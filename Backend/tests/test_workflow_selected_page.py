@@ -148,6 +148,7 @@ class WorkflowSelectedPageTests(unittest.TestCase):
             current_plan,
             frontend_pages=current_plan["frontend_pages"],
             selectedPageId="weather-detail",
+            enforce_entity_gate=True,
             detail_target_type="page",
         )
         self.assertEqual(result["detail_plans"][0]["endpoint_id"], "weather.detail")
@@ -184,6 +185,7 @@ class WorkflowSelectedPageTests(unittest.TestCase):
             frontend_pages=current_plan["frontend_pages"],
             selectedPageId="inventory",
             detail_target_type="page",
+            enforce_entity_gate=True,
         )
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["phase"], "detail_confirmation")

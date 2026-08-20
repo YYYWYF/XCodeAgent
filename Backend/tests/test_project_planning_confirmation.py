@@ -7,14 +7,17 @@ from pathlib import Path
 from unittest.mock import ANY, patch
 
 from app.graph.nodes.planning import project_planning as run_project_planning
+from app.services.entity_definitions import plan_data_sources
 from app.services.product_plan import create_product_plan
 from app.services.project_plan import (
+    apply_project_plan_datasource_policy,
     apply_project_plan_feedback,
     create_project_plan,
     create_technical_plan,
 )
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import write_project_plan_document
+from tests.entity_design_test_utils import confirm_entity_designs
 
 
 def project_planning(state: dict) -> dict:
@@ -30,8 +33,21 @@ def project_planning(state: dict) -> dict:
             source_type = candidate
     config_dir = workspace / ".xcodeagent"
     config_dir.mkdir(parents=True, exist_ok=True)
+    application_config: dict = {"datasource": {"type": source_type}}
+    if source_type == "database":
+        # 创建应用填写了数据库连接时，实体默认数据源为 database。
+        application_config["datasource"]["db"] = {
+            "useBuiltin": False,
+            "plantMode": {
+                "domain": "127.0.0.1",
+                "port": 3306,
+                "userName": "root",
+                "pwd": "test",
+                "schema": "demo",
+            },
+        }
     (config_dir / "application.json").write_text(
-        json.dumps({"datasource": {"type": source_type}}, ensure_ascii=False),
+        json.dumps(application_config, ensure_ascii=False),
         encoding="utf-8",
     )
     return run_project_planning(state)
@@ -73,11 +89,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                     }
                 )
 
-        planner.assert_called_once_with(
-            spec,
-            datasource_type="database",
-            on_token=ANY,
-        )
+        planner.assert_called_once_with(spec, on_token=ANY)
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["mode"], "project_plan_confirmation")
         self.assertEqual(
@@ -261,19 +273,18 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                     "permissions": ["admin"],
                 }
             ],
-            "data_sources": [
+            "entities": [
                 {
-                    "id": "personnel_source",
-                    "name": "人员数据源",
-                    "type": "static",
-                    "entities": ["Personnel"],
-                    "schema_refs": ["Personnel"],
+                    "id": "Personnel",
+                    "name": "Personnel",
+                    "fields": [],
+                    "data_source": "static",
                 }
             ],
             "api_contracts": [
                 {
                     "id": "personnel_source_api",
-                    "data_source_id": "personnel_source",
+                    "entity_ids": ["Personnel"],
                     "resource": "Personnel",
                     "base_path": "/api/personnel",
                     "schemas": {"Personnel": {"type": "object"}},
@@ -305,6 +316,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
             "回答：人员列表页依赖数据源/api/database",
             "static",
         )
+        updated = confirm_entity_designs(updated, source_type="static")
 
         page = updated["frontend_pages"][0]
         dependency = updated["page_data_dependencies"][0]
@@ -312,7 +324,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         self.assertEqual(dependency["data_source_ids"], ["无"])
         self.assertEqual(dependency["api_contract_ids"], ["无"])
         self.assertEqual(dependency["endpoint_dependencies"], [])
-        self.assertEqual(updated["data_sources"][0]["type"], "static")
+        self.assertEqual(plan_data_sources(updated)[0]["type"], "static")
         self.assertNotIn("task_inputs", updated)
 
     def test_project_plan_revision_feedback_updates_database_type_only(self) -> None:
@@ -328,19 +340,19 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                 "permissions": ["admin"],
             }
         ]
-        existing_plan["data_sources"] = [
+        existing_plan["entities"] = [
             {
-                "id": "personnel_source",
-                "name": "人员数据源",
-                "type": "static",
-                "entities": ["Personnel"],
-                "schema_refs": ["personnel_source_api#/schemas/Personnel"],
+                "id": "Personnel",
+                "name": "Personnel",
+                "fields": [],
+                "data_source": "static",
             }
         ]
         existing_plan["api_contracts"] = [
             {
                 "id": "personnel_source_api",
-                "data_source_id": "personnel_source",
+                "data_source_id": "static",
+                "entity_ids": ["Personnel"],
                 "resource": "Personnel",
                 "base_path": "/api/personnel",
                 "schemas": {
@@ -367,9 +379,6 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
             }
         ]
 
-        spec["data_sources"] = [
-            {**source, "type": "static"} for source in spec["data_sources"]
-        ]
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
                 "app.graph.nodes.planning.plan_project_with_chat_model",
@@ -389,15 +398,12 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         self.assertEqual(dependency["data_source_ids"], [])
         self.assertEqual(dependency["api_contract_ids"], [])
         self.assertEqual(dependency["endpoint_dependencies"], [])
-        self.assertEqual(result["project_plan"]["data_sources"][0]["type"], "static")
-        self.assertNotIn(
-            "database",
-            result["project_plan"]["architecture"]["backend_tech_stack"],
-        )
-        self.assertNotIn(
-            "cache",
-            result["project_plan"]["architecture"]["backend_tech_stack"],
-        )
+        self.assertEqual(plan_data_sources(result["project_plan"]), [])
+        result_plan = confirm_entity_designs(result["project_plan"], source_type="static")
+        result_plan = apply_project_plan_datasource_policy(result_plan)
+        self.assertEqual(plan_data_sources(result_plan)[0]["type"], "static")
+        self.assertNotIn("database", result_plan["architecture"]["backend_tech_stack"])
+        self.assertNotIn("cache", result_plan["architecture"]["backend_tech_stack"])
         self.assertNotIn("task_inputs", result["project_plan"])
 
     def test_project_plan_confirmation_ignores_question_text_negative_words(self) -> None:
@@ -445,11 +451,12 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
             synchronized = {
                 **plan,
                 "app": {**plan["app"], "name": "仓储计划应用"},
-                "data_sources": [
-                    {**source, "type": "static"}
-                    for source in plan["data_sources"]
+                "entities": [
+                    entity
+                    for entity in plan["entities"]
                 ],
             }
+            synchronized = confirm_entity_designs(synchronized, source_type="static")
 
             with patch(
                 "app.graph.nodes.planning.sync_project_plan_from_markdown",
@@ -475,18 +482,17 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
             plan,
             spec,
             edited_markdown,
-            "database",
         )
         self.assertEqual(result["project_plan"]["app"]["name"], "仓储计划应用")
         self.assertTrue(
             all(
-                source["type"] == "database"
-                for source in result["project_plan"]["data_sources"]
+                source["type"] == "static"
+                for source in plan_data_sources(result["project_plan"])
             )
         )
         self.assertEqual(internal_json["app"]["name"], "仓储计划应用")
         self.assertIn("仓储计划应用", preserved_markdown)
-        self.assertIn("类型 database", preserved_markdown)
+        self.assertIn("实体详细设计", preserved_markdown)
         self.assertIn("状态：已确认", preserved_markdown)
 
 

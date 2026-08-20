@@ -69,11 +69,13 @@ class ProjectState(TypedDict, total=False):
     selectedPageId: str
     selected_api_contract_id: str
     selected_endpoint_id: str
+    selected_entity_id: str
     detail_target_type: str
     page_template: dict[str, Any]
     data_source_spec_draft: dict[str, Any]
     detail_plans: list[dict[str, Any]]
     detail_review_submission: dict[str, Any]
+    entity_design_action: dict[str, Any]
     application_planning_confirmation: dict[str, Any]
     ui_designs: dict[str, Any]
     ui_design_action: dict[str, Any]
@@ -87,7 +89,6 @@ class ProjectState(TypedDict, total=False):
     execution_resource_claims: list[dict[str, Any]]
     build_execution_slice: dict[str, Any]
     build_context: dict[str, Any]
-    database_planning_context: dict[str, Any]
     database_change_plan: dict[str, Any]
     database_approval_requests: list[dict[str, Any]]
     build_task_plan: dict[str, Any]

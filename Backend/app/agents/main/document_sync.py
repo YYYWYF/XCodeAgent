@@ -25,14 +25,27 @@ def _sync_prompt(
     edited_markdown: str,
     datasource_type: DatasourceType = "database",
 ) -> str:
-    """构建 Markdown 同步提示，并按产品/技术边界限制可见字段。"""
+    """构建 Markdown 同步提示，并守住产品、技术与实体设计边界。"""
 
     datasource_instruction = (
-        (
-            f"For ProjectPlan data_sources, the authoritative application type is {datasource_type}. "
-            f"Keep every data_sources[].type exactly {datasource_type}; user Markdown cannot change "
-            "the type or its architecture implementation boundary. Preserve data source ids and "
-            "contract references, and never emit mock.\n\n"
+        "For RequirementSpec, entities are top-level items with id, name, description, and "
+        "display-only fields (label and description). Do NOT generate field names, field types, or "
+        "any data_sources; data source selection happens during entity design. The legacy type mock "
+        "must never be emitted.\n\n"
+        if artifact_name == "RequirementSpec"
+        else (
+            "For TechnicalPlan, preserve the complete top-level entities array with RequirementSpec "
+            "ids/names/descriptions and the confirmed snake_case field definitions. API contracts bind "
+            "one or more entities through entity_ids only. Never emit data_source_id, a top-level "
+            "data_sources field, or entity data_source; source selection belongs to EntityDesign. "
+            "module_boundaries describes code/service ownership and must not define entities or fields.\n\n"
+        )
+        if artifact_name == "TechnicalPlan"
+        else (
+            "For ProjectPlan, keep entities source-free and bind API contracts through entity_ids only. "
+            "Do not emit a top-level data_sources field or assign entity data_source; those decisions "
+            "belong to the separately confirmed entity design. Preserve entity ids and contract "
+            "references, and never emit mock.\n\n"
         )
         if artifact_name == "ProjectPlan"
         else ""
@@ -96,7 +109,7 @@ def sync_requirement_spec_from_markdown(
     edited_markdown: str,
     datasource_type: DatasourceType = "database",
 ) -> dict[str, Any]:
-    """同步用户编辑的 RequirementSpec Markdown，并恢复应用权威类型。"""
+    """同步用户编辑的 RequirementSpec Markdown，并保留隐藏结构字段。"""
 
     synced = _invoke_sync_model(
         artifact_name="RequirementSpec",
@@ -134,7 +147,7 @@ def sync_project_plan_from_markdown(
     edited_markdown: str,
     datasource_type: DatasourceType = "database",
 ) -> dict[str, Any]:
-    """同步 ProjectPlan Markdown，并恢复应用权威类型和实现边界。"""
+    """同步 ProjectPlan/TechnicalPlan Markdown，并保留实体设计边界。"""
 
     is_technical_plan = existing_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE
     synced = _invoke_sync_model(
@@ -146,7 +159,15 @@ def sync_project_plan_from_markdown(
     normalized = (
         create_technical_plan(
             requirement_spec,
-            agent_plan=synced,
+            agent_plan={
+                key: synced.get(key)
+                for key in (
+                    "architecture",
+                    "entities",
+                    "api_contracts",
+                    "pages",
+                )
+            },
             datasource_type=datasource_type,
         )
         if is_technical_plan
@@ -174,9 +195,7 @@ def sync_project_plan_from_markdown(
                 normalized[key] = value
     errors = validate_api_contract_consistency(normalized)
     if not is_technical_plan:
-        errors.extend(
-            validate_project_plan_datasource_policy(normalized, datasource_type)
-        )
+        errors.extend(validate_project_plan_datasource_policy(normalized))
     if errors:
         raise ValueError("编辑后的项目计划存在不一致：" + "; ".join(errors))
     if not is_technical_plan:

@@ -10,6 +10,7 @@ from app.domain.application_lifecycle import (
     ExecutionResourceRole,
     ExecutionResourceType,
 )
+from app.services.entity_definitions import contract_data_source_id
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 
 
@@ -73,7 +74,7 @@ def _page_claims(
     endpoint_ids.discard("")
     contracts = _dict_items(project_plan.get("api_contracts"))
     source_ids = {
-        str(contract.get("data_source_id") or "").strip()
+        contract_data_source_id(project_plan, contract).strip()
         for contract in contracts
         if any(
             str(endpoint.get("id") or "") in endpoint_ids
@@ -88,11 +89,13 @@ def _page_claims(
             for endpoint in _dict_items(contract.get("endpoints"))
         }
         direct_contract = bool(contract_endpoint_ids.intersection(endpoint_ids))
-        shared_source_contract = str(contract.get("data_source_id") or "") in source_ids
+        shared_source_contract = (
+            contract_data_source_id(project_plan, contract) in source_ids
+        )
         if not direct_contract and not shared_source_contract:
             continue
         contract_id = str(contract.get("id") or "").strip()
-        source_id = str(contract.get("data_source_id") or "").strip()
+        source_id = contract_data_source_id(project_plan, contract).strip()
         if contract_id:
             claims.append(_claim(ExecutionResourceType.API_CONTRACT, contract_id))
         if source_id:
@@ -132,7 +135,7 @@ def _data_source_claims(
     claims = [_claim(ExecutionResourceType.DATA_SOURCE, source_id, primary=True)]
     endpoint_ids: set[str] = set()
     for contract in _dict_items(project_plan.get("api_contracts")):
-        if str(contract.get("data_source_id") or "") != source_id:
+        if contract_data_source_id(project_plan, contract) != source_id:
             continue
         contract_id = str(contract.get("id") or "").strip()
         if contract_id:
@@ -177,7 +180,7 @@ def _endpoint_claims(
         ):
             continue
         contract_id = current_contract_id
-        source_id = str(contract.get("data_source_id") or "").strip()
+        source_id = contract_data_source_id(project_plan, contract).strip()
         break
     if contract_id:
         claims.append(_claim(ExecutionResourceType.API_CONTRACT, contract_id))

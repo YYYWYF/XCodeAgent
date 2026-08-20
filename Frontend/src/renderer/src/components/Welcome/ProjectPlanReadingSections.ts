@@ -31,6 +31,23 @@ function hasItems(value: unknown): boolean {
   )
 }
 
+// 仅保留 ProjectPlan 中有效的对象数组项。
+function recordItems(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === 'object' && !Array.isArray(item)
+      )
+    : []
+}
+
+// 将结构化字段转换为稳定的单行文本。
+function fieldText(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value).trim()
+    : ''
+}
+
 // 根据 ProjectPlan 中实际存在的内容生成左侧阅读章节，避免显示空章节或概念化标题。
 export function projectPlanReadingSections(
   plan: Record<string, unknown>
@@ -49,10 +66,13 @@ export function projectPlanReadingSections(
     plan.artifact_type === 'technical-plan' ? plan.pages : plan.frontend_pages
   ).length > 0
   const hasApiContracts = hasItems(plan.api_contracts)
-  const hasDataSources = hasItems(plan.data_sources)
-  const datasourceType = Array.isArray(plan.data_sources)
-    ? asRecord(plan.data_sources[0]).type
-    : undefined
+  const entities = recordItems(plan.entities)
+  const entityDataSourceType = (value: unknown): string =>
+    typeof value === 'string' ? value : fieldText(asRecord(value).type)
+  const hasDataSources = entities.some((entity) =>
+    Boolean(entityDataSourceType(entity.data_source))
+  )
+  const datasourceType = entityDataSourceType(entities[0]?.data_source)
 
   return [
     {

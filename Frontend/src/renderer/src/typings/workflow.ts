@@ -102,9 +102,24 @@ export type WorkflowClarificationChoiceAnswer = {
 }
 
 export type WorkflowDetailReviewTarget = {
-  target_type: 'page' | 'endpoint'
+  target_type: 'page' | 'endpoint' | 'entity'
   target_id: string
   name?: string
+  entity_id?: string
+  description?: string
+  module_id?: string
+  data_source_type?: string
+  design_stage?: string
+  fields?: Array<Record<string, unknown>>
+  default_constraints?: Array<Record<string, unknown>>
+  table_design?: Record<string, unknown>
+  database_design?: Record<string, unknown>
+  external_api_design?: Record<string, unknown>
+  static_design?: Record<string, unknown>
+  database_execution?: Record<string, unknown>
+  table_operations_executed?: boolean
+  business_rules?: Array<Record<string, unknown>>
+  relationships?: Array<Record<string, unknown>>
   path?: string
   page_goal?: string
   basic_layout?: Record<string, unknown>
@@ -126,33 +141,165 @@ export type WorkflowDetailReviewTarget = {
   method?: string
   summary?: string
   data_usage?: Record<string, unknown>
-  data_origin?: Record<string, unknown>
   endpoint_decision?: Record<string, unknown>
   interface_design?: Record<string, unknown>
   processing_logic?: string[]
   risks?: string[]
 }
 
+export type WorkflowEntityDesignOption = {
+  value: 'database' | 'external_api' | 'static'
+  label: string
+  available?: boolean
+  description?: string
+}
+
+export type WorkflowEntityDesignSummary = {
+  stage?: string
+  entity_id?: string
+  entity_name?: string
+  entity_description?: string
+  field_count?: number
+  default_constraints?: Array<Record<string, unknown>>
+  fields?: Array<{
+    name: string
+    label?: string
+    type?: string
+    required?: boolean
+  }>
+  data_source_type?: string
+  database_context_ready?: boolean
+  data_source_options?: WorkflowEntityDesignOption[]
+  ai_suggestions?: {
+    assist_type?: string
+    text?: string
+    messages?: Array<{
+      role?: string
+      content?: string
+    }>
+    missing_fields?: {
+      table_name?: string
+      eligible?: boolean
+      fields?: Array<{
+        entity_field?: string
+        label?: string
+        type?: string
+        nullable?: boolean
+        comment?: string
+      }>
+    }
+    suggestions?: WorkflowEntityDesignSuggestion[]
+    source?: string
+    note?: string
+  }
+  database_design?: {
+    binding_status?: string
+    matched_table?: string | null
+    table_count?: number
+    binding_count?: number
+    difference_count?: number
+    operation_count?: number
+    table_generation_required?: boolean
+    table_generation_approved?: boolean
+  }
+  external_api_design?: {
+    path?: string
+    method?: string
+    mapping_count?: number
+  }
+  ddl_execution?: {
+    status?: 'completed' | 'failed' | 'already_satisfied'
+    table_name?: string
+    columns?: string[]
+    message?: string
+    execution?: Record<string, unknown>
+  }
+  static_design?: {
+    seed_row_count?: number
+    field_value_count?: number
+  }
+  database_execution?: {
+    status?: string
+    summary?: string
+    operation_count?: number
+  }
+  validation_errors?: string[]
+}
+
+export type WorkflowEntityDesignSuggestion = {
+  id?: string
+  label?: string
+  value?: string
+  payload?: Record<string, unknown>
+  source?: string
+  note?: string
+}
+
 export type WorkflowDetailReview = {
   pages?: WorkflowDetailReviewTarget[]
   endpoints?: WorkflowDetailReviewTarget[]
+  entities?: WorkflowDetailReviewTarget[]
   summary?: {
     page_count?: number
     endpoint_count?: number
+    entity_count?: number
     api_contract_count?: number
     missingSelectedPagePlan?: boolean
     missingSelectedEndpointPlan?: boolean
+    missingSelectedEntityPlan?: boolean
     selectedPageId?: string
     selectedApiContractId?: string
     selectedEndpointId?: string
-    detailTargetType?: 'page' | 'endpoint'
+    selectedEntityId?: string
+    detailTargetType?: 'page' | 'endpoint' | 'entity'
+    entityDesign?: WorkflowEntityDesignSummary
   }
+}
+
+export type WorkflowEntityDesignAction = {
+  action:
+    | 'select_data_source'
+    | 'submit_external_api'
+    | 'submit_static_data'
+    | 'submit_bindings'
+    | 'approve_table_generation'
+    | 'list_tables'
+    | 'select_table'
+    | 'ai_assist'
+    | 'execute_add_columns'
+    | 'execute_create_table'
+    | 'submit_entity_design'
+  entity_id: string
+  data_source_type?: 'database' | 'external_api' | 'static'
+  table_name?: string
+  matched_table?: string
+  assist_type?: string
+  instruction?: string
+  context?: Record<string, unknown>
+  fields?: Array<Record<string, unknown>>
+  proposal?: Record<string, unknown>
+  database_design?: Record<string, unknown>
+  external_api_design?: Record<string, unknown>
+  static_design?: Record<string, unknown>
+  business_rules?: Array<Record<string, unknown>>
+  relationships?: Array<Record<string, unknown>>
+  acceptance_criteria?: string[]
+  risks?: string[]
+  api_info?: {
+    path?: string
+    method?: string
+    request_body?: unknown
+    response_body?: unknown
+  }
+  seed_rows?: Array<Record<string, unknown>>
+  field_values?: Record<string, string[]>
+  bindings?: Array<Record<string, unknown>>
 }
 
 export type WorkflowDetailReviewSubmission = {
   review_status: 'confirmed'
   target_changes: Array<{
-    target_type: 'page' | 'endpoint'
+    target_type: 'page' | 'endpoint' | 'entity'
     target_id: string
     changes: Record<string, unknown>
   }>
@@ -166,6 +313,7 @@ export type WorkflowClarificationAnswer =
   | string[]
   | WorkflowClarificationChoiceAnswer
   | WorkflowDetailReviewSubmission
+  | WorkflowEntityDesignAction
   | WorkflowAcceptanceAdjustment
   | WorkflowRequirementSpecEdit
   | Record<string, unknown>
@@ -199,6 +347,10 @@ export type WorkflowClarification = {
     summary?: string
     statements?: string[]
   }
+  missing_entities?: Array<{
+    entity_id?: string
+    entity_name?: string
+  }>
   [key: string]: unknown
 }
 

@@ -38,9 +38,12 @@ def _safe_file_stem(value: Any, *, prefix: str) -> str:
 
 
 def _artifact_directory(state: dict[str, Any], *, artifact_type: str) -> Path:
-    """按详细设计类型返回页面或 endpoint 的独立目录。"""
+    """按详细设计类型返回页面、endpoint 或实体的独立目录。"""
 
-    directory_name = "endpoints" if artifact_type == "endpoint" else "pages"
+    directory_name = {
+        "endpoint": "endpoints",
+        "entity": "entities",
+    }.get(artifact_type, "pages")
     return workflow_artifact_root(state) / "plans" / directory_name
 
 
@@ -158,12 +161,13 @@ def hydrate_external_detail_designs(
     project_plan_path: str | Path,
     project_plan: dict[str, Any],
 ) -> dict[str, Any]:
-    """把外置页面/endpoint 详情按原文件内容读回内存，供 Workflow 展示和确认。"""
+    """把外置页面/endpoint/实体详情按原文件内容读回内存，供 Workflow 展示和确认。"""
 
     plan_path = Path(project_plan_path).expanduser()
     hydrated = deepcopy(project_plan)
     page_details: list[dict[str, Any]] = []
     endpoint_details: list[dict[str, Any]] = []
+    entity_details: list[dict[str, Any]] = []
 
     for page in project_plan_page_records(hydrated):
         pageId = str(page.get("pageId") or "")
@@ -200,10 +204,26 @@ def hydrate_external_detail_designs(
             if isinstance(detail, dict):
                 endpoint_details.append(detail)
 
+    for entity in _dict_items(hydrated.get("entities")):
+        entity_id = str(entity.get("id") or "")
+        if not entity_id:
+            continue
+        detail_path = _resolve_detail_json_path(
+            plan_path,
+            entity.get("detail_design") if isinstance(entity.get("detail_design"), dict) else {},
+            fallback_directory="entities",
+            fallback_stem=_safe_file_stem(entity_id, prefix="entity--"),
+        )
+        detail = _read_json_object(detail_path) if detail_path else None
+        if isinstance(detail, dict):
+            entity_details.append(detail)
+
     if page_details:
         hydrated["page_detail_plans"] = page_details
     if endpoint_details:
         hydrated["endpoint_detail_plans"] = endpoint_details
+    if entity_details:
+        hydrated["entity_detail_plans"] = entity_details
     return hydrated
 
 
@@ -267,7 +287,7 @@ def _persisted_page_detail(detail: dict[str, Any]) -> dict[str, Any]:
 
 
 def _endpoint_dependencies(detail: dict[str, Any]) -> dict[str, list[str]]:
-    """从 endpoint 详情中提取契约、接口、数据源和页面依赖索引。"""
+    """从 endpoint 详情中提取契约、接口和页面依赖索引，接口不携带数据源。"""
 
     dependentPageIds = []
     data_usage = detail.get("data_usage") if isinstance(detail.get("data_usage"), dict) else {}
@@ -278,12 +298,21 @@ def _endpoint_dependencies(detail: dict[str, Any]) -> dict[str, list[str]]:
             dependentPageIds.append(item.strip())
     api_contract_id = str(detail.get("api_contract_id") or "")
     endpoint_id = str(detail.get("endpoint_id") or "")
-    data_source_id = str(detail.get("data_source_id") or "")
     return {
         "api_contract_ids": [api_contract_id] if api_contract_id else [],
         "endpoint_ids": [endpoint_id] if endpoint_id else [],
-        "dataSourceIds": [data_source_id] if data_source_id else [],
         "pageIds": sorted(dict.fromkeys(item for item in dependentPageIds if item)),
+    }
+
+
+def _entity_dependencies(detail: dict[str, Any]) -> dict[str, list[str]]:
+    """从实体详情提取数据源与模块依赖索引，不复制实体正文。"""
+
+    data_source_id = str(detail.get("data_source_id") or "")
+    module_id = str(detail.get("module_id") or "")
+    return {
+        "dataSourceIds": [data_source_id] if data_source_id else [],
+        "moduleIds": [module_id] if module_id else [],
     }
 
 
@@ -351,16 +380,19 @@ def _page_endpoint_detail_refs(
 
 
 def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
-    """写出详情文件，并返回不再内嵌详情正文的轻量 ProjectPlan。"""
+    """写出页面/endpoint/实体详情文件，并返回不再内嵌详情正文的轻量 ProjectPlan。"""
 
     from app.workspace.plan_documents import (
+        render_entity_detail_markdown,
         render_endpoint_detail_markdown,
         render_page_detail_markdown,
     )
+    from app.services.page_detail_plan import endpoint_bound_entity_summaries
 
     compact_plan = deepcopy(plan)
     page_directory = _artifact_directory(state, artifact_type="page")
     endpoint_directory = _artifact_directory(state, artifact_type="endpoint")
+    entity_directory = _artifact_directory(state, artifact_type="entity")
     if _dict_items(plan.get("page_detail_plans")):
         page_directory.mkdir(parents=True, exist_ok=True)
     if _dict_items(plan.get("endpoint_detail_plans")):
@@ -376,7 +408,13 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
         json_path = endpoint_directory / f"{stem}.json"
         markdown_path = endpoint_directory / f"{stem}.md"
         sha256 = _write_json_atomically(json_path, detail)
-        _write_markdown_atomically(markdown_path, render_endpoint_detail_markdown(detail))
+        _write_markdown_atomically(
+            markdown_path,
+            render_endpoint_detail_markdown(
+                detail,
+                bound_entities=endpoint_bound_entity_summaries(plan, api_contract_id),
+            ),
+        )
         reference = _detail_reference(
             state,
             json_path=json_path,
@@ -427,9 +465,41 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
             },
         )
 
+    entity_details = _dict_items(plan.get("entity_detail_plans"))
+    if entity_details:
+        entity_directory.mkdir(parents=True, exist_ok=True)
+    for detail in entity_details:
+        entity_id = str(detail.get("entity_id") or "")
+        if not entity_id:
+            continue
+        stem = _safe_file_stem(entity_id, prefix="entity--")
+        json_path = entity_directory / f"{stem}.json"
+        markdown_path = entity_directory / f"{stem}.md"
+        sha256 = _write_json_atomically(json_path, detail)
+        _write_markdown_atomically(markdown_path, render_entity_detail_markdown(detail))
+        reference = _detail_reference(
+            state,
+            json_path=json_path,
+            markdown_path=markdown_path,
+            detail=detail,
+            sha256=sha256,
+            dependencies=_entity_dependencies(detail),
+        )
+        compact_plan["entities"] = [
+            {
+                **entity,
+                "detail_design": reference,
+                "detail_status": reference["status"],
+            }
+            if isinstance(entity, dict) and str(entity.get("id") or "") == entity_id
+            else entity
+            for entity in _dict_items(compact_plan.get("entities"))
+        ]
+
     compact_plan.pop("page_detail_plans", None)
     compact_plan.pop("data_source_detail_plans", None)
     compact_plan.pop("endpoint_detail_plans", None)
+    compact_plan.pop("entity_detail_plans", None)
     return compact_plan
 
 

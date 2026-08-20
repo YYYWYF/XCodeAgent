@@ -35,7 +35,8 @@ export type SendWorkflowMessageOptions = {
   selectedPageId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint'
+  selectedEntityId?: string
+  detailTargetType?: 'page' | 'endpoint' | 'entity'
   buildExecutionScope?: WorkflowBuildExecutionScope
   workflowAction?: WorkflowAction
   workflowDebug?: WorkflowDebugOptions
@@ -87,6 +88,7 @@ export function buildWorkflowForwardedProps(
     selectedPageId: options.selectedPageId,
     selectedApiContractId: options.selectedApiContractId,
     selectedEndpointId: options.selectedEndpointId,
+    selectedEntityId: options.selectedEntityId,
     detailTargetType: options.detailTargetType,
     workflowAction: options.workflowAction,
     workflowDebug: options.workflowDebug,
@@ -470,9 +472,6 @@ export class AgUiChatSession {
     let processSteps: ProcessStepRecord[] = []
     let runErrorMessage = ''
     let runErrorCode: string | undefined
-    // 累积后端 llm.token custom event 的流式 token（需求分析/项目规划节点通过
-    // _llm_token_callback 发送），转发到 onContent，让工作台对话区实时展示规划文本。
-    let llmTokenAccumulator = ''
     const emitToolCalls = (nextToolCalls: ToolCallRecord[]): void => {
       toolCalls = nextToolCalls
       options.onToolCalls?.(toolCalls)
@@ -507,16 +506,10 @@ export class AgUiChatSession {
           if (workflow) options.onWorkflow?.(workflow)
         }
         if (event.name === 'llm.token') {
-          // 后端规划节点通过 _llm_token_callback 发送 llm.token custom event。
-          // 规划节点的原始 JSON 不直接展示在需求确认卡中；产品/项目规划 token
-          // 仍用于工作台运行中的进度反馈，技术规划同样沿用该流式通道。
+          // 规划模型 token 是内部 JSON 生成过程，只由 Workflow 事件驱动进度 UI，禁止写入聊天正文。
           const node = (event.value as { node?: string } | null)?.node || ''
           if (['product_planning', 'project_planning', 'technical_planning'].includes(node)) {
-            const token = (event.value as { token?: string } | null)?.token || ''
-            if (token) {
-              llmTokenAccumulator += token
-              options.onContent?.(llmTokenAccumulator)
-            }
+            return
           }
         }
       },

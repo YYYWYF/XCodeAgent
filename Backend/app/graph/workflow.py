@@ -1,21 +1,11 @@
 from langgraph.graph import END, START, StateGraph
 
 from app.graph import nodes
-from app.graph.nodes.database_context import (
-    _build_task_plan_for_context,
-    _workspace_snapshot_from_state,
-)
-from app.graph.nodes.tasks import (
-    _build_execution_scope_from_state,
-    _latest_compact_project_plan,
-    _resolve_build_context,
-)
 from app.graph.state import ProjectState
 from app.persistence.checkpoints import (
     workflow_checkpoint_db_path,
     workflow_checkpointer,
 )
-from app.services.database_planning_context import database_context_requirement
 
 
 def route_workflow_start(state: ProjectState) -> str:
@@ -28,7 +18,7 @@ def route_workflow_start(state: ProjectState) -> str:
     if state.get("resume_from") == "inspect_workspace":
         return "inspect_workspace"
     if state.get("resume_from") == "inspect_database_context":
-        return "inspect_database_context"
+        return "prepare_build_tasks"
     if state.get("resume_from") == "prepare_build_tasks":
         return "prepare_build_tasks"
     if state.get("resume_from") == "build":
@@ -68,12 +58,13 @@ def route_small_task_result(state: ProjectState) -> str:
     if state.get("status") == "failed":
         return "handle_failure"
     target = str(state.get("small_task_route") or "integration_test")
+    if target == "inspect_database_context":
+        return "prepare_build_tasks"
     if target in {
         "integration_test",
         "detail_confirmation",
         "project_planning",
         "inspect_workspace",
-        "inspect_database_context",
         "prepare_build_tasks",
         "build",
     }:
@@ -98,13 +89,17 @@ def route_build_result(state: ProjectState) -> str:
 
 
 def route_detail_confirmation(state: ProjectState) -> str:
-    """细节确认完成后进入工作区检查，等待用户输入时停止。"""
+    """细节确认完成后进入工作区检查，等待用户输入时停止。
 
-    return (
-        "await_user_input"
-        if state.get("status") == "requires_user_input"
-        else "inspect_workspace"
-    )
+    实体设计只承担 detail_confirmation 阶段：确认完成即结束当前工作流，
+    不再进入工作区检查与后续构建阶段。
+    """
+
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
+    if str(state.get("selected_entity_id") or "").strip():
+        return "await_user_input"
+    return "inspect_workspace"
 
 
 def route_project_planning(state: ProjectState) -> str:
@@ -115,43 +110,6 @@ def route_project_planning(state: ProjectState) -> str:
     if state.get("status") == "failed":
         return "handle_failure"
     return "detail_confirmation"
-
-
-def route_workspace_inspection(state: ProjectState) -> str:
-    """按已确认接口 data_origin 决定是否进入数据库上下文检查节点。"""
-
-    try:
-        project_plan = _latest_compact_project_plan(state)
-        workspace_snapshot = _workspace_snapshot_from_state(state)
-        build_task_plan = _build_task_plan_for_context(
-            state,
-            project_plan,
-            workspace_snapshot,
-        )
-        build_context = _resolve_build_context(
-            state,
-            project_plan,
-            _build_execution_scope_from_state(state),
-            build_task_plan,
-        )
-        requirement = database_context_requirement(project_plan, build_context)
-    except Exception:
-        return "prepare_build_tasks"
-    return (
-        "inspect_database_context"
-        if requirement.get("required") or requirement.get("status") == "blocked"
-        else "prepare_build_tasks"
-    )
-
-
-def route_database_context_inspection(state: ProjectState) -> str:
-    """数据库上下文检查失败时等待用户处理，否则继续任务规划。"""
-
-    return (
-        "await_user_input"
-        if state.get("status") == "requires_user_input"
-        else "prepare_build_tasks"
-    )
 
 
 def route_prepare_build_tasks(state: ProjectState) -> str:
@@ -176,7 +134,6 @@ def build_graph(*, checkpointer):
     builder.add_node("detail_confirmation", nodes.detail_confirmation)
     builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
-    builder.add_node("inspect_database_context", nodes.inspect_database_context)
     builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
     builder.add_node("build", nodes.build)
     builder.add_node("integration_test", nodes.integration_test)
@@ -193,7 +150,6 @@ def build_graph(*, checkpointer):
             "detail_confirmation": "detail_confirmation",
             "project_planning": "project_planning",
             "inspect_workspace": "inspect_workspace",
-            "inspect_database_context": "inspect_database_context",
             "prepare_build_tasks": "prepare_build_tasks",
             "build": "build",
             "integration_test": "integration_test",
@@ -220,22 +176,7 @@ def build_graph(*, checkpointer):
             "handle_failure": "handle_failure",
         },
     )
-    builder.add_conditional_edges(
-        "inspect_workspace",
-        route_workspace_inspection,
-        {
-            "inspect_database_context": "inspect_database_context",
-            "prepare_build_tasks": "prepare_build_tasks",
-        },
-    )
-    builder.add_conditional_edges(
-        "inspect_database_context",
-        route_database_context_inspection,
-        {
-            "prepare_build_tasks": "prepare_build_tasks",
-            "await_user_input": END,
-        },
-    )
+    builder.add_edge("inspect_workspace", "prepare_build_tasks")
     builder.add_conditional_edges(
         "prepare_build_tasks",
         route_prepare_build_tasks,
@@ -271,7 +212,6 @@ def build_graph(*, checkpointer):
             "detail_confirmation": "detail_confirmation",
             "project_planning": "project_planning",
             "inspect_workspace": "inspect_workspace",
-            "inspect_database_context": "inspect_database_context",
             "prepare_build_tasks": "prepare_build_tasks",
             "build": "build",
             "await_user_input": END,

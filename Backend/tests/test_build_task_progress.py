@@ -171,8 +171,6 @@ class BuildTaskProgressTests(unittest.TestCase):
                     "target": {"type": "page", "id": "home"},
                     "required_unit_ids": ["frontend:shell"],
                     "endpoint_ids": [],
-                    "api_contract_ids": [],
-                    "data_source_ids": [],
                 },
                 plan,
             ),
@@ -223,7 +221,6 @@ class BuildTaskProgressTests(unittest.TestCase):
             output=project_contract_validation_output(
                 {
                     "endpoint_ids": ["orders.list"],
-                    "api_contract_ids": ["orders-api"],
                 },
                 ["缺少 endpoint: orders.list"],
             ),

@@ -9,6 +9,14 @@ from app.protocols.workflow.projection import (
 
 
 class WorkflowProjectionTests(unittest.TestCase):
+    def test_workspace_inspection_projects_direct_task_preparation(self) -> None:
+        """工作区检查完成后不再投射独立数据库上下文节点。"""
+
+        self.assertEqual(
+            _workflow_next_nodes("inspect_workspace", {"status": "completed"}),
+            ["prepare_build_tasks"],
+        )
+
     def test_integration_repair_next_nodes_match_runtime_route(self) -> None:
         """验证可视化预测与实际修复任务路由保持一致。"""
 

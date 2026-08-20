@@ -10,6 +10,28 @@ from app.services import builtin_skills
 
 
 class BuiltinSkillsTests(unittest.TestCase):
+    def test_mybatis_skill_uses_progressive_references(self) -> None:
+        """MyBatis Skill 入口保持精简，执行细节通过必需引用延迟加载。"""
+
+        root = builtin_skills.validate_required_builtin_skills()
+        skill_root = root / builtin_skills.SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME
+        entrypoint = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertLess(len(entrypoint), 10_000)
+        self.assertIn("references/layer-implementation.md", entrypoint)
+        self.assertIn("references/bootstrap.md", entrypoint)
+        for relative_path in (
+            "references/layer-implementation.md",
+            "references/bootstrap.md",
+        ):
+            self.assertIn(
+                relative_path,
+                builtin_skills.REQUIRED_BUILTIN_SKILL_FILES[
+                    builtin_skills.SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME
+                ],
+            )
+            self.assertTrue((skill_root / relative_path).is_file())
+
     def test_source_tree_skills_are_available_and_complete(self) -> None:
         """确认源码内置技能完整且能生成页面卡片元数据。"""
 
@@ -18,6 +40,15 @@ class BuiltinSkillsTests(unittest.TestCase):
         self.assertIn(
             builtin_skills.REACT_DEV_SPEC_SKILL_NAME,
             builtin_skills.available_builtin_skills(root),
+        )
+        available = builtin_skills.available_builtin_skills(root)
+        self.assertIn(
+            builtin_skills.SPRINGBOOT_EXTERNAL_API_GENERATE_SKILL_NAME,
+            available,
+        )
+        self.assertIn(
+            builtin_skills.FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME,
+            available,
         )
         summaries = builtin_skills.list_builtin_skills(root)
         self.assertTrue(all(skill.description for skill in summaries))

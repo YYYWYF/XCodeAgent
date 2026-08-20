@@ -20,31 +20,6 @@ export const applicationIconOptions: ReadonlyArray<{ value: string; label: strin
 /** 默认应用图标：列表中的第一个。 */
 export const defaultApplicationIcon = applicationIconOptions[0].value
 
-/** 新建应用可展示的数据源选项；外部 API 暂时只展示为禁用项。 */
-export const datasourceTypeOptions: ReadonlyArray<{
-  value: DatasourceEnum
-  label: string
-  description: string
-  disabled?: boolean
-}> = [
-  {
-    value: DatasourceEnum.DB,
-    label: '数据库',
-    description: '连接数据库进行增删改查。'
-  },
-  {
-    value: DatasourceEnum.API,
-    label: '外部 API',
-    description: '直接对接外部 API，禁用。',
-    disabled: true
-  },
-  {
-    value: DatasourceEnum.STATIC,
-    label: '静态数据',
-    description: '前端直接生成静态模拟数据，仅测试用。'
-  }
-]
-
 export const initialApplicationDraft: ApplicationDraft = {
   appName: '',
   appIcon: defaultApplicationIcon,

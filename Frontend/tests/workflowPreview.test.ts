@@ -26,7 +26,10 @@ import {
   workflowInteractionAvailability,
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
-import { pageAcceptanceContinuationMessage } from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
+import {
+  entityDesignActionContinuationMessage,
+  pageAcceptanceContinuationMessage
+} from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
 import {
   createSessionIdentity,
   selectableEndpointSessionId,
@@ -105,6 +108,21 @@ test('页面验收在问题列表为空时仍生成结构化继续消息', () =>
   )
 })
 
+test('实体设计动作生成对应的继续消息', () => {
+  assert.equal(
+    entityDesignActionContinuationMessage({ action: 'select_data_source' }),
+    '已选择数据源，请生成实体设计方案后继续。'
+  )
+  assert.equal(
+    entityDesignActionContinuationMessage({ action: 'approve_table_generation' }),
+    '已批准生成目标表结构，请继续。'
+  )
+  assert.equal(
+    entityDesignActionContinuationMessage(undefined),
+    ''
+  )
+})
+
 test('验收调整类型映射到对应的安全恢复节点', () => {
   assert.equal(acceptanceAdjustmentResumeNode('local_fix'), 'small_task_repair')
   assert.equal(acceptanceAdjustmentResumeNode('page_design_change'), 'detail_confirmation')
@@ -145,12 +163,12 @@ test('缺少有效前端启动地址时不生成页面预览 URL', () => {
   assert.equal(composePreviewUrl('not a url', '/orders'), '')
 })
 
-test('已有任一页面设计的工作区重新进入时不再显示首次设计挡板', () => {
-  assert.equal(requiresInitialDetailDesignSelection(true), false)
+test('进入开发阶段始终先要求用户选择本次开发目标', () => {
+  assert.equal(requiresInitialDetailDesignSelection(true), true)
   assert.equal(requiresInitialDetailDesignSelection(false), true)
 })
 
-test('页面设计挡板只由当前页面自己的落盘详情状态决定', () => {
+test('页面视觉由 UI 稿负责，不再要求 PageDetail 门禁', () => {
   const page = {
     pageId: 'page-orders',
     key: 'page-orders',
@@ -161,7 +179,7 @@ test('页面设计挡板只由当前页面自己的落盘详情状态决定', ()
     hasDetailPlan: false
   }
 
-  assert.equal(requiresPageDetailDesign(page), true)
+  assert.equal(requiresPageDetailDesign(page), false)
   assert.equal(requiresPageDetailDesign({ ...page, designed: true }), false)
   assert.equal(requiresPageDetailDesign({ ...page, hasDetailPlan: true }), false)
   assert.equal(requiresPageDetailDesign(undefined), false)
@@ -278,6 +296,12 @@ test('页面、接口、会话和 Workflow 使用一致的详情目标键', () =
       }
     }),
     'endpoint:orders-api:list-orders'
+  )
+  assert.equal(
+    workflowDetailTargetKey({
+      state: { selected_entity_id: 'product' }
+    }),
+    'entity:product'
   )
 })
 

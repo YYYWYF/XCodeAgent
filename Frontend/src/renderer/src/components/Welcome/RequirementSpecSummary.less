@@ -179,6 +179,79 @@
   }
 }
 
+.@{class-prefix}-requirement-summary-item.is-data-source {
+  gap: 10px;
+}
+
+.@{class-prefix}-requirement-summary-entities {
+  display: grid;
+  gap: 8px;
+}
+
+.@{class-prefix}-requirement-summary-entity {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(139, 92, 246, 0.14);
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.04);
+
+  > .ant-typography {
+    color: var(--modal-text);
+    font-size: 13px;
+  }
+
+  > .ant-typography-secondary {
+    color: var(--modal-text-secondary);
+    font-size: 12px;
+    margin: 0;
+  }
+}
+
+.@{class-prefix}-requirement-summary-entity-fields {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.@{class-prefix}-requirement-summary-entity-fields-head,
+.@{class-prefix}-requirement-summary-entity-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.@{class-prefix}-requirement-summary-entity-fields-head {
+  padding-bottom: 3px;
+  color: var(--modal-text-secondary);
+  font-size: 11px;
+
+  .ant-typography {
+    color: var(--modal-text-secondary);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-requirement-summary-entity-field {
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: var(--modal-bg);
+
+  .ant-typography {
+    overflow: hidden;
+    color: var(--modal-text);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ant-typography-secondary {
+    color: var(--modal-text-secondary);
+  }
+}
+
 @media (max-width: 760px) {
   .@{class-prefix}-requirement-summary-grid {
     grid-template-columns: 1fr 1fr;

@@ -28,6 +28,34 @@ def _bullet_items(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
+def _entity_markdown(entity: Any) -> str:
+    """把单个实体渲染为 Markdown 列表项和字段表，兼容旧字符串实体。"""
+
+    if not isinstance(entity, dict):
+        return f"- 实体 {entity}"
+    entity_id = str(entity.get("id") or entity.get("name") or "实体")
+    entity_name = str(entity.get("name") or entity_id)
+    description = str(entity.get("description") or "")
+    lines = [f"- 实体 `{entity_id}` {entity_name}"]
+    if description:
+        lines.append(f"  - 说明：{description}")
+    fields = entity.get("fields")
+    if not isinstance(fields, list) or not fields:
+        return "\n".join(lines)
+    lines.append("  - 需要展示的信息：")
+    lines.append("    | 名称 | 说明 |")
+    lines.append("    | --- | --- |")
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        field_label = str(field.get("label") or field.get("name") or "")
+        field_description = str(field.get("description") or "")
+        lines.append(
+            f"    | {field_label} | {field_description} |"
+        )
+    return "\n".join(lines)
+
+
 def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     """把 RequirementSpec 渲染为用户可编辑的 Markdown 文档。"""
 
@@ -44,6 +72,13 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
         for page in spec.get("pages", [])
         if isinstance(page, dict)
     )
+    entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
+    entity_blocks = [
+        _entity_markdown(entity)
+        for entity in entities
+        if isinstance(entity, (dict, str)) and str(entity).strip()
+    ]
+    entities_markdown = "\n".join(entity_blocks) or "- 暂无实体"
     roles = "\n".join(
         f"- `{role.get('id', 'user')}` {role.get('name', '用户')}："
         f"{role.get('description', '使用应用。')}"
@@ -86,6 +121,10 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 ## 页面清单
 
 {pages}
+
+## 实体清单
+
+{entities_markdown}
 
 ## 业务流程
 

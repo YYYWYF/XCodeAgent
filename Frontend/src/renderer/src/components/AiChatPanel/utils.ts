@@ -1,6 +1,7 @@
 import { MIN_ASSISTANT_PANEL_RATIO, MIN_RIGHT_PANEL_RATIO } from './constants'
 import type {
   DevelopmentPlanningApiEndpoint,
+  DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeFile,
@@ -40,6 +41,7 @@ export type WorkspacePathParts = {
 type DetailSessionIdentity = {
   apiContractId?: string
   endpointId?: string
+  entityId?: string
   pageId?: string
 }
 
@@ -51,6 +53,11 @@ export function pageDetailTargetKey(pageId: string): string {
 /** 生成接口详情目标键，供临时运行状态按接口隔离。 */
 export function endpointDetailTargetKey(apiContractId: string, endpointId: string): string {
   return apiContractId && endpointId ? `endpoint:${apiContractId}:${endpointId}` : ''
+}
+
+/** 生成实体详情目标键，供临时运行状态按实体隔离。 */
+export function entityDetailTargetKey(entityId: string): string {
+  return entityId ? `entity:${entityId}` : ''
 }
 
 /** 生成 API 大纲的相对展示路径，仅移除完整匹配的 base path 前缀。 */
@@ -70,6 +77,9 @@ export function apiEndpointDisplayPath(endpointPath: string, basePath: string): 
 export function sessionDetailTargetKey(session: DetailSessionIdentity | undefined): string {
   if (session?.apiContractId && session.endpointId) {
     return endpointDetailTargetKey(session.apiContractId, session.endpointId)
+  }
+  if (session?.entityId) {
+    return entityDetailTargetKey(session.entityId)
   }
   return pageDetailTargetKey(session?.pageId || '')
 }
@@ -99,6 +109,16 @@ export function workflowDetailTargetKey(workflow: unknown): string {
   ).trim()
   if (apiContractId && endpointId) {
     return endpointDetailTargetKey(apiContractId, endpointId)
+  }
+  const entityId = String(
+    state.selectedEntityId ||
+      state.selected_entity_id ||
+      result.selectedEntityId ||
+      result.selected_entity_id ||
+      ''
+  ).trim()
+  if (entityId) {
+    return entityDetailTargetKey(entityId)
   }
   const pageId = String(
     state.selectedPageId ||
@@ -302,4 +322,68 @@ export function requiresEndpointDetailDesign(
   endpoint: DevelopmentPlanningApiEndpoint | undefined
 ): boolean {
   return Boolean(endpoint && !endpoint.designed && !endpoint.hasDetailPlan)
+}
+
+/** 以当前实体的落盘详情状态判断是否需要锁定对话区。 */
+export function requiresEntityDetailDesign(
+  entity: DevelopmentPlanningEntityOption | undefined
+): boolean {
+  return Boolean(entity && !entity.designed && !entity.hasDetailPlan)
+}
+
+/** 判断 Workflow 快照是否属于实体设计场景，用于聊天式渲染与工作流信息隐藏。 */
+export function isEntityDesignWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
+  if (!workflow) return false
+  // 实体设计确认后进入构建，构建阶段按普通工作流渲染；
+  // 聊天式样式只保留给 detail_confirmation 设计阶段及其终态快照。
+  const phase = String(workflow.summary.phase || '').trim()
+  if (phase && phase !== 'detail_confirmation') return false
+  if (workflow.summary.clarification?.review?.summary?.entityDesign) return true
+  if (workflow.summary.clarification?.review?.summary?.detailTargetType === 'entity') return true
+  const state = workflow.state || {}
+  const result = workflow.result || {}
+  const entityId = String(
+    state.selectedEntityId ||
+      state.selected_entity_id ||
+      result.selectedEntityId ||
+      result.selected_entity_id ||
+      ''
+  ).trim()
+  const detailTargetType = String(
+    state.detailTargetType ||
+      state.detail_target_type ||
+      result.detailTargetType ||
+      result.detail_target_type ||
+      ''
+  ).trim()
+  if (entityId && (!detailTargetType || detailTargetType === 'entity')) return true
+  // 实时运行快照可能只带节点增量，从事件 stateDelta 中恢复实体目标上下文。
+  const events = Array.isArray(workflow.events) ? workflow.events : []
+  for (const event of events) {
+    const stateDelta = event.data?.stateDelta
+    if (stateDelta && typeof stateDelta === 'object') {
+      const delta = stateDelta as Record<string, unknown>
+      const deltaEntityId = String(
+        delta.selectedEntityId || delta.selected_entity_id || ''
+      ).trim()
+      const deltaTargetType = String(
+        delta.detailTargetType || delta.detail_target_type || ''
+      ).trim()
+      if (deltaEntityId && (!deltaTargetType || deltaTargetType === 'entity')) return true
+    }
+    // 事件 detail 中可能直接携带 detail_review 确认载荷，从中恢复实体归属。
+    const detail = event.data?.detail
+    if (detail && typeof detail === 'object') {
+      const clarification = (detail as Record<string, unknown>).clarification
+      if (clarification && typeof clarification === 'object') {
+        const reviewSummary = (
+          clarification as {
+            review?: { summary?: Record<string, unknown> }
+          }
+        ).review?.summary
+        if (reviewSummary?.entityDesign || reviewSummary?.selectedEntityId) return true
+      }
+    }
+  }
+  return false
 }

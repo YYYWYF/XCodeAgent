@@ -88,7 +88,7 @@ class SmallTaskScopeTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(database["workflowIntent"], "inspect_database_context")
+        self.assertEqual(database["workflowIntent"], "detail_confirmation")
         self.assertEqual(formal["workflowIntent"], "prepare_build_tasks")
         self.assertEqual(command_only["workflowIntent"], "prepare_build_tasks")
         self.assertEqual(

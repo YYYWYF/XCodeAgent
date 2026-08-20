@@ -987,17 +987,18 @@ def validate_tsx(project_dir: str, code: str) -> tuple[bool, str]:
     )
     try:
         # 显式指定 UTF-8：Windows 上 text=True 默认用 locale 编码（中文系统为 GBK），
-        # 当生成的代码含 GBK 无法编码的字符（如 ¥ \xa5）时，写 stdin 会抛
-        # UnicodeEncodeError，导致换一换校验失败。node 端默认按 UTF-8 读取，保持一致。
+        # 当生成代码含 GBK 无法编码的字符时，写 stdin 会抛 UnicodeEncodeError；
+        # errors="replace" 同时避免子进程输出含异常字节时再次中断校验。
         proc = subprocess.run(
             ["node", "-e", script, main_path],
             input=code,
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
-    except (subprocess.SubprocessError, OSError) as exc:
+    except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
         logger.warning("ui_design_validate_error %s", exc)
         return True, ""
     if proc.returncode == 0:

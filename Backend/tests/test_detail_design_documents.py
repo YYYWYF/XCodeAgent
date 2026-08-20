@@ -12,13 +12,11 @@ from app.services.page_detail_plan import (
     extract_page_detail_context,
 )
 from app.services.detail_review import apply_detail_review_submission, detail_review_payload
-from app.services.page_dependencies import (
-    page_data_source_ids,
-    validate_project_plan_dependencies,
-)
+from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import load_project_plan_json, write_project_plan_document
+from tests.entity_design_test_utils import confirm_entity_designs
 
 
 class DetailDesignDocumentsTests(unittest.TestCase):
@@ -27,7 +25,9 @@ class DetailDesignDocumentsTests(unittest.TestCase):
     def test_project_plan_keeps_only_selected_detail_references(self) -> None:
         """写入计划后，页面和 EndpointDetail 应独立落盘并通过路径关联。"""
 
-        project_plan = create_project_plan(create_requirement_spec("创建库存管理系统"))
+        project_plan = confirm_entity_designs(
+            create_project_plan(create_requirement_spec("创建库存管理系统"))
+        )
         page = next(
             candidate
             for candidate in project_plan["frontend_pages"]
@@ -90,7 +90,10 @@ class DetailDesignDocumentsTests(unittest.TestCase):
                 all((workspace / item["json_path"]).is_file() for item in endpoint_refs)
             )
             self.assertTrue(
-                all("plans/endpoints/" in item["json_path"] for item in endpoint_refs)
+                all(
+                    "plans/endpoints/" in item["json_path"].replace("\\", "/")
+                    for item in endpoint_refs
+                )
             )
             self.assertNotIn("interface_design", persisted_detail)
             endpoint_artifact = load_project_plan_json(workspace / endpoint_refs[0]["json_path"])
@@ -204,11 +207,13 @@ class DetailDesignDocumentsTests(unittest.TestCase):
     def test_selected_page_review_only_contains_matching_page_detail(self) -> None:
         """单页审核载荷不得混入其他页面详情。"""
 
-        project_plan = create_project_plan(create_requirement_spec("创建库存管理系统"))
+        project_plan = confirm_entity_designs(
+            create_project_plan(create_requirement_spec("创建库存管理系统"))
+        )
         pages_with_sources = [
             page
             for page in project_plan["frontend_pages"]
-            if page_data_source_ids(page, project_plan["api_contracts"])
+            if (page.get("references") or {}).get("endpoint_dependencies")
         ]
         first_page, second_page = pages_with_sources[:2]
         first_detail = create_page_detail_plan(

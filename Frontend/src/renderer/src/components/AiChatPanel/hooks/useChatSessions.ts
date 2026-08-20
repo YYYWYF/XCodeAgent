@@ -23,6 +23,7 @@ import {
   sessionRuntimeKey,
   type SessionIdentity
 } from './sessionRuntime'
+import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/EntityDesignPanels'
 import { useSessionRuntimeStore } from './useSessionRuntimeStore'
 
 export type PersistSessionInput = {
@@ -33,6 +34,8 @@ export type PersistSessionInput = {
   apiContractId?: string
   endpointId?: string
   endpointLabel?: string
+  entityId?: string
+  entityLabel?: string
   pageId?: string
   titleFrom?: string
 }
@@ -65,9 +68,30 @@ function inferEndpointContextFromMessages(messages: ChatSessionMessage[]): {
   return {}
 }
 
+/** 从待保存消息中的 Workflow 快照推断实体会话归属。 */
+function inferEntityContextFromMessages(messages: ChatSessionMessage[]): {
+  entityId?: string
+  entityLabel?: string
+} {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const workflow = messages[index]?.workflow
+    const state = workflow?.state || {}
+    const result = workflow?.result || {}
+    const reviewSummary = workflow?.summary.clarification?.review?.summary || {}
+    const entityId = String(
+      state.selectedEntityId ||
+      result.selectedEntityId ||
+      reviewSummary.selectedEntityId ||
+      ''
+    ).trim()
+    if (entityId) return { entityId }
+  }
+  return {}
+}
+
 /** 判断会话是否为不绑定页面或 API 的自由对话。 */
 function isFreeChatSession(session: ChatSessionSummary): boolean {
-  return !session.pageId && !session.apiContractId && !session.endpointId
+  return !session.pageId && !session.apiContractId && !session.endpointId && !session.entityId
 }
 
 type UseChatSessionsParams = {
@@ -91,6 +115,7 @@ type UseChatSessionsResult = {
     endpointId: string,
     endpointLabel: string
   ) => Promise<SessionIdentity>
+  createEntitySession: (entityId: string, entityLabel: string) => Promise<SessionIdentity>
   createPageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   ensureActiveSession: () => Promise<SessionIdentity>
   ensurePlanningSession: (threadId: string) => Promise<SessionIdentity>
@@ -99,12 +124,15 @@ type UseChatSessionsResult = {
     endpointId: string,
     endpointLabel: string
   ) => Promise<SessionIdentity>
+  ensureEntitySession: (entityId: string, entityLabel: string) => Promise<SessionIdentity>
   ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
+  clearActiveSession: () => void
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   handleCreateSessionFromList: () => void
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
   handleSelectEndpoint: (apiContractId: string, endpointId: string) => Promise<void>
+  handleSelectEntity: (entityId: string) => Promise<void>
   handleSelectFreeChat: () => Promise<void>
   handleSelectPage: (pageId: string) => Promise<void>
   loadingSessions: boolean
@@ -117,8 +145,6 @@ type UseChatSessionsResult = {
   setDraftByKey: (sessionKey: string, value: string) => void
   setSelectedSkillsByKey: (sessionKey: string, value: ChatMessageSkill[]) => void
   setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
-  /** 清空当前 editorMode 的 activeSessionId（进入开发阶段时清掉设计阶段 planning session 历史）。 */
-  clearActiveSession: () => void
 }
 
 export function useChatSessions({
@@ -275,6 +301,8 @@ export function useChatSessions({
         apiContractId: session.apiContractId,
         endpointId: session.endpointId,
         endpointLabel: session.endpointLabel,
+        entityId: session.entityId,
+        entityLabel: session.entityLabel,
         pageId: session.pageId
       })
       registerSession(identity, session.messages)
@@ -340,6 +368,20 @@ export function useChatSessions({
     onCloseRightPanel()
   }
 
+  /** 切换实体时只定位到实体信息展示界面（已设计）或锁定引导卡片（未设计），
+   *  不自动打开历史会话；设计会话保留在左侧大纲历史中可再次打开。 */
+  const handleSelectEntity = async (_entityId: string): Promise<void> => {
+    if (loadingSessions) return
+    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    onCloseRightPanel()
+  }
+
+  /** 清空当前会话选择，用于实体设计确认后回到实体信息展示界面。 */
+  const clearActiveSession = (): void => {
+    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    onCloseRightPanel()
+  }
+
   /** 进入自由对话时恢复按更新时间排序的最近会话，不因点击入口重复新建。 */
   const handleSelectFreeChat = async (): Promise<void> => {
     if (loadingSessions) return
@@ -363,6 +405,10 @@ export function useChatSessions({
       endpointId: string
       endpointLabel: string
     },
+    entityContext?: {
+      entityId: string
+      entityLabel: string
+    },
     options?: { threadId?: string; title?: string }
   ): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
@@ -380,12 +426,16 @@ export function useChatSessions({
       apiContractId: endpointContext?.apiContractId,
       endpointId: endpointContext?.endpointId,
       endpointLabel: endpointContext?.endpointLabel,
+      entityId: entityContext?.entityId,
+      entityLabel: entityContext?.entityLabel,
       pageId
     })
     const session: ChatSessionRecord = {
       id: sessionId,
       title: options?.title
         ? options.title
+        : entityContext
+        ? `实体新会话：${entityContext.entityLabel}`
         : endpointContext
           ? `接口新会话：${endpointContext.endpointLabel}`
           : pageLabel
@@ -396,6 +446,8 @@ export function useChatSessions({
       apiContractId: identity.apiContractId,
       endpointId: identity.endpointId,
       endpointLabel: identity.endpointLabel,
+      entityId: identity.entityId,
+      entityLabel: identity.entityLabel,
       pageId: identity.pageId,
       workspaceRoot: application.workspaceRoot,
       messages: [],
@@ -493,10 +545,16 @@ export function useChatSessions({
         return identity
       }
     }
-    const identity = await createNewSession(undefined, undefined, undefined, {
-      threadId: normalizedThreadId,
-      title: '产品 Agent'
-    })
+    const identity = await createNewSession(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        threadId: normalizedThreadId,
+        title: '产品 Agent'
+      }
+    )
     planningSessionActivatedRef.current = true
     return identity
   }
@@ -529,6 +587,26 @@ export function useChatSessions({
         apiContractId: normalizedApiContractId,
         endpointId: normalizedEndpointId,
         endpointLabel
+      })
+    } catch (caughtError) {
+      reportSessionError(caughtError)
+      throw caughtError
+    }
+  }
+
+  /** 为指定实体显式创建一个新的独立会话和 AG-UI thread。 */
+  const createEntitySession = async (
+    entityId: string,
+    entityLabel: string
+  ): Promise<SessionIdentity> => {
+    const normalizedEntityId = entityId.trim()
+    if (!normalizedEntityId) {
+      throw new Error('实体标识不能为空。')
+    }
+    try {
+      return await createNewSession(undefined, undefined, undefined, {
+        entityId: normalizedEntityId,
+        entityLabel
       })
     } catch (caughtError) {
       reportSessionError(caughtError)
@@ -598,6 +676,28 @@ export function useChatSessions({
     )
   }
 
+  /** 按实体恢复既有会话，首次进入该实体时创建独立 session 与 thread。 */
+  const ensureEntitySession = async (
+    entityId: string,
+    entityLabel: string
+  ): Promise<SessionIdentity> => {
+    const normalizedEntityId = entityId.trim()
+    if (!normalizedEntityId) {
+      throw new Error('实体标识不能为空。')
+    }
+    const existingSession = sessionSummariesRef.current[editorMode].find(
+      (session) => session.entityId === normalizedEntityId
+    )
+    if (existingSession) {
+      await openChatSession(editorMode, existingSession.id)
+      const key = sessionRuntimeKey(workspaceRoot, editorMode, existingSession.id)
+      const identity = getIdentity(key)
+        || sessionIdentityFromSummary(existingSession, editorMode, workspaceRoot)
+      if (identity) return identity
+    }
+    return createEntitySession(normalizedEntityId, entityLabel)
+  }
+
   const handleCreateSessionFromList = (): void => {
     if (!application.workspaceRoot) return
     createNewSession().catch(reportSessionError)
@@ -626,6 +726,8 @@ export function useChatSessions({
         [editorMode]: current[editorMode].filter((session) => session.id !== sessionId)
       }))
       removeSession(key)
+      // 删除会话后清空该工作区的实体设计草稿缓存，避免新会话继承旧状态。
+      clearEntityDesignDraftStore(application.workspaceRoot)
 
       if (activeSessionId === sessionId) {
         if (nextSession) {
@@ -652,6 +754,7 @@ export function useChatSessions({
       (summary) => summary.id === input.sessionId
     )
     const inferredEndpoint = inferEndpointContextFromMessages(input.messages)
+    const inferredEntity = inferEntityContextFromMessages(input.messages)
     const now = Date.now()
     const session: ChatSessionRecord = {
       id: input.sessionId,
@@ -660,7 +763,8 @@ export function useChatSessions({
         (!existingSummary ||
           existingSummary.title === '新对话' ||
           existingSummary.title.startsWith('页面新会话：') ||
-          existingSummary.title.startsWith('接口新会话：'))
+          existingSummary.title.startsWith('接口新会话：') ||
+          existingSummary.title.startsWith('实体新会话：'))
           ? createChatSessionTitle(input.titleFrom)
           : existingSummary?.title || '新对话',
       editorMode: input.editorMode,
@@ -671,6 +775,8 @@ export function useChatSessions({
         input.endpointId || existingSummary?.endpointId || inferredEndpoint.endpointId,
       endpointLabel:
         input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint.endpointLabel,
+      entityId: input.entityId || existingSummary?.entityId || inferredEntity.entityId,
+      entityLabel: input.entityLabel || existingSummary?.entityLabel || inferredEntity.entityLabel,
       pageId: input.pageId || existingSummary?.pageId,
       workspaceRoot: application.workspaceRoot,
       messages: input.messages,
@@ -686,6 +792,7 @@ export function useChatSessions({
     activeSessionId,
     agUiSessionsRef,
     createEndpointSession,
+    createEntitySession,
     createPageSession,
     deletingSessionId,
     draft,
@@ -693,14 +800,17 @@ export function useChatSessions({
     ensureActiveSession,
     ensurePlanningSession,
     ensureEndpointSession,
+    ensureEntitySession,
     ensurePageSession,
     getSessionMessages,
     handleCreateSessionFromList,
     handleDeleteSession,
     handleOpenSession,
     handleSelectEndpoint,
+    handleSelectEntity,
     handleSelectFreeChat,
     handleSelectPage,
+    clearActiveSession,
     loadingSessions,
     messages,
     selectedSkills,
@@ -710,13 +820,6 @@ export function useChatSessions({
     sessions,
     setDraftByKey,
     setSelectedSkillsByKey,
-    setSessionMessages,
-    clearActiveSession: () => {
-      setActiveSessionIds((current) =>
-        current[editorMode] === undefined
-          ? current
-          : { ...current, [editorMode]: undefined }
-      )
-    }
+    setSessionMessages
   }
 }

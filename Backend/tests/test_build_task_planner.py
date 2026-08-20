@@ -7,19 +7,548 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app.agents.main.task_preparer import (
+    _compact_workspace_snapshot,
+    _endpoint_source_types,
     _model_usage,
+    _planning_context_mode,
+    _scoped_prompt_build_context,
     _task_preparation_prompt,
     prepare_build_tasks_with_main_agent,
 )
+from app.graph.nodes.tasks import _task_preparation_project_plan
 from app.services.build_task_planner import (
     _database_task_requires_approval,
     create_build_task_plan,
     tasks_from_build_task_plan,
 )
+from app.services.build_unit_compiler import annotate_unit_inputs
 from app.workspace.task_documents import render_build_task_dag_markdown
 
 
 class BuildTaskPlannerTests(unittest.TestCase):
+    def test_planning_context_mode_uses_pending_units(self) -> None:
+        """上下文模式由本轮实际待生成 Unit 决定，而不是只看请求类型。"""
+
+        self.assertEqual(
+            _planning_context_mode(
+                {
+                    "target": {"type": "page", "id": "orders"},
+                    "planning_unit_ids": ["page:orders"],
+                }
+            ),
+            "page",
+        )
+        self.assertEqual(
+            _planning_context_mode(
+                {
+                    "target": {"type": "page", "id": "orders"},
+                    "planning_unit_ids": [
+                        "backend:endpoint:orders-api:orders.list",
+                        "page:orders",
+                    ],
+                }
+            ),
+            "combined",
+        )
+        self.assertEqual(
+            _planning_context_mode(
+                {
+                    "target": {"type": "endpoint", "id": "orders.list"},
+                    "planning_unit_ids": ["backend:endpoint:orders-api:orders.list"],
+                }
+            ),
+            "endpoint",
+        )
+
+    def test_scoped_workspace_snapshot_excludes_other_side(self) -> None:
+        """endpoint/page 提示词只接收对应工作区导航事实。"""
+
+        snapshot = {
+            "project_roots": [{"path": "frontend/src"}],
+            "tech_stack": ["React", "Vite"],
+            "entrypoints": [
+                {"path": "frontend/src/main.tsx"},
+                {"path": "backend/src/main/java/demo/Application.java"},
+            ],
+            "build_commands": [{"cwd": "Frontend", "command": "pnpm build"}],
+            "test_commands": [{"cwd": "Frontend", "command": "pnpm test"}],
+            "file_manifest": [
+                "frontend/src/pages/Orders.tsx",
+                "backend/src/main/java/OrdersController.java",
+                "package.json",
+            ],
+            "shared_contracts": [{"path": "frontend/src/typings/index.ts"}],
+            "high_value_files": [
+                {"path": "frontend/package.json"},
+                {"path": "backend/pom.xml"},
+            ],
+            "code_graph": {"sampleSymbols": [{"path": "frontend/src/main.tsx"}]},
+            "backend": {
+                "dir_structure": ["backend/src/main/java/"],
+                "api_routes": [],
+                "models": [],
+                "workflow_nodes": ["irrelevant"],
+            },
+            "frontend": {"pages": ["frontend/src/pages/"]},
+        }
+
+        page_snapshot = _compact_workspace_snapshot(snapshot, scope="page")
+        endpoint_snapshot = _compact_workspace_snapshot(snapshot, scope="endpoint")
+
+        self.assertNotIn("backend", page_snapshot)
+        self.assertIn("frontend", page_snapshot)
+        self.assertIn("frontend/src/pages/Orders.tsx", page_snapshot["file_manifest"])
+        self.assertNotIn("backend/src/main/java/OrdersController.java", page_snapshot["file_manifest"])
+        self.assertNotIn("frontend", endpoint_snapshot)
+        self.assertIn("backend", endpoint_snapshot)
+        self.assertEqual(
+            endpoint_snapshot["entrypoints"],
+            [{"path": "backend/src/main/java/demo/Application.java"}],
+        )
+        self.assertEqual(
+            endpoint_snapshot["high_value_files"],
+            [{"path": "backend/pom.xml"}],
+        )
+        for omitted_key in (
+            "project_roots",
+            "tech_stack",
+            "build_commands",
+            "test_commands",
+            "file_manifest",
+            "shared_contracts",
+            "code_graph",
+        ):
+            self.assertNotIn(omitted_key, endpoint_snapshot)
+        self.assertNotIn("workflow_nodes", endpoint_snapshot["backend"])
+
+    def test_page_prompt_does_not_inject_backend_skill(self) -> None:
+        """只生成页面时不读取 Spring/MyBatis 技能或后端快照。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {"pages": [{"pageId": "orders"}]},
+            "executable_details": {
+                "page_implementation_contracts": [{"pageId": "orders"}],
+                "api_contracts": [{"id": "orders-api"}],
+            },
+        }
+        with patch(
+            "app.agents.main.task_preparer._springboot_mybatis_skill_document"
+        ) as backend_skill:
+            prompt = _task_preparation_prompt(
+                project_plan,
+                {
+                    "backend": {"dir_structure": ["backend/src/main/java/"]},
+                    "frontend": {"pages": ["frontend/src/pages/"]},
+                },
+                {
+                    "planning_context_mode": "page",
+                    "planning_unit_ids": ["page:orders"],
+                    "required_unit_ids": [
+                        "backend:endpoint:orders-api:orders.list",
+                        "page:orders",
+                    ],
+                    "direct_endpoint_details": [{"endpoint_id": "orders.list"}],
+                    "entity_designs": [{"entity_id": "Order"}],
+                },
+            )
+
+        backend_skill.assert_not_called()
+        self.assertIn("frontend-scoped", prompt)
+        self.assertIn("page implementation contract", prompt)
+        self.assertNotIn("INJECTED springboot-mybatis-generate", prompt)
+        self.assertNotIn('"backend"', prompt)
+        self.assertNotIn("direct_endpoint_details", prompt)
+        self.assertNotIn('"entity_designs"', prompt)
+
+    def test_endpoint_prompt_injects_backend_skill_only_for_endpoint_scope(self) -> None:
+        """只生成 endpoint 时注入后端技能和 endpoint 规则。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {"data_sources": [{"id": "orders", "type": "database"}]},
+            "executable_details": {
+                "endpoint_detail_plans": [{"endpoint_id": "orders.list"}],
+                "entity_designs": [{"entity_id": "Order", "data_source_type": "database"}],
+                "api_contracts": [{"id": "orders-api"}],
+            },
+        }
+        with patch(
+            "app.agents.main.task_preparer._springboot_mybatis_skill_document",
+            return_value="SKILL BODY",
+        ) as backend_skill:
+            prompt = _task_preparation_prompt(
+                project_plan,
+                {"backend": {"dir_structure": ["backend/src/main/java/"]}},
+                {
+                    "planning_context_mode": "endpoint",
+                    "planning_unit_ids": ["backend:endpoint:orders-api:orders.list"],
+                    "required_unit_ids": ["backend:endpoint:orders-api:orders.list"],
+                },
+            )
+
+        backend_skill.assert_called_once()
+        self.assertIn("endpoint-scoped", prompt)
+        self.assertIn("SKILL BODY", prompt)
+        self.assertIn("endpoint_detail_plans", prompt)
+        self.assertIn("dependencies: []", prompt)
+        self.assertIn("execution prerequisite list", prompt)
+        self.assertIn("same Unit", prompt)
+        self.assertNotIn("page implementation contract", prompt.lower())
+
+    def test_endpoint_prompt_keeps_executable_facts_once_and_target_routing_only(self) -> None:
+        """endpoint 正文只出现在 executable_details，TargetBuildContext 仅保留路由字段。"""
+
+        project_plan = {
+            "architecture": {"backend_tech_stack": {"framework": "Spring Boot"}},
+            "executable_details": {
+                "endpoint_detail_plans": [
+                    {
+                        "endpoint_id": "orders.create",
+                        "processing_logic": ["UNIQUE_ENDPOINT_LOGIC"],
+                    }
+                ],
+                "entity_designs": [
+                    {
+                        "entity_id": "Order",
+                        "data_source_type": "database",
+                        "fields": [{"name": "UNIQUE_ENTITY_FIELD"}],
+                    }
+                ],
+                "api_contracts": [{"id": "orders-api"}],
+            },
+        }
+        build_context = {
+            "target": {
+                "type": "endpoint",
+                "id": "orders.create",
+                "api_contract_id": "orders-api",
+            },
+            "endpoint_detail": {"processing_logic": ["UNIQUE_ENDPOINT_LOGIC"]},
+            "direct_endpoint_details": [
+                {"processing_logic": ["UNIQUE_ENDPOINT_LOGIC"]}
+            ],
+            "endpoint_ids": ["orders.create"],
+            "required_endpoint_ids": ["orders.create"],
+            "entity_ids": ["Order"],
+            "entity_designs": [
+                {
+                    "entity_id": "Order",
+                    "data_source_type": "database",
+                    "fields": [{"name": "UNIQUE_ENTITY_FIELD"}],
+                }
+            ],
+            "planning_unit_ids": ["backend:endpoint:orders-api:orders.create"],
+            "required_unit_ids": [
+                "backend:bootstrap",
+                "backend:endpoint:orders-api:orders.create",
+            ],
+            "source_refs": {"endpoint_detail": {"sha256": "sha-endpoint"}},
+            "planning_context_mode": "endpoint",
+        }
+
+        with patch(
+            "app.agents.main.task_preparer._springboot_mybatis_skill_document",
+            return_value="DATABASE SKILL BODY",
+        ):
+            prompt = _task_preparation_prompt(
+                project_plan,
+                {"backend": {"dir_structure": "backend/src/main/java"}},
+                build_context,
+            )
+
+        prompt_context = _scoped_prompt_build_context(build_context, "endpoint")
+        self.assertEqual(
+            prompt_context["required_unit_ids"],
+            ["backend:endpoint:orders-api:orders.create"],
+        )
+        for omitted_key in (
+            "endpoint_detail",
+            "direct_endpoint_details",
+            "entity_designs",
+            "required_endpoint_ids",
+            "planning_unit_ids",
+            "planning_context_mode",
+        ):
+            self.assertNotIn(omitted_key, prompt_context)
+        self.assertEqual(prompt.count("UNIQUE_ENDPOINT_LOGIC"), 1)
+        self.assertEqual(prompt.count("UNIQUE_ENTITY_FIELD"), 1)
+        self.assertEqual(prompt.count("owner=database"), 1)
+        self.assertNotIn('"application_skeleton"', prompt)
+
+    def test_endpoint_projection_includes_confirmed_entity_design(self) -> None:
+        """endpoint 投影保留有序实体摘要、字段和数据库绑定。"""
+
+        project_plan = {
+            "architecture": {"backend_tech_stack": {"framework": "Spring Boot"}},
+            "entity_detail_plans": [
+                {
+                    "status": "confirmed",
+                    "entity_id": "Category",
+                    "entity_name": "商品分类",
+                    "data_source_type": "database",
+                    "fields": [
+                        {
+                            "name": "category_name",
+                            "label": "分类名称",
+                            "type": "text",
+                            "required": True,
+                        }
+                    ],
+                    "database_design": {
+                        "database_name": "xcode",
+                        "matched_table": "category",
+                        "bindings": [
+                            {
+                                "entity_field": "category_name",
+                                "table_column": "category_name",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "api_contracts": [
+                {
+                    "id": "category_api",
+                    "entity_ids": ["Category"],
+                    "endpoints": [
+                        {"id": "category_api.create", "method": "POST"}
+                    ],
+                }
+            ],
+        }
+        build_context = {
+            "target": {
+                "type": "endpoint",
+                "id": "category_api.create",
+                "api_contract_id": "category_api",
+            },
+            "direct_endpoint_details": [
+                {
+                    "api_contract_id": "category_api",
+                    "endpoint_id": "category_api.create",
+                }
+            ],
+            "endpoint_ids": ["category_api.create"],
+            "entity_ids": ["Category"],
+            "required_unit_ids": [
+                "backend:endpoint:category_api:category_api.create"
+            ],
+            "planning_context_mode": "endpoint",
+        }
+
+        projected = _task_preparation_project_plan(project_plan, build_context)
+
+        designs = projected["executable_details"]["entity_designs"]
+        self.assertEqual([item["entity_id"] for item in designs], ["Category"])
+        self.assertEqual(designs[0]["fields"][0]["name"], "category_name")
+        self.assertEqual(
+            designs[0]["database_design"]["matched_table"],
+            "category",
+        )
+        self.assertNotIn("application_skeleton", projected)
+
+    def test_external_api_endpoint_prompt_uses_external_skill_only(self) -> None:
+        """外部 API endpoint 只注入外部集成规则，不误用 MyBatis。"""
+
+        project_plan = {
+            "application_skeleton": {
+                "data_sources": [{"id": "weather", "type": "external_api"}]
+            },
+            "executable_details": {
+                "endpoint_detail_plans": [{"endpoint_id": "weather.get"}],
+                "entity_designs": [
+                    {"entity_id": "Weather", "data_source_type": "external_api"}
+                ],
+                "api_contracts": [{"id": "weather-api"}],
+            },
+        }
+        with (
+            patch(
+                "app.agents.main.task_preparer._springboot_mybatis_skill_document"
+            ) as database_skill,
+            patch(
+                "app.agents.main.task_preparer._external_api_skill_document",
+                return_value="EXTERNAL SKILL BODY",
+            ) as external_skill,
+        ):
+            prompt = _task_preparation_prompt(
+                project_plan,
+                {
+                    "backend": {"dir_structure": ["backend/src/main/java/"]},
+                    "frontend": {"pages": ["frontend/src/pages/"]},
+                },
+                {
+                    "planning_context_mode": "endpoint",
+                    "planning_unit_ids": ["backend:endpoint:weather-api:weather.get"],
+                    "required_unit_ids": ["backend:endpoint:weather-api:weather.get"],
+                },
+            )
+
+        self.assertEqual(_endpoint_source_types(project_plan), {"external_api"})
+        database_skill.assert_not_called()
+        external_skill.assert_called_once()
+        self.assertIn("EXTERNAL SKILL BODY", prompt)
+        self.assertIn("upstream DTO/client", prompt)
+        self.assertIn("external_api", prompt)
+        self.assertNotIn("INJECTED springboot-mybatis-generate", prompt)
+
+    def test_mixed_endpoint_prompt_injects_exact_source_skill_union(self) -> None:
+        """混合 endpoint 按实体来源同时注入三类规则，但保留前后端边界。"""
+
+        project_plan = {
+            "application_skeleton": {
+                "data_sources": [
+                    {"id": "database", "type": "database"},
+                    {"id": "external_api", "type": "external_api"},
+                    {"id": "static", "type": "static"},
+                ]
+            },
+            "executable_details": {
+                "endpoint_detail_plans": [{"endpoint_id": "dashboard.get"}],
+                "entity_designs": [
+                    {"entity_id": "Order", "data_source_type": "database"},
+                    {"entity_id": "Weather", "data_source_type": "external_api"},
+                    {"entity_id": "Notice", "data_source_type": "static"},
+                ],
+                "api_contracts": [{"id": "dashboard-api"}],
+            },
+        }
+        with (
+            patch(
+                "app.agents.main.task_preparer._springboot_mybatis_skill_document",
+                return_value="DATABASE SKILL BODY",
+            ) as database_skill,
+            patch(
+                "app.agents.main.task_preparer._external_api_skill_document",
+                return_value="EXTERNAL SKILL BODY",
+            ) as external_skill,
+            patch(
+                "app.agents.main.task_preparer._static_data_skill_document",
+                return_value="STATIC SKILL BODY",
+            ) as static_skill,
+        ):
+            prompt = _task_preparation_prompt(
+                project_plan,
+                {
+                    "backend": {"dir_structure": ["backend/src/main/java/"]},
+                    "frontend": {"api_clients": ["frontend/src/apis/"]},
+                },
+                {
+                    "planning_context_mode": "endpoint",
+                    "planning_unit_ids": [
+                        "backend:endpoint:dashboard-api:dashboard.get",
+                        "frontend:data:static",
+                    ],
+                    "required_unit_ids": [
+                        "backend:endpoint:dashboard-api:dashboard.get",
+                        "frontend:data:static",
+                    ],
+                },
+            )
+
+        self.assertEqual(
+            _endpoint_source_types(project_plan),
+            {"database", "external_api", "static"},
+        )
+        database_skill.assert_called_once()
+        external_skill.assert_called_once()
+        static_skill.assert_called_once()
+        for marker in ("DATABASE SKILL BODY", "EXTERNAL SKILL BODY", "STATIC SKILL BODY"):
+            self.assertIn(marker, prompt)
+        self.assertIn("owner=backend", prompt)
+        self.assertIn("owner=frontend", prompt)
+        self.assertIn("combined endpoint-scoped", prompt)
+
+    def test_static_endpoint_prompt_uses_frontend_snapshot(self) -> None:
+        """纯 static endpoint 只注入前端快照和静态 Skill。"""
+
+        project_plan = {
+            "executable_details": {
+                "entity_designs": [
+                    {"entity_id": "Notice", "data_source_type": "static"}
+                ],
+                "api_contracts": [{"id": "notice-api"}],
+            }
+        }
+        prompt = _task_preparation_prompt(
+            project_plan,
+            {
+                "backend": {"dir_structure": ["backend/src/main/java/"]},
+                "frontend": {
+                    "api_clients": ["frontend/src/apis/"],
+                    "dir_structure": "frontend/src/apis/noticeApi.ts",
+                },
+                "file_manifest": [
+                    "backend/src/main/java/NoticeController.java",
+                    "frontend/src/apis/noticeApi.ts",
+                ],
+            },
+            {
+                "planning_context_mode": "endpoint",
+                "planning_unit_ids": ["frontend:data:static"],
+                "required_unit_ids": ["frontend:data:static"],
+            },
+        )
+
+        self.assertIn("frontend-scoped", prompt)
+        self.assertIn("frontend/src/apis/noticeApi.ts", prompt)
+        self.assertNotIn("backend/src/main/java/NoticeController.java", prompt)
+        self.assertIn("frontend-static-data-generate", prompt)
+        self.assertNotIn("springboot-mybatis-generate SKILL.md ---", prompt)
+
+    def test_unit_inputs_filter_entity_designs_by_owner_source(self) -> None:
+        """后端 endpoint 与前端 static Unit 只携带各自来源实体。"""
+
+        build_context = {
+            "target": {"type": "endpoint", "id": "dashboard.get"},
+            "required_unit_ids": [
+                "backend:endpoint:dashboard-api:dashboard.get",
+                "frontend:data:static",
+            ],
+            "endpoint_ids": ["dashboard.get"],
+            "entity_ids": ["Order", "Weather", "Notice"],
+            "entity_designs": [
+                {"entity_id": "Order", "data_source_type": "database"},
+                {"entity_id": "Weather", "data_source_type": "external_api"},
+                {"entity_id": "Notice", "data_source_type": "static"},
+            ],
+            "source_refs": {},
+        }
+        units = annotate_unit_inputs(
+            {
+                "backend:endpoint:dashboard-api:dashboard.get": {
+                    "id": "backend:endpoint:dashboard-api:dashboard.get",
+                    "kind": "backend",
+                    "task_ids": [],
+                },
+                "frontend:data:static": {
+                    "id": "frontend:data:static",
+                    "kind": "frontend",
+                    "task_ids": [],
+                },
+            },
+            build_context,
+            {},
+        )
+
+        backend_sources = units[
+            "backend:endpoint:dashboard-api:dashboard.get"
+        ]["source_refs"]["entity_designs"]
+        static_sources = units["frontend:data:static"]["source_refs"]["entity_designs"]
+        self.assertEqual(
+            {item["data_source_type"] for item in backend_sources},
+            {"database", "external_api"},
+        )
+        self.assertEqual(
+            {item["data_source_type"] for item in static_sources},
+            {"static"},
+        )
+        self.assertNotEqual(
+            units["backend:endpoint:dashboard-api:dashboard.get"]["input_fingerprint"],
+            units["frontend:data:static"]["input_fingerprint"],
+        )
+
     def test_delete_endpoint_name_does_not_make_create_table_high_risk(self) -> None:
         """来源 endpoint 名称中的 delete 不得被误判为高危数据库删除操作。"""
 
@@ -865,30 +1394,44 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("page-home", markdown)
 
     def test_compiles_unit_dependencies_and_source_refs(self) -> None:
-        """页面任务只继承前端公共 Unit，后端和数据库仅保留来源引用。"""
+        """页面任务只继承前端公共 Unit，后端 Unit 仅保留接口来源引用。"""
 
         base_plan = {
             "schema_version": "build-dag.v3",
             "build_units": {
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "frontend"},
-                "database:orders": {"id": "database:orders", "kind": "database"},
+                "backend:endpoint:orders": {
+                    "id": "backend:endpoint:orders",
+                    "kind": "backend",
+                },
                 "page:orders": {"id": "page:orders", "kind": "page"},
             },
             "unit_graph": {
                 "schema_version": "build-unit-graph.v3",
-                "nodes": ["frontend:api-client", "database:orders", "page:orders"],
+                "nodes": [
+                    "frontend:api-client",
+                    "backend:endpoint:orders",
+                    "page:orders",
+                ],
                 "edges": [
                     {"from": "frontend:api-client", "to": "page:orders", "type": "depends_on"},
-                    {"from": "database:orders", "to": "page:orders", "type": "depends_on"},
+                    {
+                        "from": "backend:endpoint:orders",
+                        "to": "page:orders",
+                        "type": "depends_on",
+                    },
                 ],
                 "validation": {"is_valid": True, "errors": []},
             },
         }
         build_context = {
             "target": {"type": "page", "id": "orders"},
-            "required_unit_ids": ["frontend:api-client", "database:orders", "page:orders"],
+            "required_unit_ids": [
+                "frontend:api-client",
+                "backend:endpoint:orders",
+                "page:orders",
+            ],
             "endpoint_ids": ["orders_api.list"],
-            "data_source_ids": ["orders"],
             "source_refs": {
                 "page_detail": {"id": "orders", "json_path": "plans/pages/page--orders.json", "sha256": "p1"},
                 "data_source_details": [
@@ -910,8 +1453,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     },
                     {
                         "id": "task:orders-api",
-                        "unit_id": "database:orders",
-                        "owner": "database",
+                        "unit_id": "backend:endpoint:orders",
+                        "owner": "backend",
                         "description": "实现订单 API",
                         "change_scope": [{"operation": "modify", "path": "Backend/app/orders.py"}],
                     },
@@ -935,15 +1478,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
         )
         self.assertEqual(tasks["task:orders-page"]["source_refs"]["type"], "page_detail")
         self.assertEqual(
-            plan["build_units"]["database:orders"]["source_refs"],
+            plan["build_units"]["backend:endpoint:orders"]["source_refs"],
             {
-                "type": "database_context",
+                "type": "endpoint_detail",
                 "target": {"type": "page", "id": "orders"},
-                "database_context_status": None,
-                "database_context_hashes": [],
+                "endpoint_detail": {},
                 "endpoint_details": [],
-                "data_source_ids": ["orders"],
                 "endpoint_ids": ["orders_api.list"],
+                "entity_ids": [],
+                "entity_designs": [],
             },
         )
         self.assertTrue(plan["build_units"]["page:orders"]["input_fingerprint"])
@@ -1028,17 +1571,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         },
                     }
                 ],
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {"schema_hash": "required-hash", "tables": []},
-                    "gaps": [
-                        {"id": "gap-core", "kind": "missing_table", "table": "core"},
-                        {"id": "gap-user", "kind": "missing_table", "table": "user"},
-                    ],
-                    "task_intents": [],
-                }
             },
         )
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
@@ -1086,16 +1618,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     "validation": {"is_valid": True, "errors": []},
                 },
             },
-            build_context={
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {"schema_hash": "required-hash", "tables": []},
-                    "gaps": [],
-                    "task_intents": [],
-                }
-            },
+            build_context={},
         )
 
         self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
@@ -1104,8 +1627,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             " ".join(plan["task_graph"]["validation"]["errors"]),
         )
 
-    def test_readonly_existing_database_endpoint_drops_database_change_task(self) -> None:
-        """只读 mysql_existing 接口已有真实摘要时，不保留多余 database.change 任务。"""
+    def test_normal_build_scope_rejects_database_task(self) -> None:
+        """实体确认已完成数据库操作后，正常 Build 不接受数据库任务。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -1116,78 +1639,42 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "unit_id": "database:users",
                         "owner": "database",
                         "task_type": "database.change",
-                        "description": "为用户列表准备数据库。",
+                        "description": "重复创建用户表。",
                         "database_scope": {
                             "data_source_id": "users",
                             "operations": ["create_table"],
                         },
-                        "change_scope": [
-                            {"operation": "add", "path": "database/migrations/users.sql"}
-                        ],
-                    },
-                    {
-                        "id": "users-api",
-                        "unit_id": "backend:endpoint:user_api:user.list",
-                        "owner": "backend",
-                        "description": "实现用户列表接口。",
-                        "change_scope": [{"operation": "modify", "path": "Backend/UserApi.java"}],
-                    },
+                        "change_scope": [],
+                    }
                 ]
             },
             base_build_task_plan={
                 "schema_version": "build-dag.v3",
                 "build_units": {
-                    "database:users": {"id": "database:users", "kind": "database"},
                     "backend:endpoint:user_api:user.list": {
                         "id": "backend:endpoint:user_api:user.list",
                         "kind": "backend",
-                    },
+                    }
                 },
                 "unit_graph": {
-                    "nodes": [
-                        "database:users",
-                        "backend:endpoint:user_api:user.list",
-                    ],
-                    "edges": [
-                        {
-                            "from": "database:users",
-                            "to": "backend:endpoint:user_api:user.list",
-                            "type": "depends_on",
-                        }
-                    ],
+                    "nodes": ["backend:endpoint:user_api:user.list"],
+                    "edges": [],
                     "validation": {"is_valid": True, "errors": []},
                 },
             },
             build_context={
-                "direct_endpoint_details": [
-                    {
-                        "endpoint_id": "user.list",
-                        "method": "GET",
-                        "data_origin": {
-                            "source_type": "database",
-                            "effective_source": {"kind": "mysql_existing"},
-                            "differences": [],
-                            "notes": [],
-                        },
-                    }
-                ],
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {"schema_hash": "required-hash", "tables": []},
-                    "gaps": [],
-                    "task_intents": [],
-                },
+                "required_unit_ids": ["backend:endpoint:user_api:user.list"]
             },
         )
 
-        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        self.assertNotIn("users-db", tasks)
-        self.assertIn("users-api", tasks)
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertIn(
+            "not allowed in normal Build scope",
+            " ".join(plan["task_graph"]["validation"]["errors"]),
+        )
 
-    def test_database_endpoint_and_page_units_allow_frontend_backend_parallelism(self) -> None:
-        """数据库 gap 约束 endpoint，但 page 不等待 endpoint 实现。"""
+    def test_entity_backed_endpoint_and_page_allow_parallelism(self) -> None:
+        """实体数据库操作完成后，endpoint 与 page 仍按代码 Unit 并行编译。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -1216,7 +1703,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             base_build_task_plan={
                 "schema_version": "build-dag.v3",
                 "build_units": {
-                    "database:users": {"id": "database:users", "kind": "database"},
                     "backend:endpoint:user_api:user.create": {
                         "id": "backend:endpoint:user_api:user.create",
                         "kind": "backend",
@@ -1224,17 +1710,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     "page:users": {"id": "page:users", "kind": "page"},
                 },
                 "unit_graph": {
-                    "nodes": [
-                        "database:users",
-                        "backend:endpoint:user_api:user.create",
-                        "page:users",
-                    ],
+                    "nodes": ["backend:endpoint:user_api:user.create", "page:users"],
                     "edges": [
-                        {
-                            "from": "database:users",
-                            "to": "backend:endpoint:user_api:user.create",
-                            "type": "depends_on",
-                        },
                         {
                             "from": "backend:endpoint:user_api:user.create",
                             "to": "page:users",
@@ -1245,62 +1722,20 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 },
             },
             build_context={
-                "data_source_ids": ["users"],
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {
-                        "schema_hash": "required-hash",
-                        "tables": [{"name": "users", "columns": []}],
-                    },
-                    "gaps": [
-                        {
-                            "id": "gap-users-table",
-                            "kind": "missing_table",
-                            "database": "xcode",
-                            "table": "users",
-                            "message": "表 users 不存在，需要创建。",
-                        }
-                    ],
-                    "task_intents": [
-                        {
-                            "id": "db-intent-gap-users-table",
-                            "operation": "create_table",
-                            "task_type": "database.change",
-                            "risk": "low",
-                            "gap_ids": ["gap-users-table"],
-                            "database_scope": {
-                                "database": "xcode",
-                                "tables": ["users"],
-                                "operations": ["create_table"],
-                                "gaps": [
-                                    {
-                                        "id": "gap-users-table",
-                                        "kind": "missing_table",
-                                        "database": "xcode",
-                                        "table": "users",
-                                        "message": "表 users 不存在，需要创建。",
-                                    }
-                                ],
-                            },
-                            "description": "表 users 不存在，需要创建。",
-                        }
-                    ],
-                },
+                "required_unit_ids": [
+                    "backend:endpoint:user_api:user.create",
+                    "page:users",
+                ],
             },
         )
 
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        self.assertIn("db-intent-gap-users-table", tasks)
-        self.assertEqual(tasks["db-intent-gap-users-table"]["owner"], "database")
-        self.assertIn("db-intent-gap-users-table", tasks["users-api"]["dependencies"])
         self.assertNotIn("users-api", tasks["users-page"]["dependencies"])
         self.assertEqual(tasks["users-page"]["dependencies"], [])
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
 
-    def test_database_task_missing_scope_uses_unique_gap_intent_scope(self) -> None:
-        """模型生成数据库任务但漏 scope 时，可由唯一 gap 意图补齐范围。"""
+    def test_database_task_missing_scope_is_not_auto_completed(self) -> None:
+        """专门数据库流程必须显式提供 scope，不再从规划上下文自动补齐。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -1313,88 +1748,30 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "task_type": "database.change",
                         "description": "补充 user 表的 entryDate 字段。",
                         "change_scope": [],
-                    },
-                    {
-                        "id": "summary-api",
-                        "unit_id": "backend:endpoint:core_api:summary",
-                        "owner": "backend",
-                        "description": "实现概览接口。",
-                        "change_scope": [
-                            {"operation": "modify", "path": "Backend/SummaryApi.java"}
-                        ],
-                    },
+                    }
                 ]
             },
             base_build_task_plan={
                 "schema_version": "build-dag.v3",
                 "build_units": {
                     "database:core": {"id": "database:core", "kind": "database"},
-                    "backend:endpoint:core_api:summary": {
-                        "id": "backend:endpoint:core_api:summary",
-                        "kind": "backend",
-                    },
                 },
                 "unit_graph": {
-                    "nodes": ["database:core", "backend:endpoint:core_api:summary"],
-                    "edges": [
-                        {
-                            "from": "database:core",
-                            "to": "backend:endpoint:core_api:summary",
-                            "type": "depends_on",
-                        }
-                    ],
+                    "nodes": ["database:core"],
+                    "edges": [],
                     "validation": {"is_valid": True, "errors": []},
                 },
             },
             build_context={
-                "data_source_ids": ["core"],
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {
-                        "schema_hash": "required-hash",
-                        "tables": [{"name": "user", "columns": [{"name": "entryDate"}]}],
-                    },
-                    "gaps": [
-                        {
-                            "id": "gap-entry-date",
-                            "kind": "missing_column",
-                            "resolution_kind": "database_change",
-                            "database": "xcode",
-                            "table": "user",
-                            "column": "entryDate",
-                            "message": "表 user 缺少字段 entryDate。",
-                        }
-                    ],
-                    "task_intents": [
-                        {
-                            "id": "db-intent-gap-entry-date",
-                            "operation": "add_column",
-                            "task_type": "database.change",
-                            "risk": "low",
-                            "gap_ids": ["gap-entry-date"],
-                            "database_scope": {
-                                "database": "xcode",
-                                "tables": ["user"],
-                                "columns": ["entryDate"],
-                                "operations": ["add_column"],
-                                "gap_ids": ["gap-entry-date"],
-                            },
-                            "description": "表 user 缺少字段 entryDate。",
-                        }
-                    ],
-                },
+                "required_unit_ids": ["database:core"],
             },
         )
 
-        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        self.assertEqual(
-            tasks["db-add-summary-columns"]["database_scope"]["columns"],
-            ["entryDate"],
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertIn(
+            "must declare non-empty database_scope",
+            " ".join(plan["task_graph"]["validation"]["errors"]),
         )
-        self.assertIn("db-add-summary-columns", tasks["summary-api"]["dependencies"])
-        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
 
     def test_invalid_graph_reader_preserves_every_registry_task(self) -> None:
         """无效 DAG 使用完整 nodes 读取，不能退化为不完整拓扑序。"""

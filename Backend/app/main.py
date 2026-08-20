@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import Body, FastAPI, Header
@@ -9,35 +8,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.config import Settings
 from app.graph import clear_workflow_graph_cache, workflow_graph_for_request
 from app.graph.application_planning_workflow import (
     application_planning_graph_for_request,
     clear_application_planning_graph_cache,
 )
 from app.graph.direct_modification_workflow import clear_direct_modification_graph_cache
-from app.protocols.workflow import (
-    build_workflow_ag_ui_stream,
-    workflow_capabilities,
-)
-from app.protocols.application_page_planning import (
-    application_page_planning_capabilities,
-    build_application_page_planning_ag_ui_stream,
-)
-from app.protocols.application_lifecycle import (
-    application_lifecycle_capabilities,
-    build_application_lifecycle_ag_ui_stream,
+from app.middleware.approvals import approval_store
+from app.persistence.checkpoints import close_workflow_checkpointer
+from app.protocols.agent_files import (
+    agent_files_capabilities,
+    build_agent_files_ag_ui_stream,
 )
 from app.protocols.application_development_planning import (
     application_development_planning_capabilities,
     build_application_development_planning_ag_ui_stream,
 )
-from app.protocols.user_skills import (
-    build_user_skills_ag_ui_stream,
-    user_skills_capabilities,
+from app.protocols.application_lifecycle import (
+    application_lifecycle_capabilities,
+    build_application_lifecycle_ag_ui_stream,
 )
-from app.protocols.agent_files import (
-    agent_files_capabilities,
-    build_agent_files_ag_ui_stream,
+from app.protocols.application_page_planning import (
+    application_page_planning_capabilities,
+    build_application_page_planning_ag_ui_stream,
 )
 from app.protocols.code_changes import (
     build_code_changes_ag_ui_stream,
@@ -51,7 +45,14 @@ from app.protocols.direct_modification import (
     build_conversation_ag_ui_stream,
     conversation_capabilities,
 )
-from app.config import Settings
+from app.protocols.user_skills import (
+    build_user_skills_ag_ui_stream,
+    user_skills_capabilities,
+)
+from app.protocols.workflow import (
+    build_workflow_ag_ui_stream,
+    workflow_capabilities,
+)
 from app.services.agent_file_documents import ensure_agents_document
 from app.services.builtin_skills import available_builtin_skills
 from app.services.database_crypto import (
@@ -62,9 +63,8 @@ from app.services.project_launcher import (
     launch_project_preview,
     stop_project_preview,
 )
+from app.tools import database_tools
 from app.workspace import workspace as workspace_tools
-from app.middleware.approvals import approval_store
-from app.persistence.checkpoints import close_workflow_checkpointer
 
 settings = Settings.from_env()
 
@@ -90,6 +90,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
 
 class ApprovalActionRequest(BaseModel):
     scope: Literal["once", "operation"] = Field(default="once")
@@ -132,8 +133,8 @@ async def health() -> dict[str, object]:
 
 @app.post("/application-page-planning/run")
 async def run_application_page_planning(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     return StreamingResponse(
         build_application_page_planning_ag_ui_stream(
@@ -148,8 +149,8 @@ async def run_application_page_planning(
 
 @app.post("/application-lifecycle/run")
 async def run_application_lifecycle(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     """运行独立应用生命周期 AG-UI 动作。"""
 
@@ -165,8 +166,8 @@ async def run_application_lifecycle(
 
 @app.post("/application-development-planning/run")
 async def run_application_development_planning(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     """运行独立于主工作流的工作台应用开发计划 AG-UI 动作。"""
 
@@ -182,8 +183,8 @@ async def run_application_development_planning(
 
 @app.post("/skills/run")
 async def run_user_skills(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     return StreamingResponse(
         build_user_skills_ag_ui_stream(payload=input_data, accept=accept),
@@ -194,8 +195,8 @@ async def run_user_skills(
 
 @app.post("/agent-files/run")
 async def run_agent_files(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     return StreamingResponse(
         build_agent_files_ag_ui_stream(payload=input_data, accept=accept),
@@ -206,8 +207,8 @@ async def run_agent_files(
 
 @app.post("/code-changes/run")
 async def run_code_changes(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     """通过独立 AG-UI 流执行代码变更撤销。"""
 
@@ -234,8 +235,8 @@ async def run_version_control(
 
 @app.post("/conversation/run")
 async def run_conversation(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     """运行可回答常规问题、读取工作区或执行局部修改的自由对话 Graph。"""
 
@@ -248,8 +249,8 @@ async def run_conversation(
 
 @app.post("/ag-ui")
 async def ag_ui(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     """Compatibility alias while the frontend migrates to /workflow/run."""
     return StreamingResponse(
@@ -275,7 +276,7 @@ async def workspace_info(request: workspace_tools.WorkspaceRequest) -> dict[str,
 
 @app.post("/tools/workspace/list-files")
 async def workspace_list_files(
-    request: workspace_tools.ListFilesRequest,
+        request: workspace_tools.ListFilesRequest,
 ) -> dict[str, Any]:
     return workspace_tools.list_files(request)
 
@@ -315,6 +316,20 @@ async def search_text(request: workspace_tools.SearchTextRequest) -> dict[str, A
     return workspace_tools.search_text(request)
 
 
+@app.post("/tools/database/tables")
+async def database_tables(
+        request: database_tools.DatabaseTablesRequest,
+) -> dict[str, Any]:
+    return database_tools.database_tables(request)
+
+
+@app.post("/tools/database/table-columns")
+async def database_table_columns(
+        request: database_tools.DatabaseTableColumnsRequest,
+) -> dict[str, Any]:
+    return database_tools.database_table_columns(request)
+
+
 @app.post("/tools/terminal/exec")
 async def terminal_exec(request: workspace_tools.TerminalExecRequest) -> dict[str, Any]:
     return workspace_tools.terminal_exec(request)
@@ -322,16 +337,16 @@ async def terminal_exec(request: workspace_tools.TerminalExecRequest) -> dict[st
 
 @app.post("/tools/approvals/{approval_id}/approve")
 async def approve_tool_request(
-    approval_id: str,
-    request: ApprovalActionRequest = Body(default_factory=ApprovalActionRequest),
+        approval_id: str,
+        request: ApprovalActionRequest = Body(default_factory=ApprovalActionRequest),
 ) -> dict[str, Any]:
     return approval_store.approve(approval_id, scope=request.scope)
 
 
 @app.post("/tools/approvals/{approval_id}/reject")
 async def reject_tool_request(
-    approval_id: str,
-    request: ApprovalActionRequest = Body(default_factory=ApprovalActionRequest),
+        approval_id: str,
+        request: ApprovalActionRequest = Body(default_factory=ApprovalActionRequest),
 ) -> dict[str, Any]:
     return approval_store.reject(approval_id, reason=request.reason)
 
@@ -348,8 +363,8 @@ async def git_diff(request: workspace_tools.GitDiffRequest) -> dict[str, Any]:
 
 @app.post("/workflow/run")
 async def run_workflow(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     return StreamingResponse(
         build_workflow_ag_ui_stream(

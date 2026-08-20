@@ -9,7 +9,10 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.data_source_policy import DatasourceType
-from app.services.requirement_spec import create_requirement_spec
+from app.services.requirement_spec import (
+    create_requirement_spec,
+    merge_clarification_answers_into_spec,
+)
 from app.tools.ask_user import ask_user, extract_ask_user_clarification
 from app.utils.model_output import extract_json_object
 
@@ -19,7 +22,7 @@ def _requirements_prompt(
     existing_spec: dict[str, Any] | None = None,
     datasource_type: DatasourceType = "database",
 ) -> str:
-    """构建产品需求提示；技术配置与产品验收均不进入需求澄清。"""
+    """构建产品需求提示；保留实体清单并把技术配置下沉到后续阶段。"""
 
     visible_existing_spec = (
         {
@@ -73,8 +76,13 @@ def _requirements_prompt(
         "Analyze the user's application request and decide whether the requirement is clear enough "
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 用户角色, 功能模块, "
-        "页面清单, 业务信息需求, 业务流程.\n"
-        "Data sources, databases, persistence, API contracts, schemas, and storage choices are technical "
+        "页面清单, 实体清单, 业务信息需求, 业务流程.\n"
+        "This stage only generates business entities. Each entity has a stable id, name, description, "
+        "and fields that are display-only business information (label and description only). Do NOT "
+        "generate field names, field types, data sources, or any database/external-api/static choice "
+        "here or in product/technical planning; the data source for each entity is decided and "
+        "confirmed in the entity-design stage. Never emit data_sources or the legacy type mock.\n"
+        "Databases, persistence, API contracts, schemas, and storage choices are technical "
         "planning concerns. Do not ask the product user about them, do not expose them for confirmation, "
         "and do not include data_sources in the returned RequirementSpec.\n"
         f"{clarification_policy}"
@@ -87,10 +95,11 @@ def _requirements_prompt(
         "continue planning until the user answers.\n"
         "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
         "without markdown fences or commentary. It must include app_info, user_roles, "
-        "feature_modules, pages, and business_flows. Do not return assumptions or product risks. "
+        "feature_modules, pages, entities, and business_flows. Do not return assumptions, product risks, "
+        "or acceptance_criteria. "
         "Product acceptance criteria belong to the later ProductPlan and must not be generated in the "
         "RequirementSpec confirmation document. "
-        "Every role, module, and flow must have a stable id. Every page must have a "
+        "Every role, module, entity, and flow must have a stable id. Every page must have a "
         "stable pageId, name, unique path, module_id, and description. Use '/' only for the single "
         "home/dashboard page; all other pages must have business routes derived from their pageId, "
         "such as '/employees-list' or '/onboarding-form'. Never return multiple pages with path '/'. "
@@ -179,6 +188,8 @@ def analyze_requirements_with_chat_model(
         ),
         datasource_type=datasource_type,
     )
+    if _is_clarification_followup(existing_spec):
+        spec = merge_clarification_answers_into_spec(spec, request)
     clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
     spec["clarification_status"] = clarification["status"]

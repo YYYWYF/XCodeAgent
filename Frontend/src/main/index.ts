@@ -9,11 +9,7 @@ import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { setupApplicationSettingsIpc } from './applicationSettings'
-import {
-  lstatIfPresent,
-  movePathToTrashIfPresent,
-  removeDirectoryIfPresent
-} from './filesystem'
+import { lstatIfPresent, movePathToTrashIfPresent, removeDirectoryIfPresent } from './filesystem'
 import { readManagedWorkspaceApplication } from './managedWorkspace'
 import {
   clearAuthState,
@@ -106,7 +102,7 @@ function normalizeWorkbenchNodeLabel(value: unknown, fallback: string): string {
 type WorkbenchApiContract = {
   id: string
   label: string
-  dataSourceIds: string[]
+  entityIds: string[]
   endpoints: Array<{
     apiContractId: string
     id: string
@@ -117,6 +113,23 @@ type WorkbenchApiContract = {
     hasDetailPlan?: boolean
     designed?: boolean
   }>
+}
+
+type WorkbenchEntityOption = {
+  id: string
+  label: string
+  purpose: string
+  dataSourceType: string
+  fields?: Array<{
+    name: string
+    label?: string
+    type: string
+    required?: boolean
+  }>
+  detail?: Record<string, unknown>
+  designed: boolean
+  detailPlanStatus?: string
+  hasDetailPlan: boolean
 }
 
 /** 将 API 路径统一为带前导斜杠的目录形式。 */
@@ -182,6 +195,30 @@ async function endpointDetailPlanExists(
     return Boolean(content.trim())
   } catch {
     return false
+  }
+}
+
+/** 读取选中实体的外置详情 JSON，未设计或读取失败时返回 undefined。 */
+async function readEntityDetailPlan(
+  workspaceRoot: string,
+  entityId: string
+): Promise<Record<string, unknown> | undefined> {
+  const detailPath = path.join(
+    workspaceRoot,
+    '.xcodeagent',
+    'plans',
+    'entities',
+    `${detailFileStem(entityId, 'entity--')}.json`
+  )
+  try {
+    const content = await fs.readFile(detailPath, 'utf8')
+    if (!content.trim()) return undefined
+    const parsed: unknown = JSON.parse(content)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -273,7 +310,7 @@ function buildWorkbenchPageTree(value: unknown): WorkbenchPageTreeNode[] {
   return nodes
 }
 
-/** 按 base_path 合并 ProjectPlan contracts，同一目录下展示所有具体 API。 */
+/** 按 base_path 合并 TechnicalPlan contracts，并保留其关联实体列表。 */
 function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return []
   const contracts = recordItems((value as Record<string, unknown>).api_contracts)
@@ -281,18 +318,24 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
   contracts.forEach((contract, contractIndex) => {
     const record = contract
     const contractId = String(record.id || `api-contract-${contractIndex + 1}`).trim()
-    const dataSourceId = String(record.data_source_id || contractId).trim()
+    const entityIds = Array.from(
+      new Set(
+        (Array.isArray(record.entity_ids) ? record.entity_ids : [])
+          .map((entityId) => String(entityId || '').trim())
+          .filter(Boolean)
+      )
+    )
     const basePath = normalizeApiPath(record.base_path, `/${contractId}`)
     const endpoints = recordItems(record.endpoints)
     const group = groupedContracts.get(basePath) || {
       id: basePath,
       label: basePath,
-      dataSourceIds: [],
+      entityIds: [],
       endpoints: []
     }
-    if (dataSourceId && !group.dataSourceIds.includes(dataSourceId)) {
-      group.dataSourceIds.push(dataSourceId)
-    }
+    entityIds.forEach((entityId) => {
+      if (!group.entityIds.includes(entityId)) group.entityIds.push(entityId)
+    })
     group.endpoints.push(
       ...endpoints.flatMap((endpoint, endpointIndex) => {
         const endpointRecord = endpoint
@@ -325,6 +368,72 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
     groupedContracts.set(basePath, group)
   })
   return [...groupedContracts.values()]
+}
+
+/** 从 TechnicalPlan.entities 生成工作台实体大纲选项。 */
+function projectPlanEntities(value: unknown): WorkbenchEntityOption[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return recordItems((value as Record<string, unknown>).entities).map((record, index) => {
+    const id = String(record.id || `entity-${index + 1}`).trim()
+    const fields = Array.isArray(record.fields)
+      ? record.fields
+          .filter((field): field is Record<string, unknown> =>
+            Boolean(field && typeof field === 'object' && !Array.isArray(field))
+          )
+          .map((field) => ({
+            name: String(field.name || '').trim(),
+            label:
+              typeof field.label === 'string' && field.label.trim()
+                ? field.label.trim()
+                : undefined,
+            type: String(field.type || 'text').trim(),
+            required: field.required === true
+          }))
+          .filter((field) => Boolean(field.name))
+      : []
+    const detailDesign =
+      record.detail_design &&
+      typeof record.detail_design === 'object' &&
+      !Array.isArray(record.detail_design)
+        ? (record.detail_design as Record<string, unknown>)
+        : {}
+    const rawDataSource = record.data_source
+    const dataSourceType =
+      typeof rawDataSource === 'string'
+        ? rawDataSource
+        : rawDataSource && typeof rawDataSource === 'object' && !Array.isArray(rawDataSource)
+          ? String((rawDataSource as Record<string, unknown>).type || '')
+          : ''
+    return {
+      id,
+      label: normalizeWorkbenchNodeLabel(record.name, id),
+      purpose: normalizeWorkbenchNodeLabel(record.description || record.name, `实体 ${index + 1}`),
+      dataSourceType,
+      ...(fields.length > 0 ? { fields } : {}),
+      designed: Boolean(detailDesign.json_path || record.detail_plan_id),
+      detailPlanStatus: String(detailDesign.status || record.detail_status || ''),
+      hasDetailPlan: Boolean(detailDesign.json_path || record.detail_plan_id)
+    }
+  })
+}
+
+/** 只根据外置实体详情文件补充每个实体的设计状态。 */
+async function mergeWorkbenchEntityStatus(
+  workspaceRoot: string,
+  entities: WorkbenchEntityOption[]
+): Promise<WorkbenchEntityOption[]> {
+  return Promise.all(
+    entities.map(async (entity) => {
+      const detail = await readEntityDetailPlan(workspaceRoot, entity.id)
+      const hasDetailPlan = Boolean(detail)
+      return {
+        ...entity,
+        designed: hasDetailPlan,
+        hasDetailPlan,
+        ...(detail ? { detail } : {})
+      }
+    })
+  )
 }
 
 /** 初始化页面设计状态；TechnicalPlan 的实现契约不代表用户已经开始页面设计。 */
@@ -463,7 +572,22 @@ async function mergeWorkbenchApiStatus(
   )
 }
 
-/** 校验正式规划产物，并从 TechnicalPlan 投射应用大纲与页面开发就绪状态。 */
+/** 判断是否已存在任意持久化详细设计（页面/接口/实体），用于首次设计解锁。 */
+async function pageDesignDirectoryHasEntries(workspaceRoot: string): Promise<boolean> {
+  for (const directory of ['pages', 'endpoints', 'entities']) {
+    try {
+      const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', directory))
+      if (entries.length > 0) return true
+    } catch (error: unknown) {
+      const errnoException = error as NodeJS.ErrnoException
+      if (errnoException?.code === 'ENOENT') continue
+      throw error
+    }
+  }
+  return false
+}
+
+/** 校验当前正式规划产物，并从 ProductPlan/TechnicalPlan 投射工作台大纲。 */
 async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise<{
   ready: boolean
   hasPageDesigns: boolean
@@ -472,19 +596,21 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   pages: WorkbenchPageOption[]
   pageTree: WorkbenchPageTreeNode[]
   apiContracts: WorkbenchApiContract[]
+  entities: WorkbenchEntityOption[]
 }> {
   const artifactRoot = path.join(workspaceRoot, '.xcodeagent')
   const artifacts = [
     { relativePath: 'specs/requirement-spec.md', format: 'markdown' },
     { relativePath: 'specs/requirement-spec.json', format: 'json' },
-    { relativePath: 'plans/project-plan.md', format: 'markdown' }
+    { relativePath: 'plans/product-plan.md', format: 'markdown' },
+    { relativePath: 'plans/technical-plan.md', format: 'markdown' }
   ]
   const missing: string[] = []
   const invalid: string[] = []
   let plannedPages = new Map<string, Record<string, unknown>>()
   let pageTree: WorkbenchPageTreeNode[] = []
   let apiContracts: WorkbenchApiContract[] = []
-  let projectPlanLoaded = false
+  let entities: WorkbenchEntityOption[] = []
 
   for (const artifact of artifacts) {
     const artifactPath = path.join(artifactRoot, artifact.relativePath)
@@ -512,43 +638,54 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     }
   }
 
-  // 工作台只读取当前 TechnicalPlan，不回退到其他计划文件。
-  const technicalPlanPath = 'plans/technical-plan.json'
-  try {
-    const content = await fs.readFile(path.join(artifactRoot, technicalPlanPath), 'utf8')
-    const technicalPlan = JSON.parse(content)
-    if (
-      !technicalPlan ||
-      typeof technicalPlan !== 'object' ||
-      Array.isArray(technicalPlan) ||
-      technicalPlan.artifact_type !== 'technical-plan' ||
-      technicalPlan.confirmation_status !== 'confirmed'
-    ) {
-      invalid.push(technicalPlanPath)
+  let productPlan: Record<string, unknown> | undefined
+  let technicalPlan: Record<string, unknown> | undefined
+  const currentPlanArtifacts = [
+    {
+      relativePath: 'plans/product-plan.json',
+      contractField: 'schema_version',
+      contractValue: 'product-plan.v4'
+    },
+    {
+      relativePath: 'plans/technical-plan.json',
+      contractField: 'artifact_type',
+      contractValue: 'technical-plan'
     }
-    const productPlanContent = await fs.readFile(
-      path.join(artifactRoot, 'plans/product-plan.json'),
-      'utf8'
-    )
-    const productPlan = JSON.parse(productPlanContent)
-    if (
-      !productPlan ||
-      typeof productPlan !== 'object' ||
-      Array.isArray(productPlan) ||
-      productPlan.confirmation_status !== 'confirmed'
-    ) {
-      invalid.push('plans/product-plan.json')
+  ]
+  // 工作台只读取当前 ProductPlan/TechnicalPlan 契约，不回退到旧计划文件。
+  for (const artifact of currentPlanArtifacts) {
+    try {
+      const content = await fs.readFile(path.join(artifactRoot, artifact.relativePath), 'utf8')
+      const plan = JSON.parse(content)
+      if (
+        !plan ||
+        typeof plan !== 'object' ||
+        Array.isArray(plan) ||
+        plan[artifact.contractField] !== artifact.contractValue ||
+        plan.confirmation_status !== 'confirmed'
+      ) {
+        invalid.push(artifact.relativePath)
+        continue
+      }
+      if (artifact.contractValue === 'product-plan.v4') {
+        productPlan = plan as Record<string, unknown>
+      } else {
+        technicalPlan = plan as Record<string, unknown>
+      }
+    } catch (error: unknown) {
+      const errnoException = error as NodeJS.ErrnoException
+      if (errnoException?.code === 'ENOENT') missing.push(artifact.relativePath)
+      else invalid.push(artifact.relativePath)
     }
+  }
+
+  if (productPlan && technicalPlan) {
     const workbenchPlan = technicalPlanWorkbenchView(technicalPlan, productPlan)
     plannedPages = projectPlanPages(workbenchPlan)
     pageTree = projectPlanPageTree(workbenchPlan)
     apiContracts = projectPlanApiContracts(workbenchPlan)
-    projectPlanLoaded = true
-  } catch (error: unknown) {
-    const errnoException = error as NodeJS.ErrnoException
-    if (errnoException?.code !== 'ENOENT') invalid.push(technicalPlanPath)
   }
-  if (!projectPlanLoaded) missing.push('plans/technical-plan.json')
+  entities = projectPlanEntities(technicalPlan)
 
   const buildTaskPlan = await readBuildTaskPlan(workspaceRoot)
   const pages = mergeWorkbenchPageStatus(
@@ -557,7 +694,8 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   )
   const pagesById = new Map(pages.map((page) => [page.pageId, page]))
   apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
-  const hasPageDesigns = pages.some((page) => page.designed)
+  entities = await mergeWorkbenchEntityStatus(workspaceRoot, entities)
+  const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
 
   return {
     ready: missing.length === 0 && invalid.length === 0,
@@ -566,7 +704,8 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     invalid,
     pages,
     pageTree: mergeWorkbenchPageTreeStatus(pageTree, pagesById),
-    apiContracts
+    apiContracts,
+    entities
   }
 }
 
@@ -590,6 +729,8 @@ type ChatSessionSummary = {
   apiContractId?: string
   endpointId?: string
   endpointLabel?: string
+  entityId?: string
+  entityLabel?: string
   pageId?: string
   createdAt: number
   updatedAt: number
@@ -606,6 +747,8 @@ type NormalizedChatSession = {
   apiContractId?: string
   endpointId?: string
   endpointLabel?: string
+  entityId?: string
+  entityLabel?: string
   pageId?: string
   createdAt: number
   updatedAt: number
@@ -964,6 +1107,8 @@ function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
     apiContractId: session.apiContractId,
     endpointId: session.endpointId,
     endpointLabel: session.endpointLabel,
+    entityId: session.entityId,
+    entityLabel: session.entityLabel,
     pageId: session.pageId,
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
@@ -990,6 +1135,7 @@ function normalizeSession(session: unknown): NormalizedChatSession {
 
   const pageId = normalizeSessionPageId(session.pageId) || inferSessionPageId(messages)
   const endpointContext = normalizeSessionEndpointContext(session, messages)
+  const entityContext = normalizeSessionEntityContext(session, messages)
   return {
     id,
     title: String(session.title || '新对话'),
@@ -998,6 +1144,8 @@ function normalizeSession(session: unknown): NormalizedChatSession {
     ...(endpointContext.apiContractId ? { apiContractId: endpointContext.apiContractId } : {}),
     ...(endpointContext.endpointId ? { endpointId: endpointContext.endpointId } : {}),
     ...(endpointContext.endpointLabel ? { endpointLabel: endpointContext.endpointLabel } : {}),
+    ...(entityContext.entityId ? { entityId: entityContext.entityId } : {}),
+    ...(entityContext.entityLabel ? { entityLabel: entityContext.entityLabel } : {}),
     ...(pageId ? { pageId } : {}),
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
@@ -1035,6 +1183,26 @@ function normalizeSessionEndpointContext(
     endpointId: explicit.endpointId || inferred.endpointId,
     endpointLabel:
       explicit.endpointLabel || inferred.endpointLabel || inferEndpointLabelFromTitle(session.title)
+  }
+}
+
+/** 从会话字段或旧版 Workflow 快照推断实体会话归属。 */
+function normalizeSessionEntityContext(
+  session: JsonRecord,
+  messages: JsonRecord[]
+): { entityId?: string; entityLabel?: string } {
+  const explicit = {
+    entityId: normalizeSessionEndpointField(session.entityId),
+    entityLabel: normalizeSessionEndpointField(session.entityLabel)
+  }
+  if (explicit.entityId) return explicit
+  const inferred = inferSessionEntityContext(messages)
+  return {
+    entityId: explicit.entityId || inferred.entityId,
+    entityLabel:
+      explicit.entityLabel ||
+      inferred.entityLabel ||
+      inferSessionEntityLabelFromTitle(session.title)
   }
 }
 
@@ -1083,6 +1251,38 @@ function inferSessionEndpointContext(messages: JsonRecord[]): {
     if (apiContractId && endpointId) return { apiContractId, endpointId }
   }
   return {}
+}
+
+/** 从旧版消息中的 Workflow 状态快照推断实体会话归属。 */
+function inferSessionEntityContext(messages: JsonRecord[]): {
+  entityId?: string
+  entityLabel?: string
+} {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const workflow = messages[index].workflow
+    if (!isJsonRecord(workflow)) continue
+    const state = isJsonRecord(workflow.state) ? workflow.state : undefined
+    const result = isJsonRecord(workflow.result) ? workflow.result : undefined
+    const summary = isJsonRecord(workflow.summary) ? workflow.summary : undefined
+    const clarification = isJsonRecord(summary?.clarification) ? summary.clarification : undefined
+    const review = isJsonRecord(clarification?.review) ? clarification.review : undefined
+    const reviewSummary = isJsonRecord(review?.summary) ? review.summary : undefined
+    const entityId =
+      normalizeSessionEndpointField(state?.selectedEntityId) ||
+      normalizeSessionEndpointField(state?.selected_entity_id) ||
+      normalizeSessionEndpointField(result?.selectedEntityId) ||
+      normalizeSessionEndpointField(result?.selected_entity_id) ||
+      normalizeSessionEndpointField(reviewSummary?.selectedEntityId)
+    if (entityId) return { entityId }
+  }
+  return {}
+}
+
+/** 从会话标题中恢复实体展示名，兼容旧标题。 */
+function inferSessionEntityLabelFromTitle(value: unknown): string | undefined {
+  const title = typeof value === 'string' ? value.trim() : ''
+  const matched = title.match(/(?:设计实体|确认实体|开始设计实体|查看已生成实体计划)：(.+)$/)
+  return matched?.[1]?.trim() || undefined
 }
 
 /** 从会话标题中恢复接口展示名，兼容旧标题。 */
@@ -1216,11 +1416,10 @@ function setupWorkspaceIpc(): void {
     }
     const applicationFile = getWorkspaceApplicationFile(projectPath)
     await fs.mkdir(path.dirname(applicationFile), { recursive: true })
-    await fs.writeFile(
-      applicationFile,
-      `${JSON.stringify(payload.applicationConfig, null, 2)}\n`,
-      { encoding: 'utf8', flag: 'wx' }
-    )
+    await fs.writeFile(applicationFile, `${JSON.stringify(payload.applicationConfig, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx'
+    })
 
     return {
       ok: true,
@@ -1236,10 +1435,14 @@ function setupWorkspaceIpc(): void {
   }
 
   /** 判断模板目录是否包含可识别的工程入口文件。 */
-  async function isTemplateDirectoryReady(targetDir: string, targetDirName: string): Promise<boolean> {
-    const markers = targetDirName === 'frontend'
-      ? ['package.json']
-      : ['pom.xml', 'build.gradle', 'build.gradle.kts']
+  async function isTemplateDirectoryReady(
+    targetDir: string,
+    targetDirName: string
+  ): Promise<boolean> {
+    const markers =
+      targetDirName === 'frontend'
+        ? ['package.json']
+        : ['pom.xml', 'build.gradle', 'build.gradle.kts']
     for (const marker of markers) {
       if (await lstatIfPresent(path.join(targetDir, marker))) return true
     }
@@ -1319,8 +1522,11 @@ function setupWorkspaceIpc(): void {
     try {
       await removeDirectoryIfPresent(targetDir)
     } catch (cleanupError) {
-      const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
-      cloneError = new Error(`${cloneError?.message || '模板下载失败'}；清理半成品失败：${cleanupMessage}`)
+      const cleanupMessage =
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+      cloneError = new Error(
+        `${cloneError?.message || '模板下载失败'}；清理半成品失败：${cleanupMessage}`
+      )
     }
     return {
       status: 'failed',
@@ -1350,14 +1556,15 @@ function setupWorkspaceIpc(): void {
     const projectPath = path.resolve(payload.projectPath)
 
     const frontend = await cloneGitRepo(frontendUrl, projectPath, 'frontend')
-    const backend = frontend.status === 'failed'
-      ? {
-          status: 'pending' as const,
-          attempt: 0,
-          path: path.join(projectPath, 'backend'),
-          error: '前端模板下载失败，后端模板尚未开始下载。'
-        }
-      : await cloneGitRepo(backendUrl, projectPath, 'backend')
+    const backend =
+      frontend.status === 'failed'
+        ? {
+            status: 'pending' as const,
+            attempt: 0,
+            path: path.join(projectPath, 'backend'),
+            error: '前端模板下载失败，后端模板尚未开始下载。'
+          }
+        : await cloneGitRepo(backendUrl, projectPath, 'backend')
     const failedTargets = (['frontend', 'backend'] as const).filter(
       (target) => ({ frontend, backend })[target].status === 'failed'
     )

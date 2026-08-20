@@ -79,7 +79,13 @@ class EngineeringAcceptanceTests(unittest.TestCase):
         }
         context = {
             "executable_details": {
-                "data_sources": [{"id": "leave-source", "type": "static"}],
+                "data_sources": [
+                    {
+                        "id": "leave-source",
+                        "type": "static",
+                        "entities": [{"id": "Leave"}],
+                    }
+                ],
                 "direct_endpoint_details": [
                     {
                         "endpoint_id": "leave.list",
@@ -107,6 +113,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                     {
                         "id": "leave-api",
                         "data_source_id": "leave-source",
+                        "entity_ids": ["Leave"],
                         "schemas": {
                             "LeaveListResponse": {
                                 "type": "object",
@@ -152,8 +159,8 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 status="completed",
                 code_change_set={
                     "files": [
-                        {"path": str(api_file.relative_to(root)), "changeType": "added"},
-                        {"path": str(page_file.relative_to(root)), "changeType": "added"},
+                        {"path": api_file.relative_to(root).as_posix(), "changeType": "added"},
+                        {"path": page_file.relative_to(root).as_posix(), "changeType": "added"},
                     ]
                 },
                 workspace_root=workspace,
@@ -195,8 +202,8 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 status="completed",
                 code_change_set={
                     "files": [
-                        {"path": str(api_file.relative_to(root)), "changeType": "added"},
-                        {"path": str(page_file.relative_to(root)), "changeType": "added"},
+                        {"path": api_file.relative_to(root).as_posix(), "changeType": "added"},
+                        {"path": page_file.relative_to(root).as_posix(), "changeType": "added"},
                     ]
                 },
                 workspace_root=workspace,

@@ -17,6 +17,7 @@ import {
   readWorkspaceInspectionSnapshot
 } from '../src/renderer/src/service/agUiAgent'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
+import ApplicationPlanningQuestionPanel from '../src/renderer/src/components/Welcome/ApplicationPlanningQuestionPanel'
 import { ToolCallChain } from '../src/renderer/src/components/AiChatPanel/components/ToolCallCard'
 import {
   isConversationWaitingForInput,
@@ -29,6 +30,7 @@ import WorkflowRunCard, {
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import { workflowInteractionAvailability } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
+  isStructuredPlanningWorkflow,
   processStepsForDisplay,
   processStepsForMessageDisplay,
   workflowMessageContentForDisplay
@@ -1498,6 +1500,92 @@ test('自由对话完成后仍保留与摘要相同的助手正文', () => {
     workflowMessageContentForDisplay('我是 XCodeAgent。', workflow, true),
     '我是 XCodeAgent。'
   )
+})
+
+test('失败的技术规划历史隐藏模型 JSON 并保留结构化错误卡', () => {
+  const workflow = {
+    runId: 'technical-plan-error',
+    threadId: 'technical-plan-error-thread',
+    summary: {
+      status: 'requires_user_input',
+      phase: 'technical_planning',
+      clarification: {
+        mode: 'technical_plan_generation_error',
+        status: 'requires_user_input',
+        message: '技术规划自动修复后仍未通过校验。',
+        errors: ['entities[0].fields[0] 缺少 label'],
+        questions: []
+      }
+    },
+    events: [],
+    state: {},
+    result: {}
+  }
+
+  assert.equal(isStructuredPlanningWorkflow(workflow), true)
+  assert.equal(
+    workflowMessageContentForDisplay('{"architecture":{"frontend":"React"}}', workflow, false),
+    ''
+  )
+  const markup = renderToStaticMarkup(
+    createElement(WorkflowRunCard, { interactionAvailability: 'active', workflow })
+  )
+  assert.match(markup, /技术规划自动修复后仍未通过校验/)
+  assert.match(markup, /重新生成/)
+  assert.doesNotMatch(markup, /architecture/)
+})
+
+test('失败终态仍可根据技术规划节点识别并隐藏历史 JSON', () => {
+  const workflow = {
+    runId: 'legacy-technical-plan-error',
+    threadId: 'legacy-technical-plan-error-thread',
+    summary: { status: 'failed', phase: 'failed' },
+    events: [{ type: 'workflow.node.failed', nodeName: 'technical_planning' }],
+    state: {},
+    result: {}
+  }
+
+  assert.equal(isStructuredPlanningWorkflow(workflow), true)
+  assert.equal(workflowMessageContentForDisplay('{"entities":[]}', workflow, true), '')
+})
+
+test('技术规划确认不依赖 Markdown confirmationArtifact 也能展示结构化摘要', () => {
+  const workflow = {
+    runId: 'technical-plan-confirmation',
+    threadId: 'technical-plan-confirmation-thread',
+    summary: {
+      status: 'requires_user_input',
+      phase: 'technical_planning',
+      clarification: {
+        mode: 'technical_plan_confirmation',
+        status: 'requires_user_input',
+        questions: []
+      }
+    },
+    events: [],
+    state: {
+      technical_plan: {
+        artifact_type: 'technical-plan',
+        architecture: { frontend: 'React', backend: 'Spring Boot', data: 'MySQL' },
+        entities: [],
+        api_contracts: [],
+        pages: []
+      }
+    },
+    result: {}
+  }
+  const markup = renderToStaticMarkup(
+    createElement(ApplicationPlanningQuestionPanel, {
+      onReturnHome: () => undefined,
+      onSaveRequirementSpec: async () => undefined,
+      onSubmit: () => undefined,
+      workflow
+    })
+  )
+
+  assert.match(markup, /开发技术规划/)
+  assert.match(markup, /React/)
+  assert.doesNotMatch(markup, /结构化数据暂不可用/)
 })
 
 test('Electron 会话持久化保留 Agent 步骤、检查清单和工具调用', () => {

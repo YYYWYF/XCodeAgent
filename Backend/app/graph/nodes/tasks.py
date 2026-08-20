@@ -1,14 +1,23 @@
+from typing import Any
+
 from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.planner import revise_project_plan_with_chat_model
-from app.agents.main.task_preparer import prepare_build_tasks_with_main_agent
+from app.agents.main.task_preparer import (
+    _planning_context_mode,
+    prepare_build_tasks_with_main_agent,
+)
+from app.graph.nodes.common import workspace_from_state
 from app.graph.nodes.confirmation import (
     user_confirmed_text,
     user_requested_changes_text,
 )
-from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.build_context_resolver import resolve_target_build_context
+from app.services.build_task_planner import (
+    compile_build_task_plan_scope,
+    tasks_from_build_task_plan,
+)
 from app.services.build_task_progress import (
     build_task_artifacts,
     create_build_task_progress_tracker,
@@ -20,15 +29,10 @@ from app.services.build_task_progress import (
     project_dag_validation_output,
     project_unit_skeleton_output,
 )
-from app.services.build_task_planner import (
-    compile_build_task_plan_scope,
-    tasks_from_build_task_plan,
-)
 from app.services.build_unit_skeleton import (
-    apply_target_unit_dependencies,
     ensure_build_unit_skeleton,
 )
-from app.services.database_planning_context import database_context_requirement
+from app.services.entity_definitions import entity_design_summaries, plan_data_sources
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
@@ -49,8 +53,8 @@ from app.workspace.task_documents import (
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
-def _latest_compact_project_plan(state: ProjectState) -> dict:
-    """优先从 ProjectPlan JSON 读取最新轻量计划，避免 Build 使用 checkpoint 中的内嵌详情旧对象。"""
+def _latest_project_plan(state: ProjectState) -> dict:
+    """优先从 ProjectPlan JSON 读取并回填最新详情，避免 Build 使用 checkpoint 中的旧对象。"""
 
     project_plan = state["project_plan"]
     if project_plan.get("confirmation_status") != "confirmed":
@@ -59,13 +63,13 @@ def _latest_compact_project_plan(state: ProjectState) -> dict:
         return project_plan
     path = project_plan_json_path(state)
     if path.is_file():
-        return load_project_plan_json(path)
+        return load_project_plan_json(path, hydrate_detail_designs=True)
     return project_plan
 
 
 def prepare_build_tasks(state: ProjectState) -> dict:
     """按应用、页面、数据源或 endpoint 范围编译任务子图并持久化 Build DAG。"""
-    project_plan = _latest_compact_project_plan(state)
+    project_plan = _latest_project_plan(state)
     if project_plan.get("confirmation_status") != "confirmed":
         if _user_confirmed_project_plan(state.get("request", "")):
             edited_markdown = edited_project_plan_markdown(state, project_plan)
@@ -159,15 +163,6 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_execution_scope,
             build_task_plan,
         )
-        build_context = _with_database_planning_context_from_state(
-            state,
-            project_plan,
-            build_context,
-        )
-        build_task_plan = apply_target_unit_dependencies(
-            build_task_plan,
-            build_context,
-        )
     except ValueError as exc:
         progress.fail(
             "build_context",
@@ -199,8 +194,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         (
             f"已解析 {target.get('type', 'application')}:{target.get('id', 'application')}，"
             f"涉及 {len(build_context.get('required_unit_ids') or [])} 个 Unit、"
-            f"{len(build_context.get('endpoint_ids') or [])} 个 Endpoint；"
-            f"数据库摘要状态：{_database_planning_status(build_context)}。"
+            f"{len(build_context.get('endpoint_ids') or [])} 个 Endpoint。"
         ),
         build_task_plan=build_task_plan,
         output=project_build_context_output(build_context, build_task_plan),
@@ -246,11 +240,26 @@ def prepare_build_tasks(state: ProjectState) -> dict:
 
     progress.start("model_planning", "正在调用任务规划模型生成候选构建任务。")
     try:
+        planning_unit_ids = _replaceable_unit_ids(
+            build_task_plan,
+            build_context,
+            set(build_context.get("required_unit_ids") or []),
+        )
+        planning_build_context = {
+            **build_context,
+            "planning_unit_ids": sorted(planning_unit_ids),
+        }
+        planning_build_context["planning_context_mode"] = _planning_context_mode(
+            planning_build_context
+        )
         prepared_plan = prepare_build_tasks_with_main_agent(
-            _task_preparation_project_plan(project_plan, build_context),
+            _task_preparation_project_plan(
+                project_plan,
+                planning_build_context,
+            ),
             workspace=workspace,
             workspace_snapshot=workspace_snapshot,
-            build_context=build_context,
+            build_context=planning_build_context,
             build_task_plan=build_task_plan,
         )
     except ValueError as exc:
@@ -390,7 +399,6 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "build_task_dag_path": build_task_dag_path,
         "build_execution_scope": build_execution_scope,
         "build_context": build_context,
-        "database_planning_context": build_context.get("database_planning_context", {}),
         "build_units": build_task_plan.get("build_units", {}),
         "unit_graph": build_task_plan.get("unit_graph", {}),
         "task_registry": build_task_plan.get("task_registry", {}),
@@ -445,7 +453,7 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
                 **(
                     {"apiContractId": str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()}
                     if target_type == "endpoint"
-                    and str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
+                       and str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
                     else {}
                 ),
             }
@@ -481,10 +489,10 @@ def _is_valid_build_task_plan(value: object) -> bool:
 
 
 def _resolve_build_context(
-    state: ProjectState,
-    project_plan: dict,
-    build_execution_scope: dict[str, str],
-    build_task_plan: dict,
+        state: ProjectState,
+        project_plan: dict,
+        build_execution_scope: dict[str, str],
+        build_task_plan: dict,
 ) -> dict:
     """按范围解析详情上下文；应用范围保留全局信息但不伪造单页详情。"""
 
@@ -501,7 +509,7 @@ def _resolve_build_context(
                 or ""
             ).strip() or None,
             project_plan_path=state.get("project_plan_json_path")
-            or project_plan_json_path(state),
+                              or project_plan_json_path(state),
         )
         return _add_reusable_task_context(context, build_task_plan)
     return _add_reusable_task_context({
@@ -511,8 +519,7 @@ def _resolve_build_context(
         "endpoint_detail": None,
         "direct_endpoint_details": [],
         "endpoint_ids": [],
-        "api_contract_ids": [],
-        "data_source_ids": [],
+        "entity_ids": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
     }, build_task_plan)
@@ -525,64 +532,161 @@ def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> di
         unit_id: list(unit.get("task_ids") or [])
         for unit_id, unit in (build_task_plan.get("build_units") or {}).items()
         if isinstance(unit, dict)
-        and _is_reusable_public_unit(unit_id)
-        and _unit_tasks_are_reusable(build_task_plan, unit_id)
+           and _is_reusable_public_unit(unit_id)
+           and _unit_tasks_are_reusable(build_task_plan, unit_id)
     }
     return {**build_context, "reusable_tasks_by_unit": reusable_tasks}
 
 
-def _with_database_planning_context_from_state(
-    state: ProjectState,
-    project_plan: dict,
-    build_context: dict,
-) -> dict:
-    """只消费前置数据库检查节点写入的新版真实上下文，不在任务规划内查库。"""
-
-    requirement = database_context_requirement(project_plan, build_context)
-    if not requirement.get("required"):
-        return {**build_context, "database_planning_context": {}}
-    database_context = state.get("database_planning_context")
-    if (
-        not isinstance(database_context, dict)
-        or database_context.get("schema_version") != "database-context.v1"
-        or database_context.get("status") != "completed"
-    ):
-        raise ValueError("当前接口来源于数据库，但尚未完成新版数据库上下文检查。")
-    return {
-        **build_context,
-        "database_planning_context": database_context,
-    }
-
-
-def _database_planning_status(build_context: dict) -> str:
-    """读取数据库规划摘要状态，供进度事件展示。"""
-
-    context = build_context.get("database_planning_context")
-    if not isinstance(context, dict):
-        return "missing"
-    return str(context.get("status") or "unknown")
-
-
 def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> dict:
-    """构造任务拆分视图：TechnicalPlan 作 Unit 骨架，实现契约作页面执行输入。"""
+    """按本轮规划模式构造最小任务拆分视图。"""
 
+    mode = _planning_context_mode(build_context)
+    executable_details = _executable_details(project_plan, build_context)
+    if mode == "page":
+        executable_details.pop("endpoint_detail_plans", None)
+        executable_details.pop("entity_designs", None)
+    elif mode == "endpoint":
+        executable_details.pop("page_implementation_contracts", None)
+        executable_details.pop("page_detail_plans", None)
+
+    allowed_unit_ids = list(
+        build_context.get("planning_unit_ids")
+        or build_context.get("required_unit_ids")
+        or []
+    )
+    if mode == "endpoint":
+        return {
+            "architecture": _scoped_task_architecture(
+                project_plan,
+                mode,
+                build_context,
+            ),
+            "execution_target": build_context.get("target"),
+            "allowed_unit_ids": allowed_unit_ids,
+            "executable_details": executable_details,
+        }
+
+    skeleton = {
+        "pages": _skeleton_pages(project_plan) if mode in {"page", "combined"} else [],
+        "data_sources": (
+            _skeleton_data_sources(
+                project_plan,
+                None
+                if mode == "combined"
+                else build_context.get("entity_ids"),
+            )
+            if mode in {"endpoint", "combined"}
+            else []
+        ),
+        "api_contracts": _scoped_skeleton_api_contracts(
+            project_plan,
+            build_context,
+            mode,
+        ),
+        "permission_model": (
+            project_plan.get("permission_model")
+            if mode in {"page", "combined"}
+            else None
+        ),
+    }
     return {
         "version": project_plan.get("version"),
         "confirmation_status": project_plan.get("confirmation_status"),
         "app": project_plan.get("app"),
-        "requirements_overview": project_plan.get("requirements_overview"),
-        "architecture": project_plan.get("architecture"),
-        "project_acceptance_criteria": project_plan.get("project_acceptance_criteria"),
-        "application_skeleton": {
-            "pages": _skeleton_pages(project_plan),
-            "data_sources": _skeleton_data_sources(project_plan),
-            "api_contracts": _skeleton_api_contracts(project_plan),
-            "permission_model": project_plan.get("permission_model"),
-        },
+        "requirements_overview": (
+            project_plan.get("requirements_overview")
+            if mode == "combined"
+            else None
+        ),
+        "architecture": _scoped_task_architecture(project_plan, mode, build_context),
+        "project_acceptance_criteria": (
+            project_plan.get("project_acceptance_criteria")
+            if mode == "combined"
+            else None
+        ),
+        "application_skeleton": skeleton,
         "execution_target": build_context.get("target"),
-        "allowed_unit_ids": list(build_context.get("required_unit_ids") or []),
-        "executable_details": _executable_details(project_plan, build_context),
+        "allowed_unit_ids": allowed_unit_ids,
+        "executable_details": executable_details,
     }
+
+
+def _scoped_task_architecture(
+    project_plan: dict,
+    mode: str,
+    build_context: dict | None = None,
+) -> dict:
+    """只投射当前 endpoint/page 模式和数据源需要的架构事实。"""
+
+    architecture = project_plan.get("architecture")
+    if not isinstance(architecture, dict) or mode == "combined":
+        return architecture if isinstance(architecture, dict) else {}
+    if mode == "page":
+        return {
+            key: value
+            for key, value in architecture.items()
+            if key in {"frontend", "data_contract", "route_root_path", "menu_enabled"}
+        }
+    context = build_context if isinstance(build_context, dict) else {}
+    endpoint_source_types = {
+        str(item.get("data_source_type") or "")
+        for item in context.get("entity_designs") or []
+        if isinstance(item, dict) and item.get("data_source_type")
+    }
+    if endpoint_source_types == {"static"}:
+        return {
+            key: value
+            for key, value in architecture.items()
+            if key in {"frontend", "data_contract", "route_root_path", "menu_enabled"}
+        }
+    if endpoint_source_types and endpoint_source_types <= {"database", "external_api"}:
+        return {
+            key: value
+            for key, value in architecture.items()
+            if key in {"backend_tech_stack", "data_contract"}
+        }
+    return {
+        key: value
+        for key, value in architecture.items()
+        if key in {
+            "frontend",
+            "backend_tech_stack",
+            "data_contract",
+            "route_root_path",
+            "menu_enabled",
+        }
+    }
+
+
+def _scoped_skeleton_api_contracts(
+    project_plan: dict,
+    build_context: dict,
+    mode: str,
+) -> list[dict]:
+    """页面或 endpoint 模式只保留当前范围引用到的 API 契约骨架。"""
+
+    contracts = _skeleton_api_contracts(project_plan)
+    if mode == "combined":
+        return contracts
+    endpoint_ids = {
+        str(endpoint_id)
+        for endpoint_id in build_context.get("endpoint_ids") or []
+        if str(endpoint_id).strip()
+    }
+    if not endpoint_ids:
+        return []
+    return [
+        contract
+        for contract in contracts
+        if endpoint_ids.intersection(
+            {
+                str(endpoint_id)
+                for endpoint_id in contract.get("endpoint_ids") or []
+                if str(endpoint_id).strip()
+            }
+        )
+    ]
 
 
 def _skeleton_pages(project_plan: dict) -> list[dict]:
@@ -615,25 +719,47 @@ def _skeleton_pages(project_plan: dict) -> list[dict]:
     ]
 
 
-def _skeleton_data_sources(project_plan: dict) -> list[dict]:
-    """提取数据源 Unit 骨架摘要，不携带数据源详情正文。"""
+def _skeleton_data_sources(
+    project_plan: dict,
+    entity_ids: list[str] | None = None,
+) -> list[dict]:
+    """提取当前范围的数据源 Unit 骨架摘要，不携带数据源详情正文。"""
 
-    return [
-        {
-            "id": source.get("id"),
-            "name": source.get("name"),
-            "type": source.get("type"),
-            "entities": source.get("entities"),
-            "schema_refs": source.get("schema_refs"),
-            "detail_status": (
-                source.get("detail_design", {}).get("status")
-                if isinstance(source.get("detail_design"), dict)
-                else None
-            ),
-        }
-        for source in project_plan.get("data_sources", [])
-        if isinstance(source, dict)
-    ]
+    allowed_entity_ids = {
+        str(entity_id).strip()
+        for entity_id in entity_ids or []
+        if str(entity_id).strip()
+    }
+    scoped_sources: list[dict] = []
+    for source in plan_data_sources(project_plan):
+        if not isinstance(source, dict):
+            continue
+        source_entities = [
+            entity
+            for entity in source.get("entities") or []
+            if isinstance(entity, dict)
+            and (
+                not allowed_entity_ids
+                or str(entity.get("id") or "") in allowed_entity_ids
+            )
+        ]
+        if allowed_entity_ids and not source_entities:
+            continue
+        scoped_sources.append(
+            {
+                "id": source.get("id"),
+                "name": source.get("name"),
+                "type": source.get("type"),
+                "entities": source_entities,
+                "schema_refs": source.get("schema_refs"),
+                "detail_status": (
+                    source.get("detail_design", {}).get("status")
+                    if isinstance(source.get("detail_design"), dict)
+                    else None
+                ),
+            }
+        )
+    return scoped_sources
 
 
 def _skeleton_api_contracts(project_plan: dict) -> list[dict]:
@@ -642,8 +768,7 @@ def _skeleton_api_contracts(project_plan: dict) -> list[dict]:
     return [
         {
             "id": contract.get("id"),
-            "data_source_id": contract.get("data_source_id"),
-            "resource": contract.get("resource"),
+            "entity_ids": contract.get("entity_ids"),
             "base_path": contract.get("base_path"),
             "endpoint_ids": [
                 endpoint.get("id")
@@ -660,8 +785,24 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
     """按当前构建目标投射页面实现契约、endpoint 和 API 详情。"""
 
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
-    contract_ids = {str(item) for item in build_context.get("api_contract_ids") or []}
-    source_ids = {str(item) for item in build_context.get("data_source_ids") or []}
+    entity_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in build_context.get("entity_ids") or []
+            if str(item).strip()
+        )
+    )
+    target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
+    is_application = str(target.get("type") or "") == "application"
+    if is_application:
+        entity_ids = _confirmed_entity_ids(project_plan)
+    context_entity_designs = build_context.get("entity_designs")
+    entity_designs = (
+        [dict(item) for item in context_entity_designs if isinstance(item, dict)]
+        if isinstance(context_entity_designs, list) and context_entity_designs
+        else entity_design_summaries(project_plan, entity_ids)
+    )
+    scoped_contracts = _scoped_contracts(project_plan, build_context, is_application=is_application)
     return {
         "page_implementation_contracts": (
             [build_context["page_implementation_contract"]]
@@ -676,23 +817,70 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
         "endpoint_detail_plans": list(
             build_context.get("direct_endpoint_details") or []
         ),
-        "data_sources": [
-            _scoped_data_source(source, contract_ids)
-            for source in project_plan.get("data_sources", [])
-            if isinstance(source, dict) and str(source.get("id") or "") in source_ids
-        ],
+        "entity_designs": entity_designs,
         "api_contracts": [
             _scoped_api_contract(contract, endpoint_ids)
-            for contract in project_plan.get("api_contracts", [])
-            if isinstance(contract, dict)
-            and str(contract.get("data_source_id") or "") in source_ids
-            and (
-                not contract_ids
-                or str(contract.get("id") or "") in contract_ids
-            )
+            for contract in scoped_contracts
         ],
-        "database_planning_context": build_context.get("database_planning_context", {}),
     }
+
+
+def _confirmed_entity_ids(project_plan: dict) -> list[str]:
+    """返回已确认实体设计的实体 id，供全量构建投射实体上下文。"""
+
+    return [
+        str(detail.get("entity_id") or "")
+        for detail in project_plan.get("entity_detail_plans") or []
+        if isinstance(detail, dict)
+                      and str(detail.get("status") or "") == "confirmed"
+                      and detail.get("entity_id")
+    ]
+
+
+def _scoped_entity_source_ids(project_plan: dict, entity_ids: set[str]) -> set[str]:
+    """按范围内实体设计推导虚拟数据源 id（即实体数据源类型）。"""
+
+    return {
+        str(summary.get("data_source_type") or "")
+        for summary in entity_design_summaries(project_plan, sorted(entity_ids))
+        if summary.get("data_source_type")
+    }
+
+
+def _scoped_contracts(
+        project_plan: dict,
+        build_context: dict,
+        *,
+        is_application: bool = False,
+) -> list[dict]:
+    """按范围内 endpoint/实体/详情契约收敛 API 契约，契约只作 schema 引用。"""
+
+    all_contracts = [
+        contract
+        for contract in project_plan.get("api_contracts", [])
+        if isinstance(contract, dict)
+    ]
+    if is_application:
+        return all_contracts
+    endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
+    detail_contract_ids = {
+        str(detail.get("api_contract_id") or "")
+        for detail in build_context.get("direct_endpoint_details") or []
+        if isinstance(detail, dict) and detail.get("api_contract_id")
+    }
+    return [
+        contract
+        for contract in project_plan.get("api_contracts") or []
+        if isinstance(contract, dict)
+                        and (
+                                str(contract.get("id") or "") in detail_contract_ids
+                                or any(
+                            isinstance(endpoint, dict)
+                            and str(endpoint.get("id") or "") in endpoint_ids
+                            for endpoint in contract.get("endpoints") or []
+                        )
+                        )
+    ]
 
 
 def _scoped_api_contract(contract: dict, endpoint_ids: set[str]) -> dict:
@@ -708,25 +896,58 @@ def _scoped_api_contract(contract: dict, endpoint_ids: set[str]) -> dict:
     }
 
 
-def _scoped_data_source(source: dict, contract_ids: set[str]) -> dict:
-    """局部构建仅保留直接契约的 Schema 引用，避免产生范围外的悬空引用。"""
+def _scoped_pages(project_plan: dict, target_page_id: str) -> list[dict[str, Any]]:
+    """保留当前页面及其直接导航目标壳，忽略其他页面的全局错误。"""
 
-    if not contract_ids:
-        return source
-    return {
-        **source,
-        "schema_refs": [
-            reference
-            for reference in source.get("schema_refs") or []
-            if str(reference).split("#", 1)[0] in contract_ids
-        ],
+    if not target_page_id:
+        return []
+    all_pages = [
+        page
+        for page in project_plan_page_records(project_plan)
+        if isinstance(page, dict)
+    ]
+    target_page = next(
+        (
+            page
+            for page in all_pages
+            if str(page.get("pageId") or "") == target_page_id
+        ),
+        None,
+    )
+    if target_page is None:
+        return []
+    references = (
+        target_page.get("references")
+        if isinstance(target_page.get("references"), dict)
+        else {}
+    )
+    navigation_targets = references.get("navigation_targets") or target_page.get(
+        "navigation_targets"
+    )
+    navigation_ids = {
+        str(item.get("targetPageId") or "")
+        for item in navigation_targets or []
+        if isinstance(item, dict) and item.get("targetPageId")
     }
+    navigation_pages = [
+        {
+            "pageId": page.get("pageId"),
+            "path": page.get("path"),
+            "references": {
+                "endpoint_dependencies": [],
+                "navigation_targets": [],
+            },
+        }
+        for page in all_pages
+        if str(page.get("pageId") or "") in navigation_ids
+    ]
+    return [target_page, *navigation_pages]
 
 
 def _scoped_contract_errors(
-    project_plan: dict,
-    build_execution_scope: dict[str, str],
-    build_context: dict,
+        project_plan: dict,
+        build_execution_scope: dict[str, str],
+        build_context: dict,
 ) -> list[str]:
     """按范围校验 API 契约：局部构建不受无关页面或数据源的错误阻塞。"""
 
@@ -735,56 +956,37 @@ def _scoped_contract_errors(
             *validate_project_plan_dependencies(project_plan),
             *validate_api_contract_consistency(project_plan),
         ]
-    validation_plan = _scoped_contract_validation_plan(project_plan, build_context)
+    scoped_plan = _scoped_contract_validation_plan(project_plan, build_context)
     return [
-        *validate_project_plan_dependencies(validation_plan),
-        *validate_api_contract_consistency(validation_plan),
+        *validate_project_plan_dependencies(scoped_plan),
+        *validate_api_contract_consistency(scoped_plan),
     ]
 
 
 def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) -> dict:
-    """投射目标详情、直接数据源和其 API 契约，供局部构建执行独立校验。"""
+    """投射当前页面、API Contract 与实体 id，排除数据源及范围外设计。"""
 
-    source_ids = {str(item) for item in build_context.get("data_source_ids") or []}
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
-    contract_ids = {str(item) for item in build_context.get("api_contract_ids") or []}
+    entity_ids = [
+        str(item).strip()
+        for item in build_context.get("entity_ids") or []
+        if str(item).strip()
+    ]
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     target_page_id = str(target.get("id") or "") if target.get("type") == "page" else ""
-    pages = []
-    for page in project_plan_page_records(project_plan):
-        if not isinstance(page, dict):
-            continue
-        if str(page.get("pageId") or "") == target_page_id:
-            pages.append(page)
-        else:
-            pages.append(
-                {
-                    "pageId": page.get("pageId"),
-                    "path": page.get("path"),
-                    "references": {
-                        "endpoint_dependencies": [],
-                        "navigation_targets": [],
-                    },
-                }
-            )
-    page_field = "pages" if project_plan.get("artifact_type") == "technical-plan" else "frontend_pages"
+    pages = _scoped_pages(project_plan, target_page_id)
+    contracts = _scoped_contracts(project_plan, build_context)
+    page_field = (
+        "pages"
+        if project_plan.get("artifact_type") == "technical-plan"
+        else "frontend_pages"
+    )
     return {
-        **project_plan,
+        "artifact_type": project_plan.get("artifact_type"),
         page_field: pages,
-        "data_sources": [
-            _scoped_data_source(source, contract_ids)
-            for source in project_plan.get("data_sources", [])
-            if isinstance(source, dict) and str(source.get("id") or "") in source_ids
-        ],
+        "entities": [{"id": entity_id} for entity_id in dict.fromkeys(entity_ids)],
         "api_contracts": [
-            _scoped_api_contract(contract, endpoint_ids)
-            for contract in project_plan.get("api_contracts", [])
-            if isinstance(contract, dict)
-            and str(contract.get("data_source_id") or "") in source_ids
-            and (
-                not contract_ids
-                or str(contract.get("id") or "") in contract_ids
-            )
+            _scoped_api_contract(contract, endpoint_ids) for contract in contracts
         ],
         "page_detail_plans": (
             [build_context["page_detail"]] if build_context.get("page_detail") else []
@@ -801,9 +1003,9 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
 
 
 def _merge_prepared_scope_tasks(
-    skeleton_plan: dict,
-    prepared_plan: dict,
-    build_context: dict,
+        skeleton_plan: dict,
+        prepared_plan: dict,
+        build_context: dict,
 ) -> dict:
     """用本次范围任务替换同 Unit 旧任务，并保留其他已准备 Unit 的任务。"""
 
@@ -891,8 +1093,8 @@ def _merge_prepared_scope_tasks(
 
 
 def _existing_application_unit_evidence(
-    unit_id: str,
-    prepared_plan: dict,
+        unit_id: str,
+        prepared_plan: dict,
 ) -> dict[str, object] | None:
     """根据任务规划前的工作区检查证据识别可复用的前端壳与路由 Unit。"""
 
@@ -939,10 +1141,10 @@ def _tasks_by_unit_id(tasks: list[dict]) -> dict[str, list[dict]]:
 
 
 def _drop_non_replaceable_unit_tasks(
-    generated_tasks: list[dict],
-    *,
-    replaceable_unit_ids: set[str],
-    retained_tasks_by_unit: dict[str, list[dict]],
+        generated_tasks: list[dict],
+        *,
+        replaceable_unit_ids: set[str],
+        retained_tasks_by_unit: dict[str, list[dict]],
 ) -> tuple[list[dict], dict[str, list[str]]]:
     """丢弃模型为已准备 Unit 返回的新任务，并记录依赖应指向的旧任务。"""
 
@@ -965,8 +1167,8 @@ def _drop_non_replaceable_unit_tasks(
 
 
 def _rewrite_generated_task_dependencies(
-    generated_tasks: list[dict],
-    dependency_map: dict[str, list[str]],
+        generated_tasks: list[dict],
+        dependency_map: dict[str, list[str]],
 ) -> list[dict]:
     """把被丢弃任务的依赖引用改为对应已保留任务。"""
 
@@ -979,9 +1181,9 @@ def _rewrite_generated_task_dependencies(
 
 
 def _replacement_dependency_map(
-    build_task_plan: dict,
-    generated_tasks: list[dict],
-    replaceable_unit_ids: set[str],
+        build_task_plan: dict,
+        generated_tasks: list[dict],
+        replaceable_unit_ids: set[str],
 ) -> dict[str, list[str]]:
     """按被替换 Unit 建立旧任务到新任务的映射，供全局依赖同步改写。"""
 
@@ -1002,8 +1204,8 @@ def _replacement_dependency_map(
 
 
 def _rewrite_replaced_unit_dependencies(
-    tasks: list[dict],
-    dependency_map: dict[str, list[str]],
+        tasks: list[dict],
+        dependency_map: dict[str, list[str]],
 ) -> list[dict]:
     """改写任务中的旧 Unit 任务依赖，并过滤替换映射产生的自依赖。"""
 
@@ -1028,9 +1230,9 @@ def _rewrite_replaced_unit_dependencies(
 
 
 def _rename_generated_task_id_conflicts(
-    generated_tasks: list[dict],
-    *,
-    reserved_ids: set[str],
+        generated_tasks: list[dict],
+        *,
+        reserved_ids: set[str],
 ) -> list[dict]:
     """为本次模型任务规避已保留任务 ID，并同步改写本批任务依赖。"""
 
@@ -1059,9 +1261,9 @@ def _rename_generated_task_id_conflicts(
 
 
 def _unique_scoped_task_id(
-    task: dict,
-    task_id: str,
-    used_ids: set[str],
+        task: dict,
+        task_id: str,
+        used_ids: set[str],
 ) -> str:
     """按 Unit ID 生成稳定任务前缀，直到避开已有 ID。"""
 
@@ -1108,9 +1310,9 @@ def _task_dependency_list(task: dict) -> list[str]:
 
 
 def _replaceable_unit_ids(
-    build_task_plan: dict,
-    build_context: dict,
-    required_unit_ids: set[str],
+        build_task_plan: dict,
+        build_context: dict,
+        required_unit_ids: set[str],
 ) -> set[str]:
     """仅替换目标 Unit 与尚无任务的依赖 Unit，已准备依赖任务始终复用。"""
 
@@ -1120,8 +1322,8 @@ def _replaceable_unit_ids(
             unit_id
             for unit_id in required_unit_ids
             if not (
-                _is_reusable_public_unit(unit_id)
-                and _unit_tasks_are_reusable(build_task_plan, unit_id)
+                    _is_reusable_public_unit(unit_id)
+                    and _unit_tasks_are_reusable(build_task_plan, unit_id)
             )
         }
     target_unit_id = _target_unit_id(target)
@@ -1164,8 +1366,6 @@ def _target_unit_id(target: dict) -> str:
     target_id = str(target.get("id") or "")
     if target_type == "page" and target_id:
         return f"page:{target_id}"
-    if target_type == "data_source" and target_id:
-        return f"database:{target_id}"
     if target_type == "endpoint" and target_id:
         api_contract_id = str(target.get("api_contract_id") or "").strip()
         return f"backend:endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
@@ -1280,13 +1480,12 @@ def _build_task_validation_error_category(errors: list[str]) -> str:
     if "database_scope" in text:
         return "database_scope"
     if any(
-        marker in text
-        for marker in (
-            "invalid task_type",
-            "owner is",
-            "must not modify code files",
-            "requires completed database-context.v1",
-        )
+            marker in text
+            for marker in (
+                    "invalid task_type",
+                    "owner is",
+                    "must not modify code files",
+            )
     ):
         return "semantic"
     return "topology"

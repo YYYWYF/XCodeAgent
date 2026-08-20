@@ -12,8 +12,7 @@ from app.protocols.workflow.definition import (
     WORKFLOW_NODE_LABELS,
     WORKFLOW_STATIC_NEXT_NODES,
 )
-from app.services.build_context_resolver import resolve_target_build_context
-from app.services.database_planning_context import database_context_requirement
+from app.services.page_detail_plan import endpoint_bound_entity_summaries
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.plan_documents import (
     render_endpoint_detail_markdown,
@@ -95,6 +94,8 @@ def _workflow_start_node(
             }
             else "requirements"
         )
+    if resume_from == "inspect_database_context":
+        return "prepare_build_tasks"
     supported = set(WORKFLOW_NODE_LABELS) - {"handle_failure"}
     return resume_from if resume_from in supported else "detail_confirmation"
 
@@ -146,12 +147,6 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             return []
         return ["detail_confirmation"]
     if node_name == "inspect_workspace":
-        if _database_context_next_required(update):
-            return ["inspect_database_context"]
-        return ["prepare_build_tasks"]
-    if node_name == "inspect_database_context":
-        if update.get("status") == "requires_user_input":
-            return []
         return ["prepare_build_tasks"]
     if node_name == "prepare_build_tasks":
         if update.get("status") == "requires_user_input":
@@ -172,34 +167,6 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     if node_name == "launch_project":
         return []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
-
-
-def _database_context_next_required(update: dict[str, Any]) -> bool:
-    """预测工作区检查后是否需要进入数据库上下文检查节点。"""
-
-    project_plan = update.get("project_plan")
-    if not isinstance(project_plan, dict):
-        return False
-    scope = update.get("build_execution_scope")
-    scope = scope if isinstance(scope, dict) else {}
-    target_type = str(scope.get("type") or "").strip()
-    target_id = str(scope.get("targetId") or scope.get("target_id") or "").strip()
-    if target_type not in {"page", "data_source", "endpoint"} or not target_id:
-        return False
-    try:
-        build_context = resolve_target_build_context(
-            project_plan,
-            target_type=target_type,
-            target_id=target_id,
-            api_contract_id=str(
-                scope.get("apiContractId") or scope.get("api_contract_id") or ""
-            ).strip() or None,
-            project_plan_path=update.get("project_plan_json_path"),
-        )
-        requirement = database_context_requirement(project_plan, build_context)
-    except Exception:
-        return False
-    return bool(requirement.get("required") or requirement.get("status") == "blocked")
 
 
 def _workflow_artifacts(value: dict[str, Any]) -> dict[str, Any]:
@@ -380,20 +347,6 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
         return {
             "message": message,
             "data": {"workspaceInspection": workspace_inspection},
-        }
-    if node_name == "inspect_database_context":
-        database_context = update.get("database_planning_context")
-        database_context = database_context if isinstance(database_context, dict) else {}
-        gaps = database_context.get("gaps")
-        gaps = gaps if isinstance(gaps, list) else []
-        return {
-            "message": database_context.get("summary")
-            or database_context.get("message")
-            or f"数据库结构差异={len(gaps)}",
-            "data": {
-                "databasePlanningContext": database_context,
-                "requiresUserInput": update.get("status") == "requires_user_input",
-            },
         }
     if node_name == "prepare_build_tasks":
         clarification = update.get("clarification")
@@ -756,7 +709,21 @@ def _detail_confirmation_project_plan_update(
             api_contract_id = str(detail.get("api_contract_id") or "").strip()
             method = str(detail.get("method") or "GET").upper()
             path = str(detail.get("path") or "").strip()
-            content = render_endpoint_detail_markdown(detail).strip()
+            source_plan = update.get("project_plan")
+            bound_entities: list[dict[str, Any]] = []
+            if isinstance(source_plan, dict):
+                try:
+                    bound_entities = endpoint_bound_entity_summaries(
+                        source_plan,
+                        api_contract_id,
+                    )
+                except ValueError:
+                    # 只读展示层缺计划时降级为空引用，不阻断接口详情投影。
+                    bound_entities = []
+            content = render_endpoint_detail_markdown(
+                detail,
+                bound_entities=bound_entities,
+            ).strip()
             if not content:
                 continue
             endpoint_sections.append(
@@ -974,7 +941,10 @@ def _workflow_user_input_message(
 
     confirmation_labels = {
         "requirement_spec_confirmation": "需求文档已生成，请确认后继续。",
+        "product_plan_confirmation": "产品规划已生成，请确认后继续。",
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
+        "technical_plan_confirmation": "技术规划已生成，请确认后继续。",
+        "technical_plan_generation_error": "技术规划未通过校验，请重新生成。",
         "batch_review": "页面与数据源设计已生成，请确认后继续。",
         "detail_review": "页面与数据源设计已生成，请确认后继续。",
         "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",

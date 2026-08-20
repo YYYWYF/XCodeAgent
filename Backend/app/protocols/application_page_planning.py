@@ -63,6 +63,10 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "ui_designs",
             "technical_plan",
         ],
+        "clarificationModes": {
+            "technicalPlanConfirmation": "technical_plan_confirmation",
+            "technicalPlanGenerationError": "technical_plan_generation_error",
+        },
         "artifactSchemas": {
             "product_plan": "product-plan.v4",
             "ui_designs": "ui-manifest.v3",

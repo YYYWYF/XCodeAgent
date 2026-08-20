@@ -51,13 +51,11 @@ flowchart TD
 
     subgraph P4["阶段四：上下文与任务规划"]
         C1["inspect_workspace / 检查工作区"]
-        C2["inspect_database_context / 检查数据库上下文"]
         C3["prepare_build_tasks / 生成并编译 Build DAG"]
     end
 
     subgraph P5["阶段五：构建执行"]
         B1["build / BuildScheduler 构建调度"]
-        B2["database_agent / 数据库变更执行"]
         B3["data_source_agent / 后端数据源代码生成"]
         B4["frontend_agent / 前端代码生成"]
         B5["result_normalization / 结果归一化与 diff 归属"]
@@ -92,15 +90,11 @@ flowchart TD
     D1 -->|"dependency or plan gap；当前 run 结束"| DW
     DW -->|"新请求显式进入计划修订"| D2
     D2 -->|"new confirmed ProjectPlan"| D1
-    C1 -->|"database source required"| C2
-    C1 -->|"static or external API"| C3
-    C2 -->|"database-context.v1 completed"| C3
+    C1 -->|"workspace snapshot ready"| C3
     C3 -->|"build-dag.v3 + task graph"| B1
 
-    B1 -->|"owner=database"| B2
     B1 -->|"owner=backend"| B3
     B1 -->|"owner=frontend"| B4
-    B2 --> B5
     B3 --> B5
     B4 --> B5
     B5 -->|"build_summary.status=completed"| Q1
@@ -306,7 +300,6 @@ flowchart TD
     D["detail_confirmation / 详细设计确认"]
     P["project_planning / 项目计划调整"]
     W["inspect_workspace / 检查工作区"]
-    DB["inspect_database_context / 检查数据库上下文"]
     T["prepare_build_tasks / 准备构建任务"]
     B["build / 构建调度"]
     I["integration_test / 集成测试"]
@@ -320,7 +313,7 @@ flowchart TD
     S -->|"default or resume"| D
     S -->|"resume_from=project_planning"| P
     S -->|"resume_from=inspect_workspace"| W
-    S -->|"resume_from=inspect_database_context"| DB
+    S -->|"legacy database-context resume"| T
     S -->|"resume_from=prepare_build_tasks"| T
     S -->|"resume_from=build"| B
     S -->|"resume_from=integration_test"| I
@@ -335,12 +328,9 @@ flowchart TD
     P -->|"requires_user_input"| E
     P -->|"failed"| X
 
-    W -->|"database context required"| DB
-    W -->|"database context not required"| T
-    DB -->|"completed"| T
-    DB -->|"connection failed"| E
+    W -->|"workspace snapshot ready"| T
     T -->|"valid build-dag.v3"| B
-    T -->|"contract/plan/context needs input"| E
+    T -->|"contract or plan needs input"| E
 
     B -->|"build completed"| I
     B -->|"approval or scope confirmation"| E
@@ -354,7 +344,7 @@ flowchart TD
     R -->|"workflow handoff: detail"| D
     R -->|"workflow handoff: plan"| P
     R -->|"workflow handoff: workspace"| W
-    R -->|"workflow handoff: database"| DB
+    R -->|"workflow handoff: database design"| D
     R -->|"workflow handoff: task planning"| T
     R -->|"workflow handoff: build"| B
     R -->|"confirmation"| E
@@ -382,26 +372,17 @@ flowchart TD
 - **输出**：`workspace_snapshot_summary`、`workspace_snapshot_path`、`workspace_snapshot_hash`、`workspace_revision`、代码图摘要。
 - **校验规则**：工作区路径限制；按 workspace revision 使用缓存；代码图失败可降级；主流程首次进入还会尝试执行前端 scaffold，异常只记录日志。
 - **依赖文件**：`graph/nodes/workspace_inspection.py`、`services/workspace_inspector.py`、`services/code_graph/*`、`services/frontend_scaffold.py`、`.xcodeagent/cache/`、真实工作区源码。
-- **依赖节点**：上游 `detail_confirmation`；下游由数据来源决定 `inspect_database_context` 或 `prepare_build_tasks`。
+- **依赖节点**：上游 `detail_confirmation`；下游固定为 `prepare_build_tasks`。
 
-### 6.3 `inspect_database_context / 检查数据库上下文`
-
-- **类型**：确定性数据库连接、schema 摘要和 schema diff；无 LLM 提示词。
-- **输入**：已确认 ProjectPlan、Build target、EndpointDetail 的 `data_origin`、WorkspaceSnapshot、MySQL 配置和真实 schema。
-- **输出**：`database_planning_context`（`database-context.v1`）、`actual_schema`、`required_schema`、`gaps`、`task_intents`、更新后的 `build_context`。
-- **校验规则**：只有 database 来源才要求检查；连接失败必须阻断；上下文必须是 v1 且 `status=completed` 才允许数据库来源任务规划；结构差异本身不阻断，而是编译成任务意图。
-- **依赖文件**：`graph/nodes/database_context.py`、`services/database_planning_context.py`、`services/database_schema_summary.py`、`services/database_schema_diff.py`、数据库连接配置。
-- **依赖节点**：上游 `inspect_workspace`；下游 `prepare_build_tasks`。
-
-### 6.4 `prepare_build_tasks / 生成并编译 Build DAG`
+### 6.3 `prepare_build_tasks / 生成并编译 Build DAG`
 
 - **类型**：直接 ChatModel 生成候选任务 + 多阶段确定性编译器。
-- **当前提示词**：`agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt`。数据库应用 Prompt 内联 Spring Boot/MyBatis 技能并严格限制目录、Unit、change scope、API 字段、数据库 gap 和模板修改边界；任务生成顺序固定为数据库 → 后端 → 前端。每个后端 endpoint/table 模块必须拆成对象类、Repository、ApplicationService、Controller 四个串行 stage task，各 stage 只拥有自己的文件，并把上一阶段的预期文件、职责和契约写入下一阶段描述。带 `api_dependencies` 的页面必须规划或复用 `src/apis/<biz>Api.ts`，页面只能通过该服务访问共享 axios 实例。Static 应用只允许前端内存数据模块和页面任务；模型不得生成验证任务，`acceptance_criteria=[]` 且 `acceptance_checks=[]`，工程验收元数据由后端确定性编译，但不在单个任务完成后执行 verifier。
-- **输入**：确认后的 ProjectPlan、当前目标范围、PageDetail/EndpointDetail、WorkspaceSnapshot、DatabasePlanningContext、已有 Build DAG、可复用 Unit。
+- **当前提示词**：`agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt`。数据库实体使用已确认的表名、字段绑定和执行摘要生成后端持久化代码，正常 Build 不生成数据库 owner 任务。每个后端 endpoint/table 模块必须拆成对象类、Repository、ApplicationService、Controller 四个串行 stage task，各 stage 只拥有自己的文件，并把上一阶段的预期文件、职责和契约写入下一阶段描述。带 `api_dependencies` 的页面必须规划或复用 `src/apis/<biz>Api.ts`，页面只能通过该服务访问共享 axios 实例。Static 应用只允许前端内存数据模块和页面任务；模型不得生成验证任务，`acceptance_criteria=[]` 且 `acceptance_checks=[]`，工程验收元数据由后端确定性编译，但不在单个任务完成后执行 verifier。
+- **输入**：确认后的 ProjectPlan、当前目标范围、PageDetail/EndpointDetail、有界实体设计摘要、WorkspaceSnapshot、已有 Build DAG、可复用 Unit。
 - **输出**：`build-dag.v3`、`build_units`、`unit_graph`、`task_registry`、`task_graph`、`tasks`、`build_context`、`.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md`。
-- **校验规则**：ProjectPlan 必须 confirmed；Unit skeleton 合法；目标详情必须存在；数据库来源必须已有 completed v1 context；页面/API 契约按范围校验；模型任务不能越过 required Unit；任务 ID、依赖、DAG、路径和 owner 必须合法；工程 acceptance checks 确定性编译；无效计划阻断 Build。页面任务声明的 PageKey 若与实时唯一同义目录不同，会先纠正为真实目录；模型漏报页面入口时，编译器优先复用唯一实时入口，否则把 `target.page_key` 推导的标准入口补进已有前端页面任务，再确定性补齐或规范化顶层 `BIZ_MENUS` 登记。
+- **校验规则**：ProjectPlan 必须 confirmed；Unit skeleton 合法；目标详情必须存在；页面/API 契约按范围校验；模型任务不能越过 required Unit；正常 Build 禁止 database Unit/owner；任务 ID、依赖、DAG、路径和 owner 必须合法；工程 acceptance checks 确定性编译；无效计划阻断 Build。页面任务声明的 PageKey 若与实时唯一同义目录不同，会先纠正为真实目录；模型漏报页面入口时，编译器优先复用唯一实时入口，否则把 `target.page_key` 推导的标准入口补进已有前端页面任务，再确定性补齐或规范化顶层 `BIZ_MENUS` 登记。
 - **依赖文件**：`graph/nodes/tasks.py`、`agents/main/task_preparer.py`、`services/build_unit_skeleton.py`、`services/build_context_resolver.py`、`services/build_task_planner.py`、`services/engineering_acceptance.py`、`services/build_task_menu.py`、`workspace/task_documents.py`。
-- **依赖节点**：上游 `inspect_workspace`/`inspect_database_context`；下游 `build`。
+- **依赖节点**：上游 `inspect_workspace`；下游 `build`。
 
 ## 7. Build 节点内部流程
 
@@ -582,7 +563,7 @@ flowchart TD
 - **输出**：`small_task_results`、code change sets、更新后的 repair tasks、handoff 或回测路由。
 - **校验规则**：preflight 禁止正式产物和复杂范围；精确路径授权；实际 diff 归属；依赖和并发边界；最多 20 个批次；完成后必须回到 Integration Test；需要新页面/接口/数据源/计划时必须确认后升级正式节点。
 - **依赖文件**：`graph/nodes/small_task.py`、`agents/small_task/*`、`services/small_task.py`、`services/small_task_scope.py`、`workspace/code_changes.py`。
-- **依赖节点**：上游 `repair_planning` 或验收 local fix；下游通常 `integration_test`，也可经确认跳到 `detail_confirmation/project_planning/inspect_workspace/inspect_database_context/prepare_build_tasks/build`。
+- **依赖节点**：上游 `repair_planning` 或验收 local fix；下游通常 `integration_test`，也可经确认跳到 `detail_confirmation/project_planning/inspect_workspace/prepare_build_tasks/build`。
 
 ## 9. 启动、验收、调整和终态
 
@@ -800,7 +781,7 @@ flowchart LR
     PP[("ProjectPlan.md + json / 项目计划")]
     DT[("PageDetail + EndpointDetail md/json / 详细设计")]
     WS[("WorkspaceSnapshot + CodeGraph / 工作区快照")]
-    DB["database-context.v1 / Graph State 与 Build Context"]
+    ED["EntityDetail.database_design / 数据库表绑定与执行证据"]
     DAG[("build-task-plan.json + BUILD_TASK_DAG.md / 构建任务图")]
     SRC[("frontend + backend + database / 工程实现")]
     TR[("test-report.json + logs / 测试报告")]
@@ -813,12 +794,11 @@ flowchart LR
     PP --> DT
     DT --> WS
     PP --> WS
-    WS --> DB
-    DT --> DB
+    DT --> ED
     PP --> DAG
     DT --> DAG
     WS --> DAG
-    DB --> DAG
+    ED --> DAG
     DAG --> SRC
     SRC --> TR
     PP --> TR
@@ -844,7 +824,7 @@ flowchart LR
 | 项目语义和 API contract           | `.xcodeagent/plans/project-plan.md                                                                                                       | json`                                  | Detail、Build、Testing |
 | 页面/接口可执行设计               | `.xcodeagent/plans/pages/*.md` + `*.json`、`plans/endpoints/*.md` + `*.json`；ProjectPlan JSON 只保留引用和 hash                         | 用户确认、Build Context、Task Preparer |
 | 工作区事实                        | `.xcodeagent/cache/` 下 WorkspaceSnapshot/代码图缓存 + 真实源码                                                                          | Task Preparer、Agent 导航              |
-| 数据库事实                        | Graph/checkpoint 中的 `database-context.v1`、嵌入 Build Context 的摘要 + 实时 MySQL 复查；当前没有独立 database-context artifact 文件    | Task Preparer、Database Agent          |
+| 数据库事实                        | 已确认实体详情中的 `database_design`、字段绑定和 `database_execution` 证据；实时 MySQL 复查只在实体设计或专门数据库流程发生              | Task Preparer、Database Agent          |
 | 构建 DAG                          | `.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md`                                                                            | BuildScheduler、RepairPlanner          |
 | 构建和测试结果                    | Build results、`.xcodeagent/reports/test-report.json`、runtime logs                                                                      | Quality Gate、RepairPlanner、UI        |
 | 技术恢复状态                      | `.xcodeagent/checkpoints/checkpoints.sqlite`                                                                                             | LangGraph resume                       |
@@ -971,7 +951,7 @@ application-planning Graph 已支持 `resume_from=ui_confirmation`，请求校�
 | 正式产物确认 | RequirementSpec、UI Design、ProjectPlan、PageDetail/EndpointDetail 生成或修订后均进入显式确认门禁 | 保存草稿、回答澄清均不等于确认；下游只消费已确认 revision/hash。模板完成是确定性完整性门禁，不冒充用户确认。 |
 | 人工暂停与验收请求 | `await_user_input`、`acceptance_request` 保持为控制边界，不注册为普通 Agent 节点 | `await_user_input` 结束当前 Graph run；`acceptance_request` 是 `launch_project` 的结构化输出。两者不需要 Prompt，也不拥有独立业务产物。 |
 | UI 与详细设计 | 先确认 ProjectPlan，再按 artifact 依赖调度 UI、页面详情和接口详情 | 接口详情可按 endpoint 并行；页面详情若消费已确认 UI 结构则排在 UI 后。独立任务只能写各自 artifact，最终通过确定性 join/reconcile 汇合。 |
-| 工作区与数据库上下文 | `inspect_workspace` 先生成稳定 WorkspaceSnapshot，再推导是否需要 `inspect_database_context` | 只有不依赖工作区的纯数据库 schema scan 可以提前并行；DatabasePlanningContext 和 WorkspaceSnapshot 必须在 `prepare_build_tasks` 前汇合并校验版本。 |
+| 工作区与实体上下文 | `inspect_workspace` 生成稳定 WorkspaceSnapshot，任务准备读取已确认的有界实体摘要 | 数据库探测与 DDL 在实体确认阶段完成；任务准备不重复查库，也不把完整 Schema 快照放入模型上下文。 |
 | Build DAG 并行 | BuildScheduler 只并行调度依赖满足、授权路径不冲突的 ready tasks | 不同 owner 可以并发；同一 owner 可批量处理。并发结果必须经过真实 diff 归属、工程验收和确定性合并。 |
 | 跨 Run 资源隔离 | 默认实行“一 workspace 一个写 execution”，只读会话保持并行 | 数据库 schema 变更和共享预览环境使用独占锁；代码任务需要跨 Run 并行时使用独立 Git worktree/分支，合并阶段串行。 |
 | Testing 拓扑 | 工程检查完成后直接执行确定性质量门禁，失败时才进入 RepairPlanner | API 契约在任务准备前校验；Testing 不重复校验，也不引入模型审阅硬依赖。 |

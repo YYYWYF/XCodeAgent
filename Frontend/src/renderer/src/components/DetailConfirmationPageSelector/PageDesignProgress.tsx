@@ -24,10 +24,17 @@ const ENDPOINT_DESIGN_STAGES = [
   { label: '整理接口验收', detail: '汇总接口详细设计与后续任务拆分依据', target: 92 }
 ] as const
 
+const ENTITY_DESIGN_STAGES = [
+  { label: '读取实体定义', detail: '读取已确认实体的字段、类型与数据源绑定', target: 22 },
+  { label: '设计字段与类型', detail: '整理字段语义类型、必填约束与枚举取值', target: 45 },
+  { label: '设计表结构与规则', detail: '生成目标表结构、唯一编码约束与业务规则', target: 72 },
+  { label: '整理实体验收', detail: '汇总实体详细设计与待确认事项', target: 92 }
+] as const
+
 type Props = {
   events?: WorkflowEvent[]
   pageLabel: string
-  targetType?: 'page' | 'endpoint'
+  targetType?: 'page' | 'endpoint' | 'entity'
 }
 
 /** 判断页面细节节点是否已经由后端报告完成。 */
@@ -54,14 +61,21 @@ function latestDetailProgressEvent(events: WorkflowEvent[]): WorkflowEvent | und
 }
 
 /** 判断当前进度是否来自 endpoint 详细设计，避免接口生成时复用页面文案。 */
-function progressTargetType(events: WorkflowEvent[], fallback?: 'page' | 'endpoint'): 'page' | 'endpoint' {
+function progressTargetType(
+  events: WorkflowEvent[],
+  fallback?: 'page' | 'endpoint' | 'entity'
+): 'page' | 'endpoint' | 'entity' {
   const progress = latestDetailProgressEvent(events)
   const detail = progress?.data?.detail
   const targetType =
     detail && typeof detail === 'object'
       ? (detail as Record<string, unknown>).target_type
       : undefined
-  return targetType === 'endpoint' ? 'endpoint' : fallback || 'page'
+  return targetType === 'endpoint'
+    ? 'endpoint'
+    : targetType === 'entity'
+      ? 'entity'
+      : fallback || 'page'
 }
 
 /** 在后端细粒度阶段不可见时，让百分比与步骤条使用同一个推进状态。 */
@@ -72,7 +86,12 @@ export default function PageDesignProgress({
 }: Props): JSX.Element {
   const completed = detailDesignCompleted(events)
   const resolvedTargetType = progressTargetType(events, targetType)
-  const stages = resolvedTargetType === 'endpoint' ? ENDPOINT_DESIGN_STAGES : DESIGN_STAGES
+  const stages =
+    resolvedTargetType === 'endpoint'
+      ? ENDPOINT_DESIGN_STAGES
+      : resolvedTargetType === 'entity'
+        ? ENTITY_DESIGN_STAGES
+        : DESIGN_STAGES
   const latestProgress = latestDetailProgressEvent(events)
   const activityKey = useMemo(
     () => events.reduce((total, event) => total + (event.message?.length || 1), 0),
@@ -90,7 +109,13 @@ export default function PageDesignProgress({
           正在设计「{pageLabel}」
         </Text>
         <Text
-          aria-label={`${resolvedTargetType === 'endpoint' ? '接口' : '页面'}设计进度 ${percent}%`}
+          aria-label={`${
+            resolvedTargetType === 'endpoint'
+              ? '接口'
+              : resolvedTargetType === 'entity'
+                ? '实体'
+                : '页面'
+          }设计进度 ${percent}%`}
           aria-valuemax={100}
           aria-valuemin={0}
           aria-valuenow={percent}
@@ -113,7 +138,10 @@ export default function PageDesignProgress({
         </div>
       </div>
 
-      <div className={cx('detail-page-progress-stepper')}>
+      <div
+        className={cx('detail-page-progress-stepper')}
+        style={{ gridTemplateColumns: `repeat(${stages.length}, minmax(0, 1fr))` }}
+      >
         {stages.map((item, index) => {
           const isDone = completed || index < stageIndex
           const isActive = !completed && index === stageIndex

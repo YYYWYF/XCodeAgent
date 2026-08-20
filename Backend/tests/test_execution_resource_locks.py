@@ -23,6 +23,7 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.execution_resource_scope import resolve_execution_resource_claims
+from tests.entity_design_test_utils import confirm_entity_designs
 
 
 class ExecutionResourceLockTests(unittest.TestCase):
@@ -44,7 +45,7 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 "page:order-search",
                 "api_contract:orders-api",
                 "api_contract:inventory-api",
-                "data_source:commerce-db",
+                "data_source:database",
                 "page:inventory",
             },
         )
@@ -424,9 +425,9 @@ def _write_ready_lifecycle(directory: str) -> None:
 
 
 def _project_plan() -> dict:
-    """返回覆盖共享 API、导航依赖和独立页面的最小正式计划。"""
+    """返回覆盖共享 API、导航依赖和独立页面的最小正式计划（实体设计已确认）。"""
 
-    return {
+    plan = {
         "frontend_pages": [
             {
                 "pageId": "orders",
@@ -453,17 +454,21 @@ def _project_plan() -> dict:
         "api_contracts": [
             {
                 "id": "orders-api",
-                "data_source_id": "commerce-db",
+                "entity_ids": ["Order"],
                 "endpoints": [{"id": "orders.list"}],
             },
             {
                 "id": "inventory-api",
-                "data_source_id": "commerce-db",
+                "entity_ids": ["Inventory"],
                 "endpoints": [{"id": "inventory.list"}],
             },
         ],
-        "data_sources": [{"id": "commerce-db"}],
+        "entities": [
+            {"id": "Order", "name": "Order", "fields": []},
+            {"id": "Inventory", "name": "Inventory", "fields": []},
+        ],
     }
+    return confirm_entity_designs(plan)
 
 
 if __name__ == "__main__":

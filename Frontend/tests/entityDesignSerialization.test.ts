@@ -1,0 +1,306 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import {
+  applyEntityDesignSuggestion,
+  constraintRowsToFieldValues,
+  defaultConstraintRows,
+  fieldValuesToConstraintRows,
+  normalizeFieldValues,
+  normalizeObjectRows,
+  normalizeStringList,
+  parseJsonImport,
+  parseJsonList,
+  parseJsonRecord,
+  resolveEntityDesignFields,
+  responseFieldPaths,
+  sameNameFieldMappings,
+  seedRowsFromSuggestions,
+  serializeSeedRows,
+  tryParseJson
+} from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/entityDesignSerialization'
+
+test('normalizeObjectRows 丢弃空白行并与旧 JSON 载荷等价', () => {
+  const rows = [
+    { target_field: 'product_name', source: 'product.name', rule: '' },
+    { target_field: '  ', source: '', rule: '' },
+    { target_field: 'price', source: 'product.price', rule: 'decimal' }
+  ]
+  const normalized = normalizeObjectRows(rows)
+  assert.equal(normalized.length, 2)
+  // 序列化后经旧 JSON 解析仍得到等价的行对象。
+  const reparsed = parseJsonList(JSON.stringify(normalized))
+  assert.deepEqual(reparsed, normalized)
+})
+
+test('serializeSeedRows 只保留非空字段并转字符串', () => {
+  const rows = [
+    { name: '商品A', price: 12.5, _empty: '' },
+    { name: '', price: '' }
+  ]
+  const serialized = serializeSeedRows(rows)
+  assert.equal(serialized.length, 1)
+  assert.deepEqual(serialized[0], { name: '商品A', price: '12.5' })
+})
+
+test('normalizeStringList 去空格、去重并忽略空值', () => {
+  assert.deepEqual(normalizeStringList([' 完成 ', '', '完成', ' 通过 ']), ['完成', '通过'])
+  assert.deepEqual(normalizeStringList(undefined), [])
+})
+
+test('normalizeFieldValues 丢弃空数组与空键', () => {
+  const normalized = normalizeFieldValues({
+    status: ['draft', 'approved'],
+    empty: [],
+    '  ': ['x']
+  })
+  assert.deepEqual(normalized, { status: ['draft', 'approved'] })
+})
+
+test('parseJsonRecord 兼容字符串数组并把非数组值归一为空数组', () => {
+  const parsed = parseJsonRecord('{"status":["draft"],"note":"not-array"}')
+  assert.deepEqual(parsed, { status: ['draft'], note: [] })
+})
+
+test('tryParseJson 空文本返回 undefined，非法 JSON 保留原文本', () => {
+  assert.equal(tryParseJson('  '), undefined)
+  assert.equal(tryParseJson('not json'), 'not json')
+  assert.deepEqual(tryParseJson('{"a":1}'), { a: 1 })
+})
+
+test('parseJsonImport 解析合法 JSON 并返回错误结果给非法文本', () => {
+  assert.deepEqual(parseJsonImport('  {"a": 1}  '), { ok: true, value: { a: 1 } })
+  const empty = parseJsonImport('   ')
+  assert.equal(empty.ok, false)
+  const invalid = parseJsonImport('{bad')
+  assert.equal(invalid.ok, false)
+  assert.equal(String(invalid.error).length > 0, true)
+})
+
+test('responseFieldPaths 收集顶层与嵌套路径，数组取首元素', () => {
+  const paths = responseFieldPaths({
+    data: { items: [{ name: '商品A', price: 1 }] },
+    page: 1
+  })
+  assert.deepEqual(paths, ['data', 'data.items', 'data.items.name', 'data.items.price', 'page'])
+  assert.deepEqual(responseFieldPaths('not-json'), [])
+  assert.deepEqual(responseFieldPaths(null), [])
+})
+
+test('sameNameFieldMappings 顶层同名优先、嵌套唯一路径兜底且不覆盖已填映射', () => {
+  const entityFields = [
+    { name: 'name', label: '名称' },
+    { name: 'price', label: '价格' },
+    { name: 'status', label: '状态' },
+    { name: 'description', label: '说明' }
+  ]
+  const current = [
+    { entity_field: 'name', source_field: 'data.title', rule: 'manual' },
+    { entity_field: 'price', source_field: '', rule: '' }
+  ]
+  const rows = sameNameFieldMappings(
+    entityFields,
+    { data: { items: [{ price: 1, status: 'ok' }] }, name: 'x' },
+    current
+  )
+  const byField = new Map(rows.map((row) => [String(row.entity_field), row]))
+  // 顶层同名优先
+  assert.equal(byField.get('name')?.source_field, 'data.title')
+  assert.equal(byField.get('name')?.rule, 'manual')
+  // 嵌套唯一叶子路径
+  assert.equal(byField.get('price')?.source_field, 'data.items.price')
+  assert.equal(byField.get('price')?.rule, 'nested_match')
+  // 嵌套叶子路径同样适配其他字段
+  assert.equal(byField.get('status')?.source_field, 'data.items.status')
+  // 返回体中不存在的字段保持空来源字段
+  assert.equal(byField.get('description')?.source_field, '')
+})
+
+test('seedRowsFromSuggestions 提取有效种子记录并忽略非法项', () => {
+  const rows = seedRowsFromSuggestions([
+    {
+      id: 'seed_data-0',
+      label: '种子记录 1',
+      payload: { seed_row: { name: '商品A', price: '12.5' } }
+    },
+    { id: 'seed_data-1', label: '种子记录 2', payload: {} },
+    { id: 'seed_data-2', label: '种子记录 3', payload: { seed_row: {} } },
+    {
+      id: 'seed_data-3',
+      label: '种子记录 4',
+      payload: { seed_row: { name: '商品B' } }
+    },
+    'not-a-suggestion',
+    null
+  ])
+  assert.deepEqual(rows, [
+    { name: '商品A', price: '12.5' },
+    { name: '商品B' }
+  ])
+})
+
+test('seedRowsFromSuggestions 空结果返回空数组', () => {
+  assert.deepEqual(seedRowsFromSuggestions([]), [])
+  assert.deepEqual(seedRowsFromSuggestions(undefined), [])
+})
+
+test('fieldValuesToConstraintRows 转约束行并丢弃空字段/空取值', () => {
+  const rows = fieldValuesToConstraintRows({
+    status: ['draft', 'approved'],
+    empty: [],
+    '  ': ['x'],
+    note: ['a', 'a']
+  })
+  assert.deepEqual(rows, [
+    { field: 'status', values: ['draft', 'approved'] },
+    { field: 'note', values: ['a'] }
+  ])
+})
+
+test('constraintRowsToFieldValues 转回记录并丢弃空行', () => {
+  const record = constraintRowsToFieldValues([
+    { field: 'status', values: ['draft', 'approved'] },
+    { field: '', values: ['x'] },
+    { field: 'note', values: [] },
+    { field: '  ', values: ['y'] },
+    'not-a-row'
+  ])
+  assert.deepEqual(record, { status: ['draft', 'approved'] })
+})
+
+test('resolveEntityDesignFields 优先非空 target.fields，空数组回退 design.fields', () => {
+  const target = {
+    fields: [{ name: 'status', type: 'enum', enum_values: ['on', 'off'] }]
+  }
+  const design = { fields: [{ name: 'name', type: 'text' }] }
+  assert.deepEqual(resolveEntityDesignFields(target, design), target.fields)
+  assert.deepEqual(resolveEntityDesignFields({ fields: [] }, design), design.fields)
+  assert.deepEqual(resolveEntityDesignFields(undefined, design), design.fields)
+  assert.deepEqual(resolveEntityDesignFields(undefined, undefined), [])
+})
+
+test('字段取值约束行与记录互转往返一致', () => {
+  const original = { status: ['draft'], price: ['1', '2'] }
+  const roundtrip = constraintRowsToFieldValues(
+    fieldValuesToConstraintRows(original)
+  )
+  assert.deepEqual(roundtrip, original)
+})
+
+test('defaultConstraintRows 与 constraintRowsToFieldValues 合并时保留已有行', () => {
+  const entityFields = [
+    { name: 'status', label: '状态', type: 'enum', enum_values: ['on', 'off'] },
+    { name: 'mode', label: '模式', type: 'enum', enum_values: ['a', 'b'] }
+  ]
+  const current = [{ field: 'status', values: ['on'] }]
+  const merged = defaultConstraintRows(
+    entityFields,
+    constraintRowsToFieldValues(current)
+  )
+  assert.deepEqual(merged, [
+    { field: 'status', values: ['on'] },
+    { field: 'mode', values: ['a', 'b'] }
+  ])
+})
+
+test('defaultConstraintRows 仅对 enum 字段生成默认行并与已有约束去重', () => {
+  const entityFields = [
+    { name: 'status', label: '状态', type: 'enum', enum_values: ['on', 'off'] },
+    { name: 'price', label: '价格', type: 'number' },
+    { name: 'mode', label: '模式', type: 'enum', enum_values: ['a', 'b'] },
+    { name: 'empty_enum', label: '空枚举', type: 'enum', enum_values: [] }
+  ]
+  const rows = defaultConstraintRows(entityFields, { status: ['draft'] })
+  assert.deepEqual(rows, [
+    { field: 'status', values: ['draft'] },
+    { field: 'mode', values: ['a', 'b'] }
+  ])
+})
+
+test('defaultConstraintRows 无已有约束的 enum 字段按实体顺序追加', () => {
+  const entityFields = [
+    { name: 'mode', label: '模式', type: 'enum', enum_values: ['a', 'b'] },
+    { name: 'status', label: '状态', type: 'enum', enum_values: ['on', 'off'] }
+  ]
+  const rows = defaultConstraintRows(entityFields, {})
+  assert.deepEqual(rows, [
+    { field: 'mode', values: ['a', 'b'] },
+    { field: 'status', values: ['on', 'off'] }
+  ])
+})
+
+test('defaultConstraintRows type 缺失但 enum_values 非空时仍生成默认行', () => {
+  const entityFields = [
+    { name: 'status', label: '状态', enum_values: ['on', 'off'] },
+    { name: 'mode', label: '模式', type: 'text', enum_values: ['a'] }
+  ]
+  const rows = defaultConstraintRows(entityFields, {})
+  assert.deepEqual(rows, [{ field: 'status', values: ['on', 'off'] }])
+})
+
+test('applyEntityDesignSuggestion 绑定建议合并到已有行或追加新行', () => {
+  const current = [
+    { entity_field: 'name', table_column: '', rule: '' },
+    { entity_field: 'price', table_column: '', rule: '' }
+  ]
+  const next = applyEntityDesignSuggestion('bindings', current, {
+    id: 'bindings-0',
+    label: 'price → product_price',
+    payload: { entity_field: 'price', table_column: 'product_price', rule: 'same_name' }
+  }) as Array<Record<string, unknown>>
+  assert.equal(next.length, 2)
+  assert.equal(next[1].table_column, 'product_price')
+  const added = applyEntityDesignSuggestion('bindings', current, {
+    id: 'bindings-1',
+    label: 'status → status',
+    payload: { entity_field: 'status', table_column: 'status' }
+  }) as Array<Record<string, unknown>>
+  assert.equal(added.length, 3)
+  assert.equal(added[2].entity_field, 'status')
+})
+
+test('applyEntityDesignSuggestion 规则/关系追加对象，验收/风险追加文本', () => {
+  const rules = applyEntityDesignSuggestion('business_rules', [], {
+    id: 'rules-0',
+    label: '编码唯一',
+    payload: { rule_type: 'unique', name: '编码唯一', description: '商品编码唯一' }
+  }) as Array<Record<string, unknown>>
+  assert.equal(rules.length, 1)
+  assert.equal(rules[0].name, '编码唯一')
+
+  const acceptance = applyEntityDesignSuggestion('acceptance', ['列表可查询'], {
+    id: 'acceptance-0',
+    label: '详情可打开',
+    value: '详情可打开'
+  }) as string[]
+  assert.deepEqual(acceptance, ['列表可查询', '详情可打开'])
+})
+
+test('applyEntityDesignSuggestion api_mapping 映射按实体字段合并或追加', () => {
+  const current = [
+    { entity_field: 'name', source_field: '', rule: '' },
+    { entity_field: 'price', source_field: '', rule: '' }
+  ]
+  const next = applyEntityDesignSuggestion('api_mapping', current, {
+    id: 'api_mapping-0',
+    label: 'price ← data.price',
+    payload: { entity_field: 'price', source_field: 'data.price', rule: 'same_name' }
+  }) as Array<Record<string, unknown>>
+  assert.equal(next.length, 2)
+  assert.equal(next[1].source_field, 'data.price')
+  const added = applyEntityDesignSuggestion('api_mapping', current, {
+    id: 'api_mapping-1',
+    label: 'status ← status',
+    payload: { entity_field: 'status', source_field: 'status' }
+  }) as Array<Record<string, unknown>>
+  assert.equal(added.length, 3)
+  assert.equal(added[2].source_field, 'status')
+})
+
+test('applyEntityDesignSuggestion seed_data 追加种子记录', () => {
+  const next = applyEntityDesignSuggestion('seed_data', [], {
+    id: 'seed_data-0',
+    label: '种子记录 1',
+    payload: { seed_row: { name: '商品A', price: '12.5' } }
+  }) as Array<Record<string, unknown>>
+  assert.deepEqual(next, [{ name: '商品A', price: '12.5' }])
+})

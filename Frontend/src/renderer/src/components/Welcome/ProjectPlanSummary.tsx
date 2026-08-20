@@ -1,4 +1,4 @@
-import { ArrowRightOutlined, DatabaseOutlined } from '@ant-design/icons'
+import { DatabaseOutlined } from '@ant-design/icons'
 import { Tag, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import ProjectPlanPageTreePreview from '../ProjectPlanPageTreePreview'
@@ -29,26 +29,23 @@ const dataSourceTypeLabels: Record<string, string> = {
 }
 
 type ProjectPlanEntity = {
+  id: string
   name: string
   description: string
+  dataSourceType: string
+  fields: Array<{
+    name: string
+    label: string
+    type: string
+    required: boolean
+    description: string
+  }>
 }
 
 type ProjectPlanBusinessFlow = {
   id: string
   name: string
   steps: string[]
-}
-
-type SchemaReference = {
-  raw: string
-  contractId: string
-}
-
-type ApiContractInfo = {
-  id: string
-  dataSourceId: string
-  resource: string
-  basePath: string
 }
 
 // 将未知值安全收窄为 ProjectPlan 子对象。
@@ -92,6 +89,26 @@ function stringRecordField(value: string, key: string): string {
   return value.match(pattern)?.[2]?.trim() || ''
 }
 
+// 将实体字段对象收窄为可展示字段摘要。
+function projectPlanEntityFields(value: unknown): ProjectPlanEntity['fields'] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
+      const record = item as Record<string, unknown>
+      const name = fieldText(record.name)
+      if (!name) return undefined
+      return {
+        name,
+        label: fieldText(record.label) || name,
+        type: fieldText(record.type, 'text'),
+        required: Boolean(record.required),
+        description: fieldText(record.description)
+      }
+    })
+    .filter((item): item is ProjectPlanEntity['fields'][number] => Boolean(item))
+}
+
 // 将实体对象或历史字符串化实体归一为名称和描述，避免把内部 schema_ref 当成实体文案。
 function projectPlanEntities(value: unknown): ProjectPlanEntity[] {
   if (!Array.isArray(value)) return []
@@ -99,20 +116,30 @@ function projectPlanEntities(value: unknown): ProjectPlanEntity[] {
     .map((item) => {
       if (item && typeof item === 'object' && !Array.isArray(item)) {
         const record = item as Record<string, unknown>
+        const rawDataSource = record.data_source
         return {
+          id: fieldText(record.id) || fieldText(record.name),
           name: fieldText(record.name) || fieldText(record.id),
-          description: fieldText(record.description)
+          description: fieldText(record.description),
+          dataSourceType:
+            typeof rawDataSource === 'string'
+              ? rawDataSource
+              : fieldText(asRecord(rawDataSource).type),
+          fields: projectPlanEntityFields(record.fields)
         }
       }
       if (typeof item === 'string') {
         return {
+          id: stringRecordField(item, 'id') || item.trim(),
           name: stringRecordField(item, 'name') || item.trim(),
-          description: stringRecordField(item, 'description')
+          description: stringRecordField(item, 'description'),
+          dataSourceType: '',
+          fields: []
         }
       }
-      return { name: '', description: '' }
+      return { id: '', name: '', description: '', dataSourceType: '', fields: [] }
     })
-    .filter((item) => item.name || item.description)
+    .filter((item) => item.name || item.description || item.fields.length)
 }
 
 // 将业务流程统一归一为名称和步骤，供项目规划中的流程卡片展示。
@@ -156,48 +183,6 @@ function projectPlanFlowCode(flow: ProjectPlanBusinessFlow): string {
     flow.id.replace(/_/g, ' ') ||
     'FLOW'
   ).toUpperCase()
-}
-
-// 从 schema_refs 中提取契约 ID，供旧版计划兼容建立数据源到 API 的关系。
-function parseSchemaReference(value: string): SchemaReference {
-  const reference = value.trim()
-  const hashIndex = reference.indexOf('#')
-  const contractId = hashIndex >= 0 ? reference.slice(0, hashIndex).trim() : ''
-  return {
-    raw: reference,
-    contractId
-  }
-}
-
-// 将数据源的 schema_refs 过滤、去重并转换为内部 API 契约引用。
-function projectPlanSchemaReferences(value: unknown): SchemaReference[] {
-  if (!Array.isArray(value)) return []
-  const references = value
-    .map((item) => {
-      if (typeof item === 'string') return parseSchemaReference(item)
-      const record = asRecord(item)
-      const reference = fieldText(record.ref || record.schema_ref || record.schemaRef)
-      return reference ? parseSchemaReference(reference) : undefined
-    })
-    .filter((item): item is SchemaReference => Boolean(item?.raw))
-  return Array.from(new Map(references.map((item) => [item.raw, item])).values())
-}
-
-// 根据正式 data_source_id 建立数据源到 API 契约的关系，并兼容旧版 schema_refs。
-function relatedApiContracts(
-  source: Record<string, unknown>,
-  apiContracts: ApiContractInfo[]
-): ApiContractInfo[] {
-  const sourceId = fieldText(source.id)
-  const explicitRelations = sourceId
-    ? apiContracts.filter((contract) => contract.dataSourceId === sourceId)
-    : []
-  if (explicitRelations.length) return explicitRelations
-
-  const legacyContractIds = projectPlanSchemaReferences(source.schema_refs)
-    .map((reference) => reference.contractId)
-    .filter(Boolean)
-  return apiContracts.filter((contract) => legacyContractIds.includes(contract.id))
 }
 
 // 把 ProjectPlan 状态代码转成用户可读文案。
@@ -248,119 +233,45 @@ function dataSourceTypeText(value: unknown): string {
   return dataSourceTypeLabels[type] || (/[㐀-鿿]/.test(type) ? type : '其他数据源')
 }
 
-// 将常见初始化策略代码转换为用户可理解的中文说明。
-function seedStrategyText(value: unknown): string {
-  const strategy = fieldText(value)
+// 渲染单个实体卡片，展示实体字段与绑定的数据源类型。
+function EntityItem({ entity, index }: { entity: ProjectPlanEntity; index: number }): ReactElement {
   return (
-    {
-      demo_records: '生成演示数据',
-      existing_data: '沿用已有数据',
-      none: '不初始化数据'
-    }[strategy] || strategy
-  )
-}
-
-// 将数据源 JSON 投影成“实体 → API”的业务关系卡片。
-function DataSourceItem({
-  apiContracts,
-  source,
-  index
-}: {
-  apiContracts: ApiContractInfo[]
-  source: Record<string, unknown>
-  index: number
-}): ReactElement {
-  const name = fieldText(source.name) || fieldText(source.id) || `数据源 ${index + 1}`
-  const description = fieldText(source.description)
-  const entities = projectPlanEntities(source.entities)
-  const relatedApis = relatedApiContracts(source, apiContracts).filter(
-    (contract) => contract.resource || contract.basePath
-  )
-  const isStaticSource = fieldText(source.type) === 'static'
-  const seedStrategy = seedStrategyText(source.seed_strategy)
-  const sourceMeta =
-    description ||
-    dataSourceTypeText(source.type)
-
-  return (
-    <article className={cx('project-plan-summary-data-source')}>
-      <header className={cx('project-plan-summary-data-source-header')}>
-        <span className={cx('project-plan-summary-data-source-icon')} aria-hidden="true">
+    <article className={cx('project-plan-summary-entity-card')}>
+      <header className={cx('project-plan-summary-entity-card-header')}>
+        <span className={cx('project-plan-summary-entity-card-icon')} aria-hidden="true">
           <DatabaseOutlined />
         </span>
         <div>
-          <Text strong>{name}</Text>
-          <Paragraph type="secondary">{sourceMeta}</Paragraph>
-        </div>
-        <Tag>{dataSourceTypeText(source.type)}</Tag>
-      </header>
-      <div className={cx('project-plan-summary-data-source-relation')}>
-        <section className={cx('project-plan-summary-data-source-relation-group', 'is-entity')}>
-          <div className={cx('project-plan-summary-data-source-relation-heading')}>
-            <Text strong>实体</Text>
-          </div>
-          <div className={cx('project-plan-summary-data-source-entities')}>
-            {entities.length ? (
-              entities.map((entity, entityIndex) => (
-                <article
-                  className={cx('project-plan-summary-data-source-entity')}
-                  key={`${entity.name}-${entityIndex}`}
-                >
-                  <Text strong>{entity.name || `实体 ${entityIndex + 1}`}</Text>
-                  {entity.description ? (
-                    <Paragraph type="secondary">{entity.description}</Paragraph>
-                  ) : (
-                    <Text type="secondary">暂无实体描述</Text>
-                  )}
-                </article>
-              ))
-            ) : (
-              <Text type="secondary">暂无业务实体</Text>
-            )}
-          </div>
-        </section>
-        <span
-          className={cx('project-plan-summary-data-source-relation-arrow')}
-          aria-label={isStaticSource ? '实体关联前端 Mock 数据契约' : '实体关联真实 HTTP API'}
-          role="img"
-        >
-          <ArrowRightOutlined />
-        </span>
-        <section
-          className={cx(
-            'project-plan-summary-data-source-relation-group',
-            'is-api'
+          <Text strong>{entity.name || `实体 ${index + 1}`}</Text>
+          {entity.id ? <code>{entity.id}</code> : null}
+          {entity.description ? (
+            <Paragraph type="secondary">{entity.description}</Paragraph>
+          ) : (
+            <Text type="secondary">暂无实体描述</Text>
           )}
-        >
-          <div className={cx('project-plan-summary-data-source-relation-heading')}>
-            <Text strong>
-              {isStaticSource ? '前端 Mock 数据契约' : '真实 HTTP API'}
-            </Text>
+        </div>
+        <Tag>
+          {entity.dataSourceType ? dataSourceTypeText(entity.dataSourceType) : '待实体设计'}
+        </Tag>
+      </header>
+      {entity.fields.length ? (
+        <div className={cx('project-plan-summary-entity-fields')}>
+          <div className={cx('project-plan-summary-entity-fields-head')}>
+            <Text strong>名称</Text>
+            <Text strong>字段</Text>
+            <Text strong>说明</Text>
           </div>
-          <div className={cx('project-plan-summary-data-source-apis')}>
-            {relatedApis.length ? (
-              relatedApis.map((contract) => {
-                return (
-                  <article className={cx('project-plan-summary-data-source-api')} key={contract.id}>
-                    <Text strong>{contract.resource || 'API'}</Text>
-                    {contract.basePath ? (
-                      <Tag className={cx('project-plan-code-tag')}>{contract.basePath}</Tag>
-                    ) : null}
-                  </article>
-                )
-              })
-            ) : (
-              <Text type="secondary">暂无关联数据契约</Text>
-            )}
-          </div>
-        </section>
-      </div>
-      {seedStrategy ? (
-        <footer>
-          <Text type="secondary">初始化策略</Text>
-          <Text>{seedStrategy}</Text>
-        </footer>
-      ) : null}
+          {entity.fields.map((field) => (
+            <div className={cx('project-plan-summary-entity-field')} key={field.name}>
+              <Text strong>{field.label || field.name}</Text>
+              <code>{field.name}</code>
+              <Text type="secondary">{field.description || '—'}</Text>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Text type="secondary">暂无字段定义</Text>
+      )}
     </article>
   )
 }
@@ -430,23 +341,12 @@ export default function ProjectPlanSummary({ plan }: Props): ReactElement {
   )
   const businessFlows = businessFlowDetails.map((flow) => flow.name)
   const apiContracts = recordItems(plan.api_contracts)
-  const apiContractInfo = apiContracts
-    .map((contract) => {
-      const id = fieldText(contract.id)
-      if (!id) return undefined
-      return {
-        id,
-        dataSourceId: fieldText(contract.data_source_id),
-        resource: fieldText(contract.resource),
-        basePath: fieldText(contract.base_path)
-      }
-    })
-    .filter((item): item is ApiContractInfo => Boolean(item))
   const pageTree = projectPlanPageTreeNodes(
     plan.artifact_type === 'technical-plan' ? plan.pages : plan.frontend_pages
   )
+  const entities = projectPlanEntities(plan.entities)
   const dataSources = recordItems(plan.data_sources)
-  const datasourceType = fieldText(dataSources[0]?.type, 'database')
+  const datasourceType = entities[0]?.dataSourceType || fieldText(dataSources[0]?.type, 'database')
   const isStaticDatasource = datasourceType === 'static'
   const permissionModel = asRecord(plan.permission_model)
   const permissionRoles = recordItems(permissionModel.roles)
@@ -489,8 +389,8 @@ export default function ProjectPlanSummary({ plan }: Props): ReactElement {
           <Text type="secondary">核心流程</Text>
         </div>
         <div>
-          <Text strong>{dataSources.length}</Text>
-          <Text type="secondary">数据来源</Text>
+          <Text strong>{entities.length}</Text>
+          <Text type="secondary">实体</Text>
         </div>
       </div>
 
@@ -621,24 +521,17 @@ export default function ProjectPlanSummary({ plan }: Props): ReactElement {
           </PlanSection>
         ) : null}
 
-        {dataSources.length ? (
+        {entities.length ? (
           <PlanSection
             anchorId={apiContracts.length ? undefined : PROJECT_PLAN_READING_SECTION_IDS.data}
-            count={`${dataSources.length} 个数据源`}
-            description="实体和 API 的业务归属"
-            title="数据关系"
+            count={`${entities.length} 个实体`}
+            description="业务实体及其字段定义，标注数据来源类型"
+            title="实体"
           >
-            <div className={cx('project-plan-summary-items-grid')}>
-              {dataSources.map((source, index) => {
-                return (
-                  <DataSourceItem
-                    apiContracts={apiContractInfo}
-                    index={index}
-                    key={fieldText(source.id) || `source-${index}`}
-                    source={source}
-                  />
-                )
-              })}
+            <div className={cx('project-plan-summary-entity-grid')}>
+              {entities.map((entity, index) => (
+                <EntityItem entity={entity} index={index} key={entity.name || `entity-${index}`} />
+              ))}
             </div>
           </PlanSection>
         ) : null}

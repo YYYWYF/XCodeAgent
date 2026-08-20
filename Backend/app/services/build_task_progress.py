@@ -262,18 +262,26 @@ def project_build_context_output(
         "requiredUnitIds": _compact_strings(required_units, item_limit=200, text_limit=240),
         "endpointIds": _compact_strings(build_context.get("endpoint_ids"), item_limit=200, text_limit=240),
         "apiContractIds": _compact_strings(
-            build_context.get("api_contract_ids"), item_limit=200, text_limit=240
+            {
+                str(detail.get("api_contract_id") or "")
+                for detail in build_context.get("direct_endpoint_details") or []
+                if isinstance(detail, dict) and detail.get("api_contract_id")
+            },
+            item_limit=200,
+            text_limit=240,
         ),
         "dataSourceIds": _compact_strings(
-            build_context.get("data_source_ids"), item_limit=200, text_limit=240
+            {
+                str(design.get("data_source_type") or "")
+                for design in build_context.get("entity_designs") or []
+                if isinstance(design, dict) and design.get("data_source_type")
+            },
+            item_limit=200,
+            text_limit=240,
         ),
-        "databaseStatus": _compact_text(
-            (build_context.get("database_planning_context") or {}).get("status")
-            if isinstance(build_context.get("database_planning_context"), dict)
-            else "missing",
-            80,
-        )
-        or "missing",
+        "entityIds": _compact_strings(
+            build_context.get("entity_ids"), item_limit=200, text_limit=240
+        ),
         "reusableTaskIds": _compact_strings(reusable_ids, item_limit=200, text_limit=240),
     }
 
@@ -291,7 +299,13 @@ def project_contract_validation_output(
             build_context.get("endpoint_ids"), item_limit=200, text_limit=240
         ),
         "checkedApiContractIds": _compact_strings(
-            build_context.get("api_contract_ids"), item_limit=200, text_limit=240
+            {
+                str(detail.get("api_contract_id") or "")
+                for detail in build_context.get("direct_endpoint_details") or []
+                if isinstance(detail, dict) and detail.get("api_contract_id")
+            },
+            item_limit=200,
+            text_limit=240,
         ),
         "issues": _compact_strings(errors, item_limit=100, text_limit=1_000),
     }

@@ -13,6 +13,7 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode,
@@ -84,6 +85,9 @@ function WorkbenchPage({
   const [developmentPlanningApiContracts, setDevelopmentPlanningApiContracts] = useState<
     DevelopmentPlanningApiContract[]
   >([])
+  const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
+    DevelopmentPlanningEntityOption[]
+  >([])
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [previewBaseUrl, setPreviewBaseUrl] = useState('')
   const [previewLaunchError, setPreviewLaunchError] = useState('')
@@ -106,9 +110,20 @@ function WorkbenchPage({
   // 新建应用需等模板拉取完成（lifecycle=ready_for_workbench）后才有 frontend/package.json，
   // 在此之前启动会报"未找到前端 package.json"，故规划期跳过，就绪后再启动。
   useEffect(() => {
-    const workspacePath =
-      application.workspaceRoot || application.projectParentPath || ''
-    console.log('[preview-launch-effect]', 'workspace=', workspacePath, 'source=', application.source, 'ready=', lifecycleReadyForWorkbench, 'launched=', launchedWorkspaceRef.current, 'activeLaunch=', activeLaunchWorkspaceRef.current)
+    const workspacePath = application.workspaceRoot || application.projectParentPath || ''
+    console.log(
+      '[preview-launch-effect]',
+      'workspace=',
+      workspacePath,
+      'source=',
+      application.source,
+      'ready=',
+      lifecycleReadyForWorkbench,
+      'launched=',
+      launchedWorkspaceRef.current,
+      'activeLaunch=',
+      activeLaunchWorkspaceRef.current
+    )
     if (launchCleanupTimerRef.current !== undefined) {
       window.clearTimeout(launchCleanupTimerRef.current)
       launchCleanupTimerRef.current = undefined
@@ -145,6 +160,8 @@ function WorkbenchPage({
     const launchRunId = launchRunIdRef.current + 1
     launchRunIdRef.current = launchRunId
     launchedWorkspaceRef.current = workspacePath
+    setPreviewBaseUrl('')
+    setPreviewLaunchError('')
     setPreviewLaunchLoading(true)
 
     const loadingKey = `project-launch-${application.id}-${launchRunId}`
@@ -155,60 +172,77 @@ function WorkbenchPage({
       placement: 'bottomRight',
       duration: null,
       icon: <LoadingOutlined />,
-      className: cx('project-launch-loading'),
+      className: cx('project-launch-loading')
     })
 
-    startProjectLaunch(workspacePath).then(result => {
-      const launchStillCurrent =
-        launchRunIdRef.current === launchRunId &&
-        activeLaunchWorkspaceRef.current === workspacePath &&
-        !launchCleanupPendingRef.current
-      console.log('[preview-launch-result]', 'status=', result.status, 'previewUrl=', result.preview_url, 'stillCurrent=', launchStillCurrent, 'cleanupPending=', launchCleanupPendingRef.current, 'msg=', result.message)
-      notification.close(loadingKey)
-      if (!launchStillCurrent) {
-        if (result.status === 'running') {
-          void stopProjectPreview(workspacePath).finally(() => {
-            void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
-              workspaceRoot: workspacePath
+    startProjectLaunch(workspacePath)
+      .then((result) => {
+        const launchStillCurrent =
+          launchRunIdRef.current === launchRunId &&
+          activeLaunchWorkspaceRef.current === workspacePath &&
+          !launchCleanupPendingRef.current
+        console.log(
+          '[preview-launch-result]',
+          'status=',
+          result.status,
+          'previewUrl=',
+          result.preview_url,
+          'stillCurrent=',
+          launchStillCurrent,
+          'cleanupPending=',
+          launchCleanupPendingRef.current,
+          'msg=',
+          result.message
+        )
+        notification.close(loadingKey)
+        if (!launchStillCurrent) {
+          if (result.status === 'running') {
+            void stopProjectPreview(workspacePath).finally(() => {
+              void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
+                workspaceRoot: workspacePath
+              })
             })
+          }
+          return
+        }
+        setPreviewLaunchLoading(false)
+        if (result.status === 'running' && result.preview_url) {
+          void window.xcodeAgent?.projectPreview?.registerWorkspace({
+            workspaceRoot: workspacePath
+          })
+          setPreviewBaseUrl(previewOrigin(result.preview_url))
+          setPreviewLaunchError('')
+          notification.success({
+            message: '项目预览已启动',
+            description: '可在预览面板中查看效果',
+            placement: 'bottomRight',
+            duration: 3
+          })
+        } else {
+          const errorMsg = result.message || '未知错误'
+          setPreviewBaseUrl('')
+          setPreviewLaunchError(errorMsg)
+          notification.warning({
+            message: '项目预览启动失败',
+            description: `${errorMsg}，可在预览区查看详情`,
+            placement: 'bottomRight',
+            duration: 3
           })
         }
-        return
-      }
-      setPreviewLaunchLoading(false)
-      if (result.status === 'running' && result.preview_url) {
-        void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot: workspacePath })
-        setPreviewBaseUrl(previewOrigin(result.preview_url))
-        setPreviewLaunchError('')
-        notification.success({
-          message: '项目预览已启动',
-          description: '可在预览面板中查看效果',
-          placement: 'bottomRight',
-          duration: 3,
-        })
-      } else {
-        const errorMsg = result.message || '未知错误'
+      })
+      .catch((err) => {
+        notification.close(loadingKey)
+        const launchStillCurrent =
+          launchRunIdRef.current === launchRunId &&
+          activeLaunchWorkspaceRef.current === workspacePath &&
+          !launchCleanupPendingRef.current
+        if (!launchStillCurrent) return
+        setPreviewLaunchLoading(false)
+        const errorMsg = err instanceof Error ? err.message : '网络请求失败'
         setPreviewBaseUrl('')
         setPreviewLaunchError(errorMsg)
-        notification.warning({
-          message: '项目预览启动失败',
-          description: `${errorMsg}，可在预览区查看详情`,
-          placement: 'bottomRight',
-          duration: 3,
-        })
-      }
-    }).catch(err => {
-      notification.close(loadingKey)
-      const launchStillCurrent =
-        launchRunIdRef.current === launchRunId &&
-        activeLaunchWorkspaceRef.current === workspacePath &&
-        !launchCleanupPendingRef.current
-      if (!launchStillCurrent) return
-      const errorMsg = err instanceof Error ? err.message : '网络请求失败'
-      setPreviewBaseUrl('')
-      setPreviewLaunchError(errorMsg)
-      setPreviewLaunchLoading(false)
-    })
+        setPreviewLaunchLoading(false)
+      })
     return () => {
       launchCleanupPendingRef.current = true
       launchCleanupTimerRef.current = window.setTimeout(() => {
@@ -220,7 +254,13 @@ function WorkbenchPage({
         }
       }, 0)
     }
-  }, [application.id, application.source, application.projectParentPath, application.workspaceRoot, lifecycleReadyForWorkbench])
+  }, [
+    application.id,
+    application.source,
+    application.projectParentPath,
+    application.workspaceRoot,
+    lifecycleReadyForWorkbench
+  ])
 
   useEffect(() => {
     let active = true
@@ -246,9 +286,14 @@ function WorkbenchPage({
         const inspection = await inspectWorkspacePlanningArtifacts(application.workspaceRoot)
         if (!active) return
         setDevelopmentPlanningPages(inspection.pages)
-        setDevelopmentPlanningPageTree(Array.isArray(inspection.pageTree) ? inspection.pageTree : [])
+        setDevelopmentPlanningPageTree(
+          Array.isArray(inspection.pageTree) ? inspection.pageTree : []
+        )
         setDevelopmentPlanningApiContracts(
           Array.isArray(inspection.apiContracts) ? inspection.apiContracts : []
+        )
+        setDevelopmentPlanningEntities(
+          Array.isArray(inspection.entities) ? inspection.entities : []
         )
         setHasPageDesigns(inspection.hasPageDesigns)
         if (!inspection.ready) {
@@ -259,6 +304,7 @@ function WorkbenchPage({
         setDevelopmentPlanningPages([])
         setDevelopmentPlanningPageTree([])
         setDevelopmentPlanningApiContracts([])
+        setDevelopmentPlanningEntities([])
         setHasPageDesigns(false)
         console.warn('检查 specs/plans 规划产物失败。', error)
       } finally {
@@ -352,6 +398,7 @@ function WorkbenchPage({
                 developmentPlanningPages={developmentPlanningPages}
                 developmentPlanningPageTree={developmentPlanningPageTree}
                 developmentPlanningApiContracts={developmentPlanningApiContracts}
+                developmentPlanningEntities={developmentPlanningEntities}
                 editorMode={editorMode}
                 onApplicationUpdate={handleApplicationUpdate}
                 onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}

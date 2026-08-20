@@ -35,12 +35,13 @@ class FakeChatModel:
 
 class DirectChatModelBoundaryTests(unittest.TestCase):
     def test_project_planning_prompt_requires_canonical_contract_id(self) -> None:
-        """项目规划提示必须固定契约主键，避免模型改用 contract_id。"""
+        """项目规划提示必须固定契约主键并绑定实体，避免模型改用 contract_id。"""
 
         prompt = planner._planning_prompt(create_requirement_spec("创建天气预报系统"))
 
         self.assertIn("never contract_id or contractId", prompt)
-        self.assertIn("data_source_id are required non-empty strings", prompt)
+        self.assertIn("entity_ids", prompt)
+        self.assertIn("only contract binding", prompt)
 
     def test_project_planning_prompt_shows_canonical_api_contract_example(self) -> None:
         """项目规划提示必须给出 API 契约样例，固定 Schema 引用格式。"""
@@ -54,18 +55,15 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
         self.assertIn("Do NOT use #/definitions/...", prompt)
         self.assertIn("#/components/schemas/...", prompt)
 
-    def test_static_project_planning_prompt_disables_database_backend(self) -> None:
-        """Static 规划提示必须把契约定义为前端内存边界并禁止数据库实现。"""
+    def test_project_planning_prompt_defers_entity_data_sources(self) -> None:
+        """规划提示不再声明应用级数据源类型，实体数据源由实体设计阶段决定。"""
 
-        spec = create_requirement_spec(
-            "创建库存查看系统",
-            datasource_type="static",
-        )
-        prompt = planner._planning_prompt(spec, datasource_type="static")
+        spec = create_requirement_spec("创建库存查看系统")
+        prompt = planner._planning_prompt(spec)
 
-        self.assertIn("type=static", prompt)
-        self.assertIn("frontend in-memory mock", prompt)
-        self.assertIn("do not represent a real HTTP backend", prompt)
+        self.assertIn("no app-level data source type", prompt)
+        self.assertIn("entity-design stage", prompt)
+        self.assertIn("Java8 + Springboot", prompt)
         self.assertIn("Do not emit generic full CRUD", prompt)
 
     def test_requirements_uses_direct_model_with_only_ask_user(self) -> None:

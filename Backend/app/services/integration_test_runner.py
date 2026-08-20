@@ -483,7 +483,7 @@ def _backend_checks(
             name="后端构建检查",
             layer="backend",
             language=None,
-            evidence="未发现 Maven、pom.xml 或 pytest 项目配置，跳过后端构建检查。",
+            evidence="未发现 Maven 或 pom.xml 项目配置，跳过后端构建检查。",
             required=False,
             on_progress=on_progress,
         )

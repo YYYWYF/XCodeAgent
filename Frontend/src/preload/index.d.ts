@@ -75,7 +75,7 @@ declare global {
           apiContracts: Array<{
             id: string
             label: string
-            dataSourceIds?: string[]
+            entityIds?: string[]
             endpoints: Array<{
               apiContractId?: string
               id: string
@@ -86,6 +86,15 @@ declare global {
               hasDetailPlan?: boolean
               designed?: boolean
             }>
+          }>
+          entities: Array<{
+            id: string
+            label: string
+            purpose: string
+            dataSourceType: string
+            detailPlanStatus?: string
+            hasDetailPlan: boolean
+            designed: boolean
           }>
         }>
       }

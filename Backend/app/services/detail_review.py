@@ -9,10 +9,14 @@ from app.services.api_contracts import (
     normalize_page_api_dependencies,
     normalize_response_bindings,
 )
+from app.services.entity_detail_plan import refresh_entity_detail_table_design
+from app.services.entity_design import (
+    entity_design_selection_summary,
+    entity_design_stage,
+    entity_design_summary,
+)
 from app.services.frontend_page_tree import update_frontend_page_leaves
 from app.services.page_detail_plan import (
-    apply_endpoint_datasource_policy,
-    normalize_endpoint_data_origin,
     refresh_endpoint_detail_from_decision,
 )
 
@@ -29,10 +33,19 @@ PAGE_EDITABLE_FIELDS = {
 }
 ENDPOINT_EDITABLE_FIELDS = {
     "data_usage",
-    "data_origin",
     "endpoint_decision",
     "interface_design",
     "dependent_pages",
+}
+ENTITY_EDITABLE_FIELDS = {
+    "data_source_type",
+    "database_design",
+    "external_api_design",
+    "static_design",
+    "business_rules",
+    "relationships",
+    "acceptance_criteria",
+    "risks",
 }
 
 
@@ -42,9 +55,10 @@ def detail_review_payload(
     selectedPageId: str | None = None,
     selected_api_contract_id: str | None = None,
     selected_endpoint_id: str | None = None,
+    selected_entity_id: str | None = None,
     detail_target_type: str | None = None,
 ) -> dict[str, Any]:
-    """构造本轮细节审核载荷；选中目标时只投射该目标相关详情。"""
+    """构造本轮细节审核载荷；选中目标时只投射该目标相关详情（页面/接口/实体）。"""
 
     project_plan = deepcopy(project_plan)
     pages = [
@@ -84,10 +98,12 @@ def detail_review_payload(
         selected_api_contract_id=selected_api_contract_id,
         selected_endpoint_id=selected_endpoint_id,
     )
+    entities = _entity_review_items(project_plan, selected_entity_id=selected_entity_id)
     missingSelectedPagePlan = bool(
         selectedPageId and not pages and not str(detail_target_type or "").startswith("endpoint")
     )
     missingSelectedEndpointPlan = bool(detail_target_type == "endpoint" and selected_endpoint_id and not endpoints)
+    missingSelectedEntityPlan = bool(detail_target_type == "entity" and selected_entity_id and not entities)
     return {
         "mode": "detail_review",
         "status": "requires_user_input",
@@ -100,28 +116,44 @@ def detail_review_payload(
             f"接口 `{selected_endpoint_id}` 还没有生成细节设计，请先生成该接口的 plan。"
             if missingSelectedEndpointPlan
             else
+            f"实体 `{selected_entity_id}` 尚未开始实体设计，请先选择数据源"
+            f"（数据库 / 外部 API / 静态数据）。"
+            if missingSelectedEntityPlan
+            else
             f"请审阅接口 `{selected_endpoint_id}` 详细设计；仅展开需要调整的对象。"
             if detail_target_type == "endpoint" and selected_endpoint_id
+            else
+            f"请审阅实体 `{selected_entity_id}` 详细设计；仅展开需要调整的对象。"
+            if detail_target_type == "entity" and selected_entity_id
             else
             f"请审阅页面 `{selectedPageId}` 依赖的接口详细设计；页面视觉以已确认 React UI 稿为准。"
             if detail_target_type == "endpoint_batch" and selectedPageId
             else
             f"请审阅页面 `{selectedPageId}` 详细设计；仅展开需要调整的对象。"
             if selectedPageId
-            else "请整体审阅页面与接口初版设计；仅展开需要调整的对象，确认后一次进入任务拆分。"
+            else "请整体审阅页面、接口与实体初版设计；仅展开需要调整的对象，确认后一次进入任务拆分。"
         ),
         "review": {
             "pages": pages,
             "endpoints": endpoints,
+            "entities": entities,
             "summary": {
                 "page_count": len(pages),
                 "endpoint_count": len(endpoints),
+                "entity_count": len(entities),
                 "api_contract_count": len(project_plan.get("api_contracts", [])),
                 "missingSelectedPagePlan": missingSelectedPagePlan,
                 "missingSelectedEndpointPlan": missingSelectedEndpointPlan,
+                "missingSelectedEntityPlan": missingSelectedEntityPlan,
                 "selectedPageId": selectedPageId,
                 "selectedApiContractId": selected_api_contract_id,
                 "selectedEndpointId": selected_endpoint_id,
+                "selectedEntityId": selected_entity_id,
+                "entityDesign": _entity_design_summary(
+                    project_plan,
+                    selected_entity_id,
+                    entities,
+                ),
                 "detailTargetType": detail_target_type,
             },
         },
@@ -135,8 +167,9 @@ def apply_detail_review_submission(
     selectedPageId: str | None = None,
     selected_api_contract_id: str | None = None,
     selected_endpoint_id: str | None = None,
+    selected_entity_id: str | None = None,
 ) -> dict[str, Any]:
-    """应用细节审核提交；选中目标审核只确认当前目标相关详情。"""
+    """应用细节审核提交；选中目标审核只确认当前目标（页面/接口/实体）相关详情。"""
 
     if submission.get("review_status") != "confirmed":
         raise ValueError("detail review submission must be explicitly confirmed")
@@ -160,20 +193,20 @@ def apply_detail_review_submission(
             )
         elif target_type == "endpoint":
             _apply_endpoint_target_patch(
-                updated,
                 updated.get("endpoint_detail_plans", []),
                 target_id,
                 changes,
             )
+        elif target_type == "entity":
+            _apply_target_patch(
+                updated.get("entity_detail_plans", []),
+                "entity_id",
+                target_id,
+                changes,
+                ENTITY_EDITABLE_FIELDS,
+            )
         else:
             raise ValueError(f"unsupported detail review target type: {target_type}")
-
-    _assert_endpoint_data_origins_resolved(
-        updated,
-        selectedPageId=selectedPageId,
-        selected_api_contract_id=selected_api_contract_id,
-        selected_endpoint_id=selected_endpoint_id,
-    )
 
     for detail in updated.get("page_detail_plans", []):
         if isinstance(detail, dict) and (
@@ -193,6 +226,15 @@ def apply_detail_review_submission(
                 str(detail.get("api_contract_id") or "") == str(selected_api_contract_id or "")
                 and str(detail.get("endpoint_id") or "") == str(selected_endpoint_id or "")
             )
+        ):
+            detail["status"] = "confirmed"
+            detail["approved"] = True
+    for detail in updated.get("entity_detail_plans", []):
+        if isinstance(detail, dict):
+            refresh_entity_detail_table_design(detail)
+        if isinstance(detail, dict) and (
+            not selected_entity_id
+            or str(detail.get("entity_id") or "") == str(selected_entity_id or "")
         ):
             detail["status"] = "confirmed"
             detail["approved"] = True
@@ -228,6 +270,23 @@ def apply_detail_review_submission(
                 for detail in updated.get("endpoint_detail_plans", [])
             ):
                 endpoint["detail_status"] = "confirmed"
+    confirmedEntityIds = {
+        str(detail.get("entity_id"))
+        for detail in updated.get("entity_detail_plans", [])
+        if isinstance(detail, dict)
+        and detail.get("entity_id")
+        and detail.get("status") == "confirmed"
+    }
+    updated["entities"] = [
+        {
+            **entity,
+            "detail_status": "confirmed",
+        }
+        if isinstance(entity, dict)
+        and str(entity.get("id") or "") in confirmedEntityIds
+        else entity
+        for entity in updated.get("entities", [])
+    ]
     _repair_page_contract_fields(updated)
     _repair_missing_request_schemas(updated)
     updated["confirmation_status"] = "confirmed"
@@ -287,10 +346,10 @@ def _repair_page_contract_fields(project_plan: dict[str, Any]) -> None:
     """按页面声明的 Endpoint 依赖重建受契约控制的依赖和响应绑定。"""
 
     contracts = project_plan.get("api_contracts", [])
-    data_source_ids = [
-        str(source.get("id"))
-        for source in project_plan.get("data_sources", [])
-        if isinstance(source, dict) and source.get("id")
+    planned_entity_ids = [
+        str(entity.get("id"))
+        for entity in project_plan.get("entities", [])
+        if isinstance(entity, dict) and entity.get("id")
     ]
     for detail in project_plan.get("page_detail_plans", []):
         if not isinstance(detail, dict) or not detail.get("pageId"):
@@ -302,7 +361,7 @@ def _repair_page_contract_fields(project_plan: dict[str, Any]) -> None:
         )
         api_dependencies = normalize_page_api_dependencies(
             contracts if isinstance(contracts, list) else [],
-            data_source_ids if isinstance(data_source_ids, list) else [],
+            planned_entity_ids,
             declared_api_dependencies,
             page_path=str(detail.get("path") or ""),
             page_name=str(
@@ -377,12 +436,10 @@ def _endpoint_review_items(
                 "name": detail.get("name") or f"{detail.get('method')} {detail.get('path')}",
                 "api_contract_id": api_contract_id,
                 "endpoint_id": endpoint_id,
-                "data_source_id": detail.get("data_source_id"),
                 "method": detail.get("method"),
                 "path": detail.get("path"),
                 "summary": detail.get("summary"),
                 "data_usage": _dict_value(detail.get("data_usage")),
-                "data_origin": normalize_endpoint_data_origin(detail.get("data_origin")),
                 "endpoint_decision": _dict_value(detail.get("endpoint_decision")),
                 "interface_design": _dict_value(detail.get("interface_design")),
                 "processing_logic": _list_value(detail.get("processing_logic")),
@@ -395,6 +452,83 @@ def _endpoint_review_items(
             }
         )
     return items
+
+
+def _entity_review_items(
+    project_plan: dict[str, Any],
+    *,
+    selected_entity_id: str | None,
+) -> list[dict[str, Any]]:
+    """构造实体审核对象；选中实体时只返回该实体。"""
+
+    items: list[dict[str, Any]] = []
+    for detail in project_plan.get("entity_detail_plans", []):
+        if not isinstance(detail, dict) or not detail.get("entity_id"):
+            continue
+        entity_id = str(detail.get("entity_id") or "")
+        if selected_entity_id and entity_id != str(selected_entity_id or ""):
+            continue
+        items.append(
+            {
+                "target_type": "entity",
+                "target_id": entity_id,
+                "name": detail.get("entity_name") or entity_id,
+                "entity_id": entity_id,
+                "description": detail.get("description"),
+                "module_id": detail.get("module_id"),
+                "data_source_id": detail.get("data_source_id"),
+                "data_source_type": detail.get("data_source_type"),
+                "design_stage": entity_design_stage(detail),
+                "fields": _list_value(detail.get("fields")),
+                "table_design": _dict_value(detail.get("table_design")),
+                "database_design": _dict_value(detail.get("database_design")),
+                "external_api_design": _dict_value(detail.get("external_api_design")),
+                "static_design": _dict_value(detail.get("static_design")),
+                "database_execution": _dict_value(detail.get("database_execution")),
+                "table_operations_executed": bool(detail.get("table_operations_executed")),
+                "business_rules": _list_value(detail.get("business_rules")),
+                "relationships": _list_value(detail.get("relationships")),
+                "acceptance_criteria": _list_value(detail.get("acceptance_criteria")),
+                "risks": _list_value(detail.get("risks")),
+            }
+        )
+    return items
+
+
+def _entity_design_summary(
+    project_plan: dict[str, Any],
+    selected_entity_id: str | None,
+    entities: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """构造实体设计阶段摘要；无详情时投射数据源选择摘要，有详情时投射分方案摘要。"""
+
+    if not selected_entity_id:
+        return None
+    if entities:
+        detail_like = {
+            "entity_id": entities[0].get("entity_id"),
+            "entity_name": entities[0].get("name"),
+            "fields": _list_value(entities[0].get("fields")),
+            "data_source_type": entities[0].get("data_source_type"),
+            "status": "pending_user_confirmation",
+            "design_stage": entities[0].get("design_stage"),
+            "database_design": entities[0].get("database_design"),
+            "external_api_design": entities[0].get("external_api_design"),
+            "static_design": entities[0].get("static_design"),
+            "database_execution": entities[0].get("database_execution"),
+        }
+        return entity_design_summary(detail_like)
+    entity = next(
+        (
+            item
+            for item in project_plan.get("entities", [])
+            if isinstance(item, dict) and str(item.get("id") or "") == selected_entity_id
+        ),
+        None,
+    )
+    if entity is None:
+        return {"stage": "data_source_selection", "entity_id": selected_entity_id}
+    return entity_design_selection_summary(entity)
 
 
 def _apply_target_patch(
@@ -424,7 +558,6 @@ def _apply_target_patch(
 
 
 def _apply_endpoint_target_patch(
-    project_plan: dict[str, Any],
     details: Any,
     target_id: str,
     changes: dict[str, Any],
@@ -448,195 +581,11 @@ def _apply_endpoint_target_patch(
     if target is None:
         raise ValueError(f"unknown endpoint detail review target: {target_id}")
     for key, value in changes.items():
-        if key == "data_origin":
-            target[key] = apply_endpoint_datasource_policy(
-                project_plan,
-                {"data_source_id": target.get("data_source_id")},
-                value,
-            )
-            continue
         target[key] = _normalize_editable_value(key, value, target.get(key))
     decision = target.get("endpoint_decision")
     if isinstance(decision, dict):
-        # 新结构以 EndpointDecision 为唯一语义来源；用户调整来源后立即重建派生字段。
-        if "data_origin" in changes:
-            decision["data_origin"] = normalize_endpoint_data_origin(
-                target.get("data_origin")
-            )
+        # 接口不携带数据源，EndpointDecision 只含行为语义，调整后重建派生字段。
         refresh_endpoint_detail_from_decision(target)
-
-
-def _assert_endpoint_data_origins_resolved(
-    project_plan: dict[str, Any],
-    *,
-    selectedPageId: str | None,
-    selected_api_contract_id: str | None,
-    selected_endpoint_id: str | None,
-) -> None:
-    """确认前校验 endpoint 数据来源，避免未决数据库方案绕过用户确认。"""
-
-    errors: list[str] = []
-    for detail in project_plan.get("endpoint_detail_plans", []):
-        if not isinstance(detail, dict):
-            continue
-        if selected_endpoint_id and (
-            str(detail.get("api_contract_id") or "") != str(selected_api_contract_id or "")
-            or str(detail.get("endpoint_id") or "") != str(selected_endpoint_id or "")
-        ):
-            continue
-        data_origin = normalize_endpoint_data_origin(detail.get("data_origin"))
-        effective_source = data_origin.get("effective_source")
-        source_type = str(data_origin.get("source_type") or "")
-        effective_kind = ""
-        if isinstance(effective_source, dict):
-            effective_kind = str(effective_source.get("kind") or "")
-        endpoint_name = str(
-            detail.get("endpoint_id") or detail.get("name") or "endpoint"
-        )
-        if effective_kind == "needs_user_confirmation":
-            errors.append(f"{endpoint_name}: data source needs user confirmation")
-            continue
-        errors.extend(
-            f"{endpoint_name}: {message}"
-            for message in _endpoint_database_design_errors(
-                data_origin, source_type, effective_kind
-            )
-        )
-    if errors:
-        raise ValueError(
-            "endpoint data_origin still needs user confirmation: "
-            + ", ".join(errors)
-        )
-
-
-def _endpoint_database_design_errors(
-    data_origin: dict[str, Any],
-    source_type: str,
-    effective_kind: str,
-) -> list[str]:
-    """校验结构化字段决策和数据库操作之间的引用与必填信息。"""
-
-    errors: list[str] = []
-    operations = [
-        item
-        for item in data_origin.get("database_operations", [])
-        if isinstance(item, dict)
-    ]
-    operation_index: dict[str, dict[str, Any]] = {}
-    referenced_operation_ids: set[str] = set()
-    for operation in operations:
-        operation_id = str(operation.get("id") or "")
-        if not operation_id:
-            errors.append("database operation id is required")
-            continue
-        if operation_id in operation_index:
-            errors.append(f"duplicate database operation id {operation_id}")
-            continue
-        operation_index[operation_id] = operation
-        errors.extend(_database_operation_errors(operation))
-
-    for difference in data_origin.get("differences", []):
-        if not isinstance(difference, dict):
-            continue
-        field = str(difference.get("field") or "unknown field")
-        kind = str(difference.get("resolution_kind") or "")
-        refs = [str(item) for item in difference.get("operation_refs", []) if str(item)]
-        adaptation = difference.get("backend_adaptation")
-        if kind == "needs_user_confirmation":
-            if refs:
-                errors.append(f"{field} needs_user_confirmation cannot reference operations")
-            errors.append(f"{field} needs user confirmation")
-        elif kind == "database_change":
-            if not refs:
-                errors.append(f"{field} database_change requires operation_refs")
-            for ref in refs:
-                if ref not in operation_index:
-                    errors.append(f"{field} references unknown database operation {ref}")
-                else:
-                    referenced_operation_ids.add(ref)
-            if isinstance(adaptation, dict):
-                errors.append(f"{field} database_change cannot declare backend_adaptation")
-        elif kind == "backend_adaptation":
-            if refs:
-                errors.append(f"{field} backend_adaptation cannot reference database operations")
-            if not isinstance(adaptation, dict) or not adaptation.get("strategy"):
-                errors.append(f"{field} backend_adaptation requires strategy")
-        elif kind == "already_supported":
-            if refs or isinstance(adaptation, dict):
-                errors.append(f"{field} already_supported cannot declare a resolution action")
-        else:
-            errors.append(f"{field} has invalid resolution_kind {kind}")
-
-    for operation_id in operation_index:
-        if operation_id in referenced_operation_ids:
-            continue
-        operation = operation_index[operation_id]
-        if (
-            effective_kind == "mysql_new_table"
-            and str(operation.get("operation") or "") == "create_table"
-        ):
-            # mysql_new_table 的来源类型本身声明整张新表，create_table 无需再被某个
-            # database_change 差异重复引用；字段级差异只描述取值方式（backend_adaptation）。
-            continue
-        errors.append(
-            f"database operation {operation_id} is not referenced by a difference"
-        )
-
-    if source_type in {"static", "external_api"} and operations:
-        errors.append(f"{source_type} data source cannot declare database operations")
-    if effective_kind == "mysql_new_table" and not any(
-        operation.get("operation") == "create_table" for operation in operations
-    ):
-        errors.append("mysql_new_table requires create_table operation")
-    return errors
-
-
-def _database_operation_errors(operation: dict[str, Any]) -> list[str]:
-    """校验单个数据库操作具备生成确定性 Schema 需求所需的字段。"""
-
-    operation_id = str(operation.get("id") or "database operation")
-    operation_kind = str(operation.get("operation") or "")
-    supported = {
-        "create_table",
-        "add_column",
-        "alter_column_type",
-        "alter_column_nullable",
-        "alter_column_default",
-    }
-    if operation_kind not in supported:
-        return [f"{operation_id} has unsupported operation {operation_kind}"]
-    if not operation.get("database"):
-        return [f"{operation_id} database is required"]
-    table = operation.get("table")
-    if operation_kind == "create_table":
-        if (
-            not isinstance(table, dict)
-            or not table.get("name")
-            or not table.get("columns")
-        ):
-            return [f"{operation_id} create_table requires table name and columns"]
-        for column in table.get("columns", []):
-            if not isinstance(column, dict) or not column.get("name") or not column.get("type"):
-                return [f"{operation_id} create_table columns require name and type"]
-        return []
-    if not isinstance(table, str) or not table:
-        return [f"{operation_id} table is required"]
-    column = operation.get("column")
-    if not isinstance(column, str) or not column:
-        return [f"{operation_id} column is required"]
-    target = operation.get("to")
-    if operation_kind == "add_column":
-        if not isinstance(target, dict) or not target.get("type"):
-            return [f"{operation_id} add_column requires to.type"]
-        return []
-    required_key = {
-        "alter_column_type": "type",
-        "alter_column_nullable": "nullable",
-        "alter_column_default": "default",
-    }[operation_kind]
-    if not isinstance(target, dict) or required_key not in target:
-        return [f"{operation_id} {operation_kind} requires to.{required_key}"]
-    return []
 
 
 def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
@@ -661,6 +610,8 @@ def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
         "response_bindings",
         "page_navigation",
         "operation_visibility",
+        "business_rules",
+        "relationships",
     }:
         return _dict_list(value)
     if key in {
@@ -669,7 +620,6 @@ def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
         "acceptance_criteria",
         "entities",
         "schema_refs",
-        "relationships",
         "validation_rules",
     }:
         return _string_list(value)
@@ -682,10 +632,14 @@ def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
         "data_usage",
         "endpoint_decision",
         "interface_design",
+        "database_design",
+        "external_api_design",
+        "static_design",
     }:
         return value if isinstance(value, dict) else {}
-    if key == "data_origin":
-        return normalize_endpoint_data_origin(value)
+    if key == "data_source_type":
+        normalized = str(value or "").strip()
+        return normalized if normalized in {"database", "external_api", "static"} else ""
     if key in {"processing_logic", "risks"}:
         return _string_list(value)
     return str(value).strip() if value is not None else ""

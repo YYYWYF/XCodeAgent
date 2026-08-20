@@ -31,17 +31,20 @@ import WorkflowRunCard, {
   type ClarificationAnswers,
   workflowClarification
 } from '../WorkflowRunCard'
+import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
 import TemplatePreparingCard, {
   isTemplatePreparing
 } from '../WorkflowRunCard/TemplatePreparingCard'
 import DetailBlockerCard from '../../../DetailConfirmationPageSelector/DetailBlockerCard'
 import {
+  isStructuredPlanningWorkflow,
   processStepsForMessageDisplay,
   workflowMessageContentForDisplay
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage } from '../../types'
 import { isConversationWorkflow } from '../../conversationMode'
 import {
+  isEntityDesignWorkflow,
   workflowCodeChanges,
   workflowFinalResultPresentation,
   workflowShouldShowCodeChanges
@@ -53,9 +56,50 @@ import './MessageList.less'
 
 const { Text } = Typography
 
+/** 实体设计消息只保留正文：去掉“页面与数据源设计已生成”等工作流摘要；
+ *  正文是模板话术时，从载荷合成真实设计内容（澄清说明、AI 建议文本）。 */
+function entityDesignMessageContent(
+  content: string,
+  workflow: WorkflowRunPayload | undefined
+): string {
+  const normalizedContent = content.trim()
+  if (!normalizedContent) return ''
+  const clarification = workflow ? workflowClarification(workflow) : undefined
+  if (!clarification) return content
+  const clarificationMessage = clarification.message?.trim()
+  const summaryMessage = workflow?.summary.message?.trim()
+  const boilerplate = new Set<string>()
+  if (clarificationMessage) boilerplate.add(clarificationMessage)
+  if (summaryMessage) boilerplate.add(summaryMessage)
+  const paragraphs = normalizedContent
+    .split(/\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+  const remaining = paragraphs.filter((paragraph) => !boilerplate.has(paragraph))
+  if (remaining.length > 0) return remaining.join('\n\n')
+
+  // 消息正文只是后端模板话术时，从实体设计载荷还原真实设计内容，
+  // 保证历史会话读起来是实际生成/确认的过程。
+  const parts: string[] = []
+  if (clarificationMessage) parts.push(clarificationMessage)
+  const entityDesign = clarification.review?.summary?.entityDesign
+  if (entityDesign && typeof entityDesign === 'object') {
+    const aiSuggestions = (entityDesign as Record<string, unknown>).ai_suggestions
+    if (aiSuggestions && typeof aiSuggestions === 'object') {
+      const aiText = String((aiSuggestions as Record<string, unknown>).text || '').trim()
+      if (aiText) parts.push(aiText)
+    }
+  }
+  return parts.join('\n\n')
+}
+
 /** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 研发 / 审查）在回复。
  *  人像图标 + Agent 角色名，独占一行，下方换行展示正文/卡片。 */
-function MessageAgentHeader({ agentKey }: { agentKey: 'product' | 'development' | 'test' }): ReactElement {
+function MessageAgentHeader({
+  agentKey
+}: {
+  agentKey: 'product' | 'development' | 'test'
+}): ReactElement {
   const agent = WORKBENCH_PHASE_AGENTS[agentKey]
   return (
     <div className={cx('ai-message-agent', agentKey)}>
@@ -71,6 +115,7 @@ type MessageListProps = {
   applicationLifecycle?: ApplicationLifecycle
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
+  entityDesignSession?: boolean
   /** 设计阶段：规划 workflow 确认卡始终可提交（由 planningSubmitRef 驱动），
    *  不走开发 execution 的 workflowInteractionAvailability 判定。 */
   designPhasePlanning?: boolean
@@ -99,6 +144,7 @@ type MessageListProps = {
   onStartDetailDesign?: (page: DevelopmentPlanningPageOption) => void
   loading: boolean
   messages: AgentChatMessage[]
+  onEntityDesignGateJump?: (entityId: string) => void
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
   onSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -107,6 +153,7 @@ type MessageListProps = {
   ) => Promise<void>
   onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
   revertingCodeChangeIds: ReadonlySet<string>
+  workspaceRoot?: string
 }
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
@@ -114,6 +161,7 @@ export default function MessageList({
   applicationLifecycle,
   codeChangeActionsDisabled,
   conversationRunning,
+  entityDesignSession = false,
   designPhasePlanning = false,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -127,10 +175,12 @@ export default function MessageList({
   onStartDetailDesign,
   loading,
   messages,
+  onEntityDesignGateJump,
   onOpenCodeChangeFile,
   onRevertCodeChanges,
   revertingCodeChangeIds,
-  onSubmitClarification
+  onSubmitClarification,
+  workspaceRoot
 }: MessageListProps): ReactElement {
   const { phase: currentPhase } = useWorkbenchPhase()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -164,24 +214,23 @@ export default function MessageList({
     setShowScrollToBottom(shouldShowScrollToBottom(container))
   }, [])
 
-  /** 在下一动画帧跟随最新内容，或在暂停跟随时仅刷新按钮状态。 */
+  /** 在下一动画帧直接贴底，卡片展开/收起导致高度变化时也保持贴底。 */
   const scheduleScrollUpdate = useCallback((): void => {
     if (scrollUpdateFrameRef.current !== undefined) {
       window.cancelAnimationFrame(scrollUpdateFrameRef.current)
     }
     scrollUpdateFrameRef.current = window.requestAnimationFrame(() => {
-      scrollUpdateFrameRef.current = undefined
-      const container = scrollContainerRef.current
-      if (!container) {
-        setShowScrollToBottom(false)
-        return
-      }
-      if (followLatestContentRef.current) {
+      // 双 rAF 等待 React 提交与浏览器布局全部稳定后再贴底，避免中间态高度截断滚动。
+      scrollUpdateFrameRef.current = window.requestAnimationFrame(() => {
+        scrollUpdateFrameRef.current = undefined
+        const container = scrollContainerRef.current
+        if (!container) {
+          setShowScrollToBottom(false)
+          return
+        }
         container.scrollTo({ top: container.scrollHeight, behavior: 'auto' })
         setShowScrollToBottom(false)
-        return
-      }
-      setShowScrollToBottom(shouldShowScrollToBottom(container))
+      })
     })
   }, [])
 
@@ -195,7 +244,9 @@ export default function MessageList({
     container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
   }
 
-  // 同时观察滚动容器和消息内容尺寸，覆盖窗口缩放、流式输出与卡片展开。
+  // 观察滚动容器和消息内容尺寸，覆盖窗口缩放、流式输出与卡片展开。
+  // 不用 MutationObserver：下拉框/输入框等交互会在列内产生 DOM 变化，
+  // 若一并触发贴底会把视图拉走，导致无法继续操作。
   useEffect(() => {
     const container = scrollContainerRef.current
     const messageColumn = messageColumnRef.current
@@ -245,8 +296,25 @@ export default function MessageList({
             </div>
           ) : (
             messages.map((message) => {
-              console.log('[msg-debug] id=', message.id, 'content=', JSON.stringify(message.content).slice(0, 50), 'hasWorkflow=', Boolean(message.workflow), 'phase=', message.workflow?.summary?.phase, 'clarStatus=', message.workflow ? workflowClarification(message.workflow)?.status : undefined, 'planningLoading=', message.planningLoading)
+              console.log(
+                '[msg-debug] id=',
+                message.id,
+                'content=',
+                JSON.stringify(message.content).slice(0, 50),
+                'hasWorkflow=',
+                Boolean(message.workflow),
+                'phase=',
+                message.workflow?.summary?.phase,
+                'clarStatus=',
+                message.workflow ? workflowClarification(message.workflow)?.status : undefined,
+                'planningLoading=',
+                message.planningLoading
+              )
               const messageLoading = message.id === activeAssistantMessageId
+              const entityDesignMessage = isEntityDesignWorkflow(message.workflow)
+              // 实体会话内所有消息按对话样式渲染，运行中的临时快照缺少实体
+              // 上下文时也不回退显示 Agent 流程信息。
+              const hideEntityWorkflowChrome = entityDesignSession || entityDesignMessage
               const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
               const visibleCodeChanges = workflowShouldShowCodeChanges(message.workflow)
                 ? codeChanges
@@ -271,11 +339,21 @@ export default function MessageList({
               const planningActivity = designPhasePlanning
                 ? planningWorkflowActivity(message.workflow)
                 : undefined
+              // 只有真正携带实体设计载荷的确认才渲染聊天卡片；
+              // DDL 审批等其它确认类型继续走 WorkflowRunCard 的审批卡片。
+              const entityDesignCardVisible =
+                hideEntityWorkflowChrome &&
+                Boolean(
+                  message.workflow &&
+                    workflowClarification(message.workflow)?.review?.summary?.entityDesign
+                )
               // UI 确认阶段的卡片在换一换/选模板期间（workflow running，clarification
               // 可能短暂丢失 requires_user_input/mode）也保持显示，避免卡片闪烁。
               // 用 phase=ui_confirmation 作为权威判据（running 期间 phase 不丢），
               // 辅以 clarification.mode 兜底。
-              const messageClarification = message.workflow ? workflowClarification(message.workflow) : undefined
+              const messageClarification = message.workflow
+                ? workflowClarification(message.workflow)
+                : undefined
               const isUiDesignConfirmationCard =
                 message.workflow &&
                 (message.workflow.summary?.phase === 'ui_confirmation' ||
@@ -287,7 +365,8 @@ export default function MessageList({
                   String(message.workflow.summary?.phase || '')
                 ) && message.workflow.summary?.status !== 'running'
               const showWorkflowCard = Boolean(
-                message.workflow && (requiresClarification || isUiDesignConfirmationCard || isPlanningStageCard)
+                message.workflow &&
+                  (requiresClarification || isUiDesignConfirmationCard || isPlanningStageCard)
               )
               const interactionAvailability =
                 message.workflow && requiresClarification
@@ -295,29 +374,35 @@ export default function MessageList({
                     ? 'active'
                     : workflowInteractionAvailability(message.workflow, applicationLifecycle)
                   : 'stale'
-              const visibleAssistantContent = workflowMessageContentForDisplay(
-                message.content,
-                message.workflow,
-                Boolean(visibleProcessSteps?.length)
-              )
+              const visibleAssistantContent = hideEntityWorkflowChrome
+                ? entityDesignMessageContent(message.content, message.workflow)
+                : workflowMessageContentForDisplay(
+                    message.content,
+                    message.workflow,
+                    Boolean(visibleProcessSteps?.length)
+                  )
               // 规划文档确认阶段由确认卡展示，隐藏流式 JSON 原文；生成中只显示加载态。
               // 规划占位消息（planningLoading）：用户提交后产品 Agent 正在思考，只显示 loading 态。
               const isPlanningArtifactConfirmationCard =
                 message.workflow &&
-                ['requirement_spec_confirmation', 'product_plan_confirmation', 'technical_plan_confirmation', 'project_plan_confirmation'].includes(
-                  String(messageClarification?.mode || '')
-                )
+                [
+                  'requirement_spec_confirmation',
+                  'product_plan_confirmation',
+                  'technical_plan_confirmation',
+                  'project_plan_confirmation'
+                ].includes(String(messageClarification?.mode || ''))
               const isPlanningStageRunningCard =
                 message.workflow &&
-                ['product_planning', 'project_planning', 'technical_planning'].includes(
-                  String(message.workflow.summary?.phase || '')
-                ) &&
+                isStructuredPlanningWorkflow(message.workflow) &&
                 message.workflow.summary?.status === 'running'
               const isPlanningLoadingPlaceholder = Boolean(message.planningLoading)
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
               // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。
               const effectiveAssistantContent =
-                isPlanningArtifactConfirmationCard || isPlanningStageRunningCard || isPlanningLoadingPlaceholder || (showWorkflowCard && requiresClarification)
+                isPlanningArtifactConfirmationCard ||
+                isPlanningStageRunningCard ||
+                isPlanningLoadingPlaceholder ||
+                (showWorkflowCard && requiresClarification && !entityDesignCardVisible)
                   ? ''
                   : visibleAssistantContent
               return (
@@ -371,16 +456,18 @@ export default function MessageList({
                             }}
                           />
                         )}
-                        {visibleProcessSteps &&
+                        {!hideEntityWorkflowChrome &&
+                          visibleProcessSteps &&
                           visibleProcessSteps.length > 0 &&
                           !designPhasePlanning && (
-                          <ProcessSteps
-                            conversation={conversation}
-                            loading={messageLoading}
-                            steps={visibleProcessSteps}
-                          />
-                        )}
-                        {messageLoading &&
+                            <ProcessSteps
+                              conversation={conversation}
+                              loading={messageLoading}
+                              steps={visibleProcessSteps}
+                            />
+                          )}
+                        {!hideEntityWorkflowChrome &&
+                          messageLoading &&
                           message.toolCalls &&
                           message.toolCalls.length > 0 &&
                           // 自由对话已有安全化的过程步骤时只保留一份调用链，避免重复堆叠。
@@ -406,24 +493,42 @@ export default function MessageList({
                         )}
                         {effectiveAssistantContent && (
                           <div
-                            className={cx(!messageLoading && visibleCodeChanges && 'final-result-content')}
+                            className={cx(
+                              !messageLoading && visibleCodeChanges && 'final-result-content'
+                            )}
                           >
                             <MarkdownContent content={effectiveAssistantContent} />
                           </div>
                         )}
-                        {showWorkflowCard && (
-                          <WorkflowRunCard
-                            disabled={loading || interactionAvailability !== 'active'}
-                            interactionAvailability={interactionAvailability}
-                            onSubmitClarification={onSubmitClarification}
-                            uiDesignActivePageId={uiDesignActivePageId}
-                            onUiDesignActivePageChange={onUiDesignActivePageChange}
-                            uiDesignActionPageId={uiDesignActionPageId}
-                            onUiDesignActionPageIdChange={onUiDesignActionPageIdChange}
-                            onSaveRequirementSpec={onSaveRequirementSpec}
-                            rootPath={rootPath}
-                            workflow={message.workflow!}
-                          />
+                        {message.workflow &&
+                          (entityDesignCardVisible ? (
+                            // 实体设计卡片在确认后也要保留展示（锁定态），
+                            // 否则完成快照会清掉确认设计的上下文。
+                            <EntityDesignChatCard
+                              disabled={loading || interactionAvailability !== 'active'}
+                              onInteraction={scheduleScrollUpdate}
+                              onSubmitClarification={onSubmitClarification}
+                              workflow={message.workflow}
+                              workspaceRoot={workspaceRoot}
+                            />
+                          ) : showWorkflowCard ? (
+                            <WorkflowRunCard
+                              disabled={loading || interactionAvailability !== 'active'}
+                              interactionAvailability={interactionAvailability}
+                              onEntityDesignGateJump={onEntityDesignGateJump}
+                              onSubmitClarification={onSubmitClarification}
+                              uiDesignActivePageId={uiDesignActivePageId}
+                              onUiDesignActivePageChange={onUiDesignActivePageChange}
+                              uiDesignActionPageId={uiDesignActionPageId}
+                              onUiDesignActionPageIdChange={onUiDesignActionPageIdChange}
+                              onSaveRequirementSpec={onSaveRequirementSpec}
+                              rootPath={rootPath}
+                              workflow={message.workflow}
+                              workspaceRoot={workspaceRoot}
+                            />
+                          ) : null)}
+                        {entityDesignSession && messageLoading && !requiresClarification && (
+                          <EntityDesignChatCard loading />
                         )}
                         {!messageLoading && visibleCodeChanges && (
                           <CodeChangeCard
@@ -474,7 +579,8 @@ export default function MessageList({
               )
             })
           )}
-          {designPhasePlanning && (generatingTemplate || isTemplatePreparing(applicationLifecycle)) ? (
+          {designPhasePlanning &&
+          (generatingTemplate || isTemplatePreparing(applicationLifecycle)) ? (
             <article className={cx('ai-message', 'assistant', 'template-preparing-message')}>
               <div className={cx('ai-message-content')}>
                 <TemplatePreparingCard

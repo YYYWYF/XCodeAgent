@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   CaretDownOutlined,
+  DatabaseOutlined,
   FileTextOutlined,
   FilterOutlined,
   FolderOpenOutlined,
@@ -23,6 +24,7 @@ import type {
   ApplicationConfig,
   ApplicationMenuItem,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption
 } from '../../../../typings'
@@ -83,6 +85,7 @@ type SessionSidebarProps = {
     endpointKey: string
     label: string
   }) => void
+  onEntitySelect: (entity: DevelopmentPlanningEntityOption) => void
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   onReturnWelcome: () => void
   onShowFiles: () => void
@@ -91,7 +94,9 @@ type SessionSidebarProps = {
   onThemeChange: (theme: 'light' | 'dark') => void
   pages: DevelopmentPlanningPageOption[]
   pageTree: DevelopmentPlanningPageTreeNode[]
+  entities: DevelopmentPlanningEntityOption[]
   selectedApiEndpointKey: string
+  selectedEntityId: string
   selectedPageId: string
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
@@ -323,9 +328,9 @@ function apiEndpointSelectionKey(contractId: string, endpointId: string): string
   return `${contractId}:${endpointId}`
 }
 
-/** 判断会话是否属于没有页面或 API 归属的自由对话。 */
+/** 判断会话是否属于没有页面、API 或实体归属的自由对话。 */
 function isFreeChatSession(session: ChatSessionSummary): boolean {
-  return !session.pageId && !session.apiContractId && !session.endpointId
+  return !session.pageId && !session.apiContractId && !session.endpointId && !session.entityId
 }
 
 /** 使用 ProjectPlan 页面清单组织工作台左侧大纲与快捷入口。 */
@@ -333,6 +338,7 @@ export default function SessionSidebar({
   activeSessionId,
   apiContracts = [],
   deletingSessionId,
+  entities = [],
   freeChatActive,
   filesActive,
   forceCollapsed = false,
@@ -343,6 +349,7 @@ export default function SessionSidebar({
   onDeleteSession,
   onOpenFreeChat,
   onApiEndpointSelect,
+  onEntitySelect,
   onOpenSession,
   onPageSelect,
   onShowFiles,
@@ -352,6 +359,7 @@ export default function SessionSidebar({
   pages,
   pageTree,
   selectedApiEndpointKey,
+  selectedEntityId,
   selectedPageId,
   sessionError,
   sessionRunStates,
@@ -366,6 +374,7 @@ export default function SessionSidebar({
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apiExpanded, setApiExpanded] = useState(true)
+  const [entitiesExpanded, setEntitiesExpanded] = useState(true)
   const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(
     () => new Set()
   )
@@ -416,6 +425,16 @@ export default function SessionSidebar({
     })
     return groupedSessions
   }, [sessions])
+  const sessionsByEntityId = useMemo(() => {
+    const groupedSessions = new Map<string, ChatSessionSummary[]>()
+    sessions.forEach((session) => {
+      if (!session.entityId) return
+      const entitySessions = groupedSessions.get(session.entityId) || []
+      entitySessions.push(session)
+      groupedSessions.set(session.entityId, entitySessions)
+    })
+    return groupedSessions
+  }, [sessions])
   const freeChatSessions = useMemo(() => sessions.filter(isFreeChatSession), [sessions])
   const selectedKey = selectedApiEndpointKey
     ? ''
@@ -449,6 +468,16 @@ export default function SessionSidebar({
       return endpoints.length > 0 ? [{ ...contract, endpoints }] : []
     })
   }, [apiContracts, outlineQuery])
+  const visibleEntities = useMemo(() => {
+    const query = outlineQuery.trim().toLocaleLowerCase()
+    if (!query) return entities
+    return entities.filter(
+      (entity) =>
+        entity.id.toLocaleLowerCase().includes(query) ||
+        entity.label.toLocaleLowerCase().includes(query) ||
+        entity.purpose.toLocaleLowerCase().includes(query)
+    )
+  }, [entities, outlineQuery])
 
   /** 独立切换一个 API contract 分组，避免多个资源同时收起或展开。 */
   const handleApiContractToggle = (contractId: string): void => {
@@ -620,16 +649,16 @@ export default function SessionSidebar({
       </Text>
       <fieldset
         aria-disabled={outlineLocked}
-        aria-label={outlineLocked ? '页面大纲暂不可操作，API 仍可选择' : '应用大纲'}
+        aria-label={outlineLocked ? '页面大纲暂不可操作，API 与实体仍可选择' : '应用大纲'}
         className={cx('session-outline-lock-shell')}
       >
         <div className={cx('session-outline-content')}>
           <Input
             allowClear
-            aria-label="搜索页面或 API"
+            aria-label="搜索页面、API 或实体"
             className={cx('session-search')}
             onChange={(event) => setOutlineQuery(event.target.value)}
-            placeholder="搜索页面或 API"
+            placeholder="搜索页面、API 或实体"
             prefix={<SearchOutlined />}
             value={outlineQuery}
           />
@@ -808,6 +837,79 @@ export default function SessionSidebar({
                   {visibleApiContracts.length === 0 ? (
                     <div className={cx('outline-empty')}>
                       project_plan.json 的 api_contracts 中暂无接口
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+
+            <section className={cx('outline-section', 'entity-section')}>
+              <button
+                aria-expanded={entitiesExpanded}
+                className={cx('outline-section-heading')}
+                onClick={() => setEntitiesExpanded((current) => !current)}
+                type="button"
+              >
+                <CaretDownOutlined className={cx(!entitiesExpanded && 'collapsed')} />
+                <span>Entities</span>
+              </button>
+              {entitiesExpanded ? (
+                <div className={cx('entity-group')}>
+                  {visibleEntities.map((entity) => {
+                    const entityKey = entity.id
+                    const entityDesigned = Boolean(entity.designed || entity.hasDetailPlan)
+                    return (
+                      <div className={cx('entity-node')} key={entityKey}>
+                        <button
+                          aria-current={selectedEntityId === entityKey ? 'true' : undefined}
+                          className={cx(
+                            'entity-row',
+                            selectedEntityId === entityKey && 'selected'
+                          )}
+                          onClick={() => onEntitySelect(entity)}
+                          title={entity.purpose}
+                          type="button"
+                        >
+                          <span className={cx('entity-icon')}>
+                            <DatabaseOutlined />
+                          </span>
+                          <span className={cx('entity-copy')}>
+                            <span className={cx('outline-label-row')}>
+                              <span className={cx('outline-label')}>{entity.label}</span>
+                              <span
+                                className={cx(
+                                  'outline-design-status',
+                                  entityDesigned ? 'designed' : 'undesign'
+                                )}
+                              >
+                                {entityDesigned ? '已设计' : '待设计'}
+                              </span>
+                            </span>
+                            <span className={cx('entity-meta')}>
+                              {entity.id}
+                            </span>
+                          </span>
+                        </button>
+                        <PageSessionHistory
+                          activeSessionId={activeSessionId}
+                          deletingSessionId={deletingSessionId}
+                          loadingSessions={loadingSessions}
+                          onCreateSession={async () => onEntitySelect(entity)}
+                          onDeleteSession={onDeleteSession}
+                          onOpenSession={onOpenSession}
+                          deleteTitle="删除这个实体会话？"
+                          emptyDescription="当前实体暂无历史会话"
+                          sessionError={sessionError}
+                          sessionRunStates={sessionRunStates}
+                          sessions={sessionsByEntityId.get(entity.id) || []}
+                          targetLabel={entity.label}
+                        />
+                      </div>
+                    )
+                  })}
+                  {visibleEntities.length === 0 ? (
+                    <div className={cx('outline-empty')}>
+                      project_plan.json 的 entities 中暂无实体
                     </div>
                   ) : null}
                 </div>

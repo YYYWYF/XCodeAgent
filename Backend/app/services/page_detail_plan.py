@@ -9,6 +9,9 @@ from app.services.api_contracts import (
     normalize_page_api_dependencies,
     normalize_response_bindings,
 )
+from app.services.entity_definitions import (
+    plan_data_sources,
+)
 from app.services.frontend_page_tree import (
     find_frontend_page,
     project_plan_page_records,
@@ -589,7 +592,6 @@ def _endpoint_detail_summary(detail: dict[str, Any]) -> dict[str, Any]:
         if isinstance(interface_design.get("response_format"), dict)
         else {}
     )
-    data_origin = normalize_endpoint_data_origin(detail.get("data_origin"))
     processing_logic = _text_items(detail.get("processing_logic"))
     source_endpoint = (
         detail.get("source_endpoint")
@@ -608,7 +610,6 @@ def _endpoint_detail_summary(detail: dict[str, Any]) -> dict[str, Any]:
         "path": str(detail.get("path") or source_endpoint.get("path") or ""),
         "summary": str(detail.get("summary") or source_endpoint.get("summary") or ""),
         "status": str(detail.get("status") or ""),
-        "data_origin_kind": str(data_origin.get("source_type") or "needs_user_confirmation"),
         "request_schema_ref": request_body.get("schema_ref")
         or source_endpoint.get("request_schema_ref")
         or "",
@@ -617,6 +618,111 @@ def _endpoint_detail_summary(detail: dict[str, Any]) -> dict[str, Any]:
         or "",
         "processing_summary": processing_logic[:3],
     }
+
+
+def endpoint_bound_entity_summaries(
+    project_plan: dict[str, Any],
+    api_contract_id: str,
+) -> list[dict[str, Any]]:
+    """从已确认实体设计构造接口绑定实体的只读摘要，接口不重新设计数据来源。"""
+
+    api_contracts = _dict_items(project_plan.get("api_contracts"))
+    contract = next(
+        (
+            item
+            for item in api_contracts
+            if str(item.get("id") or "") == api_contract_id
+        ),
+        None,
+    )
+    if contract is None:
+        raise ValueError(f"项目计划中不存在 API 契约：{api_contract_id}")
+    entity_ids = _text_items(contract.get("entity_ids"))
+    confirmed_details = {
+        str(detail.get("entity_id") or ""): detail
+        for detail in _dict_items(project_plan.get("entity_detail_plans"))
+        if str(detail.get("status") or "") == "confirmed"
+        and str(detail.get("entity_id") or "")
+    }
+    entity_to_source_type: dict[str, str] = {}
+    for source in plan_data_sources(project_plan):
+        source_type = str(source.get("type") or "")
+        for entity in _dict_items(source.get("entities")):
+            entity_id = str(entity.get("id") or "")
+            if entity_id:
+                entity_to_source_type.setdefault(entity_id, source_type)
+    summaries: list[dict[str, Any]] = []
+    for entity_id in entity_ids:
+        detail = confirmed_details.get(entity_id)
+        if detail is None:
+            raise ValueError(
+                f"接口关联的实体 {entity_id} 尚未完成实体设计并确认，"
+                "请先在实体设计阶段选择并确认数据源，再设计接口。"
+            )
+        database_design = (
+            detail.get("database_design")
+            if isinstance(detail.get("database_design"), dict)
+            else {}
+        )
+        external_api_design = (
+            detail.get("external_api_design")
+            if isinstance(detail.get("external_api_design"), dict)
+            else {}
+        )
+        api_info = (
+            external_api_design.get("api_info")
+            if isinstance(external_api_design.get("api_info"), dict)
+            else {}
+        )
+        summaries.append(
+            {
+                "entity_id": entity_id,
+                "entity_name": str(detail.get("entity_name") or entity_id),
+                "data_source_type": str(
+                    detail.get("data_source_type")
+                    or entity_to_source_type.get(entity_id)
+                    or ""
+                ),
+                "fields": [
+                    {
+                        "name": str(field.get("name") or ""),
+                        "label": str(field.get("label") or field.get("name") or ""),
+                        "type": str(field.get("type") or "text"),
+                        "required": bool(field.get("required")),
+                    }
+                    for field in _dict_items(detail.get("fields"))[:100]
+                    if field.get("name")
+                ],
+                "database_reference": {
+                    "matched_table": database_design.get("matched_table"),
+                    "binding_count": len(_dict_items(database_design.get("bindings"))),
+                    "operation_count": len(
+                        _dict_items(database_design.get("database_operations"))
+                    ),
+                    "table_generation_required": bool(
+                        (
+                            database_design.get("table_generation")
+                            if isinstance(
+                                database_design.get("table_generation"), dict
+                            )
+                            else {}
+                        ).get("required")
+                    ),
+                }
+                if str(detail.get("data_source_type") or "") == "database"
+                else None,
+                "external_api_reference": {
+                    "path": str(api_info.get("path") or ""),
+                    "method": str(api_info.get("method") or ""),
+                    "mapping_count": len(
+                        _dict_items(external_api_design.get("field_mappings"))
+                    ),
+                }
+                if str(detail.get("data_source_type") or "") == "external_api"
+                else None,
+            }
+        )
+    return summaries
 
 
 def extract_endpoint_detail_context(
@@ -648,15 +754,7 @@ def extract_endpoint_detail_context(
     )
     if not endpoint:
         raise ValueError(f"API 契约 {api_contract_id} 中不存在接口：{endpoint_id}")
-    data_source_id = str(contract.get("data_source_id") or api_contract_id)
-    data_source = next(
-        (
-            source
-            for source in _dict_items(project_plan.get("data_sources"))
-            if str(source.get("id") or "") == data_source_id
-        ),
-        {},
-    )
+    bound_entities = endpoint_bound_entity_summaries(project_plan, api_contract_id)
     dependent_pages = [
         {
             "pageId": page.get("pageId") or page.get("id"),
@@ -678,14 +776,6 @@ def extract_endpoint_detail_context(
         "type": "endpoint",
         "api_contract": contract,
         "api_contract_id": api_contract_id,
-        "data_source_id": data_source_id,
-        "data_source": {
-            "id": data_source_id,
-            "name": data_source.get("name"),
-            "description": data_source.get("description"),
-            "entities": data_source.get("entities") or [],
-            "type": data_source.get("type"),
-        },
         "endpoint": endpoint,
         "endpoint_id": endpoint_id,
         "method": str(endpoint.get("method") or "GET").upper(),
@@ -694,6 +784,7 @@ def extract_endpoint_detail_context(
         "request_schema": schemas.get(str(endpoint.get("request_schema_ref") or "")),
         "response_schema": schemas.get(str(endpoint.get("response_schema_ref") or "")),
         "dependent_pages": dependent_pages,
+        "bound_entities": bound_entities,
     }
 
 
@@ -722,13 +813,11 @@ def create_endpoint_detail_plan(
     ]
     request_schema_ref = endpoint.get("request_schema_ref") or ""
     response_schema_ref = endpoint.get("response_schema_ref") or ""
-    data_source_id = endpoint_context["data_source_id"]
     detail_plan = {
         "id": f"endpoint_detail:{endpoint_context['api_contract_id']}:{endpoint_id}",
         "type": "endpoint",
         "api_contract_id": endpoint_context["api_contract_id"],
         "endpoint_id": endpoint_id,
-        "data_source_id": data_source_id,
         "name": f"{method} {path}".strip(),
         "method": method,
         "path": path,
@@ -740,7 +829,6 @@ def create_endpoint_detail_plan(
             "id": contract.get("id"),
             "label": contract.get("label") or contract.get("name") or contract.get("id"),
             "base_path": contract.get("base_path"),
-            "data_source_id": data_source_id,
         },
         "data_usage": {
             "served_pages": endpoint_context.get("dependent_pages", []),
@@ -748,10 +836,6 @@ def create_endpoint_detail_plan(
             "served_business": endpoint_context["summary"],
             "consumer": "依赖该接口的前端页面或后续服务",
         },
-        "data_origin": _default_endpoint_data_origin(
-            project_plan,
-            data_source_id,
-        ),
         "interface_design": {
             "restful_style": {
                 "compliant": True,
@@ -793,8 +877,8 @@ def create_endpoint_detail_plan(
         "processing_logic": [
             "校验路径、查询、请求头和请求体参数。",
             "按权限、租户或业务范围过滤数据。",
-            "调用数据来源并转换为 API 契约约定的响应结构。",
-            "处理空数据、参数错误、权限不足和数据来源异常。",
+            "基于接口绑定实体的已确认数据源读写数据并转换为 API 契约约定的响应结构。",
+            "处理空数据、参数错误、权限不足和数据读写异常。",
         ],
         "acceptance_criteria": [
             f"`{method} {path}` 按 API 契约接收请求并返回约定响应。",
@@ -812,7 +896,6 @@ def create_endpoint_detail_plan(
             "type": "endpoint",
             "api_contract_id": endpoint_context["api_contract_id"],
             "endpoint_id": endpoint_id,
-            "data_source_id": data_source_id,
             "method": method,
             "path": path,
             "status": "confirmed",
@@ -835,11 +918,6 @@ def compose_endpoint_detail_from_decision(
     """以 EndpointDecision 为唯一语义来源，确定性组装正式 EndpointDetail。"""
 
     endpoint_decision = deepcopy(endpoint_decision)
-    endpoint_decision["data_origin"] = apply_endpoint_datasource_policy(
-        project_plan,
-        endpoint_context,
-        endpoint_decision.get("data_origin"),
-    )
     validate_endpoint_decision(endpoint_decision)
     detail_plan = create_endpoint_detail_plan(
         project_plan,
@@ -858,13 +936,7 @@ def refresh_endpoint_detail_from_decision(detail_plan: dict[str, Any]) -> None:
     validate_endpoint_decision(raw_decision)
     decision = _normalize_endpoint_decision(raw_decision)
     detail_plan["endpoint_decision"] = decision
-    detail_plan["data_origin"] = deepcopy(decision["data_origin"])
     detail_plan["risks"] = deepcopy(decision["risks"])
-    if _endpoint_decision_needs_confirmation(decision):
-        detail_plan["design_stage"] = "needs_user_confirmation"
-        detail_plan["processing_logic"] = []
-        detail_plan["acceptance_criteria"] = []
-        return
     detail_plan["design_stage"] = "complete"
     detail_plan["processing_logic"] = _processing_logic_from_endpoint_decision(
         detail_plan,
@@ -880,28 +952,6 @@ def validate_endpoint_decision(value: Any) -> None:
     """统一校验 EndpointDecision 契约，生成与审核链路不得各自定义结构。"""
 
     decision = value if isinstance(value, dict) else {}
-    data_origin = decision.get("data_origin")
-    if not isinstance(data_origin, dict) or not data_origin:
-        raise ValueError("接口决策缺少有效字段：data_origin")
-    if not isinstance(data_origin.get("effective_source"), dict):
-        raise ValueError("接口决策缺少有效来源：data_origin.effective_source")
-    source_type = str(data_origin.get("source_type") or "")
-    effective_kind = str(data_origin["effective_source"].get("kind") or "")
-    allowed_kinds = {
-        "database": {"mysql_existing", "mysql_new_table", "needs_user_confirmation"},
-        "static": {"frontend_mock"},
-        "external_api": {"third_party", "needs_user_confirmation"},
-    }
-    if source_type not in allowed_kinds:
-        raise ValueError("接口决策数据源类型非法，仅支持 database、static、external_api")
-    if effective_kind not in allowed_kinds[source_type]:
-        raise ValueError(
-            f"接口决策实现来源 {effective_kind or 'missing'} 与数据源类型 {source_type} 不匹配"
-        )
-    for list_field in ("field_mappings", "differences", "database_operations", "notes"):
-        if not isinstance(data_origin.get(list_field), list):
-            raise ValueError(f"接口决策字段类型错误：data_origin.{list_field} 必须是数组")
-
     semantics = decision.get("operation_semantics")
     if not isinstance(semantics, dict):
         raise ValueError("接口决策缺少有效字段：operation_semantics")
@@ -942,7 +992,6 @@ def _normalize_endpoint_decision(value: Any) -> dict[str, Any]:
     )
     selector = semantics.get("selector") if isinstance(semantics.get("selector"), dict) else {}
     return {
-        "data_origin": normalize_endpoint_data_origin(decision.get("data_origin")),
         "operation_semantics": {
             "operation_kind": str(semantics.get("operation_kind") or "action"),
             "target_cardinality": str(
@@ -964,21 +1013,6 @@ def _normalize_endpoint_decision(value: Any) -> dict[str, Any]:
     }
 
 
-def _endpoint_decision_needs_confirmation(decision: dict[str, Any]) -> bool:
-    """只依据结构化决策状态判断是否应停在第一步。"""
-
-    data_origin = decision["data_origin"]
-    effective_source = data_origin.get("effective_source")
-    source_type = str(data_origin.get("source_type") or "")
-    if isinstance(effective_source, dict):
-        source_type = str(effective_source.get("kind") or source_type)
-    return source_type == "needs_user_confirmation" or any(
-        isinstance(item, dict)
-        and item.get("resolution_kind") == "needs_user_confirmation"
-        for item in data_origin.get("differences", [])
-    )
-
-
 def _processing_logic_from_endpoint_decision(
     detail_plan: dict[str, Any],
     decision: dict[str, Any],
@@ -987,8 +1021,6 @@ def _processing_logic_from_endpoint_decision(
 
     semantics = decision["operation_semantics"]
     selector = semantics["selector"]
-    data_origin = decision["data_origin"]
-    effective_source = data_origin.get("effective_source") or {}
     selector_fields = "、".join(selector["fields"]) or "无额外选择字段"
     cardinality_labels = {
         "exactly_one": "恰好一个目标",
@@ -1003,17 +1035,10 @@ def _processing_logic_from_endpoint_decision(
             f"{cardinality_labels.get(semantics['target_cardinality'], semantics['target_cardinality'])}。"
         ),
         (
-            f"从 {effective_source.get('kind') or data_origin.get('source_type')} 来源执行"
+            "基于接口绑定实体的已确认数据源执行"
             f" {semantics['operation_kind']}，副作用为 {semantics['side_effect']}。"
         ),
     ]
-    operation_ids = [
-        str(item.get("id"))
-        for item in data_origin.get("database_operations", [])
-        if isinstance(item, dict) and item.get("id")
-    ]
-    if operation_ids:
-        logic.append(f"实现前执行已确认的数据库结构操作：{'、'.join(operation_ids)}。")
     if semantics["zero_match_behavior"]:
         logic.append(f"未匹配目标时：{semantics['zero_match_behavior']}")
     if semantics["multiple_match_behavior"]:
@@ -1053,7 +1078,6 @@ def _formal_endpoint_detail_fields(agent_detail_plan: dict[str, Any]) -> dict[st
 
     allowed_fields = {
         "data_usage",
-        "data_origin",
         "interface_design",
         "processing_logic",
         "dependent_pages",
@@ -1066,335 +1090,7 @@ def _formal_endpoint_detail_fields(agent_detail_plan: dict[str, Any]) -> dict[st
         for key, value in agent_detail_plan.items()
         if key in allowed_fields
     }
-    if "data_origin" in result:
-        result["data_origin"] = normalize_endpoint_data_origin(result["data_origin"])
     return result
-
-
-def _default_endpoint_data_origin(
-    project_plan: dict[str, Any],
-    data_source_id: str,
-) -> dict[str, Any]:
-    """按 ProjectPlan 数据源声明生成唯一有效来源的数据来源摘要。"""
-
-    data_source = next(
-        (
-            source
-            for source in _dict_items(project_plan.get("data_sources"))
-            if str(source.get("id") or "") == data_source_id
-        ),
-        {},
-    )
-    source_type = str(data_source.get("type") or data_source.get("source_type") or "")
-    if source_type == "static":
-        kind = "frontend_mock"
-        description = "本页面使用前端内存 Mock 数据模块，不调用真实后端接口。"
-    elif source_type == "external_api":
-        kind = "third_party"
-        description = "本接口数据来源于第三方接口。"
-    elif source_type == "database":
-        kind = "mysql_existing"
-        description = "基于已声明的 MySQL 数据源读取并组装接口响应。"
-    else:
-        raise ValueError(
-            f"数据源 {data_source_id or 'missing'} 的类型无效，仅支持 database、static、external_api。"
-        )
-    return {
-        "source_type": source_type,
-        "effective_source": {
-            "kind": kind,
-            "data_source_id": data_source_id,
-            "database": "MySQL8" if source_type == "database" else None,
-            "tables": _normalize_origin_tables(
-                data_source.get("tables")
-                or data_source.get("entities")
-                or data_source.get("table_names")
-            ),
-            "provider": data_source.get("provider") if source_type == "external_api" else None,
-            "endpoint": data_source.get("endpoint") if source_type == "external_api" else None,
-            "method": data_source.get("method") if source_type == "external_api" else None,
-            "description": description,
-        },
-        "field_mappings": [],
-        "differences": [
-            {
-                "field": "数据来源字段映射",
-                "expected": "API 契约响应字段均有明确来源",
-                "actual": "当前仅识别到 ProjectPlan 声明的数据源摘要",
-                "resolution_kind": (
-                    "already_supported" if source_type == "static" else "needs_user_confirmation"
-                ),
-                "operation_refs": [],
-                "backend_adaptation": None,
-            }
-        ],
-        "database_operations": [],
-        "notes": ["仅展示当前有效来源；无关来源分支已省略。"],
-    }
-
-
-def normalize_endpoint_data_origin(value: Any) -> dict[str, Any]:
-    """规范化正式数据来源结构，并保持大类与具体实现来源相互独立。"""
-
-    origin = value if isinstance(value, dict) else {}
-    source_type = str(origin.get("source_type") or "")
-    if source_type not in {"database", "static", "external_api"}:
-        raise ValueError("EndpointDetail.source_type 仅支持 database、static、external_api。")
-    effective_source = origin.get("effective_source")
-    if not isinstance(effective_source, dict):
-        raise ValueError("EndpointDetail.effective_source 必须是对象。")
-    effective_kind = str(effective_source.get("kind") or "")
-    allowed_kinds = {
-        "database": {"mysql_existing", "mysql_new_table", "needs_user_confirmation"},
-        "static": {"frontend_mock"},
-        "external_api": {"third_party", "needs_user_confirmation"},
-    }
-    if effective_kind not in allowed_kinds[source_type]:
-        raise ValueError(f"EndpointDetail 实现来源 {effective_kind or 'missing'} 与 {source_type} 不匹配。")
-    return {
-        "source_type": source_type,
-        "effective_source": {
-            key: value
-            for key, value in {
-                "kind": effective_kind,
-                "data_source_id": effective_source.get("data_source_id"),
-                "database": effective_source.get("database"),
-                "tables": _normalize_origin_tables(effective_source.get("tables")),
-                "provider": effective_source.get("provider"),
-                "endpoint": effective_source.get("endpoint"),
-                "method": effective_source.get("method"),
-                "description": effective_source.get("description")
-                or effective_source.get("query_description")
-                or effective_source.get("note")
-                or "",
-            }.items()
-            if value not in (None, "", [])
-        },
-        "field_mappings": _normalize_field_mappings(
-            origin.get("field_mappings")
-            or effective_source.get("field_mapping")
-            or effective_source.get("mapping")
-            or []
-        ),
-        "differences": _normalize_origin_differences(origin.get("differences")),
-        "database_operations": _normalize_database_operations(
-            origin.get("database_operations")
-        ),
-        "notes": _text_items(origin.get("notes")),
-    }
-
-
-def apply_endpoint_datasource_policy(
-    project_plan: dict[str, Any],
-    endpoint_context: dict[str, Any],
-    value: Any,
-) -> dict[str, Any]:
-    """按 ProjectPlan 权威类型钳制模型来源，Static 固定映射到前端内存 Mock。"""
-
-    data_source_id = str(endpoint_context.get("data_source_id") or "")
-    authoritative = _default_endpoint_data_origin(project_plan, data_source_id)
-    if authoritative["source_type"] == "static":
-        return authoritative
-
-    origin = value if isinstance(value, dict) else {}
-    effective_source = origin.get("effective_source")
-    effective_source = effective_source if isinstance(effective_source, dict) else {}
-    authoritative_type = str(authoritative["source_type"])
-    allowed_kind = {
-        "database": {"mysql_existing", "mysql_new_table", "needs_user_confirmation"},
-        "external_api": {"third_party", "needs_user_confirmation"},
-    }[authoritative_type]
-    proposed_kind = str(effective_source.get("kind") or "")
-    if proposed_kind not in allowed_kind:
-        proposed_kind = str(authoritative["effective_source"]["kind"])
-    return normalize_endpoint_data_origin(
-        {
-            **origin,
-            "source_type": authoritative_type,
-            "effective_source": {
-                **authoritative["effective_source"],
-                **effective_source,
-                "kind": proposed_kind,
-                "data_source_id": data_source_id,
-            },
-        }
-    )
-
-
-def _normalize_field_mappings(value: Any) -> list[dict[str, Any]]:
-    """把字段映射压缩为 target_field/source/rule 三列。"""
-
-    if isinstance(value, dict):
-        return [
-            {
-                "target_field": str(target),
-                "source": str(source),
-                "rule": "直接映射",
-            }
-            for target, source in value.items()
-            if str(target).strip() or str(source).strip()
-        ]
-    if not isinstance(value, list):
-        return []
-    mappings: list[dict[str, Any]] = []
-    for item in value:
-        if isinstance(item, dict):
-            mappings.append(
-                {
-                    "target_field": str(
-                        item.get("target_field") or item.get("field") or ""
-                    ),
-                    "source": str(item.get("source") or item.get("source_field") or ""),
-                    "rule": str(item.get("rule") or item.get("description") or ""),
-                }
-            )
-        elif str(item).strip():
-            mappings.append(
-                {
-                    "target_field": "",
-                    "source": str(item).strip(),
-                    "rule": "",
-                }
-            )
-    return [
-        mapping
-        for mapping in mappings
-        if mapping.get("target_field") or mapping.get("source") or mapping.get("rule")
-    ]
-
-
-def _normalize_origin_tables(value: Any) -> list[str]:
-    """把表结构摘要压缩为表名列表，避免把整段字段说明带进来源展示。"""
-
-    if not isinstance(value, list):
-        return []
-    tables: list[str] = []
-    for item in value:
-        if isinstance(item, dict):
-            table_name = str(
-                item.get("table_name")
-                or item.get("name")
-                or item.get("id")
-                or ""
-            ).strip()
-            if table_name:
-                tables.append(table_name)
-        elif str(item).strip():
-            tables.append(str(item).strip())
-    return tables
-
-
-def _normalize_origin_differences(differences: Any) -> list[dict[str, Any]]:
-    """规范化结构化差异决策，不从自然语言推断处理方式。"""
-
-    normalized: list[dict[str, Any]] = []
-    if isinstance(differences, list):
-        for item in differences:
-            if isinstance(item, dict):
-                backend_adaptation = item.get("backend_adaptation")
-                resolution_kind = str(
-                    item.get("resolution_kind") or "needs_user_confirmation"
-                )
-                normalized.append(
-                    {
-                        "field": str(item.get("field") or item.get("name") or "待确认项"),
-                        "expected": str(item.get("expected") or ""),
-                        "actual": str(item.get("actual") or ""),
-                        "resolution_kind": resolution_kind,
-                        # operation_refs 只对 database_change 有意义；backend_adaptation/
-                        # already_supported/needs_user_confirmation 一律清空，避免模型把
-                        # 建表操作错误挂到字段级差异上导致确认校验失败。
-                        "operation_refs": (
-                            _text_items(item.get("operation_refs"))
-                            if resolution_kind == "database_change"
-                            else []
-                        ),
-                        "backend_adaptation": (
-                            _normalize_backend_adaptation(backend_adaptation)
-                            if isinstance(backend_adaptation, dict)
-                            else None
-                        ),
-                    }
-                )
-    return [
-        item
-        for item in normalized
-        if item.get("field") or item.get("expected") or item.get("actual")
-    ]
-
-
-def _normalize_backend_adaptation(value: dict[str, Any]) -> dict[str, Any]:
-    """保留后端适配的明确策略和值，避免任务阶段重新解释说明文本。"""
-
-    return {
-        "strategy": str(value.get("strategy") or ""),
-        "value": value.get("value"),
-        "temporary": bool(value.get("temporary")),
-        "description": str(value.get("description") or ""),
-    }
-
-
-def _normalize_database_operations(value: Any) -> list[dict[str, Any]]:
-    """规范化 EndpointDetail 中已确认的数据库结构操作。"""
-
-    operations: list[dict[str, Any]] = []
-    for item in value if isinstance(value, list) else []:
-        if not isinstance(item, dict):
-            continue
-        table = item.get("table")
-        column = item.get("column")
-        operations.append(
-            {
-                "id": str(item.get("id") or ""),
-                "operation": str(item.get("operation") or ""),
-                "database": str(item.get("database") or ""),
-                "table": _normalize_operation_table(table),
-                "column": str(column) if column is not None else None,
-                "from": (
-                    dict(item.get("from"))
-                    if isinstance(item.get("from"), dict)
-                    else None
-                ),
-                "to": dict(item.get("to")) if isinstance(item.get("to"), dict) else None,
-                "reason": str(item.get("reason") or ""),
-                "source_fields": _text_items(item.get("source_fields")),
-            }
-        )
-    return operations
-
-
-def _normalize_operation_table(value: Any) -> str | dict[str, Any]:
-    """规范化数据库操作中的表名或完整建表定义。"""
-
-    if not isinstance(value, dict):
-        return str(value or "")
-    return {
-        "name": str(value.get("name") or ""),
-        "comment": str(value.get("comment") or ""),
-        "columns": [
-            _normalize_column_definition(column)
-            for column in value.get("columns", [])
-            if isinstance(column, dict)
-        ],
-        "primary_key": _text_items(value.get("primary_key")),
-        "indexes": [item for item in value.get("indexes", []) if isinstance(item, dict)],
-        "foreign_keys": [
-            item for item in value.get("foreign_keys", []) if isinstance(item, dict)
-        ],
-    }
-
-
-def _normalize_column_definition(value: dict[str, Any]) -> dict[str, Any]:
-    """保留数据库字段目标定义中的类型、空值和默认值信息。"""
-
-    return {
-        "name": str(value.get("name") or ""),
-        "type": str(value.get("type") or ""),
-        "nullable": value.get("nullable"),
-        "default": value.get("default"),
-        "comment": str(value.get("comment") or ""),
-        "auto_increment": bool(value.get("auto_increment")),
-    }
 
 
 def _rest_resource_name(path: str) -> str:

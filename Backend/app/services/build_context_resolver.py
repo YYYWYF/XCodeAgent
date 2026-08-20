@@ -7,8 +7,71 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.services.database_planning_context import endpoint_detail_uses_database
+from app.services.entity_definitions import (
+    confirmed_entity_designs,
+    entity_design_source_type,
+    entity_design_summaries,
+    missing_entity_design_ids,
+    plan_data_sources,
+)
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
+
+
+def _endpoint_contract(
+    project_plan: dict[str, Any],
+    endpoint: dict[str, Any],
+) -> dict[str, Any]:
+    """读取 endpoint 所属的 API 契约，缺失时返回空对象。"""
+
+    contract_id = str(endpoint.get("api_contract_id") or "")
+    return next(
+        (
+            item
+            for item in _dict_items(project_plan.get("api_contracts"))
+            if str(item.get("id") or "") == contract_id
+        ),
+        {},
+    )
+
+
+def _endpoint_entity_designs(
+    project_plan: dict[str, Any],
+    endpoint: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """读取 endpoint 所属契约的已确认实体设计，并返回缺失设计清单。"""
+
+    contract = _endpoint_contract(project_plan, endpoint)
+    return (
+        confirmed_entity_designs(project_plan, contract),
+        missing_entity_design_ids(project_plan, contract),
+    )
+
+
+def _entity_design_source_types(entity_designs: list[dict[str, Any]]) -> list[str]:
+    """按已确认实体设计提取有序去重的数据源类型集合。"""
+
+    result: list[str] = []
+    for detail in entity_designs:
+        source_type = entity_design_source_type(detail)
+        if source_type and source_type not in result:
+            result.append(source_type)
+    return result
+
+
+def _assert_endpoint_entities_designed(
+    endpoint_id: str,
+    entity_designs: list[dict[str, Any]],
+    missing_entity_ids: list[str],
+) -> None:
+    """接口绑定实体为空或存在未确认实体设计时，给出可定位的构建前置错误。"""
+
+    if missing_entity_ids:
+        raise ValueError(
+            f"Endpoint {endpoint_id} 绑定实体 "
+            f"{', '.join(missing_entity_ids)} 缺少已确认实体设计。"
+        )
+    if not entity_designs:
+        raise ValueError(f"Endpoint {endpoint_id} 未绑定任何实体。")
 
 
 def _page_key_from_page_id(page_id: str) -> str:
@@ -41,8 +104,6 @@ def resolve_target_build_context(
 
     if target_type == "page":
         return _page_context(project_plan, target_id, project_plan_path)
-    if target_type == "data_source":
-        return _data_source_context(project_plan, target_id, project_plan_path)
     if target_type == "endpoint":
         return _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
     raise ValueError(f"Unsupported build target type: {target_type}.")
@@ -53,7 +114,7 @@ def _page_context(
     page_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """解析页面实现契约及其全部必需 EndpointDetail，形成三类 Unit 的定向上下文。"""
+    """解析页面实现契约及其全部 EndpointDetail，并按已确认实体设计限定 Unit 范围。"""
 
     page = find_frontend_page(project_plan_page_records(project_plan), page_id)
     if page is None:
@@ -70,32 +131,32 @@ def _page_context(
     )
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _contract_endpoint_ids(page_contract)
-    source_ids: list[str] = []
-    contract_ids: list[str] = []
+    entity_ids: list[str] = []
+    source_types: list[str] = []
     endpoint_unit_ids: list[str] = []
     for endpoint_id in endpoint_ids:
         endpoint = endpoint_index.get(endpoint_id)
         if endpoint is None:
             raise ValueError(f"Page {page_id} references unknown endpoint {endpoint_id}.")
-        source_id = str(endpoint.get("data_source_id") or "")
-        if not source_id:
-            raise ValueError(f"Endpoint {endpoint_id} does not declare a data source.")
-        if source_id not in source_ids:
-            source_ids.append(source_id)
+        entity_designs, missing_entity_ids = _endpoint_entity_designs(project_plan, endpoint)
+        _assert_endpoint_entities_designed(endpoint_id, entity_designs, missing_entity_ids)
+        for entity_design in entity_designs:
+            entity_id = str(entity_design.get("entity_id") or "")
+            if entity_id and entity_id not in entity_ids:
+                entity_ids.append(entity_id)
+        endpoint_source_types = _entity_design_source_types(entity_designs)
+        for source_type in endpoint_source_types:
+            if source_type not in source_types:
+                source_types.append(source_type)
         contract_id = str(endpoint.get("api_contract_id") or "")
-        if contract_id:
-            if contract_id not in contract_ids:
-                contract_ids.append(contract_id)
+        # 仅非纯 static 的 endpoint 挂后端 Unit；static 由 frontend:data:static 承载。
+        if contract_id and not (
+            endpoint_source_types and set(endpoint_source_types) <= {"static"}
+        ):
             endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))
 
     endpoint_details: list[dict[str, Any]] = []
     endpoint_refs: list[dict[str, Any]] = []
-    database_source_ids: list[str] = []
-    static_source_ids: list[str] = []
-    for source_id in source_ids:
-        source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
-        if _source_type(source) == "static":
-            static_source_ids.append(source_id)
     for endpoint_id in endpoint_ids:
         endpoint = endpoint_index[endpoint_id]
         detail = _load_external_detail(
@@ -111,10 +172,8 @@ def _page_context(
         )
         endpoint_details.append(detail)
         endpoint_refs.append(_artifact_ref(endpoint.get("detail_design"), endpoint_id))
-        source_id = str(endpoint.get("data_source_id") or "")
-        if endpoint_detail_uses_database(detail) and source_id not in database_source_ids:
-            database_source_ids.append(source_id)
 
+    all_static = bool(source_types) and set(source_types) <= {"static"}
     return {
         "target": {
             "type": "page",
@@ -127,17 +186,16 @@ def _page_context(
         "direct_endpoint_details": endpoint_details,
         "endpoint_ids": endpoint_ids,
         "required_endpoint_ids": endpoint_ids,
-        "api_contract_ids": contract_ids,
-        "data_source_ids": source_ids,
+        "entity_ids": entity_ids,
+        "entity_designs": entity_design_summaries(project_plan, entity_ids),
         "required_unit_ids": [
             "frontend:shell",
             "frontend:route-registry",
-            *(["frontend:api-client"] if not static_source_ids else []),
+            *(["frontend:api-client"] if not all_static else []),
             *(["frontend:auth-guard"] if _page_requires_auth(page) else []),
-            *(["backend:bootstrap"] if source_ids and not static_source_ids else []),
-            *(f"frontend:data:{source_id}" for source_id in static_source_ids),
-            *(f"database:{source_id}" for source_id in database_source_ids),
-            *([] if static_source_ids else list(dict.fromkeys(endpoint_unit_ids))),
+            *(["backend:bootstrap"] if source_types and not all_static else []),
+            *(["frontend:data:static"] if "static" in source_types else []),
+            *(list(dict.fromkeys(endpoint_unit_ids)) if not all_static else []),
             f"page:{page_id}",
         ],
         "source_refs": {
@@ -164,53 +222,13 @@ def _page_context(
     }
 
 
-def _data_source_context(
-    project_plan: dict[str, Any],
-    source_id: str,
-    project_plan_path: str | Path | None,
-) -> dict[str, Any]:
-    """以 ProjectPlan 契约解析数据单元，并按需补充已有 endpoint 详情。"""
-
-    source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
-    endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
-    endpoint_ids = [
-        endpoint_id for endpoint_id, endpoint in endpoint_index.items()
-        if endpoint.get("data_source_id") == source_id
-        and "\0" not in endpoint_id
-    ]
-    endpoint_details = []
-    endpoint_refs = []
-    for endpoint_id in endpoint_ids:
-        reference = endpoint_index[endpoint_id].get("detail_design")
-        detail = _load_optional_external_detail(reference, project_plan_path)
-        if detail is not None:
-            endpoint_details.append(detail)
-            endpoint_refs.append(_artifact_ref(reference, endpoint_id))
-    return {
-        "target": {"type": "data_source", "id": source_id},
-        "page_detail": None,
-        "endpoint_detail": None,
-        "direct_endpoint_details": endpoint_details,
-        "endpoint_ids": endpoint_ids,
-        "data_source_ids": [source_id],
-        "required_unit_ids": [
-            f"frontend:data:{source_id}"
-            if _source_type(source) == "static"
-            else f"database:{source_id}"
-        ],
-        "source_refs": {
-            "endpoint_details": endpoint_refs,
-        },
-    }
-
-
 def _endpoint_context(
     project_plan: dict[str, Any],
     endpoint_id: str,
     api_contract_id: str | None,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """解析单个 endpoint 的已确认详情，并只暴露该接口的后端构建范围。"""
+    """解析单个 endpoint 的已确认详情，只暴露绑定实体信息与实体推导的 Unit 白名单。"""
 
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     contract_id = str(api_contract_id or "").strip()
@@ -222,13 +240,9 @@ def _endpoint_context(
     if endpoint is None:
         target_label = f"{contract_id}/{endpoint_id}" if contract_id else endpoint_id
         raise ValueError(f"ProjectPlan does not contain endpoint {target_label}.")
-    source_id = str(endpoint.get("data_source_id") or "")
     contract_id = str(endpoint.get("api_contract_id") or "")
-    if not source_id:
-        raise ValueError(f"Endpoint {endpoint_id} does not declare a data source.")
     if not contract_id:
         raise ValueError(f"Endpoint {endpoint_id} does not declare an API contract.")
-    source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
     detail = _load_external_detail(
         endpoint.get("detail_design"),
         "EndpointDetail",
@@ -240,6 +254,23 @@ def _endpoint_context(
         api_contract_id=contract_id,
         endpoint_id=endpoint_id,
     )
+    entity_designs, missing_entity_ids = _endpoint_entity_designs(project_plan, endpoint)
+    _assert_endpoint_entities_designed(endpoint_id, entity_designs, missing_entity_ids)
+    source_types = _entity_design_source_types(entity_designs)
+    if not source_types:
+        raise ValueError(f"Endpoint {endpoint_id} 绑定实体未声明数据源类型。")
+    entity_ids = [str(item.get("entity_id") or "") for item in entity_designs]
+    uses_static = "static" in source_types
+    uses_backend = bool(set(source_types) & {"database", "external_api"})
+    if uses_backend:
+        required_unit_ids = [
+            "backend:bootstrap",
+            _endpoint_unit_id(contract_id, endpoint_id),
+        ]
+    else:
+        required_unit_ids = []
+    if uses_static:
+        required_unit_ids.append("frontend:data:static")
     return {
         "target": {
             "type": "endpoint",
@@ -251,21 +282,9 @@ def _endpoint_context(
         "direct_endpoint_details": [detail],
         "endpoint_ids": [endpoint_id],
         "required_endpoint_ids": [endpoint_id],
-        "api_contract_ids": [contract_id],
-        "data_source_ids": [source_id],
-        "required_unit_ids": (
-            [f"frontend:data:{source_id}"]
-            if _source_type(source) == "static"
-            else [
-                "backend:bootstrap",
-                *(
-                    [f"database:{source_id}"]
-                    if endpoint_detail_uses_database(detail)
-                    else []
-                ),
-                _endpoint_unit_id(contract_id, endpoint_id),
-            ]
-        ),
+        "entity_ids": entity_ids,
+        "entity_designs": entity_design_summaries(project_plan, entity_ids),
+        "required_unit_ids": required_unit_ids,
         "source_refs": {
             "endpoint_detail": _artifact_ref(endpoint.get("detail_design"), endpoint_id),
             "endpoint_details": [_artifact_ref(endpoint.get("detail_design"), endpoint_id)],
@@ -316,8 +335,6 @@ def _source_type(source: dict[str, Any]) -> str:
     source_type = str(source.get("type") or "")
     if source_type not in {"database", "static", "external_api"}:
         raise ValueError("ProjectPlan data source type must be database, static, or external_api.")
-    if source_type == "external_api":
-        raise ValueError("external_api data source is not enabled in the current build workflow.")
     return source_type
 
 
@@ -459,7 +476,6 @@ def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:
         for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
             endpoint_id = str(endpoint.get("id") or endpoint_index + 1)
             indexed_endpoint = {
-                "data_source_id": str(contract.get("data_source_id") or ""),
                 "api_contract_id": contract_id,
                 "detail_design": endpoint.get("detail_design"),
             }

@@ -1,6 +1,7 @@
 import type { MutableRefObject, ReactNode, SetStateAction } from 'react'
 import { createContext, createElement, useContext, useRef, useState } from 'react'
 import { AgUiChatSession } from '../../../service/agUiAgent'
+import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/EntityDesignPanels'
 import type { ChatMessageSkill } from '../../../typings'
 import type { AgentChatMessage } from '../types'
 import {
@@ -138,6 +139,8 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setMessagesBySession((current) => omitWorkspaceKeys(current, workspaceRoot))
     setDrafts((current) => omitWorkspaceKeys(current, workspaceRoot))
     setSelectedSkillsBySession((current) => omitWorkspaceKeys(current, workspaceRoot))
+    // 项目删除后同时清理实体设计草稿缓存，避免残留跨会话状态。
+    clearEntityDesignDraftStore(workspaceRoot)
   }
 
   return {

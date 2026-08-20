@@ -378,8 +378,19 @@ def _contract_binding_check(
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
         schemas = _dict_value(contract.get("schemas"))
-        planned_source_type = data_sources.get(
-            str(contract.get("data_source_id") or ""), ""
+        contract_entity_ids = set(_string_list(contract.get("entity_ids")))
+        planned_source_type = next(
+            (
+                str(source.get("type") or "").lower()
+                for source in _dict_items(executable.get("data_sources"))
+                if contract_entity_ids
+                and contract_entity_ids
+                & {
+                    str(entity.get("id") or "")
+                    for entity in _dict_items(source.get("entities"))
+                }
+            ),
+            "",
         )
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "")

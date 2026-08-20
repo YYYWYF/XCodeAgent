@@ -3,11 +3,13 @@ import { Alert, Button, Collapse, Input, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
 import type {
+  WorkflowEntityDesignAction,
   WorkflowDetailReview,
   WorkflowDetailReviewSubmission,
   WorkflowDetailReviewTarget,
 } from "../../../../typings";
 import { cx } from "../../../../utils";
+import { EntityDesignCard, EntityReviewEditor } from "./EntityDesignPanels";
 
 const { Panel } = Collapse;
 const { Text } = Typography;
@@ -16,18 +18,26 @@ const { TextArea } = Input;
 type DetailReviewProps = {
   disabled?: boolean;
   message?: string;
+  onDesignAction?: (action: WorkflowEntityDesignAction) => void;
   onConfirm: (submission: WorkflowDetailReviewSubmission) => void;
   review: WorkflowDetailReview;
+  workspaceRoot?: string;
 };
 
 export default function DetailReview({
   disabled,
   message,
+  onDesignAction,
   onConfirm,
   review,
+  workspaceRoot,
 }: DetailReviewProps): ReactElement {
   const targets = useMemo(
-    () => [...(review.pages || []), ...(review.endpoints || [])],
+    () => [
+      ...(review.pages || []),
+      ...(review.endpoints || []),
+      ...(review.entities || []),
+    ],
     [review],
   );
   const [changes, setChanges] = useState<
@@ -40,6 +50,12 @@ export default function DetailReview({
   const missingSelectedEndpointPlan = Boolean(
     review.summary?.missingSelectedEndpointPlan,
   );
+  const missingSelectedEntityPlan = Boolean(
+    review.summary?.missingSelectedEntityPlan,
+  );
+  const entityDesign = review.summary?.entityDesign;
+  const selectedEntityTarget = review.entities?.[0];
+  const validationErrors = entityDesign?.validation_errors || [];
 
   // 记录单个审核对象的字段改动，并保留同对象此前已编辑的内容。
   const updateField = (
@@ -73,6 +89,20 @@ export default function DetailReview({
     });
   };
 
+  // 实体设计统一走单一卡片：数据源选择、分方案设计、绑定、规则与确认全部
+  // 在一个卡片内本地连续完成，只有 AI 辅助与最终提交才触发后端动作。
+  if (entityDesign) {
+    return (
+      <EntityDesignCard
+        disabled={disabled}
+        entityDesign={entityDesign}
+        entityTarget={selectedEntityTarget}
+        onAction={onDesignAction}
+        workspaceRoot={workspaceRoot}
+      />
+    );
+  }
+
   return (
     <div className={cx("workflow-detail-review")}>
       <div className={cx("workflow-detail-review-summary")}>
@@ -89,66 +119,92 @@ export default function DetailReview({
           <Tag>
             API 契约 <strong>{review.summary?.api_contract_count || 0}</strong>
           </Tag>
+          <Tag>
+            实体 <strong>{review.summary?.entity_count || 0}</strong>
+          </Tag>
         </div>
       </div>
       {missingSelectedPagePlan ||
       missingSelectedEndpointPlan ||
+      missingSelectedEntityPlan ||
       targets.length === 0 ? (
         <Alert
           message={
             message ||
-            `目标 ${review.summary?.selectedEndpointId || review.summary?.selectedPageId || ""} 还没有生成细节设计，请先生成该目标的 plan。`
+            `目标 ${
+              review.summary?.selectedEntityId ||
+              review.summary?.selectedEndpointId ||
+              review.summary?.selectedPageId ||
+              ""
+            } 还没有生成细节设计，请先生成该目标的 plan。`
           }
           showIcon
           type="warning"
         />
       ) : (
-        <Collapse bordered={false}>
-          {targets.map((target) => (
-            <Panel
-              header={
-                <div className={cx("workflow-detail-review-title")}>
-                  {target.target_type !== "page" && (
-                    <span className={cx("workflow-detail-review-target-icon")}>
-                      <DatabaseOutlined />
+        <>
+          {validationErrors.length > 0 && (
+            <Alert
+              message="实体设计校验未通过，请先修订后再确认"
+              description={validationErrors.join("\n")}
+              showIcon
+              type="error"
+            />
+          )}
+          <Collapse bordered={false}>
+            {targets.map((target) => (
+              <Panel
+                header={
+                  <div className={cx("workflow-detail-review-title")}>
+                    {target.target_type !== "page" && (
+                      <span className={cx("workflow-detail-review-target-icon")}>
+                        <DatabaseOutlined />
+                      </span>
+                    )}
+                    <span className={cx("workflow-detail-review-target-kind")}>
+                      {targetKindLabel(target.target_type)}
                     </span>
-                  )}
-                  <span className={cx("workflow-detail-review-target-kind")}>
-                    {targetKindLabel(target.target_type)}
-                  </span>
-                  <Text
-                    className={cx("workflow-detail-review-target-name")}
-                    strong
-                  >
-                    {target.name || target.target_id}
-                  </Text>
-                  {changes[target.target_id] && (
-                    <Tag color="purple">已修改</Tag>
-                  )}
-                </div>
-              }
-              key={`${target.target_type}:${target.target_id}`}
-            >
-              {target.target_type === "page" ? (
-                <PageReviewEditor
-                  changes={changes[target.target_id] || {}}
-                  disabled={disabled}
-                  onChange={(field, value) => updateField(target, field, value)}
-                  target={target}
-                />
-              ) : target.target_type === "endpoint" ? (
-                <EndpointReviewEditor
-                  changes={changes[target.target_id] || {}}
-                  disabled={disabled}
-                  onChange={(field, value) => updateField(target, field, value)}
-                  target={target}
-                />
-              ) : (
-                <></>
-              )}
-            </Panel>
-          ))}
-        </Collapse>
+                    <Text
+                      className={cx("workflow-detail-review-target-name")}
+                      strong
+                    >
+                      {target.name || target.target_id}
+                    </Text>
+                    {changes[target.target_id] && (
+                      <Tag color="purple">已修改</Tag>
+                    )}
+                  </div>
+                }
+                key={`${target.target_type}:${target.target_id}`}
+              >
+                {target.target_type === "page" ? (
+                  <PageReviewEditor
+                    changes={changes[target.target_id] || {}}
+                    disabled={disabled}
+                    onChange={(field, value) => updateField(target, field, value)}
+                    target={target}
+                  />
+                ) : target.target_type === "endpoint" ? (
+                  <EndpointReviewEditor
+                    changes={changes[target.target_id] || {}}
+                    disabled={disabled}
+                    onChange={(field, value) => updateField(target, field, value)}
+                    target={target}
+                  />
+                ) : target.target_type === "entity" ? (
+                  <EntityReviewEditor
+                    changes={changes[target.target_id] || {}}
+                    disabled={disabled}
+                    onChange={(field, value) => updateField(target, field, value)}
+                    target={target}
+                  />
+                ) : (
+                  <></>
+                )}
+              </Panel>
+            ))}
+          </Collapse>
+        </>
       )}
       <div className={cx("workflow-detail-review-actions")}>
         <label className={cx("workflow-detail-review-note")}>
@@ -168,6 +224,8 @@ export default function DetailReview({
             disabled ||
             missingSelectedPagePlan ||
             missingSelectedEndpointPlan ||
+            missingSelectedEntityPlan ||
+            validationErrors.length > 0 ||
             targets.length === 0
           }
           icon={<CheckCircleOutlined />}
@@ -188,6 +246,7 @@ function targetKindLabel(
 ): string {
   if (targetType === "page") return "页面";
   if (targetType === "endpoint") return "接口";
+  if (targetType === "entity") return "实体";
   return "对象";
 }
 
@@ -332,7 +391,6 @@ function EndpointReviewEditor({
   onChange,
   target,
 }: ReviewEditorProps): ReactElement {
-  const dataOrigin = objectChange(changes.data_origin, target.data_origin);
   return (
     <div className={cx("workflow-detail-review-fields")}>
       <ReviewSummaryField
@@ -343,18 +401,7 @@ function EndpointReviewEditor({
       />
       <ReviewSummaryField
         disabled={disabled}
-        label="二、数据来源"
-        onChange={(value) =>
-          onChange(
-            "data_origin",
-            parseDataOriginSummary(value, target.data_origin),
-          )
-        }
-        value={dataOriginSummary(dataOrigin)}
-      />
-      <ReviewSummaryField
-        disabled={disabled}
-        label="接口行为决策（处理逻辑与验收标准的唯一来源）"
+        label="二、接口行为决策（处理逻辑与验收标准的唯一来源）"
         onChange={(value) =>
           onChange("endpoint_decision", parseJsonObject(value))
         }
@@ -382,14 +429,17 @@ function EndpointReviewEditor({
   );
 }
 
+// 渲染单个实体详细设计的审核输入项，字段定义由 ProjectPlan 契约控制不可编辑。
 type ReviewEditorProps = {
   changes: Record<string, unknown>;
   disabled?: boolean;
+  entityId?: string;
+  onAction?: (action: WorkflowEntityDesignAction) => void;
   onChange: (field: string, value: unknown) => void;
   target: WorkflowDetailReviewTarget;
 };
 
-// 渲染简短文本配置项，并保留标准受控输入行为。
+// 实体设计第一步：选择当前实体的数据源（数据库 / 外部 API / 静态数据）。
 function ReviewTextField({
   disabled,
   label,
@@ -528,126 +578,6 @@ function parseJsonObject(value: string): Record<string, unknown> {
   } catch {
     return { note: value };
   }
-}
-
-// 把 endpoint 数据来源压缩为用户可读摘要，只展示唯一有效来源与差异项。
-function dataOriginSummary(value: unknown): string {
-  const origin = objectValue(value);
-  const effectiveSource = objectValue(origin.effective_source);
-  const fieldMappings = recordItems(origin.field_mappings);
-  const differences = recordItems(origin.differences);
-  const notes = stringItems(origin.notes);
-  return [
-    `来源类型：${String(origin.source_type || effectiveSource.kind || "待确认")}`,
-    `有效来源：${compactRecordSummary(effectiveSource) || "待确认"}`,
-    `字段映射：${fieldMappings.length > 0 ? fieldMappings.map(fieldMappingLine).join("；") : "无"}`,
-    `差异项：${differences.length > 0 ? differences.map(differenceLine).join("；") : "无"}`,
-    `备注：${notes.length > 0 ? notes.join("；") : "无"}`,
-  ].join("\n");
-}
-
-// 将用户编辑的数据来源摘要还原为后端可接收的精简结构。
-function parseDataOriginSummary(
-  value: string,
-  current: unknown,
-): Record<string, unknown> {
-  const origin = objectValue(current);
-  const next: Record<string, unknown> = {
-    ...origin,
-    effective_source: objectValue(origin.effective_source),
-  };
-  summaryLines(value).forEach((line) => {
-    if (line.startsWith("来源类型：")) {
-      // 数据源大类由 ProjectPlan 决定，摘要编辑不得改变 source_type 或实现来源。
-      return;
-    }
-    if (line.startsWith("有效来源：")) {
-      next.effective_source = {
-        ...objectValue(next.effective_source),
-        description: line.replace("有效来源：", "").trim(),
-      };
-      return;
-    }
-    if (line.startsWith("字段映射：")) {
-      next.field_mappings = parseFieldMappingLines(
-        line.replace("字段映射：", ""),
-      );
-      return;
-    }
-    if (line.startsWith("差异项：")) {
-      next.differences = parseDifferenceLines(line.replace("差异项：", ""));
-      return;
-    }
-    if (line.startsWith("备注：")) {
-      next.notes = splitInlineItems(line.replace("备注：", ""));
-    }
-  });
-  return next;
-}
-
-// 生成紧凑对象摘要，过滤空值避免展示无关字段。
-function compactRecordSummary(value: Record<string, unknown>): string {
-  return Object.entries(value)
-    .filter(([, item]) => {
-      if (Array.isArray(item)) return item.length > 0;
-      return item !== undefined && item !== null && String(item).trim() !== "";
-    })
-    .map(([key, item]) => {
-      const rendered = Array.isArray(item) ? item.join(", ") : String(item);
-      return `${key}=${rendered}`;
-    })
-    .join("，");
-}
-
-// 渲染单条字段映射，保持 target/source/rule 三列信息。
-function fieldMappingLine(value: Record<string, unknown>): string {
-  const target = String(value.target_field || value.field || "目标字段");
-  const source = String(value.source || value.source_field || "来源待确认");
-  const rule = String(value.rule || value.description || "");
-  return rule ? `${target} <- ${source}（${rule}）` : `${target} <- ${source}`;
-}
-
-// 渲染单条差异项，突出实际缺口与处理建议。
-function differenceLine(value: Record<string, unknown>): string {
-  const field = String(value.field || value.name || "待确认项");
-  const expected = value.expected ? `期望 ${String(value.expected)}` : "";
-  const actual = value.actual ? `实际 ${String(value.actual)}` : "";
-  const resolution = value.resolution ? `处理 ${String(value.resolution)}` : "";
-  return [field, expected, actual, resolution].filter(Boolean).join("，");
-}
-
-// 解析一行内用分号分隔的字段映射摘要。
-function parseFieldMappingLines(value: string): Array<Record<string, unknown>> {
-  return splitInlineItems(value).map((item) => {
-    const [target, sourceWithRule] = splitPair(item, "<-");
-    const [source, rule] = splitPair(
-      sourceWithRule.replace(/[（）]/g, ""),
-      "，",
-    );
-    return {
-      target_field: target,
-      source,
-      rule,
-    };
-  });
-}
-
-// 解析一行内用分号分隔的差异摘要。
-function parseDifferenceLines(value: string): Array<Record<string, unknown>> {
-  return splitInlineItems(value).map((item) => ({
-    field: item,
-    expected: "",
-    actual: "",
-    resolution: "",
-  }));
-}
-
-// 按中文或英文分号切分单行摘要，并忽略“无”。
-function splitInlineItems(value: string): string[] {
-  return value
-    .split(/；|;/)
-    .map((item) => item.trim())
-    .filter((item) => item && item !== "无");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

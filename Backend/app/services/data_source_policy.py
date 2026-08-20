@@ -41,6 +41,37 @@ def read_application_datasource_type(workspace_root: str | Path) -> DatasourceTy
     return cast(DatasourceType, raw_type)
 
 
+def application_has_database_config(workspace_root: str | Path) -> bool:
+    """判断创建应用时是否填写了可用的数据库连接信息。"""
+
+    application_path = (
+        Path(workspace_root).expanduser() / ".xcodeagent" / "application.json"
+    )
+    if not application_path.is_file():
+        return False
+    try:
+        application = json.loads(application_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    datasource = application.get("datasource") if isinstance(application, dict) else None
+    database = datasource.get("db") if isinstance(datasource, dict) else None
+    if not isinstance(database, dict):
+        return False
+    plant_mode = database.get("plantMode")
+    if isinstance(plant_mode, dict) and all(
+        str(plant_mode.get(key) or "").strip()
+        for key in ("domain", "userName", "schema")
+    ):
+        return True
+    dbid_mode = database.get("dbidMode")
+    if isinstance(dbid_mode, dict) and all(
+        str(dbid_mode.get(key) or "").strip()
+        for key in ("dbid", "domain", "userName", "schema")
+    ):
+        return True
+    return False
+
+
 def ensure_requirements_datasource_type(
     datasource_type: DatasourceType,
 ) -> EnabledDatasourceType:
@@ -56,9 +87,11 @@ def ensure_requirements_datasource_type(
 def ensure_enabled_datasource_type(
     datasource_type: DatasourceType,
 ) -> EnabledDatasourceType:
-    """校验当前正式规划链路已启用的数据源类型。"""
+    """校验正式规划链路支持的数据源类型，含数据库、外部 API 与静态数据。"""
 
-    return ensure_requirements_datasource_type(datasource_type)
+    if not isinstance(datasource_type, str) or datasource_type not in CANONICAL_DATASOURCE_TYPES:
+        raise DataSourcePolicyError("当前应用的数据源类型无效，仅支持 database、static、external_api。")
+    return cast(EnabledDatasourceType, datasource_type)
 
 
 def datasource_type_from_artifact(
@@ -66,26 +99,31 @@ def datasource_type_from_artifact(
     *,
     fallback: EnabledDatasourceType | None = None,
 ) -> EnabledDatasourceType:
-    """从正式工件提取唯一数据源类型，并拒绝混合类型和旧类型。"""
+    """从正式工件推导规划默认类型：全 static 返回 static，其余返回 database。"""
 
     sources = artifact.get("data_sources")
     source_types = {
-        str(source.get("type") or "")
+        str(source.get("type") or "").strip()
         for source in sources
         if isinstance(source, dict)
     } if isinstance(sources, list) else set()
-    if not source_types and fallback is not None:
-        return ensure_enabled_datasource_type(fallback)
-    if len(source_types) != 1:
-        raise DataSourcePolicyError("正式工件必须包含唯一且一致的数据源类型。")
-    return ensure_enabled_datasource_type(cast(DatasourceType, source_types.pop()))
+    for source_type in source_types:
+        if source_type not in CANONICAL_DATASOURCE_TYPES:
+            raise DataSourcePolicyError(
+                f"正式工件包含非法数据源类型：{source_type or '空'}。"
+            )
+    if not source_types:
+        return ensure_enabled_datasource_type(fallback or "database")
+    if source_types <= {"static"}:
+        return "static"
+    return "database"
 
 
 def apply_authoritative_datasource_type(
     spec: dict[str, Any],
     datasource_type: DatasourceType,
 ) -> dict[str, Any]:
-    """复制正式工件，并把所有数据源类型投影为应用配置类型。"""
+    """规范化数据源类型：合法类型原样保留，缺省类型用默认值补齐，非法类型拒绝。"""
 
     if not isinstance(datasource_type, str) or datasource_type not in CANONICAL_DATASOURCE_TYPES:
         raise DataSourcePolicyError("不能投影无效的数据源类型。")
@@ -96,7 +134,14 @@ def apply_authoritative_datasource_type(
         return projected
 
     projected["data_sources"] = [
-        {**source, "type": datasource_type}
+        {
+            **source,
+            "type": (
+                str(source.get("type") or "").strip()
+                if str(source.get("type") or "").strip() in CANONICAL_DATASOURCE_TYPES
+                else datasource_type
+            ),
+        }
         for source in sources
         if isinstance(source, dict)
     ]

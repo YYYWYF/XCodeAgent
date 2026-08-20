@@ -36,7 +36,8 @@ export interface DatabaseDatasourceDetails {
 /** 描述最终写入 application.json 的数据库数据源配置。 */
 export interface DatabaseDatasourceConfig {
   type: DatasourceEnum.DB;
-  db: DatabaseDatasourceDetails;
+  /** 创建应用时数据库连接配置非必填；实体数据源在项目规划阶段再确认。 */
+  db?: DatabaseDatasourceDetails;
 }
 
 /** 描述最终写入 application.json 的静态数据源配置，不能包含数据库字段。 */
@@ -347,11 +348,32 @@ export interface ApplicationApiAccess {
   roleIds: string[];
 }
 
+export interface ApplicationEntityFieldDefinition {
+  name: string;
+  label: string;
+  type:
+    | 'text'
+    | 'long_text'
+    | 'number'
+    | 'decimal'
+    | 'date'
+    | 'datetime'
+    | 'enum'
+    | 'boolean';
+  required: boolean;
+  description: string;
+}
+
 export interface ApplicationDataSourceDefinition {
   id: string;
   name: string;
   type: DatasourceEnum;
-  entities: Array<{ name: string; schemaRef: string }>;
+  entities: Array<{
+    name: string;
+    schemaRef: string;
+    description?: string;
+    fields?: ApplicationEntityFieldDefinition[];
+  }>;
   relations: Array<{
     from: string;
     to: string;

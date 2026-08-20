@@ -135,6 +135,54 @@ export function runTerminalExec(request: TerminalExecRequest): Promise<TerminalE
   })
 }
 
+export type DatabaseTablesRequest = {
+  workspace_root?: string
+  entity_id?: string
+}
+
+export type DatabaseTableColumn = {
+  name: string
+  type: string
+  nullable: boolean
+  comment: string
+}
+
+export type DatabaseTablesResult = {
+  tool: 'database.tables'
+  status: 'ok' | 'error'
+  database?: string
+  tables: Array<{ name: string; comment: string }>
+  message?: string
+}
+
+export type DatabaseTableColumnsResult = {
+  tool: 'database.table_columns'
+  status: 'ok' | 'error'
+  table_name: string
+  columns: DatabaseTableColumn[]
+  message?: string
+}
+
+/** 查询当前数据库的表清单（实体设计卡片本地查表使用）。 */
+export function listDatabaseTables(
+  request: DatabaseTablesRequest,
+): Promise<DatabaseTablesResult> {
+  return requestJson<DatabaseTablesResult>('/tools/database/tables', {
+    method: 'POST',
+    body: JSON.stringify(request)
+  })
+}
+
+/** 查询指定表的字段结构（实体设计卡片选表后使用）。 */
+export function fetchDatabaseTableColumns(
+  request: { workspace_root?: string; table_name: string },
+): Promise<DatabaseTableColumnsResult> {
+  return requestJson<DatabaseTableColumnsResult>('/tools/database/table-columns', {
+    method: 'POST',
+    body: JSON.stringify(request)
+  })
+}
+
 export function readWorkspaceFile(
   request: ReadWorkspaceFileRequest
 ): Promise<ReadWorkspaceFileResult> {

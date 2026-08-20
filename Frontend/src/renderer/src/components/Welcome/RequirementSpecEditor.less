@@ -79,6 +79,62 @@
   }
 }
 
+.@{class-prefix}-requirement-editor-entity-fields-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  > .ant-typography {
+    color: var(--modal-text-secondary);
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  > .ant-btn {
+    margin-left: auto;
+    color: var(--modal-accent);
+  }
+}
+
+.@{class-prefix}-requirement-editor-entity-fields {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 6px;
+  border-top: 1px dashed var(--modal-border);
+}
+
+.@{class-prefix}-requirement-editor-entity-table {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.@{class-prefix}-requirement-editor-entity-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 28px;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+
+  .ant-input {
+    width: 100%;
+  }
+
+  > .ant-btn {
+    color: var(--modal-text-secondary);
+  }
+
+  &.is-head {
+    padding: 0 2px;
+
+    > .ant-typography {
+      color: var(--modal-text-secondary);
+      font-size: 11px;
+    }
+  }
+}
+
 .@{class-prefix}-requirement-editor-flow-steps {
   display: grid;
   gap: 6px;

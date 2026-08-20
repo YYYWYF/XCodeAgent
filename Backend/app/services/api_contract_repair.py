@@ -14,7 +14,7 @@ def repair_cross_contract_schema_refs(project_plan: dict[str, Any]) -> tuple[dic
     导致契约 A 的 Endpoint 引用了未在自身 schemas 中定义的 Schema。
 
     本函数检测所有「Endpoint 引用了未知 Schema」的错误，若该 Schema 实际定义在
-    另一个契约中，则把它移动到引用它的契约内，并同步修正数据源 schema_refs。
+    另一个契约中，则把它移动到引用它的契约内；数据源归属由实体设计独立维护。
 
     Returns:
         (修复后的 project_plan, 修复动作描述列表)
@@ -67,68 +67,7 @@ def repair_cross_contract_schema_refs(project_plan: dict[str, Any]) -> tuple[dic
                 # 同步更新全局索引，避免后续重复移动
                 schema_owner[resolved] = contract
 
-    if not repairs:
-        return plan, repairs
-
-    # 第二轮：修正数据源 schema_refs，使其指向移动后的契约
-    _repair_data_source_schema_refs(plan, contracts, repairs)
-
     return plan, repairs
-
-
-def _repair_data_source_schema_refs(
-    plan: dict[str, Any],
-    contracts: list[dict[str, Any]],
-    repairs: list[str],
-) -> None:
-    """重建每个数据源的 schema_refs，只保留指向本契约内真实存在的 Schema 的引用。"""
-
-    # contract_id -> set(schema_id)
-    contract_schemas: dict[str, set[str]] = {}
-    # data_source_id -> contract
-    source_contract: dict[str, dict[str, Any]] = {}
-    for contract in contracts:
-        if not isinstance(contract, dict):
-            continue
-        cid = str(contract.get("id") or "")
-        contract_schemas[cid] = set((contract.get("schemas") or {}).keys())
-        dsid = str(contract.get("data_source_id") or "")
-        if dsid:
-            source_contract[dsid] = contract
-
-    for source in plan.get("data_sources") or []:
-        if not isinstance(source, dict):
-            continue
-        dsid = str(source.get("id") or "")
-        contract = source_contract.get(dsid)
-        if contract is None:
-            continue
-        cid = str(contract.get("id") or "")
-        valid = contract_schemas.get(cid, set())
-        refs = source.get("schema_refs")
-        if not isinstance(refs, list):
-            continue
-        new_refs: list[str] = []
-        changed = False
-        for ref in refs:
-            ref_str = str(ref)
-            # 解析裸引用（#/schemas/X）与带契约前缀的引用（cid#/schemas/X）
-            if "#/schemas/" in ref_str:
-                ref_contract, _, schema_id = ref_str.partition("#/schemas/")
-            else:
-                ref_contract, schema_id = "", ref_str
-            # 归属本契约且真实存在的 schema，统一写成完整引用
-            if schema_id in valid and (not ref_contract or ref_contract == cid):
-                full = f"{cid}#/schemas/{schema_id}"
-                if full not in new_refs:
-                    new_refs.append(full)
-                if ref_str != full:
-                    changed = True
-            else:
-                changed = True  # 丢弃指向其他契约或不存在的引用
-        if changed:
-            source["schema_refs"] = new_refs
-            repairs.append(f"Rebuilt schema_refs for data source {dsid}.")
 
 
 def validate_and_repair_project_plan(project_plan: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]:

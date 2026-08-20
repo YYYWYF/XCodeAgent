@@ -17,6 +17,7 @@ from app.services.database_execution import (
 )
 from app.services.database_schema_diff import diff_database_schema
 from app.services.database_schema_summary import inspect_mysql_schema
+from app.services.entity_definitions import entity_mysql_target_table, normalize_entity
 from app.utils.model_output import extract_json_object
 
 
@@ -224,6 +225,266 @@ def generate_database_with_deep_agent(
         )
         for task in tasks
     ]
+
+
+def _entity_table_selection_prompt(
+    entity: dict[str, Any],
+    context: dict[str, Any],
+) -> str:
+    """构造实体表选型的 Deep Agent 提示词，要求先调用工具读取真实表与列。"""
+
+    normalized = normalize_entity(entity, 0, with_types=True)
+    fields = [
+        {
+            "name": field.get("name"),
+            "label": field.get("label") or field.get("name"),
+            "type": field.get("type") or "text",
+            "required": bool(field.get("required")),
+        }
+        for field in normalized.get("fields", [])
+        if field.get("name")
+    ]
+    history = [
+        f"{item.get('role')}: {item.get('content')}"
+        for item in context.get("messages", [])[-10:]
+        if isinstance(item, dict)
+        and str(item.get("role") or "").strip()
+        and str(item.get("content") or "").strip()
+    ]
+    target_table = entity_mysql_target_table(entity)
+    target_columns = [
+        {
+            "name": column.get("name"),
+            "type": column.get("type"),
+            "comment": column.get("comment"),
+        }
+        for column in (target_table.get("columns") or [])
+        if isinstance(column, dict)
+    ]
+    return (
+        "你是应用设计的数据库选表助手。请先用 get_mysql_table_info 工具读取真实数据库："
+        "不带 table_name 调用可列出全部表，对候选表带 table_name 调用可读取真实列名；"
+        "一切以工具返回为准，不要臆造表名或列名。\n"
+        "不要生成 database_change_plan，不要执行 SQL。\n"
+        "根据实体字段与真实库表，只输出 1 项你认为最接近的方案：\n"
+        "- 存在语义匹配的库表：输出 table_name 与 bindings；"
+        "bindings 的 table_column 必须来自该表真实列名，表中没有对应列的实体字段不要绑定；\n"
+        "- 不存在合适表：省略 table_name，输出 create_table 并在 note 中说明原因，"
+        "同时必须输出 bindings：把实体字段绑定到下方『建议目标表结构』中的列名"
+        "（通常列名与实体字段同名，可按语义选择其它列），不要输出结构之外的列名。\n"
+        "missing_fields 列出需要为该表新增列的实体字段：仅当该字段没有通过 bindings "
+        "覆盖、且语义上确实需要补充时才列出；绑定列名与字段名不同但语义一致时"
+        "（如 remark 绑定到 description）视为已覆盖，不要列出。\n"
+        f"实体名称：{normalized.get('name') or ''}\n"
+        f"实体字段：{json.dumps(fields, ensure_ascii=False)}\n"
+        f"建议目标表结构：{json.dumps(target_columns, ensure_ascii=False)}\n"
+        f"用户上下文：{json.dumps(context, ensure_ascii=False)}\n"
+        f"对话历史：\n{json.dumps(history, ensure_ascii=False)}\n"
+        "只输出 JSON：{\"text\": \"给用户的回复\", "
+        "\"missing_fields\": [{\"entity_field\": \"需要新增列的实体字段名\"}], "
+        "\"suggestions\": [{\"table_name\": \"推荐表名（无合适表时省略）\", "
+        "\"create_table\": {\"note\": \"无合适表时说明原因\"}, "
+        "\"bindings\": [{\"entity_field\": \"实体字段名\", "
+        "\"table_column\": \"真实列名\", \"note\": \"可选说明\"}], "
+        "\"note\": \"可选说明\"}]}，不要输出解释文字。"
+    )
+
+
+def entity_design_table_selection_with_agent(
+    *,
+    entity: dict[str, Any],
+    context: dict[str, Any],
+    workspace: str | None,
+    selected_skill_names: list[str] | None = None,
+    on_tool_activity: ToolActivityCallback | None = None,
+) -> dict[str, Any]:
+    """用数据库 Deep Agent 读取真实表/列后生成实体表选型建议。"""
+
+    from app.agents import create_agent_bundle
+    # 延迟导入避免 app.agents → services → app.agents 的模块级循环依赖。
+    from app.services.entity_design_assist import (
+        _filter_create_table_bindings,
+        _filter_bindings_to_real_columns,
+        _normalize_ai_missing_fields,
+        _normalize_suggestions,
+    )
+
+    prompt = _entity_table_selection_prompt(entity, context)
+    agent_note = invoke_agent_with_tool_activity(
+        create_agent_bundle(workspace, selected_skill_names).database,
+        {"messages": [{"role": "user", "content": prompt}]},
+        workspace=workspace,
+        on_tool_activity=on_tool_activity,
+    )
+    parsed = extract_json_object(agent_note) or {}
+    suggestions = _normalize_suggestions(
+        "table_selection",
+        parsed.get("suggestions") if isinstance(parsed, dict) else None,
+    )
+    for suggestion in suggestions:
+        payload = suggestion.get("payload")
+        if isinstance(payload, dict) and payload.get("create_table"):
+            payload["create_table"] = entity_mysql_target_table(entity)
+            _filter_create_table_bindings(payload, entity)
+        if isinstance(payload, dict) and payload.get("table_name"):
+            _filter_bindings_to_real_columns(payload, suggestion, workspace)
+    text = (
+        str(parsed.get("text") or "").strip()
+        if isinstance(parsed, dict)
+        else ""
+    )
+    missing_fields = None
+    if suggestions:
+        payload = suggestions[0].get("payload") or {}
+        table_name = str(payload.get("table_name") or "").strip()
+        if table_name:
+            missing_fields = _normalize_ai_missing_fields(
+                entity,
+                table_name,
+                parsed.get("missing_fields")
+                if isinstance(parsed, dict)
+                else None,
+                workspace,
+            )
+    history = [
+        item
+        for item in context.get("messages", [])
+        if isinstance(item, dict)
+    ][-20:]
+    messages = [*history]
+    if text:
+        messages.append({"role": "assistant", "content": text})
+    return {
+        "assist_type": "table_selection",
+        "text": text,
+        "messages": messages[-20:],
+        "suggestions": suggestions,
+        "missing_fields": missing_fields,
+        "source": "ai",
+        "note": "",
+    }
+
+
+def _entity_bindings_prompt(
+    entity: dict[str, Any],
+    context: dict[str, Any],
+) -> str:
+    """构造“指定表字段映射”的 Deep Agent 提示词，要求读取该表真实列。"""
+
+    normalized = normalize_entity(entity, 0, with_types=True)
+    fields = [
+        {
+            "name": field.get("name"),
+            "label": field.get("label") or field.get("name"),
+            "type": field.get("type") or "text",
+            "required": bool(field.get("required")),
+        }
+        for field in normalized.get("fields", [])
+        if field.get("name")
+    ]
+    table_name = str(context.get("table_name") or "").strip()
+    history = [
+        f"{item.get('role')}: {item.get('content')}"
+        for item in context.get("messages", [])[-10:]
+        if isinstance(item, dict)
+        and str(item.get("role") or "").strip()
+        and str(item.get("content") or "").strip()
+    ]
+    return (
+        "你是应用设计的数据库字段映射助手。用户已选定目标表 "
+        f"`{table_name}`。请先用 get_mysql_table_info 工具（带 table_name="
+        f"{table_name}）读取该表的真实列名，一切以工具返回为准，不要臆造列名。\n"
+        "不要生成 database_change_plan，不要执行 SQL。\n"
+        "根据实体字段与该表真实列输出字段映射 bindings：bindings 的 table_column "
+        "必须来自该表真实列名；表中没有对应列的实体字段不要绑定，改为列入 "
+        "missing_fields（仅当语义上确实需要补列时；绑定列名与字段名不同但语义"
+        "一致时视为已覆盖，不列入）。\n"
+        f"实体名称：{normalized.get('name') or ''}\n"
+        f"实体字段：{json.dumps(fields, ensure_ascii=False)}\n"
+        f"用户上下文：{json.dumps(context, ensure_ascii=False)}\n"
+        f"对话历史：\n{json.dumps(history, ensure_ascii=False)}\n"
+        "只输出 JSON：{\"text\": \"给用户的回复\", "
+        "\"missing_fields\": [{\"entity_field\": \"需要新增列的实体字段名\"}], "
+        "\"suggestions\": [{\"entity_field\": \"实体字段名\", "
+        "\"table_column\": \"真实列名\", \"rule\": \"same_name|manual\", "
+        "\"note\": \"可选说明\"}]}，不要输出解释文字。"
+    )
+
+
+def entity_design_bindings_with_agent(
+    *,
+    entity: dict[str, Any],
+    context: dict[str, Any],
+    workspace: str | None,
+    selected_skill_names: list[str] | None = None,
+    on_tool_activity: ToolActivityCallback | None = None,
+) -> dict[str, Any]:
+    """用同一个数据库 Deep Agent 读取指定表真实列后生成字段映射建议。"""
+
+    from app.agents import create_agent_bundle
+    # 延迟导入避免 app.agents → services → app.agents 的模块级循环依赖。
+    from app.services.entity_design_assist import (
+        _normalize_ai_missing_fields,
+        _normalize_suggestions,
+        _real_table_column_names,
+    )
+
+    prompt = _entity_bindings_prompt(entity, context)
+    agent_note = invoke_agent_with_tool_activity(
+        create_agent_bundle(workspace, selected_skill_names).database,
+        {"messages": [{"role": "user", "content": prompt}]},
+        workspace=workspace,
+        on_tool_activity=on_tool_activity,
+    )
+    parsed = extract_json_object(agent_note) or {}
+    suggestions = _normalize_suggestions(
+        "bindings",
+        parsed.get("suggestions") if isinstance(parsed, dict) else None,
+    )
+    table_name = str(context.get("table_name") or "").strip()
+    # 绑定列必须落在指定表的真实列内，防止模型臆造列名。
+    if table_name:
+        real_columns = _real_table_column_names(table_name, workspace)
+        if real_columns is not None:
+            suggestions = [
+                suggestion
+                for suggestion in suggestions
+                if isinstance(suggestion.get("payload"), dict)
+                and str(suggestion["payload"].get("table_column") or "").strip()
+                in real_columns
+            ]
+    missing_fields = (
+        _normalize_ai_missing_fields(
+            entity,
+            table_name,
+            parsed.get("missing_fields") if isinstance(parsed, dict) else None,
+            workspace,
+        )
+        if table_name
+        else None
+    )
+    text = (
+        str(parsed.get("text") or "").strip()
+        if isinstance(parsed, dict)
+        else ""
+    )
+    history = [
+        item
+        for item in context.get("messages", [])
+        if isinstance(item, dict)
+    ][-20:]
+    messages = [*history]
+    if text:
+        messages.append({"role": "assistant", "content": text})
+    return {
+        "assist_type": "bindings",
+        "text": text,
+        "messages": messages[-20:],
+        "suggestions": suggestions,
+        "missing_fields": missing_fields,
+        "source": "ai",
+        "note": "",
+    }
 
 
 def _extract_database_change_plan(agent_note: str) -> dict[str, Any]:

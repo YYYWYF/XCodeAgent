@@ -25,25 +25,166 @@ def _app_name_from_plan(project_plan: dict[str, Any]) -> str:
 
 logger = logging.getLogger(__name__)
 
+_ENDPOINT_SOURCE_TYPES = frozenset({"database", "external_api", "static"})
+_ENDPOINT_BACKEND_SOURCE_TYPES = frozenset({"database", "external_api"})
+_EXTERNAL_API_SKILL_NAME = "springboot-external-api-generate"
+_STATIC_DATA_SKILL_NAME = "frontend-static-data-generate"
+
 
 def _springboot_mybatis_skill_document() -> str:
-    """读取内置 springboot-mybatis-generate 技能的 SKILL.md 全文。
+    """读取内置 springboot-mybatis-generate 技能的精简入口文档。
 
     任务规划模型处于 planning-only 边界，无法调用技能工具读取文件，因此需要把
-    SKILL.md 的完整内容直接内联进 prompt 上下文。文件缺失时返回降级提示，
+    SKILL.md 的规划核心直接内联进 prompt 上下文；执行细节由 Skill 引用文件延迟
+    加载。文件缺失时返回降级提示，
     避免规划静默失去后端架构约束。
     """
 
-    from app.services.builtin_skills import read_builtin_skill_md
-
-    content = read_builtin_skill_md("springboot-mybatis-generate")
-    if content:
-        return content
-    return (
+    return _builtin_skill_document(
+        "springboot-mybatis-generate",
         "(springboot-mybatis-generate SKILL.md 未找到，请仍按 Spring Boot + "
         "MyBatis-Plus 标准分层架构规划后端任务：对象类(Entity/PO/DTO/Converter/Assembler) → "
-        "Repository/Mapper → ApplicationService → Controller。)"
+        "Repository/Mapper → ApplicationService → Controller。)",
     )
+
+
+def _builtin_skill_document(skill_name: str, fallback: str) -> str:
+    """读取指定内置 Skill 文档，缺失时返回明确的保守降级规则。"""
+
+    from app.services.builtin_skills import read_builtin_skill_md
+
+    content = read_builtin_skill_md(skill_name)
+    return content if content else fallback
+
+
+def _endpoint_source_groups(
+    project_plan: dict[str, Any],
+    build_context: dict[str, Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """按当前 endpoint 的实体设计归并数据源，拒绝非法来源并避免全局污染。"""
+
+    executable = project_plan.get("executable_details")
+    executable = executable if isinstance(executable, dict) else {}
+    designs = executable.get("entity_designs")
+    if not isinstance(designs, list) or not designs:
+        context = build_context if isinstance(build_context, dict) else {}
+        designs = context.get("entity_designs")
+    groups: dict[str, list[dict[str, Any]]] = {
+        source_type: [] for source_type in ("database", "external_api", "static")
+    }
+    if isinstance(designs, list):
+        for item in designs:
+            if not isinstance(item, dict):
+                continue
+            source_type = str(item.get("data_source_type") or "").strip()
+            if not source_type:
+                if item.get("entity_id") or item.get("entity_name"):
+                    raise ValueError("任务准备上下文的实体设计缺少数据源类型。")
+                continue
+            if source_type not in _ENDPOINT_SOURCE_TYPES:
+                raise ValueError(f"任务准备上下文包含非法数据源类型: {source_type}")
+            groups[source_type].append(item)
+    if not any(groups.values()):
+        skeleton = project_plan.get("application_skeleton")
+        sources = skeleton.get("data_sources") if isinstance(skeleton, dict) else None
+        for source in sources or []:
+            if not isinstance(source, dict):
+                continue
+            source_type = str(source.get("type") or "").strip()
+            if not source_type:
+                continue
+            if source_type not in _ENDPOINT_SOURCE_TYPES:
+                raise ValueError(f"任务准备上下文包含非法数据源类型: {source_type}")
+            groups[source_type].append(source)
+    return {source_type: items for source_type, items in groups.items() if items}
+
+
+def _endpoint_source_types(
+    project_plan: dict[str, Any],
+    build_context: dict[str, Any] | None = None,
+) -> set[str]:
+    """返回当前 endpoint 实际涉及的数据源类型集合。"""
+
+    return set(_endpoint_source_groups(project_plan, build_context))
+
+
+def _external_api_skill_document() -> str:
+    """读取外部 API 后端生成 Skill 文档。"""
+
+    return _builtin_skill_document(
+        _EXTERNAL_API_SKILL_NAME,
+        "(springboot-external-api-generate SKILL.md 未找到：按 Java 8 Spring Boot 的上游 DTO/HTTP Client/字段映射/ApplicationService/Controller 分层规划，禁止生成 Entity、PO、Mapper、Repository、迁移或数据库配置。)",
+    )
+
+
+def _static_data_skill_document() -> str:
+    """读取静态数据前端生成 Skill 文档。"""
+
+    return _builtin_skill_document(
+        _STATIC_DATA_SKILL_NAME,
+        "(frontend-static-data-generate SKILL.md 未找到：在 /frontend/src/apis/<business>Api.ts 中实现模块级内存数据与异步契约函数，禁止生成后端接口或把业务数组放入页面。)",
+    )
+
+
+def _endpoint_source_prompt_fragments(
+    project_plan: dict[str, Any],
+    build_context: dict[str, Any] | None = None,
+) -> tuple[str, str, set[str]]:
+    """根据来源集合生成 endpoint 规则、Skill 注入和路径提示。"""
+
+    groups = _endpoint_source_groups(project_plan, build_context)
+    source_types = set(groups)
+    fragments: list[str] = []
+    skill_fragments: list[str] = []
+    if "database" in source_types:
+        fragments.append(
+            "DATABASE is the entity data-source classification, not a database-schema task. "
+            "Create owner=backend code tasks in the required backend:endpoint Unit and use "
+            "the injected springboot-mybatis-generate Skill for the four ordered layers "
+            "(object classes, repository, application service, controller). Table/schema "
+            "work was completed during entity confirmation; never create owner=database "
+            "tasks, database:* Units, migrations, seed SQL, or other schema/table operations.\n"
+        )
+        skill_fragments.append(
+            "--- INJECTED springboot-mybatis-generate SKILL.md ---\n"
+            + _springboot_mybatis_skill_document()
+            + "\n--- END INJECTED springboot-mybatis-generate SKILL.md ---\n"
+        )
+    if "external_api" in source_types:
+        fragments.append(
+            "EXTERNAL_API entities: create backend tasks in the required backend:endpoint "
+            "Unit for upstream DTO/client or gateway, field mapping, application service, "
+            "and internal controller. Do not create persistence classes, Mapper, Repository, "
+            "migration, seed SQL, or datasource tasks. Preserve the confirmed upstream "
+            "method/path/request/response and mappings.\n"
+        )
+        skill_fragments.append(
+            "--- INJECTED springboot-external-api-generate SKILL.md ---\n"
+            + _external_api_skill_document()
+            + "\n--- END INJECTED springboot-external-api-generate SKILL.md ---\n"
+        )
+    if "static" in source_types:
+        fragments.append(
+            "STATIC entities: create owner=frontend tasks only in the required "
+            "frontend:data:<sourceId> Unit. Implement the confirmed contract in a frontend "
+            "in-memory API module; never create backend, Spring, MyBatis, database, real HTTP, "
+            "or page implementation tasks for these entities.\n"
+        )
+        skill_fragments.append(
+            "--- INJECTED frontend-static-data-generate SKILL.md ---\n"
+            + _static_data_skill_document()
+            + "\n--- END INJECTED frontend-static-data-generate SKILL.md ---\n"
+        )
+    if not source_types:
+        raise ValueError("任务准备上下文缺少 endpoint 实体数据源类型。")
+    mapping = (
+        "Source-to-owner mapping for this endpoint:\n"
+        "- database and external_api -> backend:endpoint:* / owner=backend\n"
+        "- static -> frontend:data:* / owner=frontend\n"
+        "Mixed sources must remain partitioned by entity source; do not collapse them into "
+        "a single static-or-backend classification.\n"
+    )
+    return mapping + "".join(fragments), "".join(skill_fragments), source_types
 
 
 def _task_preparation_prompt(
@@ -51,11 +192,77 @@ def _task_preparation_prompt(
     workspace_snapshot: dict[str, Any] | None,
     build_context: dict[str, Any] | None = None,
 ) -> str:
+    """按本轮实际待生成 Unit 选择渐进式任务规划提示词。"""
+
+    mode = _planning_context_mode(build_context)
+    if mode == "page":
+        return _page_task_preparation_prompt(
+            project_plan,
+            workspace_snapshot,
+            build_context,
+        )
+    if mode == "endpoint":
+        return _endpoint_task_preparation_prompt(
+            project_plan,
+            workspace_snapshot,
+            build_context,
+        )
+    return _combined_task_preparation_prompt(
+        project_plan,
+        workspace_snapshot,
+        build_context,
+    )
+
+
+def _planning_context_mode(build_context: dict[str, Any] | None) -> str:
+    """根据实际会被模型替换的 Unit 判断 endpoint/page 上下文范围。"""
+
+    context = build_context if isinstance(build_context, dict) else {}
+    explicit_mode = str(context.get("planning_context_mode") or "").strip()
+    if explicit_mode in {"page", "endpoint", "combined"}:
+        return explicit_mode
+    target = context.get("target") if isinstance(context.get("target"), dict) else {}
+    pending_units = {
+        str(unit_id)
+        for unit_id in context.get("planning_unit_ids")
+        or context.get("required_unit_ids")
+        or []
+        if str(unit_id).strip()
+    }
+    target_type = str(target.get("type") or "").strip()
+    needs_page = any(unit_id.startswith("page:") for unit_id in pending_units)
+    needs_endpoint = target_type == "endpoint" or any(
+        unit_id.startswith("backend:") or unit_id.startswith("frontend:data:")
+        for unit_id in pending_units
+    )
+    if needs_page and needs_endpoint:
+        return "combined"
+    if needs_page:
+        return "page"
+    if needs_endpoint:
+        return "endpoint"
+    # 没有显式 Unit 时保守沿用完整提示词，兼容独立调用方。
+    return "combined"
+
+
+def _combined_task_preparation_prompt(
+    project_plan: dict[str, Any],
+    workspace_snapshot: dict[str, Any] | None,
+    build_context: dict[str, Any] | None = None,
+) -> str:
     """组合全局计划与定向详情上下文，约束模型仅返回当前 Unit 的任务候选。"""
-    if _task_preparation_datasource_type(project_plan) == "static":
+    source_types = _endpoint_source_types(project_plan, build_context)
+    if source_types and source_types <= {"static"}:
         return _static_task_preparation_prompt(
             project_plan,
             workspace_snapshot,
+            build_context,
+        )
+    endpoint_source_rules = ""
+    endpoint_skill_documents = ""
+    if source_types:
+        endpoint_source_rules, endpoint_skill_documents, _ = _endpoint_source_prompt_fragments(
+            project_plan,
             build_context,
         )
     snapshot_text = json.dumps(
@@ -67,8 +274,6 @@ def _task_preparation_prompt(
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
     frontend_root = "frontend"
     backend_root = "backend"
-    # 规划模型处于 planning-only 边界，无法读取技能文件，须把 SKILL.md 内联进 prompt。
-    backend_skill_document = _springboot_mybatis_skill_document()
     # 从 WorkspaceSnapshot 中提取真实后端目录树，直接注入 prompt。
     compact_snapshot = _compact_workspace_snapshot(workspace_snapshot)
     backend_snapshot = compact_snapshot.get("backend") if compact_snapshot else None
@@ -94,7 +299,7 @@ def _task_preparation_prompt(
         f"use `Frontend/src/`, bare `src/`, or `/app/frontend/` — those are wrong for a "
         f"user-application workspace.\n"
         
-        "Backend path convention: this is a Spring Boot + MyBatis-Plus Maven project "
+        "Backend path convention: this is a Spring Boot Maven project "
         f"rooted at `/{backend_root}/` (the directory containing pom.xml). Every backend "
         "file MUST be planned under `/{backend_root}/src/main/java/...` or "
         "`/{backend_root}/src/main/resources/...`; never use a bare `src/`, `app/backend/`, "
@@ -109,36 +314,18 @@ def _task_preparation_prompt(
         "Plan every backend task against that tree: reuse existing packages and do not "
         "re-plan files already present. Only add new files under "
         f"`/{backend_root}/src/main/java/...` or `/{backend_root}/src/main/resources/...`.\n"
-        "The ONLY authoritative reference for backend code organization, file structure, "
-        "naming rules, type mapping, and generation order is the injected "
-        "`springboot-mybatis-generate` SKILL.md below. The pre-check can be planned as a "
-        "separate backend task (owner: backend) that only checks and fills missing "
-        "infrastructure (pom.xml dependencies, application.yml datasource, MyBatisPlusConfig) "
-        "and generates no business code. For each backend module (one endpoint/table), plan "
-        "FOUR separate backend stage tasks (owner: backend) in the 4-phase order instead of "
-        "one monolithic module task: stage 1 object classes (Entity/PO/DTO/Converter/"
-        "Assembler), stage 2 repository (Mapper/Mapper.xml/Repository/RepositoryImpl), "
-        "stage 3 application service (ApplicationService), stage 4 controller (REST "
-        "Controller). Each stage task owns ONLY its own files in change_scope; never merge "
-        "stages and never add another stage's files to a task's change_scope. Chain stage "
-        "dependencies in order (stage 2 depends on stage 1, stage 3 on stage 2, stage 4 on "
-        "stage 3); when the pre-check task exists, stage 1 must list it in dependencies. "
-        "Write each stage's expected goal — the exact workspace-relative paths it will "
-        "create, each file's responsibility, and the contracts/class names downstream "
-        "stages must reference — into the NEXT stage task's description as execution "
-        "context, so every stage knows what its predecessor produced and can reference "
-        "those artifacts. A deterministic compiler derives engineering acceptance checks "
-        "from each stage task's exact change_scope. Follow its naming conversions "
-        "(table snake_case → PascalCase class / camelCase module, table → REST path), "
-        "and its MySQL-to-Java type mapping.\n"
-        
-        "--- INJECTED springboot-mybatis-generate SKILL.md (planning model cannot read "
-        "skills, content inlined) ---\n"
-        + backend_skill_document
-        + "\n"
-        "--- END INJECTED SKILL.md ---\n"
-
-        "NOTE: any acceptance guidance inside the injected SKILL.md (for example "
+        "The source-specific Skill sections below are the only authoritative reference for "
+        "backend and static data generation. Database and external API entities have "
+        "different implementation layers; follow only the section matching each entity. "
+        "For database entities, plan four ordered backend stages (object classes, repository, "
+        "application service, controller). For external API entities, plan upstream DTO/client, "
+        "mapping, application service, and internal controller stages without persistence. "
+        "For static entities, plan frontend:data Unit tasks only. Each task owns ONLY its own "
+        "files in change_scope and same-Unit dependencies; a deterministic compiler owns "
+        "cross-Unit edges.\n"
+        + endpoint_source_rules
+        + endpoint_skill_documents
+        + "NOTE: any acceptance guidance inside the injected SKILL.md (for example "
         "`acceptance_criteria` covering compilation or REST availability) describes "
         "generated-code content expectations only and is SUPERSEDED for task output: "
         "tasks MUST still return `acceptance_criteria: []` and `acceptance_checks: []`; "
@@ -179,6 +366,19 @@ def _task_preparation_prompt(
         "non-executable Unit skeleton: it describes all pages, data sources, public "
         "application units, and API ranges, but it must never cause tasks for pages or "
         "data sources outside TargetBuildContext.required_unit_ids.\n"
+        "Plan tasks per bound entity, never per endpoint-level data source: resolve each "
+        "endpoint's bound entities from executable_details.entity_designs (each entry carries "
+        "entity_id/entity_name/data_source_type plus the confirmed database/external_api/static "
+        "design summary). A database entity produces backend data read-write tasks; an "
+        "external_api entity produces backend call "
+        "tasks from its confirmed field mappings; a static entity produces "
+        "frontend:data:static in-memory mock modules. When an endpoint binds entities with "
+        "different data source types, plan separate tasks for each entity source instead of "
+        "classifying the endpoint as a single data source. Database table operations are "
+        "already executed and confirmed during entity design: in every Build scope NEVER "
+        "create owner=database tasks or database:* Unit tasks. API contracts in "
+        "executable_details.api_contracts are only request/response schema references and "
+        "must never be used to infer a data source.\n"
         "Do not invent generic paths when an existing project convention is present in "
         "the snapshot. For page tasks, use only executable_details.page_implementation_contracts "
         "and the referenced confirmed React UI file when one is present. If the UI design stage "
@@ -193,36 +393,15 @@ def _task_preparation_prompt(
         "frontend-backend API matching rules in this prompt: resolve every api_dependencies "
         "endpoint id to its exact method/path/schemas in executable_details.api_contracts and "
         "never invent endpoints or fields. For backend/data tasks, use only executable_details."
-        "endpoint_detail_plans, executable_details.data_sources, and "
-        "executable_details.api_contracts. ProjectPlan/API contracts in executable_details "
-        "are the only source of fields; preserve schema_refs, endpoint ids, "
+        "endpoint_detail_plans, executable_details.entity_designs, and "
+        "executable_details.api_contracts. TechnicalPlan entities and API contracts in executable_details "
+        "are the only source of fields; preserve entity_ids, endpoint ids, "
         "request/response schema refs, and page response_bindings in task source references.\n"
-        
-        "When executable_details.database_planning_context.schema_version is "
-        "`database-context.v1` and status is completed, `gaps` is the complete, "
-        "deterministic list of genuine schema differences. A required field already "
-        "satisfied — same name (case-insensitive) and a compatible/semantically "
-        "equivalent type — needs no database task. Create a database task ONLY for "
-        "`database_change` gaps (missing_database/missing_table/missing_column/"
-        "incompatible_column_type/nullable_mismatch); if `gaps` is empty or none is "
-        "`database_change`, do NOT create database tasks. `backend_adaptation` belongs in "
-        "backend tasks; `needs_confirmation` is never a task. "
-        "##TASK GENERATION PRIORITY — plan database tasks first, then backend tasks, "
-        "then frontend tasks: generate the full set of database tasks before any backend "
-        "task, and generate backend tasks before frontend tasks, so frontend API/page "
-        "tasks are only planned after the database and backend tasks they rely on. "
-        "##Merge ALL `database_change` gaps on the same table into ONE database task. "
-        "Every database task MUST carry a `database_scope` with the validated shape "
-        "`{\"gaps\": [full original gap objects]}` and `gap_ids` covering all merged "
-        "gaps — downstream reconstructs the target schema from `database_scope.gaps`, so "
-        "never drop gap fields, leave it empty, or infer it from ProjectPlan.data_sources. "
-        "If database_planning_context is missing or has no `database_change` gap, do not "
-        "create database tasks; backend tasks may still reference the existing schema.\n"
         
         "Split work into independently verifiable tasks. Every task must include:\n"
         "- id: a stable unique task id\n"
         "- unit_id: one of the required Unit IDs from TargetBuildContext\n"
-        "- owner: database, backend, or frontend\n"
+        "- owner: backend or frontend\n"
         "- title and description: write both fields in Simplified Chinese for user-facing display\n"
         "- dependencies: ids of prerequisite tasks returned in the same Unit only; never "
         "encode cross-Unit dependencies because the deterministic Unit Graph is their "
@@ -257,7 +436,7 @@ def _task_preparation_prompt(
         "When TargetBuildContext.target.type is `endpoint`, every new task MUST use the exact "
         "`backend:endpoint:<apiContractId>:<endpointId>` Unit from TargetBuildContext.required_unit_ids "
         "or an unprepared prerequisite Unit listed there. Do not create page tasks, do not create "
-        "tasks for other endpoints in the same data source, and use the confirmed "
+        "tasks for other endpoints or other entities' data sources, and use the confirmed "
         "executable_details.endpoint_detail_plans[0] as the executable source of truth.\n"
         "## CRITICAL — Reuse existing template scaffold, do NOT rebuild it\n"
         "The WorkspaceSnapshot describes a frontend template project that ALREADY EXISTS "
@@ -303,13 +482,193 @@ def _task_preparation_prompt(
     )
 
 
+def _page_task_preparation_prompt(
+    project_plan: dict[str, Any],
+    workspace_snapshot: dict[str, Any] | None,
+    build_context: dict[str, Any] | None,
+) -> str:
+    """只为页面 Unit 注入前端实现、页面契约和前端工作区上下文。"""
+
+    prompt_context = _scoped_prompt_build_context(build_context, "page")
+    snapshot_text = json.dumps(
+        _compact_workspace_snapshot(workspace_snapshot, scope="page"),
+        ensure_ascii=False,
+        indent=2,
+    )
+    return (
+        _common_task_preparation_rules()
+        + "You are planning frontend page tasks only. Do not create backend, "
+        "EndpointDetail, entity persistence, Spring, MyBatis, database, or endpoint "
+        "implementation tasks. Use only the current page implementation contract, its "
+        "referenced API Contract schemas, and the existing frontend WorkspaceSnapshot.\n"
+        "All generated frontend paths are under /frontend/. Use the authoritative "
+        "TargetBuildContext.target.page_key for src/pages/<PageKey>/index.tsx and menu "
+        "registration. Reuse the existing React scaffold; only add or replace business "
+        "page files and append the current menu item when required.\n"
+        "Every page API dependency must resolve to the exact method, path, request schema, "
+        "and response schema in executable_details.api_contracts. Call the shared API "
+        "service through the existing business API module; never invent URLs, fields, or "
+        "raw axios calls. Treat actionBindings, responseBindings, navigationBindings, "
+        "permissionBindings, and UI references as implementation context only.\n"
+        "Do not plan tests, builds, lint, type checks, verification, or business acceptance. "
+        "Return acceptance_criteria=[], acceptance_checks=[], verification_commands=[].\n\n"
+        f"WorkspaceSnapshot (frontend-scoped):\n{snapshot_text}\n\n"
+        f"TargetBuildContext:\n{json.dumps(prompt_context, ensure_ascii=False, indent=2)}\n\n"
+        f"TaskPreparationContext (page-scoped):\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
+    )
+
+
+def _endpoint_task_preparation_prompt(
+    project_plan: dict[str, Any],
+    workspace_snapshot: dict[str, Any] | None,
+    build_context: dict[str, Any] | None,
+) -> str:
+    """只为 endpoint/data Unit 注入当前数据源所需的契约、Skill 和工作区上下文。"""
+
+    prompt_context = _scoped_prompt_build_context(build_context, "endpoint")
+    source_rules, skill_documents, source_types = _endpoint_source_prompt_fragments(
+        project_plan,
+        build_context,
+    )
+    snapshot_scope = (
+        "frontend"
+        if source_types == {"static"}
+        else "endpoint_combined"
+        if "static" in source_types and source_types & _ENDPOINT_BACKEND_SOURCE_TYPES
+        else "endpoint"
+    )
+    snapshot_text = json.dumps(
+        _compact_workspace_snapshot(workspace_snapshot, scope=snapshot_scope),
+        ensure_ascii=False,
+        indent=2,
+    )
+    path_rules = (
+        "Backend source tasks use /backend/src/main/java/... or "
+        "/backend/src/main/resources/...; frontend static data tasks use "
+        "/frontend/src/apis/...; do not recreate either framework skeleton.\n"
+    )
+    snapshot_label = (
+        "frontend-scoped"
+        if snapshot_scope == "frontend"
+        else "combined endpoint-scoped"
+        if snapshot_scope == "endpoint_combined"
+        else "backend-scoped"
+    )
+    return (
+        _common_task_preparation_rules()
+        + "You are planning endpoint/data tasks only. Do not create page, route, menu, or "
+        "page implementation tasks. Use the exact endpoint contract and confirmed entity "
+        "designs in the endpoint-scoped context; do not infer data sources from API names.\n"
+        + source_rules
+        + skill_documents
+        + path_rules
+        + "Do not "
+        "plan tests, builds, lint, type checks, verification, or business acceptance. "
+        "Return acceptance_criteria=[], acceptance_checks=[], verification_commands=[].\n\n"
+        f"WorkspaceSnapshot ({snapshot_label}):\n{snapshot_text}\n\n"
+        f"TargetBuildContext:\n{json.dumps(prompt_context, ensure_ascii=False, indent=2)}\n\n"
+        f"TaskPreparationContext (endpoint-scoped):\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
+    )
+
+
+def _common_task_preparation_rules() -> str:
+    """返回 endpoint/page 共用的规划边界，避免专属上下文互相污染。"""
+
+    return (
+        "You are the build-task planning model for an app-generation workflow.\n"
+        "This is a planning-only boundary: do not call tools, subagents, or inspect files "
+        "outside the provided scoped WorkspaceSnapshot; do not generate or modify code.\n"
+        "Create tasks only for Unit IDs in TargetBuildContext.required_unit_ids and only "
+        "for the current planning scope. Dependencies may reference tasks in the same Unit "
+        "only; never copy reusable task IDs into dependencies because the deterministic Unit "
+        "Graph owns cross-Unit edges.\n"
+        "Each task must include a stable id, unit_id, owner, Simplified Chinese title and "
+        "description, exact change_scope paths, impact_scope, can_run_in_parallel, "
+        "parallel_reason, dependencies, status=pending, acceptance_criteria=[], acceptance_checks=[], "
+        "and verification_commands=[]. Return one JSON object with workspace_analysis and "
+        "tasks, without markdown fences or commentary. workspace_analysis must summarize "
+        "only the directories, entrypoints, and reuse conventions actually present in the "
+        "scoped WorkspaceSnapshot; do not infer omitted stack or verification facts.\n"
+        "The `dependencies` field is the execution prerequisite list: it must be a JSON "
+        "array of task IDs from this response and the same Unit, meaning those tasks must "
+        "complete before the current task starts. Use `dependencies: []` for a root task. "
+        "Reference the exact stable `id` values, never task titles, Unit IDs, or prose. "
+        "Do not reference tasks from another Unit or reusable tasks; the deterministic Unit "
+        "Graph owns all cross-Unit edges.\n"
+    )
+
+
+def _scoped_prompt_build_context(
+    build_context: dict[str, Any] | None,
+    mode: str,
+) -> dict[str, Any]:
+    """从目标上下文中移除另一侧的详情正文，保留当前模式的引用索引。"""
+
+    context = dict(build_context) if isinstance(build_context, dict) else {}
+    planning_unit_ids = context.get("planning_unit_ids")
+    if isinstance(planning_unit_ids, list) and planning_unit_ids:
+        context["required_unit_ids"] = list(planning_unit_ids)
+    source_refs = context.get("source_refs")
+    if isinstance(source_refs, dict):
+        source_refs = dict(source_refs)
+        if mode == "page":
+            source_refs.pop("endpoint_details", None)
+        elif mode == "endpoint":
+            source_refs.pop("page_detail", None)
+            source_refs.pop("page_implementation_contract", None)
+        context["source_refs"] = source_refs
+    if mode == "page":
+        for key in ("endpoint_detail", "direct_endpoint_details", "entity_designs", "entity_ids"):
+            context.pop(key, None)
+    elif mode == "endpoint":
+        for key in (
+            "page_detail",
+            "page_implementation_contract",
+            "endpoint_detail",
+            "direct_endpoint_details",
+            "entity_designs",
+            "required_endpoint_ids",
+            "planning_unit_ids",
+            "planning_context_mode",
+        ):
+            context.pop(key, None)
+    if mode == "endpoint":
+        allowed_keys = {
+            "target",
+            "endpoint_ids",
+            "entity_ids",
+            "required_unit_ids",
+            "source_refs",
+            "reusable_tasks_by_unit",
+        }
+        return {key: value for key, value in context.items() if key in allowed_keys}
+    return context
+
+
 def _compact_workspace_snapshot(
     workspace_snapshot: dict[str, Any] | None,
+    *,
+    scope: str = "combined",
 ) -> dict[str, Any]:
-    """裁剪规划 Prompt 的工作区快照，只保留导航所需的有限事实。"""
+    """裁剪规划 Prompt 的工作区快照，并按 endpoint/page 过滤另一侧事实。"""
 
     if not isinstance(workspace_snapshot, dict):
         return {}
+    if scope in {"endpoint", "backend"}:
+        return _compact_endpoint_workspace_snapshot(
+            workspace_snapshot,
+            roots=("backend",),
+        )
+    if scope == "frontend":
+        return _compact_endpoint_workspace_snapshot(
+            workspace_snapshot,
+            roots=("frontend",),
+        )
+    if scope == "endpoint_combined":
+        return _compact_endpoint_workspace_snapshot(
+            workspace_snapshot,
+            roots=("backend", "frontend"),
+        )
     compact: dict[str, Any] = {}
     for key in (
         "schema_version",
@@ -348,7 +707,98 @@ def _compact_workspace_snapshot(
             }
         }
         compact[key] = bounded
+    if scope in {"page", "endpoint", "frontend", "backend"}:
+        selected = "frontend" if scope in {"page", "frontend"} else "backend"
+        compact.pop("backend" if selected == "frontend" else "frontend", None)
+        for key in ("entrypoints", "file_manifest", "high_value_files"):
+            if key in compact:
+                compact[key] = _filter_workspace_paths(compact[key], selected)
     return compact
+
+
+def _compact_endpoint_workspace_snapshot(
+    workspace_snapshot: dict[str, Any],
+    *,
+    roots: tuple[str, ...],
+) -> dict[str, Any]:
+    """仅保留 endpoint 任务选择路径和复用现有代码所需的工作区事实。"""
+
+    compact: dict[str, Any] = {}
+    for key in ("entrypoints", "high_value_files"):
+        scoped_paths = _filter_workspace_paths_for_roots(
+            workspace_snapshot.get(key),
+            roots,
+        )
+        if scoped_paths:
+            compact[key] = _bounded_prompt_value(scoped_paths, limit=80)
+
+    allowed_sections = {
+        "backend": {"api_routes", "models", "dir_structure"},
+        "frontend": {"api_clients", "dir_structure"},
+    }
+    for root in roots:
+        value = workspace_snapshot.get(root)
+        if not isinstance(value, dict):
+            continue
+        allowed_keys = allowed_sections[root]
+        bounded = {
+            key: _bounded_prompt_value(item, limit=80)
+            for key, item in value.items()
+            if key in allowed_keys
+        }
+        if bounded:
+            compact[root] = bounded
+    return compact
+
+
+def _filter_workspace_paths_for_roots(
+    value: Any,
+    roots: tuple[str, ...],
+) -> list[Any]:
+    """按一个或多个工程根过滤路径条目，并丢弃不含路径的全局统计。"""
+
+    if not isinstance(value, list):
+        return []
+    prefixes = tuple(f"{root.lower()}/" for root in roots)
+    result: list[Any] = []
+    for item in value:
+        path = item if isinstance(item, str) else _workspace_item_path(item)
+        if not path:
+            continue
+        normalized = str(path).replace("\\", "/").lstrip("/").lower()
+        if normalized.startswith(prefixes):
+            result.append(item)
+    return result
+
+
+def _filter_workspace_paths(value: Any, selected_root: str) -> Any:
+    """过滤快照中的路径集合，只保留指定前后端根目录事实。"""
+
+    if not isinstance(value, list):
+        return value
+    selected_prefix = f"{selected_root.lower()}/"
+    result = []
+    for item in value:
+        path = item if isinstance(item, str) else _workspace_item_path(item)
+        if not path:
+            result.append(item)
+            continue
+        normalized = str(path).replace("\\", "/").lstrip("/").lower()
+        if normalized.startswith(selected_prefix) or "/" not in normalized:
+            result.append(item)
+    return result
+
+
+def _workspace_item_path(item: Any) -> str:
+    """从快照条目中提取可过滤的相对路径字段。"""
+
+    if not isinstance(item, dict):
+        return ""
+    for key in ("path", "file", "relative_path", "workspace_path"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
 
 
 def _bounded_prompt_value(value: Any, *, limit: int) -> Any:
@@ -366,8 +816,8 @@ def _bounded_prompt_value(value: Any, *, limit: int) -> Any:
     return value
 
 
-def _task_preparation_datasource_type(project_plan: dict[str, Any]) -> str:
-    """从任务准备投影读取唯一正式数据源类型。"""
+def _task_preparation_datasource_types(project_plan: dict[str, Any]) -> set[str]:
+    """从任务准备投影读取并校验数据源类型集合，不再折叠为二元分类。"""
 
     skeleton = project_plan.get("application_skeleton")
     sources = skeleton.get("data_sources") if isinstance(skeleton, dict) else None
@@ -376,9 +826,12 @@ def _task_preparation_datasource_type(project_plan: dict[str, Any]) -> str:
         for source in sources or []
         if isinstance(source, dict)
     }
-    if len(source_types) != 1 or next(iter(source_types)) not in {"database", "static"}:
-        raise ValueError("任务准备上下文必须包含唯一的 database 或 static 数据源类型。")
-    return next(iter(source_types))
+    if not source_types:
+        raise ValueError("任务准备上下文缺少数据源类型。")
+    if not source_types <= _ENDPOINT_SOURCE_TYPES:
+        invalid = sorted(source_types - _ENDPOINT_SOURCE_TYPES)
+        raise ValueError(f"任务准备上下文包含非法数据源类型: {', '.join(invalid)}")
+    return source_types
 
 
 def _static_task_preparation_prompt(
@@ -391,6 +844,7 @@ def _static_task_preparation_prompt(
     snapshot_text = json.dumps(
         _compact_workspace_snapshot(workspace_snapshot), ensure_ascii=False, indent=2
     )
+    static_skill = _static_data_skill_document()
     return (
         "You are the build-task planning model for a STATIC frontend-only application.\n"
         "This is planning-only: do not call tools, inspect extra files, or generate code.\n"
@@ -411,6 +865,9 @@ def _static_task_preparation_prompt(
         "exact change_scope paths, impact_scope, can_run_in_parallel, parallel_reason, status=pending, "
         "acceptance_criteria=[], acceptance_checks=[] (the deterministic compiler owns both), "
         "and verification_commands=[]. Do not plan tests or verification.\n\n"
+        "--- INJECTED frontend-static-data-generate SKILL.md ---\n"
+        + static_skill
+        + "\n--- END INJECTED frontend-static-data-generate SKILL.md ---\n\n"
         f"WorkspaceSnapshot:\n{snapshot_text}\n\n"
         f"TargetBuildContext:\n{json.dumps(build_context or {}, ensure_ascii=False, indent=2)}\n\n"
         f"TaskPreparationContext:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
@@ -446,6 +903,41 @@ def _invoke_live_main_agent(
     return _coerce_content_text(content) or ""
 
 
+def _reset_model_acceptance_fields(agent_plan: dict[str, Any] | None) -> None:
+    """在模型输出边界强制清空候选任务的验收字段。
+
+    模型即使收到提示词约束也可能生成不准确的验收内容，这里把解析出的
+    tasks / dag.tasks 中的 acceptance_criteria 与 acceptance_checks 统一重置为
+    空数组，确保下游只依赖确定性编译器生成的验收点，防止模型生成的验收
+    文案或检查对象进入 Build Task Plan。
+    TODO(验收措施): 后续需要设计更完善的验收验证措施，当前工程验收由
+    确定性编译器依据 change_scope 等元数据生成。
+    """
+
+    if not isinstance(agent_plan, dict):
+        return
+    raw_tasks = agent_plan.get("tasks")
+    if isinstance(raw_tasks, list):
+        _reset_task_acceptance_fields(raw_tasks)
+        return
+    dag = agent_plan.get("dag")
+    if isinstance(dag, dict):
+        for key in ("tasks", "nodes"):
+            value = dag.get(key)
+            if isinstance(value, list):
+                _reset_task_acceptance_fields(value)
+                return
+
+
+def _reset_task_acceptance_fields(tasks: list[Any]) -> None:
+    """将候选任务列表中的验收字段统一重置为空数组。"""
+
+    for task in tasks:
+        if isinstance(task, dict):
+            task["acceptance_criteria"] = []
+            task["acceptance_checks"] = []
+
+
 def prepare_build_tasks_with_main_agent(
     project_plan: dict[str, Any],
     *,
@@ -466,6 +958,11 @@ def prepare_build_tasks_with_main_agent(
     )
     preparation_source = "direct_chat_model"
     agent_plan = extract_json_object(agent_note)
+    # 模型输出的验收字段不可信，在解析边界统一强制重置为空数组，
+    # 防止模型生成不准确的 acceptance_criteria / acceptance_checks 进入下游；
+    # 真正的工程验收由确定性编译器基于 change_scope 等元数据生成。
+    # TODO(验收措施): 后续需要设计更完善的验收验证措施。
+    _reset_model_acceptance_fields(agent_plan)
     _log_task_model_response_diagnostics(agent_note, agent_plan)
 
     try:

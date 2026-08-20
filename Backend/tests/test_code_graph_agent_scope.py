@@ -88,6 +88,74 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertIn("Do not run project-level dependency installation", data_source_prompt)
         self.assertNotIn("regular backend verification", data_source_prompt)
 
+    def test_external_api_execution_prompt_does_not_load_database_rules(self) -> None:
+        """外部 API 后端执行批次只要求外部集成 Skill。"""
+
+        prompt = _data_source_generation_prompt(
+            project_plan={
+                "data_sources": [{"id": "database", "type": "database"}],
+            },
+            build_task_plan={"summary": {}},
+            tasks=[
+                {
+                    "id": "weather-client",
+                    "allowed_paths": ["backend/src/main/java/**"],
+                    "source_refs": {
+                        "entity_designs": [
+                            {"entity_id": "Weather", "data_source_type": "external_api"}
+                        ]
+                    },
+                }
+            ],
+        )
+
+        self.assertIn("springboot-external-api-generate", prompt)
+        self.assertIn("DTO/HTTP Client", prompt)
+        self.assertNotIn("springboot-mybatis-generate Skill", prompt)
+        self.assertIn("禁止生成 Entity/PO", prompt)
+
+    def test_frontend_static_skill_is_scoped_to_current_tasks(self) -> None:
+        """项目级存在 static 来源时，普通页面批次不误注入 static Skill。"""
+
+        page_prompt = _frontend_generation_prompt(
+            project_plan={
+                "data_sources": [{"id": "static", "type": "static"}],
+                "app": {"name": "demo"},
+            },
+            build_task_plan={"summary": {}},
+            tasks=[
+                {
+                    "id": "orders-page",
+                    "allowed_paths": ["frontend/src/pages/**"],
+                    "source_refs": {
+                        "entity_designs": [
+                            {"entity_id": "Order", "data_source_type": "database"}
+                        ]
+                    },
+                }
+            ],
+        )
+        static_prompt = _frontend_generation_prompt(
+            project_plan={"app": {"name": "demo"}},
+            build_task_plan={"summary": {}},
+            tasks=[
+                {
+                    "id": "notice-static",
+                    "allowed_paths": ["frontend/src/apis/**"],
+                    "source_refs": {
+                        "entity_designs": [
+                            {"entity_id": "Notice", "data_source_type": "static"}
+                        ]
+                    },
+                }
+            ],
+        )
+
+        self.assertNotIn("frontend-static-data-generate", page_prompt)
+        self.assertNotIn("Data source is STATIC", page_prompt)
+        self.assertIn("frontend-static-data-generate", static_prompt)
+        self.assertIn("Data source is STATIC", static_prompt)
+
     def test_empty_or_unavailable_tool_result_keeps_workspace_search_fallback(self) -> None:
         """空图结果和查询异常必须显式返回文件搜索降级信息。"""
 

@@ -13,21 +13,15 @@ from app.services.test_validation import create_revision_requests, evaluate_qual
 
 
 class IntegrationTestRunnerTests(unittest.TestCase):
-    def test_static_application_skips_all_backend_checks(self) -> None:
-        """Static 即使保留 Maven 模板，也只执行前端质量门。"""
+    def test_backend_checks_run_when_backend_project_exists(self) -> None:
+        """应用级不再有数据源类型；存在后端 Maven 工程时执行前后端质量门。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             frontend = root / "frontend"
             backend = root / "backend"
-            application_dir = root / ".xcodeagent"
             frontend.mkdir()
             backend.mkdir()
-            application_dir.mkdir()
-            (application_dir / "application.json").write_text(
-                '{"datasource":{"type":"static"}}',
-                encoding="utf-8",
-            )
             (frontend / "package.json").write_text(
                 '{"scripts":{"build":"vite build"}}',
                 encoding="utf-8",
@@ -40,7 +34,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             calls: list[list[str]] = []
 
             def fake_run(argv, **kwargs):
-                """记录 Static 实际执行命令并统一返回成功。"""
+                """记录实际执行命令并统一返回成功。"""
 
                 calls.append(argv)
                 return SimpleNamespace(returncode=0, stdout="ok", stderr="")
@@ -59,12 +53,12 @@ class IntegrationTestRunnerTests(unittest.TestCase):
 
         check_ids = [item["id"] for item in result["test_results"]]
         self.assertIn("frontend_build", check_ids)
-        self.assertFalse(any(check_id.startswith("backend_") for check_id in check_ids))
-        self.assertFalse(any("clean" in argv and "install" in argv for argv in calls))
+        self.assertTrue(any(check_id.startswith("backend_") for check_id in check_ids))
+        self.assertTrue(any("clean" in argv and "install" in argv for argv in calls))
         report = evaluate_quality_gate(
             test_results=result["test_results"],
         )
-        self.assertFalse(
+        self.assertTrue(
             any(
                 check_id.startswith("backend_")
                 for check_id in report["quality_gate"]["required_checks"]

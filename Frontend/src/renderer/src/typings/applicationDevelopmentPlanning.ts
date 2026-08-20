@@ -54,8 +54,83 @@ export type DevelopmentPlanningApiEndpoint = {
 export type DevelopmentPlanningApiContract = {
   id: string
   label: string
-  dataSourceIds?: string[]
+  entityIds?: string[]
   endpoints: DevelopmentPlanningApiEndpoint[]
+}
+export type DevelopmentPlanningEntityOption = {
+  id: string
+  label: string
+  purpose: string
+  dataSourceType: string
+  fields?: Array<{
+    name: string
+    label?: string
+    type: string
+    required?: boolean
+  }>
+  detail?: {
+    entity_id?: string
+    entity_name?: string
+    description?: string
+    design_stage?: string
+    data_source_type?: string
+    status?: string
+    fields?: Array<{
+      name?: string
+      label?: string
+      type?: string
+      required?: boolean
+      column_type?: string
+    }>
+    table_design?: {
+      name?: string
+      columns?: Array<{
+        name?: string
+        type?: string
+        comment?: string
+        nullable?: boolean
+      }>
+    }
+    database_design?: {
+      database_name?: string
+      matched_table?: string | null
+      bindings?: Array<Record<string, unknown>>
+      table_generation?: Record<string, unknown>
+      selected_table?: {
+        name?: string
+        comment?: string
+        columns?: Array<{
+          name?: string
+          type?: string
+          nullable?: boolean
+          comment?: string
+        }>
+      }
+      schema_context?: {
+        database?: string
+        tables?: Array<{
+          name?: string
+          table_name?: string
+          comment?: string
+          columns?: Array<{
+            name?: string
+            type?: string
+            nullable?: boolean
+            comment?: string
+          }>
+        }>
+      }
+    }
+    external_api_design?: Record<string, unknown>
+    static_design?: Record<string, unknown>
+    business_rules?: Array<Record<string, unknown>>
+    relationships?: Array<Record<string, unknown>>
+    acceptance_criteria?: unknown
+    risks?: unknown
+  }
+  detailPlanStatus?: string
+  hasDetailPlan: boolean
+  designed: boolean
 }
 export type MenuDevelopmentPlan = {
   menuKey: string

@@ -11,8 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services.data_source_policy import (
     DatasourceType,
     apply_authoritative_datasource_type,
+    datasource_type_from_artifact,
     ensure_requirements_datasource_type,
-    read_application_datasource_type,
+)
+from app.services.entity_definitions import (
+    merge_entities,
+    normalize_entities,
 )
 from app.workspace.spec_documents import (
     load_requirement_spec_json,
@@ -254,24 +258,18 @@ def merge_clarification_answers_into_spec(
                 }
                 for index, value in enumerate(values)
             ]
-        elif "数据源" in question or "存储方式" in question:
-            existing_sources = (
-                merged.get("data_sources")
-                if isinstance(merged.get("data_sources"), list)
+        elif "数据源" in question or "数据" in question or "存储" in question:
+            existing_entities = (
+                merged.get("entities")
+                if isinstance(merged.get("entities"), list)
                 else []
             )
-            merged["data_sources"] = [
+            merged["entities"] = existing_entities or [
                 {
-                    **source,
-                }
-                for source in existing_sources
-                if isinstance(source, dict)
-            ] or [
-                {
-                    "id": "core_source",
-                    "name": "核心业务数据源",
-                    "entities": ["CoreEntity"],
-                    "description": "提供核心业务页面所需数据。",
+                    "id": "CoreEntity",
+                    "name": "核心业务对象",
+                    "description": "提供核心业务页面所需展示的数据。",
+                    "fields": [],
                 }
             ]
         elif "验收" in question:
@@ -402,38 +400,103 @@ def _pages(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return pages
 
 
-def _data_sources(
-    modules: list[dict[str, Any]],
-    datasource_type: DatasourceType,
-) -> list[dict[str, Any]]:
-    """生成不依赖需求关键词的数据源业务信息，并使用权威类型。"""
+def _entities(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """需求阶段只生成业务实体与展示信息，不绑定任何数据源。"""
 
-    data_sources = [
-        {
-            "id": "user_source",
-            "name": "用户数据源",
-            "type": datasource_type,
-            "entities": ["User", "Role"],
-            "description": "提供登录用户、角色和权限相关数据。",
-        }
+    entities = [
+        _entity_definition(
+            "User",
+            "用户",
+            "登录系统的账号主体，记录身份和联系方式。",
+            [
+                {"label": "账号", "description": "登录账号，全局唯一。"},
+                {"label": "姓名", "description": "用户显示名称。"},
+                {"label": "邮箱", "description": "联系邮箱。"},
+                {"label": "手机号", "description": "联系手机号。"},
+                {"label": "状态", "description": "账号启用状态。"},
+            ],
+        ),
+        _entity_definition(
+            "Role",
+            "角色",
+            "权限分组，决定用户可以访问的页面和操作。",
+            [
+                {"label": "角色名称", "description": "角色显示名称。"},
+                {"label": "角色编码", "description": "角色唯一编码。"},
+            ],
+        ),
     ]
 
     for module in modules:
         module_id = module["id"]
         if module_id in {"dashboard", "access_control"}:
             continue
-        entity_name = "".join(part.title() for part in module_id.split("_"))
-        data_sources.append(
+        entity_name = _module_entity_name(module_id)
+        entities.append(
             {
-                "id": f"{module_id}_source",
-                "name": f"{module['name']}数据源",
-                "type": datasource_type,
-                "entities": [entity_name],
-                "description": f"提供{module['name']}相关列表、详情和状态数据。",
+                **_entity_definition(
+                    entity_name,
+                    entity_name,
+                    f"{module['name']}相关的核心业务对象。",
+                    _default_entity_fields(),
+                ),
+                "module_id": module_id,
             }
         )
 
-    return data_sources
+    return entities
+
+
+def _module_entity_name(module_id: str) -> str:
+    """从模块 id 派生业务实体名，去掉 management 等后缀得到干净实体名。"""
+
+    parts = [
+        part for part in str(module_id or "").split("_") if part
+    ]
+    if parts and parts[-1] == "management":
+        parts = parts[:-1]
+    if not parts:
+        parts = [str(module_id or "core")]
+    return "".join(part.title() for part in parts)
+
+
+def _default_entity_fields() -> list[dict[str, Any]]:
+    """生成不依赖需求关键词的通用实体展示信息兜底（不含字段名与类型）。"""
+
+    return [
+        {
+            "label": "名称",
+            "description": "业务对象名称。",
+        },
+        {
+            "label": "编码",
+            "description": "业务编码，可用于检索与去重。",
+        },
+        {
+            "label": "状态",
+            "description": "业务状态。",
+        },
+        {
+            "label": "说明",
+            "description": "补充说明。",
+        },
+    ]
+
+
+def _entity_definition(
+    entity_id: str,
+    name: str,
+    description: str,
+    fields: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """构造业务实体对象，供确定性默认数据源使用。"""
+
+    return {
+        "id": entity_id,
+        "name": name,
+        "description": description,
+        "fields": fields,
+    }
 
 
 def _business_flows(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -589,7 +652,7 @@ def create_requirement_spec(
         "user_roles": roles,
         "feature_modules": modules,
         "pages": _pages(modules),
-        "data_sources": _data_sources(modules, effective_datasource_type),
+        "entities": _entities(modules),
         "business_flows": _business_flows(modules),
         "acceptance_criteria": _acceptance_criteria(app_name),
         "clarification_questions": [],
@@ -622,14 +685,9 @@ def create_requirement_spec(
             {"name": "业务页面", "path": "/", "module_id": "core", "description": "业务页面。"},
             "pageId",
         ),
-        "data_sources": (
-            "source",
-            {
-                "name": "业务数据源",
-                "type": effective_datasource_type,
-                "entities": [],
-                "description": "业务数据。",
-            },
+        "entities": (
+            "entity",
+            {"name": "业务实体", "description": "业务实体。", "fields": []},
         ),
         "business_flows": ("flow", {"name": "业务流程", "steps": []}),
     }
@@ -648,13 +706,17 @@ def create_requirement_spec(
             and isinstance(agent_spec.get(key), list)
         )
         spec[key] = normalized if normalized or has_authoritative_list else default_spec[key]
-    for source in spec["data_sources"]:
-        entities = source.get("entities")
-        source["entities"] = (
-            [str(item) for item in entities if str(item).strip()]
-            if isinstance(entities, list)
-            else []
-        )
+    spec["entities"] = normalize_entities(
+        spec.get("entities"),
+        with_types=False,
+    )
+    spec = _migrate_legacy_data_sources(spec)
+    # 保留已有实体的稳定 id：新内容覆盖业务字段，旧 id 不被模型或编辑器改写。
+    spec["entities"] = merge_entities(
+        (existing_spec or {}).get("entities"),
+        spec["entities"],
+        with_types=False,
+    )
     for flow in spec["business_flows"]:
         steps = flow.get("steps")
         flow["steps"] = (
@@ -706,7 +768,7 @@ def create_requirement_spec(
         **(spec.get("app_info") if isinstance(spec.get("app_info"), dict) else {}),
         "summary": merged_summary,
     }
-    spec = _preserve_stable_data_source_ids(existing_spec, spec)
+    spec.pop("data_sources", None)
     return apply_authoritative_datasource_type(spec, effective_datasource_type)
 
 
@@ -743,69 +805,32 @@ def _merged_requirement_summary(
     return f"{existing_summary}；最新调整：{latest_request}"
 
 
-def _preserve_stable_data_source_ids(
-    existing_spec: dict[str, Any] | None,
-    spec: dict[str, Any],
-) -> dict[str, Any]:
-    """在模型或编辑器改变数据源内容时恢复已有数据源的稳定 id。"""
+def _migrate_legacy_data_sources(spec: dict[str, Any]) -> dict[str, Any]:
+    """把旧版 RequirementSpec 的 data_sources 实体拍平为顶层 entities。"""
 
-    if not isinstance(existing_spec, dict):
+    if spec.get("entities"):
+        spec.pop("data_sources", None)
         return spec
-    existing_sources = existing_spec.get("data_sources")
-    current_sources = spec.get("data_sources")
-    if not isinstance(existing_sources, list) or not isinstance(current_sources, list):
-        return spec
-
-    existing_by_id = {
-        str(source.get("id")): source
-        for source in existing_sources
-        if isinstance(source, dict) and str(source.get("id") or "").strip()
-    }
-    existing_by_name = {
-        str(source.get("name")).strip(): str(source.get("id"))
-        for source in existing_sources
-        if isinstance(source, dict)
-        and str(source.get("name") or "").strip()
-        and str(source.get("id") or "").strip()
-    }
-    used_ids: set[str] = set()
-    preserved = deepcopy(spec)
-    preserved_sources: list[dict[str, Any]] = []
-    for index, source in enumerate(current_sources):
+    legacy_entities: list[Any] = []
+    for source in spec.get("data_sources") if isinstance(spec.get("data_sources"), list) else []:
         if not isinstance(source, dict):
             continue
-        item = deepcopy(source)
-        candidate_id = str(item.get("id") or "").strip()
-        source_name = str(item.get("name") or "").strip()
-        stable_id = ""
-        matched_existing: dict[str, Any] | None = None
-        if candidate_id in existing_by_id and candidate_id not in used_ids:
-            stable_id = candidate_id
-            matched_existing = existing_by_id[candidate_id]
-        elif source_name in existing_by_name and existing_by_name[source_name] not in used_ids:
-            stable_id = existing_by_name[source_name]
-            matched_existing = existing_by_id.get(stable_id)
-        elif candidate_id:
-            stable_id = candidate_id
-        else:
-            stable_id = _stable_id("source", source_name, index)
-        while stable_id in used_ids:
-            stable_id = f"{stable_id}_{index + 1}"
-        if matched_existing is not None:
-            # 匹配到已有数据源时先恢复隐藏字段，再覆盖模型或编辑器允许修改的字段。
-            item = {**deepcopy(matched_existing), **item}
-        used_ids.add(stable_id)
-        item["id"] = stable_id
-        preserved_sources.append(item)
-    preserved["data_sources"] = preserved_sources
-    return preserved
+        legacy_entities.extend(
+            item
+            for item in (source.get("entities") if isinstance(source.get("entities"), list) else [])
+            if isinstance(item, (dict, str)) and str(item).strip()
+        )
+    spec.pop("data_sources", None)
+    if legacy_entities:
+        spec["entities"] = legacy_entities
+    return spec
 
 
 _EDITOR_ITEM_FIELDS: dict[str, tuple[str, ...]] = {
     "user_roles": ("id", "name", "description", "permissions"),
     "pages": ("pageId", "name", "path", "module_id", "description", "components"),
     "business_flows": ("id", "name", "description", "steps"),
-    "data_sources": ("name", "description"),
+    "entities": ("id", "name", "description", "fields"),
 }
 
 
@@ -821,19 +846,7 @@ def apply_requirement_spec_editor_changes(
     """
 
     # 独立编辑器单测可能没有 workspace；正式工作流会由调用方传入 application.json 类型。
-    effective_datasource_type = datasource_type
-    if effective_datasource_type is None:
-        existing_sources = existing_spec.get("data_sources")
-        existing_types = (
-            [str(item.get("type")) for item in existing_sources if isinstance(item, dict)]
-            if isinstance(existing_sources, list)
-            else []
-        )
-        effective_datasource_type = (
-            existing_types[0]
-            if existing_types and existing_types[0] in {"database", "static", "external_api"}
-            else "database"
-        )
+    effective_datasource_type = datasource_type or "database"
 
     merged = deepcopy(existing_spec)
     existing_app = (
@@ -864,22 +877,18 @@ def apply_requirement_spec_editor_changes(
         }
         sanitized_items: list[dict[str, Any]] = []
         for item in edited_items:
+            if field_name == "entities" and isinstance(item, str):
+                # 兼容旧字符串实体：编辑器提交字符串时归一为实体对象。
+                item = {
+                    "id": item.strip(),
+                    "name": item.strip(),
+                    "description": "",
+                    "fields": [],
+                }
             if not isinstance(item, dict):
                 continue
             item_id = str(item.get(identity_key) or "").strip()
             existing_item = existing_items.get(item_id)
-            if field_name == "data_sources" and existing_item is None:
-                # 数据源 ID 不属于编辑字段；即使提交值被篡改，也按名称找回原始实体等隐藏字段。
-                edited_name = str(item.get("name") or "").strip()
-                existing_item = next(
-                    (
-                        candidate
-                        for candidate in existing_spec.get(field_name, [])
-                        if isinstance(candidate, dict)
-                        and str(candidate.get("name") or "").strip() == edited_name
-                    ),
-                    None,
-                )
             sanitized = deepcopy(existing_item or {})
             sanitized.update(
                 {
@@ -915,9 +924,8 @@ def save_requirement_spec_draft(
     workspace = Path(request.workspace_root).expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError("需求文档工作区不存在或不是目录。")
-    datasource_type = ensure_requirements_datasource_type(
-        read_application_datasource_type(workspace)
-    )
+    # 应用级不再有数据源类型；数据源由实体设计阶段选择，需求草稿保存不再读取 application.json。
+    datasource_type = datasource_type_from_artifact({}, fallback="database")
 
     state: dict[str, Any] = {"workspace": str(workspace)}
     json_path = requirement_spec_json_path(state)
