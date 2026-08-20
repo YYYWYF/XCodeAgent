@@ -1759,6 +1759,7 @@ export default function AiChatPanel({
       setPreviewError(runtimePreviewLaunchError || '前端服务尚未启动完成，暂时无法预览页面')
       return
     }
+    onRightPanelOpenChange(true)
     setPreviewError('')
     setRightPanel({
       type: 'preview',
@@ -1791,6 +1792,7 @@ export default function AiChatPanel({
     codeChanges: WorkspaceCodeChangeSet,
     selectedPath: string
   ): void => {
+    onRightPanelOpenChange(true)
     setRightPanel({ type: 'diff', codeChanges, selectedPath })
   }
 
@@ -2692,7 +2694,6 @@ export default function AiChatPanel({
             selectedPath={rightPanel.selectedPath}
             onClose={() => {
               setRightPanel(undefined)
-              onRightPanelOpenChange(false)
             }}
           />
         </div>

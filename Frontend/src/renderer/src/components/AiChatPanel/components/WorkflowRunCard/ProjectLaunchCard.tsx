@@ -3,18 +3,12 @@ import {
   CloseCircleOutlined,
   GlobalOutlined,
   LoadingOutlined,
-  MinusCircleOutlined,
   RocketOutlined
 } from '@ant-design/icons'
 import { Button, message, Typography } from 'antd'
 import { useMemo } from 'react'
 import type { ReactElement } from 'react'
-import type {
-  WorkflowEvent,
-  WorkflowLaunchPart,
-  WorkflowLaunchResult,
-  WorkflowRunPayload
-} from '../../../../typings'
+import type { WorkflowEvent, WorkflowLaunchResult, WorkflowRunPayload } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { normalizePreviewUrl, openPreviewWindow } from '../../../../utils/previewUrl'
 import './ProjectLaunchCard.less'
@@ -166,13 +160,6 @@ export default function ProjectLaunchCard({ workflow }: Props): ReactElement {
         </div>
       )}
 
-      {completed && (launch?.backend || launch?.frontend) && (
-        <div className={cx('project-launch-services')}>
-          {launch?.backend ? <ServiceRow name="后端服务" part={launch.backend} /> : null}
-          {launch?.frontend ? <ServiceRow name="前端服务" part={launch.frontend} /> : null}
-        </div>
-      )}
-
       {failed && (
         <div className={cx('project-launch-error')}>
           <span className={cx('project-launch-error-icon')} aria-hidden="true">
@@ -195,43 +182,6 @@ export default function ProjectLaunchCard({ workflow }: Props): ReactElement {
         </div>
       )}
     </section>
-  )
-}
-
-/** 展示单个后端或前端服务的启动结果。 */
-function ServiceRow({ name, part }: { name: string; part: WorkflowLaunchPart }): ReactElement {
-  const serviceStatus = String(part.status || 'unknown')
-  const running = serviceStatus === 'running'
-  const skipped = serviceStatus === 'skipped'
-  const failed = serviceStatus === 'failed'
-  return (
-    <div className={cx('project-launch-service', serviceStatus)}>
-      <span className={cx('project-launch-service-icon')} aria-hidden="true">
-        {running ? (
-          <LoadingOutlined spin />
-        ) : skipped ? (
-          <MinusCircleOutlined />
-        ) : failed ? (
-          <CloseCircleOutlined />
-        ) : (
-          <CheckCircleOutlined />
-        )}
-      </span>
-      <Text className={cx('project-launch-service-name')}>{name}</Text>
-      <Text className={cx('project-launch-service-message')} type="secondary">
-        {String(part.message || '')}
-      </Text>
-      <span
-        className={cx(
-          'project-launch-service-status',
-          running && 'running',
-          skipped && 'skipped',
-          failed && 'failed'
-        )}
-      >
-        {serviceStatusText(serviceStatus)}
-      </span>
-    </div>
   )
 }
 
@@ -296,12 +246,4 @@ function stepStateText(state: StepState): string {
   if (state === 'completed') return '已完成'
   if (state === 'failed') return '失败'
   return '等待中'
-}
-
-/** 返回服务状态的中文文案。 */
-function serviceStatusText(status: string): string {
-  if (status === 'running') return '运行中'
-  if (status === 'skipped') return '已跳过'
-  if (status === 'failed') return '失败'
-  return '未知'
 }
