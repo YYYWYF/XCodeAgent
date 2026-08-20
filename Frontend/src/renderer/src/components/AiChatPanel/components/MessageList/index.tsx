@@ -321,7 +321,7 @@ export default function MessageList({
               )}
             </div>
           ) : (
-            messages.map((message) => {
+            messages.map((message, messageIndex) => {
               const messageLoading = message.id === activeAssistantMessageId
               const entityDesignMessage = isEntityDesignWorkflow(message.workflow)
               // 实体会话内所有消息按对话样式渲染，运行中的临时快照缺少实体
@@ -415,6 +415,12 @@ export default function MessageList({
                   'technical_plan_confirmation',
                   'project_plan_confirmation'
                 ].includes(String(messageClarification?.mode || ''))
+              // 已不再是当前待确认卡的规划确认卡一律锁定：一旦用户操作（留痕）或流程推进，
+              // 其后会出现留痕 user 消息与下一张卡片，该卡便不再是列表末尾。操作类按钮
+              // （确认/放弃/修改）随 disabled 禁用，查看类按钮不读 disabled、仍可点开。
+              // 当前真正待确认的卡是列表末尾消息，其后没有任何消息，因此不受影响、保持可点。
+              const planningArtifactAnswered =
+                Boolean(isPlanningArtifactConfirmationCard) && messageIndex < messages.length - 1
               const isPlanningStageRunningCard =
                 message.workflow &&
                 isStructuredPlanningWorkflow(message.workflow) &&
@@ -562,7 +568,11 @@ export default function MessageList({
                             />
                           ) : showWorkflowCard ? (
                             <WorkflowRunCard
-                              disabled={loading || interactionAvailability !== 'active'}
+                              disabled={
+                                loading ||
+                                interactionAvailability !== 'active' ||
+                                planningArtifactAnswered
+                              }
                               interactionAvailability={interactionAvailability}
                               onEntityDesignGateJump={onEntityDesignGateJump}
                               onSubmitClarification={onSubmitClarification}
