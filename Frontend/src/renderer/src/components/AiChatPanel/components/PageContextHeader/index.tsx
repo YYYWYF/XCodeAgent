@@ -2,6 +2,7 @@ import {
   ApiOutlined,
   CheckOutlined,
   ClockCircleOutlined,
+  CloseCircleOutlined,
   DatabaseOutlined,
   EllipsisOutlined,
   ExpandOutlined,
@@ -9,7 +10,7 @@ import {
   FileTextOutlined,
   CloseOutlined
 } from '@ant-design/icons'
-import { Button, Dropdown, Popover, Typography } from 'antd'
+import { Button, Dropdown, Popover, Tooltip, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import './PageContextHeader.less'
@@ -33,6 +34,7 @@ type PageContextHeaderProps = {
   pagePath: string
   pageTitle: string
   previewAvailable: boolean
+  previewLaunchError?: string
   previewLaunchLoading: boolean
   status: PageContextStatus
   targetType?: 'page' | 'api' | 'entity'
@@ -83,6 +85,7 @@ export default function PageContextHeader({
   pagePath,
   pageTitle,
   previewAvailable,
+  previewLaunchError = '',
   previewLaunchLoading,
   status,
   targetType = 'page',
@@ -171,6 +174,7 @@ export default function PageContextHeader({
   ]
   const pathText = normalizeDisplayPath(pagePath)
   const canPreviewPage = targetType === 'page' && previewAvailable
+  const previewLaunchFailed = Boolean(previewLaunchError)
 
   return (
     <section
@@ -231,8 +235,27 @@ export default function PageContextHeader({
               onClick={handleTogglePage}
               type="primary"
             >
-              {previewLaunchLoading ? '项目启动' : isPageOpen ? '关闭预览' : '预览页面'}
+              {previewLaunchLoading ? '项目启动中' : isPageOpen ? '关闭预览' : '打开预览'}
             </Button>
+            {!previewLaunchLoading && previewLaunchFailed ? (
+              <Tooltip
+                overlayClassName={cx(
+                  'page-context-preview-error-tooltip',
+                  theme === 'dark' && 'dark'
+                )}
+                placement="bottom"
+                title={previewLaunchError}
+              >
+                <span
+                  aria-label={`启动失败：${previewLaunchError}`}
+                  className={cx('page-context-preview-status', 'is-error')}
+                  tabIndex={0}
+                >
+                  <CloseCircleOutlined aria-hidden="true" />
+                  <span>启动失败</span>
+                </span>
+              </Tooltip>
+            ) : null}
             <Dropdown
               disabled={!canPreviewPage}
               menu={{ items: moreMenuItems }}
