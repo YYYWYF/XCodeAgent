@@ -17,10 +17,10 @@ from app.tools.code_graph_context import create_code_graph_context_tool
 
 
 class CodeGraphAgentScopeTests(unittest.TestCase):
-    """验证代码图只由前后端执行 Agent 消费，并保留文件搜索降级。"""
+    """验证代码图只由仍需要符号导航的前端执行 Agent 消费。"""
 
-    def test_only_frontend_and_data_source_agents_register_code_graph(self) -> None:
-        """Frontend/DataSource 保留代码图工具，其余 Agent 不得注册。"""
+    def test_only_frontend_agent_registers_code_graph(self) -> None:
+        """Frontend 保留代码图工具，DataSource 与只读规划 Agent 均不注册。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             user_skills_backend = FilesystemBackend(root_dir=workspace, virtual_mode=True)
@@ -48,19 +48,18 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                 repair = create_repair_planner_agent("model", **common)
 
         self.assertIn("code_graph_context", _tool_names(frontend))
-        self.assertIn("code_graph_context", _tool_names(data_source))
+        self.assertNotIn("code_graph_context", _tool_names(data_source))
         self.assertNotIn("code_graph_context", _tool_names(database))
         self.assertNotIn("code_graph_context", _tool_names(repair))
-        for agent in (frontend, data_source):
-            prompt = " ".join(str(agent.get("system_prompt") or "").split())
-            self.assertIn("Process dispatched tasks one by one by `task_id`", prompt)
-            self.assertIn("do not repeat the same graph query", prompt)
-            self.assertIn("always read the current source file", prompt)
-        for agent in (database, repair):
+        prompt = " ".join(str(frontend.get("system_prompt") or "").split())
+        self.assertIn("Process dispatched tasks one by one by `task_id`", prompt)
+        self.assertIn("do not repeat the same graph query", prompt)
+        self.assertIn("always read the current source file", prompt)
+        for agent in (data_source, database, repair):
             self.assertNotIn("code_graph_context", str(agent.get("system_prompt") or ""))
 
-    def test_execution_prompts_define_graph_validity_and_fallback(self) -> None:
-        """正式任务提示词必须逐 task 查询并在空结果时读取真实源码。"""
+    def test_frontend_execution_prompt_keeps_graph_fallback_only(self) -> None:
+        """Frontend 保留图降级契约，DataSource 执行提示词不再注入该模块。"""
 
         frontend_prompt = _frontend_generation_prompt(
             project_plan={"app": {"name": "demo"}},
@@ -72,20 +71,20 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
             build_task_plan={"summary": {}},
             tasks=[{"id": "backend-task", "allowed_paths": ["backend/src/**"]}],
         )
-        for prompt in (frontend_prompt, data_source_prompt):
-            with self.subTest(prompt=prompt[:40]):
-                compact_prompt = " ".join(prompt.split())
-                self.assertIn("Process dispatched tasks one by one by `task_id`", compact_prompt)
-                self.assertIn("`status` is `ready`", compact_prompt)
-                self.assertIn("all four result collections empty", compact_prompt)
-                self.assertIn("do not repeat the same graph query", compact_prompt)
-                self.assertIn("always read the current source file", compact_prompt)
-                self.assertIn("never expands the task's authorized paths", compact_prompt)
+        compact_prompt = " ".join(frontend_prompt.split())
+        self.assertIn("Process dispatched tasks one by one by `task_id`", compact_prompt)
+        self.assertIn("`status` is `ready`", compact_prompt)
+        self.assertIn("all four result collections empty", compact_prompt)
+        self.assertIn("do not repeat the same graph query", compact_prompt)
+        self.assertIn("always read the current source file", compact_prompt)
+        self.assertIn("never expands the task's authorized paths", compact_prompt)
+        self.assertNotIn("Code graph navigation contract", data_source_prompt)
+        self.assertNotIn("code_graph_context", data_source_prompt)
 
         self.assertIn("Do not run project-level dependency installation", frontend_prompt)
         self.assertIn("Do not call `pnpm install`, `npm install`, or `npx tsc`", frontend_prompt)
         self.assertIn("outer integration-test phase performs the repository checks", frontend_prompt)
-        self.assertIn("Do not run project-level dependency installation", data_source_prompt)
+        self.assertIn("Do not install dependencies", data_source_prompt)
         self.assertNotIn("regular backend verification", data_source_prompt)
 
     def test_external_api_execution_prompt_does_not_load_database_rules(self) -> None:
@@ -110,9 +109,8 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         )
 
         self.assertIn("springboot-external-api-generate", prompt)
-        self.assertIn("DTO/HTTP Client", prompt)
-        self.assertNotIn("springboot-mybatis-generate Skill", prompt)
-        self.assertIn("禁止生成 Entity/PO", prompt)
+        self.assertNotIn("springboot-mybatis-generate/SKILL.md", prompt)
+        self.assertIn("external_api", prompt)
 
     def test_frontend_static_skill_is_scoped_to_current_tasks(self) -> None:
         """项目级存在 static 来源时，普通页面批次不误注入 static Skill。"""

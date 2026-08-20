@@ -1047,7 +1047,6 @@ def create_build_task_plan(
             else "blocked"
         ),
         "generated_at": datetime.now(UTC).isoformat(),
-        "source_project_plan_version": project_plan["version"],
         "build_execution_scope": deepcopy(build_execution_scope or context.get("scope") or {}),
         "confirmation_status": "pending",
         "confirmed_at": None,

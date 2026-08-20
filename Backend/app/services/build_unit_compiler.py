@@ -69,9 +69,46 @@ def _with_task_unit_metadata(
         **canonical_source_refs,
         **provided_source_refs,
     }
-    # entity_designs 是来源隔离的确定性输入，不能被模型返回的未过滤引用覆盖。
-    if unit_id.startswith("frontend:data:") or unit_id.startswith("backend:endpoint:"):
-        source_refs["entity_designs"] = canonical_source_refs.get("entity_designs", [])
+    # entity_designs 是来源隔离的确定性输入，不能被模型返回的未过滤引用覆盖；
+    # endpoint 任务若声明了实体子集，则只暴露本任务真正实现的实体设计。
+    if (
+        unit_id.startswith("frontend:data:")
+        or unit_id.startswith("backend:endpoint:")
+        or unit_id == "backend:bootstrap"
+    ):
+        canonical_designs = _entity_design_items(
+            canonical_source_refs.get("entity_designs")
+        )
+        requested_entity_ids = _string_list(provided_source_refs.get("entity_ids"))
+        canonical_entity_ids = [
+            str(design.get("entity_id") or "")
+            for design in canonical_designs
+            if str(design.get("entity_id") or "")
+        ]
+        if not requested_entity_ids and len(canonical_entity_ids) == 1:
+            requested_entity_ids = canonical_entity_ids
+        unknown_entity_ids = set(requested_entity_ids) - set(canonical_entity_ids)
+        if unknown_entity_ids:
+            raise ValueError(
+                f"Task {task.get('id') or '<unknown>'} references entities outside "
+                f"{unit_id}: {', '.join(sorted(unknown_entity_ids))}."
+            )
+        if (
+            unit_id.startswith("backend:endpoint:")
+            and canonical_entity_ids
+            and not requested_entity_ids
+        ):
+            raise ValueError(
+                f"Backend endpoint task {task.get('id') or '<unknown>'} must declare "
+                "source_refs.entity_ids."
+            )
+        selected_entity_ids = requested_entity_ids or canonical_entity_ids
+        source_refs["entity_ids"] = selected_entity_ids
+        source_refs["entity_designs"] = [
+            design
+            for design in canonical_designs
+            if str(design.get("entity_id") or "") in set(selected_entity_ids)
+        ]
     task_with_refs = {
         **task,
         "unit_id": unit_id,
@@ -248,6 +285,23 @@ def _unit_source_refs(
                 entity_designs,
                 {"database", "external_api"},
             ),
+        }
+    if unit_id == "backend:bootstrap":
+        backend_designs = _filter_entity_designs_by_source(
+            entity_designs,
+            {"database", "external_api"},
+        )
+        return {
+            **existing,
+            "type": "backend_bootstrap",
+            "target": target,
+            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": [
+                str(design.get("entity_id") or "")
+                for design in backend_designs
+                if str(design.get("entity_id") or "")
+            ],
+            "entity_designs": backend_designs,
         }
     return {
         **existing,

@@ -173,13 +173,13 @@
 | 节点名称 / node_id / 版本 | `data_source_agent`（registry 名 `data-source-generation-agent`）；build 任务 owner=`backend`，遵循 `build-dag.v3` |
 | 节点类型 | Deep Agent（`create_deep_agent`）+ 外层确定性 BuildScheduler 调度与工程验收 harness |
 | DRI / 审核人 / 批准人 | data_source Agent 负责人 / 确定性验收编译器 / 用户（仅高危数据库审批与修复范围扩大时） |
-| 目标与非目标 | 目标：执行批准的后端任务（数据模型、迁移、API、校验、权限），严格服从已确认 API contract 与允许路径，遵守 Java 8 与 springboot-mybatis-generate 技能。非目标：本阶段不运行项目级构建/测试/安装；不改 RequirementSpec/PageDetail/ProjectPlan/API contract/DAG；不静默改契约（改不了就返回 change_request） |
+| 目标与非目标 | 目标：执行批准的 Java 8 后端实现任务，按任务实体来源读取 springboot-mybatis-generate 或 springboot-external-api-generate，严格服从已确认 API Contract、EndpointDetail、EntityDesign 与允许路径。非目标：本阶段不执行数据库结构变更、迁移、种子数据、项目级构建/测试/安装；不改正式规划产物或 DAG；不静默改契约（改不了就返回 change_request） |
 | 触发条件 / 前置条件 | build 节点选择就绪批次后按 owner 分组派发；前置：同批数据库任务已完成（`_database_first_candidates`）、依赖满足、文件锁不冲突、任务已编译确定性验收检查 |
-| 当前提示词及源码位置 | System Prompt：`agents/data_source/agent.py::create_data_source_agent`；执行 Prompt：`agents/data_source/generator.py::_data_source_generation_prompt`（含 skill 调用节、Java 8 禁用清单、禁止验证命令、JSON 结果协议） |
-| 输入 | backend owner tasks（change_scope/allowed_paths/source_refs/endpoint_ids）、BuildTaskPlan summary、ProjectPlan（`api_contracts`/`data_sources` 为唯一字段源）、`selected_skill_names`；工具：code_graph_context、delete_file、受限 execute、get_mysql_config |
+| 当前提示词及源码位置 | System Prompt：`agents/data_source/agent.py::create_data_source_agent`；执行 Prompt：`agents/data_source/generator.py::_data_source_generation_prompt`；定向上下文与任务级 Skill 映射：`agents/data_source/prompt_context.py`。执行 Prompt 仅保留最小任务包、目标正式上下文、单份验证边界和 JSON 结果协议。 |
+| 输入 | backend owner 最小任务包（id/unit/description/change_scope/allowed_paths/target_files/实体与接口引用/required_skill_paths）、目标 API Contract + EndpointDetail + 完整 EntityDesign、`selected_skill_names`；工具：delete_file、受限 execute、get_mysql_config。完整 ProjectPlan、BuildTaskPlan summary、调度验收字段和 Code Graph 不进入 DataSource 模型上下文。 |
 | 输出 | 每 task 结构化 `task_results`（task_id/status=completed\|already_satisfied\|failed/summary/failure_category/failure_reason/change_request）、真实文件 diff（`capture_agent_file_changes` + 批次级快照 diff 校验）、`build_results`、`acceptance_evidence` |
 | 成功与校验规则 | 结果必须覆盖全部任务；真实 diff 必须落在任务授权路径（`_filter_change_set_for_tasks` + `apply_batch_scope_violation`）；`verify_task_file_changes` 用工程验收检查完成态任务（文件操作类型、scope boundary、菜单登记、后端契约绑定——必须实现 endpoint method/path 且 DTO JSON 映射匹配 request/response schema）；Agent 自然语言不是验收证据 |
-| 硬依赖 / 可选依赖 | 硬依赖：确认 API contract/EndpointDetail、WorkspaceSnapshot 代码图、工作区文件权限；可选：MySQL 配置工具、用户技能快照 |
+| 硬依赖 / 可选依赖 | 硬依赖：确认 API Contract/EndpointDetail/EntityDesign、任务级实体引用、工作区文件权限和匹配的内置 Skill；可选：MySQL 配置工具、用户技能快照。DataSource 不依赖 WorkspaceSnapshot 代码图。 |
 | 可并行条件 / 冲突资源 / join 条件 | 与 frontend/database owner 按 owner 组并发（ThreadPoolExecutor）；同 owner 内按文件锁选择兼容批次（`_lock_compatible_batch`，锁来自 lock_scope/change_scope/target_files/allowed_paths）；数据库任务先行；跨 owner 文件通过批次 diff 归属校验 |
 | 副作用 / 授权范围 / 幂等键 / checkpoint | 写 `backend/` 下文件（`permissions mode=data_source`），删除须用 delete_file；受限命令工具；幂等键：`task_id + retry_count`（仅显式 `retry_failed_tasks` 恢复 pending，带 `retry_at` 审计）；checkpoint：SQLite + build-task-plan.json / repair_task_plan.json |
 | 错误分类 | runner/协议异常（`runner_protocol_error`）→ retry 类；代码/契约/质量错误 → repair 类 → 只读 RepairPlanner 编译修复任务（继承父任务授权范围）；范围扩大/改变确认产物 → `requires_user_confirmation`；用户拒绝/不可恢复 → failed → `handle_failure` |
