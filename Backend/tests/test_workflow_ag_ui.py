@@ -1002,6 +1002,25 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertEqual(summary["phase"], "project_planning")
         self.assertEqual(summary["status"], "running")
 
+    def test_progress_summary_does_not_treat_missing_requirement_confirmation_as_false(
+        self,
+    ) -> None:
+        """节点切换增量未携带需求确认字段时不得把已确认文档误报为草稿。"""
+
+        summary = _workflow_progress_summary(
+            {"phase": "ui_confirmation", "status": "completed"},
+            [
+                {
+                    "type": "workflow.node.started",
+                    "node": {"id": "technical_planning", "label": "技术规划"},
+                    "status": "running",
+                }
+            ],
+        )
+
+        self.assertEqual(summary["phase"], "technical_planning")
+        self.assertNotIn("requirementsConfirmed", summary)
+
     def setUp(self) -> None:
         self.cleanup_patcher = patch(
             "app.protocols.workflow.runtime.cleanup_workflow_checkpoints",

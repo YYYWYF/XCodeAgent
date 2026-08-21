@@ -172,7 +172,7 @@ export function planningWorkflowPhase(workflow?: WorkflowRunPayload): string {
     const startedPhase = lastEvent.nodeName || lastEvent.node?.id
     if (startedPhase) return String(startedPhase)
   }
-  return String(workflow?.summary.phase || '')
+  return String(workflow?.summary?.phase || '')
 }
 
 // 从 Workflow 或生命周期快照读取当前需求是否已通过用户确认门禁。
@@ -180,6 +180,15 @@ export function planningRequirementsConfirmed(
   workflow?: WorkflowRunPayload,
   requirementSpecPath?: string
 ): boolean {
+  // ProductPlan、UI 与 TechnicalPlan 都只能消费已确认 RequirementSpec；节点切换的增量帧
+  // 可能暂时缺少该字段或把缺失值投影为 false，此时以下游阶段门禁为权威。
+  if (
+    ['product_planning', 'ui_confirmation', 'technical_planning', 'project_planning'].includes(
+      planningWorkflowPhase(workflow)
+    )
+  ) {
+    return true
+  }
   // 以当前 state/result 中第一个明确布尔值为准；修订首帧的 false 必须覆盖旧快照里的 true。
   for (const source of [workflow?.state, workflow?.result, workflow?.summary]) {
     const value = source?.requirementsConfirmed ?? source?.requirements_confirmed

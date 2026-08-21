@@ -68,4 +68,4 @@ design_intent_analysis
 | `product_planning` | `generating_product_plan` |
 | `ui_confirmation` | `generating_ui_designs` |
 
-回退只允许发生在尚未完成的创建规划阶段。模板生成或进入工作台后不得借此入口修改创建产物。
+回退只允许发生在尚未完成的创建规划阶段。生命周期进入 `ready_for_workbench` 后，底部恢复普通 `/conversation/run` 自由对话，不再显示设计流程输入锁，也不得借设计变更入口修改创建产物。

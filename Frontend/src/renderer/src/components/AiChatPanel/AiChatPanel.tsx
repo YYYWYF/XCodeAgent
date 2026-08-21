@@ -1100,8 +1100,10 @@ export default function AiChatPanel({
   const inputMode: ChatInputMode =
     inputModes[inputModeKey] || (activeDetailTarget.type === 'none' ? 'conversation' : 'design')
   const planningWorkflowStatus = String(planningWorkflow?.summary?.status || '')
+  // 模板就绪后创建规划已经结束；即使界面暂留在产品阶段等待“进入开发”，底部也应恢复普通自由对话。
+  const designChangeWorkflowAvailable = isDesignPhase && !lifecycleReadyForWorkbench
   const designWorkflowActive =
-    isDesignPhase &&
+    designChangeWorkflowAvailable &&
     (!planningWorkflow || ACTIVE_DESIGN_WORKFLOW_STATUSES.has(planningWorkflowStatus))
   const designChangeInputLocked = designWorkflowActive && !designChangeUnlocked
   const designChangeInputEnabled = isDesignPhase && !designChangeInputLocked
@@ -2729,9 +2731,9 @@ export default function AiChatPanel({
                       : handleInputModeChange
                   }
                   onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
-                  // 设计工作台的自由输入始终先做意图识别；当前节点的澄清和确认
-                  // 只能通过上方结构化卡片提交，不能用当前阶段劫持自由输入语义。
-                  onSend={isDesignPhase ? handleDesignChangeSend : handleSend}
+                  // 创建规划仍可修订时，自由输入先做设计意图识别；模板就绪后则恢复普通自由对话。
+                  // 当前节点的澄清和确认只能通过上方结构化卡片提交，不能劫持自由输入语义。
+                  onSend={designChangeWorkflowAvailable ? handleDesignChangeSend : handleSend}
                   onStopGenerating={handleStopGenerating}
                   stopping={stopping}
                   selectedSkills={selectedSkills}

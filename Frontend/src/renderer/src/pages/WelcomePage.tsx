@@ -13,6 +13,7 @@ import {
   MAX_ACTIVE_APPLICATION_PLANS,
   type PersistedActivePlanning
 } from '../service/activeApplicationPlanning'
+import { canOpenApplicationWorkbench } from '../service/applicationStorage'
 import { cx } from '../utils'
 import './WelcomePage.less'
 import './WelcomePageLight.less'
@@ -43,9 +44,14 @@ export default function WelcomePage({
   onStartPlanning,
   theme
 }: Props): JSX.Element {
+  // 已完成初始化的规划仍需保留在内存中供工作台回显，但首页只展示真正未完成的规划。
+  const unfinishedPlannings = activePlannings.filter(
+    (planning) => !canOpenApplicationWorkbench(planning.application, planning.lifecycle)
+  )
+
   return (
     <main
-      className={cx('welcome-page', activePlannings.length > 0 && 'has-active-planning')}
+      className={cx('welcome-page', unfinishedPlannings.length > 0 && 'has-active-planning')}
       data-theme={theme}
     >
       <section className={cx('welcome-shell')}>
@@ -83,17 +89,17 @@ export default function WelcomePage({
 
             <section className={cx('welcome-actions')} aria-label="开始使用 XCodeAgent">
               <CreateApplicationAction
-                activePlanningCount={activePlannings.length}
-                disabled={activePlannings.length >= MAX_ACTIVE_APPLICATION_PLANS}
+                activePlanningCount={unfinishedPlannings.length}
+                disabled={unfinishedPlannings.length >= MAX_ACTIVE_APPLICATION_PLANS}
                 onStartPlanning={onStartPlanning}
                 theme={theme}
               />
               <OpenWorkspaceAction onOpenApplication={onOpenApplication} theme={theme} />
             </section>
 
-            {activePlannings.length > 0 ? (
+            {unfinishedPlannings.length > 0 ? (
               <section className={cx('active-planning-list')} aria-label="未完成的应用计划">
-                {activePlannings.map((planning) => (
+                {unfinishedPlannings.map((planning) => (
                   <ActivePlanningAction
                     application={planning.application}
                     deleting={deletingPlanningIds.has(planning.application.id)}

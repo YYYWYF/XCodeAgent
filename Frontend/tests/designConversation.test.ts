@@ -76,6 +76,20 @@ assert.equal(
 )
 assert.equal(
   planningRequirementsConfirmed({
+    summary: { status: 'running', phase: 'ui_confirmation' },
+    events: [
+      {
+        type: 'workflow.node.started',
+        nodeName: 'technical_planning',
+        status: 'running'
+      }
+    ],
+    state: { requirementsConfirmed: false }
+  } as WorkflowRunPayload),
+  true
+)
+assert.equal(
+  planningRequirementsConfirmed({
     state: { lifecycle: { initialization: { stage: 'generating_product_plan' } } }
   } as WorkflowRunPayload),
   false

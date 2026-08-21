@@ -20,6 +20,14 @@ from app.workspace.plan_documents import (
 )
 
 
+def _requirements_confirmation_projection(result: dict[str, Any]) -> dict[str, bool]:
+    """仅在当前快照明确携带需求确认字段时公开布尔状态，避免增量帧把缺失误报为未确认。"""
+
+    if "requirements_confirmed" not in result:
+        return {}
+    return {"requirementsConfirmed": result.get("requirements_confirmed") is True}
+
+
 def _workflow_progress_summary(
     result: dict[str, Any],
     events: list[dict[str, Any]],
@@ -72,7 +80,7 @@ def _workflow_progress_summary(
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
         "lifecycle": result.get("lifecycle"),
-        "requirementsConfirmed": result.get("requirements_confirmed") is True,
+        **_requirements_confirmation_projection(result),
         "workspaceInspectionProgress": result.get("workspace_scan_progress"),
     }
 
@@ -999,7 +1007,7 @@ def _workflow_summary(
         "clarification": clarification,
         "observability": result.get("observability", {}),
         "lifecycle": result.get("lifecycle"),
-        "requirementsConfirmed": result.get("requirements_confirmed") is True,
+        **_requirements_confirmation_projection(result),
     }
 
 
@@ -1080,7 +1088,7 @@ def _workflow_visual_payload(
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
         "clarification": result.get("clarification", {}),
-        "requirementsConfirmed": result.get("requirements_confirmed") is True,
+        **_requirements_confirmation_projection(result),
         "design_change_submission": result.get("design_change_submission", False),
         "design_change_request": result.get("design_change_request"),
         "design_change_target": result.get("design_change_target"),
