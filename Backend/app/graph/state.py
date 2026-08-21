@@ -153,4 +153,6 @@ class ProjectState(TypedDict, total=False):
     acceptance_adjustment: dict[str, Any]
     accepted: bool
     status: str
+    message: str
+    error: str
     timeline: Annotated[list[str], add]

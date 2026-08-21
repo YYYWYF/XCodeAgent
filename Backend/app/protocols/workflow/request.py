@@ -150,8 +150,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if workflow_action == "retry_failed_tasks":
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
             raise ValueError("retry_failed_tasks 只适用于主工作流的 Build 阶段。")
-        # 显式重试动作拥有最高恢复优先级，不能被旧快照中的事件或自然语言推断覆盖。
-        resume_from = "build"
+        # Build 门禁失败通常表示当前范围还没有可执行 DAG；此时必须回到任务生成，
+        # 否则会反复读取旧范围的 build-task-plan.json 并形成不可恢复的失败循环。
+        resume_from = _retry_failed_execution_node(
+            resume_state,
+            resume_values_from_state,
+        )
     elif small_task_handoff_submission and workflow_scope not in APPLICATION_PLANNING_SCOPES:
         resume_from = "small_task_repair"
     elif build_task_plan_confirmation and workflow_scope != "application_planning":
@@ -232,7 +236,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("workspaceRoot"))
         or _optional_text(application.get("workspaceRoot"))
     )
-    if workflow_action == "retry_failed_tasks":
+    if workflow_action == "retry_failed_tasks" and resume_from == "build":
         # 失败运行的公开快照可能只保留摘要；重试必须从工作区落盘计划补回真实修复候选。
         resume_values_from_state = {
             **resume_values_from_state,
@@ -298,7 +302,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **resume_values_from_state,
         **project_plan_start_values,
         **_debug_resume_values(debug_state, workspace=workspace),
-        "retry_failed_tasks": workflow_action == "retry_failed_tasks",
+        "retry_failed_tasks": (
+            workflow_action == "retry_failed_tasks" and resume_from == "build"
+        ),
         **(
             {"build_task_plan_confirmation": build_task_plan_confirmation}
             if build_task_plan_confirmation
@@ -747,6 +753,52 @@ def _resume_from_state(
                 )
 
     return ""
+
+
+def _retry_failed_execution_node(
+    resume_state: dict[str, Any] | None,
+    resume_values: dict[str, Any],
+) -> str:
+    """让 Build 门禁或 DAG 生成失败回到任务生成，其余失败沿用 Build 重试。"""
+
+    current_scope = resume_values.get("build_execution_scope")
+    build_task_plan = resume_values.get("build_task_plan")
+    planned_scope = (
+        build_task_plan.get("build_execution_scope")
+        if isinstance(build_task_plan, dict)
+        else None
+    )
+    if (
+        isinstance(current_scope, dict)
+        and current_scope
+        and isinstance(planned_scope, dict)
+        and planned_scope
+        and planned_scope != current_scope
+    ):
+        return "prepare_build_tasks"
+
+    build_summary = resume_values.get("build_summary")
+    gate_errors = (
+        build_summary.get("gate_errors")
+        if isinstance(build_summary, dict)
+        else []
+    )
+    if isinstance(gate_errors, list) and any(str(error).strip() for error in gate_errors):
+        return "prepare_build_tasks"
+
+    events = resume_state.get("events") if isinstance(resume_state, dict) else None
+    if isinstance(events, list):
+        for event in reversed(events):
+            if not isinstance(event, dict) or event.get("status") != "failed":
+                continue
+            node_name = _optional_text(event.get("nodeName"))
+            node = _optional_dict(event.get("node"))
+            node_name = node_name or (_optional_text(node.get("id")) if node else "")
+            if node_name == "prepare_build_tasks":
+                return "prepare_build_tasks"
+            if node_name == "build":
+                return "build"
+    return "build"
 
 
 def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:

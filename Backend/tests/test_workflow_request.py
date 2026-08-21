@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.protocols.workflow.request import _build_execution_scope, workflow_run_inputs
+from app.protocols.workflow.request import (
+    _build_execution_scope,
+    _retry_failed_execution_node,
+    workflow_run_inputs,
+)
 
 
 class WorkflowRequestTests(unittest.TestCase):
@@ -1086,6 +1090,57 @@ class WorkflowRequestTests(unittest.TestCase):
             inputs["resume_values"]["build_execution_scope"],
             {"type": "page", "targetId": "page_1"},
         )
+
+    def test_build_gate_failure_retry_returns_to_task_generation(self) -> None:
+        """旧 DAG 的 Build 门禁失败必须重新生成当前范围，不能原地重复 Build。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "重试当前计划任务。",
+                "forwardedProps": {
+                    "workflowAction": "retry_failed_tasks",
+                    "selectedPageId": "customers",
+                    "resumeState": {
+                        "events": [
+                            {
+                                "status": "failed",
+                                "nodeName": "build",
+                            }
+                        ],
+                        "state": {
+                            "buildSummary": {
+                                "status": "failed",
+                                "gate_errors": [
+                                    "Build DAG scope 与当前 Build scope 不一致。"
+                                ],
+                            },
+                            "buildExecutionScope": {
+                                "type": "page",
+                                "targetId": "customers",
+                            },
+                        },
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+        self.assertFalse(inputs["resume_values"]["retry_failed_tasks"])
+
+    def test_scope_mismatch_retry_recovers_without_gate_error_projection(self) -> None:
+        """历史快照缺少 gate_errors 时也应根据计划范围不一致恢复 DAG 生成。"""
+
+        node = _retry_failed_execution_node(
+            None,
+            {
+                "build_execution_scope": {"type": "page", "targetId": "customers"},
+                "build_task_plan": {
+                    "build_execution_scope": {"type": "page", "targetId": "orders"},
+                },
+            },
+        )
+
+        self.assertEqual(node, "prepare_build_tasks")
 
     def test_forwards_explicit_build_execution_scope(self) -> None:
         """AG-UI 请求应把页面/数据源范围作为 Workflow State 的结构化输入。"""

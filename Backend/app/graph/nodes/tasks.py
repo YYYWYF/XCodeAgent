@@ -646,6 +646,11 @@ def _handle_build_task_plan_confirmation(
     action_payload = state.get("build_task_plan_confirmation")
     if not isinstance(action_payload, dict) or not action_payload.get("action"):
         latest_plan = _latest_build_task_plan_from_workspace(state)
+        planned_scope = latest_plan.get("build_execution_scope")
+        # build-task-plan.json 是应用级累计产物，但 pending/confirmed 只属于生成它的目标范围。
+        # 切换页面或接口后必须继续生成当前范围，不能把上一范围的确认状态直接带入 Build。
+        if not isinstance(planned_scope, dict) or planned_scope != build_execution_scope:
+            return None
         if latest_plan.get("confirmation_status") == "pending":
             return _pending_build_task_plan_result(
                 state,

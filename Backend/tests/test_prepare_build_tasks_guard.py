@@ -262,6 +262,33 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
 
         self.assertEqual(payload["actionValues"], ["confirm", "patch", "regenerate"])
 
+    def test_confirmed_plan_from_other_page_does_not_bypass_generation(self) -> None:
+        """切换页面后不得把上一页已确认 DAG 当作当前页计划直接进入 Build。"""
+
+        old_scope = {"type": "page", "targetId": "orders"}
+        current_scope = {"type": "page", "targetId": "customers"}
+        plan = {
+            "schema_version": "build-dag.v3",
+            "status": "ready",
+            "task_graph": {"validation": {"is_valid": True, "errors": []}},
+            "execution": {"batches": []},
+            "task_registry": {},
+            "confirmation_status": "confirmed",
+            "build_execution_scope": old_scope,
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            result = _handle_build_task_plan_confirmation(
+                {"workspace": workspace},
+                {"artifact_type": "technical-plan", "confirmation_status": "confirmed"},
+                current_scope,
+            )
+
+        self.assertIsNone(result)
+
     def test_latest_project_plan_hydrates_confirmed_entity_designs(self) -> None:
         """Build 重读轻量计划时必须回填外置的已确认实体设计。"""
 

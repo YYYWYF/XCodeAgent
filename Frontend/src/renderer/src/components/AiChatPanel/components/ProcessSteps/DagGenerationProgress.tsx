@@ -40,20 +40,23 @@ type Props = {
 export default function DagGenerationProgress({ snapshot }: Props): ReactElement {
   const running = snapshot.stages.some((stage) => stage.status === 'running')
   const failed = snapshot.stages.some((stage) => stage.status === 'failed')
-  const wasRunning = useRef(running)
-  const [open, setOpen] = useState(running)
+  const pending = snapshot.stages.some((stage) => stage.status === 'pending')
+  // 子阶段完成与下一阶段启动之间仍属于生成中，不能把累计旧任务误报成本轮已生成。
+  const generating = !failed && (running || pending)
+  const wasRunning = useRef(generating)
+  const [open, setOpen] = useState(generating)
 
   useEffect(() => {
-    if (running) setOpen(true)
+    if (generating) setOpen(true)
     else if (wasRunning.current) setOpen(false)
-    wasRunning.current = running
-  }, [running])
+    wasRunning.current = generating
+  }, [generating])
 
   return (
     <details
-      className={cx('dag-generation', running ? 'running' : failed ? 'failed' : 'completed')}
+      className={cx('dag-generation', generating ? 'running' : failed ? 'failed' : 'completed')}
       onToggle={(event) => {
-        if (running && !event.currentTarget.open) {
+        if (generating && !event.currentTarget.open) {
           event.currentTarget.open = true
           return
         }
@@ -67,7 +70,7 @@ export default function DagGenerationProgress({ snapshot }: Props): ReactElement
         </span>
         <span className={cx('dag-generation-summary-copy')}>
           <Text strong>任务 DAG 生成明细</Text>
-          <Text type="secondary">{dagGenerationSummary(snapshot, running, failed)}</Text>
+          <Text type="secondary">{dagGenerationSummary(snapshot, generating, failed)}</Text>
         </span>
         <span className={cx('dag-generation-summary-metrics')} aria-hidden="true">
           <i>{snapshot.summary.unitCount} Units</i>
