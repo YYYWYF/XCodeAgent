@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from app.graph.subgraphs.testing import (
+    INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE,
     INTEGRATION_TEST_PROGRESS_REPORTER_KEY,
     _check_progress_snapshot_writer,
     _repair_scoped_tasks,
@@ -15,6 +16,7 @@ from app.graph.subgraphs.testing import (
     frontend_performance_test,
     generate_unit_tests,
     integration_test,
+    main_quality_gate,
     repair_planning,
     skip_frontend_performance,
     _source_layer,
@@ -57,6 +59,88 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                 "backend/src/main/java/demo/leave/LeaveRequestService.java"
             ),
             "backend",
+        )
+
+    def test_failed_quality_gate_reports_repair_before_planner_runs(self) -> None:
+        """门禁确认失败后必须立即广播修复准备事件，不等待 RepairPlanner 返回。"""
+
+        emitted: list[dict] = []
+        with patch(
+            "app.graph.subgraphs.testing.evaluate_quality_gate",
+            return_value={
+                "passed": False,
+                "needs_revision": True,
+                "revision_requests": [],
+            },
+        ), patch(
+            "app.graph.subgraphs.testing.write_test_report_json",
+            return_value="/tmp/test-report.json",
+        ):
+            main_quality_gate(
+                {
+                    "test_results": [{"id": "backend_build", "passed": False}],
+                    "integration_repair_enabled": True,
+                    "repair_iteration": 0,
+                    "max_repair_iterations": 3,
+                },
+                {
+                    "configurable": {
+                        INTEGRATION_TEST_PROGRESS_REPORTER_KEY: emitted.append,
+                    }
+                },
+            )
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["type"], INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE)
+        self.assertIn("正在分析失败原因", emitted[0]["message"])
+
+    def test_nested_repair_progress_reaches_outer_custom_stream(self) -> None:
+        """嵌套 Testing Subgraph 的修复事件必须沿外层进度回调立即写入 custom stream。"""
+
+        emitted: list[dict] = []
+
+        def invoke_subgraph(input_state: dict, *, config: dict) -> dict:
+            """模拟质量门禁在 RepairPlanner 前通过配置回调广播修复状态。"""
+
+            reporter = config["configurable"][INTEGRATION_TEST_PROGRESS_REPORTER_KEY]
+            reporter(
+                {
+                    "type": INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE,
+                    "message": "质量门禁未通过，正在分析失败原因并准备局部修复。",
+                }
+            )
+            return {
+                **input_state,
+                "test_results": [],
+                "test_events": [],
+                "test_report": {},
+                "quality_gate_passed": False,
+                "needs_revision": True,
+                "revision_requests": [],
+                "repair_task_plan": {},
+                "repair_tasks": [],
+                "integration_next_action": "handle_failure",
+                "code_changes": {},
+                "code_change_sets": [],
+            }
+
+        with patch(
+            "app.graph.subgraphs.testing.get_stream_writer",
+            return_value=emitted.append,
+        ), patch(
+            "app.graph.subgraphs.testing._testing_subgraph.invoke",
+            side_effect=invoke_subgraph,
+        ):
+            integration_test({"repair_iteration": 0, "max_repair_iterations": 3})
+
+        self.assertEqual(
+            emitted,
+            [
+                {
+                    "type": INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE,
+                    "message": "质量门禁未通过，正在分析失败原因并准备局部修复。",
+                }
+            ],
         )
 
     def test_test_events_accumulate_across_all_nodes(self) -> None:

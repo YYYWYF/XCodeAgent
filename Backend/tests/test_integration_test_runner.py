@@ -13,6 +13,64 @@ from app.services.test_validation import create_revision_requests, evaluate_qual
 
 
 class IntegrationTestRunnerTests(unittest.TestCase):
+    def test_frontend_build_failure_skips_backend_build_immediately(self) -> None:
+        """前端构建阻塞失败后不得再启动 Maven，后端步骤只记录未执行。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            frontend = root / "frontend"
+            backend = root / "backend"
+            frontend.mkdir()
+            backend.mkdir()
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"vite build"}}',
+                encoding="utf-8",
+            )
+            (frontend / "pnpm-lock.yaml").write_text(
+                "lockfileVersion: '9.0'",
+                encoding="utf-8",
+            )
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def fake_run(argv, **kwargs):
+                """只让前端 build 失败，并记录是否错误启动了 Maven。"""
+
+                calls.append(argv)
+                failed = argv[-2:] == ["run", "build"]
+                return SimpleNamespace(
+                    returncode=1 if failed else 0,
+                    stdout="TypeScript compilation failed" if failed else "ok",
+                    stderr="",
+                )
+
+            with (
+                patch(
+                    "app.services.integration_test_runner.shutil.which",
+                    side_effect=lambda name: name,
+                ),
+                patch(
+                    "app.services.integration_test_runner.subprocess.run",
+                    side_effect=fake_run,
+                ),
+            ):
+                result = run_integration_checks(
+                    {"workspace": workspace},
+                    phase="build",
+                )
+
+        frontend_build = next(
+            item for item in result["test_results"] if item["id"] == "frontend_build"
+        )
+        backend_build = next(
+            item for item in result["test_results"] if item["id"] == "backend_build"
+        )
+        self.assertFalse(frontend_build["passed"])
+        self.assertTrue(backend_build["passed"])
+        self.assertTrue(backend_build["skipped"])
+        self.assertIn("未执行", backend_build["evidence"])
+        self.assertFalse(any("clean" in argv and "install" in argv for argv in calls))
+
     def test_backend_checks_run_when_backend_project_exists(self) -> None:
         """应用级不再有数据源类型；存在后端 Maven 工程时执行前后端质量门。"""
 

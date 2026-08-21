@@ -21,7 +21,7 @@ WORKFLOW_NODE_LABELS = {
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
     "integration_test": "集成测试与质量门禁",
-    "small_task_repair": "局部修复任务执行",
+    "small_task_repair": "局部修复任务",
     "launch_project": "启动本地预览",
     "acceptance": "用户验收",
     "finalize_project": "完成项目",

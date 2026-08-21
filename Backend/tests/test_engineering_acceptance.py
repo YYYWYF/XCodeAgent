@@ -820,6 +820,22 @@ class EngineeringAcceptanceTests(unittest.TestCase):
 
         self.assertEqual(unauthorized, ["frontend/vite.config.ts"])
 
+    def test_batch_scope_accepts_nested_file_under_directory_authorization(self) -> None:
+        """目录级修复授权必须覆盖其内部源码，避免成功修复被误判为越权。"""
+
+        unauthorized = unauthorized_batch_paths(
+            {"files": [{"path": "frontend/src/index.tsx"}]},
+            [
+                {
+                    "allowed_paths": ["frontend"],
+                    "target_files": ["frontend/package.json"],
+                    "change_scope": [],
+                }
+            ],
+        )
+
+        self.assertEqual(unauthorized, [])
+
     def test_database_task_compiles_gap_and_approval_checks(self) -> None:
         """数据库任务只生成 schema gap 与高风险审批工程检查。"""
 

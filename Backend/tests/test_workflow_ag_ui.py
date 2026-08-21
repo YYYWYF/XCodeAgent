@@ -417,6 +417,46 @@ class FakeIntegrationProgressGraph:
         )
 
 
+class FakeImmediateRepairProgressGraph:
+    async def astream(self, initial_state, *, config, stream_mode):
+        """模拟失败门禁先发修复准备进度，再完成集成测试节点。"""
+
+        yield "custom", {
+            "type": "integration_test.checks",
+            "checks": [
+                {
+                    "id": "backend_build",
+                    "name": "后端构建检查",
+                    "status": "failed",
+                    "required": True,
+                    "evidence": "compilation failure",
+                }
+            ],
+        }
+        yield "custom", {
+            "type": "integration_test.repair.started",
+            "message": "质量门禁未通过，正在分析失败原因并准备局部修复。",
+        }
+        yield "updates", {
+            "integration_test": {
+                "phase": "integration_test",
+                "status": "completed",
+                "quality_gate_passed": False,
+                "integration_next_action": "small_task_repair",
+                "test_results": [
+                    {
+                        "id": "backend_build",
+                        "name": "后端构建检查",
+                        "passed": False,
+                        "required": True,
+                        "evidence": "compilation failure",
+                    }
+                ],
+                "test_report": {"passed": False, "summary": {"passed": 0, "total": 1}},
+                "timeline": ["integration_test"],
+            }
+        }
+
 class FakeDagGenerationProgressGraph:
     """模拟任务 DAG 子阶段实时更新并正常完成。"""
 
@@ -1486,6 +1526,39 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("前端构建检查：已通过", detail)
         self.assertIn("前端 lint 通过：已跳过", detail)
         self.assertNotIn("2/2", detail)
+
+    def test_failed_gate_projects_repair_step_before_integration_node_finishes(self) -> None:
+        """修复 running 帧必须早于集成测试完成帧，避免 RepairPlanner 分析期间界面空白。"""
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeImmediateRepairProgressGraph(),
+                payload={
+                    "threadId": "thread-immediate-repair",
+                    "runId": "run-immediate-repair",
+                    "messages": [{"role": "user", "content": "run integration tests"}],
+                    "forwardedProps": {"resumeFrom": "integration_test"},
+                },
+            )
+            return [frame async for frame in stream]
+
+        frames = _decode_agent_process_frames(asyncio.run(collect()))
+        repair_frames = [
+            frame
+            for frame in frames
+            if frame.get("id") == "workflow:small_task_repair"
+            and frame.get("status") == "running"
+        ]
+        integration_terminal = next(
+            frame
+            for frame in frames
+            if frame.get("id") == "workflow:integration_test"
+            and frame.get("status") == "failed"
+        )
+
+        self.assertGreaterEqual(len(repair_frames), 1)
+        self.assertLess(repair_frames[0]["sequence"], integration_terminal["sequence"])
+        self.assertIn("局部修复任务", repair_frames[0]["title"])
 
     def test_integration_check_projection_preserves_unit_test_counts(self) -> None:
         """单元测试数量字段必须穿过 AG-UI 进度裁剪层到达前端。"""

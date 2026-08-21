@@ -22,6 +22,7 @@ import { openLocalReportFile } from '../../../../utils/reportFile'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import DagGenerationProgress from './DagGenerationProgress'
 import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
+import RepairInProgressPanel from './RepairInProgressPanel'
 import ToolActivityChain from './ToolActivityChain'
 import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
 import './ProcessSteps.less'
@@ -208,6 +209,10 @@ function ProcessStep({
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
+  const isRepairStep = step.nodeName === 'small_task_repair'
+  const hasRepairActivity = isRepairStep && step.status === 'running'
+  const hasRepairCompletion = isRepairStep && step.status === 'completed'
+  const hasRepairPanel = hasRepairActivity || hasRepairCompletion
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
   const expandable =
@@ -218,7 +223,8 @@ function ProcessStep({
     hasDagGeneration ||
     hasProjectPlanUpdate ||
     hasWorkspaceInspection ||
-    hasWorkspaceInspectionProgress
+    hasWorkspaceInspectionProgress ||
+    hasRepairPanel
   const awaitingInput = waitingForInput && step.status === 'requires_user_input'
   const [open, setOpen] = useState(
     expandable &&
@@ -229,7 +235,8 @@ function ProcessStep({
         hasDagGeneration ||
         hasProjectPlanUpdate ||
         hasWorkspaceInspection ||
-        hasWorkspaceInspectionProgress)
+        hasWorkspaceInspectionProgress ||
+        hasRepairPanel)
   )
 
   useEffect(() => {
@@ -242,7 +249,8 @@ function ProcessStep({
         hasDagGeneration ||
         hasProjectPlanUpdate ||
         hasWorkspaceInspection ||
-        hasWorkspaceInspectionProgress)
+        hasWorkspaceInspectionProgress ||
+        hasRepairPanel)
     ) {
       setOpen(true)
     }
@@ -255,6 +263,7 @@ function ProcessStep({
     hasProjectPlanUpdate,
     hasWorkspaceInspection,
     hasWorkspaceInspectionProgress,
+    hasRepairPanel,
     step.status
   ])
 
@@ -269,6 +278,8 @@ function ProcessStep({
     hasProjectPlanUpdate && 'has-project-plan-update',
     hasWorkspaceInspection && 'has-workspace-inspection',
     hasWorkspaceInspectionProgress && 'has-workspace-inspection-progress',
+    hasRepairPanel && 'has-repair-activity',
+    hasRepairCompletion && 'repair-completed',
     isLast && 'last'
   )
   const summaryContent = (
@@ -313,12 +324,16 @@ function ProcessStep({
           !hasProjectPlanUpdate &&
           !hasWorkspaceInspection &&
           !hasWorkspaceInspectionProgress &&
+          !hasRepairPanel &&
           step.detail && (
             <DetailBlock
               label={step.kind === 'reasoning' ? '思考内容' : '动作详情'}
               value={step.detail}
             />
           )}
+        {hasRepairPanel && (
+          <RepairInProgressPanel completed={hasRepairCompletion} detail={step.detail} />
+        )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
         {step.checks && <FrontendPerformanceReport checks={step.checks} />}
         {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
@@ -483,8 +498,9 @@ function FrontendPerformanceReport({
         { key: 'accessibility', label: '可访问性', value: scores.accessibility },
         { key: 'bestPractices', label: '最佳实践', value: scores.bestPractices },
         { key: 'seo', label: 'SEO', value: scores.seo }
-      ].filter((entry): entry is { key: string; label: string; value: number } =>
-        typeof entry.value === 'number'
+      ].filter(
+        (entry): entry is { key: string; label: string; value: number } =>
+          typeof entry.value === 'number'
       )
     : []
   const metricEntries = metrics
@@ -537,10 +553,7 @@ function FrontendPerformanceReport({
               </span>
               <span className={cx('frontend-performance-score-track')}>
                 <i
-                  className={cx(
-                    'frontend-performance-score-fill',
-                    scoreTone(entry.value)
-                  )}
+                  className={cx('frontend-performance-score-fill', scoreTone(entry.value))}
                   style={{ width: `${Math.max(0, Math.min(100, entry.value))}%` }}
                 />
               </span>

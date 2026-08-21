@@ -530,6 +530,7 @@ def build_workflow_ag_ui_stream(
             ):
                 yield frame
             process_sequence = 1
+            repair_preparation_attempt: int | None = None
             yield _process_frame(
                 encoder,
                 id=_process_step_id(first_node_name, first_node_attempt),
@@ -965,6 +966,28 @@ def build_workflow_ag_ui_stream(
                             ),
                         )
                         continue
+                    if event_type == "integration_test.repair.started":
+                        process_sequence += 1
+                        repair_attempt = node_attempts.get("small_task_repair", 0) + 1
+                        repair_preparation_attempt = repair_attempt
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id("small_task_repair", repair_attempt),
+                            kind="workflow",
+                            status="running",
+                            title=f"正在执行 {_workflow_node_label('small_task_repair')}",
+                            detail=str(
+                                progress.get("message")
+                                or "正在分析失败原因并准备局部修复。"
+                            ),
+                            sequence=process_sequence,
+                            node_name="small_task_repair",
+                            attempt=repair_attempt,
+                            iteration_kind=_iteration_kind(
+                                "small_task_repair", repair_attempt
+                            ),
+                        )
+                        continue
                     if event_type == "small_task.tool_activity":
                         activity = (
                             progress.get("activity")
@@ -1156,7 +1179,55 @@ def build_workflow_ag_ui_stream(
                     ):
                         yield frame
 
-                    for next_node in _workflow_next_nodes(node_name, update):
+                    next_nodes = _workflow_next_nodes(node_name, update)
+                    if (
+                        node_name == "integration_test"
+                        and repair_preparation_attempt is not None
+                    ):
+                        if "small_task_repair" not in next_nodes:
+                            process_sequence += 1
+                            requires_input = (
+                                update.get("integration_next_action")
+                                == "await_user_input"
+                            )
+                            repair_plan = update.get("repair_task_plan")
+                            repair_reason = (
+                                str(repair_plan.get("reason") or "")
+                                if isinstance(repair_plan, dict)
+                                else ""
+                            )
+                            repair_detail = repair_reason or (
+                                "自动修复需要额外确认。"
+                                if requires_input
+                                else "当前失败无法自动修复。"
+                            )
+                            yield _process_frame(
+                                encoder,
+                                id=_process_step_id(
+                                    "small_task_repair", repair_preparation_attempt
+                                ),
+                                kind="workflow",
+                                status=(
+                                    "requires_user_input"
+                                    if requires_input
+                                    else "failed"
+                                ),
+                                title=(
+                                    "局部修复范围需要确认"
+                                    if requires_input
+                                    else "未能启动局部修复"
+                                ),
+                                detail=repair_detail,
+                                sequence=process_sequence,
+                                node_name="small_task_repair",
+                                attempt=repair_preparation_attempt,
+                                iteration_kind=_iteration_kind(
+                                    "small_task_repair", repair_preparation_attempt
+                                ),
+                            )
+                        repair_preparation_attempt = None
+
+                    for next_node in next_nodes:
                         next_attempt = _next_node_attempt(node_attempts, next_node)
                         next_iteration_kind = _iteration_kind(next_node, next_attempt)
                         next_started_result = dict(update)

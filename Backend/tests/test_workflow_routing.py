@@ -8,6 +8,7 @@ from app.graph.workflow import (
     route_detail_confirmation,
     route_prepare_build_tasks,
     route_project_planning,
+    route_small_task_result,
     route_test_validation,
     route_workflow_start,
 )
@@ -169,6 +170,20 @@ class WorkflowRoutingTests(unittest.TestCase):
                 }
             ),
             "handle_failure",
+        )
+
+    def test_successful_small_task_returns_to_integration_test(self) -> None:
+        """局部修复成功后必须重新进入集成测试，不能沿用上一轮 failed 状态。"""
+
+        self.assertEqual(
+            route_small_task_result(
+                {
+                    "status": "in_progress",
+                    "small_task_route": "integration_test",
+                    "integration_next_action": "integration_test",
+                }
+            ),
+            "integration_test",
         )
 
     def test_acceptance_requires_structured_accepted_state(self) -> None:

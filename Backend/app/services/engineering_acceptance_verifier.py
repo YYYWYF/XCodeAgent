@@ -272,14 +272,20 @@ def _allowed_paths(task: dict[str, Any]) -> list[str]:
 
 
 def _path_matches_any(path: str, patterns: list[str]) -> bool:
-    """判断实际文件是否命中任一精确或通配授权路径。"""
+    """判断实际文件是否命中任一精确、目录或通配授权路径。"""
 
-    normalized = path.lstrip("./")
+    normalized = path.replace("\\", "/").lstrip("./").rstrip("/").casefold()
     for pattern in patterns:
-        candidate = pattern.lstrip("./")
-        if candidate.endswith("/**") and normalized.startswith(candidate[:-3].rstrip("/") + "/"):
+        candidate = (
+            pattern.replace("\\", "/").lstrip("./").rstrip("/").casefold()
+        )
+        if not candidate:
+            continue
+        if candidate.endswith("/**") and normalized.startswith(
+            candidate[:-3].rstrip("/") + "/"
+        ):
             return True
-        if fnmatch(normalized, candidate):
+        if normalized.startswith(candidate + "/") or fnmatch(normalized, candidate):
             return True
     return False
 

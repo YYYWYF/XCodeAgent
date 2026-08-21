@@ -295,6 +295,76 @@ class SmallTaskExecutionTests(unittest.TestCase):
         self.assertEqual(results["page-b"]["changedFiles"], ["Frontend/src/PageB.tsx"])
         self.assertEqual(len(execution["codeChangeSets"]), 2)
 
+    def test_directory_authorized_repair_accepts_nested_source_change(self) -> None:
+        """目录级授权内的真实源码修复必须保持 completed，供主图继续回测。"""
+
+        task = {
+            **_task("frontend-build-repair", "frontend/package.json"),
+            "allowed_paths": ["frontend"],
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            target = Path(workspace) / "frontend/src/index.tsx"
+            target.parent.mkdir(parents=True)
+            target.write_text("impor ReactDOM\n", encoding="utf-8")
+
+            def repair_source(*, packet, **_kwargs) -> str:
+                """模拟 Agent 修复目录授权内、但不在 target_files 中的源码。"""
+
+                target.write_text("import ReactDOM\n", encoding="utf-8")
+                return json.dumps({"status": "completed", "summary": "已修复拼写"})
+
+            with patch(
+                "app.services.small_task.invoke_small_task_agent",
+                side_effect=repair_source,
+            ):
+                execution = execute_small_task_batch(
+                    state={"workspace": workspace},
+                    tasks=[task],
+                )
+
+        result = execution["results"][0]
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["changedFiles"], ["frontend/src/index.tsx"])
+        self.assertEqual(execution["unauthorizedPaths"], [])
+
+    def test_successful_repair_node_clears_failed_status_and_requests_retest(self) -> None:
+        """SmallTask 成功必须覆盖上一轮 failed 状态并显式请求重新集成测试。"""
+
+        task = _task("frontend-build-repair", "frontend/src/index.tsx")
+        with patch(
+            "app.graph.nodes.small_task.execute_small_task_batch",
+            return_value={
+                "results": [
+                    {
+                        "taskId": task["id"],
+                        "owner": "frontend",
+                        "status": "completed",
+                        "summary": "已修复前端构建错误",
+                        "changedFiles": ["frontend/src/index.tsx"],
+                        "verification": [],
+                        "alreadySatisfied": False,
+                        "failureReason": None,
+                        "escalation": {},
+                    }
+                ],
+                "codeChangeSets": [],
+            },
+        ):
+            result = small_task_repair(
+                {
+                    "status": "failed",
+                    "small_task_tasks": [task],
+                    "small_task_results": [],
+                    "small_task_code_change_sets": [],
+                    "repair_iteration": 0,
+                }
+            )
+
+        self.assertEqual(result["status"], "in_progress")
+        self.assertEqual(result["small_task_route"], "integration_test")
+        self.assertEqual(result["integration_next_action"], "integration_test")
+        self.assertEqual(result["repair_iteration"], 1)
+
     def test_main_node_stops_for_complex_task_confirmation(self) -> None:
         """SmallTask 返回复杂升级时主图必须暂停并生成正式工作流确认卡。"""
 

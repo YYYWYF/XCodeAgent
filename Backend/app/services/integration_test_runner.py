@@ -83,7 +83,12 @@ def run_integration_checks(
         events.append(result["id"])
     # Static 是纯前端运行时，即使模板保留 pom.xml 也不得触发后端质量门。
     if datasource_type != "static":
-        if phase in {"all", "build"}:
+        if frontend is not None and _has_blocking_failure(frontend_results):
+            backend_results = _backend_checks_skipped_after_frontend_failure(
+                phase=phase,
+                on_progress=on_progress,
+            )
+        elif phase in {"all", "build"}:
             backend_results = _backend_checks(
                 root,
                 log_root,
@@ -908,6 +913,79 @@ def _missing_tool_result(
         status="skipped" if passed else "failed",
         check=result,
     )
+    return result
+
+
+def _has_blocking_failure(results: list[dict[str, Any]]) -> bool:
+    """判断当前顺序检查是否已出现阻塞失败，供后续步骤立即短路。"""
+
+    return any(
+        not bool(result.get("passed")) and bool(result.get("blocking", True))
+        for result in results
+        if isinstance(result, dict)
+    )
+
+
+def _backend_checks_skipped_after_frontend_failure(
+    *,
+    phase: IntegrationCheckPhase,
+    on_progress: CheckProgressCallback | None,
+) -> list[dict[str, Any]]:
+    """前端阻塞失败后生成后端未执行证据，不再启动 Maven 或后端单测。"""
+
+    checks: list[tuple[str, str, bool]] = []
+    if phase in {"all", "build"}:
+        checks.append(("backend_build", "后端构建检查", True))
+    if phase in {"all", "unit"}:
+        checks.append(("backend_unit_tests", "后端单元测试", False))
+    return [
+        _skipped_after_blocking_failure_result(
+            check_id=check_id,
+            name=name,
+            layer="backend",
+            language="java",
+            evidence="前端检查已发生阻塞失败，本步骤未执行并直接进入修复任务。",
+            required=required,
+            on_progress=on_progress,
+        )
+        for check_id, name, required in checks
+    ]
+
+
+def _skipped_after_blocking_failure_result(
+    *,
+    check_id: str,
+    name: str,
+    layer: str,
+    language: str | None,
+    evidence: str,
+    required: bool,
+    on_progress: CheckProgressCallback | None,
+) -> dict[str, Any]:
+    """构造因前置阻塞失败而未执行的检查结果，且不新增第二个门禁失败。"""
+
+    result = {
+        "id": check_id,
+        "name": name,
+        "layer": layer,
+        "language": language,
+        "passed": True,
+        "skipped": True,
+        "required": required,
+        "command": None,
+        "evidence": evidence,
+        "failure_category": None,
+        "execution": {
+            "tool": "none",
+            "argv": [],
+            "cwd": ".",
+            "returncode": None,
+            "timed_out": False,
+            "stdout_log": None,
+            "stderr_log": None,
+        },
+    }
+    report_check_progress(on_progress, status="skipped", check=result)
     return result
 
 

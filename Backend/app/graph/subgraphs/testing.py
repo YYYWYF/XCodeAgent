@@ -28,6 +28,7 @@ from app.workspace.task_documents import write_repair_task_plan_json
 
 
 INTEGRATION_TEST_PROGRESS_REPORTER_KEY = "integration_test_progress_reporter"
+INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE = "integration_test.repair.started"
 IntegrationTestProgressReporter = Callable[[dict[str, Any]], None]
 _FRONTEND_SOURCE_SUFFIXES = {".js", ".jsx", ".ts", ".tsx"}
 _BACKEND_SOURCE_SUFFIXES = {".java"}
@@ -70,6 +71,17 @@ def _check_progress_snapshot_writer() -> IntegrationTestProgressReporter:
     def report(event: dict[str, Any]) -> None:
         """按稳定检查标识更新快照，确保前端不会为同一检查新增重复条目。"""
 
+        if event.get("type") == INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE:
+            writer(
+                {
+                    "type": INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE,
+                    "message": str(
+                        event.get("message")
+                        or "质量门禁未通过，正在分析失败原因并准备局部修复。"
+                    )[:1_000],
+                }
+            )
+            return
         check = event.get("check")
         if not isinstance(check, dict):
             return
@@ -1335,10 +1347,16 @@ def frontend_performance_test(
     }
 
 
-def main_quality_gate(state: ProjectState) -> dict:
+def main_quality_gate(
+    state: ProjectState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """评估质量门禁，并在可自动修复时立即广播修复准备状态。"""
+
     report = evaluate_quality_gate(
         test_results=state.get("test_results", []),
     )
+    _report_repair_started(state, report, _progress_reporter(config))
     report_path = write_test_report_json(state, report)
     return {
         "phase": "integration_test",
@@ -1349,6 +1367,32 @@ def main_quality_gate(state: ProjectState) -> dict:
         "revision_requests": report["revision_requests"],
         "test_events": ["main_quality_gate"],
     }
+
+
+def _report_repair_started(
+    state: ProjectState,
+    report: dict[str, Any],
+    reporter: IntegrationTestProgressReporter | None,
+) -> None:
+    """在 RepairPlanner 分析前发送瞬态进度，避免失败后界面长时间无反馈。"""
+
+    repair_iteration = int(state.get("repair_iteration", 0) or 0)
+    max_repair_iterations = int(state.get("max_repair_iterations", 3) or 3)
+    if (
+        report.get("passed")
+        or state.get("integration_repair_enabled") is False
+        or repair_iteration >= max_repair_iterations
+        or _generation_security_failure(state)
+    ):
+        return
+    if reporter is None:
+        return
+    reporter(
+        {
+            "type": INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE,
+            "message": "质量门禁未通过，正在分析失败原因并准备局部修复。",
+        }
+    )
 
 
 def _task_has_real_repair_paths(task: dict[str, Any]) -> bool:

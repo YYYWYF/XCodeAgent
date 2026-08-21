@@ -22,6 +22,11 @@ const WORKFLOW_NODE_LABELS: Record<string, string> = {
   handle_failure: '失败处理'
 }
 
+type CompletedIntegrationTestCheckSnapshot = {
+  checks: NonNullable<ReturnType<typeof readIntegrationTestChecks>>
+  attempt?: number
+}
+
 /** 组合实时步骤与 Workflow 历史事件，确保重进会话后仍可展示执行进度。 */
 export function processStepsForDisplay(
   steps: ProcessStepRecord[] | undefined,
@@ -31,18 +36,25 @@ export function processStepsForDisplay(
   let displaySteps = sortProcessStepsForDisplay(mergeRecoveredWorkflowSteps(steps, recoveredSteps))
   if (!displaySteps?.length) return displaySteps
   const finalChecks = completedIntegrationTestChecks(workflow)
-  if (finalChecks?.length) {
-    const latestTestStepId = [...displaySteps]
+  if (finalChecks?.checks.length) {
+    const latestTestStep = [...displaySteps]
       .reverse()
       .find(
         (step) =>
           step.nodeName === 'integration_test' || step.id.startsWith('workflow:integration_test')
-      )?.id
-    displaySteps = displaySteps.map((step) =>
-      step.id === latestTestStepId
-        ? { ...step, checks: mergeIntegrationTestChecks(step.checks, finalChecks) }
-        : step
-    )
+      )
+    const sameAttempt =
+      finalChecks.attempt === undefined ||
+      latestTestStep?.attempt === undefined ||
+      finalChecks.attempt === latestTestStep.attempt
+    // 重测节点刚启动时，Workflow 状态仍可能携带上一轮报告；不能把旧失败快照覆盖到新轮次。
+    if (latestTestStep && latestTestStep.status !== 'running' && sameAttempt) {
+      displaySteps = displaySteps.map((step) =>
+        step.id === latestTestStep.id
+          ? { ...step, checks: mergeIntegrationTestChecks(step.checks, finalChecks.checks) }
+          : step
+      )
+    }
   }
 
   const workspaceInspection = completedWorkspaceInspection(workflow)
@@ -207,7 +219,11 @@ export function isStructuredPlanningWorkflow(workflow: WorkflowRunPayload | unde
   if (
     clarificationCandidates.some((value) => {
       const mode = String((value as { mode?: string } | undefined)?.mode || '')
-      return mode.includes('product_plan') || mode.includes('project_plan') || mode.includes('technical_plan')
+      return (
+        mode.includes('product_plan') ||
+        mode.includes('project_plan') ||
+        mode.includes('technical_plan')
+      )
     })
   ) {
     return true
@@ -430,7 +446,7 @@ function workflowTimeline(workflow: WorkflowRunPayload): string[] {
 /** 从 integration_test 完成事件或状态快照读取最终检查清单。 */
 function completedIntegrationTestChecks(
   workflow: WorkflowRunPayload | undefined
-): ReturnType<typeof readIntegrationTestChecks> {
+): CompletedIntegrationTestCheckSnapshot | undefined {
   if (!workflow) return undefined
   const event = [...workflow.events]
     .reverse()
@@ -440,13 +456,24 @@ function completedIntegrationTestChecks(
       ? (event.data.detail as Record<string, unknown>)
       : undefined
   const eventChecks = readIntegrationTestChecks(eventDetail?.testReport ?? event?.data?.testReport)
-  if (eventChecks?.length) return eventChecks
-  return readIntegrationTestChecks(
+  if (eventChecks?.length) {
+    return {
+      checks: eventChecks,
+      attempt: typeof event?.attempt === 'number' ? event.attempt : undefined
+    }
+  }
+  const fallbackChecks = readIntegrationTestChecks(
     workflow.state?.testReport ??
       workflow.state?.test_report ??
       workflow.result?.testReport ??
       workflow.result?.test_report
   )
+  return fallbackChecks?.length
+    ? {
+        checks: fallbackChecks,
+        attempt: typeof event?.attempt === 'number' ? event.attempt : undefined
+      }
+    : undefined
 }
 
 /** 从最新页面细节确认完成事件中读取只读项目计划更新快照。 */

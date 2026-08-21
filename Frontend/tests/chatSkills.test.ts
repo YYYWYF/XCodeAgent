@@ -52,10 +52,7 @@ import {
   filterCatalogSkills,
   reconcileEnabledChatSkills
 } from '../src/renderer/src/components/SkillsPage/skillCatalog'
-import type {
-  UserSkillCatalog,
-  WorkflowRunPayload
-} from '../src/renderer/src/typings'
+import type { UserSkillCatalog, WorkflowRunPayload } from '../src/renderer/src/typings'
 
 test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   const scope = workflowDebugBuildScope({
@@ -1100,7 +1097,10 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
   assert.match(markup, /实现首页/)
   assert.match(markup, /按 DAG 拓扑顺序排列，将在下一阶段执行/)
   assert.match(markup, /build-task-plan\.json/)
-  assert.doesNotMatch(JSON.stringify(snapshot), /raw-model-output|\/workspace\/build-task-plan\.json/)
+  assert.doesNotMatch(
+    JSON.stringify(snapshot),
+    /raw-model-output|\/workspace\/build-task-plan\.json/
+  )
 })
 
 test('旧会话从节点完成事件恢复 DAG 生成详情', () => {
@@ -1312,6 +1312,33 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
   assert.match(markup, /已跳过/)
   assert.match(markup, /通过 3\/3 个测试/)
   assert.doesNotMatch(markup, /<pre>[^<]*已完成 2\/2 项，通过 1 项，跳过 1 项/)
+})
+
+test('局部修复完成态展示紫色结果卡并隐藏普通动作详情', () => {
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: false,
+      steps: [
+        {
+          id: 'workflow:small_task_repair',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 局部修复任务',
+          detail: 'SmallTask Agent 已处理 9 个结果，剩余任务=1',
+          sequence: 1,
+          nodeName: 'small_task_repair',
+          attempt: 1
+        }
+      ]
+    })
+  )
+
+  assert.match(markup, /AUTO REPAIR · COMPLETE/)
+  assert.match(markup, /局部修复任务已完成/)
+  assert.match(markup, /repair-completed/)
+  assert.match(markup, /aria-busy="false"/)
+  assert.match(markup, /SmallTask Agent 已处理 9 个结果/)
+  assert.doesNotMatch(markup, /动作详情/)
 })
 
 test('单元测试生成期间展示运行中的集成检查矩阵', () => {
@@ -1822,6 +1849,81 @@ test('多轮构建测试历史按 attempt 展开并把构建卡挂在对应步�
   )
   assert.equal((markup.match(/构建执行/g) || []).length, 2)
   assert.ok(markup.indexOf('构建执行') < markup.indexOf('集成测试与质量门禁'))
+})
+
+test('集成测试重试轮次不继承上一轮失败的检查快照', () => {
+  const oldChecks = [
+    {
+      id: 'frontend_build',
+      name: '前端构建检查',
+      passed: false,
+      required: true
+    }
+  ]
+  const steps = processStepsForDisplay(
+    [
+      {
+        id: 'workflow:integration_test',
+        kind: 'workflow',
+        status: 'failed',
+        title: '执行失败 集成测试与质量门禁',
+        detail: '上一轮失败',
+        sequence: 1,
+        nodeName: 'integration_test',
+        attempt: 1,
+        checks: oldChecks
+      },
+      {
+        id: 'workflow:small_task_repair',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成 局部修复任务',
+        detail: '修复完成',
+        sequence: 2,
+        nodeName: 'small_task_repair',
+        attempt: 1
+      },
+      {
+        id: 'workflow:integration_test:2',
+        kind: 'workflow',
+        status: 'running',
+        title: '正在执行 集成测试与质量门禁',
+        detail: '正在重新执行检查',
+        sequence: 3,
+        nodeName: 'integration_test',
+        attempt: 2,
+        checks: [
+          {
+            id: 'frontend_install',
+            name: '前端依赖安装检查',
+            status: 'running',
+            required: true
+          }
+        ]
+      }
+    ],
+    {
+      runId: 'run-retest-check-reset',
+      threadId: 'thread-retest-check-reset',
+      summary: { status: 'running', phase: 'integration_test' },
+      events: [
+        {
+          type: 'workflow.node.completed',
+          nodeName: 'integration_test',
+          status: 'failed',
+          attempt: 1,
+          data: { detail: { testReport: { checks: oldChecks } } }
+        }
+      ],
+      state: { testReport: { checks: oldChecks } }
+    }
+  )
+
+  const retestStep = steps?.find((step) => step.id === 'workflow:integration_test:2')
+  assert.deepEqual(
+    retestStep?.checks?.map((check) => [check.id, check.status]),
+    [['frontend_install', 'running']]
+  )
 })
 
 test('运行中任务默认折叠并只显示最新工具活动', () => {
