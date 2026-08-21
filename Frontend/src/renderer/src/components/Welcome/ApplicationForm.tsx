@@ -67,6 +67,7 @@ function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode
 
 export default function ApplicationForm({ form, onSelectProjectParent, selectingParent }: Props) {
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? true
+  const authorizationEnabled = Form.useWatch(['authorization', 'enabled'], form) ?? false
   const trackEnabled = Form.useWatch(['track', 'enable'], form) ?? true
   const apiTrackEnabled = Form.useWatch(['apiTrack', 'enable'], form) ?? true
   const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? true
@@ -339,7 +340,11 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             valuePropName="checked"
             noStyle
           >
-            <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+            <Switch
+              checkedChildren="启用"
+              disabled={authorizationEnabled}
+              unCheckedChildren="关闭"
+            />
           </Form.Item>
         </div>
         <Form.Item
@@ -355,6 +360,46 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
           rules={[{ required: authEnabled, message: '启用认证后请填写一号通clientId' }]}
         >
           <Input disabled={!authEnabled} />
+        </Form.Item>
+      </section>
+
+      <section
+        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !authorizationEnabled && 'application-form-section--disabled')}
+      >
+        <div className={cx('application-form-section-head')}>
+          <SectionTitle icon={<LockOutlined />}>权限控制</SectionTitle>
+          <Form.Item
+            className={cx('application-form-switch')}
+            name={['authorization', 'enabled']}
+            valuePropName="checked"
+            noStyle
+          >
+            <Switch
+              checkedChildren="涉及"
+              unCheckedChildren="不涉及"
+              onChange={(enabled) => {
+                // 权限控制依赖身份认证，关闭权限时同步撤销固定页面的生成意图。
+                if (enabled) {
+                  form.setFields([{ name: ['auth', 'enable'], value: true }])
+                  return
+                }
+                form.setFields([
+                  { name: ['authorization', 'runtimeManagementPageEnabled'], value: false }
+                ])
+              }}
+            />
+          </Form.Item>
+        </div>
+        <Form.Item
+          label="生成运行态权限管理页面"
+          name={['authorization', 'runtimeManagementPageEnabled']}
+          valuePropName="checked"
+        >
+          <Switch
+            checkedChildren="生成"
+            disabled={!authorizationEnabled}
+            unCheckedChildren="不生成"
+          />
         </Form.Item>
       </section>
 

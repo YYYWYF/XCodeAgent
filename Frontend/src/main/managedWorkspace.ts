@@ -2,6 +2,23 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { lstatIfPresent } from './filesystem'
 
+/** 校验 application.json 是否符合当前权限配置契约。 */
+export function assertCurrentApplicationSchema(applicationRecord: Record<string, unknown>): void {
+  if (applicationRecord.schemaVersion !== 3) {
+    throw new Error('无法添加该项目：仅支持 schemaVersion 为 3 的 application.json')
+  }
+  const authorization = applicationRecord.authorization
+  if (
+    !authorization ||
+    typeof authorization !== 'object' ||
+    Array.isArray(authorization) ||
+    typeof (authorization as Record<string, unknown>).enabled !== 'boolean' ||
+    typeof (authorization as Record<string, unknown>).runtimeManagementPageEnabled !== 'boolean'
+  ) {
+    throw new Error('无法添加该项目：application.json 缺少有效的 authorization 配置')
+  }
+}
+
 /** 校验并读取受 XCodeAgent 管理的工作区配置，拒绝缺少真实 .xcodeagent 目录的文件夹。 */
 export async function readManagedWorkspaceApplication(
   workspaceRoot: string
@@ -36,6 +53,7 @@ export async function readManagedWorkspaceApplication(
   if (typeof applicationRecord.appName !== 'string' || !applicationRecord.appName.trim()) {
     throw new Error('无法添加该项目：.xcodeagent/application.json 缺少有效的 appName')
   }
+  assertCurrentApplicationSchema(applicationRecord)
 
   return applicationRecord
 }

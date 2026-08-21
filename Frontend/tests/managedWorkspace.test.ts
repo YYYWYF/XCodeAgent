@@ -24,12 +24,34 @@ test('允许添加规范的 XCodeAgent 本地项目', async () => {
     await fs.mkdir(agentDirectory)
     await fs.writeFile(
       path.join(agentDirectory, 'application.json'),
-      JSON.stringify({ appName: '本地项目' }),
+      JSON.stringify({
+        schemaVersion: 3,
+        appName: '本地项目',
+        authorization: {
+          enabled: false,
+          runtimeManagementPageEnabled: false
+        }
+      }),
       'utf8'
     )
 
     const application = await readManagedWorkspaceApplication(workspaceRoot)
     assert.equal(application.appName, '本地项目')
+  })
+})
+
+/** 验证旧版 application.json 不会通过当前权限配置契约。 */
+test('拒绝非 schemaVersion 3 的工作区配置', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
+    await fs.mkdir(agentDirectory)
+    await fs.writeFile(
+      path.join(agentDirectory, 'application.json'),
+      JSON.stringify({ schemaVersion: 2, appName: '旧版项目' }),
+      'utf8'
+    )
+
+    await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /schemaVersion 为 3/)
   })
 })
 

@@ -10,7 +10,7 @@ import { getBackendBaseUrl, startBackendService, stopBackendService } from './ba
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { lstatIfPresent, movePathToTrashIfPresent, removeDirectoryIfPresent } from './filesystem'
-import { readManagedWorkspaceApplication } from './managedWorkspace'
+import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -1408,6 +1408,7 @@ function setupWorkspaceIpc(): void {
     ) {
       throw new Error('applicationConfig must be an object')
     }
+    assertCurrentApplicationSchema(payload.applicationConfig as Record<string, unknown>)
 
     const projectPath = path.resolve(payload.workspacePath)
     await assertNewProjectDirectory(projectPath)

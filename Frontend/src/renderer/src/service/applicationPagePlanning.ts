@@ -1,10 +1,7 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
-import type {
-  ApplicationConfig,
-  WorkflowConfirmationArtifact
-} from '../typings'
+import type { ApplicationConfig, WorkflowConfirmationArtifact } from '../typings'
 import { DatasourceEnum } from '../typings'
 import { AgUiChatSession } from './agUiAgent'
 import { createAgUiHttpAgent } from './authentication'
@@ -111,14 +108,17 @@ export function buildApplicationPlanningRequest(application: ApplicationConfig):
   const appName = application.appName || application.name || '未命名应用'
   const scenario = application.senario || '用户暂未补充场景说明。'
   const terminal = application.terminal || 'PC'
-  const layout = application.layout ||
-    {
-      type: '',
-      useHeader: true,
-      useFooter: false
-    }
+  const layout = application.layout || {
+    type: '',
+    useHeader: true,
+    useFooter: false
+  }
   const datasource = application.datasource?.type || DatasourceEnum.DB
   const authEnabled = application.auth?.enable ?? false
+  // 规划页可能先于完整 application.json 恢复，缺失权限种子时按未启用处理，避免启动阶段白屏。
+  const authorizationEnabled = application.authorization?.enabled ?? false
+  const runtimeManagementPageEnabled =
+    authorizationEnabled && (application.authorization?.runtimeManagementPageEnabled ?? false)
   return [
     `请为新应用「${appName}」完成需求、产品、UI（可跳过）和技术规划。`,
     `应用场景：${scenario}`,
@@ -126,6 +126,8 @@ export function buildApplicationPlanningRequest(application: ApplicationConfig):
     `导航布局：${layout.type || '由规划阶段确定'}，页头=${layout.useHeader ? '启用' : '禁用'}，页脚=${layout.useFooter ? '启用' : '禁用'}。`,
     `数据源类型：${datasource}。`,
     `认证：${authEnabled ? '启用' : '不启用'}。`,
+    `涉及权限控制：${authorizationEnabled ? '是' : '否'}。`,
+    `生成运行态权限管理页面：${runtimeManagementPageEnabled ? '是' : '否'}。`,
     '本轮按需求文档、产品规划、UI 设计（可按需跳过）和技术规划顺序推进，不直接生成业务代码。'
   ].join('\n')
 }

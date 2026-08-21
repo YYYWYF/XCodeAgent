@@ -138,6 +138,7 @@ function _hasConnectionFields(value: Record<string, unknown>, keys: string[]): b
 // 把新建应用表单转换为可写入 application.json 的初始配置。
 export function buildApplicationSchema(values: ApplicationDraft): ApplicationSchemaConfig {
   return {
+    schemaVersion: 3,
     appName: values.appName.trim(),
     appIcon: values.appIcon.trim(),
     senario: values.senario.trim(),
@@ -149,6 +150,7 @@ export function buildApplicationSchema(values: ApplicationDraft): ApplicationSch
     menus: { ...values.menus, homeMenuKey: '', items: [] },
     apis: [],
     auth: values.auth,
+    authorization: values.authorization,
     track: values.track,
     apiTrack: values.apiTrack,
     environment: values.environment,

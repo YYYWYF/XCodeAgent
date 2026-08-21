@@ -37,6 +37,7 @@ export const initialApplicationDraft: ApplicationDraft = {
   },
   envText: '',
   auth: { enable: false, authnSource: '', yht: { clientId: '' } },
+  authorization: { enabled: false, runtimeManagementPageEnabled: false },
   track: { enable: false, uploadId: '', apiHost: '', method: 'post' },
   apiTrack: { enable: false, businessId: '', traceBaggage: '', apiTrackHost: '' },
   menus: { enable: true, rootPath: '/page' },
