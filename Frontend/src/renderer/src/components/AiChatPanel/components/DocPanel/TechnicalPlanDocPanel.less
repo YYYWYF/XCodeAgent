@@ -1,0 +1,813 @@
+.@{class-prefix}-technical-plan-doc-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+  color: var(--wb-text);
+  font-size: 12px;
+  container-type: inline-size;
+}
+
+.@{class-prefix}-technical-plan-subtitle,
+.@{class-prefix}-technical-plan-section-title,
+.@{class-prefix}-technical-plan-entity-heading {
+  display: flex;
+  align-items: center;
+}
+
+.@{class-prefix}-technical-plan-section-tabs {
+  position: sticky;
+  top: -16px;
+  z-index: 3;
+  display: flex;
+  align-items: stretch;
+  gap: 40px;
+  min-width: 0;
+  margin: -16px -18px 0;
+  padding: 16px 18px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--wb-border);
+  background: var(--wb-canvas);
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.@{class-prefix}-technical-plan-section-tab {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 0 2px 10px;
+  border: 0;
+  color: var(--wb-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  transition: color 0.18s ease;
+
+  &::after {
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: transparent;
+    content: '';
+    transition:
+      background 0.18s ease,
+      box-shadow 0.18s ease;
+  }
+
+  &:hover,
+  &.@{class-prefix}-is-active {
+    color: var(--wb-accent);
+  }
+
+  &.@{class-prefix}-is-active {
+    font-weight: 600;
+  }
+
+  &.@{class-prefix}-is-active::after {
+    background: var(--wb-accent);
+    box-shadow: 0 -1px 5px color-mix(in srgb, var(--wb-accent) 24%, transparent);
+  }
+
+  &:focus-visible {
+    border-radius: 3px;
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: -2px;
+  }
+}
+
+.@{class-prefix}-technical-plan-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.@{class-prefix}-technical-plan-section-title {
+  gap: 6px;
+  color: var(--wb-text);
+  font-size: 12px;
+  font-weight: 600;
+
+  .anticon {
+    color: var(--wb-accent);
+    font-size: 13px;
+  }
+}
+
+.@{class-prefix}-technical-plan-architecture {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.@{class-prefix}-technical-plan-architecture-layer {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 8px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-surface);
+
+  > span {
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+  }
+
+  > strong {
+    overflow: hidden;
+    color: var(--wb-text);
+    font-size: 10px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > .anticon {
+    position: absolute;
+    right: 50%;
+    bottom: -8px;
+    z-index: 1;
+    padding: 2px;
+    color: var(--wb-accent);
+    background: var(--wb-canvas);
+    font-size: 10px;
+    transform: translateX(50%) rotate(90deg);
+  }
+}
+
+.@{class-prefix}-technical-plan-contract-list,
+.@{class-prefix}-technical-plan-endpoint-list,
+.@{class-prefix}-technical-plan-entity-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.@{class-prefix}-technical-plan-contract {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  color: var(--wb-text);
+  background: var(--wb-surface);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
+
+  &:hover,
+  &.is-selected {
+    border-color: var(--wb-accent-border);
+    background: var(--wb-accent-soft);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: 1px;
+  }
+}
+
+.@{class-prefix}-technical-plan-contract-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+
+  strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  code {
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-technical-plan-contract-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 3px;
+
+  em,
+  .@{class-prefix}-technical-plan-lineage {
+    padding: 2px 5px;
+    border: 1px solid var(--wb-border);
+    border-radius: 4px;
+    color: var(--wb-accent);
+    background: var(--wb-surface);
+    font-size: 10px;
+    font-style: normal;
+  }
+
+  em.is-entity {
+    border-color: color-mix(in srgb, var(--wb-code-add-text) 24%, var(--wb-border));
+    color: var(--wb-code-add-text);
+    background: color-mix(in srgb, var(--wb-code-add-text) 9%, var(--wb-canvas));
+  }
+}
+
+.@{class-prefix}-technical-plan-contract-workbench {
+  display: grid;
+  grid-template-columns: minmax(132px, 0.72fr) minmax(252px, 1.55fr);
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.@{class-prefix}-technical-plan-contract-column {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.@{class-prefix}-technical-plan-endpoint-block {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.@{class-prefix}-technical-plan-subtitle {
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+
+  > span:last-child {
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+    font-weight: 400;
+  }
+}
+
+.@{class-prefix}-technical-plan-endpoint {
+  display: grid;
+  grid-template-columns: 48px minmax(72px, 0.85fr) minmax(88px, 1.15fr);
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--wb-border);
+  color: var(--wb-text);
+  background: var(--wb-surface);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
+
+  &:first-child {
+    border-radius: 7px 7px 0 0;
+  }
+  &:last-child {
+    border-radius: 0 0 7px 7px;
+  }
+  &:not(:first-child) {
+    margin-top: -1px;
+  }
+
+  &:hover,
+  &.is-selected {
+    position: relative;
+    z-index: 1;
+    border-color: var(--wb-accent-border);
+    background: var(--wb-accent-soft);
+  }
+
+  code {
+    overflow: hidden;
+    min-width: 0;
+    color: var(--wb-text);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > span:last-child {
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-technical-plan-endpoint-table {
+  overflow: hidden;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-technical-plan-endpoint-head {
+  display: grid;
+  grid-template-columns: 48px minmax(72px, 0.85fr) minmax(88px, 1.15fr);
+  gap: 7px;
+  padding: 7px 8px;
+  color: var(--wb-text-tertiary);
+  background: var(--wb-surface-subtle);
+  font-size: 9px;
+}
+
+.@{class-prefix}-technical-plan-endpoint-list {
+  gap: 0;
+}
+
+.@{class-prefix}-technical-plan-endpoint-list .@{class-prefix}-technical-plan-endpoint {
+  border-width: 1px 0 0;
+  border-radius: 0;
+
+  &:first-child,
+  &:last-child {
+    border-radius: 0;
+  }
+
+  &:not(:first-child) {
+    margin-top: 0;
+  }
+}
+
+.@{class-prefix}-technical-plan-method {
+  min-width: 39px;
+  height: 18px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+
+  &.is-post,
+  &.is-patch,
+  &.is-put {
+    color: #a15b2f;
+    background: color-mix(in srgb, #d98b55 13%, var(--wb-canvas));
+  }
+  &.is-delete {
+    color: var(--wb-danger);
+    background: color-mix(in srgb, var(--wb-danger) 10%, var(--wb-canvas));
+  }
+}
+
+.@{class-prefix}-technical-plan-inspector,
+.@{class-prefix}-technical-plan-entity-card {
+  padding: 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-technical-plan-inspector {
+  display: grid;
+  gap: 9px;
+  margin-top: 5px;
+  border-color: var(--wb-accent-border);
+}
+
+.@{class-prefix}-technical-plan-inspector-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+
+  code {
+    overflow: hidden;
+    color: var(--wb-text);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-technical-plan-inspector-grid {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+
+  > div {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 7px;
+    min-width: 0;
+  }
+
+  dt {
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+  }
+
+  dd {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    color: var(--wb-text);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-technical-plan-schema-card {
+  display: grid;
+  gap: 7px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-technical-plan-schema-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+
+  strong {
+    color: var(--wb-text-secondary);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-technical-plan-schema-dependency-count {
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: var(--wb-text-tertiary);
+  background: var(--wb-surface-subtle);
+  font-size: 9px;
+}
+
+.@{class-prefix}-technical-plan-schema-node {
+  display: grid;
+  gap: 4px;
+}
+
+.@{class-prefix}-technical-plan-schema-dependency {
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 22%, var(--wb-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wb-accent) 3%, var(--wb-surface));
+
+  > .@{class-prefix}-technical-plan-schema-node-head {
+    padding: 0 0 3px;
+    background: transparent;
+  }
+}
+
+.@{class-prefix}-technical-plan-schema-node-head,
+.@{class-prefix}-technical-plan-schema-field {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 20px;
+}
+
+.@{class-prefix}-technical-plan-schema-node-head {
+  padding: 4px 5px;
+  border-radius: 4px;
+  background: var(--wb-surface-subtle);
+
+  code {
+    color: var(--wb-text);
+    font-size: 10px;
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-technical-plan-schema-field {
+  position: relative;
+  padding-left: calc(9px + (var(--schema-depth, 0) * 10px));
+  border-left: 1px solid var(--wb-border);
+
+  code {
+    overflow: hidden;
+    color: var(--wb-text);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-technical-plan-schema-dependency-rail {
+  position: relative;
+  margin: 3px 0 2px 18px;
+  padding-left: 13px;
+
+  &::before {
+    position: absolute;
+    top: 0;
+    bottom: 8px;
+    left: 0;
+    width: 10px;
+    border-bottom: 1px solid var(--wb-border-strong);
+    border-left: 1px solid var(--wb-border-strong);
+    content: '';
+  }
+}
+
+.@{class-prefix}-technical-plan-schema-branch {
+  width: 7px;
+  height: 7px;
+  border-bottom: 1px solid var(--wb-border-strong);
+  border-left: 1px solid var(--wb-border-strong);
+}
+
+.@{class-prefix}-technical-plan-schema-caret {
+  display: grid;
+  width: 10px;
+  place-items: center;
+  color: var(--wb-text-tertiary);
+  font-size: 8px;
+}
+
+.@{class-prefix}-technical-plan-schema-reference-caret {
+  display: grid;
+  width: 8px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--wb-text-tertiary);
+  font-size: 7px;
+}
+
+.@{class-prefix}-technical-plan-type {
+  color: var(--wb-text-secondary);
+  font-size: 10px;
+}
+
+.@{class-prefix}-technical-plan-schema-reference-type {
+  color: var(--wb-accent);
+  font-weight: 500;
+}
+
+.@{class-prefix}-technical-plan-schema-reference-context {
+  color: var(--wb-text-tertiary);
+  font-size: 9px;
+}
+
+.@{class-prefix}-technical-plan-required {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--wb-danger);
+  background: color-mix(in srgb, var(--wb-danger) 9%, var(--wb-canvas));
+  font-size: 9px;
+}
+
+.@{class-prefix}-technical-plan-lineage {
+  overflow: hidden;
+  margin-left: auto;
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, #3f9a70 28%, var(--wb-border));
+  border-radius: 3px;
+  color: #3f8e6a;
+  background: color-mix(in srgb, #3f9a70 9%, var(--wb-canvas));
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-technical-plan-entity-heading {
+  justify-content: space-between;
+  gap: 8px;
+
+  > div {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  strong {
+    overflow: hidden;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  code,
+  > span {
+    color: var(--wb-text-secondary);
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-technical-plan-entity-card > .ant-typography-secondary {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-technical-plan-field-table {
+  margin-top: 8px;
+
+  .ant-table {
+    color: var(--wb-text);
+    background: transparent;
+    font-size: 10px;
+  }
+
+  .ant-table-container table {
+    table-layout: fixed;
+  }
+
+  .ant-table-thead > tr > th {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--wb-border);
+    color: var(--wb-text-tertiary);
+    background: color-mix(in srgb, var(--wb-canvas) 72%, var(--wb-surface));
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+
+  .ant-table-thead > tr > th::before {
+    display: none;
+  }
+
+  .ant-table-tbody > tr > td {
+    padding: 5px 8px;
+    border-top: 1px solid var(--wb-border);
+    background: transparent;
+    line-height: 1.35;
+  }
+
+  .ant-table-tbody > tr:first-child > td {
+    border-top: 0;
+  }
+
+  .ant-table-tbody > tr:hover > td {
+    background: var(--wb-accent-soft);
+  }
+
+  .ant-table-cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong,
+  code,
+  span,
+  em {
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    font-weight: 500;
+  }
+
+  code,
+  span {
+    color: var(--wb-text-secondary);
+  }
+
+  em {
+    color: var(--wb-danger);
+    font-style: normal;
+  }
+}
+
+.@{class-prefix}-technical-plan-page-binding-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.@{class-prefix}-technical-plan-page-binding-group {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.62fr) minmax(0, 2fr);
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-technical-plan-page-binding-name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 12px;
+  overflow-wrap: anywhere;
+  border-right: 1px solid var(--wb-border);
+  color: var(--wb-text);
+  background: var(--wb-surface-subtle);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.@{class-prefix}-technical-plan-page-binding-rows {
+  display: grid;
+  min-width: 0;
+}
+
+.@{class-prefix}-technical-plan-page-binding-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.8fr) auto minmax(132px, 1.2fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--wb-border);
+
+  &:first-child {
+    border-top: 0;
+  }
+
+  > span,
+  code {
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: ellipsis;
+  }
+
+  > span {
+    color: var(--wb-text-secondary);
+    line-height: 1.45;
+  }
+
+  code {
+    min-width: 0;
+    color: var(--wb-text);
+    line-height: 1.45;
+    white-space: nowrap;
+  }
+
+  > .anticon {
+    color: var(--wb-accent);
+    font-size: 9px;
+  }
+}
+
+@container (max-width: 470px) {
+  .@{class-prefix}-technical-plan-section-tabs {
+    gap: 24px;
+  }
+
+  .@{class-prefix}-technical-plan-contract-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .@{class-prefix}-technical-plan-contract-list {
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  }
+
+  .@{class-prefix}-technical-plan-page-binding-group {
+    grid-template-columns: minmax(88px, 0.56fr) minmax(0, 2fr);
+  }
+}
+
+@container (max-width: 360px) {
+  .@{class-prefix}-technical-plan-endpoint,
+  .@{class-prefix}-technical-plan-endpoint-head {
+    grid-template-columns: 42px minmax(70px, 0.9fr) minmax(78px, 1.1fr);
+  }
+
+  .@{class-prefix}-technical-plan-page-binding-group {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .@{class-prefix}-technical-plan-page-binding-name {
+    padding: 9px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--wb-border);
+  }
+
+  .@{class-prefix}-technical-plan-page-binding-row {
+    grid-template-columns: minmax(82px, 0.8fr) auto minmax(108px, 1.2fr);
+  }
+}

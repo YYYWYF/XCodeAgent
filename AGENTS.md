@@ -41,7 +41,7 @@ These instructions apply to the whole XCodeAgent repository. Every Codex agent s
 - Documentation-only, instruction-only, comment-only, or other non-code changes do not require backend health checks, Vite checks, builds, or Python compile checks unless the user explicitly asks for verification.
 - After every code change, check that the backend health endpoint is still healthy:
   `curl -sS http://127.0.0.1:8000/health`
-- When a frontend development server is running, also check the active Vite URL after code changes. The default is `http://127.0.0.1:5173`; if Vite reports a different port, use that port instead.
+- For frontend UI or runtime validation, test the already-running Electron application directly. Do not open or test the Vite-rendered page in a web browser as a substitute for Electron testing. The Vite URL may be checked only as a development-server health signal and does not count as frontend UI validation.
 - For frontend changes, run `pnpm build` from `Frontend` when the change can affect TypeScript, bundling, routing, or UI behavior.
 - For backend Python changes, run a focused Python syntax/import check, such as `python3 -m py_compile`, on the changed files when no narrower test exists.
 - If any health check, build, or focused verification fails, investigate and fix it before reporting the change as done. If a failure cannot be fixed in the current turn, report the exact failing command and why it remains unresolved.

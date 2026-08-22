@@ -47,7 +47,7 @@
   outline: none;
   background: transparent;
   color: var(--wb-text, #1f2329);
-  font-family: "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', 'Consolas', monospace;
   font-size: 13px;
   line-height: 1.75;
   resize: none;
@@ -67,7 +67,7 @@
   overflow: auto;
   background: transparent;
   color: var(--wb-text, #1f2329);
-  font-family: "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', 'Consolas', monospace;
   font-size: 13px;
   line-height: 1.75;
   white-space: pre-wrap;
@@ -83,6 +83,68 @@
   white-space: normal;
   word-break: normal;
   background: color-mix(in srgb, var(--wb-accent, #6b3cf0) 2%, var(--wb-canvas, #ffffff));
+}
+
+/* TechnicalPlan 使用结构化审核视图，但仍沿用右侧文档面板的滚动容器和留白。 */
+.@{class-prefix}-doc-panel-structured {
+  padding: 16px 18px;
+  background: var(--wb-canvas, #ffffff);
+  font-family: inherit;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: normal;
+}
+
+.@{class-prefix}-doc-panel-technical-path {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 5px;
+  border: 0;
+  background: transparent;
+
+  > .anticon {
+    color: var(--wb-accent, #6b3cf0);
+    font-size: 16px;
+  }
+
+  > span {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  strong,
+  small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    color: var(--wb-text, #202124);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+
+  small {
+    color: var(--wb-text-tertiary, #909196);
+    font-size: 10px;
+    line-height: 1.2;
+  }
+}
+
+.@{class-prefix}-doc-panel-technical-status.ant-tag {
+  flex: 0 0 auto;
+  margin: 0 0 0 auto;
+  padding: 1px 8px;
+  border-color: color-mix(in srgb, var(--wb-warning) 25%, var(--wb-border));
+  border-radius: 5px;
+  color: var(--wb-warning);
+  background: color-mix(in srgb, var(--wb-warning) 10%, var(--wb-canvas));
+  font-size: 11px;
+  line-height: 19px;
 }
 
 .@{class-prefix}-doc-panel.@{class-prefix}-editing .@{class-prefix}-doc-panel-stage {
@@ -169,12 +231,23 @@
 }
 
 @keyframes xa-doc-panel-pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.06); opacity: 0.92; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.92;
+  }
 }
 @keyframes xa-doc-panel-slide {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(350%); }
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
 }
 
 @keyframes xa-doc-panel-fade-in {
