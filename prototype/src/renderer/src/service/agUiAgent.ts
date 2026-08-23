@@ -42,6 +42,8 @@ export type SendWorkflowMessageOptions = {
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onToolCalls?: (toolCalls: ToolCallRecord[]) => void
   onProcessSteps?: (steps: ProcessStepRecord[]) => void
+  /** 工作流分析出新的关联产物时通知会话层动态扩展产物关系。 */
+  onArtifactDiscovered?: (artifactIds: string[]) => void
   planControlAction?: 'stop' | 'end'
   planControlRunId?: string
   resumeExecutionRunId?: string
@@ -117,6 +119,9 @@ export type IntegrationTestCheckRecord = {
   status: 'running' | 'passed' | 'skipped' | 'failed'
   required: boolean
   evidence?: string
+  /** 单元测试类检查项的结构化统计（通过数/总数），缺失时不展示数字。 */
+  passedTests?: number
+  totalTests?: number
 }
 
 export type DagGenerationStageRecord = {
@@ -228,11 +233,13 @@ export type DagGenerationSnapshot = {
 export type ProcessStepRecord = {
   id: string
   kind: 'reasoning' | 'tool' | 'command' | 'workflow'
-  status: 'running' | 'completed' | 'failed' | 'requires_user_input'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'requires_user_input'
   title: string
   detail: string
   result?: string
   sequence: number
+  /** 工作流规划出的节点总数，用于折叠态仍显示当前进度。 */
+  total?: number
   appendDetail?: boolean
   checks?: IntegrationTestCheckRecord[]
   nodeName?: string
@@ -296,7 +303,7 @@ export class AgUiChatSession {
       void message
       const [
         { replayPlanning, replayDesignPhase },
-        { replayApplicationAcceptance, replayWorkbench, replayCodeReview }
+        { replayApplicationAcceptance, replayApplicationTesting, replayWorkbench, replayCodeReview }
       ] = await Promise.all([
         import('../mock/scripts/planning'),
         import('../mock/scripts/workbench')
@@ -310,22 +317,28 @@ export class AgUiChatSession {
         onContent: trackContent,
         onWorkflow: options.onWorkflow,
         onApplicationLifecycle: options.onApplicationLifecycle,
-        onProcessSteps: options.onProcessSteps
+        onProcessSteps: options.onProcessSteps,
+        onArtifactDiscovered: options.onArtifactDiscovered
       }
       const result =
         options.workflowScope === 'application_planning'
           ? await replayPlanning(this.threadId, options, callbacks)
-          : options.workflowScope === 'application_design'
+          : options.workflowScope === 'application_analysis' ||
+              options.workflowScope === 'application_workbench_planning'
             ? await replayDesignPhase(this.threadId, options, callbacks)
             : options.workflowScope === 'application_acceptance'
               ? await replayApplicationAcceptance(this.threadId, options, callbacks)
+              : options.workflowScope === 'application_testing'
+                ? await replayApplicationTesting(this.threadId, options, callbacks)
             : options.workflowScope === 'application_review'
               ? await replayCodeReview(this.threadId, options, callbacks)
               : await replayWorkbench(this.threadId, options, callbacks)
       return {
         threadId: this.threadId,
         runId: result?.runId || 'mock-run',
-        answer: lastContent || (result ? '已推进到下一阶段。' : ''),
+        // 没有正式回复时保持正文为空，由节点过程或交互卡承载当前状态，
+        // 不再用“已推进到下一阶段”这类内部流程兜底文案污染对话。
+        answer: lastContent || '',
         toolCalls: [],
         processSteps: [],
         ...(result ? { workflow: result as never } : {})
@@ -520,6 +533,7 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
     detail: stringValue(step.detail),
     result: stringValue(step.result) || undefined,
     sequence: typeof step.sequence === 'number' ? step.sequence : 0,
+    total: typeof step.total === 'number' ? step.total : undefined,
     appendDetail: step.appendDetail === true,
     nodeName: stringValue(step.nodeName) || undefined,
     attempt: typeof step.attempt === 'number' ? step.attempt : undefined,
@@ -647,12 +661,17 @@ export function readIntegrationTestChecks(
     if (!id || !name || seenIds.has(id)) continue
     seenIds.add(id)
     const evidence = stringValue(check.evidence).slice(0, 1_000)
+    // 同步正式工程的单元测试节点 v2：统计字段可缺失，出现时必须是安全非负整数。
+    const passedTests = Number(check.passedTests)
+    const totalTests = Number(check.totalTests)
     checks.push({
       id,
       name,
       status: status as IntegrationTestCheckRecord['status'],
       required: check.required === true,
-      ...(evidence ? { evidence } : {})
+      ...(evidence ? { evidence } : {}),
+      ...(Number.isSafeInteger(passedTests) && passedTests >= 0 ? { passedTests } : {}),
+      ...(Number.isSafeInteger(totalTests) && totalTests >= 0 ? { totalTests } : {})
     })
   }
   return checks.length > 0 ? checks : undefined

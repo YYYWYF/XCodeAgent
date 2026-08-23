@@ -5,7 +5,7 @@ import type {
   RefObject
 } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { DEFAULT_ASSISTANT_PANEL_WIDTH, DEFAULT_DIFF_PANEL_WIDTH } from '../constants'
+import { DEFAULT_ASSISTANT_PANEL_WIDTH } from '../constants'
 import type { RightPanelState } from '../types'
 import { clampAssistantPanelWidth } from '../utils'
 
@@ -38,16 +38,16 @@ export function useAssistantPreviewLayout({
       } as CSSProperties)
     : undefined
 
-  /** 每次首次打开 Diff 面板时按 500px 目标宽度初始化，拖拽后的宽度仍由用户控制。 */
+  /** 首次打开 Diff 面板时回到标准对话列宽度，保持与文档/预览面板一致的左右比例。 */
   useLayoutEffect(() => {
     const previousType = previousRightPanelTypeRef.current
     previousRightPanelTypeRef.current = rightPanel?.type
     if (rightPanel?.type !== 'diff' || previousType === 'diff') return
 
-    const panelWidth = panelRef.current?.getBoundingClientRect().width ?? 0
-    if (panelWidth <= 0) return
+    // 旧实现按“当前面板宽 - Diff 目标宽”初始化，量测时右侧面板尚未挂载，
+    // 会把对话列撑到远超常规的宽度并挤压 Diff 面板；这里统一回到默认比例。
     setAssistantPanelWidth(
-      clampAssistantPanelWidth(panelWidth - DEFAULT_DIFF_PANEL_WIDTH, panelRef.current)
+      clampAssistantPanelWidth(DEFAULT_ASSISTANT_PANEL_WIDTH, panelRef.current)
     )
   }, [rightPanel?.type])
 

@@ -1,6 +1,7 @@
 import {
   CheckOutlined,
   ApiOutlined,
+  DatabaseOutlined,
   FileTextOutlined,
   LockOutlined,
   PaperClipOutlined,
@@ -34,10 +35,10 @@ export type ComposerArtifactResource = {
   id: string
   name: string
   path: string
-  type: 'document' | 'page' | 'endpoint' | 'model'
+  type: 'document' | 'page' | 'endpoint' | 'entity'
 }
 
-/** 把菜单挂到输入框内，使明暗主题变量和定位上下文保持一致。 */
+/** 把菜单挂到输入框内，使浅色样式变量和定位上下文保持一致。 */
 function getResourcePopupContainer(triggerNode: HTMLElement): HTMLElement {
   return triggerNode.parentElement || triggerNode
 }
@@ -251,7 +252,13 @@ export default function ResourceSkillMenu({
                     type="button"
                   >
                     <span className={cx('composer-artifact-icon')}>
-                      {artifact.type === 'endpoint' ? <ApiOutlined /> : <FileTextOutlined />}
+                      {artifact.type === 'endpoint' ? (
+                        <ApiOutlined />
+                      ) : artifact.type === 'entity' ? (
+                        <DatabaseOutlined />
+                      ) : (
+                        <FileTextOutlined />
+                      )}
                     </span>
                     <span className={cx('composer-artifact-copy')}>
                       <Text>{artifact.name}</Text>

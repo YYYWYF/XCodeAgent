@@ -3,7 +3,7 @@ export type ContractStatus = 'draft' | 'ready' | 'executing' | 'verifying' | 'do
 export type TaskExecutionMode = 'main-integrated' | 'subagent-plan-only' | 'subagent-direct-write';
 export type AgentTaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'blocked';
 
-export type DataModelContract = {
+export type EntityContract = {
   name: string;
   description: string;
 };
@@ -35,14 +35,14 @@ export type DevelopmentContract = {
       features: string[];
       sharedCapabilities: string[];
       apiConventions: string[];
-      dataModels: DataModelContract[];
+      entities: EntityContract[];
       permissions: string[];
       errorHandling: string[];
     };
   };
   features: FeatureContract[];
   apiContracts: ApiContract[];
-  dataModels: DataModelContract[];
+  entities: EntityContract[];
   taskGraph: TaskGraph;
   verificationPlan: VerificationPlan;
   risks: string[];
@@ -60,7 +60,7 @@ export type FeatureContract = {
     interactions: string[];
   };
   apis: ApiContract[];
-  dataModels: string[];
+  entities: string[];
   dependencies: string[];
   acceptanceCriteria: string[];
   verification: string[];

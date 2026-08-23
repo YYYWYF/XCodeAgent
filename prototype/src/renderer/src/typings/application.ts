@@ -22,7 +22,7 @@ export type ApplicationAudience =
   | 'developer'
   | 'other';
 
-export type ApplicationTheme = 'light' | 'dark' | 'enterprise-blue' | 'custom';
+export type ApplicationTheme = 'light' | 'enterprise-blue' | 'custom';
 export type ApplicationLayout =
   | 'top-nav'
   | 'side-nav'

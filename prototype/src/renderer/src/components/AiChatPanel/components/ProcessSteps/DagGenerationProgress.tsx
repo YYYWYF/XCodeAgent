@@ -16,7 +16,6 @@ import {
   WarningOutlined
 } from '@ant-design/icons'
 import { Typography } from 'antd'
-import { useEffect, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import type {
   DagGenerationSnapshot,
@@ -37,22 +36,10 @@ type Props = {
 export default function DagGenerationProgress({ snapshot }: Props): ReactElement {
   const running = snapshot.stages.some((stage) => stage.status === 'running')
   const failed = snapshot.stages.some((stage) => stage.status === 'failed')
-  const wasRunning = useRef(running)
-  const [open, setOpen] = useState(running)
-
-  useEffect(() => {
-    if (running) setOpen(true)
-    else if (wasRunning.current) setOpen(false)
-    wasRunning.current = running
-  }, [running])
 
   return (
-    <details
-      className={cx('dag-generation', running ? 'running' : failed ? 'failed' : 'completed')}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-      open={open}
-    >
-      <summary className={cx('dag-generation-summary')}>
+    <section className={cx('dag-generation', running ? 'running' : failed ? 'failed' : 'completed')}>
+      <div className={cx('dag-generation-summary')}>
         <span className={cx('dag-generation-summary-icon')}>
           <NodeIndexOutlined />
         </span>
@@ -65,7 +52,7 @@ export default function DagGenerationProgress({ snapshot }: Props): ReactElement
           <i>{snapshot.summary.taskCount} Tasks</i>
           <i>{snapshot.summary.batchCount} Batches</i>
         </span>
-      </summary>
+      </div>
 
       <div className={cx('dag-generation-content')}>
         <ol className={cx('dag-generation-stages')} aria-label="任务 DAG 生成阶段">
@@ -114,11 +101,11 @@ export default function DagGenerationProgress({ snapshot }: Props): ReactElement
           </section>
         )}
       </div>
-    </details>
+    </section>
   )
 }
 
-/** 渲染单个已规划任务，默认收起文件和验收标准。 */
+/** 渲染单个已规划任务，保留任务节点可见，末级文件与验收细节默认收起。 */
 function DagTask({ index, task }: { index: number; task: DagGenerationTaskRecord }): ReactElement {
   return (
     <li>
@@ -218,7 +205,7 @@ function taskStatusLabel(status: DagGenerationTaskRecord['status']): string {
   }[status]
 }
 
-/** 渲染单个 DAG 阶段，有结构化产物的阶段可展开查看细节。 */
+/** 渲染单个 DAG 阶段，阶段节点可见，末级结构化产物默认收起。 */
 function DagStage({ index, stage }: { index: number; stage: DagGenerationStageRecord }): ReactElement {
   const summaryInner = (
     <>

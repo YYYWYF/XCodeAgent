@@ -1,9 +1,8 @@
 import {
-  FileTextOutlined,
+  CheckOutlined,
   PlayCircleOutlined,
-  ZoomInOutlined,
 } from "@ant-design/icons";
-import { Button, Tag, Typography } from "antd";
+import { Button, Typography } from "antd";
 import { useMemo, useState } from "react";
 import type {
   DevelopmentPlanningPageOption,
@@ -18,6 +17,8 @@ type DetailTargetType = "page" | "endpoint";
 
 type Props = {
   disabled: boolean;
+  /** 仅在当前工作流正在启动时显示按钮加载态；历史卡片禁用但不显示转圈。 */
+  loading?: boolean;
   onStart?: (
     targetType: "page" | "endpoint",
     targetId: string,
@@ -49,12 +50,12 @@ type Props = {
  * 由对话区承载，不再整列覆盖弹框。 */
 export default function DetailConfirmationPageSelector({
   disabled,
+  loading = false,
   onStart,
   selectedEndpoint: progressEndpoint,
   selectedPage: progressPage,
 }: Props): JSX.Element {
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | undefined>();
-  const [hoveredTemplateId, setHoveredTemplateId] = useState<string | undefined>();
+  const [focusedTemplateIndex, setFocusedTemplateIndex] = useState(0);
   const templates = useMemo(() => getAvailableTemplates(), []);
 
   const progressTarget = progressEndpoint || progressPage;
@@ -71,24 +72,13 @@ export default function DetailConfirmationPageSelector({
     progressTargetType === "endpoint"
       ? progressEndpoint?.endpointId
       : progressPage?.pageId;
-  const lockedTargetPath =
-    progressTargetType === "endpoint"
-      ? progressEndpoint?.path || progressEndpoint?.label
-      : progressPage?.path;
-  const lockedTargetPurpose =
-    progressTargetType === "endpoint"
-      ? progressEndpoint?.purpose || "补充接口用途、处理逻辑和数据来源设计。"
-      : progressPage?.purpose;
-
   /** 组装当前选中模板的上下文，供 onStart 携带给后端学习模板源码。 */
   const buildTemplateContext = (): {
     templateId: string;
     templateName: string;
     templateSourcePath: string;
   } | undefined => {
-    const selectedTemplate = templates.find(
-      (t) => t.manifest.id === selectedTemplateId,
-    );
+    const selectedTemplate = templates[focusedTemplateIndex];
     return selectedTemplate
       ? {
           templateId: selectedTemplate.manifest.id,
@@ -101,120 +91,83 @@ export default function DetailConfirmationPageSelector({
   // 仅页面目标支持选择页面模板，让后端 LLM 学习模板源码后再生成。
   const lockedTemplateVisible = progressTargetType === "page" && templates.length > 0;
 
-  const renderTemplateCards = (): JSX.Element => (
-    <div className={cx("detail-page-selector-template-cards")}>
-      {templates.map((tpl) => {
-        const isSelected = selectedTemplateId === tpl.manifest.id;
-        const desc = tpl.manifest.description || "";
-        const previewImg = tpl.manifest.previewImage;
-        return (
-          <div
-            key={tpl.manifest.id}
-            className={cx(
-              "detail-page-selector-template-card",
-              isSelected && "selected",
-            )}
-            onClick={() => {
-              setSelectedTemplateId(isSelected ? undefined : tpl.manifest.id);
-            }}
-          >
-            <div
-              className={cx("detail-page-selector-template-thumb")}
-              onMouseEnter={() => previewImg && setHoveredTemplateId(tpl.manifest.id)}
-              onMouseLeave={() => setHoveredTemplateId(undefined)}
-            >
-              {previewImg ? (
-                <img
-                  src={previewImg}
-                  alt={tpl.manifest.name}
-                  draggable={false}
-                />
-              ) : (
-                <div className={cx("detail-page-selector-template-thumb-empty")}>
-                  <FileTextOutlined />
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    暂无预览图
-                  </Text>
-                </div>
-              )}
-              {previewImg && hoveredTemplateId === tpl.manifest.id && (
-                <div className={cx("detail-page-selector-template-thumb-overlay")}>
-                  <ZoomInOutlined />
-                  <span>预览</span>
-                </div>
-              )}
-            </div>
-            <div className={cx("detail-page-selector-template-card-body")}>
-              <Text strong className={cx("detail-page-selector-template-card-name")}>
-                {tpl.manifest.name}
-              </Text>
-              <Text
-                type="secondary"
-                className={cx("detail-page-selector-template-desc")}
-                title={desc}
-              >
-                {desc}
-              </Text>
-            </div>
+  const focusedTemplate = templates[focusedTemplateIndex] || templates[0];
+
+  /** 切换当前模板；当前轮播页同时就是用户的模板选择。 */
+  const focusTemplate = (index: number): void => {
+    if (!templates[index]) return;
+    setFocusedTemplateIndex(index);
+  };
+
+  const renderTemplateShowcase = (): JSX.Element | null => {
+    if (!focusedTemplate) return null;
+    return (
+      <div className={cx("detail-page-selector-template-showcase")}>
+        <div className={cx("detail-page-selector-template-preview-frame")}>
+          <TemplatePreview
+            confirmed={disabled}
+            selected
+            template={focusedTemplate}
+          />
+        </div>
+        <div className={cx("detail-page-selector-template-showcase-footer")}>
+          <div className={cx("detail-page-selector-template-showcase-copy")}>
+            <Text strong>{focusedTemplate.manifest.name}</Text>
+            <Text type="secondary" title={focusedTemplate.manifest.description}>
+              {disabled ? "已确认模板 ·" : "已选模板 ·"}
+              {focusedTemplate.manifest.description}
+            </Text>
           </div>
-        );
-      })}
-    </div>
-  );
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className={cx("detail-page-selector-inline")}>
-      {/* 卡头：标题 + 状态，对齐「工作流执行」节点的 header 结构 */}
+    <div className={cx("detail-page-selector-inline", disabled && "disabled")}>
+      {/* 卡片只承载模板选择，不再混入页面详细设计说明。 */}
       <div className={cx("detail-page-selector-inline-header")}>
         <div className={cx("detail-page-selector-inline-title")}>
           <span className={cx("detail-page-selector-inline-signal")} aria-hidden="true" />
           <Text className={cx("detail-page-selector-inline-name")} strong>
-            {progressTargetType === "endpoint" ? "接口详细设计" : "页面详细设计"}
+            {progressTargetType === "endpoint" ? "接口详细设计" : "选择页面模板"}
           </Text>
         </div>
-        <Tag className={cx("detail-page-selector-inline-status")}>待设计</Tag>
-      </div>
-
-      {/* Agent 叙述正文：以对话消息的自然语言呈现，而不是挡板面板标题 */}
-      <div className={cx("detail-page-selector-message")}>
-        <Text className={cx("detail-page-selector-message-text")}>
-          「{progressTarget.label}」尚未进行详细设计。为避免
-          {progressTargetType === "endpoint"
-            ? "接口实现跳过需求细化"
-            : "自由对话跳过页面需求"}
-          ，我将先综合应用需求与项目计划，为
-          {progressTargetType === "endpoint"
-            ? "该接口生成需求文档"
-            : "该页面生成页面需求文档"}
-          ，确认或补充后即可进入构建。
-        </Text>
-      </div>
-
-      {/* 目标信息：浅色引用块，对齐澄清卡的上下文展示 */}
-      <div className={cx("detail-page-selector-target")}>
-        <div>
-          <Text strong>{progressTarget.label}</Text>
-          <Text code>{lockedTargetPath}</Text>
-        </div>
-        <Text type="secondary">{lockedTargetPurpose}</Text>
+        {lockedTemplateVisible && (
+          <Text className={cx("detail-page-selector-template-stepper")} type="secondary">
+            第 {focusedTemplateIndex + 1} / {templates.length} 个
+          </Text>
+        )}
       </div>
 
       {lockedTemplateVisible && (
         <section className={cx("detail-page-selector-locked-template")}>
-          <Text className={cx("detail-page-selector-section-title")} strong>
-            <FileTextOutlined style={{ marginRight: 6 }} />
-            选择页面模板（可选）
-          </Text>
-          {renderTemplateCards()}
+          {renderTemplateShowcase()}
         </section>
       )}
 
       <div className={cx("detail-page-selector-inline-actions")}>
+        {lockedTemplateVisible && (
+          <Button
+            disabled={disabled || focusedTemplateIndex === 0}
+            onClick={() => focusTemplate(focusedTemplateIndex - 1)}
+          >
+            上一个
+          </Button>
+        )}
+        {lockedTemplateVisible && (
+          <Button
+            disabled={disabled || focusedTemplateIndex === templates.length - 1}
+            onClick={() => focusTemplate(focusedTemplateIndex + 1)}
+          >
+            下一个
+          </Button>
+        )}
         <Button
           className={cx("detail-page-selector-action")}
           disabled={disabled}
           icon={<PlayCircleOutlined />}
-          loading={disabled}
+          loading={loading}
           onClick={() =>
             lockedTargetId &&
             onStart?.(
@@ -235,6 +188,116 @@ export default function DetailConfirmationPageSelector({
           开始详细设计
         </Button>
       </div>
+    </div>
+  );
+}
+
+type TemplateOption = ReturnType<typeof getAvailableTemplates>[number];
+
+/** 展示模板真实预览；外部预览地址不可用时使用本地结构示意，保证模板始终可辨认。 */
+function TemplatePreview({
+  confirmed = false,
+  selected,
+  template
+}: {
+  confirmed?: boolean;
+  selected: boolean;
+  template: TemplateOption;
+}): JSX.Element {
+  const [imageFailed, setImageFailed] = useState(false);
+  const previewImage = template.manifest.previewImage;
+  if (previewImage && !imageFailed) {
+    return (
+      <div
+        className={cx(
+          "detail-page-selector-template-preview",
+          selected && "selected",
+          confirmed && "confirmed"
+        )}
+      >
+        <img
+          alt={`${template.manifest.name}预览`}
+          className={cx("detail-page-selector-template-preview-image")}
+          draggable={false}
+          onError={() => setImageFailed(true)}
+          src={previewImage}
+        />
+        {selected && (
+          <span
+            className={cx(
+              "detail-page-selector-template-preview-selected",
+              confirmed && "confirmed"
+            )}
+          >
+            <CheckOutlined /> {confirmed ? "已确认" : "已选"}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  const isForm = template.manifest.id === "multiForm";
+  const isTabs = template.manifest.id === "tabsTable";
+  return (
+    <div
+      className={cx(
+        "detail-page-selector-template-preview",
+        "fallback",
+        selected && "selected",
+        confirmed && "confirmed"
+      )}
+    >
+      <div className={cx("template-preview-topbar")}>
+        <span className={cx("template-preview-brand")} />
+        <span className={cx("template-preview-topbar-line", "short")} />
+        <span className={cx("template-preview-topbar-line")} />
+      </div>
+      {isForm ? (
+        <div className={cx("template-preview-form")}>
+          <div className={cx("template-preview-heading", "wide")} />
+          <div className={cx("template-preview-form-grid")}>
+            {Array.from({ length: 6 }).map((_, index) => (
+              <span className={cx("template-preview-input")} key={index} />
+            ))}
+          </div>
+          <span className={cx("template-preview-submit")} />
+        </div>
+      ) : (
+        <div className={cx("template-preview-table")}>
+          <div className={cx("template-preview-heading")} />
+          {isTabs && (
+            <div className={cx("template-preview-tabs")}>
+              <span className={cx("active")} />
+              <span />
+              <span />
+            </div>
+          )}
+          <div className={cx("template-preview-filters")}>
+            <span />
+            <span />
+            <b />
+          </div>
+          <div className={cx("template-preview-table-head")} />
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div className={cx("template-preview-table-row")} key={index}>
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+          ))}
+        </div>
+      )}
+      {selected && (
+        <span
+          className={cx(
+            "detail-page-selector-template-preview-selected",
+            confirmed && "confirmed"
+          )}
+        >
+          <CheckOutlined /> {confirmed ? "已确认" : "已选"}
+        </span>
+      )}
     </div>
   );
 }

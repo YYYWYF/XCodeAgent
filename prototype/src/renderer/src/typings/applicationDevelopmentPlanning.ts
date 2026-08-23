@@ -57,6 +57,15 @@ export type DevelopmentPlanningApiContract = {
   dataSourceIds?: string[]
   endpoints: DevelopmentPlanningApiEndpoint[]
 }
+
+/** 开发阶段的实体占位产物；本轮只展示类型、状态和直接依赖，不进入实体生成工作流。 */
+export type DevelopmentPlanningEntity = {
+  entityId: string
+  key: string
+  label: string
+  purpose: string
+  schemaRef?: string
+}
 export type MenuDevelopmentPlan = {
   menuKey: string
   menuLabel: string

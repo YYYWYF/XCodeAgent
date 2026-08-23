@@ -3,6 +3,8 @@
  * 右侧「文档」tab 的富 markdown，以及「源码」tab 的真实感 TSX。
  */
 
+import { backendControllerPath, frontendPagePath } from './mock/workspaceFiles'
+
 export type PageDesignRegion = { name?: string; responsibility?: string }
 export type PageDesignApiDep = {
   apiContractId?: string
@@ -40,7 +42,7 @@ export type PageDesign = {
 
 /** 把页面详细设计序列化为富 markdown（覆盖目标/布局/交互/接口/验收等）。 */
 export function buildPageDesignDoc(design: PageDesign): string {
-  const lines: string[] = [`# ${design.name || '页面'} 页面需求文档`, '']
+  const lines: string[] = [`# ${design.name || '页面'} 页面详细设计`, '']
   if (design.path) lines.push(`- **路由**：\`${design.path}\``, '')
 
   if (design.page_goal) {
@@ -177,7 +179,7 @@ export function buildPageSource(design: PageDesign, pageId: string): { filePath:
     `}`,
     ``
   ].join('\n')
-  return { filePath: `frontend/src/pages/${pageId}/index.tsx`, content }
+  return { filePath: frontendPagePath(pageId), content }
 }
 
 /** 从接口设计生成真实感的 Java Controller 源码（对齐 build-task-plan 的 target_files）。 */
@@ -245,7 +247,7 @@ export function buildEndpointSource(
     .join('\n')
 
   return {
-    filePath: `backend/src/main/java/com/xcodeagent/${packageName}/controller/${className}.java`,
+    filePath: backendControllerPath(packageName),
     content
   }
 }
@@ -504,11 +506,14 @@ export function buildLineDiff(oldText: string, newText: string, path: string): s
   return `--- a/${path}\n+++ b/${path}\n@@ -1,${oldLines.length} +1,${newLines.length} @@\n${body}`
 }
 
-/** 审查阶段右侧面板的代码审查报告(非功能检查:规范 / 安全 / 健康度)。 */
-export function buildReviewReport(): string {
+/** 审查阶段右侧面板的代码审查报告，明确当前审查消费的测试报告依据。 */
+export function buildReviewReport(testReport?: TestReportSnapshot): string {
+  const testBasis = testReport
+    ? `第 ${testReport.round} 轮测试报告 · 代码 revision：${testReport.basedOnRevision} · 结论：合格`
+    : '当前版本的合格测试报告'
   return `# 代码审查报告
 
-> 审查范围：全部页面与接口模块 · 审查项：代码规范 / 安全 / 健康度 · 结论：**通过，可生成版本**
+> 审查依据：${testBasis} · 审查范围：全部页面与接口模块 · 结论：**通过，可生成版本**
 
 ## 总览
 
@@ -541,4 +546,95 @@ export function buildReviewReport(): string {
 - 页面：我的回检
 - 接口：GET /api/rechecks/my
 `
+}
+
+export type TestReportStatus = 'running' | 'failed' | 'passed'
+
+export type TestReportDefect = {
+  id: string
+  severity: '高' | '中' | '低'
+  title: string
+  summary: string
+  evidence: string
+  artifactIds: string[]
+  artifactLabels: string[]
+}
+
+export type TestReportSnapshot = {
+  round: number
+  status: TestReportStatus
+  basedOnRevision: number
+  defects: TestReportDefect[]
+}
+
+/** 生成测试阶段唯一的应用级测试报告；缺陷明细和产物关联来自同一轮测试快照。 */
+export function buildTestReport(report?: TestReportSnapshot): string {
+  if (!report || report.status === 'running') {
+    return '# 测试报告\n\n测试 Agent 正在执行完整应用测试，报告生成后会在此更新。\n'
+  }
+
+  const failed = report.status === 'failed'
+  const lines = [
+    '# 测试报告',
+    '',
+    `> 测试轮次：第 ${report.round} 轮 · 代码 revision：${report.basedOnRevision} · 总体结论：**${
+      failed ? '不合格' : '合格，可进入审查阶段'
+    }**`,
+    '',
+    '## 测试范围',
+    '',
+    '- 页面和接口组合行为',
+    '- 启动测试：应用启动、主路由和基础运行环境',
+    '- 非功能测试：异常反馈、响应稳定性、权限边界与恢复路径',
+    '- 业务测试：需求文档和项目计划中的核心业务旅程',
+    '',
+    '## 结果',
+    '',
+    `- 应用级检查：${failed ? '⚠️ 发现缺陷' : '✅ 通过'}`,
+    `- 缺陷数量：${report.defects.length}`,
+    ''
+  ]
+
+  if (failed) {
+    lines.push(
+      '## 缺陷清单',
+      '',
+      '| 编号 | 严重级别 | 缺陷 | 受影响产物 |',
+      '| --- | --- | --- | --- |',
+      ...report.defects.map(
+        (defect) =>
+          `| ${defect.id} | ${defect.severity} | ${defect.title}：${defect.summary} | ${defect.artifactLabels.join('、')} |`
+      ),
+      '',
+      '## 修复引导',
+      '',
+      '- 受影响产物保持开发阶段原有状态，缺陷只记录在本轮测试报告中。',
+      '- 需要复测时，请继续在测试阶段会话中补充验证结果。',
+      '',
+      '## 关键证据',
+      '',
+      ...report.defects.map((defect) => `- ${defect.id}：${defect.evidence}`),
+      ''
+    )
+  } else {
+    lines.push(
+      '## 缺陷清单',
+      '',
+      '本轮未发现缺陷，启动、非功能和业务测试均已通过。',
+      '',
+      '## 下一步',
+      '',
+      '- 当前测试报告绑定本轮代码 revision，可进入审查阶段。',
+      ''
+    )
+  }
+
+  lines.push(
+    '## 未覆盖范围',
+    '',
+    '- 专业测试人员的正式验收',
+    '- 长时间运行和生产数据规模压测',
+    ''
+  )
+  return lines.join('\n')
 }

@@ -66,9 +66,14 @@
   width: min(100%, 1080px);
   min-height: 100%;
   flex-direction: column;
-  gap: 38px;
+  gap: 24px;
   padding: 42px 38px 32px;
   margin: 0 auto;
+}
+
+// 同一 Agent 连续输出属于同一段工作流，使用更紧凑的间距，避免视觉上像缺少一条隐藏消息。
+.@{class-prefix}-ai-message.@{class-prefix}-consecutive-assistant {
+  margin-top: -8px;
 }
 
 .@{class-prefix}-ai-message-empty {
@@ -196,25 +201,41 @@
   height: 26px;
   border-radius: 50%;
   color: #fff;
-  font-size: 14px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.15px;
+  line-height: 1;
   flex-shrink: 0;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
 }
 
-.@{class-prefix}-ai-message-agent.@{class-prefix}-product .@{class-prefix}-ai-message-agent-avatar {
+.@{class-prefix}-ai-message-agent.@{class-prefix}-analysis .@{class-prefix}-ai-message-agent-avatar {
   background: linear-gradient(135deg, #a97aff, #6b3cf0);
+}
+.@{class-prefix}-ai-message-agent.@{class-prefix}-planning .@{class-prefix}-ai-message-agent-avatar {
+  background: linear-gradient(135deg, #8b7cf6, #5541d8);
 }
 .@{class-prefix}-ai-message-agent.@{class-prefix}-development .@{class-prefix}-ai-message-agent-avatar {
   background: linear-gradient(135deg, #4dabf7, #1f7aeb);
 }
-.@{class-prefix}-ai-message-agent.@{class-prefix}-test .@{class-prefix}-ai-message-agent-avatar {
+.@{class-prefix}-ai-message-agent.@{class-prefix}-testing .@{class-prefix}-ai-message-agent-avatar {
   background: linear-gradient(135deg, #fbbf24, #d97706);
+}
+.@{class-prefix}-ai-message-agent.@{class-prefix}-review .@{class-prefix}-ai-message-agent-avatar {
+  background: linear-gradient(135deg, #56c596, #20865d);
 }
 
 .@{class-prefix}-ai-message-agent-name {
   font-size: 12px;
   font-weight: 600;
   color: var(--wb-text-secondary);
+}
+
+// Agent 正在处理时只在身份栏显示轻量状态，不把过程状态写进正文对话。
+.@{class-prefix}-ai-message-agent-loading {
+  margin-left: 1px;
+  color: var(--wb-primary);
+  font-size: 12px;
 }
 
 .@{class-prefix}-final-result-heading {
@@ -258,9 +279,8 @@
 }
 
 .@{class-prefix}-final-result-content {
-  margin-bottom: 20px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--wb-border);
+  margin-bottom: 0;
+  padding-bottom: 0;
 }
 
 .@{class-prefix}-ai-message-text.ant-typography {

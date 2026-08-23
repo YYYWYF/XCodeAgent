@@ -3,6 +3,7 @@ export {}
 import type {
   ApplicationMenuItem,
   ApplicationSchemaConfig,
+  DevelopmentPlanningEntity,
   DevelopmentPlanningPageTreeNode
 } from './typings'
 
@@ -24,13 +25,6 @@ declare global {
         status: () => Promise<{ authenticated: boolean }>
         getAccessToken: () => Promise<{ accessToken: string | null }>
         reauthenticate: () => Promise<{ ok: true }>
-      }
-      settings: {
-        load: () => Promise<{
-          settings?: { version?: number; appearance?: { theme?: unknown } }
-        }>
-        saveTheme: (payload: { theme: 'dark' | 'light' }) => Promise<{ ok?: boolean }>
-        onThemeChanged: (listener: (payload: { theme?: unknown }) => void) => () => void
       }
       applications: {
         load: () => Promise<{ applications?: unknown }>
@@ -105,6 +99,7 @@ declare global {
               designed?: boolean
             }>
           }>
+          entities: DevelopmentPlanningEntity[]
         }>
       }
       sessions?: {

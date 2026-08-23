@@ -8,12 +8,7 @@
 
 /* 生成版本按钮：重要操作，渐变 + 发光强调；可生成时高亮，禁用时还原。 */
 .@{class-prefix}-workbench-publish-button {
-  height: 28px;
-  padding: 0 14px;
-  font-size: 13px;
   font-weight: 600;
-  border: 0;
-  border-radius: 8px;
   background: linear-gradient(135deg, #6b3cf0 0%, #3f6cf5 100%);
   box-shadow: 0 2px 10px rgba(107, 60, 240, 0.35);
   transition:
@@ -36,10 +31,35 @@
     }
   }
 
-  &[disabled] {
-    background: #c9c2d8;
+  &[disabled],
+  &[disabled]:hover,
+  &[disabled]:focus,
+  &[disabled]:active {
+    color: #ffffff;
+    border-color: #d6d0df;
+    background: #d6d0df;
     box-shadow: none;
+    cursor: default;
+    opacity: 1;
+    pointer-events: none;
+    user-select: none;
+    transform: none;
   }
+}
+
+/* 阶段条末端动作复用阶段节点的字号和尺寸，保留按钮圆角以区分状态位。 */
+.@{class-prefix}-workbench-terminal-action-button {
+  height: auto;
+  min-height: 0;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5715;
+}
+
+.@{class-prefix}-workbench-iteration-button {
+  font-weight: 600;
 }
 
 .@{class-prefix}-workbench-version-badge {

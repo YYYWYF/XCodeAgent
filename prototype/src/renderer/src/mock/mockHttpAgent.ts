@@ -1,6 +1,7 @@
 // 假 AG-UI HttpAgent：仅 lifecycle 动作返回统一信封，其余返回空 result。
 // 由 service/authentication.ts 在浏览器 mock 环境直接使用（不经 Vite 插件重定向）。
 import { appDataByWorkspace, mockApplications } from './fixtures'
+import { WORKSPACE_DOC_PATHS } from './workspaceFiles'
 import type { ApplicationLifecycle } from '../typings'
 
 // 模拟后端按工作区持久化的生命周期（appId 与阶段随动作演进）。
@@ -145,7 +146,7 @@ export function createMockHttpAgent(config: { url?: string; threadId?: string })
           artifact: {
             id: 'requirement_spec',
             name: '需求文档',
-            path: 'specs/requirement.md',
+            path: WORKSPACE_DOC_PATHS.requirementSpec,
             format: 'markdown',
             content: '# 需求文档（已编辑保存）\n\n已按你的编辑同步到 Markdown。'
           }

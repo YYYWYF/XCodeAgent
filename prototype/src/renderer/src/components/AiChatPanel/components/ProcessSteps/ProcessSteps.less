@@ -10,7 +10,6 @@
   min-width: 0;
   align-items: center;
   gap: 8px;
-  cursor: pointer;
   user-select: none;
 
   &::marker {
@@ -39,6 +38,34 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+
+// 工作流容器固定展开；节点摘要仍保留点击展开详情的交互。
+.@{class-prefix}-process-steps-summary {
+  cursor: default;
+  user-select: text;
+}
+
+.@{class-prefix}-process-step-summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.@{class-prefix}-process-steps-title-row {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.@{class-prefix}-process-steps-progress.ant-typography {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--wb-text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .@{class-prefix}-process-steps-status {

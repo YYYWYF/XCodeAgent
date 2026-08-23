@@ -2,6 +2,7 @@ import {
   CloseOutlined,
   CodeOutlined,
   FileMarkdownOutlined,
+  FolderOpenOutlined,
   GlobalOutlined
 } from '@ant-design/icons'
 import type { ReactElement } from 'react'
@@ -13,6 +14,7 @@ import './RightPanelTabs.less'
 export type WorkspaceTabKey =
   | 'preview'
   | 'page-preview'
+  | 'project'
   | 'source'
   | 'doc'
   | 'page-source'
@@ -25,7 +27,7 @@ export type WorkspaceTab = {
   key: WorkspaceTabKey
   label: string
   available: boolean
-  icon?: 'browser' | 'code' | 'document'
+  icon?: 'browser' | 'code' | 'document' | 'project'
 }
 
 type Props = {
@@ -42,6 +44,7 @@ export default function RightPanelTabs({ tabs, active, onChange, onClose }: Prop
     if (icon === 'browser') return <GlobalOutlined />
     if (icon === 'code') return <CodeOutlined />
     if (icon === 'document') return <FileMarkdownOutlined />
+    if (icon === 'project') return <FolderOpenOutlined />
     return null
   }
 

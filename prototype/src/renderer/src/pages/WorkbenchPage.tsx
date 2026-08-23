@@ -24,10 +24,16 @@ import {
   findVersion,
   isVersionReleasable
 } from '../service/applicationVersions'
+import {
+  resetDevelopmentPlanningApiContracts,
+  resetDevelopmentPlanningPageTree,
+  resetDevelopmentPlanningPages
+} from '../service/developmentPlanningState'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntity,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode
@@ -41,11 +47,8 @@ type Props = {
   applicationLifecycle?: ApplicationLifecycle
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onReturnWelcome: () => void
-  onThemeChange: (theme: Theme) => void
-  theme: Theme
 }
 
-type Theme = 'light' | 'dark'
 type WorkbenchEntryStage = 'loading' | 'leaving' | 'ready'
 
 const WORKBENCH_ENTRY_MIN_VISIBLE_MS = 520
@@ -79,9 +82,7 @@ function WorkbenchPage({
   application,
   applicationLifecycle,
   onApplicationLifecycleChange,
-  onReturnWelcome,
-  onThemeChange,
-  theme
+  onReturnWelcome
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
   const [workspaceApplication, setWorkspaceApplication] = useState(application)
@@ -98,6 +99,9 @@ function WorkbenchPage({
   const [developmentPlanningApiContracts, setDevelopmentPlanningApiContracts] = useState<
     DevelopmentPlanningApiContract[]
   >([])
+  const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
+    DevelopmentPlanningEntity[]
+  >([])
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [previewBaseUrl, setPreviewBaseUrl] = useState('')
   const [previewLaunchError, setPreviewLaunchError] = useState('')
@@ -107,6 +111,8 @@ function WorkbenchPage({
   const [iterationModalOpen, setIterationModalOpen] = useState(false)
   // 审查阶段进入口：聊天面板上报“允许进入”（全部开发产物完成），顶部阶段条发起“进入确认”。
   // “允不允许进入”与“当前进没进去”是两个状态，分别由这两个 state 承载。
+  const [testingEntryAvailable, setTestingEntryAvailable] = useState(false)
+  const [testingEntryRequest, setTestingEntryRequest] = useState(0)
   const [reviewEntryAvailable, setReviewEntryAvailable] = useState(false)
   const [reviewEntryRequest, setReviewEntryRequest] = useState(0)
   // 生成版本:版本描述(提交日志)+ 多步骤进度态(打包/提交码云/打Tag)。
@@ -265,6 +271,9 @@ function WorkbenchPage({
         setDevelopmentPlanningApiContracts(
           Array.isArray(inspection.apiContracts) ? inspection.apiContracts : []
         )
+        setDevelopmentPlanningEntities(
+          Array.isArray(inspection.entities) ? inspection.entities : []
+        )
         setHasPageDesigns(inspection.hasPageDesigns)
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
@@ -274,6 +283,7 @@ function WorkbenchPage({
         setDevelopmentPlanningPages([])
         setDevelopmentPlanningPageTree([])
         setDevelopmentPlanningApiContracts([])
+        setDevelopmentPlanningEntities([])
         setHasPageDesigns(false)
         console.warn('检查 specs/plans 规划产物失败。', error)
       } finally {
@@ -325,10 +335,6 @@ function WorkbenchPage({
     const timer = window.setTimeout(() => setEntryStage('ready'), WORKBENCH_ENTRY_FADE_MS)
     return () => window.clearTimeout(timer)
   }, [entryStage])
-
-  const handleThemeChange = (nextTheme: Theme): void => {
-    onThemeChange(nextTheme)
-  }
 
   const handleApplicationUpdate = (updatedApplication: ApplicationConfig): void => {
     setWorkspaceApplication(updatedApplication)
@@ -468,24 +474,9 @@ function WorkbenchPage({
       autoPublishShownRef.current = false
       onApplicationLifecycleChange(initialLifecycle)
       // 与发起新迭代一致：重置页面/接口开发任务，从设计阶段（迭代引导词）开始。
-      setDevelopmentPlanningPages((pages) =>
-        pages.map((page) => ({
-          ...page,
-          designed: false,
-          hasDetailPlan: false,
-          detailPlanStatus: 'pending'
-        }))
-      )
-      setDevelopmentPlanningApiContracts((contracts) =>
-        contracts.map((contract) => ({
-          ...contract,
-          endpoints: contract.endpoints.map((endpoint) => ({
-            ...endpoint,
-            designed: false,
-            hasDetailPlan: false
-          }))
-        }))
-      )
+      setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
+      setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
+      setDevelopmentPlanningApiContracts(resetDevelopmentPlanningApiContracts)
       setHasPageDesigns(false)
     })
   }
@@ -513,36 +504,9 @@ function WorkbenchPage({
       currentVersionId: next.id
     }))
     setViewingVersionId(next.id)
-    setDevelopmentPlanningPages((pages) =>
-      pages.map((page) => ({
-        ...page,
-        designed: false,
-        hasDetailPlan: false,
-        detailPlanStatus: 'pending'
-      }))
-    )
-    setDevelopmentPlanningPageTree((tree) => {
-      // 递归重置页面树叶节点，确保新版本从开发任务的未完成态开始。
-      const resetNode = (
-        node: DevelopmentPlanningPageTreeNode
-      ): DevelopmentPlanningPageTreeNode => ({
-        ...node,
-        ...(node.children?.length
-          ? { children: node.children.map(resetNode) }
-          : { designed: false, hasDetailPlan: false, detailPlanStatus: 'pending' })
-      })
-      return tree.map(resetNode)
-    })
-    setDevelopmentPlanningApiContracts((contracts) =>
-      contracts.map((contract) => ({
-        ...contract,
-        endpoints: contract.endpoints.map((endpoint) => ({
-          ...endpoint,
-          designed: false,
-          hasDetailPlan: false
-        }))
-      }))
-    )
+    setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
+    setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
+    setDevelopmentPlanningApiContracts(resetDevelopmentPlanningApiContracts)
     setHasPageDesigns(false)
     autoPublishShownRef.current = false
     // 应用级 lifecycle 同步重置为新迭代初始态,避免版本 lifecycle 合并把上一版本的完成态盖回来。
@@ -555,7 +519,7 @@ function WorkbenchPage({
   }
 
   return (
-    <Layout className={cx('workbench-shell')} data-theme={theme}>
+    <Layout className={cx('workbench-shell')} data-theme="light">
       {developmentPlanningPagesLoaded ? (
         <WorkbenchPhaseProvider
           key={viewedVersion?.id || workspaceApplication.id}
@@ -570,8 +534,6 @@ function WorkbenchPage({
               workspaceRoot={
                 workspaceApplication.workspaceRoot || workspaceApplication.projectParentPath || ''
               }
-              theme={theme}
-              onThemeChange={handleThemeChange}
               onReturnWelcome={onReturnWelcome}
               lifecycle={versionLifecycle}
               applicationPreviewMode={applicationPreviewMode}
@@ -582,6 +544,8 @@ function WorkbenchPage({
               onRollbackVersion={setRollbackTargetId}
               onStartIteration={() => setIterationModalOpen(true)}
               onVersionSelect={handleVersionSelect}
+              canEnterTestingStage={testingEntryAvailable}
+              onRequestEnterTesting={() => setTestingEntryRequest((count) => count + 1)}
               canEnterReviewStage={reviewEntryAvailable}
               onRequestEnterReview={() => setReviewEntryRequest((count) => count + 1)}
             />
@@ -594,13 +558,13 @@ function WorkbenchPage({
                 developmentPlanningPages={developmentPlanningPages}
                 developmentPlanningPageTree={developmentPlanningPageTree}
                 developmentPlanningApiContracts={developmentPlanningApiContracts}
+                developmentPlanningEntities={developmentPlanningEntities}
                 editorMode={editorMode}
                 onApplicationUpdate={handleApplicationUpdate}
                 onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
                 previewBaseUrl={previewBaseUrl}
                 previewLaunchError={previewLaunchError}
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
-                theme={theme}
                 rightPanelOpen={rightPanelOpen}
                 onRightPanelOpenChange={setRightPanelOpen}
                 applicationPreviewMode={applicationPreviewMode}
@@ -608,6 +572,8 @@ function WorkbenchPage({
                 versionViewKey={viewedVersion?.id || ''}
                 versionReadOnly={!isViewingActiveVersion || viewedVersion?.status === 'released'}
                 versionPreviewOnly={!isViewingActiveVersion}
+                testingEntryRequest={testingEntryRequest}
+                onTestingEntryAvailableChange={setTestingEntryAvailable}
                 reviewEntryRequest={reviewEntryRequest}
                 onReviewEntryAvailableChange={setReviewEntryAvailable}
               />

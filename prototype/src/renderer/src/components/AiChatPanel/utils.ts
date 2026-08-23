@@ -277,12 +277,14 @@ export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): b
 export function requiresPageDetailDesign(
   page: DevelopmentPlanningPageOption | undefined
 ): boolean {
-  return Boolean(page && !page.designed && !page.hasDetailPlan)
+  // 详设计划只是开发上下文；只有代码产物已交付(designed)才算页面完成。
+  return Boolean(page && !page.designed)
 }
 
 /** 以当前接口的落盘详情状态判断是否需要锁定对话区。 */
 export function requiresEndpointDetailDesign(
   endpoint: DevelopmentPlanningApiEndpoint | undefined
 ): boolean {
-  return Boolean(endpoint && !endpoint.designed && !endpoint.hasDetailPlan)
+  // 接口详设存在不代表接口代码已生成，仍需进入开发工作流完成交付。
+  return Boolean(endpoint && !endpoint.designed)
 }

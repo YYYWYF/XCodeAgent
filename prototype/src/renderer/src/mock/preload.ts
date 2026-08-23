@@ -160,11 +160,6 @@ const xcodeAgent = {
     getAccessToken: () => ok({ accessToken: 'mock-token' }),
     reauthenticate: () => ok({ authenticated: true })
   },
-  settings: {
-    load: () => ok({ settings: { appearance: { theme: 'light' } } }),
-    saveTheme: (payload: { theme?: string }) => ok(payload),
-    onThemeChanged: (_listener: (payload: { theme: string }) => void) => () => undefined
-  },
   applications: {
     load: () => ok({ applications: mockApplications }),
     save: (applications: unknown[]) => ok({ applications }),
@@ -198,7 +193,7 @@ const xcodeAgent = {
         (editorMode || 'frontend') as never
       ) as Array<{
         id: string; title: string; editorMode: string; threadId: string; pageId?: string
-        artifactIds?: string[]; apiContractId?: string; endpointId?: string; versionId?: string
+        artifactIds?: string[]; savedFiles?: unknown[]; apiContractId?: string; endpointId?: string; sessionKind?: string; versionId?: string
         createdAt: number; updatedAt: number; messages: unknown[]
       }>
       // 合并走完的实时会话（页面/接口开发、审查），否则切回开发阶段后大纲点页面/接口，
@@ -211,9 +206,13 @@ const xcodeAgent = {
         editorMode: s.editorMode,
         threadId: s.threadId,
         artifactIds: s.artifactIds,
+        savedFiles: s.savedFiles,
         pageId: s.pageId,
         apiContractId: s.apiContractId,
         endpointId: s.endpointId,
+        // 阶段默认会话依赖该字段声明文档产物归属；丢失后点击需求/计划/测试报告只会换右侧文档，
+        // 对话仍停留在原会话。
+        sessionKind: s.sessionKind,
         versionId: s.versionId,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,

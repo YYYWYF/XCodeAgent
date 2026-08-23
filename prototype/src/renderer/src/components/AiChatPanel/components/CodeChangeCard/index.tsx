@@ -15,6 +15,7 @@ const { Text } = Typography
 
 type Props = {
   codeChanges: WorkspaceCodeChangeSet
+  compact?: boolean
   loading: boolean
   onApproveAll: () => void
   onOpenFile: (path: string) => void
@@ -26,6 +27,7 @@ type Props = {
 /** 展示一次工作流产生的可审阅文件列表与汇总数据。 */
 export default function CodeChangeCard({
   codeChanges,
+  compact = false,
   loading,
   onApproveAll,
   onOpenFile,
@@ -42,6 +44,54 @@ export default function CodeChangeCard({
     codeChanges.status === 'pending_approval' && Boolean(codeChanges.approvals?.length)
   const reverted = codeChanges.status === 'reverted'
   const resolved = codeChanges.status === 'applied' || codeChanges.status === 'rejected' || reverted
+
+  if (compact) {
+    const firstFile = groupedChanges[0]
+    const displayPath = firstFile
+      ? workspaceCodeChangeDisplayPath(
+          firstFile.path,
+          codeChanges.workspaceRoot,
+          codeChanges.workspaceName
+        )
+      : '当前文件'
+
+    return (
+      <div className={cx('code-change-card', 'compact', pending && 'pending', resolved && 'resolved')}>
+        <Text className={cx('code-change-compact-label')} strong>
+          文件改动
+        </Text>
+        <Text className={cx('code-change-compact-path')} title={displayPath}>
+          {displayPath}
+        </Text>
+        <span className={cx('code-change-file-stats')}>
+          <span className={cx('addition')}>+{summary.additions}</span>
+          <span className={cx('deletion')}>-{summary.deletions}</span>
+        </span>
+        <span className={cx('code-change-compact-actions')}>
+          <Button
+            className={cx('code-change-compact-revert')}
+            disabled={revertDisabled || reverted}
+            loading={reverting}
+            onClick={onRevert}
+            size="small"
+            type="text"
+          >
+            {reverted ? '已撤销' : '撤销'}
+          </Button>
+          <Button
+            className={cx('code-change-compact-action')}
+            disabled={loading || reverted}
+            loading={loading}
+            onClick={onApproveAll}
+            size="small"
+            type="primary"
+          >
+            接受
+          </Button>
+        </span>
+      </div>
+    )
+  }
 
   return (
     <div className={cx('code-change-card', pending && 'pending', resolved && 'resolved')}>
@@ -73,8 +123,9 @@ export default function CodeChangeCard({
             >
               {reverted ? '已撤销' : '撤销'}
             </Button>
-            <Button onClick={() => onOpenFile(groupedChanges[0].path)} size="small">
-              审核
+            {/* 右侧面板已是审阅视角，这里直接以“接受”完成确认（见 MessageList 接线）。 */}
+            <Button onClick={onApproveAll} size="small" type="primary">
+              接受
             </Button>
           </div>
         )}

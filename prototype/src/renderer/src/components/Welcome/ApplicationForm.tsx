@@ -12,6 +12,7 @@ import {
   LockOutlined,
   MenuOutlined,
   MessageOutlined,
+  ProjectOutlined,
   RadarChartOutlined,
   ShopOutlined,
   ShoppingOutlined,
@@ -39,6 +40,7 @@ const { Text } = Typography
 
 const iconComponents: Record<string, typeof AppstoreOutlined> = {
   AppstoreOutlined,
+  ProjectOutlined,
   DesktopOutlined,
   DashboardOutlined,
   ShopOutlined,
@@ -74,7 +76,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
   const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? true
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? false
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
-  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#2c68ff'
+  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
   const datasourceType = Form.useWatch(['datasource', 'type'], form) ?? 'None'
   const dbUseBuiltin = Form.useWatch(['datasource', 'db', 'useBuiltin'], form) ?? false
   const dbConnectionMode = Form.useWatch(['datasource', 'db', 'connectionMode'], form) ?? 'plant'
@@ -132,7 +134,12 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
     >
       <section className={cx('application-form-section', 'application-form-section--full')}>
         <SectionTitle icon={<FolderOpenOutlined />}>项目位置</SectionTitle>
-        <Form.Item label="项目创建在哪个文件夹下？" required>
+        {/* 与正式前端保持一致：明确要求新目录/空目录，避免用户复用已有应用目录。 */}
+        <Form.Item
+          extra="请输入一个新的项目目录，或选择一个空目录；已有 XCodeAgent 应用目录不能复用。"
+          label="新应用项目目录"
+          required
+        >
           <Input.Group compact>
             <Form.Item
               name="projectPath"
@@ -198,7 +205,12 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
           name="senario"
           rules={[{ required: true, whitespace: true, message: '请输入应用场景' }]}
         >
-          <TextArea rows={3} />
+          {/* 借鉴首页方案里的大输入框体验：可伸展、限长，并引导用户完整描述场景。 */}
+          <TextArea
+            autoSize={{ minRows: 3, maxRows: 6 }}
+            maxLength={1200}
+            placeholder="描述你想解决的问题、关键流程，或希望这款应用为团队带来的改变……"
+          />
         </Form.Item>
       </section>
 
@@ -434,7 +446,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
               />
             </div>
             <Input
-              placeholder="请输入主题色色值，如：#2c68ff"
+              placeholder="请输入主题色色值，如：#6b3cf0"
               style={{ flex: 1 }}
               value={themePrimaryColor || ''}
               onChange={(e) => {

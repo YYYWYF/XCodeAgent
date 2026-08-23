@@ -5,11 +5,14 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../typings'
+import type { WorkbenchPhase } from '../../workbenchPhase'
 
 export type AgentChatMessage = {
   id: number
   role: 'user' | 'assistant'
   content: string
+  /** 消息创建时所属的工作台阶段，历史消息不得跟随当前查看阶段改名。 */
+  agentPhase?: WorkbenchPhase
   skills?: ChatMessageSkill[]
   workflow?: WorkflowRunPayload
   codeChanges?: WorkspaceCodeChangeSet

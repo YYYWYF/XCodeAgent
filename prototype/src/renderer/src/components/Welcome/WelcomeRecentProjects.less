@@ -1,47 +1,32 @@
 .@{class-prefix}-welcome-recents {
-  min-width: 0;
-  margin-top: 0;
+  margin-top: 82px;
 }
 
 .@{class-prefix}-welcome-section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
-  padding: 0 8px 0 16px;
+  margin-bottom: 18px;
 
   h2 {
     margin: 0;
-    color: #eee7f7;
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-
-  .@{class-prefix}-welcome-view-all.ant-btn {
-    height: 30px;
-    padding: 0 4px;
-    color: #bda8d2;
-
-    &:hover,
-    &:focus {
-      color: #ffffff;
-      background: transparent;
-    }
+    color: #f4edff;
+    font-size: 17px;
+    font-weight: 500;
   }
 }
 
 .@{class-prefix}-welcome-project-list {
   display: grid;
-  max-height: 210px;
+  max-height: 258px;
   align-content: start;
-  gap: 10px;
-  padding-right: 0;
+  gap: 12px;
+  padding-right: 3px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
   scrollbar-color: rgba(151, 117, 187, 0.42) transparent;
-  scrollbar-gutter: auto;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
 
   &::-webkit-scrollbar {
@@ -61,16 +46,15 @@
 .@{class-prefix}-welcome-project-row {
   display: grid;
   width: 100%;
-  min-height: 76px;
+  min-height: 78px;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   padding: 0 8px 0 0;
   color: #d4c8e4;
   text-align: left;
-  border: 1px solid rgba(151, 120, 181, 0.2);
-  border-radius: 12px;
-  background: rgba(25, 15, 39, 0.66);
-  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.1);
+  border: 1px solid #362448;
+  border-radius: 8px;
+  background: rgba(25, 14, 40, 0.84);
   transition:
     border-color 160ms ease,
     background 160ms ease,
@@ -78,9 +62,9 @@
 
   &:hover,
   &:focus-within {
-    border-color: rgba(167, 139, 250, 0.44);
-    background: rgba(38, 23, 57, 0.9);
-    transform: translateY(-1px);
+    border-color: #5d477e;
+    background: rgba(39, 22, 59, 0.96);
+    transform: translateX(2px);
   }
 
   &.@{class-prefix}-loading {
@@ -200,6 +184,7 @@
       background: var(--modal-text-secondary);
     }
   }
+
 }
 
 .@{class-prefix}-welcome-project-delete-hint {
@@ -216,8 +201,7 @@
   justify-content: center;
   color: #a78bfa;
   font-size: 22px;
-  border: 1px solid rgba(167, 139, 250, 0.16);
-  border-radius: 10px;
+  border-radius: 7px;
   background: rgba(124, 58, 237, 0.2);
 
   &.@{class-prefix}-tone-1 {
@@ -287,6 +271,7 @@
   border-radius: 8px;
   background: rgba(24, 13, 38, 0.58);
 }
+
 @keyframes welcome-loading {
   to {
     background-position: -220% 0;
@@ -301,5 +286,11 @@
     .@{class-prefix}-welcome-project-open {
       grid-template-columns: 44px 1fr auto;
     }
+  }
+}
+
+@media (max-width: 1120px) {
+  .@{class-prefix}-welcome-recents {
+    margin-top: 56px;
   }
 }

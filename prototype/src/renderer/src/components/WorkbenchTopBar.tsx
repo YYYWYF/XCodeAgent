@@ -1,6 +1,5 @@
 import { Fragment, useState } from 'react'
-import { Tag } from 'antd'
-import { AppstoreOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
+import { AppstoreOutlined } from '@ant-design/icons'
 import { MonitorPlay, PanelRight } from 'lucide-react'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
@@ -8,16 +7,16 @@ import VersionActions from './VersionActions'
 import { useWorkbenchPhase } from '../context'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
-import { WORKBENCH_PHASE_AGENTS, type WorkbenchPhase } from '../workbenchPhase'
+import {
+  WORKBENCH_PHASE_AGENTS,
+  WORKBENCH_PHASE_ORDER,
+  type WorkbenchPhase
+} from '../workbenchPhase'
 import './WorkbenchTopBar.less'
-
-const PHASE_ORDER: WorkbenchPhase[] = ['product', 'development', 'test']
 
 type Props = {
   application: ApplicationConfig
   workspaceRoot: string
-  theme: 'light' | 'dark'
-  onThemeChange: (theme: 'light' | 'dark') => void
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
   activeVersionId?: string
@@ -29,21 +28,22 @@ type Props = {
   onRollbackVersion: (versionId: string) => void
   onStartIteration: () => void
   onVersionSelect: (versionId: string) => void
-  /** 审查阶段是否具备进入条件（全部开发产物已完成；“允许进入”不等于“已进入”）。 */
+  /** 测试阶段是否具备进入条件（全部开发产物已完成；“允许进入”不等于“已进入”）。 */
+  canEnterTestingStage?: boolean
+  /** 用户点击具备进入条件的测试阶段节点时，发起进入测试确认。 */
+  onRequestEnterTesting?: () => void
+  /** 测试报告通过后是否具备进入审查阶段条件。 */
   canEnterReviewStage?: boolean
   /** 用户点击具备进入条件的审查阶段节点时，发起进入审查确认。 */
   onRequestEnterReview?: () => void
 }
 
 /**
- * 工作台顶部单条：左 = Logo(XCodeAgent)，分隔线后 = 应用卡 + 阶段横排 stepper，
- * 右侧 = 状态提示 + 预览 + 主题切换 + 版本选择与发布。
+ * 工作台顶部单条：左侧按应用、版本、五阶段和终态动作递进，右侧保留面板与预览配置。
  */
 export default function WorkbenchTopBar({
   application,
   workspaceRoot,
-  theme,
-  onThemeChange,
   onReturnWelcome,
   lifecycle,
   activeVersionId,
@@ -55,23 +55,36 @@ export default function WorkbenchTopBar({
   onRollbackVersion,
   onStartIteration,
   onVersionSelect,
+  canEnterTestingStage,
+  onRequestEnterTesting,
   canEnterReviewStage,
   onRequestEnterReview
 }: Props): JSX.Element {
-  const { phase, derivedPhase, locked, manualOverride, switchPhase } = useWorkbenchPhase()
-  const following = manualOverride === null
+  const { viewingPhase, reachedPhase, locked, switchPhase } = useWorkbenchPhase()
   // 回到前序阶段会改变当前执行状态，需要确认；向后续阶段推进不额外打断。
   const [confirmPhase, setConfirmPhase] = useState<WorkbenchPhase | null>(null)
   /** 处理阶段节点点击：未到达且不具备条件的阶段不可点，其余按回退/进入分流。 */
   const handlePhaseClick = (phaseKey: WorkbenchPhase): void => {
-    if (locked || phaseKey === phase) return
-    const targetIndex = PHASE_ORDER.indexOf(phaseKey)
-    // 旅程尚未到达审查、但开发产物已全部完成：允许进入，点击先走确认弹框而不是直接切视图。
-    if (targetIndex > PHASE_ORDER.indexOf(derivedPhase) && phaseKey === 'test' && canEnterReviewStage) {
+    if (locked || phaseKey === viewingPhase) return
+    const targetIndex = WORKBENCH_PHASE_ORDER.indexOf(phaseKey)
+    // 旅程尚未到达测试、但开发产物已全部完成：允许进入，点击先走确认弹框而不是直接切视图。
+    if (
+      targetIndex > WORKBENCH_PHASE_ORDER.indexOf(reachedPhase) &&
+      phaseKey === 'testing' &&
+      canEnterTestingStage
+    ) {
+      onRequestEnterTesting?.()
+      return
+    }
+    if (
+      targetIndex > WORKBENCH_PHASE_ORDER.indexOf(reachedPhase) &&
+      phaseKey === 'review' &&
+      canEnterReviewStage
+    ) {
       onRequestEnterReview?.()
       return
     }
-    if (targetIndex < PHASE_ORDER.indexOf(phase)) {
+    if (targetIndex < WORKBENCH_PHASE_ORDER.indexOf(viewingPhase)) {
       setConfirmPhase(phaseKey)
       return
     }
@@ -95,17 +108,32 @@ export default function WorkbenchTopBar({
         <AppstoreOutlined />
         <span className={cx('workbench-topbar-app-name')}>{application.name}</span>
       </div>
+
+      <VersionActions
+        activeVersionId={activeVersionId}
+        application={application}
+        lifecycle={lifecycle}
+        onPublish={onPublishVersion}
+        onRollback={onRollbackVersion}
+        onStartIteration={onStartIteration}
+        onVersionSelect={onVersionSelect}
+        part="selector"
+      />
+
       <div
         className={cx('workbench-topbar-phase', locked && 'locked')}
         title={locked ? '该版本已生成，阶段和 Agent 调度均已锁定' : undefined}
       >
         <div className={cx('workbench-topbar-stepper')} role="tablist" aria-label="阶段">
-          {PHASE_ORDER.map((phaseKey, idx) => {
-            const isActive = phase === phaseKey
-            const reached = PHASE_ORDER.indexOf(derivedPhase) >= idx
-            // 审查阶段具备进入条件时视同“已到达”：沿用可点击的未选中样式，不新增视觉状态。
+          {WORKBENCH_PHASE_ORDER.map((phaseKey, idx) => {
+            // 锁定版本只展示阶段旅程，不保留任何选中态；选中态仅属于可编辑版本。
+            const isActive = !locked && viewingPhase === phaseKey
+            const reached = WORKBENCH_PHASE_ORDER.indexOf(reachedPhase) >= idx
+            // 测试阶段具备进入条件时视同“已到达”：沿用可点击的未选中样式，不新增视觉状态。
             const reachable =
-              reached || (!locked && phaseKey === 'test' && Boolean(canEnterReviewStage))
+              reached ||
+              (!locked && phaseKey === 'testing' && Boolean(canEnterTestingStage)) ||
+              (!locked && phaseKey === 'review' && Boolean(canEnterReviewStage))
             return (
               <Fragment key={phaseKey}>
                 {idx > 0 ? (
@@ -122,6 +150,7 @@ export default function WorkbenchTopBar({
                     isActive && 'active',
                     reachable && !isActive && 'reached'
                   )}
+                  aria-disabled={locked || !reachable ? true : undefined}
                   disabled={locked || !reachable}
                   onClick={() => handlePhaseClick(phaseKey)}
                 >
@@ -134,14 +163,25 @@ export default function WorkbenchTopBar({
             )
           })}
         </div>
-        <Tag
-          className={cx('workbench-topbar-follow')}
-          color={following ? undefined : 'processing'}
-          onClick={locked || following ? undefined : () => switchPhase(null)}
-        >
-          {locked ? '版本已锁定' : following ? '跟随旅程' : '恢复自动'}
-        </Tag>
       </div>
+
+      <span
+        aria-hidden="true"
+        className={cx('workbench-topbar-arrow', 'workbench-topbar-terminal-arrow')}
+      >
+        →
+      </span>
+
+      <VersionActions
+        activeVersionId={activeVersionId}
+        application={application}
+        lifecycle={lifecycle}
+        onPublish={onPublishVersion}
+        onRollback={onRollbackVersion}
+        onStartIteration={onStartIteration}
+        onVersionSelect={onVersionSelect}
+        part="terminal"
+      />
 
       <button
         aria-label={rightPanelOpen ? '收起右侧面板' : '展开右侧面板'}
@@ -162,39 +202,19 @@ export default function WorkbenchTopBar({
       </button>
 
       <button
-        className={cx('workbench-topbar-theme')}
-        onClick={() => onThemeChange(theme === 'dark' ? 'light' : 'dark')}
-        title={theme === 'dark' ? '浅色' : '深色'}
+        aria-label={applicationPreviewMode ? '返回任务工作区' : '预览应用'}
+        aria-pressed={applicationPreviewMode}
+        className={cx('workbench-topbar-preview-toggle', applicationPreviewMode && 'active')}
+        onClick={() => onApplicationPreviewModeChange(!applicationPreviewMode)}
+        title={applicationPreviewMode ? '返回任务工作区' : '预览完整应用'}
         type="button"
       >
-        {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+        <MonitorPlay size={14} />
+        <span>{applicationPreviewMode ? '返回任务' : '预览应用'}</span>
       </button>
 
-      <VersionActions
-        activeVersionId={activeVersionId}
-        application={application}
-        lifecycle={lifecycle}
-        onPublish={onPublishVersion}
-        onRollback={onRollbackVersion}
-        onStartIteration={onStartIteration}
-        onVersionSelect={onVersionSelect}
-        previewAction={
-          <button
-            aria-label={applicationPreviewMode ? '返回任务工作区' : '预览应用'}
-            aria-pressed={applicationPreviewMode}
-            className={cx('workbench-topbar-preview-toggle', applicationPreviewMode && 'active')}
-            onClick={() => onApplicationPreviewModeChange(!applicationPreviewMode)}
-            title={applicationPreviewMode ? '返回任务工作区' : '预览完整应用'}
-            type="button"
-          >
-            <MonitorPlay size={14} />
-            <span>{applicationPreviewMode ? '返回任务' : '预览应用'}</span>
-          </button>
-        }
-      />
-
       <PhaseSwitchConfirmModal
-        fromPhase={phase}
+        fromPhase={viewingPhase}
         onCancel={() => setConfirmPhase(null)}
         onConfirm={(next) => {
           switchPhase(next)

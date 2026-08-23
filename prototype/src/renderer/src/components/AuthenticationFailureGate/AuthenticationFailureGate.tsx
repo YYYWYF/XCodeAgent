@@ -7,7 +7,6 @@ import {
   subscribeAuthenticationFailure,
   type AuthenticationFailure
 } from '../../service/authentication'
-import { useApplicationTheme } from '../../hooks/useApplicationTheme'
 import { cx } from '../../utils'
 import './AuthenticationFailureGate.less'
 
@@ -19,7 +18,6 @@ type Props = {
 
 /** 在任意产品页面上阻断认证失败，并将用户带回登录窗口。 */
 export function AuthenticationFailureGate({ children }: Props): JSX.Element {
-  const { theme } = useApplicationTheme()
   const [failure, setFailure] = useState<AuthenticationFailure>()
   const [redirecting, setRedirecting] = useState(false)
   const [redirectError, setRedirectError] = useState('')
@@ -66,7 +64,7 @@ export function AuthenticationFailureGate({ children }: Props): JSX.Element {
         open={Boolean(failure)}
         transitionName=""
         width={420}
-        wrapClassName={cx('authentication-failure-modal', `theme-${theme}`)}
+        wrapClassName={cx('authentication-failure-modal', 'theme-light')}
         zIndex={10000}
       >
         <div className={cx('authentication-failure-content')}>

@@ -28,7 +28,6 @@ function getWorkbenchDrawerContainer(): HTMLElement {
 type SharedProps = {
   onClose: () => void
   onSaved: () => Promise<void> | void
-  theme: 'light' | 'dark'
 }
 
 type Props = SharedProps &
@@ -38,7 +37,7 @@ type Props = SharedProps &
   )
 
 export default function SkillEditorDrawer(props: Props): ReactElement {
-  const { onClose, onSaved, theme } = props
+  const { onClose, onSaved } = props
   const isCreate = props.mode === 'create'
   const skill = isCreate ? undefined : props.skill
   const open = isCreate ? props.open : Boolean(skill)
@@ -138,7 +137,7 @@ export default function SkillEditorDrawer(props: Props): ReactElement {
     Modal.confirm({
       cancelText: '继续编辑',
       centered: true,
-      className: cx('skill-discard-confirm', `theme-${theme}`),
+      className: cx('skill-discard-confirm', 'theme-light'),
       content: '当前技能内容尚未保存，关闭后修改将丢失。',
       icon: <ExclamationCircleOutlined />,
       okButtonProps: { danger: true },

@@ -6,7 +6,6 @@ import {
   WarningOutlined
 } from '@ant-design/icons'
 import { Typography } from 'antd'
-import { useState } from 'react'
 import type { ReactElement } from 'react'
 import type { WorkspaceInspectionSnapshot } from '../../../../service/agUiAgent'
 import { cx } from '../../../../utils'
@@ -40,7 +39,6 @@ export default function WorkspaceInspectionPanel({
 }: {
   snapshot: WorkspaceInspectionSnapshot
 }): ReactElement {
-  const [graphOpen, setGraphOpen] = useState(snapshot.codeGraph.available)
   const codeGraph = snapshot.codeGraph
   const symbolTotal = codeGraph.nodesByKind.reduce((sum, item) => sum + item.count, 0)
   const relationTotal = codeGraph.relationsByKind.reduce((sum, item) => sum + item.count, 0)
@@ -108,11 +106,7 @@ export default function WorkspaceInspectionPanel({
         </section>
       </div>
 
-      <details
-        className={cx('workspace-inspection-graph')}
-        onToggle={(event) => setGraphOpen(event.currentTarget.open)}
-        open={graphOpen}
-      >
+      <details className={cx('workspace-inspection-graph')}>
         <summary>
           <span className={cx('workspace-inspection-graph-title')}>
             <RadarChartOutlined />

@@ -50,7 +50,6 @@ type Props = {
   initialStatus: ActivePlanningStatus
   initialLifecycle: ApplicationLifecycle
   initialWorkflow?: WorkflowRunPayload
-  theme: 'dark' | 'light'
   threadId: string
   visible: boolean
   onReturnHome: () => void
@@ -168,7 +167,6 @@ export default function ApplicationPagePlanningModal({
   initialStatus,
   initialLifecycle,
   initialWorkflow,
-  theme,
   threadId,
   visible,
   onReturnHome,
@@ -408,7 +406,7 @@ export default function ApplicationPagePlanningModal({
         'welcome-modal',
         'page-planning-modal',
         'page-planning-screen',
-        `theme-${theme}`,
+        'theme-light',
         !visible && 'is-hidden'
       )}
     >

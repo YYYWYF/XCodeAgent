@@ -17,15 +17,13 @@ type Props = {
   onClose: () => void
   onImported: () => Promise<void> | void
   open: boolean
-  theme: 'light' | 'dark'
 }
 
 export default function SkillZipImportModal({
   existingSkillNames,
   onClose,
   onImported,
-  open,
-  theme
+  open
 }: Props): ReactElement {
   const [error, setError] = useState('')
   const [importing, setImporting] = useState(false)
@@ -95,7 +93,7 @@ export default function SkillZipImportModal({
       confirmLoading={importing}
       title="ZIP 上传"
       width={640}
-      wrapClassName={cx('skill-zip-import-modal', `theme-${theme}`)}
+      wrapClassName={cx('skill-zip-import-modal', 'theme-light')}
     >
       <Dragger
         accept=".zip,application/zip,application/x-zip-compressed"

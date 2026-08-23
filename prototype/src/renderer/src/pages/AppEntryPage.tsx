@@ -5,7 +5,6 @@ import { saveApplication } from '../components/Welcome/applicationService'
 import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
 import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlannings'
 import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
-import { useApplicationTheme } from '../hooks/useApplicationTheme'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { canOpenApplicationWorkbench } from '../service/applicationStorage'
 import { stopProjectPreview } from '../service/projectLaunch'
@@ -46,7 +45,6 @@ export default function AppEntryPage(): JSX.Element {
 
 // 在欢迎页、多个全屏规划会话与应用工作台之间维护顶层导航。
 function AppEntryContent(): JSX.Element {
-  const { theme, setTheme } = useApplicationTheme()
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
   const activePreviewWorkspaceRef = useRef('')
@@ -86,8 +84,7 @@ function AppEntryContent(): JSX.Element {
   )
 
   const planningController = useActiveApplicationPlannings({
-    onOpenWorkbench: openWorkbench,
-    theme
+    onOpenWorkbench: openWorkbench
   })
 
   // 新建应用：创建完直接进工作台（设计阶段），规划在工作台内完成，不弹独立规划框。
@@ -159,7 +156,6 @@ function AppEntryContent(): JSX.Element {
         <WelcomePage
           onOpenApplication={handleOpenApplication}
           onOpenWorkbenchAfterCreate={handleOpenWorkbenchAfterCreate}
-          theme={theme}
         />
       </div>
 
@@ -181,7 +177,6 @@ function AppEntryContent(): JSX.Element {
           onWorkflowChange={(workflow) =>
             planningController.updatePlanningWorkflow(planning.application.id, workflow)
           }
-          theme={theme}
           threadId={planning.threadId}
           visible={planningController.visiblePlanningId === planning.application.id}
         />
@@ -198,8 +193,6 @@ function AppEntryContent(): JSX.Element {
             applicationLifecycle={applicationLifecycle}
             onApplicationLifecycleChange={mergeApplicationLifecycle}
             onReturnWelcome={handleReturnWelcome}
-            onThemeChange={setTheme}
-            theme={theme}
           />
         </div>
       ) : null}

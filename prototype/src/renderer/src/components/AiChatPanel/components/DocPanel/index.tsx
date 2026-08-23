@@ -1,87 +1,97 @@
 import { FileTextOutlined } from '@ant-design/icons'
-import { Button, Typography } from 'antd'
-import { useEffect, useRef, useState } from 'react'
+import { Typography } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import RichLoading from '../DesignProgress/RichLoading'
-import MarkdownPreview from './MarkdownPreview'
+import FileDiffView, { type PendingFileDiff } from '../FileDiffView'
 import './index.less'
 
 const { Text } = Typography
 
 type Props = {
   content?: string
-  title?: string
   generating?: boolean
   docName?: string
+  /** 生成中的单文件 Diff（编辑态中的一个行为）：存在时优先于编辑器/预览渲染。 */
+  diff?: PendingFileDiff | null
   readOnly?: boolean
   /** 保存编辑草稿（对应 IDE Ctrl+S）。 */
   onSaveEdit?: (draft: string) => void
 }
 
-/** 右侧「文档」面板：IDE 式人工编辑口子。生成就绪后默认编辑态（全面板编辑区，
- * 内部留白让文字协调），右上角仅一个保存按钮（Ctrl+S 语义）。接受/放弃在对话区授权条。 */
+/** 「应用文件」中的文档内容区：IDE 式源码视图。生成就绪后始终展示 Markdown 源码，
+ * 只读文档仅禁止编辑、不切换预览态；可编辑文档统一使用 Ctrl/Cmd+S 保存。 */
 export default function DocPanel({
   content,
-  title,
   generating,
   docName,
+  diff,
   onSaveEdit,
   readOnly = false
 }: Props): ReactElement {
   const [internalDraft, setInternalDraft] = useState(content || '')
+  const [editorScrollTop, setEditorScrollTop] = useState(0)
+  const lineNumberRef = useRef<HTMLDivElement>(null)
   // 内容变化（新文档生成/切换）→ 同步草稿（保持编辑态，不跳视图）。
   useEffect(() => {
     setInternalDraft(content || '')
   }, [content])
-  const savedRef = useRef(false)
-  const handleSave = (): void => {
+  /** 使用编辑器快捷键保存当前文档草稿，避免 Diff 与编辑态出现两套操作入口。 */
+  const handleShortcutSave = (): void => {
     onSaveEdit?.(internalDraft)
-    savedRef.current = true
   }
-  useEffect(() => {
-    if (!savedRef.current) return
-    savedRef.current = false
-  }, [content])
   // 文档已就绪(content 有值)才进编辑器态;澄清阶段未生成 → 空引导,不算 dirty。
   const ready = Boolean(content)
-  // 草稿是否偏离生成版（有未保存修改）→ 展示轻提示;仅文档就绪时判断。
-  const dirty = ready && internalDraft !== content
+  const lineCount = useMemo(
+    () => Math.max(1, internalDraft.split('\n').length),
+    [internalDraft]
+  )
 
   return (
     <div className={cx('doc-panel')}>
-      <header className={cx('doc-panel-toolbar')}>
-        <div className={cx('doc-panel-path')}>{title || '文档'}</div>
-        {ready && !generating && !readOnly && (
-          <div className={cx('doc-panel-edit-actions')}>
-            <Text className={cx('doc-panel-dirty-hint')} type="secondary">
-              {dirty ? '有未保存的修改' : '已保存'}
-            </Text>
-            <Button
-              onClick={handleSave}
-              size="small"
-              type="primary"
-            >
-              保存
-            </Button>
-          </div>
-        )}
-      </header>
-      <div className={cx('doc-panel-stage', ready && 'editor')}>
-        {generating ? (
+      <div className={cx('doc-panel-stage', (ready || diff) && 'editor')}>
+        {diff ? (
+          // Diff 过程融合进文档页签：绿色新增行逐段写入，接受后回到编辑器。
+          <FileDiffView diff={diff} />
+        ) : generating ? (
           <div className={cx('doc-panel-generating')}>
             <RichLoading bare title={`正在生成${docName || '文档'}…`} />
           </div>
-        ) : ready && readOnly ? (
-          <MarkdownPreview content={content || ''} />
         ) : ready ? (
-          <textarea
-            aria-label="编辑文档"
-            className={cx('doc-panel-editor')}
-            onChange={(event) => setInternalDraft(event.target.value)}
-            spellCheck={false}
-            value={internalDraft}
-          />
+          <div className={cx('doc-panel-code-editor')}>
+            <div
+              aria-hidden="true"
+              className={cx('doc-panel-line-numbers')}
+              ref={lineNumberRef}
+              style={{ transform: `translateY(-${editorScrollTop}px)` }}
+            >
+              {Array.from({ length: lineCount }, (_, index) => (
+                <div className={cx('doc-panel-line-number')} key={index}>
+                  <span className={cx('doc-panel-line-marker')} aria-hidden="true">
+                    {' '}
+                  </span>
+                  {index + 1}
+                </div>
+              ))}
+            </div>
+            <textarea
+              aria-label={readOnly ? '查看文档' : '编辑文档'}
+              className={cx('doc-panel-editor')}
+              onChange={(event) => setInternalDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+                  event.preventDefault()
+                  if (!readOnly) handleShortcutSave()
+                }
+              }}
+              onScroll={(event) => setEditorScrollTop(event.currentTarget.scrollTop)}
+              readOnly={readOnly}
+              spellCheck={false}
+              value={internalDraft}
+              wrap="off"
+            />
+          </div>
         ) : (
           <div className={cx('doc-panel-empty')}>
             <span className={cx('doc-panel-orb')}>

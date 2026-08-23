@@ -17,16 +17,6 @@
   background: var(--code-panel-bg);
 }
 
-.@{class-prefix}-workbench-shell[data-theme='dark'] .@{class-prefix}-code-diff-detail-panel {
-  --code-panel-bg: var(--wb-canvas);
-  --code-panel-code-bg: var(--wb-canvas);
-  --code-panel-header: var(--wb-canvas);
-  --code-panel-active: var(--wb-surface-subtle);
-  --code-panel-border: var(--wb-border);
-  --code-panel-insert: rgba(46, 160, 67, 0.2);
-  --code-panel-delete: rgba(248, 81, 73, 0.2);
-}
-
 .@{class-prefix}-code-diff-detail-header {
   position: relative;
   display: flex;
@@ -257,10 +247,3 @@
   }
 }
 
-.@{class-prefix}-workbench-shell[data-theme='dark'] {
-  .@{class-prefix}-code-diff-close-button.ant-btn:hover,
-  .@{class-prefix}-code-diff-close-button.ant-btn:focus-visible {
-    color: #ffffff;
-    background: #354052;
-  }
-}

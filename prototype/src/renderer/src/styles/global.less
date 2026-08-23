@@ -44,6 +44,19 @@ html[data-platform='windows'] body {
   -webkit-font-smoothing: auto;
 }
 
+// 全局禁用规范：禁用控件只呈现灰化结果，不显示禁用鼠标、不响应 hover。
+button[disabled],
+input[disabled],
+select[disabled],
+textarea[disabled],
+[aria-disabled='true'],
+.ant-btn-disabled,
+.ant-input-disabled,
+.ant-select-disabled {
+  cursor: default !important;
+  pointer-events: none;
+}
+
 .@{class-prefix}-workbench-shell {
   --wb-bg: #f5f5f5;
   --wb-canvas: #ffffff;
@@ -87,7 +100,7 @@ html[data-platform='windows'] body {
   background: var(--wb-bg);
 }
 
-/* Ant Design 浮层通过 Portal 挂载到 body，需要从当前页面同步主题。 */
+/* Ant Design 浮层通过 Portal 挂载到 body，需要从当前浅色页面同步样式。 */
 body:has(.@{class-prefix}-workbench-shell[data-theme='light']),
 body:has(.@{class-prefix}-welcome-page[data-theme='light']) {
   .ant-tooltip-inner,
@@ -122,120 +135,6 @@ body:has(.@{class-prefix}-welcome-page[data-theme='light']) {
   .ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
     color: #6b3cf0;
     background: rgba(107, 60, 240, 0.12);
-  }
-}
-
-body:has(.@{class-prefix}-workbench-shell[data-theme='dark']),
-body:has(.@{class-prefix}-welcome-page[data-theme='dark']) {
-  .ant-message-notice-content {
-    color: #f2f2f2;
-    background: #28282b;
-    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
-  }
-
-  .ant-tooltip-inner,
-  .ant-popover-inner {
-    color: #f2f2f2;
-    background: #28282b;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
-  }
-
-  .ant-tooltip-arrow-content,
-  .ant-popover-arrow-content {
-    background: #28282b;
-  }
-
-  .ant-popover-message,
-  .ant-popover-message-title,
-  .ant-popover-inner-content {
-    color: #f2f2f2;
-  }
-
-  .ant-select-dropdown {
-    color: #f2f2f2;
-    background: #28282b;
-    border: 1px solid rgba(167, 130, 255, 0.16);
-  }
-
-  .ant-select-item {
-    color: #f2f2f2;
-  }
-
-  .ant-select-item-option-active:not(.ant-select-item-option-disabled) {
-    background: rgba(167, 130, 255, 0.1);
-  }
-
-  .ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
-    color: #c0a9ef;
-    background: rgba(167, 130, 255, 0.17);
-  }
-
-  .ant-popover-buttons .ant-btn-default {
-    color: #f2f2f2;
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.12);
-
-    &:hover,
-    &:focus {
-      color: #ffffff;
-      background: rgba(255, 255, 255, 0.13);
-      border-color: rgba(255, 255, 255, 0.2);
-    }
-  }
-}
-
-.@{class-prefix}-workbench-shell[data-theme='dark'] {
-  --wb-bg: #1b1b1d;
-  --wb-canvas: #151a24;
-  --wb-sidebar: #202023;
-  --wb-editor: #19191b;
-  --wb-surface: rgba(255, 255, 255, 0.055);
-  --wb-surface-subtle: rgba(255, 255, 255, 0.035);
-  --wb-surface-hover: rgba(255, 255, 255, 0.075);
-  --wb-surface-selected: rgba(255, 255, 255, 0.095);
-  --wb-control: rgba(255, 255, 255, 0.1);
-  --wb-control-hover: rgba(255, 255, 255, 0.145);
-  --wb-text: #f2f2f2;
-  --wb-text-secondary: #a6a6aa;
-  --wb-text-tertiary: #737378;
-  --wb-border: rgba(255, 255, 255, 0.075);
-  --wb-border-strong: rgba(255, 255, 255, 0.13);
-  --wb-focus: rgba(255, 255, 255, 0.28);
-  --wb-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
-  --wb-code-add: rgba(46, 160, 67, 0.2);
-  --wb-code-add-text: #56d364;
-  --wb-code-delete: rgba(248, 81, 73, 0.2);
-  --wb-code-delete-text: #ff7b72;
-  --wb-inverse: var(--wb-control);
-  --wb-inverse-text: var(--wb-text);
-  --wb-danger: #ff8a80;
-  --wb-warning: #e8c06a;
-  --wb-accent: #a782ff;
-  --wb-accent-hover: #b488ff;
-  --wb-accent-active: #8d62ea;
-  --wb-accent-soft: rgba(167, 130, 255, 0.1);
-  --wb-accent-border: rgba(167, 130, 255, 0.4);
-
-  .ant-typography,
-  .ant-empty-description,
-  .ant-checkbox-wrapper,
-  .ant-radio-wrapper {
-    color: var(--wb-text);
-  }
-
-  .ant-typography-secondary {
-    color: var(--wb-text-secondary);
-  }
-
-  .ant-checkbox:not(.ant-checkbox-checked) .ant-checkbox-inner,
-  .ant-radio:not(.ant-radio-checked) .ant-radio-inner {
-    background: var(--wb-surface);
-    border-color: var(--wb-border-strong);
-  }
-
-  .ant-radio-checked .ant-radio-inner {
-    background: var(--wb-surface);
   }
 }
 

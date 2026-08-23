@@ -3,10 +3,13 @@
   align-items: center;
   flex: 0 0 auto;
   min-height: 44px;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding: 0 12px;
   gap: 8px;
   border-bottom: 1px solid var(--wb-border);
   background: var(--wb-canvas);
+  scrollbar-width: thin;
 }
 
 /* —— Logo（独立块）—— */
@@ -68,16 +71,32 @@
 
 .@{class-prefix}-workbench-topbar-phase.@{class-prefix}-locked {
   .@{class-prefix}-workbench-topbar-stepper {
-    opacity: 0.48;
+    opacity: 1;
   }
 
-  .@{class-prefix}-workbench-topbar-phase-item,
-  .@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-active,
-  .@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-reached {
-    color: var(--wb-text-tertiary);
-    background: var(--wb-surface-subtle);
-    border-color: transparent;
+  .@{class-prefix}-workbench-topbar-phase-item[disabled] {
     cursor: default;
+
+    &:hover {
+      background: transparent;
+    }
+  }
+
+  .@{class-prefix}-workbench-topbar-phase-item[disabled],
+  .@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-reached[disabled],
+  .@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-active[disabled] {
+    color: var(--wb-text);
+    background: transparent;
+    border-color: transparent;
+    font-weight: 400;
+  }
+
+  .@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-active[disabled]
+    .@{class-prefix}-workbench-topbar-phase-index {
+    color: var(--wb-text);
+    background: var(--wb-surface-subtle);
+    border-color: currentColor;
+    opacity: 0.78;
   }
 }
 
@@ -164,12 +183,6 @@
   white-space: nowrap;
 }
 
-/* —— 右侧状态提示（Agent + 跟随旅程）—— */
-.@{class-prefix}-workbench-topbar-follow {
-  cursor: default;
-  user-select: none;
-}
-
 /* —— 右侧预览开关（VSCode 式，归属顶栏而非对话区）—— */
 .@{class-prefix}-workbench-topbar-preview-toggle {
   display: inline-flex;
@@ -180,21 +193,77 @@
   gap: 6px;
   padding: 0 9px;
   margin-right: 4px;
-  border: 0;
+  border: 1px solid var(--wb-border);
   border-radius: 6px;
-  background: transparent;
+  background: var(--wb-surface);
   cursor: pointer;
-  color: var(--wb-text-tertiary);
+  color: var(--wb-accent);
+  font-weight: 600;
   flex: 0 0 auto;
 
   &:hover {
+    border-color: var(--wb-accent);
     background: var(--wb-surface-hover);
-    color: var(--wb-text);
   }
 
   &.@{class-prefix}-active {
+    border-color: var(--wb-accent);
     color: var(--wb-accent);
     background: var(--wb-accent-soft);
+  }
+}
+
+/* 窄窗口保持单行旅程，阶段与末端动作可横向滚动访问，不挤压内容造成换行。 */
+@media (max-width: 1080px) {
+  .@{class-prefix}-workbench-topbar {
+    gap: 5px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .@{class-prefix}-workbench-topbar-app {
+    max-width: 150px;
+    padding-right: 7px;
+    padding-left: 7px;
+  }
+
+  .@{class-prefix}-workbench-topbar-phase-item {
+    gap: 3px;
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+
+  .@{class-prefix}-workbench-topbar-arrow {
+    padding-right: 1px;
+    padding-left: 1px;
+  }
+
+  .@{class-prefix}-workbench-version-actions {
+    gap: 5px;
+  }
+
+  .@{class-prefix}-workbench-publish-button {
+    padding-right: 9px;
+    padding-left: 9px;
+  }
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-workbench-topbar-app-name {
+    display: none;
+  }
+
+  .@{class-prefix}-workbench-topbar-phase-item {
+    padding-right: 5px;
+    padding-left: 5px;
+  }
+
+  .@{class-prefix}-workbench-topbar-phase-index {
+    display: none;
+  }
+
+  .@{class-prefix}-workbench-topbar-preview-toggle span {
+    display: none;
   }
 }
 
@@ -226,25 +295,5 @@
   &:disabled {
     cursor: default;
     opacity: 0.38;
-  }
-}
-
-/* —— 主题切换（不相关功能，放最右上角）—— */
-.@{class-prefix}-workbench-topbar-theme {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-  color: var(--wb-text-tertiary);
-  flex: 0 0 auto;
-
-  &:hover {
-    background: var(--wb-surface-hover);
-    color: var(--wb-text);
   }
 }

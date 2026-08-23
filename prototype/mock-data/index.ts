@@ -1,7 +1,10 @@
 // 演示数据统一入口：单一 pms-new 新建旅程场景（需求回检单模块），按 workspace 路由。
 // 换演示案例 = 替换 mock-data/pms-new/ 内容，脚本按 workspaceRoot 取场景数据。
 import type { ApplicationConfig, ApplicationLifecycle, EditorMode } from '../src/renderer/src/typings'
-import type { DevelopmentPlanningApiContract } from '../src/renderer/src/typings'
+import type {
+  DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntity
+} from '../src/renderer/src/typings'
 
 // —— pms-new 新建主旅程（需求回检单模块）——
 import { pmsNewApplication, WORKSPACE_ROOT as NEW_ROOT } from './pms-new/application'
@@ -25,6 +28,7 @@ export type PlanningArtifactsShape = {
   pages: Array<Record<string, unknown>>
   pageTree: Array<Record<string, unknown>>
   apiContracts: DevelopmentPlanningApiContract[]
+  entities: DevelopmentPlanningEntity[]
 }
 
 export type AppScenario = {

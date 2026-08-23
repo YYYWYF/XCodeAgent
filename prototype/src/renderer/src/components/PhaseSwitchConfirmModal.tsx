@@ -1,8 +1,12 @@
-import { EditOutlined, PauseCircleOutlined, RetweetOutlined, UndoOutlined } from '@ant-design/icons'
+import { EditOutlined, RetweetOutlined, UndoOutlined } from '@ant-design/icons'
 import { Button, Modal } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../utils'
-import { WORKBENCH_PHASE_AGENTS, type WorkbenchPhase } from '../workbenchPhase'
+import {
+  WORKBENCH_PHASE_AGENTS,
+  WORKBENCH_PHASE_ORDER,
+  type WorkbenchPhase
+} from '../workbenchPhase'
 import './PhaseSwitchConfirmModal.less'
 
 type Props = {
@@ -26,18 +30,11 @@ const POINTS = [
     title: 'scoped 增量重建',
     desc: '重新进入下游时只重算受影响对象，已完成的部分不会被推倒重来。'
   },
-  {
-    icon: <PauseCircleOutlined />,
-    title: '旅程暂停自动',
-    desc: '阶段不再跟随旅程自动推进，直至你在顶栏点「恢复自动」。'
-  }
 ]
-
-const PHASE_ORDER: WorkbenchPhase[] = ['product', 'development', 'test']
 
 /**
  * 强制回退切阶段（增量迭代）的二次确认弹框。
- * 仅在切到旅程上游阶段时由 WorkbenchTopBar 弹出；向前推进 / 恢复自动不弹。
+ * 仅在切到旅程上游阶段时由 WorkbenchTopBar 弹出，向前推进不弹。
  */
 export default function PhaseSwitchConfirmModal({
   open,
@@ -46,9 +43,10 @@ export default function PhaseSwitchConfirmModal({
   onCancel,
   onConfirm
 }: Props): ReactElement {
-  const toAgent = WORKBENCH_PHASE_AGENTS[toPhase ?? 'product']
+  const toAgent = WORKBENCH_PHASE_AGENTS[toPhase ?? 'analysis']
   const fromAgent = WORKBENCH_PHASE_AGENTS[fromPhase]
-  const returningUpstream = PHASE_ORDER.indexOf(toPhase ?? fromPhase) < PHASE_ORDER.indexOf(fromPhase)
+  const returningUpstream =
+    WORKBENCH_PHASE_ORDER.indexOf(toPhase ?? fromPhase) < WORKBENCH_PHASE_ORDER.indexOf(fromPhase)
   return (
     <Modal
       closable={false}

@@ -2,14 +2,29 @@
 // 详情审阅 → 构建执行（Dock running）→ 授权（awaiting_authorization）→ 验收（awaiting_acceptance）→ 完成。
 // Dock 模式由 lifecycle.activeExecutions[runId] 的 status / pendingInteraction.type 推导（见 planExecutionMode.ts）。
 
-import type { ApplicationLifecycle, WorkflowRunPayload } from '../../typings'
+import type {
+  ApplicationLifecycle,
+  WorkflowRunPayload,
+  WorkspaceCodeChangeFile,
+  WorkspaceCodeChangeSet
+} from '../../typings'
 import type { ProcessStepRecord, SendWorkflowMessageOptions } from '../../service/agUiAgent'
+import {
+  buildEndpointSource,
+  buildPageSource,
+  buildReviewReport,
+  buildTestReport,
+  type PageDesign,
+  type TestReportSnapshot
+} from '../../workbenchArtifacts'
 // 页面/接口契约基座：单一 pms-new 场景（需求回检单模块）。
 import { WORKBENCH_PAGES as PAGES } from '../../../../../mock-data/pms-new/workbench-pages'
 import { mockPlanningArtifacts } from '../../../../../mock-data/pms-new/planning-artifacts'
 import { appDataByWorkspace } from '../../../../../mock-data/index'
 import { registerWorkbenchLifecycle } from '../mockHttpAgent'
 import { markEndpointDesigned, markPageDesigned } from '../designState'
+import { appPath, WORKSPACE_DOC_PATHS } from '../workspaceFiles'
+import { endpointArtifactId } from '../../workbenchDomain'
 import { nextLifecycleRevision } from './revision'
 
 const MOCK_APPLICATION_PREVIEW_URL = 'http://127.0.0.1:5190/'
@@ -19,6 +34,12 @@ type ReplayCallbacks = {
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onProcessSteps?: (steps: ProcessStepRecord[]) => void
+  onArtifactDiscovered?: (artifactIds: string[]) => void
+}
+
+/** 为每次工作流快照补齐规划节点总数，让折叠后的标题仍能显示执行进度。 */
+function withProcessStepTotal(steps: ProcessStepRecord[], total: number): ProcessStepRecord[] {
+  return steps.map((step) => ({ ...step, total }))
 }
 
 // 页面与接口 execution 共用的最小结构，供 lifecycleWith 组装 activeExecutions。
@@ -115,156 +136,6 @@ function endpointMeta(
     summary: String(endpoint.summary || ''),
     contractLabel: contract.label
   }
-}
-
-// 生成 endpoint 详细设计审阅对象。data_origin 固定为已解析的 mysql_existing，
-// 避免 isNeedsUserConfirmationDataOrigin 命中 DataOriginDecisionField 拦截确认按钮。
-function endpointReviewFor(meta: ReturnType<typeof endpointMeta>): Record<string, unknown> {
-  if (!meta) {
-    return {
-      target_type: 'endpoint',
-      target_id: 'endpoint',
-      name: '接口',
-      method: 'GET',
-      path: '/api/unknown',
-      data_origin: {
-        source_type: 'mysql_existing',
-        effective_source: {
-          kind: 'mysql_existing',
-          database: 'wh_branch',
-          tables: ['business_table']
-        },
-        differences: []
-      },
-      endpoint_decision: { behavior: '读取并返回业务数据。' },
-      interface_design: { response_schema: '统一响应信封' },
-      acceptance_criteria: ['接口返回统一响应信封']
-    }
-  }
-  const rich = RICH_ENDPOINT_REVIEWS[meta.endpointId]
-  if (rich) return rich(meta)
-  return genericEndpointReview(meta)
-}
-
-// 目标表名：取路径末段去 s 复数，如 /api/inbound/orders → inbound_order。
-function endpointTable(meta: NonNullable<ReturnType<typeof endpointMeta>>): string {
-  const segment = meta.path.split('/').filter(Boolean).pop() || 'business_table'
-  return segment.replace(/s$/i, '')
-}
-
-function genericEndpointReview(
-  meta: NonNullable<ReturnType<typeof endpointMeta>>
-): Record<string, unknown> {
-  const table = endpointTable(meta)
-  const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(meta.method)
-  const decision =
-    meta.method === 'GET'
-      ? { behavior: `按查询条件读取 ${table} 数据并分页返回。`, side_effects: [], idempotent: true }
-      : {
-          behavior: `写入 ${table} 并返回处理结果。`,
-          side_effects: ['更新目标数据表'],
-          idempotent: false
-        }
-  return {
-    target_type: 'endpoint',
-    target_id: `${meta.apiContractId}:${meta.endpointId}`,
-    name: meta.label,
-    api_contract_id: meta.apiContractId,
-    endpoint_id: meta.endpointId,
-    data_source_id: 'wh-branch-db',
-    method: meta.method,
-    path: meta.path,
-    summary: meta.summary,
-    data_usage: {
-      served_pages: [meta.contractLabel],
-      data_purpose: meta.summary || '支撑对应业务页面的数据读写。',
-      data_scope: isWrite ? '写操作' : '读操作'
-    },
-    data_origin: {
-      source_type: 'mysql_existing',
-      effective_source: { kind: 'mysql_existing', database: 'wh_branch', tables: [table] },
-      field_mappings: [],
-      differences: [],
-      notes: ['复用现有业务表，不新增表结构。']
-    },
-    endpoint_decision: {
-      behavior: decision.behavior,
-      side_effects: decision.side_effects,
-      idempotent: decision.idempotent,
-      error_handling: ['参数校验失败返回 400', '数据不存在返回 404', '服务异常返回 500']
-    },
-    interface_design: {
-      request_schema: isWrite ? `${meta.endpointId}Request` : '查询参数',
-      response_schema: '统一响应信封：{ code, data, message }',
-      response_fields: ['code', 'data', 'message'],
-      errors: ['400 参数错误', '404 不存在', '500 服务异常']
-    },
-    processing_logic: isWrite
-      ? ['校验请求参数与业务规则', '执行数据写入并校验影响行数', '记录操作日志']
-      : ['解析查询条件', '分页读取数据', '返回规范响应'],
-    dependent_pages: [],
-    acceptance_criteria: [
-      `调用 ${meta.method} ${meta.path} 返回统一响应信封`,
-      `非法参数返回 400 且不产生副作用`,
-      `接口只访问项目计划中已声明的数据表`
-    ],
-    risks: isWrite ? [{ level: 'medium', description: '写操作涉及数据表变更，需复核影响范围' }] : []
-  }
-}
-
-// 高频演示接口的专属详情（与页面详情一致，使用真实后端 prompt 风格）。
-const RICH_ENDPOINT_REVIEWS: Record<
-  string,
-  (meta: NonNullable<ReturnType<typeof endpointMeta>>) => Record<string, unknown>
-> = {
-  'ep-my-rechecks': (meta) => ({
-    target_type: 'endpoint',
-    target_id: `${meta.apiContractId}:${meta.endpointId}`,
-    name: meta.label,
-    api_contract_id: meta.apiContractId,
-    endpoint_id: meta.endpointId,
-    data_source_id: 'wh-branch-db',
-    method: meta.method,
-    path: meta.path,
-    summary: meta.summary,
-    data_usage: {
-      served_pages: ['我的回检'],
-      data_purpose: '支撑「我的回检」页的回检单分页列表。',
-      data_scope: '读操作',
-      read_pattern: '分页 + 状态筛选'
-    },
-    data_origin: {
-      source_type: 'mysql_existing',
-      effective_source: { kind: 'mysql_existing', database: 'wh_branch', tables: ['recheck'] },
-      field_mappings: [
-        { target_field: 'recheck_no', source: 'recheck.recheck_no' },
-        { target_field: 'status', source: 'recheck.status' }
-      ],
-      differences: [],
-      notes: ['按当前填报人过滤回检单。']
-    },
-    endpoint_decision: {
-      behavior: '按当前填报人与状态/分页参数返回我的回检单列表。',
-      side_effects: [],
-      idempotent: true,
-      sorting: 'created_at DESC',
-      pagination: 'limit/offset'
-    },
-    interface_design: {
-      request_schema: 'GET /api/rechecks/my?status=&page=&size=',
-      response_schema: '{ code, data: { list, total }, message }',
-      response_fields: ['list', 'total', 'code', 'message'],
-      errors: ['400 参数错误', '500 服务异常']
-    },
-    processing_logic: [
-      '解析筛选与分页参数',
-      '按当前填报人过滤后分页查询 recheck',
-      '统计总数并返回列表'
-    ],
-    dependent_pages: [{ page_id: 'my-rechecks', usage: 'read' }],
-    acceptance_criteria: ['仅返回当前填报人的回检单', '按状态筛选生效', '分页返回且 total 准确'],
-    risks: []
-  })
 }
 
 // 构造执行条目（驱动底部 Dock）。
@@ -370,188 +241,6 @@ function acceptanceInteraction(): Record<string, unknown> {
   }
 }
 
-// 页面设计详情审阅产物。lifecycle 必须携带 execution 的 pendingInteraction（page_design_confirmation），
-// 否则前端 workflowInteractionAvailability 判为 stale，确认按钮被禁用。
-function detailReviewPayload(
-  threadId: string,
-  runId: string,
-  pageId: string,
-  lifecycle: ApplicationLifecycle,
-  pageDesigns: Record<string, Record<string, unknown>>
-): WorkflowRunPayload {
-  const page = pageMeta(pageId)
-  const includesRecheckEndpoint = page.id === 'my-rechecks'
-  const identity = {
-    selectedPageId: page.id,
-    ...(includesRecheckEndpoint
-      ? {
-          selectedApiContractId: 'rechecks',
-          selectedEndpointId: 'ep-my-rechecks'
-        }
-      : {}),
-    detailTargetType: 'page'
-  }
-  return wf(
-    threadId,
-    runId,
-    'detail_confirmation',
-    'requires_user_input',
-    lifecycle,
-    {
-      // workflowInteractionAvailability 从 state.lifecycle 读 pendingInteraction 快照，
-      // 而 wf() 只把 lifecycle 放 summary.lifecycle —— 不放 state 会导致确认卡判 stale 不渲染。
-      lifecycle,
-      ...identity,
-      clarification: {
-        mode: 'detail_review',
-        status: 'requires_user_input',
-        message: includesRecheckEndpoint
-          ? '页面与依赖接口设计已生成，请确认或补充'
-          : '页面需求文档已生成，请确认或补充',
-        review: {
-          pages: [
-            pageDesigns[page.id] || {
-              target_type: 'page',
-              target_id: page.id,
-              name: page.label,
-              path: page.path,
-              page_goal: page.purpose,
-              basic_layout: {
-                overall: '顶栏 + 左筛选 + 右列表',
-                regions: [{ name: '筛选区' }, { name: '列表区' }]
-              },
-              interactions: ['提交回检弹窗', '状态筛选', '查看回检详情'],
-              state_feedback: [
-                { state: '加载中', feedbackComponent: 'Skeleton' },
-                { state: '空数据', feedbackComponent: 'Empty' }
-              ],
-              response_bindings: [{ sourcePath: 'data.list', target: 'table.rows' }],
-              api_dependencies: [
-                { endpointId: 'ep-my-rechecks', method: 'GET', path: '/api/rechecks/my' }
-              ],
-              acceptance_criteria: ['可提交回检并校验必填', '回检状态可跟踪']
-            }
-          ],
-          endpoints: includesRecheckEndpoint
-            ? [endpointReviewFor(endpointMeta('rechecks', 'ep-my-rechecks'))]
-            : [],
-          summary: {
-            page_count: 1,
-            endpoint_count: includesRecheckEndpoint ? 1 : 0,
-            api_contract_count: 1,
-            ...identity
-          }
-        }
-      }
-    },
-    {
-      result: { ...identity, lifecycle }
-    }
-  )
-}
-
-// 构建任务卡（buildExecutionSlice）：通用 3 任务。
-function buildExecutionSliceFor(pageId: string, pageLabel: string): Record<string, unknown> {
-  const includesRecheckEndpoint = pageId === 'my-rechecks'
-  const tasks =
-    pageId === 'recheck-introduction'
-      ? [
-          {
-            id: `task-${pageId}-0`,
-            task_id: `task-${pageId}-0`,
-            unit_id: `page:${pageId}`,
-            owner: 'frontend',
-            title: `生成 ${pageLabel} 静态页面`,
-            status: 'completed',
-            target_files: [`frontend/src/pages/${pageId}/index.tsx`]
-          },
-          {
-            id: `task-${pageId}-1`,
-            task_id: `task-${pageId}-1`,
-            unit_id: `page:${pageId}`,
-            owner: 'frontend',
-            title: '注册介绍页路由与导航',
-            status: 'completed'
-          },
-          {
-            id: `task-${pageId}-2`,
-            task_id: `task-${pageId}-2`,
-            unit_id: `page:${pageId}`,
-            owner: 'test',
-            title: '验证无接口状态下页面完整展示',
-            status: 'completed'
-          }
-        ]
-      : [
-          {
-            id: `task-${pageId}-0`,
-            task_id: `task-${pageId}-0`,
-            unit_id: 'endpoint:rechecks:ep-my-rechecks',
-            owner: 'backend',
-            title: '实现 GET /api/rechecks/my 查询接口',
-            status: 'completed',
-            target_files: ['backend/app/routes/rechecks.py']
-          },
-          {
-            id: `task-${pageId}-1`,
-            task_id: `task-${pageId}-1`,
-            unit_id: `page:${pageId}`,
-            owner: 'frontend',
-            title: `新增 ${pageLabel} 页面并接入查询接口`,
-            status: 'completed',
-            target_files: [`frontend/src/pages/${pageId}/index.tsx`]
-          },
-          {
-            id: `task-${pageId}-2`,
-            task_id: `task-${pageId}-2`,
-            unit_id: `page:${pageId}`,
-            owner: 'test',
-            title: '联调页面调用与接口响应绑定',
-            status: 'completed'
-          }
-        ]
-  return {
-    scope: {
-      type: 'page',
-      id: pageId,
-      label: includesRecheckEndpoint ? `${pageLabel}及依赖接口` : pageLabel
-    },
-    target_unit_ids: [
-      `page:${pageId}`,
-      ...(includesRecheckEndpoint ? ['endpoint:rechecks:ep-my-rechecks'] : [])
-    ],
-    tasks,
-    summary: { total: tasks.length, completed: tasks.length, pending: 0, running: 0, failed: 0 }
-  }
-}
-
-// 集成测试检查矩阵（通用 3 项通过）。
-function integrationChecks(): unknown[] {
-  return [
-    {
-      id: 'check-contract',
-      name: 'API 契约一致性校验',
-      status: 'passed',
-      required: true,
-      evidence: '响应字段与契约定义一致。'
-    },
-    {
-      id: 'check-route',
-      name: '页面路由注册校验',
-      status: 'passed',
-      required: true,
-      evidence: '路由已挂载，可正常访问。'
-    },
-    {
-      id: 'check-render',
-      name: '页面渲染校验',
-      status: 'passed',
-      required: false,
-      evidence: '页面无运行时报错，关键交互可用。'
-    }
-  ]
-}
-
 // 审查阶段检查矩阵（规范 / 安全 / 健康度 三项通过）。
 function reviewChecks(): unknown[] {
   return [
@@ -579,31 +268,122 @@ function reviewChecks(): unknown[] {
   ]
 }
 
-// 接口构建的集成测试检查矩阵（契约 + 数据来源 + 联调）。
-function endpointIntegrationChecks(): unknown[] {
+// —— 构建节点的代码变更集（对齐正式工程 build 后的 code_changes 载荷，驱动右侧 Diff 过程）——
+
+// 把生成的完整文件内容包装成新增文件的行级 Diff（bare diff 由前端自动补统一格式头）。
+function addedFileChange(
+  id: string,
+  path: string,
+  content: string,
+  sourceTool: string
+): WorkspaceCodeChangeFile {
+  const lines = content.split('\n')
+  return {
+    id,
+    path,
+    changeType: 'added',
+    additions: lines.length,
+    deletions: 0,
+    diff: lines.map((line) => `+${line}`).join('\n'),
+    tool: 'file.write',
+    sourceTool,
+    executed: true
+  }
+}
+
+// 页面/接口源码按单文件 Diff 呈现；路由已随应用初始化脚手架存在，不进入页面开发授权。
+// —— 构建链按文件拆解（接口 → 页面）：一个文件对应一个单一职责开发节点 ——
+
+type BuildFileTarget = {
+  key: string
+  name: string
+  path: string
+  content: string
+  sourceTool: string
+}
+
+/** 根据已接受的文件路径计算续跑起始轮次，多个源码文件仍属于同一个代码工作流节点。 */
+function acceptedBuildIndex(answers: Record<string, unknown>, targets: BuildFileTarget[]): number {
+  const accepted = typeof answers.file_acceptance === 'string' ? answers.file_acceptance : ''
+  const index = targets.findIndex((target) => target.path === accepted)
+  return index >= 0 ? index + 1 : 0
+}
+
+/** 为每个源码文件生成单一职责的开发节点，页面与接口不共用同一个编写节点。 */
+function codeBuildStepId(target: BuildFileTarget): string {
+  return `step-code-${target.key}`
+}
+
+/** 返回源码文件对应的单一开发节点名称。 */
+function codeBuildStepTitle(target: BuildFileTarget): string {
+  return target.sourceTool === 'backend_code_generator' ? '接口代码实现' : '页面代码实现'
+}
+
+// 构建链的目标文件清单：新应用全部产物都是新增文件，右侧按单文件 Diff 呈现。
+function buildFileTargets(pageId: string, includeEndpoint: boolean): BuildFileTarget[] {
+  const scenario = appDataByWorkspace()
+  const targets: BuildFileTarget[] = []
+  if (includeEndpoint) {
+    const endpointDesign = scenario.endpointDesigns['ep-my-rechecks'] as Record<string, unknown>
+    if (endpointDesign) {
+      const source = buildEndpointSource(endpointDesign)
+      targets.push({
+        key: 'controller',
+        name: source.filePath.split('/').pop() || 'Controller.java',
+        path: appPath(source.filePath),
+        content: source.content,
+        sourceTool: 'backend_code_generator'
+      })
+    }
+  }
+  const pageDesign =
+    (scenario.designedPageDesigns[pageId] as PageDesign | undefined) ||
+    (scenario.pageDesigns[pageId] as PageDesign | undefined)
+  if (pageDesign) {
+    const source = buildPageSource(pageDesign, pageId)
+    targets.push({
+      key: 'page',
+      name: source.filePath.split('/').pop() || 'index.tsx',
+      path: appPath(source.filePath),
+      content: source.content,
+      sourceTool: 'page_generator'
+    })
+  }
+  return targets
+}
+
+/** 生成独立接口会话的代码交付目标，和页面依赖接口使用同一套单文件 Diff 契约。 */
+function endpointBuildTargets(apiContractId: string, endpointId: string): BuildFileTarget[] {
+  const endpointDesign = appDataByWorkspace().endpointDesigns[endpointId] as
+    | Record<string, unknown>
+    | undefined
+  if (!endpointDesign) return []
+  const source = buildEndpointSource(endpointDesign)
   return [
     {
-      id: 'check-contract',
-      name: 'API 契约一致性校验',
-      status: 'passed',
-      required: true,
-      evidence: '接口响应字段与契约定义一致。'
-    },
-    {
-      id: 'check-db',
-      name: '数据库结构与数据来源校验',
-      status: 'passed',
-      required: true,
-      evidence: '目标表结构与 data_origin 方案一致。'
-    },
-    {
-      id: 'check-e2e',
-      name: '接口集成联调校验',
-      status: 'passed',
-      required: false,
-      evidence: '接口可正常调用，关联页面数据可读。'
+      key: `endpoint-${apiContractId}-${endpointId}`,
+      name: source.filePath.split('/').pop() || 'Controller.java',
+      path: appPath(source.filePath),
+      content: source.content,
+      sourceTool: 'backend_code_generator'
     }
   ]
+}
+
+// 组装单文件变更集：id 带序号，右侧页签按 id 变化原地刷新写入进度。
+function singleFileChangeSet(
+  runId: string,
+  target: BuildFileTarget,
+  content: string
+): WorkspaceCodeChangeSet {
+  const change = addedFileChange(`cc-${runId}-${target.key}`, target.path, content, target.sourceTool)
+  return {
+    id: `cc-${runId}-${target.key}-${change.additions}`,
+    status: 'applied',
+    workspaceRoot: appDataByWorkspace().workspaceRoot,
+    summary: { files: 1, additions: change.additions, deletions: 0 },
+    files: [change]
+  }
 }
 
 // 构造接口执行的底部 Dock 条目（scope='endpoint' + resourceKeys 供 planExecutionContextForEndpoint 匹配）。
@@ -660,90 +440,6 @@ function endpointWf(
     ...extra
   }
   return payload as unknown as WorkflowRunPayload
-}
-
-// 接口详细设计审阅产物。
-function endpointReviewPayload(
-  threadId: string,
-  runId: string,
-  apiContractId: string,
-  endpointId: string,
-  lifecycle: ApplicationLifecycle
-): WorkflowRunPayload {
-  const meta = endpointMeta(apiContractId, endpointId)
-  const review = endpointReviewFor(meta)
-  return endpointWf(
-    threadId,
-    runId,
-    'detail_confirmation',
-    'requires_user_input',
-    apiContractId,
-    endpointId,
-    'endpoint',
-    lifecycle,
-    {
-      clarification: {
-        mode: 'detail_review',
-        status: 'requires_user_input',
-        message: `请审阅接口 \`${endpointId}\` 详细设计；仅展开需要调整的对象。`,
-        review: {
-          pages: [],
-          endpoints: [review],
-          summary: {
-            page_count: 0,
-            endpoint_count: 1,
-            api_contract_count: mockPlanningArtifacts.apiContracts.length,
-            selectedApiContractId: apiContractId,
-            selectedEndpointId: endpointId,
-            detailTargetType: 'endpoint'
-          }
-        }
-      }
-    }
-  )
-}
-
-// 接口构建任务卡（buildExecutionSlice）：后端 + 数据库任务。
-function endpointBuildExecutionSlice(
-  apiContractId: string,
-  endpointId: string,
-  label: string,
-  table: string
-): Record<string, unknown> {
-  const unitId = `endpoint:${apiContractId}:${endpointId}`
-  const tasks = [
-    {
-      id: `task-${endpointId}-0`,
-      task_id: `task-${endpointId}-0`,
-      unit_id: unitId,
-      owner: 'backend',
-      title: `新增接口 ${label} 的 Controller/Service`,
-      status: 'completed',
-      target_files: [`backend/src/main/java/.../controller/`]
-    },
-    {
-      id: `task-${endpointId}-1`,
-      task_id: `task-${endpointId}-1`,
-      unit_id: unitId,
-      owner: 'backend',
-      title: `实现 Mapper 与实体映射（${table}）`,
-      status: 'completed'
-    },
-    {
-      id: `task-${endpointId}-2`,
-      task_id: `task-${endpointId}-2`,
-      unit_id: unitId,
-      owner: 'database',
-      title: `校验并应用数据表结构（${table}）`,
-      status: 'completed'
-    }
-  ]
-  return {
-    scope: { type: 'endpoint', id: `${apiContractId}:${endpointId}`, label },
-    target_unit_ids: [unitId],
-    tasks,
-    summary: { total: tasks.length, completed: tasks.length, pending: 0, running: 0, failed: 0 }
-  }
 }
 
 // 接口（endpoint）工作台剧本：接口详细审阅 → 构建链（检查工作区 → 获取数据库信息 →
@@ -856,15 +552,63 @@ async function replayEndpointWorkbench(
 
   // 3. 详情审阅确认 → 完整构建链 → 等待验收。
   if (answers.detail_review || resume) {
-    const table = endpointTable(meta)
-    const steps: Record<string, unknown>[] = []
-    const pushStep = (step: Record<string, unknown>): void => {
-      steps.push(step)
-      onProcessSteps?.([...steps] as ProcessStepRecord[])
+    const endpointTargets = endpointBuildTargets(meta.apiContractId, meta.endpointId)
+    const endpointTarget = endpointTargets[0]
+
+    // 单文件接口 Diff 被接受后只需完成文件落库和工作流收口，不能再次重跑检查与任务准备节点。
+    if (
+      resume?.summary?.phase === 'build' &&
+      endpointTarget &&
+      answers.file_acceptance === endpointTarget.path
+    ) {
+      markEndpointDesigned(meta.apiContractId, meta.endpointId)
+      return emit(
+        'build',
+        'completed',
+        emitLifecycle(
+          execEndpoint(
+            runId,
+            threadId,
+            meta.apiContractId,
+            meta.endpointId,
+            'build',
+            'completed'
+          )
+        ),
+        {},
+        { summary: { phase: 'build', status: 'completed', message: '接口代码产物已完成' } }
+      )
     }
 
+    const steps: Record<string, unknown>[] = []
+    const endpointStepTotal = Math.max(1, endpointTargets.length)
+    const buildStepId = endpointTarget ? codeBuildStepId(endpointTarget) : 'step-code-endpoint'
+    const pushStep = (step: Record<string, unknown>): void => {
+      steps.push(step)
+      onProcessSteps?.(
+        withProcessStepTotal(steps as ProcessStepRecord[], endpointStepTotal)
+      )
+    }
+    const updateStep = (id: string, patch: Record<string, unknown>): void => {
+      const index = steps.findIndex((step) => step.id === id)
+      if (index < 0) return
+      steps[index] = { ...steps[index], ...patch }
+      onProcessSteps?.(
+        withProcessStepTotal(steps as ProcessStepRecord[], endpointStepTotal)
+      )
+    }
+
+    // 接口开发只负责一个接口源码节点；启动、非功能和业务测试统一放到测试阶段。
+    pushStep({
+      id: buildStepId,
+      kind: 'workflow',
+      status: 'running',
+      title: endpointTarget ? codeBuildStepTitle(endpointTarget) : '接口代码实现',
+      detail: '正在检查工作区、读取数据源并准备接口代码。',
+      sequence: 1
+    })
+
     // inspect_workspace
-    onContent?.('已确认设计，正在检查工作区结构…')
     emit(
       'inspect_workspace',
       'completed',
@@ -879,18 +623,10 @@ async function replayEndpointWorkbench(
         )
       )
     )
-    pushStep({
-      id: 'step-inspect',
-      kind: 'workflow',
-      status: 'completed',
-      title: '检查工作区结构',
-      detail: '已扫描后端工程目录、数据库连接配置与既有接口约定。',
-      sequence: 1
-    })
+    updateStep(buildStepId, { detail: '工作区结构已确认，正在读取数据库上下文。' })
     await delay(600)
 
     // inspect_database_context（接口有数据来源，比页面多这一节点）
-    onContent?.('正在获取数据库上下文…')
     emit(
       'inspect_database_context',
       'running',
@@ -920,18 +656,10 @@ async function replayEndpointWorkbench(
         )
       )
     )
-    pushStep({
-      id: 'step-db',
-      kind: 'workflow',
-      status: 'completed',
-      title: '获取数据库信息',
-      detail: `已读取目标表 ${table} 结构与数据源配置，确认接口数据来源。`,
-      sequence: 2
-    })
+    updateStep(buildStepId, { detail: `已读取接口数据上下文，正在准备接口实现任务。` })
     await delay(300)
 
     // prepare_build_tasks
-    onContent?.('正在规划构建任务（DAG）…')
     emit(
       'prepare_build_tasks',
       'running',
@@ -961,18 +689,10 @@ async function replayEndpointWorkbench(
         )
       )
     )
-    pushStep({
-      id: 'step-prepare',
-      kind: 'workflow',
-      status: 'completed',
-      title: '规划构建任务（DAG）',
-      detail: `已为接口 ${meta.label} 拆解构建任务并编译执行 DAG。`,
-      sequence: 3
-    })
+    updateStep(buildStepId, { detail: `已为接口 ${meta.label} 准备代码实现任务。` })
     await delay(300)
 
     // build
-    onContent?.('正在生成接口代码…')
     emit(
       'build',
       'running',
@@ -981,6 +701,59 @@ async function replayEndpointWorkbench(
       )
     )
     await delay(1200)
+    const endpointFileAccepted =
+      !endpointTarget || answers.file_acceptance === endpointTarget.path
+    if (endpointTarget && !endpointFileAccepted) {
+      const lines = endpointTarget.content.split('\n')
+      for (let visible = 12; ; visible += 12) {
+        await delay(260)
+        emit(
+          'build',
+          'running',
+          emitLifecycle(
+            execEndpoint(runId, threadId, meta.apiContractId, meta.endpointId, 'build', 'running')
+          ),
+          { codeChanges: singleFileChangeSet(runId, endpointTarget, lines.slice(0, visible).join('\n')) }
+        )
+        if (visible >= lines.length) break
+      }
+      const pending = {
+        id: `pi-endpoint-file-${Date.now()}`,
+        type: 'file_acceptance',
+        basedOnRevision: 1,
+        payload: { message: `接口代码已生成，请确认 ${endpointTarget.name} 的 Diff。` },
+        createdAt: new Date().toISOString()
+      }
+      return endpointWf(
+        threadId,
+        runId,
+        'build',
+        'requires_user_input',
+        meta.apiContractId,
+        meta.endpointId,
+        'endpoint',
+        emitLifecycle(
+          execEndpoint(
+            runId,
+            threadId,
+            meta.apiContractId,
+            meta.endpointId,
+            'build',
+            'awaiting_user',
+            pending
+          )
+        ),
+        {
+          clarification: {
+            mode: 'file_acceptance',
+            status: 'requires_user_input',
+            message: `接口代码已生成，请确认 ${endpointTarget.name} 的 Diff。`
+          },
+          codeChanges: singleFileChangeSet(runId, endpointTarget, endpointTarget.content)
+        },
+        { summary: { phase: 'build', status: 'requires_user_input', message: `等待接受 ${endpointTarget.name}` } }
+      )
+    }
     emit(
       'build',
       'completed',
@@ -988,74 +761,17 @@ async function replayEndpointWorkbench(
         execEndpoint(runId, threadId, meta.apiContractId, meta.endpointId, 'build', 'completed')
       )
     )
-    pushStep({
-      id: 'step-build',
-      kind: 'workflow',
+    updateStep(buildStepId, {
       status: 'completed',
-      title: '生成接口代码',
-      detail: '',
-      sequence: 4,
-      buildExecutionSlice: endpointBuildExecutionSlice(
-        meta.apiContractId,
-        meta.endpointId,
-        meta.label,
-        table
-      )
+      title: endpointTarget ? codeBuildStepTitle(endpointTarget) : '接口代码实现',
+      detail: '接口代码已生成并完成文件 Diff 授权。'
     })
     await delay(300)
-
-    // integration_test
-    onContent?.('正在执行集成测试…')
-    emit(
-      'integration_test',
-      'running',
-      emitLifecycle(
-        execEndpoint(
-          runId,
-          threadId,
-          meta.apiContractId,
-          meta.endpointId,
-          'integration_test',
-          'running'
-        )
-      )
-    )
-    await delay(900)
-    emit(
-      'integration_test',
-      'completed',
-      emitLifecycle(
-        execEndpoint(
-          runId,
-          threadId,
-          meta.apiContractId,
-          meta.endpointId,
-          'integration_test',
-          'completed'
-        )
-      )
-    )
-    pushStep({
-      id: 'step-test',
-      kind: 'workflow',
-      status: 'completed',
-      title: '执行集成测试',
-      detail: '',
-      sequence: 5,
-      checks: endpointIntegrationChecks()
-    })
-    await delay(300)
-
-    // integration_test 通过 → 接口模块开发完成。完成标记在构建链走完后置位，
-    // 确保用户看清节点流程后，再由工作台询问是否进入审查。
     markEndpointDesigned(meta.apiContractId, meta.endpointId)
-    onContent?.(
-      `「${meta.label}」开发完成（集成测试通过）。\n全部开发产物完成后，可确认进入审查阶段。`
-    )
     return endpointWf(
       threadId,
       runId,
-      'integration_test',
+      'build',
       'completed',
       meta.apiContractId,
       meta.endpointId,
@@ -1066,47 +782,70 @@ async function replayEndpointWorkbench(
           threadId,
           meta.apiContractId,
           meta.endpointId,
-          'integration_test',
+          'build',
           'completed'
         )
       ),
       {},
-      { summary: { phase: 'integration_test', status: 'completed', message: '接口开发完成' } }
+      { summary: { phase: 'build', status: 'completed', message: '接口代码产物已完成' } }
     )
   }
 
   // 4. 开始接口详细设计 → 接口详情审阅。
   if (options.selectedEndpointId || options.detailTargetType) {
-    onContent?.(`正在为接口 ${meta.label} 生成详细设计…`)
-    await delay(700)
-    const pending = {
-      id: `pi-endpoint-design-${Date.now()}`,
-      type: 'page_design_confirmation',
-      basedOnRevision: 1,
-      payload: { message: '接口设计已生成，等待确认' },
-      createdAt: new Date().toISOString()
-    }
-    const lifecycle = emitLifecycle(
-      execEndpoint(
-        runId,
-        threadId,
-        meta.apiContractId,
-        meta.endpointId,
-        'detail_confirmation',
-        'awaiting_user',
-        pending
+    const designSteps: ProcessStepRecord[] = []
+    const designNodes = [
+      ['汇总接口上下文', '读取已确认的应用约束、项目计划和接口契约。'],
+      ['梳理请求与响应', '明确查询参数、响应结构和页面调用关系。'],
+      ['补齐数据来源与边界', '确认数据来源、异常返回和接口验收标准。']
+    ] as const
+    for (let index = 0; index < designNodes.length; index += 1) {
+      await delay(360)
+      designSteps.push({
+        id: `endpoint-design-${index}`,
+        kind: 'workflow',
+        status: 'completed',
+        title: designNodes[index][0],
+        detail: designNodes[index][1],
+        sequence: index + 1
+      })
+      onProcessSteps?.(
+        withProcessStepTotal(
+          [...designSteps],
+          designNodes.length + 1
+        )
       )
-    )
-    const payload = endpointReviewPayload(
+    }
+    const designProcessSteps = [...designSteps]
+    const endpointWorkflowTotal = designNodes.length + 1
+    return replayEndpointWorkbench(
       threadId,
-      runId,
-      meta.apiContractId,
-      meta.endpointId,
-      lifecycle
+      target,
+      {
+        ...options,
+        clarificationAnswers: {
+          ...(options.clarificationAnswers || {}),
+          detail_review: { review_status: 'confirmed', target_changes: [] }
+        }
+      },
+      {
+        ...callbacks,
+        onProcessSteps: (nextSteps) => {
+          onProcessSteps?.(
+            withProcessStepTotal(
+              [
+                ...designProcessSteps,
+                ...nextSteps.map((step, index) => ({
+                  ...step,
+                  sequence: designProcessSteps.length + index + 1
+                }))
+              ],
+              endpointWorkflowTotal
+            )
+          )
+        }
+      }
     )
-    onContent?.(`已为接口 ${meta.label} 生成详细设计，请确认后开始构建。`)
-    onWorkflow?.(payload)
-    return payload
   }
 
   // 5. 其它 → 最小 running 态。
@@ -1189,7 +928,7 @@ export async function replayApplicationAcceptance(
   }
 
   if (answers.application_acceptance) {
-    onContent?.('应用整体验收已通过，即将进入审查阶段。')
+    onContent?.('应用整体验收已通过，即将进入测试阶段。')
     const completed = emitLifecycle('completed')
     return emit(
       'completed',
@@ -1209,7 +948,7 @@ export async function replayApplicationAcceptance(
     createdAt: new Date().toISOString()
   }
   const lifecycle = emitLifecycle('awaiting_user', pending)
-  onContent?.('所有页面与接口均已完成开发和集成检查。请在右侧预览完整应用，确认后进入审查阶段。')
+  onContent?.('所有页面与接口代码产物均已交付。请在右侧预览完整应用，确认后进入测试阶段。')
   return emit(
     'requires_user_input',
     lifecycle,
@@ -1236,6 +975,253 @@ export async function replayApplicationAcceptance(
   )
 }
 
+/** 测试阶段剧本：启动、非功能和业务测试均通过后生成测试报告。 */
+export async function replayApplicationTesting(
+  threadId: string,
+  options: SendWorkflowMessageOptions,
+  callbacks: ReplayCallbacks
+): Promise<WorkflowRunPayload> {
+  const { onWorkflow, onApplicationLifecycle, onProcessSteps } = callbacks
+  const resume = options.resumeState as WorkflowRunPayload | undefined
+  const runId = resume?.runId || `mock-application-testing-${Date.now()}`
+  const answers = (options.clarificationAnswers || {}) as Record<string, unknown>
+  const appId = options.application?.id || 'app-pms-new'
+  const round = 1
+  const report: TestReportSnapshot = {
+    round,
+    status: 'passed',
+    basedOnRevision: 1,
+    defects: []
+  }
+  const reportTarget: BuildFileTarget = {
+    key: 'test-report',
+    name: 'test-report.md',
+    path: appPath(WORKSPACE_DOC_PATHS.testReport),
+    content: buildTestReport(report),
+    sourceTool: 'test_agent'
+  }
+  const baseLifecycle = {
+    ...makeBaseLifecycle(options.application),
+    extensions: {
+      testReportStatus: 'running',
+      testReportRound: report.round,
+      testReportBasedOnRevision: report.basedOnRevision,
+      testReportDefects: report.defects,
+    }
+  } as ApplicationLifecycle
+  const emitLifecycle = makeEmitLifecycle(baseLifecycle, runId, onApplicationLifecycle)
+  const reportLifecycleBase = {
+    ...baseLifecycle,
+    extensions: {
+      ...baseLifecycle.extensions,
+      testReportStatus: report.status,
+      testReportRound: report.round,
+      testReportBasedOnRevision: report.basedOnRevision,
+      testReportDefects: report.defects,
+    }
+  } as ApplicationLifecycle
+  const emitReportLifecycle = makeEmitLifecycle(reportLifecycleBase, runId, onApplicationLifecycle)
+  const emit = (
+    phase: string,
+    status: string,
+    lifecycle: ApplicationLifecycle,
+    state: Record<string, unknown> = {},
+    extra: Partial<WorkflowRunPayload> = {}
+  ): WorkflowRunPayload => {
+    const payload = wf(threadId, runId, phase, status, lifecycle, state, extra)
+    onWorkflow?.(payload)
+    return payload
+  }
+
+  // 测试报告 Diff 接受后直接完成测试阶段，不再追加二次确认卡片。
+  if (answers.file_acceptance && resume?.summary?.phase === 'test_report') {
+    const reportLifecycle = emitReportLifecycle({
+      scope: 'application',
+      targetId: appId,
+      threadId,
+      runId,
+      phase: 'test_report',
+      status: 'completed',
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    })
+    return emit(
+      'test_report',
+      'completed',
+      reportLifecycle,
+      {
+        testReport: report
+      },
+      {
+        summary: {
+          phase: 'test_report',
+          status: 'completed',
+          message: '测试报告已确认，可进入审查阶段'
+        }
+      }
+    )
+  }
+
+  const testSteps: ProcessStepRecord[] = []
+  const publishTestSteps = (): void => onProcessSteps?.(withProcessStepTotal([...testSteps], 4))
+  const addTestStep = (step: ProcessStepRecord): void => {
+    const currentIndex = testSteps.findIndex((item) => item.id === step.id)
+    if (currentIndex >= 0) testSteps[currentIndex] = step
+    else testSteps.push(step)
+    publishTestSteps()
+  }
+
+  // 先进入测试阶段再启动第一个节点，确保用户能看到 Agent 从“整理输入”开始逐步执行，
+  // 不会因为阶段切换滞后而只看到已经生成好的测试报告。
+  const running = emitLifecycle({
+    scope: 'application',
+    targetId: appId,
+    threadId,
+    runId,
+    phase: 'application_test',
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  })
+  emit('application_test', 'running', running)
+  addTestStep({
+    id: 'application-test-startup',
+    kind: 'workflow',
+    status: 'running',
+    title: '启动测试',
+    detail: '启动应用并检查主路由、页面入口和基础运行环境。',
+    sequence: 1
+  })
+  await delay(900)
+  addTestStep({
+    id: 'application-test-startup',
+    kind: 'workflow',
+    status: 'completed',
+    title: '启动测试',
+    detail: '应用已启动，主路由和页面入口可以访问。',
+    sequence: 1
+  })
+  addTestStep({
+    id: 'application-test-non-functional',
+    kind: 'workflow',
+    status: 'running',
+    title: '非功能测试',
+    detail: '检查异常反馈、响应稳定性、权限边界和恢复路径。',
+    sequence: 2
+  })
+  await delay(900)
+  addTestStep({
+    id: 'application-test-non-functional',
+    kind: 'workflow',
+    status: 'completed',
+    title: '非功能测试',
+    detail: '异常反馈、权限边界和恢复路径均通过。',
+    sequence: 2
+  })
+  addTestStep({
+    id: 'application-test-business',
+    kind: 'workflow',
+    status: 'running',
+    title: '业务测试',
+    detail: '执行需求文档和项目计划中的核心业务旅程。',
+    sequence: 3
+  })
+  await delay(900)
+  addTestStep({
+    id: 'application-test-business',
+    kind: 'workflow',
+    status: 'completed',
+    title: '业务测试',
+    detail: '核心业务旅程全部通过。',
+    sequence: 3
+  })
+  const runningReport = { ...report, status: 'running' as const }
+  addTestStep({
+    id: 'application-test-report',
+    kind: 'workflow',
+    status: 'running',
+    title: '生成测试报告',
+    detail: '汇总测试结果、缺陷证据和受影响产物。',
+    sequence: 4
+  })
+  const reportLines = reportTarget.content.split('\n')
+  for (let visible = 12; ; visible += 12) {
+    await delay(260)
+    emit(
+      'test_report',
+      'running',
+      emitLifecycle({
+        scope: 'application',
+        targetId: appId,
+        threadId,
+        runId,
+        phase: 'test_report',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }),
+      {
+        testReport: runningReport,
+        codeChanges: singleFileChangeSet(
+          runId,
+          reportTarget,
+          reportLines.slice(0, visible).join('\n')
+        )
+      }
+    )
+    if (visible >= reportLines.length) break
+  }
+  addTestStep({
+    id: 'application-test-report',
+    kind: 'workflow',
+    status: 'completed',
+    title: '生成测试报告',
+    detail: '测试报告已生成，结论为合格。',
+    sequence: 4
+  })
+  const reportPending = {
+    id: `pi-test-report-file-${Date.now()}`,
+    type: 'file_acceptance',
+    basedOnRevision: report.basedOnRevision,
+    payload: { message: '测试报告已生成，请在右侧确认 Diff 后接受。' },
+    createdAt: new Date().toISOString()
+  }
+  // 报告尚未被用户接受前，只保留“测试进行中”的生命周期。缺陷和受影响产物必须在
+  // 测试报告保存确认后才提交，避免刚进入测试阶段就把左侧开发产物错误地重置为进行中。
+  const reportLifecycle = emitLifecycle({
+    scope: 'application',
+    targetId: appId,
+    threadId,
+    runId,
+    phase: 'test_report',
+    status: 'awaiting_user',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    pendingInteraction: reportPending
+  })
+  return emit(
+    'test_report',
+    'requires_user_input',
+    reportLifecycle,
+    {
+      testReport: report,
+      clarification: {
+        mode: 'file_acceptance',
+        status: 'requires_user_input',
+        message: '测试报告已生成，请确认右侧 Diff。'
+      },
+      codeChanges: singleFileChangeSet(runId, reportTarget, reportTarget.content)
+    },
+    {
+      summary: {
+        phase: 'test_report',
+        status: 'requires_user_input',
+        message: '测试报告已生成，等待接受 Diff'
+      }
+    }
+  )
+}
+
 // 应用级审查阶段剧本(复用应用概览会话):
 // 应用验收通过 → 审查 Agent 做非功能检查(代码审查/规范检测/健康度),审查通过 → 可发布。
 export async function replayCodeReview(
@@ -1248,7 +1234,22 @@ export async function replayCodeReview(
   const runId = resume?.runId || `mock-review-${Date.now()}`
   const answers = (options.clarificationAnswers || {}) as Record<string, unknown>
   const appId = options.application?.id || 'app-pms-new'
-  const baseLifecycle = makeBaseLifecycle(options.application)
+  const baseLifecycle = {
+    ...makeBaseLifecycle(options.application),
+    extensions: {
+      testReportStatus: 'passed',
+      testReportRound: 2,
+      testReportBasedOnRevision: 1,
+      testReportDefects: [],
+      phaseValidity: {
+        analysis: 'valid',
+        planning: 'valid',
+        development: 'valid',
+        testing: 'valid',
+        review: 'valid'
+      }
+    }
+  } as ApplicationLifecycle
 
   const appExec = (
     phase: string,
@@ -1297,23 +1298,34 @@ export async function replayCodeReview(
     )
   }
 
-  // 2. 启动审查 → 走子图(规范检测 → 安全扫描 → 健康度),完成后发确认卡。
+  // 审查报告只需要确认右侧 Diff 写入；保存完成后直接结束审查并开放生成版本。
+  if (answers.file_acceptance && resume?.summary?.phase === 'code_review') {
+    const finalized = emitLifecycle(appExec('finalize_project', 'completed'))
+    return emit(
+      'finalize_project',
+      'completed',
+      finalized,
+      {},
+      { summary: { phase: 'finalize_project', status: 'completed', message: '审查报告已保存，可生成版本' } }
+    )
+  }
+
+  // 2. 进入审查后直接走子图(规范检测 → 安全扫描 → 健康度)，不再询问是否启动。
   //    子节点 emit 复用 code_review running 的 lifecycle,不调 emitLifecycle 更新 applicationLifecycle,
   //    避免 lint/security/health 进入 activeExecutions 后全部 completed(terminal)导致
-  //    deriveWorkbenchPhase 跌回 development(=审查中途跳回开发)。workflow payload 的 phase 仍逐节点切换(节点卡动态)。
-  if (answers.review_start) {
-    onContent?.('启动应用级代码审查,开始非功能检查(规范检测 / 安全扫描 / 健康度评估)…')
+  //    executionPhase 跌回 development（审查中途回到开发）。workflow payload 的 phase 仍逐节点切换（节点卡动态）。
+  if (!(answers.code_review || (answers.file_acceptance && resume?.summary?.phase === 'code_review'))) {
     const reviewRunning = emitLifecycle(appExec('code_review', 'running'))
     emit('code_review', 'running', reviewRunning)
     const steps: Record<string, unknown>[] = []
+    const reviewStepTotal = 4
     const pushStep = (step: Record<string, unknown>): void => {
       steps.push(step)
-      onProcessSteps?.([...steps] as ProcessStepRecord[])
+      onProcessSteps?.(withProcessStepTotal(steps as ProcessStepRecord[], reviewStepTotal))
     }
 
     // 规范检测
     emit('lint_check', 'running', reviewRunning)
-    onContent?.('正在执行代码规范检测…')
     await delay(1000)
     emit('lint_check', 'completed', reviewRunning)
     pushStep({
@@ -1327,7 +1339,6 @@ export async function replayCodeReview(
 
     // 安全扫描
     emit('security_scan', 'running', reviewRunning)
-    onContent?.('正在执行安全扫描…')
     await delay(1000)
     emit('security_scan', 'completed', reviewRunning)
     pushStep({
@@ -1341,7 +1352,6 @@ export async function replayCodeReview(
 
     // 健康度评估
     emit('health_check', 'running', reviewRunning)
-    onContent?.('正在评估代码健康度…')
     await delay(1000)
     emit('health_check', 'completed', reviewRunning)
     pushStep({
@@ -1354,12 +1364,35 @@ export async function replayCodeReview(
       checks: reviewChecks()
     })
 
-    onContent?.('代码审查完成:规范检测、安全扫描与健康度评估全部通过,等待确认后即可生成版本。')
+    const report = buildReviewReport({ round: 2, status: 'passed', basedOnRevision: 1, defects: [] })
+    const reportTarget: BuildFileTarget = {
+      key: 'code-review',
+      name: 'code-review.md',
+      path: appPath(WORKSPACE_DOC_PATHS.codeReview),
+      content: report,
+      sourceTool: 'review_agent'
+    }
+    const reportLines = report.split('\n')
+    for (let visible = 12; ; visible += 12) {
+      await delay(260)
+      emit('code_review', 'running', reviewRunning, {
+        codeChanges: singleFileChangeSet(runId, reportTarget, reportLines.slice(0, visible).join('\n'))
+      })
+      if (visible >= reportLines.length) break
+    }
+    pushStep({
+      id: 'step-report',
+      kind: 'workflow',
+      status: 'completed',
+      title: '生成代码审查报告',
+      detail: '报告已生成，等待确认写入工作区。',
+      sequence: 4
+    })
     const reviewPending = {
-      id: `pi-code-review-${Date.now()}`,
-      type: 'code_review',
+      id: `pi-code-review-file-${Date.now()}`,
+      type: 'file_acceptance',
       basedOnRevision: 1,
-      payload: { message: '代码审查完成,等待确认。' },
+      payload: { message: '代码审查报告已生成，请在右侧确认 Diff 后接受。' },
       createdAt: new Date().toISOString()
     }
     const reviewLifecycle = emitLifecycle(appExec('code_review', 'awaiting_user', reviewPending))
@@ -1369,62 +1402,20 @@ export async function replayCodeReview(
       reviewLifecycle,
       {
         clarification: {
-          mode: 'code_review',
+          mode: 'file_acceptance',
           status: 'requires_user_input',
-          message: '请确认审查结果。',
-          questions: [
-            {
-              id: 'code_review',
-              header: '审查确认',
-              question: '代码审查、规范检测、安全扫描与健康度评估全部通过，确认后即可生成版本。',
-              type: 'yesno',
-              presetAnswer: { selected: ['是'] }
-            }
-          ]
-        }
+          message: '代码审查报告已生成，请确认右侧 Diff。'
+        },
+        codeChanges: singleFileChangeSet(runId, reportTarget, report)
       },
       {
-        summary: { phase: 'code_review', status: 'requires_user_input', message: '请确认审查结果' }
+        summary: { phase: 'code_review', status: 'requires_user_input', message: '等待接受代码审查报告' }
       }
     )
   }
 
-  // 3. 首次进入:询问是否启动代码审查。
-  const startPending = {
-    id: `pi-review-start-${Date.now()}`,
-    type: 'review_start',
-    basedOnRevision: 1,
-    payload: { message: '是否启动代码审查?' },
-    createdAt: new Date().toISOString()
-  }
-  const startLifecycle = emitLifecycle(appExec('code_review', 'awaiting_user', startPending))
-  onContent?.(
-    '所有页面与接口模块已开发完成,是否启动应用级代码审查(规范检测 / 安全扫描 / 健康度评估)?'
-  )
-  return emit(
-    'code_review',
-    'requires_user_input',
-    startLifecycle,
-    {
-      clarification: {
-        mode: 'review_start',
-        status: 'requires_user_input',
-        message: '是否启动代码审查?',
-        questions: [
-          {
-            id: 'review_start',
-            header: '启动审查',
-            question: '所有模块开发完成,是否启动应用级代码审查?',
-            type: 'yesno',
-            presetAnswer: { selected: ['是'] }
-          }
-        ]
-      }
-    },
-    {
-      summary: { phase: 'code_review', status: 'requires_user_input', message: '是否启动审查' }
-    }
-  )
+  // 以上分支覆盖审查启动、报告授权和结论确认；未识别的控制参数不应静默生成错误状态。
+  throw new Error('代码审查工作流未处理当前状态。')
 }
 
 export async function replayWorkbench(
@@ -1454,11 +1445,6 @@ export async function replayWorkbench(
   }
   const answers = (options.clarificationAnswers || {}) as Record<string, unknown>
   // 按当前应用工作区取页面详设数据（pms-new 单页详设）。
-  const pageDesigns = appDataByWorkspace(options.application?.workspaceRoot).pageDesigns as Record<
-    string,
-    Record<string, unknown>
-  >
-
   const baseLifecycle = makeBaseLifecycle(options.application)
 
   const emit = (
@@ -1507,7 +1493,6 @@ export async function replayWorkbench(
 
   // 3. 授权决策 → 继续构建 → 等待验收。
   if (answers.agent_approval) {
-    onContent?.('已授权，继续执行开发任务…')
     const running = emitLifecycle(exec(runId, threadId, page.id, 'build', 'running'))
     emit('build', 'running', running)
     await delay(900)
@@ -1539,219 +1524,308 @@ export async function replayWorkbench(
     )
   }
 
-  // 4. 详情审阅确认 → 完整构建链 → 等待验收。
-  // 按真实节点链（workflow.py）：inspect_workspace → prepare_build_tasks → build
-  // → integration_test → launch_project(page_acceptance + preview_url)。
+  // 4. 详情审阅确认 → 完整代码构建 → 等待文件授权。
+  // 开发阶段只负责把代码产物写入工作区；启动、非功能和业务测试统一由测试阶段执行。
   // agent_approval 仅数据库高危操作才触发，普通页面构建默认不走。
   if (answers.detail_review || resume) {
     const steps: Record<string, unknown>[] = []
+    const buildTargets = buildFileTargets(page.id, includesRecheckEndpoint)
+    const workflowStepTotal = Math.max(1, buildTargets.length + 1)
+    const acceptedCount = acceptedBuildIndex(answers, buildTargets)
+    const activeTarget = buildTargets[acceptedCount]
+
+    const activeStepId = activeTarget
+      ? codeBuildStepId(activeTarget)
+      : buildTargets.length > 0
+        ? codeBuildStepId(buildTargets[buildTargets.length - 1])
+        : 'step-code-page'
     const pushStep = (step: Record<string, unknown>): void => {
       steps.push(step)
-      onProcessSteps?.([...steps] as ProcessStepRecord[])
+      onProcessSteps?.(withProcessStepTotal(steps as ProcessStepRecord[], workflowStepTotal))
+    }
+    const updateStep = (id: string, patch: Record<string, unknown>): void => {
+      const index = steps.findIndex((step) => step.id === id)
+      if (index < 0) return
+      steps[index] = { ...steps[index], ...patch }
+      onProcessSteps?.(withProcessStepTotal(steps as ProcessStepRecord[], workflowStepTotal))
     }
 
-    // inspect_workspace
-    onContent?.('已确认设计，正在检查工作区结构…')
-    emit(
-      'inspect_workspace',
-      'completed',
-      emitLifecycle(exec(runId, threadId, page.id, 'inspect_workspace', 'completed'))
-    )
-    pushStep({
-      id: 'step-inspect',
-      kind: 'workflow',
-      status: 'completed',
-      title: '检查工作区结构',
-      detail: '已扫描前端工程目录结构、入口文件与既有约定。',
-      sequence: 1
-    })
-    await delay(600)
-
-    if (includesRecheckEndpoint) {
-      onContent?.('正在读取依赖接口的数据源与契约上下文…')
-      emit(
-        'inspect_database_context',
-        'running',
-        emitLifecycle(exec(runId, threadId, page.id, 'inspect_database_context', 'running'))
-      )
-      await delay(700)
-      emit(
-        'inspect_database_context',
-        'completed',
-        emitLifecycle(exec(runId, threadId, page.id, 'inspect_database_context', 'completed'))
-      )
-      pushStep({
-        id: 'step-db',
+    /** 文件全部确认后运行预览节点，并让右侧面板在节点完成后进入浏览器预览。 */
+    const completeWithPreview = async (): Promise<WorkflowRunPayload> => {
+      markPageDesigned(page.id)
+      if (page.id === 'my-rechecks') markEndpointDesigned('rechecks', 'ep-my-rechecks')
+      const previewStep = {
+        id: `step-preview-${page.id}`,
+        kind: 'workflow',
+        status: 'running',
+        title: '启动应用预览',
+        detail: '正在启动应用预览。',
+        sequence: workflowStepTotal
+      }
+      const runningSteps = buildTargets.map((target, index) => ({
+        id: codeBuildStepId(target),
         kind: 'workflow',
         status: 'completed',
-        title: '读取依赖接口上下文',
-        detail: '已确认 GET /api/rechecks/my 的契约、recheck 数据表与页面响应绑定。',
-        sequence: steps.length + 1
+        title: codeBuildStepTitle(target),
+        detail: '文件变更已接受。',
+        sequence: index + 1
+      }))
+      runningSteps.push(previewStep)
+      onProcessSteps?.(
+        withProcessStepTotal(runningSteps as ProcessStepRecord[], workflowStepTotal)
+      )
+      emit(
+        'launch_project',
+        'running',
+        emitLifecycle(exec(runId, threadId, page.id, 'launch_project', 'running'))
+      )
+      await delay(420)
+      const completedSteps = [...runningSteps]
+      completedSteps[completedSteps.length - 1] = {
+        ...completedSteps[completedSteps.length - 1],
+        status: 'completed',
+        detail: '代码文件已保存，右侧已切换到浏览器预览。'
+      }
+      onProcessSteps?.(
+        withProcessStepTotal(completedSteps as ProcessStepRecord[], workflowStepTotal)
+      )
+      return emit(
+        'launch_project',
+        'completed',
+        emitLifecycle(exec(runId, threadId, page.id, 'launch_project', 'completed')),
+        {},
+        {
+          result: {
+            preview_url: `${MOCK_APPLICATION_PREVIEW_URL}${page.path.replace(/^\//, '')}`
+          },
+          summary: {
+            phase: 'launch_project',
+            status: 'completed',
+            message: '代码产物已完成，已进入应用预览'
+          }
+        }
+      )
+    }
+
+    // 最后一个文件的 Diff 接受就是开发交付终态；文件已在前置动作中落库，
+    // 这里直接提交“启动预览”节点，不能再把已完成的检查/任务准备流程播放一遍。
+    if (
+      resume?.summary?.phase === 'build' &&
+      buildTargets.length > 0 &&
+      typeof answers.file_acceptance === 'string' &&
+      acceptedCount >= buildTargets.length
+    ) {
+      return completeWithPreview()
+    }
+
+    // 一个源码文件对应一个单一职责节点；页面与接口依赖节点按顺序分别交付。
+    for (let index = 0; index < acceptedCount; index += 1) {
+      const target = buildTargets[index]
+      pushStep({
+        id: codeBuildStepId(target),
+        kind: 'workflow',
+        status: 'completed',
+        title: codeBuildStepTitle(target),
+        detail: '文件变更已接受。',
+        sequence: index + 1
       })
-      await delay(300)
+    }
+    if (activeTarget) {
+      pushStep({
+        id: codeBuildStepId(activeTarget),
+        kind: 'workflow',
+        status: 'pending',
+        title: codeBuildStepTitle(activeTarget),
+        detail: '正在检查工作区并准备生成代码。',
+        sequence: acceptedCount + 1
+      })
     }
 
-    // prepare_build_tasks
-    onContent?.('正在规划构建任务（DAG）…')
-    emit(
-      'prepare_build_tasks',
-      'running',
-      emitLifecycle(exec(runId, threadId, page.id, 'prepare_build_tasks', 'running'))
-    )
-    await delay(800)
-    emit(
-      'prepare_build_tasks',
-      'completed',
-      emitLifecycle(exec(runId, threadId, page.id, 'prepare_build_tasks', 'completed'))
-    )
-    pushStep({
-      id: 'step-prepare',
-      kind: 'workflow',
-      status: 'completed',
-      title: '规划构建任务（DAG）',
-      detail: includesRecheckEndpoint
-        ? `已把「${page.label}」页面与 GET /api/rechecks/my 编排为同一个双产物任务。`
-        : `已为「${page.label}」拆解构建任务并编译执行 DAG。`,
-      sequence: steps.length + 1
-    })
-    await delay(300)
+    // 代码文件全部接受后进入预览节点；启动、非功能和业务测试统一放到测试阶段。
+    const runRemainingNodes = async (): Promise<WorkflowRunPayload> => {
+      markPageDesigned(page.id)
+      if (page.id === 'my-rechecks') markEndpointDesigned('rechecks', 'ep-my-rechecks')
+      return completeWithPreview()
+    }
 
-    // build
-    onContent?.(page.id === 'my-rechecks' ? '正在实现页面及其依赖的查询接口…' : '正在生成页面代码…')
-    emit('build', 'running', emitLifecycle(exec(runId, threadId, page.id, 'build', 'running')))
-    await delay(1200)
-    emit('build', 'completed', emitLifecycle(exec(runId, threadId, page.id, 'build', 'completed')))
-    pushStep({
-      id: 'step-build',
-      kind: 'workflow',
-      status: 'completed',
-      title: page.id === 'my-rechecks' ? '实现页面与依赖接口' : '生成页面代码',
-      detail: includesRecheckEndpoint ? '先实现查询接口，再生成页面并完成调用与响应字段绑定。' : '',
-      sequence: steps.length + 1,
-      buildExecutionSlice: buildExecutionSliceFor(page.id, page.label)
-    })
-    await delay(300)
-
-    // integration_test
-    onContent?.('正在执行集成测试…')
-    emit(
-      'integration_test',
-      'running',
-      emitLifecycle(exec(runId, threadId, page.id, 'integration_test', 'running'))
-    )
-    await delay(900)
-    emit(
-      'integration_test',
-      'completed',
-      emitLifecycle(exec(runId, threadId, page.id, 'integration_test', 'completed'))
-    )
-    pushStep({
-      id: 'step-test',
-      kind: 'workflow',
-      status: 'completed',
-      title: '执行集成测试',
-      detail: includesRecheckEndpoint ? '验证页面可通过依赖接口加载当前用户的回检数据。' : '',
-      sequence: steps.length + 1,
-      checks: integrationChecks()
-    })
-    await delay(300)
-
-    // integration_test 通过 → 页面模块开发完成。完成标记在构建链走完后置位，
-    // 确保用户看清节点流程后，再由工作台询问是否进入审查。
-    markPageDesigned(page.id)
-    if (page.id === 'my-rechecks') {
-      // “我的回检”以页面为任务入口，但同一工作流同时交付其查询接口，不创建额外接口对话。
-      markEndpointDesigned('rechecks', 'ep-my-rechecks')
-      onContent?.(
-        '“我的回检”页面、GET /api/rechecks/my 查询接口与联调验证均已完成。\n全部开发产物已完成，请确认是否进入审查阶段。'
+    // 工作区检查、依赖上下文和任务准备属于整条开发工作流的前置节点，
+    // 接受接口文件后续跑页面文件时不重复执行，直接进入下一个代码节点。
+    if (acceptedCount === 0) {
+      emit(
+        'inspect_workspace',
+        'completed',
+        emitLifecycle(exec(runId, threadId, page.id, 'inspect_workspace', 'completed'))
       )
-    } else {
-      onContent?.(
-        `「${page.label}」开发完成（集成测试通过）。\n全部开发产物完成后，可确认进入审查阶段。`
+      updateStep(activeStepId, { detail: '工作区结构已确认，正在准备页面实现任务。' })
+      await delay(250)
+
+      if (includesRecheckEndpoint) {
+        emit(
+          'inspect_database_context',
+          'running',
+          emitLifecycle(exec(runId, threadId, page.id, 'inspect_database_context', 'running'))
+        )
+        await delay(300)
+        emit(
+          'inspect_database_context',
+          'completed',
+          emitLifecycle(exec(runId, threadId, page.id, 'inspect_database_context', 'completed'))
+        )
+        updateStep(activeStepId, {
+          detail: '已确认 GET /api/rechecks/my 的契约、数据来源与页面响应绑定。'
+        })
+        await delay(120)
+      }
+
+      emit(
+        'prepare_build_tasks',
+        'running',
+        emitLifecycle(exec(runId, threadId, page.id, 'prepare_build_tasks', 'running'))
+      )
+      await delay(450)
+      emit(
+        'prepare_build_tasks',
+        'completed',
+        emitLifecycle(exec(runId, threadId, page.id, 'prepare_build_tasks', 'completed'))
+      )
+      updateStep(activeStepId, {
+        detail: includesRecheckEndpoint
+          ? `已把「${page.label}」页面与 GET /api/rechecks/my 编排为同一个实现任务。`
+          : `已为「${page.label}」准备代码实现任务。`
+      })
+      await delay(120)
+    }
+
+    updateStep(activeStepId, {
+      status: 'running',
+      detail:
+        acceptedCount > 0
+          ? `已接受接口代码，开始生成「${activeTarget?.name || page.label}」页面代码。`
+          : '开始生成当前代码文件，完成后等待一次 Diff 授权。'
+    })
+
+    // build：逐文件写入（接口 → 页面）。每个文件先在对应页签内渐进呈现单文件 Diff，
+    // 再暂停等待“接受”（消息中的文件改动卡）；一个文件接受后才继续下一个文件。
+    emit(
+      'build',
+      'running',
+      emitLifecycle(exec(runId, threadId, page.id, 'build', 'running')),
+      {}
+    )
+    if (acceptedCount > 0) {
+      updateStep(activeStepId, {
+        detail: `已接受前置代码文件，继续执行${activeTarget ? codeBuildStepTitle(activeTarget) : '开发'}节点。`
+      })
+    }
+    if (activeTarget) {
+      const target = activeTarget
+      const lines = target.content.split('\n')
+      const chunkSize = 12
+      updateStep(activeStepId, { detail: `正在生成 ${target.name}，等待确认文件 Diff。` })
+      for (let visible = chunkSize; ; visible += chunkSize) {
+        await delay(380)
+        emit(
+          'build',
+          'running',
+          emitLifecycle(exec(runId, threadId, page.id, 'build', 'running')),
+          {
+            codeChanges: singleFileChangeSet(
+              runId,
+              target,
+              lines.slice(0, visible).join('\n')
+            )
+          }
+        )
+        if (visible >= lines.length) break
+      }
+      await delay(250)
+      const filePending = {
+        id: `pi-file-${acceptedCount}-${Date.now()}`,
+        type: 'file_acceptance',
+        basedOnRevision: 1,
+        payload: { message: `等待接受 ${target.name}` },
+        createdAt: new Date().toISOString()
+      }
+      return emit(
+        'build',
+        'requires_user_input',
+        emitLifecycle(exec(runId, threadId, page.id, 'build', 'awaiting_user', filePending)),
+        {
+          clarification: {
+            mode: 'file_acceptance',
+            status: 'requires_user_input',
+            message: `「${target.name}」已生成，请在右侧确认 Diff 后接受。`
+          },
+          codeChanges: singleFileChangeSet(runId, target, target.content)
+        },
+        {
+          summary: {
+            phase: 'build',
+            status: 'requires_user_input',
+            message: `等待接受 ${target.name}`
+          }
+        }
       )
     }
-    return emit(
-      'integration_test',
-      'completed',
-      emitLifecycle(exec(runId, threadId, page.id, 'integration_test', 'completed')),
-      {},
-      { summary: { phase: 'integration_test', status: 'completed', message: '页面开发完成' } }
-    )
+    updateStep(activeStepId, {
+      status: 'completed',
+      title: activeTarget ? codeBuildStepTitle(activeTarget) : '代码实现',
+      detail: '代码文件均已接受，开发节点完成。'
+    })
+    await delay(300)
+
+    // 文件全部接受后结束开发阶段；测试阶段会重新创建应用级测试会话。
+    return await runRemainingNodes()
   }
 
   // 5. 开始页面设计（DetailConfirmationPageSelector 点"开始生成"）→ 详情审阅。
   if (options.selectedPageId || options.detailTargetType || options.originalRequest) {
-    onContent?.(
-      includesRecheckEndpoint
-        ? `正在为「${page.label}」设计页面与 GET /api/rechecks/my 依赖接口…`
-        : `正在为「${page.label}」生成页面需求文档…`
-    )
     // 注：不在开始设计时 markPageDesigned——「已设计」仅在用户确认详细设计(detail_review)后标记。
     // 详情审阅需要 lifecycle 快照中的 pendingInteraction（page_design_confirmation）才能提交确认。
-    // 生成中以 processSteps 承载 5 阶段（与构建链一致：Agent 正在执行→已归档 N 个步骤），完成后留历史。
-    const designSteps: Array<{ id: string; title: string; detail: string }> =
-      includesRecheckEndpoint
-        ? [
-            {
-              id: 'design-context',
-              title: '汇总双产物上下文',
-              detail: '整合页面目标、接口契约、数据来源与项目约束。'
-            },
-            {
-              id: 'design-page',
-              title: '设计我的回检页面',
-              detail: '梳理筛选、列表、提交入口与状态反馈。'
-            },
-            {
-              id: 'design-endpoint',
-              title: '设计依赖查询接口',
-              detail: '定义 GET /api/rechecks/my 的查询参数、响应结构与数据来源。'
-            },
-            {
-              id: 'design-binding',
-              title: '校验页面调用关系',
-              detail: '把接口 data.list 与 total 绑定到页面列表及分页状态。'
-            },
-            {
-              id: 'design-summary',
-              title: '汇总双产物设计',
-              detail: '形成页面与接口可共同确认、共同实施的设计方案。'
-            }
-          ]
-        : [
-            {
-              id: 'design-context',
-              title: '汇总应用上下文',
-              detail: '整合需求文档、项目计划与页面目标。'
-            },
-            {
-              id: 'design-scope',
-              title: '梳理页面范围',
-              detail: '明确页面职责、核心功能与关键用户路径。'
-            },
-            {
-              id: 'design-breakdown',
-              title: '拆解功能与数据',
-              detail: '整理功能点、数据展示与交互依赖。'
-            },
-            {
-              id: 'design-edge',
-              title: '补齐边界与验收',
-              detail: '定义异常态、边界约束与验收标准。'
-            },
-            { id: 'design-summary', title: '汇总需求文档', detail: '整理为可确认的页面需求文档。' }
-          ]
+    // 生成中以 processSteps 持续承载设计与代码节点，保持同一条研发工作流轨迹。
+    const designSteps: Array<{ id: string; title: string; detail: string }> = [
+      {
+        id: 'design-context',
+        title: '汇总应用上下文',
+        detail: includesRecheckEndpoint
+          ? '整合已确认的应用约束、项目计划、页面目标和依赖接口契约。'
+          : '整合已确认的应用约束、项目计划与页面目标。'
+      },
+      {
+        id: 'design-scope',
+        title: '梳理页面范围',
+        detail: includesRecheckEndpoint
+          ? '明确页面职责、核心用户路径，以及页面与 GET /api/rechecks/my 的调用边界。'
+          : '明确页面职责、核心功能与关键用户路径。'
+      },
+      {
+        id: 'design-breakdown',
+        title: '拆解功能与数据',
+        detail: includesRecheckEndpoint
+          ? '拆解筛选、列表、状态反馈，并绑定接口请求参数和响应数据。'
+          : '整理功能点、数据展示与交互依赖。'
+      },
+      {
+        id: 'design-edge',
+        title: '补齐边界与验收',
+        detail: includesRecheckEndpoint
+          ? '补齐接口异常、空数据、权限边界和页面验收标准。'
+          : '定义异常态、边界约束与验收标准。'
+      }
+    ]
     const steps: ProcessStepRecord[] = []
+    const buildTargets = buildFileTargets(page.id, includesRecheckEndpoint)
+    const workflowTotal = designSteps.length + Math.max(1, buildTargets.length + 1)
     const pushStep = (step: ProcessStepRecord): void => {
       steps.push(step)
-      onProcessSteps?.([...steps])
+      onProcessSteps?.(withProcessStepTotal([...steps], workflowTotal))
     }
     onWorkflow?.(
       wf(threadId, runId, 'detail_confirmation', 'running', undefined, {
         summary: {
           phase: 'detail_confirmation',
           status: 'running',
-          message: includesRecheckEndpoint ? '正在生成页面与依赖接口设计…' : '正在生成页面需求文档…'
+          message: includesRecheckEndpoint ? '正在生成页面与依赖接口设计…' : '正在生成页面详细设计…'
         }
       })
     )
@@ -1767,39 +1841,48 @@ export async function replayWorkbench(
         nodeName: 'detail_confirmation',
         sequence: i + 1
       })
+      if (includesRecheckEndpoint && stage.id === 'design-breakdown') {
+        // 只有完成“拆解功能与数据”后才确认页面依赖接口，并把接口加入同一会话。
+        callbacks.onArtifactDiscovered?.([endpointArtifactId('rechecks', 'ep-my-rechecks')])
+      }
     }
     onWorkflow?.(
       wf(threadId, runId, 'detail_confirmation', 'completed', undefined, {
         summary: {
           phase: 'detail_confirmation',
           status: 'completed',
-          message: includesRecheckEndpoint ? '页面与依赖接口设计已生成' : '页面需求文档已生成'
+          message: includesRecheckEndpoint ? '页面与依赖接口设计已生成' : '页面详细设计已生成'
         }
       })
     )
-    await delay(300)
-    const pending = {
-      id: `pi-design-${Date.now()}`,
-      type: 'page_design_confirmation',
-      basedOnRevision: 1,
-      payload: {
-        message: includesRecheckEndpoint
-          ? '页面与依赖接口设计已生成，等待统一确认'
-          : '页面需求文档已生成，等待确认'
+    const designProcessSteps = [...steps]
+    return replayWorkbench(
+      threadId,
+      {
+        ...options,
+        clarificationAnswers: {
+          ...(options.clarificationAnswers || {}),
+          detail_review: { review_status: 'confirmed', target_changes: [] }
+        }
       },
-      createdAt: new Date().toISOString()
-    }
-    const lifecycle = emitLifecycle(
-      exec(runId, threadId, page.id, 'detail_confirmation', 'awaiting_user', pending)
+      {
+        ...callbacks,
+        onProcessSteps: (nextSteps) => {
+          onProcessSteps?.(
+            withProcessStepTotal(
+              [
+                ...designProcessSteps,
+                ...nextSteps.map((step, index) => ({
+                  ...step,
+                  sequence: designProcessSteps.length + index + 1
+                }))
+              ],
+              workflowTotal
+            )
+          )
+        }
+      }
     )
-    const payload = detailReviewPayload(threadId, runId, page.id, lifecycle, pageDesigns)
-    onContent?.(
-      includesRecheckEndpoint
-        ? `已为「${page.label}」生成页面与依赖接口设计，请确认后在同一任务中开始实施。`
-        : `已为「${page.label}」生成页面需求文档，请确认或补充后开始构建。`
-    )
-    onWorkflow?.(payload)
-    return payload
   }
 
   // 6. 其它（自由聊天/未知）→ 最小 running 态，不崩。

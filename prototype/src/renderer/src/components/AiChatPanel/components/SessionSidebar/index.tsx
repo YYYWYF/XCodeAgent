@@ -2,7 +2,8 @@ import {
   AppstoreOutlined,
   ApiOutlined,
   CaretDownOutlined,
-  CodeOutlined,
+  CaretRightOutlined,
+  DatabaseOutlined,
   DeleteOutlined,
   DownOutlined,
   EllipsisOutlined,
@@ -23,6 +24,7 @@ import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import type { WorkspaceDocKey } from '../../types'
 import type {
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntity,
   DevelopmentPlanningPageOption,
   DevelopmentPlanningPageTreeNode
 } from '../../../../typings'
@@ -31,6 +33,7 @@ import { apiEndpointDisplayPath } from '../../utils'
 import {
   artifactIdsForSession,
   documentArtifactId,
+  entityArtifactId,
   endpointArtifactId,
   pageArtifactId
 } from '../../../../workbenchDomain'
@@ -43,10 +46,10 @@ const COLLAPSED_SIDEBAR_WIDTH = 68
 const DEFAULT_SIDEBAR_WIDTH = 248
 
 type NavigationView = 'tasks' | 'artifacts'
-type ArtifactFilter = 'all' | 'page' | 'endpoint' | 'model'
+type ArtifactFilter = 'all' | 'page' | 'endpoint' | 'entity'
 type ArtifactStatus = 'not-started' | 'in-progress' | 'completed'
-type WorkbenchDocumentKey = WorkspaceDocKey | 'code-review'
-type WorkbenchPhaseIndex = 1 | 2 | 3
+type WorkbenchDocumentKey = WorkspaceDocKey | 'test-report' | 'code-review'
+type WorkbenchPhaseIndex = 1 | 2 | 3 | 4 | 5
 
 type DesignArtifactItem = {
   available: boolean
@@ -67,12 +70,12 @@ type ArtifactMenuProps = {
 
 type ArtifactConversationActionProps = ArtifactMenuProps & {
   disabled: boolean
-  theme: 'light' | 'dark'
 }
 
 type SessionSidebarProps = {
   activeSessionId?: string
   apiContracts: DevelopmentPlanningApiContract[]
+  entities: DevelopmentPlanningEntity[]
   applicationName: string
   artifactAccessById: Record<string, WorkbenchArtifactAccess>
   artifactStatusById: Record<string, WorkbenchArtifactStatus>
@@ -112,7 +115,6 @@ type SessionSidebarProps = {
   settingsActive: boolean
   showDevelopmentTasks: boolean
   skillsActive: boolean
-  theme: 'light' | 'dark'
 }
 
 /** 判断会话是否关联指定页面，兼容当前单页面会话契约。 */
@@ -149,26 +151,29 @@ function phaseIndexForSession(
     artifactIds.includes(documentArtifactId('code-review')) ||
     (session.title || '').includes('代码审查')
   ) {
-    return 3
+    return 5
   }
   if (
     artifactIds.some(
       (artifactId) =>
         artifactId.startsWith('page:') ||
         artifactId.startsWith('endpoint:') ||
-        artifactId.startsWith('model:')
+        artifactId.startsWith('entity:')
     ) ||
     session.pageId ||
     session.endpointId
   ) {
-    return 2
+    return 3
   }
   if (
     artifactIds.includes(documentArtifactId('requirement-spec')) ||
     artifactIds.includes(documentArtifactId('project-plan')) ||
-    session.title === '应用设计'
+    session.sessionKind === 'analysis' ||
+    session.sessionKind === 'planning' ||
+    session.title === '需求分析' ||
+    session.title === '项目计划'
   ) {
-    return 1
+    return session.sessionKind === 'planning' || session.title?.includes('项目计划') ? 2 : 1
   }
   return fallback
 }
@@ -226,8 +231,7 @@ function ArtifactConversationAction({
   lockMessage,
   onCreateTask,
   onOpenSession,
-  sessions,
-  theme
+  sessions
 }: ArtifactConversationActionProps): ReactElement | null {
   if (sessions.length === 0) return null
 
@@ -244,7 +248,7 @@ function ArtifactConversationAction({
           sessions={sessions}
         />
       }
-      overlayClassName={cx('artifact-conversation-overlay', theme)}
+      overlayClassName={cx('artifact-conversation-overlay')}
       placement="bottomLeft"
       trigger={['click']}
     >
@@ -287,7 +291,7 @@ function TaskNavigation({
   const visibleSessions = sessions.filter((session) => {
     if (filter === 'page') return Boolean(session.pageId)
     if (filter === 'endpoint') return Boolean(session.endpointId)
-    if (filter === 'model') return false
+    if (filter === 'entity') return false
     return true
   })
 
@@ -316,7 +320,7 @@ function TaskNavigation({
           { label: '全部', value: 'all' },
           { label: '页面', value: 'page' },
           { label: '接口', value: 'endpoint' },
-          { label: '模型', value: 'model' }
+          { label: '实体', value: 'entity' }
         ]}
         size="small"
         value={filter}
@@ -410,17 +414,30 @@ function TaskNavigation({
   )
 }
 
-/** 递归统计菜单节点下页面总数和已完成数。 */
-function pageTreeProgress(node: DevelopmentPlanningPageTreeNode): {
+/** 递归统计菜单节点下页面总数和已完成数，测试发现缺陷时同步反映产物回到进行中。 */
+function pageTreeProgress(
+  node: DevelopmentPlanningPageTreeNode,
+  artifactStatusById?: Record<string, WorkbenchArtifactStatus>
+): {
   completed: number
   total: number
 } {
   if (node.type === 'page') {
-    return { completed: node.designed || node.hasDetailPlan ? 1 : 0, total: 1 }
+    const status = artifactStatusById?.[pageArtifactId(node.pageId || node.key)]
+    return {
+      completed: status
+        ? status === 'completed'
+          ? 1
+          : 0
+        : node.designed || node.hasDetailPlan
+          ? 1
+          : 0,
+      total: 1
+    }
   }
   return (node.children || []).reduce(
     (result, child) => {
-      const progress = pageTreeProgress(child)
+      const progress = pageTreeProgress(child, artifactStatusById)
       return {
         completed: result.completed + progress.completed,
         total: result.total + progress.total
@@ -443,8 +460,7 @@ function PageArtifactNode({
   pagesById,
   readOnly,
   selectedPageId,
-  sessions,
-  theme
+  sessions
 }: {
   artifactAccessById: Record<string, WorkbenchArtifactAccess>
   artifactStatusById: Record<string, WorkbenchArtifactStatus>
@@ -458,11 +474,10 @@ function PageArtifactNode({
   readOnly: boolean
   selectedPageId: string
   sessions: ChatSessionSummary[]
-  theme: 'light' | 'dark'
 }): ReactElement | null {
   const [expanded, setExpanded] = useState(true)
   if (node.type === 'menu') {
-    const progress = pageTreeProgress(node)
+    const progress = pageTreeProgress(node, artifactStatusById)
     return (
       <div className={cx('artifact-tree-node')}>
         <button
@@ -496,7 +511,6 @@ function PageArtifactNode({
                 readOnly={readOnly}
                 selectedPageId={selectedPageId}
                 sessions={sessions}
-                theme={theme}
               />
             ))}
           </div>
@@ -519,29 +533,36 @@ function PageArtifactNode({
         className={cx(
           'artifact-row',
           status,
-          selectedPageId === pageId && 'selected',
+          selectedPageId === pageId && artifactsAvailable && access?.mode !== 'unavailable' && 'selected',
           access?.mode === 'read' && 'read-only'
         )}
         onClick={() => (requestsConversation ? onCreatePageTask(page) : onPageSelect(page))}
-        disabled={!artifactsAvailable || access?.mode === 'unavailable'}
+        disabled={
+          !artifactsAvailable ||
+          access?.mode === 'unavailable' ||
+          access?.reason === 'phase-locked'
+        }
         style={{ paddingLeft: 8 + depth * 14 }}
         title={`${page.label} · ${page.path}${access?.message ? ` · ${access.message}` : ''}`}
         type="button"
       >
-        <PhaseIndexBadge index={2} />
+        <PhaseIndexBadge index={3} />
         <FileTextOutlined />
         <span className={cx('artifact-label')}>{page.label}</span>
         <span aria-label={status} className={cx('artifact-status-dot', status)} />
       </button>
       <ArtifactConversationAction
         canCreate={!readOnly && access?.mode === 'write'}
-        disabled={!artifactsAvailable || access?.mode === 'unavailable'}
+        disabled={
+          !artifactsAvailable ||
+          access?.mode === 'unavailable' ||
+          access?.reason === 'phase-locked'
+        }
         label={page.label}
         lockMessage={access?.message}
         onCreateTask={() => onCreatePageTask(page)}
         onOpenSession={onOpenSession}
         sessions={related}
-        theme={theme}
       />
     </div>
   )
@@ -552,6 +573,7 @@ function ArtifactNavigation(
   props: Pick<
     SessionSidebarProps,
     | 'apiContracts'
+    | 'entities'
     | 'applicationName'
     | 'artifactAccessById'
     | 'artifactStatusById'
@@ -571,13 +593,12 @@ function ArtifactNavigation(
     | 'sessions'
     | 'showDevelopmentTasks'
     | 'readOnly'
-    | 'theme'
   >
 ): ReactElement {
   const [applicationExpanded, setApplicationExpanded] = useState(true)
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apisExpanded, setApisExpanded] = useState(true)
-  const [modelsExpanded, setModelsExpanded] = useState(false)
+  const [entitiesExpanded, setEntitiesExpanded] = useState(true)
   const [expandedContracts, setExpandedContracts] = useState<Set<string>>(
     () => new Set(props.apiContracts.map((contract) => contract.id))
   )
@@ -589,7 +610,9 @@ function ArtifactNavigation(
     props.pageTree.length > 0
       ? props.pageTree
       : props.pages.map((page) => ({ ...page, type: 'page' as const }))
-  const completedPages = props.pages.filter((page) => page.designed || page.hasDetailPlan).length
+  const completedPages = props.pages.filter(
+    (page) => props.artifactStatusById[pageArtifactId(page.pageId)] === 'completed'
+  ).length
   const endpointTotal = props.apiContracts.reduce(
     (sum, contract) => sum + contract.endpoints.length,
     0
@@ -597,18 +620,25 @@ function ArtifactNavigation(
   const completedEndpoints = props.apiContracts.reduce(
     (sum, contract) =>
       sum +
-      contract.endpoints.filter((endpoint) => endpoint.designed || endpoint.hasDetailPlan).length,
+      contract.endpoints.filter((endpoint, endpointIndex) => {
+        const endpointId = endpoint.id || String(endpointIndex + 1)
+        const apiContractId = endpoint.apiContractId || contract.id
+        return props.artifactStatusById[endpointArtifactId(apiContractId, endpointId)] === 'completed'
+      }).length,
     0
   )
+  const completedEntities = 0
   const completedDocuments = props.designArtifacts.filter(
     (artifact) => artifact.status === 'completed'
   ).length
-  // 页面、接口和模型只有在项目计划确认保存后才进入正式产物树。
+  // 页面、接口和实体只有在项目计划确认保存后才进入正式产物树。
   const developmentArtifactsKnown = props.showDevelopmentTasks
-  const completedTotal = completedDocuments + completedPages + completedEndpoints
+  const completedTotal = completedDocuments + completedPages + completedEndpoints + completedEntities
   const artifactTotal =
     props.designArtifacts.length +
-    (developmentArtifactsKnown ? props.pages.length + endpointTotal : 0)
+    (developmentArtifactsKnown
+      ? props.pages.length + endpointTotal + props.entities.length
+      : 0)
 
   /** 单独切换一个接口分组，不影响其他契约树节点。 */
   const toggleContract = (contractId: string): void => {
@@ -654,7 +684,10 @@ function ArtifactNavigation(
                     className={cx(
                       'artifact-row',
                       artifact.status,
-                      props.selectedDesignArtifactKey === artifact.key && 'selected',
+                      props.selectedDesignArtifactKey === artifact.key &&
+                        artifact.available &&
+                        access?.mode !== 'unavailable' &&
+                        'selected',
                       access?.mode === 'read' && 'read-only'
                     )}
                     disabled={!artifact.available || access?.mode === 'unavailable'}
@@ -663,7 +696,17 @@ function ArtifactNavigation(
                     title={`${artifact.label} · ${artifact.path}${access?.message ? ` · ${access.message}` : ''}`}
                     type="button"
                   >
-                    <PhaseIndexBadge index={artifact.key === 'code-review' ? 3 : 1} />
+                    <PhaseIndexBadge
+                      index={
+                        artifact.key === 'code-review'
+                          ? 5
+                          : artifact.key === 'test-report'
+                            ? 4
+                          : artifact.key === 'project-plan'
+                            ? 2
+                            : 1
+                      }
+                    />
                     <FileTextOutlined />
                     <span className={cx('artifact-label')}>{artifact.label}</span>
                     <span
@@ -679,7 +722,6 @@ function ArtifactNavigation(
                     onCreateTask={() => props.onCreateDocumentTask(artifact.key)}
                     onOpenSession={props.onOpenSession}
                     sessions={related}
-                    theme={props.theme}
                   />
                 </div>
               )
@@ -717,7 +759,6 @@ function ArtifactNavigation(
                       readOnly={Boolean(props.readOnly)}
                       selectedPageId={props.selectedPageId}
                       sessions={props.sessions}
-                      theme={props.theme}
                     />
                   ))}
                 </div>
@@ -739,9 +780,14 @@ function ArtifactNavigation(
                 <div className={cx('artifact-tree-children', 'section-children')}>
                   {props.apiContracts.map((contract) => {
                     const expanded = expandedContracts.has(contract.id)
-                    const completed = contract.endpoints.filter(
-                      (endpoint) => endpoint.designed || endpoint.hasDetailPlan
-                    ).length
+                    const completed = contract.endpoints.filter((endpoint, index) => {
+                      const endpointId = endpoint.id || String(index + 1)
+                      const apiContractId = endpoint.apiContractId || contract.id
+                      return (
+                        props.artifactStatusById[endpointArtifactId(apiContractId, endpointId)] ===
+                        'completed'
+                      )
+                    }).length
                     return (
                       <div className={cx('artifact-tree-node')} key={contract.id}>
                         <button
@@ -788,7 +834,10 @@ function ArtifactNavigation(
                                     className={cx(
                                       'artifact-row',
                                       status,
-                                      props.selectedApiEndpointKey === endpointKey && 'selected',
+                                      props.selectedApiEndpointKey === endpointKey &&
+                                        props.showDevelopmentTasks &&
+                                        access?.mode !== 'unavailable' &&
+                                        'selected',
                                       access?.mode === 'read' && 'read-only'
                                     )}
                                     onClick={() =>
@@ -806,24 +855,25 @@ function ArtifactNavigation(
                                           })
                                     }
                                     disabled={
-                                      !props.showDevelopmentTasks || access?.mode === 'unavailable'
+                                      !props.showDevelopmentTasks ||
+                                      access?.mode === 'unavailable' ||
+                                      access?.reason === 'phase-locked'
                                     }
                                     style={{ paddingLeft: 36 }}
                                     title={`${label}${access?.message ? ` · ${access.message}` : ''}`}
                                     type="button"
                                   >
-                                    <PhaseIndexBadge index={2} />
+                                    <PhaseIndexBadge index={3} />
                                     <ApiOutlined />
                                     <code className={cx('artifact-label')}>{label}</code>
-                                    <span
-                                      aria-label={status}
-                                      className={cx('artifact-status-dot', status)}
-                                    />
+                                    <span aria-label={status} className={cx('artifact-status-dot', status)} />
                                   </button>
                                   <ArtifactConversationAction
                                     canCreate={!props.readOnly && access?.mode === 'write'}
                                     disabled={
-                                      !props.showDevelopmentTasks || access?.mode === 'unavailable'
+                                      !props.showDevelopmentTasks ||
+                                      access?.mode === 'unavailable' ||
+                                      access?.reason === 'phase-locked'
                                     }
                                     label={label}
                                     lockMessage={access?.message}
@@ -836,7 +886,6 @@ function ArtifactNavigation(
                                     }
                                     onOpenSession={props.onOpenSession}
                                     sessions={related}
-                                    theme={props.theme}
                                   />
                                 </div>
                               )
@@ -850,19 +899,55 @@ function ArtifactNavigation(
               ) : null}
 
               <button
-                aria-expanded={modelsExpanded}
+                aria-expanded={entitiesExpanded}
                 className={cx('artifact-section-row')}
-                onClick={() => setModelsExpanded((value) => !value)}
+                onClick={() => setEntitiesExpanded((value) => !value)}
                 type="button"
               >
-                <CaretDownOutlined className={cx(!modelsExpanded && 'collapsed')} />
-                <span>模型</span>
-                <small>0/0</small>
+                <CaretDownOutlined className={cx(!entitiesExpanded && 'collapsed')} />
+                <span>实体</span>
+                <small>{completedEntities}/{props.entities.length}</small>
               </button>
-              {modelsExpanded ? (
-                <div className={cx('artifact-empty')}>
-                  <CodeOutlined /> 当前版本暂无模型实体
-                </div>
+              {entitiesExpanded ? (
+                props.entities.length === 0 ? (
+                  <div className={cx('artifact-tree-children', 'section-children')}>
+                    <div
+                      aria-label="实体定义，敬请期待"
+                      className={cx('artifact-branch-row', 'static')}
+                      style={{ paddingLeft: 22 }}
+                    >
+                      <CaretRightOutlined />
+                      <FolderOutlined />
+                      <span>实体定义</span>
+                      <small>敬请期待</small>
+                    </div>
+                  </div>
+                ) : (
+                  <div className={cx('artifact-tree-children', 'section-children')}>
+                    {props.entities.map((entity) => {
+                    const entityId = entityArtifactId(entity.entityId)
+                    const developmentStatus = props.artifactStatusById[entityId] || 'not-started'
+                      return (
+                        <div className={cx('artifact-row-shell')} key={entity.entityId}>
+                          <button
+                          aria-label={`${entity.label}实体，${developmentStatus}`}
+                            className={cx('artifact-row', developmentStatus, 'read-only')}
+                            disabled
+                            style={{ paddingLeft: 22 }}
+                            title={`${entity.purpose} · 实体仅作概念提示，暂不生成具体产物`}
+                            type="button"
+                          >
+                            <PhaseIndexBadge index={3} />
+                            <DatabaseOutlined />
+                            <span className={cx('artifact-label')}>{entity.label}</span>
+                            <span className={cx('artifact-entity-placeholder')}>占位</span>
+                          <span aria-label={developmentStatus} className={cx('artifact-status-dot', developmentStatus)} />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
               ) : null}
             </>
           ) : null}
@@ -958,10 +1043,12 @@ export default function SessionSidebar(props: SessionSidebarProps): ReactElement
             sessions={orderedSessions}
             fallbackPhaseIndex={
               props.selectedDesignArtifactKey === 'code-review'
-                ? 3
-                : props.selectedDesignArtifactKey
-                  ? 1
-                  : 2
+                ? 5
+                : props.selectedDesignArtifactKey === 'project-plan'
+                  ? 2
+                  : props.selectedDesignArtifactKey === 'requirement-spec'
+                    ? 1
+                    : 3
             }
           />
         ) : (

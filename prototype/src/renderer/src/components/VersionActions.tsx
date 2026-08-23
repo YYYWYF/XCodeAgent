@@ -1,11 +1,9 @@
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { Button, Dropdown } from 'antd'
 import {
-  CloudUploadOutlined,
   DownOutlined,
   HistoryOutlined,
-  LockOutlined,
-  PlusOutlined
+  LockOutlined
 } from '@ant-design/icons'
 import type { ApplicationConfig, ApplicationLifecycle, ApplicationVersion } from '../typings'
 import {
@@ -26,7 +24,8 @@ type Props = {
   onRollback: (versionId: string) => void
   onStartIteration: () => void
   onVersionSelect: (versionId: string) => void
-  previewAction: ReactNode
+  /** 顶栏布局需要把版本选择和审查后的终态动作拆到阶段条两侧。 */
+  part?: 'all' | 'selector' | 'terminal'
 }
 
 function statusLabelFor(version: ApplicationVersion, isActive: boolean): string {
@@ -46,7 +45,7 @@ export default function VersionActions({
   onRollback,
   onStartIteration,
   onVersionSelect,
-  previewAction
+  part = 'all'
 }: Props): JSX.Element | null {
   const [menuOpen, setMenuOpen] = useState(false)
   const viewedVersion = currentVersion(application)
@@ -98,31 +97,31 @@ export default function VersionActions({
     </div>
   )
 
-  return (
-    <div className={cx('workbench-version-actions')}>
-      <Dropdown
-        visible={menuOpen}
-        onVisibleChange={setMenuOpen}
-        overlay={versionPanel}
-        placement="bottomRight"
-        trigger={['click']}
+  const versionSelector = (
+    <Dropdown
+      visible={menuOpen}
+      onVisibleChange={setMenuOpen}
+      overlay={versionPanel}
+      placement="bottomLeft"
+      trigger={['click']}
+    >
+      <button
+        aria-label={`切换版本，当前 ${viewedVersion.versionLabel}`}
+        className={cx(
+          'workbench-version-badge',
+          viewedVersion.status === 'released' && 'is-released'
+        )}
+        type="button"
       >
-        <button
-          aria-label={`切换版本，当前 ${viewedVersion.versionLabel}`}
-          className={cx(
-            'workbench-version-badge',
-            viewedVersion.status === 'released' && 'is-released'
-          )}
-          type="button"
-        >
-          {viewedVersion.status === 'released' ? <LockOutlined /> : null}
-          <span className={cx('workbench-version-label')}>{viewedVersion.versionLabel}</span>
-          <DownOutlined className={cx('workbench-version-caret')} />
-        </button>
-      </Dropdown>
+        {viewedVersion.status === 'released' ? <LockOutlined /> : null}
+        <span className={cx('workbench-version-label')}>{viewedVersion.versionLabel}</span>
+        <DownOutlined className={cx('workbench-version-caret')} />
+      </button>
+    </Dropdown>
+  )
 
-      {previewAction}
-
+  const terminalAction = (
+    <>
       {!isViewingActiveVersion ? (
         <Button
           className={cx('workbench-rollback-button')}
@@ -136,23 +135,38 @@ export default function VersionActions({
 
       {editable ? (
         <Button
-          className={cx('workbench-publish-button', releasable && 'ready')}
+          className={cx(
+            'workbench-terminal-action-button',
+            'workbench-publish-button',
+            releasable && 'ready'
+          )}
           size="small"
           type="primary"
           disabled={!releasable}
-          icon={<CloudUploadOutlined />}
           onClick={onPublish}
-          title={releasable ? '生成版本' : '完成代码审查后可生成版本'}
+          title={releasable ? '生成新版本' : '完成代码审查后可生成新版本'}
         >
-          生成版本
+          生成新版本
         </Button>
       ) : null}
 
       {isViewingActiveVersion && !editable && viewedVersion.status === 'released' ? (
-        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={onStartIteration}>
+        <Button
+          className={cx('workbench-terminal-action-button', 'workbench-iteration-button')}
+          size="small"
+          type="primary"
+          onClick={onStartIteration}
+        >
           发起新迭代
         </Button>
       ) : null}
+    </>
+  )
+
+  return (
+    <div className={cx('workbench-version-actions')}>
+      {part === 'all' || part === 'selector' ? versionSelector : null}
+      {part === 'all' || part === 'terminal' ? terminalAction : null}
     </div>
   )
 }

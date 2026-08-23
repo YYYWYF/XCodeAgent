@@ -15,8 +15,8 @@
   align-items: center;
   gap: 10px;
   padding: 13px 14px;
-  cursor: pointer;
-  user-select: none;
+  cursor: default;
+  user-select: text;
 
   &::marker {
     color: var(--wb-text-tertiary);
@@ -118,8 +118,8 @@
   align-items: center;
   gap: 8px;
   padding: 4px 6px 4px 0;
-  cursor: pointer;
-  user-select: none;
+  cursor: default;
+  user-select: text;
 
   &.is-static {
     cursor: default;
@@ -132,17 +132,6 @@
   .@{class-prefix}-dag-generation-stage-copy {
     flex: 1;
   }
-}
-
-.@{class-prefix}-dag-generation-stage-chevron {
-  flex: 0 0 auto;
-  color: var(--wb-text-tertiary);
-  font-size: 10px;
-  transition: transform 0.18s ease;
-}
-
-.@{class-prefix}-dag-generation-stage-details[open] .@{class-prefix}-dag-generation-stage-chevron {
-  transform: rotate(90deg);
 }
 
 .@{class-prefix}-dag-generation-stage-output {
@@ -226,11 +215,24 @@
     align-items: center;
     padding: 10px 2px;
     cursor: pointer;
+    user-select: none;
 
     &::marker {
       color: var(--wb-text-tertiary);
     }
   }
+}
+
+.@{class-prefix}-dag-generation-stage-chevron {
+  flex: 0 0 auto;
+  color: var(--wb-text-tertiary);
+  font-size: 10px;
+  transition: transform 0.18s ease;
+}
+
+.@{class-prefix}-dag-generation-stage-details[open]
+  .@{class-prefix}-dag-generation-stage-chevron {
+  transform: rotate(90deg);
 }
 
 .@{class-prefix}-dag-generation-task-details {

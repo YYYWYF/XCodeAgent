@@ -2,21 +2,19 @@ import {
   ArrowDownOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  LoadingOutlined,
   RobotOutlined,
-  ToolOutlined,
-  UserOutlined
+  ToolOutlined
 } from '@ant-design/icons'
-import { Spin, Tag, Typography } from 'antd'
+import { Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   ApplicationLifecycle,
-  WorkflowRunPayload,
-  WorkspaceCodeChangeSet
+  WorkflowRunPayload
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
-import CodeChangeCard from '../CodeChangeCard'
 import ToolCallCard from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import WorkflowRunCard, {
@@ -45,7 +43,13 @@ import {
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage, WorkspaceDocKey } from '../../types'
 import { isDirectModificationWaitingForInput } from '../../directModificationMode'
-import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
+import {
+  endpointDetailTargetKey,
+  pageDetailTargetKey,
+  workflowCodeChanges,
+  workflowDetailTargetKey,
+  workflowFinalResultPresentation
+} from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { useWorkbenchPhase } from '../../../../context'
 import { WORKBENCH_PHASE_AGENTS, type WorkbenchPhase } from '../../../../workbenchPhase'
@@ -58,15 +62,126 @@ const { Text } = Typography
 // 让选页面后的多节点生成链（检查工作区→规划 DAG→构建→集成测试）清晰可见。
 const SLIM_CONVERSATION = true
 
-/** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 研发 / 审查）在回复。 */
-function MessageAgentHeader({ agentKey }: { agentKey: WorkbenchPhase }): ReactElement {
+/** 返回各阶段 Agent 的角色首字，保持头像识别简单直接。 */
+function agentAvatarInitial(agentKey: WorkbenchPhase): string {
+  const initials: Record<WorkbenchPhase, string> = {
+    analysis: 'P',
+    planning: 'PM',
+    development: 'RD',
+    testing: 'QA',
+    review: 'CR'
+  }
+  return initials[agentKey]
+}
+
+/** 将当前 Agent 映射为用户可理解的具体工作流名称。 */
+function workflowTitleForAgent(agentKey: WorkbenchPhase): string {
+  const titles: Record<WorkbenchPhase, string> = {
+    analysis: '需求分析工作流',
+    planning: '项目计划编写工作流',
+    development: '开发工作流',
+    testing: '测试验证工作流',
+    review: '代码审查工作流'
+  }
+  return titles[agentKey]
+}
+
+/** 从工作流节点反推消息所属阶段，作为旧会话缺少显式 Agent 标记时的稳定兜底。 */
+function workflowPhaseToAgentPhase(
+  workflow?: WorkflowRunPayload
+): WorkbenchPhase | undefined {
+  const phase = String(workflow?.summary?.phase || '')
+  if (['requirements', 'requirement_spec_confirmation'].includes(phase)) return 'analysis'
+  if (['project_planning', 'project_plan_confirmation'].includes(phase)) return 'planning'
+  if (
+    [
+      'detail_confirmation',
+      'inspect_workspace',
+      'inspect_database_context',
+      'prepare_build_tasks',
+      'build',
+      'integration_test',
+      'launch_project',
+      'acceptance'
+    ].includes(phase)
+  ) {
+    return 'development'
+  }
+  if (['application_test', 'test_report', 'generate_test_report', 'test', 'testing'].includes(phase)) {
+    return 'testing'
+  }
+  if (['code_review', 'lint_check', 'security_scan', 'health_check', 'finalize_project'].includes(phase)) {
+    return 'review'
+  }
+  return undefined
+}
+
+/** 过滤旧版本遗留的结构化控制消息，避免卡片选择与用户正文重复出现。 */
+function isSyntheticWorkflowActionMessage(message: AgentChatMessage): boolean {
+  if (message.role !== 'user') return false
+  const content = message.content.trim()
+  return (
+    /^(?:开始|继续)实现(?:接口)?：/.test(content) ||
+    content === '重试当前计划任务。' ||
+    /^从 .+ 节点继续执行 workflow 调试。$/.test(content) ||
+    content === '结束当前计划。' ||
+    content === '暂停当前计划执行。'
+  )
+}
+
+/** 隐藏旧版本写入对话的单产物完成提示，避免历史会话继续出现误导性阶段文案。 */
+function isSyntheticArtifactCompletionMessage(message: AgentChatMessage): boolean {
+  if (message.role !== 'assistant') return false
+  const content = message.content.trim()
+  return /代码产物已完成[\s\S]*进入测试阶段/.test(content)
+}
+
+/** 隐藏测试阶段旧剧本的启动与结果提示，测试节点和 Diff 授权本身已经表达完整流程。 */
+function isRedundantTestingMessage(message: AgentChatMessage): boolean {
+  const content = message.content.trim()
+  if (message.role === 'user') return content === '开始应用测试'
+  return (
+    content === '测试报告内容已生成，请在右侧确认 Diff 后接受。' ||
+    content === '测试结果已确认：启动、非功能和业务测试均已通过。'
+  )
+}
+
+/** 隐藏旧版审查阶段的确认卡，审查阶段只保留报告 Diff 授权，不再追加确认事项。 */
+function isRedundantReviewStartMessage(message: AgentChatMessage): boolean {
+  if (message.role === 'user') return message.content.trim() === '开始代码审查'
+  if (!message.workflow) return false
+  return ['review_start', 'code_review'].includes(workflowClarification(message.workflow)?.mode || '')
+}
+
+/** 隐藏已完成但没有正文、节点或交互的空 assistant 消息，避免历史会话留下孤立头像。 */
+function isCompletedEmptyAssistantMessage(message: AgentChatMessage): boolean {
+  if (message.role !== 'assistant' || message.content.trim()) return false
+  if (message.detailBlocker || message.codeChanges || message.processSteps?.length) return false
+  return message.workflow?.summary.status === 'completed'
+}
+
+/** assistant 消息头：标识当前是哪个阶段的 Agent 在回复。 */
+function MessageAgentHeader({
+  agentKey,
+  loading = false
+}: {
+  agentKey: WorkbenchPhase
+  loading?: boolean
+}): ReactElement {
   const agent = WORKBENCH_PHASE_AGENTS[agentKey]
   return (
     <div className={cx('ai-message-agent', agentKey)}>
       <span className={cx('ai-message-agent-avatar')} aria-hidden="true">
-        <UserOutlined />
+        {agentAvatarInitial(agentKey)}
       </span>
       <span className={cx('ai-message-agent-name')}>{agent.role}</span>
+      {loading && (
+        <LoadingOutlined
+          aria-label="Agent 正在处理"
+          className={cx('ai-message-agent-loading')}
+          spin
+        />
+      )}
     </div>
   )
 }
@@ -74,19 +189,18 @@ function MessageAgentHeader({ agentKey }: { agentKey: WorkbenchPhase }): ReactEl
 type MessageListProps = {
   /** 当前查看任务所属阶段；查看历史任务时可与应用当前阶段不同。 */
   agentPhase?: WorkbenchPhase
+  /** 当前对话所属阶段；优先于全局查看阶段，保证跨阶段查看历史会话不改 Agent。 */
+  conversationPhase?: WorkbenchPhase
   applicationLifecycle?: ApplicationLifecycle
-  codeChangeActionsDisabled: boolean
   /** 版本或历史阶段锁定时，所有会改变产物的卡片动作同时禁用。 */
   interactionsDisabled?: boolean
   loading: boolean
   messages: AgentChatMessage[]
-  onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
   onSubmitClarification: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
   ) => Promise<void>
   onDiscardArtifact: (docKey: WorkspaceDocKey) => void
-  onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
   /** 待设计目标（页面/接口）作为对话节点，含模板选择与开始详细设计。 */
   lockedPage?: DevelopmentPlanningPageOption
   lockedEndpoint?: {
@@ -98,25 +212,21 @@ type MessageListProps = {
     purpose?: string
   }
   onStartDetailDesign?: DetailConfirmationStart
-  revertingCodeChangeIds: ReadonlySet<string>
 }
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
   agentPhase,
   applicationLifecycle,
-  codeChangeActionsDisabled,
+  conversationPhase,
   interactionsDisabled = false,
   loading,
   messages,
   onDiscardArtifact,
-  onOpenCodeChangeFile,
-  onRevertCodeChanges,
   onSubmitClarification,
   lockedPage,
   lockedEndpoint,
   onStartDetailDesign,
-  revertingCodeChangeIds
 }: MessageListProps): ReactElement {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
@@ -124,11 +234,21 @@ export default function MessageList({
   const restoringFollowRef = useRef(false)
   const scrollUpdateFrameRef = useRef<number>()
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
-  const { phase: currentPhase } = useWorkbenchPhase()
-  const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
-  const hasStreamingProcess = messages.some(
-    (message) => message.id === activeAssistantMessageId && Boolean(message.processSteps?.length)
+  const { viewingPhase: currentPhase } = useWorkbenchPhase()
+  const displayMessages = messages.filter(
+    (message) =>
+      !isSyntheticWorkflowActionMessage(message) &&
+      !isSyntheticArtifactCompletionMessage(message) &&
+      !isRedundantTestingMessage(message) &&
+      !isRedundantReviewStartMessage(message) &&
+      !isCompletedEmptyAssistantMessage(message)
   )
+  const activeAssistantMessageId = loading ? findLastAssistantMessageId(displayMessages) : undefined
+  const hasWorkflowForTarget = (targetKey: string): boolean =>
+    Boolean(targetKey) &&
+    displayMessages.some(
+      (message) => message.workflow && workflowMatchesTarget(message.workflow, targetKey)
+    )
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -219,16 +339,25 @@ export default function MessageList({
         ref={scrollContainerRef}
       >
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
-          {messages.length === 0 ? (
-            <div className={cx('ai-message-empty')}>
-              <span className={cx('ai-message-empty-mark')}>
-                <RobotOutlined />
-              </span>
-              <Text strong>从一个想法开始</Text>
-            </div>
+          {displayMessages.length === 0 ? (
+            loading ? (
+              <MessageAgentHeader
+                agentKey={conversationPhase || agentPhase || currentPhase}
+                loading
+              />
+            ) : (
+              <div className={cx('ai-message-empty')}>
+                <span className={cx('ai-message-empty-mark')}>
+                  <RobotOutlined />
+                </span>
+                <Text strong>从一个想法开始</Text>
+              </div>
+            )
           ) : (
-            messages.map((message) => {
+            displayMessages.map((message, messageIndex) => {
               const messageLoading = message.id === activeAssistantMessageId
+              const consecutiveAssistant =
+                message.role === 'assistant' && messages[messageIndex - 1]?.role === 'assistant'
               const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
               const finalResult = workflowFinalResultPresentation(message.workflow)
               const visibleProcessSteps = processStepsForMessageDisplay(
@@ -239,18 +368,24 @@ export default function MessageList({
               const waitingForDirectModificationInput = isDirectModificationWaitingForInput(
                 message.workflow
               )
-              // 一段对话只对应当前阶段的一个 Agent：无论历史消息源自哪个节点 phase，
-              // 统一以当前阶段为准（设计=产品Agent、开发=研发Agent、审查=审查Agent），
-              // 避免同一对话里混出现多个 Agent。
-              const messageAgentKey: WorkbenchPhase = agentPhase || currentPhase
+              // 每条消息优先使用创建时记录的 Agent，再按工作流节点和会话归属兜底；
+              // 切换阶段只切换当前会话，不改写已经存在的历史消息身份。
+              const workflowAgentPhase = workflowPhaseToAgentPhase(message.workflow)
+              const messageAgentKey: WorkbenchPhase =
+                message.agentPhase ||
+                workflowAgentPhase ||
+                conversationPhase ||
+                agentPhase ||
+                currentPhase
+              const workflowTitle = workflowTitleForAgent(messageAgentKey)
               const requiresClarification =
                 message.workflow &&
                 workflowClarification(message.workflow)?.status === 'requires_user_input'
               // 只有最后一张待确认卡才可能是 active；历史卡（已提交 / 被新回复取代）一律 stale，
               // 防止设计阶段 fast-path 把所有 requires_user_input 历史快照都判成 active（按钮复活）。
               const lastPendingClarificationId = (() => {
-                for (let i = messages.length - 1; i >= 0; i -= 1) {
-                  const candidate = messages[i]
+                for (let i = displayMessages.length - 1; i >= 0; i -= 1) {
+                  const candidate = displayMessages[i]
                   if (
                     candidate.workflow &&
                     workflowClarification(candidate.workflow)?.status === 'requires_user_input'
@@ -266,16 +401,28 @@ export default function MessageList({
                     ? workflowInteractionAvailability(message.workflow, applicationLifecycle)
                     : 'stale'
                   : 'stale'
+              // 测试会话刚创建时查看阶段可能还没从开发阶段同步过来，不能只看 agentPhase；
+              // 以测试 Workflow 自身的运行状态兜底，保证第一条节点消息首次挂载就是展开态。
+              const testWorkflowPhase = message.workflow?.summary.phase
+              const testWorkflowStatus = message.workflow?.summary.status
+              const testWorkflowRunning =
+                (testWorkflowPhase === 'application_test' || testWorkflowPhase === 'test_report') &&
+                testWorkflowStatus === 'running'
               const visibleAssistantContent = workflowMessageContentForDisplay(
                 message.content,
                 message.workflow,
                 Boolean(visibleProcessSteps?.length)
               )
+              const detailBlockerTargetKey = message.detailBlocker
+                ? pageDetailTargetKey(message.detailBlocker.pageId)
+                : ''
+              const detailBlockerWorkflowStarted = hasWorkflowForTarget(detailBlockerTargetKey)
               return (
                 <article
                   className={cx(
                     'ai-message',
                     message.role,
+                    consecutiveAssistant && 'consecutive-assistant',
                     message.role === 'assistant' && !messageLoading && 'completed'
                   )}
                   key={message.id}
@@ -283,10 +430,11 @@ export default function MessageList({
                   <div className={cx('ai-message-content')}>
                     {message.role === 'assistant' ? (
                       <>
-                        <MessageAgentHeader agentKey={messageAgentKey} />
+                        <MessageAgentHeader agentKey={messageAgentKey} loading={messageLoading} />
                         {message.detailBlocker && (
                           <DetailConfirmationPageSelector
-                            disabled={loading}
+                            disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
+                            loading={loading}
                             onStart={onStartDetailDesign}
                             selectedPage={{
                               pageId: message.detailBlocker.pageId,
@@ -300,8 +448,9 @@ export default function MessageList({
                         )}
                         {visibleProcessSteps && visibleProcessSteps.length > 0 && (
                           <ProcessSteps
-                            loading={messageLoading}
+                            loading={messageLoading || testWorkflowRunning}
                             steps={visibleProcessSteps}
+                            workflowTitle={workflowTitle}
                             waitingForInput={waitingForDirectModificationInput}
                             waitingPrompt={message.workflow?.summary.message}
                           />
@@ -343,20 +492,9 @@ export default function MessageList({
                               interactionAvailability !== 'active'
                             }
                             interactionAvailability={interactionAvailability}
-                            onDiscard={onDiscardArtifact}
-                            onSubmitClarification={onSubmitClarification}
+                          onDiscard={onDiscardArtifact}
+                          onSubmitClarification={onSubmitClarification}
                             workflow={message.workflow}
-                          />
-                        )}
-                        {!messageLoading && codeChanges && (
-                          <CodeChangeCard
-                            codeChanges={codeChanges}
-                            loading={messageLoading}
-                            onApproveAll={() => undefined}
-                            onOpenFile={(path) => onOpenCodeChangeFile(codeChanges, path)}
-                            onRevert={() => onRevertCodeChanges(message.id, codeChanges)}
-                            revertDisabled={codeChangeActionsDisabled}
-                            reverting={revertingCodeChangeIds.has(codeChanges.id)}
                           />
                         )}
                       </>
@@ -380,12 +518,6 @@ export default function MessageList({
               )
             })
           )}
-          {loading && !hasStreamingProcess && (
-            <div className={cx('ai-message', 'assistant', 'loading')}>
-              <Spin size="small" />
-              <Text type="secondary">正在运行 Workflow...</Text>
-            </div>
-          )}
           {(lockedPage || lockedEndpoint) &&
             !messages.some(
               (message) =>
@@ -395,7 +527,21 @@ export default function MessageList({
               <div className={cx('ai-message-content')}>
                 <MessageAgentHeader agentKey="development" />
                 <DetailConfirmationPageSelector
-                  disabled={loading || interactionsDisabled}
+                  disabled={
+                    loading ||
+                    interactionsDisabled ||
+                    hasWorkflowForTarget(
+                      lockedPage
+                          ? pageDetailTargetKey(lockedPage.pageId)
+                          : lockedEndpoint
+                          ? endpointDetailTargetKey(
+                              lockedEndpoint.apiContractId,
+                              lockedEndpoint.endpointId
+                            )
+                          : ''
+                    )
+                  }
+                  loading={loading}
                   onStart={onStartDetailDesign}
                   selectedEndpoint={lockedEndpoint}
                   selectedPage={lockedPage}
@@ -426,4 +572,13 @@ function findLastAssistantMessageId(messages: AgentChatMessage[]): number | unde
     if (messages[index].role === 'assistant') return messages[index].id
   }
   return undefined
+}
+
+/** 判断 Workflow 是否属于指定页面或接口，兼容页面携带依赖接口身份的任务快照。 */
+function workflowMatchesTarget(workflow: WorkflowRunPayload, targetKey: string): boolean {
+  if (workflowDetailTargetKey(workflow) === targetKey) return true
+  if (!targetKey.startsWith('page:')) return false
+  const pageId = targetKey.slice('page:'.length)
+  const selectedPageIds = [workflow.state?.selectedPageId, workflow.result?.selectedPageId]
+  return selectedPageIds.some((value) => typeof value === 'string' && value === pageId)
 }

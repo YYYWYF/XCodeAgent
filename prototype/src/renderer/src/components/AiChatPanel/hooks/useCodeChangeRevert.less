@@ -30,32 +30,3 @@ body:has(.@{class-prefix}-code-change-revert-confirm) .ant-modal-mask {
   backdrop-filter: blur(8px);
 }
 
-body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
-  .@{class-prefix}-code-change-revert-confirm {
-  --revert-modal-accent: #a782ff;
-  --revert-modal-accent-soft: rgba(167, 130, 255, 0.2);
-
-  .ant-modal-content {
-    color: #f2f2f2;
-    background: #28282b;
-    box-shadow: 0 24px 72px rgba(0, 0, 0, 0.48);
-  }
-
-  .ant-modal-confirm-title,
-  .ant-modal-confirm-content {
-    color: #f2f2f2;
-  }
-
-  .ant-btn-default {
-    color: #f2f2f2;
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.14);
-  }
-}
-
-body:has(.@{class-prefix}-workbench-shell[data-theme='dark']):has(
-    .@{class-prefix}-code-change-revert-confirm
-  )
-  .ant-modal-mask {
-  background: rgba(5, 4, 12, 0.62);
-}

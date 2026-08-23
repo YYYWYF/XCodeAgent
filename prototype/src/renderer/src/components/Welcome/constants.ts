@@ -28,7 +28,7 @@ export const initialApplicationDraft: ApplicationDraft = {
   projectPath: '',
   terminal: 'PC',
   layout: { type: 'side', useHeader: true, useFooter: false },
-  theme: { primaryColor: '#2c68ff' },
+  theme: { primaryColor: '#6b3cf0' },
   datasource: {
     type: 'None',
     db: {

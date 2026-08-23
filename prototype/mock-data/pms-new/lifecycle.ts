@@ -25,7 +25,19 @@ export function makeCompleteLifecycle(appId: string, appName: string): Applicati
         updatedAt: now
       }
     },
-    extensions: {}
+    extensions: {
+      testReportStatus: 'passed',
+      testReportRound: 2,
+      testReportBasedOnRevision: 1,
+      testReportDefects: [],
+      phaseValidity: {
+        analysis: 'valid',
+        planning: 'valid',
+        development: 'valid',
+        testing: 'valid',
+        review: 'valid'
+      }
+    }
   } as unknown as ApplicationLifecycle
 }
 

@@ -1,6 +1,6 @@
 .@{class-prefix}-source-panel {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -8,28 +8,262 @@
   background: var(--wb-canvas);
 }
 
-.@{class-prefix}-source-panel-header {
-  flex: 0 0 auto;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--wb-border);
+// 右栏：应用文件目录树，可整栏收起为窄条。
+.@{class-prefix}-source-panel-tree {
+  display: flex;
+  flex: 0 0 220px;
+  flex-direction: column;
+  width: 220px;
+  min-height: 0;
   background: var(--wb-surface-subtle);
+  border-left: 1px solid var(--wb-border);
+  transition: flex-basis 160ms ease, width 160ms ease;
 
-  .ant-typography {
-    font-size: 12px;
+  &.@{class-prefix}-is-collapsed {
+    flex-basis: 36px;
+    width: 36px;
   }
+}
+
+.@{class-prefix}-source-panel-tree-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-source-panel-tree-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  > .anticon {
+    color: var(--wb-accent);
+    font-size: 13px;
+  }
+}
+
+.@{class-prefix}-source-panel-tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-text-tertiary);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+    color: var(--wb-accent);
+  }
+}
+
+.@{class-prefix}-source-panel-tree-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.@{class-prefix}-source-panel-tree-rail {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.@{class-prefix}-source-panel-tree-rail-label {
+  writing-mode: vertical-rl;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  letter-spacing: 3px;
+  user-select: none;
+}
+
+.@{class-prefix}-source-panel-tree-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 24px 16px;
+}
+
+.@{class-prefix}-source-tree {
+  margin: 0;
+  padding: 8px 0;
+  list-style: none;
+}
+
+.@{class-prefix}-source-tree-children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.@{class-prefix}-source-tree-node {
+  display: block;
+}
+
+.@{class-prefix}-source-tree-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms ease, color 120ms ease;
+
+  > .anticon {
+    flex: 0 0 auto;
+    font-size: 13px;
+    color: var(--wb-text-tertiary);
+  }
+
+  &.@{class-prefix}-is-dir {
+    color: var(--wb-text);
+    font-weight: 500;
+
+    > .anticon {
+      color: var(--wb-accent);
+    }
+  }
+
+  &:hover {
+    background: var(--wb-surface-hover);
+  }
+
+  &.@{class-prefix}-is-selected {
+    background: var(--wb-accent-soft);
+    color: var(--wb-accent);
+
+    > .anticon {
+      color: var(--wb-accent);
+    }
+  }
+}
+
+.@{class-prefix}-source-tree-leaf-spacer {
+  display: inline-block;
+  flex: 0 0 13px;
+  width: 13px;
+}
+
+.@{class-prefix}-source-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 右栏：源码查看器。
+.@{class-prefix}-source-panel-viewer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.@{class-prefix}-source-panel-viewer-empty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px 16px;
+}
+
+.@{class-prefix}-source-panel-code-editor {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 8px 8px 8px 4px;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-family: "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.@{class-prefix}-source-panel-line-numbers {
+  flex: 0 0 4.8ch;
+  width: 4.8ch;
+  box-sizing: border-box;
+  padding: 0 6px 0 4px;
+  color: var(--wb-text-tertiary);
+  text-align: right;
+  user-select: none;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.@{class-prefix}-source-panel-line-number {
+  height: 1.75em;
+  line-height: 1.75;
+}
+
+.@{class-prefix}-source-panel-line-marker {
+  display: inline-block;
+  width: 1em;
+  margin-right: 2px;
+  text-align: center;
 }
 
 .@{class-prefix}-source-panel-pre {
   flex: 1 1 auto;
+  width: 0;
+  height: 100%;
   min-height: 0;
+  min-width: 0;
   margin: 0;
-  padding: 14px 16px;
+  padding: 0 0 0 8px;
   overflow: auto;
   color: var(--wb-text);
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
   tab-size: 2;
+
+  // 代码阅读区隐藏滚动条：滚动能力保留，仅去掉视觉占位。
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
 
   code.hljs {
     background: transparent;
@@ -71,37 +305,3 @@
   }
 }
 
-.@{class-prefix}-workbench-shell[data-theme='dark'] .@{class-prefix}-source-panel-pre code.hljs {
-  .hljs-keyword,
-  .hljs-selector-tag,
-  .hljs-literal {
-    color: #ff7b72;
-  }
-
-  .hljs-string,
-  .hljs-regexp,
-  .hljs-addition {
-    color: #a5d6ff;
-  }
-
-  .hljs-comment,
-  .hljs-quote {
-    color: #8b949e;
-  }
-
-  .hljs-title,
-  .hljs-function .hljs-title {
-    color: #d2a8ff;
-  }
-
-  .hljs-number,
-  .hljs-symbol {
-    color: #79c0ff;
-  }
-
-  .hljs-tag,
-  .hljs-name,
-  .hljs-attribute {
-    color: #7ee787;
-  }
-}

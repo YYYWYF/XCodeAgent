@@ -1,0 +1,149 @@
+.@{class-prefix}-file-diff-view {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: transparent;
+  color: var(--wb-text);
+  font-family: "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.@{class-prefix}-file-diff-view-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: auto;
+  // VSCode 风格：编辑器边缘只保留少量呼吸空间，行号栏承担主要左侧留白。
+  padding: 8px 8px 8px 4px;
+
+  // Diff 写入区隐藏滚动条：过程滚动仍可用，视觉上更干净。
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
+// react-diff-view 的 .diff 是 table-layout:fixed，两列会各占一半宽度，
+// 这里改回 auto 并压缩行号列，避免行号左侧出现大片空白。
+.@{class-prefix}-file-diff-view .diff {
+  table-layout: auto;
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+
+  .diff-line {
+    > td {
+      padding-top: 0;
+      padding-bottom: 0;
+      border: 0;
+      vertical-align: top;
+    }
+  }
+
+  .diff-gutter {
+    width: 4.8ch;
+    min-width: 4.8ch;
+    box-sizing: border-box;
+    padding-right: 6px;
+    padding-left: 4px;
+    color: var(--wb-text-tertiary);
+    text-align: right;
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .diff-code {
+    width: auto;
+    padding-right: 16px;
+    padding-left: 8px;
+    color: var(--wb-text);
+    white-space: pre;
+  }
+
+  .diff-line-marker {
+    display: inline-block;
+    width: 1em;
+    margin-right: 2px;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  .diff-line-insert {
+    background: var(--wb-code-add);
+
+    .diff-gutter {
+      color: var(--wb-code-add-text);
+      box-shadow: inset 3px 0 0 var(--wb-code-add-text);
+    }
+
+    .diff-line-marker {
+      color: var(--wb-code-add-text);
+    }
+  }
+
+  .diff-line-delete {
+    background: var(--wb-danger-soft, rgba(255, 77, 79, 0.08));
+
+    .diff-gutter {
+      color: var(--wb-danger);
+      box-shadow: inset 3px 0 0 var(--wb-danger);
+    }
+
+    .diff-line-marker {
+      color: var(--wb-danger);
+    }
+  }
+
+  .diff-line-context {
+    background: transparent;
+  }
+}
+
+// Diff 行内语法高亮：使用与源码查看器一致的浅色 token 配色。
+.@{class-prefix}-file-diff-view code.hljs {
+  display: inline;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal {
+    color: #d73a49;
+  }
+
+  .hljs-string,
+  .hljs-regexp {
+    color: #032f62;
+  }
+
+  .hljs-comment,
+  .hljs-quote {
+    color: #6a737d;
+    font-style: italic;
+  }
+
+  .hljs-title,
+  .hljs-section {
+    color: #6f42c1;
+  }
+
+  .hljs-number,
+  .hljs-symbol {
+    color: #005cc5;
+  }
+
+  .hljs-attr,
+  .hljs-attribute {
+    color: #22863a;
+  }
+}

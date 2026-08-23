@@ -1,6 +1,5 @@
 import { AppstoreOutlined, CodeOutlined, DeleteOutlined, GlobalOutlined } from '@ant-design/icons'
 import { Button, message, Modal, Radio } from 'antd'
-import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import {
   canOpenApplicationWorkbench,
@@ -16,9 +15,7 @@ import './WelcomeModal.less'
 import './WelcomeRecentProjects.less'
 
 type Props = {
-  headerAction?: ReactNode
   onOpenApplication: (application: ApplicationConfig) => void
-  theme: 'dark' | 'light'
 }
 
 const projectIcons = [AppstoreOutlined, CodeOutlined, GlobalOutlined]
@@ -36,11 +33,7 @@ function formatRecentTime(value: number): string {
   return days < 30 ? `${days} 天前` : new Intl.DateTimeFormat('zh-CN').format(value)
 }
 
-export default function WelcomeRecentProjects({
-  headerAction,
-  onOpenApplication,
-  theme
-}: Props): JSX.Element {
+export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX.Element {
   const [applications, setApplications] = useState<ApplicationConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [applicationToDelete, setApplicationToDelete] = useState<ApplicationConfig>()
@@ -118,7 +111,6 @@ export default function WelcomeRecentProjects({
     <section className={cx('welcome-recents')} aria-labelledby="welcome-recents-title">
       <div className={cx('welcome-section-heading')}>
         <h2 id="welcome-recents-title">最近项目</h2>
-        {headerAction}
       </div>
 
       <div className={cx('welcome-project-list')}>
@@ -180,7 +172,7 @@ export default function WelcomeRecentProjects({
       <Modal
         cancelText="取消"
         centered
-        className={cx('welcome-modal', 'welcome-project-delete-modal', `theme-${theme}`)}
+        className={cx('welcome-modal', 'welcome-project-delete-modal', 'theme-light')}
         confirmLoading={deleting}
         okButtonProps={{ danger: deleteMode === 'project' }}
         okText={deleteMode === 'project' ? '删除本地项目' : '移除索引'}

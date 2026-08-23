@@ -21,7 +21,7 @@ type Props = {
 type Phase = 'intro' | 'planning' | 'questions' | 'review' | 'confirming' | 'error'
 
 const STAGE_LABELS: Record<string, string> = {
-  reading_application: '读取应用设计',
+  reading_application: '读取需求与计划',
   identifying_shared_modules: '确认开发边界',
   planning_dependencies: '拆分任务与依赖',
   validating_plan: '校验开发顺序',

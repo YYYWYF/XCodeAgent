@@ -5,8 +5,6 @@ import './styles/global.less';
 import { WorkbenchProvider } from './context';
 import { AppEntryPage } from './pages';
 import { AuthenticationFailureGate } from './components/AuthenticationFailureGate/AuthenticationFailureGate';
-import { ApplicationThemeProvider } from './hooks/useApplicationTheme';
-import { loadApplicationTheme } from './service/applicationSettings';
 
 // 标记当前桌面系统，让字体回退可以按平台选择最合适的系统字体。
 function markRuntimePlatform(): void {
@@ -18,21 +16,18 @@ function markRuntimePlatform(): void {
       : 'other';
 }
 
-/** 在首次渲染前加载应用级主题，避免界面先显示默认主题再闪烁切换。 */
-async function bootstrapRenderer(): Promise<void> {
+/** 启动浅色主题原型渲染器。 */
+function bootstrapRenderer(): void {
   markRuntimePlatform();
-  await loadApplicationTheme();
   ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
     <React.StrictMode>
-      <ApplicationThemeProvider>
-        <AuthenticationFailureGate>
-          <WorkbenchProvider>
-            <AppEntryPage />
-          </WorkbenchProvider>
-        </AuthenticationFailureGate>
-      </ApplicationThemeProvider>
+      <AuthenticationFailureGate>
+        <WorkbenchProvider>
+          <AppEntryPage />
+        </WorkbenchProvider>
+      </AuthenticationFailureGate>
     </React.StrictMode>,
   );
 }
 
-void bootstrapRenderer();
+bootstrapRenderer();

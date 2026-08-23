@@ -1,17 +1,33 @@
 import type { ApplicationLifecycle } from './typings'
 
-/**
- * 工作台三大阶段，每个阶段对应一个 Agent。
- * 阶段是主开关：先切到对应阶段，才能编辑该阶段的对象；点文件不会自动切阶段。
- * 旅程1（从零建）与旅程2（增量）共用这条阶段模型。
- */
-export type WorkbenchPhase = 'product' | 'development' | 'test'
+/** 五阶段旅程的固定顺序；版本生成是审查后的终态动作，不属于阶段。 */
+export const WORKBENCH_PHASE_ORDER = [
+  'analysis',
+  'planning',
+  'development',
+  'testing',
+  'review'
+] as const
+
+/** 工作台五阶段，每个阶段对应一个面向用户的主责 Agent。 */
+export type WorkbenchPhase = (typeof WORKBENCH_PHASE_ORDER)[number]
+
+/** 阶段产物相对当前迭代的有效性。未到达阶段不能被当作已生成产物。 */
+export type WorkbenchPhaseValidity = 'unreached' | 'valid' | 'invalid'
+
+/** 将执行位置、查看位置、最高到达位置和产物有效性集中表达。 */
+export type WorkbenchPhaseState = {
+  executionPhase: WorkbenchPhase
+  viewingPhase: WorkbenchPhase
+  reachedPhase: WorkbenchPhase
+  validity: Record<WorkbenchPhase, WorkbenchPhaseValidity>
+}
 
 export type WorkbenchAgentIdentity = {
   key: WorkbenchPhase
-  /** 短标签：产品 / 研发 / 测试。 */
+  /** 短标签：分析 / 计划 / 开发 / 测试 / 审查。 */
   label: string
-  /** Agent 身份：产品 Agent / 研发 Agent / 测试 Agent。 */
+  /** Agent 身份：产品 / 项目 / 研发 / 测试 / 审查 Agent。 */
   role: string
   /** 职责一句话。 */
   responsibility: string
@@ -19,23 +35,35 @@ export type WorkbenchAgentIdentity = {
 
 /** 每个阶段的 Agent 身份与职责。 */
 export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdentity> = {
-  product: {
-    key: 'product',
-    label: '设计',
+  analysis: {
+    key: 'analysis',
+    label: '分析',
     role: '产品 Agent',
-    responsibility: '定 WHAT：需求文档、项目计划'
+    responsibility: '明确应用要解决的问题，维护需求文档'
+  },
+  planning: {
+    key: 'planning',
+    label: '计划',
+    role: '项目 Agent',
+    responsibility: '根据确认需求维护项目计划和开发产物清单'
   },
   development: {
     key: 'development',
     label: '开发',
     role: '研发 Agent',
-    responsibility: 'spec → code：详细设计、构建'
+    responsibility: '实现页面、接口、实体并交付代码产物'
   },
-  test: {
-    key: 'test',
+  testing: {
+    key: 'testing',
+    label: '测试',
+    role: '测试 Agent',
+    responsibility: '从完整应用视角测试并生成测试报告'
+  },
+  review: {
+    key: 'review',
     label: '审查',
     role: '审查 Agent',
-    responsibility: '代码审查、规范检测等非功能检查(功能验收已前置完成)'
+    responsibility: '独立审查代码质量、安全与交付完整性'
   }
 }
 
@@ -49,16 +77,21 @@ export type EditableObjectType =
   | 'page_spec'
   | 'endpoint_spec'
   | 'code'
-  | 'acceptance'
+  | 'test_report'
+  | 'review_report'
 
 /** 各阶段可编辑的对象集合；不在集合里的对象在该阶段只读。 */
 const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
-  // 产品阶段：app 级 spec（需求文档、项目计划）。详细设计 spec 归研发。
-  product: ['requirement_doc', 'project_plan'],
-  // 研发阶段：页面 spec、接口 spec、代码。
+  // 分析阶段只维护需求文档，项目计划由独立的项目 Agent 负责。
+  analysis: ['requirement_doc'],
+  // 计划阶段只维护项目计划和页面/接口/实体清单。
+  planning: ['project_plan'],
+  // 开发阶段负责页面、接口、实体的实现和开发自验证。
   development: ['page_spec', 'endpoint_spec', 'code'],
-  // 测试阶段：以跑+看+确认为主，仅验收可确认。
-  test: ['acceptance']
+  // 测试 Agent 产出测试报告，但不直接修改开发代码。
+  testing: ['test_report'],
+  // 审查 Agent 默认只读代码，只维护审查报告。
+  review: ['review_report']
 }
 
 /** 阶段门禁：某对象在指定阶段是否可编辑。 */
@@ -69,85 +102,160 @@ export function isObjectEditableInPhase(
   return PHASE_EDITABLE_OBJECTS[phase].includes(objectType)
 }
 
-/** 规划期(设计阶段初始)的 lifecycle stage：应用还没完成需求确认/项目规划。 */
-const PLANNING_STAGES = new Set([
+/** 分析阶段的初始化节点：产品 Agent 仍在整理和确认需求。 */
+const ANALYSIS_INITIALIZATION_STAGES = new Set([
   'collecting_requirement',
   'analyzing_requirement',
   'awaiting_requirement_clarification',
   'generating_requirement_spec',
-  'awaiting_requirement_confirmation',
+  'awaiting_requirement_confirmation'
+])
+
+/** 计划阶段的初始化节点：项目 Agent 正在生成或确认项目计划。 */
+const PLANNING_INITIALIZATION_STAGES = new Set([
   'generating_project_plan',
   'awaiting_project_plan_confirmation',
   'generating_build_task_plan'
 ])
 
-/** 应用是否仍处于初始设计(规划)阶段——新应用自动开始澄清的依据。 */
+/** 应用是否仍处于分析或计划阶段——新应用自动开始规划对话的依据。 */
 export function isInitialPlanningPhase(lifecycle?: ApplicationLifecycle): boolean {
-  return Boolean(lifecycle && PLANNING_STAGES.has(lifecycle.initialization?.stage || ''))
+  const stage = lifecycle?.initialization?.stage || ''
+  return ANALYSIS_INITIALIZATION_STAGES.has(stage) || PLANNING_INITIALIZATION_STAGES.has(stage)
 }
 
-/** 研发期的工作流节点 phase（详细设计 → 构建 → 集成测试 → 启动预览）。 */
+/** 开发阶段的工作流节点，只描述研发 Agent 的设计承接、代码编写和文件交付。 */
 const DEVELOPMENT_PHASE_NODES = new Set([
   'detail_confirmation',
   'inspect_workspace',
   'inspect_database_context',
   'prepare_build_tasks',
-  'build',
-  'integration_test',
-  'launch_project',
-  'acceptance',
-  'finalize_project'
+  'build'
 ])
 
-/**
- * 审查阶段的工作流节点 phase（非功能检查：代码审查 / 规范检测 / 健康度）。
- * 所有页面/接口模块开发完成并经用户确认后进入审查阶段(code_review),审查通过即发布。
- * 集成测试归开发阶段：开发以页面 / 接口为单元，集成测试是开发对话链的一环。
- */
-const TEST_PHASE_NODES = new Set(['code_review', 'lint_check', 'security_scan', 'health_check'])
+/** 测试阶段的工作流节点，覆盖启动、非功能、业务测试和测试报告生成。 */
+const TESTING_PHASE_NODES = new Set([
+  'startup_test',
+  'non_functional_test',
+  'business_test',
+  'application_test',
+  'test',
+  'testing',
+  'test_report',
+  'generate_test_report'
+])
+
+/** 审查阶段的工作流节点；审查 Agent 默认不写开发代码。 */
+const REVIEW_PHASE_NODES = new Set(['code_review', 'lint_check', 'security_scan', 'health_check', 'finalize_project'])
 
 const TERMINAL_EXECUTION_STATUSES = new Set(['completed', 'stopped', 'failed'])
 
-/**
- * 根据后端权威 lifecycle 推导当前阶段（旅程驱动的自动值，不受手动覆盖影响）。
- * 规划期（进工作台之前）= 产品；进工作台后按活跃 execution 的节点归属研发/测试。
- */
-export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): WorkbenchPhase {
-  // 工作台里 lifecycle 尚未加载时默认研发（工作台本就是研发领地；产品阶段由手动切回触发）。
-  if (!lifecycle) return 'development'
+/** 根据初始化节点返回分析/计划阶段，未知节点交给 execution 推导。 */
+function phaseForInitializationStage(stage: string): WorkbenchPhase | null {
+  if (ANALYSIS_INITIALIZATION_STAGES.has(stage)) return 'analysis'
+  if (PLANNING_INITIALIZATION_STAGES.has(stage)) return 'planning'
+  return null
+}
 
-  const stage = lifecycle.initialization?.stage
+/** 根据工作流节点返回其所属阶段，避免用 test 等含混名称表达阶段。 */
+function phaseForExecutionNode(node: string): WorkbenchPhase | null {
+  if (DEVELOPMENT_PHASE_NODES.has(node)) return 'development'
+  if (TESTING_PHASE_NODES.has(node)) return 'testing'
+  if (REVIEW_PHASE_NODES.has(node)) return 'review'
+  return null
+}
+
+/** 返回单向旅程中更靠后的阶段。 */
+export function compareWorkbenchPhases(left: WorkbenchPhase, right: WorkbenchPhase): number {
+  return WORKBENCH_PHASE_ORDER.indexOf(left) - WORKBENCH_PHASE_ORDER.indexOf(right)
+}
+
+/** 判断目标阶段是否已经到达，供阶段切换和产物权限共同使用。 */
+export function isWorkbenchPhaseReached(
+  phase: WorkbenchPhase,
+  reachedPhase: WorkbenchPhase
+): boolean {
+  return compareWorkbenchPhases(phase, reachedPhase) <= 0
+}
+
+/** 从 lifecycle 的历史 execution 推导当前版本最高到达的阶段。 */
+export function deriveWorkbenchReachedPhase(lifecycle?: ApplicationLifecycle): WorkbenchPhase {
+  if (!lifecycle) return 'analysis'
+
+  const initializationPhase = phaseForInitializationStage(lifecycle.initialization?.stage || '')
+  if (initializationPhase) return initializationPhase
+
+  const phases = Object.values(lifecycle.activeExecutions || {})
+    .map((execution) => phaseForExecutionNode(execution.phase))
+    .filter((phase): phase is WorkbenchPhase => Boolean(phase))
+  // ready_for_workbench 表示开发目录已可用，即使还没有 execution 记录也已到达开发阶段。
+  const executionReachedPhase = phases.reduce(
+    (highest, phase) => (compareWorkbenchPhases(phase, highest) > 0 ? phase : highest),
+    'development' as WorkbenchPhase
+  )
+  // 测试报告合格后只开放审查阶段入口；必须经过用户确认或已有审查 execution，才算真正到达审查阶段。
+  const testReportStatus = String(lifecycle.extensions?.testReportStatus || '')
+  const reviewEntryConfirmed = lifecycle.extensions?.reviewEntryConfirmed === true
   if (
-    stage &&
-    stage !== 'ready_for_workbench' &&
-    stage !== 'application_template_generation_failed'
+    ['passed', 'qualified', '合格'].includes(testReportStatus) &&
+    (reviewEntryConfirmed || compareWorkbenchPhases(executionReachedPhase, 'review') >= 0)
   ) {
-    // 还在规划期（澄清/需求文档/项目计划），属产品阶段。
-    return 'product'
+    return 'review'
+  }
+  return executionReachedPhase
+}
+
+/** 根据当前活跃 execution 推导 Agent 正在执行的阶段。 */
+export function deriveWorkbenchExecutionPhase(lifecycle?: ApplicationLifecycle): WorkbenchPhase {
+  if (!lifecycle) return 'analysis'
+
+  const initializationPhase = phaseForInitializationStage(lifecycle.initialization?.stage || '')
+  if (initializationPhase) return initializationPhase
+
+  const activePhases = Object.values(lifecycle.activeExecutions || {})
+    .filter((execution) => !TERMINAL_EXECUTION_STATUSES.has(execution.status))
+    .map((execution) => phaseForExecutionNode(execution.phase))
+    .filter((phase): phase is WorkbenchPhase => Boolean(phase))
+  if (activePhases.length) {
+    return activePhases.reduce(
+      (latest, phase) => (compareWorkbenchPhases(phase, latest) > 0 ? phase : latest),
+      'development' as WorkbenchPhase
+    )
   }
 
-  const executions = Object.values(lifecycle.activeExecutions || {})
-  const activeIn = (nodes: Set<string>): boolean =>
-    executions.some(
-      (execution) =>
-        !TERMINAL_EXECUTION_STATUSES.has(execution.status) && nodes.has(execution.phase)
-    )
-  // 研发和测试同时在跑时，以更靠后的测试为当前阶段。
-  if (activeIn(TEST_PHASE_NODES)) return 'test'
-  if (activeIn(DEVELOPMENT_PHASE_NODES)) return 'development'
+  // 没有活跃任务时保留当前版本已经走到的阶段，而不是回落到旧的三阶段默认值。
+  return deriveWorkbenchReachedPhase(lifecycle)
+}
 
-  // 应用级审查完成（code_review/finalize completed）→ 保持审查阶段直到发布。
-  // 审查 = 非功能检查，所有页面/接口模块完成且用户确认后进入审查阶段。
-  const appReviewed = executions.some(
-    (execution) =>
-      execution.scope === 'application' &&
-      (execution.phase === 'code_review' || execution.phase === 'finalize_project') &&
-      execution.status === 'completed'
-  )
-  if (appReviewed) return 'test'
+/**
+ * 计算每个阶段的有效性；后续需求/计划变更可通过 lifecycle 扩展覆盖 invalid 状态。
+ * 当前原型没有持久化失效清单，因此已到达阶段默认有效，未来阶段标记为 unreached。
+ */
+export function deriveWorkbenchPhaseValidity(
+  lifecycle?: ApplicationLifecycle,
+  reachedPhase = deriveWorkbenchReachedPhase(lifecycle)
+): Record<WorkbenchPhase, WorkbenchPhaseValidity> {
+  const validity = Object.fromEntries(
+    WORKBENCH_PHASE_ORDER.map((phase) => [
+      phase,
+      isWorkbenchPhaseReached(phase, reachedPhase) ? 'valid' : 'unreached'
+    ])
+  ) as Record<WorkbenchPhase, WorkbenchPhaseValidity>
+  const extensionValidity = lifecycle?.extensions?.phaseValidity
+  if (extensionValidity && typeof extensionValidity === 'object') {
+    for (const phase of WORKBENCH_PHASE_ORDER) {
+      const value = (extensionValidity as Record<string, unknown>)[phase]
+      if (value === 'valid' || value === 'invalid' || value === 'unreached') {
+        validity[phase] = value
+      }
+    }
+  }
+  return validity
+}
 
-  // 已进工作台但当前空闲：默认研发（准备做详细设计/构建；增量迭代也从这里切回产品）。
-  return 'development'
+/** 兼容现有调用方的阶段推导入口，语义明确为当前执行阶段。 */
+export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): WorkbenchPhase {
+  return deriveWorkbenchExecutionPhase(lifecycle)
 }
 
 /** 规划期 initialization.stage 的中文节点标签。 */

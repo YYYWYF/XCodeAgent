@@ -1,7 +1,19 @@
-import type { WorkbenchPhase } from './workbenchPhase'
+import {
+  compareWorkbenchPhases,
+  WORKBENCH_PHASE_AGENTS,
+  WORKBENCH_PHASE_ORDER,
+  type WorkbenchPhase
+} from './workbenchPhase'
 
-export type WorkbenchArtifactType = 'document' | 'page' | 'endpoint' | 'model'
+export type WorkbenchArtifactType = 'document' | 'page' | 'endpoint' | 'entity'
 export type WorkbenchArtifactStatus = 'not-started' | 'in-progress' | 'completed'
+export type WorkbenchSessionKind =
+  | 'analysis'
+  | 'planning'
+  | 'development'
+  | 'testing'
+  | 'review'
+  | 'general'
 export type WorkbenchArtifactAccessMode = 'unavailable' | 'read' | 'write'
 export type WorkbenchArtifactLockReason =
   | 'future-phase'
@@ -31,6 +43,7 @@ export type WorkbenchSessionArtifactIdentity = {
   apiContractId?: string
   endpointId?: string
   pageId?: string
+  sessionKind?: WorkbenchSessionKind
   title?: string
 }
 
@@ -41,11 +54,9 @@ export type WorkbenchArtifactAccess = {
   message: string
 }
 
-const PHASE_ORDER: WorkbenchPhase[] = ['product', 'development', 'test']
-
 /** 生成设计文档产物的稳定领域标识。 */
 export function documentArtifactId(
-  key: 'requirement-spec' | 'project-plan' | 'code-review'
+  key: 'requirement-spec' | 'project-plan' | 'test-report' | 'code-review'
 ): string {
   return `document:${key}`
 }
@@ -60,6 +71,12 @@ export function endpointArtifactId(apiContractId: string, endpointId: string): s
   return `endpoint:${apiContractId.trim()}:${endpointId.trim()}`
 }
 
+/** 生成实体占位产物的稳定领域标识。 */
+export function entityArtifactId(entityId: string): string {
+  return `entity:${entityId.trim()}`
+}
+
+
 /**
  * 把当前会话显式声明转换为统一产物集合；artifactIds 支持一条对话拥有任意多个产物。
  * pageId/API 字段和标题推断只用于兼容旧会话，不再按静态计划依赖提前扩张编辑范围。
@@ -72,19 +89,17 @@ export function artifactIdsForSession(session: WorkbenchSessionArtifactIdentity)
   if (session.apiContractId && session.endpointId) {
     artifactIds.add(endpointArtifactId(session.apiContractId, session.endpointId))
   }
-  if ((session.title || '').includes('应用设计')) {
+  if (session.sessionKind === 'analysis') {
     artifactIds.add(documentArtifactId('requirement-spec'))
+  }
+  if (session.sessionKind === 'planning') {
     artifactIds.add(documentArtifactId('project-plan'))
   }
+  if (session.sessionKind === 'testing') artifactIds.add(documentArtifactId('test-report'))
   if ((session.title || '').includes('代码审查')) {
     artifactIds.add(documentArtifactId('code-review'))
   }
   return [...artifactIds]
-}
-
-/** 比较两个阶段在单向旅程中的先后顺序。 */
-export function compareWorkbenchPhases(left: WorkbenchPhase, right: WorkbenchPhase): number {
-  return PHASE_ORDER.indexOf(left) - PHASE_ORDER.indexOf(right)
 }
 
 /** 从全部对话声明中为每个产物选出唯一且稳定的默认对话。 */
@@ -139,7 +154,7 @@ export function resolveArtifactAccess(input: {
       mode: 'read',
       ownerSessionId,
       reason: 'phase-locked',
-      message: `请先切换到${phaseLabel(artifact.phase)}阶段后再编辑`
+      message: `请先切换到${phaseLabel(artifact.phase)}后再编辑`
     }
   }
   if (ownerSessionId && ownerSessionId !== currentSessionId) {
@@ -160,7 +175,8 @@ export function resolveArtifactAccess(input: {
 
 /** 返回阶段的界面名称，供权限原因统一复用。 */
 export function phaseLabel(phase: WorkbenchPhase): string {
-  if (phase === 'product') return '设计'
-  if (phase === 'development') return '开发'
-  return '审查'
+  return `${WORKBENCH_PHASE_AGENTS[phase].label}阶段`
 }
+
+// 显式引用固定顺序，确保领域模块在阶段枚举扩展时仍保持穷尽性检查。
+export { compareWorkbenchPhases, WORKBENCH_PHASE_ORDER }

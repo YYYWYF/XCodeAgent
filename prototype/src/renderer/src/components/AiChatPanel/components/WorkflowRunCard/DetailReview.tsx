@@ -37,7 +37,7 @@ export function DetailReviewAuthBar({
     <div className={cx("artifact-auth-bar")}>
       <span className={cx("artifact-auth-status")}>
         <CheckCircleOutlined aria-hidden="true" />
-        「{label}」{hasRelatedEndpoint ? "页面与依赖接口设计" : "页面需求文档"}已生成
+        「{label}」{hasRelatedEndpoint ? "页面与依赖接口设计" : "页面详细设计"}已生成
         {summary
           ? `（页面 ${summary.page_count} · 接口 ${summary.endpoint_count} · API 契约 ${summary.api_contract_count}）`
           : ""}

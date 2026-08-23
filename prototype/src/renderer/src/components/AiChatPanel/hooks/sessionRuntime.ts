@@ -1,5 +1,6 @@
 import type { EditorMode } from '../../../typings'
 import type { ChatSessionSummary } from '../../../service/chatSessions'
+import type { WorkbenchSessionKind } from '../../../workbenchDomain'
 
 export type SessionIdentity = {
   artifactIds?: string[]
@@ -10,6 +11,7 @@ export type SessionIdentity = {
   endpointId?: string
   endpointLabel?: string
   pageId?: string
+  sessionKind?: WorkbenchSessionKind
   editorMode: EditorMode
   workspaceRoot: string
 }
@@ -34,6 +36,7 @@ export function createSessionIdentity(input: {
   endpointId?: string
   endpointLabel?: string
   pageId?: string
+  sessionKind?: WorkbenchSessionKind
 }): SessionIdentity {
   return {
     ...input,
@@ -60,7 +63,8 @@ export function sessionIdentityFromSummary(
     apiContractId: summary.apiContractId,
     endpointId: summary.endpointId,
     endpointLabel: summary.endpointLabel,
-    pageId: summary.pageId
+    pageId: summary.pageId,
+    sessionKind: summary.sessionKind
   })
 }
 

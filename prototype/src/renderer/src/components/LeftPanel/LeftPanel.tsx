@@ -4,6 +4,7 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntity,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode
@@ -22,6 +23,7 @@ type Props = {
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
+  developmentPlanningEntities: DevelopmentPlanningEntity[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -32,13 +34,16 @@ type Props = {
   onRightPanelOpenChange: (open: boolean) => void
   applicationPreviewMode: boolean
   onApplicationPreviewModeChange: (open: boolean) => void
-  theme: 'light' | 'dark'
   versionReadOnly: boolean
   versionPreviewOnly: boolean
   versionViewKey: string
+  /** 顶部阶段条请求打开“进入测试”确认弹框的自增信号（透传给聊天面板）。 */
+  testingEntryRequest?: number
+  /** 聊天面板上报测试阶段是否具备进入条件（透传给工作台页）。 */
+  onTestingEntryAvailableChange?: (available: boolean) => void
   /** 顶部阶段条请求打开“进入审查”确认弹框的自增信号（透传给聊天面板）。 */
   reviewEntryRequest?: number
-  /** 聊天面板上报审查阶段是否具备进入条件（透传给工作台页）。 */
+  /** 聊天面板上报测试通过后是否具备进入审查条件（透传给工作台页）。 */
   onReviewEntryAvailableChange?: (available: boolean) => void
 }
 
@@ -51,6 +56,7 @@ export default function LeftPanel({
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
+  developmentPlanningEntities,
   editorMode,
   onApplicationUpdate,
   onApplicationLifecycleChange,
@@ -61,10 +67,11 @@ export default function LeftPanel({
   onRightPanelOpenChange,
   applicationPreviewMode,
   onApplicationPreviewModeChange,
-  theme,
   versionReadOnly,
   versionPreviewOnly,
   versionViewKey,
+  testingEntryRequest,
+  onTestingEntryAvailableChange,
   reviewEntryRequest,
   onReviewEntryAvailableChange
 }: Props): ReactElement {
@@ -81,13 +88,13 @@ export default function LeftPanel({
             developmentPlanningPages={developmentPlanningPages}
             developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}
+            developmentPlanningEntities={developmentPlanningEntities}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}
             onApplicationLifecycleChange={onApplicationLifecycleChange}
             onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}
             previewBaseUrl={previewBaseUrl}
             previewLaunchError={previewLaunchError}
-            theme={theme}
             rightPanelOpen={rightPanelOpen}
             onRightPanelOpenChange={onRightPanelOpenChange}
             applicationPreviewMode={applicationPreviewMode}
@@ -95,6 +102,8 @@ export default function LeftPanel({
             versionReadOnly={versionReadOnly}
             versionPreviewOnly={versionPreviewOnly}
             versionViewKey={versionViewKey}
+            testingEntryRequest={testingEntryRequest}
+            onTestingEntryAvailableChange={onTestingEntryAvailableChange}
             reviewEntryRequest={reviewEntryRequest}
             onReviewEntryAvailableChange={onReviewEntryAvailableChange}
           />

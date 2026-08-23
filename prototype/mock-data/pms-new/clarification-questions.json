@@ -8,10 +8,17 @@
     "required": true,
     "presetAnswer": ["recheck-report"],
     "options": [
-      { "label": "需求回检填报", "value": "recheck-report" },
-      { "label": "回检审核", "value": "recheck-review" }
-    ],
-    "default_assumption": "默认覆盖 需求回检填报 一个环节"
+      {
+        "label": "需求回检填报",
+        "value": "recheck-report",
+        "description": "覆盖回检任务创建、填报与提交，产出待审核的回检单。"
+      },
+      {
+        "label": "回检审核",
+        "value": "recheck-review",
+        "description": "覆盖审核人复核回检单、驳回或通过与意见留痕。"
+      }
+    ]
   },
   {
     "id": "recheck-decision",
@@ -30,10 +37,17 @@
     "question": "系统涉及哪些角色？",
     "presetAnswer": ["recheck-reporter", "recheck-reviewer"],
     "options": [
-      { "label": "回检填报人", "value": "recheck-reporter" },
-      { "label": "回检审核人", "value": "recheck-reviewer" }
-    ],
-    "default_assumption": "默认含回检填报人、回检审核人两类角色"
+      {
+        "label": "回检填报人",
+        "value": "recheck-reporter",
+        "description": "负责创建回检任务、填写检查结果并提交审核。"
+      },
+      {
+        "label": "回检审核人",
+        "value": "recheck-reviewer",
+        "description": "负责复核填报内容，执行通过或驳回并记录审核意见。"
+      }
+    ]
   },
   {
     "id": "remark",

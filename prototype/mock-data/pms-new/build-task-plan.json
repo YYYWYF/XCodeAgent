@@ -50,7 +50,7 @@
       "unit_id": "page:recheck-introduction",
       "status": "pending",
       "dependencies": [],
-      "target_files": ["frontend/src/pages/recheck-introduction/index.tsx"],
+      "target_files": ["frontend/pages/recheck-introduction.tsx"],
       "risk": "low",
       "acceptance_criteria": ["无需接口即可完整展示", "可进入我的回检页面"]
     },
@@ -63,8 +63,8 @@
       "status": "pending",
       "dependencies": [],
       "target_files": [
-        "frontend/src/pages/my-rechecks/index.tsx",
-        "backend/src/main/java/com/xcodeagent/rechecks/RechecksController.java"
+        "frontend/pages/my-rechecks.tsx",
+        "backend/rechecks-controller.java"
       ],
       "risk": "medium",
       "acceptance_criteria": ["查询接口仅返回当前用户数据", "页面筛选与列表使用真实接口", "页面与接口联调通过"]

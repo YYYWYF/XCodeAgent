@@ -8,6 +8,7 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../typings'
+import type { WorkbenchSessionKind } from '../workbenchDomain'
 import type { ProcessStepRecord, ToolCallRecord } from './agUiAgent'
 
 export type ChatSessionMessage = {
@@ -25,8 +26,16 @@ export type ChatSessionMessage = {
   createdAt: number
 }
 
+/** 已获用户确认写入工作区的正式文件快照；未确认的 Diff 不进入这里。 */
+export type ChatSessionSavedFile = {
+  path: string
+  content: string
+  savedAt: number
+}
+
 export type ChatSessionRecord = {
   artifactIds?: string[]
+  savedFiles?: ChatSessionSavedFile[]
   id: string
   title: string
   editorMode: EditorMode
@@ -35,6 +44,7 @@ export type ChatSessionRecord = {
   endpointId?: string
   endpointLabel?: string
   pageId?: string
+  sessionKind?: WorkbenchSessionKind
   versionId?: string
   workspaceRoot: string
   messages: ChatSessionMessage[]
@@ -44,6 +54,7 @@ export type ChatSessionRecord = {
 
 export type ChatSessionSummary = {
   artifactIds?: string[]
+  savedFiles?: ChatSessionSavedFile[]
   id: string
   title: string
   editorMode: EditorMode
@@ -52,6 +63,7 @@ export type ChatSessionSummary = {
   endpointId?: string
   endpointLabel?: string
   pageId?: string
+  sessionKind?: WorkbenchSessionKind
   versionId?: string
   createdAt: number
   updatedAt: number
@@ -188,6 +200,24 @@ function normalizeToolCalls(value: unknown): ToolCallRecord[] | undefined {
   return toolCalls.length > 0 ? toolCalls : undefined
 }
 
+/** 规范化已保存文件，按路径去重并保留最后一次确认的内容。 */
+function normalizeSavedFiles(value: unknown): ChatSessionSavedFile[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const files = new Map<string, ChatSessionSavedFile>()
+  value.forEach((item) => {
+    if (!item || typeof item !== 'object') return
+    const candidate = item as Partial<ChatSessionSavedFile>
+    const path = typeof candidate.path === 'string' ? candidate.path.trim() : ''
+    if (!path) return
+    files.set(path, {
+      path,
+      content: typeof candidate.content === 'string' ? candidate.content : '',
+      savedAt: Number(candidate.savedAt || Date.now())
+    })
+  })
+  return files.size > 0 ? [...files.values()] : undefined
+}
+
 function normalizeSession(value: unknown): ChatSessionRecord | null {
   if (!value || typeof value !== 'object') return null
   const session = value as Partial<ChatSessionRecord>
@@ -197,6 +227,7 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
     artifactIds: Array.isArray(session.artifactIds)
       ? [...new Set(session.artifactIds.map(String).filter(Boolean))]
       : undefined,
+    savedFiles: normalizeSavedFiles(session.savedFiles),
     id: String(session.id),
     title: String(session.title || '新对话'),
     editorMode: session.editorMode,
@@ -208,6 +239,7 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
       endpointContext?.endpointLabel ||
       inferEndpointLabelFromTitle(session.title),
     pageId: normalizePageId(session.pageId) || inferPageIdFromMessages(session.messages),
+    sessionKind: normalizeSessionKind(session.sessionKind),
     versionId: normalizeEndpointField(session.versionId),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
@@ -219,6 +251,7 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
 function toSummary(session: ChatSessionRecord): ChatSessionSummary {
   return {
     artifactIds: session.artifactIds,
+    savedFiles: session.savedFiles,
     id: session.id,
     title: session.title,
     editorMode: session.editorMode,
@@ -227,6 +260,7 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     endpointId: session.endpointId,
     endpointLabel: session.endpointLabel,
     pageId: session.pageId,
+    sessionKind: session.sessionKind,
     versionId: session.versionId,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -244,6 +278,7 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       artifactIds: Array.isArray(item.artifactIds)
         ? [...new Set(item.artifactIds.map(String).filter(Boolean))]
         : undefined,
+      savedFiles: normalizeSavedFiles(item.savedFiles),
       id: String(item.id || ''),
       title: String(item.title || '新对话'),
       editorMode: item.editorMode || 'frontend',
@@ -252,10 +287,18 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       endpointId: normalizeEndpointField(item.endpointId),
       endpointLabel: normalizeEndpointField(item.endpointLabel),
       pageId: normalizePageId(item.pageId),
+      sessionKind: normalizeSessionKind(item.sessionKind),
       versionId: normalizeEndpointField(item.versionId),
       createdAt: Number(item.createdAt || Date.now()),
       updatedAt: Number(item.updatedAt || Date.now()),
-      messageCount: Number(item.messageCount || 0)
+      // mock/Electron save 可能返回完整 session 而非摘要，必须从 messages 回填数量，
+      // 否则已经开始的对话会在左侧被误判为“未开始”。
+      messageCount: Number(
+        item.messageCount ||
+          (Array.isArray((item as Partial<ChatSessionRecord>).messages)
+            ? (item as Partial<ChatSessionRecord>).messages?.length
+            : 0)
+      )
     }))
     .filter((item) => item.id)
 }
@@ -270,6 +313,18 @@ function normalizePageId(value: unknown): string | undefined {
 function normalizeEndpointField(value: unknown): string | undefined {
   const text = typeof value === 'string' ? value.trim() : ''
   return text || undefined
+}
+
+/** 规范化阶段默认会话类型，未知值不进入当前会话契约。 */
+function normalizeSessionKind(value: unknown): WorkbenchSessionKind | undefined {
+  return value === 'analysis' ||
+    value === 'planning' ||
+    value === 'development' ||
+    value === 'testing' ||
+    value === 'review' ||
+    value === 'general'
+    ? value
+    : undefined
 }
 
 /** 从旧会话保存的 Workflow 快照中恢复页面归属。 */
@@ -312,6 +367,13 @@ function inferEndpointContextFromMessages(value: unknown):
       summary?: { clarification?: { review?: { summary?: Record<string, unknown> } } }
     }
     const reviewSummary = payload.summary?.clarification?.review?.summary
+    const detailTargetType = normalizeEndpointField(
+      payload.state?.detailTargetType ||
+        payload.result?.detailTargetType ||
+        reviewSummary?.detailTargetType
+    )
+    // 页面工作流可能引用接口，但接口产物关系只能由独立接口工作流建立。
+    if (detailTargetType !== 'endpoint') continue
     const apiContractId = normalizeEndpointField(
       payload.state?.selectedApiContractId ||
         payload.result?.selectedApiContractId ||

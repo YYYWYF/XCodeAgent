@@ -2,29 +2,38 @@ import {
   createContext,
   type ReactNode,
   useContext,
+  useEffect,
   useMemo,
   useState
 } from 'react';
 import type { ApplicationLifecycle } from '../typings';
 import {
-  deriveWorkbenchPhase,
+  compareWorkbenchPhases,
+  deriveWorkbenchExecutionPhase,
+  deriveWorkbenchPhaseValidity,
+  deriveWorkbenchReachedPhase,
   isObjectEditableInPhase,
   WORKBENCH_PHASE_AGENTS,
   type EditableObjectType,
   type WorkbenchAgentIdentity,
-  type WorkbenchPhase
+  type WorkbenchPhase,
+  type WorkbenchPhaseValidity
 } from '../workbenchPhase';
 
 type WorkbenchPhaseContextValue = {
-  /** 实际生效的阶段：手动覆盖优先，否则用旅程推导值。 */
-  phase: WorkbenchPhase;
-  /** 旅程推导的阶段（不受手动覆盖影响）。 */
-  derivedPhase: WorkbenchPhase;
-  /** 手动覆盖；null 表示跟随旅程（自动推进）。 */
+  /** 当前工作流实际执行的阶段，由 lifecycle 权威推导。 */
+  executionPhase: WorkbenchPhase;
+  /** 当前用户查看和编辑的阶段；阶段回退只改变这里。 */
+  viewingPhase: WorkbenchPhase;
+  /** 当前版本已经到达的最高阶段，决定未来产物是否可见。 */
+  reachedPhase: WorkbenchPhase;
+  /** 各阶段产物对当前版本是否仍然有效。 */
+  phaseValidity: Record<WorkbenchPhase, WorkbenchPhaseValidity>;
+  /** 手动查看阶段覆盖；null 表示跟随执行阶段。 */
   manualOverride: WorkbenchPhase | null;
-  /** 切换阶段；传 null 回到「跟随旅程」。 */
+  /** 切换查看阶段；传 null 回到「跟随旅程」。 */
   switchPhase: (phase: WorkbenchPhase | null) => void;
-  /** 当前生效阶段的 Agent 身份。 */
+  /** 当前查看阶段的 Agent 身份。 */
   agent: WorkbenchAgentIdentity;
   /** 阶段门禁：某对象当前是否可编辑。 */
   canEdit: (objectType: EditableObjectType) => boolean;
@@ -35,8 +44,8 @@ type WorkbenchPhaseContextValue = {
 const WorkbenchPhaseContext = createContext<WorkbenchPhaseContextValue | null>(null);
 
 /**
- * 按应用隔离的手动阶段覆盖。旅程向前自动推进阶段（derivedPhase）；
- * 用户手动切回（例如切到产品做增量迭代）会覆盖该值，传 null 恢复跟随旅程。
+ * 按应用隔离的手动查看阶段覆盖。旅程向前自动推进 executionPhase；
+ * 用户手动切回上游阶段会覆盖 viewingPhase，传 null 恢复跟随旅程。
  */
 export function WorkbenchPhaseProvider({
   applicationId,
@@ -49,26 +58,60 @@ export function WorkbenchPhaseProvider({
   locked?: boolean;
   children: ReactNode;
 }): JSX.Element {
-  const derivedPhase = deriveWorkbenchPhase(lifecycle);
+  const executionPhase = deriveWorkbenchExecutionPhase(lifecycle);
+  const derivedReachedPhase = deriveWorkbenchReachedPhase(lifecycle);
   // 多应用切换时各自保留独立的覆盖值，避免互相串用。
   const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>({});
+  // 需求/计划回退会产生新的生命周期快照，但不能抹掉本版本此前已经到达的阶段。
+  const [rememberedReachedPhases, setRememberedReachedPhases] = useState<
+    Record<string, WorkbenchPhase>
+  >({});
+  const rememberedReachedPhase = rememberedReachedPhases[applicationId];
+  const reachedPhase =
+    rememberedReachedPhase &&
+    compareWorkbenchPhases(rememberedReachedPhase, derivedReachedPhase) > 0
+      ? rememberedReachedPhase
+      : derivedReachedPhase;
+  const phaseValidity = deriveWorkbenchPhaseValidity(lifecycle, reachedPhase);
+
+  // 将本版本已到达的最高阶段记住，保证上游变更后仍可查看后续阶段。
+  useEffect(() => {
+    setRememberedReachedPhases((current) => {
+      const previous = current[applicationId];
+      if (previous && compareWorkbenchPhases(previous, derivedReachedPhase) >= 0) {
+        return current;
+      }
+      return { ...current, [applicationId]: derivedReachedPhase };
+    });
+  }, [applicationId, derivedReachedPhase]);
   const manualOverride = overrides[applicationId] ?? null;
 
   const value = useMemo<WorkbenchPhaseContextValue>(() => {
-    const phase = manualOverride ?? derivedPhase;
+    // 已生成版本只能回看其权威旅程位置，不能沿用迭代期间的手动查看阶段。
+    const viewingPhase = locked
+      ? executionPhase
+      : manualOverride && compareWorkbenchPhases(manualOverride, reachedPhase) <= 0
+        ? manualOverride
+        : executionPhase;
     return {
-      phase,
-      derivedPhase,
+      executionPhase,
+      viewingPhase,
+      reachedPhase,
+      phaseValidity,
       manualOverride,
       switchPhase: (next) => {
         if (locked) return;
-        setOverrides((current) => ({ ...current, [applicationId]: next ?? null }));
+        setOverrides((current) => ({
+          ...current,
+          [applicationId]:
+            next && compareWorkbenchPhases(next, reachedPhase) <= 0 ? next : null
+        }));
       },
-      agent: WORKBENCH_PHASE_AGENTS[phase],
-      canEdit: (objectType) => !locked && isObjectEditableInPhase(objectType, phase),
+      agent: WORKBENCH_PHASE_AGENTS[viewingPhase],
+      canEdit: (objectType) => !locked && isObjectEditableInPhase(objectType, viewingPhase),
       locked
     };
-  }, [applicationId, manualOverride, derivedPhase, locked]);
+  }, [applicationId, executionPhase, reachedPhase, phaseValidity, manualOverride, locked]);
 
   return (
     <WorkbenchPhaseContext.Provider value={value}>{children}</WorkbenchPhaseContext.Provider>

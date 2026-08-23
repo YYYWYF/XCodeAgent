@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons'
 import { Button, Modal } from 'antd'
 import type { ReactElement } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { cx } from '../../../../utils'
 import './DevelopmentConversationModal.less'
 
@@ -46,6 +46,12 @@ type CompletionProps = {
   onConfirm: () => void
   open: boolean
   pageCount: number
+}
+
+type StageCompletionProps = {
+  onCancel: () => void
+  onConfirm: () => void
+  open: boolean
 }
 
 type ConversationConfirmProps = {
@@ -87,14 +93,18 @@ export default function DevelopmentConversationModal({
   const [submitting, setSubmitting] = useState(false)
   const defaultExpandedIds = useMemo(() => collectExpandableIds(tree), [tree])
   const [expandedIds, setExpandedIds] = useState<string[]>(defaultExpandedIds)
+  const previousOpenRef = useRef(open)
 
   useEffect(() => {
-    if (open) {
-      setExpandedIds(defaultExpandedIds)
-    } else {
+    // 只在弹框开关边沿同步状态；树数据刷新不应反复重置展开集合并触发 Modal 更新死循环。
+    if (previousOpenRef.current === open) return
+    previousOpenRef.current = open
+    if (!open) {
       setSelectedId('')
       setSubmitting(false)
+      return
     }
+    setExpandedIds(defaultExpandedIds)
   }, [defaultExpandedIds, open])
 
   /** 创建所选产物的首个对话，并在异步保存期间防止重复提交。 */
@@ -282,7 +292,7 @@ export function DevelopmentArtifactConversationConfirmModal({
   )
 }
 
-/** 在全部开发产物完成后，询问用户是否进入代码审查阶段。 */
+/** 在全部开发产物完成后，询问用户是否进入测试阶段。 */
 export function DevelopmentStageCompleteModal({
   endpointCount,
   onCancel,
@@ -310,8 +320,45 @@ export function DevelopmentStageCompleteModal({
           <strong>开发阶段的产物已全部完成</strong>
           <p>
             已完成 {pageCount} 个页面和 {endpointCount}{' '}
-            个接口。是否进入审查阶段？进入后，开发产物将转为只读。
+            个接口。是否进入测试阶段？测试报告会记录整体验证结果。
           </p>
+        </div>
+        <footer className={cx('development-conversation-footer')}>
+          <Button onClick={onCancel}>暂不进入</Button>
+          <Button onClick={onConfirm} type="primary">
+            进入测试阶段
+          </Button>
+        </footer>
+      </div>
+    </Modal>
+  )
+}
+
+/** 测试报告通过后，询问用户是否进入审查阶段；暂不进入时保留测试阶段。 */
+export function TestingStageCompleteModal({
+  onCancel,
+  onConfirm,
+  open
+}: StageCompletionProps): ReactElement {
+  return (
+    <Modal
+      centered
+      closable={false}
+      footer={null}
+      getContainer={false}
+      maskClosable={false}
+      onCancel={onCancel}
+      open={open}
+      width={460}
+      wrapClassName={cx('development-complete-modal')}
+    >
+      <div className={cx('development-complete-dialog')}>
+        <span className={cx('development-complete-icon')} aria-hidden="true">
+          <CheckCircleOutlined />
+        </span>
+        <div className={cx('development-complete-copy')}>
+          <strong>测试阶段已完成</strong>
+          <p>测试报告已保存，启动、非功能和业务测试均已通过。是否进入审查阶段？</p>
         </div>
         <footer className={cx('development-conversation-footer')}>
           <Button onClick={onCancel}>暂不进入</Button>

@@ -22,6 +22,38 @@
   gap: 12px;
 }
 
+// 选择题卡片把进度放到标题行，减少一层说明信息后的垂直空白。
+.@{class-prefix}-workflow-run-card-question {
+  gap: 4px;
+  padding: 4px 0 0 4px;
+
+  .@{class-prefix}-workflow-clarification {
+    gap: 4px;
+    padding: 2px 4px 2px 4px;
+  }
+
+  .@{class-prefix}-workflow-clarification-body {
+    display: flex;
+    box-sizing: border-box;
+    height: 132px;
+    min-height: 132px;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .@{class-prefix}-workflow-clarification-question {
+    gap: 4px;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .@{class-prefix}-workflow-clarification-nav {
+    gap: 8px;
+    margin-top: auto;
+    padding-top: 3px;
+  }
+}
+
 .@{class-prefix}-workflow-artifacts,
 .@{class-prefix}-workflow-clarification,
 .@{class-prefix}-workflow-build-progress,
@@ -601,9 +633,13 @@
   border-top: 1px solid var(--wb-border);
 }
 
-.@{class-prefix}-workflow-clarification-stepper {
+.@{class-prefix}-workflow-clarification-stepper-header {
   font-size: 12px;
   color: var(--wb-text-secondary);
+}
+
+.@{class-prefix}-workflow-clarification-stepper-header {
+  flex: 0 0 auto;
 }
 
 .@{class-prefix}-workflow-clarification-nav {
@@ -758,6 +794,44 @@
 
   .ant-input {
     border-radius: 6px;
+  }
+}
+
+// antd4 的勾选框默认 baseline 对齐会让文案行高较大时勾选框偏下，这里统一垂直居中。
+.@{class-prefix}-workflow-clarification-question {
+  .@{class-prefix}-workflow-clarification-option.ant-checkbox-wrapper,
+  .@{class-prefix}-workflow-clarification-option.ant-radio-wrapper {
+    align-items: center !important;
+    line-height: 22px;
+
+    > .ant-checkbox,
+    > .ant-radio {
+      top: 0;
+    }
+  }
+}
+
+// 选项说明 Tooltip 经 Portal 挂载到 body，用 overlayClassName 限定作用域并复用浅色样式。
+.@{class-prefix}-workflow-clarification-option-tooltip {
+  &.ant-tooltip-placement-top,
+  &.ant-tooltip-placement-topLeft,
+  &.ant-tooltip-placement-topRight {
+    padding-bottom: 2px;
+  }
+
+  .ant-tooltip-inner {
+    min-height: 24px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 18px;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  // antd4.24 的箭头底色由 --antd-arrow-background-color 驱动，重置变量才能与内容块同色。
+  .ant-tooltip-arrow-content {
+    --antd-arrow-background-color: #ffffff;
   }
 }
 

@@ -20,7 +20,6 @@ type UseActiveApplicationPlanningsOptions = {
     application: ApplicationConfig,
     lifecycle: ApplicationLifecycle
   ) => Promise<void> | void
-  theme: 'dark' | 'light'
 }
 
 type ActiveApplicationPlanningsController = {
@@ -44,8 +43,7 @@ type ActiveApplicationPlanningsController = {
 
 // 维护最多三个相互隔离的应用初始化会话及其后台模板生成任务。
 export function useActiveApplicationPlannings({
-  onOpenWorkbench,
-  theme
+  onOpenWorkbench
 }: UseActiveApplicationPlanningsOptions): ActiveApplicationPlanningsController {
   const [activePlannings, setActivePlannings] = useState<PersistedActivePlanning[]>([])
   const [visiblePlanningId, setVisiblePlanningId] = useState<string>()
@@ -242,10 +240,10 @@ export function useActiveApplicationPlannings({
         okButtonProps: { danger: true },
         cancelText: '取消',
         onOk: () => deletePlanning(planning),
-        wrapClassName: cx('welcome-modal', `theme-${theme}`)
+        wrapClassName: cx('welcome-modal', 'theme-light')
       })
     },
-    [deletePlanning, deletingPlanningIds, theme]
+    [deletePlanning, deletingPlanningIds]
   )
 
   // 后台恢复到模板生成阶段的每个应用都独立续跑，不抢占当前可见页面。

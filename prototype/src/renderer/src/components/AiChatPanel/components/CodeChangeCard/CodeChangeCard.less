@@ -27,6 +27,64 @@
   }
 }
 
+/* 固定在输入框上方的授权条：单文件变更只保留文件名、加减行数和接受动作。 */
+.@{class-prefix}-code-change-card.@{class-prefix}-compact {
+  min-width: 0;
+  min-height: 38px;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 5px 8px 5px 12px;
+  border-left-width: 2px;
+  border-radius: 8px;
+  white-space: nowrap;
+
+  .@{class-prefix}-code-change-compact-label {
+    flex: 0 0 auto;
+    color: var(--wb-text);
+    font-size: 12px;
+  }
+
+  .@{class-prefix}-code-change-compact-path {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    font-size: 11px;
+    text-overflow: ellipsis;
+  }
+
+  .@{class-prefix}-code-change-file-stats {
+    flex: 0 0 auto;
+    gap: 7px;
+    font-size: 11px;
+  }
+
+  .@{class-prefix}-code-change-compact-actions {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .@{class-prefix}-code-change-compact-revert.ant-btn {
+    height: 24px;
+    padding: 0 7px;
+    color: var(--wb-text-secondary);
+    font-size: 11px;
+  }
+
+  .@{class-prefix}-code-change-compact-action.ant-btn {
+    min-width: 48px;
+    height: 24px;
+    flex: 0 0 auto;
+    padding: 0 9px;
+    border-radius: 6px;
+    font-size: 11px;
+  }
+}
+
 .@{class-prefix}-code-change-header {
   display: flex;
   min-width: 0;
@@ -187,7 +245,7 @@
   color: var(--wb-text-tertiary) !important;
   background: var(--wb-surface-subtle) !important;
   border-color: var(--wb-border) !important;
-  cursor: not-allowed;
+  cursor: default;
   opacity: 1;
 }
 

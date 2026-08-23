@@ -33,7 +33,6 @@ const { Text, Title } = Typography
 
 type Props = {
   onSkillDisabled?: (skillName: string) => void
-  theme: 'light' | 'dark'
 }
 
 type PendingAction = {
@@ -48,8 +47,7 @@ const pendingActions: PendingAction[] = [
 
 /** 渲染支持来源分类、启停、刷新和用户技能维护的技能页面。 */
 export default function SkillsPage({
-  onSkillDisabled,
-  theme
+  onSkillDisabled
 }: Props): ReactElement {
   const [catalog, setCatalog] = useState<UserSkillCatalog>()
   const [error, setError] = useState('')
@@ -165,7 +163,7 @@ export default function SkillsPage({
     Modal.confirm({
       cancelText: '取消',
       centered: true,
-      className: cx('skill-delete-confirm', `theme-${theme}`),
+      className: cx('skill-delete-confirm', 'theme-light'),
       content: `删除后将同时移除目录 ${skill.directoryName} 及其中的所有辅助资源，且无法恢复。`,
       okButtonProps: { danger: true },
       okText: '删除',
@@ -320,14 +318,12 @@ export default function SkillsPage({
           await loadSkills(false)
         }}
         open={creating}
-        theme={theme}
       />
       <SkillZipImportModal
         existingSkillNames={(catalog?.skills || []).map((skill) => skill.name)}
         onClose={() => setImportingZip(false)}
         onImported={loadSkills}
         open={importingZip}
-        theme={theme}
       />
       <SkillEditorDrawer
         mode="edit"
@@ -337,7 +333,6 @@ export default function SkillsPage({
           await loadSkills()
         }}
         skill={selectedSkill}
-        theme={theme}
       />
     </section>
   )

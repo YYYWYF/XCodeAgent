@@ -31,6 +31,6 @@ export const editorPanels: Record<EditorMode, PlaceholderProps> = {
   },
   backend: {
     title: '后端编辑器',
-    description: '这里预留后端逻辑编辑区，后续可配置接口、数据模型和服务函数。',
+    description: '这里预留后端逻辑编辑区，后续可配置接口、数据实体和服务函数。',
   },
 };

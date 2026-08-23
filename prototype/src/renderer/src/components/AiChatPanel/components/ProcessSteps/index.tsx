@@ -10,7 +10,6 @@ import {
   ToolOutlined
 } from '@ant-design/icons'
 import { Typography } from 'antd'
-import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { IntegrationTestCheckRecord, ProcessStepRecord } from '../../../../service/agUiAgent'
 import { cx } from '../../../../utils'
@@ -24,6 +23,8 @@ const { Text } = Typography
 type Props = {
   loading: boolean
   steps: ProcessStepRecord[]
+  /** 当前消息对应的具体工作流名称。 */
+  workflowTitle: string
   waitingPrompt?: string
   waitingForInput?: boolean
 }
@@ -32,25 +33,15 @@ type Props = {
 export default function ProcessSteps({
   loading,
   steps,
+  workflowTitle,
   waitingPrompt = '',
   waitingForInput = false
 }: Props): ReactElement {
-  const [open, setOpen] = useState(loading || waitingForInput)
-  const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
-
-  useEffect(() => {
-    if (loading || waitingForInput || hasTestChecklist) setOpen(true)
-  }, [hasTestChecklist, loading, waitingForInput])
-
   const statusClassName = loading ? 'running' : waitingForInput ? 'waiting' : 'completed'
 
   return (
-    <details
-      className={cx('process-steps', statusClassName)}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-      open={open}
-    >
-      <summary className={cx('process-steps-summary')}>
+    <div className={cx('process-steps', statusClassName)}>
+      <div className={cx('process-steps-summary')}>
         <span className={cx('process-steps-status')}>
           {loading ? (
             <LoadingOutlined spin />
@@ -61,18 +52,16 @@ export default function ProcessSteps({
           )}
         </span>
         <span className={cx('process-steps-heading')}>
-          <Text strong>
-            {loading ? 'Agent 正在执行' : waitingForInput ? 'Agent 等待补充' : 'Agent 执行完成'}
-          </Text>
-          <Text type="secondary">
-            {loading
-              ? currentStepLabel(steps)
-              : waitingForInput
-                ? '请根据下方提示补充修改需求'
-                : `已归档 ${steps.length} 个步骤`}
-          </Text>
+          <span className={cx('process-steps-title-row')}>
+            <Text strong>{workflowTitle}</Text>
+            <Text className={cx('process-steps-progress')}>
+              {formatStepProgress(steps)}
+            </Text>
+          </span>
+          {loading ? <Text type="secondary">{currentStepLabel(steps)}</Text> : null}
+          {waitingForInput ? <Text type="secondary">请根据下方提示补充修改需求</Text> : null}
         </span>
-      </summary>
+      </div>
       <div className={cx('process-steps-list')}>
         {steps.map((step, index) => (
           <ProcessStep
@@ -85,11 +74,11 @@ export default function ProcessSteps({
           />
         ))}
       </div>
-    </details>
+    </div>
   )
 }
 
-/** 渲染单个 Agent 步骤，仅让包含实际详情的步骤具备展开交互。 */
+/** 渲染单个 Agent 步骤，仅展示节点摘要；用户点击后再查看节点内部详情。 */
 function ProcessStep({
   isLast,
   settled,
@@ -112,37 +101,6 @@ function ProcessStep({
   const expandable =
     hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration || hasWorkspaceInspection
   const awaitingInput = waitingForInput && step.status === 'requires_user_input'
-  const [open, setOpen] = useState(
-    expandable &&
-      (step.status === 'running' ||
-        awaitingInput ||
-        hasChecks ||
-        hasBuildRun ||
-        hasDagGeneration ||
-        hasWorkspaceInspection)
-  )
-
-  useEffect(() => {
-    if (
-      expandable &&
-      (step.status === 'running' ||
-        awaitingInput ||
-        hasChecks ||
-        hasBuildRun ||
-        hasDagGeneration ||
-        hasWorkspaceInspection)
-    ) {
-      setOpen(true)
-    }
-  }, [
-    awaitingInput,
-    expandable,
-    hasBuildRun,
-    hasChecks,
-    hasDagGeneration,
-    hasWorkspaceInspection,
-    step.status
-  ])
 
   const className = cx(
     'process-step',
@@ -185,16 +143,12 @@ function ProcessStep({
   }
 
   return (
-    <details
-      className={className}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-      open={open}
-    >
+    <details className={className}>
       <summary className={cx('process-step-summary')}>{summaryContent}</summary>
       <div className={cx('process-step-detail')}>
         {!hasChecks && !hasDagGeneration && !hasWorkspaceInspection && step.detail && (
           <DetailBlock
-            label={step.kind === 'reasoning' ? '思考内容' : '动作详情'}
+            label={step.kind === 'reasoning' ? '思考内容' : undefined}
             value={step.detail}
           />
         )}
@@ -204,7 +158,10 @@ function ProcessStep({
           <WorkspaceInspectionPanel snapshot={step.workspaceInspection} />
         )}
         {step.buildExecutionSlice && (
-          <BuildExecutionRunCard executionSlice={step.buildExecutionSlice} status={step.status} />
+          <BuildExecutionRunCard
+            executionSlice={step.buildExecutionSlice}
+            status={step.status === 'pending' ? 'running' : step.status}
+          />
         )}
         {step.result && <DetailBlock label="执行结果" value={step.result} />}
       </div>
@@ -234,6 +191,8 @@ function IntegrationTestChecklist({
   return (
     <section
       aria-label={summary}
+      aria-busy={counts.running > 0}
+      aria-live="polite"
       className={cx('integration-test-checklist', counts.running > 0 ? 'running' : 'settled')}
     >
       <div className={cx('integration-test-checklist-header')}>
@@ -285,9 +244,13 @@ function IntegrationTestChecklist({
                   {check.required ? 'REQUIRED' : 'OPTIONAL'}
                 </span>
               </span>
-              {(check.status === 'failed' || check.status === 'skipped') && check.evidence && (
-                <Text type="secondary">{check.evidence}</Text>
+              {testCheckCountLabel(check) && (
+                <Text type="secondary">{testCheckCountLabel(check)}</Text>
               )}
+              {(check.status === 'running' ||
+                check.status === 'failed' ||
+                check.status === 'skipped') &&
+                check.evidence && <Text type="secondary">{check.evidence}</Text>}
             </span>
             <Text className={cx('integration-test-check-status')}>
               {testCheckStatusLabel(check.status)}
@@ -302,15 +265,30 @@ function IntegrationTestChecklist({
 /** 返回当前执行步骤在总步骤中的位置与标题。 */
 function currentStepLabel(steps: ProcessStepRecord[]): string {
   const activeIndex = steps.findIndex((step) => step.status === 'running')
-  if (activeIndex < 0) return `正在准备 · ${steps.length} 个步骤`
-  return `第 ${activeIndex + 1} / ${steps.length} 步 · ${steps[activeIndex].title}`
+  if (activeIndex >= 0) return steps[activeIndex].title
+  const pendingIndex = steps.findIndex((step) => step.status === 'pending')
+  return pendingIndex >= 0 ? `正在准备${steps[pendingIndex].title}` : '正在准备下一步'
+}
+
+/** 返回工作流当前节点与规划节点总数，折叠后也保留可读的进度信息。 */
+function formatStepProgress(steps: ProcessStepRecord[]): string {
+  if (!steps.length) return '0/0'
+  const currentIndex = steps.findIndex(
+    (step) =>
+      step.status === 'pending' ||
+      step.status === 'running' ||
+      step.status === 'requires_user_input'
+  )
+  const current = currentIndex >= 0 ? currentIndex + 1 : steps.length
+  const total = Math.max(steps.length, ...steps.map((step) => step.total || 0))
+  return `${Math.min(current, total)}/${total}`
 }
 
 /** 渲染非结构化步骤的详情或执行结果。 */
-function DetailBlock({ label, value }: { label: string; value: string }): ReactElement {
+function DetailBlock({ label, value }: { label?: string; value: string }): ReactElement {
   return (
     <section>
-      <Text className={cx('process-step-detail-label')}>{label}</Text>
+      {label ? <Text className={cx('process-step-detail-label')}>{label}</Text> : null}
       <pre>{formatValue(value)}</pre>
     </section>
   )
@@ -337,6 +315,19 @@ function testCheckCounts(
   )
 }
 
+/** 返回单元测试检查项的通过数与总数，缺少结构化统计时不显示占位数字。 */
+function testCheckCountLabel(check: IntegrationTestCheckRecord): string | undefined {
+  if (
+    check.passedTests === undefined ||
+    check.totalTests === undefined ||
+    check.totalTests < 0 ||
+    check.passedTests < 0
+  ) {
+    return undefined
+  }
+  return `通过 ${Math.min(check.passedTests, check.totalTests)}/${check.totalTests} 个测试`
+}
+
 /** 根据检查状态返回与主题匹配的状态图标。 */
 function testCheckIcon(status: IntegrationTestCheckRecord['status']): ReactElement {
   if (status === 'running') return <LoadingOutlined spin />
@@ -356,6 +347,7 @@ function testCheckStatusLabel(status: IntegrationTestCheckRecord['status']): str
 /** 根据步骤类型与终态选择时间线图标。 */
 function stepIcon(step: ProcessStepRecord, settled: boolean): ReactElement {
   if (step.status === 'running' && !settled) return <LoadingOutlined spin />
+  if (step.status === 'pending') return <MinusCircleOutlined />
   if (step.status === 'failed') return <CloseCircleOutlined />
   if (step.status === 'requires_user_input') return <PauseCircleOutlined />
   if (step.kind === 'reasoning') return <RobotOutlined />

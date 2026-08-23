@@ -291,8 +291,8 @@ function extractFrontendTemplateArtifacts(
 }
 
 /**
- * 根据规划产出的页面清单，在模板工程 frontend/src/pages/ 下
- * 追加每个页面的占位文件（<PageKey>/index.tsx，内容为 hello agent!）。
+ * 根据规划产出的页面清单，在原型工程 frontend/pages/ 下
+ * 追加每个页面的占位文件（<PageKey>.tsx，内容为 hello agent!）。
  *
  * @param schema 应用 schema，用于读取应用名称
  * @param projectPath 当前应用指定的项目位置
