@@ -12,6 +12,7 @@ from app.agents.main.task_preparer import (
     prepare_build_tasks_with_main_agent,
 )
 from app.agents.main.task_preparer_prompt import (
+    _deliverable_kind_contract_prompt,
     build_task_preparation_prompt,
     compact_workspace_snapshot,
     endpoint_source_types,
@@ -21,14 +22,82 @@ from app.agents.main.task_preparer_prompt import (
 from app.graph.nodes.tasks import _task_preparation_project_plan
 from app.services.build_task_planner import (
     _database_task_requires_approval,
+    build_task_candidate_contract_errors,
     create_build_task_plan,
+    frontend_endpoint_ownership_errors,
     merge_exact_duplicate_tasks,
     tasks_from_build_task_plan,
 )
+from app.services.business_acceptance import DELIVERABLE_KINDS
 from app.services.build_unit_compiler import annotate_unit_inputs
 
 
+def _test_deliverable(task_id: str, unit_id: str, owner: str, path: str) -> dict:
+    """为规划器旧测试构造符合当前 DAG 契约的最小交付物。"""
+
+    if owner == "frontend":
+        kind = "frontend.shared_capability"
+    else:
+        kind = "backend.bootstrap" if unit_id == "backend:bootstrap" else "backend.application_service"
+    return {
+        "id": f"deliverable:{task_id}",
+        "kind": kind,
+        "target_id": unit_id,
+        "paths": [path],
+        "provides": [f"{task_id}.implementation"],
+    }
+
+
 class BuildTaskPlannerTests(unittest.TestCase):
+    def test_task_prompt_declares_exact_deliverable_kind_allowlist(self) -> None:
+        """任务规划提示必须声明唯一完整的交付物结构和类型白名单。"""
+
+        prompt = _deliverable_kind_contract_prompt()
+
+        self.assertIn("complete allowlist", prompt)
+        self.assertIn("Any value outside this list will be rejected", prompt)
+        self.assertIn('"id": "stable unique id"', prompt)
+        self.assertIn('"target_id": "formal page, endpoint, entity, or capability id"', prompt)
+        self.assertIn('"paths": ["workspace-relative/path"]', prompt)
+        self.assertIn('"provides": ["semantic.capability"]', prompt)
+        self.assertIn('Singular `path`', prompt)
+        for kind in DELIVERABLE_KINDS:
+            self.assertIn(f"`{kind}`", prompt)
+
+    def test_raw_candidate_reports_precise_deliverable_shape_errors(self) -> None:
+        """原始候选必须在归一化前报告缺失字段和不受支持的单数 path。"""
+
+        errors = build_task_candidate_contract_errors(
+            {
+                "tasks": [
+                    {
+                        "id": "task-page-api",
+                        "unit_id": "page:test-page-1",
+                        "owner": "frontend",
+                        "deliverables": [
+                            {
+                                "kind": "frontend.api_module",
+                                "path": "frontend/src/apis/testPage1.ts",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+
+        self.assertIn("Task task-page-api deliverables[0].id is required.", errors)
+        self.assertIn(
+            "Task task-page-api deliverables[0].target_id is required.", errors
+        )
+        self.assertIn(
+            'Task task-page-api deliverables[0].paths must be a non-empty string array; singular field "path" is not supported.',
+            errors,
+        )
+        self.assertIn(
+            "Task task-page-api deliverables[0].provides must be a non-empty string array.",
+            errors,
+        )
+
     def test_planning_context_mode_uses_pending_units(self) -> None:
         """上下文模式由本轮实际待生成 Unit 决定，而不是只看请求类型。"""
 
@@ -352,6 +421,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("Use `[]` for a root", prompt)
         self.assertIn("JSON array of prerequisite task IDs", prompt)
         self.assertIn("same Unit", prompt)
+        self.assertIn('"paths": ["workspace-relative/path"]', prompt)
+        self.assertIn("Singular `path`", prompt)
         self.assertNotIn("page implementation contract", prompt.lower())
 
     def test_database_endpoint_prompt_requires_bootstrap_task(self) -> None:
@@ -882,10 +953,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
           "workspace_analysis": {"entry_files": ["src/main.tsx"]},
           "tasks": [{
             "id": "task-home",
+            "unit_id": "page:home",
             "owner": "frontend",
             "description": "新增首页",
-            "change_scope": [{"operation": "add", "path": "src/pages/Home.tsx"}],
-            "acceptance_criteria": ["首页可渲染"]
+            "change_scope": [{"operation": "add", "path": "src/pages/Home/index.tsx"}],
+            "deliverables": [{"id": "page:home", "kind": "frontend.page", "target_id": "home", "paths": ["src/pages/Home/index.tsx"], "provides": ["home.render"]}]
           }]
         }
         ```"""
@@ -909,9 +981,96 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         tasks = tasks_from_build_task_plan(plan)
         self.assertEqual(tasks[0]["id"], "task-home")
-        self.assertEqual(tasks[0]["target_files"], ["src/pages/Home.tsx"])
+        self.assertEqual(tasks[0]["target_files"], ["src/pages/Home/index.tsx"])
         self.assertEqual(plan["workspace_analysis"]["inspection_status"], "completed")
         self.assertEqual(plan["prepared_by"]["model"], "test-model")
+
+    def test_malformed_deliverable_is_regenerated_with_precise_feedback(self) -> None:
+        """错误的 path 结构必须以精确字段错误回灌并在下一轮修正。"""
+
+        invalid_response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "task-page-api",
+                        "unit_id": "page:test-page-1",
+                        "owner": "frontend",
+                        "description": "创建页面 API 模块。",
+                        "change_scope": ["frontend/src/apis/testPage1.ts"],
+                        "deliverables": [
+                            {
+                                "kind": "frontend.api_module",
+                                "path": "frontend/src/apis/testPage1.ts",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        valid_response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "task-page-api",
+                        "unit_id": "page:test-page-1",
+                        "owner": "frontend",
+                        "description": "创建页面 API 模块。",
+                        "change_scope": ["frontend/src/apis/testPage1.ts"],
+                        "deliverables": [
+                            {
+                                "id": "api:test-page-1",
+                                "kind": "frontend.api_module",
+                                "target_id": "test-page-1",
+                                "paths": ["frontend/src/apis/testPage1.ts"],
+                                "provides": ["test-page-1.api"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        chat_model = Mock()
+        bound_model = Mock()
+        chat_model.bind.return_value = bound_model
+        bound_model.invoke.side_effect = [
+            SimpleNamespace(
+                content=invalid_response, usage_metadata=None, response_metadata={}
+            ),
+            SimpleNamespace(
+                content=valid_response, usage_metadata=None, response_metadata={}
+            ),
+        ]
+        settings = SimpleNamespace(
+            model_name="test-model",
+            model_api_name="test-model",
+            default_max_tokens=4096,
+            build_task_plan_max_retries=2,
+        )
+
+        with (
+            patch(
+                "app.agents.main.task_preparer.Settings.from_env",
+                return_value=settings,
+            ),
+            patch(
+                "app.agents.main.task_preparer.create_chat_model",
+                return_value=chat_model,
+            ),
+        ):
+            plan = prepare_build_tasks_with_main_agent(
+                {"version": "1.0.0"},
+                build_context={
+                    "planning_context_mode": "page",
+                    "required_unit_ids": ["page:test-page-1"],
+                },
+            )
+
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
+        retry_prompt = bound_model.invoke.call_args_list[1].args[0]
+        self.assertIn("deliverables[0].id is required", retry_prompt)
+        self.assertIn('singular field "path" is not supported', retry_prompt)
+        self.assertNotIn("must declare at least one deliverable", retry_prompt)
 
     def test_invalid_candidate_is_automatically_regenerated(self) -> None:
         """平台边界错误回喂模型自动重生成，不要求用户修正任务拆分。"""
@@ -946,6 +1105,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                             {
                                 "operation": "modify",
                                 "path": "frontend/src/pages/Dashboard/index.tsx",
+                            }
+                        ],
+                        "deliverables": [
+                            {
+                                "id": "page:dashboard",
+                                "kind": "frontend.page",
+                                "target_id": "dashboard",
+                                "paths": ["frontend/src/pages/Dashboard/index.tsx"],
+                                "provides": ["dashboard.render"],
                             }
                         ],
                     }
@@ -1020,6 +1188,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     "path": "backend/src/main/java/demo/Order.java",
                 }
             ],
+            "deliverables": [
+                {
+                    "id": "domain:order",
+                    "kind": "backend.domain_mapping",
+                    "target_id": "Order",
+                    "paths": ["backend/src/main/java/demo/Order.java"],
+                    "provides": ["order.domain"],
+                }
+            ],
         }
         invalid_response = json.dumps({"tasks": [endpoint_task]})
         valid_response = json.dumps(
@@ -1035,6 +1212,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                             {
                                 "operation": "modify",
                                 "path": "backend/pom.xml",
+                            }
+                        ],
+                        "deliverables": [
+                            {
+                                "id": "bootstrap:backend",
+                                "kind": "backend.bootstrap",
+                                "target_id": "backend:bootstrap",
+                                "paths": ["backend/pom.xml"],
+                                "provides": ["backend.bootstrap"],
                             }
                         ],
                     },
@@ -1143,6 +1329,17 @@ class BuildTaskPlannerTests(unittest.TestCase):
                                 "path": "backend/src/main/java/demo/OrdersController.java",
                             }
                         ],
+                        "deliverables": [
+                            {
+                                "id": "controller:orders-list",
+                                "kind": "backend.endpoint_controller",
+                                "target_id": "orders.list",
+                                "paths": [
+                                    "backend/src/main/java/demo/OrdersController.java"
+                                ],
+                                "provides": ["orders.list.endpoint"],
+                            }
+                        ],
                     }
                 ]
             },
@@ -1164,7 +1361,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         bound_model = Mock()
         model.bind.return_value = bound_model
         bound_model.invoke.return_value = SimpleNamespace(
-            content='{"tasks": [{"id": "task", "owner": "frontend", "description": "任务", "change_scope": [{"operation": "modify", "path": "src/task.ts"}]}]}',
+            content='{"tasks": [{"id": "task", "unit_id": "frontend:api-client", "owner": "frontend", "description": "任务", "change_scope": [{"operation": "modify", "path": "src/task.ts"}], "deliverables": [{"id": "api:task", "kind": "frontend.shared_capability", "target_id": "frontend:api-client", "paths": ["src/task.ts"], "provides": ["task.capability"]}]}]}',
             usage_metadata=None,
             response_metadata={},
         )
@@ -1199,12 +1396,13 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "tasks": [
                 {
                     "id": "page-login",
+                    "unit_id": "page:login",
                     "owner": "frontend",
                     "title": "新增登录页",
                     "description": "实现登录表单与提交状态。",
                     "dependencies": [],
                     "change_scope": [
-                        {"operation": "add", "path": "src/pages/Login.tsx", "description": "新增登录页面"},
+                        {"operation": "add", "path": "src/pages/Login/index.tsx", "description": "新增登录页面"},
                         {"operation": "modify", "path": "src/router/index.ts", "description": "注册登录路由"},
                     ],
                     "impact_scope": {
@@ -1215,8 +1413,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     },
                     "can_run_in_parallel": False,
                     "parallel_reason": "修改共享路由表，需要串行。",
-                    "acceptance_criteria": ["访问 /login 可完成表单校验"],
-                    "verification_commands": ["pnpm test"],
+                    "deliverables": [
+                        {
+                            "id": "page:login",
+                            "kind": "frontend.page",
+                            "target_id": "login",
+                            "paths": ["src/pages/Login/index.tsx"],
+                            "provides": ["login.render"],
+                        }
+                    ],
                     "status": "completed",
                 }
             ],
@@ -1237,17 +1442,24 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertNotIn("targetFiles", task)
         self.assertNotIn("acceptanceCriteria", task)
         self.assertNotIn("canRunInParallel", task)
-        self.assertEqual(task["target_files"], ["src/pages/Login.tsx", "src/router/index.ts"])
+        self.assertEqual(task["target_files"], ["src/pages/Login/index.tsx", "src/router/index.ts"])
         self.assertEqual(task["change_scope"][0]["operation"], "add")
         self.assertEqual(task["impact_scope"]["affected_modules"], ["pages", "router"])
         self.assertFalse(task["can_run_in_parallel"])
-        self.assertNotIn("访问 /login 可完成表单校验", task["acceptance_criteria"])
+        self.assertNotIn("acceptance_criteria", task)
         self.assertEqual(
             [check["kind"] for check in task["acceptance_checks"]],
-            ["file_operation", "file_operation", "scope_boundary"],
+            [
+                "file_operation",
+                "file_operation",
+                "scope_boundary",
+                "page_entry",
+                "page_default_export",
+                "page_placeholder",
+            ],
         )
-        self.assertEqual(task["unit_id"], "application:root")
-        self.assertEqual(plan["build_units"]["application:root"]["task_ids"], ["page-login"])
+        self.assertEqual(task["unit_id"], "page:login")
+        self.assertIn("page-login", [item["id"] for item in tasks_from_build_task_plan(plan)])
 
     def test_duplicate_task_ids_are_made_unique_and_parallel_batch_is_recorded(self) -> None:
         project_plan = {"version": "1.0.0", "page_detail_plans": [], "data_sources": []}
@@ -1255,17 +1467,19 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "tasks": [
                 {
                     "id": "page-task",
+                    "unit_id": "page:login",
                     "owner": "frontend",
                     "description": "新增登录页",
-                    "change_scope": [{"operation": "add", "path": "src/pages/Login.tsx"}],
-                    "acceptance_criteria": ["登录页可渲染"],
+                    "change_scope": [{"operation": "add", "path": "src/pages/Login/index.tsx"}],
+                    "deliverables": [{"id": "page:login", "kind": "frontend.page", "target_id": "login", "paths": ["src/pages/Login/index.tsx"], "provides": ["login.render"]}],
                 },
                 {
                     "id": "page-task",
+                    "unit_id": "page:help",
                     "owner": "frontend",
                     "description": "新增帮助页",
-                    "change_scope": [{"operation": "add", "path": "src/pages/Help.tsx"}],
-                    "acceptance_criteria": ["帮助页可渲染"],
+                    "change_scope": [{"operation": "add", "path": "src/pages/Help/index.tsx"}],
+                    "deliverables": [{"id": "page:help", "kind": "frontend.page", "target_id": "help", "paths": ["src/pages/Help/index.tsx"], "provides": ["help.render"]}],
                 },
             ]
         }
@@ -1906,6 +2120,94 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(len(tasks[0]["source_refs"]["pages"]), 1)
         self.assertEqual(tasks[0]["source_refs"]["contracts"], [{"id": "home-api"}])
 
+    def test_task_graph_rejects_duplicate_frontend_endpoint_owners(self) -> None:
+        """不同 API 文件重复实现同一 Endpoint 时必须阻断候选 DAG。"""
+
+        project_plan = {
+            "api_contracts": [
+                {
+                    "id": "role_api",
+                    "endpoints": [
+                        {
+                            "id": "role_api.list",
+                            "method": "GET",
+                            "path": "/api/roles",
+                            "parameters": [],
+                        }
+                    ],
+                    "schemas": {},
+                }
+            ]
+        }
+        tasks = [
+            {
+                "id": task_id,
+                "unit_id": unit_id,
+                "owner": "frontend",
+                "description": f"实现 {task_id}",
+                "change_scope": [{"operation": "add", "path": path}],
+                "deliverables": [
+                    {
+                        "id": f"deliverable:{task_id}",
+                        "kind": "frontend.api_module",
+                        "target_id": task_id,
+                        "paths": [path],
+                        "provides": [f"{task_id}.api"],
+                    }
+                ],
+            }
+            for task_id, unit_id, path in (
+                ("home-api", "frontend:api-client", "frontend/src/apis/homeApi.ts"),
+                ("role-api", "frontend:shell", "frontend/src/apis/role.ts"),
+            )
+        ]
+
+        plan = create_build_task_plan(
+            project_plan,
+            agent_plan={"tasks": tasks},
+            build_context={
+                "required_unit_ids": ["frontend:api-client", "frontend:shell"],
+                "endpoint_ids": ["role_api.list"],
+            },
+        )
+
+        self.assertEqual(plan["status"], "blocked")
+        errors = str(plan["task_graph"]["validation"]["errors"])
+        self.assertIn("role_api + role_api.list", errors)
+        self.assertIn("home-api (frontend/src/apis/homeApi.ts)", errors)
+        self.assertIn("role-api (frontend/src/apis/role.ts)", errors)
+
+    def test_frontend_endpoint_owner_validation_ignores_repair_task(self) -> None:
+        """同一路径的父任务与受限 Repair 不得被误判为两个实现 owner。"""
+
+        check = {
+            "kind": "frontend.api_contract",
+            "target_paths": ["frontend/src/apis/roleApi.ts"],
+            "expected": {
+                "endpoints": [
+                    {
+                        "api_contract_id": "role_api",
+                        "endpoint_id": "role_api.list",
+                    }
+                ]
+            },
+        }
+        tasks = [
+            {
+                "id": "role-api",
+                "owner": "frontend",
+                "business_acceptance_checks": [check],
+            },
+            {
+                "id": "repair:role-api:business",
+                "kind": "repair",
+                "owner": "frontend",
+                "business_acceptance_checks": [check],
+            },
+        ]
+
+        self.assertEqual(frontend_endpoint_ownership_errors(tasks), [])
+
     def test_compiles_unit_dependencies_and_source_refs(self) -> None:
         """页面任务只继承前端公共 Unit，后端 Unit 仅保留接口来源引用。"""
 
@@ -2066,6 +2368,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     else {}
                 ),
                 "change_scope": [{"operation": "modify", "path": path}],
+                "deliverables": [_test_deliverable(task_id, unit_id, owner, path)],
             }
             for task_id, unit_id, owner, path in code_tasks
         ]
@@ -2198,6 +2501,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "unit_id": "backend:endpoint:user_api:user.create",
                         "owner": "backend",
                         "description": "实现用户创建接口。",
+                        "deliverables": [
+                            {
+                                "id": "controller:user-create",
+                                "kind": "backend.endpoint_controller",
+                                "target_id": "user.create",
+                                "paths": ["Backend/UserApi.java"],
+                                "provides": ["user.create.endpoint"],
+                            }
+                        ],
                         "change_scope": [
                             {"operation": "modify", "path": "Backend/UserApi.java"}
                         ],
@@ -2207,6 +2519,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "unit_id": "page:users",
                         "owner": "frontend",
                         "description": "实现用户页面。",
+                        "deliverables": [
+                            {
+                                "id": "capability:users-page",
+                                "kind": "frontend.shared_capability",
+                                "target_id": "users",
+                                "paths": ["frontend/src/pages/Users.tsx"],
+                                "provides": ["users.page"],
+                            }
+                        ],
                         "change_scope": [
                             {"operation": "modify", "path": "frontend/src/pages/Users.tsx"}
                         ],

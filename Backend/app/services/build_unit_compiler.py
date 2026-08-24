@@ -10,13 +10,19 @@ def apply_unit_compilation(
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
     build_context: dict[str, Any],
+    *,
+    preserve_compiled_task_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """补齐任务 Unit 来源，并把 Unit depends_on 边落成任务依赖边。"""
+    """补齐本轮任务 Unit 来源，并为全量任务重建 Unit 依赖边。"""
 
     units = build_task_plan.get("build_units")
     units = units if isinstance(units, dict) else {}
+    preserved_ids = preserve_compiled_task_ids or set()
     with_sources = [
-        _with_task_unit_metadata(task, units, build_context) for task in tasks
+        deepcopy(task)
+        if str(task.get("id") or "") in preserved_ids
+        else _with_task_unit_metadata(task, units, build_context)
+        for task in tasks
     ]
     return _apply_unit_task_dependencies(
         with_sources, units, build_task_plan.get("unit_graph")

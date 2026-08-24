@@ -94,6 +94,8 @@ class ProjectState(TypedDict, total=False):
     workspace_scan_progress: dict[str, Any]
     code_graph_index: dict[str, Any]
     build_execution_scope: dict[str, str]
+    last_persisted_build_execution_scope: dict[str, str] | None
+    build_task_plan_persisted: bool
     execution_resource_claims: list[dict[str, Any]]
     build_execution_slice: dict[str, Any]
     build_context: dict[str, Any]

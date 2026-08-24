@@ -136,6 +136,15 @@ def ensure_build_unit_skeleton(
     }
 
 
+def build_unit_skeleton_input_fingerprint(
+    project_plan: dict[str, Any],
+    workspace_snapshot: dict[str, Any] | None,
+) -> str:
+    """返回当前项目计划与工作区输入的 Unit 骨架指纹，供增量 DAG 判断新鲜度。"""
+
+    return _skeleton_fingerprint(project_plan, workspace_snapshot)
+
+
 def _build_units(
     project_plan: dict[str, Any],
     existing_units: Any,

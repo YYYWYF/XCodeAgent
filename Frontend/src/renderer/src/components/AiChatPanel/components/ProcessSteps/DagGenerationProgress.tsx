@@ -367,7 +367,7 @@ function ArtifactOutput({
   )
 }
 
-/** 渲染单个任务，默认收起文件和验收标准。 */
+/** 渲染单个任务，默认收起文件、交付物和两类验收检查。 */
 function DagTask({ index, task }: { index: number; task: DagGenerationTaskRecord }): ReactElement {
   return (
     <li>
@@ -388,14 +388,31 @@ function DagTask({ index, task }: { index: number; task: DagGenerationTaskRecord
         </summary>
         <div className={cx('dag-generation-task-details')}>
           <TaskDetailList label="变更文件" values={task.changePaths} />
-          <TaskDetailList label="验收标准" values={task.acceptanceCriteria} />
+          <TaskDetailList
+            label="工程检查"
+            values={checkDescriptions(task.engineeringAcceptanceChecks)}
+          />
+          <TaskDetailList
+            label="业务检查"
+            values={checkDescriptions(task.businessAcceptanceChecks)}
+          />
         </div>
       </details>
     </li>
   )
 }
 
-/** 渲染任务的文件或验收标准列表，并为缺省信息提供明确反馈。 */
+/** 从结构化检查提取安全的用户可读描述，不把业务检查误称为验收标准。 */
+function checkDescriptions(value: Array<Record<string, unknown>>): string[] {
+  return value.flatMap((item) => {
+    const description = typeof item.description === 'string' ? item.description.trim() : ''
+    const kind = typeof item.kind === 'string' ? item.kind.trim() : ''
+    if (!description) return []
+    return [kind ? `${kind}：${description}` : description]
+  })
+}
+
+/** 渲染任务的文件或结构化检查列表，并为缺省信息提供明确反馈。 */
 function TaskDetailList({ label, values }: { label: string; values: string[] }): ReactElement {
   return (
     <section>

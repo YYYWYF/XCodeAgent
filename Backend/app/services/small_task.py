@@ -29,7 +29,7 @@ def build_small_task_packet(
     *,
     source: str = "integration_test",
 ) -> dict[str, Any]:
-    """构造有界任务包，把任务、失败证据、上下文和验收标准一次交给 Agent。"""
+    """构造有界任务包，把结构化工程与业务检查及失败证据交给 Agent。"""
 
     allowed_paths = _task_paths(task)
     return {
@@ -44,9 +44,21 @@ def build_small_task_packet(
         "targetFiles": _string_list(task.get("target_files"), limit=100),
         "candidateFiles": _string_list(task.get("target_files"), limit=100),
         "changeScope": _bounded_items(task.get("change_scope"), limit=100),
-        "acceptanceCriteria": _string_list(
-            task.get("acceptance_criteria") or task.get("acceptanceCriteria"),
-            limit=20,
+        "engineeringAcceptanceChecks": _bounded_items(
+            task.get("acceptance_checks") or task.get("engineering_acceptance_checks"),
+            limit=40,
+        ),
+        "businessAcceptanceChecks": _bounded_items(
+            task.get("business_acceptance_checks") or task.get("businessAcceptanceChecks"),
+            limit=40,
+        ),
+        "businessAcceptanceEvidence": _bounded_items(
+            task.get("business_acceptance_evidence") or task.get("businessAcceptanceEvidence"),
+            limit=40,
+        ),
+        "businessAcceptanceSummary": _bounded_value(
+            task.get("business_acceptance_summary") or task.get("businessAcceptanceSummary") or {},
+            limit=2_000,
         ),
         "failureEvidence": _bounded_value(
             task.get("failure_evidence") or task.get("failureEvidence") or {},
@@ -257,7 +269,9 @@ def _packet_preview(packet: dict[str, Any]) -> dict[str, Any]:
         "taskId": packet.get("taskId"),
         "owner": packet.get("owner"),
         "allowedPaths": packet.get("allowedPaths", [])[:100],
-        "acceptanceCriteria": packet.get("acceptanceCriteria", [])[:20],
+        "engineeringAcceptanceChecks": packet.get("engineeringAcceptanceChecks", [])[:40],
+        "businessAcceptanceChecks": packet.get("businessAcceptanceChecks", [])[:40],
+        "businessAcceptanceSummary": packet.get("businessAcceptanceSummary", {}),
         "source": packet.get("source"),
     }
 

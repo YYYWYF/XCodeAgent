@@ -55,9 +55,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             context["executable_details"]["page_detail_plans"][0]["acceptance_criteria"],
             business_criteria,
         )
-        self.assertFalse(
-            any("employee" in criterion or "manager" in criterion for criterion in compiled["acceptance_criteria"])
-        )
+        self.assertNotIn("acceptance_criteria", compiled)
         self.assertEqual(
             [check["kind"] for check in compiled["acceptance_checks"]],
             ["file_operation", "scope_boundary"],
@@ -237,18 +235,18 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 status="completed",
                 code_change_set={
                     "files": [
-                        {"path": path, "changeType": "added"}
-                        for path in (
-                            "frontend/src/apis/leaveApi.ts",
-                            "frontend/src/pages/LeaveListPage/index.tsx",
-                        )
+                        {"path": "frontend/src/apis/leaveApi.ts", "changeType": "added"},
+                        {
+                            "path": "frontend/src/pages/LeaveListPage/index.tsx",
+                            "changeType": "modified",
+                        },
                     ]
                 },
                 workspace_root=workspace,
             )
 
-        self.assertTrue(any("service.get" in error for error in errors))
-        self.assertTrue(any("Schema 字段" in error for error in errors))
+        # API method/path 和字段语义已迁移到 business_acceptance，工程验收只负责文件状态。
+        self.assertFalse(errors)
 
     def test_repair_add_check_accepts_modified_existing_file(self) -> None:
         """修复已被失败尝试创建的文件时，added 检查应接受本轮 modified 差异。"""
@@ -379,9 +377,9 @@ class EngineeringAcceptanceTests(unittest.TestCase):
 
         self.assertEqual(
             [check["kind"] for check in recovered["acceptance_checks"]],
-            ["file_operation"],
+            ["file_operation", "scope_boundary"],
         )
-        self.assertEqual(recovered["acceptance_criteria"], ["pom.xml 必须被修改。"])
+        self.assertNotIn("acceptance_criteria", recovered)
 
     def test_verifier_normalizes_legacy_infrastructure_task_before_checking(self) -> None:
         """直接调用验收器时也必须过滤旧配置任务上的接口契约检查。"""
@@ -419,7 +417,10 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             )
 
         self.assertFalse(errors)
-        self.assertEqual([item["kind"] for item in evidence], ["file_operation"])
+        self.assertEqual(
+            [item["kind"] for item in evidence],
+            ["file_operation", "scope_boundary"],
+        )
 
     def test_confirmed_entity_binding_supplies_endpoint_source_type(self) -> None:
         """接口来源必须从已确认 EntitySourceBinding 推导。"""
@@ -438,15 +439,9 @@ class EngineeringAcceptanceTests(unittest.TestCase):
         ]
 
         compiled = compile_engineering_acceptance([task], context)[0]
-        contract_check = next(
-            check
-            for check in compiled["acceptance_checks"]
-            if check["kind"] == "backend_contract_binding"
-        )
-
-        self.assertEqual(
-            contract_check["expected"]["endpoints"][0]["source_type"],
-            "external_api",
+        self.assertNotIn(
+            "backend_contract_binding",
+            [check["kind"] for check in compiled["acceptance_checks"]],
         )
 
     def test_backend_contract_requires_explicit_snake_case_wire_mapping(self) -> None:
@@ -531,10 +526,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 workspace_root=workspace,
             )
 
-        self.assertEqual(
-            sum(error.count("employee_name") for error in missing_errors),
-            1,
-        )
+        self.assertFalse(missing_errors)
         self.assertFalse(mapped_errors)
         self.assertFalse(global_mapping_errors)
 
@@ -644,17 +636,12 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 workspace_root=workspace,
             )
 
-        contract_check = next(
-            check
-            for check in compiled["acceptance_checks"]
-            if check["kind"] == "backend_contract_binding"
-        )
         self.assertNotIn(
-            "backend/dto/LeaveRecordDTO.java",
-            contract_check["target_paths"],
+            "backend_contract_binding",
+            [check["kind"] for check in compiled["acceptance_checks"]],
         )
         self.assertFalse(errors)
-        self.assertTrue(any("employee_name" in error for error in missing_mapping_errors))
+        self.assertFalse(missing_mapping_errors)
 
     def test_frontend_page_checks_only_confirmed_response_bindings(self) -> None:
         """页面不必消费响应全部字段，只验证 PageDetail 明确声明的绑定字段。"""
@@ -745,7 +732,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             }
         )
 
-        self.assertNotIn("管理员可以查看全部业务记录。", task["acceptance_criteria"])
+        self.assertNotIn("acceptance_criteria", task)
         self.assertEqual(
             [check["kind"] for check in task["acceptance_checks"]],
             ["file_operation", "scope_boundary"],
@@ -767,13 +754,35 @@ class EngineeringAcceptanceTests(unittest.TestCase):
 
         errors = engineering_acceptance_contract_errors(task)
 
-        self.assertTrue(any("rerun prepare_build_tasks" in error for error in errors))
-        self.assertTrue(any("no deterministic contract binding" in error for error in errors))
+        self.assertFalse(errors)
+        self.assertEqual(
+            [check["kind"] for check in task["acceptance_checks"]],
+            ["file_operation", "scope_boundary"],
+        )
 
     def test_task_plan_compiles_contract_checks_from_build_context(self) -> None:
         """真实任务规划入口必须把 executable_details 交给工程验收编译器。"""
 
         task, context = self._frontend_contract_fixture()
+        task = {
+            **task,
+            "deliverables": [
+                {
+                    "id": "api-module:leave",
+                    "kind": "frontend.api_module",
+                    "target_id": "leave-api",
+                    "paths": ["frontend/src/apis/leaveApi.ts"],
+                    "provides": ["leave.list.client"],
+                },
+                {
+                    "id": "page:leave-list",
+                    "kind": "frontend.page",
+                    "target_id": "leave-list",
+                    "paths": ["frontend/src/pages/LeaveListPage/index.tsx"],
+                    "provides": ["leave-list.render"],
+                },
+            ],
+        }
         plan = create_build_task_plan(
             {
                 "version": "1.0.0",
@@ -784,10 +793,13 @@ class EngineeringAcceptanceTests(unittest.TestCase):
         )
         compiled = plan["task_registry"][task["id"]]
 
-        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+        self.assertTrue(
+            plan["task_graph"]["validation"]["is_valid"],
+            plan["task_graph"]["validation"]["errors"],
+        )
         self.assertIn(
-            "frontend_contract_binding",
-            [check["kind"] for check in compiled["acceptance_checks"]],
+            "frontend.api_contract",
+            [check["kind"] for check in compiled["business_acceptance_checks"]],
         )
 
     def test_batch_scope_detects_changes_outside_all_task_paths(self) -> None:
@@ -846,7 +858,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             [check["kind"] for check in compiled["acceptance_checks"]],
             ["database_gap", "database_approval"],
         )
-        self.assertFalse(any("管理员" in item for item in compiled["acceptance_criteria"]))
+        self.assertNotIn("acceptance_criteria", compiled)
 
     def test_database_post_verification_rescans_real_schema_gaps(self) -> None:
         """数据库执行后必须重新扫描真实 Schema，仍缺字段时不得报告完成。"""

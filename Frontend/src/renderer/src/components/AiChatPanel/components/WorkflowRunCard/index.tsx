@@ -1186,7 +1186,7 @@ function BuildExecutionTaskHeader({
 }
 
 function BuildExecutionTaskDetails({ task }: { task: WorkflowBuildExecutionTask }): ReactElement {
-  /** 展示单个构建任务的定位、失败原因、文件范围和验收点。 */
+  /** 展示单个构建任务的定位、失败原因、文件范围和两类检查。 */
 
   const dependencies = taskDependencies(task)
   const paths = [
@@ -1195,12 +1195,24 @@ function BuildExecutionTaskDetails({ task }: { task: WorkflowBuildExecutionTask 
     ...stringList(task.allowed_paths),
     ...stringList(task.allowedPaths)
   ]
-  const acceptance = dedupeLocalizedTaskTexts(
-    [...stringList(task.acceptanceCriteria), ...stringList(task.acceptance_criteria)],
-    task
+  const engineeringChecks = structuredCheckDescriptions(
+    task.engineeringAcceptanceChecks ?? task.engineering_acceptance_checks
+  )
+  const businessChecks = businessAcceptanceDetails(
+    task.businessAcceptanceChecks ?? task.business_acceptance_checks,
+    task.businessAcceptanceEvidence ?? task.business_acceptance_evidence
+  )
+  const engineeringFailures = acceptanceFailureDetails(
+    task.acceptanceEvidence ?? task.acceptance_evidence,
+    'engineering'
+  )
+  const businessFailures = acceptanceFailureDetails(
+    task.businessAcceptanceEvidence ?? task.business_acceptance_evidence,
+    'business'
   )
   const failureReason = taskFailureReason(task)
   const failureCategory = taskFailureCategoryText(task.failure_category)
+  const hasAcceptanceFailures = engineeringFailures.length > 0 || businessFailures.length > 0
   return (
     <div className={cx('workflow-build-task-details')}>
       <div className={cx('workflow-build-task-detail-grid')}>
@@ -1213,7 +1225,15 @@ function BuildExecutionTaskDetails({ task }: { task: WorkflowBuildExecutionTask 
       {task.status === 'failed' && (
         <div className={cx('workflow-build-task-detail-block', 'workflow-build-task-failure')}>
           <Text type="secondary">失败原因</Text>
-          <Text>{failureReason || '任务执行失败，但后端未返回具体原因。'}</Text>
+          {engineeringFailures.length > 0 && (
+            <AcceptanceFailureGroup items={engineeringFailures} label="工程验收" />
+          )}
+          {businessFailures.length > 0 && (
+            <AcceptanceFailureGroup items={businessFailures} label="业务验收" />
+          )}
+          {!hasAcceptanceFailures && (
+            <Text>{failureReason || '任务执行失败，但后端未返回具体原因。'}</Text>
+          )}
           {failureCategory && <Tag color="red">{failureCategory}</Tag>}
         </div>
       )}
@@ -1227,13 +1247,30 @@ function BuildExecutionTaskDetails({ task }: { task: WorkflowBuildExecutionTask 
           </div>
         </div>
       )}
-      {acceptance.length > 0 && (
+      {engineeringChecks.length > 0 && (
         <div className={cx('workflow-build-task-detail-block')}>
-          <Text type="secondary">验收点</Text>
+          <Text type="secondary">工程检查</Text>
           <ul className={cx('workflow-build-task-detail-list')}>
-            {acceptance.map((item) => (
+            {engineeringChecks.map((item) => (
               <li key={item}>
                 <Text>{item}</Text>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {businessChecks.length > 0 && (
+        <div className={cx('workflow-build-task-detail-block')}>
+          <Text type="secondary">业务检查</Text>
+          <ul className={cx('workflow-build-task-detail-list')}>
+            {businessChecks.map((item) => (
+              <li className={cx('workflow-build-business-check')} key={item.key}>
+                <div className={cx('workflow-build-business-check-header')}>
+                  <Text>{item.title}</Text>
+                  <Tag color={businessAcceptanceStatusColor(item.status)}>
+                    {businessAcceptanceStatusText(item.status)}
+                  </Tag>
+                </div>
               </li>
             ))}
           </ul>
@@ -1290,6 +1327,29 @@ function BuildTaskDetailItem({ label, value }: { label: string; value: string })
   )
 }
 
+function AcceptanceFailureGroup({
+  items,
+  label
+}: {
+  items: string[]
+  label: string
+}): ReactElement {
+  /** 在统一失败区域按验收类型展示具体错误。 */
+
+  return (
+    <div className={cx('workflow-build-acceptance-failure-group')}>
+      <Text strong>{label}</Text>
+      <ul className={cx('workflow-build-task-detail-list')}>
+        {items.map((item) => (
+          <li key={item}>
+            <Text type="danger">{item}</Text>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function taskDependencies(task: WorkflowBuildExecutionTask): string[] {
   /** 读取任务依赖，兼容 dependencies 与 dependsOn 字段。 */
 
@@ -1329,14 +1389,6 @@ function localizeTaskText(value: string, task: WorkflowBuildExecutionTask): stri
   const generated = generatedTaskTranslation(text, task)
   if (generated) return generated
   return `请完成任务 ${taskId(task)} 的实现与验证。`
-}
-
-function dedupeLocalizedTaskTexts(values: string[], task: WorkflowBuildExecutionTask): string[] {
-  /** 先中文化再去重，避免多条英文兜底翻成同一句后重复展示。 */
-
-  return dedupeStrings(
-    values.map((item) => localizeTaskText(item, task)).filter((item) => item.trim())
-  )
 }
 
 function containsChinese(value: string): boolean {
@@ -1956,6 +2008,111 @@ function answerOtherText(value: WorkflowClarificationAnswer | undefined): string
   return typeof value === 'object' && value && !Array.isArray(value) && 'other' in value
     ? String(value.other || '')
     : ''
+}
+
+/** 将工程验收检查投射为用户可读的结构化说明。 */
+function structuredCheckDescriptions(value: unknown): string[] {
+  return objectList(value).flatMap((item) => {
+    const description = stringValue(item.description).trim()
+    if (!description) return []
+    const kind = stringValue(item.kind).trim()
+    const prefix = kind ? `${kind}：` : ''
+    return [`${prefix}${description}`]
+  })
+}
+
+type BusinessAcceptanceDetail = {
+  key: string
+  title: string
+  status: string
+  evidence: string
+}
+
+/** 提取失败或阻断的验收证据，工程错误优先使用精确 error 字段。 */
+function acceptanceFailureDetails(
+  value: unknown,
+  kind: 'engineering' | 'business'
+): string[] {
+  return objectList(value).flatMap((item) => {
+    const status = stringValue(item.status).trim()
+    if (!['failed', 'blocked'].includes(status)) return []
+    const detail = stringValue(
+      kind === 'engineering' ? item.error || item.evidence : item.evidence || item.error
+    ).trim()
+    if (!detail) return []
+    const checkId = stringValue(item.check_id ?? item.id).trim()
+    return [checkId ? `[${checkId}] ${detail}` : detail]
+  })
+}
+
+/** 合并业务检查计划和执行证据，避免运行态任务仍被显示为待检查。 */
+function businessAcceptanceDetails(
+  value: unknown,
+  evidenceValue: unknown
+): BusinessAcceptanceDetail[] {
+  const evidenceItems = objectList(evidenceValue)
+  const evidenceById = new Map(
+    evidenceItems.flatMap((item) => {
+      const checkId = stringValue(item.check_id ?? item.id).trim()
+      return checkId ? [[checkId, item] as const] : []
+    })
+  )
+  const matchedIds = new Set<string>()
+  const details = objectList(value).flatMap((item, index) => {
+    const checkId = stringValue(item.id ?? item.check_id).trim()
+    const evidenceItem = evidenceById.get(checkId) || {}
+    if (checkId) matchedIds.add(checkId)
+    const description = stringValue(item.description).trim()
+    const kind = stringValue(item.kind).trim()
+    const evidence = stringValue(evidenceItem.evidence || item.evidence).trim()
+    const status = stringValue(evidenceItem.status || item.status).trim() || 'pending'
+    const title = description || checkId || kind
+    if (!title && !evidence) return []
+    return [
+      {
+        key: checkId || `${kind || 'business-check'}-${index}`,
+        title: kind && description ? `${kind}：${description}` : title || '业务检查',
+        status,
+        evidence
+      }
+    ]
+  })
+  const unmatchedEvidence = evidenceItems.flatMap((item, index) => {
+    const checkId = stringValue(item.check_id ?? item.id).trim()
+    if (checkId && matchedIds.has(checkId)) return []
+    const kind = stringValue(item.kind).trim()
+    const evidence = stringValue(item.evidence).trim()
+    if (!checkId && !kind && !evidence) return []
+    return [
+      {
+        key: checkId || `${kind || 'business-evidence'}-${index}`,
+        title: kind ? `${kind}：${checkId || '业务检查'}` : checkId || '业务检查',
+        status: stringValue(item.status).trim() || 'pending',
+        evidence
+      }
+    ]
+  })
+  return [...details, ...unmatchedEvidence]
+}
+
+/** 将业务验收状态转换为中文，避免任务卡片直接显示协议枚举。 */
+function businessAcceptanceStatusText(status: string): string {
+  return (
+    {
+      passed: '通过',
+      failed: '失败',
+      blocked: '阻断',
+      pending: '待检查'
+    }[status] || status
+  )
+}
+
+/** 为业务验收状态选择与当前主题兼容的 Ant Design 标签色。 */
+function businessAcceptanceStatusColor(status: string): string {
+  if (status === 'passed') return 'green'
+  if (status === 'failed') return 'red'
+  if (status === 'blocked') return 'orange'
+  return 'default'
 }
 
 function objectValue(value: unknown): Record<string, unknown> {

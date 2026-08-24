@@ -56,10 +56,11 @@ def _task(
     *,
     status: str = "pending",
     dependencies: list[str] | None = None,
+    with_deliverable: bool = False,
 ) -> dict:
     """构造具备稳定 Unit、状态和依赖的最小可调度任务。"""
 
-    return {
+    task = {
         "id": task_id,
         "unit_id": unit_id,
         "owner": "frontend",
@@ -74,9 +75,146 @@ def _task(
         ],
         "target_files": [f"frontend/src/{task_id}.ts"],
     }
+    if with_deliverable:
+        # 新生成任务必须显式声明交付物；历史基线任务刻意保留缺失字段以覆盖增量兼容边界。
+        task["deliverables"] = [
+            {
+                "id": f"capability:{task_id}",
+                "kind": "frontend.shared_capability",
+                "target_id": unit_id,
+                "paths": [f"frontend/src/{task_id}.ts"],
+                "provides": [f"{task_id}.capability"],
+            }
+        ]
+    return task
+
+
+def _page_task(task_id: str, page_id: str, page_key: str) -> dict:
+    """构造带页面交付物的任务，供跨页面增量合并测试使用。"""
+
+    task = _task(task_id, f"page:{page_id}", with_deliverable=True)
+    page_path = f"frontend/src/pages/{page_key}/index.tsx"
+    task["change_scope"] = [
+        {
+            "operation": "modify",
+            "path": page_path,
+            "description": "实现页面业务内容。",
+        }
+    ]
+    task["target_files"] = [page_path]
+    task["deliverables"] = [
+        {
+            "id": f"page:{page_id}",
+            "kind": "frontend.page",
+            "target_id": page_id,
+            "paths": [page_path],
+            "provides": [f"{page_id}.render"],
+        }
+    ]
+    return task
 
 
 class BuildTaskPlanRecoveryTests(unittest.TestCase):
+    def test_incremental_page_merge_preserves_retained_business_acceptance(self) -> None:
+        """生成新页面时不得用当前页面契约重编译历史页面的业务检查。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "page_implementation_contracts": [
+                {
+                    "pageId": "home",
+                    "requiredEndpointIds": ["shared.list"],
+                },
+                {
+                    "pageId": "test-page-1",
+                    "requiredEndpointIds": ["shared.list"],
+                },
+            ],
+            "api_contracts": [
+                {
+                    "id": "shared-api",
+                    "endpoints": [
+                        {
+                            "id": "shared.list",
+                            "method": "GET",
+                            "path": "/api/shared",
+                        }
+                    ],
+                    "schemas": {},
+                }
+            ],
+        }
+        skeleton = _base_unit_plan("page:home", "page:test-page-1")
+        home_contract = project_plan["page_implementation_contracts"][0]
+        home_context = {
+            "target": {"type": "page", "id": "home", "page_key": "Home"},
+            "required_unit_ids": ["page:home"],
+            "page_implementation_contract": home_contract,
+            "endpoint_ids": ["shared.list"],
+            "source_refs": {"page_implementation_contract": {"id": "home"}},
+        }
+        base_plan = create_build_task_plan(
+            project_plan,
+            agent_plan={"tasks": [_page_task("home-task", "home", "Home")]},
+            base_build_task_plan=skeleton,
+            build_context=home_context,
+        )
+        original_home_task = deepcopy(base_plan["task_registry"]["home-task"])
+        test_contract = project_plan["page_implementation_contracts"][1]
+        test_context = {
+            "target": {
+                "type": "page",
+                "id": "test-page-1",
+                "page_key": "TestPage1",
+            },
+            "required_unit_ids": ["page:test-page-1"],
+            "page_implementation_contract": test_contract,
+            "endpoint_ids": ["shared.list"],
+            "source_refs": {
+                "page_implementation_contract": {"id": "test-page-1"}
+            },
+        }
+        prepared_plan = create_build_task_plan(
+            project_plan,
+            agent_plan={
+                "tasks": [
+                    _page_task("test-page-task", "test-page-1", "TestPage1")
+                ]
+            },
+            base_build_task_plan=base_plan,
+            build_context=test_context,
+        )
+
+        merged = _merge_prepared_scope_tasks(
+            base_plan,
+            prepared_plan,
+            test_context,
+            project_plan=project_plan,
+        )
+
+        retained_home_task = merged["task_registry"]["home-task"]
+        generated_test_task = merged["task_registry"]["test-page-task"]
+        self.assertEqual(
+            retained_home_task["source_refs"], original_home_task["source_refs"]
+        )
+        self.assertEqual(
+            retained_home_task["business_acceptance_checks"],
+            original_home_task["business_acceptance_checks"],
+        )
+        self.assertEqual(
+            retained_home_task["business_acceptance_checks"][0]["sources"][0][
+                "target_id"
+            ],
+            "home",
+        )
+        self.assertEqual(
+            generated_test_task["business_acceptance_checks"][0]["sources"][0][
+                "target_id"
+            ],
+            "test-page-1",
+        )
+        self.assertTrue(merged["task_graph"]["validation"]["is_valid"])
+
     def test_invalid_checkpoint_falls_back_to_last_valid_persisted_dag(self) -> None:
         """无效 checkpoint 不得覆盖工作区中最后一次通过校验的 DAG。"""
 
@@ -141,7 +279,11 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
             agent_plan={
                 "tasks": [
                     {
-                        **_task("new-dashboard-task", "page:dashboard"),
+                        **_task(
+                            "new-dashboard-task",
+                            "page:dashboard",
+                            with_deliverable=True,
+                        ),
                         "description": "重新生成概览页。",
                     }
                 ]
@@ -159,6 +301,11 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
         self.assertEqual(
             set(merged["task_registry"]),
             {"shared-shell-task", "new-dashboard-task"},
+        )
+        self.assertIn("deliverables", merged["task_registry"]["shared-shell-task"])
+        self.assertIn(
+            "business_acceptance_checks",
+            merged["task_registry"]["shared-shell-task"],
         )
         self.assertTrue(merged["task_graph"]["validation"]["is_valid"])
 
@@ -196,7 +343,11 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
             agent_plan={
                 "tasks": [
                     {
-                        **_task("new-dashboard-task", "page:dashboard"),
+                        **_task(
+                            "new-dashboard-task",
+                            "page:dashboard",
+                            with_deliverable=True,
+                        ),
                         "description": "重新生成概览页。",
                     }
                 ]

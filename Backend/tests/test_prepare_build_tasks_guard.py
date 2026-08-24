@@ -171,7 +171,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "timeline": [],
                 }
             )
-
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["technical_plan"]["confirmation_status"], "confirmed")
 
@@ -244,6 +243,83 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 {"workspace": workspace},
                 {"artifact_type": "technical-plan", "confirmation_status": "confirmed"},
                 current_scope,
+            )
+
+        self.assertIsNone(result)
+
+    def test_same_application_scope_legacy_plan_does_not_bypass_generation(self) -> None:
+        """同为 application scope 时，缺少当前任务字段的旧 DAG 也必须重新生成。"""
+
+        scope = {"type": "application", "targetId": "application"}
+        plan = {
+            "schema_version": "build-dag.v3",
+            "status": "ready",
+            "task_graph": {
+                "nodes": ["old-orders-task"],
+                "topological_order": ["old-orders-task"],
+                "validation": {"is_valid": True, "errors": []},
+            },
+            "execution": {"batches": []},
+            "task_registry": {
+                "old-orders-task": {
+                    "id": "old-orders-task",
+                    "unit_id": "page:orders",
+                    "owner": "frontend",
+                    "target_files": ["src/pages/Orders/index.tsx"],
+                }
+            },
+            "confirmation_status": "pending",
+            "build_execution_scope": scope,
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            result = _handle_build_task_plan_confirmation(
+                {"workspace": workspace},
+                {"artifact_type": "technical-plan", "confirmation_status": "confirmed"},
+                scope,
+            )
+
+        self.assertIsNone(result)
+
+    def test_same_application_scope_stale_unit_fingerprint_does_not_bypass_generation(self) -> None:
+        """任务字段完整但 Unit 输入指纹过期时，也不能复用旧 application DAG。"""
+
+        scope = {"type": "application", "targetId": "application"}
+        plan = {
+            "schema_version": "build-dag.v3",
+            "status": "ready",
+            "task_graph": {
+                "nodes": ["old-orders-task"],
+                "topological_order": ["old-orders-task"],
+                "validation": {"is_valid": True, "errors": []},
+            },
+            "execution": {"batches": []},
+            "task_registry": {
+                "old-orders-task": {
+                    "id": "old-orders-task",
+                    "unit_id": "page:orders",
+                    "owner": "frontend",
+                    "deliverables": [],
+                    "acceptance_checks": [],
+                    "business_acceptance_checks": [],
+                }
+            },
+            "unit_skeleton": {"input_fingerprint": "fingerprint-from-previous-plan"},
+            "confirmation_status": "confirmed",
+            "build_execution_scope": scope,
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            result = _handle_build_task_plan_confirmation(
+                {"workspace": workspace},
+                {"artifact_type": "technical-plan", "confirmation_status": "confirmed"},
+                scope,
             )
 
         self.assertIsNone(result)
@@ -335,6 +411,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "unit_id": "backend:endpoint:orders-api:orders.list",
                         "owner": "backend",
                         "description": "实现订单接口",
+                        "deliverables": [{"id": "controller:orders", "kind": "backend.endpoint_controller", "target_id": "orders.list", "paths": ["api/orders.py"], "provides": ["orders.endpoint"]}],
                         "change_scope": [{"path": "api/orders.py"}],
                     },
                     {
@@ -343,6 +420,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "owner": "frontend",
                         "description": "实现订单页面",
                         "dependencies": ["orders-api-task"],
+                        "deliverables": [{"id": "capability:orders-page", "kind": "frontend.shared_capability", "target_id": "orders", "paths": ["src/pages/Orders.tsx"], "provides": ["orders.page"]}],
                         "change_scope": [{"path": "src/pages/Orders.tsx"}],
                     },
                 ]
@@ -415,6 +493,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "unit_id": "backend:endpoint:customers-api:customers.list",
                         "owner": "backend",
                         "description": "实现客户接口",
+                        "deliverables": [{"id": "controller:customers", "kind": "backend.endpoint_controller", "target_id": "customers.list", "paths": ["api/customers.py"], "provides": ["customers.endpoint"]}],
                         "change_scope": [{"path": "api/customers.py"}],
                     },
                     {
@@ -423,6 +502,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "owner": "frontend",
                         "description": "实现客户页面",
                         "dependencies": ["customers-api-task"],
+                        "deliverables": [{"id": "capability:customers-page", "kind": "frontend.shared_capability", "target_id": "customers", "paths": ["src/pages/Customers.tsx"], "provides": ["customers.page"]}],
                         "change_scope": [{"path": "src/pages/Customers.tsx"}],
                     },
                 ]
@@ -519,6 +599,29 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             return_value=agent_plan,
         ):
             project_plan_path = _write_current_plan(workspace, project_plan)
+            persisted_plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            persisted_plan_path.parent.mkdir(parents=True, exist_ok=True)
+            persisted_plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "build-dag.v3",
+                        "status": "ready",
+                        "task_registry": {},
+                        "task_graph": {
+                            "nodes": [],
+                            "edges": [],
+                            "topological_order": [],
+                            "validation": {"is_valid": True, "errors": []},
+                        },
+                        "execution": {"batches": []},
+                        "build_execution_scope": {
+                            "type": "page",
+                            "targetId": "dashboard",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
             result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
@@ -529,10 +632,24 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "timeline": [],
                 }
             )
+            persisted_after = json.loads(persisted_plan_path.read_text(encoding="utf-8"))
 
         self.assertEqual(result["status"], "failed")
         self.assertNotIn("clarification", result)
         self.assertIn("page:dashboard", result["error"])
+        self.assertEqual(
+            result["build_execution_scope"],
+            {"type": "page", "targetId": "orders"},
+        )
+        self.assertEqual(
+            result["build_task_plan"]["build_execution_scope"],
+            {"type": "page", "targetId": "orders"},
+        )
+        self.assertFalse(result["build_task_plan_persisted"])
+        self.assertEqual(
+            persisted_after["build_execution_scope"],
+            {"type": "page", "targetId": "dashboard"},
+        )
         self.assertEqual(
             next(
                 stage
@@ -593,6 +710,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "unit_id": "backend:endpoint:orders-api:orders.list",
                         "owner": "backend",
                         "description": "实现订单接口",
+                        "deliverables": [{"id": "controller:orders-rename", "kind": "backend.endpoint_controller", "target_id": "orders.list", "paths": ["api/orders.py"], "provides": ["orders.endpoint"]}],
                         "change_scope": [{"path": "api/orders.py"}],
                     },
                     {
@@ -601,6 +719,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "owner": "frontend",
                         "description": "实现订单页面",
                         "dependencies": ["shared-api-client-task"],
+                        "deliverables": [{"id": "capability:orders-page-rename", "kind": "frontend.shared_capability", "target_id": "orders", "paths": ["src/pages/Orders.tsx"], "provides": ["orders.page"]}],
                         "change_scope": [{"path": "src/pages/Orders.tsx"}],
                     },
                 ]
@@ -685,6 +804,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "unit_id": "backend:endpoint:orders-api:orders.list",
                         "owner": "backend",
                         "description": "实现订单接口",
+                        "deliverables": [{"id": "controller:orders-reuse", "kind": "backend.endpoint_controller", "target_id": "orders.list", "paths": ["api/orders.py"], "provides": ["orders.endpoint"]}],
                         "change_scope": [{"path": "api/orders.py"}],
                     },
                     {
@@ -693,6 +813,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "owner": "frontend",
                         "description": "实现订单页面",
                         "dependencies": ["orders-api-task"],
+                        "deliverables": [{"id": "capability:orders-page-reuse", "kind": "frontend.shared_capability", "target_id": "orders", "paths": ["src/pages/Orders.tsx"], "provides": ["orders.page"]}],
                         "change_scope": [{"path": "src/pages/Orders.tsx"}],
                     },
                 ]
@@ -741,6 +862,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "unit_id": "frontend:api-client",
                         "owner": "frontend",
                         "description": "重复生成公共 API client",
+                        "deliverables": [{"id": "capability:api-client-duplicate", "kind": "frontend.shared_capability", "target_id": "frontend:api-client", "paths": ["src/api/client.ts"], "provides": ["api.client"]}],
                         "change_scope": [{"path": "src/api/client.ts"}],
                     },
                     {
@@ -748,6 +870,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "unit_id": "backend:endpoint:orders-api:orders.list",
                         "owner": "backend",
                         "description": "重复生成订单接口",
+                        "deliverables": [{"id": "controller:orders-duplicate", "kind": "backend.endpoint_controller", "target_id": "orders.list", "paths": ["api/orders.py"], "provides": ["orders.endpoint"]}],
                         "change_scope": [{"path": "api/orders.py"}],
                     },
                     {
@@ -759,6 +882,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                             "duplicate-api-client-task",
                             "duplicate-orders-api-task",
                         ],
+                        "deliverables": [{"id": "capability:reports-page", "kind": "frontend.shared_capability", "target_id": "orderReports", "paths": ["src/pages/OrderReports.tsx"], "provides": ["reports.page"]}],
                         "change_scope": [{"path": "src/pages/OrderReports.tsx"}],
                     },
                 ]
@@ -867,12 +991,21 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "tasks": [
                         {
                             "id": "application-task",
-                            "unit_id": "application:root",
+                            "unit_id": "frontend:shell",
                             "owner": "frontend",
                             "title": "实现首页",
                             "description": "实现首页内容",
                             "change_scope": [
                                 {"operation": "modify", "path": "frontend/src/App.tsx"}
+                            ],
+                            "deliverables": [
+                                {
+                                    "id": "capability:app-shell",
+                                    "kind": "frontend.shared_capability",
+                                    "target_id": "frontend:shell",
+                                    "paths": ["frontend/src/App.tsx"],
+                                    "provides": ["app.home"],
+                                }
                             ],
                         }
                     ],

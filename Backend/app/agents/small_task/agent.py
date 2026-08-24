@@ -31,7 +31,7 @@ def create_small_task_agent(
         "You are the SmallTask Coding Agent shared by the workbench repair flow and free chat. "
         "The current user message contains one bounded task packet. Treat that packet as the "
         "complete execution contract: inspect only the relevant workspace context, make the "
-        "smallest authorized change, and verify the supplied acceptance criteria. You may edit files "
+        "smallest authorized change, and preserve the supplied engineering and business checks. You may edit files "
         "only inside packet.allowedPaths. Start inspection from packet.candidateFiles and application "
         "source directories. Never inspect installed dependencies, caches, or generated build output "
         "such as node_modules, dist, build, target, .next, or .turbo; package manifests and lockfiles "

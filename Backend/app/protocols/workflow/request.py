@@ -966,6 +966,8 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "quality_gate_passed",
         "test_report",
         "build_execution_scope",
+        "last_persisted_build_execution_scope",
+        "build_task_plan_persisted",
         "build_context",
         "execution_resource_claims",
         "tasks",
@@ -1027,6 +1029,8 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     camel_aliases = {
         "build_task_plan": "buildTaskPlan",
         "build_execution_scope": "buildExecutionScope",
+        "last_persisted_build_execution_scope": "lastPersistedBuildExecutionScope",
+        "build_task_plan_persisted": "buildTaskPlanPersisted",
         "build_task_plan_confirmation": "buildTaskPlanConfirmation",
         "test_phase_confirmation": "testPhaseConfirmation",
         "review_phase_confirmation": "reviewPhaseConfirmation",

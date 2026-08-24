@@ -491,6 +491,13 @@
   }
 }
 
+.@{class-prefix}-workflow-build-acceptance-failure-group {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .@{class-prefix}-workflow-build-task-tags {
   display: flex;
   min-width: 0;
@@ -509,6 +516,27 @@
   padding-left: 18px;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-workflow-build-business-check {
+  min-width: 0;
+
+  &::marker {
+    color: var(--wb-text-muted);
+  }
+}
+
+.@{class-prefix}-workflow-build-business-check-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+
+  .ant-tag {
+    flex: 0 0 auto;
+    margin-right: 0;
+  }
 }
 
 .@{class-prefix}-workflow-clarification {

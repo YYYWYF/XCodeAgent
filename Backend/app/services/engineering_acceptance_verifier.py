@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from fnmatch import fnmatch
 from pathlib import Path
+import re
 from typing import Any
 
 from app.services.engineering_acceptance import ensure_engineering_acceptance
-from app.services.engineering_contract_verifier import verify_contract_binding
+from app.services.business_acceptance_verifiers.common import strip_comments
 
 
 def unauthorized_batch_paths(
@@ -32,16 +33,16 @@ def verify_engineering_acceptance(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """确定性执行任务的全部工程检查并返回证据与错误。"""
 
-    # 验收入口也要重新归一化任务，防止历史 DAG 绕过 scheduler 后把契约检查误挂到配置任务。
+    # 验收入口重新归一化任务，确保工程检查只由当前任务元数据产生。
     task = ensure_engineering_acceptance(task)
     checks = _dict_items(task.get("acceptance_checks"))
     if not checks:
         return [], ["任务缺少 acceptance_checks，请重新执行 prepare_build_tasks。"]
     root = Path(workspace_root).expanduser().resolve() if workspace_root else None
     changes = {
-        str(item.get("path") or "").lstrip("./"): item
+        _normalize_path(item.get("path")): item
         for item in _change_items(code_change_set)
-        if item.get("path")
+        if _normalize_path(item.get("path"))
     }
     evidence: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -59,6 +60,7 @@ def verify_engineering_acceptance(
                 "check_id": check.get("id"),
                 "kind": check.get("kind"),
                 "status": "failed" if error else "passed",
+                "error": error,
                 "evidence": detail,
             }
         )
@@ -122,8 +124,14 @@ def _verify_check(
         return _verify_repair_change(check, status=status, changes=changes, root=root)
     if kind == "scope_boundary":
         return _verify_scope_boundary(task, batch_unauthorized_paths)
-    if kind in {"frontend_contract_binding", "backend_contract_binding"}:
-        return verify_contract_binding(check, kind=kind, root=root)
+    if kind == "page_entry":
+        return _verify_page_entry(check, root=root)
+    if kind == "page_default_export":
+        return _verify_page_default_export(check, root=root)
+    if kind == "page_placeholder":
+        return _verify_page_placeholder(check, root=root)
+    if kind == "page_component_reachability":
+        return _verify_page_component_reachability(check, root=root)
     return f"不支持的工程验收检查类型：{kind or '<empty>'}", "检查类型无法执行。"
 
 
@@ -138,7 +146,7 @@ def _verify_file_operation(
     """核对精确目标路径的工作区差异类型或已满足磁盘状态。"""
 
     paths = _string_list(check.get("target_paths"))
-    path = paths[0].lstrip("./") if paths else ""
+    path = _normalize_path(paths[0]) if paths else ""
     expected = _dict_value(check.get("expected"))
     operation = str(expected.get("operation") or "modify")
     expected_change_type = str(expected.get("change_type") or "modified")
@@ -169,11 +177,11 @@ def _verify_file_operation(
     elif root is None:
         return "已满足检查缺少工作区根目录。", "无法核对当前磁盘状态。"
     elif operation == "delete":
-        target = (root / path).resolve()
+        target = _workspace_target(root, path)
         if target.exists():
             return f"已满足检查失败：{path} 仍然存在。", "删除目标仍存在。"
     else:
-        target = (root / path).resolve()
+        target = _workspace_target(root, path)
         if not target.is_file():
             return f"已满足检查失败：{path} 不存在。", "目标文件不存在。"
     return None, f"{path} 的 {operation} 工程状态已由工作区证据确认。"
@@ -251,10 +259,157 @@ def _verify_scope_boundary(
     return None, "工作区差异全部位于本批次任务授权范围内。"
 
 
+def _verify_page_entry(
+    check: dict[str, Any],
+    *,
+    root: Path | None,
+) -> tuple[str | None, str]:
+    """确认页面入口文件存在且位于当前工作区内。"""
+
+    path = _check_path(check, "entry_path")
+    target, error = _read_workspace_file(root, path)
+    if error:
+        return error, error
+    del target
+    return None, f"页面入口 {path} 已存在。"
+
+
+def _verify_page_default_export(
+    check: dict[str, Any],
+    *,
+    root: Path | None,
+) -> tuple[str | None, str]:
+    """确认页面入口提供 default export。"""
+
+    path = _check_path(check, "entry_path")
+    source, error = _read_workspace_file(root, path)
+    if error:
+        return error, error
+    if not re.search(r"\bexport\s+default\b", strip_comments(source or "")):
+        return f"页面入口 {path} 缺少 export default。", "未发现页面 default export。"
+    return None, f"页面入口 {path} 已提供 export default。"
+
+
+def _verify_page_placeholder(
+    check: dict[str, Any],
+    *,
+    root: Path | None,
+) -> tuple[str | None, str]:
+    """确认页面入口不再保留固定模板占位内容。"""
+
+    path = _check_path(check, "entry_path")
+    source, error = _read_workspace_file(root, path)
+    if error:
+        return error, error
+    clean = strip_comments(source or "").casefold()
+    markers = _string_list(_dict_value(check.get("expected")).get("forbidden_markers"))
+    matched = [marker for marker in markers if marker.casefold() in clean]
+    if matched:
+        return (
+            f"页面入口 {path} 仍包含占位内容：{'、'.join(matched)}。",
+            "页面占位内容尚未替换。",
+        )
+    return None, f"页面入口 {path} 未发现受控占位内容。"
+
+
+def _verify_page_component_reachability(
+    check: dict[str, Any],
+    *,
+    root: Path | None,
+) -> tuple[str | None, str]:
+    """确认任务内新增组件导出且由页面入口引用。"""
+
+    expected = _dict_value(check.get("expected"))
+    entry_path = _normalize_path(expected.get("entry_path"))
+    component_path = _normalize_path(expected.get("component_path"))
+    symbol = str(expected.get("component_symbol") or "").strip()
+    entry_source, entry_error = _read_workspace_file(root, entry_path)
+    if entry_error:
+        return entry_error, entry_error
+    component_source, component_error = _read_workspace_file(root, component_path)
+    if component_error:
+        return component_error, component_error
+    component_clean = strip_comments(component_source or "")
+    if not re.search(r"\bexport\s+(?:default\s+)?(?:function|const|class)\b|\bexport\s+default\b", component_clean):
+        return f"组件 {component_path} 未发现导出。", "任务内组件缺少 export。"
+    entry_clean = strip_comments(entry_source or "")
+    component_name = component_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    import_reference = re.search(
+        rf"\bfrom\s+[\"'][^\"']*{re.escape(component_name)}(?:\.[^\"']+)?[\"']",
+        entry_clean,
+    )
+    symbol_reference = symbol and re.search(rf"\b{re.escape(symbol)}\b", entry_clean)
+    if not import_reference and not symbol_reference:
+        return (
+            f"页面入口 {entry_path} 未引用组件 {component_path}。",
+            "页面入口未发现任务内组件的可达引用。",
+        )
+    return None, f"组件 {component_path} 已导出并由页面入口引用。"
+
+
+def _check_path(check: dict[str, Any], expected_key: str) -> str:
+    """从工程检查中读取并归一化一个目标路径。"""
+
+    expected = _dict_value(check.get("expected"))
+    value = expected.get(expected_key)
+    if not value:
+        paths = _string_list(check.get("target_paths"))
+        value = paths[0] if paths else ""
+    return _normalize_path(value)
+
+
+def _read_workspace_file(root: Path | None, path: str) -> tuple[str | None, str | None]:
+    """在工作区边界内读取小型源码文件。"""
+
+    if root is None:
+        return None, "工程页面检查缺少工作区根目录。"
+    if not path:
+        return None, "工程页面检查缺少目标路径。"
+    path_error = _resolved_path_error(root, path)
+    if path_error:
+        return None, path_error
+    target = _workspace_target(root, path)
+    if not target.is_file():
+        return None, f"页面工程检查目标文件不存在：{path}。"
+    try:
+        if target.stat().st_size > 512_000:
+            return None, f"页面工程检查目标文件过大：{path}。"
+        return target.read_text(encoding="utf-8"), None
+    except (OSError, UnicodeError) as exc:
+        return None, f"页面工程检查读取失败 {path}：{type(exc).__name__}。"
+
+
+def _workspace_target(root: Path, path: str) -> Path:
+    """按文件系统实际名称解析相对路径，兼容大小写敏感和不敏感系统。"""
+
+    direct = (root / path).resolve()
+    if direct.exists():
+        return direct
+    current = root
+    for part in _normalize_path(path).split("/"):
+        if not part:
+            continue
+        try:
+            matches = [
+                child
+                for child in current.iterdir()
+                if child.name.casefold() == part.casefold()
+            ]
+        except OSError:
+            return direct
+        if len(matches) != 1:
+            return direct
+        current = matches[0]
+    return current.resolve()
+
+
 def _resolved_path_error(root: Path, path: str) -> str | None:
     """阻止工程验收读取越过工作区的路径。"""
 
-    resolved = (root / path).resolve()
+    normalized = _normalize_path(path)
+    if _is_absolute_path(path) or ".." in normalized.split("/"):
+        return f"目标路径不安全：{path}。"
+    resolved = (root / normalized).resolve()
     if resolved != root and root not in resolved.parents:
         return f"目标路径越过工作区：{path}。"
     return None
@@ -268,7 +423,7 @@ def _allowed_paths(task: dict[str, Any]) -> list[str]:
         str(item.get("path") or "")
         for item in _dict_items(task.get("change_scope"))
     )
-    return list(dict.fromkeys(path.lstrip("./") for path in paths if path))
+    return list(dict.fromkeys(_normalize_path(path) for path in paths if _normalize_path(path)))
 
 
 def _path_matches_any(path: str, patterns: list[str]) -> bool:
@@ -288,6 +443,22 @@ def _path_matches_any(path: str, patterns: list[str]) -> bool:
         if normalized.startswith(candidate + "/") or fnmatch(normalized, candidate):
             return True
     return False
+
+
+def _normalize_path(value: Any) -> str:
+    """统一 Windows、macOS 和 Linux 工程路径。"""
+
+    text = str(value or "").strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return "/".join(part for part in text.split("/") if part not in {"", "."})
+
+
+def _is_absolute_path(value: Any) -> bool:
+    """识别 POSIX、UNC 和 Windows drive 绝对路径。"""
+
+    text = str(value or "").strip().replace("\\", "/")
+    return text.startswith("/") or bool(re.match(r"^[A-Za-z]:/", text)) or text.startswith("//")
 
 
 def _change_items(value: dict[str, Any] | None) -> list[dict[str, Any]]:

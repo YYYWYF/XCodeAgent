@@ -207,6 +207,10 @@ def _workflow_progress_summary(
         "buildSummary": result.get("build_summary", {}),
         "buildTaskPlan": result.get("build_task_plan", {}),
         "buildExecutionScope": result.get("build_execution_scope"),
+        "lastPersistedBuildExecutionScope": result.get(
+            "last_persisted_build_execution_scope"
+        ),
+        "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
         "buildTaskPlanConfirmation": (
             result.get("build_task_plan_confirmation")
             or (
@@ -640,6 +644,10 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                     "projectPlan": update.get("project_plan"),
                     "buildTaskPlan": update.get("build_task_plan"),
                     "buildExecutionScope": update.get("build_execution_scope"),
+                    "lastPersistedBuildExecutionScope": update.get(
+                        "last_persisted_build_execution_scope"
+                    ),
+                    "buildTaskPlanPersisted": update.get("build_task_plan_persisted"),
                     "buildTaskPlanConfirmation": update.get(
                         "build_task_plan_confirmation"
                     ) or clarification,
@@ -658,6 +666,10 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "data": {
                     "buildTaskPlan": update.get("build_task_plan"),
                     "buildExecutionScope": update.get("build_execution_scope"),
+                    "lastPersistedBuildExecutionScope": update.get(
+                        "last_persisted_build_execution_scope"
+                    ),
+                    "buildTaskPlanPersisted": update.get("build_task_plan_persisted"),
                     "dagGeneration": update.get("dag_generation_progress"),
                     "error": update.get("error"),
                 },
@@ -1243,6 +1255,10 @@ def _workflow_visual_payload(
         "buildSummary": result.get("build_summary", {}),
         "buildTaskPlan": result.get("build_task_plan", {}),
         "buildExecutionScope": result.get("build_execution_scope"),
+        "lastPersistedBuildExecutionScope": result.get(
+            "last_persisted_build_execution_scope"
+        ),
+        "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
         "buildTaskPlanConfirmation": summary.get("buildTaskPlanConfirmation"),
         "testTarget": _workflow_test_target(result),
         "reviewPhaseConfirmation": result.get("review_phase_confirmation", {}),
@@ -1287,6 +1303,10 @@ def _workflow_visual_payload(
         "selectedEndpointId": result.get("selected_endpoint_id"),
         "detailTargetType": result.get("detail_target_type"),
         "buildExecutionScope": result.get("build_execution_scope"),
+        "lastPersistedBuildExecutionScope": result.get(
+            "last_persisted_build_execution_scope"
+        ),
+        "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
         "selectedSkillNames": result.get("selected_skill_names", []),
         "acceptanceAdjustment": result.get("acceptance_adjustment"),
         "lifecycle": result.get("lifecycle"),

@@ -77,8 +77,7 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         "    {\n"
         '      "title": "repair task title",\n'
         '      "description": "what the code runner should fix",\n'
-        '      "change_scope": [{"operation": "add|modify|delete", "path": "exact parent-authorized path", "description": "bounded change"}],\n'
-        '      "acceptance_criteria": []\n'
+        '      "change_scope": [{"operation": "add|modify|delete", "path": "exact parent-authorized path", "description": "bounded change"}]\n'
         "    }\n"
         "  ],\n"
         '  "reason": "required when confirmation or terminal failure is selected",\n'
@@ -93,9 +92,10 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         "exhausted. Choose repair only when the repair can be delegated as one "
         "or more bounded implementation tasks.\n\n"
         "For every repair task, change_scope must list only the exact files this repair "
-        "attempt needs to add, modify, or delete inside the parent authorization. Keep "
-        "acceptance_criteria empty: the scheduler recompiles attempt-specific file checks "
-        "and inherits the parent task's deterministic outcome checks.\n\n"
+        "attempt needs to add, modify, or delete inside the parent authorization. Do not "
+        "return acceptance_criteria, acceptance_checks, business_acceptance_checks, "
+        "verification_commands, or evidence: the platform recompiles attempt-specific "
+        "engineering checks and inherits the parent task's business checks exactly.\n\n"
         f"RepairPlannerInput:\n{json.dumps(repair_input, ensure_ascii=False, indent=2)}"
     )
 

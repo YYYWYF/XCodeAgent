@@ -136,6 +136,19 @@ class BuildSchedulerTests(unittest.TestCase):
 
         self.assertEqual(decision["action"], "retry")
 
+    def test_business_acceptance_blocked_does_not_create_repair(self) -> None:
+        """Verifier blocked 属于验证能力或正式来源问题，不应修改业务实现。"""
+
+        decision = classify_task_result(
+            {
+                "task_id": "api",
+                "status": "failed",
+                "failure_category": "business_acceptance_blocked",
+            }
+        )
+
+        self.assertEqual(decision["action"], "terminal_failure")
+
     def test_retries_only_failed_tasks_with_retry_classification(self) -> None:
         """显式重试只恢复 runner/tool 类失败，不会重跑实现失败任务。"""
 

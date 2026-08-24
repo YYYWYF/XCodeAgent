@@ -11,6 +11,13 @@ from typing import Any
 from app.services.build_task_menu import (
     reconcile_live_page_paths,
 )
+from app.services.business_acceptance import (
+    DELIVERABLE_KINDS,
+    business_acceptance_contract_errors,
+    compile_business_acceptance,
+    normalize_deliverables,
+    normalize_repo_path,
+)
 from app.services.engineering_acceptance import (
     compile_engineering_acceptance,
     engineering_acceptance_contract_errors,
@@ -58,6 +65,10 @@ _TEMPLATE_BOUNDARY_PATHS = {
     "src/routes/index.tsx",
 }
 _TEMPLATE_PAGE_ENTRY_PREFIXES = ("frontend/src/pages/", "src/pages/")
+_FRONTEND_ENDPOINT_IMPLEMENTATION_CHECK_KINDS = {
+    "frontend.api_contract",
+    "frontend.static_data_contract",
+}
 
 
 def tasks_from_build_task_plan(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -169,7 +180,7 @@ def _default_operation_for_path(path: str, workspace_root: str | Path | None) ->
         return "modify"
     # 去掉前导 ./ 和虚拟绝对前缀 /，使路径相对工作区解析；与验收器
     # _resolved_path_error 的 (root / path).resolve() + lstrip("./") 约定一致。
-    cleaned = path.strip().lstrip("./").lstrip("/")
+    cleaned = normalize_repo_path(path)
     if not cleaned:
         return "modify"
     try:
@@ -190,7 +201,7 @@ def _change_scope(
     if isinstance(value, list):
         for item in value:
             if isinstance(item, str):
-                path = item.strip()
+                path = normalize_repo_path(item)
                 if path:
                     result.append(
                         {
@@ -204,7 +215,7 @@ def _change_scope(
                 continue
             if not isinstance(item, dict):
                 continue
-            path = _text(item.get("path") or item.get("file"))
+            path = normalize_repo_path(item.get("path") or item.get("file"))
             if not path:
                 continue
             # 仅当模型未显式声明 operation 时按磁盘存在性兜底；显式 add/modify/delete
@@ -231,7 +242,7 @@ def _change_scope(
             "path": path,
             "description": "按任务要求调整该文件。",
         }
-        for path in target_files
+        for path in (normalize_repo_path(item) for item in target_files)
     ]
 
 
@@ -338,7 +349,11 @@ def _normalize_agent_tasks(
             else "frontend.code"
         )
         description = _text(item.get("description"), _text(item.get("title"), task_id))
-        target_files = _string_list(item.get("target_files"))
+        target_files = [
+            normalize_repo_path(path)
+            for path in _string_list(item.get("target_files"))
+            if normalize_repo_path(path)
+        ]
         change_scope = _change_scope(
             item.get("change_scope"),
             target_files,
@@ -357,7 +372,11 @@ def _normalize_agent_tasks(
         database_scope = _dict_value(item.get("database_scope"))
         allowed_paths = (
             _dedupe_normalized_strings(
-                _string_list(item.get("allowed_paths"))
+                [
+                    normalize_repo_path(path)
+                    for path in _string_list(item.get("allowed_paths"))
+                    if normalize_repo_path(path)
+                ]
             )
             or target_files
         )
@@ -388,6 +407,7 @@ def _normalize_agent_tasks(
                 "status": "pending",
                 "unit_id": _text(item.get("unit_id"), "application:root"),
                 "source_refs": _dict_value(item.get("source_refs")),
+                "deliverables": normalize_deliverables(item.get("deliverables")),
                 "requires_capabilities": _string_list(
                     item.get("requires_capabilities")
                 ),
@@ -408,14 +428,7 @@ def _normalize_agent_tasks(
                     item.get("parallel_reason"),
                     "依赖满足且目标文件不冲突时可并行。",
                 ),
-                # 模型返回的验收字段不可信，统一置空；工程验收由确定性编译器
-                # 依据 change_scope/allowed_paths/菜单/API 契约生成，模型无法
-                # 通过 acceptance_criteria / acceptance_checks 注入验收内容。
-                # TODO(验收措施): 后续需要设计更完善的验收验证措施。
-                "acceptance_criteria": [],
-                "acceptance_checks": [],
                 "engineering_context": _dict_value(item.get("engineering_context")),
-                "verification_commands": [],
             }
         )
     return tasks
@@ -490,6 +503,68 @@ def merge_exact_duplicate_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, A
             [replacement.get(dependency, dependency) for dependency in _task_dependencies(task)]
         )
     return merged
+
+
+def frontend_endpoint_ownership_errors(tasks: list[dict[str, Any]]) -> list[str]:
+    """拒绝多个普通前端任务重复实现同一个正式 Endpoint。"""
+
+    owners_by_endpoint: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for task in tasks:
+        if str(task.get("owner") or "") != "frontend" or task.get("kind") == "repair":
+            continue
+        task_id = str(task.get("id") or "<unknown>")
+        seen_task_endpoints: set[tuple[str, str]] = set()
+        for check in _dict_items(task.get("business_acceptance_checks")):
+            if str(check.get("kind") or "") not in _FRONTEND_ENDPOINT_IMPLEMENTATION_CHECK_KINDS:
+                continue
+            expected = check.get("expected") if isinstance(check.get("expected"), dict) else {}
+            paths = _dedupe_normalized_strings(
+                [
+                    normalize_repo_path(path)
+                    for path in [
+                        *_string_list(check.get("target_paths")),
+                        *_task_target_files(task),
+                    ]
+                    if normalize_repo_path(path)
+                ]
+            )
+            for endpoint in _dict_items(expected.get("endpoints")):
+                endpoint_id = str(endpoint.get("endpoint_id") or "").strip()
+                if not endpoint_id:
+                    continue
+                contract_id = str(endpoint.get("api_contract_id") or "").strip()
+                endpoint_key = (contract_id.casefold(), endpoint_id.casefold())
+                if endpoint_key in seen_task_endpoints:
+                    continue
+                seen_task_endpoints.add(endpoint_key)
+                owners_by_endpoint.setdefault(endpoint_key, []).append(
+                    {
+                        "task_id": task_id,
+                        "contract_id": contract_id,
+                        "endpoint_id": endpoint_id,
+                        "paths": paths,
+                    }
+                )
+
+    errors: list[str] = []
+    for owners in owners_by_endpoint.values():
+        if len(owners) < 2:
+            continue
+        first = owners[0]
+        endpoint_label = (
+            f"{first['contract_id']} + {first['endpoint_id']}"
+            if first["contract_id"]
+            else first["endpoint_id"]
+        )
+        owner_labels = [
+            f"{owner['task_id']} ({', '.join(owner['paths']) or 'no target path'})"
+            for owner in owners
+        ]
+        errors.append(
+            f"Frontend endpoint {endpoint_label} has multiple implementation owners: "
+            f"{'; '.join(owner_labels)}. Keep one API module owner and make other tasks reuse it."
+        )
+    return errors
 
 
 def _exact_duplicate_key(task: dict[str, Any]) -> str:
@@ -575,6 +650,71 @@ def _raw_agent_tasks(agent_plan: dict[str, Any] | None) -> Any:
             if isinstance(dag.get(key), list):
                 return dag[key]
     return None
+
+
+def build_task_candidate_contract_errors(
+    agent_plan: dict[str, Any] | None,
+) -> list[str]:
+    """在归一化前校验模型任务的交付物结构，避免非法字段被静默丢弃。"""
+
+    raw_tasks = _raw_agent_tasks(agent_plan)
+    if not isinstance(raw_tasks, list):
+        return []
+    errors: list[str] = []
+    for task_index, task in enumerate(raw_tasks):
+        if not isinstance(task, dict):
+            continue
+        task_id = _text(task.get("id"), f"tasks[{task_index}]")
+        owner = _text(task.get("owner"))
+        unit_id = _text(task.get("unit_id"))
+        task_kind = _text(task.get("kind"))
+        requires_deliverable = (
+            task_kind != "repair"
+            and owner in {"frontend", "backend"}
+            and unit_id
+            not in {
+                "frontend:shell",
+                "frontend:api-client",
+                "frontend:auth-guard",
+                "backend:bootstrap",
+            }
+        )
+        deliverables = task.get("deliverables")
+        if not isinstance(deliverables, list) or not deliverables:
+            if requires_deliverable:
+                errors.append(
+                    f"Task {task_id} deliverables must be a non-empty array."
+                )
+            continue
+        for deliverable_index, deliverable in enumerate(deliverables):
+            field_path = f"Task {task_id} deliverables[{deliverable_index}]"
+            if not isinstance(deliverable, dict):
+                errors.append(f"{field_path} must be an object.")
+                continue
+            if not _text(deliverable.get("id")):
+                errors.append(f"{field_path}.id is required.")
+            kind = _text(deliverable.get("kind"))
+            if not kind:
+                errors.append(f"{field_path}.kind is required.")
+            elif kind not in DELIVERABLE_KINDS:
+                errors.append(f"{field_path}.kind {kind} is unsupported.")
+            if not _text(deliverable.get("target_id")):
+                errors.append(f"{field_path}.target_id is required.")
+            paths = deliverable.get("paths")
+            if not _string_list(paths):
+                suffix = (
+                    '; singular field "path" is not supported.'
+                    if _text(deliverable.get("path"))
+                    else "."
+                )
+                errors.append(
+                    f"{field_path}.paths must be a non-empty string array{suffix}"
+                )
+            if not _string_list(deliverable.get("provides")):
+                errors.append(
+                    f"{field_path}.provides must be a non-empty string array."
+                )
+    return errors
 
 
 def _annotate_parallelism(
@@ -695,7 +835,11 @@ def _task_semantic_errors(
     errors: list[str] = []
     required_unit_ids = _string_list(build_context.get("required_unit_ids"))
     validate_task_scope = build_context.get("_validate_task_scope", True) is not False
+    allow_missing_deliverable_task_ids = set(
+        _string_list(build_context.get("_allow_missing_business_deliverable_task_ids"))
+    )
     errors.extend(_required_bootstrap_task_errors(tasks, build_context))
+    errors.extend(frontend_endpoint_ownership_errors(tasks))
     for task in tasks:
         task_id = str(task.get("id") or "")
         owner = str(task.get("owner") or "")
@@ -731,6 +875,13 @@ def _task_semantic_errors(
             errors.append(f"Task {task_id} is {owner} owner but declares database_scope.")
         if owner == "backend" and task_type.startswith("database."):
             errors.append(f"Task {task_id} is backend owner but declares database task_type {task_type}.")
+        errors.extend(
+            business_acceptance_contract_errors(
+                task,
+                # 只对未被本轮替换的历史基线任务放宽缺失交付物，当前模型新任务仍必须完整声明。
+                allow_missing_deliverable=task_id in allow_missing_deliverable_task_ids,
+            )
+        )
         errors.extend(engineering_acceptance_contract_errors(task))
     return errors
 
@@ -817,13 +968,15 @@ def _task_declared_paths(task: dict[str, Any]) -> list[str]:
     for change in task.get("change_scope") if isinstance(task.get("change_scope"), list) else []:
         if isinstance(change, dict) and change.get("path"):
             paths.append(str(change.get("path")))
-    return _dedupe_normalized_strings(paths)
+    return _dedupe_normalized_strings(
+        [normalize_repo_path(path) for path in paths if normalize_repo_path(path)]
+    )
 
 
 def _is_code_path(path: str) -> bool:
     """判断路径是否属于代码或前端样式文件，database task 不允许修改。"""
 
-    normalized = path.lower()
+    normalized = normalize_repo_path(path).lower()
     return normalized.endswith(_CODE_PATH_SUFFIXES)
 
 
@@ -949,9 +1102,9 @@ def _canonical_task(task: dict[str, Any]) -> dict[str, Any]:
     canonical["dependencies"] = _dedupe_strings(_task_dependencies(task))
     canonical["target_files"] = _dedupe_normalized_strings(_task_target_files(task))
     canonical["can_run_in_parallel"] = _task_can_run_in_parallel(task)
-    canonical["acceptance_criteria"] = _dedupe_normalized_strings(
-        _string_list(task.get("acceptance_criteria"))
-    )
+    canonical.pop("acceptance_criteria", None)
+    canonical.pop("verification_commands", None)
+    canonical["deliverables"] = normalize_deliverables(task.get("deliverables"))
     canonical["source_refs"] = (
         task.get("source_refs") if isinstance(task.get("source_refs"), dict) else {}
     )
@@ -974,15 +1127,39 @@ def compile_build_task_plan_scope(
     build_context: dict[str, Any] | None = None,
     *,
     validate_task_scope: bool = True,
+    preserve_compiled_task_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """将 Unit 依赖、来源引用和输入指纹编译进任务图。"""
+    """编译本轮任务契约，并在保留历史契约的前提下重建任务图。"""
 
     context = build_context if isinstance(build_context, dict) else {}
+    preserved_ids = preserve_compiled_task_ids or set()
     scoped_tasks = apply_unit_compilation(
         build_task_plan,
         tasks,
         context,
+        preserve_compiled_task_ids=preserved_ids,
     )
+    current_tasks = [
+        task
+        for task in scoped_tasks
+        if str(task.get("id") or "") not in preserved_ids
+    ]
+    current_tasks = compile_engineering_acceptance(current_tasks, context)
+    current_tasks = compile_business_acceptance(current_tasks, context)
+    current_tasks_by_id = {
+        str(task.get("id") or ""): task for task in current_tasks
+    }
+    scoped_tasks = [
+        {
+            **task,
+            "business_acceptance_checks": _dict_items(
+                task.get("business_acceptance_checks")
+            ),
+        }
+        if str(task.get("id") or "") in preserved_ids
+        else current_tasks_by_id[str(task.get("id") or "")]
+        for task in scoped_tasks
+    ]
     compiled = replace_build_task_plan_tasks(
         build_task_plan,
         scoped_tasks,
@@ -1043,12 +1220,14 @@ def create_build_task_plan(
     tasks = apply_unit_compilation(base_plan, proposed_tasks, context)
     acceptance_context = {
         **context,
+        "project_plan": project_plan,
         "executable_details": (
             _dict_value(project_plan.get("executable_details"))
             or _dict_value(context.get("executable_details"))
         ),
     }
     tasks = compile_engineering_acceptance(tasks, acceptance_context)
+    tasks = compile_business_acceptance(tasks, acceptance_context)
     tasks, execution_batches = _annotate_parallelism(tasks)
     task_graph = _build_task_graph(tasks, execution_batches, context)
     blocked_batches = [
@@ -1111,7 +1290,7 @@ def create_build_task_plan(
         "preparation_source": "confirmed_project_plan_and_workspace_snapshot",
         "agent_note": _compact_agent_note(agent_note, agent_plan),
     }
-    return compile_build_task_plan_scope(plan, tasks, build_context)
+    return compile_build_task_plan_scope(plan, tasks, acceptance_context)
 
 
 def _compact_agent_note(agent_note: str, agent_plan: dict[str, Any] | None) -> str:

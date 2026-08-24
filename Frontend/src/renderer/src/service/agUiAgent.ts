@@ -292,8 +292,9 @@ export type DagGenerationTaskRecord = {
   changePaths: string[]
   allowedPaths?: string[]
   changeScope?: Array<Record<string, unknown>>
-  acceptanceCriteria: string[]
-  acceptanceChecks?: Array<Record<string, unknown>>
+  deliverables?: Array<Record<string, unknown>>
+  engineeringAcceptanceChecks: Array<Record<string, unknown>>
+  businessAcceptanceChecks: Array<Record<string, unknown>>
 }
 
 export type DagGenerationArtifactRecord = {
@@ -999,9 +1000,13 @@ function readDagGenerationTasks(value: unknown): DagGenerationTaskRecord[] {
           1_000
         ),
         changeScope: objectRecordList(task.changeScope ?? task.change_scope, 200),
-        acceptanceCriteria: boundedStringList(task.acceptanceCriteria, 100, 1_000),
-        acceptanceChecks: objectRecordList(
-          task.acceptanceChecks ?? task.acceptance_checks,
+        deliverables: objectRecordList(task.deliverables, 100),
+        engineeringAcceptanceChecks: objectRecordList(
+          task.engineeringAcceptanceChecks ?? task.engineering_acceptance_checks,
+          100
+        ),
+        businessAcceptanceChecks: objectRecordList(
+          task.businessAcceptanceChecks ?? task.business_acceptance_checks,
           100
         )
       }

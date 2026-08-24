@@ -1474,6 +1474,10 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "buildTaskPlan": update.get("build_task_plan"),
                 "taskCount": len(tasks),
                 "buildExecutionScope": update.get("build_execution_scope"),
+                "lastPersistedBuildExecutionScope": update.get(
+                    "last_persisted_build_execution_scope"
+                ),
+                "buildTaskPlanPersisted": update.get("build_task_plan_persisted"),
             },
         }
     if node_name == "build":
@@ -1638,6 +1642,10 @@ def _workflow_summary(
         "maxRepairIterations": result.get("max_repair_iterations"),
         "buildSummary": build_summary,
         "testTarget": _workflow_test_target(result),
+        "lastPersistedBuildExecutionScope": result.get(
+            "last_persisted_build_execution_scope"
+        ),
+        "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
@@ -1686,6 +1694,10 @@ def _workflow_visual_payload(
         "detailTargetType": result.get("detail_target_type"),
         "buildExecutionScope": result.get("build_execution_scope"),
         "testTarget": _workflow_test_target(result),
+        "lastPersistedBuildExecutionScope": result.get(
+            "last_persisted_build_execution_scope"
+        ),
+        "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
     }
     payload = {
         "runId": run_id,

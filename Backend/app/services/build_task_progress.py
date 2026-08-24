@@ -182,7 +182,6 @@ def _project_tasks(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
         if not task_id:
             continue
         dependencies = task.get("dependencies") or []
-        acceptance = task.get("acceptance_criteria") or []
         projected.append(
             {
                 "id": task_id,
@@ -202,12 +201,14 @@ def _project_tasks(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
                     text_limit=1_000,
                 ),
                 "changeScope": _project_change_scope(task.get("change_scope")),
-                "acceptanceCriteria": _compact_strings(
-                    acceptance,
-                    item_limit=100,
-                    text_limit=1_000,
+                "deliverables": _project_deliverables(task.get("deliverables")),
+                "engineeringAcceptanceChecks": _project_acceptance_checks(
+                    task.get("acceptance_checks")
                 ),
-                "acceptanceChecks": _project_acceptance_checks(task.get("acceptance_checks")),
+                "businessAcceptanceChecks": _project_business_acceptance_checks(
+                    task.get("business_acceptance_checks"),
+                    task.get("business_acceptance_evidence"),
+                ),
             }
         )
     return projected
@@ -518,6 +519,64 @@ def _project_acceptance_checks(value: Any) -> list[dict[str, Any]]:
         }
         if entry:
             projected.append(entry)
+    return projected
+
+
+def _project_business_acceptance_checks(
+    checks: Any,
+    evidence: Any,
+) -> list[dict[str, Any]]:
+    """投射业务检查的归属、类型、目标和当前执行状态。"""
+
+    evidence_by_id = {
+        str(item.get("check_id") or ""): item
+        for item in evidence
+        if isinstance(item, dict) and item.get("check_id")
+    } if isinstance(evidence, list) else {}
+    projected: list[dict[str, Any]] = []
+    for item in checks[:100] if isinstance(checks, list) else []:
+        if not isinstance(item, dict):
+            continue
+        check_id = _compact_text(item.get("id"), 240)
+        if not check_id:
+            continue
+        result = evidence_by_id.get(check_id, {})
+        projected.append(
+            {
+                "id": check_id,
+                "deliverableId": _compact_text(item.get("deliverable_id"), 240),
+                "kind": _compact_text(item.get("kind"), 120),
+                "description": _compact_text(item.get("description"), 1_000),
+                "targetPaths": _compact_strings(
+                    item.get("target_paths") or [],
+                    item_limit=40,
+                    text_limit=1_000,
+                ),
+                "status": _compact_text(result.get("status"), 40) or "pending",
+                "evidence": _compact_text(result.get("evidence"), 1_000),
+            }
+        )
+    return projected
+
+
+def _project_deliverables(value: Any) -> list[dict[str, Any]]:
+    """投射任务交付物的类型、目标和相对路径，供确认页只读展示。"""
+
+    projected: list[dict[str, Any]] = []
+    for item in value[:100] if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        deliverable_id = _compact_text(item.get("id"), 240)
+        if not deliverable_id:
+            continue
+        projected.append(
+            {
+                "id": deliverable_id,
+                "kind": _compact_text(item.get("kind"), 120),
+                "targetId": _compact_text(item.get("target_id"), 240),
+                "paths": _compact_strings(item.get("paths") or [], item_limit=40, text_limit=1_000),
+            }
+        )
     return projected
 
 

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from app.graph.subgraphs.build import (
     _execute_ready_tasks,
     _workspace_snapshot_from_state,
+    _latest_build_task_plan_for_build,
     build,
     run_build_scheduler,
 )
@@ -67,6 +68,56 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             )
 
         self.assertEqual(loaded, snapshot)
+
+    def test_build_gate_rechecks_frontend_endpoint_ownership(self) -> None:
+        """即使落盘 JSON 伪造 validation=true，Build 入口也必须拒绝重复 Endpoint owner。"""
+
+        check = {
+            "kind": "frontend.api_contract",
+            "target_paths": [],
+            "expected": {
+                "endpoints": [
+                    {
+                        "api_contract_id": "role_api",
+                        "endpoint_id": "role_api.list",
+                    }
+                ]
+            },
+        }
+        tasks = [
+            {
+                "id": "home-api",
+                "owner": "frontend",
+                "target_files": ["frontend/src/apis/homeApi.ts"],
+                "business_acceptance_checks": [check],
+            },
+            {
+                "id": "role-api",
+                "owner": "frontend",
+                "target_files": ["frontend/src/apis/roleApi.ts"],
+                "business_acceptance_checks": [check],
+            },
+        ]
+        plan = {
+            "schema_version": "build-dag.v3",
+            "status": "ready",
+            "confirmation_status": "confirmed",
+            "build_execution_scope": {},
+            "task_registry": {task["id"]: task for task in tasks},
+            "task_graph": {
+                "nodes": [task["id"] for task in tasks],
+                "topological_order": [task["id"] for task in tasks],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            _ready_build_state(workspace, {"build_task_plan": plan})
+            _, errors = _latest_build_task_plan_for_build({"workspace": workspace})
+
+        self.assertIn("multiple implementation owners", str(errors))
+        self.assertIn("homeApi.ts", str(errors))
+        self.assertIn("roleApi.ts", str(errors))
 
     def test_backend_and_page_owners_execute_in_parallel_with_isolated_changes(self) -> None:
         """同批 backend/page 必须并发执行，并只认领各自授权文件。"""
@@ -140,6 +191,206 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         )
         self.assertNotIn("workspace_snapshot", runner_inputs["frontend"])
 
+    def test_parallel_task_scope_violation_only_fails_the_writing_agent(self) -> None:
+        """并行任务共享工作区时，后端越界写入不得污染前端任务验收。"""
+
+        started = threading.Barrier(2)
+        backend_written = threading.Event()
+        frontend_written = threading.Event()
+        tasks = [
+            {
+                "id": "backend-bootstrap",
+                "owner": "backend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [
+                    {"operation": "add", "path": "backend/pom.xml"}
+                ],
+            },
+            {
+                "id": "frontend-api",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [
+                    {"operation": "add", "path": "frontend/src/apis/roleApi.ts"}
+                ],
+            },
+        ]
+
+        def backend_runner(**kwargs):
+            started.wait(timeout=3)
+            workspace = kwargs.get("workspace")
+            _write_workspace_file(workspace, "backend/pom.xml")
+            unauthorized = "backend/src/main/java/example/MyBatisPlusConfig.java"
+            _write_workspace_file(workspace, unauthorized)
+            kwargs["on_tool_activity"](
+                {
+                    "callId": "backend-write-config",
+                    "tool": "write_file",
+                    "category": "write",
+                    "status": "completed",
+                    "path": f"/{unauthorized}",
+                }
+            )
+            backend_written.set()
+            self.assertTrue(frontend_written.wait(timeout=3))
+            return [
+                {
+                    "task_id": "backend-bootstrap",
+                    "owner": "backend",
+                    "status": "completed",
+                }
+            ]
+
+        def frontend_runner(**kwargs):
+            started.wait(timeout=3)
+            self.assertTrue(backend_written.wait(timeout=3))
+            _write_workspace_file(
+                kwargs.get("workspace"),
+                "frontend/src/apis/roleApi.ts",
+            )
+            frontend_written.set()
+            return [
+                {
+                    "task_id": "frontend-api",
+                    "owner": "frontend",
+                    "status": "completed",
+                }
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_data_sources_with_deep_agent",
+                    side_effect=backend_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=frontend_runner,
+                ),
+            ):
+                results, _ = _execute_ready_tasks(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": {"schema_version": "build-dag.v3"},
+                    },
+                    tasks,
+                )
+
+        results_by_id = {result["task_id"]: result for result in results}
+        self.assertEqual(results_by_id["backend-bootstrap"]["status"], "failed")
+        self.assertIn(
+            "MyBatisPlusConfig.java",
+            results_by_id["backend-bootstrap"]["failure_reason"],
+        )
+        self.assertEqual(results_by_id["frontend-api"]["status"], "completed")
+        self.assertEqual(
+            results_by_id["frontend-api"]["changed_files"],
+            ["frontend/src/apis/roleApi.ts"],
+        )
+        self.assertEqual(
+            results_by_id["frontend-api"]["acceptance_status"],
+            {"engineering": "passed", "business": "passed"},
+        )
+
+    def test_business_acceptance_runs_after_engineering_failure(self) -> None:
+        """工程验收失败后仍须独立执行业务验收，并保留两类失败证据。"""
+
+        task = {
+            "id": "frontend-api",
+            "owner": "frontend",
+            "status": "pending",
+            "dependencies": [],
+            "change_scope": [
+                {"operation": "add", "path": "frontend/src/apis/roleApi.ts"}
+            ],
+        }
+
+        def frontend_runner(**kwargs):
+            _write_workspace_file(
+                kwargs.get("workspace"),
+                "frontend/src/apis/roleApi.ts",
+            )
+            unauthorized = "frontend/src/apis/extraApi.ts"
+            _write_workspace_file(kwargs.get("workspace"), unauthorized)
+            kwargs["on_tool_activity"](
+                {
+                    "callId": "frontend-write-extra",
+                    "tool": "write_file",
+                    "category": "write",
+                    "status": "completed",
+                    "path": f"/{unauthorized}",
+                }
+            )
+            return [
+                {
+                    "task_id": "frontend-api",
+                    "owner": "frontend",
+                    "status": "completed",
+                }
+            ]
+
+        business_result = {
+            "status": "failed",
+            "business_acceptance_evidence": [
+                {
+                    "check_id": "business-api",
+                    "kind": "frontend.api_contract",
+                    "status": "failed",
+                    "evidence": "API 契约不匹配。",
+                }
+            ],
+            "business_acceptance_summary": {
+                "total": 1,
+                "passed": 0,
+                "failed": 1,
+                "blocked": 0,
+                "duration_ms_total": 1,
+                "duration_ms_avg": 1,
+                "by_kind": {},
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=frontend_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.verify_business_acceptance",
+                    return_value=business_result,
+                ) as business_verifier,
+            ):
+                results, _ = _execute_ready_tasks(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": {"schema_version": "build-dag.v3"},
+                    },
+                    [task],
+                )
+
+        result = results[0]
+        business_verifier.assert_called_once()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(
+            result["acceptance_status"],
+            {"engineering": "failed", "business": "failed"},
+        )
+        self.assertIn("extraApi.ts", result["failure_reason"])
+        self.assertIn("业务验收未通过", result["failure_reason"])
+        self.assertNotIn("API 契约不匹配", result["failure_reason"])
+        self.assertTrue(result["acceptance_evidence"])
+        self.assertTrue(
+            any(
+                "extraApi.ts" in str(item.get("error") or "")
+                for item in result["acceptance_evidence"]
+            )
+        )
+        self.assertTrue(result["business_acceptance_evidence"])
+
     def test_file_changes_are_attributed_to_each_task_scope(self) -> None:
         """同 owner 批次的实际变更只能记到授权路径命中的任务。"""
 
@@ -164,8 +415,8 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual(results[1]["status"], "completed")
         self.assertEqual(results[1]["changed_files"], [])
 
-    def test_build_owner_execution_skips_engineering_acceptance_verifier(self) -> None:
-        """代码生成完成后只归属 diff，不再逐任务执行工程验收。"""
+    def test_build_owner_execution_runs_engineering_and_business_verification(self) -> None:
+        """代码生成完成后必须先执行工程验收，再执行当前业务检查。"""
 
         task = {
             "id": "page",
@@ -202,7 +453,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 ),
                 patch(
                     "app.graph.subgraphs.build.verify_task_file_changes",
-                    create=True,
+                    side_effect=lambda **kwargs: kwargs["results"],
                 ) as acceptance_verifier,
             ):
                 results, _ = _execute_ready_tasks(
@@ -216,7 +467,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
 
         self.assertEqual(results[0]["status"], "completed")
         self.assertEqual(results[0]["changed_files"], ["Frontend/src/Page.tsx"])
-        acceptance_verifier.assert_not_called()
+        acceptance_verifier.assert_called_once()
 
     def test_build_scheduler_runs_dependency_order_until_complete(self) -> None:
         runner_skill_sets: list[list[str] | None] = []

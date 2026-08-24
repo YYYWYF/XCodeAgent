@@ -28,6 +28,7 @@ TechnicalPlan Endpoint 契约和 EntitySourceBinding。运行时的 `project_pla
 8. 增加“最新任务规划已经确认才能进入 Build”的门禁；
 9. 将当前正式产物、模板 manifest 和范围内详细设计作为 DAG 的显式前置条件；
 10. 将平台设计的任务边界校验失败交给模型自动重生成，不把任务拆分规则交给用户人工修正。
+11. 按稳定的 `api_contract_id + endpoint_id` 校验前端 Endpoint 唯一实现归属，禁止不同 API 模块重复封装同一接口。
 
 ### 2.2 本期明确不处理
 
@@ -40,7 +41,7 @@ TechnicalPlan Endpoint 契约和 EntitySourceBinding。运行时的 `project_pla
 - 不改 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan 或模板初始化本身的正式产物协议；
 - 不新增独立的“新增页面初始化”Graph 节点，新增页面继续复用现有模板初始化生命周期和 manifest 门禁；
 - 不在 Normal Build 中新增 database-owner 任务或 `database:*` Unit，数据库操作继续由实体确认阶段负责；
-- 不增加相似任务的语义判断，本期只处理可确定的完全重复任务；
+- 不增加基于自然语言相似度的任务判断；除完全重复任务合并外，只按稳定 Endpoint ID 做唯一实现归属校验；
 - 不维护 DAG revision 或历史版本，每次只保存最新任务规划；
 - 不增加 DAG 根 fingerprint；现有 Unit 级 `input_fingerprint` 保持不变，不将其误删或改名；
 - 不增加独立单元测试任务；
@@ -80,10 +81,11 @@ flowchart LR
     B --> C["模型生成候选任务"]
     C --> D["结构归一化 owner、path、operation 和 scope"]
     D --> E["合并完全重复任务"]
-    E --> F["生成工程检查并编译 DAG"]
-    F --> G{"DAG 是否有效"}
-    G -- "否" --> H["回灌错误并自动重生成候选任务"]
-    G -- "是" --> I["保存 pending build-task-plan.json"]
+    E --> F["生成工程与业务检查"]
+    F --> G["校验 Endpoint 唯一归属并编译 DAG"]
+    G --> V{"DAG 是否有效"}
+    V -- "否" --> H["回灌错误并自动重生成候选任务"]
+    V -- "是" --> I["保存 pending build-task-plan.json"]
     I --> J{"用户确认"}
     J -- "修改选中任务" --> D
     J -- "全量重新生成" --> C
@@ -254,6 +256,12 @@ DAG 生成时只做前置条件检查：
 
 如果无法确定两个任务完全等价，则保留，不在本期自动合并，也不因此阻断。
 
+前端 API 实现另有一条不依赖自然语言相似度的确定性规则：编译完正式来源绑定的
+`business_acceptance_checks` 后，以 `api_contract_id + endpoint_id` 为键建立唯一 owner。
+同一普通前端任务可以负责多个 Endpoint，但同一 Endpoint 不得同时属于两个普通任务或两个业务 API 文件；
+后续页面只能通过 Unit 依赖复用已有 owner。Repair 任务继承父任务的业务检查，不作为新的 owner 参与统计。
+冲突不会在执行阶段自动合并，而是写入 `task_graph.validation.errors` 并触发候选 DAG 自动重生成。
+
 ### 4.6 优化阻断错误
 
 错误处理维持现有 `requires_user_input` 和系统异常两类主流程，但提示必须可定位。
@@ -262,6 +270,7 @@ DAG 生成时只做前置条件检查：
 | --- | --- |
 | owner、path、operation 的可确定格式问题 | 自动归一化，不阻断 |
 | 完全重复任务 | 自动合并，不阻断 |
+| 同一前端 Endpoint 存在多个实现 owner | 阻断，列出 `api_contract_id`、`endpoint_id`、task ID 和目标文件，并自动重生成 |
 | 缺失依赖或循环依赖 | 阻断，并列出 task ID 和依赖 ID |
 | 文件范围越权或并行写冲突 | 阻断，并列出 task ID 和路径 |
 | 缺少 PageImplementationContract、Endpoint 契约或 EntitySourceBinding | 阻断，并说明缺失的上游产物 |
@@ -496,7 +505,7 @@ confirmation_status == confirmed
 | 模块 | 最小改动内容 |
 | --- | --- |
 | `Backend/app/graph/nodes/tasks.py` | 只消费已确认正式产物、模板 manifest 和范围详细设计；移除上游计划回写；处理 DAG pending、确认、patch 和重新生成 |
-| `Backend/app/services/build_task_planner.py` | 完全重复任务确定性合并；写入 scope 和确认字段；对菜单、路由、页面占位和数据库职责越界执行显式 DAG 校验，不修改或删除候选；保留 Unit 级 fingerprint |
+| `Backend/app/services/build_task_planner.py` | 完全重复任务确定性合并；按 `api_contract_id + endpoint_id` 校验前端唯一实现 owner；写入 scope 和确认字段；对菜单、路由、页面占位和数据库职责越界执行显式 DAG 校验，不修改或删除候选；保留 Unit 级 fingerprint |
 | `Backend/app/services/build_task_menu.py` | 删除 DAG 菜单/路由任务生成、菜单任务修剪和 canonical page entry 注入逻辑；仅保留已存在页面入口的只读路径校对和必要的菜单状态解析 |
 | `Backend/app/services/build_unit_skeleton.py` | 保持数据库已在实体确认阶段落地的当前边界，不为 Normal Build 创建 `database:*` Unit |
 | `Backend/app/services/build_context_resolver.py`、`page_implementation_contract.py`、`entity_definitions.py` | 将 PageImplementationContract、TechnicalPlan Endpoint 和 EntitySourceBinding 作为范围前置条件 |
@@ -535,14 +544,15 @@ confirmation_status == confirmed
 13. 单个或批量 patch 只通过同一个结构化 AG-UI 协议提交，且不能修改 owner、依赖、路径范围或工程验收；
 14. 全量重新生成会覆盖最新 JSON 并重新确认；
 15. 完全重复任务被自动合并，依赖引用、Unit task_ids 和 source_refs 同步改写；
-16. 初次执行创建文件后失败，重试修改该文件不会因 `add/modify` 不一致被误判；
-17. 缺失依赖、循环依赖、路径冲突和详细设计缺失能够定位到具体任务、路径或上游产物；
-18. DAG 任务边界或拓扑校验失败时由平台自动重生成，用户只接收通过校验的 DAG 确认，不需要人工修正任务拆分；
-19. `confirmation_status` 不是 confirmed 的最新 JSON 无法通过主图、直接 Build 恢复或 scheduler 门禁；
-20. DAG 阶段及 Build/repair 回写只生成或更新 `build-task-plan.json`，不再生成或读取 `BUILD_TASK_DAG.md`；
-21. `repair-task-plan.json` 仍作为独立修复产物保留，不与 DAG JSON 混淆；
-22. 可视化界面展示的 scope、任务内容和确认状态与最新 JSON 一致，并能区分前置阻断、DAG 自动重生成失败和 DAG 确认等待；
-22. 普通任务执行、重试和修复流程不会错误清除已经确认的任务规划。
+16. 同一前端 Endpoint 被不同 API 文件重复实现时，DAG 在确认前阻断并自动重生成；正常 Repair 不会被误判为第二个 owner；
+17. 初次执行创建文件后失败，重试修改该文件不会因 `add/modify` 不一致被误判；
+18. 缺失依赖、循环依赖、路径冲突和详细设计缺失能够定位到具体任务、路径或上游产物；
+19. DAG 任务边界或拓扑校验失败时由平台自动重生成，用户只接收通过校验的 DAG 确认，不需要人工修正任务拆分；
+20. `confirmation_status` 不是 confirmed 的最新 JSON 无法通过主图、直接 Build 恢复或 scheduler 门禁；
+21. DAG 阶段及 Build/repair 回写只生成或更新 `build-task-plan.json`，不再生成或读取 `BUILD_TASK_DAG.md`；
+22. `repair-task-plan.json` 仍作为独立修复产物保留，不与 DAG JSON 混淆；
+23. 可视化界面展示的 scope、任务内容和确认状态与最新 JSON 一致，并能区分前置阻断、DAG 自动重生成失败和 DAG 确认等待；
+24. 普通任务执行、重试和修复流程不会错误清除已经确认的任务规划。
 
 ## 10. 后续优化项
 

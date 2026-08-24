@@ -4,7 +4,6 @@ import unittest
 
 from app.services.engineering_acceptance import (
     compile_engineering_acceptance,
-    migrate_legacy_repair_acceptance,
 )
 from app.services.build_repair_planner import (
     approve_repair_scope_confirmation,
@@ -214,8 +213,41 @@ class BuildRepairPlannerTests(unittest.TestCase):
         )
 
         repair_task = plan["tasks"][0]
-        acceptance = repair_task["acceptance_criteria"]
-        self.assertFalse(any("文件必须产生实际变更（非空写入）" in item for item in acceptance))
+        self.assertNotIn("acceptance_criteria", repair_task)
+        self.assertEqual(repair_task["business_acceptance_checks"], [])
+
+    def test_formal_source_change_requires_dag_replan_instead_of_repair(self) -> None:
+        """正式产物哈希变化时必须终止当前 Repair，并要求重新生成 Build DAG。"""
+
+        plan = create_build_failure_repair_plan(
+            failed_results=[
+                {
+                    "task_id": "api",
+                    "status": "failed",
+                    "failure_category": "business_acceptance_blocked",
+                    "scheduler_decision": {"action": "repair"},
+                    "business_acceptance_evidence": [
+                        {
+                            "status": "blocked",
+                            "evidence": "正式来源 orders.list 哈希已变化。",
+                            "facts": {"reason_code": "formal_source_changed"},
+                        }
+                    ],
+                }
+            ],
+            tasks=[
+                {
+                    "id": "api",
+                    "owner": "frontend",
+                    "change_scope": [{"operation": "modify", "path": "src/api.ts"}],
+                    "allowed_paths": ["src/api.ts"],
+                }
+            ],
+        )
+
+        self.assertEqual(plan["decision"], "terminal_failure")
+        self.assertEqual(plan["tasks"], [])
+        self.assertEqual(plan["terminal_failures"][0]["failure_handling"], "replan_build_dag")
 
     def test_repair_recompiles_file_operations_for_exact_repair_scope(self) -> None:
         """修复 DTO 时不得继续要求父任务全部新增文件再次产生 added 差异。"""
@@ -270,57 +302,6 @@ class BuildRepairPlannerTests(unittest.TestCase):
         self.assertEqual(len(file_checks), 1)
         self.assertEqual(file_checks[0]["target_paths"], ["backend/CreateDTO.java"])
         self.assertEqual(file_checks[0]["expected"]["change_type"], "modified")
-
-    def test_migrates_legacy_repair_add_checks_for_safe_resume(self) -> None:
-        """旧 Repair 因重复要求 added 失败时，应恢复 DTO 精确范围并允许续跑。"""
-
-        parent = compile_engineering_acceptance(
-            [
-                {
-                    "id": "backend-create",
-                    "owner": "backend",
-                    "status": "failed",
-                    "change_scope": [
-                        {"operation": "add", "path": "/backend/Entity.java"},
-                        {"operation": "add", "path": "/backend/CreateDTO.java"},
-                    ],
-                }
-            ],
-            {},
-        )[0]
-        legacy_repair = {
-            **parent,
-            "id": "repair:backend-create:legacy",
-            "kind": "repair",
-            "repairs": {"task_id": "backend-create"},
-            "repair_acceptance_version": "repair-acceptance.v2",
-            "description": "Edit /backend/CreateDTO.java to add JSON mapping.",
-            "status": "failed",
-            "last_result_status": "failed",
-            "failure_category": "acceptance_verification_failed",
-            "failure_reason": "Entity 预期差异类型 added，实际为 modified。",
-        }
-
-        migrated = migrate_legacy_repair_acceptance([parent, legacy_repair])[1]
-
-        self.assertEqual(migrated["status"], "pending")
-        self.assertTrue(migrated["legacy_acceptance_recovered"])
-        self.assertEqual(
-            migrated["change_scope"],
-            [
-                {
-                    "operation": "modify",
-                    "path": "/backend/CreateDTO.java",
-                    "description": "从旧 Repair 描述恢复的精确修复目标。",
-                }
-            ],
-        )
-        file_checks = [
-            item for item in migrated["acceptance_checks"] if item["kind"] == "file_operation"
-        ]
-        self.assertEqual(len(file_checks), 1)
-        self.assertEqual(file_checks[0]["expected"]["change_type"], "modified")
-
 
 if __name__ == "__main__":
     unittest.main()

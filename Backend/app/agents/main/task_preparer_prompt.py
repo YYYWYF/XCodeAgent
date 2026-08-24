@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.services.business_acceptance import DELIVERABLE_KINDS
+
 
 _ENDPOINT_SOURCE_TYPES = frozenset({"database", "external_api", "static"})
 _ENDPOINT_BACKEND_SOURCE_TYPES = frozenset({"database", "external_api"})
@@ -138,7 +140,7 @@ def build_task_preparation_prompt(
     build_context: dict[str, Any] | None = None,
     validation_feedback: list[str] | None = None,
 ) -> str:
-    """按本轮实际待生成 Unit 组装统一七段式任务规划 Prompt。"""
+    """按本轮实际待生成 Unit 组装统一八段式任务规划 Prompt。"""
 
     mode = planning_context_mode(build_context)
     source_groups = (
@@ -168,6 +170,35 @@ def build_task_preparation_prompt(
         _workspace_context_section(snapshot, prompt_context, project_plan),
     ]
     return "\n\n".join(sections)
+
+
+def _deliverable_kind_contract_prompt() -> str:
+    """生成所有任务规划模式共用的交付物结构和类型唯一契约。"""
+
+    allowed_kinds = "\n".join(f"- `{kind}`" for kind in DELIVERABLE_KINDS)
+    return (
+        "AUTHORITATIVE DELIVERABLE KIND CONTRACT:\n"
+        "The `kind` field of every item in `deliverables` MUST be exactly one of the "
+        "following values:\n"
+        f"{allowed_kinds}\n"
+        "This is the complete allowlist, not an example list. Do not invent, extend, "
+        "translate, or substitute any other value. Any value outside this list will be "
+        "rejected by the platform. `kind` describes the semantic responsibility of the "
+        "deliverable; do not encode an implementation language or framework as `kind`. "
+        "Business acceptance checks are platform-owned and must not be returned in the "
+        "task plan.\n"
+        "Every executable frontend or backend task MUST declare a non-empty `deliverables` "
+        "array. Every deliverable MUST use exactly this JSON shape: "
+        "{\"id\": \"stable unique id\", \"kind\": \"one allowed value above\", "
+        "\"target_id\": \"formal page, endpoint, entity, or capability id\", "
+        "\"paths\": [\"workspace-relative/path\"], "
+        "\"provides\": [\"semantic.capability\"]}. "
+        "The fields `id`, `kind`, and `target_id` are required non-empty strings. "
+        "The fields `paths` and `provides` are required non-empty string arrays. Every "
+        "deliverable path must also belong to the task's change_scope. Singular `path`, "
+        "free-form `description`, or any other substitute field does not satisfy this "
+        "contract and will be rejected."
+    )
 
 
 def _role_boundary_section(mode: str) -> str:
@@ -202,8 +233,10 @@ def _output_contract_section() -> str:
         "directories, entrypoints, stack, and reuse conventions visible in the scoped "
         "WorkspaceSnapshot. Every task must include: `id`, `unit_id`, `owner`, Simplified "
         "Chinese `title` and `description`, `dependencies`, exact `change_scope`, "
-        "`impact_scope`, `can_run_in_parallel`, `parallel_reason`, `status: \"pending\"`, "
-        "`acceptance_criteria: []`, `acceptance_checks: []`, and `verification_commands: []`."
+        "`deliverables`, `impact_scope`, `can_run_in_parallel`, `parallel_reason`, and "
+        "`status: \"pending\"`. Do not return platform-owned acceptance, evidence, summary, "
+        "or verification-command fields.\n"
+        + _deliverable_kind_contract_prompt()
     )
 
 
@@ -271,6 +304,12 @@ def _planning_algorithm_section(
         "Fill each task with exact business semantics and file paths, self-check for "
         "duplicate tasks, then return the JSON object."
     )
+    rules.append(
+        "Across the complete candidate, each frontend endpoint identified by "
+        "api_contract_id + endpoint_id must have exactly one implementation-owner task "
+        "and one business API module path. A second page that consumes the same endpoint "
+        "must reuse that owner task and module through Unit dependencies."
+    )
     feedback = _task_plan_retry_feedback(validation_feedback)
     if feedback:
         rules.append(feedback)
@@ -290,7 +329,9 @@ def _task_rules_section(mode: str, source_types: set[str]) -> str:
         "Each item must use `{operation: add|modify|delete, path, description}` with an "
         "exact workspace-relative path. `allowed_paths` remains the execution authorization "
         "boundary. A task must own only its layer's files. Existing equivalent code should "
-        "be reused or precisely modified, never recreated under a parallel path.",
+        "be reused or precisely modified, never recreated under a parallel path. Every "
+        "deliverable path must be an exact workspace-relative path owned by the same task "
+        "and must also appear in that task's change_scope.",
     ]
     if mode in {"page", "combined", "static"} or "static" in source_types:
         fragments.append("All frontend paths are under `/frontend/`.")
@@ -360,8 +401,8 @@ def _skill_injection_section(source_types: set[str]) -> str:
     else:
         fragments.append(
             "Any acceptance or verification guidance inside an injected Skill is subordinate "
-            "to the Output Contract: task acceptance fields and verification_commands remain "
-            "empty."
+            "to the Output Contract. Do not copy acceptance content or platform-owned "
+            "verification fields into task output."
         )
     return "\n".join(fragments)
 
@@ -408,6 +449,10 @@ def _forbidden_output_section(mode: str, source_types: set[str]) -> str:
         "global style, or scaffold files.",
         "Never plan tests, test files, builds, lint, type checks, verification, smoke checks, "
         "runtime availability checks, or business acceptance tasks.",
+        "Never return platform-owned acceptance criteria, acceptance checks, business checks, "
+        "evidence, summaries, or verification commands; the platform compiles engineering "
+        "and business checks deterministically from change_scope, allowed_paths, deliverables, "
+        "and formal contracts.",
         "Never create owner=database tasks, database:* Units, DDL, schema/table changes, "
         "migrations, or seed SQL. Never add CRUD operations, endpoints, fields, credentials, "
         "URLs, headers, or configuration outside confirmed contracts.",

@@ -8,7 +8,10 @@ from app.agents.main.task_preparer_prompt import build_task_preparation_prompt
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
-from app.services.build_task_planner import create_build_task_plan
+from app.services.build_task_planner import (
+    build_task_candidate_contract_errors,
+    create_build_task_plan,
+)
 from app.utils.model_output import extract_json_object
 
 
@@ -47,38 +50,6 @@ def _invoke_live_main_agent(
     return _coerce_content_text(content) or ""
 
 
-def _reset_model_acceptance_fields(agent_plan: dict[str, Any] | None) -> None:
-    """在模型输出边界强制清空候选任务的验收字段。
-
-    模型即使收到提示词约束也可能生成不准确的验收内容，这里把解析出的
-    tasks / dag.tasks 中的 acceptance_criteria 与 acceptance_checks 统一重置为
-    空数组，确保下游只依赖确定性编译器生成的验收点。
-    """
-
-    if not isinstance(agent_plan, dict):
-        return
-    raw_tasks = agent_plan.get("tasks")
-    if isinstance(raw_tasks, list):
-        _reset_task_acceptance_fields(raw_tasks)
-        return
-    dag = agent_plan.get("dag")
-    if isinstance(dag, dict):
-        for key in ("tasks", "nodes"):
-            value = dag.get(key)
-            if isinstance(value, list):
-                _reset_task_acceptance_fields(value)
-                return
-
-
-def _reset_task_acceptance_fields(tasks: list[Any]) -> None:
-    """将候选任务列表中的验收字段统一重置为空数组。"""
-
-    for task in tasks:
-        if isinstance(task, dict):
-            task["acceptance_criteria"] = []
-            task["acceptance_checks"] = []
-
-
 def prepare_build_tasks_with_main_agent(
     project_plan: dict[str, Any],
     *,
@@ -106,10 +77,9 @@ def prepare_build_tasks_with_main_agent(
         )
         preparation_source = "direct_chat_model"
         agent_plan = extract_json_object(agent_note)
-        # 模型输出的验收字段不可信；真正验收由确定性编译器生成。
-        _reset_model_acceptance_fields(agent_plan)
         _log_task_model_response_diagnostics(agent_note, agent_plan)
 
+        raw_contract_errors = build_task_candidate_contract_errors(agent_plan)
         try:
             build_task_plan = create_build_task_plan(
                 project_plan,
@@ -122,7 +92,7 @@ def prepare_build_tasks_with_main_agent(
                 workspace_root=workspace,
             )
         except ValueError as exc:
-            last_errors = [str(exc)]
+            last_errors = list(dict.fromkeys([*raw_contract_errors, str(exc)]))
             logger.warning(
                 "build_task_plan_compile_failed attempt=%s/%s response_sha256=%s "
                 "parsed_keys=%s error=%s",
@@ -135,12 +105,15 @@ def prepare_build_tasks_with_main_agent(
             if attempt >= max_retries:
                 raise ValueError(
                     "Build DAG 自动重生成耗尽，最后一次任务候选无法编译："
-                    + str(exc)
+                    + "；".join(last_errors)
                 ) from exc
             feedback = last_errors
             continue
 
-        last_errors = _build_task_plan_validation_errors(build_task_plan)
+        last_errors = _merge_candidate_validation_errors(
+            raw_contract_errors,
+            _build_task_plan_validation_errors(build_task_plan),
+        )
         if last_errors:
             logger.warning(
                 "build_task_plan_validation_retry attempt=%s/%s response_sha256=%s "
@@ -194,6 +167,29 @@ def _build_task_plan_validation_errors(build_task_plan: dict[str, Any]) -> list[
         if reason and reason not in errors:
             errors.append(reason)
     return errors
+
+
+def _merge_candidate_validation_errors(
+    raw_contract_errors: list[str],
+    compiled_errors: list[str],
+) -> list[str]:
+    """合并原始与编译错误，并用精确字段错误替代交付物缺失的泛化提示。"""
+
+    precise_task_prefixes = {
+        error.split(" deliverables", 1)[0]
+        for error in raw_contract_errors
+        if " deliverables" in error
+    }
+    generic_suffix = " must declare at least one deliverable."
+    filtered_compiled_errors = [
+        error
+        for error in compiled_errors
+        if not (
+            error.endswith(generic_suffix)
+            and error[: -len(generic_suffix)] in precise_task_prefixes
+        )
+    ]
+    return list(dict.fromkeys([*raw_contract_errors, *filtered_compiled_errors]))
 
 
 def _log_task_model_response_diagnostics(

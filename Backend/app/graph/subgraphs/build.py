@@ -29,8 +29,12 @@ from app.services.build_repair_planner import (
 )
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
-from app.services.engineering_acceptance import migrate_legacy_repair_acceptance
+from app.services.business_acceptance_verifier import verify_business_acceptance
+from app.services.engineering_acceptance_verifier import (
+    unauthorized_batch_paths,
+)
 from app.services.build_task_planner import (
+    frontend_endpoint_ownership_errors,
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
 )
@@ -40,6 +44,7 @@ from app.services.build_tool_activity import (
 )
 from app.services.build_scheduler import (
     attribute_task_file_changes,
+    classify_task_result,
     mark_tasks_running,
     normalize_task_results,
     ready_repair_task_ids,
@@ -49,6 +54,7 @@ from app.services.build_scheduler import (
     select_ready_build_batch,
     summarize_build_runtime,
     hydrate_missing_failed_results,
+    verify_task_file_changes,
 )
 from app.workspace.code_changes import (
     build_code_change_set,
@@ -70,6 +76,7 @@ BatchToolActivityCallback = Callable[
     [list[dict[str, Any]], dict[str, Any] | None],
     None,
 ]
+MAX_PARALLEL_BUILD_TASKS = 3
 
 
 def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
@@ -92,15 +99,6 @@ def _approved_database_change_plan(tasks: list[dict[str, Any]]) -> dict[str, Any
         if isinstance(plan, dict) and plan:
             return plan
     return None
-
-
-def _group_tasks_by_owner(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """按任务 owner 分组，便于分别派发给对应专业 Agent。"""
-
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for task in tasks:
-        groups.setdefault(str(task.get("owner") or ""), []).append(task)
-    return groups
 
 
 def _workspace_snapshot_from_state(state: ProjectState) -> dict[str, Any]:
@@ -308,27 +306,26 @@ def _execute_ready_tasks(
     *,
     on_batch_tool_activity: BatchToolActivityCallback | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """把同一批就绪任务按 owner 并发分发给对应 Deep Agent。"""
+    """把同一批就绪任务逐任务并发分发，隔离 Agent 写入归属和验收状态。"""
 
     all_results: list[dict[str, Any]] = []
     code_change_sets: list[dict[str, Any]] = []
-    owner_groups = list(_group_tasks_by_owner(ready_tasks).items())
     with ThreadPoolExecutor(
-        max_workers=max(1, len(owner_groups)),
-        thread_name_prefix="build-owner",
+        max_workers=max(1, min(len(ready_tasks), MAX_PARALLEL_BUILD_TASKS)),
+        thread_name_prefix="build-task",
     ) as executor:
-        # 把节点线程的 LangGraph 运行上下文复制进每个 owner 工作线程；
+        # 把节点线程的 LangGraph 运行上下文复制进每个任务工作线程；
         # 否则 custom 模式 stream writer 在回调中调用 get_config() 时缺少上下文，会抛 RuntimeError。
         futures = [
             executor.submit(
                 contextvars.copy_context().run,
                 _execute_owner_tasks,
                 state,
-                owner,
-                owner_tasks,
+                str(task.get("owner") or ""),
+                [task],
                 on_batch_tool_activity=on_batch_tool_activity,
             )
-            for owner, owner_tasks in owner_groups
+            for task in ready_tasks
         ]
         # 按提交顺序归并结果，保持任务结果和事件展示稳定。
         for future in futures:
@@ -346,9 +343,9 @@ def _execute_owner_tasks(
     owner: str,
     owner_tasks: list[dict[str, Any]],
     *,
-    on_batch_tool_activity: BatchToolActivityCallback | None,
+    on_batch_tool_activity: BatchToolActivityCallback | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """执行一个 owner 的就绪任务，并把可归属的代码差异收敛到任务结果。"""
+    """执行一个任务 Agent，并只使用该 Agent 的真实写入完成文件归属。"""
 
     runner_entry = _runner_for_owner(owner)
     if runner_entry is None:
@@ -371,6 +368,18 @@ def _execute_owner_tasks(
 
     workspace = workspace_from_state(state)
     source_tool, runner = runner_entry
+    mutation_paths: set[str] = set()
+
+    def record_tool_activity(activity: dict[str, Any]) -> None:
+        """记录当前任务 Agent 的文件写入意图，并继续投射实时工具活动。"""
+
+        if str(activity.get("category") or "") in {"write", "delete"}:
+            normalized_path = _normalize_tool_activity_path(activity.get("path"))
+            if normalized_path:
+                mutation_paths.add(normalized_path)
+        if on_batch_tool_activity is not None:
+            on_batch_tool_activity(owner_tasks, activity)
+
     try:
         captured = capture_agent_file_changes(
             workspace=workspace,
@@ -393,13 +402,8 @@ def _execute_owner_tasks(
                     if owner == "database"
                     else {}
                 ),
-                on_tool_activity=(
-                    (
-                        lambda activity: on_batch_tool_activity(owner_tasks, activity)
-                    )
-                    if on_batch_tool_activity is not None
-                    else None
-                ),
+                # 即使前端没有订阅工具进度也必须记录写入，文件归属不能依赖 UI 回调。
+                on_tool_activity=record_tool_activity,
             ),
         )
     except Exception as exc:
@@ -422,6 +426,7 @@ def _execute_owner_tasks(
         captured.code_change_set,
         owner_tasks,
         source_tool=source_tool,
+        mutation_paths=mutation_paths,
     )
     normalized_results = normalize_task_results(
         dispatched_tasks=owner_tasks,
@@ -436,7 +441,161 @@ def _execute_owner_tasks(
             tasks=owner_tasks,
         )
     )
-    return attributed_results, owner_change_set
+    # Agent 返回的验收字段不是可信证据，先清除后只使用本轮确定性验证结果。
+    sanitized_results = [
+        {
+            key: value
+            for key, value in result.items()
+            if key
+            not in {
+                "acceptance_evidence",
+                "business_acceptance_evidence",
+                "business_acceptance_summary",
+            }
+        }
+        for result in attributed_results
+    ]
+    unauthorized_paths = unauthorized_batch_paths(owner_change_set, owner_tasks)
+    if owner != "database":
+        sanitized_results = verify_task_file_changes(
+            results=sanitized_results,
+            code_change_set=owner_change_set,
+            tasks=owner_tasks,
+            workspace_root=str(workspace) if workspace else None,
+            batch_unauthorized_paths=unauthorized_paths,
+        )
+    sanitized_results = _verify_business_results(
+        state,
+        owner_tasks,
+        sanitized_results,
+        workspace_root=str(workspace) if workspace else None,
+    )
+    return sanitized_results, owner_change_set
+
+
+def _verify_business_results(
+    state: ProjectState,
+    owner_tasks: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    workspace_root: str | None,
+) -> list[dict[str, Any]]:
+    """独立执行业务验收，并在全部检查完成后统一汇总任务状态。"""
+
+    tasks_by_id = {
+        str(task.get("id") or ""): task
+        for task in owner_tasks
+        if task.get("id")
+    }
+    dependency_evidence = _completed_dependency_business_evidence(
+        state.get("build_results"),
+        owner_tasks,
+    )
+    verified: list[dict[str, Any]] = []
+    for result in results:
+        task = tasks_by_id.get(str(result.get("task_id") or ""), {})
+        engineering_ran = isinstance(result.get("acceptance_evidence"), list)
+        if result.get("status") not in {"completed", "already_satisfied"} and not engineering_ran:
+            verified.append(result)
+            continue
+        business = verify_business_acceptance(
+            task,
+            workspace_root,
+            formal_artifacts=state.get("project_plan")
+            if isinstance(state.get("project_plan"), dict)
+            else None,
+            dependency_evidence=dependency_evidence.get(str(task.get("id") or ""), []),
+        )
+        next_result = {
+            **result,
+            "business_acceptance_evidence": business["business_acceptance_evidence"],
+            "business_acceptance_summary": business["business_acceptance_summary"],
+            "acceptance_status": {
+                **(
+                    result.get("acceptance_status")
+                    if isinstance(result.get("acceptance_status"), dict)
+                    else {}
+                ),
+                "business": business.get("status"),
+            },
+        }
+        if business.get("status") == "failed":
+            _merge_business_acceptance_failure(next_result, "business_acceptance_failed")
+        elif business.get("status") == "blocked":
+            _merge_business_acceptance_failure(next_result, "business_acceptance_blocked")
+        elif next_result.get("status") in {"completed", "already_satisfied"}:
+            next_result["failure_category"] = None
+            next_result["failure_reason"] = None
+            next_result["scheduler_decision"] = classify_task_result(next_result)
+        verified.append(next_result)
+    return verified
+
+
+def _completed_dependency_business_evidence(
+    build_results: Any,
+    tasks: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """按任务依赖隔离已完成业务验收证据，避免并发任务互相消费结果。"""
+
+    latest_by_task: dict[str, dict[str, Any]] = {}
+    for result in build_results if isinstance(build_results, list) else []:
+        if not isinstance(result, dict) or not result.get("task_id"):
+            continue
+        latest_by_task[str(result["task_id"])] = result
+    evidence_by_task: dict[str, list[dict[str, Any]]] = {}
+    for task in tasks:
+        task_id = str(task.get("id") or "")
+        dependency_evidence: list[dict[str, Any]] = []
+        for dependency_id in task.get("dependencies") or []:
+            result = latest_by_task.get(str(dependency_id))
+            if not result or result.get("status") not in {"completed", "already_satisfied"}:
+                continue
+            dependency_evidence.extend(
+                item
+                for item in result.get("business_acceptance_evidence") or []
+                if isinstance(item, dict)
+            )
+        evidence_by_task[task_id] = dependency_evidence
+    return evidence_by_task
+
+
+def _mark_business_acceptance_failure(result: dict[str, Any], category: str) -> None:
+    """把业务检查失败或证据不足转换为可进入 Repair 的调度失败。"""
+
+    summary = result.get("business_acceptance_summary")
+    summary_text = (
+        f"通过 {summary.get('passed', 0)}，失败 {summary.get('failed', 0)}，"
+        f"阻断 {summary.get('blocked', 0)}"
+        if isinstance(summary, dict)
+        else "结果摘要不可用"
+    )
+    result["status"] = "failed"
+    result["failure_category"] = category
+    result["failure_reason"] = f"业务验收未通过（{summary_text}）。"
+    original_note = str(result.get("agent_note") or "")
+    message = f"BUSINESS VERIFICATION FAILED: {result['failure_reason']}"
+    result["agent_note"] = f"{original_note}\n\n{message}" if original_note else message
+    result["scheduler_decision"] = classify_task_result(result)
+
+
+def _merge_business_acceptance_failure(result: dict[str, Any], category: str) -> None:
+    """合并业务失败与既有工程失败，避免一种验收覆盖另一种验收状态。"""
+
+    existing_failure = (
+        str(result.get("failure_reason") or "").strip()
+        if result.get("status") == "failed"
+        else ""
+    )
+    _mark_business_acceptance_failure(result, category)
+    if existing_failure:
+        business_failure = str(result.get("failure_reason") or "").strip()
+        result["failure_category"] = "acceptance_verification_failed"
+        result["failure_reason"] = "；".join(
+            dict.fromkeys(
+                value for value in (existing_failure, business_failure) if value
+            )
+        )
+        result["scheduler_decision"] = classify_task_result(result)
 
 
 def _filter_change_set_for_tasks(
@@ -444,19 +603,28 @@ def _filter_change_set_for_tasks(
     tasks: list[dict[str, Any]],
     *,
     source_tool: str,
+    mutation_paths: set[str] | None = None,
 ) -> dict[str, Any] | None:
-    """过滤并发快照中的其他 owner 文件，保证变更归属仍受任务范围约束。"""
+    """保留任务授权差异和当前 Agent 实际调用写工具产生的越界差异。"""
 
     if not isinstance(change_set, dict):
         return None
+    owned_paths = {
+        normalized
+        for path in mutation_paths or set()
+        if (normalized := _normalize_tool_activity_path(path))
+    }
     files = [
         file_item
         for file_item in change_set.get("files", [])
         if isinstance(file_item, dict)
         and file_item.get("path")
-        and any(
-            path_matches_task_scope(str(file_item["path"]), task)
-            for task in tasks
+        and (
+            _normalize_tool_activity_path(file_item["path"]) in owned_paths
+            or any(
+                path_matches_task_scope(str(file_item["path"]), task)
+                for task in tasks
+            )
         )
     ]
     workspace_root = str(change_set.get("workspaceRoot") or "")
@@ -467,6 +635,13 @@ def _filter_change_set_for_tasks(
         files=files,
         source_tool=source_tool,
     )
+
+
+def _normalize_tool_activity_path(value: Any) -> str:
+    """把工具活动中的虚拟绝对路径转换为工作区相对路径。"""
+
+    normalized = str(value or "").strip().replace("\\", "/")
+    return normalized.lstrip("/").lstrip("./")
 
 
 def _plan_build_repair_with_repair_planner(
@@ -679,6 +854,9 @@ def _latest_build_task_plan_for_build(
         errors.extend(str(error) for error in graph_errors if str(error).strip())
         if not graph_errors:
             errors.append("Build DAG task_graph.validation 未通过。")
+    errors.extend(
+        frontend_endpoint_ownership_errors(tasks_from_build_task_plan(build_task_plan))
+    )
     current_scope = state.get("build_execution_scope")
     current_scope = current_scope if isinstance(current_scope, dict) else {}
     planned_scope = build_task_plan.get("build_execution_scope")
@@ -767,9 +945,8 @@ def run_build_scheduler(
     build_task_plan, gate_errors = _latest_build_task_plan_for_build(state)
     if gate_errors:
         return _build_gate_result(state, build_task_plan, gate_errors)
-    canonical_tasks = migrate_legacy_repair_acceptance(
-        list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
-    )
+    # 当前契约直接使用最新计划，不对历史 DAG 做运行时迁移或字段回填。
+    canonical_tasks = list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
     build_task_plan = replace_build_task_plan_tasks(build_task_plan, canonical_tasks)
     state = {
         **state,

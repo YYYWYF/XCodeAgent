@@ -197,7 +197,22 @@ def _touches_public_contract(task: Dict[str, Any]) -> bool:
         [
             str(task.get("title") or ""),
             str(task.get("task_type") or ""),
-            " ".join(_string_list(task.get("acceptance_criteria"))),
+            " ".join(
+                str(check.get("description") or "")
+                for check in [
+                    *(
+                        task.get("acceptance_checks")
+                        if isinstance(task.get("acceptance_checks"), list)
+                        else []
+                    ),
+                    *(
+                        task.get("business_acceptance_checks")
+                        if isinstance(task.get("business_acceptance_checks"), list)
+                        else []
+                    ),
+                ]
+                if isinstance(check, dict)
+            ),
             " ".join(_task_target_files(task)),
         ]
     ).lower()

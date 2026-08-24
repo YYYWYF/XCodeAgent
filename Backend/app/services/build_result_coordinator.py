@@ -315,25 +315,62 @@ def _failure_reason_from_result(result: dict[str, Any] | None) -> str:
 
 
 def _failure_summary_from_result(result: dict[str, Any] | None) -> dict[str, Any]:
-    """把失败分类、调度决策和说明同步到任务展示字段。"""
+    """把失败分类、调度决策和两类验收证据同步到任务展示字段。"""
 
-    if not isinstance(result, dict) or result.get("status") != "failed":
+    if not isinstance(result, dict):
         return {
             "failure_category": None,
             "failure_reason": None,
             "failure_detail": None,
+            "acceptance_status": {},
+            "acceptance_evidence": [],
+            "business_acceptance_evidence": [],
+            "business_acceptance_summary": {
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "blocked": 0,
+                "duration_ms_total": 0,
+                "duration_ms_avg": 0,
+                "by_kind": {},
+            },
         }
     scheduler_decision = result.get("scheduler_decision")
-    return {
+    failure_fields = {
         "failure_category": result.get("failure_category")
         or result.get("error_category")
         or result.get("category"),
-        "failure_reason": _failure_reason_from_result(result),
+        "failure_reason": _failure_reason_from_result(result)
+        if result.get("status") == "failed"
+        else None,
         "failure_detail": {
             "scheduler_decision": scheduler_decision if isinstance(scheduler_decision, dict) else {},
             "changed_files": result.get("changed_files") if isinstance(result.get("changed_files"), list) else [],
+        }
+        if result.get("status") == "failed"
+        else None,
+        "acceptance_status": result.get("acceptance_status")
+        if isinstance(result.get("acceptance_status"), dict)
+        else {},
+        "acceptance_evidence": result.get("acceptance_evidence")
+        if isinstance(result.get("acceptance_evidence"), list)
+        else [],
+        "business_acceptance_evidence": result.get("business_acceptance_evidence")
+        if isinstance(result.get("business_acceptance_evidence"), list)
+        else [],
+        "business_acceptance_summary": result.get("business_acceptance_summary")
+        if isinstance(result.get("business_acceptance_summary"), dict)
+        else {
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "blocked": 0,
+            "duration_ms_total": 0,
+            "duration_ms_avg": 0,
+            "by_kind": {},
         },
     }
+    return failure_fields
 
 
 def apply_agent_results_with_scheduler(

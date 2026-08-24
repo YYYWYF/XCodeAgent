@@ -269,10 +269,17 @@ def _initial_tasks(state: ProjectState) -> list[dict[str, Any]]:
                 "description": feedback,
                 "allowed_paths": paths,
                 "target_files": paths,
-                "acceptance_criteria": [
-                    feedback,
-                    "保持已确认的页面、接口和数据源语义不变。",
+                "engineering_acceptance_checks": [
+                    {
+                        "id": "acceptance-local-fix:feedback",
+                        "kind": "user_feedback",
+                        "description": feedback,
+                        "required": True,
+                        "target_paths": paths,
+                        "verification_stage": "integration_test",
+                    },
                 ],
+                "business_acceptance_checks": [],
                 "dependencies": [],
                 "status": "pending",
             }

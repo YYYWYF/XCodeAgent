@@ -27,6 +27,7 @@ REPAIRABLE_FAILURES = {
     "runtime_error",
     "acceptance_failed",
     "acceptance_verification_failed",
+    "business_acceptance_failed",
     "no_file_changes",
 }
 CONFIRMATION_FAILURES = {
@@ -347,7 +348,7 @@ def verify_task_file_changes(
     workspace_root: str | None = None,
     batch_unauthorized_paths: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """为显式调用方执行完整工程验收；Build owner 执行路径不再调用此函数。"""
+    """在 Owner 执行后执行完整工程验收并生成结构化工程证据。"""
 
     changed_paths: list[str] = []
     if code_change_set and isinstance(code_change_set.get("files"), list):
@@ -385,6 +386,14 @@ def verify_task_file_changes(
             batch_unauthorized_paths=batch_unauthorized_paths,
         )
         verified_result["acceptance_evidence"] = acceptance_evidence
+        verified_result["acceptance_status"] = {
+            **(
+                verified_result.get("acceptance_status")
+                if isinstance(verified_result.get("acceptance_status"), dict)
+                else {}
+            ),
+            "engineering": "failed" if acceptance_errors else "passed",
+        }
         verified_result["satisfaction_evidence"] = {
             "target_files": _task_target_paths(task),
             "acceptance_checks": acceptance_evidence,
@@ -457,9 +466,9 @@ def _task_target_paths(task: dict[str, Any]) -> list[str]:
 
     return list(
         dict.fromkeys(
-            str(path).lstrip("./")
+            _normalize_path(path)
             for path in task.get("target_files", [])
-            if str(path).strip()
+            if _normalize_path(path)
         )
     )
 
@@ -478,21 +487,30 @@ def _task_authorized_paths(task: dict[str, Any]) -> list[str]:
         for path in task.get("target_files") or []
         if str(path).strip()
     )
-    return list(dict.fromkeys(path.lstrip("./") for path in paths if path))
+    return list(dict.fromkeys(_normalize_path(path) for path in paths if _normalize_path(path)))
 
 
 def _path_matches_any(path: str, patterns: list[str]) -> bool:
     """判断实际变更路径是否落在任务授权范围内。"""
 
-    normalized = path.lstrip("./")
+    normalized = _normalize_path(path).casefold()
     for pattern in patterns:
-        normalized_pattern = pattern.lstrip("./")
+        normalized_pattern = _normalize_path(pattern).casefold()
         if normalized_pattern.endswith("/**"):
             if normalized.startswith(normalized_pattern[:-3].rstrip("/") + "/"):
                 return True
-        elif fnmatch(normalized, normalized_pattern):
+        elif normalized == normalized_pattern or normalized.startswith(normalized_pattern.rstrip("/") + "/") or fnmatch(normalized, normalized_pattern):
             return True
     return False
+
+
+def _normalize_path(value: Any) -> str:
+    """统一批次差异和任务授权中的跨平台相对路径。"""
+
+    text = str(value or "").strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return "/".join(part for part in text.split("/") if part not in {"", "."})
 
 
 def summarize_build_runtime(

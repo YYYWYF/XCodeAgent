@@ -233,7 +233,8 @@ export default function BuildTaskPlanConfirmation({
                 <div className={cx('workflow-dag-confirmation-readonly-item')}>
                   <span className={cx('workflow-dag-confirmation-readonly-label')}>验收</span>
                   <Typography.Text className={cx('workflow-dag-confirmation-readonly-value')}>
-                    {task.acceptance_checks?.length || 0} 项
+                    工程 {task.acceptance_checks?.length || 0} 项 · 业务{' '}
+                    {task.business_acceptance_checks?.length || 0} 项
                   </Typography.Text>
                 </div>
               </div>

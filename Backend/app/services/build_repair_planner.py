@@ -8,10 +8,12 @@ from fnmatch import fnmatch
 from typing import Any
 
 from app.services.engineering_acceptance import compile_repair_engineering_acceptance
+from app.services.business_acceptance import compile_repair_business_acceptance
 from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
 )
+from app.services.business_acceptance import normalize_repo_path
 
 
 MAX_REPAIR_DEPTH = 1
@@ -48,6 +50,18 @@ def create_build_failure_repair_plan(
             continue
 
         parent_id = str(result.get("task_id") or "")
+        if _formal_source_changed(result):
+            terminal_failures.append(
+                {
+                    "decision": "terminal_failure",
+                    "reason": "正式产物哈希已变化，不能继续使用当前 Build DAG 修复，必须重新生成任务计划。",
+                    "failure_handling": "replan_build_dag",
+                    "repair_input_ref": {"task_id": parent_id},
+                    "tasks": [],
+                }
+            )
+            skipped.append({"task_id": parent_id, "reason": "formal_source_changed"})
+            continue
         parent_task = tasks_by_id.get(parent_id)
         if not parent_task:
             skipped.append({"task_id": parent_id, "reason": "missing_parent_task"})
@@ -179,7 +193,6 @@ def create_repair_planner_input(
     targeted_snapshot: dict[str, Any] | None = None,
     source_ref: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    acceptance = _string_list(original_task.get("acceptance_criteria"))
     change_scope = original_task.get("change_scope", [])
     return {
         "version": "0.1.0",
@@ -193,7 +206,16 @@ def create_repair_planner_input(
         },
         "workspace_snapshot": targeted_snapshot or workspace_snapshot or {},
         "failure_logs_refs": _failure_log_refs(failed_attempt),
-        "acceptance_criteria": acceptance,
+        "engineering_acceptance_checks": [
+            dict(item)
+            for item in original_task.get("acceptance_checks", [])
+            if isinstance(item, dict)
+        ],
+        "business_acceptance_checks": [
+            dict(item)
+            for item in original_task.get("business_acceptance_checks", [])
+            if isinstance(item, dict)
+        ],
         "constraints": {
             "max_repair_depth": MAX_REPAIR_DEPTH,
             "current_repair_depth": _repair_depth(original_task),
@@ -561,8 +583,13 @@ def _repair_task(
         "parallel_reason": "repair task must serialize with the failed parent scope.",
         "repair_strategy": strategy,
         "repair_boundaries": boundaries or _repair_boundaries(parent_task, {}),
-        "acceptance_criteria": [],
+        "deliverables": [
+            dict(item)
+            for item in parent_task.get("deliverables", [])
+            if isinstance(item, dict)
+        ],
         "acceptance_checks": [],
+        "business_acceptance_checks": [],
         "engineering_context": parent_task.get("engineering_context", {}),
         "failure_evidence": {
             "failure_category": result.get("failure_category"),
@@ -572,7 +599,8 @@ def _repair_task(
             "commands": result.get("commands", []),
         },
     }
-    return compile_repair_engineering_acceptance(repair_task, parent_task)
+    compiled = compile_repair_engineering_acceptance(repair_task, parent_task)
+    return compile_repair_business_acceptance(compiled, parent_task)
 
 
 def _repair_change_scope(
@@ -585,9 +613,9 @@ def _repair_change_scope(
 
     allowed_paths = _string_list(parent_task.get("allowed_paths"))
     parent_paths = [
-        str(item.get("path") or "").strip()
+        normalize_repo_path(item.get("path"))
         for item in parent_task.get("change_scope", [])
-        if isinstance(item, dict) and str(item.get("path") or "").strip()
+        if isinstance(item, dict) and normalize_repo_path(item.get("path"))
     ]
     raw_scope = raw_task.get("change_scope")
     result: list[dict[str, str]] = []
@@ -595,7 +623,7 @@ def _repair_change_scope(
         for item in raw_scope:
             if not isinstance(item, dict):
                 continue
-            path = str(item.get("path") or "").strip()
+            path = normalize_repo_path(item.get("path"))
             if not path or not _repair_path_allowed(path, allowed_paths, parent_paths):
                 continue
             operation = str(item.get("operation") or "modify").lower()
@@ -620,6 +648,7 @@ def _repair_change_scope(
             strategy,
         )
     )
+    normalized_repair_text = repair_text.replace("\\", "/")
     return [
         {
             "operation": "modify",
@@ -627,7 +656,7 @@ def _repair_change_scope(
             "description": "根据修复描述修改该精确目标文件。",
         }
         for path in parent_paths
-        if path.lstrip("./") in repair_text or path in repair_text
+        if path in normalized_repair_text
     ]
 
 
@@ -638,10 +667,10 @@ def _repair_path_allowed(
 ) -> bool:
     """判断 RepairPlanner 声明路径是否仍位于父任务文件授权范围。"""
 
-    normalized = path.lstrip("./")
-    patterns = [*allowed_paths, *parent_paths]
+    normalized = normalize_repo_path(path).casefold()
+    patterns = [normalize_repo_path(item).casefold() for item in [*allowed_paths, *parent_paths]]
     for pattern in patterns:
-        candidate = pattern.lstrip("./")
+        candidate = pattern
         if candidate.endswith("/**") and normalized.startswith(candidate[:-3].rstrip("/") + "/"):
             return True
         if fnmatch(normalized, candidate):
@@ -722,9 +751,17 @@ def _has_successful_result(task: dict[str, Any], results: list[dict[str, Any]]) 
 
 
 def _string_list(value: Any) -> list[str]:
+    """把不可信数组规整为非空字符串列表。"""
+
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    """把不可信对象规整为字典，便于读取业务验收原因码。"""
+
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _deterministic_repair_plan(repair_input: dict[str, Any]) -> dict[str, Any]:
@@ -735,7 +772,7 @@ def _deterministic_repair_plan(repair_input: dict[str, Any]) -> dict[str, Any]:
         "decision": "repair",
         "strategy": (
             "Create a bounded repair task that fixes the failed implementation "
-            "inside the original task scope, then rerun the original acceptance criteria."
+            "inside the original task scope, then rerun the inherited engineering and business checks."
         ),
         "boundaries": {
             "change_scope_policy": "stay_within_original_task_change_scope",
@@ -786,6 +823,23 @@ def _failure_log_refs(result: dict[str, Any]) -> list[str]:
             if isinstance(command, dict) and command.get("log_ref"):
                 refs.append(str(command["log_ref"]))
     return refs
+
+
+def _formal_source_changed(result: dict[str, Any]) -> bool:
+    """识别业务验收发现的正式来源哈希变化，阻止在旧 DAG 上继续 Repair。"""
+
+    evidence = result.get("business_acceptance_evidence")
+    if not isinstance(evidence, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and item.get("status") == "blocked"
+        and (
+            _dict_value(item.get("facts")).get("reason_code") == "formal_source_changed"
+            or "哈希已变化" in str(item.get("evidence") or "")
+        )
+        for item in evidence
+    )
 
 
 def _overall_repair_decision(

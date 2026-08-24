@@ -35,6 +35,8 @@ export type WorkflowSummary = {
   buildSummary?: WorkflowBuildSummary
   buildTaskPlan?: WorkflowBuildTaskPlan
   buildExecutionScope?: WorkflowBuildExecutionScope
+  lastPersistedBuildExecutionScope?: WorkflowBuildExecutionScope
+  buildTaskPlanPersisted?: boolean
   buildTaskPlanConfirmation?: WorkflowClarification
   testTarget?: WorkflowTestTarget
   unitTestSummary?: Record<string, unknown>
@@ -535,7 +537,11 @@ export type WorkflowBuildTaskPlanTask = {
   target_files?: string[]
   allowed_paths?: string[]
   change_scope?: Array<Record<string, unknown>>
+  deliverables?: Array<Record<string, unknown>>
   acceptance_checks?: Array<Record<string, unknown>>
+  business_acceptance_checks?: Array<Record<string, unknown>>
+  business_acceptance_evidence?: Array<Record<string, unknown>>
+  business_acceptance_summary?: Record<string, unknown>
   status?: string
 }
 
@@ -548,7 +554,9 @@ export type WorkflowSmallTask = {
   status?: string
   allowedPaths?: string[]
   targetFiles?: string[]
-  acceptanceCriteria?: string[]
+  engineeringAcceptanceChecks?: Array<Record<string, unknown>>
+  businessAcceptanceChecks?: Array<Record<string, unknown>>
+  businessAcceptanceSummary?: Record<string, unknown>
   dependencies?: string[]
   [key: string]: unknown
 }
@@ -788,8 +796,16 @@ export type WorkflowBuildExecutionTask = {
   target_files?: string[]
   allowedPaths?: string[]
   allowed_paths?: string[]
-  acceptanceCriteria?: string[]
-  acceptance_criteria?: string[]
+  engineeringAcceptanceChecks?: Array<Record<string, unknown>>
+  engineering_acceptance_checks?: Array<Record<string, unknown>>
+  acceptanceEvidence?: Array<Record<string, unknown>>
+  acceptance_evidence?: Array<Record<string, unknown>>
+  businessAcceptanceChecks?: Array<Record<string, unknown>>
+  business_acceptance_checks?: Array<Record<string, unknown>>
+  businessAcceptanceEvidence?: Array<Record<string, unknown>>
+  business_acceptance_evidence?: Array<Record<string, unknown>>
+  businessAcceptanceSummary?: Record<string, unknown>
+  business_acceptance_summary?: Record<string, unknown>
   source_refs?: Record<string, unknown>
   failure_category?: string | null
   failure_reason?: string | null
