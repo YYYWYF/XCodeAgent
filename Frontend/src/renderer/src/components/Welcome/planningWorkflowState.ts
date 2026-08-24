@@ -64,6 +64,7 @@ const PLANNING_CONFIRMATION_ANSWER_KEYS: Record<string, string> = {
 const PLANNING_CONFIRMATION_DEFAULTS = new Set([
   '正确，继续',
   '正确，继续规划',
+  '确认需求文档，继续',
   '确认全部设计稿'
 ])
 

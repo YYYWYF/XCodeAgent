@@ -342,8 +342,26 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(_route_start({"resume_from": "ui_confirmation"}), "ui_confirmation")
         self.assertEqual(_route_start({"resume_from": "detail_confirmation"}), "requirements")
         self.assertEqual(
-            _route_requirements({"clarification": {"status": "requires_user_input"}}),
+            _route_requirements(
+                {
+                    "clarification": {
+                        "status": "requires_user_input",
+                        "mode": "ask_user_question",
+                    }
+                }
+            ),
             "requirements_review",
+        )
+        self.assertEqual(
+            _route_requirements(
+                {
+                    "clarification": {
+                        "status": "requires_user_input",
+                        "mode": "requirement_spec_confirmation",
+                    }
+                }
+            ),
+            "product_planning",
         )
 
     def test_requirement_failure_and_retry_update_lifecycle(self) -> None:

@@ -1574,9 +1574,17 @@ def _application_planning_interaction(
         exclude_none=True,
     )
     if not str(interaction.get("request") or "").strip():
+        # 澄清答案提交轮的 message 只是占位文本，真实需求在 originalRequest 里；
+        # 缺失时不能把占位文本当成“原始需求”发给模型，否则分析必然失败。
+        original_request = (
+            _optional_text(payload.get("originalRequest"))
+            or _optional_text(payload.get("original_request"))
+            or _optional_text(forwarded_props.get("originalRequest"))
+            or _optional_text(forwarded_props.get("original_request"))
+        )
         interaction["request"] = _merge_clarification_answers(
             request=fallback_request,
-            original_request=None,
+            original_request=original_request,
             clarification_answers=interaction.get("answers"),
         )
     if interaction.get("action") == "ui_action":

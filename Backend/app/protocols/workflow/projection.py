@@ -1194,6 +1194,25 @@ def _workflow_confirmation_artifact(
     except (OSError, UnicodeError):
         return None
 
+    if contract["id"] == "product_plan":
+        # 需求与产品规划合并确认：确认卡与右侧文档展示同一份连贯的“需求文档”，
+        # 需求草稿在前、产品规划内容作为后续章节接入（其 H1 降级为章节标题）。
+        requirement_path_value = result.get("requirement_spec_path")
+        requirement_content = ""
+        if isinstance(requirement_path_value, str) and requirement_path_value.strip():
+            requirement_path = Path(requirement_path_value)
+            if (
+                "drafts" in requirement_path.parts
+                and requirement_path.name == "requirement-spec.md"
+                and requirement_path.is_file()
+            ):
+                try:
+                    requirement_content = requirement_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    requirement_content = ""
+        if requirement_content.strip():
+            content = _merge_requirement_and_product_plan(requirement_content, content)
+
     return {
         "id": contract["id"],
         "name": contract["name"],
@@ -1201,6 +1220,17 @@ def _workflow_confirmation_artifact(
         "format": "markdown",
         "content": content,
     }
+
+
+def _merge_requirement_and_product_plan(requirement_content: str, product_plan_content: str) -> str:
+    """把产品规划草稿接在需求草稿之后，呈现为一份连贯的需求文档。"""
+
+    merged_requirement = requirement_content.rstrip()
+    plan = product_plan_content.strip()
+    lines = plan.splitlines()
+    if lines and lines[0].lstrip().startswith("# ") and not lines[0].lstrip().startswith("## "):
+        lines[0] = f"## {lines[0].lstrip()[2:].strip()}"
+    return f"{merged_requirement}\n\n{'\n'.join(lines).strip()}\n"
 
 
 def _repair_terminal_reason(result: dict[str, Any]) -> str:

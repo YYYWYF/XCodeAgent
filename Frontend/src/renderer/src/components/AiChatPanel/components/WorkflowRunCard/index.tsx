@@ -62,8 +62,8 @@ const OTHER_OPTION_VALUE = '__other__'
 const ARTIFACT_CONFIRMATION_MAP: Record<string, { title: string; summary: string }> = {
   requirement_spec_confirmation: { title: '需求文档', summary: '需求文档已生成，请确认内容。' },
   product_plan_confirmation: {
-    title: '产品规划',
-    summary: '产品规划已生成，确认后生成 UI 设计稿。'
+    title: '需求文档',
+    summary: '需求文档（含产品规划）已生成，确认后生成 UI 设计稿。'
   },
   technical_plan_confirmation: {
     title: '技术规划',
@@ -685,7 +685,7 @@ function PlanConfirmationCard({
   const [viewing, setViewing] = useState(false)
   const canView = Boolean(artifact || plan)
   const documentLabel =
-    planType === 'product' ? '产品规划' : planType === 'technical' ? '技术规划' : '项目计划书'
+    planType === 'product' ? '需求文档' : planType === 'technical' ? '技术规划' : '项目计划书'
   return (
     <div className={cx('artifact-auth-bar', 'project-plan-confirmation-card')}>
       <div className={cx('artifact-auth-bar-footer')}>

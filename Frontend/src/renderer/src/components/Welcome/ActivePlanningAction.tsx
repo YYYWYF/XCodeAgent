@@ -85,9 +85,9 @@ function planningStatusPresentation(
   }
   if (stage === 'awaiting_product_plan_confirmation') {
     return {
-      description: '产品规划已生成，请由产品确认后进入 UI 设计',
+      description: '需求文档（含产品规划）已生成，确认后进入 UI 设计',
       icon: <CheckCircleFilled />,
-      title: `阶段 2/4：确认「${application.appName}」的产品规划`
+      title: `阶段 2/4：确认「${application.appName}」的需求文档`
     }
   }
   if (stage === 'awaiting_ui_design_confirmation') {

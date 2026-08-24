@@ -406,8 +406,8 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             ["product_planning"],
         )
 
-    def test_unconfirmed_requirement_never_routes_to_product_planning(self) -> None:
-        """即使通用澄清状态丢失或已清空，未确认需求也必须停在确认门禁。"""
+    def test_pending_requirement_routes_to_merged_product_confirmation(self) -> None:
+        """需求确认与产品规划确认合并：待确认需求直接进产品规划，由产品规划门一次确认。"""
 
         for clarification in (None, {"status": "clear"}):
             with self.subTest(clarification=clarification):
@@ -420,8 +420,38 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                             "clarification": clarification,
                         }
                     ),
-                    "requirements_review",
+                    "product_planning",
                 )
+
+    def test_requirement_clarification_questions_still_suspend(self) -> None:
+        """需求澄清问答仍挂起在原审阅门，等待用户回答后再进产品规划。"""
+
+        self.assertEqual(
+            _route_requirements(
+                {
+                    "requirement_spec": {"confirmation_status": "pending_user_input"},
+                    "clarification": {
+                        "status": "requires_user_input",
+                        "mode": "ask_user_question",
+                    },
+                }
+            ),
+            "requirements_review",
+        )
+        self.assertEqual(
+            _route_requirements(
+                {
+                    "requirement_spec": {
+                        "confirmation_status": "pending_user_confirmation"
+                    },
+                    "clarification": {
+                        "status": "requires_user_input",
+                        "mode": "requirement_spec_confirmation",
+                    },
+                }
+            ),
+            "product_planning",
+        )
 
     def test_router_cannot_skip_unconfirmed_upstream_artifacts(self) -> None:
         """意图 Agent 不能越过尚未确认的上游产物。"""

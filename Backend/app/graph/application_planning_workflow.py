@@ -52,16 +52,16 @@ def _route_start(state: ProjectState) -> str:
 
 
 def _route_requirements(state: ProjectState) -> str:
-    """需求未确认时进入原生审阅中断，否则进入产品规划。"""
+    """仅需求澄清问答挂起；需求确认与产品规划确认合并为产品规划门一次确认。"""
 
-    requirement_spec = state.get("requirement_spec")
+    clarification = state.get("clarification")
+    clarification = clarification if isinstance(clarification, dict) else {}
     if (
-        not isinstance(requirement_spec, dict)
-        or requirement_spec.get("confirmation_status") != "confirmed"
+        clarification.get("status") == "requires_user_input"
+        and str(clarification.get("mode") or "") == "ask_user_question"
     ):
         return "requirements_review"
-    clarification = state.get("clarification")
-    return "requirements_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "product_planning"
+    return "product_planning"
 
 
 def _route_product_planning(state: ProjectState) -> str:
@@ -230,6 +230,18 @@ def _product_planning(state: ProjectState) -> dict:
     try:
         lifecycle = load_application_lifecycle(workspace) or _ensure_lifecycle(state)
         if (
+            lifecycle.initialization.stage
+            == ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION
+        ):
+            # 需求确认并入产品规划确认门：需求草稿就绪后不再停留在需求确认阶段，
+            # 直接进入产品规划生成，统一在产品规划门一次确认两个产物。
+            lifecycle = persist_application_lifecycle_transition(
+                workspace,
+                stage=ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+                status=ApplicationLifecycleStatus.RUNNING,
+                active_run_id=state.get("active_run_id"),
+            )
+        elif (
             lifecycle.initialization.stage == ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN
             and lifecycle.initialization.status
             in {ApplicationLifecycleStatus.FAILED, ApplicationLifecycleStatus.CANCELLED}

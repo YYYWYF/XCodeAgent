@@ -2,6 +2,7 @@ import json
 import re
 import logging
 from pathlib import Path
+from typing import Any
 
 from langgraph.config import get_stream_writer
 
@@ -56,6 +57,85 @@ def _llm_token_callback(token: str) -> None:
     except (KeyError, RuntimeError):
         return
     writer({"type": "llm.token", "token": token, "node": "requirements"})
+
+
+def confirm_requirement_spec_artifact(
+    state: ProjectState,
+    existing_spec: dict[str, Any],
+    *,
+    datasource_type: str,
+) -> dict:
+    """把待确认 RequirementSpec 提升为正式产物：同步用户编辑、写正式文档并返回确认更新。
+
+    需求节点自身的确认分支与产品规划门的合并确认（一次确认需求+产品规划）共用本函数。
+    """
+
+    editor_changes = state.get("edited_requirement_spec")
+    current_document_path = str(state.get("requirement_spec_path") or "").strip()
+    has_current_document = bool(current_document_path) and Path(current_document_path).is_file()
+    if isinstance(editor_changes, dict) and editor_changes:
+        synchronized_spec = apply_requirement_spec_editor_changes(
+            existing_spec,
+            editor_changes,
+            datasource_type=datasource_type,
+        )
+        edited_markdown = None
+    else:
+        # 用户可以直接编辑右侧草稿 Markdown；确认时只读取当前状态指向的文件，
+        # 避免误读工作区里上一版正式文档。
+        edited_markdown = (
+            edited_requirement_spec_markdown(state, existing_spec)
+            if has_current_document
+            else None
+        )
+        synchronized_spec = (
+            sync_requirement_spec_from_markdown(
+                existing_spec,
+                edited_markdown,
+                datasource_type=datasource_type,
+            )
+            if edited_markdown is not None
+            else existing_spec
+        )
+        synchronized_spec = apply_authoritative_datasource_type(
+            synchronized_spec,
+            datasource_type,
+        )
+    spec = {
+        **synchronized_spec,
+        "clarification_questions": [],
+        "clarification_status": "clear",
+        "confirmation_status": "confirmed",
+    }
+    markdown_path = requirement_spec_markdown_path(state)
+    confirmed_markdown: str | None = None
+    if not (isinstance(editor_changes, dict) and editor_changes) and has_current_document and markdown_path.is_file():
+        markdown_content = markdown_path.read_text(encoding="utf-8")
+        synchronized_markdown = synchronize_requirement_spec_markdown_datasource_types(
+            markdown_content,
+            spec,
+        )
+        if synchronized_markdown != markdown_content:
+            markdown_path.write_text(synchronized_markdown, encoding="utf-8")
+        confirmed_markdown = synchronized_markdown
+    spec_path = write_confirmed_requirement_spec_document(
+        state,
+        spec,
+        markdown=confirmed_markdown,
+    )
+    return {
+        "phase": "requirements",
+        "status": "completed",
+        "requirement_spec": spec,
+        "requirements_confirmed": True,
+        "requirements_clarification_round": 0,
+        "requirement_spec_path": spec_path,
+        "requirement_spec_json_path": str(confirmed_requirement_spec_json_path(state)),
+        "edited_requirement_spec": {},
+        "requirement_spec_feedback": "",
+        "clarification": _requirement_spec_confirmed_payload(spec),
+        "timeline": ["requirements"],
+    }
 
 
 def requirements(state: ProjectState) -> dict:
@@ -125,72 +205,11 @@ def requirements(state: ProjectState) -> dict:
             else _user_confirmed_requirement_spec(request)
         )
     ):
-        editor_changes = state.get("edited_requirement_spec")
-        current_document_path = str(state.get("requirement_spec_path") or "").strip()
-        has_current_document = bool(current_document_path) and Path(current_document_path).is_file()
-        if isinstance(editor_changes, dict) and editor_changes:
-            synchronized_spec = apply_requirement_spec_editor_changes(
-                existing_spec,
-                editor_changes,
-                datasource_type=datasource_type,
-            )
-            edited_markdown = None
-        else:
-            # 用户可以直接编辑右侧草稿 Markdown；确认时只读取当前状态指向的文件，
-            # 避免误读工作区里上一版正式文档。
-            edited_markdown = (
-                edited_requirement_spec_markdown(state, existing_spec)
-                if has_current_document
-                else None
-            )
-            synchronized_spec = (
-                sync_requirement_spec_from_markdown(
-                    existing_spec,
-                    edited_markdown,
-                    datasource_type=datasource_type,
-                )
-                if edited_markdown is not None
-                else existing_spec
-            )
-            synchronized_spec = apply_authoritative_datasource_type(
-                synchronized_spec,
-                datasource_type,
-            )
-        spec = {
-            **synchronized_spec,
-            "clarification_questions": [],
-            "clarification_status": "clear",
-            "confirmation_status": "confirmed",
-        }
-        markdown_path = requirement_spec_markdown_path(state)
-        confirmed_markdown: str | None = None
-        if not (isinstance(editor_changes, dict) and editor_changes) and has_current_document and markdown_path.is_file():
-            markdown_content = markdown_path.read_text(encoding="utf-8")
-            synchronized_markdown = synchronize_requirement_spec_markdown_datasource_types(
-                markdown_content,
-                spec,
-            )
-            if synchronized_markdown != markdown_content:
-                markdown_path.write_text(synchronized_markdown, encoding="utf-8")
-            confirmed_markdown = synchronized_markdown
-        spec_path = write_confirmed_requirement_spec_document(
+        return confirm_requirement_spec_artifact(
             state,
-            spec,
-            markdown=confirmed_markdown,
+            existing_spec,
+            datasource_type=datasource_type,
         )
-        return {
-            "phase": "requirements",
-            "status": "completed",
-            "requirement_spec": spec,
-            "requirements_confirmed": True,
-            "requirements_clarification_round": 0,
-            "requirement_spec_path": spec_path,
-            "requirement_spec_json_path": str(confirmed_requirement_spec_json_path(state)),
-            "edited_requirement_spec": {},
-            "requirement_spec_feedback": "",
-            "clarification": _requirement_spec_confirmed_payload(spec),
-            "timeline": ["requirements"],
-        }
     analysis_request = _requirement_analysis_request(
         request,
         existing_spec,

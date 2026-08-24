@@ -121,7 +121,11 @@ def resume_application_planning_review(
 
     validate_application_planning_review_action(state, node_name, submission)
 
-    if submission.action == "design_change":
+    if submission.action == "design_change" or (
+        submission.action == "revise" and node_name == "product_planning"
+    ):
+        # 需求+产品规划合并确认门上的“修改”可能涉及任一产物，统一走设计意图分析，
+        # 由分类器路由到最早受影响产物并级联重新生成下游。
         if not submission.request.strip():
             raise ValueError("设计变更必须提供明确的修改要求。")
         return Command(

@@ -118,7 +118,7 @@ const PLANNING_ANSWER_LABELS: Record<string, string> = {
   ui_design_confirmation: 'UI 设计稿确认',
   requirement_spec_confirmation: '需求文档确认',
   requirement_spec_feedback: '需求文档意见',
-  product_plan_confirmation: '产品规划确认',
+  product_plan_confirmation: '需求文档确认',
   design_change_request: '设计变更',
   technical_plan_confirmation: '技术规划确认',
   project_plan_confirmation: '项目计划确认',
@@ -126,9 +126,10 @@ const PLANNING_ANSWER_LABELS: Record<string, string> = {
 }
 
 // 将设计阶段节点映射到右侧对应的规划文档标签。
+// 需求与产品规划合并为同一个「需求文档」tab，两个阶段都映射到它。
 const PHASE_DOC_KEY: Record<string, WorkspaceDocKey> = {
   requirements: 'requirement-spec',
-  product_planning: 'product-plan',
+  product_planning: 'requirement-spec',
   ui_confirmation: 'ui-design',
   technical_planning: 'technical-plan'
 }
@@ -469,6 +470,40 @@ function designDocContentFor(
     : ''
 }
 
+/** 把第二份文档的首个 H1 降级为 H2 章节，供合并为一份连贯文档时接入。 */
+function demoteLeadingH1(markdown: string): string {
+  const lines = markdown.trim().split('\n')
+  if (
+    lines.length > 0 &&
+    lines[0].trimStart().startsWith('# ') &&
+    !lines[0].trimStart().startsWith('## ')
+  ) {
+    lines[0] = `## ${lines[0].trimStart().slice(2).trim()}`
+  }
+  return lines.join('\n')
+}
+
+/** 需求与产品规划合并展示：一份连贯的“需求文档”，需求在前、产品规划作为后续章节接入。 */
+function mergedRequirementDocContentFor(
+  localContents: Record<string, string>,
+  workflow: WorkflowRunPayload | undefined
+): string {
+  // 产品规划确认门期间，后端 artifact 已是合并好的需求文档，直接使用避免重复拼接。
+  const artifact = workflow?.confirmationArtifact
+  if (artifact?.id === 'product_plan' && artifact.content.trim()) {
+    return artifact.content
+  }
+  const requirementDoc = (localContents['requirement-spec'] || '').trimEnd()
+  const productPlanDoc = (localContents['product-plan'] || '').trim()
+  if (productPlanDoc) {
+    const mergedPlan = demoteLeadingH1(productPlanDoc)
+    return requirementDoc.trim() ? `${requirementDoc}\n\n${mergedPlan}` : mergedPlan
+  }
+  if (requirementDoc.trim()) return requirementDoc
+  // 兼容旧工作区的独立需求确认门快照。
+  return artifact?.id === 'requirement_spec' ? artifact.content : ''
+}
+
 /** 从当前规划 Workflow 读取 TechnicalPlan 结构化快照，供右侧只读产物视图使用。 */
 function technicalPlanFromWorkflow(
   workflow: WorkflowRunPayload | undefined
@@ -774,8 +809,6 @@ export default function AiChatPanel({
     workflowArtifactPath(planningWorkflow, 'requirement-spec') ||
     designDocFilePath['requirement-spec']
   const requirementsConfirmed = planningRequirementsConfirmed(planningWorkflow, requirementSpecPath)
-  const productPlanPath = workflowArtifactPath(planningWorkflow, 'product-plan')
-  const productPlanDraft = Boolean(productPlanPath?.match(/[\\/]drafts[\\/]/))
   const planningUiDesignPagesSource: unknown[] | undefined =
     Array.isArray(planningClarification?.pages) && planningClarification!.pages!.length > 0
       ? planningClarification!.pages
@@ -809,15 +842,9 @@ export default function AiChatPanel({
     }
     return raw
   }, [planningUiDesignPagesSource, planningPhaseRunning])
-  const requirementDocContent = designDocContentFor(
+  const requirementDocContent = mergedRequirementDocContentFor(
     designDocFileContent,
-    planningWorkflow,
-    'requirement-spec'
-  )
-  const productPlanDocContent = designDocContentFor(
-    designDocFileContent,
-    planningWorkflow,
-    'product-plan'
+    planningWorkflow
   )
   const technicalPlanDocContent = designDocContentFor(
     designDocFileContent,
@@ -826,7 +853,6 @@ export default function AiChatPanel({
   )
   const uiDesignDocContent = designDocFileContent['ui-design'] || ''
   const requirementDocAvailable = Boolean(requirementDocContent.trim())
-  const productPlanDocAvailable = Boolean(productPlanDocContent.trim())
   const uiDesignAvailable = Boolean(uiDesignDocContent.trim()) || uiDesignPages.length > 0
   const technicalPlanDocAvailable = Boolean(technicalPlanDocContent.trim())
   // 版本标记变化时重新同步磁盘内容；应用重新打开且没有 Workflow 快照时仍会执行首次读取。
@@ -842,13 +868,6 @@ export default function AiChatPanel({
           path: 'specs/requirement-spec.md',
           content: requirementDocContent,
           available: requirementDocAvailable
-        },
-        {
-          key: 'product-plan' as WorkspaceDocKey,
-          title: productPlanDraft ? '产品规划（草稿）' : '产品规划',
-          path: 'plans/product-plan.md',
-          content: productPlanDocContent,
-          available: productPlanDocAvailable
         },
         {
           key: 'technical-plan' as WorkspaceDocKey,
@@ -960,6 +979,8 @@ export default function AiChatPanel({
   ])
 
   // 首次进入已完成全量读取；用户打开某个 tab 后按 Workflow 版本补读对应 Markdown。
+  // 合并后的「需求文档」tab 内容由需求与产品规划两份产物拼成，激活时两份都要补读，
+  // 否则全量加载错过时机后产品规划部分会永远缺失，tab 退化为只显示需求内容。
   useEffect(() => {
     if (
       !isDesignPhase ||
@@ -970,21 +991,53 @@ export default function AiChatPanel({
     ) {
       return
     }
+    const artifactsToRead =
+      activeDesignArtifact.key === 'requirement-spec'
+        ? LOCAL_DESIGN_ARTIFACTS.filter(
+            (artifact) => artifact.key === 'requirement-spec' || artifact.key === 'product-plan'
+          )
+        : [activeDesignArtifact]
     const key = activeDesignArtifact.key
     const revision = activeDesignArtifactRevision || `available:${key}`
-    const cacheKey = `${application.workspaceRoot}:${key}:${revision}`
+    // 合并 tab 的缓存键必须同时包含产品规划版本：产品规划晚于需求生成/晋升时，
+    // 仅需求版本不变也不能跳过重读，否则产品规划部分永远不会补进 tab。
+    const mergedRevision =
+      activeDesignArtifact.key === 'requirement-spec'
+        ? `${revision}|product:${workflowDesignArtifactRevision(planningWorkflow, 'product-plan') || 'pending'}`
+        : revision
+    const cacheKey = `${application.workspaceRoot}:${key}:${mergedRevision}`
     if (designDocCacheRevisionRef.current[key] === cacheKey) return
 
     setDesignDocLoadingKey(key)
-    void readLocalDesignMarkdown(
-      application.workspaceRoot,
-      activeDesignArtifact,
-      (key === 'requirement-spec' && !requirementsConfirmed) ||
-        (key === 'product-plan' && productPlanDraft)
+    void Promise.all(
+      artifactsToRead.map(async (artifact) => {
+        try {
+          const document = await readLocalDesignMarkdown(
+            application.workspaceRoot as string,
+            artifact,
+            artifact.key === 'requirement-spec' && !requirementsConfirmed
+          )
+          return [artifact.key, document] as const
+        } catch {
+          // 对应产物尚未生成时保持空态，由后续 revision 变化再次补读。
+          return null
+        }
+      })
     )
-      .then(({ content, path }) => {
-        setDesignDocFileContent((current) => ({ ...current, [key]: content }))
-        setDesignDocFilePath((current) => ({ ...current, [key]: path }))
+      .then((documents) => {
+        const readable = documents.filter(
+          (entry): entry is readonly [DesignDocArtifactKey, LocalDesignMarkdown] =>
+            entry !== null && Boolean(entry[1].content.trim())
+        )
+        if (readable.length === 0) return
+        setDesignDocFileContent((current) => ({
+          ...current,
+          ...Object.fromEntries(readable.map(([docKey, document]) => [docKey, document.content]))
+        }))
+        setDesignDocFilePath((current) => ({
+          ...current,
+          ...Object.fromEntries(readable.map(([docKey, document]) => [docKey, document.path]))
+        }))
         designDocCacheRevisionRef.current[key] = cacheKey
       })
       .catch(() => {
@@ -999,8 +1052,8 @@ export default function AiChatPanel({
     activeDesignArtifact,
     activeDesignDocAvailable,
     activeDesignArtifactRevision,
-    requirementsConfirmed,
-    productPlanDraft
+    planningWorkflow,
+    requirementsConfirmed
   ])
   // 开发阶段：右侧文档区无设计阶段产物，显示引导文案（选中页面/端点后由后续逻辑填充）。
   const designDocContent = isDesignPhase
@@ -1010,22 +1063,20 @@ export default function AiChatPanel({
   const designDocTitle = isDesignPhase
     ? activeDesignDoc?.key === 'requirement-spec' && !requirementsConfirmed
       ? `${activeDesignDoc?.path || ''} · 草稿`
-      : activeDesignDoc?.key === 'product-plan' && productPlanDraft
-        ? `${activeDesignDoc?.path || ''} · 草稿`
-        : activeDesignDoc?.path
+      : activeDesignDoc?.path
     : undefined
   const uiDesignActivePage =
     uiDesignPages.find((p) => (p.pageId || '') === uiDesignActivePageId) || uiDesignPages[0]
   const uiDesignActivePageCode = uiDesignActivePage?.code || ''
-  // 设计阶段文档生成中：规划 workflow 正在 running 且对应阶段（需求/项目计划）。
-  // 文档加载态按当前 tab 区分：需求文档 tab 只在 requirements 阶段生成中，
-  // 产品/技术规划 tab 只在对应阶段生成中，避免其他文档误显示加载态。
+  // 设计阶段文档生成中：规划 workflow 正在 running 且对应阶段。
+  // 文档加载态按当前 tab 区分：合并后的需求文档 tab 在需求分析与产品规划两个
+  // 阶段都显示生成中，技术规划 tab 只在对应阶段生成中，避免其他文档误显示加载态。
   const designDocGenerating =
     isDesignPhase &&
     planningPhaseRunning &&
     !activeDesignDoc?.available &&
-    ((activeDesignDocKey === 'requirement-spec' && planningPhase === 'requirements') ||
-      (activeDesignDocKey === 'product-plan' && planningPhase === 'product_planning') ||
+    ((activeDesignDocKey === 'requirement-spec' &&
+      (planningPhase === 'requirements' || planningPhase === 'product_planning')) ||
       (activeDesignDocKey === 'technical-plan' && planningPhase === 'technical_planning'))
   const designDocLoading =
     isDesignPhase &&
@@ -1125,10 +1176,11 @@ export default function AiChatPanel({
     }
   }, [isDesignPhase, rightPanelOpen, rightPanel, designDocs, setRightPanel])
 
-  // 需求文档确认阶段：需求文档生成后自动切到"需求文档"tab 展示内容。
+  // 需求文档确认阶段：需求文档（含合并的产品规划）生成后自动切到"需求文档"tab 展示内容。
   useEffect(() => {
     if (!isDesignPhase || !rightPanelOpen) return
-    if (planningClarification?.mode !== 'requirement_spec_confirmation') return
+    const mode = planningClarification?.mode
+    if (mode !== 'requirement_spec_confirmation' && mode !== 'product_plan_confirmation') return
     if (!requirementDocAvailable) return
     if (rightPanel?.type === 'doc' && rightPanel.docKey === 'requirement-spec') return
     setRightPanel({ type: 'doc', docKey: 'requirement-spec' })

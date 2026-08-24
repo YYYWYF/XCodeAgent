@@ -111,7 +111,7 @@ function withPlanningAction(
 // 根据确认阶段给出符合创建规划语义的标题。
 function panelTitle(mode?: string): string {
   if (mode === 'requirement_spec_confirmation') return '确认需求内容'
-  if (mode === 'product_plan_confirmation') return '确认产品规划'
+  if (mode === 'product_plan_confirmation') return '确认需求文档'
   if (mode === 'ui_design_confirmation') return '确认UI设计稿'
   if (mode === 'technical_plan_confirmation') return '确认技术规划'
   if (mode === 'technical_plan_generation_error') return '技术规划生成失败'
@@ -122,7 +122,7 @@ function panelTitle(mode?: string): string {
 // 根据确认阶段给出下一步按钮文案。
 function submitLabel(mode?: string): string {
   if (mode === 'requirement_spec_confirmation') return '需求没问题，生成需求文档'
-  if (mode === 'product_plan_confirmation') return '确认产品规划并设计 UI'
+  if (mode === 'product_plan_confirmation') return '确认需求文档并设计 UI'
   if (mode === 'ui_design_confirmation') return '确认设计稿并继续'
   if (mode === 'technical_plan_confirmation') return '确认技术规划并进入工作区'
   if (mode === 'technical_plan_generation_error') return '重新生成技术规划'
@@ -698,8 +698,8 @@ export default function ApplicationPlanningQuestionPanel({
                   ? '需求文档'
                   : artifact.id === 'product_plan'
                     ? artifactIsDraft
-                      ? '产品规划草稿'
-                      : '产品规划'
+                      ? '需求文档草稿'
+                      : '需求文档'
                     : artifact.id === 'technical_plan'
                       ? '技术规划'
                       : '当前规划'}
@@ -709,8 +709,8 @@ export default function ApplicationPlanningQuestionPanel({
                   ? '请审核需求文档。需要补充时只在下方填写意见；文档正确时，直接点击右下角按钮继续。'
                   : isProductPlanConfirmation
                     ? artifactIsDraft
-                      ? '请由产品角色审核产品规划草稿；确认后才会提升为正式产品规划并进入 UI 设计。'
-                      : '请由产品角色审核页面目标、业务信息、核心操作、跳转与验收标准；确认后进入 UI 设计。'
+                      ? '请审核需求文档草稿（含产品规划）；确认后才会提升为正式需求文档并进入 UI 设计。'
+                      : '请审核需求文档中的应用信息、用户角色、页面目标、业务信息、核心操作、跳转与验收标准；确认后进入 UI 设计。'
                     : isTechnicalPlanConfirmation
                       ? '请由开发角色审核架构、API、数据源、权限与页面实现契约；确认后进入工作区。'
                     : artifact.name}
@@ -819,7 +819,7 @@ export default function ApplicationPlanningQuestionPanel({
                   isRequirementConfirmation
                     ? '需求补充意见'
                     : isProductPlanConfirmation
-                      ? '产品规划意见'
+                      ? '需求文档意见'
                       : '技术规划意见'
                 }
                 autoSize={{ minRows: 1, maxRows: 2 }}
@@ -891,8 +891,8 @@ export default function ApplicationPlanningQuestionPanel({
                       : '需求没问题，生成需求文档'
                     : isProductPlanConfirmation
                       ? hasTechnicalPlanFeedback
-                        ? '提交产品规划意见并调整规划'
-                        : '确认产品规划正确并进入 UI 设计'
+                        ? '提交需求文档意见并调整'
+                        : '确认需求文档正确并进入 UI 设计'
                       : isTechnicalPlanConfirmation
                       ? hasTechnicalPlanFeedback
                         ? '提交技术规划意见并调整规划'

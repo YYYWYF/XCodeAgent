@@ -8,7 +8,9 @@ from langgraph.config import get_stream_writer
 from app.agents.main.product_planner import plan_product_with_chat_model
 from app.agents.main.document_sync import sync_product_plan_from_markdown
 from app.graph.nodes.confirmation import user_confirmed_text
+from app.graph.nodes.requirements import confirm_requirement_spec_artifact
 from app.graph.state import ProjectState
+from app.services.data_source_policy import datasource_type_from_artifact
 from app.services.product_plan import (
     PRODUCT_PLAN_SCHEMA_VERSION,
     create_product_plan,
@@ -75,18 +77,19 @@ def _confirmation_payload(plan: dict[str, Any]) -> dict[str, Any]:
     payload = build_ask_user_payload(
         [
             AskUserQuestion(
-                header="产品规划确认",
+                header="需求文档确认",
                 question=(
-                    "请由产品角色确认页面目标、业务信息、核心操作、页面跳转和产品验收标准。"
-                    "正确时回复“确认产品规划，继续”；需要调整时直接写出产品修改意见。"
+                    "需求分析与产品规划已合并为一份需求文档。请确认应用信息、用户角色、功能模块、"
+                    "页面目标、业务信息、核心操作、页面跳转和产品验收标准。"
+                    "正确时回复“确认需求文档，继续”；需要调整时直接写出修改意见。"
                 ),
                 type="text",
-                placeholder="例如：确认产品规划，继续 / 订单列表需要增加批量导出操作。",
+                placeholder="例如：确认需求文档，继续 / 订单列表需要增加批量导出操作。",
             )
         ]
     )
     payload["mode"] = "product_plan_confirmation"
-    payload["message"] = "请由产品角色确认产品规划后再进入 UI 设计。"
+    payload["message"] = "请确认需求文档（含产品规划）后再进入 UI 设计。"
     payload["plan_summary"] = plan.get("app", {}).get("name", "未命名应用")
     return payload
 
@@ -246,18 +249,32 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
         if application_planning_scope
         else _user_confirmed(request)
     ):
+        # 合并确认门：一次确认需求与产品规划两个产物。需求尚未确认时先提升为正式
+        # RequirementSpec，再用确认后的 spec 校验并确认 ProductPlan，保证两者一致。
+        requirement_update: dict[str, Any] = {}
+        confirmed_requirement_spec = requirement_spec
+        if requirement_spec.get("confirmation_status") != "confirmed":
+            requirement_update = confirm_requirement_spec_artifact(
+                state,
+                requirement_spec,
+                datasource_type=datasource_type_from_artifact(
+                    requirement_spec,
+                    fallback="database",
+                ),
+            )
+            confirmed_requirement_spec = requirement_update["requirement_spec"]
         edited_markdown = edited_product_plan_markdown(state, existing)
         synchronized = (
-            sync_product_plan_from_markdown(existing, requirement_spec, edited_markdown)
+            sync_product_plan_from_markdown(existing, confirmed_requirement_spec, edited_markdown)
             if edited_markdown is not None
             else existing
         )
         confirmed = {**synchronized, "confirmation_status": "confirmed"}
-        errors = validate_product_plan(confirmed, requirement_spec)
+        errors = validate_product_plan(confirmed, confirmed_requirement_spec)
         if errors:
             logger.warning("confirmed_product_plan_validation_errors: %s", errors)
             repaired = _repair_existing_product_plan(
-                requirement_spec,
+                confirmed_requirement_spec,
                 synchronized,
                 errors,
             )
@@ -267,9 +284,22 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             confirmed,
             markdown=edited_markdown,
         )
+        requirement_confirm_keys = (
+            "requirement_spec",
+            "requirements_confirmed",
+            "requirement_spec_path",
+            "requirement_spec_json_path",
+            "edited_requirement_spec",
+            "requirement_spec_feedback",
+        )
         return {
             "phase": "product_planning",
             "status": "completed",
+            **{
+                key: requirement_update[key]
+                for key in requirement_confirm_keys
+                if key in requirement_update
+            },
             "product_plan": confirmed,
             "product_plan_path": markdown_path,
             "product_plan_json_path": json_path,
