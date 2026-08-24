@@ -14,6 +14,7 @@ import {
   type ChatSessionSummary
 } from '../../../service/chatSessions'
 import type { ApplicationConfig, ChatMessageSkill, EditorMode } from '../../../typings'
+import type { WorkbenchPhase } from '../../../workbenchPhase'
 import type { AgentChatMessage } from '../types'
 import {
   createSessionIdentity,
@@ -25,6 +26,13 @@ import {
 } from './sessionRuntime'
 import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/EntityDesignPanels'
 import { useSessionRuntimeStore } from './useSessionRuntimeStore'
+import {
+  selectedSessionIdForPhase,
+  withSelectedSessionForPhase,
+  withoutDeletedSessionSelection,
+  withoutEditorModeSessionSelection,
+  type PhaseSessionSelection
+} from './phaseSessionSelection'
 
 export type PersistSessionInput = {
   editorMode: EditorMode
@@ -107,6 +115,7 @@ function isFreeChatSession(session: ChatSessionSummary): boolean {
 type UseChatSessionsParams = {
   application: ApplicationConfig
   editorMode: EditorMode
+  workbenchPhase: WorkbenchPhase
   onCloseRightPanel: () => void
   /** 设计阶段：规划 session 由 ensurePlanningSession 激活，loadSessionsForMode
    *  只加载会话列表不自动 openChatSession，避免覆盖规划 session 的 activeSessionId。 */
@@ -161,13 +170,14 @@ type UseChatSessionsResult = {
 export function useChatSessions({
   application,
   editorMode,
+  workbenchPhase,
   onCloseRightPanel,
   designPhasePlanning = false
 }: UseChatSessionsParams): UseChatSessionsResult {
   const [sessionSummaries, setSessionSummaries] = useState<
     Record<EditorMode, ChatSessionSummary[]>
   >({ frontend: [], backend: [] })
-  const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<EditorMode, string>>>({})
+  const [activeSessionIds, setActiveSessionIds] = useState<PhaseSessionSelection>({})
   // 初始即标记为加载中：loadSessionsForMode 在 effect 中异步执行，
   // 首次渲染时 loadingSessions 需为 true，否则 ensurePlanningSession effect
   // 会在 sessionSummaries 为空时抢先创建重复 session，导致历史对话丢失。
@@ -217,7 +227,7 @@ export function useChatSessions({
 
   const workspaceRoot = application.workspaceRoot || ''
   const sessions = sessionSummaries[editorMode]
-  const activeSessionId = activeSessionIds[editorMode]
+  const activeSessionId = selectedSessionIdForPhase(activeSessionIds, editorMode, workbenchPhase)
   const activeKey = activeSessionId
     ? sessionRuntimeKey(workspaceRoot, editorMode, activeSessionId)
     : undefined
@@ -255,7 +265,7 @@ export function useChatSessions({
   const loadSessionsForMode = async (mode: EditorMode): Promise<void> => {
     if (!application.workspaceRoot) {
       setSessionSummaries((current) => ({ ...current, [mode]: [] }))
-      setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
+      setActiveSessionIds((current) => withoutEditorModeSessionSelection(current, mode))
       setSessionLoadingModes((current) => ({ ...current, [mode]: false }))
       return
     }
@@ -270,7 +280,7 @@ export function useChatSessions({
       }
       setSessionSummaries((current) => ({ ...current, [mode]: nextSessions }))
       if (nextSessions.length === 0) {
-        setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
+        setActiveSessionIds((current) => withoutEditorModeSessionSelection(current, mode))
         return
       }
       // 设计阶段规划 session 由 ensurePlanningSession 激活，这里只加载列表，
@@ -297,7 +307,11 @@ export function useChatSessions({
     }
   }
 
-  const openChatSession = async (mode: EditorMode, sessionId: string): Promise<void> => {
+  const openChatSession = async (
+    mode: EditorMode,
+    sessionId: string,
+    phase: WorkbenchPhase = workbenchPhase
+  ): Promise<void> => {
     if (!application.workspaceRoot) return
 
     const key = sessionRuntimeKey(application.workspaceRoot, mode, sessionId)
@@ -321,7 +335,7 @@ export function useChatSessions({
     // 设计阶段规划 session 已激活时，不抢 activeSessionId，避免覆盖规划对话。
     if (planningSessionActivatedRef.current) return
 
-    setActiveSessionIds((current) => ({ ...current, [mode]: sessionId }))
+    setActiveSessionIds((current) => withSelectedSessionForPhase(current, mode, phase, sessionId))
     onCloseRightPanel()
   }
 
@@ -354,7 +368,9 @@ export function useChatSessions({
       return
     }
 
-    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    setActiveSessionIds((current) =>
+      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
+    )
     onCloseRightPanel()
   }
 
@@ -371,7 +387,9 @@ export function useChatSessions({
       return
     }
 
-    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    setActiveSessionIds((current) =>
+      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
+    )
     onCloseRightPanel()
   }
 
@@ -380,13 +398,17 @@ export function useChatSessions({
   const handleSelectEntity = async (_entityId: string): Promise<void> => {
     if (loadingSessions) return
     void _entityId
-    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    setActiveSessionIds((current) =>
+      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
+    )
     onCloseRightPanel()
   }
 
   /** 清空当前会话选择，用于实体设计确认后回到实体信息展示界面。 */
   const clearActiveSession = (): void => {
-    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    setActiveSessionIds((current) =>
+      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
+    )
     onCloseRightPanel()
   }
 
@@ -400,7 +422,9 @@ export function useChatSessions({
       return
     }
 
-    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    setActiveSessionIds((current) =>
+      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
+    )
     onCloseRightPanel()
   }
 
@@ -417,7 +441,7 @@ export function useChatSessions({
       entityId: string
       entityLabel: string
     },
-    options?: { threadId?: string; title?: string }
+    options?: { threadId?: string; title?: string; workbenchPhase?: WorkbenchPhase }
   ): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
       throw new Error('创建会话前需要选择工作目录。')
@@ -465,7 +489,14 @@ export function useChatSessions({
 
     registerSession(identity, [], agUiSession)
     setDraftByKey(identity.key, '')
-    setActiveSessionIds((current) => ({ ...current, [editorMode]: session.id }))
+    setActiveSessionIds((current) =>
+      withSelectedSessionForPhase(
+        current,
+        editorMode,
+        options?.workbenchPhase || workbenchPhase,
+        session.id
+      )
+    )
     onCloseRightPanel()
 
     const summary = await saveChatSession(session)
@@ -531,7 +562,9 @@ export function useChatSessions({
           }
         }
         planningSessionActivatedRef.current = true
-        setActiveSessionIds((current) => ({ ...current, [editorMode]: best.id }))
+        setActiveSessionIds((current) =>
+          withSelectedSessionForPhase(current, editorMode, 'product', best.id)
+        )
         // 清理同 threadId 的重复空壳 session（消息数 0 且非选中），避免再次串用。
         for (const duplicate of sameThreadSessions) {
           if (duplicate.id === best.id) continue
@@ -560,7 +593,8 @@ export function useChatSessions({
       undefined,
       {
         threadId: normalizedThreadId,
-        title: '产品 Agent'
+        title: '产品 Agent',
+        workbenchPhase: 'product'
       }
     )
     planningSessionActivatedRef.current = true
@@ -645,7 +679,7 @@ export function useChatSessions({
               entityLabel: String(target.entityLabel || targetLabel).trim() || targetLabel
             }
           : undefined,
-        { title: `测试：${targetLabel}` }
+        { title: `测试：${targetLabel}`, workbenchPhase: 'test' }
       )
     } catch (caughtError) {
       reportSessionError(caughtError)
@@ -765,6 +799,9 @@ export function useChatSessions({
         [editorMode]: current[editorMode].filter((session) => session.id !== sessionId)
       }))
       removeSession(key)
+      setActiveSessionIds((current) =>
+        withoutDeletedSessionSelection(current, editorMode, sessionId)
+      )
       // 删除会话后清空该工作区的实体设计草稿缓存，避免新会话继承旧状态。
       clearEntityDesignDraftStore(application.workspaceRoot)
 
@@ -772,7 +809,9 @@ export function useChatSessions({
         if (nextSession) {
           await openChatSession(editorMode, nextSession.id)
         } else {
-          setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+          setActiveSessionIds((current) =>
+            withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
+          )
         }
       }
 

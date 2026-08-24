@@ -44,8 +44,13 @@ import {
 import {
   splitWorkspacePath,
   workspaceCodeChangeDisplayPath,
+  workflowCodeChangesBeforeConfirmation,
   workflowShouldShowCodeChanges
 } from '../src/renderer/src/components/AiChatPanel/utils'
+import {
+  selectedSessionIdForPhase,
+  withSelectedSessionForPhase
+} from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
 import {
   DEFAULT_SKILL_CATEGORY,
   enabledUserSkills,
@@ -1482,7 +1487,7 @@ test('UI 确认过渡帧缺少 clarification 时仍可正常渲染', () => {
   )
 })
 
-test('正式工作流只在启动预览后展示代码差异', () => {
+test('正式工作流从开发完成确认开始展示代码差异', () => {
   const workflow = (phase: string): WorkflowRunPayload => ({
     runId: `run-${phase}`,
     threadId: 'thread-code-changes',
@@ -1491,10 +1496,34 @@ test('正式工作流只在启动预览后展示代码差异', () => {
   })
 
   assert.equal(workflowShouldShowCodeChanges(workflow('integration_test')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('test_phase_confirmation')), true)
   assert.equal(workflowShouldShowCodeChanges(workflow('launch_project')), true)
   assert.equal(workflowShouldShowCodeChanges(workflow('acceptance')), true)
   assert.equal(workflowShouldShowCodeChanges(workflow('completed')), true)
   assert.equal(workflowShouldShowCodeChanges(workflow('conversation')), true)
+  assert.equal(workflowCodeChangesBeforeConfirmation(workflow('test_phase_confirmation')), true)
+  assert.equal(workflowCodeChangesBeforeConfirmation(workflow('launch_project')), false)
+})
+
+test('开发与测试阶段分别保留当前会话', () => {
+  const developmentSelected = withSelectedSessionForPhase(
+    {},
+    'frontend',
+    'development',
+    'development-session'
+  )
+  const bothSelected = withSelectedSessionForPhase(
+    developmentSelected,
+    'frontend',
+    'test',
+    'test-session'
+  )
+
+  assert.equal(
+    selectedSessionIdForPhase(bothSelected, 'frontend', 'development'),
+    'development-session'
+  )
+  assert.equal(selectedSessionIdForPhase(bothSelected, 'frontend', 'test'), 'test-session')
 })
 
 test('没有详情的步骤保持静态且只有验证步骤可以展开', () => {

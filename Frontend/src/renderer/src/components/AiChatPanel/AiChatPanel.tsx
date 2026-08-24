@@ -1324,6 +1324,7 @@ export default function AiChatPanel({
   } = useChatSessions({
     application,
     editorMode,
+    workbenchPhase: activeWorkbenchPhase,
     // 开发阶段切换页面/接口会话时保留右侧面板（源码/预览/文档随选中目标自动更新），
     // 仅设计阶段切换规划会话时清空右侧文档面板。
     onCloseRightPanel: () => {

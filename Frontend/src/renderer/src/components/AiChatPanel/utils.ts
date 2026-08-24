@@ -283,7 +283,7 @@ export function workflowCodeChanges(
   return undefined
 }
 
-/** 仅在简单改码或正式流程已进入启动预览阶段后展示最终结果与文件差异。 */
+/** 在开发完成确认起展示 Build 文件差异，测试与审查后续节点继续保留。 */
 export function workflowShouldShowCodeChanges(
   workflow: WorkflowRunPayload | undefined
 ): boolean {
@@ -291,10 +291,18 @@ export function workflowShouldShowCodeChanges(
 
   return [
     'conversation',
+    'test_phase_confirmation',
     'launch_project',
     'acceptance',
     'completed'
   ].includes(String(workflow.summary.phase || ''))
+}
+
+/** 开发完成确认需要先展示 Build Diff，再展示进入测试阶段的确认卡。 */
+export function workflowCodeChangesBeforeConfirmation(
+  workflow: WorkflowRunPayload | undefined
+): boolean {
+  return workflow?.summary.phase === 'test_phase_confirmation'
 }
 
 /** 根据 Workflow 最终状态生成结果标题，避免失败运行被标记为任务完成。 */

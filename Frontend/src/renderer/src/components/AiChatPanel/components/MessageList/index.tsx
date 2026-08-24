@@ -52,6 +52,7 @@ import { isConversationWorkflow } from '../../conversationMode'
 import {
   isEntityDesignWorkflow,
   workflowCodeChanges,
+  workflowCodeChangesBeforeConfirmation,
   workflowFinalResultPresentation,
   workflowShouldShowCodeChanges
 } from '../../utils'
@@ -357,6 +358,9 @@ export default function MessageList({
               const visibleCodeChanges = workflowShouldShowCodeChanges(message.workflow)
                 ? codeChanges
                 : undefined
+              const codeChangesBeforeConfirmation = workflowCodeChangesBeforeConfirmation(
+                message.workflow
+              )
               const finalResult = workflowFinalResultPresentation(message.workflow)
               const conversation =
                 (messageLoading && conversationRunning) || isConversationWorkflow(message.workflow)
@@ -578,6 +582,17 @@ export default function MessageList({
                             <MarkdownContent content={effectiveAssistantContent} />
                           </div>
                         )}
+                        {!messageLoading && visibleCodeChanges && codeChangesBeforeConfirmation && (
+                          <CodeChangeCard
+                            codeChanges={visibleCodeChanges}
+                            loading={messageLoading}
+                            onApproveAll={() => undefined}
+                            onOpenFile={(path) => onOpenCodeChangeFile(visibleCodeChanges, path)}
+                            onRevert={() => onRevertCodeChanges(message.id, visibleCodeChanges)}
+                            revertDisabled={codeChangeActionsDisabled}
+                            reverting={revertingCodeChangeIds.has(visibleCodeChanges.id)}
+                          />
+                        )}
                         {message.workflow &&
                           (entityDesignCardVisible ? (
                             // 实体设计卡片在确认后也要保留展示（锁定态），
@@ -613,17 +628,19 @@ export default function MessageList({
                         {entityDesignSession && messageLoading && !requiresClarification && (
                           <EntityDesignChatCard loading />
                         )}
-                        {!messageLoading && visibleCodeChanges && (
-                          <CodeChangeCard
-                            codeChanges={visibleCodeChanges}
-                            loading={messageLoading}
-                            onApproveAll={() => undefined}
-                            onOpenFile={(path) => onOpenCodeChangeFile(visibleCodeChanges, path)}
-                            onRevert={() => onRevertCodeChanges(message.id, visibleCodeChanges)}
-                            revertDisabled={codeChangeActionsDisabled}
-                            reverting={revertingCodeChangeIds.has(visibleCodeChanges.id)}
-                          />
-                        )}
+                        {!messageLoading &&
+                          visibleCodeChanges &&
+                          !codeChangesBeforeConfirmation && (
+                            <CodeChangeCard
+                              codeChanges={visibleCodeChanges}
+                              loading={messageLoading}
+                              onApproveAll={() => undefined}
+                              onOpenFile={(path) => onOpenCodeChangeFile(visibleCodeChanges, path)}
+                              onRevert={() => onRevertCodeChanges(message.id, visibleCodeChanges)}
+                              revertDisabled={codeChangeActionsDisabled}
+                              reverting={revertingCodeChangeIds.has(visibleCodeChanges.id)}
+                            />
+                          )}
                         {!messageLoading &&
                           visibleCodeChanges &&
                           message.workflow &&
