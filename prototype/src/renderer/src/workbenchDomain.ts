@@ -4,6 +4,7 @@ import {
   WORKBENCH_PHASE_ORDER,
   type WorkbenchPhase
 } from './workbenchPhase'
+import { agentArtifactId } from './agentDevelopment'
 
 export type WorkbenchArtifactType =
   | 'document'
@@ -53,6 +54,17 @@ export type WorkbenchArtifact = {
   available: boolean
 }
 
+export type WorkbenchSessionArtifactIdentity = {
+  artifactIds?: readonly string[]
+  apiContractId?: string
+  endpointId?: string
+  agentId?: string
+  entityIds?: readonly string[]
+  pageId?: string
+  sessionKind?: WorkbenchSessionKind
+  title?: string
+}
+
 export type WorkbenchArtifactAccess = {
   mode: WorkbenchArtifactAccessMode
   reason: WorkbenchArtifactLockReason
@@ -79,6 +91,23 @@ export function endpointArtifactId(apiContractId: string, endpointId: string): s
 /** 生成实体占位产物的稳定领域标识。 */
 export function entityArtifactId(entityId: string): string {
   return `entity:${entityId.trim()}`
+}
+
+/** 把会话的显式目标转换为统一产物集合；当前单会话工作流只用它恢复上下文，不据此加写锁。 */
+export function artifactIdsForSession(session: WorkbenchSessionArtifactIdentity): string[] {
+  const artifactIds = new Set((session.artifactIds || []).filter(Boolean))
+  if (session.pageId) artifactIds.add(pageArtifactId(session.pageId))
+  if (session.apiContractId && session.endpointId) {
+    artifactIds.add(endpointArtifactId(session.apiContractId, session.endpointId))
+  }
+  if (session.agentId) artifactIds.add(agentArtifactId(session.agentId))
+  ;(session.entityIds || []).forEach((entityId) => {
+    if (entityId.trim()) artifactIds.add(entityArtifactId(entityId))
+  })
+  if (session.sessionKind === 'analysis') artifactIds.add(documentArtifactId('requirement-spec'))
+  if (session.sessionKind === 'planning') artifactIds.add(documentArtifactId('project-plan'))
+  if ((session.title || '').includes('代码审查')) artifactIds.add(documentArtifactId('code-review'))
+  return [...artifactIds]
 }
 
 

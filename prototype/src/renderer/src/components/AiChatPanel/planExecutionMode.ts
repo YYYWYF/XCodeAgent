@@ -108,7 +108,9 @@ export function derivePlanExecutionMode(execution?: WorkbenchExecution): PlanExe
   if (interactionType === 'repair_scope_confirmation') {
     return 'awaiting_repair_confirmation'
   }
-  if (interactionType === 'page_acceptance') return 'awaiting_acceptance'
+  if (interactionType === 'page_acceptance' || interactionType === 'agent_acceptance') {
+    return 'awaiting_acceptance'
+  }
   return 'awaiting_plan_adjustment'
 }
 
@@ -290,6 +292,7 @@ export function planExecutionPhaseLabel(phase?: string): string {
 /** 判断当前计划模式是否允许显示节点级调试恢复入口。
  * 原型不提供节点级调试入口（生产功能），始终隐藏。 */
 export function planExecutionShowsDebugResume(_mode: PlanExecutionMode): boolean {
+  void _mode
   return false
 }
 

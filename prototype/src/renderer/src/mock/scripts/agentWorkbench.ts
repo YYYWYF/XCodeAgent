@@ -1,14 +1,29 @@
-import type { ApplicationLifecycle, WorkflowRunPayload } from '../../typings'
+import type {
+  ApplicationLifecycle,
+  WorkflowRunPayload,
+  WorkspaceCodeChangeSet
+} from '../../typings'
 import type { ProcessStepRecord, SendWorkflowMessageOptions } from '../../service/agUiAgent'
 import { mockPlanningArtifacts } from '../../../../../mock-data/pms-new/planning-artifacts'
+import { appDataByWorkspace } from '../../../../../mock-data'
 import {
   buildAgentDesignDoc,
+  buildAgentPageIntegrationSource,
   buildAgentSource,
+  buildAgentToolAdapterSource,
+  missingAgentEntityIds,
   type DevelopmentPlanningAgent
 } from '../../agentDevelopment'
 import { registerWorkbenchLifecycle } from '../mockHttpAgent'
-import { markAgentDesigned } from '../designState'
+import { appPath } from '../workspaceFiles'
+import {
+  isEntityDesigned,
+  markAgentDesigned,
+  markEntityDesigned
+} from '../designState'
 import { nextLifecycleRevision } from './revision'
+
+const MOCK_APPLICATION_PREVIEW_URL = 'http://127.0.0.1:5190/'
 
 export type AgentReplayCallbacks = {
   onContent?: (content: string) => void
@@ -60,15 +75,45 @@ function agentMeta(agentId: string): DevelopmentPlanningAgent {
       label: agentId,
       purpose: '完成页面内的受控业务辅助任务',
       model: '项目默认模型',
+      modelId: 'default-model',
       apiDependencies: [],
+      apiReferences: [],
+      entityIds: [],
       pageIds: [],
       tools: [],
       permissions: ['遵循应用默认权限'],
       acceptanceCriteria: ['试运行结果符合职责和权限边界'],
+      knowledgeReferences: [],
       designed: false,
       hasDetailPlan: false
     }
   )
+}
+
+/** 将规划目录实体转换为当前版本的 Agent 依赖状态，避免已发布版本状态泄漏到新迭代。 */
+function agentDependencyEntities(
+  versionKey: string | undefined,
+  isCompletedDemoVersion: boolean
+): Array<{
+  entityId: string
+  label: string
+  purpose: string
+  designed: boolean
+  hasDetailPlan: boolean
+  detailPlanStatus: string
+}> {
+  return mockPlanningArtifacts.entities.map((entity) => {
+    const designed =
+      isCompletedDemoVersion || isEntityDesigned(entity.entityId, versionKey)
+    return {
+      entityId: entity.entityId,
+      label: entity.label,
+      purpose: entity.purpose,
+      designed,
+      hasDetailPlan: designed,
+      detailPlanStatus: designed ? 'confirmed' : 'pending'
+    }
+  })
 }
 
 /** 创建智能体作用域的应用生命周期执行快照。 */
@@ -134,6 +179,24 @@ function agentReview(agent: DevelopmentPlanningAgent): Record<string, unknown> {
     inputs: ['用户发送的自然语言消息', '当前页面上下文、会话历史和必要的用户身份范围'],
     outputs: ['面向用户的直接回复', '工具调用摘要、数据来源与可核验证据'],
     model: agent.model,
+    api_dependencies: agent.apiReferences.map((reference) => ({
+      apiContractId: reference.apiContractId,
+      endpointId: reference.endpointId,
+      method: reference.method,
+      path: reference.path,
+      entityIds: reference.entityIds,
+      purpose: reference.purpose
+    })),
+    page_integrations: agent.pageIds.map((pageId) => ({
+      pageId,
+      entry: '页面内助手入口与抽屉式对话'
+    })),
+    system_instructions: [
+      '仅根据当前用户可见数据和已确认知识回答。',
+      '高风险写操作必须拒绝或转人工确认。'
+    ],
+    context_strategy: ['保留当前会话与工具证据摘要，限制历史上下文长度。'],
+    failure_handling: ['工具失败显示可重试错误、来源和当前请求状态。'],
     conversation_experience: [
       '支持连续多轮消息，发送后立即显示用户消息和智能体生成状态。',
       '回复完成后保留本次试运行上下文，可继续追问或清空会话。'
@@ -152,47 +215,85 @@ function agentReview(agent: DevelopmentPlanningAgent): Record<string, unknown> {
 }
 
 /** 生成智能体实现的 DAG 切片，沿用现有构建任务卡结构。 */
-function agentBuildSlice(agent: DevelopmentPlanningAgent): Record<string, unknown> {
-  const agentSourcePath = buildAgentSource(agent).filePath
-  const toolSourcePath = agentSourcePath
-    .replace('/generated/agent/', '/generated/tool/')
-    .replace(/Agent\.java$/, 'ToolAdapter.java')
-  const tasks = [
-    {
-      id: `task-${agent.id}-definition`,
-      task_id: `task-${agent.id}-definition`,
-      unit_id: `agent:${agent.id}`,
-      owner: 'backend',
-      title: `生成 ${agent.label} 定义与系统指令`,
-      status: 'completed',
-      target_files: [agentSourcePath]
-    },
-    {
-      id: `task-${agent.id}-tools`,
-      task_id: `task-${agent.id}-tools`,
-      unit_id: `agent:${agent.id}`,
-      owner: 'backend',
-      title: '绑定受控工具、API 与权限策略',
-      status: 'completed',
-      dependencies: [`task-${agent.id}-definition`],
-      target_files: [toolSourcePath]
-    },
-    {
-      id: `task-${agent.id}-page`,
-      task_id: `task-${agent.id}-page`,
-      unit_id: `page:${agent.pageIds[0] || 'application'}`,
-      owner: 'frontend',
-      title: '接入页面助手入口与运行状态',
-      status: 'completed',
-      dependencies: [`task-${agent.id}-tools`],
-      target_files: [`frontend/src/pages/${agent.pageIds[0] || 'application'}/index.tsx`]
-    }
+type AgentBuildTarget = {
+  key: string
+  name: string
+  path: string
+  content: string
+  sourceTool: string
+}
+
+/** 生成智能体定义、工具适配器和页面接入的三份实际 Diff 目标。 */
+function agentBuildTargets(agent: DevelopmentPlanningAgent): AgentBuildTarget[] {
+  const sources = [
+    { key: 'definition', source: buildAgentSource(agent), sourceTool: 'agent_java_generator' },
+    { key: 'tools', source: buildAgentToolAdapterSource(agent), sourceTool: 'agent_tool_adapter_generator' },
+    { key: 'page', source: buildAgentPageIntegrationSource(agent), sourceTool: 'agent_page_integrator' }
   ]
+  return sources.map(({ key, source, sourceTool }) => ({
+    key,
+    name: source.filePath.split('/').pop() || source.filePath,
+    path: appPath(source.filePath),
+    content: source.content,
+    sourceTool
+  }))
+}
+
+/** 把智能体源码包装为前端 Diff 面板使用的单文件变更集。 */
+function agentSingleFileChangeSet(
+  runId: string,
+  target: AgentBuildTarget
+): WorkspaceCodeChangeSet {
+  const lines = target.content.split('\n')
+  const change = {
+    id: `cc-${runId}-agent-${target.key}`,
+    path: target.path,
+    changeType: 'added' as const,
+    additions: lines.length,
+    deletions: 0,
+    diff: lines.map((line) => `+${line}`).join('\n'),
+    tool: 'file.write' as const,
+    sourceTool: target.sourceTool,
+    executed: true
+  }
+  return {
+    id: `cc-${runId}-agent-${target.key}-${change.additions}`,
+    status: 'applied',
+    workspaceRoot: appDataByWorkspace().workspaceRoot,
+    summary: { files: 1, additions: change.additions, deletions: 0 },
+    files: [change]
+  }
+}
+
+/** 生成智能体构建 DAG，并将已接受、当前待确认和后续待执行任务区分展示。 */
+function agentBuildSlice(
+  agent: DevelopmentPlanningAgent,
+  targets: AgentBuildTarget[],
+  acceptedCount: number
+): Record<string, unknown> {
+  const tasks = targets.map((target, index) => ({
+      id: `task-${agent.id}-${target.key}`,
+      task_id: `task-${agent.id}-${target.key}`,
+      unit_id: target.key === 'page' ? `page:${agent.pageIds[0] || 'application'}` : `agent:${agent.id}`,
+      owner: target.key === 'page' ? 'frontend' : 'backend',
+      title:
+        target.key === 'definition'
+          ? `生成 ${agent.label} 定义与系统指令`
+          : target.key === 'tools'
+            ? '绑定受控工具、API 与权限策略'
+            : '接入页面助手入口与运行状态',
+      status: index < acceptedCount ? 'completed' : index === acceptedCount ? 'running' : 'pending',
+      ...(index > 0 ? { dependencies: [`task-${agent.id}-${targets[index - 1]?.key}`] } : {}),
+      target_files: [target.path]
+    }))
+  const completed = tasks.filter((task) => task.status === 'completed').length
+  const running = tasks.filter((task) => task.status === 'running').length
+  const pending = tasks.filter((task) => task.status === 'pending').length
   return {
     scope: { type: 'agent', id: agent.id, label: agent.label },
     target_unit_ids: [`agent:${agent.id}`, ...agent.pageIds.map((pageId) => `page:${pageId}`)],
     tasks,
-    summary: { total: tasks.length, completed: tasks.length, pending: 0, running: 0, failed: 0 }
+    summary: { total: tasks.length, completed, pending, running, failed: 0 }
   }
 }
 
@@ -237,6 +338,9 @@ export async function replayAgentWorkbench(
   const answers = (options.clarificationAnswers || {}) as Record<string, unknown>
   const appId = options.application?.id || 'app-pms-new'
   const appName = options.application?.name || '武汉分行需求回检系统'
+  const versionKey = options.application?.currentVersionId
+  const isCompletedDemoVersion =
+    appId === 'app-pms-new' && versionKey === 'app-pms-new-v1-3'
 
   /** 发布权威生命周期并保留同一 runId。 */
   const emitLifecycle = (
@@ -273,67 +377,290 @@ export async function replayAgentWorkbench(
     return payload
   }
 
+  /** 生成实体依赖门禁，让用户先进入实体设计再返回 Agent 详细设计。 */
+  const emitDependencyGate = (
+    view: 'dependency_gate' | 'entity_design',
+    entityId?: string
+  ): WorkflowRunPayload => {
+    const dependencyEntities = agentDependencyEntities(versionKey, isCompletedDemoVersion)
+    const missingEntityIds = missingAgentEntityIds(agent, dependencyEntities)
+    const entity = dependencyEntities.find((candidate) => candidate.entityId === entityId)
+    const isEntityDesign = view === 'entity_design' && entity
+    const pending = {
+      id: `pi-agent-entity-${Date.now()}`,
+      type: isEntityDesign ? 'entity_design_confirmation' : 'agent_dependency_gate',
+      basedOnRevision: 1,
+      payload: {
+        agentId: agent.id,
+        missingEntityIds,
+        ...(entity ? { entityId: entity.entityId } : {})
+      },
+      createdAt: new Date().toISOString()
+    }
+    const lifecycle = emitLifecycle('inspect_agent_dependencies', 'awaiting_user', pending)
+    const clarification = isEntityDesign
+      ? {
+          mode: 'agent_dependency_gate',
+          status: 'requires_user_input',
+          message: `请先确认实体“${entity.label}”的详细设计，确认后才能继续 ${agent.label} 的设计。`,
+          context: { view: 'entity_design', entityId: entity.entityId },
+          entity_design: {
+            entity_id: entity.entityId,
+            name: entity.label,
+            purpose: entity.purpose,
+            document: [
+              `# ${entity.label} 实体设计`,
+              '',
+              '## 用途',
+              '',
+              entity.purpose,
+              '',
+              '## 依赖约束',
+              '',
+              `- 该实体由 ${agent.label} 通过已确认 API 只读使用。`,
+              '- 仅保留当前用户可见数据范围，未确认前不得进入 Agent 构建。'
+            ].join('\n')
+          },
+          missing_entities: missingEntityIds
+        }
+      : {
+          mode: 'agent_dependency_gate',
+          status: 'requires_user_input',
+          message: `${agent.label} 依赖的实体尚未完成详细设计，请先处理依赖后再继续。`,
+          context: { view: 'dependency_gate' },
+          missing_entities: missingEntityIds.map((missingId) => {
+            const missing = dependencyEntities.find((candidate) => candidate.entityId === missingId)
+            return {
+              entity_id: missingId,
+              name: missing?.label || missingId,
+              purpose: missing?.purpose || '需要完成实体详细设计'
+            }
+          })
+        }
+    return emit(
+      'inspect_agent_dependencies',
+      'requires_user_input',
+      lifecycle,
+      {
+        selectedEntityId: entity?.entityId,
+        agentDependencyAction: view === 'entity_design' ? 'open_design' : 'recheck',
+        clarification
+      }
+    )
+  }
+
+  /** 生成十段式智能体设计并停在明确确认门。 */
+  const emitAgentDetailReview = async (): Promise<WorkflowRunPayload> => {
+    onContent?.(`正在为 ${agent.label} 生成详细设计…`)
+    await delay(650)
+    const pending = {
+      id: `pi-agent-design-${Date.now()}`,
+      type: 'agent_design_confirmation',
+      basedOnRevision: 1,
+      payload: { message: '智能体设计已生成，等待人工确认' },
+      createdAt: new Date().toISOString()
+    }
+    const lifecycle = emitLifecycle('detail_confirmation', 'awaiting_user', pending)
+    const payload = emit(
+      'detail_confirmation',
+      'requires_user_input',
+      lifecycle,
+      {
+        selectedEntityIds: agent.entityIds,
+        clarification: {
+        mode: 'detail_review',
+        status: 'requires_user_input',
+        message: `请审阅 ${agent.label} 的任务、规则、限制、输入、输出、模型、对话体验、记忆、工具和知识检索设计。`,
+        review: {
+          pages: [],
+          endpoints: [],
+          agents: [agentReview(agent)],
+          summary: {
+            page_count: 0,
+            endpoint_count: 0,
+            agent_count: 1,
+            api_contract_count: mockPlanningArtifacts.apiContracts.length,
+            selectedAgentId: agent.id,
+            detailTargetType: 'agent'
+          }
+        }
+        }
+      }
+    )
+    onContent?.(`已生成 ${agent.label} 详细设计，请明确确认后进入构建。`)
+    return payload
+  }
+
   if (options.planControlAction === 'stop') {
     return emit('build', 'stopped', emitLifecycle('build', 'stopped'))
   }
   if (options.planControlAction === 'end') {
     return emit('finalize_project', 'completed', emitLifecycle('finalize_project', 'completed'))
   }
+  if (answers.agent_acceptance === 'accepted' && resume?.summary?.phase === 'acceptance') {
+    markAgentDesigned(agent.id, versionKey)
+    const lifecycle = emitLifecycle('acceptance', 'completed')
+    onContent?.(`${agent.label} 试运行和页面预览验收通过，智能体已完成交付。`)
+    return emit(
+      'acceptance',
+      'completed',
+      lifecycle,
+      { agentPreviewReady: true },
+      { summary: { phase: 'acceptance', status: 'completed', message: '智能体验收通过' } }
+    )
+  }
+
+  const resumeClarification = String(
+    (resume?.state?.clarification as { mode?: unknown } | undefined)?.mode ||
+      (resume?.result?.clarification as { mode?: unknown } | undefined)?.mode ||
+      (resume?.summary?.clarification as { mode?: unknown } | undefined)?.mode ||
+      ''
+  )
+  const dependencyAction = String(answers.agent_dependency_action || '').trim()
+  if (resumeClarification === 'agent_dependency_gate') {
+    const selectedEntityId = String(
+      answers.entity_id ||
+        resume?.state?.selectedEntityId ||
+        resume?.result?.selectedEntityId ||
+        ''
+    ).trim()
+    if (dependencyAction === 'open_design' && selectedEntityId) {
+      return emitDependencyGate('entity_design', selectedEntityId)
+    }
+    if (dependencyAction === 'confirm_entity_design' && selectedEntityId) {
+      markEntityDesigned(selectedEntityId, versionKey)
+      const refreshedEntities = agentDependencyEntities(versionKey, isCompletedDemoVersion)
+      const stillMissing = missingAgentEntityIds(agent, refreshedEntities)
+      if (stillMissing.length > 0) return emitDependencyGate('dependency_gate')
+      return emitAgentDetailReview()
+    }
+    return emitDependencyGate('dependency_gate')
+  }
+
+  const missingEntityIds = missingAgentEntityIds(
+    agent,
+    agentDependencyEntities(versionKey, isCompletedDemoVersion)
+  )
+  if (missingEntityIds.length > 0) {
+    return emitDependencyGate('dependency_gate')
+  }
 
   if (answers.detail_review || resume) {
     const steps: ProcessStepRecord[] = []
+    const targets = agentBuildTargets(agent)
+    const buildResume = resume?.summary?.phase === 'build'
+    const acceptedPath = typeof answers.file_acceptance === 'string' ? answers.file_acceptance : ''
+    const acceptedIndex = buildResume
+      ? Math.max(
+          0,
+          targets.findIndex((target) => target.path === acceptedPath) + 1
+        )
+      : 0
     /** 追加完成节点并立即流式更新过程卡。 */
     const pushStep = (step: ProcessStepRecord): void => {
       steps.push(step)
       onProcessSteps?.([...steps])
     }
 
-    const stages = [
-      [
-        'inspect_workspace',
-        '检查工作区与已有产物',
-        '已定位页面、接口、模型配置与现有 Agent 运行时。'
-      ],
-      [
-        'inspect_agent_dependencies',
-        '校验模型、工具与权限',
-        '模型、GET /api/rechecks/my 和只读权限边界均可用。'
-      ],
-      ['prepare_build_tasks', '规划构建任务（DAG）', '已拆分智能体定义、工具绑定和页面接入任务。']
-    ] as const
-    for (const [phase, title, detail] of stages) {
-      onContent?.(`正在${title}…`)
-      emit(phase, 'running', emitLifecycle(phase, 'running'))
-      await delay(450)
-      emit(phase, 'completed', emitLifecycle(phase, 'completed'))
-      pushStep({
-        id: `step-${phase}`,
-        kind: 'workflow',
-        status: 'completed',
-        title,
-        detail,
-        sequence: steps.length + 1
-      })
+    if (!buildResume) {
+      const stages = [
+        [
+          'inspect_workspace',
+          '检查工作区与已有产物',
+          '已定位页面、接口、模型配置与现有 Agent 运行时。'
+        ],
+        [
+          'inspect_agent_dependencies',
+          '校验模型、工具与权限',
+          '模型、GET /api/rechecks/my、实体引用和只读权限边界均已确认。'
+        ],
+        ['prepare_build_tasks', '规划构建任务（DAG）', '已拆分智能体定义、工具绑定和页面接入任务。']
+      ] as const
+      for (const [phase, title, detail] of stages) {
+        onContent?.(`正在${title}…`)
+        emit(phase, 'running', emitLifecycle(phase, 'running'))
+        await delay(450)
+        emit(phase, 'completed', emitLifecycle(phase, 'completed'))
+        pushStep({
+          id: `step-${phase}`,
+          kind: 'workflow',
+          status: 'completed',
+          title,
+          detail,
+          sequence: steps.length + 1
+        })
+      }
     }
 
-    onContent?.(`正在生成 ${agent.label} 与页面接入代码…`)
-    emit('build', 'running', emitLifecycle('build', 'running'))
-    await delay(700)
-    emit('build', 'completed', emitLifecycle('build', 'completed'))
+    const activeTarget = targets[acceptedIndex]
+    if (activeTarget) {
+      onContent?.(`正在生成 ${activeTarget.name}…`)
+      const buildExecutionSlice = agentBuildSlice(
+        agent,
+        targets,
+        acceptedIndex
+      ) as ProcessStepRecord['buildExecutionSlice']
+      pushStep({
+        id: 'step-agent-build',
+        kind: 'workflow',
+        status: 'running',
+        title: `生成 ${activeTarget.name}`,
+        detail: '代码已生成，等待你确认当前文件 Diff。',
+        sequence: steps.length + 1,
+        buildExecutionSlice
+      })
+      const pending = {
+        id: `pi-agent-file-${Date.now()}`,
+        type: 'file_acceptance',
+        basedOnRevision: 1,
+        payload: { path: activeTarget.path, name: activeTarget.name },
+        createdAt: new Date().toISOString()
+      }
+      const lifecycle = emitLifecycle('build', 'awaiting_user', pending)
+      const clarification = {
+        mode: 'file_acceptance',
+        status: 'requires_user_input',
+        message: `已生成 ${activeTarget.name}，请在右侧确认 Diff 后继续。`
+      }
+      return emit(
+        'build',
+        'requires_user_input',
+        lifecycle,
+        {
+          clarification,
+          buildExecutionSlice,
+          buildTargetPath: activeTarget.path,
+          acceptedBuildFiles: targets.slice(0, acceptedIndex).map((target) => target.path)
+        },
+        {
+          codeChanges: agentSingleFileChangeSet(runId, activeTarget),
+          summary: {
+            phase: 'build',
+            status: 'requires_user_input',
+            message: `等待接受 ${activeTarget.name}`
+          }
+        }
+      )
+    }
+
     pushStep({
       id: 'step-agent-build',
       kind: 'workflow',
       status: 'completed',
       title: '生成智能体与页面接入代码',
-      detail: '',
+      detail: '所有文件 Diff 均已接受并保存。',
       sequence: steps.length + 1,
-      buildExecutionSlice: agentBuildSlice(agent) as ProcessStepRecord['buildExecutionSlice']
+      buildExecutionSlice: agentBuildSlice(
+        agent,
+        targets,
+        targets.length
+      ) as ProcessStepRecord['buildExecutionSlice']
     })
 
     onContent?.('正在执行受控试运行与集成验证…')
     emit('integration_test', 'running', emitLifecycle('integration_test', 'running'))
     await delay(650)
-    const lifecycle = emitLifecycle('integration_test', 'completed')
+    emitLifecycle('integration_test', 'completed')
     pushStep({
       id: 'step-agent-test',
       kind: 'workflow',
@@ -343,47 +670,55 @@ export async function replayAgentWorkbench(
       sequence: steps.length + 1,
       checks: agentChecks() as ProcessStepRecord['checks']
     })
-    markAgentDesigned(agent.id)
-    onContent?.(`${agent.label} 开发完成。右侧可查看设计文档、实现源码和试运行结果。`)
+    onContent?.('正在启动智能体页面预览…')
+    emit('launch_project', 'running', emitLifecycle('launch_project', 'running'))
+    await delay(450)
+    emitLifecycle('launch_project', 'completed')
+    pushStep({
+      id: 'step-agent-preview',
+      kind: 'workflow',
+      status: 'completed',
+      title: '启动智能体页面预览',
+      detail: '页面入口、助手抽屉和试运行上下文已准备完成。',
+      sequence: steps.length + 1
+    })
+    const pending = {
+      id: `pi-agent-acceptance-${Date.now()}`,
+      type: 'agent_acceptance',
+      basedOnRevision: 1,
+      payload: { message: '请在右侧完成智能体试运行和页面预览验收。' },
+      createdAt: new Date().toISOString()
+    }
+    const acceptanceLifecycle = emitLifecycle('acceptance', 'awaiting_user', pending)
+    onContent?.(`${agent.label} 已完成构建和集成测试，请在右侧试运行并确认验收。`)
     return emit(
-      'integration_test',
-      'completed',
-      lifecycle,
-      { agentPreviewReady: true },
-      { summary: { phase: 'integration_test', status: 'completed', message: '智能体开发完成' } }
+      'acceptance',
+      'requires_user_input',
+      acceptanceLifecycle,
+      {
+        agentPreviewReady: true,
+        clarification: {
+          mode: 'agent_acceptance',
+          status: 'requires_user_input',
+          message: '请在右侧完成智能体多轮试运行，并确认页面入口、工具证据、失败重试和权限拒绝状态。'
+        }
+      },
+      {
+        summary: {
+          phase: 'acceptance',
+          status: 'requires_user_input',
+          previewUrl: MOCK_APPLICATION_PREVIEW_URL,
+          acceptanceRequest: {
+            status: 'awaiting_user',
+            preview_url: MOCK_APPLICATION_PREVIEW_URL,
+            message: '等待智能体验收'
+          },
+          message: '智能体预览已启动，等待验收'
+        },
+        result: { preview_url: MOCK_APPLICATION_PREVIEW_URL }
+      }
     )
   }
 
-  onContent?.(`正在为 ${agent.label} 生成详细设计…`)
-  await delay(650)
-  const pending = {
-    id: `pi-agent-design-${Date.now()}`,
-    type: 'page_design_confirmation',
-    basedOnRevision: 1,
-    payload: { message: '智能体设计已生成，等待人工确认' },
-    createdAt: new Date().toISOString()
-  }
-  const lifecycle = emitLifecycle('detail_confirmation', 'awaiting_user', pending)
-  const payload = emit('detail_confirmation', 'requires_user_input', lifecycle, {
-    clarification: {
-      mode: 'detail_review',
-      status: 'requires_user_input',
-      message: `请审阅 ${agent.label} 的任务、规则、限制、输入、输出、模型、对话体验、记忆、工具和知识检索设计。`,
-      review: {
-        pages: [],
-        endpoints: [],
-        agents: [agentReview(agent)],
-        summary: {
-          page_count: 0,
-          endpoint_count: 0,
-          agent_count: 1,
-          api_contract_count: mockPlanningArtifacts.apiContracts.length,
-          selectedAgentId: agent.id,
-          detailTargetType: 'agent'
-        }
-      }
-    }
-  })
-  onContent?.(`已生成 ${agent.label} 详细设计，请明确确认后进入构建。`)
-  return payload
+  return emitAgentDetailReview()
 }

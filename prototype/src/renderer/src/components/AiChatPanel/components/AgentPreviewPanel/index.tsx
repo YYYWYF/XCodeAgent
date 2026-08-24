@@ -30,6 +30,7 @@ export default function AgentPreviewPanel({ agent, hidden }: Props): ReactElemen
   const [draft, setDraft] = useState(DEFAULT_TRIAL_PROMPT)
   const [turns, setTurns] = useState<AgentTrialTurn[]>([])
   const [pendingPrompt, setPendingPrompt] = useState('')
+  const [failedPrompt, setFailedPrompt] = useState('')
   const [running, setRunning] = useState(false)
   const timeoutRef = useRef<number>()
   const conversationRef = useRef<HTMLDivElement>(null)
@@ -48,6 +49,7 @@ export default function AgentPreviewPanel({ agent, hidden }: Props): ReactElemen
     setDraft(DEFAULT_TRIAL_PROMPT)
     setTurns([])
     setPendingPrompt('')
+    setFailedPrompt('')
     setRunning(false)
   }, [agent.id])
 
@@ -59,25 +61,45 @@ export default function AgentPreviewPanel({ agent, hidden }: Props): ReactElemen
     })
   }, [pendingPrompt, running, turns])
 
-  /** 发送一条用户消息，并在模拟生成完成后向会话追加智能体回复。 */
-  const handleRun = (): void => {
-    const prompt = draft.trim()
-    if (!prompt || running) return
+  /** 模拟一次智能体试运行，并区分首次失败与重试成功两种状态。 */
+  const runTrial = (prompt: string, isRetry: boolean): void => {
     const nextSequence = turns.length + 1
+    const shouldFail = !isRetry && /失败|权限|拒绝/.test(prompt)
     setPendingPrompt(prompt)
+    setFailedPrompt('')
     setDraft('')
     setRunning(true)
     timeoutRef.current = window.setTimeout(() => {
+      if (shouldFail) {
+        setFailedPrompt(prompt)
+        setPendingPrompt('')
+        setRunning(false)
+        return
+      }
       setTurns((current) => [...current, createAgentTrialTurn(agent, prompt, nextSequence)])
       setPendingPrompt('')
       setRunning(false)
     }, 650)
   }
 
+  /** 发送一条用户消息，并在模拟生成完成后向会话追加智能体回复。 */
+  const handleRun = (): void => {
+    const prompt = draft.trim()
+    if (!prompt || running) return
+    runTrial(prompt, false)
+  }
+
+  /** 复用失败消息重新发起试运行，验证失败后的恢复路径。 */
+  const handleRetry = (): void => {
+    if (!failedPrompt || running) return
+    runTrial(failedPrompt, true)
+  }
+
   /** 清空本次试运行历史，并恢复示例输入。 */
   const clearConversation = (): void => {
     if (running) return
     setTurns([])
+    setFailedPrompt('')
     setDraft(DEFAULT_TRIAL_PROMPT)
   }
 
@@ -163,6 +185,14 @@ export default function AgentPreviewPanel({ agent, hidden }: Props): ReactElemen
                 <Spin size="small" /> 正在生成回复并核验工具证据…
               </span>
             </div>
+          </div>
+        ) : null}
+        {failedPrompt ? (
+          <div className={cx('agent-preview-error')} role="alert">
+            <Text>试运行失败：工具调用失败，未执行任何写操作。</Text>
+            <Button aria-label="重试试运行" onClick={handleRetry} size="small" type="link">
+              重试
+            </Button>
           </div>
         ) : null}
       </div>

@@ -328,6 +328,31 @@
         font-size: 13px;
         line-height: 1.65;
       }
+      .agent-thread {
+        max-height: 300px;
+        padding: 2px 0;
+        overflow: auto;
+      }
+      .agent-message {
+        margin: 10px 14px;
+        padding: 9px 10px;
+        border-radius: 8px;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .agent-message.user {
+        margin-left: 42px;
+        background: #f0eaff;
+        color: #4c2aad;
+      }
+      .agent-message.assistant {
+        margin-right: 28px;
+        background: #f7f7fa;
+        color: #4d5562;
+      }
+      .agent-message.loading {
+        color: #6b3cf0;
+      }
       .agent-drawer .agent-evidence {
         margin-top: 10px;
         padding: 8px;
@@ -335,6 +360,24 @@
         background: #f5f1ff;
         border-radius: 7px;
         font-size: 11px;
+      }
+      .agent-status {
+        min-height: 18px;
+        padding: 0 14px 8px;
+        color: #6b3cf0;
+        font-size: 11px;
+      }
+      .agent-status.error {
+        color: #b42318;
+      }
+      .agent-retry {
+        margin-left: 6px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        text-decoration: underline;
       }
       .agent-drawer footer {
         display: flex;
@@ -418,9 +461,60 @@
         return (
           '<button class="agent-entry" id="agentEntry">✦ 回检填报助手</button>' +
           '<aside class="agent-drawer" id="agentDrawer"><header><strong>回检填报助手</strong><small>项目默认模型 · 只读当前用户数据</small></header>' +
-          '<div class="agent-answer">你当前有 2 条待审核回检单。建议先核对整改说明和附件是否完整，再联系审核人确认处理时限。<div class="agent-evidence">工具：GET /api/rechecks/my?status=待审核 · 返回 2 条 · 未执行写操作</div></div>' +
-          '<footer><input value="我的待审核回检下一步怎么处理？" aria-label="智能体输入"><button class="btn">发送</button></footer></aside>'
+          '<div class="agent-thread" id="agentThread" aria-live="polite"><div class="agent-message assistant">你当前有 2 条待审核回检单。建议先核对整改说明和附件是否完整，再联系审核人确认处理时限。<div class="agent-evidence">工具：GET /api/rechecks/my?status=待审核 · 返回 2 条 · 未执行写操作</div></div></div>' +
+          '<div class="agent-status" id="agentStatus" aria-live="polite"></div>' +
+          '<footer><input id="agentInput" value="我的待审核回检下一步怎么处理？" aria-label="智能体输入"><button class="btn" id="agentSend">发送</button></footer></aside>'
         )
+      }
+
+      // 对页面内智能体执行一轮可见的发送、生成、证据和失败重试状态模拟。
+      function sendAgentMessage() {
+        var input = document.getElementById('agentInput')
+        var thread = document.getElementById('agentThread')
+        var status = document.getElementById('agentStatus')
+        var send = document.getElementById('agentSend')
+        if (!input || !thread || !status || !send) return
+        var prompt = input.value.trim()
+        if (!prompt || send.disabled) return
+        window.__lastAgentPrompt = prompt
+        var isRetry = window.__agentRetryPrompt === prompt
+        window.__agentRetryPrompt = ''
+        thread.insertAdjacentHTML('beforeend', '<div class="agent-message user">' + escapeAgentHtml(prompt) + '</div>')
+        status.className = 'agent-status'
+        status.textContent = '正在生成回复并核验工具证据…'
+        send.disabled = true
+        input.disabled = true
+        window.setTimeout(function () {
+          var failed = /失败|权限|拒绝/.test(prompt) && !isRetry
+          if (failed) {
+            status.className = 'agent-status error'
+            status.innerHTML = '试运行失败：工具调用失败，未执行任何写操作。<button class="agent-retry" id="agentRetry">重试</button>'
+            document.getElementById('agentRetry').addEventListener('click', function () {
+              status.textContent = ''
+              window.__agentRetryPrompt = window.__lastAgentPrompt || prompt
+              input.value = window.__lastAgentPrompt || prompt
+              sendAgentMessage()
+            })
+          } else {
+            var reply = /还有|注意|补充|然后|接着/.test(prompt)
+              ? '还需要注意两点：确认每条回检单的整改附件可以正常打开，并保留与审核人的沟通记录。涉及提交或修改的操作仍需要你本人确认。'
+              : '根据当前用户可见的回检单，建议先核对整改说明和附件，再联系审核人确认处理时限。'
+            thread.insertAdjacentHTML('beforeend', '<div class="agent-message assistant">' + reply + '<div class="agent-evidence">工具：GET /api/rechecks/my?status=待审核 · 返回 2 条 · 未执行写操作</div></div>')
+            status.className = 'agent-status'
+            status.textContent = '已完成回复 · 可继续追问'
+          }
+          send.disabled = false
+          input.disabled = false
+          input.value = ''
+          thread.scrollTop = thread.scrollHeight
+        }, 520)
+      }
+
+      // 转义用户输入，确保原型中的对话回显不会把文本当作 HTML 执行。
+      function escapeAgentHtml(value) {
+        return value.replace(/[&<>"']/g, function (character) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]
+        })
       }
 
       // 根据版本生成统计卡，后续版本逐步补齐运营视角。
@@ -565,6 +659,13 @@
         if (agentEntry) {
           agentEntry.addEventListener('click', function () {
             document.getElementById('agentDrawer').classList.toggle('open')
+          })
+          document.getElementById('agentSend').addEventListener('click', sendAgentMessage)
+          document.getElementById('agentInput').addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault()
+              sendAgentMessage()
+            }
           })
         }
       }

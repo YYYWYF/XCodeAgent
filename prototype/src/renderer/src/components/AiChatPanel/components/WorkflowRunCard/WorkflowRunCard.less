@@ -697,6 +697,48 @@
   border-top: 1px solid var(--wb-border);
 }
 
+.@{class-prefix}-workflow-entity-dependency-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 10px;
+    border: 1px solid var(--wb-border);
+    border-radius: 8px;
+    background: var(--wb-surface);
+  }
+
+  li > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+.@{class-prefix}-workflow-entity-design-document {
+  max-height: 220px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface);
+  color: var(--wb-text-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 /* 设计阶段产物授权操作行（CodeX 式，非卡片）：产物已生成状态 + 编辑 + 确认保存 */
 .@{class-prefix}-artifact-auth-bar {
   display: flex;

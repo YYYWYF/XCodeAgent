@@ -76,18 +76,42 @@ export const PMS_API_CONTRACTS: DevelopmentPlanningApiContract[] = [
   }
 ]
 
-/** 当前只保留实体概念提示，不生成具体实体产物或实体工作流。 */
-export const PMS_ENTITIES: DevelopmentPlanningEntity[] = []
+/** 智能体开发前必须先确认的实体依赖，实体本身仍沿用当前 prototype 的规划目录。 */
+export const PMS_ENTITIES: DevelopmentPlanningEntity[] = [
+  {
+    entityId: 'recheck-record',
+    key: 'recheck-record',
+    label: '回检单',
+    purpose: '保存当前用户的回检状态、整改说明和审核信息',
+    schemaRef: 'schema.recheck-record',
+    designed: true,
+    hasDetailPlan: true,
+    detailPlanStatus: 'confirmed'
+  }
+]
 export const PMS_AGENTS: DevelopmentPlanningAgent[] = [
   {
     id: 'recheck-assistant',
     label: '回检填报助手',
     purpose: '解释当前用户的回检状态，并基于可见回检单给出下一步操作建议',
     model: '项目默认模型',
+    modelId: 'default-model',
     apiDependencies: ['GET /api/rechecks/my'],
+    apiReferences: [
+      {
+        apiContractId: 'rechecks',
+        endpointId: 'ep-my-rechecks',
+        method: 'GET',
+        path: '/api/rechecks/my',
+        purpose: '查询当前用户的回检单',
+        entityIds: ['recheck-record']
+      }
+    ],
+    entityIds: ['recheck-record'],
     pageIds: ['my-rechecks'],
     tools: ['查询我的回检单'],
     permissions: ['只读当前用户可见数据', '禁止代替用户提交或修改回检单'],
+    knowledgeReferences: ['knowledge:recheck-policy'],
     acceptanceCriteria: [
       '回答包含工具调用摘要和数据来源说明',
       '只能读取当前用户的回检单',

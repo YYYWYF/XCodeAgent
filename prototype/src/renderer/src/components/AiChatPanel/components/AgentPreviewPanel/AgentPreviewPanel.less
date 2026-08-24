@@ -96,6 +96,27 @@
   color: var(--wb-text-secondary, #646a7c);
 }
 
+.xa-agent-preview-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 10px 12px;
+  color: var(--wb-danger, #cf1322);
+  background: var(--wb-danger-soft, rgba(207, 19, 34, 0.08));
+  border: 1px solid var(--wb-danger-border, rgba(207, 19, 34, 0.24));
+  border-radius: 10px;
+
+  .ant-typography {
+    color: inherit;
+  }
+
+  .ant-btn-link {
+    padding: 0;
+    color: inherit;
+  }
+}
+
 .xa-agent-preview-empty {
   display: grid;
   min-height: 220px;

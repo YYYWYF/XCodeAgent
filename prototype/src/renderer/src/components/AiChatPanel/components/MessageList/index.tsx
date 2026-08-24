@@ -19,9 +19,9 @@ import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import ToolCallCard from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import WorkflowRunCard, {
-  type ClarificationAnswers,
-  workflowClarification
+  type ClarificationAnswers
 } from '../WorkflowRunCard'
+import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
 import DetailConfirmationPageSelector from '../../../../components/DetailConfirmationPageSelector'
 type DetailConfirmationStart = (
   targetType: 'page' | 'endpoint',

@@ -470,6 +470,11 @@ function workflowCardCopy(mode?: string, phase?: string): WorkflowCardCopy {
         title: '授权执行用例',
         primaryAction: '开始执行'
       }
+    case 'agent_acceptance':
+      return {
+        title: '智能体验收',
+        primaryAction: '确认验收'
+      }
     default:
       // 没有明确交互类型时保留通用标题，兼容其它工作台过程卡片。
       return {
@@ -1181,6 +1186,12 @@ export function buildClarificationContinuationMessage(
   }
   if (mode === 'development_entry_confirmation') {
     return '确认进入开发阶段。'
+  }
+  if (mode === 'agent_dependency_gate') {
+    const action = String(answers.agent_dependency_action || '')
+    if (action === 'open_design') return '已进入实体详细设计，请审阅并确认后返回智能体流程。'
+    if (action === 'confirm_entity_design') return '已确认实体详细设计，请重新校验智能体依赖。'
+    if (action === 'recheck') return '已发起实体依赖重新检测。'
   }
   if (
     mode === 'requirement_spec_confirmation' &&

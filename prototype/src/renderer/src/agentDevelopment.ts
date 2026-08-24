@@ -1,13 +1,34 @@
+export type AgentApiReference = {
+  apiContractId: string
+  endpointId: string
+  method: string
+  path: string
+  purpose: string
+  entityIds: string[]
+}
+
+export type AgentDependencyEntityState = {
+  entityId: string
+  label: string
+  designed?: boolean
+  hasDetailPlan?: boolean
+  detailPlanStatus?: string
+}
+
 export type DevelopmentPlanningAgent = {
   id: string
   label: string
   purpose: string
   model: string
+  modelId: string
   apiDependencies: string[]
+  apiReferences: AgentApiReference[]
+  entityIds: string[]
   pageIds: string[]
   tools: string[]
   permissions: string[]
   acceptanceCriteria: string[]
+  knowledgeReferences: string[]
   designed: boolean
   hasDetailPlan: boolean
   detailPlanStatus?: string
@@ -37,7 +58,11 @@ export type AgentDetailBlocker = {
   agentId: string
   label: string
   model: string
+  modelId: string
   purpose: string
+  apiReferences: AgentApiReference[]
+  entityIds: string[]
+  knowledgeReferences: string[]
 }
 
 /** 生成智能体产物的稳定领域标识。 */
@@ -66,8 +91,27 @@ export function buildAgentDetailBlocker(agent: DevelopmentPlanningAgent): AgentD
     agentId: agent.id,
     label: agent.label,
     model: agent.model,
-    purpose: agent.purpose
+    modelId: agent.modelId,
+    purpose: agent.purpose,
+    apiReferences: agent.apiReferences,
+    entityIds: agent.entityIds,
+    knowledgeReferences: agent.knowledgeReferences
   }
+}
+
+/** 返回智能体当前声明但尚未完成详细设计确认的实体依赖。 */
+export function missingAgentEntityIds(
+  agent: DevelopmentPlanningAgent,
+  entities: readonly AgentDependencyEntityState[]
+): string[] {
+  const requiredEntityIds = new Set([
+    ...agent.entityIds,
+    ...agent.apiReferences.flatMap((reference) => reference.entityIds)
+  ])
+  return [...requiredEntityIds].filter((entityId) => {
+    const entity = entities.find((candidate) => candidate.entityId === entityId)
+    return !entity || !(entity.designed || entity.hasDetailPlan || entity.detailPlanStatus === 'confirmed')
+  })
 }
 
 /** 生成一次智能体试运行对话轮次，供原型连续追加用户消息与智能体回复。 */
@@ -99,6 +143,15 @@ function markdownList(items: readonly string[], fallback: string): string[] {
   return (items.length > 0 ? items : [fallback]).map((item) => `- ${item}`)
 }
 
+/** 把智能体的 API 绑定转换为用户可核对的稳定引用条目。 */
+function apiReferenceMarkdown(agent: DevelopmentPlanningAgent): string[] {
+  if (agent.apiReferences.length === 0) return ['- 暂无稳定 API 引用']
+  return agent.apiReferences.map((reference) => {
+    const entities = reference.entityIds.length > 0 ? `；实体：${reference.entityIds.join('、')}` : ''
+    return `- ${reference.method.toUpperCase()} ${reference.path}（契约：\`${reference.apiContractId}\`，端点：\`${reference.endpointId}\`）${entities}`
+  })
+}
+
 /** 生成供用户确认的智能体 Markdown 详细设计文档。 */
 export function buildAgentDesignDoc(agent: DevelopmentPlanningAgent): string {
   return [
@@ -112,6 +165,7 @@ export function buildAgentDesignDoc(agent: DevelopmentPlanningAgent): string {
       agent.pageIds.map((pageId) => `服务页面：\`${pageId}\``),
       '暂未绑定页面'
     ),
+    ...apiReferenceMarkdown(agent),
     '',
     '## 规则',
     '',
@@ -137,7 +191,7 @@ export function buildAgentDesignDoc(agent: DevelopmentPlanningAgent): string {
     '',
     '## 模型',
     '',
-    `- ${agent.model}`,
+    `- ${agent.model}（模型标识：\`${agent.modelId}\`）`,
     '',
     '## 对话体验',
     '',
@@ -153,10 +207,11 @@ export function buildAgentDesignDoc(agent: DevelopmentPlanningAgent): string {
     '## 工具',
     '',
     ...markdownList(agent.tools, '暂无工具'),
-    ...markdownList(agent.apiDependencies, '暂无 API 依赖'),
+    ...apiReferenceMarkdown(agent),
     '',
     '## 知识检索',
     '',
+    ...markdownList(agent.knowledgeReferences, '暂无已确认知识引用'),
     '- 优先检索当前应用已确认的需求、项目计划和业务知识。',
     '- 检索不到可靠内容时明确说明，不使用未经确认的信息补全答案。',
     ''
@@ -168,6 +223,14 @@ export function buildAgentSource(agent: DevelopmentPlanningAgent): AgentSourceAr
   const className = `${toJavaClassName(agent.id)}Agent`
   const tools = javaList(agent.tools)
   const apiDependencies = javaList(agent.apiDependencies)
+  const apiReferences = javaList(
+    agent.apiReferences.map(
+      (reference) =>
+        `${reference.apiContractId}:${reference.endpointId} ${reference.method.toUpperCase()} ${reference.path}`
+    )
+  )
+  const entityIds = javaList(agent.entityIds)
+  const knowledgeReferences = javaList(agent.knowledgeReferences)
   const permissions = javaList(agent.permissions)
   const content = [
     'package com.xcodeagent.generated.agent;',
@@ -191,9 +254,13 @@ export function buildAgentSource(agent: DevelopmentPlanningAgent): AgentSourceAr
     `        .id("${escapeJavaString(agent.id)}")`,
     `        .name("${escapeJavaString(agent.label)}")`,
     `        .model("${escapeJavaString(agent.model)}")`,
+    `        .modelId("${escapeJavaString(agent.modelId)}")`,
     `        .purpose("${escapeJavaString(agent.purpose)}")`,
     `        .tools(${tools})`,
     `        .apiDependencies(${apiDependencies})`,
+    `        .apiReferences(${apiReferences})`,
+    `        .entityIds(${entityIds})`,
+    `        .knowledgeReferences(${knowledgeReferences})`,
     `        .permissions(${permissions})`,
     '        .build();',
     '    this.delegate = runtime.create(definition);',
@@ -208,6 +275,68 @@ export function buildAgentSource(agent: DevelopmentPlanningAgent): AgentSourceAr
   ].join('\n')
   return {
     filePath: `backend/src/main/java/com/xcodeagent/generated/agent/${className}.java`,
+    content
+  }
+}
+
+/** 生成智能体受控工具适配器的 Java 代码，确保工具绑定与智能体定义分离。 */
+export function buildAgentToolAdapterSource(agent: DevelopmentPlanningAgent): AgentSourceArtifact {
+  const className = `${toJavaClassName(agent.id)}ToolAdapter`
+  const references = agent.apiReferences.length > 0 ? agent.apiReferences : []
+  const referenceComments = references.length > 0
+    ? references.map(
+        (reference) =>
+          ` * - ${reference.endpointId}: ${reference.method.toUpperCase()} ${reference.path}；实体：${reference.entityIds.join('、') || '无'}`
+      )
+    : [' * - 当前智能体没有声明 API 工具。']
+  const content = [
+    'package com.xcodeagent.generated.tool;',
+    '',
+    'import com.xcodeagent.runtime.agent.AgentToolResult;',
+    'import com.xcodeagent.runtime.agent.ToolContext;',
+    'import org.springframework.stereotype.Component;',
+    '',
+    '/** 智能体工具适配器只暴露已确认的 API 与实体范围，不允许越权扩展。 */',
+    ...referenceComments,
+    '@Component',
+    `public final class ${className} {`,
+    '',
+    '  /** 使用当前用户上下文执行受控查询，并把来源和失败信息返回给运行时。 */',
+    '  public AgentToolResult query(ToolContext context) {',
+    `    return context.query("${escapeJavaString(references[0]?.endpointId || 'none')}")`,
+    '        .withEvidence(true);',
+    '  }',
+    '}',
+    ''
+  ].join('\n')
+  return {
+    filePath: `backend/src/main/java/com/xcodeagent/generated/tool/${className}.java`,
+    content
+  }
+}
+
+/** 生成页面侧的智能体入口组件，页面只消费稳定的 Agent 会话接口。 */
+export function buildAgentPageIntegrationSource(
+  agent: DevelopmentPlanningAgent
+): AgentSourceArtifact {
+  const componentName = toJavaClassName(agent.id)
+  const content = [
+    "import { useState } from 'react'",
+    '',
+    '/** 页面内智能体入口只负责会话展示，权限与工具执行由后端 Agent 运行时处理。 */',
+    `export function ${componentName}(): JSX.Element {`,
+    '  const [open, setOpen] = useState(false)',
+    '  return (',
+    '    <aside aria-label="智能体助手">',
+    `      <button onClick={() => setOpen((current) => !current)} type="button">${agent.label}</button>`,
+    '      {open ? <div role="status">可开始连续对话，工具证据和失败状态会在消息中展示。</div> : null}',
+    '    </aside>',
+    '  )',
+    '}',
+    ''
+  ].join('\n')
+  return {
+    filePath: `frontend/src/pages/${agent.pageIds[0] || 'application'}/components/${componentName}.tsx`,
     content
   }
 }
