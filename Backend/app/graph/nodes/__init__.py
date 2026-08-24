@@ -5,6 +5,7 @@ from app.graph.nodes.lifecycle import (
     finalize_project,
     handle_failure,
     launch_project,
+    test_phase_confirmation,
 )
 from app.graph.nodes.modification import direct_modification
 from app.graph.nodes.planning import detail_confirmation, project_planning
@@ -29,6 +30,7 @@ __all__ = [
     "integration_test",
     "small_task_repair",
     "launch_project",
+    "test_phase_confirmation",
     "prepare_build_tasks",
     "project_planning",
     "product_planning",

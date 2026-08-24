@@ -17,6 +17,47 @@ class WorkflowProjectionTests(unittest.TestCase):
             ["prepare_build_tasks"],
         )
 
+    def test_build_projects_test_phase_confirmation_gate(self) -> None:
+        """Build 成功后的可视化下一节点必须是测试阶段确认门。"""
+
+        self.assertEqual(
+            _workflow_next_nodes(
+                "build", {"build_summary": {"status": "completed"}}
+            ),
+            ["test_phase_confirmation"],
+        )
+
+        self.assertEqual(
+            _workflow_next_nodes(
+                "build",
+                {"status": "failed", "build_summary": {"status": "completed"}},
+            ),
+            ["handle_failure"],
+        )
+
+    def test_test_phase_confirmation_projects_target(self) -> None:
+        """测试阶段确认投影包含结构化目标摘要。"""
+
+        summary = _workflow_summary(
+            {
+                "phase": "test_phase_confirmation",
+                "status": "requires_user_input",
+                "test_target": {"type": "endpoint", "id": "orders.list", "label": "GET /orders"},
+                "clarification": {
+                    "mode": "test_phase_confirmation",
+                    "status": "requires_user_input",
+                    "testTarget": {
+                        "type": "endpoint",
+                        "id": "orders.list",
+                        "label": "GET /orders",
+                    },
+                },
+            },
+            [],
+        )
+
+        self.assertEqual(summary["testTarget"]["label"], "GET /orders")
+
     def test_integration_repair_next_nodes_match_runtime_route(self) -> None:
         """验证可视化预测与实际修复任务路由保持一致。"""
 
@@ -166,7 +207,7 @@ class WorkflowProjectionTests(unittest.TestCase):
         """AG-UI 摘要应原样投影 lifecycle，供前端直接消费业务阶段。"""
 
         lifecycle = {
-            "schemaVersion": "1.2.0",
+            "schemaVersion": "1.3.0",
             "revision": 4,
             "initialization": {
                 "stage": "awaiting_requirement_confirmation",

@@ -114,7 +114,7 @@ def _validate_resumable_execution(
     target_id: str,
     allow_plan_adjustment_debug: bool = False,
 ) -> None:
-    """只允许当前线程接替同一目标上可恢复的旧执行。"""
+    """只允许安全恢复同一目标上的旧执行，测试阶段确认可切换到新对话。"""
 
     execution = lifecycle.active_executions.get(run_id)
     if execution is None:
@@ -131,9 +131,18 @@ def _validate_resumable_execution(
         and execution.pending_interaction is not None
         and execution.pending_interaction.type == PendingInteractionType.PLAN_ADJUSTMENT
     )
-    if not resumable_status and not debug_plan_adjustment:
+    # Build 完成确认是唯一允许由用户正向确认接管 awaiting_user execution 的门；
+    # 其余待交互仍必须遵守 stopped/failed 或显式调试恢复规则，避免绕过人工门禁。
+    test_phase_confirmation = (
+        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type == PendingInteractionType.TEST_PHASE_CONFIRMATION
+    )
+    if not resumable_status and not debug_plan_adjustment and not test_phase_confirmation:
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
-    if execution.thread_id != thread_id:
+    # 测试阶段是显式的新对话边界：只有结构化测试确认允许把 execution 所有权
+    # 从开发 thread 原子转交给新的测试 thread，其余恢复仍必须留在原对话。
+    if execution.thread_id != thread_id and not test_phase_confirmation:
         raise ApplicationLifecycleConflictError("不能从其他对话接替工作台执行。")
     if execution.scope != scope or execution.target_id != target_id:
         raise ApplicationLifecycleConflictError("恢复目标与原工作台执行不一致。")
@@ -194,10 +203,17 @@ def project_workflow_lifecycle_boundary(
             ),
         )
         return application_lifecycle_payload(state)
+    # 确认节点完成后 Graph 会立即进入集成测试。生命周期提前投影真实的下一节点，
+    # 避免测试正在执行时顶部步骤条仍停留在开发阶段。
+    projected_phase = (
+        "integration_test"
+        if node_name == "test_phase_confirmation" and status == "completed"
+        else node_name
+    )
     state = update_workbench_execution(
         workspace,
         run_id=run_id,
-        phase=node_name,
+        phase=projected_phase,
         status=WorkbenchExecutionStatus.RUNNING,
     )
     return application_lifecycle_payload(state)
@@ -261,6 +277,7 @@ def _pending_interaction(
     mode = str(clarification.get("mode") or "")
     interaction_type = {
         "repair_scope_confirmation": PendingInteractionType.REPAIR_SCOPE_CONFIRMATION,
+        "test_phase_confirmation": PendingInteractionType.TEST_PHASE_CONFIRMATION,
         "detail_review": PendingInteractionType.PAGE_DESIGN_CONFIRMATION,
         "agent_approval": PendingInteractionType.AGENT_APPROVAL,
     }.get(mode, PendingInteractionType.PLAN_ADJUSTMENT)

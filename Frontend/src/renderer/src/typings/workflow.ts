@@ -36,6 +36,7 @@ export type WorkflowSummary = {
   buildTaskPlan?: WorkflowBuildTaskPlan
   buildExecutionScope?: WorkflowBuildExecutionScope
   buildTaskPlanConfirmation?: WorkflowClarification
+  testTarget?: WorkflowTestTarget
   lifecycle?: ApplicationLifecycle
   [key: string]: unknown
 }
@@ -344,6 +345,13 @@ export type ApplicationPlanningAction =
 export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer> & {
   /** 由创建规划 UI 明确写入，不能由确认文案反推。 */
   __applicationPlanningAction?: ApplicationPlanningAction
+  /** Build 完成后进入测试阶段的唯一结构化确认动作。 */
+  test_phase_confirmation?: WorkflowTestPhaseConfirmation
+}
+
+/** 开发完成后恢复测试阶段确认节点的协议答案。 */
+export type WorkflowTestPhaseConfirmation = {
+  action: 'confirm'
 }
 
 export type WorkflowBuildTaskPlanPatch = {
@@ -403,11 +411,19 @@ export type WorkflowClarification = {
   }>
   taskPlan?: WorkflowBuildTaskPlan
   buildExecutionScope?: WorkflowBuildExecutionScope
+  testTarget?: WorkflowTestTarget
   confirmationStatus?: 'pending' | 'confirmed' | string
   editableFields?: string[]
   actionValues?: string[]
   errors?: string[]
   [key: string]: unknown
+}
+
+/** 开发完成确认后展示给用户的测试目标摘要。 */
+export type WorkflowTestTarget = {
+  type: 'page' | 'endpoint' | 'data_source' | 'application' | string
+  id: string
+  label: string
 }
 
 export type WorkflowBuildTaskPlan = {
@@ -546,13 +562,29 @@ export type WorkbenchExecutionStatus =
 
 export type LifecyclePendingInteraction = {
   id: string
-  type: string
+  type: LifecyclePendingInteractionType
   basedOnRevision: number
   payload: Record<string, unknown>
   artifactRefs: Array<Record<string, unknown>>
   createdAt: string
   submittedAt?: string | null
 }
+
+/** 当前工作台 execution 支持跨会话恢复的结构化交互类型。 */
+export type LifecyclePendingInteractionType =
+  | 'requirement_clarification'
+  | 'requirement_confirmation'
+  | 'product_plan_confirmation'
+  | 'technical_plan_confirmation'
+  | 'page_design_confirmation'
+  | 'task_plan_confirmation'
+  | 'impact_confirmation'
+  | 'page_acceptance'
+  | 'application_acceptance'
+  | 'agent_approval'
+  | 'repair_scope_confirmation'
+  | 'test_phase_confirmation'
+  | 'plan_adjustment'
 
 export type LifecycleError = {
   code: string
@@ -585,7 +617,7 @@ export type ExecutionResourceLock = {
 }
 
 export type ApplicationLifecycle = {
-  schemaVersion: '1.2.0'
+  schemaVersion: '1.3.0'
   application: { id: string; name: string }
   updatedAt: string
   revision: number

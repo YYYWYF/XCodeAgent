@@ -28,6 +28,18 @@ def _requirements_confirmation_projection(result: dict[str, Any]) -> dict[str, b
     return {"requirementsConfirmed": result.get("requirements_confirmed") is True}
 
 
+def _workflow_test_target(result: dict[str, Any]) -> dict[str, Any] | None:
+    """从节点结果或 clarification 统一读取测试目标，保证增量帧完整投影。"""
+
+    target = result.get("test_target")
+    if isinstance(target, dict):
+        return target
+    clarification = result.get("clarification")
+    if isinstance(clarification, dict) and isinstance(clarification.get("testTarget"), dict):
+        return clarification.get("testTarget")
+    return None
+
+
 def _workflow_progress_summary(
     result: dict[str, Any],
     events: list[dict[str, Any]],
@@ -72,6 +84,7 @@ def _workflow_progress_summary(
                 else {}
             )
         ),
+        "testTarget": _workflow_test_target(result),
         "testSummary": {},
         "smallTaskTasks": result.get("small_task_tasks", []),
         "smallTaskResults": result.get("small_task_results", []),
@@ -186,11 +199,15 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             if isinstance(build_summary, dict)
             else ""
         )
+        if update.get("status") == "failed":
+            return ["handle_failure"]
         if summary_status == "completed":
-            return ["integration_test"]
+            return ["test_phase_confirmation"]
         if summary_status == "requires_confirmation" or update.get("status") == "requires_user_input":
             return []
         return ["handle_failure"]
+    if node_name == "test_phase_confirmation":
+        return ["integration_test"] if update.get("status") == "completed" else []
     if node_name == "launch_project":
         return []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
@@ -439,6 +456,17 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "buildExecutionSlice": update.get("build_execution_slice"),
                 "buildEvents": update.get("build_events", []),
                 "buildResults": update.get("build_results", []),
+            },
+        }
+    if node_name == "test_phase_confirmation":
+        clarification = update.get("clarification")
+        clarification = clarification if isinstance(clarification, dict) else {}
+        return {
+            "message": clarification.get("message") or "开发已完成，等待确认进入测试阶段。",
+            "data": {
+                "clarification": clarification,
+                "testTarget": update.get("test_target") or clarification.get("testTarget"),
+                "requiresUserInput": update.get("status") == "requires_user_input",
             },
         }
     if node_name == "integration_test":
@@ -1001,6 +1029,7 @@ def _workflow_summary(
                 else {}
             )
         ),
+        "testTarget": _workflow_test_target(result),
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
@@ -1041,6 +1070,7 @@ def _workflow_user_input_message(
         "small_task_workflow_handoff": "小任务需要确认后转入正式工作流。",
         "unit_test_confirmation": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
+        "test_phase_confirmation": "开发已完成，请确认进入测试阶段。",
     }
     if clarification_mode in confirmation_labels:
         return confirmation_labels[clarification_mode]
@@ -1081,6 +1111,7 @@ def _workflow_visual_payload(
         "buildTaskPlan": result.get("build_task_plan", {}),
         "buildExecutionScope": result.get("build_execution_scope"),
         "buildTaskPlanConfirmation": summary.get("buildTaskPlanConfirmation"),
+        "testTarget": _workflow_test_target(result),
         "buildExecutionSlice": result.get("build_execution_slice"),
         "testReport": result.get("test_report", {}),
         "repairTaskPlan": result.get("repair_task_plan"),

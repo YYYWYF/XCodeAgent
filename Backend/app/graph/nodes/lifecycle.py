@@ -60,6 +60,185 @@ def launch_project(state: ProjectState) -> dict:
     }
 
 
+def _test_target_record(state: ProjectState) -> dict[str, str]:
+    """根据当前构建范围生成测试确认卡需要展示的稳定目标摘要。"""
+
+    scope = state.get("build_execution_scope")
+    scope = scope if isinstance(scope, dict) else {}
+    target_type = str(scope.get("type") or "application").strip() or "application"
+    target_id = str(scope.get("targetId") or scope.get("target_id") or "").strip()
+    scope_label = str(
+        scope.get("targetLabel")
+        or scope.get("target_label")
+        or scope.get("label")
+        or scope.get("name")
+        or ""
+    ).strip()
+    project_plan = state.get("project_plan")
+    project_plan = project_plan if isinstance(project_plan, dict) else {}
+
+    def records(key: str) -> list[dict[str, Any]]:
+        """读取项目计划中指定的结构化记录列表。"""
+
+        value = project_plan.get(key)
+        if not isinstance(value, list):
+            value = state.get(key)
+        return (
+            [item for item in value if isinstance(item, dict)]
+            if isinstance(value, list)
+            else []
+        )
+
+    def page_records() -> list[dict[str, Any]]:
+        """读取当前计划的页面记录，兼容菜单树根节点的运行时投影。"""
+
+        pages = records("pages") or records("frontend_pages")
+        flattened: list[dict[str, Any]] = []
+
+        def visit(items: list[dict[str, Any]]) -> None:
+            """递归收集页面叶子，保留稳定页面标识和名称。"""
+
+            for item in items:
+                children = records_from_value(item.get("children"))
+                if children:
+                    visit(children)
+                else:
+                    flattened.append(item)
+
+        visit(pages)
+        return flattened
+
+    def record_label(record: dict[str, Any], *, endpoint: bool = False) -> str:
+        """从页面、接口或数据源记录中选择用户可读名称。"""
+
+        if endpoint:
+            for key in ("label", "name", "title", "display_name"):
+                value = str(record.get(key) or "").strip()
+                if value:
+                    return value
+            method = str(
+                record.get("method") or record.get("http_method") or ""
+            ).strip().upper()
+            path = str(
+                record.get("path") or record.get("url") or record.get("name") or ""
+            ).strip()
+            if method and path:
+                return f"{method} {path}"
+        for key in ("label", "name", "title", "display_name", "path", "id"):
+            value = str(record.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    label = ""
+    if target_type == "page":
+        label = next(
+            (
+                record_label(item)
+                for item in page_records()
+                if str(
+                    item.get("pageId")
+                    or item.get("page_id")
+                    or item.get("key")
+                    or item.get("id")
+                    or ""
+                )
+                == target_id
+            ),
+            "",
+        )
+    elif target_type == "endpoint":
+        for contract in records("api_contracts"):
+            for endpoint in records_from_value(contract.get("endpoints")):
+                endpoint_key = str(
+                    endpoint.get("id")
+                    or endpoint.get("endpointId")
+                    or endpoint.get("endpoint_id")
+                    or ""
+                )
+                if endpoint_key == target_id:
+                    label = record_label(endpoint, endpoint=True)
+                    break
+            if label:
+                break
+    elif target_type == "data_source":
+        label = next(
+            (
+                record_label(item)
+                for item in records("data_sources")
+                if str(
+                    item.get("id")
+                    or item.get("dataSourceId")
+                    or item.get("data_source_id")
+                    or ""
+                )
+                == target_id
+            ),
+            "",
+        )
+
+    application_name = str(state.get("application_name") or "").strip()
+    return {
+        "type": target_type,
+        "id": target_id or "application",
+        "label": scope_label or label or target_id or application_name or "当前应用",
+    }
+
+
+def records_from_value(value: Any) -> list[dict[str, Any]]:
+    """将任意列表值裁剪为结构化记录，避免测试目标摘要读取不可信对象。"""
+
+    return (
+        [item for item in value if isinstance(item, dict)]
+        if isinstance(value, list)
+        else []
+    )
+
+
+def test_phase_confirmation(state: ProjectState) -> dict:
+    """在 Build 完成后暂停等待用户确认，并在确认后放行测试子流程。"""
+
+    target = _test_target_record(state)
+    build_summary = state.get("build_summary")
+    if (
+        not isinstance(build_summary, dict)
+        or build_summary.get("status") != "completed"
+    ):
+        return {
+            "phase": "test_phase_confirmation",
+            "status": "failed",
+            "message": "Build 尚未完成，不能进入测试阶段。",
+            "error": "只有 Build 完成后才能进入测试阶段确认。",
+            "test_target": target,
+            "timeline": ["test_phase_confirmation"],
+        }
+    submission = state.get("test_phase_confirmation")
+    confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
+    if confirmed:
+        return {
+            "phase": "test_phase_confirmation",
+            "status": "completed",
+            "clarification": {},
+            "test_target": target,
+            "integration_next_action": "integration_test",
+            "timeline": ["test_phase_confirmation"],
+        }
+    return {
+        "phase": "test_phase_confirmation",
+        "status": "requires_user_input",
+        "clarification": {
+            "mode": "test_phase_confirmation",
+            "status": "requires_user_input",
+            "message": "代码生成与 Build 已完成，确认后将进入测试阶段，执行测试、失败修复与项目启动。",
+            "testTarget": target,
+            "questions": [],
+        },
+        "test_target": target,
+        "integration_next_action": "await_user_input",
+        "timeline": ["test_phase_confirmation"],
+    }
+
+
 def _failed_project_launch(launch: dict) -> dict:
     """将任一启动阶段失败统一映射为 Workflow 失败结果。"""
 

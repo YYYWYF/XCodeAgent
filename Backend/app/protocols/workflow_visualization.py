@@ -38,6 +38,7 @@ WORKFLOW_NODE_LABELS = {
     "inspect_workspace": "工作区快照检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
+    "test_phase_confirmation": "开发完成与测试阶段确认",
     "integration_test": "集成测试与质量门禁",
     "small_task_repair": "局部修复任务",
     "launch_project": "启动本地预览",
@@ -51,7 +52,8 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "project_planning": ["detail_confirmation"],
     "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
-    "build": ["integration_test"],
+    "build": ["test_phase_confirmation"],
+    "test_phase_confirmation": ["integration_test"],
     "small_task_repair": ["integration_test"],
     "launch_project": ["acceptance"],
     "acceptance": ["finalize_project"],
@@ -78,6 +80,15 @@ def workflow_capabilities() -> dict[str, Any]:
         ),
         "endpoint": "/workflow/run",
         "transport": "ag-ui-sse",
+        "workflowActions": {
+            "requestField": "forwardedProps.workflowAction",
+            "values": {
+                "test_phase_confirmation": (
+                    "通过 clarificationAnswers.test_phase_confirmation 提交结构化 confirm 动作；"
+                    "确认后恢复 test_phase_confirmation 并进入 integration_test。"
+                )
+            },
+        },
         "acceptanceAdjustments": {
             "requestField": "clarificationAnswers.acceptance_adjustment",
             "values": {
@@ -87,6 +98,17 @@ def workflow_capabilities() -> dict[str, Any]:
                 "data_source_change": "重新生成实体设计并再次确认，接口详情不依赖数据源。",
                 "project_plan_change": "重新生成项目计划，确认后再生成页面/接口详细设计。",
             },
+        },
+        "clarificationModes": {
+            "test_phase_confirmation": {
+                "answerField": "clarificationAnswers.test_phase_confirmation",
+                "answer": {"action": "confirm"},
+                "testTarget": {
+                    "type": "page|endpoint|data_source|application",
+                    "id": "稳定目标 ID",
+                    "label": "显示名称",
+                },
+            }
         },
         "input": {
             "request": "Optional one-line user requirement for simple HTTP callers.",
@@ -992,12 +1014,25 @@ def _workflow_progress_summary(
         "needsRevision": result.get("needs_revision"),
         "previewUrl": result.get("preview_url"),
         "buildSummary": result.get("build_summary", {}),
+        "testTarget": _workflow_test_target(result),
         "testSummary": {},
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
         "requirementsConfirmed": result.get("requirements_confirmed") is True,
     }
+
+
+def _workflow_test_target(result: dict[str, Any]) -> dict[str, Any] | None:
+    """从结果或 clarification 读取测试阶段的稳定目标摘要。"""
+
+    target = result.get("test_target")
+    if isinstance(target, dict):
+        return target
+    clarification = result.get("clarification")
+    if isinstance(clarification, dict) and isinstance(clarification.get("testTarget"), dict):
+        return clarification.get("testTarget")
+    return None
 
 
 def _workflow_node_label(node_name: str) -> str:
@@ -1029,6 +1064,8 @@ def _workflow_start_node(
         return "prepare_build_tasks"
     if resume_from == "build":
         return "build"
+    if resume_from == "test_phase_confirmation":
+        return "test_phase_confirmation"
     if resume_from == "integration_test":
         return "integration_test"
     if resume_from == "small_task_repair":
@@ -1067,6 +1104,22 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("status") == "requires_user_input":
             return []
         return ["build"]
+    if node_name == "build":
+        build_summary = update.get("build_summary")
+        summary_status = (
+            str(build_summary.get("status") or "")
+            if isinstance(build_summary, dict)
+            else ""
+        )
+        if update.get("status") == "failed":
+            return ["handle_failure"]
+        if summary_status == "completed":
+            return ["test_phase_confirmation"]
+        if summary_status == "requires_confirmation" or update.get("status") == "requires_user_input":
+            return []
+        return ["handle_failure"]
+    if node_name == "test_phase_confirmation":
+        return ["integration_test"] if update.get("status") == "completed" else []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
 
 
@@ -1424,6 +1477,7 @@ def _workflow_summary(
         "repairIteration": result.get("repair_iteration"),
         "maxRepairIterations": result.get("max_repair_iterations"),
         "buildSummary": build_summary,
+        "testTarget": _workflow_test_target(result),
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
@@ -1471,6 +1525,7 @@ def _workflow_visual_payload(
         "selectedEntityId": result.get("selected_entity_id"),
         "detailTargetType": result.get("detail_target_type"),
         "buildExecutionScope": result.get("build_execution_scope"),
+        "testTarget": _workflow_test_target(result),
     }
     payload = {
         "runId": run_id,

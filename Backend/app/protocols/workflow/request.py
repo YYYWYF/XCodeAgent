@@ -62,6 +62,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     build_task_plan_confirmation = _build_task_plan_confirmation(
         clarification_answers
     )
+    test_phase_confirmation = _test_phase_confirmation_submission(
+        clarification_answers
+    )
     small_task_handoff_submission = _small_task_handoff_submission(
         clarification_answers
     )
@@ -161,6 +164,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     elif build_task_plan_confirmation and workflow_scope != "application_planning":
         # DAG 确认必须回到同一 prepare 节点，不能被通用 detail_confirmation 回退规则截走。
         resume_from = "prepare_build_tasks"
+    elif test_phase_confirmation and workflow_scope != "application_planning":
+        # 开发完成确认必须恢复同一确认节点，确认成功后由 Graph 放行测试节点。
+        resume_from = "test_phase_confirmation"
     if not resume_from and _clarification_answers_to_text(clarification_answers):
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
             raise ValueError(
@@ -308,6 +314,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **(
             {"build_task_plan_confirmation": build_task_plan_confirmation}
             if build_task_plan_confirmation
+            else {}
+        ),
+        **(
+            {"test_phase_confirmation": test_phase_confirmation}
+            if test_phase_confirmation
             else {}
         ),
         "selected_skill_names": list(selected_skill_names),
@@ -821,6 +832,7 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "inspect_workspace",
             "prepare_build_tasks",
             "build",
+            "test_phase_confirmation",
             "integration_test",
             "small_task_repair",
             "launch_project",
@@ -872,6 +884,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan",
         "build_task_plan_path",
         "build_task_plan_confirmation",
+        "test_phase_confirmation",
         "build_execution_scope",
         "build_context",
         "execution_resource_claims",
@@ -915,6 +928,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan": "buildTaskPlan",
         "build_execution_scope": "buildExecutionScope",
         "build_task_plan_confirmation": "buildTaskPlanConfirmation",
+        "test_phase_confirmation": "testPhaseConfirmation",
         "build_results": "buildResults",
         "build_summary": "buildSummary",
         "repair_task_plan": "repairTaskPlan",
@@ -1416,6 +1430,22 @@ def _build_task_plan_confirmation(value: Any) -> dict[str, Any]:
         if isinstance(patches, list)
         else [],
     }
+
+
+def _test_phase_confirmation_submission(value: Any) -> dict[str, str]:
+    """提取测试阶段进入确认动作，拒绝自然语言或未知动作。"""
+
+    if not isinstance(value, dict):
+        return {}
+    if "test_phase_confirmation" not in value:
+        return {}
+    answer = value.get("test_phase_confirmation")
+    if not isinstance(answer, dict):
+        raise ValueError("test_phase_confirmation 必须是结构化对象。")
+    action = _optional_text(answer.get("action")).lower()
+    if action != "confirm":
+        raise ValueError("test_phase_confirmation.action 只支持 confirm。")
+    return {"mode": "test_phase_confirmation", "action": "confirm"}
 
 
 def _unit_test_decision(value: Any) -> str:

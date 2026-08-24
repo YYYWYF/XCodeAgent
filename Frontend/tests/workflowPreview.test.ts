@@ -51,6 +51,11 @@ import {
   navigatePreviewHistory,
   previewOrigin
 } from '../src/renderer/src/utils/previewUrl'
+import {
+  deriveWorkbenchPhase,
+  isObjectEditableInPhase,
+  workbenchPhaseForNode
+} from '../src/renderer/src/workbenchPhase'
 import type {
   ApplicationLifecycle,
   WorkbenchExecution,
@@ -407,6 +412,23 @@ test('独立 AG-UI lifecycle 事件只接收完整的版本化投影', () => {
   assert.equal(readApplicationLifecycle({ revision: 3 }), undefined)
 })
 
+test('Build 确认门仍属于开发阶段，集成测试和验收分别进入测试与审查阶段', () => {
+  const lifecycle = planLifecycle({ phase: 'test_phase_confirmation', status: 'running' })
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'development')
+  assert.equal(
+    deriveWorkbenchPhase(planLifecycle({ phase: 'integration_test', status: 'running' })),
+    'test'
+  )
+  assert.equal(workbenchPhaseForNode('integration_test', 'development'), 'test')
+  assert.equal(workbenchPhaseForNode('acceptance', 'test'), 'review')
+})
+
+test('测试阶段不允许编辑产物，验收编辑权限只在审查阶段开放', () => {
+  assert.equal(isObjectEditableInPhase('code', 'test'), false)
+  assert.equal(isObjectEditableInPhase('acceptance', 'test'), false)
+  assert.equal(isObjectEditableInPhase('acceptance', 'review'), true)
+})
+
 test('重复地址不追加历史，新地址会截断旧前进记录', () => {
   const initial = {
     history: ['https://first.example', 'https://second.example'],
@@ -425,7 +447,7 @@ test('重复地址不追加历史，新地址会截断旧前进记录', () => {
 /** 构造页面计划执行测试需要的最小生命周期。 */
 function planLifecycle(execution: WorkbenchExecution): ApplicationLifecycle {
   return {
-    schemaVersion: '1.2.0',
+    schemaVersion: '1.3.0',
     application: { id: 'app-1', name: '测试应用' },
     updatedAt: '2026-07-23T00:00:00Z',
     revision: 2,

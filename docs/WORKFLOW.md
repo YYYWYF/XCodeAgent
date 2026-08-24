@@ -1,6 +1,6 @@
 ## workflow目标
 
-workflow根据用户需求生成可在本地运行的前后端工程，并通过需求确认、计划生成、代码生成、集成测试和用户验收形成完整闭环。
+workflow根据用户需求生成可在本地运行的前后端工程，并通过设计、开发、测试、审查四个工作台阶段形成完整闭环。
 
 > 2026-08-13 起，创建链路和页面实现边界以 `docs/PRODUCT_UI_TECHNICAL_PLANNING.md` 为准。本文后续仍保留的 PageDetail 描述仅解释历史工作区兼容，不得用于新运行生成页面详设。
 
@@ -34,21 +34,34 @@ START
   → detail_confirmation //仅为页面依赖或显式接口目标补齐 EndpointDetail
   → inspect_workspace //确定性工作区快照
   → prepare_build_tasks //direct ChatModel 基于快照和可选数据库摘要生成静态 Build DAG
-  → build //BuildScheduler 派发给 CodeRunner
-  → integration_test
-      ├─ 测试与质量门禁通过 → launch_project
-      │                         → 提示用户验收并结束本轮
-      │                         → 用户确认后从 acceptance 续跑
-      │                         → finalize_project
-      │                         → END
-      ├─ 可自动修复 → RepairPlanner 生成 repair_task_plan
-      │              → small_task_repair 并行执行局部 repair tasks
-      │              → integration_test 复测
-      │              → 复杂任务经用户确认后转入对应正式节点
-      ├─ 需要用户确认 → END
-      └─ 不可恢复失败 → handle_failure
-                         → END
+  → build //BuildScheduler 派发给 CodeRunner；开发阶段在此结束
+  → test_phase_confirmation //Build completed 后的显式用户确认门
+      ├─ 首次进入 → requires_user_input，返回 test_phase_confirmation 确认卡
+      └─ 用户 confirm → integration_test
+          ├─ 测试与质量门禁通过 → launch_project
+          │                         → 提示用户验收并结束本轮
+          │                         → 用户确认后从 acceptance 续跑
+          │                         → finalize_project
+          │                         → END
+          ├─ 可自动修复 → RepairPlanner 生成 repair_task_plan
+          │              → small_task_repair 并行执行局部 repair tasks
+          │              → integration_test 复测
+          ├─ 需要用户确认 → END
+          └─ 不可恢复失败 → handle_failure
+                             → END
 ```
+
+### 工作台四阶段边界
+
+顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责详细设计、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `launch_project`；审查阶段负责 `acceptance` 和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在审查阶段开放。
+
+`build` 只有在 `build_summary.status == completed` 时才能路由到 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
+
+测试阶段沿用原有有界修复链路：任一阻塞测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，达到既有重试上限后明确失败，不回到 `build`。项目启动及预览就绪卡仍属于测试阶段，用户提交最终验收后才进入审查阶段。
+
+### 测试阶段 AG-UI 与生命周期契约
+
+`test_phase_confirmation` 是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。确认门的 AG-UI 快照同时投影 `clarification.mode`、固定确认文案和 `testTarget`；生命周期待交互类型为 `test_phase_confirmation`，应用生命周期 schema 当前为 `1.3.0`。恢复请求在新的测试 thread 中提交开发会话的 `resumeState` 与 `resumeExecutionRunId`；生命周期只为该结构化确认允许跨 thread 原子转交 execution，其他恢复仍要求同一 thread。确认节点完成时生命周期立即投影 `integration_test`，使顶部测试阶段在测试执行开始时同步高亮。
 
 需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 只读取 `.xcodeagent/plans/technical-plan.json`；页面选择从 `pages[].references` 解析实现范围并在运行时编译 PageImplementationContract，只有缺失 EndpointDetail 时才停在 `detail_confirmation`，纯静态页面可直接继续。
 
@@ -83,7 +96,7 @@ START
 职责边界固定如下：
 
 - `application-lifecycle.json`：顶层 `initialization.stage/status/threadId` 只保存进入工作台前的初始化门禁和 checkpoint 定位，完成后固定为 `ready_for_workbench/completed` 并清空 thread；工作台阶段另由按 run 隔离的 `activeExecutions`、页面/API 契约/数据源 `resourceLocks`、execution 交互门禁、活动 run 和恢复审计表示；
-- 已停止或失败的执行继续运行时，客户端显式提交旧 `runId` 作为恢复令牌；服务端只允许同一 `threadId`、scope 和 target 接替，并原子地把该 run 当前可见的资源登记转给新 `runId`，不使用 lifecycle 快照覆盖当前 Graph 状态；
+- 已停止或失败的执行继续运行时，客户端显式提交旧 `runId` 作为恢复令牌；服务端只允许同一 `threadId`、scope 和 target 接替，并原子地把该 run 当前可见的资源登记转给新 `runId`，不使用 lifecycle 快照覆盖当前 Graph 状态。唯一例外是结构化 `test_phase_confirmation`：它允许 execution 从开发 thread 转交给空白测试 thread，scope 和 target 仍必须完全一致；
 - `checkpoints.sqlite`：LangGraph 技术执行断点和节点状态，继续保留；
 - RequirementSpec / ProjectPlan Markdown + JSON：正式文档内容和 `confirmation_status`，继续保留；
 - Build DAG / ExecutionRun / TestReport：任务、执行和测试事实，继续由各自产物负责。
@@ -100,7 +113,7 @@ START
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
-当节点进入 `requires_user_input` 时，前端不应硬编码续跑阶段，而应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点并设置内部 `resume_from`。主 Graph 支持从 `project_planning`、`detail_confirmation`、`inspect_workspace`、`prepare_build_tasks`、`small_task_repair` 和后续执行节点续跑；旧快照中的 `inspect_database_context` 在协议边界映射到 `prepare_build_tasks`。首页独立规划 Graph 支持 `requirements`、`product_planning`、`ui_confirmation`、`technical_planning` 恢复，历史 `project_planning` 映射为 `technical_planning`。
+当节点进入 `requires_user_input` 时，前端不应硬编码续跑阶段，而应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点并设置内部 `resume_from`。主 Graph 支持从 `project_planning`、`detail_confirmation`、`inspect_workspace`、`prepare_build_tasks`、`test_phase_confirmation`、`small_task_repair` 和后续执行节点续跑；旧快照中的 `inspect_database_context` 在协议边界映射到 `prepare_build_tasks`。首页独立规划 Graph 支持 `requirements`、`product_planning`、`ui_confirmation`、`technical_planning` 恢复，历史 `project_planning` 映射为 `technical_planning`。
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 

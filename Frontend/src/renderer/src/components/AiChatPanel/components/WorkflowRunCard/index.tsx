@@ -31,6 +31,7 @@ import type {
   WorkflowBuildTaskPlan,
   WorkflowBuildTaskPlanConfirmation,
   WorkflowConfirmationArtifact,
+  WorkflowTestTarget,
   WorkflowRunPayload
 } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -47,6 +48,7 @@ import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import DetailReview from './DetailReview'
 import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
+import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -127,8 +129,14 @@ export default function WorkflowRunCard({
   const status = String(workflow.summary.status || 'unknown')
   const artifacts = workflow.summary.artifacts || {}
   const clarification = workflowClarification(workflow)
+  // 项目启动快照可能暂时保留上一测试节点已提交的性能测试确认；启动卡不应重复展示该旧交互。
+  const projectLaunch = workflow.summary.phase === 'launch_project'
+  const staleFrontendPerformanceConfirmation =
+    projectLaunch && clarification?.mode === 'frontend_performance_confirmation'
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification)
-  const clarificationQuestions = clarification?.questions || []
+  const clarificationQuestions = staleFrontendPerformanceConfirmation
+    ? []
+    : clarification?.questions || []
   const entityDesignGate = clarification?.mode === 'entity_design_required'
   const gateQuestion = clarification?.questions?.[0]
   const entityGateEntities = (clarification?.missing_entities || []).filter((item) =>
@@ -151,10 +159,14 @@ export default function WorkflowRunCard({
   const databaseApproval = workflowDatabaseApproval(clarification)
   const unitTestConfirmation = clarification?.mode === 'unit_test_confirmation'
   const frontendPerformanceConfirmation =
-    clarification?.mode === 'frontend_performance_confirmation'
-  // 项目启动节点使用专用卡片展示运行、完成和失败状态。
-  const projectLaunch = workflow.summary.phase === 'launch_project'
+    clarification?.mode === 'frontend_performance_confirmation' &&
+    !staleFrontendPerformanceConfirmation
   const dagConfirmation = clarification?.mode === 'build_task_plan_confirmation'
+  const testPhaseConfirmation = clarification?.mode === 'test_phase_confirmation'
+  const testTarget =
+    (clarification?.testTarget || workflow.summary?.testTarget || workflow.state?.testTarget) as
+      | WorkflowTestTarget
+      | undefined
   const dagTaskPlan =
     (clarification?.taskPlan as WorkflowBuildTaskPlan | undefined) ||
     workflow.summary.buildTaskPlan
@@ -210,14 +222,17 @@ export default function WorkflowRunCard({
     ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
     : dagConfirmation
       ? dagTaskPlan?.tasks?.length || 0
-      : uiDesignConfirmation
-        ? (
-            (clarification as unknown as Record<string, unknown> | undefined)?.pages as
-              | unknown[]
-              | undefined
-          )?.length || clarificationQuestions.length
-        : clarificationQuestions.length
-  const requiresConfirmation = clarification?.status === 'requires_user_input'
+      : testPhaseConfirmation
+        ? 1
+        : uiDesignConfirmation
+          ? (
+              (clarification as unknown as Record<string, unknown> | undefined)?.pages as
+                | unknown[]
+                | undefined
+            )?.length || clarificationQuestions.length
+          : clarificationQuestions.length
+  const requiresConfirmation =
+    !staleFrontendPerformanceConfirmation && clarification?.status === 'requires_user_input'
   const [answers, setAnswers] = useState<ClarificationAnswers>(() =>
     loadClarificationDraft(workflow.threadId, clarificationQuestions)
   )
@@ -270,8 +285,9 @@ export default function WorkflowRunCard({
         !uiDesignConfirmation &&
         !artifactConfirmation &&
         !unitTestConfirmation &&
-        !projectLaunch && 
-        !dagConfirmation && (
+        !projectLaunch &&
+        !dagConfirmation &&
+        !testPhaseConfirmation && (
           <div className={cx('workflow-run-message')}>
             <Text>{String(workflow.summary.message)}</Text>
           </div>
@@ -305,7 +321,13 @@ export default function WorkflowRunCard({
           ))}
         </div>
       )}
-      {(clarificationQuestions.length > 0 || detailReview || technicalPlanGenerationError || dagConfirmation) && (
+      {(
+        clarificationQuestions.length > 0 ||
+        detailReview ||
+        technicalPlanGenerationError ||
+        dagConfirmation ||
+        testPhaseConfirmation
+      ) && (
         <div className={cx('workflow-clarification')}>
           {!entityDesignReview && !entityDesignGate && (
             <div className={cx('workflow-clarification-header')}>
@@ -356,7 +378,19 @@ export default function WorkflowRunCard({
               type="error"
             />
           )}
-          {dagConfirmation && requiresConfirmation ? (
+          {testPhaseConfirmation && requiresConfirmation ? (
+            <TestPhaseConfirmationCard
+              disabled={disabled || interactionAvailability !== 'active'}
+              onSubmit={() =>
+                onSubmitClarification?.(workflow, {
+                  test_phase_confirmation: {
+                    action: 'confirm'
+                  }
+                })
+              }
+              target={testTarget}
+            />
+          ) : dagConfirmation && requiresConfirmation ? (
             <BuildTaskPlanConfirmation
               disabled={disabled || interactionAvailability !== 'active'}
               errors={clarification?.errors}

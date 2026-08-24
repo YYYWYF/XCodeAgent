@@ -541,6 +541,69 @@
   }
 }
 
+.@{class-prefix}-workflow-test-phase-confirmation {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-border);
+
+  .ant-btn {
+    min-height: 38px;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-title {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+  }
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--wb-code-add-text);
+  font-size: 18px;
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-target {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+
+  .ant-typography:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 .@{class-prefix}-workflow-confirmation-artifact {
   display: flex;
   min-width: 0;

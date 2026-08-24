@@ -1430,7 +1430,7 @@ export function readApplicationLifecycle(value: unknown): ApplicationLifecycle |
   if (!value || typeof value !== 'object') return undefined
   const lifecycle = value as Partial<ApplicationLifecycle>
   if (
-    lifecycle.schemaVersion !== '1.2.0' ||
+    lifecycle.schemaVersion !== '1.3.0' ||
     typeof lifecycle.revision !== 'number' ||
     !lifecycle.application ||
     typeof lifecycle.application.id !== 'string' ||

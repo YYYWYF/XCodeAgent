@@ -9,9 +9,13 @@ from app.graph.workflow import (
     route_prepare_build_tasks,
     route_project_planning,
     route_small_task_result,
+    route_test_phase_confirmation,
     route_test_validation,
     route_workflow_start,
 )
+from app.graph.nodes.lifecycle import test_phase_confirmation
+from app.protocols.workflow.lifecycle import _pending_interaction
+from app.domain.application_lifecycle import PendingInteractionType
 
 
 class WorkflowRoutingTests(unittest.TestCase):
@@ -99,13 +103,103 @@ class WorkflowRoutingTests(unittest.TestCase):
             "launch_project",
         )
 
-    def test_build_only_enters_testing_after_complete_summary(self) -> None:
-        """构建切片完整成功后才允许进入集成测试。"""
+    def test_build_only_enters_test_confirmation_after_complete_summary(self) -> None:
+        """构建切片完整成功后必须先停在测试阶段确认门。"""
 
         self.assertEqual(
             route_build_result({"build_summary": {"status": "completed"}}),
+            "test_phase_confirmation",
+        )
+
+    def test_test_phase_confirmation_waits_for_user_input(self) -> None:
+        """开发完成确认门在用户操作前必须暂停主 Workflow。"""
+
+        self.assertEqual(
+            route_test_phase_confirmation({"status": "requires_user_input"}),
+            "await_user_input",
+        )
+
+    def test_test_phase_confirmation_enters_integration_test_after_confirm(self) -> None:
+        """用户确认进入测试阶段后才允许执行集成测试。"""
+
+        self.assertEqual(
+            route_test_phase_confirmation(
+                {"status": "completed", "build_summary": {"status": "completed"}}
+            ),
             "integration_test",
         )
+
+    def test_test_phase_confirmation_rejects_incomplete_build(self) -> None:
+        """确认节点不能被直接恢复到未完成的 Build。"""
+
+        result = test_phase_confirmation(
+            {"build_summary": {"status": "running"}, "application_name": "测试应用"}
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertNotIn("clarification", result)
+
+    def test_test_phase_confirmation_projects_stable_page_target(self) -> None:
+        """确认卡应投影当前页面的稳定 ID 和显示名称。"""
+
+        result = test_phase_confirmation(
+            {
+                "build_summary": {"status": "completed"},
+                "build_execution_scope": {"type": "page", "targetId": "orders"},
+                "project_plan": {"pages": [{"pageId": "orders", "name": "订单页"}]},
+            }
+        )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["clarification"]["testTarget"],
+            {"type": "page", "id": "orders", "label": "订单页"},
+        )
+
+    def test_test_phase_confirmation_projects_endpoint_target_name(self) -> None:
+        """接口测试目标优先使用接口名称而不是自然语言确认文本。"""
+
+        result = test_phase_confirmation(
+            {
+                "build_summary": {"status": "completed"},
+                "build_execution_scope": {"type": "endpoint", "targetId": "orders.list"},
+                "project_plan": {
+                    "api_contracts": [
+                        {
+                            "id": "orders-api",
+                            "endpoints": [
+                                {
+                                    "id": "orders.list",
+                                    "name": "订单列表接口",
+                                    "method": "GET",
+                                    "path": "/orders",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+        )
+
+        self.assertEqual(
+            result["clarification"]["testTarget"],
+            {"type": "endpoint", "id": "orders.list", "label": "订单列表接口"},
+        )
+
+    def test_test_phase_confirmation_uses_typed_lifecycle_interaction(self) -> None:
+        """测试阶段确认应投影为独立的生命周期待交互类型。"""
+
+        interaction_type, payload = _pending_interaction(
+            {
+                "clarification": {
+                    "mode": "test_phase_confirmation",
+                    "testTarget": {"type": "application", "id": "app", "label": "应用"},
+                }
+            }
+        )
+
+        self.assertEqual(interaction_type, PendingInteractionType.TEST_PHASE_CONFIRMATION)
+        self.assertEqual(payload["testTarget"]["id"], "app")
 
     def test_build_confirmation_stops_for_user_input(self) -> None:
         """构建需要扩大范围时必须停留等待用户确认。"""

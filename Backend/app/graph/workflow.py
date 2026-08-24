@@ -23,6 +23,8 @@ def route_workflow_start(state: ProjectState) -> str:
         return "prepare_build_tasks"
     if state.get("resume_from") == "build":
         return "build"
+    if state.get("resume_from") == "test_phase_confirmation":
+        return "test_phase_confirmation"
     if state.get("resume_from") == "integration_test":
         return "integration_test"
     if state.get("resume_from") == "small_task_repair":
@@ -73,7 +75,7 @@ def route_small_task_result(state: ProjectState) -> str:
 
 
 def route_build_result(state: ProjectState) -> str:
-    """仅允许完整成功的构建进入测试，确认与失败走各自终态。"""
+    """仅允许完整成功的构建进入测试阶段确认门，失败走失败处理。"""
 
     build_summary = state.get("build_summary")
     summary_status = (
@@ -81,10 +83,27 @@ def route_build_result(state: ProjectState) -> str:
         if isinstance(build_summary, dict)
         else ""
     )
+    if state.get("status") == "failed":
+        return "handle_failure"
     if summary_status == "completed":
-        return "integration_test"
+        return "test_phase_confirmation"
     if summary_status == "requires_confirmation" or state.get("status") == "requires_user_input":
         return "await_user_input"
+    return "handle_failure"
+
+
+def route_test_phase_confirmation(state: ProjectState) -> str:
+    """根据测试阶段确认结果选择暂停或继续集成测试。"""
+
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
+    build_summary = state.get("build_summary")
+    build_completed = (
+        isinstance(build_summary, dict)
+        and build_summary.get("status") == "completed"
+    )
+    if state.get("status") == "completed" and build_completed:
+        return "integration_test"
     return "handle_failure"
 
 
@@ -138,6 +157,7 @@ def build_graph(*, checkpointer):
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
     builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
     builder.add_node("build", nodes.build)
+    builder.add_node("test_phase_confirmation", nodes.test_phase_confirmation)
     builder.add_node("integration_test", nodes.integration_test)
     builder.add_node("small_task_repair", nodes.small_task_repair)
     builder.add_node("launch_project", nodes.launch_project)
@@ -154,6 +174,7 @@ def build_graph(*, checkpointer):
             "inspect_workspace": "inspect_workspace",
             "prepare_build_tasks": "prepare_build_tasks",
             "build": "build",
+            "test_phase_confirmation": "test_phase_confirmation",
             "integration_test": "integration_test",
             "small_task_repair": "small_task_repair",
             "launch_project": "launch_project",
@@ -191,6 +212,15 @@ def build_graph(*, checkpointer):
     builder.add_conditional_edges(
         "build",
         route_build_result,
+        {
+            "test_phase_confirmation": "test_phase_confirmation",
+            "await_user_input": END,
+            "handle_failure": "handle_failure",
+        },
+    )
+    builder.add_conditional_edges(
+        "test_phase_confirmation",
+        route_test_phase_confirmation,
         {
             "integration_test": "integration_test",
             "await_user_input": END,

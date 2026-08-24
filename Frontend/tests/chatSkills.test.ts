@@ -1420,6 +1420,46 @@ test('构建完成后展示单元测试跳过确认按钮', () => {
   assert.doesNotMatch(markup, /127\.0\.0\.1:3000/)
 })
 
+test('项目启动节点不展示已过期的前端性能测试确认', () => {
+  const markup = renderToStaticMarkup(
+    createElement(WorkflowRunCard, {
+      interactionAvailability: 'stale',
+      workflow: {
+        runId: 'run-launch-with-stale-performance-confirmation',
+        threadId: 'thread-launch-with-stale-performance-confirmation',
+        summary: {
+          status: 'running',
+          phase: 'launch_project',
+          clarification: {
+            mode: 'frontend_performance_confirmation',
+            status: 'requires_user_input',
+            message: '单元测试已完成。是否跳过前端性能测试？',
+            questions: [
+              {
+                id: 'frontend_performance_confirmation',
+                header: '前端性能测试',
+                question: '是否跳过前端性能测试？',
+                type: 'choice',
+                options: [
+                  { label: '是，跳过性能测试', value: 'skip' },
+                  { label: '否，继续执行', value: 'run' }
+                ]
+              }
+            ]
+          }
+        },
+        events: []
+      }
+    })
+  )
+
+  assert.match(markup, /正在启动项目预览/)
+  assert.doesNotMatch(markup, /是否跳过前端性能测试/)
+  assert.doesNotMatch(markup, /是，跳过性能测试/)
+  assert.doesNotMatch(markup, /待确认事项/)
+  assert.doesNotMatch(markup, /该确认已提交或已失效/)
+})
+
 test('UI 确认过渡帧缺少 clarification 时仍可正常渲染', () => {
   assert.doesNotThrow(() =>
     renderToStaticMarkup(

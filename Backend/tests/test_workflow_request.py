@@ -498,6 +498,45 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
         self.assertNotIn("user_interaction_submission", inputs)
 
+    def test_test_phase_confirmation_is_forwarded_as_structured_resume(self) -> None:
+        """进入测试阶段按钮必须恢复确认节点并保留结构化动作。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "开始测试页面：请假申请页",
+                "clarificationAnswers": {
+                    "test_phase_confirmation": {
+                        "action": "confirm",
+                    }
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "test_phase_confirmation",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "test_phase_confirmation")
+        self.assertEqual(
+            inputs["resume_values"]["test_phase_confirmation"],
+            {"mode": "test_phase_confirmation", "action": "confirm"},
+        )
+
+    def test_test_phase_confirmation_rejects_non_confirm_action(self) -> None:
+        """测试阶段确认不接受拒绝动作或自然语言回退。"""
+
+        with self.assertRaisesRegex(ValueError, "只支持 confirm"):
+            workflow_run_inputs(
+                {
+                    "request": "进入测试",
+                    "clarificationAnswers": {
+                        "test_phase_confirmation": {"action": "reject"}
+                    },
+                }
+            )
+
     def test_frontend_performance_confirmation_is_forwarded_as_resume_decision(self) -> None:
         """前端性能测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
 

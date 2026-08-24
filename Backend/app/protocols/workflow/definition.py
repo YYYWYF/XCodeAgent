@@ -20,6 +20,7 @@ WORKFLOW_NODE_LABELS = {
     "inspect_workspace": "扫描工作区代码",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
+    "test_phase_confirmation": "开发完成与测试阶段确认",
     "integration_test": "集成测试与质量门禁",
     "small_task_repair": "局部修复任务",
     "launch_project": "启动本地预览",
@@ -39,7 +40,8 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "technical_planning": [],
     "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build", "handle_failure"],
-    "build": ["integration_test"],
+    "build": ["test_phase_confirmation"],
+    "test_phase_confirmation": ["integration_test"],
     "small_task_repair": ["integration_test"],
     "acceptance": ["finalize_project"],
 }
@@ -77,7 +79,22 @@ def workflow_capabilities() -> dict[str, Any]:
                     "通过 clarificationAnswers 提交 Build DAG 的 confirm、patch 或 regenerate 动作；"
                     "确认对象只允许修改任务 title 和 description。"
                 ),
+                "test_phase_confirmation": (
+                    "通过 clarificationAnswers.test_phase_confirmation 提交结构化 confirm 动作；"
+                    "确认后恢复 test_phase_confirmation 并进入 integration_test。"
+                ),
             },
+        },
+        "clarificationModes": {
+            "test_phase_confirmation": {
+                "answerField": "clarificationAnswers.test_phase_confirmation",
+                "answer": {"action": "confirm"},
+                "testTarget": {
+                    "type": "page|endpoint|data_source|application",
+                    "id": "稳定目标 ID",
+                    "label": "显示名称",
+                },
+            }
         },
         "acceptanceAdjustments": {
             "requestField": "clarificationAnswers.acceptance_adjustment",

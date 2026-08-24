@@ -11,7 +11,10 @@ from app.domain.application_lifecycle import (
     PendingInteractionType,
     WorkbenchExecutionStatus,
 )
-from app.protocols.workflow.lifecycle import begin_workflow_lifecycle
+from app.protocols.workflow.lifecycle import (
+    begin_workflow_lifecycle,
+    project_workflow_lifecycle_boundary,
+)
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
     create_application_lifecycle,
@@ -405,6 +408,109 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 payload["resourceLocks"]["apiContracts"]["audit-api"]["reason"],
                 "repair_expansion",
             )
+
+    def test_test_phase_confirmation_can_take_over_waiting_execution_in_new_thread(self) -> None:
+        """开发完成确认应允许测试新对话接管 awaiting_user execution。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="orders",
+                page_id="orders",
+                thread_id="thread-orders",
+                run_id="run-old",
+                phase="test_phase_confirmation",
+            )
+            waiting = update_workbench_execution(
+                directory,
+                run_id="run-old",
+                phase="test_phase_confirmation",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.TEST_PHASE_CONFIRMATION,
+                pending_payload={
+                    "mode": "test_phase_confirmation",
+                    "testTarget": {
+                        "type": "page",
+                        "id": "orders",
+                        "label": "订单页",
+                    },
+                },
+            )
+            pending = waiting.active_executions["run-old"].pending_interaction
+            assert pending is not None
+
+            payload = begin_workflow_lifecycle(
+                {
+                    "workspace": directory,
+                    "resume_values": {
+                        "build_execution_scope": {"type": "page", "targetId": "orders"},
+                        "resume_execution_run_id": "run-old",
+                    },
+                },
+                thread_id="thread-tests-orders",
+                run_id="run-new",
+                phase="test_phase_confirmation",
+            )
+
+            assert payload is not None
+            self.assertNotIn("run-old", payload["activeExecutions"])
+            self.assertEqual(
+                payload["activeExecutions"]["run-new"]["threadId"],
+                "thread-tests-orders",
+            )
+
+            projected = project_workflow_lifecycle_boundary(
+                directory,
+                run_id="run-new",
+                node_name="test_phase_confirmation",
+                update={"status": "completed"},
+            )
+
+            assert projected is not None
+            self.assertEqual(
+                projected["activeExecutions"]["run-new"]["phase"],
+                "integration_test",
+            )
+
+    def test_other_resumable_execution_cannot_move_to_new_thread(self) -> None:
+        """非测试确认的可恢复执行不得跨对话接管。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="orders",
+                page_id="orders",
+                thread_id="thread-orders",
+                run_id="run-old",
+                phase="detail_confirmation",
+            )
+            update_workbench_execution(
+                directory,
+                run_id="run-old",
+                phase="detail_confirmation",
+                status=WorkbenchExecutionStatus.STOPPED,
+            )
+
+            with self.assertRaises(ApplicationLifecycleConflictError):
+                begin_workflow_lifecycle(
+                    {
+                        "workspace": directory,
+                        "resume_values": {
+                            "build_execution_scope": {
+                                "type": "page",
+                                "targetId": "orders",
+                            },
+                            "resume_execution_run_id": "run-old",
+                        },
+                    },
+                    thread_id="thread-new",
+                    run_id="run-new",
+                    phase="detail_confirmation",
+                )
 
 
 def _write_ready_lifecycle(directory: str) -> None:

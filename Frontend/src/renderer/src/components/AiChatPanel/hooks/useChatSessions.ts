@@ -40,6 +40,16 @@ export type PersistSessionInput = {
   titleFrom?: string
 }
 
+export type TestPhaseSessionTarget = {
+  targetLabel: string
+  pageId?: string
+  apiContractId?: string
+  endpointId?: string
+  endpointLabel?: string
+  entityId?: string
+  entityLabel?: string
+}
+
 /** 从待保存消息中的 Workflow 快照推断 API endpoint 会话归属。 */
 function inferEndpointContextFromMessages(messages: ChatSessionMessage[]): {
   apiContractId?: string
@@ -117,6 +127,7 @@ type UseChatSessionsResult = {
   ) => Promise<SessionIdentity>
   createEntitySession: (entityId: string, entityLabel: string) => Promise<SessionIdentity>
   createPageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
+  createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
   ensureActiveSession: () => Promise<SessionIdentity>
   ensurePlanningSession: (threadId: string) => Promise<SessionIdentity>
   ensureEndpointSession: (
@@ -368,6 +379,7 @@ export function useChatSessions({
    *  不自动打开历史会话；设计会话保留在左侧大纲历史中可再次打开。 */
   const handleSelectEntity = async (_entityId: string): Promise<void> => {
     if (loadingSessions) return
+    void _entityId
     setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
     onCloseRightPanel()
   }
@@ -610,6 +622,37 @@ export function useChatSessions({
     }
   }
 
+  /** 为测试阶段创建独立的空白会话和 AG-UI thread，同时保留开发目标归属。 */
+  const createTestSession = async (target: TestPhaseSessionTarget): Promise<SessionIdentity> => {
+    const targetLabel = target.targetLabel.trim() || '当前应用'
+    const apiContractId = String(target.apiContractId || '').trim()
+    const endpointId = String(target.endpointId || '').trim()
+    const entityId = String(target.entityId || '').trim()
+    try {
+      return await createNewSession(
+        String(target.pageId || '').trim() || undefined,
+        undefined,
+        apiContractId && endpointId
+          ? {
+              apiContractId,
+              endpointId,
+              endpointLabel: String(target.endpointLabel || targetLabel).trim() || targetLabel
+            }
+          : undefined,
+        entityId
+          ? {
+              entityId,
+              entityLabel: String(target.entityLabel || targetLabel).trim() || targetLabel
+            }
+          : undefined,
+        { title: `测试：${targetLabel}` }
+      )
+    } catch (caughtError) {
+      reportSessionError(caughtError)
+      throw caughtError
+    }
+  }
+
   /** 按页面恢复既有会话，首次进入该页面时创建独立 session 与 thread。 */
   const ensurePageSession = async (pageId: string, pageLabel: string): Promise<SessionIdentity> => {
     const normalizedPageId = pageId.trim()
@@ -790,6 +833,7 @@ export function useChatSessions({
     createEndpointSession,
     createEntitySession,
     createPageSession,
+    createTestSession,
     deletingSessionId,
     draft,
     draftKey,

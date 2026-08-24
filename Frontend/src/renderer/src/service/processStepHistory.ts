@@ -15,6 +15,7 @@ const WORKFLOW_NODE_LABELS: Record<string, string> = {
   inspect_database_context: '数据库上下文检查',
   prepare_build_tasks: '构建任务 DAG 生成',
   build: '代码生成与构建协调',
+  test_phase_confirmation: '开发完成与测试阶段确认',
   integration_test: '集成测试与质量门禁',
   launch_project: '启动本地预览',
   acceptance: '用户验收',

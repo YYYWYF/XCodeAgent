@@ -111,6 +111,8 @@ class ProjectState(TypedDict, total=False):
     build_results: list[dict[str, Any]]
     build_summary: dict[str, Any]
     build_events: Annotated[list[str], add]
+    test_target: dict[str, Any]
+    test_phase_confirmation: dict[str, Any]
     test_generation_input_code_changes: dict[str, Any]
     test_generation_input_code_change_sets: list[dict[str, Any]]
     unit_test_generation_context: dict[str, Any]

@@ -18,7 +18,8 @@ import type {
   WorkflowBuildTaskPlanConfirmation,
   WorkflowDebugOptions,
   WorkflowAction,
-  WorkflowRunPayload
+  WorkflowRunPayload,
+  WorkflowTestTarget
 } from '../../../typings'
 import {
   isConversationWorkflow,
@@ -39,7 +40,7 @@ import {
 } from '../skillSelection'
 import { stoppedAnswer, workflowCodeChanges, workflowPreviewTarget } from '../utils'
 import type { WorkflowPreviewTarget } from '../utils'
-import type { PersistSessionInput } from './useChatSessions'
+import type { PersistSessionInput, TestPhaseSessionTarget } from './useChatSessions'
 import {
   sessionIdentityMatchesTarget,
   type SessionIdentity,
@@ -104,6 +105,7 @@ type UseWorkflowConversationParams = {
   conversationEnabled: boolean
   inputMode: ChatInputMode
   editorMode: EditorMode
+  createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
   ensureActiveSession: () => Promise<SessionIdentity>
   ensureEndpointSession: (
     apiContractId: string,
@@ -115,6 +117,7 @@ type UseWorkflowConversationParams = {
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
+  onEnterTestPhase: () => void
   onPreviewReady: (target: WorkflowPreviewTarget) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
@@ -205,6 +208,41 @@ function buildTaskPlanConfirmationMessage(
     regenerate: '请重新生成 Build DAG。'
   }
   return messages[action]
+}
+
+/** 从开发完成确认载荷读取测试目标，确保刷新后仍能生成一致的用户消息。 */
+function testPhaseConfirmationTarget(
+  workflow: WorkflowRunPayload
+): WorkflowTestTarget | undefined {
+  const clarification = workflowClarification(workflow)
+  const candidates = [
+    clarification?.testTarget,
+    workflow.summary?.testTarget,
+    workflow.state?.testTarget,
+    workflow.result?.testTarget
+  ]
+  return candidates.find(
+    (value): value is WorkflowTestTarget =>
+      Boolean(
+        value &&
+          typeof value === 'object' &&
+          !Array.isArray(value) &&
+          String((value as Record<string, unknown>).label || '').trim()
+      )
+  )
+}
+
+/** 将测试目标转换为用户可追踪的阶段进入消息。 */
+function testPhaseConfirmationMessage(workflow: WorkflowRunPayload): string {
+  const target = testPhaseConfirmationTarget(workflow)
+  if (!target) return '开始测试应用：当前应用'
+  const typeLabels: Record<string, string> = {
+    page: '页面',
+    endpoint: '接口',
+    data_source: '数据源',
+    application: '应用'
+  }
+  return `开始测试${typeLabels[target.type] || '目标'}：${target.label}`
 }
 
 /** 从 Workflow 快照中读取最近一次实体选择，作为实体设计确认继续时的兜底上下文。 */
@@ -304,6 +342,7 @@ export function useWorkflowConversation({
   conversationEnabled,
   inputMode,
   editorMode,
+  createTestSession,
   ensureActiveSession,
   ensureEndpointSession,
   ensureEntitySession,
@@ -311,6 +350,7 @@ export function useWorkflowConversation({
   getSessionMessages,
   persistSession,
   onApplicationLifecycleChange,
+  onEnterTestPhase,
   onPreviewReady,
   publishAiMessage,
   runningSessionsRef,
@@ -320,6 +360,8 @@ export function useWorkflowConversation({
 }: UseWorkflowConversationParams): UseWorkflowConversationResult {
   const stopRequestedRef = useRef<Record<string, boolean>>({})
   const notifiedPreviewTargetsRef = useRef<Set<string>>(new Set())
+  // 测试阶段切换会先异步创建新会话，用 runId 防止按钮连点创建多个空白测试会话。
+  const testPhaseTransitionRunIdsRef = useRef<Set<string>>(new Set())
   const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
@@ -849,6 +891,54 @@ export function useWorkflowConversation({
         titleFrom: 'Build DAG 确认',
         conversation: false
       })
+    }
+    if (!conversation && clarificationMode === 'test_phase_confirmation') {
+      const answer = answers.test_phase_confirmation
+      const action =
+        answer && typeof answer === 'object' && !Array.isArray(answer)
+          ? String((answer as Record<string, unknown>).action || '')
+          : ''
+      if (
+        action !== 'confirm' ||
+        loading ||
+        workspaceBusy ||
+        testPhaseTransitionRunIdsRef.current.has(workflow.runId)
+      ) {
+        return false
+      }
+      testPhaseTransitionRunIdsRef.current.add(workflow.runId)
+      const target = testPhaseConfirmationTarget(workflow)
+      const targetId = target?.id || workflowBuildScope?.targetId
+      let testSession: SessionIdentity
+      try {
+        testSession = await createTestSession({
+          targetLabel: target?.label || '当前应用',
+          pageId: activeSession?.pageId || (target?.type === 'page' ? targetId : undefined),
+          apiContractId: activeSession?.apiContractId || workflowBuildScope?.apiContractId,
+          endpointId:
+            activeSession?.endpointId || (target?.type === 'endpoint' ? targetId : undefined),
+          endpointLabel: activeSession?.endpointLabel || target?.label,
+          entityId:
+            activeSession?.entityId || (target?.type === 'data_source' ? targetId : undefined),
+          entityLabel: activeSession?.entityLabel || target?.label
+        })
+      } catch {
+        testPhaseTransitionRunIdsRef.current.delete(workflow.runId)
+        return false
+      }
+      onEnterTestPhase()
+      const started = await sendWorkflowMessage(testPhaseConfirmationMessage(workflow), {
+        clarificationAnswers: answers,
+        originalRequest,
+        resumeState: workflow,
+        buildExecutionScope: workflowBuildScope,
+        resumeExecutionRunId: workflow.runId,
+        sessionIdentity: testSession,
+        titleFrom: '进入测试阶段',
+        conversation: false
+      })
+      if (!started) testPhaseTransitionRunIdsRef.current.delete(workflow.runId)
+      return started
     }
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
     if (!continuationMessage || loading || workspaceBusy) return false

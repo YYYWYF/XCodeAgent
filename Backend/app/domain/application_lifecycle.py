@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-APPLICATION_LIFECYCLE_SCHEMA_VERSION = "1.2.0"
+APPLICATION_LIFECYCLE_SCHEMA_VERSION = "1.3.0"
 
 
 class ApplicationLifecycleStage(StrEnum):
@@ -58,6 +58,7 @@ class PendingInteractionType(StrEnum):
     APPLICATION_ACCEPTANCE = "application_acceptance"
     AGENT_APPROVAL = "agent_approval"
     REPAIR_SCOPE_CONFIRMATION = "repair_scope_confirmation"
+    TEST_PHASE_CONFIRMATION = "test_phase_confirmation"
     PLAN_ADJUSTMENT = "plan_adjustment"
 
 

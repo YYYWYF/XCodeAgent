@@ -10,7 +10,11 @@ import { Spin, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWorkbenchPhase } from '../../../../context'
-import { WORKBENCH_PHASE_AGENTS } from '../../../../workbenchPhase'
+import {
+  WORKBENCH_PHASE_AGENTS,
+  workbenchPhaseForNode,
+  type WorkbenchPhase
+} from '../../../../workbenchPhase'
 import {
   planningWorkflowActivity,
   planningWorkflowNeedsChatLoading,
@@ -95,12 +99,12 @@ function entityDesignMessageContent(
   return parts.join('\n\n')
 }
 
-/** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 研发 / 审查）在回复。
+/** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 研发 / 测试 / 审查）在回复。
  *  人像图标 + Agent 角色名，独占一行，下方换行展示正文/卡片。 */
 function MessageAgentHeader({
   agentKey
 }: {
-  agentKey: 'product' | 'development' | 'test'
+  agentKey: WorkbenchPhase
 }): ReactElement {
   const agent = WORKBENCH_PHASE_AGENTS[agentKey]
   return (
@@ -111,6 +115,23 @@ function MessageAgentHeader({
       <span className={cx('ai-message-agent-name')}>{agent.role}</span>
     </div>
   )
+}
+
+/** 从消息自身的 Workflow 节点推导 Agent 身份，避免阶段推进后历史消息被重新标记。 */
+function messageAgentPhase(
+  workflow: WorkflowRunPayload | undefined,
+  fallback: WorkbenchPhase
+): WorkbenchPhase {
+  if (!workflow) return fallback
+  const phase =
+    String(workflow.summary?.phase || '').trim() ||
+    String(workflow.result?.phase || '').trim() ||
+    [...(workflow.events || [])]
+      .reverse()
+      .map((event) => String(event.nodeName || event.node?.id || '').trim())
+      .find(Boolean) ||
+    ''
+  return workbenchPhaseForNode(phase, fallback)
 }
 
 type MessageListProps = {
@@ -462,9 +483,11 @@ export default function MessageList({
                   <div className={cx('ai-message-content')}>
                     {message.role === 'assistant' ? (
                       <>
-                        {/* 统一 Agent 头：人像图标 + 当前阶段 Agent 角色名（产品/研发/审查），
+                        {/* 统一 Agent 头：人像图标 + 当前阶段 Agent 角色名（产品/研发/测试/审查），
                             独占一行，下方换行展示正文/卡片。 */}
-                        <MessageAgentHeader agentKey={currentPhase} />
+                        <MessageAgentHeader
+                          agentKey={messageAgentPhase(message.workflow, currentPhase)}
+                        />
                         {messageError ? (
                           <AgentErrorCard
                             error={messageError}
