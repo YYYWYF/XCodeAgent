@@ -68,8 +68,9 @@ class GenerationWorkspacePathTests(unittest.TestCase):
         prompt = agent.payloads[0]["messages"][0]["content"]
         self.assertNotIn(workspace, prompt)
         self.assertNotIn("Workspace:\n", prompt)
-        self.assertIn("app/backend/** means /app/backend/**", prompt)
-        self.assertIn("Never include, repeat, or reconstruct", prompt)
+        self.assertIn('"app/backend/**"', prompt)
+        self.assertNotIn("app/backend/** means /app/backend/**", prompt)
+        self.assertNotIn("Never include, repeat, or reconstruct", prompt)
 
 
 if __name__ == "__main__":

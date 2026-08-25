@@ -397,7 +397,7 @@ def _combined_task_preparation_prompt(
           
         "前后端任务只生成代码相关的工作，不要生成任何验证工作：不要规划编写或运行测试、"
         "执行构建/类型检查、冒烟验证、接口联通检查等验证类任务，也不要规划测试文件"
-        "（*.test.*、*.spec.*、Java 测试类等）。不要把 PageDetail、EndpointDetail 或需求文档中的"
+        "（*.test.*、*.spec.*、Java 测试类等）。不要把页面实现契约、TechnicalPlan 或需求文档中的"
         "业务验收标准复制到任务；acceptance_criteria 和 acceptance_checks 都必须返回空数组（[]），"
         "模型不得输出任何验收检查对象或验收文案，后端会根据 change_scope、"
         "allowed_paths 和正式 API 契约确定性生成纯工程验收点并写入 acceptance_checks。"
@@ -441,8 +441,8 @@ def _combined_task_preparation_prompt(
         "classifying the endpoint as a single data source. Database table operations are "
         "already executed and confirmed during entity design: in every Build scope NEVER "
         "create owner=database tasks or database:* Unit tasks. API contracts in "
-        "executable_details.api_contracts are only request/response schema references and "
-        "must never be used to infer a data source.\n"
+        "executable_details.api_contracts are the executable interface truth and "
+        "they must never be used to infer a data source.\n"
         "Do not invent generic paths when an existing project convention is present in "
         "the snapshot. For page tasks, use only executable_details.page_implementation_contracts "
         "and the referenced confirmed React UI file when one is present. If the UI design stage "
@@ -457,7 +457,7 @@ def _combined_task_preparation_prompt(
         "frontend-backend API matching rules in this prompt: resolve every api_dependencies "
         "endpoint id to its exact method/path/schemas in executable_details.api_contracts and "
         "never invent endpoints or fields. For backend/data tasks, use only executable_details."
-        "endpoint_detail_plans, executable_details.entity_designs, and "
+        "endpoint_contracts, executable_details.entity_designs, and "
         "executable_details.api_contracts. TechnicalPlan entities and API contracts in executable_details "
         "are the only source of fields; preserve entity_ids, endpoint ids, "
         "request/response schema refs, and page response_bindings in task source references.\n"
@@ -501,7 +501,7 @@ def _combined_task_preparation_prompt(
         "`backend:endpoint:<apiContractId>:<endpointId>` Unit from TargetBuildContext.required_unit_ids "
         "or an unprepared prerequisite Unit listed there. Do not create page tasks, do not create "
         "tasks for other endpoints or other entities' data sources, and use the confirmed "
-        "executable_details.endpoint_detail_plans[0] as the executable source of truth.\n"
+        "executable_details.endpoint_contracts[0] as the executable source of truth.\n"
         "## CRITICAL — Reuse existing template scaffold, do NOT rebuild it\n"
         "The WorkspaceSnapshot describes a frontend template project that ALREADY EXISTS "
         f"under `/{frontend_root}/`. Its framework scaffold is complete and MUST NOT be "
@@ -561,7 +561,7 @@ def _page_task_preparation_prompt(
     return (
         _common_task_preparation_rules()
         + "You are planning frontend page tasks only. Do not create backend, "
-        "EndpointDetail, entity persistence, Spring, MyBatis, database, or endpoint "
+        "TechnicalPlan endpoint semantics, entity persistence, Spring, MyBatis, database, or endpoint "
         "implementation tasks. Use only the current page implementation contract, its "
         "referenced API Contract schemas, and the existing frontend WorkspaceSnapshot.\n"
         "All generated frontend paths are under /frontend/. Use the authoritative "
@@ -691,20 +691,18 @@ def _scoped_prompt_build_context(
     if isinstance(source_refs, dict):
         source_refs = dict(source_refs)
         if mode == "page":
-            source_refs.pop("endpoint_details", None)
+            source_refs.pop("technical_plan_endpoints", None)
         elif mode == "endpoint":
-            source_refs.pop("page_detail", None)
             source_refs.pop("page_implementation_contract", None)
         context["source_refs"] = source_refs
     if mode == "page":
-        for key in ("endpoint_detail", "direct_endpoint_details", "entity_designs", "entity_ids"):
+        for key in ("endpoint_contract", "direct_endpoint_contracts", "entity_designs", "entity_ids"):
             context.pop(key, None)
     elif mode == "endpoint":
         for key in (
-            "page_detail",
             "page_implementation_contract",
-            "endpoint_detail",
-            "direct_endpoint_details",
+            "endpoint_contract",
+            "direct_endpoint_contracts",
             "entity_designs",
             "required_endpoint_ids",
             "planning_unit_ids",

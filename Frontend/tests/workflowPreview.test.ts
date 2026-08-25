@@ -4,9 +4,6 @@ import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
   pageDetailTargetKey,
-  requiresEndpointDetailDesign,
-  requiresInitialDetailDesignSelection,
-  requiresPageDetailDesign,
   sessionDetailTargetKey,
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
@@ -130,9 +127,9 @@ test('实体设计动作生成对应的继续消息', () => {
 
 test('验收调整类型映射到对应的安全恢复节点', () => {
   assert.equal(acceptanceAdjustmentResumeNode('local_fix'), 'small_task_repair')
-  assert.equal(acceptanceAdjustmentResumeNode('page_design_change'), 'detail_confirmation')
-  assert.equal(acceptanceAdjustmentResumeNode('endpoint_change'), 'detail_confirmation')
-  assert.equal(acceptanceAdjustmentResumeNode('data_source_change'), 'detail_confirmation')
+  assert.equal(acceptanceAdjustmentResumeNode('page_design_change'), 'project_planning')
+  assert.equal(acceptanceAdjustmentResumeNode('endpoint_change'), 'project_planning')
+  assert.equal(acceptanceAdjustmentResumeNode('data_source_change'), 'entity_source_binding')
   assert.equal(acceptanceAdjustmentResumeNode('project_plan_change'), 'project_planning')
 })
 
@@ -166,45 +163,6 @@ test('页面预览使用当前启动端口和所选页面路由拼接真实地�
 test('缺少有效前端启动地址时不生成页面预览 URL', () => {
   assert.equal(composePreviewUrl('', '/orders'), '')
   assert.equal(composePreviewUrl('not a url', '/orders'), '')
-})
-
-test('进入开发阶段始终先要求用户选择本次开发目标', () => {
-  assert.equal(requiresInitialDetailDesignSelection(true), true)
-  assert.equal(requiresInitialDetailDesignSelection(false), true)
-})
-
-test('页面视觉由 UI 稿负责，不再要求 PageDetail 门禁', () => {
-  const page = {
-    pageId: 'page-orders',
-    key: 'page-orders',
-    label: '订单页',
-    path: '/orders',
-    purpose: '管理订单',
-    designed: false,
-    hasDetailPlan: false
-  }
-
-  assert.equal(requiresPageDetailDesign(page), false)
-  assert.equal(requiresPageDetailDesign({ ...page, designed: true }), false)
-  assert.equal(requiresPageDetailDesign({ ...page, hasDetailPlan: true }), false)
-  assert.equal(requiresPageDetailDesign(undefined), false)
-})
-
-test('接口设计挡板只由当前 endpoint 自己的落盘详情状态决定', () => {
-  const endpoint = {
-    apiContractId: 'orders-api',
-    id: 'list-orders',
-    method: 'GET',
-    path: '/orders',
-    summary: '查询订单',
-    designed: false,
-    hasDetailPlan: false
-  }
-
-  assert.equal(requiresEndpointDetailDesign(endpoint), true)
-  assert.equal(requiresEndpointDetailDesign({ ...endpoint, designed: true }), false)
-  assert.equal(requiresEndpointDetailDesign({ ...endpoint, hasDetailPlan: true }), false)
-  assert.equal(requiresEndpointDetailDesign(undefined), false)
 })
 
 test('切换 API 时只恢复有消息的同接口会话', () => {
@@ -476,18 +434,18 @@ function pageExecution(overrides: Partial<WorkbenchExecution> = {}): WorkbenchEx
   }
 }
 
-/** 构造等待页面设计确认的运行及其 Workflow 快照。 */
+/** 构造等待实体数据源绑定的运行及其 Workflow 快照。 */
 function pendingInteractionWorkflow(): {
   execution: WorkbenchExecution
   lifecycle: ApplicationLifecycle
   workflow: WorkflowRunPayload
 } {
   const execution = pageExecution({
-    phase: 'detail_confirmation',
+    phase: 'entity_source_binding',
     status: 'awaiting_user',
     pendingInteraction: {
       id: 'interaction-design-1',
-      type: 'page_design_confirmation',
+      type: 'entity_source_binding',
       basedOnRevision: 3,
       payload: {},
       artifactRefs: [],
@@ -499,7 +457,7 @@ function pendingInteractionWorkflow(): {
   lifecycle.revision = 3
   const workflow = previewWorkflow(
     {
-      phase: 'detail_confirmation',
+      phase: 'entity_source_binding',
       status: 'requires_user_input',
       lifecycle
     },

@@ -10,10 +10,6 @@ from app.services.frontend_page_tree import (
 )
 from app.services.entity_definitions import contract_data_source_id, plan_data_sources
 from app.services.page_dependencies import validate_project_plan_dependencies
-from app.services.page_detail_plan import (
-    create_page_detail_plan,
-    extract_page_detail_context,
-)
 from app.services.application_planning_persistence import project_plan_application_payload
 from app.services.project_plan import (
     create_project_plan,
@@ -609,72 +605,7 @@ class ProjectPlanTests(unittest.TestCase):
         )
         self.assertEqual(validate_api_contract_consistency(plan), [])
 
-    def test_contract_consistency_rejects_unknown_page_response_field(self) -> None:
-        plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
-        page_context = extract_page_detail_context(
-            plan,
-            "inventory_management_list_page",
-        )
-        page_detail = create_page_detail_plan(
-            plan,
-            page_context,
-        )
-        endpoint_id = page_context["references"]["endpoint_dependencies"][0]["endpoint_id"]
-        page_detail["response_bindings"] = [
-            {
-                "endpoint_id": endpoint_id,
-                "source_path": "items[].field_not_in_contract",
-                "page_field": "invalid",
-            }
-        ]
-        plan["page_detail_plans"] = [page_detail]
 
-        errors = validate_api_contract_consistency(plan)
-
-        self.assertTrue(any("unknown response field" in error for error in errors))
-
-    def test_contract_consistency_accepts_jsonpath_list_response_bindings(self) -> None:
-        plan = create_project_plan(create_requirement_spec("创建一个人员管理系统"))
-        page = next(
-            page
-            for page in plan["frontend_pages"]
-            if any(
-                str(dependency.get("endpoint_id", "")).endswith(".list")
-                for dependency in page["references"]["endpoint_dependencies"]
-            )
-        )
-        pageId = page["pageId"]
-        endpoint_id = next(
-            dependency["endpoint_id"]
-            for dependency in page["references"]["endpoint_dependencies"]
-            if str(dependency.get("endpoint_id", "")).endswith(".list")
-        )
-        page_context = extract_page_detail_context(
-            plan,
-            pageId,
-        )
-        page_detail = create_page_detail_plan(
-            plan,
-            page_context,
-            agent_detail_plan={
-                "response_bindings": [
-                    {
-                        "endpoint_id": endpoint_id,
-                        "source_path": "$.items.",
-                        "page_field": "items",
-                    },
-                    {
-                        "endpoint_id": endpoint_id,
-                        "source_path": "$.total",
-                        "page_field": "total",
-                    },
-                ]
-            },
-        )
-        plan["page_detail_plans"] = [page_detail]
-
-        self.assertEqual(validate_api_contract_consistency(plan), [])
-        self.assertEqual(page_detail["response_bindings"][0]["source_path"], "items")
 
     def test_project_plan_tolerates_agent_string_items(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")

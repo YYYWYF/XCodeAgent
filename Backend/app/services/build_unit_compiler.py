@@ -244,7 +244,7 @@ def _unit_source_refs(
     unit: dict[str, Any],
     build_context: dict[str, Any],
 ) -> dict[str, Any]:
-    """按 Unit 类型映射到 ProjectPlan、PageDetail 或 EndpointDetail 来源。"""
+    """按 Unit 类型映射到页面实现契约、TechnicalPlan Endpoint 或实体绑定来源。"""
 
     existing = _dict_value(unit.get("source_refs"))
     target = _dict_value(build_context.get("target"))
@@ -253,9 +253,11 @@ def _unit_source_refs(
     if unit_id.startswith("page:"):
         return {
             **existing,
-            "type": "page_detail",
+            "type": "page_implementation_contract",
             "target": target,
-            "page_detail": _dict_value(refs.get("page_detail")),
+            "page_implementation_contract": _dict_value(
+                refs.get("page_implementation_contract")
+            ),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
             "entity_ids": _string_list(build_context.get("entity_ids")),
             "entity_designs": entity_designs,
@@ -272,11 +274,11 @@ def _unit_source_refs(
     if unit_id.startswith("backend:endpoint:"):
         return {
             **existing,
-            "type": "endpoint_detail",
+            "type": "technical_plan_endpoint",
             "target": target,
-            "endpoint_detail": _dict_value(refs.get("endpoint_detail")),
-            "endpoint_details": _matching_endpoint_refs(
-                refs.get("endpoint_details"),
+            "technical_plan_endpoint": _dict_value(refs.get("technical_plan_endpoint")),
+            "technical_plan_endpoints": _matching_endpoint_refs(
+                refs.get("technical_plan_endpoints"),
                 _string_list(build_context.get("endpoint_ids")),
             ),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),

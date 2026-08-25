@@ -238,11 +238,6 @@ def _unit_graph(
         for contract in _dict_items(project_plan.get("page_implementation_contracts"))
         if contract.get("pageId") or contract.get("id")
     }
-    legacy_page_details_by_id = {
-        str(detail.get("pageId") or detail.get("id")): detail
-        for detail in _dict_items(project_plan.get("page_detail_plans"))
-        if detail.get("pageId") or detail.get("id")
-    }
     for source_id, source_type in source_type_map.items():
         if source_type == "static":
             source_unit_id = f"frontend:data:{source_id}"
@@ -287,7 +282,7 @@ def _unit_graph(
             )
         dependency_source = _page_dependency_source(
             page,
-            page_contracts_by_id.get(page_id) or legacy_page_details_by_id.get(page_id),
+            page_contracts_by_id.get(page_id),
         )
         endpoint_unit_ids = _page_endpoint_unit_ids(dependency_source, contracts)
         static_endpoint_unit_ids = [
@@ -324,15 +319,15 @@ def _unit_graph(
 
 def _page_dependency_source(
     page: dict[str, Any],
-    page_detail: dict[str, Any] | None,
+    page_contract: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """优先用页面实现契约或旧 PageDetail 的 endpoint 引用补齐页面 Unit 依赖。"""
+    """用 PageImplementationContract 的 endpoint 引用补齐页面 Unit 依赖。"""
 
-    if not isinstance(page_detail, dict):
+    if not isinstance(page_contract, dict):
         return page
     required_endpoint_ids = [
         str(endpoint_id or "").strip()
-        for endpoint_id in page_detail.get("requiredEndpointIds") or []
+        for endpoint_id in page_contract.get("requiredEndpointIds") or []
         if str(endpoint_id or "").strip()
     ]
     if required_endpoint_ids:
@@ -346,10 +341,7 @@ def _page_dependency_source(
                 ],
             },
         }
-    detail_references = page_detail.get("references")
-    if not isinstance(detail_references, dict):
-        return page
-    return {**page, "references": detail_references}
+    return page
 
 
 def _skeleton_fingerprint(

@@ -30,64 +30,12 @@ from app.workspace.plan_documents import (
 from tests.entity_design_test_utils import confirm_entity_designs
 
 
-def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
-    """把测试 PageDetail/EndpointDetail 写成独立文件并返回主计划路径。"""
+def _write_current_plan(workspace: str, project_plan: dict) -> str:
+    """把当前 TechnicalPlan 测试夹具写入正式 JSON 路径。"""
 
     workspace_root = Path(workspace)
     plan_path = workspace_root / ".xcodeagent/plans/project-plan.json"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
-    page_details = list(project_plan.get("page_detail_plans", []))
-    for detail in page_details:
-        page_id = str(detail.get("pageId") or "")
-        if not page_id:
-            continue
-        detail = {"status": "confirmed", **detail}
-        detail_path = workspace_root / f".xcodeagent/plans/pages/page--{page_id}.json"
-        detail_path.parent.mkdir(parents=True, exist_ok=True)
-        detail_path.write_text(json.dumps(detail), encoding="utf-8")
-        for page in project_plan.get("frontend_pages", []):
-            if isinstance(page, dict) and str(page.get("pageId") or "") == page_id:
-                page["detail_design"] = {
-                    "status": "confirmed",
-                    "json_path": f".xcodeagent/plans/pages/page--{page_id}.json",
-                    "sha256": f"sha-page-{page_id}",
-                }
-    supplied_endpoint_details = {
-        (
-            str(detail.get("api_contract_id") or ""),
-            str(detail.get("endpoint_id") or ""),
-        ): detail
-        for detail in project_plan.get("endpoint_detail_plans", [])
-        if isinstance(detail, dict)
-    }
-    for contract in project_plan.get("api_contracts", []):
-        if not isinstance(contract, dict):
-            continue
-        contract_id = str(contract.get("id") or "")
-        for endpoint in contract.get("endpoints", []) or []:
-            if not isinstance(endpoint, dict):
-                continue
-            endpoint_id = str(endpoint.get("id") or "")
-            detail = {
-                "api_contract_id": contract_id,
-                "endpoint_id": endpoint_id,
-                "status": "confirmed",
-                **supplied_endpoint_details.get((contract_id, endpoint_id), {}),
-            }
-            detail_path = workspace_root / (
-                ".xcodeagent/plans/endpoints/"
-                f"endpoint--{contract_id}--{endpoint_id}.json"
-            )
-            detail_path.parent.mkdir(parents=True, exist_ok=True)
-            detail_path.write_text(json.dumps(detail), encoding="utf-8")
-            endpoint["detail_design"] = {
-                "status": "confirmed",
-                "json_path": (
-                    ".xcodeagent/plans/endpoints/"
-                    f"endpoint--{contract_id}--{endpoint_id}.json"
-                ),
-                "sha256": f"sha-endpoint-{contract_id}-{endpoint_id}",
-            }
     plan_path.write_text(json.dumps(project_plan), encoding="utf-8")
     return str(plan_path)
 
@@ -96,6 +44,17 @@ def _with_confirmed_designs(plan: dict, *, source_type: str = "database") -> dic
     """为当前实体事实源补齐已确认设计，供构建任务测试使用。"""
 
     return confirm_entity_designs(deepcopy(plan), source_type=source_type)
+
+
+def _page_implementation_contract(page_id: str, endpoint_ids: list[str]) -> dict:
+    """构造当前 TechnicalPlan 页面实现契约测试夹具。"""
+
+    return {
+        "schema_version": "page-implementation-contract.v1",
+        "pageId": page_id,
+        "uiDesignRef": {"path": f".xcodeagent/ui-design/pages/{page_id}.tsx"},
+        "requiredEndpointIds": endpoint_ids,
+    }
 
 
 def _write_formal_build_artifacts(
@@ -342,14 +301,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "version": "1.0.0",
             "confirmation_status": "confirmed",
             "frontend_pages": [
-                {
-                    "pageId": "orders",
-                    "detail_design": {"status": "confirmed", "json_path": "pages/orders.json"},
-                },
-                {
-                    "pageId": "customers",
-                    "detail_design": {"status": "confirmed", "json_path": "pages/customers.json"},
-                },
+                {"pageId": "orders"},
+                {"pageId": "customers"},
+            ],
+            "page_implementation_contracts": [
+                _page_implementation_contract("orders", ["orders.list"]),
+                _page_implementation_contract("customers", ["customers.list"]),
             ],
             "entities": [
                 {
@@ -366,10 +323,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "api_contracts": [
                 {"id": "orders-api", "entity_ids": ["Order"], "endpoints": [{"id": "orders.list"}]},
                 {"id": "customers-api", "entity_ids": ["Customer"], "endpoints": [{"id": "customers.list"}]},
-            ],
-            "page_detail_plans": [
-                {"pageId": "orders", "references": {"endpoint_dependencies": [{"endpoint_id": "orders.list"}]}},
-                {"pageId": "customers", "references": {"endpoint_dependencies": [{"endpoint_id": "customers.list"}]}},
             ],
         }
         project_plan = _with_confirmed_designs(project_plan)
@@ -407,7 +360,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             return_value=agent_plan,
         ) as preparer:
             state_project_plan = deepcopy(project_plan)
-            project_plan_path = _externalize_detail_designs(workspace, project_plan)
+            project_plan_path = _write_current_plan(workspace, project_plan)
             result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
@@ -428,15 +381,18 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(result["build_task_plan"]["build_units"]["page:customers"]["status"], "not_prepared")
         prepared_project_plan = preparer.call_args.args[0]
         self.assertNotIn("frontend_pages", prepared_project_plan)
-        self.assertNotIn("page_detail_plans", prepared_project_plan)
+        self.assertNotIn("page_implementation_contracts", prepared_project_plan)
         self.assertEqual(
             [page["pageId"] for page in prepared_project_plan["application_skeleton"]["pages"]],
             ["orders", "customers"],
         )
         executable_details = prepared_project_plan["executable_details"]
-        self.assertEqual([detail["pageId"] for detail in executable_details["page_detail_plans"]], ["orders"])
         self.assertEqual(
-            [detail["endpoint_id"] for detail in executable_details["endpoint_detail_plans"]],
+            [contract["pageId"] for contract in executable_details["page_implementation_contracts"]],
+            ["orders"],
+        )
+        self.assertEqual(
+            [endpoint["id"] for endpoint in executable_details["endpoint_contracts"]],
             ["orders.list"],
         )
         self.assertNotIn("data_sources", executable_details)
@@ -493,7 +449,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=customer_agent_plan,
         ) as customer_preparer:
-            project_plan_path = _externalize_detail_designs(workspace, project_plan)
+            project_plan_path = _write_current_plan(workspace, project_plan)
             customer_result = prepare_build_tasks(
                 {
                     "request": "生成客户页面",
@@ -518,14 +474,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "version": "1.0.0",
             "confirmation_status": "confirmed",
             "frontend_pages": [
-                {
-                    "pageId": "orders",
-                    "detail_design": {"status": "confirmed", "json_path": "pages/orders.json"},
-                },
-                {
-                    "pageId": "dashboard",
-                    "detail_design": {"status": "pending", "json_path": "pages/dashboard.json"},
-                },
+                {"pageId": "orders"},
+                {"pageId": "dashboard"},
+            ],
+            "page_implementation_contracts": [
+                _page_implementation_contract("orders", ["orders.list"]),
+                _page_implementation_contract("dashboard", []),
             ],
             "entities": [
                 {
@@ -536,9 +490,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ],
             "api_contracts": [
                 {"id": "orders-api", "entity_ids": ["Order"], "endpoints": [{"id": "orders.list"}]},
-            ],
-            "page_detail_plans": [
-                {"pageId": "orders", "references": {"endpoint_dependencies": [{"endpoint_id": "orders.list"}]}},
             ],
         }
         project_plan = _with_confirmed_designs(project_plan)
@@ -567,7 +518,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=agent_plan,
         ):
-            project_plan_path = _externalize_detail_designs(workspace, project_plan)
+            project_plan_path = _write_current_plan(workspace, project_plan)
             result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
@@ -598,13 +549,10 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "version": "1.0.0",
             "confirmation_status": "confirmed",
             "frontend_pages": [
-                {
-                    "pageId": "orders",
-                    "detail_design": {
-                        "status": "confirmed",
-                        "json_path": "pages/orders.json",
-                    },
-                }
+                {"pageId": "orders"}
+            ],
+            "page_implementation_contracts": [
+                _page_implementation_contract("orders", ["orders.list"]),
             ],
             "entities": [
                 {
@@ -618,14 +566,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "id": "orders-api",
                     "entity_ids": ["Order"],
                     "endpoints": [{"id": "orders.list"}],
-                }
-            ],
-            "page_detail_plans": [
-                {
-                    "pageId": "orders",
-                    "references": {
-                        "endpoint_dependencies": [{"endpoint_id": "orders.list"}]
-                    },
                 }
             ],
         }
@@ -677,7 +617,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=agent_plan,
         ):
-            project_plan_path = _externalize_detail_designs(workspace, project_plan)
+            project_plan_path = _write_current_plan(workspace, project_plan)
             result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
@@ -713,20 +653,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "version": "1.0.0",
             "confirmation_status": "confirmed",
             "frontend_pages": [
-                {
-                    "pageId": "orders",
-                    "detail_design": {
-                        "status": "confirmed",
-                        "json_path": "pages/orders.json",
-                    },
-                },
-                {
-                    "pageId": "orderReports",
-                    "detail_design": {
-                        "status": "confirmed",
-                        "json_path": "pages/order-reports.json",
-                    },
-                },
+                {"pageId": "orders"},
+                {"pageId": "orderReports"},
+            ],
+            "page_implementation_contracts": [
+                _page_implementation_contract("orders", ["orders.list"]),
+                _page_implementation_contract("orderReports", ["orders.list"]),
             ],
             "entities": [
                 {
@@ -741,20 +673,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "entity_ids": ["Order"],
                     "endpoints": [{"id": "orders.list"}],
                 }
-            ],
-            "page_detail_plans": [
-                {
-                    "pageId": "orders",
-                    "references": {
-                        "endpoint_dependencies": [{"endpoint_id": "orders.list"}]
-                    },
-                },
-                {
-                    "pageId": "orderReports",
-                    "references": {
-                        "endpoint_dependencies": [{"endpoint_id": "orders.list"}]
-                    },
-                },
             ],
         }
         project_plan = _with_confirmed_designs(project_plan)
@@ -790,7 +708,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=first_agent_plan,
         ):
-            project_plan_path = _externalize_detail_designs(workspace, project_plan)
+            project_plan_path = _write_current_plan(workspace, project_plan)
             first_result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
@@ -857,7 +775,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=second_agent_plan,
         ):
-            project_plan_path = _externalize_detail_designs(workspace, project_plan)
+            project_plan_path = _write_current_plan(workspace, project_plan)
             second_result = prepare_build_tasks(
                 {
                     "request": "生成订单报表页面",

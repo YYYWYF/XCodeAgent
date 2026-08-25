@@ -27,9 +27,9 @@ from app.services.entity_detail_plan import (
     attach_entity_detail_plan,
     create_entity_detail_plan,
 )
-from app.services.detail_review import (
-    _entity_design_summary,
-    _entity_review_items,
+from app.services.entity_source_binding import (
+    _entity_binding_summary,
+    _entity_binding_items,
 )
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
@@ -626,8 +626,8 @@ class EntityDesignServiceTests(unittest.TestCase):
             plan, entity, default_datasource_type="static"
         )
         plan = attach_entity_detail_plan(plan, detail)
-        entities = _entity_review_items(plan, selected_entity_id=entity["id"])
-        summary = _entity_design_summary(plan, entity["id"], entities)
+        entities = _entity_binding_items(plan, selected_entity_id=entity["id"])
+        summary = _entity_binding_summary(plan, entity["id"], entities)
         status_field = next(
             field
             for field in summary["fields"]

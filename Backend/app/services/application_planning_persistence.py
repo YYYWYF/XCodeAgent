@@ -51,7 +51,7 @@ def _page_key_from_page_id(page_id: str) -> str:
     return pascal
 
 
-def _page_detail_map(project_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _page_contract_map(project_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """按页面 id 索引当前 TechnicalPlan 的运行时实现契约。"""
 
     implementation_contracts = {
@@ -287,7 +287,7 @@ def _home_menu_key(project_plan: dict[str, Any]) -> str:
 def _menus(project_plan: dict[str, Any]) -> dict[str, Any]:
     """把 ProjectPlan 页面清单和详细设计投射为菜单。"""
 
-    details = _page_detail_map(project_plan)
+    details = _page_contract_map(project_plan)
     items = _menu_tree_items(project_plan_page_records(project_plan), details)
     if not items:
         raise ValueError("已确认的项目计划中没有可写入的页面清单。")

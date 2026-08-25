@@ -191,7 +191,7 @@ def _frontend_generation_prompt(
         "ProjectPlan.api_contracts is the only source of API fields. Render and submit only "
         "fields declared by the task's endpoint_ids, schema refs, and response_bindings; "
         "do not infer or add frontend-only API fields.\n"
-        "Do not modify RequirementSpec, PageDetail, ProjectPlan, API contracts, or "
+        "Do not modify RequirementSpec, ProductPlan, TechnicalPlan, API contracts, or "
         "the task DAG. If an API contract or page plan cannot be implemented, "
         "return a change_request instead of silently changing it.\n"
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n"

@@ -30,8 +30,8 @@ export function acceptanceAdjustmentResumeNode(
   adjustmentType: WorkflowAcceptanceAdjustmentType
 ): string {
   if (adjustmentType === 'local_fix') return 'small_task_repair'
-  if (adjustmentType === 'project_plan_change') return 'project_planning'
-  return 'detail_confirmation'
+  if (adjustmentType === 'data_source_change') return 'entity_source_binding'
+  return 'project_planning'
 }
 
 /** 根据后端权威生命周期判断历史 Workflow 确认是否仍可提交。 */
@@ -280,7 +280,8 @@ function normalizePageId(value?: string): string {
 export function planExecutionPhaseLabel(phase?: string): string {
   return (
     {
-      detail_confirmation: '确认页面设计',
+      development_readiness_gate: '检查开发前置',
+      entity_source_binding: '实体数据源绑定',
       inspect_workspace: '检查工作区',
       inspect_database_context: '获取数据库信息',
       prepare_build_tasks: '生成执行计划',
@@ -306,7 +307,8 @@ export function workflowResumeNode(
   executionPhase?: string
 ): string {
   const supported = new Set([
-    'detail_confirmation',
+    'development_readiness_gate',
+    'entity_source_binding',
     'inspect_workspace',
     'inspect_database_context',
     'prepare_build_tasks',

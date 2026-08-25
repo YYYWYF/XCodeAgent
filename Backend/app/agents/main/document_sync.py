@@ -180,19 +180,8 @@ def sync_project_plan_from_markdown(
             datasource_type=datasource_type,
         )
     )
-    if not is_technical_plan:
-        if isinstance(synced.get("app"), dict):
-            normalized["app"] = synced["app"]
-        for key in (
-            "page_detail_plans",
-            "endpoint_detail_plans",
-            "detail_confirmation_summary",
-            "page_detail_confirmation_summary",
-            "endpoint_detail_confirmation_summary",
-        ):
-            value = synced.get(key, existing_plan.get(key))
-            if value is not None:
-                normalized[key] = value
+    if not is_technical_plan and isinstance(synced.get("app"), dict):
+        normalized["app"] = synced["app"]
     errors = validate_api_contract_consistency(normalized)
     if not is_technical_plan:
         errors.extend(validate_project_plan_datasource_policy(normalized))

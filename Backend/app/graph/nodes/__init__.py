@@ -8,7 +8,8 @@ from app.graph.nodes.lifecycle import (
     test_phase_confirmation,
 )
 from app.graph.nodes.modification import direct_modification
-from app.graph.nodes.planning import detail_confirmation, project_planning
+from app.graph.nodes.development_readiness import development_readiness_gate
+from app.graph.nodes.planning import entity_source_binding, project_planning
 from app.graph.nodes.product_planning import product_planning
 from app.graph.nodes.requirements import requirements
 from app.graph.nodes.testing import integration_test, quality_gate
@@ -21,8 +22,9 @@ __all__ = [
     "acceptance",
     "build",
     "classify_request_complexity",
-    "detail_confirmation",
+    "development_readiness_gate",
     "direct_modification",
+    "entity_source_binding",
     "finalize_project",
     "handle_failure",
     "inspect_workspace",

@@ -33,7 +33,8 @@ PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
-    "detail_confirmation": "页面细节确认",
+    "development_readiness_gate": "开发前置检查",
+    "entity_source_binding": "实体数据源绑定",
     "project_planning": "项目规划",
     "inspect_workspace": "工作区快照检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
@@ -48,8 +49,9 @@ WORKFLOW_NODE_LABELS = {
 }
 
 WORKFLOW_STATIC_NEXT_NODES = {
-    "detail_confirmation": ["inspect_workspace"],
-    "project_planning": ["detail_confirmation"],
+    "development_readiness_gate": ["inspect_workspace"],
+    "entity_source_binding": [],
+    "project_planning": ["development_readiness_gate"],
     "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
     "build": ["test_phase_confirmation"],
@@ -1043,7 +1045,7 @@ def _workflow_start_node(
     resume_from: str | None,
     workflow_scope: str | None = None,
 ) -> str:
-    """返回页面细节确认或其后的兼容可视化入口。"""
+    """返回开发就绪检查、实体绑定或其后的兼容可视化入口。"""
 
     if workflow_scope == "application_planning":
         return (
@@ -1052,8 +1054,10 @@ def _workflow_start_node(
             in {"requirements", "product_planning", "ui_confirmation", "technical_planning"}
             else "requirements"
         )
-    if resume_from == "detail_confirmation":
-        return "detail_confirmation"
+    if resume_from == "development_readiness_gate":
+        return "development_readiness_gate"
+    if resume_from == "entity_source_binding":
+        return "entity_source_binding"
     if resume_from == "project_planning":
         return "project_planning"
     if resume_from == "inspect_workspace":
@@ -1076,7 +1080,7 @@ def _workflow_start_node(
         return "acceptance"
     if resume_from == "finalize_project":
         return "finalize_project"
-    return "detail_confirmation"
+    return "development_readiness_gate"
 
 
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
@@ -1090,14 +1094,16 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("integration_next_action") == "await_user_input":
             return []
         return ["handle_failure"]
-    if node_name == "detail_confirmation":
+    if node_name == "development_readiness_gate":
         if update.get("status") == "requires_user_input":
             return []
         return ["inspect_workspace"]
+    if node_name == "entity_source_binding":
+        return []
     if node_name == "project_planning":
         if update.get("status") == "requires_user_input":
             return []
-        return ["detail_confirmation"]
+        return ["development_readiness_gate"]
     if node_name == "inspect_workspace":
         return ["prepare_build_tasks"]
     if node_name == "prepare_build_tasks":
@@ -1210,22 +1216,26 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "message": (f"计划文档={update.get('project_plan_path')}"),
             "data": {"projectPlan": update.get("project_plan")},
         }
-    if node_name == "detail_confirmation":
+    if node_name == "development_readiness_gate":
+        clarification = update.get("clarification")
+        return {
+            "message": (
+                "开发前置检查未通过，请先完成实体数据源绑定。"
+                if update.get("status") == "requires_user_input"
+                else "开发前置检查已通过。"
+            ),
+            "data": {
+                "clarification": clarification,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+                "developmentReadiness": update.get("development_readiness"),
+            },
+        }
+    if node_name == "entity_source_binding":
         clarification = update.get("clarification")
         status = update.get("status")
         if status == "requires_user_input":
-            review = (
-                clarification.get("review", {})
-                if isinstance(clarification, dict)
-                else {}
-            )
-            summary = review.get("summary", {}) if isinstance(review, dict) else {}
             return {
-                "message": (
-                    "页面/接口初版设计待确认，"
-                    f"页面={summary.get('page_count', 0)}，"
-                    f"接口={summary.get('endpoint_count', 0)}"
-                ),
+                "message": "实体数据源绑定待确认。",
                 "data": {
                     "clarification": clarification,
                     "requiresUserInput": True,
@@ -1233,7 +1243,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 },
             }
         return {
-            "message": _detail_confirmation_completed_message(update),
+            "message": "实体数据源绑定已确认；请重新选择页面或 API 开始开发。",
             "data": {
                 "detailSelection": update.get("detail_selection"),
                 "detailPlans": update.get("detail_plans", []),
@@ -1346,30 +1356,6 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {"status": update.get("status"), "phase": update.get("phase")},
         }
     return {"message": "", "data": {}}
-
-
-def _detail_confirmation_completed_message(update: dict[str, Any]) -> str:
-    detail_selection = update.get("detail_selection")
-    summary = {}
-    if isinstance(detail_selection, dict) and isinstance(
-        detail_selection.get("summary"),
-        dict,
-    ):
-        summary = detail_selection["summary"]
-    project_plan = update.get("project_plan")
-    if not summary and isinstance(project_plan, dict):
-        candidate = project_plan.get("detail_confirmation_summary")
-        if isinstance(candidate, dict):
-            summary = candidate
-
-    if summary.get("all_detail_targets_completed"):
-        return (
-            "页面/接口详细设计已全部完成，最终项目计划书已更新，" "准备进入任务拆分。"
-        )
-    remaining = summary.get("remaining_total")
-    if isinstance(remaining, int):
-        return f"项目计划书已更新，剩余待设计对象={remaining}"
-    return "项目计划书已更新"
 
 
 def _workflow_event(

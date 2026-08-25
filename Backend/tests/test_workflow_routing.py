@@ -5,7 +5,8 @@ import unittest
 from app.graph.workflow import (
     route_acceptance,
     route_build_result,
-    route_detail_confirmation,
+    route_development_readiness,
+    route_entity_source_binding,
     route_prepare_build_tasks,
     route_project_planning,
     route_small_task_result,
@@ -13,22 +14,22 @@ from app.graph.workflow import (
     route_test_validation,
     route_workflow_start,
 )
-from app.graph.nodes.lifecycle import test_phase_confirmation
+from app.graph.nodes.lifecycle import test_phase_confirmation as run_test_phase_confirmation
 from app.protocols.workflow.lifecycle import _pending_interaction
 from app.domain.application_lifecycle import PendingInteractionType
 
 
 class WorkflowRoutingTests(unittest.TestCase):
-    def test_workflow_start_defaults_to_detail_confirmation(self) -> None:
+    def test_workflow_start_defaults_to_development_readiness(self) -> None:
         self.assertEqual(
             route_workflow_start({}),
-            "detail_confirmation",
+            "development_readiness_gate",
         )
 
-    def test_workflow_start_can_resume_from_detail_confirmation(self) -> None:
+    def test_workflow_start_can_resume_from_entity_source_binding(self) -> None:
         self.assertEqual(
-            route_workflow_start({"resume_from": "detail_confirmation"}),
-            "detail_confirmation",
+            route_workflow_start({"resume_from": "entity_source_binding"}),
+            "entity_source_binding",
         )
 
     def test_workflow_start_can_resume_from_project_planning(self) -> None:
@@ -43,10 +44,10 @@ class WorkflowRoutingTests(unittest.TestCase):
             "await_user_input",
         )
 
-    def test_project_planning_continues_to_detail_confirmation(self) -> None:
+    def test_project_planning_continues_to_development_readiness(self) -> None:
         self.assertEqual(
             route_project_planning({"status": "completed"}),
-            "detail_confirmation",
+            "development_readiness_gate",
         )
 
     def test_workflow_start_can_resume_from_prepare_build_tasks(self) -> None:
@@ -63,23 +64,23 @@ class WorkflowRoutingTests(unittest.TestCase):
             "prepare_build_tasks",
         )
 
-    def test_detail_confirmation_waits_for_user_input(self) -> None:
+    def test_development_readiness_waits_for_user_input(self) -> None:
         self.assertEqual(
-            route_detail_confirmation({"status": "requires_user_input"}),
+            route_development_readiness({"status": "requires_user_input"}),
             "await_user_input",
         )
 
-    def test_detail_confirmation_continues_when_page_spec_is_confirmed(self) -> None:
+    def test_development_readiness_continues_when_ready(self) -> None:
         self.assertEqual(
-            route_detail_confirmation({"status": "completed"}),
+            route_development_readiness({"status": "completed"}),
             "inspect_workspace",
         )
 
-    def test_detail_confirmation_ends_after_entity_confirmation(self) -> None:
-        """实体设计只承担 detail_confirmation 阶段：确认完成即结束当前工作流。"""
+    def test_entity_source_binding_always_ends_as_independent_interaction(self) -> None:
+        """实体数据源绑定确认后不自动进入页面/API开发。"""
 
         self.assertEqual(
-            route_detail_confirmation(
+            route_entity_source_binding(
                 {"status": "completed", "selected_entity_id": "product"}
             ),
             "await_user_input",
@@ -132,7 +133,7 @@ class WorkflowRoutingTests(unittest.TestCase):
     def test_test_phase_confirmation_rejects_incomplete_build(self) -> None:
         """确认节点不能被直接恢复到未完成的 Build。"""
 
-        result = test_phase_confirmation(
+        result = run_test_phase_confirmation(
             {"build_summary": {"status": "running"}, "application_name": "测试应用"}
         )
 
@@ -142,7 +143,7 @@ class WorkflowRoutingTests(unittest.TestCase):
     def test_test_phase_confirmation_projects_stable_page_target(self) -> None:
         """确认卡应投影当前页面的稳定 ID 和显示名称。"""
 
-        result = test_phase_confirmation(
+        result = run_test_phase_confirmation(
             {
                 "build_summary": {"status": "completed"},
                 "build_execution_scope": {"type": "page", "targetId": "orders"},
@@ -159,7 +160,7 @@ class WorkflowRoutingTests(unittest.TestCase):
     def test_test_phase_confirmation_projects_endpoint_target_name(self) -> None:
         """接口测试目标优先使用接口名称而不是自然语言确认文本。"""
 
-        result = test_phase_confirmation(
+        result = run_test_phase_confirmation(
             {
                 "build_summary": {"status": "completed"},
                 "build_execution_scope": {"type": "endpoint", "targetId": "orders.list"},

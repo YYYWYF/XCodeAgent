@@ -2,13 +2,15 @@
 
 ## Scope
 
-Workbench 读取 `.xcodeagent/plans/technical-plan.json`，并以 ProductPlan 的 `pages` 作为页面事实，再按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲投射 `api_contracts`，实体大纲只投射 TechnicalPlan 顶层 `entities`。页面开发就绪状态来自已确认的页面 references，不再检查 `.xcodeagent/plans/pages/`，也不再用 PageDetail 蒙层锁住页面对话。工作台检查产物时仍返回页面、API 与实体目录，实体目录包含字段摘要和独立设计状态。
+Workbench 读取 `.xcodeagent/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲直接投射 `api_contracts`，实体大纲投射 TechnicalPlan 顶层 `entities` 和独立数据源绑定状态。当前流程不生成或读取页面/API详设文件。
 
-选择页面后，主 `/workflow/run` 从 ProductPlan、UiManifest 和 TechnicalPlan references 按需编译对应 `PageImplementationContract`：若 `requiredEndpointIds` 为空，直接进入工作区检查与任务规划；若存在接口依赖，只为缺失或失效的 EndpointDetail 生成批量开发确认。选择接口提交 `detailTargetType=endpoint`、`selectedApiContractId` 和 `selectedEndpointId`；选择实体提交 `detailTargetType=entity` 和 `selectedEntityId`。TechnicalPlan 已确认实体字段；实体设计只负责数据源类型、来源绑定、业务规则与数据库表操作，确认后独立写入 `.xcodeagent/plans/entities/entity--<entityId>.json/.md`；接口设计通过 `entity_ids` 只读引用绑定实体的已确认设计，接口或页面进入开发前必须通过实体确认门禁。
+页面视觉、组件、交互入口和状态呈现以已确认 React UI 稿为权威；UI 阶段被跳过时依据 ProductPlan、TechnicalPlan 和模板技能实现。`PageImplementationContract` 仍由 ProductPlan、UiManifest 和 TechnicalPlan 在运行时确定性编译，不写入独立页面详设。
 
-页面视觉、组件、交互入口和状态呈现以已确认 React UI 稿为权威；若 UI 阶段被跳过，则依据 ProductPlan、TechnicalPlan 和模板技能实现，不再生成新的 `plans/pages/page--<pageId>.*`。EndpointDetail 独立保存接口用途、处理逻辑及与已确认实体设计的绑定，页面任务上下文由 TechnicalPlan 切片、PageImplementationContract、React UI 路径、实体设计摘要及相关 EndpointDetail 共同组成。
+选择页面或 API 后，主 `/workflow/run` 首先进入 `development_readiness_gate`。门禁按页面的 `requiredEndpointIds` 或选中的 API Endpoint 收集 `entity_ids`，并校验所有关联实体是否已有已确认 EntitySourceBinding：通过后进入 `inspect_workspace`；缺失时返回 `entity_source_binding_required`、`missing_entities` 和当前 `development_target`，但不自动切换实体。用户必须从实体大纲手动进入独立 EntitySourceBinding，确认完成后重新发起原页面/API开发。
 
-无目标的“自由对话”以及已就绪页面、endpoint 或 entity 下的普通输入使用独立 `/conversation/run` AG-UI Graph；正式详情确认、设计修改、调试恢复、计划控制及尚未设计目标仍使用 `/workflow/run`。页面、接口和实体各自保留独立本地会话归属与 AG-UI `threadId`，左侧目标只决定会话归属和执行范围，不改变传输协议。
+EntitySourceBinding 只负责实体的数据源类型与物理来源绑定，保留 database、external API、static 三类方案、AI 映射辅助、建表/补列以及高危 DDL 审批。确认后只写入 `.xcodeagent/plans/entities/entity--<entityId>.json/.md`，并独立结束，不自动续跑页面/API任务。`prepare_build_tasks` 在生成 Build DAG 前再次执行同一实体绑定复检，防止恢复旧 checkpoint 或绕过入口门禁。
+
+页面、API 和实体各自保留独立本地会话归属与 AG-UI `threadId`。页面/API开发、EntitySourceBinding、Build DAG 确认以及后续执行都使用 `/workflow/run` 的完整 AG-UI 生命周期；无目标普通协作继续使用独立 `/conversation/run`。
 
 This flow uses the independent `/application-development-planning/run` AG-UI endpoint and its own thread id. It never enters or resumes the primary LangGraph workflow. A normal generation requires one model call; if the model returns genuine blocking questions, the answers are supplied to a second generation call. Confirmation is deterministic and model-free.
 

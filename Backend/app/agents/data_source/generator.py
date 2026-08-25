@@ -34,7 +34,7 @@ def _data_source_generation_prompt(
         "Read a repeated Skill path only once in this invocation, and apply it only to tasks "
         "that declare that path. Never apply database persistence rules to external_api entities.\n"
         "The targeted execution context is authoritative: API request/response fields come from "
-        "the matching API Contract and EndpointDetail; persistence or upstream mappings come from "
+        "the matching TechnicalPlan API Contract; persistence or upstream mappings come from "
         "the matching confirmed EntityDesign. Never infer fields or source types from omitted global "
         "ProjectPlan data. If the contract cannot be implemented, return a change_request instead "
         "of silently changing it. Do not modify formal planning artifacts or the task DAG.\n\n"

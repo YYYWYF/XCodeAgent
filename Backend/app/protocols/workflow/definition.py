@@ -15,7 +15,8 @@ WORKFLOW_NODE_LABELS = {
     "product_planning": "产品规划",
     "ui_confirmation": "UI 设计",
     "technical_planning": "技术规划",
-    "detail_confirmation": "接口详细设计",
+    "development_readiness_gate": "开发前置检查",
+    "entity_source_binding": "实体数据源绑定",
     "project_planning": "技术规划调整",
     "inspect_workspace": "扫描工作区代码",
     "prepare_build_tasks": "构建任务 DAG 生成",
@@ -32,8 +33,9 @@ WORKFLOW_NODE_LABELS = {
 # 仅用于可视化层的兜底预测；实际节点路由始终以 LangGraph 为准。
 WORKFLOW_STATIC_NEXT_NODES = {
     "design_intent_analysis": ["requirements", "product_planning", "ui_confirmation"],
-    "detail_confirmation": ["inspect_workspace"],
-    "project_planning": ["detail_confirmation"],
+    "development_readiness_gate": ["inspect_workspace"],
+    "entity_source_binding": [],
+    "project_planning": ["development_readiness_gate"],
     "requirements": ["product_planning"],
     "product_planning": ["ui_confirmation"],
     "ui_confirmation": ["technical_planning"],
@@ -100,10 +102,10 @@ def workflow_capabilities() -> dict[str, Any]:
             "requestField": "clarificationAnswers.acceptance_adjustment",
             "values": {
                 "local_fix": "仅修改当前已确认范围内的局部实现，不改变产品语义。",
-                "page_design_change": "兼容旧请求：不再生成 PageDetail，按技术规划调整处理。",
-                "endpoint_change": "重新生成接口详细设计并再次确认。",
-                "data_source_change": "重新生成实体设计并再次确认，接口详情不依赖数据源。",
-                "project_plan_change": "重新生成技术规划，开发确认后再检查相关接口详细设计。",
+                "page_design_change": "页面实现变化按 TechnicalPlan 调整处理。",
+                "endpoint_change": "返回 TechnicalPlan 调整并重新确认接口契约。",
+                "data_source_change": "进入独立 EntitySourceBinding 并重新确认数据源绑定。",
+                "project_plan_change": "重新生成并确认 TechnicalPlan，然后重新执行开发前置检查。",
             },
         },
         "skillSelection": {
@@ -145,12 +147,6 @@ def workflow_capabilities() -> dict[str, Any]:
                 "workflow.run.finished",
                 "workflow.run.failed",
             ],
-            "nodeCompletedDetail": {
-                "projectPlanUpdate": (
-                    "Optional read-only Markdown snapshot for the page or endpoint sections "
-                    "confirmed by detail_confirmation."
-                ),
-            },
             "agentProcess": {
                 "name": PROCESS_EVENT_NAME,
                 "optionalFields": {

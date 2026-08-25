@@ -272,6 +272,10 @@ class ProductPlanningRetryTests(unittest.TestCase):
                 "app.graph.nodes.planning.write_technical_plan_document",
                 return_value=("technical-plan.md", "technical-plan.json"),
             ),
+            patch(
+                "app.graph.nodes.planning.edited_technical_plan_markdown",
+                return_value=None,
+            ),
         ):
             update = project_planning(state)
 
@@ -502,6 +506,10 @@ class ProductPlanningRetryTests(unittest.TestCase):
             patch(
                 "app.graph.nodes.planning.write_technical_plan_document",
                 return_value=("technical-plan.md", "technical-plan.json"),
+            ),
+            patch(
+                "app.graph.nodes.planning.edited_technical_plan_markdown",
+                return_value=None,
             ),
         ):
             result = project_planning(state)

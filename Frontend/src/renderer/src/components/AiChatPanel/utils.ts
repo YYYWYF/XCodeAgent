@@ -1,8 +1,6 @@
 import { MIN_ASSISTANT_PANEL_RATIO, MIN_RIGHT_PANEL_RATIO } from './constants'
 import type {
-  DevelopmentPlanningApiEndpoint,
   DevelopmentPlanningEntityOption,
-  DevelopmentPlanningPageOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeFile,
   WorkspaceCodeChangeSet
@@ -346,35 +344,19 @@ export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): b
   return true
 }
 
-/** 页面视觉由 React UI 稿负责，因此页面永远不再要求 PageDetail 门禁。 */
-export function requiresPageDetailDesign(
-  page: DevelopmentPlanningPageOption | undefined
-): boolean {
-  void page
-  return false
-}
-
-/** 以当前接口的落盘详情状态判断是否需要锁定对话区。 */
-export function requiresEndpointDetailDesign(
-  endpoint: DevelopmentPlanningApiEndpoint | undefined
-): boolean {
-  return Boolean(endpoint && !endpoint.designed && !endpoint.hasDetailPlan)
-}
-
-/** 以当前实体的落盘详情状态判断是否需要锁定对话区。 */
-export function requiresEntityDetailDesign(
+/** 以当前实体的数据源绑定状态判断是否需要锁定对话区。 */
+export function requiresEntitySourceBinding(
   entity: DevelopmentPlanningEntityOption | undefined
 ): boolean {
   return Boolean(entity && !entity.designed && !entity.hasDetailPlan)
 }
 
-/** 判断 Workflow 快照是否属于实体设计场景，用于聊天式渲染与工作流信息隐藏。 */
+/** 判断 Workflow 快照是否属于独立 EntitySourceBinding 场景。 */
 export function isEntityDesignWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
   if (!workflow) return false
-  // 实体设计确认后进入构建，构建阶段按普通工作流渲染；
-  // 聊天式样式只保留给 detail_confirmation 设计阶段及其终态快照。
+  // 实体数据源绑定是独立工作流，不进入后续 Build。
   const phase = String(workflow.summary.phase || '').trim()
-  if (phase && phase !== 'detail_confirmation') return false
+  if (phase && phase !== 'entity_source_binding') return false
   if (workflow.summary.clarification?.review?.summary?.entityDesign) return true
   if (workflow.summary.clarification?.review?.summary?.detailTargetType === 'entity') return true
   const state = workflow.state || {}
@@ -408,7 +390,7 @@ export function isEntityDesignWorkflow(workflow: WorkflowRunPayload | undefined)
       ).trim()
       if (deltaEntityId && (!deltaTargetType || deltaTargetType === 'entity')) return true
     }
-    // 事件 detail 中可能直接携带 detail_review 确认载荷，从中恢复实体归属。
+    // 事件 detail 中可能直接携带 EntitySourceBinding 确认载荷，从中恢复实体归属。
     const detail = event.data?.detail
     if (detail && typeof detail === 'object') {
       const clarification = (detail as Record<string, unknown>).clarification

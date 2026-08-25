@@ -145,12 +145,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 {
                     "planning_context_mode": "page",
                     "planning_unit_ids": ["page:orders"],
-                    "required_unit_ids": [
-                        "backend:endpoint:orders-api:orders.list",
-                        "page:orders",
-                    ],
-                    "direct_endpoint_details": [{"endpoint_id": "orders.list"}],
-                    "entity_designs": [{"entity_id": "Order"}],
+                    "required_unit_ids": ["page:orders"],
                 },
                 ["Task menu-task must not modify frontend/src/constants/menus.ts."],
             )
@@ -160,7 +155,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("page implementation contract", prompt)
         self.assertNotIn("INJECTED springboot-mybatis-generate", prompt)
         self.assertNotIn('"backend"', prompt)
-        self.assertNotIn("direct_endpoint_details", prompt)
+        self.assertNotIn("direct_endpoint_contracts", prompt)
         self.assertNotIn('"entity_designs"', prompt)
         self.assertNotIn("append the current menu item", prompt)
         self.assertIn("Never create a menu or route registration task", prompt)
@@ -1789,9 +1784,13 @@ class BuildTaskPlannerTests(unittest.TestCase):
             ],
             "endpoint_ids": ["orders_api.list"],
             "source_refs": {
-                "page_detail": {"id": "orders", "json_path": "plans/pages/page--orders.json", "sha256": "p1"},
-                "data_source_details": [
-                    {"id": "orders", "json_path": "plans/data-source/data-source--orders.json", "sha256": "d1"}
+                "page_implementation_contract": {
+                    "id": "orders",
+                    "ui_design_path": ".xcodeagent/ui-design/pages/Orders/index.tsx",
+                    "ui_design_sha256": "p1",
+                },
+                "technical_plan_endpoints": [
+                    {"id": "orders_api.list", "api_contract_id": "orders-api"}
                 ],
             },
         }
@@ -1832,14 +1831,19 @@ class BuildTaskPlannerTests(unittest.TestCase):
             tasks["task:orders-page"]["dependencies"],
             ["task:api-client"],
         )
-        self.assertEqual(tasks["task:orders-page"]["source_refs"]["type"], "page_detail")
+        self.assertEqual(
+            tasks["task:orders-page"]["source_refs"]["type"],
+            "page_implementation_contract",
+        )
         self.assertEqual(
             plan["build_units"]["backend:endpoint:orders"]["source_refs"],
             {
-                "type": "endpoint_detail",
+                "type": "technical_plan_endpoint",
                 "target": {"type": "page", "id": "orders"},
-                "endpoint_detail": {},
-                "endpoint_details": [],
+                "technical_plan_endpoint": {},
+                "technical_plan_endpoints": [
+                    {"id": "orders_api.list", "api_contract_id": "orders-api"}
+                ],
                 "endpoint_ids": ["orders_api.list"],
                 "entity_ids": [],
                 "entity_designs": [],

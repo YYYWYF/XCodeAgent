@@ -13,7 +13,6 @@ from langgraph.graph import END, START, StateGraph
 from app.graph.state import ProjectState
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import (
-    _detail_confirmation_project_plan_update,
     _workflow_confirmation_artifact,
     _workflow_next_nodes,
     _workflow_node_detail,
@@ -890,129 +889,6 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertNotIn("/private/workspace", str(snapshot))
         self.assertNotIn("secret-hash", str(snapshot))
 
-    def test_detail_confirmation_projects_page_and_related_endpoint_markdown(self) -> None:
-        """页面确认完成后只投影本轮页面与联动接口章节。"""
-
-        update = {
-            "phase": "detail_confirmation",
-            "status": "completed",
-            "selectedPageId": "inventory-page",
-            "detail_target_type": "page",
-            "project_plan_path": "/private/workspace/plans/project-plan.md",
-            "detail_plans": [
-                {
-                    "pageId": "inventory-page",
-                    "page_name": "库存列表",
-                    "path": "/inventory",
-                    "page_goal": "查看并筛选库存",
-                    "status": "confirmed",
-                    "api_dependencies": [
-                        {
-                            "endpoint_id": "list-inventory",
-                            "method": "GET",
-                            "path": "/api/inventory",
-                            "summary": "查询库存",
-                        }
-                    ],
-                    "references": {
-                        "endpoint_detail_refs": [
-                            {
-                                "api_contract_id": "inventory-api",
-                                "endpoint_id": "list-inventory",
-                                "json_path": "/private/workspace/plans/endpoints/list.json",
-                                "markdown_path": "/private/workspace/plans/endpoints/list.md",
-                            }
-                        ]
-                    },
-                },
-                {
-                    "api_contract_id": "inventory-api",
-                    "endpoint_id": "list-inventory",
-                    "method": "GET",
-                    "path": "/api/inventory",
-                    "summary": "查询库存",
-                    "data_origin": {
-                        "source_type": "database",
-                        "effective_source": {
-                            "kind": "mysql_existing",
-                            "database": "inventory",
-                            "tables": [{"name": "inventory"}],
-                        },
-                    },
-                    "status": "confirmed",
-                },
-            ],
-        }
-
-        snapshot = _detail_confirmation_project_plan_update(update)
-        self.assertIsNotNone(snapshot)
-        assert snapshot is not None
-        self.assertEqual(snapshot["targetType"], "page")
-        self.assertEqual(snapshot["targetId"], "inventory-page")
-        self.assertEqual(snapshot["summary"], {"pageCount": 1, "endpointCount": 1})
-        self.assertEqual(
-            [section["kind"] for section in snapshot["sections"]],
-            ["page", "endpoint"],
-        )
-        self.assertIn("查看并筛选库存", snapshot["sections"][0]["content"])
-        self.assertIn("GET /api/inventory", snapshot["sections"][1]["content"])
-        self.assertNotIn("/private/workspace", str(snapshot))
-        self.assertNotIn("list.json", str(snapshot))
-
-        detail = _workflow_node_detail("detail_confirmation", update)
-        self.assertEqual(detail["data"]["projectPlanUpdate"], snapshot)
-
-    def test_detail_confirmation_projects_only_selected_endpoint_markdown(self) -> None:
-        """接口确认完成后只投影当前接口章节。"""
-
-        snapshot = _detail_confirmation_project_plan_update(
-            {
-                "status": "completed",
-                "detail_target_type": "endpoint",
-                "selected_api_contract_id": "orders-api",
-                "selected_endpoint_id": "create-order",
-                "detail_plans": [
-                    {
-                        "api_contract_id": "orders-api",
-                        "endpoint_id": "create-order",
-                        "method": "POST",
-                        "path": "/api/orders",
-                        "summary": "创建订单",
-                        "data_origin": {
-                            "source_type": "database",
-                            "effective_source": {
-                                "kind": "mysql_existing",
-                                "database": "orders",
-                                "tables": [{"name": "orders"}],
-                            },
-                        },
-                        "status": "confirmed",
-                    }
-                ],
-            }
-        )
-
-        self.assertIsNotNone(snapshot)
-        assert snapshot is not None
-        self.assertEqual(snapshot["targetType"], "endpoint")
-        self.assertEqual(snapshot["targetId"], "create-order")
-        self.assertEqual(snapshot["summary"], {"pageCount": 0, "endpointCount": 1})
-        self.assertEqual(len(snapshot["sections"]), 1)
-        self.assertIn("创建订单", snapshot["sections"][0]["content"])
-
-    def test_detail_confirmation_omits_empty_project_plan_update(self) -> None:
-        """缺失有效详情时保留旧摘要，不发送空面板快照。"""
-
-        update = {
-            "status": "completed",
-            "detail_plans": [{"unexpected": True}],
-        }
-
-        self.assertIsNone(_detail_confirmation_project_plan_update(update))
-        detail = _workflow_node_detail("detail_confirmation", update)
-        self.assertEqual(detail["message"], "项目计划书已更新")
-        self.assertNotIn("projectPlanUpdate", detail["data"])
-
     def test_progress_summary_prefers_newly_started_node_over_previous_result(self) -> None:
         """节点切换后应立即展示新阶段，不能继续沿用上一节点的 phase。"""
 
@@ -1800,11 +1676,11 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIsNone(
             _workflow_confirmation_artifact(
                 {
-                    "phase": "detail_confirmation",
+                    "phase": "entity_source_binding",
                     "status": "requires_user_input",
                     "project_plan_path": "project-plan.md",
                     "clarification": {
-                        "mode": "detail_review",
+                        "mode": "entity_source_binding",
                         "status": "requires_user_input",
                     },
                 }

@@ -148,14 +148,12 @@ def _validate_page_api_dependencies(
     endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]],
     errors: list[str],
 ) -> None:
-    page_contracts = project_plan.get("page_implementation_contracts") or project_plan.get(
-        "page_detail_plans", []
-    )
-    for page_detail in page_contracts:
-        for endpoint_id in _page_endpoint_ids(page_detail):
+    page_contracts = project_plan.get("page_implementation_contracts") or []
+    for page_contract in page_contracts:
+        for endpoint_id in _page_endpoint_ids(page_contract):
             if endpoint_id not in endpoint_index:
                 errors.append(
-                    f"Page {page_detail.get('pageId')} references unknown endpoint {endpoint_id}."
+                    f"Page {page_contract.get('pageId')} references unknown endpoint {endpoint_id}."
                 )
 
 
@@ -164,50 +162,34 @@ def _validate_page_bindings(
     contracts: list[dict[str, Any]],
     errors: list[str],
 ) -> None:
-    page_contracts = project_plan.get("page_implementation_contracts") or project_plan.get(
-        "page_detail_plans", []
-    )
-    for page_detail in page_contracts:
-        endpoint_ids = set(_page_endpoint_ids(page_detail))
-        bindings = page_detail.get("responseBindings") or page_detail.get("response_bindings")
+    page_contracts = project_plan.get("page_implementation_contracts") or []
+    for page_contract in page_contracts:
+        endpoint_ids = set(_page_endpoint_ids(page_contract))
+        bindings = page_contract.get("responseBindings") or []
         for binding in dict_items(bindings):
             endpoint_id = str(binding.get("endpoint_id") or "")
             source_path = normalize_response_path(binding.get("source_path"))
             if endpoint_id not in endpoint_ids:
                 errors.append(
-                    f"Page {page_detail.get('pageId')} binds undeclared endpoint {endpoint_id}."
+                    f"Page {page_contract.get('pageId')} binds undeclared endpoint {endpoint_id}."
                 )
             elif source_path not in {
                 normalize_response_path(path)
                 for path in response_field_paths(contracts, endpoint_id)
             }:
                 errors.append(
-                    f"Page {page_detail.get('pageId')} binds unknown response field {source_path}."
+                    f"Page {page_contract.get('pageId')} binds unknown response field {source_path}."
                 )
 
 
-def _page_endpoint_ids(page_detail: dict[str, Any]) -> list[str]:
-    """统一读取页面详情的 endpoint 引用，不要求页面重复声明数据源依赖。"""
+def _page_endpoint_ids(page_contract: dict[str, Any]) -> list[str]:
+    """读取 PageImplementationContract 的 endpoint 引用。"""
 
-    references = (
-        page_detail.get("references")
-        if isinstance(page_detail.get("references"), dict)
-        else {}
-    )
-    dependencies = [
-        *dict_items(page_detail.get("endpoint_dependencies")),
-        *dict_items(references.get("endpoint_dependencies")),
-        *dict_items(page_detail.get("api_dependencies")),
-    ]
     endpoint_ids: list[str] = []
-    for endpoint_id in page_detail.get("requiredEndpointIds") or []:
+    for endpoint_id in page_contract.get("requiredEndpointIds") or []:
         normalized = str(endpoint_id or "").strip()
         if normalized and normalized not in endpoint_ids:
             endpoint_ids.append(normalized)
-    for dependency in dependencies:
-        endpoint_id = str(dependency.get("endpoint_id") or "")
-        if endpoint_id and endpoint_id not in endpoint_ids:
-            endpoint_ids.append(endpoint_id)
     return endpoint_ids
 
 

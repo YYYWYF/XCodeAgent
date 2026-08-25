@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
@@ -114,7 +113,7 @@ def _page_context(
     page_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """解析页面实现契约及其全部 EndpointDetail，并按已确认实体设计限定 Unit 范围。"""
+    """解析页面实现契约及其 TechnicalPlan Endpoint，并按实体绑定限定 Unit 范围。"""
 
     page = find_frontend_page(project_plan_page_records(project_plan), page_id)
     if page is None:
@@ -123,11 +122,6 @@ def _page_context(
         project_plan,
         page_id,
         project_plan_path,
-    )
-    legacy_page_detail = (
-        page_contract
-        if page_contract.get("schema_version") != "page-implementation-contract.v1"
-        else None
     )
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _contract_endpoint_ids(page_contract)
@@ -155,23 +149,7 @@ def _page_context(
         ):
             endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))
 
-    endpoint_details: list[dict[str, Any]] = []
-    endpoint_refs: list[dict[str, Any]] = []
-    for endpoint_id in endpoint_ids:
-        endpoint = endpoint_index[endpoint_id]
-        detail = _load_external_detail(
-            endpoint.get("detail_design"),
-            "EndpointDetail",
-            endpoint_id,
-            project_plan_path,
-        )
-        _assert_endpoint_detail_identity(
-            detail,
-            api_contract_id=str(endpoint.get("api_contract_id") or ""),
-            endpoint_id=endpoint_id,
-        )
-        endpoint_details.append(detail)
-        endpoint_refs.append(_artifact_ref(endpoint.get("detail_design"), endpoint_id))
+    endpoint_contracts = [endpoint_index[endpoint_id] for endpoint_id in endpoint_ids]
 
     all_static = bool(source_types) and set(source_types) <= {"static"}
     return {
@@ -180,10 +158,9 @@ def _page_context(
             "id": page_id,
             "page_key": _page_key_from_page_id(page_id),
         },
-        "page_detail": legacy_page_detail,
         "page_implementation_contract": page_contract,
-        "endpoint_detail": None,
-        "direct_endpoint_details": endpoint_details,
+        "endpoint_contract": None,
+        "direct_endpoint_contracts": endpoint_contracts,
         "endpoint_ids": endpoint_ids,
         "required_endpoint_ids": endpoint_ids,
         "entity_ids": entity_ids,
@@ -198,11 +175,6 @@ def _page_context(
             f"page:{page_id}",
         ],
         "source_refs": {
-            **(
-                {"page_detail": _artifact_ref(page.get("detail_design"), page_id)}
-                if legacy_page_detail is not None
-                else {}
-            ),
             "page_implementation_contract": {
                 "id": page_id,
                 "ui_design_path": (
@@ -216,7 +188,13 @@ def _page_context(
                     else None
                 ),
             },
-            "endpoint_details": endpoint_refs,
+            "technical_plan_endpoints": [
+                {
+                    "id": endpoint_id,
+                    "api_contract_id": endpoint_index[endpoint_id].get("api_contract_id"),
+                }
+                for endpoint_id in endpoint_ids
+            ],
         },
     }
 
@@ -227,7 +205,7 @@ def _endpoint_context(
     api_contract_id: str | None,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """解析单个 endpoint 的已确认详情，只暴露绑定实体信息与实体推导的 Unit 白名单。"""
+    """解析单个 TechnicalPlan Endpoint，只暴露绑定实体与必要 Unit。"""
 
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     contract_id = str(api_contract_id or "").strip()
@@ -242,17 +220,6 @@ def _endpoint_context(
     contract_id = str(endpoint.get("api_contract_id") or "")
     if not contract_id:
         raise ValueError(f"Endpoint {endpoint_id} does not declare an API contract.")
-    detail = _load_external_detail(
-        endpoint.get("detail_design"),
-        "EndpointDetail",
-        endpoint_id,
-        project_plan_path,
-    )
-    _assert_endpoint_detail_identity(
-        detail,
-        api_contract_id=contract_id,
-        endpoint_id=endpoint_id,
-    )
     entity_designs, missing_entity_ids = _endpoint_entity_designs(project_plan, endpoint)
     _assert_endpoint_entities_designed(endpoint_id, entity_designs, missing_entity_ids)
     source_types = _entity_design_source_types(entity_designs)
@@ -274,40 +241,23 @@ def _endpoint_context(
             "id": endpoint_id,
             "api_contract_id": contract_id,
         },
-        "page_detail": None,
-        "endpoint_detail": detail,
-        "direct_endpoint_details": [detail],
+        "endpoint_contract": endpoint,
+        "direct_endpoint_contracts": [endpoint],
         "endpoint_ids": [endpoint_id],
         "required_endpoint_ids": [endpoint_id],
         "entity_ids": entity_ids,
         "entity_designs": entity_design_summaries(project_plan, entity_ids),
         "required_unit_ids": required_unit_ids,
         "source_refs": {
-            "endpoint_detail": _artifact_ref(endpoint.get("detail_design"), endpoint_id),
-            "endpoint_details": [_artifact_ref(endpoint.get("detail_design"), endpoint_id)],
+            "technical_plan_endpoint": {
+                "id": endpoint_id,
+                "api_contract_id": contract_id,
+            },
+            "technical_plan_endpoints": [
+                {"id": endpoint_id, "api_contract_id": contract_id}
+            ],
         },
     }
-
-
-def _assert_endpoint_detail_identity(
-    detail: dict[str, Any],
-    *,
-    api_contract_id: str,
-    endpoint_id: str,
-) -> None:
-    """校验独立 EndpointDetail 与页面引用的契约、接口标识完全一致。"""
-
-    detail_endpoint_id = str(detail.get("endpoint_id") or "")
-    detail_contract_id = str(detail.get("api_contract_id") or "")
-    if detail_endpoint_id != endpoint_id:
-        raise ValueError(
-            f"EndpointDetail {endpoint_id} file contains endpoint {detail_endpoint_id or 'missing'}."
-        )
-    if detail_contract_id != api_contract_id:
-        raise ValueError(
-            f"EndpointDetail {endpoint_id} file contains API contract "
-            f"{detail_contract_id or 'missing'}."
-        )
 
 
 def _required_item(value: Any, key: str, target_id: str, label: str) -> dict[str, Any]:
@@ -335,99 +285,14 @@ def _source_type(source: dict[str, Any]) -> str:
     return source_type
 
 
-def _load_external_detail(
-    reference: Any,
-    label: str,
-    target_id: str,
-    project_plan_path: str | Path | None,
-) -> dict[str, Any]:
-    """按 ProjectPlan 中的 detail_design 引用读取外置详情文件。"""
-
-    detail_ref = reference if isinstance(reference, dict) else {}
-    json_path = str(detail_ref.get("json_path") or "").strip()
-    if not json_path:
-        raise ValueError(f"{label} {target_id} is missing detail_design.json_path.")
-    if detail_ref.get("status") != "confirmed":
-        raise ValueError(f"{label} {target_id} detail_design is not confirmed.")
-    detail_path = _resolve_detail_path(json_path, project_plan_path)
-    if detail_path is None or not detail_path.is_file():
-        raise ValueError(f"{label} {target_id} detail file does not exist: {json_path}.")
-    detail = json.loads(detail_path.read_text(encoding="utf-8"))
-    if not isinstance(detail, dict):
-        raise ValueError(f"{label} {target_id} detail file must contain a JSON object.")
-    if detail.get("status") != "confirmed":
-        raise ValueError(f"{label} {target_id} external detail is not confirmed.")
-    return detail
 
 
-def _load_optional_external_detail(
-    reference: Any,
-    project_plan_path: str | Path | None,
-) -> dict[str, Any] | None:
-    """仅把可用的已确认 endpoint 详情作为补充上下文，缺失或失效时回退到 ProjectPlan 契约。"""
-
-    detail_ref = reference if isinstance(reference, dict) else {}
-    json_path = str(detail_ref.get("json_path") or "").strip()
-    if not json_path or detail_ref.get("status") != "confirmed":
-        return None
-    try:
-        detail_path = _resolve_detail_path(json_path, project_plan_path)
-        if detail_path is None or not detail_path.is_file():
-            return None
-        detail = json.loads(detail_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(detail, dict) or detail.get("status") != "confirmed":
-        return None
-    return detail
 
 
-def _resolve_detail_path(
-    json_path: str,
-    project_plan_path: str | Path | None,
-) -> Path | None:
-    """解析 detail_design.json_path，兼容 workspace 根相对和 plans 目录相对引用。"""
-
-    path = Path(json_path).expanduser()
-    if path.is_absolute():
-        return path
-    if project_plan_path is None:
-        return path
-    plan_path = Path(project_plan_path).expanduser()
-    plan_dir = plan_path.parent
-    workspace_root = _workspace_root_from_project_plan_path(plan_path)
-    candidates = []
-    if workspace_root is not None:
-        candidates.append(workspace_root / path)
-    candidates.append(plan_dir / path)
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    return candidates[0] if candidates else path
 
 
-def _workspace_root_from_project_plan_path(project_plan_path: Path) -> Path | None:
-    """由 project-plan.json 路径推导 workspace 根目录，用于解析 .xcodeagent 相对引用。"""
-
-    plan_dir = project_plan_path.parent
-    if plan_dir.name == "plans" and plan_dir.parent.name == ".xcodeagent":
-        return plan_dir.parent.parent
-    if plan_dir.name == "plans":
-        return plan_dir.parent
-    return plan_dir
 
 
-def _endpoint_ids(page_detail: dict[str, Any]) -> list[str]:
-    """从页面详情持久化引用中提取稳定且去重的 endpoint 标识。"""
-
-    references = page_detail.get("references") if isinstance(page_detail.get("references"), dict) else {}
-    dependencies = page_detail.get("endpoint_dependencies") or references.get("endpoint_dependencies") or []
-    result: list[str] = []
-    for dependency in _dict_items(dependencies):
-        endpoint_id = str(dependency.get("endpoint_id") or "")
-        if endpoint_id and endpoint_id not in result:
-            result.append(endpoint_id)
-    return result
 
 
 def _page_implementation_contract(
@@ -435,47 +300,34 @@ def _page_implementation_contract(
     page_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """读取当前页面的正式实现契约，并对旧项目回退到已确认 PageDetail。"""
+    """读取当前页面的正式 PageImplementationContract。"""
 
     for contract in _dict_items(project_plan.get("page_implementation_contracts")):
         if str(contract.get("pageId") or "") == page_id:
             return contract
-    page = find_frontend_page(project_plan_page_records(project_plan), page_id)
-    if page is None:
-        raise ValueError(f"ProjectPlan does not contain page {page_id}.")
-    if isinstance(page.get("detail_design"), dict):
-        return _load_external_detail(
-            page.get("detail_design"),
-            "PageDetail",
-            page_id,
-            project_plan_path,
-        )
     raise ValueError(f"TechnicalPlan does not contain PageImplementationContract {page_id}.")
 
 
 def _contract_endpoint_ids(contract: dict[str, Any]) -> list[str]:
-    """从新版页面实现契约或旧 PageDetail 中提取去重 endpoint 标识。"""
+    """从 PageImplementationContract 提取去重 endpoint 标识。"""
 
     result = []
     for endpoint_id in contract.get("requiredEndpointIds") or []:
         normalized = str(endpoint_id or "").strip()
         if normalized and normalized not in result:
             result.append(normalized)
-    return result or _endpoint_ids(contract)
+    return result
 
 
 def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:
-    """建立 endpoint 到数据源、契约和详情引用的只读反向索引。"""
+    """建立 endpoint 到 TechnicalPlan 完整接口契约的只读反向索引。"""
 
     index: dict[str, dict[str, Any]] = {}
     for contract in _dict_items(value):
         contract_id = str(contract.get("id") or "")
         for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
             endpoint_id = str(endpoint.get("id") or endpoint_index + 1)
-            indexed_endpoint = {
-                "api_contract_id": contract_id,
-                "detail_design": endpoint.get("detail_design"),
-            }
+            indexed_endpoint = {**endpoint, "api_contract_id": contract_id}
             index.setdefault(endpoint_id, indexed_endpoint)
             if contract_id:
                 index[f"{contract_id}\0{endpoint_id}"] = indexed_endpoint
@@ -488,15 +340,6 @@ def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:
     return f"backend:endpoint:{api_contract_id}:{endpoint_id}"
 
 
-def _artifact_ref(reference: Any, target_id: str) -> dict[str, Any]:
-    """投射详情 artifact 的稳定路径、哈希和业务标识。"""
-
-    detail_ref = reference if isinstance(reference, dict) else {}
-    return {
-        "id": target_id,
-        "json_path": detail_ref.get("json_path"),
-        "sha256": detail_ref.get("sha256"),
-    }
 
 
 def _page_requires_auth(page: dict[str, Any]) -> bool:

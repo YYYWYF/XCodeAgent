@@ -67,9 +67,8 @@ import type { AgentChatMessage, WorkspaceDocKey } from './types'
 import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
-  requiresEndpointDetailDesign,
   requiresInitialDetailDesignSelection,
-  requiresEntityDetailDesign,
+  requiresEntitySourceBinding,
   sessionDetailTargetKey,
   workflowDetailTargetKey,
   type WorkflowPreviewTarget
@@ -122,7 +121,7 @@ const PLANNING_ANSWER_LABELS: Record<string, string> = {
   design_change_request: '设计变更',
   technical_plan_confirmation: '技术规划确认',
   project_plan_confirmation: '项目计划确认',
-  detail_review: '详细设计确认'
+  entity_source_binding: '实体数据源绑定'
 }
 
 // 将设计阶段节点映射到右侧对应的规划文档标签。
@@ -611,7 +610,7 @@ function workflowHasDetailReview(workflow: unknown): boolean {
     (clarification) =>
       clarification &&
       typeof clarification === 'object' &&
-      (clarification as Record<string, unknown>).mode === 'detail_review'
+      (clarification as Record<string, unknown>).mode === 'entity_source_binding'
   )
 }
 
@@ -1403,7 +1402,7 @@ export default function AiChatPanel({
     handleRetryPlan,
     handleStopPlan,
     handleSend,
-    handleStartEndpointDetailConfirmation,
+    handleStartEndpointDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
@@ -1837,11 +1836,10 @@ export default function AiChatPanel({
     runId: activeWorkflow?.runId,
     threadId: activeWorkflow?.threadId || activeSession?.threadId
   }
-  // 实体设计以聊天样式呈现，只覆盖 detail_confirmation 阶段；
-  // 确认进入构建后切换回普通工作流界面（流程步骤与计划控制栏）。
+  // 实体数据源绑定以聊天样式呈现，并作为独立流程结束。
   const entityDesignChatActive = Boolean(
     activeDetailTarget.type === 'entity' &&
-      (!activeWorkflow || String(activeWorkflow.summary.phase || '') === 'detail_confirmation')
+      (!activeWorkflow || String(activeWorkflow.summary.phase || '') === 'entity_source_binding')
   )
   const targetExecutionContext = activeApiEndpoint
     ? planExecutionContextForEndpoint(
@@ -1852,7 +1850,7 @@ export default function AiChatPanel({
       )
     : activeDetailTarget.type === 'entity'
       ? entityDesignChatActive
-        ? // 实体设计阶段（detail_confirmation）不归属页面/应用级执行上下文；
+        ? // EntitySourceBinding 不归属页面/应用级执行上下文；
           // 置空执行态可避免应用级 execution 把计划模式置为非空闲，
           // 从而抑制未设计实体与页面/接口一致的锁定引导卡片。
           { execution: undefined, dependencyLocked: false }
@@ -2015,13 +2013,13 @@ export default function AiChatPanel({
   const detailConfirmationWaitingReview =
     !loading &&
     activeWorkflowMatchesTarget &&
-    (activeWorkflowPhase === 'detail_confirmation' ||
+    (activeWorkflowPhase === 'entity_source_binding' ||
       workflowHasDetailReview(latestWorkflowForDisplay))
   const detailProgressVisible =
     loading &&
     activeWorkflowMatchesTarget &&
     (generatingDetailTargetKey === activeTargetKey ||
-      activeWorkflowPhase === 'detail_confirmation') &&
+      activeWorkflowPhase === 'entity_source_binding') &&
     developmentPlanningReady &&
     Boolean(activeApiEndpoint || activePageOption) &&
     !detailConfirmationWaitingReview
@@ -2414,7 +2412,7 @@ export default function AiChatPanel({
     }
   }
 
-  /** 启动当前接口的详细设计；解锁状态仍以后续持久化目录检查为准。 */
+  /** 启动当前接口开发；后端先执行实体绑定前置检查。 */
   const handleStartEndpointDesign = async (
     endpointTargetId: string,
     endpointLabel: string,
@@ -2444,7 +2442,7 @@ export default function AiChatPanel({
     } else {
       setActiveDetailTarget({ type: 'none' })
     }
-    const started = await handleStartEndpointDetailConfirmation({
+    const started = await handleStartEndpointDevelopment({
       apiContractId: targetContext?.apiContractId,
       endpointId: targetContext?.endpointId || endpointTargetId,
       endpointLabel,
@@ -2457,7 +2455,7 @@ export default function AiChatPanel({
     }
   }
 
-  /** 从首次目标选择器直接启动所选页面或接口的详细设计 Workflow。 */
+  /** 从目标选择器启动页面/API开发或独立实体数据源绑定。 */
   const handleInitialDetailTargetSelect = async (
     targetType: 'page' | 'endpoint' | 'entity',
     targetId: string,
@@ -2952,14 +2950,11 @@ export default function AiChatPanel({
               </>
             )}
 
-            {/* page 待设计走对话区 detailBlocker 流内卡片；endpoint 与 entity 待设计仍用 locked 选择器。 */}
-            {(requiresEndpointDetailDesign(activeApiEndpointOption?.endpoint) ||
-              // 引导卡片只属于未进入会话的入口态；实体设计会话一旦激活，
-              // 即使等待后端响应也保持设计对话，避免突然弹回引导卡片。
-              (requiresEntityDetailDesign(activeEntityOption) &&
+            {/* 独立 EntitySourceBinding 尚未完成时保留实体入口引导卡片。 */}
+            {(requiresEntitySourceBinding(activeEntityOption) &&
                 entityDesignChatActive &&
                 !entitySessionActive &&
-                !entityDesignReturning)) &&
+                !entityDesignReturning) &&
             displayedPlanExecutionMode === 'idle' &&
             !detailConfirmationWaitingReview ? (
               <DetailConfirmationPageSelector

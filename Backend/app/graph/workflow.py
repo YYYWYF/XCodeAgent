@@ -9,10 +9,12 @@ from app.persistence.checkpoints import (
 
 
 def route_workflow_start(state: ProjectState) -> str:
-    """让主 Workflow 从页面细节确认或其后的恢复节点开始执行。"""
+    """让主 Workflow 从开发就绪门禁、实体绑定或指定恢复节点开始。"""
 
-    if state.get("resume_from") == "detail_confirmation":
-        return "detail_confirmation"
+    if state.get("resume_from") == "entity_source_binding":
+        return "entity_source_binding"
+    if state.get("resume_from") == "development_readiness_gate":
+        return "development_readiness_gate"
     if state.get("resume_from") == "project_planning":
         return "project_planning"
     if state.get("resume_from") == "inspect_workspace":
@@ -35,7 +37,9 @@ def route_workflow_start(state: ProjectState) -> str:
         return "acceptance"
     if state.get("resume_from") == "finalize_project":
         return "finalize_project"
-    return "detail_confirmation"
+    if str(state.get("selected_entity_id") or "").strip():
+        return "entity_source_binding"
+    return "development_readiness_gate"
 
 
 def route_test_validation(state: ProjectState) -> str:
@@ -64,7 +68,7 @@ def route_small_task_result(state: ProjectState) -> str:
         return "prepare_build_tasks"
     if target in {
         "integration_test",
-        "detail_confirmation",
+        "entity_source_binding",
         "project_planning",
         "inspect_workspace",
         "prepare_build_tasks",
@@ -107,28 +111,26 @@ def route_test_phase_confirmation(state: ProjectState) -> str:
     return "handle_failure"
 
 
-def route_detail_confirmation(state: ProjectState) -> str:
-    """细节确认完成后进入工作区检查，等待用户输入时停止。
+def route_entity_source_binding(state: ProjectState) -> str:
+    """实体数据源绑定始终作为独立交互结束，不自动进入页面/API开发。"""
 
-    实体设计只承担 detail_confirmation 阶段：确认完成即结束当前工作流，
-    不再进入工作区检查与后续构建阶段。
-    """
+    return "await_user_input"
 
-    if state.get("status") == "requires_user_input":
-        return "await_user_input"
-    if str(state.get("selected_entity_id") or "").strip():
-        return "await_user_input"
-    return "inspect_workspace"
+
+def route_development_readiness(state: ProjectState) -> str:
+    """开发就绪时进入工作区检查，否则停下等待用户手动完成实体绑定。"""
+
+    return "await_user_input" if state.get("status") == "requires_user_input" else "inspect_workspace"
 
 
 def route_project_planning(state: ProjectState) -> str:
-    """项目计划调整确认后重新进入页面细节确认，失败则停止在失败处理。"""
+    """技术计划调整确认后重新执行开发就绪门禁，失败则统一处理。"""
 
     if state.get("status") == "requires_user_input":
         return "await_user_input"
     if state.get("status") == "failed":
         return "handle_failure"
-    return "detail_confirmation"
+    return "development_readiness_gate"
 
 
 def route_prepare_build_tasks(state: ProjectState) -> str:
@@ -148,11 +150,12 @@ def route_acceptance(state: ProjectState) -> str:
 
 
 def build_graph(*, checkpointer):
-    """构建从 ProjectPlan 页面细节确认开始的主应用开发图。"""
+    """构建从开发就绪检查开始的主应用开发图。"""
 
     builder = StateGraph(ProjectState)
 
-    builder.add_node("detail_confirmation", nodes.detail_confirmation)
+    builder.add_node("development_readiness_gate", nodes.development_readiness_gate)
+    builder.add_node("entity_source_binding", nodes.entity_source_binding)
     builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
     builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
@@ -169,7 +172,8 @@ def build_graph(*, checkpointer):
         START,
         route_workflow_start,
         {
-            "detail_confirmation": "detail_confirmation",
+            "development_readiness_gate": "development_readiness_gate",
+            "entity_source_binding": "entity_source_binding",
             "project_planning": "project_planning",
             "inspect_workspace": "inspect_workspace",
             "prepare_build_tasks": "prepare_build_tasks",
@@ -183,18 +187,23 @@ def build_graph(*, checkpointer):
         },
     )
     builder.add_conditional_edges(
-        "detail_confirmation",
-        route_detail_confirmation,
+        "development_readiness_gate",
+        route_development_readiness,
         {
             "inspect_workspace": "inspect_workspace",
             "await_user_input": END,
         },
     )
     builder.add_conditional_edges(
+        "entity_source_binding",
+        route_entity_source_binding,
+        {"await_user_input": END},
+    )
+    builder.add_conditional_edges(
         "project_planning",
         route_project_planning,
         {
-            "detail_confirmation": "detail_confirmation",
+            "development_readiness_gate": "development_readiness_gate",
             "await_user_input": END,
             "handle_failure": "handle_failure",
         },
@@ -242,7 +251,7 @@ def build_graph(*, checkpointer):
         route_small_task_result,
         {
             "integration_test": "integration_test",
-            "detail_confirmation": "detail_confirmation",
+            "entity_source_binding": "entity_source_binding",
             "project_planning": "project_planning",
             "inspect_workspace": "inspect_workspace",
             "prepare_build_tasks": "prepare_build_tasks",

@@ -256,7 +256,7 @@ export async function deleteDuty(id: string) {
 
 当数据源类型是 `mysql`/`external_api`/`third_party` 等真实后端时，才用上面的 `service.get('/api/...')` 写法，复用 `service.ts` 的 axios 实例调用真实接口。
 
-> 判断依据：ProjectPlan `data_sources[].type=static`，且 EndpointDetail 为 `source_type=static`、`effective_source.kind=frontend_mock` 时选择 A；`database/mysql_existing` 时选择 B。旧 `mock` 不是正式类型，不得据此生成。Static 场景误用 `service.get` 会导致页面请求不存在的后端接口、表格一直 loading。
+> 判断依据：引用实体的已确认 EntitySourceBinding 为 `data_source_type=static` 时选择 A；`database` 或 `external_api` 时选择 B。Static 场景误用 `service.get` 会导致页面请求不存在的后端接口、表格一直 loading。
 
 ## 🟢 自由编写与公共目录放置规则
 

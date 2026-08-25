@@ -15,22 +15,13 @@ from app.agents.main.planner import (
     plan_project_with_chat_model,
     revise_project_plan_with_chat_model,
 )
-from app.agents.main.page_designer import (
-    PageDependencyGapError,
-    design_endpoint_with_chat_model,
-    design_page_with_chat_model,
-)
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
-from app.services.detail_review import (
-    apply_detail_review_submission,
-    detail_review_payload,
-)
-from app.services.frontend_page_tree import (
-    project_plan_page_records,
-    update_frontend_page_leaves,
+from app.services.entity_source_binding import (
+    apply_entity_source_binding_submission,
+    entity_source_binding_payload,
 )
 from app.services.entity_design import (
     ENTITY_DESIGN_STAGE_EXTERNAL_API_INPUT,
@@ -60,13 +51,6 @@ from app.services.page_implementation_contract import (
     materialize_technical_plan_runtime,
     validate_page_implementation_contracts,
 )
-from app.services.page_detail_plan import (
-    attach_endpoint_detail_plan,
-    attach_page_detail_plan,
-    detail_design_targets,
-    extract_endpoint_detail_context,
-    extract_page_detail_context,
-)
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
     edited_technical_plan_markdown,
@@ -82,17 +66,6 @@ logger = logging.getLogger("uvicorn.error")
 _TECHNICAL_PLAN_GENERATION_ATTEMPTS = 3
 
 
-class EntityDesignRequiredError(ValueError):
-    """接口/页面详细设计开始前，绑定的实体尚未完成实体设计并确认。"""
-
-    def __init__(
-        self,
-        reason: str,
-        missing_entities: list[dict[str, str]] | None = None,
-    ) -> None:
-        super().__init__(reason)
-        self.reason = reason
-        self.missing_entities = missing_entities or []
 
 
 def _detail_workspace_options(state: ProjectState) -> dict[str, str]:
@@ -288,7 +261,7 @@ def _planning_confirmed_payload(state: ProjectState, plan: dict) -> dict:
 def _detail_progress(message: str, **detail: object) -> None:
     """向 LangGraph custom stream 和后端日志同步发送细节设计进度。"""
 
-    logger.info("detail_confirmation progress: %s %s", message, detail)
+    logger.info("entity_source_binding progress: %s %s", message, detail)
     try:
         writer = get_stream_writer()
     except (KeyError, RuntimeError):
@@ -296,8 +269,8 @@ def _detail_progress(message: str, **detail: object) -> None:
     if writer:
         writer(
             {
-                "type": "detail_confirmation.progress",
-                "node_name": "detail_confirmation",
+                "type": "entity_source_binding.progress",
+                "node_name": "entity_source_binding",
                 "message": message,
                 "detail": detail,
             }
@@ -482,78 +455,37 @@ def project_planning(state: ProjectState) -> dict:
     }
 
 
-def detail_confirmation(state: ProjectState) -> dict:
-    """按页面批量确认缺失接口详情，并保留显式接口/实体独立详设。"""
+def entity_source_binding(state: ProjectState) -> dict:
+    """运行独立实体数据源绑定；页面/API 不再进入任何详设节点。"""
 
+    selected_entity_id = str(state.get("selected_entity_id") or "").strip()
+    if not selected_entity_id:
+        raise ValueError("EntitySourceBinding 必须提供 selectedEntityId。")
+    result = _entity_source_binding_implementation(
+        {**state, "detail_target_type": "entity"}
+    )
+    result["phase"] = "entity_source_binding"
+    result["timeline"] = ["entity_source_binding"]
+    result["entity_source_binding_submission"] = {}
+    clarification = result.get("clarification")
+    if isinstance(clarification, dict):
+        clarification.setdefault("workflow_phase", "entity_source_binding")
+    return result
+
+
+def _entity_source_binding_implementation(state: ProjectState) -> dict:
+    """处理单个实体的数据源选择、物理绑定、数据库操作与显式确认。"""
+
+    selected_entity_id = str(state.get("selected_entity_id") or "").strip()
+    if not selected_entity_id:
+        raise ValueError("EntitySourceBinding 必须提供 selectedEntityId。")
     pending_plan = state.get("pending_project_plan")
-    submission = state.get("detail_review_submission")
-    selectedPageId = str(state.get("selectedPageId") or "")
-    selected_api_contract_id = str(state.get("selected_api_contract_id") or "")
-    selected_endpoint_id = str(state.get("selected_endpoint_id") or "")
-    selected_entity_id = str(state.get("selected_entity_id") or "")
-    detail_target_type = str(
-        state.get("detail_target_type")
-        or (
-            "entity"
-            if selected_entity_id
-            else "endpoint"
-            if selected_endpoint_id
-            else "page"
-            if selectedPageId
-            else ""
-        )
-    )
-    selected_endpoint_state = {
-        **({"selected_api_contract_id": selected_api_contract_id} if selected_api_contract_id else {}),
-        **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
-        **({"detail_target_type": detail_target_type} if detail_target_type else {}),
+    submission = state.get("entity_source_binding_submission")
+    selected_state = {
+        "selected_entity_id": selected_entity_id,
+        "detail_target_type": "entity",
     }
-    selected_entity_state = {
-        **({"selected_entity_id": selected_entity_id} if selected_entity_id else {}),
-        **({"detail_target_type": detail_target_type} if detail_target_type else {}),
-    }
-    selection_mode = (
-        "entity_review"
-        if detail_target_type == "entity" or selected_entity_id
-        else "endpoint_review"
-        if detail_target_type == "endpoint" or selected_endpoint_id
-        else "batch_review"
-    )
-    if selectedPageId and detail_target_type == "page" and not selected_entity_id:
-        return _page_endpoint_confirmation(state, selectedPageId)
-    acceptance_adjustment = state.get("acceptance_adjustment")
-    acceptance_adjustment_type = (
-        str(acceptance_adjustment.get("type") or "").strip()
-        if isinstance(acceptance_adjustment, dict)
-        else ""
-    )
-    has_detail_submission = isinstance(submission, dict) and bool(submission)
-    if (
-        acceptance_adjustment_type
-        in {"page_design_change", "endpoint_change", "data_source_change"}
-        and not has_detail_submission
-    ):
-        return _regenerate_acceptance_detail_plan(
-            state,
-            selectedPageId=selectedPageId,
-            selected_api_contract_id=selected_api_contract_id,
-            selected_endpoint_id=selected_endpoint_id,
-            selected_entity_id=selected_entity_id,
-            detail_target_type=detail_target_type,
-            regenerate_endpoint_details=acceptance_adjustment_type == "endpoint_change",
-        )
-    if acceptance_adjustment_type == "project_plan_change" and not has_detail_submission:
-        return _regenerate_acceptance_detail_plan(
-            state,
-            selectedPageId=selectedPageId,
-            selected_api_contract_id=selected_api_contract_id,
-            selected_endpoint_id=selected_endpoint_id,
-            selected_entity_id=selected_entity_id,
-            detail_target_type=detail_target_type,
-            regenerate_endpoint_details=True,
-        )
-    # 单卡片一次性提交：把 submit_entity_design 动作转译为实体确认载荷，
-    # 由下方既有确认门禁完成校验、确认与数据库操作执行。
+
     entity_submit_action = (
         state.get("entity_design_action")
         if isinstance(state.get("entity_design_action"), dict)
@@ -564,18 +496,18 @@ def detail_confirmation(state: ProjectState) -> dict:
         else None
     )
     if entity_submit_action and not submission:
-        submit_base_plan = (
+        base_plan = (
             pending_plan
             if isinstance(pending_plan, dict)
             else state.get("project_plan")
             if isinstance(state.get("project_plan"), dict)
             else None
         )
-        if not isinstance(submit_base_plan, dict):
-            raise ValueError("缺少项目计划，无法提交实体设计。")
+        if not isinstance(base_plan, dict):
+            raise ValueError("缺少 TechnicalPlan，无法提交实体数据源绑定。")
         review_plan = _ensure_entity_detail_for_submit(
             state,
-            submit_base_plan,
+            base_plan,
             selected_entity_id,
             entity_submit_action,
         )
@@ -594,1108 +526,192 @@ def detail_confirmation(state: ProjectState) -> dict:
             submission = {
                 "review_status": "confirmed",
                 "target_changes": [],
-                "overall_note": "实体设计单卡片确认",
+                "overall_note": "实体数据源绑定单卡片确认",
             }
-    if pending_plan and isinstance(submission, dict):
-        edited_markdown = edited_project_plan_markdown(state, pending_plan)
-        synchronized_plan = (
-            sync_project_plan_from_markdown(
+
+    if isinstance(pending_plan, dict) and isinstance(submission, dict):
+        entity_errors = _pending_entity_design_validation_errors(
+            pending_plan,
+            selected_entity_id,
+        )
+        if entity_errors:
+            review_plan = _attach_entity_design_validation_errors(
                 pending_plan,
-                state.get("requirement_spec", {}),
-                edited_markdown,
-            )
-            if edited_markdown is not None and state.get("requirement_spec")
-            else pending_plan
-        )
-        if selected_entity_id:
-            entity_errors = _pending_entity_design_validation_errors(
-                synchronized_plan,
                 selected_entity_id,
+                entity_errors,
             )
-            if entity_errors:
-                review_plan = _attach_entity_design_validation_errors(
-                    synchronized_plan,
-                    selected_entity_id,
-                    entity_errors,
-                )
-                return _entity_design_requires_revision(
-                    state,
-                    review_plan,
-                    selected_entity_id=selected_entity_id,
-                    detail_target_type=detail_target_type or "entity",
-                )
-        confirmed_plan = apply_detail_review_submission(
-            synchronized_plan,
-            submission,
-            selectedPageId=selectedPageId or None,
-            selected_api_contract_id=selected_api_contract_id or None,
-            selected_endpoint_id=selected_endpoint_id or None,
-            selected_entity_id=selected_entity_id or None,
-        )
-        if selected_entity_id:
-            confirmed_plan = _execute_confirmed_entity_database_operations(
+            return _entity_design_requires_revision(
                 state,
-                confirmed_plan,
-                selected_entity_id,
+                review_plan,
+                selected_entity_id=selected_entity_id,
+                detail_target_type="entity",
             )
+        confirmed_plan = apply_entity_source_binding_submission(
+            pending_plan,
+            submission,
+            selected_entity_id=selected_entity_id,
+        )
+        confirmed_plan = _execute_confirmed_entity_database_operations(
+            state,
+            confirmed_plan,
+            selected_entity_id,
+        )
         project_plan_path = write_project_plan_document(state, confirmed_plan)
         return {
-            "phase": "detail_confirmation",
+            "phase": "entity_source_binding",
             "status": "completed",
             "project_plan": confirmed_plan,
             "pending_project_plan": {},
             "project_plan_path": project_plan_path,
             "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "clarification": (
-                _entity_design_confirmed_payload(
-                    confirmed_plan,
-                    selected_entity_id=selected_entity_id,
-                    detail_target_type=detail_target_type or "entity",
-                )
-                if selected_entity_id
-                else _project_plan_confirmed_payload(confirmed_plan)
+            "clarification": _entity_design_confirmed_payload(
+                confirmed_plan,
+                selected_entity_id=selected_entity_id,
+                detail_target_type="entity",
             ),
             "detail_selection": {
                 "status": "completed",
-                "mode": "batch_review",
+                "mode": "entity_review",
                 "targets": [],
             },
-            "selectedPageId": selectedPageId or None,
-            **selected_endpoint_state,
-            **selected_entity_state,
-            "detail_plans": [
-                *confirmed_plan.get("page_detail_plans", []),
-                *confirmed_plan.get("endpoint_detail_plans", []),
-                *confirmed_plan.get("entity_detail_plans", []),
-            ],
-            "detail_review_submission": {},
-            "acceptance_adjustment": {},
-            "timeline": ["detail_confirmation"],
-        }
-
-    if pending_plan and _user_confirmed_project_plan(state.get("request", "")):
-        legacy_submission = {
-            "review_status": "confirmed",
-            "target_changes": [],
-            "overall_note": "legacy text confirmation",
-        }
-        return detail_confirmation(
-            {**state, "detail_review_submission": legacy_submission}
-        )
-
-    if pending_plan and (selectedPageId or selected_endpoint_id or selected_entity_id):
-        review_plan = pending_plan
-        project_plan_path = state.get("project_plan_path")
-        ai_suggestions: dict[str, Any] | None = None
-        ddl_execution: dict[str, Any] | None = None
-        if selectedPageId and not _has_selected_page_detail(review_plan, selectedPageId):
-            # 旧会话可能保留上一页面的待确认计划；新选择的页面缺失时必须基于最新正式计划补生成。
-            source_plan = state.get("project_plan")
-            if not isinstance(source_plan, dict):
-                source_plan = pending_plan
-            try:
-                review_plan = _generate_all_detail_plans(
-                    source_plan,
-                    frontend_pages=state.get("pages") or state.get("frontend_pages"),
-                    selectedPageId=selectedPageId,
-                    enforce_entity_gate=True,
-                    **_detail_workspace_options(state),
-                )
-            except PageDependencyGapError as exc:
-                return {
-                    "phase": "detail_confirmation",
-                    "status": "requires_user_input",
-                    "project_plan": source_plan,
-                    "clarification": _project_plan_revision_required_payload(str(exc)),
-                    "selectedPageId": selectedPageId,
-                    "timeline": ["detail_confirmation"],
-                }
-            except EntityDesignRequiredError as exc:
-                return {
-                    "phase": "detail_confirmation",
-                    "status": "requires_user_input",
-                    "project_plan": source_plan,
-                    "clarification": _entity_design_required_payload(exc),
-                    "selectedPageId": selectedPageId,
-                    "timeline": ["detail_confirmation"],
-                }
-            review_plan["confirmation_status"] = "pending_user_confirmation"
-            project_plan_path = write_project_plan_document(state, review_plan)
-        if selected_endpoint_id and not _has_selected_endpoint_detail(
-            review_plan,
-            selected_api_contract_id,
-            selected_endpoint_id,
-        ):
-            source_plan = state.get("project_plan")
-            if not isinstance(source_plan, dict):
-                source_plan = pending_plan
-            try:
-                review_plan = _generate_all_detail_plans(
-                    source_plan,
-                    selected_api_contract_id=selected_api_contract_id,
-                    selected_endpoint_id=selected_endpoint_id,
-                    detail_target_type=detail_target_type or "endpoint",
-                    enforce_entity_gate=True,
-                    **_detail_workspace_options(state),
-                )
-            except EntityDesignRequiredError as exc:
-                return {
-                    "phase": "detail_confirmation",
-                    "status": "requires_user_input",
-                    "project_plan": source_plan,
-                    "clarification": _entity_design_required_payload(exc),
-                    "selected_api_contract_id": selected_api_contract_id,
-                    "selected_endpoint_id": selected_endpoint_id,
-                    "detail_target_type": detail_target_type or "endpoint",
-                    "timeline": ["detail_confirmation"],
-                }
-            review_plan["confirmation_status"] = "pending_user_confirmation"
-            project_plan_path = write_project_plan_document(state, review_plan)
-        if selected_entity_id:
-            source_plan = state.get("project_plan")
-            if not isinstance(source_plan, dict):
-                source_plan = review_plan
-            action = state.get("entity_design_action")
-            if isinstance(action, dict) and str(action.get("entity_id") or "") == selected_entity_id:
-                if str(action.get("action") or "") == "ai_assist":
-                    ai_suggestions = _build_entity_design_ai_suggestions(
-                        source_plan,
-                        selected_entity_id,
-                        action,
-                        workspace_root=_detail_workspace_options(state).get(
-                            "workspace_root"
-                        ),
-                    )
-                elif str(action.get("action") or "") == "execute_add_columns":
-                    ddl_execution = _execute_entity_add_columns_with_agent(
-                        state,
-                        source_plan,
-                        selected_entity_id,
-                        action,
-                    )
-                    if ddl_execution.get("status") == "approval_required":
-                        return {
-                            "phase": "detail_confirmation",
-                            "status": "requires_user_input",
-                            "entity_design_action": {
-                                **action,
-                                "database_change_plan": ddl_execution.get(
-                                    "database_change_plan"
-                                ),
-                            },
-                            "clarification": _entity_ddl_approval_payload(
-                                ddl_execution
-                            ),
-                            "pending_project_plan": review_plan,
-                            "project_plan": state.get("project_plan"),
-                            "project_plan_path": project_plan_path,
-                            "project_plan_json_path": _project_plan_json_path_for_state(
-                                state
-                            ),
-                            "timeline": ["detail_confirmation"],
-                        }
-                elif str(action.get("action") or "") == "execute_create_table":
-                    ddl_execution = _execute_entity_create_table_action(
-                        state,
-                        source_plan,
-                        selected_entity_id,
-                        action,
-                    )
-                    if ddl_execution.get("status") == "approval_required":
-                        return {
-                            "phase": "detail_confirmation",
-                            "status": "requires_user_input",
-                            "entity_design_action": {
-                                **action,
-                                "database_change_plan": ddl_execution.get(
-                                    "database_change_plan"
-                                ),
-                            },
-                            "clarification": _entity_ddl_approval_payload(
-                                ddl_execution
-                            ),
-                            "pending_project_plan": review_plan,
-                            "project_plan": state.get("project_plan"),
-                            "project_plan_path": project_plan_path,
-                            "project_plan_json_path": _project_plan_json_path_for_state(
-                                state
-                            ),
-                            "timeline": ["detail_confirmation"],
-                        }
-                else:
-                    review_plan = _apply_entity_design_action(
-                        state,
-                        source_plan,
-                        review_plan,
-                        selected_entity_id,
-                    )
-                    review_plan["confirmation_status"] = "pending_user_confirmation"
-                    project_plan_path = write_project_plan_document(state, review_plan)
-        clarification = detail_review_payload(
-            review_plan,
-            selectedPageId=selectedPageId or None,
-            selected_api_contract_id=selected_api_contract_id or None,
-            selected_endpoint_id=selected_endpoint_id or None,
-            selected_entity_id=selected_entity_id or None,
-            detail_target_type=detail_target_type or None,
-        )
-        if ai_suggestions is not None:
-            entity_design = (
-                clarification.get("review", {}).get("summary", {}).get("entityDesign")
-            )
-            if isinstance(entity_design, dict):
-                entity_design["ai_suggestions"] = ai_suggestions
-        if ddl_execution is not None:
-            entity_design = (
-                clarification.get("review", {}).get("summary", {}).get("entityDesign")
-            )
-            if isinstance(entity_design, dict):
-                entity_design["ddl_execution"] = ddl_execution
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "clarification": clarification,
-            "pending_project_plan": review_plan,
-            "project_plan": state.get("project_plan"),
-            "project_plan_path": project_plan_path,
-            "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "detail_selection": {
-                "status": "requires_user_input",
-                "mode": selection_mode,
-                "selectedPageId": selectedPageId or None,
-                **selected_endpoint_state,
-                **selected_entity_state,
-                "targets": _selected_detail_design_targets(
-                    review_plan,
-                    selectedPageId,
-                    selected_api_contract_id=selected_api_contract_id or None,
-                    selected_endpoint_id=selected_endpoint_id or None,
-                    selected_entity_id=selected_entity_id or None,
-                ),
-            },
-            "selectedPageId": selectedPageId or None,
-            **selected_endpoint_state,
-            **selected_entity_state,
+            **selected_state,
             "detail_plans": _selected_detail_plans(
-                review_plan,
-                selectedPageId,
-                selected_api_contract_id=selected_api_contract_id or None,
-                selected_endpoint_id=selected_endpoint_id or None,
-                selected_entity_id=selected_entity_id or None,
+                confirmed_plan,
+                "",
+                selected_entity_id=selected_entity_id,
             ),
             "entity_design_action": {},
-            "timeline": ["detail_confirmation"],
-        }
-
-    if pending_plan:
-        revised_plan = revise_project_plan_with_chat_model(
-            pending_plan,
-            state.get("request", ""),
-            on_token=_planning_token_callback,
-        )
-        revised_plan = _generate_all_detail_plans(
-            revised_plan,
-            **_detail_workspace_options(state),
-        )
-        revised_plan["confirmation_status"] = "pending_user_confirmation"
-        project_plan_path = write_project_plan_document(state, revised_plan)
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "clarification": detail_review_payload(revised_plan),
-            "pending_project_plan": revised_plan,
-            "project_plan": state.get("project_plan"),
-            "project_plan_path": project_plan_path,
-            "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "detail_selection": {
-                "status": "requires_user_input",
-                "mode": "batch_review",
-                "targets": detail_design_targets(revised_plan),
-            },
-            "timeline": ["detail_confirmation"],
-        }
-
-    project_plan = state.get("project_plan")
-    if not isinstance(project_plan, dict):
-        raise ValueError(
-            "主 Workflow 需要工作区 .xcodeagent/plans/project-plan.json "
-            "（兼容 plans/project-plan.json）作为初始输入。"
-        )
-    if not selectedPageId and not selected_endpoint_id and not selected_entity_id:
-        raise ValueError(
-            "开始详细设计时必须提供 selectedPageId、selectedEndpointId 或 selectedEntityId。"
-        )
-    if selected_entity_id and not _has_selected_entity_detail(
-        project_plan,
-        selected_entity_id,
-    ):
-        # 实体设计从数据源选择开始：首次进入不自动生成详情，而是返回选择界面。
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "clarification": detail_review_payload(
-                project_plan,
-                selected_entity_id=selected_entity_id,
-                detail_target_type=detail_target_type or "entity",
-            ),
-            "pending_project_plan": project_plan,
-            "project_plan": project_plan,
-            "project_plan_path": state.get("project_plan_path"),
-            "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "detail_selection": {
-                "status": "requires_user_input",
-                "mode": "entity_review",
-                **selected_entity_state,
-                "targets": [],
-            },
-            **selected_entity_state,
-            "detail_plans": [],
-            "timeline": ["detail_confirmation"],
-        }
-    if selected_entity_id and _has_selected_entity_detail(
-        project_plan,
-        selected_entity_id,
-    ):
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "clarification": detail_review_payload(
-                project_plan,
-                selected_entity_id=selected_entity_id,
-                detail_target_type=detail_target_type or "entity",
-            ),
-            "pending_project_plan": project_plan,
-            "project_plan": project_plan,
-            "project_plan_path": state.get("project_plan_path"),
-            "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "detail_selection": {
-                "status": "requires_user_input",
-                "mode": "entity_review",
-                **selected_entity_state,
-                "targets": _selected_detail_design_targets(
-                    project_plan,
-                    "",
-                    selected_entity_id=selected_entity_id,
-                ),
-            },
-            **selected_entity_state,
-            "detail_plans": _selected_detail_plans(
-                project_plan,
-                "",
-                selected_entity_id=selected_entity_id,
-            ),
-            "timeline": ["detail_confirmation"],
-        }
-    if (
-        selectedPageId
-        and _has_selected_page_detail(project_plan, selectedPageId)
-        and _page_endpoint_details_complete(project_plan, selectedPageId)
-    ):
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "clarification": detail_review_payload(
-                project_plan,
-                selectedPageId=selectedPageId,
-                selected_api_contract_id=selected_api_contract_id or None,
-                selected_endpoint_id=selected_endpoint_id or None,
-                detail_target_type=detail_target_type or None,
-            ),
-            "pending_project_plan": project_plan,
-            "project_plan": project_plan,
-            "project_plan_path": state.get("project_plan_path"),
-            "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "detail_selection": {
-                "status": "requires_user_input",
-                "mode": "batch_review",
-                "selectedPageId": selectedPageId,
-                **selected_endpoint_state,
-                "targets": _selected_detail_design_targets(
-                    project_plan,
-                    selectedPageId,
-                ),
-            },
-            "selectedPageId": selectedPageId,
-            **selected_endpoint_state,
-            "detail_plans": _selected_detail_plans(project_plan, selectedPageId),
-            "timeline": ["detail_confirmation"],
-        }
-    if selected_endpoint_id and _has_selected_endpoint_detail(
-        project_plan,
-        selected_api_contract_id,
-        selected_endpoint_id,
-    ):
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "clarification": detail_review_payload(
-                project_plan,
-                selected_api_contract_id=selected_api_contract_id or None,
-                selected_endpoint_id=selected_endpoint_id,
-                detail_target_type=detail_target_type or "endpoint",
-            ),
-            "pending_project_plan": project_plan,
-            "project_plan": project_plan,
-            "project_plan_path": state.get("project_plan_path"),
-            "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "detail_selection": {
-                "status": "requires_user_input",
-                "mode": "endpoint_review",
-                **selected_endpoint_state,
-                "targets": _selected_detail_design_targets(
-                    project_plan,
-                    "",
-                    selected_api_contract_id=selected_api_contract_id or None,
-                    selected_endpoint_id=selected_endpoint_id,
-                ),
-            },
-            **selected_endpoint_state,
-            "detail_plans": _selected_detail_plans(
-                project_plan,
-                "",
-                selected_api_contract_id=selected_api_contract_id or None,
-                selected_endpoint_id=selected_endpoint_id,
-            ),
-            "timeline": ["detail_confirmation"],
-        }
-    try:
-        project_plan_pages = project_plan_page_records(project_plan)
-        frontend_pages = project_plan_pages or state.get("pages") or state.get("frontend_pages")
-        pending_plan = _generate_all_detail_plans(
-            project_plan,
-            frontend_pages=frontend_pages,
-            selectedPageId=selectedPageId or None,
-            selected_api_contract_id=selected_api_contract_id or None,
-            selected_endpoint_id=selected_endpoint_id or None,
-            selected_entity_id=selected_entity_id or None,
-            detail_target_type=detail_target_type or None,
-            enforce_entity_gate=bool(selectedPageId or selected_endpoint_id),
-            **_detail_workspace_options(state),
-        )
-    except EntityDesignRequiredError as exc:
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "project_plan": project_plan,
-            "clarification": _entity_design_required_payload(exc),
-            "selectedPageId": selectedPageId or None,
-            "selected_api_contract_id": selected_api_contract_id or None,
-            "selected_endpoint_id": selected_endpoint_id or None,
-            "detail_target_type": detail_target_type or None,
-            "timeline": ["detail_confirmation"],
-        }
-    except (PageDependencyGapError, ValueError) as exc:
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "project_plan": project_plan,
-            "clarification": _project_plan_revision_required_payload(str(exc)),
-            "timeline": ["detail_confirmation"],
-        }
-    pending_plan["confirmation_status"] = "pending_user_confirmation"
-    project_plan_path = write_project_plan_document(state, pending_plan)
-    targets = _selected_detail_design_targets(
-        pending_plan,
-        selectedPageId,
-        selected_api_contract_id=selected_api_contract_id or None,
-        selected_endpoint_id=selected_endpoint_id or None,
-        selected_entity_id=selected_entity_id or None,
-    )
-    return {
-        "phase": "detail_confirmation",
-        "status": "requires_user_input",
-        "clarification": detail_review_payload(
-            pending_plan,
-            selectedPageId=selectedPageId or None,
-            selected_api_contract_id=selected_api_contract_id or None,
-            selected_endpoint_id=selected_endpoint_id or None,
-            selected_entity_id=selected_entity_id or None,
-            detail_target_type=detail_target_type or None,
-        ),
-        "pending_project_plan": pending_plan,
-        "project_plan": project_plan,
-        "project_plan_path": project_plan_path,
-        "project_plan_json_path": _project_plan_json_path_for_state(state),
-        "detail_selection": {
-            "status": "requires_user_input",
-            "mode": selection_mode,
-            "selectedPageId": selectedPageId or None,
-            **selected_endpoint_state,
-            **selected_entity_state,
-            "targets": targets,
-        },
-        "selectedPageId": selectedPageId or None,
-        **selected_endpoint_state,
-        **selected_entity_state,
-        "detail_plans": _selected_detail_plans(
-            pending_plan,
-            selectedPageId,
-            selected_api_contract_id=selected_api_contract_id or None,
-            selected_endpoint_id=selected_endpoint_id or None,
-            selected_entity_id=selected_entity_id or None,
-        ),
-        "timeline": ["detail_confirmation"],
-    }
-
-
-def _page_endpoint_confirmation(state: ProjectState, selected_page_id: str) -> dict:
-    """按页面实现契约批量生成并确认缺失接口详情，不再生成 PageDetail。"""
-
-    pending_plan = state.get("pending_project_plan")
-    submission = state.get("detail_review_submission")
-    if isinstance(pending_plan, dict) and isinstance(submission, dict) and submission:
-        confirmed_plan = apply_detail_review_submission(
-            pending_plan,
-            submission,
-            selectedPageId=selected_page_id,
-        )
-        project_plan_path = write_project_plan_document(state, confirmed_plan)
-        return {
-            "phase": "detail_confirmation",
-            "status": "completed",
-            "project_plan": confirmed_plan,
-            "pending_project_plan": {},
-            "project_plan_path": project_plan_path,
-            "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "clarification": _page_contract_ready_payload(selected_page_id),
-            "detail_selection": {"status": "completed", "mode": "endpoint_batch", "targets": []},
-            "selectedPageId": selected_page_id,
-            "detail_target_type": "page",
-            "detail_plans": list(confirmed_plan.get("endpoint_detail_plans") or []),
-            "detail_review_submission": {},
             "acceptance_adjustment": {},
-            "timeline": ["detail_confirmation"],
+            "timeline": ["entity_source_binding"],
         }
 
-    detail_selection = state.get("detail_selection")
-    pending_selected_page_id = (
-        str(detail_selection.get("selectedPageId") or "")
-        if isinstance(detail_selection, dict)
-        else ""
-    )
-    if isinstance(pending_plan, dict) and pending_selected_page_id == selected_page_id:
-        return _page_endpoint_review_result(
-            state,
-            pending_plan,
-            selected_page_id,
-            state.get("project_plan_path"),
+    if isinstance(pending_plan, dict) and _user_confirmed_project_plan(state.get("request", "")):
+        return _entity_source_binding_implementation(
+            {
+                **state,
+                "entity_source_binding_submission": {
+                    "review_status": "confirmed",
+                    "target_changes": [],
+                    "overall_note": "文本确认",
+                },
+            }
         )
 
     project_plan = state.get("project_plan")
     if not isinstance(project_plan, dict):
-        raise ValueError("页面开发需要已确认的 TechnicalPlan。")
-    try:
-        generated_plan = _generate_all_detail_plans(
-            project_plan,
-            frontend_pages=project_plan_page_records(project_plan),
-            selectedPageId=selected_page_id,
-            detail_target_type="page",
-            enforce_entity_gate=True,
-            **_detail_workspace_options(state),
-        )
-    except EntityDesignRequiredError as exc:
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "project_plan": project_plan,
-            "clarification": _entity_design_required_payload(exc),
-            "selectedPageId": selected_page_id,
-            "timeline": ["detail_confirmation"],
-        }
-    except (PageDependencyGapError, ValueError) as exc:
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "project_plan": project_plan,
-            "clarification": _project_plan_revision_required_payload(str(exc)),
-            "selectedPageId": selected_page_id,
-            "timeline": ["detail_confirmation"],
-        }
-    pending_details = list(generated_plan.get("endpoint_detail_plans") or [])
-    if not pending_details:
-        return {
-            "phase": "detail_confirmation",
-            "status": "completed",
-            "project_plan": project_plan,
-            "pending_project_plan": {},
-            "project_plan_path": state.get("project_plan_path"),
-            "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "clarification": _page_contract_ready_payload(selected_page_id),
-            "detail_selection": {"status": "completed", "mode": "page_contract", "targets": []},
-            "selectedPageId": selected_page_id,
-            "detail_target_type": "page",
-            "detail_plans": [],
-            "timeline": ["detail_confirmation"],
-        }
-    generated_plan["confirmation_status"] = "pending_user_confirmation"
-    project_plan_path = write_project_plan_document(state, generated_plan)
-    return _page_endpoint_review_result(
-        state,
-        generated_plan,
-        selected_page_id,
-        project_plan_path,
+        raise ValueError("缺少已确认 TechnicalPlan，无法进行实体数据源绑定。")
+    review_plan = pending_plan if isinstance(pending_plan, dict) else project_plan
+    project_plan_path = state.get("project_plan_path")
+    ai_suggestions: dict[str, Any] | None = None
+    ddl_execution: dict[str, Any] | None = None
+    action = state.get("entity_design_action")
+    if isinstance(action, dict) and str(action.get("entity_id") or "") == selected_entity_id:
+        action_name = str(action.get("action") or "")
+        if action_name == "ai_assist":
+            ai_suggestions = _build_entity_design_ai_suggestions(
+                project_plan,
+                selected_entity_id,
+                action,
+                workspace_root=_detail_workspace_options(state).get("workspace_root"),
+            )
+        elif action_name == "execute_add_columns":
+            ddl_execution = _execute_entity_add_columns_with_agent(
+                state,
+                project_plan,
+                selected_entity_id,
+                action,
+            )
+        elif action_name == "execute_create_table":
+            ddl_execution = _execute_entity_create_table_action(
+                state,
+                project_plan,
+                selected_entity_id,
+                action,
+            )
+        else:
+            review_plan = _apply_entity_design_action(
+                state,
+                project_plan,
+                review_plan,
+                selected_entity_id,
+            )
+            review_plan["confirmation_status"] = "pending_user_confirmation"
+            project_plan_path = write_project_plan_document(state, review_plan)
+        if ddl_execution and ddl_execution.get("status") == "approval_required":
+            return {
+                "phase": "entity_source_binding",
+                "status": "requires_user_input",
+                "entity_design_action": {
+                    **action,
+                    "database_change_plan": ddl_execution.get("database_change_plan"),
+                },
+                "clarification": _entity_ddl_approval_payload(ddl_execution),
+                "pending_project_plan": review_plan,
+                "project_plan": project_plan,
+                "project_plan_path": project_plan_path,
+                "project_plan_json_path": _project_plan_json_path_for_state(state),
+                **selected_state,
+                "timeline": ["entity_source_binding"],
+            }
+
+    clarification = entity_source_binding_payload(
+        review_plan,
+        selected_entity_id=selected_entity_id,
+        detail_target_type="entity",
     )
-
-
-def _page_endpoint_review_result(
-    state: ProjectState,
-    pending_plan: dict,
-    selected_page_id: str,
-    project_plan_path: str | None,
-) -> dict:
-    """构造页面依赖接口的批量确认结果。"""
-
+    if ai_suggestions is not None:
+        entity_design = clarification.get("review", {}).get("summary", {}).get("entityDesign")
+        if isinstance(entity_design, dict):
+            entity_design["ai_suggestions"] = ai_suggestions
+    if ddl_execution is not None:
+        entity_design = clarification.get("review", {}).get("summary", {}).get("entityDesign")
+        if isinstance(entity_design, dict):
+            entity_design["ddl_execution"] = ddl_execution
     return {
-        "phase": "detail_confirmation",
+        "phase": "entity_source_binding",
         "status": "requires_user_input",
-        "clarification": detail_review_payload(
-            pending_plan,
-            selectedPageId=selected_page_id,
-            detail_target_type="endpoint_batch",
-        ),
-        "pending_project_plan": pending_plan,
-        "project_plan": state.get("project_plan"),
-        "project_plan_path": project_plan_path,
-        "project_plan_json_path": _project_plan_json_path_for_state(state),
-        "detail_selection": {
-            "status": "requires_user_input",
-            "mode": "endpoint_batch",
-            "selectedPageId": selected_page_id,
-            "targets": [
-                {
-                    "id": f"{detail.get('api_contract_id')}:{detail.get('endpoint_id')}",
-                    "type": "endpoint",
-                    "label": f"接口：{detail.get('method')} {detail.get('path')}",
-                    "name": detail.get("name") or detail.get("endpoint_id"),
-                }
-                for detail in pending_plan.get("endpoint_detail_plans", [])
-                if isinstance(detail, dict)
-            ],
-        },
-        "selectedPageId": selected_page_id,
-        "detail_target_type": "page",
-        "detail_plans": list(pending_plan.get("endpoint_detail_plans") or []),
-        "timeline": ["detail_confirmation"],
-    }
-
-
-def _page_contract_ready_payload(selected_page_id: str) -> dict:
-    """说明页面实现契约及接口详情已满足开发前置条件。"""
-
-    return {
-        "mode": "page_implementation_ready",
-        "status": "clear",
-        "question_schema": "gemini_cli.ask_user.v1",
-        "questions": [],
-        "message": f"页面 `{selected_page_id}` 的实现契约和接口详情已就绪，可以进入开发。",
-    }
-
-
-def _regenerate_acceptance_detail_plan(
-    state: ProjectState,
-    *,
-    selectedPageId: str,
-    selected_api_contract_id: str,
-    selected_endpoint_id: str,
-    selected_entity_id: str,
-    detail_target_type: str,
-    regenerate_endpoint_details: bool,
-) -> dict:
-    """根据验收反馈生成新的页面、接口或实体详情版本，并重新停在确认门禁。"""
-
-    project_plan = state.get("project_plan")
-    adjustment = state.get("acceptance_adjustment")
-    feedback = (
-        str(adjustment.get("feedback") or "").strip()
-        if isinstance(adjustment, dict)
-        else ""
-    )
-    if not isinstance(project_plan, dict):
-        raise ValueError("验收调整缺少当前已确认的 ProjectPlan。")
-    if not selectedPageId and not selected_endpoint_id and not selected_entity_id:
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "project_plan": project_plan,
-            "clarification": _project_plan_revision_required_payload(
-                "验收调整缺少当前页面、接口或实体目标。"
-            ),
-            "timeline": ["detail_confirmation"],
-        }
-
-    try:
-        pending_plan = _generate_all_detail_plans(
-            project_plan,
-            frontend_pages=state.get("pages") or state.get("frontend_pages"),
-            selectedPageId=selectedPageId or None,
-            selected_api_contract_id=selected_api_contract_id or None,
-            selected_endpoint_id=selected_endpoint_id or None,
-            selected_entity_id=selected_entity_id or None,
-            detail_target_type=detail_target_type or None,
-            workspace_root=_detail_workspace_options(state).get("workspace_root"),
-            user_request=feedback,
-            regenerate_endpoint_details=regenerate_endpoint_details,
-        )
-    except PageDependencyGapError as exc:
-        return {
-            "phase": "detail_confirmation",
-            "status": "requires_user_input",
-            "project_plan": project_plan,
-            "clarification": _project_plan_revision_required_payload(str(exc)),
-            "selectedPageId": selectedPageId or None,
-            "selected_api_contract_id": selected_api_contract_id or None,
-            "selected_endpoint_id": selected_endpoint_id or None,
-            "selected_entity_id": selected_entity_id or None,
-            "detail_target_type": detail_target_type or None,
-            "timeline": ["detail_confirmation"],
-        }
-
-    pending_plan["confirmation_status"] = "pending_user_confirmation"
-    project_plan_path = write_project_plan_document(state, pending_plan)
-    targets = _selected_detail_design_targets(
-        pending_plan,
-        selectedPageId,
-        selected_api_contract_id=selected_api_contract_id or None,
-        selected_endpoint_id=selected_endpoint_id or None,
-        selected_entity_id=selected_entity_id or None,
-    )
-    selected_endpoint_state = {
-        **(
-            {"selected_api_contract_id": selected_api_contract_id}
-            if selected_api_contract_id
-            else {}
-        ),
-        **(
-            {"selected_endpoint_id": selected_endpoint_id}
-            if selected_endpoint_id
-            else {}
-        ),
-        **({"detail_target_type": detail_target_type} if detail_target_type else {}),
-    }
-    selected_entity_state = {
-        **({"selected_entity_id": selected_entity_id} if selected_entity_id else {}),
-        **({"detail_target_type": detail_target_type} if detail_target_type else {}),
-    }
-    selection_mode = (
-        "entity_review"
-        if detail_target_type == "entity" or selected_entity_id
-        else "endpoint_review"
-        if detail_target_type == "endpoint" or selected_endpoint_id
-        else "batch_review"
-    )
-    return {
-        "phase": "detail_confirmation",
-        "status": "requires_user_input",
-        "clarification": detail_review_payload(
-            pending_plan,
-            selectedPageId=selectedPageId or None,
-            selected_api_contract_id=selected_api_contract_id or None,
-            selected_endpoint_id=selected_endpoint_id or None,
-            selected_entity_id=selected_entity_id or None,
-            detail_target_type=detail_target_type or None,
-        ),
-        "pending_project_plan": pending_plan,
+        "clarification": clarification,
+        "pending_project_plan": review_plan,
         "project_plan": project_plan,
         "project_plan_path": project_plan_path,
         "project_plan_json_path": _project_plan_json_path_for_state(state),
         "detail_selection": {
             "status": "requires_user_input",
-            "mode": selection_mode,
-            "selectedPageId": selectedPageId or None,
-            **selected_endpoint_state,
-            **selected_entity_state,
-            "targets": targets,
-        },
-        "selectedPageId": selectedPageId or None,
-        **selected_endpoint_state,
-        **selected_entity_state,
-        "detail_plans": _selected_detail_plans(
-            pending_plan,
-            selectedPageId,
-            selected_api_contract_id=selected_api_contract_id or None,
-            selected_endpoint_id=selected_endpoint_id or None,
-            selected_entity_id=selected_entity_id or None,
-        ),
-        "timeline": ["detail_confirmation"],
-    }
-
-
-def _generate_all_detail_plans(
-    project_plan: dict,
-    *,
-    frontend_pages: list[dict] | None = None,
-    selectedPageId: str | None = None,
-    selected_api_contract_id: str | None = None,
-    selected_endpoint_id: str | None = None,
-    selected_entity_id: str | None = None,
-    detail_target_type: str | None = None,
-    workspace_root: str | None = None,
-    user_request: str = "",
-    regenerate_endpoint_details: bool = False,
-    enforce_entity_gate: bool = False,
-) -> dict:
-    """为页面依赖接口、显式 endpoint 或实体生成对应详细设计。"""
-
-    project_pages = project_plan_page_records(project_plan)
-    normalized_project_page_leaves = [
-        _normalize_detail_page(page)
-        for page in project_pages
-        if isinstance(page, dict)
-    ]
-    normalized_project_pages = update_frontend_page_leaves(
-        project_pages,
-        {
-            str(page.get("pageId") or page.get("id") or "").strip(): page
-            for page in normalized_project_page_leaves
-            if str(page.get("pageId") or page.get("id") or "").strip()
-        },
-    )
-    page_field = "pages" if project_plan.get("artifact_type") == "technical-plan" else "frontend_pages"
-    updated_plan = (
-        project_plan
-        if normalized_project_pages == project_pages
-        else {**project_plan, page_field: normalized_project_pages}
-    )
-    source_pages = (
-        frontend_pages
-        if isinstance(frontend_pages, list)
-        else normalized_project_page_leaves
-    )
-    pages = [
-        _normalize_detail_page(page)
-        for page in source_pages
-        if isinstance(page, dict)
-    ]
-    if selectedPageId:
-        pages = [
-            page
-            for page in pages
-            if page.get("pageId") == selectedPageId
-        ]
-        if not pages:
-            raise ValueError(f"项目计划中不存在页面：{selectedPageId}")
-        # 新流程不生成页面正文；已有 EndpointDetail 只用于判断当前页面的接口缺口。
-        updated_plan = {
-            **updated_plan,
-            "page_detail_plans": [],
-        }
-        _drop_legacy_detail_fields(updated_plan)
-    if detail_target_type == "endpoint" or selected_endpoint_id:
-        if not selected_api_contract_id or not selected_endpoint_id:
-            raise ValueError("接口详细设计必须提供 selectedApiContractId 和 selectedEndpointId。")
-        updated_plan, detail = _generate_endpoint_detail_plan(
-            updated_plan,
-            selected_api_contract_id,
-            selected_endpoint_id,
-            workspace_root,
-            user_request=user_request,
-            enforce_entity_gate=True,
-        )
-        updated_plan = {
-            **updated_plan,
-            "page_detail_plans": [],
-            "endpoint_detail_plans": [detail],
-        }
-        _drop_legacy_detail_fields(updated_plan)
-        updated_plan["detail_confirmation_summary"] = {
-            "confirmed_pages": 0,
-            "confirmed_endpoints": 0,
-            "total_pages": 0,
-            "total_endpoints": 1,
-            "mode": "endpoint_review",
-        }
-        return updated_plan
-    if detail_target_type == "entity" or selected_entity_id:
-        if not selected_entity_id:
-            raise ValueError("实体详细设计必须提供 selectedEntityId。")
-        updated_plan, detail = _generate_entity_detail_plan(
-            updated_plan,
-            selected_entity_id,
-            user_request=user_request,
-        )
-        updated_plan = {
-            **updated_plan,
-            "page_detail_plans": [],
-            "endpoint_detail_plans": [],
-            "entity_detail_plans": [detail],
-        }
-        _drop_legacy_detail_fields(updated_plan)
-        updated_plan["entities"] = [
-            {
-                **entity,
-                "detail_status": "pending_user_confirmation",
-            }
-            if isinstance(entity, dict)
-            and str(entity.get("id") or "") == selected_entity_id
-            else entity
-            for entity in updated_plan.get("entities", [])
-        ]
-        updated_plan["detail_confirmation_summary"] = {
-            "confirmed_pages": 0,
-            "confirmed_endpoints": 0,
-            "confirmed_entities": 0,
-            "total_pages": 0,
-            "total_endpoints": 0,
-            "total_entities": 1,
             "mode": "entity_review",
-        }
-        return updated_plan
-
-    endpoint_review_details: list[dict] = []
-    endpoint_review_keys: set[tuple[str, str]] = set()
-    for page in pages:
-        pageId = page.get("pageId") if isinstance(page, dict) else None
-        if not pageId:
-            continue
-        references = extract_page_detail_context(updated_plan, pageId).get("references", {})
-        for dependency in references.get("endpoint_dependencies", []):
-            if not isinstance(dependency, dict):
-                continue
-            api_contract_id, endpoint_id = _resolve_endpoint_dependency(
-                updated_plan,
-                dependency,
-            )
-            detail_key = (api_contract_id, endpoint_id)
-            if detail_key in endpoint_review_keys:
-                continue
-            existing_detail = _find_formal_endpoint_detail(
-                updated_plan,
-                api_contract_id,
-                endpoint_id,
-            )
-            if existing_detail is None or regenerate_endpoint_details:
-                updated_plan, existing_detail = _generate_endpoint_detail_plan(
-                    updated_plan,
-                    api_contract_id,
-                    endpoint_id,
-                    workspace_root,
-                    user_request=user_request,
-                    enforce_entity_gate=enforce_entity_gate,
-                )
-            if str(existing_detail.get("status") or "") != "confirmed":
-                endpoint_review_details.append(existing_detail)
-                endpoint_review_keys.add(detail_key)
-
-    # 页面选择只携带需要共同确认的 EndpointDetail；视觉和产品语义由上游正式产物负责。
-    updated_plan["endpoint_detail_plans"] = endpoint_review_details
-
-    updated_plan["detail_confirmation_summary"] = {
-        "confirmed_pages": 0,
-        "confirmed_endpoints": 0,
-        "total_pages": 0,
-        "total_endpoints": len(endpoint_review_details),
-        "mode": "batch_review",
-    }
-    return updated_plan
-
-
-def _resolve_endpoint_dependency(
-    project_plan: dict,
-    dependency: dict,
-) -> tuple[str, str]:
-    """把页面 endpoint 引用解析为唯一的契约与接口标识。"""
-
-    endpoint_id = str(dependency.get("endpoint_id") or "").strip()
-    requested_contract_id = str(dependency.get("api_contract_id") or "").strip()
-    matches: list[str] = []
-    for contract in project_plan.get("api_contracts", []):
-        if not isinstance(contract, dict):
-            continue
-        contract_id = str(contract.get("id") or "")
-        if requested_contract_id and contract_id != requested_contract_id:
-            continue
-        if any(
-            isinstance(endpoint, dict) and str(endpoint.get("id") or "") == endpoint_id
-            for endpoint in contract.get("endpoints", []) or []
-        ):
-            matches.append(contract_id)
-    if len(matches) != 1:
-        raise ValueError(f"页面依赖无法唯一定位接口：{requested_contract_id}:{endpoint_id}")
-    return matches[0], endpoint_id
-
-
-def _find_formal_endpoint_detail(
-    project_plan: dict,
-    api_contract_id: str,
-    endpoint_id: str,
-) -> dict | None:
-    """查找已存在且内容完整的 EndpointDetail，避免页面设计重复生成。"""
-
-    return next(
-        (
-            detail
-            for detail in project_plan.get("endpoint_detail_plans", [])
-            if isinstance(detail, dict)
-            and str(detail.get("api_contract_id") or "") == api_contract_id
-            and str(detail.get("endpoint_id") or "") == endpoint_id
-            and _has_formal_endpoint_detail_content(detail)
+            **selected_state,
+            "targets": _selected_detail_design_targets(
+                review_plan,
+                "",
+                selected_entity_id=selected_entity_id,
+            ),
+        },
+        **selected_state,
+        "detail_plans": _selected_detail_plans(
+            review_plan,
+            "",
+            selected_entity_id=selected_entity_id,
         ),
-        None,
-    )
+        "entity_design_action": {},
+        "timeline": ["entity_source_binding"],
+    }
 
 
-def _generate_endpoint_detail_plan(
-    project_plan: dict,
-    api_contract_id: str,
-    endpoint_id: str,
-    workspace_root: str | None = None,
-    user_request: str = "",
-    enforce_entity_gate: bool = False,
-) -> tuple[dict, dict]:
-    """复用独立 endpoint 设计链路生成详情并挂回 ProjectPlan 内存态。"""
 
-    _detail_progress(
-        "开始生成接口详细设计。",
-        target_type="endpoint",
-        api_contract_id=api_contract_id,
-        endpoint_id=endpoint_id,
-    )
-    if enforce_entity_gate:
-        gate_errors, missing_entities = entity_bound_design_gate(
-            project_plan,
-            api_contract_id,
-        )
-        if gate_errors:
-            raise EntityDesignRequiredError(
-                "；".join(gate_errors),
-                missing_entities=missing_entities,
-            )
-    endpoint_context = extract_endpoint_detail_context(
-        project_plan,
-        api_contract_id,
-        endpoint_id,
-    )
-    _detail_progress(
-        "已定位接口契约，正在调用模型生成接口决策。",
-        target_type="endpoint",
-        api_contract_id=api_contract_id,
-        endpoint_id=endpoint_id,
-        method=endpoint_context.get("method"),
-        path=endpoint_context.get("path"),
-    )
-    detail = design_endpoint_with_chat_model(
-        project_plan,
-        endpoint_context,
-        user_request,
-    )
-    _detail_progress(
-        "接口决策已闭合，完整接口详情已确定性组装。",
-        target_type="endpoint",
-        api_contract_id=api_contract_id,
-        endpoint_id=endpoint_id,
-        design_source=detail.get("design_source"),
-    )
-    detail["status"] = "pending_user_confirmation"
-    detail["approved"] = False
-    updated_plan = attach_endpoint_detail_plan(project_plan, detail)
-    _detail_progress(
-        "接口详细设计已挂回 ProjectPlan，等待用户确认。",
-        target_type="endpoint",
-        api_contract_id=api_contract_id,
-        endpoint_id=endpoint_id,
-        detail_plan_id=detail.get("id"),
-    )
-    return updated_plan, detail
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _generate_entity_detail_plan(
@@ -1984,9 +1000,9 @@ def _entity_design_requires_revision(
         "detail_target_type": detail_target_type,
     }
     return {
-        "phase": "detail_confirmation",
+        "phase": "entity_source_binding",
         "status": "requires_user_input",
-        "clarification": detail_review_payload(
+        "clarification": entity_source_binding_payload(
             review_plan,
             selected_entity_id=selected_entity_id,
             detail_target_type=detail_target_type,
@@ -2011,9 +1027,9 @@ def _entity_design_requires_revision(
                 "",
                 selected_entity_id=selected_entity_id,
             ),
-            "detail_review_submission": {},
+            "entity_source_binding_submission": {},
             "entity_design_action": {},
-            "timeline": ["detail_confirmation"],
+            "timeline": ["entity_source_binding"],
         }
 
 
@@ -2448,127 +1464,36 @@ def _entity_ddl_approval_payload(ddl_execution: dict[str, Any]) -> dict[str, Any
     }
 
 
-def _entity_design_required_payload(error: EntityDesignRequiredError) -> dict:
-    """接口/页面详细设计前置门禁：要求先完成绑定实体的实体设计并确认。"""
-
-    payload = build_ask_user_payload(
-        [
-            AskUserQuestion(
-                header="实体设计门禁",
-                question=(
-                    "接口/页面详细设计开始前，必须先完成其绑定实体的实体设计并确认。"
-                    f"{error.reason}"
-                    "请先回到左侧大纲选择对应实体完成实体设计。"
-                ),
-                type="text",
-                placeholder="例如：先完成订单实体的数据源选择与绑定确认。",
-            )
-        ]
-    )
-    payload["mode"] = "entity_design_required"
-    payload["message"] = "存在未完成实体设计的实体，接口/页面详细设计已暂停。"
-    payload["reason"] = error.reason
-    payload["missing_entities"] = [
-        {
-            "entity_id": str(item.get("entity_id") or ""),
-            "entity_name": str(
-                item.get("entity_name") or item.get("entity_id") or ""
-            ),
-        }
-        for item in error.missing_entities
-        if isinstance(item, dict) and str(item.get("entity_id") or "").strip()
-    ]
-    return payload
 
 
-def _normalize_detail_page(page: dict) -> dict:
-    """把正式计划中的 id 兼容映射为细节设计内部使用的 pageId。"""
-
-    pageId = str(page.get("pageId") or page.get("id") or "").strip()
-    if not pageId or page.get("pageId") == pageId:
-        return page
-    return {**page, "pageId": pageId}
 
 
-def _drop_legacy_detail_fields(project_plan: dict) -> None:
-    """清理旧版数据源详细设计字段，避免新 endpoint 流程继续透传。"""
-
-    project_plan.pop("data_source_detail_plans", None)
-    project_plan.pop("data_source_detail_confirmation_summary", None)
 
 
 def _selected_detail_plans(
     project_plan: dict,
-    selectedPageId: str,
+    selectedPageId: str = "",
     *,
-    selected_api_contract_id: str | None = None,
-    selected_endpoint_id: str | None = None,
     selected_entity_id: str | None = None,
 ) -> list[dict]:
-    """只返回当前页面、当前 endpoint 或当前实体的详细设计。"""
+    """只返回当前 EntitySourceBinding 的实体绑定产物。"""
 
-    if selected_entity_id:
-        return [
-            detail
-            for detail in project_plan.get("entity_detail_plans", [])
-            if isinstance(detail, dict)
-            and str(detail.get("entity_id") or "") == selected_entity_id
-        ]
-    if selected_endpoint_id:
-        return [
-            detail
-            for detail in project_plan.get("endpoint_detail_plans", [])
-            if isinstance(detail, dict)
-            and str(detail.get("api_contract_id") or "") == str(selected_api_contract_id or "")
-            and str(detail.get("endpoint_id") or "") == selected_endpoint_id
-        ]
-
-    selected_page_details = [
+    del selectedPageId
+    if not selected_entity_id:
+        return []
+    return [
         detail
-        for detail in project_plan.get("page_detail_plans", [])
+        for detail in project_plan.get("entity_detail_plans", [])
         if isinstance(detail, dict)
-        and str(detail.get("pageId") or "") == selectedPageId
+        and str(detail.get("entity_id") or "") == selected_entity_id
     ]
-    return selected_page_details
 
 
-def _has_selected_page_detail(project_plan: dict, selectedPageId: str) -> bool:
-    """判断计划中是否已经包含当前页面的详情正文。"""
-
-    return any(
-        isinstance(detail, dict)
-        and str(detail.get("pageId") or "") == selectedPageId
-        for detail in project_plan.get("page_detail_plans", [])
-    )
 
 
-def _page_endpoint_details_complete(project_plan: dict, selectedPageId: str) -> bool:
-    """判断页面声明的全部 endpoint 是否已有可独立复用的正式详情。"""
-
-    references = extract_page_detail_context(project_plan, selectedPageId).get("references", {})
-    for dependency in references.get("endpoint_dependencies", []):
-        if not isinstance(dependency, dict):
-            return False
-        api_contract_id, endpoint_id = _resolve_endpoint_dependency(project_plan, dependency)
-        if _find_formal_endpoint_detail(project_plan, api_contract_id, endpoint_id) is None:
-            return False
-    return True
 
 
-def _has_selected_endpoint_detail(
-    project_plan: dict,
-    selected_api_contract_id: str,
-    selected_endpoint_id: str,
-) -> bool:
-    """判断计划中是否已经包含当前 endpoint 的详情正文。"""
 
-    return any(
-        isinstance(detail, dict)
-        and str(detail.get("api_contract_id") or "") == selected_api_contract_id
-        and str(detail.get("endpoint_id") or "") == selected_endpoint_id
-        and _has_formal_endpoint_detail_content(detail)
-        for detail in project_plan.get("endpoint_detail_plans", [])
-    )
 
 
 def _has_selected_entity_detail(
@@ -2584,64 +1509,32 @@ def _has_selected_entity_detail(
     )
 
 
-def _has_formal_endpoint_detail_content(detail: dict) -> bool:
-    """判断 endpoint 详情是否包含可供用户确认的正式设计内容，接口不依赖数据源。"""
-
-    return all(
-        isinstance(detail.get(field), dict) and bool(detail.get(field))
-        for field in ("data_usage", "interface_design")
-    )
 
 
 def _selected_detail_design_targets(
     project_plan: dict,
-    selectedPageId: str,
+    selectedPageId: str = "",
     *,
-    selected_api_contract_id: str | None = None,
-    selected_endpoint_id: str | None = None,
     selected_entity_id: str | None = None,
 ) -> list[dict]:
-    """把全量目标清单收敛到当前页面、当前 endpoint 或当前实体。"""
+    """把 EntitySourceBinding 目标收敛到当前实体。"""
 
     selected_plans = _selected_detail_plans(
         project_plan,
         selectedPageId,
-        selected_api_contract_id=selected_api_contract_id,
-        selected_endpoint_id=selected_endpoint_id,
         selected_entity_id=selected_entity_id,
     )
-    if selected_entity_id:
-        return [
-            {
-                "id": selected_entity_id,
-                "type": "entity",
-                "label": f"实体：{plan.get('entity_name') or selected_entity_id}",
-                "name": plan.get("entity_name") or selected_entity_id,
-                "description": plan.get("description") or "",
-            }
-            for plan in selected_plans
-        ]
-    if selected_endpoint_id:
-        return [
-            {
-                "id": f"{selected_api_contract_id}:{selected_endpoint_id}",
-                "type": "endpoint",
-                "label": f"接口：{plan.get('method')} {plan.get('path')}",
-                "name": plan.get("name") or selected_endpoint_id,
-                "description": plan.get("summary") or "",
-            }
-            for plan in selected_plans
-        ]
-    selected_ids = {
-        str(plan.get("pageId") or "")
-        for plan in selected_plans
-        if isinstance(plan, dict) and plan.get("pageId")
-    }
     return [
-        target
-        for target in detail_design_targets(project_plan)
-        if str(target.get("id") or "") in selected_ids
+        {
+            "id": str(plan.get("entity_id") or selected_entity_id or ""),
+            "type": "entity",
+            "label": f"实体：{plan.get('entity_name') or selected_entity_id}",
+            "name": plan.get("entity_name") or selected_entity_id,
+            "description": plan.get("description") or "",
+        }
+        for plan in selected_plans
     ]
+
 
 
 def _project_plan_json_path_for_state(state: ProjectState) -> str:
@@ -2907,23 +1800,6 @@ def _repair_project_plan_validation_errors(
     return repaired, _project_plan_validation_errors(repaired, state)
 
 
-def _project_plan_revision_required_payload(reason: str) -> dict:
-    """页面设计发现依赖缺口时阻止自由扩展，并要求修订 ProjectPlan。"""
-
-    payload = build_ask_user_payload(
-        [
-            AskUserQuestion(
-                header="需要修订计划",
-                question="页面设计需要尚未声明的 endpoint 或跳转目标，不能自由添加。请返回项目计划修订依赖后重新确认。",
-                type="text",
-                placeholder="例如：在入职页面的 endpoint_dependencies 中补充员工创建接口。",
-            )
-        ]
-    )
-    payload["mode"] = "project_plan_revision_required"
-    payload["message"] = "页面设计已停止，必须先修订并重新确认项目计划。"
-    payload["reason"] = reason
-    return payload
 
 
 def _project_plan_confirmed_payload(project_plan: dict) -> dict:
@@ -2947,14 +1823,14 @@ def _entity_design_confirmed_payload(
     """实体设计确认后的完成载荷：保留已确认实体设计的 review 摘要，
     前端据此继续展示确认卡片（锁定态），避免确认后上下文丢失。"""
 
-    payload = detail_review_payload(
+    payload = entity_source_binding_payload(
         project_plan,
-        selected_entity_id=selected_entity_id or None,
+        selected_entity_id=selected_entity_id,
         detail_target_type=detail_target_type or "entity",
     )
     payload["status"] = "clear"
     payload["message"] = (
-        f"实体 `{selected_entity_id}` 详细设计已确认并保存，可以继续后续流程。"
+        f"实体 `{selected_entity_id}` 的数据源绑定已确认并保存；请重新选择页面或 API 开始开发。"
     )
     return payload
 

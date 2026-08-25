@@ -137,9 +137,10 @@ export function isInitialPlanningPhase(lifecycle?: ApplicationLifecycle): boolea
   return Boolean(lifecycle && PLANNING_STAGES.has(lifecycle.initialization?.stage || ''))
 }
 
-/** 开发阶段的工作流节点 phase（详细设计 → 工作区检查 → DAG → Build → 测试确认）。 */
+/** 开发阶段的工作流节点 phase（开发前置检查 → 工作区检查 → DAG → Build → 测试确认）。 */
 const DEVELOPMENT_PHASE_NODES = new Set([
-  'detail_confirmation',
+  'development_readiness_gate',
+  'entity_source_binding',
   'inspect_workspace',
   'inspect_database_context',
   'prepare_build_tasks',
@@ -214,7 +215,8 @@ const INITIALIZATION_STAGE_LABELS: Record<string, string> = {
 
 /** 研发/测试期 execution.phase 的中文节点标签。 */
 const EXECUTION_PHASE_LABELS: Record<string, string> = {
-  detail_confirmation: '详细设计',
+  development_readiness_gate: '检查开发前置',
+  entity_source_binding: '实体数据源绑定',
   inspect_workspace: '检查工作区',
   inspect_database_context: '获取数据库信息',
   prepare_build_tasks: '生成执行计划',

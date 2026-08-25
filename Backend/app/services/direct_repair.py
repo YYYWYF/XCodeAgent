@@ -164,7 +164,7 @@ def repair_plan_handoff(plan: dict[str, Any]) -> dict[str, Any]:
         "requestedResources": (
             requested_resources if isinstance(requested_resources, list) else []
         ),
-        "workflowIntent": "detail_confirmation",
+        "workflowIntent": "development_readiness_gate",
     }
     return build_small_task_handoff(
         mode=(

@@ -113,7 +113,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
                 "status": "requires_user_input",
                 "message": message,
                 "reason": decision.reason,
-                "workflowIntent": "detail_confirmation",
+                "workflowIntent": "development_readiness_gate",
                 "questions": [
                     {
                         "id": "small_task_handoff",
@@ -616,7 +616,7 @@ def _direct_small_task_handoff(stage_result: dict[str, Any]) -> dict[str, Any]:
 
     escalation = stage_result.get("escalation")
     escalation = escalation if isinstance(escalation, dict) else {}
-    target = str(escalation.get("workflowIntent") or "detail_confirmation")
+    target = str(escalation.get("workflowIntent") or "development_readiness_gate")
     reason = str(
         escalation.get("reason")
         or stage_result.get("summary")

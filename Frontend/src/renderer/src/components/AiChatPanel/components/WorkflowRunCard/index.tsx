@@ -137,7 +137,7 @@ export default function WorkflowRunCard({
   const clarificationQuestions = staleFrontendPerformanceConfirmation
     ? []
     : clarification?.questions || []
-  const entityDesignGate = clarification?.mode === 'entity_design_required'
+  const entityDesignGate = clarification?.mode === 'entity_source_binding_required'
   const gateQuestion = clarification?.questions?.[0]
   const entityGateEntities = (clarification?.missing_entities || []).filter((item) =>
     Boolean(
@@ -148,8 +148,9 @@ export default function WorkflowRunCard({
   )
   const entityGateAnswerKey = gateQuestion
     ? clarificationQuestionKey(gateQuestion, 0)
-    : 'entity_design_required'
-  const detailReview = clarification?.mode === 'detail_review' ? clarification.review : undefined
+    : 'entity_source_binding_required'
+  const detailReview =
+    clarification?.mode === 'entity_source_binding' ? clarification.review : undefined
   // 实体设计评审：确认对象包含实体目标或实体设计摘要时，视为实体设计场景，
   // 此时裁剪卡片顶部的等待提示与“已生成产物”列表，避免与实体面板信息重复。
   const entityDesignReview = Boolean(
@@ -429,7 +430,7 @@ export default function WorkflowRunCard({
                 onSubmitClarification?.(workflow, { entity_design: action })
               }
               onConfirm={(submission) =>
-                onSubmitClarification?.(workflow, { detail_review: submission })
+                onSubmitClarification?.(workflow, { entity_source_binding: submission })
               }
               review={detailReview}
               workspaceRoot={workspaceRoot}
@@ -1837,8 +1838,8 @@ export function buildClarificationContinuationMessage(
   const clarification = workflowClarification(workflow)
   const acceptanceMessage = pageAcceptanceContinuationMessage(clarification, answers)
   if (acceptanceMessage) return acceptanceMessage
-  if (clarification?.mode === 'detail_review' && answers.detail_review) {
-    const submission = answers.detail_review
+  if (clarification?.mode === 'entity_source_binding' && answers.entity_source_binding) {
+    const submission = answers.entity_source_binding
     if (
       typeof submission === 'object' &&
       !Array.isArray(submission) &&
@@ -1847,7 +1848,7 @@ export function buildClarificationContinuationMessage(
       return '已整体审阅并确认全部页面和数据源设计，请合并本次结构化修改后继续。'
     }
   }
-  if (clarification?.mode === 'detail_review' && answers.entity_design) {
+  if (clarification?.mode === 'entity_source_binding' && answers.entity_design) {
     const actionMessage = entityDesignActionContinuationMessage(answers.entity_design)
     if (actionMessage) return actionMessage
   }

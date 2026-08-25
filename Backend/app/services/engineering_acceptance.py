@@ -411,7 +411,7 @@ def _contract_binding_check(
         )
     else:
         description = (
-            f"页面必须绑定已确认接口 {endpoint_text}，并引用 PageDetail 声明的响应绑定字段。"
+            f"页面必须绑定已确认接口 {endpoint_text}，并引用 PageImplementationContract 声明的响应绑定字段。"
         )
     return _check(
         task,
@@ -471,34 +471,28 @@ def _confirmed_endpoint_source_types(
     context: dict[str, Any],
     executable: dict[str, Any],
 ) -> dict[tuple[str, str], str]:
-    """从已确认 EndpointDetail 提取数据来源，并覆盖 ProjectPlan 中的旧来源声明。"""
+    """从当前范围已确认实体绑定推导接口数据来源。"""
 
-    details = [
-        *_dict_items(context.get("direct_endpoint_details")),
-        *_dict_items(executable.get("endpoint_detail_plans")),
+    entity_designs = [
+        *_dict_items(context.get("entity_designs")),
+        *_dict_items(executable.get("entity_designs")),
     ]
-    direct_detail = _dict_value(context.get("endpoint_detail"))
-    if direct_detail:
-        details.append(direct_detail)
+    source_types = [
+        str(detail.get("data_source_type") or "").lower()
+        for detail in entity_designs
+        if str(detail.get("data_source_type") or "").strip()
+    ]
+    source_type = source_types[0] if len(set(source_types)) == 1 else "mixed" if source_types else ""
     result: dict[tuple[str, str], str] = {}
-    for detail in details:
-        endpoint_id = str(detail.get("endpoint_id") or detail.get("id") or "")
-        if endpoint_id.startswith("endpoint_detail:"):
-            endpoint_id = endpoint_id.rsplit(":", 1)[-1]
-        if not endpoint_id:
-            continue
-        contract_id = str(detail.get("api_contract_id") or "")
-        decision = _dict_value(detail.get("endpoint_decision"))
-        origin = _dict_value(decision.get("data_origin")) or _dict_value(
-            detail.get("data_origin")
-        )
-        effective_source = _dict_value(origin.get("effective_source"))
-        source_type = str(
-            effective_source.get("kind") or origin.get("source_type") or ""
-        ).lower()
-        if source_type:
-            result[(contract_id, endpoint_id)] = source_type
-            result.setdefault(("", endpoint_id), source_type)
+    if not source_type:
+        return result
+    for contract in _dict_items(executable.get("api_contracts")):
+        contract_id = str(contract.get("id") or "")
+        for endpoint in _dict_items(contract.get("endpoints")):
+            endpoint_id = str(endpoint.get("id") or "")
+            if endpoint_id:
+                result[(contract_id, endpoint_id)] = source_type
+                result.setdefault(("", endpoint_id), source_type)
     return result
 
 
@@ -540,9 +534,7 @@ def _page_response_bindings(executable: dict[str, Any]) -> dict[str, list[str]]:
     """按 endpoint 汇总页面实际绑定的响应字段，避免要求页面消费完整 Schema。"""
 
     result: dict[str, list[str]] = {}
-    details = _dict_items(executable.get("page_implementation_contracts")) or _dict_items(
-        executable.get("page_detail_plans")
-    )
+    details = _dict_items(executable.get("page_implementation_contracts"))
     for detail in details:
         bindings = detail.get("responseBindings") or detail.get("response_bindings")
         for binding in _dict_items(bindings):

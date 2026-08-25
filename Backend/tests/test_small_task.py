@@ -88,12 +88,12 @@ class SmallTaskScopeTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(database["workflowIntent"], "detail_confirmation")
+        self.assertEqual(database["workflowIntent"], "entity_source_binding")
         self.assertEqual(formal["workflowIntent"], "prepare_build_tasks")
         self.assertEqual(command_only["workflowIntent"], "prepare_build_tasks")
         self.assertEqual(
             workflow_target_for_small_task({"reasonCode": "new_page"}),
-            "detail_confirmation",
+            "project_planning",
         )
 
     def test_file_scope_allows_only_current_task_paths(self) -> None:
@@ -151,7 +151,7 @@ class SmallTaskScopeTests(unittest.TestCase):
                     "summary": "需要新增接口",
                     "escalation": {
                         "reasonCode": "new_api",
-                        "workflowIntent": "detail_confirmation",
+                        "workflowIntent": "project_planning",
                         "requestedPaths": ["Backend/app/api.py"],
                     },
                 }
@@ -159,7 +159,7 @@ class SmallTaskScopeTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "requires_workflow")
-        self.assertEqual(result["escalation"]["workflowIntent"], "detail_confirmation")
+        self.assertEqual(result["escalation"]["workflowIntent"], "project_planning")
         self.assertEqual(result["escalation"]["requestedPaths"], ["Backend/app/api.py"])
 
     def test_acceptance_local_fix_replaces_stale_repair_tasks(self) -> None:
@@ -380,7 +380,7 @@ class SmallTaskExecutionTests(unittest.TestCase):
                         "summary": "需要新增 API",
                         "escalation": {
                             "reasonCode": "new_api",
-                            "workflowIntent": "detail_confirmation",
+                            "workflowIntent": "project_planning",
                             "reason": "需要确认接口契约",
                         },
                         "packet": {},
@@ -405,7 +405,7 @@ class SmallTaskExecutionTests(unittest.TestCase):
         )
         self.assertEqual(
             result["clarification"]["workflowIntent"],
-            "detail_confirmation",
+            "project_planning",
         )
 
 

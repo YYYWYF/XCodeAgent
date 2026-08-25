@@ -52,9 +52,7 @@ def verify_contract_binding(
                 if not _backend_wire_field_present(root, field_source, source, field)
             ]
         elif api_source:
-            # source_type 来自 EndpointDetail.data_origin.effective_source.kind
-            # （frontend_mock / third_party / mysql_existing / mysql_new_table /
-            # needs_user_confirmation）或回退到 data_source.type（static 等）。
+            # source_type 来自已确认实体数据源绑定；static 表示前端内存数据。
             # 前端内存 Mock 与无后端来源不经过集中 service.ts，跳过 service.get
             # 与接口路径绑定检查，只校验 Schema 字段；真实后端来源仍要求 service 绑定。
             if not _is_frontend_mock_source(endpoint.get("source_type")):
@@ -86,10 +84,7 @@ def verify_contract_binding(
 def _is_frontend_mock_source(source_type: Any) -> bool:
     """判断来源是否为前端内存 Mock 或无后端来源，应跳过 service 绑定检查。
 
-    source_type 取自 EndpointDetail.data_origin.effective_source.kind，合法值包括
-    frontend_mock / third_party / mysql_existing / mysql_new_table /
-    needs_user_confirmation；回退场景下可能是 data_source.type（static 等）。
-    frontend_mock 与旧值 mock/static/none 都表示无本地后端 service 可绑定。
+    source_type 取自已确认实体数据源绑定。static/none 表示无本地后端 service。
     """
 
     return str(source_type or "").lower() in {

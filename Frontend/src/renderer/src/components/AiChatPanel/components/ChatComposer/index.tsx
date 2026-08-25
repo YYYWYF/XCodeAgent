@@ -28,7 +28,8 @@ const { TextArea } = Input
 const { Option } = Select
 
 const resumeNodeOptions = [
-  { value: 'detail_confirmation', label: 'detail_confirmation' },
+  { value: 'development_readiness_gate', label: 'development_readiness_gate' },
+  { value: 'entity_source_binding', label: 'entity_source_binding' },
   { value: 'inspect_workspace', label: 'inspect_workspace' },
   { value: 'inspect_database_context', label: 'inspect_database_context' },
   { value: 'prepare_build_tasks', label: 'prepare_build_tasks' },
@@ -73,7 +74,7 @@ export default function ChatComposer({
   copy,
   debugOnly = false,
   draft,
-  initialResumeFrom = 'detail_confirmation',
+  initialResumeFrom = 'development_readiness_gate',
   loading,
   onDraftChange,
   onInputModeChange,

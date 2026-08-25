@@ -6,9 +6,7 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from app.agents.main import page_designer, planner, requirements_analyzer
-from app.services.page_detail_plan import extract_page_detail_context
-from app.services.project_plan import create_project_plan
+from app.agents.main import planner, requirements_analyzer
 from app.services.requirement_spec import create_requirement_spec
 from app.tools.ask_user import ask_user
 
@@ -153,41 +151,6 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
         self.assertEqual(result["planned_by"]["agent"], "chat-model")
         self.assertEqual(result["planned_by"]["mode"], "direct")
 
-    def test_page_design_uses_direct_model_without_tools(self) -> None:
-        fake_model = FakeChatModel(AIMessage(content="Design the confirmed page."))
-        settings = SimpleNamespace(model_name="test-model", default_max_tokens=1024)
-        project_plan = create_project_plan(
-            create_requirement_spec("创建一个库存管理系统")
-        )
-        page_context = extract_page_detail_context(
-            project_plan,
-            project_plan["frontend_pages"][0]["pageId"],
-        )
-
-        with (
-            patch(
-                "app.agents.main.page_designer.Settings.from_env",
-                return_value=settings,
-            ) as from_env,
-            patch(
-                "app.agents.main.page_designer.create_chat_model",
-                return_value=fake_model,
-            ) as create_model,
-            patch("app.agents.create_agent_bundle") as bundle_factory,
-        ):
-            result = page_designer.design_page_with_chat_model(
-                project_plan,
-                page_context,
-            )
-
-        from_env.assert_called_once_with()
-        create_model.assert_called_once_with(settings)
-        bundle_factory.assert_not_called()
-        self.assertIsNone(fake_model.bound_tools)
-        self.assertIn("page-design model", fake_model.prompts[0])
-        self.assertEqual(result["design_source"], "direct_chat_model")
-        self.assertEqual(result["designed_by"]["agent"], "chat-model")
-        self.assertEqual(result["designed_by"]["mode"], "direct")
 
 
 if __name__ == "__main__":

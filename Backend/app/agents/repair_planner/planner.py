@@ -22,7 +22,7 @@ def _test_repair_planning_prompt(
         "Review the test report and revision requests. Decide whether bounded "
         "repair is possible for specialist code agents. "
         "Do not mark failed tests as passed. Do not silently change confirmed "
-        "requirements, PageDetail, or API contracts. Do not edit files or mutate "
+        "requirements, PageImplementationContract, or API contracts. Do not edit files or mutate "
         "workflow state. Base the plan on stdout_tail/stderr_tail or readable virtual "
         "workspace logs. If evidence is unavailable, choose terminal_failure rather "
         "than guessing a root cause.\n\n"

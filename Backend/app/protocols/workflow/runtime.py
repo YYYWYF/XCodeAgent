@@ -169,8 +169,8 @@ def _runtime_node_label(node_name: str, state: dict[str, Any]) -> str:
     """按本次运行目标动态生成节点展示名称，保持内部节点 id 稳定。"""
 
     detail_target_type = str(state.get("detail_target_type") or "")
-    if node_name == "detail_confirmation" and detail_target_type == "endpoint":
-        return "接口细节确认"
+    if node_name == "entity_source_binding":
+        return "实体数据源绑定"
     return _workflow_node_label(node_name)
 
 
@@ -275,7 +275,7 @@ def build_workflow_ag_ui_stream(
         workspace: str | None = None
         lifecycle_payload: dict[str, Any] | None = None
         workflow_scope = workflow_inputs.get("workflow_scope") or None
-        current_phase = "detail_confirmation"
+        current_phase = "development_readiness_gate"
         node_attempts: dict[str, int] = {}
         application_planning_resume_lock: asyncio.Lock | None = None
         application_planning_resume_lock_acquired = False
@@ -573,8 +573,8 @@ def build_workflow_ag_ui_stream(
                 if stream_mode == "custom":
                     progress = chunk if isinstance(chunk, dict) else {}
                     event_type = progress.get("type")
-                    if event_type == "detail_confirmation.progress":
-                        progress_node = str(progress.get("node_name") or "detail_confirmation")
+                    if event_type == "entity_source_binding.progress":
+                        progress_node = str(progress.get("node_name") or "entity_source_binding")
                         progress_attempt = _current_node_attempt(node_attempts, progress_node)
                         progress_detail = (
                             progress.get("detail")

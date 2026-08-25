@@ -150,7 +150,7 @@ type UseWorkflowConversationResult = {
       templateSourcePath?: string
     }
   ) => Promise<boolean>
-  handleStartEndpointDetailConfirmation: (target: {
+  handleStartEndpointDevelopment: (target: {
     apiContractId?: string
     endpointId: string
     endpointLabel: string
@@ -996,8 +996,8 @@ export function useWorkflowConversation({
     )
   }
 
-  /** 以用户选择的具体 endpoint 作为主 Workflow 细节设计起点。 */
-  const handleStartEndpointDetailConfirmation = async (target: {
+  /** 以用户选择的具体 endpoint 作为开发就绪检查起点。 */
+  const handleStartEndpointDevelopment = async (target: {
     apiContractId?: string
     endpointId: string
     endpointLabel: string
@@ -1010,7 +1010,7 @@ export function useWorkflowConversation({
       target.endpointLabel
     )
     return sendWorkflowMessage(
-      `${target.hasDetailPlan ? '查看已生成接口计划' : '开始设计接口'}：${target.endpointLabel}`,
+      `开始开发接口：${target.endpointLabel}`,
       {
         selectedApiContractId: target.apiContractId,
         selectedEndpointId: target.endpointId,
@@ -1023,12 +1023,12 @@ export function useWorkflowConversation({
         },
         endpointLabel: target.endpointLabel,
         sessionIdentity: identity,
-        titleFrom: `${target.hasDetailPlan ? '确认接口' : '设计接口'}：${target.endpointLabel}`
+        titleFrom: `开发接口：${target.endpointLabel}`
       }
     )
   }
 
-  /** 以用户选择的实体作为主 Workflow 细节设计起点，复用普通工作台会话。 */
+  /** 以用户选择的实体作为独立 EntitySourceBinding 起点。 */
   const handleStartEntityDetailConfirmation = async (target: {
     entityId: string
     entityLabel: string
@@ -1037,7 +1037,7 @@ export function useWorkflowConversation({
     if (!target.entityId || loading || workspaceBusy) return false
     const identity = await ensureEntitySession(target.entityId, target.entityLabel)
     return sendWorkflowMessage(
-      `${target.hasDetailPlan ? '查看已生成实体计划' : '开始设计实体'}：${target.entityLabel}`,
+      `${target.hasDetailPlan ? '查看实体数据源绑定' : '开始实体数据源绑定'}：${target.entityLabel}`,
       {
         selectedEntityId: target.entityId,
         selectedEntityLabel: target.entityLabel,
@@ -1046,7 +1046,7 @@ export function useWorkflowConversation({
         selectedEndpointId: '',
         detailTargetType: 'entity',
         sessionIdentity: identity,
-        titleFrom: `${target.hasDetailPlan ? '确认实体' : '设计实体'}：${target.entityLabel}`
+        titleFrom: `实体数据源绑定：${target.entityLabel}`
       }
     )
   }
@@ -1245,7 +1245,7 @@ export function useWorkflowConversation({
     handleRetryPlan,
     handleStopPlan,
     handleSend,
-    handleStartEndpointDetailConfirmation,
+    handleStartEndpointDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,

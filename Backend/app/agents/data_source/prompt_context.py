@@ -90,18 +90,9 @@ def data_source_execution_context(
     project_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """构造仅含当前 API、EndpointDetail 和完整 EntityDesign 的执行上下文。"""
+    """构造仅含当前 TechnicalPlan API 与完整实体数据源绑定的执行上下文。"""
 
     contract_ids, endpoint_ids, entity_ids = _task_scope_ids(tasks)
-    endpoint_details = [
-        dict(detail)
-        for detail in _dict_items(project_plan.get("endpoint_detail_plans"))
-        if str(detail.get("endpoint_id") or "") in endpoint_ids
-        and (
-            not contract_ids
-            or str(detail.get("api_contract_id") or "") in contract_ids
-        )
-    ]
     entity_designs = [
         dict(detail)
         for detail in _dict_items(project_plan.get("entity_detail_plans"))
@@ -115,7 +106,6 @@ def data_source_execution_context(
             endpoint_ids,
             entity_ids,
         ),
-        "endpoint_detail_plans": endpoint_details,
         "entity_designs": entity_designs,
     }
 
@@ -130,8 +120,8 @@ def _compact_task_source_refs(task: dict[str, Any]) -> dict[str, Any]:
         for key in (
             "type",
             "target",
-            "endpoint_detail",
-            "endpoint_details",
+            "technical_plan_endpoint",
+            "technical_plan_endpoints",
             "endpoint_ids",
             "entity_ids",
         )

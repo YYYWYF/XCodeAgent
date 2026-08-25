@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.services.detail_review import (
-    apply_detail_review_submission,
-    detail_review_payload,
+from app.services.entity_source_binding import (
+    apply_entity_source_binding_submission,
+    entity_source_binding_payload,
 )
 from app.services.entity_detail_plan import (
     attach_entity_detail_plan,
@@ -89,7 +89,7 @@ class EntityDetailPlanTests(unittest.TestCase):
             hydrated = hydrate_external_detail_designs(plan_path, compact)
 
             entity_ref = next(
-                item.get("detail_design")
+                item.get("source_binding")
                 for item in compact["entities"]
                 if item.get("id") == entity["id"]
             )
@@ -111,7 +111,7 @@ class EntityDetailPlanTests(unittest.TestCase):
         detail = create_entity_detail_plan(plan, entity)
         plan_with_detail = attach_entity_detail_plan(plan, detail)
 
-        payload = detail_review_payload(
+        payload = entity_source_binding_payload(
             plan_with_detail,
             selected_entity_id=entity["id"],
             detail_target_type="entity",
@@ -121,7 +121,7 @@ class EntityDetailPlanTests(unittest.TestCase):
         self.assertEqual(payload["review"]["entities"][0]["entity_id"], entity["id"])
         self.assertFalse(payload["review"]["summary"]["missingSelectedEntityPlan"])
 
-        missing = detail_review_payload(
+        missing = entity_source_binding_payload(
             plan,
             selected_entity_id="Missing",
             detail_target_type="entity",
@@ -136,7 +136,7 @@ class EntityDetailPlanTests(unittest.TestCase):
         detail = create_entity_detail_plan(plan, entity)
         plan_with_detail = attach_entity_detail_plan(plan, detail)
 
-        confirmed = apply_detail_review_submission(
+        confirmed = apply_entity_source_binding_submission(
             plan_with_detail,
             {
                 "review_status": "confirmed",
@@ -161,7 +161,7 @@ class EntityDetailPlanTests(unittest.TestCase):
         plan_with_detail = attach_entity_detail_plan(plan, detail)
 
         with self.assertRaises(ValueError):
-            apply_detail_review_submission(
+            apply_entity_source_binding_submission(
                 plan_with_detail,
                 {
                     "review_status": "confirmed",

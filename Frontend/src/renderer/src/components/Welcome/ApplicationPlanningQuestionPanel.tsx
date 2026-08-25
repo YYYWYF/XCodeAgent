@@ -115,7 +115,7 @@ function panelTitle(mode?: string): string {
   if (mode === 'ui_design_confirmation') return '确认UI设计稿'
   if (mode === 'technical_plan_confirmation') return '确认技术规划'
   if (mode === 'technical_plan_generation_error') return '技术规划生成失败'
-  if (mode === 'detail_review') return '审核页面与数据源细节'
+  if (mode === 'entity_source_binding') return '确认实体数据源绑定'
   return '补充规划细节'
 }
 
@@ -485,7 +485,7 @@ export default function ApplicationPlanningQuestionPanel({
     'technical_plan_confirmation',
     'technical_plan_generation_error',
     'requirement_spec_confirmation',
-    'detail_review',
+    'entity_source_binding',
   ])
   if (
     !knownConfirmationModes.has(clarification.mode || '') &&
@@ -634,7 +634,7 @@ export default function ApplicationPlanningQuestionPanel({
     )
   }
 
-  if (clarification.mode === 'detail_review' && clarification.review) {
+  if (clarification.mode === 'entity_source_binding' && clarification.review) {
     return (
       <section className={cx('planning-question-panel', 'is-detail-review')}>
         <PlanningPanelHeader
@@ -644,7 +644,7 @@ export default function ApplicationPlanningQuestionPanel({
         />
         <DetailReview
           disabled={disabled}
-          onConfirm={(submission) => onSubmit(workflow, { detail_review: submission })}
+          onConfirm={(submission) => onSubmit(workflow, { entity_source_binding: submission })}
           review={clarification.review}
         />
       </section>

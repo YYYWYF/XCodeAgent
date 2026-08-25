@@ -276,7 +276,7 @@ def project_build_context_output(
         "apiContractIds": _compact_strings(
             {
                 str(detail.get("api_contract_id") or "")
-                for detail in build_context.get("direct_endpoint_details") or []
+                for detail in build_context.get("direct_endpoint_contracts") or []
                 if isinstance(detail, dict) and detail.get("api_contract_id")
             },
             item_limit=200,
@@ -313,7 +313,7 @@ def project_contract_validation_output(
         "checkedApiContractIds": _compact_strings(
             {
                 str(detail.get("api_contract_id") or "")
-                for detail in build_context.get("direct_endpoint_details") or []
+                for detail in build_context.get("direct_endpoint_contracts") or []
                 if isinstance(detail, dict) and detail.get("api_contract_id")
             },
             item_limit=200,

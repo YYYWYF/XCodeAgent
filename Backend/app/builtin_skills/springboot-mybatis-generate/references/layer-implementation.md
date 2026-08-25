@@ -38,20 +38,20 @@
 - Mapper 继承 `BaseMapper<PO>`，基础单表能力优先使用 MyBatis-Plus。
 - Mapper XML 只承载当前 endpoint 确实需要的联表、聚合、动态筛选或自定义 SQL；基础 CRUD 不创建空 XML 或重复 SQL。
 - Repository 接口只声明当前 endpoint 和已存在模块需要的领域操作，不强制补齐五个通用 CRUD 方法。
-- RepositoryImpl 注入 Mapper 与 Converter，查询条件、唯一性判断和分页行为必须与 EndpointDetail 一致。
+- RepositoryImpl 注入 Mapper 与 Converter，查询条件和分页行为必须与 TechnicalPlan Endpoint 的参数及 Schema 一致。
 - 逻辑删除、审计字段及租户过滤沿用项目和表的既有约定，不能凭空添加。
 
 ## 应用服务阶段
 
 - ApplicationService 编排 DTO/Entity、Repository 和业务决策，不直接操作 Mapper。
-- 写操作按 EndpointDetail 的 `transaction_required` 决定事务边界。
+- 写操作按 Spring 事务约定和实际持久化边界决定事务范围。
 - 零匹配、多匹配、唯一性冲突和返回状态等行为必须与已确认 endpoint 决策一致。
 - 只实现当前契约需要的方法；复用已有服务时做精确增量修改。
 
 ## Controller 阶段
 
 - 使用项目现有响应封装、异常处理、校验注解和鉴权方式。
-- HTTP method、path、请求 Schema、响应 Schema、状态码和错误码严格来自当前 API Contract 与 EndpointDetail。
+- HTTP method、path、请求 Schema、响应 Schema、状态码、错误码和执行语义严格来自当前 TechnicalPlan API Contract。
 - Controller 只做协议适配和参数校验，业务判断放入 ApplicationService。
 - 同一业务模块已有 Controller 时优先增加方法，不能为每个 endpoint 重复创建 Controller。
 

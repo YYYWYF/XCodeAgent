@@ -12,12 +12,7 @@ from app.protocols.workflow.definition import (
     WORKFLOW_NODE_LABELS,
     WORKFLOW_STATIC_NEXT_NODES,
 )
-from app.services.page_detail_plan import endpoint_bound_entity_summaries
 from app.workspace.code_changes import merge_code_change_sets
-from app.workspace.plan_documents import (
-    render_endpoint_detail_markdown,
-    render_page_detail_markdown,
-)
 
 
 def _requirements_confirmation_projection(result: dict[str, Any]) -> dict[str, bool]:
@@ -112,7 +107,7 @@ def _workflow_start_node(
     resume_from: str | None,
     workflow_scope: str | None = None,
 ) -> str:
-    """返回页面细节确认或其后的主 Workflow 展示入口。"""
+    """返回开发就绪检查、实体绑定或其后的主 Workflow 展示入口。"""
 
     if workflow_scope == "application_planning":
         return (
@@ -131,7 +126,7 @@ def _workflow_start_node(
     if resume_from == "inspect_database_context":
         return "prepare_build_tasks"
     supported = set(WORKFLOW_NODE_LABELS) - {"handle_failure"}
-    return resume_from if resume_from in supported else "detail_confirmation"
+    return resume_from if resume_from in supported else "development_readiness_gate"
 
 
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
@@ -174,16 +169,16 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if next_action == "await_user_input":
             return []
         return ["handle_failure"]
-    if node_name == "detail_confirmation":
+    if node_name == "development_readiness_gate":
         if update.get("status") == "requires_user_input":
             return []
-        if update.get("workflow_scope") == "application_planning":
-            return []
         return ["inspect_workspace"]
+    if node_name == "entity_source_binding":
+        return []
     if node_name == "project_planning":
         if update.get("status") == "requires_user_input":
             return []
-        return ["detail_confirmation"]
+        return ["development_readiness_gate"]
     if node_name == "inspect_workspace":
         return ["prepare_build_tasks"]
     if node_name == "prepare_build_tasks":
@@ -341,39 +336,37 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "requiresUserInput": update.get("status") == "requires_user_input",
             },
         }
-    if node_name == "detail_confirmation":
+    if node_name == "development_readiness_gate":
+        clarification = update.get("clarification")
+        return {
+            "message": (
+                "开发前置检查未通过，请先完成实体数据源绑定。"
+                if update.get("status") == "requires_user_input"
+                else "开发前置检查已通过。"
+            ),
+            "data": {
+                "clarification": clarification,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+                "developmentReadiness": update.get("development_readiness"),
+            },
+        }
+    if node_name == "entity_source_binding":
         clarification = update.get("clarification")
         status = update.get("status")
         if status == "requires_user_input":
-            review = (
-                clarification.get("review", {})
-                if isinstance(clarification, dict)
-                else {}
-            )
-            summary = review.get("summary", {}) if isinstance(review, dict) else {}
             return {
-                "message": (
-                    "页面/接口初版设计待确认，"
-                    f"页面={summary.get('page_count', 0)}，"
-                    f"接口={summary.get('endpoint_count', 0)}"
-                ),
+                "message": "实体数据源绑定待确认。",
                 "data": {
                     "clarification": clarification,
                     "requiresUserInput": True,
                     "detailSelection": update.get("detail_selection"),
                 },
             }
-        project_plan_update = _detail_confirmation_project_plan_update(update)
         return {
-            "message": _detail_confirmation_completed_message(update),
+            "message": "实体数据源绑定已确认；请重新选择页面或 API 开始开发。",
             "data": {
                 "detailSelection": update.get("detail_selection"),
                 "detailPlans": update.get("detail_plans", []),
-                **(
-                    {"projectPlanUpdate": project_plan_update}
-                    if project_plan_update
-                    else {}
-                ),
             },
         }
     if node_name == "inspect_workspace":
@@ -733,131 +726,6 @@ def _safe_path_items(value: Any, *, limit: int) -> list[dict[str, str]]:
     return items
 
 
-def _detail_confirmation_completed_message(update: dict[str, Any]) -> str:
-    detail_selection = update.get("detail_selection")
-    summary = {}
-    if isinstance(detail_selection, dict) and isinstance(
-        detail_selection.get("summary"),
-        dict,
-    ):
-        summary = detail_selection["summary"]
-    project_plan = update.get("project_plan")
-    if not summary and isinstance(project_plan, dict):
-        candidate = project_plan.get("detail_confirmation_summary")
-        if isinstance(candidate, dict):
-            summary = candidate
-
-    if summary.get("all_detail_targets_completed"):
-        return (
-            "页面/接口详细设计已全部完成，最终项目计划书已更新，"
-            "准备进入任务拆分。"
-        )
-    remaining = summary.get("remaining_total")
-    if isinstance(remaining, int):
-        return f"项目计划书已更新，剩余待设计对象={remaining}"
-    return "项目计划书已更新"
-
-
-def _detail_confirmation_project_plan_update(
-    update: dict[str, Any],
-) -> dict[str, Any] | None:
-    """把本轮确认的页面与接口详情渲染为只读项目计划更新快照。"""
-
-    detail_plans = update.get("detail_plans")
-    if update.get("status") != "completed" or not isinstance(detail_plans, list):
-        return None
-
-    page_sections: list[dict[str, str]] = []
-    endpoint_sections: list[dict[str, str]] = []
-    for detail in detail_plans:
-        if not isinstance(detail, dict):
-            continue
-        page_id = str(detail.get("pageId") or "").strip()
-        endpoint_id = str(detail.get("endpoint_id") or "").strip()
-        if page_id:
-            content = _render_project_plan_page_update(detail)
-            if not content:
-                continue
-            page_sections.append(
-                {
-                    "id": f"page:{page_id}",
-                    "kind": "page",
-                    "title": str(detail.get("page_name") or page_id),
-                    "subtitle": str(detail.get("path") or ""),
-                    "content": content,
-                }
-            )
-            continue
-        if endpoint_id:
-            api_contract_id = str(detail.get("api_contract_id") or "").strip()
-            method = str(detail.get("method") or "GET").upper()
-            path = str(detail.get("path") or "").strip()
-            source_plan = update.get("project_plan")
-            bound_entities: list[dict[str, Any]] = []
-            if isinstance(source_plan, dict):
-                try:
-                    bound_entities = endpoint_bound_entity_summaries(
-                        source_plan,
-                        api_contract_id,
-                    )
-                except ValueError:
-                    # 只读展示层缺计划时降级为空引用，不阻断接口详情投影。
-                    bound_entities = []
-            content = render_endpoint_detail_markdown(
-                detail,
-                bound_entities=bound_entities,
-            ).strip()
-            if not content:
-                continue
-            endpoint_sections.append(
-                {
-                    "id": f"endpoint:{api_contract_id}:{endpoint_id}",
-                    "kind": "endpoint",
-                    "title": f"{method} {path}".strip() or endpoint_id,
-                    "subtitle": (
-                        f"API 契约 · {api_contract_id}"
-                        if api_contract_id
-                        else endpoint_id
-                    ),
-                    "content": content,
-                }
-            )
-
-    sections = [*page_sections, *endpoint_sections]
-    if not sections:
-        return None
-
-    selected_page_id = str(update.get("selectedPageId") or "").strip()
-    selected_endpoint_id = str(update.get("selected_endpoint_id") or "").strip()
-    target_type = str(update.get("detail_target_type") or "").strip()
-    if target_type not in {"page", "endpoint"}:
-        target_type = "endpoint" if selected_endpoint_id else "page"
-    target_id = (
-        selected_endpoint_id
-        if target_type == "endpoint"
-        else selected_page_id
-    ) or sections[0]["id"].split(":", 1)[-1]
-    raw_project_plan_path = str(update.get("project_plan_path") or "").strip()
-    document_name = (
-        Path(raw_project_plan_path).name
-        if raw_project_plan_path.lower().endswith(".md")
-        else "project-plan.md"
-    )
-    return {
-        "format": "markdown",
-        "readOnly": True,
-        "documentName": document_name,
-        "status": "confirmed",
-        "targetType": target_type,
-        "targetId": target_id,
-        "summary": {
-            "pageCount": len(page_sections),
-            "endpointCount": len(endpoint_sections),
-        },
-        "sections": sections,
-    }
-
-
 def _prepare_build_tasks_input_message(
     clarification: Any,
     question_count: int,
@@ -868,7 +736,7 @@ def _prepare_build_tasks_input_message(
     messages = {
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "build_prerequisite_error": "Build DAG 的正式产物或模板前置条件未满足，已返回上游流程。",
-        "build_context_error": "当前构建范围缺少已确认的实现详情，已返回详细设计流程。",
+        "build_context_error": "当前构建范围缺少已确认的实体数据源绑定或技术契约。",
         "api_contract_consistency_error": "当前构建范围的 API 契约校验未通过，已阻止代码生成。",
         "build_task_plan_validation_error": "Build DAG 校验未通过，平台已停止代码生成。",
         "build_task_plan_generation_error": "Build DAG 自动重生成未得到有效任务计划，平台已停止代码生成。",
@@ -876,28 +744,6 @@ def _prepare_build_tasks_input_message(
     if mode in messages:
         return messages[mode]
     return f"当前构建准备需要输入，待确认问题={question_count}"
-
-
-def _render_project_plan_page_update(detail: dict[str, Any]) -> str:
-    """渲染页面更新正文，同时移除外置详情文件的宿主路径。"""
-
-    references = (
-        detail.get("references")
-        if isinstance(detail.get("references"), dict)
-        else {}
-    )
-    safe_detail = {
-        **detail,
-        "references": {
-            **references,
-            "endpoint_detail_refs": [],
-        },
-    }
-    content = render_page_detail_markdown(safe_detail)
-    return content.replace(
-        "\nEndpointDetail 独立产物引用：\n- 无\n",
-        "\n",
-    ).strip()
 
 
 def _workflow_event(
@@ -1065,7 +911,8 @@ def _workflow_user_input_message(
         "technical_plan_confirmation": "技术规划已生成，请确认后继续。",
         "technical_plan_generation_error": "技术规划未通过校验，请重新生成。",
         "batch_review": "页面与数据源设计已生成，请确认后继续。",
-        "detail_review": "页面与数据源设计已生成，请确认后继续。",
+        "entity_source_binding": "实体数据源绑定已生成，请确认后继续。",
+        "entity_source_binding_required": "请先完成当前目标依赖实体的数据源绑定。",
         "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",
         "small_task_workflow_handoff": "小任务需要确认后转入正式工作流。",
         "unit_test_confirmation": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",

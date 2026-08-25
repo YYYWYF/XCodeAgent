@@ -421,8 +421,8 @@ class EngineeringAcceptanceTests(unittest.TestCase):
         self.assertFalse(errors)
         self.assertEqual([item["kind"] for item in evidence], ["file_operation"])
 
-    def test_confirmed_endpoint_detail_overrides_project_plan_source_type(self) -> None:
-        """已确认 EndpointDetail 的 third_party 来源必须覆盖 ProjectPlan 的旧 database 声明。"""
+    def test_confirmed_entity_binding_supplies_endpoint_source_type(self) -> None:
+        """接口来源必须从已确认 EntitySourceBinding 推导。"""
 
         task = {
             "id": "backend-leave-list",
@@ -433,18 +433,8 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             ],
         }
         context = self._contract_context()
-        context["direct_endpoint_details"] = [
-            {
-                "api_contract_id": "leave-api",
-                "endpoint_id": "leave.list",
-                "status": "confirmed",
-                "endpoint_decision": {
-                    "data_origin": {
-                        "source_type": "third_party",
-                        "effective_source": {"kind": "third_party"},
-                    }
-                },
-            }
+        context["executable_details"]["entity_designs"] = [
+            {"entity_id": "Leave", "data_source_type": "external_api"}
         ]
 
         compiled = compile_engineering_acceptance([task], context)[0]
@@ -456,7 +446,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
 
         self.assertEqual(
             contract_check["expected"]["endpoints"][0]["source_type"],
-            "third_party",
+            "external_api",
         )
 
     def test_backend_contract_requires_explicit_snake_case_wire_mapping(self) -> None:

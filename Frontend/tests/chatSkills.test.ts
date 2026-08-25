@@ -1153,7 +1153,7 @@ test('旧会话从节点完成事件恢复 DAG 生成详情', () => {
   assert.equal(steps?.[0].dagGeneration?.tasks[0]?.id, 'page-home')
 })
 
-test('页面细节确认把只读计划更新挂到正确执行轮次并默认展开', () => {
+test('实体数据源绑定把只读计划更新挂到正确执行轮次并默认展开', () => {
   const projectPlanUpdate = readProjectPlanUpdate({
     format: 'markdown',
     readOnly: true,
@@ -1175,7 +1175,7 @@ test('页面细节确认把只读计划更新挂到正确执行轮次并默认�
         kind: 'endpoint',
         title: 'GET /api/inventory',
         subtitle: 'API 契约 · inventory-api',
-        content: '# 接口详细设计：GET /api/inventory\n\n## 一、数据用途\n\n- 用途：查询库存'
+        content: '# 实体数据源绑定：GET /api/inventory\n\n## 一、数据用途\n\n- 用途：查询库存'
       }
     ]
   })
@@ -1184,23 +1184,23 @@ test('页面细节确认把只读计划更新挂到正确执行轮次并默认�
   const steps = processStepsForDisplay(
     [
       {
-        id: 'workflow:detail_confirmation',
+        id: 'workflow:entity_source_binding',
         kind: 'workflow',
         status: 'completed',
-        title: '已完成 页面细节确认',
+        title: '已完成 实体数据源绑定',
         detail: '项目计划书已更新',
         sequence: 1,
-        nodeName: 'detail_confirmation',
+        nodeName: 'entity_source_binding',
         attempt: 1
       },
       {
-        id: 'workflow:detail_confirmation:2',
+        id: 'workflow:entity_source_binding:2',
         kind: 'workflow',
         status: 'completed',
-        title: '已完成 页面细节确认',
+        title: '已完成 实体数据源绑定',
         detail: '项目计划书已更新',
         sequence: 2,
-        nodeName: 'detail_confirmation',
+        nodeName: 'entity_source_binding',
         attempt: 2
       }
     ],
@@ -1211,7 +1211,7 @@ test('页面细节确认把只读计划更新挂到正确执行轮次并默认�
       events: [
         {
           type: 'workflow.node.completed',
-          nodeName: 'detail_confirmation',
+          nodeName: 'entity_source_binding',
           status: 'completed',
           attempt: 2,
           data: { detail: { projectPlanUpdate } }
@@ -1255,8 +1255,8 @@ test('损坏或缺失的计划更新快照继续使用旧动作摘要', () => {
     events: [
       {
         type: 'workflow.node.completed',
-        nodeName: 'detail_confirmation',
-        node: { label: '页面细节确认' },
+        nodeName: 'entity_source_binding',
+        node: { label: '实体数据源绑定' },
         status: 'completed',
         message: '项目计划书已更新'
       }

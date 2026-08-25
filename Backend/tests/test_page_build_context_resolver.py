@@ -12,67 +12,40 @@ from app.graph.nodes.tasks import _scoped_contract_validation_plan
 from tests.entity_design_test_utils import confirm_entity_designs
 
 
-def _detail_ref(path: str, *, status: str = "confirmed") -> dict:
-    """构造外置详情 artifact 的轻量引用。"""
-
-    return {
-        "status": status,
-        "json_path": path,
-        "sha256": f"sha-{path}",
-    }
-
-
 def _write_json(path: Path, payload: dict) -> None:
-    """把测试详情写入临时工作区。"""
+    """把测试计划写入临时工作区。"""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _project_plan(workspace: Path) -> tuple[dict, Path]:
-    """构造 PageDetail 与 EndpointDetail 均独立外置的 ProjectPlan。"""
+    """构造带页面实现契约、TechnicalPlan Endpoint 与实体绑定的计划。"""
 
     plan_path = workspace / ".xcodeagent/plans/project-plan.json"
-    _write_json(
-        workspace / ".xcodeagent/plans/pages/page--orders.json",
-        {
-            "pageId": "orders",
-            "status": "confirmed",
-            "references": {"endpoint_dependencies": [{"endpoint_id": "orders.list"}]},
-        },
-    )
-    _write_json(
-        workspace / ".xcodeagent/plans/pages/page--customers.json",
-        {
-            "pageId": "customers",
-            "status": "confirmed",
-            "references": {"endpoint_dependencies": [{"endpoint_id": "customers.list"}]},
-        },
-    )
-    for contract_id, endpoint_id in (
-        ("orders-api", "orders.list"),
-        ("customers-api", "customers.list"),
-    ):
-        _write_json(
-            workspace
-            / f".xcodeagent/plans/endpoints/endpoint--{contract_id}--{endpoint_id}.json",
-            {
-                "api_contract_id": contract_id,
-                "endpoint_id": endpoint_id,
-                "status": "confirmed",
-            },
-        )
     plan = {
         "frontend_pages": [
             {
                 "pageId": "orders",
-                "detail_design": _detail_ref(".xcodeagent/plans/pages/page--orders.json"),
                 "references": {"permissions": ["admin"]},
             },
             {
                 "pageId": "customers",
-                "detail_design": _detail_ref(".xcodeagent/plans/pages/page--customers.json"),
                 "references": {"permissions": ["admin"]},
+            },
+        ],
+        "page_implementation_contracts": [
+            {
+                "schema_version": "page-implementation-contract.v1",
+                "pageId": "orders",
+                "uiDesignRef": {"path": ".xcodeagent/ui-design/pages/Orders/index.tsx"},
+                "requiredEndpointIds": ["orders.list"],
+            },
+            {
+                "schema_version": "page-implementation-contract.v1",
+                "pageId": "customers",
+                "uiDesignRef": {"path": ".xcodeagent/ui-design/pages/Customers/index.tsx"},
+                "requiredEndpointIds": ["customers.list"],
             },
         ],
         "entities": [
@@ -94,9 +67,6 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
                 "endpoints": [
                     {
                         "id": "orders.list",
-                        "detail_design": _detail_ref(
-                            ".xcodeagent/plans/endpoints/endpoint--orders-api--orders.list.json"
-                        ),
                     }
                 ],
             },
@@ -106,9 +76,6 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
                 "endpoints": [
                     {
                         "id": "customers.list",
-                        "detail_design": _detail_ref(
-                            ".xcodeagent/plans/endpoints/endpoint--customers-api--customers.list.json"
-                        ),
                     }
                 ],
             },
@@ -138,16 +105,6 @@ class PageBuildContextResolverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             workspace_path = Path(workspace)
             plan, plan_path = _project_plan(workspace_path)
-            plan["page_implementation_contracts"] = [
-                {
-                    "schema_version": "page-implementation-contract.v1",
-                    "pageId": "orders",
-                    "uiDesignRef": {"path": ".xcodeagent/ui-design/pages/Orders/index.tsx"},
-                    "requiredEndpointIds": ["orders.list"],
-                }
-            ]
-            plan["frontend_pages"][0].pop("detail_design", None)
-
             context = resolve_target_build_context(
                 plan,
                 target_type="page",
@@ -155,15 +112,15 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 project_plan_path=plan_path,
             )
 
-        self.assertIsNone(context["page_detail"])
+        self.assertNotIn("page_detail", context)
         self.assertEqual(
             context["page_implementation_contract"]["pageId"],
             "orders",
         )
         self.assertEqual(context["required_endpoint_ids"], ["orders.list"])
 
-    def test_page_context_requires_and_loads_endpoint_details(self) -> None:
-        """页面 scope 必须加载 requiredEndpoints 对应的独立 EndpointDetail。"""
+    def test_page_context_uses_technical_plan_endpoint_contract(self) -> None:
+        """页面 scope 直接加载 requiredEndpoints 对应的 TechnicalPlan 契约。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan, plan_path = _project_plan(Path(workspace))
@@ -178,13 +135,13 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
         self.assertEqual(context["entity_ids"], ["Order"])
         self.assertEqual(context["entity_designs"][0]["data_source_type"], "database")
-        self.assertEqual(context["page_detail"]["pageId"], "orders")
+        self.assertEqual(context["page_implementation_contract"]["pageId"], "orders")
         self.assertEqual(
-            [detail["endpoint_id"] for detail in context["direct_endpoint_details"]],
+            [endpoint["id"] for endpoint in context["direct_endpoint_contracts"]],
             ["orders.list"],
         )
         self.assertEqual(
-            [reference["id"] for reference in context["source_refs"]["endpoint_details"]],
+            [reference["id"] for reference in context["source_refs"]["technical_plan_endpoints"]],
             ["orders.list"],
         )
         self.assertEqual(context["required_endpoint_ids"], ["orders.list"])
@@ -241,22 +198,11 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertEqual(validate_project_plan_dependencies(validation_plan), [])
         self.assertEqual(validate_api_contract_consistency(validation_plan), [])
 
-    def test_page_context_only_loads_direct_endpoint_detail(self) -> None:
-        """页面 scope 只加载当前页面 requiredEndpoints 对应的详情。"""
+    def test_page_context_only_loads_direct_endpoint_contract(self) -> None:
+        """页面 scope 只加载当前页面 requiredEndpoints 对应的 TechnicalPlan 契约。"""
 
         with tempfile.TemporaryDirectory() as workspace:
-            workspace_path = Path(workspace)
-            plan, plan_path = _project_plan(workspace_path)
-            detail_path = ".xcodeagent/plans/endpoints/endpoint--orders-api--orders.list.json"
-            plan["api_contracts"][0]["endpoints"][0]["detail_design"] = _detail_ref(detail_path)
-            _write_json(
-                workspace_path / detail_path,
-                {
-                    "api_contract_id": "orders-api",
-                    "endpoint_id": "orders.list",
-                    "status": "confirmed",
-                },
-            )
+            plan, plan_path = _project_plan(Path(workspace))
 
             context = resolve_target_build_context(
                 plan,
@@ -266,11 +212,11 @@ class PageBuildContextResolverTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            [detail["endpoint_id"] for detail in context["direct_endpoint_details"]],
+            [endpoint["id"] for endpoint in context["direct_endpoint_contracts"]],
             ["orders.list"],
         )
         self.assertEqual(
-            [reference["id"] for reference in context["source_refs"]["endpoint_details"]],
+            [reference["id"] for reference in context["source_refs"]["technical_plan_endpoints"]],
             ["orders.list"],
         )
 
@@ -288,38 +234,24 @@ class PageBuildContextResolverTests(unittest.TestCase):
                     project_plan_path=plan_path,
                 )
 
-    def test_page_context_rejects_missing_required_endpoint_detail(self) -> None:
-        """页面 requiredEndpoint 缺少独立详情时必须返回可定位错误。"""
+    def test_page_context_uses_endpoint_contract_without_external_artifact(self) -> None:
+        """页面 requiredEndpoint 直接消费 TechnicalPlan 契约。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan, plan_path = _project_plan(Path(workspace))
-            plan["api_contracts"][0]["endpoints"][0].pop("detail_design")
+            context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+            self.assertEqual(context["direct_endpoint_contracts"][0]["id"], "orders.list")
 
-            with self.assertRaisesRegex(ValueError, "EndpointDetail orders.list is missing"):
-                resolve_target_build_context(
-                    plan,
-                    target_type="page",
-                    target_id="orders",
-                    project_plan_path=plan_path,
-                )
-
-    def test_endpoint_context_requires_current_confirmed_endpoint_detail(self) -> None:
-        """endpoint scope 只暴露当前接口详情和它对应的 endpoint Unit。"""
+    def test_endpoint_context_uses_current_technical_plan_contract(self) -> None:
+        """endpoint scope 只暴露当前 TechnicalPlan 接口和对应 Unit。"""
 
         with tempfile.TemporaryDirectory() as workspace:
-            workspace_path = Path(workspace)
-            plan, plan_path = _project_plan(workspace_path)
-            detail_path = ".xcodeagent/plans/endpoints/endpoint--orders-api--orders.list.json"
-            plan["api_contracts"][0]["endpoints"][0]["detail_design"] = _detail_ref(detail_path)
-            _write_json(
-                workspace_path / detail_path,
-                {
-                    "api_contract_id": "orders-api",
-                    "endpoint_id": "orders.list",
-                    "status": "confirmed",
-                    "interface_design": {"route": "GET /orders"},
-                },
-            )
+            plan, plan_path = _project_plan(Path(workspace))
 
             context = resolve_target_build_context(
                 plan,
@@ -329,13 +261,13 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 project_plan_path=plan_path,
             )
 
-        self.assertIsNone(context["page_detail"])
+        self.assertNotIn("page_detail", context)
         self.assertEqual(context["target"]["type"], "endpoint")
         self.assertEqual(context["target"]["api_contract_id"], "orders-api")
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
         self.assertEqual(context["entity_ids"], ["Order"])
         self.assertEqual(context["entity_designs"][0]["entity_id"], "Order")
-        self.assertEqual(context["direct_endpoint_details"][0]["endpoint_id"], "orders.list")
+        self.assertEqual(context["direct_endpoint_contracts"][0]["id"], "orders.list")
         self._assert_no_source_or_contract_fields(context)
         self.assertFalse(any(unit.startswith("database:") for unit in context["required_unit_ids"]))
         self.assertEqual(
@@ -444,19 +376,13 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertFalse(any(unit.startswith("backend:endpoint:") for unit in context["required_unit_ids"]))
 
     def test_page_context_rejects_unknown_endpoint(self) -> None:
-        """页面外置详情引用未知 endpoint 时返回明确错误。"""
+        """页面实现契约引用未知 endpoint 时返回明确错误。"""
 
         with tempfile.TemporaryDirectory() as workspace:
-            workspace_path = Path(workspace)
-            plan, plan_path = _project_plan(workspace_path)
-            _write_json(
-                workspace_path / ".xcodeagent/plans/pages/page--orders.json",
-                {
-                    "pageId": "orders",
-                    "status": "confirmed",
-                    "references": {"endpoint_dependencies": [{"endpoint_id": "orders.unknown"}]},
-                },
-            )
+            plan, plan_path = _project_plan(Path(workspace))
+            plan["page_implementation_contracts"][0]["requiredEndpointIds"] = [
+                "orders.unknown"
+            ]
 
             with self.assertRaisesRegex(ValueError, "unknown endpoint orders.unknown"):
                 resolve_target_build_context(
@@ -465,63 +391,6 @@ class PageBuildContextResolverTests(unittest.TestCase):
                     target_id="orders",
                     project_plan_path=plan_path,
                 )
-
-    def test_page_context_rejects_missing_page_detail_file(self) -> None:
-        """页面详情引用文件不存在时返回明确错误。"""
-
-        with tempfile.TemporaryDirectory() as workspace:
-            plan, plan_path = _project_plan(Path(workspace))
-            plan["frontend_pages"][0]["detail_design"] = _detail_ref(
-                ".xcodeagent/plans/pages/missing.json"
-            )
-
-            with self.assertRaisesRegex(ValueError, "PageDetail orders detail file does not exist"):
-                resolve_target_build_context(
-                    plan,
-                    target_type="page",
-                    target_id="orders",
-                    project_plan_path=plan_path,
-                )
-
-    def test_page_context_rejects_unconfirmed_external_page_detail(self) -> None:
-        """页面外置详情未确认时返回明确错误。"""
-
-        with tempfile.TemporaryDirectory() as workspace:
-            workspace_path = Path(workspace)
-            plan, plan_path = _project_plan(workspace_path)
-            _write_json(
-                workspace_path / ".xcodeagent/plans/pages/page--orders.json",
-                {"pageId": "orders", "status": "draft"},
-            )
-
-            with self.assertRaisesRegex(ValueError, "PageDetail orders external detail is not confirmed"):
-                resolve_target_build_context(
-                    plan,
-                    target_type="page",
-                    target_id="orders",
-                    project_plan_path=plan_path,
-                )
-
-    def test_page_context_rejects_missing_endpoint_detail_file(self) -> None:
-        """requiredEndpoint 详情引用失效时不得生成缺少接口任务的页面 DAG。"""
-
-        with tempfile.TemporaryDirectory() as workspace:
-            plan, plan_path = _project_plan(Path(workspace))
-            plan["api_contracts"][0]["endpoints"][0]["detail_design"] = _detail_ref(
-                ".xcodeagent/plans/endpoints/missing.json"
-            )
-
-            with self.assertRaisesRegex(
-                ValueError,
-                "EndpointDetail orders.list detail file does not exist",
-            ):
-                resolve_target_build_context(
-                    plan,
-                    target_type="page",
-                    target_id="orders",
-                    project_plan_path=plan_path,
-                )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.build_context_resolver import resolve_target_build_context
+from app.services.development_readiness import development_readiness
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     merge_exact_duplicate_tasks,
@@ -77,6 +78,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         state,
         project_plan,
         workspace=workspace,
+        build_execution_scope=build_execution_scope,
         formal_artifacts=formal_artifacts,
     )
     if prerequisite_errors:
@@ -410,6 +412,7 @@ def _build_prerequisite_errors(
     project_plan: dict[str, Any],
     *,
     workspace: str | None,
+    build_execution_scope: dict[str, str] | None = None,
     formal_artifacts: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
     """在 DAG 生成前只读校验正式产物、模板 manifest 和当前运行时计划。"""
@@ -438,6 +441,28 @@ def _build_prerequisite_errors(
         errors.append("TechnicalPlan 缺失、类型不正确或未确认。")
     if not isinstance(project_plan, dict) or project_plan.get("artifact_type") != "technical-plan":
         errors.append("Build 运行时 project_plan 不是当前 TechnicalPlan 的只读投影。")
+    scope = build_execution_scope if isinstance(build_execution_scope, dict) else {}
+    target_type = str(scope.get("type") or "")
+    target_id = str(scope.get("targetId") or "")
+    if target_type in {"page", "endpoint"} and target_id:
+        try:
+            readiness = development_readiness(
+                project_plan,
+                target_type=target_type,
+                target_id=target_id,
+                api_contract_id=str(
+                    scope.get("apiContractId") or scope.get("api_contract_id") or ""
+                ).strip() or None,
+            )
+            if not readiness.get("ready"):
+                missing = "、".join(
+                    str(item.get("entity_name") or item.get("entity_id") or "")
+                    for item in readiness.get("missing_entities", [])
+                    if isinstance(item, dict)
+                )
+                errors.append(f"EntitySourceBinding 未完成：{missing}。")
+        except ValueError as exc:
+            errors.append(str(exc))
     if workspace:
         readiness = inspect_template_generation_readiness(workspace)
         errors.extend(
@@ -528,7 +553,7 @@ def _build_prerequisite_blocked_result(
                 header="Build 前置条件",
                 question=(
                     "当前正式产物、模板初始化或运行时上下文尚未就绪，DAG 不会修改上游产物。"
-                    "请返回对应的规划、模板初始化或 Workbench 详细设计流程处理。"
+                    "请返回对应的规划、模板初始化或 EntitySourceBinding 流程处理。"
                 ),
                 type="text",
                 placeholder="请按下方具体错误完成上游流程后重新进入 Build。",
@@ -546,7 +571,7 @@ def _build_prerequisite_blocked_result(
                 "ui_confirmation",
                 "technical_planning",
                 "application_lifecycle",
-                "detail_confirmation",
+                "entity_source_binding",
             ],
             "buildExecutionScope": build_execution_scope,
         }
@@ -1029,10 +1054,9 @@ def _resolve_build_context(
         return _add_reusable_task_context(context, build_task_plan)
     return _add_reusable_task_context({
         "target": {"type": "application", "id": "application"},
-        "page_detail": None,
         "page_implementation_contract": None,
-        "endpoint_detail": None,
-        "direct_endpoint_details": [],
+        "endpoint_contract": None,
+        "direct_endpoint_contracts": [],
         "endpoint_ids": [],
         "entity_ids": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
@@ -1058,12 +1082,8 @@ def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> d
 
     mode = _planning_context_mode(build_context)
     executable_details = _executable_details(project_plan, build_context)
-    if mode == "page":
-        executable_details.pop("endpoint_detail_plans", None)
-        executable_details.pop("entity_designs", None)
-    elif mode == "endpoint":
+    if mode == "endpoint":
         executable_details.pop("page_implementation_contracts", None)
-        executable_details.pop("page_detail_plans", None)
 
     allowed_unit_ids = list(
         build_context.get("planning_unit_ids")
@@ -1220,13 +1240,8 @@ def _skeleton_pages(project_plan: dict) -> list[dict]:
             "path": page.get("path"),
             "module_id": page.get("module_id"),
             "description": page.get("description"),
-            "detail_status": (
-                contract_status.get(str(page.get("pageId") or ""))
-                or (
-                    page.get("detail_design", {}).get("status")
-                    if isinstance(page.get("detail_design"), dict)
-                    else None
-                )
+            "implementation_contract_status": contract_status.get(
+                str(page.get("pageId") or "")
             ),
         }
         for page in project_plan_page_records(project_plan)
@@ -1326,11 +1341,8 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
             if build_context.get("target", {}).get("type") == "application"
             else []
         ),
-        "page_detail_plans": (
-            [build_context["page_detail"]] if build_context.get("page_detail") else []
-        ),
-        "endpoint_detail_plans": list(
-            build_context.get("direct_endpoint_details") or []
+        "endpoint_contracts": list(
+            build_context.get("direct_endpoint_contracts") or []
         ),
         "entity_designs": entity_designs,
         "api_contracts": [
@@ -1378,17 +1390,17 @@ def _scoped_contracts(
     if is_application:
         return all_contracts
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
-    detail_contract_ids = {
-        str(detail.get("api_contract_id") or "")
-        for detail in build_context.get("direct_endpoint_details") or []
-        if isinstance(detail, dict) and detail.get("api_contract_id")
+    target_contract_ids = {
+        str(endpoint.get("api_contract_id") or "")
+        for endpoint in build_context.get("direct_endpoint_contracts") or []
+        if isinstance(endpoint, dict) and endpoint.get("api_contract_id")
     }
     return [
         contract
         for contract in project_plan.get("api_contracts") or []
         if isinstance(contract, dict)
                         and (
-                                str(contract.get("id") or "") in detail_contract_ids
+                                str(contract.get("id") or "") in target_contract_ids
                                 or any(
                             isinstance(endpoint, dict)
                             and str(endpoint.get("id") or "") in endpoint_ids
@@ -1503,16 +1515,13 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
         "api_contracts": [
             _scoped_api_contract(contract, endpoint_ids) for contract in contracts
         ],
-        "page_detail_plans": (
-            [build_context["page_detail"]] if build_context.get("page_detail") else []
-        ),
         "page_implementation_contracts": (
             [build_context["page_implementation_contract"]]
             if build_context.get("page_implementation_contract")
             else []
         ),
-        "endpoint_detail_plans": list(
-            build_context.get("direct_endpoint_details") or []
+        "endpoint_contracts": list(
+            build_context.get("direct_endpoint_contracts") or []
         ),
     }
 

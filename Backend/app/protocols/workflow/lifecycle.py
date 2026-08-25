@@ -278,7 +278,8 @@ def _pending_interaction(
     interaction_type = {
         "repair_scope_confirmation": PendingInteractionType.REPAIR_SCOPE_CONFIRMATION,
         "test_phase_confirmation": PendingInteractionType.TEST_PHASE_CONFIRMATION,
-        "detail_review": PendingInteractionType.PAGE_DESIGN_CONFIRMATION,
+        "entity_source_binding": PendingInteractionType.ENTITY_SOURCE_BINDING,
+        "entity_source_binding_required": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "agent_approval": PendingInteractionType.AGENT_APPROVAL,
     }.get(mode, PendingInteractionType.PLAN_ADJUSTMENT)
     return interaction_type, clarification

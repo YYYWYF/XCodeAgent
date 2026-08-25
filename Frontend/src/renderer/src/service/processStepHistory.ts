@@ -9,7 +9,8 @@ import {
 import type { DagGenerationSnapshot, ProcessStepRecord } from './agUiAgent'
 
 const WORKFLOW_NODE_LABELS: Record<string, string> = {
-  detail_confirmation: '页面细节确认',
+  development_readiness_gate: '开发前置检查',
+  entity_source_binding: '实体数据源绑定',
   inspect_workspace: '扫描工作区代码',
   scan_workspace_code: '扫描工作区代码',
   inspect_database_context: '数据库上下文检查',
@@ -77,13 +78,13 @@ export function processStepsForDisplay(
   const planUpdate = completedProjectPlanUpdate(workflow)
   if (!planUpdate) return displaySteps
   const targetStepId = planUpdate.attempt
-    ? processStepId('detail_confirmation', planUpdate.attempt)
+    ? processStepId('entity_source_binding', planUpdate.attempt)
     : [...displaySteps]
         .reverse()
         .find(
           (step) =>
-            step.nodeName === 'detail_confirmation' ||
-            step.id.startsWith('workflow:detail_confirmation')
+            step.nodeName === 'entity_source_binding' ||
+            step.id.startsWith('workflow:entity_source_binding')
         )?.id
   return displaySteps.map((step) =>
     step.id === targetStepId ? { ...step, projectPlanUpdate: planUpdate.snapshot } : step
@@ -299,7 +300,7 @@ function completedWorkflowProcessSteps(
         ? completedDagGenerationSnapshot(detail, stateDelta, workflow)
         : undefined
     const projectPlanUpdate =
-      event.nodeName === 'detail_confirmation'
+      event.nodeName === 'entity_source_binding'
         ? readProjectPlanUpdate(detail.projectPlanUpdate)
         : undefined
     const step: ProcessStepRecord = {
@@ -405,17 +406,10 @@ function workflowStepNodeName(step: ProcessStepRecord): string {
   return nodeName
 }
 
-/** 根据 Workflow 目标类型动态返回节点展示名称，兼容 endpoint 详细设计历史。 */
-function workflowNodeLabel(nodeName: string, workflow: WorkflowRunPayload): string | undefined {
-  const detailTargetType =
-    workflow.state?.detailTargetType ||
-    workflow.result?.detailTargetType ||
-    workflow.summary.clarification?.review?.summary?.detailTargetType
-  if (nodeName === 'detail_confirmation' && detailTargetType === 'endpoint') {
-    return '接口细节确认'
-  }
-  if (nodeName === 'detail_confirmation' && detailTargetType === 'entity') {
-    return '实体设计'
+/** 返回当前 Workflow 节点的展示名称。 */
+function workflowNodeLabel(nodeName: string, _workflow: WorkflowRunPayload): string | undefined {
+  if (nodeName === 'entity_source_binding') {
+    return '实体数据源绑定'
   }
   return WORKFLOW_NODE_LABELS[nodeName]
 }
@@ -496,7 +490,7 @@ function completedProjectPlanUpdate(workflow: WorkflowRunPayload | undefined):
   const event = [...workflow.events]
     .reverse()
     .find(
-      (item) => item.nodeName === 'detail_confirmation' && item.type === 'workflow.node.completed'
+      (item) => item.nodeName === 'entity_source_binding' && item.type === 'workflow.node.completed'
     )
   if (!event) return undefined
   const detail = workflowEventDetail(event)

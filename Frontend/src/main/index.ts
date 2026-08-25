@@ -177,29 +177,8 @@ function detailFileStem(value: string, prefix: string): string {
   return `${prefix}${normalized || 'unknown'}`
 }
 
-/** 检查选中接口是否已经存在外置详情 JSON。 */
-async function endpointDetailPlanExists(
-  workspaceRoot: string,
-  apiContractId: string,
-  endpointId: string
-): Promise<boolean> {
-  const detailPath = path.join(
-    workspaceRoot,
-    '.xcodeagent',
-    'plans',
-    'endpoints',
-    `${detailFileStem(`${apiContractId}--${endpointId}`, 'endpoint--')}.json`
-  )
-  try {
-    const content = await fs.readFile(detailPath, 'utf8')
-    return Boolean(content.trim())
-  } catch {
-    return false
-  }
-}
-
-/** 读取选中实体的外置详情 JSON，未设计或读取失败时返回 undefined。 */
-async function readEntityDetailPlan(
+/** 读取选中实体的外置 EntitySourceBinding，未绑定或读取失败时返回 undefined。 */
+async function readEntitySourceBinding(
   workspaceRoot: string,
   entityId: string
 ): Promise<Record<string, unknown> | undefined> {
@@ -344,13 +323,6 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
           .toUpperCase()
         const endpointPath = String(endpointRecord.path || '').trim()
         if (!endpointPath) return []
-        const detailDesign =
-          endpointRecord.detail_design &&
-          typeof endpointRecord.detail_design === 'object' &&
-          !Array.isArray(endpointRecord.detail_design)
-            ? (endpointRecord.detail_design as Record<string, unknown>)
-            : {}
-        const hasDetailPlan = Boolean(detailDesign.json_path || endpointRecord.detail_plan_id)
         return [
           {
             apiContractId: contractId,
@@ -358,9 +330,9 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
             method,
             path: normalizeApiPath(endpointPath, '/'),
             summary: String(endpointRecord.summary || ''),
-            designed: hasDetailPlan,
-            detailPlanStatus: String(detailDesign.status || endpointRecord.detail_status || ''),
-            hasDetailPlan
+            designed: true,
+            detailPlanStatus: 'confirmed',
+            hasDetailPlan: true
           }
         ]
       })
@@ -391,11 +363,11 @@ function projectPlanEntities(value: unknown): WorkbenchEntityOption[] {
           }))
           .filter((field) => Boolean(field.name))
       : []
-    const detailDesign =
-      record.detail_design &&
-      typeof record.detail_design === 'object' &&
-      !Array.isArray(record.detail_design)
-        ? (record.detail_design as Record<string, unknown>)
+    const sourceBinding =
+      record.source_binding &&
+      typeof record.source_binding === 'object' &&
+      !Array.isArray(record.source_binding)
+        ? (record.source_binding as Record<string, unknown>)
         : {}
     const rawDataSource = record.data_source
     const dataSourceType =
@@ -410,33 +382,33 @@ function projectPlanEntities(value: unknown): WorkbenchEntityOption[] {
       purpose: normalizeWorkbenchNodeLabel(record.description || record.name, `实体 ${index + 1}`),
       dataSourceType,
       ...(fields.length > 0 ? { fields } : {}),
-      designed: Boolean(detailDesign.json_path || record.detail_plan_id),
-      detailPlanStatus: String(detailDesign.status || record.detail_status || ''),
-      hasDetailPlan: Boolean(detailDesign.json_path || record.detail_plan_id)
+      designed: Boolean(sourceBinding.json_path),
+      detailPlanStatus: String(sourceBinding.status || record.source_binding_status || ''),
+      hasDetailPlan: Boolean(sourceBinding.json_path)
     }
   })
 }
 
-/** 只根据外置实体详情文件补充每个实体的设计状态。 */
+/** 只根据外置 EntitySourceBinding 补充每个实体的绑定状态。 */
 async function mergeWorkbenchEntityStatus(
   workspaceRoot: string,
   entities: WorkbenchEntityOption[]
 ): Promise<WorkbenchEntityOption[]> {
   return Promise.all(
     entities.map(async (entity) => {
-      const detail = await readEntityDetailPlan(workspaceRoot, entity.id)
-      const hasDetailPlan = Boolean(detail)
+      const binding = await readEntitySourceBinding(workspaceRoot, entity.id)
+      const hasDetailPlan = Boolean(binding)
       return {
         ...entity,
         designed: hasDetailPlan,
         hasDetailPlan,
-        ...(detail ? { detail } : {})
+        ...(binding ? { detail: binding } : {})
       }
     })
   )
 }
 
-/** 初始化页面设计状态；TechnicalPlan 的实现契约不代表用户已经开始页面设计。 */
+/** 初始化页面开发状态；页面不再存在独立详设产物。 */
 function mergeWorkbenchPageStatus(
   pages: WorkbenchPageOption[],
   buildTaskPlan?: Record<string, unknown>
@@ -450,7 +422,7 @@ function mergeWorkbenchPageStatus(
   }))
 }
 
-/** 把页面叶子的详细设计状态回写到页面目录树，保留菜单层级不变。 */
+/** 把页面叶子的开发状态回写到页面目录树，保留菜单层级不变。 */
 function mergeWorkbenchPageTreeStatus(
   pageTree: WorkbenchPageTreeNode[],
   pagesById: Map<string, WorkbenchPageOption>
@@ -546,45 +518,16 @@ function pageBuildTaskSummary(
   }
 }
 
-/** 只根据外置接口详情文件补充每个 endpoint 的设计状态。 */
-async function mergeWorkbenchApiStatus(
-  workspaceRoot: string,
-  contracts: WorkbenchApiContract[]
-): Promise<WorkbenchApiContract[]> {
-  return Promise.all(
-    contracts.map(async (contract) => ({
-      ...contract,
-      endpoints: await Promise.all(
-        contract.endpoints.map(async (endpoint) => {
-          const hasDetailPlan = await endpointDetailPlanExists(
-            workspaceRoot,
-            endpoint.apiContractId,
-            endpoint.id
-          )
-          return {
-            ...endpoint,
-            designed: hasDetailPlan,
-            hasDetailPlan
-          }
-        })
-      )
-    }))
-  )
-}
-
-/** 判断是否已存在任意持久化详细设计（页面/接口/实体），用于首次设计解锁。 */
+/** 判断是否已存在实体数据源绑定，供工作台展示独立实体入口状态。 */
 async function pageDesignDirectoryHasEntries(workspaceRoot: string): Promise<boolean> {
-  for (const directory of ['pages', 'endpoints', 'entities']) {
-    try {
-      const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', directory))
-      if (entries.length > 0) return true
-    } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException
-      if (errnoException?.code === 'ENOENT') continue
-      throw error
-    }
+  try {
+    const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', 'entities'))
+    return entries.length > 0
+  } catch (error: unknown) {
+    const errnoException = error as NodeJS.ErrnoException
+    if (errnoException?.code !== 'ENOENT') throw error
+    return false
   }
-  return false
 }
 
 /** 校验当前正式规划产物，并从 ProductPlan/TechnicalPlan 投射工作台大纲。 */
@@ -693,7 +636,6 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     buildTaskPlan
   )
   const pagesById = new Map(pages.map((page) => [page.pageId, page]))
-  apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
   entities = await mergeWorkbenchEntityStatus(workspaceRoot, entities)
   const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
 

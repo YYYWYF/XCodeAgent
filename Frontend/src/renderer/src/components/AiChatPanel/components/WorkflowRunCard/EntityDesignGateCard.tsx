@@ -22,7 +22,7 @@ type EntityDesignGateCardProps = {
   onRetry: () => void
 }
 
-/** 实体设计门禁专用卡片：展示缺失实体并支持一键跳转设计、完成后再重新检测。 */
+/** 实体数据源绑定门禁卡片：展示缺失实体并支持一键跳转绑定、完成后再重新检测。 */
 export default function EntityDesignGateCard({
   disabled,
   explanation,
@@ -37,13 +37,13 @@ export default function EntityDesignGateCard({
           <ExclamationCircleOutlined />
         </span>
         <div className={cx('workflow-entity-gate-copy')}>
-          <Text strong>实体设计门禁</Text>
+          <Text strong>实体数据源绑定前置</Text>
           <Text type="secondary">{explanation}</Text>
         </div>
       </div>
       {entities.length > 0 ? (
         <div className={cx('workflow-entity-gate-list')}>
-          <Text type="secondary">请先完成以下实体的设计并确认：</Text>
+          <Text type="secondary">请先完成以下实体的数据源绑定并确认：</Text>
           {entities.map((entity) => {
             const entityId = String(entity.entity_id || '').trim()
             if (!entityId) return null
@@ -58,7 +58,7 @@ export default function EntityDesignGateCard({
                   size="small"
                   type="primary"
                 >
-                  前往设计
+                  前往绑定
                 </Button>
               </div>
             )
@@ -67,7 +67,7 @@ export default function EntityDesignGateCard({
       ) : null}
       <div className={cx('workflow-entity-gate-actions')}>
         <Text type="secondary">
-          完成实体设计后点击重新检测，继续生成页面/接口详细设计。
+          完成实体数据源绑定后点击重新检测，继续当前页面/API开发。
         </Text>
         <Button
           disabled={disabled}

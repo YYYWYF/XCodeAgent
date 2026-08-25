@@ -205,7 +205,7 @@ def build_small_task_handoff(
         if mode == "small_task_scope_confirmation"
         else (
             f"当前小任务无法安全直接完成：{reason or '需要正式工作流处理'}。"
-            f"建议转入“{target_node or 'detail_confirmation'}”节点，是否确认？"
+            f"建议转入“{target_node or 'development_readiness_gate'}”节点，是否确认？"
         )
     )
     return {

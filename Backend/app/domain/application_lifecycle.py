@@ -51,7 +51,7 @@ class PendingInteractionType(StrEnum):
     REQUIREMENT_CONFIRMATION = "requirement_confirmation"
     PRODUCT_PLAN_CONFIRMATION = "product_plan_confirmation"
     TECHNICAL_PLAN_CONFIRMATION = "technical_plan_confirmation"
-    PAGE_DESIGN_CONFIRMATION = "page_design_confirmation"
+    ENTITY_SOURCE_BINDING = "entity_source_binding"
     TASK_PLAN_CONFIRMATION = "task_plan_confirmation"
     IMPACT_CONFIRMATION = "impact_confirmation"
     PAGE_ACCEPTANCE = "page_acceptance"

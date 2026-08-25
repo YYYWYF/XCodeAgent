@@ -40,7 +40,8 @@ type Props = {
 /** 判断页面细节节点是否已经由后端报告完成。 */
 function detailDesignCompleted(events: WorkflowEvent[]): boolean {
   return events.some(
-    (event) => event.type === 'workflow.node.completed' && event.nodeName === 'detail_confirmation'
+    (event) =>
+      event.type === 'workflow.node.completed' && event.nodeName === 'development_readiness_gate'
   )
 }
 
@@ -55,7 +56,7 @@ function latestDetailProgressEvent(events: WorkflowEvent[]): WorkflowEvent | und
   return [...events].reverse().find(
     (event) =>
       event.type === 'workflow.node.progress' &&
-      event.nodeName === 'detail_confirmation' &&
+      event.nodeName === 'development_readiness_gate' &&
       event.message
   )
 }

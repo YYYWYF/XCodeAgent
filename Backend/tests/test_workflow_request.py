@@ -702,7 +702,7 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["resume_from"], "")
 
-    def test_clarification_answers_default_to_detail_confirmation_resume(self) -> None:
+    def test_clarification_answers_default_to_development_readiness_resume(self) -> None:
         inputs = workflow_run_inputs(
             {
                 "originalRequest": "帮我做一个库房系统",
@@ -710,7 +710,7 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "detail_confirmation")
+        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
         self.assertNotIn("原始需求：\n请基于原始需求", inputs["request"])
         self.assertIn("回答：库管员", inputs["request"])
 
@@ -798,8 +798,8 @@ class WorkflowRequestTests(unittest.TestCase):
     def test_acceptance_design_and_plan_changes_route_to_their_confirmation_nodes(self) -> None:
         for adjustment_type, expected_node in (
             ("page_design_change", "project_planning"),
-            ("endpoint_change", "detail_confirmation"),
-            ("data_source_change", "detail_confirmation"),
+            ("endpoint_change", "project_planning"),
+            ("data_source_change", "entity_source_binding"),
             ("project_plan_change", "project_planning"),
         ):
             with self.subTest(adjustment_type=adjustment_type):
@@ -879,36 +879,6 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertIn("其他补充：列表必须支持按仓库分组并导出 Excel", inputs["request"])
         self.assertNotIn("__other__", inputs["request"])
 
-    def test_infers_detail_confirmation_resume_and_preserves_plan_state(self) -> None:
-        inputs = workflow_run_inputs(
-            {
-                "request": "我选择 页面：库存管理列表页",
-                "forwardedProps": {
-                    "resumeState": {
-                        "events": [
-                            {
-                                "type": "workflow.node.completed",
-                                "node": {"id": "detail_confirmation"},
-                                "status": "requires_user_input",
-                            }
-                        ],
-                        "result": {
-                            "project_plan": {"frontend_pages": []},
-                            "project_plan_path": "var/plans/project-plan.md",
-                            "page_spec_draft": {"pageId": "inventory_page"},
-                        },
-                    }
-                },
-            }
-        )
-
-        self.assertEqual(inputs["resume_from"], "detail_confirmation")
-        self.assertEqual(inputs["resume_values"]["project_plan"], {"frontend_pages": []})
-        self.assertEqual(
-            inputs["resume_values"]["page_spec_draft"],
-            {"pageId": "inventory_page"},
-        )
-
     def test_preserves_requirement_spec_from_state_snapshot_resume(self) -> None:
         inputs = workflow_run_inputs(
             {
@@ -940,26 +910,26 @@ class WorkflowRequestTests(unittest.TestCase):
             "var/specs/requirement-spec.md",
         )
 
-    def test_extracts_structured_batch_detail_review_submission(self) -> None:
+    def test_extracts_structured_entity_source_binding_submission(self) -> None:
         submission = {
             "review_status": "confirmed",
             "target_changes": [
                 {
-                    "target_type": "page",
-                    "target_id": "inventory_page",
-                    "changes": {"interactions": ["搜索", "导出"]},
+                    "target_type": "entity",
+                    "target_id": "Inventory",
+                    "changes": {"risks": []},
                 }
             ],
         }
         inputs = workflow_run_inputs(
             {
-                "clarificationAnswers": {"detail_review": submission},
+                "clarificationAnswers": {"entity_source_binding": submission},
                 "forwardedProps": {
                     "resumeState": {
                         "events": [
                             {
                                 "type": "workflow.node.completed",
-                                "node": {"id": "detail_confirmation"},
+                                "node": {"id": "entity_source_binding"},
                                 "status": "requires_user_input",
                             }
                         ],
@@ -971,9 +941,9 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "detail_confirmation")
+        self.assertEqual(inputs["resume_from"], "entity_source_binding")
         self.assertEqual(
-            inputs["resume_values"]["detail_review_submission"],
+            inputs["resume_values"]["entity_source_binding_submission"],
             submission,
         )
 
@@ -1166,7 +1136,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertNotIn("project_plan", inputs.get("resume_values", {}))
         self.assertNotIn("frontend_pages", inputs.get("resume_values", {}))
 
-    def test_forwards_selected_page_id_to_detail_confirmation_state(self) -> None:
+    def test_forwards_selected_page_id_to_development_readiness_state(self) -> None:
         inputs = workflow_run_inputs(
             {
                 "request": "开始设计库存页面",
@@ -1180,7 +1150,7 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
     def test_restores_selected_page_scope_from_resume_state(self) -> None:
-        """确认 PageDetail 后只携带恢复态时仍应恢复页面构建范围。"""
+        """开发前置检查暂停后仍恢复页面构建范围。"""
 
         inputs = workflow_run_inputs(
             {
@@ -1188,7 +1158,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 "forwardedProps": {
                     "resumeState": {
                         "state": {
-                            "phase": "detail_confirmation",
+                            "phase": "development_readiness_gate",
                             "status": "requires_user_input",
                             "selectedPageId": "page_1",
                         }
@@ -1197,7 +1167,7 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "detail_confirmation")
+        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
         self.assertEqual(inputs["resume_values"]["selectedPageId"], "page_1")
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],
@@ -1281,7 +1251,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 "forwardedProps": {
                     "resumeState": {
                         "state": {
-                            "phase": "detail_confirmation",
+                            "phase": "development_readiness_gate",
                             "status": "requires_user_input",
                             "selectedPageId": "page_1",
                             "build_execution_scope": {
@@ -1309,7 +1279,7 @@ class WorkflowRequestTests(unittest.TestCase):
                     "selectedPageId": "personnel-list",
                     "resumeState": {
                         "state": {
-                            "phase": "detail_confirmation",
+                            "phase": "development_readiness_gate",
                             "status": "requires_user_input",
                             "selectedPageId": "page_1",
                             "build_execution_scope": {
@@ -1360,7 +1330,7 @@ class WorkflowRequestTests(unittest.TestCase):
                         "selectedPageId": "personnel-list",
                         "resumeState": {
                             "state": {
-                                "phase": "detail_confirmation",
+                                "phase": "development_readiness_gate",
                                 "status": "requires_user_input",
                                 "selectedPageId": "page_1",
                                 "build_execution_scope": {

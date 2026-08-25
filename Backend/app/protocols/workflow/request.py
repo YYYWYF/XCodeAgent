@@ -162,7 +162,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     elif small_task_handoff_submission and workflow_scope not in APPLICATION_PLANNING_SCOPES:
         resume_from = "small_task_repair"
     elif build_task_plan_confirmation and workflow_scope != "application_planning":
-        # DAG 确认必须回到同一 prepare 节点，不能被通用 detail_confirmation 回退规则截走。
+        # DAG 确认必须回到同一 prepare 节点，不能被通用开发入口回退规则截走。
         resume_from = "prepare_build_tasks"
     elif test_phase_confirmation and workflow_scope != "application_planning":
         # 开发完成确认必须恢复同一确认节点，确认成功后由 Graph 放行测试节点。
@@ -172,13 +172,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 "创建规划确认必须通过 applicationPlanningInteraction 恢复原生中断。"
             )
-        resume_from = (
-            "detail_confirmation"
-        )
+        resume_from = "development_readiness_gate"
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
-    detail_review_submission = _detail_review_submission(clarification_answers)
+    entity_source_binding_submission = _entity_source_binding_submission(clarification_answers)
     entity_design_action = _entity_design_action(clarification_answers)
+    if entity_source_binding_submission or entity_design_action:
+        resume_from = "entity_source_binding"
     acceptance_decision = _page_acceptance_decision(clarification_answers)
     acceptance_adjustment = _acceptance_adjustment(clarification_answers)
     unit_test_decision = _unit_test_decision(clarification_answers)
@@ -228,10 +228,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("detail_target_type"))
         or _optional_text(resume_values_from_state.get("detail_target_type"))
     )
-    # endpoint 详细设计和页面详细设计互斥；本次明确选择接口时，不允许恢复态里的旧页面 ID 回流。
+    # 页面与接口开发目标互斥；本次明确选择接口时，不允许恢复态里的旧页面 ID 回流。
     if detail_target_type == "endpoint" or selected_endpoint_id:
         selectedPageId = ""
-    # 实体详细设计与页面/接口互斥；本次明确选择实体时，不允许旧页面或旧接口 ID 回流。
+    # 实体数据源绑定与页面/API开发互斥；本次明确选择实体时，不允许旧开发目标回流。
     if detail_target_type == "entity" or selected_entity_id:
         selectedPageId = ""
         selected_endpoint_id = ""
@@ -280,7 +280,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selected_endpoint_id=selected_endpoint_id,
         project_plan=project_plan_start_values.get("project_plan"),
     )
-    # endpoint scope 是正式 handoff 的权威目标；即使客户端只发送了 scope，也要补回详情确认所需的显式 ID。
+    # endpoint scope 是正式 handoff 的权威目标；即使客户端只发送 scope，也要补回门禁所需的显式 ID。
     if build_execution_scope.get("type") == "endpoint":
         selected_api_contract_id = selected_api_contract_id or _optional_text(
             build_execution_scope.get("apiContractId")
@@ -323,8 +323,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "selected_skill_names": list(selected_skill_names),
         **(
-            {"detail_review_submission": detail_review_submission}
-            if detail_review_submission
+            {"entity_source_binding_submission": entity_source_binding_submission}
+            if entity_source_binding_submission
             else {}
         ),
         **({"entity_design_action": entity_design_action} if entity_design_action else {}),
@@ -827,7 +827,8 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
         if node_name == "inspect_database_context":
             return "prepare_build_tasks"
         supported = {
-            "detail_confirmation",
+            "development_readiness_gate",
+            "entity_source_binding",
             "project_planning",
             "inspect_workspace",
             "prepare_build_tasks",
@@ -873,7 +874,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "page_spec_draft",
         "data_source_spec_draft",
         "detail_plans",
-        "detail_review_submission",
+        "entity_source_binding_submission",
         "workspace_snapshot_summary",
         "workspace_snapshot_path",
         "workspace_snapshot_hash",
@@ -1557,10 +1558,12 @@ def _answer_to_text(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 
-def _detail_review_submission(value: Any) -> dict[str, Any] | None:
+def _entity_source_binding_submission(value: Any) -> dict[str, Any] | None:
+    """读取独立 EntitySourceBinding 的确认提交。"""
+
     if not isinstance(value, dict):
         return None
-    submission = value.get("detail_review")
+    submission = value.get("entity_source_binding")
     if not isinstance(submission, dict):
         return None
     if submission.get("review_status") != "confirmed":
@@ -1571,10 +1574,10 @@ def _detail_review_submission(value: Any) -> dict[str, Any] | None:
 def _entity_design_action(value: Any) -> dict[str, Any] | None:
     """从结构化确认答案中提取实体设计动作。
 
-    实体设计是 detail_confirmation 的 entity 内部分支交互：前端在数据源选择、
+    EntitySourceBinding 是独立交互：前端在数据源选择、
     外部 API 信息补充、静态数据构建、手动绑定与表生成审批等步骤提交
     ``{entity_design: {action, entity_id, ...}}``，由本函数规整后进入
-    resume_values 供 detail_confirmation 节点消费。
+    resume_values 供 entity_source_binding 节点消费。
     """
 
     if not isinstance(value, dict):

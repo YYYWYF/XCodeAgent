@@ -1317,7 +1317,7 @@ def execute_entity_database_operations(
 
 
 def entity_design_summary(detail: dict[str, Any]) -> dict[str, Any]:
-    """构造实体设计阶段摘要，供 detail_review 载荷投射给前端。"""
+    """构造实体数据源绑定阶段摘要，供 EntitySourceBinding 投射给前端。"""
 
     stage = entity_design_stage(detail)
     detail_fields = _dict_items(detail.get("fields"))
