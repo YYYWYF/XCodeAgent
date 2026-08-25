@@ -135,6 +135,25 @@ function PlanningPendingCard({ detail }: { detail: string }): ReactElement {
   )
 }
 
+/** 从已答澄清卡之后的最近一条 user 留痕解析「header：答案」行，用于历史卡只读回填。 */
+function parseAnsweredClarificationTrace(
+  messages: AgentChatMessage[],
+  cardIndex: number
+): Record<string, string> | undefined {
+  for (let index = cardIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (message.role === 'assistant' && message.workflow) break
+    if (message.role !== 'user') continue
+    const answers: Record<string, string> = {}
+    for (const line of (message.content || '').split('\n')) {
+      const match = line.match(/^([^：\n]{1,40})：(.+)$/)
+      if (match) answers[match[1].trim()] = match[2].trim()
+    }
+    if (Object.keys(answers).length > 0) return answers
+  }
+  return undefined
+}
+
 /** 从消息自身的 Workflow 节点推导 Agent 身份，避免阶段推进后历史消息被重新标记。 */
 function messageAgentPhase(
   workflow: WorkflowRunPayload | undefined,
@@ -441,12 +460,24 @@ export default function MessageList({
                     isReviewPhaseConfirmationCard ||
                     isCodeReviewCard)
               )
+              // 设计阶段/会话内只有列表末尾的待答卡可交互：其后出现答案留痕或下一张卡
+              // 即证明它已被回答。历史待答卡渲染为失效态，避免旧表单以空白可填样式误导。
               const interactionAvailability =
                 message.workflow && requiresClarification
-                  ? conversation || designPhasePlanning
-                    ? 'active'
-                    : workflowInteractionAvailability(message.workflow, applicationLifecycle)
+                  ? messageIndex < messages.length - 1
+                    ? 'stale'
+                    : conversation || designPhasePlanning
+                      ? 'active'
+                      : workflowInteractionAvailability(message.workflow, applicationLifecycle)
                   : 'stale'
+              // 已答过的历史澄清卡：从其后最近的 user 留痕解析「header：答案」行回填为
+              // 只读摘要，避免旧表单以空白可填样式重现（恢复会话时 localStorage 草稿已丢）。
+              const historicalClarificationAnswers =
+                interactionAvailability === 'stale' &&
+                requiresClarification &&
+                messageClarification?.questions?.length
+                  ? parseAnsweredClarificationTrace(messages, messageIndex)
+                  : undefined
               const visibleAssistantContent = hideEntityWorkflowChrome
                 ? entityDesignMessageContent(message.content, message.workflow)
                 : workflowMessageContentForDisplay(
@@ -635,6 +666,7 @@ export default function MessageList({
                                 interactionAvailability !== 'active' ||
                                 planningArtifactAnswered
                               }
+                              historicalClarificationAnswers={historicalClarificationAnswers}
                               interactionAvailability={interactionAvailability}
                               onEntityDesignGateJump={onEntityDesignGateJump}
                               onSubmitClarification={onSubmitClarification}
@@ -707,7 +739,13 @@ export default function MessageList({
             <article className={cx('ai-message', 'assistant')}>
               <div className={cx('ai-message-content')}>
                 <MessageAgentHeader agentKey={currentPhase} />
-                <AgentErrorCard error={visibleError} onRetry={onRetryError} />
+                <AgentErrorCard
+                  error={visibleError}
+                  onRetry={onRetryError}
+                  title={
+                    /确认卡|中断|过期|版本/.test(visibleError) ? '规划确认未完成' : undefined
+                  }
+                />
               </div>
             </article>
           ) : null}

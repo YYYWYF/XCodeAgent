@@ -85,6 +85,8 @@ export type ClarificationAnswers = WorkflowClarificationAnswers
 type WorkflowRunCardProps = {
   disabled?: boolean
   interactionAvailability: WorkflowInteractionAvailability
+  /** 已答完的历史澄清卡：header→答案 映射，存在时按原控件形态回填答案并以禁用态展示。 */
+  historicalClarificationAnswers?: Record<string, string>
   onEntityDesignGateJump?: (entityId: string) => void
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
@@ -116,6 +118,7 @@ type WorkflowRunCardProps = {
 
 export default function WorkflowRunCard({
   disabled,
+  historicalClarificationAnswers,
   interactionAvailability,
   onEntityDesignGateJump,
   onSubmitClarification,
@@ -547,26 +550,57 @@ export default function WorkflowRunCard({
             <>
               {confirmationArtifact && <ConfirmationArtifact artifact={confirmationArtifact} />}
               <ClarificationContext clarification={clarification} />
-              {clarificationQuestions.map((question, index) => (
-                <div className={cx('workflow-clarification-question')} key={question.id || index}>
-                  <div className={cx('workflow-clarification-title')}>
-                    <Tag>{question.header || question.dimension || '需求'}</Tag>
-                    <Text>{question.question || '请补充需求细节。'}</Text>
+              {clarificationQuestions.map((question, index) => {
+                // 已答历史卡：保留原控件形态（勾选框/单选/文本框），回填留痕答案并禁用，
+                // 让用户看到的回填样式与当初作答时一致，而不是一行只读「已答：」文字。
+                const historicalText = historicalClarificationAnswers
+                  ? historicalClarificationAnswerFor(
+                      historicalClarificationAnswers,
+                      question,
+                      index
+                    )
+                  : undefined
+                const historicalValue = historicalClarificationAnswers
+                  ? historicalClarificationAnswerValue(question, historicalText)
+                  : undefined
+                return (
+                  <div className={cx('workflow-clarification-question')} key={question.id || index}>
+                    <div className={cx('workflow-clarification-title')}>
+                      <Tag>{question.header || question.dimension || '需求'}</Tag>
+                      <Text>{question.question || '请补充需求细节。'}</Text>
+                    </div>
+                    {historicalClarificationAnswers ? (
+                      historicalValue !== undefined ? (
+                        <ClarificationQuestionControl
+                          disabled
+                          onChange={() => undefined}
+                          question={question}
+                          value={historicalValue}
+                        />
+                      ) : (
+                        <div className={cx('workflow-clarification-history-answer')}>
+                          <Text type="secondary">已答：</Text>
+                          <Text>{historicalText || '（本轮未作答）'}</Text>
+                        </div>
+                      )
+                    ) : (
+                      <ClarificationQuestionControl
+                        disabled={disabled}
+                        onChange={(value) =>
+                          updateAnswer(clarificationQuestionKey(question, index), value)
+                        }
+                        question={question}
+                        value={answers[clarificationQuestionKey(question, index)]}
+                      />
+                    )}
+                    {question.default_assumption && (
+                      <Text type="secondary">{question.default_assumption}</Text>
+                    )}
                   </div>
-                  <ClarificationQuestionControl
-                    disabled={disabled}
-                    onChange={(value) =>
-                      updateAnswer(clarificationQuestionKey(question, index), value)
-                    }
-                    question={question}
-                    value={answers[clarificationQuestionKey(question, index)]}
-                  />
-                  {question.default_assumption && (
-                    <Text type="secondary">{question.default_assumption}</Text>
-                  )}
-                </div>
-              ))}
-              {clarification?.status === 'requires_user_input' && (
+                )
+              })}
+              {clarification?.status === 'requires_user_input' &&
+                !historicalClarificationAnswers && (
                 <Button
                   className={cx('clarification-confirm-btn')}
                   disabled={disabled || !canSubmitClarification}
@@ -1741,6 +1775,50 @@ function OtherInput({
 
 function clarificationQuestionKey(question: WorkflowClarificationQuestion, index: number): string {
   return question.id || question.header || question.question || String(index)
+}
+
+/** 历史留痕按 header 记录：依次尝试 id/header/question 作为 key 命中答案。 */
+function historicalClarificationAnswerFor(
+  answers: Record<string, string>,
+  question: WorkflowClarificationQuestion,
+  index: number
+): string | undefined {
+  for (const key of [question.id, question.header, question.question, String(index)]) {
+    if (!key) continue
+    const value = answers[key]
+    if (typeof value === 'string' && value.trim()) return value
+  }
+  return undefined
+}
+
+/**
+ * 把留痕文本答案反解为对应控件的值，让历史卡保留勾选框/单选/文本框原形态回填。
+ * 选择题序列化格式为「选项A、选项B（其他文本）」；文本题直接是答案原文。
+ * 解析不出有效内容时返回 undefined，调用方回退为只读摘要。
+ */
+function historicalClarificationAnswerValue(
+  question: WorkflowClarificationQuestion,
+  text: string | undefined
+): WorkflowClarificationAnswer | undefined {
+  const trimmed = (text || '').trim()
+  if (!trimmed) return undefined
+  if (question.type === 'choice' || question.type === 'yesno') {
+    // 拆出末尾的「（其他文本）」部分。
+    let other: string | undefined
+    let main = trimmed
+    const otherMatch = trimmed.match(/（([^（）]*)）\s*$/)
+    if (otherMatch) {
+      other = otherMatch[1].trim() || undefined
+      main = trimmed.slice(0, otherMatch.index).trim()
+    }
+    const selected = main
+      .split('、')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    if (selected.length === 0 && !other) return undefined
+    return { selected, other }
+  }
+  return trimmed
 }
 
 // 澄清表单草稿本地持久化：恢复（从历史"查看计划"回到待确认阶段）时回填用户已填的答案。
