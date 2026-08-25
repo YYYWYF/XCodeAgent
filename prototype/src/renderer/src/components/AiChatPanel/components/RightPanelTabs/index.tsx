@@ -1,5 +1,5 @@
 import {
-  CloseOutlined,
+  AppstoreOutlined,
   CodeOutlined,
   FileMarkdownOutlined,
   FolderOpenOutlined,
@@ -13,6 +13,7 @@ import './RightPanelTabs.less'
 /** 工作区 tab 键：预览/源码/文档/过程 + 设计阶段的三份产物文档（需求文档/项目计划/构建任务）。 */
 export type WorkspaceTabKey =
   | 'preview'
+  | 'application-preview'
   | 'page-preview'
   | 'project'
   | 'source'
@@ -27,20 +28,24 @@ export type WorkspaceTab = {
   key: WorkspaceTabKey
   label: string
   available: boolean
-  icon?: 'browser' | 'code' | 'document' | 'project'
+  icon?: 'application' | 'browser' | 'code' | 'document' | 'project'
 }
 
 type Props = {
   tabs: WorkspaceTab[]
   active: WorkspaceTabKey
   onChange: (key: WorkspaceTabKey) => void
-  onClose: () => void
 }
 
 /** 右侧工作区的 tab 条：预览 / 源码 / 文档 / 过程。不可用的 tab 灰显。 */
-export default function RightPanelTabs({ tabs, active, onChange, onClose }: Props): ReactElement {
+export default function RightPanelTabs({
+  tabs,
+  active,
+  onChange
+}: Props): ReactElement {
   /** 按窗口内容类型返回统一线性图标。 */
   const renderIcon = (icon?: WorkspaceTab['icon']): ReactElement | null => {
+    if (icon === 'application') return <AppstoreOutlined />
     if (icon === 'browser') return <GlobalOutlined />
     if (icon === 'code') return <CodeOutlined />
     if (icon === 'document') return <FileMarkdownOutlined />
@@ -65,14 +70,6 @@ export default function RightPanelTabs({ tabs, active, onChange, onClose }: Prop
           </button>
         ))}
       </div>
-      <button
-        type="button"
-        className={cx('workspace-tabs-close')}
-        aria-label="关闭右侧面板"
-        onClick={onClose}
-      >
-        <CloseOutlined />
-      </button>
     </header>
   )
 }

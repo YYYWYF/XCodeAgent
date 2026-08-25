@@ -12,6 +12,7 @@
   flex: 1;
   width: 100%;
   min-height: 0;
+  align-items: flex-start;
   overflow: auto;
   background: var(--wb-canvas);
   scrollbar-width: thin;
@@ -65,6 +66,7 @@
   display: flex;
   width: min(100%, 1080px);
   min-height: 100%;
+  box-sizing: border-box;
   flex-direction: column;
   gap: 24px;
   padding: 42px 38px 32px;
@@ -223,6 +225,9 @@
 }
 .@{class-prefix}-ai-message-agent.@{class-prefix}-review .@{class-prefix}-ai-message-agent-avatar {
   background: linear-gradient(135deg, #56c596, #20865d);
+}
+.@{class-prefix}-ai-message-agent.@{class-prefix}-acceptance .@{class-prefix}-ai-message-agent-avatar {
+  background: linear-gradient(135deg, #a97aff, #6b3cf0);
 }
 
 .@{class-prefix}-ai-message-agent-name {

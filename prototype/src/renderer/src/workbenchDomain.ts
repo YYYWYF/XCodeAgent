@@ -13,6 +13,7 @@ export type WorkbenchSessionKind =
   | 'development'
   | 'testing'
   | 'review'
+  | 'acceptance'
   | 'general'
 export type WorkbenchArtifactAccessMode = 'unavailable' | 'read' | 'write'
 export type WorkbenchArtifactLockReason =

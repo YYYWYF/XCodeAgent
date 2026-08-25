@@ -73,9 +73,9 @@ type UseWorkflowConversationParams = {
   planningPhase?: boolean
   /** 当前是否处于测试阶段默认对话。 */
   testingPhase?: boolean
+  /** 当前是否处于验收阶段普通对话，用于把反馈交给范围审核而不是页面构建。 */
+  acceptancePhase?: boolean
   autoStartDesign?: boolean
-  /** 所有页面/接口模块开发完成 → 自动进入应用概览验收。 */
-  autoStartApplicationAcceptance?: boolean
   /** 用户确认开发产物全部完成后，进入测试阶段并创建应用级测试会话。 */
   autoStartTesting?: boolean
   /** 用户确认测试合格后，进入审查阶段并创建应用级非功能检查会话。 */
@@ -90,6 +90,8 @@ type UseWorkflowConversationParams = {
   ensureReviewSession: () => Promise<SessionIdentity>
   /** 创建/复用无页面归属的应用级测试会话。 */
   ensureTestingSession: () => Promise<SessionIdentity>
+  /** 创建/复用无页面归属的应用级验收会话。 */
+  ensureAcceptanceSession: () => Promise<SessionIdentity>
   ensureEndpointSession: (
     apiContractId: string,
     endpointId: string,
@@ -125,7 +127,10 @@ type UseWorkflowConversationResult = {
   handleSend: (
     workflowDebug?: WorkflowDebugOptions,
     explicitMessage?: string,
-    options?: { suppressUserMessage?: boolean }
+    options?: {
+      sessionIdentity?: SessionIdentity
+      suppressUserMessage?: boolean
+    }
   ) => Promise<void>
   handleStartDetailConfirmation: (
     selectedPageId: string,
@@ -229,7 +234,8 @@ function agentPhaseForSession(
     identity.sessionKind === 'planning' ||
     identity.sessionKind === 'development' ||
     identity.sessionKind === 'testing' ||
-    identity.sessionKind === 'review'
+    identity.sessionKind === 'review' ||
+    identity.sessionKind === 'acceptance'
   ) {
     return identity.sessionKind
   }
@@ -258,15 +264,16 @@ export function useWorkflowConversation({
   planningPhase,
   testingPhase,
   autoStartDesign,
-  autoStartApplicationAcceptance,
   autoStartTesting,
   autoStartReview,
+  acceptancePhase,
   editorMode,
   ensureActiveSession,
   ensureAnalysisSession,
   ensurePlanningSession,
   ensureReviewSession,
   ensureTestingSession,
+  ensureAcceptanceSession,
   ensureEndpointSession,
   ensurePageSession,
   attachArtifactsToActiveSession,
@@ -282,9 +289,15 @@ export function useWorkflowConversation({
 }: UseWorkflowConversationParams): UseWorkflowConversationResult {
   const stopRequestedRef = useRef<Record<string, boolean>>({})
   const notifiedPreviewTargetsRef = useRef<Set<string>>(new Set())
+  const acceptanceHandoffRef = useRef(false)
   const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
+
+  useEffect(() => {
+    // 离开验收阶段时清掉一次性回话标记，避免下次普通输入被误当成验收意见。
+    if (!acceptancePhase) acceptanceHandoffRef.current = false
+  }, [acceptancePhase])
 
   const selectedTarget = {
     apiContractId: selectedApiContractId,
@@ -330,50 +343,125 @@ export function useWorkflowConversation({
     [application.workspaceRoot, editorMode, runStates]
   )
 
+  /** 验收不通过后只把用户意见追加到固定会话，暂不启动后续处理流程。 */
+  const appendAcceptanceFeedbackMessage = async (
+    identity: SessionIdentity,
+    message: string
+  ): Promise<void> => {
+    const previousMessages = getSessionMessages(identity.key)
+    const now = Date.now()
+    const nextMessages: AgentChatMessage[] = [
+      ...previousMessages,
+      {
+        id: now,
+        role: 'user',
+        content: message,
+        skills: selectedSkills.length > 0 ? selectedSkills : undefined,
+        createdAt: now
+      }
+    ]
+    setSessionMessages(identity.key, nextMessages)
+    setDraftByKey(identity.key, '')
+    setSelectedSkillsByKey(identity.key, [])
+    if (draftKey !== identity.key) {
+      setDraftByKey(draftKey, '')
+      setSelectedSkillsByKey(draftKey, [])
+    }
+    await persistSession({
+      artifactIds: identity.artifactIds,
+      editorMode: identity.editorMode,
+      messages: nextMessages,
+      sessionId: identity.sessionId,
+      threadId: identity.threadId,
+      apiContractId: identity.apiContractId,
+      endpointId: identity.endpointId,
+      endpointLabel: identity.endpointLabel,
+      pageId: identity.pageId,
+      sessionKind: identity.sessionKind,
+      titleFrom: '应用验收'
+    })
+  }
+
   /** 首次发送时创建目标会话；简单模式补充输入优先复用当前会话和 thread。 */
   const handleSend = async (
     workflowDebug?: WorkflowDebugOptions,
     explicitMessage?: string,
-    options?: { suppressUserMessage?: boolean }
+    options?: {
+      sessionIdentity?: SessionIdentity
+      suppressUserMessage?: boolean
+    }
   ): Promise<void> => {
     const message = (explicitMessage || draft).trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
+    // 验收入口由应用预览承载；进入对话后只把用户意见追加到验收会话。
+    const acceptanceFeedback = Boolean(acceptancePhase)
     const workflowPhase = String(activeWorkflow?.summary?.phase || '')
     const planningDesignConversation =
       Boolean(designPhase) &&
       (Boolean(planningPhase) ||
         activeSession?.sessionKind === 'planning' ||
         workflowPhase === 'project_planning')
-    const sessionIdentity =
-      isDirectModificationWorkflow(activeWorkflow) && matchingActiveSession
-        ? matchingActiveSession
-        : autoStartApplicationAcceptance || autoStartTesting || autoStartReview || testingPhase
-          ? autoStartTesting || testingPhase
-            ? await ensureTestingSession()
-            : await ensureReviewSession()
-            : selectedApiContractId && selectedEndpointId
-            ? await ensureEndpointSession(
-                selectedApiContractId,
-                selectedEndpointId,
-                selectedEndpointLabel || selectedEndpointId
-              )
-            : selectedPageId
-              ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
-              : designPhase
-                ? planningDesignConversation
-                  ? await ensurePlanningSession()
-                  : await ensureAnalysisSession()
-                : await ensureActiveSession()
+    // 自动推进会先创建目标阶段的默认会话；普通消息则严格追加到当前已打开的会话。
+    const automaticStageSession = autoStartTesting || autoStartReview
+    if (
+      acceptanceFeedback &&
+      (options?.sessionIdentity || activeSession)?.sessionKind !== 'acceptance'
+    ) {
+      setErrors((current) => ({
+        ...current,
+        [activeSession?.key || draftKey]: '验收意见需要先进入应用验收对话。'
+      }))
+      return
+    }
+    const sessionIdentity = options?.sessionIdentity ||
+      (automaticStageSession
+        ? autoStartTesting
+          ? await ensureTestingSession()
+          : autoStartReview
+            ? await ensureReviewSession()
+            : await ensureAcceptanceSession()
+        : activeSession ||
+          (acceptanceFeedback
+            ? await ensureAcceptanceSession()
+            : isDirectModificationWorkflow(activeWorkflow) && matchingActiveSession
+              ? matchingActiveSession
+              : testingPhase
+                ? await ensureTestingSession()
+                : selectedApiContractId && selectedEndpointId
+                  ? await ensureEndpointSession(
+                      selectedApiContractId,
+                      selectedEndpointId,
+                      selectedEndpointLabel || selectedEndpointId
+                    )
+                  : selectedPageId
+                    ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
+                    : designPhase
+                      ? planningDesignConversation
+                        ? await ensurePlanningSession()
+                        : await ensureAnalysisSession()
+                      : await ensureActiveSession()))
+    if (acceptanceFeedback && options?.suppressUserMessage) {
+      // 仅用于“不通过”入口的产品 Agent 提示，不把入口动作伪装成用户意见。
+      acceptanceHandoffRef.current = true
+    } else if (acceptanceFeedback && acceptanceHandoffRef.current) {
+      acceptanceHandoffRef.current = false
+      await appendAcceptanceFeedbackMessage(sessionIdentity, message)
+      return
+    }
     const designWorkflowScope = planningDesignConversation
       ? 'application_workbench_planning'
       : 'application_analysis'
     await sendWorkflowMessage(message, {
       clearDraft: true,
-      detailTargetType: selectedApiContractId && selectedEndpointId ? 'endpoint' : undefined,
-      selectedApiContractId,
-      selectedEndpointId,
+      detailTargetType: acceptanceFeedback
+        ? 'application'
+        : selectedApiContractId && selectedEndpointId
+          ? 'endpoint'
+          : undefined,
+      selectedApiContractId: acceptanceFeedback ? undefined : selectedApiContractId,
+      selectedEndpointId: acceptanceFeedback ? undefined : selectedEndpointId,
       buildExecutionScope:
-        selectedApiContractId && selectedEndpointId
+        !acceptanceFeedback && selectedApiContractId && selectedEndpointId
           ? {
               type: 'endpoint',
               targetId: selectedEndpointId,
@@ -381,10 +469,17 @@ export function useWorkflowConversation({
             }
           : undefined,
       selectedSkills,
-      selectedPageId: selectedApiContractId && selectedEndpointId ? '' : selectedPageId,
+      originalRequest: acceptanceFeedback ? message : undefined,
+      selectedPageId: acceptanceFeedback
+        ? undefined
+        : selectedApiContractId && selectedEndpointId
+          ? ''
+          : selectedPageId,
       sessionIdentity,
       titleFrom:
-        designPhase && !selectedApiContractId && !selectedEndpointId
+        acceptanceFeedback
+          ? '应用验收'
+          : designPhase && !selectedApiContractId && !selectedEndpointId
           ? planningDesignConversation
             ? '项目计划'
             : '需求分析'
@@ -395,16 +490,15 @@ export function useWorkflowConversation({
               : message,
       workflowDebug,
       suppressUserMessage: options?.suppressUserMessage,
-      directModification: shouldUseDirectModification(
-        directModificationEnabled,
-        activeWorkflow,
-        workflowDebug
-      ),
+      acceptanceFeedback,
+      directModification: acceptanceFeedback
+        ? false
+        : shouldUseDirectModification(directModificationEnabled, activeWorkflow, workflowDebug),
       workflowScope:
-        designPhase && !selectedApiContractId && !selectedEndpointId
+        acceptanceFeedback
+          ? 'application_acceptance_feedback'
+          : designPhase && !selectedApiContractId && !selectedEndpointId
           ? designWorkflowScope
-          : autoStartApplicationAcceptance
-            ? 'application_acceptance'
           : autoStartTesting || testingPhase
               ? 'application_testing'
             : autoStartReview
@@ -428,6 +522,7 @@ export function useWorkflowConversation({
       planControlAction?: 'stop' | 'end'
       planControlRunId?: string
       resumeExecutionRunId?: string
+      acceptanceFeedback?: boolean
       selectedPageId?: string
       selectedApiContractId?: string
       selectedEndpointId?: string
@@ -605,6 +700,7 @@ export function useWorkflowConversation({
         planControlAction: options?.planControlAction,
         planControlRunId: options?.planControlRunId,
         resumeExecutionRunId: options?.resumeExecutionRunId,
+        acceptanceFeedback: options?.acceptanceFeedback,
         resumeState: options?.resumeState,
         pageTemplate: options?.pageTemplate,
         directModification: options?.directModification,
@@ -1041,18 +1137,6 @@ export function useWorkflowConversation({
     }, 600)
     return () => window.clearTimeout(timer)
   }, [autoStartDesign, loading, planningPhase, workspaceBusy])
-
-  // 所有页面/接口模块开发完成 → 自动进入应用概览验收；验收通过前不允许进入审查。
-  const autoStartApplicationAcceptanceRef = useRef(false)
-  useEffect(() => {
-    if (!autoStartApplicationAcceptance || autoStartApplicationAcceptanceRef.current) return
-    if (loading || workspaceBusy) return
-    const timer = window.setTimeout(() => {
-      autoStartApplicationAcceptanceRef.current = true
-      void handleSend(undefined, '开始应用验收')
-    }, 1200)
-    return () => window.clearTimeout(timer)
-  }, [autoStartApplicationAcceptance, loading, workspaceBusy])
 
   // 用户确认开发完成后进入测试阶段，测试 Agent 负责生成唯一测试报告。
   const autoStartTestingRef = useRef(false)

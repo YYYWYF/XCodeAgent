@@ -1,0 +1,161 @@
+.@{class-prefix}-right-panel-layout-control {
+  display: flex;
+  flex-direction: column;
+  width: 8px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 3px;
+  box-shadow: none;
+  transition:
+    width 0.16s ease,
+    height 0.16s ease,
+    padding 0.16s ease,
+    gap 0.16s ease;
+
+  &:hover,
+  &:focus-within {
+    width: 30px;
+    height: 84px;
+    gap: 2px;
+    padding: 3px;
+    background: var(--wb-surface);
+    border: 1px solid var(--wb-border-strong);
+    border-radius: 7px;
+    box-shadow: 0 2px 8px rgb(24 27 36 / 8%);
+
+    .@{class-prefix}-right-panel-layout-option {
+      width: 24px;
+      height: 24px;
+      opacity: 1;
+      pointer-events: auto;
+      transform: none;
+    }
+  }
+
+  &.@{class-prefix}-docked {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    z-index: 12;
+    transform: translateY(-50%);
+    border-left: 0;
+    border-radius: 0 3px 3px 0;
+    box-shadow: none;
+
+    &:hover,
+    &:focus-within {
+      border-left: 0;
+      border-radius: 0 7px 7px 0;
+      box-shadow: none;
+    }
+  }
+
+  &.@{class-prefix}-floating {
+    position: absolute;
+    top: 50%;
+    // 全宽与隐藏态固定贴住最右边线，延续分栏态的贴边控制语义。
+    right: 0;
+    z-index: 12;
+    transform: translateY(-50%);
+    border-right: 0;
+    border-radius: 3px 0 0 3px;
+    box-shadow: none;
+
+    &:hover,
+    &:focus-within {
+      border-right: 0;
+      border-radius: 7px 0 0 7px;
+      box-shadow: none;
+    }
+  }
+}
+
+.@{class-prefix}-right-panel-layout-option {
+  display: inline-flex;
+  width: 0;
+  height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--wb-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+  transform: scale(0.72);
+  transition:
+    width 0.16s ease,
+    height 0.16s ease,
+    opacity 0.12s ease,
+    transform 0.16s ease;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    outline: none;
+  }
+
+  &.@{class-prefix}-active {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+}
+
+/* 三个小图标复用同一个窗口轮廓，仅通过右侧区域展示对应布局。 */
+.@{class-prefix}-right-panel-layout-icon {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 12px;
+  box-sizing: border-box;
+  border: 1px solid currentcolor;
+  border-radius: 2px;
+
+  &::after {
+    position: absolute;
+    top: -1px;
+    right: -1px;
+    width: 4px;
+    height: 12px;
+    box-sizing: border-box;
+    content: '';
+    border: 1px solid currentcolor;
+    border-radius: 0 2px 2px 0;
+    background: currentcolor;
+  }
+}
+
+.@{class-prefix}-right-panel-layout-option.@{class-prefix}-mode-hidden
+  .@{class-prefix}-right-panel-layout-icon::after {
+  width: 1px;
+  border: 0;
+  border-radius: 0;
+  background: var(--wb-accent);
+  opacity: 0.56;
+}
+
+.@{class-prefix}-right-panel-layout-option.@{class-prefix}-mode-split
+  .@{class-prefix}-right-panel-layout-icon::after {
+  border-color: var(--wb-accent);
+  background: var(--wb-accent);
+  opacity: 0.56;
+}
+
+.@{class-prefix}-right-panel-layout-option.@{class-prefix}-mode-full
+  .@{class-prefix}-right-panel-layout-icon::after {
+  width: 14px;
+  color: var(--wb-accent);
+  border-color: var(--wb-accent);
+  border-radius: 2px;
+  background: var(--wb-accent);
+  opacity: 0.56;
+}

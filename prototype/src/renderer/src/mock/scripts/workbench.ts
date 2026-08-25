@@ -902,12 +902,26 @@ export async function replayApplicationAcceptance(
     status: string,
     pending?: Record<string, unknown>
   ): ApplicationLifecycle => {
+    // 验收阶段快照必须携带前置测试/审查门禁，验收通过后生成版本才能连续放行。
     const lifecycle = {
       schemaVersion: '1.2.0',
       application: { id: appId, name: appName },
       updatedAt: new Date().toISOString(),
       revision: nextLifecycleRevision(),
       initialization: { stage: 'ready_for_workbench', status: 'completed' },
+      extensions: {
+        testReportStatus: 'passed',
+        reviewStatus: 'passed',
+        acceptanceStatus: status === 'completed' ? 'passed' : 'pending',
+        phaseValidity: {
+          analysis: 'valid',
+          planning: 'valid',
+          development: 'valid',
+          testing: 'valid',
+          review: 'valid',
+          acceptance: 'valid'
+        }
+      },
       activeExecutions: { [runId]: appExecution(status, pending) }
     } as ApplicationLifecycle
     onApplicationLifecycle?.(lifecycle)
@@ -918,7 +932,7 @@ export async function replayApplicationAcceptance(
   /** 同步应用验收 Workflow 投影到对话消息。 */
   const emit = (
     status: string,
-    lifecycle: ApplicationLifecycle,
+    lifecycle: ApplicationLifecycle | undefined,
     state: Record<string, unknown> = {},
     extra: Partial<WorkflowRunPayload> = {}
   ): WorkflowRunPayload => {
@@ -927,8 +941,25 @@ export async function replayApplicationAcceptance(
     return payload
   }
 
+  // 返回对话后的验收反馈只复刻到验收会话，先由产品 Agent 提示用户继续补充问题。
+  if (options.acceptanceFeedback) {
+    onContent?.('请告诉我验收中发现的问题，或补充具体验收意见。')
+    return emit(
+      'completed',
+      resume?.summary?.lifecycle as ApplicationLifecycle | undefined,
+      {},
+      {
+        summary: {
+          phase: 'acceptance',
+          status: 'completed',
+          message: '已进入验收对话，等待补充意见'
+        }
+      }
+    )
+  }
+
   if (answers.application_acceptance) {
-    onContent?.('应用整体验收已通过，即将进入测试阶段。')
+    onContent?.('应用已依据需求文档基线验收通过，可以继续生成版本。')
     const completed = emitLifecycle('completed')
     return emit(
       'completed',
@@ -944,11 +975,11 @@ export async function replayApplicationAcceptance(
     id: `pi-application-acceptance-${Date.now()}`,
     type: 'application_acceptance',
     basedOnRevision: 1,
-    payload: { message: '请在右侧完整应用预览中完成整体验收。' },
+    payload: { message: '请根据需求文档基线在右侧应用预览中完成验收。' },
     createdAt: new Date().toISOString()
   }
   const lifecycle = emitLifecycle('awaiting_user', pending)
-  onContent?.('所有页面与接口代码产物均已交付。请在右侧预览完整应用，确认后进入测试阶段。')
+  onContent?.('请根据需求文档基线完成应用验收。')
   return emit(
     'requires_user_input',
     lifecycle,
@@ -956,16 +987,8 @@ export async function replayApplicationAcceptance(
       clarification: {
         mode: 'application_acceptance',
         status: 'requires_user_input',
-        message: '请完成应用整体验收。',
-        questions: [
-          {
-            id: 'application_acceptance',
-            header: '应用验收',
-            question: '完整应用的页面、接口与关键业务流程是否符合预期？',
-            type: 'yesno',
-            presetAnswer: { selected: ['是'] }
-          }
-        ]
+        message: '请根据需求文档基线完成应用验收。',
+        questions: []
       }
     },
     {
@@ -1223,13 +1246,13 @@ export async function replayApplicationTesting(
 }
 
 // 应用级审查阶段剧本(复用应用概览会话):
-// 应用验收通过 → 审查 Agent 做非功能检查(代码审查/规范检测/健康度),审查通过 → 可发布。
+// 审查阶段剧本：审查 Agent 做非功能检查(代码审查/规范检测/健康度)，通过后进入用户验收。
 export async function replayCodeReview(
   threadId: string,
   options: SendWorkflowMessageOptions,
   callbacks: ReplayCallbacks
 ): Promise<WorkflowRunPayload> {
-  const { onContent, onWorkflow, onApplicationLifecycle, onProcessSteps } = callbacks
+  const { onWorkflow, onApplicationLifecycle, onProcessSteps } = callbacks
   const resume = options.resumeState as WorkflowRunPayload | undefined
   const runId = resume?.runId || `mock-review-${Date.now()}`
   const answers = (options.clarificationAnswers || {}) as Record<string, unknown>
@@ -1282,18 +1305,40 @@ export async function replayCodeReview(
     return payload
   }
 
-  // 1. 审查确认通过 → finalize_project completed(可发布)。
-  if (answers.code_review) {
-    onContent?.('审查确认通过,应用已就绪,现在可以生成版本了。')
+  // 审查报告写入确认后，一次性提交完整审查通过快照，避免同 revision 的补充状态被生命周期 store 丢弃。
+  if (answers.code_review || (answers.file_acceptance && resume?.summary?.phase === 'code_review')) {
     await delay(300)
-    const finalized = emitLifecycle(appExec('finalize_project', 'completed'))
+    const now = new Date().toISOString()
+    const reviewed = {
+      ...baseLifecycle,
+      updatedAt: now,
+      revision: nextLifecycleRevision(),
+      extensions: {
+        ...baseLifecycle.extensions,
+        reviewStatus: 'passed',
+        acceptanceStatus: 'pending',
+        phaseValidity: {
+          analysis: 'valid',
+          planning: 'valid',
+          development: 'valid',
+          testing: 'valid',
+          review: 'valid',
+          acceptance: 'valid'
+        }
+      },
+      activeExecutions: {
+        [runId]: appExec('code_review', 'completed')
+      }
+    } as ApplicationLifecycle
+    onApplicationLifecycle?.(reviewed)
+    registerWorkbenchLifecycle(reviewed)
     return emit(
-      'finalize_project',
+      'code_review',
       'completed',
-      finalized,
+      reviewed,
       {},
       {
-        summary: { phase: 'finalize_project', status: 'completed', message: '审查通过,可生成版本' }
+        summary: { phase: 'code_review', status: 'completed', message: '审查阶段已完成，已进入验收阶段' }
       }
     )
   }
@@ -1558,8 +1603,8 @@ export async function replayWorkbench(
         id: `step-preview-${page.id}`,
         kind: 'workflow',
         status: 'running',
-        title: '启动应用预览',
-        detail: '正在启动应用预览。',
+        title: '启动页面预览',
+        detail: '正在启动当前页面预览。',
         sequence: workflowStepTotal
       }
       const runningSteps = buildTargets.map((target, index) => ({
@@ -1601,7 +1646,7 @@ export async function replayWorkbench(
           summary: {
             phase: 'launch_project',
             status: 'completed',
-            message: '代码产物已完成，已进入应用预览'
+            message: '代码产物已完成，已进入页面预览'
           }
         }
       )

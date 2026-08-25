@@ -2,7 +2,7 @@
 import type { ApplicationLifecycle } from '../../src/renderer/src/typings'
 
 /**
- * 代码审查完成态 lifecycle(ready_for_workbench + finalize_project completed)。
+ * 验收完成态 lifecycle(ready_for_workbench + acceptance completed)。
  * 用于版本演示:达到此态的迭代版本已经具备发布条件。
  */
 export function makeCompleteLifecycle(appId: string, appName: string): ApplicationLifecycle {
@@ -14,12 +14,12 @@ export function makeCompleteLifecycle(appId: string, appName: string): Applicati
     revision: 5,
     initialization: { stage: 'ready_for_workbench', status: 'completed' },
     activeExecutions: {
-      'app-review': {
+      'app-acceptance': {
         scope: 'application',
         targetId: appId,
-        threadId: `${appId}-review`,
-        runId: `${appId}-review-run`,
-        phase: 'finalize_project',
+        threadId: `${appId}-acceptance`,
+        runId: `${appId}-acceptance-run`,
+        phase: 'acceptance',
         status: 'completed',
         startedAt: now,
         updatedAt: now
@@ -30,12 +30,15 @@ export function makeCompleteLifecycle(appId: string, appName: string): Applicati
       testReportRound: 2,
       testReportBasedOnRevision: 1,
       testReportDefects: [],
+      reviewStatus: 'passed',
+      acceptanceStatus: 'passed',
       phaseValidity: {
         analysis: 'valid',
         planning: 'valid',
         development: 'valid',
         testing: 'valid',
-        review: 'valid'
+        review: 'valid',
+        acceptance: 'valid'
       }
     }
   } as unknown as ApplicationLifecycle

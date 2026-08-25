@@ -322,6 +322,7 @@ function normalizeSessionKind(value: unknown): WorkbenchSessionKind | undefined 
     value === 'development' ||
     value === 'testing' ||
     value === 'review' ||
+    value === 'acceptance' ||
     value === 'general'
     ? value
     : undefined

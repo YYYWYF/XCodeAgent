@@ -47,6 +47,8 @@ export type SendWorkflowMessageOptions = {
   planControlAction?: 'stop' | 'end'
   planControlRunId?: string
   resumeExecutionRunId?: string
+  /** 验收阶段从普通对话提交的反馈只做范围审核，不直接启动页面构建。 */
+  acceptanceFeedback?: boolean
   pageTemplate?: {
     id?: string
     name?: string
@@ -85,6 +87,7 @@ export function buildWorkflowForwardedProps(
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
     resumeExecutionRunId: options.resumeExecutionRunId,
+    acceptanceFeedback: options.acceptanceFeedback,
     pageTemplate: options.pageTemplate,
     directModification: options.directModification
       ? {
@@ -326,7 +329,8 @@ export class AgUiChatSession {
           : options.workflowScope === 'application_analysis' ||
               options.workflowScope === 'application_workbench_planning'
             ? await replayDesignPhase(this.threadId, options, callbacks)
-            : options.workflowScope === 'application_acceptance'
+            : options.workflowScope === 'application_acceptance' ||
+                options.workflowScope === 'application_acceptance_feedback'
               ? await replayApplicationAcceptance(this.threadId, options, callbacks)
               : options.workflowScope === 'application_testing'
                 ? await replayApplicationTesting(this.threadId, options, callbacks)

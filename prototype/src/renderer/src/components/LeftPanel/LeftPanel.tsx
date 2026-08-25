@@ -30,10 +30,6 @@ type Props = {
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
   previewLaunchError: string
-  rightPanelOpen: boolean
-  onRightPanelOpenChange: (open: boolean) => void
-  applicationPreviewMode: boolean
-  onApplicationPreviewModeChange: (open: boolean) => void
   versionReadOnly: boolean
   versionPreviewOnly: boolean
   versionViewKey: string
@@ -63,10 +59,6 @@ export default function LeftPanel({
   onPlanningArtifactsRefresh,
   previewBaseUrl,
   previewLaunchError,
-  rightPanelOpen,
-  onRightPanelOpenChange,
-  applicationPreviewMode,
-  onApplicationPreviewModeChange,
   versionReadOnly,
   versionPreviewOnly,
   versionViewKey,
@@ -95,10 +87,6 @@ export default function LeftPanel({
             onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}
             previewBaseUrl={previewBaseUrl}
             previewLaunchError={previewLaunchError}
-            rightPanelOpen={rightPanelOpen}
-            onRightPanelOpenChange={onRightPanelOpenChange}
-            applicationPreviewMode={applicationPreviewMode}
-            onApplicationPreviewModeChange={onApplicationPreviewModeChange}
             versionReadOnly={versionReadOnly}
             versionPreviewOnly={versionPreviewOnly}
             versionViewKey={versionViewKey}

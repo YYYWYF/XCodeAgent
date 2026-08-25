@@ -1,15 +1,16 @@
 import type { ApplicationLifecycle } from './typings'
 
-/** 五阶段旅程的固定顺序；版本生成是审查后的终态动作，不属于阶段。 */
+/** 六阶段旅程的固定顺序；版本生成是验收后的终态动作，不属于阶段。 */
 export const WORKBENCH_PHASE_ORDER = [
   'analysis',
   'planning',
   'development',
   'testing',
-  'review'
+  'review',
+  'acceptance'
 ] as const
 
-/** 工作台五阶段，每个阶段对应一个面向用户的主责 Agent。 */
+/** 工作台六阶段；验收阶段由用户主责并由独立验收 Agent 承接反馈，其余阶段由对应 Agent 主责。 */
 export type WorkbenchPhase = (typeof WORKBENCH_PHASE_ORDER)[number]
 
 /** 阶段产物相对当前迭代的有效性。未到达阶段不能被当作已生成产物。 */
@@ -25,9 +26,9 @@ export type WorkbenchPhaseState = {
 
 export type WorkbenchAgentIdentity = {
   key: WorkbenchPhase
-  /** 短标签：分析 / 计划 / 开发 / 测试 / 审查。 */
+  /** 短标签：分析 / 计划 / 开发 / 测试 / 审查 / 验收。 */
   label: string
-  /** Agent 身份：产品 / 项目 / 研发 / 测试 / 审查 Agent。 */
+  /** 主责角色：产品 / 项目 / 研发 / 测试 / 审查 Agent 或用户。 */
   role: string
   /** 职责一句话。 */
   responsibility: string
@@ -64,6 +65,12 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     label: '审查',
     role: '审查 Agent',
     responsibility: '独立审查代码质量、安全与交付完整性'
+  },
+  acceptance: {
+    key: 'acceptance',
+    label: '验收',
+    role: '产品 Agent',
+    responsibility: '依据需求文档协助用户确认当前交付，并承接验收反馈'
   }
 }
 
@@ -91,7 +98,9 @@ const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
   // 测试 Agent 产出测试报告，但不直接修改开发代码。
   testing: ['test_report'],
   // 审查 Agent 默认只读代码，只维护审查报告。
-  review: ['review_report']
+  review: ['review_report'],
+  // 验收阶段只承载用户确认，不新增可编辑的正式产物。
+  acceptance: []
 }
 
 /** 阶段门禁：某对象在指定阶段是否可编辑。 */
@@ -146,7 +155,10 @@ const TESTING_PHASE_NODES = new Set([
 ])
 
 /** 审查阶段的工作流节点；审查 Agent 默认不写开发代码。 */
-const REVIEW_PHASE_NODES = new Set(['code_review', 'lint_check', 'security_scan', 'health_check', 'finalize_project'])
+const REVIEW_PHASE_NODES = new Set(['code_review', 'lint_check', 'security_scan', 'health_check'])
+
+/** 验收阶段只等待用户对当前预览交付作出明确确认。 */
+const ACCEPTANCE_PHASE_NODES = new Set(['acceptance'])
 
 const TERMINAL_EXECUTION_STATUSES = new Set(['completed', 'stopped', 'failed'])
 
@@ -162,6 +174,7 @@ function phaseForExecutionNode(node: string): WorkbenchPhase | null {
   if (DEVELOPMENT_PHASE_NODES.has(node)) return 'development'
   if (TESTING_PHASE_NODES.has(node)) return 'testing'
   if (REVIEW_PHASE_NODES.has(node)) return 'review'
+  if (ACCEPTANCE_PHASE_NODES.has(node)) return 'acceptance'
   return null
 }
 
@@ -200,7 +213,10 @@ export function deriveWorkbenchReachedPhase(lifecycle?: ApplicationLifecycle): W
     ['passed', 'qualified', '合格'].includes(testReportStatus) &&
     (reviewEntryConfirmed || compareWorkbenchPhases(executionReachedPhase, 'review') >= 0)
   ) {
-    return 'review'
+    const reviewStatus = String(lifecycle.extensions?.reviewStatus || '')
+    const reviewPassed = ['passed', 'approved', '通过'].includes(reviewStatus)
+    // 审查通过后，正常旅程自动进入用户验收；验收是否通过仍由独立状态记录。
+    return reviewPassed ? 'acceptance' : 'review'
   }
   return executionReachedPhase
 }
@@ -281,7 +297,7 @@ const EXECUTION_PHASE_LABELS: Record<string, string> = {
   build: '开发实现',
   integration_test: '集成测试',
   launch_project: '启动预览',
-  acceptance: '预览验收',
+  acceptance: '验收确认',
   code_review: '代码审查',
   lint_check: '代码规范检测',
   security_scan: '安全扫描',

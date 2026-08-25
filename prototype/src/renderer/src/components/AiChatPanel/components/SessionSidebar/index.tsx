@@ -49,7 +49,7 @@ type NavigationView = 'tasks' | 'artifacts'
 type ArtifactFilter = 'all' | 'page' | 'endpoint' | 'entity'
 type ArtifactStatus = 'not-started' | 'in-progress' | 'completed'
 type WorkbenchDocumentKey = WorkspaceDocKey | 'test-report' | 'code-review'
-type WorkbenchPhaseIndex = 1 | 2 | 3 | 4 | 5
+type WorkbenchPhaseIndex = 1 | 2 | 3 | 4 | 5 | 6
 
 type DesignArtifactItem = {
   available: boolean
@@ -152,6 +152,12 @@ function phaseIndexForSession(
     (session.title || '').includes('代码审查')
   ) {
     return 5
+  }
+  if (
+    session.sessionKind === 'acceptance' ||
+    (session.title || '').includes('应用验收')
+  ) {
+    return 6
   }
   if (
     artifactIds.some(

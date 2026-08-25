@@ -1,14 +1,5 @@
-import {
-  ArrowLeftOutlined,
-  ArrowRightOutlined,
-  AimOutlined,
-  DesktopOutlined,
-  ExpandOutlined,
-  MobileOutlined,
-  ReloadOutlined,
-  TabletOutlined
-} from '@ant-design/icons'
-import { Button, Input, Segmented, Select, Tooltip, Typography } from 'antd'
+import { CheckCircleFilled, MessageOutlined } from '@ant-design/icons'
+import { Button, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
@@ -25,11 +16,10 @@ import {
 } from '../../utils'
 import RichLoading from '../AiChatPanel/components/DesignProgress/RichLoading'
 import './BrowserPreviewPanel.less'
+import BrowserPreviewToolbar, { type PreviewViewport } from './BrowserPreviewToolbar'
 import { useElementInspector } from './useElementInspector'
 
 const { Text } = Typography
-
-type PreviewViewport = 'desktop' | 'tablet' | 'mobile'
 
 type Props = {
   applicationMode?: boolean
@@ -40,6 +30,16 @@ type Props = {
   pages?: DevelopmentPlanningPageOption[]
   previewBaseUrl?: string
   selectedPagePath?: string
+  /** 在应用预览中显示验收意见与确认控件。 */
+  acceptanceEnabled?: boolean
+  /** 当前版本是否已经完成验收。 */
+  acceptanceAccepted?: boolean
+  /** 提交应用预览内的验收通过动作。 */
+  onAcceptApplication?: () => void
+  /** 验收控件是否只读。 */
+  acceptanceReadOnly?: boolean
+  /** 点击不通过后回到验收对话，由产品 Agent 引导用户输入意见。 */
+  onSubmitAcceptanceFeedback?: () => void
   onInspectingChange?: (active: boolean) => void
 }
 
@@ -66,6 +66,11 @@ export default function BrowserPreviewPanel({
   pages = [],
   previewBaseUrl = '',
   selectedPagePath = '',
+  acceptanceEnabled = false,
+  acceptanceAccepted = false,
+  onAcceptApplication,
+  acceptanceReadOnly = false,
+  onSubmitAcceptanceFeedback,
   onInspectingChange
 }: Props): ReactElement {
   const pageOptions = useMemo<PreviewPageOption[]>(() => {
@@ -92,6 +97,7 @@ export default function BrowserPreviewPanel({
   const previewUrl = navigation.history[navigation.index]
   const frameKey = `${previewUrl}-${refreshKey}`
   const elementInspector = useElementInspector({
+    enabled: !applicationMode,
     frameKey,
     onInspectingChange,
     previewUrl
@@ -161,121 +167,34 @@ export default function BrowserPreviewPanel({
 
   return (
     <section className={cx('browser-preview-panel', applicationMode && 'application-mode')}>
-      <header className={cx('browser-preview-toolbar')}>
-        {!applicationMode ? (
-          <div className={cx('browser-navigation')}>
-            <Tooltip title="后退">
-              <Button
-                aria-label="后退"
-                disabled={navigation.index === 0}
-                icon={<ArrowLeftOutlined />}
-                onClick={() =>
-                  setNavigation((current) => ({
-                    ...current,
-                    index: Math.max(0, current.index - 1)
-                  }))
-                }
-                type="text"
-              />
-            </Tooltip>
-            <Tooltip title="前进">
-              <Button
-                aria-label="前进"
-                disabled={navigation.index >= navigation.history.length - 1}
-                icon={<ArrowRightOutlined />}
-                onClick={() =>
-                  setNavigation((current) => ({
-                    ...current,
-                    index: Math.min(current.history.length - 1, current.index + 1)
-                  }))
-                }
-                type="text"
-              />
-            </Tooltip>
-            <Tooltip title="刷新">
-              <Button
-                aria-label="刷新"
-                icon={<ReloadOutlined />}
-                onClick={() => setRefreshKey((key) => key + 1)}
-                type="text"
-              />
-            </Tooltip>
-          </div>
-        ) : null}
-        {!applicationMode ? (
-          <Input.Search
-            aria-label="预览地址"
-            className={cx('browser-address-input')}
-            enterButton="访问"
-            onChange={(event) => setDraftUrl(event.target.value)}
-            onSearch={navigateTo}
-            value={draftUrl}
-          />
-        ) : null}
-        {!applicationMode ? (
-          <Tooltip
-            title={
-              elementInspector.active
-                ? '退出元素审查'
-                : elementInspector.ready
-                  ? '审查预览页面中的元素'
-                  : '当前预览页面尚未准备好元素审查'
-            }
-          >
-            <span className={cx('browser-inspector-button-shell')}>
-              <Button
-                aria-label={elementInspector.active ? '退出审查' : '审查元素'}
-                aria-pressed={elementInspector.active}
-                className={cx('browser-inspector-button')}
-                disabled={!elementInspector.ready && !elementInspector.active}
-                icon={<AimOutlined />}
-                onClick={elementInspector.toggle}
-                type="primary"
-              >
-                {elementInspector.active ? '退出审查' : '审查元素'}
-              </Button>
-            </span>
-          </Tooltip>
-        ) : null}
-        {!applicationMode ? (
-          <Select
-            aria-label="页面"
-            className={cx('browser-page-select')}
-            options={pageOptions}
-            value={selectedPage}
-            onChange={handlePageChange}
-          />
-        ) : null}
-        {applicationMode ? (
-          <Tooltip title="刷新应用预览">
-            <Button
-              aria-label="刷新应用预览"
-              icon={<ReloadOutlined />}
-              onClick={() => setRefreshKey((key) => key + 1)}
-              type="text"
-            />
-          </Tooltip>
-        ) : null}
-        <Segmented
-          aria-label="视口"
-          className={cx('browser-viewport-switcher')}
-          options={[
-            { label: <DesktopOutlined />, value: 'desktop' },
-            { label: <TabletOutlined />, value: 'tablet' },
-            { label: <MobileOutlined />, value: 'mobile' }
-          ]}
-          value={viewport}
-          onChange={(value) => setViewport(value as PreviewViewport)}
+      {!applicationMode ? (
+        <BrowserPreviewToolbar
+          draftUrl={draftUrl}
+          elementInspectorActive={elementInspector.active}
+          elementInspectorReady={elementInspector.ready}
+          navigationIndex={navigation.index}
+          navigationLength={navigation.history.length}
+          onDraftUrlChange={setDraftUrl}
+          onNavigate={navigateTo}
+          onNavigateHistory={(direction) =>
+            setNavigation((current) => ({
+              ...current,
+              index:
+                direction === 'back'
+                  ? Math.max(0, current.index - 1)
+                  : Math.min(current.history.length - 1, current.index + 1)
+            }))
+          }
+          onOpenInBrowser={openInBrowser}
+          onPageChange={handlePageChange}
+          onRefresh={() => setRefreshKey((key) => key + 1)}
+          onToggleInspector={elementInspector.toggle}
+          onViewportChange={setViewport}
+          pageOptions={pageOptions}
+          selectedPage={selectedPage}
+          viewport={viewport}
         />
-        <Tooltip title="在系统浏览器打开">
-          <Button
-            aria-label="在系统浏览器打开"
-            icon={<ExpandOutlined />}
-            onClick={openInBrowser}
-            type="primary"
-          />
-        </Tooltip>
-      </header>
+      ) : null}
 
       <div className={cx('browser-preview-stage')}>
         {frameLoading && (
@@ -295,6 +214,45 @@ export default function BrowserPreviewPanel({
           />
         </div>
       </div>
+
+      {applicationMode && acceptanceEnabled ? (
+        <footer className={cx('browser-preview-acceptance-bar')} aria-label="应用验收确认">
+          <div className={cx('browser-preview-acceptance-title')}>版本验收</div>
+          <div className={cx('browser-preview-acceptance-prompt')}>
+            {acceptanceAccepted
+              ? '已依据需求文档基线验收通过。'
+              : '请依据需求文档基线验收当前应用。'}
+          </div>
+          {acceptanceAccepted ? (
+            <span className={cx('browser-preview-acceptance-passed')}>
+              <CheckCircleFilled /> 已通过
+            </span>
+          ) : (
+            <div className={cx('browser-preview-acceptance-actions')}>
+              <Button
+                aria-label="验收不通过并进入对话"
+                disabled={acceptanceReadOnly}
+                icon={<MessageOutlined />}
+                onClick={onSubmitAcceptanceFeedback}
+                type="default"
+              >
+                <span className={cx('browser-preview-acceptance-action-full')}>不通过，进入对话</span>
+                <span className={cx('browser-preview-acceptance-action-compact')}>不通过</span>
+              </Button>
+              <Button
+                aria-label="验收通过"
+                disabled={acceptanceReadOnly}
+                icon={<CheckCircleFilled />}
+                onClick={onAcceptApplication}
+                type="primary"
+              >
+                <span className={cx('browser-preview-acceptance-action-full')}>验收通过</span>
+                <span className={cx('browser-preview-acceptance-action-compact')}>通过</span>
+              </Button>
+            </div>
+          )}
+        </footer>
+      ) : null}
 
       {openError && (
         <Text className={cx('browser-preview-error')} type="danger">
