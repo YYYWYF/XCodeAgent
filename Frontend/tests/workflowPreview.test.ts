@@ -433,7 +433,7 @@ test('只有非终态 execution 会阻止工作台直接返回首页', () => {
   assert.equal(hasNonTerminalApplicationExecution(completedLifecycle), false)
 })
 
-test('独立 AG-UI lifecycle 事件只接收完整的版本化投影', () => {
+test('独立 AG-UI lifecycle 事件只接收完整的业务投影', () => {
   const lifecycle = planLifecycle(pageExecution())
 
   assert.equal(readApplicationLifecycle(lifecycle), lifecycle)
@@ -475,7 +475,6 @@ test('重复地址不追加历史，新地址会截断旧前进记录', () => {
 /** 构造页面计划执行测试需要的最小生命周期。 */
 function planLifecycle(execution: WorkbenchExecution): ApplicationLifecycle {
   return {
-    schemaVersion: '1.4.0',
     application: { id: 'app-1', name: '测试应用' },
     updatedAt: '2026-07-23T00:00:00Z',
     revision: 2,

@@ -13,7 +13,6 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.domain.application_lifecycle import (
-    APPLICATION_LIFECYCLE_SCHEMA_VERSION,
     ApplicationIdentity,
     ApplicationInitialization,
     ArtifactReference,
@@ -50,10 +49,6 @@ class ApplicationLifecyclePersistenceError(ValueError):
 
 class ApplicationLifecycleCorruptedError(ApplicationLifecyclePersistenceError):
     """表示现有状态文件损坏或不符合当前 schema。"""
-
-
-class UnsupportedApplicationLifecycleVersionError(ApplicationLifecyclePersistenceError):
-    """表示状态文件来自当前实现不支持的未来版本。"""
 
 
 class ApplicationLifecycleConflictError(ApplicationLifecyclePersistenceError):
@@ -160,11 +155,6 @@ def load_application_lifecycle(workspace: str | Path) -> ApplicationLifecycle | 
         raise ApplicationLifecycleCorruptedError(f"生命周期状态文件损坏：{path}") from exc
     if not isinstance(raw, dict):
         raise ApplicationLifecycleCorruptedError("生命周期状态文件根节点必须是对象。")
-    version = raw.get("schemaVersion")
-    if version != APPLICATION_LIFECYCLE_SCHEMA_VERSION:
-        raise UnsupportedApplicationLifecycleVersionError(
-            f"不支持的生命周期 schemaVersion：{version!r}"
-        )
     try:
         return ApplicationLifecycle.model_validate(raw)
     except ValidationError as exc:

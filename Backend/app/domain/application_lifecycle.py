@@ -9,9 +9,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-APPLICATION_LIFECYCLE_SCHEMA_VERSION = "1.4.0"
-
-
 class ApplicationLifecycleStage(StrEnum):
     """定义用户可见的应用开发业务阶段。"""
 
@@ -208,12 +205,8 @@ class WorkbenchExecution(ApplicationLifecycleModel):
 
 
 class ApplicationLifecycle(ApplicationLifecycleModel):
-    """表示 application-lifecycle.json 的完整版本化业务快照。"""
+    """表示 application-lifecycle.json 的完整业务快照。"""
 
-    schema_version: Literal[APPLICATION_LIFECYCLE_SCHEMA_VERSION] = Field(
-        default=APPLICATION_LIFECYCLE_SCHEMA_VERSION,
-        alias="schemaVersion",
-    )
     application: ApplicationIdentity
     updated_at: datetime = Field(alias="updatedAt")
     revision: int = Field(ge=1)

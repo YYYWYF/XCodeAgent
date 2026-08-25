@@ -669,7 +669,6 @@ export type ExecutionResourceLock = {
 }
 
 export type ApplicationLifecycle = {
-  schemaVersion: '1.4.0'
   application: { id: string; name: string }
   updatedAt: string
   revision: number

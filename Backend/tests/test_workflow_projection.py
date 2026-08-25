@@ -281,7 +281,6 @@ class WorkflowProjectionTests(unittest.TestCase):
         """AG-UI 摘要应原样投影 lifecycle，供前端直接消费业务阶段。"""
 
         lifecycle = {
-            "schemaVersion": "1.4.0",
             "revision": 4,
             "initialization": {
                 "stage": "awaiting_requirement_document_confirmation",

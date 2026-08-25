@@ -69,7 +69,7 @@ START
 
 ### 测试阶段 AG-UI 与生命周期契约
 
-`unit_test`、`unit_test_repair`、`test_phase_confirmation`、`review_phase_confirmation` 和 `code_review` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。`unit_test_confirmation` 和 `frontend_performance_confirmation` 是独立生命周期待交互类型，分别使用对应的 `run/skip` 结构化答案恢复原节点；恢复必须携带原执行的 `resumeExecutionRunId`，其中性能测试确认只允许同一测试 thread 接管。两个阶段确认门的 AG-UI 快照分别投影固定确认文案；恢复都校验原执行的 scope/target，阶段交接允许原子转交到新的阶段 thread。审查确认提交后生命周期立即投影 `code_review`，使顶部审查阶段在扫描首帧前同步高亮。生命周期 schema 当前为 `1.4.0`。
+`unit_test`、`unit_test_repair`、`test_phase_confirmation`、`review_phase_confirmation` 和 `code_review` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。`unit_test_confirmation` 和 `frontend_performance_confirmation` 是独立生命周期待交互类型，分别使用对应的 `run/skip` 结构化答案恢复原节点；恢复必须携带原执行的 `resumeExecutionRunId`，其中性能测试确认只允许同一测试 thread 接管。两个阶段确认门的 AG-UI 快照分别投影固定确认文案；恢复都校验原执行的 scope/target，阶段交接允许原子转交到新的阶段 thread。审查确认提交后生命周期立即投影 `code_review`，使顶部审查阶段在扫描首帧前同步高亮。生命周期快照不再包含 schema 版本字段。
 
 需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 读取 `.xcodeagent/plans/technical-plan.json`；页面选择从 `pages[].references` 解析实现范围并在运行时编译 PageImplementationContract，API 选择直接读取 TechnicalPlan Endpoint。两者都先进入 `development_readiness_gate`，只在关联实体均有已确认 EntitySourceBinding 时继续。门禁不会自动跳转实体；用户完成独立绑定后必须重新发起原目标开发。
 
@@ -97,7 +97,7 @@ START
 
 ### 工作区应用生命周期
 
-`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台 execution 和资源锁的持久化权威来源，schema 与完整状态机见 `docs/APPLICATION_LIFECYCLE.md`。初始化期间由 `initialization.threadId` 定位同一 checkpoint，成功进入工作台时清空；初始化交互正文和确认令牌不在根节点重复保存。它使用版本化 Pydantic schema、单调 revision、同目录临时文件 + fsync + 原子替换，损坏或不支持的版本不会被当作缺失静默忽略。当前对话的 Graph 运行状态以实时 AG-UI 流和同一 `threadId` 的 LangGraph checkpoint 为准，不会在每个节点运行前从状态文件重建。
+`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台 execution 和资源锁的持久化权威来源，结构与完整状态机见 `docs/APPLICATION_LIFECYCLE.md`。初始化期间由 `initialization.threadId` 定位同一 checkpoint，成功进入工作台时清空；初始化交互正文和确认令牌不在根节点重复保存。它使用严格 Pydantic 结构、单调 revision、同目录临时文件 + fsync + 原子替换，损坏或不符合当前结构的文件不会被当作缺失静默忽略。当前对话的 Graph 运行状态以实时 AG-UI 流和同一 `threadId` 的 LangGraph checkpoint 为准，不会在每个节点运行前从状态文件重建。
 
 应用冷启动恢复到 `awaiting_user` 时，前端通过 `/application-page-planning/run` 的 `applicationPlanningRecovery.get` AG-UI 动作只读获取同一 `threadId` 的 checkpoint，并重新投影右侧需求草稿与确认卡；未确认的 RequirementSpec 只能作为草稿展示，不能冒充正式文档。该动作不得调用 Graph 节点、改变 lifecycle 或伪造用户消息；真正的确认/补充必须提交带版本令牌的 `applicationPlanningInteraction`。运行中阶段仍可按原线程恢复执行，失败或取消阶段只展示显式重试入口。
 
