@@ -123,16 +123,15 @@
 
 ### 权限管理固定资源
 
-权限管理模块与业务资源使用相同结构和 snake_case 命名，只注入两个固定资源点：
+权限管理模块使用平台固定的 `system` 资源类型和 snake_case 命名，只注入一个固定资源点：
 
 ```text
-system_authorization_management  page，targetResourceRef=route:/roles
-manage_system_authorization      operation，targetResourceRef=authorization-api.v1#management-endpoints
+system_authorization_management  system，targetResourceRef=authorization-api.v1#management-control-plane
 ```
 
-- 所有权限管理 Endpoint 统一绑定 `manage_system_authorization`。
+- `/roles` 菜单、路由、页面内操作和所有权限管理 Endpoint 统一绑定 `system_authorization_management`；固定系统页面是业务页面/操作资源规则的唯一例外。
 - `/api/authorization/status` 和 `/api/authorization/me/effective-permissions` 只要求可信身份认证，不绑定系统管理资源。
-- 系统管理员角色必须同时拥有上述两个资源；页面资源不能替代后端管理操作校验。
+- 系统管理员角色默认获得该唯一系统资源；后端仍须独立鉴权，不能只依赖前端入口隐藏。
 
 ## 文档地位与当前状态
 
@@ -152,17 +151,17 @@ manage_system_authorization      operation，targetResourceRef=authorization-api
 | 阶段                            | 状态   | 说明                                                                                                                                |
 | ------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------- |
 | 1. 原子修正应用权限配置         | 已实施 | 已切换到 v5 内置 RBAC 配置，删除 provider/独立运行态页面字段；配置冲突通过现有 AG-UI 前置澄清并原子持久化后再继续 RequirementSpec。 |
-| 2. RequirementSpec 权限语义     | 已实施 | 权限候选、来源、隐藏稳定 `ruleId` 与 Markdown/编辑器校验已落地；阶段 4 实施前置收敛会删除旧行为字段并增加默认角色引用。           |
+| 2. RequirementSpec 权限语义     | 已实施 | 权限候选、来源、隐藏稳定 `ruleId` 与 Markdown/编辑器校验已落地；阶段 4 实施前置收敛会删除旧行为字段并增加默认角色引用。             |
 | 3. ProductPlan 与 UiDesign 边界 | 已实施 | ProductPlan 已升级 v5，只保存业务页面/action 及规则到目标的稳定映射；角色、资源键和固定页面均被拒绝，UiDesign 只消费业务页面。      |
-| 4. TechnicalPlan 固定资源编译   | 未实施 | 按本计划先收敛上游当前契约，再实现 `authorization-manifest.v2`、统一资源键、默认角色授权及初始系统管理员选择。                    |
+| 4. TechnicalPlan 固定资源编译   | 未实施 | 按本计划先收敛上游当前契约，再实现 `authorization-manifest.v2`、统一资源键、默认角色授权及初始系统管理员选择。                      |
 | 5. EndpointDetail 数据权限      | 未实施 | 必须等待固定数据资源和策略键。                                                                                                      |
 
 ### 当前工作流适配（本次实施）
 
 需求与产品规划现在构成一个用户可见的“需求文档”联合节点：RequirementSpec 先记录业务角色及其职责和权限候选，ProductPlan 在同一节点内消费已校验草稿生成页面与操作；二者只能通过一次 `requirement_document_confirmation` 联合确认后，UiDesign、TechnicalPlan 才能读取正式文件。内部继续保留各自 Markdown/JSON，ProductPlan 的 `requirement_spec_sha256` 必须等于同轮已确认 RequirementSpec 的确定性哈希；不生成 `requirement-document-manifest.json`。因此本文所有“RequirementSpec 确认后再生成 ProductPlan”的旧描述均以此规则为准替换。
-| 6. 工程初始化接入内置权限基础   | 未实施 | 分为后端模板、前端模板和 XCodeAgent 生命周期三个独立验收包；必须等待 TechnicalPlan 资源 manifest。                                  |
-| 7. Build DAG 和授权运行时       | 未实施 | 使用 MyBatis + Flyway 实现运行态；必须等待阶段 3 至 6 确认。                                                                        |
-| 8. 失效规则与完整回归           | 未实施 | 必须在前序阶段完成后执行。                                                                                                          |
+| 6. 工程初始化接入内置权限基础 | 未实施 | 分为后端模板、前端模板和 XCodeAgent 生命周期三个独立验收包；必须等待 TechnicalPlan 资源 manifest。 |
+| 7. Build DAG 和授权运行时 | 未实施 | 使用 MyBatis + Flyway 实现运行态；必须等待阶段 3 至 6 确认。 |
+| 8. 失效规则与完整回归 | 未实施 | 必须在前序阶段完成后执行。 |
 
 ## 不可违背的业务不变量
 
@@ -188,7 +187,7 @@ manage_system_authorization      operation，targetResourceRef=authorization-api
 - 用户未明确提出控制的操作，不生成操作资源点，不隐藏或禁用该操作。
 - 用户未明确提出控制的数据范围，不生成数据资源点，不生成数据过滤算法。
 - 对已认证成员而言，未生成资源点的业务功能默认可见可用；是否要求登录仍由独立身份认证契约决定。
-- `/roles`、`system_authorization_management` 和 `manage_system_authorization` 是平台固定控制面，不受“未提及业务功能默认可见”规则影响。
+- `/roles` 与 `system_authorization_management` 是平台固定控制面，不受“未提及业务功能默认可见”规则影响。
 
 ### 资源固定、关系动态
 
@@ -208,31 +207,31 @@ manage_system_authorization      operation，targetResourceRef=authorization-api
 
 ### RequirementSpec 决策表
 
-| 权限能力 | 用户业务描述                       | RequirementSpec 结果                                      | 是否澄清                               |
-| -------- | ---------------------------------- | --------------------------------------------------------- | -------------------------------------- |
-| 关闭     | 未提及权限控制                     | `enabled=false`，三类候选为空                            | 否                                     |
-| 开启     | 未提及页面、操作或数据控制         | `enabled=true`，三类候选为空                             | 只确认系统管理员角色选择               |
-| 开启     | 明确页面、操作或数据控制并说明角色 | 只生成明确候选及其 `defaultGrantedRoleIds`               | 否                                     |
-| 开启     | 明确受控目标但未说明授权角色       | 保留已确认候选，不推断角色                               | 是，只确认该候选首次默认授予哪些角色   |
-| 开启     | 存在一个管理员类业务角色           | 保留业务角色和明确业务授权                               | 是，确认复用该角色或新建系统管理员角色 |
-| 开启     | 存在多个管理员类业务角色           | 保留全部业务角色                                         | 是，选择唯一系统管理员角色或新建       |
-| 开启     | 明确提出权限但业务含义不完整       | 保留已确认事实，不推断缺失语义                           | 是，只询问该业务歧义                   |
-| 关闭     | 业务描述明确要求权限控制           | 不得静默丢弃，也不得自动开启                             | 是，确认启用并补齐配置，或移除该需求   |
+| 权限能力 | 用户业务描述                       | RequirementSpec 结果                       | 是否澄清                               |
+| -------- | ---------------------------------- | ------------------------------------------ | -------------------------------------- |
+| 关闭     | 未提及权限控制                     | `enabled=false`，三类候选为空              | 否                                     |
+| 开启     | 未提及页面、操作或数据控制         | `enabled=true`，三类候选为空               | 只确认系统管理员角色选择               |
+| 开启     | 明确页面、操作或数据控制并说明角色 | 只生成明确候选及其 `defaultGrantedRoleIds` | 否                                     |
+| 开启     | 明确受控目标但未说明授权角色       | 保留已确认候选，不推断角色                 | 是，只确认该候选首次默认授予哪些角色   |
+| 开启     | 存在一个管理员类业务角色           | 保留业务角色和明确业务授权                 | 是，确认复用该角色或新建系统管理员角色 |
+| 开启     | 存在多个管理员类业务角色           | 保留全部业务角色                           | 是，选择唯一系统管理员角色或新建       |
+| 开启     | 明确提出权限但业务含义不完整       | 保留已确认事实，不推断缺失语义             | 是，只询问该业务歧义                   |
+| 关闭     | 业务描述明确要求权限控制           | 不得静默丢弃，也不得自动开启               | 是，确认启用并补齐配置，或移除该需求   |
 
 三个候选数组彼此独立，任何一个数组为空都是合法状态。禁止为了“结构完整”补写 `scope=all`、默认受控页面、默认受控操作或默认业务授权。
 
 ### 代码职责边界
 
-| 层级                        | 允许职责                                                               | 禁止职责                                                         |
-| --------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| 需求模型                    | 理解用户业务语言；提取明确权限候选和角色授权事实；提出真实业务歧义       | 根据权限开关、初始管理员或登录配置推断业务权限；生成技术 ID      |
-| RequirementSpec service     | 归一化当前字段；生成和保留 `ruleId/dataRuleKey`；校验角色引用和业务语义 | 使用关键词解释权限语义；补默认授权；生成页面/实体/资源绑定       |
-| requirement-document node   | 执行配置冲突、业务角色/职责、权限语义、授权角色和系统管理员选择澄清，并联合确认 RequirementSpec 与 ProductPlan | 检查问题文本关键词；自动选择角色；静默修改应用配置 |
-| RequirementSpec UI/Markdown | 用业务语言展示候选、默认业务角色和系统管理员选择；保存不可见稳定标记     | 要求用户填写技术 ID、资源键、策略键、SQL 或数据库字段             |
-| ProductPlan                 | 承接已确认页面和业务 action/step，建立稳定目标 ID                      | 新增权限语义、资源键、角色或固定权限管理页                       |
-| TechnicalPlan               | 确定性编译资源键、策略键、目标绑定、首次角色种子和默认授权矩阵           | 让模型决定最终键或角色授权；创建无来源资源；写入特定角色判断     |
-| EndpointDetail              | 细化已声明数据策略的执行算法和失败模式                                 | 新建资源、改变 policy 或扩大数据范围                             |
-| 生成应用运行时              | 读取固定资源目录；动态配置角色和成员关系；执行最终裁决                 | CRUD 资源定义；直接授权成员；按固定角色判断                      |
+| 层级                        | 允许职责                                                                                                       | 禁止职责                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| 需求模型                    | 理解用户业务语言；提取明确权限候选和角色授权事实；提出真实业务歧义                                             | 根据权限开关、初始管理员或登录配置推断业务权限；生成技术 ID  |
+| RequirementSpec service     | 归一化当前字段；生成和保留 `ruleId/dataRuleKey`；校验角色引用和业务语义                                        | 使用关键词解释权限语义；补默认授权；生成页面/实体/资源绑定   |
+| requirement-document node   | 执行配置冲突、业务角色/职责、权限语义、授权角色和系统管理员选择澄清，并联合确认 RequirementSpec 与 ProductPlan | 检查问题文本关键词；自动选择角色；静默修改应用配置           |
+| RequirementSpec UI/Markdown | 用业务语言展示候选、默认业务角色和系统管理员选择；保存不可见稳定标记                                           | 要求用户填写技术 ID、资源键、策略键、SQL 或数据库字段        |
+| ProductPlan                 | 承接已确认页面和业务 action/step，建立稳定目标 ID                                                              | 新增权限语义、资源键、角色或固定权限管理页                   |
+| TechnicalPlan               | 确定性编译资源键、策略键、目标绑定、首次角色种子和默认授权矩阵                                                 | 让模型决定最终键或角色授权；创建无来源资源；写入特定角色判断 |
+| EndpointDetail              | 细化已声明数据策略的执行算法和失败模式                                                                         | 新建资源、改变 policy 或扩大数据范围                         |
+| 生成应用运行时              | 读取固定资源目录；动态配置角色和成员关系；执行最终裁决                                                         | CRUD 资源定义；直接授权成员；按固定角色判断                  |
 
 ### 确定性逻辑允许与禁止清单
 
@@ -430,7 +429,7 @@ authorization.enabled=false
 
 ### 固定权限管理页
 
-当 `authorization.enabled=true` 时，模板确定性增加：
+当 XCodeAgent 选择前后端 `auth` 分支时，模板确定性增加：
 
 ```text
 route: /roles
@@ -441,7 +440,7 @@ name: 权限管理
 固定页面包含：
 
 - 只读页面、操作、数据和系统资源目录。
-- 角色列表、创建、修改、启用和停用。
+- 角色列表、创建、修改、启用、停用和删除。
 - 角色资源矩阵。
 - 成员列表、预配置成员、JIT 成员和成员角色设置。
 - 成员最终有效权限。
@@ -451,11 +450,10 @@ name: 权限管理
 固定系统资源键由平台确定性注入，且只包含：
 
 ```text
-system_authorization_management  page
-manage_system_authorization     operation
+system_authorization_management  system
 ```
 
-资源定义全部只读。拥有 `manage_system_authorization` 的成员可以使用同一组管理 API 查看和维护资源关系、角色、成员角色关系、有效权限与审计，不再为每个管理动作拆分资源点。页面菜单对无 `system_authorization_management` 的成员隐藏；直接访问路由或在没有管理操作资源时调用管理 API 均返回 403。`/api/authorization/status` 和当前成员自己的 `/api/authorization/me/effective-permissions` 只要求可信认证，不绑定 `manage_system_authorization`。
+资源定义全部只读。拥有 `system_authorization_management` 的成员可以使用同一组管理 API 查看和维护资源关系、角色、成员角色关系、有效权限与审计，不再为页面、读写动作或接口拆分资源点。页面菜单对无该资源的成员隐藏；直接访问路由或调用管理 API 均返回 403。`/api/authorization/status` 和当前成员自己的 `/api/authorization/me/effective-permissions` 只要求可信认证，不绑定该系统资源。
 
 页面所有权规则：
 
@@ -483,7 +481,7 @@ TechnicalPlan 资源点契约：
 type PermissionResourcePoint = {
   resourceKey: string;
   origin: "system" | "business";
-  type: "page" | "operation" | "data";
+  type: "page" | "operation" | "data" | "system";
   name: string;
   description: string;
   sourceRuleIds: string[];
@@ -504,8 +502,7 @@ type PermissionResourcePoint = {
 操作资源：resourceKey = actionId
 数据资源：resourceKey = dataRuleKey
 数据策略：policyKey = <dataRuleKey>_policy
-系统页面：system_authorization_management
-系统操作：manage_system_authorization
+系统控制面：system_authorization_management（type=system）
 ```
 
 编译与校验规则：
@@ -517,7 +514,7 @@ type PermissionResourcePoint = {
 - 每个受控操作规则必须绑定一个操作资源；多个规则指向同一 action 时复用资源并聚合来源。
 - 每个数据规则独立产生一个数据资源和策略键。
 - 所有业务资源必须 `origin=business` 且至少包含一个有效 `sourceRuleIds`。
-- 两个系统资源必须 `origin=system`、`sourceRuleIds=[]`，由平台注入，模型不能改名、删除或拆分。
+- 唯一系统资源必须 `origin=system`、`type=system`、`sourceRuleIds=[]`，由平台注入，模型不能改名、删除或拆分。
 - 资源键重复但类型、目标或语义不一致时拒绝确认。
 - TechnicalPlan 不能改变数据范围含义、默认角色授权或初始系统管理员选择，也不能写入角色名/角色 ID 裁决逻辑。
 
@@ -531,7 +528,11 @@ type AuthorizationManifestV2 = {
   bindings: {
     pages: Array<{ pageId: string; resourceKey: string }>;
     actions: Array<{ actionId: string; resourceKey: string }>;
-    endpoints: Array<{ endpointId: string; operationResourceKeys: string[]; dataPolicyKeys: string[] }>;
+    endpoints: Array<{
+      endpointId: string;
+      operationResourceKeys: string[];
+      dataPolicyKeys: string[];
+    }>;
     dataRules: Array<{
       ruleId: string;
       dataRuleKey: string;
@@ -560,13 +561,13 @@ type AuthorizationManifestV2 = {
 
 - `roleSeedKey` 确定性复用已确认 `user_roles[].id`，不得由模型改写。
 - 业务资源只按每条规则的 `defaultGrantedRoleIds` 聚合到对应角色；不得把未明确授权的业务资源加入角色。
-- 被选为初始系统管理员的角色固定获得两个系统资源；若复用业务管理员角色，则同时保留该角色明确获得的业务资源；若新建独立角色，则默认只有两个系统资源。
+- 被选为初始系统管理员的角色固定获得唯一系统资源；若复用业务管理员角色，则同时保留该角色明确获得的业务资源；若新建独立角色，则默认只有该系统资源。
 - PageImplementationContract、EndpointDetail、Build DAG、前后端守卫和运行态资源投影必须引用同一 manifest。
 - TechnicalPlan Markdown 必须按页面、操作、数据资源和角色默认授权分组展示人类可读表格，同时保留 `ruleId → target → resourceKey` 追踪关系；用户不需要手工编辑技术 ID。
 
 ### 生成应用运行态 OpenAPI 契约
 
-后端模板中的 `src/main/resources/openapi/authorization-api.v1.yaml` 是权限管理接口唯一事实源，契约版本固定为 `authorization-api.v1`。前端使用 lockfile 固定版本的 Orval，由该文件确定性生成 TypeScript 类型和 Axios 客户端，禁止在前端手写第二套请求/响应 DTO。生成结果必须提交并通过跨仓契约校验。
+本仓库的 [`contracts/authorization-api.v1.yaml`](../contracts/authorization-api.v1.yaml) 是前后端共享的权限管理接口唯一事实源，契约版本固定为 `authorization-api.v1`。后端 `auth` 分支提交与该文件字节一致的 `src/main/resources/openapi/authorization-api.v1.yaml` 副本；前端从该本地契约确定性生成 TypeScript 类型，但所有 HTTP 请求必须复用模板现有 `src/apis/service.ts` 的 axios 实例，不生成或引入第二个 HTTP 客户端。XCodeAgent 必须校验两个 YAML 文件的 SHA-256 一致，并验证前端生成类型无漂移。
 
 固定接口：
 
@@ -574,40 +575,49 @@ type AuthorizationManifestV2 = {
 GET  /api/authorization/status
 GET  /api/authorization/me/effective-permissions
 GET  /api/authorization/resources
+GET  /api/authorization/resources/{resourceKey}
 GET  /api/authorization/roles
 POST /api/authorization/roles
+GET  /api/authorization/roles/{roleId}
 PUT  /api/authorization/roles/{roleId}
+DELETE /api/authorization/roles/{roleId}
 PUT  /api/authorization/roles/{roleId}/status
+GET  /api/authorization/roles/{roleId}/resources
 PUT  /api/authorization/roles/{roleId}/resources
 GET  /api/authorization/members
+GET  /api/authorization/members/{subjectId}
 PUT  /api/authorization/members/{subjectId}/roles
+DELETE /api/authorization/members/{subjectId}
 GET  /api/authorization/members/{subjectId}/effective-permissions
 GET  /api/authorization/audit
 ```
 
-- 除 `/status` 和 `/me/effective-permissions` 外，上述权限管理 Endpoint 全部绑定同一个 `manage_system_authorization`，不按读写动作继续拆分资源。
-- `/roles` 页面单独绑定 `system_authorization_management`，从而分别保证前端入口控制和后端不可绕过校验；这两个资源是权限管理的最小完整集合。
+- 除 `/status` 和 `/me/effective-permissions` 外，上述权限管理 Endpoint 全部绑定唯一的 `system_authorization_management`，不按页面、读写动作或接口继续拆分资源。
+- `/roles` 页面也绑定 `system_authorization_management`，前端入口控制和后端不可绕过校验引用同一资源。
+- `POST /roles` 请求为 `{name, description?, expectedRevision}`；`PUT /roles/{roleId}` 只允许更新 `{name, description?, expectedRevision}`；`PUT /roles/{roleId}/status` 为 `{active, expectedRevision}`。
+- `PUT /roles/{roleId}/resources` 为 `{resourceKeys, expectedRevision}`，按全量替换处理；`DELETE /roles/{roleId}` 为 `{expectedRevision}`，不接受资源或系统属性字段。
+- `PUT /members/{subjectId}/roles` 为 `{roleIds, displayName?, expectedRevision}`，按全量替换成员角色处理，并可作为精确 subject 的预配置入口；`DELETE /members/{subjectId}` 为 `{expectedRevision}`，只撤销本地授权记录。
 
 响应与并发契约：
 
 - 列表响应统一包含 `items`、`total`、`page`、`pageSize` 和读取时的 `revision`。
 - 资源 DTO 至少包含 `resourceKey`、`origin`、`type`、`name`、`description`、`semanticDefinition`、可选 `targetResourceRef` 和可选 `policyKey`。
-- 角色 DTO 至少包含 `roleId`、`name`、可选 `description`、`active`、`isSystemRole`、`isInitialAdminRole` 和关联 `resourceKeys`；成员 DTO 至少包含 `subjectId`、可选 `displayName`、来源状态和关联 `roleIds`。
+- 角色 DTO 至少包含 `roleId`、`name`、可选 `description`、`active`、`deleted`、`isSystemRole`、`isInitialAdminRole` 和关联 `resourceKeys`；成员 DTO 至少包含 `subjectId`、可选 `displayName`、来源状态和关联 `roleIds`。
 - `isSystemRole` 和 `isInitialAdminRole` 由首次种子创建过程写入，在普通角色创建、更新和资源关系 API 中只读；客户端提交修改时必须拒绝，不能静默忽略。
 - 有效权限响应包含 `subjectId`、最终 `resourceKeys` 和 `revision`。
-- 创建/更新角色请求、角色状态替换、角色资源全量替换和成员角色全量替换请求都必须携带 `expectedRevision`；成功响应返回最新 `revision`。
+- 创建/更新/删除角色、角色状态替换、角色资源全量替换、成员角色全量替换和删除本地成员授权记录请求都必须携带 `expectedRevision`；成功响应返回最新 `revision`。
+- `DELETE /roles/{roleId}` 只允许删除未拥有 `system_authorization_management` 的角色，采用逻辑删除并撤销其关联关系；`DELETE /members/{subjectId}` 只删除本地授权记录及角色关系，不删除外部身份。
 - 错误响应统一包含 `code`、`message`、可选 `currentRevision` 和可选 `details`。
 - 固定错误码至少包含 `unauthenticated`、`forbidden`、`authorization_not_ready`、`authorization_revision_conflict` 和 `last_administrator_required`。
 
 接口注册与就绪状态矩阵：
 
-| 状态                               | `/api/authorization/status`                                                                            | 当前成员有效权限                                      | 权限管理接口                                    |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- | ----------------------------------------------- |
-| `authorization.enabled=false`      | 不注册，404                                                                                            | 不注册，404                                           | 不注册，404                                     |
-| 已启用、Build 运行时未就绪         | 公开 200，返回 `enabled=true`、`ready=false`、`contractVersion=authorization-api.v1` 和非敏感 `reason` | 在解析身份前统一 503 `authorization_not_ready`        | 在解析身份前统一 503 `authorization_not_ready` |
-| 已启用、运行时就绪、未认证         | 公开 200，返回 `ready=true`                                                                            | 401 `unauthenticated`                                 | 401 `unauthenticated`                           |
-| 已启用、运行时就绪、已认证但无资源 | 公开 200，返回 `ready=true`                                                                            | 200，仅返回当前成员有效资源，可以为空                 | 403 `forbidden`                                 |
-| 已启用、运行时就绪、拥有管理资源   | 公开 200，返回 `ready=true`                                                                            | 200                                                   | 200                                             |
+| 状态                                    | `/api/authorization/status`                                                            | 当前成员有效权限                               | 权限管理接口                                   |
+| --------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- |
+| auth 分支、Build 运行时未就绪           | 公开 200，返回 `ready=false`、`contractVersion=authorization-api.v1` 和非敏感 `reason` | 在解析身份前统一 503 `authorization_not_ready` | 在解析身份前统一 503 `authorization_not_ready` |
+| auth 分支、运行时就绪、未认证           | 公开 200，返回 `ready=true`                                                            | 401 `unauthenticated`                          | 401 `unauthenticated`                          |
+| auth 分支、运行时就绪、已认证但无资源   | 公开 200，返回 `ready=true`                                                            | 200，仅返回当前成员有效资源，可以为空          | 403 `forbidden`                                |
+| auth 分支、运行时就绪、拥有系统管理资源 | 公开 200，返回 `ready=true`                                                            | 200                                            | 200                                            |
 
 未就绪 `reason` 只允许公开非敏感枚举：`runtime_not_built`、`database_not_initialized`、`resource_manifest_mismatch`；就绪时 `reason=null`。不得返回数据库地址、异常堆栈、Cookie、token 或内部配置。`AuthorizationReadinessFilter` 必须先于身份认证过滤器处理权限管理接口：未就绪时除 `/status` 外统一返回 503；就绪后再执行 Spring Security 的 401 和 RBAC 的 403 判定。
 
@@ -640,6 +650,8 @@ listSubjects
 replaceSubjectRoles
 getEffectivePermissions
 listAudit
+deleteRole
+deleteSubjectAuthorization
 ```
 
 运行态约束：
@@ -647,7 +659,7 @@ listAudit
 - 不提供 `createResource`、`updateResource` 或 `deleteResource`。
 - `roleId` 是稳定 UUID；角色名称按标准化值唯一，可改名。
 - 普通运行态新建角色的 `isSystemRole=false`、`isInitialAdminRole=false`；这两个属性不是授予权限的替代机制，也不能被普通角色 API 修改。
-- 角色只允许启用和停用，不允许删除；停用角色不贡献有效权限，关系保留以便审计和恢复。
+- 角色可启用、停用和逻辑删除；拥有 `system_authorization_management` 的角色不可删除，其他角色删除时撤销关联关系并保留审计历史。停用或已删除角色不贡献有效权限。
 - `replaceRoleResources` 和 `replaceSubjectRoles` 是全量替换，不支持成员直接资源授权。
 - 可以通过精确 subject 标识预配置尚未登录的成员；首次认证时 JIT 补充展示信息，但不得覆盖已有角色关系。
 - 所有写操作携带 `expectedRevision`；服务在事务中校验 revision、计算变更后有效权限、执行防锁死检查、写关系与审计并递增 revision。
@@ -658,11 +670,11 @@ listAudit
 
 - RequirementSpec 必须恰有一个 `isInitialAdminRole=true` 的角色，且该角色同时 `isSystemRole=true`；其他角色可以是系统角色，但不能再标记为初始管理员角色。
 - 若用户选择复用业务管理员角色，首次初始化沿用其角色种子；若用户明确不合并，首次初始化创建独立系统管理员角色。两种情况都不得根据角色名称自动判断。
-- 将 `system_authorization_management` 和 `manage_system_authorization` 两个资源绑定给所选角色，再把 `initialAdministratorSubjects` 作为该角色的默认成员；复用业务角色时还保留其明确的业务资源，不能自动获得全部业务资源。
+- 将 `system_authorization_management` 绑定给所选角色，再把 `initialAdministratorSubjects` 作为该角色的默认成员；复用业务角色时还保留其明确的业务资源，不能自动获得全部业务资源。
 - 两个系统属性只记录角色来源和系统归属，不产生隐式权限；最终裁决始终只读取角色资源关系。
 - 初始管理员角色后续可以改名、调整资源或停用；`initialAdministratorSubjects` 也可以通过成员角色配置调整，不要求这些成员或该初始角色永久承担管理职责。
-- 每次管理写事务完成后，系统必须仍至少存在一个活跃成员，通过一个或多个启用角色的资源并集同时拥有两个系统资源；该成员和角色不必是初始种子。
-- 移除自己的管理权限、停用最后有效管理角色、删除最后有效成员关系或拆散最后一组完整管理资源时，整笔事务拒绝。
+- 每次管理写事务完成后，系统必须仍至少存在一个活跃成员，通过一个或多个启用角色的资源并集拥有 `system_authorization_management`；该成员和角色不必是初始种子。
+- 移除自己的管理权限、停用最后有效管理角色、删除最后有效管理员成员、删除最后有效成员关系或撤销最后一组系统资源授权时，整笔事务拒绝。
 - 管理员种子只在首次初始化生效；后续 Build 或启动不得重新覆盖运行态角色与成员配置。
 
 ## 分阶段实施与启动验收
@@ -765,20 +777,20 @@ listAudit
 
 #### 4C. 编译 `authorization-manifest.v2`
 
-- RBAC 关闭时输出 `enabled=false`、空资源/绑定/默认授权；RBAC 开启时确定性注入 `system_authorization_management` 和 `manage_system_authorization`。
+- RBAC 关闭时输出 `enabled=false`、空资源/绑定/默认授权；RBAC 开启时确定性注入唯一 `type=system` 的 `system_authorization_management`。
 - 页面规则编译为 `resourceKey=pageId`，操作规则编译为 `resourceKey=actionId`，数据规则编译为 `resourceKey=dataRuleKey`、`policyKey=<dataRuleKey>_policy`；所有 key 必须为 `lower_snake_case`。
 - 多条规则指向同一页面或 action 时复用资源并聚合去重 `sourceRuleIds`；同一 action 的全部后端能力绑定同一操作资源。
-- 每个管理 Endpoint 统一绑定 `manage_system_authorization`；状态接口和当前成员有效权限接口仅要求认证，不绑定管理资源。
-- 确定性编译 `defaultRoleAuthorization.roles`、`roleResourceGrants` 和 `initialAdminRoleSeedKey`。角色 seed key 复用 `user_roles[].id`，业务授权只来自 `defaultGrantedRoleIds`，初始管理员角色额外且仅固定获得两个系统资源。
+- `/roles` 与每个管理 Endpoint 统一绑定 `system_authorization_management`；状态接口和当前成员有效权限接口仅要求认证，不绑定管理资源。
+- 确定性编译 `defaultRoleAuthorization.roles`、`roleResourceGrants` 和 `initialAdminRoleSeedKey`。角色 seed key 复用 `user_roles[].id`，业务授权只来自 `defaultGrantedRoleIds`，初始管理员角色额外且仅固定获得该唯一系统资源。
 - fingerprint 覆盖规范化后的 resources、bindings 和 defaultRoleAuthorization；数组排序与去重规则固定，重复编译必须字节级稳定。
 - PageImplementationContract 只投影已确认的 `{targetType,targetId,resourceKey}`；页面投影只使用 `pageId`，不保存 PageKey/pageKey。EndpointDetail 只消费已声明的数据策略。
 
 4C 验收：
 
-- 三类业务候选为空时只生成两个系统资源和初始系统管理员的两项默认授权。
+- 三类业务候选为空时只生成唯一系统资源和初始系统管理员的一项默认授权。
 - 只存在一种业务候选时只生成对应资源类型；未提及业务目标没有资源、绑定或守卫。
 - 相同确认输入重复编译得到相同 manifest 和 fingerprint；只改文案但保留稳定 key/目标时资源键不变，语义变更仍触发重新确认。
-- 复用业务管理员时该角色获得两个系统资源和明确业务资源；拆分角色时独立管理员默认只有两个系统资源。
+- 复用业务管理员时该角色获得唯一系统资源和明确业务资源；拆分角色时独立管理员默认只有该系统资源。
 - 无来源、规则漏覆盖、未知目标、key 冲突、未知角色引用、多个初始管理员或模型越权字段均阻止 TechnicalPlan 确认。
 
 #### 4D. TechnicalPlan 文档整合与阶段交付
@@ -812,19 +824,21 @@ listAudit
 
 ### 6. 工程初始化接入模板权限基础
 
-本阶段拆为三个必须顺序执行、独立启动和独立由用户验收的工作包。模板源代码始终包含权限能力，但由生成配置决定是否注册；不能维护“有权限版/无权限版”两套模板。
+本阶段拆为三个必须顺序执行、独立启动和独立由用户验收的工作包。前后端模板按权限开关成对选择分支：`authorization.enabled=false` 时均使用 `main`，`authorization.enabled=true` 时均使用 `auth`；不允许混用分支或由调用方指定任意分支。
 
 #### 6A. 后端模板权限契约与可启动骨架
 
 模板仓库：<https://github.com/Hupy2118/springboot-template.git>
 
+分支边界：权限契约、Controller 骨架、OpenAPI、`CurrentSubjectProvider` 和未就绪实现只存在于 `auth` 分支；`main` 分支不得包含运行态权限 API、OpenAPI 或权限运行时骨架。
+
 固定实现边界：
 
 - 在 `src/main/java/com/cmbchina/backend/authorization/` 增加 Controller、DTO、应用端口、领域类型、异常映射、就绪状态和 `CurrentSubjectProvider`。
-- 在 `src/main/resources/openapi/authorization-api.v1.yaml` 提交本计划规定的唯一 OpenAPI 契约。
+- 在 `src/main/resources/openapi/authorization-api.v1.yaml` 提交与本仓库 `contracts/authorization-api.v1.yaml` 字节一致的副本；本地契约文件才是唯一事实源。
+- 后端权限骨架只识别 `system_authorization_management` 一个 `type=system` 资源：除状态与当前成员权限查询外，资源目录、角色、角色资源、成员和审计接口均由该资源守卫；不得恢复页面资源与管理操作资源的双资源模型。
 - 若模板尚未接入 Spring Security，本工作包只增加由 Spring Boot BOM 管理的 `spring-security-core` 编译依赖，用于 `SecurityContextHolder`/`Authentication` 类型；不得引入会默认保护全站的 starter 或伪造认证 Filter。实际一号通认证和 Web Security 配置由阶段 7 接入。
-- 默认配置 `xcodeagent.authorization.enabled=false`；关闭时所有权限 Controller 均不注册。
-- 开启时注册公开 `/api/authorization/status` 和管理接口骨架。默认就绪状态为 `ready=false`；状态接口返回 200，其他接口统一返回结构化 503 `authorization_not_ready`。
+- `auth` 分支不保留 `xcodeagent.authorization.enabled` 运行时开关；公开 `/api/authorization/status` 和管理接口骨架始终注册。默认就绪状态为 `ready=false`；状态接口返回 200，其他接口统一返回结构化 503 `authorization_not_ready`。
 - `CurrentSubjectProvider` 固定读取 Spring Security `Authentication.getName()`，但本工作包不伪造身份、不信任前端 subject，也不复制一号通认证协议。
 - 只交付稳定编译边界，不增加 Flyway DDL、MyBatis Mapper、测试身份、内存角色数据或假审计；这些只能在阶段 7 实现。
 - 保持 Spring Boot 2.7 和 Java 8 兼容，所有新增或实质修改的方法按模板工程规范添加中文用途注释。
@@ -832,33 +846,44 @@ listAudit
 独立验收：
 
 - 后端模板测试和 Maven 构建通过，应用可以独立启动。
-- `enabled=false` 时状态及管理接口均为 404。
-- `enabled=true` 时状态接口返回契约版本和 `ready=false`，其他权限接口返回 503，响应不泄露内部信息。
+- `main` 分支不存在状态及管理接口；`auth` 分支状态接口返回契约版本和 `ready=false`，其他权限接口返回 503，响应不泄露内部信息。
 - OpenAPI 与 Controller/DTO 骨架通过契约测试，不存在未在 OpenAPI 声明的权限接口。
 
 #### 6B. 前端模板完整权限管理能力
 
 模板仓库：<https://github.com/ruyue1/frontend-template.git>
 
+分支边界：`AuthorizationManagementPage`、`src/authorization/` 和权限 service 封装只存在于 `auth` 分支；`main` 分支不得注册 `/roles`、权限菜单、Provider 或权限网络请求。
+
 固定实现边界：
 
 - 用完整页面替换现有 `src/pages/System/Role/index.tsx` 占位实现，固定页面目录为 `src/pages/System/AuthorizationManagementPage/`。
-- 增加 `src/authorization/`，包含由后端 OpenAPI 生成的 TypeScript 类型和 Axios 客户端、PermissionProvider、`can(resourceKey)`、菜单/路由/操作守卫及统一错误状态处理。
-- 增加 `src/config/authorization.ts`，默认 `enabled=false`，并固定 `managementRoute=/roles`、`contractVersion=authorization-api.v1`。
-- `enabled=false` 时不注册 `/roles`、不显示权限菜单、不挂载权限 Provider，也不发起权限 API 请求；权限源代码仍保留在统一模板中。
-- `enabled=true` 时将 `/roles` 注册为 layout 下的独立系统路由和系统菜单，不把它放入业务 `/page` 菜单树或业务页面生成逻辑。
-- 页面完整提供只读资源目录、角色创建/修改/启停、角色资源全量替换、成员列表与预配置、成员角色全量替换、有效权限和审计查询。
-- `/roles` 路由和菜单使用 `system_authorization_management`，页面内所有管理请求统一要求 `manage_system_authorization`；前端不得用页面资源代替后端操作校验。
+- 增加 `src/authorization/`，包含由本地 OpenAPI 生成的 TypeScript 类型、`authorizationApi.ts`、PermissionProvider、`can(resourceKey)`、菜单/路由/操作守卫及统一错误状态处理；禁止生成独立 Axios 客户端。
+- `authorizationApi.ts` 必须从模板现有 `src/apis/service.ts` 导入 `service`，按 OpenAPI operationId 封装所有权限请求；页面和 Provider 只能调用这些封装函数，不能直接调用 axios、fetch 或拼装第二套请求。
+
+  ```ts
+  export const getMyEffectivePermissions = () =>
+    service.get<EffectivePermissions>(
+      "/api/authorization/me/effective-permissions",
+    );
+  ```
+
+- GET 列表参数统一通过 `{ params }` 传递；POST/PUT 直接传请求 DTO；带 `expectedRevision` 的 DELETE 使用 `service.delete(path, { data: request })`，不得改成查询参数。
+- `PermissionProvider` 只以 `can("system_authorization_management")` 守卫 `/roles`、权限菜单及管理页面全部操作；前端不得为管理页面、角色读写或成员操作派生额外资源键。
+- `auth` 分支始终将 `/roles` 注册为 layout 下的独立系统路由和系统菜单，不把它放入业务 `/page` 菜单树或业务页面生成逻辑；不增加前端权限开关配置。
+- `PermissionProvider` 每次挂载时都直接通过 `authorizationApi.ts` 请求 `/api/authorization/me/effective-permissions`。请求完成前保持 loading 并按无权限处理；成功后仅将本次响应的 `resourceKeys` 放入当前 Provider 的 React 状态用于渲染，不写入 localStorage、sessionStorage、IndexedDB、Electron 存储、模块全局变量或 service 单例。页面刷新或 Provider 重新挂载必须重新请求接口；401 清空当前状态并走登录处理，503 直接展示权限运行时未就绪状态，其他错误进入统一错误态。
+- 页面完整提供只读资源目录、角色创建/修改/启停/删除、角色资源全量替换、成员列表与预配置/移除、成员角色全量替换、有效权限和审计查询。
+- `/roles` 路由、菜单和页面内所有管理请求统一使用 `system_authorization_management`；前端不得将入口隐藏视为后端鉴权的替代。
 - 页面必须覆盖 loading、empty、error、401、403、409、503，以及明暗主题下的背景、文字、边框、hover/focus、弹层和禁用状态。
-- 前端不得解析 Cookie、构造当前用户 subject 或绕过生成客户端手写权限请求。
-- 增加 `orval.config.ts` 和 `authorization:generate` 脚本；Orval 作为 lockfile 固定的开发依赖。XCodeAgent 通过子进程环境变量 `AUTHORIZATION_OPENAPI_PATH` 传入生成后端中的权威 OpenAPI 绝对路径，输出固定写入 `src/authorization/generated/`。未设置或文件不存在时生成命令必须失败；模板提交生成结果，使前端在没有相邻后端仓库时仍可构建。
+- 增加 `authorization:types` 脚本，使用 lockfile 固定版本的 `openapi-typescript` 只生成类型到 `src/authorization/generated/authorizationApiTypes.ts`。
 
 独立验收：
 
 - 前端测试和 `pnpm build` 通过，开发服务器可以启动。
-- 使用 6A 后端骨架启动联调时，开启权限后 `/roles` 正确显示“权限服务尚未就绪”，而不是崩溃。
-- 关闭权限时路由、菜单和网络请求均不存在；开启权限时固定系统路由存在且不污染业务菜单。
-- 资源目录没有创建、编辑和删除入口；客户端类型与 6A OpenAPI 生成结果一致。
+- 使用 6A 后端骨架启动联调时，当前成员有效权限请求返回 503 后，`/roles` 正确显示“权限服务尚未就绪”，而不是额外查询状态接口或崩溃。
+- `main` 分支路由、菜单和网络请求均不存在；`auth` 分支固定系统路由存在且不污染业务菜单，并通过当前成员有效权限接口获得资源点。
+- 连续刷新页面时每次都会重新请求 `/api/authorization/me/effective-permissions`；两次请求之间修改当前成员角色或角色资源后，刷新必须立即反映最新资源点，不得命中任何前端缓存。
+- 资源目录没有创建、编辑和删除入口；生成类型与本地 OpenAPI 一致，全部权限请求均经过 `authorizationApi.ts` 和模板既有 `service.ts`。
 
 #### 6C. XCodeAgent 模板生命周期接入
 
@@ -866,33 +891,36 @@ listAudit
 
 固定实现边界：
 
-- 继续从两个模板仓库的 `main` 分支浅克隆到生成项目的 `frontend/` 和 `backend/`；本计划暂不增加 tag、SHA 或模板版本选择逻辑。
-- RBAC 开启时，从生成后端读取权威 OpenAPI，运行前端模板的确定性客户端生成命令，并校验生成结果；不得从网络再次获取另一份契约。
-- 根据 `application.json.authorization.enabled` 原子写入前后端当前配置；开启时接入 `/roles`，关闭时保留模板源代码但不注册相关能力。
-- 文件级 capability gate 必须检查后端 OpenAPI/权限骨架、前端固定页面/Provider/生成客户端和配置入口，不能只检查 `package.json`、`pom.xml` 或目录存在。
+- 从已持久化的 `application.json.authorization.enabled` 确定唯一 `templateBranch`：关闭为 `main`，开启为 `auth`；前后端必须使用同一分支并通过 `git clone --branch <templateBranch> --single-branch --depth 1` 浅克隆到生成项目的 `frontend/` 和 `backend/`。
+- 分支选择不得来自前端自由输入或请求参数。用户自定义模板仓库 URL 可以保留，但 RBAC 开启时两个自定义仓库都必须存在并遵守 `auth` 分支契约；缺失时初始化失败。
+- 选择 `auth` 分支后，使用本仓库本地契约生成前端类型，并校验本地契约与后端 `auth` 分支 OpenAPI 副本 SHA-256 一致；不得从网络再次获取另一份契约，也不得生成独立 HTTP 客户端。
+- `auth` 分支不写入前后端权限开关配置，`/roles` 与权限接口作为该分支固有能力存在；`main` 分支不包含权限能力。
+- `auth` 分支的文件级 capability gate 必须检查后端 OpenAPI 副本及其本地契约 SHA-256、权限骨架、前端固定页面、Provider、生成类型、`authorizationApi.ts` 和既有 `service.ts` 复用关系；`main` 分支必须验证这些权限能力均不存在，不能只检查 `package.json`、`pom.xml` 或目录存在。
 - 先初始化业务页面，再校验所有业务路由不得与 `/roles` 冲突；固定页面不读取 UiDesign，不创建普通 PageImplementationContract、EndpointDetail 或业务开发任务。
-- 写入 `.xcodeagent/authorization/permission-resources.json` 和 `.xcodeagent/authorization/foundation-manifest.json`。阶段 6 只写固定资源 manifest 和基础接入状态，不写 DDL 或声称运行时 ready。
-- 模板生成 manifest 增加 `authorizationBackendContract`、`authorizationFrontend`、`authorizationConfig` 和 `authorizationGate`；RBAC 关闭时记录 skipped，开启时任一步缺失均使模板初始化失败。
+- `auth` 分支写入 `.xcodeagent/authorization/permission-resources.json` 和 `.xcodeagent/authorization/foundation-manifest.json`。阶段 6 只写唯一系统资源 manifest 和基础接入状态，不写 DDL 或声称运行时 ready；`main` 分支不创建该目录。
+- 模板生成 manifest 记录前后端仓库 URL、所选 `templateBranch`、各自实际 commit SHA，以及 `authorizationBackendContract`、`authorizationFrontend`、`authorizationConfig` 和 `authorizationGate`。已有模板目录只有 manifest 中的来源 URL 和分支与当前选择相同、且前后端 commit SHA 均存在时才能复用；记录缺失或不匹配时 fail closed，不能覆盖或混用。
 - XCodeAgent 的规划、配置持久化、模板生成进度、成功和失败仍通过 AG-UI 完整生命周期传递；不能为该流程新增普通 JSON/REST 产品接口。
 
 阶段产物：
 
 ```text
-frontend/src/pages/System/AuthorizationManagementPage/
-frontend/src/authorization/
-frontend/src/config/authorization.ts
-backend/src/main/java/com/cmbchina/backend/authorization/
-backend/src/main/resources/openapi/authorization-api.v1.yaml
-.xcodeagent/authorization/permission-resources.json
-.xcodeagent/authorization/foundation-manifest.json
+auth 分支：
+  frontend/src/pages/System/AuthorizationManagementPage/
+  frontend/src/authorization/
+  backend/src/main/java/com/cmbchina/backend/authorization/
+  backend/src/main/resources/openapi/authorization-api.v1.yaml
+  contracts/authorization-api.v1.yaml（XCodeAgent 本地唯一事实源）
+  .xcodeagent/authorization/permission-resources.json
+  .xcodeagent/authorization/foundation-manifest.json
+main 分支：无上述运行态权限产物
 ```
 
 独立验收：
 
-- XCodeAgent 前后端和桌面开发态启动通过，并能分别创建 RBAC 开启和关闭的生成应用。
-- 生成项目模板完成后前后端立即可启动；关闭时权限接口和 `/roles` 均为 404/不存在，开启时 `/roles` 显示未就绪状态。
+- XCodeAgent 前后端和桌面开发态启动通过，并能分别创建 `auth` 分支的 RBAC 开启应用与 `main` 分支的关闭应用；前后端分支选择、仓库 URL 和 commit SHA 必须成对一致。
+- 生成项目模板完成后前后端立即可启动；`main` 分支不存在权限接口和 `/roles`，`auth` 分支的 `/roles` 显示未就绪状态。
 - 业务页面设计列表中不存在权限管理页；修改业务路由为 `/roles` 时 ProductPlan 路由校验阻止确认。
-- 删除任一必需权限模板文件或制造 OpenAPI/生成客户端漂移时，模板 capability gate 稳定失败并指出具体缺失项。
+- `auth` 分支缺失、前后端分支混用、已有目录来源不匹配、删除任一必需权限模板文件、制造 OpenAPI/生成类型漂移或绕过 `service.ts` 时，模板 capability gate 稳定失败并指出具体缺失项。
 
 ### 7. Build DAG 和内置授权运行时
 
@@ -912,10 +940,11 @@ authorization.storage
 
 实现内容：
 
-- 使用 Flyway 生成当前契约的资源投影、角色、关系、成员、审计和 revision 表，使用 MyBatis 实现 Mapper、查询和事务内关系替换；不生成旧 schema 迁移或兼容分支。
+- 仅对 `auth` 分支注入权限任务链，并使用 Flyway 生成当前契约的资源投影、角色、关系、成员、审计和 revision 表，使用 MyBatis 实现 Mapper、查询和事务内关系替换；`main` 分支不生成权限 Build 任务、DDL 或守卫。
 - 生成 JIT 成员、allow 并集、数据策略合并、缓存失效和管理服务。
 - 所有管理写操作实现 `expectedRevision`、事务、审计和防锁死校验。
-- 按 manifest 创建带只读 `isSystemRole/isInitialAdminRole` 元数据的初始角色种子、两个系统资源关系和默认成员关系；重复执行必须幂等且不得覆盖运行态配置。
+- 按 manifest 创建带只读 `isSystemRole/isInitialAdminRole` 元数据的初始角色种子、唯一系统资源关系和默认成员关系；重复执行必须幂等且不得覆盖运行态配置。
+- 所有权限管理路由和 `/roles` 仅校验 `system_authorization_management`；状态与当前成员有效权限查询仅校验认证，运行时不得创建或解释第二个管理资源键。
 - 接入既有一号通 Spring Security 认证；`CurrentSubjectProvider` 只使用经过验证的 `Authentication.getName()`，认证适配未完成时不得把权限服务标记为 ready。
 - 完成 OpenAPI 中全部稳定端口，使 `/api/authorization/status` 仅在数据库、资源 manifest、认证适配和运行时服务均就绪后返回 `ready=true`。
 - 前端只对已有页面/操作资源生成控制；后端只对已有绑定目标生成守卫。
@@ -926,8 +955,8 @@ authorization.storage
 - 没有业务资源时，不向业务页面、操作或 endpoint 注入 RBAC 守卫。
 - 只存在部分业务资源时只保护精确目标，不扩大到同页其他操作或同实体其他 endpoint。
 - 验证 401、403、页面/操作行为、多角色并集、数据范围并集、停用角色和未知资源拒绝。
-- 验证角色创建/改名/启停、角色资源全量替换、成员预配置/JIT 和成员角色全量替换。
-- 验证 revision 冲突、审计原子性、自我移权和最后管理员保护。
+- 验证角色创建/改名/启停/删除、角色资源全量替换、成员预配置/JIT/移除和成员角色全量替换。
+- 验证 revision 冲突、审计原子性、自我移权、管理角色不可删除和最后管理员保护。
 - 验证 Flyway migration、MyBatis Mapper、manifest fingerprint、幂等 bootstrap 和状态接口从未就绪切换为就绪。
 - 验证前端伪造 subjectId、未验证 Cookie、空 SecurityContext 和匿名 Authentication 均不能获得权限。
 - 代码搜索不存在资源写接口、成员直接授权、角色继承、显式 deny、角色名分支和外部授权 provider。
@@ -962,8 +991,8 @@ authorization.storage
 - 初始管理员为空或使用 `current-user` 占位符时拒绝保存，真实 subject 可以完成幂等 bootstrap。
 - 权限关闭、权限开启未 Build、运行时就绪未认证、已认证无资源四种接口状态矩阵。
 - 一号通认证只通过 Spring Security `Authentication.getName()` 提供当前 subject，前端伪造 subject 不生效。
-- 后端 OpenAPI 与前端生成客户端一致，以及人为制造契约漂移时 capability gate 失败。
-- 前后端统一模板在权限关闭时不注册权限能力，在权限开启时提供 `/roles` 和未就绪/就绪状态。
+- 后端 OpenAPI 与前端生成类型一致，权限 service 封装覆盖全部前端使用的 operationId；`getAuthorizationStatus` 保持后端运维接口且不由前端调用。人为制造契约漂移或直接调用 axios/fetch 时 capability gate 失败。
+- 前后端 `main` 分支不包含权限能力；`auth` 分支提供唯一系统资源控制的 `/roles` 和未就绪/就绪状态，且前端生成类型与本地契约一致、两个 YAML 副本 SHA-256 一致。
 
 每个代码工作包均执行：
 
@@ -973,7 +1002,7 @@ authorization.storage
 - `pnpm dev` 验收新建、需求确认或工作台界面。
 - 从模板阶段开始，通过 `/api/projects/launch` 启动生成应用验收。
 - 阶段 6A 在后端模板执行 Maven 测试、构建和 Spring Boot 启动验收；阶段 6B 在前端模板执行测试、`pnpm build` 和开发服务器验收。
-- 阶段 6C 必须用同一次模板初始化得到的后端 OpenAPI 重新生成前端客户端，并验证生成结果无未提交漂移。
+- 阶段 6C 必须用本地 OpenAPI 重新生成前端类型，验证生成结果无未提交漂移，并验证 `authorizationApi.ts` 通过既有 `service.ts` 覆盖全部前端使用的 operationId；前端代码搜索不得调用 `/api/authorization/status`。
 - 涉及目录、API、存储格式或边界变化时，同一工作包更新 `docs/CODEBASE_INDEX.md`。
 
 ## 默认决策
@@ -986,14 +1015,14 @@ authorization.storage
 - `unauthenticated` 属于认证层，不属于 RBAC RequirementSpec。
 - 系统资源和业务资源在运行态均为只读固定目录；业务资源由 TechnicalPlan 确定性编译。
 - RequirementSpec/TechnicalPlan 只确定首次角色种子和默认授权；首次初始化后，角色、成员角色关系和角色资源关系在运行态动态配置。
-- 授权采用 allow 并集，不支持角色继承、显式 deny、成员直接授权或角色删除。
-- 初始管理员是角色的系统元数据属性，不是独立的隐式权限类型；系统始终通过显式资源关系保留至少一个同时拥有两个系统资源的活跃成员。
+- 授权采用 allow 并集，不支持角色继承、显式 deny 或成员直接授权；普通角色可逻辑删除，拥有系统管理资源的角色不可删除。
+- 初始管理员是角色的系统元数据属性，不是独立的隐式权限类型；系统始终通过显式资源关系保留至少一个拥有 `system_authorization_management` 的活跃成员。
 - 初始管理员必须填写真实、精确的 subject，不使用 `current-user` 或首次访问者占位符。
 - 当前 subject 固定来自 Spring Security `Authentication.getName()`；权限模块不信任前端身份输入。
-- 后端模板 OpenAPI 是运行态接口唯一事实源，前端类型和 Axios 客户端由它生成。
-- 权限关闭时所有权限接口均不注册；权限开启但运行时未就绪时只有公开状态接口返回 200，其他接口返回 503。
-- 统一模板始终包含权限源代码；权限开关只控制路由、菜单、Provider、Controller 和 API 请求是否注册。
+- 本仓库 `contracts/authorization-api.v1.yaml` 是运行态接口唯一事实源，后端 `auth` 分支副本和前端 TypeScript 类型由它同步或生成；前端请求统一复用模板现有 `src/apis/service.ts`。
+- `main` 分支不存在权限接口；`auth` 分支运行时未就绪时只有公开状态接口返回 200，其他接口返回 503。
+- 模板分支由已持久化的权限开关唯一确定：关闭使用 `main`，开启使用 `auth`；前后端必须成对使用同一分支，调用方不能自由指定分支。
 - 后端模板只提供稳定权限骨架，权限 DDL、MyBatis Mapper、Flyway migration 和真实运行时只在阶段 7 Build 生成。
-- 模板仓库暂时继续使用 `main`，不增加 tag、SHA 或版本选择逻辑。
+- 不增加用户可选 tag、SHA 或分支；模板生成 manifest 仅记录本次 `main`/`auth` 分支实际拉取的 commit SHA，用于来源核验和安全复用。
 - ProductPlan 使用 `product-plan.v5`，不保存 `resourceKey`、`policyKey` 或角色字段。
 - 不读取旧权限字段或旧 application schema，不实现兼容分支。

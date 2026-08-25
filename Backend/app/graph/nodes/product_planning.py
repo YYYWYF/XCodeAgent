@@ -147,6 +147,9 @@ def _validation_retry_feedback(user_feedback: str, errors: list[str]) -> str:
         "即使需求包含权限规则也必须从你的 JSON 中完全删除；"
         "对于每条“缺少受限操作 action”诊断，必须补充一个 name 完全相同的唯一普通产品 action；"
         "对于“受限操作 action 重复”诊断，必须只保留一个同名 action；"
+        "对于 pageId 或 actionId 的格式诊断，必须使用 lower_snake_case 重写错误 ID；"
+        "lower_snake_case 只能包含小写字母、数字和单个下划线（例如 order_list、order_list_export），"
+        "不得使用大写、连字符、空格或中文。pageId 必须原样使用 RequirementSpec 中对应页面的 pageId；"
         "不要要求用户重试，也不要解释校验过程：\n"
         f"{diagnostics}"
     )

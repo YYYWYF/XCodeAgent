@@ -45,6 +45,48 @@ def requirements(state: dict) -> dict:
 
 
 class RequirementsConfirmationTests(unittest.TestCase):
+    def test_requirement_pages_normalize_ids_to_unique_lower_snake_case(self) -> None:
+        """模型给出的 camelCase、连字符页面 ID 必须在进入 ProductPlan 前收敛。"""
+
+        spec = create_requirement_spec(
+            "创建页面 ID 规范化应用",
+            agent_spec={
+                "pages": [
+                    {
+                        "pageId": "OrderList",
+                        "name": "订单列表",
+                        "path": "/orders",
+                        "module_id": "orders",
+                        "description": "查看订单。",
+                    },
+                    {
+                        "pageId": "order-list",
+                        "name": "订单导出",
+                        "path": "/orders/export",
+                        "module_id": "orders",
+                        "description": "导出订单。",
+                    },
+                ]
+            },
+            authoritative_agent_spec=True,
+        )
+
+        self.assertEqual(
+            [page["pageId"] for page in spec["pages"]],
+            ["order_list", "order_list_2"],
+        )
+        self.assertEqual(validate_requirement_spec_confirmation_readiness(spec), [])
+
+    def test_requirement_confirmation_rejects_edited_invalid_page_id(self) -> None:
+        """Markdown 编辑绕过生成归一化时，也不得把非法页面 ID 交给 ProductPlan。"""
+
+        spec = create_requirement_spec("创建库存管理系统")
+        spec["pages"][0]["pageId"] = "inventory-list"
+
+        errors = validate_requirement_spec_confirmation_readiness(spec)
+
+        self.assertIn("页面清单第 1 项的 pageId 必须为 lower_snake_case", errors)
+
     def test_authorization_candidates_are_normalized_and_rendered(self) -> None:
         """权限候选保留业务语义并在 Markdown 中展示固定页面边界。"""
 

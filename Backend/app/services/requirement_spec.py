@@ -524,8 +524,11 @@ def validate_requirement_spec_confirmation_readiness(spec: dict[str, Any]) -> li
             if not isinstance(page, dict):
                 errors.append(f"页面清单第 {index + 1} 项必须是对象")
                 continue
-            if not str(page.get("pageId") or page.get("id") or "").strip():
+            page_id = str(page.get("pageId") or page.get("id") or "").strip()
+            if not page_id:
                 errors.append(f"页面清单第 {index + 1} 项缺少 pageId")
+            elif not _is_lower_snake_case(page_id):
+                errors.append(f"页面清单第 {index + 1} 项的 pageId 必须为 lower_snake_case")
             for field_name in ("name", "path", "module_id", "description"):
                 if not str(page.get(field_name) or "").strip():
                     errors.append(f"页面清单第 {index + 1} 项缺少 {field_name}")
@@ -891,6 +894,23 @@ def _normalize_requirement_items(
     return normalized
 
 
+def _normalized_page_id(value: Any, index: int, used_ids: set[str]) -> str:
+    """将页面标识收敛为当前契约要求的唯一 lower_snake_case 值。"""
+
+    # 先拆分 camelCase，再统一处理连字符、空格等模型常见分隔符，避免下游 ProductPlan 无法同时保持页面身份与格式契约。
+    candidate = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(value or "").strip())
+    candidate = re.sub(r"[^a-zA-Z0-9]+", "_", candidate).strip("_").lower()
+    if not candidate or not candidate[0].isalpha():
+        candidate = f"page_{index}"
+    base = candidate
+    suffix = 2
+    while candidate in used_ids:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used_ids.add(candidate)
+    return candidate
+
+
 def create_requirement_spec(
     request: str,
     agent_note: str = "live main-agent requirements analysis",
@@ -1014,6 +1034,10 @@ def create_requirement_spec(
             and isinstance(agent_spec.get(key), list)
         )
         spec[key] = normalized if normalized or has_authoritative_list else default_spec[key]
+    # 页面 ID 是 RequirementSpec 与 ProductPlan 的不可变关联键，必须在源头完成确定性规范化。
+    used_page_ids: set[str] = set()
+    for index, page in enumerate(spec["pages"], start=1):
+        page["pageId"] = _normalized_page_id(page.get("pageId"), index, used_page_ids)
     # 用户角色保留首次系统管理员种子元数据，但不携带资源关系或运行态授权。
     for role in spec["user_roles"]:
         for forbidden_key in ("permissions", "allowed_roles", "allowedRoleIds", "roleIds"):
