@@ -2,6 +2,7 @@ import {
   ArrowDownOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  LoadingOutlined,
   RobotOutlined,
   ToolOutlined,
   UserOutlined
@@ -115,6 +116,21 @@ function MessageAgentHeader({
       </span>
       <span className={cx('ai-message-agent-name')}>{agent.role}</span>
     </div>
+  )
+}
+
+/** 设计阶段快照未到达时的加载卡：与 PlanningWorkflowActivity 同款边框卡片，保证只出现一种加载 UI。 */
+function PlanningPendingCard({ detail }: { detail: string }): ReactElement {
+  return (
+    <section aria-live="polite" className={cx('planning-workflow-activity', 'running')}>
+      <span className={cx('planning-workflow-activity-icon')} aria-hidden="true">
+        <LoadingOutlined spin />
+      </span>
+      <div className={cx('planning-workflow-activity-copy')}>
+        <Text strong>产品 Agent 正在处理</Text>
+        <Text type="secondary">{detail}</Text>
+      </div>
+    </section>
   )
 }
 
@@ -327,21 +343,22 @@ export default function MessageList({
       >
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
           {messages.length === 0 && !visibleError ? (
-            <div className={cx('ai-message-empty')}>
-              {designPhasePlanning ? (
-                <>
-                  <Spin size="small" />
-                  <Text type="secondary">产品 Agent 正在准备需求确认…</Text>
-                </>
-              ) : (
-                <>
-                  <span className={cx('ai-message-empty-mark')}>
-                    <RobotOutlined />
-                  </span>
-                  <Text strong>从一个想法开始</Text>
-                </>
-              )}
-            </div>
+            designPhasePlanning ? (
+              // 设计阶段空态也渲染为消息流里的同一张边框加载卡，不再使用全屏 Spin。
+              <article className={cx('ai-message', 'assistant')}>
+                <div className={cx('ai-message-content')}>
+                  <MessageAgentHeader agentKey={currentPhase} />
+                  <PlanningPendingCard detail="正在准备需求确认…" />
+                </div>
+              </article>
+            ) : (
+              <div className={cx('ai-message-empty')}>
+                <span className={cx('ai-message-empty-mark')}>
+                  <RobotOutlined />
+                </span>
+                <Text strong>从一个想法开始</Text>
+              </div>
+            )
           ) : (
             messages.map((message, messageIndex) => {
               const messageLoading = message.id === activeAssistantMessageId
@@ -462,7 +479,8 @@ export default function MessageList({
                   designPhasePlanning,
                   isPlanningLoadingPlaceholder,
                   showWorkflowCard,
-                  visibleAssistantContent
+                  visibleAssistantContent,
+                  messageIndex === messages.length - 1
                 )
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
               // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。
@@ -499,22 +517,21 @@ export default function MessageList({
                           />
                         ) : null}
                         {/* 设计阶段规划占位消息：初次进入或用户提交后产品 Agent 正在准备，
-                            planningLoading 标记的占位消息显示 loading 态，
-                            流式 chunk 到达后 planningLoading 被清除，展示返回内容。 */}
+                            planningLoading 标记的占位消息显示与「正在分析需求」一致的
+                            边框卡片加载态，流式 chunk 到达后 planningLoading 被清除并展示返回内容。 */}
                         {showPlanningLoading &&
                           (planningActivity && message.workflow ? (
                             <PlanningWorkflowActivity workflow={message.workflow} />
                           ) : (
-                            <div className={cx('ai-message-loading-placeholder')}>
-                              <Spin size="small" />
-                              <Text type="secondary">
-                                {isPlanningWorkflowRunning
+                            <PlanningPendingCard
+                              detail={
+                                isPlanningWorkflowRunning
                                   ? '正在生成设计方案…'
                                   : designPhasePlanning
                                     ? '正在准备需求确认…'
-                                    : '正在处理…'}
-                              </Text>
-                            </div>
+                                    : '正在处理…'
+                              }
+                            />
                           ))}
                         {!showPlanningLoading &&
                         !messageError &&

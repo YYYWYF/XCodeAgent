@@ -210,7 +210,14 @@ export function processStepsForMessageDisplay(
 /** 判断 Workflow 是否属于由结构化卡片承载的规划产物生成流程。 */
 export function isStructuredPlanningWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
   if (!workflow || isConversationWorkflow(workflow)) return false
-  const planningNodes = new Set(['product_planning', 'project_planning', 'technical_planning'])
+  // requirements 也在结构化承载集合内：需求阶段的流式输出是中间态 JSON，
+  // 不能以纯文本气泡裸露，统一由「正在分析需求」活动卡承接加载态。
+  const planningNodes = new Set([
+    'requirements',
+    'product_planning',
+    'project_planning',
+    'technical_planning'
+  ])
   if (planningNodes.has(String(workflow.summary.phase || ''))) return true
   const clarificationCandidates = [
     workflow.summary.clarification,
@@ -221,6 +228,7 @@ export function isStructuredPlanningWorkflow(workflow: WorkflowRunPayload | unde
     clarificationCandidates.some((value) => {
       const mode = String((value as { mode?: string } | undefined)?.mode || '')
       return (
+        mode.includes('requirement_spec') ||
         mode.includes('product_plan') ||
         mode.includes('project_plan') ||
         mode.includes('technical_plan')

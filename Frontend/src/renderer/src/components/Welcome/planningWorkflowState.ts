@@ -146,15 +146,17 @@ export function planningWorkflowNeedsChatLoading(
   designPhasePlanning: boolean,
   loadingPlaceholder: boolean,
   hasWorkflowCard: boolean,
-  content: string
+  content: string,
+  isLatestAssistantMessage = false
 ): boolean {
   if (loadingPlaceholder) return true
-  return Boolean(
-    designPhasePlanning &&
-      workflow?.summary.status === 'running' &&
-      !hasWorkflowCard &&
-      !content.trim()
-  )
+  if (!designPhasePlanning || hasWorkflowCard) return false
+  if (workflow?.summary.status === 'running') return !content.trim()
+  // 规划快照尚未到达的窗口期：仅对当前正在推进的最后一条 assistant 消息生效。
+  // 该窗口内无 workflow 的消息只可能来自规划流式 token（中间态输出），不能以纯文本裸露；
+  // 历史遗留的无 workflow 消息（后面已有后续消息）不受影响，仍正常展示原文。
+  if (!workflow && isLatestAssistantMessage) return true
+  return false
 }
 
 // 判断权威快照是否可以回填聊天区；用户已提交新一轮时禁止复用上一轮待确认内容。
