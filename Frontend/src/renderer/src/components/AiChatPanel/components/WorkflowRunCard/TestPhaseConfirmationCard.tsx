@@ -13,7 +13,7 @@ type Props = {
 }
 
 const TEST_PHASE_CONFIRMATION_DESCRIPTION =
-  '代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试、失败修复与项目启动'
+  '代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试与失败修复'
 
 /** 渲染 Build 完成后的测试阶段进入确认卡。 */
 export default function TestPhaseConfirmationCard({

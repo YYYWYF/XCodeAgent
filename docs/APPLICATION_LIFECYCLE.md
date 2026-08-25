@@ -46,7 +46,7 @@ collecting_requirement
 不得反向把初始化改回待确认或运行中。旧 schema 和旧阶段不做迁移或兼容，
 读取时直接拒绝。
 
-主 Workflow 获取范围登记时在 `activeExecutions` 中创建运行，并由后端从正式 ProjectPlan 计算资源集合。页面主目标、导航关联页、直接使用的 API 契约及其数据源，以及共享这些 API/数据源的其他页面和契约会原子写入 `resourceLocks`。当前阶段 `resourceLocks` 仅作为可观测、可持久化的资源元数据，不参与启动门禁：同工作区、同页面、共享 API/数据源或应用级范围均不会因为已有登记被拒绝；同一资源键以最近一次运行记录为准。等待授权、修复确认、验收、失败和停止仍保留登记，只有 `finalize_project` 成功或用户明确“结束计划”才清理该 run 当前拥有的登记。已停止或失败的执行继续运行时，前端只提交旧 runId 作为同一执行的恢复令牌；后端仍验证同一 thread、scope 和 target，并在一次写入中转移旧 run 当前可见的资源记录。结构化测试阶段确认是唯一可跨 thread 转交 execution 的恢复动作，用于从开发会话进入空白测试会话；scope 与 target 校验不放宽。该令牌不参与 Graph 状态重建。
+主 Workflow 获取范围登记时在 `activeExecutions` 中创建运行，并由后端从正式 ProjectPlan 计算资源集合。页面主目标、导航关联页、直接使用的 API 契约及其数据源，以及共享这些 API/数据源的其他页面和契约会原子写入 `resourceLocks`。当前阶段 `resourceLocks` 仅作为可观测、可持久化的资源元数据，不参与启动门禁：同工作区、同页面、共享 API/数据源或应用级范围均不会因为已有登记被拒绝；同一资源键以最近一次运行记录为准。等待授权、修复确认、验收、失败和停止仍保留登记，只有 `finalize_project` 成功或用户明确“结束计划”才清理该 run 当前拥有的登记。已停止或失败的执行继续运行时，前端只提交旧 runId 作为同一执行的恢复令牌；后端仍验证同一 thread、scope 和 target，并在一次写入中转移旧 run 当前可见的资源记录。结构化测试阶段确认与审查阶段确认是仅有可跨 thread 转交 execution 的恢复动作，分别用于进入空白测试会话和审查会话；scope 与 target 校验不放宽。该令牌不参与 Graph 状态重建。
 
 当前实现只关闭业务资源集合的互斥执法，不放宽文件、命令、敏感操作或 Agent 工具权限。`resourceLocks` 只保存稳定资源键和紧凑 owner 元数据，恢复业务互斥前应重新引入显式策略开关和冲突 UX，而不是让持久化字段隐式阻断。
 
@@ -54,13 +54,13 @@ collecting_requirement
 
 底部计划执行模式只按当前页面或当前 Workflow 身份读取 execution，并由 `execution.status + execution.pendingInteraction.type` 派生；`resourceLocks` 不参与输入或操作门禁，关联页面不会因资源登记进入只读状态。控制栏开放停止/结束、查看计划、Agent 授权、RepairPlanner 范围确认、失败后的重试/调整/结束，以及页面预览验收。最终 `page_acceptance=accepted` 是结构化动作；普通文本和澄清回答不能冒充验收通过。
 
-Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase_confirmation` 等待用户确认。该交互的 payload 携带 `mode=test_phase_confirmation` 和稳定 `testTarget`；前端创建新的测试会话/thread，并提交结构化 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，以 `resumeExecutionRunId` 替换原 execution。确认节点完成后 execution 的 phase 立即更新为 `integration_test`，顶部阶段与实际测试同步。旧 schema 不做迁移或兼容读取。
+Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase_confirmation` 等待用户确认。该交互的 payload 携带 `mode=test_phase_confirmation` 和稳定 `testTarget`；前端创建新的测试会话/thread，并提交结构化 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，以 `resumeExecutionRunId` 替换原 execution。测试阶段构建检查完成后，`frontend_performance_confirmation` 作为独立的可恢复待交互类型承载执行或跳过选择；它只允许同一测试 thread、scope 和 target 恢复。集成质量门禁通过后，execution 会以 `pendingInteraction.type=review_phase_confirmation` 等待审查确认；前端创建新的审查会话/thread，并提交 `clarificationAnswers.review_phase_confirmation={action:"confirm"}`。确认节点完成后 execution 的 phase 立即更新为 `code_review`，顶部阶段与实际审查同步。旧 schema 不做迁移或兼容读取。
 
 示意快照（省略无关字段）：
 
 ```json
 {
-  "schemaVersion": "1.3.0",
+  "schemaVersion": "1.4.0",
   "revision": 27,
   "initialization": {
     "stage": "ready_for_workbench",

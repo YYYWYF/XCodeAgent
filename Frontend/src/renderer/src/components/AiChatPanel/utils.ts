@@ -297,6 +297,32 @@ export function workflowShouldShowCodeChanges(
   ].includes(String(workflow.summary.phase || ''))
 }
 
+/** 仅在审查阶段及其启动、验收、交付后续节点展示代码审查结果。 */
+export function workflowShouldShowCodeReview(
+  workflow: WorkflowRunPayload | undefined
+): boolean {
+  if (!workflow) return false
+  const phase = String(workflow.summary.phase || '')
+  if (phase === 'code_review') return workflow.summary.status !== 'failed'
+  if (!['launch_project', 'acceptance', 'finalize_project', 'completed'].includes(phase)) {
+    return false
+  }
+  const candidates: unknown[] = [
+    workflow.summary.codeReviewResult,
+    workflow.state?.codeReviewResult,
+    workflow.state?.code_review_result,
+    workflow.result?.codeReviewResult,
+    workflow.result?.code_review_result
+  ]
+  return candidates.some(
+    (value) =>
+      Boolean(value) &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      Object.keys(value as Record<string, unknown>).length > 0
+  )
+}
+
 /** 开发完成确认需要先展示 Build Diff，再展示进入测试阶段的确认卡。 */
 export function workflowCodeChangesBeforeConfirmation(
   workflow: WorkflowRunPayload | undefined

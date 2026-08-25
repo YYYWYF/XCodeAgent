@@ -75,6 +75,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     test_phase_confirmation = _test_phase_confirmation_submission(
         clarification_answers
     )
+    review_phase_confirmation = _review_phase_confirmation_submission(
+        clarification_answers
+    )
     unit_test_decision = _unit_test_decision(clarification_answers)
     small_task_handoff_submission = _small_task_handoff_submission(
         clarification_answers
@@ -187,9 +190,20 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     elif test_phase_confirmation and workflow_scope != "application_planning":
         # 开发完成确认必须恢复同一确认节点，确认成功后由 Graph 放行测试节点。
         resume_from = "test_phase_confirmation"
+    elif review_phase_confirmation and workflow_scope != "application_planning":
+        # 审查阶段确认允许从测试 thread 原子转交到新的审查 thread。
+        resume_from = "review_phase_confirmation"
     elif unit_test_decision and workflow_scope != "application_planning":
         # 单元测试确认属于开发阶段门禁；提交后必须回到 unit_test，不能误入集成测试。
         resume_from = "unit_test"
+    if (
+        resume_from == "review_phase_confirmation"
+        and not review_phase_confirmation
+        and workflow_scope != "application_planning"
+    ):
+        raise ValueError(
+            "review_phase_confirmation 只能通过 clarificationAnswers 提交 confirm 动作。"
+        )
     if not resume_from and _clarification_answers_to_text(clarification_answers):
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
             raise ValueError(
@@ -341,6 +355,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **(
             {"test_phase_confirmation": test_phase_confirmation}
             if test_phase_confirmation
+            else {}
+        ),
+        **(
+            {"review_phase_confirmation": review_phase_confirmation}
+            if review_phase_confirmation
             else {}
         ),
         "selected_skill_names": list(selected_skill_names),
@@ -860,6 +879,8 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "test_phase_confirmation",
             "integration_test",
             "small_task_repair",
+            "review_phase_confirmation",
+            "code_review",
             "launch_project",
             "acceptance",
             "finalize_project",
@@ -910,6 +931,10 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan_path",
         "build_task_plan_confirmation",
         "test_phase_confirmation",
+        "review_phase_confirmation",
+        "code_review_result",
+        "quality_gate_passed",
+        "test_report",
         "build_execution_scope",
         "build_context",
         "execution_resource_claims",
@@ -974,6 +999,10 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_execution_scope": "buildExecutionScope",
         "build_task_plan_confirmation": "buildTaskPlanConfirmation",
         "test_phase_confirmation": "testPhaseConfirmation",
+        "review_phase_confirmation": "reviewPhaseConfirmation",
+        "code_review_result": "codeReviewResult",
+        "quality_gate_passed": "qualityGatePassed",
+        "test_report": "testReport",
         "build_results": "buildResults",
         "build_summary": "buildSummary",
         "code_changes": "codeChanges",
@@ -1515,6 +1544,22 @@ def _test_phase_confirmation_submission(value: Any) -> dict[str, str]:
     if action != "confirm":
         raise ValueError("test_phase_confirmation.action 只支持 confirm。")
     return {"mode": "test_phase_confirmation", "action": "confirm"}
+
+
+def _review_phase_confirmation_submission(value: Any) -> dict[str, str]:
+    """提取审查阶段进入确认动作，拒绝自然语言或未知动作。"""
+
+    if not isinstance(value, dict):
+        return {}
+    if "review_phase_confirmation" not in value:
+        return {}
+    answer = value.get("review_phase_confirmation")
+    if not isinstance(answer, dict):
+        raise ValueError("review_phase_confirmation 必须是结构化对象。")
+    action = _optional_text(answer.get("action")).lower()
+    if action != "confirm":
+        raise ValueError("review_phase_confirmation.action 只支持 confirm。")
+    return {"mode": "review_phase_confirmation", "action": "confirm"}
 
 
 def _unit_test_decision(value: Any) -> str:

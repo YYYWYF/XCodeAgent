@@ -31,6 +31,7 @@ import type {
   WorkflowBuildTaskPlan,
   WorkflowBuildTaskPlanConfirmation,
   WorkflowConfirmationArtifact,
+  WorkflowCodeReviewResult,
   WorkflowTestTarget,
   WorkflowRunPayload
 } from '../../../../typings'
@@ -40,6 +41,7 @@ import {
   pageAcceptanceContinuationMessage
 } from '../../workflowContinuation'
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode'
+import { workflowShouldShowCodeReview } from '../../utils'
 import AgentApprovalCard from '../AgentApprovalCard'
 import { approveToolRequest, rejectToolRequest } from '../../../../service/workspaceTools'
 import type { ToolApproval } from '../../../../service/workspaceTools'
@@ -49,6 +51,8 @@ import DetailReview from './DetailReview'
 import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
+import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
+import CodeReviewCard from './CodeReviewCard'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -130,6 +134,10 @@ export default function WorkflowRunCard({
   const clarification = workflowClarification(workflow)
   // 项目启动快照可能暂时保留上一测试节点已提交的性能测试确认；启动卡不应重复展示该旧交互。
   const projectLaunch = workflow.summary.phase === 'launch_project'
+  const reviewPhaseConfirmation = clarification?.mode === 'review_phase_confirmation'
+  const codeReviewResult = readCodeReviewResult(workflow)
+  // 恢复或重跑测试节点时快照可能短暂携带上一轮审查结果，必须以当前阶段为显示边界。
+  const codeReview = workflowShouldShowCodeReview(workflow)
   const staleFrontendPerformanceConfirmation =
     projectLaunch && clarification?.mode === 'frontend_performance_confirmation'
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification)
@@ -224,6 +232,8 @@ export default function WorkflowRunCard({
       ? dagTaskPlan?.tasks?.length || 0
       : testPhaseConfirmation
         ? 1
+        : reviewPhaseConfirmation
+          ? 1
         : uiDesignConfirmation
           ? (
               (clarification as unknown as Record<string, unknown> | undefined)?.pages as
@@ -287,7 +297,9 @@ export default function WorkflowRunCard({
         !unitTestConfirmation &&
         !projectLaunch &&
         !dagConfirmation &&
-        !testPhaseConfirmation && (
+        !testPhaseConfirmation &&
+        !reviewPhaseConfirmation &&
+        !codeReview && (
           <div className={cx('workflow-run-message')}>
             <Text>{String(workflow.summary.message)}</Text>
           </div>
@@ -304,6 +316,12 @@ export default function WorkflowRunCard({
           </Text>
         </div>
       ) : null}
+      {codeReview && (
+        <CodeReviewCard
+          result={codeReviewResult}
+          running={workflow.summary.phase === 'code_review' && status === 'running'}
+        />
+      )}
       {projectLaunch && <ProjectLaunchCard workflow={workflow} />}
       {!entityDesignReview && Object.keys(artifacts).length > 0 && artifactConfirmation && (
         <div className={cx('workflow-artifacts')}>
@@ -326,7 +344,8 @@ export default function WorkflowRunCard({
         detailReview ||
         technicalPlanGenerationError ||
         dagConfirmation ||
-        testPhaseConfirmation
+        testPhaseConfirmation ||
+        reviewPhaseConfirmation
       ) && (
         <div className={cx('workflow-clarification')}>
           {!entityDesignReview && !entityDesignGate && (
@@ -389,6 +408,17 @@ export default function WorkflowRunCard({
                 })
               }
               target={testTarget}
+            />
+          ) : reviewPhaseConfirmation && requiresConfirmation ? (
+            <ReviewPhaseConfirmationCard
+              disabled={disabled || interactionAvailability !== 'active'}
+              onSubmit={() =>
+                onSubmitClarification?.(workflow, {
+                  review_phase_confirmation: {
+                    action: 'confirm'
+                  }
+                })
+              }
             />
           ) : dagConfirmation && requiresConfirmation ? (
             <BuildTaskPlanConfirmation
@@ -556,6 +586,25 @@ export default function WorkflowRunCard({
       )}
     </div>
   )
+}
+
+/** 从 summary/state/result 读取审查结果，保证审查节点推进到启动节点后卡片仍可渲染。 */
+function readCodeReviewResult(workflow: WorkflowRunPayload): WorkflowCodeReviewResult | undefined {
+  const candidates: unknown[] = [
+    workflow.summary.codeReviewResult,
+    workflow.state?.codeReviewResult,
+    workflow.state?.code_review_result,
+    workflow.result?.codeReviewResult,
+    workflow.result?.code_review_result
+  ]
+  const candidate = candidates.find(
+    (value) =>
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      Object.keys(value).length > 0
+  )
+  return candidate as WorkflowCodeReviewResult | undefined
 }
 
 /** 从 Workflow 公开状态中读取 RequirementSpec 结构化数据。 */

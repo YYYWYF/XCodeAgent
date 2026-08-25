@@ -9,7 +9,8 @@ import {
   shouldShowEndpointDetailDesignEntry,
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
-  workflowPreviewTarget
+  workflowPreviewTarget,
+  workflowShouldShowCodeReview
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import {
   deriveDisplayedPlanExecutionMode,
@@ -143,6 +144,53 @@ test('历史、失败、非启动阶段和缺少地址的 Workflow 不触发预�
     undefined
   )
   assert.equal(workflowPreviewTarget(previewWorkflow({ previewUrl: '' }), true), undefined)
+})
+
+test('测试重跑和审查确认节点不会展示恢复快照中的旧代码审查结果', () => {
+  const staleCodeReviewResult = {
+    status: 'completed' as const,
+    summary: '前后端代码扫描已完成。',
+    issueCount: 0,
+    truncated: false,
+    loadedSkills: ['frontend-code-scan' as const, 'backend-code-scan' as const],
+    targets: [],
+    issues: []
+  }
+  const integrationWorkflow = previewWorkflow({
+    phase: 'integration_test',
+    status: 'requires_user_input',
+    codeReviewResult: staleCodeReviewResult,
+    clarification: {
+      mode: 'frontend_performance_confirmation',
+      status: 'requires_user_input',
+      questions: []
+    }
+  })
+  const reviewConfirmationWorkflow = previewWorkflow({
+    phase: 'review_phase_confirmation',
+    status: 'requires_user_input',
+    codeReviewResult: staleCodeReviewResult,
+    clarification: {
+      mode: 'review_phase_confirmation',
+      status: 'requires_user_input',
+      questions: []
+    }
+  })
+
+  assert.equal(workflowShouldShowCodeReview(integrationWorkflow), false)
+  assert.equal(workflowShouldShowCodeReview(reviewConfirmationWorkflow), false)
+  assert.equal(
+    workflowShouldShowCodeReview(
+      previewWorkflow({ phase: 'code_review', status: 'running', codeReviewResult: undefined })
+    ),
+    true
+  )
+  assert.equal(
+    workflowShouldShowCodeReview(
+      previewWorkflow({ phase: 'launch_project', codeReviewResult: staleCodeReviewResult })
+    ),
+    true
+  )
 })
 
 test('不同运行返回相同 URL 时仍生成不同的一次性目标', () => {
@@ -427,7 +475,7 @@ test('重复地址不追加历史，新地址会截断旧前进记录', () => {
 /** 构造页面计划执行测试需要的最小生命周期。 */
 function planLifecycle(execution: WorkbenchExecution): ApplicationLifecycle {
   return {
-    schemaVersion: '1.3.0',
+    schemaVersion: '1.4.0',
     application: { id: 'app-1', name: '测试应用' },
     updatedAt: '2026-07-23T00:00:00Z',
     revision: 2,
@@ -495,6 +543,88 @@ test('只有匹配权威生命周期的待确认交互保持可提交', () => {
 
   assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
   assert.equal(workflowInteractionAvailability(workflow, undefined), 'unavailable')
+})
+
+test('性能测试确认使用 summary 中最新生命周期时保持可提交', () => {
+  const execution = pageExecution({
+    phase: 'integration_test',
+    status: 'awaiting_user',
+    pendingInteraction: {
+      id: 'interaction-performance-1',
+      type: 'frontend_performance_confirmation',
+      basedOnRevision: 4,
+      payload: { mode: 'frontend_performance_confirmation' },
+      artifactRefs: [],
+      createdAt: '2026-07-23T00:00:00Z',
+      submittedAt: null
+    }
+  })
+  const lifecycle = planLifecycle(execution)
+  lifecycle.revision = 4
+  const workflow = previewWorkflow(
+    {
+      phase: 'integration_test',
+      status: 'requires_user_input',
+      lifecycle,
+      clarification: {
+        mode: 'frontend_performance_confirmation',
+        status: 'requires_user_input',
+        questions: []
+      }
+    },
+    execution.runId
+  )
+  workflow.threadId = execution.threadId
+
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
+  assert.equal(derivePlanExecutionMode(execution), 'awaiting_frontend_performance_confirmation')
+})
+
+test('Workflow 生命周期比全局缓存更新时当前审查确认保持可提交', () => {
+  const execution = pageExecution({
+    phase: 'review_phase_confirmation',
+    status: 'awaiting_user',
+    pendingInteraction: {
+      id: 'interaction-review-1',
+      type: 'review_phase_confirmation',
+      basedOnRevision: 5,
+      payload: { mode: 'review_phase_confirmation' },
+      artifactRefs: [],
+      createdAt: '2026-07-23T00:00:00Z',
+      submittedAt: null
+    }
+  })
+  const snapshotLifecycle = planLifecycle(execution)
+  snapshotLifecycle.revision = 5
+  const staleLifecycle = planLifecycle(
+    pageExecution({
+      runId: execution.runId,
+      threadId: execution.threadId,
+      phase: 'integration_test',
+      status: 'running',
+      pendingInteraction: undefined
+    })
+  )
+  staleLifecycle.revision = 4
+  const workflow = previewWorkflow(
+    {
+      phase: 'review_phase_confirmation',
+      status: 'requires_user_input',
+      lifecycle: snapshotLifecycle,
+      clarification: {
+        mode: 'review_phase_confirmation',
+        status: 'requires_user_input',
+        questions: []
+      }
+    },
+    execution.runId
+  )
+  workflow.threadId = execution.threadId
+
+  assert.equal(workflowInteractionAvailability(workflow, staleLifecycle), 'active')
+
+  staleLifecycle.revision = 6
+  assert.equal(workflowInteractionAvailability(workflow, staleLifecycle), 'stale')
 })
 
 test('确认运行被构建运行替换后历史确认卡片失效', () => {

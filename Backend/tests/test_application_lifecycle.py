@@ -410,7 +410,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
             loaded = load_application_lifecycle(directory)
 
             assert loaded is not None
-            self.assertEqual(loaded.schema_version, "1.3.0")
+            self.assertEqual(loaded.schema_version, "1.4.0")
             self.assertEqual(loaded.active_executions, {})
             self.assertEqual(loaded.resource_locks.pages, {})
             self.assertNotIn("project", payload)

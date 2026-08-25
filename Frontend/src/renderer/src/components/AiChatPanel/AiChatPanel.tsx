@@ -683,6 +683,7 @@ function pageContextStatus(
     mode === 'awaiting_repair_confirmation' ||
     mode === 'awaiting_unit_test_confirmation' ||
     mode === 'awaiting_test_phase_confirmation' ||
+    mode === 'awaiting_review_phase_confirmation' ||
     mode === 'awaiting_acceptance' ||
     mode === 'awaiting_plan_adjustment'
   ) {
@@ -1341,6 +1342,11 @@ export default function AiChatPanel({
     switchPhase('test')
   }, [switchPhase])
 
+  /** 审查会话创建成功后立即高亮审查阶段，避免等待代码扫描首帧才更新顶部步骤条。 */
+  const handleEnterReviewPhase = useCallback((): void => {
+    switchPhase('review')
+  }, [switchPhase])
+
   // 同步工作台自动启动返回的最新前端端口和错误，不进行任何浏览器持久化。
   useEffect(() => {
     setRuntimePreviewBaseUrl(previewOrigin(previewBaseUrl))
@@ -1354,6 +1360,7 @@ export default function AiChatPanel({
     createEndpointSession,
     createPageSession,
     createTestSession,
+    createReviewSession,
     clearActiveSession,
     deletingSessionId,
     draft,
@@ -1423,6 +1430,7 @@ export default function AiChatPanel({
     draftKey,
     editorMode,
     createTestSession,
+    createReviewSession,
     ensureActiveSession,
     ensureEndpointSession,
     ensureEntitySession,
@@ -1431,6 +1439,7 @@ export default function AiChatPanel({
     persistSession,
     onApplicationLifecycleChange,
     onEnterTestPhase: handleEnterTestPhase,
+    onEnterReviewPhase: handleEnterReviewPhase,
     onPreviewReady: handlePreviewReady,
     publishAiMessage,
     runningSessionsRef,

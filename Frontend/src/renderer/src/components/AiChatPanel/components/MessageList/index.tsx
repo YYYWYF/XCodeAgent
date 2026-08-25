@@ -55,7 +55,8 @@ import {
   workflowCodeChanges,
   workflowCodeChangesBeforeConfirmation,
   workflowFinalResultPresentation,
-  workflowShouldShowCodeChanges
+  workflowShouldShowCodeChanges,
+  workflowShouldShowCodeReview
 } from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
@@ -420,6 +421,10 @@ export default function MessageList({
               // 项目启动节点使用专用卡片覆盖运行、完成与失败状态。
               const isLaunchProjectCard =
                 message.workflow && message.workflow.summary?.phase === 'launch_project'
+              // 审查结果需要在后续 launch_project 快照中继续显示，不能只依赖当前 phase。
+              const isReviewPhaseConfirmationCard =
+                message.workflow && messageClarification?.mode === 'review_phase_confirmation'
+              const isCodeReviewCard = workflowShouldShowCodeReview(message.workflow)
               // 创建规划的产品/技术阶段也展示 WorkflowRunCard，保证运行与确认状态连续可见。
               const isPlanningStageCard =
                 message.workflow &&
@@ -432,7 +437,9 @@ export default function MessageList({
                   (requiresClarification ||
                     isUiDesignConfirmationCard ||
                     isPlanningStageCard ||
-                    isLaunchProjectCard)
+                    isLaunchProjectCard ||
+                    isReviewPhaseConfirmationCard ||
+                    isCodeReviewCard)
               )
               const interactionAvailability =
                 message.workflow && requiresClarification
@@ -488,6 +495,7 @@ export default function MessageList({
                 isPlanningArtifactConfirmationCard ||
                 isPlanningStageRunningCard ||
                 isLaunchProjectCard ||
+                isCodeReviewCard ||
                 showPlanningLoading ||
                 (showWorkflowCard && requiresClarification && !entityDesignCardVisible)
                   ? ''

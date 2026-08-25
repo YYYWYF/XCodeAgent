@@ -604,6 +604,162 @@
   }
 }
 
+// 审查阶段确认和结果卡使用工作台主题变量，浅色/深色主题共享同一组可读状态色。
+.@{class-prefix}-workflow-review-phase-confirmation {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-border);
+
+  .ant-btn {
+    min-height: 38px;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-workflow-review-phase-confirmation-title {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+  }
+}
+
+.@{class-prefix}-workflow-review-phase-confirmation-icon,
+.@{class-prefix}-workflow-code-review-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--wb-code-add-text);
+  font-size: 18px;
+}
+
+.@{class-prefix}-workflow-code-review-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface);
+
+  &.running {
+    flex-direction: row;
+    align-items: flex-start;
+    border-color: var(--wb-accent-border);
+    background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-surface));
+  }
+}
+
+.@{class-prefix}-workflow-code-review-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.@{class-prefix}-workflow-code-review-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+
+  > .ant-tag {
+    margin-left: auto;
+  }
+}
+
+.@{class-prefix}-workflow-code-review-targets,
+.@{class-prefix}-workflow-code-review-issue-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.@{class-prefix}-workflow-code-review-target,
+.@{class-prefix}-workflow-code-review-issue {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-workflow-code-review-target-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.@{class-prefix}-workflow-code-review-warning {
+  overflow-wrap: anywhere;
+  color: var(--wb-warning) !important;
+}
+
+.@{class-prefix}-workflow-code-review-section-title,
+.@{class-prefix}-workflow-code-review-issue-header,
+.@{class-prefix}-workflow-code-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-workflow-code-review-issue-header .ant-tag {
+  margin-right: 0;
+}
+
+.@{class-prefix}-workflow-code-review-file {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-subtle);
+  border-color: var(--wb-border);
+}
+
+.@{class-prefix}-workflow-code-review-actions {
+  justify-content: flex-end;
+  padding-top: 4px;
+  border-top: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-workflow-code-review-empty {
+  padding: 6px 0 0;
+
+  .ant-empty {
+    margin: 6px 0 0;
+  }
+
+  .ant-empty-image {
+    height: 28px;
+    color: var(--wb-code-add-text);
+  }
+}
+
 .@{class-prefix}-workflow-confirmation-artifact {
   display: flex;
   min-width: 0;

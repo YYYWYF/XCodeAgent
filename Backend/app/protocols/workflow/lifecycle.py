@@ -114,7 +114,7 @@ def _validate_resumable_execution(
     target_id: str,
     allow_plan_adjustment_debug: bool = False,
 ) -> None:
-    """只允许安全恢复同一目标上的旧执行，测试阶段确认可切换到新对话。"""
+    """只允许安全恢复同一目标上的旧执行，阶段确认可切换到新对话。"""
 
     execution = lifecycle.active_executions.get(run_id)
     if execution is None:
@@ -138,6 +138,12 @@ def _validate_resumable_execution(
         and execution.pending_interaction is not None
         and execution.pending_interaction.type == PendingInteractionType.UNIT_TEST_CONFIRMATION
     )
+    frontend_performance_confirmation = (
+        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type
+        == PendingInteractionType.FRONTEND_PERFORMANCE_CONFIRMATION
+    )
     repair_scope_confirmation = (
         execution.status == WorkbenchExecutionStatus.AWAITING_USER
         and execution.pending_interaction is not None
@@ -149,17 +155,25 @@ def _validate_resumable_execution(
         and execution.pending_interaction is not None
         and execution.pending_interaction.type == PendingInteractionType.TEST_PHASE_CONFIRMATION
     )
+    review_phase_confirmation = (
+        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type
+        == PendingInteractionType.REVIEW_PHASE_CONFIRMATION
+    )
     if (
         not resumable_status
         and not debug_plan_adjustment
         and not unit_test_confirmation
+        and not frontend_performance_confirmation
         and not repair_scope_confirmation
         and not test_phase_confirmation
+        and not review_phase_confirmation
     ):
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
-    # 测试阶段是显式的新对话边界：只有结构化测试确认允许把 execution 所有权
-    # 从开发 thread 原子转交给新的测试 thread，其余恢复仍必须留在原对话。
-    if execution.thread_id != thread_id and not test_phase_confirmation:
+    # 阶段确认是显式的新对话边界：只有结构化测试/审查确认允许把 execution 所有权
+    # 从上一阶段 thread 原子转交给新的阶段 thread，其余恢复仍必须留在原对话。
+    if execution.thread_id != thread_id and not test_phase_confirmation and not review_phase_confirmation:
         raise ApplicationLifecycleConflictError("不能从其他对话接替工作台执行。")
     if execution.scope != scope or execution.target_id != target_id:
         raise ApplicationLifecycleConflictError("恢复目标与原工作台执行不一致。")
@@ -220,13 +234,13 @@ def project_workflow_lifecycle_boundary(
             ),
         )
         return application_lifecycle_payload(state)
-    # 确认节点完成后 Graph 会立即进入集成测试。生命周期提前投影真实的下一节点，
-    # 避免测试正在执行时顶部步骤条仍停留在开发阶段。
-    projected_phase = (
-        "integration_test"
-        if node_name == "test_phase_confirmation" and status == "completed"
-        else node_name
-    )
+    # 阶段确认节点完成后 Graph 会立即进入下一阶段。生命周期提前投影真实的下一节点，
+    # 避免执行已经开始时顶部步骤条仍停留在上一阶段。
+    projected_phase = node_name
+    if node_name == "test_phase_confirmation" and status == "completed":
+        projected_phase = "integration_test"
+    elif node_name == "review_phase_confirmation" and status == "completed":
+        projected_phase = "code_review"
     state = update_workbench_execution(
         workspace,
         run_id=run_id,
@@ -295,7 +309,11 @@ def _pending_interaction(
     interaction_type = {
         "repair_scope_confirmation": PendingInteractionType.REPAIR_SCOPE_CONFIRMATION,
         "unit_test_confirmation": PendingInteractionType.UNIT_TEST_CONFIRMATION,
+        "frontend_performance_confirmation": (
+            PendingInteractionType.FRONTEND_PERFORMANCE_CONFIRMATION
+        ),
         "test_phase_confirmation": PendingInteractionType.TEST_PHASE_CONFIRMATION,
+        "review_phase_confirmation": PendingInteractionType.REVIEW_PHASE_CONFIRMATION,
         "entity_source_binding": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "entity_source_binding_required": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "agent_approval": PendingInteractionType.AGENT_APPROVAL,

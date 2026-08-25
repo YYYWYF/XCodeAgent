@@ -57,6 +57,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             patch("app.agents.registry.Settings.from_env", return_value=object()),
             patch("app.agents.registry.create_chat_model", return_value="model"),
             patch(
+                "app.agents.registry.create_code_analyze_agent",
+                side_effect=lambda model, **kwargs: ("code_analyze", kwargs),
+            ),
+            patch(
                 "app.agents.registry.create_frontend_agent",
                 side_effect=lambda model, **kwargs: ("frontend", kwargs),
             ) as frontend_factory,
@@ -129,6 +133,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             ) as memory_snapshot_factory,
             patch("app.agents.registry.Settings.from_env", return_value=object()),
             patch("app.agents.registry.create_chat_model", return_value="model"),
+            patch(
+                "app.agents.registry.create_code_analyze_agent",
+                side_effect=lambda model, **kwargs: ("code_analyze", kwargs),
+            ),
             patch(
                 "app.agents.registry.create_frontend_agent",
                 side_effect=lambda model, **kwargs: ("frontend", kwargs),
@@ -206,6 +214,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             ),
             patch("app.agents.registry.Settings.from_env", return_value=object()),
             patch("app.agents.registry.create_chat_model", return_value="model"),
+            patch(
+                "app.agents.registry.create_code_analyze_agent",
+                side_effect=lambda model, **kwargs: ("code_analyze", kwargs),
+            ),
             patch(
                 "app.agents.registry.create_frontend_agent",
                 side_effect=lambda model, **kwargs: ("frontend", kwargs),

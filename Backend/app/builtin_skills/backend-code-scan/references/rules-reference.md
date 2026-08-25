@@ -2,7 +2,7 @@
 
 本文档包含8条高优先级规则的详细检测逻辑、修复示例和误报排除规则。
 
-> ⚠️ **风险提示**: 全部自动处理，仅在报告中标记风险操作供人工复核
+> ⚠️ **当前审查模式**: 本期只识别、分类和报告问题，不修改源码、不编译、不执行修复。下方修复示例仅供后续“修复”动作参考。
 
 ---
 
@@ -17,6 +17,7 @@
 | CKR6004 | OkHttp超时 | 添加超时配置 | ✅ |
 | CKR4003 | Redis降级 | catch + log + throw | ✅ |
 | CKR5000 | CallerRunsPolicy | 改为AbortPolicy | ✅ |
+| CKR7019 | SQLException北斗错误码 | 统一异常响应（需人工确认） | ✅ |
 
 ---
 
@@ -306,6 +307,23 @@ new ThreadPoolExecutor.DiscardPolicy()
 
 ---
 
+### CKR7019 - SQLException 北斗错误码
+
+**规则**: 数据库异常响应必须使用项目约定的非成功北斗错误码，并避免直接暴露 SQL 详情。
+
+**检测关键字**: `SQLException`, `X-B3-ReturnCode`, `X-B3-ErrorMsg`
+
+**检测逻辑**:
+1. 定位 `SQLException` 的 catch 或统一异常处理器。
+2. 检查是否设置项目既有的非成功 `X-B3-ReturnCode`，并以通用文案写入 `X-B3-ErrorMsg`。
+3. 排除已经委托给项目统一异常处理器且明确设置错误码的路径。
+
+**误报排除**: 非数据库异常、已由统一异常处理器处理、仅在测试夹具中构造的 SQLException。
+
+**后续修复参考**: 由人工确认项目已有错误码枚举后，再补充统一异常响应；本期只报告问题。
+
+---
+
 
 
 ## 误报排除规则总结
@@ -319,6 +337,7 @@ new ThreadPoolExecutor.DiscardPolicy()
 | CKR6004 | @Autowired注入的Bean、Builder中已配置超时 |
 | CKR4003 | try-catch已包裹、@Cacheable、@Retryable |
 | CKR5000 | 无例外 |
+| CKR7019 | 已由统一异常处理器设置非成功错误码、非数据库异常、测试夹具 |
 
 ---
 

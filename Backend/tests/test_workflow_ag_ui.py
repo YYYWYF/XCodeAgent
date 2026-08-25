@@ -1044,7 +1044,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         """资源锁写入成功后应立即广播，不能等待首个 Graph 节点完成。"""
 
         initial_lifecycle = {
-            "schemaVersion": "1.3.0",
+            "schemaVersion": "1.4.0",
             "application": {"id": "app-1", "name": "测试应用"},
             "updatedAt": "2026-07-23T00:00:00Z",
             "revision": 2,

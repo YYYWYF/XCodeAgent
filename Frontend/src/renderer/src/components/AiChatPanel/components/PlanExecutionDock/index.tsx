@@ -184,9 +184,19 @@ export default function PlanExecutionDock({
                 单元测试门禁等待选择，确认卡可选择继续执行或跳过。
               </div>
             )}
+            {mode === 'awaiting_frontend_performance_confirmation' && (
+              <div className={cx('plan-execution-dock-interaction')}>
+                构建检查已完成，请在上方选择执行或跳过前端性能测试。
+              </div>
+            )}
             {mode === 'awaiting_test_phase_confirmation' && (
               <div className={cx('plan-execution-dock-interaction')}>
                 开发已完成，请在上方确认进入测试阶段。
+              </div>
+            )}
+            {mode === 'awaiting_review_phase_confirmation' && (
+              <div className={cx('plan-execution-dock-interaction')}>
+                测试已通过，请在上方确认进入审查阶段。
               </div>
             )}
             {mode === 'awaiting_acceptance' && (
@@ -331,7 +341,9 @@ function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
     awaiting_authorization: '执行已暂停，等待授权',
     awaiting_repair_confirmation: 'RepairPlanner 需要你的确认',
     awaiting_unit_test_confirmation: '等待单元测试选择',
+    awaiting_frontend_performance_confirmation: '等待前端性能测试选择',
     awaiting_test_phase_confirmation: '等待进入测试阶段',
+    awaiting_review_phase_confirmation: '等待进入审查阶段',
     awaiting_acceptance: '页面已准备好，等待最终验收',
     awaiting_plan_adjustment: '执行已暂停',
     failed: '计划执行失败',
@@ -361,8 +373,14 @@ function planModeDescription(
   if (mode === 'awaiting_test_phase_confirmation') {
     return '开发已完成，请在上方确认进入测试阶段。'
   }
+  if (mode === 'awaiting_review_phase_confirmation') {
+    return '测试已通过，请在上方确认进入审查阶段。'
+  }
   if (mode === 'awaiting_unit_test_confirmation') {
     return '请在上方确认卡选择继续执行或跳过单元测试。'
+  }
+  if (mode === 'awaiting_frontend_performance_confirmation') {
+    return '请在上方确认卡选择继续执行或跳过前端性能测试。'
   }
   if (mode === 'awaiting_authorization') {
     return String(payload?.message || 'Agent 请求执行受保护操作。')

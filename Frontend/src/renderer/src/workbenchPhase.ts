@@ -79,13 +79,13 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     key: 'test',
     label: '测试',
     role: '测试 Agent',
-    responsibility: '构建检查、集成测试、失败修复与项目启动'
+    responsibility: '构建检查、集成测试与失败修复'
   },
   review: {
     key: 'review',
     label: '审查',
     role: '审查 Agent',
-    responsibility: '代码审查、规范检测与交付验收'
+    responsibility: '代码审查、项目启动、规范检测与交付验收'
   }
 }
 
@@ -148,9 +148,18 @@ const DEVELOPMENT_PHASE_NODES = new Set([
   'test_phase_confirmation'
 ])
 
-/** 测试阶段的工作流节点 phase（集成测试 → 失败修复 → 启动预览）。 */
-const TEST_PHASE_NODES = new Set(['integration_test', 'small_task_repair', 'launch_project'])
-const REVIEW_PHASE_NODES = new Set(['acceptance', 'finalize_project'])
+/** 测试阶段的工作流节点 phase（集成测试 → 失败修复 → 审查确认）。 */
+const TEST_PHASE_NODES = new Set([
+  'integration_test',
+  'small_task_repair',
+  'review_phase_confirmation'
+])
+const REVIEW_PHASE_NODES = new Set([
+  'code_review',
+  'launch_project',
+  'acceptance',
+  'finalize_project'
+])
 
 /** 根据 Workflow 节点归属选择消息应显示的 Agent 阶段。 */
 export function workbenchPhaseForNode(
@@ -223,6 +232,8 @@ const EXECUTION_PHASE_LABELS: Record<string, string> = {
   unit_test_repair: '单元测试局部修复',
   test_phase_confirmation: '开发完成确认',
   integration_test: '集成测试',
+  review_phase_confirmation: '测试完成与审查确认',
+  code_review: '前后端代码审查',
   launch_project: '启动预览',
   acceptance: '预览验收',
   finalize_project: '完成交付'

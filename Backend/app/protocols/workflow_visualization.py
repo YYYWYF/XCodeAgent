@@ -22,6 +22,7 @@ from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
 from app.protocols.workflow.request import workflow_run_inputs
+from app.protocols.workflow.projection import _workflow_code_review_result
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.run_lease import (
     WorkspaceRunLease,
@@ -44,6 +45,8 @@ WORKFLOW_NODE_LABELS = {
     "test_phase_confirmation": "开发完成与测试阶段确认",
     "integration_test": "集成测试与质量门禁",
     "small_task_repair": "局部修复任务",
+    "review_phase_confirmation": "测试完成与审查阶段确认",
+    "code_review": "前后端代码审查",
     "launch_project": "启动本地预览",
     "acceptance": "用户验收",
     "finalize_project": "完成项目",
@@ -60,6 +63,9 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "unit_test": ["unit_test_repair", "test_phase_confirmation"],
     "unit_test_repair": ["unit_test"],
     "test_phase_confirmation": ["integration_test"],
+    "integration_test": ["review_phase_confirmation", "small_task_repair"],
+    "review_phase_confirmation": ["code_review"],
+    "code_review": ["launch_project", "handle_failure"],
     "small_task_repair": ["integration_test"],
     "launch_project": ["acceptance"],
     "acceptance": ["finalize_project"],
@@ -94,7 +100,11 @@ def workflow_capabilities() -> dict[str, Any]:
                 "test_phase_confirmation": (
                     "通过 clarificationAnswers.test_phase_confirmation 提交结构化 confirm 动作；"
                     "确认后恢复 test_phase_confirmation 并进入 integration_test。"
-                )
+                ),
+                "review_phase_confirmation": (
+                    "通过 clarificationAnswers.review_phase_confirmation 提交结构化 confirm 动作；"
+                    "确认后恢复 review_phase_confirmation 并进入 code_review。"
+                ),
             },
         },
         "acceptanceAdjustments": {
@@ -121,6 +131,11 @@ def workflow_capabilities() -> dict[str, Any]:
                     "id": "稳定目标 ID",
                     "label": "显示名称",
                 },
+            },
+            "review_phase_confirmation": {
+                "answerField": "clarificationAnswers.review_phase_confirmation",
+                "answer": {"action": "confirm"},
+                "lifecycleInteraction": "review_phase_confirmation",
             }
         },
         "input": {
@@ -1037,6 +1052,8 @@ def _workflow_progress_summary(
         "unitTestMaxRepairIterations": result.get("unit_test_max_repair_iterations"),
         "repairReturnNode": result.get("repair_return_node"),
         "testTarget": _workflow_test_target(result),
+        "reviewPhaseConfirmation": result.get("review_phase_confirmation", {}),
+        "codeReviewResult": _workflow_code_review_result(result.get("code_review_result")),
         "testSummary": {},
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
@@ -1098,6 +1115,10 @@ def _workflow_start_node(
         return "integration_test"
     if resume_from == "small_task_repair":
         return "small_task_repair"
+    if resume_from == "review_phase_confirmation":
+        return "review_phase_confirmation"
+    if resume_from == "code_review":
+        return "code_review"
     if resume_from == "launch_project":
         return "launch_project"
     if resume_from == "acceptance":
@@ -1112,7 +1133,7 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
 
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):
-            return ["launch_project"]
+            return ["review_phase_confirmation"]
         if update.get("integration_next_action") == "small_task_repair":
             return ["small_task_repair"]
         if update.get("integration_next_action") == "await_user_input":
@@ -1176,6 +1197,10 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             and build_completed
             and update.get("unit_test_gate_passed") is True
         ) else []
+    if node_name == "review_phase_confirmation":
+        return ["code_review"] if update.get("status") == "completed" else []
+    if node_name == "code_review":
+        return ["launch_project"] if update.get("status") == "completed" else ["handle_failure"]
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
 
 
@@ -1207,6 +1232,24 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
 def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
     """把节点更新投射为前端可展示的摘要和结构化数据。"""
 
+    if node_name == "review_phase_confirmation":
+        clarification = update.get("clarification")
+        clarification = clarification if isinstance(clarification, dict) else {}
+        return {
+            "message": clarification.get("message") or "测试已通过，等待确认进入审查阶段。",
+            "data": {
+                "clarification": clarification,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+            },
+        }
+    if node_name == "code_review":
+        result = _workflow_code_review_result(update.get("code_review_result"))
+        return {
+            "message": str(
+                update.get("message") or result.get("summary") or "前后端代码审查完成。"
+            ),
+            "data": {"codeReviewResult": result, "requiresUserInput": False},
+        }
     if node_name == "classify_request_complexity":
         return {
             "message": f"复杂度={update.get('request_complexity')}，原因={update.get('complexity_reason')}",

@@ -11,11 +11,11 @@
 节点在主图中的位置总体合理：
 
 ```text
-integration_test -> launch_project -> END
-                                      |
-                                      | 用户提交结构化验收动作后的下一次 run
-                                      v
-                                 acceptance -> finalize_project
+integration_test -> review_phase_confirmation -> code_review -> launch_project -> END
+                                                                    |
+                                                                    | 用户提交结构化验收动作后的下一次 run
+                                                                    v
+                                                               acceptance -> finalize_project
 ```
 
 
@@ -83,7 +83,7 @@ integration_test -> launch_project -> END
 - 集成测试可能需要占用与预览相同的本地端口。
 - 启动失败无法判断是工程问题还是测试过程中的临时文件变化。
 
-因此 `integration_test -> launch_project` 的顺序边是必要的。
+因此 `code_review -> launch_project` 的顺序边是必要的；质量门禁通过后必须先完成审查确认和只读扫描。
 
 #### 与 `acceptance` 并行：不可能
 
@@ -109,7 +109,9 @@ integration_test -> launch_project -> END
 build
   -> integration_test
       -> quality gate passed
-          -> launch_project
+          -> review_phase_confirmation
+              -> code_review
+                  -> launch_project
               -> END
 ```
 
@@ -226,12 +228,12 @@ timeline:
 正常边：
 
 ```text
-integration_test -- quality_gate_passed=true --> launch_project
+integration_test -- quality_gate_passed=true --> review_phase_confirmation --> code_review --> launch_project
 ```
 
 该边必要且方向正确。
 
-路由函数 `route_test_validation()` 优先读取 `quality_gate_passed`；因此质量门禁通过时，`integration_next_action="launch_project"` 并不是实际路由的必要条件。后者主要用于状态说明和兼容投影。
+路由函数 `route_test_validation()` 优先读取 `quality_gate_passed`；质量门禁通过时统一路由到 `review_phase_confirmation`，由用户确认后进入 `code_review`，再启动预览。
 
 另有 START 恢复边：
 
@@ -239,7 +241,7 @@ integration_test -- quality_gate_passed=true --> launch_project
 START -- resume_from=launch_project --> launch_project
 ```
 
-该边对普通生产请求不是必要的，且能绕过门禁。建议限制为显式调试能力，或者删除公开恢复集合中的 `launch_project`。
+该边只用于已有审查阶段执行的安全恢复，不能替代审查确认或代码审查节点。
 
 ### 3.2 执行成功后的路由
 
@@ -304,7 +306,7 @@ launch_project failed -> launch_project
 
 | 边 | 判断 |
 | --- | --- |
-| `integration_test -> launch_project` | 必须存在 |
+| `code_review -> launch_project` | 必须存在 |
 | `launch_project(success) -> END` | 必须存在，用于人工验收门禁 |
 | `launch_project(failed) -> END` | 当前安全兜底可保留，但应升级为分类路由 |
 | `launch_project(failed) -> handle_failure` | 不应无条件存在，会丢失可恢复场景 |

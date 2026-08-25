@@ -31,6 +31,10 @@ def route_workflow_start(state: ProjectState) -> str:
         return "unit_test_repair"
     if state.get("resume_from") == "test_phase_confirmation":
         return "test_phase_confirmation"
+    if state.get("resume_from") == "review_phase_confirmation":
+        return "review_phase_confirmation"
+    if state.get("resume_from") == "code_review":
+        return "code_review"
     if state.get("resume_from") == "integration_test":
         return "integration_test"
     if state.get("resume_from") == "small_task_repair":
@@ -54,7 +58,7 @@ def route_test_validation(state: ProjectState) -> str:
     if state.get("status") == "requires_user_input" or next_action == "await_user_input":
         return "await_user_input"
     if state.get("quality_gate_passed"):
-        return "launch_project"
+        return "review_phase_confirmation"
     if next_action == "small_task_repair":
         return "small_task_repair"
     return "handle_failure"
@@ -133,6 +137,24 @@ def route_test_phase_confirmation(state: ProjectState) -> str:
     return "handle_failure"
 
 
+def route_review_phase_confirmation(state: ProjectState) -> str:
+    """根据审查阶段确认结果选择暂停或开始代码审查。"""
+
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
+    if state.get("status") == "completed" and state.get("quality_gate_passed") is True:
+        return "code_review"
+    return "handle_failure"
+
+
+def route_code_review(state: ProjectState) -> str:
+    """审查完成后无条件启动项目，审查执行异常才进入失败处理。"""
+
+    if state.get("status") == "completed":
+        return "launch_project"
+    return "handle_failure"
+
+
 def route_entity_source_binding(state: ProjectState) -> str:
     """实体数据源绑定始终作为独立交互结束，不自动进入页面/API开发。"""
 
@@ -185,6 +207,8 @@ def build_graph(*, checkpointer):
     builder.add_node("unit_test", nodes.unit_test)
     builder.add_node("unit_test_repair", nodes.unit_test_repair)
     builder.add_node("test_phase_confirmation", nodes.test_phase_confirmation)
+    builder.add_node("review_phase_confirmation", nodes.review_phase_confirmation)
+    builder.add_node("code_review", nodes.code_review)
     builder.add_node("integration_test", nodes.integration_test)
     builder.add_node("small_task_repair", nodes.small_task_repair)
     builder.add_node("launch_project", nodes.launch_project)
@@ -205,6 +229,8 @@ def build_graph(*, checkpointer):
             "unit_test": "unit_test",
             "unit_test_repair": "unit_test_repair",
             "test_phase_confirmation": "test_phase_confirmation",
+            "review_phase_confirmation": "review_phase_confirmation",
+            "code_review": "code_review",
             "integration_test": "integration_test",
             "small_task_repair": "small_task_repair",
             "launch_project": "launch_project",
@@ -287,10 +313,27 @@ def build_graph(*, checkpointer):
         },
     )
     builder.add_conditional_edges(
+        "review_phase_confirmation",
+        route_review_phase_confirmation,
+        {
+            "code_review": "code_review",
+            "await_user_input": END,
+            "handle_failure": "handle_failure",
+        },
+    )
+    builder.add_conditional_edges(
+        "code_review",
+        route_code_review,
+        {
+            "launch_project": "launch_project",
+            "handle_failure": "handle_failure",
+        },
+    )
+    builder.add_conditional_edges(
         "integration_test",
         route_test_validation,
         {
-            "launch_project": "launch_project",
+            "review_phase_confirmation": "review_phase_confirmation",
             "small_task_repair": "small_task_repair",
             "await_user_input": END,
             "handle_failure": "handle_failure",

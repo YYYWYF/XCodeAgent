@@ -40,8 +40,12 @@ START
   → test_phase_confirmation //Build completed 后的显式用户确认门
       ├─ 首次进入 → requires_user_input，返回 test_phase_confirmation 确认卡
       └─ 用户 confirm → integration_test
-          ├─ 依赖安装、前后端 Build、前端性能测试和集成质量门禁通过 → launch_project
-          │                         → 提示用户验收并结束本轮
+          ├─ 依赖安装、前后端 Build、前端性能测试和集成质量门禁通过
+          │   → review_phase_confirmation //测试阶段内的审查确认门
+          │       ├─ 首次进入 → requires_user_input，返回“测试已通过，是否进入审查阶段？”
+          │       └─ 用户 confirm → 新建审查会话并进入 code_review
+          │           → 只读扫描 frontend/src 与 backend/src/main/java
+          │           → launch_project → 提示用户验收并结束本轮
           │                         → 用户确认后从 acceptance 续跑
           │                         → finalize_project
           │                         → END
@@ -55,17 +59,17 @@ START
 
 ### 工作台四阶段边界
 
-顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责开发就绪检查、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `launch_project`；审查阶段负责 `acceptance` 和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在审查阶段开放。
+顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责开发就绪检查、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `review_phase_confirmation`；审查阶段负责只读 `code_review`、`launch_project`、`acceptance` 和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在审查阶段开放。
 
 `build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，失败最多经过 3 轮独立 `unit_test_repair`，耗尽后失败且不展示测试阶段确认卡。
 
 单元测试通过或跳过后才进入 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 或单测失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
 
-测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，只执行依赖安装、前后端 Build、前端性能测试和集成质量门禁。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。项目启动及预览就绪卡仍属于测试阶段，用户提交最终验收后才进入审查阶段。
+测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，只执行依赖安装、前后端 Build、前端性能测试和集成质量门禁。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。质量门禁通过后必须先经过 `review_phase_confirmation`；确认后由 `code_review` 只读扫描两个指定源码目录，审查问题仅展示、不阻断 `launch_project`，项目启动及预览验收均归属审查阶段。
 
 ### 测试阶段 AG-UI 与生命周期契约
 
-`unit_test`、`unit_test_repair` 和 `test_phase_confirmation` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。`unit_test_confirmation` 是新的生命周期待交互类型，仍使用 `clarificationAnswers.unit_test_confirmation` 的 `run/skip` 答案恢复同一单测节点；单测确认恢复必须携带原执行的 `resumeExecutionRunId`。`test_phase_confirmation` 确认门的 AG-UI 快照同时投影 `clarification.mode`、固定确认文案和 `testTarget`，其恢复允许从开发 thread 原子转交给新的测试 thread。确认节点完成时生命周期立即投影 `integration_test`，使顶部测试阶段在测试执行开始时同步高亮。生命周期 schema 当前为 `1.3.0`。
+`unit_test`、`unit_test_repair`、`test_phase_confirmation`、`review_phase_confirmation` 和 `code_review` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。`unit_test_confirmation` 和 `frontend_performance_confirmation` 是独立生命周期待交互类型，分别使用对应的 `run/skip` 结构化答案恢复原节点；恢复必须携带原执行的 `resumeExecutionRunId`，其中性能测试确认只允许同一测试 thread 接管。两个阶段确认门的 AG-UI 快照分别投影固定确认文案；恢复都校验原执行的 scope/target，阶段交接允许原子转交到新的阶段 thread。审查确认提交后生命周期立即投影 `code_review`，使顶部审查阶段在扫描首帧前同步高亮。生命周期 schema 当前为 `1.4.0`。
 
 需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 读取 `.xcodeagent/plans/technical-plan.json`；页面选择从 `pages[].references` 解析实现范围并在运行时编译 PageImplementationContract，API 选择直接读取 TechnicalPlan Endpoint。两者都先进入 `development_readiness_gate`，只在关联实体均有已确认 EntitySourceBinding 时继续。门禁不会自动跳转实体；用户完成独立绑定后必须重新发起原目标开发。
 
@@ -100,7 +104,7 @@ START
 职责边界固定如下：
 
 - `application-lifecycle.json`：顶层 `initialization.stage/status/threadId` 只保存进入工作台前的初始化门禁和 checkpoint 定位，完成后固定为 `ready_for_workbench/completed` 并清空 thread；工作台阶段另由按 run 隔离的 `activeExecutions`、页面/API 契约/数据源 `resourceLocks`、execution 交互门禁、活动 run 和恢复审计表示；
-- 已停止或失败的执行继续运行时，客户端显式提交旧 `runId` 作为恢复令牌；服务端只允许同一 `threadId`、scope 和 target 接替，并原子地把该 run 当前可见的资源登记转给新 `runId`，不使用 lifecycle 快照覆盖当前 Graph 状态。唯一例外是结构化 `test_phase_confirmation`：它允许 execution 从开发 thread 转交给空白测试 thread，scope 和 target 仍必须完全一致；
+- 已停止或失败的执行继续运行时，客户端显式提交旧 `runId` 作为恢复令牌；服务端只允许同一 `threadId`、scope 和 target 接替，并原子地把该 run 当前可见的资源登记转给新 `runId`，不使用 lifecycle 快照覆盖当前 Graph 状态。唯一例外是结构化 `test_phase_confirmation` 与 `review_phase_confirmation`：它们允许 execution 从上一阶段 thread 转交给空白阶段 thread，scope 和 target 仍必须完全一致；
 - `checkpoints.sqlite`：LangGraph 技术执行断点和节点状态，继续保留；
 - RequirementSpec / ProjectPlan Markdown + JSON：正式文档内容和 `confirmation_status`，继续保留；
 - Build DAG / ExecutionRun / TestReport：任务、执行和测试事实，继续由各自产物负责。
@@ -117,7 +121,7 @@ START
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
-当节点进入 `requires_user_input` 时，前端不应硬编码续跑阶段，而应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点并设置内部 `resume_from`。主 Graph 支持从 `development_readiness_gate`、`entity_source_binding`、`project_planning`、`inspect_workspace`、`prepare_build_tasks`、`test_phase_confirmation`、`small_task_repair` 和后续执行节点续跑；`inspect_database_context` 在协议边界映射到 `prepare_build_tasks`。首页独立规划 Graph 支持 `requirements`、`product_planning`、`ui_confirmation`、`technical_planning` 恢复。
+当节点进入 `requires_user_input` 时，前端不应硬编码续跑阶段，而应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点并设置内部 `resume_from`。主 Graph 支持从 `development_readiness_gate`、`entity_source_binding`、`project_planning`、`inspect_workspace`、`prepare_build_tasks`、`test_phase_confirmation`、`integration_test`、`review_phase_confirmation`、`code_review`、`small_task_repair` 和后续执行节点续跑；`inspect_database_context` 在协议边界映射到 `prepare_build_tasks`。首页独立规划 Graph 支持 `requirements`、`product_planning`、`ui_confirmation`、`technical_planning` 恢复。
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
@@ -474,7 +478,7 @@ testing.START
   → testing.END
 ```
 
-`main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；质量门禁通过时跳过修复计划并输出 `integration_next_action = launch_project`。
+`main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；质量门禁通过时跳过修复计划并输出 `integration_next_action = review_phase_confirmation`。
 
 任一阻塞性集成检查失败时，前端性能确认门自动跳过，检查记录为 `passed=true, skipped=true`，流程直达集成质量门禁与修复规划，不再要求用户先回答跳过/继续。单测门禁只在开发阶段由 `unit_test` 处理；advisory 的 `frontend_performance` 失败不触发集成修复，测试生成越权写入仍作为安全失败直接终止。
 
@@ -507,7 +511,7 @@ testing.START
 - `repair_task_plan_path`：结构化修复任务计划 JSON 路径；
 - `repair_tasks`：RepairPlanner 生成、随后交给 SmallTask Agent 的受限局部修复任务；
 - `small_task_tasks` / `small_task_results`：SmallTask 执行器的任务状态、实际改动、验证和升级结果；
-- `unit_test_next_action` / `integration_next_action`：分别表示开发单测和测试集成门禁的下一步路由；单测取值包含 `test_phase_confirmation`、`unit_test_repair`、`await_user_input` 或 `handle_failure`，集成测试取值包含 `launch_project`、`small_task_repair`、`await_user_input` 或 `handle_failure`；
+- `unit_test_next_action` / `integration_next_action`：分别表示开发单测和测试集成门禁的下一步路由；单测取值包含 `test_phase_confirmation`、`unit_test_repair`、`await_user_input` 或 `handle_failure`，集成测试取值包含 `review_phase_confirmation`、`small_task_repair`、`await_user_input` 或 `handle_failure`；
 - `repair_iteration` / `max_repair_iterations`：集成测试修复闭环预算。
 - `unit_test_quality_gate_passed`、`unit_test_results`、`unit_test_report`、`unit_test_report_path`、`unit_test_repair_iteration` / `unit_test_max_repair_iterations`：开发阶段单测的独立结果、报告和修复预算。
 - `unit_test_generation_context`、`unit_test_generation`、`unit_test_mapping_path`：本轮源码目标、首次 Build Diff 派生的 `code_diff`、生成/同步结果、warning、校验和可重建映射缓存；`unit_test_code_change_sets` 与 `unit_test_generation_code_change_sets` 保存实际测试文件差异（后者为生成阶段别名）。

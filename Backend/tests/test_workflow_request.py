@@ -673,6 +673,56 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
+    def test_review_phase_confirmation_is_forwarded_as_structured_resume(self) -> None:
+        """进入审查阶段按钮必须恢复确认节点并保留 confirm 动作。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "开始审查前后端代码",
+                "clarificationAnswers": {
+                    "review_phase_confirmation": {"action": "confirm"}
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "review_phase_confirmation",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "review_phase_confirmation")
+        self.assertEqual(
+            inputs["resume_values"]["review_phase_confirmation"],
+            {"mode": "review_phase_confirmation", "action": "confirm"},
+        )
+
+    def test_review_phase_confirmation_rejects_non_confirm_action(self) -> None:
+        """审查阶段确认不接受未知动作或自然语言冒充确认。"""
+
+        with self.assertRaisesRegex(ValueError, "只支持 confirm"):
+            workflow_run_inputs(
+                {
+                    "request": "进入审查",
+                    "clarificationAnswers": {
+                        "review_phase_confirmation": {"action": "skip"}
+                    },
+                }
+            )
+
+        with self.assertRaisesRegex(ValueError, "只能通过 clarificationAnswers"):
+            workflow_run_inputs(
+                {
+                    "request": "进入审查",
+                    "resumeState": {
+                        "summary": {
+                            "status": "requires_user_input",
+                            "phase": "review_phase_confirmation",
+                        }
+                    },
+                }
+            )
+
     def test_frontend_performance_confirmation_is_forwarded_as_resume_decision(self) -> None:
         """前端性能测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
 

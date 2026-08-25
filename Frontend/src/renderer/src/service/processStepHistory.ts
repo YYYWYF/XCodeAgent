@@ -20,6 +20,8 @@ const WORKFLOW_NODE_LABELS: Record<string, string> = {
   unit_test_repair: '单元测试局部修复',
   test_phase_confirmation: '开发完成与测试阶段确认',
   integration_test: '集成测试与质量门禁',
+  review_phase_confirmation: '测试完成与审查阶段确认',
+  code_review: '前后端代码审查',
   launch_project: '启动本地预览',
   acceptance: '用户验收',
   finalize_project: '完成项目',
@@ -327,7 +329,7 @@ function completedWorkflowProcessSteps(
   if (stepsById.size === 0) {
     const timeline = workflowTimeline(workflow)
     for (const [index, nodeName] of timeline.entries()) {
-      const label = workflowNodeLabel(nodeName, workflow)
+      const label = workflowNodeLabel(nodeName)
       if (!label) continue
       const stepId = `workflow:${nodeName}`
       // 旧 timeline 可能重复记录同一节点；保留首次出现位置，避免历史步骤发生跳序。
@@ -411,7 +413,7 @@ function workflowStepNodeName(step: ProcessStepRecord): string {
 }
 
 /** 返回当前 Workflow 节点的展示名称。 */
-function workflowNodeLabel(nodeName: string, _workflow: WorkflowRunPayload): string | undefined {
+function workflowNodeLabel(nodeName: string): string | undefined {
   if (nodeName === 'entity_source_binding') {
     return '实体数据源绑定'
   }

@@ -1477,7 +1477,7 @@ def repair_planning(state: ProjectState) -> dict:
         return {
             "repair_task_plan": {},
             "repair_tasks": [],
-            "integration_next_action": "launch_project",
+            "integration_next_action": "review_phase_confirmation",
             "test_events": ["repair_planning:skipped"],
         }
 
@@ -2007,8 +2007,14 @@ def integration_test(state: ProjectState) -> dict:
         ),
         "integration_next_action": result.get(
             "integration_next_action",
-            "launch_project" if result.get("quality_gate_passed", False) else "handle_failure",
+            "review_phase_confirmation"
+            if result.get("quality_gate_passed", False)
+            else "handle_failure",
         ),
+        # 每次新的集成测试轮次都必须重新等待审查确认，不能复用旧轮次的确认或结果。
+        "review_phase_confirmation": {},
+        "code_review_result": {},
+        "code_review_next_action": "",
         # 集成测试的公开更新也要显式覆盖 checkpoint 中的旧预览字段。
         "preview_url": "",
         "launch_result": {},

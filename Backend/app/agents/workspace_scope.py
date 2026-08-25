@@ -22,6 +22,7 @@ AgentWorkspaceMode = Literal[
     "frontend",
     "data_source",
     "database",
+    "code_analyze",
     "repair_planner",
     "small_task",
     "test_generation",
@@ -145,6 +146,29 @@ def create_workspace_permissions(
                     mode="allow",
                 ),
                 FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
+            ]
+        )
+        return permissions
+
+    if mode == "code_analyze":
+        # 代码审查只允许读取两端业务源码和强制加载的内置扫描 Skill。
+        permissions.extend(
+            [
+                FilesystemPermission(
+                    operations=["read"],
+                    paths=[
+                        "/frontend/src",
+                        "/frontend/src/**",
+                        "/backend/src/main/java",
+                        "/backend/src/main/java/**",
+                    ],
+                    mode="allow",
+                ),
+                FilesystemPermission(
+                    operations=["write"],
+                    paths=["/**"],
+                    mode="deny",
+                ),
             ]
         )
         return permissions

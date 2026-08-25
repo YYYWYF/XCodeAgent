@@ -474,6 +474,49 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 "integration_test",
             )
 
+    def test_frontend_performance_confirmation_can_resume_in_test_thread(self) -> None:
+        """性能测试选择应允许同一测试对话接管 awaiting_user execution。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="orders",
+                page_id="orders",
+                thread_id="thread-tests-orders",
+                run_id="run-old",
+                phase="integration_test",
+            )
+            update_workbench_execution(
+                directory,
+                run_id="run-old",
+                phase="integration_test",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.FRONTEND_PERFORMANCE_CONFIRMATION,
+                pending_payload={"mode": "frontend_performance_confirmation"},
+            )
+
+            payload = begin_workflow_lifecycle(
+                {
+                    "workspace": directory,
+                    "resume_values": {
+                        "build_execution_scope": {"type": "page", "targetId": "orders"},
+                        "resume_execution_run_id": "run-old",
+                    },
+                },
+                thread_id="thread-tests-orders",
+                run_id="run-new",
+                phase="integration_test",
+            )
+
+            assert payload is not None
+            self.assertNotIn("run-old", payload["activeExecutions"])
+            self.assertEqual(
+                payload["activeExecutions"]["run-new"]["threadId"],
+                "thread-tests-orders",
+            )
+
     def test_other_resumable_execution_cannot_move_to_new_thread(self) -> None:
         """非测试确认的可恢复执行不得跨对话接管。"""
 
