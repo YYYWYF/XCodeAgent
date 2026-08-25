@@ -18,6 +18,70 @@ import {
   serializeSeedRows,
   tryParseJson
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/entityDesignSerialization'
+import { fetchDatabaseTableColumns } from '../src/renderer/src/service/workspaceTools'
+
+test('fetchDatabaseTableColumns 合并同键并发请求并在结束后清理', async () => {
+  const globalWithBrowser = globalThis as typeof globalThis & {
+    window?: { xcodeAgent?: { agentBaseUrl?: string } }
+  }
+  const previousWindow = globalWithBrowser.window
+  const previousFetch = globalThis.fetch
+  let requestCount = 0
+  let releaseRequest: (() => void) | undefined
+  const requestReleased = new Promise<void>((resolve) => {
+    releaseRequest = resolve
+  })
+
+  globalWithBrowser.window = { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  globalThis.fetch = (async () => {
+    requestCount += 1
+    await requestReleased
+    return {
+      ok: true,
+      json: async () => ({
+        tool: 'database.table_columns',
+        status: 'ok',
+        table_name: 'category',
+        columns: []
+      })
+    } as Response
+  }) as typeof fetch
+
+  try {
+    const first = fetchDatabaseTableColumns({
+      workspace_root: 'C:/workspace/',
+      table_name: 'category'
+    })
+    const second = fetchDatabaseTableColumns({
+      workspace_root: 'C:/workspace',
+      table_name: ' category '
+    })
+    assert.equal(requestCount, 1)
+    releaseRequest?.()
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    assert.deepEqual(firstResult, secondResult)
+
+    await fetchDatabaseTableColumns({
+      workspace_root: 'C:/workspace',
+      table_name: 'category'
+    })
+    assert.equal(requestCount, 2)
+
+    const differentTable = fetchDatabaseTableColumns({
+      workspace_root: 'C:/workspace',
+      table_name: 'product'
+    })
+    assert.equal(requestCount, 3)
+    await differentTable
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousWindow) {
+      globalWithBrowser.window = previousWindow
+    } else {
+      delete globalWithBrowser.window
+    }
+  }
+})
 
 test('normalizeObjectRows 丢弃空白行并与旧 JSON 载荷等价', () => {
   const rows = [

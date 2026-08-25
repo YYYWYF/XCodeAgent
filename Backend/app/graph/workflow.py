@@ -87,7 +87,6 @@ def route_small_task_result(state: ProjectState) -> str:
         "integration_test",
         "entity_source_binding",
         "unit_test",
-        "detail_confirmation",
         "project_planning",
         "inspect_workspace",
         "prepare_build_tasks",
@@ -270,7 +269,6 @@ def build_graph(*, checkpointer):
         {
             "unit_test": "unit_test",
             "integration_test": "integration_test",
-            "detail_confirmation": "detail_confirmation",
             "project_planning": "project_planning",
             "inspect_workspace": "inspect_workspace",
             "prepare_build_tasks": "prepare_build_tasks",

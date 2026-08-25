@@ -163,6 +163,24 @@ export type DatabaseTableColumnsResult = {
   message?: string
 }
 
+// 合并同一工作区、同一数据表的并发字段查询，避免 React StrictMode 重复触发底层请求。
+const databaseTableColumnsRequests = new Map<
+  string,
+  Promise<DatabaseTableColumnsResult>
+>()
+
+// 将字段查询参数整理为稳定键；去掉工作区末尾分隔符和输入空白，避免同一资源产生多个请求。
+function databaseTableColumnsRequestKey(request: {
+  workspace_root?: string
+  table_name: string
+}): string {
+  const workspaceRoot = String(request.workspace_root || '')
+    .trim()
+    .replace(/[\\/]+$/, '')
+  const tableName = String(request.table_name || '').trim()
+  return `${workspaceRoot}\u0000${tableName}`
+}
+
 /** 查询当前数据库的表清单（实体设计卡片本地查表使用）。 */
 export function listDatabaseTables(
   request: DatabaseTablesRequest,
@@ -177,10 +195,21 @@ export function listDatabaseTables(
 export function fetchDatabaseTableColumns(
   request: { workspace_root?: string; table_name: string },
 ): Promise<DatabaseTableColumnsResult> {
-  return requestJson<DatabaseTableColumnsResult>('/tools/database/table-columns', {
+  const requestKey = databaseTableColumnsRequestKey(request)
+  const existingRequest = databaseTableColumnsRequests.get(requestKey)
+  if (existingRequest) return existingRequest
+
+  const currentRequest = requestJson<DatabaseTableColumnsResult>('/tools/database/table-columns', {
     method: 'POST',
     body: JSON.stringify(request)
+  }).finally(() => {
+    // 仅缓存请求进行中的 Promise；请求结束后清理，保证再次进入实体时仍能实时查询。
+    if (databaseTableColumnsRequests.get(requestKey) === currentRequest) {
+      databaseTableColumnsRequests.delete(requestKey)
+    }
   })
+  databaseTableColumnsRequests.set(requestKey, currentRequest)
+  return currentRequest
 }
 
 export function readWorkspaceFile(
