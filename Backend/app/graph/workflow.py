@@ -25,6 +25,10 @@ def route_workflow_start(state: ProjectState) -> str:
         return "prepare_build_tasks"
     if state.get("resume_from") == "build":
         return "build"
+    if state.get("resume_from") == "unit_test":
+        return "unit_test"
+    if state.get("resume_from") == "unit_test_repair":
+        return "unit_test_repair"
     if state.get("resume_from") == "test_phase_confirmation":
         return "test_phase_confirmation"
     if state.get("resume_from") == "integration_test":
@@ -56,6 +60,19 @@ def route_test_validation(state: ProjectState) -> str:
     return "handle_failure"
 
 
+def route_unit_test_result(state: ProjectState) -> str:
+    """根据开发阶段单元测试门禁结果选择确认、修复或失败路径。"""
+
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
+    next_action = str(state.get("unit_test_next_action") or "")
+    if next_action == "unit_test_repair":
+        return "unit_test_repair"
+    if next_action == "test_phase_confirmation" and state.get("unit_test_gate_passed") is True:
+        return "test_phase_confirmation"
+    return "handle_failure"
+
+
 def route_small_task_result(state: ProjectState) -> str:
     """根据 SmallTask Agent 的完成、升级或失败结果选择主图路由。"""
 
@@ -69,6 +86,8 @@ def route_small_task_result(state: ProjectState) -> str:
     if target in {
         "integration_test",
         "entity_source_binding",
+        "unit_test",
+        "detail_confirmation",
         "project_planning",
         "inspect_workspace",
         "prepare_build_tasks",
@@ -79,7 +98,7 @@ def route_small_task_result(state: ProjectState) -> str:
 
 
 def route_build_result(state: ProjectState) -> str:
-    """仅允许完整成功的构建进入测试阶段确认门，失败走失败处理。"""
+    """仅允许完整成功的构建进入开发阶段单元测试门禁，失败走失败处理。"""
 
     build_summary = state.get("build_summary")
     summary_status = (
@@ -90,7 +109,7 @@ def route_build_result(state: ProjectState) -> str:
     if state.get("status") == "failed":
         return "handle_failure"
     if summary_status == "completed":
-        return "test_phase_confirmation"
+        return "unit_test"
     if summary_status == "requires_confirmation" or state.get("status") == "requires_user_input":
         return "await_user_input"
     return "handle_failure"
@@ -106,7 +125,11 @@ def route_test_phase_confirmation(state: ProjectState) -> str:
         isinstance(build_summary, dict)
         and build_summary.get("status") == "completed"
     )
-    if state.get("status") == "completed" and build_completed:
+    if (
+        state.get("status") == "completed"
+        and build_completed
+        and state.get("unit_test_gate_passed") is True
+    ):
         return "integration_test"
     return "handle_failure"
 
@@ -160,6 +183,8 @@ def build_graph(*, checkpointer):
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
     builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
     builder.add_node("build", nodes.build)
+    builder.add_node("unit_test", nodes.unit_test)
+    builder.add_node("unit_test_repair", nodes.unit_test_repair)
     builder.add_node("test_phase_confirmation", nodes.test_phase_confirmation)
     builder.add_node("integration_test", nodes.integration_test)
     builder.add_node("small_task_repair", nodes.small_task_repair)
@@ -178,6 +203,8 @@ def build_graph(*, checkpointer):
             "inspect_workspace": "inspect_workspace",
             "prepare_build_tasks": "prepare_build_tasks",
             "build": "build",
+            "unit_test": "unit_test",
+            "unit_test_repair": "unit_test_repair",
             "test_phase_confirmation": "test_phase_confirmation",
             "integration_test": "integration_test",
             "small_task_repair": "small_task_repair",
@@ -222,7 +249,32 @@ def build_graph(*, checkpointer):
         "build",
         route_build_result,
         {
+            "unit_test": "unit_test",
+            "await_user_input": END,
+            "handle_failure": "handle_failure",
+        },
+    )
+    builder.add_conditional_edges(
+        "unit_test",
+        route_unit_test_result,
+        {
+            "unit_test_repair": "unit_test_repair",
             "test_phase_confirmation": "test_phase_confirmation",
+            "await_user_input": END,
+            "handle_failure": "handle_failure",
+        },
+    )
+    builder.add_conditional_edges(
+        "unit_test_repair",
+        route_small_task_result,
+        {
+            "unit_test": "unit_test",
+            "integration_test": "integration_test",
+            "detail_confirmation": "detail_confirmation",
+            "project_planning": "project_planning",
+            "inspect_workspace": "inspect_workspace",
+            "prepare_build_tasks": "prepare_build_tasks",
+            "build": "build",
             "await_user_input": END,
             "handle_failure": "handle_failure",
         },

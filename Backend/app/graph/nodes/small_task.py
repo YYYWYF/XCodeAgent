@@ -24,7 +24,14 @@ from app.workspace.code_changes import merge_code_change_sets
 
 
 def small_task_repair(state: ProjectState) -> dict[str, Any]:
-    """执行集成测试产生的局部修复任务，升级复杂任务并回到集成测试验证。"""
+    """执行局部修复任务，并按来源节点返回对应的复测入口。"""
+
+    repair_return_node = str(state.get("repair_return_node") or "integration_test")
+    if repair_return_node not in {"unit_test", "integration_test"}:
+        repair_return_node = "integration_test"
+    repair_phase = (
+        "unit_test_repair" if repair_return_node == "unit_test" else "small_task_repair"
+    )
 
     tasks = _initial_tasks(state)
     handoff = state.get("small_task_handoff")
@@ -44,7 +51,7 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
             else:
                 target_node = workflow_target_for_small_task(handoff)
                 return {
-                    "phase": "small_task_repair",
+                    "phase": repair_phase,
                     "status": "in_progress",
                     "message": f"已确认升级，转入 {target_node} 节点继续处理。",
                     "small_task_handoff": {},
@@ -113,11 +120,13 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
         execution = execute_small_task_batch(
             state=state,
             tasks=batch,
-            on_tool_activity=_small_task_tool_activity_writer(),
+            on_tool_activity=_small_task_tool_activity_writer(
+                "unit_test_repair" if repair_return_node == "unit_test" else "small_task_repair"
+            ),
             source=(
                 "acceptance_adjustment"
                 if isinstance(state.get("acceptance_adjustment"), dict)
-                else "integration_test.small_task"
+                else f"{repair_return_node}.small_task"
             ),
         )
         batch_results = execution["results"]
@@ -210,21 +219,33 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
             "小任务执行批次超过安全上限，已停止继续修改。",
         )
     merged_changes = merge_code_change_sets(all_change_sets)
-    next_iteration = int(state.get("repair_iteration", 0) or 0) + (1 if dispatched else 0)
+    iteration_key = (
+        "unit_test_repair_iteration"
+        if repair_return_node == "unit_test"
+        else "repair_iteration"
+    )
+    next_iteration = int(state.get(iteration_key, 0) or 0) + (1 if dispatched else 0)
+    next_node_label = "单元测试" if repair_return_node == "unit_test" else "集成测试"
     return {
-        "phase": "small_task_repair",
+        "phase": repair_phase,
         "status": "in_progress",
-        "message": f"SmallTask Agent 已完成 {len(working_tasks)} 个局部任务，返回集成测试复核。",
+        "message": f"SmallTask Agent 已完成 {len(working_tasks)} 个局部任务，返回{next_node_label}复核。",
         "repair_tasks": working_tasks,
         "small_task_tasks": working_tasks,
         "small_task_results": all_results,
         "small_task_code_change_sets": all_change_sets,
         "small_task_handoff": {},
         "small_task_handoff_submission": {},
-        "small_task_route": "integration_test",
-        "integration_next_action": "integration_test",
+        "small_task_route": repair_return_node,
+        "repair_return_node": repair_return_node,
+        "integration_next_action": (
+            repair_return_node if repair_return_node == "integration_test" else state.get("integration_next_action", "")
+        ),
+        "unit_test_next_action": (
+            repair_return_node if repair_return_node == "unit_test" else state.get("unit_test_next_action", "")
+        ),
         "acceptance_adjustment": {},
-        "repair_iteration": next_iteration,
+        iteration_key: next_iteration,
         "code_changes": merged_changes or state.get("code_changes", {}),
         "clarification": {},
         "timeline": ["small_task_repair"],
@@ -298,7 +319,11 @@ def _await_handoff(
     """保存待确认升级状态，并让主工作流在当前节点停止。"""
 
     return {
-        "phase": "small_task_repair",
+        "phase": (
+            "unit_test_repair"
+            if state.get("repair_return_node") == "unit_test"
+            else "small_task_repair"
+        ),
         "status": "requires_user_input",
         "message": str(handoff.get("message") or "SmallTask Agent 需要你的确认。"),
         "repair_tasks": tasks,
@@ -308,7 +333,17 @@ def _await_handoff(
         "small_task_handoff": handoff,
         "small_task_handoff_submission": {},
         "small_task_route": "await_user_input",
-        "integration_next_action": "await_user_input",
+        "repair_return_node": state.get("repair_return_node", "integration_test"),
+        "integration_next_action": (
+            "await_user_input"
+            if state.get("repair_return_node", "integration_test") == "integration_test"
+            else state.get("integration_next_action", "await_user_input")
+        ),
+        "unit_test_next_action": (
+            "await_user_input"
+            if state.get("repair_return_node", "integration_test") == "unit_test"
+            else state.get("unit_test_next_action", "await_user_input")
+        ),
         "clarification": handoff,
         "timeline": ["small_task_repair"],
     }
@@ -336,7 +371,11 @@ def _small_task_failure(
     """生成失败路由需要的完整小任务状态和有界代码差异。"""
 
     return {
-        "phase": "small_task_repair",
+        "phase": (
+            "unit_test_repair"
+            if state.get("repair_return_node") == "unit_test"
+            else "small_task_repair"
+        ),
         "status": "failed",
         "message": reason[:2_000],
         "repair_tasks": tasks,
@@ -346,7 +385,17 @@ def _small_task_failure(
         "small_task_handoff": {},
         "small_task_handoff_submission": {},
         "small_task_route": "handle_failure",
-        "integration_next_action": "handle_failure",
+        "repair_return_node": state.get("repair_return_node", "integration_test"),
+        "integration_next_action": (
+            "handle_failure"
+            if state.get("repair_return_node", "integration_test") == "integration_test"
+            else state.get("integration_next_action", "handle_failure")
+        ),
+        "unit_test_next_action": (
+            "handle_failure"
+            if state.get("repair_return_node", "integration_test") == "unit_test"
+            else state.get("unit_test_next_action", "handle_failure")
+        ),
         "code_changes": merge_code_change_sets(change_sets) or state.get("code_changes", {}),
         "clarification": {},
         "timeline": ["small_task_repair"],
@@ -372,7 +421,7 @@ def _submission_decision(submission: Any) -> str:
     return ""
 
 
-def _small_task_tool_activity_writer() -> ToolActivityCallback | None:
+def _small_task_tool_activity_writer(node_name: str = "small_task_repair") -> ToolActivityCallback | None:
     """把并行 Agent 工具活动发布到主工作流的 custom stream。"""
 
     try:
@@ -386,12 +435,18 @@ def _small_task_tool_activity_writer() -> ToolActivityCallback | None:
         writer(
             {
                 "type": "small_task.tool_activity",
-                "node_name": "small_task_repair",
+                "node_name": node_name,
                 "activity": activity,
             }
         )
 
     return report
+
+
+def unit_test_repair(state: ProjectState) -> dict[str, Any]:
+    """执行开发阶段单元测试失败后的 SmallTask 修复。"""
+
+    return small_task_repair({**state, "repair_return_node": "unit_test"})
 
 
 def _first_small_task_preflight(tasks: list[dict[str, Any]]) -> dict[str, str]:

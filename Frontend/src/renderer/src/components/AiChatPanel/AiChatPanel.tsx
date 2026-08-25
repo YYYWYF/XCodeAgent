@@ -680,6 +680,7 @@ function pageContextStatus(
   if (
     mode === 'awaiting_authorization' ||
     mode === 'awaiting_repair_confirmation' ||
+    mode === 'awaiting_unit_test_confirmation' ||
     mode === 'awaiting_test_phase_confirmation' ||
     mode === 'awaiting_acceptance' ||
     mode === 'awaiting_plan_adjustment'
@@ -1334,9 +1335,9 @@ export default function AiChatPanel({
     [activePreviewPath, setRightPanel]
   )
 
-  /** 测试会话启动时清除手动阶段覆盖，让顶部步骤条跟随权威生命周期推进。 */
+  /** 测试会话启动时立即高亮测试阶段，避免生命周期回传延迟造成步骤条仍显示开发中。 */
   const handleEnterTestPhase = useCallback((): void => {
-    switchPhase(null)
+    switchPhase('test')
   }, [switchPhase])
 
   // 同步工作台自动启动返回的最新前端端口和错误，不进行任何浏览器持久化。

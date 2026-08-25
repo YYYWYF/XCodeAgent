@@ -209,7 +209,8 @@ function ProcessStep({
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
-  const isRepairStep = step.nodeName === 'small_task_repair'
+  const isRepairStep =
+    step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair'
   const hasRepairActivity = isRepairStep && step.status === 'running'
   const hasRepairCompletion = isRepairStep && step.status === 'completed'
   const hasRepairPanel = hasRepairActivity || hasRepairCompletion
@@ -635,6 +636,8 @@ function processStepTitle(
     execute_backend: '修改后端文件',
     execute_workspace: '修改工作区文件',
     integration_test: '验证修改',
+    unit_test: '执行单元测试',
+    unit_test_repair: '修复单元测试失败',
     launch_project: '启动预览',
     finalize_direct_modification: '整理结果'
   }

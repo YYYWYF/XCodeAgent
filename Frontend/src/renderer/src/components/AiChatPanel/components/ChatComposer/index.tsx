@@ -34,6 +34,8 @@ const resumeNodeOptions = [
   { value: 'inspect_database_context', label: 'inspect_database_context' },
   { value: 'prepare_build_tasks', label: 'prepare_build_tasks' },
   { value: 'build', label: 'build' },
+  { value: 'unit_test', label: 'unit_test' },
+  { value: 'unit_test_repair', label: 'unit_test_repair' },
   { value: 'integration_test', label: 'integration_test' },
   { value: 'launch_project', label: 'launch_project' },
   { value: 'acceptance', label: 'acceptance' },

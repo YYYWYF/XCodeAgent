@@ -132,6 +132,10 @@ def _iteration_kind(node_name: str, attempt: int) -> str:
         return "initial_build" if attempt == 1 else "repair_build"
     if node_name == "integration_test":
         return "initial_test" if attempt == 1 else "retest"
+    if node_name == "unit_test":
+        return "initial_unit_test" if attempt == 1 else "unit_retest"
+    if node_name == "unit_test_repair":
+        return "initial_unit_repair" if attempt == 1 else "unit_repair_retest"
     return "initial"
 
 
@@ -150,6 +154,11 @@ def _terminal_process_status(node_name: str, update: dict[str, Any]) -> str:
         if summary_status != "completed":
             return "failed"
     if node_name == "integration_test" and update.get("quality_gate_passed") is not True:
+        return "failed"
+    if (
+        node_name == "unit_test"
+        and update.get("unit_test_next_action") == "unit_test_repair"
+    ):
         return "failed"
     return "completed"
 
@@ -942,27 +951,28 @@ def build_workflow_ag_ui_stream(
                             ),
                         )
                         continue
-                    if event_type == "integration_test.checks":
+                    if event_type in {"integration_test.checks", "unit_test.checks"}:
                         checks = integration_test_checks(progress)
                         if not checks:
                             continue
                         process_sequence += 1
-                        test_attempt = _current_node_attempt(
-                            node_attempts, "integration_test"
+                        check_node = (
+                            "unit_test" if event_type == "unit_test.checks" else "integration_test"
                         )
+                        test_attempt = _current_node_attempt(node_attempts, check_node)
                         yield _process_frame(
                             encoder,
-                            id=_process_step_id("integration_test", test_attempt),
+                            id=_process_step_id(check_node, test_attempt),
                             kind="workflow",
                             status="running",
-                            title=f"正在执行 {_workflow_node_label('integration_test')}",
+                            title=f"正在执行 {_workflow_node_label(check_node)}",
                             detail=integration_test_check_summary(checks),
                             sequence=process_sequence,
                             checks=checks,
-                            node_name="integration_test",
+                            node_name=check_node,
                             attempt=test_attempt,
                             iteration_kind=_iteration_kind(
-                                "integration_test", test_attempt
+                                check_node, test_attempt
                             ),
                         )
                         continue
@@ -999,6 +1009,7 @@ def build_workflow_ag_ui_stream(
                             activity_status = "running"
                         process_sequence += 1
                         task_id = str(activity.get("taskId") or "")
+                        tool_node = str(progress.get("node_name") or "small_task_repair")
                         yield _process_frame(
                             encoder,
                             id=f"small-task-tool:{task_id or process_sequence}",
@@ -1011,7 +1022,7 @@ def build_workflow_ag_ui_stream(
                                 or "SmallTask Agent 正在执行局部任务。"
                             ),
                             sequence=process_sequence,
-                            node_name="small_task_repair",
+                            node_name=tool_node,
                         )
                         continue
                     if event_type == "llm.token":
@@ -1130,8 +1141,15 @@ def build_workflow_ag_ui_stream(
                         yield frame
                     process_sequence += 1
                     checks = (
-                        integration_test_checks(update.get("test_results", []))
-                        if node_name == "integration_test"
+                        integration_test_checks(
+                            update.get(
+                                "unit_test_results"
+                                if node_name == "unit_test"
+                                else "test_results",
+                                [],
+                            )
+                        )
+                        if node_name in {"integration_test", "unit_test"}
                         else None
                     )
                     process_detail = (

@@ -68,7 +68,11 @@ def create_deterministic_test_results(state: dict[str, Any]) -> list[dict[str, A
 
 def create_revision_requests(
     test_results: list[dict[str, Any]],
+    *,
+    source: str = "integration_test",
 ) -> list[dict[str, Any]]:
+    """把阻塞检查失败转换为带阶段来源的修复请求。"""
+
     failed_results = [
         result
         for result in test_results
@@ -77,7 +81,7 @@ def create_revision_requests(
     return [
         {
             "id": f"revision:{result['id']}",
-            "source": "integration_test",
+            "source": source,
             "target": "repair-planner-agent",
             "owner": _revision_owner(result["id"]),
             "owners": _revision_owners(result["id"]),
@@ -108,8 +112,11 @@ def _revision_owners(check_id: str) -> list[str]:
 def evaluate_quality_gate(
     *,
     test_results: list[dict[str, Any]],
+    source: str = "integration_test",
 ) -> dict[str, Any]:
-    revision_requests = create_revision_requests(test_results)
+    """按指定阶段评估质量门禁，并在修复请求中保留阶段归属。"""
+
+    revision_requests = create_revision_requests(test_results, source=source)
     passed = all(
         bool(result["passed"]) or not _result_is_blocking(result)
         for result in test_results

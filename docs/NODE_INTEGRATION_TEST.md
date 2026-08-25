@@ -109,7 +109,7 @@ execution:
 
 ### 3.4 前端性能测试（advisory）
 
-单元测试阶段结束后先进入 `frontend_performance_confirmation`，通过 AG-UI 展示与单元测试同款的“是否跳过前端性能测试”按钮；选择继续执行后才启动 Lighthouse。
+测试阶段的依赖安装与前后端 Build 检查结束后进入 `frontend_performance_confirmation`，通过 AG-UI 展示“是否跳过前端性能测试”按钮；选择继续执行后才启动 Lighthouse。开发阶段的单元测试门禁在进入测试阶段前独立完成，不属于此子图。
 
 执行器 `Backend/app/services/frontend_performance_runner.py` 复用 `launch_frontend_project(root, skip_install=True)` 启动用户工程 `frontend/` 下的 `dev|start` 脚本，并解析日志拿到真实 `preview_url`；随后在 `.xcodeagent/runtime/tests/frontend_performance/` 下运行：
 

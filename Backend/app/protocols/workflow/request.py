@@ -65,6 +65,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     test_phase_confirmation = _test_phase_confirmation_submission(
         clarification_answers
     )
+    unit_test_decision = _unit_test_decision(clarification_answers)
     small_task_handoff_submission = _small_task_handoff_submission(
         clarification_answers
     )
@@ -160,13 +161,23 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             resume_values_from_state,
         )
     elif small_task_handoff_submission and workflow_scope not in APPLICATION_PLANNING_SCOPES:
-        resume_from = "small_task_repair"
+        # 单测修复使用独立节点；恢复快照中的 repairReturnNode 是当前契约里
+        # 唯一可靠的来源，不能让通用 SmallTask 节点吞掉开发阶段修复计数。
+        resume_from = (
+            "unit_test_repair"
+            if str(resume_values_from_state.get("repair_return_node") or "")
+            == "unit_test"
+            else "small_task_repair"
+        )
     elif build_task_plan_confirmation and workflow_scope != "application_planning":
         # DAG 确认必须回到同一 prepare 节点，不能被通用开发入口回退规则截走。
         resume_from = "prepare_build_tasks"
     elif test_phase_confirmation and workflow_scope != "application_planning":
         # 开发完成确认必须恢复同一确认节点，确认成功后由 Graph 放行测试节点。
         resume_from = "test_phase_confirmation"
+    elif unit_test_decision and workflow_scope != "application_planning":
+        # 单元测试确认属于开发阶段门禁；提交后必须回到 unit_test，不能误入集成测试。
+        resume_from = "unit_test"
     if not resume_from and _clarification_answers_to_text(clarification_answers):
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
             raise ValueError(
@@ -181,7 +192,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         resume_from = "entity_source_binding"
     acceptance_decision = _page_acceptance_decision(clarification_answers)
     acceptance_adjustment = _acceptance_adjustment(clarification_answers)
-    unit_test_decision = _unit_test_decision(clarification_answers)
     frontend_performance_decision = _frontend_performance_decision(
         clarification_answers
     )
@@ -833,6 +843,8 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "inspect_workspace",
             "prepare_build_tasks",
             "build",
+            "unit_test",
+            "unit_test_repair",
             "test_phase_confirmation",
             "integration_test",
             "small_task_repair",
@@ -904,12 +916,31 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "small_task_handoff_submission",
         "small_task_route",
         "small_task_max_concurrency",
+        "repair_return_node",
         "integration_next_action",
         "unit_test_decision",
+        "unit_test_gate_passed",
+        "unit_test_build_code_changes",
+        "unit_test_build_code_change_sets",
+        "unit_test_build_diff_captured",
+        "unit_test_results",
+        "unit_test_report",
+        "unit_test_report_path",
+        "unit_test_quality_gate_passed",
+        "unit_test_next_action",
+        "unit_test_generation",
+        "unit_test_mapping_path",
+        "unit_test_code_change_sets",
+        "unit_test_generation_code_change_sets",
+        "unit_test_repair_enabled",
+        "unit_test_repair_task_plan",
+        "unit_test_repair_task_plan_path",
+        "unit_test_repair_iteration",
+        "unit_test_max_repair_iterations",
         "frontend_performance_decision",
         "frontend_performance_test_enabled",
-        "unit_test_build_checks_completed",
-        "unit_test_build_results",
+        "integration_build_checks_completed",
+        "integration_build_results",
         "unit_test_generation_context",
         "unit_test_affected_layers",
         "clarification",
@@ -936,12 +967,31 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "code_changes": "codeChanges",
         "repair_task_plan": "repairTaskPlan",
         "repair_tasks": "repairTasks",
+        "repair_return_node": "repairReturnNode",
         "integration_next_action": "integrationNextAction",
         "unit_test_decision": "unitTestDecision",
+        "unit_test_gate_passed": "unitTestGatePassed",
+        "unit_test_build_code_changes": "unitTestBuildCodeChanges",
+        "unit_test_build_code_change_sets": "unitTestBuildCodeChangeSets",
+        "unit_test_build_diff_captured": "unitTestBuildDiffCaptured",
+        "unit_test_results": "unitTestResults",
+        "unit_test_report": "unitTestReport",
+        "unit_test_report_path": "unitTestReportPath",
+        "unit_test_quality_gate_passed": "unitTestQualityGatePassed",
+        "unit_test_next_action": "unitTestNextAction",
+        "unit_test_generation": "unitTestGeneration",
+        "unit_test_mapping_path": "unitTestMappingPath",
+        "unit_test_code_change_sets": "unitTestCodeChangeSets",
+        "unit_test_generation_code_change_sets": "unitTestGenerationCodeChangeSets",
+        "unit_test_repair_enabled": "unitTestRepairEnabled",
+        "unit_test_repair_task_plan": "unitTestRepairTaskPlan",
+        "unit_test_repair_task_plan_path": "unitTestRepairTaskPlanPath",
+        "unit_test_repair_iteration": "unitTestRepairIteration",
+        "unit_test_max_repair_iterations": "unitTestMaxRepairIterations",
         "frontend_performance_decision": "frontendPerformanceDecision",
         "frontend_performance_test_enabled": "frontendPerformanceTestEnabled",
-        "unit_test_build_checks_completed": "unitTestBuildChecksCompleted",
-        "unit_test_build_results": "unitTestBuildResults",
+        "integration_build_checks_completed": "integrationBuildChecksCompleted",
+        "integration_build_results": "integrationBuildResults",
         "unit_test_generation_context": "unitTestGenerationContext",
         "unit_test_affected_layers": "unitTestAffectedLayers",
     }

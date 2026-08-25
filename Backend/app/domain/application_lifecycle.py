@@ -58,6 +58,7 @@ class PendingInteractionType(StrEnum):
     APPLICATION_ACCEPTANCE = "application_acceptance"
     AGENT_APPROVAL = "agent_approval"
     REPAIR_SCOPE_CONFIRMATION = "repair_scope_confirmation"
+    UNIT_TEST_CONFIRMATION = "unit_test_confirmation"
     TEST_PHASE_CONFIRMATION = "test_phase_confirmation"
     PLAN_ADJUSTMENT = "plan_adjustment"
 

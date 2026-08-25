@@ -37,6 +37,21 @@ export type WorkflowSummary = {
   buildExecutionScope?: WorkflowBuildExecutionScope
   buildTaskPlanConfirmation?: WorkflowClarification
   testTarget?: WorkflowTestTarget
+  unitTestSummary?: Record<string, unknown>
+  unitTestResults?: Array<Record<string, unknown>>
+  unitTestReport?: Record<string, unknown>
+  unitTestGeneration?: Record<string, unknown>
+  unitTestGenerationContext?: Record<string, unknown>
+  unitTestQualityGatePassed?: boolean
+  unitTestGatePassed?: boolean
+  unitTestNextAction?: string
+  unitTestDecision?: 'run' | 'skip' | string
+  unitTestBuildCodeChanges?: WorkspaceCodeChangeSet
+  unitTestBuildDiffCaptured?: boolean
+  unitTestRepairTaskPlan?: Record<string, unknown>
+  unitTestRepairIteration?: number
+  unitTestMaxRepairIterations?: number
+  repairReturnNode?: 'unit_test' | 'integration_test' | string
   lifecycle?: ApplicationLifecycle
   [key: string]: unknown
 }
@@ -345,6 +360,8 @@ export type ApplicationPlanningAction =
 export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer> & {
   /** 由创建规划 UI 明确写入，不能由确认文案反推。 */
   __applicationPlanningAction?: ApplicationPlanningAction
+  /** 单元测试门禁的结构化运行或跳过选择。 */
+  unit_test_confirmation?: 'run' | 'skip'
   /** Build 完成后进入测试阶段的唯一结构化确认动作。 */
   test_phase_confirmation?: WorkflowTestPhaseConfirmation
 }
@@ -583,6 +600,7 @@ export type LifecyclePendingInteractionType =
   | 'application_acceptance'
   | 'agent_approval'
   | 'repair_scope_confirmation'
+  | 'unit_test_confirmation'
   | 'test_phase_confirmation'
   | 'plan_adjustment'
 

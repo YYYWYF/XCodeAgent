@@ -39,6 +39,8 @@ WORKFLOW_NODE_LABELS = {
     "inspect_workspace": "工作区快照检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
+    "unit_test": "开发阶段单元测试",
+    "unit_test_repair": "单元测试局部修复",
     "test_phase_confirmation": "开发完成与测试阶段确认",
     "integration_test": "集成测试与质量门禁",
     "small_task_repair": "局部修复任务",
@@ -54,7 +56,9 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "project_planning": ["development_readiness_gate"],
     "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
-    "build": ["test_phase_confirmation"],
+    "build": ["unit_test"],
+    "unit_test": ["unit_test_repair", "test_phase_confirmation"],
+    "unit_test_repair": ["unit_test"],
     "test_phase_confirmation": ["integration_test"],
     "small_task_repair": ["integration_test"],
     "launch_project": ["acceptance"],
@@ -68,6 +72,8 @@ WORKFLOW_ARTIFACT_FIELDS = (
     "project_plan_json_path",
     "workspace_snapshot_path",
     "build_task_plan_path",
+    "unit_test_report_path",
+    "unit_test_repair_task_plan_path",
     "test_report_path",
     "repair_task_plan_path",
 )
@@ -102,6 +108,11 @@ def workflow_capabilities() -> dict[str, Any]:
             },
         },
         "clarificationModes": {
+            "unit_test_confirmation": {
+                "answerField": "clarificationAnswers.unit_test_confirmation",
+                "answer": {"selected": ["run"], "values": ["run", "skip"]},
+                "lifecycleInteraction": "unit_test_confirmation",
+            },
             "test_phase_confirmation": {
                 "answerField": "clarificationAnswers.test_phase_confirmation",
                 "answer": {"action": "confirm"},
@@ -1016,6 +1027,15 @@ def _workflow_progress_summary(
         "needsRevision": result.get("needs_revision"),
         "previewUrl": result.get("preview_url"),
         "buildSummary": result.get("build_summary", {}),
+        "unitTestSummary": result.get("unit_test_report", {}),
+        "unitTestReport": result.get("unit_test_report", {}),
+        "unitTestResults": result.get("unit_test_results", []),
+        "unitTestQualityGatePassed": result.get("unit_test_quality_gate_passed"),
+        "unitTestGatePassed": result.get("unit_test_gate_passed"),
+        "unitTestNextAction": result.get("unit_test_next_action"),
+        "unitTestRepairIteration": result.get("unit_test_repair_iteration"),
+        "unitTestMaxRepairIterations": result.get("unit_test_max_repair_iterations"),
+        "repairReturnNode": result.get("repair_return_node"),
         "testTarget": _workflow_test_target(result),
         "testSummary": {},
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
@@ -1068,6 +1088,10 @@ def _workflow_start_node(
         return "prepare_build_tasks"
     if resume_from == "build":
         return "build"
+    if resume_from == "unit_test":
+        return "unit_test"
+    if resume_from == "unit_test_repair":
+        return "unit_test_repair"
     if resume_from == "test_phase_confirmation":
         return "test_phase_confirmation"
     if resume_from == "integration_test":
@@ -1098,6 +1122,23 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("status") == "requires_user_input":
             return []
         return ["inspect_workspace"]
+    if node_name == "unit_test":
+        if update.get("status") == "requires_user_input":
+            return []
+        if update.get("unit_test_next_action") == "unit_test_repair":
+            return ["unit_test_repair"]
+        if (
+            update.get("unit_test_next_action") == "test_phase_confirmation"
+            and update.get("unit_test_gate_passed") is True
+        ):
+            return ["test_phase_confirmation"]
+        return ["handle_failure"]
+    if node_name == "unit_test_repair":
+        return ["unit_test"] if update.get("small_task_route") == "unit_test" else []
+    if node_name == "detail_confirmation":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["inspect_workspace"]
     if node_name == "entity_source_binding":
         return []
     if node_name == "project_planning":
@@ -1120,12 +1161,21 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("status") == "failed":
             return ["handle_failure"]
         if summary_status == "completed":
-            return ["test_phase_confirmation"]
+            return ["unit_test"]
         if summary_status == "requires_confirmation" or update.get("status") == "requires_user_input":
             return []
         return ["handle_failure"]
     if node_name == "test_phase_confirmation":
-        return ["integration_test"] if update.get("status") == "completed" else []
+        build_summary = update.get("build_summary")
+        build_completed = (
+            isinstance(build_summary, dict)
+            and build_summary.get("status") == "completed"
+        )
+        return ["integration_test"] if (
+            update.get("status") == "completed"
+            and build_completed
+            and update.get("unit_test_gate_passed") is True
+        ) else []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
 
 
@@ -1163,6 +1213,44 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {
                 "requestComplexity": update.get("request_complexity"),
                 "complexityDecision": update.get("complexity_decision"),
+            },
+        }
+    if node_name == "unit_test":
+        report = update.get("unit_test_report")
+        report = report if isinstance(report, dict) else update.get("test_report", {})
+        summary = report.get("summary", {}) if isinstance(report, dict) else {}
+        clarification = update.get("clarification")
+        clarification = clarification if isinstance(clarification, dict) else {}
+        return {
+            "message": clarification.get("message") or (
+                f"通过={report.get('passed') if isinstance(report, dict) else None}，"
+                f"检查={summary.get('passed', 0)}/{summary.get('total', 0)}"
+            ),
+            "data": {
+                "unitTestReport": report,
+                "unitTestResults": update.get("unit_test_results", []),
+                "unitTestGeneration": update.get("unit_test_generation", {}),
+                "unitTestGenerationContext": update.get(
+                    "unit_test_generation_context", {}
+                ),
+                "unitTestNextAction": update.get("unit_test_next_action"),
+                "unitTestRepairTaskPlan": update.get("unit_test_repair_task_plan"),
+                "unitTestRepairIteration": update.get("unit_test_repair_iteration"),
+                "unitTestMaxRepairIterations": update.get(
+                    "unit_test_max_repair_iterations"
+                ),
+                "clarification": clarification,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+            },
+        }
+    if node_name == "unit_test_repair":
+        return {
+            "message": str(update.get("message") or "SmallTask Agent 正在修复单元测试失败。"),
+            "data": {
+                "smallTaskTasks": update.get("small_task_tasks", []),
+                "smallTaskResults": update.get("small_task_results", []),
+                "smallTaskHandoff": update.get("small_task_handoff", {}),
+                "requiresUserInput": update.get("status") == "requires_user_input",
             },
         }
     if node_name == "requirements":
@@ -1322,11 +1410,6 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {
                 "testReport": report,
                 "testEvents": update.get("test_events", []),
-                "unitTestGeneration": update.get("unit_test_generation", {}),
-                "unitTestGenerationContext": update.get(
-                    "unit_test_generation_context", {}
-                ),
-                "unitTestMappingPath": update.get("unit_test_mapping_path"),
                 "qualityGatePassed": update.get("quality_gate_passed"),
                 "needsRevision": update.get("needs_revision"),
                 "revisionRequests": update.get("revision_requests", []),

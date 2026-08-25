@@ -21,6 +21,8 @@ WORKFLOW_NODE_LABELS = {
     "inspect_workspace": "扫描工作区代码",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
+    "unit_test": "开发阶段单元测试",
+    "unit_test_repair": "单元测试局部修复",
     "test_phase_confirmation": "开发完成与测试阶段确认",
     "integration_test": "集成测试与质量门禁",
     "small_task_repair": "局部修复任务",
@@ -42,7 +44,9 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "technical_planning": [],
     "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build", "handle_failure"],
-    "build": ["test_phase_confirmation"],
+    "build": ["unit_test"],
+    "unit_test": ["unit_test_repair", "test_phase_confirmation"],
+    "unit_test_repair": ["unit_test"],
     "test_phase_confirmation": ["integration_test"],
     "small_task_repair": ["integration_test"],
     "acceptance": ["finalize_project"],
@@ -58,6 +62,8 @@ WORKFLOW_ARTIFACT_FIELDS = (
     "project_plan_path",
     "project_plan_json_path",
     "build_task_plan_path",
+    "unit_test_report_path",
+    "unit_test_repair_task_plan_path",
     "test_report_path",
     "repair_task_plan_path",
 )
@@ -88,6 +94,11 @@ def workflow_capabilities() -> dict[str, Any]:
             },
         },
         "clarificationModes": {
+            "unit_test_confirmation": {
+                "answerField": "clarificationAnswers.unit_test_confirmation",
+                "answer": {"selected": ["run"], "values": ["run", "skip"]},
+                "lifecycleInteraction": "unit_test_confirmation",
+            },
             "test_phase_confirmation": {
                 "answerField": "clarificationAnswers.test_phase_confirmation",
                 "answer": {"action": "confirm"},
@@ -152,7 +163,10 @@ def workflow_capabilities() -> dict[str, Any]:
                 "optionalFields": {
                     "nodeName": "Stable workflow node name.",
                     "attempt": "One-based execution attempt; omitted by legacy sessions.",
-                    "iterationKind": "initial_build|initial_test|repair_build|retest|initial",
+                    "iterationKind": (
+                        "initial_build|initial_unit_test|initial_unit_repair|initial_test|"
+                        "repair_build|unit_retest|unit_repair_retest|retest|initial"
+                    ),
                     "buildExecutionSlice": (
                         "Build-task snapshot attached to the matching build attempt; running "
                         "tasks may carry ephemeral activeToolActivity."
@@ -172,7 +186,7 @@ def workflow_capabilities() -> dict[str, Any]:
                         "file/symbol/relation counters."
                     ),
                     "checks": {
-                        "description": "Incremental integration-test check snapshot.",
+                        "description": "Incremental unit-test or integration-test check snapshot.",
                         "item": {
                             "id": "stable check identifier",
                             "name": "display name",

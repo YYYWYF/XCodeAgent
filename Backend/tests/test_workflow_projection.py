@@ -17,14 +17,14 @@ class WorkflowProjectionTests(unittest.TestCase):
             ["prepare_build_tasks"],
         )
 
-    def test_build_projects_test_phase_confirmation_gate(self) -> None:
-        """Build 成功后的可视化下一节点必须是测试阶段确认门。"""
+    def test_build_projects_unit_test_gate(self) -> None:
+        """Build 成功后的可视化下一节点必须是开发阶段单测门禁。"""
 
         self.assertEqual(
             _workflow_next_nodes(
                 "build", {"build_summary": {"status": "completed"}}
             ),
-            ["test_phase_confirmation"],
+            ["unit_test"],
         )
 
         self.assertEqual(

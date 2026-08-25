@@ -179,6 +179,11 @@ export default function PlanExecutionDock({
                 </Button>
               </>
             )}
+            {mode === 'awaiting_unit_test_confirmation' && (
+              <div className={cx('plan-execution-dock-interaction')}>
+                单元测试门禁等待选择，确认卡可选择继续执行或跳过。
+              </div>
+            )}
             {mode === 'awaiting_test_phase_confirmation' && (
               <div className={cx('plan-execution-dock-interaction')}>
                 开发已完成，请在上方确认进入测试阶段。
@@ -325,6 +330,7 @@ function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
     stopping: '正在暂停计划执行…',
     awaiting_authorization: '执行已暂停，等待授权',
     awaiting_repair_confirmation: 'RepairPlanner 需要你的确认',
+    awaiting_unit_test_confirmation: '等待单元测试选择',
     awaiting_test_phase_confirmation: '等待进入测试阶段',
     awaiting_acceptance: '页面已准备好，等待最终验收',
     awaiting_plan_adjustment: '执行已暂停',
@@ -354,6 +360,9 @@ function planModeDescription(
   }
   if (mode === 'awaiting_test_phase_confirmation') {
     return '开发已完成，请在上方确认进入测试阶段。'
+  }
+  if (mode === 'awaiting_unit_test_confirmation') {
+    return '请在上方确认卡选择继续执行或跳过单元测试。'
   }
   if (mode === 'awaiting_authorization') {
     return String(payload?.message || 'Agent 请求执行受保护操作。')

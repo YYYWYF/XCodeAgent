@@ -12,6 +12,7 @@ export type PlanExecutionMode =
   | 'stopping'
   | 'awaiting_authorization'
   | 'awaiting_repair_confirmation'
+  | 'awaiting_unit_test_confirmation'
   | 'awaiting_test_phase_confirmation'
   | 'awaiting_acceptance'
   | 'awaiting_plan_adjustment'
@@ -80,6 +81,9 @@ export function derivePlanExecutionMode(execution?: WorkbenchExecution): PlanExe
   if (interactionType === 'agent_approval') return 'awaiting_authorization'
   if (interactionType === 'repair_scope_confirmation') {
     return 'awaiting_repair_confirmation'
+  }
+  if (interactionType === 'unit_test_confirmation') {
+    return 'awaiting_unit_test_confirmation'
   }
   if (interactionType === 'test_phase_confirmation') {
     return 'awaiting_test_phase_confirmation'
@@ -286,6 +290,8 @@ export function planExecutionPhaseLabel(phase?: string): string {
       inspect_database_context: '获取数据库信息',
       prepare_build_tasks: '生成执行计划',
       build: '开发实现',
+      unit_test: '开发阶段单元测试',
+      unit_test_repair: '单元测试局部修复',
       test_phase_confirmation: '开发完成确认',
       integration_test: '集成测试',
       small_task_repair: '执行局部修复任务',
@@ -313,6 +319,8 @@ export function workflowResumeNode(
     'inspect_database_context',
     'prepare_build_tasks',
     'build',
+    'unit_test',
+    'unit_test_repair',
     'test_phase_confirmation',
     'integration_test',
     'small_task_repair',

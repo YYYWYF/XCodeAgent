@@ -1,5 +1,6 @@
 from app.graph.state import ProjectState
 from app.graph.subgraphs.testing import integration_test
+from app.graph.subgraphs.unit_testing import unit_test
 
 
 def quality_gate(state: ProjectState) -> dict:

@@ -123,10 +123,24 @@ class ProjectState(TypedDict, total=False):
     unit_test_code_change_sets: list[dict[str, Any]]
     unit_test_generation_code_change_sets: list[dict[str, Any]]
     unit_test_decision: str
+    unit_test_build_code_changes: dict[str, Any]
+    unit_test_build_code_change_sets: list[dict[str, Any]]
+    unit_test_build_diff_captured: bool
+    unit_test_results: list[dict[str, Any]]
+    unit_test_report: dict[str, Any]
+    unit_test_report_path: str
+    unit_test_quality_gate_passed: bool
+    unit_test_next_action: str
+    unit_test_gate_passed: bool
+    unit_test_repair_enabled: bool
+    unit_test_repair_task_plan: dict[str, Any]
+    unit_test_repair_task_plan_path: str
+    unit_test_repair_iteration: int
+    unit_test_max_repair_iterations: int
     frontend_performance_decision: str
     frontend_performance_test_enabled: bool
-    unit_test_build_checks_completed: bool
-    unit_test_build_results: list[dict[str, Any]]
+    integration_build_checks_completed: bool
+    integration_build_results: list[dict[str, Any]]
     test_results: list[dict[str, Any]]
     test_events: Annotated[list[str], add]
     test_report: dict[str, Any]
@@ -146,6 +160,7 @@ class ProjectState(TypedDict, total=False):
     small_task_handoff: dict[str, Any]
     small_task_handoff_submission: dict[str, Any]
     small_task_route: str
+    repair_return_node: str
     small_task_max_concurrency: int
     code_changes: dict[str, Any]
     code_change_sets: Annotated[list[dict[str, Any]], add]

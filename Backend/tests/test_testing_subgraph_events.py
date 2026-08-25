@@ -24,6 +24,7 @@ from app.graph.subgraphs.testing import (
     unit_test_confirmation,
     validate_generated_unit_tests,
 )
+from app.graph.subgraphs.unit_testing import build_unit_testing_subgraph
 from app.services.test_validation import create_revision_requests
 from app.workspace.code_changes import CapturedWorkspaceChanges
 
@@ -143,7 +144,9 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             ],
         )
 
-    def test_test_events_accumulate_across_all_nodes(self) -> None:
+    def test_integration_events_accumulate_across_all_nodes(self) -> None:
+        """测试阶段子图只累计集成构建、性能和质量门禁事件。"""
+
         subgraph = build_testing_subgraph()
 
         def integration_checks(
@@ -152,7 +155,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             on_progress=None,
             phase: str = "all",
         ) -> dict:
-            """按构建和单测阶段返回不同检查，验证测试生成位于两者之间。"""
+            """按当前集成构建阶段返回检查，验证测试子图不执行单元测试。"""
 
             if phase == "build":
                 return {
@@ -162,13 +165,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                     ],
                     "test_events": ["frontend_install", "backend_install"],
                 }
-            return {
-                "test_results": [
-                    {"id": "frontend_unit_tests", "passed": True},
-                    {"id": "backend_unit_tests", "passed": True},
-                ],
-                "test_events": ["frontend_unit_tests", "backend_unit_tests"],
-            }
+            return {"test_results": [], "test_events": []}
 
         with patch(
             "app.graph.subgraphs.testing.run_integration_checks",
@@ -194,7 +191,6 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                     "test_events": [],
                     "code_changes": {},
                     "code_change_sets": [],
-                    "unit_test_decision": "run",
                     "timeline": [],
                     "selected_skill_names": ["workflow-skill"],
                 }
@@ -207,17 +203,12 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertIn("backend_install", events)
         self.assertIn("main_quality_gate", events)
         self.assertIn("repair_planning:skipped", events)
-        # Order follows node execution order.
+        # 集成阶段不再包含单元测试生成、确认或执行事件。
         self.assertEqual(
             events,
             [
-                "unit_test_targets:collected",
                 "frontend_install",
                 "backend_install",
-                "unit_test_confirmation:run",
-                "unit_test_generation:skipped",
-                "frontend_unit_tests",
-                "backend_unit_tests",
                 "frontend_performance_confirmation:auto_skipped_unavailable",
                 "frontend_performance:skipped",
                 "main_quality_gate",
@@ -284,13 +275,13 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertEqual(emitted[-1]["checks"][0]["status"], "passed")
 
     def test_integration_confirmation_clears_stale_quality_gate_result(self) -> None:
-        """等待单元测试选择时必须清空上一轮通过状态并保留确认载荷。"""
+        """等待性能测试选择时必须清空上一轮通过状态并保留确认载荷。"""
 
         clarification = {
-            "mode": "unit_test_confirmation",
+            "mode": "frontend_performance_confirmation",
             "status": "requires_user_input",
-            "message": "是否跳过单元测试？",
-            "questions": [{"id": "unit_test_confirmation"}],
+            "message": "是否跳过前端性能测试？",
+            "questions": [{"id": "frontend_performance_confirmation"}],
         }
 
         def invoke_subgraph(input_state: dict, *, config: dict) -> dict:
@@ -304,7 +295,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                 "clarification": clarification,
                 "integration_next_action": "await_user_input",
                 "test_results": [{"id": "frontend_build", "passed": True}],
-                "unit_test_build_checks_completed": True,
+                "integration_build_checks_completed": True,
             }
 
         with patch(
@@ -335,8 +326,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertEqual(result["acceptance_decision"], "")
         self.assertFalse(result["accepted"])
 
-    def test_performance_confirmation_resume_preserves_unit_test_state(self) -> None:
-        """等待性能测试选择时不能清空单测决策和构建缓存，否则恢复后会从头重跑。"""
+    def test_performance_confirmation_resume_preserves_integration_build_state(self) -> None:
+        """等待性能测试选择时不能清空集成构建缓存，否则恢复后会从头重跑。"""
 
         clarification = {
             "mode": "frontend_performance_confirmation",
@@ -357,9 +348,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                 "clarification": clarification,
                 "integration_next_action": "await_user_input",
                 "test_results": cached_build_results,
-                "unit_test_decision": "skip",
-                "unit_test_build_checks_completed": True,
-                "unit_test_build_results": cached_build_results,
+                "integration_build_checks_completed": True,
+                "integration_build_results": cached_build_results,
             }
 
         with patch(
@@ -368,9 +358,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         ):
             result = integration_test(
                 {
-                    "unit_test_decision": "skip",
-                    "unit_test_build_checks_completed": True,
-                    "unit_test_build_results": cached_build_results,
+                    "integration_build_checks_completed": True,
+                    "integration_build_results": cached_build_results,
                     "frontend_performance_test_enabled": True,
                     "repair_iteration": 0,
                     "max_repair_iterations": 3,
@@ -379,9 +368,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["clarification"], clarification)
-        self.assertEqual(result["unit_test_decision"], "skip")
-        self.assertTrue(result["unit_test_build_checks_completed"])
-        self.assertEqual(result["unit_test_build_results"], cached_build_results)
+        self.assertTrue(result["integration_build_checks_completed"])
+        self.assertEqual(result["integration_build_results"], cached_build_results)
         self.assertTrue(result["frontend_performance_test_enabled"])
 
     def test_progress_snapshot_places_generation_after_frontend_build(self) -> None:
@@ -457,20 +445,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                     "test_results": [{"id": "frontend_build", "passed": True}],
                     "test_events": ["frontend_build"],
                 }
-            on_progress(
-                {
-                    "status": "passed",
-                    "check": {
-                        "id": "frontend_unit_tests",
-                        "name": "前端单元测试",
-                        "required": False,
-                    },
-                }
-            )
-            return {
-                "test_results": [{"id": "frontend_unit_tests", "passed": True}],
-                "test_events": ["frontend_unit_tests"],
-            }
+            return {"test_results": [], "test_events": []}
 
         with (
             patch(
@@ -528,37 +503,27 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             [
                 ("frontend_build", "running"),
                 ("frontend_build", "passed"),
-                ("frontend_test_generation", "running"),
-                ("frontend_test_generation", "skipped"),
-                ("frontend_unit_tests", "passed"),
                 ("frontend_performance", "skipped"),
             ],
         )
         self.assertEqual(result["test_results"][-1]["id"], "frontend_performance")
 
-    def test_build_completion_pauses_before_unit_test_generation(self) -> None:
-        """构建检查完成后必须先等待用户决定，不能自动进入测试生成。"""
+    def test_unit_test_gate_pauses_before_generation(self) -> None:
+        """开发阶段单测节点必须先等待用户决定，不能自动进入测试生成。"""
 
         with patch(
-            "app.graph.subgraphs.testing.run_integration_checks",
-            return_value={
-                "test_results": [
-                    {"id": "frontend_build", "passed": True, "skipped": False}
-                ],
-                "test_events": ["frontend_build"],
-            },
-        ), patch(
             "app.graph.subgraphs.testing._invoke_test_generation_agent"
         ) as invoke_agent:
-            result = build_testing_subgraph().invoke(
+            result = build_unit_testing_subgraph().invoke(
                 {
                     "workspace": "/tmp/workspace",
-                    "test_generation_input_code_changes": {
-                        "files": [{"path": "frontend/src/pages/Orders.tsx"}]
+                    "code_changes": {
+                        "files": [
+                            {"path": "frontend/src/pages/Orders.tsx", "diff": "+return null"}
+                        ]
                     },
                     "test_results": [],
                     "test_events": [],
-                    "code_changes": {},
                     "code_change_sets": [],
                     "timeline": [],
                 }
@@ -569,45 +534,12 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             result["clarification"]["mode"],
             "unit_test_confirmation",
         )
-        self.assertEqual(
-            [check["id"] for check in result["test_results"]],
-            ["frontend_build"],
-        )
         invoke_agent.assert_not_called()
 
     def test_disabled_unit_test_generation_skips_confirmation(self) -> None:
         """快速修改模式关闭测试生成时不应被新的确认门阻塞。"""
 
-        with patch(
-            "app.graph.subgraphs.testing.run_integration_checks",
-            return_value={
-                "test_results": [
-                    {"id": "frontend_build", "passed": True, "skipped": False}
-                ],
-                "test_events": ["frontend_build"],
-            },
-        ), patch(
-            "app.graph.subgraphs.testing.evaluate_quality_gate",
-            return_value={
-                "passed": True,
-                "needs_revision": False,
-                "revision_requests": [],
-            },
-        ), patch(
-            "app.graph.subgraphs.testing.write_test_report_json",
-            return_value="/tmp/test-report.json",
-        ):
-            result = build_testing_subgraph().invoke(
-                {
-                    "workspace": "/tmp/workspace",
-                    "unit_test_generation_enabled": False,
-                    "test_results": [],
-                    "test_events": [],
-                    "code_changes": {},
-                    "code_change_sets": [],
-                    "timeline": [],
-                }
-            )
+        result = unit_test_confirmation({"unit_test_generation_enabled": False})
 
         self.assertEqual(result["status"], "in_progress")
         self.assertEqual(result.get("clarification"), {})
@@ -776,36 +708,29 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         """用户选择跳过后只记录 skipped 检查，不调用生成和单测命令。"""
 
         with patch(
-            "app.graph.subgraphs.testing.run_integration_checks",
-            return_value={
-                "test_results": [
-                    {"id": "frontend_build", "passed": True, "skipped": False}
-                ],
-                "test_events": ["frontend_build"],
-            },
-        ), patch(
             "app.graph.subgraphs.testing._invoke_test_generation_agent"
         ) as invoke_agent, patch(
-            "app.graph.subgraphs.testing.evaluate_quality_gate",
+            "app.graph.subgraphs.unit_testing.evaluate_quality_gate",
             return_value={
                 "passed": True,
                 "needs_revision": False,
                 "revision_requests": [],
             },
         ), patch(
-            "app.graph.subgraphs.testing.write_test_report_json",
+            "app.graph.subgraphs.unit_testing.write_test_report_json",
             return_value="/tmp/test-report.json",
         ):
-            result = build_testing_subgraph().invoke(
+            result = build_unit_testing_subgraph().invoke(
                 {
                     "workspace": "/tmp/workspace",
-                    "test_generation_input_code_changes": {
-                        "files": [{"path": "frontend/src/pages/Orders.tsx"}]
+                    "code_changes": {
+                        "files": [
+                            {"path": "frontend/src/pages/Orders.tsx", "diff": "+return null"}
+                        ]
                     },
                     "unit_test_decision": "skip",
                     "test_results": [],
                     "test_events": [],
-                    "code_changes": {},
                     "code_change_sets": [],
                     "timeline": [],
                 }
@@ -816,11 +741,11 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         }
         self.assertTrue(results_by_id["frontend_test_generation"]["skipped"])
         self.assertTrue(results_by_id["frontend_unit_tests"]["skipped"])
-        self.assertEqual(result["integration_next_action"], "launch_project")
+        self.assertEqual(result["unit_test_next_action"], "test_phase_confirmation")
         invoke_agent.assert_not_called()
 
-    def test_confirmed_unit_test_resume_reuses_completed_build_checks(self) -> None:
-        """确认恢复时复用已完成构建快照，避免再次安装和构建。"""
+    def test_confirmed_integration_resume_reuses_completed_build_checks(self) -> None:
+        """测试阶段确认恢复时复用已完成集成构建快照，避免再次安装和构建。"""
 
         cached = [{"id": "frontend_build", "passed": True, "skipped": False}]
         with patch(
@@ -828,16 +753,15 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         ) as run_checks:
             result = build_project_checks(
                 {
-                    "unit_test_decision": "run",
-                    "unit_test_build_checks_completed": True,
-                    "unit_test_build_results": cached,
+                    "integration_build_checks_completed": True,
+                    "integration_build_results": cached,
                     "test_results": cached,
                 },
                 config={},
             )
 
         self.assertEqual(result["test_results"], cached)
-        self.assertEqual(result["test_events"], ["unit_test_build:reused_after_confirmation"])
+        self.assertEqual(result["test_events"], ["integration_build:reused_after_confirmation"])
         run_checks.assert_not_called()
 
     def test_generation_publishes_running_and_terminal_matrix_states(self) -> None:
@@ -1459,10 +1383,6 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertEqual(result["integration_next_action"], "small_task_repair")
         self.assertEqual(len(result["repair_tasks"]), 1)
         self.assertNotIn("requires_user_input", [result.get("status")])
-        self.assertIn(
-            "unit_test_confirmation:auto_skipped_blocking_failure",
-            result["test_events"],
-        )
         self.assertIn(
             "frontend_performance_confirmation:auto_skipped_blocking_failure",
             result["test_events"],

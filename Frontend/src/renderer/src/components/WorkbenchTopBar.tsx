@@ -84,7 +84,8 @@ export default function WorkbenchTopBar({
         <div className={cx('workbench-topbar-stepper')} role="tablist" aria-label="阶段">
           {PHASE_ORDER.map((phaseKey, idx) => {
             const isActive = phase === phaseKey
-            const reached = PHASE_ORDER.indexOf(derivedPhase) >= idx
+            // 测试确认成功后先由会话切换立即设置当前阶段，生命周期异步回传前也不能把当前按钮置灰。
+            const reached = Math.max(PHASE_ORDER.indexOf(derivedPhase), PHASE_ORDER.indexOf(phase)) >= idx
             return (
               <Fragment key={phaseKey}>
                 {idx > 0 ? (

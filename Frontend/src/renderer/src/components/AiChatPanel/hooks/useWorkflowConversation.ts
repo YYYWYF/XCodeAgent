@@ -958,6 +958,11 @@ export function useWorkflowConversation({
             ? 'page'
             : undefined,
       buildExecutionScope: workflowBuildScope,
+      resumeExecutionRunId:
+        clarificationMode === 'unit_test_confirmation' ||
+        clarificationMode === 'frontend_performance_confirmation'
+          ? workflow.runId
+          : undefined,
       titleFrom: originalRequest || '补充需求确认',
       conversation
     })

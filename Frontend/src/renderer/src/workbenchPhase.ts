@@ -73,13 +73,13 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     key: 'development',
     label: '开发',
     role: '研发 Agent',
-    responsibility: 'spec → code：详细设计、构建'
+    responsibility: 'spec → code：详细设计、构建与单元测试门禁'
   },
   test: {
     key: 'test',
     label: '测试',
     role: '测试 Agent',
-    responsibility: '构建检查、单元/集成测试、失败修复与项目启动'
+    responsibility: '构建检查、集成测试、失败修复与项目启动'
   },
   review: {
     key: 'review',
@@ -137,7 +137,7 @@ export function isInitialPlanningPhase(lifecycle?: ApplicationLifecycle): boolea
   return Boolean(lifecycle && PLANNING_STAGES.has(lifecycle.initialization?.stage || ''))
 }
 
-/** 开发阶段的工作流节点 phase（开发前置检查 → 工作区检查 → DAG → Build → 测试确认）。 */
+/** 开发阶段的工作流节点 phase（开发前置检查 → 工作区检查 → DAG → Build →单元测试-> 测试确认）。 */
 const DEVELOPMENT_PHASE_NODES = new Set([
   'development_readiness_gate',
   'entity_source_binding',
@@ -145,6 +145,8 @@ const DEVELOPMENT_PHASE_NODES = new Set([
   'inspect_database_context',
   'prepare_build_tasks',
   'build',
+  'unit_test',
+  'unit_test_repair',
   'test_phase_confirmation'
 ])
 
@@ -221,6 +223,8 @@ const EXECUTION_PHASE_LABELS: Record<string, string> = {
   inspect_database_context: '获取数据库信息',
   prepare_build_tasks: '生成执行计划',
   build: '开发实现',
+  unit_test: '开发阶段单元测试',
+  unit_test_repair: '单元测试局部修复',
   test_phase_confirmation: '开发完成确认',
   integration_test: '集成测试',
   launch_project: '启动预览',

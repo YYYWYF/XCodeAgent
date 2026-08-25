@@ -40,7 +40,7 @@ START
   → test_phase_confirmation //Build completed 后的显式用户确认门
       ├─ 首次进入 → requires_user_input，返回 test_phase_confirmation 确认卡
       └─ 用户 confirm → integration_test
-          ├─ 测试与质量门禁通过 → launch_project
+          ├─ 依赖安装、前后端 Build、前端性能测试和集成质量门禁通过 → launch_project
           │                         → 提示用户验收并结束本轮
           │                         → 用户确认后从 acceptance 续跑
           │                         → finalize_project
@@ -57,13 +57,15 @@ START
 
 顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责开发就绪检查、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `launch_project`；审查阶段负责 `acceptance` 和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在审查阶段开放。
 
-`build` 只有在 `build_summary.status == completed` 时才能路由到 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
+`build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，失败最多经过 3 轮独立 `unit_test_repair`，耗尽后失败且不展示测试阶段确认卡。
 
-测试阶段沿用原有有界修复链路：任一阻塞测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，达到既有重试上限后明确失败，不回到 `build`。项目启动及预览就绪卡仍属于测试阶段，用户提交最终验收后才进入审查阶段。
+单元测试通过或跳过后才进入 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 或单测失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
+
+测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，只执行依赖安装、前后端 Build、前端性能测试和集成质量门禁。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。项目启动及预览就绪卡仍属于测试阶段，用户提交最终验收后才进入审查阶段。
 
 ### 测试阶段 AG-UI 与生命周期契约
 
-`test_phase_confirmation` 是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。确认门的 AG-UI 快照同时投影 `clarification.mode`、固定确认文案和 `testTarget`；生命周期待交互类型为 `test_phase_confirmation`，应用生命周期 schema 当前为 `1.3.0`。恢复请求在新的测试 thread 中提交开发会话的 `resumeState` 与 `resumeExecutionRunId`；恢复边界把开发完成快照中公开的有界 `codeChanges` 映射回 Graph `code_changes`，供 `integration_test` 生成 `unit_test_generation_context.code_diff` 并传给 TestGeneration Agent，但不复制开发对话历史。生命周期只为该结构化确认允许跨 thread 原子转交 execution，其他恢复仍要求同一 thread。确认节点完成时生命周期立即投影 `integration_test`，使顶部测试阶段在测试执行开始时同步高亮。
+`unit_test`、`unit_test_repair` 和 `test_phase_confirmation` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。`unit_test_confirmation` 是新的生命周期待交互类型，仍使用 `clarificationAnswers.unit_test_confirmation` 的 `run/skip` 答案恢复同一单测节点；单测确认恢复必须携带原执行的 `resumeExecutionRunId`。`test_phase_confirmation` 确认门的 AG-UI 快照同时投影 `clarification.mode`、固定确认文案和 `testTarget`，其恢复允许从开发 thread 原子转交给新的测试 thread。确认节点完成时生命周期立即投影 `integration_test`，使顶部测试阶段在测试执行开始时同步高亮。生命周期 schema 当前为 `1.3.0`。
 
 需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 读取 `.xcodeagent/plans/technical-plan.json`；页面选择从 `pages[].references` 解析实现范围并在运行时编译 PageImplementationContract，API 选择直接读取 TechnicalPlan Endpoint。两者都先进入 `development_readiness_gate`，只在关联实体均有已确认 EntitySourceBinding 时继续。门禁不会自动跳转实体；用户完成独立绑定后必须重新发起原目标开发。
 
@@ -404,7 +406,7 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 - `requires_user_confirmation`：表示需要扩大修改范围、变更已确认需求/API 契约或做用户可见产品决策，调度器停止继续释放后续任务；
 - `terminal_failure`：表示证据不足、修复预算耗尽或失败不可自动处理，调度器停止构建并保留失败证据。
 
-外层 `build` 使用确定性条件路由：仅 `build_summary.status == completed` 可进入 `integration_test`；`requires_confirmation` 以 `repair_scope_confirmation` 暂停并返回稳定 `planId`、精确 `requestedPaths` 和原因；阻塞、仍有 pending/failed、不可修复或终止失败全部进入 `handle_failure`。用户批准时只从原任务授权范围编译 repair task，拒绝则终止，不允许测试节点抢跑。
+外层 `build` 使用确定性条件路由：仅 `build_summary.status == completed` 可进入 `unit_test`；`requires_confirmation` 以 `repair_scope_confirmation` 暂停并返回稳定 `planId`、精确 `requestedPaths` 和原因；阻塞、仍有 pending/failed、不可修复或终止失败全部进入 `handle_failure`。用户批准时只从原任务授权范围编译 repair task，拒绝则终止，不允许单测或测试节点抢跑。
 
 因此失败处理不是统一“重跑”：可重试的 runner/tool/网络类失败只通过显式 AG-UI 恢复动作重试；实现、编译、测试、验收类失败进入 RepairPlanner，已有 ready 修复计划也可由同一恢复入口继续执行；契约或计划边界类失败进入用户确认；不可恢复失败终止当前 build。摘要中的 `recovery_available`、`recovery_task_ids` 和兼容保留的 `retry_available`/`retryable_task_ids` 是前端是否显示恢复入口及其失败提示的依据。
 
@@ -430,13 +432,31 @@ Chat Composer 通过既有 `/skills/run` AG-UI 目录接口提供搜索和多选
 
 环境级 `~/.xcodeagent[_dev|_st|_uat]/AGENTS.md` 是六个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.xcodeagent/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
 
-外层主 Graph 不关心单个生成任务的执行细节，只根据 Build Subgraph 的确定性终态路由；构建完整成功才进入 `integration_test`。
+外层主 Graph 不关心单个生成任务的执行细节，只根据 Build Subgraph 的确定性终态路由；构建完整成功才进入 `unit_test`，单测门禁完成后才允许测试阶段运行。
+
+### `unit_test` / Unit Testing Subgraph
+
+`unit_test` 在外层主 Graph 中表现为一个节点，内部由独立 Unit Testing Subgraph 负责单测生成、校验、执行、质量门禁和开发阶段修复规划；`unit_test_repair` 复用 SmallTask 执行器，成功后只回到 `unit_test`。
+
+单测子图固定为：
+
+```text
+unit_testing.START
+  → collect_unit_test_targets // 读取首次 Build 快照及稳定 code_diff
+  → unit_test_confirmation (用户选择 run/skip)
+  → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks)
+  → unit_test_quality_gate
+  → unit_repair_planning
+  → unit_testing.END
+```
+
+单测确认使用现有 `run/skip` 结构化答案；无受影响源码时自动按无须执行通过。质量门禁失败最多生成三轮 `unit_test_repair`，修复预算与集成测试完全独立；耗尽后进入 `handle_failure`。
 
 ### `integration_test` / Testing Subgraph
 
-`integration_test` 在外层主 Graph 中表现为一个节点，但内部应实现为 Testing Subgraph，并合并原 `quality_gate` 的职责。
+`integration_test` 在外层主 Graph 中表现为一个节点，但内部只负责测试阶段的构建检查、性能测试、集成质量门禁和测试阶段修复规划。
 
-测试生成快照会忽略 Maven `target/` 以及前端 `build/`、`dist/` 等可重建产物；生产源码、配置和正式 `.xcodeagent` 工件仍按越权写入处理。
+测试生成快照会忽略 Maven `target/` 以及前端 `build/`、`dist/` 等可重建产物；生产源码、配置和正式 `.xcodeagent` 工件仍按越权写入处理。单测生成使用首次 Build 的 `code_changes/code_change_sets` 快照，后续生成文件和修复文件只追加到开发阶段 Diff，不覆盖 `unit_test_generation_context.code_diff`。
 
 后端测试目标默认排除 MapStruct 或纯映射层（`*Assembler`、`*Converter`、`*Mapper`）、DTO、Entity、配置类和简单 getter/setter；优先覆盖 Service，只有路由或校验契约变化时才生成 Controller 测试。
 
@@ -446,10 +466,7 @@ Testing Subgraph 的最小内部结构：
 
 ```text
 testing.START
-  → collect_unit_test_targets
-  → build_project_checks
-  → unit_test_confirmation (用户选择)
-  → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks)
+  → build_project_checks //依赖安装、前后端 Build
   → frontend_performance_confirmation (用户选择)
   → (skip_frontend_performance | frontend_performance_test)
   → main_quality_gate
@@ -459,17 +476,22 @@ testing.START
 
 `main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；质量门禁通过时跳过修复计划并输出 `integration_next_action = launch_project`。
 
-任一阻塞性检查失败时，单元测试确认与前端性能确认两个可选门自动跳过，检查记录为 `passed=true, skipped=true`，流程直达质量门禁与修复规划，不再要求用户先回答跳过/继续。advisory 的 `frontend_performance` 失败不触发修复，测试生成越权写入仍作为安全失败直接终止。
+任一阻塞性集成检查失败时，前端性能确认门自动跳过，检查记录为 `passed=true, skipped=true`，流程直达集成质量门禁与修复规划，不再要求用户先回答跳过/继续。单测门禁只在开发阶段由 `unit_test` 处理；advisory 的 `frontend_performance` 失败不触发集成修复，测试生成越权写入仍作为安全失败直接终止。
 
-当前质量门禁覆盖：
+当前单测门禁覆盖：
+
+- TestGenerationAgent 生成与校验受影响层的单元测试；
+- 前端 Jest/Vitest 与后端 Maven 单元测试（仅存在对应测试文件时执行）；
+- 独立 `unit_test_report`、`unit_test_quality_gate_passed`、`unit_test_next_action` 和修复计数。
+
+集成测试质量门禁覆盖：
 
 - 前端 TypeScript 依赖安装；
 - 前端 TypeScript 构建；
 - 后端 Java 构建。
-- 前端和后端单元测试生成校验，以及存在对应测试文件时的 Jest/Surefire 单元测试。
 - `frontend_performance` 作为 advisory 检查纳入报告展示，但不参与门禁阻断与返修。
 
-单元测试生成是正式 Workflow 中的尽力而为阶段：测试子图从刚完成的 Build 代码变更集合中提取目标业务源码及有界真实 diff，并先完成前后端依赖、类型和构建检查；构建检查无阻塞失败时暂停并通过 AG-UI 展示“是否跳过单元测试”的两个按钮。选择跳过时，生成和单元测试检查记录为 `passed=true, skipped=true` 后进入前端性能确认；选择继续时才交给 TestGeneration Agent，再执行前后端单元测试。本轮没有对应测试文件、生成 Agent 无输出或 Agent 初始化失败时，生成和单测检查仍按尽力而为策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败仍进入 RepairPlanner → SmallTask 修复闭环。子图通过 `build_project_checks → unit_test_confirmation → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks) → frontend_performance_confirmation → (skip_frontend_performance | frontend_performance_test)` 固定执行顺序，并在确认恢复时复用已完成的构建检查快照，避免重复安装和构建。TestGeneration Agent 调用期间通过 `integration_test.checks` 发布逐层 `running` 快照，前端原位展示集成检查矩阵、旋转 loading 和生成说明，校验完成后再更新为通过、跳过或失败；实时快照与最终报告均按依赖/类型检查、构建、测试生成检查、单元测试、前端性能测试的稳定顺序展示。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。测试生成期间 LangGraph 对 `.xcodeagent/checkpoints/` 的技术性写入不属于工程变更；其他 `.xcodeagent` 正式工件仍受越权修改检查保护。
+单元测试生成是开发阶段的尽力而为门禁：Unit Testing Subgraph 从首次 Build 代码变更集合中提取目标业务源码及有界真实 diff；选择跳过时，单测结果记录为 `passed=true, skipped=true` 并直接放行确认门，选择继续时才调用 TestGenerationAgent，再执行前后端单元测试。本轮没有对应源码、生成 Agent 无输出或 Agent 初始化失败时按无须执行策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败进入独立 `unit_test_repair` 闭环。测试阶段的 `integration_test` 不再调用 TestGenerationAgent 或执行单元测试，只执行依赖、Build、前端性能和集成检查。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。`unit_test.checks` 与 `integration_test.checks` 分别更新开发、测试阶段矩阵，后者不展示单元测试行。
 
 集成测试修复授权使用用户 workspace 下的项目目录级范围：frontend 侧失败授权 `frontend/`，backend 侧失败授权 `backend/`，同时把具体失败文件（如 `backend/pom.xml`、`frontend/package.json`、对应测试与业务源码）保留为 `target_files`/`change_scope` 提示。RepairPlanner 返回 `requires_user_confirmation` 或 `terminal_failure` 时，只要确定性候选任务携带真实授权路径，就自动升级为 `ready/repair` 并直接派发 SmallTask；仅无真实路径、安全失败或修复预算耗尽时才等待扩权确认或进入 `handle_failure`。
 
@@ -485,9 +507,10 @@ testing.START
 - `repair_task_plan_path`：结构化修复任务计划 JSON 路径；
 - `repair_tasks`：RepairPlanner 生成、随后交给 SmallTask Agent 的受限局部修复任务；
 - `small_task_tasks` / `small_task_results`：SmallTask 执行器的任务状态、实际改动、验证和升级结果；
-- `integration_next_action`：外层 Graph 的下一步路由，取值为 `launch_project`、`small_task_repair`、`await_user_input` 或 `handle_failure`；
+- `unit_test_next_action` / `integration_next_action`：分别表示开发单测和测试集成门禁的下一步路由；单测取值包含 `test_phase_confirmation`、`unit_test_repair`、`await_user_input` 或 `handle_failure`，集成测试取值包含 `launch_project`、`small_task_repair`、`await_user_input` 或 `handle_failure`；
 - `repair_iteration` / `max_repair_iterations`：集成测试修复闭环预算。
-- `unit_test_generation_context`、`unit_test_generation`、`unit_test_mapping_path`：本轮源码目标、生成/同步结果、warning、校验和可重建映射缓存；`unit_test_code_change_sets` 与 `unit_test_generation_code_change_sets` 保存实际测试文件差异（后者为生成阶段别名）。
+- `unit_test_quality_gate_passed`、`unit_test_results`、`unit_test_report`、`unit_test_report_path`、`unit_test_repair_iteration` / `unit_test_max_repair_iterations`：开发阶段单测的独立结果、报告和修复预算。
+- `unit_test_generation_context`、`unit_test_generation`、`unit_test_mapping_path`：本轮源码目标、首次 Build Diff 派生的 `code_diff`、生成/同步结果、warning、校验和可重建映射缓存；`unit_test_code_change_sets` 与 `unit_test_generation_code_change_sets` 保存实际测试文件差异（后者为生成阶段别名）。
 
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：
 
@@ -501,8 +524,8 @@ testing.START
 - 页面任务进入 DAG 前，以实时工作区校对模型计划路径。只有当计划入口不存在，且实时 `frontend/src/pages` 中存在唯一的同义目录（忽略大小写、分隔符和 `Page` 后缀）时，才把目标路径改写到该既有入口；保留模型声明的 `add/modify` 操作，若仍违反页面初始化边界则写入校验错误并自动重生成；多候选时不得猜测。这样可修复 WorkspaceSnapshot 在长流程中变旧造成的 `DashboardPage`/`Dashboard` 重复入口，同时保留可审计的 `path_reconciliation`。
 - 模板页面的占位文件、菜单和路由必须在模板初始化阶段完成。DAG 只读校验既有页面入口和菜单状态；模型误返回共享菜单、路由、隐藏路由或页面占位注册任务时，编译器保留原候选并把任务 ID、字段和路径写入 `task_graph.validation.errors`，随后自动重生成；不创建兜底任务、不修剪混合页面任务，也不修改共享注册文件。
 - 任何具有精确 `target_files` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
-- Frontend/Data Source owner Agent 只负责任务范围内的源码读取和实现，不在 task 内执行依赖安装、build、lint、typecheck、unit test 或 dev-server 命令；这些项目级检查统一由后续 `integration_test` 执行，缺少依赖或命令时由 Agent 在结构化结果中报告，不得自行安装恢复。
-- 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`，但状态声明和自然语言证据都不构成项目级质量结论。当前 Build 调度器只负责结果归一化和真实文件 diff 的任务归属，不再执行 `engineering_acceptance`/`acceptance_checks` 逐项工程验收，也不因批次快照中出现额外的编译产物或生成文件而阻断代码生成。菜单、API/Spring 契约和数据库等项目级正确性统一由后续 `integration_test` 的 install、build、unit test 和质量门禁处理；`acceptance_checks` 仍保留在任务计划和修复上下文中，供审计或后续重新启用。合法 JSON 遗漏已派发任务时记为 `runner_protocol_error`；明显未转义双引号会先做一次确定性恢复，仍损坏的顶层报告记为 `invalid_structured_response` 并进入受控重试分类。
+- Frontend/Data Source owner Agent 只负责任务范围内的源码读取和实现，不在 task 内执行依赖安装、build、lint、typecheck、unit test 或 dev-server 命令；依赖、Build、性能和集成检查由后续 `integration_test` 执行，单元测试由开发阶段 `unit_test` 执行，缺少依赖或命令时由 Agent 在结构化结果中报告，不得自行安装恢复。
+- 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`，但状态声明和自然语言证据都不构成项目级质量结论。当前 Build 调度器只负责结果归一化和真实文件 diff 的任务归属，不再执行 `engineering_acceptance`/`acceptance_checks` 逐项工程验收，也不因批次快照中出现额外的编译产物或生成文件而阻断代码生成。菜单、API/Spring 契约和数据库等项目级正确性由开发阶段 `unit_test` 的单测门禁与测试阶段 `integration_test` 的 install、build、性能和集成质量门禁共同处理；`acceptance_checks` 仍保留在任务计划和修复上下文中，供审计或后续重新启用。合法 JSON 遗漏已派发任务时记为 `runner_protocol_error`；明显未转义双引号会先做一次确定性恢复，仍损坏的顶层报告记为 `invalid_structured_response` 并进入受控重试分类。
 - Deep Agent 工具活动继续使用根图和子图流；执行器按“根图优先、浅层 namespace 优先、同层最新优先”恢复最终 `values/messages`。根 `values` 快照不含 `messages` 时先使用根消息分片，再回退到最浅层 Agent namespace，且不得把工具结果或更深子 Agent 文本误作主 Agent 报告。
 - RepairPlanner 必须为每个修复任务返回父任务授权内的精确 `change_scope`。修复任务不继承父任务历史执行的 `add/modify/delete` 差异检查，而是按本轮范围重新编译文件检查；父任务的 API/Schema 等最终结果检查继续继承。兼容旧 RepairPlanner 且无法确定精确文件时，`completed` 至少要产生一处授权变更，`already_satisfied` 必须证明原精确目标状态成立。只有本轮文件检查和继承的结果检查全部通过才可关闭父任务，从而避免要求 DTO 小修复重新新增整个模块。
 - 恢复旧 DAG 时，如果 Repair 正是因为继承父任务 `added` 差异而产生 `acceptance_verification_failed`，调度器会从旧修复描述中恢复明确提及的精确父任务路径、按 `modify` 重编译检查并把该 Repair 恢复为 `pending`；其他失败类型和无法确认父任务的 Repair 不会被自动重置。

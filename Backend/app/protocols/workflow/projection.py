@@ -81,6 +81,12 @@ def _workflow_progress_summary(
         ),
         "testTarget": _workflow_test_target(result),
         "testSummary": {},
+        "unitTestSummary": result.get("unit_test_report", {}),
+        "unitTestReport": result.get("unit_test_report", {}),
+        "unitTestResults": result.get("unit_test_results", []),
+        "unitTestQualityGatePassed": result.get("unit_test_quality_gate_passed"),
+        "unitTestGatePassed": result.get("unit_test_gate_passed"),
+        "unitTestNextAction": result.get("unit_test_next_action"),
         "smallTaskTasks": result.get("small_task_tasks", []),
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
@@ -173,6 +179,23 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("status") == "requires_user_input":
             return []
         return ["inspect_workspace"]
+    if node_name == "unit_test":
+        if update.get("status") == "requires_user_input":
+            return []
+        next_action = str(update.get("unit_test_next_action") or "")
+        if next_action == "unit_test_repair":
+            return ["unit_test_repair"]
+        if next_action == "test_phase_confirmation" and update.get("unit_test_gate_passed") is True:
+            return ["test_phase_confirmation"]
+        return ["handle_failure"]
+    if node_name == "unit_test_repair":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["unit_test"] if update.get("small_task_route") == "unit_test" else []
+    if node_name == "detail_confirmation":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["inspect_workspace"]
     if node_name == "entity_source_binding":
         return []
     if node_name == "project_planning":
@@ -197,12 +220,21 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("status") == "failed":
             return ["handle_failure"]
         if summary_status == "completed":
-            return ["test_phase_confirmation"]
+            return ["unit_test"]
         if summary_status == "requires_confirmation" or update.get("status") == "requires_user_input":
             return []
         return ["handle_failure"]
     if node_name == "test_phase_confirmation":
-        return ["integration_test"] if update.get("status") == "completed" else []
+        build_summary = update.get("build_summary")
+        build_completed = (
+            isinstance(build_summary, dict)
+            and build_summary.get("status") == "completed"
+        )
+        return ["integration_test"] if (
+            update.get("status") == "completed"
+            and build_completed
+            and update.get("unit_test_gate_passed") is True
+        ) else []
     if node_name == "launch_project":
         return []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
@@ -451,6 +483,53 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "buildResults": update.get("build_results", []),
             },
         }
+    if node_name == "unit_test":
+        report = update.get("unit_test_report")
+        report = report if isinstance(report, dict) else update.get("test_report", {})
+        summary = report.get("summary", {}) if isinstance(report, dict) else {}
+        clarification = update.get("clarification")
+        clarification = clarification if isinstance(clarification, dict) else {}
+        return {
+            "message": clarification.get("message") or (
+                f"通过={report.get('passed') if isinstance(report, dict) else None}，"
+                f"检查={summary.get('passed', 0)}/{summary.get('total', 0)}"
+            ),
+            "data": {
+                "unitTestReport": report,
+                "unitTestResults": update.get("unit_test_results", []),
+                "unitTestGeneration": update.get("unit_test_generation", {}),
+                "unitTestGenerationContext": update.get(
+                    "unit_test_generation_context", {}
+                ),
+                "unitTestNextAction": update.get("unit_test_next_action"),
+                "unitTestRepairTaskPlan": update.get("unit_test_repair_task_plan"),
+                "unitTestRepairIteration": update.get("unit_test_repair_iteration"),
+                "unitTestMaxRepairIterations": update.get(
+                    "unit_test_max_repair_iterations"
+                ),
+                "clarification": clarification,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+            },
+        }
+    if node_name == "unit_test_repair":
+        results = update.get("small_task_results")
+        results = results if isinstance(results, list) else []
+        tasks = update.get("small_task_tasks")
+        tasks = tasks if isinstance(tasks, list) else update.get("repair_tasks", [])
+        handoff = update.get("small_task_handoff")
+        handoff = handoff if isinstance(handoff, dict) else {}
+        return {
+            "message": (
+                str(update.get("message") or "")
+                or f"SmallTask Agent 已处理 {len(results)} 个结果，准备重新执行单元测试。"
+            ),
+            "data": {
+                "smallTaskTasks": tasks,
+                "smallTaskResults": results,
+                "smallTaskHandoff": handoff,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+            },
+        }
     if node_name == "test_phase_confirmation":
         clarification = update.get("clarification")
         clarification = clarification if isinstance(clarification, dict) else {}
@@ -486,11 +565,6 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {
                 "testReport": report,
                 "testEvents": update.get("test_events", []),
-                "unitTestGeneration": update.get("unit_test_generation", {}),
-                "unitTestGenerationContext": update.get(
-                    "unit_test_generation_context", {}
-                ),
-                "unitTestMappingPath": update.get("unit_test_mapping_path"),
                 "qualityGatePassed": update.get("quality_gate_passed"),
                 "needsRevision": update.get("needs_revision"),
                 "revisionRequests": update.get("revision_requests", []),
@@ -859,8 +933,13 @@ def _workflow_summary(
             result.get("acceptance_request") if preview_visible else None
         ),
         "integrationNextAction": result.get("integration_next_action"),
+        "repairReturnNode": result.get("repair_return_node"),
         "repairIteration": result.get("repair_iteration"),
         "maxRepairIterations": result.get("max_repair_iterations"),
+        "unitTestGatePassed": result.get("unit_test_gate_passed"),
+        "unitTestNextAction": result.get("unit_test_next_action"),
+        "unitTestRepairIteration": result.get("unit_test_repair_iteration"),
+        "unitTestMaxRepairIterations": result.get("unit_test_max_repair_iterations"),
         "smallTaskTasks": result.get("small_task_tasks", []),
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
@@ -961,6 +1040,12 @@ def _workflow_visual_payload(
         "testTarget": _workflow_test_target(result),
         "buildExecutionSlice": result.get("build_execution_slice"),
         "testReport": result.get("test_report", {}),
+        "unitTestReport": result.get("unit_test_report", {}),
+        "unitTestResults": result.get("unit_test_results", []),
+        "unitTestQualityGatePassed": result.get("unit_test_quality_gate_passed"),
+        "unitTestGeneration": result.get("unit_test_generation", {}),
+        "unitTestGenerationContext": result.get("unit_test_generation_context", {}),
+        "unitTestNextAction": result.get("unit_test_next_action"),
         "repairTaskPlan": result.get("repair_task_plan"),
         "smallTaskTasks": result.get("small_task_tasks", []),
         "smallTaskResults": result.get("small_task_results", []),

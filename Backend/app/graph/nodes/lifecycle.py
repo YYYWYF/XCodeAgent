@@ -196,7 +196,7 @@ def records_from_value(value: Any) -> list[dict[str, Any]]:
 
 
 def test_phase_confirmation(state: ProjectState) -> dict:
-    """在 Build 完成后暂停等待用户确认，并在确认后放行测试子流程。"""
+    """在 Build 与开发阶段单元测试门禁完成后暂停等待用户确认。"""
 
     target = _test_target_record(state)
     build_summary = state.get("build_summary")
@@ -212,6 +212,15 @@ def test_phase_confirmation(state: ProjectState) -> dict:
             "test_target": target,
             "timeline": ["test_phase_confirmation"],
         }
+    if state.get("unit_test_gate_passed") is not True:
+        return {
+            "phase": "test_phase_confirmation",
+            "status": "failed",
+            "message": "单元测试门禁尚未完成，不能进入测试阶段。",
+            "error": "只有单元测试通过或明确跳过后才能进入测试阶段确认。",
+            "test_target": target,
+            "timeline": ["test_phase_confirmation"],
+        }
     submission = state.get("test_phase_confirmation")
     confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
     if confirmed:
@@ -221,6 +230,11 @@ def test_phase_confirmation(state: ProjectState) -> dict:
             "clarification": {},
             "test_target": target,
             "integration_next_action": "integration_test",
+            # Build 阶段可能已经消耗过自己的修复次数；进入测试阶段时必须重新
+            # 开启独立的集成测试修复预算，不能把开发阶段计数带入 SmallTask。
+            "repair_iteration": 0,
+            "max_repair_iterations": 3,
+            "repair_return_node": "integration_test",
             "timeline": ["test_phase_confirmation"],
         }
     return {
@@ -229,7 +243,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
         "clarification": {
             "mode": "test_phase_confirmation",
             "status": "requires_user_input",
-            "message": "代码生成与 Build 已完成，确认后将进入测试阶段，执行测试、失败修复与项目启动。",
+            "message": "代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试、失败修复与项目启动。",
             "testTarget": target,
             "questions": [],
         },

@@ -38,6 +38,12 @@ _FRONTEND_PERFORMANCE_DECISIONS = {"skip", "run"}
 _MAX_TEST_DIFF_ENTRIES = 20
 _MAX_TEST_DIFF_CHARS = 12_000
 _MAX_SINGLE_TEST_DIFF_CHARS = 6_000
+_UNIT_TEST_CHECK_IDS = {
+    "frontend_test_generation",
+    "backend_test_generation",
+    "frontend_unit_tests",
+    "backend_unit_tests",
+}
 _INTEGRATION_CHECK_ORDER = (
     "frontend_install",
     "frontend_build",
@@ -59,7 +65,9 @@ def _progress_reporter(config: RunnableConfig | None) -> IntegrationTestProgress
     return reporter if callable(reporter) else None
 
 
-def _check_progress_snapshot_writer() -> IntegrationTestProgressReporter:
+def _check_progress_snapshot_writer(
+    event_type: str = "integration_test.checks",
+) -> IntegrationTestProgressReporter:
     """将检查增量合并为小型快照，并通过 LangGraph custom stream 发送。"""
 
     try:
@@ -107,7 +115,7 @@ def _check_progress_snapshot_writer() -> IntegrationTestProgressReporter:
         }
         writer(
             {
-                "type": "integration_test.checks",
+                "type": event_type,
                 "checks": _ordered_integration_checks(list(checks.values())),
             }
         )
@@ -235,6 +243,19 @@ def _blocking_test_failures(state: ProjectState | dict[str, Any]) -> list[dict[s
     ]
 
 
+def _without_unit_test_checks(value: Any) -> list[dict[str, Any]]:
+    """从测试阶段缓存中剔除单元测试记录，防止历史结果污染集成测试矩阵。"""
+
+    if not isinstance(value, list):
+        return []
+    return [
+        item
+        for item in value
+        if isinstance(item, dict)
+        and str(item.get("id") or "") not in _UNIT_TEST_CHECK_IDS
+    ]
+
+
 def _unit_test_confirmation_payload() -> dict[str, Any]:
     """构造构建完成后的单元测试可选确认载荷。"""
 
@@ -288,13 +309,13 @@ def _frontend_performance_decision(
 
 
 def _frontend_performance_confirmation_payload() -> dict[str, Any]:
-    """构造单元测试完成后的前端性能测试可选确认载荷。"""
+    """构造测试阶段构建检查完成后的前端性能测试确认载荷。"""
 
     return {
         "mode": "frontend_performance_confirmation",
         "status": "requires_user_input",
         "message": (
-            "单元测试已完成。前端性能测试不是必需步骤，可能耗时较长，"
+            "构建检查已完成。前端性能测试不是必需步骤，可能耗时较长，"
             "是否跳过前端性能测试？"
         ),
         "questions": [
@@ -390,7 +411,7 @@ def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
         }
     previous_context = state.get("unit_test_generation_context")
     previous_context = previous_context if isinstance(previous_context, dict) else {}
-    if state.get("unit_test_build_checks_completed") and previous_context:
+    if state.get("unit_test_build_diff_captured") and previous_context:
         return {
             "unit_test_generation_context": previous_context,
             "unit_test_affected_layers": _string_list(
@@ -1023,14 +1044,12 @@ def build_project_checks(
     state: ProjectState,
     config: RunnableConfig,
 ) -> dict[str, Any]:
-    """先执行依赖和构建检查，为后续测试生成建立完成门。"""
+    """先执行依赖和构建检查，为测试阶段性能与集成质量门禁建立完成门。"""
 
     reporter = _progress_reporter(config)
-    decision = _unit_test_decision(state)
-    cached_results = state.get("unit_test_build_results")
+    cached_results = _without_unit_test_checks(state.get("integration_build_results"))
     if (
-        state.get("unit_test_build_checks_completed")
-        and decision
+        state.get("integration_build_checks_completed")
         and isinstance(cached_results, list)
         and cached_results
     ):
@@ -1040,9 +1059,9 @@ def build_project_checks(
         _report_result_snapshot(reporter, cached_results)
         return {
             "test_results": cached_results,
-            "unit_test_build_results": cached_results,
-            "unit_test_build_checks_completed": True,
-            "test_events": ["unit_test_build:reused_after_confirmation"],
+            "integration_build_results": cached_results,
+            "integration_build_checks_completed": True,
+            "test_events": ["integration_build:reused_after_confirmation"],
         }
 
     result = run_integration_checks(
@@ -1052,14 +1071,14 @@ def build_project_checks(
     )
     test_results = _ordered_integration_checks(
         [
-            *state.get("test_results", []),
-            *result.get("test_results", []),
+            *_without_unit_test_checks(state.get("test_results")),
+            *_without_unit_test_checks(result.get("test_results")),
         ]
     )
     return {
         "test_results": test_results,
-        "unit_test_build_results": test_results,
-        "unit_test_build_checks_completed": True,
+        "integration_build_results": test_results,
+        "integration_build_checks_completed": True,
         "test_events": result.get("test_events", []),
     }
 
@@ -1067,6 +1086,20 @@ def build_project_checks(
 def unit_test_confirmation(state: ProjectState) -> dict[str, Any]:
     """无阻塞失败时暂停等待用户选择；存在阻塞失败则自动跳过直达质量门禁。"""
 
+    context = state.get("unit_test_generation_context")
+    if (
+        isinstance(context, dict)
+        and context.get("enabled") is not False
+        and not context.get("has_targets")
+        and not context.get("existing_test_files")
+    ):
+        return {
+            "status": "in_progress",
+            "clarification": {},
+            "unit_test_decision": "skip",
+            "integration_next_action": "skip_unit_tests",
+            "test_events": ["unit_test_confirmation:auto_skipped_no_targets"],
+        }
     if _blocking_test_failures(state):
         return {
             "status": "in_progress",
@@ -1520,11 +1553,16 @@ def repair_planning(state: ProjectState) -> dict:
     repair_iteration = int(state.get("repair_iteration", 0) or 0)
     max_repair_iterations = int(state.get("max_repair_iterations", 3) or 3)
     if repair_iteration >= max_repair_iterations:
+        repair_stage = (
+            "Unit test"
+            if state.get("repair_return_node") == "unit_test"
+            else "Integration"
+        )
         repair_task_plan = {
             "version": "0.1.0",
             "status": "terminal_failure",
             "decision": "terminal_failure",
-            "reason": "Integration repair iteration budget exhausted.",
+            "reason": f"{repair_stage} repair iteration budget exhausted.",
             "tasks": [],
         }
         repair_task_plan_path = write_repair_task_plan_json(state, repair_task_plan)
@@ -1778,15 +1816,11 @@ def _test_file_layer(path: str) -> str | None:
 
 
 def build_testing_subgraph():
+    """构建测试阶段子图，仅保留构建检查、性能测试和集成质量门禁。"""
+
     builder = StateGraph(ProjectState)
 
-    builder.add_node("collect_unit_test_targets", collect_unit_test_targets)
     builder.add_node("build_project_checks", build_project_checks)
-    builder.add_node("unit_test_confirmation", unit_test_confirmation)
-    builder.add_node("skip_unit_tests", skip_unit_tests)
-    builder.add_node("generate_unit_tests", generate_unit_tests)
-    builder.add_node("validate_generated_unit_tests", validate_generated_unit_tests)
-    builder.add_node("actual_project_checks", actual_project_checks)
     builder.add_node(
         "frontend_performance_confirmation",
         frontend_performance_confirmation,
@@ -1796,28 +1830,8 @@ def build_testing_subgraph():
     builder.add_node("main_quality_gate", main_quality_gate)
     builder.add_node("repair_planning", repair_planning)
 
-    builder.add_edge(START, "collect_unit_test_targets")
-    builder.add_edge("collect_unit_test_targets", "build_project_checks")
-    builder.add_edge("build_project_checks", "unit_test_confirmation")
-    builder.add_conditional_edges(
-        "unit_test_confirmation",
-        _route_unit_test_confirmation,
-        {
-            "skip_unit_tests": "skip_unit_tests",
-            "generate_unit_tests": "generate_unit_tests",
-            "await_user_input": END,
-        },
-    )
-    builder.add_edge(
-        "skip_unit_tests",
-        "frontend_performance_confirmation",
-    )
-    builder.add_edge("generate_unit_tests", "validate_generated_unit_tests")
-    builder.add_edge("validate_generated_unit_tests", "actual_project_checks")
-    builder.add_edge(
-        "actual_project_checks",
-        "frontend_performance_confirmation",
-    )
+    builder.add_edge(START, "build_project_checks")
+    builder.add_edge("build_project_checks", "frontend_performance_confirmation")
     builder.add_conditional_edges(
         "frontend_performance_confirmation",
         _route_frontend_performance_confirmation,
@@ -1839,19 +1853,11 @@ _testing_subgraph = build_testing_subgraph()
 
 
 def integration_test(state: ProjectState) -> dict:
-    """运行测试子图，并把内部检查的增量状态转发到主 Graph 流。"""
+    """运行测试阶段子图，并只保留集成检查与性能测试结果。"""
 
     previous_small_task_changes = [
         item
         for item in state.get("small_task_code_change_sets", [])
-        if isinstance(item, dict)
-    ]
-    previous_test_changes = [
-        item
-        for item in (
-            state.get("unit_test_generation_code_change_sets")
-            or state.get("unit_test_code_change_sets", [])
-        )
         if isinstance(item, dict)
     ]
     input_code_changes = state.get("code_changes")
@@ -1869,30 +1875,20 @@ def integration_test(state: ProjectState) -> dict:
             for item in input_code_change_sets
         }.values()
     )
-    decision = _unit_test_decision(state)
     frontend_performance_decision = _frontend_performance_decision(state)
     reuse_build_checks = bool(
-        state.get("unit_test_build_checks_completed")
-        and decision in _UNIT_TEST_DECISIONS
+        state.get("integration_build_checks_completed")
+        and frontend_performance_decision in _FRONTEND_PERFORMANCE_DECISIONS
     )
-    cached_build_results = (
-        state.get("unit_test_build_results")
-        if isinstance(state.get("unit_test_build_results"), list)
-        else []
+    cached_build_results = _without_unit_test_checks(
+        state.get("integration_build_results")
     )
     result = _testing_subgraph.invoke(
         {
             **state,
-            "test_generation_input_code_changes": input_code_changes,
-            "test_generation_input_code_change_sets": input_code_change_sets,
-            "unit_test_generation_enabled": state.get(
-                "unit_test_generation_enabled", True
-            ),
-            "unit_test_code_change_sets": previous_test_changes,
             "test_results": cached_build_results if reuse_build_checks else [],
-            "unit_test_build_results": cached_build_results if reuse_build_checks else [],
-            "unit_test_build_checks_completed": reuse_build_checks,
-            # 每轮测试必须从未决状态开始，避免重试时沿用上一轮质量门结果越过确认节点。
+            "integration_build_results": cached_build_results if reuse_build_checks else [],
+            "integration_build_checks_completed": reuse_build_checks,
             "test_report": {},
             "test_report_path": None,
             "quality_gate_passed": False,
@@ -1901,6 +1897,13 @@ def integration_test(state: ProjectState) -> dict:
             "repair_task_plan": {},
             "repair_task_plan_path": None,
             "repair_tasks": [],
+            # 测试阶段修复只能依据集成检查失败与 Build 执行范围，不能复用
+            # 开发阶段单测生成上下文，否则会把单测目标文件带入集成修复授权。
+            "unit_test_generation": {},
+            "unit_test_generation_context": {},
+            "unit_test_affected_layers": [],
+            "unit_test_code_change_sets": [],
+            "unit_test_generation_code_change_sets": [],
             "integration_next_action": "",
             "clarification": {},
             # 集成测试位于启动预览之前；重试该节点时必须清空上一轮启动与验收状态，
@@ -1921,25 +1924,10 @@ def integration_test(state: ProjectState) -> dict:
             }
         },
     )
-    current_test_changes = [
-        item
-        for item in (
-            result.get("unit_test_generation_code_change_sets")
-            or result.get("unit_test_code_change_sets", [])
-        )
-        if isinstance(item, dict)
-    ]
-    new_test_changes = current_test_changes[len(previous_test_changes):]
     repair_planner_changes = [
         item for item in result.get("code_change_sets", []) if isinstance(item, dict)
     ]
-    new_code_change_sets = [*new_test_changes, *repair_planner_changes]
-    waiting_for_unit_test_decision = (
-        result.get("status") == "requires_user_input"
-        and result.get("integration_next_action") == "await_user_input"
-        and isinstance(result.get("clarification"), dict)
-        and result.get("clarification", {}).get("mode") == "unit_test_confirmation"
-    )
+    new_code_change_sets = repair_planner_changes
     waiting_for_frontend_performance_decision = (
         result.get("status") == "requires_user_input"
         and result.get("integration_next_action") == "await_user_input"
@@ -1947,10 +1935,7 @@ def integration_test(state: ProjectState) -> dict:
         and result.get("clarification", {}).get("mode")
         == "frontend_performance_confirmation"
     )
-    waiting_for_test_decision = (
-        waiting_for_unit_test_decision
-        or waiting_for_frontend_performance_decision
-    )
+    waiting_for_test_decision = waiting_for_frontend_performance_decision
     quality_gate_passed = (
         False
         if waiting_for_test_decision
@@ -1963,24 +1948,13 @@ def integration_test(state: ProjectState) -> dict:
         if quality_gate_passed
         else "failed"
     )
-    resumed_unit_test_decision = (
-        decision
-        if waiting_for_unit_test_decision
-        else state.get("unit_test_decision")
-        if waiting_for_frontend_performance_decision
-        else ""
-    )
     resumed_build_checks_completed = (
-        bool(result.get("unit_test_build_checks_completed"))
-        if waiting_for_unit_test_decision
-        else bool(state.get("unit_test_build_checks_completed"))
+        bool(result.get("integration_build_checks_completed"))
         if waiting_for_frontend_performance_decision
         else False
     )
     resumed_build_results = (
-        result.get("unit_test_build_results", [])
-        if waiting_for_unit_test_decision
-        else state.get("unit_test_build_results", [])
+        result.get("integration_build_results", [])
         if waiting_for_frontend_performance_decision
         else []
     )
@@ -1992,7 +1966,7 @@ def integration_test(state: ProjectState) -> dict:
             if waiting_for_test_decision
             else {}
         ),
-        "test_results": result.get("test_results", []),
+        "test_results": _without_unit_test_checks(result.get("test_results")),
         "test_events": result.get("test_events", []),
         "test_report": result.get("test_report", {}),
         "test_report_path": result.get("test_report_path"),
@@ -2002,12 +1976,6 @@ def integration_test(state: ProjectState) -> dict:
         "repair_task_plan": result.get("repair_task_plan", {}),
         "repair_task_plan_path": result.get("repair_task_plan_path"),
         "repair_tasks": result.get("repair_tasks", []),
-        "unit_test_generation_context": result.get("unit_test_generation_context", {}),
-        "unit_test_generation": result.get("unit_test_generation", {}),
-        "unit_test_affected_layers": result.get("unit_test_affected_layers", []),
-        "unit_test_decision": (
-            resumed_unit_test_decision
-        ),
         "frontend_performance_decision": (
             ""
             if not waiting_for_frontend_performance_decision
@@ -2019,15 +1987,8 @@ def integration_test(state: ProjectState) -> dict:
                 state.get("frontend_performance_test_enabled", True),
             )
         ),
-        "unit_test_build_checks_completed": (
-            resumed_build_checks_completed
-        ),
-        "unit_test_build_results": (
-            resumed_build_results
-        ),
-        "unit_test_mapping_path": result.get("unit_test_mapping_path"),
-        "unit_test_code_change_sets": current_test_changes,
-        "unit_test_generation_code_change_sets": current_test_changes,
+        "integration_build_checks_completed": resumed_build_checks_completed,
+        "integration_build_results": resumed_build_results,
         "small_task_tasks": result.get("repair_tasks", []),
         "small_task_results": state.get("small_task_results", []),
         "small_task_code_change_sets": [
@@ -2039,6 +2000,7 @@ def integration_test(state: ProjectState) -> dict:
         "small_task_route": "small_task_repair"
         if result.get("repair_tasks")
         else result.get("integration_next_action", "handle_failure"),
+        "repair_return_node": "integration_test",
         "repair_iteration": result.get("repair_iteration", state.get("repair_iteration", 0)),
         "max_repair_iterations": result.get(
             "max_repair_iterations", state.get("max_repair_iterations", 3)

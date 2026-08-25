@@ -490,13 +490,13 @@ class WorkflowRequestTests(unittest.TestCase):
                 "resumeState": {
                     "summary": {
                         "status": "requires_user_input",
-                        "phase": "integration_test",
+                        "phase": "unit_test",
                     }
                 },
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "integration_test")
+        self.assertEqual(inputs["resume_from"], "unit_test")
         self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
         self.assertNotIn("user_interaction_submission", inputs)
 
@@ -637,8 +637,8 @@ class WorkflowRequestTests(unittest.TestCase):
         )
         self.assertNotIn("user_interaction_submission", inputs)
 
-    def test_performance_resume_keeps_previous_unit_test_decision(self) -> None:
-        """性能测试确认恢复时必须保留单测决策与构建缓存，避免集成测试从头重跑。"""
+    def test_performance_resume_keeps_integration_build_cache(self) -> None:
+        """性能测试确认恢复时必须保留集成构建缓存，避免测试阶段从头重跑。"""
 
         inputs = workflow_run_inputs(
             {
@@ -659,8 +659,8 @@ class WorkflowRequestTests(unittest.TestCase):
                             "mode": "frontend_performance_confirmation"
                         },
                         "unit_test_decision": "skip",
-                        "unit_test_build_checks_completed": True,
-                        "unit_test_build_results": [
+                        "integration_build_checks_completed": True,
+                        "integration_build_results": [
                             {"id": "frontend_build", "passed": True}
                         ],
                     }
@@ -670,11 +670,9 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["resume_from"], "integration_test")
         self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
-        self.assertTrue(
-            inputs["resume_values"]["unit_test_build_checks_completed"]
-        )
+        self.assertTrue(inputs["resume_values"]["integration_build_checks_completed"])
         self.assertEqual(
-            inputs["resume_values"]["unit_test_build_results"][0]["id"],
+            inputs["resume_values"]["integration_build_results"][0]["id"],
             "frontend_build",
         )
         self.assertEqual(

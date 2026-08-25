@@ -104,12 +104,12 @@ class WorkflowRoutingTests(unittest.TestCase):
             "launch_project",
         )
 
-    def test_build_only_enters_test_confirmation_after_complete_summary(self) -> None:
-        """构建切片完整成功后必须先停在测试阶段确认门。"""
+    def test_build_only_enters_unit_test_after_complete_summary(self) -> None:
+        """构建切片完整成功后必须先进入开发阶段单测门禁。"""
 
         self.assertEqual(
             route_build_result({"build_summary": {"status": "completed"}}),
-            "test_phase_confirmation",
+            "unit_test",
         )
 
     def test_test_phase_confirmation_waits_for_user_input(self) -> None:
@@ -125,10 +125,30 @@ class WorkflowRoutingTests(unittest.TestCase):
 
         self.assertEqual(
             route_test_phase_confirmation(
-                {"status": "completed", "build_summary": {"status": "completed"}}
+                {
+                    "status": "completed",
+                    "build_summary": {"status": "completed"},
+                    "unit_test_gate_passed": True,
+                }
             ),
             "integration_test",
         )
+
+    def test_test_phase_confirmation_resets_integration_repair_budget(self) -> None:
+        """进入测试阶段时不应继承 Build 阶段已经消耗的修复次数。"""
+
+        result = test_phase_confirmation(
+            {
+                "build_summary": {"status": "completed"},
+                "unit_test_gate_passed": True,
+                "test_phase_confirmation": {"action": "confirm"},
+                "repair_iteration": 3,
+            }
+        )
+
+        self.assertEqual(result["repair_iteration"], 0)
+        self.assertEqual(result["max_repair_iterations"], 3)
+        self.assertEqual(result["repair_return_node"], "integration_test")
 
     def test_test_phase_confirmation_rejects_incomplete_build(self) -> None:
         """确认节点不能被直接恢复到未完成的 Build。"""
@@ -146,6 +166,7 @@ class WorkflowRoutingTests(unittest.TestCase):
         result = run_test_phase_confirmation(
             {
                 "build_summary": {"status": "completed"},
+                "unit_test_gate_passed": True,
                 "build_execution_scope": {"type": "page", "targetId": "orders"},
                 "project_plan": {"pages": [{"pageId": "orders", "name": "订单页"}]},
             }
@@ -163,6 +184,7 @@ class WorkflowRoutingTests(unittest.TestCase):
         result = run_test_phase_confirmation(
             {
                 "build_summary": {"status": "completed"},
+                "unit_test_gate_passed": True,
                 "build_execution_scope": {"type": "endpoint", "targetId": "orders.list"},
                 "project_plan": {
                     "api_contracts": [
