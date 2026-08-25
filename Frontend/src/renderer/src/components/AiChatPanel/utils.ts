@@ -1,5 +1,6 @@
 import { MIN_ASSISTANT_PANEL_RATIO, MIN_RIGHT_PANEL_RATIO } from './constants'
 import type {
+  DevelopmentPlanningApiEndpoint,
   DevelopmentPlanningEntityOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeFile,
@@ -349,6 +350,24 @@ export function requiresEntitySourceBinding(
   entity: DevelopmentPlanningEntityOption | undefined
 ): boolean {
   return Boolean(entity && !entity.designed && !entity.hasDetailPlan)
+}
+
+/** 以 endpoint 文档状态判断接口是否需要显示开始详细设计入口。 */
+export function requiresEndpointDetailDesign(
+  endpoint: DevelopmentPlanningApiEndpoint | undefined
+): boolean {
+  return Boolean(endpoint && !endpoint.designed && !endpoint.hasDetailPlan)
+}
+
+/** 判断待设计接口是否应显示锁定卡片；空白新会话仍属于尚未开始设计。 */
+export function shouldShowEndpointDetailDesignEntry(
+  endpoint: DevelopmentPlanningApiEndpoint | undefined,
+  endpointSessionActive: boolean,
+  messageCount: number
+): boolean {
+  return (
+    requiresEndpointDetailDesign(endpoint) && (!endpointSessionActive || messageCount === 0)
+  )
 }
 
 /** 判断 Workflow 快照是否属于独立 EntitySourceBinding 场景。 */

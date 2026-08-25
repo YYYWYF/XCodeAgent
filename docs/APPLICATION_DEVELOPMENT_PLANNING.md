@@ -2,7 +2,9 @@
 
 ## Scope
 
-Workbench 读取 `.xcodeagent/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲直接投射 `api_contracts`，实体大纲投射 TechnicalPlan 顶层 `entities` 和独立数据源绑定状态。当前流程不生成或读取页面/API详设文件。
+Workbench 读取 `.xcodeagent/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲从 `api_contracts` 投射 endpoint 基本信息，但接口“已设计”只由对应非空 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.md` 是否真实产出决定，TechnicalPlan 声明本身不能放行该状态；实体大纲投射 TechnicalPlan 顶层 `entities` 和独立数据源绑定状态。页面当前不读取独立详设文件。
+
+点击大纲中的待设计 endpoint 时，工作台先清空自动恢复的目标会话并展示与未设计实体一致的“开始详细设计”锁定卡片；点击卡片后才创建或恢复 endpoint 会话，并通过 `/workflow/run` 进入实体数据源绑定前置检查。空白的新 endpoint 会话仍显示入口卡片，已有 Workflow 消息或用户显式打开历史会话时让出对话区展示运行结果。
 
 页面视觉、组件、交互入口和状态呈现以已确认 React UI 稿为权威；UI 阶段被跳过时依据 ProductPlan、TechnicalPlan 和模板技能实现。`PageImplementationContract` 仍由 ProductPlan、UiManifest 和 TechnicalPlan 在运行时确定性编译，不写入独立页面详设。
 

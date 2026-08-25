@@ -4,7 +4,9 @@ import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
   pageDetailTargetKey,
+  requiresEndpointDetailDesign,
   sessionDetailTargetKey,
+  shouldShowEndpointDetailDesignEntry,
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
   workflowPreviewTarget
@@ -200,6 +202,26 @@ test('切换 API 时只恢复有消息的同接口会话', () => {
       ' stats '
     ),
     'endpoint-ready'
+  )
+})
+
+test('待设计 API 在开始前显示绿色设计入口，已有运行消息后让出对话区', () => {
+  const pendingEndpoint = {
+    id: 'stats',
+    method: 'GET',
+    path: '/stats',
+    summary: '统计信息',
+    designed: false,
+    hasDetailPlan: false
+  }
+
+  assert.equal(requiresEndpointDetailDesign(pendingEndpoint), true)
+  assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, false, 0), true)
+  assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, true, 0), true)
+  assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, true, 1), false)
+  assert.equal(
+    requiresEndpointDetailDesign({ ...pendingEndpoint, designed: true, hasDetailPlan: true }),
+    false
   )
 })
 

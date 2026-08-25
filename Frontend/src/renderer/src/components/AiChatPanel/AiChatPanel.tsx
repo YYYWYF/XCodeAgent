@@ -67,9 +67,11 @@ import type { AgentChatMessage, WorkspaceDocKey } from './types'
 import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
+  requiresEndpointDetailDesign,
   requiresInitialDetailDesignSelection,
   requiresEntitySourceBinding,
   sessionDetailTargetKey,
+  shouldShowEndpointDetailDesignEntry,
   workflowDetailTargetKey,
   type WorkflowPreviewTarget
 } from './utils'
@@ -2051,6 +2053,16 @@ export default function AiChatPanel({
   const entitySessionActive = Boolean(
     entityDetailTarget && activeSession?.entityId === entityDetailTarget.entityId
   )
+  const endpointSessionActive = Boolean(
+    activeApiEndpoint &&
+      activeSession?.apiContractId === activeApiEndpoint.apiContractId &&
+      activeSession?.endpointId === activeApiEndpoint.endpointId
+  )
+  const showEndpointDetailDesignEntry = shouldShowEndpointDetailDesignEntry(
+    activeApiEndpointOption?.endpoint,
+    endpointSessionActive,
+    messages.length
+  )
   const showEntityInfoPanel = Boolean(
     entityDetailTarget &&
       Boolean(activeEntityOption?.designed || activeEntityOption?.hasDetailPlan) &&
@@ -2334,6 +2346,23 @@ export default function AiChatPanel({
     setInteractingDetailTargetKey(endpointDetailTargetKey(target.apiContractId, target.endpointId))
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ ...target, type: 'endpoint' })
+    const endpoint = developmentPlanningApiContracts
+      .flatMap((contract) =>
+        contract.endpoints.map((candidate) => ({
+          apiContractId: candidate.apiContractId || contract.id,
+          endpoint: candidate
+        }))
+      )
+      .find(
+        (candidate) =>
+          candidate.apiContractId === target.apiContractId &&
+          candidate.endpoint.id === target.endpointId
+      )?.endpoint
+    // 待设计接口与未绑定实体一致：点击大纲先回到绿色设计入口，历史会话仍可从子列表打开。
+    if (requiresEndpointDetailDesign(endpoint)) {
+      clearActiveSession()
+      return
+    }
     handleSelectEndpoint(target.apiContractId, target.endpointId).catch(() => undefined)
   }
 
@@ -2951,11 +2980,12 @@ export default function AiChatPanel({
               </>
             )}
 
-            {/* 独立 EntitySourceBinding 尚未完成时保留实体入口引导卡片。 */}
-            {(requiresEntitySourceBinding(activeEntityOption) &&
-                entityDesignChatActive &&
-                !entitySessionActive &&
-                !entityDesignReturning) &&
+            {/* 未完成的实体绑定与 endpoint 设计都先显示统一绿色入口卡片。 */}
+            {((requiresEntitySourceBinding(activeEntityOption) &&
+              entityDesignChatActive &&
+              !entitySessionActive &&
+              !entityDesignReturning) ||
+              showEndpointDetailDesignEntry) &&
             displayedPlanExecutionMode === 'idle' &&
             !detailConfirmationWaitingReview ? (
               <DetailConfirmationPageSelector

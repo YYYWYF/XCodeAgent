@@ -11,6 +11,7 @@ import { normalizePersistentSessionMessage } from './sessionMessageNormalization
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { lstatIfPresent, movePathToTrashIfPresent, removeDirectoryIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
+import { endpointDesignDocumentExists } from './planningArtifactStatus'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -330,9 +331,9 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
             method,
             path: normalizeApiPath(endpointPath, '/'),
             summary: String(endpointRecord.summary || ''),
-            designed: true,
-            detailPlanStatus: 'confirmed',
-            hasDetailPlan: true
+            designed: false,
+            detailPlanStatus: '',
+            hasDetailPlan: false
           }
         ]
       })
@@ -518,6 +519,33 @@ function pageBuildTaskSummary(
   }
 }
 
+/** 只根据 endpoint Markdown 是否真实产出合并接口设计状态。 */
+async function mergeWorkbenchApiStatus(
+  workspaceRoot: string,
+  contracts: WorkbenchApiContract[]
+): Promise<WorkbenchApiContract[]> {
+  return Promise.all(
+    contracts.map(async (contract) => ({
+      ...contract,
+      endpoints: await Promise.all(
+        contract.endpoints.map(async (endpoint) => {
+          const hasDesignDocument = await endpointDesignDocumentExists(
+            workspaceRoot,
+            endpoint.apiContractId,
+            endpoint.id
+          )
+          return {
+            ...endpoint,
+            designed: hasDesignDocument,
+            detailPlanStatus: hasDesignDocument ? 'generated' : '',
+            hasDetailPlan: hasDesignDocument
+          }
+        })
+      )
+    }))
+  )
+}
+
 /** 判断是否已存在实体数据源绑定，供工作台展示独立实体入口状态。 */
 async function pageDesignDirectoryHasEntries(workspaceRoot: string): Promise<boolean> {
   try {
@@ -636,6 +664,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     buildTaskPlan
   )
   const pagesById = new Map(pages.map((page) => [page.pageId, page]))
+  apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
   entities = await mergeWorkbenchEntityStatus(workspaceRoot, entities)
   const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
 
