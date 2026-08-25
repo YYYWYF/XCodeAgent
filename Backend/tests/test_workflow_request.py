@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.agents.test_generation.generator import _build_prompt
+from app.graph.subgraphs.testing import collect_unit_test_targets
 from app.protocols.workflow.request import (
     _build_execution_scope,
     _retry_failed_execution_node,
@@ -523,6 +525,78 @@ class WorkflowRequestTests(unittest.TestCase):
             inputs["resume_values"]["test_phase_confirmation"],
             {"mode": "test_phase_confirmation", "action": "confirm"},
         )
+
+    def test_test_phase_confirmation_restores_build_code_diff_for_test_generation(
+        self,
+    ) -> None:
+        """测试新对话必须恢复开发 Build Diff，供 TestGeneration Agent 生成单测。"""
+
+        source_diff = (
+            "@@ -1 +1,2 @@\n"
+            "-public List<LeaveRecord> list() { return List.of(); }\n"
+            "+public List<LeaveRecord> list() { return repository.findAll(); }\n"
+        )
+        code_changes = {
+            "id": "code-change-set:build",
+            "workspaceRoot": "/workspace",
+            "workspaceName": "workspace",
+            "files": [
+                {
+                    "id": "file:leave-service",
+                    "path": "backend/src/main/java/demo/LeaveRecordService.java",
+                    "changeType": "modified",
+                    "additions": 1,
+                    "deletions": 1,
+                    "diff": source_diff,
+                }
+            ],
+            "summary": {"files": 1, "additions": 1, "deletions": 1},
+        }
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "开始测试接口：请假记录查询",
+                "clarificationAnswers": {
+                    "test_phase_confirmation": {"action": "confirm"}
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "test_phase_confirmation",
+                    },
+                    "state": {
+                        "phase": "test_phase_confirmation",
+                        "codeChanges": code_changes,
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "test_phase_confirmation")
+        self.assertEqual(inputs["resume_values"]["code_changes"], code_changes)
+        self.assertIn(
+            "repository.findAll()",
+            inputs["resume_values"]["code_changes"]["files"][0]["diff"],
+        )
+        collected = collect_unit_test_targets(
+            {
+                **inputs["resume_values"],
+                "test_generation_input_code_changes": inputs["resume_values"][
+                    "code_changes"
+                ],
+                "test_generation_input_code_change_sets": [],
+            }
+        )
+        generation_context = collected["unit_test_generation_context"]
+        self.assertEqual(
+            generation_context["source_files"],
+            ["backend/src/main/java/demo/LeaveRecordService.java"],
+        )
+        self.assertIn(
+            "repository.findAll()",
+            generation_context["code_diff"]["files"][0]["diff"],
+        )
+        self.assertIn("repository.findAll()", _build_prompt(generation_context))
 
     def test_test_phase_confirmation_rejects_non_confirm_action(self) -> None:
         """测试阶段确认不接受拒绝动作或自然语言回退。"""

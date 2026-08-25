@@ -61,7 +61,7 @@ START
 
 ### 测试阶段 AG-UI 与生命周期契约
 
-`test_phase_confirmation` 是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。确认门的 AG-UI 快照同时投影 `clarification.mode`、固定确认文案和 `testTarget`；生命周期待交互类型为 `test_phase_confirmation`，应用生命周期 schema 当前为 `1.3.0`。恢复请求在新的测试 thread 中提交开发会话的 `resumeState` 与 `resumeExecutionRunId`；生命周期只为该结构化确认允许跨 thread 原子转交 execution，其他恢复仍要求同一 thread。确认节点完成时生命周期立即投影 `integration_test`，使顶部测试阶段在测试执行开始时同步高亮。
+`test_phase_confirmation` 是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。确认门的 AG-UI 快照同时投影 `clarification.mode`、固定确认文案和 `testTarget`；生命周期待交互类型为 `test_phase_confirmation`，应用生命周期 schema 当前为 `1.3.0`。恢复请求在新的测试 thread 中提交开发会话的 `resumeState` 与 `resumeExecutionRunId`；恢复边界把开发完成快照中公开的有界 `codeChanges` 映射回 Graph `code_changes`，供 `integration_test` 生成 `unit_test_generation_context.code_diff` 并传给 TestGeneration Agent，但不复制开发对话历史。生命周期只为该结构化确认允许跨 thread 原子转交 execution，其他恢复仍要求同一 thread。确认节点完成时生命周期立即投影 `integration_test`，使顶部测试阶段在测试执行开始时同步高亮。
 
 需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 只读取 `.xcodeagent/plans/technical-plan.json`；页面选择从 `pages[].references` 解析实现范围并在运行时编译 PageImplementationContract，只有缺失 EndpointDetail 时才停在 `detail_confirmation`，纯静态页面可直接继续。
 
