@@ -227,7 +227,14 @@ type LocalDesignMarkdown = {
 }
 
 const TECHNICAL_PLAN_JSON_PATH = '.xcodeagent/plans/technical-plan.json'
-const PRODUCT_PLAN_JSON_PATH = '.xcodeagent/plans/product-plan.json'
+const PRODUCT_PLAN_JSON_PATHS = [
+  '.xcodeagent/drafts/plans/product-plan.json',
+  '.xcodeagent/plans/product-plan.json'
+] as const
+const REQUIREMENT_SPEC_JSON_PATHS = [
+  '.xcodeagent/drafts/specs/requirement-spec.json',
+  '.xcodeagent/specs/requirement-spec.json'
+] as const
 
 const LOCAL_DESIGN_ARTIFACTS: ReadonlyArray<{
   key: DesignDocArtifactKey
@@ -428,23 +435,48 @@ async function readLocalTechnicalPlanJson(
   }
 }
 
-/** 从当前工作区读取 ProductPlan 的当前结构化快照，供页面绑定解析中文页面名。 */
+/** 从当前工作区读取 ProductPlan 的当前结构化快照，草稿优先、正式文档兜底。 */
 async function readLocalProductPlanJson(
   workspaceRoot: string
 ): Promise<Record<string, unknown> | undefined> {
-  try {
-    const result = await readWorkspaceFile({
-      workspace_root: workspaceRoot,
-      path: PRODUCT_PLAN_JSON_PATH,
-      max_lines: 5000,
-      max_chars: 200000
-    })
-    const parsed: unknown = JSON.parse(result.content)
-    return asWorkflowRecord(parsed)
-  } catch {
-    // ProductPlan JSON 尚未生成或暂时不可读时，由右侧面板显示对应的空态。
-    return undefined
+  for (const path of PRODUCT_PLAN_JSON_PATHS) {
+    try {
+      const result = await readWorkspaceFile({
+        workspace_root: workspaceRoot,
+        path,
+        max_lines: 5000,
+        max_chars: 200000
+      })
+      const parsed: unknown = JSON.parse(result.content)
+      const record = asWorkflowRecord(parsed)
+      if (record) return record
+    } catch {
+      // 候选路径不存在时尝试下一个；全部不可读时由面板显示对应的空态。
+    }
   }
+  return undefined
+}
+
+/** 从当前工作区读取 RequirementSpec 的结构化快照，草稿优先、正式文档兜底。 */
+async function readLocalRequirementSpecJson(
+  workspaceRoot: string
+): Promise<Record<string, unknown> | undefined> {
+  for (const path of REQUIREMENT_SPEC_JSON_PATHS) {
+    try {
+      const result = await readWorkspaceFile({
+        workspace_root: workspaceRoot,
+        path,
+        max_lines: 5000,
+        max_chars: 200000
+      })
+      const parsed: unknown = JSON.parse(result.content)
+      const record = asWorkflowRecord(parsed)
+      if (record) return record
+    } catch {
+      // 候选路径不存在时尝试下一个；全部不可读时由面板显示 Markdown 兜底。
+    }
+  }
+  return undefined
 }
 
 /** 从本地 Markdown 或当前确认快照读取设计文档正文，保证 tab 的可用性以真实内容为准。 */
@@ -525,6 +557,20 @@ function productPlanFromWorkflow(
   if (!workflow) return undefined
   for (const source of [workflow.state, workflow.result]) {
     const value = source?.product_plan
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
+/** 从当前规划 Workflow 读取 RequirementSpec 结构化快照，供右侧需求文档可视化视图使用。 */
+function requirementSpecFromWorkflow(
+  workflow: WorkflowRunPayload | undefined
+): Record<string, unknown> | undefined {
+  if (!workflow) return undefined
+  for (const source of [workflow.state, workflow.result]) {
+    const value = source?.requirement_spec
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
     }
@@ -727,6 +773,7 @@ export default function AiChatPanel({
   // TechnicalPlan 右侧展示使用内部 JSON，Markdown 仅作为正式用户工件保留。
   const [technicalPlanFile, setTechnicalPlanFile] = useState<Record<string, unknown>>()
   const [productPlanFile, setProductPlanFile] = useState<Record<string, unknown>>()
+  const [requirementSpecFile, setRequirementSpecFile] = useState<Record<string, unknown>>()
   const [technicalPlanFileLoading, setTechnicalPlanFileLoading] = useState(false)
   const designDocCacheRevisionRef = useRef<Record<string, string>>({})
   const [designDocLoadingKey, setDesignDocLoadingKey] = useState<WorkspaceDocKey>()
@@ -903,6 +950,7 @@ export default function AiChatPanel({
     : ''
   const activeDesignDocAvailable = Boolean(activeDesignDoc?.available)
   const technicalPlanViewActive = isDesignPhase && activeDesignDocKey === 'technical-plan'
+  const requirementDocViewActive = isDesignPhase && activeDesignDocKey === 'requirement-spec'
   // 右侧技术规划始终走结构化视图；运行中优先使用 Workflow，重开工作区时读取正式 JSON。
   const technicalPlanForDoc = technicalPlanViewActive
     ? technicalPlanFromWorkflow(planningWorkflow) || technicalPlanFile
@@ -914,6 +962,13 @@ export default function AiChatPanel({
     technicalPlanViewActive &&
     (!technicalPlanForDoc || !productPlanForDoc) &&
     technicalPlanFileLoading
+  // 需求文档 tab 优先使用结构化可视化；结构化数据不可读时回退 Markdown。
+  const requirementSpecForDoc = requirementDocViewActive
+    ? requirementSpecFromWorkflow(planningWorkflow) || requirementSpecFile
+    : undefined
+  const requirementProductPlanForDoc = requirementDocViewActive
+    ? productPlanFromWorkflow(planningWorkflow) || productPlanFile
+    : undefined
 
   // 进入工作台时一次性读取四类本地设计产物，重新打开应用也不依赖内存 Workflow 快照。
   useEffect(() => {
@@ -921,6 +976,7 @@ export default function AiChatPanel({
     if (!isDesignPhase || !workspaceRoot) {
       setTechnicalPlanFile(undefined)
       setProductPlanFile(undefined)
+      setRequirementSpecFile(undefined)
       setTechnicalPlanFileLoading(false)
       return
     }
@@ -928,21 +984,23 @@ export default function AiChatPanel({
     setTechnicalPlanFileLoading(true)
 
     const loadDesignDocuments = async (): Promise<void> => {
-      const [entries, localTechnicalPlan, localProductPlan] = await Promise.all([
-        Promise.all(
-          LOCAL_DESIGN_ARTIFACTS.map(async (artifact) => {
-            try {
-              const document = await readLocalDesignMarkdown(workspaceRoot, artifact)
-              return document.content.trim() ? ([artifact.key, document] as const) : null
-            } catch {
-              // 工作区没有对应产物属于正常空态，不影响其他文档继续加载。
-              return null
-            }
-          })
-        ),
-        readLocalTechnicalPlanJson(workspaceRoot),
-        readLocalProductPlanJson(workspaceRoot)
-      ])
+      const [entries, localTechnicalPlan, localProductPlan, localRequirementSpec] =
+        await Promise.all([
+          Promise.all(
+            LOCAL_DESIGN_ARTIFACTS.map(async (artifact) => {
+              try {
+                const document = await readLocalDesignMarkdown(workspaceRoot, artifact)
+                return document.content.trim() ? ([artifact.key, document] as const) : null
+              } catch {
+                // 工作区没有对应产物属于正常空态，不影响其他文档继续加载。
+                return null
+              }
+            })
+          ),
+          readLocalTechnicalPlanJson(workspaceRoot),
+          readLocalProductPlanJson(workspaceRoot),
+          readLocalRequirementSpecJson(workspaceRoot)
+        ])
       if (cancelled) return
       const nextContents = Object.fromEntries(
         entries
@@ -962,6 +1020,7 @@ export default function AiChatPanel({
       setDesignDocFilePath(nextPaths)
       setTechnicalPlanFile(localTechnicalPlan)
       setProductPlanFile(localProductPlan)
+      setRequirementSpecFile(localRequirementSpec)
       setTechnicalPlanFileLoading(false)
     }
 
@@ -2976,10 +3035,19 @@ export default function AiChatPanel({
                 content={designDocContent}
                 docName={designDocName}
                 generating={designDocGenerating || designDocLoading}
-                productPlan={productPlanForDoc}
+                productPlan={requirementDocViewActive ? requirementProductPlanForDoc : productPlanForDoc}
+                requirementSpec={requirementSpecForDoc}
                 technicalPlan={technicalPlanForDoc}
-                structuredDocument={technicalPlanViewActive ? 'technical-plan' : undefined}
-                structuredDocumentLoading={technicalPlanViewLoading}
+                structuredDocument={
+                  technicalPlanViewActive
+                    ? 'technical-plan'
+                    : requirementDocViewActive
+                      ? 'requirement-doc'
+                      : undefined
+                }
+                structuredDocumentLoading={
+                  technicalPlanViewActive ? technicalPlanViewLoading : false
+                }
                 title={designDocTitle}
               />
             ) : (

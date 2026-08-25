@@ -1,0 +1,521 @@
+.@{class-prefix}-requirement-doc-panel {
+  // 需求文档可视化面板的局部语义色：让章节、操作类型与状态要求有清晰的颜色分层。
+  --req-blue: #2563eb;
+  --req-blue-soft: rgba(37, 99, 235, 0.09);
+  --req-blue-border: rgba(37, 99, 235, 0.3);
+  --req-green: #1a7f37;
+  --req-green-soft: rgba(26, 127, 55, 0.1);
+  --req-green-border: rgba(26, 127, 55, 0.3);
+  --req-orange: #b45309;
+  --req-orange-soft: rgba(180, 83, 9, 0.1);
+  --req-orange-border: rgba(180, 83, 9, 0.32);
+  --req-cyan: #0e7490;
+  --req-cyan-soft: rgba(14, 116, 144, 0.1);
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+  color: var(--wb-text);
+  font-size: 12px;
+  container-type: inline-size;
+}
+
+.@{class-prefix}-requirement-doc-section-tabs {
+  position: sticky;
+  top: -16px;
+  z-index: 3;
+  display: flex;
+  align-items: stretch;
+  gap: 40px;
+  min-width: 0;
+  margin: -16px -18px 0;
+  padding: 16px 18px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--wb-border);
+  background: var(--wb-canvas);
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.@{class-prefix}-requirement-doc-section-tab {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 0 2px 10px;
+  border: 0;
+  color: var(--wb-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  transition: color 0.18s ease;
+
+  &::after {
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: transparent;
+    content: '';
+    transition:
+      background 0.18s ease,
+      box-shadow 0.18s ease;
+  }
+
+  &:hover,
+  &.@{class-prefix}-is-active {
+    color: var(--wb-accent);
+  }
+
+  &.@{class-prefix}-is-active {
+    font-weight: 600;
+  }
+
+  &.@{class-prefix}-is-active::after {
+    background: var(--wb-accent);
+    box-shadow: 0 -1px 5px color-mix(in srgb, var(--wb-accent) 24%, transparent);
+  }
+
+  &:focus-visible {
+    border-radius: 3px;
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: -2px;
+  }
+}
+
+.@{class-prefix}-requirement-doc-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.@{class-prefix}-requirement-doc-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--wb-text);
+  font-size: 12px;
+  font-weight: 600;
+
+  .anticon {
+    color: var(--wb-accent);
+    font-size: 13px;
+  }
+
+  &.@{class-prefix}-is-pages .anticon {
+    color: var(--req-blue);
+  }
+
+  &.@{class-prefix}-is-entities .anticon {
+    color: var(--req-green);
+  }
+
+  &.@{class-prefix}-is-flows .anticon {
+    color: var(--req-orange);
+  }
+}
+
+.@{class-prefix}-requirement-doc-section-count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.@{class-prefix}-requirement-doc-card-list,
+.@{class-prefix}-requirement-doc-page-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.@{class-prefix}-requirement-doc-app-card,
+.@{class-prefix}-requirement-doc-card,
+.@{class-prefix}-requirement-doc-page-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.@{class-prefix}-requirement-doc-page-card:hover,
+.@{class-prefix}-requirement-doc-card:hover {
+  border-color: var(--wb-accent-border);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+
+.@{class-prefix}-requirement-doc-app-card {
+  > strong {
+    color: var(--wb-text);
+    font-size: 13px;
+  }
+}
+
+.@{class-prefix}-requirement-doc-app-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.@{class-prefix}-requirement-doc-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+
+  > strong {
+    color: var(--wb-text);
+    font-size: 12px;
+  }
+
+  > code {
+    overflow: hidden;
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > span {
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-requirement-doc-priority {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  font-size: 10px;
+  font-style: normal;
+
+  &.@{class-prefix}-is-should {
+    color: var(--req-blue);
+    background: var(--req-blue-soft);
+  }
+
+  &.@{class-prefix}-is-could {
+    color: var(--wb-text-secondary);
+    background: var(--wb-control);
+  }
+
+  &.@{class-prefix}-is-wont {
+    color: var(--wb-text-tertiary);
+    background: var(--wb-surface);
+  }
+}
+
+.@{class-prefix}-requirement-doc-page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+
+  > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  > div > strong {
+    color: var(--wb-text);
+    font-size: 13px;
+  }
+
+  > div > code {
+    overflow: hidden;
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > span {
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-requirement-doc-page-goal {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--wb-accent);
+  border-radius: 0 6px 6px 0;
+  color: var(--wb-text);
+  background: linear-gradient(
+    to right,
+    var(--wb-accent-soft),
+    color-mix(in srgb, var(--wb-accent-soft) 40%, transparent)
+  );
+  font-size: 11px;
+
+  > span {
+    color: var(--wb-accent);
+    font-size: 10px;
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-requirement-doc-page-block {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+
+  > ul {
+    display: grid;
+    gap: 5px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    > li {
+      display: grid;
+      gap: 1px;
+      min-width: 0;
+
+      > strong {
+        color: var(--wb-text);
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      > span {
+        color: var(--wb-text-secondary);
+        font-size: 11px;
+      }
+    }
+  }
+}
+
+.@{class-prefix}-requirement-doc-state-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+
+  &::before {
+    flex: 0 0 auto;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--wb-text-tertiary);
+    content: '';
+  }
+
+  &.@{class-prefix}-is-loading::before {
+    background: var(--req-blue);
+  }
+
+  &.@{class-prefix}-is-empty::before {
+    background: var(--wb-text-tertiary);
+  }
+
+  &.@{class-prefix}-is-error::before {
+    background: var(--wb-danger);
+  }
+
+  &.@{class-prefix}-is-success::before {
+    background: var(--req-green);
+  }
+
+  &.@{class-prefix}-is-validation::before {
+    background: var(--wb-warning);
+  }
+
+  &.@{class-prefix}-is-disabled::before {
+    background: var(--wb-border-strong);
+  }
+}
+
+.@{class-prefix}-requirement-doc-page-block-title {
+  color: var(--wb-text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.@{class-prefix}-requirement-doc-action-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.@{class-prefix}-requirement-doc-action {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-requirement-doc-action-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+
+  > strong {
+    color: var(--wb-text);
+    font-size: 11px;
+  }
+
+  > em {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border-radius: 999px;
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface);
+    font-size: 10px;
+    font-style: normal;
+  }
+
+  > em.@{class-prefix}-is-navigation {
+    color: var(--req-blue);
+    background: var(--req-blue-soft);
+  }
+
+  > em.@{class-prefix}-is-submit {
+    color: var(--req-green);
+    background: var(--req-green-soft);
+  }
+
+  > em.@{class-prefix}-is-mutation {
+    color: var(--req-orange);
+    background: var(--req-orange-soft);
+  }
+}
+
+.@{class-prefix}-requirement-doc-action-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+
+  > .anticon {
+    margin-top: 2px;
+    color: var(--wb-accent);
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-requirement-doc-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+
+  .ant-tag {
+    margin-inline-end: 0;
+    border-color: var(--req-blue-border);
+    color: var(--req-blue);
+    background: var(--req-blue-soft);
+  }
+}
+
+.@{class-prefix}-requirement-doc-acceptance {
+  gap: 4px;
+
+  > li {
+    position: relative;
+    padding-left: 12px;
+    color: var(--wb-text-secondary);
+    font-size: 11px;
+
+    &::before {
+      position: absolute;
+      top: 6px;
+      left: 0;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--req-green);
+      content: '';
+    }
+  }
+}
+
+.@{class-prefix}-requirement-doc-field-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px dashed var(--wb-border);
+  list-style: none;
+
+  > li {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+
+    > strong {
+      color: var(--wb-text);
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    > span {
+      color: var(--wb-text-secondary);
+      font-size: 11px;
+    }
+  }
+}
+
+.@{class-prefix}-requirement-doc-flow-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 0 0 20px;
+  border-top: 1px dashed var(--wb-border);
+
+  > li {
+    color: var(--wb-text-secondary);
+    font-size: 11px;
+    line-height: 1.55;
+
+    &::marker {
+      color: var(--wb-accent);
+      font-weight: 600;
+    }
+  }
+}
+
+// 暗色主题下提高局部语义色的亮度与底纹透明度，保证分层在深色底上仍然清楚。
+.@{class-prefix}-workbench-shell[data-theme='dark'] .@{class-prefix}-requirement-doc-panel {
+  --req-blue: #6ea8fe;
+  --req-blue-soft: rgba(110, 168, 254, 0.16);
+  --req-blue-border: rgba(110, 168, 254, 0.4);
+  --req-green: #4ac26b;
+  --req-green-soft: rgba(74, 194, 107, 0.16);
+  --req-green-border: rgba(74, 194, 107, 0.4);
+  --req-orange: #e8a13d;
+  --req-orange-soft: rgba(232, 161, 61, 0.16);
+  --req-orange-border: rgba(232, 161, 61, 0.42);
+  --req-cyan: #39c5cf;
+  --req-cyan-soft: rgba(57, 197, 207, 0.16);
+}

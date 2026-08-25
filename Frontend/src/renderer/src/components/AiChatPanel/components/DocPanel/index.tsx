@@ -4,6 +4,7 @@ import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import RichLoading from '../DesignProgress/RichLoading'
+import RequirementDocPanel from './RequirementDocPanel'
 import TechnicalPlanDocPanel from './TechnicalPlanDocPanel'
 import './index.less'
 
@@ -15,30 +16,40 @@ function technicalPlanStatusLabel(plan?: Record<string, unknown>): string {
   return status === 'confirmed' ? '已确认' : status === 'pending_user_confirmation' ? '待确认' : '草稿'
 }
 
+/** 将 RequirementSpec 的确认状态转换为顶部工具栏中的可读标签。 */
+function requirementStatusLabel(spec?: Record<string, unknown>): string {
+  const status = spec?.confirmation_status
+  return status === 'confirmed' ? '已确认' : status === 'pending_user_confirmation' ? '待确认' : '草稿'
+}
+
 type Props = {
   content?: string
   title?: string
   generating?: boolean
   docName?: string
   productPlan?: Record<string, unknown>
+  requirementSpec?: Record<string, unknown>
   technicalPlan?: Record<string, unknown>
-  structuredDocument?: 'technical-plan'
+  structuredDocument?: 'requirement-doc' | 'technical-plan'
   structuredDocumentLoading?: boolean
 }
 
-/** 右侧产物面板：普通文档只读展示 Markdown，TechnicalPlan 使用结构化审核视图。 */
+/** 右侧产物面板：需求文档与技术规划使用结构化审核视图，其余文档只读展示 Markdown。 */
 export default function DocPanel({
   content,
   title,
   generating,
   docName,
   productPlan,
+  requirementSpec,
   technicalPlan,
   structuredDocument,
   structuredDocumentLoading
 }: Props): ReactElement {
   const isTechnicalPlan = structuredDocument === 'technical-plan'
-  const ready = Boolean(content || technicalPlan || isTechnicalPlan)
+  const isRequirementDoc = structuredDocument === 'requirement-doc'
+  const requirementReady = isRequirementDoc && Boolean(requirementSpec && Object.keys(requirementSpec).length)
+  const ready = Boolean(content || technicalPlan || isTechnicalPlan || requirementReady)
 
   return (
     <div className={cx('doc-panel')}>
@@ -56,6 +67,19 @@ export default function DocPanel({
               </Tag>
             ) : null}
           </div>
+        ) : isRequirementDoc ? (
+          <div className={cx('doc-panel-path', 'doc-panel-technical-path')}>
+            <FileTextOutlined aria-hidden="true" />
+            <span>
+              <strong>需求文档</strong>
+              <small>{title?.split('/').pop() || 'requirement-spec.json'}</small>
+            </span>
+            {requirementSpec ? (
+              <Tag className={cx('doc-panel-technical-status')}>
+                {requirementStatusLabel(requirementSpec)}
+              </Tag>
+            ) : null}
+          </div>
         ) : (
           <div className={cx('doc-panel-path')}>{title || '文档'}</div>
         )}
@@ -69,12 +93,12 @@ export default function DocPanel({
           <div
             className={cx(
               'doc-panel-viewer',
-              isTechnicalPlan ? 'doc-panel-structured' : 'doc-panel-markdown'
+              isTechnicalPlan || requirementReady ? 'doc-panel-structured' : 'doc-panel-markdown'
             )}
           >
             {structuredDocumentLoading ? (
               <div className={cx('doc-panel-generating')}>
-                <RichLoading bare title="正在读取技术规划…" />
+                <RichLoading bare title="正在读取结构化文档…" />
               </div>
             ) : isTechnicalPlan ? (
               technicalPlan && productPlan ? (
@@ -85,6 +109,8 @@ export default function DocPanel({
                   <Text type="secondary">未读取到 ProductPlan 或 TechnicalPlan 结构化数据</Text>
                 </div>
               )
+            ) : requirementReady ? (
+              <RequirementDocPanel productPlan={productPlan || {}} spec={requirementSpec || {}} />
             ) : (
               <MarkdownContent content={content ?? ''} />
             )}
