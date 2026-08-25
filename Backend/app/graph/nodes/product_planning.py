@@ -13,6 +13,7 @@ from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.requirements import prepare_requirement_spec_confirmation
 from app.graph.state import ProjectState
 from app.services.data_source_policy import datasource_type_from_artifact
+from app.services.model_transport_retry import run_with_transport_retry
 from app.services.product_plan import (
     PRODUCT_PLAN_SCHEMA_VERSION,
     authorization_operation_action_coverage,
@@ -171,11 +172,14 @@ def _generate_valid_product_plan(
     last_coverage: list[dict[str, Any]] = []
     for attempt in range(1, _PRODUCT_PLAN_GENERATION_ATTEMPTS + 1):
         try:
-            candidate = plan_product_with_chat_model(
-                requirement_spec,
-                existing_plan=retry_base,
-                user_feedback=retry_feedback,
-                on_token=_product_planning_token,
+            candidate = run_with_transport_retry(
+                lambda: plan_product_with_chat_model(
+                    requirement_spec,
+                    existing_plan=retry_base,
+                    user_feedback=retry_feedback,
+                    on_token=_product_planning_token,
+                ),
+                operation_name="产品规划模型调用",
             )
             last_coverage = authorization_operation_action_coverage(
                 requirement_spec,

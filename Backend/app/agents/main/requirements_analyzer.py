@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from copy import deepcopy
 from typing import Any, Callable
@@ -11,6 +12,7 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.data_source_policy import DatasourceType
+from app.services.model_transport_retry import run_with_transport_retry
 from app.services.requirement_spec import (
     _authorization_enabled_from_request,
     create_requirement_spec,
@@ -19,8 +21,12 @@ from app.tools.ask_user import (
     ask_user,
     extract_ask_user_clarification,
 )
-from app.utils.model_output import extract_json_object
+from app.utils.model_output import (
+    extract_json_object,
+    repair_unescaped_json_string_quotes,
+)
 
+logger = logging.getLogger("uvicorn.error")
 
 MAX_REQUIREMENT_CLARIFICATION_ROUNDS = 3
 MIN_REQUIREMENT_CLARIFICATION_QUESTIONS = 5
@@ -363,49 +369,54 @@ def _invoke_live_chat_model(
     """调用绑定澄清工具的需求模型，可选流式吐词。"""
 
     active_settings = settings or Settings.from_env()
-    runnable = create_chat_model(active_settings).bind_tools([ask_user])
-    if on_token is None:
-        result = runnable.invoke(
+
+    def _call_once() -> dict[str, Any]:
+        # 每次重试必须重建 runnable 与流式迭代器：已中断的流不能续读。
+        runnable = create_chat_model(active_settings).bind_tools([ask_user])
+        if on_token is None:
+            result = runnable.invoke(
+                _requirements_prompt(
+                    request,
+                    existing_spec,
+                    datasource_type,
+                    clarification_round,
+                )
+            )
+            return {"messages": [result]}
+
+        accumulated_text = ""
+        merged_chunk: AIMessageChunk | None = None
+        for chunk in runnable.stream(
             _requirements_prompt(
                 request,
                 existing_spec,
                 datasource_type,
                 clarification_round,
             )
+        ):
+            if isinstance(chunk, AIMessageChunk):
+                # glm-5.2 流式 chunk.content 是 content block 列表（如
+                # [{"text": "...", "type": "text", "index": 0}]），不是纯字符串。
+                # 用 _coerce_content_text 提取 text block，否则 accumulated_text 永远为空，
+                # 导致最终 agent_note 为空、spec 解析失败、应用名与页面退回固定 fallback。
+                token = _coerce_content_text(chunk.content)
+                if token:
+                    accumulated_text += token
+                    on_token(token)
+                merged_chunk = chunk if merged_chunk is None else merged_chunk + chunk
+        if merged_chunk is None:
+            return {"messages": []}
+        final_tool_calls = getattr(merged_chunk, "tool_calls", None) or []
+        final = AIMessage(
+            content=accumulated_text,
+            tool_calls=final_tool_calls
+            if hasattr(merged_chunk, "tool_calls")
+            else None,
+            id=merged_chunk.id if hasattr(merged_chunk, "id") else None,
         )
-        return {"messages": [result]}
+        return {"messages": [final]}
 
-    accumulated_text = ""
-    merged_chunk: AIMessageChunk | None = None
-    for chunk in runnable.stream(
-        _requirements_prompt(
-            request,
-            existing_spec,
-            datasource_type,
-            clarification_round,
-        )
-    ):
-        if isinstance(chunk, AIMessageChunk):
-            # glm-5.2 流式 chunk.content 是 content block 列表（如
-            # [{"text": "...", "type": "text", "index": 0}]），不是纯字符串。
-            # 用 _coerce_content_text 提取 text block，否则 accumulated_text 永远为空，
-            # 导致最终 agent_note 为空、spec 解析失败、应用名与页面退回固定 fallback。
-            token = _coerce_content_text(chunk.content)
-            if token:
-                accumulated_text += token
-                on_token(token)
-            merged_chunk = chunk if merged_chunk is None else merged_chunk + chunk
-    if merged_chunk is None:
-        return {"messages": []}
-    final_tool_calls = getattr(merged_chunk, "tool_calls", None) or []
-    final = AIMessage(
-        content=accumulated_text,
-        tool_calls=final_tool_calls
-        if hasattr(merged_chunk, "tool_calls")
-        else None,
-        id=merged_chunk.id if hasattr(merged_chunk, "id") else None,
-    )
-    return {"messages": [final]}
+    return run_with_transport_retry(_call_once, operation_name="需求分析模型调用")
 
 
 def analyze_requirements_with_chat_model(
@@ -419,6 +430,51 @@ def analyze_requirements_with_chat_model(
     """直接调用需求模型生成 RequirementSpec，并在关键需求不足时请求澄清。"""
 
     settings = Settings.from_env()
+
+    def _analyze_once() -> dict[str, Any]:
+        return _analyze_requirements_once(
+            request,
+            existing_spec=existing_spec,
+            datasource_type=datasource_type,
+            clarification_round=clarification_round,
+            settings=settings,
+            on_token=on_token,
+        )
+
+    try:
+        return _analyze_once()
+    except ValueError as exc:
+        # 模型输出的 JSON 结构损坏（引号未转义等）属于内容抖动：
+        # 恢复层修不好时重新调用一次，新输出大概率自愈，避免直接打断 workflow。
+        if not _is_malformed_spec_json_error(exc):
+            raise
+        logger.warning(
+            "requirement_spec_content_retry: 模型返回的需求 JSON 不完整，重试一次：%s",
+            exc,
+        )
+        return _analyze_once()
+
+
+def _is_malformed_spec_json_error(exc: ValueError) -> bool:
+    """是否为"模型返回的需求 JSON 损坏/不完整"类错误（可安全重试模型调用）。"""
+
+    message = str(exc)
+    return message.startswith("需求 AI 未返回完整") or message.startswith(
+        "需求 AI 返回的新 RequirementSpec 缺少完整字段"
+    )
+
+
+def _analyze_requirements_once(
+    request: str,
+    *,
+    existing_spec: dict[str, Any] | None,
+    datasource_type: DatasourceType,
+    clarification_round: int,
+    settings: Settings,
+    on_token: Callable[[str], None] | None,
+) -> dict[str, Any]:
+    """单次需求分析：调用模型、解析 RequirementSpec、合并澄清上下文。"""
+
     agent_result = _invoke_live_chat_model(
         request,
         existing_spec=existing_spec,
@@ -436,6 +492,8 @@ def analyze_requirements_with_chat_model(
     asks_for_clarification = any(
         getattr(message, "tool_calls", None) for message in messages
     )
+    if not asks_for_clarification:
+        agent_spec = _recover_requirement_spec_json(agent_note, agent_spec)
     if not asks_for_clarification and not isinstance(agent_spec, dict):
         # 需求已被判定为清晰时必须有完整 JSON，不能退回固定页面模板继续向下游传播。
         raise ValueError("需求 AI 未返回完整 RequirementSpec JSON。")
@@ -537,6 +595,45 @@ def _authorization_config_conflict_from_agent_spec(
         "requested": True,
         "evidence": evidence_items[:8],
     }
+
+
+_REQUIREMENT_SPEC_CONTRACT_MARKERS = ('"app_info"', '"user_roles"', '"feature_modules"')
+
+
+def _requirement_spec_fields_missing(agent_spec: Any) -> bool:
+    """提取结果是否缺 RequirementSpec 顶层字段（嵌套子对象被误当整体的特征）。"""
+
+    if not isinstance(agent_spec, dict):
+        return True
+    return any(
+        field not in agent_spec
+        for field in ("app_info", "user_roles", "feature_modules", "pages")
+    )
+
+
+def _recover_requirement_spec_json(
+    agent_note: str, agent_spec: Any
+) -> Any:
+    """模型 JSON 引号损坏时的受控恢复：修复后重解析，仅在能拿到完整顶层字段时采用。
+
+    与 build_result_coordinator 的恢复模式一致：只在文本里存在契约标记时尝试，
+    避免把无关文本误修复成看似合法的内容。
+    """
+
+    if not _requirement_spec_fields_missing(agent_spec):
+        return agent_spec
+    if not any(marker in agent_note for marker in _REQUIREMENT_SPEC_CONTRACT_MARKERS):
+        return agent_spec
+    repaired_note = repair_unescaped_json_string_quotes(agent_note)
+    if repaired_note == agent_note:
+        return agent_spec
+    repaired_spec = extract_json_object(repaired_note)
+    if _requirement_spec_fields_missing(repaired_spec):
+        return agent_spec
+    logger.warning(
+        "requirement_spec_json_recovered: 模型输出经引号修复后解析出完整 RequirementSpec"
+    )
+    return repaired_spec
 
 
 def _validate_complete_requirement_spec(

@@ -48,7 +48,11 @@ export function requirementPageRows(
     const pageId = textValue(page.pageId, `page-${index + 1}`)
     if (pageId) specPageMap.set(pageId, page)
   })
-  return recordItems(productPlan.pages).map((page, index) => {
+  // 需求草稿阶段（澄清中/待确认）还没有 ProductPlan：退回用 spec 的页面清单渲染，
+  // 避免结构化视图在只有需求数据时显示 0 个页面。
+  const planPages = recordItems(productPlan.pages)
+  const sourcePages = planPages.length ? planPages : requirementPages
+  return sourcePages.map((page, index) => {
     const pageId = textValue(page.pageId, `page-${index + 1}`)
     const specPage = specPageMap.get(pageId) || {}
     const informationItems = recordItems(page.information_items).map((item, itemIndex) => ({

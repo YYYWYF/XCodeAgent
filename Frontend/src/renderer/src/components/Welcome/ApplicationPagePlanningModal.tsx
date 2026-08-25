@@ -201,6 +201,18 @@ function planningInterrupt(workflow: WorkflowRunPayload): Record<string, unknown
   throw new Error('当前规划确认卡缺少可恢复的服务端中断，请刷新后重试。')
 }
 
+const MISSING_INTERRUPT_ERROR = '当前规划确认卡缺少可恢复的服务端中断，请刷新后重试。'
+
+/** 判断快照是否带有可恢复的服务端审阅中断。导出供提交路径自检测试。 */
+export function hasPlanningInterrupt(workflow: WorkflowRunPayload): boolean {
+  try {
+    planningInterrupt(workflow)
+    return true
+  } catch {
+    return false
+  }
+}
+
 // 把确认卡操作转换为类型化 resume 信封，禁止由服务端猜测用户正在回答哪张卡。
 function buildPlanningInteraction(
   workflow: WorkflowRunPayload,
@@ -643,6 +655,49 @@ export default function ApplicationPagePlanningModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialLifecycle.initialization.stage, originalRequest])
 
+  // 提交前确保快照带有可恢复中断：卡片快照在流式时序窗口里可能丢掉中断投影
+  // （同 runId 的中间帧覆盖 finished 帧），此时静默重读后端 checkpoint 投影，
+  // 用最新快照构建提交，避免对用户报出本可自愈的错误。
+  // 恢复请求本身偶发失败（网络抖动/后端繁忙）时自动重试一次，并把恢复失败
+  // 与"确认卡真的没有可恢复中断"区分开，不再混报。
+  const loadSubmittablePlanningWorkflow = async (
+    currentWorkflow: WorkflowRunPayload
+  ): Promise<WorkflowRunPayload> => {
+    if (hasPlanningInterrupt(currentWorkflow)) return currentWorkflow
+    if (!application.workspaceRoot) throw new Error(MISSING_INTERRUPT_ERROR)
+    const recovered = await fetchRecoveryWorkflowWithRetry()
+    if (!hasPlanningInterrupt(recovered)) {
+      throw new Error(MISSING_INTERRUPT_ERROR)
+    }
+    return recovered
+  }
+
+  const fetchRecoveryWorkflowWithRetry = async (): Promise<WorkflowRunPayload> => {
+    let lastError: unknown
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result = await session.sendMessage('读取待确认的应用规划状态。', {
+          application,
+          applicationPlanningRecovery: {
+            action: 'get',
+            workspaceRoot: application.workspaceRoot || '',
+            applicationId: application.id
+          },
+          editorMode: 'frontend',
+          workflowScope: 'application_planning',
+          workspaceRoot: application.workspaceRoot || ''
+        })
+        if (result.workflow) return result.workflow
+        lastError = new Error('恢复响应缺少规划快照')
+      } catch (reason) {
+        lastError = reason
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('读取待确认规划状态失败，请重试。')
+  }
+
   // 提交当前确认卡答案，并用服务端中断标识精确恢复同一个审阅门。
   const handleSubmitClarification = (
     currentWorkflow: WorkflowRunPayload,
@@ -650,17 +705,20 @@ export default function ApplicationPagePlanningModal({
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
   ): void => {
-    try {
-      const interaction = buildPlanningInteraction(
-        currentWorkflow,
-        answers,
-        editedRequirementSpec,
-        requirementSpecFeedback
-      )
-      void runPlanning('请根据本轮确认继续创建规划。', interaction)
-    } catch (reason) {
-      setError(formatError(reason, '创建规划确认失败'))
-    }
+    void (async () => {
+      try {
+        const submittable = await loadSubmittablePlanningWorkflow(currentWorkflow)
+        const interaction = buildPlanningInteraction(
+          submittable,
+          answers,
+          editedRequirementSpec,
+          requirementSpecFeedback
+        )
+        void runPlanning('请根据本轮确认继续创建规划。', interaction)
+      } catch (reason) {
+        setError(formatError(reason, '创建规划确认失败'))
+      }
+    })()
   }
 
   // 把提交确认的能力注册给 AppEntryPage，供工作台中间区的 ApplicationPlanningQuestionPanel
@@ -675,18 +733,21 @@ export default function ApplicationPagePlanningModal({
         designChangeRequest?: string
       ) => {
         if (designChangeRequest) {
-          try {
-            const interaction = buildPlanningInteraction(
-              workflow,
-              answers,
-              undefined,
-              undefined,
-              designChangeRequest
-            )
-            void runPlanning(designChangeRequest, interaction)
-          } catch (reason) {
-            setError(formatError(reason, '设计变更提交失败'))
-          }
+          void (async () => {
+            try {
+              const submittable = await loadSubmittablePlanningWorkflow(workflow)
+              const interaction = buildPlanningInteraction(
+                submittable,
+                answers,
+                undefined,
+                undefined,
+                designChangeRequest
+              )
+              void runPlanning(designChangeRequest, interaction)
+            } catch (reason) {
+              setError(formatError(reason, '设计变更提交失败'))
+            }
+          })()
           return
         }
         handleSubmitClarification(workflow, answers, editedRequirementSpec, requirementSpecFeedback)
