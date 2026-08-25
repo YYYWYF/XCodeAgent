@@ -945,6 +945,72 @@ class WorkflowRequestTests(unittest.TestCase):
             submission,
         )
 
+    def test_extracts_entity_table_selection_action_with_resume_state(self) -> None:
+        """AI 智能选表请求应同时恢复实体节点、结构化动作和交互令牌。"""
+
+        action = {
+            "action": "ai_assist",
+            "entity_id": "entity_category",
+            "assist_type": "table_selection",
+            "context": {
+                "fields": [{"name": "id", "type": "text", "required": True}],
+                "available_tables": [{"name": "category", "comment": "商品分类"}],
+            },
+        }
+        inputs = workflow_run_inputs(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "已请求 AI 辅助，请查看表单内的建议并采纳。",
+                    }
+                ],
+                "forwardedProps": {
+                    "clarificationAnswers": {"entity_design": action},
+                    "selectedEntityId": "entity_category",
+                    "detailTargetType": "entity",
+                    "resumeState": {
+                        "runId": "run-entity-binding",
+                        "state": {
+                            "selected_entity_id": "entity_category",
+                            "pending_project_plan": {
+                                "confirmation_status": "pending_user_confirmation"
+                            },
+                            "lifecycle": {
+                                "activeExecutions": {
+                                    "run-entity-binding": {
+                                        "pendingInteraction": {
+                                            "id": "interaction-entity-binding",
+                                            "basedOnRevision": 8,
+                                        }
+                                    }
+                                }
+                            },
+                        },
+                        "summary": {
+                            "phase": "entity_source_binding",
+                            "status": "requires_user_input",
+                        },
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "entity_source_binding")
+        self.assertEqual(inputs["resume_values"]["entity_design_action"], action)
+        self.assertEqual(
+            inputs["resume_values"]["selected_entity_id"],
+            "entity_category",
+        )
+        self.assertEqual(
+            inputs["resume_values"]["lifecycle_interaction_submission"],
+            {
+                "id": "interaction-entity-binding",
+                "basedOnRevision": 8,
+                "runId": "run-entity-binding",
+            },
+        )
+
     def test_project_planning_resume_preserves_plan_state(self) -> None:
         inputs = workflow_run_inputs(
             {

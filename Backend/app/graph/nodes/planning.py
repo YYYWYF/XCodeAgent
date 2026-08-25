@@ -529,7 +529,14 @@ def _entity_source_binding_implementation(state: ProjectState) -> dict:
                 "overall_note": "实体数据源绑定单卡片确认",
             }
 
-    if isinstance(pending_plan, dict) and isinstance(submission, dict):
+    # 节点每轮会用空对象清理确认状态；只有显式 confirmed 提交才能进入确认分支，
+    # 否则 AI、DDL 等后续实体设计动作会被旧的空状态提前截断。
+    has_confirmed_submission = (
+        isinstance(submission, dict)
+        and bool(submission)
+        and str(submission.get("review_status") or "") == "confirmed"
+    )
+    if isinstance(pending_plan, dict) and has_confirmed_submission:
         entity_errors = _pending_entity_design_validation_errors(
             pending_plan,
             selected_entity_id,
