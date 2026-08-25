@@ -30,3 +30,14 @@ Each task owns only its layer's files and passes its exact produced paths, class
 and contracts to the next task. Use Java 8 syntax and APIs only. Do not add tests,
 build commands, or verification tasks to the generated task plan; the outer workflow
 owns verification.
+
+Write every backend task `description` as a Simplified Chinese ordered execution list
+using `1. ...`, `2. ...`, and so on. Name the exact target paths and layer responsibility.
+During planning, classify every target against `WorkspaceSnapshot.backend.existing_files`.
+Use `modify` for a listed path and make the ordered list directly require reading it and
+comparing its behavior with the complete confirmed requirements. Use `add` for an absent
+path and directly require creating it from the confirmed contract. Do not defer this first
+existence decision to execution. Leave an existing target unchanged when it already satisfies
+the task, and make only the minimum additions or corrections when it partially satisfies the
+task. Execution checks the live path only to detect changes after the WorkspaceSnapshot;
+return `already_satisfied` with evidence when the entire task requires no write.

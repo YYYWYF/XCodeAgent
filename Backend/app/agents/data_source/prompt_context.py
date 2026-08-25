@@ -14,6 +14,8 @@ _SOURCE_SKILL_NAMES = {
     "external_api": SPRINGBOOT_EXTERNAL_API_GENERATE_SKILL_NAME,
 }
 _SOURCE_SKILL_ORDER = ("database", "external_api")
+_BOOTSTRAP_UNIT_ID = "backend:bootstrap"
+_OUTER_VERIFICATION_POLICY = "outer_integration_test_only"
 
 
 def task_entity_designs(task: dict[str, Any]) -> list[dict[str, Any]]:
@@ -65,68 +67,94 @@ def task_required_skill_paths(task: dict[str, Any]) -> list[str]:
     ]
 
 
-def execution_task_packet(task: dict[str, Any]) -> dict[str, Any]:
-    """把 Build 任务裁剪为 DataSource Agent 可执行的最小任务包。"""
+def task_required_instruction_paths(task: dict[str, Any]) -> list[str]:
+    """展开任务必须读取的 Skill 入口与当前任务类型对应的条件参考文档。"""
 
-    packet = {
-        key: task[key]
-        for key in (
-            "id",
-            "unit_id",
-            "title",
-            "description",
-            "allowed_paths",
-            "target_files",
-            "change_scope",
+    paths = task_required_skill_paths(task)
+    database_skill_root = (
+        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
+        f"{SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME}/"
+    )
+    if any(path.startswith(database_skill_root) for path in paths):
+        reference_name = (
+            "references/bootstrap.md"
+            if _task_kind(task) == "bootstrap"
+            else "references/layer-implementation.md"
         )
-        if key in task
-    }
-    packet["source_refs"] = _compact_task_source_refs(task)
-    packet["required_skill_paths"] = task_required_skill_paths(task)
-    return packet
+        paths.append(f"{database_skill_root}{reference_name}")
+    return paths
 
 
-def data_source_execution_context(
+def execution_task_packet(
     project_plan: dict[str, Any],
-    tasks: list[dict[str, Any]],
+    task: dict[str, Any],
 ) -> dict[str, Any]:
-    """构造仅含当前 TechnicalPlan API 与完整实体数据源绑定的执行上下文。"""
+    """把 Build 任务和已确认设计编译为 Java Agent 可直接执行的最小任务包。"""
 
-    contract_ids, endpoint_ids, entity_ids = _task_scope_ids(tasks)
-    entity_designs = [
-        dict(detail)
-        for detail in _dict_items(project_plan.get("entity_detail_plans"))
-        if str(detail.get("entity_id") or "") in entity_ids
-        and str(detail.get("status") or "") == "confirmed"
-    ]
+    kind = _task_kind(task)
     return {
-        "api_contracts": _scoped_api_contracts(
+        **({"id": task["id"]} if "id" in task else {}),
+        **({"unit_id": task["unit_id"]} if "unit_id" in task else {}),
+        "kind": kind,
+        "allowed_paths": list(task.get("allowed_paths") or []),
+        "change_scope": [
+            dict(item)
+            for item in task.get("change_scope") or []
+            if isinstance(item, dict)
+        ],
+        "instruction_paths": task_required_instruction_paths(task),
+        "implementation_contract": task_implementation_contract(project_plan, task),
+    }
+
+
+def task_implementation_contract(
+    project_plan: dict[str, Any],
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    """按 bootstrap 或 endpoint 边界生成唯一且不混入全局计划的实现契约。"""
+
+    if _task_kind(task) == "bootstrap":
+        return {
+            "kind": "bootstrap",
+            "java_version": "8",
+            "build_system": "maven",
+            "framework": "spring_boot",
+            "persistence": "mybatis_plus",
+            "database": "mysql",
+            "configuration_policy": "reuse_existing_then_fill_missing",
+            "verification_policy": _OUTER_VERIFICATION_POLICY,
+        }
+
+    contract_ids, endpoint_ids, entity_ids = _task_scope_ids([task])
+    api_contracts = _scoped_api_contracts(
+        project_plan,
+        contract_ids,
+        endpoint_ids,
+        entity_ids,
+    )
+    return {
+        "kind": "endpoint",
+        "api_contract": api_contracts[0] if api_contracts else {},
+        "endpoint_detail": _scoped_endpoint_detail(
             project_plan,
             contract_ids,
             endpoint_ids,
-            entity_ids,
         ),
-        "entity_designs": entity_designs,
+        "entities": [
+            _implementation_entity_binding(detail)
+            for detail in _dict_items(project_plan.get("entity_detail_plans"))
+            if str(detail.get("entity_id") or "") in entity_ids
+            and str(detail.get("status") or "") == "confirmed"
+        ],
+        "language": {"java_version": "8"},
+        "verification_policy": _OUTER_VERIFICATION_POLICY,
     }
 
 
-def _compact_task_source_refs(task: dict[str, Any]) -> dict[str, Any]:
-    """投射执行任务所需的稳定标识，避免重复注入实体设计正文。"""
+def _task_kind(task: dict[str, Any]) -> str:
+    """根据稳定 Unit 标识区分基础设施任务与 Endpoint 实现任务。"""
 
-    value = task.get("source_refs")
-    source_refs = value if isinstance(value, dict) else {}
-    return {
-        key: source_refs[key]
-        for key in (
-            "type",
-            "target",
-            "technical_plan_endpoint",
-            "technical_plan_endpoints",
-            "endpoint_ids",
-            "entity_ids",
-        )
-        if key in source_refs
-    }
+    return "bootstrap" if str(task.get("unit_id") or "") == _BOOTSTRAP_UNIT_ID else "endpoint"
 
 
 def _task_scope_ids(tasks: list[dict[str, Any]]) -> tuple[set[str], set[str], set[str]]:
@@ -144,7 +172,11 @@ def _task_scope_ids(tasks: list[dict[str, Any]]) -> tuple[set[str], set[str], se
         if contract_id:
             contract_ids.add(contract_id)
         endpoint_ids.update(_string_items(source_refs.get("endpoint_ids")))
-        entity_ids.update(_string_items(source_refs.get("entity_ids")))
+        entity_ids.update(
+            str(design.get("entity_id") or "").strip()
+            for design in task_entity_designs(task)
+            if str(design.get("entity_id") or "").strip()
+        )
     return contract_ids, endpoint_ids, entity_ids
 
 
@@ -213,6 +245,50 @@ def _scoped_api_contracts(
             }
         )
     return result
+
+
+def _scoped_endpoint_detail(
+    project_plan: dict[str, Any],
+    contract_ids: set[str],
+    endpoint_ids: set[str],
+) -> dict[str, Any]:
+    """读取当前任务唯一的已确认 EndpointDetail 行为，不携带其他接口设计。"""
+
+    for detail in _dict_items(project_plan.get("endpoint_detail_plans")):
+        endpoint_id = str(detail.get("endpoint_id") or detail.get("id") or "").strip()
+        contract_id = str(detail.get("api_contract_id") or "").strip()
+        if endpoint_id not in endpoint_ids:
+            continue
+        if contract_ids and contract_id and contract_id not in contract_ids:
+            continue
+        if str(detail.get("status") or "") != "confirmed":
+            continue
+        return dict(detail)
+    return {}
+
+
+def _implementation_entity_binding(detail: dict[str, Any]) -> dict[str, Any]:
+    """把已确认实体设计裁剪为 Java 实现所需的字段与来源绑定。"""
+
+    source_type = str(detail.get("data_source_type") or "").strip()
+    source_key = {
+        "database": "database_design",
+        "external_api": "external_api_design",
+    }.get(source_type, "")
+    source_binding = detail.get(source_key) if source_key else {}
+    return {
+        "entity_id": detail.get("entity_id"),
+        "entity_name": detail.get("entity_name"),
+        "fields": [
+            dict(field)
+            for field in detail.get("fields") or []
+            if isinstance(field, dict)
+        ],
+        "source_type": source_type,
+        "source_binding": (
+            dict(source_binding) if isinstance(source_binding, dict) else {}
+        ),
+    }
 
 
 def _string_items(value: Any) -> list[str]:

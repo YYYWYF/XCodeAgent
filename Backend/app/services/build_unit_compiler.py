@@ -65,12 +65,13 @@ def _with_task_unit_metadata(
     unit = units.get(unit_id) if isinstance(units.get(unit_id), dict) else {}
     canonical_source_refs = _unit_source_refs(unit_id, unit, build_context)
     provided_source_refs = _dict_value(task.get("source_refs"))
+    provided_source_refs.pop("entity_ids", None)
     source_refs = {
         **canonical_source_refs,
         **provided_source_refs,
     }
     # entity_designs 是来源隔离的确定性输入，不能被模型返回的未过滤引用覆盖；
-    # endpoint 任务若声明了实体子集，则只暴露本任务真正实现的实体设计。
+    # endpoint 任务按固定任务 ID 推导实体子集，只暴露本任务真正实现的实体设计。
     if (
         unit_id.startswith("frontend:data:")
         or unit_id.startswith("backend:endpoint:")
@@ -79,31 +80,12 @@ def _with_task_unit_metadata(
         canonical_designs = _entity_design_items(
             canonical_source_refs.get("entity_designs")
         )
-        requested_entity_ids = _string_list(provided_source_refs.get("entity_ids"))
         canonical_entity_ids = [
             str(design.get("entity_id") or "")
             for design in canonical_designs
             if str(design.get("entity_id") or "")
         ]
-        if not requested_entity_ids and len(canonical_entity_ids) == 1:
-            requested_entity_ids = canonical_entity_ids
-        unknown_entity_ids = set(requested_entity_ids) - set(canonical_entity_ids)
-        if unknown_entity_ids:
-            raise ValueError(
-                f"Task {task.get('id') or '<unknown>'} references entities outside "
-                f"{unit_id}: {', '.join(sorted(unknown_entity_ids))}."
-            )
-        if (
-            unit_id.startswith("backend:endpoint:")
-            and canonical_entity_ids
-            and not requested_entity_ids
-        ):
-            raise ValueError(
-                f"Backend endpoint task {task.get('id') or '<unknown>'} must declare "
-                "source_refs.entity_ids."
-            )
-        selected_entity_ids = requested_entity_ids or canonical_entity_ids
-        source_refs["entity_ids"] = selected_entity_ids
+        selected_entity_ids = _task_entity_ids(task, unit_id, canonical_entity_ids)
         source_refs["entity_designs"] = [
             design
             for design in canonical_designs
@@ -121,6 +103,29 @@ def _with_task_unit_metadata(
         ),
     }
     return task_with_refs
+
+
+def _task_entity_ids(
+    task: dict[str, Any],
+    unit_id: str,
+    canonical_entity_ids: list[str],
+) -> list[str]:
+    """从固定任务 ID 推导后端任务的实体范围。"""
+
+    if not unit_id.startswith("backend:endpoint:") or not canonical_entity_ids:
+        return canonical_entity_ids
+    task_id = _text(task.get("id"))
+    prefix = f"{unit_id}::"
+    if task_id.startswith(prefix):
+        entity_id, separator, stage = task_id[len(prefix):].rpartition("::")
+        if separator and entity_id in canonical_entity_ids and stage:
+            return [entity_id]
+    if len(canonical_entity_ids) == 1:
+        return canonical_entity_ids
+    raise ValueError(
+        f"Backend endpoint task {task_id or '<unknown>'} must use fixed id "
+        f"{unit_id}::<entityId>::<stage> so its entity scope is unambiguous."
+    )
 
 
 def _apply_unit_task_dependencies(
@@ -259,7 +264,6 @@ def _unit_source_refs(
                 refs.get("page_implementation_contract")
             ),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_ids": _string_list(build_context.get("entity_ids")),
             "entity_designs": entity_designs,
         }
     if unit_id.startswith("frontend:data:"):
@@ -268,7 +272,6 @@ def _unit_source_refs(
             "type": "frontend_mock_contract",
             "target": target,
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_ids": _string_list(build_context.get("entity_ids")),
             "entity_designs": _filter_entity_designs_by_source(entity_designs, {"static"}),
         }
     if unit_id.startswith("backend:endpoint:"):
@@ -282,7 +285,6 @@ def _unit_source_refs(
                 _string_list(build_context.get("endpoint_ids")),
             ),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_ids": _string_list(build_context.get("entity_ids")),
             "entity_designs": _filter_entity_designs_by_source(
                 entity_designs,
                 {"database", "external_api"},
@@ -298,11 +300,6 @@ def _unit_source_refs(
             "type": "backend_bootstrap",
             "target": target,
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_ids": [
-                str(design.get("entity_id") or "")
-                for design in backend_designs
-                if str(design.get("entity_id") or "")
-            ],
             "entity_designs": backend_designs,
         }
     return {

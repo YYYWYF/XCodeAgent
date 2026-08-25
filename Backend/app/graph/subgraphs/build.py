@@ -61,6 +61,7 @@ from app.workspace.task_documents import (
     write_build_task_plan_json,
 )
 from app.workspace.task_documents import write_repair_task_plan_json
+from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
 Runner = Callable[..., list[dict[str, Any]]]
@@ -100,6 +101,18 @@ def _group_tasks_by_owner(tasks: list[dict[str, Any]]) -> dict[str, list[dict[st
     for task in tasks:
         groups.setdefault(str(task.get("owner") or ""), []).append(task)
     return groups
+
+
+def _workspace_snapshot_from_state(state: ProjectState) -> dict[str, Any]:
+    """为 backend owner 读取检查阶段生成的完整 WorkspaceSnapshot。"""
+
+    snapshot = state.get("workspace_snapshot")
+    if isinstance(snapshot, dict) and snapshot:
+        return snapshot
+    snapshot_path = state.get("workspace_snapshot_path")
+    if snapshot_path:
+        return load_workspace_snapshot_json(snapshot_path)
+    return {}
 
 
 def _runner_exception_results(
@@ -368,6 +381,11 @@ def _execute_owner_tasks(
                 tasks=owner_tasks,
                 workspace=workspace,
                 selected_skill_names=state.get("selected_skill_names"),
+                **(
+                    {"workspace_snapshot": _workspace_snapshot_from_state(state)}
+                    if owner == "backend"
+                    else {}
+                ),
                 **({"page_template": state.get("page_template")} if owner == "frontend" else {}),
                 **({"ui_designs": state.get("ui_designs")} if owner == "frontend" else {}),
                 **(

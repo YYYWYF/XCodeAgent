@@ -5,10 +5,8 @@ from typing import Any
 
 from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.planner import revise_project_plan_with_chat_model
-from app.agents.main.task_preparer import (
-    _planning_context_mode,
-    prepare_build_tasks_with_main_agent,
-)
+from app.agents.main.task_preparer import prepare_build_tasks_with_main_agent
+from app.agents.main.task_preparer_prompt import planning_context_mode
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
@@ -233,7 +231,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             **build_context,
             "planning_unit_ids": sorted(planning_unit_ids),
         }
-        planning_build_context["planning_context_mode"] = _planning_context_mode(
+        planning_build_context["planning_context_mode"] = planning_context_mode(
             planning_build_context
         )
         prepared_plan = prepare_build_tasks_with_main_agent(
@@ -1080,7 +1078,7 @@ def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> di
 def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> dict:
     """按本轮规划模式构造最小任务拆分视图。"""
 
-    mode = _planning_context_mode(build_context)
+    mode = planning_context_mode(build_context)
     executable_details = _executable_details(project_plan, build_context)
     if mode == "endpoint":
         executable_details.pop("page_implementation_contracts", None)

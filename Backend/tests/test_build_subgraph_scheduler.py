@@ -7,7 +7,12 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from app.graph.subgraphs.build import _execute_ready_tasks, build, run_build_scheduler
+from app.graph.subgraphs.build import (
+    _execute_ready_tasks,
+    _workspace_snapshot_from_state,
+    build,
+    run_build_scheduler,
+)
 from app.services.build_task_planner import replace_build_task_plan_tasks
 from app.services.build_scheduler import attribute_task_file_changes
 
@@ -43,10 +48,31 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_backend_workspace_snapshot_loads_from_inspection_artifact(self) -> None:
+        """Build 应通过独立快照路径读取 WorkspaceSnapshot，而不是读取任务计划。"""
+
+        snapshot = {"high_value_files": [{"path": "backend/pom.xml"}]}
+        with tempfile.TemporaryDirectory() as workspace:
+            snapshot_path = os.path.join(workspace, "workspace-snapshot.json")
+            with open(snapshot_path, "w", encoding="utf-8") as handle:
+                json.dump(snapshot, handle)
+
+            loaded = _workspace_snapshot_from_state(
+                {
+                    "workspace_snapshot_path": snapshot_path,
+                    "build_task_plan": {
+                        "workspace_analysis": {"inspected_directories": ["wrong"]}
+                    },
+                }
+            )
+
+        self.assertEqual(loaded, snapshot)
+
     def test_backend_and_page_owners_execute_in_parallel_with_isolated_changes(self) -> None:
         """同批 backend/page 必须并发执行，并只认领各自授权文件。"""
 
         barrier = threading.Barrier(2)
+        runner_inputs: dict[str, dict] = {}
         tasks = [
             {
                 "id": "api",
@@ -65,6 +91,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         ]
 
         def complete_runner(**kwargs):
+            runner_inputs[str(kwargs["tasks"][0]["owner"])] = kwargs
             barrier.wait(timeout=3)
             for task in kwargs["tasks"]:
                 path = str(task["change_scope"][0]["path"])
@@ -94,6 +121,9 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": {"schema_version": "build-dag.v3"},
+                        "workspace_snapshot": {
+                            "high_value_files": [{"path": "backend/pom.xml"}]
+                        },
                     },
                     tasks,
                 )
@@ -104,6 +134,11 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual(results_by_id["api"]["changed_files"], ["Backend/app/api.py"])
         self.assertEqual(results_by_id["page"]["changed_files"], ["Frontend/src/Page.tsx"])
         self.assertEqual(len(change_sets), 2)
+        self.assertEqual(
+            runner_inputs["backend"]["workspace_snapshot"]["high_value_files"],
+            [{"path": "backend/pom.xml"}],
+        )
+        self.assertNotIn("workspace_snapshot", runner_inputs["frontend"])
 
     def test_file_changes_are_attributed_to_each_task_scope(self) -> None:
         """同 owner 批次的实际变更只能记到授权路径命中的任务。"""

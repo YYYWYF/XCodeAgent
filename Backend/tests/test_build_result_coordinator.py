@@ -28,7 +28,7 @@ class BuildResultCoordinatorTests(unittest.TestCase):
           ]
         }"""
 
-        results = create_agent_task_results(tasks, note)
+        results = create_agent_task_results(tasks, note, strict_schema=True)
 
         self.assertEqual([result["status"] for result in results], ["completed", "already_satisfied"])
         self.assertEqual(results[0]["agent_note"], "已写入页面")
@@ -36,6 +36,73 @@ class BuildResultCoordinatorTests(unittest.TestCase):
             results[1]["satisfaction_evidence"]["target_files"],
             ["frontend/src/constants/menus.ts"],
         )
+
+    def test_strict_schema_accepts_failed_change_request_contract(self) -> None:
+        """合同不匹配失败必须携带固定失败字段和非空变更请求。"""
+
+        results = create_agent_task_results(
+            [{"id": "backend", "owner": "backend"}],
+            """{
+              "task_results": [{
+                "task_id": "backend",
+                "status": "failed",
+                "summary": "接口合同缺少实现语义",
+                "failure_category": "contract_mismatch",
+                "failure_reason": "缺少冲突处理规则",
+                "change_request": {"reason": "请补充冲突处理规则"}
+              }]
+            }""",
+            require_structured=True,
+            strict_schema=True,
+        )
+
+        self.assertEqual(results[0]["status"], "failed")
+        self.assertEqual(results[0]["failure_category"], "contract_mismatch")
+        self.assertEqual(
+            results[0]["change_request"]["reason"],
+            "请补充冲突处理规则",
+        )
+
+    def test_strict_schema_rejects_duplicate_unknown_missing_and_extra_top_level(self) -> None:
+        """严格协议必须拒绝重复、未知、缺失任务以及额外顶层字段。"""
+
+        tasks = [
+            {"id": "first", "owner": "backend"},
+            {"id": "second", "owner": "backend"},
+        ]
+        notes = {
+            "duplicate": """{"task_results":[
+              {"task_id":"first","status":"completed","summary":"ok"},
+              {"task_id":"first","status":"completed","summary":"ok"}
+            ]}""",
+            "unknown": """{"task_results":[
+              {"task_id":"first","status":"completed","summary":"ok"},
+              {"task_id":"unknown","status":"completed","summary":"ok"}
+            ]}""",
+            "missing": """{"task_results":[
+              {"task_id":"first","status":"completed","summary":"ok"}
+            ]}""",
+            "extra_top_level": """{
+              "task_results":[
+                {"task_id":"first","status":"completed","summary":"ok"},
+                {"task_id":"second","status":"completed","summary":"ok"}
+              ],
+              "summary":"not allowed"
+            }""",
+        }
+
+        for case, note in notes.items():
+            with self.subTest(case=case):
+                results = create_agent_task_results(
+                    tasks,
+                    note,
+                    require_structured=True,
+                    strict_schema=True,
+                )
+                self.assertEqual(
+                    [result["failure_category"] for result in results],
+                    ["invalid_structured_response", "invalid_structured_response"],
+                )
 
     def test_invalid_structured_status_becomes_protocol_failure(self) -> None:
         """结构化状态不合法时必须显式失败，不能回退成 completed。"""

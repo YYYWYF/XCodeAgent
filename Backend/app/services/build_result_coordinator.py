@@ -11,6 +11,18 @@ from app.utils.model_output import (
 )
 
 
+_STRICT_REPORT_FIELDS = {
+    "task_id",
+    "status",
+    "summary",
+    "satisfaction_evidence",
+    "failure_category",
+    "failure_reason",
+    "change_request",
+}
+_CHANGE_REQUEST_FAILURES = {"contract_mismatch", "plan_mismatch"}
+
+
 def create_agent_task_result(
     task: dict[str, Any],
     agent_note: str,
@@ -41,10 +53,15 @@ def create_agent_task_results(
     executed_by: dict[str, Any] | None = None,
     *,
     require_structured: bool = False,
+    strict_schema: bool = False,
 ) -> list[dict[str, Any]]:
     """解析 Agent 的逐任务报告；严格模式拒绝缺失或损坏的结构化终态。"""
 
-    reports, is_structured, parse_error, recovered = _structured_task_reports(agent_note)
+    reports, is_structured, parse_error, recovered = _structured_task_reports(
+        agent_note,
+        expected_task_ids=[str(task.get("id") or "") for task in tasks],
+        strict_schema=strict_schema,
+    )
     structured_contract = is_structured or require_structured
     structured_error = parse_error or (
         "Agent did not return the required structured task_results JSON."
@@ -68,6 +85,9 @@ def create_agent_task_results(
 
 def _structured_task_reports(
     agent_note: str,
+    *,
+    expected_task_ids: list[str] | None = None,
+    strict_schema: bool = False,
 ) -> tuple[dict[str, dict[str, Any]], bool, str, bool]:
     """从最终 JSON 中提取以任务 ID 索引的结构化报告。"""
 
@@ -101,6 +121,14 @@ def _structured_task_reports(
     raw_reports = payload.get("task_results")
     if not isinstance(raw_reports, list):
         raw_reports = [payload] if payload.get("task_id") else []
+    if strict_schema:
+        schema_error = _strict_task_report_error(
+            payload,
+            raw_reports,
+            expected_task_ids or [],
+        )
+        if schema_error:
+            return {}, True, schema_error, recovered
     return (
         {
             str(report.get("task_id")): report
@@ -111,6 +139,81 @@ def _structured_task_reports(
         "",
         recovered,
     )
+
+
+def _strict_task_report_error(
+    payload: dict[str, Any],
+    raw_reports: list[Any],
+    expected_task_ids: list[str],
+) -> str:
+    """校验 Java Agent 的唯一顶层结构、任务集合和条件结果字段。"""
+
+    if set(payload) != {"task_results"} or not isinstance(payload.get("task_results"), list):
+        return "Agent task result must contain only the top-level task_results array."
+    if any(not isinstance(report, dict) for report in raw_reports):
+        return "Agent task_results must contain only JSON objects."
+
+    reports = [report for report in raw_reports if isinstance(report, dict)]
+    report_ids = [str(report.get("task_id") or "") for report in reports]
+    if any(not task_id for task_id in report_ids):
+        return "Agent task_results contains a result without task_id."
+    if len(report_ids) != len(set(report_ids)):
+        return "Agent task_results contains duplicate task_id values."
+
+    expected = set(expected_task_ids)
+    actual = set(report_ids)
+    unknown = sorted(actual - expected)
+    missing = sorted(expected - actual)
+    if unknown:
+        return f"Agent task_results contains unknown task_id values: {', '.join(unknown)}."
+    if missing:
+        return f"Agent task_results omitted task_id values: {', '.join(missing)}."
+
+    for report in reports:
+        task_id = str(report.get("task_id") or "")
+        extra_fields = sorted(set(report) - _STRICT_REPORT_FIELDS)
+        if extra_fields:
+            return (
+                f"Agent result {task_id} contains unsupported fields: "
+                f"{', '.join(extra_fields)}."
+            )
+        result_error = _strict_result_condition_error(report)
+        if result_error:
+            return f"Agent result {task_id} {result_error}"
+    return ""
+
+
+def _strict_result_condition_error(report: dict[str, Any]) -> str:
+    """按任务状态校验摘要、满足证据、失败原因和 change_request 条件。"""
+
+    status = str(report.get("status") or "").strip()
+    if status not in {"completed", "already_satisfied", "failed"}:
+        return f"has invalid status {report.get('status')!r}."
+    if not str(report.get("summary") or "").strip():
+        return "must include a non-empty summary."
+
+    failure_fields = {"failure_category", "failure_reason"}
+    if status != "failed" and any(field in report for field in failure_fields):
+        return "must not include failure fields unless status is failed."
+    if status != "already_satisfied" and "satisfaction_evidence" in report:
+        return "must not include satisfaction_evidence for this status."
+    if status == "already_satisfied" and not report.get("satisfaction_evidence"):
+        return "must include non-empty satisfaction_evidence."
+
+    if status != "failed":
+        if "change_request" in report:
+            return "must not include change_request unless status is failed."
+        return ""
+
+    category = str(report.get("failure_category") or "").strip()
+    if not category or not str(report.get("failure_reason") or "").strip():
+        return "must include failure_category and failure_reason."
+    has_change_request = bool(report.get("change_request"))
+    if category in _CHANGE_REQUEST_FAILURES and not has_change_request:
+        return "must include a non-empty change_request for contract or plan mismatch."
+    if category not in _CHANGE_REQUEST_FAILURES and "change_request" in report:
+        return "must not include change_request for this failure category."
+    return ""
 
 
 def _is_task_report_payload(payload: Any) -> bool:

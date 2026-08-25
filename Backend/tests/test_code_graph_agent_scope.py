@@ -51,6 +51,12 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertNotIn("code_graph_context", _tool_names(data_source))
         self.assertNotIn("code_graph_context", _tool_names(database))
         self.assertNotIn("code_graph_context", _tool_names(repair))
+        self.assertEqual(data_source.get("name"), "data-source-generation-agent")
+        data_source_system_prompt = str(data_source.get("system_prompt") or "")
+        self.assertIn("Java Backend Coding Agent", data_source_system_prompt)
+        self.assertNotIn("Data Source Coding Agent", data_source_system_prompt)
+        self.assertNotIn("unique filename", data_source_system_prompt)
+        self.assertNotIn("changed files", data_source_system_prompt)
         prompt = " ".join(str(frontend.get("system_prompt") or "").split())
         self.assertIn("Process dispatched tasks one by one by `task_id`", prompt)
         self.assertIn("do not repeat the same graph query", prompt)
@@ -68,7 +74,9 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         )
         data_source_prompt = _data_source_generation_prompt(
             project_plan={},
-            build_task_plan={"summary": {}},
+            workspace_snapshot={
+                "backend": {"dir_structure": "└── backend/\n    └── pom.xml"}
+            },
             tasks=[{"id": "backend-task", "allowed_paths": ["backend/src/**"]}],
         )
         compact_prompt = " ".join(frontend_prompt.split())
@@ -85,6 +93,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertIn("Do not call `pnpm install`, `npm install`, or `npx tsc`", frontend_prompt)
         self.assertIn("outer integration-test phase performs the repository checks", frontend_prompt)
         self.assertIn("Do not install dependencies", data_source_prompt)
+        self.assertIn("provided array order", data_source_prompt)
         self.assertNotIn("regular backend verification", data_source_prompt)
 
     def test_external_api_execution_prompt_does_not_load_database_rules(self) -> None:
@@ -93,8 +102,18 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         prompt = _data_source_generation_prompt(
             project_plan={
                 "data_sources": [{"id": "database", "type": "database"}],
+                "entity_detail_plans": [
+                    {
+                        "entity_id": "Weather",
+                        "status": "confirmed",
+                        "data_source_type": "external_api",
+                        "external_api_design": {"api_info": {"path": "/weather"}},
+                    }
+                ],
             },
-            build_task_plan={"summary": {}},
+            workspace_snapshot={
+                "backend": {"dir_structure": "└── backend/\n    └── pom.xml"}
+            },
             tasks=[
                 {
                     "id": "weather-client",

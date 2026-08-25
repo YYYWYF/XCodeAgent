@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import unittest
 
-from app.agents.data_source.generator import (
-    _data_source_execution_context,
-    _data_source_generation_prompt,
-    _execution_task_packet,
-    _task_required_skill_paths,
+from app.agents.data_source.generator import _data_source_generation_prompt
+from app.agents.data_source.prompt_context import (
+    execution_task_packet,
+    task_implementation_contract,
+    task_required_instruction_paths,
+    task_required_skill_paths,
 )
+from app.agents.data_source.workspace_context import backend_workspace_context
 from app.services.build_unit_compiler import apply_unit_compilation
 
 
-def _task(*, entity_ids: list[str], designs: list[dict]) -> dict:
+def _task(*, designs: list[dict]) -> dict:
     """构造包含调度冗余字段的后端 Endpoint 测试任务。"""
 
     return {
@@ -36,7 +38,6 @@ def _task(*, entity_ids: list[str], designs: list[dict]) -> dict:
                 "api_contract_id": "category_api",
             },
             "endpoint_ids": ["category.create"],
-            "entity_ids": entity_ids,
             "entity_designs": designs,
         },
         "acceptance_checks": [{"description": "UNRELATED_ACCEPTANCE_SENTINEL"}],
@@ -124,6 +125,32 @@ def _project_plan() -> dict:
     }
 
 
+def _workspace_snapshot() -> dict:
+    """构造任务构建与执行阶段共同使用的完整 WorkspaceSnapshot。"""
+
+    return {
+        "workspace_revision": "UNRELATED_WORKSPACE_REVISION",
+        "high_value_files": [
+            {"path": "backend/pom.xml"},
+            {"path": "frontend/package.json"},
+        ],
+        "entrypoints": [
+            {"path": "backend/src/main/java/demo/Application.java"},
+            {"path": "frontend/src/main.tsx"},
+        ],
+        "backend": {
+            "dir_structure": (
+                "└── backend/\n"
+                "    ├── pom.xml\n"
+                "    └── src/\n"
+                "        └── main/\n"
+                "            └── java/"
+            ),
+        },
+        "frontend": {"dir_structure": "UNRELATED_FRONTEND_WORKSPACE"},
+    }
+
+
 class DataSourceGenerationPromptTests(unittest.TestCase):
     """验证 DataSource 执行提示词的任务级 Skill 路由与最小上下文。"""
 
@@ -131,15 +158,12 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         """每个任务只声明自身实体来源对应的 Skill 路径。"""
 
         database = _task(
-            entity_ids=["Category"],
             designs=[{"entity_id": "Category", "data_source_type": "database"}],
         )
         external = _task(
-            entity_ids=["Weather"],
             designs=[{"entity_id": "Weather", "data_source_type": "external_api"}],
         )
         mixed = _task(
-            entity_ids=["Category", "Weather"],
             designs=[
                 {"entity_id": "Category", "data_source_type": "database"},
                 {"entity_id": "Weather", "data_source_type": "external_api"},
@@ -147,35 +171,41 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            _task_required_skill_paths(database),
+            task_required_skill_paths(database),
             ["/.xcodeagent/builtin-skills/springboot-mybatis-generate/SKILL.md"],
         )
         self.assertEqual(
-            _task_required_skill_paths(external),
+            task_required_skill_paths(external),
             ["/.xcodeagent/builtin-skills/springboot-external-api-generate/SKILL.md"],
         )
-        self.assertEqual(len(_task_required_skill_paths(mixed)), 2)
+        self.assertEqual(len(task_required_skill_paths(mixed)), 2)
+        self.assertEqual(
+            task_required_instruction_paths(database),
+            [
+                "/.xcodeagent/builtin-skills/springboot-mybatis-generate/SKILL.md",
+                "/.xcodeagent/builtin-skills/springboot-mybatis-generate/"
+                "references/layer-implementation.md",
+            ],
+        )
 
     def test_static_backend_task_is_rejected(self) -> None:
         """static 实体若误入后端执行器，应在调用模型前失败。"""
 
         task = _task(
-            entity_ids=["Notice"],
             designs=[{"entity_id": "Notice", "data_source_type": "static"}],
         )
         with self.assertRaisesRegex(ValueError, "不得处理 static"):
-            _task_required_skill_paths(task)
+            task_required_skill_paths(task)
 
     def test_prompt_contains_only_execution_fields_and_targeted_artifacts(self) -> None:
         """提示词排除全局计划与调度字段，同时保留目标正式设计。"""
 
         task = _task(
-            entity_ids=["Category"],
             designs=[{"entity_id": "Category", "data_source_type": "database"}],
         )
         prompt = _data_source_generation_prompt(
             project_plan=_project_plan(),
-            build_task_plan={"summary": {"note": "UNRELATED_BUILD_SUMMARY"}},
+            workspace_snapshot=_workspace_snapshot(),
             tasks=[task],
         )
 
@@ -198,44 +228,146 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertNotIn("ProjectPlan context:", prompt)
         self.assertNotIn("BuildTaskPlan summary:", prompt)
         self.assertNotIn("Code graph navigation contract", prompt)
-        self.assertEqual(prompt.count("outer integration-test phase"), 1)
+        self.assertIn("outer_integration_test_only", prompt)
+        self.assertIn("创建分类。", prompt)
+        self.assertIn("Backend Workspace Context:", prompt)
+        self.assertIn('"backend_working_directory": "/backend"', prompt)
+        self.assertIn('"backend_directory_structure"', prompt)
+        self.assertIn("└── backend/\\n", prompt)
+        self.assertIn("└── java/", prompt)
+        self.assertIn("authoritative and trustworthy navigation evidence", prompt)
+        self.assertIn("You may read any relevant listed file", prompt)
+        self.assertIn("path metadata, not file contents or write authorization", prompt)
+        self.assertIn("prefer the current filesystem result", prompt)
+        self.assertIn("process those items in numeric order", prompt)
+        self.assertIn("planner's snapshot-time existence classification", prompt)
+        self.assertIn("only to detect WorkspaceSnapshot drift", prompt)
+        self.assertIn("If an add target now exists", prompt)
+        self.assertIn("If a modify target is now missing", prompt)
+        self.assertIn("follow the already-classified add or modify action", prompt)
+        self.assertIn("Leave a fully satisfying target unchanged", prompt)
+        self.assertIn("add or correct only the missing behavior", prompt)
+        self.assertIn("only when every target in the task already satisfies", prompt)
+        self.assertIn("another target requires a permitted creation", prompt)
+        self.assertNotIn("UNRELATED_WORKSPACE_REVISION", prompt)
+        self.assertNotIn("UNRELATED_FRONTEND_WORKSPACE", prompt)
 
-    def test_execution_context_keeps_only_current_contract_and_designs(self) -> None:
-        """定向上下文按任务标识精确筛选三类正式输入。"""
+    def test_endpoint_contract_keeps_only_current_api_behavior_and_bindings(self) -> None:
+        """Endpoint 实现契约只保留当前 API、行为与已确认来源绑定。"""
 
         task = _task(
-            entity_ids=["Category"],
             designs=[{"entity_id": "Category", "data_source_type": "database"}],
         )
-        context = _data_source_execution_context(_project_plan(), [task])
+        context = task_implementation_contract(_project_plan(), task)
 
-        self.assertEqual([item["id"] for item in context["api_contracts"]], ["category_api"])
+        self.assertEqual(context["kind"], "endpoint")
+        self.assertEqual(context["api_contract"]["id"], "category_api")
         self.assertEqual(
-            [item["id"] for item in context["api_contracts"][0]["endpoints"]],
+            [item["id"] for item in context["api_contract"]["endpoints"]],
             ["category.create"],
         )
         self.assertEqual(
-            set(context["api_contracts"][0]["schemas"]),
+            set(context["api_contract"]["schemas"]),
             {"CategoryInput", "CategoryValue"},
         )
+        self.assertEqual(context["endpoint_detail"]["processing_logic"], ["创建分类。"])
         self.assertEqual(
-            [item["entity_id"] for item in context["entity_designs"]],
+            [item["entity_id"] for item in context["entities"]],
             ["Category"],
         )
+        self.assertNotIn("table_design", context["entities"][0])
 
     def test_execution_packet_drops_scheduler_only_fields(self) -> None:
         """最小任务包不携带验收、状态和影响分析等调度字段。"""
 
         task = _task(
-            entity_ids=["Category"],
             designs=[{"entity_id": "Category", "data_source_type": "database"}],
         )
-        packet = _execution_task_packet(task)
+        packet = execution_task_packet(_project_plan(), task)
 
         self.assertNotIn("acceptance_checks", packet)
         self.assertNotIn("impact_scope", packet)
         self.assertNotIn("status", packet)
-        self.assertNotIn("entity_designs", packet["source_refs"])
+        self.assertNotIn("target_files", packet)
+        self.assertNotIn("source_refs", packet)
+        self.assertNotIn("title", packet)
+        self.assertNotIn("description", packet)
+        self.assertEqual(packet["kind"], "endpoint")
+        self.assertIn("implementation_contract", packet)
+        self.assertNotIn("backend_working_directory", str(packet))
+
+    def test_bootstrap_packet_expands_reference_and_omits_endpoint_context(self) -> None:
+        """bootstrap 只携带基础设施契约并展开专属参考文档。"""
+
+        task = _task(
+            designs=[{"entity_id": "Category", "data_source_type": "database"}],
+        )
+        task["id"] = "backend:bootstrap::bootstrap"
+        task["unit_id"] = "backend:bootstrap"
+        packet = execution_task_packet(_project_plan(), task)
+
+        self.assertEqual(packet["kind"], "bootstrap")
+        self.assertIn(
+            "/.xcodeagent/builtin-skills/springboot-mybatis-generate/"
+            "references/bootstrap.md",
+            packet["instruction_paths"],
+        )
+        self.assertNotIn("references/layer-implementation.md", str(packet))
+        self.assertEqual(packet["implementation_contract"]["kind"], "bootstrap")
+        self.assertNotIn("api_contract", packet["implementation_contract"])
+        self.assertNotIn("entities", packet["implementation_contract"])
+
+
+class DataSourceWorkspaceContextTests(unittest.TestCase):
+    """验证 Java Agent 直接复用任务构建阶段的 WorkspaceSnapshot Context。"""
+
+    def test_resolves_supported_backend_directories(self) -> None:
+        """目录投影必须保留工作目录和完整的后端目录树。"""
+
+        directory_structure = (
+            "└── backend/\n"
+            "    ├── pom.xml\n"
+            "    └── src/\n"
+            "        └── main/"
+        )
+        self.assertEqual(
+            backend_workspace_context(
+                {"backend": {"dir_structure": directory_structure}}
+            ),
+            {
+                "backend_working_directory": "/backend",
+                "backend_directory_structure": directory_structure,
+            },
+        )
+
+    def test_preserves_uppercase_backend_directory(self) -> None:
+        """大小写不同的后端根目录必须按快照原样传递。"""
+
+        directory_structure = "└── Backend/\n    └── pom.xml"
+        self.assertEqual(
+            backend_workspace_context(
+                {"backend": {"dir_structure": directory_structure}}
+            ),
+            {
+                "backend_working_directory": "/Backend",
+                "backend_directory_structure": directory_structure,
+            },
+        )
+
+    def test_rejects_missing_or_unsafe_workspace_context(self) -> None:
+        """不得从宿主机绝对路径、目录穿越或缺失信息猜测后端目录。"""
+
+        invalid_values = (
+            {},
+            {"backend": {}},
+            {"backend": {"dir_structure": "└── C:\\workspace\\backend/"}},
+            {"backend": {"dir_structure": "└── ../backend/"}},
+            {"backend": {"dir_structure": "└── frontend/"}},
+        )
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "dir_structure"):
+                    backend_workspace_context(value)
 
 
 class DataSourceTaskCompilationTests(unittest.TestCase):
@@ -249,9 +381,9 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
             {"build_units": {unit_id: {"id": unit_id}}},
             [
                 {
-                    "id": "orders.repository",
+                    "id": f"{unit_id}::Order::repository",
                     "unit_id": unit_id,
-                    "source_refs": {"entity_ids": ["Order"]},
+                    "source_refs": {},
                 }
             ],
             {
@@ -266,17 +398,19 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(tasks[0]["source_refs"]["entity_ids"], ["Order"])
+        self.assertNotIn("entity_ids", tasks[0]["source_refs"])
         self.assertEqual(
             [item["entity_id"] for item in tasks[0]["source_refs"]["entity_designs"]],
             ["Order"],
         )
 
-    def test_multi_entity_endpoint_task_requires_explicit_entity_subset(self) -> None:
-        """多实体 Endpoint 任务缺少 entity_ids 时拒绝进入执行阶段。"""
+    def test_multi_entity_endpoint_task_requires_fixed_entity_task_id(
+        self,
+    ) -> None:
+        """多实体 Endpoint 任务必须用固定任务 ID 表达唯一实体范围。"""
 
         unit_id = "backend:endpoint:dashboard_api:dashboard.get"
-        with self.assertRaisesRegex(ValueError, "source_refs.entity_ids"):
+        with self.assertRaisesRegex(ValueError, "must use fixed id"):
             apply_unit_compilation(
                 {"build_units": {unit_id: {"id": unit_id}}},
                 [{"id": "ambiguous", "unit_id": unit_id, "source_refs": {}}],
@@ -311,9 +445,9 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(tasks[0]["source_refs"]["entity_ids"], ["Order"])
+        self.assertNotIn("entity_ids", tasks[0]["source_refs"])
         self.assertEqual(
-            _task_required_skill_paths(tasks[0]),
+            task_required_skill_paths(tasks[0]),
             ["/.xcodeagent/builtin-skills/springboot-mybatis-generate/SKILL.md"],
         )
 

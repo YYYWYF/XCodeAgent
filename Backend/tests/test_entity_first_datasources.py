@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.agents.main.task_preparer import _task_preparation_datasource_types
+from app.agents.main.task_preparer_prompt import task_preparation_datasource_types
 from tests.entity_design_test_utils import confirm_entity_designs
 from app.services.entity_definitions import (
     contract_data_source_id,
@@ -112,19 +112,19 @@ class EntityFirstDatasourceTests(unittest.TestCase):
             }
 
         self.assertEqual(
-            _task_preparation_datasource_types(plan_with_types(["static"])),
+            task_preparation_datasource_types(plan_with_types(["static"])),
             {"static"},
         )
         self.assertEqual(
-            _task_preparation_datasource_types(plan_with_types(["database", "static"])),
+            task_preparation_datasource_types(plan_with_types(["database", "static"])),
             {"database", "static"},
         )
         self.assertEqual(
-            _task_preparation_datasource_types(plan_with_types(["external_api"])),
+            task_preparation_datasource_types(plan_with_types(["external_api"])),
             {"external_api"},
         )
         with self.assertRaisesRegex(ValueError, "非法数据源类型"):
-            _task_preparation_datasource_types(plan_with_types(["mock"]))
+            task_preparation_datasource_types(plan_with_types(["mock"]))
 
     def test_plan_derives_data_source_type_from_entity_design(self) -> None:
         """契约绑定实体，data_source_id 由已确认实体设计的数据源类型推导。"""
