@@ -42,7 +42,7 @@ class ApplicationPlanningStructuredActionTests(unittest.TestCase):
                 {
                     "clarification": {
                         "status": "requires_user_input",
-                        "mode": "product_plan_confirmation",
+                        "mode": "requirement_document_confirmation",
                         "questions": [{"id": "confirmation"}],
                     }
                 },

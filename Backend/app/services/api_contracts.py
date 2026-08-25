@@ -500,11 +500,11 @@ def _normalize_parameters(value: Any) -> list[dict[str, Any]]:
 
 
 def _normalize_authentication(value: Any) -> dict[str, Any]:
+    """按当前 API 契约规范化认证开关，不承载任何授权角色语义。"""
+
     source = value if isinstance(value, dict) else {}
-    roles = source.get("roles")
     return {
         "required": bool(source.get("required", False)),
-        "roles": [str(role) for role in roles] if isinstance(roles, list) else [],
     }
 
 

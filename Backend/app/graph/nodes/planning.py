@@ -44,6 +44,7 @@ from app.services.project_plan import (
     validate_technical_plan_api_contracts,
     validate_project_plan_datasource_policy,
 )
+from app.services.authorization_manifest import validate_authorization_manifest
 from app.services.product_plan import require_current_product_plan
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_implementation_contract import (
@@ -191,7 +192,19 @@ def _technical_plan_contract_errors(
     ui_designs = state.get("ui_designs")
     if not isinstance(product_plan, dict) or not isinstance(ui_designs, dict):
         return ["TechnicalPlan 缺少 ProductPlan 或 UiDesign 输入。"]
-    return validate_page_implementation_contracts(plan, product_plan, ui_designs)
+    requirement_spec = state.get("requirement_spec")
+    errors = validate_page_implementation_contracts(plan, product_plan, ui_designs)
+    if isinstance(requirement_spec, dict):
+        errors.extend(
+            validate_authorization_manifest(
+                plan.get("authorization_manifest"),
+                requirement_spec,
+                product_plan,
+                plan.get("api_contracts") if isinstance(plan.get("api_contracts"), list) else [],
+                plan.get("pages") if isinstance(plan.get("pages"), list) else [],
+            )
+        )
+    return errors
 
 
 def _planning_artifact_fields(
@@ -1659,8 +1672,7 @@ def _project_plan_validation_errors(
                 state["requirement_spec"],
             )
         )
-        # 临时暂停页面行为闭合校验；页面 Endpoint 结构和 API 契约校验继续执行。
-        # errors.extend(_technical_plan_contract_errors(state, project_plan))
+        errors.extend(_technical_plan_contract_errors(state, project_plan))
     return errors
 
 

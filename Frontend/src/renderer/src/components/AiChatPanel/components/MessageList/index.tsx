@@ -452,8 +452,7 @@ export default function MessageList({
               const isPlanningArtifactConfirmationCard =
                 message.workflow &&
                 [
-                  'requirement_spec_confirmation',
-                  'product_plan_confirmation',
+                  'requirement_document_confirmation',
                   'technical_plan_confirmation',
                   'project_plan_confirmation'
                 ].includes(String(messageClarification?.mode || ''))

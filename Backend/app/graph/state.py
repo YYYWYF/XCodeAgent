@@ -34,6 +34,7 @@ class ProjectState(TypedDict, total=False):
     design_change_existing_artifacts: dict[str, bool]
     design_interaction_origin: str
     application_planning_interaction: dict[str, Any]
+    authorization_config_conflict: dict[str, Any]
     direct_modification_owner: str
     direct_modification_scope: str
     direct_modification_confidence: float

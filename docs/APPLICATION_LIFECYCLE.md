@@ -12,7 +12,7 @@
 
 ## Schema 与一致性
 
-当前 `schemaVersion` 为 `1.3.0`。顶层只保存 application 标识、UTC `updatedAt`、单调递增 `revision`、`initialization`、活动 run 引用、按 runId 索引的 `activeExecutions`、按稳定业务标识索引的 `resourceLocks`、错误和扩展容器。应用标识同时作为当前工作区业务身份，不再重复保存同值的 project 标识。`initialization.threadId` 仅在初始化期间定位同一 LangGraph checkpoint，进入 `ready_for_workbench` 时清空。工作台待交互与错误只嵌入各自 execution，避免一个页面的确认覆盖另一个页面。该版本不兼容旧 schema，未知版本或旧字段会被严格拒绝。
+当前 `schemaVersion` 为 `1.4.0`。顶层只保存 application 标识、UTC `updatedAt`、单调递增 `revision`、`initialization`、活动 run 引用、按 runId 索引的 `activeExecutions`、按稳定业务标识索引的 `resourceLocks`、错误和扩展容器。应用标识同时作为当前工作区业务身份，不再重复保存同值的 project 标识。`initialization.threadId` 仅在初始化期间定位同一 LangGraph checkpoint，进入 `ready_for_workbench` 时清空。工作台待交互与错误只嵌入各自 execution，避免一个页面的确认覆盖另一个页面。该版本不兼容旧 schema，未知版本或旧字段会被严格拒绝。
 
 写入使用同目录临时文件、文件 fsync、原子替换和目录 fsync。未知版本或损坏文件会显式拒绝读取，不根据旧索引、localStorage、checkpoint 或正式文档反向生成状态文件。所有状态文件和动作输入先经过 Pydantic 校验。
 
@@ -22,11 +22,10 @@
 collecting_requirement
   -> analyzing_requirement
   -> awaiting_requirement_clarification -> analyzing_requirement
-  -> awaiting_requirement_confirmation
+  -> generating_requirement_document
+  -> awaiting_requirement_document_confirmation
        ├─ revise -> analyzing_requirement
-       └─ confirm -> generating_requirement_spec
-  -> generating_product_plan
-  -> awaiting_product_plan_confirmation -> generating_product_plan
+       └─ confirm -> generating_ui_designs
   -> generating_ui_designs
   -> awaiting_ui_design_confirmation -> generating_ui_designs
   -> generating_technical_plan

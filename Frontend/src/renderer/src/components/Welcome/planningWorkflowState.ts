@@ -54,8 +54,7 @@ const DESIGN_INTENT_LABELS: Record<string, string> = {
 }
 
 const PLANNING_CONFIRMATION_ANSWER_KEYS: Record<string, string> = {
-  requirement_spec_confirmation: 'requirement_spec_confirmation',
-  product_plan_confirmation: 'product_plan_confirmation',
+  requirement_document_confirmation: 'requirement_document_confirmation',
   ui_design_confirmation: 'ui_design_confirmation',
   technical_plan_confirmation: 'technical_plan_confirmation',
   project_plan_confirmation: 'project_plan_confirmation'
@@ -183,10 +182,10 @@ export function planningRequirementsConfirmed(
   workflow?: WorkflowRunPayload,
   requirementSpecPath?: string
 ): boolean {
-  // ProductPlan、UI 与 TechnicalPlan 都只能消费已确认 RequirementSpec；节点切换的增量帧
+  // UI 与 TechnicalPlan 只能消费已联合确认的需求文档；节点切换的增量帧
   // 可能暂时缺少该字段或把缺失值投影为 false，此时以下游阶段门禁为权威。
   if (
-    ['product_planning', 'ui_confirmation', 'technical_planning', 'project_planning'].includes(
+    ['ui_confirmation', 'technical_planning', 'project_planning'].includes(
       planningWorkflowPhase(workflow)
     )
   ) {
@@ -235,7 +234,7 @@ export function planningTechnicalPlanConfirmed(workflow?: WorkflowRunPayload): b
   return false
 }
 
-// 判断当前是否正在把已确认的需求草稿落成正式 Markdown 文档。
+// 判断当前是否正在生成由需求事实与产品规划共同组成的需求文档。
 export function planningRequirementsDocumentGenerating(
   workflow?: WorkflowRunPayload,
   lifecycleStage?: string
@@ -246,15 +245,15 @@ export function planningRequirementsDocumentGenerating(
       interaction &&
       typeof interaction === 'object' &&
       (interaction as Record<string, unknown>).action === 'confirm' &&
-      (interaction as Record<string, unknown>).artifact === 'requirement_spec'
+      (interaction as Record<string, unknown>).artifact === 'requirement_document'
     ) {
       return planningWorkflowPhase(workflow) === 'requirements'
     }
   }
   return (
-    planningWorkflowPhase(workflow) === 'requirements' &&
-    (lifecycleStage === 'generating_requirement_spec' ||
-      planningWorkflowLifecycleStage(workflow) === 'generating_requirement_spec')
+    planningWorkflowPhase(workflow) === 'product_planning' &&
+    (lifecycleStage === 'generating_requirement_document' ||
+      planningWorkflowLifecycleStage(workflow) === 'generating_requirement_document')
   )
 }
 

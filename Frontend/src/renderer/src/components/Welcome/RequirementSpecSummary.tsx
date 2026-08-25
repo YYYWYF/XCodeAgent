@@ -4,6 +4,7 @@ import {
   FileTextOutlined,
   FlagOutlined,
   PartitionOutlined,
+  SafetyCertificateOutlined,
   TeamOutlined
 } from '@ant-design/icons'
 import { Tag, Typography } from 'antd'
@@ -63,6 +64,12 @@ type SourceEntity = {
   name: string
   description: string
   fields: EntityField[]
+}
+
+// 读取需求文档中的权限候选，缺失时按关闭权限处理。
+function authorizationRequirements(value: unknown): Record<string, unknown> {
+  const record = asRecord(value)
+  return record || {}
 }
 
 // 将实体字段对象安全收窄为需求层的展示信息（名称与说明，不含字段名和类型）。
@@ -188,6 +195,22 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
   const pages = asArray(spec.pages)
   const entities = sourceEntities(spec.entities)
   const flows = asArray(spec.business_flows)
+  const authorization = authorizationRequirements(spec.authorization_requirements)
+  const authorizationEnabled = authorization.enabled === true
+  const restrictedPages = asArray(authorization.restrictedPages)
+  const restrictedOperations = asArray(authorization.restrictedOperations)
+  const dataRules = asArray(authorization.dataRules)
+  const roleNames = new Map(
+    roles.map((role) => [itemText(role, ['id']), itemText(role, ['name', 'id'])])
+  )
+  // 将规则的默认授权角色 ID 映射为确认界面可读名称。
+  const grantedRoleLabels = (item: unknown): string[] => {
+    const record = asRecord(item)
+    const roleIds = asArray(record?.defaultGrantedRoleIds)
+    return roleIds
+      .map((roleId) => roleNames.get(itemText(roleId, ['id'])) || itemText(roleId, ['id']))
+      .filter(Boolean)
+  }
   const assumptions = itemLabels(spec.assumptions)
   const appName = itemText(app, ['name']) || '未命名应用'
 
@@ -220,15 +243,17 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
       ) : null}
 
       {roles.length ? (
-        <SummarySection icon={<TeamOutlined />} title="用户角色">
+        <SummarySection icon={<TeamOutlined />} title="业务参与者">
           <div className={cx('requirement-summary-grid')}>
             {roles.map((item, index) => {
-              const record = asRecord(item)
               return (
                 <SummaryItem
                   description={itemText(item, ['description'])}
                   key={itemText(item, ['id', 'name']) || `role-${index}`}
-                  labels={itemLabels(record?.permissions)}
+                  labels={[
+                    ...(asRecord(item)?.isInitialAdminRole === true ? ['初始系统管理员'] : []),
+                    ...(asRecord(item)?.isSystemRole === true ? ['系统角色'] : [])
+                  ]}
                   name={itemText(item, ['name']) || `角色 ${index + 1}`}
                 />
               )
@@ -264,6 +289,62 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
           </div>
         </SummarySection>
       ) : null}
+
+      <SummarySection icon={<SafetyCertificateOutlined />} title="权限需求">
+        {!authorizationEnabled ? (
+          <Text type="secondary">不涉及应用级资源授权。</Text>
+        ) : (
+          <div className={cx('requirement-summary-list')}>
+            <Text type="secondary">
+              权限关系遵循 RBAC
+              资源模型；本需求确认首次默认角色授权和初始系统管理员角色，运行态关系仍可动态配置。
+            </Text>
+            <Text type="secondary">
+              身份认证不自动产生 RBAC 资源；下面仅列出用户需求明确提及的受控业务对象。
+            </Text>
+            <Text type="secondary">
+              未提出的业务功能默认不受 RBAC 控制，对已认证成员保持可见可用。
+            </Text>
+            <SummaryItem
+              description={`受控页面 ${restrictedPages.length} 项、受控操作 ${restrictedOperations.length} 项、数据范围 ${dataRules.length} 项。`}
+              labels={['页面和操作入口无权限时固定隐藏；直接访问返回 403']}
+              name="权限候选"
+            />
+            {!restrictedPages.length && !restrictedOperations.length && !dataRules.length ? (
+              <Text type="secondary">
+                用户需求未提出具体页面、操作或数据范围权限控制，业务资源候选保持为空。
+              </Text>
+            ) : null}
+            {restrictedPages.map((item, index) => (
+              <SummaryItem
+                description={itemText(item, ['description', 'rationale']) || '待补充业务说明'}
+                key={itemText(item, ['name']) || `restricted-page-${index}`}
+                labels={grantedRoleLabels(item)}
+                name={itemText(item, ['name']) || `受控页面 ${index + 1}`}
+              />
+            ))}
+            {restrictedOperations.map((item, index) => (
+              <SummaryItem
+                description={itemText(item, ['description', 'rationale']) || '待补充业务说明'}
+                key={itemText(item, ['name']) || `restricted-operation-${index}`}
+                labels={grantedRoleLabels(item)}
+                name={itemText(item, ['name']) || `受控操作 ${index + 1}`}
+              />
+            ))}
+            {dataRules.map((item, index) => (
+              <SummaryItem
+                description={
+                  `包含：${itemText(item, ['includes']) || '待补充'}；不包含：${itemText(item, ['excludes']) || '待补充'}`
+                }
+                key={itemText(item, ['name']) || `data-rule-${index}`}
+                labels={grantedRoleLabels(item)}
+                name={itemText(item, ['name']) || `数据范围 ${index + 1}`}
+              />
+            ))}
+            <Text type="secondary">系统固定页面：/roles（权限管理），由模板提供，不属于业务页面清单。</Text>
+          </div>
+        )}
+      </SummarySection>
 
       {entities.length ? (
         <SummarySection icon={<DatabaseOutlined />} title="实体">

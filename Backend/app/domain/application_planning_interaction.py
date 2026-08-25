@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ApplicationPlanningArtifact = Literal[
     "requirement_spec",
-    "product_plan",
+    "requirement_document",
     "ui_designs",
     "technical_plan",
 ]

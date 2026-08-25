@@ -1512,12 +1512,8 @@ def _workflow_summary(
         question_count = len(questions) if isinstance(questions, list) else 0
         if isinstance(result.get("acceptance_request"), dict):
             message = "项目预览已就绪，请确认是否符合预期。"
-        elif clarification.get("mode") == "requirement_spec_confirmation":
-            message = (
-                "需求文档已生成，请确认后继续。"
-                if result.get("requirements_confirmed") is True
-                else "右侧已展示需求文档草稿，请确认需求没问题后转为正式文档。"
-            )
+        elif clarification.get("mode") == "requirement_document_confirmation":
+            message = "右侧已展示需求文档草稿，请确认后继续。"
         elif question_count > 0:
             message = f"还有 {question_count} 个问题需要补充，完成后将继续执行。"
         else:
@@ -1627,10 +1623,10 @@ def _workflow_confirmation_artifact(
         return None
 
     artifact_contracts = {
-        "requirement_spec_confirmation": {
-            "phase": "requirements",
-            "id": "requirement_spec",
-            "name": "requirement-spec.md",
+        "requirement_document_confirmation": {
+            "phase": "product_planning",
+            "id": "requirement_document",
+            "name": "requirement-document",
             "path_field": "requirement_spec_path",
         },
         "project_plan_confirmation": {

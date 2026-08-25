@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 import re
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +26,45 @@ from app.workspace.spec_documents import (
     requirement_spec_draft_markdown_path,
     write_requirement_spec_draft_document,
 )
+
+
+_LOWER_SNAKE_CASE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+
+
+def _default_authorization_requirements(
+    enabled: bool = False,
+) -> dict[str, Any]:
+    """构造当前 RequirementSpec 使用的权限需求默认结构。"""
+
+    return {
+        "enabled": bool(enabled),
+        "restrictedPages": [],
+        "restrictedOperations": [],
+        "dataRules": [],
+    }
+
+
+def _explicit_authorization_flag(text: str, marker: str) -> bool | None:
+    """从创建应用规划请求中读取权限开关事实，避免模型自行覆盖表单选择。"""
+
+    match = re.search(
+        rf"{re.escape(marker)}\s*[:：]\s*(是|否|启用|不启用|开启|关闭|true|false)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1).lower() in {"是", "启用", "开启", "true"}
+
+
+def _authorization_enabled_from_request(text: str) -> bool | None:
+    """读取权限是否启用的显式规划事实。"""
+
+    for marker in ("涉及权限控制", "权限控制", "应用级资源授权"):
+        value = _explicit_authorization_flag(text, marker)
+        if value is not None:
+            return value
+    return None
 
 
 class SaveRequirementSpecDraftRequest(BaseModel):
@@ -101,49 +141,6 @@ def _answer_facts(value: str) -> list[str]:
     return facts
 
 
-def _answer_blocks(request: str) -> list[dict[str, str]]:
-    blocks: list[dict[str, str]] = []
-    current_question = ""
-    for raw_line in request.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        stripped = line.strip("-").strip()
-        if stripped.startswith("回答：") or stripped.startswith("回答:"):
-            answer = re.split(r"回答[:：]", stripped, maxsplit=1)[1].strip()
-            if current_question and answer:
-                blocks.append({"question": current_question, "answer": answer})
-            current_question = ""
-            continue
-        if "：" in stripped:
-            current_question = stripped
-    return blocks
-
-
-def _answer_values(answer: str) -> list[str]:
-    cleaned_parts: list[str] = []
-    for part in re.split(r"[；;]", answer):
-        part = part.strip()
-        if not part:
-            continue
-        if part.startswith("已选："):
-            part = part.split("已选：", 1)[1].strip()
-        elif part.startswith("其他补充："):
-            part = part.split("其他补充：", 1)[1].strip()
-        cleaned_parts.append(part)
-
-    values: list[str] = []
-    for part in cleaned_parts:
-        if _negative_optional_answer(part):
-            continue
-        values.extend(
-            item.strip()
-            for item in re.split(r"[、，,/\n]", part)
-            if item.strip() and not _negative_optional_answer(item.strip())
-        )
-    return _dedupe(values)
-
-
 def _negative_optional_answer(value: str) -> bool:
     normalized = value.replace(" ", "")
     return normalized in {
@@ -171,9 +168,369 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
-def _stable_id(prefix: str, name: str, index: int) -> str:
-    ascii_slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-    return f"{prefix}_{ascii_slug or index + 1}"
+def _string_list(value: Any) -> list[str]:
+    """把来源引用等自由输入归一为去重后的非空字符串列表。"""
+
+    if not isinstance(value, list):
+        return []
+    return _dedupe([str(item).strip() for item in value if str(item).strip()])
+
+
+def _is_lower_snake_case(value: object) -> bool:
+    """判断稳定业务标识是否符合当前 lower_snake_case 契约。"""
+
+    return bool(_LOWER_SNAKE_CASE_PATTERN.fullmatch(str(value or "").strip()))
+
+
+def _rule_signature(item: dict[str, Any], field_name: str) -> tuple[str, str]:
+    """构造业务候选的稳定匹配键，用于保留已有 ruleId 而不采信模型 ID。"""
+
+    name = str(item.get("name") or "").strip().casefold()
+    if field_name == "dataRules":
+        detail = "\n".join(
+            str(item.get(field) or "").strip().casefold()
+            for field in ("includes", "excludes")
+        )
+    else:
+        detail = str(item.get("description") or "").strip().casefold()
+    return name, detail
+
+
+def _existing_rules(
+    value: Any,
+    field_name: str,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """收集已有唯一规则，供同步时保留内部稳定字段。"""
+
+    items = value.get(field_name) if isinstance(value, dict) else None
+    result: dict[tuple[str, str], dict[str, Any]] = {}
+    duplicates: set[tuple[str, str]] = set()
+    if not isinstance(items, list):
+        return result
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rule_id = str(item.get("ruleId") or "").strip()
+        signature = _rule_signature(item, field_name)
+        if not rule_id or not signature[0] or signature in result:
+            duplicates.add(signature)
+            continue
+        result[signature] = item
+    return {key: item for key, item in result.items() if key not in duplicates}
+
+
+def normalize_authorization_requirements(
+    value: Any,
+    *,
+    enabled_hint: bool | None = None,
+    existing_value: Any = None,
+    pages: list[dict[str, Any]] | None = None,
+    entities: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """归一化 RequirementSpec 权限候选，只保留需求阶段的业务语义。"""
+
+    raw = value if isinstance(value, dict) else {}
+    raw_enabled = raw.get("enabled")
+    enabled = (
+        bool(enabled_hint)
+        if enabled_hint is not None
+        else bool(raw_enabled)
+        if isinstance(raw_enabled, bool)
+        else False
+    )
+    # 页面和实体参数保留在函数签名中，避免调用方把候选绑定到尚未完成的规划产物。
+    # RequirementSpec 阶段不读取它们，也不生成或校验 pageId/entityId。
+    _ = pages, entities
+    existing_rules = {
+        field_name: _existing_rules(existing_value, field_name)
+        for field_name in ("restrictedPages", "restrictedOperations", "dataRules")
+    }
+
+    def normalize_rule(item: Any, field_name: str) -> dict[str, Any] | None:
+        """归一化单个受控页面候选，只保存页面业务含义。"""
+
+        if not isinstance(item, dict):
+            return None
+        signature_source = {
+            "name": str(item.get("name") or "").strip(),
+            "description": str(item.get("description") or ""),
+        }
+        if field_name == "dataRules":
+            signature_source["includes"] = str(item.get("includes") or "").strip()
+            signature_source["excludes"] = str(item.get("excludes") or "").strip()
+        signature = _rule_signature(signature_source, field_name)
+        existing_rule = existing_rules[field_name].get(signature, {})
+        normalized = {
+            "name": signature_source["name"],
+            "description": signature_source["description"],
+            "sourceRefs": _string_list(item.get("sourceRefs"))
+            or _string_list(existing_rule.get("sourceRefs")),
+            "defaultGrantedRoleIds": _string_list(item.get("defaultGrantedRoleIds"))
+            or _string_list(existing_rule.get("defaultGrantedRoleIds")),
+            "ruleId": str(existing_rule.get("ruleId") or "").strip() or str(uuid4()),
+        }
+        if field_name != "dataRules":
+            normalized["rationale"] = str(item.get("rationale") or "")
+        else:
+            normalized["dataRuleKey"] = str(
+                existing_rule.get("dataRuleKey") or item.get("dataRuleKey") or ""
+            ).strip()
+            normalized["includes"] = signature_source["includes"] or str(
+                existing_rule.get("includes") or ""
+            ).strip()
+            normalized["excludes"] = signature_source["excludes"] or str(
+                existing_rule.get("excludes") or ""
+            ).strip()
+        return normalized
+
+    def raw_list(field_name: str) -> list[Any]:
+        """读取权限候选数组，非法形状按空数组处理。"""
+
+        value = raw.get(field_name)
+        return value if isinstance(value, list) else []
+
+    normalized = {
+        "enabled": enabled,
+        "restrictedPages": [
+            rule
+            for item in raw_list("restrictedPages")
+            if (rule := normalize_rule(item, "restrictedPages")) is not None
+        ]
+        if enabled
+        else [],
+        "restrictedOperations": [
+            rule
+            for item in raw_list("restrictedOperations")
+            if (rule := normalize_rule(item, "restrictedOperations")) is not None
+        ]
+        if enabled
+        else [],
+        "dataRules": [
+            rule
+            for item in raw_list("dataRules")
+            if (rule := normalize_rule(item, "dataRules")) is not None
+        ]
+        if enabled
+        else [],
+    }
+    initial_admin_role_id = str(raw.get("initialAdminRoleId") or "").strip()
+    if not initial_admin_role_id and isinstance(existing_value, dict):
+        initial_admin_role_id = str(existing_value.get("initialAdminRoleId") or "").strip()
+    if enabled and initial_admin_role_id:
+        normalized["initialAdminRoleId"] = initial_admin_role_id
+    return normalized
+
+
+def validate_authorization_requirements(
+    value: dict[str, Any],
+    *,
+    require_initial_admin: bool = True,
+) -> list[str]:
+    """校验权限候选的业务语义，并可延后初始系统管理员确认。"""
+
+    authorization = value.get("authorization_requirements") if isinstance(value, dict) else None
+    if authorization is None and isinstance(value, dict):
+        authorization = value
+    if not isinstance(authorization, dict):
+        return []
+
+    enabled = authorization.get("enabled") is True
+    errors: list[str] = []
+
+    if not enabled:
+        for field in ("restrictedPages", "restrictedOperations", "dataRules"):
+            if authorization.get(field):
+                errors.append(f"权限未启用时 {field} 必须为空")
+        if authorization.get("initialAdminRoleId"):
+            errors.append("权限未启用时不能保留 initialAdminRoleId")
+        return errors
+
+    for field_name, label in (
+        ("restrictedPages", "受控页面"),
+        ("restrictedOperations", "受控操作"),
+        ("dataRules", "数据范围"),
+    ):
+        if not isinstance(authorization.get(field_name), list):
+            errors.append(f"{label}候选必须是数组")
+
+    restricted_pages = authorization.get("restrictedPages")
+    restricted_pages = restricted_pages if isinstance(restricted_pages, list) else []
+    restricted_operations = authorization.get("restrictedOperations")
+    restricted_operations = (
+        restricted_operations if isinstance(restricted_operations, list) else []
+    )
+    data_rules = authorization.get("dataRules")
+    data_rules = data_rules if isinstance(data_rules, list) else []
+    if "unauthorizedBehavior" in authorization:
+        errors.append("RequirementSpec 不支持 unauthorizedBehavior")
+
+    roles = value.get("user_roles") if isinstance(value, dict) else None
+    roles = roles if isinstance(roles, list) else []
+    role_ids: set[str] = set()
+    initial_roles: list[dict[str, Any]] = []
+    for role in roles:
+        if not isinstance(role, dict):
+            errors.append("业务参与者必须是对象")
+            continue
+        role_id = str(role.get("id") or "").strip()
+        if not _is_lower_snake_case(role_id):
+            errors.append(f"业务参与者 {role.get('name') or '未命名'} 的 id 必须为 lower_snake_case")
+        elif role_id in role_ids:
+            errors.append(f"业务参与者 {role_id} 的 id 重复")
+        else:
+            role_ids.add(role_id)
+        if not isinstance(role.get("isSystemRole"), bool):
+            errors.append(f"业务参与者 {role_id or '未命名'} 缺少 isSystemRole")
+        if not isinstance(role.get("isInitialAdminRole"), bool):
+            errors.append(f"业务参与者 {role_id or '未命名'} 缺少 isInitialAdminRole")
+        if role.get("isInitialAdminRole") is True:
+            initial_roles.append(role)
+            if role.get("isSystemRole") is not True:
+                errors.append(f"初始系统管理员角色 {role_id or '未命名'} 必须同时是系统角色")
+    if require_initial_admin and len(initial_roles) != 1:
+        errors.append("权限启用时必须且只能选择一个初始系统管理员角色")
+    initial_admin_role_id = str(authorization.get("initialAdminRoleId") or "").strip()
+    if require_initial_admin and not initial_admin_role_id:
+        errors.append("权限启用时缺少 initialAdminRoleId")
+    elif initial_admin_role_id and initial_admin_role_id not in role_ids:
+        errors.append("initialAdminRoleId 必须引用 user_roles 中的角色")
+    elif initial_admin_role_id and not any(
+        str(role.get("id") or "").strip() == initial_admin_role_id for role in initial_roles
+    ):
+        errors.append("initialAdminRoleId 必须引用唯一初始系统管理员角色")
+
+    rule_ids: set[str] = set()
+    data_rule_keys: set[str] = set()
+    for item in restricted_pages:
+        if not isinstance(item, dict):
+            errors.append("受控页面规则必须是对象")
+            continue
+        page_name = str(item.get("name") or "").strip()
+        if not page_name:
+            errors.append("受控页面缺少业务对象名称")
+        if not str(item.get("description") or "").strip():
+            errors.append(f"受控页面 {page_name or '未命名'} 缺少业务说明")
+        _validate_authorization_rule_metadata(
+            item, page_name or "未命名", rule_ids, role_ids, errors
+        )
+
+    for item in restricted_operations:
+        if not isinstance(item, dict):
+            errors.append("受控操作规则必须是对象")
+            continue
+        operation_name = str(item.get("name") or "").strip()
+        if not operation_name:
+            errors.append("受控操作缺少业务操作名称")
+        if not str(item.get("description") or "").strip():
+            errors.append(f"受控操作 {operation_name or '未命名'} 缺少业务描述")
+        _validate_authorization_rule_metadata(
+            item, operation_name or "未命名", rule_ids, role_ids, errors
+        )
+
+    for item in data_rules:
+        if not isinstance(item, dict):
+            errors.append("数据范围规则必须是对象")
+            continue
+        data_name = str(item.get("name") or "").strip()
+        if not data_name:
+            errors.append("数据范围缺少业务对象名称")
+        if not str(item.get("includes") or "").strip():
+            errors.append(f"数据范围 {data_name or '未命名'} 缺少 includes 业务边界")
+        if not str(item.get("excludes") or "").strip():
+            errors.append(f"数据范围 {data_name or '未命名'} 缺少 excludes 业务边界")
+        technical_text = " ".join(
+            str(item.get(field_name) or "")
+            for field_name in ("name", "description", "includes", "excludes")
+        )
+        if re.search(
+            r"(?:resourcekey|policykey|\bsql\b|\bselect\b|\bwhere\b|\bjoin\b|字段|列名|数据库)",
+            technical_text,
+            flags=re.IGNORECASE,
+        ):
+            errors.append(f"数据范围 {data_name or '未命名'} 必须使用产品语言，不能包含技术字段或 SQL")
+        data_rule_key = str(item.get("dataRuleKey") or "").strip()
+        if not _is_lower_snake_case(data_rule_key):
+            errors.append(f"数据范围 {data_name or '未命名'} 的 dataRuleKey 必须为 lower_snake_case")
+        elif data_rule_key in data_rule_keys:
+            errors.append(f"数据范围 {data_name or '未命名'} 的 dataRuleKey 重复")
+        else:
+            data_rule_keys.add(data_rule_key)
+        _validate_authorization_rule_metadata(
+            item, data_name or "未命名", rule_ids, role_ids, errors
+        )
+
+    return _dedupe(errors)
+
+
+def _validate_authorization_rule_metadata(
+    item: dict[str, Any],
+    name: str,
+    rule_ids: set[str],
+    role_ids: set[str],
+    errors: list[str],
+) -> None:
+    """校验候选的内部稳定 ID 与可追溯业务来源。"""
+
+    rule_id = str(item.get("ruleId") or "").strip()
+    if not rule_id:
+        errors.append(f"权限规则 {name} 缺少 ruleId")
+    elif rule_id in rule_ids:
+        errors.append(f"权限规则 {name} 的 ruleId 重复")
+    else:
+        rule_ids.add(rule_id)
+    if not _string_list(item.get("sourceRefs")):
+        errors.append(f"权限规则 {name} 缺少业务来源")
+    granted_role_ids = _string_list(item.get("defaultGrantedRoleIds"))
+    if not granted_role_ids:
+        errors.append(f"权限规则 {name} 缺少 defaultGrantedRoleIds")
+    elif unknown_role_ids := set(granted_role_ids) - role_ids:
+        errors.append(
+            f"权限规则 {name} 的 defaultGrantedRoleIds 引用了未知角色："
+            + "、".join(sorted(unknown_role_ids))
+        )
+
+
+def validate_requirement_spec_confirmation_readiness(spec: dict[str, Any]) -> list[str]:
+    """校验需求文档进入用户确认前必须具备的最小业务结构。"""
+
+    errors: list[str] = []
+    app_info = spec.get("app_info")
+    if not isinstance(app_info, dict):
+        errors.append("应用信息必须是对象")
+    else:
+        if not str(app_info.get("name") or "").strip():
+            errors.append("应用名称不能为空")
+        if not str(app_info.get("summary") or "").strip():
+            errors.append("应用需求摘要不能为空")
+
+    for field_name, label in (
+        ("user_roles", "业务参与者"),
+        ("feature_modules", "功能模块"),
+        ("pages", "页面清单"),
+        ("entities", "实体清单"),
+        ("business_flows", "业务流程"),
+    ):
+        if not isinstance(spec.get(field_name), list):
+            errors.append(f"{label}必须是数组")
+
+    modules = spec.get("feature_modules")
+    if isinstance(modules, list) and not modules:
+        errors.append("功能模块不能为空")
+    pages = spec.get("pages")
+    if isinstance(pages, list):
+        if not pages:
+            errors.append("页面清单不能为空")
+        for index, page in enumerate(pages):
+            if not isinstance(page, dict):
+                errors.append(f"页面清单第 {index + 1} 项必须是对象")
+                continue
+            if not str(page.get("pageId") or page.get("id") or "").strip():
+                errors.append(f"页面清单第 {index + 1} 项缺少 pageId")
+            for field_name in ("name", "path", "module_id", "description"):
+                if not str(page.get(field_name) or "").strip():
+                    errors.append(f"页面清单第 {index + 1} 项缺少 {field_name}")
+
+    return _dedupe(errors)
 
 
 def _path_from_pageId(pageId: str) -> str:
@@ -206,71 +563,6 @@ def _unique_page_path(path: str, pageId: str, used_paths: set[str]) -> str:
             suffix += 1
     used_paths.add(candidate)
     return candidate
-
-
-def merge_clarification_answers_into_spec(
-    spec: dict[str, Any],
-    request: str,
-) -> dict[str, Any]:
-    """将结构化澄清答案合并到 RequirementSpec 字段中。
-
-    这是澄清恢复时的确定性保护；模型仍应返回完整 Spec，但常见维度的答案
-    不能丢失，也不能因为合并过程再次触发相同问题。
-    """
-
-    blocks = _answer_blocks(request)
-    if not blocks:
-        return spec
-
-    merged = deepcopy(spec)
-    for block in blocks:
-        question = block["question"]
-        values = _answer_values(block["answer"])
-        if not values:
-            continue
-        if "角色" in question:
-            merged["user_roles"] = [
-                {
-                    "id": _stable_id("role", value, index),
-                    "name": value,
-                    "description": f"以{value}身份使用系统。",
-                }
-                for index, value in enumerate(values)
-            ]
-        elif "页面" in question or "菜单" in question:
-            merged["pages"] = [
-                {
-                    "pageId": _stable_id("page", value, index),
-                    "name": value,
-                    "path": f"/{_stable_id('page', value, index).removeprefix('page_').replace('_', '-')}",
-                    "module_id": _stable_id("module", value, index),
-                    "description": f"{value}页面。",
-                }
-                for index, value in enumerate(values)
-            ]
-        elif "功能" in question or "模块" in question:
-            merged["feature_modules"] = [
-                {
-                    "id": _stable_id("module", value, index),
-                    "name": value,
-                    "description": f"支持{value}相关业务能力。",
-                    "priority": "must",
-                }
-                for index, value in enumerate(values)
-            ]
-        elif "数据源" in question or "数据" in question or "存储" in question:
-            # 澄清答案只补充用户明确提供的事实，不为技术问题凭空创建核心实体。
-            merged["entities"] = (
-                merged.get("entities")
-                if isinstance(merged.get("entities"), list)
-                else []
-            )
-        elif "验收" in question:
-            merged["acceptance_criteria"] = values
-
-    merged["source_request"] = consolidated_requirement_text(request) or request
-    merged["summary"] = merged["source_request"]
-    return merged
 
 
 def _app_name(request: str) -> str:
@@ -332,12 +624,14 @@ def _feature_modules(request: str) -> list[dict[str, Any]]:
             }
         )
 
-    if _contains_any(request, ("登录", "权限", "角色", "鉴权")):
+    if _contains_any(request, ("登录", "鉴权", "认证")) or (
+        _authorization_enabled_from_request(request) is True
+    ):
         modules.append(
             {
                 "id": "access_control",
                 "name": "登录与权限",
-                "description": "支持用户登录、角色区分和页面/操作权限控制。",
+                "description": "支持用户登录和基于资源的页面/操作授权，角色关系在运行态配置。",
                 "priority": "must",
             }
         )
@@ -408,17 +702,21 @@ def _entities(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 {"label": "手机号", "description": "联系手机号。"},
                 {"label": "状态", "description": "账号启用状态。"},
             ],
-        ),
-        _entity_definition(
-            "Role",
-            "角色",
-            "权限分组，决定用户可以访问的页面和操作。",
-            [
-                {"label": "角色名称", "description": "角色显示名称。"},
-                {"label": "角色编码", "description": "角色唯一编码。"},
-            ],
-        ),
+        )
     ]
+    # 启用应用级权限后，角色由模板固定管理页和运行态 RBAC 提供，不生成业务 Role 实体。
+    if not any(module.get("id") == "access_control" for module in modules):
+        entities.append(
+            _entity_definition(
+                "Role",
+                "角色",
+                "业务参与者分组信息，仅用于业务描述，不决定授权。",
+                [
+                    {"label": "角色名称", "description": "业务分组显示名称。"},
+                    {"label": "角色编码", "description": "业务分组编码。"},
+                ],
+            )
+        )
 
     for module in modules:
         module_id = module["id"]
@@ -538,7 +836,7 @@ def _acceptance_criteria(spec_name: str) -> list[str]:
         "页面清单中的每个页面都有可见标题、主要内容区、加载态、空态和错误态。",
         "页面所需的核心业务信息可以被正确读取并展示。",
         "用户执行核心操作后可以看到与产品规则一致的成功、失败或校验反馈。",
-        "主要业务流程可以由对应角色按预期步骤完成。",
+        "主要业务流程可以由对应业务参与者按预期步骤完成。",
         "如包含登录或权限模块，未授权用户不能访问受保护页面。",
     ]
 
@@ -620,16 +918,14 @@ def create_requirement_spec(
     # 模型正在 ask_user 时只允许保留已有或明确返回的事实，禁止用默认页面填充未决需求。
     modules = _feature_modules(source_text) if allow_inferred_defaults else []
     app_name = _app_name(source_text) if allow_inferred_defaults else ""
+    request_authorization_enabled = _authorization_enabled_from_request(source_text)
     roles = [
         {
-            "id": "admin",
-            "name": "管理员",
-            "description": "负责查看全部数据、管理配置和执行高权限操作。",
-        },
-        {
-            "id": "user",
-            "name": "普通用户",
-            "description": "负责日常业务查看和处理。",
+            "id": "business_user",
+            "name": "业务使用者",
+            "description": "使用应用完成已确认的业务流程。",
+            "isSystemRole": False,
+            "isInitialAdminRole": False,
         },
     ] if allow_inferred_defaults else []
 
@@ -653,6 +949,9 @@ def create_requirement_spec(
         "pages": _pages(modules) if allow_inferred_defaults else [],
         "entities": _entities(modules) if allow_inferred_defaults else [],
         "business_flows": _business_flows(modules) if allow_inferred_defaults else [],
+        "authorization_requirements": _default_authorization_requirements(
+            enabled=(request_authorization_enabled is True),
+        ),
         "acceptance_criteria": (
             _acceptance_criteria(app_name) if allow_inferred_defaults else []
         ),
@@ -676,7 +975,15 @@ def create_requirement_spec(
         }
 
     item_defaults = {
-        "user_roles": ("role", {"name": "用户", "description": "使用应用。"}),
+        "user_roles": (
+            "role",
+            {
+                "name": "用户",
+                "description": "使用应用。",
+                "isSystemRole": False,
+                "isInitialAdminRole": False,
+            },
+        ),
         "feature_modules": (
             "module",
             {"name": "业务模块", "description": "完成核心业务。", "priority": "must"},
@@ -707,6 +1014,12 @@ def create_requirement_spec(
             and isinstance(agent_spec.get(key), list)
         )
         spec[key] = normalized if normalized or has_authoritative_list else default_spec[key]
+    # 用户角色保留首次系统管理员种子元数据，但不携带资源关系或运行态授权。
+    for role in spec["user_roles"]:
+        for forbidden_key in ("permissions", "allowed_roles", "allowedRoleIds", "roleIds"):
+            role.pop(forbidden_key, None)
+        role["isSystemRole"] = bool(role.get("isSystemRole"))
+        role["isInitialAdminRole"] = bool(role.get("isInitialAdminRole"))
     spec["entities"] = normalize_entities(
         spec.get("entities"),
         with_types=False,
@@ -737,6 +1050,39 @@ def create_requirement_spec(
         if route_root and path.startswith(f"{route_root}/{route_root.lstrip('/')}"):
             path = route_root + path[len(f"{route_root}/{route_root.lstrip('/')}"):] if path.startswith(f"{route_root}/{route_root.lstrip('/')}/") else route_root
         page["path"] = _unique_page_path(path, pageId, used_page_paths)
+
+    # 权限候选在业务页面和实体归一化后统一整理，但不建立跨产物技术绑定。
+    agent_authorization = (
+        agent_spec.get("authorization_requirements")
+        if isinstance(agent_spec, dict)
+        else None
+    )
+    existing_authorization = (
+        existing_spec.get("authorization_requirements")
+        if isinstance(existing_spec, dict)
+        else None
+    )
+    authorization_source = (
+        agent_authorization
+        if isinstance(agent_authorization, dict)
+        else existing_authorization
+    )
+    explicit_authorization_enabled = _authorization_enabled_from_request(source_text)
+    # 权限总开关由创建表单约束；业务行为和 ruleId 只来自候选及已有内部状态。
+    spec["authorization_requirements"] = normalize_authorization_requirements(
+        authorization_source
+        if isinstance(authorization_source, dict)
+        else default_spec["authorization_requirements"],
+        enabled_hint=explicit_authorization_enabled,
+        existing_value=existing_authorization,
+        pages=spec["pages"],
+        entities=spec["entities"],
+    )
+    if spec["authorization_requirements"].get("enabled") is not True:
+        # 关闭权限时不保留任何系统管理员角色种子，避免配置与需求事实冲突。
+        for role in spec["user_roles"]:
+            role["isSystemRole"] = False
+            role["isInitialAdminRole"] = False
 
     criteria = spec.get("acceptance_criteria")
     normalized_criteria = product_acceptance_criteria(criteria)
@@ -828,7 +1174,7 @@ def _migrate_legacy_data_sources(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 _EDITOR_ITEM_FIELDS: dict[str, tuple[str, ...]] = {
-    "user_roles": ("id", "name", "description", "permissions"),
+    "user_roles": ("id", "name", "description", "isSystemRole", "isInitialAdminRole"),
     "pages": ("pageId", "name", "path", "module_id", "description", "components"),
     "business_flows": ("id", "name", "description", "steps"),
     "entities": ("id", "name", "description", "fields"),
@@ -901,6 +1247,19 @@ def apply_requirement_spec_editor_changes(
             sanitized_items.append(sanitized)
         merged[field_name] = sanitized_items
 
+    # 权限章节是需求确认中的业务候选编辑区，整体替换候选数组但保留内部元数据。
+    edited_authorization = edited_spec.get("authorization_requirements")
+    if isinstance(edited_authorization, dict):
+        existing_authorization = (
+            existing_spec.get("authorization_requirements")
+            if isinstance(existing_spec.get("authorization_requirements"), dict)
+            else {}
+        )
+        merged["authorization_requirements"] = {
+            **deepcopy(existing_authorization),
+            **deepcopy(edited_authorization),
+        }
+
     request = str(existing_spec.get("source_request") or existing_spec.get("summary") or "")
     normalized = create_requirement_spec(
         request,
@@ -910,6 +1269,9 @@ def apply_requirement_spec_editor_changes(
         authoritative_agent_spec=True,
         datasource_type=effective_datasource_type,
     )
+    authorization_errors = validate_authorization_requirements(normalized)
+    if authorization_errors:
+        raise ValueError("编辑后的权限需求存在不一致：" + "；".join(authorization_errors))
     normalized["editor_sync"] = {
         "status": "synchronized",
         "source": "requirement_spec_summary_editor",

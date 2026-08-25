@@ -897,7 +897,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                 "phase": "requirements",
                 "status": "completed",
                 "clarification": {
-                    "mode": "requirement_spec_confirmation",
+                    "mode": "requirement_document_confirmation",
                     "status": "clear",
                 },
             },
@@ -1644,7 +1644,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "requirement_spec_path": str(requirement_path),
                     "project_plan_path": str(project_plan_path),
                     "clarification": {
-                        "mode": "requirement_spec_confirmation",
+                        "mode": "requirement_document_confirmation",
                         "status": "requires_user_input",
                     },
                 }
@@ -1693,7 +1693,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "status": "completed",
                     "requirement_spec_path": "requirement-spec.md",
                     "clarification": {
-                        "mode": "requirement_spec_confirmation",
+                        "mode": "requirement_document_confirmation",
                         "status": "clear",
                     },
                 }
@@ -1720,7 +1720,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "requirements_confirmed": False,
                     "requirement_spec_path": str(requirement_path),
                     "clarification": {
-                        "mode": "requirement_spec_confirmation",
+                        "mode": "requirement_document_confirmation",
                         "status": "requires_user_input",
                     },
                 }
@@ -1898,7 +1898,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         """
 
         checkpoint_clarification = {
-            "mode": "requirement_spec_confirmation",
+            "mode": "requirement_document_confirmation",
             "status": "requires_user_input",
             "questions": [{"id": "user_roles", "question": "需要哪些角色？"}],
         }

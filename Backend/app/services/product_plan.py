@@ -8,7 +8,7 @@ from typing import Any
 
 from app.services.requirement_spec import product_acceptance_criteria
 
-PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v4"
+PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v5"
 _STATE_REQUIREMENT_KEYS = ("loading", "empty", "error", "success", "validation")
 _FORBIDDEN_PRODUCT_KEYS = {
     "api_contracts",
@@ -16,6 +16,10 @@ _FORBIDDEN_PRODUCT_KEYS = {
     "database",
     "schemas",
     "technical_architecture",
+    "authorization",
+    "permission_model",
+    "role_assignments",
+    "user_roles",
 }
 _REMOVED_PRODUCT_KEYS = {"assumptions", "risks"}
 _DUPLICATED_PRODUCT_KEYS = {"frontend_pages"}
@@ -23,7 +27,6 @@ _PRODUCT_BEHAVIOR_TYPES = {"business", "navigation", "interface", "external", "s
 _PRODUCT_STEP_TYPES = _PRODUCT_BEHAVIOR_TYPES - {"sequence"}
 _MODEL_ROOT_KEYS = {
     "app",
-    "user_roles",
     "business_flows",
     "pages",
     "product_acceptance_criteria",
@@ -38,7 +41,6 @@ _MODEL_PAGE_KEYS = {
     "information_items",
     "actions",
     "navigation_targets",
-    "allowed_roles",
     "state_requirements",
     "acceptance_criteria",
 }
@@ -51,6 +53,13 @@ _MODEL_ACTION_KEYS = {
     "requiresConfirmation",
     "behavior",
 }
+_LOWER_SNAKE_CASE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+
+
+def _is_lower_snake_case(value: Any) -> bool:
+    """判断页面和操作稳定标识是否符合当前权限资源键契约。"""
+
+    return bool(_LOWER_SNAKE_CASE_PATTERN.fullmatch(str(value or "").strip()))
 
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:
@@ -130,7 +139,7 @@ def validate_product_plan_model_output(
 
     errors = _exact_keys(agent_plan, _MODEL_ROOT_KEYS, "ProductPlan 模型输出")
     errors.extend(_exact_keys(agent_plan.get("app"), _MODEL_APP_KEYS, "ProductPlan 模型输出.app"))
-    for field in ("user_roles", "business_flows", "product_acceptance_criteria"):
+    for field in ("business_flows", "product_acceptance_criteria"):
         if not isinstance(agent_plan.get(field), list):
             errors.append(f"ProductPlan 模型输出.{field} 必须是 JSON 数组。")
     pages = agent_plan.get("pages")
@@ -146,6 +155,8 @@ def validate_product_plan_model_output(
     ]
     if actual_page_ids != expected_page_ids:
         errors.append("ProductPlan 模型输出.pages 必须按 RequirementSpec 顺序完整返回全部页面。")
+    if any(not _is_lower_snake_case(page_id) for page_id in actual_page_ids):
+        errors.append("ProductPlan 模型输出.pageId 必须全部为 lower_snake_case。")
     for page_index, page in enumerate(pages):
         location = f"ProductPlan 模型输出.pages[{page_index}]"
         errors.extend(_exact_keys(page, _MODEL_PAGE_KEYS, location))
@@ -171,6 +182,8 @@ def validate_product_plan_model_output(
                 action_location = f"{location}.actions[{action_index}]"
                 errors.extend(_exact_keys(action, _MODEL_ACTION_KEYS, action_location))
                 if isinstance(action, dict):
+                    if not _is_lower_snake_case(action.get("actionId")):
+                        errors.append(f"{action_location}.actionId 必须为 lower_snake_case。")
                     errors.extend(
                         _model_behavior_errors(action.get("behavior"), f"{action_location}.behavior")
                     )
@@ -178,7 +191,7 @@ def validate_product_plan_model_output(
         errors.extend(
             _exact_keys(state_requirements, set(_STATE_REQUIREMENT_KEYS), f"{location}.state_requirements")
         )
-        for field in ("navigation_targets", "allowed_roles", "acceptance_criteria"):
+        for field in ("navigation_targets", "acceptance_criteria"):
             if not isinstance(page.get(field), list):
                 errors.append(f"{location}.{field} 必须是 JSON 数组。")
     return errors
@@ -187,8 +200,8 @@ def validate_product_plan_model_output(
 def _stable_action_id(page_id: str, value: Any, index: int) -> str:
     """为模型遗漏的页面操作生成稳定 actionId。"""
 
-    normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
-    return normalized or f"{page_id}-action-{index}"
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
+    return normalized or f"{page_id}_action_{index}"
 
 
 def _stable_item_id(page_id: str, value: Any, index: int) -> str:
@@ -350,11 +363,6 @@ def _normalized_pages(
         for item in _dict_items((agent_plan or {}).get("pages"))
         if str(item.get("pageId") or item.get("id") or "").strip()
     }
-    role_ids = {
-        str(item.get("id") or "").strip()
-        for item in _dict_items(requirement_spec.get("user_roles"))
-        if str(item.get("id") or "").strip()
-    }
     page_ids = {
         str(item.get("pageId") or item.get("id") or "").strip()
         for item in _dict_items(requirement_spec.get("pages"))
@@ -387,11 +395,6 @@ def _normalized_pages(
             for target in [*_text_items(supplement.get("navigation_targets")), *action_targets]
             if target in page_ids
         ]))
-        allowed_roles = [
-            role_id
-            for role_id in _text_items(supplement.get("allowed_roles"))
-            if role_id in role_ids
-        ] or sorted(role_ids)
         state_requirements = supplement.get("state_requirements")
         pages.append(
             {
@@ -410,7 +413,6 @@ def _normalized_pages(
                 "information_items": information,
                 "actions": actions,
                 "navigation_targets": navigation,
-                "allowed_roles": allowed_roles,
                 "state_requirements": (
                     dict(state_requirements)
                     if isinstance(state_requirements, dict)
@@ -431,6 +433,117 @@ def _normalized_pages(
     return pages
 
 
+def _authorization_target_key(value: Any) -> str:
+    """把业务名称压缩为确定性匹配键，不从相近词推断权限目标。"""
+
+    return re.sub(r"[^\w]+", "", str(value or "").casefold())
+
+
+def _authorization_targets(
+    requirement_spec: dict[str, Any],
+    pages: list[dict[str, Any]],
+) -> dict[str, list[dict[str, str]]]:
+    """把已确认页面/操作候选确定性映射到 ProductPlan 的稳定目标。"""
+
+    authorization = requirement_spec.get("authorization_requirements")
+    authorization = authorization if isinstance(authorization, dict) else {}
+    if authorization.get("enabled") is not True:
+        return {"pageRules": [], "operationRules": []}
+
+    page_by_name: dict[str, list[str]] = {}
+    action_by_name: dict[str, list[str]] = {}
+    for page in pages:
+        page_id = str(page.get("pageId") or "").strip()
+        page_key = _authorization_target_key(page.get("name"))
+        if page_id and page_key:
+            page_by_name.setdefault(page_key, []).append(page_id)
+        for action in _dict_items(page.get("actions")):
+            action_id = str(action.get("actionId") or "").strip()
+            action_key = _authorization_target_key(action.get("name"))
+            if action_id and action_key:
+                action_by_name.setdefault(action_key, []).append(action_id)
+
+    def mapped_rules(field_name: str, targets: dict[str, list[str]], target_field: str) -> list[dict[str, str]]:
+        """只在名称一对一匹配时保留规则目标，歧义交由确认校验显式阻断。"""
+
+        result: list[dict[str, str]] = []
+        for rule in _dict_items(authorization.get(field_name)):
+            rule_id = str(rule.get("ruleId") or "").strip()
+            candidates = targets.get(_authorization_target_key(rule.get("name")), [])
+            if rule_id and len(candidates) == 1:
+                result.append({"ruleId": rule_id, target_field: candidates[0]})
+        return result
+
+    return {
+        "pageRules": mapped_rules("restrictedPages", page_by_name, "pageId"),
+        "operationRules": mapped_rules("restrictedOperations", action_by_name, "actionId"),
+    }
+
+
+def authorization_operation_action_coverage(
+    requirement_spec: dict[str, Any],
+    product_plan: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """列出无法唯一落到 ProductPlan action 的已确认权限操作规则。"""
+
+    authorization = requirement_spec.get("authorization_requirements")
+    authorization = authorization if isinstance(authorization, dict) else {}
+    if authorization.get("enabled") is not True:
+        return []
+
+    action_candidates: dict[str, list[dict[str, str]]] = {}
+    for page in _dict_items(product_plan.get("pages")):
+        page_id = str(page.get("pageId") or "").strip()
+        page_name = str(page.get("name") or page_id).strip()
+        for action in _dict_items(page.get("actions")):
+            action_id = str(action.get("actionId") or "").strip()
+            action_name = str(action.get("name") or "").strip()
+            action_key = _authorization_target_key(action_name)
+            if page_id and action_id and action_key:
+                action_candidates.setdefault(action_key, []).append(
+                    {
+                        "pageId": page_id,
+                        "pageName": page_name,
+                        "actionId": action_id,
+                        "actionName": action_name,
+                    }
+                )
+
+    uncovered: list[dict[str, Any]] = []
+    for rule in _dict_items(authorization.get("restrictedOperations")):
+        rule_id = str(rule.get("ruleId") or "").strip()
+        name = str(rule.get("name") or "").strip()
+        candidates = action_candidates.get(_authorization_target_key(name), [])
+        if rule_id and name and len(candidates) != 1:
+            uncovered.append(
+                {
+                    "ruleId": rule_id,
+                    "name": name,
+                    "description": str(rule.get("description") or name).strip(),
+                    "candidates": candidates,
+                    "reason": "missing" if not candidates else "ambiguous",
+                }
+            )
+    return uncovered
+
+
+def authorization_operation_action_coverage_errors(
+    requirement_spec: dict[str, Any],
+    product_plan: dict[str, Any],
+) -> list[str]:
+    """把权限操作覆盖缺口转换为可回灌给产品规划模型的具体诊断。"""
+
+    errors: list[str] = []
+    for item in authorization_operation_action_coverage(requirement_spec, product_plan):
+        name = item["name"]
+        if item["reason"] == "missing":
+            errors.append(f"缺少受限操作 action：{name}。必须生成一个 name 完全等于“{name}”的唯一 action。")
+        else:
+            action_ids = "、".join(candidate["actionId"] for candidate in item["candidates"])
+            errors.append(f"受限操作 action 重复：{name}（{action_ids}）。必须只保留一个 name 为“{name}”的 action。")
+    return errors
+
+
 def create_product_plan(
     requirement_spec: dict[str, Any],
     *,
@@ -446,16 +559,15 @@ def create_product_plan(
         "schema_version": PRODUCT_PLAN_SCHEMA_VERSION,
         "version": str((existing_plan or {}).get("version") or "0.1.0"),
         "generated_at": datetime.now(UTC).isoformat(),
-        "requirement_spec_sha256": hashlib.sha256(
-            json.dumps(requirement_spec, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest(),
+        "requirement_spec_sha256": requirement_spec_sha256(requirement_spec),
         "app": {
             "name": str(app_info.get("name") or "未命名应用"),
             "summary": str(app_info.get("summary") or requirement_spec.get("summary") or ""),
         },
-        "user_roles": _dict_items(requirement_spec.get("user_roles")),
         "business_flows": _dict_items(requirement_spec.get("business_flows")),
         "pages": pages,
+        # 映射只追踪已确认业务规则到产品稳定目标，不包含角色、资源键或策略键。
+        "authorizationTargets": _authorization_targets(requirement_spec, pages),
         "product_acceptance_criteria": product_acceptance_criteria(
             (agent_plan or {}).get("product_acceptance_criteria")
         )
@@ -463,6 +575,19 @@ def create_product_plan(
         "confirmation_status": "pending_user_confirmation",
     }
     return plan
+
+
+def requirement_spec_sha256(requirement_spec: dict[str, Any]) -> str:
+    """计算 RequirementSpec 当前确认内容的稳定摘要，供联合需求文档绑定使用。"""
+
+    return hashlib.sha256(
+        json.dumps(
+            requirement_spec,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[str, Any]) -> list[str]:
@@ -476,6 +601,8 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
     errors: list[str] = []
     if product_plan.get("schema_version") != PRODUCT_PLAN_SCHEMA_VERSION:
         errors.append(f"ProductPlan.schema_version 必须为 {PRODUCT_PLAN_SCHEMA_VERSION}。")
+    if str(product_plan.get("requirement_spec_sha256") or "") != requirement_spec_sha256(requirement_spec):
+        errors.append("ProductPlan.requirement_spec_sha256 必须绑定当前 RequirementSpec。")
     forbidden_keys = sorted(_FORBIDDEN_PRODUCT_KEYS.intersection(product_plan))
     if forbidden_keys:
         errors.append("ProductPlan 不得包含技术规划字段：" + "、".join(forbidden_keys) + "。")
@@ -484,7 +611,7 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
         errors.append("ProductPlan 不得包含产品假设或产品风险字段：" + "、".join(removed_keys) + "。")
     if not isinstance(product_plan.get("app"), dict):
         errors.append("ProductPlan.app 必须是 JSON 对象。")
-    for key in ("user_roles", "business_flows", "pages"):
+    for key in ("business_flows", "pages"):
         if not isinstance(product_plan.get(key), list):
             errors.append(f"ProductPlan.{key} 必须是 JSON 数组。")
     duplicated_keys = sorted(_DUPLICATED_PRODUCT_KEYS.intersection(product_plan))
@@ -497,11 +624,18 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
         errors.append("ProductPlan.product_acceptance_criteria 必须是字符串数组。")
     if expected != actual:
         errors.append("ProductPlan.pages 必须与 RequirementSpec.pages 一一对应且保持顺序。")
+    if any(not _is_lower_snake_case(page_id) for page_id in actual):
+        errors.append("ProductPlan.pages.pageId 必须全部为 lower_snake_case。")
     page_ids = set(actual)
-    role_ids = {
-        str(item.get("id") or "").strip()
-        for item in _dict_items(requirement_spec.get("user_roles"))
-    }
+    authorization = requirement_spec.get("authorization_requirements")
+    authorization = authorization if isinstance(authorization, dict) else {}
+    authorization_targets = product_plan.get("authorizationTargets")
+    if not isinstance(authorization_targets, dict):
+        errors.append("ProductPlan.authorizationTargets 必须是 JSON 对象。")
+        authorization_targets = {}
+    for field_name in ("pageRules", "operationRules"):
+        if not isinstance(authorization_targets.get(field_name), list):
+            errors.append(f"ProductPlan.authorizationTargets.{field_name} 必须是 JSON 数组。")
     for page in _dict_items(product_plan.get("pages")):
         page_id = str(page.get("pageId") or "")
         for key in ("name", "path", "module_id", "description", "goal"):
@@ -519,6 +653,8 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
         ]
         if any(not action_id for action_id in action_ids) or len(action_ids) != len(set(action_ids)):
             errors.append(f"页面 {page_id} 的 actionId 必须非空且唯一；纯展示页面可以没有 actions。")
+        elif any(not _is_lower_snake_case(action_id) for action_id in action_ids):
+            errors.append(f"页面 {page_id} 的 actionId 必须为 lower_snake_case。")
         for action in _dict_items(page.get("actions")):
             for key in ("name", "description"):
                 if not str(action.get(key) or "").strip():
@@ -553,13 +689,53 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
                         errors.append(f"页面 {page_id} 的组合 action 步骤缺少 expectedResult。")
         if any(target not in page_ids for target in _text_items(page.get("navigation_targets"))):
             errors.append(f"页面 {page_id} 引用了不存在的跳转目标。")
-        if any(role not in role_ids for role in _text_items(page.get("allowed_roles"))):
-            errors.append(f"页面 {page_id} 引用了不存在的产品角色。")
+        forbidden_page_keys = {
+            "allowed_roles",
+            "allowedRoleIds",
+            "authorization",
+            "permissions",
+            "roleIds",
+        }.intersection(page)
+        if forbidden_page_keys:
+            errors.append(
+                f"页面 {page_id} 不得包含角色或授权字段：" + "、".join(sorted(forbidden_page_keys)) + "。"
+            )
         state_requirements = page.get("state_requirements")
         if not isinstance(state_requirements, dict) or any(
             not str(state_requirements.get(key) or "").strip() for key in _STATE_REQUIREMENT_KEYS
         ):
             errors.append(f"页面 {page_id} 的 state_requirements 必须完整覆盖五种产品状态。")
+    target_specs = (
+        ("restrictedPages", "pageRules", "pageId", page_ids),
+        (
+            "restrictedOperations",
+            "operationRules",
+            "actionId",
+            {
+                str(action.get("actionId") or "").strip()
+                for page in _dict_items(product_plan.get("pages"))
+                for action in _dict_items(page.get("actions"))
+            },
+        ),
+    )
+    for requirement_field, mapping_field, target_field, valid_targets in target_specs:
+        expected_rule_ids = {
+            str(rule.get("ruleId") or "").strip()
+            for rule in _dict_items(authorization.get(requirement_field))
+            if str(rule.get("ruleId") or "").strip()
+        }
+        mappings = _dict_items(authorization_targets.get(mapping_field))
+        actual_rule_ids = [str(item.get("ruleId") or "").strip() for item in mappings]
+        if set(actual_rule_ids) != expected_rule_ids or len(actual_rule_ids) != len(set(actual_rule_ids)):
+            errors.append(
+                f"ProductPlan.authorizationTargets.{mapping_field} 必须与已确认 {requirement_field} 一一对应。"
+            )
+        for mapping in mappings:
+            target = str(mapping.get(target_field) or "").strip()
+            if target not in valid_targets:
+                errors.append(
+                    f"ProductPlan.authorizationTargets.{mapping_field} 引用了不存在的 {target_field}。"
+                )
     return errors
 
 

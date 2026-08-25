@@ -446,7 +446,7 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                     },
                     "clarification": {
                         "status": "requires_user_input",
-                        "mode": "requirement_spec_confirmation",
+                        "mode": "requirement_document_confirmation",
                     },
                 }
             ),

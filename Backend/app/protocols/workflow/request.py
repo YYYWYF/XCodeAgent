@@ -45,6 +45,16 @@ class SelectedSkillConflictError(ValueError):
     code = "selected_skill_conflict"
 
 
+# 创建规划权限澄清使用稳定问题 ID；这里仅把协议 ID 映射成模型可读的业务标签，
+# 不根据用户业务文本做关键词推断。
+_CLARIFICATION_QUESTION_LABELS = {
+    "authorization_page_business": "受控页面业务含义",
+    "authorization_operation_business": "受控操作业务含义",
+    "authorization_data_scope_business": "数据范围业务含义",
+    "authorization_business_review": "权限业务梳理",
+}
+
+
 def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     """应用兼容性回退规则并返回统一的运行时输入。
 
@@ -86,12 +96,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(payload.get("message"))
         or _last_user_message(payload.get("messages"))
     )
+    original_request = (
+        _optional_text(payload.get("originalRequest"))
+        or _optional_text(forwarded_props.get("originalRequest"))
+    )
     request = _merge_clarification_answers(
         request=request,
-        original_request=(
-            _optional_text(payload.get("originalRequest"))
-            or _optional_text(forwarded_props.get("originalRequest"))
-        ),
+        original_request=original_request,
         clarification_answers=clarification_answers,
     )
     resume_state = (
@@ -122,6 +133,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         payload,
         forwarded_props=forwarded_props,
         fallback_request=request,
+        original_request=original_request,
     )
     if application_planning_interaction and workflow_scope != "application_planning":
         raise ValueError("创建规划交互只能提交到 application_planning Graph。")
@@ -1442,7 +1454,11 @@ def _clarification_answers_to_text(value: Any) -> str:
         for key, answer in value.items():
             answer_text = _answer_to_text(answer)
             if answer_text:
-                lines.extend([f"- {key}", f"  回答：{answer_text}"])
+                question_label = _CLARIFICATION_QUESTION_LABELS.get(
+                    str(key),
+                    str(key),
+                )
+                lines.extend([f"- {question_label}", f"  回答：{answer_text}"])
         return "\n".join(lines)
 
     if isinstance(value, list):
@@ -1643,6 +1659,7 @@ def _application_planning_interaction(
     *,
     forwarded_props: dict[str, Any],
     fallback_request: str,
+    original_request: str,
 ) -> dict[str, Any] | None:
     """只从当前 AG-UI 字段读取并校验创建规划原生中断恢复载荷。"""
 

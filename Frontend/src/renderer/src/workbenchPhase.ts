@@ -125,10 +125,8 @@ const PLANNING_STAGES = new Set([
   'collecting_requirement',
   'analyzing_requirement',
   'awaiting_requirement_clarification',
-  'generating_requirement_spec',
-  'awaiting_requirement_confirmation',
-  'generating_project_plan',
-  'awaiting_project_plan_confirmation',
+  'generating_requirement_document',
+  'awaiting_requirement_document_confirmation',
   'generating_build_task_plan'
 ])
 
@@ -206,10 +204,8 @@ const INITIALIZATION_STAGE_LABELS: Record<string, string> = {
   collecting_requirement: '收集需求',
   analyzing_requirement: '分析需求',
   awaiting_requirement_clarification: '需求澄清',
-  generating_requirement_spec: '生成需求文档',
-  awaiting_requirement_confirmation: '确认需求文档',
-  generating_project_plan: '生成项目计划',
-  awaiting_project_plan_confirmation: '确认项目计划',
+  generating_requirement_document: '生成需求文档',
+  awaiting_requirement_document_confirmation: '确认需求文档',
   generating_application_template_files: '生成应用模板',
   application_template_generation_failed: '生成失败',
   ready_for_workbench: '已就绪'

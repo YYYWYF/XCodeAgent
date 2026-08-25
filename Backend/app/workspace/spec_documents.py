@@ -68,6 +68,87 @@ def _entity_markdown(entity: Any) -> str:
     return "\n".join(lines)
 
 
+def _authorization_markdown(spec: dict[str, Any]) -> str:
+    """渲染权限业务候选、默认角色授权和固定系统页面说明。"""
+
+    authorization = spec.get("authorization_requirements")
+    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+        return "- 不涉及应用级资源授权。"
+
+    roles = {
+        str(role.get("id") or "").strip(): str(role.get("name") or "").strip()
+        for role in spec.get("user_roles", [])
+        if isinstance(role, dict) and str(role.get("id") or "").strip()
+    }
+
+    def granted_roles(item: dict[str, Any]) -> str:
+        """把规则默认授权角色转换为用户可读文本。"""
+
+        role_ids = item.get("defaultGrantedRoleIds")
+        if not isinstance(role_ids, list):
+            return "待确认"
+        labels = [roles.get(str(role_id).strip(), str(role_id).strip()) for role_id in role_ids]
+        return "、".join(label for label in labels if label) or "待确认"
+
+    def authorization_items(field_name: str) -> list[Any]:
+        """读取权限候选数组，避免损坏草稿渲染时中断整个确认面板。"""
+
+        value = authorization.get(field_name)
+        return value if isinstance(value, list) else []
+
+    pages = "\n".join(
+        f"- {item.get('name') or '受控页面'}："
+        f"{item.get('description', '') or '待补充'}；理由：{item.get('rationale', '') or '待补充'}"
+        f"；默认授权：{granted_roles(item)}"
+        f" <!-- ruleId:{item.get('ruleId', '')} -->"
+        for item in authorization_items("restrictedPages")
+        if isinstance(item, dict)
+    )
+    operations = "\n".join(
+        f"- {item.get('name') or '受控操作'}：{item.get('description', '') or '待补充'}；"
+        f"理由：{item.get('rationale', '') or '待补充'}"
+        f"；默认授权：{granted_roles(item)}"
+        f" <!-- ruleId:{item.get('ruleId', '')} -->"
+        for item in authorization_items("restrictedOperations")
+        if isinstance(item, dict)
+    )
+    data_rules = "\n".join(
+        f"- {item.get('name') or '数据范围'}：包含 {item.get('includes', '') or '待补充'}；"
+        f"不包含 {item.get('excludes', '') or '待补充'}；默认授权：{granted_roles(item)}"
+        f" <!-- ruleId:{item.get('ruleId', '')} dataRuleKey:{item.get('dataRuleKey', '')} -->"
+        for item in authorization_items("dataRules")
+        if isinstance(item, dict)
+    )
+    fixed_page = (
+        "- 模板固定页面 `/roles`（`system_authorization_management`）：提供角色、成员与资源关系的运行态管理；"
+        "不属于业务页面清单，不进入 ProductPlan 或 UiDesign。"
+    )
+    initial_admin_role_id = str(authorization.get("initialAdminRoleId") or "").strip()
+    initial_admin_role = roles.get(initial_admin_role_id, "待确认")
+    return "\n".join(
+        [
+            "- 应用级资源授权：启用。",
+            "- 固定无权行为：页面和操作入口隐藏；直接访问页面或后端 Endpoint 返回 403。",
+            f"- 初始系统管理员角色：{initial_admin_role} <!-- initialAdminRoleId:{initial_admin_role_id} -->",
+            "- 约束边界：身份认证不自动产生 RBAC 资源；以下仅列出用户需求明确提及的受控业务对象。",
+            "",
+            "### 受控页面",
+            pages or "- 用户需求未提出页面级权限控制。",
+            "",
+            "### 受控操作",
+            operations or "- 用户需求未提出操作级权限控制。",
+            "",
+            "### 数据范围",
+            data_rules or "- 用户需求未提出数据范围权限控制。",
+            "",
+            "### 系统固定页面",
+            fixed_page,
+            "",
+            "- 权限关系遵循 RBAC 资源模型：本需求确认首次默认角色授权和初始系统管理员角色；运行态成员与角色资源关系可继续动态配置。",
+        ]
+    )
+
+
 def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     """把 RequirementSpec 渲染为用户可编辑的 Markdown 文档。"""
 
@@ -94,7 +175,8 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     roles = "\n".join(
         f"- `{role.get('id', 'user')}` {role.get('name', '用户')}："
         f"{role.get('description', '使用应用。')}"
-        f"{'；权限：' + '、'.join(str(item) for item in role.get('permissions', [])) if role.get('permissions') else ''}"
+        f"{'；系统角色' if role.get('isSystemRole') else ''}"
+        f"{'；初始系统管理员' if role.get('isInitialAdminRole') else ''}"
         for role in spec.get("user_roles", [])
         if isinstance(role, dict)
     )
@@ -122,9 +204,13 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 - 状态：{_confirmation_status_label(spec.get('confirmation_status') or spec.get('status'))}
 - 版本：{spec.get('version', '0.1.0')}
 
-## 用户角色
+## 业务参与者（非授权角色）
 
 {roles}
+
+## 权限需求
+
+{_authorization_markdown(spec)}
 
 ## 功能模块
 

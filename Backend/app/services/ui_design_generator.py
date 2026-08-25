@@ -148,7 +148,6 @@ def _page_brief(page: dict[str, Any]) -> str:
         )
     for key, label in (
         ("navigation_targets", "approved navigation target pageIds"),
-        ("allowed_roles", "approved product roles"),
         ("acceptance_criteria", "product acceptance criteria"),
     ):
         value = page.get(key)
@@ -207,9 +206,10 @@ def _product_fact_boundary_rules() -> str:
 
     return (
         "--- PRODUCT FACT BOUNDARY (MANDATORY) ---\n"
-        "- ProductPlan is the ONLY source of product facts. Page names, routes, roles, states, "
+        "- ProductPlan is the ONLY source of product facts. Page names, routes, states, "
         "information items, actions, navigation targets, metrics, filters, fields, and business "
-        "labels are immutable. Never add, rename, remove, broaden, or reinterpret them.\n"
+        "labels are immutable. Never add, rename, remove, broaden, or reinterpret them. Do not add role, "
+        "permission, authorization, resource-key, policy-key, or /roles system-page content.\n"
         "- You may decide visual layout, component composition, spacing, hierarchy, typography, "
         "responsive arrangement, theme-token usage, and the visual presentation of declared states.\n"
         "- Mock rows may provide example VALUES only for fields explicitly named by a declared "

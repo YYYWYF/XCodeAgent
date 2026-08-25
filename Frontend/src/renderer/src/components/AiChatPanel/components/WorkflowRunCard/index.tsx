@@ -62,8 +62,7 @@ const OTHER_OPTION_VALUE = '__other__'
 
 // 设计阶段产物确认卡 mode → 文档信息（驱动产物确认行渲染）。
 const ARTIFACT_CONFIRMATION_MAP: Record<string, { title: string; summary: string }> = {
-  requirement_spec_confirmation: { title: '需求文档', summary: '需求文档已生成，请确认内容。' },
-  product_plan_confirmation: {
+  requirement_document_confirmation: {
     title: '需求文档',
     summary: '需求文档（含产品规划）已生成，确认后生成 UI 设计稿。'
   },
@@ -209,13 +208,13 @@ export default function WorkflowRunCard({
   const technicalPlanObject = readTechnicalPlan(workflow)
   // 产物确认答案键必须与当前 mode 一一对应，避免确认产品规划时误发需求确认答案。
   const artifactAnswerKey =
-    clarification?.mode === 'product_plan_confirmation'
-      ? 'product_plan_confirmation'
+    clarification?.mode === 'requirement_document_confirmation'
+      ? 'requirement_document_confirmation'
       : clarification?.mode === 'technical_plan_confirmation'
         ? 'technical_plan_confirmation'
         : clarification?.mode === 'project_plan_confirmation'
           ? 'project_plan_confirmation'
-          : 'requirement_spec_confirmation'
+          : 'requirement_document_confirmation'
   const databaseApprovalAnswerKey = clarificationQuestions[0]
     ? clarificationQuestionKey(clarificationQuestions[0], 0)
     : 'database_approval'
@@ -459,14 +458,14 @@ export default function WorkflowRunCard({
               }
             />
           ) : artifactConfirmation && requiresConfirmation ? (
-            clarification?.mode === 'requirement_spec_confirmation' ? (
+            clarification?.mode === 'requirement_document_confirmation' ? (
               <RequirementSpecConfirmationCard
                 artifact={confirmationArtifact}
                 disabled={Boolean(disabled)}
                 onSaveRequirementSpec={onSaveRequirementSpec}
                 onSubmit={(feedback) =>
                   onSubmitClarification?.(workflow, {
-                    requirement_spec_confirmation: feedback || '正确，继续规划'
+                    requirement_document_confirmation: feedback || '正确，继续规划'
                   })
                 }
                 requiresConfirmation={requiresConfirmation}
@@ -484,14 +483,14 @@ export default function WorkflowRunCard({
                   onSubmitClarification?.(workflow, { [artifactAnswerKey]: '正确，继续' })
                 }
                 plan={
-                  clarification?.mode === 'product_plan_confirmation'
+                  clarification?.mode === 'requirement_document_confirmation'
                     ? productPlanObject
                     : clarification?.mode === 'technical_plan_confirmation'
                       ? technicalPlanObject
                       : projectPlanObject
                 }
                 planType={
-                  clarification?.mode === 'product_plan_confirmation'
+                  clarification?.mode === 'requirement_document_confirmation'
                     ? 'product'
                     : clarification?.mode === 'technical_plan_confirmation'
                       ? 'technical'
@@ -1989,10 +1988,8 @@ function workflowConfirmationArtifact(
   clarification?: WorkflowClarification
 ): WorkflowConfirmationArtifact | undefined {
   const expectedArtifactId =
-    clarification?.mode === 'requirement_spec_confirmation'
-      ? 'requirement_spec'
-      : clarification?.mode === 'product_plan_confirmation'
-        ? 'product_plan'
+    clarification?.mode === 'requirement_document_confirmation'
+      ? 'requirement_document'
         : clarification?.mode === 'technical_plan_confirmation'
           ? 'technical_plan'
           : clarification?.mode === 'project_plan_confirmation'

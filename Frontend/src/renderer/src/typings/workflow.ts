@@ -540,10 +540,8 @@ export type ApplicationLifecycleStage =
   | 'collecting_requirement'
   | 'analyzing_requirement'
   | 'awaiting_requirement_clarification'
-  | 'generating_requirement_spec'
-  | 'awaiting_requirement_confirmation'
-  | 'generating_product_plan'
-  | 'awaiting_product_plan_confirmation'
+  | 'generating_requirement_document'
+  | 'awaiting_requirement_document_confirmation'
   | 'generating_ui_designs'
   | 'awaiting_ui_design_confirmation'
   | 'generating_technical_plan'
@@ -590,8 +588,7 @@ export type LifecyclePendingInteraction = {
 /** 当前工作台 execution 支持跨会话恢复的结构化交互类型。 */
 export type LifecyclePendingInteractionType =
   | 'requirement_clarification'
-  | 'requirement_confirmation'
-  | 'product_plan_confirmation'
+  | 'requirement_document_confirmation'
   | 'technical_plan_confirmation'
   | 'page_design_confirmation'
   | 'task_plan_confirmation'

@@ -84,7 +84,6 @@ def render_product_plan_markdown(plan: dict[str, Any]) -> str:
                     f"- 页面 ID：`{page.get('pageId', '')}`",
                     f"- 路由：`{page.get('path', '')}`",
                     f"- 页面目标：{page.get('goal', page.get('description', '待补充'))}",
-                    f"- 允许角色：{'、'.join(_text_items(page.get('allowed_roles'))) or '待补充'}",
                     f"- 页面跳转：{'、'.join(_text_items(page.get('navigation_targets'))) or '无'}",
                     "",
                     "业务信息：",

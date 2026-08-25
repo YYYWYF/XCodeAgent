@@ -250,6 +250,31 @@ def technical_plan_pages(technical_plan: dict[str, Any]) -> list[dict[str, Any]]
     return _dict_items(technical_plan.get("pages"))
 
 
+def _permission_bindings(technical_plan: dict[str, Any], page_id: str, action_ids: list[str]) -> list[dict[str, str]]:
+    """从已编译权限目录为页面及其业务操作投影最小权限绑定。"""
+
+    manifest = technical_plan.get("authorization_manifest")
+    if not isinstance(manifest, dict) or manifest.get("enabled") is not True:
+        return []
+    bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
+    result = [
+        {"targetType": "page", "targetId": page_id, "resourceKey": str(item.get("resourceKey") or "")}
+        for item in _dict_items(bindings.get("pages"))
+        if str(item.get("pageId") or "") == page_id and str(item.get("resourceKey") or "")
+    ]
+    action_keys = {
+        str(item.get("actionId") or ""): str(item.get("resourceKey") or "")
+        for item in _dict_items(bindings.get("actions"))
+        if str(item.get("actionId") or "") and str(item.get("resourceKey") or "")
+    }
+    result.extend(
+        {"targetType": "action", "targetId": action_id, "resourceKey": action_keys[action_id]}
+        for action_id in action_ids
+        if action_id in action_keys
+    )
+    return result
+
+
 def build_page_implementation_contracts(
     technical_plan: dict[str, Any],
     product_plan: dict[str, Any],
@@ -333,10 +358,11 @@ def build_page_implementation_contracts(
                 "requiredEndpointIds": endpoint_ids,
                 "actionBindings": action_bindings,
                 "responseBindings": [],
-                "permissionBindings": [
-                    {"roleId": role_id, "access": "allow"}
-                    for role_id in _text_items(product_page.get("allowed_roles"))
-                ],
+                "permissionBindings": _permission_bindings(
+                    technical_plan,
+                    page_id,
+                    list(product_actions),
+                ),
                 "navigationBindings": [
                     {"targetPageId": target_id}
                     for target_id in _text_items(product_page.get("navigation_targets"))
@@ -431,20 +457,6 @@ def materialize_technical_plan_runtime(
         "data_sources": [
             dict(source) for source in _dict_items(requirement_spec.get("data_sources"))
         ],
-        "permission_model": {
-            "roles": user_roles,
-            "page_access": [
-                {
-                    "pageId": page.get("pageId"),
-                    "path": page.get("path"),
-                    "allowed_roles": _text_items(page.get("allowed_roles")),
-                }
-                for page in product_pages
-                if page.get("pageId")
-            ],
-            "operation_permissions": [],
-            "default_policy": "deny_unlisted",
-        },
         "business_flows": _dict_items(product_plan.get("business_flows")),
         "acceptance_criteria": _text_items(requirement_spec.get("acceptance_criteria")),
     }

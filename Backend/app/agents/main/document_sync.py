@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.agents.model_factory import create_chat_model
@@ -14,8 +15,60 @@ from app.services.project_plan import (
     validate_project_plan_datasource_policy,
 )
 from app.services.product_plan import create_product_plan, validate_product_plan
-from app.services.requirement_spec import create_requirement_spec
+from app.services.requirement_spec import (
+    create_requirement_spec,
+    validate_authorization_requirements,
+)
 from app.utils.model_output import extract_json_object
+
+
+_REQUIREMENT_RULE_ID_MARKER = re.compile(r"<!--\s*ruleId\s*:\s*([^\s>]+)")
+_REQUIREMENT_DATA_RULE_KEY_MARKER = re.compile(r"dataRuleKey\s*:\s*([^\s>]+)")
+
+
+def _requirement_rule_ids(spec: dict[str, Any]) -> set[str]:
+    """收集当前 RequirementSpec 已分配的内部权限规则标识。"""
+
+    authorization = spec.get("authorization_requirements")
+    if not isinstance(authorization, dict):
+        return set()
+    return {
+        str(item.get("ruleId")).strip()
+        for field_name in ("restrictedPages", "restrictedOperations", "dataRules")
+        for item in (authorization.get(field_name) or [])
+        if isinstance(item, dict) and str(item.get("ruleId") or "").strip()
+    }
+
+
+def _validate_requirement_rule_markers(existing_spec: dict[str, Any], edited_markdown: str) -> None:
+    """拒绝重复或伪造的权限规则标识，避免 Markdown 覆盖内部稳定身份。"""
+
+    markers = [match.group(1).strip() for match in _REQUIREMENT_RULE_ID_MARKER.finditer(edited_markdown)]
+    if len(markers) != len(set(markers)):
+        raise ValueError("编辑后的权限需求包含重复 ruleId 标记")
+    unknown_ids = set(markers) - _requirement_rule_ids(existing_spec)
+    if unknown_ids:
+        raise ValueError("编辑后的权限需求包含未知 ruleId 标记")
+    data_rule_keys = [
+        match.group(1).strip()
+        for match in _REQUIREMENT_DATA_RULE_KEY_MARKER.finditer(edited_markdown)
+    ]
+    if len(data_rule_keys) != len(set(data_rule_keys)):
+        raise ValueError("编辑后的权限需求包含重复 dataRuleKey 标记")
+    authorization = existing_spec.get("authorization_requirements")
+    existing_keys = {
+        str(item.get("dataRuleKey") or "").strip()
+        for item in (
+            authorization.get("dataRules") or []
+            if isinstance(authorization, dict)
+            else []
+        )
+        if isinstance(item, dict)
+        and str(item.get("dataRuleKey") or "").strip()
+    }
+    unknown_keys = set(data_rule_keys) - existing_keys
+    if unknown_keys:
+        raise ValueError("编辑后的权限需求包含未知 dataRuleKey 标记")
 
 
 def _sync_prompt(
@@ -31,7 +84,13 @@ def _sync_prompt(
         "For RequirementSpec, entities are top-level items with id, name, description, and "
         "display-only fields (label and description). Do NOT generate field names, field types, or "
         "any data_sources; data source selection happens during entity design. The legacy type mock "
-        "must never be emitted.\n\n"
+        "must never be emitted. Preserve authorization_requirements as the business permission contract: "
+        "sync restrictedPages, restrictedOperations, dataRules, defaultGrantedRoleIds, and initialAdminRoleId from the edited "
+        "permission section, but never add role-resource/member assignments, resourceKey, policyKey, SQL, or database "
+        "fields. user_roles contain only id, name, description, isSystemRole, and isInitialAdminRole seed metadata. "
+        "RequirementSpec permission candidates contain business names, descriptions, rationales, data includes/excludes, and default role ids only; "
+        "page/entity/operation/resource bindings are assigned after RequirementSpec confirmation and must not be reconstructed from Markdown. "
+        "Preserve each hidden <!-- ruleId:... --> marker and dataRuleKey marker for an unchanged permission candidate; never invent either key or emit unauthorizedBehavior/unauthenticated.\n\n"
         if artifact_name == "RequirementSpec"
         else (
             "For TechnicalPlan, preserve the complete top-level entities array with RequirementSpec "
@@ -111,6 +170,7 @@ def sync_requirement_spec_from_markdown(
 ) -> dict[str, Any]:
     """同步用户编辑的 RequirementSpec Markdown，并保留隐藏结构字段。"""
 
+    _validate_requirement_rule_markers(existing_spec, edited_markdown)
     synced = _invoke_sync_model(
         artifact_name="RequirementSpec",
         structured_document=existing_spec,
@@ -131,6 +191,9 @@ def sync_requirement_spec_from_markdown(
         authoritative_agent_spec=True,
         datasource_type=datasource_type,
     )
+    authorization_errors = validate_authorization_requirements(normalized)
+    if authorization_errors:
+        raise ValueError("编辑后的权限需求存在不一致：" + "；".join(authorization_errors))
     for key in ("analyzed_by", "analysis_source"):
         if key in existing_spec:
             normalized[key] = existing_spec[key]
@@ -166,6 +229,13 @@ def sync_project_plan_from_markdown(
                     "entities",
                     "api_contracts",
                     "pages",
+                )
+            }
+            | {
+                "authorization_data_bindings": (
+                    (existing_plan.get("authorization_manifest") or {})
+                    .get("bindings", {})
+                    .get("dataRules", [])
                 )
             },
             datasource_type=datasource_type,

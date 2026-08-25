@@ -117,9 +117,8 @@ function planningUserMessageText(answers: WorkflowClarificationAnswers): string 
 
 const PLANNING_ANSWER_LABELS: Record<string, string> = {
   ui_design_confirmation: 'UI 设计稿确认',
-  requirement_spec_confirmation: '需求文档确认',
+  requirement_document_confirmation: '需求文档确认',
   requirement_spec_feedback: '需求文档意见',
-  product_plan_confirmation: '需求文档确认',
   design_change_request: '设计变更',
   technical_plan_confirmation: '技术规划确认',
   project_plan_confirmation: '项目计划确认',
@@ -1242,7 +1241,7 @@ export default function AiChatPanel({
   useEffect(() => {
     if (!isDesignPhase || !rightPanelOpen) return
     const mode = planningClarification?.mode
-    if (mode !== 'requirement_spec_confirmation' && mode !== 'product_plan_confirmation') return
+    if (mode !== 'requirement_document_confirmation') return
     if (!requirementDocAvailable) return
     if (rightPanel?.type === 'doc' && rightPanel.docKey === 'requirement-spec') return
     setRightPanel({ type: 'doc', docKey: 'requirement-spec' })
@@ -1590,8 +1589,7 @@ export default function AiChatPanel({
     // 只要最后一条消息与本次快照是同一种确认卡、且未显式开启新轮，就视为同轮更新，
     // 更新同一张卡片而非新增——否则每次轮询都会新建一张同 phase 的确认卡并残留 loading。
     const DESIGN_CONFIRMATION_MODES = new Set([
-      'requirement_spec_confirmation',
-      'product_plan_confirmation',
+      'requirement_document_confirmation',
       'technical_plan_confirmation',
       'ui_design_confirmation'
     ])

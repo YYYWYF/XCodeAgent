@@ -64,30 +64,20 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
     ApplicationLifecycleStage.COLLECTING_REQUIREMENT: {ApplicationLifecycleStage.ANALYZING_REQUIREMENT},
     ApplicationLifecycleStage.ANALYZING_REQUIREMENT: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-        ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-        ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+        ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
     },
     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION: {
         ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
     },
-    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC: {
+    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-        ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+        ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
     },
-    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION: {
+    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-        ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-        ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-    },
-    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN: {
-        ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
-    },
-    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION: {
-        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+        ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
     },
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS: {
@@ -113,7 +103,7 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
 
 APPLICATION_PLANNING_REVISION_STAGES = {
     ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
 }
 
@@ -121,10 +111,8 @@ APPLICATION_PLANNING_ACTIVE_STAGES = {
     ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
     ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
     ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
     ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,

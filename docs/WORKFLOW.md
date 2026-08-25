@@ -105,7 +105,7 @@ START
 - RequirementSpec / ProjectPlan Markdown + JSON：正式文档内容和 `confirmation_status`，继续保留；
 - Build DAG / ExecutionRun / TestReport：任务、执行和测试事实，继续由各自产物负责。
 
-创建流程覆盖 `collecting_requirement -> analyzing_requirement -> awaiting_requirement_clarification -> analyzing_requirement -> awaiting_requirement_confirmation -> generating_requirement_spec -> generating_product_plan -> awaiting_product_plan_confirmation -> generating_ui_designs -> awaiting_ui_design_confirmation -> generating_technical_plan -> awaiting_technical_plan_confirmation -> generating_application_template_files -> application_template_generation_failed（终止）/ready_for_workbench`。模板生成只由用户确认 TechnicalPlan 后触发；失败、重启和再次打开都不会重新触发。需求确认提交 `revise` 时从 `awaiting_requirement_confirmation` 回到 `analyzing_requirement`；提交 `confirm` 时才进入 `generating_requirement_spec`。旧 ProjectPlan 阶段只用于历史恢复。
+创建流程覆盖 `collecting_requirement -> analyzing_requirement -> awaiting_requirement_clarification -> analyzing_requirement -> generating_requirement_document -> awaiting_requirement_document_confirmation -> generating_ui_designs -> awaiting_ui_design_confirmation -> generating_technical_plan -> awaiting_technical_plan_confirmation -> generating_application_template_files -> application_template_generation_failed（终止）/ready_for_workbench`。需求事实与产品规划属于同一份需求文档：只有联合确认后才能进入 UI 设计；提交 `revise` 时回到 `analyzing_requirement`。模板生成只由用户确认 TechnicalPlan 后触发；失败、重启和再次打开都不会重新触发。
 
 进入工作台后的主 Workflow 不再改写应用初始化阶段；运行、等待确认、失败、停止和验收只更新对应 execution。后端从正式 ProjectPlan 为页面执行解析页面、导航关联页、API 契约和数据源资源集合并写入 `resourceLocks`，但当前不以集合交集、同页面、同工作区或应用级范围拒绝新运行；进程内 lease 同样只跟踪活动 run 的释放，不再执行互斥。重叠资源键显示最近一次写入的 owner，完成或明确结束只清理该 run 当前拥有的登记。中央消息、现有进度卡、侧栏与预览布局不改变。停止、结束、结构化确认、重试、计划调整和最终验收均复用 `/workflow/run` 的 AG-UI 完整事件生命周期。停止操作先用本地 Workflow 快照即时显示 `stopping/stopped`，并让该瞬时状态优先于可能 revision 更高但尚未刷新的文件快照；后端 AG-UI 回包随后校准权威 execution，乐观更新不得改写顶层 `initialization`。
 
@@ -176,9 +176,9 @@ TechnicalPlan 继续保存原有 Endpoint HTTP 契约与 Schema 字段，不扩�
 
 当 requirements direct ChatModel 边界判断需求不清晰时，必须先一次性审视所有关键产品事实：应用信息、角色、模块、页面清单、支撑业务信息的需求和业务流程。数据源、存储、API、数据库和验收标准分别由后续 ProductPlan、TechnicalPlan 和工程验收边界负责，不进入需求确认。它将所有无法安全推断的产品缺口合并为一次 5-8 题的 `clarification.status = requires_user_input`；如果本轮只剩少于 5 个实质缺口，则只提这些问题。Graph 在该节点后结束本轮运行并等待用户回答，最多允许三轮；第三轮回答后的最终合并不再产生第四轮问题，而是进入 RequirementSpec 确认。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和本轮结构化答案；后端据此推断续跑节点并生成扁平的当前请求，不重复嵌套完整会话。模型基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
 
-无论初始需求是否需要澄清，只要分析得到当前版本，就必须进入 `requirement_spec_confirmation`，要求用户明确确认需求内容。澄清问题的回答只用于补充需求，不能等同于对当前版本的确认；模型生成或更新当前版本时先写入草稿 Markdown/JSON，用户确认后才进入 `generating_requirement_spec`，把草稿提升为正式 Markdown/JSON，输出 `requirementsConfirmed = true`，再继续进入 `product_planning`。如果仍存在重要缺口，模型继续停留在分析/追问页面；用户提出修改意见时，旧的生成请求失效，回到分析并再次等待确认。
+无论初始需求是否需要澄清，只要分析得到当前版本，就先生成 RequirementSpec 与 ProductPlan 两份草稿，再进入唯一的 `requirement_document_confirmation`。澄清答案只用于补充信息，不能等同确认；ProductPlan 可以在同一节点消费已校验的 RequirementSpec 草稿，但 UiDesign 与后续节点只能消费联合确认后的正式 pair。确认时服务端先在内存完成 Markdown 同步、完整性校验和 `requirement_spec_sha256` 绑定，再原子写入两份 Markdown/JSON；任一写入或回读校验失败都会回滚，不会留下半确认产物。修改意见使整个需求文档回到分析并重新确认。
 
-等待 `requirement_spec_confirmation` 时，AG-UI workflow payload 返回服务端生成的草稿 `confirmationArtifact` 与草稿路径；右侧文档区展示 Markdown 草稿，确认卡只展示状态、修改入口和确认动作，不在对话卡片内重复渲染完整需求内容。`requirementsConfirmed = false` 表示当前仍是草稿，不能把它当作正式文档。意见框为空并点击确认时，前端提交 `action=confirm`，将草稿提升为正式需求文档并继续规划；意见框非空并提交时，前端提交 `action=revise`，旧生成请求失效并基于最新 RequirementSpec 重新生成草稿。后端不再按“确认、修改、只保留”等关键词重新解释 action，因此确认词出现在修改意见中也不会静默放行。正式文档生成期间显示“正在生成需求文档”，不能用错误页面占位。
+等待 `requirement_document_confirmation` 时，AG-UI workflow payload 返回一个 `requirement_document` 确认产物；右侧以 RequirementSpec 的业务事实和 ProductPlan 的页面、操作共同可视化。内部仍分别保存 `.xcodeagent/drafts/specs/requirement-spec.{md,json}` 与 `.xcodeagent/drafts/plans/product-plan.{md,json}`，确认后提升到对应正式目录；不生成需求文档 manifest。JSON 只作为内部工作流状态，Markdown 是用户可读、可编辑的正式文档。
 
 确认后以 Markdown 作为用户可读正式文档，JSON 只作为内部工作流状态。右侧需求文档页和本地文件探测应优先读取草稿路径；未确认时必须标记“需求文档（草稿）”，不能把草稿路径或旧正式文件冒充为正式需求文档。
 

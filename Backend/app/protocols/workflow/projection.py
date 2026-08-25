@@ -980,12 +980,7 @@ def _workflow_user_input_message(
         return "项目预览已就绪，请确认是否符合预期。"
 
     confirmation_labels = {
-        "requirement_spec_confirmation": (
-            "右侧已展示需求文档草稿，请确认需求没问题后转为正式文档。"
-            if result.get("requirements_confirmed") is not True
-            else "需求文档已生成，请确认后继续。"
-        ),
-        "product_plan_confirmation": "产品规划草稿已生成，请确认后转为正式产品规划。",
+        "requirement_document_confirmation": "需求文档草稿已生成，请确认后同时固化需求与页面操作规划。",
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
         "technical_plan_confirmation": "技术规划已生成，请确认后继续。",
         "technical_plan_generation_error": "技术规划未通过校验，请重新生成。",
@@ -1109,10 +1104,10 @@ def _workflow_confirmation_artifact(
         return None
 
     artifact_contracts = {
-        "requirement_spec_confirmation": {
-            "phase": "requirements",
-            "id": "requirement_spec",
-            "name": "requirement-spec.md",
+        "requirement_document_confirmation": {
+            "phase": "product_planning",
+            "id": "requirement_document",
+            "name": "requirement-document",
             "path_field": "requirement_spec_path",
         },
         "project_plan_confirmation": {
@@ -1120,12 +1115,6 @@ def _workflow_confirmation_artifact(
             "id": "project_plan",
             "name": "project-plan.md",
             "path_field": "project_plan_path",
-        },
-        "product_plan_confirmation": {
-            "phase": "product_planning",
-            "id": "product_plan",
-            "name": "product-plan.md",
-            "path_field": "product_plan_path",
         },
         "technical_plan_confirmation": {
             "phase": "technical_planning",

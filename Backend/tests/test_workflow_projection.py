@@ -210,7 +210,7 @@ class WorkflowProjectionTests(unittest.TestCase):
             "schemaVersion": "1.3.0",
             "revision": 4,
             "initialization": {
-                "stage": "awaiting_requirement_confirmation",
+                "stage": "awaiting_requirement_document_confirmation",
                 "status": "awaiting_user",
             },
         }

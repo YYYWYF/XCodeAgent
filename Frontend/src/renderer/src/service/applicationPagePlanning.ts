@@ -117,8 +117,9 @@ export function buildApplicationPlanningRequest(application: ApplicationConfig):
   const authEnabled = application.auth?.enable ?? false
   // 规划页可能先于完整 application.json 恢复，缺失权限种子时按未启用处理，避免启动阶段白屏。
   const authorizationEnabled = application.authorization?.enabled ?? false
-  const runtimeManagementPageEnabled =
-    authorizationEnabled && (application.authorization?.runtimeManagementPageEnabled ?? false)
+  const initialAdministratorSubjects = authorizationEnabled
+    ? (application.authorization?.initialAdministratorSubjects ?? [])
+    : []
   return [
     `请为新应用「${appName}」完成需求、产品、UI（可跳过）和技术规划。`,
     `应用场景：${scenario}`,
@@ -127,7 +128,7 @@ export function buildApplicationPlanningRequest(application: ApplicationConfig):
     `数据源类型：${datasource}。`,
     `认证：${authEnabled ? '启用' : '不启用'}。`,
     `涉及权限控制：${authorizationEnabled ? '是' : '否'}。`,
-    `生成运行态权限管理页面：${runtimeManagementPageEnabled ? '是' : '否'}。`,
+    `初始管理员成员标识：${initialAdministratorSubjects.length ? initialAdministratorSubjects.join('、') : '未提供'}。`,
     '本轮按需求文档、产品规划、UI 设计（可按需跳过）和技术规划顺序推进，不直接生成业务代码。'
   ].join('\n')
 }

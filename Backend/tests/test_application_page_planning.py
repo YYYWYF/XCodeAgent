@@ -125,7 +125,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "requirements_confirmed": False,
                 "requirement_spec_path": str(artifact),
                 "clarification": {
-                    "mode": "requirement_spec_confirmation",
+                    "mode": "requirement_document_confirmation",
                     "status": "requires_user_input",
                     "questions": [],
                 },
@@ -157,7 +157,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             {"configurable": {"thread_id": "planning-thread"}},
         )
         self.assertIn("workflow-run", frames)
-        self.assertIn("requirement_spec_confirmation", frames)
+        self.assertIn("requirement_document_confirmation", frames)
         self.assertIn("confirmationArtifact", frames)
         self.assertIn("待确认需求", frames)
         self.assertIn("RUN_FINISHED", frames)
@@ -357,7 +357,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 {
                     "clarification": {
                         "status": "requires_user_input",
-                        "mode": "requirement_spec_confirmation",
+                        "mode": "requirement_document_confirmation",
                     }
                 }
             ),
@@ -426,7 +426,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                         "confirmation_status": "pending_user_confirmation",
                     },
                     "clarification": {
-                        "mode": "requirement_spec_confirmation",
+                        "mode": "requirement_document_confirmation",
                         "status": "requires_user_input",
                         "questions": [{"id": "confirmation", "header": "需求确认"}],
                     },
@@ -436,7 +436,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
             self.assertEqual(
                 result["lifecycle"]["initialization"]["stage"],
-                "awaiting_requirement_confirmation",
+                "awaiting_requirement_document_confirmation",
             )
             self.assertNotIn("pendingInteraction", result["lifecycle"])
 
@@ -601,7 +601,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "product_plan_path": str(draft_path),
                 "clarification": {
                     "status": "requires_user_input",
-                    "mode": "product_plan_confirmation",
+                    "mode": "requirement_document_confirmation",
                 },
             }
 

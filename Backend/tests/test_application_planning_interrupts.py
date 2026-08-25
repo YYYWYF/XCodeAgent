@@ -37,7 +37,7 @@ def _requirements_fixture(state: ProjectState) -> dict:
             },
             "clarification": {
                 "status": "requires_user_input",
-                "mode": "requirement_spec_confirmation",
+                "mode": "requirement_document_confirmation",
             },
             "application_planning_interaction": {},
         }
@@ -50,7 +50,7 @@ def _requirements_fixture(state: ProjectState) -> dict:
         },
         "clarification": {
             "status": "requires_user_input",
-            "mode": "requirement_spec_confirmation",
+            "mode": "requirement_document_confirmation",
         },
     }
 
