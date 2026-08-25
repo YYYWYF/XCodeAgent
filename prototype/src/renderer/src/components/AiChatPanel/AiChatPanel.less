@@ -1,4 +1,5 @@
 .@{class-prefix}-ai-chat-panel {
+  position: relative;
   display: flex;
   flex: 1;
   width: 100%;
@@ -37,6 +38,22 @@
     width: var(--assistant-panel-width, 660px);
     border-right: 0;
   }
+}
+
+/* 右侧工作区全宽时，占满原对话区，保留左侧工作台导航。 */
+.@{class-prefix}-ai-chat-panel.@{class-prefix}-right-panel-full {
+  .@{class-prefix}-ai-chat-assistant {
+    // 中间对话容器不参与横向分配，释放出的空间由右侧工作区完整接管。
+    flex: 0 0 0;
+    width: 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .@{class-prefix}-ai-chat-main {
+    display: none;
+  }
+
 }
 
 .@{class-prefix}-split-dragging {
@@ -107,39 +124,12 @@
       box-shadow: none;
     }
 
-    .@{class-prefix}-panel-split-handle-icon {
-      opacity: 1;
-      transform: translate(-50%, -50%) scale(1);
-    }
   }
 
   &:focus-visible {
     outline: 2px solid var(--wb-accent-border);
     outline-offset: -2px;
   }
-}
-
-.@{class-prefix}-panel-split-handle-icon {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  z-index: 1;
-  display: inline-flex;
-  width: 22px;
-  height: 32px;
-  align-items: center;
-  justify-content: center;
-  color: var(--wb-text);
-  background: var(--wb-surface);
-  border: 1px solid var(--wb-border-strong);
-  border-radius: 6px;
-  box-shadow: none;
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(-50%, -50%) scale(0.92);
-  transition:
-    opacity 0.16s ease,
-    transform 0.16s ease;
 }
 
 .@{class-prefix}-embedded-preview-pane {
@@ -229,6 +219,7 @@
 /* #2 右侧工作区：tab 条 + 内容区。embedded-preview-pane 默认是横向，
    workspace-pane 改成纵向，让 tab 条在顶、内容在下。 */
 .@{class-prefix}-workspace-pane {
+  position: relative;
   display: flex;
   flex-direction: column;
 }
@@ -251,15 +242,6 @@
   min-height: 0;
   overflow: auto;
   padding: 12px 14px;
-}
-
-.@{class-prefix}-application-preview-workspace {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  background: var(--wb-canvas);
 }
 
 .@{class-prefix}-historical-task-notice {

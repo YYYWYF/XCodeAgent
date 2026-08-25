@@ -56,7 +56,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                         "pageId": first_page["pageId"],
                         "actions": [
                             {
-                                "actionId": "open-detail",
+                                "actionId": "open_detail",
                                 "name": "查看详情",
                                 "description": "进入详情页面。",
                                 "requiresConfirmation": False,
@@ -102,7 +102,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                         "pageId": page["pageId"],
                         "actions": [
                             {
-                                "actionId": "open-current-detail",
+                                "actionId": "open_current_detail",
                                 "name": "查看当前详情",
                                 "description": "按当前对象进入详情页面。",
                                 "requiresConfirmation": False,
@@ -138,7 +138,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                         "pageId": first_page["pageId"],
                         "actions": [
                             {
-                                "actionId": "open-detail",
+                                "actionId": "open_detail",
                                 "name": "查看详情",
                                 "description": "进入详情页面。",
                                 "requiresConfirmation": False,
@@ -157,8 +157,78 @@ class ProductPlanningRetryTests(unittest.TestCase):
 
         self.assertEqual(planner_mock.call_count, 3)
 
-    def test_technical_plan_temporarily_skips_business_action_validation(self) -> None:
-        """页面行为校验暂停时，缺少业务动作绑定不触发 TechnicalPlan 重试。"""
+    @patch("app.graph.nodes.product_planning.write_product_plan_documents")
+    @patch("app.graph.nodes.product_planning.plan_product_with_chat_model")
+    def test_missing_restricted_operation_requests_page_then_creates_action(
+        self,
+        planner_mock,
+        writer_mock,
+    ) -> None:
+        """模型始终遗漏受限操作时，应转为页面归属澄清并确定性补齐 action。"""
+
+        requirement_spec = create_requirement_spec(
+            "人员管理",
+            agent_spec={
+                "pages": [
+                    {
+                        "pageId": "people",
+                        "name": "人员列表",
+                        "path": "/people",
+                        "module_id": "people",
+                        "description": "管理人员信息。",
+                    }
+                ],
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [],
+                    "restrictedOperations": [
+                        {
+                            "name": "停用人员",
+                            "description": "停用选定人员。",
+                            "rationale": "停用会影响人员使用状态。",
+                            "sourceRefs": ["业务描述"],
+                        }
+                    ],
+                    "dataRules": [],
+                },
+            },
+        )
+        missing_operation_plan = create_product_plan(requirement_spec)
+        planner_mock.return_value = missing_operation_plan
+        writer_mock.return_value = ("product-plan.md", "product-plan.json")
+
+        clarification_update = product_planning(
+            {"requirement_spec": requirement_spec, "request": ""}
+        )
+
+        self.assertEqual(planner_mock.call_count, 3)
+        self.assertEqual(
+            clarification_update["clarification"]["mode"],
+            "authorization_operation_action_resolution",
+        )
+        question = clarification_update["clarification"]["questions"][0]
+        self.assertEqual(question["options"][0]["value"], "page:people")
+
+        resolved_update = product_planning(
+            {
+                "workflow_scope": "application_planning",
+                "requirement_spec": requirement_spec,
+                "product_plan": clarification_update["product_plan"],
+                "clarification": clarification_update["clarification"],
+                "application_planning_interaction": {
+                    "action": "answer",
+                    "answers": {question["id"]: {"selected": ["page:people"]}},
+                },
+            }
+        )
+
+        resolved_plan = resolved_update["product_plan"]
+        self.assertEqual(resolved_update["clarification"]["mode"], "requirement_document_confirmation")
+        self.assertEqual(resolved_plan["pages"][0]["actions"][0]["name"], "停用人员")
+        self.assertEqual(validate_product_plan(resolved_plan, requirement_spec), [])
+
+    def test_technical_plan_retries_missing_business_action_binding(self) -> None:
+        """缺少业务 action endpoint 实现时，TechnicalPlan 必须在同一轮自动修复。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
         target_page = requirement_spec["pages"][0]
@@ -170,7 +240,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                         "pageId": target_page["pageId"],
                         "actions": [
                             {
-                                "actionId": "guide_list_page-search-guides",
+                                "actionId": "guide_list_page_search_guides",
                                 "name": "搜索指南",
                                 "description": "按关键字查询指南。",
                                 "requiresConfirmation": False,
@@ -190,7 +260,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                         "actions": (
                             [
                                 {
-                                    "actionId": "guide_list_page-search-guides",
+                                    "actionId": "guide_list_page_search_guides",
                                     "controlIds": ["guide-search"],
                                 }
                             ]
@@ -226,7 +296,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                     "id": "guides-api",
                     "entity_ids": [requirement_spec["entities"][0]["id"]],
                     "base_path": "/api/guides",
-                    "authentication": {"required": False, "roles": []},
+                    "authentication": {"required": False},
                     "schemas": {},
                     "endpoints": [{"id": "guides.search", "method": "GET"}],
                 }
@@ -235,7 +305,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
         valid_plan = deepcopy(invalid_plan)
         valid_plan["pages"][0]["references"]["action_implementations"] = [
             {
-                "actionId": "guide_list_page-search-guides",
+                "actionId": "guide_list_page_search_guides",
                 "endpointId": "guides.search",
             }
         ]
@@ -279,7 +349,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
         ):
             update = project_planning(state)
 
-        self.assertEqual(planner_mock.call_count, 1)
+        self.assertEqual(planner_mock.call_count, 2)
         self.assertEqual(update["status"], "requires_user_input")
         self.assertEqual(update["clarification"]["mode"], "technical_plan_confirmation")
         self.assertNotIn("page_implementation_contracts", update["technical_plan"])
@@ -292,7 +362,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
         binding = runtime_plan["page_implementation_contracts"][0][
             "actionBindings"
         ][0]
-        self.assertEqual(binding["endpointId"], "")
+        self.assertEqual(binding["endpointId"], "guides.search")
 
     def test_technical_plan_retries_raw_validation_error_then_confirms(self) -> None:
         """首次原始 JSON 校验失败时应在同一生成预算内修复并返回确认载荷。"""
@@ -575,7 +645,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                         "pageId": first_page["pageId"],
                         "actions": [
                             {
-                                "actionId": "open-detail",
+                                "actionId": "open_detail",
                                 "name": "查看详情",
                                 "description": "进入详情页面。",
                                 "requiresConfirmation": False,

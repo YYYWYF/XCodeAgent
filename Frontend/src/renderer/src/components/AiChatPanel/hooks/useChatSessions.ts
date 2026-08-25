@@ -58,6 +58,9 @@ export type TestPhaseSessionTarget = {
   entityLabel?: string
 }
 
+/** 审查阶段沿用测试目标归属，但使用全新的会话和 AG-UI thread。 */
+export type ReviewPhaseSessionTarget = TestPhaseSessionTarget
+
 /** 从待保存消息中的 Workflow 快照推断 API endpoint 会话归属。 */
 function inferEndpointContextFromMessages(messages: ChatSessionMessage[]): {
   apiContractId?: string
@@ -137,6 +140,7 @@ type UseChatSessionsResult = {
   createEntitySession: (entityId: string, entityLabel: string) => Promise<SessionIdentity>
   createPageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
+  createReviewSession: (target: ReviewPhaseSessionTarget) => Promise<SessionIdentity>
   ensureActiveSession: () => Promise<SessionIdentity>
   ensurePlanningSession: (threadId: string) => Promise<SessionIdentity>
   ensureEndpointSession: (
@@ -687,6 +691,39 @@ export function useChatSessions({
     }
   }
 
+  /** 为审查阶段创建独立空白会话和 AG-UI thread，保留当前目标归属但不复制测试消息。 */
+  const createReviewSession = async (
+    target: ReviewPhaseSessionTarget
+  ): Promise<SessionIdentity> => {
+    const targetLabel = target.targetLabel.trim() || '当前应用'
+    const apiContractId = String(target.apiContractId || '').trim()
+    const endpointId = String(target.endpointId || '').trim()
+    const entityId = String(target.entityId || '').trim()
+    try {
+      return await createNewSession(
+        String(target.pageId || '').trim() || undefined,
+        undefined,
+        apiContractId && endpointId
+          ? {
+              apiContractId,
+              endpointId,
+              endpointLabel: String(target.endpointLabel || targetLabel).trim() || targetLabel
+            }
+          : undefined,
+        entityId
+          ? {
+              entityId,
+              entityLabel: String(target.entityLabel || targetLabel).trim() || targetLabel
+            }
+          : undefined,
+        { title: `审查：${targetLabel}`, workbenchPhase: 'review' }
+      )
+    } catch (caughtError) {
+      reportSessionError(caughtError)
+      throw caughtError
+    }
+  }
+
   /** 按页面恢复既有会话，首次进入该页面时创建独立 session 与 thread。 */
   const ensurePageSession = async (pageId: string, pageLabel: string): Promise<SessionIdentity> => {
     const normalizedPageId = pageId.trim()
@@ -873,6 +910,7 @@ export function useChatSessions({
     createEntitySession,
     createPageSession,
     createTestSession,
+    createReviewSession,
     deletingSessionId,
     draft,
     draftKey,

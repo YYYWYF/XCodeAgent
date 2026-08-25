@@ -13,7 +13,9 @@ export type PlanExecutionMode =
   | 'awaiting_authorization'
   | 'awaiting_repair_confirmation'
   | 'awaiting_unit_test_confirmation'
+  | 'awaiting_frontend_performance_confirmation'
   | 'awaiting_test_phase_confirmation'
+  | 'awaiting_review_phase_confirmation'
   | 'awaiting_acceptance'
   | 'awaiting_plan_adjustment'
   | 'failed'
@@ -44,15 +46,30 @@ export function workflowInteractionAvailability(
   if (isConversationWorkflow(workflow)) {
     return workflow.summary.status === 'requires_user_input' ? 'active' : 'stale'
   }
-  if (!lifecycle) return 'unavailable'
-
-  const snapshotExecution = workflowLifecycleSnapshot(workflow)?.activeExecutions?.[workflow.runId]
+  const snapshotLifecycle = workflowLifecycleSnapshot(workflow)
+  const snapshotExecution = snapshotLifecycle?.activeExecutions?.[workflow.runId]
   const snapshotPending = snapshotExecution?.pendingInteraction
+  if (!lifecycle) return 'unavailable'
+  if (!snapshotExecution || !snapshotPending) return 'stale'
+
+  const snapshotInteractionActive =
+    snapshotExecution.status === 'awaiting_user' &&
+    snapshotExecution.threadId === workflow.threadId &&
+    !snapshotPending.submittedAt
   const activeExecution = lifecycle.activeExecutions[workflow.runId]
   const activePending = activeExecution?.pendingInteraction
-  if (!snapshotPending || !activePending) return 'stale'
+  if (!activeExecution || activeExecution.threadId !== workflow.threadId) return 'stale'
+  // application-lifecycle 自定义事件和 workflow-run 卡片事件分开发送，React store
+  // 可能仍保留同一 run 的 running 快照。只在该 run 尚无 pendingInteraction 且卡片
+  // revision 更新时临时放行；已替换 run、已提交或令牌冲突不会进入该分支。
+  if (!activePending) {
+    return snapshotLifecycle.revision > lifecycle.revision && snapshotInteractionActive
+      ? 'active'
+      : 'stale'
+  }
 
-  return activeExecution.status === 'awaiting_user' &&
+  return snapshotInteractionActive &&
+    activeExecution.status === 'awaiting_user' &&
     activeExecution.threadId === workflow.threadId &&
     !activePending.submittedAt &&
     activePending.id === snapshotPending.id &&
@@ -63,7 +80,13 @@ export function workflowInteractionAvailability(
 
 /** 从 Workflow 的兼容投影位置读取提交交互所依据的生命周期快照。 */
 function workflowLifecycleSnapshot(workflow: WorkflowRunPayload): ApplicationLifecycle | undefined {
-  const candidates = [workflow.state?.lifecycle, workflow.result?.lifecycle]
+  // 节点边界先在 summary 广播最新生命周期，再生成 state/result；优先读取 summary
+  // 可避免当前确认卡因帧间时序被误判为历史卡，同时仍校验交互 id 与 revision。
+  const candidates = [
+    workflow.summary.lifecycle,
+    workflow.state?.lifecycle,
+    workflow.result?.lifecycle
+  ]
   return candidates.find((candidate): candidate is ApplicationLifecycle =>
     Boolean(candidate && typeof candidate === 'object')
   )
@@ -85,8 +108,14 @@ export function derivePlanExecutionMode(execution?: WorkbenchExecution): PlanExe
   if (interactionType === 'unit_test_confirmation') {
     return 'awaiting_unit_test_confirmation'
   }
+  if (interactionType === 'frontend_performance_confirmation') {
+    return 'awaiting_frontend_performance_confirmation'
+  }
   if (interactionType === 'test_phase_confirmation') {
     return 'awaiting_test_phase_confirmation'
+  }
+  if (interactionType === 'review_phase_confirmation') {
+    return 'awaiting_review_phase_confirmation'
   }
   if (interactionType === 'page_acceptance') return 'awaiting_acceptance'
   return 'awaiting_plan_adjustment'
@@ -295,6 +324,8 @@ export function planExecutionPhaseLabel(phase?: string): string {
       test_phase_confirmation: '开发完成确认',
       integration_test: '集成测试',
       small_task_repair: '执行局部修复任务',
+      review_phase_confirmation: '审查阶段确认',
+      code_review: '前后端代码审查',
       launch_project: '启动预览',
       acceptance: '预览验收',
       finalize_project: '完成交付'
@@ -324,8 +355,11 @@ export function workflowResumeNode(
     'test_phase_confirmation',
     'integration_test',
     'small_task_repair',
+    'review_phase_confirmation',
+    'code_review',
     'launch_project',
-    'acceptance'
+    'acceptance',
+    'finalize_project'
   ])
   const events = workflow?.events || []
   for (let index = events.length - 1; index >= 0; index -= 1) {

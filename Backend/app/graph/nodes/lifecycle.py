@@ -243,7 +243,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
         "clarification": {
             "mode": "test_phase_confirmation",
             "status": "requires_user_input",
-            "message": "代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试、失败修复与项目启动。",
+            "message": "代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试与失败修复。",
             "testTarget": target,
             "questions": [],
         },

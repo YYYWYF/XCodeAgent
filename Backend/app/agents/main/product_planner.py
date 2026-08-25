@@ -19,7 +19,6 @@ def _model_product_plan_view(plan: dict[str, Any]) -> dict[str, Any]:
         key: plan.get(key)
         for key in (
             "app",
-            "user_roles",
             "business_flows",
             "pages",
             "product_acceptance_criteria",
@@ -30,11 +29,6 @@ def _model_product_plan_view(plan: dict[str, Any]) -> dict[str, Any]:
 def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
     """按 RequirementSpec 页面身份生成完整且可直接遵循的 JSON 响应结构示例。"""
 
-    role_ids = [
-        str(item.get("id") or "").strip()
-        for item in requirement_spec.get("user_roles", [])
-        if isinstance(item, dict) and str(item.get("id") or "").strip()
-    ]
     pages: list[dict[str, Any]] = []
     for source in requirement_spec.get("pages", []):
         if not isinstance(source, dict):
@@ -57,7 +51,7 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
                 ],
                 "actions": [
                     {
-                        "actionId": f"{page_id}-primary-action",
+                        "actionId": f"{page_id}_primary_action",
                         "name": "<填写用户主动操作名称；纯展示页面删除此示例并返回空数组>",
                         "description": "<填写操作意图>",
                         "requiresConfirmation": False,
@@ -68,7 +62,6 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
                     }
                 ],
                 "navigation_targets": [],
-                "allowed_roles": role_ids,
                 "state_requirements": {
                     "loading": "<填写加载状态要求>",
                     "empty": "<填写空状态要求>",
@@ -86,12 +79,34 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
             "name": str(app_info.get("name") or "未命名应用"),
             "summary": str(app_info.get("summary") or requirement_spec.get("summary") or ""),
         },
-        "user_roles": requirement_spec.get("user_roles", []),
         "business_flows": requirement_spec.get("business_flows", []),
         "pages": pages,
         "product_acceptance_criteria": ["<填写产品级验收标准>"],
     }
     return json.dumps(example, ensure_ascii=False, indent=2)
+
+
+def _authorization_operation_action_instruction(requirement_spec: dict[str, Any]) -> str:
+    """把已确认的业务操作权限转换为模型必须覆盖的产品 action 约束。"""
+
+    authorization = requirement_spec.get("authorization_requirements")
+    authorization = authorization if isinstance(authorization, dict) else {}
+    if authorization.get("enabled") is not True:
+        return ""
+    operation_names = [
+        str(item.get("name") or "").strip()
+        for item in authorization.get("restrictedOperations", [])
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    if not operation_names:
+        return ""
+    names = "、".join(f"“{name}”" for name in operation_names)
+    return (
+        "权限操作覆盖约束：以下是已确认的业务受限操作："
+        f"{names}。每一项必须在某个页面的 actions 中各出现且只出现一次，"
+        "对应 action.name 必须与该名称完全相同；这些 action 仍是普通产品 action，"
+        "不要输出任何权限、角色或 authorizationTargets 字段。\n"
+    )
 
 
 def _product_planning_prompt(
@@ -106,12 +121,15 @@ def _product_planning_prompt(
         "as a replacement plan. Start from the complete existing plan, change only facts explicitly "
         "affected by the feedback or by the confirmed RequirementSpec, and preserve every unrelated "
         "page goal, information item, action, navigation target, state requirement, acceptance criterion, "
-        "and app summary. Preserve stable pageId, itemId, actionId, and stepId values for unchanged "
+        "and app summary. RequirementSpec pageId and every actionId must use lower_snake_case; preserve stable pageId, itemId, actionId, and stepId values for unchanged "
         "product concepts. Return the complete merged ProductPlan, not a patch and not a plan describing "
         "only the latest feedback.\n"
         f"Existing ProductPlan:\n{json.dumps(_model_product_plan_view(existing_plan), ensure_ascii=False)}\n\n"
         if existing_plan
-        else "Create a new ProductPlan from the confirmed RequirementSpec.\n"
+        else "Create a new ProductPlan from the validated RequirementSpec draft in this same requirement-document stage.\n"
+    )
+    authorization_operation_instruction = _authorization_operation_action_instruction(
+        requirement_spec
     )
     return (
         "You are the product-planning model for an app-generation workflow.\n"
@@ -119,17 +137,20 @@ def _product_planning_prompt(
         "architecture, data sources, persistence choices, code files, React components, or visual layout. "
         "Never ask the product reviewer to confirm data-source or storage decisions.\n"
         "Return one complete JSON object without markdown fences. The root object must contain exactly "
-        "app, user_roles, business_flows, pages, and product_acceptance_criteria. Never return frontend_pages "
+        "app, business_flows, pages, and product_acceptance_criteria. Never return frontend_pages "
         "or any other root field. Do not return assumptions or product "
         "risks. Product uncertainty must be resolved during requirements clarification, while technical "
         "risk belongs to later technical planning and execution.\n"
+        "When the RequirementSpec contains authorization rules, still do not return authorizationTargets: "
+        "it is an internal derived field that the server creates only after validating this raw JSON. "
+        "Your response must omit it completely, together with every other authorization mapping or field.\n"
         "All page acceptance_criteria and product_acceptance_criteria must describe only observable "
         "product behavior for users of the generated application. Never include XCodeAgent workflow "
         "stages, preview availability, code generation, build/compile/lint/typecheck status, automated "
         "or integration tests, quality gates, or conditions for entering user acceptance.\n"
         "The page set is immutable: pages must match RequirementSpec.pages one-to-one by pageId, name, "
         "path, module_id, and description. For each page add: goal, information_items, actions, "
-        "navigation_targets, allowed_roles, state_requirements, and acceptance_criteria.\n"
+        "navigation_targets, state_requirements, and acceptance_criteria.\n"
         "information_items MUST be JSON objects shaped exactly as "
         "{itemId, label, description}; never serialize objects as strings. itemId is stable within its page.\n"
         "An action is an explicit user-triggered intent that changes visible UI state, changes a result set, "
@@ -146,18 +167,20 @@ def _product_planning_prompt(
         "purely local presentation changes. Use business for querying, submitting, mutating, exporting, or "
         "other domain outcomes whose implementation is decided later. Actions must not contain endpoint ids, HTTP "
         "details, schemas, data sources, database operations, or implementation guesses.\n"
-        "navigation_targets may only reference pageIds declared in the same plan. allowed_roles may only "
-        "reference RequirementSpec.user_roles ids. Every navigation behavior targetPageId must also appear "
+        "navigation_targets may only reference pageIds declared in the same plan. Never return authorizationTargets, authorization, "
+        "permissions, allowed_roles, role IDs, role assignments, resource keys, policy keys, or the fixed /roles "
+        "system page. Every navigation behavior targetPageId must also appear "
         "in that page's navigation_targets, including a targetPageId equal to the current pageId. "
         "state_requirements should cover loading, empty, error, "
         "success, and validation.\n"
         "Follow this complete JSON response structure exactly. Replace angle-bracket placeholders with "
         "product facts; do not add keys. For navigation/external/sequence behavior, replace the behavior "
         "object with the exact type-specific fields described above.\n"
+        f"{authorization_operation_instruction}"
         f"Complete JSON response example:\n{_product_plan_json_example(requirement_spec)}\n\n"
         f"{revision_context}"
         f"Latest product feedback:\n{user_feedback}\n\n"
-        f"Confirmed RequirementSpec:\n{json.dumps(requirement_spec, ensure_ascii=False)}"
+        f"Validated RequirementSpec draft:\n{json.dumps(requirement_spec, ensure_ascii=False)}"
     )
 
 

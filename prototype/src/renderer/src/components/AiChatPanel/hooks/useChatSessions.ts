@@ -102,6 +102,7 @@ type UseChatSessionsResult = {
   draftKey: string
   createReviewSession: () => Promise<SessionIdentity>
   createTestingSession: () => Promise<SessionIdentity>
+  createAcceptanceSession: () => Promise<SessionIdentity>
   ensureAnalysisSession: () => Promise<SessionIdentity>
   ensurePlanningSession: () => Promise<SessionIdentity>
   createEndpointSession: (
@@ -126,7 +127,7 @@ type UseChatSessionsResult = {
     endpointContext?: RelatedEndpointContext
   ) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
-  handleCreateSessionFromList: () => void
+  handleCreateSessionFromList: (sessionKind?: WorkbenchSessionKind) => void
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
   handleRenameSession: (sessionId: string, title: string) => Promise<void>
@@ -258,25 +259,11 @@ export function useChatSessions({
         [mode]: nextSessions
       }
       setSessionSummaries((current) => ({ ...current, [mode]: nextSessions }))
-      const activeSessionId = activeSessionIdsRef.current[mode]
-      const activeSessionKey = activeSessionId
-        ? sessionRuntimeKey(application.workspaceRoot, mode, activeSessionId)
-        : ''
-      const hasActiveRuntimeSession = Boolean(
-        activeSessionId && agUiSessionsRef.current[activeSessionKey]
-      )
+      // 会话列表只负责恢复目录，绝不擅自打开“最近一条”会话；当前会话由阶段入口或用户选择决定。
       if (nextSessions.length === 0) {
-        if (hasActiveRuntimeSession) return
         activeSessionIdsRef.current = { ...activeSessionIdsRef.current, [mode]: undefined }
         setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
-        return
       }
-      // 当前阶段已创建临时会话时，不要被旧会话列表中的最近记录覆盖。
-      if (hasActiveRuntimeSession) return
-      // 优先恢复最近一条有内容的会话，避免空白“新对话”遮住已经落盘的页面设计记录。
-      const sessionToOpen =
-        nextSessions.find((session) => session.messageCount > 0) || nextSessions[0]
-      await openChatSession(mode, sessionToOpen.id)
     } catch (caughtError) {
       setSessionErrors((current) => ({
         ...current,
@@ -387,8 +374,7 @@ export function useChatSessions({
     setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
   }
 
-  /** 创建普通会话或带页面归属的独立设计会话。 */
-  /** 创建尚未进入目录的运行时草稿会话，等待 Agent 回复后再物化。 */
+/** 创建尚未进入目录的运行时草稿会话，等待 Agent 回复后再物化。 */
   const createNewSession = async (
     pageId?: string,
     pageLabel?: string,
@@ -585,7 +571,7 @@ export function useChatSessions({
     }
   }
 
-  /** 创建或复用唯一的应用级代码审查会话。 */
+  /** 创建或复用阶段默认的应用级代码审查会话。 */
   const createReviewSession = async (): Promise<SessionIdentity> => {
     const REVIEW_TITLE = '代码审查'
     const existingReview = sessionSummariesRef.current[editorMode].find(
@@ -593,7 +579,7 @@ export function useChatSessions({
         !session.pageId &&
         !session.apiContractId &&
         !session.endpointId &&
-        (session.title || '').includes(REVIEW_TITLE)
+        session.sessionKind === 'review' && session.title === REVIEW_TITLE
     )
     if (existingReview) {
       await openChatSession(editorMode, existingReview.id)
@@ -602,10 +588,10 @@ export function useChatSessions({
         getIdentity(key) || sessionIdentityFromSummary(existingReview, editorMode, workspaceRoot)
       if (identity) return identity
     }
-    return createNewSession(undefined, undefined, undefined, REVIEW_TITLE, false, 'review')
+    return createNewSession(undefined, undefined, undefined, REVIEW_TITLE, true, 'review')
   }
 
-  /** 创建或复用唯一的应用级测试会话。 */
+  /** 创建或复用阶段默认的应用级测试会话。 */
   const createTestingSession = async (): Promise<SessionIdentity> => {
     const TESTING_TITLE = '应用测试'
     const existingTesting = sessionSummariesRef.current[editorMode].find(
@@ -613,7 +599,7 @@ export function useChatSessions({
         !session.pageId &&
         !session.apiContractId &&
         !session.endpointId &&
-        (session.title || '').includes(TESTING_TITLE)
+        session.sessionKind === 'testing' && session.title === TESTING_TITLE
     )
     if (existingTesting) {
       await openChatSession(editorMode, existingTesting.id)
@@ -622,7 +608,27 @@ export function useChatSessions({
         getIdentity(key) || sessionIdentityFromSummary(existingTesting, editorMode, workspaceRoot)
       if (identity) return identity
     }
-    return createNewSession(undefined, undefined, undefined, TESTING_TITLE, false, 'testing')
+    return createNewSession(undefined, undefined, undefined, TESTING_TITLE, true, 'testing')
+  }
+
+  /** 创建或复用阶段默认的应用级验收会话，保持验收与审查对话完全隔离。 */
+  const createAcceptanceSession = async (): Promise<SessionIdentity> => {
+    const ACCEPTANCE_TITLE = '应用验收'
+    const existingAcceptance = sessionSummariesRef.current[editorMode].find(
+      (session) =>
+        !session.pageId &&
+        !session.apiContractId &&
+        !session.endpointId &&
+        session.sessionKind === 'acceptance' && session.title === ACCEPTANCE_TITLE
+    )
+    if (existingAcceptance) {
+      await openChatSession(editorMode, existingAcceptance.id)
+      const key = sessionRuntimeKey(workspaceRoot, editorMode, existingAcceptance.id)
+      const identity =
+        getIdentity(key) || sessionIdentityFromSummary(existingAcceptance, editorMode, workspaceRoot)
+      if (identity) return identity
+    }
+    return createNewSession(undefined, undefined, undefined, ACCEPTANCE_TITLE, true, 'acceptance')
   }
 
   /** 读取当前运行时已创建的设计会话，避免自动首轮再次创建空白会话。 */
@@ -645,7 +651,7 @@ export function useChatSessions({
         !session.pageId &&
         !session.apiContractId &&
         !session.endpointId &&
-        (session.sessionKind === 'analysis' || (session.title || '').includes('需求分析'))
+        session.sessionKind === 'analysis' && session.title === '需求分析'
     )
     if (existing) {
       await openChatSession(editorMode, existing.id)
@@ -654,7 +660,7 @@ export function useChatSessions({
         getIdentity(key) || sessionIdentityFromSummary(existing, editorMode, workspaceRoot)
       if (identity) return identity
     }
-    return createNewSession(undefined, undefined, undefined, '需求分析', false, 'analysis')
+    return createNewSession(undefined, undefined, undefined, '需求分析', true, 'analysis')
   }
 
   /** 创建或复用项目 Agent 的计划阶段默认会话，只持有项目计划。 */
@@ -666,7 +672,7 @@ export function useChatSessions({
         !session.pageId &&
         !session.apiContractId &&
         !session.endpointId &&
-        (session.sessionKind === 'planning' || session.title === '项目计划')
+        session.sessionKind === 'planning' && session.title === '项目计划'
     )
     if (existing) {
       await openChatSession(editorMode, existing.id)
@@ -675,7 +681,7 @@ export function useChatSessions({
         getIdentity(key) || sessionIdentityFromSummary(existing, editorMode, workspaceRoot)
       if (identity) return identity
     }
-    return createNewSession(undefined, undefined, undefined, '项目计划', false, 'planning')
+    return createNewSession(undefined, undefined, undefined, '项目计划', true, 'planning')
   }
 
   /** 按 API endpoint 恢复既有会话，首次进入该接口时创建独立 session 与 thread。 */
@@ -704,9 +710,10 @@ export function useChatSessions({
     return createEndpointSession(normalizedApiContractId, normalizedEndpointId, endpointLabel)
   }
 
-  const handleCreateSessionFromList = (): void => {
+  /** 从对话视图显式创建当前阶段的额外持久会话，创建完成即成为当前会话。 */
+  const handleCreateSessionFromList = (sessionKind: WorkbenchSessionKind = 'general'): void => {
     if (!application.workspaceRoot) return
-    createNewSession().catch(reportSessionError)
+    createNewSession(undefined, undefined, undefined, '新对话', true, sessionKind).catch(reportSessionError)
   }
 
   const reportSessionError = (caughtError: unknown): void => {
@@ -894,6 +901,7 @@ export function useChatSessions({
     clearActiveSession,
     createReviewSession,
     createTestingSession,
+    createAcceptanceSession,
     ensureAnalysisSession,
     ensurePlanningSession,
     createEndpointSession,

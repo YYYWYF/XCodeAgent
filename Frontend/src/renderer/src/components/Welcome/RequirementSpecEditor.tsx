@@ -10,6 +10,7 @@ import { Button, Input, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { cx } from '../../utils'
 import RequirementSpecFlowEditor from './RequirementSpecFlowSteps'
+import RequirementAuthorizationEditor from './RequirementAuthorizationEditor'
 import './RequirementSpecEditor.less'
 
 const { Text, Title } = Typography
@@ -330,10 +331,11 @@ export default function RequirementSpecEditor({ onChange, rootPath, spec }: Prop
             id: draftId('role'),
             name: '新角色',
             description: '',
-            permissions: []
+            isSystemRole: false,
+            isInitialAdminRole: false
           })
         }
-        title="用户角色"
+        title="业务参与者"
       >
         {recordList(spec.user_roles).map((item, index) => (
           <EditorItem
@@ -385,6 +387,7 @@ export default function RequirementSpecEditor({ onChange, rootPath, spec }: Prop
           />
         ))}
       </EditorSection>
+      <RequirementAuthorizationEditor onChange={onChange} spec={spec} />
       <EditorSection icon={<DatabaseOutlined />} onAdd={addEntity} title="实体">
         {editorEntities(spec.entities).map((entity, entityIndex) => (
           <EditorItem

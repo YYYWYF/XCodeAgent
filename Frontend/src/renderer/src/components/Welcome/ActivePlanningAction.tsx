@@ -41,18 +41,11 @@ function planningStatusPresentation(
       title: `阶段 1/4：等待补充「${application.appName}」的需求细节`
     }
   }
-  if (status === 'running' && stage === 'awaiting_requirement_confirmation') {
+  if (status === 'running' && stage === 'awaiting_requirement_document_confirmation') {
     return {
-      description: '需求分析已完成，等待确认后生成正式需求文档',
+      description: '需求事实与页面、操作规划已完成，正在等待联合确认',
       icon: <LoadingOutlined spin />,
-      title: `阶段 1/4：等待确认「${application.appName}」的需求内容`
-    }
-  }
-  if (status === 'running' && stage === 'awaiting_product_plan_confirmation') {
-    return {
-      description: '正在处理产品规划并准备 UI 设计稿',
-      icon: <LoadingOutlined spin />,
-      title: `阶段 2/4：正在处理「${application.appName}」的产品规划`
+      title: `阶段 1/4：等待确认「${application.appName}」的需求文档`
     }
   }
   if (status === 'running' && stage === 'awaiting_ui_design_confirmation') {
@@ -76,18 +69,11 @@ function planningStatusPresentation(
       title: `阶段 1/4：补充「${application.appName}」的需求细节`
     }
   }
-  if (stage === 'awaiting_requirement_confirmation') {
+  if (stage === 'awaiting_requirement_document_confirmation') {
     return {
-      description: '需求分析已完成，确认后生成需求文档并继续产品规划',
+      description: '需求事实与页面、操作规划已生成，确认后进入 UI 设计',
       icon: <CheckCircleFilled />,
-      title: `阶段 1/4：确认「${application.appName}」的需求内容`
-    }
-  }
-  if (stage === 'awaiting_product_plan_confirmation') {
-    return {
-      description: '需求文档（含产品规划）已生成，确认后进入 UI 设计',
-      icon: <CheckCircleFilled />,
-      title: `阶段 2/4：确认「${application.appName}」的需求文档`
+      title: `阶段 1/4：确认「${application.appName}」的需求文档`
     }
   }
   if (stage === 'awaiting_ui_design_confirmation') {
@@ -132,16 +118,9 @@ function planningStatusPresentation(
       title: `阶段 3/4：正在生成「${application.appName}」的 UI 设计稿`
     }
   }
-  if (stage === 'generating_product_plan') {
+  if (stage === 'generating_requirement_document') {
     return {
-      description: '需求文档已确认，正在生成产品规划',
-      icon: <LoadingOutlined spin />,
-      title: `阶段 2/4：正在生成「${application.appName}」的产品规划`
-    }
-  }
-  if (stage === 'generating_requirement_spec') {
-    return {
-      description: '需求分析已完成，正在生成需求文档',
+      description: '正在整合需求事实、页面与操作规划',
       icon: <LoadingOutlined spin />,
       title: `阶段 1/4：正在生成「${application.appName}」的需求文档`
     }

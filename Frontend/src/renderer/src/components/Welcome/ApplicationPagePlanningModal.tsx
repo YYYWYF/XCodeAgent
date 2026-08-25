@@ -249,8 +249,7 @@ function buildPlanningInteraction(
   }
 
   const confirmationValue = [
-    visibleAnswers.requirement_spec_confirmation,
-    visibleAnswers.product_plan_confirmation,
+    visibleAnswers.requirement_document_confirmation,
     visibleAnswers.ui_design_confirmation,
     visibleAnswers.technical_plan_confirmation
   ].find((value) => typeof value === 'string')
@@ -525,9 +524,9 @@ export default function ApplicationPagePlanningModal({
                   : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
                       initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
                     ? 'ui_confirmation'
-                    : initialLifecycle.initialization.stage === 'generating_product_plan' ||
+                    : initialLifecycle.initialization.stage === 'generating_requirement_document' ||
                         initialLifecycle.initialization.stage ===
-                          'awaiting_product_plan_confirmation'
+                          'awaiting_requirement_document_confirmation'
                       ? 'product_planning'
                     : 'requirements'
             },

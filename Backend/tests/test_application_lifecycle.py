@@ -19,7 +19,6 @@ from app.services.application_lifecycle import (
     complete_workbench_execution,
     ApplicationLifecycleConflictError,
     ApplicationLifecycleCorruptedError,
-    UnsupportedApplicationLifecycleVersionError,
     create_application_lifecycle,
     end_workbench_execution,
     application_lifecycle_path,
@@ -212,18 +211,14 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
             self.assertEqual(application_lifecycle_path(directory).read_text(encoding="utf-8"), original)
 
-    def test_corrupt_and_future_versions_fail_explicitly(self) -> None:
-        """损坏与未来版本不得静默推断或兼容。"""
+    def test_corrupt_snapshot_fails_explicitly(self) -> None:
+        """损坏的生命周期快照不得被静默当作缺失状态。"""
 
         with tempfile.TemporaryDirectory() as directory:
             path = application_lifecycle_path(directory)
             path.parent.mkdir(parents=True)
             path.write_text("{broken", encoding="utf-8")
             with self.assertRaises(ApplicationLifecycleCorruptedError):
-                load_application_lifecycle(directory)
-
-            path.write_text(json.dumps({"schemaVersion": "9.0.0"}), encoding="utf-8")
-            with self.assertRaises(UnsupportedApplicationLifecycleVersionError):
                 load_application_lifecycle(directory)
 
     def test_revision_compare_and_swap_rejects_lost_update(self) -> None:
@@ -331,7 +326,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
                     )
                 }
                 if path.name == "product-plan.json":
-                    payload.update({"schema_version": "product-plan.v4", "pages": []})
+                    payload.update({"schema_version": "product-plan.v5", "pages": []})
                 if path.name == "ui-designs.json":
                     payload.update({"schema_version": "ui-manifest.v3", "pages": []})
                 if path.name == "technical-plan.json":
@@ -410,9 +405,9 @@ class ApplicationLifecycleTests(unittest.TestCase):
             loaded = load_application_lifecycle(directory)
 
             assert loaded is not None
-            self.assertEqual(loaded.schema_version, "1.3.0")
             self.assertEqual(loaded.active_executions, {})
             self.assertEqual(loaded.resource_locks.pages, {})
+            self.assertNotIn("schemaVersion", loaded.model_dump(mode="json", by_alias=True))
             self.assertNotIn("project", payload)
             self.assertNotIn("delivery", payload)
 

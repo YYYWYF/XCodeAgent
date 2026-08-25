@@ -110,8 +110,7 @@ function withPlanningAction(
 
 // 根据确认阶段给出符合创建规划语义的标题。
 function panelTitle(mode?: string): string {
-  if (mode === 'requirement_spec_confirmation') return '确认需求内容'
-  if (mode === 'product_plan_confirmation') return '确认需求文档'
+  if (mode === 'requirement_document_confirmation') return '确认需求文档'
   if (mode === 'ui_design_confirmation') return '确认UI设计稿'
   if (mode === 'technical_plan_confirmation') return '确认技术规划'
   if (mode === 'technical_plan_generation_error') return '技术规划生成失败'
@@ -121,8 +120,7 @@ function panelTitle(mode?: string): string {
 
 // 根据确认阶段给出下一步按钮文案。
 function submitLabel(mode?: string): string {
-  if (mode === 'requirement_spec_confirmation') return '需求没问题，生成需求文档'
-  if (mode === 'product_plan_confirmation') return '确认需求文档并设计 UI'
+  if (mode === 'requirement_document_confirmation') return '确认需求文档并设计 UI'
   if (mode === 'ui_design_confirmation') return '确认设计稿并继续'
   if (mode === 'technical_plan_confirmation') return '确认技术规划并进入工作区'
   if (mode === 'technical_plan_generation_error') return '重新生成技术规划'
@@ -426,8 +424,8 @@ export default function ApplicationPlanningQuestionPanel({
   const lastValidUiWorkflowRef = useRef<WorkflowRunPayload | undefined>(undefined)
   const clarification = planningClarification(workflow)
   const questions = clarification?.questions || []
-  const isRequirementConfirmation = clarification?.mode === 'requirement_spec_confirmation'
-  const isProductPlanConfirmation = clarification?.mode === 'product_plan_confirmation'
+  const isRequirementConfirmation = clarification?.mode === 'requirement_document_confirmation'
+  const isProductPlanConfirmation = false
   const isTechnicalPlanConfirmation =
     clarification?.mode === 'technical_plan_confirmation'
   const isTechnicalPlanGenerationError =
@@ -481,10 +479,9 @@ export default function ApplicationPlanningQuestionPanel({
   // UI 确认阶段：用缓存的有效 UI workflow 渲染，保持布局不动，单页加载态由面板内控制。
   const knownConfirmationModes = new Set([
     'ui_design_confirmation',
-    'product_plan_confirmation',
+    'requirement_document_confirmation',
     'technical_plan_confirmation',
     'technical_plan_generation_error',
-    'requirement_spec_confirmation',
     'entity_source_binding',
   ])
   if (
@@ -535,7 +532,7 @@ export default function ApplicationPlanningQuestionPanel({
     onSubmit(
       workflow,
       {
-        requirement_spec_confirmation: feedbackText || '正确，继续规划',
+        requirement_document_confirmation: feedbackText || '正确，继续规划',
         __applicationPlanningAction: feedbackText ? 'revise' : 'confirm'
       },
       requirementDraft,

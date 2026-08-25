@@ -40,7 +40,11 @@ import {
 } from '../skillSelection'
 import { stoppedAnswer, workflowCodeChanges, workflowPreviewTarget } from '../utils'
 import type { WorkflowPreviewTarget } from '../utils'
-import type { PersistSessionInput, TestPhaseSessionTarget } from './useChatSessions'
+import type {
+  PersistSessionInput,
+  ReviewPhaseSessionTarget,
+  TestPhaseSessionTarget
+} from './useChatSessions'
 import {
   sessionIdentityMatchesTarget,
   type SessionIdentity,
@@ -106,6 +110,7 @@ type UseWorkflowConversationParams = {
   inputMode: ChatInputMode
   editorMode: EditorMode
   createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
+  createReviewSession: (target: ReviewPhaseSessionTarget) => Promise<SessionIdentity>
   ensureActiveSession: () => Promise<SessionIdentity>
   ensureEndpointSession: (
     apiContractId: string,
@@ -118,6 +123,7 @@ type UseWorkflowConversationParams = {
   persistSession: (input: PersistSessionInput) => Promise<void>
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onEnterTestPhase: () => void
+  onEnterReviewPhase: () => void
   onPreviewReady: (target: WorkflowPreviewTarget) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
@@ -343,6 +349,7 @@ export function useWorkflowConversation({
   inputMode,
   editorMode,
   createTestSession,
+  createReviewSession,
   ensureActiveSession,
   ensureEndpointSession,
   ensureEntitySession,
@@ -351,6 +358,7 @@ export function useWorkflowConversation({
   persistSession,
   onApplicationLifecycleChange,
   onEnterTestPhase,
+  onEnterReviewPhase,
   onPreviewReady,
   publishAiMessage,
   runningSessionsRef,
@@ -362,6 +370,8 @@ export function useWorkflowConversation({
   const notifiedPreviewTargetsRef = useRef<Set<string>>(new Set())
   // 测试阶段切换会先异步创建新会话，用 runId 防止按钮连点创建多个空白测试会话。
   const testPhaseTransitionRunIdsRef = useRef<Set<string>>(new Set())
+  // 审查阶段切换同样需要先创建新会话，用 runId 防止确认卡重复提交。
+  const reviewPhaseTransitionRunIdsRef = useRef<Set<string>>(new Set())
   const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
@@ -938,6 +948,55 @@ export function useWorkflowConversation({
         conversation: false
       })
       if (!started) testPhaseTransitionRunIdsRef.current.delete(workflow.runId)
+      return started
+    }
+    if (!conversation && clarificationMode === 'review_phase_confirmation') {
+      const answer = answers.review_phase_confirmation
+      const action =
+        answer && typeof answer === 'object' && !Array.isArray(answer)
+          ? String((answer as Record<string, unknown>).action || '')
+          : ''
+      if (
+        action !== 'confirm' ||
+        loading ||
+        workspaceBusy ||
+        reviewPhaseTransitionRunIdsRef.current.has(workflow.runId)
+      ) {
+        return false
+      }
+      reviewPhaseTransitionRunIdsRef.current.add(workflow.runId)
+      const target = testPhaseConfirmationTarget(workflow)
+      const targetId = target?.id || workflowBuildScope?.targetId
+      let reviewSession: SessionIdentity
+      try {
+        reviewSession = await createReviewSession({
+          targetLabel: target?.label || '当前应用',
+          pageId: activeSession?.pageId || (target?.type === 'page' ? targetId : undefined),
+          apiContractId: activeSession?.apiContractId || workflowBuildScope?.apiContractId,
+          endpointId:
+            activeSession?.endpointId || (target?.type === 'endpoint' ? targetId : undefined),
+          endpointLabel: activeSession?.endpointLabel || target?.label,
+          entityId:
+            activeSession?.entityId || (target?.type === 'data_source' ? targetId : undefined),
+          entityLabel: activeSession?.entityLabel || target?.label
+        })
+      } catch {
+        reviewPhaseTransitionRunIdsRef.current.delete(workflow.runId)
+        return false
+      }
+      // 会话创建成功后立即切换顶部阶段，避免等待审查 Agent 首帧造成视觉滞后。
+      onEnterReviewPhase()
+      const started = await sendWorkflowMessage('开始审查前后端代码', {
+        clarificationAnswers: answers,
+        originalRequest,
+        resumeState: workflow,
+        buildExecutionScope: workflowBuildScope,
+        resumeExecutionRunId: workflow.runId,
+        sessionIdentity: reviewSession,
+        titleFrom: '进入审查阶段',
+        conversation: false
+      })
+      if (!started) reviewPhaseTransitionRunIdsRef.current.delete(workflow.runId)
       return started
     }
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)

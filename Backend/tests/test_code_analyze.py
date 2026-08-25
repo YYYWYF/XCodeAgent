@@ -1,0 +1,467 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from deepagents.backends.protocol import LsResult, ReadResult, WriteResult
+
+from app.agents.code_analyze.analyzer import (
+    REQUIRED_SKILL_PATHS,
+    analyze_workspace_code,
+    normalize_code_review_result,
+)
+from app.agents.code_analyze.scope import CodeAnalyzeScopedBackend
+
+
+class CodeAnalyzeTests(unittest.TestCase):
+    """验证代码审查 Agent 的目录边界和结果安全投影。"""
+
+    def test_scope_rejects_writes_and_out_of_scope_reads(self) -> None:
+        """审查后端拒绝所有写入，并拒绝源码目录之外的读取。"""
+
+        delegate = SimpleNamespace(
+            ls=lambda *_args: LsResult(entries=[]),
+            read=lambda *_args: ReadResult(error=None),
+            write=lambda *_args: WriteResult(path="/frontend/src/App.tsx"),
+        )
+        scoped = CodeAnalyzeScopedBackend(delegate)
+
+        self.assertEqual(scoped.ls("frontend").error, "code_analyze_path_denied: frontend")
+        self.assertIsNone(scoped.ls("frontend/src").error)
+        self.assertIsNone(scoped.read("frontend/src/App.tsx").error)
+        self.assertEqual(scoped.read("frontend/package.json").error, "code_analyze_path_denied: frontend/package.json")
+        self.assertEqual(scoped.write("frontend/src/App.tsx", "x").error, "code_analyze_write_denied")
+
+    def test_scope_allows_rooted_code_glob_but_not_workspace_glob(self) -> None:
+        """无 base path 的 glob 也必须显式锚定到两个源码根目录。"""
+
+        delegate = SimpleNamespace(
+            glob=lambda *_args: type("Glob", (), {"error": None})(),
+        )
+        scoped = CodeAnalyzeScopedBackend(delegate)
+
+        self.assertIsNone(scoped.glob("/frontend/src/**/*.tsx").error)
+        self.assertIn("code_analyze_path_denied", scoped.glob("**/*.tsx").error or "")
+
+    def test_normalizer_deduplicates_and_marks_frontend_warning(self) -> None:
+        """后端问题去重与前端无规则 warning 必须稳定。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            (root / "frontend/src").mkdir(parents=True)
+            (root / "backend/src/main/java").mkdir(parents=True)
+            result = normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "summary": "完成",
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "targets": [
+                        {
+                            "side": "frontend",
+                            "root": "frontend/src",
+                            "status": "completed",
+                            "scanned_file_count": 2,
+                        },
+                        {
+                            "side": "backend",
+                            "root": "backend/src/main/java",
+                            "status": "completed",
+                            "scanned_file_count": 2,
+                        },
+                    ],
+                    "issues": [
+                        {
+                            "id": "one",
+                            "side": "backend",
+                            "rule_id": "CKR5000",
+                            "severity": "HIGH",
+                            "title": "重复问题",
+                            "summary": "说明",
+                            "file": "backend/src/main/java/App.java",
+                            "line": 4,
+                        },
+                        {
+                            "id": "two",
+                            "side": "backend",
+                            "rule_id": "CKR5000",
+                            "severity": "high",
+                            "title": "重复问题",
+                            "summary": "另一段说明",
+                            "file": "backend/src/main/java/App.java",
+                            "line": 4,
+                        },
+                    ],
+                    "truncated": False,
+                },
+                workspace=workspace,
+            )
+
+        self.assertEqual(result["issue_count"], 1)
+        self.assertEqual(result["issues"][0]["severity"], "high")
+        self.assertEqual(result["targets"][0]["status"], "completed")
+        self.assertEqual(result["targets"][0]["warning"], "当前未配置扫描规则。")
+        self.assertEqual(result["targets"][1]["status"], "completed")
+
+    def test_normalizer_marks_missing_target_as_skipped(self) -> None:
+        """源码目录不存在时应标记 skipped，且不影响另一端结果。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            (Path(workspace) / "backend/src/main/java").mkdir(parents=True)
+            result = normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "targets": [],
+                    "issues": [],
+                },
+                workspace=workspace,
+            )
+
+        self.assertEqual(result["targets"][0]["status"], "skipped")
+        self.assertEqual(result["targets"][0]["warning"], "扫描目录不存在，已跳过。")
+        self.assertEqual(result["targets"][1]["status"], "completed")
+
+    def test_normalizer_drops_frontend_issues_when_rules_are_unconfigured(self) -> None:
+        """前端 Skill 只有占位内容时不得投影任何前端问题。"""
+
+        result = normalize_code_review_result(
+            {
+                "status": "completed",
+                "summary": "发现前端问题",
+                "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                "targets": [],
+                "issues": [
+                    {
+                        "side": "frontend",
+                        "rule_id": "MODEL-GUESS",
+                        "severity": "high",
+                        "title": "无规则问题",
+                        "summary": "不应展示",
+                        "file": "/outside/frontend-file.tsx",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(result["issue_count"], 0)
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(
+            result["summary"],
+            "代码审查完成，未发现需要处理的问题；当前未配置扫描规则。",
+        )
+
+    def test_normalizer_accepts_logged_skill_and_target_shapes(self) -> None:
+        """运行日志中的 Skill 文件对象和按端目标对象应归一为公开审查结构。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            (root / "frontend/src").mkdir(parents=True)
+            (root / "backend/src/main/java").mkdir(parents=True)
+            result = normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": [
+                        {
+                            "name": "frontend-code-scan",
+                            "path": "/.xcodeagent/builtin-skills/frontend-code-scan/SKILL.md",
+                            "rules_loaded": 0,
+                        },
+                        {
+                            "name": "backend-code-scan",
+                            "path": "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md",
+                            "rules_loaded": 8,
+                            "references": "/.xcodeagent/builtin-skills/backend-code-scan/references/rules-reference.md",
+                        },
+                        {
+                            "name": "backend-code-scan/rules-reference",
+                            "path": "/.xcodeagent/builtin-skills/backend-code-scan/references/rules-reference.md",
+                        },
+                    ],
+                    "targets": {
+                        "frontend": {"root": "/frontend/src", "file_count": 30},
+                        "backend": {
+                            "root": "/backend/src/main/java",
+                            "file_count": 17,
+                        },
+                    },
+                    "issues": [
+                        {
+                            "side": "frontend",
+                            "path": "frontend-code-scan/SKILL.md",
+                            "severity": "low",
+                            "title": "规则未配置",
+                            "summary": "不应作为问题展示",
+                        }
+                    ],
+                },
+                workspace=workspace,
+            )
+
+        self.assertEqual(
+            result["loaded_skills"],
+            ["backend-code-scan", "frontend-code-scan"],
+        )
+        self.assertEqual(result["targets"][0]["scanned_file_count"], 30)
+        self.assertEqual(result["targets"][1]["scanned_file_count"], 17)
+        self.assertEqual(result["issues"], [])
+
+    def test_normalizer_rejects_unapproved_nested_skill_reference(self) -> None:
+        """Skill 对象中的嵌套规则引用仍须通过精确文件白名单。"""
+
+        with self.assertRaisesRegex(ValueError, "未授权的扫描 Skill 规则引用"):
+            normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": [
+                        "frontend-code-scan",
+                        {
+                            "name": "backend-code-scan",
+                            "path": "backend-code-scan/SKILL.md",
+                            "references": "backend-code-scan/references/other.md",
+                        },
+                    ],
+                    "targets": [],
+                    "issues": [],
+                }
+            )
+
+    def test_normalizer_accepts_logged_skill_paths_and_flat_target_counts(self) -> None:
+        """规则引用路径不是第三个 Skill，日志中的平铺扫描计数也应被保留。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            (root / "frontend/src").mkdir(parents=True)
+            (root / "backend/src/main/java").mkdir(parents=True)
+            result = normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": [
+                        "frontend-code-scan/SKILL.md",
+                        "backend-code-scan/SKILL.md",
+                        "backend-code-scan/references/rules-reference.md",
+                    ],
+                    "targets": {
+                        "frontend_files_scanned": 22,
+                        "backend_files_scanned": 17,
+                    },
+                    "issues": [],
+                },
+                workspace=workspace,
+            )
+
+        self.assertEqual(
+            result["loaded_skills"],
+            ["backend-code-scan", "frontend-code-scan"],
+        )
+        self.assertEqual(result["targets"][0]["scanned_file_count"], 22)
+        self.assertEqual(result["targets"][1]["scanned_file_count"], 17)
+
+    def test_normalizer_accepts_logged_scan_root_target_items(self) -> None:
+        """最新日志中 targets 数组的 scan_root 字段应安全归一为固定 root。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            (root / "frontend/src").mkdir(parents=True)
+            (root / "backend/src/main/java").mkdir(parents=True)
+            result = normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": [
+                        "frontend-code-scan",
+                        "backend-code-scan",
+                    ],
+                    "targets": [
+                        {
+                            "side": "frontend",
+                            "scan_root": "/frontend/src",
+                            "scanned_file_count": 0,
+                            "warning": "前端 Skill 无规则。",
+                        },
+                        {
+                            "side": "backend",
+                            "scan_root": "/backend/src/main/java",
+                            "scanned_file_count": 17,
+                        },
+                    ],
+                    "issues": [],
+                },
+                workspace=workspace,
+            )
+
+        self.assertEqual(result["targets"][0]["root"], "frontend/src")
+        self.assertEqual(result["targets"][0]["scanned_file_count"], 0)
+        self.assertEqual(result["targets"][1]["root"], "backend/src/main/java")
+        self.assertEqual(result["targets"][1]["scanned_file_count"], 17)
+
+    def test_normalizer_rejects_out_of_scope_scan_root(self) -> None:
+        """scan_root 别名不能绕过两个固定扫描目录的安全边界。"""
+
+        with self.assertRaisesRegex(ValueError, "审查目标包含未授权目录"):
+            normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": [
+                        "frontend-code-scan",
+                        "backend-code-scan",
+                    ],
+                    "targets": [
+                        {
+                            "side": "backend",
+                            "scan_root": "/backend/src/test/java",
+                        }
+                    ],
+                    "issues": [],
+                }
+            )
+
+    @patch("app.agents.create_agent_bundle")
+    @patch("app.agents.code_analyze.analyzer.invoke_agent_with_tool_activity")
+    def test_analyzer_does_not_rescan_after_result_validation_failure(
+        self,
+        invoke_mock,
+        create_bundle_mock,
+    ) -> None:
+        """Agent 已完成扫描后，即使结果协议错误也不得再次执行整轮扫描。"""
+
+        create_bundle_mock.return_value = SimpleNamespace(code_analyze=object())
+
+        def invoke_once(*_args, on_tool_activity=None, **_kwargs):
+            """模拟完整读取 Skill 后返回含未授权声明的结果。"""
+
+            for path in REQUIRED_SKILL_PATHS:
+                on_tool_activity(
+                    {
+                        "tool": "read_file",
+                        "status": "completed",
+                        "path": path,
+                    }
+                )
+            return json.dumps(
+                {
+                    "status": "completed",
+                    "loaded_skills": [
+                        "frontend-code-scan",
+                        "backend-code-scan",
+                        "unapproved-skill",
+                    ],
+                    "targets": [],
+                    "issues": [],
+                }
+            )
+
+        invoke_mock.side_effect = invoke_once
+
+        with self.assertRaisesRegex(ValueError, "未授权的扫描 Skill"):
+            analyze_workspace_code({}, "/tmp/workspace")
+
+        self.assertEqual(invoke_mock.call_count, 1)
+
+    def test_normalizer_accepts_safe_workspace_path_variants(self) -> None:
+        """虚拟根路径、点前缀和真实工作区内绝对路径应统一为安全相对路径。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            source_root = Path(workspace) / "backend/src/main/java"
+            source_root.mkdir(parents=True)
+            absolute_file = source_root / "Example.java"
+            result = normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "targets": [
+                        {
+                            "side": "backend",
+                            "root": "/backend/src/main/java",
+                            "status": "completed",
+                        }
+                    ],
+                    "issues": [
+                        {
+                            "side": "backend",
+                            "title": "问题一",
+                            "summary": "说明",
+                            "file": "/backend/src/main/java/Example.java",
+                        },
+                        {
+                            "side": "backend",
+                            "title": "问题二",
+                            "summary": "说明",
+                            "file": "./backend/src/main/java/Other.java",
+                        },
+                        {
+                            "side": "backend",
+                            "title": "问题三",
+                            "summary": "说明",
+                            "file": str(absolute_file),
+                        },
+                    ],
+                },
+                workspace=workspace,
+            )
+
+        self.assertEqual(
+            [issue["file"] for issue in result["issues"]],
+            [
+                "backend/src/main/java/Example.java",
+                "backend/src/main/java/Other.java",
+                "backend/src/main/java/Example.java",
+            ],
+        )
+
+    def test_normalizer_rejects_invalid_status_and_absolute_path(self) -> None:
+        """非 completed 状态或绝对/越界路径不能进入公开结果。"""
+
+        base = {
+            "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+            "targets": [],
+            "issues": [],
+        }
+        with self.assertRaises(ValueError):
+            normalize_code_review_result({**base, "status": "failed"})
+        with self.assertRaises(ValueError):
+            normalize_code_review_result(
+                {
+                    **base,
+                    "status": "completed",
+                    "issues": [
+                        {
+                            "side": "backend",
+                            "file": "/etc/passwd",
+                            "title": "越界",
+                            "summary": "越界",
+                        }
+                    ],
+                }
+            )
+
+    def test_normalizer_redacts_absolute_paths_in_review_text(self) -> None:
+        """摘要和问题说明中的宿主路径不能进入公开审查结果。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            (Path(workspace) / "backend/src/main/java").mkdir(parents=True)
+            result = normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "summary": f"扫描 {workspace}/frontend/src 完成",
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "issues": [
+                        {
+                            "side": "backend",
+                            "file": "backend/src/main/java/App.java",
+                            "title": "绝对路径 {workspace}",
+                            "summary": f"详情见 {workspace}/frontend/src/App.tsx",
+                        }
+                    ],
+                },
+                workspace=workspace,
+            )
+
+        self.assertNotIn(workspace, result["summary"])
+        self.assertNotIn(workspace, result["issues"][0]["summary"])
+
+
+if __name__ == "__main__":
+    unittest.main()

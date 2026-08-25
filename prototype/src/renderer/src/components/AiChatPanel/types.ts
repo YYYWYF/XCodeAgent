@@ -18,14 +18,23 @@ export type AgentChatMessage = {
   codeChanges?: WorkspaceCodeChangeSet
   toolCalls?: ToolCallRecord[]
   processSteps?: ProcessStepRecord[]
-  /** 待设计目标挡板：该消息以交互卡形式渲染（目标信息 + 模板选择 + 开始详细设计），
-   * 作为对话历史保留，点开始后不回退消失。 */
-  detailBlocker?: {
-    pageId: string
-    label: string
-    path?: string
-    purpose?: string
-  }
+  /** 待设计目标挡板：作为对话历史消息持久化，支持页面与接口两类详细设计入口。 */
+  detailBlocker?:
+    | {
+        type: 'page'
+        pageId: string
+        label: string
+        path?: string
+        purpose?: string
+      }
+    | {
+        type: 'endpoint'
+        apiContractId: string
+        endpointId: string
+        label: string
+        path?: string
+        purpose?: string
+      }
   createdAt: number
 }
 
@@ -42,6 +51,9 @@ export type RightPanelState =
   | { type: 'process' }
   | { type: 'doc'; docKey?: WorkspaceDocKey }
   | { type: 'source' }
+
+/** 右侧公共工作区的三档展示尺寸。 */
+export type RightPanelLayout = 'hidden' | 'split' | 'full'
 
 export type ChatCopy = Record<
   EditorMode,

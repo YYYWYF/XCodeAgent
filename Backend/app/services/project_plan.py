@@ -39,6 +39,7 @@ from app.services.frontend_page_tree import (
 )
 from app.services.page_dependencies import normalize_page_dependencies
 from app.services.requirement_spec import product_acceptance_criteria
+from app.services.authorization_manifest import compile_authorization_manifest
 
 
 BACKEND_TECH_STACK = {
@@ -856,7 +857,7 @@ def _api_contracts(
                     "id": contract_id,
                     "entity_ids": [entity],
                     "base_path": f"/api/{route_base}",
-                    "authentication": {"required": True, "roles": ["admin", "user"]},
+                    "authentication": {"required": True},
                     "schemas": schemas,
                     "endpoints": endpoints,
                 }
@@ -1404,6 +1405,36 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
+def validate_technical_plan_model_authentication(agent_plan: Any) -> list[str]:
+    """在归一化前校验模型认证字段，避免非法授权语义被静默丢弃。"""
+
+    if not isinstance(agent_plan, dict):
+        return []
+    errors: list[str] = []
+    for contract in _dict_items(agent_plan.get("api_contracts")):
+        contract_id = str(contract.get("id") or "unknown")
+        authentication = contract.get("authentication")
+        if authentication is not None and (
+            not isinstance(authentication, dict)
+            or set(authentication) != {"required"}
+            or not isinstance(authentication.get("required"), bool)
+        ):
+            errors.append(
+                f"TechnicalPlan 模型输出 API Contract {contract_id} 的 authentication 只能包含 boolean required。"
+            )
+        for endpoint in _dict_items(contract.get("endpoints")):
+            endpoint_authentication = endpoint.get("authentication")
+            if endpoint_authentication is not None and (
+                not isinstance(endpoint_authentication, dict)
+                or set(endpoint_authentication) != {"required"}
+                or not isinstance(endpoint_authentication.get("required"), bool)
+            ):
+                errors.append(
+                    f"TechnicalPlan 模型输出 Endpoint {endpoint.get('id') or 'unknown'} 的 authentication 只能包含 boolean required。"
+                )
+    return errors
+
+
 def _attach_technical_entity_field_refs(
     contracts: list[dict[str, Any]],
     entities: list[dict[str, Any]],
@@ -1668,6 +1699,15 @@ def validate_technical_plan_api_contracts(
             errors.append(f"TechnicalPlan API Contract {contract_id} 包含非法字段：{'、'.join(unexpected)}。")
         if missing:
             errors.append(f"TechnicalPlan API Contract {contract_id} 缺少必需字段：{'、'.join(missing)}。")
+        authentication = contract.get("authentication")
+        if authentication is not None and (
+            not isinstance(authentication, dict)
+            or set(authentication) != {"required"}
+            or not isinstance(authentication.get("required"), bool)
+        ):
+            errors.append(
+                f"TechnicalPlan API Contract {contract_id} 的 authentication 只能包含 boolean required。"
+            )
         raw_ids = contract.get("entity_ids")
         ids = [str(value).strip() for value in raw_ids if str(value).strip()] if isinstance(raw_ids, list) else []
         if not ids:
@@ -1690,6 +1730,15 @@ def validate_technical_plan_api_contracts(
                 )
             )
         for endpoint in _dict_items(contract.get("endpoints")):
+            endpoint_authentication = endpoint.get("authentication")
+            if endpoint_authentication is not None and (
+                not isinstance(endpoint_authentication, dict)
+                or set(endpoint_authentication) != {"required"}
+                or not isinstance(endpoint_authentication.get("required"), bool)
+            ):
+                errors.append(
+                    f"TechnicalPlan Endpoint {endpoint.get('id') or 'unknown'} 的 authentication 只能包含 boolean required。"
+                )
             for key in ("request_schema_ref", "response_schema_ref"):
                 reference = endpoint.get(key)
                 if reference and _schema_for_contract_ref(contract, reference) is None:
@@ -1706,6 +1755,9 @@ def create_technical_plan(
 ) -> dict[str, Any]:
     """生成只包含开发新增事实的 TechnicalPlan。"""
 
+    authentication_errors = validate_technical_plan_model_authentication(agent_plan)
+    if authentication_errors:
+        raise ValueError("；".join(authentication_errors))
     effective_datasource_type: EnabledDatasourceType = (
         ensure_enabled_datasource_type(datasource_type)
         if datasource_type is not None
@@ -1744,12 +1796,25 @@ def create_technical_plan(
         architecture[key] = deepcopy(policy[key])
     if effective_datasource_type == "static":
         architecture["frontend"] = deepcopy(policy["frontend"])
+    pages = _technical_plan_pages(spec, agent_plan, api_contracts)
+    product_plan = (
+        spec.get("confirmed_product_plan")
+        if isinstance(spec.get("confirmed_product_plan"), dict)
+        else {"authorizationTargets": {"pageRules": [], "operationRules": []}}
+    )
     plan = {
         "artifact_type": TECHNICAL_PLAN_ARTIFACT_TYPE,
         "architecture": architecture,
         "entities": entities,
         "api_contracts": api_contracts,
-        "pages": _technical_plan_pages(spec, agent_plan, api_contracts),
+        "pages": pages,
+        "authorization_manifest": compile_authorization_manifest(
+            spec,
+            product_plan,
+            api_contracts,
+            pages,
+            _agent_section(agent_plan, "authorization_data_bindings"),
+        ),
     }
     repaired, _ = repair_cross_contract_schema_refs(plan)
     return repaired

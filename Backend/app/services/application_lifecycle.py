@@ -13,7 +13,6 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.domain.application_lifecycle import (
-    APPLICATION_LIFECYCLE_SCHEMA_VERSION,
     ApplicationIdentity,
     ApplicationInitialization,
     ArtifactReference,
@@ -52,10 +51,6 @@ class ApplicationLifecycleCorruptedError(ApplicationLifecyclePersistenceError):
     """表示现有状态文件损坏或不符合当前 schema。"""
 
 
-class UnsupportedApplicationLifecycleVersionError(ApplicationLifecyclePersistenceError):
-    """表示状态文件来自当前实现不支持的未来版本。"""
-
-
 class ApplicationLifecycleConflictError(ApplicationLifecyclePersistenceError):
     """表示 revision、交互 ID 或状态转换发生冲突。"""
 
@@ -64,30 +59,20 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
     ApplicationLifecycleStage.COLLECTING_REQUIREMENT: {ApplicationLifecycleStage.ANALYZING_REQUIREMENT},
     ApplicationLifecycleStage.ANALYZING_REQUIREMENT: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-        ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-        ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+        ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
     },
     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION: {
         ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
     },
-    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC: {
+    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-        ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+        ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
     },
-    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION: {
+    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-        ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-        ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-    },
-    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN: {
-        ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
-    },
-    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION: {
-        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+        ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
     },
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS: {
@@ -113,7 +98,7 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
 
 APPLICATION_PLANNING_REVISION_STAGES = {
     ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
 }
 
@@ -121,10 +106,8 @@ APPLICATION_PLANNING_ACTIVE_STAGES = {
     ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
     ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
     ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
     ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
@@ -172,11 +155,6 @@ def load_application_lifecycle(workspace: str | Path) -> ApplicationLifecycle | 
         raise ApplicationLifecycleCorruptedError(f"生命周期状态文件损坏：{path}") from exc
     if not isinstance(raw, dict):
         raise ApplicationLifecycleCorruptedError("生命周期状态文件根节点必须是对象。")
-    version = raw.get("schemaVersion")
-    if version != APPLICATION_LIFECYCLE_SCHEMA_VERSION:
-        raise UnsupportedApplicationLifecycleVersionError(
-            f"不支持的生命周期 schemaVersion：{version!r}"
-        )
     try:
         return ApplicationLifecycle.model_validate(raw)
     except ValidationError as exc:

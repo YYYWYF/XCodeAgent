@@ -152,7 +152,7 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
             (workspace / ".xcodeagent/plans/product-plan.json").write_text(
                 json.dumps(
                     {
-                        "schema_version": "product-plan.v4",
+                        "schema_version": "product-plan.v5",
                         "confirmation_status": "confirmed",
                         "pages": [],
                     }

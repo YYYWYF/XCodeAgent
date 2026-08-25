@@ -101,14 +101,14 @@ export type ApplicationLayout =
   | 'immersive'
   | 'login-admin'
 
-/** 描述新建应用阶段声明的权限能力初始输入。 */
+/** 描述新建应用阶段声明的内置 RBAC 开关和首次管理员种子。 */
 export interface ApplicationAuthorizationSeed {
   enabled: boolean
-  runtimeManagementPageEnabled: boolean
+  initialAdministratorSubjects: string[]
 }
 
 export interface ApplicationSchemaConfig {
-  schemaVersion: 3
+  schemaVersion: 5
   appName: string
   appIcon: string
   senario: string

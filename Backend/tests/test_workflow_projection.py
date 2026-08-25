@@ -5,6 +5,7 @@ import unittest
 from app.protocols.workflow.projection import (
     _workflow_next_nodes,
     _workflow_summary,
+    _workflow_visual_payload,
 )
 
 
@@ -68,6 +69,79 @@ class WorkflowProjectionTests(unittest.TestCase):
             ),
             ["small_task_repair"],
         )
+
+    def test_code_review_result_projects_nested_fields_to_camel_case(self) -> None:
+        """审查结果的目标、问题和规则字段均使用 AG-UI camelCase。"""
+
+        summary = _workflow_summary(
+            {
+                "phase": "code_review",
+                "status": "completed",
+                "code_review_result": {
+                    "status": "completed",
+                    "issue_count": 1,
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "targets": [
+                        {
+                            "side": "frontend",
+                            "root": "frontend/src",
+                            "status": "completed",
+                            "scanned_file_count": 3,
+                        }
+                    ],
+                    "issues": [
+                        {
+                            "id": "issue-1",
+                            "side": "frontend",
+                            "rule_id": "FE001",
+                            "severity": "high",
+                            "title": "问题",
+                            "summary": "说明",
+                            "file": "frontend/src/App.tsx",
+                            "line": 8,
+                        }
+                    ],
+                },
+            },
+            [],
+        )
+
+        review = summary["codeReviewResult"]
+        self.assertEqual(review["issueCount"], 1)
+        self.assertEqual(review["targets"][0]["scannedFileCount"], 3)
+        self.assertEqual(review["issues"][0]["ruleId"], "FE001")
+
+    def test_integration_test_hides_stale_code_review_result(self) -> None:
+        """测试重跑期间不得向测试 Agent 投影上一轮代码审查结果。"""
+
+        result = {
+            "phase": "integration_test",
+            "status": "requires_user_input",
+            "clarification": {
+                "mode": "frontend_performance_confirmation",
+                "status": "requires_user_input",
+                "questions": [],
+            },
+            "code_review_result": {
+                "status": "completed",
+                "summary": "上一轮代码审查完成。",
+                "issue_count": 0,
+                "targets": [],
+                "issues": [],
+            },
+        }
+        summary = _workflow_summary(result, [])
+        payload = _workflow_visual_payload(
+            run_id="run-retest",
+            thread_id="thread-test",
+            summary=summary,
+            events=[],
+            result=result,
+        )
+
+        self.assertEqual(summary["codeReviewResult"], {})
+        self.assertEqual(payload["state"]["codeReviewResult"], {})
+        self.assertEqual(payload["result"]["codeReviewResult"], {})
 
     def test_failed_summary_explains_exhausted_budget_without_stale_preview(self) -> None:
         """验证失败摘要展示修复计数和终止原因，并隐藏旧预览地址。"""
@@ -207,10 +281,9 @@ class WorkflowProjectionTests(unittest.TestCase):
         """AG-UI 摘要应原样投影 lifecycle，供前端直接消费业务阶段。"""
 
         lifecycle = {
-            "schemaVersion": "1.3.0",
             "revision": 4,
             "initialization": {
-                "stage": "awaiting_requirement_confirmation",
+                "stage": "awaiting_requirement_document_confirmation",
                 "status": "awaiting_user",
             },
         }

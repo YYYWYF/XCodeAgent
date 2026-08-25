@@ -10,9 +10,7 @@
 
 .@{class-prefix}-browser-preview-panel.@{class-prefix}-application-mode {
   .@{class-prefix}-browser-preview-toolbar {
-    min-height: 42px;
-    justify-content: flex-end;
-    padding: 5px 12px;
+    display: none;
   }
 
   .@{class-prefix}-browser-preview-stage {
@@ -32,7 +30,7 @@
   display: grid;
   min-height: 58px;
   align-items: center;
-  grid-template-columns: auto auto minmax(220px, 1fr) auto minmax(132px, 180px) auto auto;
+  grid-template-columns: auto auto minmax(220px, 1fr) auto minmax(132px, 180px) auto auto auto;
   gap: 10px;
   padding: 10px 12px;
   background: var(--wb-canvas);
@@ -219,6 +217,56 @@
   background: var(--wb-canvas);
 }
 
+.@{class-prefix}-browser-preview-acceptance-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--wb-canvas);
+  border-top: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-browser-preview-acceptance-title {
+  color: var(--wb-accent);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-browser-preview-acceptance-prompt {
+  min-width: 0;
+  color: var(--wb-text);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-browser-preview-acceptance-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-browser-preview-acceptance-action-compact {
+  display: none;
+}
+
+.@{class-prefix}-browser-preview-acceptance-passed {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 84px;
+  color: var(--wb-accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .@{class-prefix}-browser-preview-error {
   position: absolute;
   right: 16px;
@@ -257,5 +305,28 @@
 
   .@{class-prefix}-browser-page-select.ant-select {
     display: none;
+  }
+
+  .@{class-prefix}-browser-preview-acceptance-bar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .@{class-prefix}-browser-preview-acceptance-actions {
+    gap: 4px;
+  }
+
+  .@{class-prefix}-browser-preview-acceptance-actions .ant-btn {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .@{class-prefix}-browser-preview-acceptance-action-full {
+    display: none;
+  }
+
+  .@{class-prefix}-browser-preview-acceptance-action-compact {
+    display: inline;
   }
 }

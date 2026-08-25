@@ -1,4 +1,3 @@
-import { HolderOutlined } from '@ant-design/icons'
 import { Alert } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -15,6 +14,7 @@ import type {
   WorkflowRunPayload
 } from '../../typings'
 import { composePreviewUrl, cx, previewOrigin } from '../../utils'
+import type { ChatSessionSummary } from '../../service/chatSessions'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
 import CodeChangeCard from './components/CodeChangeCard'
@@ -55,10 +55,12 @@ import {
   type WorkbenchArtifactAccess,
   type WorkbenchArtifactStatus
 } from '../../workbenchDomain'
-import RightPanelTabs, {
+import {
   type WorkspaceTab,
   type WorkspaceTabKey
 } from './components/RightPanelTabs'
+import WorkbenchRightPanel from './components/WorkbenchRightPanel'
+import type { RightPanelLayout } from './types'
 import SessionSidebar from './components/SessionSidebar'
 import DevelopmentConversationModal, {
   DevelopmentArtifactConversationConfirmModal,
@@ -75,6 +77,7 @@ import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
 import type { RelatedEndpointContext } from './hooks/useChatSessions'
+import type { SessionIdentity } from './hooks/sessionRuntime'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import { chatCopy } from './constants'
@@ -82,15 +85,9 @@ import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
   sessionDetailTargetKey,
-  workflowDetailTargetKey,
   workflowCodeChanges,
   type WorkflowPreviewTarget
 } from './utils'
-import {
-  deriveDisplayedPlanExecutionMode,
-  planExecutionContextForEndpoint,
-  planExecutionContextForPage
-} from './planExecutionMode'
 import './AiChatPanel.less'
 
 type Props = {
@@ -108,10 +105,6 @@ type Props = {
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
   previewLaunchError: string
-  rightPanelOpen: boolean
-  onRightPanelOpenChange: (open: boolean) => void
-  applicationPreviewMode: boolean
-  onApplicationPreviewModeChange: (open: boolean) => void
   versionReadOnly: boolean
   versionPreviewOnly: boolean
   versionViewKey: string
@@ -137,6 +130,44 @@ type ActiveDetailTarget =
   | { type: 'none' }
   | { type: 'page'; pageId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
+
+type DevelopmentAutoTarget =
+  | { kind: 'page'; artifactId: string; page: DevelopmentPlanningPageOption }
+  | {
+      kind: 'endpoint'
+      artifactId: string
+      apiContractId: string
+      description: string
+      endpointId: string
+      endpointLabel: string
+      path: string
+    }
+
+type DevelopmentCompletionCandidate = {
+  runId: string
+  artifactId: string
+}
+
+type ProjectDocumentConfig = {
+  content: string
+  onSaveEdit?: (draft: string) => void
+  readOnly: boolean
+}
+
+type DetailBlockerMessage = NonNullable<AgentChatMessage['detailBlocker']>
+
+/** 返回当前阶段最近使用的应用级会话；页面和接口会话只归开发阶段管理。 */
+function latestStageSession(
+  sessions: ChatSessionSummary[],
+  phase: WorkbenchPhase
+): ChatSessionSummary | undefined {
+  return sessions
+    .filter(
+      (session) =>
+        session.sessionKind === phase && !session.pageId && !session.apiContractId && !session.endpointId
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+}
 
 /** 从生命周期扩展读取当前测试报告，报告正文和产物状态共享同一份快照。 */
 function readTestReportSnapshot(
@@ -214,7 +245,7 @@ function beginReviewExecution(
   }
 }
 
-/** 将已经保存审查报告但停留在旧确认态的会话收口为可生成版本的完成态。 */
+/** 将已确认的审查报告收口为审查通过态，随后由阶段推导自动进入验收。 */
 function completeReviewExecution(
   lifecycle: ApplicationLifecycle,
   applicationId: string
@@ -227,7 +258,8 @@ function completeReviewExecution(
     revision: lifecycle.revision + 1,
     extensions: {
       ...lifecycle.extensions,
-      reviewEntryConfirmed: true
+      reviewEntryConfirmed: true,
+      reviewStatus: 'passed'
     },
     activeExecutions: {
       ...lifecycle.activeExecutions,
@@ -236,7 +268,39 @@ function completeReviewExecution(
         targetId: applicationId,
         threadId: runId,
         runId,
-        phase: 'finalize_project',
+        phase: 'code_review',
+        status: 'completed',
+        startedAt: now,
+        updatedAt: now
+      }
+    }
+  }
+}
+
+/** 记录用户对当前预览交付的明确验收确认，不改变验收对话归属。 */
+function completeAcceptanceExecution(
+  lifecycle: ApplicationLifecycle,
+  applicationId: string
+): ApplicationLifecycle {
+  const now = new Date().toISOString()
+  const runId = `mock-acceptance-complete-${Date.now()}`
+  return {
+    ...lifecycle,
+    updatedAt: now,
+    revision: lifecycle.revision + 1,
+    extensions: {
+      ...lifecycle.extensions,
+      acceptanceStatus: 'passed',
+      acceptanceBasedOnRevision: lifecycle.revision
+    },
+    activeExecutions: {
+      ...lifecycle.activeExecutions,
+      [runId]: {
+        scope: 'application',
+        targetId: applicationId,
+        threadId: runId,
+        runId,
+        phase: 'acceptance',
         status: 'completed',
         startedAt: now,
         updatedAt: now
@@ -336,8 +400,7 @@ function resolveDesignDocKey(
 /** 判断设计阶段的文件改动是否仍属于当前阶段的待授权生成，过滤已确认后残留的历史快照。 */
 function isPendingDesignCodeChange(
   workflow: WorkflowRunPayload | undefined,
-  stage: string | undefined,
-  _viewingPhase: WorkbenchPhase
+  stage: string | undefined
 ): boolean {
   const phase = String(workflow?.summary?.phase || '')
   const running = workflow?.summary?.status === 'running'
@@ -360,33 +423,6 @@ function isPendingDesignCodeChange(
   }
   // 页面/接口构建与测试/审查报告沿用各自工作流的当前 Diff，不按查看阶段过滤。
   return true
-}
-
-/** 判断 Workflow 是否已经返回详细设计确认卡片，避免外层选择器遮住待确认内容。 */
-function workflowHasDetailReview(workflow: unknown): boolean {
-  if (!workflow || typeof workflow !== 'object') return false
-  const payload = workflow as {
-    events?: Array<{ data?: Record<string, unknown> }>
-    result?: Record<string, unknown>
-    state?: Record<string, unknown>
-    summary?: Record<string, unknown>
-  }
-  return [
-    payload.summary?.clarification,
-    payload.state?.clarification,
-    payload.result?.clarification,
-    ...(payload.events || []).map((event) => {
-      const detail = event.data?.detail
-      return detail && typeof detail === 'object'
-        ? (detail as Record<string, unknown>).clarification
-        : undefined
-    })
-  ].some(
-    (clarification) =>
-      clarification &&
-      typeof clarification === 'object' &&
-      (clarification as Record<string, unknown>).mode === 'detail_review'
-  )
 }
 
 /** 从当前消息历史里读取最后一个 Workflow，弥补 activeWorkflow 在运行结束瞬间的状态空窗。 */
@@ -474,10 +510,6 @@ export default function AiChatPanel({
   onPlanningArtifactsRefresh,
   previewBaseUrl,
   previewLaunchError,
-  rightPanelOpen,
-  onRightPanelOpenChange,
-  applicationPreviewMode,
-  onApplicationPreviewModeChange,
   versionReadOnly,
   versionPreviewOnly,
   versionViewKey,
@@ -505,8 +537,11 @@ export default function AiChatPanel({
     statuses: Record<string, WorkbenchArtifactStatus>
     versionKey: string
   }>(() => ({ statuses: {}, versionKey: versionViewKey }))
+  const [developmentCompletionCandidate, setDevelopmentCompletionCandidate] = useState<
+    DevelopmentCompletionCandidate | undefined
+  >()
   const activeDetailTargetRef = useRef<ActiveDetailTarget>(activeDetailTarget)
-  const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
+  const [, setInteractingDetailTargetKey] = useState('')
   const [, setGeneratingDetailTargetKey] = useState('')
   const [previewError, setPreviewError] = useState('')
   const [elementInspectionActive, setElementInspectionActive] = useState(false)
@@ -518,18 +553,20 @@ export default function AiChatPanel({
   const { publishAiMessage } = useWorkbench()
   // 阶段门禁：查看阶段决定当前 Agent 与编辑权限，执行阶段和已到达阶段独立保留。
   const {
-    executionPhase,
     reachedPhase,
     viewingPhase: activeWorkbenchPhase
   } = useWorkbenchPhase()
+  const acceptanceAccepted =
+    String(applicationLifecycle?.extensions?.acceptanceStatus || '') === 'passed'
   const [viewingTaskPhase, setViewingTaskPhase] = useState<WorkbenchPhase>(activeWorkbenchPhase)
   useEffect(() => {
-    // 当前执行进入设计、测试或审查阶段时立即同步查看位置，避免上一阶段的 Agent 先渲染一帧。
+    // 当前执行进入设计、测试、审查或验收阶段时立即同步查看位置，避免沿用上一阶段内容。
     if (
       activeWorkbenchPhase === 'analysis' ||
       activeWorkbenchPhase === 'planning' ||
       activeWorkbenchPhase === 'testing' ||
-      activeWorkbenchPhase === 'review'
+      activeWorkbenchPhase === 'review' ||
+      activeWorkbenchPhase === 'acceptance'
     ) {
       setViewingTaskPhase(activeWorkbenchPhase)
     }
@@ -675,12 +712,11 @@ export default function AiChatPanel({
   const isDesignPhase = activeWorkbenchPhase === 'analysis' || activeWorkbenchPhase === 'planning'
   // 设计阶段由当前工作台阶段直接决定 Agent 身份；会话切换完成前不沿用上一阶段的消息和加载态。
   const renderedTaskPhase = isDesignPhase ? activeWorkbenchPhase : viewingTaskPhase
-  // 审查阶段：应用级单会话，左侧大纲折叠(参照分析阶段)。
-  const isReviewPhase = activeWorkbenchPhase === 'review'
   const displayIsDesignPhase =
     renderedTaskPhase === 'analysis' || renderedTaskPhase === 'planning'
   const displayIsTestingPhase = renderedTaskPhase === 'testing'
   const displayIsReviewPhase = renderedTaskPhase === 'review'
+  const displayIsAcceptancePhase = renderedTaskPhase === 'acceptance'
   const viewingHistoricalStage = renderedTaskPhase !== activeWorkbenchPhase
   // 所有模块(页面+接口)开发完成后仅提示用户确认，由用户决定是否进入测试阶段。
   // 准入必须读取当前工作台动态产物清单，不能读取静态演示剧本，否则未开始页面会被误判为已完成。
@@ -714,9 +750,11 @@ export default function AiChatPanel({
     panelRef,
     panelStyle,
     rightPanel,
+    rightPanelLayout,
+    setRightPanelLayout,
     setRightPanel,
     splitDragging
-  } = useAssistantPreviewLayout({ rightPanelOpen })
+  } = useAssistantPreviewLayout()
   const activePageId = activeDetailTarget.type === 'page' ? activeDetailTarget.pageId : ''
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
@@ -735,9 +773,9 @@ export default function AiChatPanel({
       setPreviewError('')
       setRuntimePreviewBaseUrl(nextBaseUrl)
       setRuntimePreviewLaunchError('')
-      onApplicationPreviewModeChange(true)
+      setRightPanelLayout('split')
     },
-    [onApplicationPreviewModeChange, versionViewKey]
+    [setRightPanelLayout, versionViewKey]
   )
 
   // 同步工作台自动启动返回的最新前端端口和错误，不进行任何浏览器持久化。
@@ -750,10 +788,12 @@ export default function AiChatPanel({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    createEndpointSession,
     attachArtifactsToActiveSession,
     createPageSession,
     createReviewSession,
     createTestingSession,
+    createAcceptanceSession,
     ensureAnalysisSession,
     deletingSessionId,
     draft,
@@ -768,6 +808,7 @@ export default function AiChatPanel({
     handleRenameSession,
     handleSelectEndpoint,
     handleSelectPage,
+    loadingSessions,
     ensurePlanningSession,
     messages,
     persistSession,
@@ -804,7 +845,8 @@ export default function AiChatPanel({
       sessionKind === 'planning' ||
       sessionKind === 'development' ||
       sessionKind === 'testing' ||
-      sessionKind === 'review'
+      sessionKind === 'review' ||
+      sessionKind === 'acceptance'
     ) {
       return sessionKind
     }
@@ -812,6 +854,7 @@ export default function AiChatPanel({
     const sessionTitle = sessions.find((session) => session.id === activeSessionId)?.title || ''
     if (sessionTitle.includes('应用测试')) return 'testing'
     if (sessionTitle.includes('代码审查')) return 'review'
+    if (sessionTitle.includes('应用验收')) return 'acceptance'
     if (sessionTitle === '项目计划') return 'planning'
     if (sessionTitle.includes('需求分析')) return 'analysis'
     return renderedTaskPhase
@@ -876,6 +919,7 @@ export default function AiChatPanel({
     ensurePlanningSession,
     ensureReviewSession: createReviewSession,
     ensureTestingSession: createTestingSession,
+    ensureAcceptanceSession: createAcceptanceSession,
     ensureEndpointSession,
     ensurePageSession,
     attachArtifactsToActiveSession,
@@ -898,10 +942,11 @@ export default function AiChatPanel({
     autoStartDesign: isInitialPlanningPhase(applicationLifecycle),
     autoStartTesting:
       allDevelopmentModulesComplete && testingTransitionRequested,
+    acceptancePhase: displayIsAcceptancePhase,
     // 合格测试报告将最高到达阶段推进为审查；进入审查后由审查 Agent 自动开启默认对话。
     autoStartReview:
       !versionReadOnly &&
-      (activeWorkbenchPhase === 'review' || executionPhase === 'review') &&
+      activeWorkbenchPhase === 'review' &&
       testReportPassedForEntry,
     setDraftByKey,
     setSelectedSkillsByKey,
@@ -909,6 +954,52 @@ export default function AiChatPanel({
   })
 
   const applicationPreviewUrl = composeVersionPreviewUrl(runtimePreviewBaseUrl, '/', versionViewKey)
+  const acceptancePreviewEntryRef = useRef('')
+  useEffect(() => {
+    // 验收进入时默认全宽展示独立“应用预览”Tab；后续 Tab 切换不再改变用户选择的宽度。
+    if (!displayIsAcceptancePhase || !applicationPreviewUrl) {
+      if (!displayIsAcceptancePhase) {
+        acceptancePreviewEntryRef.current = ''
+      }
+      return
+    }
+    const entryKey = `${versionViewKey}:${String(applicationLifecycle?.extensions?.reviewStatus || '')}`
+    if (acceptancePreviewEntryRef.current === entryKey) return
+    acceptancePreviewEntryRef.current = entryKey
+    setRightPanel({
+      type: 'preview',
+      requestKey: `${versionViewKey}:${runtimePreviewBaseUrl}:acceptance`,
+      url: applicationPreviewUrl
+    })
+    setRightPanelLayout('full')
+  }, [
+    applicationLifecycle?.extensions?.reviewStatus,
+    applicationPreviewUrl,
+    displayIsAcceptancePhase,
+    runtimePreviewBaseUrl,
+    setRightPanel,
+    setRightPanelLayout,
+    versionViewKey
+  ])
+
+  /** 切换右侧工作区三档布局：隐藏、分栏和全宽覆盖。 */
+  const handleRightPanelLayoutChange = (layout: RightPanelLayout): void => {
+    if (layout === 'hidden') {
+      // 隐藏只收起工作区，不清除当前 Tab，恢复后仍回到用户上一次查看的内容。
+      autoOpenStateRef.current.dismissed = true
+      setRightPanelLayout('hidden')
+      return
+    }
+    if (layout === 'split') {
+      // 极早期尚未生成右侧内容时，先提供稳定的文档工作区，避免“分栏”后为空。
+      if (!rightPanel) setRightPanel({ type: 'doc' })
+      setRightPanelLayout('split')
+      return
+    }
+    // 全宽仅改变公共面板尺寸；当前文件、浏览器或应用预览 Tab 保持不变。
+    if (!rightPanel) setRightPanel({ type: 'doc' })
+    setRightPanelLayout('full')
+  }
 
   // 开发产物写入完成不等于开发工作流完成；单元测试、集成测试和预览启动仍在运行时，
   // 必须禁止“进入测试阶段”提示，避免用户在上一条工作流尚未收尾时被提前切阶段。
@@ -936,7 +1027,7 @@ export default function AiChatPanel({
     !reviewTransitionRequested
 
   useEffect(() => {
-    // 测试报告合格且当前请求收尾后只打开一次进入审查确认；用户暂不进入时保留测试阶段查看位置。
+    // 测试报告确认后沿正常旅程自动进入审查，不要求用户再手动切换阶段。
     if (
       versionReadOnly ||
       activeWorkbenchPhase !== 'testing' ||
@@ -945,19 +1036,24 @@ export default function AiChatPanel({
       loading ||
       workspaceBusy
     ) {
-      if (activeWorkbenchPhase !== 'testing') {
-        reviewCompletionPromptRef.current = ''
-        setReviewCompleteModalOpen(false)
-      }
+      if (activeWorkbenchPhase !== 'testing') reviewCompletionPromptRef.current = ''
       return
     }
     const promptKey = `${versionViewKey}:testing-complete`
     if (reviewCompletionPromptRef.current === promptKey) return
     reviewCompletionPromptRef.current = promptKey
-    setReviewCompleteModalOpen(true)
+    setReviewCompleteModalOpen(false)
+    setViewingTaskPhase('review')
+    setReviewTransitionRequested(true)
+    if (applicationLifecycle) {
+      onApplicationLifecycleChange(beginReviewExecution(applicationLifecycle, application.id))
+    }
   }, [
     activeWorkbenchPhase,
+    application.id,
+    applicationLifecycle,
     loading,
+    onApplicationLifecycleChange,
     reviewTransitionRequested,
     testReportPassedForEntry,
     versionReadOnly,
@@ -995,29 +1091,6 @@ export default function AiChatPanel({
           ? '描述想微调的页面，例如修改文案、样式、字段…'
           : '描述应用整体调整，或确认开发计划…'
   const copy = { ...baseChatCopy, placeholder: composerPlaceholder }
-  const workflowIdentity = {
-    runId: activeWorkflow?.runId,
-    threadId: activeWorkflow?.threadId || activeSession?.threadId
-  }
-  const targetExecutionContext = activeApiEndpoint
-    ? planExecutionContextForEndpoint(
-        applicationLifecycle,
-        activeApiEndpoint.apiContractId,
-        activeApiEndpoint.endpointId,
-        workflowIdentity
-      )
-    : planExecutionContextForPage(
-        applicationLifecycle,
-        activePageOption?.pageId || activePageId,
-        workflowIdentity
-      )
-  const scopedExecution = targetExecutionContext.execution
-  const displayedPlanExecutionMode = deriveDisplayedPlanExecutionMode(
-    scopedExecution,
-    stopping ? 'stopping' : activeWorkflow?.summary.status,
-    loading,
-    Boolean(applicationLifecycle)
-  )
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const activePageTitle =
     activePageOption?.label || application.defaultPage || application.pages[0] || '页面'
@@ -1083,6 +1156,11 @@ export default function AiChatPanel({
         }
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
   const developmentArtifactRefreshRef = useRef('')
+  const developmentCompletionSnapshotRef = useRef<{
+    runId: string
+    status: string
+    phase: string
+  }>()
   useEffect(() => {
     // 构建终态在 mock/真实 AG-UI 中都可能晚于生命周期快照落盘；终态到达后主动刷新一次，
     // 让左侧产物状态、测试准入和右侧预览共同消费同一份最新规划事实。
@@ -1097,6 +1175,43 @@ export default function AiChatPanel({
     developmentArtifactRefreshRef.current = refreshKey
     onPlanningArtifactsRefresh()
   }, [activeWorkbenchPhase, latestWorkflowForDisplay, onPlanningArtifactsRefresh, versionViewKey])
+  useEffect(() => {
+    // 只记录“同一开发工作流从执行态进入完成态”的边沿，避免用户手动打开历史完成产物时误触发自动切换。
+    if (activeWorkbenchPhase !== 'development' || versionReadOnly) {
+      developmentCompletionSnapshotRef.current = undefined
+      setDevelopmentCompletionCandidate(undefined)
+      return
+    }
+    const workflow = latestWorkflowForDisplay as WorkflowRunPayload | undefined
+    const summary = workflow?.summary
+    const runId = workflow?.runId || ''
+    if (!summary || !runId) return
+    const currentSnapshot = {
+      phase: String(summary.phase || ''),
+      runId,
+      status: String(summary.status || '')
+    }
+    const previousSnapshot = developmentCompletionSnapshotRef.current
+    developmentCompletionSnapshotRef.current = currentSnapshot
+    const isTerminalBuild =
+      currentSnapshot.status === 'completed' &&
+      ['build', 'launch_project', 'integration_test'].includes(currentSnapshot.phase)
+    if (
+      !isTerminalBuild ||
+      !previousSnapshot ||
+      previousSnapshot.runId !== runId ||
+      previousSnapshot.status === 'completed' ||
+      !activeTargetKey
+    ) {
+      return
+    }
+    setDevelopmentCompletionCandidate({ artifactId: activeTargetKey, runId })
+  }, [
+    activeTargetKey,
+    activeWorkbenchPhase,
+    latestWorkflowForDisplay,
+    versionReadOnly
+  ])
   // 当前写入中的单文件变更：固定放在对话输入框上方，作为独立的授权条展示。
   const pendingCodeChangeContext = (() => {
     const workflow = latestWorkflowForDisplay as WorkflowRunPayload | undefined
@@ -1110,8 +1225,7 @@ export default function AiChatPanel({
       changes.files.length === 0 ||
       !isPendingDesignCodeChange(
         workflow,
-        applicationLifecycle?.initialization?.stage,
-        activeWorkbenchPhase
+        applicationLifecycle?.initialization?.stage
       )
     ) {
       return undefined
@@ -1304,6 +1418,7 @@ export default function AiChatPanel({
     activeApiEndpoint,
     applicationPreviewUrl,
     displayIsDesignPhase,
+    displayIsTestingPhase,
     activeWorkbenchPhase,
     displayIsReviewPhase,
     versionPreviewOnly,
@@ -1538,6 +1653,31 @@ export default function AiChatPanel({
   ])
   const developmentArtifactStatusById =
     developmentStatusState.versionKey === versionViewKey ? developmentStatusState.statuses : {}
+  const developmentAutoTargets = useMemo<DevelopmentAutoTarget[]>(
+    () => [
+      ...developmentPlanningPages.map((page) => ({
+        artifactId: pageArtifactId(page.pageId),
+        kind: 'page' as const,
+        page
+      })),
+      ...developmentPlanningApiContracts.flatMap((contract) =>
+        contract.endpoints.map((endpoint) => {
+          const apiContractId = endpoint.apiContractId || contract.id
+          const endpointId = endpoint.id
+          return {
+            apiContractId,
+            artifactId: endpointArtifactId(apiContractId, endpointId),
+            description: endpoint.summary,
+            endpointId,
+            endpointLabel: `${endpoint.method} ${endpoint.path}`,
+            kind: 'endpoint' as const,
+            path: endpoint.path
+          }
+        })
+      )
+    ],
+    [developmentPlanningApiContracts, developmentPlanningPages]
+  )
 
   /** 会话创建后即由摘要派生“进行中”；该函数仅保留调用点语义，不再提前把产物推进为完成。 */
   const markDevelopmentArtifactsInProgress = (artifactIds: string[]): void => {
@@ -1634,7 +1774,7 @@ export default function AiChatPanel({
   // 已完成审查后查看历史设计或开发对话时，报告状态仍应保持完成，不能被当前会话的工作流覆盖。
   const reviewArtifactReady =
     reviewReportReady ||
-    (reachedPhase === 'review' &&
+    (compareWorkbenchPhases(reachedPhase, 'review') >= 0 &&
       sessions.some(
         (session) => (session.title || '').includes('代码审查') && session.messageCount > 0
       ))
@@ -1734,26 +1874,41 @@ export default function AiChatPanel({
       isPageCodeDelivered(conversationPageOption.pageId) &&
       pagePreviewUrl
   )
-  const pagePreviewTab: WorkspaceTab = {
-    key: 'page-preview',
+  const browserTab: WorkspaceTab = {
+    key: displayIsAcceptancePhase ? 'preview' : 'page-preview',
     label: '浏览器',
-    available: pagePreviewReady,
+    available: displayIsAcceptancePhase ? Boolean(previewTabUrl) : pagePreviewReady,
     icon: 'browser'
   }
+  const acceptancePreviewTab: WorkspaceTab | undefined = displayIsAcceptancePhase
+    ? {
+        key: 'application-preview',
+        label: '应用预览',
+        available: Boolean(applicationPreviewUrl),
+        icon: 'application'
+      }
+    : undefined
   // 右侧按功能类别收敛：应用文件（应用目录：文档与代码同一棵树）在前，浏览器（页面预览）在后。
   const workspaceTabs: WorkspaceTab[] = [
     { key: 'project' as const, label: '应用文件', available: true, icon: 'project' as const },
-    pagePreviewTab
+    browserTab,
+    ...(acceptancePreviewTab ? [acceptancePreviewTab] : [])
   ]
   // 当前激活的工作区 tab：预览面板 → 浏览器；文档/源码面板统一归入“应用文件”。
   const activeWorkspaceTab: WorkspaceTabKey =
     rightPanel?.type === 'preview'
       ? rightPanel.requestKey?.endsWith(':page')
         ? ('page-preview' as WorkspaceTabKey)
-        : 'preview'
+        : displayIsAcceptancePhase
+          ? rightPanel.requestKey?.endsWith(':acceptance')
+            ? 'application-preview'
+            : 'preview'
+          : 'preview'
       : 'project'
+  const isAcceptancePreviewTab =
+    displayIsAcceptancePhase && activeWorkspaceTab === 'application-preview'
   const openWorkspaceTab = (key: WorkspaceTabKey): void => {
-    // 手动切换 tab 后不再自动升级/重开（含预览强制覆盖回切）。
+    // 手动切换 Tab 后不再自动覆盖用户当前查看内容，面板尺寸始终由三档控制器决定。
     autoOpenStateRef.current.type = null
     autoOpenStateRef.current.dismissed = true
     if (key === 'page-preview' && pagePreviewUrl) {
@@ -1761,6 +1916,12 @@ export default function AiChatPanel({
         type: 'preview',
         requestKey: `${versionViewKey}:${runtimePreviewBaseUrl}:page`,
         url: pagePreviewUrl
+      })
+    } else if (key === 'application-preview' && applicationPreviewUrl) {
+      setRightPanel({
+        type: 'preview',
+        requestKey: `${versionViewKey}:${runtimePreviewBaseUrl}:acceptance`,
+        url: applicationPreviewUrl
       })
     } else if (key === 'preview' && previewTabUrl) {
       setRightPanel({
@@ -1905,7 +2066,7 @@ export default function AiChatPanel({
       phase: 'review',
       status: reviewArtifactStatus,
       type: 'document',
-      available: reachedPhase === 'review'
+      available: compareWorkbenchPhases(reachedPhase, 'review') >= 0
     }
   ]
   const artifactOwners = resolveArtifactOwners(
@@ -1966,68 +2127,6 @@ export default function AiChatPanel({
     accessMode: artifactAccessById[artifact.id]?.mode
   }))
   const visibleConversationArtifacts = designSessionSwitching ? [] : conversationArtifacts
-  const activeWorkflowPhase = String(
-    activeWorkflow?.summary?.phase ||
-      activeWorkflow?.result?.phase ||
-      activeWorkflow?.state?.phase ||
-      ''
-  )
-  const activeSessionTargetKey = sessionDetailTargetKey(activeSession)
-  const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
-  const activeWorkflowMatchesTarget = Boolean(
-    activeTargetKey &&
-      (activeWorkflowTargetKey
-        ? activeWorkflowTargetKey === activeTargetKey
-        : activeSessionTargetKey
-          ? activeSessionTargetKey === activeTargetKey
-          : interactingDetailTargetKey === activeTargetKey)
-  )
-  const detailConfirmationWaitingReview =
-    !loading &&
-    activeWorkflowMatchesTarget &&
-    (activeWorkflowPhase === 'detail_confirmation' ||
-      workflowHasDetailReview(latestWorkflowForDisplay))
-  // 待设计目标（页面/接口）作为对话节点提示：进入开发未操作时，对话区末尾出现「尚未详细设计」节点。
-  const lockedDetailTarget =
-    (Boolean(activePageOption && !isPageCodeDelivered(activePageOption.pageId)) ||
-      Boolean(
-        activeApiEndpointOption?.endpoint &&
-          !isEndpointCodeDelivered(activeApiEndpointOption.endpoint.id)
-      )) &&
-    displayedPlanExecutionMode === 'idle' &&
-    !detailConfirmationWaitingReview
-      ? activePageOption
-        ? {
-            type: 'page' as const,
-            label: activePageOption.label,
-            path: activePageOption.path,
-            purpose: activePageOption.purpose
-          }
-        : activeApiEndpoint
-          ? {
-              type: 'endpoint' as const,
-              label: activeApiEndpoint.label,
-              path: activeApiEndpointOption?.endpoint.path,
-              purpose: activeApiEndpointOption?.endpoint.summary
-            }
-          : undefined
-      : undefined
-  // 对话节点承载的待设计目标（含模板选择），传给 MessageList 的 DetailConfirmationPageSelector。
-  const lockedPage = lockedDetailTarget?.type === 'page' ? activePageOption : undefined
-  const lockedEndpoint =
-    lockedDetailTarget?.type === 'endpoint'
-      ? {
-          apiContractId: activeApiEndpoint?.apiContractId || '',
-          endpointId: activeApiEndpoint?.endpointId || '',
-          hasDetailPlan: Boolean(
-            activeApiEndpointOption?.endpoint.designed ||
-              activeApiEndpointOption?.endpoint.hasDetailPlan
-          ),
-          label: activeApiEndpoint?.label || '',
-          path: activeApiEndpointOption?.endpoint.path,
-          purpose: activeApiEndpointOption?.endpoint.summary
-        }
-      : undefined
   // 页面目录刷新时保留当前页面上下文；仅在清单稳定且当前页面失效时回退。
   useEffect(() => {
     if (activeApiEndpoint) return
@@ -2094,7 +2193,6 @@ export default function AiChatPanel({
   }
 
   const handleShowSettings = (): void => {
-    onApplicationPreviewModeChange(false)
     setPreviewError('')
     // 应用配置只是覆盖中间工作区的临时抽屉，不改变用户对右侧产物面板的开关选择。
     setActiveView('settings')
@@ -2103,11 +2201,14 @@ export default function AiChatPanel({
   /** 从目录恢复任意历史会话，并同步其任务级别而不改变顶部阶段状态。 */
   const handleOpenSidebarSession = async (sessionId: string): Promise<void> => {
     const session = sessions.find((item) => item.id === sessionId)
-    onApplicationPreviewModeChange(false)
     if (session?.pageId || session?.endpointId) {
       setViewingTaskPhase(activeWorkbenchPhase === 'testing' ? 'testing' : 'development')
     }
-    else if ((session?.title || '').includes('代码审查')) setViewingTaskPhase('review')
+    else if (session?.sessionKind === 'review' || (session?.title || '').includes('代码审查')) {
+      setViewingTaskPhase('review')
+    } else if (session?.sessionKind === 'acceptance') {
+      setViewingTaskPhase('acceptance')
+    }
     else if (session?.sessionKind === 'testing' || (session?.title || '').includes('应用测试')) {
       setViewingTaskPhase('testing')
     } else if (
@@ -2128,25 +2229,62 @@ export default function AiChatPanel({
 
   /** 新建普通对话时退出页面/API 目标上下文，避免后续消息被旧目标接管。 */
   const handleCreateChatSession = (): void => {
-    onApplicationPreviewModeChange(false)
     setViewingTaskPhase(activeWorkbenchPhase)
     setActiveView('chat')
     setInteractingDetailTargetKey('')
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ type: 'none' })
-    handleCreateSessionFromList()
+    handleCreateSessionFromList(renderedTaskPhase)
+  }
+
+  /** 在目标会话创建成功后持久化开发 Agent 的首条详细设计消息，模板卡只从该消息渲染。 */
+  const appendInitialDetailAgentMessage = async (
+    identity: SessionIdentity,
+    detailBlocker: DetailBlockerMessage
+  ): Promise<void> => {
+    const existingMessages = getSessionMessages(identity.key)
+    if (existingMessages.length > 0) return
+    const nextMessages: AgentChatMessage[] = [
+      {
+        id: Date.now(),
+        role: 'assistant',
+        agentPhase: 'development',
+        content: '',
+        detailBlocker,
+        createdAt: Date.now()
+      }
+    ]
+    setSessionMessages(identity.key, nextMessages)
+    await persistSession({
+      artifactIds: identity.artifactIds,
+      editorMode: identity.editorMode,
+      messages: nextMessages,
+      sessionId: identity.sessionId,
+      threadId: identity.threadId,
+      apiContractId: identity.apiContractId,
+      endpointId: identity.endpointId,
+      endpointLabel: identity.endpointLabel,
+      pageId: identity.pageId,
+      sessionKind: identity.sessionKind,
+      titleFrom: identity.pageId || identity.endpointLabel || '开发对话'
+    })
   }
 
   /** 为首次选择的页面产物创建会话并立即启动首轮 Agent 工作流。 */
   const createPageConversation = async (
     page: DevelopmentPlanningPageOption
   ): Promise<boolean> => {
-    onApplicationPreviewModeChange(false)
     setActiveView('chat')
     setActiveDetailTarget({ type: 'page', pageId: page.pageId })
-    // 首次创建页面会话只取得产物编辑权，先让用户选择页面模板；
-    // 详细设计 Workflow 由模板选择器的“开始详细设计”动作启动。
-    await createPageSession(page.pageId, page.label)
+    // 创建并持久化页面会话后，由开发 Agent 的首条消息给出模板选择。
+    const identity = await createPageSession(page.pageId, page.label)
+    await appendInitialDetailAgentMessage(identity, {
+      type: 'page',
+      pageId: page.pageId,
+      label: page.label,
+      path: page.path,
+      purpose: page.purpose
+    })
     markDevelopmentArtifactsInProgress([pageArtifactId(page.pageId)])
     return true
   }
@@ -2157,7 +2295,6 @@ export default function AiChatPanel({
     endpointId: string
     endpointLabel: string
   }): Promise<boolean> => {
-    onApplicationPreviewModeChange(false)
     setActiveView('chat')
     setActiveDetailTarget({
       type: 'endpoint',
@@ -2166,12 +2303,22 @@ export default function AiChatPanel({
       endpointKey: `${target.apiContractId}:${target.endpointId}`,
       label: target.endpointLabel
     })
-    const started = await handleStartEndpointDetailConfirmation({
+    const endpoint = developmentPlanningApiContracts
+      .find((contract) => contract.id === target.apiContractId)
+      ?.endpoints.find((item) => item.id === target.endpointId)
+    const identity = await createEndpointSession(
+      target.apiContractId,
+      target.endpointId,
+      target.endpointLabel
+    )
+    await appendInitialDetailAgentMessage(identity, {
+      type: 'endpoint',
       apiContractId: target.apiContractId,
       endpointId: target.endpointId,
-      endpointLabel: target.endpointLabel
+      label: target.endpointLabel,
+      path: endpoint?.path,
+      purpose: endpoint?.summary
     })
-    if (!started) return false
     setViewingTaskPhase(activeWorkbenchPhase === 'testing' ? 'testing' : 'development')
     markDevelopmentArtifactsInProgress([
       endpointArtifactId(target.apiContractId, target.endpointId)
@@ -2245,6 +2392,92 @@ export default function AiChatPanel({
     }
   }
 
+  /** 自动选中下一个开发产物；没有既有会话时只弹出创建确认，不直接创建会话。 */
+  const openNextDevelopmentTarget = async (target: DevelopmentAutoTarget): Promise<void> => {
+    setActiveView('chat')
+    setViewingTaskPhase('development')
+    setGeneratingDetailTargetKey('')
+    if (target.kind === 'page') {
+      setActiveArtifactTab('page-source')
+      setInteractingDetailTargetKey(pageDetailTargetKey(target.page.pageId))
+      setActiveDetailTarget({ type: 'page', pageId: target.page.pageId })
+      const ownerSessionId = artifactOwners[target.artifactId]
+      if (ownerSessionId) {
+        await handleOpenSession(ownerSessionId)
+        return
+      }
+      setPendingDevelopmentConversationTarget({
+        description: target.page.purpose,
+        id: `page:${target.page.pageId}`,
+        kind: 'page',
+        label: target.page.label,
+        pageId: target.page.pageId,
+        path: target.page.path
+      })
+      return
+    }
+    setActiveArtifactTab('endpoint-source')
+    setRightPanel({ type: 'source' })
+    setRightPanelLayout('split')
+    setInteractingDetailTargetKey(
+      endpointDetailTargetKey(target.apiContractId, target.endpointId)
+    )
+    setActiveDetailTarget({
+      type: 'endpoint',
+      apiContractId: target.apiContractId,
+      endpointId: target.endpointId,
+      endpointKey: `${target.apiContractId}:${target.endpointId}`,
+      label: target.endpointLabel
+    })
+    const ownerSessionId = artifactOwners[target.artifactId]
+    if (ownerSessionId) {
+      await handleOpenSession(ownerSessionId)
+      return
+    }
+    setPendingDevelopmentConversationTarget({
+      apiContractId: target.apiContractId,
+      description: target.description,
+      endpointId: target.endpointId,
+      id: `endpoint:${target.apiContractId}:${target.endpointId}`,
+      kind: 'endpoint',
+      label: target.endpointLabel,
+      path: target.path
+    })
+  }
+
+  useEffect(() => {
+    // 开发产物完成后自动推进一次；没有后续产物时交给现有“开发完成”门禁处理。
+    if (
+      !developmentCompletionCandidate ||
+      activeWorkbenchPhase !== 'development' ||
+      versionReadOnly ||
+      developmentArtifactStatusById[developmentCompletionCandidate.artifactId] !== 'completed'
+    ) {
+      return
+    }
+    const currentIndex = developmentAutoTargets.findIndex(
+      (target) => target.artifactId === developmentCompletionCandidate.artifactId
+    )
+    const nextTarget =
+      developmentAutoTargets
+        .slice(Math.max(0, currentIndex + 1))
+        .find((target) => developmentArtifactStatusById[target.artifactId] !== 'completed') ||
+      developmentAutoTargets.find(
+        (target) => developmentArtifactStatusById[target.artifactId] !== 'completed'
+      )
+    setDevelopmentCompletionCandidate(undefined)
+    if (!nextTarget) return
+    openNextDevelopmentTarget(nextTarget).catch((caughtError) => {
+      setPreviewError(caughtError instanceof Error ? caughtError.message : '下一个开发产物启动失败，请重试。')
+    })
+  }, [
+    activeWorkbenchPhase,
+    developmentArtifactStatusById,
+    developmentAutoTargets,
+    developmentCompletionCandidate,
+    versionReadOnly
+  ])
+
   /** 确认单个产物的授权弹窗，并复用首次开发选择的统一创建流程。 */
   const handleConfirmArtifactConversation = async (): Promise<void> => {
     if (!pendingDevelopmentConversationTarget) return
@@ -2278,9 +2511,32 @@ export default function AiChatPanel({
     }
   }
 
+  /** 用户在应用预览内确认验收通过后写入当前版本生命周期，生成版本门禁随之开放。 */
+  const handleAcceptApplication = (): void => {
+    if (!applicationLifecycle || versionReadOnly) return
+    onApplicationLifecycleChange(
+      completeAcceptanceExecution(applicationLifecycle, application.id)
+    )
+  }
+
+  /** 点击不通过后切回验收对话，由产品 Agent 提示用户输入验收意见。 */
+  const handleSubmitAcceptanceFeedback = (): void => {
+    if (versionReadOnly) return
+    setActiveView('chat')
+    setRightPanelLayout('split')
+    // 先确保验收默认会话已经成为当前会话，再发起一次不带用户正文的 Agent 提示。
+    void createAcceptanceSession()
+      .then((identity) =>
+        handleSend(undefined, '不通过验收', {
+          sessionIdentity: identity,
+          suppressUserMessage: true
+        })
+      )
+      .catch(() => undefined)
+  }
+
   /** 从应用大纲切换页面；没有消息历史时仅展示空白上下文，不提前创建会话。 */
   const handlePageSelect = (page: DevelopmentPlanningPageOption): void => {
-    onApplicationPreviewModeChange(false)
     // 页面与接口可以共用一个会话；切换产物时右侧源码页签也必须同步切换。
     setActiveArtifactTab('page-source')
     setViewingTaskPhase(activeWorkbenchPhase === 'testing' ? 'testing' : 'development')
@@ -2298,7 +2554,7 @@ export default function AiChatPanel({
         requestKey: `${versionViewKey}:${runtimePreviewBaseUrl}:${page.pageId}:page`,
         url: completedPreviewUrl
       })
-      onRightPanelOpenChange(true)
+      setRightPanelLayout('split')
     }
     setActiveView('chat')
     setInteractingDetailTargetKey(pageDetailTargetKey(page.pageId))
@@ -2313,116 +2569,16 @@ export default function AiChatPanel({
     handleSelectPage(page.pageId).catch(() => undefined)
   }
 
-  // 锁定目标作为对话历史消息注入（含模板选择交互）：进开发选中待设计页面时，
-  // 向该页面 session 追加一条 detailBlocker assistant 消息，点「开始详细设计」后该消息
-  // 保留在历史里，与后续 user/assistant 节点串成完整对话链，回看可见。
-  const blockerInjectedRef = useRef('')
-  useEffect(() => {
-    if (isDesignPhase || activeWorkbenchPhase !== 'development') return
-    if (displayedPlanExecutionMode !== 'idle') return
-    const target = lockedDetailTarget
-    if (!target || target.type !== 'page' || !activePageOption) return
-    const pageId = activePageOption.pageId
-    if (!pageId || blockerInjectedRef.current === pageId) return
-    blockerInjectedRef.current = pageId
-    ensurePageSession(pageId, target.label)
-      .then((identity) => {
-        // 待设计页面进入详细设计前默认展示文档占位，固定应用预览仍保留在页签中。
-        const existing = getSessionMessages(identity.key)
-        if (existing.some((message) => message.detailBlocker)) return
-        const blockerMessage: AgentChatMessage = {
-          id: Date.now(),
-          role: 'assistant',
-          content: '',
-          detailBlocker: {
-            pageId,
-            label: target.label,
-            path: target.path,
-            purpose: target.purpose
-          },
-          createdAt: Date.now()
-        }
-        setSessionMessages(identity.key, [...existing, blockerMessage])
-      })
-      .catch(() => undefined)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    activeWorkbenchPhase,
-    isDesignPhase,
-    displayedPlanExecutionMode,
-    lockedDetailTarget,
-    activePageOption
-  ])
-
-  // 阶段切换会话隔离：切到设计阶段恢复产品 Agent 的设计会话（无 pageId/endpointId），
-  // 切回开发阶段恢复当前页面会话。避免切阶段后对话内容仍是上一阶段、只换了 Agent 名。
+  // 阶段只负责初始化默认会话或恢复该阶段最近会话；消息发送后不再由阶段逻辑抢占当前会话。
   const phaseSwitchHandledRef = useRef<WorkbenchPhase | ''>('')
   useEffect(() => {
+    // 必须先完成会话目录加载，随后由阶段规则明确决定要打开哪一条会话。
+    if (loadingSessions) return
     if (phaseSwitchHandledRef.current === activeWorkbenchPhase) return
     phaseSwitchHandledRef.current = activeWorkbenchPhase
-    if (activeWorkbenchPhase === 'testing') {
-      setViewingTaskPhase('testing')
-      const testingSession = sessions
-        .filter(
-          (session) =>
-            session.sessionKind === 'testing' || (session.title || '').includes('应用测试')
-        )
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0]
-      if (testingSession && testingSession.id !== activeSessionId) {
-        handleOpenChatSession(testingSession.id).catch(() => undefined)
-      }
-    } else if (isDesignPhase) {
-      setViewingTaskPhase(activeWorkbenchPhase)
-      // 分析/计划阶段分别恢复各自的默认会话；首次回退且没有历史会话时创建空白默认会话。
-      setRightPanel({
-        type: 'doc',
-        docKey: activeWorkbenchPhase === 'planning' ? 'project-plan' : 'requirement-spec'
-      })
-      onRightPanelOpenChange(true)
-      const defaultSession =
-        activeWorkbenchPhase === 'planning' ? formalPlanningSession : formalAnalysisSession
-      const activeDesignSession =
-        activeSession &&
-        !activeSession.pageId &&
-        !activeSession.endpointId &&
-        activeSession.sessionKind ===
-          (activeWorkbenchPhase === 'planning' ? 'planning' : 'analysis')
-          ? activeSession
-          : undefined
-      const deferInitialAnalysisSession =
-        activeWorkbenchPhase === 'analysis' &&
-        !defaultSession &&
-        !activeDesignSession &&
-        isInitialPlanningPhase(applicationLifecycle)
-      if (activeDesignSession) {
-        // 确认续跑可能先创建了尚未写入目录的临时会话，优先保留这条正在执行的 thread。
-        if (activeDesignSession.sessionId !== activeSessionId) {
-          handleOpenChatSession(activeDesignSession.sessionId).catch(() => undefined)
-        }
-      } else if (defaultSession) {
-        handleOpenChatSession(defaultSession.id).catch(() => undefined)
-      } else if (!deferInitialAnalysisSession) {
-        const ensureDefaultSession =
-          activeWorkbenchPhase === 'planning' ? ensurePlanningSession : ensureAnalysisSession
-        ensureDefaultSession()
-          .then((identity) => handleOpenChatSession(identity.sessionId))
-          .catch(() => undefined)
-      }
-    } else if (isReviewPhase) {
-      // 审查阶段只恢复唯一的代码审查会话。
-      const reviewSession = sessions
-        .filter(
-          (session) =>
-            !session.pageId && !session.endpointId && (session.title || '').includes('代码审查')
-        )
-        .sort((a, b) => b.updatedAt - a.updatedAt)[0]
-      // 当前迭代进入审查时默认展示审查报告；应用预览由顶部独立入口承载。
-      setRightPanel({ type: 'doc' })
-      if (reviewSession) {
-        handleOpenChatSession(reviewSession.id).catch(() => undefined)
-      }
-    } else if (activeWorkbenchPhase === 'development') {
-      // 开发阶段恢复最近的页面/接口会话；没有历史会话时只切换查看阶段，不创建空白对话。
+
+    if (activeWorkbenchPhase === 'development') {
+      // 开发阶段按页面/API 产物选择会话，不用阶段级默认会话覆盖用户当前选择。
       setViewingTaskPhase('development')
       const developmentSession = sessions
         .filter((session) => Boolean(session.pageId) || Boolean(session.endpointId))
@@ -2430,23 +2586,52 @@ export default function AiChatPanel({
       if (developmentSession && developmentSession.id !== activeSessionId) {
         handleOpenChatSession(developmentSession.id).catch(() => undefined)
       }
+      return
     }
+
+    setViewingTaskPhase(activeWorkbenchPhase)
+    if (activeWorkbenchPhase === 'analysis' || activeWorkbenchPhase === 'planning') {
+      setRightPanel({
+        type: 'doc',
+        docKey: activeWorkbenchPhase === 'planning' ? 'project-plan' : 'requirement-spec'
+      })
+      setRightPanelLayout('split')
+    } else if (activeWorkbenchPhase === 'review') {
+      // 审查阶段默认展示审查报告；应用预览由独立页签承载。
+      setRightPanel({ type: 'doc' })
+    }
+
+    const stageSession = latestStageSession(sessions, activeWorkbenchPhase)
+    if (stageSession) {
+      handleOpenChatSession(stageSession.id).catch(() => undefined)
+      return
+    }
+
+    const createDefaultSession =
+      activeWorkbenchPhase === 'analysis'
+        ? ensureAnalysisSession
+        : activeWorkbenchPhase === 'planning'
+          ? ensurePlanningSession
+          : activeWorkbenchPhase === 'testing'
+            ? createTestingSession
+            : activeWorkbenchPhase === 'review'
+              ? createReviewSession
+              : createAcceptanceSession
+    createDefaultSession()
+      .then((identity) => handleOpenChatSession(identity.sessionId))
+      .catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeWorkbenchPhase,
-    activeSession?.endpointId,
-    activeSession?.pageId,
-    activeSession?.sessionKind,
     activeSessionId,
-    applicationLifecycle,
     ensureAnalysisSession,
     ensurePlanningSession,
-    formalAnalysisSession,
-    formalPlanningSession,
-    isDesignPhase,
-    isReviewPhase
+    createAcceptanceSession,
+    createReviewSession,
+    createTestingSession,
+    loadingSessions,
+    sessions
   ])
-
   /** 授权条「放弃」:丢弃该文档编辑版,回到 Agent 生成版。 */
   const handleDiscardArtifact = (docKey: WorkspaceDocKey): void => {
     setEditedDesignDocs((prev) => {
@@ -2473,7 +2658,7 @@ export default function AiChatPanel({
     setRightPanel(
       docKey === 'code-review' || docKey === 'test-report' ? { type: 'doc' } : { type: 'doc', docKey }
     )
-    onRightPanelOpenChange(true)
+    setRightPanelLayout('split')
     const ownerSessionId = artifactOwners[documentArtifactId(docKey)]
     const defaultSession = sessions.find((session) => session.id === ownerSessionId)
     if (defaultSession && defaultSession.id !== activeSessionId) {
@@ -2500,11 +2685,10 @@ export default function AiChatPanel({
 
   /** 从应用大纲切换 API；页面和 API 目标互斥，因此会清空当前页面选中态。 */
   const handleApiEndpointSelect = (target: ActiveApiEndpointTarget): void => {
-    onApplicationPreviewModeChange(false)
     // 同一开发会话的接口产物不能只改变左侧选中态，右侧应立即定位到接口源码。
     setActiveArtifactTab('endpoint-source')
     setRightPanel({ type: 'source' })
-    onRightPanelOpenChange(true)
+    setRightPanelLayout('split')
     setViewingTaskPhase(activeWorkbenchPhase === 'testing' ? 'testing' : 'development')
     setPreviewError('')
     setActiveView('chat')
@@ -2715,7 +2899,7 @@ export default function AiChatPanel({
   }
 
   const showRightPanel =
-    !applicationPreviewMode && activeView === 'chat' && rightPanelOpen && Boolean(rightPanel)
+    activeView === 'chat' && rightPanelLayout !== 'hidden' && Boolean(rightPanel)
   // 项目计划一经确认，开发目录即保持可用；刷新期间不再用瞬时 planningReady 灰化产物。
   const showDevelopmentTasks = developmentCatalogUnlocked
   // 测试阶段的对话导航只展示测试会话，隔离分析/计划/开发/审查阶段的历史会话。
@@ -2771,6 +2955,8 @@ export default function AiChatPanel({
         ? appPath(WORKSPACE_DOC_PATHS.testReport)
         : displayIsReviewPhase
           ? appPath(WORKSPACE_DOC_PATHS.codeReview)
+          : displayIsAcceptancePhase
+            ? appPath(WORKSPACE_DOC_PATHS.requirementSpec)
           : activeSource
             ? appPath(activeSource.filePath)
             : ''
@@ -2780,7 +2966,7 @@ export default function AiChatPanel({
   )
 
   /** 项目树中 Markdown 文档的编辑配置：设计文档带草稿编辑（只读按阶段权限），审查报告只读。 */
-  const projectDocConfig = (path: string) => {
+  const projectDocConfig = (path: string): ProjectDocumentConfig | undefined => {
     if (
       path === appPath(WORKSPACE_DOC_PATHS.requirementSpec) ||
       path === appPath(WORKSPACE_DOC_PATHS.projectPlan)
@@ -2813,6 +2999,7 @@ export default function AiChatPanel({
       className={cx(
         'ai-chat-panel',
         showRightPanel && 'embedded-preview-open',
+        rightPanelLayout === 'full' && 'right-panel-full',
         rightPanel?.type === 'diff' && 'diff-panel-open',
         elementInspectionActive && 'element-inspection-active',
         splitDragging && 'split-dragging'
@@ -2847,23 +3034,7 @@ export default function AiChatPanel({
         onConfirm={handleConfirmTestingComplete}
         open={reviewCompleteModalOpen}
       />
-      {applicationPreviewMode ? (
-        <main className={cx('application-preview-workspace')}>
-          <BrowserPreviewPanel
-            applicationMode
-            application={application}
-            pages={developmentPlanningPages}
-            requestKey={`${versionViewKey}:${runtimePreviewBaseUrl}:application-workspace`}
-            requestedUrl={applicationPreviewUrl}
-            previewBaseUrl={runtimePreviewBaseUrl}
-            selectedPagePath="/"
-            errorMessage={runtimePreviewLaunchError}
-            onInspectingChange={setElementInspectionActive}
-          />
-        </main>
-      ) : (
-        <>
-          <SessionSidebar
+      <SessionSidebar
             activeSessionId={activeSessionId}
             apiContracts={developmentPlanningApiContracts}
             applicationName={application.name}
@@ -2885,7 +3056,7 @@ export default function AiChatPanel({
                 status: testReportArtifactStatus
               },
               {
-                available: reachedPhase === 'review',
+          available: compareWorkbenchPhases(reachedPhase, 'review') >= 0,
                 key: 'code-review' as const,
                 label: '审查报告',
                 path: WORKSPACE_DOC_PATHS.codeReview,
@@ -2964,7 +3135,9 @@ export default function AiChatPanel({
                           : '需求分析'
                         : displayIsReviewPhase
                           ? '代码审查'
-                          : '新对话')
+                          : displayIsAcceptancePhase
+                            ? '应用验收'
+                            : '新对话')
                     }
                     historical={viewingHistoricalStage}
                   />
@@ -2997,8 +3170,6 @@ export default function AiChatPanel({
                   interactionsDisabled={versionReadOnly || viewingHistoricalStage}
                   key={`${activeSession?.key || draftKey}:${renderedTaskPhase}`}
                   loading={designSessionSwitching || loading}
-                  lockedEndpoint={lockedEndpoint}
-                  lockedPage={lockedPage}
                   messages={designSessionSwitching ? [] : messages}
                   onDiscardArtifact={handleDiscardArtifact}
                   onSubmitClarification={handleSubmitWorkflowClarification}
@@ -3030,27 +3201,27 @@ export default function AiChatPanel({
                   ) : null}
 
                   <ChatComposer
-                  activeWorkflow={activeWorkflow}
-                  artifactResources={composerArtifactResources}
-                  copy={copy}
-                  draft={draft}
-                  error={error}
-                  loading={designSessionSwitching || loading}
-                  onDraftChange={(value) => setDraftByKey(draftKey, value)}
-                  onArtifactAttach={handleAttachArtifactToConversation}
-                  onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
-                  onSend={handleSend}
-                  onStopGenerating={handleStopGenerating}
-                  readOnly={versionReadOnly || viewingHistoricalStage}
-                  readOnlyMessage={
-                    viewingHistoricalStage
-                      ? '历史阶段任务仅供查看；如需调整，请从顶部切换应用阶段'
-                      : '已生成版本只读，请先发起新迭代或回退后继续调整'
-                  }
-                  stopping={stopping}
-                  selectedSkills={selectedSkills}
-                  workspaceBusy={workspaceBusy}
-                  workspaceRoot={workspaceRoot}
+                    activeWorkflow={activeWorkflow}
+                    artifactResources={composerArtifactResources}
+                    copy={copy}
+                    draft={draft}
+                    error={error}
+                    loading={designSessionSwitching || loading}
+                    onDraftChange={(value) => setDraftByKey(draftKey, value)}
+                    onArtifactAttach={handleAttachArtifactToConversation}
+                    onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
+                    onSend={handleSend}
+                    onStopGenerating={handleStopGenerating}
+                    readOnly={versionReadOnly || viewingHistoricalStage}
+                    readOnlyMessage={
+                      viewingHistoricalStage
+                        ? '历史阶段任务仅供查看；如需调整，请从顶部切换应用阶段'
+                        : '已生成版本只读，请先发起新迭代或回退后继续调整'
+                    }
+                    stopping={stopping}
+                    selectedSkills={selectedSkills}
+                    workspaceBusy={workspaceBusy}
+                    workspaceRoot={workspaceRoot}
                   />
                 </div>
               </div>
@@ -3060,7 +3231,7 @@ export default function AiChatPanel({
             )}
           </div>
 
-          {showRightPanel && (
+          {showRightPanel && rightPanelLayout === 'split' && (
             <div
               aria-label="拖动调整右侧面板宽度"
               aria-orientation="vertical"
@@ -3072,57 +3243,56 @@ export default function AiChatPanel({
               role="separator"
               tabIndex={elementInspectionActive ? -1 : 0}
               title="拖动调整左右面板宽度"
-            >
-              <HolderOutlined className={cx('panel-split-handle-icon')} />
-            </div>
+            />
           )}
 
-          {showRightPanel &&
-            (rightPanel?.type === 'preview' ||
+          {activeView === 'chat' &&
+            (!showRightPanel ||
+              rightPanel?.type === 'preview' ||
               rightPanel?.type === 'doc' ||
               rightPanel?.type === 'process' ||
-              rightPanel?.type === 'source') && (
-              <div className={cx('embedded-preview-pane', 'workspace-pane')}>
-                <RightPanelTabs
-                  tabs={workspaceTabs}
-                  active={activeWorkspaceTab}
-                  onChange={openWorkspaceTab}
-                  onClose={() => {
-                    autoOpenStateRef.current.dismissed = true
-                    onRightPanelOpenChange(false)
-                  }}
-                />
-                <div className={cx('workspace-content')}>
-                  {rightPanel.type === 'preview' && (
-                    <BrowserPreviewPanel
-                      application={application}
-                      pages={developmentPlanningPages}
-                      requestKey={rightPanel.requestKey}
-                      requestedUrl={rightPanel.url}
-                      previewBaseUrl={runtimePreviewBaseUrl}
-                      selectedPagePath={
-                        conversationPageOption?.path ||
-                        (activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/')
-                      }
-                      errorMessage={runtimePreviewLaunchError}
-                      onInspectingChange={setElementInspectionActive}
-                    />
-                  )}
-                  {(rightPanel.type === 'doc' || rightPanel.type === 'source') && (
-                    <SourcePanel
-                      diff={pendingFileDiff ?? null}
-                      docConfig={projectDocConfig}
-                      directories={workspaceScaffoldDirectories}
-                      files={workspaceSourceFiles}
-                      initialFilePath={projectInitialFileExists ? projectInitialFilePath : ''}
-                    />
-                  )}
-                </div>
-              </div>
+              rightPanel?.type === 'source') &&
+            (rightPanelLayout === 'hidden' || Boolean(rightPanel)) && (
+              <WorkbenchRightPanel
+                tabs={workspaceTabs}
+                activeTab={activeWorkspaceTab}
+                layout={rightPanelLayout}
+                onLayoutChange={handleRightPanelLayoutChange}
+                onTabChange={openWorkspaceTab}
+              >
+                {rightPanel?.type === 'preview' && (
+                  <BrowserPreviewPanel
+                    application={application}
+                    pages={developmentPlanningPages}
+                    requestKey={rightPanel.requestKey}
+                    requestedUrl={rightPanel.url}
+                    previewBaseUrl={runtimePreviewBaseUrl}
+                    selectedPagePath={
+                      conversationPageOption?.path ||
+                      (activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/')
+                    }
+                    applicationMode={isAcceptancePreviewTab}
+                    errorMessage={runtimePreviewLaunchError}
+                    acceptanceEnabled={isAcceptancePreviewTab}
+                    acceptanceAccepted={acceptanceAccepted}
+                    onAcceptApplication={handleAcceptApplication}
+                    acceptanceReadOnly={versionReadOnly}
+                    onSubmitAcceptanceFeedback={handleSubmitAcceptanceFeedback}
+                    onInspectingChange={setElementInspectionActive}
+                  />
+                )}
+                {(rightPanel?.type === 'doc' || rightPanel?.type === 'source') && (
+                  <SourcePanel
+                    diff={pendingFileDiff ?? null}
+                    docConfig={projectDocConfig}
+                    directories={workspaceScaffoldDirectories}
+                    files={workspaceSourceFiles}
+                    initialFilePath={projectInitialFileExists ? projectInitialFilePath : ''}
+                  />
+                )}
+              </WorkbenchRightPanel>
             )}
 
-        </>
-      )}
     </section>
   )
 }

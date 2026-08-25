@@ -89,7 +89,7 @@ def _technical_planning_prompt(
                 "id": contract_id,
                 "entity_ids": [entity_id],
                 "base_path": f"/api/{entity_id.lower()}",
-                "authentication": {"required": True, "roles": ["admin"]},
+                "authentication": {"required": True},
                 "schemas": {
                     item_schema_id: {
                         "type": "object",
@@ -126,7 +126,7 @@ def _technical_planning_prompt(
                         "request_schema_ref": None,
                         "response_schema_ref": list_schema_id,
                         "error_codes": ["UNAUTHORIZED"],
-                        "authentication": {"required": True, "roles": ["admin"]},
+                        "authentication": {"required": True},
                     }
                 ],
             }
@@ -147,6 +147,7 @@ def _technical_planning_prompt(
                 },
             }
         ],
+        "authorization_data_bindings": [],
     }
     product_goal_context = {
         "app": {
@@ -157,13 +158,17 @@ def _technical_planning_prompt(
         },
         "product_acceptance_criteria": product_plan.get("product_acceptance_criteria", []),
     }
-    role_context = {"user_roles": product_plan.get("user_roles", [])}
+    authorization_context = {
+        "enabled": (requirement_spec.get("authorization_requirements") or {}).get("enabled") is True,
+        "dataRules": (requirement_spec.get("authorization_requirements") or {}).get("dataRules", []),
+        "authorizationTargets": product_plan.get("authorizationTargets", {}),
+    }
     flow_context = {"business_flows": product_plan.get("business_flows", [])}
     page_context = {
         "pages": [
             {
                 key: page.get(key)
-                for key in ("pageId", "goal", "information_items", "allowed_roles")
+                for key in ("pageId", "goal", "information_items")
                 if page.get(key) is not None
             }
             for page in pages
@@ -181,14 +186,14 @@ def _technical_planning_prompt(
     }
     entity_context = {"entities": entities}
     revision_context = (
-        "Revise the existing TechnicalPlan according to planning_adjustment_request and return the complete four-part object.\n"
+        "Revise the existing TechnicalPlan according to planning_adjustment_request and return the complete five-part object.\n"
         f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"
         if existing_plan
         else "Create a new TechnicalPlan.\n"
     )
     return (
         "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
-        "The object has exactly four sections: architecture, entities, api_contracts, and pages.\n\n"
+        "The object has exactly five sections: architecture, entities, api_contracts, pages, and authorization_data_bindings.\n\n"
         "Field definitions:\n"
         "1. architecture is a technical summary. frontend describes the client form and communication style; "
         "backend describes the Java8/Springboot service boundary; data describes MySQL8 persistence and Redis caching.\n"
@@ -204,13 +209,14 @@ def _technical_planning_prompt(
         "same-level properties: total, pageSize, current, and list. It has no other sibling properties. Its query "
         "parameters use current and pageSize, while fields inside list items follow the item Schema. "
         "Schema references resolve to names in the same contract. Each Endpoint contains id, method, path, summary, "
-        "parameters, request_schema_ref, response_schema_ref, error_codes, and authentication.\n"
+        "parameters, request_schema_ref, response_schema_ref, error_codes, and authentication. authentication, when present, is exactly {required:boolean}; never emit roles.\n"
         "4. pages contains the technical references from each ProductPlan page to selected endpoints. Each item has "
         "pageId and references. references contains endpoint_dependencies and action_implementations. Endpoint "
         "dependencies contain endpoint_id, usage, trigger, and required_for_initial_load. A direct business action "
         "uses {actionId, endpointId}; a business sequence uses {actionId, stepBindings:[{stepId, endpointId}]}. "
         "Every selected endpointId exists in api_contracts and also appears in that page's endpoint_dependencies. "
-        "The page set covers every upstream ProductPlan pageId.\n\n"
+        "The page set covers every upstream ProductPlan pageId.\n"
+        "5. authorization_data_bindings is empty when authorization is disabled. When enabled, it has exactly one item per dataRules ruleId: {ruleId, entityIds, endpointIds}. entityIds and endpointIds are non-empty; every endpointId exists in api_contracts and belongs to an API contract covering at least one entityId. Do not emit resourceKey, policyKey, roles, page bindings, action bindings, or any authorization manifest field.\n\n"
         "Complete result example:\n"
         f"{json.dumps(response_example, ensure_ascii=False, indent=2)}\n\n"
         "Dynamic context sections:\n"
@@ -218,11 +224,11 @@ def _technical_planning_prompt(
         f"{json.dumps(entity_context, ensure_ascii=False)}\n\n"
         "- Product goal context: application purpose and product-level acceptance outcomes. Use it to shape the architecture and endpoint scope.\n"
         f"{json.dumps(product_goal_context, ensure_ascii=False)}\n\n"
-        "- Role context: confirmed user roles. Use it to define endpoint authentication roles.\n"
-        f"{json.dumps(role_context, ensure_ascii=False)}\n\n"
+        "- Authorization context: confirmed data rules and ProductPlan target identities. Select only entityIds and endpointIds for each data rule; system compiles all resources and bindings.\n"
+        f"{json.dumps(authorization_context, ensure_ascii=False)}\n\n"
         "- Business-flow context: confirmed business flows. Use it to preserve cross-page and multi-step behavior.\n"
         f"{json.dumps(flow_context, ensure_ascii=False)}\n\n"
-        "- Page context: page goals, information items, and allowed roles. Use it to determine read models and page dependencies.\n"
+        "- Page context: page goals and information items. Use it to determine read models and page dependencies.\n"
         f"{json.dumps(page_context, ensure_ascii=False)}\n\n"
         "- Business-action context: page-scoped ProductPlan actions. Use it to select endpoint implementations only for business actions and business steps.\n"
         f"{json.dumps(action_context, ensure_ascii=False)}\n\n"
@@ -330,7 +336,7 @@ def _planning_prompt(
         '  "entity_ids": ["Inventory"],\n'
         '  "resource": "InventoryItem",\n'
         '  "base_path": "/api/inventory",\n'
-        '  "authentication": {"required": true, "roles": ["admin", "user"]},\n'
+        '  "authentication": {"required": true},\n'
         '  "schemas": {\n'
         '    "InventoryItem": {\n'
         '      "type": "object",\n'
@@ -346,7 +352,7 @@ def _planning_prompt(
         '  "endpoints": [\n'
         '    {"id": "inventory.list", "method": "GET", "path": "/api/inventory", "summary": "List inventory items", '
         '"parameters": [], "request_schema_ref": null, "response_schema_ref": "InventoryListResponse", '
-        '"error_codes": [], "authentication": {"required": true, "roles": ["admin", "user"]}}\n'
+        '"error_codes": [], "authentication": {"required": true}}\n'
         "  ]\n"
         "}\n"
         "Schema reference format rule: inside ProjectPlan api_contracts, schema names are bare strings. "

@@ -15,6 +15,15 @@ from app.protocols.workflow.definition import (
 from app.workspace.code_changes import merge_code_change_sets
 
 
+_CODE_REVIEW_VISIBLE_PHASES = {
+    "code_review",
+    "launch_project",
+    "acceptance",
+    "finalize_project",
+    "completed",
+}
+
+
 def _requirements_confirmation_projection(result: dict[str, Any]) -> dict[str, bool]:
     """仅在当前快照明确携带需求确认字段时公开布尔状态，避免增量帧把缺失误报为未确认。"""
 
@@ -33,6 +42,71 @@ def _workflow_test_target(result: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(clarification, dict) and isinstance(clarification.get("testTarget"), dict):
         return clarification.get("testTarget")
     return None
+
+
+def _workflow_code_review_result(value: Any) -> dict[str, Any]:
+    """将代码审查内部 snake_case 结果投影为有界的 AG-UI camelCase 结构。"""
+
+    if not isinstance(value, dict):
+        return {}
+    raw_targets = value.get("targets")
+    targets: list[dict[str, Any]] = []
+    if isinstance(raw_targets, list):
+        for raw in raw_targets[:2]:
+            if not isinstance(raw, dict):
+                continue
+            target = {
+                "side": raw.get("side"),
+                "root": raw.get("root"),
+                "status": raw.get("status"),
+                "scannedFileCount": raw.get(
+                    "scanned_file_count", raw.get("scannedFileCount", 0)
+                ),
+            }
+            if raw.get("warning"):
+                target["warning"] = raw.get("warning")
+            targets.append(target)
+    raw_issues = value.get("issues")
+    issues: list[dict[str, Any]] = []
+    if isinstance(raw_issues, list):
+        for raw in raw_issues[:100]:
+            if not isinstance(raw, dict):
+                continue
+            issue: dict[str, Any] = {
+                "id": raw.get("id"),
+                "side": raw.get("side"),
+                "severity": raw.get("severity"),
+                "title": raw.get("title"),
+                "summary": raw.get("summary"),
+                "file": raw.get("file"),
+            }
+            rule_id = raw.get("rule_id", raw.get("ruleId"))
+            if rule_id:
+                issue["ruleId"] = rule_id
+            line = raw.get("line")
+            if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+                issue["line"] = line
+            issues.append(issue)
+    return {
+        "status": value.get("status", "completed"),
+        "summary": value.get("summary", ""),
+        "issueCount": value.get("issue_count", value.get("issueCount", len(issues))),
+        "truncated": bool(value.get("truncated")),
+        "loadedSkills": value.get("loaded_skills", value.get("loadedSkills", [])),
+        "targets": targets,
+        "issues": issues,
+    }
+
+
+def _workflow_code_review_result_for_phase(
+    value: Any,
+    phase: Any,
+) -> dict[str, Any]:
+    """仅在审查节点及其后续交付节点公开代码审查结果。"""
+
+    if str(phase or "") not in _CODE_REVIEW_VISIBLE_PHASES:
+        return {}
+    return _workflow_code_review_result(value)
 
 
 def _workflow_progress_summary(
@@ -80,6 +154,11 @@ def _workflow_progress_summary(
             )
         ),
         "testTarget": _workflow_test_target(result),
+        "reviewPhaseConfirmation": result.get("review_phase_confirmation", {}),
+        "codeReviewResult": _workflow_code_review_result_for_phase(
+            result.get("code_review_result"),
+            phase,
+        ),
         "testSummary": {},
         "unitTestSummary": result.get("unit_test_report", {}),
         "unitTestReport": result.get("unit_test_report", {}),
@@ -166,7 +245,7 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         return []
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):
-            return ["launch_project"]
+            return ["review_phase_confirmation"]
         next_action = update.get("integration_next_action")
         if next_action == "repair_build":
             return ["small_task_repair"]
@@ -235,6 +314,10 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             and build_completed
             and update.get("unit_test_gate_passed") is True
         ) else []
+    if node_name == "review_phase_confirmation":
+        return ["code_review"] if update.get("status") == "completed" else []
+    if node_name == "code_review":
+        return ["launch_project"] if update.get("status") == "completed" else ["handle_failure"]
     if node_name == "launch_project":
         return []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
@@ -248,7 +331,11 @@ def _workflow_artifacts(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
+def _public_workflow_state(
+    value: dict[str, Any],
+    *,
+    phase: Any | None = None,
+) -> dict[str, Any]:
     """在状态发送到前端前移除内部 JSON 工件路径。"""
 
     public_state = {
@@ -266,12 +353,39 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
         public_state["workspaceInspection"] = inspection
     if "requirements_confirmed" in value:
         public_state["requirementsConfirmed"] = value.get("requirements_confirmed") is True
+    if "code_review_result" in value:
+        public_state.pop("code_review_result", None)
+        public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
+            value.get("code_review_result"),
+            phase if phase is not None else value.get("phase"),
+        )
     return public_state
 
 
 def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
     """把节点内部更新投射为前端可展示的摘要和结构化数据。"""
 
+    if node_name == "review_phase_confirmation":
+        clarification = update.get("clarification")
+        clarification = clarification if isinstance(clarification, dict) else {}
+        return {
+            "message": clarification.get("message") or "测试已通过，等待确认进入审查阶段。",
+            "data": {
+                "clarification": clarification,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+            },
+        }
+    if node_name == "code_review":
+        result = _workflow_code_review_result(update.get("code_review_result"))
+        return {
+            "message": str(
+                update.get("message") or result.get("summary") or "前后端代码审查完成。"
+            ),
+            "data": {
+                "codeReviewResult": result,
+                "requiresUserInput": False,
+            },
+        }
     if node_name == "classify_request_complexity":
         return {
             "message": f"复杂度={update.get('request_complexity')}，原因={update.get('complexity_reason')}",
@@ -955,6 +1069,11 @@ def _workflow_summary(
             )
         ),
         "testTarget": _workflow_test_target(result),
+        "reviewPhaseConfirmation": result.get("review_phase_confirmation", {}),
+        "codeReviewResult": _workflow_code_review_result_for_phase(
+            result.get("code_review_result"),
+            result.get("phase"),
+        ),
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
@@ -980,12 +1099,7 @@ def _workflow_user_input_message(
         return "项目预览已就绪，请确认是否符合预期。"
 
     confirmation_labels = {
-        "requirement_spec_confirmation": (
-            "右侧已展示需求文档草稿，请确认需求没问题后转为正式文档。"
-            if result.get("requirements_confirmed") is not True
-            else "需求文档已生成，请确认后继续。"
-        ),
-        "product_plan_confirmation": "产品规划草稿已生成，请确认后转为正式产品规划。",
+        "requirement_document_confirmation": "需求文档草稿已生成，请确认后同时固化需求与页面操作规划。",
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
         "technical_plan_confirmation": "技术规划已生成，请确认后继续。",
         "technical_plan_generation_error": "技术规划未通过校验，请重新生成。",
@@ -997,6 +1111,7 @@ def _workflow_user_input_message(
         "unit_test_confirmation": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "test_phase_confirmation": "开发已完成，请确认进入测试阶段。",
+        "review_phase_confirmation": "测试已通过，请确认进入审查阶段。",
     }
     if clarification_mode in confirmation_labels:
         return confirmation_labels[clarification_mode]
@@ -1038,6 +1153,11 @@ def _workflow_visual_payload(
         "buildExecutionScope": result.get("build_execution_scope"),
         "buildTaskPlanConfirmation": summary.get("buildTaskPlanConfirmation"),
         "testTarget": _workflow_test_target(result),
+        "reviewPhaseConfirmation": result.get("review_phase_confirmation", {}),
+        "codeReviewResult": _workflow_code_review_result_for_phase(
+            result.get("code_review_result"),
+            summary.get("phase"),
+        ),
         "buildExecutionSlice": result.get("build_execution_slice"),
         "testReport": result.get("test_report", {}),
         "unitTestReport": result.get("unit_test_report", {}),
@@ -1084,7 +1204,7 @@ def _workflow_visual_payload(
         "summary": summary,
         "events": events,
         "state": state_payload,
-        "result": _public_workflow_state(result),
+        "result": _public_workflow_state(result, phase=summary.get("phase")),
     }
     if code_changes:
         payload["codeChanges"] = code_changes
@@ -1109,10 +1229,10 @@ def _workflow_confirmation_artifact(
         return None
 
     artifact_contracts = {
-        "requirement_spec_confirmation": {
-            "phase": "requirements",
-            "id": "requirement_spec",
-            "name": "requirement-spec.md",
+        "requirement_document_confirmation": {
+            "phase": "product_planning",
+            "id": "requirement_document",
+            "name": "requirement-document",
             "path_field": "requirement_spec_path",
         },
         "project_plan_confirmation": {
@@ -1120,12 +1240,6 @@ def _workflow_confirmation_artifact(
             "id": "project_plan",
             "name": "project-plan.md",
             "path_field": "project_plan_path",
-        },
-        "product_plan_confirmation": {
-            "phase": "product_planning",
-            "id": "product_plan",
-            "name": "product-plan.md",
-            "path_field": "product_plan_path",
         },
         "technical_plan_confirmation": {
             "phase": "technical_planning",

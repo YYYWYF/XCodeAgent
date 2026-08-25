@@ -306,6 +306,11 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                 {
                     "quality_gate_passed": True,
                     "test_report": {"passed": True},
+                    "review_phase_confirmation": {"action": "confirm"},
+                    "code_review_result": {
+                        "status": "completed",
+                        "summary": "上一轮代码审查完成。",
+                    },
                     "preview_url": "http://127.0.0.1:3000",
                     "launch_result": {"status": "running"},
                     "acceptance_request": {"status": "requires_user_input"},
@@ -325,6 +330,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertEqual(result["acceptance_request"], {})
         self.assertEqual(result["acceptance_decision"], "")
         self.assertFalse(result["accepted"])
+        self.assertEqual(result["review_phase_confirmation"], {})
+        self.assertEqual(result["code_review_result"], {})
 
     def test_performance_confirmation_resume_preserves_integration_build_state(self) -> None:
         """等待性能测试选择时不能清空集成构建缓存，否则恢复后会从头重跑。"""
@@ -652,6 +659,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertEqual(result["test_results"][-1]["id"], "frontend_performance")
         self.assertIn("frontend_performance_confirmation:run", result["test_events"])
         self.assertIn("frontend_performance", result["test_events"])
+        self.assertTrue(result["quality_gate_passed"])
+        self.assertEqual(result["integration_next_action"], "review_phase_confirmation")
         performance_runner.assert_called_once()
 
     def test_subgraph_skips_performance_when_user_skips(self) -> None:

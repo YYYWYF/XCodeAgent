@@ -4,18 +4,55 @@ import { lstatIfPresent } from './filesystem'
 
 /** 校验 application.json 是否符合当前权限配置契约。 */
 export function assertCurrentApplicationSchema(applicationRecord: Record<string, unknown>): void {
-  if (applicationRecord.schemaVersion !== 3) {
-    throw new Error('无法添加该项目：仅支持 schemaVersion 为 3 的 application.json')
+  if (applicationRecord.schemaVersion !== 5) {
+    throw new Error('无法添加该项目：application.json 必须使用当前 schemaVersion 5')
   }
+
   const authorization = applicationRecord.authorization
+  const authorizationRecord =
+    authorization && typeof authorization === 'object' && !Array.isArray(authorization)
+      ? (authorization as Record<string, unknown>)
+      : undefined
+  const administratorSubjectsValue = authorizationRecord?.initialAdministratorSubjects
+  const authorizationKeys = authorizationRecord ? Object.keys(authorizationRecord) : []
   if (
-    !authorization ||
-    typeof authorization !== 'object' ||
-    Array.isArray(authorization) ||
-    typeof (authorization as Record<string, unknown>).enabled !== 'boolean' ||
-    typeof (authorization as Record<string, unknown>).runtimeManagementPageEnabled !== 'boolean'
+    !authorizationRecord ||
+    typeof authorizationRecord.enabled !== 'boolean' ||
+    authorizationKeys.some((key) => !['enabled', 'initialAdministratorSubjects'].includes(key)) ||
+    !Array.isArray(administratorSubjectsValue) ||
+    !administratorSubjectsValue.every(
+      (subject: unknown) => typeof subject === 'string' && subject.trim().length > 0
+    )
   ) {
     throw new Error('无法添加该项目：application.json 缺少有效的 authorization 配置')
+  }
+
+  const authorizationEnabled = authorizationRecord.enabled === true
+  const administratorSubjects = authorizationRecord.initialAdministratorSubjects as string[]
+  if (!authorizationEnabled && administratorSubjects.length > 0) {
+    throw new Error('无法添加该项目：未启用权限时不能保留初始管理员')
+  }
+  if (authorizationEnabled && administratorSubjects.length === 0) {
+    throw new Error('无法添加该项目：启用权限后至少需要一个初始管理员成员')
+  }
+  if (
+    authorizationEnabled &&
+    administratorSubjects.some((subject) => subject.trim() === 'current-user')
+  ) {
+    throw new Error('无法添加该项目：初始管理员必须使用真实 subjectId，不能使用 current-user')
+  }
+
+  const auth = applicationRecord.auth
+  if (
+    !auth ||
+    typeof auth !== 'object' ||
+    Array.isArray(auth) ||
+    typeof (auth as Record<string, unknown>).enable !== 'boolean'
+  ) {
+    throw new Error('无法添加该项目：application.json 缺少有效的 auth 配置')
+  }
+  if (authorizationEnabled && (auth as Record<string, unknown>).enable !== true) {
+    throw new Error('无法添加该项目：启用权限时必须同时启用认证')
   }
 }
 

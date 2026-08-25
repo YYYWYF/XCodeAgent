@@ -105,8 +105,6 @@ function WorkbenchPage({
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [previewBaseUrl, setPreviewBaseUrl] = useState('')
   const [previewLaunchError, setPreviewLaunchError] = useState('')
-  const [rightPanelOpen, setRightPanelOpen] = useState(true)
-  const [applicationPreviewMode, setApplicationPreviewMode] = useState(false)
   const [publishModalOpen, setPublishModalOpen] = useState(false)
   const [iterationModalOpen, setIterationModalOpen] = useState(false)
   // 审查阶段进入口：聊天面板上报“允许进入”（全部开发产物完成），顶部阶段条发起“进入确认”。
@@ -441,7 +439,6 @@ function WorkbenchPage({
     if (!target || versionId === viewingVersionId) return
     runVersionSwitch(target.versionLabel, () => {
       setViewingVersionId(versionId)
-      setApplicationPreviewMode(true)
     })
   }
 
@@ -536,10 +533,6 @@ function WorkbenchPage({
               }
               onReturnWelcome={onReturnWelcome}
               lifecycle={versionLifecycle}
-              applicationPreviewMode={applicationPreviewMode}
-              onApplicationPreviewModeChange={setApplicationPreviewMode}
-              rightPanelOpen={rightPanelOpen}
-              onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
               onPublishVersion={confirmGenerateVersion}
               onRollbackVersion={setRollbackTargetId}
               onStartIteration={() => setIterationModalOpen(true)}
@@ -565,10 +558,6 @@ function WorkbenchPage({
                 previewBaseUrl={previewBaseUrl}
                 previewLaunchError={previewLaunchError}
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
-                rightPanelOpen={rightPanelOpen}
-                onRightPanelOpenChange={setRightPanelOpen}
-                applicationPreviewMode={applicationPreviewMode}
-                onApplicationPreviewModeChange={setApplicationPreviewMode}
                 versionViewKey={viewedVersion?.id || ''}
                 versionReadOnly={!isViewingActiveVersion || viewedVersion?.status === 'released'}
                 versionPreviewOnly={!isViewingActiveVersion}

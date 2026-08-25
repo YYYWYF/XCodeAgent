@@ -18,14 +18,13 @@ from app.graph.state import ProjectState
 
 ARTIFACT_BY_NODE: dict[str, ApplicationPlanningArtifact] = {
     "requirements": "requirement_spec",
-    "product_planning": "product_plan",
+    "requirement_document": "requirement_document",
     "ui_confirmation": "ui_designs",
     "technical_planning": "technical_plan",
 }
 
 CONFIRMATION_MODE_BY_ARTIFACT: dict[ApplicationPlanningArtifact, str] = {
-    "requirement_spec": "requirement_spec_confirmation",
-    "product_plan": "product_plan_confirmation",
+    "requirement_document": "requirement_document_confirmation",
     "ui_designs": "ui_design_confirmation",
     "technical_plan": "technical_plan_confirmation",
 }
@@ -38,7 +37,11 @@ def application_planning_review_payload(
     """从 checkpoint 中的待确认产物构造原生 interrupt 公开载荷。"""
 
     artifact = ARTIFACT_BY_NODE[node_name]
-    artifact_value = state.get(artifact)
+    artifact_value = (
+        {"requirement_spec": state.get("requirement_spec"), "product_plan": state.get("product_plan")}
+        if artifact == "requirement_document"
+        else state.get(artifact)
+    )
     revision_source = {
         "artifact": artifact_value,
         "clarification": state.get("clarification"),
@@ -76,7 +79,7 @@ def validate_application_planning_review_action(
         return
 
     if submission.action == "answer":
-        if artifact != "requirement_spec" or mode == CONFIRMATION_MODE_BY_ARTIFACT[artifact] or not has_questions:
+        if artifact != "requirement_spec" or not has_questions:
             raise ValueError(
                 f"当前 {artifact} 审阅门不允许 action=answer；澄清问题必须存在且不能提交确认卡答案。"
             )
@@ -84,7 +87,7 @@ def validate_application_planning_review_action(
             raise ValueError("需求澄清 action=answer 必须提供回答内容。")
         return
 
-    expected_mode = CONFIRMATION_MODE_BY_ARTIFACT[artifact]
+    expected_mode = CONFIRMATION_MODE_BY_ARTIFACT.get(artifact)
     if submission.action == "revise" and mode in {
         "technical_plan_generation_error",
         "project_plan_dependency_validation_error",
@@ -92,7 +95,7 @@ def validate_application_planning_review_action(
     }:
         # 技术计划生成或依赖校验失败时，修订动作表示用户授权重新生成当前产物。
         return
-    if mode != expected_mode:
+    if not expected_mode or mode != expected_mode:
         raise ValueError(
             f"当前 {artifact} clarification.mode={mode or 'unknown'} 不允许 action={submission.action}。"
         )
@@ -122,7 +125,7 @@ def resume_application_planning_review(
     validate_application_planning_review_action(state, node_name, submission)
 
     if submission.action == "design_change" or (
-        submission.action == "revise" and node_name == "product_planning"
+        submission.action == "revise" and node_name == "requirement_document"
     ):
         # 需求+产品规划合并确认门上的“修改”可能涉及任一产物，统一走设计意图分析，
         # 由分类器路由到最早受影响产物并级联重新生成下游。
@@ -164,7 +167,8 @@ def resume_application_planning_review(
                 "pageIds": [],
                 "instruction": submission.request.strip(),
             }
-    return Command(update=update, goto=node_name)
+    target_node = "product_planning" if node_name == "requirement_document" else node_name
+    return Command(update=update, goto=target_node)
 
 
 def requirements_review(
@@ -175,12 +179,12 @@ def requirements_review(
     return resume_application_planning_review(state, "requirements")
 
 
-def product_planning_review(
+def requirement_document_review(
     state: ProjectState,
 ) -> Command[Literal["product_planning", "design_intent_analysis"]]:
-    """暂停 ProductPlan 审阅并恢复到产品规划或设计意图分析。"""
+    """暂停联合需求文档审阅并恢复到产品规划或设计意图分析。"""
 
-    return resume_application_planning_review(state, "product_planning")
+    return resume_application_planning_review(state, "requirement_document")
 
 
 def ui_confirmation_review(
@@ -203,6 +207,8 @@ def pending_review_node(state: ProjectState) -> str:
     """返回设计闲聊结束后需要重新挂起的原审阅门节点。"""
 
     origin = str(state.get("design_interaction_origin") or "requirements")
+    if origin == "product_planning":
+        return "requirement_document_review"
     return (
         f"{origin}_review"
         if origin in ARTIFACT_BY_NODE

@@ -266,6 +266,68 @@ class WorkflowRequestTests(unittest.TestCase):
             {"pageId": "order_list_page", "action": "select_template", "templateId": "commonTable"},
         )
 
+    def test_application_planning_answer_preserves_original_requirement(self) -> None:
+        """创建规划的结构化回答必须以真实原始需求生成恢复请求。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "请根据本轮确认继续创建规划。",
+                    }
+                ],
+                "forwardedProps": {
+                    "workflowScope": "application_planning",
+                    "originalRequest": "创建人员管理应用，HR 管理全部人员，普通用户管理本人信息。",
+                    "applicationPlanningInteraction": {
+                        "gateId": "requirement_spec:revision-1",
+                        "artifact": "requirement_spec",
+                        "artifactRevision": "revision-1",
+                        "action": "answer",
+                        "answers": {
+                            "本人信息入口": {"selected": ["独立「我的信息」页"]}
+                        },
+                    },
+                },
+            }
+        )
+
+        interaction_request = inputs["application_planning_interaction"]["request"]
+        self.assertIn("创建人员管理应用", interaction_request)
+        self.assertIn("独立「我的信息」页", interaction_request)
+        self.assertNotIn("原始需求：\n请根据本轮确认继续创建规划。", interaction_request)
+
+    def test_permission_answer_uses_business_label_and_survives_recovery_message(self) -> None:
+        """权限回答不应把内部问题 ID 暴露给需求模型，也不能被恢复文案覆盖。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "message": "请根据本轮确认继续创建规划。",
+                "forwardedProps": {
+                    "workflowScope": "application_planning",
+                    "originalRequest": "创建人员管理应用，涉及权限控制。",
+                    "applicationPlanningInteraction": {
+                        "gateId": "requirement_spec:revision-1",
+                        "artifact": "requirement_spec",
+                        "artifactRevision": "revision-1",
+                        "action": "answer",
+                        "request": "请根据本轮确认继续创建规划。",
+                        "answers": {
+                            "authorization_data_scope_business": (
+                                "管理员可以查看人员列表，普通用户只能查看和修改自己的基本信息"
+                            )
+                        },
+                    },
+                },
+            }
+        )
+
+        interaction_request = inputs["application_planning_interaction"]["request"]
+        self.assertIn("数据范围业务含义", interaction_request)
+        self.assertIn("管理员可以查看人员列表", interaction_request)
+        self.assertNotIn("authorization_data_scope_business", interaction_request)
+
     def test_application_planning_extracts_ui_design_regenerate_action(self) -> None:
         inputs = workflow_run_inputs(
             {
@@ -607,6 +669,56 @@ class WorkflowRequestTests(unittest.TestCase):
                     "request": "进入测试",
                     "clarificationAnswers": {
                         "test_phase_confirmation": {"action": "reject"}
+                    },
+                }
+            )
+
+    def test_review_phase_confirmation_is_forwarded_as_structured_resume(self) -> None:
+        """进入审查阶段按钮必须恢复确认节点并保留 confirm 动作。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "开始审查前后端代码",
+                "clarificationAnswers": {
+                    "review_phase_confirmation": {"action": "confirm"}
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "review_phase_confirmation",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "review_phase_confirmation")
+        self.assertEqual(
+            inputs["resume_values"]["review_phase_confirmation"],
+            {"mode": "review_phase_confirmation", "action": "confirm"},
+        )
+
+    def test_review_phase_confirmation_rejects_non_confirm_action(self) -> None:
+        """审查阶段确认不接受未知动作或自然语言冒充确认。"""
+
+        with self.assertRaisesRegex(ValueError, "只支持 confirm"):
+            workflow_run_inputs(
+                {
+                    "request": "进入审查",
+                    "clarificationAnswers": {
+                        "review_phase_confirmation": {"action": "skip"}
+                    },
+                }
+            )
+
+        with self.assertRaisesRegex(ValueError, "只能通过 clarificationAnswers"):
+            workflow_run_inputs(
+                {
+                    "request": "进入审查",
+                    "resumeState": {
+                        "summary": {
+                            "status": "requires_user_input",
+                            "phase": "review_phase_confirmation",
+                        }
                     },
                 }
             )
@@ -1106,7 +1218,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 "pages": [{"pageId": "inventory_page"}],
             }
             product_plan = {
-                "schema_version": "product-plan.v4",
+                "schema_version": "product-plan.v5",
                 "confirmation_status": "confirmed",
                 "app": {"name": "库存应用", "summary": "管理库存"},
                 "business_flows": [],

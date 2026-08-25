@@ -333,8 +333,8 @@ def _load_template_planning_artifacts(workspace: Path) -> tuple[dict[str, Any], 
     )
     if product_plan.get("confirmation_status") != "confirmed":
         raise ApplicationTemplateGenerationError("正式 ProductPlan 尚未确认。")
-    if product_plan.get("schema_version") != "product-plan.v4":
-        raise ApplicationTemplateGenerationError("正式 ProductPlan 不是 product-plan.v4。")
+    if product_plan.get("schema_version") != "product-plan.v5":
+        raise ApplicationTemplateGenerationError("正式 ProductPlan 不是 product-plan.v5。")
     ui_designs = _load_json_object(
         workspace / ".xcodeagent/specs/ui-designs.json",
         "正式 UiDesign Manifest",

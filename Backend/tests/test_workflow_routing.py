@@ -9,12 +9,15 @@ from app.graph.workflow import (
     route_entity_source_binding,
     route_prepare_build_tasks,
     route_project_planning,
+    route_review_phase_confirmation,
+    route_code_review,
     route_small_task_result,
     route_test_phase_confirmation,
     route_test_validation,
     route_workflow_start,
 )
 from app.graph.nodes.lifecycle import test_phase_confirmation as run_test_phase_confirmation
+from app.graph.nodes.code_review import review_phase_confirmation
 from app.protocols.workflow.lifecycle import _pending_interaction
 from app.domain.application_lifecycle import PendingInteractionType
 
@@ -98,11 +101,24 @@ class WorkflowRoutingTests(unittest.TestCase):
             "build",
         )
 
-    def test_integration_test_passes_to_launch_project(self) -> None:
+    def test_integration_test_passes_to_review_confirmation(self) -> None:
         self.assertEqual(
             route_test_validation({"quality_gate_passed": True}),
-            "launch_project",
+            "review_phase_confirmation",
         )
+
+    def test_review_confirmation_requires_structured_completion(self) -> None:
+        self.assertEqual(
+            route_review_phase_confirmation({"status": "requires_user_input"}),
+            "await_user_input",
+        )
+        self.assertEqual(
+            route_review_phase_confirmation(
+                {"status": "completed", "quality_gate_passed": True}
+            ),
+            "code_review",
+        )
+        self.assertEqual(route_code_review({"status": "completed"}), "launch_project")
 
     def test_build_only_enters_unit_test_after_complete_summary(self) -> None:
         """构建切片完整成功后必须先进入开发阶段单测门禁。"""
@@ -137,7 +153,7 @@ class WorkflowRoutingTests(unittest.TestCase):
     def test_test_phase_confirmation_resets_integration_repair_budget(self) -> None:
         """进入测试阶段时不应继承 Build 阶段已经消耗的修复次数。"""
 
-        result = test_phase_confirmation(
+        result = run_test_phase_confirmation(
             {
                 "build_summary": {"status": "completed"},
                 "unit_test_gate_passed": True,
@@ -223,6 +239,24 @@ class WorkflowRoutingTests(unittest.TestCase):
 
         self.assertEqual(interaction_type, PendingInteractionType.TEST_PHASE_CONFIRMATION)
         self.assertEqual(payload["testTarget"]["id"], "app")
+
+    def test_frontend_performance_confirmation_uses_typed_lifecycle_interaction(self) -> None:
+        """性能测试选择应投影为可恢复的独立生命周期交互类型。"""
+
+        interaction_type, payload = _pending_interaction(
+            {
+                "clarification": {
+                    "mode": "frontend_performance_confirmation",
+                    "status": "requires_user_input",
+                }
+            }
+        )
+
+        self.assertEqual(
+            interaction_type,
+            PendingInteractionType.FRONTEND_PERFORMANCE_CONFIRMATION,
+        )
+        self.assertEqual(payload["mode"], "frontend_performance_confirmation")
 
     def test_build_confirmation_stops_for_user_input(self) -> None:
         """构建需要扩大范围时必须停留等待用户确认。"""

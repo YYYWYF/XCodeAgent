@@ -897,7 +897,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                 "phase": "requirements",
                 "status": "completed",
                 "clarification": {
-                    "mode": "requirement_spec_confirmation",
+                    "mode": "requirement_document_confirmation",
                     "status": "clear",
                 },
             },
@@ -1044,7 +1044,6 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         """资源锁写入成功后应立即广播，不能等待首个 Graph 节点完成。"""
 
         initial_lifecycle = {
-            "schemaVersion": "1.3.0",
             "application": {"id": "app-1", "name": "测试应用"},
             "updatedAt": "2026-07-23T00:00:00Z",
             "revision": 2,
@@ -1644,7 +1643,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "requirement_spec_path": str(requirement_path),
                     "project_plan_path": str(project_plan_path),
                     "clarification": {
-                        "mode": "requirement_spec_confirmation",
+                        "mode": "requirement_document_confirmation",
                         "status": "requires_user_input",
                     },
                 }
@@ -1693,7 +1692,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "status": "completed",
                     "requirement_spec_path": "requirement-spec.md",
                     "clarification": {
-                        "mode": "requirement_spec_confirmation",
+                        "mode": "requirement_document_confirmation",
                         "status": "clear",
                     },
                 }
@@ -1720,7 +1719,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "requirements_confirmed": False,
                     "requirement_spec_path": str(requirement_path),
                     "clarification": {
-                        "mode": "requirement_spec_confirmation",
+                        "mode": "requirement_document_confirmation",
                         "status": "requires_user_input",
                     },
                 }
@@ -1898,7 +1897,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         """
 
         checkpoint_clarification = {
-            "mode": "requirement_spec_confirmation",
+            "mode": "requirement_document_confirmation",
             "status": "requires_user_input",
             "questions": [{"id": "user_roles", "question": "需要哪些角色？"}],
         }

@@ -89,7 +89,7 @@ def unit_repair_planning(state: ProjectState) -> dict[str, Any]:
     generic_next = str(result.get("integration_next_action") or "handle_failure")
     if generic_next == "small_task_repair":
         next_action = "unit_test_repair"
-    elif generic_next == "launch_project":
+    elif generic_next in {"launch_project", "review_phase_confirmation"}:
         next_action = "test_phase_confirmation"
     else:
         next_action = generic_next

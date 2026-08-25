@@ -830,7 +830,7 @@ flowchart LR
 
 ### 11.1 生命周期、确认与恢复边界
 
-- `.xcodeagent/application-lifecycle.json` 当前 `schemaVersion=1.3.0`，每次写入单调增加 `revision`。`initialization` 与 `activeExecutions` 是两套并列状态：前者描述新建应用，后者按 runId 描述工作台执行，不能互相覆盖。
+- `.xcodeagent/application-lifecycle.json` 不保存 schema 版本字段，每次写入单调增加 `revision`。`initialization` 与 `activeExecutions` 是两套并列状态：前者描述新建应用，后者按 runId 描述工作台执行，不能互相覆盖；测试质量门禁通过后先进入审查确认与只读代码审查，再在审查阶段启动预览和完成验收。
 - `initialization.threadId` 只用于定位初始化 checkpoint；应用进入 `ready_for_workbench` 后清空。前端应用索引中的 `planningConfirmedAt` 一旦写入，就永久允许该应用进入工作台，后续页面设计状态不会撤销它。
 - 需要用户处理的工作台交互写入 `pendingInteraction={id,type,basedOnRevision,...}`。提交时协议层校验 interaction id 和 lifecycle revision，避免旧确认覆盖新状态。
 - `resourceLocks` 与 execution `resourceKeys` 当前只是可观测的资源声明，不执行跨 run 互斥；重叠资源允许并发，最新 writer 成为界面显示的 owner。单次 Build 内部的文件调度约束不能替代跨 run 隔离。

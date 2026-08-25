@@ -1,6 +1,7 @@
 import json
 import re
 import logging
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,16 @@ from app.services.data_source_policy import (
     apply_authoritative_datasource_type,
     datasource_type_from_artifact,
 )
-from app.services.requirement_spec import apply_requirement_spec_editor_changes
+from app.services.application_authorization_config import (
+    ApplicationAuthorizationConfigError,
+    authorization_configuration_can_enable,
+    persist_authorization_configuration,
+)
+from app.services.requirement_spec import (
+    apply_requirement_spec_editor_changes,
+    validate_authorization_requirements,
+    validate_requirement_spec_confirmation_readiness,
+)
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload, clear_clarification
 from app.workspace.spec_documents import (
     confirmed_requirement_spec_json_path,
@@ -59,16 +69,13 @@ def _llm_token_callback(token: str) -> None:
     writer({"type": "llm.token", "token": token, "node": "requirements"})
 
 
-def confirm_requirement_spec_artifact(
+def prepare_requirement_spec_confirmation(
     state: ProjectState,
     existing_spec: dict[str, Any],
     *,
     datasource_type: str,
-) -> dict:
-    """把待确认 RequirementSpec 提升为正式产物：同步用户编辑、写正式文档并返回确认更新。
-
-    需求节点自身的确认分支与产品规划门的合并确认（一次确认需求+产品规划）共用本函数。
-    """
+) -> tuple[dict[str, Any], str | None]:
+    """同步并校验待确认 RequirementSpec，只返回内存候选，不提前写入正式文件。"""
 
     editor_changes = state.get("edited_requirement_spec")
     current_document_path = str(state.get("requirement_spec_path") or "").strip()
@@ -107,17 +114,37 @@ def confirm_requirement_spec_artifact(
         "clarification_status": "clear",
         "confirmation_status": "confirmed",
     }
-    markdown_path = requirement_spec_markdown_path(state)
     confirmed_markdown: str | None = None
+    markdown_path = requirement_spec_markdown_path(state)
     if not (isinstance(editor_changes, dict) and editor_changes) and has_current_document and markdown_path.is_file():
         markdown_content = markdown_path.read_text(encoding="utf-8")
         synchronized_markdown = synchronize_requirement_spec_markdown_datasource_types(
             markdown_content,
             spec,
         )
-        if synchronized_markdown != markdown_content:
-            markdown_path.write_text(synchronized_markdown, encoding="utf-8")
         confirmed_markdown = synchronized_markdown
+    readiness_errors = validate_requirement_spec_confirmation_readiness(spec)
+    if readiness_errors:
+        raise ValueError("确认前需求文档完整性校验失败：" + "；".join(readiness_errors))
+    authorization_errors = validate_authorization_requirements(spec)
+    if authorization_errors:
+        raise ValueError("确认前权限需求校验失败：" + "；".join(authorization_errors))
+    return spec, confirmed_markdown
+
+
+def confirm_requirement_spec_artifact(
+    state: ProjectState,
+    existing_spec: dict[str, Any],
+    *,
+    datasource_type: str,
+) -> dict:
+    """兼容非联合流程的 RequirementSpec 正式写入入口。"""
+
+    spec, confirmed_markdown = prepare_requirement_spec_confirmation(
+        state,
+        existing_spec,
+        datasource_type=datasource_type,
+    )
     spec_path = write_confirmed_requirement_spec_document(
         state,
         spec,
@@ -152,6 +179,24 @@ def requirements(state: ProjectState) -> dict:
     interaction = _application_planning_interaction(state)
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     request = _request_for_requirement_node(state, interaction)
+    # 处理前一轮权限配置冲突的用户选择；解决后才允许继续生成需求草稿。
+    conflict = state.get("authorization_config_conflict")
+    conflict_resolved = False
+    if (
+        application_planning_scope
+        and isinstance(conflict, dict)
+        and conflict.get("requested") is True
+    ):
+        resolution = _resolve_authorization_config_conflict(
+            state,
+            interaction,
+            conflict,
+            existing_spec if isinstance(existing_spec, dict) else {},
+        )
+        if resolution.get("result") is not None:
+            return resolution["result"]
+        request = str(resolution["request"])
+        conflict_resolved = True
     revision_requested = (
         interaction.get("action") == "revise"
         if application_planning_scope
@@ -192,7 +237,7 @@ def requirements(state: ProjectState) -> dict:
             "requirements_clarification_round": clarification_round,
             "requirement_spec_path": draft_path,
             "requirement_spec_json_path": draft_json_path,
-            "clarification": _requirement_spec_confirmation_payload(existing_spec),
+            "clarification": _requirement_spec_draft_payload(existing_spec),
             "timeline": ["requirements"],
         }
     if (
@@ -223,6 +268,20 @@ def requirements(state: ProjectState) -> dict:
         clarification_round=clarification_round,
         on_token=_llm_token_callback,
     )
+    model_conflict = analysis.get("authorization_config_conflict")
+    if (
+        application_planning_scope
+        and isinstance(model_conflict, dict)
+        and model_conflict.get("requested") is True
+    ):
+        return _authorization_config_conflict_result(
+            apply_authoritative_datasource_type(
+                analysis["requirement_spec"],
+                datasource_type,
+            ),
+            state,
+            model_conflict,
+        )
     spec = apply_authoritative_datasource_type(
         analysis["requirement_spec"],
         datasource_type,
@@ -234,13 +293,63 @@ def requirements(state: ProjectState) -> dict:
         clarification,
         spec,
     )
+    _clear_unselected_initial_admin(spec, existing_spec)
+    answered_authorization_questions = _apply_authorization_business_answers(
+        spec,
+        interaction,
+    )
+    clarification = _remove_answered_authorization_questions(
+        clarification,
+        answered_authorization_questions,
+        spec,
+    )
+    authorization_errors = validate_authorization_requirements(
+        spec,
+        require_initial_admin=False,
+    )
+    next_authorization_question = _next_authorization_business_question(
+        spec,
+        answered_question_ids=answered_authorization_questions,
+    )
+    if authorization_errors or next_authorization_question is not None:
+        # 权限业务语义不完整时不能写草稿或进入确认；按业务维度逐步引导用户补充。
+        clarification = _authorization_validation_clarification(
+            clarification,
+            spec,
+            authorization_errors,
+            answered_authorization_questions,
+        )
+        spec["clarification_questions"] = clarification["questions"]
+        spec["clarification_status"] = "requires_user_input"
+        spec["confirmation_status"] = "pending_user_input"
+        return {
+            "phase": "requirements",
+            "status": "requires_user_input",
+            "requirement_spec": spec,
+            "requirements_confirmed": False,
+            "requirements_clarification_round": min(
+                clarification_round + 1,
+                MAX_REQUIREMENT_CLARIFICATION_ROUNDS,
+            ),
+            "requirement_spec_path": "",
+            "requirement_spec_json_path": "",
+            "clarification": clarification,
+            "authorization_config_conflict": {},
+            "timeline": ["requirements"],
+        }
     next_clarification_round = clarification_round
     if _should_suppress_repeat_clarification(existing_spec, clarification):
         clarification = clear_clarification(spec)
         spec["clarification_questions"] = []
         spec["clarification_status"] = "clear"
     if clarification["status"] == "clear":
-        clarification = _requirement_spec_confirmation_payload(spec)
+        readiness_errors = validate_requirement_spec_confirmation_readiness(spec)
+        if readiness_errors:
+            raise ValueError(
+                "需求 AI 返回的 RequirementSpec 未达到确认条件："
+                + "；".join(readiness_errors)
+            )
+        clarification = _requirement_spec_draft_payload(spec)
         spec["clarification_questions"] = []
         spec["clarification_status"] = "clear"
         spec["confirmation_status"] = "pending_user_confirmation"
@@ -249,7 +358,13 @@ def requirements(state: ProjectState) -> dict:
         next_round = clarification_round + 1
         if clarification_round >= MAX_REQUIREMENT_CLARIFICATION_ROUNDS:
             # 用户已经回答完第三轮后，不再信任模型继续追问，直接进入正式需求确认。
-            clarification = _requirement_spec_confirmation_payload(
+            readiness_errors = validate_requirement_spec_confirmation_readiness(spec)
+            if readiness_errors:
+                raise ValueError(
+                    "需求 AI 最终合并的 RequirementSpec 未达到确认条件："
+                    + "；".join(readiness_errors)
+                )
+            clarification = _requirement_spec_draft_payload(
                 spec,
                 clarification_limit_reached=True,
             )
@@ -277,6 +392,7 @@ def requirements(state: ProjectState) -> dict:
             "requirement_spec_path": "",
             "requirement_spec_json_path": "",
             "clarification": clarification,
+            "authorization_config_conflict": {},
             "timeline": ["requirements"],
         }
 
@@ -291,50 +407,674 @@ def requirements(state: ProjectState) -> dict:
         "requirement_spec_path": spec_path,
         "requirement_spec_json_path": str(requirement_spec_draft_json_path(state)),
         "clarification": clarification,
+        "authorization_config_conflict": {} if conflict_resolved else state.get("authorization_config_conflict", {}),
         "timeline": ["requirements"],
     }
 
 
-def _requirement_spec_confirmation_payload(
+def _authorization_config_answer_text(value: object) -> str:
+    """读取选择题或文本题中的权限配置回答。"""
+
+    if isinstance(value, dict):
+        selected = value.get("selected")
+        if isinstance(selected, list):
+            return ",".join(str(item).strip() for item in selected if str(item).strip())
+        return str(selected or value.get("other") or "").strip()
+    return str(value or "").strip()
+
+
+def _authorization_subjects(value: object) -> list[str]:
+    """从管理员回答中拆分 subjectId，并保持首次出现顺序。"""
+
+    subjects: list[str] = []
+    seen: set[str] = set()
+    for item in re.split(r"[,，;；\n]+", _authorization_config_answer_text(value)):
+        subject = item.strip()
+        if subject and subject not in seen:
+            seen.add(subject)
+            subjects.append(subject)
+    return subjects
+
+
+def _authorization_config_conflict_result(
+    spec: dict,
+    state: ProjectState,
+    conflict: dict,
+    *,
+    collecting_admin: bool = False,
+    message: str | None = None,
+) -> dict:
+    """构造配置冲突前置澄清，禁止在此之前写入 RequirementSpec 草稿。"""
+
+    workspace = str(state.get("workspace") or "").strip()
+    can_enable = bool(workspace) and authorization_configuration_can_enable(workspace)
+    if collecting_admin:
+        questions = [
+            {
+                "id": "authorization_initial_admin",
+                "header": "初始管理员",
+                "dimension": "内置权限初始化",
+                "question": "请输入认证系统中真实存在或可预配置的初始管理员 subjectId；多个值请用逗号分隔。",
+                "type": "text",
+                "placeholder": "例如 user@example.com",
+            }
+        ]
+    else:
+        options = [
+            {
+                "label": "移除权限要求",
+                "value": "remove",
+                "description": "保持当前关闭权限配置，并移除本轮业务权限要求。",
+            }
+        ]
+        if can_enable:
+            options.insert(
+                0,
+                {
+                    "label": "启用权限控制",
+                    "value": "enable",
+                    "description": "使用数据库并补充真实管理员 subjectId 后继续需求分析。",
+                },
+            )
+        questions = [
+            {
+                "id": "authorization_config_decision",
+                "header": "权限配置冲突",
+                "dimension": "权限开关与业务需求",
+                "question": "业务描述提出了权限控制，但当前应用配置未启用权限。请选择处理方式。",
+                "type": "choice",
+                "multiSelect": False,
+                "allowOther": False,
+                "options": options,
+            }
+        ]
+    clarification = {
+        "mode": "authorization_configuration_conflict",
+        "status": "requires_user_input",
+        "question_schema": "gemini_cli.ask_user.v1",
+        "questions": questions,
+        "message": message
+        or "请先解决应用权限配置与业务需求之间的冲突，再继续生成 RequirementSpec。",
+        "conflictEvidence": conflict.get("evidence", []),
+    }
+    spec["confirmation_status"] = "pending_user_input"
+    spec["clarification_status"] = "requires_user_input"
+    spec["clarification_questions"] = questions
+    return {
+        "phase": "requirements",
+        "status": "requires_user_input",
+        "requirement_spec": spec,
+        "requirements_confirmed": False,
+        "requirements_clarification_round": _clarification_round(state),
+        "requirement_spec_path": "",
+        "requirement_spec_json_path": "",
+        "authorization_config_conflict": {
+            **conflict,
+            "decision": "enable" if collecting_admin else "",
+        },
+        "clarification": clarification,
+        "timeline": ["requirements"],
+    }
+
+
+def _resolve_authorization_config_conflict(
+    state: ProjectState,
+    interaction: dict,
+    conflict: dict,
+    existing_spec: dict,
+) -> dict:
+    """处理前置澄清答案；只有管理员校验通过后才原子启用配置。"""
+
+    answers = interaction.get("answers") if isinstance(interaction, dict) else {}
+    answers = answers if isinstance(answers, dict) else {}
+    decision = _authorization_config_answer_text(answers.get("authorization_config_decision"))
+    decision = decision or str(conflict.get("decision") or "").strip()
+    workspace = str(state.get("workspace") or "").strip()
+    if decision == "enable":
+        if not authorization_configuration_can_enable(workspace):
+            return {
+                "result": _authorization_config_conflict_result(
+                    existing_spec,
+                    state,
+                    conflict,
+                    message="当前应用不是数据库数据源，不能启用内置权限；请选择移除权限要求。",
+                )
+            }
+        subjects = _authorization_subjects(answers.get("authorization_initial_admin"))
+        if not subjects:
+            return {
+                "result": _authorization_config_conflict_result(
+                    existing_spec,
+                    state,
+                    conflict,
+                    collecting_admin=True,
+                )
+            }
+        try:
+            persist_authorization_configuration(
+                workspace,
+                initial_administrator_subjects=subjects,
+            )
+        except ApplicationAuthorizationConfigError as exc:
+            raise ValueError(str(exc)) from exc
+        return {
+            "request": "\n".join(
+                [
+                    "权限配置冲突已确认解决：启用权限控制。",
+                    "涉及权限控制：是。",
+                    f"初始管理员成员标识：{'、'.join(subjects)}。",
+                    str(interaction.get("request") or state.get("request") or ""),
+                ]
+            )
+        }
+    if decision == "remove":
+        return {
+            "request": "\n".join(
+                [
+                    "权限配置冲突已确认解决：移除本轮业务权限要求。",
+                    "涉及权限控制：否。",
+                    str(interaction.get("request") or state.get("request") or ""),
+                ]
+            )
+        }
+    return {"result": _authorization_config_conflict_result(existing_spec, state, conflict)}
+
+
+def _requirement_spec_draft_payload(
     spec: dict,
     *,
     clarification_limit_reached: bool = False,
 ) -> dict:
-    """构造需求确认卡，并在澄清预算用尽时明确告知用户。"""
+    """构造已完成澄清的草稿载荷，联合确认由 ProductPlan 生成完成后统一处理。"""
 
-    payload = build_ask_user_payload(
-        [
-            AskUserQuestion(
-                header="需求确认",
-                question=(
-                    "需求分析已完成，请审核当前需求内容。"
-                    "如需补充或调整，请填写具体意见；明确确认后才会生成正式需求文档。"
-                ),
-                type="text",
-                placeholder="例如：需要增加审批人角色和盘点页面。",
-            )
-        ]
-    )
-    payload["mode"] = "requirement_spec_confirmation"
-    payload["message"] = (
-        "已完成最多 3 轮需求澄清，请审核当前需求；如仍需调整，请在确认卡中填写具体意见。"
-        if clarification_limit_reached
-        else "需求分析已完成，请确认需求没问题后生成正式需求文档。"
-    )
+    payload = clear_clarification(spec)
+    payload["mode"] = "requirement_document_draft"
+    payload["message"] = "需求事实已完成校验，正在生成同一阶段的页面与操作规划。"
     if clarification_limit_reached:
         payload["clarification_limit_reached"] = True
     payload["spec_summary"] = spec.get("app_info", {}).get("name", "未命名应用")
     return payload
 
 
+def _authorization_validation_clarification(
+    clarification: dict,
+    spec: dict,
+    errors: list[str],
+    answered_question_ids: set[str] | None = None,
+) -> dict:
+    """把权限候选缺口转换为一次聚焦的业务澄清，不暴露结构字段错误。"""
+
+    question = _next_authorization_business_question(
+        spec,
+        answered_question_ids=answered_question_ids or set(),
+    )
+    if question is None:
+        # 只在候选形状异常等极少数情况使用兜底问题，仍然只要求业务说明。
+        question = {
+            "id": "authorization_business_review",
+            "header": "权限业务梳理",
+            "dimension": "权限业务梳理",
+            "question": (
+                "请先用业务语言说明需要控制的页面、操作或数据范围；"
+                "如果没有对应的权限控制，请明确回答“无”。"
+            ),
+            "type": "text",
+        }
+    existing_questions = clarification.get("questions")
+    questions = (
+        [item for item in existing_questions if isinstance(item, dict)]
+        if isinstance(existing_questions, list)
+        else []
+    )
+    if not any(item.get("id") == question["id"] for item in questions):
+        questions.append(question)
+    return {
+        **clarification,
+        "mode": "ask_user_question",
+        "status": "requires_user_input",
+        "questions": questions,
+        "message": "请先完成权限业务梳理，再确认需求文档。",
+    }
+
+
+def _clear_unselected_initial_admin(spec: dict, existing_spec: dict | None) -> None:
+    """首次角色提取只保留职责事实，等待结构化选择后才写入系统管理员属性。"""
+
+    existing_authorization = (
+        existing_spec.get("authorization_requirements")
+        if isinstance(existing_spec, dict)
+        and isinstance(existing_spec.get("authorization_requirements"), dict)
+        else {}
+    )
+    if str(existing_authorization.get("initialAdminRoleId") or "").strip():
+        return
+    authorization = spec.get("authorization_requirements")
+    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+        return
+    authorization.pop("initialAdminRoleId", None)
+    roles = spec.get("user_roles")
+    if not isinstance(roles, list):
+        return
+    for role in roles:
+        if isinstance(role, dict):
+            role["isSystemRole"] = False
+            role["isInitialAdminRole"] = False
+
+
+def _next_authorization_business_question(
+    spec: dict,
+    *,
+    answered_question_ids: set[str] | None = None,
+) -> dict | None:
+    """按页面、操作、数据范围顺序返回一个权限业务梳理问题。"""
+
+    authorization = spec.get("authorization_requirements")
+    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+        return None
+    answered_question_ids = answered_question_ids or set()
+
+    restricted_pages = authorization.get("restrictedPages")
+    if (
+        "authorization_page_business" not in answered_question_ids
+        and isinstance(restricted_pages, list)
+        and any(
+            not isinstance(item, dict)
+            or not str(item.get("name") or "").strip()
+            or not str(item.get("description") or "").strip()
+            for item in restricted_pages
+        )
+    ):
+        return {
+            "id": "authorization_page_business",
+            "header": "权限业务梳理 1/3",
+            "dimension": "受控页面业务含义",
+            "question": (
+                "第 1 步，请说明哪些业务页面或业务对象需要限制访问，以及限制的业务原因。"
+                "如果不需要页面级权限控制，请回答“无”。"
+            ),
+            "type": "text",
+        }
+
+    restricted_operations = authorization.get("restrictedOperations")
+    if (
+        "authorization_operation_business" not in answered_question_ids
+        and isinstance(restricted_operations, list)
+        and any(
+            not isinstance(item, dict)
+            or not str(item.get("name") or "").strip()
+            or not str(item.get("description") or "").strip()
+            for item in restricted_operations
+        )
+    ):
+        return {
+            "id": "authorization_operation_business",
+            "header": "权限业务梳理 2/3",
+            "dimension": "受控操作业务含义",
+            "question": (
+                "第 2 步，请说明哪些业务操作需要授权，以及为什么需要限制。"
+                "如果不需要操作级权限控制，请回答“无”。"
+            ),
+            "type": "text",
+        }
+
+    data_rules = authorization.get("dataRules")
+    if (
+        "authorization_data_scope_business" not in answered_question_ids
+        and isinstance(data_rules, list)
+        and any(
+            not isinstance(item, dict)
+            or not str(item.get("name") or "").strip()
+            or not str(item.get("includes") or "").strip()
+            or not str(item.get("excludes") or "").strip()
+            for item in data_rules
+        )
+    ):
+        return {
+            "id": "authorization_data_scope_business",
+            "header": "权限业务梳理 3/3",
+            "dimension": "数据范围业务含义",
+            "question": (
+                "第 3 步，请说明哪些业务对象需要数据范围控制，分别写明成员可以看到的数据和明确不包含的数据。"
+                "如果不需要数据范围权限控制，请回答“无”。"
+            ),
+            "type": "text",
+        }
+
+    roles = spec.get("user_roles")
+    roles = roles if isinstance(roles, list) else []
+    role_options = [
+        {
+            "label": str(role.get("name") or role.get("id") or "未命名角色"),
+            "value": str(role.get("id") or "").strip(),
+        }
+        for role in roles
+        if isinstance(role, dict) and str(role.get("id") or "").strip()
+    ]
+    if not role_options and "authorization_business_roles" not in answered_question_ids:
+        return {
+            "id": "authorization_business_roles",
+            "header": "业务角色梳理",
+            "dimension": "业务参与者",
+            "question": (
+                "需求中尚未识别出业务角色。请先说明应用有哪些业务参与者，以及是否存在管理员类角色；"
+                "确认后再选择谁承担系统权限管理。"
+            ),
+            "type": "text",
+        }
+    initial_admin_role_id = str(authorization.get("initialAdminRoleId") or "").strip()
+    selected_initial_roles = [
+        role
+        for role in roles
+        if isinstance(role, dict) and role.get("isInitialAdminRole") is True
+    ]
+    if (
+        "authorization_initial_admin_role" not in answered_question_ids
+        and (
+            len(selected_initial_roles) != 1
+            or not initial_admin_role_id
+            or str(selected_initial_roles[0].get("id") or "").strip()
+            != initial_admin_role_id
+            or selected_initial_roles[0].get("isSystemRole") is not True
+        )
+    ):
+        return {
+            "id": "authorization_initial_admin_role",
+            "header": "初始系统管理员",
+            "dimension": "系统权限管理角色",
+            "question": (
+                "已识别业务角色："
+                + "、".join(str(option["label"]) for option in role_options)
+                + "。请选择其中一个首次承担系统权限管理的角色；"
+                "如这些业务角色都不承担该职责，再选择新建独立系统管理员。"
+            ),
+            "type": "choice",
+            "allowOther": False,
+            "options": [
+                *role_options,
+                {"label": "新建独立系统管理员", "value": "__create_system_administrator__"},
+            ],
+        }
+
+    for field_name, label in (
+        ("restrictedPages", "受控页面"),
+        ("restrictedOperations", "受控操作"),
+        ("dataRules", "数据范围"),
+    ):
+        items = authorization.get(field_name)
+        items = items if isinstance(items, list) else []
+        for item in items:
+            if not isinstance(item, dict) or item.get("defaultGrantedRoleIds"):
+                continue
+            rule_id = str(item.get("ruleId") or "").strip()
+            if not rule_id:
+                continue
+            question_id = f"authorization_default_grants_{rule_id}"
+            if question_id in answered_question_ids:
+                continue
+            return {
+                "id": question_id,
+                "header": "默认角色授权",
+                "dimension": label,
+                "question": f"首次初始化时，哪些业务角色默认拥有“{item.get('name') or label}”权限？可多选。",
+                "type": "choice",
+                "multiSelect": True,
+                "allowOther": False,
+                "options": role_options,
+            }
+
+    return None
+
+
+_AUTHORIZATION_BUSINESS_QUESTION_TARGETS = {
+    "authorization_page_business": {
+        "field": "restrictedPages",
+        "fallback_name": "受控业务页面",
+    },
+    "authorization_operation_business": {
+        "field": "restrictedOperations",
+        "fallback_name": "受控业务操作",
+    },
+    "authorization_data_scope_business": {
+        "field": "dataRules",
+        "fallback_name": "受控业务数据",
+    },
+}
+
+def _authorization_answer_text(value: object) -> str:
+    """把权限澄清卡的结构化回答还原为一段业务说明文本。"""
+
+    if isinstance(value, list):
+        return "、".join(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, dict):
+        selected = value.get("selected")
+        other = str(value.get("other") or "").strip()
+        selected_text = _authorization_answer_text(selected)
+        return "；".join(
+            item for item in (
+                f"已选：{selected_text}" if selected_text else "",
+                f"其他补充：{other}" if other else "",
+            ) if item
+        )
+    return str(value or "").strip()
+
+
+def _authorization_answer_values(value: object) -> list[str]:
+    """提取选择题的稳定选项值，供角色选择与默认授权关系写回。"""
+
+    if isinstance(value, dict):
+        return _authorization_answer_values(value.get("selected"))
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    return [text] if text else []
+
+
+def _is_explicit_no_authorization_answer(value: str) -> bool:
+    """识别权限澄清协议约定的否定回答，不解释自由业务语言。"""
+
+    normalized = value.replace(" ", "").replace("已选：", "")
+    return normalized in {
+        "无",
+        "暂无",
+        "没有",
+        "不需要",
+        "无需",
+        "否",
+        "不用",
+    }
+
+
+def _authorization_candidate_is_complete(field: str, value: object) -> bool:
+    """判断一个权限候选是否已经具备需求阶段的业务语义。"""
+
+    if not isinstance(value, dict):
+        return False
+    if field in {"restrictedPages", "restrictedOperations"}:
+        return bool(
+            str(value.get("name") or "").strip()
+            and str(value.get("description") or "").strip()
+        )
+    return bool(
+        str(value.get("name") or "").strip()
+        and str(value.get("includes") or "").strip()
+        and str(value.get("excludes") or "").strip()
+    )
+
+
+def _apply_authorization_business_answers(
+    spec: dict,
+    interaction: dict,
+) -> set[str]:
+    """按稳定问题 ID 合并权限澄清回答，保留用户原话而不解析业务关键词。"""
+
+    answers = interaction.get("answers") if isinstance(interaction, dict) else None
+    authorization = spec.get("authorization_requirements")
+    if not isinstance(answers, dict) or not isinstance(authorization, dict):
+        return set()
+    if authorization.get("enabled") is not True:
+        return set()
+
+    updated_authorization = deepcopy(authorization)
+    answered_question_ids: set[str] = set()
+    for question_id, target in _AUTHORIZATION_BUSINESS_QUESTION_TARGETS.items():
+        if question_id not in answers:
+            continue
+        answer_text = _authorization_answer_text(answers.get(question_id))
+        if not answer_text:
+            continue
+        answered_question_ids.add(question_id)
+        field = str(target["field"])
+        if _is_explicit_no_authorization_answer(answer_text):
+            updated_authorization[field] = []
+            continue
+
+        raw_items = updated_authorization.get(field)
+        items = raw_items if isinstance(raw_items, list) else []
+        complete_items = [
+            deepcopy(item)
+            for item in items
+            if _authorization_candidate_is_complete(field, item)
+        ]
+        if complete_items:
+            source_ref = f"用户权限澄清回答：{answer_text}"
+            for item in complete_items:
+                source_refs = item.get("sourceRefs")
+                if not isinstance(source_refs, list):
+                    source_refs = []
+                if source_ref not in source_refs:
+                    source_refs.append(source_ref)
+                item["sourceRefs"] = source_refs
+            updated_authorization[field] = complete_items
+            continue
+
+        seed_item = next(
+            (item for item in items if isinstance(item, dict)),
+            {},
+        )
+        source_ref = f"用户权限澄清回答：{answer_text}"
+        source_refs = [
+            str(item).strip()
+            for item in seed_item.get("sourceRefs", [])
+            if str(item).strip()
+        ] if isinstance(seed_item.get("sourceRefs"), list) else []
+        if source_ref not in source_refs:
+            source_refs.append(source_ref)
+
+        if field == "dataRules":
+            fallback_item = {
+                "ruleId": str(seed_item.get("ruleId") or "").strip(),
+                "name": str(seed_item.get("name") or target["fallback_name"]).strip(),
+                "description": str(seed_item.get("description") or answer_text).strip(),
+                "dataRuleKey": str(seed_item.get("dataRuleKey") or "").strip(),
+                "includes": str(seed_item.get("includes") or answer_text).strip(),
+                "excludes": str(seed_item.get("excludes") or "").strip(),
+                "sourceRefs": source_refs,
+            }
+        else:
+            fallback_item = {
+                "ruleId": str(seed_item.get("ruleId") or "").strip(),
+                "name": str(seed_item.get("name") or target["fallback_name"]).strip(),
+                "description": str(seed_item.get("description") or answer_text).strip(),
+                "rationale": str(seed_item.get("rationale") or answer_text).strip(),
+                "sourceRefs": source_refs,
+            }
+        updated_authorization[field] = [fallback_item]
+
+    if "authorization_initial_admin_role" in answers:
+        selected = _authorization_answer_values(answers["authorization_initial_admin_role"])
+        selected_role_id = selected[0] if len(selected) == 1 else ""
+        roles = spec.get("user_roles")
+        roles = deepcopy(roles) if isinstance(roles, list) else []
+        if selected_role_id == "__create_system_administrator__":
+            used_ids = {
+                str(role.get("id") or "").strip()
+                for role in roles
+                if isinstance(role, dict)
+            }
+            selected_role_id = "system_administrator"
+            suffix = 2
+            while selected_role_id in used_ids:
+                selected_role_id = f"system_administrator_{suffix}"
+                suffix += 1
+            roles.append(
+                {
+                    "id": selected_role_id,
+                    "name": "系统管理员",
+                    "description": "首次负责系统权限管理的角色。",
+                    "isSystemRole": True,
+                    "isInitialAdminRole": True,
+                }
+            )
+        if selected_role_id and any(
+            isinstance(role, dict) and str(role.get("id") or "").strip() == selected_role_id
+            for role in roles
+        ):
+            for role in roles:
+                if not isinstance(role, dict):
+                    continue
+                is_selected = str(role.get("id") or "").strip() == selected_role_id
+                role["isInitialAdminRole"] = is_selected
+                role["isSystemRole"] = is_selected or bool(role.get("isSystemRole"))
+            spec["user_roles"] = roles
+            updated_authorization["initialAdminRoleId"] = selected_role_id
+            answered_question_ids.add("authorization_initial_admin_role")
+
+    for question_id, answer in answers.items():
+        if not str(question_id).startswith("authorization_default_grants_"):
+            continue
+        rule_id = str(question_id).removeprefix("authorization_default_grants_")
+        selected_role_ids = _authorization_answer_values(answer)
+        if not selected_role_ids:
+            continue
+        for field_name in ("restrictedPages", "restrictedOperations", "dataRules"):
+            items = updated_authorization.get(field_name)
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if isinstance(item, dict) and str(item.get("ruleId") or "").strip() == rule_id:
+                    item["defaultGrantedRoleIds"] = selected_role_ids
+                    answered_question_ids.add(str(question_id))
+
+    if answered_question_ids:
+        spec["authorization_requirements"] = updated_authorization
+    return answered_question_ids
+
+
+def _remove_answered_authorization_questions(
+    clarification: dict,
+    answered_question_ids: set[str],
+    spec: dict,
+) -> dict:
+    """从下一轮问题中移除本轮已回答的权限维度，避免原生中断重复展示。"""
+
+    if not answered_question_ids:
+        return clarification
+    questions = clarification.get("questions")
+    if not isinstance(questions, list):
+        return clarification
+    remaining = [
+        item
+        for item in questions
+        if not isinstance(item, dict)
+        or item.get("id") not in answered_question_ids
+    ]
+    if remaining:
+        return {
+            **clarification,
+            "questions": remaining,
+            "status": "requires_user_input",
+        }
+    return clear_clarification(spec)
+
+
 def _requirement_spec_confirmed_payload(spec: dict) -> dict:
     return {
-        "mode": "requirement_spec_confirmation",
+        "mode": "requirement_document_confirmation",
         "status": "clear",
         "question_schema": "gemini_cli.ask_user.v1",
         "questions": [],
         "assumptions": [],
-        "message": "需求文档已由用户确认，可以继续产品规划。",
+        "message": "需求文档已确认，可以继续后续规划。",
         "spec_summary": spec.get("app_info", {}).get("name", "未命名应用"),
     }
 

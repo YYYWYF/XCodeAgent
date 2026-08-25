@@ -33,6 +33,15 @@ function statusLabelFor(version: ApplicationVersion, isActive: boolean): string 
   return version.status === 'released' ? '已生成版本' : '已保存'
 }
 
+/** 根据当前生命周期返回生成版本按钮的阻塞原因，避免在验收阶段仍显示审查文案。 */
+function releaseBlockedTitle(lifecycle?: ApplicationLifecycle): string {
+  const extensions = lifecycle?.extensions || {}
+  if (String(extensions.testReportStatus || '') !== 'passed') return '测试通过后可生成新版本'
+  if (String(extensions.reviewStatus || '') !== 'passed') return '审查通过后可生成新版本'
+  if (String(extensions.acceptanceStatus || '') !== 'passed') return '验收通过后可生成新版本'
+  return '完成当前版本前置流程后可生成新版本'
+}
+
 /**
  * 工作台版本选择与生成版本操作区；查看历史版本不会改变当前单向版本头。
  * 下拉面板单列：每个版本直显完整日志，选中即切换，无额外 hover 面板。
@@ -144,7 +153,7 @@ export default function VersionActions({
           type="primary"
           disabled={!releasable}
           onClick={onPublish}
-          title={releasable ? '生成新版本' : '完成代码审查后可生成新版本'}
+           title={releasable ? '生成新版本' : releaseBlockedTitle(lifecycle || viewedVersion.lifecycle)}
         >
           生成新版本
         </Button>

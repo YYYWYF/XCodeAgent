@@ -22,8 +22,6 @@ import WorkflowRunCard, {
   workflowClarification
 } from '../WorkflowRunCard'
 import DetailConfirmationPageSelector from '../../../../components/DetailConfirmationPageSelector'
-import type { DevelopmentPlanningPageOption } from '../../../../typings'
-
 type DetailConfirmationStart = (
   targetType: 'page' | 'endpoint',
   targetId: string,
@@ -69,7 +67,8 @@ function agentAvatarInitial(agentKey: WorkbenchPhase): string {
     planning: 'PM',
     development: 'RD',
     testing: 'QA',
-    review: 'CR'
+    review: 'CR',
+    acceptance: '验'
   }
   return initials[agentKey]
 }
@@ -81,7 +80,8 @@ function workflowTitleForAgent(agentKey: WorkbenchPhase): string {
     planning: '项目计划编写工作流',
     development: '开发工作流',
     testing: '测试验证工作流',
-    review: '代码审查工作流'
+    review: '代码审查工作流',
+    acceptance: '验收确认'
   }
   return titles[agentKey]
 }
@@ -101,12 +101,12 @@ function workflowPhaseToAgentPhase(
       'prepare_build_tasks',
       'build',
       'integration_test',
-      'launch_project',
-      'acceptance'
+      'launch_project'
     ].includes(phase)
   ) {
     return 'development'
   }
+  if (phase === 'acceptance') return 'acceptance'
   if (['application_test', 'test_report', 'generate_test_report', 'test', 'testing'].includes(phase)) {
     return 'testing'
   }
@@ -151,6 +151,14 @@ function isRedundantReviewStartMessage(message: AgentChatMessage): boolean {
   if (message.role === 'user') return message.content.trim() === '开始代码审查'
   if (!message.workflow) return false
   return ['review_start', 'code_review'].includes(workflowClarification(message.workflow)?.mode || '')
+}
+
+/** 隐藏验收条已经表达过的旧启动消息，验收对话只保留用户进入对话后的提示。 */
+function isRedundantAcceptanceStartMessage(message: AgentChatMessage): boolean {
+  if (message.role === 'user') return message.content.trim() === '开始应用验收'
+  if (message.content.trim() === '请根据需求文档基线完成应用验收。') return true
+  if (!message.workflow) return false
+  return workflowClarification(message.workflow)?.mode === 'application_acceptance'
 }
 
 /** 隐藏已完成但没有正文、节点或交互的空 assistant 消息，避免历史会话留下孤立头像。 */
@@ -201,16 +209,6 @@ type MessageListProps = {
     answers: ClarificationAnswers
   ) => Promise<void>
   onDiscardArtifact: (docKey: WorkspaceDocKey) => void
-  /** 待设计目标（页面/接口）作为对话节点，含模板选择与开始详细设计。 */
-  lockedPage?: DevelopmentPlanningPageOption
-  lockedEndpoint?: {
-    apiContractId: string
-    endpointId: string
-    hasDetailPlan?: boolean
-    label: string
-    path?: string
-    purpose?: string
-  }
   onStartDetailDesign?: DetailConfirmationStart
 }
 
@@ -224,13 +222,13 @@ export default function MessageList({
   messages,
   onDiscardArtifact,
   onSubmitClarification,
-  lockedPage,
-  lockedEndpoint,
   onStartDetailDesign,
 }: MessageListProps): ReactElement {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
-  const followLatestContentRef = useRef(true)
+  // 每次会话挂载的首批消息从顶部呈现，避免历史内容一出现就被自动滚到底部。
+  const initialMessagesPresentedRef = useRef(false)
+  const followLatestContentRef = useRef(false)
   const restoringFollowRef = useRef(false)
   const scrollUpdateFrameRef = useRef<number>()
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
@@ -241,6 +239,7 @@ export default function MessageList({
       !isSyntheticArtifactCompletionMessage(message) &&
       !isRedundantTestingMessage(message) &&
       !isRedundantReviewStartMessage(message) &&
+      !isRedundantAcceptanceStartMessage(message) &&
       !isCompletedEmptyAssistantMessage(message)
   )
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(displayMessages) : undefined
@@ -318,17 +317,27 @@ export default function MessageList({
     }
   }, [scheduleScrollUpdate])
 
-  // 消息或加载状态切换后主动安排一次跟随，ResizeObserver 不可用时仍可工作。
+  // 首批消息始终从对话区顶部开始；首批呈现后，新消息才沿用常规的底部跟随。
   useEffect(() => {
-    // 新消息/卡片出现时强制跟随最新：同步 scrollTo + rAF + 300ms 内容稳定后补滚，
-    // 确保异步渲染的工作流确认卡（授权块）始终落在视口内。
-    followLatestContentRef.current = true
     const container = scrollContainerRef.current
-    if (container) container.scrollTo({ top: container.scrollHeight, behavior: 'auto' })
+    if (displayMessages.length === 0 || !container) return undefined
+
+    if (!initialMessagesPresentedRef.current) {
+      initialMessagesPresentedRef.current = true
+      followLatestContentRef.current = false
+      restoringFollowRef.current = false
+      container.scrollTo({ top: 0, behavior: 'auto' })
+      setShowScrollToBottom(false)
+      return undefined
+    }
+
+    // 后续消息/卡片出现时才跟随最新，确保流式工作流持续落在可视范围内。
+    followLatestContentRef.current = true
+    container.scrollTo({ top: container.scrollHeight, behavior: 'auto' })
     scheduleScrollUpdate()
     const timer = window.setTimeout(scheduleScrollUpdate, 300)
     return () => window.clearTimeout(timer)
-  }, [loading, messages, scheduleScrollUpdate])
+  }, [displayMessages.length, loading, messages, scheduleScrollUpdate])
 
   return (
     <div className={cx('ai-message-list-shell')}>
@@ -339,20 +348,21 @@ export default function MessageList({
         ref={scrollContainerRef}
       >
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
+          {/* 只有原始会话确实没有任何消息时才显示空白占位；被过滤的控制消息也不应把已有对话伪装成空白。 */}
           {displayMessages.length === 0 ? (
             loading ? (
               <MessageAgentHeader
                 agentKey={conversationPhase || agentPhase || currentPhase}
                 loading
               />
-            ) : (
+            ) : messages.length === 0 ? (
               <div className={cx('ai-message-empty')}>
                 <span className={cx('ai-message-empty-mark')}>
                   <RobotOutlined />
                 </span>
                 <Text strong>从一个想法开始</Text>
               </div>
-            )
+            ) : null
           ) : (
             displayMessages.map((message, messageIndex) => {
               const messageLoading = message.id === activeAssistantMessageId
@@ -413,9 +423,15 @@ export default function MessageList({
                 message.workflow,
                 Boolean(visibleProcessSteps?.length)
               )
-              const detailBlockerTargetKey = message.detailBlocker
-                ? pageDetailTargetKey(message.detailBlocker.pageId)
-                : ''
+              const detailBlockerTargetKey =
+                message.detailBlocker?.type === 'endpoint'
+                  ? endpointDetailTargetKey(
+                      message.detailBlocker.apiContractId,
+                      message.detailBlocker.endpointId
+                    )
+                  : message.detailBlocker?.type === 'page'
+                    ? pageDetailTargetKey(message.detailBlocker.pageId)
+                    : ''
               const detailBlockerWorkflowStarted = hasWorkflowForTarget(detailBlockerTargetKey)
               return (
                 <article
@@ -431,7 +447,7 @@ export default function MessageList({
                     {message.role === 'assistant' ? (
                       <>
                         <MessageAgentHeader agentKey={messageAgentKey} loading={messageLoading} />
-                        {message.detailBlocker && (
+                        {message.detailBlocker?.type === 'page' && (
                           <DetailConfirmationPageSelector
                             disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
                             loading={loading}
@@ -443,6 +459,20 @@ export default function MessageList({
                               path: message.detailBlocker.path || '/',
                               purpose: message.detailBlocker.purpose || '',
                               designed: false
+                            }}
+                          />
+                        )}
+                        {message.detailBlocker?.type === 'endpoint' && (
+                          <DetailConfirmationPageSelector
+                            disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
+                            loading={loading}
+                            onStart={onStartDetailDesign}
+                            selectedEndpoint={{
+                              apiContractId: message.detailBlocker.apiContractId,
+                              endpointId: message.detailBlocker.endpointId,
+                              label: message.detailBlocker.label,
+                              path: message.detailBlocker.path,
+                              purpose: message.detailBlocker.purpose
                             }}
                           />
                         )}
@@ -517,37 +547,6 @@ export default function MessageList({
                 </article>
               )
             })
-          )}
-          {(lockedPage || lockedEndpoint) &&
-            !messages.some(
-              (message) =>
-                message.detailBlocker?.pageId === (lockedPage ? lockedPage.pageId : '')
-            ) && (
-            <article className={cx('ai-message', 'assistant', 'completed')}>
-              <div className={cx('ai-message-content')}>
-                <MessageAgentHeader agentKey="development" />
-                <DetailConfirmationPageSelector
-                  disabled={
-                    loading ||
-                    interactionsDisabled ||
-                    hasWorkflowForTarget(
-                      lockedPage
-                          ? pageDetailTargetKey(lockedPage.pageId)
-                          : lockedEndpoint
-                          ? endpointDetailTargetKey(
-                              lockedEndpoint.apiContractId,
-                              lockedEndpoint.endpointId
-                            )
-                          : ''
-                    )
-                  }
-                  loading={loading}
-                  onStart={onStartDetailDesign}
-                  selectedEndpoint={lockedEndpoint}
-                  selectedPage={lockedPage}
-                />
-              </div>
-            </article>
           )}
         </div>
       </div>

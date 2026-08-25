@@ -45,7 +45,7 @@ Workbench
 - 拍平页面清单和稳定 `pageId`；
 - 页面目标、业务信息项和稳定 `actionId`；
 - 每个 action 的产品行为类型、预期业务/可见结果和组合步骤；
-- 页面跳转关系和允许访问的产品角色；
+- 页面跳转关系；
 - loading、empty、error、success 等产品状态要求；
 - 页面级产品验收标准。
 
@@ -53,13 +53,12 @@ ProductPlan 使用 `business`、`navigation`、`interface`、`external`、`seque
 
 ProductPlan 中面向产品角色展示的验收标准，只描述生成应用的目标用户能够观察或完成的产品结果。XCodeAgent 自身的本地预览、代码生成、编译、构建、lint、typecheck、自动化/集成测试、质量门禁、工作流节点和“何时进入用户验收”等交付条件属于独立工程运行状态，不得写入应用产品验收标准；确定性归一化会剔除这类越界文案。
 
-正式 JSON 使用 `product-plan.v4`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
+正式 JSON 使用 `product-plan.v5`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。ProductPlan 不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
 
 ```json
 {
-  "schema_version": "product-plan.v4",
+  "schema_version": "product-plan.v5",
   "app": {"name": "...", "summary": "..."},
-  "user_roles": [],
   "business_flows": [],
   "pages": [
     {
@@ -86,7 +85,6 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
         }
       ],
       "navigation_targets": ["order-detail"],
-      "allowed_roles": ["user"],
       "state_requirements": {
         "loading": "...",
         "empty": "...",
@@ -101,7 +99,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 }
 ```
 
-模型提示直接提供包含全部 RequirementSpec 页面身份的完整 JSON 响应示例；根对象只能包含 `app`、`user_roles`、`business_flows`、`pages`、`product_acceptance_criteria`。页面、信息项、action、behavior、sequence step 和状态对象均拒绝未声明字段。`information_items` 必须是 JSON 对象，禁止把 Python/JSON 字典序列化成字符串。action 只表示用户主动触发且会改变可见状态、结果集、页面位置、业务信息或外部效果的产品意图。阅读、浏览、滚动或看见内容不是 action，应写入 `information_items` 或 `acceptance_criteria`；纯展示页面允许 `actions: []`。导航 action 必须声明 `targetPageId`，并同步进入 `navigation_targets`。
+模型提示直接提供包含全部 RequirementSpec 页面身份的完整 JSON 响应示例；根对象只能包含 `app`、`business_flows`、`pages`、`product_acceptance_criteria`。页面、信息项、action、behavior、sequence step 和状态对象均拒绝未声明字段。`information_items` 必须是 JSON 对象，禁止把 Python/JSON 字典序列化成字符串。action 只表示用户主动触发且会改变可见状态、结果集、页面位置、业务信息或外部效果的产品意图。阅读、浏览、滚动或看见内容不是 action，应写入 `information_items` 或 `acceptance_criteria`；纯展示页面允许 `actions: []`。导航 action 必须声明 `targetPageId`，并同步进入 `navigation_targets`。
 
 ### UiDesign
 
@@ -288,7 +286,7 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 
 ### TechnicalPlan 上下文预算
 
-- 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、角色、业务流程、页面信息和业务动作上下文，并在修订时注入修订上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
+- 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、已确认数据规则与目标身份、业务流程、页面信息和业务动作上下文，并在修订时注入修订上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
 
 ## 详设节点移除与工作台执行
 
@@ -320,7 +318,7 @@ TechnicalPlan + EntitySourceBinding -> development_readiness_gate -> Build DAG
 
 ProductPlan 或 UiDesign 变化时重新确认受影响 TechnicalPlan/运行时页面契约；TechnicalPlan API 或 Schema 变化时使相关 Build DAG 失效；EntitySourceBinding 变化时使引用实体的页面/API Build DAG 失效。纯代码实现错误进入 SmallTask 修复，不回到规划阶段。
 
-TechnicalPlan 确认前执行确定性一致性检查：UI 中声明的每个业务操作、显示项和跳转必须能映射到 ProductPlan；每个 ProductPlan `business` action 和组合中的每个 `business` step 必须有且只有一个 endpoint 实现；TechnicalPlan 不得为 `navigation`、`interface` 或 `external` 行为重复作产品/UI 决策；每个技术绑定必须引用已存在的 action/step、endpoint、Schema、角色和页面。编译后的 `endpoint`、`navigation`、`local`、`external`、`sequence` 联合契约必须完整闭合，失败时不得进入工作台。
+TechnicalPlan 确认前执行确定性一致性检查：UI 中声明的每个业务操作、显示项和跳转必须能映射到 ProductPlan；每个 ProductPlan `business` action 和组合中的每个 `business` step 必须有且只有一个 endpoint 实现；TechnicalPlan 不得为 `navigation`、`interface` 或 `external` 行为重复作产品/UI 决策；每个技术绑定必须引用已存在的 action/step、endpoint、Schema 和页面。启用权限时，`authorization-manifest.v1` 必须完整覆盖 RequirementSpec 规则、ProductPlan 目标和数据规则的实体/API 绑定；资源键、系统资源及 endpoint resource binding 均由确定性编译器生成。编译后的 `endpoint`、`navigation`、`local`、`external`、`sequence` 联合契约必须完整闭合，失败时不得进入工作台。
 
 ## 上下文预算
 

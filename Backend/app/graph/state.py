@@ -34,6 +34,7 @@ class ProjectState(TypedDict, total=False):
     design_change_existing_artifacts: dict[str, bool]
     design_interaction_origin: str
     application_planning_interaction: dict[str, Any]
+    authorization_config_conflict: dict[str, Any]
     direct_modification_owner: str
     direct_modification_scope: str
     direct_modification_confidence: float
@@ -114,6 +115,9 @@ class ProjectState(TypedDict, total=False):
     build_events: Annotated[list[str], add]
     test_target: dict[str, Any]
     test_phase_confirmation: dict[str, Any]
+    review_phase_confirmation: dict[str, Any]
+    code_review_result: dict[str, Any]
+    code_review_next_action: str
     test_generation_input_code_changes: dict[str, Any]
     test_generation_input_code_change_sets: list[dict[str, Any]]
     unit_test_generation_context: dict[str, Any]

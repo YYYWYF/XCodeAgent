@@ -96,8 +96,6 @@ export default function WorkflowRunCard({
   const detailReview = clarification?.mode === 'detail_review' ? clarification.review : undefined
   const isTestReportWorkflow =
     clarification?.mode === 'test_report' || workflow.summary.phase === 'test_report'
-  // 测试报告只通过右侧 Diff 授权完成保存，彻底移除对话区的交付确认卡。
-  if (isTestReportWorkflow) return null
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
     : undefined
@@ -115,6 +113,10 @@ export default function WorkflowRunCard({
     return initial
   })
   const [clarificationStep, setClarificationStep] = useState(0)
+  // 测试报告只通过右侧 Diff 授权完成保存，彻底移除对话区的交付确认卡。
+  if (isTestReportWorkflow) return null
+  // 应用级验收的主交互位于右侧预览底部，避免在对话区重复渲染一张确认卡。
+  if (clarification?.mode === 'application_acceptance') return null
   const canSubmitClarification =
     clarification?.status === 'requires_user_input' &&
     clarificationQuestions.length > 0 &&
@@ -1094,6 +1096,7 @@ function clarificationAnswerText(value: WorkflowClarificationAnswer | undefined)
 }
 
 // 从 Workflow payload 的多个位置读取待确认载荷，兼容流式快照、最终结果和自定义事件。
+// eslint-disable-next-line react-refresh/only-export-components
 export function workflowClarification(
   workflow: WorkflowRunPayload
 ): WorkflowClarification | undefined {

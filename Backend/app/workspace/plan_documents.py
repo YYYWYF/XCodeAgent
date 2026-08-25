@@ -717,6 +717,35 @@ def _technical_entity_markdown(entity: dict[str, Any]) -> str:
     )
 
 
+def _authorization_manifest_markdown(plan: dict[str, Any]) -> str:
+    """把确定性权限资源目录渲染为只读开发核对信息。"""
+
+    manifest = plan.get("authorization_manifest")
+    if not isinstance(manifest, dict) or manifest.get("enabled") is not True:
+        return "- 未启用运行态权限管理。"
+    bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
+    resource_lines = [
+        f"  - `{item.get('resourceKey', '')}`：{item.get('origin', '')}/{item.get('type', '')}；来源规则："
+        f"{', '.join(_text_items(item.get('sourceRuleIds'))) or '系统固定'}"
+        for item in _dict_items(manifest.get("resources"))
+    ]
+    endpoint_lines = [
+        f"  - `{item.get('endpointId', '')}`：操作资源 {', '.join(_text_items(item.get('requiredOperationResourceKeys'))) or '-'}；"
+        f"数据策略 {', '.join(_text_items(item.get('dataPolicyKeys'))) or '-'}"
+        for item in _dict_items(bindings.get("endpoints"))
+    ]
+    return "\n".join([
+        f"- Manifest：`{manifest.get('schema_version', '')}`",
+        f"- 指纹：`{manifest.get('fingerprint', '')}`",
+        "",
+        "资源目录：",
+        *(resource_lines or ["  - 无"]),
+        "",
+        "接口绑定：",
+        *(endpoint_lines or ["  - 无"]),
+    ])
+
+
 def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
     """渲染只供开发审核且不重复产品事实的 TechnicalPlan。"""
 
@@ -755,6 +784,10 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
 ## 页面技术引用
 
 {pages or '- 无'}
+
+## 权限资源目录（系统编译，只读）
+
+{_authorization_manifest_markdown(plan)}
 """
 
 

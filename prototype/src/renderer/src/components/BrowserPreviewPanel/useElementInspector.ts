@@ -9,6 +9,8 @@ import {
 } from './elementInspectorProtocol'
 
 type Options = {
+  /** 应用验收预览不提供元素审查，关闭监听与跨窗口通信。 */
+  enabled?: boolean
   frameKey: string
   onInspectingChange?: (active: boolean) => void
   previewUrl: string
@@ -25,6 +27,7 @@ const ELEMENT_INSPECTOR_MESSAGE_KEY = 'element-inspector-selection'
 
 /** 管理跨域 iframe 审查协议、就绪状态以及 renderer 内的选中结果反馈。 */
 export function useElementInspector({
+  enabled = true,
   frameKey,
   onInspectingChange,
   previewUrl
@@ -56,19 +59,27 @@ export function useElementInspector({
 
   /** 切换审查状态并同步父级遮罩和 iframe 运行时。 */
   const toggle = useCallback((): void => {
-    if (!activeRef.current && !ready) return
+    if (!enabled || (!activeRef.current && !ready)) return
     const nextActive = !activeRef.current
     activeRef.current = nextActive
     setActive(nextActive)
     onInspectingChange?.(nextActive)
     postActiveCommand(nextActive)
-  }, [onInspectingChange, postActiveCommand, ready])
+  }, [enabled, onInspectingChange, postActiveCommand, ready])
 
   useEffect(() => {
     setReady(false)
-  }, [frameKey])
+    // 进入应用验收预览时，确保此前普通浏览器的审查遮罩与 iframe 命令彻底退出。
+    if (!enabled && activeRef.current) {
+      activeRef.current = false
+      setActive(false)
+      onInspectingChange?.(false)
+      postActiveCommand(false)
+    }
+  }, [enabled, frameKey, onInspectingChange, postActiveCommand])
 
   useEffect(() => {
+    if (!enabled) return undefined
     /** 只接收当前 iframe 和当前 origin 的消息，并在监听器内输出和提示选中位置。 */
     const handleMessage = (event: MessageEvent): void => {
       if (event.source !== iframeRef.current?.contentWindow) return
@@ -98,7 +109,7 @@ export function useElementInspector({
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [postActiveCommand, previewUrl])
+  }, [enabled, postActiveCommand, previewUrl])
 
   useEffect(() => {
     return () => {

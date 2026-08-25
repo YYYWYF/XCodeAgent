@@ -1,6 +1,5 @@
 import { Fragment, useState } from 'react'
 import { AppstoreOutlined } from '@ant-design/icons'
-import { MonitorPlay, PanelRight } from 'lucide-react'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import VersionActions from './VersionActions'
@@ -20,10 +19,6 @@ type Props = {
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
   activeVersionId?: string
-  applicationPreviewMode: boolean
-  onApplicationPreviewModeChange: (open: boolean) => void
-  rightPanelOpen: boolean
-  onToggleRightPanel: () => void
   onPublishVersion: () => void
   onRollbackVersion: (versionId: string) => void
   onStartIteration: () => void
@@ -39,7 +34,7 @@ type Props = {
 }
 
 /**
- * 工作台顶部单条：左侧按应用、版本、五阶段和终态动作递进，右侧保留面板与预览配置。
+ * 工作台顶部单条：左侧按应用、版本、六阶段和终态动作递进，右侧保留面板与预览配置。
  */
 export default function WorkbenchTopBar({
   application,
@@ -47,10 +42,6 @@ export default function WorkbenchTopBar({
   onReturnWelcome,
   lifecycle,
   activeVersionId,
-  applicationPreviewMode,
-  onApplicationPreviewModeChange,
-  rightPanelOpen,
-  onToggleRightPanel,
   onPublishVersion,
   onRollbackVersion,
   onStartIteration,
@@ -182,36 +173,6 @@ export default function WorkbenchTopBar({
         onVersionSelect={onVersionSelect}
         part="terminal"
       />
-
-      <button
-        aria-label={rightPanelOpen ? '收起右侧面板' : '展开右侧面板'}
-        aria-pressed={rightPanelOpen}
-        className={cx('workbench-topbar-panel-toggle', rightPanelOpen && 'active')}
-        disabled={applicationPreviewMode}
-        onClick={onToggleRightPanel}
-        title={
-          applicationPreviewMode
-            ? '应用预览模式不使用任务面板'
-            : rightPanelOpen
-              ? '收起右侧面板'
-              : '展开右侧面板'
-        }
-        type="button"
-      >
-        <PanelRight size={14} />
-      </button>
-
-      <button
-        aria-label={applicationPreviewMode ? '返回任务工作区' : '预览应用'}
-        aria-pressed={applicationPreviewMode}
-        className={cx('workbench-topbar-preview-toggle', applicationPreviewMode && 'active')}
-        onClick={() => onApplicationPreviewModeChange(!applicationPreviewMode)}
-        title={applicationPreviewMode ? '返回任务工作区' : '预览完整应用'}
-        type="button"
-      >
-        <MonitorPlay size={14} />
-        <span>{applicationPreviewMode ? '返回任务' : '预览应用'}</span>
-      </button>
 
       <PhaseSwitchConfirmModal
         fromPhase={viewingPhase}

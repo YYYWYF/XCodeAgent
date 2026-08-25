@@ -26,6 +26,8 @@ WORKFLOW_NODE_LABELS = {
     "test_phase_confirmation": "开发完成与测试阶段确认",
     "integration_test": "集成测试与质量门禁",
     "small_task_repair": "局部修复任务",
+    "review_phase_confirmation": "测试完成与审查阶段确认",
+    "code_review": "前后端代码审查",
     "launch_project": "启动本地预览",
     "acceptance": "用户验收",
     "finalize_project": "完成项目",
@@ -48,7 +50,11 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "unit_test": ["unit_test_repair", "test_phase_confirmation"],
     "unit_test_repair": ["unit_test"],
     "test_phase_confirmation": ["integration_test"],
+    "integration_test": ["review_phase_confirmation", "small_task_repair"],
+    "review_phase_confirmation": ["code_review"],
+    "code_review": ["launch_project", "handle_failure"],
     "small_task_repair": ["integration_test"],
+    "launch_project": ["acceptance"],
     "acceptance": ["finalize_project"],
 }
 
@@ -91,6 +97,10 @@ def workflow_capabilities() -> dict[str, Any]:
                     "通过 clarificationAnswers.test_phase_confirmation 提交结构化 confirm 动作；"
                     "确认后恢复 test_phase_confirmation 并进入 integration_test。"
                 ),
+                "review_phase_confirmation": (
+                    "通过 clarificationAnswers.review_phase_confirmation 提交结构化 confirm 动作；"
+                    "确认后恢复 review_phase_confirmation 并进入 code_review。"
+                ),
             },
         },
         "clarificationModes": {
@@ -98,6 +108,11 @@ def workflow_capabilities() -> dict[str, Any]:
                 "answerField": "clarificationAnswers.unit_test_confirmation",
                 "answer": {"selected": ["run"], "values": ["run", "skip"]},
                 "lifecycleInteraction": "unit_test_confirmation",
+            },
+            "frontend_performance_confirmation": {
+                "answerField": "clarificationAnswers.frontend_performance_confirmation",
+                "answer": {"selected": ["run"], "values": ["run", "skip"]},
+                "lifecycleInteraction": "frontend_performance_confirmation",
             },
             "test_phase_confirmation": {
                 "answerField": "clarificationAnswers.test_phase_confirmation",
@@ -107,6 +122,11 @@ def workflow_capabilities() -> dict[str, Any]:
                     "id": "稳定目标 ID",
                     "label": "显示名称",
                 },
+            },
+            "review_phase_confirmation": {
+                "answerField": "clarificationAnswers.review_phase_confirmation",
+                "answer": {"action": "confirm"},
+                "lifecycleInteraction": "review_phase_confirmation",
             }
         },
         "acceptanceAdjustments": {

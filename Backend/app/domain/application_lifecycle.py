@@ -9,19 +9,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-APPLICATION_LIFECYCLE_SCHEMA_VERSION = "1.3.0"
-
-
 class ApplicationLifecycleStage(StrEnum):
     """定义用户可见的应用开发业务阶段。"""
 
     COLLECTING_REQUIREMENT = "collecting_requirement"
     ANALYZING_REQUIREMENT = "analyzing_requirement"
     AWAITING_REQUIREMENT_CLARIFICATION = "awaiting_requirement_clarification"
-    GENERATING_REQUIREMENT_SPEC = "generating_requirement_spec"
-    AWAITING_REQUIREMENT_CONFIRMATION = "awaiting_requirement_confirmation"
-    GENERATING_PRODUCT_PLAN = "generating_product_plan"
-    AWAITING_PRODUCT_PLAN_CONFIRMATION = "awaiting_product_plan_confirmation"
+    GENERATING_REQUIREMENT_DOCUMENT = "generating_requirement_document"
+    AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION = "awaiting_requirement_document_confirmation"
     GENERATING_UI_DESIGNS = "generating_ui_designs"
     AWAITING_UI_DESIGN_CONFIRMATION = "awaiting_ui_design_confirmation"
     GENERATING_TECHNICAL_PLAN = "generating_technical_plan"
@@ -48,8 +43,7 @@ class PendingInteractionType(StrEnum):
     """定义可跨会话恢复的用户交互类型。"""
 
     REQUIREMENT_CLARIFICATION = "requirement_clarification"
-    REQUIREMENT_CONFIRMATION = "requirement_confirmation"
-    PRODUCT_PLAN_CONFIRMATION = "product_plan_confirmation"
+    REQUIREMENT_DOCUMENT_CONFIRMATION = "requirement_document_confirmation"
     TECHNICAL_PLAN_CONFIRMATION = "technical_plan_confirmation"
     ENTITY_SOURCE_BINDING = "entity_source_binding"
     TASK_PLAN_CONFIRMATION = "task_plan_confirmation"
@@ -59,7 +53,9 @@ class PendingInteractionType(StrEnum):
     AGENT_APPROVAL = "agent_approval"
     REPAIR_SCOPE_CONFIRMATION = "repair_scope_confirmation"
     UNIT_TEST_CONFIRMATION = "unit_test_confirmation"
+    FRONTEND_PERFORMANCE_CONFIRMATION = "frontend_performance_confirmation"
     TEST_PHASE_CONFIRMATION = "test_phase_confirmation"
+    REVIEW_PHASE_CONFIRMATION = "review_phase_confirmation"
     PLAN_ADJUSTMENT = "plan_adjustment"
 
 
@@ -209,12 +205,8 @@ class WorkbenchExecution(ApplicationLifecycleModel):
 
 
 class ApplicationLifecycle(ApplicationLifecycleModel):
-    """表示 application-lifecycle.json 的完整版本化业务快照。"""
+    """表示 application-lifecycle.json 的完整业务快照。"""
 
-    schema_version: Literal[APPLICATION_LIFECYCLE_SCHEMA_VERSION] = Field(
-        default=APPLICATION_LIFECYCLE_SCHEMA_VERSION,
-        alias="schemaVersion",
-    )
     application: ApplicationIdentity
     updated_at: datetime = Field(alias="updatedAt")
     revision: int = Field(ge=1)

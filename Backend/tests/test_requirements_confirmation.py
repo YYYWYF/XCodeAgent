@@ -10,12 +10,14 @@ from app.graph.nodes.requirements import requirements as requirements_node
 from app.services.requirement_spec import (
     SaveRequirementSpecDraftRequest,
     create_requirement_spec,
-    merge_clarification_answers_into_spec,
     save_requirement_spec_draft,
+    validate_authorization_requirements,
+    validate_requirement_spec_confirmation_readiness,
 )
 from app.tools.ask_user import clear_clarification
 from app.workspace.spec_documents import (
     load_requirement_spec_json,
+    render_requirement_spec_markdown,
     write_requirement_spec_document,
     write_requirement_spec_draft_document,
 )
@@ -43,6 +45,734 @@ def requirements(state: dict) -> dict:
 
 
 class RequirementsConfirmationTests(unittest.TestCase):
+    def test_authorization_candidates_are_normalized_and_rendered(self) -> None:
+        """权限候选保留业务语义并在 Markdown 中展示固定页面边界。"""
+
+        spec = create_requirement_spec(
+            "创建库存管理系统\n涉及权限控制：是\n启用运行态权限管理页面：是",
+            agent_spec={
+                "app_info": {"name": "库存应用", "summary": "管理库存。"},
+                "feature_modules": [],
+                "user_roles": [
+                    {
+                        "id": "warehouse_staff",
+                        "name": "库管员",
+                        "description": "处理库存。",
+                        "isSystemRole": True,
+                        "isInitialAdminRole": True,
+                    }
+                ],
+                "pages": [
+                    {
+                        "pageId": "inventory_list",
+                        "name": "库存列表",
+                        "path": "/inventory",
+                        "module_id": "inventory",
+                        "description": "查看库存。",
+                    }
+                ],
+                "entities": [
+                    {
+                        "id": "Inventory",
+                        "name": "库存",
+                        "description": "库存对象。",
+                        "fields": [],
+                    }
+                ],
+                "business_flows": [],
+                "authorization_requirements": {
+                    "enabled": True,
+                    "initialAdminRoleId": "warehouse_staff",
+                    "restrictedPages": [
+                        {
+                            "ruleId": "inventory_page_rule",
+                            "pageId": "inventory_list",
+                            "name": "库存列表",
+                            "description": "仅授权成员可访问库存。",
+                            "rationale": "库存信息属于内部业务数据。",
+                            "sourceRefs": ["业务描述"],
+                            "defaultGrantedRoleIds": ["warehouse_staff"],
+                        }
+                    ],
+                    "restrictedOperations": [
+                        {
+                            "ruleId": "inventory_adjust_rule",
+                            "operationId": "inventory_adjust",
+                            "pageId": "inventory_list",
+                            "name": "调整库存",
+                            "description": "允许调整库存数量。",
+                            "rationale": "调整会改变库存结果。",
+                            "sourceRefs": ["业务描述"],
+                            "defaultGrantedRoleIds": ["warehouse_staff"],
+                        }
+                    ],
+                    "dataRules": [
+                        {
+                            "ruleId": "inventory_scope_rule",
+                            "dataRuleId": "inventory_scope",
+                            "entityId": "Inventory",
+                            "name": "库存可见范围",
+                            "description": "库存数据范围。",
+                            "dataRuleKey": "organization_inventory",
+                            "includes": "成员所属组织的库存。",
+                            "excludes": "其他组织的库存。",
+                            "sourceRefs": ["业务描述"],
+                            "defaultGrantedRoleIds": ["warehouse_staff"],
+                        }
+                    ],
+                },
+            },
+        )
+
+        authorization = spec["authorization_requirements"]
+        self.assertTrue(authorization["enabled"])
+        self.assertNotIn("unauthorizedBehavior", authorization)
+        self.assertEqual(authorization["restrictedPages"][0]["name"], "库存列表")
+        self.assertNotIn("pageId", authorization["restrictedPages"][0])
+        self.assertEqual(authorization["restrictedOperations"][0]["name"], "调整库存")
+        self.assertNotIn("operationId", authorization["restrictedOperations"][0])
+        self.assertNotIn("pageId", authorization["restrictedOperations"][0])
+        self.assertNotIn("dataRuleId", authorization["dataRules"][0])
+        self.assertNotIn("entityId", authorization["dataRules"][0])
+        self.assertEqual(authorization["dataRules"][0]["dataRuleKey"], "organization_inventory")
+        self.assertNotIn("permissions", spec["user_roles"][0])
+        self.assertEqual(validate_authorization_requirements(spec), [])
+        markdown = render_requirement_spec_markdown(spec)
+        self.assertIn("## 权限需求", markdown)
+        self.assertIn("/roles", markdown)
+        self.assertIn("成员所属组织的库存", markdown)
+
+    def test_authorization_validation_only_checks_business_semantics(self) -> None:
+        """需求阶段不绑定页面或实体，只校验候选是否说明了业务含义。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "user_roles": [
+                    {
+                        "id": "personnel_manager",
+                        "name": "人员管理员",
+                        "description": "管理人员信息。",
+                        "isSystemRole": True,
+                        "isInitialAdminRole": True,
+                    }
+                ],
+                "authorization_requirements": {
+                    "enabled": True,
+                    "initialAdminRoleId": "personnel_manager",
+                    "restrictedPages": [
+                        {
+                            "name": "人员列表",
+                            "description": "只有获得授权的成员才能查看人员信息。",
+                            "pageId": "not_generated_yet",
+                            "sourceRefs": ["用户提及人员列表权限"],
+                            "defaultGrantedRoleIds": ["personnel_manager"],
+                        }
+                    ],
+                    "restrictedOperations": [
+                        {
+                            "name": "保存",
+                            "description": "保存业务对象。",
+                            "sourceRefs": ["用户提及保存权限"],
+                            "defaultGrantedRoleIds": ["personnel_manager"],
+                        },
+                        {
+                            "name": "再次保存",
+                            "description": "再次保存业务对象。",
+                            "sourceRefs": ["用户提及再次保存权限"],
+                            "defaultGrantedRoleIds": ["personnel_manager"],
+                        },
+                    ],
+                    "dataRules": [
+                        {
+                            "name": "数据范围",
+                            "dataRuleKey": "assigned_personnel",
+                            "includes": "当前成员负责的人员数据。",
+                            "excludes": "其他成员负责的人员数据。",
+                            "entityId": "not_generated_yet",
+                            "sourceRefs": ["用户提及数据范围"],
+                            "defaultGrantedRoleIds": ["personnel_manager"],
+                        }
+                    ],
+                }
+            },
+        )
+
+        errors = validate_authorization_requirements(spec)
+        self.assertEqual(errors, [])
+
+    def test_authorization_validation_rejects_incomplete_business_candidate(self) -> None:
+        """缺少业务语义才需要澄清，缺少技术绑定不应触发错误。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedOperations": [{"description": "需要限制某个操作。"}],
+                    "dataRules": [{"name": "人员范围", "includes": "", "excludes": ""}],
+                }
+            },
+        )
+
+        errors = validate_authorization_requirements(spec)
+        self.assertTrue(any("受控操作缺少业务操作名称" in error for error in errors))
+        self.assertTrue(any("数据范围 人员范围 缺少 includes 业务边界" in error for error in errors))
+
+    def test_permission_answer_is_consumed_without_repeating_data_scope_question(self) -> None:
+        """权限澄清回答应直接进入需求确认，不因模型再次返回空候选而重复追问。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "unauthorizedBehavior": {"unauthorizedOperation": "disable"},
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                    "dataRules": [{"name": "人员", "scope": ""}],
+                }
+            },
+        )
+        answer = "管理员可以查看人员列表，普通用户只能查看和修改自己的基本信息"
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace)
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": spec,
+                    "clarification": {
+                        "mode": "ask_user_question",
+                        "status": "requires_user_input",
+                        "questions": [
+                            {
+                                "id": "authorization_data_scope_business",
+                                "header": "权限业务梳理 3/3",
+                                "question": "请说明数据范围业务规则。",
+                                "type": "text",
+                            }
+                        ],
+                    },
+                },
+            ):
+                result = requirements_node(
+                    {
+                        "request": "权限澄清回答",
+                        "workspace": workspace,
+                        "workflow_scope": "application_planning",
+                        "requirement_spec": spec,
+                        "requirements_clarification_round": 1,
+                        "application_planning_interaction": {
+                            "action": "answer",
+                            "request": "权限澄清回答",
+                            "answers": {
+                                "authorization_data_scope_business": answer,
+                            },
+                        },
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["clarification"]["mode"], "ask_user_question")
+        self.assertEqual(
+            result["clarification"]["questions"][-1]["id"],
+            "authorization_initial_admin_role",
+        )
+        data_rules = result["requirement_spec"]["authorization_requirements"]["dataRules"]
+        self.assertEqual(len(data_rules), 1)
+        self.assertEqual(data_rules[0]["includes"], answer)
+        self.assertIn(
+            f"用户权限澄清回答：{answer}",
+            data_rules[0]["sourceRefs"],
+        )
+        self.assertIn(
+            "权限启用时必须且只能选择一个初始系统管理员角色",
+            validate_authorization_requirements(result["requirement_spec"]),
+        )
+
+    def test_permission_answer_no_clears_only_the_answered_dimension(self) -> None:
+        """回答“无”只清空对应权限维度，不凭空影响其他业务权限候选。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [
+                        {
+                            "name": "人员列表",
+                            "description": "只有授权成员可以进入人员列表。",
+                            "sourceRefs": ["用户提及人员列表权限"],
+                        }
+                    ],
+                    "unauthorizedBehavior": {"unauthorizedPage": "show_forbidden"},
+                    "restrictedOperations": [],
+                    "dataRules": [{"name": "人员", "scope": ""}],
+                }
+            },
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace)
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": spec,
+                    "clarification": {
+                        "mode": "ask_user_question",
+                        "status": "requires_user_input",
+                        "questions": [
+                            {
+                                "id": "authorization_data_scope_business",
+                                "header": "权限业务梳理 3/3",
+                                "question": "请说明数据范围业务规则。",
+                                "type": "text",
+                            }
+                        ],
+                    },
+                },
+            ):
+                result = requirements_node(
+                    {
+                        "request": "权限澄清回答",
+                        "workspace": workspace,
+                        "workflow_scope": "application_planning",
+                        "requirement_spec": spec,
+                        "requirements_clarification_round": 1,
+                        "application_planning_interaction": {
+                            "action": "answer",
+                            "request": "权限澄清回答",
+                            "answers": {
+                                "authorization_data_scope_business": "无",
+                            },
+                        },
+                        "timeline": [],
+                    }
+                )
+
+        authorization = result["requirement_spec"]["authorization_requirements"]
+        self.assertEqual(authorization["dataRules"], [])
+        self.assertEqual(len(authorization["restrictedPages"]), 1)
+        self.assertEqual(result["clarification"]["mode"], "ask_user_question")
+        self.assertEqual(
+            result["clarification"]["questions"][-1]["id"],
+            "authorization_initial_admin_role",
+        )
+
+    def test_authorization_without_explicit_candidates_goes_to_confirmation(self) -> None:
+        """权限能力开启但用户未提出具体控制时，空候选直接进入需求确认。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "unauthorizedBehavior": {"unauthorizedOperation": "disable"},
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                    "dataRules": [],
+                }
+            },
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace)
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": spec,
+                    "clarification": clear_clarification(spec),
+                },
+            ):
+                result = requirements_node(
+                    {
+                        "request": "涉及权限控制：是",
+                        "workspace": workspace,
+                        "timeline": [],
+                    }
+                )
+
+            self.assertEqual(result["status"], "requires_user_input")
+            self.assertEqual(result["clarification"]["mode"], "ask_user_question")
+            self.assertEqual(
+                result["clarification"]["questions"][-1]["id"],
+                "authorization_initial_admin_role",
+            )
+            authorization = result["requirement_spec"]["authorization_requirements"]
+            self.assertEqual(authorization["restrictedPages"], [])
+            self.assertEqual(authorization["restrictedOperations"], [])
+            self.assertEqual(authorization["dataRules"], [])
+            self.assertIn(
+                "权限启用时必须且只能选择一个初始系统管理员角色",
+                validate_authorization_requirements(result["requirement_spec"]),
+            )
+            self.assertFalse(
+                (Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.md").exists()
+            )
+
+    def test_initial_admin_and_default_grants_are_collected_by_stable_questions(self) -> None:
+        """权限启用时按稳定问题依次收集初始管理员和规则默认授权。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "user_roles": [
+                    {
+                        "id": "business_manager",
+                        "name": "业务管理员",
+                        "description": "管理业务记录。",
+                    }
+                ],
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [
+                        {
+                            "name": "订单列表",
+                            "description": "仅授权成员可查看订单。",
+                            "rationale": "订单包含内部业务信息。",
+                            "sourceRefs": ["用户提出订单列表权限"],
+                        }
+                    ],
+                    "restrictedOperations": [],
+                    "dataRules": [],
+                },
+            },
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace)
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={"requirement_spec": spec, "clarification": clear_clarification(spec)},
+            ):
+                first = requirements_node(
+                    {"request": "涉及权限控制：是", "workspace": workspace, "timeline": []}
+                )
+            self.assertEqual(
+                first["clarification"]["questions"][-1]["id"],
+                "authorization_initial_admin_role",
+            )
+            self.assertEqual(
+                [item["label"] for item in first["clarification"]["questions"][-1]["options"]],
+                ["业务管理员", "新建独立系统管理员"],
+            )
+
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": first["requirement_spec"],
+                    "clarification": clear_clarification(first["requirement_spec"]),
+                },
+            ):
+                second = requirements_node(
+                    {
+                        "request": "选择业务管理员承担系统权限管理",
+                        "workspace": workspace,
+                        "requirement_spec": first["requirement_spec"],
+                        "application_planning_interaction": {
+                            "action": "answer",
+                            "answers": {"authorization_initial_admin_role": "business_manager"},
+                        },
+                        "timeline": [],
+                    }
+                )
+            rule_id = second["requirement_spec"]["authorization_requirements"]["restrictedPages"][0]["ruleId"]
+            self.assertEqual(
+                second["clarification"]["questions"][-1]["id"],
+                f"authorization_default_grants_{rule_id}",
+            )
+
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": second["requirement_spec"],
+                    "clarification": clear_clarification(second["requirement_spec"]),
+                },
+            ):
+                third = requirements_node(
+                    {
+                        "request": "默认授予业务管理员",
+                        "workspace": workspace,
+                        "requirement_spec": second["requirement_spec"],
+                        "application_planning_interaction": {
+                            "action": "answer",
+                            "answers": {f"authorization_default_grants_{rule_id}": ["business_manager"]},
+                        },
+                        "timeline": [],
+                    }
+                )
+        self.assertEqual(third["clarification"]["mode"], "requirement_document_draft")
+        self.assertEqual(validate_authorization_requirements(third["requirement_spec"]), [])
+
+    def test_initial_admin_selection_waits_for_business_role_analysis(self) -> None:
+        """没有已识别业务角色时，不能只显示新建系统管理员选项。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "user_roles": [],
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                    "dataRules": [],
+                },
+            },
+            authoritative_agent_spec=True,
+            allow_inferred_defaults=False,
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace)
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={"requirement_spec": spec, "clarification": clear_clarification(spec)},
+            ):
+                result = requirements_node(
+                    {"request": "涉及权限控制：是", "workspace": workspace, "timeline": []}
+                )
+        question = result["clarification"]["questions"][-1]
+        self.assertEqual(question["id"], "authorization_business_roles")
+        self.assertIn("管理员类角色", question["question"])
+
+    def test_operation_candidate_without_page_binding_enters_confirmation(self) -> None:
+        """操作候选只说明业务含义时，不因尚未生成 pageId 而停留在澄清。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "unauthorizedBehavior": {"unauthorizedOperation": "disable"},
+                    "restrictedPages": [],
+                    "restrictedOperations": [
+                        {
+                            "name": "停用人员",
+                            "description": "只有获得授权的成员才能停用人员信息。",
+                            "rationale": "停用会影响人员使用状态。",
+                            "sourceRefs": ["用户提及停用人员权限"],
+                        }
+                    ],
+                    "dataRules": [],
+                }
+            },
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace)
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": spec,
+                    "clarification": clear_clarification(spec),
+                },
+            ):
+                result = requirements_node(
+                    {
+                        "request": "涉及权限控制：是",
+                        "workspace": workspace,
+                        "timeline": [],
+                    }
+                )
+
+            self.assertEqual(result["status"], "requires_user_input")
+            self.assertEqual(result["clarification"]["mode"], "ask_user_question")
+            self.assertEqual(
+                result["clarification"]["questions"][-1]["id"],
+                "authorization_initial_admin_role",
+            )
+            self.assertNotIn(
+                "pageId",
+                result["requirement_spec"]["authorization_requirements"][
+                    "restrictedOperations"
+                ][0],
+            )
+
+    def test_incomplete_authorization_candidates_use_stepwise_business_questions(self) -> None:
+        """权限候选不完整时按业务维度逐步提问，而不是展示结构字段错误。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [{}],
+                    "restrictedOperations": [{}],
+                    "dataRules": [{}],
+                }
+            },
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace)
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": spec,
+                    "clarification": clear_clarification(spec),
+                },
+            ):
+                result = requirements_node(
+                    {
+                        "request": "涉及权限控制：是",
+                        "workspace": workspace,
+                        "timeline": [],
+                    }
+                )
+
+            question = result["clarification"]["questions"][-1]
+            self.assertEqual(question["id"], "authorization_page_business")
+            self.assertIn("第 1 步", question["question"])
+            self.assertNotIn("缺少业务对象名称", question["question"])
+            self.assertNotIn("pageId", question["question"])
+            self.assertNotIn("operationId", question["question"])
+
+    def test_model_identified_authorization_ambiguity_stays_in_clarification(self) -> None:
+        """模型识别到用户明确权限描述存在歧义时，需求节点保留该业务澄清。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是\n数据范围需要按业务情况确认",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                    "dataRules": [],
+                }
+            },
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace)
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": spec,
+                    "clarification": {
+                        "mode": "ask_user_question",
+                        "status": "requires_user_input",
+                        "questions": [
+                            {
+                                "id": "authorization_scope",
+                                "header": "数据范围",
+                                "dimension": "权限业务边界",
+                                "question": "订单数据范围应限制为本人还是所属组织？",
+                                "type": "text",
+                            }
+                        ],
+                    },
+                },
+            ):
+                result = requirements_node(
+                    {
+                        "request": "涉及权限控制：是\n数据范围需要按业务情况确认",
+                        "workspace": workspace,
+                        "timeline": [],
+                    }
+                )
+
+            self.assertEqual(result["status"], "requires_user_input")
+            self.assertEqual(result["clarification"]["mode"], "ask_user_question")
+            self.assertTrue(
+                any("数据范围" in question["question"] for question in result["clarification"]["questions"])
+            )
+            self.assertFalse(
+                (Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.md").exists()
+            )
+
+    def test_disabled_authorization_clears_model_candidates(self) -> None:
+        """表单明确关闭权限时，模型返回的权限候选不能进入 RequirementSpec。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：否",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "dataRules": [
+                        {
+                            "ruleId": "scope",
+                            "dataRuleId": "all",
+                            "entityId": "User",
+                            "scope": "all",
+                            "ruleDescription": "全部数据。",
+                        }
+                    ],
+                }
+            },
+        )
+
+        authorization = spec["authorization_requirements"]
+        self.assertFalse(authorization["enabled"])
+        self.assertEqual(authorization["dataRules"], [])
+        self.assertNotIn("login_page", [page["pageId"] for page in spec["pages"]])
+
+    def test_requirement_spec_does_not_accept_runtime_management_page_switch(self) -> None:
+        """RequirementSpec 不再保存运行态权限管理页面开关。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "dataRules": [
+                        {
+                            "ruleId": "scope",
+                            "dataRuleId": "all",
+                            "entityId": "User",
+                            "scope": "all",
+                            "ruleDescription": "所有登录成员可以查看全部数据。",
+                        }
+                    ],
+                }
+            },
+        )
+
+        self.assertTrue(spec["authorization_requirements"]["enabled"])
+        self.assertNotIn("runtimeManagementPageEnabled", spec["authorization_requirements"])
+
+    def test_permission_draft_save_rejects_unclosed_editor_changes(self) -> None:
+        """权限编辑草稿保存会执行闭合校验，但不会把无效候选写入磁盘。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": True,
+                    "dataRules": [
+                        {
+                            "ruleId": "scope",
+                            "dataRuleId": "all",
+                            "entityId": "User",
+                            "scope": "all",
+                            "ruleDescription": "登录成员可以查看全部数据。",
+                        }
+                    ],
+                }
+            },
+        )
+        spec["confirmation_status"] = "pending_user_confirmation"
+        edited = {
+            **spec,
+            "authorization_requirements": {
+                **spec["authorization_requirements"],
+                "restrictedOperations": [
+                    {
+                        "name": "保存",
+                        "description": "",
+                        "pageId": "missing_page",
+                    }
+                ],
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            write_requirement_spec_draft_document({"workspace": workspace}, spec)
+            _write_application_config(workspace)
+            with self.assertRaisesRegex(ValueError, "编辑后的权限需求"):
+                save_requirement_spec_draft(
+                    SaveRequirementSpecDraftRequest.model_validate(
+                        {
+                            "action": "save",
+                            "workspaceRoot": workspace,
+                            "spec": edited,
+                        }
+                    )
+                )
+
     def test_default_acceptance_criteria_exclude_xcodeagent_workflow(self) -> None:
         """默认产品验收只能描述应用结果，不能泄漏生成器交付门禁。"""
 
@@ -212,27 +942,26 @@ class RequirementsConfirmationTests(unittest.TestCase):
             ["奶茶喜好页", "零食喜好页"],
         )
 
-    def test_clarification_answers_merge_into_requirement_spec_fields(self) -> None:
-        spec = create_requirement_spec("创建一个业务管理系统")
-        request = "\n".join(
-            [
-                "- 用户角色：系统需要哪些用户角色？",
-                "  回答：已选：仓库管理员、采购员",
-                "- 页面清单：需要哪些页面？",
-                "  回答：已选：库存列表、入库登记",
-            ]
+    def test_empty_business_structure_cannot_enter_requirement_confirmation(self) -> None:
+        """自然语言摘要存在时也不能确认空模块、空页面的需求文档。"""
+
+        spec = create_requirement_spec(
+            "创建人员管理应用",
+            agent_spec={
+                "app_info": {"name": "", "summary": "管理人员信息"},
+                "feature_modules": [],
+                "pages": [],
+                "entities": [],
+                "business_flows": [],
+            },
+            allow_inferred_defaults=False,
         )
 
-        merged = merge_clarification_answers_into_spec(spec, request)
+        errors = validate_requirement_spec_confirmation_readiness(spec)
 
-        self.assertEqual(
-            [role["name"] for role in merged["user_roles"]],
-            ["仓库管理员", "采购员"],
-        )
-        self.assertEqual(
-            [page["name"] for page in merged["pages"]],
-            ["库存列表", "入库登记"],
-        )
+        self.assertIn("应用名称不能为空", errors)
+        self.assertIn("功能模块不能为空", errors)
+        self.assertIn("页面清单不能为空", errors)
 
     def test_clear_requirement_waits_for_spec_confirmation(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
@@ -267,7 +996,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
             result["clarification"]["mode"],
-            "requirement_spec_confirmation",
+            "requirement_document_draft",
         )
         self.assertEqual(
             result["requirement_spec"]["confirmation_status"],
@@ -319,7 +1048,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
             result["clarification"]["mode"],
-            "requirement_spec_confirmation",
+            "requirement_document_draft",
         )
         self.assertEqual(
             result["requirement_spec"]["confirmation_status"],
@@ -779,7 +1508,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
-            result["clarification"]["mode"], "requirement_spec_confirmation"
+            result["clarification"]["mode"], "requirement_document_draft"
         )
         self.assertEqual(
             result["requirement_spec"]["confirmation_status"],
@@ -892,7 +1621,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
             result["clarification"]["mode"],
-            "requirement_spec_confirmation",
+            "requirement_document_draft",
         )
         self.assertTrue(result["clarification"]["clarification_limit_reached"])
         self.assertEqual(result["requirements_clarification_round"], 3)
@@ -998,7 +1727,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
             result["clarification"]["mode"],
-            "requirement_spec_confirmation",
+            "requirement_document_draft",
         )
         self.assertEqual(len(result["clarification"]["questions"]), 1)
         self.assertEqual(result["requirement_spec"]["clarification_questions"], [])

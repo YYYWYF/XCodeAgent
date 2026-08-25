@@ -137,20 +137,48 @@ function _hasConnectionFields(value: Record<string, unknown>, keys: string[]): b
 
 // 把新建应用表单转换为可写入 application.json 的初始配置。
 export function buildApplicationSchema(values: ApplicationDraft): ApplicationSchemaConfig {
+  const authorizationEnabled = values.authorization.enabled === true
+  const datasource = buildDatasourceConfig(values.datasource)
+  const initialAdministratorSubjects = authorizationEnabled
+    ? Array.from(
+        new Set(
+          (values.authorization.initialAdministratorSubjects ?? [])
+            .map((subject) => subject.trim())
+            .filter(Boolean)
+        )
+      )
+    : []
+
+  if (authorizationEnabled && values.auth.enable !== true) {
+    throw new Error('启用权限控制时必须同时启用认证。')
+  }
+  if (authorizationEnabled && datasource.type !== DatasourceEnum.DB) {
+    throw new Error('启用权限控制时必须使用数据库数据源。')
+  }
+  if (authorizationEnabled && initialAdministratorSubjects.length === 0) {
+    throw new Error('启用权限控制时至少填写一个初始管理员 subjectId。')
+  }
+  if (initialAdministratorSubjects.some((subject) => subject === 'current-user')) {
+    throw new Error('初始管理员必须使用真实 subjectId，不能使用 current-user。')
+  }
+
   return {
-    schemaVersion: 3,
+    schemaVersion: 5,
     appName: values.appName.trim(),
     appIcon: values.appIcon.trim(),
     senario: values.senario.trim(),
     terminal: values.terminal,
     layout: values.layout,
     theme: values.theme,
-    datasource: buildDatasourceConfig(values.datasource),
+    datasource,
     env: parseEnv(values.envText),
     menus: { ...values.menus, homeMenuKey: '', items: [] },
     apis: [],
     auth: values.auth,
-    authorization: values.authorization,
+    authorization: {
+      enabled: authorizationEnabled,
+      initialAdministratorSubjects
+    },
     track: values.track,
     apiTrack: values.apiTrack,
     environment: values.environment,

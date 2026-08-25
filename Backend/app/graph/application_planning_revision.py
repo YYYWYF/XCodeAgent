@@ -66,7 +66,7 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
             _workspace(state),
             stage={
                 "requirements": ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                "product_planning": ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+                "product_planning": ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
                 "ui_confirmation": ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
             }[target],
             active_run_id=state.get("active_run_id"),

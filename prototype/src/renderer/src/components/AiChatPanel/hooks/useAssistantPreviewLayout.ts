@@ -6,7 +6,7 @@ import type {
 } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { DEFAULT_ASSISTANT_PANEL_WIDTH } from '../constants'
-import type { RightPanelState } from '../types'
+import type { RightPanelLayout, RightPanelState } from '../types'
 import { clampAssistantPanelWidth } from '../utils'
 
 type AssistantPreviewLayout = {
@@ -16,23 +16,23 @@ type AssistantPreviewLayout = {
   handlePanelSplitDragStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   panelRef: RefObject<HTMLElement>
   panelStyle?: CSSProperties
+  rightPanelLayout: RightPanelLayout
   rightPanel?: RightPanelState
+  setRightPanelLayout: (layout: RightPanelLayout) => void
   setRightPanel: (panel?: RightPanelState) => void
   splitDragging: boolean
 }
 
-export function useAssistantPreviewLayout({
-  rightPanelOpen
-}: {
-  rightPanelOpen: boolean
-}): AssistantPreviewLayout {
+/** 管理右侧公共工作区的内容、三档尺寸与分栏拖拽宽度。 */
+export function useAssistantPreviewLayout(): AssistantPreviewLayout {
   const panelRef = useRef<HTMLElement | null>(null)
   const [rightPanel, setRightPanel] = useState<RightPanelState>()
   const previousRightPanelTypeRef = useRef<RightPanelState['type']>()
   const [assistantPanelWidth, setAssistantPanelWidth] = useState(DEFAULT_ASSISTANT_PANEL_WIDTH)
+  const [rightPanelLayout, setRightPanelLayout] = useState<RightPanelLayout>('split')
   const [splitDragging, setSplitDragging] = useState(false)
   const embeddedPreviewOpen = rightPanel?.type === 'preview'
-  const panelStyle = rightPanelOpen
+  const panelStyle = rightPanelLayout === 'split'
     ? ({
         '--assistant-panel-width': `${assistantPanelWidth}px`
       } as CSSProperties)
@@ -52,7 +52,7 @@ export function useAssistantPreviewLayout({
   }, [rightPanel?.type])
 
   useEffect(() => {
-    if (!rightPanelOpen) {
+    if (rightPanelLayout !== 'split') {
       setSplitDragging(false)
       return
     }
@@ -61,10 +61,10 @@ export function useAssistantPreviewLayout({
     if (nextWidth !== assistantPanelWidth) {
       setAssistantPanelWidth(nextWidth)
     }
-  }, [assistantPanelWidth, rightPanelOpen])
+  }, [assistantPanelWidth, rightPanelLayout])
 
   useEffect(() => {
-    if (!rightPanelOpen) return undefined
+    if (rightPanelLayout !== 'split') return undefined
 
     /** 在窗口尺寸改变后重新约束左右面板宽度。 */
     const handleWindowResize = (): void => {
@@ -75,7 +75,7 @@ export function useAssistantPreviewLayout({
 
     window.addEventListener('resize', handleWindowResize)
     return () => window.removeEventListener('resize', handleWindowResize)
-  }, [rightPanelOpen])
+  }, [rightPanelLayout])
 
   useEffect(() => {
     if (!splitDragging) return undefined
@@ -128,7 +128,9 @@ export function useAssistantPreviewLayout({
     handlePanelSplitDragStart,
     panelRef,
     panelStyle,
+    rightPanelLayout,
     rightPanel,
+    setRightPanelLayout,
     setRightPanel,
     splitDragging
   }

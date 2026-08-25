@@ -58,19 +58,22 @@ export function bumpVersionLabel(parent: {
 }
 
 /**
- * 可生成版本判定：当前迭代必须同时拥有当前 revision 的合格测试报告和通过的审查。
- * 只看 finalize_project 会让旧的审查完成态绕过测试门禁，因此测试结论是必要条件。
+ * 可生成版本判定：当前迭代必须同时拥有合格测试、通过审查和用户明确验收。
+ * 验收未通过前不得把审查完成态直接视为可发布，避免绕过用户确认门禁。
  */
 export function isVersionReleasable(v?: ApplicationVersion): boolean {
   if (!v || v.status !== 'iterating') return false
   const lifecycle = v.lifecycle
   const testReportStatus = String(lifecycle?.extensions?.testReportStatus || '')
   const testReportPassed = ['passed', 'qualified', '合格'].includes(testReportStatus)
-  const reviewCompleted = Object.values(lifecycle?.activeExecutions || {}).some(
+  const reviewCompleted =
+    String(lifecycle?.extensions?.reviewStatus || '') === 'passed' ||
+    Object.values(lifecycle?.activeExecutions || {}).some(
     (execution) =>
-      execution.phase === 'finalize_project' && execution.status === 'completed'
-  )
-  return testReportPassed && reviewCompleted
+      execution.phase === 'code_review' && execution.status === 'completed'
+    )
+  const acceptancePassed = String(lifecycle?.extensions?.acceptanceStatus || '') === 'passed'
+  return testReportPassed && reviewCompleted && acceptancePassed
 }
 
 /** 新建应用时产生初始 v1.0(迭代中)。 */

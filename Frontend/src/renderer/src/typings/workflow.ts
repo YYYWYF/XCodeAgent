@@ -42,6 +42,8 @@ export type WorkflowSummary = {
   unitTestReport?: Record<string, unknown>
   unitTestGeneration?: Record<string, unknown>
   unitTestGenerationContext?: Record<string, unknown>
+  reviewPhaseConfirmation?: WorkflowClarification
+  codeReviewResult?: WorkflowCodeReviewResult
   unitTestQualityGatePassed?: boolean
   unitTestGatePassed?: boolean
   unitTestNextAction?: string
@@ -96,6 +98,32 @@ export type WorkflowAcceptanceRequest = {
   preview_url?: string
   server?: Record<string, unknown>
   [key: string]: unknown
+}
+
+/** 前后端代码审查节点返回的只读扫描结果。 */
+export type WorkflowCodeReviewResult = {
+  status?: 'completed' | string
+  summary?: string
+  issueCount?: number
+  truncated?: boolean
+  loadedSkills?: string[]
+  targets?: Array<{
+    side?: 'frontend' | 'backend' | string
+    root?: string
+    status?: 'completed' | 'skipped' | string
+    scannedFileCount?: number
+    warning?: string
+  }>
+  issues?: Array<{
+    id?: string
+    side?: 'frontend' | 'backend' | string
+    ruleId?: string
+    severity?: 'critical' | 'high' | 'medium' | 'low' | string
+    title?: string
+    summary?: string
+    file?: string
+    line?: number
+  }>
 }
 
 export type WorkflowAcceptanceAdjustmentType =
@@ -364,10 +392,17 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   unit_test_confirmation?: 'run' | 'skip'
   /** Build 完成后进入测试阶段的唯一结构化确认动作。 */
   test_phase_confirmation?: WorkflowTestPhaseConfirmation
+  /** 集成测试通过后进入审查阶段的唯一结构化确认动作。 */
+  review_phase_confirmation?: WorkflowReviewPhaseConfirmation
 }
 
 /** 开发完成后恢复测试阶段确认节点的协议答案。 */
 export type WorkflowTestPhaseConfirmation = {
+  action: 'confirm'
+}
+
+/** 集成测试通过后恢复审查阶段确认节点的协议答案。 */
+export type WorkflowReviewPhaseConfirmation = {
   action: 'confirm'
 }
 
@@ -540,10 +575,8 @@ export type ApplicationLifecycleStage =
   | 'collecting_requirement'
   | 'analyzing_requirement'
   | 'awaiting_requirement_clarification'
-  | 'generating_requirement_spec'
-  | 'awaiting_requirement_confirmation'
-  | 'generating_product_plan'
-  | 'awaiting_product_plan_confirmation'
+  | 'generating_requirement_document'
+  | 'awaiting_requirement_document_confirmation'
   | 'generating_ui_designs'
   | 'awaiting_ui_design_confirmation'
   | 'generating_technical_plan'
@@ -590,8 +623,7 @@ export type LifecyclePendingInteraction = {
 /** 当前工作台 execution 支持跨会话恢复的结构化交互类型。 */
 export type LifecyclePendingInteractionType =
   | 'requirement_clarification'
-  | 'requirement_confirmation'
-  | 'product_plan_confirmation'
+  | 'requirement_document_confirmation'
   | 'technical_plan_confirmation'
   | 'page_design_confirmation'
   | 'task_plan_confirmation'
@@ -601,7 +633,9 @@ export type LifecyclePendingInteractionType =
   | 'agent_approval'
   | 'repair_scope_confirmation'
   | 'unit_test_confirmation'
+  | 'frontend_performance_confirmation'
   | 'test_phase_confirmation'
+  | 'review_phase_confirmation'
   | 'plan_adjustment'
 
 export type LifecycleError = {
@@ -635,7 +669,6 @@ export type ExecutionResourceLock = {
 }
 
 export type ApplicationLifecycle = {
-  schemaVersion: '1.3.0'
   application: { id: string; name: string }
   updatedAt: string
   revision: number
