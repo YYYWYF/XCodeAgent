@@ -485,7 +485,9 @@ export default function UiDesignConfirmationPanel({
       }
       runInFlightRef.current = true
       runStartedAtRef.current = Date.now()
-      observedRunningRef.current = false
+      // 轮询是 no-op resume，后端直接返回 requires_user_input 不经过 running 阶段，
+      // 预置 observedRunningRef=true 让完成检测逻辑能清除 acting 加载态。
+      observedRunningRef.current = true
       onSubmitRef.current(workflowRef.current, {})
     }, 1500)
     return () => clearInterval(timer)
