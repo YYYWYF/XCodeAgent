@@ -60,6 +60,10 @@ function AppEntryContent(): JSX.Element {
     >
   >({})
 
+  // 规划重试句柄：由 Modal 通过 onRetryHandlerChange 注册，
+  // 聊天区域错误卡片的重试按钮直接调用它，不弹出全屏 Modal。
+  const planningRetryByAppRef = useRef<Record<string, (() => void) | undefined>>({})
+
   // 规划流式数据注入句柄：由工作台 AiChatPanel 注册，Modal 转发 onContent/onWorkflow 时调用，
   // 把规划流式内容注入工作台 MessageList（设计阶段产品 Agent 对话 + 工作流卡片）。
   const planningStreamRef = useRef<
@@ -321,6 +325,9 @@ function AppEntryContent(): JSX.Element {
           onStopHandlerChange={(handler) =>
             planningController.registerStopHandler(planning.application.id, handler)
           }
+          onRetryHandlerChange={(handler) => {
+            planningRetryByAppRef.current[planning.application.id] = handler ?? undefined
+          }}
           onWorkflowChange={(workflow) =>
             planningController.updatePlanningWorkflow(planning.application.id, workflow)
           }
@@ -364,7 +371,11 @@ function AppEntryContent(): JSX.Element {
             onRetryPlanning={
               templateGenerationFailed
                 ? undefined
-                : () => planningController.showPlanning(activeApplication.id)
+                : () => {
+                    const retry = planningRetryByAppRef.current[activeApplication.id]
+                    if (retry) retry()
+                    else planningController.showPlanning(activeApplication.id)
+                  }
             }
             generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
             planningThreadId={activePlanningThreadId}

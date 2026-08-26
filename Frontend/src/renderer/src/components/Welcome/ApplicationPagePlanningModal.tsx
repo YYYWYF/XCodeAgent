@@ -1,4 +1,4 @@
-import { Button, message, Spin, Steps } from 'antd'
+import { Button, message, Spin } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ApplicationConfig,
@@ -34,8 +34,6 @@ import {
 } from './planningWorkflowState'
 import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
 import './ApplicationPagePlanningModal.less'
-
-const { Step } = Steps
 
 // 绘制带轻微弧度的单向返回箭头，避免视觉上接近刷新图标。
 function CurvedBackIcon(): JSX.Element {
@@ -80,6 +78,7 @@ type Props = {
   onStatusChange: (status: ActivePlanningStatus) => void
   onWorkflowChange: (workflow: WorkflowRunPayload) => void
   onStopHandlerChange: (handler?: () => Promise<void>) => void
+  onRetryHandlerChange: (handler?: () => void) => void
 }
 
 const phaseOrder = [
@@ -378,7 +377,8 @@ export default function ApplicationPagePlanningModal({
   onLifecycleChange,
   onStatusChange,
   onWorkflowChange,
-  onStopHandlerChange
+  onStopHandlerChange,
+  onRetryHandlerChange
 }: Props): JSX.Element {
   const session = useMemo(() => createApplicationPlanningSession(threadId), [threadId])
   const originalRequest = useMemo(() => buildApplicationPlanningRequest(application), [application])
@@ -792,6 +792,14 @@ export default function ApplicationPagePlanningModal({
     await runPlanning(originalRequest)
   }
 
+  // 把重试能力暴露给外部（聊天区域错误卡片），重试时不弹出全屏 Modal，
+  // 直接在后台重新运行规划，错误状态更新到聊天区域卡片。
+  useEffect(() => {
+    onRetryHandlerChange(() => void retryAfterFailure())
+    return () => onRetryHandlerChange(undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflow, originalRequest])
+
   return (
     <main
       aria-hidden={!visible}
@@ -827,19 +835,6 @@ export default function ApplicationPagePlanningModal({
 
       <div className={cx('page-planning-screen-body')}>
         <div className={cx('page-planning-screen-content')}>
-          {!isTechnicalPlanConfirmation ? (
-            <Steps
-              className={cx('page-planning-steps')}
-              current={workflowStep(workflow)}
-              size="small"
-            >
-              <Step title="需求确认" />
-              <Step title="产品规划" />
-              <Step title="UI确认" />
-              <Step title="技术规划" />
-            </Steps>
-          ) : null}
-
           {error ? (
             <AgentErrorCard
               error={error}
