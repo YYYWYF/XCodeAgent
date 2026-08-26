@@ -701,7 +701,8 @@ export default function ApplicationPagePlanningModal({
     currentWorkflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
-    requirementSpecFeedback?: string
+    requirementSpecFeedback?: string,
+    designChangeRequest?: string
   ): void => {
     void (async () => {
       try {
@@ -716,11 +717,12 @@ export default function ApplicationPagePlanningModal({
           submittable,
           answers,
           editedRequirementSpec,
-          requirementSpecFeedback
+          requirementSpecFeedback,
+          designChangeRequest
         )
-        void runPlanning('请根据本轮确认继续创建规划。', interaction)
+        void runPlanning(designChangeRequest?.trim() || '请根据本轮确认继续创建规划。', interaction)
       } catch (reason) {
-        setError(formatError(reason, '创建规划确认失败'))
+        setError(formatError(reason, designChangeRequest ? '设计变更提交失败' : '创建规划确认失败'))
       }
     })()
   }
@@ -736,25 +738,13 @@ export default function ApplicationPagePlanningModal({
         requirementSpecFeedback?: string,
         designChangeRequest?: string
       ) => {
-        if (designChangeRequest) {
-          void (async () => {
-            try {
-              const submittable = await loadSubmittablePlanningWorkflow(workflow)
-              const interaction = buildPlanningInteraction(
-                submittable,
-                answers,
-                undefined,
-                undefined,
-                designChangeRequest
-              )
-              void runPlanning(designChangeRequest, interaction)
-            } catch (reason) {
-              setError(formatError(reason, '设计变更提交失败'))
-            }
-          })()
-          return
-        }
-        handleSubmitClarification(workflow, answers, editedRequirementSpec, requirementSpecFeedback)
+        handleSubmitClarificationRef.current(
+          workflow,
+          answers,
+          editedRequirementSpec,
+          requirementSpecFeedback,
+          designChangeRequest
+        )
       }
     )
     return () => onSubmitClarificationChange(null)
@@ -789,6 +779,12 @@ export default function ApplicationPagePlanningModal({
     if (confirmation) return
     await runPlanning(originalRequest)
   }
+
+  // handleSubmitClarification 和 runPlanning 依赖 initialLifecycle 等响应式状态，
+  // 但 onSubmitClarificationChange 的注册 effect 依赖列表为 []（只注册一次）。
+  // 用 ref 持有最新引用，避免注册的 handler 捕获旧闭包导致 resumeFrom 永远是初始阶段。
+  const handleSubmitClarificationRef = useRef(handleSubmitClarification)
+  handleSubmitClarificationRef.current = handleSubmitClarification
 
   // 把重试能力暴露给外部（聊天区域错误卡片），重试时不弹出全屏 Modal，
   // 直接在后台重新运行规划，错误状态更新到聊天区域卡片。
