@@ -521,6 +521,8 @@ export default function MessageList({
                 )
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
               // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。
+              // UI 确认阶段轮询 run 期间 status=running 但 phase 仍是 ui_confirmation，
+              // 此时流式文本会短暂替代卡片造成闪烁，也需隐藏。
               const effectiveAssistantContent =
                 messageError ||
                 isPlanningArtifactConfirmationCard ||
@@ -528,6 +530,7 @@ export default function MessageList({
                 isLaunchProjectCard ||
                 isCodeReviewCard ||
                 showPlanningLoading ||
+                isUiDesignConfirmationCard ||
                 (showWorkflowCard && requiresClarification && !entityDesignCardVisible)
                   ? ''
                   : visibleAssistantContent
