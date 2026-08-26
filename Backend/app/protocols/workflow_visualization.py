@@ -1613,6 +1613,8 @@ def _workflow_summary(
             message = "项目预览已就绪，请确认是否符合预期。"
         elif clarification.get("mode") == "requirement_document_confirmation":
             message = "右侧已展示需求文档草稿，请确认后继续。"
+        elif clarification.get("mode") == "ui_design_confirmation":
+            message = "UI设计稿已生成，请逐页确认后继续。"
         elif question_count > 0:
             message = f"还有 {question_count} 个问题需要补充，完成后将继续执行。"
         else:

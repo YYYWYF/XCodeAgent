@@ -351,16 +351,14 @@ def build_workflow_ag_ui_stream(
                 if callable(graph)
                 else graph
             )
-            if (
-                workflow_scope == "application_planning"
-                and isinstance(application_planning_interaction, dict)
-            ):
-                # 同一创建规划 thread 的恢复请求必须从快照校验一直串行到本轮流结束。
-                application_planning_resume_lock = _application_planning_resume_lock(
-                    thread_id
-                )
-                await application_planning_resume_lock.acquire()
-                application_planning_resume_lock_acquired = True
+            if workflow_scope == "application_planning":
+                if isinstance(application_planning_interaction, dict):
+                    # 同一创建规划 thread 的恢复请求必须从快照校验一直串行到本轮流结束。
+                    application_planning_resume_lock = _application_planning_resume_lock(
+                        thread_id
+                    )
+                    await application_planning_resume_lock.acquire()
+                    application_planning_resume_lock_acquired = True
             await cleanup_workflow_checkpoints(
                 workspace=workspace,
                 project_id=project_id,
@@ -381,16 +379,19 @@ def build_workflow_ag_ui_stream(
             checkpoint_values: dict[str, Any] = {}
             if (
                 workflow_scope == "application_planning"
-                and isinstance(application_planning_interaction, dict)
                 and hasattr(active_graph, "aget_state")
             ):
+                # 轮询（无 interaction 的 no-op resume）也必须读 checkpoint，
+                # 否则 initial_state 缺少 phase/clarification，started 帧的
+                # summary.phase 为 None，前端误判不是 UI 确认卡片导致闪烁。
                 checkpoint_snapshot = await active_graph.aget_state(
                     {"configurable": {"thread_id": thread_id}}
                 )
-                _validate_application_planning_resume(
-                    checkpoint_snapshot,
-                    application_planning_interaction,
-                )
+                if isinstance(application_planning_interaction, dict):
+                    _validate_application_planning_resume(
+                        checkpoint_snapshot,
+                        application_planning_interaction,
+                    )
                 checkpoint_values = dict(checkpoint_snapshot.values)
             initial_state: dict[str, Any] = {
                 **checkpoint_values,
@@ -595,6 +596,11 @@ def build_workflow_ag_ui_stream(
                     )
                 )
             if resume_from == "ui_confirmation":
+                # 恢复 phase/clarification/ui_designs：轮询 no-op resume 的
+                # result 为空 dict 没有 phase，前端收到 phase=None 会误判
+                # 不是 UI 确认卡片导致卡片消失闪烁。
+                if "phase" not in started_result and initial_state.get("phase") is not None:
+                    started_result["phase"] = initial_state.get("phase")
                 if "clarification" not in started_result and initial_state.get("clarification") is not None:
                     started_result["clarification"] = initial_state.get("clarification")
                 if "ui_designs" not in started_result and initial_state.get("ui_designs") is not None:
