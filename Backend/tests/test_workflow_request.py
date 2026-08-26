@@ -673,6 +673,19 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
+        with self.assertRaisesRegex(ValueError, "只能通过 clarificationAnswers"):
+            workflow_run_inputs(
+                {
+                    "request": "进入审查",
+                    "resumeState": {
+                        "summary": {
+                            "status": "requires_user_input",
+                            "phase": "review_phase_confirmation",
+                        }
+                    },
+                }
+            )
+
     def test_review_phase_confirmation_is_forwarded_as_structured_resume(self) -> None:
         """进入审查阶段按钮必须恢复确认节点并保留 confirm 动作。"""
 
@@ -710,16 +723,67 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
+    def test_code_review_repair_confirmation_is_forwarded_as_structured_resume(self) -> None:
+        """一键修复按钮必须恢复同一代码审查节点并携带 repair_all 动作。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "开始一键修复扫描出的代码问题",
+                "clarificationAnswers": {
+                    "code_review_repair_confirmation": {"action": "repair_all"}
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "code_review",
+                    },
+                    "state": {
+                        "clarification": {
+                            "mode": "code_review_repair_confirmation",
+                            "status": "requires_user_input",
+                        },
+                        "codeReviewResult": {
+                            "status": "completed",
+                            "issues": [{"id": "CKR6002-1"}],
+                        },
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "code_review")
+        self.assertEqual(
+            inputs["resume_values"]["code_review_repair_confirmation"],
+            {"mode": "code_review_repair_confirmation", "action": "repair_all"},
+        )
+        self.assertEqual(inputs["resume_values"]["code_review_result"]["issues"][0]["id"], "CKR6002-1")
+
+    def test_code_review_repair_confirmation_rejects_unknown_action_or_missing_answer(self) -> None:
+        """代码审查恢复只接受结构化 repair_all，不允许自然语言或过期快照绕过。"""
+
+        with self.assertRaisesRegex(ValueError, "只支持 repair_all"):
+            workflow_run_inputs(
+                {
+                    "clarificationAnswers": {
+                        "code_review_repair_confirmation": {"action": "skip"}
+                    }
+                }
+            )
+
         with self.assertRaisesRegex(ValueError, "只能通过 clarificationAnswers"):
             workflow_run_inputs(
                 {
-                    "request": "进入审查",
                     "resumeState": {
                         "summary": {
                             "status": "requires_user_input",
-                            "phase": "review_phase_confirmation",
-                        }
-                    },
+                            "phase": "code_review",
+                        },
+                        "state": {
+                            "clarification": {
+                                "mode": "code_review_repair_confirmation"
+                            },
+                        },
+                    }
                 }
             )
 

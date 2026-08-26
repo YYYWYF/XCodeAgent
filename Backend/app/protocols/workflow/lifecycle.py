@@ -161,6 +161,12 @@ def _validate_resumable_execution(
         and execution.pending_interaction.type
         == PendingInteractionType.REVIEW_PHASE_CONFIRMATION
     )
+    code_review_repair_confirmation = (
+        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type
+        == PendingInteractionType.CODE_REVIEW_REPAIR_CONFIRMATION
+    )
     if (
         not resumable_status
         and not debug_plan_adjustment
@@ -169,11 +175,16 @@ def _validate_resumable_execution(
         and not repair_scope_confirmation
         and not test_phase_confirmation
         and not review_phase_confirmation
+        and not code_review_repair_confirmation
     ):
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
     # 阶段确认是显式的新对话边界：只有结构化测试/审查确认允许把 execution 所有权
     # 从上一阶段 thread 原子转交给新的阶段 thread，其余恢复仍必须留在原对话。
-    if execution.thread_id != thread_id and not test_phase_confirmation and not review_phase_confirmation:
+    if (
+        execution.thread_id != thread_id
+        and not test_phase_confirmation
+        and not review_phase_confirmation
+    ):
         raise ApplicationLifecycleConflictError("不能从其他对话接替工作台执行。")
     if execution.scope != scope or execution.target_id != target_id:
         raise ApplicationLifecycleConflictError("恢复目标与原工作台执行不一致。")
@@ -314,6 +325,7 @@ def _pending_interaction(
         ),
         "test_phase_confirmation": PendingInteractionType.TEST_PHASE_CONFIRMATION,
         "review_phase_confirmation": PendingInteractionType.REVIEW_PHASE_CONFIRMATION,
+        "code_review_repair_confirmation": PendingInteractionType.CODE_REVIEW_REPAIR_CONFIRMATION,
         "entity_source_binding": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "entity_source_binding_required": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "agent_approval": PendingInteractionType.AGENT_APPROVAL,

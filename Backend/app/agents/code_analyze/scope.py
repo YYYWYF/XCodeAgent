@@ -240,6 +240,86 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
         return getattr(self._delegate, name)
 
 
+class CodeReviewRepairScopedBackend(CodeAnalyzeScopedBackend):
+    """在审查读取边界内允许修复 Agent 修改两端业务源码。"""
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        """只允许写入 frontend/src 或 backend/src/main/java。"""
+
+        return (
+            self._delegate.write(file_path, content)
+            if _is_repair_write_path(file_path)
+            else WriteResult(error=_denied(file_path))
+        )
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        """异步只允许写入 frontend/src 或 backend/src/main/java。"""
+
+        return (
+            await self._delegate.awrite(file_path, content)
+            if _is_repair_write_path(file_path)
+            else WriteResult(error=_denied(file_path))
+        )
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """只允许编辑两个业务源码根目录内的文件。"""
+
+        return (
+            self._delegate.edit(file_path, old_string, new_string, replace_all)
+            if _is_repair_write_path(file_path)
+            else EditResult(error=_denied(file_path))
+        )
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """异步只允许编辑两个业务源码根目录内的文件。"""
+
+        return (
+            await self._delegate.aedit(file_path, old_string, new_string, replace_all)
+            if _is_repair_write_path(file_path)
+            else EditResult(error=_denied(file_path))
+        )
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        """只允许批量写入业务源码文件。"""
+
+        if any(not _is_repair_write_path(path) for path, _ in files):
+            return [
+                FileUploadResponse(
+                    path=path,
+                    error=None if _is_repair_write_path(path) else _denied(path),
+                )
+                for path, _ in files
+            ]
+        return self._delegate.upload_files(files)
+
+    async def aupload_files(
+        self, files: list[tuple[str, bytes]]
+    ) -> list[FileUploadResponse]:
+        """异步只允许批量写入业务源码文件。"""
+
+        if any(not _is_repair_write_path(path) for path, _ in files):
+            return [
+                FileUploadResponse(
+                    path=path,
+                    error=None if _is_repair_write_path(path) else _denied(path),
+                )
+                for path, _ in files
+            ]
+        return await self._delegate.aupload_files(files)
+
+
 def normalize_virtual_path(value: Any) -> str:
     """规范化 Agent 虚拟路径并拒绝目录穿越。"""
 
@@ -261,6 +341,22 @@ def _is_code_path(value: Any) -> bool:
 
     path = normalize_virtual_path(value)
     return bool(path) and any(path == root or path.startswith(f"{root}/") for root in _CODE_ROOTS)
+
+
+def _is_repair_write_path(value: Any) -> bool:
+    """判断修复 Agent 是否可以修改路径，明确排除源码根内的测试文件。"""
+
+    path = normalize_virtual_path(value)
+    if not _is_code_path(path):
+        return False
+    parts = PurePosixPath(path).parts
+    if any(part.casefold() in {"test", "tests", "__tests__", "spec", "specs"} for part in parts):
+        return False
+    filename = parts[-1].casefold() if parts else ""
+    return not any(
+        filename.endswith(suffix)
+        for suffix in (".test.ts", ".test.tsx", ".test.js", ".test.jsx", ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx")
+    )
 
 
 def _is_code_pattern(value: Any) -> bool:

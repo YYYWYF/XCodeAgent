@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,69 @@ def _workflow_code_review_result_for_phase(
     return _workflow_code_review_result(value)
 
 
+def _workflow_code_review_repair(value: Any, phase: Any) -> dict[str, Any]:
+    """投影代码审查修复状态，过滤日志和宿主机路径。"""
+
+    if str(phase or "") not in _CODE_REVIEW_VISIBLE_PHASES or not isinstance(value, dict):
+        return {}
+    status = str(value.get("status") or "not_required")
+    if status not in {"not_required", "awaiting_user", "repairing", "building", "completed", "failed"}:
+        status = "failed"
+    checks: list[dict[str, Any]] = []
+    raw_checks = value.get("build_checks") or value.get("buildChecks")
+    if isinstance(raw_checks, list):
+        for raw in raw_checks[:10]:
+            if not isinstance(raw, dict):
+                continue
+            raw_status = raw.get("status")
+            if raw_status is None and raw.get("skipped") is True:
+                # 检查器用 skipped=true、passed=true 表示“未执行但不阻断”，
+                # 公开协议必须保留该状态，不能错误投影为 passed。
+                raw_status = "skipped"
+            elif raw_status is None and isinstance(raw.get("passed"), bool):
+                raw_status = "passed" if raw.get("passed") else "failed"
+            check_status = str(raw_status or "running")
+            if check_status not in {"running", "passed", "skipped", "failed"}:
+                check_status = "failed"
+            checks.append(
+                {
+                    "id": str(raw.get("id") or "")[:120],
+                    "name": str(raw.get("name") or "")[:200],
+                    "layer": str(raw.get("layer") or "")[:40],
+                    "status": check_status,
+                    "evidence": _safe_public_text(raw.get("evidence"), 800) or None,
+                }
+            )
+    return {
+        "status": status,
+        "iteration": _bounded_non_negative_int(value.get("iteration")),
+        "maxIterations": _bounded_non_negative_int(value.get("max_iterations", value.get("maxIterations", 3))),
+        "requestedIssueCount": _bounded_non_negative_int(
+            value.get("requested_issue_count", value.get("requestedIssueCount"))
+        ),
+        "attemptedIssueIds": _bounded_string_list(
+            value.get("attempted_issue_ids", value.get("attemptedIssueIds")), limit=100
+        ),
+        "summary": _safe_public_text(value.get("summary"), 2_000),
+        "changedFiles": [
+            path
+            for raw_path in (value.get("changed_files", value.get("changedFiles")) or [])
+            if (path := _safe_relative_path(raw_path))
+            and (path.startswith("frontend/src/") or path.startswith("backend/src/main/java/"))
+        ][:100],
+        "buildChecks": checks,
+        "failure": _safe_public_text(value.get("failure"), 2_000) or None,
+    }
+
+
+def _safe_public_text(value: Any, limit: int) -> str:
+    """裁剪公开文案并移除疑似宿主机绝对路径。"""
+
+    text = str(value or "").strip()
+    text = re.sub(r"(?<![\w])(?:[A-Za-z]:[\\/]|/(?!/))[^\s,;()]+", "[path]", text)
+    return text[:limit]
+
+
 def _workflow_progress_summary(
     result: dict[str, Any],
     events: list[dict[str, Any]],
@@ -158,6 +222,9 @@ def _workflow_progress_summary(
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
             phase,
+        ),
+        "codeReviewRepair": _workflow_code_review_repair(
+            result.get("code_review_repair_result"), phase
         ),
         "testSummary": {},
         "unitTestSummary": result.get("unit_test_report", {}),
@@ -345,6 +412,15 @@ def _public_workflow_state(
         not in {
             "requirement_spec_json_path",
             "project_plan_json_path",
+            # 构建结果和瞬态事件包含执行证据，公开协议只通过 codeReviewRepair
+            # 投影有限的检查状态，不能把原始日志带到 StateSnapshot。
+            "code_review_build_results",
+            "code_review_events",
+            "code_review_repair_confirmation",
+            "code_review_repair_status",
+            "code_review_repair_iteration",
+            "code_review_max_repair_iterations",
+            "code_review_next_action",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
@@ -357,6 +433,12 @@ def _public_workflow_state(
         public_state.pop("code_review_result", None)
         public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
             value.get("code_review_result"),
+            phase if phase is not None else value.get("phase"),
+        )
+    if "code_review_repair_result" in value:
+        public_state.pop("code_review_repair_result", None)
+        public_state["codeReviewRepair"] = _workflow_code_review_repair(
+            value.get("code_review_repair_result"),
             phase if phase is not None else value.get("phase"),
         )
     return public_state
@@ -383,7 +465,10 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             ),
             "data": {
                 "codeReviewResult": result,
-                "requiresUserInput": False,
+                "codeReviewRepair": _workflow_code_review_repair(
+                    update.get("code_review_repair_result"), "code_review"
+                ),
+                "requiresUserInput": update.get("status") == "requires_user_input",
             },
         }
     if node_name == "classify_request_complexity":
@@ -1074,6 +1159,9 @@ def _workflow_summary(
             result.get("code_review_result"),
             result.get("phase"),
         ),
+        "codeReviewRepair": _workflow_code_review_repair(
+            result.get("code_review_repair_result"), result.get("phase")
+        ),
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
@@ -1112,6 +1200,7 @@ def _workflow_user_input_message(
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "test_phase_confirmation": "开发已完成，请确认进入测试阶段。",
         "review_phase_confirmation": "测试已通过，请确认进入审查阶段。",
+        "code_review_repair_confirmation": "代码审查发现问题，请在上方执行一键修复。",
     }
     if clarification_mode in confirmation_labels:
         return confirmation_labels[clarification_mode]
@@ -1157,6 +1246,9 @@ def _workflow_visual_payload(
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
             summary.get("phase"),
+        ),
+        "codeReviewRepair": _workflow_code_review_repair(
+            result.get("code_review_repair_result"), summary.get("phase")
         ),
         "buildExecutionSlice": result.get("build_execution_slice"),
         "testReport": result.get("test_report", {}),

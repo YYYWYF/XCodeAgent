@@ -745,6 +745,67 @@
   justify-content: flex-end;
   padding-top: 4px;
   border-top: 1px solid var(--wb-border);
+
+  .ant-btn-primary {
+    border-color: var(--wb-accent);
+    background: var(--wb-accent);
+
+    &:hover,
+    &:focus {
+      border-color: var(--wb-accent-active);
+      background: var(--wb-accent-active);
+    }
+  }
+}
+
+.@{class-prefix}-workflow-code-review-repair-summary {
+  overflow-wrap: anywhere;
+
+  &.failed {
+    color: var(--wb-danger) !important;
+  }
+}
+
+.@{class-prefix}-workflow-code-review-build-checks {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-workflow-code-review-build-check {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+
+  > .ant-typography-secondary {
+    margin-left: auto;
+  }
+}
+
+.@{class-prefix}-workflow-code-review-build-check-status {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--wb-warning);
+
+  &.passed {
+    background: var(--wb-success);
+  }
+
+  &.failed {
+    background: var(--wb-danger);
+  }
+
+  &.skipped {
+    background: var(--wb-text-secondary);
+  }
 }
 
 .@{class-prefix}-workflow-code-review-empty {

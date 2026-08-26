@@ -44,6 +44,7 @@ export type WorkflowSummary = {
   unitTestGenerationContext?: Record<string, unknown>
   reviewPhaseConfirmation?: WorkflowClarification
   codeReviewResult?: WorkflowCodeReviewResult
+  codeReviewRepair?: WorkflowCodeReviewRepair
   unitTestQualityGatePassed?: boolean
   unitTestGatePassed?: boolean
   unitTestNextAction?: string
@@ -124,6 +125,32 @@ export type WorkflowCodeReviewResult = {
     file?: string
     line?: number
   }>
+}
+
+/** 代码审查一键修复及独立构建检查状态。 */
+export type WorkflowCodeReviewRepair = {
+  status?:
+    | 'not_required'
+    | 'awaiting_user'
+    | 'repairing'
+    | 'building'
+    | 'completed'
+    | 'failed'
+    | string
+  iteration?: number
+  maxIterations?: number
+  requestedIssueCount?: number
+  attemptedIssueIds?: string[]
+  summary?: string
+  changedFiles?: string[]
+  buildChecks?: Array<{
+    id?: string
+    name?: string
+    layer?: string
+    status?: 'running' | 'passed' | 'skipped' | 'failed' | string
+    evidence?: string
+  }>
+  failure?: string
 }
 
 export type WorkflowAcceptanceAdjustmentType =
@@ -394,6 +421,8 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   test_phase_confirmation?: WorkflowTestPhaseConfirmation
   /** 集成测试通过后进入审查阶段的唯一结构化确认动作。 */
   review_phase_confirmation?: WorkflowReviewPhaseConfirmation
+  /** 代码审查问题的一键修复动作。 */
+  code_review_repair_confirmation?: WorkflowCodeReviewRepairConfirmation
 }
 
 /** 开发完成后恢复测试阶段确认节点的协议答案。 */
@@ -404,6 +433,11 @@ export type WorkflowTestPhaseConfirmation = {
 /** 集成测试通过后恢复审查阶段确认节点的协议答案。 */
 export type WorkflowReviewPhaseConfirmation = {
   action: 'confirm'
+}
+
+/** 审查阶段一键修复只能提交 repair_all。 */
+export type WorkflowCodeReviewRepairConfirmation = {
+  action: 'repair_all'
 }
 
 export type WorkflowBuildTaskPlanPatch = {
@@ -636,6 +670,7 @@ export type LifecyclePendingInteractionType =
   | 'frontend_performance_confirmation'
   | 'test_phase_confirmation'
   | 'review_phase_confirmation'
+  | 'code_review_repair_confirmation'
   | 'plan_adjustment'
 
 export type LifecycleError = {

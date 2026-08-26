@@ -22,7 +22,11 @@ from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
 from app.protocols.workflow.request import workflow_run_inputs
-from app.protocols.workflow.projection import _workflow_code_review_result
+from app.protocols.workflow.projection import (
+    _workflow_code_review_repair,
+    _workflow_code_review_result,
+    _workflow_code_review_result_for_phase,
+)
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.run_lease import (
     WorkspaceRunLease,
@@ -105,6 +109,10 @@ def workflow_capabilities() -> dict[str, Any]:
                     "通过 clarificationAnswers.review_phase_confirmation 提交结构化 confirm 动作；"
                     "确认后恢复 review_phase_confirmation 并进入 code_review。"
                 ),
+                "code_review_repair_confirmation": (
+                    "通过 clarificationAnswers.code_review_repair_confirmation 提交结构化 repair_all 动作；"
+                    "确认后恢复 code_review 子图并执行受限代码修复。"
+                ),
             },
         },
         "acceptanceAdjustments": {
@@ -136,7 +144,12 @@ def workflow_capabilities() -> dict[str, Any]:
                 "answerField": "clarificationAnswers.review_phase_confirmation",
                 "answer": {"action": "confirm"},
                 "lifecycleInteraction": "review_phase_confirmation",
-            }
+            },
+            "code_review_repair_confirmation": {
+                "answerField": "clarificationAnswers.code_review_repair_confirmation",
+                "answer": {"action": "repair_all"},
+                "lifecycleInteraction": "code_review_repair_confirmation",
+            },
         },
         "input": {
             "request": "Optional one-line user requirement for simple HTTP callers.",
@@ -174,6 +187,8 @@ def workflow_capabilities() -> dict[str, Any]:
                 "workflow.run.started",
                 "workflow.node.started",
                 "workflow.node.completed",
+                "code_review.repair",
+                "code_review.build_checks",
                 "agent-process",
                 "workflow.run.finished",
                 "workflow.run.failed",
@@ -1053,7 +1068,12 @@ def _workflow_progress_summary(
         "repairReturnNode": result.get("repair_return_node"),
         "testTarget": _workflow_test_target(result),
         "reviewPhaseConfirmation": result.get("review_phase_confirmation", {}),
-        "codeReviewResult": _workflow_code_review_result(result.get("code_review_result")),
+        "codeReviewResult": _workflow_code_review_result_for_phase(
+            result.get("code_review_result"), result.get("phase")
+        ),
+        "codeReviewRepair": _workflow_code_review_repair(
+            result.get("code_review_repair_result"), result.get("phase")
+        ),
         "testSummary": {},
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
@@ -1200,6 +1220,8 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     if node_name == "review_phase_confirmation":
         return ["code_review"] if update.get("status") == "completed" else []
     if node_name == "code_review":
+        if update.get("status") == "requires_user_input":
+            return []
         return ["launch_project"] if update.get("status") == "completed" else ["handle_failure"]
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
 
@@ -1221,11 +1243,29 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
             "requirement_spec_json_path",
             "project_plan_json_path",
             "workspace_snapshot",
+            # 可视化协议仅公开 codeReviewRepair 的裁剪结果，避免原始构建日志泄露。
+            "code_review_build_results",
+            "code_review_events",
+            "code_review_repair_confirmation",
+            "code_review_repair_status",
+            "code_review_repair_iteration",
+            "code_review_max_repair_iterations",
+            "code_review_next_action",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
     if "requirements_confirmed" in value:
         public_state["requirementsConfirmed"] = value.get("requirements_confirmed") is True
+    if "code_review_result" in value:
+        public_state.pop("code_review_result", None)
+        public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
+            value.get("code_review_result"), value.get("phase")
+        )
+    if "code_review_repair_result" in value:
+        public_state.pop("code_review_repair_result", None)
+        public_state["codeReviewRepair"] = _workflow_code_review_repair(
+            value.get("code_review_repair_result"), value.get("phase")
+        )
     return public_state
 
 
@@ -1248,7 +1288,13 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "message": str(
                 update.get("message") or result.get("summary") or "前后端代码审查完成。"
             ),
-            "data": {"codeReviewResult": result, "requiresUserInput": False},
+            "data": {
+                "codeReviewResult": result,
+                "codeReviewRepair": _workflow_code_review_repair(
+                    update.get("code_review_repair_result"), "code_review"
+                ),
+                "requiresUserInput": update.get("status") == "requires_user_input",
+            },
         }
     if node_name == "classify_request_complexity":
         return {

@@ -35,6 +35,7 @@ def run_integration_checks(
     *,
     on_progress: CheckProgressCallback | None = None,
     phase: IntegrationCheckPhase = "all",
+    artifact_namespace: str = "tests",
 ) -> dict[str, Any]:
     """按阶段执行集成检查，支持构建和单元测试之间的显式生成门。"""
 
@@ -42,7 +43,8 @@ def run_integration_checks(
         raise ValueError(f"不支持的集成检查阶段：{phase}")
 
     root = workspace_root(state).resolve()
-    log_root = workflow_artifact_root(state).resolve() / "runtime" / "tests"
+    safe_namespace = _safe_artifact_namespace(artifact_namespace)
+    log_root = workflow_artifact_root(state).resolve() / "runtime" / safe_namespace
     log_root.mkdir(parents=True, exist_ok=True)
     frontend = _find_frontend_package(root)
     datasource_type = _configured_datasource_type(root)
@@ -109,6 +111,14 @@ def run_integration_checks(
             results.append(result)
             events.append(result["id"])
     return {"test_results": results, "test_events": events}
+
+
+def _safe_artifact_namespace(value: str) -> str:
+    """把检查日志命名空间限制为单层相对目录名。"""
+
+    normalized = str(value or "tests").strip().replace("\\", "_").replace("/", "_")
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", normalized).strip("._")
+    return normalized[:80] or "tests"
 
 
 def _unit_test_affected_layers(state: dict[str, Any]) -> set[str] | None:

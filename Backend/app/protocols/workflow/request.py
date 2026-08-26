@@ -78,6 +78,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     review_phase_confirmation = _review_phase_confirmation_submission(
         clarification_answers
     )
+    code_review_repair_confirmation = _code_review_repair_confirmation_submission(
+        clarification_answers
+    )
     unit_test_decision = _unit_test_decision(clarification_answers)
     small_task_handoff_submission = _small_task_handoff_submission(
         clarification_answers
@@ -193,6 +196,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     elif review_phase_confirmation and workflow_scope != "application_planning":
         # 审查阶段确认允许从测试 thread 原子转交到新的审查 thread。
         resume_from = "review_phase_confirmation"
+    elif code_review_repair_confirmation and workflow_scope != "application_planning":
+        # 一键修复在当前审查 thread 内恢复代码审查子图，不创建新的生命周期交接。
+        if not _has_code_review_issue_snapshot(resume_values_from_state):
+            raise ValueError(
+                "code_review_repair_confirmation 缺少有效的代码审查问题快照，不能恢复修复。"
+            )
+        resume_from = "code_review"
     elif unit_test_decision and workflow_scope != "application_planning":
         # 单元测试确认属于开发阶段门禁；提交后必须回到 unit_test，不能误入集成测试。
         resume_from = "unit_test"
@@ -203,6 +213,15 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     ):
         raise ValueError(
             "review_phase_confirmation 只能通过 clarificationAnswers 提交 confirm 动作。"
+        )
+    if (
+        resume_from == "code_review"
+        and not code_review_repair_confirmation
+        and workflow_scope != "application_planning"
+        and _clarification_mode(resume_state) == "code_review_repair_confirmation"
+    ):
+        raise ValueError(
+            "code_review_repair_confirmation 只能通过 clarificationAnswers 提交 repair_all 动作。"
         )
     if not resume_from and _clarification_answers_to_text(clarification_answers):
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
@@ -360,6 +379,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **(
             {"review_phase_confirmation": review_phase_confirmation}
             if review_phase_confirmation
+            else {}
+        ),
+        **(
+            {"code_review_repair_confirmation": code_review_repair_confirmation}
+            if code_review_repair_confirmation
             else {}
         ),
         "selected_skill_names": list(selected_skill_names),
@@ -933,6 +957,12 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "test_phase_confirmation",
         "review_phase_confirmation",
         "code_review_result",
+        "code_review_repair_confirmation",
+        "code_review_repair_status",
+        "code_review_repair_result",
+        "code_review_build_results",
+        "code_review_repair_iteration",
+        "code_review_max_repair_iterations",
         "quality_gate_passed",
         "test_report",
         "build_execution_scope",
@@ -1001,6 +1031,12 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "test_phase_confirmation": "testPhaseConfirmation",
         "review_phase_confirmation": "reviewPhaseConfirmation",
         "code_review_result": "codeReviewResult",
+        "code_review_repair_result": "codeReviewRepair",
+        "code_review_build_results": "codeReviewBuildResults",
+        "code_review_repair_status": "codeReviewRepairStatus",
+        "code_review_repair_iteration": "codeReviewRepairIteration",
+        "code_review_max_repair_iterations": "codeReviewMaxRepairIterations",
+        "code_review_repair_confirmation": "codeReviewRepairConfirmation",
         "quality_gate_passed": "qualityGatePassed",
         "test_report": "testReport",
         "build_results": "buildResults",
@@ -1562,6 +1598,52 @@ def _review_phase_confirmation_submission(value: Any) -> dict[str, str]:
     return {"mode": "review_phase_confirmation", "action": "confirm"}
 
 
+def _code_review_repair_confirmation_submission(value: Any) -> dict[str, str]:
+    """提取代码审查一键修复动作，拒绝自然语言和未知动作。"""
+
+    if not isinstance(value, dict):
+        return {}
+    if "code_review_repair_confirmation" not in value:
+        return {}
+    answer = value.get("code_review_repair_confirmation")
+    if not isinstance(answer, dict):
+        raise ValueError("code_review_repair_confirmation 必须是结构化对象。")
+    action = _optional_text(answer.get("action")).lower()
+    if action != "repair_all":
+        raise ValueError("code_review_repair_confirmation.action 只支持 repair_all。")
+    return {"mode": "code_review_repair_confirmation", "action": "repair_all"}
+
+
+def _clarification_mode(value: dict[str, Any] | None) -> str:
+    """读取恢复快照中的 clarification 模式，用于识别过期的修复交互。"""
+
+    if not isinstance(value, dict):
+        return ""
+    state = _optional_dict(value.get("state")) or {}
+    result = _optional_dict(value.get("result")) or {}
+    clarification = _optional_dict(state.get("clarification")) or _optional_dict(
+        result.get("clarification")
+    ) or {}
+    return _optional_text(clarification.get("mode"))
+
+
+def _has_code_review_issue_snapshot(value: dict[str, Any] | None) -> bool:
+    """确认一键修复恢复请求携带了至少一个带稳定 ID 的审查问题。"""
+
+    if not isinstance(value, dict):
+        return False
+    result = value.get("code_review_result")
+    if not isinstance(result, dict):
+        return False
+    issues = result.get("issues")
+    if not isinstance(issues, list) or not issues or len(issues) > 100:
+        return False
+    return all(
+        isinstance(issue, dict) and bool(str(issue.get("id") or "").strip())
+        for issue in issues
+    )
+
+
 def _unit_test_decision(value: Any) -> str:
     """从结构化确认答案提取单元测试的 skip/run 决策。"""
 
@@ -1720,9 +1802,10 @@ def _application_planning_interaction(
         by_alias=False,
         exclude_none=True,
     )
-    if not str(interaction.get("request") or "").strip():
+    interaction_request = _optional_text(interaction.get("request"))
+    if not interaction_request or interaction_request == _optional_text(fallback_request):
         # 澄清答案提交轮的 message 只是占位文本，真实需求在 originalRequest 里；
-        # 缺失时不能把占位文本当成“原始需求”发给模型，否则分析必然失败。
+        # 即使客户端把占位文本放进 interaction.request，也不能覆盖真实原始需求。
         original_request = (
             _optional_text(payload.get("originalRequest"))
             or _optional_text(payload.get("original_request"))

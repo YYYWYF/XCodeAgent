@@ -9,6 +9,11 @@ description: 只读扫描 backend/src/main/java 下的 Java 代码，识别架�
 
 只允许扫描用户工作区的 `backend/src/main/java/**/*.java`。本技能只识别、分类和报告问题，禁止写入源码、执行修复、运行编译或执行其他命令。
 
+上面的只读约束适用于 `CodeAnalyzeAgent` 扫描调用；只有在用户提交结构化
+`code_review_repair_confirmation.action=repair_all` 后，专用的 `CodeReviewRepairAgent`
+才可以把本技能及规则引用作为修复参考。修复 Agent 仍受工作流源码范围、工具和真实
+Diff 校验约束，扫描 Agent 不得借此写入任何文件。
+
 详细检测关键字、误报排除条件和规则说明见 `references/rules-reference.md`。
 
 ## 核心规则

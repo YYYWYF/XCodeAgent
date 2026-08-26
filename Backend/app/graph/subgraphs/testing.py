@@ -2015,6 +2015,13 @@ def integration_test(state: ProjectState) -> dict:
         "review_phase_confirmation": {},
         "code_review_result": {},
         "code_review_next_action": "",
+        "code_review_repair_confirmation": {},
+        "code_review_repair_status": "not_required",
+        "code_review_repair_result": {},
+        "code_review_build_results": [],
+        "code_review_repair_iteration": 0,
+        "code_review_max_repair_iterations": 3,
+        "code_review_events": [],
         # 集成测试的公开更新也要显式覆盖 checkpoint 中的旧预览字段。
         "preview_url": "",
         "launch_result": {},

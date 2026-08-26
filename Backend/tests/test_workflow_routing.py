@@ -120,6 +120,14 @@ class WorkflowRoutingTests(unittest.TestCase):
         )
         self.assertEqual(route_code_review({"status": "completed"}), "launch_project")
 
+    def test_code_review_issues_pause_for_repair_confirmation(self) -> None:
+        """代码审查发现问题时停在当前审查 thread 等待一键修复。"""
+
+        self.assertEqual(
+            route_code_review({"status": "requires_user_input"}),
+            "await_user_input",
+        )
+
     def test_build_only_enters_unit_test_after_complete_summary(self) -> None:
         """构建切片完整成功后必须先进入开发阶段单测门禁。"""
 
@@ -257,6 +265,24 @@ class WorkflowRoutingTests(unittest.TestCase):
             PendingInteractionType.FRONTEND_PERFORMANCE_CONFIRMATION,
         )
         self.assertEqual(payload["mode"], "frontend_performance_confirmation")
+
+    def test_code_review_repair_confirmation_uses_typed_lifecycle_interaction(self) -> None:
+        """一键修复确认应投影为同一审查线程内可恢复的生命周期交互。"""
+
+        interaction_type, payload = _pending_interaction(
+            {
+                "clarification": {
+                    "mode": "code_review_repair_confirmation",
+                    "status": "requires_user_input",
+                }
+            }
+        )
+
+        self.assertEqual(
+            interaction_type,
+            PendingInteractionType.CODE_REVIEW_REPAIR_CONFIRMATION,
+        )
+        self.assertEqual(payload["mode"], "code_review_repair_confirmation")
 
     def test_build_confirmation_stops_for_user_input(self) -> None:
         """构建需要扩大范围时必须停留等待用户确认。"""

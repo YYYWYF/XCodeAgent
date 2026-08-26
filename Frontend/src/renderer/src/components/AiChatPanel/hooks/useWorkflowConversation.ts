@@ -372,6 +372,8 @@ export function useWorkflowConversation({
   const testPhaseTransitionRunIdsRef = useRef<Set<string>>(new Set())
   // 审查阶段切换同样需要先创建新会话，用 runId 防止确认卡重复提交。
   const reviewPhaseTransitionRunIdsRef = useRef<Set<string>>(new Set())
+  // 一键修复在当前审查会话中恢复，用独立 runId 集合阻止确认卡连续提交。
+  const codeReviewRepairRunIdsRef = useRef<Set<string>>(new Set())
   const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
@@ -997,6 +999,33 @@ export function useWorkflowConversation({
         conversation: false
       })
       if (!started) reviewPhaseTransitionRunIdsRef.current.delete(workflow.runId)
+      return started
+    }
+    if (!conversation && clarificationMode === 'code_review_repair_confirmation') {
+      const answer = answers.code_review_repair_confirmation
+      const action =
+        answer && typeof answer === 'object' && !Array.isArray(answer)
+          ? String((answer as Record<string, unknown>).action || '')
+          : ''
+      if (
+        action !== 'repair_all' ||
+        loading ||
+        workspaceBusy ||
+        codeReviewRepairRunIdsRef.current.has(workflow.runId)
+      ) {
+        return false
+      }
+      codeReviewRepairRunIdsRef.current.add(workflow.runId)
+      const started = await sendWorkflowMessage('开始一键修复扫描出的代码问题', {
+        clarificationAnswers: answers,
+        originalRequest,
+        resumeState: workflow,
+        buildExecutionScope: workflowBuildScope,
+        resumeExecutionRunId: workflow.runId,
+        titleFrom: '一键修复代码审查问题',
+        conversation: false
+      })
+      if (!started) codeReviewRepairRunIdsRef.current.delete(workflow.runId)
       return started
     }
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)

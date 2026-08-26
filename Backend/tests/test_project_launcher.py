@@ -1286,6 +1286,47 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertNotIn("Java 后端与前端", result["launch_result"]["message"])
         launcher.assert_called_once_with(root, on_progress=ANY)
 
+    def test_launch_project_preserves_code_review_build_state(self) -> None:
+        """启动进度快照继续携带审查完成状态和三项构建检查。"""
+
+        launch_result = {
+            "status": "running",
+            "message": "preview ready",
+            "preview_url": "http://127.0.0.1:80",
+            "frontend": {"status": "running"},
+            "backend": {"status": "running"},
+        }
+        review_result = {"status": "completed", "issues": [{"id": "CKR6002-1"}]}
+        repair_result = {
+            "status": "completed",
+            "build_checks": [
+                {"id": "frontend_install", "status": "passed"},
+                {"id": "frontend_build", "status": "passed"},
+                {"id": "backend_build", "status": "passed"},
+            ],
+        }
+        with patch(
+            "app.graph.nodes.lifecycle.launch_project_preview",
+            return_value=launch_result,
+        ):
+            result = launch_project(
+                {
+                    "workspace": "/workspace",
+                    "code_review_result": review_result,
+                    "code_review_repair_status": "completed",
+                    "code_review_repair_result": repair_result,
+                    "code_review_build_results": list(repair_result["build_checks"]),
+                    "code_review_repair_iteration": 1,
+                    "code_review_max_repair_iterations": 3,
+                }
+            )
+
+        self.assertEqual(result["code_review_repair_status"], "completed")
+        self.assertEqual(
+            [item["id"] for item in result["code_review_repair_result"]["build_checks"]],
+            ["frontend_install", "frontend_build", "backend_build"],
+        )
+
     def test_launch_project_does_not_stop_backend_for_frontend_only_failure(self) -> None:
         """验证纯前端启动失败能被 Workflow 正确映射。"""
 

@@ -101,6 +101,10 @@ def workflow_capabilities() -> dict[str, Any]:
                     "通过 clarificationAnswers.review_phase_confirmation 提交结构化 confirm 动作；"
                     "确认后恢复 review_phase_confirmation 并进入 code_review。"
                 ),
+                "code_review_repair_confirmation": (
+                    "通过 clarificationAnswers.code_review_repair_confirmation 提交结构化 repair_all 动作；"
+                    "确认后恢复 code_review 子图并执行受限代码修复。"
+                ),
             },
         },
         "clarificationModes": {
@@ -127,7 +131,12 @@ def workflow_capabilities() -> dict[str, Any]:
                 "answerField": "clarificationAnswers.review_phase_confirmation",
                 "answer": {"action": "confirm"},
                 "lifecycleInteraction": "review_phase_confirmation",
-            }
+            },
+            "code_review_repair_confirmation": {
+                "answerField": "clarificationAnswers.code_review_repair_confirmation",
+                "answer": {"action": "repair_all"},
+                "lifecycleInteraction": "code_review_repair_confirmation",
+            },
         },
         "acceptanceAdjustments": {
             "requestField": "clarificationAnswers.acceptance_adjustment",
@@ -174,6 +183,8 @@ def workflow_capabilities() -> dict[str, Any]:
                 "workflow.node.started",
                 "workflow.node.progress",
                 "workflow.node.completed",
+                "code_review.repair",
+                "code_review.build_checks",
                 "agent-process",
                 "workflow.run.finished",
                 "workflow.run.failed",

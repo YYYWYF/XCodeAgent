@@ -26,6 +26,7 @@ from app.protocols.application_planning_interrupt import (
 from app.protocols.workflow.projection import (
     _public_workflow_state,
     _workflow_artifacts,
+    _workflow_code_review_repair,
     _workflow_event,
     _workflow_next_nodes,
     _workflow_node_detail,
@@ -439,6 +440,10 @@ def build_workflow_ag_ui_stream(
             if workflow_scope:
                 initial_state["workflow_scope"] = workflow_scope
 
+            # 维护当前运行的增量状态；custom 进度帧不能回退到本轮恢复前的快照，
+            # 否则修复完成后的构建检查会被旧的 awaiting_user 状态覆盖。
+            stream_state: dict[str, Any] = dict(initial_state)
+
             config = {
                 "configurable": {"thread_id": thread_id},
                 "run_name": "xcodeagent-main-workflow",
@@ -485,6 +490,19 @@ def build_workflow_ag_ui_stream(
                 yield frame
             first_node_attempt = _next_node_attempt(node_attempts, first_node_name)
             first_node_iteration_kind = _iteration_kind(first_node_name, first_node_attempt)
+            repair_resume = (
+                first_node_name == "code_review"
+                and isinstance(
+                    initial_state.get("code_review_repair_confirmation"), dict
+                )
+                and initial_state["code_review_repair_confirmation"].get("action")
+                == "repair_all"
+            )
+            first_node_event_message = (
+                "正在修复审查的问题"
+                if repair_resume
+                else f"正在执行：{_runtime_node_label(first_node_name, initial_state)}"
+            )
             first_node_event = _workflow_event(
                 events,
                 "workflow.node.started",
@@ -492,8 +510,12 @@ def build_workflow_ag_ui_stream(
                 thread_id=thread_id,
                 node_name=first_node_name,
                 status="running",
-                message=f"正在执行：{_runtime_node_label(first_node_name, initial_state)}",
-                node_label=_runtime_node_label(first_node_name, initial_state),
+                message=first_node_event_message,
+                node_label=(
+                    "修复审查的问题"
+                    if repair_resume
+                    else _runtime_node_label(first_node_name, initial_state)
+                ),
                 attempt=first_node_attempt,
                 iteration_kind=first_node_iteration_kind,
             )
@@ -504,6 +526,36 @@ def build_workflow_ag_ui_stream(
             # awaitingUserInput=false → showingProgress=true 切到进度页，否则会卡在
             # 按钮禁用的确认面板不动。不修改共享 result，避免影响后续 updates 聚合。
             started_result = dict(result)
+            if first_node_name == "code_review":
+                # 修复恢复请求的首帧也要携带原始审查快照，避免前端把修复轮次误显示为首次扫描。
+                for key in (
+                    "code_review_result",
+                    "code_review_repair_result",
+                    "code_review_repair_status",
+                    "code_review_build_results",
+                    "code_review_repair_iteration",
+                    "code_review_max_repair_iterations",
+                ):
+                    if initial_state.get(key) is not None:
+                        started_result[key] = initial_state[key]
+                started_result["phase"] = "code_review"
+                started_result["status"] = "running"
+                repair_submission = initial_state.get("code_review_repair_confirmation")
+                if (
+                    isinstance(repair_submission, dict)
+                    and repair_submission.get("action") == "repair_all"
+                ):
+                    repair_snapshot = dict(
+                        initial_state.get("code_review_repair_result") or {}
+                    )
+                    repair_snapshot.update(
+                        {
+                            "status": "repairing",
+                            "summary": "正在修复审查的问题，请稍候…",
+                        }
+                    )
+                    started_result["code_review_repair_result"] = repair_snapshot
+                    started_result["code_review_repair_status"] = "repairing"
             if workflow_scope == "application_planning":
                 # 规划修订恢复运行时持续投影变更上下文，让前端从 started 帧起展示真实生成阶段。
                 for key in (
@@ -545,7 +597,11 @@ def build_workflow_ag_ui_stream(
                 id=_process_step_id(first_node_name, first_node_attempt),
                 kind="workflow",
                 status="running",
-                title=f"正在执行 {_runtime_node_label(first_node_name, initial_state)}",
+                title=(
+                    "正在修复审查的问题"
+                    if repair_resume
+                    else f"正在执行 {_runtime_node_label(first_node_name, initial_state)}"
+                ),
                 detail=str(first_node_event["message"]),
                 sequence=process_sequence,
                 node_name=first_node_name,
@@ -591,7 +647,7 @@ def build_workflow_ag_ui_stream(
                             else {}
                         )
                         progress_state = {
-                            **initial_state,
+                            **stream_state,
                             **(
                                 {"detail_target_type": progress_detail.get("target_type")}
                                 if progress_detail.get("target_type")
@@ -654,7 +710,7 @@ def build_workflow_ag_ui_stream(
                             progress.get("message") or "正在扫描用户工作区代码…"
                         )
                         progress_state = {
-                            **initial_state,
+                            **stream_state,
                             "phase": progress_node,
                             "status": "in_progress",
                             "workspace_scan_progress": progress_detail,
@@ -712,7 +768,7 @@ def build_workflow_ag_ui_stream(
                             progress.get("message") or "正在启动项目预览…"
                         )
                         progress_state = {
-                            **initial_state,
+                            **stream_state,
                             "phase": progress_node,
                             "status": "in_progress",
                             "launch_progress": progress_detail,
@@ -811,7 +867,7 @@ def build_workflow_ag_ui_stream(
                         else:
                             progress_clarification = {}
                         progress_state = {
-                            **initial_state,
+                            **stream_state,
                             "phase": progress_node,
                             "status": "running",
                             "ui_designs": {
@@ -976,6 +1032,115 @@ def build_workflow_ag_ui_stream(
                             ),
                         )
                         continue
+                    if event_type in {"code_review.repair", "code_review.build_checks"}:
+                        process_sequence += 1
+                        progress_node = "code_review"
+                        progress_attempt = _current_node_attempt(node_attempts, progress_node)
+                        current_repair = dict(
+                            stream_state.get("code_review_repair_result") or {}
+                        )
+                        if event_type == "code_review.repair":
+                            current_repair.update(
+                                {
+                                    "status": "repairing",
+                                    "iteration": progress.get("attempt", current_repair.get("iteration", 0)),
+                                    "summary": str(
+                                        progress.get("message") or "正在修复代码审查问题。"
+                                    )[:2_000],
+                                }
+                            )
+                        else:
+                            checks = progress.get("checks")
+                            checks = checks if isinstance(checks, list) else []
+                            # 构建器按检查项逐条发送进度；按 id 合并而不是覆盖，
+                            # 这样前端能在三项检查尚未全部结束时看到已完成的行。
+                            existing_checks = current_repair.get("build_checks")
+                            existing_checks = (
+                                existing_checks
+                                if isinstance(existing_checks, list)
+                                else []
+                            )
+                            checks_by_id = {
+                                str(item.get("id") or ""): item
+                                for item in existing_checks
+                                if isinstance(item, dict) and str(item.get("id") or "")
+                            }
+                            for check in checks:
+                                if isinstance(check, dict):
+                                    check_id = str(check.get("id") or "")
+                                    if check_id:
+                                        checks_by_id[check_id] = check
+                            current_repair.update(
+                                {
+                                    "status": "building",
+                                    "build_checks": list(checks_by_id.values())[:10],
+                                    "summary": "正在执行审查修复后的前后端构建检查。",
+                                }
+                            )
+                        # custom 事件本身不写入 LangGraph checkpoint，但必须更新本轮
+                        # 运行态，避免下一个进度帧或启动进度帧回到旧的确认状态。
+                        stream_state["code_review_repair_result"] = current_repair
+                        stream_state["code_review_repair_status"] = current_repair.get(
+                            "status", "repairing"
+                        )
+                        progress_state = {
+                            **stream_state,
+                            "phase": "code_review",
+                            "status": "in_progress",
+                            "code_review_repair_result": current_repair,
+                        }
+                        public_repair = _workflow_code_review_repair(
+                            current_repair, "code_review"
+                        )
+                        progress_message = str(
+                            progress.get("message")
+                            or (
+                                "正在修复代码审查问题。"
+                                if event_type == "code_review.repair"
+                                else "正在执行审查修复后的前后端构建检查。"
+                            )
+                        )
+                        _workflow_event(
+                            events,
+                            "workflow.node.progress",
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            node_name=progress_node,
+                            status="running",
+                            message=progress_message,
+                            data={
+                                "phase": "code_review",
+                                "codeReviewRepair": public_repair,
+                            },
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                            node_label=_runtime_node_label(progress_node, progress_state),
+                        )
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=progress_state,
+                        ):
+                            yield frame
+                        yield _process_frame(
+                            encoder,
+                            id=f"workflow:code_review:{event_type.split('.')[-1]}",
+                            kind="workflow",
+                            status="running",
+                            title=(
+                                "正在修复审查的问题"
+                                if event_type == "code_review.repair"
+                                else "正在执行前后端构建检查"
+                            ),
+                            detail=progress_message,
+                            sequence=process_sequence,
+                            node_name=progress_node,
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                        )
+                        continue
                     if event_type == "integration_test.repair.started":
                         process_sequence += 1
                         repair_attempt = node_attempts.get("small_task_repair", 0) + 1
@@ -1059,6 +1224,10 @@ def build_workflow_ag_ui_stream(
                         continue
                     if not isinstance(update, dict):
                         continue
+                    # 节点更新是 LangGraph 的增量结果；先合并进运行态，供后续
+                    # launch_project.progress 和 code_review.build_checks 帧继续投影。
+                    stream_state.update(update)
+                    result = dict(stream_state)
                     if (
                         workflow_scope == "application_planning"
                         and node_name.endswith("_review")
@@ -1248,7 +1417,7 @@ def build_workflow_ag_ui_stream(
                     for next_node in next_nodes:
                         next_attempt = _next_node_attempt(node_attempts, next_node)
                         next_iteration_kind = _iteration_kind(next_node, next_attempt)
-                        next_started_result = dict(update)
+                        next_started_result = dict(stream_state)
                         if workflow_scope == "application_planning" and next_node != "ui_confirmation":
                             # 下一阶段开始帧不能复用上一阶段的待确认载荷，避免旧面板遮住新阶段进度。
                             next_started_result.pop("clarification", None)

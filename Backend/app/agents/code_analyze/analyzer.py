@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -12,6 +13,8 @@ from app.agents.code_analyze.scope import is_code_analyze_read_path
 from app.services.builtin_skills import FRONTEND_CODE_SCAN_SKILL_NAME, resolve_builtin_skills_root
 from app.utils.model_output import extract_json_object
 
+
+logger = logging.getLogger(__name__)
 
 MAX_REVIEW_ISSUES = 100
 REQUIRED_SKILLS = {
@@ -86,15 +89,13 @@ def normalize_code_review_result(
 ) -> dict[str, Any]:
     """校验 Agent 输出、裁剪敏感字段并限制问题数量。"""
 
-    if str(payload.get("status") or "").strip().lower() != "completed":
-        raise ValueError("审查结果 status 必须为 completed。")
-
+    reported_status = str(payload.get("status") or "").strip().lower()
     frontend_scan_warning = _frontend_scan_warning()
     issues: list[dict[str, Any]] = []
     normalized_issue_count = 0
     seen: set[tuple[str, str, str, int, str]] = set()
     seen_ids: set[str] = set()
-    raw_issues = payload.get("issues")
+    raw_issues = payload.get("issues", payload.get("findings"))
     if not isinstance(raw_issues, list):
         raw_issues = []
     for raw in raw_issues:
@@ -105,7 +106,7 @@ def normalize_code_review_result(
         if side == "frontend" and frontend_scan_warning:
             continue
         file_path = _normalize_review_path(
-            raw.get("file", raw.get("path")),
+            raw.get("file", raw.get("filePath", raw.get("path"))),
             workspace=workspace,
         )
         if side not in {"frontend", "backend"} or not is_code_analyze_read_path(file_path):
@@ -123,9 +124,9 @@ def normalize_code_review_result(
             else None
         )
         normalized = {
-            "id": str(raw.get("id") or "").strip()[:120],
+            "id": str(raw.get("id", raw.get("issue_id")) or "").strip()[:120],
             "side": side,
-            "rule_id": str(raw.get("rule_id") or "").strip()[:80] or None,
+            "rule_id": str(raw.get("rule_id", raw.get("ruleId")) or "").strip()[:80] or None,
             "severity": severity,
             "title": _safe_review_text(raw.get("title") or "未命名问题", workspace)[:240],
             "summary": _safe_review_text(
@@ -152,12 +153,25 @@ def normalize_code_review_result(
         if len(issues) < MAX_REVIEW_ISSUES:
             issues.append(normalized)
 
+    # 模型可能把“发现规范问题”表达为 failed/issues_found；只要至少一个问题已通过
+    # 目录、端类型和字段校验，扫描本身就属于成功完成，不能阻断后续问题列表投影。
+    if reported_status != "completed":
+        if normalized_issue_count == 0:
+            raise ValueError("审查结果 status 必须为 completed。")
+        logger.warning(
+            "CodeAnalyze Agent 返回非 completed 状态 %r，但包含 %d 个有效问题；已归一为 completed。",
+            reported_status,
+            normalized_issue_count,
+        )
+
     targets = _normalize_targets(
-        payload.get("targets"),
+        payload.get("targets", payload.get("scanTargets")),
         workspace=workspace,
         frontend_scan_warning=frontend_scan_warning,
     )
-    loaded = _normalize_loaded_skills(payload.get("loaded_skills"))
+    loaded = _normalize_loaded_skills(
+        payload.get("loaded_skills", payload.get("loadedSkills"))
+    )
     if set(loaded) != {"frontend-code-scan", "backend-code-scan"}:
         raise ValueError("审查结果缺少前后端扫描 Skill。")
     summary = _safe_review_text(
@@ -174,7 +188,7 @@ def normalize_code_review_result(
         "status": "completed",
         "summary": summary,
         "issue_count": normalized_issue_count,
-        "truncated": bool(payload.get("truncated"))
+        "truncated": bool(payload.get("truncated", payload.get("isTruncated")))
         or normalized_issue_count > MAX_REVIEW_ISSUES,
         "loaded_skills": loaded,
         "targets": targets,
@@ -194,6 +208,8 @@ def _build_prompt(state: dict[str, Any]) -> str:
         f"当前构建目标：{json.dumps(target, ensure_ascii=False)}\n"
         "前端 Skill 当前可能没有具体规则；没有具体规则时不得生成任何前端问题，"
         "不得读取 frontend/src 源码，只报告扫描目标、0 个扫描文件和规则未配置 warning。\n"
+        "只要扫描执行完成，status 必须始终为 completed；发现规范问题只写入 issues，"
+        "不得把 status 写成 failed、issues_found 或 non_compliant。\n"
         "targets 必须为数组，每项使用 side、root、status、scanned_file_count 和可选 warning。\n"
         "只返回约定 JSON，不修改任何文件。"
     )
@@ -287,7 +303,12 @@ def _normalize_target_root(
         declared_root = value.get("scan_root", value.get("scanRoot"))
     if declared_root is None:
         return expected or ""
-    return _normalize_review_path(declared_root, workspace=workspace)
+    normalized = _normalize_review_path(declared_root, workspace=workspace)
+    # 模型有时会把固定根目录写成根下 glob/子路径；将其收敛到端类型的
+    # canonical root 仍不扩大读取范围，同时避免把安全目录误报为越权目标。
+    if expected and (normalized == expected or normalized.startswith(f"{expected}/")):
+        return expected
+    return normalized
 
 
 def _target_items(value: Any) -> list[dict[str, Any]]:
@@ -339,6 +360,14 @@ def _normalize_loaded_skills(value: Any) -> list[str]:
             if not declared_path or name_from_path is not None:
                 raise ValueError("审查结果包含未授权的扫描 Skill。")
             continue
+        if (
+            not declared_name
+            and declared_path
+            and _is_authorized_rules_reference_alias(declared_path)
+        ):
+            # 模型有时把规则引用直接放在 loaded_skills 数组中；它不是第三个 Skill，
+            # 但只允许精确的后端规则文件别名，不能放宽其它路径。
+            continue
         if declared_name and declared_name not in {"frontend-code-scan", "backend-code-scan"}:
             raise ValueError("审查结果包含未授权的扫描 Skill。")
         if declared_path and name_from_path is False:
@@ -366,7 +395,7 @@ def _validate_declared_rule_references(value: Any) -> None:
     if not references:
         return
     for reference in references:
-        if not isinstance(reference, str) or _skill_name_from_declaration(reference) is not None:
+        if not isinstance(reference, str) or not _is_authorized_rules_reference_alias(reference):
             raise ValueError("审查结果包含未授权的扫描 Skill 规则引用。")
 
 
@@ -385,6 +414,20 @@ def _skill_name_from_declaration(value: str) -> str | bool | None:
         "backend-code-scan/references/rules-reference.md": None,
     }
     return declarations[path] if path in declarations else False
+
+
+def _is_authorized_rules_reference_alias(value: str) -> bool:
+    """判断模型输出是否只是唯一授权的后端规则引用别名。"""
+
+    path = value.strip().replace("\\", "/").lstrip("/")
+    return path in {
+        "rules-reference.md",
+        "rules-reference",
+        "references/rules-reference.md",
+        "backend-code-scan/rules-reference",
+        "backend-code-scan/references/rules-reference.md",
+        ".xcodeagent/builtin-skills/backend-code-scan/references/rules-reference.md",
+    }
 
 
 def _normalize_review_path(value: Any, *, workspace: str | None) -> str:

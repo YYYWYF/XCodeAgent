@@ -6,6 +6,7 @@ from typing import Any
 
 from app.agents.database import create_database_agent
 from app.agents.code_analyze import create_code_analyze_agent
+from app.agents.code_review_repair import create_code_review_repair_agent
 from app.agents.data_source import create_data_source_agent
 from app.agents.frontend import create_frontend_agent
 from app.agents.model_factory import create_chat_model
@@ -35,6 +36,7 @@ _MAX_SNAPSHOT_ATTEMPTS = 3
 @dataclass(frozen=True)
 class AgentBundle:
     code_analyze: Any
+    code_review_repair: Any
     frontend: Any
     data_source: Any
     database: Any
@@ -119,6 +121,10 @@ def _create_agent_bundle_for_workspace(
         chat_model,
         workspace_root=workspace_root,
     )
+    code_review_repair = create_code_review_repair_agent(
+        chat_model,
+        workspace_root=workspace_root,
+    )
     data_source = create_data_source_agent(
         chat_model,
         workspace_root=workspace_root,
@@ -168,6 +174,7 @@ def _create_agent_bundle_for_workspace(
     )
     return AgentBundle(
         code_analyze=code_analyze,
+        code_review_repair=code_review_repair,
         frontend=frontend,
         data_source=data_source,
         database=database,

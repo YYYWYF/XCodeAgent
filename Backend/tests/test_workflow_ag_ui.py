@@ -146,6 +146,123 @@ class FakeWorkflowGraph:
         return self.get_state(config)
 
 
+class FakeCodeReviewBuildProgressGraph:
+    """模拟审查修复、三项构建检查及启动进度的最小 Graph。"""
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        """按真实顺序发送修复事件、逐项构建事件和启动进度事件。"""
+
+        del initial_state, config, stream_mode
+        yield "custom", {
+            "type": "code_review.repair",
+            "status": "running",
+            "attempt": 1,
+            "message": "正在修复第 1/3 轮代码审查问题。",
+        }
+        for check_id, check_name, status in (
+            ("frontend_install", "前端依赖安装检查", "passed"),
+            ("frontend_build", "前端构建检查", "passed"),
+            ("backend_build", "后端构建检查", "running"),
+        ):
+            yield "custom", {
+                "type": "code_review.build_checks",
+                "status": "running",
+                "attempt": 1,
+                "checks": [
+                    {
+                        "id": check_id,
+                        "name": check_name,
+                        "layer": "frontend" if check_id.startswith("frontend") else "backend",
+                        "status": status,
+                    }
+                ],
+            }
+        yield "updates", {
+            "code_review": {
+                "phase": "code_review",
+                "status": "completed",
+                "message": "代码修复完成，前后端构建检查通过。",
+                "code_review_result": {
+                    "status": "completed",
+                    "summary": "代码审查发现 1 个问题。",
+                    "issue_count": 1,
+                    "issues": [
+                        {
+                            "id": "CKR6002-1",
+                            "side": "backend",
+                            "severity": "high",
+                            "title": "连接超时未配置",
+                            "summary": "需要配置连接和读取超时。",
+                            "file": "backend/src/main/java/App.java",
+                        }
+                    ],
+                },
+                "code_review_repair_result": {
+                    "status": "completed",
+                    "iteration": 1,
+                    "max_iterations": 3,
+                    "requested_issue_count": 1,
+                    "build_checks": [
+                        {
+                            "id": "frontend_install",
+                            "name": "前端依赖安装检查",
+                            "layer": "frontend",
+                            "status": "passed",
+                        },
+                        {
+                            "id": "frontend_build",
+                            "name": "前端构建检查",
+                            "layer": "frontend",
+                            "status": "passed",
+                        },
+                        {
+                            "id": "backend_build",
+                            "name": "后端构建检查",
+                            "layer": "backend",
+                            "status": "passed",
+                        },
+                    ],
+                },
+                "code_review_next_action": "launch_project",
+                "timeline": ["code_review", "review_build_checks"],
+            }
+        }
+        yield "custom", {
+            "type": "launch_project.progress",
+            "node_name": "launch_project",
+            "message": "正在启动本地预览。",
+            "detail": {"stage": "frontend", "status": "running"},
+        }
+
+    async def aget_state(self, config):
+        """返回带有审查完成状态的启动中快照，模拟 LangGraph checkpoint。"""
+
+        del config
+        return SimpleNamespace(
+            values={
+                "phase": "launch_project",
+                "status": "requires_user_input",
+                "code_review_result": {
+                    "status": "completed",
+                    "issue_count": 1,
+                    "issues": [{"id": "CKR6002-1", "file": "backend/src/main/java/App.java"}],
+                },
+                "code_review_repair_result": {
+                    "status": "completed",
+                    "iteration": 1,
+                    "max_iterations": 3,
+                    "requested_issue_count": 1,
+                    "build_checks": [
+                        {"id": "frontend_install", "name": "前端依赖安装检查", "status": "passed"},
+                        {"id": "frontend_build", "name": "前端构建检查", "status": "passed"},
+                        {"id": "backend_build", "name": "后端构建检查", "status": "passed"},
+                    ],
+                },
+                "timeline": ["code_review", "review_build_checks", "launch_project"],
+            }
+        )
+
+
 class FakeProjectPlanningWaitGraph:
     def __init__(self, project_plan_path: str = "var/plans/project-plan.md") -> None:
         self.project_plan_path = project_plan_path
@@ -1592,6 +1709,99 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("requiresUserInput", payload)
         self.assertIn("requires_user_input", payload)
         self.assertIn("需要哪些角色", payload)
+
+    def test_code_review_build_checks_are_visible_before_launch_finishes(self) -> None:
+        """审查修复后的启动进度帧必须保留三项构建检查，而不是回退到旧确认态。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            graph = FakeCodeReviewBuildProgressGraph()
+            issue = {
+                "id": "CKR6002-1",
+                "side": "backend",
+                "severity": "high",
+                "title": "连接超时未配置",
+                "summary": "需要配置连接和读取超时。",
+                "file": "backend/src/main/java/App.java",
+            }
+            review_result = {
+                "status": "completed",
+                "summary": "代码审查发现 1 个问题。",
+                "issueCount": 1,
+                "issues": [issue],
+            }
+            repair_result = {
+                "status": "awaiting_user",
+                "iteration": 0,
+                "maxIterations": 3,
+                "requestedIssueCount": 1,
+                "buildChecks": [],
+            }
+
+            async def collect() -> list[str]:
+                stream = build_workflow_ag_ui_stream(
+                    graph=graph,
+                    payload={
+                        "threadId": "thread-code-review-progress",
+                        "runId": "run-code-review-progress",
+                        "messages": [{"role": "user", "content": "开始一键修复扫描出的代码问题"}],
+                        "workspaceRoot": workspace,
+                        "resumeFrom": "code_review",
+                        "resumeExecutionRunId": "run-code-review-original",
+                        "clarificationAnswers": {
+                            "code_review_repair_confirmation": {"action": "repair_all"}
+                        },
+                        "resumeState": {
+                            "summary": {
+                                "phase": "code_review",
+                                "status": "requires_user_input",
+                                "clarification": {
+                                    "mode": "code_review_repair_confirmation",
+                                    "status": "requires_user_input",
+                                },
+                            },
+                            "state": {
+                                "phase": "code_review",
+                                "codeReviewResult": review_result,
+                                "codeReviewRepair": repair_result,
+                            },
+                            "result": {
+                                "phase": "code_review",
+                                "codeReviewResult": review_result,
+                                "codeReviewRepair": repair_result,
+                            },
+                        },
+                    },
+                )
+                return [frame async for frame in stream]
+
+            frames = asyncio.run(collect())
+
+        workflow_frames = _decode_workflow_run_frames(frames)
+        building_progresses = [
+            frame
+            for frame in workflow_frames
+            if frame.get("summary", {}).get("phase") == "code_review"
+            and frame.get("summary", {}).get("codeReviewRepair", {}).get("status")
+            == "building"
+        ]
+        self.assertTrue(building_progresses)
+        building_progress = building_progresses[-1]
+        self.assertEqual(
+            [check["id"] for check in building_progress["summary"]["codeReviewRepair"]["buildChecks"]],
+            ["frontend_install", "frontend_build", "backend_build"],
+        )
+        launch_progress = next(
+            frame
+            for frame in workflow_frames
+            if frame.get("summary", {}).get("phase") == "launch_project"
+            and frame.get("summary", {}).get("status") == "running"
+        )
+        repair = launch_progress["summary"]["codeReviewRepair"]
+        self.assertEqual(repair["status"], "completed")
+        self.assertEqual(
+            [check["id"] for check in repair["buildChecks"]],
+            ["frontend_install", "frontend_build", "backend_build"],
+        )
 
     def test_stream_exposes_project_planning_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:

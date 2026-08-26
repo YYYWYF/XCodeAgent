@@ -148,8 +148,10 @@ def route_review_phase_confirmation(state: ProjectState) -> str:
 
 
 def route_code_review(state: ProjectState) -> str:
-    """审查完成后无条件启动项目，审查执行异常才进入失败处理。"""
+    """审查子图暂停时等待用户，完成后启动项目，异常进入失败处理。"""
 
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
     if state.get("status") == "completed":
         return "launch_project"
     return "handle_failure"
@@ -326,6 +328,8 @@ def build_graph(*, checkpointer):
         route_code_review,
         {
             "launch_project": "launch_project",
+            # 扫描发现问题时，子图必须在当前审查 thread 暂停，等待结构化 repair_all。
+            "await_user_input": END,
             "handle_failure": "handle_failure",
         },
     )

@@ -38,7 +38,22 @@ def launch_project(state: ProjectState) -> dict:
     if launch.get("status") == "failed":
         return _failed_project_launch(launch)
     preview_url = launch.get("preview_url")
+    # 启动节点返回增量状态时显式携带审查结果和独立构建状态，
+    # 让启动过程中的每个快照都能继续渲染三项检查，不依赖隐式 checkpoint 合并。
+    review_context = {
+        key: state[key]
+        for key in (
+            "code_review_result",
+            "code_review_repair_status",
+            "code_review_repair_result",
+            "code_review_build_results",
+            "code_review_repair_iteration",
+            "code_review_max_repair_iterations",
+        )
+        if state.get(key) is not None
+    }
     return {
+        **review_context,
         "phase": "launch_project",
         "status": "requires_user_input",
         "preview_url": preview_url,

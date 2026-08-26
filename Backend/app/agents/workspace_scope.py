@@ -23,6 +23,7 @@ AgentWorkspaceMode = Literal[
     "data_source",
     "database",
     "code_analyze",
+    "code_review_repair",
     "repair_planner",
     "small_task",
     "test_generation",
@@ -166,6 +167,29 @@ def create_workspace_permissions(
                 ),
                 FilesystemPermission(
                     operations=["write"],
+                    paths=["/**"],
+                    mode="deny",
+                ),
+            ]
+        )
+        return permissions
+
+    if mode == "code_review_repair":
+        # 审查修复只能修改两端业务源码；配置、测试、构建产物和工作流文件全部拒绝。
+        permissions.extend(
+            [
+                FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=[
+                        "/frontend/src",
+                        "/frontend/src/**",
+                        "/backend/src/main/java",
+                        "/backend/src/main/java/**",
+                    ],
+                    mode="allow",
+                ),
+                FilesystemPermission(
+                    operations=["read", "write"],
                     paths=["/**"],
                     mode="deny",
                 ),

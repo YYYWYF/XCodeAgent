@@ -200,6 +200,33 @@ class WorkspaceScopeTests(unittest.TestCase):
             self.assertEqual(_check_fs_permission(permissions, "read", "/data.json"), "allow")
             self.assertEqual(_check_fs_permission(permissions, "write", "/data.json"), "deny")
 
+    def test_code_review_repair_permissions_allow_only_business_source(self) -> None:
+        """代码审查修复权限只允许两端业务源码和内置扫描 Skill。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            permissions = create_workspace_permissions(
+                workspace,
+                mode="code_review_repair",
+                include_builtin_skills=True,
+            )
+
+            self.assertEqual(
+                _check_fs_permission(permissions, "read", "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md"),
+                "allow",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "write", "/backend/src/main/java/App.java"),
+                "allow",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "read", "/backend/src/test/java/AppTest.java"),
+                "deny",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "write", "/package.json"),
+                "deny",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

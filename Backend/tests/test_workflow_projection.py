@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.protocols.workflow.projection import (
+    _public_workflow_state,
     _workflow_next_nodes,
     _workflow_summary,
     _workflow_visual_payload,
@@ -142,6 +143,126 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertEqual(summary["codeReviewResult"], {})
         self.assertEqual(payload["state"]["codeReviewResult"], {})
         self.assertEqual(payload["result"]["codeReviewResult"], {})
+
+    def test_code_review_repair_projects_status_and_build_checks(self) -> None:
+        """代码审查修复状态和独立构建检查应持续投影为 camelCase。"""
+
+        summary = _workflow_summary(
+            {
+                "phase": "code_review",
+                "status": "in_progress",
+                "code_review_result": {
+                    "status": "completed",
+                    "issue_count": 1,
+                    "issues": [],
+                },
+                "code_review_repair_result": {
+                    "status": "building",
+                    "iteration": 1,
+                    "max_iterations": 3,
+                    "requested_issue_count": 1,
+                    "attempted_issue_ids": ["CKR6002-1"],
+                    "changed_files": ["backend/src/main/java/App.java"],
+                    "build_checks": [
+                        {
+                            "id": "backend_build",
+                            "name": "后端构建检查",
+                            "layer": "backend",
+                            "status": "running",
+                        }
+                    ],
+                },
+            },
+            [],
+        )
+
+        repair = summary["codeReviewRepair"]
+        self.assertEqual(repair["status"], "building")
+        self.assertEqual(repair["iteration"], 1)
+        self.assertEqual(repair["buildChecks"][0]["id"], "backend_build")
+        self.assertEqual(repair["changedFiles"], ["backend/src/main/java/App.java"])
+
+    def test_code_review_repair_preserves_skipped_build_check_status(self) -> None:
+        """独立构建中未执行的可选检查应投影为 skipped 而不是 passed。"""
+
+        summary = _workflow_summary(
+            {
+                "phase": "code_review",
+                "status": "in_progress",
+                "code_review_repair_result": {
+                    "status": "building",
+                    "build_checks": [
+                        {
+                            "id": "backend_build",
+                            "name": "后端构建检查",
+                            "layer": "backend",
+                            "passed": True,
+                            "skipped": True,
+                        }
+                    ],
+                },
+            },
+            [],
+        )
+
+        self.assertEqual(
+            summary["codeReviewRepair"]["buildChecks"][0]["status"],
+            "skipped",
+        )
+
+    def test_code_review_build_logs_are_not_exposed_in_public_state(self) -> None:
+        """公开状态只保留裁剪后的修复检查，不携带原始构建日志。"""
+
+        summary = _workflow_summary(
+            {
+                "phase": "code_review",
+                "status": "in_progress",
+                "code_review_repair_result": {
+                    "status": "building",
+                    "iteration": 1,
+                    "max_iterations": 3,
+                    "build_checks": [
+                        {
+                            "id": "backend_build",
+                            "name": "后端构建检查",
+                            "passed": False,
+                            "evidence": "failed at /Users/example/workspace/backend/src/main/java/App.java",
+                        }
+                    ],
+                },
+                "code_review_build_results": [
+                    {
+                        "id": "backend_build",
+                        "execution": {"stdout": "full command output"},
+                    }
+                ],
+                "code_review_events": ["review_build_checks"],
+            },
+            [],
+        )
+
+        public_state = _public_workflow_state(
+            {
+                "phase": "code_review",
+                "code_review_build_results": [{"execution": {"stdout": "full command output"}}],
+                "code_review_events": ["review_build_checks"],
+                "code_review_repair_result": {
+                    "status": "building",
+                    "build_checks": [
+                        {
+                            "id": "backend_build",
+                            "passed": False,
+                            "evidence": "failed at /Users/example/workspace/backend/src/main/java/App.java",
+                        }
+                    ],
+                },
+            },
+            phase="code_review",
+        )
+        self.assertNotIn("code_review_build_results", public_state)
+        self.assertNotIn("code_review_events", public_state)
+        self.assertEqual(summary["codeReviewRepair"]["buildChecks"][0]["status"], "failed")
+        self.assertNotIn("/Users/example", summary["codeReviewRepair"]["buildChecks"][0]["evidence"])
 
     def test_failed_summary_explains_exhausted_budget_without_stale_preview(self) -> None:
         """验证失败摘要展示修复计数和终止原因，并隐藏旧预览地址。"""

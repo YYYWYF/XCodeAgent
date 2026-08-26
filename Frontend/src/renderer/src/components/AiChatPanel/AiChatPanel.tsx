@@ -684,6 +684,7 @@ function pageContextStatus(
     mode === 'awaiting_unit_test_confirmation' ||
     mode === 'awaiting_test_phase_confirmation' ||
     mode === 'awaiting_review_phase_confirmation' ||
+    mode === 'awaiting_code_review_repair_confirmation' ||
     mode === 'awaiting_acceptance' ||
     mode === 'awaiting_plan_adjustment'
   ) {

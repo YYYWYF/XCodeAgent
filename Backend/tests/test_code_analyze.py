@@ -14,7 +14,7 @@ from app.agents.code_analyze.analyzer import (
     analyze_workspace_code,
     normalize_code_review_result,
 )
-from app.agents.code_analyze.scope import CodeAnalyzeScopedBackend
+from app.agents.code_analyze.scope import CodeAnalyzeScopedBackend, CodeReviewRepairScopedBackend
 
 
 class CodeAnalyzeTests(unittest.TestCase):
@@ -46,6 +46,25 @@ class CodeAnalyzeTests(unittest.TestCase):
 
         self.assertIsNone(scoped.glob("/frontend/src/**/*.tsx").error)
         self.assertIn("code_analyze_path_denied", scoped.glob("**/*.tsx").error or "")
+
+    def test_repair_scope_rejects_source_tests_and_out_of_scope_writes(self) -> None:
+        """修复 Agent 可以修改业务源码，但不能修改源码根内测试或工作区配置。"""
+
+        delegate = SimpleNamespace(
+            write=lambda *_args: WriteResult(path="/frontend/src/App.tsx"),
+            edit=lambda *_args: type("Edit", (), {"error": None})(),
+        )
+        scoped = CodeReviewRepairScopedBackend(delegate)
+
+        self.assertIsNone(scoped.write("frontend/src/App.tsx", "x").error)
+        self.assertEqual(
+            scoped.write("frontend/src/__tests__/App.test.tsx", "x").error,
+            "code_analyze_path_denied: frontend/src/__tests__/App.test.tsx",
+        )
+        self.assertEqual(
+            scoped.edit("backend/pom.xml", "old", "new").error,
+            "code_analyze_path_denied: backend/pom.xml",
+        )
 
     def test_normalizer_deduplicates_and_marks_frontend_warning(self) -> None:
         """后端问题去重与前端无规则 warning 必须稳定。"""
@@ -411,8 +430,42 @@ class CodeAnalyzeTests(unittest.TestCase):
             ],
         )
 
-    def test_normalizer_rejects_invalid_status_and_absolute_path(self) -> None:
-        """非 completed 状态或绝对/越界路径不能进入公开结果。"""
+    def test_normalizer_treats_findings_as_completed_review(self) -> None:
+        """模型把发现问题标为 failed 时仍应投影成功审查和问题列表。"""
+
+        with self.assertLogs("app.agents.code_analyze.analyzer", level="WARNING"):
+            result = normalize_code_review_result(
+                {
+                    "status": "failed",
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "targets": [
+                        {
+                            "side": "backend",
+                            "root": "backend/src/main/java",
+                            "status": "completed",
+                            "scanned_file_count": 1,
+                        }
+                    ],
+                    "issues": [
+                        {
+                            "side": "backend",
+                            "rule_id": "CKR6002",
+                            "severity": "high",
+                            "title": "HttpURLConnection 未配置完整超时",
+                            "summary": "连接未同时设置连接超时和读取超时。",
+                            "file": "backend/src/main/java/PersonNameController.java",
+                            "line": 69,
+                        }
+                    ],
+                }
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["issue_count"], 1)
+        self.assertEqual(result["issues"][0]["rule_id"], "CKR6002")
+
+    def test_normalizer_rejects_failed_status_without_valid_findings(self) -> None:
+        """没有有效问题支撑的 failed 状态仍表示扫描失败。"""
 
         base = {
             "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
@@ -421,6 +474,15 @@ class CodeAnalyzeTests(unittest.TestCase):
         }
         with self.assertRaises(ValueError):
             normalize_code_review_result({**base, "status": "failed"})
+
+    def test_normalizer_rejects_absolute_out_of_scope_issue_path(self) -> None:
+        """绝对越界问题路径不能借由状态归一进入公开结果。"""
+
+        base = {
+            "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+            "targets": [],
+            "issues": [],
+        }
         with self.assertRaises(ValueError):
             normalize_code_review_result(
                 {

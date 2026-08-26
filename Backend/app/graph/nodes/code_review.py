@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agents.code_analyze.analyzer import _safe_review_text, analyze_workspace_code
 from app.graph.state import ProjectState
+from app.graph.subgraphs.code_review import run_code_review_subgraph
+from app.graph.nodes.common import workspace_from_state
+from langchain_core.runnables import RunnableConfig
 
 
 def review_phase_confirmation(state: ProjectState) -> dict[str, Any]:
@@ -43,30 +45,47 @@ def review_phase_confirmation(state: ProjectState) -> dict[str, Any]:
     }
 
 
-def code_review(state: ProjectState) -> dict[str, Any]:
-    """调用只读 CodeAnalyze Agent 扫描指定前后端源码并返回结构化结果。"""
+def code_review(
+    state: ProjectState, config: RunnableConfig | None = None
+) -> dict[str, Any]:
+    """调用代码审查子图，统一处理扫描、修复确认、构建和失败路由。"""
 
-    workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
-    try:
-        result = analyze_workspace_code(state, workspace)
-    except Exception as exc:  # noqa: BLE001 - 节点边界统一将 Agent 异常转为失败状态。
-        return {
-            "phase": "code_review",
-            "status": "failed",
-            "message": "前后端代码审查失败。",
-            "error": _safe_review_text(
-                f"{type(exc).__name__}: {str(exc)[:500]}",
-                workspace,
-            ),
-            "code_review_result": {},
-            "code_review_next_action": "handle_failure",
-            "timeline": ["code_review"],
-        }
-    return {
+    result = run_code_review_subgraph(state, config)
+    workspace = workspace_from_state(state)
+    update: dict[str, Any] = {
         "phase": "code_review",
-        "status": "completed",
-        "message": result.get("summary") or "前后端代码审查完成。",
-        "code_review_result": result,
-        "code_review_next_action": "launch_project",
-        "timeline": ["code_review"],
+        "status": result.get("status", "failed"),
+        "message": result.get("message") or "前后端代码审查完成。",
+        "clarification": result.get("clarification", {}),
+        "code_review_result": result.get("code_review_result", state.get("code_review_result", {})),
+        "code_review_repair_status": result.get(
+            "code_review_repair_status", state.get("code_review_repair_status", "not_required")
+        ),
+        "code_review_repair_result": result.get(
+            "code_review_repair_result", state.get("code_review_repair_result", {})
+        ),
+        "code_review_build_results": result.get(
+            "code_review_build_results", state.get("code_review_build_results", [])
+        ),
+        "code_review_repair_iteration": result.get(
+            "code_review_repair_iteration", state.get("code_review_repair_iteration", 0)
+        ),
+        "code_review_max_repair_iterations": result.get(
+            "code_review_max_repair_iterations",
+            state.get("code_review_max_repair_iterations", 3),
+        ),
+        "code_review_events": result.get("code_review_events", []),
+        "code_review_next_action": result.get("code_review_next_action", "handle_failure"),
+        "timeline": result.get("timeline", ["code_review"]),
     }
+    if result.get("error"):
+        update["error"] = str(result["error"])[:2_000]
+    if result.get("code_changes"):
+        update["code_changes"] = result["code_changes"]
+    if result.get("code_change_sets"):
+        update["code_change_sets"] = result["code_change_sets"]
+    if not workspace:
+        update["status"] = "failed"
+        update["error"] = "代码审查需要显式用户 workspaceRoot。"
+        update["code_review_next_action"] = "handle_failure"
+    return update

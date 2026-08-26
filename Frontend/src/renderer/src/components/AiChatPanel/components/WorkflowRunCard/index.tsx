@@ -32,6 +32,7 @@ import type {
   WorkflowBuildTaskPlanConfirmation,
   WorkflowConfirmationArtifact,
   WorkflowCodeReviewResult,
+  WorkflowCodeReviewRepair,
   WorkflowTestTarget,
   WorkflowRunPayload
 } from '../../../../typings'
@@ -139,6 +140,8 @@ export default function WorkflowRunCard({
   const projectLaunch = workflow.summary.phase === 'launch_project'
   const reviewPhaseConfirmation = clarification?.mode === 'review_phase_confirmation'
   const codeReviewResult = readCodeReviewResult(workflow)
+  const codeReviewRepair = readCodeReviewRepair(workflow)
+  const codeReviewRepairConfirmation = clarification?.mode === 'code_review_repair_confirmation'
   // 恢复或重跑测试节点时快照可能短暂携带上一轮审查结果，必须以当前阶段为显示边界。
   const codeReview = workflowShouldShowCodeReview(workflow)
   const staleFrontendPerformanceConfirmation =
@@ -174,13 +177,11 @@ export default function WorkflowRunCard({
     !staleFrontendPerformanceConfirmation
   const dagConfirmation = clarification?.mode === 'build_task_plan_confirmation'
   const testPhaseConfirmation = clarification?.mode === 'test_phase_confirmation'
-  const testTarget =
-    (clarification?.testTarget || workflow.summary?.testTarget || workflow.state?.testTarget) as
-      | WorkflowTestTarget
-      | undefined
+  const testTarget = (clarification?.testTarget ||
+    workflow.summary?.testTarget ||
+    workflow.state?.testTarget) as WorkflowTestTarget | undefined
   const dagTaskPlan =
-    (clarification?.taskPlan as WorkflowBuildTaskPlan | undefined) ||
-    workflow.summary.buildTaskPlan
+    (clarification?.taskPlan as WorkflowBuildTaskPlan | undefined) || workflow.summary.buildTaskPlan
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -237,13 +238,13 @@ export default function WorkflowRunCard({
         ? 1
         : reviewPhaseConfirmation
           ? 1
-        : uiDesignConfirmation
-          ? (
-              (clarification as unknown as Record<string, unknown> | undefined)?.pages as
-                | unknown[]
-                | undefined
-            )?.length || clarificationQuestions.length
-          : clarificationQuestions.length
+          : uiDesignConfirmation
+            ? (
+                (clarification as unknown as Record<string, unknown> | undefined)?.pages as
+                  | unknown[]
+                  | undefined
+              )?.length || clarificationQuestions.length
+            : clarificationQuestions.length
   const requiresConfirmation =
     !staleFrontendPerformanceConfirmation && clarification?.status === 'requires_user_input'
   const [answers, setAnswers] = useState<ClarificationAnswers>(() =>
@@ -322,7 +323,19 @@ export default function WorkflowRunCard({
       {codeReview && (
         <CodeReviewCard
           result={codeReviewResult}
+          repair={codeReviewRepair}
           running={workflow.summary.phase === 'code_review' && status === 'running'}
+          canRepair={
+            codeReviewRepairConfirmation &&
+            !disabled &&
+            !historicalClarificationAnswers &&
+            interactionAvailability === 'active'
+          }
+          onRepairAll={() =>
+            onSubmitClarification?.(workflow, {
+              code_review_repair_confirmation: { action: 'repair_all' }
+            })
+          }
         />
       )}
       {projectLaunch && <ProjectLaunchCard workflow={workflow} />}
@@ -342,14 +355,12 @@ export default function WorkflowRunCard({
           ))}
         </div>
       )}
-      {(
-        clarificationQuestions.length > 0 ||
+      {(clarificationQuestions.length > 0 ||
         detailReview ||
         technicalPlanGenerationError ||
         dagConfirmation ||
         testPhaseConfirmation ||
-        reviewPhaseConfirmation
-      ) && (
+        reviewPhaseConfirmation) && (
         <div className={cx('workflow-clarification')}>
           {!entityDesignReview && !entityDesignGate && (
             <div className={cx('workflow-clarification-header')}>
@@ -450,7 +461,7 @@ export default function WorkflowRunCard({
               message={clarification?.message}
               onSubmit={(decision) =>
                 onSubmitClarification?.(workflow, {
-                  frontend_performance_confirmation: decision,
+                  frontend_performance_confirmation: decision
                 })
               }
             />
@@ -601,19 +612,19 @@ export default function WorkflowRunCard({
               })}
               {clarification?.status === 'requires_user_input' &&
                 !historicalClarificationAnswers && (
-                <Button
-                  className={cx('clarification-confirm-btn')}
-                  disabled={disabled || !canSubmitClarification}
-                  onClick={() => {
-                    clearClarificationDraft(workflow.threadId, clarificationQuestions)
-                    onSubmitClarification?.(workflow, answers)
-                  }}
-                  size="large"
-                  type="primary"
-                >
-                  确认并继续
-                </Button>
-              )}
+                  <Button
+                    className={cx('clarification-confirm-btn')}
+                    disabled={disabled || !canSubmitClarification}
+                    onClick={() => {
+                      clearClarificationDraft(workflow.threadId, clarificationQuestions)
+                      onSubmitClarification?.(workflow, answers)
+                    }}
+                    size="large"
+                    type="primary"
+                  >
+                    确认并继续
+                  </Button>
+                )}
             </>
           )}
         </div>
@@ -633,12 +644,43 @@ function readCodeReviewResult(workflow: WorkflowRunPayload): WorkflowCodeReviewR
   ]
   const candidate = candidates.find(
     (value) =>
-      value &&
+      value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
+  )
+  return candidate as WorkflowCodeReviewResult | undefined
+}
+
+/** 从 summary/state/result 读取代码审查修复状态。 */
+function readCodeReviewRepair(workflow: WorkflowRunPayload): WorkflowCodeReviewRepair | undefined {
+  // 同一运行的 summary、state、result 可能在不同帧到达；优先展示状态更靠后的快照，
+  // 避免启动节点的旧 awaiting_user 摘要覆盖已经完成的构建检查。
+  const repairStatusRank: Record<string, number> = {
+    not_required: 1,
+    awaiting_user: 2,
+    repairing: 3,
+    building: 4,
+    failed: 5,
+    completed: 6
+  }
+  const candidates: unknown[] = [
+    workflow.result?.codeReviewRepair,
+    workflow.result?.code_review_repair_result,
+    workflow.state?.codeReviewRepair,
+    workflow.state?.code_review_repair_result,
+    workflow.summary.codeReviewRepair
+  ]
+  const validCandidates = candidates.filter(
+    (value): value is WorkflowCodeReviewRepair =>
+      Boolean(value) &&
+      value !== null &&
       typeof value === 'object' &&
       !Array.isArray(value) &&
       Object.keys(value).length > 0
   )
-  return candidate as WorkflowCodeReviewResult | undefined
+  return validCandidates.sort(
+    (left, right) =>
+      (repairStatusRank[String(right.status || '')] || 0) -
+      (repairStatusRank[String(left.status || '')] || 0)
+  )[0]
 }
 
 /** 从 Workflow 公开状态中读取 RequirementSpec 结构化数据。 */
@@ -714,9 +756,7 @@ function RequirementSpecConfirmationCard({
       {!requirementsConfirmed && spec ? (
         <div className={cx('requirement-spec-draft-summary')}>
           <Text strong>需求草稿已展示在右侧</Text>
-          <Text type="secondary">
-            确认后将转为正式需求文档并进入下一阶段。
-          </Text>
+          <Text type="secondary">确认后将转为正式需求文档并进入下一阶段。</Text>
         </div>
       ) : null}
       <div className={cx('artifact-auth-bar-footer')}>
@@ -1724,33 +1764,25 @@ function UnitTestConfirmationPanel({
 function FrontendPerformanceConfirmationPanel({
   disabled,
   message,
-  onSubmit,
+  onSubmit
 }: {
-  disabled?: boolean;
-  message?: string;
-  onSubmit: (decision: 'skip' | 'run') => void;
+  disabled?: boolean
+  message?: string
+  onSubmit: (decision: 'skip' | 'run') => void
 }): ReactElement {
   return (
-    <div className={cx("workflow-frontend-performance-confirmation")}>
+    <div className={cx('workflow-frontend-performance-confirmation')}>
       <Text>{message || '单元测试已完成。是否跳过前端性能测试？'}</Text>
-      <div className={cx("workflow-frontend-performance-confirmation-actions")}>
-        <Button
-          disabled={disabled}
-          onClick={() => onSubmit('skip')}
-          type="default"
-        >
+      <div className={cx('workflow-frontend-performance-confirmation-actions')}>
+        <Button disabled={disabled} onClick={() => onSubmit('skip')} type="default">
           是，跳过性能测试
         </Button>
-        <Button
-          disabled={disabled}
-          onClick={() => onSubmit('run')}
-          type="primary"
-        >
+        <Button disabled={disabled} onClick={() => onSubmit('run')} type="primary">
           否，继续执行
         </Button>
       </div>
     </div>
-  );
+  )
 }
 
 function OtherInput({
@@ -2117,11 +2149,11 @@ function workflowConfirmationArtifact(
   const expectedArtifactId =
     clarification?.mode === 'requirement_document_confirmation'
       ? 'requirement_document'
-        : clarification?.mode === 'technical_plan_confirmation'
-          ? 'technical_plan'
-          : clarification?.mode === 'project_plan_confirmation'
-            ? 'project_plan'
-            : undefined
+      : clarification?.mode === 'technical_plan_confirmation'
+        ? 'technical_plan'
+        : clarification?.mode === 'project_plan_confirmation'
+          ? 'project_plan'
+          : undefined
   const artifact = workflow.confirmationArtifact
 
   if (

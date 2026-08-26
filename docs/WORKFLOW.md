@@ -59,17 +59,17 @@ START
 
 ### 工作台四阶段边界
 
-顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责开发就绪检查、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `review_phase_confirmation`；审查阶段负责只读 `code_review`、`launch_project`、`acceptance` 和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在审查阶段开放。
+顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责开发就绪检查、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `review_phase_confirmation`；审查阶段负责 `code_review` 子图、`launch_project`、`acceptance` 和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在审查阶段开放。
 
 `build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，失败最多经过 3 轮独立 `unit_test_repair`，耗尽后失败且不展示测试阶段确认卡。
 
 单元测试通过或跳过后才进入 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 或单测失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
 
-测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，只执行依赖安装、前后端 Build、前端性能测试和集成质量门禁。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。质量门禁通过后必须先经过 `review_phase_confirmation`；确认后由 `code_review` 只读扫描两个指定源码目录，审查问题仅展示、不阻断 `launch_project`，项目启动及预览验收均归属审查阶段。
+测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，只执行依赖安装、前后端 Build、前端性能测试和集成质量门禁。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。质量门禁通过后必须先经过 `review_phase_confirmation`；确认后由 `code_review` 子图只读扫描两个指定源码目录。发现问题时暂停等待结构化 `repair_all`，修复和独立构建检查最多循环三轮；无问题或构建通过后才进入 `launch_project`，项目启动及预览验收均归属审查阶段。
 
 ### 测试阶段 AG-UI 与生命周期契约
 
-`unit_test`、`unit_test_repair`、`test_phase_confirmation`、`review_phase_confirmation` 和 `code_review` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。`unit_test_confirmation` 和 `frontend_performance_confirmation` 是独立生命周期待交互类型，分别使用对应的 `run/skip` 结构化答案恢复原节点；恢复必须携带原执行的 `resumeExecutionRunId`，其中性能测试确认只允许同一测试 thread 接管。两个阶段确认门的 AG-UI 快照分别投影固定确认文案；恢复都校验原执行的 scope/target，阶段交接允许原子转交到新的阶段 thread。审查确认提交后生命周期立即投影 `code_review`，使顶部审查阶段在扫描首帧前同步高亮。生命周期快照不再包含 schema 版本字段。
+`unit_test`、`unit_test_repair`、`test_phase_confirmation`、`review_phase_confirmation` 和 `code_review` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。`unit_test_confirmation`、`frontend_performance_confirmation` 和 `code_review_repair_confirmation` 是生命周期待交互类型，分别使用对应的 `run/skip`、`confirm` 或 `repair_all` 结构化答案恢复原节点；恢复必须携带原执行的 `resumeExecutionRunId`，其中性能测试确认只允许同一测试 thread 接管，代码审查一键修复只能由当前审查 thread 接管。两个阶段确认门和代码修复门的 AG-UI 快照分别投影固定确认文案；恢复都校验原执行的 scope/target，阶段交接允许原子转交到新的阶段 thread。审查确认提交后生命周期立即投影 `code_review`，使顶部审查阶段在扫描首帧前同步高亮。生命周期快照不再包含 schema 版本字段。
 
 需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 读取 `.xcodeagent/plans/technical-plan.json`；页面选择从 `pages[].references` 解析实现范围并在运行时编译 PageImplementationContract，API 选择直接读取 TechnicalPlan Endpoint。两者都先进入 `development_readiness_gate`，只在关联实体均有已确认 EntitySourceBinding 时继续。门禁不会自动跳转实体；用户完成独立绑定后必须重新发起原目标开发。
 
@@ -488,6 +488,28 @@ testing.START
 - 前端 Jest/Vitest 与后端 Maven 单元测试（仅存在对应测试文件时执行）；
 - 独立 `unit_test_report`、`unit_test_quality_gate_passed`、`unit_test_next_action` 和修复计数。
 
+### `code_review` / Code Review Subgraph
+
+测试质量门禁通过后，主 Graph 先停在 `review_phase_confirmation`；确认后进入审查阶段。
+`code_review` 对外仍是一个节点，对内运行以下受控子图：
+
+```text
+code_scan
+  ├─ 无问题 → 子图完成 → launch_project
+  └─ 有问题 → code_review_repair_confirmation
+                 └─ repair_all → code_review_repair → review_build_checks
+                                      ├─ 通过 → launch_project
+                                      └─ 失败（最多 3 轮）→ code_review_repair
+```
+
+首次进入只执行一次只读 `CodeAnalyzeAgent` 扫描；恢复 `repair_all` 时直接使用持久化的前 100 条问题，
+不重新扫描。前端没有配置规则时不读取 `frontend/src`，目标标记为已跳过并显示 warning，不生成前端问题。
+修复由独立 `CodeReviewRepairAgent` 完成，只能读写 `frontend/src/**` 与
+`backend/src/main/java/**`，禁止修改配置、依赖、测试、工件或执行命令。修复后由独立的
+`review_build_checks` 执行前端依赖安装、前端 Build 和后端 Build；它不复用测试阶段结果、日志或修复预算。
+构建证据最多回传三轮，耗尽后进入 `handle_failure`，不会启动项目。构建通过后保留原始审查问题、修复摘要和
+构建检查结果，再继续现有 `launch_project → acceptance → finalize_project` 流程。
+
 集成测试质量门禁覆盖：
 
 - 前端 TypeScript 依赖安装；
@@ -640,7 +662,13 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 
 ## 一等 Deep Agent
 
-本项目只保留五个一等 Deep Agent：Frontend Generation、Data Source Generation、Database Change、Test、RepairPlanner。`agents/main/` 只作为历史命名下的 direct ChatModel 边界目录，用于需求、规划、页面设计、任务准备和 Markdown 同步；它不再声明或创建 Main DeepAgent。
+本项目的一等 Deep Agent 包含 Frontend Generation、Data Source Generation、Database Change、Test、RepairPlanner、CodeAnalyze 和 CodeReviewRepair。`agents/main/` 只作为历史命名下的 direct ChatModel 边界目录，用于需求、规划、页面设计、任务准备和 Markdown 同步；它不再声明或创建 Main DeepAgent。
+
+### CodeAnalyze / CodeReviewRepair Agent
+
+`agents/code_analyze/` 始终只读扫描两个固定源码根，并强制读取前后端扫描 Skill 及后端规则引用；
+`agents/code_review_repair/` 只有收到结构化 `repair_all` 后才可在同样的两个源码根内产生真实 Diff。
+两个 Agent 均不加载用户 Skill、Agent Memory、生成类工具或命令执行能力。
 
 ### Frontend Generation Agent
 
