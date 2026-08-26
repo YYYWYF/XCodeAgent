@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { test } from 'node:test'
 import {
   derivePlanExecutionMode,
@@ -197,4 +199,21 @@ test('会话恢复只保留当前工作台阶段，审查确认不会混入验�
 
   assert.deepEqual(sessionsForWorkbenchPhase(sessions, 'review'), [sessions[1]])
   assert.deepEqual(sessionsForWorkbenchPhase(sessions, 'acceptance'), [sessions[2]])
+})
+
+test('验收底栏高度与预览预留空间使用同一个变量', () => {
+  const panelStyles = readFileSync(
+    path.join(process.cwd(), 'src/renderer/src/components/AiChatPanel/AiChatPanel.less'),
+    'utf8'
+  )
+  const dockStyles = readFileSync(
+    path.join(
+      process.cwd(),
+      'src/renderer/src/components/AiChatPanel/components/AcceptanceDecisionDock.less'
+    ),
+    'utf8'
+  )
+
+  assert.match(panelStyles, /padding-bottom:\s*var\(--acceptance-decision-dock-height\)/)
+  assert.match(dockStyles, /height:\s*var\(--acceptance-decision-dock-height, 72px\)/)
 })

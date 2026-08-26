@@ -13,9 +13,11 @@
 
 // 验收待验收时右侧预览占满工作区；对话和拖拽条由“不通过”按钮恢复。
 .@{class-prefix}-acceptance-awaiting {
+  --acceptance-decision-dock-height: 84px;
+
   .@{class-prefix}-embedded-preview-pane {
     box-sizing: border-box;
-    padding-bottom: 84px;
+    padding-bottom: var(--acceptance-decision-dock-height);
   }
 }
 
@@ -387,20 +389,11 @@
     flex: 1 1 auto;
     border-top: 0;
     border-left: 0;
-    padding-bottom: 84px;
   }
 }
 
 @media (max-width: 720px) {
   .@{class-prefix}-acceptance-awaiting {
-    .@{class-prefix}-embedded-preview-pane {
-      padding-bottom: 132px;
-    }
-  }
-
-  .@{class-prefix}-ai-chat-panel.@{class-prefix}-acceptance-preview-focus {
-    .@{class-prefix}-embedded-preview-pane {
-      padding-bottom: 132px;
-    }
+    --acceptance-decision-dock-height: 132px;
   }
 }
