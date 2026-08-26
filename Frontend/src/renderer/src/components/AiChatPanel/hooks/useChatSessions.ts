@@ -27,6 +27,7 @@ import {
 import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/EntityDesignPanels'
 import { useSessionRuntimeStore } from './useSessionRuntimeStore'
 import {
+  sessionsForPlanningThread,
   sessionsForWorkbenchPhase,
   selectedSessionIdForPhase,
   withSelectedSessionForPhase,
@@ -559,8 +560,10 @@ export function useChatSessions({
     // 已存在同 threadId 的会话则复用并激活。
     // 可能有多个同 threadId 的重复 session（历史 bug 产生），优先选消息最多的；
     // 同时检查内存中 messagesRef 是否有历史消息（未落盘的规划对话）。
-    const sameThreadSessions = sessionSummaries[editorMode].filter(
-      (summary) => summary.workbenchPhase === 'product' && summary.threadId === normalizedThreadId
+    const sameThreadSessions = sessionsForPlanningThread(
+      sessionSummaries[editorMode],
+      phase,
+      normalizedThreadId
     )
     if (sameThreadSessions.length > 0) {
       // 选消息最多或内存中有消息的 session，避免选中空壳重复 session 丢失历史对话。

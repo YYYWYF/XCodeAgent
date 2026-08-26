@@ -12,6 +12,15 @@ export function sessionsForWorkbenchPhase<
   return sessions.filter((session) => session.workbenchPhase === phase)
 }
 
+/** 只返回指定阶段和线程的规划会话，避免规划阶段误复用产品会话或重复创建空会话。 */
+export function sessionsForPlanningThread<
+  Session extends { threadId: string; workbenchPhase: WorkbenchPhase }
+>(sessions: Session[], phase: WorkbenchPhase, threadId: string): Session[] {
+  return sessions.filter(
+    (session) => session.workbenchPhase === phase && session.threadId === threadId
+  )
+}
+
 /** 读取指定编辑模式和工作台阶段各自选中的会话，避免跨阶段复用最后会话。 */
 export function selectedSessionIdForPhase(
   selection: PhaseSessionSelection,

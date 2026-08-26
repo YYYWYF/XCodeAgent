@@ -65,6 +65,7 @@ import {
   isSupersededPlanningStageEntryMessage,
   isSupersededPlanningPhaseMessage,
   isSupersededPlanningProgressMessage,
+  isTemplateSupersededPlanningProgressMessage,
   latestUiDesignPreviewMessageIndex
 } from './uiDesignPreviewHistory'
 import './MessageList.less'
@@ -284,6 +285,9 @@ export default function MessageList({
   const currentPlanningPhase = designPhasePlanning
     ? planningWorkflowPhase(planningWorkflow)
     : ''
+  // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
+  const templatePreparationVisible =
+    designPhasePlanning && (generatingTemplate || isTemplatePreparing(applicationLifecycle))
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -375,7 +379,7 @@ export default function MessageList({
         ref={scrollContainerRef}
       >
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
-          {messages.length === 0 && !visibleError ? (
+          {messages.length === 0 && !visibleError && !templatePreparationVisible ? (
             designPhasePlanning ? (
               // 设计阶段空态也渲染为消息流里的同一张边框加载卡，不再使用全屏 Spin。
               <article className={cx('ai-message', 'assistant')}>
@@ -399,6 +403,13 @@ export default function MessageList({
             )
           ) : (
             messages.map((message, messageIndex) => {
+              // 模板已开始准备后，空的 planning loading 已被更具体的模板卡取代；
+              // 已完成的 TechnicalPlan 消息不满足此条件，仍作为历史保留。
+              if (
+                isTemplateSupersededPlanningProgressMessage(message, templatePreparationVisible)
+              ) {
+                return null
+              }
               // 以 activePlannings 的当前权威阶段收口冲突消息：保留 UI 设计稿历史，
               // 只隐藏过早生成的 TechnicalPlan，进入规划窗口后也不回显旧入口卡。
               if (
@@ -806,8 +817,7 @@ export default function MessageList({
               </div>
             </article>
           ) : null}
-          {designPhasePlanning &&
-          (generatingTemplate || isTemplatePreparing(applicationLifecycle)) ? (
+          {templatePreparationVisible ? (
             <article className={cx('ai-message', 'assistant', 'template-preparing-message')}>
               <div className={cx('ai-message-content')}>
                 <TemplatePreparingCard

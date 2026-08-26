@@ -108,6 +108,22 @@ export function isSupersededPlanningProgressMessage(
   return message.workflow?.summary?.status === 'running'
 }
 
+/** 模板准备终态覆盖空的规划进度，避免模板已就绪后仍显示“正在恢复规划阶段”。 */
+export function isTemplateSupersededPlanningProgressMessage(
+  message: AgentChatMessage,
+  templatePreparationVisible: boolean
+): boolean {
+  if (
+    !templatePreparationVisible ||
+    message.role !== 'assistant' ||
+    message.content.trim() ||
+    message.error
+  ) {
+    return false
+  }
+  return Boolean(message.planningLoading) || message.workflow?.summary?.status === 'running'
+}
+
 /** 压缩创建规划会话：保留最新 UI 预览，删除重复预览和入口失败轮次。 */
 export function compactPlanningMessageHistory(
   messages: AgentChatMessage[],

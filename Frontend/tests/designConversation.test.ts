@@ -7,6 +7,7 @@ import {
   isSupersededPlanningPhaseMessage,
   isSupersededPlanningProgressMessage,
   isSupersededPlanningStageEntryMessage,
+  isTemplateSupersededPlanningProgressMessage,
   latestUiDesignPreviewMessageIndex
 } from '../src/renderer/src/components/AiChatPanel/components/MessageList/uiDesignPreviewHistory'
 import {
@@ -26,6 +27,7 @@ import {
 } from '../src/renderer/src/components/Welcome/planningWorkflowState'
 import type { WorkflowRunPayload } from '../src/renderer/src/typings'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
+import { sessionsForPlanningThread } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
 
 const planningInteraction = {
   gateId: 'requirement_spec:revision-1',
@@ -42,6 +44,15 @@ const forwardedProps = buildWorkflowForwardedProps({
 assert.deepEqual(forwardedProps.applicationPlanningInteraction, planningInteraction)
 assert.equal(forwardedProps.workflowScope, 'application_planning')
 assert.equal(forwardedProps.resumeState, undefined)
+
+const phasePlanningSessions = [
+  { id: 'product', threadId: 'shared-thread', workbenchPhase: 'product' as const },
+  { id: 'planning', threadId: 'shared-thread', workbenchPhase: 'planning' as const },
+  { id: 'other', threadId: 'other-thread', workbenchPhase: 'planning' as const }
+]
+assert.deepEqual(sessionsForPlanningThread(phasePlanningSessions, 'planning', 'shared-thread'), [
+  phasePlanningSessions[1]
+])
 
 assert.equal(
   planningRequirementsConfirmed({
@@ -424,6 +435,13 @@ const requirementDraftConfirmationMessage = {
 } as AgentChatMessage
 assert.equal(isSupersededPlanningProgressMessage(runningRequirementsMessage, 15), true)
 assert.equal(isSupersededPlanningProgressMessage(staleLoadingPlaceholder, 15), true)
+assert.equal(isTemplateSupersededPlanningProgressMessage(staleLoadingPlaceholder, true), true)
+assert.equal(isTemplateSupersededPlanningProgressMessage(runningRequirementsMessage, true), true)
+assert.equal(
+  isTemplateSupersededPlanningProgressMessage(requirementDraftConfirmationMessage, true),
+  false
+)
+assert.equal(isTemplateSupersededPlanningProgressMessage(staleLoadingPlaceholder, false), false)
 assert.deepEqual(
   compactPlanningMessageHistory([
     runningRequirementsMessage,
