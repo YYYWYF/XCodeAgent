@@ -36,7 +36,6 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
                     "initialAdminRoleId": "administrator",
                     "restrictedPages": [],
                     "restrictedOperations": [],
-                    "dataRules": [],
                 }
             },
         )
@@ -63,15 +62,10 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
                     }
                 ],
                 "restrictedOperations": [],
-                "dataRules": [
+                "dataAuthorizationIssues": [
                     {
-                        "name": "个人资产可见范围",
-                        "description": "普通用户只查看自己名下的资产。",
-                        "dataRuleKey": "own_assets",
-                        "includes": "当前成员名下的资产。",
-                        "excludes": "其他成员名下的资产。",
+                        "description": "普通用户只能查看自己名下的资产。",
                         "sourceRefs": ["普通用户查看自己名下的资产"],
-                        "defaultGrantedRoleIds": ["ordinary_user"],
                     }
                 ],
             },
@@ -92,6 +86,10 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
             merged["authorization_requirements"]["restrictedPages"][0]["description"],
             "只有管理员可以进入资产列表页。",
         )
+        self.assertEqual(
+            merged["authorization_capability_issues"][0]["code"],
+            "DATA_AUTHORIZATION_NOT_SUPPORTED",
+        )
 
     def test_authorization_fact_output_rejects_incomplete_page_candidate(self) -> None:
         """模型遗漏页面业务说明时必须触发自动修复，不能转嫁给用户。"""
@@ -111,7 +109,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
                     }
                 ],
                 "restrictedOperations": [],
-                "dataRules": [],
+                "dataAuthorizationIssues": [],
             },
         }
 
@@ -119,8 +117,8 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
 
         self.assertTrue(any("缺少业务语义" in error for error in errors))
 
-    def test_data_rule_does_not_require_page_or_operation_behavior(self) -> None:
-        """仅数据范围候选不会凭空生成页面或操作的未授权行为。"""
+    def test_data_authorization_issue_blocks_confirmation(self) -> None:
+        """数据授权能力问题不能作为 V1 正式 RequirementSpec 确认。"""
 
         spec = create_requirement_spec(
             "涉及权限控制：是",
@@ -137,23 +135,24 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
                 "authorization_requirements": {
                     "enabled": True,
                     "initialAdminRoleId": "order_manager",
-                    "dataRules": [
-                        {
-                            "name": "订单可见范围",
-                            "description": "订单数据按负责人隔离。",
-                            "dataRuleKey": "own_orders",
-                            "includes": "成员自己负责的订单。",
-                            "excludes": "其他成员负责的订单。",
-                            "sourceRefs": ["用户提及订单仅本人可见"],
-                            "defaultGrantedRoleIds": ["order_manager"],
-                        }
-                    ],
                 }
             },
         )
 
+        spec["authorization_capability_issues"] = [
+            {
+                "code": "DATA_AUTHORIZATION_NOT_SUPPORTED",
+                "capability": "data_authorization",
+                "description": "订单数据按负责人隔离。",
+                "sourceRefs": ["用户提及订单仅本人可见"],
+            }
+        ]
+
         self.assertNotIn("unauthorizedBehavior", spec["authorization_requirements"])
-        self.assertEqual(validate_authorization_requirements(spec), [])
+        self.assertIn(
+            "当前需求包含不支持的数据权限：DATA_AUTHORIZATION_NOT_SUPPORTED",
+            validate_authorization_requirements(spec),
+        )
 
     def test_rule_id_ignores_model_value_and_survives_reordering(self) -> None:
         """模型不得指定 ruleId，编辑器重排则必须复用已有内部标识。"""

@@ -88,7 +88,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertIn("页面清单第 1 项的 pageId 必须为 lower_snake_case", errors)
 
     def test_authorization_candidates_are_normalized_and_rendered(self) -> None:
-        """权限候选保留业务语义并在 Markdown 中展示固定页面边界。"""
+        """权限候选保留业务语义并在 Markdown 中展示第一阶段边界。"""
 
         spec = create_requirement_spec(
             "创建库存管理系统\n涉及权限控制：是\n启用运行态权限管理页面：是",
@@ -148,20 +148,6 @@ class RequirementsConfirmationTests(unittest.TestCase):
                             "defaultGrantedRoleIds": ["warehouse_staff"],
                         }
                     ],
-                    "dataRules": [
-                        {
-                            "ruleId": "inventory_scope_rule",
-                            "dataRuleId": "inventory_scope",
-                            "entityId": "Inventory",
-                            "name": "库存可见范围",
-                            "description": "库存数据范围。",
-                            "dataRuleKey": "organization_inventory",
-                            "includes": "成员所属组织的库存。",
-                            "excludes": "其他组织的库存。",
-                            "sourceRefs": ["业务描述"],
-                            "defaultGrantedRoleIds": ["warehouse_staff"],
-                        }
-                    ],
                 },
             },
         )
@@ -174,15 +160,12 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual(authorization["restrictedOperations"][0]["name"], "调整库存")
         self.assertNotIn("operationId", authorization["restrictedOperations"][0])
         self.assertNotIn("pageId", authorization["restrictedOperations"][0])
-        self.assertNotIn("dataRuleId", authorization["dataRules"][0])
-        self.assertNotIn("entityId", authorization["dataRules"][0])
-        self.assertEqual(authorization["dataRules"][0]["dataRuleKey"], "organization_inventory")
         self.assertNotIn("permissions", spec["user_roles"][0])
         self.assertEqual(validate_authorization_requirements(spec), [])
         markdown = render_requirement_spec_markdown(spec)
         self.assertIn("## 权限需求", markdown)
         self.assertIn("/roles", markdown)
-        self.assertIn("成员所属组织的库存", markdown)
+        self.assertIn("第一阶段不实现数据范围授权", markdown)
 
     def test_authorization_validation_only_checks_business_semantics(self) -> None:
         """需求阶段不绑定页面或实体，只校验候选是否说明了业务含义。"""
@@ -225,17 +208,6 @@ class RequirementsConfirmationTests(unittest.TestCase):
                             "defaultGrantedRoleIds": ["personnel_manager"],
                         },
                     ],
-                    "dataRules": [
-                        {
-                            "name": "数据范围",
-                            "dataRuleKey": "assigned_personnel",
-                            "includes": "当前成员负责的人员数据。",
-                            "excludes": "其他成员负责的人员数据。",
-                            "entityId": "not_generated_yet",
-                            "sourceRefs": ["用户提及数据范围"],
-                            "defaultGrantedRoleIds": ["personnel_manager"],
-                        }
-                    ],
                 }
             },
         )
@@ -252,89 +224,62 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 "authorization_requirements": {
                     "enabled": True,
                     "restrictedOperations": [{"description": "需要限制某个操作。"}],
-                    "dataRules": [{"name": "人员范围", "includes": "", "excludes": ""}],
                 }
             },
         )
 
         errors = validate_authorization_requirements(spec)
         self.assertTrue(any("受控操作缺少业务操作名称" in error for error in errors))
-        self.assertTrue(any("数据范围 人员范围 缺少 includes 业务边界" in error for error in errors))
+        self.assertFalse(any("数据范围" in error for error in errors))
 
-    def test_permission_answer_is_consumed_without_repeating_data_scope_question(self) -> None:
-        """权限澄清回答应直接进入需求确认，不因模型再次返回空候选而重复追问。"""
+    def test_data_authorization_requirement_blocks_confirmation(self) -> None:
+        """数据范围授权在第一阶段必须明确阻断，不能转为澄清问题继续执行。"""
 
         spec = create_requirement_spec(
             "涉及权限控制：是",
             agent_spec={
                 "authorization_requirements": {
                     "enabled": True,
-                    "unauthorizedBehavior": {"unauthorizedOperation": "disable"},
                     "restrictedPages": [],
                     "restrictedOperations": [],
-                    "dataRules": [{"name": "人员", "scope": ""}],
+                    "dataRules": [{"name": "人员数据范围"}],
                 }
             },
         )
-        answer = "管理员可以查看人员列表，普通用户只能查看和修改自己的基本信息"
         with tempfile.TemporaryDirectory() as workspace:
             _write_application_config(workspace)
             with patch(
                 "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
                 return_value={
                     "requirement_spec": spec,
-                    "clarification": {
-                        "mode": "ask_user_question",
-                        "status": "requires_user_input",
-                        "questions": [
-                            {
-                                "id": "authorization_data_scope_business",
-                                "header": "权限业务梳理 3/3",
-                                "question": "请说明数据范围业务规则。",
-                                "type": "text",
-                            }
-                        ],
-                    },
+                    "clarification": clear_clarification(spec),
                 },
             ):
                 result = requirements_node(
                     {
-                        "request": "权限澄清回答",
+                        "request": "普通用户只能查看和修改自己的基本信息",
                         "workspace": workspace,
                         "workflow_scope": "application_planning",
                         "requirement_spec": spec,
                         "requirements_clarification_round": 1,
                         "application_planning_interaction": {
                             "action": "answer",
-                            "request": "权限澄清回答",
-                            "answers": {
-                                "authorization_data_scope_business": answer,
-                            },
+                            "request": "普通用户只能查看和修改自己的基本信息",
                         },
                         "timeline": [],
                     }
                 )
 
         self.assertEqual(result["status"], "requires_user_input")
-        self.assertEqual(result["clarification"]["mode"], "ask_user_question")
+        self.assertEqual(result["clarification"]["mode"], "authorization_capability_not_supported")
+        self.assertEqual(result["clarification"]["questions"], [])
         self.assertEqual(
-            result["clarification"]["questions"][-1]["id"],
-            "authorization_initial_admin_role",
-        )
-        data_rules = result["requirement_spec"]["authorization_requirements"]["dataRules"]
-        self.assertEqual(len(data_rules), 1)
-        self.assertEqual(data_rules[0]["includes"], answer)
-        self.assertIn(
-            f"用户权限澄清回答：{answer}",
-            data_rules[0]["sourceRefs"],
-        )
-        self.assertIn(
-            "权限启用时必须且只能选择一个初始系统管理员角色",
-            validate_authorization_requirements(result["requirement_spec"]),
+            result["clarification"]["capabilityIssues"][0]["code"],
+            "DATA_AUTHORIZATION_NOT_SUPPORTED",
         )
 
-    def test_permission_answer_no_clears_only_the_answered_dimension(self) -> None:
-        """回答“无”只清空对应权限维度，不凭空影响其他业务权限候选。"""
+    def test_data_authorization_capability_issue_cannot_be_cleared_by_answer(self) -> None:
+        """“无”不是移除原始数据权限需求的确认，仍须重新生成需求文档。"""
 
         spec = create_requirement_spec(
             "涉及权限控制：是",
@@ -348,9 +293,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
                             "sourceRefs": ["用户提及人员列表权限"],
                         }
                     ],
-                    "unauthorizedBehavior": {"unauthorizedPage": "show_forbidden"},
                     "restrictedOperations": [],
-                    "dataRules": [{"name": "人员", "scope": ""}],
+                    "dataRules": [{"name": "人员数据范围"}],
                 }
             },
         )
@@ -360,46 +304,26 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
                 return_value={
                     "requirement_spec": spec,
-                    "clarification": {
-                        "mode": "ask_user_question",
-                        "status": "requires_user_input",
-                        "questions": [
-                            {
-                                "id": "authorization_data_scope_business",
-                                "header": "权限业务梳理 3/3",
-                                "question": "请说明数据范围业务规则。",
-                                "type": "text",
-                            }
-                        ],
-                    },
+                    "clarification": clear_clarification(spec),
                 },
             ):
                 result = requirements_node(
                     {
-                        "request": "权限澄清回答",
+                        "request": "数据权限不在第一阶段实施",
                         "workspace": workspace,
                         "workflow_scope": "application_planning",
                         "requirement_spec": spec,
                         "requirements_clarification_round": 1,
                         "application_planning_interaction": {
                             "action": "answer",
-                            "request": "权限澄清回答",
-                            "answers": {
-                                "authorization_data_scope_business": "无",
-                            },
+                            "request": "数据权限不在第一阶段实施",
                         },
                         "timeline": [],
                     }
                 )
 
-        authorization = result["requirement_spec"]["authorization_requirements"]
-        self.assertEqual(authorization["dataRules"], [])
-        self.assertEqual(len(authorization["restrictedPages"]), 1)
-        self.assertEqual(result["clarification"]["mode"], "ask_user_question")
-        self.assertEqual(
-            result["clarification"]["questions"][-1]["id"],
-            "authorization_initial_admin_role",
-        )
+        self.assertEqual(len(result["requirement_spec"]["authorization_requirements"]["restrictedPages"]), 1)
+        self.assertEqual(result["clarification"]["mode"], "authorization_capability_not_supported")
 
     def test_authorization_without_explicit_candidates_goes_to_confirmation(self) -> None:
         """权限能力开启但用户未提出具体控制时，空候选直接进入需求确认。"""
@@ -442,7 +366,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
             authorization = result["requirement_spec"]["authorization_requirements"]
             self.assertEqual(authorization["restrictedPages"], [])
             self.assertEqual(authorization["restrictedOperations"], [])
-            self.assertEqual(authorization["dataRules"], [])
+            self.assertNotIn("dataRules", authorization)
             self.assertIn(
                 "权限启用时必须且只能选择一个初始系统管理员角色",
                 validate_authorization_requirements(result["requirement_spec"]),
@@ -636,7 +560,6 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     "enabled": True,
                     "restrictedPages": [{}],
                     "restrictedOperations": [{}],
-                    "dataRules": [{}],
                 }
             },
         )
@@ -674,7 +597,6 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     "enabled": True,
                     "restrictedPages": [],
                     "restrictedOperations": [],
-                    "dataRules": [],
                 }
             },
         )
@@ -739,7 +661,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
 
         authorization = spec["authorization_requirements"]
         self.assertFalse(authorization["enabled"])
-        self.assertEqual(authorization["dataRules"], [])
+        self.assertNotIn("dataRules", authorization)
         self.assertNotIn("login_page", [page["pageId"] for page in spec["pages"]])
 
     def test_requirement_spec_does_not_accept_runtime_management_page_switch(self) -> None:

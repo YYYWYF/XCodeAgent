@@ -57,6 +57,8 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 正式 JSON 使用 `product-plan.v5`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。ProductPlan 不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
 
+权限开启时，服务端在模型输出校验后确定性生成内部 `authorizationTargets`：页面规则仅为 `{ruleId,pageId}`，操作规则必须为 `{ruleId,pageId,actionId}`。`actionId` 只在所属页面内唯一，不能脱离 `pageId` 作为权限目标；`stepId` 仅用于产品组合行为，绝不进入权限目标。ProductPlan 不保存资源键或角色授权；联合确认前只校验受控页面 `pageId`、受控操作 `<pageId>_<actionId>` 与固定 `system_authorization_management` 的全局候选是否碰撞，实际资源目录仍由 TechnicalPlan 编译。
+
 ```json
 {
   "schema_version": "product-plan.v5",
@@ -290,7 +292,7 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 
 ### TechnicalPlan 上下文预算
 
-- 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、已确认数据规则与目标身份、业务流程、页面信息和业务动作上下文，并在修订时注入修订上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
+- 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、V1 页面与操作权限目标身份、业务流程、页面信息和业务动作上下文，并在修订时注入修订上下文；数据权限不进入第一阶段模型上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
 
 ## 详设节点移除与工作台执行
 
@@ -322,7 +324,7 @@ TechnicalPlan + EntitySourceBinding -> development_readiness_gate -> Build DAG
 
 ProductPlan 或 UiDesign 变化时重新确认受影响 TechnicalPlan/运行时页面契约；TechnicalPlan API 或 Schema 变化时使相关 Build DAG 失效；EntitySourceBinding 变化时使引用实体的页面/API Build DAG 失效。纯代码实现错误进入 SmallTask 修复，不回到规划阶段。
 
-TechnicalPlan 确认前执行确定性一致性检查：UI 中声明的每个业务操作、显示项和跳转必须能映射到 ProductPlan；每个 ProductPlan `business` action 和组合中的每个 `business` step 必须有且只有一个 endpoint 实现；TechnicalPlan 不得为 `navigation`、`interface` 或 `external` 行为重复作产品/UI 决策；每个技术绑定必须引用已存在的 action/step、endpoint、Schema 和页面。启用权限时，`authorization-manifest.v1` 必须完整覆盖 RequirementSpec 规则、ProductPlan 目标和数据规则的实体/API 绑定；资源键、系统资源及 endpoint resource binding 均由确定性编译器生成。编译后的 `endpoint`、`navigation`、`local`、`external`、`sequence` 联合契约必须完整闭合，失败时不得进入工作台。
+TechnicalPlan 确认前执行确定性一致性检查：UI 中声明的每个业务操作、显示项和跳转必须能映射到 ProductPlan；每个 ProductPlan `business` action 和组合中的每个 `business` step 必须有且只有一个 endpoint 实现；TechnicalPlan 不得为 `navigation`、`interface` 或 `external` 行为重复作产品/UI 决策；每个技术绑定必须引用已存在的 action/step、endpoint、Schema 和页面。启用权限时，`authorization-manifest.v2` 必须完整覆盖 RequirementSpec 页面/操作规则及 ProductPlan 目标，确定性生成页面、顶层 action 和唯一系统资源，以及 Endpoint `operationResourceKeys` 的 ANY-OF 绑定；V1 出现数据权限字段必须拒绝确认。资源键、系统资源及 endpoint resource binding 均由确定性编译器生成。编译后的 `endpoint`、`navigation`、`local`、`external`、`sequence` 联合契约必须完整闭合，失败时不得进入工作台。
 
 ## 上下文预算
 

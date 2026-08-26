@@ -1435,6 +1435,30 @@ def validate_technical_plan_model_authentication(agent_plan: Any) -> list[str]:
     return errors
 
 
+def validate_technical_plan_model_authorization(agent_plan: Any) -> list[str]:
+    """在归一化前拒绝模型越权输出的权限资源或数据权限字段。"""
+
+    if not isinstance(agent_plan, dict):
+        return []
+    forbidden = {
+        "authorization_manifest",
+        "authorization_data_bindings",
+        "dataRules",
+        "dataPolicyBindings",
+        "dataRuleKey",
+        "policyKey",
+        "permission_model",
+        "permissionBindings",
+        "resourceKey",
+        "roles",
+    }
+    detected = sorted(set(agent_plan).intersection(forbidden))
+    return [
+        "TechnicalPlan 模型不得输出权限资源、角色授权或数据权限字段："
+        + "、".join(detected)
+    ] if detected else []
+
+
 def _attach_technical_entity_field_refs(
     contracts: list[dict[str, Any]],
     entities: list[dict[str, Any]],
@@ -1756,8 +1780,9 @@ def create_technical_plan(
     """生成只包含开发新增事实的 TechnicalPlan。"""
 
     authentication_errors = validate_technical_plan_model_authentication(agent_plan)
-    if authentication_errors:
-        raise ValueError("；".join(authentication_errors))
+    authorization_errors = validate_technical_plan_model_authorization(agent_plan)
+    if authentication_errors or authorization_errors:
+        raise ValueError("；".join([*authentication_errors, *authorization_errors]))
     effective_datasource_type: EnabledDatasourceType = (
         ensure_enabled_datasource_type(datasource_type)
         if datasource_type is not None
@@ -1813,7 +1838,6 @@ def create_technical_plan(
             product_plan,
             api_contracts,
             pages,
-            _agent_section(agent_plan, "authorization_data_bindings"),
         ),
     }
     repaired, _ = repair_cross_contract_schema_refs(plan)

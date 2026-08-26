@@ -667,6 +667,23 @@ export default function ApplicationPlanningQuestionPanel({
     )
   }
 
+  if (clarification.mode === 'authorization_capability_not_supported') {
+    // 第一阶段不允许以空问题卡片继续；明确展示能力边界并保持工作流停在需求阶段。
+    return (
+      <section className={cx('planning-question-panel')}>
+        <Alert
+          description={
+            clarification.message ||
+            '当前需求包含第一阶段尚不支持的数据权限。请修改需求后重新生成需求文档。'
+          }
+          message="数据权限暂不支持"
+          showIcon
+          type="warning"
+        />
+      </section>
+    )
+  }
+
   return (
     <section
       className={cx(

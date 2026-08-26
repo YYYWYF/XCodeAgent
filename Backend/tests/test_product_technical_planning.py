@@ -130,11 +130,13 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         product_plan = create_product_plan(requirement_spec)
         product_plan["user_roles"] = [{"id": "administrator"}]
         product_plan["pages"][0]["allowed_roles"] = ["administrator"]
+        product_plan["resourceKey"] = "forbidden"
 
         errors = validate_product_plan(product_plan, requirement_spec)
 
         self.assertTrue(any("不得包含技术规划字段" in error for error in errors))
         self.assertTrue(any("不得包含角色或授权字段" in error for error in errors))
+        self.assertTrue(any("resourceKey" in error for error in errors))
 
     def test_product_plan_maps_confirmed_page_and_operation_rules(self) -> None:
         """已确认权限候选只能映射到真实业务页面和 action，无法映射即拒绝确认。"""
@@ -200,9 +202,54 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertEqual(validate_product_plan(product_plan, requirement_spec), [])
         targets = product_plan["authorizationTargets"]
         self.assertEqual(targets["pageRules"][0]["pageId"], "people_list")
+        self.assertEqual(targets["operationRules"][0]["pageId"], "people_list")
         self.assertEqual(targets["operationRules"][0]["actionId"], "disable_person")
         product_plan["authorizationTargets"]["operationRules"] = []
         self.assertTrue(any("operationRules 必须与已确认" in error for error in validate_product_plan(product_plan, requirement_spec)))
+
+    def test_product_plan_rejects_incomplete_operation_target_and_resource_collision(self) -> None:
+        """操作规则必须闭合到页面，且预编译资源键不得与页面或系统资源冲突。"""
+
+        requirement_spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "pages": [
+                    {"pageId": "orders", "name": "订单", "path": "/orders", "module_id": "orders", "description": "管理订单。"},
+                    {"pageId": "orders_export", "name": "导出中心", "path": "/exports", "module_id": "orders", "description": "导出订单。"},
+                ],
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [{"name": "导出中心", "description": "仅授权成员访问。"}],
+                    "restrictedOperations": [{"name": "导出订单", "description": "仅授权成员导出。"}],
+                },
+            },
+        )
+        product_plan = create_product_plan(
+            requirement_spec,
+            agent_plan={
+                "pages": [
+                    {"pageId": "orders", "actions": [{"actionId": "export", "name": "导出订单", "description": "导出订单文件。", "requiresConfirmation": False, "behavior": {"type": "business", "expectedResult": "生成导出文件。"}}]},
+                    {"pageId": "orders_export", "actions": []},
+                ]
+            },
+        )
+
+        self.assertTrue(any("跨类型碰撞" in error for error in validate_product_plan(product_plan, requirement_spec)))
+        product_plan["authorizationTargets"]["operationRules"][0].pop("pageId")
+        self.assertTrue(any("映射字段必须为" in error for error in validate_product_plan(product_plan, requirement_spec)))
+
+    def test_product_plan_rejects_fixed_roles_page(self) -> None:
+        """固定权限管理页不属于业务 ProductPlan，也不能进入 UiDesign 输入。"""
+
+        requirement_spec = create_requirement_spec(
+            "创建应用",
+            agent_spec={
+                "pages": [{"pageId": "system_authorization_management", "name": "角色管理", "path": "/roles", "module_id": "system", "description": "管理权限。"}],
+            },
+        )
+        product_plan = create_product_plan(requirement_spec)
+
+        self.assertTrue(any("固定权限管理页面" in error for error in validate_product_plan(product_plan, requirement_spec)))
 
     def test_product_prompt_requires_exact_coverage_for_restricted_operations(self) -> None:
         """受限业务操作必须作为模型生成 ProductPlan action 的显式覆盖约束。"""
@@ -283,7 +330,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("do not include data_sources", _requirements_prompt("创建库存系统"))
         self.assertIn("Do not return assumptions, product risks", _requirements_prompt("创建库存系统"))
 
-    def test_technical_prompt_uses_current_five_part_contract(self) -> None:
+    def test_technical_prompt_uses_current_four_part_contract(self) -> None:
         """TechnicalPlan 提示词必须使用三段架构、实体引用和新分页字段。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
@@ -293,7 +340,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             None,
         )
 
-        self.assertIn("architecture, entities, api_contracts, pages, and authorization_data_bindings", prompt)
+        self.assertIn("architecture, entities, api_contracts, and pages", prompt)
+        self.assertNotIn("authorization_data_bindings", prompt)
         self.assertIn("entity_field_ref", prompt)
         self.assertIn("computed, aggregated, and transport properties may omit the mapping", prompt)
         self.assertIn("has exactly four same-level properties", prompt)
@@ -756,6 +804,26 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                         }
                     ]
                 },
+            )
+
+    def test_technical_plan_rejects_model_owned_authorization_fields_before_normalization(self) -> None:
+        """模型不得用隐藏字段绕过平台确定性权限编译。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        requirement_with_product = {
+            **requirement_spec,
+            "confirmed_product_plan": create_product_plan(requirement_spec),
+        }
+
+        with self.assertRaisesRegex(ValueError, "authorization_manifest"):
+            create_technical_plan(
+                requirement_with_product,
+                agent_plan={"authorization_manifest": {"enabled": True}},
+            )
+        with self.assertRaisesRegex(ValueError, "dataRules"):
+            create_technical_plan(
+                requirement_with_product,
+                agent_plan={"dataRules": []},
             )
         with self.assertRaisesRegex(ValueError, "模型输出 Endpoint people_api.list"):
             create_technical_plan(

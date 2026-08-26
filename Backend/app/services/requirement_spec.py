@@ -40,7 +40,6 @@ def _default_authorization_requirements(
         "enabled": bool(enabled),
         "restrictedPages": [],
         "restrictedOperations": [],
-        "dataRules": [],
     }
 
 
@@ -186,13 +185,7 @@ def _rule_signature(item: dict[str, Any], field_name: str) -> tuple[str, str]:
     """构造业务候选的稳定匹配键，用于保留已有 ruleId 而不采信模型 ID。"""
 
     name = str(item.get("name") or "").strip().casefold()
-    if field_name == "dataRules":
-        detail = "\n".join(
-            str(item.get(field) or "").strip().casefold()
-            for field in ("includes", "excludes")
-        )
-    else:
-        detail = str(item.get("description") or "").strip().casefold()
+    detail = str(item.get("description") or "").strip().casefold()
     return name, detail
 
 
@@ -243,7 +236,7 @@ def normalize_authorization_requirements(
     _ = pages, entities
     existing_rules = {
         field_name: _existing_rules(existing_value, field_name)
-        for field_name in ("restrictedPages", "restrictedOperations", "dataRules")
+        for field_name in ("restrictedPages", "restrictedOperations")
     }
 
     def normalize_rule(item: Any, field_name: str) -> dict[str, Any] | None:
@@ -255,9 +248,6 @@ def normalize_authorization_requirements(
             "name": str(item.get("name") or "").strip(),
             "description": str(item.get("description") or ""),
         }
-        if field_name == "dataRules":
-            signature_source["includes"] = str(item.get("includes") or "").strip()
-            signature_source["excludes"] = str(item.get("excludes") or "").strip()
         signature = _rule_signature(signature_source, field_name)
         existing_rule = existing_rules[field_name].get(signature, {})
         normalized = {
@@ -269,18 +259,7 @@ def normalize_authorization_requirements(
             or _string_list(existing_rule.get("defaultGrantedRoleIds")),
             "ruleId": str(existing_rule.get("ruleId") or "").strip() or str(uuid4()),
         }
-        if field_name != "dataRules":
-            normalized["rationale"] = str(item.get("rationale") or "")
-        else:
-            normalized["dataRuleKey"] = str(
-                existing_rule.get("dataRuleKey") or item.get("dataRuleKey") or ""
-            ).strip()
-            normalized["includes"] = signature_source["includes"] or str(
-                existing_rule.get("includes") or ""
-            ).strip()
-            normalized["excludes"] = signature_source["excludes"] or str(
-                existing_rule.get("excludes") or ""
-            ).strip()
+        normalized["rationale"] = str(item.get("rationale") or "")
         return normalized
 
     def raw_list(field_name: str) -> list[Any]:
@@ -302,13 +281,6 @@ def normalize_authorization_requirements(
             rule
             for item in raw_list("restrictedOperations")
             if (rule := normalize_rule(item, "restrictedOperations")) is not None
-        ]
-        if enabled
-        else [],
-        "dataRules": [
-            rule
-            for item in raw_list("dataRules")
-            if (rule := normalize_rule(item, "dataRules")) is not None
         ]
         if enabled
         else [],
@@ -336,9 +308,18 @@ def validate_authorization_requirements(
 
     enabled = authorization.get("enabled") is True
     errors: list[str] = []
+    unsupported_fields = {
+        field_name
+        for field_name in ("dataRules", "dataRuleKey", "includes", "excludes", "policyKey")
+        if field_name in authorization
+    }
+    if unsupported_fields:
+        errors.append(
+            "Authorization V1 不支持数据权限字段：" + "、".join(sorted(unsupported_fields))
+        )
 
     if not enabled:
-        for field in ("restrictedPages", "restrictedOperations", "dataRules"):
+        for field in ("restrictedPages", "restrictedOperations"):
             if authorization.get(field):
                 errors.append(f"权限未启用时 {field} 必须为空")
         if authorization.get("initialAdminRoleId"):
@@ -348,7 +329,6 @@ def validate_authorization_requirements(
     for field_name, label in (
         ("restrictedPages", "受控页面"),
         ("restrictedOperations", "受控操作"),
-        ("dataRules", "数据范围"),
     ):
         if not isinstance(authorization.get(field_name), list):
             errors.append(f"{label}候选必须是数组")
@@ -359,8 +339,9 @@ def validate_authorization_requirements(
     restricted_operations = (
         restricted_operations if isinstance(restricted_operations, list) else []
     )
-    data_rules = authorization.get("dataRules")
-    data_rules = data_rules if isinstance(data_rules, list) else []
+    capability_issues = value.get("authorization_capability_issues") if isinstance(value, dict) else None
+    if isinstance(capability_issues, list) and capability_issues:
+        errors.append("当前需求包含不支持的数据权限：DATA_AUTHORIZATION_NOT_SUPPORTED")
     if "unauthorizedBehavior" in authorization:
         errors.append("RequirementSpec 不支持 unauthorizedBehavior")
 
@@ -400,7 +381,6 @@ def validate_authorization_requirements(
         errors.append("initialAdminRoleId 必须引用唯一初始系统管理员角色")
 
     rule_ids: set[str] = set()
-    data_rule_keys: set[str] = set()
     for item in restricted_pages:
         if not isinstance(item, dict):
             errors.append("受控页面规则必须是对象")
@@ -425,38 +405,6 @@ def validate_authorization_requirements(
             errors.append(f"受控操作 {operation_name or '未命名'} 缺少业务描述")
         _validate_authorization_rule_metadata(
             item, operation_name or "未命名", rule_ids, role_ids, errors
-        )
-
-    for item in data_rules:
-        if not isinstance(item, dict):
-            errors.append("数据范围规则必须是对象")
-            continue
-        data_name = str(item.get("name") or "").strip()
-        if not data_name:
-            errors.append("数据范围缺少业务对象名称")
-        if not str(item.get("includes") or "").strip():
-            errors.append(f"数据范围 {data_name or '未命名'} 缺少 includes 业务边界")
-        if not str(item.get("excludes") or "").strip():
-            errors.append(f"数据范围 {data_name or '未命名'} 缺少 excludes 业务边界")
-        technical_text = " ".join(
-            str(item.get(field_name) or "")
-            for field_name in ("name", "description", "includes", "excludes")
-        )
-        if re.search(
-            r"(?:resourcekey|policykey|\bsql\b|\bselect\b|\bwhere\b|\bjoin\b|字段|列名|数据库)",
-            technical_text,
-            flags=re.IGNORECASE,
-        ):
-            errors.append(f"数据范围 {data_name or '未命名'} 必须使用产品语言，不能包含技术字段或 SQL")
-        data_rule_key = str(item.get("dataRuleKey") or "").strip()
-        if not _is_lower_snake_case(data_rule_key):
-            errors.append(f"数据范围 {data_name or '未命名'} 的 dataRuleKey 必须为 lower_snake_case")
-        elif data_rule_key in data_rule_keys:
-            errors.append(f"数据范围 {data_name or '未命名'} 的 dataRuleKey 重复")
-        else:
-            data_rule_keys.add(data_rule_key)
-        _validate_authorization_rule_metadata(
-            item, data_name or "未命名", rule_ids, role_ids, errors
         )
 
     return _dedupe(errors)
@@ -1113,6 +1061,37 @@ def create_requirement_spec(
         pages=spec["pages"],
         entities=spec["entities"],
     )
+    # 第一阶段不能把数据范围语义悄然丢弃：模型或编辑内容一旦提出该能力，
+    # 必须以明确的能力缺口阻断 RequirementSpec 确认，等待用户改写需求。
+    data_authorization_issues = []
+    if (
+        spec["authorization_requirements"].get("enabled") is True
+        and isinstance(authorization_source, dict)
+    ):
+        raw_data_rules = authorization_source.get("dataRules")
+        if raw_data_rules:
+            data_authorization_issues.append(
+                {
+                    "code": "DATA_AUTHORIZATION_NOT_SUPPORTED",
+                    "capability": "data_authorization",
+                    "description": "需求中包含数据范围或按归属关系的数据授权要求。",
+                    "sourceRefs": [],
+                }
+            )
+    existing_capability_issues = (
+        existing_spec.get("authorization_capability_issues")
+        if isinstance(existing_spec, dict)
+        else None
+    )
+    if isinstance(agent_authorization, dict):
+        # 新一轮模型输出是当前事实；未再提出数据权限即视为已经移除该需求。
+        spec.pop("authorization_capability_issues", None)
+    elif isinstance(existing_capability_issues, list):
+        data_authorization_issues = [
+            item for item in existing_capability_issues if isinstance(item, dict)
+        ]
+    if data_authorization_issues:
+        spec["authorization_capability_issues"] = data_authorization_issues
     if spec["authorization_requirements"].get("enabled") is not True:
         # 关闭权限时不保留任何系统管理员角色种子，避免配置与需求事实冲突。
         for role in spec["user_roles"]:

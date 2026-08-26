@@ -724,25 +724,47 @@ def _authorization_manifest_markdown(plan: dict[str, Any]) -> str:
     if not isinstance(manifest, dict) or manifest.get("enabled") is not True:
         return "- 未启用运行态权限管理。"
     bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
+    resources = _dict_items(manifest.get("resources"))
     resource_lines = [
-        f"  - `{item.get('resourceKey', '')}`：{item.get('origin', '')}/{item.get('type', '')}；来源规则："
-        f"{', '.join(_text_items(item.get('sourceRuleIds'))) or '系统固定'}"
-        for item in _dict_items(manifest.get("resources"))
+        f"| {item.get('name', '')} | `{item.get('resourceKey', '')}` | {item.get('type', '')} | {item.get('targetResourceRef', '')} | {', '.join(_text_items(item.get('sourceRuleIds'))) or '系统固定'} |"
+        for item in resources
+    ]
+    action_lines = [
+        f"| `{item.get('pageId', '')}` | `{item.get('actionId', '')}` | `{item.get('resourceKey', '')}` |"
+        for item in _dict_items(bindings.get("actions"))
     ]
     endpoint_lines = [
-        f"  - `{item.get('endpointId', '')}`：操作资源 {', '.join(_text_items(item.get('requiredOperationResourceKeys'))) or '-'}；"
-        f"数据策略 {', '.join(_text_items(item.get('dataPolicyKeys'))) or '-'}"
+        f"| `{item.get('endpointId', '')}` | {', '.join(f'`{key}`' for key in _text_items(item.get('operationResourceKeys'))) or '-'} | ANY-OF |"
         for item in _dict_items(bindings.get("endpoints"))
+    ]
+    default_authorization = manifest.get("defaultRoleAuthorization") if isinstance(manifest.get("defaultRoleAuthorization"), dict) else {}
+    grant_lines = [
+        f"| `{item.get('roleSeedKey', '')}` | {', '.join(f'`{key}`' for key in _text_items(item.get('resourceKeys'))) or '-'} |"
+        for item in _dict_items(default_authorization.get("roleResourceGrants"))
     ]
     return "\n".join([
         f"- Manifest：`{manifest.get('schema_version', '')}`",
         f"- 指纹：`{manifest.get('fingerprint', '')}`",
         "",
-        "资源目录：",
-        *(resource_lines or ["  - 无"]),
+        "页面、操作与系统资源：",
+        "| 名称 | 稳定 key | 类型 | 目标 | 来源规则 |",
+        "| --- | --- | --- | --- | --- |",
+        *(resource_lines or ["| 无 | - | - | - | - |"]),
         "",
-        "接口绑定：",
-        *(endpoint_lines or ["  - 无"]),
+        "顶层 action 资源：",
+        "| 页面 | action | 稳定 key |",
+        "| --- | --- | --- |",
+        *(action_lines or ["| 无 | - | - |"]),
+        "",
+        "Endpoint 操作资源绑定：",
+        "| Endpoint | 操作资源 | 裁决 |",
+        "| --- | --- | --- |",
+        *(endpoint_lines or ["| 无 | - | - |"]),
+        "",
+        "默认角色授权：",
+        "| 角色 seed key | 默认资源 |",
+        "| --- | --- |",
+        *(grant_lines or ["| 无 | - |"]),
     ])
 
 

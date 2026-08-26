@@ -148,7 +148,6 @@ def _technical_planning_prompt(
                 },
             }
         ],
-        "authorization_data_bindings": [],
     }
     product_goal_context = {
         "app": {
@@ -161,7 +160,6 @@ def _technical_planning_prompt(
     }
     authorization_context = {
         "enabled": (requirement_spec.get("authorization_requirements") or {}).get("enabled") is True,
-        "dataRules": (requirement_spec.get("authorization_requirements") or {}).get("dataRules", []),
         "authorizationTargets": product_plan.get("authorizationTargets", {}),
     }
     flow_context = {"business_flows": product_plan.get("business_flows", [])}
@@ -194,7 +192,7 @@ def _technical_planning_prompt(
     )
     return (
         "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
-        "The object has exactly five sections: architecture, entities, api_contracts, pages, and authorization_data_bindings.\n\n"
+        "The object has exactly four sections: architecture, entities, api_contracts, and pages.\n\n"
         "Field definitions:\n"
         "1. architecture is a technical summary. frontend describes the client form and communication style; "
         "backend describes the Java8/Springboot service boundary; data describes MySQL8 persistence and Redis caching.\n"
@@ -229,7 +227,7 @@ def _technical_planning_prompt(
         "uses {actionId, endpointId}; a business sequence uses {actionId, stepBindings:[{stepId, endpointId}]}. "
         "Every selected endpointId exists in api_contracts and also appears in that page's endpoint_dependencies. "
         "The page set covers every upstream ProductPlan pageId.\n"
-        "5. authorization_data_bindings is empty when authorization is disabled. When enabled, it has exactly one item per dataRules ruleId: {ruleId, entityIds, endpointIds}. entityIds and endpointIds are non-empty; every endpointId exists in api_contracts and belongs to an API contract covering at least one entityId. Do not emit resourceKey, policyKey, roles, page bindings, action bindings, or any authorization manifest field.\n\n"
+        "Do not emit authorization_manifest, resourceKey, roles, permission bindings, dataRules, policyKey, data-policy bindings, SQL, or executable authorization rules. The platform deterministically compiles all V1 page/action/system resources and Endpoint ANY-OF bindings after your output passes validation.\n\n"
         "Complete result example:\n"
         f"{json.dumps(response_example, ensure_ascii=False, indent=2)}\n\n"
         "Dynamic context sections:\n"
@@ -237,7 +235,7 @@ def _technical_planning_prompt(
         f"{json.dumps(entity_context, ensure_ascii=False)}\n\n"
         "- Product goal context: application purpose and product-level acceptance outcomes. Use it to shape the architecture and endpoint scope.\n"
         f"{json.dumps(product_goal_context, ensure_ascii=False)}\n\n"
-        "- Authorization context: confirmed data rules and ProductPlan target identities. Select only entityIds and endpointIds for each data rule; system compiles all resources and bindings.\n"
+        "- Authorization context: confirmed ProductPlan target identities. Do not generate any authorization field; the system compiles all resources and bindings.\n"
         f"{json.dumps(authorization_context, ensure_ascii=False)}\n\n"
         "- Business-flow context: confirmed business flows. Use it to preserve cross-page and multi-step behavior.\n"
         f"{json.dumps(flow_context, ensure_ascii=False)}\n\n"

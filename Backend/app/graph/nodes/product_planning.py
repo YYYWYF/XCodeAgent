@@ -266,7 +266,7 @@ def _operation_coverage_clarification(
             options = [
                 {
                     "label": f"{candidate['pageName']} · {candidate['actionName']}",
-                    "value": f"action:{candidate['actionId']}",
+                    "value": f"action:{candidate['pageId']}:{candidate['actionId']}",
                     "description": "将该权限规则绑定到此现有产品操作。",
                 }
                 for candidate in candidates
@@ -322,7 +322,7 @@ def _resolve_operation_coverage(
 ) -> dict[str, Any]:
     """按用户选择补齐缺失 action 或确定重复 action 的唯一权限绑定。"""
 
-    selected_actions: dict[str, str] = {}
+    selected_actions: dict[str, tuple[str, str]] = {}
     plan = create_product_plan(
         requirement_spec,
         agent_plan=candidate,
@@ -356,7 +356,11 @@ def _resolve_operation_coverage(
                 }
             )
         elif selection.startswith("action:"):
-            selected_actions[rule_id] = selection.removeprefix("action:").strip()
+            selected_value = selection.removeprefix("action:").strip()
+            page_id, separator, action_id = selected_value.partition(":")
+            if not separator or not page_id or not action_id:
+                raise ValueError("受限操作归属选择缺少 pageId/actionId，请刷新后重试。")
+            selected_actions[rule_id] = (page_id, action_id)
         else:
             raise ValueError("受限操作归属选择无效，请刷新后重试。")
 
@@ -364,8 +368,8 @@ def _resolve_operation_coverage(
     plan = create_product_plan(requirement_spec, agent_plan=plan, existing_plan=plan)
     operation_rules = plan["authorizationTargets"]["operationRules"]
     operation_rules.extend(
-        {"ruleId": rule_id, "actionId": action_id}
-        for rule_id, action_id in selected_actions.items()
+        {"ruleId": rule_id, "pageId": page_id, "actionId": action_id}
+        for rule_id, (page_id, action_id) in selected_actions.items()
     )
     return plan
 

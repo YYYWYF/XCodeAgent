@@ -46,6 +46,10 @@ def persist_authorization_configuration(
     authorization = current.get("authorization")
     if not isinstance(auth, dict) or not isinstance(authorization, dict):
         raise ApplicationAuthorizationConfigError("application.json 缺少有效的认证或权限配置。")
+    if set(authorization) != {"enabled", "initialAdministratorSubjects"}:
+        raise ApplicationAuthorizationConfigError(
+            "application.json authorization 必须只包含 enabled 和 initialAdministratorSubjects。"
+        )
 
     subjects: list[str] = []
     seen: set[str] = set()

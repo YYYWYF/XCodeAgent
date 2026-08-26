@@ -11,7 +11,7 @@ type Props = {
   spec: Record<string, unknown>
 }
 
-type AuthorizationListField = 'restrictedPages' | 'restrictedOperations' | 'dataRules'
+type AuthorizationListField = 'restrictedPages' | 'restrictedOperations'
 
 // 将未知值安全收窄为权限编辑器可读的对象。
 function asRecord(value: unknown): Record<string, unknown> {
@@ -69,7 +69,10 @@ export default function RequirementAuthorizationEditor({ onChange, spec }: Props
   const enabled = authorization.enabled === true
   const roles = recordList(spec.user_roles)
   const roleOptions = roles
-    .map((role) => ({ label: textValue(role.name) || textValue(role.id), value: textValue(role.id) }))
+    .map((role) => ({
+      label: textValue(role.name) || textValue(role.id),
+      value: textValue(role.id)
+    }))
     .filter((option) => option.value)
 
   // 修改权限顶层事实并保留未展示的内部字段。
@@ -175,17 +178,6 @@ export default function RequirementAuthorizationEditor({ onChange, spec }: Props
       ])
       return
     }
-    replaceList(field, [
-      ...recordList(authorization[field]),
-      {
-        name: '新数据范围',
-        description: '',
-        includes: '',
-        excludes: '',
-        defaultGrantedRoleIds: [],
-        sourceRefs: ['RequirementSpec 确认修改']
-      }
-    ])
   }
 
   return (
@@ -197,7 +189,7 @@ export default function RequirementAuthorizationEditor({ onChange, spec }: Props
         <Title level={5}>权限需求</Title>
       </header>
       <Text type="secondary">
-        只保留用户需求明确提及的业务页面、操作和数据范围；未提及的候选保持为空，不进行 RBAC
+        只保留用户需求明确提及的业务页面和操作；未提及的候选保持为空，不进行
         资源控制。页面和操作入口对无权限成员固定隐藏，直接访问固定返回 403。
       </Text>
       <div className={cx('requirement-editor-field')}>
@@ -212,7 +204,10 @@ export default function RequirementAuthorizationEditor({ onChange, spec }: Props
               onChange={updateInitialAdminRole}
               options={[
                 ...roleOptions,
-                { label: '新建独立系统管理员', value: '__create_system_administrator__' }
+                {
+                  label: '新建独立系统管理员',
+                  value: '__create_system_administrator__'
+                }
               ]}
               value={textValue(authorization.initialAdminRoleId)}
             />
@@ -268,7 +263,9 @@ export default function RequirementAuthorizationEditor({ onChange, spec }: Props
                         updateItem('restrictedPages', index, 'defaultGrantedRoleIds', value)
                       }
                       options={roleOptions}
-                      value={Array.isArray(item.defaultGrantedRoleIds) ? item.defaultGrantedRoleIds : []}
+                      value={
+                        Array.isArray(item.defaultGrantedRoleIds) ? item.defaultGrantedRoleIds : []
+                      }
                     />
                   </EditorField>
                 </AuthorizationItem>
@@ -324,78 +321,15 @@ export default function RequirementAuthorizationEditor({ onChange, spec }: Props
                         updateItem('restrictedOperations', index, 'defaultGrantedRoleIds', value)
                       }
                       options={roleOptions}
-                      value={Array.isArray(item.defaultGrantedRoleIds) ? item.defaultGrantedRoleIds : []}
+                      value={
+                        Array.isArray(item.defaultGrantedRoleIds) ? item.defaultGrantedRoleIds : []
+                      }
                     />
                   </EditorField>
                 </AuthorizationItem>
               ))}
             </section>
           </div>
-          <section className={cx('requirement-editor-section')}>
-            <header>
-              <Title level={5}>数据范围</Title>
-              <Button
-                icon={<PlusOutlined />}
-                onClick={() => addItem('dataRules')}
-                size="small"
-                type="text"
-              >
-                新增
-              </Button>
-            </header>
-            {recordList(authorization.dataRules).map((item, index) => (
-              <AuthorizationItem
-                key={`data-${index}`}
-                onRemove={() => removeItem('dataRules', index)}
-              >
-                <EditorField label="业务对象名称">
-                  <Input
-                    onChange={(event) =>
-                      updateItem('dataRules', index, 'name', event.target.value)
-                    }
-                    value={textValue(item.name)}
-                  />
-                </EditorField>
-                <EditorField label="业务对象说明">
-                  <TextArea
-                    autoSize={{ minRows: 2, maxRows: 4 }}
-                    onChange={(event) =>
-                      updateItem('dataRules', index, 'description', event.target.value)
-                    }
-                    value={textValue(item.description)}
-                  />
-                </EditorField>
-                <EditorField label="包含的数据">
-                  <TextArea
-                    autoSize={{ minRows: 2, maxRows: 4 }}
-                    onChange={(event) =>
-                      updateItem('dataRules', index, 'includes', event.target.value)
-                    }
-                    value={textValue(item.includes)}
-                  />
-                </EditorField>
-                <EditorField label="不包含的数据">
-                  <TextArea
-                    autoSize={{ minRows: 2, maxRows: 4 }}
-                    onChange={(event) =>
-                      updateItem('dataRules', index, 'excludes', event.target.value)
-                    }
-                    value={textValue(item.excludes)}
-                  />
-                </EditorField>
-                <EditorField label="首次默认授权角色">
-                  <Select
-                    mode="multiple"
-                    onChange={(value) =>
-                      updateItem('dataRules', index, 'defaultGrantedRoleIds', value)
-                    }
-                    options={roleOptions}
-                    value={Array.isArray(item.defaultGrantedRoleIds) ? item.defaultGrantedRoleIds : []}
-                  />
-                </EditorField>
-              </AuthorizationItem>
-            ))}
-          </section>
         </>
       ) : (
         <Text type="secondary">不涉及应用级资源授权；候选规则会保持为空。</Text>

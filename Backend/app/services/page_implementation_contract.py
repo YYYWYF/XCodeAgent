@@ -258,19 +258,19 @@ def _permission_bindings(technical_plan: dict[str, Any], page_id: str, action_id
         return []
     bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
     result = [
-        {"targetType": "page", "targetId": page_id, "resourceKey": str(item.get("resourceKey") or "")}
+        {"targetType": "page", "pageId": page_id, "resourceKey": str(item.get("resourceKey") or "")}
         for item in _dict_items(bindings.get("pages"))
         if str(item.get("pageId") or "") == page_id and str(item.get("resourceKey") or "")
     ]
     action_keys = {
-        str(item.get("actionId") or ""): str(item.get("resourceKey") or "")
+        (str(item.get("pageId") or ""), str(item.get("actionId") or "")): str(item.get("resourceKey") or "")
         for item in _dict_items(bindings.get("actions"))
-        if str(item.get("actionId") or "") and str(item.get("resourceKey") or "")
+        if str(item.get("pageId") or "") and str(item.get("actionId") or "") and str(item.get("resourceKey") or "")
     }
     result.extend(
-        {"targetType": "action", "targetId": action_id, "resourceKey": action_keys[action_id]}
+        {"targetType": "action", "pageId": page_id, "actionId": action_id, "resourceKey": action_keys[(page_id, action_id)]}
         for action_id in action_ids
-        if action_id in action_keys
+        if (page_id, action_id) in action_keys
     )
     return result
 

@@ -53,16 +53,18 @@ def _authorization_fact_extraction_prompt(
         "user_roles is an array of every explicitly stated business participant. Each item must contain exactly "
         "id, name, description. id must be lower_snake_case; description must state the role's explicit business "
         "responsibilities. Return [] only if the request truly identifies no business participant.\n"
-        "authorization_requirements must contain exactly restrictedPages, restrictedOperations, dataRules. "
+        "authorization_requirements must contain exactly restrictedPages, restrictedOperations, dataAuthorizationIssues. "
         "Return only controls explicitly stated in the request; empty arrays are valid. Every restrictedPages and "
         "restrictedOperations item must contain exactly name, description, rationale, sourceRefs, defaultGrantedRoleIds. "
         "description states who can perform or access the business target; rationale states the business reason; "
         "sourceRefs is a non-empty string array citing the original request; defaultGrantedRoleIds is an array "
         "referencing user_roles ids. Return [] when the request does not explicitly state the default role grant; "
-        "never guess a role. Every dataRules item must contain exactly name, description, dataRuleKey, "
-        "includes, excludes, sourceRefs, defaultGrantedRoleIds. dataRuleKey must be lower_snake_case; includes and "
-        "excludes must state the precise business boundary. Never emit empty objects, placeholders, allowedRoles, "
-        "resource keys, technical ids, routes, API fields, SQL, or initial-system-administrator fields.\n"
+        "never guess a role. dataAuthorizationIssues contains only explicit data-authorization requests that V1 cannot "
+        "implement. Each item must contain exactly description and sourceRefs. Add an issue when different members, roles, "
+        "organizations, projects, customers, or other relations determine which records can be read, modified, or created. "
+        "Do not add an issue for a fixed business query such as 'my applications' unless it is an authorization boundary. "
+        "Never emit empty objects, placeholders, allowedRoles, resource keys, technical ids, routes, API fields, SQL, "
+        "or initial-system-administrator fields.\n"
         "Do not ask the user to repeat facts already stated. If a fact is explicit, express it completely using the "
         "required fields.\n"
         f"Existing business roles, if any:\n{json.dumps(existing_roles, ensure_ascii=False)}\n\n"
@@ -109,7 +111,7 @@ def _validate_authorization_fact_output(value: Any) -> list[str]:
     authorization = value.get("authorization_requirements")
     if not isinstance(authorization, dict):
         return [*errors, "权限事实模型输出.authorization_requirements 必须是对象。"]
-    expected_authorization = {"restrictedPages", "restrictedOperations", "dataRules"}
+    expected_authorization = {"restrictedPages", "restrictedOperations", "dataAuthorizationIssues"}
     if set(authorization) != expected_authorization:
         errors.append("权限事实模型输出.authorization_requirements 字段不符合契约。")
     for field_name in ("restrictedPages", "restrictedOperations"):
@@ -129,25 +131,18 @@ def _validate_authorization_fact_output(value: Any) -> list[str]:
             grants = _string_list(item.get("defaultGrantedRoleIds"))
             if any(role_id not in role_ids for role_id in grants):
                 errors.append(f"权限事实模型输出.{field_name}[{index}] 默认角色授权无效。")
-    data_rules = authorization.get("dataRules")
-    if not isinstance(data_rules, list):
-        return [*errors, "权限事实模型输出.dataRules 必须是数组。"]
-    for index, item in enumerate(data_rules):
-        expected = {
-            "name", "description", "dataRuleKey", "includes", "excludes", "sourceRefs", "defaultGrantedRoleIds"
-        }
+    data_issues = authorization.get("dataAuthorizationIssues")
+    if not isinstance(data_issues, list):
+        return [*errors, "权限事实模型输出.dataAuthorizationIssues 必须是数组。"]
+    for index, item in enumerate(data_issues):
+        expected = {"description", "sourceRefs"}
         if not isinstance(item, dict) or set(item) != expected:
-            errors.append(f"权限事实模型输出.dataRules[{index}] 字段不符合契约。")
+            errors.append(f"权限事实模型输出.dataAuthorizationIssues[{index}] 字段不符合契约。")
             continue
-        if any(not str(item.get(key) or "").strip() for key in ("name", "description", "includes", "excludes")):
-            errors.append(f"权限事实模型输出.dataRules[{index}] 缺少业务边界。")
-        if not _is_lower_snake_case(item.get("dataRuleKey")):
-            errors.append(f"权限事实模型输出.dataRules[{index}].dataRuleKey 必须为 lower_snake_case。")
+        if not str(item.get("description") or "").strip():
+            errors.append(f"权限事实模型输出.dataAuthorizationIssues[{index}] 缺少业务说明。")
         if not _string_list(item.get("sourceRefs")):
-            errors.append(f"权限事实模型输出.dataRules[{index}] 缺少 sourceRefs。")
-        grants = _string_list(item.get("defaultGrantedRoleIds"))
-        if any(role_id not in role_ids for role_id in grants):
-            errors.append(f"权限事实模型输出.dataRules[{index}] 默认角色授权无效。")
+            errors.append(f"权限事实模型输出.dataAuthorizationIssues[{index}] 缺少 sourceRefs。")
     return errors
 
 
@@ -188,11 +183,25 @@ def _merge_authorization_facts(
     authorization = deepcopy(authorization) if isinstance(authorization, dict) else {}
     fact_authorization = facts.get("authorization_requirements")
     fact_authorization = fact_authorization if isinstance(fact_authorization, dict) else {}
-    for field_name in ("restrictedPages", "restrictedOperations", "dataRules"):
+    for field_name in ("restrictedPages", "restrictedOperations"):
         fact_items = fact_authorization.get(field_name)
         if isinstance(fact_items, list):
             # 权限候选以独立事实提取为唯一来源，空数组也表示没有明确提出该维度。
             authorization[field_name] = fact_items
+    data_issues = fact_authorization.get("dataAuthorizationIssues")
+    if isinstance(data_issues, list):
+        merged["authorization_capability_issues"] = [
+            {
+                "code": "DATA_AUTHORIZATION_NOT_SUPPORTED",
+                "capability": "data_authorization",
+                "description": str(item.get("description") or "").strip(),
+                "sourceRefs": _string_list(item.get("sourceRefs")),
+            }
+            for item in data_issues
+            if isinstance(item, dict)
+            and str(item.get("description") or "").strip()
+            and _string_list(item.get("sourceRefs"))
+        ]
     if authorization:
         merged["authorization_requirements"] = authorization
     return merged
@@ -293,31 +302,30 @@ def _requirements_prompt(
         "页面清单, 实体清单, 业务信息需求, 业务流程.\n"
         "When the request explicitly says that application-level authorization is enabled, also produce an "
         "authorization_requirements object. Extract only permission controls explicitly stated in the user's "
-        "business description or clarification answers into restrictedPages, restrictedOperations, and "
-        "dataRules. Empty candidate arrays are valid and mean that the user did not request RBAC control for "
-        "that business dimension. Never infer a page, operation, or data-scope restriction merely because the "
+        "business description or clarification answers into restrictedPages and restrictedOperations. Empty candidate "
+        "arrays are valid and mean that the user did not request RBAC control for that business dimension. Never infer "
+        "a page or operation restriction merely because the "
         "application authorization switch is enabled. The generated seed lines for authorization enablement and "
         "initial administrators are configuration facts only; they "
         "are not evidence that any business page, operation, or entity must be permission-controlled. Ask only "
         "when a permission control the user actually "
         "mentioned has ambiguous business meaning, such as which page/action it refers to or what an explicitly "
-        "requested data scope means. Do not ask the user to invent role ids, resource keys, policy keys, database "
+        "requested target means. Do not ask the user to invent role ids, resource keys, policy keys, database "
         "fields, SQL, or technical permission names.\n"
         "Permission clarification belongs to this early requirements conversation, before the RequirementSpec "
         "confirmation card. Ask one focused business question at a time: first the business pages/objects whose "
-        "access is controlled, then the controlled business operations, then the data visibility scope. Only ask "
+        "access is controlled, then the controlled business operations. Only ask "
         "a category when the user explicitly mentioned that kind of control; otherwise keep its candidate array "
         "empty. If the user mentioned a category but its meaning is incomplete, use ask_user instead of returning "
         "placeholder candidates with empty names or descriptions. A user answer of “无” means that category has "
         "no RBAC control and must remain empty.\n"
         "Authentication and RBAC resource control are separate: a login requirement does not itself create a "
-        "restricted page, operation, or data rule. RequirementSpec authorization candidates are business-only: "
+        "restricted page or operation. RequirementSpec authorization candidates are business-only: "
         "restrictedPages records the business page/object name and why access is restricted; "
-        "restrictedOperations records the business operation name and reason; dataRules records the business "
-        "object and its precise includes/excludes boundary. Do not emit or request pageId, entityId, operationId, "
-        "route, resourceKey, policyKey, database fields, or SQL for these candidates. Those bindings and resource "
+        "restrictedOperations records the business operation name and reason. Do not emit or request pageId, entityId, operationId, "
+        "route, resourceKey, policyKey, dataRuleKey, database fields, or SQL for these candidates. Those bindings and resource "
         "identifiers are assigned after this document is confirmed.\n"
-        "Each permission candidate must include sourceRefs containing the relevant original business description or clarification answer and non-empty defaultGrantedRoleIds referencing user_roles[].id. If the user explicitly requests a controlled target but does not state which role receives it by default, call ask_user to select the applicable business roles; never guess or leave it empty. Do not emit unauthorizedBehavior, unauthorizedPage, unauthorizedOperation, unauthenticated, or any other configurable unauthorized-display field: page/menu and operation entries are fixed to hide for users without the matching resource, while direct page and endpoint access is rejected with 403. Each dataRules item must include a semantic lower_snake_case dataRuleKey plus human-readable includes and excludes; dataRuleKey is proposed by the model but is not shown as a user-editable technical binding.\n"
+        "Each permission candidate must include sourceRefs containing the relevant original business description or clarification answer and non-empty defaultGrantedRoleIds referencing user_roles[].id. If the user explicitly requests a controlled target but does not state which role receives it by default, call ask_user to select the applicable business roles; never guess or leave it empty. Do not emit unauthorizedBehavior, unauthorizedPage, unauthorizedOperation, unauthenticated, or any other configurable unauthorized-display field: page/menu and operation entries are fixed to hide for users without the matching resource, while direct page and endpoint access is rejected with 403. Data authorization is not supported in this phase: report it only through the separate authorization fact extraction capability issue, never as RequirementSpec fields.\n"
         "First identify every business participant explicitly stated in the request and put it in user_roles; this includes roles such as 管理员、审批人、运营人员、员工 when the user describes them. Do not replace an explicitly stated role with a generic business_user. RequirementSpec first records business-role facts, never runtime role-resource/member relations. Every user_roles item must have a stable lower_snake_case id, name, description, isSystemRole=false, and isInitialAdminRole=false. Do not select an initial system administrator and do not call ask_user for that selection: after business roles are recorded, the workflow presents the choice deterministically. Never decide system-administrator responsibility from a role name. The flags are metadata only and do not grant implicit permissions.\n"
         "When the configuration fact says application-level authorization is disabled but the original business description explicitly requests a permission control, return a top-level internal authorization_config_conflict object with requested=true and short evidence. Do not copy this marker into the RequirementSpec and do not silently enable authorization_requirements. Omit the marker when no business permission control was requested.\n"
         "If authorization is not enabled, return authorization_requirements.enabled=false and empty candidate "
@@ -351,7 +359,7 @@ def _requirements_prompt(
         "The JSON must represent the complete current requirement, not a patch. When authorization is enabled, "
         "the complete JSON must also contain authorization_requirements with the current contract fields; do not "
         "include authorization candidate ruleId, page/entity bindings, role-resource/member assignments, "
-        "resourceKey, or policyKey. dataRuleKey and user_roles role ids are the only stable planning keys "
+        "resourceKey, policyKey, dataRuleKey, includes, or excludes. user_roles role ids are the only stable planning keys "
         "allowed in this RequirementSpec contract.\n\n"
         f"{revision_context}Latest user request or feedback:\n{request}"
     )
@@ -681,7 +689,7 @@ def _validate_complete_requirement_spec(
     if authorization_required and not isinstance(authorization, dict):
         missing_fields.append("authorization_requirements")
     elif isinstance(authorization, dict) and authorization.get("enabled") is True:
-        for field_name in ("restrictedPages", "restrictedOperations", "dataRules"):
+        for field_name in ("restrictedPages", "restrictedOperations"):
             if not isinstance(authorization.get(field_name), list):
                 missing_fields.append(f"authorization_requirements.{field_name}")
     if missing_fields:

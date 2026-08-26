@@ -74,6 +74,20 @@ class ApplicationAuthorizationConfigTests(unittest.TestCase):
                     initial_administrator_subjects=["current-user"],
                 )
 
+    def test_persist_rejects_legacy_authorization_fields(self) -> None:
+        """当前应用配置不得继续写入旧的授权提供方字段。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            target = _write_current_config(workspace)
+            content = json.loads(target.read_text(encoding="utf-8"))
+            content["authorization"]["providerMode"] = "external"
+            target.write_text(json.dumps(content, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(ApplicationAuthorizationConfigError, "必须只包含"):
+                persist_authorization_configuration(
+                    workspace,
+                    initial_administrator_subjects=["ops@example.com"],
+                )
+
     def test_model_conflict_marker_only_applies_to_closed_authorization(self) -> None:
         """模型内部冲突标记不能在权限已开启的规划请求中误触发。"""
 

@@ -112,13 +112,6 @@ def _authorization_markdown(spec: dict[str, Any]) -> str:
         for item in authorization_items("restrictedOperations")
         if isinstance(item, dict)
     )
-    data_rules = "\n".join(
-        f"- {item.get('name') or '数据范围'}：包含 {item.get('includes', '') or '待补充'}；"
-        f"不包含 {item.get('excludes', '') or '待补充'}；默认授权：{granted_roles(item)}"
-        f" <!-- ruleId:{item.get('ruleId', '')} dataRuleKey:{item.get('dataRuleKey', '')} -->"
-        for item in authorization_items("dataRules")
-        if isinstance(item, dict)
-    )
     fixed_page = (
         "- 模板固定页面 `/roles`（`system_authorization_management`）：提供角色、成员与资源关系的运行态管理；"
         "不属于业务页面清单，不进入 ProductPlan 或 UiDesign。"
@@ -138,8 +131,9 @@ def _authorization_markdown(spec: dict[str, Any]) -> str:
             "### 受控操作",
             operations or "- 用户需求未提出操作级权限控制。",
             "",
-            "### 数据范围",
-            data_rules or "- 用户需求未提出数据范围权限控制。",
+            "### 数据权限边界",
+            "- 第一阶段不实现数据范围授权。明确的数据授权需求会以 DATA_AUTHORIZATION_NOT_SUPPORTED 阻止需求文档确认；"
+            "固定业务查询不因此自动成为数据权限。",
             "",
             "### 系统固定页面",
             fixed_page,

@@ -589,6 +589,16 @@ def _requirement_spec_draft_payload(
 
     payload = clear_clarification(spec)
     payload["mode"] = "requirement_document_draft"
+    # 草稿已生成不等于用户已确认；通过 AG-UI 的显式确认问题保持门禁状态。
+    payload["status"] = "requires_user_input"
+    payload["questions"] = [
+        {
+            "id": "requirement_spec_confirmation",
+            "header": "需求文档确认",
+            "question": "需求文档草稿已生成。请确认后继续页面与操作规划，或选择修改。",
+            "type": "yesno",
+        }
+    ]
     payload["message"] = "需求事实已完成校验，正在生成同一阶段的页面与操作规划。"
     if clarification_limit_reached:
         payload["clarification_limit_reached"] = True
@@ -603,6 +613,28 @@ def _authorization_validation_clarification(
     answered_question_ids: set[str] | None = None,
 ) -> dict:
     """把权限候选缺口转换为一次聚焦的业务澄清，不暴露结构字段错误。"""
+
+    if any("DATA_AUTHORIZATION_NOT_SUPPORTED" in error for error in errors):
+        issues = spec.get("authorization_capability_issues")
+        issues = issues if isinstance(issues, list) else []
+        issue_refs = [
+            ref
+            for issue in issues if isinstance(issue, dict)
+            for ref in issue.get("sourceRefs", []) if isinstance(ref, str) and ref.strip()
+        ]
+        return {
+            "mode": "authorization_capability_not_supported",
+            "status": "requires_user_input",
+            "questions": [],
+            "message": "当前第一阶段不支持数据权限。请移除该授权要求，或将其明确改写为不承担授权语义的固定业务查询后重新生成需求文档。",
+            "capabilityIssues": [
+                {
+                    "code": "DATA_AUTHORIZATION_NOT_SUPPORTED",
+                    "capability": "data_authorization",
+                    "sourceRefs": issue_refs,
+                }
+            ],
+        }
 
     question = _next_authorization_business_question(
         spec,
@@ -666,7 +698,7 @@ def _next_authorization_business_question(
     *,
     answered_question_ids: set[str] | None = None,
 ) -> dict | None:
-    """按页面、操作、数据范围顺序返回一个权限业务梳理问题。"""
+    """按页面和操作顺序返回一个权限业务梳理问题。"""
 
     authorization = spec.get("authorization_requirements")
     if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
@@ -686,7 +718,7 @@ def _next_authorization_business_question(
     ):
         return {
             "id": "authorization_page_business",
-            "header": "权限业务梳理 1/3",
+            "header": "权限业务梳理 1/2",
             "dimension": "受控页面业务含义",
             "question": (
                 "第 1 步，请说明哪些业务页面或业务对象需要限制访问，以及限制的业务原因。"
@@ -708,34 +740,11 @@ def _next_authorization_business_question(
     ):
         return {
             "id": "authorization_operation_business",
-            "header": "权限业务梳理 2/3",
+            "header": "权限业务梳理 2/2",
             "dimension": "受控操作业务含义",
             "question": (
                 "第 2 步，请说明哪些业务操作需要授权，以及为什么需要限制。"
                 "如果不需要操作级权限控制，请回答“无”。"
-            ),
-            "type": "text",
-        }
-
-    data_rules = authorization.get("dataRules")
-    if (
-        "authorization_data_scope_business" not in answered_question_ids
-        and isinstance(data_rules, list)
-        and any(
-            not isinstance(item, dict)
-            or not str(item.get("name") or "").strip()
-            or not str(item.get("includes") or "").strip()
-            or not str(item.get("excludes") or "").strip()
-            for item in data_rules
-        )
-    ):
-        return {
-            "id": "authorization_data_scope_business",
-            "header": "权限业务梳理 3/3",
-            "dimension": "数据范围业务含义",
-            "question": (
-                "第 3 步，请说明哪些业务对象需要数据范围控制，分别写明成员可以看到的数据和明确不包含的数据。"
-                "如果不需要数据范围权限控制，请回答“无”。"
             ),
             "type": "text",
         }
@@ -798,7 +807,6 @@ def _next_authorization_business_question(
     for field_name, label in (
         ("restrictedPages", "受控页面"),
         ("restrictedOperations", "受控操作"),
-        ("dataRules", "数据范围"),
     ):
         items = authorization.get(field_name)
         items = items if isinstance(items, list) else []
@@ -833,10 +841,6 @@ _AUTHORIZATION_BUSINESS_QUESTION_TARGETS = {
     "authorization_operation_business": {
         "field": "restrictedOperations",
         "fallback_name": "受控业务操作",
-    },
-    "authorization_data_scope_business": {
-        "field": "dataRules",
-        "fallback_name": "受控业务数据",
     },
 }
 
@@ -889,15 +893,9 @@ def _authorization_candidate_is_complete(field: str, value: object) -> bool:
 
     if not isinstance(value, dict):
         return False
-    if field in {"restrictedPages", "restrictedOperations"}:
-        return bool(
-            str(value.get("name") or "").strip()
-            and str(value.get("description") or "").strip()
-        )
     return bool(
         str(value.get("name") or "").strip()
-        and str(value.get("includes") or "").strip()
-        and str(value.get("excludes") or "").strip()
+        and str(value.get("description") or "").strip()
     )
 
 
@@ -960,24 +958,13 @@ def _apply_authorization_business_answers(
         if source_ref not in source_refs:
             source_refs.append(source_ref)
 
-        if field == "dataRules":
-            fallback_item = {
-                "ruleId": str(seed_item.get("ruleId") or "").strip(),
-                "name": str(seed_item.get("name") or target["fallback_name"]).strip(),
-                "description": str(seed_item.get("description") or answer_text).strip(),
-                "dataRuleKey": str(seed_item.get("dataRuleKey") or "").strip(),
-                "includes": str(seed_item.get("includes") or answer_text).strip(),
-                "excludes": str(seed_item.get("excludes") or "").strip(),
-                "sourceRefs": source_refs,
-            }
-        else:
-            fallback_item = {
-                "ruleId": str(seed_item.get("ruleId") or "").strip(),
-                "name": str(seed_item.get("name") or target["fallback_name"]).strip(),
-                "description": str(seed_item.get("description") or answer_text).strip(),
-                "rationale": str(seed_item.get("rationale") or answer_text).strip(),
-                "sourceRefs": source_refs,
-            }
+        fallback_item = {
+            "ruleId": str(seed_item.get("ruleId") or "").strip(),
+            "name": str(seed_item.get("name") or target["fallback_name"]).strip(),
+            "description": str(seed_item.get("description") or answer_text).strip(),
+            "rationale": str(seed_item.get("rationale") or answer_text).strip(),
+            "sourceRefs": source_refs,
+        }
         updated_authorization[field] = [fallback_item]
 
     if "authorization_initial_admin_role" in answers:
@@ -1026,7 +1013,7 @@ def _apply_authorization_business_answers(
         selected_role_ids = _authorization_answer_values(answer)
         if not selected_role_ids:
             continue
-        for field_name in ("restrictedPages", "restrictedOperations", "dataRules"):
+        for field_name in ("restrictedPages", "restrictedOperations"):
             items = updated_authorization.get(field_name)
             if not isinstance(items, list):
                 continue
