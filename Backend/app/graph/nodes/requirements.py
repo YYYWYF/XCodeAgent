@@ -589,16 +589,6 @@ def _requirement_spec_draft_payload(
 
     payload = clear_clarification(spec)
     payload["mode"] = "requirement_document_draft"
-    # 草稿已生成不等于用户已确认；通过 AG-UI 的显式确认问题保持门禁状态。
-    payload["status"] = "requires_user_input"
-    payload["questions"] = [
-        {
-            "id": "requirement_spec_confirmation",
-            "header": "需求文档确认",
-            "question": "需求文档草稿已生成。请确认后继续页面与操作规划，或选择修改。",
-            "type": "yesno",
-        }
-    ]
     payload["message"] = "需求事实已完成校验，正在生成同一阶段的页面与操作规划。"
     if clarification_limit_reached:
         payload["clarification_limit_reached"] = True

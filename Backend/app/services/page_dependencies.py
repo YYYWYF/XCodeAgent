@@ -26,10 +26,24 @@ def normalize_page_dependencies(
     pageIds = {str(page.get("pageId") or "") for page in pages}
     normalized: list[dict[str, Any]] = []
     for page in pages:
+        action_implementations = (
+            [
+                dict(item)
+                for item in dict_items(_references_value(page, "action_implementations"))
+            ]
+            if include_action_implementations
+            else []
+        )
         endpoint_dependencies = _normalize_endpoint_dependencies(
             page,
             endpoint_index=endpoint_index,
             api_contracts=api_contracts,
+        )
+        # action_implementations 已经明确页面会调用的 endpoint，不能再要求模型
+        # 在两份并列字段中重复维护同一依赖；在此确定性补齐页面依赖闭包。
+        endpoint_dependencies = _include_action_implementation_dependencies(
+            endpoint_dependencies,
+            action_implementations,
         )
         navigation_targets = _normalize_navigation_targets(
             _references_value(page, "navigation_targets"), pageIds=pageIds
@@ -40,10 +54,7 @@ def normalize_page_dependencies(
             "navigation_targets": [dict(item) for item in navigation_targets],
         }
         if include_action_implementations:
-            references["action_implementations"] = [
-                dict(item)
-                for item in dict_items(_references_value(page, "action_implementations"))
-            ]
+            references["action_implementations"] = action_implementations
         normalized.append(
             {
                 "pageId": str(page.get("pageId") or ""),
@@ -214,6 +225,42 @@ def _normalize_endpoint_dependencies(
                 ),
             }
         )
+    return result
+
+
+def _include_action_implementation_dependencies(
+    dependencies: list[dict[str, Any]],
+    action_implementations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """将业务 action 已选择的 endpoint 确定性并入页面依赖，消除重复维护缺口。"""
+
+    result = [dict(item) for item in dependencies]
+    seen = {
+        str(item.get("endpoint_id") or "").strip()
+        for item in result
+        if str(item.get("endpoint_id") or "").strip()
+    }
+    for implementation in action_implementations:
+        action_id = str(implementation.get("actionId") or "").strip()
+        endpoint_ids = [str(implementation.get("endpointId") or "").strip()]
+        endpoint_ids.extend(
+            str(binding.get("endpointId") or "").strip()
+            for binding in dict_items(implementation.get("stepBindings"))
+        )
+        for endpoint_id in endpoint_ids:
+            if not endpoint_id or endpoint_id in seen:
+                continue
+            seen.add(endpoint_id)
+            result.append(
+                {
+                    "endpoint_id": endpoint_id,
+                    "usage": "action",
+                    "trigger": (
+                        f"业务操作 {action_id} 触发" if action_id else "业务操作触发"
+                    ),
+                    "required_for_initial_load": False,
+                }
+            )
     return result
 
 

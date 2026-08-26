@@ -25,6 +25,7 @@ from app.services.page_implementation_contract import (
     validate_page_implementation_contracts,
 )
 from app.services.api_contracts import normalize_api_contracts
+from app.services.page_dependencies import normalize_page_dependencies
 from app.services.product_plan import (
     create_product_plan,
     validate_product_plan,
@@ -51,6 +52,55 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
         self.assertTrue(all(page["actions"] == [] for page in product_plan["pages"]))
         self.assertEqual(validate_product_plan(product_plan, requirement_spec), [])
+
+    def test_technical_action_endpoints_close_page_dependencies(self) -> None:
+        """TechnicalPlan 的业务操作选择 endpoint 后必须自动进入页面接口依赖。"""
+
+        normalized = normalize_page_dependencies(
+            [
+                {
+                    "pageId": "asset_list",
+                    "references": {
+                        "endpoint_dependencies": [
+                            {"endpoint_id": "asset_api.list", "usage": "read"}
+                        ],
+                        "action_implementations": [
+                            {
+                                "actionId": "asset_outbound",
+                                "endpointId": "asset_api.outbound",
+                            },
+                            {
+                                "actionId": "asset_inbound",
+                                "stepBindings": [
+                                    {
+                                        "stepId": "submit_inbound",
+                                        "endpointId": "asset_api.inbound",
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                }
+            ],
+            [
+                {
+                    "id": "asset_api",
+                    "endpoints": [
+                        {"id": "asset_api.list"},
+                        {"id": "asset_api.outbound"},
+                        {"id": "asset_api.inbound"},
+                    ],
+                }
+            ],
+            include_action_implementations=True,
+        )
+
+        dependencies = normalized[0]["references"]["endpoint_dependencies"]
+        self.assertEqual(
+            [item["endpoint_id"] for item in dependencies],
+            ["asset_api.list", "asset_api.outbound", "asset_api.inbound"],
+        )
+        self.assertEqual(dependencies[1]["required_for_initial_load"], False)
 
     def test_product_plan_rejects_requirement_pair_hash_mismatch(self) -> None:
         """联合需求文档中的 ProductPlan 必须绑定同一版本 RequirementSpec。"""
