@@ -214,7 +214,7 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
     return builder.compile(checkpointer=checkpointer)
 
 
-_DIRECT_MODIFICATION_GRAPHS: dict[str, object] = {}
+_DIRECT_MODIFICATION_GRAPHS: dict[str, tuple[object, object]] = {}
 
 
 async def direct_modification_graph_for_request(
@@ -226,14 +226,15 @@ async def direct_modification_graph_for_request(
 
     db_path = workflow_checkpoint_db_path(workspace=workspace, project_id=project_id)
     cache_key = str(db_path)
-    if cache_key not in _DIRECT_MODIFICATION_GRAPHS:
-        _DIRECT_MODIFICATION_GRAPHS[cache_key] = build_direct_modification_graph(
-            checkpointer=await workflow_checkpointer(
-                workspace=workspace,
-                project_id=project_id,
-            )
+    checkpointer = await workflow_checkpointer(workspace=workspace, project_id=project_id)
+    cached = _DIRECT_MODIFICATION_GRAPHS.get(cache_key)
+    if cached is None or cached[0] is not checkpointer:
+        cached = (
+            checkpointer,
+            build_direct_modification_graph(checkpointer=checkpointer),
         )
-    return _DIRECT_MODIFICATION_GRAPHS[cache_key]
+        _DIRECT_MODIFICATION_GRAPHS[cache_key] = cached
+    return cached[1]
 
 
 def clear_direct_modification_graph_cache() -> None:

@@ -26,7 +26,7 @@ type Props = {
   title: string
 }
 
-// 使用原创建规划页面的动态视觉展示四阶段进度、时间线与 AG-UI 实时消息。
+// 使用原创建规划页面的动态视觉展示各节点进度、时间线与 AG-UI 实时消息。
 export default function ApplicationPlanningProgress({
   events,
   fallbackMessage,

@@ -10,7 +10,8 @@
 design_intent_analysis
   ├─ requirements -> requirements_review(interrupt) -> product_planning
   ├─ product_planning -> product_planning_review(interrupt) -> ui_confirmation
-  ├─ ui_confirmation -> ui_confirmation_review(interrupt) -> technical_planning
+  ├─ ui_confirmation -> ui_confirmation_review(interrupt) -> planning_stage_entry(interrupt)
+  │    └─ enter_planning -> technical_planning
   ├─ technical_planning -> technical_planning_review(interrupt) -> END
   └─ design_chat_response -> 原审阅门(interrupt)
 ```
@@ -54,7 +55,7 @@ design_intent_analysis
 - UiDesign：页面集合不变时转换为 `adjust_pages`；页面集合变化时由原 UI 节点重建当前页面集合。
 - TechnicalPlan：上游重新确认后，基于新的 ProductPlan 和 UiDesign 增量重做并再次确认。
 
-任何新版本都必须经过原节点后的 review interrupt 明确确认。澄清答案只补充信息，不等于确认。确认完成后由同一 Graph task 继续下一阶段；传输层会开启新的 AG-UI runId，但始终复用原 threadId 和 checkpoint，不允许前端手工拼接阶段或另起 Workflow。
+任何新版本都必须经过原节点后的 review interrupt 明确确认。澄清答案只补充信息，不等于确认。UiDesign 确认或明确跳过后只到达 `planning_stage_entry`；必须由绿色入口卡提交 `enter_planning`，同一 Graph 才能生成 TechnicalPlan。传输层会开启新的 AG-UI runId，但始终复用原 threadId 和 checkpoint，不允许前端手工拼接阶段或另起 Workflow。
 
 聊天区在修订节点运行时只展示“正在重新生成对应产物”的实时状态；需求节点仍在澄清时只展示问题，不写需求草稿或页面兜底，澄清结束后才在右侧展示最新 Markdown 草稿，聊天区只展示对应的确认操作卡。用户确认后才形成正式产物。设计阶段不展示通用 Workflow 步骤归档摘要。
 

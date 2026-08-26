@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from typing import Any, Callable
 
@@ -38,7 +39,7 @@ def _technical_planning_prompt(
     requirement_spec: dict[str, Any],
     existing_plan: dict[str, Any] | None,
 ) -> str:
-    """Build the TechnicalPlan prompt with explicit output fields and split contexts."""
+    """构造字段边界明确且按上下文拆分的 TechnicalPlan 提示词。"""
 
     product_plan = (
         requirement_spec.get("confirmed_product_plan")
@@ -127,7 +128,7 @@ def _technical_planning_prompt(
                         "response_schema_ref": list_schema_id,
                         "error_codes": ["UNAUTHORIZED"],
                         "authentication": {"required": True},
-                    }
+                    },
                 ],
             }
         ],
@@ -209,7 +210,19 @@ def _technical_planning_prompt(
         "same-level properties: total, pageSize, current, and list. It has no other sibling properties. Its query "
         "parameters use current and pageSize, while fields inside list items follow the item Schema. "
         "Schema references resolve to names in the same contract. Each Endpoint contains id, method, path, summary, "
-        "parameters, request_schema_ref, response_schema_ref, error_codes, and authentication. authentication, when present, is exactly {required:boolean}; never emit roles.\n"
+        "parameters, request_schema_ref, response_schema_ref, error_codes, and authentication. Decide whether a request "
+        "body exists from the operation semantics, never from the HTTP method alone. If the operation consumes body "
+        "fields, request_schema_ref is a non-empty bare schema name and that schema is defined in the same contract. "
+        "If path/query parameters plus authentication context fully describe a command, request_schema_ref is null even "
+        "for POST, PUT, or PATCH. Never invent an empty request object merely to satisfy a method convention. Before "
+        "returning, verify every non-null request_schema_ref and response_schema_ref resolves inside its own contract.\n"
+        "Request-body semantics examples (illustrative Endpoint fragments, not extra required endpoints):\n"
+        '- command-with-body: {"id":"photo_api.rename","method":"PATCH","path":"/api/photos/{photoId}",'
+        '"request_schema_ref":"PhotoRenameInput","response_schema_ref":"PhotoOutput"}; PhotoRenameInput must be '
+        "defined in photo_api.schemas because the operation consumes a new name.\n"
+        '- command-without-body: {"id":"photo_api.like","method":"POST","path":"/api/photos/{photoId}/like",'
+        '"request_schema_ref":null,"response_schema_ref":"PhotoActionOutput"}; the path plus authenticated user '
+        "fully describes the command.\n"
         "4. pages contains the technical references from each ProductPlan page to selected endpoints. Each item has "
         "pageId and references. references contains endpoint_dependencies and action_implementations. Endpoint "
         "dependencies contain endpoint_id, usage, trigger, and required_for_initial_load. A direct business action "
@@ -451,27 +464,199 @@ def _invoke_live_chat_model(
     """
 
     active_settings = settings or Settings.from_env()
+    return _invoke_prompt_with_chat_model(
+        _planning_prompt(requirement_spec, existing_plan, datasource_type),
+        settings=active_settings,
+        on_token=on_token,
+    )
+
+
+def _invoke_prompt_with_chat_model(
+    prompt: str,
+    *,
+    settings: Settings,
+    on_token: Callable[[str], None] | None = None,
+) -> str:
+    """调用无工具聊天模型执行给定规划提示，并按需转发流式文本。"""
+
     model = create_chat_model(
-        active_settings,
+        settings,
         extra_model_kwargs={"thinking": {"type": "disabled"}},
     )
     if on_token is None:
-        result = model.invoke(
-            _planning_prompt(requirement_spec, existing_plan, datasource_type)
-        )
+        result = model.invoke(prompt)
         content = getattr(result, "content", "")
         return _coerce_content_text(content) or ""
 
     accumulated_text = ""
-    for chunk in model.stream(
-        _planning_prompt(requirement_spec, existing_plan, datasource_type)
-    ):
+    for chunk in model.stream(prompt):
         if isinstance(chunk, AIMessageChunk):
             token = chunk.content
             if isinstance(token, str) and token:
                 accumulated_text += token
                 on_token(token)
     return accumulated_text
+
+
+def _technical_contract_ids_for_errors(
+    existing_plan: dict[str, Any],
+    validation_errors: list[str],
+) -> list[str]:
+    """依据 Contract、Endpoint 和 Schema 标识定位需要修复的 API Contract。"""
+
+    error_text = "\n".join(str(error) for error in validation_errors)
+    target_ids: list[str] = []
+    for contract in existing_plan.get("api_contracts", []):
+        if not isinstance(contract, dict):
+            continue
+        contract_id = str(contract.get("id") or "").strip()
+        if not contract_id:
+            continue
+        endpoint_ids = [
+            str(endpoint.get("id") or "").strip()
+            for endpoint in contract.get("endpoints", [])
+            if isinstance(endpoint, dict)
+        ]
+        markers = [contract_id, *[value for value in endpoint_ids if value]]
+        if any(marker in error_text for marker in markers):
+            target_ids.append(contract_id)
+    return target_ids
+
+
+def technical_plan_contract_repair_applicable(
+    existing_plan: dict[str, Any],
+    validation_errors: list[str],
+) -> bool:
+    """判断当前错误是否能安全收窄到至少一个现有 API Contract。"""
+
+    return bool(_technical_contract_ids_for_errors(existing_plan, validation_errors))
+
+
+def _technical_page_endpoint_ids(page: dict[str, Any]) -> set[str]:
+    """汇总页面依赖和业务动作实现中的 Endpoint，供 Contract 修复定位关联动作。"""
+
+    references = page.get("references") if isinstance(page.get("references"), dict) else {}
+    endpoint_ids = {
+        str(dependency.get("endpoint_id") or "")
+        for dependency in references.get("endpoint_dependencies", [])
+        if isinstance(dependency, dict) and str(dependency.get("endpoint_id") or "").strip()
+    }
+    for implementation in references.get("action_implementations", []):
+        if not isinstance(implementation, dict):
+            continue
+        endpoint_id = str(implementation.get("endpointId") or "").strip()
+        if endpoint_id:
+            endpoint_ids.add(endpoint_id)
+        endpoint_ids.update(
+            str(binding.get("endpointId") or "").strip()
+            for binding in implementation.get("stepBindings", [])
+            if isinstance(binding, dict) and str(binding.get("endpointId") or "").strip()
+        )
+    return endpoint_ids
+
+
+def _technical_contract_repair_prompt(
+    requirement_spec: dict[str, Any],
+    existing_plan: dict[str, Any],
+    validation_errors: list[str],
+    contract_ids: list[str],
+) -> str:
+    """只投射失败 Contract 及其关联实体、页面动作，构造定向修复提示词。"""
+
+    target_id_set = set(contract_ids)
+    target_contracts = [
+        contract
+        for contract in existing_plan.get("api_contracts", [])
+        if isinstance(contract, dict) and contract.get("id") in target_id_set
+    ]
+    bound_entity_ids = {
+        str(entity_id)
+        for contract in target_contracts
+        for entity_id in contract.get("entity_ids", [])
+        if str(entity_id).strip()
+    }
+    entity_context = [
+        entity
+        for entity in existing_plan.get("entities", [])
+        if isinstance(entity, dict) and str(entity.get("id") or "") in bound_entity_ids
+    ]
+    target_endpoint_ids = {
+        str(endpoint.get("id") or "")
+        for contract in target_contracts
+        for endpoint in contract.get("endpoints", [])
+        if isinstance(endpoint, dict) and str(endpoint.get("id") or "").strip()
+    }
+    related_page_ids = {
+        str(page.get("pageId") or "")
+        for page in existing_plan.get("pages", [])
+        if isinstance(page, dict)
+        and bool(_technical_page_endpoint_ids(page) & target_endpoint_ids)
+    }
+    product_plan = requirement_spec.get("confirmed_product_plan")
+    product_actions = [
+        {"pageId": page.get("pageId"), "actions": page.get("actions", [])}
+        for page in (product_plan or {}).get("pages", [])
+        if isinstance(page, dict) and str(page.get("pageId") or "") in related_page_ids
+    ]
+    return (
+        "You repair API Contracts inside an existing TechnicalPlan. Return exactly one JSON object with the sole "
+        "top-level key api_contracts. Return complete replacement objects for exactly the requested contract ids; "
+        "do not return architecture, entities, pages, markdown, or commentary. Preserve stable contract ids, endpoint "
+        "ids, paths, and unrelated valid semantics. Resolve every schema reference inside the same contract. Decide "
+        "whether a request body exists from operation semantics, not HTTP method: bodyless commands may use null "
+        "request_schema_ref; operations that consume body fields must define and reference a real request schema. "
+        "Never add an empty request schema only to silence validation.\n\n"
+        f"Requested contract ids:\n{json.dumps(contract_ids, ensure_ascii=False)}\n\n"
+        f"Validation errors:\n{json.dumps(validation_errors[:12], ensure_ascii=False)}\n\n"
+        f"Contracts to repair:\n{json.dumps(target_contracts, ensure_ascii=False)}\n\n"
+        f"Bound entities:\n{json.dumps(entity_context, ensure_ascii=False)}\n\n"
+        f"Related confirmed product actions:\n{json.dumps(product_actions, ensure_ascii=False)}\n"
+    )
+
+
+def repair_technical_plan_api_contracts_with_chat_model(
+    requirement_spec: dict[str, Any],
+    existing_plan: dict[str, Any],
+    validation_errors: list[str],
+    *,
+    on_token: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """让模型只替换报错 API Contract，并确定性合并回完整 TechnicalPlan。"""
+
+    contract_ids = _technical_contract_ids_for_errors(existing_plan, validation_errors)
+    if not contract_ids:
+        raise ValueError("TechnicalPlan 校验错误无法定位到具体 API Contract。")
+    settings = Settings.from_env()
+    response_text = _invoke_prompt_with_chat_model(
+        _technical_contract_repair_prompt(
+            requirement_spec,
+            existing_plan,
+            validation_errors,
+            contract_ids,
+        ),
+        settings=settings,
+        on_token=on_token,
+    )
+    response = extract_json_object(response_text)
+    repaired_contracts = response.get("api_contracts")
+    if not isinstance(repaired_contracts, list):
+        raise ValueError("TechnicalPlan Contract 修复结果缺少 api_contracts 数组。")
+    repaired_by_id = {
+        str(contract.get("id") or ""): contract
+        for contract in repaired_contracts
+        if isinstance(contract, dict) and str(contract.get("id") or "").strip()
+    }
+    if set(repaired_by_id) != set(contract_ids):
+        raise ValueError("TechnicalPlan Contract 修复结果必须完整且只能包含指定 Contract。")
+    merged_contracts = [
+        deepcopy(repaired_by_id.get(str(contract.get("id") or ""), contract))
+        for contract in existing_plan.get("api_contracts", [])
+        if isinstance(contract, dict)
+    ]
+    return create_technical_plan(
+        requirement_spec,
+        agent_plan={**existing_plan, "api_contracts": merged_contracts},
+    )
 
 
 def plan_project_with_chat_model(

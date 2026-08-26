@@ -83,6 +83,13 @@ function planningStatusPresentation(
       title: `阶段 3/4：确认「${application.appName}」的 UI 设计稿`
     }
   }
+  if (stage === 'awaiting_planning_stage_entry') {
+    return {
+      description: '设计阶段已完成，请确认是否进入规划阶段并生成技术规划',
+      icon: <CheckCircleFilled />,
+      title: `「${application.appName}」正在等待进入规划阶段`
+    }
+  }
   if (stage === 'awaiting_technical_plan_confirmation') {
     return {
       description: '技术规划已生成，请由开发确认后进入工作台',
@@ -106,7 +113,7 @@ function planningStatusPresentation(
   }
   if (stage === 'generating_technical_plan') {
     return {
-      description: 'UI 设计稿已确认，正在生成技术规划',
+      description: '已进入独立规划阶段，正在生成技术规划',
       icon: <LoadingOutlined spin />,
       title: `阶段 4/4：正在生成「${application.appName}」的技术规划`
     }

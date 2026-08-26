@@ -18,6 +18,7 @@ from app.graph.application_planning_revision import (
 )
 from app.graph.application_planning_interrupts import (
     pending_review_node,
+    planning_stage_entry,
     requirement_document_review,
     requirements_review,
     technical_planning_review,
@@ -46,7 +47,12 @@ def _route_start(state: ProjectState) -> str:
     resume_from = state.get("resume_from")
     if resume_from == "design_intent_analysis":
         return "design_intent_analysis"
-    if resume_from in {"product_planning", "ui_confirmation", "technical_planning"}:
+    if resume_from in {
+        "product_planning",
+        "ui_confirmation",
+        "planning_stage_entry",
+        "technical_planning",
+    }:
         return resume_from
     return "requirements"
 
@@ -72,10 +78,10 @@ def _route_product_planning(state: ProjectState) -> str:
 
 
 def _route_ui_confirmation(state: ProjectState) -> str:
-    """UI设计稿未全部确认时进入原生审阅中断，否则进入技术规划。"""
+    """UI设计稿未全部确认时继续审阅，否则停在独立规划阶段入口。"""
 
     clarification = state.get("clarification")
-    return "ui_confirmation_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "technical_planning"
+    return "ui_confirmation_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "planning_stage_entry"
 
 
 def _route_technical_planning(state: ProjectState) -> str:
@@ -156,7 +162,7 @@ def _requirements(state: ProjectState) -> dict:
 
 
 async def _ui_confirmation(state: ProjectState) -> dict:
-    """为每个页面生成设计稿或处理明确跳过，并在阶段完成后进入技术规划。"""
+    """为每个页面生成设计稿或处理明确跳过，完成后等待用户进入规划阶段。"""
 
     node_state = design_artifact_node_state(state, "ui_confirmation")
     if (
@@ -198,11 +204,11 @@ async def _ui_confirmation(state: ProjectState) -> dict:
                     "lifecycle": application_lifecycle_payload(lifecycle),
                 },
             )
-        # UI 已全部确认或明确跳过，推进到开发技术规划阶段。
+        # UI 已全部确认或明确跳过，只推进到规划阶段入口，不得自动生成 TechnicalPlan。
         lifecycle = persist_application_lifecycle_transition(
             workspace,
-            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-            status=ApplicationLifecycleStatus.RUNNING,
+            stage=ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+            status=ApplicationLifecycleStatus.AWAITING_USER,
             active_run_id=state.get("active_run_id"),
         )
         return design_node_update(
@@ -368,7 +374,7 @@ def _ensure_lifecycle(state: ProjectState):
 
 
 def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: ProjectState):
-    """把当前生命周期推进到开发技术规划的合法状态路径。"""
+    """校验规划阶段入口动作，并把生命周期推进到 TechnicalPlan 生成。"""
 
     common = {
         "active_run_id": state.get("active_run_id"),
@@ -414,9 +420,28 @@ def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: Proj
     if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION:
         lifecycle = persist_application_lifecycle_transition(
             workspace,
+            stage=ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+            status=ApplicationLifecycleStatus.AWAITING_USER,
+            **common,
+        )
+    if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY:
+        interaction = state.get("application_planning_interaction")
+        action = str(interaction.get("action") or "") if isinstance(interaction, dict) else ""
+        if action != "enter_planning":
+            raise ValueError("TechnicalPlan 必须由用户明确进入规划阶段后才能生成。")
+        lifecycle = persist_application_lifecycle_transition(
+            workspace,
             stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
             status=ApplicationLifecycleStatus.RUNNING,
             **common,
+        )
+    if lifecycle.initialization.stage not in {
+        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+        ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+    }:
+        raise ValueError(
+            "TechnicalPlan 只能在用户明确进入规划阶段后生成，当前生命周期为 "
+            f"{lifecycle.initialization.stage.value}。"
         )
     technical_plan = state.get("technical_plan")
     if (
@@ -532,7 +557,7 @@ def _workspace(state: ProjectState) -> str:
 
 
 def build_application_planning_graph(*, checkpointer):
-    """构建需求、产品、UI、技术四阶段创建规划 Graph。"""
+    """构建设计、规划分段且含显式入口门禁的创建规划 Graph。"""
 
     builder = StateGraph(ProjectState)
     builder.add_node("design_intent_analysis", analyze_design_intent)
@@ -543,6 +568,7 @@ def build_application_planning_graph(*, checkpointer):
     builder.add_node("requirement_document_review", requirement_document_review)
     builder.add_node("ui_confirmation", _ui_confirmation)
     builder.add_node("ui_confirmation_review", ui_confirmation_review)
+    builder.add_node("planning_stage_entry", planning_stage_entry)
     builder.add_node("technical_planning", _technical_planning)
     builder.add_node("technical_planning_review", technical_planning_review)
     builder.add_conditional_edges(START, _route_start, {
@@ -550,6 +576,7 @@ def build_application_planning_graph(*, checkpointer):
         "requirements": "requirements",
         "product_planning": "product_planning",
         "ui_confirmation": "ui_confirmation",
+        "planning_stage_entry": "planning_stage_entry",
         "technical_planning": "technical_planning",
     })
     builder.add_conditional_edges("design_intent_analysis", route_design_intent, {
@@ -567,7 +594,7 @@ def build_application_planning_graph(*, checkpointer):
         "requirement_document_review": "requirement_document_review",
     })
     builder.add_conditional_edges("ui_confirmation", _route_ui_confirmation, {
-        "technical_planning": "technical_planning",
+        "planning_stage_entry": "planning_stage_entry",
         "ui_confirmation_review": "ui_confirmation_review",
     })
     builder.add_conditional_edges("technical_planning", _route_technical_planning, {
@@ -578,12 +605,13 @@ def build_application_planning_graph(*, checkpointer):
         "requirements_review": "requirements_review",
         "requirement_document_review": "requirement_document_review",
         "ui_confirmation_review": "ui_confirmation_review",
+        "planning_stage_entry": "planning_stage_entry",
         "technical_planning_review": "technical_planning_review",
     })
     return builder.compile(checkpointer=checkpointer)
 
 
-_APPLICATION_PLANNING_GRAPHS: dict[str, object] = {}
+_APPLICATION_PLANNING_GRAPHS: dict[str, tuple[object, object]] = {}
 
 
 async def application_planning_graph_for_request(*, workspace: str | None = None, project_id: str | None = None):
@@ -591,11 +619,15 @@ async def application_planning_graph_for_request(*, workspace: str | None = None
 
     db_path = workflow_checkpoint_db_path(workspace=workspace, project_id=project_id)
     cache_key = str(db_path)
-    if cache_key not in _APPLICATION_PLANNING_GRAPHS:
-        _APPLICATION_PLANNING_GRAPHS[cache_key] = build_application_planning_graph(
-            checkpointer=await workflow_checkpointer(workspace=workspace, project_id=project_id)
+    checkpointer = await workflow_checkpointer(workspace=workspace, project_id=project_id)
+    cached = _APPLICATION_PLANNING_GRAPHS.get(cache_key)
+    if cached is None or cached[0] is not checkpointer:
+        cached = (
+            checkpointer,
+            build_application_planning_graph(checkpointer=checkpointer),
         )
-    return _APPLICATION_PLANNING_GRAPHS[cache_key]
+        _APPLICATION_PLANNING_GRAPHS[cache_key] = cached
+    return cached[1]
 
 
 def clear_application_planning_graph_cache() -> None:

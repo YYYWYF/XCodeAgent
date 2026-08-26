@@ -80,14 +80,14 @@ START
 - Deep Agents：外层确定性 Graph 负责阶段门禁，页面设计和后续专业 Agent 只接收已确认计划及相关文件引用。
 - 128k 上下文：正式 `project_plan.frontend_pages` 以菜单树保留用户确认过的目录关系，运行态只把拍平后的页面叶子概览显式传入需要执行的节点；完整计划作为结构化初始状态传入，仓库源码、历史消息和大型工具输出仍不注入主 Graph 上下文。
 
-### 新建应用四阶段规划 Graph
+### 新建应用设计与规划分段 Graph
 
-首页“创建并规划页面”使用独立 `requirements → product_planning → ui_confirmation → technical_planning` Graph，并负责生成主 Graph 的正式初始产物。产品确认 RequirementSpec、ProductPlan 与 React UI 稿（UI 阶段也可明确跳过），开发确认 TechnicalPlan；它不会进入工作区检查、任务拆分、代码生成和测试阶段。
+首页“创建并规划页面”使用独立 `requirements → product_planning → ui_confirmation → planning_stage_entry → technical_planning` Graph，并负责生成主 Graph 的正式初始产物。产品确认 RequirementSpec、ProductPlan 与 React UI 稿（UI 阶段也可明确跳过）；确认或跳过都必须停在绿色规划入口卡，只有 `enter_planning` 才由规划 Agent 生成 TechnicalPlan。它不会进入工作区检查、任务拆分、代码生成和测试阶段。
 
-- 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照和 `applicationPlanningInteraction`；确认卡携带服务端生成的 `gateId`、`artifactRevision` 与显式动作，沿同一 thread/checkpoint 原生恢复 Graph。前端按实际按钮或表单意图提交 `answer/confirm/revise/ui_action/design_change`，后端节点不再从中文文案猜动作；同一 thread 的版本校验与恢复全程串行，重复提交至多一个进入下游节点。
-- RequirementSpec、ProductPlan 和 TechnicalPlan 使用 Markdown 确认入口；React UI 稿及 `ui-designs.json` 使用 UI 确认界面，用户可提交结构化 `ui_design_action.action = skip` 跳过 UI 设计并直接进入 TechnicalPlan。澄清回答不能替代产物确认。RequirementSpec、ProductPlan 与 UI 产品确认不展示或询问数据源、数据库、持久化和 API 选择；这些内部技术输入只在 TechnicalPlan 由开发角色确认。
+- 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照和 `applicationPlanningInteraction`；确认卡携带服务端生成的 `gateId`、`artifactRevision` 与显式动作，沿同一 thread/checkpoint 原生恢复 Graph。前端按实际按钮或表单意图提交 `answer/confirm/revise/ui_action/enter_planning/design_change`，后端节点不再从中文文案猜动作；同一 thread 的版本校验与恢复全程串行，重复提交至多一个进入下游节点。
+- RequirementSpec、ProductPlan 和 TechnicalPlan 使用 Markdown 确认入口；React UI 稿及 `ui-designs.json` 使用 UI 确认界面。`ui_design_action.action = skip` 只写入 skipped Manifest 并进入 `awaiting_planning_stage_entry`，不得直接生成 TechnicalPlan。澄清回答不能替代产物确认。
 - TechnicalPlan 确认后校验四类正式产物；UI Manifest 的 `confirmation_status` 可以是 `confirmed` 或用户明确提交跳过后的 `skipped`，再推进 lifecycle 到 `generating_application_template_files`。模板完成动作使用同一规则复核四类 JSON 后才写入 `ready_for_workbench`。
-- 创建弹窗展示“需求确认、产品规划、UI 确认、技术规划”四阶段；RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为，页面事实只保留 `pages`，不生成或兼容读取 `frontend_pages`，也不含数据源/API/数据库；模型输出先按完整 JSON 示例执行精确字段校验；UI 使用 `ui-manifest.v3`，正式 JSON 在生成 UI 时保存 React 稿引用、产品 ID 到控件 ID 的映射、本地 UI 效果和验证证据，跳过时保存空 `pages` 与 `confirmation_status: skipped`，不复制 ProductPlan 文案、正式路由、角色或状态事实；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
+- 创建界面按“设计阶段 → 规划阶段 → 开发阶段”推进；设计阶段包含需求、产品和 UI，规划阶段包含 TechnicalPlan。RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为；UI 使用 `ui-manifest.v3`，跳过时保存空 `pages` 与 `confirmation_status: skipped`；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
 - 主 Workflow 运行时从 RequirementSpec、ProductPlan、UiManifest 和 TechnicalPlan 按需编译 PageImplementationContract；编译结果不写回 TechnicalPlan。
 - 创建规划不执行构建后的集成测试质量门，也不生成 `quality_gate_passed`；AG-UI 摘要只在主 Workflow 明确产生布尔质量门结果时展示“通过/未通过”，不得把缺失值误报为未通过。
 
@@ -121,7 +121,7 @@ START
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
-当节点进入 `requires_user_input` 时，前端不应硬编码续跑阶段，而应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点并设置内部 `resume_from`。主 Graph 支持从 `development_readiness_gate`、`entity_source_binding`、`project_planning`、`inspect_workspace`、`prepare_build_tasks`、`test_phase_confirmation`、`integration_test`、`review_phase_confirmation`、`code_review`、`small_task_repair` 和后续执行节点续跑；`inspect_database_context` 在协议边界映射到 `prepare_build_tasks`。首页独立规划 Graph 支持 `requirements`、`product_planning`、`ui_confirmation`、`technical_planning` 恢复。
+当主 Graph 节点进入 `requires_user_input` 时，前端不应硬编码续跑阶段，而应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点并设置内部 `resume_from`。主 Graph 支持从 `development_readiness_gate`、`entity_source_binding`、`project_planning`、`inspect_workspace`、`prepare_build_tasks`、`test_phase_confirmation`、`integration_test`、`review_phase_confirmation`、`code_review`、`small_task_repair` 和后续执行节点续跑；`inspect_database_context` 在协议边界映射到 `prepare_build_tasks`。首页独立创建规划 Graph 只使用同一 thread 的 LangGraph checkpoint 与 `applicationPlanningInteraction` 恢复原生 interrupt，前端不回传 `resumeState` 重建状态；其可视化入口包含 `requirements`、`product_planning`、`ui_confirmation`、`planning_stage_entry` 和 `technical_planning`，且 TechnicalPlan 节点会复核权威 lifecycle 已通过 `enter_planning`。
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 

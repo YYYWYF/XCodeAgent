@@ -1264,6 +1264,8 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             },
             "requirement_spec_path": "var/specs/requirement-spec.md",
             "requirement_spec_json_path": "var/specs/requirement-spec.json",
+            "technical_plan_repair_candidate": {"artifact_type": "technical-plan"},
+            "technical_plan_repair_errors": ["internal validation detail"],
             "clarification": {
                 "status": "requires_user_input",
                 "questions": [{"id": "role", "question": "需要哪些角色？"}],
@@ -1283,6 +1285,8 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             payload["state"]["requirement_spec"]["confirmation_status"],
             "pending_user_input",
         )
+        self.assertNotIn("technical_plan_repair_candidate", payload["state"])
+        self.assertNotIn("technical_plan_repair_errors", payload["state"])
         self.assertEqual(
             payload["state"]["requirement_spec_path"],
             "var/specs/requirement-spec.md",

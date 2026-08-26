@@ -13,7 +13,9 @@ from app.agents.database.generator import (
 )
 from app.agents.main.planner import (
     plan_project_with_chat_model,
+    repair_technical_plan_api_contracts_with_chat_model,
     revise_project_plan_with_chat_model,
+    technical_plan_contract_repair_applicable,
 )
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.common import workspace_from_state
@@ -310,6 +312,20 @@ def project_planning(state: ProjectState) -> dict:
         if state.get("workflow_scope") == "application_planning"
         else state.get("project_plan")
     )
+    repair_seed = state.get("technical_plan_repair_candidate")
+    repair_errors = state.get("technical_plan_repair_errors")
+    clarification = state.get("clarification")
+    resume_failed_candidate = (
+        phase == "technical_planning"
+        and action == "revise"
+        and isinstance(clarification, dict)
+        and clarification.get("mode") == "technical_plan_generation_error"
+        and isinstance(repair_seed, dict)
+        and bool(repair_seed)
+    )
+    if resume_failed_candidate:
+        # 外部“重新生成”继续修复服务端 checkpoint 中的失败候选，不从零重复生成。
+        existing_plan = repair_seed
     if isinstance(existing_plan, dict):
         existing_plan = apply_project_plan_datasource_policy(existing_plan)
     if (
@@ -403,6 +419,8 @@ def project_planning(state: ProjectState) -> dict:
             "project_plan_json_path": _project_plan_json_path_for_state(state),
             **_planning_artifact_fields(state, project_plan, project_plan_path),
             "clarification": _planning_confirmed_payload(state, project_plan),
+            "technical_plan_repair_candidate": {},
+            "technical_plan_repair_errors": [],
             "timeline": [phase],
         }
 
@@ -414,16 +432,23 @@ def project_planning(state: ProjectState) -> dict:
             "planning_adjustment_request": request,
         }
     if phase == "technical_planning":
-        project_plan, validation_errors = _generate_valid_technical_plan(
+        project_plan, validation_errors, failed_candidate = _generate_valid_technical_plan(
             state,
             requirement_spec,
             existing_plan if isinstance(existing_plan, dict) else None,
+            initial_errors=(
+                [str(error) for error in repair_errors]
+                if resume_failed_candidate and isinstance(repair_errors, list)
+                else None
+            ),
         )
         if project_plan is None:
             return {
                 "phase": phase,
                 "status": "requires_user_input",
                 "clarification": _technical_plan_generation_error_payload(validation_errors),
+                "technical_plan_repair_candidate": failed_candidate or {},
+                "technical_plan_repair_errors": validation_errors[:12],
                 "timeline": [phase],
             }
     else:
@@ -464,6 +489,8 @@ def project_planning(state: ProjectState) -> dict:
         "project_plan_json_path": _project_plan_json_path_for_state(state),
         **_planning_artifact_fields(state, project_plan, project_plan_path),
         "clarification": clarification,
+        "technical_plan_repair_candidate": {},
+        "technical_plan_repair_errors": [],
         "timeline": [phase],
     }
 
@@ -1690,15 +1717,39 @@ def _technical_plan_retry_feedback(errors: list[str]) -> str:
     )
 
 
+def _repair_technical_plan_candidate(
+    requirement_spec: dict,
+    current_plan: dict,
+    errors: list[str],
+) -> dict:
+    """优先定向修复失败 Contract，无法定位或解析时才回退完整计划修订。"""
+
+    if technical_plan_contract_repair_applicable(current_plan, errors):
+        return repair_technical_plan_api_contracts_with_chat_model(
+            requirement_spec,
+            current_plan,
+            errors,
+            on_token=_planning_token_callback,
+        )
+    logger.warning("technical_plan_contract_repair_fallback: errors=%s", errors)
+    return plan_project_with_chat_model(
+        requirement_spec,
+        existing_plan=current_plan,
+        on_token=_planning_token_callback,
+    )
+
+
 def _generate_valid_technical_plan(
     state: ProjectState,
     requirement_spec: dict,
     existing_plan: dict | None,
-) -> tuple[dict | None, list[str]]:
+    *,
+    initial_errors: list[str] | None = None,
+) -> tuple[dict | None, list[str], dict | None]:
     """在统一的三次总预算内完成 TechnicalPlan 生成、规范化校验与错误反馈修复。"""
 
     current_plan = existing_plan
-    remaining_errors: list[str] = []
+    remaining_errors = list(initial_errors or [])
     base_feedback = str(requirement_spec.get("planning_adjustment_request") or "").strip()
     for attempt in range(1, _TECHNICAL_PLAN_GENERATION_ATTEMPTS + 1):
         retry_feedback = (
@@ -1715,17 +1766,25 @@ def _generate_valid_technical_plan(
             ),
         }
         try:
-            candidate = plan_project_with_chat_model(
-                current_requirement,
-                **({"existing_plan": current_plan} if current_plan else {}),
-                on_token=_planning_token_callback,
+            candidate = (
+                _repair_technical_plan_candidate(
+                    current_requirement,
+                    current_plan,
+                    remaining_errors,
+                )
+                if current_plan and remaining_errors
+                else plan_project_with_chat_model(
+                    current_requirement,
+                    **({"existing_plan": current_plan} if current_plan else {}),
+                    on_token=_planning_token_callback,
+                )
             )
             candidate = apply_project_plan_feedback(candidate, retry_feedback)
             candidate = _attach_technical_plan_contracts(state, candidate)
             candidate["confirmation_status"] = "pending_user_confirmation"
             remaining_errors = _project_plan_validation_errors(candidate, state)
             if not remaining_errors:
-                return candidate, []
+                return candidate, [], None
             current_plan = candidate
         except (TypeError, ValueError) as exc:
             remaining_errors = [str(exc)]
@@ -1735,7 +1794,7 @@ def _generate_valid_technical_plan(
             _TECHNICAL_PLAN_GENERATION_ATTEMPTS,
             remaining_errors,
         )
-    return None, remaining_errors
+    return None, remaining_errors, current_plan
 
 
 def _repair_technical_plan_validation_errors(
@@ -1765,13 +1824,13 @@ def _repair_technical_plan_validation_errors(
             remaining_errors,
         )
         try:
-            repaired = plan_project_with_chat_model(
+            repaired = _repair_technical_plan_candidate(
                 {
                     **technical_requirement,
                     "planning_adjustment_request": feedback,
                 },
-                existing_plan=current_plan,
-                on_token=_planning_token_callback,
+                current_plan,
+                remaining_errors,
             )
             repaired = apply_project_plan_feedback(
                 repaired,

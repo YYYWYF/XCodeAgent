@@ -412,6 +412,111 @@ class ProductPlanningRetryTests(unittest.TestCase):
         self.assertEqual(update["clarification"]["questions"], [])
         self.assertNotIn("project_plan", update)
         self.assertNotIn("technical_plan", update)
+        self.assertEqual(update["technical_plan_repair_candidate"], {})
+        self.assertEqual(
+            update["technical_plan_repair_errors"],
+            ["字段必须使用 type，禁止 semantic_type"],
+        )
+
+    def test_technical_plan_validation_retry_repairs_only_target_contract(self) -> None:
+        """可定位的 API 错误应进入 Contract 定向修复，而不是再次生成完整计划。"""
+
+        state = self._technical_planning_state()
+        invalid_plan = create_technical_plan(
+            {
+                **state["requirement_spec"],
+                "confirmed_product_plan": state["product_plan"],
+            }
+        )
+        valid_plan = deepcopy(invalid_plan)
+        endpoint_id = invalid_plan["api_contracts"][0]["endpoints"][0]["id"]
+        error = f"Endpoint {endpoint_id} references unknown schema MissingInput."
+        with (
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=invalid_plan,
+            ) as planner_mock,
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_api_contracts_with_chat_model",
+                return_value=valid_plan,
+            ) as contract_repair_mock,
+            patch(
+                "app.graph.nodes.planning._project_plan_validation_errors",
+                side_effect=[[error], []],
+            ),
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="technical-plan.md",
+            ),
+            patch(
+                "app.graph.nodes.planning.write_technical_plan_document",
+                return_value=("technical-plan.md", "technical-plan.json"),
+            ),
+        ):
+            update = project_planning(state)
+
+        self.assertEqual(planner_mock.call_count, 1)
+        contract_repair_mock.assert_called_once()
+        self.assertEqual(update["clarification"]["mode"], "technical_plan_confirmation")
+        self.assertEqual(update["technical_plan_repair_candidate"], {})
+        self.assertEqual(update["technical_plan_repair_errors"], [])
+
+    def test_external_retry_continues_checkpoint_repair_candidate(self) -> None:
+        """错误卡重试应直接续修 checkpoint 候选，不重新调用整份 TechnicalPlan 生成。"""
+
+        state = self._technical_planning_state()
+        repair_seed = create_technical_plan(
+            {
+                **state["requirement_spec"],
+                "confirmed_product_plan": state["product_plan"],
+            }
+        )
+        repaired_plan = deepcopy(repair_seed)
+        contract_id = repair_seed["api_contracts"][0]["id"]
+        error = f"Schema {contract_id}.Output references unknown schema MissingItem."
+        state.update(
+            {
+                "application_planning_interaction": {
+                    "action": "revise",
+                    "request": "请继续修复技术规划。",
+                },
+                "clarification": {
+                    "mode": "technical_plan_generation_error",
+                    "status": "requires_user_input",
+                    "errors": [error],
+                },
+                "technical_plan_repair_candidate": repair_seed,
+                "technical_plan_repair_errors": [error],
+            }
+        )
+        with (
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model"
+            ) as planner_mock,
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_api_contracts_with_chat_model",
+                return_value=repaired_plan,
+            ) as contract_repair_mock,
+            patch(
+                "app.graph.nodes.planning._project_plan_validation_errors",
+                return_value=[],
+            ),
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="technical-plan.md",
+            ),
+            patch(
+                "app.graph.nodes.planning.write_technical_plan_document",
+                return_value=("technical-plan.md", "technical-plan.json"),
+            ),
+        ):
+            update = project_planning(state)
+
+        planner_mock.assert_not_called()
+        contract_repair_mock.assert_called_once()
+        self.assertEqual(update["clarification"]["mode"], "technical_plan_confirmation")
+        self.assertEqual(update["technical_plan_repair_candidate"], {})
+        self.assertEqual(update["technical_plan_repair_errors"], [])
 
     def test_ui_design_can_be_skipped_and_returns_completed(self) -> None:
         """用户明确跳过 UI 设计时应落盘 skipped Manifest 并直接放行技术规划。"""

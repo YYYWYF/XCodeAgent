@@ -1108,7 +1108,13 @@ def _workflow_start_node(
         return (
             resume_from
             if resume_from
-            in {"requirements", "product_planning", "ui_confirmation", "technical_planning"}
+            in {
+                "requirements",
+                "product_planning",
+                "ui_confirmation",
+                "planning_stage_entry",
+                "technical_planning",
+            }
             else "requirements"
         )
     if resume_from == "development_readiness_gate":

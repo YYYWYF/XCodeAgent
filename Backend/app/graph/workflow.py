@@ -382,14 +382,15 @@ async def workflow_graph_for_request(
 ):
     db_path = workflow_checkpoint_db_path(workspace=workspace, project_id=project_id)
     cache_key = str(db_path)
-    if cache_key not in _WORKFLOW_GRAPHS:
-        _WORKFLOW_GRAPHS[cache_key] = build_graph(
-            checkpointer=await workflow_checkpointer(
-                workspace=workspace,
-                project_id=project_id,
-            )
+    checkpointer = await workflow_checkpointer(workspace=workspace, project_id=project_id)
+    cached = _WORKFLOW_GRAPHS.get(cache_key)
+    if cached is None or cached[0] is not checkpointer:
+        cached = (
+            checkpointer,
+            build_graph(checkpointer=checkpointer),
         )
-    return _WORKFLOW_GRAPHS[cache_key]
+        _WORKFLOW_GRAPHS[cache_key] = cached
+    return cached[1]
 
 
 def clear_workflow_graph_cache() -> None:

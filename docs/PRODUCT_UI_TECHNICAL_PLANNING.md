@@ -2,7 +2,7 @@
 
 ## 目标
 
-应用创建流程把产品决策和开发决策拆成两个独立确认边界，避免 UI 设计稿与页面详细设计重复定义布局、组件和交互。
+应用创建流程把产品设计、技术规划和开发执行拆成三个独立阶段，避免 UI 设计稿与页面详细设计重复定义布局、组件和交互，也避免 UI 确认或跳过后自动越过阶段入口生成 TechnicalPlan。
 
 四个正式产物均采用 LangGraph 原生人工审阅门：需求澄清期间只更新 checkpoint 中的未完成事实，不生成或写入 RequirementSpec 草稿；模型判定没有重要缺口后才写入待确认 Markdown/内部 JSON，再进入独立 review 节点调用 `interrupt()`。用户操作通过同一 thread 的 `Command(resume=...)` 恢复。创建规划的 SQLite checkpoint 是上下文权威，前端只提交包含 `gateId`、产物摘要和显式 action 的 `applicationPlanningInteraction`，不回传 Workflow 状态来推断恢复节点。`confirm`、`revise`、需求澄清 `answer`、UI `ui_action` 和底部 `design_change` 具有不同类型；前端按按钮/表单的明确意图产生 action，产物节点直接消费 action，用户文本只作为回答或修订内容。服务端按 thread 串行完成中断读取、版本校验和恢复，旧卡片、摘要不匹配或并发重复提交必须在节点执行前拒绝。
 
@@ -13,6 +13,8 @@ ProductPlan
   -> 产品确认
 UiDesign（可选的真实 React 页面稿 + UiManifest）
   -> 产品确认或明确跳过
+等待进入规划阶段
+  -> 用户显式确认 enter_planning
 TechnicalPlan
   -> 开发确认
 Workbench
@@ -110,7 +112,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 负责人：产品。
 
-生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。用户也可以明确跳过 UI 设计；此时不生成页面 TSX，Manifest 使用 `confirmation_status: skipped` 和空 `pages`，TechnicalPlan 与页面代码生成直接依据 ProductPlan、TechnicalPlan 和模板技能继续。
+生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。用户也可以明确跳过 UI 设计；此时不生成页面 TSX，Manifest 使用 `confirmation_status: skipped` 和空 `pages`。确认或跳过都只到达 `awaiting_planning_stage_entry`，用户点击绿色入口卡后，Electron 客户端为该应用创建或聚焦唯一的规划窗口。窗口跳过欢迎页与通用工作台入场，首屏直接锁定到 Planning 阶段，只展示 TechnicalPlan 规划文档。启动上下文使用 `graphThreadId` 恢复 lifecycle 中的原初始化 Graph checkpoint，并用独立的 `conversationThreadId` 创建规划 Agent 前端会话；只有该规划窗口提交一次 `enter_planning`，避免复制或丢失已确认的 RequirementSpec、ProductPlan 与 UiDesign 状态。
 
 `ui-designs.json` 使用 `ui-manifest.v3`，它是 React 稿的引用与校验证据，不是另一份页面详设，也不是第二份产品事实。正式落盘文件不保存 TSX 正文，不重复页面名称、正式路由、描述、角色、状态要求、业务标签或验收标准；确认界面需要这些文案时，仅从当前 ProductPlan 临时投影。核心结构为：
 
@@ -228,6 +230,8 @@ TechnicalPlan 顶层 `entities`；数据源身份只来自后续已确认 Entity
 `entity_ids` 关联一个或多个实体，禁止 `data_source_id`。角色/跳转/状态来自 ProductPlan；UI 路径与控件映射来自已确认 UiManifest，跳过时不提供 UI 路径和控件映射；
 运行时按当前构建范围组合这些正式上游产物。
 
+Endpoint 是否存在请求体由业务语义决定，不由 HTTP Method 单独决定。只依赖路径参数、查询参数和登录态即可完整表达的命令型 `POST`、`PUT` 或 `PATCH` 可以使用 `request_schema_ref: null`；实际消费请求体字段的 Endpoint 必须引用同一 API Contract `schemas` 内的真实请求 Schema，禁止为了通过校验生成无业务字段的空请求对象。
+
 TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品可见的 `sequence` 决策；这些事实已经分别由 ProductPlan 和 UiDesign 确认。它只为需要后端/数据实现的业务 action 或业务 step 选择 endpoint：
 
 ```json
@@ -312,7 +316,7 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 正式依赖顺序为：
 
 ```text
-RequirementSpec -> ProductPlan -> UiDesign（可选） -> TechnicalPlan
+RequirementSpec -> ProductPlan -> UiDesign（可选） -> 等待进入规划阶段 -> TechnicalPlan
 TechnicalPlan + EntitySourceBinding -> development_readiness_gate -> Build DAG
 ```
 
@@ -332,7 +336,7 @@ RequirementSpec 与 ProductPlan 只持久化用户提出或确认的产品事实
 - EntitySourceBinding：单个实体定义和所选数据源的有界元数据；
 - Build：当前 Unit 的 TechnicalPlan Endpoint、页面实现契约、实体绑定摘要、UI 设计文件路径和工作区快照。
 
-ProductPlan 每次自动修复只回灌最多八条校验摘要，TechnicalPlan 最多回灌十二条页面/API/数据源契约摘要；两者都不追加历史模型全文。重试候选保留在当前节点局部变量中，TechnicalPlan 只注入精简实体和 ProductPlan 行为上下文，只有通过校验的计划才进入确认产物，从而保持 128k 上下文预算与 checkpoint 可检查性。
+ProductPlan 每次自动修复只回灌最多八条校验摘要，TechnicalPlan 最多回灌十二条页面/API/数据源契约摘要；两者都不追加历史模型全文。TechnicalPlan 首次失败后优先只向模型投射报错 API Contract、绑定实体和关联产品动作，并将修复结果确定性合并回完整候选；无法定位具体 Contract 时才回退完整计划修订。三次预算耗尽时，最后一个可解析候选和精简错误只保留在 LangGraph checkpoint 的内部修复字段中，不作为 AG-UI 公开状态，也不写入正式 Markdown/JSON；用户授权“重新生成”后从该候选继续修复。只有通过校验的计划才进入确认产物，从而保持 128k 上下文预算与 checkpoint 可检查性。
 
 TechnicalPlan 的模型生成、JSON 解析和正式契约校验共用最多三次“生成 → 校验 → 错误反馈修复”总预算。三次仍失败时，节点停留在 `technical_planning` 并返回 `technical_plan_generation_error`，仅包含精简错误与重新生成操作，不写入 Markdown/JSON，也不发出确认产物。规划模型的 `llm.token` 原始 JSON 只用于内部生成过程，前端聊天和历史消息均不得展示；确认界面直接读取 Workflow `state/result.technical_plan` 的结构化计划。
 

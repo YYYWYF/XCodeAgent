@@ -23,7 +23,8 @@ import { cx, previewOrigin } from '../utils'
 import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
 import {
   hasApplicationEnteredDevelopment,
-  subscribeApplicationDevelopmentEntry
+  subscribeApplicationDevelopmentEntry,
+  type WorkbenchPhase
 } from '../workbenchPhase'
 import './WorkbenchPage.less'
 
@@ -52,6 +53,10 @@ type Props = {
   onRetryPlanning?: () => void
   planningThreadId?: string
   planningWorkflow?: WorkflowRunPayload
+  /** 独立阶段窗口的首屏阶段，避免 lifecycle 拉取前短暂显示研发阶段。 */
+  initialPhase?: WorkbenchPhase
+  /** 规划 Agent 独立聊天会话标识，不替代后端 Graph checkpoint thread。 */
+  planningConversationThreadId?: string
   theme: Theme
 }
 
@@ -76,6 +81,8 @@ function WorkbenchPage({
   onRetryPlanning,
   planningThreadId,
   planningWorkflow,
+  initialPhase,
+  planningConversationThreadId,
   theme
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
@@ -99,7 +106,10 @@ function WorkbenchPage({
   const [previewLaunchError, setPreviewLaunchError] = useState('')
   // 预览启动中状态：驱动左侧上下文头“预览页面”按钮的 loading 呈现。
   const [previewLaunchLoading, setPreviewLaunchLoading] = useState(false)
-  const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
+  const stageWindow = initialPhase === 'planning'
+  const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>(() =>
+    stageWindow ? 'ready' : 'loading'
+  )
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const entryStartedAtRef = useRef(Date.now())
   const launchedWorkspaceRef = useRef<string>()
@@ -343,10 +353,11 @@ function WorkbenchPage({
 
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
-      {developmentPlanningPagesLoaded ? (
+      {developmentPlanningPagesLoaded || stageWindow ? (
         <WorkbenchPhaseProvider
           applicationId={workspaceApplication.id}
           lifecycle={applicationLifecycle}
+          initialPhase={initialPhase}
         >
           <div className={cx('workbench-shell-column')}>
             <WorkbenchTopBar
@@ -387,6 +398,7 @@ function WorkbenchPage({
                 planningError={planningError}
                 onRetryPlanning={onRetryPlanning}
                 planningThreadId={planningThreadId}
+                planningConversationThreadId={planningConversationThreadId}
                 planningWorkflow={planningWorkflow}
                 theme={theme}
                 rightPanelOpen={rightPanelOpen}

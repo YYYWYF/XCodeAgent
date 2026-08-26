@@ -17,12 +17,57 @@ import type {
 import WelcomePage from './WelcomePage'
 import WorkbenchPage from './WorkbenchPage'
 import { hasApplicationEnteredDevelopment } from '../workbenchPhase'
+import { cx } from '../utils'
 
 type ActiveSurface = 'welcome' | 'workbench'
+
+/** 判断恢复快照是否正停在设计到规划的显式入口门禁。 */
+function isPlanningStageEntryWorkflow(workflow?: WorkflowRunPayload): boolean {
+  if (!workflow) return false
+  const clarificationCandidates = [
+    workflow.summary?.clarification,
+    workflow.result?.clarification,
+    workflow.state?.clarification
+  ]
+  const mode = clarificationCandidates
+    .map((value) =>
+      value && typeof value === 'object'
+        ? String((value as Record<string, unknown>).mode || '')
+        : ''
+    )
+    .find(Boolean)
+  return workflow.summary?.phase === 'planning_stage_entry' || mode === 'planning_stage_entry_confirmation'
+}
 
 /** 读取应用实际绑定的预览工作区，用于区分不同生成项目进程。 */
 function applicationPreviewWorkspace(application: ApplicationConfig): string {
   return application.workspaceRoot || application.projectParentPath || ''
+}
+
+/** 在独立窗口恢复应用与 Graph checkpoint 前显示规划阶段专属首帧，避免闪回欢迎页。 */
+function PlanningWindowBootScreen({ theme }: { theme: 'dark' | 'light' }): JSX.Element {
+  return (
+    <div className={cx('workbench-shell')} data-theme={theme}>
+      <div aria-live="polite" className={cx('workbench-entry')} role="status">
+        <div className={cx('workbench-entry-glow', 'glow-one')} />
+        <div className={cx('workbench-entry-glow', 'glow-two')} />
+        <div className={cx('workbench-entry-content')}>
+          <div className={cx('workbench-entry-mark')} aria-hidden="true">
+            <span />
+            <span />
+          </div>
+          <div className={cx('workbench-entry-kicker')}>PLANNING AGENT</div>
+          <h1>正在进入规划阶段</h1>
+          <p>正在恢复规划会话与确认上下文</p>
+          <div className={cx('workbench-entry-progress')} aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /** 在应用根部持有不会随工作台显隐而销毁的会话运行管理器。 */
@@ -36,6 +81,7 @@ export default function AppEntryPage(): JSX.Element {
 
 // 在欢迎页、多个全屏规划会话与应用工作台之间维护顶层导航。
 function AppEntryContent(): JSX.Element {
+  const launchContext = window.xcodeAgent?.launchContext
   const { theme, setTheme } = useApplicationTheme()
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
@@ -59,6 +105,9 @@ function AppEntryContent(): JSX.Element {
       | undefined
     >
   >({})
+  const [planningSubmitRevision, setPlanningSubmitRevision] = useState(0)
+  const planningLaunchOpenedRef = useRef(false)
+  const planningLaunchSubmittedRef = useRef(false)
 
   // 规划重试句柄：由 Modal 通过 onRetryHandlerChange 注册，
   // 聊天区域错误卡片的重试按钮直接调用它，不弹出全屏 Modal。
@@ -163,6 +212,33 @@ function AppEntryContent(): JSX.Element {
   const activePlanningThreadId = activePlanning?.threadId
   const templateGenerationFailed =
     activePlanning?.lifecycle.initialization.stage === 'application_template_generation_failed'
+
+  // 独立规划窗口从持久化活动规划中定位应用，首帧直接进入对应工作台。
+  useEffect(() => {
+    if (!launchContext || planningLaunchOpenedRef.current) return
+    const planning = planningController.activePlannings.find(
+      (item) =>
+        item.application.id === launchContext.applicationId &&
+        item.threadId === launchContext.graphThreadId
+    )
+    if (!planning) return
+    planningLaunchOpenedRef.current = true
+    void openWorkbench(planning.application, planning.lifecycle)
+  }, [launchContext, openWorkbench, planningController.activePlannings])
+
+  // 新窗口只在 checkpoint 恢复出入口门禁后提交一次，避免原窗口和新窗口并发 resume。
+  useEffect(() => {
+    if (!launchContext || planningLaunchSubmittedRef.current) return
+    const workflow = activePlanning?.workflow
+    const submit = planningSubmitByAppRef.current[launchContext.applicationId]
+    if (!workflow || !submit || !isPlanningStageEntryWorkflow(workflow)) return
+    planningLaunchSubmittedRef.current = true
+    submit(workflow, {
+      planning_stage_entry: 'enter',
+      __applicationPlanningAction: 'enter_planning'
+    })
+  }, [activePlanning?.workflow, launchContext, planningSubmitRevision])
+
   useEffect(() => {
     activePlanningThreadIdRef.current = activePlanningThreadId
     // threadId 就绪后，如果 stream 已注册且有待回放的缓存，按 threadId 回放。
@@ -263,12 +339,19 @@ function AppEntryContent(): JSX.Element {
   )
 
   const planningVisible = Boolean(planningController.visiblePlanningId)
+  const mountedPlannings = launchContext
+    ? planningController.activePlannings.filter(
+        (planning) =>
+          planning.application.id === launchContext.applicationId &&
+          planning.threadId === launchContext.graphThreadId
+      )
+    : planningController.activePlannings
 
   return (
     <>
       <div
-        aria-hidden={activeSurface !== 'welcome' || planningVisible}
-        hidden={activeSurface !== 'welcome' || planningVisible}
+        aria-hidden={Boolean(launchContext) || activeSurface !== 'welcome' || planningVisible}
+        hidden={Boolean(launchContext) || activeSurface !== 'welcome' || planningVisible}
       >
         <WelcomePage
           activePlannings={planningController.activePlannings}
@@ -290,7 +373,9 @@ function AppEntryContent(): JSX.Element {
         />
       </div>
 
-      {planningController.activePlannings.map((planning) => (
+      {launchContext && !activeApplication ? <PlanningWindowBootScreen theme={theme} /> : null}
+
+      {mountedPlannings.map((planning) => (
         <ApplicationPagePlanningModal
           application={planning.application}
           initialLifecycle={planning.lifecycle}
@@ -311,6 +396,7 @@ function AppEntryContent(): JSX.Element {
           }}
           onSubmitClarificationChange={(handler) => {
             planningSubmitByAppRef.current[planning.application.id] = handler ?? undefined
+            setPlanningSubmitRevision((current) => current + 1)
           }}
           onPlanningContent={(content) => {
             deliverPlanningChunk(planning.threadId, { content, workflow: undefined })
@@ -379,6 +465,12 @@ function AppEntryContent(): JSX.Element {
             }
             generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
             planningThreadId={activePlanningThreadId}
+            initialPhase={launchContext?.phase}
+            planningConversationThreadId={
+              launchContext?.applicationId === activeApplication.id
+                ? launchContext.conversationThreadId
+                : undefined
+            }
             planningWorkflow={activePlanning?.workflow}
             planningError={activePlanning?.error}
             theme={theme}

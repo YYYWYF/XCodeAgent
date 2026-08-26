@@ -28,14 +28,15 @@ collecting_requirement
        └─ confirm -> generating_ui_designs
   -> generating_ui_designs
   -> awaiting_ui_design_confirmation -> generating_ui_designs
-  -> generating_technical_plan
+  -> awaiting_planning_stage_entry
+       └─ enter_planning -> generating_technical_plan
   -> awaiting_technical_plan_confirmation -> generating_technical_plan
   -> generating_application_template_files
        ├─ success -> ready_for_workbench
        └─ failure -> application_template_generation_failed（终止）
 ```
 
-模板生成只由用户确认 TechnicalPlan 后的确认回调启动。失败、应用重启、再次打开和进入工作台都不会重新启动模板生成；任何新一轮生成都必须重新完成规划并确认 TechnicalPlan。
+UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不会自动执行 TechnicalPlan。只有原创建规划 checkpoint 上通过 `gateId + artifactRevision` 校验的 `enter_planning` 动作才能进入 `generating_technical_plan`。模板生成只由用户确认 TechnicalPlan 后的确认回调启动。失败、应用重启、再次打开和进入工作台都不会重新启动模板生成；任何新一轮生成都必须重新进入规划阶段并确认 TechnicalPlan。
 
 ## 全应用生命周期与计划执行模式
 

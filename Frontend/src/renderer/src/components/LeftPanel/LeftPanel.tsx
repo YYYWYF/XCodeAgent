@@ -52,6 +52,8 @@ type Props = {
   /** 从工作台错误卡片重新打开设计阶段规划窗口。 */
   onRetryPlanning?: () => void
   planningThreadId?: string
+  /** 规划阶段新窗口使用的独立前端会话 threadId。 */
+  planningConversationThreadId?: string
   planningWorkflow?: WorkflowRunPayload
   theme: 'light' | 'dark'
   rightPanelOpen: boolean
@@ -84,6 +86,7 @@ export default function LeftPanel({
   planningError,
   onRetryPlanning,
   planningThreadId,
+  planningConversationThreadId,
   planningWorkflow,
   theme,
   rightPanelOpen,
@@ -118,6 +121,7 @@ export default function LeftPanel({
             planningError={planningError}
             onRetryPlanning={onRetryPlanning}
             planningThreadId={planningThreadId}
+            planningConversationThreadId={planningConversationThreadId}
             planningWorkflow={planningWorkflow}
             theme={theme}
             rightPanelOpen={rightPanelOpen}

@@ -142,7 +142,10 @@ type UseChatSessionsResult = {
   createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
   createReviewSession: (target: ReviewPhaseSessionTarget) => Promise<SessionIdentity>
   ensureActiveSession: () => Promise<SessionIdentity>
-  ensurePlanningSession: (threadId: string) => Promise<SessionIdentity>
+  ensurePlanningSession: (
+    threadId: string,
+    phase?: WorkbenchPhase
+  ) => Promise<SessionIdentity>
   ensureEndpointSession: (
     apiContractId: string,
     endpointId: string,
@@ -516,9 +519,12 @@ export function useChatSessions({
     return createNewSession()
   }
 
-  /** 设计阶段规划会话：绑定 planningThreadId，用于在工作台展示规划对话流。
-   *  规划仍由 ApplicationPagePlanningModal 的 session 跑，本会话只承接转发的流式消息。 */
-  const ensurePlanningSession = async (threadId: string): Promise<SessionIdentity> => {
+  /** 创建规划会话：产品阶段可绑定 Graph thread，规划阶段则绑定新的独立聊天 thread。
+   *  Graph 仍由 ApplicationPagePlanningModal 的原 checkpoint session 跑，本会话只承接转发流。 */
+  const ensurePlanningSession = async (
+    threadId: string,
+    phase: WorkbenchPhase = 'product'
+  ): Promise<SessionIdentity> => {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) throw new Error('规划线程标识不能为空。')
     // 已存在同 threadId 的会话则复用并激活。
@@ -567,7 +573,7 @@ export function useChatSessions({
         }
         planningSessionActivatedRef.current = true
         setActiveSessionIds((current) =>
-          withSelectedSessionForPhase(current, editorMode, 'product', best.id)
+          withSelectedSessionForPhase(current, editorMode, phase, best.id)
         )
         // 清理同 threadId 的重复空壳 session（消息数 0 且非选中），避免再次串用。
         for (const duplicate of sameThreadSessions) {
@@ -597,8 +603,8 @@ export function useChatSessions({
       undefined,
       {
         threadId: normalizedThreadId,
-        title: '产品 Agent',
-        workbenchPhase: 'product'
+        title: phase === 'planning' ? '规划 Agent' : '产品 Agent',
+        workbenchPhase: phase
       }
     )
     planningSessionActivatedRef.current = true

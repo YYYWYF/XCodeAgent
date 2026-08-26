@@ -448,7 +448,7 @@ def _document_descriptor(
 
 
 def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, Any]:
-    """校验需求、产品、UI、技术四阶段正式产物并返回索引，UI允许明确跳过。"""
+    """校验设计与规划阶段的四类正式产物并返回索引，UI允许明确跳过。"""
 
     requirement_spec = state.get("requirement_spec")
     product_plan = state.get("product_plan")

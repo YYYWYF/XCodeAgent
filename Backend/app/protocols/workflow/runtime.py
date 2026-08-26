@@ -58,6 +58,10 @@ from app.protocols.workflow.stream_events import (
     _workflow_ag_ui_frames,
 )
 from app.config import Settings
+from app.domain.application_planning_interaction import ApplicationPlanningInteraction
+from app.graph.application_planning_interrupts import (
+    validate_application_planning_review_action,
+)
 from app.graph.application_planning_revision import cleared_design_change_context
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.services.user_skill_runtime import validate_selected_user_skills
@@ -103,6 +107,19 @@ def _validate_application_planning_resume(
         raise ValueError("创建规划交互与当前待确认产物不匹配。")
     if submitted_revision != str(pending.get("artifactRevision") or ""):
         raise ValueError("待确认产物已经更新，请基于最新版本重新提交。")
+    # 动作组合必须在 Command(resume=...) 前完成校验。LangGraph 会缓存已送入
+    # interrupt 的 resume 值；如果节点恢复后才抛错，下一次重试仍会复用旧动作。
+    submission = ApplicationPlanningInteraction.model_validate(interaction)
+    node_name = str(pending.get("phase") or "")
+    validation_state = dict(snapshot.values)
+    pending_clarification = pending.get("clarification")
+    if isinstance(pending_clarification, dict):
+        validation_state["clarification"] = pending_clarification
+    validate_application_planning_review_action(
+        validation_state,
+        node_name,
+        submission,
+    )
     return pending
 
 
@@ -191,6 +208,8 @@ def _application_planning_resume_node(interaction: Any) -> str:
         return ""
     if interaction.get("action") == "design_change":
         return "design_intent_analysis"
+    if interaction.get("action") == "enter_planning":
+        return "planning_stage_entry"
     return {
         "requirement_spec": "requirements",
         "product_plan": "product_planning",
@@ -459,6 +478,8 @@ def build_workflow_ag_ui_stream(
                     "workspace": workspace,
                     "selected_skill_names": list(selected_skill_names),
                     "selected_skills_revision": selected_skill_validation.revision,
+                    "editor_mode": editor_mode,
+                    "workflow_scope": workflow_scope,
                     "workflow": "xcodeagent-main",
                     "langsmith_enabled": observability["langsmith"]["enabled"],
                 },
@@ -618,18 +639,9 @@ def build_workflow_ag_ui_stream(
                 dict,
             ):
                 # 传输层开启新 AG-UI run，但业务执行恢复同一 thread 的原生中断任务。
-                graph_input = Command(
-                    resume=application_planning_interaction,
-                    update={
-                        "active_thread_id": thread_id,
-                        "active_run_id": run_id,
-                        "selected_skill_names": list(selected_skill_names),
-                        "workspace": workspace,
-                        "project_id": project_id,
-                        "editor_mode": editor_mode,
-                        "workflow_scope": workflow_scope,
-                    },
-                )
+                # 运行元数据由审阅节点在门禁校验成功后一次性写入；若校验失败，纯 resume
+                # 不留下可与下次重试冲突的 pending writes。
+                graph_input = Command(resume=application_planning_interaction)
             async for stream_mode, chunk in active_graph.astream(
                 graph_input,
                 config=config,

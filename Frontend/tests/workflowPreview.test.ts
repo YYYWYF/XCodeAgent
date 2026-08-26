@@ -122,10 +122,7 @@ test('实体设计动作生成对应的继续消息', () => {
     entityDesignActionContinuationMessage({ action: 'approve_table_generation' }),
     '已批准生成目标表结构，请继续。'
   )
-  assert.equal(
-    entityDesignActionContinuationMessage(undefined),
-    ''
-  )
+  assert.equal(entityDesignActionContinuationMessage(undefined), '')
 })
 
 test('验收调整类型映射到对应的安全恢复节点', () => {
@@ -449,6 +446,25 @@ test('Build 确认门仍属于开发阶段，集成测试和验收分别进入�
   )
   assert.equal(workbenchPhaseForNode('integration_test', 'development'), 'test')
   assert.equal(workbenchPhaseForNode('acceptance', 'test'), 'review')
+})
+
+test('UI 完成后仍停留设计阶段，进入后 TechnicalPlan 属于独立规划阶段', () => {
+  const awaitingEntry = planLifecycle(pageExecution({ status: 'completed' }))
+  awaitingEntry.initialization = {
+    stage: 'awaiting_planning_stage_entry',
+    status: 'awaiting_user'
+  }
+  assert.equal(deriveWorkbenchPhase(awaitingEntry), 'product')
+
+  const generatingTechnicalPlan = {
+    ...awaitingEntry,
+    initialization: { stage: 'generating_technical_plan', status: 'running' }
+  } as ApplicationLifecycle
+  assert.equal(deriveWorkbenchPhase(generatingTechnicalPlan), 'planning')
+  assert.equal(workbenchPhaseForNode('ui_confirmation', 'planning'), 'product')
+  assert.equal(workbenchPhaseForNode('technical_planning', 'product'), 'planning')
+  assert.equal(isObjectEditableInPhase('project_plan', 'product'), false)
+  assert.equal(isObjectEditableInPhase('project_plan', 'planning'), true)
 })
 
 test('测试阶段不允许编辑产物，验收编辑权限只在审查阶段开放', () => {

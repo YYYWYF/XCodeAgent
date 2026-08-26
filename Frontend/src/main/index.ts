@@ -11,7 +11,10 @@ import { normalizePersistentSessionMessage } from './sessionMessageNormalization
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { lstatIfPresent, movePathToTrashIfPresent, removeDirectoryIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
-import { endpointDesignDocumentExists } from './planningArtifactStatus'
+import {
+  endpointDesignDocumentExists,
+  PRODUCT_PLAN_SCHEMA_VERSION
+} from './planningArtifactStatus'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -26,6 +29,7 @@ let loginWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 const previewWindows = new Set<BrowserWindow>()
+const planningWindows = new Map<string, BrowserWindow>()
 const launchedPreviewWorkspaces = new Map<string, string>()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 let primaryStartupPromise: Promise<boolean> | null = null
@@ -615,7 +619,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     {
       relativePath: 'plans/product-plan.json',
       contractField: 'schema_version',
-      contractValue: 'product-plan.v4'
+      contractValue: PRODUCT_PLAN_SCHEMA_VERSION
     },
     {
       relativePath: 'plans/technical-plan.json',
@@ -638,7 +642,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
         invalid.push(artifact.relativePath)
         continue
       }
-      if (artifact.contractValue === 'product-plan.v4') {
+      if (artifact.contractValue === PRODUCT_PLAN_SCHEMA_VERSION) {
         productPlan = plan as Record<string, unknown>
       } else {
         technicalPlan = plan as Record<string, unknown>
@@ -938,6 +942,90 @@ function setupBrowserIpc(): void {
       throw new Error(openError)
     }
     return { ok: true }
+  })
+}
+
+type PlanningWindowPayload = {
+  applicationId: string
+  graphThreadId: string
+  conversationThreadId: string
+  theme: 'dark' | 'light'
+}
+
+/** 校验独立规划窗口的应用与会话标识，禁止把任意启动参数注入渲染进程。 */
+function normalizePlanningWindowPayload(value: unknown): PlanningWindowPayload {
+  const payload = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+  const applicationId = String(payload.applicationId || '').trim()
+  const graphThreadId = String(payload.graphThreadId || '').trim()
+  const conversationThreadId = String(payload.conversationThreadId || '').trim()
+  const theme = payload.theme === 'dark' || payload.theme === 'light' ? payload.theme : undefined
+  if (!applicationId || !graphThreadId || !conversationThreadId || !theme) {
+    throw new Error(
+      '打开规划窗口必须提供 applicationId、graphThreadId、conversationThreadId 和 theme'
+    )
+  }
+  return { applicationId, graphThreadId, conversationThreadId, theme }
+}
+
+/** 创建或聚焦指定应用唯一的规划阶段窗口，并通过 preload 传递双线程上下文。 */
+function createPlanningWindow(payload: PlanningWindowPayload): { reused: boolean } {
+  const existingWindow = planningWindows.get(payload.applicationId)
+  if (existingWindow && !existingWindow.isDestroyed()) {
+    if (existingWindow.isMinimized()) existingWindow.restore()
+    existingWindow.show()
+    existingWindow.focus()
+    return { reused: true }
+  }
+  planningWindows.delete(payload.applicationId)
+
+  const planningWindow = new BrowserWindow({
+    width: 1440,
+    height: 920,
+    minWidth: 720,
+    minHeight: 600,
+    title: 'XCode Agent · 规划阶段',
+    backgroundColor: payload.theme === 'dark' ? '#111217' : '#f5f7fb',
+    show: false,
+    autoHideMenuBar: true,
+    ...(process.platform === 'linux' ? { icon } : {}),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      additionalArguments: [
+        `--xcode-agent-base-url=${getBackendBaseUrl()}`,
+        `--xcode-agent-planning-application-id=${encodeURIComponent(payload.applicationId)}`,
+        `--xcode-agent-planning-graph-thread-id=${encodeURIComponent(payload.graphThreadId)}`,
+        `--xcode-agent-planning-conversation-thread-id=${encodeURIComponent(payload.conversationThreadId)}`
+      ]
+    }
+  })
+
+  planningWindows.set(payload.applicationId, planningWindow)
+  planningWindow.setMenuBarVisibility(false)
+  planningWindow.once('closed', () => {
+    if (planningWindows.get(payload.applicationId) === planningWindow) {
+      planningWindows.delete(payload.applicationId)
+    }
+  })
+  planningWindow.once('ready-to-show', () => {
+    planningWindow.show()
+    planningWindow.focus()
+  })
+  planningWindow.webContents.setWindowOpenHandler(({ url }) => {
+    void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  loadRendererPage(planningWindow, 'index')
+  return { reused: false }
+}
+
+/** 注册工作台多窗口 IPC；规划窗口拥有独立的前端会话 threadId。 */
+function setupWorkbenchWindowIpc(): void {
+  ipcMain.handle('windows:open-planning', async (_event, value) => {
+    const result = createPlanningWindow(normalizePlanningWindowPayload(value))
+    return { ok: true, ...result }
   })
 }
 
@@ -1848,6 +1936,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   setupApplicationSettingsIpc()
   setupAuthIpc()
   setupBrowserIpc()
+  setupWorkbenchWindowIpc()
   setupProjectPreviewIpc()
   setupWorkspaceIpc()
   setupSessionStorageIpc()

@@ -130,10 +130,8 @@ def _validate_endpoint(
             errors.append(
                 f"Endpoint {endpoint_id} does not declare path parameter {path_param}."
             )
-    if method in {"POST", "PUT", "PATCH"} and not endpoint.get(
-        "request_schema_ref"
-    ):
-        errors.append(f"Endpoint {endpoint_id} does not define request schema.")
+    # 请求体由业务语义决定：命令型 POST/PUT/PATCH 可以只依赖路径参数和登录态，
+    # 因此不能仅凭 HTTP Method 强制要求 request_schema_ref。
     if method != "DELETE" and not endpoint.get("response_schema_ref"):
         errors.append(f"Endpoint {endpoint_id} does not define response schema.")
     for key in ("request_schema_ref", "response_schema_ref"):

@@ -39,15 +39,19 @@ const WorkbenchPhaseContext = createContext<WorkbenchPhaseContextValue | null>(n
 export function WorkbenchPhaseProvider({
   applicationId,
   lifecycle,
+  initialPhase,
   children
 }: {
   applicationId: string;
   lifecycle?: ApplicationLifecycle;
+  initialPhase?: WorkbenchPhase;
   children: ReactNode;
 }): JSX.Element {
   const derivedPhase = deriveWorkbenchPhase(lifecycle);
-  // 多应用切换时各自保留独立的覆盖值，避免互相串用。
-  const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>({});
+  // 独立规划窗口首帧直接锁到规划阶段；普通窗口仍按 lifecycle 推导。
+  const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>(() =>
+    initialPhase ? { [applicationId]: initialPhase } : {}
+  );
   const manualOverride = overrides[applicationId] ?? null;
 
   const value = useMemo<WorkbenchPhaseContextValue>(() => {

@@ -15,6 +15,11 @@ from app.graph.application_planning_workflow import (
     _requirements,
     _route_requirements,
     _route_start,
+    _route_ui_confirmation,
+)
+from app.domain.application_lifecycle import (
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
 )
 from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
@@ -22,7 +27,12 @@ from app.protocols.application_page_planning import (
 )
 from app.protocols.workflow.projection import _workflow_confirmation_artifact
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
-from app.services.application_lifecycle import load_application_lifecycle
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    load_application_lifecycle,
+    transition_application_lifecycle,
+    write_application_lifecycle,
+)
 from app.services.requirement_spec import create_requirement_spec
 from app.services.product_plan import create_product_plan
 from app.workspace.spec_documents import (
@@ -87,6 +97,33 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
         json.dumps(state["technical_plan"], ensure_ascii=False), encoding="utf-8"
     )
     return state
+
+
+def _write_planning_stage_entry_lifecycle(workspace: Path) -> None:
+    """把测试生命周期推进到等待进入规划阶段，模拟已确认或已跳过 UI。"""
+
+    state = create_application_lifecycle(
+        application_id=workspace.name,
+        application_name="业务管理应用",
+    )
+    for stage, status in (
+        (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, ApplicationLifecycleStatus.RUNNING),
+        (
+            ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+            ApplicationLifecycleStatus.RUNNING,
+        ),
+        (
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+            ApplicationLifecycleStatus.AWAITING_USER,
+        ),
+        (ApplicationLifecycleStage.GENERATING_UI_DESIGNS, ApplicationLifecycleStatus.RUNNING),
+        (
+            ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+            ApplicationLifecycleStatus.AWAITING_USER,
+        ),
+    ):
+        state = transition_application_lifecycle(state, stage=stage, status=status)
+    write_application_lifecycle(workspace, state)
 
 
 class ApplicationPagePlanningTests(unittest.TestCase):
@@ -333,14 +370,22 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(result["clarification"]["questions"][0]["header"], "角色")
         self.assertEqual(result["clarification"]["questions"][0]["question"], "主要使用者是谁？")
 
-    def test_routes_cover_four_planning_stages(self) -> None:
-        """独立创建 Graph 应支持需求、产品、UI 和技术四阶段恢复。"""
+    def test_routes_cover_design_and_independent_planning_stages(self) -> None:
+        """独立创建 Graph 应把技术规划放在设计与开发之间的独立规划阶段。"""
 
         self.assertEqual(_route_start({}), "requirements")
         self.assertEqual(_route_start({"resume_from": "project_planning"}), "requirements")
         self.assertEqual(_route_start({"resume_from": "product_planning"}), "product_planning")
         self.assertEqual(_route_start({"resume_from": "ui_confirmation"}), "ui_confirmation")
+        self.assertEqual(
+            _route_start({"resume_from": "planning_stage_entry"}),
+            "planning_stage_entry",
+        )
         self.assertEqual(_route_start({"resume_from": "detail_confirmation"}), "requirements")
+        self.assertEqual(
+            _route_ui_confirmation({"clarification": {"status": "clear", "skipped": True}}),
+            "planning_stage_entry",
+        )
         self.assertEqual(
             _route_requirements(
                 {
@@ -491,6 +536,11 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             state = _confirmed_state(workspace)
+            _write_planning_stage_entry_lifecycle(workspace)
+            state["application_planning_interaction"] = {
+                "action": "enter_planning",
+                "artifact": "ui_designs",
+            }
             update = {
                 "phase": "technical_planning",
                 "status": "completed",
@@ -508,6 +558,18 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["workflow_scope"], "application_planning")
             self.assertIn("application_planning_confirmation", result)
+
+    def test_technical_planning_cannot_run_before_stage_entry(self) -> None:
+        """直接调度 TechnicalPlan 时必须在模型调用前拒绝，不能绕过规划入口。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = _confirmed_state(Path(directory))
+            with patch(
+                "app.graph.application_planning_workflow.nodes.project_planning"
+            ) as project_planning:
+                with self.assertRaisesRegex(ValueError, "明确进入规划阶段"):
+                    _technical_planning({**state, "workflow_scope": "application_planning"})
+            project_planning.assert_not_called()
 
     def test_artifact_gate_rejects_unconfirmed_plan_json(self) -> None:
         """plans 中未确认的 TechnicalPlan JSON 不得通过工作区入口门禁。"""
@@ -552,7 +614,17 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         )
         self.assertEqual(
             capability["phases"],
-            ["requirements", "product_planning", "ui_confirmation", "technical_planning"],
+            [
+                "requirements",
+                "product_planning",
+                "ui_confirmation",
+                "planning_stage_entry",
+                "technical_planning",
+            ],
+        )
+        self.assertEqual(
+            capability["clarificationModes"]["planningStageEntry"],
+            "planning_stage_entry_confirmation",
         )
         self.assertEqual(
             capability["confirmationArtifacts"],

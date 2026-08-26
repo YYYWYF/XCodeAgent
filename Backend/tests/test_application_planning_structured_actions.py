@@ -99,6 +99,29 @@ class ApplicationPlanningStructuredActionTests(unittest.TestCase):
             ),
         )
 
+    def test_planning_stage_entry_only_accepts_explicit_enter_action(self) -> None:
+        """UI 完成后的入口门禁不能把普通确认误当成进入规划阶段。"""
+
+        state = {
+            "ui_designs": {"confirmation_status": "skipped"},
+            "clarification": {
+                "status": "completed",
+                "mode": "ui_design_confirmation",
+                "questions": [],
+            }
+        }
+        validate_application_planning_review_action(
+            state,
+            "planning_stage_entry",
+            _submission("ui_designs", "enter_planning"),
+        )
+        with self.assertRaisesRegex(ValueError, "只允许 action=enter_planning"):
+            validate_application_planning_review_action(
+                state,
+                "planning_stage_entry",
+                _submission("ui_designs", "confirm"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

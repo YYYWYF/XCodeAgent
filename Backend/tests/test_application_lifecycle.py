@@ -75,6 +75,10 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
                 ApplicationLifecycleStatus.AWAITING_USER,
             ),
+            (
+                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+                ApplicationLifecycleStatus.AWAITING_USER,
+            ),
             (ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN, ApplicationLifecycleStatus.RUNNING),
             (
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
@@ -122,6 +126,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
                     ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
                     ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
                     ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                    ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
                     ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
                     ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
                 ]
@@ -276,6 +281,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
                 ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
                 ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
@@ -344,6 +350,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
                 ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
                 ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
@@ -482,6 +489,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
             for stage, status in (
                 (ApplicationLifecycleStage.GENERATING_UI_DESIGNS, ApplicationLifecycleStatus.RUNNING),
                 (ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION, ApplicationLifecycleStatus.AWAITING_USER),
+                (ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY, ApplicationLifecycleStatus.AWAITING_USER),
                 (ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN, ApplicationLifecycleStatus.RUNNING),
                 (ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION, ApplicationLifecycleStatus.AWAITING_USER),
             ):

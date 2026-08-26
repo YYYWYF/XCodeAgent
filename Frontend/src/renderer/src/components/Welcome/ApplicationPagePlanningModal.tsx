@@ -28,9 +28,11 @@ import UiDesignStreamingPreview from './UiDesignStreamingPreview'
 import {
   planningRequirementsDocumentGenerating,
   planningTechnicalPlanConfirmed,
+  planningWorkflowCanPublishDuringRun,
   planningWorkflowLifecycleStage,
   planningWorkflowPhase,
-  planningWorkflowRequiresUserInput
+  planningWorkflowRequiresUserInput,
+  retainApplicationPlanningInterrupt
 } from './planningWorkflowState'
 import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
 import './ApplicationPagePlanningModal.less'
@@ -85,6 +87,7 @@ const phaseOrder = [
   'requirements',
   'product_planning',
   'ui_confirmation',
+  'planning_stage_entry',
   'technical_planning'
 ]
 
@@ -125,6 +128,12 @@ const phaseProgress: Record<
     complete: 65,
     message: '正在为各页面生成设计稿…',
     title: '正在生成UI设计稿'
+  },
+  planning_stage_entry: {
+    active: 68,
+    complete: 68,
+    message: '设计阶段已完成，等待进入规划阶段…',
+    title: '等待进入规划阶段'
   },
   technical_planning: {
     active: 78,
@@ -288,7 +297,7 @@ function buildPlanningInteraction(
   }
 }
 
-// 根据当前阶段计算四段规划条的高亮位置。
+// 根据当前节点计算创建规划进度条的高亮位置。
 function workflowStep(workflow?: WorkflowRunPayload): number {
   const phase = planningWorkflowPhase(workflow)
   const index = phaseOrder.indexOf(phase)
@@ -319,7 +328,7 @@ function workflowProgressEvents(
   const finished = workflow.summary.status === 'completed'
   const events = phaseOrder.slice(0, currentIndex + 1).map((stage, index) => {
     const meta =
-      stage === 'requirements' &&
+      stage === 'product_planning' &&
       planningRequirementsDocumentGenerating(workflow, planningWorkflowLifecycleStage(workflow))
         ? {
             ...phaseProgress.requirements,
@@ -352,7 +361,7 @@ function workflowProgressEvents(
 // 返回当前节点在动态进度卡上的标题与兜底说明。
 function workflowProgressCopy(workflow?: WorkflowRunPayload): { fallback: string; title: string } {
   const stage = phaseOrder[workflowStep(workflow)]
-  if (stage === 'requirements' && planningRequirementsDocumentGenerating(workflow)) {
+  if (stage === 'product_planning' && planningRequirementsDocumentGenerating(workflow)) {
     return { fallback: '正在生成需求文档…', title: '正在生成需求文档' }
   }
   const meta = phaseProgress[stage] || phaseProgress.requirements
@@ -387,14 +396,12 @@ export default function ApplicationPagePlanningModal({
   // 记录当前请求代次；用户补充新内容时，旧的生成流和旧快照都必须失效。
   const planningRunTokenRef = useRef(0)
   const planningRunningRef = useRef(false)
-  // 标记本轮 runPlanning 流式 onWorkflow 是否已转发最终（requires_user_input）workflow，
-  // 避免 result.workflow 重复转发导致工作台新增重复卡片。
-  const streamedFinalWorkflowRef = useRef(false)
   // 一旦进入过 UI 确认阶段就锁定：单页"选模板/换一换"run 期间 workflow 流式快照
   // 可能短暂丢失 clarification/phase，导致 showingProgress 闪烁切回进度页白屏。
   // 锁定后整个会话不再切回全屏进度页，逐页动作只在渲染区显示加载态。
   const enteredUiConfirmationRef = useRef(false)
   const [workflow, setWorkflow] = useState<WorkflowRunPayload | undefined>(initialWorkflow)
+  const workflowRef = useRef<WorkflowRunPayload | undefined>(initialWorkflow)
   const [running, setRunning] = useState(false)
   const [preparingTemplate, setPreparingTemplate] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
@@ -415,7 +422,7 @@ export default function ApplicationPagePlanningModal({
   ) {
     enteredUiConfirmationRef.current = true
   }
-  // 已离开 UI 确认阶段（流转到 technical_planning 等）：解除锁定，让进度页正常显示。
+  // 已离开 UI 确认阶段（流转到规划入口或技术规划）：解除 UI 面板锁定。
   if (
     enteredUiConfirmationRef.current &&
     planningWorkflowPhase(workflow) &&
@@ -424,8 +431,7 @@ export default function ApplicationPagePlanningModal({
     enteredUiConfirmationRef.current = false
   }
   const inUiConfirmationStage = enteredUiConfirmationRef.current
-  const showingProgress =
-    !workflow || (running && !awaitingUserInput && !inUiConfirmationStage)
+  const showingProgress = !workflow || (running && !awaitingUserInput && !inUiConfirmationStage)
   // run 中途流式快照可能短暂丢失 clarification，此时确认面板会返回 null 导致白屏。
   // 有 workflow 但无 clarification 时显示加载态兜底，避免空白。
   const hasClarification = Boolean(
@@ -434,8 +440,8 @@ export default function ApplicationPagePlanningModal({
       workflow?.result?.clarification
   )
   // UI确认节点生成期间，流式展示已就绪的设计稿，避免干等到最后一次性出现。
-  // 排除 ui_confirmation 已完成（用户一键确认全部设计稿后同 run 流转到 technical_planning，
-  // 但 technical_planning 的 started 帧到达前可能短暂停留在 ui_confirmation completed 帧），
+  // 排除 ui_confirmation 已完成（用户确认或跳过后同 run 流转到规划入口，
+  // 但入口 started 帧到达前可能短暂停留在 ui_confirmation completed 帧），
   // 否则会误显示"设计稿生成中"。
   const streamingUiPhase =
     showingProgress &&
@@ -458,7 +464,15 @@ export default function ApplicationPagePlanningModal({
     }
     onStopHandlerChange(stopPlanning)
     return () => onStopHandlerChange(undefined)
-  }, [application, onLifecycleChange, onStopHandlerChange, onWorkflowChange, session, threadId, workflow])
+  }, [
+    application,
+    onLifecycleChange,
+    onStopHandlerChange,
+    onWorkflowChange,
+    session,
+    threadId,
+    workflow
+  ])
 
   // 将运行、待查看或异常状态同步给首页的规划入口。
   useEffect(() => {
@@ -476,11 +490,17 @@ export default function ApplicationPagePlanningModal({
   }, [error, onErrorChange])
 
   // 同步组件内 Workflow 展示状态与可跨重启恢复的外部快照。
-  const handleWorkflowChange = (nextWorkflow: WorkflowRunPayload): void => {
+  const handleWorkflowChange = (
+    nextWorkflow: WorkflowRunPayload,
+    publishExternally = true
+  ): WorkflowRunPayload | undefined => {
     // 每个全屏规划实例只接收自己的线程事件，避免并行应用互相覆盖问题卡片。
-    if (nextWorkflow.threadId !== threadId) return
-    setWorkflow(nextWorkflow)
-    onWorkflowChange(nextWorkflow)
+    if (nextWorkflow.threadId !== threadId) return undefined
+    const mergedWorkflow = retainApplicationPlanningInterrupt(workflowRef.current, nextWorkflow)
+    workflowRef.current = mergedWorkflow
+    setWorkflow(mergedWorkflow)
+    if (publishExternally) onWorkflowChange(mergedWorkflow)
+    return mergedWorkflow
   }
 
   // 保持加载界面直到模板准备完成；失败后只展示终止状态，不再次触发模板初始化。
@@ -518,28 +538,30 @@ export default function ApplicationPagePlanningModal({
     onStatusChange('running')
     setError('')
     setStreamingContent('')
-    streamedFinalWorkflowRef.current = false
     try {
       const result = await session.sendMessage(messageText, {
         application,
         applicationPlanningInteraction: interaction,
         editorMode: 'frontend',
         originalRequest,
-        workflowDebug: {
-          enabled: true,
-          resumeFrom:
-            initialLifecycle.initialization.stage === 'generating_technical_plan' ||
-            initialLifecycle.initialization.stage === 'awaiting_technical_plan_confirmation'
-              ? 'technical_planning'
-              : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
-                  initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
-                ? 'ui_confirmation'
-                : initialLifecycle.initialization.stage === 'generating_requirement_document' ||
-                    initialLifecycle.initialization.stage ===
-                      'awaiting_requirement_document_confirmation'
-                  ? 'product_planning'
-                : 'requirements'
-        },
+        workflowDebug: interaction
+          ? undefined
+          : {
+              enabled: true,
+              resumeFrom:
+                initialLifecycle.initialization.stage === 'generating_technical_plan' ||
+                initialLifecycle.initialization.stage === 'awaiting_technical_plan_confirmation'
+                  ? 'technical_planning'
+                  : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
+                      initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
+                    ? 'ui_confirmation'
+                    : initialLifecycle.initialization.stage ===
+                          'generating_requirement_document' ||
+                        initialLifecycle.initialization.stage ===
+                          'awaiting_requirement_document_confirmation'
+                      ? 'product_planning'
+                      : 'requirements'
+            },
         workflowScope: 'application_planning',
         workspaceRoot: application.workspaceRoot,
         onContent: (content) => {
@@ -549,21 +571,18 @@ export default function ApplicationPagePlanningModal({
         },
         onWorkflow: (nextWorkflow) => {
           if (runToken !== planningRunTokenRef.current) return
-          handleWorkflowChange(nextWorkflow)
-          onPlanningWorkflow?.(nextWorkflow)
-          // 流式已转发最终（requires_user_input）workflow，标记避免 result.workflow 重复转发。
-          if (nextWorkflow?.summary?.status === 'requires_user_input') {
-            streamedFinalWorkflowRef.current = true
+          const publishDuringRun = planningWorkflowCanPublishDuringRun(nextWorkflow)
+          const mergedWorkflow = handleWorkflowChange(nextWorkflow, publishDuringRun)
+          if (mergedWorkflow && publishDuringRun) {
+            onPlanningWorkflow?.(mergedWorkflow)
           }
         }
       })
       if (runToken !== planningRunTokenRef.current) return
       if (result.workflow) {
-        handleWorkflowChange(result.workflow)
-        // 流式已转发最终 workflow 时不再重复转发，避免工作台新增重复卡片。
-        if (!streamedFinalWorkflowRef.current) {
-          onPlanningWorkflow?.(result.workflow)
-        }
+        const mergedWorkflow = handleWorkflowChange(result.workflow)
+        // sendMessage 完整结束后才把待输入/终态发布到工作台；此时 checkpoint 已稳定。
+        if (mergedWorkflow) onPlanningWorkflow?.(mergedWorkflow)
       }
       const confirmation = workflowConfirmation(result.workflow)
       if (confirmation && !completedRef.current) {
@@ -605,20 +624,16 @@ export default function ApplicationPagePlanningModal({
           // 不是产品 Agent 对话，不转发到工作台 MessageList，避免生硬文案。
         },
         onWorkflow: (nextWorkflow) => {
-          handleWorkflowChange(nextWorkflow)
-          onPlanningWorkflow?.(nextWorkflow)
-          // 流式已转发最终（requires_user_input）workflow，标记避免 result.workflow 重复转发。
-          if (nextWorkflow?.summary?.status === 'requires_user_input') {
-            streamedFinalWorkflowRef.current = true
+          const publishDuringRun = planningWorkflowCanPublishDuringRun(nextWorkflow)
+          const mergedWorkflow = handleWorkflowChange(nextWorkflow, publishDuringRun)
+          if (mergedWorkflow && publishDuringRun) {
+            onPlanningWorkflow?.(mergedWorkflow)
           }
         }
       })
       if (result.workflow) {
-        handleWorkflowChange(result.workflow)
-        // 流式已转发最终 workflow 时不再重复转发，避免工作台新增重复卡片。
-        if (!streamedFinalWorkflowRef.current) {
-          onPlanningWorkflow?.(result.workflow)
-        }
+        const mergedWorkflow = handleWorkflowChange(result.workflow)
+        if (mergedWorkflow) onPlanningWorkflow?.(mergedWorkflow)
       }
     } catch (reason) {
       if (isAuthenticationFailure(reason)) return

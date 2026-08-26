@@ -19,6 +19,7 @@ class ApplicationLifecycleStage(StrEnum):
     AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION = "awaiting_requirement_document_confirmation"
     GENERATING_UI_DESIGNS = "generating_ui_designs"
     AWAITING_UI_DESIGN_CONFIRMATION = "awaiting_ui_design_confirmation"
+    AWAITING_PLANNING_STAGE_ENTRY = "awaiting_planning_stage_entry"
     GENERATING_TECHNICAL_PLAN = "generating_technical_plan"
     AWAITING_TECHNICAL_PLAN_CONFIRMATION = "awaiting_technical_plan_confirmation"
     GENERATING_APPLICATION_TEMPLATE_FILES = "generating_application_template_files"

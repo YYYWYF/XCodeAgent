@@ -51,6 +51,7 @@ import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import DetailReview from './DetailReview'
 import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
+import PlanningStageEntryCard from './PlanningStageEntryCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
 import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
@@ -187,6 +188,7 @@ export default function WorkflowRunCard({
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
     : undefined
   const technicalPlanGenerationError = clarification?.mode === 'technical_plan_generation_error'
+  const planningStageEntry = clarification?.mode === 'planning_stage_entry_confirmation'
   // UI 确认阶段：clarification.mode 或 summary.phase 判定。换一换/选模板期间流式快照
   // 可能短暂丢失 clarification.mode，用 phase=ui_confirmation 兜底，避免卡片闪烁切换。
   const uiDesignConfirmation =
@@ -297,6 +299,7 @@ export default function WorkflowRunCard({
       {workflow.summary.message &&
         !entityDesignReview &&
         !uiDesignConfirmation &&
+        !planningStageEntry &&
         !artifactConfirmation &&
         !unitTestConfirmation &&
         !projectLaunch &&
@@ -358,23 +361,24 @@ export default function WorkflowRunCard({
       {(clarificationQuestions.length > 0 ||
         detailReview ||
         technicalPlanGenerationError ||
+        planningStageEntry ||
         dagConfirmation ||
         testPhaseConfirmation ||
         reviewPhaseConfirmation) && (
-        <div className={cx('workflow-clarification')}>
-          {!entityDesignReview && !entityDesignGate && (
-            <div className={cx('workflow-clarification-header')}>
-              <div>
-                <Text strong>待确认事项</Text>
+          <div className={cx('workflow-clarification')}>
+            {!entityDesignReview && !entityDesignGate && !planningStageEntry && (
+              <div className={cx('workflow-clarification-header')}>
+                <div>
+                  <Text strong>待确认事项</Text>
+                </div>
+                <Tag
+                  className={cx('workflow-confirmation-count')}
+                  color={requiresConfirmation ? 'gold' : 'default'}
+                >
+                  {confirmationItemCount}
+                </Tag>
               </div>
-              <Tag
-                className={cx('workflow-confirmation-count')}
-                color={requiresConfirmation ? 'gold' : 'default'}
-              >
-                {confirmationItemCount}
-              </Tag>
-            </div>
-          )}
+            )}
           {requiresConfirmation && interactionAvailability !== 'active' && (
             <Alert
               message={
@@ -411,7 +415,18 @@ export default function WorkflowRunCard({
               type="error"
             />
           )}
-          {testPhaseConfirmation && requiresConfirmation ? (
+          {planningStageEntry && requiresConfirmation ? (
+            <PlanningStageEntryCard
+              disabled={disabled || interactionAvailability !== 'active'}
+              onEnterPlanning={() =>
+                onSubmitClarification?.(workflow, {
+                  planning_stage_entry: 'enter',
+                  __applicationPlanningAction: 'enter_planning'
+                })
+              }
+              skippedUiDesign={clarification?.ui_design_skipped === true}
+            />
+          ) : testPhaseConfirmation && requiresConfirmation ? (
             <TestPhaseConfirmationCard
               disabled={disabled || interactionAvailability !== 'active'}
               onSubmit={() =>

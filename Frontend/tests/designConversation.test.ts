@@ -2,16 +2,30 @@ import assert from 'node:assert/strict'
 
 import { buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
 import {
+  appendPlanningLoadingPlaceholder,
+  compactPlanningMessageHistory,
+  isSupersededPlanningPhaseMessage,
+  isSupersededPlanningProgressMessage,
+  isSupersededPlanningStageEntryMessage,
+  latestUiDesignPreviewMessageIndex
+} from '../src/renderer/src/components/AiChatPanel/components/MessageList/uiDesignPreviewHistory'
+import {
   ensureApplicationPlanningAction,
   planningRequirementsConfirmed,
   planningTechnicalPlanConfirmed,
   planningWorkflowNeedsChatLoading,
   planningWorkflowActivity,
+  planningWorkflowCanPublishDuringRun,
+  planningWorkflowPhase,
   planningWorkflowRequiresUserInput,
   planningWorkflowSettlesLoading,
-  shouldBackfillPlanningWorkflow
+  planningWorkflowUiDesignSkipped,
+  retainApplicationPlanningInterrupt,
+  shouldBackfillPlanningWorkflow,
+  shouldCreatePlanningWindow
 } from '../src/renderer/src/components/Welcome/planningWorkflowState'
 import type { WorkflowRunPayload } from '../src/renderer/src/typings'
+import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 
 const planningInteraction = {
   gateId: 'requirement_spec:revision-1',
@@ -46,7 +60,9 @@ const regeneratedRequirementWithStaleTerminalConfirmation = {
   },
   events: [],
   state: {
-    lifecycle: { initialization: { stage: 'awaiting_requirement_confirmation' } },
+    lifecycle: {
+      initialization: { stage: 'awaiting_requirement_document_confirmation' }
+    },
     technical_plan: { confirmation_status: 'pending_user_confirmation' }
   },
   result: {
@@ -55,7 +71,10 @@ const regeneratedRequirementWithStaleTerminalConfirmation = {
   }
 } as WorkflowRunPayload
 
-assert.equal(planningTechnicalPlanConfirmed(regeneratedRequirementWithStaleTerminalConfirmation), false)
+assert.equal(
+  planningTechnicalPlanConfirmed(regeneratedRequirementWithStaleTerminalConfirmation),
+  false
+)
 
 const completedTechnicalPlanWorkflow = {
   ...regeneratedRequirementWithStaleTerminalConfirmation,
@@ -90,7 +109,7 @@ assert.equal(
 )
 assert.equal(
   planningRequirementsConfirmed({
-    state: { lifecycle: { initialization: { stage: 'generating_product_plan' } } }
+    state: { lifecycle: { initialization: { stage: 'generating_requirement_document' } } }
   } as WorkflowRunPayload),
   false
 )
@@ -127,6 +146,14 @@ const summaryOnlyQuestionsWorkflow = {
 } as WorkflowRunPayload
 
 assert.equal(planningWorkflowRequiresUserInput(summaryOnlyQuestionsWorkflow), true)
+assert.equal(planningWorkflowCanPublishDuringRun(summaryOnlyQuestionsWorkflow), false)
+assert.equal(
+  planningWorkflowCanPublishDuringRun({
+    ...summaryOnlyQuestionsWorkflow,
+    summary: { status: 'running', phase: 'requirements' }
+  } as WorkflowRunPayload),
+  true
+)
 assert.equal(
   ensureApplicationPlanningAction(summaryOnlyQuestionsWorkflow, { audience: '运营人员' })
     .__applicationPlanningAction,
@@ -138,14 +165,15 @@ assert.equal(
       ...summaryOnlyQuestionsWorkflow,
       summary: {
         ...summaryOnlyQuestionsWorkflow.summary,
+        phase: 'product_planning',
         clarification: {
-          mode: 'requirement_spec_confirmation',
+          mode: 'requirement_document_confirmation',
           status: 'requires_user_input',
           questions: []
         }
       }
     } as WorkflowRunPayload,
-    { requirement_spec_confirmation: '正确，继续规划' }
+    { requirement_document_confirmation: '正确，继续规划' }
   ).__applicationPlanningAction,
   'confirm'
 )
@@ -155,21 +183,168 @@ assert.equal(
       ...summaryOnlyQuestionsWorkflow,
       summary: {
         ...summaryOnlyQuestionsWorkflow.summary,
+        phase: 'product_planning',
         clarification: {
-          mode: 'requirement_spec_confirmation',
+          mode: 'requirement_document_confirmation',
           status: 'requires_user_input',
           questions: []
         }
       }
     } as WorkflowRunPayload,
-    { requirement_spec_confirmation: '增加审批角色' }
+    { requirement_document_confirmation: '增加审批角色' }
   ).__applicationPlanningAction,
   'revise'
+)
+assert.equal(
+  ensureApplicationPlanningAction(
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: {
+        ...summaryOnlyQuestionsWorkflow.summary,
+        phase: 'planning_stage_entry',
+        clarification: {
+          mode: 'planning_stage_entry_confirmation',
+          status: 'requires_user_input',
+          questions: []
+        }
+      }
+    } as WorkflowRunPayload,
+    { planning_stage_entry: 'enter' }
+  ).__applicationPlanningAction,
+  'enter_planning'
+)
+assert.equal(
+  latestUiDesignPreviewMessageIndex([
+    {
+      id: 1,
+      role: 'assistant',
+      content: '',
+      createdAt: 1,
+      workflow: {
+        ...summaryOnlyQuestionsWorkflow,
+        summary: { status: 'requires_user_input', phase: 'ui_confirmation' }
+      } as WorkflowRunPayload
+    },
+    { id: 2, role: 'user', content: '换一个模板', createdAt: 2 },
+    {
+      id: 3,
+      role: 'assistant',
+      content: '',
+      createdAt: 3,
+      workflow: {
+        ...summaryOnlyQuestionsWorkflow,
+        summary: {
+          status: 'requires_user_input',
+          phase: 'ui_confirmation',
+          clarification: { mode: 'ui_design_confirmation', status: 'requires_user_input' }
+        }
+      } as WorkflowRunPayload
+    }
+  ] as AgentChatMessage[]),
+  2
+)
+
+const compactedPlanningMessages = compactPlanningMessageHistory([
+  {
+    id: 1,
+    role: 'assistant',
+    content: '',
+    createdAt: 1,
+    workflow: {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'requires_user_input', phase: 'ui_confirmation' }
+    } as WorkflowRunPayload
+  },
+  {
+    id: 2,
+    role: 'assistant',
+    content: '',
+    createdAt: 2,
+    workflow: {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: {
+        status: 'requires_user_input',
+        phase: 'ui_confirmation',
+        clarification: { mode: 'ui_design_confirmation', status: 'requires_user_input' }
+      }
+    } as WorkflowRunPayload
+  },
+  {
+    id: 3,
+    role: 'assistant',
+    content: '当前阶段需要你的确认后继续。',
+    createdAt: 3,
+    workflow: {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: {
+        status: 'requires_user_input',
+        phase: 'planning_stage_entry',
+        clarification: {
+          mode: 'planning_stage_entry_confirmation',
+          status: 'requires_user_input'
+        }
+      }
+    } as WorkflowRunPayload
+  },
+  { id: 4, role: 'user', content: '进入规划阶段', createdAt: 4 },
+  {
+    id: 5,
+    role: 'assistant',
+    content: '',
+    createdAt: 5,
+    workflow: {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'failed', phase: 'failed' }
+    } as WorkflowRunPayload
+  }
+] as AgentChatMessage[])
+assert.deepEqual(
+  compactedPlanningMessages.map((message) => message.id),
+  [2, 3]
+)
+
+const planningHandoffMessages = [
+  {
+    id: 10,
+    role: 'assistant',
+    content: '',
+    createdAt: 10,
+    workflow: {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: {
+        status: 'requires_user_input',
+        phase: 'planning_stage_entry',
+        clarification: {
+          mode: 'planning_stage_entry_confirmation',
+          status: 'requires_user_input'
+        }
+      }
+    } as WorkflowRunPayload
+  },
+  {
+    id: 11,
+    role: 'assistant',
+    content: '',
+    createdAt: 11,
+    workflow: {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'technical_planning' }
+    } as WorkflowRunPayload
+  }
+] as AgentChatMessage[]
+
+assert.equal(isSupersededPlanningStageEntryMessage(planningHandoffMessages, 0), true)
+assert.deepEqual(
+  compactPlanningMessageHistory(planningHandoffMessages).map((message) => message.id),
+  [11]
 )
 assert.equal(planningWorkflowSettlesLoading(summaryOnlyQuestionsWorkflow), true)
 assert.equal(
   planningWorkflowNeedsChatLoading(
-    { ...summaryOnlyQuestionsWorkflow, summary: { status: 'running', phase: 'requirements' } } as WorkflowRunPayload,
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'requirements' }
+    } as WorkflowRunPayload,
     true,
     false,
     false,
@@ -179,7 +354,10 @@ assert.equal(
 )
 assert.equal(
   planningWorkflowNeedsChatLoading(
-    { ...summaryOnlyQuestionsWorkflow, summary: { status: 'running', phase: 'requirements' } } as WorkflowRunPayload,
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'requirements' }
+    } as WorkflowRunPayload,
     true,
     false,
     false,
@@ -189,13 +367,70 @@ assert.equal(
 )
 assert.equal(
   planningWorkflowNeedsChatLoading(
-    { ...summaryOnlyQuestionsWorkflow, summary: { status: 'running', phase: 'requirements' } } as WorkflowRunPayload,
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'requirements' }
+    } as WorkflowRunPayload,
     true,
     false,
     true,
     ''
   ),
   false
+)
+assert.equal(
+  planningWorkflowNeedsChatLoading(summaryOnlyQuestionsWorkflow, true, true, true, ''),
+  false
+)
+
+const pendingQuestionMessage = {
+  id: 12,
+  role: 'assistant',
+  content: '',
+  createdAt: 12,
+  workflow: summaryOnlyQuestionsWorkflow
+} as AgentChatMessage
+const staleLoadingPlaceholder = {
+  id: 13,
+  role: 'assistant',
+  content: '',
+  createdAt: 13,
+  planningLoading: true
+} as AgentChatMessage
+assert.deepEqual(
+  appendPlanningLoadingPlaceholder([pendingQuestionMessage], staleLoadingPlaceholder),
+  [pendingQuestionMessage]
+)
+assert.deepEqual(appendPlanningLoadingPlaceholder([], staleLoadingPlaceholder), [
+  staleLoadingPlaceholder
+])
+
+const runningRequirementsMessage = {
+  id: 14,
+  role: 'assistant',
+  content: '',
+  createdAt: 14,
+  workflow: {
+    ...summaryOnlyQuestionsWorkflow,
+    summary: { status: 'running', phase: 'requirements' }
+  } as WorkflowRunPayload
+} as AgentChatMessage
+const requirementDraftConfirmationMessage = {
+  id: 15,
+  role: 'assistant',
+  content: '',
+  createdAt: 15,
+  workflow: summaryOnlyQuestionsWorkflow
+} as AgentChatMessage
+assert.equal(isSupersededPlanningProgressMessage(runningRequirementsMessage, 15), true)
+assert.equal(isSupersededPlanningProgressMessage(staleLoadingPlaceholder, 15), true)
+assert.deepEqual(
+  compactPlanningMessageHistory([
+    runningRequirementsMessage,
+    staleLoadingPlaceholder,
+    requirementDraftConfirmationMessage
+  ]).map((message) => message.id),
+  [15]
 )
 
 const clarificationOnlyQuestionsWorkflow = {
@@ -214,6 +449,178 @@ assert.equal(planningWorkflowRequiresUserInput(clarificationOnlyQuestionsWorkflo
 assert.equal(planningWorkflowSettlesLoading(clarificationOnlyQuestionsWorkflow), true)
 assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, false), true)
 assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, true), false)
+
+const previousRunWithInterrupt = {
+  ...summaryOnlyQuestionsWorkflow,
+  runId: 'previous-run',
+  result: {
+    application_planning_interrupt: {
+      gateId: 'requirement_spec:previous',
+      artifact: 'requirement_spec',
+      artifactRevision: 'previous'
+    }
+  }
+} as WorkflowRunPayload
+const nextRunWithoutInterrupt = {
+  ...summaryOnlyQuestionsWorkflow,
+  runId: 'next-run',
+  summary: { status: 'running', phase: 'requirements' },
+  result: {}
+} as WorkflowRunPayload
+assert.equal(
+  retainApplicationPlanningInterrupt(previousRunWithInterrupt, nextRunWithoutInterrupt).result
+    ?.application_planning_interrupt,
+  undefined
+)
+
+const technicalPlanningWithStaleEntry = {
+  ...summaryOnlyQuestionsWorkflow,
+  runId: 'technical-planning-run',
+  summary: { status: 'running', phase: 'technical_planning' },
+  events: [
+    {
+      type: 'workflow.node.started',
+      nodeName: 'technical_planning',
+      status: 'running'
+    }
+  ],
+  state: {
+    clarification: {
+      mode: 'planning_stage_entry_confirmation',
+      status: 'requires_user_input'
+    }
+  },
+  result: {}
+} as WorkflowRunPayload
+
+assert.equal(planningWorkflowRequiresUserInput(technicalPlanningWithStaleEntry), false)
+assert.equal(planningWorkflowCanPublishDuringRun(technicalPlanningWithStaleEntry), true)
+assert.equal(
+  planningWorkflowNeedsChatLoading(
+    technicalPlanningWithStaleEntry,
+    true,
+    false,
+    false,
+    '',
+    true
+  ),
+  true
+)
+
+const latePlanningEntryFrame = {
+  ...technicalPlanningWithStaleEntry,
+  summary: {
+    status: 'requires_user_input',
+    phase: 'planning_stage_entry',
+    clarification: {
+      mode: 'planning_stage_entry_confirmation',
+      status: 'requires_user_input'
+    }
+  },
+  events: []
+} as WorkflowRunPayload
+
+assert.equal(
+  retainApplicationPlanningInterrupt(technicalPlanningWithStaleEntry, latePlanningEntryFrame)
+    .summary.phase,
+  'technical_planning'
+)
+
+const awaitingPlanningEntryWithStaleTechnicalProjection = {
+  ...summaryOnlyQuestionsWorkflow,
+  summary: {
+    status: 'requires_user_input',
+    phase: 'technical_planning',
+    clarification: {
+      mode: 'planning_stage_entry_confirmation',
+      status: 'requires_user_input'
+    }
+  },
+  state: {
+    lifecycle: {
+      initialization: { stage: 'awaiting_planning_stage_entry', status: 'awaiting_user' }
+    }
+  },
+  events: [
+    {
+      type: 'workflow.node.started',
+      nodeName: 'technical_planning',
+      status: 'running'
+    }
+  ]
+} as WorkflowRunPayload
+
+assert.equal(
+  planningWorkflowPhase(awaitingPlanningEntryWithStaleTechnicalProjection),
+  'planning_stage_entry'
+)
+assert.equal(
+  planningWorkflowRequiresUserInput(awaitingPlanningEntryWithStaleTechnicalProjection),
+  true
+)
+assert.equal(
+  planningWorkflowUiDesignSkipped({
+    ...awaitingPlanningEntryWithStaleTechnicalProjection,
+    state: {
+      ...awaitingPlanningEntryWithStaleTechnicalProjection.state,
+      clarification: { ui_design_skipped: true },
+      ui_designs: { confirmation_status: 'skipped', pages: [{ pageId: 'old-page' }] }
+    }
+  } as WorkflowRunPayload),
+  true
+)
+assert.equal(shouldCreatePlanningWindow(undefined), true)
+assert.equal(shouldCreatePlanningWindow('planning-conversation-thread'), false)
+
+const entryAuthoritativeWorkflow = {
+  ...summaryOnlyQuestionsWorkflow,
+  summary: {
+    status: 'requires_user_input',
+    phase: 'planning_stage_entry',
+    clarification: {
+      mode: 'planning_stage_entry_confirmation',
+      status: 'requires_user_input'
+    }
+  }
+} as WorkflowRunPayload
+const retainedUiDesignMessage = {
+  id: 20,
+  role: 'assistant',
+  content: '',
+  createdAt: 20,
+  workflow: {
+    ...summaryOnlyQuestionsWorkflow,
+    summary: { status: 'requires_user_input', phase: 'ui_confirmation' }
+  } as WorkflowRunPayload
+} as AgentChatMessage
+assert.equal(isSupersededPlanningPhaseMessage(retainedUiDesignMessage, 'planning_stage_entry'), false)
+assert.equal(isSupersededPlanningPhaseMessage(retainedUiDesignMessage, 'technical_planning'), false)
+assert.deepEqual(
+  compactPlanningMessageHistory(
+    [
+      retainedUiDesignMessage,
+      {
+        id: 21,
+        role: 'assistant',
+        content: '',
+        createdAt: 21,
+        workflow: {
+          ...summaryOnlyQuestionsWorkflow,
+          summary: { status: 'running', phase: 'technical_planning' }
+        } as WorkflowRunPayload
+      },
+      {
+        id: 22,
+        role: 'assistant',
+        content: '请确认是否进入规划阶段。',
+        createdAt: 22,
+        workflow: entryAuthoritativeWorkflow
+      }
+    ] as AgentChatMessage[],
+    entryAuthoritativeWorkflow
+  ).map((message) => message.id),
+  [20, 22]
+)
 
 const analyzingDesignIntentWorkflow = {
   runId: 'run-design-change',
@@ -263,9 +670,13 @@ assert.deepEqual(planningWorkflowActivity(initialRequirementWorkflow), {
 
 const generatingRequirementDocumentWorkflow = {
   ...initialRequirementWorkflow,
+  summary: {
+    status: 'running',
+    phase: 'product_planning'
+  },
   state: {
     lifecycle: {
-      initialization: { stage: 'generating_requirement_spec' }
+      initialization: { stage: 'generating_requirement_document' }
     }
   }
 } as WorkflowRunPayload

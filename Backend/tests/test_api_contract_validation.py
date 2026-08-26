@@ -6,6 +6,40 @@ from app.services.api_contract_validation import validate_api_contract_consisten
 
 
 class ApiContractValidationTests(unittest.TestCase):
+    def test_bodyless_post_command_is_allowed_when_semantics_use_path_and_auth(self) -> None:
+        """命令型 POST 由路径参数和登录态表达完整语义时允许没有请求体。"""
+
+        project_plan = {
+            "entities": [{"id": "Photo", "name": "Photo", "fields": []}],
+            "api_contracts": [
+                {
+                    "id": "photo_api",
+                    "entity_ids": ["Photo"],
+                    "schemas": {"PhotoActionOutput": {"type": "object"}},
+                    "endpoints": [
+                        {
+                            "id": "photo_api.like",
+                            "method": "POST",
+                            "path": "/photos/{photoId}/like",
+                            "parameters": [
+                                {
+                                    "name": "photoId",
+                                    "in": "path",
+                                    "required": True,
+                                    "schema": {"type": "string"},
+                                }
+                            ],
+                            "request_schema_ref": None,
+                            "response_schema_ref": "PhotoActionOutput",
+                            "authentication": {"required": True, "roles": ["user"]},
+                        }
+                    ],
+                }
+            ],
+        }
+
+        self.assertEqual(validate_api_contract_consistency(project_plan), [])
+
     def test_page_contract_endpoint_reference_does_not_require_data_source_dependency(self) -> None:
         """页面只声明 endpoint 依赖时，校验器应通过 ProjectPlan 契约解析数据源。"""
 

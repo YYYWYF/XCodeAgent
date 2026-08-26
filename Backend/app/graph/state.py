@@ -63,6 +63,8 @@ class ProjectState(TypedDict, total=False):
     technical_plan: dict[str, Any]
     technical_plan_path: str
     technical_plan_json_path: str
+    technical_plan_repair_candidate: dict[str, Any]
+    technical_plan_repair_errors: list[str]
     project_plan: dict[str, Any]
     pages: list[dict[str, Any]]
     frontend_pages: list[dict[str, Any]]

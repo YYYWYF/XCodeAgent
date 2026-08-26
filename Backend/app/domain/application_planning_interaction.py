@@ -18,6 +18,7 @@ ApplicationPlanningAction = Literal[
     "confirm",
     "revise",
     "ui_action",
+    "enter_planning",
     "design_change",
 ]
 
@@ -57,6 +58,11 @@ class ApplicationPlanningInteraction(BaseModel):
         if self.action == "ui_action":
             if self.artifact != "ui_designs" or not isinstance(self.ui_action, dict):
                 raise ValueError("UI 动作必须绑定 ui_designs 并提供 uiAction。")
+        elif self.action == "enter_planning":
+            if self.artifact != "ui_designs":
+                raise ValueError("进入规划阶段动作必须绑定已确认或已跳过的 ui_designs。")
+            if self.ui_action is not None:
+                raise ValueError("进入规划阶段动作不能携带 uiAction。")
         elif self.ui_action is not None:
             raise ValueError("只有 ui_action 可以携带 uiAction。")
         return self

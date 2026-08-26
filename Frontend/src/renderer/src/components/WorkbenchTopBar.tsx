@@ -1,6 +1,12 @@
 import { Fragment, useState } from 'react'
 import { Tag } from 'antd'
-import { BlockOutlined, DownOutlined, FolderOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
+import {
+  BlockOutlined,
+  DownOutlined,
+  FolderOutlined,
+  MoonOutlined,
+  SunOutlined
+} from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import { useWorkbenchPhase } from '../context'
@@ -13,7 +19,7 @@ import {
 } from '../workbenchPhase'
 import './WorkbenchTopBar.less'
 
-const PHASE_ORDER: WorkbenchPhase[] = ['product', 'development', 'test', 'review']
+const PHASE_ORDER: WorkbenchPhase[] = ['product', 'planning', 'development', 'test', 'review']
 
 type Props = {
   application: ApplicationConfig

@@ -143,7 +143,7 @@ def _ui_design_confirmed_payload(
 
 
 def _ui_design_skipped_payload() -> dict[str, Any]:
-    """构造跳过 UI 设计后直接进入技术规划的清晰状态载荷。"""
+    """构造跳过 UI 设计后等待进入规划阶段的清晰状态载荷。"""
 
     return {
         "mode": "ui_design_confirmation",
@@ -151,7 +151,7 @@ def _ui_design_skipped_payload() -> dict[str, Any]:
         "question_schema": "gemini_cli.ask_user.v1",
         "questions": [],
         "assumptions": [],
-        "message": "已跳过 UI 设计稿生成，直接进入技术规划。",
+        "message": "已跳过 UI 设计稿生成，等待用户确认进入规划阶段。",
         "skipped": True,
         "pages": [],
     }

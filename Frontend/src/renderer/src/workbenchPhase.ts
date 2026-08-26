@@ -16,9 +16,7 @@ export function hasApplicationEnteredDevelopment(applicationId: string): boolean
 /** 持久化进入开发阶段的决定，并通知当前窗口内依赖该门禁的功能。 */
 export function markApplicationEnteredDevelopment(applicationId: string): void {
   window.localStorage.setItem(developmentEntryStorageKey(applicationId), '1')
-  window.dispatchEvent(
-    new CustomEvent(DEVELOPMENT_ENTRY_EVENT, { detail: { applicationId } })
-  )
+  window.dispatchEvent(new CustomEvent(DEVELOPMENT_ENTRY_EVENT, { detail: { applicationId } }))
 }
 
 /** 监听指定应用进入开发阶段的决定，兼顾当前窗口操作与其他窗口同步。 */
@@ -45,17 +43,17 @@ export function subscribeApplicationDevelopmentEntry(
 }
 
 /**
- * 工作台四大阶段，每个阶段对应一个 Agent。
+ * 工作台五大阶段，每个阶段对应一个 Agent。
  * 阶段是主开关：先切到对应阶段，才能编辑该阶段的对象；点文件不会自动切阶段。
  * 旅程1（从零建）与旅程2（增量）共用这条阶段模型。
  */
-export type WorkbenchPhase = 'product' | 'development' | 'test' | 'review'
+export type WorkbenchPhase = 'product' | 'planning' | 'development' | 'test' | 'review'
 
 export type WorkbenchAgentIdentity = {
   key: WorkbenchPhase
-  /** 短标签：设计 / 开发 / 测试 / 审查。 */
+  /** 短标签：设计 / 规划 / 开发 / 测试 / 审查。 */
   label: string
-  /** Agent 身份：产品 Agent / 研发 Agent / 测试 Agent / 审查 Agent。 */
+  /** Agent 身份：产品 Agent / 规划 Agent / 研发 Agent / 测试 Agent / 审查 Agent。 */
   role: string
   /** 职责一句话。 */
   responsibility: string
@@ -67,7 +65,13 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     key: 'product',
     label: '设计',
     role: '产品 Agent',
-    responsibility: '定 WHAT：需求文档、产品规划、UI 设计和技术规划'
+    responsibility: '定 WHAT：需求文档、产品规划和 UI 设计'
+  },
+  planning: {
+    key: 'planning',
+    label: '规划',
+    role: '规划 Agent',
+    responsibility: '定 HOW：技术架构、实体、API、Schema 与页面实现引用'
   },
   development: {
     key: 'development',
@@ -103,8 +107,9 @@ export type EditableObjectType =
 
 /** 各阶段可编辑的对象集合；不在集合里的对象在该阶段只读。 */
 const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
-  // 产品阶段：app 级 spec（需求文档、项目计划）。详细设计 spec 归研发。
-  product: ['requirement_doc', 'project_plan'],
+  // 设计阶段只编辑产品事实，技术规划由独立规划阶段负责。
+  product: ['requirement_doc'],
+  planning: ['project_plan'],
   // 研发阶段：页面 spec、接口 spec、代码。
   development: ['page_spec', 'endpoint_spec', 'code'],
   // 测试阶段：以跑+看+确认为主，仅验收可确认。
@@ -128,6 +133,14 @@ const PLANNING_STAGES = new Set([
   'generating_requirement_document',
   'awaiting_requirement_document_confirmation',
   'generating_build_task_plan'
+])
+
+/** 独立技术规划阶段及模板准备阶段的生命周期节点。 */
+const TECHNICAL_PLANNING_STAGES = new Set([
+  'generating_technical_plan',
+  'awaiting_technical_plan_confirmation',
+  'generating_application_template_files',
+  'application_template_generation_failed'
 ])
 
 /** 应用是否仍处于初始设计(规划)阶段——新应用自动开始澄清的依据。 */
@@ -160,6 +173,18 @@ const REVIEW_PHASE_NODES = new Set([
   'acceptance',
   'finalize_project'
 ])
+const PRODUCT_PHASE_NODES = new Set([
+  'requirements',
+  'requirements_review',
+  'product_planning',
+  'requirement_document_review',
+  'ui_confirmation',
+  'ui_confirmation_review',
+  'planning_stage_entry',
+  'design_intent_analysis',
+  'design_chat_response'
+])
+const PLANNING_PHASE_NODES = new Set(['technical_planning', 'technical_planning_review'])
 
 /** 根据 Workflow 节点归属选择消息应显示的 Agent 阶段。 */
 export function workbenchPhaseForNode(
@@ -167,6 +192,8 @@ export function workbenchPhaseForNode(
   fallback: WorkbenchPhase
 ): WorkbenchPhase {
   const node = String(nodeName || '').trim()
+  if (PRODUCT_PHASE_NODES.has(node)) return 'product'
+  if (PLANNING_PHASE_NODES.has(node)) return 'planning'
   if (REVIEW_PHASE_NODES.has(node)) return 'review'
   if (TEST_PHASE_NODES.has(node)) return 'test'
   if (DEVELOPMENT_PHASE_NODES.has(node)) return 'development'
@@ -184,6 +211,7 @@ export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): Workbenc
   if (!lifecycle) return 'development'
 
   const stage = lifecycle.initialization?.stage
+  if (stage && TECHNICAL_PLANNING_STAGES.has(stage)) return 'planning'
   if (
     stage &&
     stage !== 'ready_for_workbench' &&
@@ -215,6 +243,11 @@ const INITIALIZATION_STAGE_LABELS: Record<string, string> = {
   awaiting_requirement_clarification: '需求澄清',
   generating_requirement_document: '生成需求文档',
   awaiting_requirement_document_confirmation: '确认需求文档',
+  generating_ui_designs: '生成 UI 设计',
+  awaiting_ui_design_confirmation: '确认 UI 设计',
+  awaiting_planning_stage_entry: '等待进入规划阶段',
+  generating_technical_plan: '生成技术规划',
+  awaiting_technical_plan_confirmation: '确认技术规划',
   generating_application_template_files: '生成应用模板',
   application_template_generation_failed: '生成失败',
   ready_for_workbench: '已就绪'

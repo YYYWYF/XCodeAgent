@@ -36,7 +36,7 @@ class ApplicationPlanningRecoveryRequest(BaseModel):
 
 
 def application_page_planning_capabilities() -> dict[str, Any]:
-    """发布创建应用产品/UI/技术四阶段 Workflow 的 AG-UI 能力。"""
+    """发布设计阶段、规划阶段及其显式入口门禁的 AG-UI 能力。"""
 
     return {
         "name": "application-page-planning",
@@ -50,6 +50,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "requirements",
             "product_planning",
             "ui_confirmation",
+            "planning_stage_entry",
             "technical_planning",
         ],
         "designChange": {
@@ -68,6 +69,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "technical_plan",
         ],
         "clarificationModes": {
+            "planningStageEntry": "planning_stage_entry_confirmation",
             "technicalPlanConfirmation": "technical_plan_confirmation",
             "technicalPlanGenerationError": "technical_plan_generation_error",
         },

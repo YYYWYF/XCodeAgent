@@ -421,6 +421,9 @@ def _public_workflow_state(
             "code_review_repair_iteration",
             "code_review_max_repair_iterations",
             "code_review_next_action",
+            # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。
+            "technical_plan_repair_candidate",
+            "technical_plan_repair_errors",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }

@@ -8,7 +8,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from app.graph.application_planning_interrupts import requirements_review
+from app.graph.application_planning_interrupts import (
+    planning_stage_entry,
+    requirements_review,
+)
 from app.graph.state import ProjectState
 from app.protocols.application_planning_interrupt import (
     project_application_planning_interrupt,
@@ -116,6 +119,27 @@ def _counting_interrupt_test_graph(
         _route_requirements_fixture,
         {"review": "requirements_review", "completed": END},
     )
+    return builder.compile(checkpointer=InMemorySaver())
+
+
+def _planning_stage_entry_test_graph():
+    """构建入口门与技术规划占位节点，验证失败后可在同一 checkpoint 重试。"""
+
+    def technical_planning_fixture(state: ProjectState) -> dict:
+        """记录成功进入规划阶段后的运行身份，并结束测试图。"""
+
+        return {
+            "phase": "technical_planning",
+            "status": "completed",
+            "clarification": {"status": "clear"},
+        }
+
+    builder = StateGraph(ProjectState)
+    builder.add_node("planning_stage_entry", planning_stage_entry)
+    builder.add_node("technical_planning", technical_planning_fixture)
+    builder.add_node("design_intent_analysis", _design_intent_fixture)
+    builder.add_edge(START, "planning_stage_entry")
+    builder.add_edge("technical_planning", END)
     return builder.compile(checkpointer=InMemorySaver())
 
 
@@ -348,6 +372,72 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         completed = await graph.aget_state(config)
         self.assertTrue(frames)
         self.assertEqual(completed.values["status"], "completed")
+        self.assertFalse(completed.tasks)
+
+    async def test_planning_entry_can_retry_after_valid_gate_action_is_rejected(self) -> None:
+        """入口动作校验失败不得留下重复运行元数据，下一次显式进入应正常续跑。"""
+
+        graph = _planning_stage_entry_test_graph()
+        thread_id = "planning-entry-retry"
+        config = {"configurable": {"thread_id": thread_id}}
+        _ = [
+            chunk
+            async for chunk in graph.astream(
+                {
+                    "active_thread_id": thread_id,
+                    "active_run_id": "initial-run",
+                    "ui_designs": {"confirmation_status": "skipped"},
+                    "clarification": {
+                        "status": "completed",
+                        "mode": "ui_design_confirmation",
+                    },
+                },
+                config=config,
+                stream_mode="updates",
+            )
+        ]
+        snapshot = await graph.aget_state(config)
+        pending = snapshot.tasks[0].interrupts[0].value
+
+        with TemporaryDirectory() as workspace:
+            rejected_frames = [
+                frame
+                async for frame in build_workflow_ag_ui_stream(
+                    graph=graph,
+                    payload=_resume_payload(
+                        thread_id=thread_id,
+                        run_id="planning-entry-rejected",
+                        workspace=workspace,
+                        pending=pending,
+                        action="confirm",
+                        request="普通确认不能进入规划阶段",
+                    ),
+                )
+            ]
+            resumed_frames = [
+                frame
+                async for frame in build_workflow_ag_ui_stream(
+                    graph=graph,
+                    payload=_resume_payload(
+                        thread_id=thread_id,
+                        run_id="planning-entry-success",
+                        workspace=workspace,
+                        pending=pending,
+                        action="enter_planning",
+                        request="进入规划阶段",
+                    ),
+                )
+            ]
+
+        self.assertTrue(any('"type":"RUN_ERROR"' in frame for frame in rejected_frames))
+        self.assertTrue(any("只允许 action=enter_planning" in frame for frame in rejected_frames))
+        self.assertFalse(
+            any('"type":"RUN_ERROR"' in frame for frame in resumed_frames),
+            resumed_frames,
+        )
+        completed = await graph.aget_state(config)
+        self.assertEqual(completed.values["status"], "completed")
+        self.assertEqual(completed.values["active_run_id"], "planning-entry-success")
         self.assertFalse(completed.tasks)
 
     async def test_stale_gate_fails_before_revision_started_projection(self) -> None:

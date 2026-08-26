@@ -251,7 +251,7 @@ export default function UiDesignConfirmationPanel({
     onSubmit(workflow, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
   }
 
-  // 用户明确选择跳过 UI 设计时，提交结构化动作并直接进入技术规划。
+  // 用户明确选择跳过 UI 设计时，只提交跳过动作并等待规划阶段入口卡。
   const skipUiDesign = (): void => {
     if (disabled) return
     onSubmit(
@@ -504,7 +504,7 @@ export default function UiDesignConfirmationPanel({
         <div className={cx('ui-design-header-copy')}>
           <h4>确认UI设计稿</h4>
           <p>
-            如需视觉参考可选择模板或换一换生成设计稿，也可以跳过，直接进入技术规划。
+            如需视觉参考可选择模板或换一换生成设计稿，也可以跳过；完成后需手动进入规划阶段。
           </p>
           {actingPageIds.length > 0 || generatingPageIds.length > 0 ? (
             <span className={cx('ui-design-processing-hint')}>

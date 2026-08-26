@@ -410,6 +410,7 @@ export type ApplicationPlanningAction =
   | 'confirm'
   | 'revise'
   | 'ui_action'
+  | 'enter_planning'
   | 'design_change'
 
 export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer> & {
@@ -613,6 +614,7 @@ export type ApplicationLifecycleStage =
   | 'awaiting_requirement_document_confirmation'
   | 'generating_ui_designs'
   | 'awaiting_ui_design_confirmation'
+  | 'awaiting_planning_stage_entry'
   | 'generating_technical_plan'
   | 'awaiting_technical_plan_confirmation'
   | 'generating_application_template_files'

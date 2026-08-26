@@ -19,6 +19,7 @@ import {
 import {
   planningWorkflowActivity,
   planningWorkflowNeedsChatLoading,
+  planningWorkflowPhase,
   planningWorkflowRequiresUserInput
 } from '../../../Welcome/planningWorkflowState'
 import type {
@@ -61,6 +62,12 @@ import {
 import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
+import {
+  isSupersededPlanningStageEntryMessage,
+  isSupersededPlanningPhaseMessage,
+  isSupersededPlanningProgressMessage,
+  latestUiDesignPreviewMessageIndex
+} from './uiDesignPreviewHistory'
 import './MessageList.less'
 
 const { Text } = Typography
@@ -102,13 +109,9 @@ function entityDesignMessageContent(
   return parts.join('\n\n')
 }
 
-/** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 研发 / 测试 / 审查）在回复。
+/** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 规划 / 研发 / 测试 / 审查）在回复。
  *  人像图标 + Agent 角色名，独占一行，下方换行展示正文/卡片。 */
-function MessageAgentHeader({
-  agentKey
-}: {
-  agentKey: WorkbenchPhase
-}): ReactElement {
+function MessageAgentHeader({ agentKey }: { agentKey: WorkbenchPhase }): ReactElement {
   const agent = WORKBENCH_PHASE_AGENTS[agentKey]
   return (
     <div className={cx('ai-message-agent', agentKey)}>
@@ -120,15 +123,22 @@ function MessageAgentHeader({
   )
 }
 
-/** 设计阶段快照未到达时的加载卡：与 PlanningWorkflowActivity 同款边框卡片，保证只出现一种加载 UI。 */
-function PlanningPendingCard({ detail }: { detail: string }): ReactElement {
+/** 创建规划快照未到达时的加载卡，文案跟随当前产品/规划 Agent 身份。 */
+function PlanningPendingCard({
+  agentKey,
+  detail
+}: {
+  agentKey: WorkbenchPhase
+  detail: string
+}): ReactElement {
+  const agent = WORKBENCH_PHASE_AGENTS[agentKey]
   return (
     <section aria-live="polite" className={cx('planning-workflow-activity', 'running')}>
       <span className={cx('planning-workflow-activity-icon')} aria-hidden="true">
         <LoadingOutlined spin />
       </span>
       <div className={cx('planning-workflow-activity-copy')}>
-        <Text strong>产品 Agent 正在处理</Text>
+        <Text strong>{agent.role} 正在处理</Text>
         <Text type="secondary">{detail}</Text>
       </div>
     </section>
@@ -271,6 +281,10 @@ export default function MessageList({
     (message) => message.id === activeAssistantMessageId && Boolean(message.processSteps?.length)
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
+  const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
+  const currentPlanningPhase = designPhasePlanning
+    ? planningWorkflowPhase(planningWorkflow)
+    : ''
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -368,7 +382,12 @@ export default function MessageList({
               <article className={cx('ai-message', 'assistant')}>
                 <div className={cx('ai-message-content')}>
                   <MessageAgentHeader agentKey={currentPhase} />
-                  <PlanningPendingCard detail="正在准备需求确认…" />
+                  <PlanningPendingCard
+                    agentKey={currentPhase}
+                    detail={
+                      currentPhase === 'planning' ? '正在恢复规划阶段…' : '正在准备需求确认…'
+                    }
+                  />
                 </div>
               </article>
             ) : (
@@ -381,6 +400,29 @@ export default function MessageList({
             )
           ) : (
             messages.map((message, messageIndex) => {
+              // 以 activePlannings 的当前权威阶段收口冲突消息：保留 UI 设计稿历史，
+              // 只隐藏过早生成的 TechnicalPlan，进入规划窗口后也不回显旧入口卡。
+              if (
+                designPhasePlanning &&
+                isSupersededPlanningPhaseMessage(message, currentPlanningPhase)
+              ) {
+                return null
+              }
+              // TechnicalPlan 已开始后，入口动作已经消费；不在规划窗口继续展示可点击入口卡。
+              if (
+                designPhasePlanning &&
+                isSupersededPlanningStageEntryMessage(messages, messageIndex)
+              ) {
+                return null
+              }
+              // 新确认卡或结果消息已经到达时，不再渲染前一帧的空 loading，
+              // 同时避免 loading 收口后留下只有 Agent 头像的空消息。
+              if (
+                designPhasePlanning &&
+                isSupersededPlanningProgressMessage(message, latestAssistantMessageId)
+              ) {
+                return null
+              }
               const messageLoading = message.id === activeAssistantMessageId
               const entityDesignMessage = isEntityDesignWorkflow(message.workflow)
               // 实体会话内所有消息按对话样式渲染，运行中的临时快照缺少实体
@@ -437,6 +479,8 @@ export default function MessageList({
                 message.workflow &&
                 (message.workflow.summary?.phase === 'ui_confirmation' ||
                   messageClarification?.mode === 'ui_design_confirmation')
+              const isLatestUiDesignConfirmationCard =
+                isUiDesignConfirmationCard && messageIndex === latestUiDesignPreviewIndex
               // 项目启动节点使用专用卡片覆盖运行、完成与失败状态。
               const isLaunchProjectCard =
                 message.workflow && message.workflow.summary?.phase === 'launch_project'
@@ -453,8 +497,8 @@ export default function MessageList({
                 message.workflow.summary?.status !== 'running'
               const showWorkflowCard = Boolean(
                 message.workflow &&
-                  (requiresClarification ||
-                    isUiDesignConfirmationCard ||
+                  ((requiresClarification && !isUiDesignConfirmationCard) ||
+                    isLatestUiDesignConfirmationCard ||
                     isPlanningStageCard ||
                     isLaunchProjectCard ||
                     isReviewPhaseConfirmationCard ||
@@ -546,7 +590,7 @@ export default function MessageList({
                   <div className={cx('ai-message-content')}>
                     {message.role === 'assistant' ? (
                       <>
-                        {/* 统一 Agent 头：人像图标 + 当前阶段 Agent 角色名（产品/研发/测试/审查），
+                        {/* 统一 Agent 头：人像图标 + 当前阶段 Agent 角色名（产品/规划/研发/测试/审查），
                             独占一行，下方换行展示正文/卡片。 */}
                         <MessageAgentHeader
                           agentKey={messageAgentPhase(message.workflow, currentPhase)}
@@ -557,7 +601,7 @@ export default function MessageList({
                             onRetry={isCurrentErrorMessage ? onRetryError : undefined}
                           />
                         ) : null}
-                        {/* 设计阶段规划占位消息：初次进入或用户提交后产品 Agent 正在准备，
+                        {/* 创建规划占位消息：初次进入或用户提交后当前阶段 Agent 正在准备，
                             planningLoading 标记的占位消息显示与「正在分析需求」一致的
                             边框卡片加载态，流式 chunk 到达后 planningLoading 被清除并展示返回内容。 */}
                         {showPlanningLoading &&
@@ -565,11 +609,16 @@ export default function MessageList({
                             <PlanningWorkflowActivity workflow={message.workflow} />
                           ) : (
                             <PlanningPendingCard
+                              agentKey={messageAgentPhase(message.workflow, currentPhase)}
                               detail={
                                 isPlanningWorkflowRunning
-                                  ? '正在生成设计方案…'
+                                  ? currentPhase === 'planning'
+                                    ? '正在生成技术规划…'
+                                    : '正在生成设计方案…'
                                   : designPhasePlanning
-                                    ? '正在准备需求确认…'
+                                    ? currentPhase === 'planning'
+                                      ? '正在恢复规划阶段…'
+                                      : '正在准备需求确认…'
                                     : '正在处理…'
                               }
                             />

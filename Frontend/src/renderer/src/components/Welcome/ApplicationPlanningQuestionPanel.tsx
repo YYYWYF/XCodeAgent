@@ -16,9 +16,10 @@ import RequirementSpecSummary from './RequirementSpecSummary'
 import RequirementSpecEditor from './RequirementSpecEditor'
 import UiDesignConfirmationPanel from './UiDesignConfirmationPanel'
 import TechnicalPlanSummary from './TechnicalPlanSummary'
+import PlanningStageEntryCard from '../AiChatPanel/components/WorkflowRunCard/PlanningStageEntryCard'
 import { projectPlanReadingSections } from './ProjectPlanReadingSections'
+import { planningWorkflowClarification } from './planningWorkflowState'
 import type {
-  WorkflowClarification,
   WorkflowClarificationAnswer,
   WorkflowClarificationAnswers,
   ApplicationPlanningAction,
@@ -52,18 +53,6 @@ type Props = {
   ) => void
   rootPath?: string
   workflow: WorkflowRunPayload
-}
-
-// 从公开 Workflow 载荷中读取当前规划阶段的待确认内容。
-function planningClarification(workflow: WorkflowRunPayload): WorkflowClarification | undefined {
-  const candidates = [
-    workflow.summary.clarification,
-    workflow.state?.clarification,
-    workflow.result?.clarification
-  ]
-  return candidates.find((value): value is WorkflowClarification =>
-    Boolean(value && typeof value === 'object')
-  )
 }
 
 // 为规划问题生成稳定表单字段，确保提交答案能与后端问题一一对应。
@@ -352,7 +341,7 @@ function ProjectPlanConfirmationLayout({
             layout="vertical"
             onFinish={onFinish}
           >
-              <Form.Item name={['answers', technicalPlanAnswerKey]} noStyle>
+            <Form.Item name={['answers', technicalPlanAnswerKey]} noStyle>
               <TextArea
                 aria-label="技术规划意见"
                 autoSize={{ minRows: 1, maxRows: 2 }}
@@ -422,7 +411,7 @@ export default function ApplicationPlanningQuestionPanel({
   const [requirementDraft, setRequirementDraft] = useState<Record<string, unknown>>()
   const [savingRequirement, setSavingRequirement] = useState(false)
   const lastValidUiWorkflowRef = useRef<WorkflowRunPayload | undefined>(undefined)
-  const clarification = planningClarification(workflow)
+  const clarification = planningWorkflowClarification(workflow)
   const questions = clarification?.questions || []
   const isRequirementConfirmation = clarification?.mode === 'requirement_document_confirmation'
   const isProductPlanConfirmation = false
@@ -430,6 +419,7 @@ export default function ApplicationPlanningQuestionPanel({
     clarification?.mode === 'technical_plan_confirmation'
   const isTechnicalPlanGenerationError =
     clarification?.mode === 'technical_plan_generation_error'
+  const isPlanningStageEntry = clarification?.mode === 'planning_stage_entry_confirmation'
   const isDocumentConfirmation =
     isRequirementConfirmation || isProductPlanConfirmation || isTechnicalPlanConfirmation
   const technicalPlanAnswerKey = questions[0]
@@ -474,7 +464,7 @@ export default function ApplicationPlanningQuestionPanel({
   const effectiveWorkflow =
     clarification.mode === 'ui_design_confirmation' && hasUiDesignPages
       ? workflow
-      : lastValidUiWorkflowRef.current ?? workflow
+      : (lastValidUiWorkflowRef.current ?? workflow)
   // run 中途 mode 变未知但曾进入过
   // UI 确认阶段：用缓存的有效 UI workflow 渲染，保持布局不动，单页加载态由面板内控制。
   const knownConfirmationModes = new Set([
@@ -482,12 +472,10 @@ export default function ApplicationPlanningQuestionPanel({
     'requirement_document_confirmation',
     'technical_plan_confirmation',
     'technical_plan_generation_error',
-    'entity_source_binding',
+    'planning_stage_entry_confirmation',
+    'entity_source_binding'
   ])
-  if (
-    !knownConfirmationModes.has(clarification.mode || '') &&
-    lastValidUiWorkflowRef.current
-  ) {
+  if (!knownConfirmationModes.has(clarification.mode || '') && lastValidUiWorkflowRef.current) {
     return (
       <UiDesignConfirmationPanel
         disabled={disabled}
@@ -540,6 +528,21 @@ export default function ApplicationPlanningQuestionPanel({
     )
   }
 
+  if (isPlanningStageEntry) {
+    return (
+      <PlanningStageEntryCard
+        disabled={disabled}
+        onEnterPlanning={() =>
+          onSubmit(workflow, {
+            planning_stage_entry: 'enter',
+            __applicationPlanningAction: 'enter_planning'
+          })
+        }
+        skippedUiDesign={clarification.ui_design_skipped === true}
+      />
+    )
+  }
+
   if (isTechnicalPlanGenerationError) {
     const errors = Array.isArray(clarification.errors)
       ? clarification.errors.map(String).filter(Boolean).slice(0, 8)
@@ -551,7 +554,11 @@ export default function ApplicationPlanningQuestionPanel({
             <>
               <Paragraph>{clarification.message || '技术规划自动修复后仍未通过校验。'}</Paragraph>
               {errors.length ? (
-                <ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul>
+                <ul>
+                  {errors.map((error) => (
+                    <li key={error}>{error}</li>
+                  ))}
+                </ul>
               ) : null}
             </>
           }
@@ -562,7 +569,9 @@ export default function ApplicationPlanningQuestionPanel({
         <Button
           disabled={disabled}
           onClick={() =>
-            onSubmit(workflow, { planning_recovery: '请重新生成技术规划，并修复全部结构和契约错误。' })
+            onSubmit(workflow, {
+              planning_recovery: '请重新生成技术规划，并修复全部结构和契约错误。'
+            })
           }
           size="large"
           type="primary"
@@ -710,7 +719,7 @@ export default function ApplicationPlanningQuestionPanel({
                       : '请审核需求文档中的应用信息、用户角色、页面目标、业务信息、核心操作、跳转与验收标准；确认后进入 UI 设计。'
                     : isTechnicalPlanConfirmation
                       ? '请由开发角色审核架构、API、数据源、权限与页面实现契约；确认后进入工作区。'
-                    : artifact.name}
+                      : artifact.name}
               </Text>
             </div>
             {canShowSummary ? (
@@ -891,10 +900,10 @@ export default function ApplicationPlanningQuestionPanel({
                         ? '提交需求文档意见并调整'
                         : '确认需求文档正确并进入 UI 设计'
                       : isTechnicalPlanConfirmation
-                      ? hasTechnicalPlanFeedback
-                        ? '提交技术规划意见并调整规划'
-                        : '确认技术规划正确并进入工作区'
-                      : undefined
+                        ? hasTechnicalPlanFeedback
+                          ? '提交技术规划意见并调整规划'
+                          : '确认技术规划正确并进入工作区'
+                        : undefined
                 }
                 disabled={disabled}
                 htmlType="submit"
@@ -911,13 +920,14 @@ export default function ApplicationPlanningQuestionPanel({
                   ? '确认修改并继续规划'
                   : isRequirementConfirmation && hasRequirementFeedback
                     ? '提交补充，重新分析需求'
-                    : (isProductPlanConfirmation || isTechnicalPlanConfirmation) && hasTechnicalPlanFeedback
+                    : (isProductPlanConfirmation || isTechnicalPlanConfirmation) &&
+                        hasTechnicalPlanFeedback
                       ? '提交意见，调整规划'
                       : isTechnicalPlanConfirmation
                         ? '技术规划正确，进入工作区'
                         : isProductPlanConfirmation
                           ? '产品规划正确，进入 UI 设计'
-                        : submitLabel(clarification.mode)}
+                          : submitLabel(clarification.mode)}
               </Button>
             </div>
           ) : null}

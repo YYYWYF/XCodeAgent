@@ -3,12 +3,18 @@ from __future__ import annotations
 import json
 import unittest
 from copy import deepcopy
+from unittest.mock import patch
 
 from app.agents.main.product_planner import (
     _product_plan_json_example,
     _product_planning_prompt,
 )
-from app.agents.main.planner import _technical_planning_prompt
+from app.agents.main.planner import (
+    _technical_contract_ids_for_errors,
+    _technical_contract_repair_prompt,
+    _technical_planning_prompt,
+    repair_technical_plan_api_contracts_with_chat_model,
+)
 from app.agents.main.requirements_analyzer import (
     _requirements_prompt,
     _validate_complete_requirement_spec,
@@ -297,8 +303,120 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("Business-flow context", prompt)
         self.assertIn("Page context", prompt)
         self.assertIn("Business-action context", prompt)
+        self.assertIn("operation semantics, never from the HTTP method alone", prompt)
+        self.assertIn("command-with-body", prompt)
+        self.assertIn("command-without-body", prompt)
+        self.assertIn("Never invent an empty request object", prompt)
         self.assertNotIn("engineering_design", prompt)
         self.assertNotIn('"resource"', prompt)
+
+    def test_contract_repair_prompt_projects_only_implicated_contract_context(self) -> None:
+        """Contract 定向修复不得把无关 API、实体或页面动作重新注入模型。"""
+
+        existing_plan = {
+            "entities": [
+                {"id": "Photo", "fields": [{"name": "id"}]},
+                {"id": "User", "fields": [{"name": "id"}]},
+            ],
+            "api_contracts": [
+                {
+                    "id": "photo_api",
+                    "entity_ids": ["Photo"],
+                    "schemas": {"PhotoOutput": {"type": "object"}},
+                    "endpoints": [{"id": "photo_api.like", "method": "POST"}],
+                },
+                {
+                    "id": "user_api",
+                    "entity_ids": ["User"],
+                    "schemas": {"UnrelatedSchema": {"type": "object"}},
+                    "endpoints": [
+                        {"id": "user_api.unrelated_endpoint", "method": "GET"}
+                    ],
+                },
+            ],
+            "pages": [
+                {
+                    "pageId": "photo_page",
+                    "references": {
+                        "endpoint_dependencies": [
+                            {"endpoint_id": "photo_api.like"}
+                        ]
+                    },
+                }
+            ],
+        }
+        requirement_spec = {
+            "confirmed_product_plan": {
+                "pages": [
+                    {
+                        "pageId": "photo_page",
+                        "actions": [{"actionId": "like-photo"}],
+                    },
+                    {
+                        "pageId": "user_page",
+                        "actions": [{"actionId": "UNRELATED_ACTION_SENTINEL"}],
+                    },
+                ]
+            }
+        }
+        errors = ["Endpoint photo_api.like references unknown schema MissingInput."]
+
+        contract_ids = _technical_contract_ids_for_errors(existing_plan, errors)
+        prompt = _technical_contract_repair_prompt(
+            requirement_spec,
+            existing_plan,
+            errors,
+            contract_ids,
+        )
+
+        self.assertEqual(contract_ids, ["photo_api"])
+        self.assertIn("photo_api.like", prompt)
+        self.assertIn("like-photo", prompt)
+        self.assertNotIn("user_api.unrelated_endpoint", prompt)
+        self.assertNotIn("UnrelatedSchema", prompt)
+        self.assertNotIn("UNRELATED_ACTION_SENTINEL", prompt)
+
+    def test_contract_repair_merges_replacement_without_rewriting_other_contracts(self) -> None:
+        """Contract 修复结果只能替换目标 Contract，其他完整计划部分必须保持不变。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(requirement_spec)
+        technical_input = {
+            **requirement_spec,
+            "confirmed_product_plan": product_plan,
+        }
+        existing_plan = create_technical_plan(technical_input)
+        target_contract = deepcopy(existing_plan["api_contracts"][0])
+        target_contract["schemas"]["RepairOutput"] = {
+            "type": "object",
+            "properties": {"success": {"type": "boolean"}},
+            "required": ["success"],
+        }
+        target_contract_id = str(target_contract["id"])
+        untouched_contracts = deepcopy(existing_plan["api_contracts"][1:])
+        errors = [
+            f"Schema {target_contract_id}.Broken references unknown schema MissingItem."
+        ]
+
+        with (
+            patch("app.agents.main.planner.Settings.from_env", return_value=object()),
+            patch(
+                "app.agents.main.planner._invoke_prompt_with_chat_model",
+                return_value=json.dumps(
+                    {"api_contracts": [target_contract]},
+                    ensure_ascii=False,
+                ),
+            ),
+        ):
+            repaired = repair_technical_plan_api_contracts_with_chat_model(
+                technical_input,
+                existing_plan,
+                errors,
+            )
+
+        self.assertIn("RepairOutput", repaired["api_contracts"][0]["schemas"])
+        self.assertEqual(repaired["api_contracts"][1:], untouched_contracts)
+        self.assertEqual(repaired["pages"], existing_plan["pages"])
 
     def test_requirement_prompt_limits_rounds_and_batches_questions(self) -> None:
         """需求提示必须固定三轮预算、每轮问题批量和最终合并边界。"""

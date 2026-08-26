@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,18 @@ from app.workspace.spec_documents import workflow_artifact_root
 
 _CHECKPOINT_EXIT_STACK = AsyncExitStack()
 _CHECKPOINT_SAVERS: dict[str, AsyncSqliteSaver] = {}
+_CHECKPOINT_IDENTITIES: dict[str, tuple[int, int]] = {}
+_CHECKPOINT_LOCK = asyncio.Lock()
+
+
+def _checkpoint_file_identity(path: Path) -> tuple[int, int] | None:
+    """读取 checkpoint 文件的设备与 inode，用于识别同路径文件被移动或替换。"""
+
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return stat.st_dev, stat.st_ino
 
 
 def workflow_checkpoint_db_path(
@@ -38,15 +51,27 @@ async def workflow_checkpointer(
 
     db_path = workflow_checkpoint_db_path(workspace=workspace, project_id=project_id)
     cache_key = str(db_path)
-    saver = _CHECKPOINT_SAVERS.get(cache_key)
-    if saver is None:
+    async with _CHECKPOINT_LOCK:
+        saver = _CHECKPOINT_SAVERS.get(cache_key)
+        current_identity = _checkpoint_file_identity(db_path)
+        if saver is not None and _CHECKPOINT_IDENTITIES.get(cache_key) == current_identity:
+            return saver
+        if saver is not None:
+            # 项目删除会把整个 .xcodeagent 移入废纸篓；旧连接仍可写旧 inode，必须主动关闭。
+            await saver.conn.close()
+            _CHECKPOINT_SAVERS.pop(cache_key, None)
+            _CHECKPOINT_IDENTITIES.pop(cache_key, None)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         saver = await _CHECKPOINT_EXIT_STACK.enter_async_context(
             AsyncSqliteSaver.from_conn_string(str(db_path))
         )
         await saver.setup()
         _CHECKPOINT_SAVERS[cache_key] = saver
-    return saver
+        identity = _checkpoint_file_identity(db_path)
+        if identity is None:
+            raise RuntimeError(f"Checkpoint 数据库创建失败：{db_path}")
+        _CHECKPOINT_IDENTITIES[cache_key] = identity
+        return saver
 
 
 async def cleanup_workflow_checkpoints(
@@ -118,6 +143,7 @@ async def close_workflow_checkpointer() -> None:
 
     await _CHECKPOINT_EXIT_STACK.aclose()
     _CHECKPOINT_SAVERS.clear()
+    _CHECKPOINT_IDENTITIES.clear()
 
 
 def _checkpoint_timestamp(item: Any) -> datetime:

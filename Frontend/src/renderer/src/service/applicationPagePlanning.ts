@@ -17,7 +17,7 @@ type RequirementSpecDraftPayload = {
   error?: { message?: string }
 }
 
-// 读取创建规划四阶段 Graph 的 AG-UI 地址。
+// 读取包含设计、显式规划入口和 TechnicalPlan 的创建规划 Graph 地址。
 function getApplicationPlanningUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
   return agentBaseUrl
