@@ -525,23 +525,21 @@ export default function ApplicationPagePlanningModal({
         applicationPlanningInteraction: interaction,
         editorMode: 'frontend',
         originalRequest,
-        workflowDebug: interaction
-          ? undefined
-          : {
-              enabled: true,
-                resumeFrom:
-                initialLifecycle.initialization.stage === 'generating_technical_plan' ||
-                initialLifecycle.initialization.stage === 'awaiting_technical_plan_confirmation'
-                  ? 'technical_planning'
-                  : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
-                      initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
-                    ? 'ui_confirmation'
-                    : initialLifecycle.initialization.stage === 'generating_requirement_document' ||
-                        initialLifecycle.initialization.stage ===
-                          'awaiting_requirement_document_confirmation'
-                      ? 'product_planning'
-                    : 'requirements'
-            },
+        workflowDebug: {
+          enabled: true,
+          resumeFrom:
+            initialLifecycle.initialization.stage === 'generating_technical_plan' ||
+            initialLifecycle.initialization.stage === 'awaiting_technical_plan_confirmation'
+              ? 'technical_planning'
+              : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
+                  initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
+                ? 'ui_confirmation'
+                : initialLifecycle.initialization.stage === 'generating_requirement_document' ||
+                    initialLifecycle.initialization.stage ===
+                      'awaiting_requirement_document_confirmation'
+                  ? 'product_planning'
+                : 'requirements'
+        },
         workflowScope: 'application_planning',
         workspaceRoot: application.workspaceRoot,
         onContent: (content) => {
