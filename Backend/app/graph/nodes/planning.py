@@ -20,7 +20,10 @@ from app.agents.main.planner import (
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
-from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.api_contract_validation import (
+    validate_api_contract_consistency,
+    validate_api_contract_definitions,
+)
 from app.services.entity_source_binding import (
     apply_entity_source_binding_submission,
     entity_source_binding_payload,
@@ -48,7 +51,10 @@ from app.services.project_plan import (
 )
 from app.services.authorization_manifest import validate_authorization_manifest
 from app.services.product_plan import require_current_product_plan
-from app.services.page_dependencies import validate_project_plan_dependencies
+from app.services.page_dependencies import (
+    close_page_action_endpoint_dependencies,
+    validate_project_plan_dependencies,
+)
 from app.services.page_implementation_contract import (
     attach_page_implementation_contracts,
     materialize_technical_plan_runtime,
@@ -179,7 +185,18 @@ def _attach_technical_plan_contracts(
     ui_designs = state.get("ui_designs")
     if not isinstance(product_plan, dict) or not isinstance(ui_designs, dict):
         raise ValueError("TechnicalPlan 缺少 ProductPlan 或 UiDesign 输入。")
-    return attach_page_implementation_contracts(plan, product_plan, ui_designs)
+    closed_plan = {
+        **plan,
+        "pages": close_page_action_endpoint_dependencies(
+            [page for page in plan.get("pages", []) if isinstance(page, dict)],
+            [
+                contract
+                for contract in plan.get("api_contracts", [])
+                if isinstance(contract, dict)
+            ],
+        ),
+    }
+    return attach_page_implementation_contracts(closed_plan, product_plan, ui_designs)
 
 
 def _technical_plan_contract_errors(
@@ -1700,7 +1717,20 @@ def _project_plan_validation_errors(
             )
         )
         errors.extend(_technical_plan_contract_errors(state, project_plan))
-    return errors
+    return list(dict.fromkeys(str(error).strip() for error in errors if str(error).strip()))
+
+
+def _technical_plan_contract_validation_errors(
+    requirement_spec: dict,
+    project_plan: dict,
+) -> list[str]:
+    """汇总仅能通过替换 API Contract 修复的确定性错误。"""
+
+    errors = [
+        *validate_api_contract_definitions(project_plan),
+        *validate_technical_plan_api_contracts(project_plan, requirement_spec),
+    ]
+    return list(dict.fromkeys(str(error).strip() for error in errors if str(error).strip()))
 
 
 def _technical_plan_retry_feedback(errors: list[str]) -> str:
@@ -1724,7 +1754,15 @@ def _repair_technical_plan_candidate(
 ) -> dict:
     """优先定向修复失败 Contract，无法定位或解析时才回退完整计划修订。"""
 
-    if technical_plan_contract_repair_applicable(current_plan, errors):
+    contract_errors = _technical_plan_contract_validation_errors(
+        requirement_spec,
+        current_plan,
+    )
+    if technical_plan_contract_repair_applicable(
+        current_plan,
+        errors,
+        contract_errors,
+    ):
         return repair_technical_plan_api_contracts_with_chat_model(
             requirement_spec,
             current_plan,
@@ -1751,6 +1789,12 @@ def _generate_valid_technical_plan(
     current_plan = existing_plan
     remaining_errors = list(initial_errors or [])
     base_feedback = str(requirement_spec.get("planning_adjustment_request") or "").strip()
+    if current_plan and remaining_errors:
+        current_plan = _attach_technical_plan_contracts(state, current_plan)
+        current_plan["confirmation_status"] = "pending_user_confirmation"
+        remaining_errors = _project_plan_validation_errors(current_plan, state)
+        if not remaining_errors:
+            return current_plan, [], None
     for attempt in range(1, _TECHNICAL_PLAN_GENERATION_ATTEMPTS + 1):
         retry_feedback = (
             _technical_plan_retry_feedback(remaining_errors)

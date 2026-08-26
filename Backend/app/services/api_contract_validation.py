@@ -27,6 +27,25 @@ def _string_items(value: Any) -> list[str]:
 def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]:
     """校验项目计划中的实体、API 契约和页面字段引用是否闭合。"""
 
+    errors, endpoint_index = _validate_api_contract_definitions(project_plan)
+    contracts = dict_items(project_plan.get("api_contracts"))
+    _validate_page_api_dependencies(project_plan, endpoint_index, errors)
+    _validate_page_bindings(project_plan, contracts, errors)
+    return errors
+
+
+def validate_api_contract_definitions(project_plan: dict[str, Any]) -> list[str]:
+    """只校验 API Contract 自身，供 Contract-only 修复安全分流。"""
+
+    errors, _ = _validate_api_contract_definitions(project_plan)
+    return errors
+
+
+def _validate_api_contract_definitions(
+    project_plan: dict[str, Any],
+) -> tuple[list[str], dict[str, tuple[dict[str, Any], dict[str, Any]]]]:
+    """校验 Contract 定义并返回页面引用校验需要的 Endpoint 索引。"""
+
     contracts = dict_items(project_plan.get("api_contracts"))
     errors: list[str] = []
     endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
@@ -57,9 +76,7 @@ def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]
         if not dict_items(contract.get("endpoints")):
             errors.append(f"API contract {contract_id} does not define endpoints.")
 
-    _validate_page_api_dependencies(project_plan, endpoint_index, errors)
-    _validate_page_bindings(project_plan, contracts, errors)
-    return errors
+    return errors, endpoint_index
 
 
 def _validate_contract_schemas(

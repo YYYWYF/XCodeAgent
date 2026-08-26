@@ -567,6 +567,7 @@ def validate_page_implementation_contracts(
                 endpoint_ids=endpoint_ids,
                 required_endpoint_ids=required_endpoint_ids,
                 navigation_targets=allowed_navigation_targets,
+                validate_endpoint_references=not uses_current_product_contract,
                 errors=errors,
             )
         if ui_designs is not None and ui_designs.get("confirmation_status") != "skipped":
@@ -590,6 +591,7 @@ def _validate_action_binding(
     endpoint_ids: set[str],
     required_endpoint_ids: set[str],
     navigation_targets: set[str],
+    validate_endpoint_references: bool,
     errors: list[str],
 ) -> None:
     """按判别类型校验单个业务操作，拒绝未知或依赖不闭合的实现方式。"""
@@ -645,6 +647,8 @@ def _validate_action_binding(
             )
         if step_type == "endpoint":
             endpoint_id = str(step.get("endpointId") or "")
+            if not validate_endpoint_references:
+                continue
             if endpoint_id not in endpoint_ids:
                 errors.append(f"页面 {page_id} 的操作 {action_id} 引用了不存在的 endpoint {endpoint_id or '空'}。")
             elif endpoint_id not in required_endpoint_ids:

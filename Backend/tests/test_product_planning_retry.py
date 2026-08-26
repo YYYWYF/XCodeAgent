@@ -445,6 +445,10 @@ class ProductPlanningRetryTests(unittest.TestCase):
                 side_effect=[[error], []],
             ),
             patch(
+                "app.graph.nodes.planning._technical_plan_contract_validation_errors",
+                return_value=[error],
+            ),
+            patch(
                 "app.graph.nodes.planning.write_project_plan_document",
                 return_value="technical-plan.md",
             ),
@@ -499,7 +503,11 @@ class ProductPlanningRetryTests(unittest.TestCase):
             ) as contract_repair_mock,
             patch(
                 "app.graph.nodes.planning._project_plan_validation_errors",
-                return_value=[],
+                side_effect=[[error], []],
+            ),
+            patch(
+                "app.graph.nodes.planning._technical_plan_contract_validation_errors",
+                return_value=[error],
             ),
             patch(
                 "app.graph.nodes.planning.write_project_plan_document",
@@ -517,6 +525,85 @@ class ProductPlanningRetryTests(unittest.TestCase):
         self.assertEqual(update["clarification"]["mode"], "technical_plan_confirmation")
         self.assertEqual(update["technical_plan_repair_candidate"], {})
         self.assertEqual(update["technical_plan_repair_errors"], [])
+
+    def test_external_retry_closes_action_endpoint_dependency_without_model_call(self) -> None:
+        """旧 checkpoint 的 action Endpoint 缺口应确定性闭合并直接恢复确认。"""
+
+        state = self._technical_planning_state()
+        target_page = state["product_plan"]["pages"][0]
+        target_page["actions"] = [
+            {
+                "actionId": "submit_name",
+                "name": "提交姓名",
+                "description": "提交并保存用户输入的姓名。",
+                "requiresConfirmation": False,
+                "behavior": {
+                    "type": "business",
+                    "expectedResult": "保存姓名。",
+                },
+            }
+        ]
+        state["ui_designs"]["pages"][0]["bindings"] = {
+            "actions": [
+                {"actionId": "submit_name", "controlIds": ["submit-name"]}
+            ]
+        }
+        repair_seed = create_technical_plan(
+            {
+                **state["requirement_spec"],
+                "confirmed_product_plan": state["product_plan"],
+            }
+        )
+        endpoint_id = repair_seed["api_contracts"][0]["endpoints"][0]["id"]
+        repair_seed["pages"][0]["references"] = {
+            "endpoint_dependencies": [],
+            "action_implementations": [
+                {"actionId": "submit_name", "endpointId": endpoint_id}
+            ],
+        }
+        error = (
+            f"页面 {target_page['pageId']} 的业务 action submit_name 使用的 endpoint "
+            f"{endpoint_id} 未列入 requiredEndpointIds。"
+        )
+        state.update(
+            {
+                "application_planning_interaction": {
+                    "action": "revise",
+                    "request": "请继续修复技术规划。",
+                },
+                "clarification": {
+                    "mode": "technical_plan_generation_error",
+                    "status": "requires_user_input",
+                    "errors": [error],
+                },
+                "technical_plan_repair_candidate": repair_seed,
+                "technical_plan_repair_errors": [error],
+            }
+        )
+
+        with (
+            patch("app.graph.nodes.planning.plan_project_with_chat_model") as planner_mock,
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_api_contracts_with_chat_model"
+            ) as contract_repair_mock,
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="technical-plan.md",
+            ),
+            patch(
+                "app.graph.nodes.planning.write_technical_plan_document",
+                return_value=("technical-plan.md", "technical-plan.json"),
+            ),
+        ):
+            update = project_planning(state)
+
+        planner_mock.assert_not_called()
+        contract_repair_mock.assert_not_called()
+        self.assertEqual(update["clarification"]["mode"], "technical_plan_confirmation")
+        dependencies = update["technical_plan"]["pages"][0]["references"][
+            "endpoint_dependencies"
+        ]
+        self.assertEqual([item["endpoint_id"] for item in dependencies], [endpoint_id])
 
     def test_ui_design_can_be_skipped_and_returns_completed(self) -> None:
         """用户明确跳过 UI 设计时应落盘 skipped Manifest 并直接放行技术规划。"""

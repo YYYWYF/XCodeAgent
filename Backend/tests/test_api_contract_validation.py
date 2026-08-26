@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.api_contract_validation import (
+    validate_api_contract_consistency,
+    validate_api_contract_definitions,
+)
 
 
 class ApiContractValidationTests(unittest.TestCase):
@@ -95,6 +98,29 @@ class ApiContractValidationTests(unittest.TestCase):
         self.assertEqual(
             validate_api_contract_consistency(project_plan),
             ["Page orders references unknown endpoint orders.list."],
+        )
+
+    def test_contract_definition_validation_excludes_page_reference_errors(self) -> None:
+        """页面引用错误不得被归类为 Contract-only 可修复错误。"""
+
+        project_plan = {
+            "entities": [],
+            "api_contracts": [],
+            "page_implementation_contracts": [
+                {
+                    "pageId": "name_entry",
+                    "requiredEndpointIds": ["person_name_api.create"],
+                }
+            ],
+        }
+
+        self.assertEqual(validate_api_contract_definitions(project_plan), [])
+        self.assertEqual(
+            validate_api_contract_consistency(project_plan),
+            [
+                "Page name_entry references unknown endpoint "
+                "person_name_api.create."
+            ],
         )
 
     def test_data_source_fields_are_not_part_of_contract_validation(self) -> None:

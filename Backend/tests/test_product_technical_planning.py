@@ -14,6 +14,7 @@ from app.agents.main.planner import (
     _technical_contract_repair_prompt,
     _technical_planning_prompt,
     repair_technical_plan_api_contracts_with_chat_model,
+    technical_plan_contract_repair_applicable,
 )
 from app.agents.main.requirements_analyzer import (
     _requirements_prompt,
@@ -515,6 +516,121 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("RepairOutput", repaired["api_contracts"][0]["schemas"])
         self.assertEqual(repaired["api_contracts"][1:], untouched_contracts)
         self.assertEqual(repaired["pages"], existing_plan["pages"])
+
+    def test_contract_repair_requires_every_error_to_be_contract_scoped(self) -> None:
+        """页面错误或混合错误不得因包含已知 Endpoint ID 而进入 Contract-only 修复。"""
+
+        existing_plan = {
+            "api_contracts": [
+                {
+                    "id": "person_name_api",
+                    "endpoints": [{"id": "person_name_api.create"}],
+                }
+            ]
+        }
+        contract_error = (
+            "Endpoint person_name_api.create references unknown schema MissingInput."
+        )
+        page_error = (
+            "页面 name_entry 的业务 action submit_name 使用的 endpoint "
+            "person_name_api.create 未列入 requiredEndpointIds。"
+        )
+
+        self.assertTrue(
+            technical_plan_contract_repair_applicable(
+                existing_plan,
+                [contract_error],
+                [contract_error],
+            )
+        )
+        self.assertFalse(
+            technical_plan_contract_repair_applicable(
+                existing_plan,
+                [page_error],
+                [contract_error],
+            )
+        )
+        self.assertFalse(
+            technical_plan_contract_repair_applicable(
+                existing_plan,
+                [contract_error, page_error],
+                [contract_error],
+            )
+        )
+
+    def test_action_endpoints_close_page_dependencies_without_guessing_unknown_ids(self) -> None:
+        """direct/sequence 已知 Endpoint 必须补入页面依赖，未知 Endpoint 继续留给校验。"""
+
+        pages = [
+            {
+                "pageId": "name_entry",
+                "references": {
+                    "endpoint_dependencies": [
+                        {
+                            "endpoint_id": "person_name_api.list",
+                            "usage": "page_load",
+                            "trigger": "进入页面",
+                            "required_for_initial_load": True,
+                        }
+                    ],
+                    "action_implementations": [
+                        {
+                            "actionId": "submit_name",
+                            "endpointId": "person_name_api.create",
+                        },
+                        {
+                            "actionId": "save_and_refresh",
+                            "stepBindings": [
+                                {
+                                    "stepId": "refresh",
+                                    "endpointId": "person_name_api.list",
+                                },
+                                {
+                                    "stepId": "notify",
+                                    "endpointId": "person_name_api.unknown",
+                                },
+                            ],
+                        },
+                    ],
+                },
+            }
+        ]
+        contracts = [
+            {
+                "id": "person_name_api",
+                "endpoints": [
+                    {"id": "person_name_api.list"},
+                    {"id": "person_name_api.create"},
+                ],
+            }
+        ]
+
+        closed = normalize_page_dependencies(
+            pages,
+            contracts,
+            include_action_implementations=True,
+        )
+        dependencies = closed[0]["references"]["endpoint_dependencies"]
+
+        self.assertEqual(
+            [item["endpoint_id"] for item in dependencies],
+            ["person_name_api.list", "person_name_api.create"],
+        )
+        self.assertEqual(dependencies[0]["trigger"], "进入页面")
+        self.assertEqual(dependencies[1]["usage"], "business_action")
+        self.assertEqual(dependencies[1]["trigger"], "业务操作 submit_name")
+        self.assertFalse(dependencies[1]["required_for_initial_load"])
+        self.assertEqual(
+            pages[0]["references"]["endpoint_dependencies"],
+            [
+                {
+                    "endpoint_id": "person_name_api.list",
+                    "usage": "page_load",
+                    "trigger": "进入页面",
+                    "required_for_initial_load": True,
+                }
+            ],
+        )
 
     def test_requirement_prompt_limits_rounds_and_batches_questions(self) -> None:
         """需求提示必须固定三轮预算、每轮问题批量和最终合并边界。"""
@@ -1259,6 +1375,71 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
 
         self.assertTrue(any("缺少业务 action endpoint 实现" in error for error in errors))
         self.assertTrue(any("不得为导航、界面或外部 action" in error for error in errors))
+
+    def test_missing_action_endpoint_dependency_is_reported_once(self) -> None:
+        """同一业务 action 的页面依赖缺口只向修复链路报告一次。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "name_entry",
+                    "actions": [
+                        {
+                            "actionId": "submit_name",
+                            "behavior": {
+                                "type": "business",
+                                "expectedResult": "保存姓名。",
+                            },
+                        }
+                    ],
+                    "navigation_targets": [],
+                }
+            ]
+        }
+        technical_plan = {
+            "artifact_type": "technical-plan",
+            "pages": [
+                {
+                    "pageId": "name_entry",
+                    "references": {
+                        "endpoint_dependencies": [
+                            {"endpoint_id": "person_name_api.list"}
+                        ],
+                        "action_implementations": [
+                            {
+                                "actionId": "submit_name",
+                                "endpointId": "person_name_api.create",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "api_contracts": [
+                {
+                    "id": "person_name_api",
+                    "endpoints": [
+                        {"id": "person_name_api.list"},
+                        {"id": "person_name_api.create"},
+                    ],
+                }
+            ],
+        }
+
+        errors = validate_page_implementation_contracts(
+            technical_plan,
+            product_plan,
+        )
+
+        dependency_errors = [
+            error for error in errors if "未列入 requiredEndpointIds" in error
+        ]
+        self.assertEqual(
+            dependency_errors,
+            [
+                "页面 name_entry 的业务 action submit_name 使用的 endpoint "
+                "person_name_api.create 未列入 requiredEndpointIds。"
+            ],
+        )
 
     def test_ui_manifest_controls_must_reference_exact_product_actions(self) -> None:
         """UI 业务控件与产品操作不一致时必须阻止进入工作台。"""

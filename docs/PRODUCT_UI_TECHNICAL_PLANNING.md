@@ -236,6 +236,12 @@ Endpoint 是否存在请求体由业务语义决定，不由 HTTP Method 单独�
 
 TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品可见的 `sequence` 决策；这些事实已经分别由 ProductPlan 和 UiDesign 确认。它只为需要后端/数据实现的业务 action 或业务 step 选择 endpoint：
 
+平台规范化 TechnicalPlan 候选以及恢复失败 checkpoint 时，会把 `action_implementations` 和
+`stepBindings` 已明确选择且真实存在的 Endpoint 确定性并入同页 `endpoint_dependencies`。已有依赖的
+`usage`、`trigger` 和首屏标记保持不变；未知 Endpoint 不会被自动创建或掩盖，仍由一致性校验拒绝。
+Contract-only 自动修复仅适用于全部剩余错误都来自 API Contract 定义的情况，页面或混合错误必须走完整
+TechnicalPlan 修订。
+
 ```json
 {
   "action_implementations": [

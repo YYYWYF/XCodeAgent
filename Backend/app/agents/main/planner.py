@@ -524,10 +524,20 @@ def _technical_contract_ids_for_errors(
 def technical_plan_contract_repair_applicable(
     existing_plan: dict[str, Any],
     validation_errors: list[str],
+    contract_validation_errors: list[str],
 ) -> bool:
-    """判断当前错误是否能安全收窄到至少一个现有 API Contract。"""
+    """仅在全部错误均来自 Contract 定义校验时允许定向修复。"""
 
-    return bool(_technical_contract_ids_for_errors(existing_plan, validation_errors))
+    contract_error_set = {
+        str(error).strip()
+        for error in contract_validation_errors
+        if str(error).strip()
+    }
+    return (
+        bool(validation_errors)
+        and all(str(error).strip() in contract_error_set for error in validation_errors)
+        and bool(_technical_contract_ids_for_errors(existing_plan, validation_errors))
+    )
 
 
 def _technical_page_endpoint_ids(page: dict[str, Any]) -> set[str]:
@@ -653,7 +663,12 @@ def repair_technical_plan_api_contracts_with_chat_model(
     ]
     return create_technical_plan(
         requirement_spec,
-        agent_plan={**existing_plan, "api_contracts": merged_contracts},
+        agent_plan={
+            "architecture": deepcopy(existing_plan.get("architecture", {})),
+            "entities": deepcopy(existing_plan.get("entities", [])),
+            "api_contracts": merged_contracts,
+            "pages": deepcopy(existing_plan.get("pages", [])),
+        },
     )
 
 
