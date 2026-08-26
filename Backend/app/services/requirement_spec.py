@@ -1038,6 +1038,17 @@ def create_requirement_spec(
     used_page_ids: set[str] = set()
     for index, page in enumerate(spec["pages"], start=1):
         page["pageId"] = _normalized_page_id(page.get("pageId"), index, used_page_ids)
+    # 模型可能省略或留空 module_id，但下游校验要求非空。
+    # 优先归属到第一个功能模块，否则兜底 core，保持与固定页面模板一致。
+    module_ids = [
+        str(module.get("id") or "").strip()
+        for module in spec.get("feature_modules", [])
+        if isinstance(module, dict)
+    ]
+    default_module_id = module_ids[0] if module_ids else "core"
+    for page in spec["pages"]:
+        if not str(page.get("module_id") or "").strip():
+            page["module_id"] = default_module_id
     # 用户角色保留首次系统管理员种子元数据，但不携带资源关系或运行态授权。
     for role in spec["user_roles"]:
         for forbidden_key in ("permissions", "allowed_roles", "allowedRoleIds", "roleIds"):
