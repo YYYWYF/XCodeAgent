@@ -20,6 +20,7 @@
     "test:preview-inspector": "node scripts/run-preview-inspector-tests.mjs",
     "test:project-deletion": "node scripts/run-project-deletion-tests.mjs",
     "test:workflow-preview": "node scripts/run-workflow-preview-tests.mjs",
+    "test:acceptance-phase": "node scripts/run-acceptance-phase-tests.mjs",
     "test:entity-design": "node scripts/run-entity-design-tests.mjs",
     "test:dag-generation": "node scripts/run-dag-generation-tests.mjs",
     "test:database-crypto": "node scripts/run-database-credential-crypto-tests.mjs",

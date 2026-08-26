@@ -7,6 +7,7 @@ import type {
   WorkspaceCodeChangeSet
 } from '../../typings'
 import { normalizePreviewUrl } from '../../utils/previewUrl'
+import type { WorkbenchPhase } from '../../workbenchPhase'
 
 export type WorkflowPreviewTarget = {
   key: string
@@ -291,22 +292,21 @@ export function workflowShouldShowCodeChanges(
   return [
     'conversation',
     'test_phase_confirmation',
+    'acceptance_phase_confirmation',
     'launch_project',
     'acceptance',
     'completed'
   ].includes(String(workflow.summary.phase || ''))
 }
 
-/** 仅在审查阶段及其启动、验收、交付后续节点展示代码审查结果。 */
+/** 仅在代码审查及进入验收的确认门展示审查结果，验收会话不继承审查卡片。 */
 export function workflowShouldShowCodeReview(
   workflow: WorkflowRunPayload | undefined
 ): boolean {
   if (!workflow) return false
   const phase = String(workflow.summary.phase || '')
   if (phase === 'code_review') return workflow.summary.status !== 'failed'
-  if (!['launch_project', 'acceptance', 'finalize_project', 'completed'].includes(phase)) {
-    return false
-  }
+  if (phase !== 'acceptance_phase_confirmation') return false
   const candidates: unknown[] = [
     workflow.summary.codeReviewResult,
     workflow.state?.codeReviewResult,
@@ -320,6 +320,22 @@ export function workflowShouldShowCodeReview(
       typeof value === 'object' &&
       !Array.isArray(value) &&
       Object.keys(value as Record<string, unknown>).length > 0
+  )
+}
+
+/** 验收主节点运行时即展示启动卡片，并用子节点事件或启动结果覆盖流式快照差异。 */
+export function workflowShouldShowProjectLaunch(
+  workflow: WorkflowRunPayload | undefined,
+  activePhase: WorkbenchPhase
+): boolean {
+  if (!workflow || activePhase !== 'acceptance') return false
+  const phase = String(workflow.summary.phase || '')
+  if (phase === 'launch_project') return true
+  if (phase !== 'acceptance') return false
+  if (workflow.summary.status === 'running') return true
+  if (Object.keys(workflow.summary.launchResult || {}).length > 0) return true
+  return workflow.events.some(
+    (event) => String(event.nodeName || event.node?.id || '') === 'launch_project'
   )
 }
 
@@ -351,8 +367,8 @@ export function workflowPreviewTarget(
     workflow?.summary.intent === 'workspace_change' &&
     workflow.summary.status === 'completed'
   const workflowLaunchReady =
-    workflow?.summary.phase === 'launch_project' &&
-    workflow.summary.status === 'requires_user_input'
+    ['launch_project', 'acceptance'].includes(String(workflow?.summary.phase || '')) &&
+    workflow?.summary.status === 'requires_user_input'
   if (!live || !workflow || (!workflowLaunchReady && !conversationChangeCompleted)) {
     return undefined
   }

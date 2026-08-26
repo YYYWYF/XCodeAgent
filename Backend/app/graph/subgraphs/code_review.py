@@ -203,7 +203,7 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
         "code_review_build_results": [],
         "code_review_repair_iteration": 0,
         "code_review_max_repair_iterations": MAX_CODE_REVIEW_REPAIR_ITERATIONS,
-        "code_review_next_action": "launch_project",
+        "code_review_next_action": "acceptance_phase_confirmation",
         "code_review_events": ["code_scan"],
         "timeline": ["code_review", "code_scan"],
     }
@@ -376,7 +376,7 @@ def review_build_checks(state: ProjectState) -> dict[str, Any]:
                 "failure": None,
             },
             "code_review_build_results": results,
-            "code_review_next_action": "launch_project",
+            "code_review_next_action": "acceptance_phase_confirmation",
             "code_review_events": ["review_build_checks"],
             "timeline": ["code_review", "code_review_repair", "review_build_checks"],
         }

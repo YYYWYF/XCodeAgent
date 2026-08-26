@@ -4,6 +4,7 @@ import unittest
 
 from app.graph.workflow import (
     route_acceptance,
+    route_acceptance_phase_confirmation,
     route_build_result,
     route_development_readiness,
     route_entity_source_binding,
@@ -18,6 +19,7 @@ from app.graph.workflow import (
 )
 from app.graph.nodes.lifecycle import test_phase_confirmation as run_test_phase_confirmation
 from app.graph.nodes.code_review import review_phase_confirmation
+from app.graph.nodes.code_review import acceptance_phase_confirmation
 from app.protocols.workflow.lifecycle import _pending_interaction
 from app.domain.application_lifecycle import PendingInteractionType
 
@@ -118,7 +120,32 @@ class WorkflowRoutingTests(unittest.TestCase):
             ),
             "code_review",
         )
-        self.assertEqual(route_code_review({"status": "completed"}), "launch_project")
+        self.assertEqual(
+            route_code_review({"status": "completed"}),
+            "acceptance_phase_confirmation",
+        )
+
+    def test_acceptance_phase_confirmation_requires_structured_completion(self) -> None:
+        """代码审查成功后必须先停在验收阶段确认门。"""
+
+        base = {
+            "code_review_result": {"status": "completed"},
+            "code_review_repair_result": {"status": "not_required"},
+        }
+        waiting = acceptance_phase_confirmation(base)
+        self.assertEqual(waiting["status"], "requires_user_input")
+        self.assertEqual(
+            waiting["clarification"]["mode"], "acceptance_phase_confirmation"
+        )
+        self.assertEqual(
+            route_acceptance_phase_confirmation({"status": "requires_user_input"}),
+            "await_user_input",
+        )
+        completed = acceptance_phase_confirmation(
+            {**base, "acceptance_phase_confirmation": {"action": "confirm"}}
+        )
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(route_acceptance_phase_confirmation(completed), "acceptance")
 
     def test_code_review_issues_pause_for_repair_confirmation(self) -> None:
         """代码审查发现问题时停在当前审查 thread 等待一键修复。"""
@@ -283,6 +310,24 @@ class WorkflowRoutingTests(unittest.TestCase):
             PendingInteractionType.CODE_REVIEW_REPAIR_CONFIRMATION,
         )
         self.assertEqual(payload["mode"], "code_review_repair_confirmation")
+
+    def test_acceptance_phase_confirmation_uses_typed_lifecycle_interaction(self) -> None:
+        """验收阶段确认应投影为可跨审查 thread 接管的生命周期交互。"""
+
+        interaction_type, payload = _pending_interaction(
+            {
+                "clarification": {
+                    "mode": "acceptance_phase_confirmation",
+                    "status": "requires_user_input",
+                }
+            }
+        )
+
+        self.assertEqual(
+            interaction_type,
+            PendingInteractionType.ACCEPTANCE_PHASE_CONFIRMATION,
+        )
+        self.assertEqual(payload["mode"], "acceptance_phase_confirmation")
 
     def test_build_confirmation_stops_for_user_input(self) -> None:
         """构建需要扩大范围时必须停留等待用户确认。"""

@@ -3,6 +3,7 @@ from typing import Any
 from langgraph.config import get_stream_writer
 
 from app.graph.state import ProjectState
+from app.graph.subgraphs.acceptance import run_acceptance_subgraph
 from app.services.project_launcher import launch_project_preview
 from app.workspace.spec_documents import workspace_root
 
@@ -289,26 +290,9 @@ def _failed_project_launch(launch: dict) -> dict:
 
 
 def acceptance(state: ProjectState) -> dict:
-    decision = str(state.get("acceptance_decision") or "")
-    if decision != "accepted":
-        return {
-            "phase": "acceptance",
-            "status": "requires_user_input",
-            "accepted": False,
-            "clarification": {
-                "mode": "plan_adjustment",
-                "status": "requires_user_input",
-                "message": "已记录修改请求，请调整计划后重新执行并验收。",
-                "questions": [],
-            },
-            "timeline": ["acceptance"],
-        }
-    return {
-        "phase": "acceptance",
-        "status": "completed",
-        "accepted": True,
-        "timeline": ["acceptance"],
-    }
+    """执行验收子图，统一承接项目启动与用户验收等待。"""
+
+    return run_acceptance_subgraph(state)
 
 
 def finalize_project(state: ProjectState) -> dict:

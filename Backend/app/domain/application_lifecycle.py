@@ -58,6 +58,7 @@ class PendingInteractionType(StrEnum):
     TEST_PHASE_CONFIRMATION = "test_phase_confirmation"
     REVIEW_PHASE_CONFIRMATION = "review_phase_confirmation"
     CODE_REVIEW_REPAIR_CONFIRMATION = "code_review_repair_confirmation"
+    ACCEPTANCE_PHASE_CONFIRMATION = "acceptance_phase_confirmation"
     PLAN_ADJUSTMENT = "plan_adjustment"
 
 

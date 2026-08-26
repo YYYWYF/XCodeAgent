@@ -1,0 +1,58 @@
+.@{class-prefix}-acceptance-decision-dock {
+  position: absolute;
+  z-index: 8;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  min-height: 72px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--wb-border);
+  background: var(--wb-surface);
+  box-shadow: var(--wb-shadow);
+}
+
+.@{class-prefix}-acceptance-decision-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+
+  .ant-typography {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-acceptance-decision-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+
+  .ant-btn {
+    min-height: 36px;
+    border-radius: 6px;
+  }
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-acceptance-decision-dock {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .@{class-prefix}-acceptance-decision-actions {
+    .ant-btn {
+      flex: 1;
+      min-width: 0;
+      padding-inline: 8px;
+    }
+  }
+}

@@ -186,6 +186,15 @@ test('测试重跑和审查确认节点不会展示恢复快照中的旧代码�
     workflowShouldShowCodeReview(
       previewWorkflow({ phase: 'launch_project', codeReviewResult: staleCodeReviewResult })
     ),
+    false
+  )
+  assert.equal(
+    workflowShouldShowCodeReview(
+      previewWorkflow({
+        phase: 'acceptance_phase_confirmation',
+        codeReviewResult: staleCodeReviewResult
+      })
+    ),
     true
   )
 })
@@ -437,7 +446,7 @@ test('独立 AG-UI lifecycle 事件只接收完整的业务投影', () => {
   assert.equal(readApplicationLifecycle({ revision: 3 }), undefined)
 })
 
-test('Build 确认门仍属于开发阶段，集成测试和验收分别进入测试与审查阶段', () => {
+test('Build 确认门仍属于开发阶段，集成测试、审查和验收分别进入后续阶段', () => {
   const lifecycle = planLifecycle({ phase: 'test_phase_confirmation', status: 'running' })
   assert.equal(deriveWorkbenchPhase(lifecycle), 'development')
   assert.equal(
@@ -445,7 +454,8 @@ test('Build 确认门仍属于开发阶段，集成测试和验收分别进入�
     'test'
   )
   assert.equal(workbenchPhaseForNode('integration_test', 'development'), 'test')
-  assert.equal(workbenchPhaseForNode('acceptance', 'test'), 'review')
+  assert.equal(workbenchPhaseForNode('acceptance_phase_confirmation', 'test'), 'review')
+  assert.equal(workbenchPhaseForNode('acceptance', 'review'), 'acceptance')
 })
 
 test('UI 完成后仍停留设计阶段，进入后 TechnicalPlan 属于独立规划阶段', () => {
@@ -467,10 +477,11 @@ test('UI 完成后仍停留设计阶段，进入后 TechnicalPlan 属于独立�
   assert.equal(isObjectEditableInPhase('project_plan', 'planning'), true)
 })
 
-test('测试阶段不允许编辑产物，验收编辑权限只在审查阶段开放', () => {
+test('测试和审查阶段不允许编辑验收结果，验收编辑权限只在验收阶段开放', () => {
   assert.equal(isObjectEditableInPhase('code', 'test'), false)
   assert.equal(isObjectEditableInPhase('acceptance', 'test'), false)
-  assert.equal(isObjectEditableInPhase('acceptance', 'review'), true)
+  assert.equal(isObjectEditableInPhase('acceptance', 'review'), false)
+  assert.equal(isObjectEditableInPhase('acceptance', 'acceptance'), true)
 })
 
 test('重复地址不追加历史，新地址会截断旧前进记录', () => {

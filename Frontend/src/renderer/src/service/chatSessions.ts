@@ -8,6 +8,7 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet,
 } from '../typings';
+import type { WorkbenchPhase } from '../workbenchPhase';
 import { readDagGenerationSnapshot } from './agUiAgent';
 import type { ProcessStepRecord, ToolCallRecord } from './agUiAgent';
 
@@ -32,6 +33,7 @@ export type ChatSessionRecord = {
   id: string;
   title: string;
   editorMode: EditorMode;
+  workbenchPhase: WorkbenchPhase;
   threadId: string;
   apiContractId?: string;
   endpointId?: string;
@@ -49,6 +51,7 @@ export type ChatSessionSummary = {
   id: string;
   title: string;
   editorMode: EditorMode;
+  workbenchPhase: WorkbenchPhase;
   threadId: string;
   apiContractId?: string;
   endpointId?: string;
@@ -72,6 +75,13 @@ export type SessionWorkspaceSummary = {
 };
 
 const CHAT_SESSION_EDITOR_MODES: EditorMode[] = ['frontend', 'backend'];
+const CHAT_SESSION_WORKBENCH_PHASES: WorkbenchPhase[] = [
+  'product',
+  'development',
+  'test',
+  'review',
+  'acceptance',
+];
 
 type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>;
 
@@ -209,16 +219,23 @@ function normalizeToolCalls(value: unknown): ToolCallRecord[] | undefined {
   return toolCalls.length > 0 ? toolCalls : undefined;
 }
 
+/** 校验并规范化完整会话，阶段字段缺失或非法时拒绝进入当前存储契约。 */
 function normalizeSession(value: unknown): ChatSessionRecord | null {
   if (!value || typeof value !== 'object') return null;
   const session = value as Partial<ChatSessionRecord>;
-  if (!session.id || !session.editorMode || !session.threadId) return null;
+  if (
+    !session.id ||
+    !session.editorMode ||
+    !session.threadId ||
+    !isWorkbenchPhase(session.workbenchPhase)
+  ) return null;
   const endpointContext = inferEndpointContextFromMessages(session.messages);
   const entityContext = inferEntityContextFromMessages(session.messages);
   return {
     id: String(session.id),
     title: String(session.title || '新对话'),
     editorMode: session.editorMode,
+    workbenchPhase: session.workbenchPhase,
     threadId: String(session.threadId),
     apiContractId:
       normalizeEndpointField(session.apiContractId) ||
@@ -243,11 +260,13 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
   };
 }
 
+/** 将完整会话投影为包含阶段归属的列表摘要。 */
 function toSummary(session: ChatSessionRecord): ChatSessionSummary {
   return {
     id: session.id,
     title: session.title,
     editorMode: session.editorMode,
+    workbenchPhase: session.workbenchPhase,
     threadId: session.threadId,
     apiContractId: session.apiContractId,
     endpointId: session.endpointId,
@@ -261,14 +280,17 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
   };
 }
 
+/** 规范化会话摘要列表，并剔除不属于当前阶段契约的记录。 */
 function normalizeSummaries(value: unknown): ChatSessionSummary[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((item): item is Partial<ChatSessionSummary> => Boolean(item && typeof item === 'object'))
+    .filter((item) => isWorkbenchPhase(item.workbenchPhase))
     .map((item) => ({
       id: String(item.id || ''),
       title: String(item.title || '新对话'),
       editorMode: item.editorMode || 'frontend',
+      workbenchPhase: item.workbenchPhase as WorkbenchPhase,
       threadId: String(item.threadId || item.id || ''),
       apiContractId: normalizeEndpointField(item.apiContractId),
       endpointId: normalizeEndpointField(item.endpointId),
@@ -281,6 +303,11 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       messageCount: Number(item.messageCount || 0),
     }))
     .filter((item) => item.id);
+}
+
+/** 判断持久化会话是否声明了当前支持的工作台阶段。 */
+function isWorkbenchPhase(value: unknown): value is WorkbenchPhase {
+  return CHAT_SESSION_WORKBENCH_PHASES.includes(value as WorkbenchPhase);
 }
 
 /** 规范化页面会话标识，空值不写入本地会话契约。 */

@@ -1,6 +1,6 @@
 ## workflow目标
 
-workflow根据用户需求生成可在本地运行的前后端工程，并通过设计、开发、测试、审查四个工作台阶段形成完整闭环。
+workflow根据用户需求生成可在本地运行的前后端工程，并通过设计、开发、测试、审查、验收五个工作台阶段形成完整闭环。
 
 > 创建链路和页面/API实现边界以 `docs/PRODUCT_UI_TECHNICAL_PLANNING.md` 为准。当前契约不包含页面/API详设节点或产物。
 
@@ -45,10 +45,14 @@ START
           │       ├─ 首次进入 → requires_user_input，返回“测试已通过，是否进入审查阶段？”
           │       └─ 用户 confirm → 新建审查会话并进入 code_review
           │           → 只读扫描 frontend/src 与 backend/src/main/java
-          │           → launch_project → 提示用户验收并结束本轮
-          │                         → 用户确认后从 acceptance 续跑
-          │                         → finalize_project
-          │                         → END
+          │           → acceptance_phase_confirmation //审查完成后的验收阶段确认门
+          │               ├─ 首次进入 → requires_user_input，返回“进入验收阶段”确认卡
+          │               └─ 用户 confirm → 新建验收会话并进入 acceptance 子图
+          │                   ├─ launch_project → 启动本地预览并输出实时进度
+          │                   └─ acceptance_review → 生成 page_acceptance 等待状态
+          │                       → 用户验收（不通过可恢复普通对话）
+          │                       → finalize_project（保留后端能力，当前 UI 暂不调用）
+          │                       → END
           ├─ 可自动修复 → RepairPlanner 生成 repair_task_plan
           │              → small_task_repair 并行执行局部 repair tasks
           │              → integration_test 复测
@@ -57,19 +61,19 @@ START
                              → END
 ```
 
-### 工作台四阶段边界
+### 工作台五阶段边界
 
-顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责开发就绪检查、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `review_phase_confirmation`；审查阶段负责 `code_review` 子图、`launch_project`、`acceptance` 和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在审查阶段开放。
+顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段 → 验收阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责开发就绪检查、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `review_phase_confirmation`；审查阶段负责 `code_review` 子图和 `acceptance_phase_confirmation`；验收阶段负责 `acceptance` 子图（包含 `launch_project`、`acceptance_review`）和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在验收阶段开放。
 
 `build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，失败最多经过 3 轮独立 `unit_test_repair`，耗尽后失败且不展示测试阶段确认卡。
 
 单元测试通过或跳过后才进入 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 或单测失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
 
-测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，只执行依赖安装、前后端 Build、前端性能测试和集成质量门禁。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。质量门禁通过后必须先经过 `review_phase_confirmation`；确认后由 `code_review` 子图只读扫描两个指定源码目录。发现问题时暂停等待结构化 `repair_all`，修复和独立构建检查最多循环三轮；无问题或构建通过后才进入 `launch_project`，项目启动及预览验收均归属审查阶段。
+测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，只执行依赖安装、前后端 Build、前端性能测试和集成质量门禁。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。质量门禁通过后必须先经过 `review_phase_confirmation`；确认后由 `code_review` 子图只读扫描两个指定源码目录。发现问题时暂停等待结构化 `repair_all`，修复和独立构建检查最多循环三轮；无问题或构建通过后进入 `acceptance_phase_confirmation`，只有用户提交结构化 `confirm` 才切换到独立验收会话并执行验收子图。验收子图先运行 `launch_project`，成功后由 `acceptance_review` 投影 `page_acceptance`、预览地址和启动结果；已有成功启动快照恢复时跳过启动节点，启动失败不进入待验收。
 
 ### 测试阶段 AG-UI 与生命周期契约
 
-`unit_test`、`unit_test_repair`、`test_phase_confirmation`、`review_phase_confirmation` 和 `code_review` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员。`unit_test_confirmation`、`frontend_performance_confirmation` 和 `code_review_repair_confirmation` 是生命周期待交互类型，分别使用对应的 `run/skip`、`confirm` 或 `repair_all` 结构化答案恢复原节点；恢复必须携带原执行的 `resumeExecutionRunId`，其中性能测试确认只允许同一测试 thread 接管，代码审查一键修复只能由当前审查 thread 接管。两个阶段确认门和代码修复门的 AG-UI 快照分别投影固定确认文案；恢复都校验原执行的 scope/target，阶段交接允许原子转交到新的阶段 thread。审查确认提交后生命周期立即投影 `code_review`，使顶部审查阶段在扫描首帧前同步高亮。生命周期快照不再包含 schema 版本字段。
+`unit_test`、`unit_test_repair`、`test_phase_confirmation`、`review_phase_confirmation`、`code_review`、`acceptance_phase_confirmation` 和 `acceptance` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员；`launch_project` 与 `acceptance_review` 是验收子图内部节点，启动进度仍以 `nodeName=launch_project` 输出。`unit_test_confirmation`、`frontend_performance_confirmation`、`code_review_repair_confirmation` 和 `acceptance_phase_confirmation` 是生命周期待交互类型，分别使用对应的 `run/skip`、`confirm`、`repair_all` 或 `confirm` 结构化答案恢复原节点；恢复必须携带原执行的 `resumeExecutionRunId`，其中性能测试确认只允许同一测试 thread 接管，验收阶段确认允许从审查 thread 原子转交到新的验收 thread。各阶段确认门、代码修复门和验收等待的 AG-UI 快照分别投影固定文案；恢复都校验原执行的 scope/target。审查确认提交后生命周期立即投影 `code_review`，验收阶段确认提交后立即投影 `acceptance`，使顶部阶段在新会话首帧前同步高亮。生命周期快照不再包含 schema 版本字段。
 
 需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 读取 `.xcodeagent/plans/technical-plan.json`；页面选择从 `pages[].references` 解析实现范围并在运行时编译 PageImplementationContract，API 选择直接读取 TechnicalPlan Endpoint。两者都先进入 `development_readiness_gate`，只在关联实体均有已确认 EntitySourceBinding 时继续。门禁不会自动跳转实体；用户完成独立绑定后必须重新发起原目标开发。
 
@@ -104,7 +108,7 @@ START
 职责边界固定如下：
 
 - `application-lifecycle.json`：顶层 `initialization.stage/status/threadId` 只保存进入工作台前的初始化门禁和 checkpoint 定位，完成后固定为 `ready_for_workbench/completed` 并清空 thread；工作台阶段另由按 run 隔离的 `activeExecutions`、页面/API 契约/数据源 `resourceLocks`、execution 交互门禁、活动 run 和恢复审计表示；
-- 已停止或失败的执行继续运行时，客户端显式提交旧 `runId` 作为恢复令牌；服务端只允许同一 `threadId`、scope 和 target 接替，并原子地把该 run 当前可见的资源登记转给新 `runId`，不使用 lifecycle 快照覆盖当前 Graph 状态。唯一例外是结构化 `test_phase_confirmation` 与 `review_phase_confirmation`：它们允许 execution 从上一阶段 thread 转交给空白阶段 thread，scope 和 target 仍必须完全一致；
+- 已停止或失败的执行继续运行时，客户端显式提交旧 `runId` 作为恢复令牌；服务端只允许同一 `threadId`、scope 和 target 接替，并原子地把该 run 当前可见的资源登记转给新 `runId`，不使用 lifecycle 快照覆盖当前 Graph 状态。唯一例外是结构化 `test_phase_confirmation`、`review_phase_confirmation` 与 `acceptance_phase_confirmation`：它们允许 execution 从上一阶段 thread 转交给空白阶段 thread，scope 和 target 仍必须完全一致；
 - `checkpoints.sqlite`：LangGraph 技术执行断点和节点状态，继续保留；
 - RequirementSpec / ProjectPlan Markdown + JSON：正式文档内容和 `confirmation_status`，继续保留；
 - Build DAG / ExecutionRun / TestReport：任务、执行和测试事实，继续由各自产物负责。
@@ -121,7 +125,7 @@ START
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
-当主 Graph 节点进入 `requires_user_input` 时，前端不应硬编码续跑阶段，而应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点并设置内部 `resume_from`。主 Graph 支持从 `development_readiness_gate`、`entity_source_binding`、`project_planning`、`inspect_workspace`、`prepare_build_tasks`、`test_phase_confirmation`、`integration_test`、`review_phase_confirmation`、`code_review`、`small_task_repair` 和后续执行节点续跑；`inspect_database_context` 在协议边界映射到 `prepare_build_tasks`。首页独立创建规划 Graph 只使用同一 thread 的 LangGraph checkpoint 与 `applicationPlanningInteraction` 恢复原生 interrupt，前端不回传 `resumeState` 重建状态；其可视化入口包含 `requirements`、`product_planning`、`ui_confirmation`、`planning_stage_entry` 和 `technical_planning`，且 TechnicalPlan 节点会复核权威 lifecycle 已通过 `enter_planning`。
+当主 Graph 节点进入 `requires_user_input` 时，前端不应硬编码续跑阶段，而应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点并设置内部 `resume_from`。主 Graph 支持从 `development_readiness_gate`、`entity_source_binding`、`project_planning`、`inspect_workspace`、`prepare_build_tasks`、`test_phase_confirmation`、`integration_test`、`review_phase_confirmation`、`code_review`、`acceptance_phase_confirmation`、`acceptance`、`small_task_repair` 和后续执行节点续跑；`inspect_database_context` 在协议边界映射到 `prepare_build_tasks`。首页独立创建规划 Graph 只使用同一 thread 的 LangGraph checkpoint 与 `applicationPlanningInteraction` 恢复原生 interrupt，前端不回传 `resumeState` 重建状态；其可视化入口包含 `requirements`、`product_planning`、`ui_confirmation`、`planning_stage_entry` 和 `technical_planning`，且 TechnicalPlan 节点会复核权威 lifecycle 已通过 `enter_planning`。
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
@@ -495,10 +499,10 @@ testing.START
 
 ```text
 code_scan
-  ├─ 无问题 → 子图完成 → launch_project
+  ├─ 无问题 → 子图完成 → acceptance_phase_confirmation
   └─ 有问题 → code_review_repair_confirmation
                  └─ repair_all → code_review_repair → review_build_checks
-                                      ├─ 通过 → launch_project
+                                      ├─ 通过 → acceptance_phase_confirmation
                                       └─ 失败（最多 3 轮）→ code_review_repair
 ```
 
@@ -508,7 +512,31 @@ code_scan
 `backend/src/main/java/**`，禁止修改配置、依赖、测试、工件或执行命令。修复后由独立的
 `review_build_checks` 执行前端依赖安装、前端 Build 和后端 Build；它不复用测试阶段结果、日志或修复预算。
 构建证据最多回传三轮，耗尽后进入 `handle_failure`，不会启动项目。构建通过后保留原始审查问题、修复摘要和
-构建检查结果，再继续现有 `launch_project → acceptance → finalize_project` 流程。
+构建检查结果，再进入 `acceptance_phase_confirmation`；只有用户确认后才创建验收会话并运行验收子图。
+
+### `acceptance` / Acceptance Subgraph
+
+验收阶段确认门只接受 `clarificationAnswers.acceptance_phase_confirmation={action:"confirm"}`。
+确认请求允许 execution 从审查 thread 原子转交到标题为“验收：目标名称”的新 thread；新会话首先持久化
+用户消息“正在启动项目准备验收”。主 Graph 的 `acceptance` 是验收子图门面，子图内部依次执行：
+
+```text
+acceptance.START
+  ├─ 已有成功 launch_result + preview_url → acceptance_review
+  └─ 否则 → launch_project
+                 ├─ 失败 → acceptance.END（不产生待验收交互）
+                 └─ 成功 → acceptance_review
+                              → page_acceptance（预览地址、launchResult、acceptanceRequest）
+                              → acceptance.END
+```
+
+`launch_project` 继续复用现有工程识别、前后端启动、健康检查和 `launch_project.progress` 事件，
+但在子图内成功状态为 `completed`；启动失败直接结束子图。恢复已有成功启动快照时不得重复启动。
+`page_acceptance` 显式映射生命周期 `PAGE_ACCEPTANCE`。当前前端“不通过，进入对话”只恢复原分栏并让普通
+消息走 `/conversation/run`，不提交验收结果；“验收通过”仅提示功能暂未开放，后端 accepted/finalize 能力保留。
+
+验收运行态的 AG-UI 最终投影必须包含 `previewUrl`、`launchResult` 和 `acceptanceRequest`，而启动过程的实时进度
+仍使用 `nodeName=launch_project`。
 
 集成测试质量门禁覆盖：
 
@@ -526,7 +554,7 @@ code_scan
 - `test_results`：每项测试的通过状态、命令和证据；单元测试命令若能从 Jest、Vitest 或 Maven 输出中解析数量，还会提供 `passed_tests` 与 `total_tests` 供集成检查矩阵展示；`frontend_performance` 额外携带 `performance_scores`、`performance_metrics` 与 `report_path`；
 - `test_report`：确定性测试汇总和质量门禁结果；
 - `test_report_path`：结构化测试报告 JSON 路径；
-- `quality_gate_passed`：是否允许进入启动和验收；
+- `quality_gate_passed`：是否允许进入审查确认和后续验收；
 - `needs_revision`：是否需要返回修改；
 - `revision_requests`：返回给 RepairPlanner Agent 的结构化返修请求；
 - `repair_task_plan`：RepairPlanner Agent 基于失败证据生成的修复任务计划；
@@ -579,7 +607,8 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 
 外层 Graph 根据 `integration_next_action` 路由：
 
-- `launch_project`：质量门禁通过，进入 `launch_project`，写入 `preview_url` 和 `acceptance_request`，本轮结束等待用户验收；
+- `acceptance_phase_confirmation`：代码审查无问题或修复构建通过后，等待用户确认进入独立验收会话；
+- `launch_project`：验收子图内启动本地预览，写入 `preview_url` 和 `launch_result`，成功后交给 `acceptance_review`；
 - `small_task_repair`：RepairPlanner 返回可执行 repair tasks，SmallTask 调度器按依赖、路径和资源锁选择最多 2 个（硬上限 3 个）互不冲突任务并行执行；任务完成后再次进入 `integration_test`，本路由不直接回到 `build`；
 - `await_user_input`：修复需要扩大范围、改变契约或做产品决策，本轮结束等待用户确认；
 - `handle_failure`：证据不足、修复预算耗尽或不可恢复失败，进入失败处理。
@@ -602,7 +631,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 写入 `acceptance_request` 并提示用户验收；
 - 保存和清理进程信息。
 
-`launch_project` 是质量门禁通过后的本轮终点。LangGraph 节点先通过 `workspace_root(state)` 解析普通工作目录，再使用确定性的 `find_backend_project_root(workspace_path)` 探测直属 `backend/Backend/pom.xml`。识别到 Maven 后端时，节点依次调用与 Graph State 解耦的 `launch_backend_project(workspace_path)` 和 `launch_frontend_project(workspace_path)` 公共服务；未识别到后端时，将 `launch_result.backend.status` 记为 `skipped` 并直接启动前端。后端 launcher 在每个工作区的串行锁内，先停止内存登记或 `backend.pid` 恢复出的上一轮 Java 进程，确认退出后才执行 Maven；PID 恢复必须校验命令确实是当前工作区 `target` 下的 `java -jar`，清理失败则以 `backend_cleanup` 中止构建。只有新 Java 进程仍存活且本次日志出现约定的版本标志后才启动前端。前端启动进程仍存活且预览地址通过 HTTP 或本次启动日志检查后，节点才返回 `preview_url` 和 `acceptance_request`，并将状态设为 `requires_user_input`；任一实际启动的进程提前退出或就绪检查超时都会返回启动失败，不进入验收。若 Java 已启动但前端失败，节点停止本次 Java 进程并记录清理结果；纯前端启动失败时不执行后端清理。前端收到实时 Workflow 的成功 `summary.previewUrl` 后，会自动打开右侧预览面板并导航到该地址；重复状态快照不会重复导航，历史会话也不会自动弹出预览。工作流不会自动进入 `acceptance`；用户确认验收后，下一轮从 `acceptance` 续跑。
+`launch_project` 是验收子图内的启动子节点。编译后的验收子图直接作为主 Graph 的 `acceptance` runnable 挂载，AG-UI runtime 开启子图命名空间并即时转发其 custom 事件，因此 `structure`、`backend`、`frontend`、`ready` 会在各步骤开始或完成时刷新，而不是等待整个子图结束后一次性投影；子图内部 update/message 仍只在父节点完成时统一合并。LangGraph 节点先通过 `workspace_root(state)` 解析普通工作目录，再使用确定性的 `find_backend_project_root(workspace_path)` 探测直属 `backend/Backend/pom.xml`。识别到 Maven 后端时，节点依次调用与 Graph State 解耦的 `launch_backend_project(workspace_path)` 和 `launch_frontend_project(workspace_path)` 公共服务；未识别到后端时，将 `launch_result.backend.status` 记为 `skipped` 并直接启动前端。后端 launcher 在每个工作区的串行锁内，先停止内存登记或 `backend.pid` 恢复出的上一轮 Java 进程，确认退出后才执行 Maven；PID 恢复必须校验命令确实是当前工作区 `target` 下的 `java -jar`，清理失败则以 `backend_cleanup` 中止构建。只有新 Java 进程仍存活且本次日志出现约定的版本标志后才启动前端。前端启动进程仍存活且预览地址通过 HTTP 或本次启动日志检查后，节点才返回 `preview_url` 和 `acceptance_request`，并在子图内标记启动完成；任一实际启动的进程提前退出或就绪检查超时都会返回启动失败，不进入 `acceptance_review`。若 Java 已启动但前端失败，节点停止本次 Java 进程并记录清理结果；纯前端启动失败时不执行后端清理。前端收到验收 Workflow 的成功 `summary.previewUrl` 后，会自动打开右侧预览面板并导航到该地址；重复状态快照不会重复导航，历史会话也不会自动弹出预览。已有成功启动快照恢复时直接进入 `acceptance_review`，不会重复启动。
 
 当前启动策略：
 
@@ -634,7 +663,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 
 ### `acceptance`
 
-暂停并等待用户验收。
+验收子图的门面节点；内部依次运行 `launch_project` 与 `acceptance_review`，成功启动后暂停并等待用户验收。
 
 用户选择：
 

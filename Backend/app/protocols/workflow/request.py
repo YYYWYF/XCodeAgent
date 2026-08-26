@@ -78,6 +78,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     review_phase_confirmation = _review_phase_confirmation_submission(
         clarification_answers
     )
+    acceptance_phase_confirmation = _acceptance_phase_confirmation_submission(
+        clarification_answers
+    )
     code_review_repair_confirmation = _code_review_repair_confirmation_submission(
         clarification_answers
     )
@@ -196,6 +199,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     elif review_phase_confirmation and workflow_scope != "application_planning":
         # 审查阶段确认允许从测试 thread 原子转交到新的审查 thread。
         resume_from = "review_phase_confirmation"
+    elif acceptance_phase_confirmation and workflow_scope != "application_planning":
+        # 验收阶段确认允许从审查 thread 原子转交到新的验收 thread。
+        resume_from = "acceptance_phase_confirmation"
     elif code_review_repair_confirmation and workflow_scope != "application_planning":
         # 一键修复在当前审查 thread 内恢复代码审查子图，不创建新的生命周期交接。
         if not _has_code_review_issue_snapshot(resume_values_from_state):
@@ -213,6 +219,14 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     ):
         raise ValueError(
             "review_phase_confirmation 只能通过 clarificationAnswers 提交 confirm 动作。"
+        )
+    if (
+        resume_from == "acceptance_phase_confirmation"
+        and not acceptance_phase_confirmation
+        and workflow_scope != "application_planning"
+    ):
+        raise ValueError(
+            "acceptance_phase_confirmation 只能通过 clarificationAnswers 提交 confirm 动作。"
         )
     if (
         resume_from == "code_review"
@@ -379,6 +393,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **(
             {"review_phase_confirmation": review_phase_confirmation}
             if review_phase_confirmation
+            else {}
+        ),
+        **(
+            {"acceptance_phase_confirmation": acceptance_phase_confirmation}
+            if acceptance_phase_confirmation
             else {}
         ),
         **(
@@ -905,7 +924,7 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "small_task_repair",
             "review_phase_confirmation",
             "code_review",
-            "launch_project",
+            "acceptance_phase_confirmation",
             "acceptance",
             "finalize_project",
         }
@@ -956,6 +975,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan_confirmation",
         "test_phase_confirmation",
         "review_phase_confirmation",
+        "acceptance_phase_confirmation",
         "code_review_result",
         "code_review_repair_confirmation",
         "code_review_repair_status",
@@ -1016,6 +1036,11 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "selected_skill_names",
         "workflow_scope",
         "acceptance_adjustment",
+        "preview_url",
+        "launch_result",
+        "acceptance_request",
+        "acceptance_decision",
+        "accepted",
         "ui_designs",
         "conversation_response",
     }
@@ -1034,6 +1059,11 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan_confirmation": "buildTaskPlanConfirmation",
         "test_phase_confirmation": "testPhaseConfirmation",
         "review_phase_confirmation": "reviewPhaseConfirmation",
+        "acceptance_phase_confirmation": "acceptancePhaseConfirmation",
+        "preview_url": "previewUrl",
+        "launch_result": "launchResult",
+        "acceptance_request": "acceptanceRequest",
+        "acceptance_decision": "acceptanceDecision",
         "code_review_result": "codeReviewResult",
         "code_review_repair_result": "codeReviewRepair",
         "code_review_build_results": "codeReviewBuildResults",
@@ -1600,6 +1630,22 @@ def _review_phase_confirmation_submission(value: Any) -> dict[str, str]:
     if action != "confirm":
         raise ValueError("review_phase_confirmation.action 只支持 confirm。")
     return {"mode": "review_phase_confirmation", "action": "confirm"}
+
+
+def _acceptance_phase_confirmation_submission(value: Any) -> dict[str, str]:
+    """提取验收阶段进入确认动作，拒绝自然语言和未知动作。"""
+
+    if not isinstance(value, dict):
+        return {}
+    if "acceptance_phase_confirmation" not in value:
+        return {}
+    answer = value.get("acceptance_phase_confirmation")
+    if not isinstance(answer, dict):
+        raise ValueError("acceptance_phase_confirmation 必须是结构化对象。")
+    action = _optional_text(answer.get("action")).lower()
+    if action != "confirm":
+        raise ValueError("acceptance_phase_confirmation.action 只支持 confirm。")
+    return {"mode": "acceptance_phase_confirmation", "action": "confirm"}
 
 
 def _code_review_repair_confirmation_submission(value: Any) -> dict[str, str]:

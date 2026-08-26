@@ -43,17 +43,23 @@ export function subscribeApplicationDevelopmentEntry(
 }
 
 /**
- * 工作台五大阶段，每个阶段对应一个 Agent。
+ * 工作台六大阶段，每个阶段对应一个 Agent。
  * 阶段是主开关：先切到对应阶段，才能编辑该阶段的对象；点文件不会自动切阶段。
  * 旅程1（从零建）与旅程2（增量）共用这条阶段模型。
  */
-export type WorkbenchPhase = 'product' | 'planning' | 'development' | 'test' | 'review'
+export type WorkbenchPhase =
+  | 'product'
+  | 'planning'
+  | 'development'
+  | 'test'
+  | 'review'
+  | 'acceptance'
 
 export type WorkbenchAgentIdentity = {
   key: WorkbenchPhase
-  /** 短标签：设计 / 规划 / 开发 / 测试 / 审查。 */
+  /** 短标签：设计 / 规划 / 开发 / 测试 / 审查 / 验收。 */
   label: string
-  /** Agent 身份：产品 Agent / 规划 Agent / 研发 Agent / 测试 Agent / 审查 Agent。 */
+  /** Agent 身份：产品 Agent / 规划 Agent / 研发 Agent / 测试 Agent / 审查 Agent / 验收 Agent。 */
   role: string
   /** 职责一句话。 */
   responsibility: string
@@ -89,7 +95,13 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     key: 'review',
     label: '审查',
     role: '审查 Agent',
-    responsibility: '代码审查、项目启动、规范检测与交付验收'
+    responsibility: '代码审查、修复复核与进入验收阶段确认'
+  },
+  acceptance: {
+    key: 'acceptance',
+    label: '验收',
+    role: '验收 Agent',
+    responsibility: '项目预览与用户验收'
   }
 }
 
@@ -114,7 +126,8 @@ const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
   development: ['page_spec', 'endpoint_spec', 'code'],
   // 测试阶段：以跑+看+确认为主，仅验收可确认。
   test: [],
-  review: ['acceptance']
+  review: [],
+  acceptance: ['acceptance']
 }
 
 /** 阶段门禁：某对象在指定阶段是否可编辑。 */
@@ -169,7 +182,11 @@ const TEST_PHASE_NODES = new Set([
 ])
 const REVIEW_PHASE_NODES = new Set([
   'code_review',
+  'acceptance_phase_confirmation'
+])
+const ACCEPTANCE_PHASE_NODES = new Set([
   'launch_project',
+  'acceptance_review',
   'acceptance',
   'finalize_project'
 ])
@@ -186,6 +203,19 @@ const PRODUCT_PHASE_NODES = new Set([
 ])
 const PLANNING_PHASE_NODES = new Set(['technical_planning', 'technical_planning_review'])
 
+/** 仅纠正审查阶段遗留覆盖值，用户主动切到测试等阶段时不得强制跳回验收。 */
+export function shouldAutoEnterAcceptancePhase(
+  activePhase: WorkbenchPhase,
+  manualOverride: WorkbenchPhase | null,
+  workflowPhase: string | undefined
+): boolean {
+  return (
+    activePhase !== 'acceptance' &&
+    manualOverride === 'review' &&
+    ACCEPTANCE_PHASE_NODES.has(String(workflowPhase || '').trim())
+  )
+}
+
 /** 根据 Workflow 节点归属选择消息应显示的 Agent 阶段。 */
 export function workbenchPhaseForNode(
   nodeName: string | undefined,
@@ -195,6 +225,7 @@ export function workbenchPhaseForNode(
   if (PRODUCT_PHASE_NODES.has(node)) return 'product'
   if (PLANNING_PHASE_NODES.has(node)) return 'planning'
   if (REVIEW_PHASE_NODES.has(node)) return 'review'
+  if (ACCEPTANCE_PHASE_NODES.has(node)) return 'acceptance'
   if (TEST_PHASE_NODES.has(node)) return 'test'
   if (DEVELOPMENT_PHASE_NODES.has(node)) return 'development'
   return fallback
@@ -204,7 +235,7 @@ const TERMINAL_EXECUTION_STATUSES = new Set(['completed', 'stopped', 'failed'])
 
 /**
  * 根据后端权威 lifecycle 推导当前阶段（旅程驱动的自动值，不受手动覆盖影响）。
- * 规划期（进工作台之前）= 设计；进工作台后按活跃 execution 的节点归属开发/测试/审查。
+ * 规划期（进工作台之前）= 设计；进工作台后按活跃 execution 的节点归属开发/测试/审查/验收。
  */
 export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): WorkbenchPhase {
   // 工作台里 lifecycle 尚未加载时默认研发（工作台本就是研发领地；产品阶段由手动切回触发）。
@@ -227,7 +258,8 @@ export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): Workbenc
       (execution) =>
         !TERMINAL_EXECUTION_STATUSES.has(execution.status) && nodes.has(execution.phase)
     )
-  // 研发和测试同时在跑时，以更靠后的测试为当前阶段。
+  // 多个阶段短暂并存时，以更靠后的验收阶段优先。
+  if (activeIn(ACCEPTANCE_PHASE_NODES)) return 'acceptance'
   if (activeIn(REVIEW_PHASE_NODES)) return 'review'
   if (activeIn(TEST_PHASE_NODES)) return 'test'
   if (activeIn(DEVELOPMENT_PHASE_NODES)) return 'development'
@@ -253,7 +285,7 @@ const INITIALIZATION_STAGE_LABELS: Record<string, string> = {
   ready_for_workbench: '已就绪'
 }
 
-/** 研发/测试期 execution.phase 的中文节点标签。 */
+/** 工作台 execution.phase 的中文节点标签。 */
 const EXECUTION_PHASE_LABELS: Record<string, string> = {
   development_readiness_gate: '检查开发前置',
   entity_source_binding: '实体数据源绑定',
@@ -267,7 +299,9 @@ const EXECUTION_PHASE_LABELS: Record<string, string> = {
   integration_test: '集成测试',
   review_phase_confirmation: '测试完成与审查确认',
   code_review: '前后端代码审查',
+  acceptance_phase_confirmation: '验收阶段确认',
   launch_project: '启动预览',
+  acceptance_review: '用户验收',
   acceptance: '预览验收',
   finalize_project: '完成交付'
 }

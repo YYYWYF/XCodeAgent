@@ -16,7 +16,11 @@ from app.graph.nodes.testing import integration_test, quality_gate, unit_test
 from app.graph.nodes.small_task import small_task_repair, unit_test_repair
 from app.graph.nodes.ui_confirmation import ui_confirmation
 from app.graph.nodes.workspace_inspection import inspect_workspace, scan_workspace_code
-from app.graph.nodes.code_review import code_review, review_phase_confirmation
+from app.graph.nodes.code_review import (
+    acceptance_phase_confirmation,
+    code_review,
+    review_phase_confirmation,
+)
 from app.graph.subgraphs import build
 
 __all__ = [
@@ -44,4 +48,5 @@ __all__ = [
     "ui_confirmation",
     "review_phase_confirmation",
     "code_review",
+    "acceptance_phase_confirmation",
 ]

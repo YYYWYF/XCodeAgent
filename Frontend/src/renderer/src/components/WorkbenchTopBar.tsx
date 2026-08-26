@@ -19,7 +19,14 @@ import {
 } from '../workbenchPhase'
 import './WorkbenchTopBar.less'
 
-const PHASE_ORDER: WorkbenchPhase[] = ['product', 'planning', 'development', 'test', 'review']
+const PHASE_ORDER: WorkbenchPhase[] = [
+  'product',
+  'planning',
+  'development',
+  'test',
+  'review',
+  'acceptance'
+]
 
 type Props = {
   application: ApplicationConfig

@@ -638,7 +638,9 @@ function processStepTitle(
     integration_test: '验证修改',
     unit_test: '执行单元测试',
     unit_test_repair: '修复单元测试失败',
+    acceptance_phase_confirmation: '确认进入验收阶段',
     launch_project: '启动预览',
+    acceptance_review: '等待用户验收',
     finalize_direct_modification: '整理结果'
   }
   const label =

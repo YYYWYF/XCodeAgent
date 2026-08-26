@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useWorkbench, useWorkbenchPhase } from '../../context'
 import {
   hasApplicationEnteredDevelopment,
-  markApplicationEnteredDevelopment
+  markApplicationEnteredDevelopment,
+  shouldAutoEnterAcceptancePhase
 } from '../../workbenchPhase'
 import type {
   ApplicationConfig,
@@ -43,6 +44,7 @@ import {
 } from '../Welcome/planningWorkflowState'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
+import AcceptanceDecisionDock from './components/AcceptanceDecisionDock'
 import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import DesignChangeLockDock from './components/DesignChangeLockDock'
 import DocPanel from './components/DocPanel'
@@ -716,6 +718,7 @@ function pageContextStatus(
     mode === 'awaiting_unit_test_confirmation' ||
     mode === 'awaiting_test_phase_confirmation' ||
     mode === 'awaiting_review_phase_confirmation' ||
+    mode === 'awaiting_acceptance_phase_confirmation' ||
     mode === 'awaiting_code_review_repair_confirmation' ||
     mode === 'awaiting_acceptance' ||
     mode === 'awaiting_plan_adjustment'
@@ -798,6 +801,8 @@ export default function AiChatPanel({
   // 仅在用户点击页面开始设计后记录本次工作台内的页面设计状态。
   const [startedPageDesignIds, setStartedPageDesignIds] = useState<Set<string>>(() => new Set())
   const [previewError, setPreviewError] = useState('')
+  // 验收阶段拒绝结果仅恢复普通对话，不改变后端 page_acceptance 待验收状态。
+  const [acceptanceConversationSessionKey, setAcceptanceConversationSessionKey] = useState('')
   const [elementInspectionActive, setElementInspectionActive] = useState(false)
   // UI 设计稿预览：右侧"UI设计稿"tab 当前选中的页面 id（由中间区卡片或右侧列表驱动）。
   const [uiDesignActivePageId, setUiDesignActivePageId] = useState('')
@@ -829,7 +834,11 @@ export default function AiChatPanel({
   // 用该标记抑制引导卡片闪现，直到大纲状态刷新为已设计。
   const [entityDesignReturning, setEntityDesignReturning] = useState(false)
   const { publishAiMessage } = useWorkbench()
-  const { phase: activeWorkbenchPhase, switchPhase } = useWorkbenchPhase()
+  const {
+    phase: activeWorkbenchPhase,
+    manualOverride: workbenchPhaseOverride,
+    switchPhase
+  } = useWorkbenchPhase()
   const isDesignPhase = activeWorkbenchPhase === 'product'
   const isTechnicalPlanningPhase = activeWorkbenchPhase === 'planning'
   const isApplicationPlanningPhase = isDesignPhase || isTechnicalPlanningPhase
@@ -838,6 +847,9 @@ export default function AiChatPanel({
   useEffect(() => {
     setDesignChangeUnlocked(false)
   }, [application.id, isApplicationPlanningPhase, planningThreadId])
+  useEffect(() => {
+    setAcceptanceConversationSessionKey('')
+  }, [application.id, planningThreadId])
   // 模板生成完成后（lifecycle 变为 ready_for_workbench），derivedPhase 自动变 development。
   // 前端拦截：保持 product 阶段，等用户点"进入开发"按钮后才放开（switchPhase(null) 恢复跟随旅程）。
   // 用 sessionStorage 按 applicationId 记录用户是否已确认进入开发，跨重挂载保持。
@@ -1370,7 +1382,8 @@ export default function AiChatPanel({
     (!planningWorkflow || ACTIVE_DESIGN_WORKFLOW_STATUSES.has(planningWorkflowStatus))
   const designChangeInputLocked = designWorkflowActive && !designChangeUnlocked
   const designChangeInputEnabled = isApplicationPlanningPhase && !designChangeInputLocked
-  const effectiveInputMode: ChatInputMode = designChangeInputEnabled ? 'conversation' : inputMode
+  const effectiveInputMode: ChatInputMode =
+    acceptanceConversationSessionKey || designChangeInputEnabled ? 'conversation' : inputMode
   const activePreviewPath = activePageOption?.path || '/'
   const conversationEnabled =
     activeDetailTarget.type === 'none'
@@ -1400,9 +1413,11 @@ export default function AiChatPanel({
       setPreviewError('')
       setRuntimePreviewBaseUrl(nextBaseUrl)
       setRuntimePreviewLaunchError('')
+      // 验收子图完成启动后自动打开嵌入式预览，供用户直接完成验收。
+      onRightPanelOpenChange(true)
       setRightPanel({ type: 'preview', requestKey: target.key, url: nextPreviewUrl })
     },
-    [activePreviewPath, setRightPanel]
+    [activePreviewPath, onRightPanelOpenChange, setRightPanel]
   )
 
   /** 测试会话启动时立即高亮测试阶段，避免生命周期回传延迟造成步骤条仍显示开发中。 */
@@ -1413,6 +1428,11 @@ export default function AiChatPanel({
   /** 审查会话创建成功后立即高亮审查阶段，避免等待代码扫描首帧才更新顶部步骤条。 */
   const handleEnterReviewPhase = useCallback((): void => {
     switchPhase('review')
+  }, [switchPhase])
+
+  /** 验收会话创建成功后立即高亮验收阶段，避免等待项目启动首帧才更新顶部步骤条。 */
+  const handleEnterAcceptancePhase = useCallback((): void => {
+    switchPhase('acceptance')
   }, [switchPhase])
 
   // 同步工作台自动启动返回的最新前端端口和错误，不进行任何浏览器持久化。
@@ -1429,6 +1449,7 @@ export default function AiChatPanel({
     createPageSession,
     createTestSession,
     createReviewSession,
+    createAcceptanceSession,
     clearActiveSession,
     deletingSessionId,
     draft,
@@ -1472,6 +1493,17 @@ export default function AiChatPanel({
     ? sessions.find((session) => session.title === '规划 Agent')?.threadId
     : undefined
 
+  // 切换到其他会话时清除“不通过后恢复对话”的局部状态，避免串用普通输入模式。
+  useEffect(() => {
+    if (
+      acceptanceConversationSessionKey &&
+      activeSession?.key &&
+      activeSession.key !== acceptanceConversationSessionKey
+    ) {
+      setAcceptanceConversationSessionKey('')
+    }
+  }, [acceptanceConversationSessionKey, activeSession?.key])
+
   const {
     activeWorkflow,
     conversationRunning,
@@ -1503,6 +1535,8 @@ export default function AiChatPanel({
     editorMode,
     createTestSession,
     createReviewSession,
+    createAcceptanceSession,
+    acceptanceConversationSessionKey,
     ensureActiveSession,
     ensureEndpointSession,
     ensureEntitySession,
@@ -1512,6 +1546,7 @@ export default function AiChatPanel({
     onApplicationLifecycleChange,
     onEnterTestPhase: handleEnterTestPhase,
     onEnterReviewPhase: handleEnterReviewPhase,
+    onEnterAcceptancePhase: handleEnterAcceptancePhase,
     onPreviewReady: handlePreviewReady,
     publishAiMessage,
     runningSessionsRef,
@@ -2105,6 +2140,17 @@ export default function AiChatPanel({
   )
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
+  const acceptanceAwaiting = displayedPlanExecutionMode === 'awaiting_acceptance'
+  const acceptanceConversationActive = Boolean(
+    acceptanceConversationSessionKey &&
+      activeSession?.key === acceptanceConversationSessionKey
+  )
+  const acceptancePreviewFocus =
+    activeWorkbenchPhase === 'acceptance' &&
+    acceptanceAwaiting &&
+    showRightPanel &&
+    rightPanel?.type === 'preview' &&
+    !acceptanceConversationActive
   const inputModeLocked = isConversationWaitingForInput(latestWorkflowForDisplay)
   const activeWorkflowPhase = String(
     activeWorkflow?.summary?.phase ||
@@ -2112,6 +2158,18 @@ export default function AiChatPanel({
       activeWorkflow?.state?.phase ||
       ''
   )
+  // 兜底修正旧审查覆盖值：验收 Workflow 已运行时，顶部和阶段会话必须同步切到验收。
+  useEffect(() => {
+    if (
+      shouldAutoEnterAcceptancePhase(
+        activeWorkbenchPhase,
+        workbenchPhaseOverride,
+        activeWorkflowPhase
+      )
+    ) {
+      switchPhase('acceptance')
+    }
+  }, [activeWorkbenchPhase, activeWorkflowPhase, switchPhase, workbenchPhaseOverride])
   const activeSessionTargetKey = sessionDetailTargetKey(activeSession)
   const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const activeWorkflowMatchesTarget = Boolean(
@@ -2308,6 +2366,16 @@ export default function AiChatPanel({
   const handleClosePage = (): void => {
     setRightPanel(undefined)
   }
+
+  /** 验收不通过只恢复原对话区和分栏，不向后端提交验收结果。 */
+  const handleAcceptanceReject = useCallback((): void => {
+    setAcceptanceConversationSessionKey(activeSession?.key || draftKey)
+  }, [activeSession?.key, draftKey])
+
+  /** 验收通过暂未接线，保留按钮并明确告知用户当前能力边界。 */
+  const handleAcceptanceApprove = useCallback((): void => {
+    message.info('验收通过功能暂未开放')
+  }, [])
 
   /** 使用当前前端端口和所选页面路由打开独立全屏预览窗口。 */
   const handleOpenFullscreenPreview = async (): Promise<void> => {
@@ -2872,6 +2940,8 @@ export default function AiChatPanel({
         'ai-chat-panel',
         showRightPanel && 'embedded-preview-open',
         rightPanel?.type === 'diff' && 'diff-panel-open',
+        acceptanceAwaiting && 'acceptance-awaiting',
+        acceptancePreviewFocus && 'acceptance-preview-focus',
         elementInspectionActive && 'element-inspection-active',
         splitDragging && 'split-dragging'
       )}
@@ -3033,6 +3103,7 @@ export default function AiChatPanel({
             ) : null}
 
             {!entityDesignChatActive &&
+            !acceptanceAwaiting &&
             shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive) ? (
               <WorkspaceDebugDock
                 activeWorkflow={activeWorkflow}
@@ -3084,12 +3155,14 @@ export default function AiChatPanel({
                   activeWorkflow={activeWorkflow}
                   copy={copy}
                   draft={draft}
-                  inputMode={effectiveInputMode}
+                  inputMode={acceptanceConversationActive ? 'conversation' : effectiveInputMode}
                   inputModeDisabled={inputModeLocked}
                   loading={loading}
                   onDraftChange={(value) => setDraftByKey(draftKey, value)}
                   onInputModeChange={
-                    activeDetailTarget.type === 'none' || entityDesignChatActive
+                    activeDetailTarget.type === 'none' ||
+                    entityDesignChatActive ||
+                    acceptanceConversationActive
                       ? undefined
                       : handleInputModeChange
                   }
@@ -3252,6 +3325,13 @@ export default function AiChatPanel({
             errorMessage={runtimePreviewLaunchError}
             onInspectingChange={setElementInspectionActive}
           />
+          {acceptanceAwaiting && (
+            <AcceptanceDecisionDock
+              disabled={loading || workspaceBusy}
+              onAccept={handleAcceptanceApprove}
+              onReject={handleAcceptanceReject}
+            />
+          )}
         </div>
       )}
 

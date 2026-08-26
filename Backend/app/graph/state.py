@@ -123,6 +123,7 @@ class ProjectState(TypedDict, total=False):
     code_review_result: dict[str, Any]
     code_review_next_action: str
     code_review_repair_confirmation: dict[str, Any]
+    acceptance_phase_confirmation: dict[str, Any]
     code_review_repair_status: str
     code_review_repair_result: dict[str, Any]
     code_review_build_results: list[dict[str, Any]]

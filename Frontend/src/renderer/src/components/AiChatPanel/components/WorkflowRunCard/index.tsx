@@ -42,7 +42,8 @@ import {
   pageAcceptanceContinuationMessage
 } from '../../workflowContinuation'
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode'
-import { workflowShouldShowCodeReview } from '../../utils'
+import { workflowShouldShowCodeReview, workflowShouldShowProjectLaunch } from '../../utils'
+import { useWorkbenchPhase } from '../../../../context'
 import AgentApprovalCard from '../AgentApprovalCard'
 import { approveToolRequest, rejectToolRequest } from '../../../../service/workspaceTools'
 import type { ToolApproval } from '../../../../service/workspaceTools'
@@ -54,7 +55,9 @@ import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
 import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
+import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
+import { workflowClarification } from './workflowClarification'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -134,19 +137,22 @@ export default function WorkflowRunCard({
   workflow,
   workspaceRoot
 }: WorkflowRunCardProps): ReactElement {
+  const { phase: currentWorkbenchPhase } = useWorkbenchPhase()
   const status = String(workflow.summary.status || 'unknown')
   const artifacts = workflow.summary.artifacts || {}
   const clarification = workflowClarification(workflow)
   // 项目启动快照可能暂时保留上一测试节点已提交的性能测试确认；启动卡不应重复展示该旧交互。
-  const projectLaunch = workflow.summary.phase === 'launch_project'
+  const projectLaunch = workflowShouldShowProjectLaunch(workflow, currentWorkbenchPhase)
+  const launchNode = workflow.summary.phase === 'launch_project'
   const reviewPhaseConfirmation = clarification?.mode === 'review_phase_confirmation'
+  const acceptancePhaseConfirmation = clarification?.mode === 'acceptance_phase_confirmation'
   const codeReviewResult = readCodeReviewResult(workflow)
   const codeReviewRepair = readCodeReviewRepair(workflow)
   const codeReviewRepairConfirmation = clarification?.mode === 'code_review_repair_confirmation'
   // 恢复或重跑测试节点时快照可能短暂携带上一轮审查结果，必须以当前阶段为显示边界。
   const codeReview = workflowShouldShowCodeReview(workflow)
   const staleFrontendPerformanceConfirmation =
-    projectLaunch && clarification?.mode === 'frontend_performance_confirmation'
+    launchNode && clarification?.mode === 'frontend_performance_confirmation'
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification)
   const clarificationQuestions = staleFrontendPerformanceConfirmation
     ? []
@@ -240,13 +246,15 @@ export default function WorkflowRunCard({
         ? 1
         : reviewPhaseConfirmation
           ? 1
-          : uiDesignConfirmation
-            ? (
-                (clarification as unknown as Record<string, unknown> | undefined)?.pages as
-                  | unknown[]
-                  | undefined
-              )?.length || clarificationQuestions.length
-            : clarificationQuestions.length
+          : acceptancePhaseConfirmation
+            ? 1
+            : uiDesignConfirmation
+              ? (
+                  (clarification as unknown as Record<string, unknown> | undefined)?.pages as
+                    | unknown[]
+                    | undefined
+                )?.length || clarificationQuestions.length
+              : clarificationQuestions.length
   const requiresConfirmation =
     !staleFrontendPerformanceConfirmation && clarification?.status === 'requires_user_input'
   const [answers, setAnswers] = useState<ClarificationAnswers>(() =>
@@ -306,6 +314,7 @@ export default function WorkflowRunCard({
         !dagConfirmation &&
         !testPhaseConfirmation &&
         !reviewPhaseConfirmation &&
+        !acceptancePhaseConfirmation &&
         !codeReview && (
           <div className={cx('workflow-run-message')}>
             <Text>{String(workflow.summary.message)}</Text>
@@ -364,7 +373,8 @@ export default function WorkflowRunCard({
         planningStageEntry ||
         dagConfirmation ||
         testPhaseConfirmation ||
-        reviewPhaseConfirmation) && (
+        reviewPhaseConfirmation ||
+        acceptancePhaseConfirmation) && (
           <div className={cx('workflow-clarification')}>
             {!entityDesignReview && !entityDesignGate && !planningStageEntry && (
               <div className={cx('workflow-clarification-header')}>
@@ -444,6 +454,17 @@ export default function WorkflowRunCard({
               onSubmit={() =>
                 onSubmitClarification?.(workflow, {
                   review_phase_confirmation: {
+                    action: 'confirm'
+                  }
+                })
+              }
+            />
+          ) : acceptancePhaseConfirmation && requiresConfirmation ? (
+            <AcceptancePhaseConfirmationCard
+              disabled={disabled || interactionAvailability !== 'active'}
+              onSubmit={() =>
+                onSubmitClarification?.(workflow, {
+                  acceptance_phase_confirmation: {
                     action: 'confirm'
                   }
                 })
@@ -2247,51 +2268,6 @@ function readTechnicalPlan(workflow: WorkflowRunPayload): Record<string, unknown
     }
   }
   return undefined
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function workflowClarification(
-  workflow: WorkflowRunPayload
-): WorkflowClarification | undefined {
-  for (const candidate of [
-    workflow.summary.clarification,
-    workflow.summary.buildTaskPlanConfirmation,
-    workflow.state?.clarification,
-    workflow.result?.clarification
-  ]) {
-    if (isUsableWorkflowClarification(candidate)) return candidate
-  }
-
-  const clarificationEvent = workflow.events
-    .slice()
-    .reverse()
-    .find((event) => {
-      const detail = event.data?.detail
-      return Boolean(detail && typeof detail === 'object' && 'clarification' in detail)
-    })
-  const eventClarification = clarificationEvent?.data?.detail
-  if (
-    eventClarification &&
-    typeof eventClarification === 'object' &&
-    'clarification' in eventClarification
-  ) {
-    const clarification = (eventClarification as { clarification?: unknown }).clarification
-    if (isUsableWorkflowClarification(clarification)) return clarification
-  }
-
-  return undefined
-}
-
-/** 判断确认载荷是否包含可渲染语义，避免空对象遮蔽后续真实载荷。 */
-function isUsableWorkflowClarification(value: unknown): value is WorkflowClarification {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const clarification = value as WorkflowClarification
-  return Boolean(
-    clarification.mode ||
-      clarification.status ||
-      clarification.message ||
-      (Array.isArray(clarification.questions) && clarification.questions.length > 0)
-  )
 }
 
 // 提取高危数据库审批载荷：必须是 agent_approval 模式且包含可执行的 SQL 语句。

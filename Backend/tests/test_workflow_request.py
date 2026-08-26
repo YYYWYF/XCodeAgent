@@ -723,6 +723,71 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
+    def test_acceptance_phase_confirmation_is_forwarded_as_structured_resume(self) -> None:
+        """进入验收按钮必须恢复验收确认节点并保留 confirm 动作。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "正在启动项目准备验收",
+                "clarificationAnswers": {
+                    "acceptance_phase_confirmation": {"action": "confirm"}
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "acceptance_phase_confirmation",
+                    },
+                    "state": {
+                        "acceptancePhaseConfirmation": {
+                            "mode": "acceptance_phase_confirmation",
+                            "status": "requires_user_input",
+                        },
+                        "codeReviewResult": {"status": "completed", "issues": []},
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "acceptance_phase_confirmation")
+        self.assertEqual(
+            inputs["resume_values"]["acceptance_phase_confirmation"],
+            {"mode": "acceptance_phase_confirmation", "action": "confirm"},
+        )
+        self.assertEqual(
+            inputs["resume_values"]["code_review_result"]["status"], "completed"
+        )
+
+    def test_acceptance_phase_confirmation_rejects_unknown_action_or_missing_answer(self) -> None:
+        """验收阶段恢复只接受结构化 confirm，不允许自然语言或未知动作。"""
+
+        with self.assertRaisesRegex(ValueError, "只支持 confirm"):
+            workflow_run_inputs(
+                {
+                    "request": "进入验收",
+                    "clarificationAnswers": {
+                        "acceptance_phase_confirmation": {"action": "skip"}
+                    },
+                }
+            )
+
+        with self.assertRaisesRegex(ValueError, "只能通过 clarificationAnswers"):
+            workflow_run_inputs(
+                {
+                    "request": "进入验收",
+                    "resumeState": {
+                        "summary": {
+                            "status": "requires_user_input",
+                            "phase": "acceptance_phase_confirmation",
+                        },
+                        "state": {
+                            "clarification": {
+                                "mode": "acceptance_phase_confirmation"
+                            }
+                        },
+                    },
+                }
+            )
+
     def test_code_review_repair_confirmation_is_forwarded_as_structured_resume(self) -> None:
         """一键修复按钮必须恢复同一代码审查节点并携带 repair_all 动作。"""
 

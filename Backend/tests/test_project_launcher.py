@@ -1355,8 +1355,8 @@ class ProjectLauncherTests(unittest.TestCase):
         waiting = acceptance({})
         accepted = acceptance({"acceptance_decision": "accepted"})
 
-        self.assertEqual(waiting["status"], "requires_user_input")
-        self.assertFalse(waiting["accepted"])
+        # 新契约中验收门面必须先启动项目；无 workspace 时启动失败并结束子图。
+        self.assertEqual(waiting["status"], "failed")
         self.assertEqual(accepted["status"], "completed")
         self.assertTrue(accepted["accepted"])
 

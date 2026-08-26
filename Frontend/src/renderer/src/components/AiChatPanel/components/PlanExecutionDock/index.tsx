@@ -199,6 +199,11 @@ export default function PlanExecutionDock({
                 测试已通过，请在上方确认进入审查阶段。
               </div>
             )}
+            {mode === 'awaiting_acceptance_phase_confirmation' && (
+              <div className={cx('plan-execution-dock-interaction')}>
+                代码审查已完成，请在上方确认进入验收阶段。
+              </div>
+            )}
             {mode === 'awaiting_code_review_repair_confirmation' && (
               <div className={cx('plan-execution-dock-interaction')}>
                 代码审查发现问题，请在上方执行一键修复。
@@ -349,6 +354,7 @@ function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
     awaiting_frontend_performance_confirmation: '等待前端性能测试选择',
     awaiting_test_phase_confirmation: '等待进入测试阶段',
     awaiting_review_phase_confirmation: '等待进入审查阶段',
+    awaiting_acceptance_phase_confirmation: '等待进入验收阶段',
     awaiting_code_review_repair_confirmation: '等待一键修复代码问题',
     awaiting_acceptance: '页面已准备好，等待最终验收',
     awaiting_plan_adjustment: '执行已暂停',
@@ -381,6 +387,9 @@ function planModeDescription(
   }
   if (mode === 'awaiting_review_phase_confirmation') {
     return '测试已通过，请在上方确认进入审查阶段。'
+  }
+  if (mode === 'awaiting_acceptance_phase_confirmation') {
+    return '代码审查已完成，请在上方确认进入验收阶段。'
   }
   if (mode === 'awaiting_code_review_repair_confirmation') {
     return '代码审查发现问题，请在上方执行一键修复。'

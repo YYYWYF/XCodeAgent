@@ -24,6 +24,7 @@ export type WorkflowSummary = {
   phase?: string
   previewUrl?: string
   launchResult?: WorkflowLaunchResult
+  launchProgress?: WorkflowLaunchProgress
   acceptanceRequest?: WorkflowAcceptanceRequest
   artifacts?: Record<string, string>
   clarification?: WorkflowClarification
@@ -45,6 +46,7 @@ export type WorkflowSummary = {
   unitTestGeneration?: Record<string, unknown>
   unitTestGenerationContext?: Record<string, unknown>
   reviewPhaseConfirmation?: WorkflowClarification
+  acceptancePhaseConfirmation?: WorkflowClarification
   codeReviewResult?: WorkflowCodeReviewResult
   codeReviewRepair?: WorkflowCodeReviewRepair
   unitTestQualityGatePassed?: boolean
@@ -59,6 +61,13 @@ export type WorkflowSummary = {
   repairReturnNode?: 'unit_test' | 'integration_test' | string
   lifecycle?: ApplicationLifecycle
   [key: string]: unknown
+}
+
+/** 项目启动子图通过 AG-UI 实时投影的当前子步骤。 */
+export type WorkflowLaunchProgress = {
+  stage?: 'structure' | 'backend' | 'frontend' | 'ready' | string
+  status?: 'pending' | 'running' | 'completed' | 'skipped' | 'failed' | string
+  message?: string
 }
 
 export type WorkflowBuildSummary = {
@@ -424,6 +433,8 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   test_phase_confirmation?: WorkflowTestPhaseConfirmation
   /** 集成测试通过后进入审查阶段的唯一结构化确认动作。 */
   review_phase_confirmation?: WorkflowReviewPhaseConfirmation
+  /** 代码审查完成后进入验收阶段的唯一结构化确认动作。 */
+  acceptance_phase_confirmation?: WorkflowAcceptancePhaseConfirmation
   /** 代码审查问题的一键修复动作。 */
   code_review_repair_confirmation?: WorkflowCodeReviewRepairConfirmation
 }
@@ -435,6 +446,11 @@ export type WorkflowTestPhaseConfirmation = {
 
 /** 集成测试通过后恢复审查阶段确认节点的协议答案。 */
 export type WorkflowReviewPhaseConfirmation = {
+  action: 'confirm'
+}
+
+/** 代码审查完成后恢复验收阶段确认节点的协议答案。 */
+export type WorkflowAcceptancePhaseConfirmation = {
   action: 'confirm'
 }
 
@@ -681,6 +697,7 @@ export type LifecyclePendingInteractionType =
   | 'test_phase_confirmation'
   | 'review_phase_confirmation'
   | 'code_review_repair_confirmation'
+  | 'acceptance_phase_confirmation'
   | 'plan_adjustment'
 
 export type LifecycleError = {

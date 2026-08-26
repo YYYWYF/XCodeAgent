@@ -685,6 +685,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
 }
 
 type EditorMode = 'frontend' | 'backend'
+type WorkbenchPhase = 'product' | 'development' | 'test' | 'review' | 'acceptance'
 
 type SessionWorkspaceSummary = {
   workspaceRoot: string
@@ -700,6 +701,7 @@ type ChatSessionSummary = {
   id: string
   title: string
   editorMode: EditorMode
+  workbenchPhase: WorkbenchPhase
   threadId: string
   apiContractId?: string
   endpointId?: string
@@ -718,6 +720,7 @@ type NormalizedChatSession = {
   id: string
   title: string
   editorMode: EditorMode
+  workbenchPhase: WorkbenchPhase
   threadId: string
   apiContractId?: string
   endpointId?: string
@@ -1083,6 +1086,20 @@ function assertEditorMode(value: unknown): EditorMode {
   return value
 }
 
+/** 校验并返回会话所属的工作台阶段，阻止不同阶段的消息在恢复时串台。 */
+function assertWorkbenchPhase(value: unknown): WorkbenchPhase {
+  if (
+    value !== 'product' &&
+    value !== 'development' &&
+    value !== 'test' &&
+    value !== 'review' &&
+    value !== 'acceptance'
+  ) {
+    throw new Error('workbenchPhase must be a supported workbench phase')
+  }
+  return value
+}
+
 /** 校验并返回可安全用于文件名的会话标识。 */
 function assertSessionId(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) {
@@ -1162,6 +1179,7 @@ function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
     id: String(session.id || ''),
     title: String(session.title || '新对话'),
     editorMode: assertEditorMode(session.editorMode),
+    workbenchPhase: assertWorkbenchPhase(session.workbenchPhase),
     threadId: String(session.threadId || ''),
     apiContractId: session.apiContractId,
     endpointId: session.endpointId,
@@ -1187,6 +1205,7 @@ function normalizeSession(session: unknown): NormalizedChatSession {
   }
 
   const editorMode = assertEditorMode(session.editorMode)
+  const workbenchPhase = assertWorkbenchPhase(session.workbenchPhase)
   const id = assertSessionId(session.id)
   const messages = Array.isArray(session.messages)
     ? session.messages.filter(isJsonRecord).map(normalizePersistentSessionMessage)
@@ -1199,6 +1218,7 @@ function normalizeSession(session: unknown): NormalizedChatSession {
     id,
     title: String(session.title || '新对话'),
     editorMode,
+    workbenchPhase,
     threadId: String(session.threadId || id),
     ...(endpointContext.apiContractId ? { apiContractId: endpointContext.apiContractId } : {}),
     ...(endpointContext.endpointId ? { endpointId: endpointContext.endpointId } : {}),

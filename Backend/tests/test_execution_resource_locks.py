@@ -474,6 +474,54 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 "integration_test",
             )
 
+    def test_acceptance_phase_confirmation_can_take_over_in_new_thread(self) -> None:
+        """验收阶段确认应允许审查 execution 原子转交到新验收 thread。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="orders",
+                page_id="orders",
+                thread_id="thread-review-orders",
+                run_id="run-old",
+                phase="acceptance_phase_confirmation",
+            )
+            waiting = update_workbench_execution(
+                directory,
+                run_id="run-old",
+                phase="acceptance_phase_confirmation",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.ACCEPTANCE_PHASE_CONFIRMATION,
+                pending_payload={
+                    "mode": "acceptance_phase_confirmation",
+                    "message": "代码审查已完成，是否进入验收阶段？",
+                },
+            )
+            pending = waiting.active_executions["run-old"].pending_interaction
+            assert pending is not None
+
+            payload = begin_workflow_lifecycle(
+                {
+                    "workspace": directory,
+                    "resume_values": {
+                        "build_execution_scope": {"type": "page", "targetId": "orders"},
+                        "resume_execution_run_id": "run-old",
+                    },
+                },
+                thread_id="thread-acceptance-orders",
+                run_id="run-new",
+                phase="acceptance",
+            )
+
+            assert payload is not None
+            self.assertNotIn("run-old", payload["activeExecutions"])
+            self.assertEqual(
+                payload["activeExecutions"]["run-new"]["threadId"],
+                "thread-acceptance-orders",
+            )
+
     def test_frontend_performance_confirmation_can_resume_in_test_thread(self) -> None:
         """性能测试选择应允许同一测试对话接管 awaiting_user execution。"""
 

@@ -1,6 +1,7 @@
 from langgraph.graph import END, START, StateGraph
 
 from app.graph import nodes
+from app.graph.subgraphs import acceptance_subgraph
 from app.graph.state import ProjectState
 from app.persistence.checkpoints import (
     workflow_checkpoint_db_path,
@@ -35,12 +36,12 @@ def route_workflow_start(state: ProjectState) -> str:
         return "review_phase_confirmation"
     if state.get("resume_from") == "code_review":
         return "code_review"
+    if state.get("resume_from") == "acceptance_phase_confirmation":
+        return "acceptance_phase_confirmation"
     if state.get("resume_from") == "integration_test":
         return "integration_test"
     if state.get("resume_from") == "small_task_repair":
         return "small_task_repair"
-    if state.get("resume_from") == "launch_project":
-        return "launch_project"
     if state.get("resume_from") == "acceptance":
         return "acceptance"
     if state.get("resume_from") == "finalize_project":
@@ -148,12 +149,22 @@ def route_review_phase_confirmation(state: ProjectState) -> str:
 
 
 def route_code_review(state: ProjectState) -> str:
-    """审查子图暂停时等待用户，完成后启动项目，异常进入失败处理。"""
+    """审查子图暂停时等待用户，完成后进入验收阶段确认，异常进入失败处理。"""
 
     if state.get("status") == "requires_user_input":
         return "await_user_input"
     if state.get("status") == "completed":
-        return "launch_project"
+        return "acceptance_phase_confirmation"
+    return "handle_failure"
+
+
+def route_acceptance_phase_confirmation(state: ProjectState) -> str:
+    """根据用户确认结果选择进入验收子图或暂停等待。"""
+
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
+    if state.get("status") == "completed":
+        return "acceptance"
     return "handle_failure"
 
 
@@ -211,10 +222,12 @@ def build_graph(*, checkpointer):
     builder.add_node("test_phase_confirmation", nodes.test_phase_confirmation)
     builder.add_node("review_phase_confirmation", nodes.review_phase_confirmation)
     builder.add_node("code_review", nodes.code_review)
+    builder.add_node("acceptance_phase_confirmation", nodes.acceptance_phase_confirmation)
     builder.add_node("integration_test", nodes.integration_test)
     builder.add_node("small_task_repair", nodes.small_task_repair)
-    builder.add_node("launch_project", nodes.launch_project)
-    builder.add_node("acceptance", nodes.acceptance)
+    # 验收必须作为真实子图挂载，协议层才能在项目启动期间逐条收到 custom 进度，
+    # 不能再由同步包装节点 invoke，否则子步骤会在启动完成后才一次性交付。
+    builder.add_node("acceptance", acceptance_subgraph)
     builder.add_node("finalize_project", nodes.finalize_project)
     builder.add_node("handle_failure", nodes.handle_failure)
 
@@ -233,9 +246,9 @@ def build_graph(*, checkpointer):
             "test_phase_confirmation": "test_phase_confirmation",
             "review_phase_confirmation": "review_phase_confirmation",
             "code_review": "code_review",
+            "acceptance_phase_confirmation": "acceptance_phase_confirmation",
             "integration_test": "integration_test",
             "small_task_repair": "small_task_repair",
-            "launch_project": "launch_project",
             "acceptance": "acceptance",
             "finalize_project": "finalize_project",
         },
@@ -327,8 +340,17 @@ def build_graph(*, checkpointer):
         "code_review",
         route_code_review,
         {
-            "launch_project": "launch_project",
+            "acceptance_phase_confirmation": "acceptance_phase_confirmation",
             # 扫描发现问题时，子图必须在当前审查 thread 暂停，等待结构化 repair_all。
+            "await_user_input": END,
+            "handle_failure": "handle_failure",
+        },
+    )
+    builder.add_conditional_edges(
+        "acceptance_phase_confirmation",
+        route_acceptance_phase_confirmation,
+        {
+            "acceptance": "acceptance",
             "await_user_input": END,
             "handle_failure": "handle_failure",
         },
@@ -357,7 +379,6 @@ def build_graph(*, checkpointer):
             "handle_failure": "handle_failure",
         },
     )
-    builder.add_edge("launch_project", END)
     builder.add_conditional_edges(
         "acceptance",
         route_acceptance,

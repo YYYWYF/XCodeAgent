@@ -89,3 +89,50 @@ def code_review(
         update["error"] = "代码审查需要显式用户 workspaceRoot。"
         update["code_review_next_action"] = "handle_failure"
     return update
+
+
+def acceptance_phase_confirmation(state: ProjectState) -> dict[str, Any]:
+    """在代码审查完成后等待用户确认进入独立验收阶段。"""
+
+    review_result = state.get("code_review_result")
+    review_status = (
+        str(review_result.get("status") or "")
+        if isinstance(review_result, dict)
+        else ""
+    )
+    repair_result = state.get("code_review_repair_result")
+    repair_status = (
+        str(repair_result.get("status") or "not_required")
+        if isinstance(repair_result, dict)
+        else "not_required"
+    )
+    if review_status != "completed" or repair_status not in {"not_required", "completed"}:
+        return {
+            "phase": "acceptance_phase_confirmation",
+            "status": "failed",
+            "message": "代码审查失败，不能进入验收阶段。",
+            "error": state.get("error") or "代码审查未完成。",
+            "timeline": ["acceptance_phase_confirmation"],
+        }
+    submission = state.get("acceptance_phase_confirmation")
+    confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
+    if confirmed:
+        return {
+            "phase": "acceptance_phase_confirmation",
+            "status": "completed",
+            "clarification": {},
+            "acceptance_next_action": "acceptance",
+            "timeline": ["acceptance_phase_confirmation"],
+        }
+    return {
+        "phase": "acceptance_phase_confirmation",
+        "status": "requires_user_input",
+        "clarification": {
+            "mode": "acceptance_phase_confirmation",
+            "status": "requires_user_input",
+            "message": "代码审查已完成，是否进入验收阶段？",
+            "questions": [],
+        },
+        "acceptance_next_action": "await_user_input",
+        "timeline": ["acceptance_phase_confirmation"],
+    }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Any, AsyncIterator
 from urllib.parse import urlencode
 from uuid import uuid4
@@ -69,6 +70,37 @@ from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
 _APPLICATION_PLANNING_RESUME_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _graph_stream_supports_subgraphs(graph: Any) -> bool:
+    """判断 Graph 流是否支持子图命名空间参数，并兼容测试中的轻量假 Graph。"""
+
+    try:
+        parameters = inspect.signature(graph.astream).parameters.values()
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return any(
+        parameter.name == "subgraphs"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _workflow_stream_chunk(item: Any) -> tuple[tuple[str, ...], str, Any]:
+    """统一解析普通 Graph 与开启子图命名空间后的流式记录。"""
+
+    if isinstance(item, tuple) and len(item) == 3:
+        namespace, stream_mode, chunk = item
+        normalized_namespace = (
+            tuple(str(part) for part in namespace)
+            if isinstance(namespace, tuple)
+            else tuple()
+        )
+        return normalized_namespace, str(stream_mode), chunk
+    if isinstance(item, tuple) and len(item) == 2:
+        stream_mode, chunk = item
+        return tuple(), str(stream_mode), chunk
+    return tuple(), "", item
 
 
 def _application_planning_resume_lock(thread_id: str) -> asyncio.Lock:
@@ -648,11 +680,18 @@ def build_workflow_ag_ui_stream(
                 # 运行元数据由审阅节点在门禁校验成功后一次性写入；若校验失败，纯 resume
                 # 不留下可与下次重试冲突的 pending writes。
                 graph_input = Command(resume=application_planning_interaction)
-            async for stream_mode, chunk in active_graph.astream(
-                graph_input,
-                config=config,
-                stream_mode=["updates", "messages", "custom"],
-            ):
+            stream_kwargs: dict[str, Any] = {
+                "config": config,
+                "stream_mode": ["updates", "messages", "custom"],
+            }
+            if _graph_stream_supports_subgraphs(active_graph):
+                # 仅开启命名空间后，作为主图节点挂载的验收子图 custom 事件才会
+                # 在启动过程中即时穿透；子图 update 仍由父节点最终增量统一投影。
+                stream_kwargs["subgraphs"] = True
+            async for stream_item in active_graph.astream(graph_input, **stream_kwargs):
+                namespace, stream_mode, chunk = _workflow_stream_chunk(stream_item)
+                if namespace and stream_mode != "custom":
+                    continue
                 if stream_mode == "custom":
                     progress = chunk if isinstance(chunk, dict) else {}
                     event_type = progress.get("type")
@@ -785,11 +824,15 @@ def build_workflow_ag_ui_stream(
                         progress_message = str(
                             progress.get("message") or "正在启动项目预览…"
                         )
+                        launch_progress = {
+                            **progress_detail,
+                            "message": progress_message,
+                        }
                         progress_state = {
                             **stream_state,
                             "phase": progress_node,
                             "status": "in_progress",
-                            "launch_progress": progress_detail,
+                            "launch_progress": launch_progress,
                         }
                         _workflow_event(
                             events,
@@ -801,7 +844,7 @@ def build_workflow_ag_ui_stream(
                             message=progress_message,
                             data={
                                 "phase": progress_node,
-                                "launchProgress": progress_detail,
+                                "launchProgress": launch_progress,
                                 "stateDelta": _public_workflow_state(progress_state),
                             },
                             attempt=progress_attempt,

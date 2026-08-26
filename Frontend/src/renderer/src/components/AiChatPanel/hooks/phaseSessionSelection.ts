@@ -5,6 +5,13 @@ export type PhaseSessionSelection = Partial<
   Record<EditorMode, Partial<Record<WorkbenchPhase, string>>>
 >
 
+/** 只返回归属于指定工作台阶段的会话，避免历史确认卡跨阶段显示。 */
+export function sessionsForWorkbenchPhase<
+  Session extends { workbenchPhase: WorkbenchPhase }
+>(sessions: Session[], phase: WorkbenchPhase): Session[] {
+  return sessions.filter((session) => session.workbenchPhase === phase)
+}
+
 /** 读取指定编辑模式和工作台阶段各自选中的会话，避免跨阶段复用最后会话。 */
 export function selectedSessionIdForPhase(
   selection: PhaseSessionSelection,

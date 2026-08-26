@@ -4,7 +4,8 @@ import type { ReactElement } from 'react'
 import type { WorkflowRunPayload } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { EntityDesignCard } from './EntityDesignPanels'
-import { workflowClarification, type ClarificationAnswers } from './index'
+import type { ClarificationAnswers } from './index'
+import { workflowClarification } from './workflowClarification'
 import './EntityDesignChatCard.less'
 
 const { Text } = Typography

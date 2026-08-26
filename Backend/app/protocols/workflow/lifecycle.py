@@ -167,6 +167,12 @@ def _validate_resumable_execution(
         and execution.pending_interaction.type
         == PendingInteractionType.CODE_REVIEW_REPAIR_CONFIRMATION
     )
+    acceptance_phase_confirmation = (
+        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type
+        == PendingInteractionType.ACCEPTANCE_PHASE_CONFIRMATION
+    )
     if (
         not resumable_status
         and not debug_plan_adjustment
@@ -176,6 +182,7 @@ def _validate_resumable_execution(
         and not test_phase_confirmation
         and not review_phase_confirmation
         and not code_review_repair_confirmation
+        and not acceptance_phase_confirmation
     ):
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
     # 阶段确认是显式的新对话边界：只有结构化测试/审查确认允许把 execution 所有权
@@ -184,6 +191,7 @@ def _validate_resumable_execution(
         execution.thread_id != thread_id
         and not test_phase_confirmation
         and not review_phase_confirmation
+        and not acceptance_phase_confirmation
     ):
         raise ApplicationLifecycleConflictError("不能从其他对话接替工作台执行。")
     if execution.scope != scope or execution.target_id != target_id:
@@ -208,7 +216,9 @@ def project_workflow_lifecycle_boundary(
         )
 
     status = str(update.get("status") or "")
-    if node_name == "launch_project" and status == "requires_user_input":
+    if (
+        node_name == "launch_project" or clarification_mode(update) == "page_acceptance"
+    ) and status == "requires_user_input":
         state = update_workbench_execution(
             workspace,
             run_id=run_id,
@@ -252,6 +262,8 @@ def project_workflow_lifecycle_boundary(
         projected_phase = "integration_test"
     elif node_name == "review_phase_confirmation" and status == "completed":
         projected_phase = "code_review"
+    elif node_name == "acceptance_phase_confirmation" and status == "completed":
+        projected_phase = "acceptance"
     state = update_workbench_execution(
         workspace,
         run_id=run_id,
@@ -326,11 +338,20 @@ def _pending_interaction(
         "test_phase_confirmation": PendingInteractionType.TEST_PHASE_CONFIRMATION,
         "review_phase_confirmation": PendingInteractionType.REVIEW_PHASE_CONFIRMATION,
         "code_review_repair_confirmation": PendingInteractionType.CODE_REVIEW_REPAIR_CONFIRMATION,
+        "acceptance_phase_confirmation": PendingInteractionType.ACCEPTANCE_PHASE_CONFIRMATION,
+        "page_acceptance": PendingInteractionType.PAGE_ACCEPTANCE,
         "entity_source_binding": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "entity_source_binding_required": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "agent_approval": PendingInteractionType.AGENT_APPROVAL,
     }.get(mode, PendingInteractionType.PLAN_ADJUSTMENT)
     return interaction_type, clarification
+
+
+def clarification_mode(update: dict[str, Any]) -> str:
+    """读取节点结果中的 clarification 模式，供生命周期边界选择交互类型。"""
+
+    clarification = update.get("clarification")
+    return str(clarification.get("mode") or "") if isinstance(clarification, dict) else ""
 
 
 def _acceptance_payload(update: dict[str, Any]) -> dict[str, Any]:

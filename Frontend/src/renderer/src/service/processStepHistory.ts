@@ -22,7 +22,9 @@ const WORKFLOW_NODE_LABELS: Record<string, string> = {
   integration_test: '集成测试与质量门禁',
   review_phase_confirmation: '测试完成与审查阶段确认',
   code_review: '前后端代码审查',
+  acceptance_phase_confirmation: '验收阶段确认',
   launch_project: '启动本地预览',
+  acceptance_review: '用户验收',
   acceptance: '用户验收',
   finalize_project: '完成项目',
   handle_failure: '失败处理'

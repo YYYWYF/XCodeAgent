@@ -16,6 +16,7 @@ export type PlanExecutionMode =
   | 'awaiting_frontend_performance_confirmation'
   | 'awaiting_test_phase_confirmation'
   | 'awaiting_review_phase_confirmation'
+  | 'awaiting_acceptance_phase_confirmation'
   | 'awaiting_code_review_repair_confirmation'
   | 'awaiting_acceptance'
   | 'awaiting_plan_adjustment'
@@ -117,6 +118,9 @@ export function derivePlanExecutionMode(execution?: WorkbenchExecution): PlanExe
   }
   if (interactionType === 'review_phase_confirmation') {
     return 'awaiting_review_phase_confirmation'
+  }
+  if (interactionType === 'acceptance_phase_confirmation') {
+    return 'awaiting_acceptance_phase_confirmation'
   }
   if (interactionType === 'code_review_repair_confirmation') {
     return 'awaiting_code_review_repair_confirmation'
@@ -329,6 +333,7 @@ export function planExecutionPhaseLabel(phase?: string): string {
       integration_test: '集成测试',
       small_task_repair: '执行局部修复任务',
       review_phase_confirmation: '审查阶段确认',
+      acceptance_phase_confirmation: '验收阶段确认',
       code_review_repair_confirmation: '代码审查一键修复',
       code_review: '前后端代码审查',
       launch_project: '启动预览',
@@ -361,9 +366,9 @@ export function workflowResumeNode(
     'integration_test',
     'small_task_repair',
     'review_phase_confirmation',
+    'acceptance_phase_confirmation',
     'code_review_repair_confirmation',
     'code_review',
-    'launch_project',
     'acceptance',
     'finalize_project'
   ])

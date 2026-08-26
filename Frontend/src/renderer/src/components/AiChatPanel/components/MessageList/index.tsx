@@ -35,10 +35,8 @@ import CodeChangeCard from '../CodeChangeCard'
 import { ToolCallChain } from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import VersionCommitReminder from '../VersionCommitReminder'
-import WorkflowRunCard, {
-  type ClarificationAnswers,
-  workflowClarification
-} from '../WorkflowRunCard'
+import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
+import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
 import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
 import TemplatePreparingCard, {
   isTemplatePreparing
@@ -57,7 +55,8 @@ import {
   workflowCodeChangesBeforeConfirmation,
   workflowFinalResultPresentation,
   workflowShouldShowCodeChanges,
-  workflowShouldShowCodeReview
+  workflowShouldShowCodeReview,
+  workflowShouldShowProjectLaunch
 } from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
@@ -109,7 +108,7 @@ function entityDesignMessageContent(
   return parts.join('\n\n')
 }
 
-/** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 规划 / 研发 / 测试 / 审查）在回复。
+/** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 规划 / 研发 / 测试 / 审查 / 验收）在回复。
  *  人像图标 + Agent 角色名，独占一行，下方换行展示正文/卡片。 */
 function MessageAgentHeader({ agentKey }: { agentKey: WorkbenchPhase }): ReactElement {
   const agent = WORKBENCH_PHASE_AGENTS[agentKey]
@@ -482,11 +481,15 @@ export default function MessageList({
               const isLatestUiDesignConfirmationCard =
                 isUiDesignConfirmationCard && messageIndex === latestUiDesignPreviewIndex
               // 项目启动节点使用专用卡片覆盖运行、完成与失败状态。
-              const isLaunchProjectCard =
-                message.workflow && message.workflow.summary?.phase === 'launch_project'
-              // 审查结果需要在后续 launch_project 快照中继续显示，不能只依赖当前 phase。
+              const isLaunchProjectCard = workflowShouldShowProjectLaunch(
+                message.workflow,
+                currentPhase
+              )
+              // 审查结果需要在后续验收快照中继续显示，不能只依赖当前 phase。
               const isReviewPhaseConfirmationCard =
                 message.workflow && messageClarification?.mode === 'review_phase_confirmation'
+              const isAcceptancePhaseConfirmationCard =
+                message.workflow && messageClarification?.mode === 'acceptance_phase_confirmation'
               const isCodeReviewCard = workflowShouldShowCodeReview(message.workflow)
               // 创建规划的产品/技术阶段也展示 WorkflowRunCard，保证运行与确认状态连续可见。
               const isPlanningStageCard =
@@ -502,6 +505,7 @@ export default function MessageList({
                     isPlanningStageCard ||
                     isLaunchProjectCard ||
                     isReviewPhaseConfirmationCard ||
+                    isAcceptancePhaseConfirmationCard ||
                     isCodeReviewCard)
               )
               // 设计阶段/会话内只有列表末尾的待答卡可交互：其后出现答案留痕或下一张卡
@@ -572,6 +576,7 @@ export default function MessageList({
                 isPlanningArtifactConfirmationCard ||
                 isPlanningStageRunningCard ||
                 isLaunchProjectCard ||
+                isAcceptancePhaseConfirmationCard ||
                 isCodeReviewCard ||
                 showPlanningLoading ||
                 isUiDesignConfirmationCard ||

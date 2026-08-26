@@ -51,7 +51,9 @@ WORKFLOW_NODE_LABELS = {
     "small_task_repair": "局部修复任务",
     "review_phase_confirmation": "测试完成与审查阶段确认",
     "code_review": "前后端代码审查",
+    "acceptance_phase_confirmation": "验收阶段确认",
     "launch_project": "启动本地预览",
+    "acceptance_review": "用户验收",
     "acceptance": "用户验收",
     "finalize_project": "完成项目",
     "handle_failure": "失败处理",
@@ -69,9 +71,11 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "test_phase_confirmation": ["integration_test"],
     "integration_test": ["review_phase_confirmation", "small_task_repair"],
     "review_phase_confirmation": ["code_review"],
-    "code_review": ["launch_project", "handle_failure"],
+    "code_review": ["acceptance_phase_confirmation", "handle_failure"],
+    "acceptance_phase_confirmation": ["acceptance"],
     "small_task_repair": ["integration_test"],
-    "launch_project": ["acceptance"],
+    "launch_project": ["acceptance_review"],
+    "acceptance_review": [],
     "acceptance": ["finalize_project"],
 }
 
@@ -113,6 +117,10 @@ def workflow_capabilities() -> dict[str, Any]:
                     "通过 clarificationAnswers.code_review_repair_confirmation 提交结构化 repair_all 动作；"
                     "确认后恢复 code_review 子图并执行受限代码修复。"
                 ),
+                "acceptance_phase_confirmation": (
+                    "通过 clarificationAnswers.acceptance_phase_confirmation 提交结构化 confirm 动作；"
+                    "确认后恢复验收阶段确认并进入 acceptance 子图。"
+                ),
             },
         },
         "acceptanceAdjustments": {
@@ -149,6 +157,11 @@ def workflow_capabilities() -> dict[str, Any]:
                 "answerField": "clarificationAnswers.code_review_repair_confirmation",
                 "answer": {"action": "repair_all"},
                 "lifecycleInteraction": "code_review_repair_confirmation",
+            },
+            "acceptance_phase_confirmation": {
+                "answerField": "clarificationAnswers.acceptance_phase_confirmation",
+                "answer": {"action": "confirm"},
+                "lifecycleInteraction": "acceptance_phase_confirmation",
             },
         },
         "input": {
@@ -1056,6 +1069,8 @@ def _workflow_progress_summary(
         "qualityGatePassed": result.get("quality_gate_passed"),
         "needsRevision": result.get("needs_revision"),
         "previewUrl": result.get("preview_url"),
+        "launchResult": result.get("launch_result"),
+        "acceptanceRequest": result.get("acceptance_request"),
         "buildSummary": result.get("build_summary", {}),
         "unitTestSummary": result.get("unit_test_report", {}),
         "unitTestReport": result.get("unit_test_report", {}),
@@ -1068,6 +1083,9 @@ def _workflow_progress_summary(
         "repairReturnNode": result.get("repair_return_node"),
         "testTarget": _workflow_test_target(result),
         "reviewPhaseConfirmation": result.get("review_phase_confirmation", {}),
+        "acceptancePhaseConfirmation": result.get(
+            "acceptance_phase_confirmation", {}
+        ),
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"), result.get("phase")
         ),
@@ -1145,8 +1163,8 @@ def _workflow_start_node(
         return "review_phase_confirmation"
     if resume_from == "code_review":
         return "code_review"
-    if resume_from == "launch_project":
-        return "launch_project"
+    if resume_from == "acceptance_phase_confirmation":
+        return "acceptance_phase_confirmation"
     if resume_from == "acceptance":
         return "acceptance"
     if resume_from == "finalize_project":
@@ -1228,7 +1246,13 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     if node_name == "code_review":
         if update.get("status") == "requires_user_input":
             return []
-        return ["launch_project"] if update.get("status") == "completed" else ["handle_failure"]
+        return (
+            ["acceptance_phase_confirmation"]
+            if update.get("status") == "completed"
+            else ["handle_failure"]
+        )
+    if node_name == "acceptance_phase_confirmation":
+        return ["acceptance"] if update.get("status") == "completed" else []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
 
 
@@ -1283,6 +1307,16 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
         clarification = clarification if isinstance(clarification, dict) else {}
         return {
             "message": clarification.get("message") or "测试已通过，等待确认进入审查阶段。",
+            "data": {
+                "clarification": clarification,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+            },
+        }
+    if node_name == "acceptance_phase_confirmation":
+        clarification = update.get("clarification")
+        clarification = clarification if isinstance(clarification, dict) else {}
+        return {
+            "message": clarification.get("message") or "代码审查已完成，等待确认进入验收阶段。",
             "data": {
                 "clarification": clarification,
                 "requiresUserInput": update.get("status") == "requires_user_input",
@@ -1527,10 +1561,15 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "launchResult": update.get("launch_result"),
             },
         }
-    if node_name == "acceptance":
+    if node_name in {"acceptance", "acceptance_review"}:
         return {
-            "message": f"验收={update.get('accepted')}",
-            "data": {"accepted": update.get("accepted")},
+            "message": str(update.get("message") or f"验收={update.get('accepted')}"),
+            "data": {
+                "accepted": update.get("accepted"),
+                "previewUrl": update.get("preview_url"),
+                "launchResult": update.get("launch_result"),
+                "acceptanceRequest": update.get("acceptance_request"),
+            },
         }
     if node_name in {"finalize_project", "handle_failure"}:
         return {
@@ -1609,7 +1648,9 @@ def _workflow_summary(
     if status == "requires_user_input":
         questions = clarification.get("questions")
         question_count = len(questions) if isinstance(questions, list) else 0
-        if isinstance(result.get("acceptance_request"), dict):
+        if clarification.get("mode") == "acceptance_phase_confirmation":
+            message = "代码审查已完成，请确认进入验收阶段。"
+        elif isinstance(result.get("acceptance_request"), dict):
             message = "项目预览已就绪，请确认是否符合预期。"
         elif clarification.get("mode") == "requirement_document_confirmation":
             message = "右侧已展示需求文档草稿，请确认后继续。"
@@ -1648,6 +1689,9 @@ def _workflow_summary(
             "last_persisted_build_execution_scope"
         ),
         "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
+        "acceptancePhaseConfirmation": result.get(
+            "acceptance_phase_confirmation", {}
+        ),
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
@@ -1675,6 +1719,8 @@ def _workflow_visual_payload(
         "qualityGatePassed": summary.get("qualityGatePassed"),
         "needsRevision": summary.get("needsRevision"),
         "previewUrl": summary.get("previewUrl"),
+        "launchResult": summary.get("launchResult"),
+        "acceptanceRequest": summary.get("acceptanceRequest"),
         "tasks": result.get("tasks", []),
         "buildSummary": result.get("build_summary", {}),
         "buildExecutionSlice": result.get("build_execution_slice"),
@@ -1700,6 +1746,9 @@ def _workflow_visual_payload(
             "last_persisted_build_execution_scope"
         ),
         "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
+        "acceptancePhaseConfirmation": summary.get(
+            "acceptancePhaseConfirmation", {}
+        ),
     }
     payload = {
         "runId": run_id,

@@ -28,10 +28,10 @@ import {
 } from '../conversationMode'
 import {
   buildClarificationContinuationMessage,
-  workflowClarification,
   workflowOriginalRequest,
   type ClarificationAnswers
 } from '../components/WorkflowRunCard'
+import { workflowClarification } from '../components/WorkflowRunCard/workflowClarification'
 import type { AgentChatMessage } from '../types'
 import {
   beginOptimisticSkillSend,
@@ -42,6 +42,7 @@ import { stoppedAnswer, workflowCodeChanges, workflowPreviewTarget } from '../ut
 import type { WorkflowPreviewTarget } from '../utils'
 import type {
   PersistSessionInput,
+  AcceptancePhaseSessionTarget,
   ReviewPhaseSessionTarget,
   TestPhaseSessionTarget
 } from './useChatSessions'
@@ -111,6 +112,8 @@ type UseWorkflowConversationParams = {
   editorMode: EditorMode
   createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
   createReviewSession: (target: ReviewPhaseSessionTarget) => Promise<SessionIdentity>
+  createAcceptanceSession: (target: AcceptancePhaseSessionTarget) => Promise<SessionIdentity>
+  acceptanceConversationSessionKey?: string
   ensureActiveSession: () => Promise<SessionIdentity>
   ensureEndpointSession: (
     apiContractId: string,
@@ -124,6 +127,7 @@ type UseWorkflowConversationParams = {
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onEnterTestPhase: () => void
   onEnterReviewPhase: () => void
+  onEnterAcceptancePhase: () => void
   onPreviewReady: (target: WorkflowPreviewTarget) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
@@ -350,6 +354,8 @@ export function useWorkflowConversation({
   editorMode,
   createTestSession,
   createReviewSession,
+  createAcceptanceSession,
+  acceptanceConversationSessionKey,
   ensureActiveSession,
   ensureEndpointSession,
   ensureEntitySession,
@@ -359,6 +365,7 @@ export function useWorkflowConversation({
   onApplicationLifecycleChange,
   onEnterTestPhase,
   onEnterReviewPhase,
+  onEnterAcceptancePhase,
   onPreviewReady,
   publishAiMessage,
   runningSessionsRef,
@@ -372,6 +379,8 @@ export function useWorkflowConversation({
   const testPhaseTransitionRunIdsRef = useRef<Set<string>>(new Set())
   // 审查阶段切换同样需要先创建新会话，用 runId 防止确认卡重复提交。
   const reviewPhaseTransitionRunIdsRef = useRef<Set<string>>(new Set())
+  // 验收阶段切换需要跨 thread 原子接管执行，用 runId 防止确认卡重复创建会话。
+  const acceptancePhaseTransitionRunIdsRef = useRef<Set<string>>(new Set())
   // 一键修复在当前审查会话中恢复，用独立 runId 集合阻止确认卡连续提交。
   const codeReviewRepairRunIdsRef = useRef<Set<string>>(new Set())
   const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
@@ -429,8 +438,12 @@ export function useWorkflowConversation({
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
-    const sessionIdentity =
-      isConversationWorkflow(activeWorkflow) && matchingActiveSession
+    const acceptanceConversationSession =
+      acceptanceConversationSessionKey && activeSession?.key === acceptanceConversationSessionKey
+        ? activeSession
+        : undefined
+    const sessionIdentity = acceptanceConversationSession ||
+      (isConversationWorkflow(activeWorkflow) && matchingActiveSession
         ? matchingActiveSession
         : selectedEntityId
           ? await ensureEntitySession(
@@ -438,14 +451,14 @@ export function useWorkflowConversation({
               selectedEntityLabel || selectedEntityId
             )
           : selectedApiContractId && selectedEndpointId
-          ? await ensureEndpointSession(
-              selectedApiContractId,
-              selectedEndpointId,
-              selectedEndpointLabel || selectedEndpointId
-            )
-          : selectedPageId
-            ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
-            : await ensureActiveSession()
+            ? await ensureEndpointSession(
+                selectedApiContractId,
+                selectedEndpointId,
+                selectedEndpointLabel || selectedEndpointId
+              )
+            : selectedPageId
+              ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
+              : await ensureActiveSession())
     await sendWorkflowMessage(message, {
       clearDraft: true,
       detailTargetType: selectedEntityId
@@ -472,12 +485,10 @@ export function useWorkflowConversation({
       sessionIdentity,
       titleFrom: message,
       workflowDebug,
-      conversation: shouldUseConversation(
-        conversationEnabled,
-        activeWorkflow,
-        workflowDebug,
-        inputMode
-      )
+      // 验收“不通过”只恢复普通对话；即使之前输入模式是 workflow，也必须走 conversation 端点。
+      conversation:
+        Boolean(acceptanceConversationSession) ||
+        shouldUseConversation(conversationEnabled, activeWorkflow, workflowDebug, inputMode)
     })
   }
 
@@ -999,6 +1010,57 @@ export function useWorkflowConversation({
         conversation: false
       })
       if (!started) reviewPhaseTransitionRunIdsRef.current.delete(workflow.runId)
+      return started
+    }
+    if (!conversation && clarificationMode === 'acceptance_phase_confirmation') {
+      const answer = answers.acceptance_phase_confirmation
+      const action =
+        answer && typeof answer === 'object' && !Array.isArray(answer)
+          ? String((answer as Record<string, unknown>).action || '')
+          : ''
+      if (
+        action !== 'confirm' ||
+        loading ||
+        workspaceBusy ||
+        acceptancePhaseTransitionRunIdsRef.current.has(workflow.runId)
+      ) {
+        return false
+      }
+      acceptancePhaseTransitionRunIdsRef.current.add(workflow.runId)
+      const target = testPhaseConfirmationTarget(workflow)
+      const targetId = target?.id || workflowBuildScope?.targetId
+      let acceptanceSession: SessionIdentity
+      // 先切换顶部阶段，让后续新会话选择直接落在验收阶段，避免审查阶段覆盖值滞留。
+      onEnterAcceptancePhase()
+      try {
+        acceptanceSession = await createAcceptanceSession({
+          targetLabel: target?.label || selectedPageLabel || activeSession?.pageId || '当前应用',
+          pageId: activeSession?.pageId || (target?.type === 'page' ? targetId : undefined),
+          apiContractId: activeSession?.apiContractId || workflowBuildScope?.apiContractId,
+          endpointId:
+            activeSession?.endpointId || (target?.type === 'endpoint' ? targetId : undefined),
+          endpointLabel: activeSession?.endpointLabel || target?.label,
+          entityId:
+            activeSession?.entityId || (target?.type === 'data_source' ? targetId : undefined),
+          entityLabel: activeSession?.entityLabel || target?.label
+        })
+      } catch {
+        onEnterReviewPhase()
+        acceptancePhaseTransitionRunIdsRef.current.delete(workflow.runId)
+        return false
+      }
+      // 会话创建完成后用同一 AG-UI 请求恢复审查执行并运行验收子图。
+      const started = await sendWorkflowMessage('正在启动项目准备验收', {
+        clarificationAnswers: answers,
+        originalRequest,
+        resumeState: workflow,
+        buildExecutionScope: workflowBuildScope,
+        resumeExecutionRunId: workflow.runId,
+        sessionIdentity: acceptanceSession,
+        titleFrom: '进入验收阶段',
+        conversation: false
+      })
+      if (!started) acceptancePhaseTransitionRunIdsRef.current.delete(workflow.runId)
       return started
     }
     if (!conversation && clarificationMode === 'code_review_repair_confirmation') {

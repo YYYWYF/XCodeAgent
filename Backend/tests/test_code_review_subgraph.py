@@ -150,7 +150,9 @@ class CodeReviewSubgraphTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["code_review_repair_status"], "completed")
-        self.assertEqual(result["code_review_next_action"], "launch_project")
+        self.assertEqual(
+            result["code_review_next_action"], "acceptance_phase_confirmation"
+        )
         analyze.assert_not_called()
         build.assert_called_once()
 

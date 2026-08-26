@@ -210,6 +210,59 @@ class WorkflowProjectionTests(unittest.TestCase):
             "skipped",
         )
 
+    def test_acceptance_confirmation_routes_before_launch(self) -> None:
+        """代码审查完成后可视化下一节点应是验收阶段确认，而不是启动项目。"""
+
+        self.assertEqual(
+            _workflow_next_nodes(
+                "code_review",
+                {"status": "completed"},
+            ),
+            ["acceptance_phase_confirmation"],
+        )
+        self.assertEqual(
+            _workflow_next_nodes(
+                "acceptance_phase_confirmation",
+                {"status": "completed"},
+            ),
+            ["acceptance"],
+        )
+
+    def test_acceptance_summary_contains_preview_launch_and_request(self) -> None:
+        """验收最终投影必须携带预览地址、启动结果和验收请求。"""
+
+        launch_result = {
+            "status": "completed",
+            "preview_url": "http://127.0.0.1:3000",
+        }
+        result = {
+            "phase": "acceptance",
+            "status": "requires_user_input",
+            "preview_url": launch_result["preview_url"],
+            "launch_result": launch_result,
+            "acceptance_request": {"status": "requires_user_input"},
+            "clarification": {
+                "mode": "page_acceptance",
+                "status": "requires_user_input",
+            },
+        }
+        summary = _workflow_summary(result, [])
+        payload = _workflow_visual_payload(
+            run_id="acceptance-run",
+            thread_id="acceptance-thread",
+            summary=summary,
+            events=[],
+            result=result,
+        )
+
+        self.assertEqual(summary["previewUrl"], launch_result["preview_url"])
+        self.assertEqual(summary["launchResult"], launch_result)
+        self.assertEqual(summary["acceptanceRequest"]["status"], "requires_user_input")
+        self.assertEqual(payload["state"]["launchResult"], launch_result)
+        self.assertEqual(
+            payload["state"]["acceptanceRequest"]["status"], "requires_user_input"
+        )
+
     def test_code_review_build_logs_are_not_exposed_in_public_state(self) -> None:
         """公开状态只保留裁剪后的修复检查，不携带原始构建日志。"""
 

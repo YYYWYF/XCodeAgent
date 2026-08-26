@@ -8,9 +8,14 @@ import {
 import { Button, message, Typography } from 'antd'
 import { useMemo } from 'react'
 import type { ReactElement } from 'react'
-import type { WorkflowEvent, WorkflowLaunchResult, WorkflowRunPayload } from '../../../../typings'
+import type {
+  WorkflowLaunchProgress,
+  WorkflowLaunchResult,
+  WorkflowRunPayload
+} from '../../../../typings'
 import { cx } from '../../../../utils'
 import { normalizePreviewUrl, openPreviewWindow } from '../../../../utils/previewUrl'
+import { launchStageIndex, projectLaunchProgress } from './projectLaunchProgress'
 import './ProjectLaunchCard.less'
 
 const { Text } = Typography
@@ -21,25 +26,12 @@ type Props = {
 
 type StepState = 'pending' | 'running' | 'completed' | 'failed'
 
-type LaunchProgress = {
-  stage?: string
-  status?: string
-  message?: string
-}
-
 const LAUNCH_STEPS = [
   { key: 'detect', label: '识别工程结构' },
   { key: 'backend', label: '启动后端服务' },
   { key: 'frontend', label: '启动前端服务' },
   { key: 'ready', label: '健康检查就绪' }
 ] as const
-
-const LAUNCH_STAGE_INDEX: Record<string, number> = {
-  structure: 0,
-  backend: 1,
-  frontend: 2,
-  ready: 3
-}
 
 /** 后端失败阶段到步骤序号的映射，用于失败时高亮具体步骤。 */
 const FAILED_STEP_INDEX: Record<string, number> = {
@@ -73,7 +65,7 @@ export default function ProjectLaunchCard({ workflow }: Props): ReactElement {
   const running = status === 'running'
   const failed = status === 'failed'
   const completed = !running && !failed
-  const launchProgress = latestLaunchProgress(workflow)
+  const launchProgress = projectLaunchProgress(workflow)
   const stepStates = useMemo(
     () => resolveStepStates(launch, status, launchProgress),
     [launch, status, launchProgress]
@@ -185,28 +177,14 @@ export default function ProjectLaunchCard({ workflow }: Props): ReactElement {
   )
 }
 
-/** 读取最近一次项目启动进度事件，供运行态实时推进步骤。 */
-function latestLaunchProgress(workflow: WorkflowRunPayload): LaunchProgress | undefined {
-  const event = [...workflow.events]
-    .reverse()
-    .find(
-      (item): item is WorkflowEvent & { data: { launchProgress?: unknown } } =>
-        item.type === 'workflow.node.progress' &&
-        item.nodeName === 'launch_project' &&
-        Boolean(item.data?.launchProgress)
-    )
-  const progress = event?.data?.launchProgress
-  return progress && typeof progress === 'object' ? (progress as LaunchProgress) : undefined
-}
-
 /** 根据启动结果、Workflow 状态与实时进度事件推导四个步骤的展示状态。 */
 function resolveStepStates(
   launch: WorkflowLaunchResult | undefined,
   status: string,
-  progress?: LaunchProgress
+  progress?: WorkflowLaunchProgress
 ): StepState[] {
   if (status === 'running') {
-    const stageIndex = LAUNCH_STAGE_INDEX[String(progress?.stage || '')]
+    const stageIndex = launchStageIndex(progress?.stage)
     if (stageIndex !== undefined) {
       const stageStatus = String(progress?.status || 'running')
       return LAUNCH_STEPS.map((_, index) =>

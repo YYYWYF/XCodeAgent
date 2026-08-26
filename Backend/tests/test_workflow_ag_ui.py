@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 from langgraph.graph import END, START, StateGraph
 
 from app.graph.state import ProjectState
+from app.graph.subgraphs.acceptance import acceptance_subgraph
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import (
     _workflow_confirmation_artifact,
@@ -1035,6 +1037,171 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertEqual(summary["phase"], "project_planning")
         self.assertEqual(summary["status"], "running")
 
+    def test_progress_summary_projects_latest_launch_substep(self) -> None:
+        """项目启动进度必须进入 summary，供前端脱离事件合并顺序实时刷新。"""
+
+        summary = _workflow_progress_summary(
+            {
+                "phase": "launch_project",
+                "status": "in_progress",
+                "launch_progress": {
+                    "stage": "frontend",
+                    "status": "running",
+                    "message": "正在启动前端服务",
+                },
+            },
+            [
+                {
+                    "type": "workflow.node.progress",
+                    "nodeName": "launch_project",
+                    "status": "running",
+                }
+            ],
+        )
+
+        self.assertEqual(
+            summary["launchProgress"],
+            {
+                "stage": "frontend",
+                "status": "running",
+                "message": "正在启动前端服务",
+            },
+        )
+
+    def test_acceptance_subgraph_streams_each_launch_substep_before_completion(
+        self,
+    ) -> None:
+        """验收子图必须在启动完成前逐条穿透项目启动 custom 进度。"""
+
+        builder = StateGraph(ProjectState)
+        builder.add_node("acceptance", acceptance_subgraph)
+        builder.add_edge(START, "acceptance")
+        builder.add_edge("acceptance", END)
+        graph = builder.compile()
+
+        def fake_launch(_root, *, on_progress=None):
+            """模拟真实启动器依次上报全部阶段，不依赖外部进程。"""
+
+            stages = [
+                ("structure", "running"),
+                ("structure", "completed"),
+                ("backend", "running"),
+                ("backend", "completed"),
+                ("frontend", "running"),
+                ("frontend", "completed"),
+                ("ready", "completed"),
+            ]
+            for stage, status in stages:
+                if on_progress is not None:
+                    on_progress(stage, status, f"{stage}:{status}")
+            return {
+                "status": "running",
+                "preview_url": "http://127.0.0.1:4173",
+                "message": "预览已就绪。",
+            }
+
+        async def collect() -> list[str]:
+            """收集主协议生成的全部 AG-UI 帧。"""
+
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-acceptance-progress",
+                    "runId": "run-acceptance-progress",
+                    "messages": [{"role": "user", "content": "正在启动项目准备验收"}],
+                    "workspaceRoot": "/tmp",
+                    "resumeFrom": "acceptance",
+                },
+            )
+            return [frame async for frame in stream]
+
+        with patch(
+            "app.graph.nodes.lifecycle.launch_project_preview",
+            side_effect=fake_launch,
+        ):
+            workflow_frames = _decode_workflow_run_frames(asyncio.run(collect()))
+
+        progresses = [
+            frame.get("summary", {}).get("launchProgress")
+            for frame in workflow_frames
+            if frame.get("summary", {}).get("launchProgress")
+        ]
+        observed = [
+            (progress.get("stage"), progress.get("status"))
+            for progress in progresses
+        ]
+        expected = [
+            ("structure", "running"),
+            ("structure", "completed"),
+            ("backend", "running"),
+            ("backend", "completed"),
+            ("frontend", "running"),
+            ("frontend", "completed"),
+            ("ready", "completed"),
+        ]
+        self.assertEqual(observed[: len(expected)], expected)
+
+    def test_acceptance_launch_progress_arrives_before_launcher_returns(self) -> None:
+        """启动器仍在阻塞执行时，首个验收子步骤必须已经到达 AG-UI 消费端。"""
+
+        builder = StateGraph(ProjectState)
+        builder.add_node("acceptance", acceptance_subgraph)
+        builder.add_edge(START, "acceptance")
+        builder.add_edge("acceptance", END)
+        graph = builder.compile()
+        allow_completion = threading.Event()
+
+        def blocking_launch(_root, *, on_progress=None):
+            """在首个进度后阻塞，验证事件无需等待启动器返回。"""
+
+            if on_progress is not None:
+                on_progress("structure", "running", "正在识别工程结构…")
+            allow_completion.wait(timeout=2)
+            if on_progress is not None:
+                on_progress("ready", "completed", "预览已就绪。")
+            return {
+                "status": "running",
+                "preview_url": "http://127.0.0.1:4173",
+                "message": "预览已就绪。",
+            }
+
+        async def observe_first_progress() -> bool:
+            """消费到首个实时启动帧后立即放行模拟启动器。"""
+
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-acceptance-live-progress",
+                    "runId": "run-acceptance-live-progress",
+                    "messages": [{"role": "user", "content": "正在启动项目准备验收"}],
+                    "workspaceRoot": "/tmp",
+                    "resumeFrom": "acceptance",
+                },
+            )
+            try:
+                async for frame in stream:
+                    workflow_frames = _decode_workflow_run_frames([frame])
+                    if any(
+                        (
+                            item.get("summary", {}).get("launchProgress") or {}
+                        ).get("stage") == "structure"
+                        for item in workflow_frames
+                    ):
+                        return True
+                return False
+            finally:
+                allow_completion.set()
+
+        with patch(
+            "app.graph.nodes.lifecycle.launch_project_preview",
+            side_effect=blocking_launch,
+        ):
+            observed = asyncio.run(
+                asyncio.wait_for(observe_first_progress(), timeout=1)
+            )
+
+        self.assertTrue(observed)
+
     def test_progress_summary_does_not_treat_missing_requirement_confirmation_as_false(
         self,
     ) -> None:
@@ -1064,12 +1231,12 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.cleanup_patcher.stop()
 
-    def test_launch_project_is_current_run_terminal_in_visual_timeline(self) -> None:
-        """验证启动成功或失败后都不会伪造尚未执行的验收节点事件。"""
+    def test_launch_project_routes_to_acceptance_review_in_visual_timeline(self) -> None:
+        """验证验收子图启动成功后预测下一节点为 acceptance_review。"""
 
         self.assertEqual(
             _workflow_next_nodes("launch_project", {"status": "requires_user_input"}),
-            [],
+            ["acceptance_review"],
         )
         self.assertEqual(
             _workflow_next_nodes("launch_project", {"status": "failed"}),

@@ -29,7 +29,9 @@ WORKFLOW_NODE_LABELS = {
     "small_task_repair": "局部修复任务",
     "review_phase_confirmation": "测试完成与审查阶段确认",
     "code_review": "前后端代码审查",
+    "acceptance_phase_confirmation": "验收阶段确认",
     "launch_project": "启动本地预览",
+    "acceptance_review": "用户验收",
     "acceptance": "用户验收",
     "finalize_project": "完成项目",
     "handle_failure": "失败处理",
@@ -54,9 +56,13 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "test_phase_confirmation": ["integration_test"],
     "integration_test": ["review_phase_confirmation", "small_task_repair"],
     "review_phase_confirmation": ["code_review"],
-    "code_review": ["launch_project", "handle_failure"],
+    "code_review": ["acceptance_phase_confirmation", "handle_failure"],
+    "acceptance_phase_confirmation": ["acceptance"],
     "small_task_repair": ["integration_test"],
-    "launch_project": ["acceptance"],
+    # 验收子图内部节点仍通过稳定的 nodeName 公开启动进度，下一节点是
+    # acceptance_review；主图门面 acceptance 再负责交回 finalize_project。
+    "launch_project": ["acceptance_review"],
+    "acceptance_review": [],
     "acceptance": ["finalize_project"],
 }
 
@@ -107,6 +113,10 @@ def workflow_capabilities() -> dict[str, Any]:
                     "通过 clarificationAnswers.code_review_repair_confirmation 提交结构化 repair_all 动作；"
                     "确认后恢复 code_review 子图并执行受限代码修复。"
                 ),
+                "acceptance_phase_confirmation": (
+                    "通过 clarificationAnswers.acceptance_phase_confirmation 提交结构化 confirm 动作；"
+                    "确认后恢复验收阶段确认并进入 acceptance 子图。"
+                ),
             },
         },
         "clarificationModes": {
@@ -138,6 +148,11 @@ def workflow_capabilities() -> dict[str, Any]:
                 "answerField": "clarificationAnswers.code_review_repair_confirmation",
                 "answer": {"action": "repair_all"},
                 "lifecycleInteraction": "code_review_repair_confirmation",
+            },
+            "acceptance_phase_confirmation": {
+                "answerField": "clarificationAnswers.acceptance_phase_confirmation",
+                "answer": {"action": "confirm"},
+                "lifecycleInteraction": "acceptance_phase_confirmation",
             },
         },
         "acceptanceAdjustments": {
