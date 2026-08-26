@@ -707,6 +707,12 @@ export default function ApplicationPagePlanningModal({
   ): void => {
     void (async () => {
       try {
+        // 空答案 = UI 设计稿生成池轮询（no-op resume）：不构造 interaction，
+        // 直接以 undefined 传入 runPlanning，后端走恢复路径重读 ui-designs.json。
+        if (Object.keys(answers).length === 0) {
+          void runPlanning('请根据本轮确认继续创建规划。', undefined)
+          return
+        }
         const submittable = await loadSubmittablePlanningWorkflow(currentWorkflow)
         const interaction = buildPlanningInteraction(
           submittable,

@@ -2616,6 +2616,14 @@ export default function AiChatPanel({
     setGeneratingDetailTargetKey('')
     // 设计阶段：规划确认走 planningSubmitRef（Modal 的 runPlanning），不走开发 workflow。
     if (isDesignPhase) {
+      // 空答案 = UI 设计稿生成池轮询（no-op resume）：不开启新一轮、不追加用户消息，
+      // 也不走 ensureApplicationPlanningAction（空 answers 会被误判为 confirm）。
+      // 直接把空 answers 传给 onSubmitPlanningClarification，由 Modal 拦截走恢复路径。
+      const isUiDesignPoll = !answers || Object.keys(answers).length === 0
+      if (isUiDesignPoll) {
+        onSubmitPlanningClarification(workflow, {}, editedRequirementSpec)
+        return
+      }
       const planningAnswers = ensureApplicationPlanningAction(workflow, answers)
       // UI 设计稿的单页动作（换一换/选模板/调整）是同一轮内的更新，不新增消息卡片，
       // 只更新现有卡片；跳过与确认全部等推进到下一阶段的操作才新增卡片并留痕。
@@ -2624,10 +2632,7 @@ export default function AiChatPanel({
           ? (planningAnswers as { ui_design_action?: { action?: string } }).ui_design_action
               ?.action !== 'skip'
           : false
-      // 空答案 = UI 设计稿生成池轮询（no-op resume）：不开启新一轮、不追加用户消息，
-      // 仅让后端 resume 路径重读 ui-designs.json 并回传最新页面状态。
-      const isUiDesignPoll = !answers || Object.keys(answers).length === 0
-      if (!isUiDesignPageAction && !isUiDesignPoll) {
+      if (!isUiDesignPageAction) {
         planningNewRoundRef.current = true
         // 用户操作留痕：把确认/放弃/填表等操作作为 user 消息追加到对话区。
         appendPlanningUserMessage(planningAnswers)
