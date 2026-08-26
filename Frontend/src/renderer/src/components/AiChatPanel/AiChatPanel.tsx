@@ -1782,6 +1782,15 @@ export default function AiChatPanel({
         Boolean(lastWorkflowRunId) &&
         (lastMessage?.workflow?.summary?.status === 'requires_user_input' ||
           lastMessage?.workflow?.summary?.status === 'completed')
+      // UI 确认卡片的轮询 text/delta（如「还有 N 个问题需要补充」）会短暂替代卡片造成闪烁。
+      // 最后一条消息已是 UI 确认卡时直接丢弃纯 content，卡片持续显示不闪烁。
+      const lastIsUiDesignConfirmationCard =
+        lastMessage?.role === 'assistant' &&
+        Boolean(lastWorkflowRunId) &&
+        (lastMessage?.workflow?.summary?.phase === 'ui_confirmation' ||
+          (lastMessage?.workflow?.summary?.clarification as { mode?: string } | undefined)
+            ?.mode === 'ui_design_confirmation')
+      if (lastIsUiDesignConfirmationCard) return
       const appendToLast =
         lastMessage?.role === 'assistant' &&
         (lastIsPlaceholder ||
