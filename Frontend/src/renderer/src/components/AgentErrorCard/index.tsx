@@ -1,5 +1,5 @@
-import { CloseCircleOutlined } from '@ant-design/icons'
-import { Typography } from 'antd'
+import { CloseCircleOutlined, RedoOutlined } from '@ant-design/icons'
+import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../utils'
 import './AgentErrorCard.less'
@@ -16,6 +16,8 @@ type AgentErrorCardProps = {
 /** 把模型连接失败、运行失败和后端返回的异常统一呈现为可理解的错误卡片。 */
 export default function AgentErrorCard({
   error,
+  onRetry,
+  retrying,
   title = '模型服务异常'
 }: AgentErrorCardProps): ReactElement {
   const copy = readableAgentError(error)
@@ -42,6 +44,17 @@ export default function AgentErrorCard({
           <Text className={cx('agent-error-card-detail')} type="secondary">
             错误详情：{copy.detail}
           </Text>
+        ) : null}
+        {onRetry ? (
+          <Button
+            className={cx('agent-error-card-retry')}
+            icon={<RedoOutlined />}
+            loading={retrying}
+            onClick={onRetry}
+            type="primary"
+          >
+            重试
+          </Button>
         ) : null}
       </div>
     </section>
