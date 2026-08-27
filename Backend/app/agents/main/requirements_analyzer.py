@@ -389,7 +389,7 @@ def _requirements_prompt(
         "Analyze the user's application request and decide whether the requirement is clear enough "
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 业务参与者, 功能模块, "
-        "页面清单, 业务流程.\n"
+        "页面清单, 业务流程, 业务智能体需求.\n"
         "When the request explicitly says that application-level authorization is enabled, also produce an "
         "authorization_requirements object. Extract only permission controls explicitly stated in the user's "
         "business description or clarification answers into restrictedPages and restrictedOperations. Empty candidate "
@@ -426,6 +426,18 @@ def _requirements_prompt(
         "Databases, persistence, API contracts, schemas, and storage choices are technical "
         "planning concerns. Do not ask the product user about them, do not expose them for confirmation, "
         "and do not include data_sources in the returned RequirementSpec.\n"
+        "Business-agent requirements are user-facing AI assistants or autonomous task capabilities that the "
+        "user explicitly requests. Do not classify ordinary automation, search, recommendation, data processing, "
+        "or generated copy as a business agent unless the user clearly requests an assistant, conversational "
+        "interaction, or autonomous task role. If the distinction would materially change the product, call "
+        "ask_user. Always return agent_requirements as an array; return [] when no business agent is requested. "
+        "Every agent_requirements item must contain exactly agentId, name, purpose, capabilities, entryPageIds, "
+        "interactionMode, and boundaries. agentId must be unique lower_snake_case. capabilities must contain the "
+        "explicit user-facing abilities. entryPageIds must reference pages[].pageId and may be [] only when the "
+        "agent is explicitly application-wide. interactionMode describes the requested product interaction, such "
+        "as conversation. boundaries records explicit read/write or business-scope limits and may be empty. This is "
+        "still a product-requirements boundary: never put a model, model id, prompt, API endpoint, tool, skill, "
+        "knowledge source, storage choice, implementation class, or code path in agent_requirements.\n"
         f"{clarification_policy}"
         f"{followup_policy}"
         "When asking, questions can be choice, text, or yesno. For every choice question, first decide "
@@ -437,7 +449,7 @@ def _requirements_prompt(
         "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
         "without markdown fences or commentary. The JSON must contain exactly these top-level fields: "
         "version, status, generated_at, app_info, user_roles, feature_modules, pages, business_flows, "
-        "authorization_requirements. Do not include any other field. "
+        "agent_requirements, authorization_requirements. Do not include any other field. "
         "app_info MUST include non-empty name and summary. Use summary as the only application-summary field; "
         "the field is named summary, not description. "
         "Do not return assumptions, product risks, or acceptance_criteria. "
@@ -768,6 +780,7 @@ def _validate_complete_requirement_spec(
             "feature_modules",
             "pages",
             "business_flows",
+            "agent_requirements",
         )
         if not isinstance(agent_spec.get(field_name), list)
     ]
@@ -805,6 +818,48 @@ def _validate_complete_requirement_spec(
         for field_name in ("restrictedPages", "restrictedOperations"):
             if not isinstance(authorization.get(field_name), list):
                 missing_fields.append(f"authorization_requirements.{field_name}")
+    agent_requirements = agent_spec.get("agent_requirements")
+    page_ids = {
+        str(page.get("pageId") or "").strip()
+        for page in agent_spec.get("pages", [])
+        if isinstance(page, dict) and str(page.get("pageId") or "").strip()
+    }
+    agent_ids: set[str] = set()
+    expected_agent_fields = {
+        "agentId",
+        "name",
+        "purpose",
+        "capabilities",
+        "entryPageIds",
+        "interactionMode",
+        "boundaries",
+    }
+    if isinstance(agent_requirements, list):
+        for index, agent in enumerate(agent_requirements):
+            field_prefix = f"agent_requirements[{index}]"
+            if not isinstance(agent, dict) or set(agent) != expected_agent_fields:
+                missing_fields.append(f"{field_prefix}(complete-fields)")
+                continue
+            agent_id = str(agent.get("agentId") or "").strip()
+            if not _LOWER_SNAKE_CASE_PATTERN.fullmatch(agent_id):
+                missing_fields.append(f"{field_prefix}.agentId(lower_snake_case)")
+            elif agent_id in agent_ids:
+                missing_fields.append(f"{field_prefix}.agentId(unique)")
+            else:
+                agent_ids.add(agent_id)
+            for field_name in ("name", "purpose", "interactionMode"):
+                if not str(agent.get(field_name) or "").strip():
+                    missing_fields.append(f"{field_prefix}.{field_name}")
+            capabilities = agent.get("capabilities")
+            if not isinstance(capabilities, list) or not _string_list(capabilities):
+                missing_fields.append(f"{field_prefix}.capabilities(non-empty)")
+            entry_page_ids = agent.get("entryPageIds")
+            if not isinstance(entry_page_ids, list):
+                missing_fields.append(f"{field_prefix}.entryPageIds")
+            elif set(_string_list(entry_page_ids)) - page_ids:
+                missing_fields.append(f"{field_prefix}.entryPageIds(page-reference)")
+            if not isinstance(agent.get("boundaries"), list):
+                missing_fields.append(f"{field_prefix}.boundaries")
     if missing_fields:
         raise ValueError(
             "需求 AI 返回的新 RequirementSpec 缺少完整字段："

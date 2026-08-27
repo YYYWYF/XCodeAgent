@@ -175,6 +175,29 @@ def _string_list(value: Any) -> list[str]:
     return _dedupe([str(item).strip() for item in value if str(item).strip()])
 
 
+def normalize_agent_requirements(value: Any) -> list[dict[str, Any]]:
+    """归一化业务智能体需求，只保留需求阶段可确认的产品事实。"""
+
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "agentId": str(item.get("agentId") or "").strip(),
+                "name": str(item.get("name") or "").strip(),
+                "purpose": str(item.get("purpose") or "").strip(),
+                "capabilities": _string_list(item.get("capabilities")),
+                "entryPageIds": _string_list(item.get("entryPageIds")),
+                "interactionMode": str(item.get("interactionMode") or "").strip(),
+                "boundaries": _string_list(item.get("boundaries")),
+            }
+        )
+    return normalized
+
+
 def _is_lower_snake_case(value: object) -> bool:
     """判断稳定业务标识是否符合当前 lower_snake_case 契约。"""
 
@@ -494,6 +517,7 @@ def validate_requirement_spec_confirmation_readiness(spec: dict[str, Any]) -> li
     if isinstance(modules, list) and not modules:
         errors.append("功能模块不能为空")
     pages = spec.get("pages")
+    page_ids: set[str] = set()
     if isinstance(pages, list):
         if not pages:
             errors.append("页面清单不能为空")
@@ -506,9 +530,53 @@ def validate_requirement_spec_confirmation_readiness(spec: dict[str, Any]) -> li
                 errors.append(f"页面清单第 {index + 1} 项缺少 pageId")
             elif not _is_lower_snake_case(page_id):
                 errors.append(f"页面清单第 {index + 1} 项的 pageId 必须为 lower_snake_case")
+            else:
+                page_ids.add(page_id)
             for field_name in ("name", "path", "module_id", "description"):
                 if not str(page.get(field_name) or "").strip():
                     errors.append(f"页面清单第 {index + 1} 项缺少 {field_name}")
+
+    agent_requirements = spec.get("agent_requirements")
+    if not isinstance(agent_requirements, list):
+        errors.append("智能体需求必须是数组")
+    else:
+        agent_ids: set[str] = set()
+        for index, agent in enumerate(agent_requirements):
+            label = f"智能体需求第 {index + 1} 项"
+            if not isinstance(agent, dict):
+                errors.append(f"{label}必须是对象")
+                continue
+            agent_id = str(agent.get("agentId") or "").strip()
+            if not agent_id:
+                errors.append(f"{label}缺少 agentId")
+            elif not _is_lower_snake_case(agent_id):
+                errors.append(f"{label}的 agentId 必须为 lower_snake_case")
+            if agent_id in agent_ids:
+                errors.append(f"{label}的 agentId 重复：{agent_id}")
+            elif agent_id:
+                agent_ids.add(agent_id)
+            for field_name, field_label in (
+                ("name", "名称"),
+                ("purpose", "职责"),
+                ("interactionMode", "交互方式"),
+            ):
+                if not str(agent.get(field_name) or "").strip():
+                    errors.append(f"{label}缺少{field_label}")
+            capabilities = agent.get("capabilities")
+            if not isinstance(capabilities, list) or not _string_list(capabilities):
+                errors.append(f"{label}至少需要一项核心能力")
+            entry_page_ids = agent.get("entryPageIds")
+            if not isinstance(entry_page_ids, list):
+                errors.append(f"{label}的 entryPageIds 必须是数组")
+            else:
+                unknown_page_ids = set(_string_list(entry_page_ids)) - page_ids
+                if unknown_page_ids:
+                    errors.append(
+                        f"{label}引用了不存在的入口页面："
+                        + "、".join(sorted(unknown_page_ids))
+                    )
+            if not isinstance(agent.get("boundaries"), list):
+                errors.append(f"{label}的 boundaries 必须是数组")
 
     return _dedupe(errors)
 
@@ -946,6 +1014,7 @@ def create_requirement_spec(
         "pages": _pages(modules) if allow_inferred_defaults else [],
         "entities": _entities(modules) if allow_inferred_defaults else [],
         "business_flows": _business_flows(modules) if allow_inferred_defaults else [],
+        "agent_requirements": [],
         "authorization_requirements": _default_authorization_requirements(
             enabled=(request_authorization_enabled is True),
         ),
@@ -1013,8 +1082,28 @@ def create_requirement_spec(
         spec[key] = normalized if normalized or has_authoritative_list else default_spec[key]
     # 页面 ID 是 RequirementSpec 与 ProductPlan 的不可变关联键，必须在源头完成确定性规范化。
     used_page_ids: set[str] = set()
+    normalized_page_ids: dict[str, str] = {}
     for index, page in enumerate(spec["pages"], start=1):
-        page["pageId"] = _normalized_page_id(page.get("pageId"), index, used_page_ids)
+        original_page_id = str(page.get("pageId") or "").strip()
+        normalized_page_id = _normalized_page_id(
+            original_page_id,
+            index,
+            used_page_ids,
+        )
+        page["pageId"] = normalized_page_id
+        if original_page_id:
+            normalized_page_ids.setdefault(original_page_id, normalized_page_id)
+    spec["agent_requirements"] = normalize_agent_requirements(
+        spec.get("agent_requirements")
+    )
+    # 入口页面与页面目录在同一份 RequirementSpec 中共享身份；页面 ID 规范化时必须同步引用。
+    for agent_requirement in spec["agent_requirements"]:
+        agent_requirement["entryPageIds"] = _dedupe(
+            [
+                normalized_page_ids.get(page_id, page_id)
+                for page_id in agent_requirement["entryPageIds"]
+            ]
+        )
     # 模型可能省略或留空 module_id，但下游校验要求非空。
     # 优先归属到第一个功能模块，否则兜底 core，保持与固定页面模板一致。
     module_ids = [
@@ -1221,6 +1310,15 @@ _EDITOR_ITEM_FIELDS: dict[str, tuple[str, ...]] = {
     "pages": ("pageId", "name", "path", "module_id", "description", "components"),
     "business_flows": ("id", "name", "description", "steps"),
     "entities": ("id", "name", "description", "fields"),
+    "agent_requirements": (
+        "agentId",
+        "name",
+        "purpose",
+        "capabilities",
+        "entryPageIds",
+        "interactionMode",
+        "boundaries",
+    ),
 }
 
 
@@ -1259,7 +1357,12 @@ def apply_requirement_spec_editor_changes(
         edited_items = edited_spec.get(field_name)
         if not isinstance(edited_items, list):
             continue
-        identity_key = "pageId" if field_name == "pages" else "id"
+        if field_name == "pages":
+            identity_key = "pageId"
+        elif field_name == "agent_requirements":
+            identity_key = "agentId"
+        else:
+            identity_key = "id"
         existing_items = {
             str(item.get(identity_key)): item
             for item in existing_spec.get(field_name, [])

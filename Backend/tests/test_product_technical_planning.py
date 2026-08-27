@@ -694,8 +694,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_requirement_prompt_limits_rounds_and_batches_questions(self) -> None:
-        """需求提示必须固定三轮预算、每轮问题批量和最终合并边界。"""
+    def test_requirement_prompt_limits_rounds_and_asks_only_required_gaps(self) -> None:
+        """需求提示必须固定三轮预算，并且只询问实际缺失的必需字段。"""
 
         first_prompt = _requirements_prompt("创建一个库存管理系统")
         final_prompt = _requirements_prompt(
@@ -705,8 +705,11 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
 
         self.assertIn("at most 3 clarification rounds", first_prompt)
-        self.assertIn("5 to 8 focused questions", first_prompt)
-        self.assertIn("If fewer than 5 material gaps remain, ask exactly all remaining gaps", first_prompt)
+        self.assertIn("check these required fields in order", first_prompt)
+        self.assertIn("(1) app_info.name is non-empty", first_prompt)
+        self.assertIn("(5) business_flows has at least one flow", first_prompt)
+        self.assertIn("call ask_user once for exactly those missing fields", first_prompt)
+        self.assertNotIn("5 to 8 focused questions", first_prompt)
         self.assertIn("clarification round 1 of 3", first_prompt)
         self.assertIn("never call ask_user in this pass", final_prompt)
         self.assertIn("After the user has answered round 3, never call ask_user again", final_prompt)

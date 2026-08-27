@@ -70,6 +70,11 @@ def _sync_prompt(
         "Each restrictedPages candidate contains a targetPageId that must reference an existing pages[].pageId; preserve it for unchanged "
         "candidates and update it only when the edited Markdown explicitly changes the target page. Other page/entity/operation/resource "
         "bindings must not be reconstructed from Markdown. "
+        "Preserve agent_requirements as product-level business-agent needs. Every item contains exactly "
+        "agentId, name, purpose, capabilities, entryPageIds, interactionMode, and boundaries. Preserve agentId "
+        "for an unchanged business agent, keep entryPageIds bound to existing pages[].pageId, and return [] when "
+        "the edited document explicitly contains no business agent. Never add a model, model id, prompt, API "
+        "endpoint, tool, skill, knowledge source, storage choice, implementation class, or code path at this boundary. "
         "Preserve each hidden <!-- ruleId:... --> marker for an unchanged permission candidate; never invent it or emit dataRules, dataRuleKey, unauthorizedBehavior, or unauthenticated.\n\n"
         if artifact_name == "RequirementSpec"
         else (
