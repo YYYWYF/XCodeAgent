@@ -1487,7 +1487,7 @@ test('UI 确认过渡帧缺少 clarification 时仍可正常渲染', () => {
   )
 })
 
-test('正式工作流从开发完成确认开始展示代码差异', () => {
+test('正式工作流仅在开发交接展示代码差异', () => {
   const workflow = (phase: string): WorkflowRunPayload => ({
     runId: `run-${phase}`,
     threadId: 'thread-code-changes',
@@ -1497,9 +1497,14 @@ test('正式工作流从开发完成确认开始展示代码差异', () => {
 
   assert.equal(workflowShouldShowCodeChanges(workflow('integration_test')), false)
   assert.equal(workflowShouldShowCodeChanges(workflow('test_phase_confirmation')), true)
-  assert.equal(workflowShouldShowCodeChanges(workflow('launch_project')), true)
-  assert.equal(workflowShouldShowCodeChanges(workflow('acceptance')), true)
-  assert.equal(workflowShouldShowCodeChanges(workflow('completed')), true)
+  assert.equal(workflowShouldShowCodeChanges(workflow('review_phase_confirmation')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('code_review')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('acceptance_phase_confirmation')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('launch_project')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('acceptance_review')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('acceptance')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('finalize_project')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('completed')), false)
   assert.equal(workflowShouldShowCodeChanges(workflow('conversation')), true)
   assert.equal(workflowCodeChangesBeforeConfirmation(workflow('test_phase_confirmation')), true)
   assert.equal(workflowCodeChangesBeforeConfirmation(workflow('launch_project')), false)

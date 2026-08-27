@@ -47,6 +47,7 @@ export type WorkflowSummary = {
   unitTestGenerationContext?: Record<string, unknown>
   reviewPhaseConfirmation?: WorkflowClarification
   acceptancePhaseConfirmation?: WorkflowClarification
+  testReportResult?: WorkflowTestReportResult
   codeReviewResult?: WorkflowCodeReviewResult
   codeReviewRepair?: WorkflowCodeReviewRepair
   unitTestQualityGatePassed?: boolean
@@ -137,6 +138,11 @@ export type WorkflowCodeReviewResult = {
     file?: string
     line?: number
   }>
+}
+
+/** 测试阶段生成的用户可读 Markdown 报告。 */
+export type WorkflowTestReportResult = {
+  reportPath?: string
 }
 
 /** 代码审查一键修复及独立构建检查状态。 */

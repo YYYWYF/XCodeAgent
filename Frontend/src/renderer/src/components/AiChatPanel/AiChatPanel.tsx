@@ -75,6 +75,7 @@ import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useCodeReviewReportPanel } from './hooks/useCodeReviewReportPanel'
+import { useTestReportPanel } from './hooks/useTestReportPanel'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import { chatCopy } from './constants'
 import type { AgentChatMessage, WorkspaceDocKey } from './types'
@@ -87,6 +88,7 @@ import {
   sessionDetailTargetKey,
   shouldShowDevelopmentTargetSelector,
   shouldShowEndpointDetailDesignEntry,
+  workflowShouldShowCodeChanges,
   workflowDetailTargetKey,
   type WorkflowPreviewTarget
 } from './utils'
@@ -1317,7 +1319,14 @@ export default function AiChatPanel({
     const firstAvailable = designDocs?.find((doc) => doc.available)
     const target = phaseDoc || firstAvailable || designDocs?.[0]
     if (target) setRightPanel({ type: 'doc', docKey: target.key })
-  }, [isApplicationPlanningPhase, rightPanelOpen, rightPanel, designDocs, planningPhase, setRightPanel])
+  }, [
+    isApplicationPlanningPhase,
+    rightPanelOpen,
+    rightPanel,
+    designDocs,
+    planningPhase,
+    setRightPanel
+  ])
 
   // 需求文档确认阶段：需求文档（含合并的产品规划）生成后自动切到"需求文档"tab 展示内容。
   useEffect(() => {
@@ -1831,8 +1840,8 @@ export default function AiChatPanel({
         lastMessage?.role === 'assistant' &&
         Boolean(lastWorkflowRunId) &&
         (lastMessage?.workflow?.summary?.phase === 'ui_confirmation' ||
-          (lastMessage?.workflow?.summary?.clarification as { mode?: string } | undefined)
-            ?.mode === 'ui_design_confirmation')
+          (lastMessage?.workflow?.summary?.clarification as { mode?: string } | undefined)?.mode ===
+            'ui_design_confirmation')
       if (lastIsUiDesignConfirmationCard) return
       const appendToLast =
         lastMessage?.role === 'assistant' &&
@@ -2154,6 +2163,22 @@ export default function AiChatPanel({
       ''
   )
   const {
+    available: testReportAvailable,
+    content: testReportContent,
+    error: testReportError,
+    loading: testReportLoading,
+    path: testReportPath
+  } = useTestReportPanel({
+    activeWorkflowPhase,
+    applicationId: application.id,
+    isApplicationPlanningPhase,
+    rightPanel,
+    rightPanelOpen,
+    setRightPanel,
+    workflow: latestWorkflowForDisplay,
+    workspaceRoot: application.workspaceRoot
+  })
+  const {
     available: reviewReportAvailable,
     content: reviewReportContent,
     error: reviewReportError,
@@ -2169,32 +2194,62 @@ export default function AiChatPanel({
     workflow: latestWorkflowForDisplay,
     workspaceRoot: application.workspaceRoot
   })
+  const codeDiffVisible = workflowShouldShowCodeChanges(latestWorkflowForDisplay)
+
+  // 阶段切入测试或审查后立即退出可能遗留的 Diff 详情，避免卡片隐藏后右侧仍显示代码差异。
+  useEffect(() => {
+    if (!rightPanelOpen || rightPanel?.type !== 'diff' || codeDiffVisible) return
+    if (reviewReportAvailable) {
+      setRightPanel({ type: 'review-report' })
+      return
+    }
+    setRightPanel(testReportAvailable ? { type: 'test-report' } : { type: 'doc' })
+  }, [
+    codeDiffVisible,
+    reviewReportAvailable,
+    rightPanel,
+    rightPanelOpen,
+    setRightPanel,
+    testReportAvailable
+  ])
   const displayedWorkspaceTabs: WorkspaceTab[] = isApplicationPlanningPhase
     ? workspaceTabs
     : [
         ...workspaceTabs,
+        { key: 'test-report', label: '测试报告', available: testReportAvailable },
         { key: 'review-report', label: '审查报告', available: reviewReportAvailable }
       ]
   const displayedWorkspaceTab: WorkspaceTabKey =
-    !isApplicationPlanningPhase && rightPanel?.type === 'review-report'
-      ? 'review-report'
-      : activeWorkspaceTab
-  /** 在开发阶段处理审查报告 tab，其余 tab 继续复用既有切换逻辑。 */
+    !isApplicationPlanningPhase && rightPanel?.type === 'test-report'
+      ? 'test-report'
+      : !isApplicationPlanningPhase && rightPanel?.type === 'review-report'
+        ? 'review-report'
+        : activeWorkspaceTab
+  /** 在开发阶段处理测试/审查报告 tab，其余 tab 继续复用既有切换逻辑。 */
   const openDisplayedWorkspaceTab = useCallback(
     (key: WorkspaceTabKey): void => {
+      if (key === 'test-report' && !isApplicationPlanningPhase) {
+        if (testReportAvailable) setRightPanel({ type: 'test-report' })
+        return
+      }
       if (key === 'review-report' && !isApplicationPlanningPhase) {
         if (reviewReportAvailable) setRightPanel({ type: 'review-report' })
         return
       }
       openWorkspaceTab(key)
     },
-    [isApplicationPlanningPhase, openWorkspaceTab, reviewReportAvailable, setRightPanel]
+    [
+      isApplicationPlanningPhase,
+      openWorkspaceTab,
+      reviewReportAvailable,
+      setRightPanel,
+      testReportAvailable
+    ]
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
   const acceptanceAwaiting = displayedPlanExecutionMode === 'awaiting_acceptance'
   const acceptanceConversationActive = Boolean(
-    acceptanceConversationSessionKey &&
-      activeSession?.key === acceptanceConversationSessionKey
+    acceptanceConversationSessionKey && activeSession?.key === acceptanceConversationSessionKey
   )
   const acceptancePreviewFocus =
     activeWorkbenchPhase === 'acceptance' &&
@@ -3376,6 +3431,29 @@ export default function AiChatPanel({
         </div>
       )}
 
+      {showRightPanel && rightPanel?.type === 'test-report' && (
+        <div className={cx('embedded-preview-pane', 'workspace-pane')}>
+          <RightPanelTabs
+            tabs={displayedWorkspaceTabs}
+            active={displayedWorkspaceTab}
+            onChange={openDisplayedWorkspaceTab}
+            onClose={() => {
+              setRightPanel(undefined)
+              onRightPanelOpenChange(false)
+            }}
+          />
+          <div className={cx('workspace-content')}>
+            <DocPanel
+              content={testReportContent}
+              docName="测试报告"
+              error={testReportError}
+              generating={testReportLoading}
+              title={testReportPath}
+            />
+          </div>
+        </div>
+      )}
+
       {showRightPanel && rightPanel?.type === 'preview' && (
         <div className={cx('embedded-preview-pane')}>
           <RightPanelTabs
@@ -3431,7 +3509,7 @@ export default function AiChatPanel({
         </div>
       )}
 
-      {showRightPanel && rightPanel?.type === 'diff' && (
+      {showRightPanel && codeDiffVisible && rightPanel?.type === 'diff' && (
         <div className={cx('embedded-preview-pane', 'diff-detail-pane')}>
           <CodeDiffDetailPanel
             codeChanges={rightPanel.codeChanges}

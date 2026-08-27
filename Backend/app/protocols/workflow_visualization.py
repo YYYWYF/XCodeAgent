@@ -1535,12 +1535,15 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
     if node_name == "integration_test":
         report = update.get("test_report", {})
         summary = report.get("summary", {}) if isinstance(report, dict) else {}
-        report_path = update.get("test_report_path")
-        report_suffix = (
-            f"，报告={report_path}"
-            if report_path and not str(report_path).lower().endswith(".json")
-            else ""
+        normalized_report_path = str(update.get("test_report_path") or "").replace(
+            "\\", "/"
         )
+        report_result = (
+            {"reportPath": ".xcodeagent/reports/test-report.md"}
+            if normalized_report_path.endswith(".xcodeagent/reports/test-report.md")
+            else {}
+        )
+        report_suffix = "，测试报告已生成" if report_result else ""
         return {
             "message": (
                 f"通过={report.get('passed') if isinstance(report, dict) else None}，"
@@ -1549,6 +1552,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             ),
             "data": {
                 "testReport": report,
+                "testReportResult": report_result,
                 "testEvents": update.get("test_events", []),
                 "qualityGatePassed": update.get("quality_gate_passed"),
                 "needsRevision": update.get("needs_revision"),

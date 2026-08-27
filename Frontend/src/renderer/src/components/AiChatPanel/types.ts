@@ -47,6 +47,7 @@ export type RightPanelState =
       selectedPath?: string
     }
   | { type: 'doc'; docKey?: WorkspaceDocKey }
+  | { type: 'test-report' }
   | { type: 'review-report' }
   | { type: 'source' }
   | { type: 'process' }

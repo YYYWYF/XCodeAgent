@@ -124,7 +124,6 @@ def public_direct_state(state: dict[str, Any]) -> dict[str, Any]:
         "direct_stage_results",
         "backend_handoff",
         "test_results",
-        "test_report_path",
         "quality_gate_passed",
         "repair_iteration",
         "max_repair_iterations",
@@ -143,6 +142,13 @@ def public_direct_state(state: dict[str, Any]) -> dict[str, Any]:
         "code_graph_index",
     )
     public_state = {key: state[key] for key in keys if key in state}
+    normalized_test_report_path = str(state.get("test_report_path") or "").replace(
+        "\\", "/"
+    )
+    if normalized_test_report_path.endswith(".xcodeagent/reports/test-report.md"):
+        public_state["testReportResult"] = {
+            "reportPath": ".xcodeagent/reports/test-report.md"
+        }
     inspection = _workspace_inspection_snapshot(state)
     if inspection is not None:
         public_state["workspaceInspection"] = inspection

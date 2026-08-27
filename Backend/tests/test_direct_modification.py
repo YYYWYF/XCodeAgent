@@ -967,6 +967,7 @@ class DirectModificationNodeTests(unittest.TestCase):
                     "frontend": {"status": "completed", "summary": "完成页面修改"}
                 },
                 "direct_code_change_sets": [],
+                "test_report_path": "/private/workspace/.xcodeagent/reports/test-report.md",
                 "launch_result": {"status": "running"},
                 "preview_url": "http://127.0.0.1:3000",
             }
@@ -975,6 +976,10 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(update["status"], "completed")
         self.assertEqual(update["acceptance_request"], {})
         self.assertEqual(update["clarification"], {})
+        self.assertEqual(
+            update["direct_modification_result"]["tests"]["reportPath"],
+            ".xcodeagent/reports/test-report.md",
+        )
 
     def test_fullstack_routes_backend_then_frontend(self) -> None:
         """fullstack 成功路径必须固定后端优先，再执行前端和测试。"""

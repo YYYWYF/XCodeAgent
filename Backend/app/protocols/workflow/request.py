@@ -986,6 +986,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "code_review_max_repair_iterations",
         "quality_gate_passed",
         "test_report",
+        "test_report_path",
         "build_execution_scope",
         "last_persisted_build_execution_scope",
         "build_task_plan_persisted",
@@ -1075,6 +1076,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "code_review_repair_confirmation": "codeReviewRepairConfirmation",
         "quality_gate_passed": "qualityGatePassed",
         "test_report": "testReport",
+        "test_report_path": "testReportPath",
         "build_results": "buildResults",
         "build_summary": "buildSummary",
         "code_changes": "codeChanges",
@@ -1111,6 +1113,13 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     for snake_key, camel_key in camel_aliases.items():
         if snake_key not in resumed_values and merged.get(camel_key) is not None:
             resumed_values[snake_key] = merged[camel_key]
+    normalized_test_report_path = str(
+        resumed_values.get("test_report_path") or ""
+    ).replace("\\", "/").strip()
+    if normalized_test_report_path == ".xcodeagent/reports/test-report.md":
+        resumed_values["test_report_path"] = normalized_test_report_path
+    else:
+        resumed_values.pop("test_report_path", None)
     review_result = resumed_values.get("code_review_result")
     if (
         "code_review_report_path" not in resumed_values
@@ -1118,6 +1127,17 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         and review_result.get("reportPath")
     ):
         resumed_values["code_review_report_path"] = review_result["reportPath"]
+    test_report_result = merged.get("testReportResult")
+    test_report_path = (
+        str(test_report_result.get("reportPath") or "").replace("\\", "/").strip()
+        if isinstance(test_report_result, dict)
+        else ""
+    )
+    if (
+        "test_report_path" not in resumed_values
+        and test_report_path == ".xcodeagent/reports/test-report.md"
+    ):
+        resumed_values["test_report_path"] = test_report_path
     raw_adjustment = resumed_values.get("acceptance_adjustment") or merged.get(
         "acceptanceAdjustment"
     )

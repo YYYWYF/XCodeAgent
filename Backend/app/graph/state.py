@@ -162,6 +162,7 @@ class ProjectState(TypedDict, total=False):
     test_events: Annotated[list[str], add]
     test_report: dict[str, Any]
     test_report_path: str
+    test_report_json_path: str
     quality_gate_passed: bool
     needs_revision: bool
     revision_requests: list[dict[str, Any]]

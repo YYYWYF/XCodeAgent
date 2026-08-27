@@ -149,6 +149,36 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertEqual(payload["state"]["codeReviewResult"], {})
         self.assertEqual(payload["result"]["codeReviewResult"], {})
 
+    def test_test_report_projects_relative_markdown_and_hides_internal_json(self) -> None:
+        """测试报告只公开固定 Markdown 相对路径并隐藏内部 JSON 路径。"""
+
+        result = {
+            "phase": "review_phase_confirmation",
+            "status": "requires_user_input",
+            "test_report_path": "/private/workspace/.xcodeagent/reports/test-report.md",
+            "test_report_json_path": "/private/workspace/.xcodeagent/reports/test-report.json",
+        }
+        summary = _workflow_summary(result, [])
+        public_state = _public_workflow_state(result)
+        payload = _workflow_visual_payload(
+            run_id="run-test-report",
+            thread_id="thread-test-report",
+            summary=summary,
+            events=[],
+            result=result,
+        )
+
+        expected = {"reportPath": ".xcodeagent/reports/test-report.md"}
+        self.assertEqual(summary["testReportResult"], expected)
+        self.assertEqual(
+            summary["artifacts"]["test_report_path"], expected["reportPath"]
+        )
+        self.assertEqual(public_state["testReportResult"], expected)
+        self.assertNotIn("test_report_path", public_state)
+        self.assertNotIn("test_report_json_path", public_state)
+        self.assertEqual(payload["state"]["testReportResult"], expected)
+        self.assertEqual(payload["result"]["testReportResult"], expected)
+
     def test_code_review_repair_projects_status_and_build_checks(self) -> None:
         """代码审查修复状态和独立构建检查应持续投影为 camelCase。"""
 

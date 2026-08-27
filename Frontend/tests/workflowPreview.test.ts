@@ -11,6 +11,7 @@ import {
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
   workflowPreviewTarget,
+  workflowShouldShowCodeChanges,
   workflowShouldShowCodeReview
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import {
@@ -46,6 +47,9 @@ import { readApplicationLifecycle } from '../src/renderer/src/service/agUiAgent'
 import { processStepsForMessageDisplay } from '../src/renderer/src/service/processStepHistory'
 import { workspaceToolErrorMessage } from '../src/renderer/src/service/workspaceTools'
 import { codeReviewReportFocusKey } from '../src/renderer/src/components/AiChatPanel/hooks/useCodeReviewReportPanel'
+import { testReportFocusKey } from '../src/renderer/src/components/AiChatPanel/hooks/useTestReportPanel'
+import { integrationTestCheckReportPath } from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/reportAction'
+import { workspaceTabIsAvailable } from '../src/renderer/src/components/AiChatPanel/components/RightPanelTabs/tabAvailability'
 import {
   hasNonTerminalApplicationExecution,
   latestApplicationLifecycle
@@ -89,6 +93,11 @@ test('实时成功 launch 会生成可去重的预览目标', () => {
 
   assert.equal(target?.url, 'http://127.0.0.1:3000')
   assert.equal(target?.key, 'thread-1:run-1:http://127.0.0.1:3000')
+})
+
+test('预览 tab 不依赖运行地址状态且始终允许进入', () => {
+  assert.equal(workspaceTabIsAvailable('preview', false), true)
+  assert.equal(workspaceTabIsAvailable('source', false), false)
 })
 
 test('自由对话代码修改完成并启动后直接生成预览目标', () => {
@@ -203,6 +212,20 @@ test('测试重跑和审查确认节点不会展示恢复快照中的旧代码�
   )
 })
 
+test('审查和验收阶段所有节点均隐藏代码差异', () => {
+  const workflow = (phase: string): WorkflowRunPayload =>
+    previewWorkflow({ phase, status: 'requires_user_input' }, `run-${phase}`)
+
+  assert.equal(workflowShouldShowCodeChanges(workflow('review_phase_confirmation')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('code_review')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('acceptance_phase_confirmation')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('launch_project')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('acceptance_review')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('acceptance')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('finalize_project')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('completed')), false)
+})
+
 test('审查流程三个节点隐藏动作详情且其他步骤保持不变', () => {
   const workflow = previewWorkflow({ phase: 'code_review', status: 'completed' })
   const steps = processStepsForMessageDisplay(
@@ -273,6 +296,39 @@ test('同一路径的审查报告在新的 Workflow 运行中获得新的自动�
 
   assert.notEqual(first, second)
   assert.equal(first, 'application-1:run-1:.xcodeagent/reports/code-review.md')
+})
+
+test('同一路径的测试报告在新的 Workflow 运行中获得新的自动聚焦键', () => {
+  const first = testReportFocusKey('application-1', 'run-1', '.xcodeagent/reports/test-report.md')
+  const second = testReportFocusKey('application-1', 'run-2', '.xcodeagent/reports/test-report.md')
+
+  assert.notEqual(first, second)
+  assert.equal(first, 'application-1:run-1:.xcodeagent/reports/test-report.md')
+})
+
+test('完整 Lighthouse 报告按钮只允许出现在前端性能检查行', () => {
+  const reportPath = '.xcodeagent/runtime/tests/frontend_performance/lighthouse.html'
+
+  assert.equal(
+    integrationTestCheckReportPath({
+      id: 'frontend_performance',
+      name: '前端性能测试',
+      status: 'passed',
+      required: false,
+      reportPath
+    }),
+    reportPath
+  )
+  assert.equal(
+    integrationTestCheckReportPath({
+      id: 'frontend_build',
+      name: '前端构建检查',
+      status: 'passed',
+      required: true,
+      reportPath
+    }),
+    undefined
+  )
 })
 
 test('受控文件读取的结构化校验错误会显示可读文案', () => {

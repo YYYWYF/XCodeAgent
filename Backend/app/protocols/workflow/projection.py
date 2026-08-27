@@ -26,6 +26,18 @@ _CODE_REVIEW_VISIBLE_PHASES = {
     "completed",
 }
 _CODE_REVIEW_REPORT_PATH = ".xcodeagent/reports/code-review.md"
+_TEST_REPORT_PATH = ".xcodeagent/reports/test-report.md"
+
+
+def _workflow_test_report_result(report_path: Any) -> dict[str, str]:
+    """只公开规范化的工作区内 Markdown 测试报告路径。"""
+
+    normalized_path = str(report_path or "").replace("\\", "/").strip()
+    return (
+        {"reportPath": _TEST_REPORT_PATH}
+        if normalized_path.endswith(_TEST_REPORT_PATH)
+        else {}
+    )
 
 
 def _requirements_confirmation_projection(result: dict[str, Any]) -> dict[str, bool]:
@@ -280,6 +292,9 @@ def _workflow_progress_summary(
             phase,
             result.get("code_review_report_path"),
         ),
+        "testReportResult": _workflow_test_report_result(
+            result.get("test_report_path")
+        ),
         "codeReviewRepair": _workflow_code_review_repair(
             result.get("code_review_repair_result"), phase
         ),
@@ -456,11 +471,19 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
 
 
 def _workflow_artifacts(value: dict[str, Any]) -> dict[str, Any]:
-    return {
+    """投影用户可读工件，并把测试报告收敛为固定工作区相对路径。"""
+
+    artifacts = {
         field: value.get(field)
         for field in WORKFLOW_ARTIFACT_FIELDS
-        if value.get(field) and not str(value.get(field)).lower().endswith(".json")
+        if value.get(field)
+        and field != "test_report_path"
+        and not str(value.get(field)).lower().endswith(".json")
     }
+    report_result = _workflow_test_report_result(value.get("test_report_path"))
+    if report_result:
+        artifacts["test_report_path"] = report_result["reportPath"]
+    return artifacts
 
 
 def _public_workflow_state(
@@ -487,6 +510,8 @@ def _public_workflow_state(
             "code_review_max_repair_iterations",
             "code_review_next_action",
             "code_review_report_path",
+            "test_report_path",
+            "test_report_json_path",
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。
             "technical_plan_repair_candidate",
             "technical_plan_repair_errors",
@@ -511,6 +536,9 @@ def _public_workflow_state(
             value.get("code_review_repair_result"),
             phase if phase is not None else value.get("phase"),
         )
+    report_result = _workflow_test_report_result(value.get("test_report_path"))
+    if report_result:
+        public_state["testReportResult"] = report_result
     return public_state
 
 
@@ -833,12 +861,8 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
     if node_name == "integration_test":
         report = update.get("test_report", {})
         summary = report.get("summary", {}) if isinstance(report, dict) else {}
-        report_path = update.get("test_report_path")
-        report_suffix = (
-            f"，报告={report_path}"
-            if report_path and not str(report_path).lower().endswith(".json")
-            else ""
-        )
+        report_result = _workflow_test_report_result(update.get("test_report_path"))
+        report_suffix = "，测试报告已生成" if report_result else ""
         clarification = update.get("clarification")
         clarification_message = (
             str(clarification.get("message") or "")
@@ -853,6 +877,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             ),
             "data": {
                 "testReport": report,
+                "testReportResult": report_result,
                 "testEvents": update.get("test_events", []),
                 "qualityGatePassed": update.get("quality_gate_passed"),
                 "needsRevision": update.get("needs_revision"),
@@ -1261,6 +1286,9 @@ def _workflow_summary(
             result.get("phase"),
             result.get("code_review_report_path"),
         ),
+        "testReportResult": _workflow_test_report_result(
+            result.get("test_report_path")
+        ),
         "codeReviewRepair": _workflow_code_review_repair(
             result.get("code_review_repair_result"), result.get("phase")
         ),
@@ -1363,6 +1391,9 @@ def _workflow_visual_payload(
             result.get("code_review_result"),
             summary.get("phase"),
             result.get("code_review_report_path"),
+        ),
+        "testReportResult": _workflow_test_report_result(
+            result.get("test_report_path")
         ),
         "codeReviewRepair": _workflow_code_review_repair(
             result.get("code_review_repair_result"), summary.get("phase")

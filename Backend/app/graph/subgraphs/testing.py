@@ -23,7 +23,10 @@ from app.services.integration_test_runner import run_integration_checks
 from app.services.test_validation import evaluate_quality_gate
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.code_changes import merge_code_change_sets
-from app.workspace.test_documents import write_test_report_json
+from app.workspace.test_documents import (
+    write_test_report_json,
+    write_test_report_markdown,
+)
 from app.workspace.task_documents import write_repair_task_plan_json
 
 
@@ -1378,11 +1381,13 @@ def main_quality_gate(
         test_results=state.get("test_results", []),
     )
     _report_repair_started(state, report, _progress_reporter(config))
-    report_path = write_test_report_json(state, report)
+    report_json_path = write_test_report_json(state, report)
+    report_path = write_test_report_markdown(state, report)
     return {
         "phase": "integration_test",
         "test_report": report,
         "test_report_path": report_path,
+        "test_report_json_path": report_json_path,
         "quality_gate_passed": report["passed"],
         "needs_revision": report["needs_revision"],
         "revision_requests": report["revision_requests"],
@@ -1879,6 +1884,7 @@ def integration_test(state: ProjectState) -> dict:
             "integration_build_checks_completed": reuse_build_checks,
             "test_report": {},
             "test_report_path": None,
+            "test_report_json_path": None,
             "quality_gate_passed": False,
             "needs_revision": False,
             "revision_requests": [],
@@ -1958,6 +1964,7 @@ def integration_test(state: ProjectState) -> dict:
         "test_events": result.get("test_events", []),
         "test_report": result.get("test_report", {}),
         "test_report_path": result.get("test_report_path"),
+        "test_report_json_path": result.get("test_report_json_path"),
         "quality_gate_passed": quality_gate_passed,
         "needs_revision": result.get("needs_revision", False),
         "revision_requests": result.get("revision_requests", []),

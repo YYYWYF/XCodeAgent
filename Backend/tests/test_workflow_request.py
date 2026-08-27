@@ -9,12 +9,40 @@ from app.agents.test_generation.generator import _build_prompt
 from app.graph.subgraphs.testing import collect_unit_test_targets
 from app.protocols.workflow.request import (
     _build_execution_scope,
+    _resume_values,
     _retry_failed_execution_node,
     workflow_run_inputs,
 )
 
 
 class WorkflowRequestTests(unittest.TestCase):
+    def test_resume_values_restore_test_report_from_public_result(self) -> None:
+        """恢复公开快照时应把 Markdown 测试报告路径写回内部状态字段。"""
+
+        values = _resume_values(
+            {
+                "state": {
+                    "testReportResult": {
+                        "reportPath": ".xcodeagent/reports/test-report.md"
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(
+            values["test_report_path"], ".xcodeagent/reports/test-report.md"
+        )
+        self.assertNotIn("test_report_json_path", values)
+
+        rejected = _resume_values(
+            {
+                "state": {
+                    "testReportResult": {"reportPath": "/tmp/untrusted-report.md"}
+                }
+            }
+        )
+        self.assertNotIn("test_report_path", rejected)
+
     def test_endpoint_selection_derives_endpoint_build_scope(self) -> None:
         """选择单个 endpoint 时，执行计划范围应锁定到该 endpoint 而非整应用。"""
 

@@ -76,8 +76,11 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         ), patch(
             "app.graph.subgraphs.testing.write_test_report_json",
             return_value="/tmp/test-report.json",
+        ), patch(
+            "app.graph.subgraphs.testing.write_test_report_markdown",
+            return_value="/tmp/test-report.md",
         ):
-            main_quality_gate(
+            result = main_quality_gate(
                 {
                     "test_results": [{"id": "backend_build", "passed": False}],
                     "integration_repair_enabled": True,
@@ -93,6 +96,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
 
         self.assertEqual(len(emitted), 1)
         self.assertEqual(emitted[0]["type"], INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE)
+        self.assertEqual(result["test_report_path"], "/tmp/test-report.md")
+        self.assertEqual(result["test_report_json_path"], "/tmp/test-report.json")
         self.assertIn("正在分析失败原因", emitted[0]["message"])
 
     def test_nested_repair_progress_reaches_outer_custom_stream(self) -> None:

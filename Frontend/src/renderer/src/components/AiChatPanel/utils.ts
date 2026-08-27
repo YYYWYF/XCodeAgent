@@ -174,10 +174,7 @@ export function formatSessionTime(value: number): string {
 }
 
 export function clampAssistantPanelRatio(nextRatio: number): number {
-  const maxRatio = Math.max(
-    MIN_ASSISTANT_PANEL_RATIO,
-    1 - MIN_RIGHT_PANEL_RATIO,
-  )
+  const maxRatio = Math.max(MIN_ASSISTANT_PANEL_RATIO, 1 - MIN_RIGHT_PANEL_RATIO)
 
   return Math.min(Math.max(nextRatio, MIN_ASSISTANT_PANEL_RATIO), maxRatio)
 }
@@ -283,26 +280,15 @@ export function workflowCodeChanges(
   return undefined
 }
 
-/** 在开发完成确认起展示 Build 文件差异，测试与审查后续节点继续保留。 */
-export function workflowShouldShowCodeChanges(
-  workflow: WorkflowRunPayload | undefined
-): boolean {
+/** 仅在开发交接与自由修改结果中展示代码差异，测试、审查和验收阶段始终隐藏。 */
+export function workflowShouldShowCodeChanges(workflow: WorkflowRunPayload | undefined): boolean {
   if (!workflow) return true
 
-  return [
-    'conversation',
-    'test_phase_confirmation',
-    'acceptance_phase_confirmation',
-    'launch_project',
-    'acceptance',
-    'completed'
-  ].includes(String(workflow.summary.phase || ''))
+  return ['conversation', 'test_phase_confirmation'].includes(String(workflow.summary.phase || ''))
 }
 
 /** 仅在代码审查及进入验收的确认门展示审查结果，验收会话不继承审查卡片。 */
-export function workflowShouldShowCodeReview(
-  workflow: WorkflowRunPayload | undefined
-): boolean {
+export function workflowShouldShowCodeReview(workflow: WorkflowRunPayload | undefined): boolean {
   if (!workflow) return false
   const phase = String(workflow.summary.phase || '')
   if (phase === 'code_review') return workflow.summary.status !== 'failed'
@@ -441,9 +427,7 @@ export function shouldShowEndpointDetailDesignEntry(
   endpointSessionActive: boolean,
   messageCount: number
 ): boolean {
-  return (
-    requiresEndpointDetailDesign(endpoint) && (!endpointSessionActive || messageCount === 0)
-  )
+  return requiresEndpointDetailDesign(endpoint) && (!endpointSessionActive || messageCount === 0)
 }
 
 /** 判断 Workflow 快照是否属于独立 EntitySourceBinding 场景。 */
@@ -477,9 +461,7 @@ export function isEntityDesignWorkflow(workflow: WorkflowRunPayload | undefined)
     const stateDelta = event.data?.stateDelta
     if (stateDelta && typeof stateDelta === 'object') {
       const delta = stateDelta as Record<string, unknown>
-      const deltaEntityId = String(
-        delta.selectedEntityId || delta.selected_entity_id || ''
-      ).trim()
+      const deltaEntityId = String(delta.selectedEntityId || delta.selected_entity_id || '').trim()
       const deltaTargetType = String(
         delta.detailTargetType || delta.detail_target_type || ''
       ).trim()

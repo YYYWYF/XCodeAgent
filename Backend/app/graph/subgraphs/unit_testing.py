@@ -38,13 +38,13 @@ def unit_test_quality_gate(state: ProjectState) -> dict[str, Any]:
         or workflow_artifact_root(state) / "reports" / "unit-test-report.json"
     )
     report_path = write_test_report_json(
-        {**state, "test_report_path": report_path}, report
+        {**state, "test_report_json_path": report_path}, report
     )
     passed = bool(report.get("passed"))
     return {
         "phase": "unit_test",
         "test_report": report,
-        "test_report_path": report_path,
+        "test_report_json_path": report_path,
         "unit_test_report": report,
         "unit_test_report_path": report_path,
         "unit_test_quality_gate_passed": passed,
@@ -66,7 +66,7 @@ def _unit_repair_state(state: ProjectState) -> dict[str, Any]:
         **state,
         "test_results": state.get("test_results", []),
         "test_report": state.get("test_report", {}),
-        "test_report_path": state.get("test_report_path"),
+        "test_report_json_path": state.get("unit_test_report_path"),
         "quality_gate_passed": state.get("unit_test_quality_gate_passed", False),
         "needs_revision": state.get("needs_revision", False),
         "revision_requests": state.get("revision_requests", []),
@@ -231,6 +231,7 @@ def unit_test(state: ProjectState) -> dict[str, Any]:
         "test_results": [],
         "test_report": {},
         "test_report_path": None,
+        "test_report_json_path": None,
         "quality_gate_passed": False,
         "needs_revision": False,
         "revision_requests": [],
@@ -351,7 +352,8 @@ def unit_test(state: ProjectState) -> dict[str, Any]:
         ),
         "unit_test_results": result.get("test_results", []),
         "unit_test_report": result.get("unit_test_report") or result.get("test_report", {}),
-        "unit_test_report_path": result.get("unit_test_report_path") or result.get("test_report_path"),
+        "unit_test_report_path": result.get("unit_test_report_path")
+        or result.get("test_report_json_path"),
         "unit_test_generation_context": result.get("unit_test_generation_context", {}),
         "unit_test_generation": result.get("unit_test_generation", {}),
         "unit_test_affected_layers": result.get("unit_test_affected_layers", []),

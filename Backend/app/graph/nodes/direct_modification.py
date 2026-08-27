@@ -88,6 +88,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         "test_results": [],
         "test_report": {},
         "test_report_path": "",
+        "test_report_json_path": "",
         "quality_gate_passed": False,
         "launch_result": {},
         "preview_url": "",
@@ -515,6 +516,14 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         )
     )
     code_changes = merge_code_change_sets(state.get("direct_code_change_sets", []))
+    normalized_test_report_path = str(state.get("test_report_path") or "").replace(
+        "\\", "/"
+    )
+    public_test_report_path = (
+        ".xcodeagent/reports/test-report.md"
+        if normalized_test_report_path.endswith(".xcodeagent/reports/test-report.md")
+        else None
+    )
     direct_result = {
         "status": status,
         "intent": conversation_intent,
@@ -526,7 +535,7 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         "tests": {
             "passed": state.get("quality_gate_passed") is True,
             "checks": state.get("test_results", []),
-            "reportPath": state.get("test_report_path"),
+            "reportPath": public_test_report_path,
         },
         "logPaths": direct_test_log_paths(state.get("test_results", [])),
         "launchResult": launch_result,

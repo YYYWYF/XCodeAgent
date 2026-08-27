@@ -14,7 +14,11 @@ import {
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 import { projectLaunchProgress } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/projectLaunchProgress'
 import { sessionsForWorkbenchPhase } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
-import type { ApplicationLifecycle, WorkbenchExecution, WorkflowRunPayload } from '../src/renderer/src/typings'
+import type {
+  ApplicationLifecycle,
+  WorkbenchExecution,
+  WorkflowRunPayload
+} from '../src/renderer/src/typings'
 import {
   deriveWorkbenchPhase,
   isObjectEditableInPhase,
@@ -24,9 +28,7 @@ import {
 } from '../src/renderer/src/workbenchPhase'
 
 /** 构造验收阶段测试所需的最小生命周期执行。 */
-function acceptanceExecution(
-  overrides: Partial<WorkbenchExecution> = {}
-): WorkbenchExecution {
+function acceptanceExecution(overrides: Partial<WorkbenchExecution> = {}): WorkbenchExecution {
   return {
     scope: 'page',
     targetId: 'orders',
@@ -167,7 +169,10 @@ test('项目启动进度选择后续子步骤，不被旧工程识别事件覆�
 test('验收自动切换只纠正审查覆盖，不覆盖用户主动返回测试阶段', () => {
   assert.equal(shouldAutoEnterAcceptancePhase('review', 'review', 'acceptance'), true)
   assert.equal(shouldAutoEnterAcceptancePhase('test', 'test', 'acceptance'), false)
-  assert.equal(shouldAutoEnterAcceptancePhase('development', 'development', 'launch_project'), false)
+  assert.equal(
+    shouldAutoEnterAcceptancePhase('development', 'development', 'launch_project'),
+    false
+  )
 })
 
 test('验收确认 phase 覆盖流式快照中遗留的进入审查确认', () => {
@@ -216,4 +221,19 @@ test('验收底栏高度与预览预留空间使用同一个变量', () => {
 
   assert.match(panelStyles, /padding-bottom:\s*var\(--acceptance-decision-dock-height\)/)
   assert.match(dockStyles, /height:\s*var\(--acceptance-decision-dock-height, 72px\)/)
+})
+
+test('验收 Agent 头像拥有可见的阶段背景', () => {
+  const messageListStyles = readFileSync(
+    path.join(
+      process.cwd(),
+      'src/renderer/src/components/AiChatPanel/components/MessageList/MessageList.less'
+    ),
+    'utf8'
+  )
+
+  assert.match(
+    messageListStyles,
+    /\.@\{class-prefix\}-ai-message-agent\.@\{class-prefix\}-acceptance\s+\.@\{class-prefix\}-ai-message-agent-avatar\s*\{[^}]*background:/s
+  )
 })
