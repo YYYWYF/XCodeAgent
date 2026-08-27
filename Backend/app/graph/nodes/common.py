@@ -23,6 +23,8 @@ def capture_agent_file_changes(
     source_tool: str,
     action: Callable[[], T],
     capture_exceptions: bool = False,
+    ignored_dirs: set[str] | None = None,
+    included_roots: tuple[str, ...] | None = None,
 ) -> CapturedWorkspaceChanges:
     """执行 Agent 并按调用方策略捕获工作区差异和异常。"""
 
@@ -31,6 +33,8 @@ def capture_agent_file_changes(
         source_tool=source_tool,
         action=action,
         capture_exceptions=capture_exceptions,
+        ignored_dirs=ignored_dirs,
+        included_roots=included_roots,
     )
 
 

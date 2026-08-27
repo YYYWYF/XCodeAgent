@@ -110,6 +110,41 @@ class WorkspaceCodeChangeTests(unittest.TestCase):
 
             self.assertEqual(files, [])
 
+    def test_included_roots_capture_all_frontend_files_without_other_workspace_paths(self) -> None:
+        """限定根应捕获 frontend 非源码文件，同时跳过 node_modules 和根外内容。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            before = snapshot_workspace(
+                workspace,
+                ignored_dirs={"node_modules"},
+                included_roots=("frontend", "backend/src/main/java"),
+            )
+            (root / "frontend" / "dist").mkdir(parents=True)
+            (root / "frontend" / "dist" / "manifest.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            (root / "frontend" / "node_modules" / "pkg").mkdir(parents=True)
+            (root / "frontend" / "node_modules" / "pkg" / "index.js").write_text(
+                "generated\n", encoding="utf-8"
+            )
+            (root / "unrelated" / "cache").mkdir(parents=True)
+            (root / "unrelated" / "cache" / "data.txt").write_text(
+                "ignored\n", encoding="utf-8"
+            )
+            after = snapshot_workspace(
+                workspace,
+                ignored_dirs={"node_modules"},
+                included_roots=("frontend", "backend/src/main/java"),
+            )
+
+            files = diff_workspace_snapshots(before, after, source_tool="test.agent")
+
+            self.assertEqual(
+                [item["path"] for item in files],
+                ["frontend/dist/manifest.json"],
+            )
+
     def test_agent_internal_directory_is_not_included(self) -> None:
         """验证工作目录中的 .xcodeagent 状态文件不会进入用户代码变更集。"""
 

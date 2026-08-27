@@ -36,6 +36,7 @@ def run_integration_checks(
     on_progress: CheckProgressCallback | None = None,
     phase: IntegrationCheckPhase = "all",
     artifact_namespace: str = "tests",
+    frontend_install_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """按阶段执行集成检查，支持构建和单元测试之间的显式生成门。"""
 
@@ -70,6 +71,7 @@ def run_integration_checks(
             unit_tests_affected=frontend_unit_tests_affected,
             include_unit_tests=phase == "all",
             on_progress=on_progress,
+            preinstalled_result=frontend_install_result,
         )
     else:
         frontend_results = _frontend_unit_checks(
@@ -172,6 +174,7 @@ def _frontend_checks(
     unit_tests_affected: bool = True,
     include_unit_tests: bool = True,
     on_progress: CheckProgressCallback | None = None,
+    preinstalled_result: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """依次执行前端安装、构建和可选的单元测试。"""
 
@@ -202,7 +205,7 @@ def _frontend_checks(
         return results
 
     package_manager_command = shutil.which(frontend.package_manager)
-    install_result = (
+    install_result = dict(preinstalled_result) if isinstance(preinstalled_result, dict) else (
         _run_command_result(
             check_id="frontend_install",
             name="前端依赖安装检查",
@@ -226,6 +229,12 @@ def _frontend_checks(
             on_progress=on_progress,
         )
     )
+    if isinstance(preinstalled_result, dict):
+        report_check_progress(
+            on_progress,
+            status="passed" if install_result.get("passed") is True else "failed",
+            check=install_result,
+        )
     build_result = _run_script_result(
         check_id="frontend_build",
         name="前端构建检查",

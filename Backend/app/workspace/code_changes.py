@@ -10,11 +10,11 @@ from typing import Any, TypeVar
 
 from app.workspace.workspace import (
     CODE_CHANGE_DIFF_LIMIT,
+    DEFAULT_IGNORED_DIRS,
     _diff_stats,
     _is_sensitive_path,
     _looks_binary,
     _relative_path,
-    _should_ignore,
     _text_diff,
     _truncate,
     _workspace_root,
@@ -26,6 +26,7 @@ MAX_SNAPSHOT_FILE_BYTES = 1_000_000
 # 被后台编译进程刷新；把它们纳入代码变更集会造成越权写入误报。
 CODE_CHANGE_IGNORED_DIRS = {".xcodeagent", "target", "build", "dist"}
 CODE_CHANGE_IGNORED_FILE_NAMES = {".ds_store"}
+DEFAULT_CODE_CHANGE_IGNORED_DIRS = DEFAULT_IGNORED_DIRS | CODE_CHANGE_IGNORED_DIRS
 T = TypeVar("T")
 
 
@@ -50,26 +51,53 @@ class CapturedWorkspaceChanges:
     error: Exception | None = None
 
 
-def snapshot_workspace(workspace_root: str | None) -> WorkspaceSnapshot | None:
-    """Return a text-safe snapshot of files inside workspace_root."""
+def snapshot_workspace(
+    workspace_root: str | None,
+    *,
+    ignored_dirs: set[str] | None = None,
+    included_roots: tuple[str, ...] | None = None,
+) -> WorkspaceSnapshot | None:
+    """按调用方边界生成工作区内文本安全的文件快照。"""
 
     if not workspace_root:
         return None
 
     root = _workspace_root(workspace_root)
+    effective_ignored_dirs = (
+        set(ignored_dirs)
+        if ignored_dirs is not None
+        else set(DEFAULT_CODE_CHANGE_IGNORED_DIRS)
+    )
+    effective_included_roots = _normalize_included_roots(included_roots)
     files: dict[str, WorkspaceFileSnapshot] = {}
     for dirpath, dirnames, filenames in os.walk(root):
         current = Path(dirpath)
         dirnames[:] = [
             name
             for name in sorted(dirnames)
-            if not _should_ignore(current / name, root, include_hidden=True)
-            and not _is_internal_code_change_path(current / name, root)
+            if not _is_ignored_snapshot_path(
+                current / name,
+                root,
+                ignored_dirs=effective_ignored_dirs,
+            )
+            and _is_included_snapshot_path(
+                current / name,
+                root,
+                included_roots=effective_included_roots,
+                include_ancestors=True,
+            )
         ]
 
         for filename in sorted(filenames):
             path = current / filename
-            if _skip_snapshot_path(path, root):
+            if not _is_included_snapshot_path(
+                path,
+                root,
+                included_roots=effective_included_roots,
+                include_ancestors=False,
+            ):
+                continue
+            if _skip_snapshot_path(path, root, ignored_dirs=effective_ignored_dirs):
                 continue
 
             try:
@@ -175,10 +203,16 @@ def capture_workspace_changes(
     source_tool: str,
     action: Callable[[], T],
     capture_exceptions: bool = False,
+    ignored_dirs: set[str] | None = None,
+    included_roots: tuple[str, ...] | None = None,
 ) -> CapturedWorkspaceChanges:
     """执行动作并捕获前后差异；快速模式可选择把异常作为结果返回。"""
 
-    before = snapshot_workspace(workspace)
+    before = snapshot_workspace(
+        workspace,
+        ignored_dirs=ignored_dirs,
+        included_roots=included_roots,
+    )
     value: Any = None
     error: Exception | None = None
     try:
@@ -187,7 +221,11 @@ def capture_workspace_changes(
         if not capture_exceptions:
             raise
         error = exc
-    after = snapshot_workspace(workspace)
+    after = snapshot_workspace(
+        workspace,
+        ignored_dirs=ignored_dirs,
+        included_roots=included_roots,
+    )
     files = diff_workspace_snapshots(before, after, source_tool=source_tool)
     code_change_set = (
         build_code_change_set(
@@ -269,28 +307,76 @@ def merge_code_change_sets(
     }
 
 
-def _skip_snapshot_path(path: Path, root: Path) -> bool:
+def _skip_snapshot_path(
+    path: Path,
+    root: Path,
+    *,
+    ignored_dirs: set[str],
+) -> bool:
     """判断文件是否应从面向用户的工作区变更快照中排除。"""
 
     if path.is_symlink() or not path.is_file():
         return True
     if path.name.casefold() in CODE_CHANGE_IGNORED_FILE_NAMES:
         return True
-    if _is_internal_code_change_path(path, root):
-        return True
-    if _should_ignore(path, root, include_hidden=True):
+    if _is_ignored_snapshot_path(path, root, ignored_dirs=ignored_dirs):
         return True
     return _is_sensitive_path(path)
 
 
-def _is_internal_code_change_path(path: Path, root: Path) -> bool:
-    """判断路径是否位于不应展示给用户的 Agent 内部状态目录。"""
+def _is_ignored_snapshot_path(
+    path: Path,
+    root: Path,
+    *,
+    ignored_dirs: set[str],
+) -> bool:
+    """判断路径是否位于调用方指定的不应捕获目录。"""
 
     try:
         relative_parts = path.relative_to(root).parts
     except ValueError:
         return True
-    return any(part in CODE_CHANGE_IGNORED_DIRS for part in relative_parts)
+    return any(part in ignored_dirs for part in relative_parts)
+
+
+def _normalize_included_roots(value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    """规范化调用方限定的快照根，并丢弃绝对路径与目录穿越。"""
+
+    if value is None:
+        return None
+    roots: list[str] = []
+    for item in value:
+        normalized = str(item or "").strip().replace("\\", "/").strip("/")
+        path = Path(normalized)
+        if not normalized or path.is_absolute() or ".." in path.parts:
+            continue
+        roots.append(path.as_posix())
+    return tuple(dict.fromkeys(roots))
+
+
+def _is_included_snapshot_path(
+    path: Path,
+    root: Path,
+    *,
+    included_roots: tuple[str, ...] | None,
+    include_ancestors: bool,
+) -> bool:
+    """判断路径是否位于快照根内，遍历目录时同时保留通向目标根的祖先。"""
+
+    if included_roots is None:
+        return True
+    try:
+        relative = path.relative_to(root).as_posix().strip("/")
+    except ValueError:
+        return False
+    if not relative:
+        return include_ancestors
+    return any(
+        relative == included
+        or relative.startswith(f"{included}/")
+        or (include_ancestors and included.startswith(f"{relative}/"))
+        for included in included_roots
+    )
 
 
 def _code_change_payload_from_snapshots(

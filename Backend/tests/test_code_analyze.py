@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from deepagents.backends.protocol import LsResult, ReadResult, WriteResult
+from deepagents.backends.protocol import GlobResult, LsResult, ReadResult, WriteResult
 
 from app.agents.code_analyze.analyzer import (
     REQUIRED_SKILL_PATHS,
@@ -20,8 +20,8 @@ from app.agents.code_analyze.scope import CodeAnalyzeScopedBackend, CodeReviewRe
 class CodeAnalyzeTests(unittest.TestCase):
     """验证代码审查 Agent 的目录边界和结果安全投影。"""
 
-    def test_scope_rejects_writes_and_out_of_scope_reads(self) -> None:
-        """审查后端拒绝所有写入，并拒绝源码目录之外的读取。"""
+    def test_scope_reads_frontend_project_but_rejects_dependencies(self) -> None:
+        """审查后端可读取前端项目文件，但拒绝依赖目录和所有写入。"""
 
         delegate = SimpleNamespace(
             ls=lambda *_args: LsResult(entries=[]),
@@ -30,25 +30,54 @@ class CodeAnalyzeTests(unittest.TestCase):
         )
         scoped = CodeAnalyzeScopedBackend(delegate)
 
-        self.assertEqual(scoped.ls("frontend").error, "code_analyze_path_denied: frontend")
+        self.assertIsNone(scoped.ls("frontend").error)
         self.assertIsNone(scoped.ls("frontend/src").error)
         self.assertIsNone(scoped.read("frontend/src/App.tsx").error)
-        self.assertEqual(scoped.read("frontend/package.json").error, "code_analyze_path_denied: frontend/package.json")
+        self.assertIsNone(scoped.read("frontend/package.json").error)
+        self.assertEqual(
+            scoped.read("frontend/node_modules/pkg/index.js").error,
+            "code_analyze_path_denied: frontend/node_modules/pkg/index.js",
+        )
+        self.assertEqual(
+            scoped.read("frontend/.env").error,
+            "code_analyze_path_denied: frontend/.env",
+        )
         self.assertEqual(scoped.write("frontend/src/App.tsx", "x").error, "code_analyze_write_denied")
+
+    def test_scope_filters_recursive_frontend_list_results(self) -> None:
+        """委托文件后端递归返回的依赖目录和敏感文件也不能暴露给扫描 Agent。"""
+
+        delegate = SimpleNamespace(
+            ls=lambda *_args: LsResult(
+                entries=[
+                    {"path": "/frontend/package.json", "is_dir": False},
+                    {"path": "/frontend/.env", "is_dir": False},
+                    {"path": "/frontend/node_modules/pkg", "is_dir": True},
+                ]
+            )
+        )
+        scoped = CodeAnalyzeScopedBackend(delegate)
+
+        result = scoped.ls("frontend")
+
+        self.assertEqual(
+            [item["path"] for item in result.entries or []],
+            ["/frontend/package.json"],
+        )
 
     def test_scope_allows_rooted_code_glob_but_not_workspace_glob(self) -> None:
         """无 base path 的 glob 也必须显式锚定到两个源码根目录。"""
 
         delegate = SimpleNamespace(
-            glob=lambda *_args: type("Glob", (), {"error": None})(),
+            glob=lambda *_args: GlobResult(matches=[]),
         )
         scoped = CodeAnalyzeScopedBackend(delegate)
 
         self.assertIsNone(scoped.glob("/frontend/src/**/*.tsx").error)
         self.assertIn("code_analyze_path_denied", scoped.glob("**/*.tsx").error or "")
 
-    def test_repair_scope_rejects_source_tests_and_out_of_scope_writes(self) -> None:
-        """修复 Agent 可以修改业务源码，但不能修改源码根内测试或工作区配置。"""
+    def test_repair_scope_allows_frontend_project_but_protects_generated_files(self) -> None:
+        """修复 Agent 可修改前端项目，但不能直接修改依赖目录或 lockfile。"""
 
         delegate = SimpleNamespace(
             write=lambda *_args: WriteResult(path="/frontend/src/App.tsx"),
@@ -57,17 +86,22 @@ class CodeAnalyzeTests(unittest.TestCase):
         scoped = CodeReviewRepairScopedBackend(delegate)
 
         self.assertIsNone(scoped.write("frontend/src/App.tsx", "x").error)
+        self.assertIsNone(scoped.write("frontend/src/__tests__/App.test.tsx", "x").error)
         self.assertEqual(
-            scoped.write("frontend/src/__tests__/App.test.tsx", "x").error,
-            "code_analyze_path_denied: frontend/src/__tests__/App.test.tsx",
+            scoped.write("frontend/pnpm-lock.yaml", "x").error,
+            "code_analyze_path_denied: frontend/pnpm-lock.yaml",
+        )
+        self.assertEqual(
+            scoped.write("frontend/node_modules/pkg/index.js", "x").error,
+            "code_analyze_path_denied: frontend/node_modules/pkg/index.js",
         )
         self.assertEqual(
             scoped.edit("backend/pom.xml", "old", "new").error,
             "code_analyze_path_denied: backend/pom.xml",
         )
 
-    def test_normalizer_deduplicates_and_marks_frontend_warning(self) -> None:
-        """后端问题去重与前端无规则 warning 必须稳定。"""
+    def test_normalizer_deduplicates_without_stale_frontend_warning(self) -> None:
+        """后端问题去重且当前前端规则不再投影占位 warning。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
@@ -81,7 +115,7 @@ class CodeAnalyzeTests(unittest.TestCase):
                     "targets": [
                         {
                             "side": "frontend",
-                            "root": "frontend/src",
+                            "root": "frontend",
                             "status": "completed",
                             "scanned_file_count": 2,
                         },
@@ -122,7 +156,7 @@ class CodeAnalyzeTests(unittest.TestCase):
         self.assertEqual(result["issue_count"], 1)
         self.assertEqual(result["issues"][0]["severity"], "high")
         self.assertEqual(result["targets"][0]["status"], "completed")
-        self.assertEqual(result["targets"][0]["warning"], "当前未配置扫描规则。")
+        self.assertIsNone(result["targets"][0]["warning"])
         self.assertEqual(result["targets"][1]["status"], "completed")
 
     def test_normalizer_marks_missing_target_as_skipped(self) -> None:
@@ -144,34 +178,71 @@ class CodeAnalyzeTests(unittest.TestCase):
         self.assertEqual(result["targets"][0]["warning"], "扫描目录不存在，已跳过。")
         self.assertEqual(result["targets"][1]["status"], "completed")
 
-    def test_normalizer_drops_frontend_issues_when_rules_are_unconfigured(self) -> None:
-        """前端 Skill 只有占位内容时不得投影任何前端问题。"""
+    def test_normalizer_accepts_frontend_dependency_issue_and_repair_action(self) -> None:
+        """前端依赖问题可指向 manifest，并保留有限 pnpm 修复动作。"""
 
         result = normalize_code_review_result(
             {
                 "status": "completed",
-                "summary": "发现前端问题",
+                "summary": "发现前端依赖问题",
                 "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
-                "targets": [],
+                "targets": [{"side": "frontend", "root": "frontend"}],
                 "issues": [
                     {
                         "side": "frontend",
-                        "rule_id": "MODEL-GUESS",
+                        "rule_id": "axios-version-risk",
                         "severity": "high",
-                        "title": "无规则问题",
-                        "summary": "不应展示",
-                        "file": "/outside/frontend-file.tsx",
+                        "title": "axios 版本风险",
+                        "summary": "需要按 Skill 修复。",
+                        "file": "/frontend/package.json",
+                        "repair_actions": ["pnpm_install"],
                     }
                 ],
             }
         )
 
-        self.assertEqual(result["issue_count"], 0)
-        self.assertEqual(result["issues"], [])
-        self.assertEqual(
-            result["summary"],
-            "代码审查完成，未发现需要处理的问题；当前未配置扫描规则。",
-        )
+        self.assertEqual(result["issue_count"], 1)
+        self.assertEqual(result["issues"][0]["file"], "frontend/package.json")
+        self.assertEqual(result["issues"][0]["repair_actions"], ["pnpm_install"])
+
+    def test_normalizer_rejects_unregistered_repair_action(self) -> None:
+        """Skill 输出不能借 repair_actions 扩展为任意命令权限。"""
+
+        with self.assertRaisesRegex(ValueError, "未授权的修复动作"):
+            normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "issues": [
+                        {
+                            "side": "frontend",
+                            "title": "试图执行任意命令",
+                            "summary": "不应接受",
+                            "file": "frontend/package.json",
+                            "repair_actions": ["execute_shell"],
+                        }
+                    ],
+                }
+            )
+
+    def test_normalizer_rejects_frontend_node_modules_issue(self) -> None:
+        """任何 node_modules 问题路径都不能进入公开扫描结果。"""
+
+        with self.assertRaisesRegex(ValueError, "越界源码路径"):
+            normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "issues": [
+                        {
+                            "side": "frontend",
+                            "title": "越界依赖文件",
+                            "summary": "不应展示",
+                            "file": "frontend/node_modules/pkg/index.js",
+                        }
+                    ],
+                }
+            )
 
     def test_normalizer_accepts_logged_skill_and_target_shapes(self) -> None:
         """运行日志中的 Skill 文件对象和按端目标对象应归一为公开审查结构。"""
@@ -201,21 +272,13 @@ class CodeAnalyzeTests(unittest.TestCase):
                         },
                     ],
                     "targets": {
-                        "frontend": {"root": "/frontend/src", "file_count": 30},
+                        "frontend": {"root": "/frontend", "file_count": 30},
                         "backend": {
                             "root": "/backend/src/main/java",
                             "file_count": 17,
                         },
                     },
-                    "issues": [
-                        {
-                            "side": "frontend",
-                            "path": "frontend-code-scan/SKILL.md",
-                            "severity": "low",
-                            "title": "规则未配置",
-                            "summary": "不应作为问题展示",
-                        }
-                    ],
+                    "issues": [],
                 },
                 workspace=workspace,
             )
@@ -311,7 +374,7 @@ class CodeAnalyzeTests(unittest.TestCase):
                 workspace=workspace,
             )
 
-        self.assertEqual(result["targets"][0]["root"], "frontend/src")
+        self.assertEqual(result["targets"][0]["root"], "frontend")
         self.assertEqual(result["targets"][0]["scanned_file_count"], 0)
         self.assertEqual(result["targets"][1]["root"], "backend/src/main/java")
         self.assertEqual(result["targets"][1]["scanned_file_count"], 17)

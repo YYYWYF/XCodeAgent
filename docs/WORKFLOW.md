@@ -44,7 +44,7 @@ START
           │   → review_phase_confirmation //测试阶段内的审查确认门
           │       ├─ 首次进入 → requires_user_input，返回“测试已通过，是否进入审查阶段？”
           │       └─ 用户 confirm → 新建审查会话并进入 code_review
-          │           → 只读扫描 frontend/src 与 backend/src/main/java
+          │           → 只读扫描安全 frontend/** 与 backend/src/main/java
           │           → acceptance_phase_confirmation //审查完成后的验收阶段确认门
           │               ├─ 首次进入 → requires_user_input，返回“进入验收阶段”确认卡
           │               └─ 用户 confirm → 新建验收会话并进入 acceptance 子图
@@ -507,10 +507,16 @@ code_scan
 ```
 
 首次进入只执行一次只读 `CodeAnalyzeAgent` 扫描；恢复 `repair_all` 时直接使用持久化的前 100 条问题，
-不重新扫描。前端没有配置规则时不读取 `frontend/src`，目标标记为已跳过并显示 warning，不生成前端问题。
-修复由独立 `CodeReviewRepairAgent` 完成，只能读写 `frontend/src/**` 与
-`backend/src/main/java/**`，禁止修改配置、依赖、测试、工件或执行命令。修复后由独立的
-`review_build_checks` 执行前端依赖安装、前端 Build 和后端 Build；它不复用测试阶段结果、日志或修复预算。
+不重新扫描。前端 Skill 有规则时可读取整个 `frontend/**` 项目范围，但所有文件工具和结果归一化都确定性排除
+`node_modules` 与敏感文件；前端扫描目标固定为 `frontend`。问题可声明有限的内部 `repair_actions`，当前只支持
+`pnpm_install`，且不进入 AG-UI 公开问题结构。
+修复由独立 `CodeReviewRepairAgent` 完成，可读写除 `node_modules`、敏感文件和手工 lockfile 写入之外的
+`frontend/**`，后端仍限于非测试的 `backend/src/main/java/**`。当 Skill 要求 `pnpm_install` 时，Agent 必须先修改
+`package.json`，再调用无参数、固定 `frontend` cwd 和固定 `pnpm install` argv 的专用工具；工具使用非 shell 子进程，
+生成 `pnpm-lock.yaml`、更新 `node_modules` 并保存结构化日志证据。工作区 Diff 捕获 package、lockfile 和其他项目文件，
+始终忽略 `node_modules`；缺少真实成功证据或未生成 lockfile 时修复失败。修复后由独立的
+`review_build_checks` 复用已验证的安装证据，只执行前端 Build 和后端 Build；没有安装动作时继续执行既有前端安装检查。
+它不复用测试阶段结果、日志或修复预算。
 构建证据最多回传三轮，耗尽后进入 `handle_failure`，不会启动项目。构建通过后保留原始审查问题、修复摘要和
 构建检查结果，再进入 `acceptance_phase_confirmation`；只有用户确认后才创建验收会话并运行验收子图。
 

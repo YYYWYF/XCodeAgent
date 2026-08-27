@@ -152,14 +152,22 @@ def create_workspace_permissions(
         return permissions
 
     if mode == "code_analyze":
-        # 代码审查只允许读取两端业务源码和强制加载的内置扫描 Skill。
+        # 代码审查允许读取前端项目文件和后端业务源码，但永不暴露依赖目录。
         permissions.extend(
             [
                 FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=[
+                        "/frontend/node_modules",
+                        "/frontend/node_modules/**",
+                    ],
+                    mode="deny",
+                ),
+                FilesystemPermission(
                     operations=["read"],
                     paths=[
-                        "/frontend/src",
-                        "/frontend/src/**",
+                        "/frontend",
+                        "/frontend/**",
                         "/backend/src/main/java",
                         "/backend/src/main/java/**",
                     ],
@@ -175,14 +183,27 @@ def create_workspace_permissions(
         return permissions
 
     if mode == "code_review_repair":
-        # 审查修复只能修改两端业务源码；配置、测试、构建产物和工作流文件全部拒绝。
+        # 审查修复可处理前端项目文件；依赖目录和 lockfile 仍由专用 pnpm 工具独占。
         permissions.extend(
             [
                 FilesystemPermission(
                     operations=["read", "write"],
                     paths=[
-                        "/frontend/src",
-                        "/frontend/src/**",
+                        "/frontend/node_modules",
+                        "/frontend/node_modules/**",
+                    ],
+                    mode="deny",
+                ),
+                FilesystemPermission(
+                    operations=["write"],
+                    paths=["/frontend/pnpm-lock.yaml"],
+                    mode="deny",
+                ),
+                FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=[
+                        "/frontend",
+                        "/frontend/**",
                         "/backend/src/main/java",
                         "/backend/src/main/java/**",
                     ],

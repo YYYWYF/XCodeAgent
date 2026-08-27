@@ -11,13 +11,27 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from app.agents.code_analyze.scope import CodeReviewRepairScopedBackend
 from app.agents.workspace_scope import create_workspace_backend, create_workspace_permissions
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
+from app.tools.code_review_pnpm import (
+    PNPM_INSTALL_TOOL_NAME,
+    create_code_review_pnpm_install_tool,
+)
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
 class CodeReviewRepairMiddleware(AgentMiddleware):
-    """从默认 DeepAgent 工具中移除命令、委派和任务编排能力。"""
+    """从默认 DeepAgent 工具中移除通用命令、委派和任务编排能力。"""
 
-    _ALLOWED_TOOLS = frozenset({"ls", "read_file", "glob", "grep", "write_file", "edit_file"})
+    _ALLOWED_TOOLS = frozenset(
+        {
+            "ls",
+            "read_file",
+            "glob",
+            "grep",
+            "write_file",
+            "edit_file",
+            PNPM_INSTALL_TOOL_NAME,
+        }
+    )
 
     def wrap_model_call(
         self,
@@ -39,19 +53,22 @@ class CodeReviewRepairMiddleware(AgentMiddleware):
 
 
 def create_code_review_repair_agent(model, workspace_root: str | None = None):
-    """创建只能修改前后端业务源码的审查修复 Agent。"""
+    """创建按 Skill 修复前端项目和后端业务源码的受限 Agent。"""
 
     system_prompt = (
         "You are the CodeReviewRepairAgent. The user has explicitly chosen one-click repair "
         "for the bounded findings supplied in the current packet. Read both scan Skill entry "
         "documents and the backend rules reference before editing. Apply every supplied finding, "
         "including high-risk rules, but preserve existing APIs and project conventions; never "
-        "invent error codes, dependencies, or business semantics. You may read and edit only "
-        "/frontend/src/** and /backend/src/main/java/**. You may create a new source file inside "
-        "those roots when a rule requires it. Never read or modify package manifests, lockfiles, "
-        "pom.xml, configuration, tests, generated output, workflow artifacts, secrets, or any "
-        "other path. Do not execute commands, use task or todo tools, delegate work, or run builds; "
-        "the workflow performs deterministic build checks after you finish. Keep method signatures "
+        "invent error codes, dependencies, or business semantics. You may read and edit safe files "
+        "under /frontend/** and non-test business source under /backend/src/main/java/**. Never read "
+        "or modify node_modules, sensitive files, backend configuration/tests, workflow artifacts, "
+        "or any other path. Never edit /frontend/pnpm-lock.yaml with file tools. When an issue has "
+        "repair_actions=[\"pnpm_install\"], first apply the Skill remediation to package.json and "
+        "then call pnpm_install_frontend exactly once; that tool alone regenerates the lockfile. "
+        "Do not call it for issues without that repair action. Do not use task/todo tools, delegate "
+        "work, or run builds; the workflow performs deterministic build checks after you finish. "
+        "Keep method signatures "
         "and behavior stable unless the finding requires the smallest safe change. If a high-risk "
         "finding cannot be fixed safely from existing source evidence, return failed instead of "
         "guessing. Return exactly one JSON object with status, summary, attempted_issue_ids, "
@@ -62,11 +79,13 @@ def create_code_review_repair_agent(model, workspace_root: str | None = None):
     backend = CodeReviewRepairScopedBackend(
         create_workspace_backend(workspace_root, include_builtin_skills=True)
     )
+    pnpm_install_tool = create_code_review_pnpm_install_tool(workspace_root)
     return create_deep_agent(
         name="code-review-repair-agent",
         model=model,
         system_prompt=system_prompt,
         middleware=[CodeReviewRepairMiddleware()],
+        tools=[pnpm_install_tool],
         skills=[
             f"{BUILTIN_SKILLS_VIRTUAL_ROOT}frontend-code-scan/",
             f"{BUILTIN_SKILLS_VIRTUAL_ROOT}backend-code-scan/",

@@ -200,8 +200,8 @@ class WorkspaceScopeTests(unittest.TestCase):
             self.assertEqual(_check_fs_permission(permissions, "read", "/data.json"), "allow")
             self.assertEqual(_check_fs_permission(permissions, "write", "/data.json"), "deny")
 
-    def test_code_review_repair_permissions_allow_only_business_source(self) -> None:
-        """代码审查修复权限只允许两端业务源码和内置扫描 Skill。"""
+    def test_code_review_repair_permissions_allow_frontend_project_without_dependencies(self) -> None:
+        """代码审查修复允许前端项目文件，但拒绝依赖目录和手工 lockfile 写入。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             permissions = create_workspace_permissions(
@@ -217,6 +217,30 @@ class WorkspaceScopeTests(unittest.TestCase):
             self.assertEqual(
                 _check_fs_permission(permissions, "write", "/backend/src/main/java/App.java"),
                 "allow",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "read", "/frontend/package.json"),
+                "allow",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "write", "/frontend/package.json"),
+                "allow",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "read", "/frontend/pnpm-lock.yaml"),
+                "allow",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "write", "/frontend/pnpm-lock.yaml"),
+                "deny",
+            )
+            self.assertEqual(
+                _check_fs_permission(
+                    permissions,
+                    "read",
+                    "/frontend/node_modules/pkg/index.js",
+                ),
+                "deny",
             )
             self.assertEqual(
                 _check_fs_permission(permissions, "read", "/backend/src/test/java/AppTest.java"),

@@ -17,10 +17,12 @@ from deepagents.backends.protocol import (
     ReadResult,
     WriteResult,
 )
+from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
 
-_CODE_ROOTS = ("frontend/src", "backend/src/main/java")
-_LIST_ROOTS = _CODE_ROOTS
+_FRONTEND_ROOT = "frontend"
+_BACKEND_ROOT = "backend/src/main/java"
+_CODE_ROOTS = (_FRONTEND_ROOT, _BACKEND_ROOT)
 _SKILL_FILES = {
     ".xcodeagent/builtin-skills/frontend-code-scan/SKILL.md",
     ".xcodeagent/builtin-skills/backend-code-scan/SKILL.md",
@@ -43,22 +45,22 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
     def ls(self, path: str) -> LsResult:
         """仅允许浏览源码目录及内置 Skill 目录。"""
 
-        return self._delegate.ls(path) if _is_list_path(path) else LsResult(error=_denied(path))
+        return _filter_ls_result(self._delegate.ls(path)) if _is_list_path(path) else LsResult(error=_denied(path))
 
     async def als(self, path: str) -> LsResult:
         """异步仅允许浏览源码目录及内置 Skill 目录。"""
 
-        return await self._delegate.als(path) if _is_list_path(path) else LsResult(error=_denied(path))
+        return _filter_ls_result(await self._delegate.als(path)) if _is_list_path(path) else LsResult(error=_denied(path))
 
     def ls_info(self, path: str) -> list[FileInfo]:
         """仅允许读取源码和内置 Skill 目录的元数据。"""
 
-        return self._delegate.ls_info(path) if _is_list_path(path) else []
+        return _filter_file_infos(self._delegate.ls_info(path)) if _is_list_path(path) else []
 
     async def als_info(self, path: str) -> list[FileInfo]:
         """异步仅允许读取源码和内置 Skill 目录的元数据。"""
 
-        return await self._delegate.als_info(path) if _is_list_path(path) else []
+        return _filter_file_infos(await self._delegate.als_info(path)) if _is_list_path(path) else []
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2_000) -> ReadResult:
         """仅允许读取两端源码和三个必需 Skill 文件。"""
@@ -87,7 +89,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
         """禁止无路径全工作区搜索，只允许在两个源码根目录内搜索。"""
 
         return (
-            self._delegate.grep(pattern, path, glob)
+            _filter_grep_result(self._delegate.grep(pattern, path, glob))
             if _is_code_path(path)
             else GrepResult(error=_denied(path or "workspace"))
         )
@@ -101,7 +103,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
         """异步禁止无路径全工作区搜索，只允许在两个源码根目录内搜索。"""
 
         return (
-            await self._delegate.agrep(pattern, path, glob)
+            _filter_grep_result(await self._delegate.agrep(pattern, path, glob))
             if _is_code_path(path)
             else GrepResult(error=_denied(path or "workspace"))
         )
@@ -114,7 +116,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
     ) -> list[Any] | str:
         """禁止无路径原始搜索，只允许在两个源码根目录内搜索。"""
 
-        return self._delegate.grep_raw(pattern, path, glob) if _is_code_path(path) else _denied(path)
+        return _filter_raw_matches(self._delegate.grep_raw(pattern, path, glob)) if _is_code_path(path) else _denied(path)
 
     async def agrep_raw(
         self,
@@ -125,7 +127,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
         """异步禁止无路径原始搜索，只允许在两个源码根目录内搜索。"""
 
         return (
-            await self._delegate.agrep_raw(pattern, path, glob)
+            _filter_raw_matches(await self._delegate.agrep_raw(pattern, path, glob))
             if _is_code_path(path)
             else _denied(path)
         )
@@ -134,7 +136,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
         """禁止无路径全工作区匹配，只允许在两个源码根目录内匹配。"""
 
         return (
-            self._delegate.glob(pattern, path)
+            _filter_glob_result(self._delegate.glob(pattern, path))
             if _is_code_path(path) or (path is None and _is_code_pattern(pattern))
             else GlobResult(error=_denied(path or "workspace"))
         )
@@ -143,7 +145,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
         """异步禁止无路径全工作区匹配，只允许在两个源码根目录内匹配。"""
 
         return (
-            await self._delegate.aglob(pattern, path)
+            _filter_glob_result(await self._delegate.aglob(pattern, path))
             if _is_code_path(path) or (path is None and _is_code_pattern(pattern))
             else GlobResult(error=_denied(path or "workspace"))
         )
@@ -152,7 +154,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
         """仅允许在两个源码根目录内读取匹配元数据。"""
 
         return (
-            self._delegate.glob_info(pattern, path)
+            _filter_file_infos(self._delegate.glob_info(pattern, path))
             if _is_code_path(path) or (path == "/" and _is_code_pattern(pattern))
             else []
         )
@@ -161,7 +163,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
         """异步仅允许在两个源码根目录内读取匹配元数据。"""
 
         return (
-            await self._delegate.aglob_info(pattern, path)
+            _filter_file_infos(await self._delegate.aglob_info(pattern, path))
             if _is_code_path(path) or (path == "/" and _is_code_pattern(pattern))
             else []
         )
@@ -241,10 +243,10 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
 
 
 class CodeReviewRepairScopedBackend(CodeAnalyzeScopedBackend):
-    """在审查读取边界内允许修复 Agent 修改两端业务源码。"""
+    """在审查读取边界内允许修复 Agent 修改授权项目文件。"""
 
     def write(self, file_path: str, content: str) -> WriteResult:
-        """只允许写入 frontend/src 或 backend/src/main/java。"""
+        """只允许写入安全前端文件或后端业务源码。"""
 
         return (
             self._delegate.write(file_path, content)
@@ -253,7 +255,7 @@ class CodeReviewRepairScopedBackend(CodeAnalyzeScopedBackend):
         )
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
-        """异步只允许写入 frontend/src 或 backend/src/main/java。"""
+        """异步只允许写入安全前端文件或后端业务源码。"""
 
         return (
             await self._delegate.awrite(file_path, content)
@@ -268,7 +270,7 @@ class CodeReviewRepairScopedBackend(CodeAnalyzeScopedBackend):
         new_string: str,
         replace_all: bool = False,
     ) -> EditResult:
-        """只允许编辑两个业务源码根目录内的文件。"""
+        """只允许编辑安全前端文件或后端业务源码。"""
 
         return (
             self._delegate.edit(file_path, old_string, new_string, replace_all)
@@ -336,18 +338,27 @@ def is_code_analyze_read_path(value: Any) -> bool:
     return _is_read_path(path)
 
 
-def _is_code_path(value: Any) -> bool:
-    """判断路径是否落在两个源码根目录内。"""
+def is_code_review_change_path(value: Any) -> bool:
+    """判断真实审查修复 Diff 是否位于授权范围，包含 pnpm 生成的锁文件。"""
 
     path = normalize_virtual_path(value)
-    return bool(path) and any(path == root or path.startswith(f"{root}/") for root in _CODE_ROOTS)
+    return _is_safe_frontend_path(path) or _is_backend_source_path(path)
+
+
+def _is_code_path(value: Any) -> bool:
+    """判断路径是否落在安全前端范围或后端源码根目录内。"""
+
+    path = normalize_virtual_path(value)
+    return _is_safe_frontend_path(path) or _is_backend_source_path(path)
 
 
 def _is_repair_write_path(value: Any) -> bool:
-    """判断修复 Agent 是否可以修改路径，明确排除源码根内的测试文件。"""
+    """判断修复 Agent 是否可以修改路径，并保留 lockfile 的工具专属写入。"""
 
     path = normalize_virtual_path(value)
-    if not _is_code_path(path):
+    if _is_safe_frontend_path(path):
+        return path != "frontend/pnpm-lock.yaml"
+    if not _is_backend_source_path(path):
         return False
     parts = PurePosixPath(path).parts
     if any(part.casefold() in {"test", "tests", "__tests__", "spec", "specs"} for part in parts):
@@ -360,16 +371,16 @@ def _is_repair_write_path(value: Any) -> bool:
 
 
 def _is_code_pattern(value: Any) -> bool:
-    """判断不带 base path 的 glob 模式是否显式锚定到源码目录。"""
+    """判断不带 base path 的 glob 模式是否显式锚定到授权目录。"""
 
     pattern = str(value or "").strip().replace("\\", "/").lstrip("/")
     if not pattern or ".." in PurePosixPath(pattern).parts:
         return False
-    return any(pattern.startswith(f"{root}/") for root in _CODE_ROOTS)
+    return _is_safe_frontend_path(pattern) or _is_backend_source_path(pattern)
 
 
 def _is_read_path(value: Any) -> bool:
-    """判断路径是否属于源码目录或固定内置 Skill 文件。"""
+    """判断路径是否属于授权项目目录或固定内置 Skill 文件。"""
 
     path = normalize_virtual_path(value)
     return _is_code_path(path) or path in _SKILL_FILES
@@ -379,7 +390,75 @@ def _is_list_path(value: Any) -> bool:
     """判断目录列表请求是否只触及允许的目录元数据。"""
 
     path = normalize_virtual_path(value)
-    return path in _LIST_ROOTS or path in _SKILL_LIST_ROOTS
+    return _is_code_path(path) or path in _SKILL_LIST_ROOTS
+
+
+def _is_safe_frontend_path(value: Any) -> bool:
+    """允许 frontend 全目录，但拒绝依赖目录、敏感文件和穿越路径。"""
+
+    path = normalize_virtual_path(value)
+    if not path or not (path == _FRONTEND_ROOT or path.startswith(f"{_FRONTEND_ROOT}/")):
+        return False
+    parts = PurePosixPath(path).parts
+    return not any(part.casefold() == "node_modules" for part in parts) and not any(
+        part in SENSITIVE_FILE_NAMES for part in parts
+    )
+
+
+def _is_backend_source_path(value: Any) -> bool:
+    """判断路径是否位于固定后端业务源码根。"""
+
+    path = normalize_virtual_path(value)
+    return bool(path) and (path == _BACKEND_ROOT or path.startswith(f"{_BACKEND_ROOT}/"))
+
+
+def _safe_result_path(value: Any) -> bool:
+    """过滤委托后端可能递归返回的 node_modules 或敏感路径。"""
+
+    path = normalize_virtual_path(value)
+    return not path.startswith("frontend/") or _is_safe_frontend_path(path)
+
+
+def _filter_file_infos(values: list[FileInfo]) -> list[FileInfo]:
+    """从文件元数据列表移除不允许暴露的前端路径。"""
+
+    return [item for item in values if _safe_result_path(item.get("path"))]
+
+
+def _filter_ls_result(result: LsResult) -> LsResult:
+    """过滤目录列表中的依赖目录和敏感文件。"""
+
+    if result.entries is not None:
+        result.entries = _filter_file_infos(result.entries)
+    return result
+
+
+def _filter_grep_result(result: GrepResult) -> GrepResult:
+    """过滤文本搜索结果中的依赖目录和敏感文件。"""
+
+    if result.matches is not None:
+        result.matches = [item for item in result.matches if _safe_result_path(item.get("path"))]
+    return result
+
+
+def _filter_glob_result(result: GlobResult) -> GlobResult:
+    """过滤文件匹配结果中的依赖目录和敏感文件。"""
+
+    if result.matches is not None:
+        result.matches = _filter_file_infos(result.matches)
+    return result
+
+
+def _filter_raw_matches(value: list[Any] | str) -> list[Any] | str:
+    """过滤原始搜索结果中的依赖目录和敏感文件。"""
+
+    if not isinstance(value, list):
+        return value
+    return [
+        item
+        for item in value
+        if not isinstance(item, dict) or _safe_result_path(item.get("path"))
+    ]
 
 
 def _denied(value: Any) -> str:

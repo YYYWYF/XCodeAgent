@@ -61,6 +61,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 side_effect=lambda model, **kwargs: ("code_analyze", kwargs),
             ),
             patch(
+                "app.agents.registry.create_code_review_repair_agent",
+                side_effect=lambda model, **kwargs: ("code_review_repair", kwargs),
+            ),
+            patch(
                 "app.agents.registry.create_frontend_agent",
                 side_effect=lambda model, **kwargs: ("frontend", kwargs),
             ) as frontend_factory,
@@ -136,6 +140,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             patch(
                 "app.agents.registry.create_code_analyze_agent",
                 side_effect=lambda model, **kwargs: ("code_analyze", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_code_review_repair_agent",
+                side_effect=lambda model, **kwargs: ("code_review_repair", kwargs),
             ),
             patch(
                 "app.agents.registry.create_frontend_agent",
@@ -217,6 +225,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             patch(
                 "app.agents.registry.create_code_analyze_agent",
                 side_effect=lambda model, **kwargs: ("code_analyze", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_code_review_repair_agent",
+                side_effect=lambda model, **kwargs: ("code_review_repair", kwargs),
             ),
             patch(
                 "app.agents.registry.create_frontend_agent",

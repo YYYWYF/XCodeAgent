@@ -30,10 +30,10 @@ def _scan_result(*, issues: list[dict] | None = None) -> dict:
         "targets": [
             {
                 "side": "frontend",
-                "root": "frontend/src",
+                "root": "frontend",
                 "status": "completed",
                 "scanned_file_count": 0,
-                "warning": "当前未配置扫描规则。",
+                "warning": None,
             },
             {
                 "side": "backend",
@@ -58,6 +58,22 @@ def _issue() -> dict:
         "summary": "调用连接 API 前需要设置超时。",
         "file": "backend/src/main/java/PersonController.java",
         "line": 69,
+    }
+
+
+def _frontend_dependency_issue() -> dict:
+    """构造一个要求修复 Agent 执行 pnpm install 的前端依赖问题。"""
+
+    return {
+        "id": "axios-version-risk-1",
+        "side": "frontend",
+        "rule_id": "axios-version-risk",
+        "severity": "high",
+        "title": "axios 版本风险",
+        "summary": "按前端 Skill 更新依赖并执行 pnpm install。",
+        "file": "frontend/package.json",
+        "line": 12,
+        "repair_actions": ["pnpm_install"],
     }
 
 
@@ -191,6 +207,227 @@ class CodeReviewSubgraphTests(unittest.TestCase):
         self.assertEqual(result["code_review_next_action"], "handle_failure")
         self.assertIn("越界", result["error"])
 
+    def test_frontend_dependency_repair_requires_successful_pnpm_evidence(self) -> None:
+        """依赖问题缺少专用 pnpm 成功证据时必须阻断修复。"""
+
+        issue = _frontend_dependency_issue()
+        captured = CapturedWorkspaceChanges(
+            value={
+                "agent_output": {
+                    "status": "completed",
+                    "summary": "已修改 package.json。",
+                    "attempted_issue_ids": [issue["id"]],
+                    "changed_files": ["frontend/package.json"],
+                    "failure_reason": None,
+                },
+                "pnpm_install_call_count": 0,
+                "pnpm_install_called": False,
+                "pnpm_install_completed": False,
+                "pnpm_install_failed": False,
+                "pnpm_install": None,
+            },
+            code_change_set={
+                "id": "code-change-set:missing-install",
+                "status": "applied",
+                "files": [
+                    {"path": "frontend/package.json", "changeType": "modified"}
+                ],
+            },
+        )
+        state = {
+            "workspace": tempfile.mkdtemp(),
+            "status": "requires_user_input",
+            "code_review_result": _scan_result(issues=[issue]),
+            "code_review_repair_iteration": 0,
+            "code_review_max_repair_iterations": 3,
+        }
+        with patch(
+            "app.graph.subgraphs.code_review.capture_agent_file_changes",
+            return_value=captured,
+        ):
+            result = code_review_repair(state)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("pnpm install", result["error"])
+
+    def test_frontend_dependency_repair_rejects_failed_pnpm_call(self) -> None:
+        """专用 pnpm 工具被调用但执行失败时不能接受 Agent 的 completed 声明。"""
+
+        issue = _frontend_dependency_issue()
+        captured = CapturedWorkspaceChanges(
+            value={
+                "agent_output": {
+                    "status": "completed",
+                    "summary": "安装失败但仍声明完成。",
+                    "attempted_issue_ids": [issue["id"]],
+                    "changed_files": ["frontend/package.json"],
+                    "failure_reason": None,
+                },
+                "pnpm_install_call_count": 1,
+                "pnpm_install_called": True,
+                "pnpm_install_completed": False,
+                "pnpm_install_failed": True,
+                "pnpm_install": {
+                    "execution_id": "install-failed",
+                    "status": "failed",
+                    "exit_code": 1,
+                    "timed_out": False,
+                    "command": ["pnpm", "install"],
+                    "cwd": "frontend",
+                },
+            },
+            code_change_set={
+                "id": "code-change-set:failed-install",
+                "status": "applied",
+                "files": [
+                    {"path": "frontend/package.json", "changeType": "modified"}
+                ],
+            },
+        )
+        state = {
+            "workspace": tempfile.mkdtemp(),
+            "status": "requires_user_input",
+            "code_review_result": _scan_result(issues=[issue]),
+            "code_review_repair_iteration": 0,
+            "code_review_max_repair_iterations": 3,
+        }
+        with patch(
+            "app.graph.subgraphs.code_review.capture_agent_file_changes",
+            return_value=captured,
+        ):
+            result = code_review_repair(state)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("成功执行证据", result["error"])
+
+    def test_frontend_dependency_repair_accepts_generated_lockfile(self) -> None:
+        """专用 pnpm 工具成功后应接受 package 与 lockfile 的真实 Diff。"""
+
+        issue = _frontend_dependency_issue()
+        evidence = {
+            "execution_id": "install-1",
+            "status": "passed",
+            "exit_code": 0,
+            "timed_out": False,
+            "command": ["pnpm", "install"],
+            "cwd": "frontend",
+            "stdout_log": ".xcodeagent/runtime/code-review/pnpm-install/install-1/stdout.log",
+            "stderr_log": ".xcodeagent/runtime/code-review/pnpm-install/install-1/stderr.log",
+            "stdout_tail": "done",
+            "stderr_tail": "",
+        }
+        captured = CapturedWorkspaceChanges(
+            value={
+                "agent_output": {
+                    "status": "completed",
+                    "summary": "已按 Skill 更新依赖。",
+                    "attempted_issue_ids": [issue["id"]],
+                    "changed_files": [
+                        "frontend/package.json",
+                        "frontend/pnpm-lock.yaml",
+                    ],
+                    "failure_reason": None,
+                },
+                "pnpm_install_call_count": 1,
+                "pnpm_install_called": True,
+                "pnpm_install_completed": True,
+                "pnpm_install_failed": False,
+                "pnpm_install": evidence,
+            },
+            code_change_set={
+                "id": "code-change-set:dependency",
+                "status": "applied",
+                "files": [
+                    {"path": "frontend/package.json", "changeType": "modified"},
+                    {"path": "frontend/pnpm-lock.yaml", "changeType": "modified"},
+                ],
+            },
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "frontend"
+            frontend.mkdir()
+            (frontend / "pnpm-lock.yaml").write_text("lockfileVersion: '6.0'", encoding="utf-8")
+            state = {
+                "workspace": workspace,
+                "status": "requires_user_input",
+                "code_review_result": _scan_result(issues=[issue]),
+                "code_review_repair_iteration": 0,
+                "code_review_max_repair_iterations": 3,
+            }
+            with patch(
+                "app.graph.subgraphs.code_review.capture_agent_file_changes",
+                return_value=captured,
+            ):
+                result = code_review_repair(state)
+
+        self.assertEqual(result["status"], "in_progress")
+        self.assertEqual(
+            result["code_review_repair_result"]["package_install"]["status"],
+            "passed",
+        )
+        self.assertIn(
+            "frontend/pnpm-lock.yaml",
+            result["code_review_repair_result"]["changed_files"],
+        )
+
+    def test_frontend_dependency_repair_rejects_multiple_pnpm_calls(self) -> None:
+        """依赖规则即使最终成功，调用专用 pnpm 工具超过一次也必须失败。"""
+
+        issue = _frontend_dependency_issue()
+        captured = CapturedWorkspaceChanges(
+            value={
+                "agent_output": {
+                    "status": "completed",
+                    "summary": "重复执行了安装。",
+                    "attempted_issue_ids": [issue["id"]],
+                    "changed_files": [
+                        "frontend/package.json",
+                        "frontend/pnpm-lock.yaml",
+                    ],
+                    "failure_reason": None,
+                },
+                "pnpm_install_call_count": 2,
+                "pnpm_install_called": True,
+                "pnpm_install_completed": True,
+                "pnpm_install_failed": False,
+                "pnpm_install": {
+                    "execution_id": "install-2",
+                    "status": "passed",
+                    "exit_code": 0,
+                    "timed_out": False,
+                    "command": ["pnpm", "install"],
+                    "cwd": "frontend",
+                },
+            },
+            code_change_set={
+                "id": "code-change-set:repeated-install",
+                "status": "applied",
+                "files": [
+                    {"path": "frontend/package.json", "changeType": "modified"},
+                    {"path": "frontend/pnpm-lock.yaml", "changeType": "modified"},
+                ],
+            },
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "frontend"
+            frontend.mkdir()
+            (frontend / "pnpm-lock.yaml").write_text("lockfileVersion: '6.0'", encoding="utf-8")
+            state = {
+                "workspace": workspace,
+                "status": "requires_user_input",
+                "code_review_result": _scan_result(issues=[issue]),
+                "code_review_repair_iteration": 0,
+                "code_review_max_repair_iterations": 3,
+            }
+            with patch(
+                "app.graph.subgraphs.code_review.capture_agent_file_changes",
+                return_value=captured,
+            ):
+                result = code_review_repair(state)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("恰好执行一次", result["error"])
+
     def test_repair_node_reports_building_until_checks_finish(self) -> None:
         """修复产生真实 Diff 后必须进入 building，不能在构建前提前标记完成。"""
 
@@ -322,6 +559,62 @@ class CodeReviewSubgraphTests(unittest.TestCase):
         self.assertEqual(result["code_review_repair_status"], "repairing")
         self.assertEqual(result["code_review_next_action"], "code_review_repair")
         self.assertNotEqual(result["code_review_next_action"], "launch_project")
+
+    def test_review_build_reuses_agent_pnpm_install_evidence(self) -> None:
+        """构建检查应复用修复 Agent 的成功安装证据，避免重复安装。"""
+
+        evidence = {
+            "status": "passed",
+            "exit_code": 0,
+            "command": ["pnpm", "install"],
+            "cwd": "frontend",
+            "stdout_log": ".xcodeagent/runtime/code-review/pnpm-install/run/stdout.log",
+            "stderr_log": ".xcodeagent/runtime/code-review/pnpm-install/run/stderr.log",
+            "stdout_tail": "done",
+            "stderr_tail": "",
+        }
+        with patch(
+            "app.graph.subgraphs.code_review.run_integration_checks",
+            return_value={
+                "test_results": [
+                    {
+                        "id": "frontend_install",
+                        "name": "前端依赖安装检查",
+                        "passed": True,
+                        "required": True,
+                    },
+                    {
+                        "id": "frontend_build",
+                        "name": "前端构建检查",
+                        "passed": True,
+                        "required": True,
+                    },
+                    {
+                        "id": "backend_build",
+                        "name": "后端构建检查",
+                        "passed": True,
+                        "required": True,
+                    },
+                ]
+            },
+        ) as checks:
+            result = review_build_checks(
+                {
+                    "workspace": tempfile.mkdtemp(),
+                    "code_review_result": _scan_result(issues=[_frontend_dependency_issue()]),
+                    "code_review_repair_iteration": 1,
+                    "code_review_max_repair_iterations": 3,
+                    "code_review_repair_result": {
+                        "status": "building",
+                        "package_install": evidence,
+                    },
+                }
+            )
+
+        self.assertEqual(result["status"], "completed")
+        supplied = checks.call_args.kwargs["frontend_install_result"]
+        self.assertEqual(supplied["id"], "frontend_install")
+        self.assertEqual(supplied["execution"]["tool"], "pnpm_install_frontend")
 
 
 if __name__ == "__main__":

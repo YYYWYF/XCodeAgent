@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from langgraph.config import get_stream_writer
@@ -13,6 +13,7 @@ from app.agents.code_review_repair import (
     invoke_code_review_repair_agent,
     normalize_code_review_repair_result,
 )
+from app.agents.code_analyze.scope import is_code_review_change_path
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.services.integration_test_runner import run_integration_checks
@@ -25,7 +26,14 @@ CODE_REVIEW_REPAIR_ACTION = "repair_all"
 CODE_REVIEW_REPAIR_EVENT_TYPE = "code_review.repair"
 CODE_REVIEW_BUILD_EVENT_TYPE = "code_review.build_checks"
 MAX_CODE_REVIEW_REPAIR_ITERATIONS = 3
-_CODE_ROOTS = ("frontend/src", "backend/src/main/java")
+_CODE_REVIEW_CAPTURE_IGNORED_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".xcodeagent",
+    "node_modules",
+}
+_CODE_REVIEW_CAPTURE_ROOTS = ("frontend", "backend/src/main/java")
 _REVIEW_BUILD_CHECKS = (
     ("frontend_install", "前端依赖安装检查", "frontend"),
     ("frontend_build", "前端构建检查", "frontend"),
@@ -72,14 +80,29 @@ def _max_repair_attempts(state: ProjectState) -> int:
     return max(1, min(value, MAX_CODE_REVIEW_REPAIR_ITERATIONS))
 
 
-def _source_path(value: Any) -> str:
-    """规范化并校验修复 Agent 返回的源码相对路径。"""
+def _repair_path(value: Any) -> str:
+    """规范化并校验修复 Agent 返回的授权相对路径。"""
 
     normalized = str(value or "").strip().replace("\\", "/").lstrip("/")
     path = PurePosixPath(normalized)
     if not normalized or path.is_absolute() or ".." in path.parts:
         return ""
-    return normalized if any(normalized == root or normalized.startswith(f"{root}/") for root in _CODE_ROOTS) else ""
+    return normalized if is_code_review_change_path(normalized) else ""
+
+
+def _required_repair_actions(issues: list[dict[str, Any]]) -> set[str]:
+    """汇总扫描问题声明的有限修复动作。"""
+
+    return {
+        str(action or "").strip()
+        for issue in issues
+        for action in (
+            issue.get("repair_actions")
+            if isinstance(issue.get("repair_actions"), list)
+            else []
+        )
+        if str(action or "").strip()
+    }
 
 
 def _failed_build_checks(value: Any) -> list[dict[str, Any]]:
@@ -103,6 +126,37 @@ def _failed_build_checks(value: Any) -> list[dict[str, Any]]:
             }
         )
     return failures[:10]
+
+
+def _frontend_install_result(value: Any) -> dict[str, Any] | None:
+    """把修复 Agent 的成功 pnpm 证据转换为可复用的安装检查结果。"""
+
+    if not isinstance(value, dict) or value.get("status") != "passed":
+        return None
+    if value.get("exit_code") != 0 or value.get("command") != ["pnpm", "install"]:
+        return None
+    return {
+        "id": "frontend_install",
+        "name": "前端依赖安装检查",
+        "layer": "frontend",
+        "language": "typescript",
+        "passed": True,
+        "required": True,
+        "command": ["pnpm", "install"],
+        "evidence": "修复 Agent 已按前端 Skill 执行 pnpm install 并成功更新依赖。",
+        "failure_category": None,
+        "execution": {
+            "tool": "pnpm_install_frontend",
+            "argv": ["pnpm", "install"],
+            "cwd": "frontend",
+            "returncode": 0,
+            "timed_out": False,
+            "stdout_log": value.get("stdout_log"),
+            "stderr_log": value.get("stderr_log"),
+            "stdout_tail": str(value.get("stdout_tail") or "")[-4_000:],
+            "stderr_tail": str(value.get("stderr_tail") or "")[-4_000:],
+        },
+    }
 
 
 def _repair_confirmation_payload(
@@ -245,6 +299,8 @@ def code_review_repair(state: ProjectState) -> dict[str, Any]:
                 max_attempts=max_attempts,
                 workspace=workspace,
             ),
+            ignored_dirs=_CODE_REVIEW_CAPTURE_IGNORED_DIRS,
+            included_roots=_CODE_REVIEW_CAPTURE_ROOTS,
         )
         repair_result = normalize_code_review_repair_result(captured.value)
     except Exception as exc:  # noqa: BLE001 - 修复 Agent 错误统一阻断项目启动
@@ -259,20 +315,55 @@ def code_review_repair(state: ProjectState) -> dict[str, Any]:
         )
     if attempted_ids != issue_ids:
         return _repair_failure(state, "CodeReviewRepairAgent 未覆盖当前展示的全部问题。", attempt)
+    required_actions = _required_repair_actions(issues)
+    pnpm_evidence = repair_result.get("pnpm_install")
+    pnpm_call_count = int(repair_result.get("pnpm_install_call_count") or 0)
+    pnpm_succeeded = (
+        pnpm_call_count == 1
+        and repair_result.get("pnpm_install_called") is True
+        and repair_result.get("pnpm_install_completed") is True
+        and repair_result.get("pnpm_install_failed") is not True
+        and isinstance(pnpm_evidence, dict)
+        and pnpm_evidence.get("status") == "passed"
+        and pnpm_evidence.get("exit_code") == 0
+    )
+    if "pnpm_install" in required_actions and not pnpm_succeeded:
+        return _repair_failure(
+            state,
+            "前端 Skill 要求恰好执行一次 pnpm install，但未取得唯一的成功执行证据。",
+            attempt,
+        )
+    if "pnpm_install" not in required_actions and pnpm_call_count:
+        return _repair_failure(state, "CodeReviewRepairAgent 在未授权问题中执行了 pnpm install。", attempt)
+    if "pnpm_install" in required_actions:
+        lockfile = Path(workspace or "") / "frontend/pnpm-lock.yaml"
+        if not workspace or not lockfile.is_file():
+            return _repair_failure(state, "pnpm install 未生成 frontend/pnpm-lock.yaml。", attempt)
     captured_paths = _captured_change_paths(captured.code_change_set)
-    changed_paths = {path for path in captured_paths if _source_path(path)}
+    if "pnpm_install" in required_actions and not {
+        "frontend/package.json",
+        "frontend/pnpm-lock.yaml",
+    } <= captured_paths:
+        return _repair_failure(
+            state,
+            "前端依赖修复未同时产生 package.json 与 pnpm-lock.yaml 的真实 Diff。",
+            attempt,
+        )
+    changed_paths = {path for path in captured_paths if _repair_path(path)}
     reported_raw_paths = {
         str(item or "").strip().replace("\\", "/").lstrip("/")
         for item in repair_result.get("changed_files", [])
         if str(item or "").strip()
     }
-    reported_paths = {path for path in reported_raw_paths if _source_path(path)}
-    if any(not _source_path(path) for path in captured_paths):
-        return _repair_failure(state, "CodeReviewRepairAgent 产生了越界源码变更。", attempt)
-    if any(not _source_path(path) for path in reported_raw_paths):
-        return _repair_failure(state, "CodeReviewRepairAgent 返回了越界源码路径。", attempt)
+    reported_paths = {path for path in reported_raw_paths if _repair_path(path)}
+    if any(not _repair_path(path) for path in captured_paths):
+        return _repair_failure(state, "CodeReviewRepairAgent 产生了越界项目变更。", attempt)
+    if any(not _repair_path(path) for path in reported_raw_paths):
+        return _repair_failure(state, "CodeReviewRepairAgent 返回了越界项目路径。", attempt)
+    if "frontend/pnpm-lock.yaml" in captured_paths and not pnpm_succeeded:
+        return _repair_failure(state, "pnpm-lock.yaml 只能由成功的专用 pnpm 工具生成。", attempt)
     if not changed_paths:
-        return _repair_failure(state, "CodeReviewRepairAgent 未产生授权源码 Diff。", attempt)
+        return _repair_failure(state, "CodeReviewRepairAgent 未产生授权项目 Diff。", attempt)
     if reported_paths and not reported_paths <= changed_paths:
         return _repair_failure(state, "CodeReviewRepairAgent 返回了未实际变更的源码路径。", attempt)
 
@@ -290,6 +381,7 @@ def code_review_repair(state: ProjectState) -> dict[str, Any]:
             workspace,
         ),
         "changed_files": sorted(changed_paths),
+        "package_install": pnpm_evidence if pnpm_succeeded else None,
         "failure": None,
     }
     return {
@@ -330,11 +422,17 @@ def review_build_checks(state: ProjectState) -> dict[str, Any]:
         )
 
     try:
+        previous_repair = state.get("code_review_repair_result")
+        previous_repair = previous_repair if isinstance(previous_repair, dict) else {}
+        frontend_install_result = _frontend_install_result(
+            previous_repair.get("package_install")
+        )
         result = run_integration_checks(
             state,
             on_progress=report,
             phase="build",
             artifact_namespace="code-review",
+            frontend_install_result=frontend_install_result,
         )
     except Exception as exc:  # noqa: BLE001 - 构建执行异常进入有限修复环
         results = [

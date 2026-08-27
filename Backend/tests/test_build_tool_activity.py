@@ -198,7 +198,7 @@ class BuildToolActivityTests(unittest.TestCase):
     def test_process_tools_are_visible_without_arguments_and_host_paths_are_hidden(self) -> None:
         """执行和委派应显示安全状态，但不得泄露命令、Prompt 或宿主机路径。"""
 
-        for tool_name in ("write_todos", "task", "execute"):
+        for tool_name in ("write_todos", "task", "execute", "pnpm_install_frontend"):
             activity = normalized_tool_activity(
                 call_id="internal",
                 tool_name=tool_name,

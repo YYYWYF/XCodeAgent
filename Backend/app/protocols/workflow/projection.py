@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.agents.code_analyze.scope import is_code_review_change_path
 from app.protocols.workflow.definition import (
     WORKFLOW_ARTIFACT_FIELDS,
     WORKFLOW_EVENT_PROTOCOL,
@@ -159,7 +160,7 @@ def _workflow_code_review_repair(value: Any, phase: Any) -> dict[str, Any]:
             path
             for raw_path in (value.get("changed_files", value.get("changedFiles")) or [])
             if (path := _safe_relative_path(raw_path))
-            and (path.startswith("frontend/src/") or path.startswith("backend/src/main/java/"))
+            and is_code_review_change_path(path)
         ][:100],
         "buildChecks": checks,
         "failure": _safe_public_text(value.get("failure"), 2_000) or None,

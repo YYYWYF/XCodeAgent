@@ -15,6 +15,7 @@ _VISIBLE_TOOL_CATEGORIES = {
     "edit_file": "write",
     "delete_file": "delete",
     "execute": "execute",
+    "pnpm_install_frontend": "execute",
     "task": "agent",
     "write_todos": "plan",
 }
@@ -98,6 +99,8 @@ def _tool_activity_message(
         return f"正在编辑文件：{target}"
     if tool_name == "execute":
         return "正在执行项目验证命令"
+    if tool_name == "pnpm_install_frontend":
+        return "正在安装前端依赖并更新锁文件"
     if tool_name == "task":
         return "正在委派 Agent 子任务"
     if tool_name == "write_todos":

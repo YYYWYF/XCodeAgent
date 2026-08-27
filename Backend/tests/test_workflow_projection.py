@@ -85,7 +85,7 @@ class WorkflowProjectionTests(unittest.TestCase):
                     "targets": [
                         {
                             "side": "frontend",
-                            "root": "frontend/src",
+                            "root": "frontend",
                             "status": "completed",
                             "scanned_file_count": 3,
                         }
@@ -100,6 +100,7 @@ class WorkflowProjectionTests(unittest.TestCase):
                             "summary": "说明",
                             "file": "frontend/src/App.tsx",
                             "line": 8,
+                            "repair_actions": ["pnpm_install"],
                         }
                     ],
                 },
@@ -111,6 +112,7 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertEqual(review["issueCount"], 1)
         self.assertEqual(review["targets"][0]["scannedFileCount"], 3)
         self.assertEqual(review["issues"][0]["ruleId"], "FE001")
+        self.assertNotIn("repairActions", review["issues"][0])
 
     def test_integration_test_hides_stale_code_review_result(self) -> None:
         """测试重跑期间不得向测试 Agent 投影上一轮代码审查结果。"""
@@ -162,7 +164,13 @@ class WorkflowProjectionTests(unittest.TestCase):
                     "max_iterations": 3,
                     "requested_issue_count": 1,
                     "attempted_issue_ids": ["CKR6002-1"],
-                    "changed_files": ["backend/src/main/java/App.java"],
+                    "changed_files": [
+                        "frontend/package.json",
+                        "frontend/pnpm-lock.yaml",
+                        "frontend/.env",
+                        "frontend/node_modules/pkg/index.js",
+                        "backend/src/main/java/App.java",
+                    ],
                     "build_checks": [
                         {
                             "id": "backend_build",
@@ -180,7 +188,14 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertEqual(repair["status"], "building")
         self.assertEqual(repair["iteration"], 1)
         self.assertEqual(repair["buildChecks"][0]["id"], "backend_build")
-        self.assertEqual(repair["changedFiles"], ["backend/src/main/java/App.java"])
+        self.assertEqual(
+            repair["changedFiles"],
+            [
+                "frontend/package.json",
+                "frontend/pnpm-lock.yaml",
+                "backend/src/main/java/App.java",
+            ],
+        )
 
     def test_code_review_repair_preserves_skipped_build_check_status(self) -> None:
         """独立构建中未执行的可选检查应投影为 skipped 而不是 passed。"""

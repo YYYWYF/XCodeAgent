@@ -13,6 +13,56 @@ from app.services.test_validation import create_revision_requests, evaluate_qual
 
 
 class IntegrationTestRunnerTests(unittest.TestCase):
+    def test_build_reuses_supplied_frontend_install_result(self) -> None:
+        """审查修复已安装依赖时只执行 Build，不重复运行 pnpm install。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "frontend"
+            frontend.mkdir()
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"vite build"}}',
+                encoding="utf-8",
+            )
+            (frontend / "pnpm-lock.yaml").write_text(
+                "lockfileVersion: '9.0'",
+                encoding="utf-8",
+            )
+            calls: list[list[str]] = []
+
+            def fake_run(argv, **kwargs):
+                """记录构建命令并统一返回成功。"""
+
+                calls.append(argv)
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            install_result = {
+                "id": "frontend_install",
+                "name": "前端依赖安装检查",
+                "layer": "frontend",
+                "passed": True,
+                "required": True,
+                "evidence": "修复 Agent 已执行安装。",
+            }
+            with (
+                patch(
+                    "app.services.integration_test_runner.shutil.which",
+                    side_effect=lambda name: name,
+                ),
+                patch(
+                    "app.services.integration_test_runner.subprocess.run",
+                    side_effect=fake_run,
+                ),
+            ):
+                result = run_integration_checks(
+                    {"workspace": workspace},
+                    phase="build",
+                    frontend_install_result=install_result,
+                )
+
+        self.assertNotIn(["pnpm", "install"], calls)
+        self.assertIn(["pnpm", "run", "build"], calls)
+        self.assertIs(result["test_results"][0]["passed"], True)
+
     def test_frontend_build_failure_skips_backend_build_immediately(self) -> None:
         """前端构建阻塞失败后不得再启动 Maven，后端步骤只记录未执行。"""
 

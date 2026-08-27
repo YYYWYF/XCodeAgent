@@ -17,6 +17,7 @@ from app.utils.model_output import extract_json_object
 logger = logging.getLogger(__name__)
 
 MAX_REVIEW_ISSUES = 100
+ALLOWED_REPAIR_ACTIONS = {"pnpm_install"}
 REQUIRED_SKILLS = {
     "/.xcodeagent/builtin-skills/frontend-code-scan/SKILL.md": "frontend-code-scan",
     "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md": "backend-code-scan",
@@ -111,7 +112,7 @@ def normalize_code_review_result(
         )
         if side not in {"frontend", "backend"} or not is_code_analyze_read_path(file_path):
             raise ValueError("审查结果包含越界源码路径。")
-        expected_prefix = "frontend/src/" if side == "frontend" else "backend/src/main/java/"
+        expected_prefix = "frontend/" if side == "frontend" else "backend/src/main/java/"
         if not file_path.startswith(expected_prefix):
             raise ValueError("审查问题的端类型与文件路径不匹配。")
         severity = str(raw.get("severity") or "medium").strip().lower()
@@ -134,6 +135,10 @@ def normalize_code_review_result(
             )[:800],
             "file": file_path,
             "line": line_number,
+            "repair_actions": _normalize_repair_actions(
+                raw.get("repair_actions", raw.get("repairActions")),
+                side=side,
+            ),
         }
         identity = (
             side,
@@ -203,11 +208,14 @@ def _build_prompt(state: dict[str, Any]) -> str:
     target = target if isinstance(target, dict) else {}
     return (
         "开始审查前后端代码。严格先读取两个扫描 Skill 和后端规则引用。\n"
-        "允许的最大范围为 frontend/src/** 与 backend/src/main/java/**；其他用户目录禁止读取。\n"
-        "执行后端规则扫描；仅当前端 Skill 存在具体规则时才读取并扫描 frontend/src。\n"
+        "允许的最大范围为 frontend/**（必须排除所有 node_modules 和敏感文件）与 "
+        "backend/src/main/java/**；其他用户目录禁止读取。\n"
+        "执行后端规则扫描；当前端 Skill 存在具体规则时，按规则读取并扫描 frontend 下的项目文件。\n"
         f"当前构建目标：{json.dumps(target, ensure_ascii=False)}\n"
         "前端 Skill 当前可能没有具体规则；没有具体规则时不得生成任何前端问题，"
-        "不得读取 frontend/src 源码，只报告扫描目标、0 个扫描文件和规则未配置 warning。\n"
+        "不得读取 frontend 项目文件，只报告扫描目标、0 个扫描文件和规则未配置 warning。\n"
+        "当前端 Skill 的修复方案要求执行 pnpm i/pnpm install 时，对应 issue 必须设置 "
+        'repair_actions=["pnpm_install"]；否则设置空数组。不得声明其他修复动作。\n'
         "只要扫描执行完成，status 必须始终为 completed；发现规范问题只写入 issues，"
         "不得把 status 写成 failed、issues_found 或 non_compliant。\n"
         "targets 必须为数组，每项使用 side、root、status、scanned_file_count 和可选 warning。\n"
@@ -231,7 +239,7 @@ def _normalize_targets(
                 continue
             side = str(raw.get("side") or "").strip().lower()
             expected = {
-                "frontend": "frontend/src",
+                "frontend": "frontend",
                 "backend": "backend/src/main/java",
             }.get(side)
             root = _normalize_target_root(raw, expected=expected, workspace=workspace)
@@ -264,7 +272,7 @@ def _normalize_targets(
 
     workspace_path = Path(workspace).resolve() if workspace else None
     targets: list[dict[str, Any]] = []
-    for side, root in (("frontend", "frontend/src"), ("backend", "backend/src/main/java")):
+    for side, root in (("frontend", "frontend"), ("backend", "backend/src/main/java")):
         target = raw_targets.get(
             side,
             {
@@ -320,7 +328,7 @@ def _target_items(value: Any) -> list[dict[str, Any]]:
         return []
 
     items: list[dict[str, Any]] = []
-    for side, root in (("frontend", "frontend/src"), ("backend", "backend/src/main/java")):
+    for side, root in (("frontend", "frontend"), ("backend", "backend/src/main/java")):
         side_value = value.get(side)
         if isinstance(side_value, dict):
             items.append({"root": root, **side_value, "side": side})
@@ -440,7 +448,7 @@ def _normalize_review_path(value: Any, *, workspace: str | None) -> str:
         return ""
 
     # DeepAgent 文件工具使用 `/frontend/...` 形式的虚拟路径；结果中安全地转为相对路径。
-    virtual_roots = ("frontend/src", "backend/src/main/java")
+    virtual_roots = ("frontend", "backend/src/main/java")
     if any(
         raw_path == f"/{root}" or raw_path.startswith(f"/{root}/")
         for root in virtual_roots
@@ -460,6 +468,23 @@ def _normalize_review_path(value: Any, *, workspace: str | None) -> str:
     if normalized in {"", "."} or ".." in path.parts:
         return ""
     return normalized
+
+
+def _normalize_repair_actions(value: Any, *, side: str) -> list[str]:
+    """归一化 Skill 驱动的有限修复动作，并拒绝模型扩展命令权限。"""
+
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("审查问题 repair_actions 必须为数组。")
+    actions = list(
+        dict.fromkeys(str(item or "").strip() for item in value if str(item or "").strip())
+    )
+    if any(action not in ALLOWED_REPAIR_ACTIONS for action in actions):
+        raise ValueError("审查问题包含未授权的修复动作。")
+    if actions and side != "frontend":
+        raise ValueError("后端审查问题不能声明前端修复动作。")
+    return actions
 
 
 def _frontend_scan_warning() -> str | None:
