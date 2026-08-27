@@ -255,7 +255,7 @@ def _requirements_prompt(
     datasource_type: DatasourceType = "database",
     clarification_round: int = 0,
 ) -> str:
-    """构建产品需求提示；保留实体清单并把技术配置下沉到后续阶段。"""
+    """构建产品需求提示；实体归技术规划阶段。"""
 
     bounded_round = max(0, min(clarification_round, MAX_REQUIREMENT_CLARIFICATION_ROUNDS))
     next_round = min(
@@ -341,7 +341,7 @@ def _requirements_prompt(
         "Analyze the user's application request and decide whether the requirement is clear enough "
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 业务参与者, 功能模块, "
-        "页面清单, 实体清单, 业务信息需求, 业务流程.\n"
+        "页面清单, 业务流程.\n"
         "When the request explicitly says that application-level authorization is enabled, also produce an "
         "authorization_requirements object. Extract only permission controls explicitly stated in the user's "
         "business description or clarification answers into restrictedPages and restrictedOperations. Empty candidate "
@@ -387,15 +387,18 @@ def _requirements_prompt(
         "for genuine either-or decisions. After calling ask_user, do not invent answers and do not "
         "continue planning until the user answers.\n"
         "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
-        "without markdown fences or commentary. It must include app_info, user_roles, "
-        "feature_modules, pages, and business_flows. Do not return assumptions, product risks, "
-        "or acceptance_criteria. "
+        "without markdown fences or commentary. The JSON must contain exactly these top-level fields: "
+        "version, status, generated_at, app_info, user_roles, feature_modules, pages, business_flows, "
+        "authorization_requirements. Do not include any other field. "
+        "Do not return assumptions, product risks, or acceptance_criteria. "
         "Product acceptance criteria belong to the later ProductPlan and must not be generated in the "
         "RequirementSpec confirmation document. "
         "Every role, module, and flow must have a stable id. Every page must have a "
         "stable lower_snake_case pageId, name, unique path, module_id, and description. Use '/' only for the single "
         "home/dashboard page; all other pages must have business routes derived from their pageId, "
         "such as '/employees-list' or '/onboarding-form'. Never return multiple pages with path '/'. "
+        "Each business_flows item must have id, name, description, and steps. Each step is a string "
+        "describing one business action; do not include role_id, page_id, or other structured fields in steps. "
         "The JSON must represent the complete current requirement, not a patch. When authorization is enabled, "
         "the complete JSON must also contain authorization_requirements with the current contract fields; do not "
         "include authorization candidate ruleId, page/entity bindings, role-resource/member assignments, "
