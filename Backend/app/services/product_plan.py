@@ -8,7 +8,7 @@ from typing import Any
 
 from app.services.requirement_spec import product_acceptance_criteria
 
-PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v5"
+PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v6"
 _STATE_REQUIREMENT_KEYS = ("loading", "empty", "error", "success", "validation")
 _FORBIDDEN_PRODUCT_KEYS = {
     "api_contracts",
@@ -32,6 +32,7 @@ _PRODUCT_BEHAVIOR_TYPES = {"business", "navigation", "interface", "external", "s
 _PRODUCT_STEP_TYPES = _PRODUCT_BEHAVIOR_TYPES - {"sequence"}
 _MODEL_ROOT_KEYS = {
     "app",
+    "agents",
     "business_flows",
     "pages",
     "product_acceptance_criteria",
@@ -42,6 +43,7 @@ _PRODUCT_PLAN_KEYS = {
     "generated_at",
     "requirement_spec_sha256",
     "app",
+    "agents",
     "business_flows",
     "pages",
     "authorizationTargets",
@@ -63,6 +65,26 @@ _MODEL_PAGE_KEYS = {
 }
 _MODEL_INFORMATION_ITEM_KEYS = {"itemId", "label", "description"}
 _MODEL_APP_KEYS = {"name", "summary"}
+_MODEL_AGENT_KEYS = {
+    "agentId",
+    "name",
+    "purpose",
+    "capabilities",
+    "entryPageIds",
+    "pageActionBindings",
+    "interaction",
+    "boundaries",
+    "acceptanceCriteria",
+}
+_MODEL_AGENT_CAPABILITY_KEYS = {"capabilityId", "name", "expectedResult"}
+_MODEL_AGENT_PAGE_BINDING_KEYS = {"pageId", "actionIds"}
+_MODEL_AGENT_INTERACTION_KEYS = {
+    "mode",
+    "supportsMultiTurn",
+    "inputDescription",
+    "outputDescription",
+    "stateRequirements",
+}
 _MODEL_ACTION_KEYS = {
     "actionId",
     "name",
@@ -148,6 +170,148 @@ def _model_behavior_errors(value: Any, location: str) -> list[str]:
     return errors
 
 
+def _agent_contract_errors(
+    value: Any,
+    requirement_spec: dict[str, Any],
+    pages: Any,
+    *,
+    location: str,
+) -> list[str]:
+    """校验 ProductPlan 智能体产品契约及其稳定页面操作引用。"""
+
+    if not isinstance(value, list):
+        return [f"{location} 必须是 JSON 数组。"]
+    requirements = _dict_items(requirement_spec.get("agent_requirements"))
+    agents = _dict_items(value)
+    expected_ids = [str(item.get("agentId") or "").strip() for item in requirements]
+    actual_ids = [str(item.get("agentId") or "").strip() for item in agents]
+    errors: list[str] = []
+    if actual_ids != expected_ids:
+        errors.append(f"{location} 必须与 RequirementSpec.agent_requirements 一一对应并保持顺序。")
+
+    page_actions = {
+        str(page.get("pageId") or "").strip(): {
+            str(action.get("actionId") or "").strip()
+            for action in _dict_items(page.get("actions"))
+            if str(action.get("actionId") or "").strip()
+        }
+        for page in _dict_items(pages)
+    }
+    requirements_by_id = {
+        str(item.get("agentId") or "").strip(): item for item in requirements
+    }
+    for index, agent in enumerate(value):
+        agent_location = f"{location}[{index}]"
+        errors.extend(_exact_keys(agent, _MODEL_AGENT_KEYS, agent_location))
+        if not isinstance(agent, dict):
+            continue
+        agent_id = str(agent.get("agentId") or "").strip()
+        if not _is_lower_snake_case(agent_id):
+            errors.append(f"{agent_location}.agentId 必须为 lower_snake_case。")
+        requirement = requirements_by_id.get(agent_id)
+        if requirement is None:
+            continue
+        for field in ("name", "purpose", "interactionMode"):
+            plan_field = "interaction" if field == "interactionMode" else field
+            actual = (
+                str((agent.get(plan_field) or {}).get("mode") or "").strip()
+                if field == "interactionMode" and isinstance(agent.get(plan_field), dict)
+                else str(agent.get(plan_field) or "").strip()
+            )
+            if actual != str(requirement.get(field) or "").strip():
+                errors.append(f"{agent_location}.{plan_field} 必须保持 RequirementSpec 中的已确认值。")
+        for field in ("entryPageIds", "boundaries"):
+            if _text_items(agent.get(field)) != _text_items(requirement.get(field)):
+                errors.append(f"{agent_location}.{field} 必须保持 RequirementSpec 中的已确认值。")
+
+        capabilities = agent.get("capabilities")
+        if not isinstance(capabilities, list):
+            errors.append(f"{agent_location}.capabilities 必须是 JSON 数组。")
+            capabilities = []
+        expected_capability_names = _text_items(requirement.get("capabilities"))
+        actual_capability_names: list[str] = []
+        capability_ids: list[str] = []
+        for capability_index, capability in enumerate(capabilities):
+            capability_location = f"{agent_location}.capabilities[{capability_index}]"
+            errors.extend(
+                _exact_keys(capability, _MODEL_AGENT_CAPABILITY_KEYS, capability_location)
+            )
+            if not isinstance(capability, dict):
+                continue
+            capability_id = str(capability.get("capabilityId") or "").strip()
+            capability_ids.append(capability_id)
+            actual_capability_names.append(str(capability.get("name") or "").strip())
+            if not _is_lower_snake_case(capability_id):
+                errors.append(f"{capability_location}.capabilityId 必须为 lower_snake_case。")
+            if not str(capability.get("expectedResult") or "").strip():
+                errors.append(f"{capability_location}.expectedResult 不能为空。")
+        if actual_capability_names != expected_capability_names:
+            errors.append(
+                f"{agent_location}.capabilities 必须逐项覆盖 RequirementSpec 中的已确认能力。"
+            )
+        if len(capability_ids) != len(set(capability_ids)):
+            errors.append(f"{agent_location}.capabilityId 必须在当前智能体内唯一。")
+
+        bindings = agent.get("pageActionBindings")
+        if not isinstance(bindings, list):
+            errors.append(f"{agent_location}.pageActionBindings 必须是 JSON 数组。")
+            bindings = []
+        binding_page_ids: list[str] = []
+        for binding_index, binding in enumerate(bindings):
+            binding_location = f"{agent_location}.pageActionBindings[{binding_index}]"
+            errors.extend(
+                _exact_keys(binding, _MODEL_AGENT_PAGE_BINDING_KEYS, binding_location)
+            )
+            if not isinstance(binding, dict):
+                continue
+            page_id = str(binding.get("pageId") or "").strip()
+            binding_page_ids.append(page_id)
+            action_ids = _text_items(binding.get("actionIds"))
+            if not action_ids:
+                errors.append(f"{binding_location}.actionIds 必须至少引用一个页面操作。")
+            if len(action_ids) != len(set(action_ids)):
+                errors.append(f"{binding_location}.actionIds 不能重复。")
+            for action_id in action_ids:
+                if action_id not in page_actions.get(page_id, set()):
+                    errors.append(
+                        f"{binding_location}.actionIds 引用了不存在的页面操作 {action_id}。"
+                    )
+        if binding_page_ids != _text_items(requirement.get("entryPageIds")):
+            errors.append(
+                f"{agent_location}.pageActionBindings 必须逐项覆盖已确认入口页面。"
+            )
+
+        interaction = agent.get("interaction")
+        errors.extend(
+            _exact_keys(interaction, _MODEL_AGENT_INTERACTION_KEYS, f"{agent_location}.interaction")
+        )
+        if isinstance(interaction, dict):
+            if not isinstance(interaction.get("supportsMultiTurn"), bool):
+                errors.append(f"{agent_location}.interaction.supportsMultiTurn 必须是 boolean。")
+            for field in ("inputDescription", "outputDescription"):
+                if not str(interaction.get(field) or "").strip():
+                    errors.append(f"{agent_location}.interaction.{field} 不能为空。")
+            state_requirements = interaction.get("stateRequirements")
+            errors.extend(
+                _exact_keys(
+                    state_requirements,
+                    set(_STATE_REQUIREMENT_KEYS),
+                    f"{agent_location}.interaction.stateRequirements",
+                )
+            )
+            if isinstance(state_requirements, dict) and any(
+                not str(state_requirements.get(key) or "").strip()
+                for key in _STATE_REQUIREMENT_KEYS
+            ):
+                errors.append(
+                    f"{agent_location}.interaction.stateRequirements 必须完整描述五种状态。"
+                )
+        acceptance = agent.get("acceptanceCriteria")
+        if not isinstance(acceptance, list) or not _text_items(acceptance):
+            errors.append(f"{agent_location}.acceptanceCriteria 必须是非空字符串数组。")
+    return errors
+
+
 def validate_product_plan_model_output(
     agent_plan: dict[str, Any],
     requirement_spec: dict[str, Any],
@@ -211,6 +375,14 @@ def validate_product_plan_model_output(
         for field in ("navigation_targets", "acceptance_criteria"):
             if not isinstance(page.get(field), list):
                 errors.append(f"{location}.{field} 必须是 JSON 数组。")
+    errors.extend(
+        _agent_contract_errors(
+            agent_plan.get("agents"),
+            requirement_spec,
+            pages,
+            location="ProductPlan 模型输出.agents",
+        )
+    )
     return errors
 
 
@@ -450,6 +622,191 @@ def _normalized_pages(
     return pages
 
 
+def _stable_agent_capability_id(agent_id: str, value: Any, index: int) -> str:
+    """为智能体产品能力生成稳定且不依赖展示名称语言的标识。"""
+
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
+    return normalized or f"{agent_id}_capability_{index}"
+
+
+def _default_agent_action_id(page_id: str, agent_id: str) -> str:
+    """生成入口页面调用智能体的确定性产品操作标识。"""
+
+    return f"{page_id}_{agent_id}_interact"
+
+
+def _ensure_agent_entry_actions(
+    pages: list[dict[str, Any]],
+    requirement_spec: dict[str, Any],
+    agent_plan: dict[str, Any] | None,
+) -> None:
+    """仅在模型未规划入口操作时补齐最小智能体交互动作。"""
+
+    page_map = {
+        str(page.get("pageId") or "").strip(): page
+        for page in pages
+        if str(page.get("pageId") or "").strip()
+    }
+    supplements = {
+        str(item.get("agentId") or "").strip(): item
+        for item in _dict_items((agent_plan or {}).get("agents"))
+    }
+    for requirement in _dict_items(requirement_spec.get("agent_requirements")):
+        agent_id = str(requirement.get("agentId") or "").strip()
+        supplement = supplements.get(agent_id, {})
+        bindings = {
+            str(item.get("pageId") or "").strip(): _text_items(item.get("actionIds"))
+            for item in _dict_items(supplement.get("pageActionBindings"))
+        }
+        for page_id in _text_items(requirement.get("entryPageIds")):
+            page = page_map.get(page_id)
+            if page is None or bindings.get(page_id):
+                continue
+            action_id = _default_agent_action_id(page_id, agent_id)
+            actions = page.setdefault("actions", [])
+            if any(
+                str(action.get("actionId") or "").strip() == action_id
+                for action in _dict_items(actions)
+            ):
+                continue
+            actions.append(
+                {
+                    "actionId": action_id,
+                    "name": f"使用{str(requirement.get('name') or '智能体')}",
+                    "description": str(requirement.get("purpose") or "与业务智能体交互。"),
+                    "requiresConfirmation": False,
+                    "behavior": {
+                        "type": "business",
+                        "expectedResult": "用户获得符合智能体职责和业务边界的明确回复。",
+                    },
+                }
+            )
+
+
+def _normalized_agents(
+    requirement_spec: dict[str, Any],
+    agent_plan: dict[str, Any] | None,
+    existing_plan: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """把需求智能体扩展为仅包含产品可见行为的 ProductPlan 契约。"""
+
+    supplements = {
+        str(item.get("agentId") or "").strip(): item
+        for item in _dict_items((agent_plan or {}).get("agents"))
+    }
+    existing_agents = {
+        str(item.get("agentId") or "").strip(): item
+        for item in _dict_items((existing_plan or {}).get("agents"))
+    }
+    agents: list[dict[str, Any]] = []
+    for requirement in _dict_items(requirement_spec.get("agent_requirements")):
+        agent_id = str(requirement.get("agentId") or "").strip()
+        if not agent_id:
+            continue
+        supplement = supplements.get(agent_id, {})
+        existing_agent = existing_agents.get(agent_id, {})
+        supplied_capabilities = {
+            str(item.get("name") or "").strip(): item
+            for item in _dict_items(supplement.get("capabilities"))
+        }
+        existing_capabilities = {
+            str(item.get("name") or "").strip(): item
+            for item in _dict_items(existing_agent.get("capabilities"))
+        }
+        capabilities = []
+        for index, name in enumerate(_text_items(requirement.get("capabilities")), start=1):
+            supplied = supplied_capabilities.get(name, {})
+            existing_capability = existing_capabilities.get(name, {})
+            capabilities.append(
+                {
+                    "capabilityId": str(existing_capability.get("capabilityId") or "").strip()
+                    or str(supplied.get("capabilityId") or "").strip()
+                    or _stable_agent_capability_id(agent_id, name, index),
+                    "name": name,
+                    "expectedResult": str(
+                        supplied.get("expectedResult")
+                        or f"用户能够通过{str(requirement.get('name') or '智能体')}完成“{name}”。"
+                    ).strip(),
+                }
+            )
+        supplied_bindings = {
+            str(item.get("pageId") or "").strip(): item
+            for item in _dict_items(supplement.get("pageActionBindings"))
+        }
+        page_bindings = []
+        for page_id in _text_items(requirement.get("entryPageIds")):
+            supplied = supplied_bindings.get(page_id, {})
+            action_ids = _text_items(supplied.get("actionIds"))
+            page_bindings.append(
+                {
+                    "pageId": page_id,
+                    "actionIds": action_ids
+                    or [_default_agent_action_id(page_id, agent_id)],
+                }
+            )
+        supplied_interaction = (
+            supplement.get("interaction")
+            if isinstance(supplement.get("interaction"), dict)
+            else {}
+        )
+        supplied_states = (
+            supplied_interaction.get("stateRequirements")
+            if isinstance(supplied_interaction.get("stateRequirements"), dict)
+            else {}
+        )
+        interaction_mode = str(requirement.get("interactionMode") or "conversation").strip()
+        agents.append(
+            {
+                "agentId": agent_id,
+                "name": str(requirement.get("name") or agent_id).strip(),
+                "purpose": str(requirement.get("purpose") or "").strip(),
+                "capabilities": capabilities,
+                "entryPageIds": _text_items(requirement.get("entryPageIds")),
+                "pageActionBindings": page_bindings,
+                "interaction": {
+                    "mode": interaction_mode,
+                    "supportsMultiTurn": bool(
+                        supplied_interaction.get(
+                            "supportsMultiTurn",
+                            interaction_mode == "conversation",
+                        )
+                    ),
+                    "inputDescription": str(
+                        supplied_interaction.get("inputDescription")
+                        or "用户从已确认入口页面提交的业务问题或操作意图。"
+                    ).strip(),
+                    "outputDescription": str(
+                        supplied_interaction.get("outputDescription")
+                        or "向用户返回符合智能体职责、能力和边界的产品结果。"
+                    ).strip(),
+                    "stateRequirements": {
+                        "loading": str(
+                            supplied_states.get("loading") or "处理请求时展示明确进度。"
+                        ).strip(),
+                        "empty": str(
+                            supplied_states.get("empty") or "无会话内容时说明可使用的能力。"
+                        ).strip(),
+                        "error": str(
+                            supplied_states.get("error") or "失败时说明原因并提供重试入口。"
+                        ).strip(),
+                        "success": str(
+                            supplied_states.get("success") or "成功时展示完整且可理解的结果。"
+                        ).strip(),
+                        "validation": str(
+                            supplied_states.get("validation") or "无效或空输入不能提交。"
+                        ).strip(),
+                    },
+                },
+                "boundaries": _text_items(requirement.get("boundaries")),
+                "acceptanceCriteria": product_acceptance_criteria(
+                    supplement.get("acceptanceCriteria")
+                )
+                or ["目标用户可以从已确认入口完成智能体核心能力并获得明确反馈。"],
+            }
+        )
+    return agents
+
+
 def _authorization_target_key(value: Any) -> str:
     """把业务名称压缩为确定性匹配键，不从相近词推断权限目标。"""
 
@@ -600,6 +957,7 @@ def create_product_plan(
     app_info = requirement_spec.get("app_info")
     app_info = app_info if isinstance(app_info, dict) else {}
     pages = _normalized_pages(requirement_spec, agent_plan)
+    _ensure_agent_entry_actions(pages, requirement_spec, agent_plan)
     plan = {
         "schema_version": PRODUCT_PLAN_SCHEMA_VERSION,
         "version": str((existing_plan or {}).get("version") or "0.1.0"),
@@ -609,6 +967,7 @@ def create_product_plan(
             "name": str(app_info.get("name") or "未命名应用"),
             "summary": str(app_info.get("summary") or requirement_spec.get("summary") or ""),
         },
+        "agents": _normalized_agents(requirement_spec, agent_plan, existing_plan),
         "business_flows": _dict_items(requirement_spec.get("business_flows")),
         "pages": pages,
         # 映射只追踪已确认业务规则到产品稳定目标，不包含角色、资源键或策略键。
@@ -636,7 +995,7 @@ def requirement_spec_sha256(requirement_spec: dict[str, Any]) -> str:
 
 
 def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[str, Any]) -> list[str]:
-    """校验 ProductPlan v4 的结构、需求边界和稳定引用均闭合。"""
+    """校验 ProductPlan v6 的结构、需求边界和稳定引用均闭合。"""
 
     expected = [
         str(item.get("pageId") or item.get("id") or "").strip()
@@ -657,7 +1016,7 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
         errors.append("ProductPlan 不得包含产品假设或产品风险字段：" + "、".join(removed_keys) + "。")
     if not isinstance(product_plan.get("app"), dict):
         errors.append("ProductPlan.app 必须是 JSON 对象。")
-    for key in ("business_flows", "pages"):
+    for key in ("agents", "business_flows", "pages"):
         if not isinstance(product_plan.get(key), list):
             errors.append(f"ProductPlan.{key} 必须是 JSON 数组。")
     duplicated_keys = sorted(_DUPLICATED_PRODUCT_KEYS.intersection(product_plan))
@@ -759,6 +1118,14 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
             not str(state_requirements.get(key) or "").strip() for key in _STATE_REQUIREMENT_KEYS
         ):
             errors.append(f"页面 {page_id} 的 state_requirements 必须完整覆盖五种产品状态。")
+    errors.extend(
+        _agent_contract_errors(
+            product_plan.get("agents"),
+            requirement_spec,
+            product_plan.get("pages"),
+            location="ProductPlan.agents",
+        )
+    )
     target_specs = (("restrictedPages", "pageRules", {"ruleId", "pageId"}),
                     ("restrictedOperations", "operationRules", {"ruleId", "pageId", "actionId"}))
     action_targets = {
@@ -809,7 +1176,7 @@ def require_current_product_plan(
     value: Any,
     requirement_spec: dict[str, Any],
 ) -> dict[str, Any]:
-    """要求下游只消费当前 pages-only ProductPlan，拒绝历史格式和无效快照。"""
+    """要求下游只消费当前 ProductPlan，拒绝历史格式和无效快照。"""
 
     if not isinstance(value, dict):
         raise ValueError("缺少当前 ProductPlan。")

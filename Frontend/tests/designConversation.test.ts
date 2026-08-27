@@ -626,6 +626,40 @@ assert.equal(
     .__applicationPlanningAction,
   'answer'
 )
+const projectPlanDependencyRecovery = ensureApplicationPlanningAction(
+  {
+    ...summaryOnlyQuestionsWorkflow,
+    summary: {
+      ...summaryOnlyQuestionsWorkflow.summary,
+      phase: 'technical_planning',
+      clarification: {
+        mode: 'project_plan_dependency_validation_error',
+        status: 'requires_user_input',
+        questions: [{ header: '计划一致性校验', question: '请补充业务决策。' }]
+      }
+    }
+  } as WorkflowRunPayload,
+  { 计划一致性校验: '保留已确认需求，并补齐智能体契约。' }
+)
+assert.equal(projectPlanDependencyRecovery.__applicationPlanningAction, 'revise')
+assert.equal(projectPlanDependencyRecovery.planning_recovery, '保留已确认需求，并补齐智能体契约。')
+const projectPlanRevisionRecovery = ensureApplicationPlanningAction(
+  {
+    ...summaryOnlyQuestionsWorkflow,
+    summary: {
+      ...summaryOnlyQuestionsWorkflow.summary,
+      phase: 'technical_planning',
+      clarification: {
+        mode: 'project_plan_revision_required',
+        status: 'requires_user_input',
+        questions: [{ header: '计划修订', question: '请补充修订要求。' }]
+      }
+    }
+  } as WorkflowRunPayload,
+  { 计划修订: '按当前产品规划重新生成技术计划。' }
+)
+assert.equal(projectPlanRevisionRecovery.__applicationPlanningAction, 'revise')
+assert.equal(projectPlanRevisionRecovery.planning_recovery, '按当前产品规划重新生成技术计划。')
 assert.equal(
   ensureApplicationPlanningAction(
     {

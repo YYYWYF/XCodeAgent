@@ -12,6 +12,7 @@ from app.services.project_plan import (
     TECHNICAL_PLAN_ARTIFACT_TYPE,
     create_project_plan,
     create_technical_plan,
+    technical_agent_contract_model_input,
     validate_project_plan_datasource_policy,
 )
 from app.services.product_plan import create_product_plan, validate_product_plan
@@ -70,14 +71,35 @@ def _sync_prompt(
         "Each restrictedPages candidate contains a targetPageId that must reference an existing pages[].pageId; preserve it for unchanged "
         "candidates and update it only when the edited Markdown explicitly changes the target page. Other page/entity/operation/resource "
         "bindings must not be reconstructed from Markdown. "
+        "Preserve agent_requirements as product-level business-agent needs. Every item contains exactly "
+        "agentId, name, purpose, capabilities, entryPageIds, interactionMode, and boundaries. Preserve agentId "
+        "for an unchanged business agent, keep entryPageIds bound to existing pages[].pageId, and return [] when "
+        "the edited document explicitly contains no business agent. Never add a model, model id, prompt, API "
+        "endpoint, tool, skill, knowledge source, storage choice, implementation class, or code path at this boundary. "
         "Preserve each hidden <!-- ruleId:... --> marker for an unchanged permission candidate; never invent it or emit dataRules, dataRuleKey, unauthorizedBehavior, or unauthenticated.\n\n"
         if artifact_name == "RequirementSpec"
+        else (
+            "For ProductPlan, preserve agents as the product-visible business-agent contract. Every agent "
+            "must keep the confirmed RequirementSpec agentId, name, purpose, entryPageIds, interaction mode, "
+            "and boundaries. Synchronize capability expected results, pageActionBindings, interaction product "
+            "states, and acceptanceCriteria from the edited Markdown while preserving stable capabilityId, "
+            "pageId, and actionId references for unchanged content. Never add model/modelId, prompt, API or "
+            "endpoint details, tools, skills, knowledge sources, storage, runtime, implementation classes, "
+            "code paths, or build/test workflow fields. Return agents=[] when the confirmed RequirementSpec "
+            "contains no business agents.\n\n"
+        )
+        if artifact_name == "ProductPlan"
         else (
             "For TechnicalPlan, preserve the complete top-level entities array with RequirementSpec "
             "ids/names/descriptions and the confirmed snake_case field definitions. API contracts bind "
             "one or more entities through entity_ids only. Never emit data_source_id, a top-level "
             "data_sources field, or entity data_source; source selection belongs to EntityDesign. "
-            "module_boundaries describes code/service ownership and must not define entities or fields.\n\n"
+            "module_boundaries describes code/service ownership and must not define entities or fields. "
+            "Preserve agent_contracts for every confirmed ProductPlan agent, including stable agentId, "
+            "gateway Endpoint, capability/tool bindings, Python 3.12 + DeepAgents sidecar runtime, AG-UI "
+            "SSE invocation, security boundary, and artifact paths. Do not remove or redesign hidden Agent "
+            "contract fields unless the edited Markdown explicitly changes the corresponding visible Agent "
+            "technical section.\n\n"
         )
         if artifact_name == "TechnicalPlan"
         else (
@@ -212,10 +234,10 @@ def sync_project_plan_from_markdown(
                 )
             }
             | {
-                "authorization_data_bindings": (
-                    (existing_plan.get("authorization_manifest") or {})
-                    .get("bindings", {})
-                    .get("dataRules", [])
+                "agent_contracts": technical_agent_contract_model_input(
+                    synced.get("agent_contracts")
+                    if isinstance(synced.get("agent_contracts"), list)
+                    else existing_plan.get("agent_contracts")
                 )
             },
             datasource_type=datasource_type,

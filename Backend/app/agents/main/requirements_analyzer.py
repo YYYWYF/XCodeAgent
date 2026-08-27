@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from copy import deepcopy
+from hashlib import sha256
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -300,6 +301,7 @@ def _requirements_prompt(
     existing_spec: dict[str, Any] | None = None,
     datasource_type: DatasourceType = "database",
     clarification_round: int = 0,
+    format_correction: bool = False,
 ) -> str:
     """构建产品需求提示；实体归技术规划阶段。"""
 
@@ -356,7 +358,8 @@ def _requirements_prompt(
         "(5) business_flows has at least one flow. "
         "If any required field is missing or empty and cannot be directly inferred from the user's "
         "request, call ask_user once for exactly those missing fields. If all required fields are "
-        "present, return the complete JSON immediately without calling ask_user. "
+        "present, return the complete JSON immediately unless a permission ambiguity or the business-agent "
+        "suitability check described above still requires user input. "
         "Do not classify gaps as material versus technical, do not count gaps, and do not deliberate "
         "about whether a gap is worth asking — just check the five fields above. "
         f"This workflow allows at most {MAX_REQUIREMENT_CLARIFICATION_ROUNDS} clarification rounds. "
@@ -367,7 +370,8 @@ def _requirements_prompt(
         "or optional features after the user has answered a prior clarification turn. "
         "Never use ask_user to ask whether the requirements are complete, whether the user has "
         "anything else to add, or to request generic confirmation. "
-        "Omit optional details that the user did not request instead of inventing assumptions. "
+        "Except for the business-agent suitability check described above, omit optional details that the user did "
+        "not request instead of inventing assumptions. "
         f"After the user has answered round {MAX_REQUIREMENT_CLARIFICATION_ROUNDS}, never call ask_user again "
         "under any circumstance; return the best complete JSON supported by the request and answers, "
         "leaving genuinely unspecified optional details empty for the confirmation UI.\n"
@@ -376,9 +380,22 @@ def _requirements_prompt(
         "The latest request contains answers to a previous clarification turn. Treat these answers as "
         "the user's confirmation for the asked dimensions. Merge them into a complete RequirementSpec "
         "now. Do not call ask_user again for the same dimensions, and do not ask optional 'any other "
-        "roles/pages/features' questions. Omit optional details that remain unspecified.\n"
+        "roles/pages/features' questions. If the previous pending question was the business-agent "
+        "suitability check, treat an affirmative answer as explicit permission to derive the proposed "
+        "product-level agent requirement from the confirmed application context; treat a negative answer "
+        "as a decision to keep agent_requirements empty. In both cases, do not ask the suitability question "
+        "again. Omit optional details that remain unspecified.\n"
         if existing_spec
         and existing_spec.get("confirmation_status") == "pending_user_input"
+        else ""
+    )
+    format_correction_policy = (
+        "FORMAT CORRECTION: The previous response did not follow the required response protocol. "
+        "Do not repeat prose, explanations, markdown, or an unstructured clarification question. "
+        "If user input is required, call ask_user and return no prose. Otherwise return one complete JSON object "
+        "that follows every RequirementSpec field rule below. This instruction corrects only the response format; "
+        "it does not add, remove, or reinterpret any user requirement.\n"
+        if format_correction
         else ""
     )
     return (
@@ -386,10 +403,11 @@ def _requirements_prompt(
         "This is a requirements-only boundary. Do not call subagents, do not delegate tasks, "
         "do not create project plans, and do not generate or modify code.\n"
         "The only tool you may call is ask_user, and only when user input is required.\n"
+        f"{format_correction_policy}"
         "Analyze the user's application request and decide whether the requirement is clear enough "
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 业务参与者, 功能模块, "
-        "页面清单, 业务流程.\n"
+        "页面清单, 业务流程, 业务智能体需求.\n"
         "When the request explicitly says that application-level authorization is enabled, also produce an "
         "authorization_requirements object. Extract only permission controls explicitly stated in the user's "
         "business description or clarification answers into restrictedPages and restrictedOperations. Empty candidate "
@@ -426,6 +444,30 @@ def _requirements_prompt(
         "Databases, persistence, API contracts, schemas, and storage choices are technical "
         "planning concerns. Do not ask the product user about them, do not expose them for confirmation, "
         "and do not include data_sources in the returned RequirementSpec.\n"
+        "Business-agent requirements are user-facing AI assistants or autonomous task capabilities that the "
+        "user explicitly requests or explicitly accepts after an agent suitability check. When the user has not "
+        "explicitly requested, accepted, or declined a business agent, perform that agent suitability check before "
+        "defaulting agent_requirements to an empty array. An application is suitable only when a concrete "
+        "user-facing agent role would add material value beyond deterministic pages and fixed workflows through "
+        "contextual reasoning, multi-turn natural-language guidance, cross-feature assistance, or tool-backed task "
+        "execution. Ordinary CRUD, dashboards, reports, fixed approvals, search, filtering, import/export, "
+        "notifications, scheduled automation, data processing, recommendation, or generated copy alone are not "
+        "sufficient. If the application is suitable, call ask_user with one focused yesno question that names a "
+        "concrete proposed agent role, explains the user-visible value in this application, and asks whether to "
+        "integrate it. This agent suitability check is an explicit exception to the all-five-required-fields return "
+        "rule, but it remains inside the same clarification-round limit and should be included in the current "
+        "ask_user call alongside any other required questions. Do not add an agent_requirements item until the user "
+        "accepts. If the user declines, return agent_requirements=[] and do not ask the suitability question again. "
+        "If the user explicitly requested or accepted an agent, populate agent_requirements without asking a generic "
+        "suitability question. If no concrete agent role would add material value, return agent_requirements=[] "
+        "without asking. Always return agent_requirements as an array. "
+        "Every agent_requirements item must contain exactly agentId, name, purpose, capabilities, entryPageIds, "
+        "interactionMode, and boundaries. agentId must be unique lower_snake_case. capabilities must contain the "
+        "explicit user-facing abilities. entryPageIds must reference pages[].pageId and may be [] only when the "
+        "agent is explicitly application-wide. interactionMode describes the requested product interaction, such "
+        "as conversation. boundaries records explicit read/write or business-scope limits and may be empty. This is "
+        "still a product-requirements boundary: never put a model, model id, prompt, API endpoint, tool, skill, "
+        "knowledge source, storage choice, implementation class, or code path in agent_requirements.\n"
         f"{clarification_policy}"
         f"{followup_policy}"
         "When asking, questions can be choice, text, or yesno. For every choice question, first decide "
@@ -437,7 +479,7 @@ def _requirements_prompt(
         "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
         "without markdown fences or commentary. The JSON must contain exactly these top-level fields: "
         "version, status, generated_at, app_info, user_roles, feature_modules, pages, business_flows, "
-        "authorization_requirements. Do not include any other field. "
+        "agent_requirements, authorization_requirements. Do not include any other field. "
         "app_info MUST include non-empty name and summary. Use summary as the only application-summary field; "
         "the field is named summary, not description. "
         "Do not return assumptions, product risks, or acceptance_criteria. "
@@ -472,6 +514,7 @@ def _invoke_live_chat_model(
     clarification_round: int = 0,
     settings: Settings | None = None,
     on_token: Callable[[str], None] | None = None,
+    format_correction: bool = False,
 ) -> dict[str, Any]:
     """调用绑定澄清工具的需求模型，可选流式吐词。"""
 
@@ -487,18 +530,21 @@ def _invoke_live_chat_model(
                     existing_spec,
                     datasource_type,
                     clarification_round,
+                    format_correction,
                 )
             )
             return {"messages": [result]}
 
         accumulated_text = ""
         merged_chunk: AIMessageChunk | None = None
+        complete_message: AIMessage | None = None
         for chunk in runnable.stream(
             _requirements_prompt(
                 request,
                 existing_spec,
                 datasource_type,
                 clarification_round,
+                format_correction,
             )
         ):
             if isinstance(chunk, AIMessageChunk):
@@ -511,15 +557,32 @@ def _invoke_live_chat_model(
                     accumulated_text += token
                     on_token(token)
                 merged_chunk = chunk if merged_chunk is None else merged_chunk + chunk
+            elif isinstance(chunk, AIMessage):
+                # LangChain 在原生流式关闭时会让 stream() 回退为单个完整消息；
+                # 必须保留该消息，否则已成功返回的正文和工具调用会被误判为空响应。
+                token = _coerce_content_text(chunk.content)
+                if token:
+                    on_token(token)
+                complete_message = chunk
+        if complete_message is not None:
+            return {"messages": [complete_message]}
         if merged_chunk is None:
             return {"messages": []}
         final_tool_calls = getattr(merged_chunk, "tool_calls", None) or []
+        response_metadata = getattr(merged_chunk, "response_metadata", None)
+        usage_metadata = getattr(merged_chunk, "usage_metadata", None)
         final = AIMessage(
             content=accumulated_text,
             tool_calls=(
                 final_tool_calls if hasattr(merged_chunk, "tool_calls") else None
             ),
             id=merged_chunk.id if hasattr(merged_chunk, "id") else None,
+            response_metadata=(
+                response_metadata if isinstance(response_metadata, dict) else {}
+            ),
+            usage_metadata=(
+                usage_metadata if isinstance(usage_metadata, dict) else None
+            ),
         )
         return {"messages": [final]}
 
@@ -538,7 +601,9 @@ def analyze_requirements_with_chat_model(
 
     settings = Settings.from_env()
 
-    def _analyze_once() -> dict[str, Any]:
+    def _analyze_once(*, format_correction: bool = False) -> dict[str, Any]:
+        """执行一次需求分析，并在内容重试时启用固定协议纠正。"""
+
         return _analyze_requirements_once(
             request,
             existing_spec=existing_spec,
@@ -546,6 +611,7 @@ def analyze_requirements_with_chat_model(
             clarification_round=clarification_round,
             settings=settings,
             on_token=on_token,
+            format_correction=format_correction,
         )
 
     try:
@@ -559,7 +625,7 @@ def analyze_requirements_with_chat_model(
             "requirement_spec_content_retry: 模型返回的需求 JSON 不完整，重试一次：%s",
             exc,
         )
-        return _analyze_once()
+        return _analyze_once(format_correction=True)
 
 
 def _is_malformed_spec_json_error(exc: ValueError) -> bool:
@@ -571,6 +637,43 @@ def _is_malformed_spec_json_error(exc: ValueError) -> bool:
     )
 
 
+def _log_requirement_model_response_diagnostics(
+    message: Any,
+    agent_note: str,
+    agent_spec: Any,
+    *,
+    configured_max_tokens: int | None,
+) -> None:
+    """记录需求模型响应的脱敏结构摘要，不输出用户需求或模型正文。"""
+
+    response_metadata = getattr(message, "response_metadata", None)
+    response_metadata = response_metadata if isinstance(response_metadata, dict) else {}
+    usage_metadata = getattr(message, "usage_metadata", None)
+    token_usage = response_metadata.get("token_usage")
+    usage = (
+        usage_metadata
+        if isinstance(usage_metadata, dict)
+        else token_usage
+        if isinstance(token_usage, dict)
+        else {}
+    )
+    output_tokens = usage.get("output_tokens") or usage.get("completion_tokens")
+    finish_reason = response_metadata.get("finish_reason") or response_metadata.get(
+        "finishReason"
+    )
+    logger.info(
+        "requirement_model_response response_chars=%s response_sha256=%s parsed_keys=%s "
+        "tool_call_count=%s finish_reason=%s output_tokens=%s configured_max_tokens=%s",
+        len(agent_note),
+        sha256(agent_note.encode("utf-8")).hexdigest()[:16],
+        sorted(str(key) for key in agent_spec) if isinstance(agent_spec, dict) else [],
+        len(getattr(message, "tool_calls", None) or []),
+        finish_reason,
+        output_tokens if isinstance(output_tokens, int) else None,
+        configured_max_tokens,
+    )
+
+
 def _analyze_requirements_once(
     request: str,
     *,
@@ -579,6 +682,7 @@ def _analyze_requirements_once(
     clarification_round: int,
     settings: Settings,
     on_token: Callable[[str], None] | None,
+    format_correction: bool = False,
 ) -> dict[str, Any]:
     """单次需求分析：调用模型、解析 RequirementSpec、合并澄清上下文。"""
 
@@ -589,9 +693,11 @@ def _analyze_requirements_once(
         clarification_round=clarification_round,
         settings=settings,
         on_token=on_token,
+        format_correction=format_correction,
     )
     messages = agent_result.get("messages", [])
-    content = getattr(messages[-1], "content", "") if messages else ""
+    message = messages[-1] if messages else None
+    content = getattr(message, "content", "") if message is not None else ""
     agent_note = _coerce_content_text(content) or ""
     analysis_source = "direct_chat_model"
 
@@ -601,6 +707,12 @@ def _analyze_requirements_once(
     )
     if not asks_for_clarification:
         agent_spec = _recover_requirement_spec_json(agent_note, agent_spec)
+    _log_requirement_model_response_diagnostics(
+        message,
+        agent_note,
+        agent_spec,
+        configured_max_tokens=getattr(settings, "default_max_tokens", None),
+    )
     if not asks_for_clarification and not isinstance(agent_spec, dict):
         # 需求已被判定为清晰时必须有完整 JSON，不能退回固定页面模板继续向下游传播。
         raise ValueError("需求 AI 未返回完整 RequirementSpec JSON。")
@@ -617,6 +729,9 @@ def _analyze_requirements_once(
     if isinstance(effective_agent_spec, dict):
         # 此标记只驱动配置前置澄清，不能成为正式需求文档的一部分。
         effective_agent_spec.pop("authorization_config_conflict", None)
+        effective_agent_spec = _normalize_optional_agent_requirement_fields(
+            effective_agent_spec
+        )
     if not asks_for_clarification:
         _validate_complete_requirement_spec(
             effective_agent_spec,
@@ -768,6 +883,7 @@ def _validate_complete_requirement_spec(
             "feature_modules",
             "pages",
             "business_flows",
+            "agent_requirements",
         )
         if not isinstance(agent_spec.get(field_name), list)
     ]
@@ -805,8 +921,75 @@ def _validate_complete_requirement_spec(
         for field_name in ("restrictedPages", "restrictedOperations"):
             if not isinstance(authorization.get(field_name), list):
                 missing_fields.append(f"authorization_requirements.{field_name}")
+    agent_requirements = agent_spec.get("agent_requirements")
+    page_ids = {
+        str(page.get("pageId") or "").strip()
+        for page in agent_spec.get("pages", [])
+        if isinstance(page, dict) and str(page.get("pageId") or "").strip()
+    }
+    agent_ids: set[str] = set()
+    expected_agent_fields = {
+        "agentId",
+        "name",
+        "purpose",
+        "capabilities",
+        "entryPageIds",
+        "interactionMode",
+        "boundaries",
+    }
+    if isinstance(agent_requirements, list):
+        for index, agent in enumerate(agent_requirements):
+            field_prefix = f"agent_requirements[{index}]"
+            if not isinstance(agent, dict) or set(agent) != expected_agent_fields:
+                missing_fields.append(f"{field_prefix}(complete-fields)")
+                continue
+            agent_id = str(agent.get("agentId") or "").strip()
+            if not _LOWER_SNAKE_CASE_PATTERN.fullmatch(agent_id):
+                missing_fields.append(f"{field_prefix}.agentId(lower_snake_case)")
+            elif agent_id in agent_ids:
+                missing_fields.append(f"{field_prefix}.agentId(unique)")
+            else:
+                agent_ids.add(agent_id)
+            for field_name in ("name", "purpose", "interactionMode"):
+                if not str(agent.get(field_name) or "").strip():
+                    missing_fields.append(f"{field_prefix}.{field_name}")
+            capabilities = agent.get("capabilities")
+            if not isinstance(capabilities, list) or not _string_list(capabilities):
+                missing_fields.append(f"{field_prefix}.capabilities(non-empty)")
+            entry_page_ids = agent.get("entryPageIds")
+            if not isinstance(entry_page_ids, list):
+                missing_fields.append(f"{field_prefix}.entryPageIds")
+            elif set(_string_list(entry_page_ids)) - page_ids:
+                missing_fields.append(f"{field_prefix}.entryPageIds(page-reference)")
+            if not isinstance(agent.get("boundaries"), list):
+                missing_fields.append(f"{field_prefix}.boundaries")
     if missing_fields:
         raise ValueError(
             "需求 AI 返回的新 RequirementSpec 缺少完整字段："
             + "、".join(missing_fields)
         )
+
+
+def _normalize_optional_agent_requirement_fields(
+    agent_spec: dict[str, Any],
+) -> dict[str, Any]:
+    """规范化可无损解释的智能体边界，同时保留其他字段的严格校验。"""
+
+    normalized = deepcopy(agent_spec)
+    agent_requirements = normalized.get("agent_requirements")
+    if not isinstance(agent_requirements, list):
+        return normalized
+    for agent in agent_requirements:
+        if not isinstance(agent, dict):
+            continue
+        boundaries = agent.get("boundaries")
+        if boundaries is None:
+            # boundaries 的空数组有明确契约语义，不需要模型或产品侧发明业务事实。
+            agent["boundaries"] = []
+        elif isinstance(boundaries, str):
+            # 单个字符串仍是明确的一条业务边界，无损收敛到正式数组契约。
+            normalized_boundary = boundaries.strip()
+            agent["boundaries"] = (
+                [normalized_boundary] if normalized_boundary else []
+            )
+    return normalized

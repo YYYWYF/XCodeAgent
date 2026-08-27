@@ -829,6 +829,50 @@ def _authorization_manifest_markdown(plan: dict[str, Any]) -> str:
     ])
 
 
+def _technical_agent_contract_markdown(contract: dict[str, Any]) -> str:
+    """渲染单个业务智能体的运行时、调用、工具和产物契约。"""
+
+    runtime = contract.get("runtime") if isinstance(contract.get("runtime"), dict) else {}
+    invocation = contract.get("invocation") if isinstance(contract.get("invocation"), dict) else {}
+    artifacts = contract.get("artifacts") if isinstance(contract.get("artifacts"), dict) else {}
+    tool_lines = [
+        "- `{tool}` → `{endpoint}`（{mode}）".format(
+            tool=item.get("toolId", ""),
+            endpoint=item.get("endpointId", ""),
+            mode=item.get("accessMode", ""),
+        )
+        for item in _dict_items(contract.get("toolBindings"))
+    ]
+    capability_lines = [
+        "- `{capability}`：{tools}".format(
+            capability=item.get("capabilityId", ""),
+            tools=", ".join(
+                f"`{tool_id}`" for tool_id in _text_items(item.get("toolIds"))
+            )
+            or "无工具",
+        )
+        for item in _dict_items(contract.get("capabilityBindings"))
+    ]
+    return "\n".join(
+        [
+            f"### {contract.get('agentId', 'unknown-agent')}",
+            "",
+            f"- 运行时：{runtime.get('language', 'Python')} {runtime.get('pythonVersion', '')} + {runtime.get('framework', 'DeepAgents')}（{runtime.get('deployment', 'sidecar')}）",
+            f"- 调用：AG-UI SSE，经 Java 网关 Endpoint `{invocation.get('gatewayEndpointId', '')}`",
+            f"- 内部路径：`{invocation.get('internalPath', '')}`",
+            f"- Agent 代码：`{artifacts.get('agentPath', '')}`",
+            f"- 工具适配：`{artifacts.get('toolAdapterPath', '')}`",
+            f"- 测试：`{artifacts.get('testPath', '')}`",
+            "",
+            "能力绑定：",
+            *(capability_lines or ["- 无"]),
+            "",
+            "工具绑定：",
+            *(tool_lines or ["- 无"]),
+        ]
+    )
+
+
 def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
     """渲染只供开发审核且不重复产品事实的 TechnicalPlan。"""
 
@@ -845,6 +889,20 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
         _technical_page_references_markdown(page)
         for page in _dict_items(plan.get("pages"))
     )
+    agent_contracts = "\n\n".join(
+        _technical_agent_contract_markdown(contract)
+        for contract in _dict_items(plan.get("agent_contracts"))
+    )
+    agent_architecture = (
+        f"\n- 智能体运行时：{architecture.get('agent_runtime')}"
+        if architecture.get("agent_runtime")
+        else ""
+    )
+    agent_section = (
+        f"\n\n## 智能体运行时契约\n\n{agent_contracts}"
+        if agent_contracts
+        else ""
+    )
     return f"""# 技术规划
 
 - 状态：{_status_label(plan.get('confirmation_status', 'draft'))}
@@ -854,7 +912,7 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
 
 - 前端：{architecture.get('frontend', '待补充')}
 - 后端：{architecture.get('backend', '待补充')}
-- 数据：{architecture.get('data', '待补充')}
+- 数据：{architecture.get('data', '待补充')}{agent_architecture}
 
 ## 业务实体
 
@@ -866,7 +924,7 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
 
 ## 页面技术引用
 
-{pages or '- 无'}
+{pages or '- 无'}{agent_section}
 
 ## 权限资源目录（系统编译，只读）
 

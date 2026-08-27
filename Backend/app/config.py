@@ -36,6 +36,8 @@ class Settings:
     )
     default_temperature: float = 0.2
     default_max_tokens: int = 2048
+    # 完整技术规划与定向 Contract 修复使用独立输出预算，不影响其他 Agent。
+    technical_plan_max_tokens: int = 32768
     # UI 确认节点生成 React 设计稿的生成 token 上限。推理模型（如 glm-5.2）的
     # 思考过程与正文共用该预算，且网关会把 thinking 以 [{'thinking': ..}] 碎片
     # 形式逐 token 拼进 content——16384 时思考可吃掉大部分预算导致正文在
@@ -67,9 +69,17 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        """从环境变量加载模型、UI 设计生成和持久化配置。"""
+        """从环境变量加载模型、技术规划、UI 设计生成和持久化配置。"""
 
         base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL")
+        try:
+            technical_plan_max_tokens = int(
+                os.getenv("XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS", "32768")
+            )
+        except ValueError:
+            raise ValueError("XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS 必须是正整数。") from None
+        if technical_plan_max_tokens <= 0:
+            raise ValueError("XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS 必须是正整数。")
         model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
         if model_provider == "openai-compatible":
             model_provider = "openai"
@@ -94,6 +104,7 @@ class Settings:
             ),
             default_temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
             default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "2048")),
+            technical_plan_max_tokens=technical_plan_max_tokens,
             ui_design_max_tokens=int(
                 os.getenv("XCODEAGENT_UI_DESIGN_MAX_TOKENS", "32768")
             ),
