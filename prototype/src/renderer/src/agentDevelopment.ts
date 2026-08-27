@@ -1,3 +1,5 @@
+import type { AgentConfigResource, AgentConfigState } from './agentConfig'
+
 export type AgentApiReference = {
   apiContractId: string
   endpointId: string
@@ -118,13 +120,16 @@ export function missingAgentEntityIds(
 export function createAgentTrialTurn(
   agent: DevelopmentPlanningAgent,
   prompt: string,
-  sequence: number
+  sequence: number,
+  config?: AgentConfigState
 ): AgentTrialTurn {
   const normalizedSequence = Math.max(1, Math.trunc(sequence))
   const userMessage = prompt.trim()
   const apiDependency = agent.apiDependencies[0] || '无 API 调用'
   const endpoint =
     apiDependency === 'GET /api/rechecks/my' ? `${apiDependency}?status=待审核` : apiDependency
+  const configuredTools = configuredResourceNames(agent.tools, config?.tools)
+  const modelLabel = config?.model.model || agent.model
   const isFollowUp = /还有|注意|补充|然后|接着/.test(userMessage)
   return {
     sequence: normalizedSequence,
@@ -132,9 +137,9 @@ export function createAgentTrialTurn(
     assistantMessage: isFollowUp
       ? '还需要注意两点：一是确认每条回检单的整改附件可以正常打开，二是保留与审核人的沟通记录。涉及提交或修改的操作仍需要你本人确认。'
       : '你当前有 2 条待审核回检单。建议先核对整改说明和附件是否完整，再联系对应审核人确认处理时限；我不会代替你提交或修改回检单。',
-    toolName: agent.tools[0] || '未调用工具',
+    toolName: configuredTools[0] || '未调用工具',
     endpoint,
-    evidence: '仅返回当前用户可见数据 · 2 条'
+    evidence: `${modelLabel} · 仅返回当前用户可见数据 · 2 条`
   }
 }
 
@@ -152,8 +157,31 @@ function apiReferenceMarkdown(agent: DevelopmentPlanningAgent): string[] {
   })
 }
 
+/** 合并智能体基线资源与配置面板新增资源，生成稳定且不重复的展示列表。 */
+function configuredResourceNames(
+  baseResources: readonly string[],
+  configuredResources?: readonly AgentConfigResource[]
+): string[] {
+  const names = [...baseResources, ...(configuredResources || []).map((resource) => resource.name)]
+  return [...new Set(names.filter((name) => name.trim()))]
+}
+
+/** 将配置中的布尔开关转换为用户文档中的启用或关闭文案。 */
+function enabledLabel(value: boolean | undefined): string {
+  return value === false ? '关闭' : '启用'
+}
+
 /** 生成供用户确认的智能体 Markdown 详细设计文档。 */
-export function buildAgentDesignDoc(agent: DevelopmentPlanningAgent): string {
+export function buildAgentDesignDoc(
+  agent: DevelopmentPlanningAgent,
+  config?: AgentConfigState
+): string {
+  const modelLabel = config?.model.model || agent.model
+  const modelId = config?.model.model || agent.modelId
+  const tools = configuredResourceNames(agent.tools, config?.tools)
+  const knowledgeReferences = configuredResourceNames(agent.knowledgeReferences, config?.knowledge)
+  const skills = (config?.skills || []).map((resource) => resource.name)
+  const modelSettings = config?.model
   return [
     `# ${agent.label} 智能体设计`,
     '',
@@ -172,6 +200,7 @@ export function buildAgentDesignDoc(agent: DevelopmentPlanningAgent): string {
     '- 只回答需求回检相关问题，并明确说明信息来源。',
     '- 先理解当前问题，再按需调用工具，核验证据后生成回复。',
     '- 本设计需要人工确认后才能进入构建；修订后需要重新确认。',
+    ...(skills.length > 0 ? [`- 已配置技能：${skills.join('、')}。`] : []),
     '',
     '## 限制',
     '',
@@ -191,13 +220,25 @@ export function buildAgentDesignDoc(agent: DevelopmentPlanningAgent): string {
     '',
     '## 模型',
     '',
-    `- ${agent.model}（模型标识：\`${agent.modelId}\`）`,
+    `- ${modelLabel}（模型标识：\`${modelId}\`）`,
+    ...(modelSettings
+      ? [
+          `- 深度思考：${enabledLabel(modelSettings.deepThinking)}`,
+          `- 生成参数：temperature=${modelSettings.temperature}，topP=${modelSettings.topP}，frequencyPenalty=${modelSettings.frequencyPenalty}，presencePenalty=${modelSettings.presencePenalty}。`,
+          `- 输出上限：maxTokens=${modelSettings.maxTokens}。`
+        ]
+      : []),
     '',
     '## 对话体验',
     '',
     '- 支持连续多轮消息，发送后立即显示用户消息和智能体生成状态。',
     '- 回复完成后保留本次试运行上下文，可继续追问或清空会话。',
     '- 工具调用过程作为可展开信息展示，不打断主要对话。',
+    ...(config
+      ? [
+          `- 连续多轮对话：${enabledLabel(config.conversation.multiTurn)}；工具证据：${enabledLabel(config.conversation.toolEvidence)}；失败后允许重试：${enabledLabel(config.conversation.retryOnFailure)}。`
+        ]
+      : []),
     '',
     '## 记忆',
     '',
@@ -206,12 +247,12 @@ export function buildAgentDesignDoc(agent: DevelopmentPlanningAgent): string {
     '',
     '## 工具',
     '',
-    ...markdownList(agent.tools, '暂无工具'),
+    ...markdownList(tools, '暂无工具'),
     ...apiReferenceMarkdown(agent),
     '',
     '## 知识检索',
     '',
-    ...markdownList(agent.knowledgeReferences, '暂无已确认知识引用'),
+    ...markdownList(knowledgeReferences, '暂无已确认知识引用'),
     '- 优先检索当前应用已确认的需求、项目计划和业务知识。',
     '- 检索不到可靠内容时明确说明，不使用未经确认的信息补全答案。',
     ''
@@ -219,9 +260,13 @@ export function buildAgentDesignDoc(agent: DevelopmentPlanningAgent): string {
 }
 
 /** 生成与右侧源码预览配套的智能体定义示例。 */
-export function buildAgentSource(agent: DevelopmentPlanningAgent): AgentSourceArtifact {
+export function buildAgentSource(
+  agent: DevelopmentPlanningAgent,
+  config?: AgentConfigState
+): AgentSourceArtifact {
   const className = `${toJavaClassName(agent.id)}Agent`
-  const tools = javaList(agent.tools)
+  const tools = javaList(configuredResourceNames(agent.tools, config?.tools))
+  const skills = javaList((config?.skills || []).map((resource) => resource.name))
   const apiDependencies = javaList(agent.apiDependencies)
   const apiReferences = javaList(
     agent.apiReferences.map(
@@ -230,8 +275,14 @@ export function buildAgentSource(agent: DevelopmentPlanningAgent): AgentSourceAr
     )
   )
   const entityIds = javaList(agent.entityIds)
-  const knowledgeReferences = javaList(agent.knowledgeReferences)
+  const knowledgeReferences = javaList(
+    configuredResourceNames(agent.knowledgeReferences, config?.knowledge)
+  )
   const permissions = javaList(agent.permissions)
+  const model = config?.model.model || agent.model
+  const modelId = config?.model.model || agent.modelId
+  const modelSettings = config?.model
+  const conversation = config?.conversation
   const content = [
     'package com.xcodeagent.generated.agent;',
     '',
@@ -253,15 +304,34 @@ export function buildAgentSource(agent: DevelopmentPlanningAgent): AgentSourceAr
     '    AgentDefinition definition = AgentDefinition.builder()',
     `        .id("${escapeJavaString(agent.id)}")`,
     `        .name("${escapeJavaString(agent.label)}")`,
-    `        .model("${escapeJavaString(agent.model)}")`,
-    `        .modelId("${escapeJavaString(agent.modelId)}")`,
+    `        .model("${escapeJavaString(model)}")`,
+    `        .modelId("${escapeJavaString(modelId)}")`,
     `        .purpose("${escapeJavaString(agent.purpose)}")`,
     `        .tools(${tools})`,
+    `        .skills(${skills})`,
     `        .apiDependencies(${apiDependencies})`,
     `        .apiReferences(${apiReferences})`,
     `        .entityIds(${entityIds})`,
     `        .knowledgeReferences(${knowledgeReferences})`,
     `        .permissions(${permissions})`,
+    ...(modelSettings
+      ? [
+          `        .deepThinking(${javaBoolean(modelSettings.deepThinking)})`,
+          `        .temperature(${modelSettings.temperature})`,
+          `        .topP(${modelSettings.topP})`,
+          `        .frequencyPenalty(${modelSettings.frequencyPenalty})`,
+          `        .presencePenalty(${modelSettings.presencePenalty})`,
+          `        .maxTokens(${modelSettings.maxTokens})`,
+          `        .otherParameters(${javaList(modelSettings.otherParameters)})`
+        ]
+      : []),
+    ...(conversation
+      ? [
+          `        .multiTurn(${javaBoolean(conversation.multiTurn)})`,
+          `        .toolEvidence(${javaBoolean(conversation.toolEvidence)})`,
+          `        .retryOnFailure(${javaBoolean(conversation.retryOnFailure)})`
+        ]
+      : []),
     '        .build();',
     '    this.delegate = runtime.create(definition);',
     '  }',
@@ -280,9 +350,13 @@ export function buildAgentSource(agent: DevelopmentPlanningAgent): AgentSourceAr
 }
 
 /** 生成智能体受控工具适配器的 Java 代码，确保工具绑定与智能体定义分离。 */
-export function buildAgentToolAdapterSource(agent: DevelopmentPlanningAgent): AgentSourceArtifact {
+export function buildAgentToolAdapterSource(
+  agent: DevelopmentPlanningAgent,
+  config?: AgentConfigState
+): AgentSourceArtifact {
   const className = `${toJavaClassName(agent.id)}ToolAdapter`
   const references = agent.apiReferences.length > 0 ? agent.apiReferences : []
+  const configuredTools = configuredResourceNames(agent.tools, config?.tools)
   const referenceComments = references.length > 0
     ? references.map(
         (reference) =>
@@ -296,8 +370,11 @@ export function buildAgentToolAdapterSource(agent: DevelopmentPlanningAgent): Ag
     'import com.xcodeagent.runtime.agent.ToolContext;',
     'import org.springframework.stereotype.Component;',
     '',
-    '/** 智能体工具适配器只暴露已确认的 API 与实体范围，不允许越权扩展。 */',
+    '/**',
+    ' * 智能体工具适配器只暴露已确认的 API 与实体范围，不允许越权扩展。',
+    ` * - 已配置工具：${configuredTools.join('、') || '无'}。`,
     ...referenceComments,
+    ' */',
     '@Component',
     `public final class ${className} {`,
     '',
@@ -355,6 +432,11 @@ function toJavaClassName(agentId: string): string {
 function javaList(items: readonly string[]): string {
   if (items.length === 0) return 'List.of()'
   return `List.of(${items.map((item) => `"${escapeJavaString(item)}"`).join(', ')})`
+}
+
+/** 把配置布尔值序列化为 Java 源码中的布尔字面量。 */
+function javaBoolean(value: boolean): string {
+  return value ? 'true' : 'false'
 }
 
 /** 转义 Java 字符串中的反斜线、双引号和换行。 */

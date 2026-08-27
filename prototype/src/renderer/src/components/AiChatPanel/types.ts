@@ -45,6 +45,7 @@ export type WorkspaceDocKey = 'requirement-spec' | 'project-plan'
 
 export type RightPanelState =
   | { type: 'preview'; requestKey?: string; url?: string }
+  | { type: 'agent-config' }
   | { type: 'agent-preview' }
   | {
       type: 'diff'

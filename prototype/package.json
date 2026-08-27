@@ -7,6 +7,7 @@
     "format": "prettier --write .",
     "lint": "eslint --cache .",
     "test:agent-development": "node scripts/run-agent-development-tests.mjs",
+    "test:new-app-agent-planning": "node scripts/run-new-app-agent-planning-tests.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.web.json --composite false",
     "dev:prototype": "vite --config vite.prototype.config.ts"
   },

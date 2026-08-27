@@ -14,6 +14,7 @@ import {
   type AgentTrialTurn,
   type DevelopmentPlanningAgent
 } from '../../../../agentDevelopment'
+import { agentConfigFingerprint, type AgentConfigState } from '../../../../agentConfig'
 import { cx } from '../../../../utils'
 import './AgentPreviewPanel.less'
 
@@ -22,11 +23,12 @@ const DEFAULT_TRIAL_PROMPT = '我的待审核回检单下一步应该怎么处�
 
 type Props = {
   agent: DevelopmentPlanningAgent
+  config: AgentConfigState
   hidden?: boolean
 }
 
 /** 渲染智能体构建后的受控试运行，不展示隐藏思维链。 */
-export default function AgentPreviewPanel({ agent, hidden }: Props): ReactElement {
+export default function AgentPreviewPanel({ agent, config, hidden }: Props): ReactElement {
   const [draft, setDraft] = useState(DEFAULT_TRIAL_PROMPT)
   const [turns, setTurns] = useState<AgentTrialTurn[]>([])
   const [pendingPrompt, setPendingPrompt] = useState('')
@@ -34,6 +36,7 @@ export default function AgentPreviewPanel({ agent, hidden }: Props): ReactElemen
   const [running, setRunning] = useState(false)
   const timeoutRef = useRef<number>()
   const conversationRef = useRef<HTMLDivElement>(null)
+  const configFingerprint = agentConfigFingerprint(config)
 
   /** 卸载面板时清理尚未完成的模拟运行，避免向已卸载组件写入状态。 */
   useEffect(
@@ -51,7 +54,7 @@ export default function AgentPreviewPanel({ agent, hidden }: Props): ReactElemen
     setPendingPrompt('')
     setFailedPrompt('')
     setRunning(false)
-  }, [agent.id])
+  }, [agent.id, configFingerprint])
 
   /** 新消息或生成状态出现后滚动到对话底部。 */
   useEffect(() => {
@@ -76,7 +79,7 @@ export default function AgentPreviewPanel({ agent, hidden }: Props): ReactElemen
         setRunning(false)
         return
       }
-      setTurns((current) => [...current, createAgentTrialTurn(agent, prompt, nextSequence)])
+      setTurns((current) => [...current, createAgentTrialTurn(agent, prompt, nextSequence, config)])
       setPendingPrompt('')
       setRunning(false)
     }, 650)
@@ -111,7 +114,7 @@ export default function AgentPreviewPanel({ agent, hidden }: Props): ReactElemen
         </span>
         <span>
           <Text strong>{agent.label}</Text>
-          <Text type="secondary">{agent.model} · 对话式试运行</Text>
+          <Text type="secondary">{config.model.model} · 对话式试运行</Text>
         </span>
         <Tag color={running ? 'gold' : 'green'}>
           {running ? '正在生成回复' : turns.length > 0 ? `${turns.length} 轮对话` : '等待消息'}

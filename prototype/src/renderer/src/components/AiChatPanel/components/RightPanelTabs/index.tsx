@@ -4,7 +4,8 @@ import {
   CodeOutlined,
   FileMarkdownOutlined,
   FolderOpenOutlined,
-  GlobalOutlined
+  GlobalOutlined,
+  SettingOutlined
 } from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
@@ -23,6 +24,7 @@ export type WorkspaceTabKey =
   | 'endpoint-source'
   | 'agent-source'
   | 'agent-preview'
+  | 'agent-config'
   | 'agent-doc'
   | 'detail-doc'
   | 'process'
@@ -34,7 +36,15 @@ export type WorkspaceTab = {
   key: WorkspaceTabKey
   label: string
   available: boolean
-  icon?: 'application' | 'artifacts' | 'browser' | 'code' | 'document' | 'project' | 'test-cases'
+  icon?:
+    | 'application'
+    | 'artifacts'
+    | 'browser'
+    | 'code'
+    | 'document'
+    | 'project'
+    | 'settings'
+    | 'test-cases'
 }
 
 type Props = {
@@ -58,6 +68,7 @@ export default function RightPanelTabs({
     if (icon === 'code') return <CodeOutlined />
     if (icon === 'document') return <FileMarkdownOutlined />
     if (icon === 'project') return <FolderOpenOutlined />
+    if (icon === 'settings') return <SettingOutlined />
     return null
   }
 

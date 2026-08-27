@@ -1193,6 +1193,11 @@ export function buildClarificationContinuationMessage(
     if (action === 'confirm_entity_design') return '已确认实体详细设计，请重新校验智能体依赖。'
     if (action === 'recheck') return '已发起实体依赖重新检测。'
   }
+  if (mode === 'agent_config_review') {
+    return String(answers.agent_config_action || '') === 'cancel'
+      ? '已取消本次智能体配置变更，保留当前生效版本。'
+      : '已确认智能体配置变更，请开始增量生成代码。'
+  }
   if (
     mode === 'requirement_spec_confirmation' &&
     answers.confirm_requirement_spec !== undefined &&

@@ -14,6 +14,13 @@ import {
   missingAgentEntityIds,
   type DevelopmentPlanningAgent
 } from '../../agentDevelopment'
+import {
+  changedAgentConfigSections,
+  cloneAgentConfig,
+  createInitialAgentConfig,
+  isAgentConfigState,
+  type AgentConfigState
+} from '../../agentConfig'
 import { registerWorkbenchLifecycle } from '../mockHttpAgent'
 import { appPath } from '../workspaceFiles'
 import {
@@ -90,10 +97,10 @@ function agentMeta(agentId: string): DevelopmentPlanningAgent {
   )
 }
 
-/** 将规划目录实体转换为当前版本的 Agent 依赖状态，避免已发布版本状态泄漏到新迭代。 */
+/** 将规划目录实体转换为当前版本的 Agent 依赖状态，避免其他版本状态泄漏到当前迭代。 */
 function agentDependencyEntities(
   versionKey: string | undefined,
-  isCompletedDemoVersion: boolean
+  hasCompletedDesignFixtures: boolean
 ): Array<{
   entityId: string
   label: string
@@ -104,7 +111,7 @@ function agentDependencyEntities(
 }> {
   return mockPlanningArtifacts.entities.map((entity) => {
     const designed =
-      isCompletedDemoVersion || isEntityDesigned(entity.entityId, versionKey)
+      hasCompletedDesignFixtures || isEntityDesigned(entity.entityId, versionKey)
     return {
       entityId: entity.entityId,
       label: entity.label,
@@ -164,7 +171,10 @@ function agentWorkflow(
 }
 
 /** 生成用户必须明确确认的智能体结构化详细设计。 */
-function agentReview(agent: DevelopmentPlanningAgent): Record<string, unknown> {
+function agentReview(
+  agent: DevelopmentPlanningAgent,
+  config?: AgentConfigState
+): Record<string, unknown> {
   return {
     target_type: 'agent',
     target_id: agent.id,
@@ -178,7 +188,7 @@ function agentReview(agent: DevelopmentPlanningAgent): Record<string, unknown> {
     limitations: [...agent.permissions, '不展示隐藏思维链，不编造工具未返回的业务数据。'],
     inputs: ['用户发送的自然语言消息', '当前页面上下文、会话历史和必要的用户身份范围'],
     outputs: ['面向用户的直接回复', '工具调用摘要、数据来源与可核验证据'],
-    model: agent.model,
+    model: config?.model.model || agent.model,
     api_dependencies: agent.apiReferences.map((reference) => ({
       apiContractId: reference.apiContractId,
       endpointId: reference.endpointId,
@@ -205,12 +215,17 @@ function agentReview(agent: DevelopmentPlanningAgent): Record<string, unknown> {
       '会话内保留必要的最近对话和工具结果摘要。',
       '不跨用户共享业务数据，不依赖无界历史；长内容保存为稳定引用。'
     ],
-    tools: [...agent.tools, ...agent.apiDependencies],
+    tools: [
+      ...agent.tools,
+      ...(config?.tools || []).map((resource) => resource.name),
+      ...agent.apiDependencies
+    ],
     knowledge_retrieval: [
+      ...((config?.knowledge || []).map((resource) => `已配置：${resource.name}`)),
       '优先检索当前应用已确认的需求、项目计划和业务知识。',
       '检索不到可靠内容时明确说明，不使用未经确认的信息补全答案。'
     ],
-    design_markdown: buildAgentDesignDoc(agent)
+    design_markdown: buildAgentDesignDoc(agent, config)
   }
 }
 
@@ -224,10 +239,17 @@ type AgentBuildTarget = {
 }
 
 /** 生成智能体定义、工具适配器和页面接入的三份实际 Diff 目标。 */
-function agentBuildTargets(agent: DevelopmentPlanningAgent): AgentBuildTarget[] {
+function agentBuildTargets(
+  agent: DevelopmentPlanningAgent,
+  config?: AgentConfigState
+): AgentBuildTarget[] {
   const sources = [
-    { key: 'definition', source: buildAgentSource(agent), sourceTool: 'agent_java_generator' },
-    { key: 'tools', source: buildAgentToolAdapterSource(agent), sourceTool: 'agent_tool_adapter_generator' },
+    { key: 'definition', source: buildAgentSource(agent, config), sourceTool: 'agent_java_generator' },
+    {
+      key: 'tools',
+      source: buildAgentToolAdapterSource(agent, config),
+      sourceTool: 'agent_tool_adapter_generator'
+    },
     { key: 'page', source: buildAgentPageIntegrationSource(agent), sourceTool: 'agent_page_integrator' }
   ]
   return sources.map(({ key, source, sourceTool }) => ({
@@ -339,8 +361,26 @@ export async function replayAgentWorkbench(
   const appId = options.application?.id || 'app-pms-new'
   const appName = options.application?.name || '武汉分行需求回检系统'
   const versionKey = options.application?.currentVersionId
-  const isCompletedDemoVersion =
+  const hasCompletedDesignFixtures =
     appId === 'app-pms-new' && versionKey === 'app-pms-new-v1-3'
+  const resumeAgentConfig = isAgentConfigState(resume?.state?.agentConfig)
+    ? resume?.state?.agentConfig
+    : isAgentConfigState(resume?.result?.agentConfig)
+      ? resume?.result?.agentConfig
+      : undefined
+  const submittedAgentConfig = isAgentConfigState(options.agentConfig)
+    ? options.agentConfig
+    : undefined
+  let revisionAgentConfig = submittedAgentConfig || resumeAgentConfig
+  let configRevision = Boolean(
+    options.workflowScope === 'agent_config_revision' ||
+      options.agentConfigAction ||
+      resume?.state?.agentConfigRevision ||
+      resume?.result?.agentConfigRevision
+  )
+  const revisionBaseConfig =
+    (isAgentConfigState(options.agentConfigBase) && options.agentConfigBase) ||
+    createInitialAgentConfig()
 
   /** 发布权威生命周期并保留同一 runId。 */
   const emitLifecycle = (
@@ -372,7 +412,29 @@ export async function replayAgentWorkbench(
     state: Record<string, unknown> = {},
     extra: Partial<WorkflowRunPayload> = {}
   ): WorkflowRunPayload => {
-    const payload = agentWorkflow(threadId, runId, agent.id, phase, status, lifecycle, state, extra)
+    const revisionState =
+      configRevision && revisionAgentConfig
+        ? {
+            agentConfigRevision: true,
+            agentConfig: revisionAgentConfig,
+            agentConfigBase: revisionBaseConfig,
+            agentConfigRevisionStatus: state.agentConfigRevisionStatus || 'running'
+          }
+        : {}
+    const nextExtra =
+      Object.keys(revisionState).length > 0
+        ? { ...extra, result: { ...(extra.result || {}), ...revisionState } }
+        : extra
+    const payload = agentWorkflow(
+      threadId,
+      runId,
+      agent.id,
+      phase,
+      status,
+      lifecycle,
+      { ...state, ...revisionState },
+      nextExtra
+    )
     onWorkflow?.(payload)
     return payload
   }
@@ -382,7 +444,7 @@ export async function replayAgentWorkbench(
     view: 'dependency_gate' | 'entity_design',
     entityId?: string
   ): WorkflowRunPayload => {
-    const dependencyEntities = agentDependencyEntities(versionKey, isCompletedDemoVersion)
+    const dependencyEntities = agentDependencyEntities(versionKey, hasCompletedDesignFixtures)
     const missingEntityIds = missingAgentEntityIds(agent, dependencyEntities)
     const entity = dependencyEntities.find((candidate) => candidate.entityId === entityId)
     const isEntityDesign = view === 'entity_design' && entity
@@ -491,21 +553,75 @@ export async function replayAgentWorkbench(
     return payload
   }
 
+  /** 生成配置变更确认卡，候选版本在用户确认前不替换当前智能体产物。 */
+  const emitAgentConfigReview = async (config: AgentConfigState): Promise<WorkflowRunPayload> => {
+    configRevision = true
+    revisionAgentConfig = cloneAgentConfig(config)
+    const changedSections = changedAgentConfigSections(revisionBaseConfig, revisionAgentConfig)
+    onContent?.(`正在整理 ${agent.label} 的配置变更…`)
+    await delay(350)
+    const pending = {
+      id: `pi-agent-config-${Date.now()}`,
+      type: 'agent_config_confirmation',
+      basedOnRevision: 1,
+      payload: {
+        agentId: agent.id,
+        changedSections: changedSections.map((section) => section.label)
+      },
+      createdAt: new Date().toISOString()
+    }
+    const lifecycle = emitLifecycle('agent_config_review', 'awaiting_user', pending)
+    const payload = emit(
+      'agent_config_review',
+      'requires_user_input',
+      lifecycle,
+      {
+        agentConfigRevisionStatus: 'awaiting_confirmation',
+        clarification: {
+          mode: 'agent_config_review',
+          status: 'requires_user_input',
+          message: `检测到 ${agent.label} 的配置已修改，请确认后重新生成候选代码。`,
+          context: {
+            changedSections: changedSections.map((section) => section.label),
+            model: revisionAgentConfig.model.model,
+            summary:
+              '配置变更会同步更新智能体设计 Markdown、Java 定义和工具适配器，并沿用逐文件 Diff 与验收流程。'
+          }
+        }
+      },
+      {
+        summary: {
+          phase: 'agent_config_review',
+          status: 'requires_user_input',
+          message: '等待确认智能体配置变更'
+        }
+      }
+    )
+    onContent?.(`已整理 ${agent.label} 配置变更，请确认后进入增量生成。`)
+    return payload
+  }
+
   if (options.planControlAction === 'stop') {
     return emit('build', 'stopped', emitLifecycle('build', 'stopped'))
   }
   if (options.planControlAction === 'end') {
     return emit('finalize_project', 'completed', emitLifecycle('finalize_project', 'completed'))
   }
+  if (options.agentConfigAction === 'submit' && submittedAgentConfig) {
+    return emitAgentConfigReview(submittedAgentConfig)
+  }
   if (answers.agent_acceptance === 'accepted' && resume?.summary?.phase === 'acceptance') {
-    markAgentDesigned(agent.id, versionKey)
+    if (!configRevision) markAgentDesigned(agent.id, versionKey)
     const lifecycle = emitLifecycle('acceptance', 'completed')
     onContent?.(`${agent.label} 试运行和页面预览验收通过，智能体已完成交付。`)
     return emit(
       'acceptance',
       'completed',
       lifecycle,
-      { agentPreviewReady: true },
+      {
+        agentPreviewReady: true,
+        ...(configRevision ? { agentConfigRevisionStatus: 'accepted' } : {})
+      },
       { summary: { phase: 'acceptance', status: 'completed', message: '智能体验收通过' } }
     )
   }
@@ -517,6 +633,31 @@ export async function replayAgentWorkbench(
       ''
   )
   const dependencyAction = String(answers.agent_dependency_action || '').trim()
+  const configAction = String(answers.agent_config_action || '').trim()
+  if (resumeClarification === 'agent_config_review') {
+    const candidate = revisionAgentConfig || resumeAgentConfig
+    if (!candidate) return emitAgentDetailReview()
+    configRevision = true
+    revisionAgentConfig = cloneAgentConfig(candidate)
+    if (configAction === 'cancel') {
+      const lifecycle = emitLifecycle('agent_config_review', 'completed')
+      onContent?.(`已取消 ${agent.label} 的配置变更，保留当前生效版本。`)
+      return emit(
+        'agent_config_review',
+        'completed',
+        lifecycle,
+        { agentConfigRevisionStatus: 'cancelled' },
+        {
+          summary: {
+            phase: 'agent_config_review',
+            status: 'completed',
+            message: '已取消智能体配置变更'
+          }
+        }
+      )
+    }
+    if (configAction !== 'confirm') return emitAgentConfigReview(candidate)
+  }
   if (resumeClarification === 'agent_dependency_gate') {
     const selectedEntityId = String(
       answers.entity_id ||
@@ -529,7 +670,7 @@ export async function replayAgentWorkbench(
     }
     if (dependencyAction === 'confirm_entity_design' && selectedEntityId) {
       markEntityDesigned(selectedEntityId, versionKey)
-      const refreshedEntities = agentDependencyEntities(versionKey, isCompletedDemoVersion)
+      const refreshedEntities = agentDependencyEntities(versionKey, hasCompletedDesignFixtures)
       const stillMissing = missingAgentEntityIds(agent, refreshedEntities)
       if (stillMissing.length > 0) return emitDependencyGate('dependency_gate')
       return emitAgentDetailReview()
@@ -539,7 +680,7 @@ export async function replayAgentWorkbench(
 
   const missingEntityIds = missingAgentEntityIds(
     agent,
-    agentDependencyEntities(versionKey, isCompletedDemoVersion)
+    agentDependencyEntities(versionKey, hasCompletedDesignFixtures)
   )
   if (missingEntityIds.length > 0) {
     return emitDependencyGate('dependency_gate')
@@ -547,7 +688,7 @@ export async function replayAgentWorkbench(
 
   if (answers.detail_review || resume) {
     const steps: ProcessStepRecord[] = []
-    const targets = agentBuildTargets(agent)
+    const targets = agentBuildTargets(agent, revisionAgentConfig)
     const buildResume = resume?.summary?.phase === 'build'
     const acceptedPath = typeof answers.file_acceptance === 'string' ? answers.file_acceptance : ''
     const acceptedIndex = buildResume

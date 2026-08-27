@@ -17,6 +17,7 @@ import type {
   WorkflowRunPayload
 } from '../../../typings'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
+import type { AgentConfigState } from '../../../agentConfig'
 import {
   isDirectModificationWorkflow,
   shouldUseDirectModification
@@ -562,8 +563,12 @@ export function useWorkflowConversation({
       selectedPageId?: string
       selectedApiContractId?: string
       selectedEndpointId?: string
+      selectedAgentId?: string
+      agentConfig?: AgentConfigState
+      agentConfigAction?: 'submit' | 'confirm' | 'cancel'
+      agentConfigBase?: AgentConfigState
       endpointLabel?: string
-      detailTargetType?: 'page' | 'endpoint' | 'application'
+      detailTargetType?: 'page' | 'endpoint' | 'agent' | 'application'
       sessionIdentity?: SessionIdentity
       pageTemplate?: {
         id?: string
@@ -756,6 +761,10 @@ export function useWorkflowConversation({
           options && 'selectedPageId' in options ? options.selectedPageId : identity.pageId,
         selectedApiContractId: options?.selectedApiContractId,
         selectedEndpointId: options?.selectedEndpointId,
+        selectedAgentId: options?.selectedAgentId,
+        agentConfig: options?.agentConfig,
+        agentConfigAction: options?.agentConfigAction,
+        agentConfigBase: options?.agentConfigBase,
         detailTargetType: options?.detailTargetType,
         buildExecutionScope: options?.buildExecutionScope,
         workflowDebug: options?.workflowDebug,

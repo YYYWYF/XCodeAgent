@@ -43,6 +43,7 @@ import {
   createRollbackVersion,
   currentVersion,
   findVersion,
+  isVersionEditable,
   isVersionReleasable
 } from '../service/applicationVersions'
 import {
@@ -497,6 +498,8 @@ function WorkbenchPage({
     testCaseGenerationTaskType
   )
   const releaseVersion = isViewingActiveVersion ? viewedVersion : undefined
+  // 只有当前迭代版本可编辑；设计完成、测试前和审查前仍保持 iterating，生成后才变为 released。
+  const versionReadOnly = !isViewingActiveVersion || !isVersionEditable(viewedVersion)
 
   const versionReleasable = Boolean(
     releaseVersion &&
@@ -734,7 +737,7 @@ function WorkbenchPage({
           key={viewedVersion?.id || workspaceApplication.id}
           applicationId={workspaceApplication.id}
           lifecycle={versionLifecycle}
-          locked={!isViewingActiveVersion || viewedVersion?.status === 'released'}
+          locked={versionReadOnly}
         >
           <div className={cx('workbench-shell-column')}>
             <WorkbenchTopBar
@@ -780,7 +783,7 @@ function WorkbenchPage({
                 previewLaunchError={previewLaunchError}
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
                 versionViewKey={viewedVersion?.id || ''}
-                versionReadOnly={!isViewingActiveVersion || viewedVersion?.status === 'released'}
+                versionReadOnly={versionReadOnly}
                 versionPreviewOnly={!isViewingActiveVersion}
                 testingEntryRequest={testingEntryRequest}
                 onTestingEntryAvailableChange={setTestingEntryAvailable}
