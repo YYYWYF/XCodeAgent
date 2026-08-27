@@ -39,6 +39,48 @@ class TestGenerationTests(unittest.TestCase):
         self.assertIn("*Mapper", prompt)
         self.assertIn("Prefer Service tests", prompt)
 
+    def test_prompt_uses_only_current_bounded_artifacts(self) -> None:
+        """提示只携带 Build Diff、当前任务范围和 TechnicalPlan JSON。"""
+
+        prompt = _build_prompt(
+            {
+                "source_files": ["frontend/src/pages/Orders/index.tsx"],
+                "code_diff": {
+                    "files": [
+                        {
+                            "path": "frontend/src/pages/Orders/index.tsx",
+                            "diff": "+export const Orders = () => null;",
+                        }
+                    ]
+                },
+                "existing_test_files": ["frontend/tests/page-orders.test.tsx"],
+                "build_task_plan_path": ".xcodeagent/plans/build-task-plan.json",
+                "technical_plan_json_path": ".xcodeagent/plans/technical-plan.json",
+                "build_execution_scope": {"type": "page", "targetId": "orders"},
+                "build_execution_slice": {"task_ids": ["task:orders"]},
+                "project_plan_json_path": "stale-project-plan.json",
+                "requirement_spec_json_path": "stale-requirement-spec.json",
+                "detail_plans": [{"stale": True}],
+                "code_graph_index": {"stale": True},
+            }
+        )
+
+        self.assertIn("frozen Build code diff", prompt)
+        self.assertIn(".xcodeagent/plans/build-task-plan.json", prompt)
+        self.assertIn(".xcodeagent/plans/technical-plan.json", prompt)
+        self.assertIn("+export const Orders", prompt)
+        for removed_key in (
+            "project_plan_path",
+            "project_plan_json_path",
+            "requirement_spec_path",
+            "requirement_spec_json_path",
+            "code_graph_index",
+            "page_selection",
+            "detail_selection",
+            "detail_plans",
+        ):
+            self.assertNotIn(removed_key, prompt)
+
     def test_no_target_does_not_create_agent(self) -> None:
         """没有业务源码目标时不调用模型并返回跳过结果。"""
 

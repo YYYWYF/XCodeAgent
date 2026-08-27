@@ -239,26 +239,18 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "source_files": context.get("source_files", [])[:100],
         "code_diff": context.get("code_diff", {}),
         "existing_test_files": context.get("existing_test_files", [])[:5],
-        "project_plan_path": context.get("project_plan_path"),
-        "project_plan_json_path": context.get("project_plan_json_path"),
         "build_task_plan_path": context.get("build_task_plan_path"),
-        "requirement_spec_path": context.get("requirement_spec_path"),
-        "requirement_spec_json_path": context.get("requirement_spec_json_path"),
-        "code_graph_index": context.get("code_graph_index", {}),
-        "page_selection": context.get("page_selection", {}),
-        "detail_selection": context.get("detail_selection", {}),
-        "detail_plans": (
-            context.get("detail_plans", [])[:20]
-            if isinstance(context.get("detail_plans"), list)
-            else []
-        ),
+        "technical_plan_json_path": context.get("technical_plan_json_path"),
         "build_execution_scope": context.get("build_execution_scope", {}),
         "build_execution_slice": context.get("build_execution_slice", {}),
     }
     return (
-        "Generate or update unit tests for this bounded change. Read the referenced files "
-        "from the workspace before writing. Existing tests must be updated in place when "
-        "they cover the changed source. Do not create more than five test files.\n\n"
+        "Generate or update unit tests for this bounded change. Read inputs in this order: "
+        "the frozen Build code diff; changed source files and existing related tests; the "
+        "confirmed Build task plan narrowed by the execution scope and slice; the current "
+        "TechnicalPlan JSON; then only direct source dependencies needed for the test. "
+        "Existing tests must be updated in place when they cover the changed source. Do not "
+        "create more than five test files.\n\n"
         "Do not generate tests for backend mapping-only classes such as *Assembler, "
         "*Converter or *Mapper, including MapStruct implementations; also exclude DTO, "
         "entity, configuration and getter/setter-only classes. Prefer Service tests and "

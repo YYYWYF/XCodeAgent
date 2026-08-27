@@ -508,20 +508,8 @@ def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
         "build_execution_slice": state.get("build_execution_slice", {}),
         "build_task_plan_path": state.get("build_task_plan_path")
         or ".xcodeagent/plans/build-task-plan.json",
-        "project_plan_path": state.get("project_plan_path")
-        or ".xcodeagent/plans/project-plan.md",
-        "project_plan_json_path": state.get("project_plan_json_path")
-        or ".xcodeagent/plans/project-plan.json",
-        "requirement_spec_path": state.get("requirement_spec_path")
-        or ".xcodeagent/specs/requirement-spec.md",
-        "requirement_spec_json_path": state.get("requirement_spec_json_path")
-        or ".xcodeagent/specs/requirement-spec.json",
-        "code_graph_index": state.get("code_graph_index", {}),
-        "page_selection": state.get("page_selection", {}),
-        "detail_selection": state.get("detail_selection", {}),
-        "detail_plans": state.get("detail_plans", [])[:20]
-        if isinstance(state.get("detail_plans"), list)
-        else [],
+        "technical_plan_json_path": state.get("technical_plan_json_path")
+        or ".xcodeagent/plans/technical-plan.json",
     }
     return {
         "unit_test_generation_context": context,

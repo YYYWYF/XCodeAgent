@@ -940,6 +940,75 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         )
         self.assertIn("service.get('/api/leave-types')", code_diff["files"][0]["diff"])
 
+    def test_collected_targets_use_only_current_test_artifacts(self) -> None:
+        """单测上下文只保留 Build DAG、TechnicalPlan 和当前执行范围。"""
+
+        execution_scope = {"type": "page", "targetId": "orders"}
+        execution_slice = {"task_ids": ["task:orders"], "tasks": []}
+        result = collect_unit_test_targets(
+            {
+                "test_generation_input_code_changes": {
+                    "files": [{"path": "frontend/src/pages/Orders/index.tsx"}]
+                },
+                "build_task_plan_path": "/workspace/.xcodeagent/plans/build-task-plan.json",
+                "technical_plan_json_path": "/workspace/.xcodeagent/plans/technical-plan.json",
+                "build_execution_scope": execution_scope,
+                "build_execution_slice": execution_slice,
+                "project_plan_path": "stale-project-plan.md",
+                "project_plan_json_path": "stale-project-plan.json",
+                "requirement_spec_path": "stale-requirement-spec.md",
+                "requirement_spec_json_path": "stale-requirement-spec.json",
+                "code_graph_index": {"stale": True},
+                "page_selection": {"stale": True},
+                "detail_selection": {"stale": True},
+                "detail_plans": [{"stale": True}],
+            }
+        )
+
+        context = result["unit_test_generation_context"]
+        self.assertEqual(
+            context["build_task_plan_path"],
+            "/workspace/.xcodeagent/plans/build-task-plan.json",
+        )
+        self.assertEqual(
+            context["technical_plan_json_path"],
+            "/workspace/.xcodeagent/plans/technical-plan.json",
+        )
+        self.assertEqual(context["build_execution_scope"], execution_scope)
+        self.assertEqual(context["build_execution_slice"], execution_slice)
+        for removed_key in (
+            "project_plan_path",
+            "project_plan_json_path",
+            "requirement_spec_path",
+            "requirement_spec_json_path",
+            "code_graph_index",
+            "page_selection",
+            "detail_selection",
+            "detail_plans",
+        ):
+            self.assertNotIn(removed_key, context)
+
+    def test_collected_targets_default_to_current_technical_plan(self) -> None:
+        """缺少显式路径时必须指向当前 TechnicalPlan，不能回退旧 ProjectPlan。"""
+
+        result = collect_unit_test_targets(
+            {
+                "test_generation_input_code_changes": {
+                    "files": [{"path": "backend/src/main/java/demo/OrderService.java"}]
+                }
+            }
+        )
+
+        context = result["unit_test_generation_context"]
+        self.assertEqual(
+            context["technical_plan_json_path"],
+            ".xcodeagent/plans/technical-plan.json",
+        )
+        self.assertEqual(
+            context["build_task_plan_path"],
+            ".xcodeagent/plans/build-task-plan.json",
+        )
+
     def test_frontend_setup_file_is_not_treated_as_a_unit_test_target(self) -> None:
         """Jest setupTests.ts 不是本轮对应测试文件。"""
 
