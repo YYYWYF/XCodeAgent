@@ -2,7 +2,6 @@ import { useState } from 'react'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import {
-  RequirementEntitiesSection,
   RequirementFlowsSection,
   RequirementOverviewSection,
   RequirementPagesSection,
@@ -19,7 +18,6 @@ type Props = {
 const requirementDocSections: Array<{ key: RequirementSectionKey; label: string }> = [
   { key: 'overview', label: '概览' },
   { key: 'pages', label: '页面' },
-  { key: 'entities', label: '实体' },
   { key: 'flows', label: '业务流程' }
 ]
 
@@ -52,9 +50,6 @@ export default function RequirementDocPanel({ productPlan, spec }: Props): React
       ) : null}
       {activeSection === 'pages' ? (
         <RequirementPagesSection productPlan={productPlan} sectionKey="pages" spec={spec} />
-      ) : null}
-      {activeSection === 'entities' ? (
-        <RequirementEntitiesSection sectionKey="entities" spec={spec} />
       ) : null}
       {activeSection === 'flows' ? (
         <RequirementFlowsSection sectionKey="flows" spec={spec} />

@@ -2,7 +2,6 @@ import {
   ApartmentOutlined,
   ArrowRightOutlined,
   BranchesOutlined,
-  DatabaseOutlined,
   FileTextOutlined,
   TeamOutlined
 } from '@ant-design/icons'
@@ -14,7 +13,6 @@ import {
   behaviorTypeLabel,
   modulePriorityLabel,
   recordItems,
-  requirementEntityRows,
   requirementFlowRows,
   requirementPageRows,
   stringItems,
@@ -25,7 +23,7 @@ import {
 
 const { Text } = Typography
 
-export type RequirementSectionKey = 'overview' | 'pages' | 'entities' | 'flows'
+export type RequirementSectionKey = 'overview' | 'pages' | 'flows'
 
 type SectionProps = {
   sectionKey: RequirementSectionKey
@@ -233,52 +231,6 @@ export function RequirementPagesSection({
           pages.map((page) => <PageCard key={page.key} page={page} />)
         ) : (
           <Text type="secondary">暂无页面规划</Text>
-        )}
-      </div>
-    </section>
-  )
-}
-
-/** 渲染需求实体卡片与字段说明，字段以中文标签为主。 */
-export function RequirementEntitiesSection({
-  spec,
-  sectionKey
-}: { spec: JsonRecord } & SectionProps): ReactElement {
-  const entities = requirementEntityRows(spec)
-  return (
-    <section
-      aria-label="实体"
-      className={cx('requirement-doc-section')}
-      id={`requirement-doc-panel-${sectionKey}`}
-      role="tabpanel"
-    >
-      <div className={cx('requirement-doc-section-title', 'is-entities')}>
-        <DatabaseOutlined /> <span>核心实体</span>
-        <span className={cx('requirement-doc-section-count')}>{entities.length}</span>
-      </div>
-      <div className={cx('requirement-doc-card-list')}>
-        {entities.length ? (
-          entities.map((entity) => (
-            <article className={cx('requirement-doc-card')} key={entity.key}>
-              <div className={cx('requirement-doc-card-heading')}>
-                <strong>{entity.name}</strong>
-                <span>{entity.fields.length} 字段</span>
-              </div>
-              {entity.description ? <Text type="secondary">{entity.description}</Text> : null}
-              {entity.fields.length ? (
-                <ul className={cx('requirement-doc-field-list')}>
-                  {entity.fields.map((field) => (
-                    <li key={field.key}>
-                      <strong>{field.label}</strong>
-                      {field.description ? <span>{field.description}</span> : null}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </article>
-          ))
-        ) : (
-          <Text type="secondary">暂无实体定义</Text>
         )}
       </div>
     </section>
