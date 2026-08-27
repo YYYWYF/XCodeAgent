@@ -254,7 +254,14 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Do not generate tests for backend mapping-only classes such as *Assembler, "
         "*Converter or *Mapper, including MapStruct implementations; also exclude DTO, "
         "entity, configuration and getter/setter-only classes. Prefer Service tests and "
-        "route-contract tests only when their behavior changed.\n\n"
+        "route-contract tests only when their behavior changed. Every Java unit test, "
+        "including a Controller test, must use JUnit 5 and Mockito without loading a Spring "
+        "application context. Use @ExtendWith(MockitoExtension.class), Mockito @Mock and "
+        "@InjectMocks. If a changed HTTP contract requires MockMvc and Spring Test is "
+        "already available, use "
+        "MockMvcBuilders.standaloneSetup. Never use or import @WebMvcTest, @SpringBootTest, "
+        "@MockBean, @Autowired or SpringExtension, and never modify build dependencies for a "
+        "generated test.\n\n"
         f"TestGenerationContext:\n{json.dumps(references, ensure_ascii=False, indent=2, default=str)[:28_000]}"
     )
 
@@ -329,8 +336,15 @@ def _validate_test_files(
         elif normalized.endswith("test.java"):
             if "@Test" not in content or "@Disabled" in content or "@Ignore" in content:
                 invalid_contents.append(relative)
-            package_match = re.search(r"\bpackage\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;", content)
-            package_path = relative.split("/src/test/java/", 1)[-1].rsplit("/", 1)[0].replace("/", ".")
+            package_match = re.search(
+                r"\bpackage\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;",
+                content,
+            )
+            package_path = (
+                relative.split("/src/test/java/", 1)[-1]
+                .rsplit("/", 1)[0]
+                .replace("/", ".")
+            )
             if not package_match or package_match.group(1) != package_path:
                 invalid_contents.append(relative)
         if source_files and not _test_references_source(content, relative, source_files):

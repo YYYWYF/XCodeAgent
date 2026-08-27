@@ -39,6 +39,22 @@ class TestGenerationTests(unittest.TestCase):
         self.assertIn("*Mapper", prompt)
         self.assertIn("Prefer Service tests", prompt)
 
+    def test_prompt_requires_plain_junit_and_mockito_for_controllers(self) -> None:
+        """Controller 单元测试也必须使用纯 JUnit/Mockito，不能加载 Spring 上下文。"""
+
+        prompt = _build_prompt(
+            {
+                "source_files": [
+                    "backend/src/main/java/demo/OrdersController.java"
+                ]
+            }
+        )
+
+        self.assertIn("JUnit 5 and Mockito", prompt)
+        self.assertIn("MockMvcBuilders.standaloneSetup", prompt)
+        self.assertIn("Never use or import @WebMvcTest", prompt)
+        self.assertIn("@MockBean", prompt)
+
     def test_prompt_uses_only_current_bounded_artifacts(self) -> None:
         """提示只携带 Build Diff、当前任务范围和 TechnicalPlan JSON。"""
 
@@ -520,6 +536,36 @@ class TestGenerationTests(unittest.TestCase):
 
         self.assertTrue(validation["valid"])
         self.assertEqual(validation["invalid_paths"], [])
+        self.assertEqual(validation["invalid_contents"], [])
+
+    def test_backend_spring_context_annotations_are_left_to_compilation(self) -> None:
+        """Spring 测试注解只受提示词约束，不在确定性内容校验中失败。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            test_path = (
+                Path(workspace)
+                / "backend/src/test/java/demo/OrdersControllerTest.java"
+            )
+            test_path.parent.mkdir(parents=True)
+            test_path.write_text(
+                "package demo;\n"
+                "import org.junit.jupiter.api.Test;\n"
+                "import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;\n"
+                "import org.springframework.boot.test.mock.bean.MockBean;\n"
+                "@WebMvcTest(OrdersController.class)\n"
+                "class OrdersControllerTest {\n"
+                "  @MockBean Object service;\n"
+                "  @Test void mainPath() {}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            validation = _validate_test_files(
+                workspace,
+                ["backend/src/test/java/demo/OrdersControllerTest.java"],
+                ["backend/src/test/java/demo/OrdersControllerTest.java"],
+            )
+
+        self.assertTrue(validation["valid"])
         self.assertEqual(validation["invalid_contents"], [])
 
 
