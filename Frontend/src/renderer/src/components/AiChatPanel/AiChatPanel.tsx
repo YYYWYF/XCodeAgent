@@ -84,6 +84,7 @@ import {
   requiresInitialDetailDesignSelection,
   requiresEntitySourceBinding,
   sessionDetailTargetKey,
+  shouldShowDevelopmentTargetSelector,
   shouldShowEndpointDetailDesignEntry,
   workflowDetailTargetKey,
   type WorkflowPreviewTarget
@@ -792,6 +793,8 @@ export default function AiChatPanel({
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
   // 记录用户是否主动进入自由对话，用于切换工作台上下文和设计入口状态。
   const [freeChatSelected, setFreeChatSelected] = useState(false)
+  // 用户从模板就绪卡片进入开发后，必须先选择页面、接口或实体，不能被残留规划会话跳过。
+  const [developmentEntrySelectionPending, setDevelopmentEntrySelectionPending] = useState(false)
   // 设计阶段自由变更是主规划 Workflow 的显式中断模式，默认保持锁定。
   const [designChangeUnlocked, setDesignChangeUnlocked] = useState(false)
   // 按页面/API目标保留输入模式，切换会话时不让用户反复选择同一模式。
@@ -850,6 +853,10 @@ export default function AiChatPanel({
   useEffect(() => {
     setAcceptanceConversationSessionKey('')
   }, [application.id, planningThreadId])
+  // 切换应用时清理上一个应用尚未完成的首次开发目标选择。
+  useEffect(() => {
+    setDevelopmentEntrySelectionPending(false)
+  }, [application.id])
   // 模板生成完成后（lifecycle 变为 ready_for_workbench），derivedPhase 自动变 development。
   // 前端拦截：保持 product 阶段，等用户点"进入开发"按钮后才放开（switchPhase(null) 恢复跟随旅程）。
   // 用 sessionStorage 按 applicationId 记录用户是否已确认进入开发，跨重挂载保持。
@@ -2203,14 +2210,16 @@ export default function AiChatPanel({
         activeSession ||
         latestWorkflowForDisplay
     )
-  const detailTargetSelectionRequired =
-    developmentPlanningReady &&
-    initialDetailDesignSelectionRequired &&
-    !hasActiveDetailWorkflow &&
-    !detailProgressVisible &&
-    !detailConfirmationWaitingReview &&
-    !freeChatSelected &&
-    !isApplicationPlanningPhase
+  const detailTargetSelectionRequired = shouldShowDevelopmentTargetSelector({
+    developmentEntrySelectionPending,
+    developmentPlanningReady,
+    detailConfirmationWaitingReview,
+    detailProgressVisible,
+    freeChatSelected,
+    hasActiveDetailWorkflow,
+    initialDetailDesignSelectionRequired,
+    isApplicationPlanningPhase
+  })
   const activeSessionUpdatedAt = sessions.find(
     (session) => session.id === activeSessionId
   )?.updatedAt
@@ -2673,6 +2682,7 @@ export default function AiChatPanel({
       endpointId?: string
     }
   ): Promise<void> => {
+    setDevelopmentEntrySelectionPending(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
@@ -2904,6 +2914,7 @@ export default function AiChatPanel({
   const handleEnterDevelopment = useCallback((): void => {
     markApplicationEnteredDevelopment(application.id)
     setEnterDevConfirmed(true)
+    setDevelopmentEntrySelectionPending(true)
     clearActiveSession()
     setActiveDetailTarget({ type: 'none' })
     setInteractingDetailTargetKey('')

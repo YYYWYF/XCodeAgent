@@ -387,6 +387,40 @@ export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): b
   return true
 }
 
+type DevelopmentTargetSelectorState = {
+  developmentEntrySelectionPending: boolean
+  developmentPlanningReady: boolean
+  detailConfirmationWaitingReview: boolean
+  detailProgressVisible: boolean
+  freeChatSelected: boolean
+  hasActiveDetailWorkflow: boolean
+  initialDetailDesignSelectionRequired: boolean
+  isApplicationPlanningPhase: boolean
+}
+
+/** 判断开发对象选择器是否应接管主区域；显式进入开发必须优先于残留会话状态。 */
+export function shouldShowDevelopmentTargetSelector({
+  developmentEntrySelectionPending,
+  developmentPlanningReady,
+  detailConfirmationWaitingReview,
+  detailProgressVisible,
+  freeChatSelected,
+  hasActiveDetailWorkflow,
+  initialDetailDesignSelectionRequired,
+  isApplicationPlanningPhase
+}: DevelopmentTargetSelectorState): boolean {
+  if (isApplicationPlanningPhase) return false
+  if (developmentEntrySelectionPending) return true
+  return (
+    developmentPlanningReady &&
+    initialDetailDesignSelectionRequired &&
+    !hasActiveDetailWorkflow &&
+    !detailProgressVisible &&
+    !detailConfirmationWaitingReview &&
+    !freeChatSelected
+  )
+}
+
 /** 以当前实体的数据源绑定状态判断是否需要锁定对话区。 */
 export function requiresEntitySourceBinding(
   entity: DevelopmentPlanningEntityOption | undefined

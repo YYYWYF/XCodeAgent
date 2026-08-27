@@ -6,6 +6,7 @@ import {
   pageDetailTargetKey,
   requiresEndpointDetailDesign,
   sessionDetailTargetKey,
+  shouldShowDevelopmentTargetSelector,
   shouldShowEndpointDetailDesignEntry,
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
@@ -275,6 +276,35 @@ test('待设计 API 在开始前显示绿色设计入口，已有运行消息后
   assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, true, 1), false)
   assert.equal(
     requiresEndpointDetailDesign({ ...pendingEndpoint, designed: true, hasDetailPlan: true }),
+    false
+  )
+})
+
+test('模板就绪后显式进入开发优先显示目标选择器', () => {
+  assert.equal(
+    shouldShowDevelopmentTargetSelector({
+      developmentEntrySelectionPending: true,
+      developmentPlanningReady: false,
+      detailConfirmationWaitingReview: false,
+      detailProgressVisible: false,
+      freeChatSelected: true,
+      hasActiveDetailWorkflow: true,
+      initialDetailDesignSelectionRequired: true,
+      isApplicationPlanningPhase: false
+    }),
+    true
+  )
+  assert.equal(
+    shouldShowDevelopmentTargetSelector({
+      developmentEntrySelectionPending: true,
+      developmentPlanningReady: true,
+      detailConfirmationWaitingReview: false,
+      detailProgressVisible: false,
+      freeChatSelected: false,
+      hasActiveDetailWorkflow: false,
+      initialDetailDesignSelectionRequired: true,
+      isApplicationPlanningPhase: true
+    }),
     false
   )
 })
