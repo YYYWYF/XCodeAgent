@@ -327,7 +327,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
                     )
                 }
                 if path.name == "product-plan.json":
-                    payload.update({"schema_version": "product-plan.v5", "pages": []})
+                    payload.update({"schema_version": "product-plan.v6", "pages": []})
                 if path.name == "ui-designs.json":
                     payload.update({"schema_version": "ui-manifest.v3", "pages": []})
                 if path.name == "technical-plan.json":

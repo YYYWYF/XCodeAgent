@@ -23,6 +23,7 @@ def _complete_spec_dict() -> dict:
         "pages": [{"pageId": "p1", "name": "首页", "path": "/"}],
         "entities": [],
         "business_flows": [{"id": "f1", "name": "流程", "description": "", "steps": ["开始"]}],
+        "agent_requirements": [],
     }
 
 
@@ -39,7 +40,7 @@ def test_recovery_repairs_unescaped_quotes_in_spec_json():
     broken = (
         '{"app_info": {"name": "武汉"分行"项目管理", "summary": "摘要"}, '
         '"user_roles": [], "feature_modules": [], "pages": [], '
-        '"entities": [], "business_flows": []}'
+        '"entities": [], "business_flows": [], "agent_requirements": []}'
     )
     recovered = _recover_requirement_spec_json(broken, None)
     assert isinstance(recovered, dict)

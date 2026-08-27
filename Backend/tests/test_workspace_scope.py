@@ -162,6 +162,44 @@ class WorkspaceScopeTests(unittest.TestCase):
                 "allow",
             )
 
+    def test_agent_runtime_can_only_write_generated_python_sidecar(self) -> None:
+        """Agent CodeRunner 可读工程上下文但只能写 agent-runtime。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            permissions = create_workspace_permissions(
+                workspace,
+                mode="agent_runtime",
+            )
+
+            self.assertEqual(
+                _check_fs_permission(
+                    permissions,
+                    "write",
+                    "/agent-runtime/agents/inventory_assistant.py",
+                ),
+                "allow",
+            )
+            self.assertEqual(
+                _check_fs_permission(
+                    permissions,
+                    "write",
+                    "/backend/src/main/java/App.java",
+                ),
+                "deny",
+            )
+            self.assertEqual(
+                _check_fs_permission(
+                    permissions,
+                    "write",
+                    "/frontend/src/App.tsx",
+                ),
+                "deny",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "read", "/backend/pom.xml"),
+                "allow",
+            )
+
     def test_host_workspace_path_cannot_be_repeated_as_virtual_path(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
             permissions = create_workspace_permissions(workspace, mode="frontend")

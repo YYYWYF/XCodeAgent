@@ -144,6 +144,47 @@ def _authorization_markdown(spec: dict[str, Any]) -> str:
     )
 
 
+def _agent_requirements_markdown(spec: dict[str, Any]) -> str:
+    """把产品级业务智能体需求渲染为可编辑 Markdown。"""
+
+    requirements = spec.get("agent_requirements")
+    if not isinstance(requirements, list) or not requirements:
+        return "- 当前需求不包含业务智能体。"
+    blocks: list[str] = []
+    for agent in requirements:
+        if not isinstance(agent, dict):
+            continue
+        capabilities = agent.get("capabilities")
+        entry_page_ids = agent.get("entryPageIds")
+        boundaries = agent.get("boundaries")
+        capability_text = (
+            "、".join(str(item) for item in capabilities)
+            if isinstance(capabilities, list) and capabilities
+            else "待补充"
+        )
+        entry_page_text = (
+            "、".join(f"`{item}`" for item in entry_page_ids)
+            if isinstance(entry_page_ids, list) and entry_page_ids
+            else "应用级入口"
+        )
+        boundary_text = (
+            "、".join(str(item) for item in boundaries)
+            if isinstance(boundaries, list) and boundaries
+            else "暂无明确限制"
+        )
+        blocks.extend(
+            [
+                f"- `{agent.get('agentId', '')}` {agent.get('name', '未命名智能体')}",
+                f"  - 职责：{agent.get('purpose', '待补充')}",
+                f"  - 核心能力：{capability_text}",
+                f"  - 入口页面：{entry_page_text}",
+                f"  - 交互方式：{agent.get('interactionMode', '待补充')}",
+                f"  - 业务边界：{boundary_text}",
+            ]
+        )
+    return "\n".join(blocks) or "- 当前需求不包含业务智能体。"
+
+
 def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     """把 RequirementSpec 渲染为用户可编辑的 Markdown 文档。"""
 
@@ -214,6 +255,10 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 ## 页面清单
 
 {pages}
+
+## 智能体需求
+
+{_agent_requirements_markdown(spec)}
 
 ## 实体清单
 

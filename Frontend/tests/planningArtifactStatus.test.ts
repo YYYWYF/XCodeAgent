@@ -9,9 +9,9 @@ import {
   PRODUCT_PLAN_SCHEMA_VERSION
 } from '../src/main/planningArtifactStatus'
 
-/** 验证 Electron 工作台只读取后端当前的 ProductPlan v5 契约。 */
-test('ProductPlan 工作台校验使用 v5', () => {
-  assert.equal(PRODUCT_PLAN_SCHEMA_VERSION, 'product-plan.v5')
+/** 验证 Electron 工作台只读取后端当前的 ProductPlan v6 契约。 */
+test('ProductPlan 工作台校验使用 v6', () => {
+  assert.equal(PRODUCT_PLAN_SCHEMA_VERSION, 'product-plan.v6')
 })
 
 /** 创建隔离工作区并在用例结束后清理。 */
@@ -39,11 +39,7 @@ test('没有 endpoint Markdown 时接口保持待设计', async () => {
 /** 验证空文件不属于已产出的有效 endpoint 设计文档。 */
 test('空 endpoint Markdown 不会标记为已设计', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const documentPath = endpointDesignDocumentPath(
-      workspaceRoot,
-      'employee-api',
-      'employee.list'
-    )
+    const documentPath = endpointDesignDocumentPath(workspaceRoot, 'employee-api', 'employee.list')
     await fs.mkdir(path.dirname(documentPath), { recursive: true })
     await fs.writeFile(documentPath, '   \n', 'utf8')
 
@@ -57,11 +53,7 @@ test('空 endpoint Markdown 不会标记为已设计', async () => {
 /** 验证只有非空用户可读 endpoint 文档真实落盘后才标记为已设计。 */
 test('非空 endpoint Markdown 产出后接口标记为已设计', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const documentPath = endpointDesignDocumentPath(
-      workspaceRoot,
-      'employee-api',
-      'employee.list'
-    )
+    const documentPath = endpointDesignDocumentPath(workspaceRoot, 'employee-api', 'employee.list')
     await fs.mkdir(path.dirname(documentPath), { recursive: true })
     await fs.writeFile(documentPath, '# Employee list endpoint\n', 'utf8')
 
@@ -75,11 +67,7 @@ test('非空 endpoint Markdown 产出后接口标记为已设计', async () => {
 /** 验证内部 JSON 单独存在时不能代替用户要求的 endpoint 文档。 */
 test('只有 endpoint JSON 时接口仍保持待设计', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const markdownPath = endpointDesignDocumentPath(
-      workspaceRoot,
-      'employee-api',
-      'employee.list'
-    )
+    const markdownPath = endpointDesignDocumentPath(workspaceRoot, 'employee-api', 'employee.list')
     await fs.mkdir(path.dirname(markdownPath), { recursive: true })
     await fs.writeFile(markdownPath.replace(/\.md$/, '.json'), '{"status":"confirmed"}\n', 'utf8')
 

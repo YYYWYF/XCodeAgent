@@ -74,7 +74,27 @@ const APPLICATION_PLANNING_CLARIFICATION_PHASES: Record<string, string> = {
   planning_stage_entry_confirmation: 'planning_stage_entry',
   technical_plan_confirmation: 'technical_planning',
   technical_plan_generation_error: 'technical_planning',
+  project_plan_dependency_validation_error: 'technical_planning',
+  project_plan_revision_required: 'technical_planning',
   project_plan_confirmation: 'project_planning'
+}
+
+const APPLICATION_PLANNING_RECOVERY_MODES = new Set([
+  'technical_plan_generation_error',
+  'project_plan_dependency_validation_error',
+  'project_plan_revision_required'
+])
+
+/** 从通用澄清卡答案中提取恢复请求，确保修订动作保留用户补充的业务决策。 */
+function applicationPlanningRecoveryRequest(answers: WorkflowClarificationAnswers): string {
+  if (typeof answers.planning_recovery === 'string') {
+    return answers.planning_recovery.trim()
+  }
+  for (const [key, value] of Object.entries(answers)) {
+    if (key === '__applicationPlanningAction') continue
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
 }
 
 /** 判断创建规划确认是否仍属于当前节点，过滤 checkpoint 中已消费但尚未清理的旧确认。 */
@@ -176,8 +196,16 @@ export function ensureApplicationPlanningAction(
   if (mode === 'planning_stage_entry_confirmation') {
     return { ...answers, __applicationPlanningAction: 'enter_planning' }
   }
-  if (mode === 'technical_plan_generation_error' || typeof answers.planning_recovery === 'string') {
-    return { ...answers, __applicationPlanningAction: 'revise' }
+  if (
+    APPLICATION_PLANNING_RECOVERY_MODES.has(mode) ||
+    typeof answers.planning_recovery === 'string'
+  ) {
+    const planningRecovery = applicationPlanningRecoveryRequest(answers)
+    return {
+      ...answers,
+      ...(planningRecovery ? { planning_recovery: planningRecovery } : {}),
+      __applicationPlanningAction: 'revise'
+    }
   }
 
   const confirmationKey = PLANNING_CONFIRMATION_ANSWER_KEYS[mode]

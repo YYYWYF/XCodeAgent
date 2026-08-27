@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-export const PRODUCT_PLAN_SCHEMA_VERSION = 'product-plan.v5'
+export const PRODUCT_PLAN_SCHEMA_VERSION = 'product-plan.v6'
 
 /** 把 endpoint 业务标识转换为与规划产物约定一致的安全文件名。 */
 function endpointDocumentStem(apiContractId: string, endpointId: string): string {
