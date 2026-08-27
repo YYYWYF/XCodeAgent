@@ -231,9 +231,9 @@ def normalize_authorization_requirements(
         if isinstance(raw_enabled, bool)
         else False
     )
-    # 页面和实体参数保留在函数签名中，避免调用方把候选绑定到尚未完成的规划产物。
-    # RequirementSpec 阶段不读取它们，也不生成或校验 pageId/entityId。
-    _ = pages, entities
+    # 页面在 RequirementSpec 内已具有稳定 pageId；页面权限规则必须引用该身份。
+    # 实体在此阶段不参与权限绑定，保留参数是为了保持调用边界稳定。
+    _ = entities
     existing_rules = {
         field_name: _existing_rules(existing_value, field_name)
         for field_name in ("restrictedPages", "restrictedOperations")
@@ -259,6 +259,12 @@ def normalize_authorization_requirements(
             or _string_list(existing_rule.get("defaultGrantedRoleIds")),
             "ruleId": str(existing_rule.get("ruleId") or "").strip() or str(uuid4()),
         }
+        if field_name == "restrictedPages":
+            # 规则语义不变时保留已有绑定；用户明确修改时以当前 targetPageId 为准。
+            normalized["targetPageId"] = (
+                str(item.get("targetPageId") or "").strip()
+                or str(existing_rule.get("targetPageId") or "").strip()
+            )
         normalized["rationale"] = str(item.get("rationale") or "")
         return normalized
 
@@ -339,6 +345,11 @@ def validate_authorization_requirements(
     restricted_operations = (
         restricted_operations if isinstance(restricted_operations, list) else []
     )
+    page_ids = {
+        str(page.get("pageId") or page.get("id") or "").strip()
+        for page in value.get("pages", [])
+        if isinstance(page, dict) and str(page.get("pageId") or page.get("id") or "").strip()
+    }
     capability_issues = value.get("authorization_capability_issues") if isinstance(value, dict) else None
     if isinstance(capability_issues, list) and capability_issues:
         errors.append("当前需求包含不支持的数据权限：DATA_AUTHORIZATION_NOT_SUPPORTED")
@@ -390,6 +401,13 @@ def validate_authorization_requirements(
             errors.append("受控页面缺少业务对象名称")
         if not str(item.get("description") or "").strip():
             errors.append(f"受控页面 {page_name or '未命名'} 缺少业务说明")
+        target_page_id = str(item.get("targetPageId") or "").strip()
+        if not target_page_id:
+            errors.append(f"受控页面 {page_name or '未命名'} 缺少 targetPageId")
+        elif target_page_id not in page_ids:
+            errors.append(
+                f"受控页面 {page_name or '未命名'} 的 targetPageId 必须引用 pages 中的页面"
+            )
         _validate_authorization_rule_metadata(
             item, page_name or "未命名", rule_ids, role_ids, errors
         )

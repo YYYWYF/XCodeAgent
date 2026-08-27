@@ -128,7 +128,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     "restrictedPages": [
                         {
                             "ruleId": "inventory_page_rule",
-                            "pageId": "inventory_list",
+                            "targetPageId": "inventory_list",
                             "name": "库存列表",
                             "description": "仅授权成员可访问库存。",
                             "rationale": "库存信息属于内部业务数据。",
@@ -156,7 +156,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertTrue(authorization["enabled"])
         self.assertNotIn("unauthorizedBehavior", authorization)
         self.assertEqual(authorization["restrictedPages"][0]["name"], "库存列表")
-        self.assertNotIn("pageId", authorization["restrictedPages"][0])
+        self.assertEqual(authorization["restrictedPages"][0]["targetPageId"], "inventory_list")
         self.assertEqual(authorization["restrictedOperations"][0]["name"], "调整库存")
         self.assertNotIn("operationId", authorization["restrictedOperations"][0])
         self.assertNotIn("pageId", authorization["restrictedOperations"][0])
@@ -167,8 +167,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertIn("/roles", markdown)
         self.assertIn("第一阶段不实现数据范围授权", markdown)
 
-    def test_authorization_validation_only_checks_business_semantics(self) -> None:
-        """需求阶段不绑定页面或实体，只校验候选是否说明了业务含义。"""
+    def test_authorization_validation_requires_page_binding(self) -> None:
+        """需求阶段的受控页面必须绑定已确认页面，避免 ProductPlan 按名称猜测。"""
 
         spec = create_requirement_spec(
             "涉及权限控制：是",
@@ -189,7 +189,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                         {
                             "name": "人员列表",
                             "description": "只有获得授权的成员才能查看人员信息。",
-                            "pageId": "not_generated_yet",
+                            "targetPageId": "not_generated_yet",
                             "sourceRefs": ["用户提及人员列表权限"],
                             "defaultGrantedRoleIds": ["personnel_manager"],
                         }
@@ -213,14 +213,23 @@ class RequirementsConfirmationTests(unittest.TestCase):
         )
 
         errors = validate_authorization_requirements(spec)
-        self.assertEqual(errors, [])
+        self.assertTrue(any("targetPageId 必须引用 pages" in error for error in errors))
 
     def test_authorization_validation_rejects_incomplete_business_candidate(self) -> None:
-        """缺少业务语义才需要澄清，缺少技术绑定不应触发错误。"""
+        """缺少业务语义时仍需澄清，页面绑定仅适用于受控页面规则。"""
 
         spec = create_requirement_spec(
             "涉及权限控制：是",
             agent_spec={
+                "pages": [
+                    {
+                        "pageId": "people_list",
+                        "name": "人员列表",
+                        "path": "/people",
+                        "module_id": "people",
+                        "description": "查看人员信息。",
+                    }
+                ],
                 "authorization_requirements": {
                     "enabled": True,
                     "restrictedOperations": [{"description": "需要限制某个操作。"}],
@@ -238,6 +247,15 @@ class RequirementsConfirmationTests(unittest.TestCase):
         spec = create_requirement_spec(
             "涉及权限控制：是",
             agent_spec={
+                "pages": [
+                    {
+                        "pageId": "people_list",
+                        "name": "人员列表",
+                        "path": "/people",
+                        "module_id": "people",
+                        "description": "查看人员信息。",
+                    }
+                ],
                 "authorization_requirements": {
                     "enabled": True,
                     "restrictedPages": [],
@@ -284,11 +302,21 @@ class RequirementsConfirmationTests(unittest.TestCase):
         spec = create_requirement_spec(
             "涉及权限控制：是",
             agent_spec={
+                "pages": [
+                    {
+                        "pageId": "people_list",
+                        "name": "人员列表",
+                        "path": "/people",
+                        "module_id": "people",
+                        "description": "查看人员信息。",
+                    }
+                ],
                 "authorization_requirements": {
                     "enabled": True,
                     "restrictedPages": [
                         {
                             "name": "人员列表",
+                            "targetPageId": "people_list",
                             "description": "只有授权成员可以进入人员列表。",
                             "sourceRefs": ["用户提及人员列表权限"],
                         }
@@ -381,6 +409,15 @@ class RequirementsConfirmationTests(unittest.TestCase):
         spec = create_requirement_spec(
             "涉及权限控制：是",
             agent_spec={
+                "pages": [
+                    {
+                        "pageId": "order_list",
+                        "name": "订单列表",
+                        "path": "/orders",
+                        "module_id": "orders",
+                        "description": "查看订单。",
+                    }
+                ],
                 "user_roles": [
                     {
                         "id": "business_manager",
@@ -393,6 +430,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     "restrictedPages": [
                         {
                             "name": "订单列表",
+                            "targetPageId": "order_list",
                             "description": "仅授权成员可查看订单。",
                             "rationale": "订单包含内部业务信息。",
                             "sourceRefs": ["用户提出订单列表权限"],

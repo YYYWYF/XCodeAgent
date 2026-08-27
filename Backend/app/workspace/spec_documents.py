@@ -99,6 +99,7 @@ def _authorization_markdown(spec: dict[str, Any]) -> str:
     pages = "\n".join(
         f"- {item.get('name') or '受控页面'}："
         f"{item.get('description', '') or '待补充'}；理由：{item.get('rationale', '') or '待补充'}"
+        f"；目标页面：{item.get('targetPageId', '') or '待确认'}"
         f"；默认授权：{granted_roles(item)}"
         f" <!-- ruleId:{item.get('ruleId', '')} -->"
         for item in authorization_items("restrictedPages")

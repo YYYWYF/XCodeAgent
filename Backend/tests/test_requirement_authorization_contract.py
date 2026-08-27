@@ -55,6 +55,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
                 "restrictedPages": [
                     {
                         "name": "资产列表页",
+                        "targetPageId": "asset_list",
                         "description": "只有管理员可以进入资产列表页。",
                         "rationale": "列表展示全局资产信息。",
                         "sourceRefs": ["管理员可查看资产列表页"],
@@ -71,7 +72,13 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
             },
         }
 
-        self.assertEqual(_validate_authorization_fact_output(facts), [])
+        self.assertEqual(
+            _validate_authorization_fact_output(
+                facts,
+                [{"pageId": "asset_list", "name": "资产列表", "description": "资产信息。"}],
+            ),
+            [],
+        )
         merged = _merge_authorization_facts(
             {
                 "user_roles": [],
@@ -102,6 +109,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
                 "restrictedPages": [
                     {
                         "name": "资产列表页",
+                        "targetPageId": "asset_list",
                         "description": "",
                         "rationale": "资产信息需要管理。",
                         "sourceRefs": ["管理员可查看资产列表页"],
@@ -113,7 +121,10 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
             },
         }
 
-        errors = _validate_authorization_fact_output(facts)
+        errors = _validate_authorization_fact_output(
+            facts,
+            [{"pageId": "asset_list", "name": "资产列表", "description": "资产信息。"}],
+        )
 
         self.assertTrue(any("缺少业务语义" in error for error in errors))
 
@@ -167,6 +178,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
                         {
                             "ruleId": "model-controlled-id",
                             "name": "人员列表",
+                            "targetPageId": "people_list",
                             "description": "仅授权成员可查看人员信息。",
                             "rationale": "人员信息属于内部资料。",
                             "sourceRefs": ["用户提及人员列表权限"],
@@ -201,6 +213,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
                     "restrictedPages": [
                         {
                             "name": "人员列表",
+                            "targetPageId": "people_list",
                             "description": "仅授权成员可查看人员信息。",
                             "rationale": "人员信息属于内部资料。",
                             "sourceRefs": ["用户提及人员列表权限"],
@@ -217,3 +230,51 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
                 spec,
                 f"<!-- ruleId:{rule_id} -->\n<!-- ruleId:{rule_id} -->",
             )
+
+    def test_restricted_page_requires_existing_target_page_id(self) -> None:
+        """受控页面必须以已确认 pageId 建立稳定绑定，不能再回退到名称猜测。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：是",
+            agent_spec={
+                "pages": [
+                    {
+                        "pageId": "asset_list",
+                        "name": "资产列表",
+                        "path": "/assets",
+                        "module_id": "asset",
+                        "description": "查看资产。",
+                    }
+                ],
+                "user_roles": [
+                    {
+                        "id": "administrator",
+                        "name": "管理员",
+                        "description": "管理资产。",
+                        "isSystemRole": True,
+                        "isInitialAdminRole": True,
+                    }
+                ],
+                "authorization_requirements": {
+                    "enabled": True,
+                    "initialAdminRoleId": "administrator",
+                    "restrictedPages": [
+                        {
+                            "name": "资产管理功能",
+                            "targetPageId": "asset_list",
+                            "description": "仅管理员可访问。",
+                            "rationale": "资产信息属于内部资料。",
+                            "sourceRefs": ["需求"],
+                            "defaultGrantedRoleIds": ["administrator"],
+                        }
+                    ],
+                    "restrictedOperations": [],
+                },
+            },
+        )
+
+        self.assertEqual(validate_authorization_requirements(spec), [])
+        spec["authorization_requirements"]["restrictedPages"][0]["targetPageId"] = "missing_page"
+        self.assertTrue(
+            any("targetPageId 必须引用 pages" in error for error in validate_authorization_requirements(spec))
+        )

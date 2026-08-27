@@ -467,13 +467,9 @@ def _authorization_targets(
     if authorization.get("enabled") is not True:
         return {"pageRules": [], "operationRules": []}
 
-    page_by_name: dict[str, list[str]] = {}
     action_by_name: dict[str, list[dict[str, str]]] = {}
     for page in pages:
         page_id = str(page.get("pageId") or "").strip()
-        page_key = _authorization_target_key(page.get("name"))
-        if page_id and page_key:
-            page_by_name.setdefault(page_key, []).append(page_id)
         for action in _dict_items(page.get("actions")):
             action_id = str(action.get("actionId") or "").strip()
             action_key = _authorization_target_key(action.get("name"))
@@ -482,16 +478,12 @@ def _authorization_targets(
                     {"pageId": page_id, "actionId": action_id}
                 )
 
-    def mapped_rules(field_name: str, targets: dict[str, list[str]], target_field: str) -> list[dict[str, str]]:
-        """只在名称一对一匹配时保留规则目标，歧义交由确认校验显式阻断。"""
-
-        result: list[dict[str, str]] = []
-        for rule in _dict_items(authorization.get(field_name)):
-            rule_id = str(rule.get("ruleId") or "").strip()
-            candidates = targets.get(_authorization_target_key(rule.get("name")), [])
-            if rule_id and len(candidates) == 1:
-                result.append({"ruleId": rule_id, target_field: candidates[0]})
-        return result
+    page_rules = [
+        {"ruleId": rule_id, "pageId": target_page_id}
+        for rule in _dict_items(authorization.get("restrictedPages"))
+        if (rule_id := str(rule.get("ruleId") or "").strip())
+        and (target_page_id := str(rule.get("targetPageId") or "").strip())
+    ]
 
     operation_rules: list[dict[str, str]] = []
     for rule in _dict_items(authorization.get("restrictedOperations")):
@@ -500,7 +492,8 @@ def _authorization_targets(
         if rule_id and len(candidates) == 1:
             operation_rules.append({"ruleId": rule_id, **candidates[0]})
     return {
-        "pageRules": mapped_rules("restrictedPages", page_by_name, "pageId"),
+        # 页面权限直接消费 RequirementSpec 已确认的稳定绑定，绝不再按展示名称猜测。
+        "pageRules": page_rules,
         # 操作 ID 只在页面内唯一；权限目标必须带父页面才能成为后续资源绑定的唯一坐标。
         "operationRules": operation_rules,
     }

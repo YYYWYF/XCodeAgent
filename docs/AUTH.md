@@ -290,9 +290,8 @@ allowOperation(endpoint, member) =
 7. 搜索新增代码中的自然语言权限关键词表、角色名分支、默认权限规则、无来源资源、资源写接口和授权 provider 分支；发现即停止验收。
 8. 更新本文步骤状态和必要的 `docs/CODEBASE_INDEX.md`，再申请进入下一步骤。
 9. 每个步骤完成后必须实际启动受影响的 XCodeAgent、模板工程或生成应用，向用户提交修改文件、启动命令、测试结果、人工验收入口和遗留问题；只有用户明确确认达到预期后才能开始下一步骤，模型不得把多个未验收步骤合并执行。
-10. 第一阶段步骤 5 必须按 `5A 后端模板 → 5B 前端模板 → 5C XCodeAgent 生命周期` 顺序独立交付、启动并等待用户验收。
-11. 修改模板前必须确认 XCodeAgent、前端模板和后端模板三个仓库均有本地可写工作区；缺少写权限时停止并报告，不能通过临时复制仓库规避。
-12. 本计划不授权模型推送远端、创建 PR 或提交到模板仓库；这些外部写操作必须另行取得用户授权。
+10. 第一阶段步骤 5 只在 XCodeAgent 中完成模板分支选择与获取；前后端模板的 `main`/`auth` 分支公约是既有前提，不属于本步骤的改造、构建或独立验收范围。
+11. 本计划不授权模型推送远端、创建 PR 或提交到模板仓库；这些外部写操作必须另行取得用户授权。
 
 ## 核心流程与事实来源
 
@@ -375,9 +374,14 @@ type AuthorizationRuleBase = {
   defaultGrantedRoleIds: string[];
 };
 
+type RestrictedPageRule = AuthorizationRuleBase & {
+  // 已确认业务页面的稳定身份，不以展示名称建立关联。
+  targetPageId: string;
+};
+
 type AuthorizationRequirements = {
   enabled: boolean;
-  restrictedPages: AuthorizationRuleBase[];
+  restrictedPages: RestrictedPageRule[];
   restrictedOperations: AuthorizationRuleBase[];
   initialAdminRoleId?: string;
 };
@@ -409,6 +413,10 @@ type AuthorizationCapabilityIssue = {
 ```text
 每条页面或操作规则
 → defaultGrantedRoleIds 必须非空，且每项都引用 user_roles[].id
+
+每条页面规则
+→ targetPageId 必须非空，且引用 RequirementSpec.pages[].pageId
+→ ProductPlan 仅通过 targetPageId 生成 pageRules，不得按 name 推断页面目标
 
 authorization.enabled=true
 → initialAdminRoleId 必须引用唯一 isInitialAdminRole=true 的 user_roles[]
@@ -627,7 +635,7 @@ GET  /api/authorization/audit
 
 ### 运行态数据与服务契约
 
-内置权限运行时固定使用 MyBatis + Flyway。Flyway 只维护当前契约的初始化迁移，不增加历史 schema 探测、旧表读取或双写兼容；MyBatis 负责权限查询、关系全量替换、revision 锁和事务内持久化。
+内置权限运行时复用后端 `auth` 模板已经提供的权限表、数据访问和初始化扩展点。XCodeAgent 不为权限引入 Flyway、MyBatis、DDL、Mapper、数据源配置或 Maven 依赖；模板内部采用何种既有持久化实现不构成 XCodeAgent 的额外技术契约。
 
 运行态至少包含：
 
@@ -668,7 +676,7 @@ deleteSubjectAuthorization
 - 可以通过精确 subject 标识预配置尚未登录的成员；首次认证时 JIT 补充展示信息，但不得覆盖已有角色关系。
 - 所有写操作携带 `expectedRevision`；服务在事务中校验 revision、计算变更后有效权限、执行防锁死检查、写关系与审计并递增 revision。
 - 并发 revision 冲突不做自动合并，返回可重新加载的冲突结果。
-- 权限 DDL、Flyway migration 和 MyBatis Mapper 只由第一阶段步骤 6 的 Build 生成；步骤 5A 后端模板只提供稳定端口和未就绪实现，不能提前创建表或内存模拟持久化。
+- 权限表、数据访问和初始化扩展点由既有后端 `auth` 分支提供；步骤 6 只将已确认权限事实覆盖到现有业务 Build Task 和模板启动初始化，不创建第二套权限存储或内存模拟持久化。
 
 ### 初始管理员与防锁死
 
@@ -703,9 +711,7 @@ deleteSubjectAuthorization
 → 步骤 2 RequirementSpec 权限语义
 → 步骤 3 ProductPlan 与 UiDesign 边界
 → 步骤 4 TechnicalPlan 权限编译
-→ 步骤 5A 后端模板
-→ 步骤 5B 前端模板
-→ 步骤 5C XCodeAgent 模板生命周期
+→ 步骤 5 XCodeAgent 模板分支获取
 → 步骤 6 Build DAG 与授权运行时
 → 步骤 7 失效、目录协调与完整回归
 ```
@@ -752,12 +758,13 @@ deleteSubjectAuthorization
 - 删除旧页面/操作行为字段，增加两类规则的 `defaultGrantedRoleIds`、角色系统属性和初始管理员角色选择。
 - `user_roles[]` 增加并校验 `isSystemRole/isInitialAdminRole`，权限开启时必须确认唯一初始管理员角色；支持复用业务管理员角色或新建独立系统管理员角色，不得根据角色名称自动判断。
 - 页面/操作规则的 `defaultGrantedRoleIds` 必须非空且全部引用有效 `user_roles[].id`；缺失角色授权时通过现有 AG-UI 澄清，不得猜测或补默认角色。
-- 同步更新 RequirementSpec JSON/Markdown、结构化编辑器、摘要、确认门禁、提示词和测试；确认 Markdown 修改时保留隐藏 `ruleId`、角色引用和来源追踪。
+- 每条 `restrictedPages` 必须在需求文档确认前得到 `targetPageId`，且该值只能引用同一 RequirementSpec 的 `pages[].pageId`；权限事实提取读取页面目录后选择目标，页面名称只用于展示，不能参与 ProductPlan 映射。
+- 同步更新 RequirementSpec JSON/Markdown、结构化编辑器、摘要、确认门禁、提示词和测试；确认 Markdown 修改时保留隐藏 `ruleId`、可见的 `targetPageId`、角色引用和来源追踪。
 
 启动验收：
 
 - 启动 XCodeAgent 前后端和 Electron 桌面应用，分别创建权限关闭、权限开启但无业务权限、仅页面权限、仅操作权限四类需求，RequirementSpec 草稿、Markdown、结构化编辑器和确认摘要保持一致。
-- 页面/操作规则新增、编辑、删除后，隐藏 `ruleId`、`sourceRefs` 和 `defaultGrantedRoleIds` 正确保留或重新生成；未知、重复或被篡改的隐藏标记阻止确认。
+- 页面/操作规则新增、编辑、删除后，隐藏 `ruleId`、`sourceRefs` 和 `defaultGrantedRoleIds` 正确保留或重新生成；每条受控页面的 `targetPageId` 必须始终指向当前页面清单，未知、重复或被篡改的隐藏标记阻止确认。
 - 未明确默认授权角色时只产生对应权限候选的稳定澄清问题；回答后重新生成草稿，并且用户可以在桌面端完成 RequirementSpec/ProductPlan 联合确认。
 - 明确数据授权需求稳定显示 `DATA_AUTHORIZATION_NOT_SUPPORTED` 并阻止联合确认；普通固定“我的数据”业务查询可以继续，语义不明确时只询问“业务查询还是授权边界”。
 - 固定 `/roles` 只作为系统能力说明出现，不进入业务页面候选；页面/操作未授权行为字段和旧数据权限字段不能通过 JSON、Markdown 或编辑器重新写入。
@@ -769,7 +776,7 @@ deleteSubjectAuthorization
 
 步骤状态：部分实施。`product-plan.v5` 和业务页面/action 映射基线已经落地；操作目标闭合、联合确认门禁和资源键碰撞校验仍需在本步骤完成并独立验收。
 
-- 页面候选映射稳定业务页面，操作候选只映射稳定顶层 action；sequence 的 `stepId` 不进入权限目标。
+- 页面候选通过已确认的 `targetPageId` 映射稳定业务页面，绝不按页面展示名称猜测；操作候选只映射稳定顶层 action；sequence 的 `stepId` 不进入权限目标。
 - ProductPlan 不保存角色、角色关系、资源键、策略键或固定权限管理页。
 - 没有对应 RequirementSpec 规则的页面/action 不得新增权限语义。
 - UI 设计只处理业务页面；`/roles` 不产生 UI 设计任务，UI skip 也不影响固定页面。
@@ -778,7 +785,7 @@ deleteSubjectAuthorization
 - 联合确认前构造全部受控 `pageId`、全部受控 `<pageId>_<actionId>` 和 `system_authorization_management` 候选并执行全局唯一校验；冲突必须精确回灌修复，不能追加类型前缀、数字或随机后缀。
 - 清除 ProductPlan planner、Markdown、UiDesign 输入和相关测试中的旧角色示例、点号资源前缀、PageKey 权限字段、operationKey 和 step 权限字段。
 
-已有实施结果：`product-plan.v5` 不再持久化 `user_roles` 或页面 `allowed_roles`，当前服务已把 `restrictedPages`、`restrictedOperations` 映射为页面和顶层 action。本步骤完成后，候选无法一对一映射、目标被删除、映射被篡改、联合确认哈希不匹配或资源候选发生碰撞都会阻止确认；映射不包含角色、资源键、策略键或 `stepId`，也不会在 ProductPlan Markdown 或 UiDesign 中展示为角色判断。
+已有实施结果：`product-plan.v5` 不再持久化 `user_roles` 或页面 `allowed_roles`，当前服务以 `restrictedPages[].targetPageId` 直接映射页面，并将 `restrictedOperations` 映射为顶层 action。页面展示名称变化不会影响权限目标；目标被删除、映射被篡改、联合确认哈希不匹配或资源候选发生碰撞都会阻止确认；映射不包含角色、资源键、策略键或 `stepId`，也不会在 ProductPlan Markdown 或 UiDesign 中展示为角色判断。
 
 启动验收：
 
@@ -861,6 +868,7 @@ deleteSubjectAuthorization
 - TechnicalPlan JSON 只新增根字段 `authorization_manifest`，结构严格使用本文 `authorization-manifest.v2`，不在 API Contract、页面或实体中复制另一份资源目录或角色矩阵。
 - TechnicalPlan Markdown 分别展示页面资源、顶层 action 操作资源、Endpoint ANY-OF 绑定和默认角色授权表；显示业务名称、稳定 key、目标和来源规则，禁止只输出 UUID 或难以理解的点号路径。
 - V2 数据权限只存在于本文“V2 数据权限演进预留”设计章节，不进入 TechnicalPlan V1 JSON/Markdown 或生成项目。
+- 步骤 4E 是 TechnicalPlan 确认前的权限语义与可交付性最终门禁：确认前必须完成 manifest、资源/角色/Endpoint 绑定、ANY-OF、mixed-control、数据权限阻断、fingerprint 和 PageImplementationContract 权限投影的确定性校验；Build 只检查正式产物的新鲜度、完整性和任务覆盖，不重新解释或修复权限设计。
 - RequirementSpec、ProductPlan、UiDesign、TechnicalPlan 的重新确认和下游失效遵守现有正式文档确认门禁；自动修复后的 TechnicalPlan 仍必须重新确认。
 - 更新 `docs/CODEBASE_INDEX.md` 中发生变化的契约、服务和文档边界，并记录步骤 4 的实际测试与启动结果；全部验收通过后才能把本步骤状态改为“已实施”。
 
@@ -872,17 +880,63 @@ deleteSubjectAuthorization
 - TechnicalPlan JSON、Markdown、PageImplementationContract 和 API Contract 对同一资源/目标的引用一致，不存在旧 `business.*`、`system.authorization.*`、PageKey、step 权限、data policy 或第二份权限详设残留。
 - 启动 XCodeAgent 前后端和 Electron 桌面应用，实际生成并确认至少一组包含页面、操作和系统管理员的 TechnicalPlan；模型提交 manifest、Markdown 和确认入口后暂停，由用户确认步骤 4 达到预期。
 
+##### 步骤 4E：权限语义与可交付性最终门禁
+
+在 TechnicalPlan 用户确认前，基于当前草稿、已确认 RequirementSpec/ProductPlan/UiDesign 和 PageImplementationContract 运行单一确定性验证器。验证器只产生门禁结果与自动修复输入，不生成成功报告页面、不向正常确认载荷注入权限校验明细，也不持久化第二份权限事实；任一阻断项失败时不得将 TechnicalPlan 标记为 `confirmed`，而是进入现有自动修复或正式修订路径。自动修复耗尽后，既有 `technical_plan_generation_error` 页面只展示失败检查项及其具体引用。
+
+| 检查项 | 必须结果 |
+| --- | --- |
+| ResourceKey 是否存在 | 每个 page/action/endpoint binding 的资源键均存在于 manifest 资源目录。 |
+| Page binding 是否有效 | 指向已确认 ProductPlan 的页面。 |
+| Action binding 是否有效 | 指向该页面已确认的顶层 action。 |
+| Endpoint binding 是否有效 | 指向当前 API Contract 的存在 Endpoint。 |
+| Action → Endpoint → Resource 是否闭环 | 受控 action 的全部直接业务 Endpoint 和 sequence business step Endpoint 均包含该 action 资源；Endpoint 中每个资源也可反向追踪到 action。 |
+| 受控能力是否可交付后端 guard | 每个非空 `operationResourceKeys` 都能编译为唯一 Controller Task 的 ANY-OF 约束；此处只校验计划覆盖，不读取尚未生成的代码。 |
+| Endpoint 是否混用受控/未受控 action | 不允许混用；出现即以 `ENDPOINT_AUTHORIZATION_MIXED_CONTROL` 阻断确认。 |
+| Initial Admin 是否拥有 system resource | 初始管理员角色的默认授权必须包含 `system_authorization_management`。 |
+
+- 页面权限和 Endpoint 权限是独立维度：受控 Page 不自动向其调用的 Endpoint 传播资源键；未显式绑定的 Endpoint 默认可访问。受控 Page 调用未绑定的 `asset_api.list` 一类 Endpoint 时，只作为内部通过说明，不在正常确认页展示，也不是警告或阻断。
+- 必须继续拒绝未知资源、重复或跨类型资源键、无效 page/action/endpoint 引用、双向闭环遗漏、V2 数据权限字段和 fingerprint 漂移。
+- “Backend 是否真正有 guard”不属于步骤 4E：步骤 5/6 前代码尚未生成；步骤 6 EDD 必须根据这里确认的非空 Endpoint binding 验证真实 Controller 在业务逻辑前执行对应的 ANY-OF guard。
+
+4E 验收：
+
+- 覆盖有效闭环、未知资源、无效 Page/Action/Endpoint、Action→Endpoint 正向遗漏、Endpoint→Action 反向遗漏、mixed-control、初始管理员缺系统资源、V2 字段和 fingerprint 漂移。
+- 验证受控 Page 使用未显式授权 Endpoint 时可确认，且该 Endpoint 的 `operationResourceKeys=[]`；不得将页面资源自动写入 Endpoint binding。
+- 验证成功时确认卡不展示 4E 校验报告；验证失败时 `technical_plan_generation_error` 页面展示失败检查项及其具体 page/action/endpoint/resourceKey 引用，且不存在可编辑的第二份权限 JSON。
+
+##### 步骤 4F：TechnicalPlanDocPanel 权限设计视图
+
+在 `TechnicalPlanDocPanel` 现有“架构 / 实体 / API 契约 / 页面绑定”之后新增固定 Tab“权限”。该 Tab 只读取当前 TechnicalPlan 的 `authorization_manifest`，按首次初始化的默认角色授权展示权限模型；不读取 4E 校验报告，不新增后端接口、AG-UI 字段或第二份持久化权限事实。
+
+固定实现边界：
+
+- 扩展内部 `SectionKey` 增加 `authorization`，Tab 固定排在“页面绑定”之后；默认选中 Tab 仍为“API 契约”。
+- 新建独立权限展示组件及纯数据投影函数，不继续扩展 `TechnicalPlanDocSections.tsx`；由 `defaultRoleAuthorization.roles` 作为角色全集，使用 `roleResourceGrants` 关联 `resources`，并由 `bindings.endpoints[].operationResourceKeys` 建立操作资源到 Endpoint 的反向索引。
+- 采用“角色卡片 + 展开明细”视图。角色卡展示名称、seed key、描述、系统角色/初始管理员标记和默认资源数量；展开内容按 `system → page → operation` 分组，展示资源名称、`resourceKey`、目标和来源规则。
+- 操作资源显示其关联 Endpoint；同一 Endpoint 绑定多个资源时明确显示 ANY-OF，且只说明该角色拥有的资源，不将 Endpoint 未绑定或页面资源自动推导为角色资源。
+- 角色未获任何默认资源时仍展示为空授权角色；权限关闭时不显示这个tab。异常或未知资源引用显示“引用未解析”，不得令草稿查看崩溃；正式确认仍由步骤 4E 阻断。
+- Tab 顶部明确说明页面权限与 Endpoint 权限相互独立，未显式授权的 Endpoint 按当前契约默认可访问；本视图仅表达默认角色授权，不表达成员级运行时有效权限。
+- 样式只使用 DocPanel 既有 `--wb-*` 主题变量，覆盖明暗主题、窄面板换行、键盘焦点和资源明细展开；不得改造 `TechnicalPlanSummary`。
+- 同步在 TechnicalPlan 文档展示说明中记录该 Tab 的位置与职责；不改变 `authorization_manifest`、fingerprint 或角色授权关系。
+
+4F 验收：
+
+- 覆盖权限关闭、无默认资源角色、初始管理员系统资源、页面/操作资源分组、多个角色共享资源、多个操作资源绑定同一 Endpoint 的 ANY-OF，以及未知引用的稳定展示。
+- 验证受控页面不自动获得 Endpoint 权限，未绑定 Endpoint 不会写入任何角色资源。
+- 运行新增前端聚焦测试与 `pnpm build`，并在 Electron 应用中验证 Tab 切换、角色展开/收起、空态、长名称/长 key 以及明暗主题。
+
 #### 步骤 5：工程初始化接入模板权限基础
 
-本步骤拆为三个必须顺序执行、独立启动和独立由用户验收的工作包。前后端模板按权限开关成对选择分支：`authorization.enabled=false` 时均使用 `main`，`authorization.enabled=true` 时均使用 `auth`；不允许混用分支或由调用方指定任意分支。
+前后端模板的权限能力已分别存在于对应模板仓库的 `auth` 分支。本步骤只改造 XCodeAgent：根据已持久化的权限开关成对获取既有分支；`authorization.enabled=false` 时均使用 `main`，`authorization.enabled=true` 时均使用 `auth`。不允许混用分支或由调用方指定任意分支。
 
-##### 步骤 5A：后端模板权限契约与可启动骨架
+##### 既有后端模板分支公约（不属于本步骤交付）
 
 模板仓库：<https://github.com/Hupy2118/springboot-template.git>
 
 分支边界：权限契约、Controller 骨架、OpenAPI、`CurrentSubjectProvider` 和未就绪实现只存在于 `auth` 分支；`main` 分支不得包含运行态权限 API、OpenAPI 或权限运行时骨架。
 
-固定实现边界：
+既有分支公约：
 
 - 在 `src/main/java/com/cmbchina/backend/authorization/` 增加 Controller、DTO、应用端口、领域类型、异常映射、就绪状态和 `CurrentSubjectProvider`。
 - 在 `src/main/resources/openapi/authorization-api.v1.yaml` 提交与本仓库 `contracts/authorization-api.v1.yaml` 字节一致的副本；本地契约文件才是唯一事实源。
@@ -890,23 +944,16 @@ deleteSubjectAuthorization
 - 若模板尚未接入 Spring Security，本工作包只增加由 Spring Boot BOM 管理的 `spring-security-core` 编译依赖，用于 `SecurityContextHolder`/`Authentication` 类型；不得引入会默认保护全站的 starter 或伪造认证 Filter。实际一号通认证和 Web Security 配置由步骤 6 接入。
 - `auth` 分支不保留 `xcodeagent.authorization.enabled` 运行时开关；公开 `/api/authorization/status` 和管理接口骨架始终注册。默认就绪状态为 `ready=false`；状态接口返回 200，其他接口统一返回结构化 503 `authorization_not_ready`。
 - `CurrentSubjectProvider` 固定读取 Spring Security `Authentication.getName()`，但本工作包不伪造身份、不信任前端 subject，也不复制一号通认证协议。
-- 只交付稳定编译边界，不增加 Flyway DDL、MyBatis Mapper、测试身份、内存角色数据或假审计；这些只能在步骤 6 实现。
+- `auth` 分支已提供权限表、数据访问和启动初始化扩展点；不伪造测试身份、内存角色数据或假审计。步骤 6 只覆盖已确认权限事实到现有业务 Task，并在首次启动时执行模板内的真实幂等初始化。
 - 保持 Spring Boot 2.7 和 Java 8 兼容，所有新增或实质修改的方法按模板工程规范添加中文用途注释。
 
-独立验收：
-
-- 后端模板测试和 Maven 构建通过，应用可以独立启动。
-- `main` 分支不存在状态及管理接口；`auth` 分支状态接口返回契约版本和 `ready=false`，其他权限接口返回 503，响应不泄露内部信息。
-- OpenAPI 与 Controller/DTO 骨架通过契约测试，不存在未在 OpenAPI 声明的权限接口。
-- 分别启动 `main` 与 `auth` 后端模板并提供状态接口和管理接口实测结果；模型提交启动命令与访问入口后暂停，由用户确认步骤 5A 达到预期。
-
-##### 步骤 5B：前端模板完整权限管理能力
+##### 既有前端模板分支公约（不属于本步骤交付）
 
 模板仓库：<https://github.com/ruyue1/frontend-template.git>
 
 分支边界：`AuthorizationManagementPage`、`src/authorization/` 和权限 service 封装只存在于 `auth` 分支；`main` 分支不得注册 `/roles`、权限菜单、Provider 或权限网络请求。
 
-固定实现边界：
+既有分支公约：
 
 - 用完整页面替换现有 `src/pages/System/Role/index.tsx` 占位实现，固定页面目录为 `src/pages/System/AuthorizationManagementPage/`。
 - 增加 `src/authorization/`，包含由本地 OpenAPI 生成的 TypeScript 类型、`authorizationApi.ts`、PermissionProvider、`can(resourceKey)`、菜单/路由/操作守卫及统一错误状态处理；禁止生成独立 Axios 客户端。
@@ -928,43 +975,26 @@ deleteSubjectAuthorization
 - 页面必须覆盖 loading、empty、error、401、403、409、503，以及明暗主题下的背景、文字、边框、hover/focus、弹层和禁用状态。
 - 增加 `authorization:types` 脚本，使用 lockfile 固定版本的 `openapi-typescript` 只生成类型到 `src/authorization/generated/authorizationApiTypes.ts`。
 
-独立验收：
-
-- 前端测试和 `pnpm build` 通过，开发服务器可以启动。
-- 使用 5A 后端骨架启动联调时，当前成员有效权限请求返回 503 后，`/roles` 正确显示“权限服务尚未就绪”，而不是额外查询状态接口或崩溃。
-- `main` 分支路由、菜单和网络请求均不存在；`auth` 分支固定系统路由存在且不污染业务菜单，并通过当前成员有效权限接口获得资源点。
-- 连续刷新页面时每次都会重新请求 `/api/authorization/me/effective-permissions`；两次请求之间修改当前成员角色或角色资源后，刷新必须立即反映最新资源点，不得命中任何前端缓存。
-- 资源目录没有创建、编辑和删除入口；生成类型与本地 OpenAPI 一致，全部权限请求均经过 `authorizationApi.ts` 和模板既有 `service.ts`。
-- 分别启动 `main` 与 `auth` 前端模板，并用步骤 5A 的 `auth` 后端完成 `/roles` 未就绪页面联调；模型提交页面入口和明暗主题验收路径后暂停，由用户确认步骤 5B 达到预期。
-
-##### 步骤 5C：XCodeAgent 模板生命周期接入
+##### XCodeAgent 实施边界
 
 主要入口：application lifecycle、template generation、Electron 模板下载、对应 AG-UI protocol 和 frontend service。
 
 固定实现边界：
 
-- 从已持久化的 `application.json.authorization.enabled` 确定唯一 `templateBranch`：关闭为 `main`，开启为 `auth`；前后端必须使用同一分支并通过 `git clone --branch <templateBranch> --single-branch --depth 1` 浅克隆到生成项目的 `frontend/` 和 `backend/`。
-- 分支选择不得来自前端自由输入或请求参数。用户自定义模板仓库 URL 可以保留，但 RBAC 开启时两个自定义仓库都必须存在并遵守 `auth` 分支契约；缺失时初始化失败。
-- 选择 `auth` 分支后，使用本仓库本地契约生成前端类型，并校验本地契约与后端 `auth` 分支 OpenAPI 副本 SHA-256 一致；不得从网络再次获取另一份契约，也不得生成独立 HTTP 客户端。
-- `auth` 分支不写入前后端权限开关配置，`/roles` 与权限接口作为该分支固有能力存在；`main` 分支不包含权限能力。
-- `auth` 分支的文件级 capability gate 必须检查后端 OpenAPI 副本及其本地契约 SHA-256、权限骨架、前端固定页面、Provider、生成类型、`authorizationApi.ts` 和既有 `service.ts` 复用关系；`main` 分支必须验证这些权限能力均不存在，不能只检查 `package.json`、`pom.xml` 或目录存在。
+- 从已持久化的 `application.json.authorization.enabled` 确定唯一 `templateBranch`：关闭为 `main`，开启为 `auth`；前后端必须使用同一分支，并通过 `git clone --branch <templateBranch> --single-branch --depth 1` 浅克隆到生成项目的 `frontend/` 和 `backend/`。
+- 分支选择不得来自前端自由输入或请求参数。用户自定义模板仓库 URL 可以保留；目标分支不存在或获取失败时初始化失败，不得回退到其他分支。
+- `auth` 分支固有提供 `/roles` 与权限接口，`main` 分支不包含权限能力；XCodeAgent 不为分支写入前后端权限开关配置，也不修改、生成或校验模板内权限实现。
 - 先初始化业务页面，再校验所有业务路由不得与 `/roles` 冲突；固定页面不读取 UiDesign，不创建普通 PageImplementationContract、业务 Endpoint 授权逻辑或业务开发任务。
-- `auth` 分支写入 `.xcodeagent/authorization/permission-resources.json` 和 `.xcodeagent/authorization/foundation-manifest.json`。步骤 5 只写唯一系统资源 manifest 和基础接入状态，不写 DDL 或声称运行时 ready；`main` 分支不创建该目录。
-- 模板生成 manifest 记录前后端仓库 URL、所选 `templateBranch`、各自实际 commit SHA，以及 `authorizationBackendContract`、`authorizationFrontend`、`authorizationConfig` 和 `authorizationGate`。已有模板目录只有 manifest 中的来源 URL 和分支与当前选择相同、且前后端 commit SHA 均存在时才能复用；记录缺失或不匹配时 fail closed，不能覆盖或混用。
+- 沿用既有模板来源记录与复用规则，记录前后端仓库 URL、所选 `templateBranch` 及各自实际 commit SHA；已有模板目录的来源 URL、分支或 commit SHA 不匹配时 fail closed，不能覆盖或混用。步骤 5 不写 `.xcodeagent/authorization/` 权限基础产物，也不新增权限专属 manifest 字段。
 - XCodeAgent 的规划、配置持久化、模板生成进度、成功和失败仍通过 AG-UI 完整生命周期传递；不能为该流程新增普通 JSON/REST 产品接口。
 
 步骤产物：
 
 ```text
-auth 分支：
-  frontend/src/pages/System/AuthorizationManagementPage/
-  frontend/src/authorization/
-  backend/src/main/java/com/cmbchina/backend/authorization/
-  backend/src/main/resources/openapi/authorization-api.v1.yaml
-  contracts/authorization-api.v1.yaml（XCodeAgent 本地唯一事实源）
-  .xcodeagent/authorization/permission-resources.json
-  .xcodeagent/authorization/foundation-manifest.json
-main 分支：无上述运行态权限产物
+authorization.enabled=true：
+  frontend/ 与 backend/ 均为各自模板仓库的 auth 分支检出内容
+authorization.enabled=false：
+  frontend/ 与 backend/ 均为各自模板仓库的 main 分支检出内容
 ```
 
 独立验收：
@@ -972,56 +1002,65 @@ main 分支：无上述运行态权限产物
 - XCodeAgent 前后端和桌面开发态启动通过，并能分别创建 `auth` 分支的 RBAC 开启应用与 `main` 分支的关闭应用；前后端分支选择、仓库 URL 和 commit SHA 必须成对一致。
 - 生成项目模板完成后前后端立即可启动；`main` 分支不存在权限接口和 `/roles`，`auth` 分支的 `/roles` 显示未就绪状态。
 - 业务页面设计列表中不存在权限管理页；修改业务路由为 `/roles` 时 ProductPlan 路由校验阻止确认。
-- `auth` 分支缺失、前后端分支混用、已有目录来源不匹配、删除任一必需权限模板文件、制造 OpenAPI/生成类型漂移或绕过 `service.ts` 时，模板 capability gate 稳定失败并指出具体缺失项。
-- 模型提交两个真实生成项目的目录、模板来源 manifest、启动命令和访问入口后暂停，由用户确认步骤 5C 达到预期。
+- `auth` 分支缺失、目标分支获取失败、前后端分支混用或已有目录来源不匹配时，模板初始化稳定失败并指出具体原因；不回退到其他分支。
+- 模型提交两个真实生成项目的目录、模板来源记录、启动命令和访问入口后暂停，由用户确认步骤 5 达到预期。
 
 #### 步骤 6：Build DAG 和内置授权运行时
 
-主要入口：task preparer、tasks node、build task planner/menu、Build/Testing subgraph 和 task documents。
+主要入口：TechnicalPlan 最终确认门禁、task preparer、tasks node、build context resolver、unit compiler、build task planner、前后端 Build Agent、Build/Testing subgraph 和 task documents。
 
-固定注入权限任务链：
+步骤状态：未实施。权限语义在步骤 4 TechnicalPlan 最终确认前完成；本步骤只消费已确认且新鲜的权限事实，并将其覆盖到已有 Entity/API/Page DAG。不得创建 `authorization:*` Unit、权限任务链或业务任务完成后的补鉴权 Task。
+
+##### 步骤 6A：Build 前置完整性与新鲜度门禁
+
+- `prepare_build_tasks` 必须从工作区重新读取最新 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan 和模板就绪状态，不信任 checkpoint 中的旧副本。
+- 只接受 `artifact_type=technical-plan`、`confirmation_status=confirmed` 且当前 schema/fingerprint 有效的 TechnicalPlan；校验其上游哈希、应用 `authorization.enabled`、已选 `main/auth` 模板分支和 manifest `enabled` 状态一致。
+- 同时校验当前范围所需的 PageImplementationContract、Endpoint 契约、EntitySourceBinding 和模板初始化门禁均已就绪。
+- 若正式产物缺失、确认状态无效、schema/fingerprint 或上游哈希不一致，返回步骤 4 TechnicalPlan 正式修订入口；Build 不重新运行 4E 的语义校验，不重新编译、补全、修复或推断权限设计。
+
+##### 步骤 6B：在叶子任务生成前编译权限 Overlay
 
 ```text
-authorization.storage
-→ authorization.core
-→ business.authorization
-→ authorization.runtime-api
-→ frontend.authorization.runtime
-→ frontend.authorization.guards
-→ authorization.verification
+已确认 TechnicalPlan
+→ Build 完整性门禁
+→ Base Unit Skeleton（现有 Entity / Endpoint / Page）
+→ Authorization Overlay Compiler
+→ 现有 Task Generator
+→ Final Build DAG
+→ Build 与 EDD Verification
 ```
 
-实现内容：
+- Base Unit Skeleton 保持当前 `build-dag.v3` 的 Entity 实现阶段、`backend:endpoint:*` 和 `page:*` Unit；Overlay 只标注现有 Unit/BuildContext，不新增权限 Unit、边或独立 Task。
+- Overlay 在模型生成叶子任务之前，从 `authorization_manifest` 裁剪当前目标所需事实：页面 `resourceKey`、所属顶层 action 的 `resourceKey`、Endpoint 的 `operationResourceKeys` 和 ANY-OF 语义。
+- `TargetBuildContext.authorization_constraints` 是平台拥有的只读运行时投影；Unit 编译器确定性写入 `task.source_refs.authorization`。模型不得输出、修改或推断同名权限字段；冲突或漂移候选必须拒绝并自动重新生成。
+- Page Unit 输入指纹只包含本页和本页 action 的权限切片；Endpoint Unit 输入指纹只包含该 Endpoint 的操作资源切片。默认角色授权变化只触发启动初始化/步骤 7 协调，不使无关业务 Task 重新生成。
 
-- 仅对 `auth` 分支注入权限任务链，并使用 Flyway 生成当前契约的资源投影、角色、关系、成员、审计和 revision 表，使用 MyBatis 实现 Mapper、查询和事务内关系替换；`main` 分支不生成权限 Build 任务、DDL 或守卫。
-- 生成 JIT 成员、allow 资源并集、缓存失效和管理服务；V1 不生成数据策略解析器、数据过滤器、Policy IR 或 Relation 运行时。
-- Build 必须复核 manifest 中 Endpoint 的操作权限属性一致性：同一 Endpoint 不得同时存在受控与未受控 business action 引用；发现混用时阻止 DAG，不能在 Build 阶段通过推断、补字段或调用来源信息生成授权分支。
-- 操作资源裁决固定读取成员全部启用角色的资源并集；全部引用均未受控的 Endpoint 必须保持 `operationResourceKeys=[]` 且不增加操作守卫，全部引用均受控时非空 `operationResourceKeys` 按 ANY-OF 判断，任一命中即可继续，一个都未命中时返回 403。
-- Build 只消费 TechnicalPlan manifest 中已确认的页面、操作和系统资源及 Endpoint 操作绑定；发现 `type=data`、`dataPolicyBindings`、`policyKey` 等 V2 字段时必须阻止 DAG，不得临时解释自然语言数据范围或自行补建数据授权实现。
-- 所有管理写操作实现 `expectedRevision`、事务、审计和防锁死校验。
-- 按 manifest 创建带只读 `isSystemRole/isInitialAdminRole` 元数据的初始角色种子、唯一系统资源关系和默认成员关系；重复执行必须幂等且不得覆盖运行态配置。
-- 所有权限管理路由和 `/roles` 仅校验 `system_authorization_management`；状态与当前成员有效权限查询不绑定该管理资源，认证/就绪规则按运行态状态矩阵执行。
-- 接入既有一号通 Spring Security 认证；`CurrentSubjectProvider` 只使用经过验证的 `Authentication.getName()`，认证适配未完成时不得把权限服务标记为 ready。
-- 完成 OpenAPI 中全部稳定端口，使 `/api/authorization/status` 仅在数据库、资源 manifest、认证适配和运行时服务均就绪后返回 `ready=true`。
-- 前端只对已有页面/操作资源生成控制；后端只对已有 operation Endpoint 绑定生成守卫。
-- `/roles` 页面由模板提供，不创建可修改该页面或资源定义的 Build/SmallTask 任务。
+##### 步骤 6C：现有 Entity/API/Page Task 的权限实现边界
+
+- Page Task 直接消费 `PageImplementationContract.permissionBindings` 和 action bindings，复用模板已有 PermissionProvider 与 `can(resourceKey)` 实现受控页面入口、直接访问和操作控件守卫；不创建第二个 Provider、权限缓存、权限目录或 `/roles` 页面。
+- Action 不建立独立 Unit；其权限约束随所属 `page:*` Task 生成，并精确对应当前页面的 action bindings。
+- Endpoint Unit 的所有任务保留权限来源追踪；只有 Controller/API 暴露阶段在业务逻辑前，使用模板已有权限服务按 `operationResourceKeys` 执行 ANY-OF 裁决。空数组不生成操作守卫。
+- Entity、Repository、Service 阶段不得据此生成数据过滤、Relation、Policy IR 或其他 V2 数据权限逻辑。
+- `auth` 模板已有的权限表、数据访问、权限管理页面、权限 API 端口和公共守卫能力是可复用模板基础；如固定权限 API 尚有待完成的业务实现，只能使用现有标准 API/Endpoint Task 规则在首次 DAG 中共同规划，不得在业务 Build 后追加权限任务。
+- `/roles` 与模板权限核心文件不得成为普通 Page/SmallTask 的重写目标；所有管理路由仍只裁决 `system_authorization_management`。
+
+##### 步骤 6D：Final DAG 覆盖校验、执行与启动初始化
+
+- Final DAG Compiler 只校验任务对已确认约束的覆盖：每个受控页面、action 和 Endpoint 必须分别由对应 Page Task、所属 Page Task 和唯一 Controller Task 覆盖；不得出现独立权限 Unit、后置补鉴权 Task、第二份资源目录或模型生成的权限规则。
+- Repair Task 必须继承父任务的 `source_refs.authorization`，不得删除、扩大或改写资源键。
+- Build 完成后的首次生成应用启动中，由 `auth` 模板已有初始化服务读取完整 `authorization_manifest` 与 `initialAdministratorSubjects`，在一个事务中幂等初始化资源、角色、角色资源关系、管理员成员、成员角色关系、revision 和 manifest fingerprint。
+- 相同 fingerprint 重启时不重复写入；已初始化但 fingerprint 不一致时 fail closed，交由步骤 7 的目录协调处理，不覆盖运行态角色配置。
+- 初始化成功且认证适配完成后，权限服务才能从 `ready=false` 切换为 `ready=true`。XCodeAgent 不直接拼 SQL，也不只写一条管理员记录。
 
 启动验收：
 
-- 没有业务资源时，不向业务页面、操作或 Endpoint 注入 RBAC 守卫。
-- 只存在部分业务资源时只保护精确目标，不扩大到同页其他操作或其他 Endpoint。
-- 验证不同页面使用相同 `actionId` 时产生不同操作资源，页面、操作或系统 resourceKey 冲突时在 Build 前已被门禁阻止。
-- 验证全部引用均未受控的 Endpoint 不生成操作资源守卫，全部引用均受控的 Endpoint 才允许聚合 `operationResourceKeys`。
-- 验证受控 action 与未受控 action 混用同一 Endpoint 时在 Build 前被 `ENDPOINT_AUTHORIZATION_MIXED_CONTROL` 门禁阻止，不能通过前端参数、请求头或调用来源字段绕过。
-- 验证同一 Endpoint 绑定多个受控操作资源时，成员拥有任意一个即可通过、一个都没有时返回 403；资源来自不同角色时仍按角色资源并集通过。
-- 验证 sequence 的全部 business step Endpoint 继承父 action 资源，interface、navigation 和 external step 不生成操作资源。
-- 验证 401、403、页面/操作行为、多角色资源并集、停用角色和未知资源拒绝。
-- 验证 V1 工程中不存在 data resource、data policy、数据范围过滤器和 Relation/Policy IR 运行时代码；人为向 manifest 注入 V2 字段时 Build fail closed。
-- 验证角色创建/改名/启停/删除、角色资源全量替换、成员预配置/JIT/移除和成员角色全量替换。
-- 验证 revision 冲突、审计原子性、自我移权、管理角色不可删除和最后管理员保护。
-- 验证 Flyway migration、MyBatis Mapper、manifest fingerprint、幂等 bootstrap 和状态接口从未就绪切换为就绪。
-- 验证前端伪造 subjectId、未验证 Cookie、空 SecurityContext 和匿名 Authentication 均不能获得权限。
-- 代码搜索不存在资源写接口、成员直接授权、角色继承、显式 deny、角色名分支和外部授权 provider。
+- 权限关闭时不生成任何权限 Overlay 或业务守卫；仅页面、仅 action、页面+action 时只覆盖精确 Page/Action/Endpoint，不扩大到同页其他目标。
+- 不同页面使用相同 `actionId` 时仍生成不同操作资源；`ENDPOINT_AUTHORIZATION_MIXED_CONTROL`、资源键冲突、V2 字段和未确认/过期 TechnicalPlan 均在进入 Task 生成前阻止，并回到步骤 4 而不是由 Build 修复。
+- 同一 Endpoint 绑定多个操作资源时，Controller 仅在成员启用角色资源并集命中任一资源时继续；全部未受控的 Endpoint 不生成操作守卫。
+- EDD 对每个 4E 确认的非空 Endpoint binding 读取真实 Controller：必须在业务逻辑前调用模板权限服务并使用相同的 ANY-OF 资源键；空 binding 不得生成多余操作守卫。Page Task、Controller Task 和 Repair Task 都接收精确权限切片；Entity、Repository、Service 中不存在数据过滤或数据权限逻辑。
+- 代码搜索不存在独立权限 DAG、后置补鉴权 Task、资源写接口、成员直接授权、角色继承、显式 deny、角色名分支和外部授权 provider。
+- 验证角色创建/改名/启停/删除、角色资源和成员角色全量替换、revision 冲突、审计原子性、自我移权和最后管理员保护，且前端伪造 subjectId、未验证 Cookie、空 SecurityContext 和匿名 Authentication 均不能获得权限。
+- 验证首次启动完成完整幂等初始化、相同 fingerprint 重启无重复写入、不同 fingerprint fail closed，以及 401/403/503 状态矩阵。
 - 通过 `/api/projects/launch` 启动至少一个完成 Build 的 `auth` 生成应用，验证权限服务 `ready=true`、`/roles` 可访问且页面/操作守卫生效；模型提交运行态地址和验证账号/前提说明后暂停，由用户确认步骤 6 达到预期。
 
 #### 步骤 7：失效、目录协调和完整回归
@@ -1069,13 +1108,12 @@ authorization.storage
 - `scripts/start-backend.sh` 后检查 `/health`。
 - `pnpm dev` 验收新建、需求确认或工作台界面。
 - 从步骤 5 开始，通过 `/api/projects/launch` 启动生成应用验收。
-- 步骤 5A 在后端模板执行 Maven 测试、构建和 Spring Boot 启动验收；步骤 5B 在前端模板执行测试、`pnpm build` 和开发服务器验收。
-- 步骤 5C 必须用本地 OpenAPI 重新生成前端类型，验证生成结果无未提交漂移，并验证 `authorizationApi.ts` 通过既有 `service.ts` 覆盖全部前端使用的 operationId；前端代码搜索不得调用 `/api/authorization/status`。
+- 步骤 5 只验证 XCodeAgent 对 `main`/`auth` 的确定性分支选择、成对获取、来源记录和生成应用启动；不在 XCodeAgent 中重新生成、构建或深度校验既有模板分支。
 - 涉及目录、API、存储格式或边界变化时，同一工作包更新 `docs/CODEBASE_INDEX.md`。
 
 第一阶段完成判定：
 
-- 步骤 1–7 以及步骤 5A–5C 均已有独立修改记录、自动化测试结果、真实启动命令、人工验收入口和用户确认；任何一步只完成代码或测试但未经过用户启动验收时，第一阶段仍视为未完成。
+- 步骤 1–7 均已有独立修改记录、自动化测试结果、真实启动命令、人工验收入口和用户确认；任何一步只完成代码或测试但未经过用户启动验收时，第一阶段仍视为未完成。
 - 使用 XCodeAgent 分别生成 `main` 与 `auth` 分支应用，完整走通新建配置、需求文档联合确认、UiDesign、TechnicalPlan、模板初始化、Build DAG、生成应用启动和权限运行时 ready。
 - 在真实生成应用中通过 `/roles` 创建或修改角色、替换角色资源、配置成员角色，并验证刷新后页面入口、路由、操作按钮和后端 Endpoint 立即按最新资源关系生效。
 - 验证多角色资源并集、Endpoint 多操作资源 ANY-OF、受控/未受控 Endpoint 混用门禁、系统管理资源、防锁死、revision 冲突、审计和 manifest fingerprint 全部符合本文契约。
@@ -1195,7 +1233,7 @@ customer.is_primary_owner(subject.id, order.customer_id)
 - 本仓库 `contracts/authorization-api.v1.yaml` 是运行态接口唯一事实源，后端 `auth` 分支副本和前端 TypeScript 类型由它同步或生成；前端请求统一复用模板现有 `src/apis/service.ts`。
 - `main` 分支不存在权限接口；`auth` 分支运行时未就绪时只有公开状态接口返回 200，其他接口返回 503。
 - 模板分支由已持久化的权限开关唯一确定：关闭使用 `main`，开启使用 `auth`；前后端必须成对使用同一分支，调用方不能自由指定分支。
-- 后端模板只提供稳定权限骨架，权限 DDL、MyBatis Mapper、Flyway migration 和真实运行时只在第一阶段步骤 6 Build 生成。
+- 后端 `auth` 模板提供权限表、数据访问和启动初始化扩展点；步骤 6 不生成 DDL、Flyway migration、MyBatis Mapper 或额外持久化依赖，只将已确认权限约束覆盖到现有 Build Task 并驱动首次启动初始化。
 - 不增加用户可选 tag、SHA 或分支；模板生成 manifest 仅记录本次 `main`/`auth` 分支实际拉取的 commit SHA，用于来源核验和安全复用。
 - ProductPlan 使用 `product-plan.v5`，不保存 `resourceKey`、`policyKey` 或角色字段；`policyKey` 在 V1 中属于不支持字段。
 - ProductPlan 的权限操作目标固定为顶层 `{ruleId,pageId,actionId}`；sequence 的 `stepId` 只描述父 action 内部步骤，不进入权限资源、投影或 Endpoint 绑定。

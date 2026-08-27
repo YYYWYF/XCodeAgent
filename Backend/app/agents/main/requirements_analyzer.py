@@ -38,6 +38,7 @@ _LOWER_SNAKE_CASE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 def _authorization_fact_extraction_prompt(
     request: str,
     existing_spec: dict[str, Any] | None,
+    pages: list[dict[str, Any]],
 ) -> str:
     """构造只提取角色与权限业务事实的 JSON 提示，禁止把结构缺口转成用户追问。"""
 
@@ -46,6 +47,15 @@ def _authorization_fact_extraction_prompt(
         if isinstance(existing_spec, dict) and isinstance(existing_spec.get("user_roles"), list)
         else []
     )
+    page_candidates = [
+        {
+            "pageId": str(page.get("pageId") or "").strip(),
+            "name": str(page.get("name") or "").strip(),
+            "description": str(page.get("description") or "").strip(),
+        }
+        for page in pages
+        if isinstance(page, dict) and str(page.get("pageId") or "").strip()
+    ]
     return (
         "You extract explicit authorization business facts for an application requirement. "
         "Return exactly one JSON object without markdown and never call tools. The root must contain exactly "
@@ -54,8 +64,11 @@ def _authorization_fact_extraction_prompt(
         "id, name, description. id must be lower_snake_case; description must state the role's explicit business "
         "responsibilities. Return [] only if the request truly identifies no business participant.\n"
         "authorization_requirements must contain exactly restrictedPages, restrictedOperations, dataAuthorizationIssues. "
-        "Return only controls explicitly stated in the request; empty arrays are valid. Every restrictedPages and "
+        "Return only controls explicitly stated in the request; empty arrays are valid. Every restrictedPages item "
+        "must contain exactly name, targetPageId, description, rationale, sourceRefs, defaultGrantedRoleIds; every "
         "restrictedOperations item must contain exactly name, description, rationale, sourceRefs, defaultGrantedRoleIds. "
+        "For each restrictedPages item, targetPageId must be copied exactly from one item in the supplied page "
+        "catalogue. It is the stable identity of the controlled page, not a technical implementation detail. "
         "description states who can perform or access the business target; rationale states the business reason; "
         "sourceRefs is a non-empty string array citing the original request; defaultGrantedRoleIds is an array "
         "referencing user_roles ids. Return [] when the request does not explicitly state the default role grant; "
@@ -68,6 +81,7 @@ def _authorization_fact_extraction_prompt(
         "Do not ask the user to repeat facts already stated. If a fact is explicit, express it completely using the "
         "required fields.\n"
         f"Existing business roles, if any:\n{json.dumps(existing_roles, ensure_ascii=False)}\n\n"
+        f"Confirmed page catalogue for restrictedPages.targetPageId:\n{json.dumps(page_candidates, ensure_ascii=False)}\n\n"
         f"Original requirement:\n{request}"
     )
 
@@ -84,7 +98,10 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else []
 
 
-def _validate_authorization_fact_output(value: Any) -> list[str]:
+def _validate_authorization_fact_output(
+    value: Any,
+    pages: list[dict[str, Any]],
+) -> list[str]:
     """在写入 RequirementSpec 前严格校验角色和权限业务事实的模型原始输出。"""
 
     if not isinstance(value, dict):
@@ -114,18 +131,42 @@ def _validate_authorization_fact_output(value: Any) -> list[str]:
     expected_authorization = {"restrictedPages", "restrictedOperations", "dataAuthorizationIssues"}
     if set(authorization) != expected_authorization:
         errors.append("权限事实模型输出.authorization_requirements 字段不符合契约。")
+    page_ids = {
+        str(page.get("pageId") or "").strip()
+        for page in pages
+        if isinstance(page, dict) and str(page.get("pageId") or "").strip()
+    }
     for field_name in ("restrictedPages", "restrictedOperations"):
         items = authorization.get(field_name)
         if not isinstance(items, list):
             errors.append(f"权限事实模型输出.{field_name} 必须是数组。")
             continue
         for index, item in enumerate(items):
-            expected = {"name", "description", "rationale", "sourceRefs", "defaultGrantedRoleIds"}
+            expected = {
+                "name",
+                "targetPageId",
+                "description",
+                "rationale",
+                "sourceRefs",
+                "defaultGrantedRoleIds",
+            } if field_name == "restrictedPages" else {
+                "name",
+                "description",
+                "rationale",
+                "sourceRefs",
+                "defaultGrantedRoleIds",
+            }
             if not isinstance(item, dict) or set(item) != expected:
                 errors.append(f"权限事实模型输出.{field_name}[{index}] 字段不符合契约。")
                 continue
             if any(not str(item.get(key) or "").strip() for key in ("name", "description", "rationale")):
                 errors.append(f"权限事实模型输出.{field_name}[{index}] 缺少业务语义。")
+            if field_name == "restrictedPages":
+                target_page_id = str(item.get("targetPageId") or "").strip()
+                if not target_page_id:
+                    errors.append(f"权限事实模型输出.{field_name}[{index}] 缺少 targetPageId。")
+                elif page_ids and target_page_id not in page_ids:
+                    errors.append(f"权限事实模型输出.{field_name}[{index}].targetPageId 未引用页面目录。")
             if not _string_list(item.get("sourceRefs")):
                 errors.append(f"权限事实模型输出.{field_name}[{index}] 缺少 sourceRefs。")
             grants = _string_list(item.get("defaultGrantedRoleIds"))
@@ -150,17 +191,18 @@ def _extract_authorization_facts(
     request: str,
     existing_spec: dict[str, Any] | None,
     settings: Settings,
+    pages: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """独立提取权限业务事实，并在字段形状漂移时要求模型自动修复。"""
 
     feedback = ""
     for _attempt in range(_AUTHORIZATION_FACT_EXTRACTION_ATTEMPTS):
-        prompt = _authorization_fact_extraction_prompt(request, existing_spec)
+        prompt = _authorization_fact_extraction_prompt(request, existing_spec, pages)
         if feedback:
             prompt += "\n\nPrevious output failed validation. Return a corrected complete JSON only:\n" + feedback
         result = create_chat_model(settings).invoke(prompt)
         payload = extract_json_object(_coerce_content_text(getattr(result, "content", "")) or "")
-        errors = _validate_authorization_fact_output(payload)
+        errors = _validate_authorization_fact_output(payload, pages)
         if not errors:
             return payload
         feedback = "\n".join(f"- {error}" for error in errors[:12])
@@ -322,9 +364,9 @@ def _requirements_prompt(
         "Authentication and RBAC resource control are separate: a login requirement does not itself create a "
         "restricted page or operation. RequirementSpec authorization candidates are business-only: "
         "restrictedPages records the business page/object name and why access is restricted; "
-        "restrictedOperations records the business operation name and reason. Do not emit or request pageId, entityId, operationId, "
-        "route, resourceKey, policyKey, dataRuleKey, database fields, or SQL for these candidates. Those bindings and resource "
-        "identifiers are assigned after this document is confirmed.\n"
+        "restrictedOperations records the business operation name and reason. The specialized authorization fact "
+        "extraction pass assigns restrictedPages.targetPageId from this document's page catalogue; do not invent page, "
+        "entity, operation, route, resourceKey, policyKey, dataRuleKey, database fields, or SQL identifiers here.\n"
         "Each permission candidate must include sourceRefs containing the relevant original business description or clarification answer and non-empty defaultGrantedRoleIds referencing user_roles[].id. If the user explicitly requests a controlled target but does not state which role receives it by default, call ask_user to select the applicable business roles; never guess or leave it empty. Do not emit unauthorizedBehavior, unauthorizedPage, unauthorizedOperation, unauthenticated, or any other configurable unauthorized-display field: page/menu and operation entries are fixed to hide for users without the matching resource, while direct page and endpoint access is rejected with 403. Data authorization is not supported in this phase: report it only through the separate authorization fact extraction capability issue, never as RequirementSpec fields.\n"
         "First identify every business participant explicitly stated in the request and put it in user_roles; this includes roles such as 管理员、审批人、运营人员、员工 when the user describes them. Do not replace an explicitly stated role with a generic business_user. RequirementSpec first records business-role facts, never runtime role-resource/member relations. Every user_roles item must have a stable lower_snake_case id, name, description, isSystemRole=false, and isInitialAdminRole=false. Do not select an initial system administrator and do not call ask_user for that selection: after business roles are recorded, the workflow presents the choice deterministically. Never decide system-administrator responsibility from a role name. The flags are metadata only and do not grant implicit permissions.\n"
         "When the configuration fact says application-level authorization is disabled but the original business description explicitly requests a permission control, return a top-level internal authorization_config_conflict object with requested=true and short evidence. Do not copy this marker into the RequirementSpec and do not silently enable authorization_requirements. Omit the marker when no business permission control was requested.\n"
@@ -537,7 +579,12 @@ def _analyze_requirements_once(
         allow_inferred_defaults=False,
     )
     # 角色事实独立于是否开启权限：后续“谁是初始系统管理员”的选择只能基于这里识别的业务角色。
-    authorization_facts = _extract_authorization_facts(request, existing_spec, settings)
+    authorization_facts = _extract_authorization_facts(
+        request,
+        existing_spec,
+        settings,
+        spec.get("pages") if isinstance(spec.get("pages"), list) else [],
+    )
     effective_agent_spec = _merge_authorization_facts(
         effective_agent_spec,
         authorization_facts,

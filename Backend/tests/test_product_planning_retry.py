@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from app.graph.nodes.planning import project_planning
+from app.graph.nodes.planning import _project_plan_validation_errors, project_planning
 from app.graph.nodes.product_planning import product_planning
 from app.graph.nodes.ui_confirmation import ui_confirmation
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
@@ -36,6 +36,32 @@ class ProductPlanningRetryTests(unittest.TestCase):
             },
             "request": "",
         }
+
+    def test_4e_uses_materialized_page_implementation_contracts(self) -> None:
+        """4E 必须消费运行时投影，不能从紧凑 TechnicalPlan 读取未持久化的权限绑定。"""
+
+        state = self._technical_planning_state()
+        compact_plan = {"artifact_type": "technical-plan", "pages": []}
+        runtime_plan = {
+            **compact_plan,
+            "page_implementation_contracts": [
+                {"pageId": "dashboard_page", "permissionBindings": []}
+            ],
+        }
+        with (
+            patch(
+                "app.graph.nodes.planning.materialize_technical_plan_runtime",
+                return_value=runtime_plan,
+            ),
+            patch("app.graph.nodes.planning.validate_project_plan_dependencies", return_value=[]),
+            patch("app.graph.nodes.planning.validate_api_contract_consistency", return_value=[]),
+            patch("app.graph.nodes.planning.validate_project_plan_datasource_policy", return_value=[]),
+            patch("app.graph.nodes.planning.validate_technical_plan_api_contracts", return_value=[]),
+            patch("app.graph.nodes.planning._technical_plan_contract_errors", return_value=[]) as contract_errors,
+        ):
+            self.assertEqual(_project_plan_validation_errors(compact_plan, state), [])
+
+        contract_errors.assert_called_once_with(state, runtime_plan)
 
     @patch("app.graph.nodes.product_planning.write_product_plan_documents")
     @patch("app.graph.nodes.product_planning.plan_product_with_chat_model")

@@ -49,7 +49,10 @@ from app.services.project_plan import (
     validate_technical_plan_api_contracts,
     validate_project_plan_datasource_policy,
 )
-from app.services.authorization_manifest import validate_authorization_manifest
+from app.services.authorization_deliverability import (
+    authorization_deliverability_errors,
+    authorization_deliverability_report,
+)
 from app.services.product_plan import require_current_product_plan
 from app.services.page_dependencies import (
     close_page_action_endpoint_dependencies,
@@ -70,11 +73,8 @@ from app.workspace.plan_documents import (
     write_project_plan_document,
 )
 
-
 logger = logging.getLogger("uvicorn.error")
 _TECHNICAL_PLAN_GENERATION_ATTEMPTS = 3
-
-
 
 
 def _detail_workspace_options(state: ProjectState) -> dict[str, str]:
@@ -159,9 +159,14 @@ def _technical_planning_requirement_spec(
         return requirement_spec
     product_plan = state.get("product_plan")
     ui_designs = state.get("ui_designs")
-    if not isinstance(product_plan, dict) or product_plan.get("confirmation_status") != "confirmed":
+    if (
+        not isinstance(product_plan, dict)
+        or product_plan.get("confirmation_status") != "confirmed"
+    ):
         raise ValueError("TechnicalPlan 必须基于已确认 ProductPlan 生成。")
-    if not isinstance(ui_designs, dict) or ui_designs.get("confirmation_status") not in {
+    if not isinstance(ui_designs, dict) or ui_designs.get(
+        "confirmation_status"
+    ) not in {
         "confirmed",
         "skipped",
     }:
@@ -214,15 +219,23 @@ def _technical_plan_contract_errors(
     requirement_spec = state.get("requirement_spec")
     errors = validate_page_implementation_contracts(plan, product_plan, ui_designs)
     if isinstance(requirement_spec, dict):
-        errors.extend(
-            validate_authorization_manifest(
-                plan.get("authorization_manifest"),
-                requirement_spec,
-                product_plan,
-                plan.get("api_contracts") if isinstance(plan.get("api_contracts"), list) else [],
-                plan.get("pages") if isinstance(plan.get("pages"), list) else [],
-            )
+        report = authorization_deliverability_report(
+            plan.get("authorization_manifest"),
+            requirement_spec,
+            product_plan,
+            (
+                plan.get("api_contracts")
+                if isinstance(plan.get("api_contracts"), list)
+                else []
+            ),
+            plan.get("pages") if isinstance(plan.get("pages"), list) else [],
+            (
+                plan.get("page_implementation_contracts")
+                if isinstance(plan.get("page_implementation_contracts"), list)
+                else []
+            ),
         )
+        errors.extend(authorization_deliverability_errors(report))
     return errors
 
 
@@ -321,7 +334,9 @@ def project_planning(state: ProjectState) -> dict:
         requirement_spec = state.get("requirement_spec")
         if not isinstance(requirement_spec, dict):
             raise ValueError("TechnicalPlan 必须读取已确认的 RequirementSpec。")
-        product_plan = require_current_product_plan(state.get("product_plan"), requirement_spec)
+        product_plan = require_current_product_plan(
+            state.get("product_plan"), requirement_spec
+        )
         if product_plan.get("confirmation_status") != "confirmed":
             raise ValueError("TechnicalPlan 必须基于已确认 ProductPlan 生成。")
     existing_plan = (
@@ -361,7 +376,11 @@ def project_planning(state: ProjectState) -> dict:
             "phase": phase,
             "status": "requires_user_input",
             "project_plan": existing_plan,
-            **({"technical_plan": existing_plan} if phase == "technical_planning" else {}),
+            **(
+                {"technical_plan": existing_plan}
+                if phase == "technical_planning"
+                else {}
+            ),
             "project_plan_path": state.get("project_plan_path", ""),
             "project_plan_json_path": state.get("project_plan_json_path", ""),
             "technical_plan_path": state.get("technical_plan_path", ""),
@@ -449,21 +468,25 @@ def project_planning(state: ProjectState) -> dict:
             "planning_adjustment_request": request,
         }
     if phase == "technical_planning":
-        project_plan, validation_errors, failed_candidate = _generate_valid_technical_plan(
-            state,
-            requirement_spec,
-            existing_plan if isinstance(existing_plan, dict) else None,
-            initial_errors=(
-                [str(error) for error in repair_errors]
-                if resume_failed_candidate and isinstance(repair_errors, list)
-                else None
-            ),
+        project_plan, validation_errors, failed_candidate = (
+            _generate_valid_technical_plan(
+                state,
+                requirement_spec,
+                existing_plan if isinstance(existing_plan, dict) else None,
+                initial_errors=(
+                    [str(error) for error in repair_errors]
+                    if resume_failed_candidate and isinstance(repair_errors, list)
+                    else None
+                ),
+            )
         )
         if project_plan is None:
             return {
                 "phase": phase,
                 "status": "requires_user_input",
-                "clarification": _technical_plan_generation_error_payload(validation_errors),
+                "clarification": _technical_plan_generation_error_payload(
+                    validation_errors
+                ),
                 "technical_plan_repair_candidate": failed_candidate or {},
                 "technical_plan_repair_errors": validation_errors[:12],
                 "timeline": [phase],
@@ -556,9 +579,11 @@ def _entity_source_binding_implementation(state: ProjectState) -> dict:
         base_plan = (
             pending_plan
             if isinstance(pending_plan, dict)
-            else state.get("project_plan")
-            if isinstance(state.get("project_plan"), dict)
-            else None
+            else (
+                state.get("project_plan")
+                if isinstance(state.get("project_plan"), dict)
+                else None
+            )
         )
         if not isinstance(base_plan, dict):
             raise ValueError("缺少 TechnicalPlan，无法提交实体数据源绑定。")
@@ -649,7 +674,9 @@ def _entity_source_binding_implementation(state: ProjectState) -> dict:
             "timeline": ["entity_source_binding"],
         }
 
-    if isinstance(pending_plan, dict) and _user_confirmed_project_plan(state.get("request", "")):
+    if isinstance(pending_plan, dict) and _user_confirmed_project_plan(
+        state.get("request", "")
+    ):
         return _entity_source_binding_implementation(
             {
                 **state,
@@ -669,7 +696,10 @@ def _entity_source_binding_implementation(state: ProjectState) -> dict:
     ai_suggestions: dict[str, Any] | None = None
     ddl_execution: dict[str, Any] | None = None
     action = state.get("entity_design_action")
-    if isinstance(action, dict) and str(action.get("entity_id") or "") == selected_entity_id:
+    if (
+        isinstance(action, dict)
+        and str(action.get("entity_id") or "") == selected_entity_id
+    ):
         action_name = str(action.get("action") or "")
         if action_name == "ai_assist":
             ai_suggestions = _build_entity_design_ai_suggestions(
@@ -724,11 +754,15 @@ def _entity_source_binding_implementation(state: ProjectState) -> dict:
         detail_target_type="entity",
     )
     if ai_suggestions is not None:
-        entity_design = clarification.get("review", {}).get("summary", {}).get("entityDesign")
+        entity_design = (
+            clarification.get("review", {}).get("summary", {}).get("entityDesign")
+        )
         if isinstance(entity_design, dict):
             entity_design["ai_suggestions"] = ai_suggestions
     if ddl_execution is not None:
-        entity_design = clarification.get("review", {}).get("summary", {}).get("entityDesign")
+        entity_design = (
+            clarification.get("review", {}).get("summary", {}).get("entityDesign")
+        )
         if isinstance(entity_design, dict):
             entity_design["ddl_execution"] = ddl_execution
     return {
@@ -758,24 +792,6 @@ def _entity_source_binding_implementation(state: ProjectState) -> dict:
         "entity_design_action": {},
         "timeline": ["entity_source_binding"],
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _generate_entity_detail_plan(
@@ -982,9 +998,11 @@ def _apply_entity_design_action(
         design_stage = (
             "database_design"
             if source_type == "database"
-            else ENTITY_DESIGN_STAGE_EXTERNAL_API_INPUT
-            if source_type == "external_api"
-            else "static_design"
+            else (
+                ENTITY_DESIGN_STAGE_EXTERNAL_API_INPUT
+                if source_type == "external_api"
+                else "static_design"
+            )
         )
         detail = create_entity_detail_plan(
             source_plan,
@@ -1034,7 +1052,10 @@ def _attach_entity_design_validation_errors(
 
     updated = deepcopy(project_plan)
     for detail in updated.get("entity_detail_plans", []):
-        if not isinstance(detail, dict) or str(detail.get("entity_id") or "") != entity_id:
+        if (
+            not isinstance(detail, dict)
+            or str(detail.get("entity_id") or "") != entity_id
+        ):
             continue
         source_type = str(detail.get("data_source_type") or "")
         section_key = {
@@ -1043,7 +1064,11 @@ def _attach_entity_design_validation_errors(
             "static": "static_design",
         }.get(source_type)
         if section_key:
-            section = detail.get(section_key) if isinstance(detail.get(section_key), dict) else {}
+            section = (
+                detail.get(section_key)
+                if isinstance(detail.get(section_key), dict)
+                else {}
+            )
             section["validation_errors"] = errors
             detail[section_key] = section
         detail["validation_errors"] = errors
@@ -1085,16 +1110,16 @@ def _entity_design_requires_revision(
                 selected_entity_id=selected_entity_id,
             ),
         },
-            **selected_entity_state,
-            "detail_plans": _selected_detail_plans(
-                review_plan,
-                "",
-                selected_entity_id=selected_entity_id,
-            ),
-            "entity_source_binding_submission": {},
-            "entity_design_action": {},
-            "timeline": ["entity_source_binding"],
-        }
+        **selected_entity_state,
+        "detail_plans": _selected_detail_plans(
+            review_plan,
+            "",
+            selected_entity_id=selected_entity_id,
+        ),
+        "entity_source_binding_submission": {},
+        "entity_design_action": {},
+        "timeline": ["entity_source_binding"],
+    }
 
 
 def _execute_confirmed_entity_database_operations(
@@ -1106,7 +1131,10 @@ def _execute_confirmed_entity_database_operations(
 
     updated = deepcopy(project_plan)
     for detail in updated.get("entity_detail_plans", []):
-        if not isinstance(detail, dict) or str(detail.get("entity_id") or "") != entity_id:
+        if (
+            not isinstance(detail, dict)
+            or str(detail.get("entity_id") or "") != entity_id
+        ):
             continue
         if str(detail.get("status") or "") != "confirmed":
             continue
@@ -1186,9 +1214,7 @@ def _execute_entity_database_operations_with_agent(
     tables: list[str] = []
     for operation in create_tables:
         table = (
-            operation.get("table")
-            if isinstance(operation.get("table"), dict)
-            else {}
+            operation.get("table") if isinstance(operation.get("table"), dict) else {}
         )
         table_name = str(table.get("name") or "")
         if not table_name:
@@ -1263,9 +1289,7 @@ def _execute_entity_database_operations_with_agent(
     )
     detail["database_execution"] = {
         **execution,
-        "operation_ids": [
-            str(operation.get("id") or "") for operation in operations
-        ],
+        "operation_ids": [str(operation.get("id") or "") for operation in operations],
         "approved_by": "entity_design_confirmation",
         "agent_note": str(task_result.get("agent_note") or ""),
         "plan": task_result.get("plan"),
@@ -1279,9 +1303,7 @@ def _execute_entity_database_operations_with_agent(
         "database_change_plan": task_result.get("database_change_plan"),
         "database_risk": task_result.get("database_risk"),
     }
-    detail["table_operations_executed"] = (
-        execution.get("status") == "completed"
-    )
+    detail["table_operations_executed"] = execution.get("status") == "completed"
     return True
 
 
@@ -1338,9 +1360,11 @@ def _execute_entity_add_columns_with_agent(
         state,
         project_plan,
         detail,
-        action.get("database_change_plan")
-        if isinstance(action.get("database_change_plan"), dict)
-        else None,
+        (
+            action.get("database_change_plan")
+            if isinstance(action.get("database_change_plan"), dict)
+            else None
+        ),
         True,
     )
     execution = (
@@ -1394,9 +1418,7 @@ def _execute_entity_create_table_action(
     """点击“确认建表并应用”后立即按 Database Agent 流程生成并执行建表 DDL。"""
 
     proposal = (
-        action.get("proposal")
-        if isinstance(action.get("proposal"), dict)
-        else {}
+        action.get("proposal") if isinstance(action.get("proposal"), dict) else {}
     )
     table_name = str(proposal.get("name") or "").strip()
     if not table_name:
@@ -1432,9 +1454,11 @@ def _execute_entity_create_table_action(
         state,
         project_plan,
         detail,
-        action.get("database_change_plan")
-        if isinstance(action.get("database_change_plan"), dict)
-        else None,
+        (
+            action.get("database_change_plan")
+            if isinstance(action.get("database_change_plan"), dict)
+            else None
+        ),
     )
     execution = (
         detail.get("database_execution")
@@ -1487,9 +1511,7 @@ def _entity_ddl_approval_payload(ddl_execution: dict[str, Any]) -> dict[str, Any
         else {}
     )
     risk = (
-        ddl_execution.get("risk")
-        if isinstance(ddl_execution.get("risk"), dict)
-        else {}
+        ddl_execution.get("risk") if isinstance(ddl_execution.get("risk"), dict) else {}
     )
     plan = (
         ddl_execution.get("database_change_plan")
@@ -1512,8 +1534,7 @@ def _entity_ddl_approval_payload(ddl_execution: dict[str, Any]) -> dict[str, Any
                 "id": "database_approval",
                 "header": "数据库审批",
                 "question": str(
-                    approval.get("description")
-                    or "是否批准执行该高危数据库变更计划？"
+                    approval.get("description") or "是否批准执行该高危数据库变更计划？"
                 ),
                 "type": "text",
                 "placeholder": "在审批卡片中批准或拒绝；批准后继续当前工作流。",
@@ -1526,12 +1547,6 @@ def _entity_ddl_approval_payload(ddl_execution: dict[str, Any]) -> dict[str, Any
             "statementCount": len(statements),
         },
     }
-
-
-
-
-
-
 
 
 def _selected_detail_plans(
@@ -1553,13 +1568,6 @@ def _selected_detail_plans(
     ]
 
 
-
-
-
-
-
-
-
 def _has_selected_entity_detail(
     project_plan: dict,
     selected_entity_id: str,
@@ -1571,8 +1579,6 @@ def _has_selected_entity_detail(
         and str(detail.get("entity_id") or "") == selected_entity_id
         for detail in project_plan.get("entity_detail_plans", [])
     )
-
-
 
 
 def _selected_detail_design_targets(
@@ -1600,10 +1606,11 @@ def _selected_detail_design_targets(
     ]
 
 
-
 def _project_plan_json_path_for_state(state: ProjectState) -> str:
     if state.get("workflow_scope") == "application_planning":
-        return str(state.get("technical_plan_json_path") or technical_plan_json_path(state))
+        return str(
+            state.get("technical_plan_json_path") or technical_plan_json_path(state)
+        )
     return str(state.get("project_plan_json_path") or project_plan_json_path(state))
 
 
@@ -1667,11 +1674,7 @@ def _technical_plan_generation_error_payload(errors: list[str]) -> dict:
 def _project_plan_dependency_error_summary(errors: list[str]) -> str:
     """把计划一致性错误压缩成用户可见的简短问题清单。"""
 
-    visible_errors = [
-        str(error).strip()
-        for error in errors
-        if str(error).strip()
-    ][:5]
+    visible_errors = [str(error).strip() for error in errors if str(error).strip()][:5]
     if not visible_errors:
         return ""
     return "当前剩余问题：" + "；".join(visible_errors) + "。"
@@ -1716,7 +1719,8 @@ def _project_plan_validation_errors(
                 state["requirement_spec"],
             )
         )
-        errors.extend(_technical_plan_contract_errors(state, project_plan))
+        # 4E 必须读取运行时物化的 PageImplementationContract；正式 TechnicalPlan 不持久化该派生字段。
+        errors.extend(_technical_plan_contract_errors(state, validation_plan))
     return list(dict.fromkeys(str(error).strip() for error in errors if str(error).strip()))
 
 
@@ -1788,7 +1792,9 @@ def _generate_valid_technical_plan(
 
     current_plan = existing_plan
     remaining_errors = list(initial_errors or [])
-    base_feedback = str(requirement_spec.get("planning_adjustment_request") or "").strip()
+    base_feedback = str(
+        requirement_spec.get("planning_adjustment_request") or ""
+    ).strip()
     if current_plan and remaining_errors:
         current_plan = _attach_technical_plan_contracts(state, current_plan)
         current_plan["confirmation_status"] = "pending_user_confirmation"
@@ -1910,8 +1916,9 @@ def _repair_project_plan_validation_errors(
             repair_attempts=repair_attempts,
         )
 
-    feedback = "系统计划一致性校验失败，请在本次重新生成中完整修复以下问题：\n" + "\n".join(
-        f"- {error}" for error in errors
+    feedback = (
+        "系统计划一致性校验失败，请在本次重新生成中完整修复以下问题：\n"
+        + "\n".join(f"- {error}" for error in errors)
     )
     repaired = revise_project_plan_with_chat_model(
         project_plan,
@@ -1920,8 +1927,6 @@ def _repair_project_plan_validation_errors(
     )
     repaired["confirmation_status"] = "pending_user_confirmation"
     return repaired, _project_plan_validation_errors(repaired, state)
-
-
 
 
 def _project_plan_confirmed_payload(project_plan: dict) -> dict:
@@ -1986,7 +1991,6 @@ def _user_confirmed_project_plan(request: str) -> bool:
 def _has_explicit_user_submission(state: ProjectState) -> bool:
     """创建规划只接受原生中断恢复写入的计划交互。"""
 
-    return (
-        state.get("workflow_scope") != "application_planning"
-        or bool(state.get("application_planning_interaction"))
+    return state.get("workflow_scope") != "application_planning" or bool(
+        state.get("application_planning_interaction")
     )

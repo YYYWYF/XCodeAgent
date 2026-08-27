@@ -704,6 +704,122 @@
   min-width: 0;
 }
 
+.@{class-prefix}-technical-plan-authorization-note {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-surface-subtle);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.@{class-prefix}-technical-plan-authorization-role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.@{class-prefix}-technical-plan-authorization-role-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-surface);
+
+  > header {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+
+    > div:first-child {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    strong,
+    code,
+    .ant-typography {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    code {
+      color: var(--wb-text-secondary);
+      font-size: 10px;
+    }
+  }
+
+  > .ant-typography-secondary {
+    font-size: 10px;
+  }
+
+  summary {
+    color: var(--wb-accent);
+    cursor: pointer;
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-technical-plan-authorization-role-tags {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.@{class-prefix}-technical-plan-authorization-groups {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+
+  > section {
+    display: grid;
+    gap: 5px;
+  }
+
+  > section > strong {
+    color: var(--wb-text-secondary);
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-technical-plan-authorization-resource {
+  display: grid;
+  gap: 3px;
+  padding: 7px;
+  border: 1px solid var(--wb-border);
+  border-radius: 5px;
+  background: var(--wb-surface-subtle);
+
+  > div {
+    display: flex;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  strong,
+  code,
+  .ant-typography {
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: ellipsis;
+  }
+
+  code {
+    color: var(--wb-text-secondary);
+  }
+}
+
+.@{class-prefix}-technical-plan-authorization-endpoint {
+  color: var(--wb-accent) !important;
+}
+
 .@{class-prefix}-technical-plan-page-binding-group {
   display: grid;
   grid-template-columns: minmax(96px, 0.62fr) minmax(0, 2fr);

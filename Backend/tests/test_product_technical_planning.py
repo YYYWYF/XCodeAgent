@@ -189,8 +189,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertTrue(any("不得包含角色或授权字段" in error for error in errors))
         self.assertTrue(any("resourceKey" in error for error in errors))
 
-    def test_product_plan_maps_confirmed_page_and_operation_rules(self) -> None:
-        """已确认权限候选只能映射到真实业务页面和 action，无法映射即拒绝确认。"""
+    def test_product_plan_maps_page_rules_from_target_page_id(self) -> None:
+        """页面规则必须直接消费 targetPageId，展示名称不再参与权限目标推断。"""
 
         requirement_spec = create_requirement_spec(
             "涉及权限控制：是",
@@ -212,7 +212,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                     },
                     "restrictedPages": [
                         {
-                            "name": "人员列表",
+                            "name": "人员管理功能",
+                            "targetPageId": "people_list",
                             "description": "仅授权成员可访问。",
                             "rationale": "人员信息属于内部资料。",
                             "sourceRefs": ["用户提及人员列表权限"],
@@ -270,7 +271,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                 ],
                 "authorization_requirements": {
                     "enabled": True,
-                    "restrictedPages": [{"name": "导出中心", "description": "仅授权成员访问。"}],
+                    "restrictedPages": [{"name": "导出中心", "targetPageId": "orders_export", "description": "仅授权成员访问。"}],
                     "restrictedOperations": [{"name": "导出订单", "description": "仅授权成员导出。"}],
                 },
             },

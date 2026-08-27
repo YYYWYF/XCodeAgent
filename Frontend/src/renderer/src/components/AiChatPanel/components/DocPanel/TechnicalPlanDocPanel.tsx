@@ -8,6 +8,8 @@ import {
   PageBindingsSection,
   type SectionKey
 } from './TechnicalPlanDocSections'
+import { AuthorizationSection } from './TechnicalPlanAuthorizationSection'
+import { authorizationDesignView } from './TechnicalPlanAuthorizationData'
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
 import './TechnicalPlanDocPanel.less'
 
@@ -29,7 +31,14 @@ export default function TechnicalPlanDocPanel({ plan, productPlan }: Props): Rea
   const entities = recordItems(plan.entities)
   const contracts = recordItems(plan.api_contracts)
   const pages = recordItems(plan.pages)
+  const hasAuthorization = Boolean(authorizationDesignView(plan))
+  const sections = hasAuthorization
+    ? [...technicalPlanSections, { key: 'authorization' as const, label: '权限' }]
+    : technicalPlanSections
   const [activeSection, setActiveSection] = useState<SectionKey>('api-contracts')
+  const resolvedActiveSection = sections.some((section) => section.key === activeSection)
+    ? activeSection
+    : 'api-contracts'
   const [selectedContractId, setSelectedContractId] = useState('')
   const [selectedEndpointId, setSelectedEndpointId] = useState('')
   const resolvedContract =
@@ -55,13 +64,13 @@ export default function TechnicalPlanDocPanel({ plan, productPlan }: Props): Rea
   return (
     <div className={cx('technical-plan-doc-panel')}>
       <div className={cx('technical-plan-section-tabs')} role="tablist" aria-label="技术规划章节">
-        {technicalPlanSections.map((section) => (
+        {sections.map((section) => (
           <button
             aria-controls={`technical-plan-panel-${section.key}`}
-            aria-selected={activeSection === section.key}
+            aria-selected={resolvedActiveSection === section.key}
             className={cx(
               'technical-plan-section-tab',
-              activeSection === section.key && 'is-active'
+              resolvedActiveSection === section.key && 'is-active'
             )}
             key={section.key}
             id={`technical-plan-tab-${section.key}`}
@@ -73,13 +82,13 @@ export default function TechnicalPlanDocPanel({ plan, productPlan }: Props): Rea
           </button>
         ))}
       </div>
-      {activeSection === 'architecture' ? (
+      {resolvedActiveSection === 'architecture' ? (
         <ArchitectureSection architecture={architecture} sectionKey="architecture" />
       ) : null}
-      {activeSection === 'entities' ? (
+      {resolvedActiveSection === 'entities' ? (
         <EntitiesSection entities={entities} sectionKey="entities" />
       ) : null}
-      {activeSection === 'api-contracts' ? (
+      {resolvedActiveSection === 'api-contracts' ? (
         <ContractSection
           contracts={contracts}
           onContractChange={(id) => {
@@ -94,13 +103,16 @@ export default function TechnicalPlanDocPanel({ plan, productPlan }: Props): Rea
           sectionKey="api-contracts"
         />
       ) : null}
-      {activeSection === 'page-bindings' ? (
+      {resolvedActiveSection === 'page-bindings' ? (
         <PageBindingsSection
           contracts={contracts}
           pages={pages}
           productPlan={productPlan}
           sectionKey="page-bindings"
         />
+      ) : null}
+      {resolvedActiveSection === 'authorization' ? (
+        <AuthorizationSection plan={plan} sectionKey="authorization" />
       ) : null}
     </div>
   )
