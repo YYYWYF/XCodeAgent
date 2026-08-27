@@ -104,6 +104,7 @@ class WorkflowProjectionTests(unittest.TestCase):
                         }
                     ],
                 },
+                "code_review_report_path": "/private/workspace/.xcodeagent/reports/code-review.md",
             },
             [],
         )
@@ -112,7 +113,9 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertEqual(review["issueCount"], 1)
         self.assertEqual(review["targets"][0]["scannedFileCount"], 3)
         self.assertEqual(review["issues"][0]["ruleId"], "FE001")
+        self.assertEqual(review["reportPath"], ".xcodeagent/reports/code-review.md")
         self.assertNotIn("repairActions", review["issues"][0])
+        self.assertNotIn("code_review_report_path", summary)
 
     def test_integration_test_hides_stale_code_review_result(self) -> None:
         """测试重跑期间不得向测试 Agent 投影上一轮代码审查结果。"""

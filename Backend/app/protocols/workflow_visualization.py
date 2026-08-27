@@ -1087,7 +1087,9 @@ def _workflow_progress_summary(
             "acceptance_phase_confirmation", {}
         ),
         "codeReviewResult": _workflow_code_review_result_for_phase(
-            result.get("code_review_result"), result.get("phase")
+            result.get("code_review_result"),
+            result.get("phase"),
+            result.get("code_review_report_path"),
         ),
         "codeReviewRepair": _workflow_code_review_repair(
             result.get("code_review_repair_result"), result.get("phase")
@@ -1281,6 +1283,7 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
             "code_review_repair_iteration",
             "code_review_max_repair_iterations",
             "code_review_next_action",
+            "code_review_report_path",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
@@ -1289,7 +1292,9 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
     if "code_review_result" in value:
         public_state.pop("code_review_result", None)
         public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
-            value.get("code_review_result"), value.get("phase")
+            value.get("code_review_result"),
+            value.get("phase"),
+            value.get("code_review_report_path"),
         )
     if "code_review_repair_result" in value:
         public_state.pop("code_review_repair_result", None)
@@ -1323,7 +1328,9 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             },
         }
     if node_name == "code_review":
-        result = _workflow_code_review_result(update.get("code_review_result"))
+        result = _workflow_code_review_result(
+            update.get("code_review_result"), update.get("code_review_report_path")
+        )
         return {
             "message": str(
                 update.get("message") or result.get("summary") or "前后端代码审查完成。"

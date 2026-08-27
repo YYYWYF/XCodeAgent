@@ -30,6 +30,12 @@ const WORKFLOW_NODE_LABELS: Record<string, string> = {
   handle_failure: '失败处理'
 }
 
+const REVIEW_DETAIL_HIDDEN_NODES = new Set([
+  'review_phase_confirmation',
+  'code_review',
+  'acceptance_phase_confirmation'
+])
+
 type CompletedIntegrationTestCheckSnapshot = {
   checks: NonNullable<ReturnType<typeof readIntegrationTestChecks>>
   attempt?: number
@@ -211,7 +217,11 @@ export function processStepsForMessageDisplay(
   if (isConversationWorkflow(workflow)) return displaySteps
 
   const stableSteps = displaySteps.filter((step) => step.kind !== 'tool' && step.kind !== 'command')
-  return stableSteps
+  return stableSteps.map((step) =>
+    REVIEW_DETAIL_HIDDEN_NODES.has(String(step.nodeName || ''))
+      ? { ...step, detail: '', result: '' }
+      : step
+  )
 }
 
 /** 判断 Workflow 是否属于由结构化卡片承载的规划产物生成流程。 */

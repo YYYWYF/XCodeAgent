@@ -106,12 +106,11 @@ def normalize_code_review_result(
         # 前端 Skill 只有占位内容时不存在可执行规则，模型生成的前端问题属于无依据结果，必须丢弃。
         if side == "frontend" and frontend_scan_warning:
             continue
-        file_path = _normalize_review_path(
+        file_path = _normalize_issue_path(
             raw.get("file", raw.get("filePath", raw.get("path"))),
+            side=side,
             workspace=workspace,
         )
-        if side not in {"frontend", "backend"} or not is_code_analyze_read_path(file_path):
-            raise ValueError("审查结果包含越界源码路径。")
         expected_prefix = "frontend/" if side == "frontend" else "backend/src/main/java/"
         if not file_path.startswith(expected_prefix):
             raise ValueError("审查问题的端类型与文件路径不匹配。")
@@ -468,6 +467,38 @@ def _normalize_review_path(value: Any, *, workspace: str | None) -> str:
     if normalized in {"", "."} or ".." in path.parts:
         return ""
     return normalized
+
+
+def _normalize_issue_path(
+    value: Any,
+    *,
+    side: str,
+    workspace: str | None,
+) -> str:
+    """将扫描根相对的问题路径补全为安全的工作区相对路径。"""
+
+    raw_path = str(value or "").strip().replace("\\", "/")
+    normalized = _normalize_review_path(raw_path, workspace=workspace)
+    if not normalized:
+        return ""
+    # 已声明任一固定工作区根时保持原路径，交由端类型校验拒绝跨端问题。
+    if any(
+        normalized == root or normalized.startswith(f"{root}/")
+        for root in ("frontend", "backend/src/main/java")
+    ):
+        return normalized
+    # 绝对路径只允许由 _normalize_review_path 证明位于真实工作区内；不能把
+    # `/package.json` 等工作区根文件误解释成 frontend 下的文件。
+    if raw_path.startswith("/") or (len(raw_path) > 1 and raw_path[1] == ":"):
+        return normalized
+    relative_path = PurePosixPath(normalized)
+    if ".." in relative_path.parts:
+        return ""
+    root = {
+        "frontend": "frontend",
+        "backend": "backend/src/main/java",
+    }.get(side)
+    return f"{root}/{normalized}" if root else normalized
 
 
 def _normalize_repair_actions(value: Any, *, side: str) -> list[str]:

@@ -108,6 +108,30 @@ function getAgentBaseUrl(): string {
   return agentBaseUrl ? agentBaseUrl.replace(/\/$/, '') : '/api/agent'
 }
 
+/** 从 FastAPI 字符串或结构化校验错误中提取可读提示。 */
+export function workspaceToolErrorMessage(payload: unknown, status: number): string {
+  if (!payload || typeof payload !== 'object' || !('detail' in payload)) {
+    return `HTTP ${status}`
+  }
+  const detail = (payload as { detail: unknown }).detail
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) =>
+        item && typeof item === 'object' && 'msg' in item
+          ? String((item as { msg: unknown }).msg || '').trim()
+          : ''
+      )
+      .filter(Boolean)
+    if (messages.length > 0) return messages.join('；')
+  }
+  if (detail && typeof detail === 'object' && 'message' in detail) {
+    const message = String((detail as { message: unknown }).message || '').trim()
+    if (message) return message
+  }
+  return `HTTP ${status}`
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${getAgentBaseUrl()}${path}`, {
     ...init,
@@ -119,11 +143,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
-    const detail =
-      payload && typeof payload === 'object' && 'detail' in payload
-        ? String((payload as { detail: unknown }).detail)
-        : `HTTP ${response.status}`
-    throw new Error(detail)
+    throw new Error(workspaceToolErrorMessage(payload, response.status))
   }
   return payload as T
 }

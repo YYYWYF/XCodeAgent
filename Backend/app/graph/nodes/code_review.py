@@ -58,6 +58,9 @@ def code_review(
         "message": result.get("message") or "前后端代码审查完成。",
         "clarification": result.get("clarification", {}),
         "code_review_result": result.get("code_review_result", state.get("code_review_result", {})),
+        "code_review_report_path": result.get(
+            "code_review_report_path", state.get("code_review_report_path", "")
+        ),
         "code_review_repair_status": result.get(
             "code_review_repair_status", state.get("code_review_repair_status", "not_required")
         ),

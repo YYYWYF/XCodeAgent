@@ -116,6 +116,7 @@ export type WorkflowAcceptanceRequest = {
 export type WorkflowCodeReviewResult = {
   status?: 'completed' | string
   summary?: string
+  reportPath?: string
   issueCount?: number
   truncated?: boolean
   loadedSkills?: string[]

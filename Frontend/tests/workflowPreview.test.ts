@@ -43,6 +43,9 @@ import {
   subscribeApplicationsChanged
 } from '../src/renderer/src/service/applicationStorage'
 import { readApplicationLifecycle } from '../src/renderer/src/service/agUiAgent'
+import { processStepsForMessageDisplay } from '../src/renderer/src/service/processStepHistory'
+import { workspaceToolErrorMessage } from '../src/renderer/src/service/workspaceTools'
+import { codeReviewReportFocusKey } from '../src/renderer/src/components/AiChatPanel/hooks/useCodeReviewReportPanel'
 import {
   hasNonTerminalApplicationExecution,
   latestApplicationLifecycle
@@ -198,6 +201,96 @@ test('测试重跑和审查确认节点不会展示恢复快照中的旧代码�
     ),
     true
   )
+})
+
+test('审查流程三个节点隐藏动作详情且其他步骤保持不变', () => {
+  const workflow = previewWorkflow({ phase: 'code_review', status: 'completed' })
+  const steps = processStepsForMessageDisplay(
+    [
+      {
+        id: 'review-confirmation',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成审查阶段确认',
+        detail: '不应展示的确认详情',
+        result: '不应展示的确认结果',
+        nodeName: 'review_phase_confirmation',
+        sequence: 1
+      },
+      {
+        id: 'review',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成代码审查',
+        detail: '不应展示的扫描详情',
+        result: '不应展示的扫描结果',
+        nodeName: 'code_review',
+        sequence: 2
+      },
+      {
+        id: 'acceptance-confirmation',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成验收阶段确认',
+        detail: '不应展示的验收详情',
+        result: '不应展示的验收结果',
+        nodeName: 'acceptance_phase_confirmation',
+        sequence: 3
+      },
+      {
+        id: 'integration-test',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成集成测试',
+        detail: '仍需展示的测试详情',
+        result: '仍需展示的测试结果',
+        nodeName: 'integration_test',
+        sequence: 4
+      }
+    ],
+    workflow
+  )
+
+  assert.equal(steps?.[0].detail, '')
+  assert.equal(steps?.[0].result, '')
+  assert.equal(steps?.[1].detail, '')
+  assert.equal(steps?.[2].result, '')
+  assert.equal(steps?.[3].detail, '仍需展示的测试详情')
+  assert.equal(steps?.[3].result, '仍需展示的测试结果')
+})
+
+test('同一路径的审查报告在新的 Workflow 运行中获得新的自动聚焦键', () => {
+  const first = codeReviewReportFocusKey(
+    'application-1',
+    'run-1',
+    '.xcodeagent/reports/code-review.md'
+  )
+  const second = codeReviewReportFocusKey(
+    'application-1',
+    'run-2',
+    '.xcodeagent/reports/code-review.md'
+  )
+
+  assert.notEqual(first, second)
+  assert.equal(first, 'application-1:run-1:.xcodeagent/reports/code-review.md')
+})
+
+test('受控文件读取的结构化校验错误会显示可读文案', () => {
+  assert.equal(
+    workspaceToolErrorMessage(
+      {
+        detail: [
+          {
+            type: 'less_than_equal',
+            msg: 'Input should be less than or equal to 200000'
+          }
+        ]
+      },
+      422
+    ),
+    'Input should be less than or equal to 200000'
+  )
+  assert.equal(workspaceToolErrorMessage({ detail: {} }, 422), 'HTTP 422')
 })
 
 test('不同运行返回相同 URL 时仍生成不同的一次性目标', () => {

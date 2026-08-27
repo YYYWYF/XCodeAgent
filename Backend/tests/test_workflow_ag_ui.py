@@ -1948,6 +1948,13 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             frames = asyncio.run(collect())
 
         workflow_frames = _decode_workflow_run_frames(frames)
+        process_frames = _decode_agent_process_frames(frames)
+        code_review_step_ids = {
+            frame["id"]
+            for frame in process_frames
+            if frame.get("nodeName") == "code_review"
+        }
+        self.assertEqual(code_review_step_ids, {"workflow:code_review"})
         building_progresses = [
             frame
             for frame in workflow_frames

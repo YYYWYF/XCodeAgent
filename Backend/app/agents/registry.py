@@ -37,6 +37,7 @@ _MAX_SNAPSHOT_ATTEMPTS = 3
 class AgentBundle:
     code_analyze: Any
     code_review_repair: Any
+    code_review_repair_with_pnpm: Any
     frontend: Any
     data_source: Any
     database: Any
@@ -125,6 +126,11 @@ def _create_agent_bundle_for_workspace(
         chat_model,
         workspace_root=workspace_root,
     )
+    code_review_repair_with_pnpm = create_code_review_repair_agent(
+        chat_model,
+        workspace_root=workspace_root,
+        allow_pnpm_install=True,
+    )
     data_source = create_data_source_agent(
         chat_model,
         workspace_root=workspace_root,
@@ -175,6 +181,7 @@ def _create_agent_bundle_for_workspace(
     return AgentBundle(
         code_analyze=code_analyze,
         code_review_repair=code_review_repair,
+        code_review_repair_with_pnpm=code_review_repair_with_pnpm,
         frontend=frontend,
         data_source=data_source,
         database=database,

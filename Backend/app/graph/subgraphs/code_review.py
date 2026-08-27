@@ -19,6 +19,7 @@ from app.graph.state import ProjectState
 from app.services.integration_test_runner import run_integration_checks
 from app.agents.code_analyze.analyzer import analyze_workspace_code, _safe_review_text
 from app.workspace.code_changes import code_change_state_update
+from app.workspace.code_review_documents import write_code_review_markdown
 
 
 CODE_REVIEW_REPAIR_CONFIRMATION_MODE = "code_review_repair_confirmation"
@@ -196,6 +197,7 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
     writer({"type": "code_review.scan", "status": "running"})
     try:
         result = analyze_workspace_code(state, workspace)
+        report_path = write_code_review_markdown(state, result)
     except Exception as exc:  # noqa: BLE001 - 子图边界统一转换为失败状态
         return {
             "phase": "code_review",
@@ -203,6 +205,7 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
             "message": "前后端代码审查失败。",
             "error": _safe_review_text(f"{type(exc).__name__}: {exc}", workspace),
             "code_review_result": {},
+            "code_review_report_path": "",
             "code_review_repair_status": "failed",
             "code_review_next_action": "handle_failure",
             "code_review_events": ["code_scan"],
@@ -219,6 +222,7 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
                 issues, truncated=bool(result.get("truncated"))
             ),
             "code_review_result": result,
+            "code_review_report_path": report_path,
             "code_review_repair_status": "awaiting_user",
             "code_review_repair_result": {
                 "status": "awaiting_user",
@@ -243,6 +247,7 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
         "message": result.get("summary") or "前后端代码审查完成，未发现需要处理的问题。",
         "clarification": {},
         "code_review_result": result,
+        "code_review_report_path": report_path,
         "code_review_repair_status": "not_required",
         "code_review_repair_result": {
             "status": "not_required",

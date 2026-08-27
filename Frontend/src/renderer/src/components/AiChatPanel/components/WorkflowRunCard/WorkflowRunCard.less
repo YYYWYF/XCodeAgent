@@ -337,8 +337,7 @@
   }
 }
 
-.@{class-prefix}-workflow-build-task-header-shell
-  > .@{class-prefix}-workflow-build-tool-activity {
+.@{class-prefix}-workflow-build-task-header-shell > .@{class-prefix}-workflow-build-tool-activity {
   margin-top: 9px;
 }
 
@@ -727,11 +726,74 @@
   background: var(--wb-surface);
 
   &.running {
-    flex-direction: row;
-    align-items: flex-start;
+    position: relative;
+    gap: 7px;
+    overflow: hidden;
+    padding: 15px 16px;
     border-color: var(--wb-accent-border);
-    background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-surface));
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--wb-accent) 9%, var(--wb-surface)) 0%,
+      color-mix(in srgb, var(--wb-accent) 3%, var(--wb-surface)) 58%,
+      var(--wb-surface) 100%
+    );
+
+    &::before {
+      position: absolute;
+      top: 0;
+      right: 0;
+      left: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--wb-accent), var(--wb-accent-soft), transparent);
+      content: '';
+    }
   }
+}
+
+.@{class-prefix}-workflow-code-review-loading-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+
+  .ant-typography {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-workflow-code-review-loading-icon {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-surface));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+
+.@{class-prefix}-workflow-code-review-loading-hint {
+  margin: 0 0 0 35px !important;
+  color: var(--wb-text-secondary) !important;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-workflow-code-review-completion {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 2px;
+}
+
+.@{class-prefix}-workflow-code-review-icon.warning {
+  color: var(--wb-warning);
 }
 
 .@{class-prefix}-workflow-code-review-copy {
@@ -741,52 +803,92 @@
   gap: 3px;
 }
 
-.@{class-prefix}-workflow-code-review-header {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  gap: 10px;
-
-  > .ant-tag {
-    margin-left: auto;
-  }
-}
-
-.@{class-prefix}-workflow-code-review-targets,
 .@{class-prefix}-workflow-code-review-issue-list {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
-}
-
-.@{class-prefix}-workflow-code-review-target,
-.@{class-prefix}-workflow-code-review-issue {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-  padding: 9px 10px;
-  border: 1px solid var(--wb-border);
-  border-radius: 7px;
-  background: var(--wb-canvas);
-}
-
-.@{class-prefix}-workflow-code-review-target-main {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
   gap: 10px;
 }
 
-.@{class-prefix}-workflow-code-review-warning {
-  overflow-wrap: anywhere;
-  color: var(--wb-warning) !important;
+.@{class-prefix}-workflow-code-review-issues {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 46%, var(--wb-border));
+  border-radius: 12px;
+  background:
+    radial-gradient(
+      circle at 92% 4%,
+      color-mix(in srgb, var(--wb-accent) 18%, transparent) 0,
+      transparent 34%
+    ),
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--wb-accent) 12%, var(--wb-surface)) 0%,
+      color-mix(in srgb, var(--wb-accent) 5%, var(--wb-canvas)) 58%,
+      var(--wb-surface) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--wb-accent) 18%, transparent),
+    0 12px 30px color-mix(in srgb, var(--wb-accent) 9%, transparent);
+
+  &::before {
+    position: absolute;
+    inset: 0;
+    opacity: 0.34;
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--wb-accent) 10%, transparent) 1px, transparent 1px),
+      linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--wb-accent) 10%, transparent) 1px,
+        transparent 1px
+      );
+    background-size: 24px 24px;
+    pointer-events: none;
+    content: '';
+  }
+
+  > * {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+.@{class-prefix}-workflow-code-review-issue {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 38%, var(--wb-border));
+  border-radius: 10px;
+  background: linear-gradient(
+    120deg,
+    color-mix(in srgb, var(--wb-accent) 10%, var(--wb-canvas)) 0%,
+    color-mix(in srgb, var(--wb-accent) 4%, var(--wb-surface)) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--wb-accent) 14%, transparent),
+    0 6px 18px color-mix(in srgb, var(--wb-accent) 7%, transparent);
+
+  &.critical,
+  &.high {
+    border-color: color-mix(in srgb, var(--wb-accent) 52%, var(--wb-danger));
+  }
+
+  &.medium {
+    border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-warning));
+  }
+
+  &.low {
+    border-color: color-mix(in srgb, var(--wb-accent) 42%, var(--wb-border));
+  }
 }
 
 .@{class-prefix}-workflow-code-review-section-title,
-.@{class-prefix}-workflow-code-review-issue-header,
 .@{class-prefix}-workflow-code-review-actions {
   display: flex;
   flex-wrap: wrap;
@@ -794,17 +896,136 @@
   gap: 8px;
 }
 
-.@{class-prefix}-workflow-code-review-issue-header .ant-tag {
-  margin-right: 0;
+.@{class-prefix}-workflow-code-review-section-title {
+  justify-content: flex-end;
+
+  > div {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin-right: auto;
+    color: var(--wb-accent);
+  }
+
+  .ant-tag {
+    margin-right: 0;
+    color: var(--wb-accent);
+    border-color: var(--wb-accent-border);
+    background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-surface));
+  }
+}
+
+.@{class-prefix}-workflow-code-review-truncated {
+  color: var(--wb-warning) !important;
+  border-color: color-mix(in srgb, var(--wb-warning) 42%, var(--wb-border)) !important;
+}
+
+.@{class-prefix}-workflow-code-review-severity-bar {
+  width: 4px;
+  flex: 0 0 auto;
+  background: var(--wb-accent);
+}
+
+.@{class-prefix}-workflow-code-review-issue.critical
+  .@{class-prefix}-workflow-code-review-severity-bar,
+.@{class-prefix}-workflow-code-review-issue.high
+  .@{class-prefix}-workflow-code-review-severity-bar {
+  background: var(--wb-danger);
+}
+
+.@{class-prefix}-workflow-code-review-issue.medium
+  .@{class-prefix}-workflow-code-review-severity-bar {
+  background: var(--wb-warning);
+}
+
+.@{class-prefix}-workflow-code-review-issue-body {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 13px;
+}
+
+.@{class-prefix}-workflow-code-review-issue-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+
+  .ant-tag {
+    margin-right: 0;
+    border-radius: 999px;
+  }
+}
+
+.@{class-prefix}-workflow-code-review-side-tag {
+  color: var(--wb-accent) !important;
+  border-color: var(--wb-accent-border) !important;
+  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-canvas)) !important;
+}
+
+.@{class-prefix}-workflow-code-review-severity-tag {
+  color: var(--wb-accent) !important;
+  border-color: var(--wb-accent-border) !important;
+  background: transparent !important;
+
+  &.critical,
+  &.high {
+    color: var(--wb-danger) !important;
+    border-color: color-mix(in srgb, var(--wb-danger) 42%, var(--wb-border)) !important;
+  }
+
+  &.medium {
+    color: var(--wb-warning) !important;
+    border-color: color-mix(in srgb, var(--wb-warning) 50%, var(--wb-border)) !important;
+  }
+}
+
+.@{class-prefix}-workflow-code-review-rule {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--wb-text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.@{class-prefix}-workflow-code-review-issue-title,
+.@{class-prefix}-workflow-code-review-issue-summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .@{class-prefix}-workflow-code-review-file {
-  align-self: flex-start;
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 6px;
+  align-self: stretch;
   max-width: 100%;
+  padding: 7px 9px;
   overflow-wrap: anywhere;
   color: var(--wb-text-secondary);
-  background: var(--wb-surface-subtle);
-  border-color: var(--wb-border);
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-surface-subtle));
+
+  > .anticon {
+    flex: 0 0 auto;
+    margin-top: 3px;
+    color: var(--wb-accent);
+  }
+
+  .ant-typography {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--wb-text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+  }
 }
 
 .@{class-prefix}-workflow-code-review-actions {
@@ -832,58 +1053,28 @@
   }
 }
 
-.@{class-prefix}-workflow-code-review-build-checks {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  border: 1px solid var(--wb-border);
-  border-radius: 7px;
-  background: var(--wb-canvas);
-}
-
-.@{class-prefix}-workflow-code-review-build-check {
+.@{class-prefix}-workflow-code-review-build-progress {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
+  padding: 11px 12px;
+  color: var(--wb-accent);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-surface));
 
-  > .ant-typography-secondary {
-    margin-left: auto;
-  }
-}
-
-.@{class-prefix}-workflow-code-review-build-check-status {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--wb-warning);
-
-  &.passed {
-    background: var(--wb-success);
+  .anticon {
+    flex: 0 0 auto;
+    color: var(--wb-accent);
+    font-size: 17px;
   }
 
-  &.failed {
-    background: var(--wb-danger);
-  }
-
-  &.skipped {
-    background: var(--wb-text-secondary);
-  }
-}
-
-.@{class-prefix}-workflow-code-review-empty {
-  padding: 6px 0 0;
-
-  .ant-empty {
-    margin: 6px 0 0;
-  }
-
-  .ant-empty-image {
-    height: 28px;
-    color: var(--wb-code-add-text);
+  .ant-typography {
+    min-width: 0;
+    margin: 0;
+    color: var(--wb-text);
+    overflow-wrap: anywhere;
   }
 }
 
@@ -1384,7 +1575,9 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
 
 .@{class-prefix}-template-preparing-ready {
   align-items: stretch;
-  background: linear-gradient(135deg, rgba(22, 163, 74, 0.06), transparent 40%), var(--wb-surface-subtle, #f7f8fa);
+  background:
+    linear-gradient(135deg, rgba(22, 163, 74, 0.06), transparent 40%),
+    var(--wb-surface-subtle, #f7f8fa);
   border-color: rgba(22, 163, 74, 0.25);
 
   .@{class-prefix}-template-preparing-head .ant-typography {
@@ -1484,7 +1677,8 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
   }
 }
 
-body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) .@{class-prefix}-requirement-spec-edit-modal {
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
+  .@{class-prefix}-requirement-spec-edit-modal {
   --modal-bg: #1b1b1d;
   --modal-surface: #28282b;
   --modal-surface-hover: #34343a;

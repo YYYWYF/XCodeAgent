@@ -90,6 +90,12 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             result = build_code_review_subgraph().invoke(
                 {"workspace": workspace, "status": "in_progress"}
             )
+            report_path = Path(result["code_review_report_path"])
+            self.assertTrue(report_path.is_file())
+            self.assertEqual(
+                report_path.resolve().relative_to(Path(workspace).resolve()).as_posix(),
+                ".xcodeagent/reports/code-review.md",
+            )
 
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["code_review_repair_status"], "awaiting_user")

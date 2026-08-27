@@ -21,7 +21,7 @@ from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 class CodeReviewRepairMiddleware(AgentMiddleware):
     """从默认 DeepAgent 工具中移除通用命令、委派和任务编排能力。"""
 
-    _ALLOWED_TOOLS = frozenset(
+    _FILE_TOOLS = frozenset(
         {
             "ls",
             "read_file",
@@ -29,9 +29,15 @@ class CodeReviewRepairMiddleware(AgentMiddleware):
             "grep",
             "write_file",
             "edit_file",
-            PNPM_INSTALL_TOOL_NAME,
         }
     )
+
+    def __init__(self, *, allow_pnpm_install: bool = False) -> None:
+        """按当前问题包授权状态固定本实例可见的工具集合。"""
+
+        self._allowed_tools = self._FILE_TOOLS | (
+            {PNPM_INSTALL_TOOL_NAME} if allow_pnpm_install else set()
+        )
 
     def wrap_model_call(
         self,
@@ -40,7 +46,9 @@ class CodeReviewRepairMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """同步模型调用前过滤工具。"""
 
-        return handler(request.override(tools=_allowed_tools(request.tools)))
+        return handler(
+            request.override(tools=_allowed_tools(request.tools, self._allowed_tools))
+        )
 
     async def awrap_model_call(
         self,
@@ -49,12 +57,27 @@ class CodeReviewRepairMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """异步模型调用前过滤工具。"""
 
-        return await handler(request.override(tools=_allowed_tools(request.tools)))
+        return await handler(
+            request.override(tools=_allowed_tools(request.tools, self._allowed_tools))
+        )
 
 
-def create_code_review_repair_agent(model, workspace_root: str | None = None):
+def create_code_review_repair_agent(
+    model,
+    workspace_root: str | None = None,
+    *,
+    allow_pnpm_install: bool = False,
+):
     """创建按 Skill 修复前端项目和后端业务源码的受限 Agent。"""
 
+    package_install_instruction = (
+        "This capability is authorized for findings with repair_actions=[\"pnpm_install\"]. "
+        "First apply the Skill remediation to package.json and then call "
+        "pnpm_install_frontend exactly once; that tool alone regenerates the lockfile. "
+        if allow_pnpm_install
+        else "No package installation action is authorized for this capability. No package "
+        "installation tool is available; never attempt pnpm, npm, yarn, or another command. "
+    )
     system_prompt = (
         "You are the CodeReviewRepairAgent. The user has explicitly chosen one-click repair "
         "for the bounded findings supplied in the current packet. Read both scan Skill entry "
@@ -63,10 +86,9 @@ def create_code_review_repair_agent(model, workspace_root: str | None = None):
         "invent error codes, dependencies, or business semantics. You may read and edit safe files "
         "under /frontend/** and non-test business source under /backend/src/main/java/**. Never read "
         "or modify node_modules, sensitive files, backend configuration/tests, workflow artifacts, "
-        "or any other path. Never edit /frontend/pnpm-lock.yaml with file tools. When an issue has "
-        "repair_actions=[\"pnpm_install\"], first apply the Skill remediation to package.json and "
-        "then call pnpm_install_frontend exactly once; that tool alone regenerates the lockfile. "
-        "Do not call it for issues without that repair action. Do not use task/todo tools, delegate "
+        "or any other path. Never edit /frontend/pnpm-lock.yaml with file tools. "
+        f"{package_install_instruction}"
+        "Do not use task/todo tools, delegate "
         "work, or run builds; the workflow performs deterministic build checks after you finish. "
         "Keep method signatures "
         "and behavior stable unless the finding requires the smallest safe change. If a high-risk "
@@ -79,13 +101,19 @@ def create_code_review_repair_agent(model, workspace_root: str | None = None):
     backend = CodeReviewRepairScopedBackend(
         create_workspace_backend(workspace_root, include_builtin_skills=True)
     )
-    pnpm_install_tool = create_code_review_pnpm_install_tool(workspace_root)
+    extra_tools = (
+        [create_code_review_pnpm_install_tool(workspace_root)]
+        if allow_pnpm_install
+        else []
+    )
     return create_deep_agent(
         name="code-review-repair-agent",
         model=model,
         system_prompt=system_prompt,
-        middleware=[CodeReviewRepairMiddleware()],
-        tools=[pnpm_install_tool],
+        middleware=[
+            CodeReviewRepairMiddleware(allow_pnpm_install=allow_pnpm_install)
+        ],
+        tools=extra_tools,
         skills=[
             f"{BUILTIN_SKILLS_VIRTUAL_ROOT}frontend-code-scan/",
             f"{BUILTIN_SKILLS_VIRTUAL_ROOT}backend-code-scan/",
@@ -99,7 +127,7 @@ def create_code_review_repair_agent(model, workspace_root: str | None = None):
     )
 
 
-def _allowed_tools(tools: list[Any]) -> list[Any]:
+def _allowed_tools(tools: list[Any], allowed_names: frozenset[str] | set[str]) -> list[Any]:
     """按稳定工具名保留源码修复所需的读写工具。"""
 
     return [
@@ -108,5 +136,5 @@ def _allowed_tools(tools: list[Any]) -> list[Any]:
         if str(
             (tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", ""))
             or ""
-        ) in CodeReviewRepairMiddleware._ALLOWED_TOOLS
+        ) in allowed_names
     ]

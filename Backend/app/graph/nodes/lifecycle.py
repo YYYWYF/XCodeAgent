@@ -45,6 +45,7 @@ def launch_project(state: ProjectState) -> dict:
         key: state[key]
         for key in (
             "code_review_result",
+            "code_review_report_path",
             "code_review_repair_status",
             "code_review_repair_result",
             "code_review_build_results",

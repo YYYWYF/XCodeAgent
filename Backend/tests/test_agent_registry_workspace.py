@@ -105,6 +105,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             second_bundle.frontend[1]["workspace_root"],
             str(Path(second_workspace).resolve()),
         )
+        self.assertNotIn("allow_pnpm_install", first_bundle.code_review_repair[1])
+        self.assertTrue(
+            first_bundle.code_review_repair_with_pnpm[1]["allow_pnpm_install"]
+        )
         self.assertEqual(first_bundle.frontend[1]["agent_memory_backend"], "agent-memory")
         self.assertEqual(
             first_bundle.repair_planner[1]["agent_memory_backend"],

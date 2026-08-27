@@ -809,6 +809,7 @@ class WorkflowRequestTests(unittest.TestCase):
                         },
                         "codeReviewResult": {
                             "status": "completed",
+                            "reportPath": ".xcodeagent/reports/code-review.md",
                             "issues": [{"id": "CKR6002-1"}],
                         },
                     },
@@ -822,6 +823,10 @@ class WorkflowRequestTests(unittest.TestCase):
             {"mode": "code_review_repair_confirmation", "action": "repair_all"},
         )
         self.assertEqual(inputs["resume_values"]["code_review_result"]["issues"][0]["id"], "CKR6002-1")
+        self.assertEqual(
+            inputs["resume_values"]["code_review_report_path"],
+            ".xcodeagent/reports/code-review.md",
+        )
 
     def test_code_review_repair_confirmation_rejects_unknown_action_or_missing_answer(self) -> None:
         """代码审查恢复只接受结构化 repair_all，不允许自然语言或过期快照绕过。"""

@@ -25,6 +25,7 @@ _CODE_REVIEW_VISIBLE_PHASES = {
     "finalize_project",
     "completed",
 }
+_CODE_REVIEW_REPORT_PATH = ".xcodeagent/reports/code-review.md"
 
 
 def _requirements_confirmation_projection(result: dict[str, Any]) -> dict[str, bool]:
@@ -47,7 +48,9 @@ def _workflow_test_target(result: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _workflow_code_review_result(value: Any) -> dict[str, Any]:
+def _workflow_code_review_result(
+    value: Any, report_path: Any = None
+) -> dict[str, Any]:
     """将代码审查内部 snake_case 结果投影为有界的 AG-UI camelCase 结构。"""
 
     if not isinstance(value, dict):
@@ -90,7 +93,7 @@ def _workflow_code_review_result(value: Any) -> dict[str, Any]:
             if isinstance(line, int) and not isinstance(line, bool) and line > 0:
                 issue["line"] = line
             issues.append(issue)
-    return {
+    result = {
         "status": value.get("status", "completed"),
         "summary": value.get("summary", ""),
         "issueCount": value.get("issue_count", value.get("issueCount", len(issues))),
@@ -99,17 +102,22 @@ def _workflow_code_review_result(value: Any) -> dict[str, Any]:
         "targets": targets,
         "issues": issues,
     }
+    normalized_report_path = str(report_path or "").replace("\\", "/").strip()
+    if normalized_report_path.endswith(_CODE_REVIEW_REPORT_PATH):
+        result["reportPath"] = _CODE_REVIEW_REPORT_PATH
+    return result
 
 
 def _workflow_code_review_result_for_phase(
     value: Any,
     phase: Any,
+    report_path: Any = None,
 ) -> dict[str, Any]:
     """仅在审查节点及其后续交付节点公开代码审查结果。"""
 
     if str(phase or "") not in _CODE_REVIEW_VISIBLE_PHASES:
         return {}
-    return _workflow_code_review_result(value)
+    return _workflow_code_review_result(value, report_path)
 
 
 def _workflow_code_review_repair(value: Any, phase: Any) -> dict[str, Any]:
@@ -270,6 +278,7 @@ def _workflow_progress_summary(
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
             phase,
+            result.get("code_review_report_path"),
         ),
         "codeReviewRepair": _workflow_code_review_repair(
             result.get("code_review_repair_result"), phase
@@ -477,6 +486,7 @@ def _public_workflow_state(
             "code_review_repair_iteration",
             "code_review_max_repair_iterations",
             "code_review_next_action",
+            "code_review_report_path",
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。
             "technical_plan_repair_candidate",
             "technical_plan_repair_errors",
@@ -493,6 +503,7 @@ def _public_workflow_state(
         public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
             value.get("code_review_result"),
             phase if phase is not None else value.get("phase"),
+            value.get("code_review_report_path"),
         )
     if "code_review_repair_result" in value:
         public_state.pop("code_review_repair_result", None)
@@ -527,7 +538,9 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             },
         }
     if node_name == "code_review":
-        result = _workflow_code_review_result(update.get("code_review_result"))
+        result = _workflow_code_review_result(
+            update.get("code_review_result"), update.get("code_review_report_path")
+        )
         return {
             "message": str(
                 update.get("message") or result.get("summary") or "前后端代码审查完成。"
@@ -1246,6 +1259,7 @@ def _workflow_summary(
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
             result.get("phase"),
+            result.get("code_review_report_path"),
         ),
         "codeReviewRepair": _workflow_code_review_repair(
             result.get("code_review_repair_result"), result.get("phase")
@@ -1348,6 +1362,7 @@ def _workflow_visual_payload(
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
             summary.get("phase"),
+            result.get("code_review_report_path"),
         ),
         "codeReviewRepair": _workflow_code_review_repair(
             result.get("code_review_repair_result"), summary.get("phase")

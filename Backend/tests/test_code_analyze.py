@@ -205,6 +205,75 @@ class CodeAnalyzeTests(unittest.TestCase):
         self.assertEqual(result["issues"][0]["file"], "frontend/package.json")
         self.assertEqual(result["issues"][0]["repair_actions"], ["pnpm_install"])
 
+    def test_normalizer_accepts_scan_root_relative_frontend_manifest_paths(self) -> None:
+        """前端依赖问题使用扫描根相对路径时应安全补全 frontend 根。"""
+
+        result = normalize_code_review_result(
+            {
+                "status": "completed",
+                "summary": "发现前端依赖问题",
+                "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                "targets": [{"side": "frontend", "root": "frontend"}],
+                "issues": [
+                    {
+                        "side": "frontend",
+                        "rule_id": "axios-version-risk",
+                        "severity": "high",
+                        "title": "axios 版本风险",
+                        "summary": "package.json 声明的版本存在风险。",
+                        "file": "package.json",
+                        "repair_actions": ["pnpm_install"],
+                    },
+                    {
+                        "side": "frontend",
+                        "rule_id": "form-data-version-risk",
+                        "severity": "high",
+                        "title": "form-data 版本风险",
+                        "summary": "锁文件中的间接依赖版本存在风险。",
+                        "file": "pnpm-lock.yaml",
+                        "repair_actions": ["pnpm_install"],
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(
+            [issue["file"] for issue in result["issues"]],
+            ["frontend/package.json", "frontend/pnpm-lock.yaml"],
+        )
+
+    def test_normalizer_keeps_side_relative_path_security_boundaries(self) -> None:
+        """扫描根相对兼容不能放行依赖目录、跨端根或绝对越界路径。"""
+
+        base = {
+            "status": "completed",
+            "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+            "issues": [],
+        }
+        for file_path in (
+            "node_modules/axios/index.js",
+            "backend/src/main/java/App.java",
+            "/etc/passwd",
+            "../package.json",
+        ):
+            with self.subTest(file_path=file_path), self.assertRaisesRegex(
+                ValueError,
+                "越界源码路径|端类型与文件路径不匹配",
+            ):
+                normalize_code_review_result(
+                    {
+                        **base,
+                        "issues": [
+                            {
+                                "side": "frontend",
+                                "title": "越界问题",
+                                "summary": "不应接受。",
+                                "file": file_path,
+                            }
+                        ],
+                    }
+                )
+
     def test_normalizer_rejects_unregistered_repair_action(self) -> None:
         """Skill 输出不能借 repair_actions 扩展为任意命令权限。"""
 

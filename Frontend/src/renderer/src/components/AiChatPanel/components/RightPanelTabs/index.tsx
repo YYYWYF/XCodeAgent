@@ -5,7 +5,13 @@ import type { WorkspaceDocKey } from '../../types'
 import './RightPanelTabs.less'
 
 /** 工作区 tab 键：预览/源码/文档/过程 + 设计阶段的三份产物文档（需求文档/项目计划/构建任务）。 */
-export type WorkspaceTabKey = 'preview' | 'source' | 'doc' | 'process' | WorkspaceDocKey
+export type WorkspaceTabKey =
+  | 'preview'
+  | 'source'
+  | 'doc'
+  | 'review-report'
+  | 'process'
+  | WorkspaceDocKey
 
 export type WorkspaceTab = {
   key: WorkspaceTabKey

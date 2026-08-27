@@ -584,6 +584,7 @@ def build_workflow_ag_ui_stream(
                 # 修复恢复请求的首帧也要携带原始审查快照，避免前端把修复轮次误显示为首次扫描。
                 for key in (
                     "code_review_result",
+                    "code_review_report_path",
                     "code_review_repair_result",
                     "code_review_repair_status",
                     "code_review_build_results",
@@ -1187,7 +1188,9 @@ def build_workflow_ag_ui_stream(
                             yield frame
                         yield _process_frame(
                             encoder,
-                            id=f"workflow:code_review:{event_type.split('.')[-1]}",
+                            # 审查节点开始、修复和构建检查共用同一稳定步骤 ID，
+                            # 前端据此原位更新，避免时间线重复显示同一审查动作。
+                            id=_process_step_id(progress_node, progress_attempt),
                             kind="workflow",
                             status="running",
                             title=(

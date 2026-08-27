@@ -977,6 +977,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "review_phase_confirmation",
         "acceptance_phase_confirmation",
         "code_review_result",
+        "code_review_report_path",
         "code_review_repair_confirmation",
         "code_review_repair_status",
         "code_review_repair_result",
@@ -1065,6 +1066,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "acceptance_request": "acceptanceRequest",
         "acceptance_decision": "acceptanceDecision",
         "code_review_result": "codeReviewResult",
+        "code_review_report_path": "codeReviewReportPath",
         "code_review_repair_result": "codeReviewRepair",
         "code_review_build_results": "codeReviewBuildResults",
         "code_review_repair_status": "codeReviewRepairStatus",
@@ -1109,6 +1111,13 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     for snake_key, camel_key in camel_aliases.items():
         if snake_key not in resumed_values and merged.get(camel_key) is not None:
             resumed_values[snake_key] = merged[camel_key]
+    review_result = resumed_values.get("code_review_result")
+    if (
+        "code_review_report_path" not in resumed_values
+        and isinstance(review_result, dict)
+        and review_result.get("reportPath")
+    ):
+        resumed_values["code_review_report_path"] = review_result["reportPath"]
     raw_adjustment = resumed_values.get("acceptance_adjustment") or merged.get(
         "acceptanceAdjustment"
     )

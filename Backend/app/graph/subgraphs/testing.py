@@ -2014,6 +2014,7 @@ def integration_test(state: ProjectState) -> dict:
         # 每次新的集成测试轮次都必须重新等待审查确认，不能复用旧轮次的确认或结果。
         "review_phase_confirmation": {},
         "code_review_result": {},
+        "code_review_report_path": "",
         "code_review_next_action": "",
         "code_review_repair_confirmation": {},
         "code_review_repair_status": "not_required",

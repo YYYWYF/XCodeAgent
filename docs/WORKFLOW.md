@@ -512,7 +512,8 @@ code_scan
 `pnpm_install`，且不进入 AG-UI 公开问题结构。
 修复由独立 `CodeReviewRepairAgent` 完成，可读写除 `node_modules`、敏感文件和手工 lockfile 写入之外的
 `frontend/**`，后端仍限于非测试的 `backend/src/main/java/**`。当 Skill 要求 `pnpm_install` 时，Agent 必须先修改
-`package.json`，再调用无参数、固定 `frontend` cwd 和固定 `pnpm install` argv 的专用工具；工具使用非 shell 子进程，
+`package.json`，工作流才选择注册了安装工具的独立修复能力，并调用无参数、固定 `frontend` cwd 和固定
+`pnpm install` argv 的专用工具；普通问题使用的默认修复能力不注册该工具。工具使用非 shell 子进程，
 生成 `pnpm-lock.yaml`、更新 `node_modules` 并保存结构化日志证据。工作区 Diff 捕获 package、lockfile 和其他项目文件，
 始终忽略 `node_modules`；缺少真实成功证据或未生成 lockfile 时修复失败。修复后由独立的
 `review_build_checks` 复用已验证的安装证据，只执行前端 Build 和后端 Build；没有安装动作时继续执行既有前端安装检查。
@@ -703,7 +704,8 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 
 `agents/code_analyze/` 始终只读扫描两个固定源码根，并强制读取前后端扫描 Skill 及后端规则引用；
 `agents/code_review_repair/` 只有收到结构化 `repair_all` 后才可在同样的两个源码根内产生真实 Diff。
-两个 Agent 均不加载用户 Skill、Agent Memory、生成类工具或命令执行能力。
+两个 Agent 均不加载用户 Skill、Agent Memory、生成类工具或通用命令执行能力；只有问题包显式声明
+`repair_actions=["pnpm_install"]` 时，修复 Agent 才获得固定专用安装工具。
 
 ### Frontend Generation Agent
 

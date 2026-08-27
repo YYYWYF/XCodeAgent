@@ -13,6 +13,9 @@ from app.tools.code_review_pnpm import (
 from app.utils.model_output import extract_json_object
 
 
+PNPM_INSTALL_REPAIR_ACTION = "pnpm_install"
+
+
 def build_code_review_repair_prompt(
     *,
     issues: list[dict[str, Any]],
@@ -22,6 +25,14 @@ def build_code_review_repair_prompt(
 ) -> str:
     """构造一轮受限代码修复任务包。"""
 
+    authorized_actions = _repair_actions(issues)
+    package_install_instruction = (
+        "For pnpm_install, edit package.json first and call pnpm_install_frontend exactly once; "
+        "never edit pnpm-lock.yaml directly. "
+        if PNPM_INSTALL_REPAIR_ACTION in authorized_actions
+        else "This packet authorizes no package installation action; do not attempt pnpm, npm, "
+        "yarn, or another command. "
+    )
     packet = {
         "attempt": attempt,
         "max_attempts": max_attempts,
@@ -35,8 +46,8 @@ def build_code_review_repair_prompt(
         "the required Skill/rules reference first. Attempt every issue id in the packet. Build "
         "failures are additional evidence from the previous deterministic build and must be fixed "
         "only when the repair boundary allows it. Follow each issue's repair_actions exactly. "
-        "For pnpm_install, edit package.json first and call pnpm_install_frontend exactly once; "
-        "never edit pnpm-lock.yaml directly. Return only JSON with this exact shape:\n"
+        f"{package_install_instruction}"
+        "Return only JSON with this exact shape:\n"
         '{"status":"completed|failed","summary":"...","attempted_issue_ids":[],'
         '"changed_files":[],"failure_reason":null}\n\n'
         f"RepairPacket:\n{json.dumps(packet, ensure_ascii=False, indent=2)}"
@@ -56,6 +67,13 @@ def invoke_code_review_repair_agent(
 
     from app.agents import create_agent_bundle
 
+    authorized_actions = _repair_actions(issues)
+    agent_bundle = create_agent_bundle(workspace)
+    repair_agent = (
+        agent_bundle.code_review_repair_with_pnpm
+        if PNPM_INSTALL_REPAIR_ACTION in authorized_actions
+        else agent_bundle.code_review_repair
+    )
     before_evidence = read_pnpm_install_evidence(workspace) if workspace else None
     before_execution_id = str((before_evidence or {}).get("execution_id") or "")
     observed_call_ids: set[str] = set()
@@ -78,7 +96,7 @@ def invoke_code_review_repair_agent(
             on_tool_activity(activity)
 
     agent_output = invoke_agent_with_tool_activity(
-        create_agent_bundle(workspace).code_review_repair,
+        repair_agent,
         {
             "messages": [
                 {
@@ -194,3 +212,18 @@ def _safe_nonnegative_int(value: Any) -> int:
     """把不可信调用次数钳制为非负整数。"""
 
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def _repair_actions(issues: list[dict[str, Any]]) -> set[str]:
+    """从后端归一化问题包中提取有限修复动作。"""
+
+    return {
+        str(action or "").strip()
+        for issue in issues
+        for action in (
+            issue.get("repair_actions")
+            if isinstance(issue.get("repair_actions"), list)
+            else []
+        )
+        if str(action or "").strip()
+    }

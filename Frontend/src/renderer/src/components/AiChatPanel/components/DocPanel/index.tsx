@@ -1,5 +1,5 @@
 import { FileTextOutlined } from '@ant-design/icons'
-import { Tag, Typography } from 'antd'
+import { Alert, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
@@ -13,19 +13,28 @@ const { Text } = Typography
 /** 将 TechnicalPlan 的确认状态转换为顶部工具栏中的可读标签。 */
 function technicalPlanStatusLabel(plan?: Record<string, unknown>): string {
   const status = plan?.confirmation_status
-  return status === 'confirmed' ? '已确认' : status === 'pending_user_confirmation' ? '待确认' : '草稿'
+  return status === 'confirmed'
+    ? '已确认'
+    : status === 'pending_user_confirmation'
+      ? '待确认'
+      : '草稿'
 }
 
 /** 将 RequirementSpec 的确认状态转换为顶部工具栏中的可读标签。 */
 function requirementStatusLabel(spec?: Record<string, unknown>): string {
   const status = spec?.confirmation_status
-  return status === 'confirmed' ? '已确认' : status === 'pending_user_confirmation' ? '待确认' : '草稿'
+  return status === 'confirmed'
+    ? '已确认'
+    : status === 'pending_user_confirmation'
+      ? '待确认'
+      : '草稿'
 }
 
 type Props = {
   content?: string
   title?: string
   generating?: boolean
+  error?: string
   docName?: string
   productPlan?: Record<string, unknown>
   requirementSpec?: Record<string, unknown>
@@ -39,6 +48,7 @@ export default function DocPanel({
   content,
   title,
   generating,
+  error,
   docName,
   productPlan,
   requirementSpec,
@@ -48,8 +58,9 @@ export default function DocPanel({
 }: Props): ReactElement {
   const isTechnicalPlan = structuredDocument === 'technical-plan'
   const isRequirementDoc = structuredDocument === 'requirement-doc'
-  const requirementReady = isRequirementDoc && Boolean(requirementSpec && Object.keys(requirementSpec).length)
-  const ready = Boolean(content || technicalPlan || isTechnicalPlan || requirementReady)
+  const requirementReady =
+    isRequirementDoc && Boolean(requirementSpec && Object.keys(requirementSpec).length)
+  const ready = Boolean(content || technicalPlan || isTechnicalPlan || requirementReady || error)
 
   return (
     <div className={cx('doc-panel')}>
@@ -88,6 +99,10 @@ export default function DocPanel({
         {generating ? (
           <div className={cx('doc-panel-generating')}>
             <RichLoading bare title={`正在生成${docName || '文档'}…`} />
+          </div>
+        ) : error ? (
+          <div className={cx('doc-panel-empty', 'doc-panel-error')}>
+            <Alert message="文档读取失败" description={error} showIcon type="error" />
           </div>
         ) : ready ? (
           <div
