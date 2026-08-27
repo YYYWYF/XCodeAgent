@@ -8,13 +8,23 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from app.graph.nodes.planning import _project_plan_validation_errors, project_planning
+from app.graph.nodes.planning import (
+    _project_plan_validation_errors,
+    _technical_planning_requirement_spec,
+    project_planning,
+)
 from app.graph.nodes.product_planning import product_planning
 from app.graph.nodes.ui_confirmation import ui_confirmation
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.product_plan import create_product_plan, validate_product_plan
 from app.services.project_plan import create_technical_plan
 from app.services.requirement_spec import create_requirement_spec
+
+
+def technical_model_entities(requirement_spec: dict) -> dict:
+    """构造测试中的技术规划模型实体输出。"""
+
+    return {"entities": deepcopy(requirement_spec.get("entities", []))}
 
 
 class ProductPlanningRetryTests(unittest.TestCase):
@@ -36,6 +46,18 @@ class ProductPlanningRetryTests(unittest.TestCase):
             },
             "request": "",
         }
+
+    def test_technical_planning_input_removes_requirement_entities(self) -> None:
+        """TechnicalPlan 输入必须在进入模型前剔除 RequirementSpec.entities。"""
+
+        state = self._technical_planning_state()
+        technical_input = _technical_planning_requirement_spec(
+            state,
+            state["requirement_spec"],
+        )
+
+        self.assertNotIn("entities", technical_input)
+        self.assertEqual(technical_input["confirmed_product_plan"], state["product_plan"])
 
     def test_4e_uses_materialized_page_implementation_contracts(self) -> None:
         """4E 必须消费运行时投影，不能从紧凑 TechnicalPlan 读取未持久化的权限绑定。"""
@@ -300,7 +322,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
         }
         invalid_plan = {
             **create_technical_plan(
-                {**requirement_spec, "confirmed_product_plan": product_plan}
+                {**requirement_spec, "confirmed_product_plan": product_plan},
+                agent_plan=technical_model_entities(requirement_spec),
             ),
             "pages": [
                 {
@@ -398,7 +421,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
             {
                 **state["requirement_spec"],
                 "confirmed_product_plan": state["product_plan"],
-            }
+            },
+            agent_plan=technical_model_entities(state["requirement_spec"]),
         )
         with (
             patch(
@@ -452,7 +476,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
             {
                 **state["requirement_spec"],
                 "confirmed_product_plan": state["product_plan"],
-            }
+            },
+            agent_plan=technical_model_entities(state["requirement_spec"]),
         )
         valid_plan = deepcopy(invalid_plan)
         endpoint_id = invalid_plan["api_contracts"][0]["endpoints"][0]["id"]
@@ -499,7 +524,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
             {
                 **state["requirement_spec"],
                 "confirmed_product_plan": state["product_plan"],
-            }
+            },
+            agent_plan=technical_model_entities(state["requirement_spec"]),
         )
         repaired_plan = deepcopy(repair_seed)
         contract_id = repair_seed["api_contracts"][0]["id"]
@@ -578,7 +604,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
             {
                 **state["requirement_spec"],
                 "confirmed_product_plan": state["product_plan"],
-            }
+            },
+            agent_plan=technical_model_entities(state["requirement_spec"]),
         )
         endpoint_id = repair_seed["api_contracts"][0]["endpoints"][0]["id"]
         repair_seed["pages"][0]["references"] = {
@@ -768,7 +795,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
             {
                 **state["requirement_spec"],
                 "confirmed_product_plan": state["product_plan"],
-            }
+            },
+            agent_plan=technical_model_entities(state["requirement_spec"]),
         )
         technical_plan["confirmation_status"] = "pending_user_confirmation"
         state.update(

@@ -38,6 +38,12 @@ from app.workspace.spec_documents import render_requirement_spec_markdown
 from app.workspace.plan_documents import render_project_plan_markdown
 
 
+def technical_model_entities(requirement_spec: dict) -> dict:
+    """构造测试中的技术规划模型实体输出。"""
+
+    return {"entities": deepcopy(requirement_spec.get("entities", []))}
+
+
 class ProductTechnicalPlanningTests(unittest.TestCase):
     """验证 ProductPlan 与 PageImplementationContract 的核心确定性边界。"""
 
@@ -383,9 +389,17 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("Do not return assumptions, product risks", _requirements_prompt("创建库存系统"))
 
     def test_technical_prompt_uses_current_four_part_contract(self) -> None:
-        """TechnicalPlan 提示词必须使用三段架构、实体引用和新分页字段。"""
+        """TechnicalPlan 提示词必须使用产品上下文生成实体和新分页字段。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        requirement_spec["entities"] = [
+            {
+                "id": "REQUIREMENT_ENTITY_SENTINEL",
+                "name": "需求实体哨兵",
+                "description": "技术规划不得读取这个实体。",
+                "fields": [{"name": "requirement_field_sentinel"}],
+            }
+        ]
         product_plan = create_product_plan(requirement_spec)
         prompt = _technical_planning_prompt(
             {**requirement_spec, "confirmed_product_plan": product_plan},
@@ -407,8 +421,52 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("command-with-body", prompt)
         self.assertIn("command-without-body", prompt)
         self.assertIn("Never invent an empty request object", prompt)
+        self.assertIn("RequirementSpec entities are not provided", prompt)
+        self.assertNotIn("REQUIREMENT_ENTITY_SENTINEL", prompt)
+        self.assertNotIn("requirement_field_sentinel", prompt)
         self.assertNotIn("engineering_design", prompt)
         self.assertNotIn('"resource"', prompt)
+
+    def test_technical_plan_entities_come_only_from_model_output(self) -> None:
+        """TechnicalPlan 实体不得继承 RequirementSpec.entities。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        requirement_spec["entities"] = [
+            {
+                "id": "RequirementOnly",
+                "name": "需求阶段实体",
+                "description": "不得进入技术规划。",
+                "fields": [{"name": "requirement_only_field"}],
+            }
+        ]
+        product_plan = create_product_plan(requirement_spec)
+        technical_plan = create_technical_plan(
+            {**requirement_spec, "confirmed_product_plan": product_plan},
+            agent_plan={
+                "entities": [
+                    {
+                        "id": "PlannedRecord",
+                        "name": "技术规划实体",
+                        "description": "根据 ProductPlan 生成。",
+                        "fields": [
+                            {
+                                "name": "record_code",
+                                "label": "记录编码",
+                                "description": "技术规划字段。",
+                                "type": "text",
+                                "required": True,
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(
+            [entity["id"] for entity in technical_plan["entities"]],
+            ["PlannedRecord"],
+        )
+        self.assertNotIn("RequirementOnly", json.dumps(technical_plan, ensure_ascii=False))
 
     def test_contract_repair_prompt_projects_only_implicated_contract_context(self) -> None:
         """Contract 定向修复不得把无关 API、实体或页面动作重新注入模型。"""
@@ -485,7 +543,10 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             **requirement_spec,
             "confirmed_product_plan": product_plan,
         }
-        existing_plan = create_technical_plan(technical_input)
+        existing_plan = create_technical_plan(
+            technical_input,
+            agent_plan=technical_model_entities(requirement_spec),
+        )
         target_contract = deepcopy(existing_plan["api_contracts"][0])
         target_contract["schemas"]["RepairOutput"] = {
             "type": "object",
@@ -815,7 +876,10 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             **requirement_spec,
             "confirmed_product_plan": product_plan,
         }
-        technical_plan = create_technical_plan(requirement_with_product)
+        technical_plan = create_technical_plan(
+            requirement_with_product,
+            agent_plan=technical_model_entities(requirement_spec),
+        )
         ui_designs = {
             "schema_version": "ui-manifest.v3",
             "pages": [

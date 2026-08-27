@@ -170,7 +170,7 @@ TechnicalPlan 只写入 `.xcodeagent/plans/technical-plan.md|json`，`technical_
 TechnicalPlan 包含：
 
 - `architecture` 三段技术架构、业务实体、API Contract、请求/响应 Schema；
-- `entities` 根据 RequirementSpec 实体骨架补齐规范字段，是实体与 API 的唯一字段事实源；
+- `entities` 由技术规划模型根据已确认 ProductPlan 的页面、信息项、业务操作与业务流程独立生成，是实体与 API 的唯一字段事实源；技术规划不读取 RequirementSpec 的 `entities`；
 - API Contract 通过 `entity_ids` 关联实体；Schema 字段可使用 `entity_field_ref` 表示实体来源，计算、聚合和传输字段可以不做实体映射；
 - ProductPlan 中 `business` action/step 到 endpoint 的 `action_implementations`；
 - ProductPlan 与 UiManifest 的上游内容哈希。
@@ -340,7 +340,7 @@ RequirementSpec 与 ProductPlan 只持久化用户提出或确认的产品事实
 
 - ProductPlan：RequirementSpec；
 - UiDesign：单页 ProductPlan 摘要；
-- TechnicalPlan：RequirementSpec 实体上下文、拆分的 ProductPlan 行为上下文和必要修订信息，不加载完整上游文档或 UI manifest JSON；
+- TechnicalPlan：拆分的 ProductPlan 页面、信息项、行为与业务流程上下文，以及必要修订信息；不读取 RequirementSpec 的 `entities`，也不加载完整上游文档或 UI manifest JSON；
 - EntitySourceBinding：单个实体定义和所选数据源的有界元数据；
 - Build：当前 Unit 的 TechnicalPlan Endpoint、页面实现契约、实体绑定摘要、UI 设计文件路径和工作区快照。
 

@@ -153,7 +153,7 @@ def _technical_planning_requirement_spec(
     state: ProjectState,
     requirement_spec: dict,
 ) -> dict:
-    """把已确认 ProductPlan 注入技术规划输入，并保留 UI 阶段门禁。"""
+    """注入已确认 ProductPlan，并从技术规划输入中移除需求实体。"""
 
     if state.get("workflow_scope") != "application_planning":
         return requirement_spec
@@ -171,8 +171,13 @@ def _technical_planning_requirement_spec(
         "skipped",
     }:
         raise ValueError("TechnicalPlan 必须基于已确认或已跳过的 UI 设计阶段生成。")
+    technical_input = {
+        key: value
+        for key, value in requirement_spec.items()
+        if key != "entities"
+    }
     return {
-        **requirement_spec,
+        **technical_input,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
     }
@@ -1714,10 +1719,7 @@ def _project_plan_validation_errors(
         and isinstance(state.get("requirement_spec"), dict)
     ):
         errors.extend(
-            validate_technical_plan_api_contracts(
-                project_plan,
-                state["requirement_spec"],
-            )
+            validate_technical_plan_api_contracts(project_plan)
         )
         # 4E 必须读取运行时物化的 PageImplementationContract；正式 TechnicalPlan 不持久化该派生字段。
         errors.extend(_technical_plan_contract_errors(state, validation_plan))
@@ -1725,14 +1727,13 @@ def _project_plan_validation_errors(
 
 
 def _technical_plan_contract_validation_errors(
-    requirement_spec: dict,
     project_plan: dict,
 ) -> list[str]:
     """汇总仅能通过替换 API Contract 修复的确定性错误。"""
 
     errors = [
         *validate_api_contract_definitions(project_plan),
-        *validate_technical_plan_api_contracts(project_plan, requirement_spec),
+        *validate_technical_plan_api_contracts(project_plan),
     ]
     return list(dict.fromkeys(str(error).strip() for error in errors if str(error).strip()))
 
@@ -1744,7 +1745,7 @@ def _technical_plan_retry_feedback(errors: list[str]) -> str:
     return (
         "系统 TechnicalPlan 一致性校验未通过。请基于已确认的 ProductPlan 与 UiManifest，"
         "在本次重新生成中返回完整 TechnicalPlan 并修复下列问题；不得猜测或省略业务 action/step，"
-        "必须完整保留 RequirementSpec 实体并通过 entity_ids 绑定 API Contract，禁止 data_source_id；"
+        "必须完整保留当前 TechnicalPlan 实体并通过 entity_ids 绑定 API Contract，禁止 data_source_id；"
         "每个 endpointId 必须同时存在于 api_contracts 和对应页面 endpoint_dependencies。"
         "不要要求用户重试，也不要解释校验过程：\n"
         f"{diagnostics}"
@@ -1759,7 +1760,6 @@ def _repair_technical_plan_candidate(
     """优先定向修复失败 Contract，无法定位或解析时才回退完整计划修订。"""
 
     contract_errors = _technical_plan_contract_validation_errors(
-        requirement_spec,
         current_plan,
     )
     if technical_plan_contract_repair_applicable(

@@ -457,10 +457,10 @@ flowchart TD
 备注：
 
 - `artifact_type` 标识技术规划类型；`confirmation_status` 控制是否可以进入模板生成和后续开发。
-- `source_refs` 保存已确认 ProductPlan 的版本；TechnicalPlan 同时读取 RequirementSpec 的实体骨架以稳定保留实体身份、名称、描述和顺序，不从 UI 设计推导实体。
+- `source_refs` 保存已确认 ProductPlan 的版本；TechnicalPlan 不读取 RequirementSpec 的 `entities`，而是根据 ProductPlan 的页面、信息项、业务操作与业务流程生成实体身份、名称、描述和顺序，也不从 UI 设计推导实体。
 - 只补充产品落地所需的架构、数据、接口、权限和工程边界。
 - `architecture` 说明整体技术形态和主要技术栈；`engineering_design.module_boundaries` 只划分代码模块及职责，不得定义实体；`data_models` 是非权威工程说明，不得覆盖顶层 `entities`。
-- `entities` 沿用 RequirementSpec 的实体身份并补齐规范字段，是 API Contract 和 EntityDesign 的唯一字段事实源。
+- `entities` 由技术规划模型独立生成并补齐规范字段，是 API Contract 和 EntityDesign 的唯一字段事实源。
 - `api_contracts` 通过非空 `entity_ids` 绑定一个或多个实体，禁止 `data_source_id`，也不直接绑定角色权限。
 - `pages.references.endpoint_dependencies` 说明页面依赖哪些接口；`action_implementations` 说明 ProductPlan 的动作如何落到具体接口。
 - `information_implementations` 说明 ProductPlan 的信息项如何映射到接口返回值和数据模型字段，例如 `order-status` 对应 `orders.get` 的 `status`。

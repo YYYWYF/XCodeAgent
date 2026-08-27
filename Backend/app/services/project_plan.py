@@ -25,7 +25,6 @@ from app.services.entity_definitions import (
     entity_json_schema,
     entity_table_name,
     normalize_data_source_type,
-    normalize_entity,
     normalize_entities,
     plan_data_sources,
     validate_entity_definitions,
@@ -1236,38 +1235,14 @@ def _technical_engineering_design(
 
 
 def _technical_entities(
-    spec: dict[str, Any],
     agent_plan: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """沿用旧 ProjectPlan 语义，把需求实体补全为 TechnicalPlan 权威字段定义。"""
+    """只从技术规划模型输出生成 TechnicalPlan 权威实体定义。"""
 
-    requirement_entities = normalize_entities(spec.get("entities"))
-    planned_entities = {
-        str(item.get("id") or ""): item
-        for item in _dict_items(_agent_section(agent_plan, "entities"))
-        if str(item.get("id") or "").strip()
-    }
-    result: list[dict[str, Any]] = []
-    for index, requirement_entity in enumerate(requirement_entities):
-        entity_id = str(requirement_entity.get("id") or "")
-        supplement = planned_entities.get(entity_id, {})
-        fields = (
-            supplement.get("fields")
-            if isinstance(supplement.get("fields"), list)
-            and supplement.get("fields")
-            else requirement_entity.get("fields", [])
-        )
-        result.append(
-            normalize_entity(
-                {
-                    **requirement_entity,
-                    "fields": fields,
-                },
-                index,
-                with_types=True,
-            )
-        )
-    return result
+    return normalize_entities(
+        _agent_section(agent_plan, "entities"),
+        with_types=True,
+    )
 
 
 def _technical_plan_pages(
@@ -1679,7 +1654,6 @@ def _validate_technical_pagination(
 
 def validate_technical_plan_api_contracts(
     plan: dict[str, Any],
-    requirement_spec: dict[str, Any],
 ) -> list[str]:
     """校验 API Contract 的实体绑定、Schema 引用和分页契约。"""
 
@@ -1689,20 +1663,13 @@ def validate_technical_plan_api_contracts(
         for entity in raw_entities
         if str(entity.get("id") or "").strip()
     }
-    if not known_entity_ids:
-        known_entity_ids = {
-            str(entity.get("id") or "")
-            for entity in normalize_entities(requirement_spec.get("entities"))
-            if str(entity.get("id") or "").strip()
-        }
-    source_entities = raw_entities or normalize_entities(requirement_spec.get("entities"))
     entity_fields = {
         str(entity.get("id") or ""): {
             str(field.get("name") or "")
             for field in _dict_items(entity.get("fields"))
             if str(field.get("name") or "").strip()
         }
-        for entity in source_entities
+        for entity in raw_entities
         if str(entity.get("id") or "").strip()
     }
     errors: list[str] = []
@@ -1788,7 +1755,7 @@ def create_technical_plan(
         if datasource_type is not None
         else datasource_type_from_artifact(spec, fallback="database")
     )
-    entities = _technical_entities(spec, agent_plan)
+    entities = _technical_entities(agent_plan)
     contract_sources = [
         {
             "id": "unbound",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import json
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import ANY, patch
 
@@ -18,6 +19,12 @@ from app.services.project_plan import (
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import write_project_plan_document
 from tests.entity_design_test_utils import confirm_entity_designs
+
+
+def technical_model_entities(requirement_spec: dict) -> dict:
+    """构造测试中的技术规划模型实体输出。"""
+
+    return {"entities": deepcopy(requirement_spec.get("entities", []))}
 
 
 def project_planning(state: dict) -> dict:
@@ -59,7 +66,8 @@ def confirmed_application_planning_artifacts(spec: dict) -> tuple[dict, dict, di
     product_plan = create_product_plan(spec)
     product_plan["confirmation_status"] = "confirmed"
     technical_plan = create_technical_plan(
-        {**spec, "confirmed_product_plan": product_plan}
+        {**spec, "confirmed_product_plan": product_plan},
+        agent_plan=technical_model_entities(spec),
     )
     technical_plan["confirmation_status"] = "pending_user_confirmation"
     ui_designs = {

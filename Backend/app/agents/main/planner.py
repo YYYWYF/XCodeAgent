@@ -46,11 +46,8 @@ def _technical_planning_prompt(
         if isinstance(requirement_spec.get("confirmed_product_plan"), dict)
         else {}
     )
-    entities = [
-        item for item in requirement_spec.get("entities", []) if isinstance(item, dict)
-    ]
     pages = [item for item in product_plan.get("pages", []) if isinstance(item, dict)]
-    entity = entities[0] if entities else {
+    entity = {
         "id": "Order",
         "name": "Order",
         "description": "Order business entity",
@@ -183,7 +180,6 @@ def _technical_planning_prompt(
             if page.get("pageId")
         ]
     }
-    entity_context = {"entities": entities}
     revision_context = (
         "Revise the existing TechnicalPlan according to planning_adjustment_request and return the complete five-part object.\n"
         f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"
@@ -232,9 +228,9 @@ def _technical_planning_prompt(
         "Complete result example:\n"
         f"{json.dumps(response_example, ensure_ascii=False, indent=2)}\n\n"
         "Dynamic context sections:\n"
-        "- Entity context: business entities are generated in this stage, derived from pages, "
-        "feature modules, and business flows. There is no entity skeleton from RequirementSpec.\n"
-        f"{json.dumps(entity_context, ensure_ascii=False)}\n\n"
+        "- Entity generation boundary: derive business entities exclusively from the confirmed ProductPlan "
+        "pages, information items, actions, and business flows. RequirementSpec entities are not provided "
+        "to or consumed by this stage.\n\n"
         "- Product goal context: application purpose and product-level acceptance outcomes. Use it to shape the architecture and endpoint scope.\n"
         f"{json.dumps(product_goal_context, ensure_ascii=False)}\n\n"
         "- Authorization context: confirmed ProductPlan target identities. Do not generate any authorization field; the system compiles all resources and bindings.\n"
