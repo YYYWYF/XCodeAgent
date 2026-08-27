@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
@@ -19,6 +19,7 @@ def _model_product_plan_view(plan: dict[str, Any]) -> dict[str, Any]:
         key: plan.get(key)
         for key in (
             "app",
+            "agents",
             "business_flows",
             "pages",
             "product_acceptance_criteria",
@@ -74,11 +75,89 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
         )
     app_info = requirement_spec.get("app_info")
     app_info = app_info if isinstance(app_info, dict) else {}
+    page_map = {
+        str(page.get("pageId") or "").strip(): page
+        for page in pages
+        if str(page.get("pageId") or "").strip()
+    }
+    agents: list[dict[str, Any]] = []
+    for requirement in requirement_spec.get("agent_requirements", []):
+        if not isinstance(requirement, dict):
+            continue
+        agent_id = str(requirement.get("agentId") or "agent").strip()
+        page_action_bindings: list[dict[str, Any]] = []
+        for page_id in requirement.get("entryPageIds", []):
+            page_id = str(page_id).strip()
+            page = page_map.get(page_id)
+            if page is None:
+                continue
+            action_id = f"{page_id}_{agent_id}_interact"
+            page["actions"].append(
+                {
+                    "actionId": action_id,
+                    "name": f"使用{str(requirement.get('name') or '智能体')}",
+                    "description": f"从当前页面调用{str(requirement.get('name') or '智能体')}。",
+                    "requiresConfirmation": False,
+                    "behavior": {
+                        "type": "business",
+                        "expectedResult": "<填写用户完成智能体交互后可观察的产品结果>",
+                    },
+                }
+            )
+            page_action_bindings.append({"pageId": page_id, "actionIds": [action_id]})
+        agents.append(
+            {
+                "agentId": agent_id,
+                "name": str(requirement.get("name") or "智能体"),
+                "purpose": str(requirement.get("purpose") or "<填写智能体职责>"),
+                "capabilities": [
+                    {
+                        "capabilityId": f"{agent_id}_capability_{index}",
+                        "name": str(capability),
+                        "expectedResult": "<填写该能力为用户带来的产品结果>",
+                    }
+                    for index, capability in enumerate(
+                        requirement.get("capabilities", []),
+                        start=1,
+                    )
+                    if str(capability).strip()
+                ],
+                "entryPageIds": [
+                    str(page_id).strip()
+                    for page_id in requirement.get("entryPageIds", [])
+                    if str(page_id).strip()
+                ],
+                "pageActionBindings": page_action_bindings,
+                "interaction": {
+                    "mode": str(requirement.get("interactionMode") or "conversation"),
+                    "supportsMultiTurn": str(
+                        requirement.get("interactionMode") or "conversation"
+                    )
+                    == "conversation",
+                    "inputDescription": "<填写用户如何向智能体表达业务问题或操作意图>",
+                    "outputDescription": "<填写智能体向用户呈现的产品结果>",
+                    "stateRequirements": {
+                        "loading": "<填写智能体处理中的产品状态>",
+                        "empty": "<填写尚无交互内容时的产品状态>",
+                        "error": "<填写智能体处理失败时的产品状态>",
+                        "success": "<填写智能体成功返回时的产品状态>",
+                        "validation": "<填写无效输入的产品校验要求>",
+                    },
+                },
+                "boundaries": [
+                    str(boundary).strip()
+                    for boundary in requirement.get("boundaries", [])
+                    if str(boundary).strip()
+                ],
+                "acceptanceCriteria": ["<填写用户可观察的智能体产品验收标准>"],
+            }
+        )
     example = {
         "app": {
             "name": str(app_info.get("name") or "未命名应用"),
             "summary": str(app_info.get("summary") or requirement_spec.get("summary") or ""),
         },
+        "agents": agents,
         "business_flows": requirement_spec.get("business_flows", []),
         "pages": pages,
         "product_acceptance_criteria": ["<填写产品级验收标准>"],
@@ -137,7 +216,7 @@ def _product_planning_prompt(
         "architecture, data sources, persistence choices, code files, React components, or visual layout. "
         "Never ask the product reviewer to confirm data-source or storage decisions.\n"
         "Return one complete JSON object without markdown fences. The root object must contain exactly "
-        "app, business_flows, pages, and product_acceptance_criteria. Never return frontend_pages "
+        "app, agents, business_flows, pages, and product_acceptance_criteria. Never return frontend_pages "
         "or any other root field. Do not return assumptions or product "
         "risks. Product uncertainty must be resolved during requirements clarification, while technical "
         "risk belongs to later technical planning and execution.\n"
@@ -176,6 +255,17 @@ def _product_planning_prompt(
         "in that page's navigation_targets, including a targetPageId equal to the current pageId. "
         "state_requirements should cover loading, empty, error, "
         "success, and validation.\n"
+        "agents must match RequirementSpec.agent_requirements one-to-one and in the same order. Preserve "
+        "agentId, name, purpose, entryPageIds, interaction mode, and boundaries exactly. Expand every "
+        "confirmed capability into {capabilityId,name,expectedResult}; capabilityId must be stable "
+        "lower_snake_case and names must preserve RequirementSpec capability order. Every entryPageId must "
+        "have exactly one pageActionBindings item shaped {pageId,actionIds}; every actionId must reference "
+        "a real action on that page that represents invoking or interacting with the agent. interaction "
+        "contains exactly mode, supportsMultiTurn, inputDescription, outputDescription, and stateRequirements "
+        "covering loading, empty, error, success, and validation. acceptanceCriteria must contain observable "
+        "product outcomes. Return agents=[] when RequirementSpec.agent_requirements is empty. Never return model "
+        "or modelId, prompt, API endpoint or schema, tool, skill, knowledge source, storage, runtime, code path, "
+        "implementation class, or build/test workflow fields inside agents.\n"
         "Follow this complete JSON response structure exactly. Replace angle-bracket placeholders with "
         "product facts; do not add keys. For navigation/external/sequence behavior, replace the behavior "
         "object with the exact type-specific fields described above.\n"
@@ -213,12 +303,17 @@ def _invoke_product_planner(
 
     accumulated = ""
     for chunk in model.stream(prompt):
-        if not isinstance(chunk, AIMessageChunk):
-            continue
-        token = _coerce_content_text(chunk.content)
-        if token:
-            accumulated += token
-            on_token(token)
+        if isinstance(chunk, AIMessageChunk):
+            token = _coerce_content_text(chunk.content)
+            if token:
+                accumulated += token
+                on_token(token)
+        elif isinstance(chunk, AIMessage):
+            # 原生流式关闭时 stream() 会回退为单个完整消息，不能丢弃正文。
+            token = _coerce_content_text(chunk.content)
+            if token:
+                accumulated += token
+                on_token(token)
     return accumulated
 
 

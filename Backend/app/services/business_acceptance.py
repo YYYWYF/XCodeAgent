@@ -49,6 +49,7 @@ DELIVERABLE_KINDS = (
     "backend.external_api_client",
     "backend.external_api_mapping",
     "backend.bootstrap",
+    "agent.runtime",
 )
 
 _FRONTEND_DELIVERABLE_KINDS = {
@@ -57,7 +58,12 @@ _FRONTEND_DELIVERABLE_KINDS = {
     "frontend.static_data_module",
     "frontend.shared_capability",
 }
-_BACKEND_DELIVERABLE_KINDS = set(DELIVERABLE_KINDS) - _FRONTEND_DELIVERABLE_KINDS
+_AGENT_DELIVERABLE_KINDS = {"agent.runtime"}
+_BACKEND_DELIVERABLE_KINDS = (
+    set(DELIVERABLE_KINDS)
+    - _FRONTEND_DELIVERABLE_KINDS
+    - _AGENT_DELIVERABLE_KINDS
+)
 _CHECK_ORDER = {kind: index for index, kind in enumerate(BUSINESS_ACCEPTANCE_KINDS)}
 _MAX_ITEMS = 100
 _MAX_SCHEMA_DEPTH = 6
@@ -154,6 +160,12 @@ def business_acceptance_contract_errors(
         ):
             errors.append(
                 f"Task {task_id} backend deliverable {deliverable_id} has invalid owner or Unit."
+            )
+        if kind in _AGENT_DELIVERABLE_KINDS and (
+            owner != "agent" or not unit_id.startswith("agent:")
+        ):
+            errors.append(
+                f"Task {task_id} agent deliverable {deliverable_id} has invalid owner or Unit."
             )
         paths = deliverable["paths"]
         if not paths and kind != "frontend.shared_capability":
@@ -991,7 +1003,7 @@ def _requires_business_deliverable(task: dict[str, Any]) -> bool:
         return False
     owner = _text(task.get("owner"))
     unit_id = _text(task.get("unit_id"))
-    if owner not in {"frontend", "backend"}:
+    if owner not in {"frontend", "backend", "agent"}:
         return False
     return unit_id not in {"frontend:shell", "frontend:api-client", "frontend:auth-guard", "backend:bootstrap"}
 

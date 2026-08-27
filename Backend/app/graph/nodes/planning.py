@@ -47,6 +47,7 @@ from app.services.project_plan import (
     apply_project_plan_datasource_policy,
     apply_project_plan_feedback,
     TECHNICAL_PLAN_ARTIFACT_TYPE,
+    validate_technical_plan_agent_contracts,
     validate_technical_plan_api_contracts,
     validate_project_plan_datasource_policy,
 )
@@ -1733,6 +1734,13 @@ def _project_plan_validation_errors(
         errors.extend(
             validate_technical_plan_api_contracts(project_plan)
         )
+        if isinstance(state.get("product_plan"), dict):
+            errors.extend(
+                validate_technical_plan_agent_contracts(
+                    project_plan,
+                    state["product_plan"],
+                )
+            )
         # 4E 必须读取运行时物化的 PageImplementationContract；正式 TechnicalPlan 不持久化该派生字段。
         errors.extend(_technical_plan_contract_errors(state, validation_plan))
     return list(dict.fromkeys(str(error).strip() for error in errors if str(error).strip()))

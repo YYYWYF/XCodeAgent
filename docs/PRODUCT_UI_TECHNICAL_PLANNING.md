@@ -55,14 +55,47 @@ ProductPlan 使用 `business`、`navigation`、`interface`、`external`、`seque
 
 ProductPlan 中面向产品角色展示的验收标准，只描述生成应用的目标用户能够观察或完成的产品结果。XCodeAgent 自身的本地预览、代码生成、编译、构建、lint、typecheck、自动化/集成测试、质量门禁、工作流节点和“何时进入用户验收”等交付条件属于独立工程运行状态，不得写入应用产品验收标准；确定性归一化会剔除这类越界文案。
 
-正式 JSON 使用 `product-plan.v5`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。ProductPlan 不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
+正式 JSON 使用 `product-plan.v6`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。根级 `agents` 只承接 RequirementSpec 已确认的业务智能体，并定义用户可确认的业务能力、入口页面与操作、交互方式、状态要求、业务边界和验收标准；普通应用必须使用 `agents: []`。ProductPlan 不选择模型、Prompt、API、工具、Skill、知识库、运行时、存储或代码路径，也不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
 
 权限开启时，RequirementSpec 的每条 `restrictedPages` 都以已确认的 `targetPageId` 引用业务页面；服务端在模型输出校验后仅根据该稳定绑定确定性生成内部 `authorizationTargets.pageRules[{ruleId,pageId}]`，不得按页面展示名称匹配或猜测。操作规则必须为 `{ruleId,pageId,actionId}`。`actionId` 只在所属页面内唯一，不能脱离 `pageId` 作为权限目标；`stepId` 仅用于产品组合行为，绝不进入权限目标。ProductPlan 不保存资源键或角色授权；联合确认前只校验受控页面 `pageId`、受控操作 `<pageId>_<actionId>` 与固定 `system_authorization_management` 的全局候选是否碰撞，实际资源目录仍由 TechnicalPlan 编译。
 
 ```json
 {
-  "schema_version": "product-plan.v5",
+  "schema_version": "product-plan.v6",
   "app": {"name": "...", "summary": "..."},
+  "agents": [
+    {
+      "agentId": "order_assistant",
+      "name": "订单助手",
+      "purpose": "帮助用户理解订单状态并完成下一步操作",
+      "capabilities": [
+        {
+          "capabilityId": "explain_order_status",
+          "name": "解释订单状态",
+          "expectedResult": "用户理解当前状态及后续可执行操作"
+        }
+      ],
+      "entryPageIds": ["orders"],
+      "pageActionBindings": [
+        {"pageId": "orders", "actionIds": ["ask_order_assistant"]}
+      ],
+      "interaction": {
+        "mode": "conversation",
+        "supportsMultiTurn": true,
+        "inputDescription": "用户输入订单相关问题",
+        "outputDescription": "返回状态解释和业务建议",
+        "stateRequirements": {
+          "loading": "...",
+          "empty": "...",
+          "error": "...",
+          "success": "...",
+          "validation": "..."
+        }
+      },
+      "boundaries": ["不得绕过订单审批或直接修改受限状态"],
+      "acceptanceCriteria": ["能够根据当前订单上下文给出明确答复"]
+    }
+  ],
   "business_flows": [],
   "pages": [
     {
@@ -103,7 +136,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 }
 ```
 
-模型提示直接提供包含全部 RequirementSpec 页面身份的完整 JSON 响应示例；根对象只能包含 `app`、`business_flows`、`pages`、`product_acceptance_criteria`。页面、信息项、action、behavior、sequence step 和状态对象均拒绝未声明字段。`information_items` 必须是 JSON 对象，禁止把 Python/JSON 字典序列化成字符串。action 只表示用户主动触发且会改变可见状态、结果集、页面位置、业务信息或外部效果的产品意图。阅读、浏览、滚动或看见内容不是 action，应写入 `information_items` 或 `acceptance_criteria`；纯展示页面允许 `actions: []`。导航 action 必须声明 `targetPageId`，并同步进入 `navigation_targets`。
+模型提示直接提供包含全部 RequirementSpec 页面身份的完整 JSON 响应示例；根对象只能包含 `app`、`agents`、`business_flows`、`pages`、`product_acceptance_criteria`。`agents` 必须与 RequirementSpec 的 `agent_requirements` 按稳定 `agentId` 一一对应并保持顺序，能力名称、入口页面、交互模式和业务边界不得漂移；每个入口页面必须通过 `pageActionBindings` 引用该页面真实存在的 action。页面、智能体、能力、绑定、交互、信息项、action、behavior、sequence step 和状态对象均拒绝未声明字段。`information_items` 必须是 JSON 对象，禁止把 Python/JSON 字典序列化成字符串。action 只表示用户主动触发且会改变可见状态、结果集、页面位置、业务信息或外部效果的产品意图。阅读、浏览、滚动或看见内容不是 action，应写入 `information_items` 或 `acceptance_criteria`；纯展示页面允许 `actions: []`。导航 action 必须声明 `targetPageId`，并同步进入 `navigation_targets`。
 
 ### UiDesign
 
@@ -169,10 +202,11 @@ TechnicalPlan 只写入 `.xcodeagent/plans/technical-plan.md|json`，`technical_
 
 TechnicalPlan 包含：
 
-- `architecture` 三段技术架构、业务实体、API Contract、请求/响应 Schema；
+- `architecture` 默认包含前端、Java 后端和数据三段；存在业务智能体时额外包含平台确定性生成的 `agent_runtime`，固定为独立 Python 3.12 + DeepAgents sidecar；
 - `entities` 由技术规划模型根据已确认 ProductPlan 的页面、信息项、业务操作与业务流程独立生成，是实体与 API 的唯一字段事实源；技术规划不读取 RequirementSpec 的 `entities`；
 - API Contract 通过 `entity_ids` 关联实体；Schema 字段可使用 `entity_field_ref` 表示实体来源，计算、聚合和传输字段可以不做实体映射；
 - ProductPlan 中 `business` action/step 到 endpoint 的 `action_implementations`；
+- 根级 `agent_contracts`：与 ProductPlan `agents[]` 按 `agentId` 一一对应，定义能力到工具、工具到 API Endpoint、页面入口到 Java AG-UI 网关、会话、模型选择策略、安全边界和代码产物路径；普通应用固定为 `[]`；
 - ProductPlan 与 UiManifest 的上游内容哈希。
 
 正式 JSON 使用 `artifact_type: "technical-plan"`，只持久化本阶段新增的开发事实：
@@ -221,9 +255,64 @@ TechnicalPlan 包含：
         "action_implementations": []
       }
     }
+  ],
+  "agent_contracts": []
+}
+```
+
+包含业务智能体时，平台在模型给出的稳定绑定通过校验后确定性补齐运行时、安全和产物字段：
+
+```json
+{
+  "architecture": {
+    "agent_runtime": "独立 agent-runtime Python 3.12 + DeepAgents sidecar；客户端仅通过 Java8 + Springboot 网关使用 AG-UI SSE 调用。"
+  },
+  "agent_contracts": [
+    {
+      "agentId": "inventory_assistant",
+      "runtime": {
+        "language": "Python",
+        "pythonVersion": "3.12",
+        "framework": "DeepAgents",
+        "deployment": "sidecar",
+        "serviceName": "agent-runtime"
+      },
+      "invocation": {
+        "transport": "ag-ui-sse",
+        "gatewayEndpointId": "inventory_api.agent_message",
+        "internalPath": "/internal/agents/inventory_assistant/run"
+      },
+      "model": {"selection": "project_default"},
+      "capabilityBindings": [
+        {"capabilityId": "explain_inventory_status", "toolIds": ["get_inventory_status"]}
+      ],
+      "toolBindings": [
+        {
+          "toolId": "get_inventory_status",
+          "apiContractId": "inventory_api",
+          "endpointId": "inventory_api.get_status",
+          "accessMode": "read"
+        }
+      ],
+      "knowledgeReferences": [],
+      "session": {"supportsMultiTurn": true, "memory": "conversation"},
+      "security": {
+        "directClientAccess": false,
+        "authForwarding": "scoped-user-context"
+      },
+      "artifacts": {
+        "agentPath": "agent-runtime/agents/inventory_assistant.py",
+        "toolAdapterPath": "agent-runtime/tools/inventory_assistant_tools.py",
+        "testPath": "agent-runtime/tests/test_inventory_assistant.py"
+      }
+    }
   ]
 }
 ```
+
+技术规划模型返回对象固定为 `architecture`、`entities`、`api_contracts`、`pages`、`agent_contracts` 五段。模型只选择 `gatewayEndpointId`、能力/工具/API 绑定、项目默认模型策略、知识引用和会话模式；Python 版本、DeepAgents、sidecar、AG-UI SSE、禁止客户端直连、内部路径和代码路径由平台确定性生成，不能被模型改写。每个工具 Endpoint 必须存在于同一 TechnicalPlan，且不能与 Agent 网关 Endpoint 相同；Java 业务后端仍固定为 Java8 + Springboot，不因应用包含智能体而替换成 Python。
+
+TechnicalPlan 确认摘要和右侧阅读面板必须在 `agent_contracts` 非空时按需展示“智能体契约”，覆盖 Agent Runtime、Java 网关、能力→工具、工具→API Endpoint、会话/模型/安全、代码产物和 required checks；阅读面板默认打开该章节。普通应用 `agent_contracts=[]` 时不得出现该章节、Python 运行时或智能体指标。
 
 TechnicalPlan 不再持久化 `app`、`requirements_overview`、`project_acceptance_criteria`、
 `business_flows`、`acceptance_criteria`、`risks`、`data_sources`、`permission_model`、
@@ -299,6 +388,9 @@ TechnicalPlan 修订。
 ### TechnicalPlan 上下文预算
 
 - 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、V1 页面与操作权限目标身份、业务流程、页面信息和业务动作上下文，并在修订时注入修订上下文；数据权限不进入第一阶段模型上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
+- 模型输出预算独立于上述输入上下文及全局 `AGENT_MAX_TOKENS`：完整 TechnicalPlan 和定向 API Contract 修复使用 `XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS`，默认 `32768`，必须为正整数。调用时复制当前 Settings，不修改其他 Agent 的配置，也不自动无限提高预算或增加重试次数。
+- 规划响应只允许一个完整根级 JSON 对象（可用单个完整 JSON 代码围栏包裹）；截断、附加正文、多对象或非对象响应直接进入既有有界修复，不从内层对象恢复，不补造契约。同步和流式调用均保留结束原因及用量，空正文的末尾片段也必须处理；`finish_reason=length` 即使正文可解析也视为截断，其他明确非正常结束同样拒绝。未提供结束原因时仍须通过完整 JSON 与正式契约校验。
+- 默认新增诊断只记录正文长度、短 SHA-256、受控结束原因枚举、输出 token 数和配置上限，不记录模型正文、提示词、凭据或任意供应商元数据。输出校验不改变 AG-UI 生命周期、三次总尝试预算和 TechnicalPlan 显式确认门禁。
 
 ## 详设节点移除与工作台执行
 

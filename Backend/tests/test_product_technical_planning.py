@@ -121,8 +121,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
 
         self.assertTrue(any("requirement_spec_sha256" in error for error in errors))
 
-    def test_product_plan_v5_keeps_only_pages_and_closes_navigation(self) -> None:
-        """v5 必须规范产品行为，并从导航操作闭合页面跳转。"""
+    def test_product_plan_v6_keeps_only_pages_and_closes_navigation(self) -> None:
+        """v6 必须规范产品行为，并从导航操作闭合页面跳转。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
         first_page, second_page = requirement_spec["pages"][:2]
@@ -154,7 +154,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
 
         page = product_plan["pages"][0]
-        self.assertEqual(product_plan["schema_version"], "product-plan.v5")
+        self.assertEqual(product_plan["schema_version"], "product-plan.v6")
         self.assertNotIn("frontend_pages", product_plan)
         self.assertEqual(page["information_items"][0]["itemId"], "inventory-summary")
         self.assertIsInstance(page["information_items"][0], dict)
@@ -388,7 +388,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("do not include data_sources", _requirements_prompt("创建库存系统"))
         self.assertIn("Do not return assumptions, product risks", _requirements_prompt("创建库存系统"))
 
-    def test_technical_prompt_uses_current_four_part_contract(self) -> None:
+    def test_technical_prompt_uses_current_five_part_contract(self) -> None:
         """TechnicalPlan 提示词必须使用产品上下文生成实体和新分页字段。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
@@ -406,10 +406,14 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             None,
         )
 
-        self.assertIn("architecture, entities, api_contracts, and pages", prompt)
+        self.assertIn(
+            "architecture, entities, api_contracts, pages, and agent_contracts",
+            prompt,
+        )
         self.assertNotIn("authorization_data_bindings", prompt)
         self.assertIn("entity_field_ref", prompt)
         self.assertIn("computed, aggregated, and transport properties may omit the mapping", prompt)
+        self.assertIn("has exactly five sections", prompt)
         self.assertIn("has exactly four same-level properties", prompt)
         self.assertIn("total, pageSize, current, and list", prompt)
         self.assertIn("Product goal context", prompt)
@@ -694,8 +698,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_requirement_prompt_limits_rounds_and_batches_questions(self) -> None:
-        """需求提示必须固定三轮预算、每轮问题批量和最终合并边界。"""
+    def test_requirement_prompt_limits_rounds_and_asks_only_required_gaps(self) -> None:
+        """需求提示必须固定三轮预算，并且只询问实际缺失的必需字段。"""
 
         first_prompt = _requirements_prompt("创建一个库存管理系统")
         final_prompt = _requirements_prompt(
@@ -705,8 +709,11 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
 
         self.assertIn("at most 3 clarification rounds", first_prompt)
-        self.assertIn("5 to 8 focused questions", first_prompt)
-        self.assertIn("If fewer than 5 material gaps remain, ask exactly all remaining gaps", first_prompt)
+        self.assertIn("check these required fields in order", first_prompt)
+        self.assertIn("(1) app_info.name is non-empty", first_prompt)
+        self.assertIn("(5) business_flows has at least one flow", first_prompt)
+        self.assertIn("call ask_user once for exactly those missing fields", first_prompt)
+        self.assertNotIn("5 to 8 focused questions", first_prompt)
         self.assertIn("clarification round 1 of 3", first_prompt)
         self.assertIn("never call ask_user in this pass", final_prompt)
         self.assertIn("After the user has answered round 3, never call ask_user again", final_prompt)
@@ -816,7 +823,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertNotIn("确认需求摘要：旧需求：使用统一喜好列表页。", markdown)
 
     def test_product_model_example_contains_every_page_and_no_duplicate_tree(self) -> None:
-        """模型完整 JSON 示例必须展开全部页面，并且只保留 pages。"""
+        """模型完整 JSON 示例必须展开全部页面和智能体产品契约。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
         example = json.loads(_product_plan_json_example(requirement_spec))
@@ -827,7 +834,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
         self.assertEqual(
             set(example),
-            {"app", "business_flows", "pages", "product_acceptance_criteria"},
+            {"app", "agents", "business_flows", "pages", "product_acceptance_criteria"},
         )
         self.assertNotIn("frontend_pages", example)
 
@@ -906,12 +913,14 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                 "entities",
                 "api_contracts",
                 "pages",
+                "agent_contracts",
                 "authorization_manifest",
                 "product_plan_sha256",
                 "ui_designs_sha256",
             },
         )
         self.assertEqual(attached["artifact_type"], "technical-plan")
+        self.assertEqual(attached["agent_contracts"], [])
         self.assertNotIn("page_implementation_contracts", attached)
         self.assertNotIn("frontend_pages", attached)
         self.assertNotIn("requirements_overview", attached)

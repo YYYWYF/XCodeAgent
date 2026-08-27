@@ -394,7 +394,7 @@ generating_application_template_files
 ### 10.3 菜单
 
 - 从 ProductPlan 页面名称和正式路由推导预期菜单项。
-- ProductPlan v4 页面为拍平列表，本阶段只补齐顶层页面入口，不虚构菜单层级。
+- ProductPlan v6 页面为拍平列表，本阶段只补齐顶层页面入口，不虚构菜单层级。
 - 按稳定 PageKey 检查和追加缺失项。
 - 不整体替换 `BIZ_MENUS`。
 - 菜单文件缺失、无法解析或写入失败时返回明确失败。

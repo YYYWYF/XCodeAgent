@@ -372,10 +372,12 @@ def _normalize_agent_tasks(
         used_ids.add(task_id)
 
         owner = _text(item.get("owner"), "frontend")
-        if owner not in {"frontend", "backend", "database"}:
+        if owner not in {"frontend", "backend", "database", "agent"}:
             owner = (
                 "database"
                 if owner in {"data_source", "data-source", "data", "db"}
+                else "agent"
+                if owner in {"python-agent", "python_agent", "agent-runtime"}
                 else "backend"
                 if owner in {"api", "server"}
                 else "frontend"
@@ -383,6 +385,8 @@ def _normalize_agent_tasks(
         default_task_type = (
             "database.change"
             if owner == "database"
+            else "agent.code"
+            if owner == "agent"
             else "backend.code"
             if owner == "backend"
             else "frontend.code"
@@ -809,7 +813,7 @@ def build_task_candidate_contract_errors(
             )
         requires_deliverable = (
             task_kind != "repair"
-            and owner in {"frontend", "backend"}
+            and owner in {"frontend", "backend", "agent"}
             and unit_id
             not in {
                 "frontend:shell",
@@ -1007,6 +1011,8 @@ def _task_semantic_errors(
             errors.append(f"Task {task_id} is in database Unit {unit_id} but owner is {owner}.")
         if unit_id.startswith("backend:") and owner != "backend":
             errors.append(f"Task {task_id} is in backend Unit {unit_id} but owner is {owner}.")
+        if unit_id.startswith("agent:") and owner != "agent":
+            errors.append(f"Task {task_id} is in agent Unit {unit_id} but owner is {owner}.")
         if unit_id.startswith(("page:", "frontend:")) and owner != "frontend":
             errors.append(f"Task {task_id} is in frontend/page Unit {unit_id} but owner is {owner}.")
         if owner == "database":
@@ -1027,6 +1033,18 @@ def _task_semantic_errors(
             errors.append(f"Task {task_id} is {owner} owner but declares database_scope.")
         if owner == "backend" and task_type.startswith("database."):
             errors.append(f"Task {task_id} is backend owner but declares database task_type {task_type}.")
+        if owner == "agent":
+            if task_type != "agent.code":
+                errors.append(f"Task {task_id} is agent owner but task_type is {task_type}.")
+            outside_agent_runtime = [
+                path for path in paths if not path.startswith("agent-runtime/")
+            ]
+            if outside_agent_runtime:
+                errors.append(
+                    f"Agent task {task_id} contains paths outside agent-runtime: "
+                    + ", ".join(outside_agent_runtime)
+                    + "."
+                )
         errors.extend(
             business_acceptance_contract_errors(
                 task,
@@ -1253,6 +1271,11 @@ def _task_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
         "frontend": len([task for task in tasks if task.get("owner") == "frontend"]),
         "backend": len([task for task in tasks if task.get("owner") == "backend"]),
         "database": len([task for task in tasks if task.get("owner") == "database"]),
+        **(
+            {"agent": len([task for task in tasks if task.get("owner") == "agent"])}
+            if any(task.get("owner") == "agent" for task in tasks)
+            else {}
+        ),
         "pending": len([task for task in tasks if task.get("status") == "pending"]),
         "running": len([task for task in tasks if task.get("status") == "running"]),
         "completed": len(
@@ -1348,6 +1371,8 @@ def _default_task_type(owner: str) -> str:
         return "database.change"
     if owner == "backend":
         return "backend.code"
+    if owner == "agent":
+        return "agent.code"
     return "frontend.code"
 
 

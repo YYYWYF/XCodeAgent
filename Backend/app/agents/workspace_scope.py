@@ -21,6 +21,7 @@ from app.workspace.workspace import SENSITIVE_FILE_NAMES
 AgentWorkspaceMode = Literal[
     "frontend",
     "data_source",
+    "agent_runtime",
     "database",
     "code_analyze",
     "code_review_repair",
@@ -214,6 +215,20 @@ def create_workspace_permissions(
                     paths=["/**"],
                     mode="deny",
                 ),
+            ]
+        )
+        return permissions
+
+    if mode == "agent_runtime":
+        permissions.extend(
+            [
+                FilesystemPermission(operations=["read"], paths=["/**"], mode="allow"),
+                FilesystemPermission(
+                    operations=["write"],
+                    paths=["/agent-runtime", "/agent-runtime/**"],
+                    mode="allow",
+                ),
+                FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
             ]
         )
         return permissions

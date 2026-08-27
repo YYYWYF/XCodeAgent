@@ -95,6 +95,8 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertIn("Do not install dependencies", data_source_prompt)
         self.assertIn("provided array order", data_source_prompt)
         self.assertNotIn("regular backend verification", data_source_prompt)
+        self.assertIn("existing AG-UI client/event-stream boundary", frontend_prompt)
+        self.assertIn("do not call the Python sidecar directly", frontend_prompt)
 
     def test_frontend_execution_prompt_requires_shared_response_entity_adapter(self) -> None:
         """真实业务 API 必须按公共适配器解包，页面侧只消费业务类型。"""
