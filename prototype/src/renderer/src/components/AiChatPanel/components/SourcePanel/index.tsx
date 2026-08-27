@@ -13,6 +13,7 @@ import hljs from 'highlight.js/lib/core'
 import java from 'highlight.js/lib/languages/java'
 import javascript from 'highlight.js/lib/languages/javascript'
 import json from 'highlight.js/lib/languages/json'
+import python from 'highlight.js/lib/languages/python'
 import typescript from 'highlight.js/lib/languages/typescript'
 import xml from 'highlight.js/lib/languages/xml'
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
@@ -25,6 +26,7 @@ import './SourcePanel.less'
 hljs.registerLanguage('java', java)
 hljs.registerLanguage('javascript', javascript)
 hljs.registerLanguage('json', json)
+hljs.registerLanguage('python', python)
 hljs.registerLanguage('typescript', typescript)
 hljs.registerLanguage('xml', xml)
 
@@ -64,6 +66,7 @@ function languageForFile(name: string): string | undefined {
   if (ext === 'json') return 'json'
   if (['html', 'svg', 'xml'].includes(ext)) return 'xml'
   if (ext === 'java') return 'java'
+  if (ext === 'py') return 'python'
   return undefined
 }
 
@@ -169,7 +172,7 @@ function renderTreeNodes(
         ) : (
           <>
             <span aria-hidden="true" className={cx('source-tree-leaf-spacer')} />
-            {/\.(tsx?|jsx?|json|css|less|scss|html?|md|java|xml|ya?ml)$/.test(node.name) ? (
+            {/\.(tsx?|jsx?|json|css|less|scss|html?|md|java|py|xml|ya?ml)$/.test(node.name) ? (
               <CodeOutlined />
             ) : (
               <FileOutlined />
@@ -190,7 +193,13 @@ function renderTreeNodes(
 }
 
 /** 「应用文件」面板：左侧文件内容查看器 + 右侧可整栏收起的应用目录树。 */
-export default function SourcePanel({ files, directories, initialFilePath, diff, docConfig }: Props) {
+export default function SourcePanel({
+  files,
+  directories,
+  initialFilePath,
+  diff,
+  docConfig
+}: Props): ReactElement {
   const tree = useMemo(() => buildTree(files, directories), [directories, files])
   // 目录树默认折叠；仅定位 initialFilePath 时自动展开其祖先目录。
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set<string>())

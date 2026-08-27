@@ -17,6 +17,7 @@ import { cx } from '../../../../utils'
 import AgentResourcePickerModal from './AgentResourcePickerModal'
 import { ConfigSection, SelectedResources } from './ConfigSection'
 import ConversationExperience from './ConversationExperience'
+import AgentPersonaReplyLogic from './AgentPersonaReplyLogic'
 import {
   AGENT_CONFIG_MODEL,
   AGENT_CONFIG_RESOURCE_KIND_LABELS,
@@ -140,6 +141,12 @@ export default function AgentConfigPanel({
     onChange({ ...config, conversation })
   }
 
+  /** 更新人设与回复逻辑草稿，保留其他配置模块的当前值。 */
+  const updatePersonaReplyLogic = (personaReplyLogic: string): void => {
+    if (readOnly) return
+    onChange({ ...config, personaReplyLogic })
+  }
+
   const revisionInProgress = ['pending_generation', 'generating', 'awaiting_acceptance'].includes(
     status
   )
@@ -169,6 +176,13 @@ export default function AgentConfigPanel({
       </header>
 
       <div className={cx('agent-config-scroll')}>
+        <AgentPersonaReplyLogic
+          agent={agent}
+          onChange={updatePersonaReplyLogic}
+          readOnly={readOnly}
+          value={config.personaReplyLogic}
+        />
+
         <ConfigSection
           expanded={expandedSections.has('model')}
           onToggle={() => toggleSection('model')}

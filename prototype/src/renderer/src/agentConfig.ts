@@ -1,5 +1,29 @@
 export const DEFAULT_AGENT_CONFIG_MODEL = 'minimax-m2p5-229b-w8a8'
 
+/** 配置面板中人设与回复逻辑的默认 Markdown 模板。 */
+export const DEFAULT_AGENT_PERSONA_REPLY_LOGIC = [
+  '## 角色',
+  '请描述角色概述和主要职责',
+  '',
+  '## 目标',
+  '角色的工作目标，如果有多个，可以按照1.2....列出',
+  '',
+  '## 技能',
+  '1. 为了实现目标1，调用工具1',
+  '2. 为了实现目标2，调用工具2',
+  '',
+  '## 要求与限制',
+  '1. 要求1',
+  '2. 要求1……'
+].join('\n')
+
+export type AgentPersonaReplyLogicContext = {
+  label: string
+  purpose: string
+  tools: readonly string[]
+  permissions: readonly string[]
+}
+
 export type AgentConfigResourceKind = 'skills' | 'knowledge' | 'tools'
 
 export type AgentConfigResource = {
@@ -31,6 +55,7 @@ export type AgentConfigState = {
   knowledge: AgentConfigResource[]
   tools: AgentConfigResource[]
   conversation: AgentConfigConversationSettings
+  personaReplyLogic: string
 }
 
 export type AgentConfigRevisionStatus =
@@ -58,6 +83,40 @@ export function isAgentConfigEditable(input: {
   return Boolean(input.agentId?.trim()) && !input.versionReadOnly
 }
 
+/** 根据智能体已确认的职责、工具和权限生成可直接编辑的优化模板。 */
+export function buildOptimizedAgentPersonaReplyLogic(
+  context: AgentPersonaReplyLogicContext
+): string {
+  const label = context.label.trim() || '当前智能体'
+  const purpose = context.purpose.trim() || '完成已确认的业务辅助任务'
+  const tools = context.tools.map((tool) => tool.trim()).filter(Boolean)
+  const permissions = context.permissions.map((permission) => permission.trim()).filter(Boolean)
+  const skillLines =
+    tools.length > 0
+      ? tools.map(
+          (tool, index) =>
+            `${index + 1}. 为了实现工作目标，调用工具“${tool}”获取必要信息和核验证据。`
+        )
+      : ['1. 先理解用户问题，再根据需要调用已确认工具获取核验证据。']
+  const limitationLines = permissions.map((permission, index) => `${index + 1}. ${permission}`)
+  limitationLines.push(
+    `${limitationLines.length + 1}. 不执行未经确认的写操作，不编造工具未返回的数据。`
+  )
+  return [
+    '## 角色',
+    `你是${label}，负责${purpose}。`,
+    '',
+    '## 目标',
+    `1. ${purpose}`,
+    '',
+    '## 技能',
+    ...skillLines,
+    '',
+    '## 要求与限制',
+    ...limitationLines
+  ].join('\n')
+}
+
 /** 创建配置面板的默认配置，确保每个智能体会话拥有独立的可编辑副本。 */
 export function createInitialAgentConfig(): AgentConfigState {
   return {
@@ -78,7 +137,8 @@ export function createInitialAgentConfig(): AgentConfigState {
       multiTurn: true,
       toolEvidence: true,
       retryOnFailure: true
-    }
+    },
+    personaReplyLogic: DEFAULT_AGENT_PERSONA_REPLY_LOGIC
   }
 }
 
@@ -92,7 +152,8 @@ export function cloneAgentConfig(config: AgentConfigState): AgentConfigState {
     skills: config.skills.map((resource) => ({ ...resource })),
     knowledge: config.knowledge.map((resource) => ({ ...resource })),
     tools: config.tools.map((resource) => ({ ...resource })),
-    conversation: { ...config.conversation }
+    conversation: { ...config.conversation },
+    personaReplyLogic: config.personaReplyLogic
   }
 }
 
@@ -105,7 +166,8 @@ export function agentConfigFingerprint(config: AgentConfigState): string {
     skills: resources(config.skills),
     knowledge: resources(config.knowledge),
     tools: resources(config.tools),
-    conversation: config.conversation
+    conversation: config.conversation,
+    personaReplyLogic: config.personaReplyLogic
   })
 }
 
@@ -129,9 +191,12 @@ export function createAgentConfigSessionState(): AgentConfigSessionState {
 export function changedAgentConfigSections(
   activeConfig: AgentConfigState,
   draftConfig: AgentConfigState
-): Array<{ key: 'model' | AgentConfigResourceKind | 'conversation'; label: string }> {
+): Array<{
+  key: 'model' | AgentConfigResourceKind | 'conversation' | 'personaReplyLogic'
+  label: string
+}> {
   const sections: Array<{
-    key: 'model' | AgentConfigResourceKind | 'conversation'
+    key: 'model' | AgentConfigResourceKind | 'conversation' | 'personaReplyLogic'
     label: string
   }> = []
   if (JSON.stringify(activeConfig.model) !== JSON.stringify(draftConfig.model)) {
@@ -158,6 +223,9 @@ export function changedAgentConfigSections(
   if (JSON.stringify(activeConfig.conversation) !== JSON.stringify(draftConfig.conversation)) {
     sections.push({ key: 'conversation', label: '对话体验' })
   }
+  if (activeConfig.personaReplyLogic !== draftConfig.personaReplyLogic) {
+    sections.push({ key: 'personaReplyLogic', label: '人设与回复逻辑' })
+  }
   return sections
 }
 
@@ -177,6 +245,7 @@ export function isAgentConfigState(value: unknown): value is AgentConfigState {
       Array.isArray(candidate.knowledge) &&
       Array.isArray(candidate.tools) &&
       candidate.conversation &&
-      typeof candidate.conversation === 'object'
+      typeof candidate.conversation === 'object' &&
+      typeof candidate.personaReplyLogic === 'string'
   )
 }

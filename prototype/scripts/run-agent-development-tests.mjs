@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import ts from 'typescript'
 
@@ -181,6 +182,19 @@ const configuredAgent = {
     maxTokens: 2048,
     otherParameters: ['response_format=json']
   },
+  personaReplyLogic: [
+    '## 角色',
+    '你是回检填报助手，负责解释回检状态。',
+    '',
+    '## 目标',
+    '1. 帮助用户判断下一步处理方式。',
+    '',
+    '## 技能',
+    '1. 为了查询状态，调用查询我的回检单。',
+    '',
+    '## 要求与限制',
+    '1. 仅回答当前用户可见的数据。'
+  ].join('\n'),
   skills: [
     {
       id: 'skill-creator',
@@ -210,49 +224,83 @@ const configuredAgent = {
 }
 const configuredDesignDoc = agentDevelopment.buildAgentDesignDoc(agent, configuredAgent)
 const initialConfig = agentConfig.createInitialAgentConfig()
+assert.match(initialConfig.personaReplyLogic, /^## 角色/m)
+assert.match(initialConfig.personaReplyLogic, /^## 目标/m)
+assert.match(initialConfig.personaReplyLogic, /^## 技能/m)
+assert.match(initialConfig.personaReplyLogic, /^## 要求与限制/m)
 assert.deepEqual(
   agentConfig
     .changedAgentConfigSections(initialConfig, configuredAgent)
     .map((section) => section.label),
-  ['模型', '技能', '知识检索', '工具', '对话体验']
+  ['模型', '技能', '知识检索', '工具', '对话体验', '人设与回复逻辑']
 )
 const clonedConfig = agentConfig.cloneAgentConfig(configuredAgent)
 assert.equal(agentConfig.areAgentConfigsEqual(configuredAgent, clonedConfig), true)
 clonedConfig.skills.push({ id: 'extra-skill', name: '额外技能', description: '额外技能' })
 assert.equal(agentConfig.areAgentConfigsEqual(configuredAgent, clonedConfig), false)
+const optimizedPersona = agentConfig.buildOptimizedAgentPersonaReplyLogic({
+  label: agent.label,
+  purpose: agent.purpose,
+  tools: agent.tools,
+  permissions: agent.permissions
+})
+assert.match(optimizedPersona, /回检填报助手/)
+assert.match(optimizedPersona, /解释回检状态并给出下一步建议/)
+assert.match(optimizedPersona, /查询我的回检单/)
+assert.match(optimizedPersona, /^## 要求与限制/m)
+const invalidConfig = { ...initialConfig }
+delete invalidConfig.personaReplyLogic
+assert.equal(agentConfig.isAgentConfigState(invalidConfig), false)
 assert.match(configuredDesignDoc, /minimax-m2p5-229b-w8a8/)
 assert.match(configuredDesignDoc, /深度思考：启用/)
 assert.match(configuredDesignDoc, /maxTokens=2048/)
 assert.match(configuredDesignDoc, /技能创建器/)
 assert.match(configuredDesignDoc, /连续多轮对话：关闭/)
+assert.match(configuredDesignDoc, /人设与回复逻辑/)
 const configuredSource = agentDevelopment.buildAgentSource(agent, configuredAgent)
-assert.match(configuredSource.content, /\.deepThinking\(true\)/)
-assert.match(configuredSource.content, /\.temperature\(0\.2\)/)
-assert.match(configuredSource.content, /\.maxTokens\(2048\)/)
-assert.match(configuredSource.content, /\.skills\(List\.of\("技能创建器"\)\)/)
-assert.match(configuredSource.content, /\.retryOnFailure\(false\)/)
+assert.match(configuredSource.content, /deep_thinking=True/)
+assert.match(configuredSource.content, /temperature=0\.2/)
+assert.match(configuredSource.content, /max_tokens=2048/)
+assert.match(configuredSource.content, /skills=\["技能创建器"\]/)
+assert.match(configuredSource.content, /retry_on_failure=False/)
+assert.match(configuredSource.content, /persona_reply_logic="## 角色/)
 const configuredToolSource = agentDevelopment.buildAgentToolAdapterSource(agent, configuredAgent)
 assert.match(configuredToolSource.content, /已配置工具：查询我的回检单、news。/)
 
+/** 使用 Python 编译器校验生成源码的语法，避免仅通过字符串断言掩盖缩进或字面量错误。 */
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+function assertPythonSyntax(content, label) {
+  const result = spawnSync(
+    'python3',
+    ['-c', 'import sys; compile(sys.stdin.read(), sys.argv[1], "exec")', label],
+    { input: content, encoding: 'utf8' }
+  )
+  assert.equal(
+    result.status,
+    0,
+    `${label} 不是有效的 Python 源码：${result.stderr || result.error?.message || '未知错误'}`
+  )
+}
+
 const sourceArtifact = agentDevelopment.buildAgentSource(agent)
-assert.equal(
-  sourceArtifact.filePath,
-  'backend/src/main/java/com/xcodeagent/generated/agent/RecheckAssistantAgent.java'
-)
-assert.match(sourceArtifact.content, /public final class RecheckAssistantAgent/)
-assert.match(sourceArtifact.content, /AgentDefinition\.builder\(\)/)
+assert.equal(sourceArtifact.filePath, 'backend/agents/recheck_assistant_agent.py')
+assert.match(sourceArtifact.content, /class RecheckAssistantAgent:/)
+assert.match(sourceArtifact.content, /AgentDefinition\(/)
 assert.match(sourceArtifact.content, /查询我的回检单/)
 assert.match(sourceArtifact.content, /default-model/)
 assert.match(sourceArtifact.content, /recheck-record/)
-assert.doesNotMatch(sourceArtifact.content, /createApplicationAgent/)
+assert.match(sourceArtifact.content, /def chat\(/)
+assert.doesNotMatch(sourceArtifact.content, /public final class/)
+assert.doesNotMatch(sourceArtifact.content, /\.java\b/)
+assertPythonSyntax(sourceArtifact.content, sourceArtifact.filePath)
 
 const toolArtifact = agentDevelopment.buildAgentToolAdapterSource(agent)
-assert.equal(
-  toolArtifact.filePath,
-  'backend/src/main/java/com/xcodeagent/generated/tool/RecheckAssistantToolAdapter.java'
-)
-assert.match(toolArtifact.content, /public final class RecheckAssistantToolAdapter/)
+assert.equal(toolArtifact.filePath, 'backend/agents/recheck_assistant_tool_adapter.py')
+assert.match(toolArtifact.content, /class RecheckAssistantToolAdapter:/)
 assert.match(toolArtifact.content, /ep-my-rechecks/)
+assert.match(toolArtifact.content, /def query\(/)
+assert.doesNotMatch(toolArtifact.content, /\.java\b/)
+assertPythonSyntax(toolArtifact.content, toolArtifact.filePath)
 
 const pageIntegrationArtifact = agentDevelopment.buildAgentPageIntegrationSource(agent)
 assert.equal(

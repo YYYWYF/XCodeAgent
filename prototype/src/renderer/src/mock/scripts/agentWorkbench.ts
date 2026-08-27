@@ -15,6 +15,7 @@ import {
   type DevelopmentPlanningAgent
 } from '../../agentDevelopment'
 import {
+  DEFAULT_AGENT_PERSONA_REPLY_LOGIC,
   changedAgentConfigSections,
   cloneAgentConfig,
   createInitialAgentConfig,
@@ -189,6 +190,7 @@ function agentReview(
     inputs: ['用户发送的自然语言消息', '当前页面上下文、会话历史和必要的用户身份范围'],
     outputs: ['面向用户的直接回复', '工具调用摘要、数据来源与可核验证据'],
     model: config?.model.model || agent.model,
+    persona_reply_logic: config?.personaReplyLogic || DEFAULT_AGENT_PERSONA_REPLY_LOGIC,
     api_dependencies: agent.apiReferences.map((reference) => ({
       apiContractId: reference.apiContractId,
       endpointId: reference.endpointId,
@@ -244,13 +246,21 @@ function agentBuildTargets(
   config?: AgentConfigState
 ): AgentBuildTarget[] {
   const sources = [
-    { key: 'definition', source: buildAgentSource(agent, config), sourceTool: 'agent_java_generator' },
+    {
+      key: 'definition',
+      source: buildAgentSource(agent, config),
+      sourceTool: 'agent_python_generator'
+    },
     {
       key: 'tools',
       source: buildAgentToolAdapterSource(agent, config),
       sourceTool: 'agent_tool_adapter_generator'
     },
-    { key: 'page', source: buildAgentPageIntegrationSource(agent), sourceTool: 'agent_page_integrator' }
+    {
+      key: 'page',
+      source: buildAgentPageIntegrationSource(agent),
+      sourceTool: 'agent_page_integrator'
+    }
   ]
   return sources.map(({ key, source, sourceTool }) => ({
     key,
@@ -585,7 +595,7 @@ export async function replayAgentWorkbench(
             changedSections: changedSections.map((section) => section.label),
             model: revisionAgentConfig.model.model,
             summary:
-              '配置变更会同步更新智能体设计 Markdown、Java 定义和工具适配器，并沿用逐文件 Diff 与验收流程。'
+              '配置变更会同步更新智能体设计 Markdown、Python 定义和工具适配器，并沿用逐文件 Diff 与验收流程。'
           }
         }
       },
