@@ -201,6 +201,39 @@ class ApplicationTemplateGenerationTests(unittest.TestCase):
             self.assertEqual(manifest["steps"]["templateFiles"]["status"], "pending")
             self.assertEqual(manifest["steps"]["menus"]["status"], "pending")
 
+    def test_download_manifest_records_template_source_without_authorization_artifact(self) -> None:
+        """模板来源记录必须保留 URL、分支和提交，不另建权限专属产物。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            self._write_workspace(
+                workspace,
+                pages=[{"pageId": "orders", "name": "订单", "path": "/orders"}],
+            )
+            result = self._download_success()
+            targets = result["targets"]
+            assert isinstance(targets, dict)
+            for name, url in {
+                "frontend": "https://example.test/frontend.git",
+                "backend": "https://example.test/backend.git",
+            }.items():
+                target = targets[name]
+                assert isinstance(target, dict)
+                target.update(
+                    repositoryUrl=url,
+                    branch="auth",
+                    commitSha="a" * 40,
+                )
+
+            manifest = prepare_application_template_generation(workspace, result)
+
+            for target_name in ("frontend", "backend"):
+                source = manifest["steps"]["download"]["targets"][target_name]
+                self.assertEqual(source["branch"], "auth")
+                self.assertEqual(source["commitSha"], "a" * 40)
+                self.assertTrue(source["repositoryUrl"].startswith("https://example.test/"))
+            self.assertFalse((workspace / ".xcodeagent/authorization").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

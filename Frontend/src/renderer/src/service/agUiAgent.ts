@@ -327,6 +327,7 @@ export type DagGenerationSnapshot = {
 const DAG_GENERATION_STAGE_OUTPUT_KIND: Record<string, DagGenerationStageOutput['kind']> = {
   unit_skeleton: 'unit_graph',
   build_context: 'build_context',
+  authorization_overlay: 'build_context',
   contract_validation: 'contract_validation',
   model_planning: 'candidate_tasks',
   task_compilation: 'compiled_tasks',

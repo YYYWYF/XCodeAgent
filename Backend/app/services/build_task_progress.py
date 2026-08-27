@@ -9,7 +9,6 @@ from langgraph.config import get_stream_writer
 
 from app.services.build_task_planner import tasks_from_build_task_plan
 
-
 ProgressWriter = Callable[[dict[str, Any]], None]
 
 MAX_STAGE_RECORDS = 200
@@ -18,6 +17,7 @@ MAX_STAGE_EDGES = 500
 DAG_GENERATION_STAGES: tuple[tuple[str, str], ...] = (
     ("unit_skeleton", "生成 Unit DAG 骨架"),
     ("build_context", "解析目标构建上下文"),
+    ("authorization_overlay", "权限约束投影"),
     ("contract_validation", "校验页面依赖与 API 契约"),
     ("model_planning", "生成候选构建任务"),
     ("task_compilation", "编译任务注册表与依赖"),
@@ -193,7 +193,9 @@ def _project_tasks(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
                 "owner": _compact_text(task.get("owner"), 80),
                 "unitId": _compact_text(task.get("unit_id"), 240),
                 "status": _task_status(task.get("status")),
-                "dependencies": _compact_strings(dependencies, item_limit=200, text_limit=240),
+                "dependencies": _compact_strings(
+                    dependencies, item_limit=200, text_limit=240
+                ),
                 "changePaths": _change_paths(task),
                 "allowedPaths": _compact_strings(
                     task.get("allowed_paths") or [],
@@ -229,9 +231,11 @@ def project_unit_skeleton_output(build_task_plan: dict[str, Any]) -> dict[str, A
                 "id": _compact_text(unit_id, 240),
                 "kind": _compact_text(unit.get("kind"), 80) or "unknown",
                 "status": _compact_text(unit.get("status"), 80) or "not_prepared",
-                "taskCount": len(unit.get("task_ids") or [])
-                if isinstance(unit.get("task_ids"), list)
-                else 0,
+                "taskCount": (
+                    len(unit.get("task_ids") or [])
+                    if isinstance(unit.get("task_ids"), list)
+                    else 0
+                ),
             }
         )
     validation = unit_graph.get("validation")
@@ -272,8 +276,12 @@ def project_build_context_output(
             "type": _compact_text(target.get("type"), 80) or "application",
             "id": _compact_text(target.get("id"), 240) or "application",
         },
-        "requiredUnitIds": _compact_strings(required_units, item_limit=200, text_limit=240),
-        "endpointIds": _compact_strings(build_context.get("endpoint_ids"), item_limit=200, text_limit=240),
+        "requiredUnitIds": _compact_strings(
+            required_units, item_limit=200, text_limit=240
+        ),
+        "endpointIds": _compact_strings(
+            build_context.get("endpoint_ids"), item_limit=200, text_limit=240
+        ),
         "apiContractIds": _compact_strings(
             {
                 str(detail.get("api_contract_id") or "")
@@ -295,7 +303,9 @@ def project_build_context_output(
         "entityIds": _compact_strings(
             build_context.get("entity_ids"), item_limit=200, text_limit=240
         ),
-        "reusableTaskIds": _compact_strings(reusable_ids, item_limit=200, text_limit=240),
+        "reusableTaskIds": _compact_strings(
+            reusable_ids, item_limit=200, text_limit=240
+        ),
     }
 
 
@@ -368,19 +378,27 @@ def project_dag_validation_output(build_task_plan: dict[str, Any]) -> dict[str, 
                 {
                     "index": index + 1,
                     "mode": _compact_text(batch.get("mode"), 40) or "serial",
-                    "taskIds": _compact_strings(batch.get("tasks"), item_limit=200, text_limit=240),
+                    "taskIds": _compact_strings(
+                        batch.get("tasks"), item_limit=200, text_limit=240
+                    ),
                 }
             )
     return {
         "kind": "dag_validation",
         "isValid": validation.get("is_valid") is True,
-        "roots": _compact_strings(task_graph.get("roots"), item_limit=200, text_limit=240),
-        "leaves": _compact_strings(task_graph.get("leaves"), item_limit=200, text_limit=240),
+        "roots": _compact_strings(
+            task_graph.get("roots"), item_limit=200, text_limit=240
+        ),
+        "leaves": _compact_strings(
+            task_graph.get("leaves"), item_limit=200, text_limit=240
+        ),
         "topologicalOrder": _compact_strings(
             task_graph.get("topological_order"), item_limit=200, text_limit=240
         ),
         "batches": projected_batches,
-        "issues": _compact_strings(validation.get("errors"), item_limit=100, text_limit=1_000),
+        "issues": _compact_strings(
+            validation.get("errors"), item_limit=100, text_limit=1_000
+        ),
     }
 
 
@@ -421,7 +439,9 @@ def _project_validation(value: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "isValid": value.get("is_valid") is True,
-        "issues": _compact_strings(value.get("errors"), item_limit=100, text_limit=1_000),
+        "issues": _compact_strings(
+            value.get("errors"), item_limit=100, text_limit=1_000
+        ),
     }
 
 
@@ -460,7 +480,9 @@ def _project_summary(
         "unitCount": len(build_units),
         "taskCount": len(tasks),
         "edgeCount": len(task_graph.get("edges") or []),
-        "batchCount": len(execution.get("batches") or task_graph.get("execution_layers") or []),
+        "batchCount": len(
+            execution.get("batches") or task_graph.get("execution_layers") or []
+        ),
         "frontendCount": _integer(summary.get("frontend")),
         "backendCount": _integer(summary.get("backend")),
         "databaseCount": _integer(summary.get("database")),
@@ -528,11 +550,15 @@ def _project_business_acceptance_checks(
 ) -> list[dict[str, Any]]:
     """投射业务检查的归属、类型、目标和当前执行状态。"""
 
-    evidence_by_id = {
-        str(item.get("check_id") or ""): item
-        for item in evidence
-        if isinstance(item, dict) and item.get("check_id")
-    } if isinstance(evidence, list) else {}
+    evidence_by_id = (
+        {
+            str(item.get("check_id") or ""): item
+            for item in evidence
+            if isinstance(item, dict) and item.get("check_id")
+        }
+        if isinstance(evidence, list)
+        else {}
+    )
     projected: list[dict[str, Any]] = []
     for item in checks[:100] if isinstance(checks, list) else []:
         if not isinstance(item, dict):
@@ -574,7 +600,9 @@ def _project_deliverables(value: Any) -> list[dict[str, Any]]:
                 "id": deliverable_id,
                 "kind": _compact_text(item.get("kind"), 120),
                 "targetId": _compact_text(item.get("target_id"), 240),
-                "paths": _compact_strings(item.get("paths") or [], item_limit=40, text_limit=1_000),
+                "paths": _compact_strings(
+                    item.get("paths") or [], item_limit=40, text_limit=1_000
+                ),
             }
         )
     return projected
@@ -608,7 +636,9 @@ def _task_status(value: Any) -> str:
     """限制任务状态为公开协议支持的四种值。"""
 
     status = str(value or "pending")
-    return status if status in {"pending", "running", "completed", "failed"} else "pending"
+    return (
+        status if status in {"pending", "running", "completed", "failed"} else "pending"
+    )
 
 
 def _integer(value: Any) -> int:

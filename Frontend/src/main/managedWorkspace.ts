@@ -56,6 +56,13 @@ export function assertCurrentApplicationSchema(applicationRecord: Record<string,
   }
 }
 
+/** 根据已持久化的权限开关确定前后端模板唯一允许的分支。 */
+export function resolveApplicationTemplateBranch(applicationRecord: Record<string, unknown>): 'main' | 'auth' {
+  assertCurrentApplicationSchema(applicationRecord)
+  const authorization = applicationRecord.authorization as Record<string, unknown>
+  return authorization.enabled === true ? 'auth' : 'main'
+}
+
 /** 校验并读取受 XCodeAgent 管理的工作区配置，拒绝缺少真实 .xcodeagent 目录的文件夹。 */
 export async function readManagedWorkspaceApplication(
   workspaceRoot: string

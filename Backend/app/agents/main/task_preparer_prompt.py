@@ -363,6 +363,14 @@ def _task_rules_section(mode: str, source_types: set[str]) -> str:
             "state each path's snapshot status and planned action separately. Apply this "
             "description contract to backend:bootstrap, database, and external_api tasks."
         )
+        fragments.append(
+            "When TargetBuildContext.authorization_constraints contains a non-empty endpoint "
+            "operationResourceKeys binding, the matching backend:endpoint task may modify only "
+            "the real Controller endpoint: add exactly one @RequireAnyResource annotation before "
+            "business logic, reference the platform-generated AuthConstants symbols, and preserve "
+            "ANY-OF by passing all keys to that one annotation. Never create or modify AuthConstants, "
+            "authorization services, repositories, request-derived permission checks, or data rules."
+        )
     return "\n".join(fragments)
 
 
@@ -453,6 +461,10 @@ def _forbidden_output_section(mode: str, source_types: set[str]) -> str:
         "evidence, summaries, or verification commands; the platform compiles engineering "
         "and business checks deterministically from change_scope, allowed_paths, deliverables, "
         "and formal contracts.",
+        "Never output authorization, authorization_constraints, or source_refs.authorization; "
+        "the platform injects immutable authorization slices after Unit selection.",
+        "Never create, modify, or list AuthConstants in change_scope, allowed_paths, or deliverables; "
+        "the platform writes business operation constants into the auth template managed region after DAG confirmation.",
         "Never create owner=database tasks, database:* Units, DDL, schema/table changes, "
         "migrations, or seed SQL. Never add CRUD operations, endpoints, fields, credentials, "
         "URLs, headers, or configuration outside confirmed contracts.",
@@ -551,6 +563,7 @@ def scoped_prompt_build_context(
             "required_unit_ids",
             "source_refs",
             "reusable_tasks_by_unit",
+            "authorization_constraints",
         }
         return {key: value for key, value in context.items() if key in allowed_keys}
     return context

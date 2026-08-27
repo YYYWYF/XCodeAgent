@@ -32,7 +32,9 @@ from app.services.requirement_spec import (
     validate_authorization_requirements,
     validate_requirement_spec_confirmation_readiness,
 )
-from app.tools.ask_user import AskUserQuestion, build_ask_user_payload, clear_clarification
+from app.tools.ask_user import (
+    clear_clarification,
+)
 from app.workspace.spec_documents import (
     confirmed_requirement_spec_json_path,
     edited_requirement_spec_markdown,
@@ -44,7 +46,6 @@ from app.workspace.spec_documents import (
     write_confirmed_requirement_spec_document,
     write_requirement_spec_draft_document,
 )
-
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -79,7 +80,9 @@ def prepare_requirement_spec_confirmation(
 
     editor_changes = state.get("edited_requirement_spec")
     current_document_path = str(state.get("requirement_spec_path") or "").strip()
-    has_current_document = bool(current_document_path) and Path(current_document_path).is_file()
+    has_current_document = (
+        bool(current_document_path) and Path(current_document_path).is_file()
+    )
     if isinstance(editor_changes, dict) and editor_changes:
         synchronized_spec = apply_requirement_spec_editor_changes(
             existing_spec,
@@ -116,7 +119,11 @@ def prepare_requirement_spec_confirmation(
     }
     confirmed_markdown: str | None = None
     markdown_path = requirement_spec_markdown_path(state)
-    if not (isinstance(editor_changes, dict) and editor_changes) and has_current_document and markdown_path.is_file():
+    if (
+        not (isinstance(editor_changes, dict) and editor_changes)
+        and has_current_document
+        and markdown_path.is_file()
+    ):
         markdown_content = markdown_path.read_text(encoding="utf-8")
         synchronized_markdown = synchronize_requirement_spec_markdown_datasource_types(
             markdown_content,
@@ -170,12 +177,18 @@ def requirements(state: ProjectState) -> dict:
 
     # 应用级不再有数据源类型；需求阶段只保留实体字段展示信息，数据源由实体设计决定。
     datasource_type = datasource_type_from_artifact(
-        state.get("requirement_spec") if isinstance(state.get("requirement_spec"), dict) else {},
+        (
+            state.get("requirement_spec")
+            if isinstance(state.get("requirement_spec"), dict)
+            else {}
+        ),
         fallback="database",
     )
     existing_spec = state.get("requirement_spec")
     if isinstance(existing_spec, dict):
-        existing_spec = apply_authoritative_datasource_type(existing_spec, datasource_type)
+        existing_spec = apply_authoritative_datasource_type(
+            existing_spec, datasource_type
+        )
     interaction = _application_planning_interaction(state)
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     request = _request_for_requirement_node(state, interaction)
@@ -225,9 +238,13 @@ def requirements(state: ProjectState) -> dict:
         and existing_spec.get("confirmation_status") == "pending_user_confirmation"
         and not _has_explicit_user_submission(state)
     ):
-        draft_path = str(state.get("requirement_spec_path") or requirement_spec_draft_markdown_path(state))
+        draft_path = str(
+            state.get("requirement_spec_path")
+            or requirement_spec_draft_markdown_path(state)
+        )
         draft_json_path = str(
-            state.get("requirement_spec_json_path") or requirement_spec_draft_json_path(state)
+            state.get("requirement_spec_json_path")
+            or requirement_spec_draft_json_path(state)
         )
         return {
             "phase": "requirements",
@@ -407,7 +424,9 @@ def requirements(state: ProjectState) -> dict:
         "requirement_spec_path": spec_path,
         "requirement_spec_json_path": str(requirement_spec_draft_json_path(state)),
         "clarification": clarification,
-        "authorization_config_conflict": {} if conflict_resolved else state.get("authorization_config_conflict", {}),
+        "authorization_config_conflict": (
+            {} if conflict_resolved else state.get("authorization_config_conflict", {})
+        ),
         "timeline": ["requirements"],
     }
 
@@ -527,7 +546,9 @@ def _resolve_authorization_config_conflict(
 
     answers = interaction.get("answers") if isinstance(interaction, dict) else {}
     answers = answers if isinstance(answers, dict) else {}
-    decision = _authorization_config_answer_text(answers.get("authorization_config_decision"))
+    decision = _authorization_config_answer_text(
+        answers.get("authorization_config_decision")
+    )
     decision = decision or str(conflict.get("decision") or "").strip()
     workspace = str(state.get("workspace") or "").strip()
     if decision == "enable":
@@ -577,7 +598,9 @@ def _resolve_authorization_config_conflict(
                 ]
             )
         }
-    return {"result": _authorization_config_conflict_result(existing_spec, state, conflict)}
+    return {
+        "result": _authorization_config_conflict_result(existing_spec, state, conflict)
+    }
 
 
 def _requirement_spec_draft_payload(
@@ -609,8 +632,10 @@ def _authorization_validation_clarification(
         issues = issues if isinstance(issues, list) else []
         issue_refs = [
             ref
-            for issue in issues if isinstance(issue, dict)
-            for ref in issue.get("sourceRefs", []) if isinstance(ref, str) and ref.strip()
+            for issue in issues
+            if isinstance(issue, dict)
+            for ref in issue.get("sourceRefs", [])
+            if isinstance(ref, str) and ref.strip()
         ]
         return {
             "mode": "authorization_capability_not_supported",
@@ -766,15 +791,12 @@ def _next_authorization_business_question(
         for role in roles
         if isinstance(role, dict) and role.get("isInitialAdminRole") is True
     ]
-    if (
-        "authorization_initial_admin_role" not in answered_question_ids
-        and (
-            len(selected_initial_roles) != 1
-            or not initial_admin_role_id
-            or str(selected_initial_roles[0].get("id") or "").strip()
-            != initial_admin_role_id
-            or selected_initial_roles[0].get("isSystemRole") is not True
-        )
+    if "authorization_initial_admin_role" not in answered_question_ids and (
+        len(selected_initial_roles) != 1
+        or not initial_admin_role_id
+        or str(selected_initial_roles[0].get("id") or "").strip()
+        != initial_admin_role_id
+        or selected_initial_roles[0].get("isSystemRole") is not True
     ):
         return {
             "id": "authorization_initial_admin_role",
@@ -790,7 +812,10 @@ def _next_authorization_business_question(
             "allowOther": False,
             "options": [
                 *role_options,
-                {"label": "新建独立系统管理员", "value": "__create_system_administrator__"},
+                {
+                    "label": "新建独立系统管理员",
+                    "value": "__create_system_administrator__",
+                },
             ],
         }
 
@@ -834,6 +859,7 @@ _AUTHORIZATION_BUSINESS_QUESTION_TARGETS = {
     },
 }
 
+
 def _authorization_answer_text(value: object) -> str:
     """把权限澄清卡的结构化回答还原为一段业务说明文本。"""
 
@@ -844,10 +870,12 @@ def _authorization_answer_text(value: object) -> str:
         other = str(value.get("other") or "").strip()
         selected_text = _authorization_answer_text(selected)
         return "；".join(
-            item for item in (
+            item
+            for item in (
                 f"已选：{selected_text}" if selected_text else "",
                 f"其他补充：{other}" if other else "",
-            ) if item
+            )
+            if item
         )
     return str(value or "").strip()
 
@@ -940,11 +968,15 @@ def _apply_authorization_business_answers(
             {},
         )
         source_ref = f"用户权限澄清回答：{answer_text}"
-        source_refs = [
-            str(item).strip()
-            for item in seed_item.get("sourceRefs", [])
-            if str(item).strip()
-        ] if isinstance(seed_item.get("sourceRefs"), list) else []
+        source_refs = (
+            [
+                str(item).strip()
+                for item in seed_item.get("sourceRefs", [])
+                if str(item).strip()
+            ]
+            if isinstance(seed_item.get("sourceRefs"), list)
+            else []
+        )
         if source_ref not in source_refs:
             source_refs.append(source_ref)
 
@@ -958,7 +990,9 @@ def _apply_authorization_business_answers(
         updated_authorization[field] = [fallback_item]
 
     if "authorization_initial_admin_role" in answers:
-        selected = _authorization_answer_values(answers["authorization_initial_admin_role"])
+        selected = _authorization_answer_values(
+            answers["authorization_initial_admin_role"]
+        )
         selected_role_id = selected[0] if len(selected) == 1 else ""
         roles = spec.get("user_roles")
         roles = deepcopy(roles) if isinstance(roles, list) else []
@@ -983,7 +1017,8 @@ def _apply_authorization_business_answers(
                 }
             )
         if selected_role_id and any(
-            isinstance(role, dict) and str(role.get("id") or "").strip() == selected_role_id
+            isinstance(role, dict)
+            and str(role.get("id") or "").strip() == selected_role_id
             for role in roles
         ):
             for role in roles:
@@ -1008,7 +1043,10 @@ def _apply_authorization_business_answers(
             if not isinstance(items, list):
                 continue
             for item in items:
-                if isinstance(item, dict) and str(item.get("ruleId") or "").strip() == rule_id:
+                if (
+                    isinstance(item, dict)
+                    and str(item.get("ruleId") or "").strip() == rule_id
+                ):
                     item["defaultGrantedRoleIds"] = selected_role_ids
                     answered_question_ids.add(str(question_id))
 
@@ -1032,8 +1070,7 @@ def _remove_answered_authorization_questions(
     remaining = [
         item
         for item in questions
-        if not isinstance(item, dict)
-        or item.get("id") not in answered_question_ids
+        if not isinstance(item, dict) or item.get("id") not in answered_question_ids
     ]
     if remaining:
         return {
@@ -1144,7 +1181,9 @@ def _confirmed_requirement_spec_update(
         "requirements_confirmed": True,
         "requirements_clarification_round": 0,
         "requirement_spec_path": str(state.get("requirement_spec_path") or ""),
-        "requirement_spec_json_path": str(state.get("requirement_spec_json_path") or ""),
+        "requirement_spec_json_path": str(
+            state.get("requirement_spec_json_path") or ""
+        ),
         "clarification": _requirement_spec_confirmed_payload(confirmed_spec),
         "timeline": ["requirements"],
     }
@@ -1153,9 +1192,8 @@ def _confirmed_requirement_spec_update(
 def _has_explicit_user_submission(state: ProjectState) -> bool:
     """创建规划只接受原生中断恢复写入的显式交互，其他调用保持原行为。"""
 
-    return (
-        state.get("workflow_scope") != "application_planning"
-        or bool(state.get("application_planning_interaction"))
+    return state.get("workflow_scope") != "application_planning" or bool(
+        state.get("application_planning_interaction")
     )
 
 
@@ -1221,7 +1259,9 @@ def _apply_menus_root_path_to_pages(spec: dict, state: ProjectState) -> None:
         if not app_file.is_file():
             return
         app_config = json.loads(app_file.read_text(encoding="utf-8"))
-        root_path = str((app_config.get("menus") or {}).get("rootPath", "") or "/").strip()
+        root_path = str(
+            (app_config.get("menus") or {}).get("rootPath", "") or "/"
+        ).strip()
         menus_enabled = bool((app_config.get("menus") or {}).get("enable"))
     except Exception:
         return
@@ -1279,7 +1319,9 @@ def _without_technical_datasource_questions(clarification: dict, spec: dict) -> 
     questions = clarification.get("questions")
     if not isinstance(questions, list):
         return clarification
-    filtered = [question for question in questions if not _is_datasource_question(question)]
+    filtered = [
+        question for question in questions if not _is_datasource_question(question)
+    ]
     if not filtered:
         return clear_clarification(spec)
     return {**clarification, "questions": filtered}

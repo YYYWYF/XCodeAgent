@@ -105,12 +105,20 @@ def inspect_java_sources(files: dict[str, str]) -> JavaAstModel:
         if root.has_error:
             raise JavaAstError(f"{language.upper()} AST parse failed: {path}")
         if language == "xml":
-            _collect_xml(root, source, xml_tags, xml_operation_ids, identifiers, literals)
+            _collect_xml(
+                root, source, xml_tags, xml_operation_ids, identifiers, literals
+            )
             continue
         for node in _walk(root):
             if node.type in {"identifier", "type_identifier"}:
                 identifiers.add(_text(node, source))
-            if node.type in {"string_literal", "decimal_integer_literal", "true", "false", "null_literal"}:
+            if node.type in {
+                "string_literal",
+                "decimal_integer_literal",
+                "true",
+                "false",
+                "null_literal",
+            }:
                 literals.add(_literal(node, source))
         types.extend(_java_types(root, source, path))
     return JavaAstModel(
@@ -126,7 +134,12 @@ def _java_types(root: Any, source: bytes, source_path: str) -> list[JavaType]:
     """提取顶层与嵌套 Java 类型及其直接成员。"""
 
     result: list[JavaType] = []
-    supported = {"class_declaration", "interface_declaration", "enum_declaration", "record_declaration"}
+    supported = {
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "record_declaration",
+    }
     for node in _walk(root):
         if node.type not in supported:
             continue
@@ -173,7 +186,11 @@ def _fields(node: Any, source: bytes) -> list[JavaField]:
         name = child.child_by_field_name("name")
         if name is not None:
             result.append(
-                JavaField(name=_text(name, source), type_name=type_name, annotations=annotations)
+                JavaField(
+                    name=_text(name, source),
+                    type_name=type_name,
+                    annotations=annotations,
+                )
             )
     return result
 
@@ -187,14 +204,26 @@ def _method(node: Any, source: bytes) -> JavaMethod:
     parameters: list[JavaParameter] = []
     if parameters_node is not None:
         for parameter in parameters_node.named_children:
-            if parameter.type not in {"formal_parameter", "spread_parameter", "receiver_parameter"}:
+            if parameter.type not in {
+                "formal_parameter",
+                "spread_parameter",
+                "receiver_parameter",
+            }:
                 continue
             parameter_name = parameter.child_by_field_name("name")
             parameter_type = parameter.child_by_field_name("type")
             parameters.append(
                 JavaParameter(
-                    name=_text(parameter_name, source) if parameter_name is not None else "",
-                    type_name=_text(parameter_type, source) if parameter_type is not None else "",
+                    name=(
+                        _text(parameter_name, source)
+                        if parameter_name is not None
+                        else ""
+                    ),
+                    type_name=(
+                        _text(parameter_type, source)
+                        if parameter_type is not None
+                        else ""
+                    ),
                     annotations=_annotations(parameter, source),
                 )
             )
@@ -206,7 +235,13 @@ def _method(node: Any, source: bytes) -> JavaMethod:
     for child in _walk(node):
         if child.type in {"identifier", "type_identifier"}:
             identifiers.add(_text(child, source))
-        if child.type in {"string_literal", "decimal_integer_literal", "true", "false", "null_literal"}:
+        if child.type in {
+            "string_literal",
+            "decimal_integer_literal",
+            "true",
+            "false",
+            "null_literal",
+        }:
             literals.add(_literal(child, source))
         if child.type == "method_invocation":
             object_node = child.child_by_field_name("object")
@@ -214,10 +249,18 @@ def _method(node: Any, source: bytes) -> JavaMethod:
             arguments = child.child_by_field_name("arguments")
             calls.append(
                 JavaCall(
-                    object_name=_text(object_node, source) if object_node is not None else "",
-                    method=_text(method_node, source) if method_node is not None else "",
+                    object_name=(
+                        _text(object_node, source) if object_node is not None else ""
+                    ),
+                    method=(
+                        _text(method_node, source) if method_node is not None else ""
+                    ),
                     arguments=_text(arguments, source) if arguments is not None else "",
-                    strings=[_literal(item, source) for item in _walk(child) if item.type == "string_literal"],
+                    strings=[
+                        _literal(item, source)
+                        for item in _walk(child)
+                        if item.type == "string_literal"
+                    ],
                 )
             )
         if child.type == "local_variable_declaration":
@@ -251,7 +294,9 @@ def _method(node: Any, source: bytes) -> JavaMethod:
 def _annotations(node: Any, source: bytes) -> list[JavaAnnotation]:
     """读取声明 modifiers 中的直接注解。"""
 
-    modifiers = next((child for child in node.named_children if child.type == "modifiers"), None)
+    modifiers = next(
+        (child for child in node.named_children if child.type == "modifiers"), None
+    )
     result: list[JavaAnnotation] = []
     if modifiers is None:
         return result
@@ -261,13 +306,25 @@ def _annotations(node: Any, source: bytes) -> list[JavaAnnotation]:
         name_node = annotation.child_by_field_name("name")
         if name_node is None:
             name_node = next(
-                (child for child in annotation.named_children if child.type in {"identifier", "scoped_identifier"}),
+                (
+                    child
+                    for child in annotation.named_children
+                    if child.type in {"identifier", "scoped_identifier"}
+                ),
                 None,
             )
         result.append(
             JavaAnnotation(
-                name=_text(name_node, source).rsplit(".", 1)[-1] if name_node is not None else "",
-                strings=[_literal(item, source) for item in _walk(annotation) if item.type == "string_literal"],
+                name=(
+                    _text(name_node, source).rsplit(".", 1)[-1]
+                    if name_node is not None
+                    else ""
+                ),
+                strings=[
+                    _literal(item, source)
+                    for item in _walk(annotation)
+                    if item.type == "string_literal"
+                ],
                 arguments=_annotation_arguments(annotation, source),
                 text=_text(annotation, source),
             )
@@ -309,17 +366,25 @@ def _collect_xml(
         if node.type not in {"element", "self_closing_tag"}:
             continue
         start_tag = next(
-            (child for child in node.named_children if child.type in {"STag", "EmptyElemTag"}),
+            (
+                child
+                for child in node.named_children
+                if child.type in {"STag", "EmptyElemTag"}
+            ),
             node if node.type == "self_closing_tag" else None,
         )
         if start_tag is None:
             continue
-        name_node = next((child for child in start_tag.named_children if child.type == "Name"), None)
+        name_node = next(
+            (child for child in start_tag.named_children if child.type == "Name"), None
+        )
         if name_node is None:
             continue
         tag = _text(name_node, source).casefold()
         tags.add(tag)
-        for attribute in (child for child in _walk(start_tag) if child.type == "Attribute"):
+        for attribute in (
+            child for child in _walk(start_tag) if child.type == "Attribute"
+        ):
             parts = attribute.named_children
             if not parts:
                 continue
@@ -348,4 +413,8 @@ def _literal(node: Any, source: bytes) -> str:
     """移除 Java/XML 简单字面量的外围引号。"""
 
     text = _text(node, source).strip()
-    return text[1:-1] if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"} else text
+    return (
+        text[1:-1]
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}
+        else text
+    )

@@ -20,6 +20,7 @@ from app.services.build_task_planner import (
 from app.services.application_template_generation import (
     inspect_template_generation_readiness,
 )
+from app.services.authorization_overlay import compile_authorization_overlay
 from app.services.engineering_acceptance import compile_engineering_acceptance
 from app.services.build_task_progress import (
     build_task_artifacts,
@@ -193,6 +194,39 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             f"涉及 {len(build_context.get('required_unit_ids') or [])} 个 Unit、"
             f"{len(build_context.get('endpoint_ids') or [])} 个 Endpoint。"
         ),
+        build_task_plan=build_task_plan,
+        output=project_build_context_output(build_context, build_task_plan),
+    )
+
+    progress.start("authorization_overlay", "正在按当前 Unit 编译只读权限 Overlay。")
+    try:
+        build_context = compile_authorization_overlay(project_plan, build_context)
+    except ValueError as exc:
+        attempt_plan = _build_task_plan_attempt_view(
+            build_task_plan,
+            build_execution_scope,
+        )
+        progress.fail(
+            "authorization_overlay",
+            f"权限 Overlay 编译失败：{exc}",
+            build_task_plan=attempt_plan,
+            output=project_build_context_output({}, attempt_plan),
+        )
+        return {
+            "phase": "prepare_build_tasks",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "build_task_plan": attempt_plan,
+            "build_execution_scope": build_execution_scope,
+            "build_task_plan_persisted": False,
+            "dag_generation_progress": progress.snapshot(),
+            "clarification": _build_context_error_payload(str(exc)),
+            "timeline": ["prepare_build_tasks"],
+            **formal_artifact_state,
+        }
+    progress.complete(
+        "authorization_overlay",
+        "已完成当前 Unit 的只读权限切片编译。",
         build_task_plan=build_task_plan,
         output=project_build_context_output(build_context, build_task_plan),
     )
@@ -419,6 +453,27 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "confirmation_status": "pending",
         "confirmed_at": None,
     }
+    authorization_constraints = build_context.get("authorization_constraints")
+    route_guard_projection = (
+        authorization_constraints.get("routeGuardProjection")
+        if isinstance(authorization_constraints, dict)
+        else None
+    )
+    if route_guard_projection is None:
+        build_task_plan.pop("authorization_route_projection", None)
+    else:
+        # 路由投影属于待确认 DAG 的平台事实，不能交由 Page Agent 生成或修改。
+        build_task_plan["authorization_route_projection"] = route_guard_projection
+    auth_constants_projection = (
+        authorization_constraints.get("authConstantsProjection")
+        if isinstance(authorization_constraints, dict)
+        else None
+    )
+    if auth_constants_projection is None:
+        build_task_plan.pop("authorization_constants_projection", None)
+    else:
+        # 操作资源常量由平台统一写入模板托管区，Endpoint Agent 只能引用它们。
+        build_task_plan["authorization_constants_projection"] = auth_constants_projection
     progress.start("artifact_persistence", "正在保存待确认的 JSON Build Task Plan。")
     try:
         build_task_plan_path = write_build_task_plan_json(state, build_task_plan)

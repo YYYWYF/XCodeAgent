@@ -41,6 +41,9 @@ class TemplateDownloadTarget(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
     attempt: int = Field(ge=0, le=3)
     error: str | None = Field(default=None, max_length=8192)
+    repository_url: str | None = Field(default=None, alias="repositoryUrl", max_length=4096)
+    branch: Literal["main", "auth"] | None = None
+    commit_sha: str | None = Field(default=None, alias="commitSha", min_length=7, max_length=128)
 
 
 class TemplateDownloadResult(BaseModel):

@@ -10,7 +10,11 @@ import { getBackendBaseUrl, startBackendService, stopBackendService } from './ba
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { lstatIfPresent, movePathToTrashIfPresent, removeDirectoryIfPresent } from './filesystem'
-import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
+import {
+  assertCurrentApplicationSchema,
+  readManagedWorkspaceApplication,
+  resolveApplicationTemplateBranch
+} from './managedWorkspace'
 import {
   endpointDesignDocumentExists,
   PRODUCT_PLAN_SCHEMA_VERSION
@@ -1512,6 +1516,9 @@ function setupWorkspaceIpc(): void {
     attempt: number
     path: string
     error?: string
+    repositoryUrl?: string
+    branch?: 'main' | 'auth'
+    commitSha?: string
   }
 
   /** 判断模板目录是否包含可识别的工程入口文件。 */
@@ -1533,13 +1540,14 @@ function setupWorkspaceIpc(): void {
   async function cloneGitRepo(
     templateUrl: string,
     projectPath: string,
-    targetDirName: string
+    targetDirName: string,
+    templateBranch: 'main' | 'auth'
   ): Promise<TemplateCloneTargetResult> {
     const targetDir = path.join(projectPath, targetDirName)
     await fs.mkdir(path.dirname(targetDir), { recursive: true })
 
     if (await isTemplateDirectoryReady(targetDir, targetDirName)) {
-      return { status: 'succeeded', attempt: 0, path: targetDir }
+      return readExistingTemplateSource(targetDir, targetDirName, templateUrl, templateBranch)
     }
 
     const existing = await lstatIfPresent(targetDir)
@@ -1568,7 +1576,7 @@ function setupWorkspaceIpc(): void {
         await new Promise<void>((resolve, reject) => {
           execFile(
             'git',
-            ['clone', '--depth', '1', templateUrl, targetDir],
+            ['clone', '--branch', templateBranch, '--single-branch', '--depth', '1', templateUrl, targetDir],
             {
               timeout: 120000,
               maxBuffer: 10 * 1024 * 1024,
@@ -1592,8 +1600,7 @@ function setupWorkspaceIpc(): void {
           throw new Error(`git clone 完成，但 ${targetDirName} 模板缺少工程入口文件。`)
         }
         cloneError = null
-        await removeDirectoryIfPresent(path.join(targetDir, '.git'))
-        return { status: 'succeeded', attempt, path: targetDir }
+        return readExistingTemplateSource(targetDir, targetDirName, templateUrl, templateBranch, attempt)
       } catch (error) {
         cloneError = error instanceof Error ? error : new Error(String(error))
       }
@@ -1616,6 +1623,46 @@ function setupWorkspaceIpc(): void {
     }
   }
 
+  /** 读取并校验现有浅克隆的来源、分支和提交，避免混用或覆盖模板。 */
+  async function readExistingTemplateSource(
+    targetDir: string,
+    targetDirName: string,
+    expectedUrl: string,
+    expectedBranch: 'main' | 'auth',
+    attempt = 0
+  ): Promise<TemplateCloneTargetResult> {
+    const readGit = (args: string[]): Promise<string> =>
+      new Promise((resolve, reject) => {
+        execFile('git', ['-C', targetDir, ...args], { windowsHide: true }, (error, stdout, stderr) => {
+          if (error) {
+            reject(new Error(`${targetDirName} 模板来源无法验证：${stderr || error.message}`))
+            return
+          }
+          resolve(stdout.trim())
+        })
+      })
+    try {
+      const [repositoryUrl, branch, commitSha] = await Promise.all([
+        readGit(['config', '--get', 'remote.origin.url']),
+        readGit(['branch', '--show-current']),
+        readGit(['rev-parse', 'HEAD'])
+      ])
+      if (repositoryUrl !== expectedUrl || branch !== expectedBranch || !commitSha) {
+        throw new Error(
+          `${targetDirName} 模板来源不匹配：期望 ${expectedUrl}@${expectedBranch}，实际 ${repositoryUrl || 'unknown'}@${branch || 'detached'}。`
+        )
+      }
+      return { status: 'succeeded', attempt, path: targetDir, repositoryUrl, branch: expectedBranch, commitSha }
+    } catch (error) {
+      return {
+        status: 'failed',
+        attempt,
+        path: targetDir,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
   // 从远程模板仓库拉取前后端模板工程，放到 <项目位置>/frontend/ 和 <项目位置>/backend/ 下。
   ipcMain.handle('workspace:clone-template', async (_event, payload = {}) => {
     if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
@@ -1634,8 +1681,10 @@ function setupWorkspaceIpc(): void {
         : 'https://github.com/Hupy2118/springboot-template.git'
 
     const projectPath = path.resolve(payload.projectPath)
+    const applicationConfig = await readManagedWorkspaceApplication(projectPath)
+    const templateBranch = resolveApplicationTemplateBranch(applicationConfig)
 
-    const frontend = await cloneGitRepo(frontendUrl, projectPath, 'frontend')
+    const frontend = await cloneGitRepo(frontendUrl, projectPath, 'frontend', templateBranch)
     const backend =
       frontend.status === 'failed'
         ? {
@@ -1644,7 +1693,7 @@ function setupWorkspaceIpc(): void {
             path: path.join(projectPath, 'backend'),
             error: '前端模板下载失败，后端模板尚未开始下载。'
           }
-        : await cloneGitRepo(backendUrl, projectPath, 'backend')
+        : await cloneGitRepo(backendUrl, projectPath, 'backend', templateBranch)
     const failedTargets = (['frontend', 'backend'] as const).filter(
       (target) => ({ frontend, backend })[target].status === 'failed'
     )

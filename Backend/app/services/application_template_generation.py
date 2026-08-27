@@ -297,6 +297,9 @@ def _normalize_download_step(workspace: Path, value: dict[str, Any]) -> dict[str
             "path": target_name,
             "attempt": max(0, min(attempt, 3)),
             "error": error,
+            "repositoryUrl": str(raw.get("repositoryUrl") or "").strip() or None,
+            "branch": str(raw.get("branch") or "").strip() or None,
+            "commitSha": str(raw.get("commitSha") or "").strip() or None,
         }
     return {
         "status": "failed" if incomplete_targets else "succeeded",

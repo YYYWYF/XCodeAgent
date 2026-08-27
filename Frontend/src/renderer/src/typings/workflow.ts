@@ -658,6 +658,9 @@ export type TemplateDownloadTargetResult = {
   attempt: number
   path: string
   error?: string
+  repositoryUrl?: string
+  branch?: 'main' | 'auth'
+  commitSha?: string
 }
 
 export type TemplateDownloadResult = {

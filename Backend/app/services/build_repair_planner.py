@@ -567,6 +567,15 @@ def _repair_task(
                 if isinstance(parent_task.get("source_refs"), dict)
                 else {}
             ),
+            # 权限切片必须作为 Repair Task 的直接只读来源，不能只埋在 parent 下。
+            **(
+                {
+                    "authorization": dict(parent_task["source_refs"]["authorization"])
+                }
+                if isinstance(parent_task.get("source_refs"), dict)
+                and isinstance(parent_task["source_refs"].get("authorization"), dict)
+                else {}
+            ),
             "repair": source_ref,
         },
         "repairs": {

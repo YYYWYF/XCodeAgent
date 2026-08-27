@@ -441,6 +441,13 @@ def _is_template_boundary_path(value: Any) -> bool:
     return normalized in _TEMPLATE_BOUNDARY_PATHS
 
 
+def _is_auth_constants_path(value: Any) -> bool:
+    """识别模板拥有的 AuthConstants 文件，禁止模型任务将其纳入写入范围。"""
+
+    normalized = str(value or "").strip().replace("\\", "/").lower()
+    return normalized.endswith("/authconstants.java") or normalized == "authconstants.java"
+
+
 def _is_template_page_entry_path(value: Any) -> bool:
     """判断路径是否是模板初始化负责创建的页面入口文件。"""
 
@@ -665,6 +672,24 @@ def build_task_candidate_contract_errors(
         if not isinstance(task, dict):
             continue
         task_id = _text(task.get("id"), f"tasks[{task_index}]")
+        source_refs = task.get("source_refs")
+        if isinstance(source_refs, dict) and "authorization" in source_refs:
+            errors.append(
+                f"Task {task_id} must not output platform-owned source_refs.authorization."
+            )
+        if "authorization_constraints" in task or "authorization" in task:
+            errors.append(
+                f"Task {task_id} must not output platform-owned authorization fields."
+            )
+        candidate_paths = [
+            str(change.get("path") or "")
+            for change in task.get("change_scope") or []
+            if isinstance(change, dict)
+        ] + _string_list(task.get("allowed_paths"))
+        if any(_is_auth_constants_path(path) for path in candidate_paths):
+            errors.append(
+                f"Task {task_id} must not modify platform-owned AuthConstants."
+            )
         owner = _text(task.get("owner"))
         unit_id = _text(task.get("unit_id"))
         task_kind = _text(task.get("kind"))
@@ -833,6 +858,7 @@ def _task_semantic_errors(
     """校验 DAG 拓扑之外的任务边界、owner、Unit、数据库职责和审批语义。"""
 
     errors: list[str] = []
+    errors.extend(_authorization_coverage_errors(tasks, build_context))
     required_unit_ids = _string_list(build_context.get("required_unit_ids"))
     validate_task_scope = build_context.get("_validate_task_scope", True) is not False
     allow_missing_deliverable_task_ids = set(
@@ -884,6 +910,48 @@ def _task_semantic_errors(
         )
         errors.extend(engineering_acceptance_contract_errors(task))
     return errors
+
+
+def _authorization_coverage_errors(
+    tasks: list[dict[str, Any]], build_context: dict[str, Any]) -> list[str]:
+    """校验 Final DAG 已完整覆盖平台编译的页面和 Endpoint 权限事实。"""
+
+    constraints = build_context.get("authorization_constraints")
+    if not isinstance(constraints, dict):
+        return []
+    errors: list[str] = []
+    units = {str(task.get("unit_id") or "") for task in tasks}
+    task_paths = [
+        path
+        for task in tasks
+        for path in _task_scope_paths(task)
+    ]
+    for page in _dict_items(constraints.get("pages")):
+        page_id = _text(page.get("pageId"))
+        if page_id and f"page:{page_id}" not in units:
+            errors.append(f"Authorization page {page_id} is missing its page Unit task.")
+    for endpoint in _dict_items(constraints.get("endpoints")):
+        keys = _string_list(endpoint.get("operationResourceKeys"))
+        contract_id = _text(endpoint.get("apiContractId"))
+        endpoint_id = _text(endpoint.get("endpointId"))
+        unit_id = f"backend:endpoint:{contract_id}:{endpoint_id}"
+        if keys and unit_id not in units:
+            errors.append(f"Authorization endpoint {contract_id}:{endpoint_id} is missing its Controller Unit task.")
+    if any(_is_template_boundary_path(path) for path in task_paths):
+        errors.append("Build tasks must not modify platform-owned shared route or menu files.")
+    if any(_is_auth_constants_path(path) for path in task_paths):
+        errors.append("Build tasks must not modify platform-owned AuthConstants.")
+    return errors
+
+
+def _task_scope_paths(task: dict[str, Any]) -> list[str]:
+    """提取任务声明的变更与允许路径，供平台边界校验复用。"""
+
+    return [
+        str(item.get("path") or "")
+        for item in task.get("change_scope") or []
+        if isinstance(item, dict) and str(item.get("path") or "")
+    ] + _string_list(task.get("allowed_paths"))
 
 
 def _required_bootstrap_task_errors(

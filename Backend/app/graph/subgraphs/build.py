@@ -30,6 +30,15 @@ from app.services.build_repair_planner import (
 )
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
+from app.services.authorization_route_projection import (
+    AuthorizationRouteProjectionError,
+    apply_authorization_route_projection,
+)
+from app.services.authorization_constants_projection import (
+    AuthorizationConstantsProjectionError,
+    apply_authorization_constants_projection,
+)
+from app.services.authorization_edd import verify_authorization_edd
 from app.services.business_acceptance_verifier import verify_business_acceptance
 from app.services.engineering_acceptance_verifier import (
     unauthorized_batch_paths,
@@ -1004,6 +1013,30 @@ def run_build_scheduler(
     build_task_plan, gate_errors = _latest_build_task_plan_for_build(state)
     if gate_errors:
         return _build_gate_result(state, build_task_plan, gate_errors)
+    try:
+        # 用户确认 DAG 后、叶子任务分发前由平台写入共享 RouteGuard 托管区。
+        apply_authorization_route_projection(
+            workspace_from_state(state) or "",
+            build_task_plan.get("authorization_route_projection"),
+        )
+    except (AuthorizationRouteProjectionError, OSError) as exc:
+        return _build_gate_result(
+            state,
+            build_task_plan,
+            [f"共享 RouteGuard 投影写入失败，Build 已阻断：{exc}"],
+        )
+    try:
+        # 平台常量先于 Endpoint 任务写入，保证 Controller 仅引用已存在的稳定符号。
+        apply_authorization_constants_projection(
+            workspace_from_state(state) or "",
+            build_task_plan.get("authorization_constants_projection"),
+        )
+    except (AuthorizationConstantsProjectionError, OSError, ValueError) as exc:
+        return _build_gate_result(
+            state,
+            build_task_plan,
+            [f"AuthConstants 投影写入失败，Build 已阻断：{exc}"],
+        )
     # 当前契约直接使用最新计划，不对历史 DAG 做运行时迁移或字段回填。
     canonical_tasks = list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
     build_task_plan = replace_build_task_plan_tasks(build_task_plan, canonical_tasks)
@@ -1459,6 +1492,14 @@ def run_build_scheduler(
         if build_summary.get("status") == "requires_confirmation"
         else "failed"
     )
+    if workflow_status == "completed":
+        edd_errors = verify_authorization_edd(
+            workspace_from_state(state) or "",
+            current_state.get("build_task_plan", build_task_plan),
+        )
+        if edd_errors:
+            workflow_status = "failed"
+            build_summary = {**build_summary, "status": "failed", "authorization_edd_errors": edd_errors}
     clarification = (
         _repair_scope_confirmation_payload(repair_task_plan)
         if isinstance(repair_task_plan, dict)

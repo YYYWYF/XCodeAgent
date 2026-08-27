@@ -5,6 +5,8 @@ from hashlib import sha256
 import json
 from typing import Any
 
+from app.services.authorization_overlay import unit_authorization_slice
+
 
 def apply_unit_compilation(
     build_task_plan: dict[str, Any],
@@ -47,6 +49,11 @@ def annotate_unit_inputs(
         task_ids = _string_list(unit.get("task_ids"))
         if unit_id in required_unit_ids:
             source_refs = _unit_source_refs(unit_id, unit, build_context)
+            authorization = unit_authorization_slice(unit_id, build_context)
+            if authorization is not None:
+                source_refs["authorization"] = authorization
+            else:
+                source_refs.pop("authorization", None)
             unit["source_refs"] = source_refs
             unit["input_fingerprint"] = _stable_fingerprint(
                 _unit_fingerprint_payload(unit_id, source_refs, build_context)
@@ -76,6 +83,12 @@ def _with_task_unit_metadata(
         **canonical_source_refs,
         **provided_source_refs,
     }
+    # 权限 Overlay 是平台拥有的只读事实，模型候选不得提交或覆盖同名来源字段。
+    authorization = unit_authorization_slice(unit_id, build_context)
+    if authorization is not None:
+        source_refs["authorization"] = authorization
+    else:
+        source_refs.pop("authorization", None)
     # entity_designs 是来源隔离的确定性输入，不能被模型返回的未过滤引用覆盖；
     # endpoint 任务按固定任务 ID 推导实体子集，只暴露本任务真正实现的实体设计。
     if (
