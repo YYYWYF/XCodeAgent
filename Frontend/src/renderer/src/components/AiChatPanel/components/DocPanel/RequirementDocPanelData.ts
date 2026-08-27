@@ -29,6 +29,23 @@ export type RequirementPageRow = {
   acceptanceCriteria: string[]
 }
 
+export type RequirementAgentRow = {
+  key: string
+  agentId: string
+  name: string
+  purpose: string
+  capabilities: Array<{ key: string; name: string; expectedResult: string }>
+  entryPageIds: string[]
+  pageActionBindings: Array<{ key: string; pageId: string; actionIds: string[] }>
+  interactionMode: string
+  supportsMultiTurn: boolean
+  inputDescription: string
+  outputDescription: string
+  stateRequirements: Array<{ key: string; label: string; description: string }>
+  boundaries: string[]
+  acceptanceCriteria: string[]
+}
+
 const STATE_REQUIREMENT_LABELS: Record<string, string> = {
   loading: '加载中',
   empty: '空状态',
@@ -36,6 +53,62 @@ const STATE_REQUIREMENT_LABELS: Record<string, string> = {
   disabled: '禁用',
   success: '成功',
   validation: '校验'
+}
+
+/** 把 ProductPlan 智能体契约拍平为确认视图；产品规划缺失时回退展示需求智能体摘要。 */
+export function requirementAgentRows(
+  productPlan: JsonRecord,
+  spec: JsonRecord
+): RequirementAgentRow[] {
+  const plannedAgents = recordItems(productPlan.agents)
+  const sourceAgents = plannedAgents.length ? plannedAgents : recordItems(spec.agent_requirements)
+  return sourceAgents.map((agent, index) => {
+    const agentId = textValue(agent.agentId, `agent-${index + 1}`)
+    const interaction = asRecord(agent.interaction)
+    const capabilityRecords = recordItems(agent.capabilities)
+    const capabilityNames = capabilityRecords.length ? [] : stringItems(agent.capabilities)
+    const capabilities = capabilityRecords.length
+      ? capabilityRecords.map((capability, capabilityIndex) => ({
+          key: textValue(capability.capabilityId, `${agentId}-capability-${capabilityIndex + 1}`),
+          name: textValue(capability.name, `能力 ${capabilityIndex + 1}`),
+          expectedResult: textValue(capability.expectedResult)
+        }))
+      : capabilityNames.map((name, capabilityIndex) => ({
+          key: `${agentId}-capability-${capabilityIndex + 1}`,
+          name,
+          expectedResult: ''
+        }))
+    const stateRequirements = Object.entries(asRecord(interaction.stateRequirements)).map(
+      ([stateKey, description]) => ({
+        key: stateKey,
+        label: STATE_REQUIREMENT_LABELS[stateKey] || stateKey,
+        description: textValue(description)
+      })
+    )
+    return {
+      key: agentId,
+      agentId,
+      name: textValue(agent.name, `智能体 ${index + 1}`),
+      purpose: textValue(agent.purpose),
+      capabilities,
+      entryPageIds: stringItems(agent.entryPageIds),
+      pageActionBindings: recordItems(agent.pageActionBindings).map((binding, bindingIndex) => {
+        const pageId = textValue(binding.pageId, `${agentId}-page-${bindingIndex + 1}`)
+        return {
+          key: pageId,
+          pageId,
+          actionIds: stringItems(binding.actionIds)
+        }
+      }),
+      interactionMode: textValue(interaction.mode) || textValue(agent.interactionMode),
+      supportsMultiTurn: Boolean(interaction.supportsMultiTurn),
+      inputDescription: textValue(interaction.inputDescription),
+      outputDescription: textValue(interaction.outputDescription),
+      stateRequirements,
+      boundaries: stringItems(agent.boundaries),
+      acceptanceCriteria: stringItems(agent.acceptanceCriteria)
+    }
+  })
 }
 
 /** 把产品规划页面拍平为右侧面板可直接渲染的行结构，缺失字段一律降级为空态文案。 */

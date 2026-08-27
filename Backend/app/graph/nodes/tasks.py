@@ -1297,6 +1297,7 @@ def _resolve_build_context(
         "direct_endpoint_contracts": [],
         "endpoint_ids": [],
         "entity_ids": [],
+        "agent_contracts": list(project_plan.get("agent_contracts") or []),
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
@@ -1374,6 +1375,11 @@ def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> d
             else None
         ),
         "architecture": _scoped_task_architecture(project_plan, mode, build_context),
+        "agent_contracts": (
+            project_plan.get("agent_contracts", [])
+            if mode == "combined"
+            else []
+        ),
         "project_acceptance_criteria": (
             project_plan.get("project_acceptance_criteria")
             if mode == "combined"

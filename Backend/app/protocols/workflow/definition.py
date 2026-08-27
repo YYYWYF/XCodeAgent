@@ -200,6 +200,7 @@ def workflow_capabilities() -> dict[str, Any]:
                 "frontend",
                 "data_source",
                 "database",
+                "agent_runtime",
                 "repair_planner",
                 "small_task",
                 "workspace_assistant",

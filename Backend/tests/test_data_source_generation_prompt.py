@@ -560,6 +560,45 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertNotIn("PROMPT_SAMPLE_KEYWORD", prompt)
         self.assertNotIn("PROMPT_SAMPLE_PRODUCT", prompt)
 
+    def test_agent_gateway_endpoint_receives_matching_agent_contract(self) -> None:
+        """Java Agent 网关任务只能收到以当前 Endpoint 为入口的 Agent Contract。"""
+
+        task = _task(designs=[{"entity_id": "Category", "data_source_type": "database"}])
+        project_plan = _project_plan()
+        project_plan["agent_contracts"] = [
+            {
+                "agentId": "category_assistant",
+                "invocation": {
+                    "gatewayEndpointId": "category.create",
+                    "internalPath": "/internal/agents/category_assistant/run",
+                    "transport": "ag-ui-sse",
+                },
+            },
+            {
+                "agentId": "unrelated_assistant",
+                "invocation": {
+                    "gatewayEndpointId": "weather.get",
+                    "internalPath": "/internal/agents/unrelated_assistant/run",
+                    "transport": "ag-ui-sse",
+                },
+            },
+        ]
+
+        context = task_implementation_contract(project_plan, task)
+        prompt = _data_source_generation_prompt(
+            project_plan=project_plan,
+            workspace_snapshot=_workspace_snapshot(),
+            tasks=[task],
+        )
+
+        self.assertEqual(
+            [item["agentId"] for item in context["agent_contracts"]],
+            ["category_assistant"],
+        )
+        self.assertIn("AG-UI SSE public stream", prompt)
+        self.assertIn("/internal/agents/category_assistant/run", prompt)
+        self.assertNotIn("unrelated_assistant", prompt)
+
     def test_execution_packet_drops_scheduler_only_fields(self) -> None:
         """最小任务包不携带验收、状态和影响分析等调度字段。"""
 

@@ -510,7 +510,7 @@ system_authorization_management  system
 
 ### ProductPlan 与 TechnicalPlan 衔接
 
-ProductPlan 使用 `product-plan.v5`，不保存资源键、策略键或角色矩阵。
+ProductPlan 使用 `product-plan.v6`，不保存资源键、策略键或角色矩阵。
 
 确定性约束：
 
@@ -800,7 +800,7 @@ deleteSubjectAuthorization
 
 主要入口：ProductPlan 生成/校验、ProductPlan Markdown、UI 设计生成池和确认面板。
 
-步骤状态：部分实施。`product-plan.v5` 和业务页面/action 映射基线已经落地；操作目标闭合、联合确认门禁和资源键碰撞校验仍需在本步骤完成并独立验收。
+步骤状态：部分实施。`product-plan.v6` 和业务页面/action 映射基线已经落地；操作目标闭合、联合确认门禁和资源键碰撞校验仍需在本步骤完成并独立验收。
 
 - 页面候选通过已确认的 `targetPageId` 映射稳定业务页面，绝不按页面展示名称猜测；操作候选只映射稳定顶层 action；sequence 的 `stepId` 不进入权限目标。
 - ProductPlan 不保存角色、角色关系、资源键、策略键或固定权限管理页。
@@ -811,7 +811,7 @@ deleteSubjectAuthorization
 - 联合确认前构造全部受控 `pageId`、全部受控 `<pageId>_<actionId>` 和 `system_authorization_management` 候选并执行全局唯一校验；冲突必须精确回灌修复，不能追加类型前缀、数字或随机后缀。
 - 清除 ProductPlan planner、Markdown、UiDesign 输入和相关测试中的旧角色示例、点号资源前缀、PageKey 权限字段、operationKey 和 step 权限字段。
 
-已有实施结果：`product-plan.v5` 不再持久化 `user_roles` 或页面 `allowed_roles`，当前服务以 `restrictedPages[].targetPageId` 直接映射页面，并将 `restrictedOperations` 映射为顶层 action。页面展示名称变化不会影响权限目标；目标被删除、映射被篡改、联合确认哈希不匹配或资源候选发生碰撞都会阻止确认；映射不包含角色、资源键、策略键或 `stepId`，也不会在 ProductPlan Markdown 或 UiDesign 中展示为角色判断。
+已有实施结果：`product-plan.v6` 不再持久化 `user_roles` 或页面 `allowed_roles`，当前服务以 `restrictedPages[].targetPageId` 直接映射页面，并将 `restrictedOperations` 映射为顶层 action。页面展示名称变化不会影响权限目标；目标被删除、映射被篡改、联合确认哈希不匹配或资源候选发生碰撞都会阻止确认；映射不包含角色、资源键、策略键或 `stepId`，也不会在 ProductPlan Markdown 或 UiDesign 中展示为角色判断。
 
 启动验收：
 
@@ -1325,7 +1325,7 @@ customer.is_primary_owner(subject.id, order.customer_id)
 - 模板分支由已持久化的权限开关唯一确定：关闭使用 `main`，开启使用 `auth`；前后端必须成对使用同一分支，调用方不能自由指定分支。
 - 后端 `auth` 模板提供权限表、数据访问和启动初始化扩展点；步骤 6 不生成运行时源码，步骤 7 不生成 DDL、Flyway migration、MyBatis Mapper 或额外持久化依赖，只将已确认权限约束覆盖到现有 Build Task 并驱动模板首次启动初始化。
 - 不增加用户可选 tag、SHA 或分支；模板生成 manifest 仅记录本次 `main`/`auth` 分支实际拉取的 commit SHA，用于来源核验和安全复用。
-- ProductPlan 使用 `product-plan.v5`，不保存 `resourceKey`、`policyKey` 或角色字段；`policyKey` 在 V1 中属于不支持字段。
+- ProductPlan 使用 `product-plan.v6`，不保存 `resourceKey`、`policyKey` 或角色字段；`policyKey` 在 V1 中属于不支持字段。
 - ProductPlan 的权限操作目标固定为顶层 `{ruleId,pageId,actionId}`；sequence 的 `stepId` 只描述父 action 内部步骤，不进入权限资源、投影或 Endpoint 绑定。
 - 页面、操作和系统资源共用全局 `resourceKey` 空间：页面使用 `pageId`，操作使用 `<pageId>_<actionId>`；`type` 只分类，跨类型碰撞必须在联合确认和 TechnicalPlan 编译时拒绝。
 - 同一 Endpoint 的所有 business action 引用必须具有一致的操作权限属性：全部未受控时 `operationResourceKeys=[]`，全部受控时才聚合 `operationResourceKeys` 并按 ANY-OF 裁决；受控与未受控混用时以 `ENDPOINT_AUTHORIZATION_MIXED_CONTROL` 阻止编译并要求拆分 Endpoint，禁止依赖调用来源字段区分授权语义。

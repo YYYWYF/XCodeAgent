@@ -1108,6 +1108,51 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertFalse(draft_markdown.exists())
         self.assertFalse(draft_json.exists())
 
+    def test_agent_suitability_question_blocks_before_requirement_draft(self) -> None:
+        """普通业务的智能体建议也必须等待回答，且不能提前生成需求草稿。"""
+
+        request = "创建一个业务系统，支持处理业务记录。"
+        spec = create_requirement_spec(request)
+        question = {
+            "header": "智能体建议",
+            "question": "是否需要加入智能体能力以协助现有业务？",
+            "type": "yesno",
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": spec,
+                    "clarification": {
+                        "mode": "ask_user_question",
+                        "status": "requires_user_input",
+                        "questions": [question],
+                    },
+                },
+            ):
+                result = requirements(
+                    {
+                        "request": request,
+                        "workspace": workspace,
+                        "timeline": [],
+                    }
+                )
+            draft_markdown = Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.md"
+            draft_json = Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.json"
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["clarification"]["mode"], "ask_user_question")
+        self.assertEqual(result["clarification"]["questions"], [question])
+        self.assertEqual(result["requirement_spec"]["agent_requirements"], [])
+        self.assertEqual(
+            result["requirement_spec"]["confirmation_status"],
+            "pending_user_input",
+        )
+        self.assertEqual(result["requirement_spec_path"], "")
+        self.assertEqual(result["requirement_spec_json_path"], "")
+        self.assertFalse(draft_markdown.exists())
+        self.assertFalse(draft_json.exists())
+
     def test_requirement_type_comes_from_static_application_config(self) -> None:
         """即使模型返回 database，Static 应用也必须投影为 static。"""
 

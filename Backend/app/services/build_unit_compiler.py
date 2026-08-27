@@ -336,6 +336,28 @@ def _unit_source_refs(
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
             "entity_designs": backend_designs,
         }
+    if unit_id.startswith("agent:"):
+        agent_id = unit_id.removeprefix("agent:")
+        agent_contracts = _dict_items(build_context.get("agent_contracts"))
+        matching_contracts = (
+            agent_contracts
+            if agent_id == "runtime"
+            else [
+                contract
+                for contract in agent_contracts
+                if str(contract.get("agentId") or "") == agent_id
+            ]
+        )
+        return {
+            **existing,
+            "type": (
+                "agent_runtime_bootstrap"
+                if agent_id == "runtime"
+                else "technical_plan_agent_contract"
+            ),
+            "target": {"type": "agent", "id": agent_id},
+            "agent_contracts": matching_contracts,
+        }
     return {
         **existing,
         "type": "application_unit",
@@ -379,6 +401,12 @@ def _unit_fingerprint_payload(
                 _entity_design_items(build_context.get("entity_designs")),
                 {"database", "external_api"},
             ),
+        }
+    if unit_id.startswith("agent:"):
+        return {
+            "unit_id": unit_id,
+            "source_refs": source_refs,
+            "agent_contracts": _dict_items(build_context.get("agent_contracts")),
         }
     return {
         "unit_id": unit_id,

@@ -28,6 +28,7 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 "frontend",
                 "data_source",
                 "database",
+                "agent_runtime",
                 "repair_planner",
                 "small_task",
                 "workspace_assistant",
@@ -75,6 +76,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             patch(
                 "app.agents.registry.create_database_agent",
                 side_effect=lambda model, **kwargs: ("database", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_agent_runtime_agent",
+                side_effect=lambda model, **kwargs: ("agent_runtime", kwargs),
             ),
             patch(
                 "app.agents.registry.create_repair_planner_agent",
@@ -162,6 +167,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 side_effect=lambda model, **kwargs: ("database", kwargs),
             ),
             patch(
+                "app.agents.registry.create_agent_runtime_agent",
+                side_effect=lambda model, **kwargs: ("agent_runtime", kwargs),
+            ),
+            patch(
                 "app.agents.registry.create_repair_planner_agent",
                 side_effect=lambda model, **kwargs: (
                     "repair_planner",
@@ -247,6 +256,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 side_effect=lambda model, **kwargs: ("database", kwargs),
             ),
             patch(
+                "app.agents.registry.create_agent_runtime_agent",
+                side_effect=lambda model, **kwargs: ("agent_runtime", kwargs),
+            ),
+            patch(
                 "app.agents.registry.create_repair_planner_agent",
                 side_effect=lambda model, **kwargs: ("repair", kwargs),
             ),
@@ -270,6 +283,7 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             first.frontend,
             first.data_source,
             first.database,
+            first.agent_runtime,
             first.repair_planner,
             first.small_task,
             first.workspace_assistant,

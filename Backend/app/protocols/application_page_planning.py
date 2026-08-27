@@ -84,7 +84,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "technicalPlanGenerationError": "technical_plan_generation_error",
         },
         "artifactSchemas": {
-            "product_plan": "product-plan.v5",
+            "product_plan": "product-plan.v6",
             "ui_designs": "ui-manifest.v3",
             "technical_plan": "technical-plan",
         },

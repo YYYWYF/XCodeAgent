@@ -20,6 +20,7 @@ from app.services.frontend_scaffold import (
     ensure_frontend_page_placeholders,
     inspect_frontend_menu_entries,
 )
+from app.services.product_plan import PRODUCT_PLAN_SCHEMA_VERSION
 TEMPLATE_GENERATION_MANIFEST_RELATIVE_PATH = Path(
     ".xcodeagent/template-generation-manifest.json"
 )
@@ -360,8 +361,10 @@ def _load_template_pages(workspace: Path) -> list[dict[str, Any]]:
     product_plan = _load_json_object(workspace / ".xcodeagent/plans/product-plan.json", "正式 ProductPlan")
     if product_plan.get("confirmation_status") != "confirmed":
         raise ApplicationTemplateGenerationError("正式 ProductPlan 尚未确认。")
-    if product_plan.get("schema_version") != "product-plan.v5":
-        raise ApplicationTemplateGenerationError("正式 ProductPlan 不是 product-plan.v5。")
+    if product_plan.get("schema_version") != PRODUCT_PLAN_SCHEMA_VERSION:
+        raise ApplicationTemplateGenerationError(
+            f"正式 ProductPlan 不是 {PRODUCT_PLAN_SCHEMA_VERSION}。"
+        )
     ui_designs = _load_json_object(workspace / ".xcodeagent/specs/ui-designs.json", "正式 UiDesign Manifest")
     if ui_designs.get("schema_version") != "ui-manifest.v3":
         raise ApplicationTemplateGenerationError("正式 UiDesign Manifest 不是 ui-manifest.v3。")

@@ -68,7 +68,7 @@ class ApplicationTemplateGenerationTests(unittest.TestCase):
             (root / "backend/pom.xml").write_text("<project/>", encoding="utf-8")
             (root / ".xcodeagent/plans").mkdir(parents=True)
             (root / ".xcodeagent/specs").mkdir(parents=True)
-            (root / ".xcodeagent/plans/product-plan.json").write_text('{"confirmation_status":"confirmed","schema_version":"product-plan.v5","pages":[{"pageId":"dashboard","name":"首页","path":"/dashboard"}]}', encoding="utf-8")
+            (root / ".xcodeagent/plans/product-plan.json").write_text('{"confirmation_status":"confirmed","schema_version":"product-plan.v6","pages":[{"pageId":"dashboard","name":"首页","path":"/dashboard"}]}', encoding="utf-8")
             (root / ".xcodeagent/specs/ui-designs.json").write_text('{"schema_version":"ui-manifest.v3","confirmation_status":"skipped"}', encoding="utf-8")
             manifest = prepare_application_template_generation(root, self._download("main"))
             validate_application_template_generation(root)
