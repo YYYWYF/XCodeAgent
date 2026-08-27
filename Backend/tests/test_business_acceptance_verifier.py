@@ -8,6 +8,7 @@ import unittest
 
 from app.services.business_acceptance import BUSINESS_ACCEPTANCE_KINDS, compile_business_acceptance
 from app.services.business_acceptance_verifier import verify_business_acceptance
+from app.services.business_acceptance_verifiers.backend_domain import verify_domain_mapping_source
 from app.services.business_acceptance_verifiers.typescript_inspection import (
     verify_api_contract_source,
 )
@@ -26,6 +27,67 @@ def _compiled_task(kind: str, path: str, *, unit_id: str = "frontend:api-client"
         target_id="orders.list" if kind == "backend.endpoint_controller" else "Order",
     )
     return compile_business_acceptance([task], context)[0], context["project_plan"]
+
+
+def _personal_info_domain_expected(method: str = "GET") -> dict:
+    """构造覆盖异名数据库列和 API DTO 的个人信息领域映射预期。"""
+
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "birthplace": {"type": "string"}},
+    }
+    return {
+        "entities": [
+            {
+                "entity_id": "personal_info",
+                "data_source_type": "database",
+                "database_table": "members",
+                "fields": [
+                    {"name": "name", "type": "text", "required": True, "enum_values": []},
+                    {"name": "birthplace", "type": "text", "required": False, "enum_values": []},
+                ],
+                "database_bindings": [
+                    {"entity_field": "name", "table": "members", "table_column": "name"},
+                    {"entity_field": "birthplace", "table": "members", "table_column": "native_place"},
+                ],
+            }
+        ],
+        "endpoints": [
+            {
+                "endpoint_id": "personal_info.list",
+                "method": method,
+                "request_schema": schema if method != "GET" else None,
+                "response_schema": schema,
+            }
+        ],
+    }
+
+
+def _personal_info_domain_sources() -> dict[str, str]:
+    """构造 JavaBean、MapStruct 和 MyBatis-Plus 协同映射的源码样本。"""
+
+    return {
+        "backend/src/domain/personalInfo/entity/PersonalInfo.java": (
+            "class PersonalInfo { private String name; private String birthplace; }"
+        ),
+        "backend/src/infrastructure/po/PersonalInfoPO.java": (
+            "@TableName(\"members\") class PersonalInfoPO { "
+            "private String name; private String nativePlace; }"
+        ),
+        "backend/src/application/personalInfo/dto/PersonalInfoDTO.java": (
+            "class PersonalInfoDTO { private String name; private String birthplace; }"
+        ),
+        "backend/src/infrastructure/converter/PersonalInfoConverter.java": (
+            "@Mapper interface PersonalInfoConverter { "
+            "@Mapping(source = \"nativePlace\", target = \"birthplace\") "
+            "PersonalInfo toEntity(PersonalInfoPO po); }"
+        ),
+        "backend/src/application/assembler/PersonalInfoAssembler.java": (
+            "class PersonalInfoAssembler { PersonalInfoDTO toDTO(PersonalInfo entity) { "
+            "PersonalInfoDTO dto = new PersonalInfoDTO(); dto.setName(entity.getName()); "
+            "dto.setBirthplace(entity.getBirthplace()); return dto; } }"
+        ),
+    }
 
 
 class BusinessAcceptanceVerifierTests(unittest.TestCase):
@@ -321,6 +383,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             "po": "backend/src/po/OrderPO.java",
             "dto": "backend/src/dto/OrderDTO.java",
             "converter": "backend/src/converter/OrderConverter.java",
+            "assembler": "backend/src/assembler/OrderAssembler.java",
         }
         task = _task(
             "backend.domain_mapping",
@@ -329,7 +392,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             unit_id="backend:orders",
             target_id="Order",
         )
-        for role in ("po", "dto", "converter"):
+        for role in ("po", "dto", "converter", "assembler"):
             path = paths[role]
             task["deliverables"].append(
                 {
@@ -347,13 +410,14 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         sources = {
             paths["entity"]: "class Order { private String id; private String status; }",
             paths["po"]: (
-                "class OrderPO { @TableField(\"order_id\") private String id; "
-                "private String status; }"
+                "@TableName(\"orders\") class OrderPO { "
+                "@TableField(\"order_id\") private String id; private String status; }"
             ),
             paths["dto"]: "class OrderDTO { private String id; private String status; }",
-            paths["converter"]: (
-                "class OrderConverter { Order toEntity(OrderPO po) { "
-                "return Order.builder().id(po.getId()).status(po.getStatus()).build(); } }"
+            paths["converter"]: "@Mapper interface OrderConverter { Order toEntity(OrderPO po); }",
+            paths["assembler"]: (
+                "class OrderAssembler { OrderDTO toDTO(Order entity) { OrderDTO dto = new OrderDTO(); "
+                "dto.setId(entity.getId()); dto.setStatus(entity.getStatus()); return dto; } }"
             ),
         }
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -369,6 +433,83 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
 
         self.assertEqual(len(compiled["business_acceptance_checks"]), 1)
         self.assertEqual(result["status"], "passed", result)
+
+    def test_domain_mapping_supports_java_bean_mapstruct_and_mybatis_camel_case(self) -> None:
+        """领域映射应接受 JavaBean、MapStruct 异名映射和 MyBatis-Plus 驼峰列策略。"""
+
+        result = verify_domain_mapping_source(
+            _personal_info_domain_sources(),
+            _personal_info_domain_expected(),
+        )
+
+        self.assertEqual(result["status"], "passed", result)
+        edges = result["facts"]["entities"][0]["conversion_edges"]
+        self.assertTrue(any(["nativePlace", "birthplace"] in edge["mappings"] for edge in edges))
+
+    def test_domain_mapping_rejects_missing_dto_field_per_layer(self) -> None:
+        """字段只存在于 Entity 或 PO 时不得替代 DTO 自身的字段证据。"""
+
+        sources = _personal_info_domain_sources()
+        sources["backend/src/application/personalInfo/dto/PersonalInfoDTO.java"] = (
+            "class PersonalInfoDTO { private String name; }"
+        )
+
+        result = verify_domain_mapping_source(sources, _personal_info_domain_expected())
+
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("DTO 缺少 API Schema 字段 birthplace", result["evidence"])
+
+    def test_domain_mapping_rejects_unrelated_column_literal(self) -> None:
+        """无关字符串字面量不得冒充 PO 字段上的数据库列映射。"""
+
+        expected = _personal_info_domain_expected()
+        expected["entities"][0]["database_bindings"][1]["table_column"] = "legacy_place"
+        sources = _personal_info_domain_sources()
+        sources["backend/src/infrastructure/converter/PersonalInfoConverter.java"] += (
+            ' class Unrelated { String value = "legacy_place"; }'
+        )
+
+        result = verify_domain_mapping_source(sources, expected)
+
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("birthplace -> legacy_place", result["evidence"])
+
+    def test_domain_mapping_requires_source_read_and_target_write_in_one_method(self) -> None:
+        """转换方法仅读取 getter 而未写入目标对象时不得通过。"""
+
+        sources = _personal_info_domain_sources()
+        sources["backend/src/infrastructure/converter/PersonalInfoConverter.java"] = (
+            "class PersonalInfoConverter { PersonalInfo toEntity(PersonalInfoPO po) { "
+            "po.getName(); po.getNativePlace(); return new PersonalInfo(); } }"
+        )
+
+        result = verify_domain_mapping_source(sources, _personal_info_domain_expected())
+
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("po->entity 字段转换", result["evidence"])
+
+    def test_domain_mapping_write_endpoint_requires_reverse_conversion(self) -> None:
+        """写接口必须提供 DTO 到 Entity 再到 PO 的反向转换链。"""
+
+        result = verify_domain_mapping_source(
+            _personal_info_domain_sources(),
+            _personal_info_domain_expected("POST"),
+        )
+
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("dto->entity 字段转换", result["evidence"])
+        self.assertIn("entity->po 字段转换", result["evidence"])
+
+    def test_domain_mapping_blocks_incomplete_formal_database_bindings(self) -> None:
+        """数据库实体正式绑定不完整时应阻断，而不是让代码 Repair 猜测列名。"""
+
+        expected = _personal_info_domain_expected()
+        expected["entities"][0]["database_bindings"] = expected["entities"][0]["database_bindings"][:1]
+
+        result = verify_domain_mapping_source(_personal_info_domain_sources(), expected)
+
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["facts"]["reason_code"], "domain_mapping_evidence_incomplete")
 
     def test_application_service_ast_requires_real_repository_delegation(self) -> None:
         """ApplicationService 仅声明 Repository 字段但不调用时不能通过。"""
@@ -515,9 +656,13 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
                 "return Promise.resolve(orders[0]) }"
             ),
             "backend.domain_mapping": (
-                "class OrderEntity { String id; String status; }\n"
-                "class OrderPo { String order_id; }\n"
-                "class OrderConverter { OrderEntity convert(String id, String status, String order_id) { return null; } }"
+                "class Order { String id; String status; }\n"
+                "@TableName(\"orders\") class OrderPO { @TableField(\"order_id\") String id; }\n"
+                "class OrderDTO { String id; String status; }\n"
+                "class OrderConverter { Order toEntity(OrderPO po) { Order entity = new Order(); "
+                "entity.setId(po.getId()); return entity; } }\n"
+                "class OrderAssembler { OrderDTO toDTO(Order entity) { OrderDTO dto = new OrderDTO(); "
+                "dto.setId(entity.getId()); dto.setStatus(entity.getStatus()); return dto; } }"
             ),
             "backend.repository_contract": (
                 "interface OrderRepository { List<Order> findByStatus(String status); }\n"

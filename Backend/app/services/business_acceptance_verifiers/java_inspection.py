@@ -12,65 +12,11 @@ from app.services.business_acceptance_verifiers.java_inspection_support import (
     _find_controller_method,
     _has_annotation,
     _inspect_or_block,
-    _java_type_matches,
     _method_matches_operation,
     _name_has_suffix,
     _operation_present,
     _type_has_suffix,
 )
-
-
-def verify_domain_mapping_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
-    """通过 AST 验证 Entity/PO/DTO 字段、列绑定和转换层。"""
-
-    model = _inspect_or_block(files)
-    if isinstance(model, dict):
-        return model
-    data_types = [item for item in model.types if not _type_has_suffix(item, "Converter", "Assembler", "Mapper")]
-    conversion_types = [item for item in model.types if _type_has_suffix(item, "Converter", "Assembler", "Mapper")]
-    field_types = {field.name: field.type_name for item in data_types for field in item.fields}
-    structural_names = set(field_types) | model.literals
-    errors: list[str] = []
-    checked: list[dict[str, Any]] = []
-    for entity in _dict_items(expected.get("entities")):
-        entity_id = str(entity.get("entity_id") or "")
-        fields = _dict_items(entity.get("fields"))
-        bindings = _dict_items(entity.get("database_bindings"))
-        for field in fields:
-            name = str(field.get("name") or "")
-            if name and name not in field_types:
-                errors.append(f"实体 {entity_id} 缺少字段 {name}。")
-                continue
-            actual_type = field_types.get(name, "")
-            if actual_type and not _java_type_matches(field.get("type"), actual_type):
-                errors.append(
-                    f"实体 {entity_id} 字段 {name} 的 Java 类型 {actual_type} 不匹配正式类型 {field.get('type')}。"
-                )
-            enum_values = {str(item) for item in field.get("enum_values", []) if str(item).strip()}
-            available_enum_values = model.identifiers | model.literals | {
-                value for item in model.types for value in item.enum_values
-            }
-            if enum_values and not enum_values.issubset(available_enum_values):
-                errors.append(f"实体 {entity_id} 字段 {name} 缺少枚举值。")
-        for binding in bindings:
-            column = str(binding.get("table_column") or "")
-            field = str(binding.get("entity_field") or "")
-            if column and column not in structural_names and column not in model.identifiers:
-                errors.append(f"实体 {entity_id} 缺少数据库列映射 {column}。")
-            if field and not any(field in method.identifiers for item in conversion_types for method in item.methods):
-                errors.append(f"实体 {entity_id} 缺少字段转换 {field}。")
-        checked.append({"entity_id": entity_id, "field_count": len(fields), "binding_count": len(bindings)})
-        if fields and not conversion_types:
-            errors.append(f"实体 {entity_id} 缺少 Entity/PO/DTO 转换层。")
-    if errors:
-        return verification_result("failed", "；".join(errors), facts={"entities": checked})
-    if not checked:
-        return verification_result("blocked", "没有可验证的完整 EntityDesign 输入。")
-    return verification_result(
-        "passed",
-        "已通过 AST 验证 Entity/PO/DTO 字段和数据库绑定。",
-        facts={"entities": checked},
-    )
 
 
 def verify_repository_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:

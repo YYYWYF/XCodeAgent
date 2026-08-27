@@ -9,8 +9,9 @@ from unittest.mock import patch
 
 from app.graph.subgraphs.build import (
     _execute_ready_tasks,
-    _workspace_snapshot_from_state,
     _latest_build_task_plan_for_build,
+    _verify_business_results,
+    _workspace_snapshot_from_state,
     build,
     run_build_scheduler,
 )
@@ -292,7 +293,42 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(
             results_by_id["frontend-api"]["acceptance_status"],
-            {"engineering": "passed", "business": "passed"},
+            {"engineering": "passed", "business": "skipped"},
+        )
+
+    def test_business_acceptance_is_skipped_by_default(self) -> None:
+        """默认关闭业务自检时不调用校验器，并记录可展示的跳过状态。"""
+
+        task = {
+            "id": "frontend-api",
+            "business_acceptance_checks": [
+                {"id": "business-api", "kind": "frontend.api_contract"}
+            ],
+        }
+        result = {
+            "task_id": "frontend-api",
+            "status": "completed",
+            "acceptance_status": {"engineering": "passed"},
+        }
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "app.graph.subgraphs.build.verify_business_acceptance"
+            ) as business_verifier,
+        ):
+            verified = _verify_business_results(
+                {"project_plan": {}},
+                [task],
+                [result],
+                workspace_root=None,
+            )
+
+        business_verifier.assert_not_called()
+        self.assertEqual(verified[0]["status"], "completed")
+        self.assertEqual(verified[0]["acceptance_status"]["business"], "skipped")
+        self.assertEqual(
+            verified[0]["business_acceptance_evidence"][0]["status"],
+            "skipped",
         )
 
     def test_business_acceptance_runs_after_engineering_failure(self) -> None:
@@ -354,6 +390,10 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as workspace:
             with (
+                patch.dict(
+                    os.environ,
+                    {"XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED": "true"},
+                ),
                 patch(
                     "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
                     side_effect=frontend_runner,

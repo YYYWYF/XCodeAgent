@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from langgraph.config import get_stream_writer
 
+from app.config import dag_business_self_check_enabled
 from app.agents.database.generator import generate_database_with_deep_agent
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
 from app.agents.frontend.generator import generate_frontend_with_deep_agent
@@ -487,6 +488,15 @@ def _verify_business_results(
         for task in owner_tasks
         if task.get("id")
     }
+    if not dag_business_self_check_enabled():
+        return [
+            _skip_business_acceptance(
+                result,
+                tasks_by_id.get(str(result.get("task_id") or ""), {}),
+            )
+            for result in results
+        ]
+
     dependency_evidence = _completed_dependency_business_evidence(
         state.get("build_results"),
         owner_tasks,
@@ -529,6 +539,55 @@ def _verify_business_results(
             next_result["scheduler_decision"] = classify_task_result(next_result)
         verified.append(next_result)
     return verified
+
+
+def _skip_business_acceptance(
+    result: dict[str, Any],
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    """关闭业务自检时记录明确的跳过证据，并保留工程校验的最终裁决。"""
+
+    checks = [
+        check
+        for check in task.get("business_acceptance_checks") or []
+        if isinstance(check, dict)
+    ]
+    evidence = [
+        {
+            "check_id": str(check.get("id") or ""),
+            "kind": str(check.get("kind") or ""),
+            "status": "skipped",
+            "evidence": "DAG 业务自检已通过环境变量关闭，本次自动跳过。",
+        }
+        for check in checks
+    ]
+    next_result = {
+        **result,
+        "business_acceptance_evidence": evidence,
+        "business_acceptance_summary": {
+            "total": len(evidence),
+            "passed": 0,
+            "failed": 0,
+            "blocked": 0,
+            "skipped": len(evidence),
+            "duration_ms_total": 0,
+            "duration_ms_avg": 0,
+            "by_kind": {},
+        },
+        "acceptance_status": {
+            **(
+                result.get("acceptance_status")
+                if isinstance(result.get("acceptance_status"), dict)
+                else {}
+            ),
+            "business": "skipped",
+        },
+    }
+    if next_result.get("status") in {"completed", "already_satisfied"}:
+        next_result["failure_category"] = None
+        next_result["failure_reason"] = None
+        next_result["scheduler_decision"] = classify_task_result(next_result)
+    return next_result
 
 
 def _completed_dependency_business_evidence(

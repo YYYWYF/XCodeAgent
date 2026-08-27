@@ -19,6 +19,7 @@ class JavaAnnotation:
 
     name: str
     strings: list[str]
+    arguments: dict[str, str]
     text: str
 
 
@@ -50,16 +51,19 @@ class JavaMethod:
     annotations: list[JavaAnnotation]
     parameters: list[JavaParameter]
     calls: list[JavaCall]
+    local_variables: dict[str, str]
+    assignments: list[tuple[str, str]]
     identifiers: set[str]
     literals: set[str]
 
 
 @dataclass
 class JavaField:
-    """记录 Java 字段名称和声明类型。"""
+    """记录 Java 字段名称、声明类型和字段注解。"""
 
     name: str
     type_name: str
+    annotations: list[JavaAnnotation]
 
 
 @dataclass
@@ -68,6 +72,7 @@ class JavaType:
 
     kind: str
     name: str
+    source_path: str
     annotations: list[JavaAnnotation]
     fields: list[JavaField]
     methods: list[JavaMethod]
@@ -107,7 +112,7 @@ def inspect_java_sources(files: dict[str, str]) -> JavaAstModel:
                 identifiers.add(_text(node, source))
             if node.type in {"string_literal", "decimal_integer_literal", "true", "false", "null_literal"}:
                 literals.add(_literal(node, source))
-        types.extend(_java_types(root, source))
+        types.extend(_java_types(root, source, path))
     return JavaAstModel(
         types=types,
         identifiers=identifiers,
@@ -117,7 +122,7 @@ def inspect_java_sources(files: dict[str, str]) -> JavaAstModel:
     )
 
 
-def _java_types(root: Any, source: bytes) -> list[JavaType]:
+def _java_types(root: Any, source: bytes, source_path: str) -> list[JavaType]:
     """提取顶层与嵌套 Java 类型及其直接成员。"""
 
     result: list[JavaType] = []
@@ -145,6 +150,7 @@ def _java_types(root: Any, source: bytes) -> list[JavaType]:
             JavaType(
                 kind=node.type.removesuffix("_declaration"),
                 name=_text(name, source),
+                source_path=source_path,
                 annotations=_annotations(node, source),
                 fields=fields,
                 methods=methods,
@@ -159,13 +165,16 @@ def _fields(node: Any, source: bytes) -> list[JavaField]:
 
     type_node = node.child_by_field_name("type")
     type_name = _text(type_node, source) if type_node is not None else ""
+    annotations = _annotations(node, source)
     result: list[JavaField] = []
     for child in node.named_children:
         if child.type != "variable_declarator":
             continue
         name = child.child_by_field_name("name")
         if name is not None:
-            result.append(JavaField(name=_text(name, source), type_name=type_name))
+            result.append(
+                JavaField(name=_text(name, source), type_name=type_name, annotations=annotations)
+            )
     return result
 
 
@@ -190,6 +199,8 @@ def _method(node: Any, source: bytes) -> JavaMethod:
                 )
             )
     calls: list[JavaCall] = []
+    local_variables: dict[str, str] = {}
+    assignments: list[tuple[str, str]] = []
     identifiers: set[str] = set()
     literals: set[str] = set()
     for child in _walk(node):
@@ -209,12 +220,29 @@ def _method(node: Any, source: bytes) -> JavaMethod:
                     strings=[_literal(item, source) for item in _walk(child) if item.type == "string_literal"],
                 )
             )
+        if child.type == "local_variable_declaration":
+            local_type = child.child_by_field_name("type")
+            for declarator in child.named_children:
+                if declarator.type != "variable_declarator":
+                    continue
+                local_name = declarator.child_by_field_name("name")
+                if local_name is not None:
+                    local_variables[_text(local_name, source)] = (
+                        _text(local_type, source) if local_type is not None else ""
+                    )
+        if child.type == "assignment_expression":
+            left = child.child_by_field_name("left")
+            right = child.child_by_field_name("right")
+            if left is not None and right is not None:
+                assignments.append((_text(left, source), _text(right, source)))
     return JavaMethod(
         name=_text(name, source) if name is not None else "",
         return_type=_text(return_node, source) if return_node is not None else "",
         annotations=_annotations(node, source),
         parameters=parameters,
         calls=calls,
+        local_variables=local_variables,
+        assignments=assignments,
         identifiers=identifiers,
         literals=literals,
     )
@@ -240,10 +268,29 @@ def _annotations(node: Any, source: bytes) -> list[JavaAnnotation]:
             JavaAnnotation(
                 name=_text(name_node, source).rsplit(".", 1)[-1] if name_node is not None else "",
                 strings=[_literal(item, source) for item in _walk(annotation) if item.type == "string_literal"],
+                arguments=_annotation_arguments(annotation, source),
                 text=_text(annotation, source),
             )
         )
     return result
+
+
+def _annotation_arguments(node: Any, source: bytes) -> dict[str, str]:
+    """在已定位注解节点内提取命名参数，避免用全文字符串猜测映射关系。"""
+
+    arguments: dict[str, str] = {}
+    for child in _walk(node):
+        if child.type != "element_value_pair":
+            continue
+        key = child.child_by_field_name("key")
+        value = child.child_by_field_name("value")
+        if key is None or value is None:
+            named = child.named_children
+            key = named[0] if named else None
+            value = named[-1] if len(named) > 1 else None
+        if key is not None and value is not None:
+            arguments[_text(key, source)] = _literal(value, source)
+    return arguments
 
 
 def _collect_xml(

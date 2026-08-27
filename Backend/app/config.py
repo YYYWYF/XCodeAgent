@@ -50,6 +50,7 @@ class Settings:
     # 调用 LLM 生成设计稿的并发上限。默认 3，避免单 API Key 触发模型服务限流。
     ui_design_concurrency: int = 3
     build_task_plan_max_retries: int = 2
+    dag_business_self_check_enabled: bool = False
     checkpoint_db_path: str = ""  # populated in from_env
     checkpoint_retention_days: int = 30
     langsmith_tracing_enabled: bool = False
@@ -105,6 +106,9 @@ class Settings:
             build_task_plan_max_retries=int(
                 os.getenv("BUILD_TASK_PLAN_MAX_RETRIES", "2")
             ),
+            dag_business_self_check_enabled=_env_bool(
+                "XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED", default=False
+            ),
             checkpoint_db_path=os.getenv("XCODEAGENT_CHECKPOINT_DB", ""),
             checkpoint_retention_days=int(
                 os.getenv("XCODEAGENT_CHECKPOINT_RETENTION_DAYS", "30")
@@ -131,7 +135,15 @@ def _required_any(*names: str) -> str:
 
 
 def _env_bool(name: str, *, default: bool) -> bool:
+    """把常见环境变量布尔值转换为 Python 布尔值。"""
+
     value = os.getenv(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def dag_business_self_check_enabled() -> bool:
+    """读取 DAG 执行阶段业务自检开关，未配置时默认关闭。"""
+
+    return _env_bool("XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED", default=False)

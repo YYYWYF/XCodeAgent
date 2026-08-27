@@ -665,6 +665,17 @@ def _entity_expectation(entity: dict[str, Any]) -> dict[str, Any]:
         "entity_id": _text(entity.get("entity_id")),
         "entity_name": _text(entity.get("entity_name") or entity.get("entity_id")),
         "data_source_type": _text(entity.get("data_source_type") or entity.get("data_source_id")),
+        "database_table": _text(
+            database.get("matched_table")
+            or next(
+                (
+                    binding.get("table")
+                    for binding in _dict_items(database.get("bindings"))
+                    if _text(binding.get("table"))
+                ),
+                "",
+            )
+        ),
         "fields": [
             {
                 "name": _text(field.get("name")),

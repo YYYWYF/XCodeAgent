@@ -2123,6 +2123,7 @@ function businessAcceptanceStatusText(status: string): string {
       passed: '通过',
       failed: '失败',
       blocked: '阻断',
+      skipped: '已跳过',
       pending: '待检查'
     }[status] || status
   )
