@@ -58,6 +58,7 @@ def code_review(
         "message": result.get("message") or "前后端代码审查完成。",
         "clarification": result.get("clarification", {}),
         "code_review_result": result.get("code_review_result", state.get("code_review_result", {})),
+        "code_review_retry": result.get("code_review_retry", {}),
         "code_review_report_path": result.get(
             "code_review_report_path", state.get("code_review_report_path", "")
         ),
@@ -90,6 +91,7 @@ def code_review(
     if not workspace:
         update["status"] = "failed"
         update["error"] = "代码审查需要显式用户 workspaceRoot。"
+        update["code_review_retry"] = {}
         update["code_review_next_action"] = "handle_failure"
     return update
 

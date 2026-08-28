@@ -97,6 +97,10 @@ def workflow_capabilities() -> dict[str, Any]:
                     "恢复当前 Build 切片中的失败任务：优先重试 retry 分类的瞬时失败；"
                     "没有瞬时候选时，执行已生成且无需额外确认的 RepairPlanner 修复任务。"
                 ),
+                "retry_code_review": (
+                    "仅在 codeReviewRetry.available=true 时恢复失败的审查扫描或修复模型请求；"
+                    "修复重试复用原问题快照和失败前轮次。"
+                ),
                 "build_task_plan_confirmation": (
                     "通过 clarificationAnswers 提交 Build DAG 的 confirm、patch 或 regenerate 动作；"
                     "确认对象只允许修改任务 title 和 description。"

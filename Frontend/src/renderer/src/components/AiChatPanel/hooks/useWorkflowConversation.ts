@@ -54,7 +54,8 @@ import {
 import {
   planExecutionForPage,
   withWorkflowExecutionStatus,
-  workflowInteractionAvailability,
+  workflowCodeReviewRetry,
+  workflowInteractionAvailability
 } from '../planExecutionMode'
 
 type SessionRunEntry = {
@@ -147,6 +148,7 @@ type UseWorkflowConversationResult = {
   ) => Promise<boolean>
   handleEndPlan: (runId?: string) => Promise<void>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
+  handleRetryCodeReview: () => Promise<void>
   handleRetryPlan: () => Promise<void>
   handleStopPlan: (runId?: string) => Promise<void>
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
@@ -1253,6 +1255,26 @@ export function useWorkflowConversation({
     })
   }
 
+  /** 在原审查会话和执行范围内重新调用失败的扫描或修复模型子步骤。 */
+  const handleRetryCodeReview = async (): Promise<void> => {
+    if (!activeWorkflow || !workflowCodeReviewRetry(activeWorkflow) || loading || workspaceBusy) {
+      return
+    }
+    const execution = planExecutionForPage(
+      activeWorkflow.summary.lifecycle,
+      activeSession?.pageId || selectedPageId,
+      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
+    )
+    await sendWorkflowMessage('重试当前代码审查请求。', {
+      resumeState: activeWorkflow,
+      resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
+      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
+      buildExecutionScope: activeWorkflow.summary.buildExecutionScope,
+      titleFrom: '重试代码审查',
+      workflowAction: 'retry_code_review'
+    })
+  }
+
   /** 按暂停态调试面板选择的节点恢复当前计划，并保留原执行身份与状态快照。 */
   const handleResumePlan = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     if (!activeWorkflow || !workflowDebug?.resumeFrom || loading || workspaceBusy) return
@@ -1397,6 +1419,7 @@ export function useWorkflowConversation({
     handleAdjustPlan,
     handleEndPlan,
     handleResumePlan,
+    handleRetryCodeReview,
     handleRetryPlan,
     handleStopPlan,
     handleSend,

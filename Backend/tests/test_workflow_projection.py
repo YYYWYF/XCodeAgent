@@ -117,6 +117,45 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertNotIn("repairActions", review["issues"][0])
         self.assertNotIn("code_review_report_path", summary)
 
+    def test_failed_repair_projects_retry_and_required_review_snapshot(self) -> None:
+        """审查模型失败终态必须保留受控重试标记和修复所需的有限问题快照。"""
+
+        result = {
+            "phase": "failed",
+            "status": "failed",
+            "code_review_retry": {"available": True, "target": "repair"},
+            "code_review_result": {
+                "status": "completed",
+                "issue_count": 1,
+                "targets": [],
+                "issues": [
+                    {
+                        "id": "issue-1",
+                        "side": "frontend",
+                        "rule_id": "FE001",
+                        "severity": "high",
+                        "title": "问题",
+                        "summary": "说明",
+                        "file": "frontend/src/App.tsx",
+                    }
+                ],
+            },
+            "code_review_repair_result": {
+                "status": "failed",
+                "iteration": 2,
+                "max_iterations": 3,
+                "failure": "模型返回无效结果",
+            },
+        }
+
+        summary = _workflow_summary(result, [])
+        public_state = _public_workflow_state(result, phase="failed")
+
+        self.assertEqual(summary["codeReviewRetry"], {"available": True, "target": "repair"})
+        self.assertEqual(summary["codeReviewResult"]["issues"][0]["id"], "issue-1")
+        self.assertEqual(public_state["codeReviewRetry"]["target"], "repair")
+        self.assertEqual(public_state["codeReviewRepair"]["iteration"], 2)
+
     def test_integration_test_hides_stale_code_review_result(self) -> None:
         """测试重跑期间不得向测试 Agent 投影上一轮代码审查结果。"""
 

@@ -548,6 +548,15 @@ test('AG-UI 重试失败任务发送显式工作流动作', () => {
   assert.equal(forwardedProps.workflowAction, 'retry_failed_tasks')
 })
 
+test('AG-UI 审查模型重试发送独立工作流动作', () => {
+  const forwardedProps = buildWorkflowForwardedProps({
+    editorMode: 'frontend',
+    workflowAction: 'retry_code_review'
+  })
+
+  assert.equal(forwardedProps.workflowAction, 'retry_code_review')
+})
+
 test('AG-UI 连续请求只发送当前用户消息', async () => {
   const originalFetch = globalThis.fetch
   const requestBodies: Array<Record<string, unknown>> = []

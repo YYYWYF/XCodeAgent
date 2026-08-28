@@ -25,6 +25,7 @@ import {
   shouldRenderPlanExecutionDock,
   withWorkflowExecutionStatus,
   workflowCanRetryFailedTasks,
+  workflowCodeReviewRetry,
   workflowInteractionAvailability,
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
@@ -955,6 +956,33 @@ test('失败计划只为可恢复的 Build 失败显示恢复动作', () => {
       state: { build_summary: { retry_available: true, retryable_failures: 1 } }
     }),
     true
+  )
+})
+
+test('仅后端签发的审查模型失败快照提供重试动作', () => {
+  assert.deepEqual(
+    workflowCodeReviewRetry(
+      previewWorkflow({
+        status: 'failed',
+        phase: 'failed',
+        codeReviewRetry: { available: true, target: 'scan' }
+      })
+    ),
+    { available: true, target: 'scan' }
+  )
+  assert.deepEqual(
+    workflowCodeReviewRetry({
+      ...previewWorkflow({ status: 'failed', phase: 'failed' }),
+      state: { codeReviewRetry: { available: true, target: 'repair' } }
+    }),
+    { available: true, target: 'repair' }
+  )
+  assert.equal(
+    workflowCodeReviewRetry({
+      ...previewWorkflow({ status: 'failed', phase: 'failed' }),
+      state: { codeReviewRetry: { available: true, target: 'build' } }
+    }),
+    undefined
   )
 })
 

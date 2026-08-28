@@ -27,6 +27,8 @@ CODE_REVIEW_REPAIR_ACTION = "repair_all"
 CODE_REVIEW_REPAIR_EVENT_TYPE = "code_review.repair"
 CODE_REVIEW_BUILD_EVENT_TYPE = "code_review.build_checks"
 MAX_CODE_REVIEW_REPAIR_ITERATIONS = 3
+CODE_REVIEW_RETRY_SCAN = "scan"
+CODE_REVIEW_RETRY_REPAIR = "repair"
 _CODE_REVIEW_CAPTURE_IGNORED_DIRS = {
     ".git",
     ".hg",
@@ -176,6 +178,12 @@ def _repair_confirmation_payload(
     }
 
 
+def _model_retry_payload(target: str) -> dict[str, Any]:
+    """生成只允许恢复当前审查模型子步骤的公开重试标记。"""
+
+    return {"available": True, "target": target}
+
+
 def _route_review_start(state: ProjectState) -> str:
     """首次进入扫描，确认一键修复后直接进入修复，避免重复扫描。"""
 
@@ -197,7 +205,6 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
     writer({"type": "code_review.scan", "status": "running"})
     try:
         result = analyze_workspace_code(state, workspace)
-        report_path = write_code_review_markdown(state, result)
     except Exception as exc:  # noqa: BLE001 - 子图边界统一转换为失败状态
         return {
             "phase": "code_review",
@@ -205,6 +212,23 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
             "message": "前后端代码审查失败。",
             "error": _safe_review_text(f"{type(exc).__name__}: {exc}", workspace),
             "code_review_result": {},
+            "code_review_retry": _model_retry_payload(CODE_REVIEW_RETRY_SCAN),
+            "code_review_report_path": "",
+            "code_review_repair_status": "failed",
+            "code_review_next_action": "handle_failure",
+            "code_review_events": ["code_scan"],
+            "timeline": ["code_review", "code_scan"],
+        }
+    try:
+        report_path = write_code_review_markdown(state, result)
+    except Exception as exc:  # noqa: BLE001 - 报告持久化失败不可通过重复模型调用恢复
+        return {
+            "phase": "code_review",
+            "status": "failed",
+            "message": "代码审查报告保存失败。",
+            "error": _safe_review_text(f"{type(exc).__name__}: {exc}", workspace),
+            "code_review_result": result,
+            "code_review_retry": {},
             "code_review_report_path": "",
             "code_review_repair_status": "failed",
             "code_review_next_action": "handle_failure",
@@ -222,6 +246,7 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
                 issues, truncated=bool(result.get("truncated"))
             ),
             "code_review_result": result,
+            "code_review_retry": {},
             "code_review_report_path": report_path,
             "code_review_repair_status": "awaiting_user",
             "code_review_repair_result": {
@@ -247,6 +272,7 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
         "message": result.get("summary") or "前后端代码审查完成，未发现需要处理的问题。",
         "clarification": {},
         "code_review_result": result,
+        "code_review_retry": {},
         "code_review_report_path": report_path,
         "code_review_repair_status": "not_required",
         "code_review_repair_result": {
@@ -309,7 +335,12 @@ def code_review_repair(state: ProjectState) -> dict[str, Any]:
         )
         repair_result = normalize_code_review_repair_result(captured.value)
     except Exception as exc:  # noqa: BLE001 - 修复 Agent 错误统一阻断项目启动
-        return _repair_failure(state, _safe_review_text(f"{type(exc).__name__}: {exc}", workspace), attempt)
+        return _repair_failure(
+            state,
+            _safe_review_text(f"{type(exc).__name__}: {exc}", workspace),
+            attempt,
+            retry_model_request=True,
+        )
 
     attempted_ids = set(repair_result.get("attempted_issue_ids", []))
     if repair_result.get("status") != "completed":
@@ -317,9 +348,15 @@ def code_review_repair(state: ProjectState) -> dict[str, Any]:
             state,
             repair_result.get("failure_reason") or "CodeReviewRepairAgent 未完成问题修复。",
             attempt,
+            retry_model_request=True,
         )
     if attempted_ids != issue_ids:
-        return _repair_failure(state, "CodeReviewRepairAgent 未覆盖当前展示的全部问题。", attempt)
+        return _repair_failure(
+            state,
+            "CodeReviewRepairAgent 未覆盖当前展示的全部问题。",
+            attempt,
+            retry_model_request=True,
+        )
     required_actions = _required_repair_actions(issues)
     pnpm_evidence = repair_result.get("pnpm_install")
     pnpm_call_count = int(repair_result.get("pnpm_install_call_count") or 0)
@@ -337,13 +374,24 @@ def code_review_repair(state: ProjectState) -> dict[str, Any]:
             state,
             "前端 Skill 要求恰好执行一次 pnpm install，但未取得唯一的成功执行证据。",
             attempt,
+            retry_model_request=True,
         )
     if "pnpm_install" not in required_actions and pnpm_call_count:
-        return _repair_failure(state, "CodeReviewRepairAgent 在未授权问题中执行了 pnpm install。", attempt)
+        return _repair_failure(
+            state,
+            "CodeReviewRepairAgent 在未授权问题中执行了 pnpm install。",
+            attempt,
+            retry_model_request=True,
+        )
     if "pnpm_install" in required_actions:
         lockfile = Path(workspace or "") / "frontend/pnpm-lock.yaml"
         if not workspace or not lockfile.is_file():
-            return _repair_failure(state, "pnpm install 未生成 frontend/pnpm-lock.yaml。", attempt)
+            return _repair_failure(
+                state,
+                "pnpm install 未生成 frontend/pnpm-lock.yaml。",
+                attempt,
+                retry_model_request=True,
+            )
     captured_paths = _captured_change_paths(captured.code_change_set)
     if "pnpm_install" in required_actions and not {
         "frontend/package.json",
@@ -353,6 +401,7 @@ def code_review_repair(state: ProjectState) -> dict[str, Any]:
             state,
             "前端依赖修复未同时产生 package.json 与 pnpm-lock.yaml 的真实 Diff。",
             attempt,
+            retry_model_request=True,
         )
     changed_paths = {path for path in captured_paths if _repair_path(path)}
     reported_raw_paths = {
@@ -362,15 +411,40 @@ def code_review_repair(state: ProjectState) -> dict[str, Any]:
     }
     reported_paths = {path for path in reported_raw_paths if _repair_path(path)}
     if any(not _repair_path(path) for path in captured_paths):
-        return _repair_failure(state, "CodeReviewRepairAgent 产生了越界项目变更。", attempt)
+        return _repair_failure(
+            state,
+            "CodeReviewRepairAgent 产生了越界项目变更。",
+            attempt,
+            retry_model_request=True,
+        )
     if any(not _repair_path(path) for path in reported_raw_paths):
-        return _repair_failure(state, "CodeReviewRepairAgent 返回了越界项目路径。", attempt)
+        return _repair_failure(
+            state,
+            "CodeReviewRepairAgent 返回了越界项目路径。",
+            attempt,
+            retry_model_request=True,
+        )
     if "frontend/pnpm-lock.yaml" in captured_paths and not pnpm_succeeded:
-        return _repair_failure(state, "pnpm-lock.yaml 只能由成功的专用 pnpm 工具生成。", attempt)
+        return _repair_failure(
+            state,
+            "pnpm-lock.yaml 只能由成功的专用 pnpm 工具生成。",
+            attempt,
+            retry_model_request=True,
+        )
     if not changed_paths:
-        return _repair_failure(state, "CodeReviewRepairAgent 未产生授权项目 Diff。", attempt)
+        return _repair_failure(
+            state,
+            "CodeReviewRepairAgent 未产生授权项目 Diff。",
+            attempt,
+            retry_model_request=True,
+        )
     if reported_paths and not reported_paths <= changed_paths:
-        return _repair_failure(state, "CodeReviewRepairAgent 返回了未实际变更的源码路径。", attempt)
+        return _repair_failure(
+            state,
+            "CodeReviewRepairAgent 返回了未实际变更的源码路径。",
+            attempt,
+            retry_model_request=True,
+        )
 
     repair_state = {
         # RepairAgent 已完成文件修改后仍需通过确定性构建门禁；在构建结果返回前
@@ -395,6 +469,7 @@ def code_review_repair(state: ProjectState) -> dict[str, Any]:
         "status": "in_progress",
         "message": repair_state["summary"],
         "clarification": {},
+        "code_review_retry": {},
         "code_review_repair_status": "building",
         "code_review_repair_result": repair_state,
         "code_review_repair_iteration": attempt,
@@ -467,6 +542,7 @@ def review_build_checks(state: ProjectState) -> dict[str, Any]:
             "status": "completed",
             "message": "代码修复完成，前后端构建检查通过。",
             "clarification": {},
+            "code_review_retry": {},
             "code_review_repair_status": "completed",
             "code_review_repair_result": {
                 **previous_repair,
@@ -491,6 +567,7 @@ def review_build_checks(state: ProjectState) -> dict[str, Any]:
             "status": "in_progress",
             "message": f"前后端构建未通过，将进入第 {attempt + 1}/{max_attempts} 轮修复。",
             "clarification": {},
+            "code_review_retry": {},
             "code_review_repair_status": "repairing",
             "code_review_repair_result": {
                 **previous_repair,
@@ -512,6 +589,7 @@ def review_build_checks(state: ProjectState) -> dict[str, Any]:
         "message": "代码修复后前后端构建仍未通过。",
         "error": _build_failure_summary(results, workspace=workspace),
         "clarification": {},
+        "code_review_retry": {},
         "code_review_repair_status": "failed",
         "code_review_repair_result": {
             "status": "failed",
@@ -546,7 +624,13 @@ def _route_after_build(state: ProjectState) -> str:
     return END
 
 
-def _repair_failure(state: ProjectState, message: str, attempt: int | None = None) -> dict[str, Any]:
+def _repair_failure(
+    state: ProjectState,
+    message: str,
+    attempt: int | None = None,
+    *,
+    retry_model_request: bool = False,
+) -> dict[str, Any]:
     """构造修复失败结果，确保外层主图进入统一失败处理。"""
 
     workspace = workspace_from_state(state)
@@ -557,6 +641,11 @@ def _repair_failure(state: ProjectState, message: str, attempt: int | None = Non
         "message": "前后端代码修复失败。",
         "error": safe_message,
         "clarification": {},
+        "code_review_retry": (
+            _model_retry_payload(CODE_REVIEW_RETRY_REPAIR)
+            if retry_model_request
+            else {}
+        ),
         "code_review_repair_status": "failed",
         "code_review_repair_result": {
             "status": "failed",

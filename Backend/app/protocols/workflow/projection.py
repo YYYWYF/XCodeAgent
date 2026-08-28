@@ -29,6 +29,21 @@ _CODE_REVIEW_REPORT_PATH = ".xcodeagent/reports/code-review.md"
 _TEST_REPORT_PATH = ".xcodeagent/reports/test-report.md"
 
 
+def _workflow_code_review_retry(value: Any) -> dict[str, Any]:
+    """投影受控审查模型重试标记，拒绝未知恢复目标。"""
+
+    if not isinstance(value, dict) or value.get("available") is not True:
+        return {}
+    target = str(value.get("target") or "")
+    return {"available": True, "target": target} if target in {"scan", "repair"} else {}
+
+
+def _code_review_projection_phase(value: dict[str, Any], phase: Any) -> Any:
+    """审查模型失败时继续公开有限扫描/修复快照，供同线程受控重试。"""
+
+    return "code_review" if _workflow_code_review_retry(value.get("code_review_retry")) else phase
+
+
 def _workflow_test_report_result(report_path: Any) -> dict[str, str]:
     """只公开规范化的工作区内 Markdown 测试报告路径。"""
 
@@ -287,16 +302,18 @@ def _workflow_progress_summary(
         "acceptancePhaseConfirmation": result.get(
             "acceptance_phase_confirmation", {}
         ),
+        "codeReviewRetry": _workflow_code_review_retry(result.get("code_review_retry")),
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
-            phase,
+            _code_review_projection_phase(result, phase),
             result.get("code_review_report_path"),
         ),
         "testReportResult": _workflow_test_report_result(
             result.get("test_report_path")
         ),
         "codeReviewRepair": _workflow_code_review_repair(
-            result.get("code_review_repair_result"), phase
+            result.get("code_review_repair_result"),
+            _code_review_projection_phase(result, phase),
         ),
         "testSummary": {},
         "unitTestSummary": result.get("unit_test_report", {}),
@@ -518,6 +535,13 @@ def _public_workflow_state(
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
+    retry = _workflow_code_review_retry(value.get("code_review_retry"))
+    public_state.pop("code_review_retry", None)
+    public_state["codeReviewRetry"] = retry
+    projection_phase = _code_review_projection_phase(
+        value,
+        phase if phase is not None else value.get("phase"),
+    )
     inspection = _workspace_inspection_snapshot(value)
     if inspection is not None:
         public_state["workspaceInspection"] = inspection
@@ -527,14 +551,14 @@ def _public_workflow_state(
         public_state.pop("code_review_result", None)
         public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
             value.get("code_review_result"),
-            phase if phase is not None else value.get("phase"),
+            projection_phase,
             value.get("code_review_report_path"),
         )
     if "code_review_repair_result" in value:
         public_state.pop("code_review_repair_result", None)
         public_state["codeReviewRepair"] = _workflow_code_review_repair(
             value.get("code_review_repair_result"),
-            phase if phase is not None else value.get("phase"),
+            projection_phase,
         )
     report_result = _workflow_test_report_result(value.get("test_report_path"))
     if report_result:
@@ -1281,16 +1305,18 @@ def _workflow_summary(
         "acceptancePhaseConfirmation": result.get(
             "acceptance_phase_confirmation", {}
         ),
+        "codeReviewRetry": _workflow_code_review_retry(result.get("code_review_retry")),
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
-            result.get("phase"),
+            _code_review_projection_phase(result, result.get("phase")),
             result.get("code_review_report_path"),
         ),
         "testReportResult": _workflow_test_report_result(
             result.get("test_report_path")
         ),
         "codeReviewRepair": _workflow_code_review_repair(
-            result.get("code_review_repair_result"), result.get("phase")
+            result.get("code_review_repair_result"),
+            _code_review_projection_phase(result, result.get("phase")),
         ),
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
@@ -1387,16 +1413,18 @@ def _workflow_visual_payload(
         "acceptancePhaseConfirmation": result.get(
             "acceptance_phase_confirmation", {}
         ),
+        "codeReviewRetry": _workflow_code_review_retry(result.get("code_review_retry")),
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
-            summary.get("phase"),
+            _code_review_projection_phase(result, summary.get("phase")),
             result.get("code_review_report_path"),
         ),
         "testReportResult": _workflow_test_report_result(
             result.get("test_report_path")
         ),
         "codeReviewRepair": _workflow_code_review_repair(
-            result.get("code_review_repair_result"), summary.get("phase")
+            result.get("code_review_repair_result"),
+            _code_review_projection_phase(result, summary.get("phase")),
         ),
         "buildExecutionSlice": result.get("build_execution_slice"),
         "testReport": result.get("test_report", {}),

@@ -105,6 +105,10 @@ def workflow_capabilities() -> dict[str, Any]:
         "workflowActions": {
             "requestField": "forwardedProps.workflowAction",
             "values": {
+                "retry_code_review": (
+                    "仅在 codeReviewRetry.available=true 时恢复失败的审查扫描或修复模型请求；"
+                    "修复重试复用原问题快照和失败前轮次。"
+                ),
                 "test_phase_confirmation": (
                     "通过 clarificationAnswers.test_phase_confirmation 提交结构化 confirm 动作；"
                     "确认后恢复 test_phase_confirmation 并进入 integration_test。"

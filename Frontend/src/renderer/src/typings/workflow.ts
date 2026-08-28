@@ -50,6 +50,7 @@ export type WorkflowSummary = {
   testReportResult?: WorkflowTestReportResult
   codeReviewResult?: WorkflowCodeReviewResult
   codeReviewRepair?: WorkflowCodeReviewRepair
+  codeReviewRetry?: WorkflowCodeReviewRetry
   unitTestQualityGatePassed?: boolean
   unitTestGatePassed?: boolean
   unitTestNextAction?: string
@@ -779,7 +780,12 @@ export type WorkflowRunPayload = {
   result?: Record<string, unknown>
 }
 
-export type WorkflowAction = 'retry_failed_tasks'
+export type WorkflowAction = 'retry_failed_tasks' | 'retry_code_review'
+
+export type WorkflowCodeReviewRetry = {
+  available: true
+  target: 'scan' | 'repair'
+}
 
 export type WorkflowDebugOptions = {
   enabled: boolean

@@ -105,6 +105,7 @@ import {
   planExecutionContextForRun,
   shouldRenderPlanExecutionDock,
   workflowCanRetryFailedTasks,
+  workflowCodeReviewRetry,
   workflowResumeNode,
   type PlanExecutionMode
 } from './planExecutionMode'
@@ -1529,6 +1530,7 @@ export default function AiChatPanel({
     handleAdjustPlan,
     handleEndPlan,
     handleResumePlan,
+    handleRetryCodeReview,
     handleRetryPlan,
     handleStopPlan,
     handleSend,
@@ -3167,7 +3169,13 @@ export default function AiChatPanel({
               onEntityDesignGateJump={handleEntityDesignGateJump}
               onOpenCodeChangeFile={handleOpenCodeChangeFile}
               onRevertCodeChanges={requestCodeChangeRevert}
-              onRetryError={planningError ? onRetryPlanning : undefined}
+              onRetryError={
+                planningError
+                  ? onRetryPlanning
+                  : workflowCodeReviewRetry(activeWorkflow)
+                    ? () => void handleRetryCodeReview()
+                    : undefined
+              }
               onSubmitClarification={handleSubmitWorkflowClarification}
               revertingCodeChangeIds={revertingCodeChangeIds}
               workspaceRoot={application.workspaceRoot || undefined}

@@ -80,6 +80,23 @@ def _frontend_dependency_issue() -> dict:
 class CodeReviewSubgraphTests(unittest.TestCase):
     """验证代码审查子图的扫描、恢复和构建回环边界。"""
 
+    def test_scan_model_failure_exposes_scan_retry(self) -> None:
+        """扫描 Agent 的网络或业务异常必须标记为可重试扫描。"""
+
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.subgraphs.code_review.analyze_workspace_code",
+            side_effect=ConnectionError("model endpoint unavailable"),
+        ):
+            result = build_code_review_subgraph().invoke(
+                {"workspace": workspace, "status": "in_progress"}
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(
+            result["code_review_retry"],
+            {"available": True, "target": "scan"},
+        )
+
     def test_first_entry_scans_and_pauses_with_issues(self) -> None:
         """首次进入必须扫描一次，并在发现问题时等待结构化修复确认。"""
 
@@ -212,6 +229,10 @@ class CodeReviewSubgraphTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["code_review_next_action"], "handle_failure")
         self.assertIn("越界", result["error"])
+        self.assertEqual(
+            result["code_review_retry"],
+            {"available": True, "target": "repair"},
+        )
 
     def test_frontend_dependency_repair_requires_successful_pnpm_evidence(self) -> None:
         """依赖问题缺少专用 pnpm 成功证据时必须阻断修复。"""
@@ -486,6 +507,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["code_review_next_action"], "handle_failure")
         self.assertIn("最大 3 轮", result["error"])
+        self.assertEqual(result["code_review_retry"], {})
         capture_mock.assert_not_called()
 
     def test_start_route_requires_issue_snapshot_for_repair(self) -> None:
@@ -564,6 +586,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
 
         self.assertEqual(result["code_review_repair_status"], "repairing")
         self.assertEqual(result["code_review_next_action"], "code_review_repair")
+        self.assertEqual(result["code_review_retry"], {})
         self.assertNotEqual(result["code_review_next_action"], "launch_project")
 
     def test_review_build_reuses_agent_pnpm_install_evidence(self) -> None:

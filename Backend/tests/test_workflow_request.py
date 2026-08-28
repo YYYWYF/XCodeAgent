@@ -1889,6 +1889,108 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_from"], "build")
         self.assertTrue(inputs["resume_values"]["retry_failed_tasks"])
 
+    def test_retry_code_review_scan_clears_stale_review_state(self) -> None:
+        """扫描模型失败重试必须回到 code_scan，并清除旧修复上下文。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowAction": "retry_code_review",
+                    "resumeExecutionRunId": "review-run-1",
+                    "resumeState": {
+                        "summary": {
+                            "status": "failed",
+                            "codeReviewRetry": {"available": True, "target": "scan"},
+                        },
+                        "state": {
+                            "codeReviewResult": {"issues": [{"id": "stale"}]},
+                            "codeReviewRepair": {"status": "failed", "iteration": 2},
+                        },
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(inputs["workflow_action"], "retry_code_review")
+        self.assertEqual(inputs["resume_from"], "code_review")
+        self.assertEqual(inputs["resume_values"]["code_review_retry"], {})
+        self.assertEqual(inputs["resume_values"]["code_review_result"], {})
+        self.assertEqual(inputs["resume_values"]["code_review_repair_confirmation"], {})
+        self.assertEqual(inputs["resume_values"]["code_review_repair_iteration"], 0)
+
+    def test_retry_code_review_repair_reuses_failed_attempt(self) -> None:
+        """修复模型失败重试必须跳过扫描，并且不额外消耗修复轮次。"""
+
+        issue = {"id": "issue-1", "file": "frontend/src/App.tsx"}
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowAction": "retry_code_review",
+                    "resumeExecutionRunId": "review-run-2",
+                    "resumeState": {
+                        "summary": {
+                            "status": "failed",
+                            "codeReviewRetry": {"available": True, "target": "repair"},
+                        },
+                        "state": {
+                            "codeReviewResult": {"issues": [issue]},
+                            "codeReviewRepair": {"status": "failed", "iteration": 2},
+                        },
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "code_review")
+        self.assertEqual(inputs["resume_values"]["code_review_result"]["issues"], [issue])
+        self.assertEqual(
+            inputs["resume_values"]["code_review_repair_confirmation"]["action"],
+            "repair_all",
+        )
+        self.assertEqual(inputs["resume_values"]["code_review_repair_iteration"], 1)
+
+    def test_retry_code_review_rejects_missing_retry_snapshot(self) -> None:
+        """客户端不能在没有后端重试标记时任意恢复代码审查节点。"""
+
+        with self.assertRaisesRegex(ValueError, "缺少有效的审查模型失败快照"):
+            workflow_run_inputs(
+                {"forwardedProps": {"workflowAction": "retry_code_review"}}
+            )
+
+    def test_retry_code_review_rejects_application_planning_scope(self) -> None:
+        """独立创建规划 Graph 不接受代码审查重试动作。"""
+
+        with self.assertRaisesRegex(ValueError, "只适用于主工作流"):
+            workflow_run_inputs(
+                {
+                    "forwardedProps": {
+                        "workflowAction": "retry_code_review",
+                        "workflowScope": "application_planning",
+                    }
+                }
+            )
+
+    def test_retry_code_review_requires_failed_execution_token(self) -> None:
+        """审查重试必须携带当前失败 runId，供生命周期校验同线程和同目标。"""
+
+        with self.assertRaisesRegex(ValueError, "resumeExecutionRunId"):
+            workflow_run_inputs(
+                {
+                    "forwardedProps": {
+                        "workflowAction": "retry_code_review",
+                        "resumeState": {
+                            "summary": {
+                                "status": "failed",
+                                "codeReviewRetry": {
+                                    "available": True,
+                                    "target": "scan",
+                                },
+                            }
+                        },
+                    }
+                }
+            )
+
     def test_retry_restores_camel_case_repair_plan_from_public_state_snapshot(self) -> None:
         """公开 StateSnapshot 的 camelCase 修复计划必须能回到 Build 恢复输入。"""
 

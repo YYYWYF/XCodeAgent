@@ -181,6 +181,19 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             resume_state,
             resume_values_from_state,
         )
+    elif workflow_action == "retry_code_review":
+        if workflow_scope in APPLICATION_PLANNING_SCOPES:
+            raise ValueError("retry_code_review 只适用于主工作流的审查阶段。")
+        retry_target = _code_review_retry_target(resume_state)
+        if not retry_target:
+            raise ValueError("retry_code_review 缺少有效的审查模型失败快照。")
+        resume_from = "code_review"
+        resume_values_from_state.update(
+            _code_review_retry_values(
+                resume_values_from_state,
+                target=retry_target,
+            )
+        )
     elif small_task_handoff_submission and workflow_scope not in APPLICATION_PLANNING_SCOPES:
         # 单测修复使用独立节点；恢复快照中的 repairReturnNode 是当前契约里
         # 唯一可靠的来源，不能让通用 SmallTask 节点吞掉开发阶段修复计数。
@@ -373,6 +386,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("resumeExecutionRunId"))
         or _optional_text(forwarded_props.get("resume_execution_run_id"))
     )
+    if workflow_action == "retry_code_review" and not resume_execution_run_id:
+        raise ValueError("retry_code_review 必须携带失败执行的 resumeExecutionRunId。")
     resume_values = {
         **resume_values_from_state,
         **project_plan_start_values,
@@ -782,7 +797,80 @@ def _optional_text(value: Any) -> str:
 def _supported_workflow_action(value: str) -> str:
     """限制主 Workflow 当前允许的显式控制动作，避免未知动作悄悄改变恢复路由。"""
 
-    return value if value in {"retry_failed_tasks"} else ""
+    return value if value in {"retry_failed_tasks", "retry_code_review"} else ""
+
+
+def _code_review_retry_target(value: dict[str, Any] | None) -> str:
+    """从公开失败快照读取后端签发的审查模型重试目标。"""
+
+    if not value:
+        return ""
+    state = _optional_dict(value.get("state")) or {}
+    result = _optional_dict(value.get("result")) or {}
+    summary = _optional_dict(value.get("summary")) or {}
+    if not any(source.get("status") == "failed" for source in (state, result, summary, value)):
+        return ""
+    for source in (state, result, summary, value):
+        retry = _optional_dict(
+            source.get("codeReviewRetry") or source.get("code_review_retry")
+        )
+        if not retry or retry.get("available") is not True:
+            continue
+        target = _optional_text(retry.get("target"))
+        if target in {"scan", "repair"}:
+            return target
+    return ""
+
+
+def _code_review_retry_values(
+    resumed_values: dict[str, Any],
+    *,
+    target: str,
+) -> dict[str, Any]:
+    """清除旧失败状态，并为扫描或修复模型调用恢复最小可信输入。"""
+
+    common: dict[str, Any] = {
+        "phase": "code_review",
+        "status": "running",
+        "message": "",
+        "error": "",
+        "clarification": {},
+        "code_review_retry": {},
+    }
+    if target == "scan":
+        return {
+            **common,
+            "code_review_result": {},
+            "code_review_report_path": "",
+            "code_review_repair_confirmation": {},
+            "code_review_repair_status": "not_required",
+            "code_review_repair_result": {},
+            "code_review_build_results": [],
+            "code_review_repair_iteration": 0,
+        }
+
+    review_result = resumed_values.get("code_review_result")
+    issues = review_result.get("issues") if isinstance(review_result, dict) else None
+    if not isinstance(issues, list) or not any(isinstance(item, dict) for item in issues):
+        raise ValueError("retry_code_review 修复重试缺少有效的代码审查问题快照。")
+    repair_result = resumed_values.get("code_review_repair_result")
+    repair_result = repair_result if isinstance(repair_result, dict) else {}
+    raw_iteration = repair_result.get("iteration")
+    failed_attempt = (
+        raw_iteration
+        if isinstance(raw_iteration, int) and not isinstance(raw_iteration, bool)
+        else 0
+    )
+    return {
+        **common,
+        "code_review_repair_confirmation": {
+            "mode": "code_review_repair_confirmation",
+            "action": "repair_all",
+        },
+        # 模型请求失败不算完成一轮修复；重试时让子图重新使用同一轮次编号。
+        "code_review_repair_iteration": max(0, failed_attempt - 1),
+        "code_review_repair_status": "repairing",
+    }
 
 
 def _optional_dict(value: Any) -> dict[str, Any] | None:
@@ -977,6 +1065,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "review_phase_confirmation",
         "acceptance_phase_confirmation",
         "code_review_result",
+        "code_review_retry",
         "code_review_report_path",
         "code_review_repair_confirmation",
         "code_review_repair_status",
@@ -1067,6 +1156,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "acceptance_request": "acceptanceRequest",
         "acceptance_decision": "acceptanceDecision",
         "code_review_result": "codeReviewResult",
+        "code_review_retry": "codeReviewRetry",
         "code_review_report_path": "codeReviewReportPath",
         "code_review_repair_result": "codeReviewRepair",
         "code_review_build_results": "codeReviewBuildResults",

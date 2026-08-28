@@ -431,6 +431,28 @@ export function workflowCanRetryFailedTasks(
   )
 }
 
+/** 从 Workflow 的 summary/state/result 中读取后端签发的审查模型重试能力。 */
+export function workflowCodeReviewRetry(
+  workflow?: WorkflowRunPayload
+): { available: true; target: 'scan' | 'repair' } | undefined {
+  const candidates: unknown[] = [
+    workflow?.summary?.codeReviewRetry,
+    workflow?.summary?.code_review_retry,
+    workflow?.state?.codeReviewRetry,
+    workflow?.state?.code_review_retry,
+    workflow?.result?.codeReviewRetry,
+    workflow?.result?.code_review_retry
+  ]
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue
+    const retry = candidate as Record<string, unknown>
+    if (retry.available === true && (retry.target === 'scan' || retry.target === 'repair')) {
+      return { available: true, target: retry.target }
+    }
+  }
+  return undefined
+}
+
 /** 从 Workflow 快照识别已生成且仍有待执行任务的 RepairPlanner 计划。 */
 function workflowHasReadyRepairPlan(workflow?: WorkflowRunPayload): boolean {
   const candidates: unknown[] = [
