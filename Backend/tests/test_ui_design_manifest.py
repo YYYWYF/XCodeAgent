@@ -115,13 +115,14 @@ export default Orders;
 
         self.assertEqual(validate_ui_design_code(self.page, code), [])
 
-    def test_expression_bound_ids_reported_with_static_literal_hint(self) -> None:
-        """map 回调里的表达式绑定 id 必须判缺失，并提示改写静态字面量。
+    def test_expression_bound_ids_resolved_from_map_source(self) -> None:
+        """map 回调里的表达式绑定 id 从数据源字面量静态解析，校验通过。
 
         回归：模型把 5 个指标卡做成 metricCards.map((m) => <div
-        data-information-item-id={m.itemId}>)，_STATIC_ATTRIBUTE_TEMPLATE 只认
-        ="字面量"，5 项全部判"缺少"，重试 2 次仍用同种动态写法而失败。报错需
-        显式指出"表达式绑定无法静态解析"，引导模型逐项写死字面量。
+        data-information-item-id={m.itemId}>)，旧 _STATIC_ATTRIBUTE_TEMPLATE 只认
+        ="字面量"，5 项全部判"缺少"，重试 2 次仍用同种动态写法而失败。现在校验器
+        从 .map() 数据源数组里提取 itemId 字面量，与 expected 精确匹配，动态写法
+        （合理的 React 模式）不再被阻断。
         """
 
         page = {
@@ -150,18 +151,10 @@ const DashboardPage = () => <div>
 export default DashboardPage;
 """
 
-        errors = validate_ui_design_code(page, code)
+        # 动态绑定 + 数据源带字面量 → 校验通过。
+        self.assertEqual(validate_ui_design_code(page, code), [])
 
-        # 表达式绑定的 2 个信息项判缺失，且报错带"表达式绑定"定向提示。
-        missing_error = next(e for e in errors if "缺少" in e and "完全一致" in e)
-        self.assertIn("dashboard_page-project-total", missing_error)
-        self.assertIn("dashboard_page-active-project-count", missing_error)
-        self.assertIn("表达式绑定", missing_error)
-        self.assertIn("静态", missing_error)
-        control_error = next(e for e in errors if "缺少静态 data-control-id" in e)
-        self.assertIn("表达式绑定", control_error)
-
-        # 改成逐项静态字面量后，缺失与提示都消失。
+        # 改成逐项静态字面量后，仍然通过。
         static_code = """
 import React from 'react';
 import { Statistic } from 'antd';
@@ -173,6 +166,36 @@ const DashboardPage = () => <div>
 export default DashboardPage;
 """
         self.assertEqual(validate_ui_design_code(page, static_code), [])
+
+    def test_expression_bound_without_source_still_reported(self) -> None:
+        """动态绑定但数据源无对应字面量时，仍判缺失并给表达式绑定提示。
+
+        兜底：{someVar} 这种无数据源的纯变量绑定，静态分析无法解析值，仍判缺失
+        并回喂模型改写字面量。保证校验器不会被任意 {expr} 蒙混过关。
+        """
+
+        page = {
+            "pageId": "dashboard_page",
+            "information_items": [
+                {"itemId": "dashboard_page-project-total"},
+            ],
+            "actions": [],
+        }
+        code = """
+import React from 'react';
+import { Statistic } from 'antd';
+const DashboardPage = (props) => <div>
+  <div data-information-item-id={props.someVar} data-control-id={`${props.someVar}-display`}>
+    <Statistic value={1} />
+  </div>
+</div>;
+export default DashboardPage;
+"""
+
+        errors = validate_ui_design_code(page, code)
+        missing_error = next(e for e in errors if "缺少" in e and "完全一致" in e)
+        self.assertIn("dashboard_page-project-total", missing_error)
+        self.assertIn("表达式绑定", missing_error)
 
     def test_business_display_nested_in_preview_only_container_not_flagged(self) -> None:
         """嵌套在 data-preview-only 容器内的 Table 不应误报为未绑定。"""

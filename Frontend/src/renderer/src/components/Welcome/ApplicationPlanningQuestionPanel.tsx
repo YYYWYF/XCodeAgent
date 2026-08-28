@@ -425,9 +425,14 @@ export default function ApplicationPlanningQuestionPanel({
   const technicalPlanAnswerKey = questions[0]
     ? questionKey(questions[0], 0)
     : 'technical_plan_confirmation'
-  const technicalPlanFeedback = Form.useWatch(['answers', technicalPlanAnswerKey], form) as
-    | WorkflowClarificationAnswer
+  // 订阅整个 answers 对象再按动态 key 取值：antd v4 的 useWatch 不支持动态 namePath
+  // （technicalPlanAnswerKey 随 questions[0] 变化），直接传动态 namePath 会触发
+  // "useWatch is not support dynamic namePath" 警告。订阅固定的 ['answers'] 不触发警告，
+  // answers 变化时重渲染，再从 answers[technicalPlanAnswerKey] 取当前 feedback。
+  const answersValues = Form.useWatch(['answers'], form) as
+    | Record<string, WorkflowClarificationAnswer>
     | undefined
+  const technicalPlanFeedback = answersValues?.[technicalPlanAnswerKey]
   const handleConfirmationFeedbackTab = useTabToFillPlaceholder(form, [
     'answers',
     isRequirementConfirmation ? 'requirement_spec_feedback' : technicalPlanAnswerKey
