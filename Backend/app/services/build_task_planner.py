@@ -167,12 +167,14 @@ def _text(value: Any, default: str = "") -> str:
 
 
 def _default_operation_for_path(path: str, workspace_root: str | Path | None) -> str:
-    """未显式声明 operation 时，按磁盘是否已存在该文件决定 add/modify。
+    """按磁盘是否已存在该文件决定 add/modify。
 
     build-task-plan 的 change_scope 默认一律标 modify，但模板工程拉取后业务 API、
     新增页面等文件并不存在；build 阶段实际产生 added 差异，与 modify 期望不符，
-    导致工程验收报"预期 modified 实际 added"。这里在缺省时按磁盘存在性兜底：
+    导致工程验收报"预期 modified 实际 added"。这里以磁盘存在性作为确定性事实：
     文件已存在 → modify，不存在 → add，使期望与实际差异类型对齐。
+    模型显式填写的 add 或 modify 同样必须服从该事实；delete 保留其独立的
+    删除语义，不参与本规则归一化。
     与当前工作区差异校验的 `modify if entry_exists else add` 约定保持一致。
     """
 
@@ -218,14 +220,18 @@ def _change_scope(
             path = normalize_repo_path(item.get("path") or item.get("file"))
             if not path:
                 continue
-            # 仅当模型未显式声明 operation 时按磁盘存在性兜底；显式 add/modify/delete
-            # 一律保留，避免覆盖模型对 delete 等语义的明确意图。
+            # 文件是否存在是工作区的确定性事实。无论模型是否显式填写 add/modify，
+            # 都统一由磁盘状态归一化；仅 delete 保留模型的删除语义。
             raw_operation = item.get("operation")
             if raw_operation is None or str(raw_operation).strip() == "":
                 operation = _default_operation_for_path(path, workspace_root)
             else:
                 operation = str(raw_operation).strip().lower()
                 if operation not in operations:
+                    operation = _default_operation_for_path(path, workspace_root)
+                # 未提供工作区根目录时没有可验证的事实源，保留模型显式意图，避免
+                # 把无法判定的新增文件错误改写为 modify。
+                elif operation != "delete" and workspace_root:
                     operation = _default_operation_for_path(path, workspace_root)
             result.append(
                 {
@@ -914,13 +920,12 @@ def _task_semantic_errors(
 
 def _authorization_coverage_errors(
     tasks: list[dict[str, Any]], build_context: dict[str, Any]) -> list[str]:
-    """校验 Final DAG 已完整覆盖平台编译的页面和 Endpoint 权限事实。"""
+    """校验当前范围内页面和后端 Endpoint 的权限实现覆盖。"""
 
     constraints = build_context.get("authorization_constraints")
     if not isinstance(constraints, dict):
         return []
     errors: list[str] = []
-    units = {str(task.get("unit_id") or "") for task in tasks}
     task_paths = [
         path
         for task in tasks
@@ -930,13 +935,31 @@ def _authorization_coverage_errors(
         page_id = _text(page.get("pageId"))
         if page_id and f"page:{page_id}" not in units:
             errors.append(f"Authorization page {page_id} is missing its page Unit task.")
+    # 权限不是独立 Build Unit。仅当当前范围本来就要求实现某个后端 endpoint
+    # Unit 时，才要求该 Unit 中存在 Controller 交付物；纯静态及范围外接口不应
+    # 因携带 operationResourceKeys 被误判为缺少后端 Controller。
+    required_unit_ids = set(_string_list(build_context.get("required_unit_ids")))
     for endpoint in _dict_items(constraints.get("endpoints")):
         keys = _string_list(endpoint.get("operationResourceKeys"))
         contract_id = _text(endpoint.get("apiContractId"))
         endpoint_id = _text(endpoint.get("endpointId"))
         unit_id = f"backend:endpoint:{contract_id}:{endpoint_id}"
-        if keys and unit_id not in units:
-            errors.append(f"Authorization endpoint {contract_id}:{endpoint_id} is missing its Controller Unit task.")
+        if not keys or unit_id not in required_unit_ids:
+            continue
+        has_controller_task = any(
+            str(task.get("unit_id") or "") == unit_id
+            and str(task.get("owner") or "") == "backend"
+            and any(
+                str(deliverable.get("kind") or "") == "backend.endpoint_controller"
+                for deliverable in _dict_items(task.get("deliverables"))
+            )
+            for task in tasks
+        )
+        if not has_controller_task:
+            errors.append(
+                f"Authorization endpoint {contract_id}:{endpoint_id} is missing its "
+                "Controller implementation task."
+            )
     if any(_is_template_boundary_path(path) for path in task_paths):
         errors.append("Build tasks must not modify platform-owned shared route or menu files.")
     if any(_is_auth_constants_path(path) for path in task_paths):

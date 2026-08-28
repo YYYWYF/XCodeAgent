@@ -21,6 +21,7 @@ from app.agents.main.task_preparer_prompt import (
 )
 from app.graph.nodes.tasks import _task_preparation_project_plan
 from app.services.build_task_planner import (
+    _authorization_coverage_errors,
     _database_task_requires_approval,
     build_task_candidate_contract_errors,
     create_build_task_plan,
@@ -205,12 +206,44 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("Existing files do not remove a stage", prompt)
         self.assertIn("For every owner=backend task", prompt)
         self.assertIn("`1. ...\\n2. ...`", prompt)
-        self.assertIn("classify every exact change_scope path during planning", prompt)
-        self.assertIn("operation=modify when the path is listed in existing_files", prompt)
+        self.assertIn("For every frontend or backend change_scope path", prompt)
+        self.assertIn("WorkspaceSnapshot.<layer>.existing_files", prompt)
+        self.assertIn("emit operation=modify when the exact path is listed", prompt)
         self.assertIn("operation=add when it is absent", prompt)
-        self.assertIn("Do not defer this first existence decision", prompt)
+        self.assertIn("do not delegate this decision to an execution Agent", prompt)
         self.assertIn("leave a fully satisfying file unchanged", prompt)
         self.assertIn("minimum additions or corrections", prompt)
+
+    def test_frontend_prompt_requires_file_operations_from_snapshot(self) -> None:
+        """前端任务必须依据快照文件清单决定 add 或 modify。"""
+
+        prompt = build_task_preparation_prompt(
+            {"executable_details": {"page_implementation_contracts": [{"pageId": "orders"}]}},
+            {
+                "frontend": {
+                    "dir_structure": (
+                        "└── frontend/\n"
+                        "    └── src/\n"
+                        "        └── pages/\n"
+                        "            └── Orders/\n"
+                        "                └── index.tsx"
+                    )
+                }
+            },
+            {
+                "planning_context_mode": "page",
+                "planning_unit_ids": ["page:orders"],
+                "required_unit_ids": ["page:orders"],
+                "target": {"type": "page", "id": "orders", "page_key": "Orders"},
+            },
+        )
+
+        self.assertIn("For every frontend or backend change_scope path", prompt)
+        self.assertIn("WorkspaceSnapshot.<layer>.existing_files", prompt)
+        self.assertIn("emit operation=modify when the exact path is listed", prompt)
+        self.assertIn("operation=add when it is absent", prompt)
+        self.assertIn("The platform will deterministically normalize add/modify", prompt)
+        self.assertIn('"frontend/src/pages/Orders/index.tsx"', prompt)
 
     def test_forbidden_output_follows_injected_skill_and_preserves_scope_semantics(self) -> None:
         """Skill 后的平台禁止项必须覆盖冲突描述并保留 change_scope 契约。"""
@@ -386,6 +419,38 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertNotIn(
             "backend/src/main/java/com/cmbchina/backend/OrderController.java",
             projected["backend"]["existing_files"],
+        )
+
+    def test_frontend_snapshot_projects_exact_existing_files_for_planning(self) -> None:
+        """前端目录树同样必须投影为可直接判断 add/modify 的文件列表。"""
+
+        snapshot = {
+            "frontend": {
+                "pages": [],
+                "dir_structure": (
+                    "└── frontend/\n"
+                    "    └── src/\n"
+                    "        ├── apis/\n"
+                    "        │   └── assetApi.ts\n"
+                    "        └── pages/\n"
+                    "            └── AssetList/\n"
+                    "                └── index.tsx"
+                ),
+            },
+        }
+
+        projected = compact_workspace_snapshot(snapshot, scope="page")
+
+        self.assertEqual(
+            projected["frontend"]["existing_files"],
+            [
+                "frontend/src/apis/assetApi.ts",
+                "frontend/src/pages/AssetList/index.tsx",
+            ],
+        )
+        self.assertNotIn(
+            "frontend/src/pages/AssetList/components/InboundOutboundModal.tsx",
+            projected["frontend"]["existing_files"],
         )
 
     def test_endpoint_prompt_injects_backend_skill_only_for_endpoint_scope(self) -> None:
@@ -2670,8 +2735,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(scope["frontend/src/apis/service.ts"], "modify")
         self.assertEqual(scope["frontend/src/apis/userApi.ts"], "add")
 
-    def test_change_scope_explicit_operation_is_preserved(self) -> None:
-        """模型显式声明的 add/modify/delete 一律保留，不被磁盘存在性覆盖。"""
+    def test_change_scope_explicit_add_or_modify_is_normalized_by_file_existence(self) -> None:
+        """显式 add/modify 也必须由工作区文件存在性统一归一化。"""
 
         base_plan = {
             "schema_version": "build-dag.v3",
@@ -2698,9 +2763,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
                             "owner": "frontend",
                             "description": "实现 API 模块",
                             "change_scope": [
-                                # 显式 add，即使文件已存在也保留 add
+                                # 显式 add，但文件存在，必须纠正为 modify。
                                 {"operation": "add", "path": "frontend/src/apis/service.ts"},
-                                # 显式 modify，即使文件不存在也保留 modify
+                                # 显式 modify，但文件不存在，必须纠正为 add。
                                 {"operation": "modify", "path": "frontend/src/apis/missing.ts"},
                             ],
                         }
@@ -2712,8 +2777,68 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         task = plan["task_registry"]["task-api"]
         scope = {item["path"]: item["operation"] for item in task["change_scope"]}
-        self.assertEqual(scope["frontend/src/apis/service.ts"], "add")
-        self.assertEqual(scope["frontend/src/apis/missing.ts"], "modify")
+        self.assertEqual(scope["frontend/src/apis/service.ts"], "modify")
+        self.assertEqual(scope["frontend/src/apis/missing.ts"], "add")
+
+    def test_authorization_endpoint_requires_controller_only_for_required_backend_unit(self) -> None:
+        """权限 endpoint 仅在当前后端 Unit 内要求 Controller 交付物。"""
+
+        unit_id = "backend:endpoint:inbound_api:inbound_api.submit"
+        constraints = {
+            "endpoints": [
+                {
+                    "apiContractId": "inbound_api",
+                    "endpointId": "inbound_api.submit",
+                    "operationResourceKeys": ["inbound_submit"],
+                }
+            ]
+        }
+        service_only_task = {
+            "id": "inbound-service",
+            "unit_id": unit_id,
+            "owner": "backend",
+            "deliverables": [{"kind": "backend.application_service"}],
+        }
+        controller_task = {
+            "id": "inbound-controller",
+            "unit_id": unit_id,
+            "owner": "backend",
+            "deliverables": [{"kind": "backend.endpoint_controller"}],
+        }
+
+        self.assertEqual(
+            _authorization_coverage_errors(
+                [service_only_task],
+                {
+                    "required_unit_ids": [unit_id],
+                    "authorization_constraints": constraints,
+                },
+            ),
+            [
+                "Authorization endpoint inbound_api:inbound_api.submit is missing its "
+                "Controller implementation task."
+            ],
+        )
+        self.assertEqual(
+            _authorization_coverage_errors(
+                [controller_task],
+                {
+                    "required_unit_ids": [unit_id],
+                    "authorization_constraints": constraints,
+                },
+            ),
+            [],
+        )
+        self.assertEqual(
+            _authorization_coverage_errors(
+                [],
+                {
+                    "required_unit_ids": ["frontend:data:static"],
+                    "authorization_constraints": constraints,
+                },
+            ),
+            [],
+        )
 
 
 if __name__ == "__main__":

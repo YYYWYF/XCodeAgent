@@ -332,6 +332,13 @@ def _task_rules_section(mode: str, source_types: set[str]) -> str:
         "be reused or precisely modified, never recreated under a parallel path. Every "
         "deliverable path must be an exact workspace-relative path owned by the same task "
         "and must also appear in that task's change_scope.",
+        "For every frontend or backend change_scope path, the corresponding "
+        "WorkspaceSnapshot.<layer>.existing_files is the deterministic file-existence "
+        "source: emit operation=modify when the exact path is listed and operation=add "
+        "when it is absent. Apply this rule even when choosing an explicit operation; "
+        "do not delegate this decision to an execution Agent. The platform will "
+        "deterministically normalize add/modify against the live workspace; delete keeps "
+        "its separate deletion meaning.",
     ]
     if mode in {"page", "combined", "static"} or "static" in source_types:
         fragments.append("All frontend paths are under `/frontend/`.")
@@ -350,11 +357,7 @@ def _task_rules_section(mode: str, source_types: set[str]) -> str:
             "newline-separated ordered execution list using the exact `1. ...\\n2. ...` "
             "style. Each numbered item must name the exact target path or business "
             "responsibility and must be directly executable, not generic background text. "
-            "WorkspaceSnapshot.backend.existing_files is the deterministic planning-time "
-            "projection of backend.dir_structure. Before emitting a backend task, classify "
-            "every exact change_scope path during planning: use operation=modify when the "
-            "path is listed in existing_files, and operation=add when it is absent. Do not "
-            "defer this first existence decision to the execution Agent. For a missing path, "
+            "For a missing path, "
             "the numbered description must directly instruct creation from the confirmed "
             "contract. For an existing path, it must directly instruct reading the existing "
             "file and comparing its behavior with the confirmed business requirements: leave "
@@ -638,7 +641,7 @@ def compact_workspace_snapshot(
                 "dir_structure",
             }
         }
-        if key == "backend":
+        if key in {"backend", "frontend"}:
             compact[key]["existing_files"] = _existing_files_from_dir_structure(
                 value.get("dir_structure")
             )
@@ -676,7 +679,7 @@ def _compact_endpoint_workspace_snapshot(
             for key, item in value.items()
             if key in allowed_sections[root]
         }
-        if root == "backend":
+        if root in {"backend", "frontend"}:
             bounded["existing_files"] = _existing_files_from_dir_structure(
                 value.get("dir_structure")
             )
