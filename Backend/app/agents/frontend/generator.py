@@ -209,6 +209,16 @@ def _frontend_generation_prompt(
         + _page_template_instruction(page_template)
         + _ui_design_reference_instruction(ui_designs)
         + data_source_instruction
+        + "## Authorization boundary for page tasks\n"
+        "A task may contain platform-owned `source_refs.authorization.actions`. This is the only action-permission input. "
+        "For every listed action, use the existing template `Permission` component imported from the template authorization module, "
+        "wrap exactly one real interaction with `<Permission resourceKey=\"<provided resourceKey>\" mode=\"hidden\">`, "
+        "and keep or add exactly one literal `data-action-id=\"<actionId>\"` on that interaction. Copy the supplied resourceKey exactly; "
+        "do not derive, rename, replace it with a role check, or create a frontend AuthConstants copy. Do not wrap unlisted actions. "
+        "Do not create AuthProvider instances, permission caches, authorization API clients, resource catalogs, role-management UI, `/roles`, "
+        "route guards, menus, routers, or shared authorization files. Route access is platform-owned. For business APIs, import functions from `src/apis/` "
+        "and invoke them through `useRequest`; page and component code must never call `fetch`, `axios`, or `service` directly. "
+        "If an action, its real interaction, or its supplied resourceKey cannot be uniquely located, return that task as failed rather than guessing.\n\n"
         + "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
         "Before generating or modifying any frontend code, you MUST read the following "
         "the required built-in skills with read_file(limit=400) and follow their instructions. "

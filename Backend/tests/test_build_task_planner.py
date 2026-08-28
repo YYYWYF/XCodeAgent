@@ -1521,6 +1521,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "page_entry",
                 "page_default_export",
                 "page_placeholder",
+                "frontend_api_boundary",
             ],
         )
         self.assertEqual(task["unit_id"], "page:login")

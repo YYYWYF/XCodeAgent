@@ -7,6 +7,7 @@ import pytest
 from app.agents.main import requirements_analyzer
 from app.agents.main.requirements_analyzer import (
     _is_malformed_spec_json_error,
+    _requirements_prompt,
     _recover_requirement_spec_json,
     analyze_requirements_with_chat_model,
 )
@@ -64,6 +65,16 @@ def test_malformed_error_classification():
         ValueError("需求 AI 返回的新 RequirementSpec 缺少完整字段：pages")
     )
     assert not _is_malformed_spec_json_error(ValueError("ProductPlan 校验失败"))
+
+
+def test_requirements_prompt_requires_app_info_summary_with_example():
+    """提示词必须给出 app_info 的唯一摘要字段，避免模型使用 description 漂移。"""
+
+    prompt = _requirements_prompt("创建库房管理应用")
+
+    assert "app_info MUST include non-empty name and summary" in prompt
+    assert '"app_info": {"name": "库房管理", "summary":' in prompt
+    assert "do not use description as a substitute" in prompt
 
 
 def test_malformed_json_retries_model_call_once(monkeypatch):

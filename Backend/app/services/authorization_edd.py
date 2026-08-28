@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.services.authorization_constants_projection import apply_authorization_constants_projection
-from app.services.authorization_route_projection import apply_authorization_route_projection
+from app.services.authorization_constants_projection import verify_authorization_constants_projection
+from app.services.authorization_route_projection import verify_authorization_route_projection
 
 
 def verify_authorization_edd(workspace: str | Path, build_task_plan: dict[str, Any]) -> list[str]:
@@ -17,10 +17,10 @@ def verify_authorization_edd(workspace: str | Path, build_task_plan: dict[str, A
     if route_projection is None and constants_projection is None:
         return []
     errors: list[str] = []
-    # 两个投影函数均为幂等写入；此处再次调用同时验证模板声明、标记与精确投影未漂移。
+    # EDD 必须是纯只读阶段：仅核对模板声明、托管区标记和内容，不得重放投影。
     try:
-        apply_authorization_route_projection(workspace, route_projection)
-        apply_authorization_constants_projection(workspace, constants_projection)
+        verify_authorization_route_projection(workspace, route_projection)
+        verify_authorization_constants_projection(workspace, constants_projection)
     except (ValueError, OSError) as exc:
         return [f"权限共享投影 EDD 失败：{exc}"]
     root = Path(workspace).expanduser().resolve()
@@ -34,7 +34,23 @@ def verify_authorization_edd(workspace: str | Path, build_task_plan: dict[str, A
     for path, text in _source_items(root / "frontend" / "src", {".ts", ".tsx"}):
         if "/pages/" in path.as_posix() and ("fetch(" in text or "axios." in text or "service." in text):
             errors.append(f"页面源码存在禁止的直接 HTTP 调用：{path.relative_to(root)}。")
+        if "/authorization/" not in path.as_posix() and _declares_auth_provider(text):
+            errors.append(f"页面或共享业务源码声明了第二套 AuthProvider：{path.relative_to(root)}。")
     return errors
+
+
+def _declares_auth_provider(source: str) -> bool:
+    """识别业务源码中新建的 AuthProvider 声明，不把模板授权目录误判为重复实现。"""
+
+    return any(
+        marker in source
+        for marker in (
+            "function AuthProvider",
+            "const AuthProvider",
+            "class AuthProvider",
+            "createContext<Auth",
+        )
+    )
 
 
 def _source_items(root: Path, suffixes: set[str]) -> list[tuple[Path, str]]:

@@ -51,6 +51,35 @@ def apply_authorization_constants_projection(
     return {"applied": True, "path": str(target.relative_to(workspace_path)), "count": len(items)}
 
 
+def verify_authorization_constants_projection(
+    workspace: str | Path,
+    projection: Any,
+) -> dict[str, Any]:
+    """只读验证 AuthConstants 托管区与确认投影完全一致，不写入任何文件。"""
+
+    items = _projection_items(projection)
+    if not items:
+        return {"verified": False, "reason": "authorization_disabled_or_no_operation_resources"}
+    workspace_path = Path(workspace).expanduser().resolve()
+    manifest = load_template_generation_manifest(workspace_path)
+    if _backend_branch(manifest) != "auth":
+        raise AuthorizationConstantsProjectionError("权限常量投影存在，但后端模板不是 auth 分支。")
+    descriptor = _load_descriptor(workspace_path)
+    target = _target_path(workspace_path, descriptor)
+    content = target.read_text(encoding="utf-8")
+    start_marker = _required_text(descriptor, "startMarker")
+    end_marker = _required_text(descriptor, "endMarker")
+    start = content.find(start_marker)
+    end = content.find(end_marker)
+    if start < 0 or end < 0 or end <= start:
+        raise AuthorizationConstantsProjectionError("AuthConstants 托管文件缺少有效边界标记。")
+    body_start = start + len(start_marker)
+    expected = content[:body_start] + "\n" + _render_projection(items) + content[end:]
+    if content != expected:
+        raise AuthorizationConstantsProjectionError("AuthConstants 托管区与确认投影不一致。")
+    return {"verified": True, "path": str(target.relative_to(workspace_path)), "count": len(items)}
+
+
 def _projection_items(value: Any) -> list[dict[str, str]]:
     """严格校验平台持久化的常量名和值，拒绝系统或页面资源。"""
 

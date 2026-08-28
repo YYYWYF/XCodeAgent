@@ -277,6 +277,45 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         )
         self.assertNotIn("table_design", context["entities"][0])
 
+    def test_endpoint_contract_projects_platform_authorization_constraints(self) -> None:
+        """后端执行任务包只消费平台注入的 Endpoint 权限切片。"""
+
+        task = _task(designs=[{"entity_id": "Category", "data_source_type": "database"}])
+        task["source_refs"]["authorization"] = {
+            "endpoints": [
+                {
+                    "apiContractId": "category_api",
+                    "endpointId": "category.create",
+                    "httpMethod": "POST",
+                    "path": "/categories",
+                    "operationResourceKeys": ["categories_create"],
+                    "semantics": "ANY_OF",
+                }
+            ],
+            "authConstants": [
+                {"name": "CATEGORIES_CREATE_RESOURCE", "resourceKey": "categories_create"}
+            ],
+        }
+
+        context = task_implementation_contract(_project_plan(), task)
+
+        self.assertEqual(
+            context["authorization_constraints"],
+            {
+                "endpointIdentity": {
+                    "apiContractId": "category_api",
+                    "endpointId": "category.create",
+                    "httpMethod": "POST",
+                    "path": "/categories",
+                },
+                "operationResourceKeys": ["categories_create"],
+                "semantics": "ANY_OF",
+                "authConstants": [
+                    {"name": "CATEGORIES_CREATE_RESOURCE", "resourceKey": "categories_create"}
+                ],
+            },
+        )
+
     def test_execution_packet_drops_scheduler_only_fields(self) -> None:
         """最小任务包不携带验收、状态和影响分析等调度字段。"""
 

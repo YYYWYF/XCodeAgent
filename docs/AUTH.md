@@ -1070,31 +1070,46 @@ authorization.enabled=false：
 
 ##### 步骤 7A：Build 入口与平台共享投影
 
-- Build 只加载最新、已确认且已通过步骤 6 `dag_validation` 的 `build-task-plan.json`；执行阶段不再重新运行 DAG 语义校验或权限设计。
-- DAG 确认后、任何叶子任务派发前，平台幂等写入 `auth` 模板声明的 RouteGuard 和 AuthConstants 托管区。写入必须验证模板分支、声明、目标文件和边界标记；失败时 fail closed，Agent 不得补写共享 Router 或 AuthConstants。
-- 平台投影的源码变化单独记录为平台证据，不归属前后端 Agent；Retry/Repair 只能重复应用同一份确认投影。
+状态：已实施。
+
+- Build 启动时只加载步骤 6 当前已确认且已通过 `dag_validation` 的 `build-task-plan.json`，并将其绑定为本次 Build Run 的唯一执行计划。平台记录 `schema_version`、规范化内容 SHA-256，并保存本次运行使用的只读副本；后续前后端 Agent、Testing、Retry 和 Repair 均不得重新读取或切换到其他版本的任务计划。执行阶段不再进行 DAG 权限语义校验、权限设计或权限事实补全。
+- `schema_version` 只表示格式兼容性；计划身份只由 SHA-256 表示。每次恢复 Build 前重新比对规划权威文件与绑定 SHA-256；若已变化，终止当前 Build，由新的已确认计划重新启动 Build Run。
+- 任何叶子任务派发前，由平台根据本次 Build Run 绑定的任务计划幂等执行共享权限投影。模板已有 `RouteGuard` 等权限基础能力只做声明、目标文件和托管边界验证；平台仅写入模板明确声明的 `AuthConstants` 及路由权限托管配置。验证或投影失败时 fail closed，Page Task、API Task 及其他 Build Agent 不得补写共享 Router、`AuthConstants` 或推断权限关系。
+- 平台投影的源码变化、Build Run 标识及计划 SHA-256 单独记录为平台执行证据，不归属前后端 Build Agent。Retry 和 Repair 必须继续使用本次 Build Run 已绑定的同一任务计划，只能重新执行或恢复既有投影，不得新增、修改、删除、补全或重新推断权限事实。
 
 ##### 步骤 7B：前端业务权限接入
 
-- 前端 Prompt/Skill 只读取 `task.source_refs.authorization.pages/actions`。每个受控顶层 action 使用模板 `Permission` 和精确 `resourceKey`；保留或补充稳定 `data-action-id` 以支持确定性验收。未受控 action 不增加包装。
-- 默认使用 `hidden`；只有控件可靠支持禁用且保留可见性有明确交互价值时使用 `disabled`，无法确认时仍使用 `hidden`。
-- 应用级能力完全复用模板 `AuthProvider`、`RouteGuard`、`Permission` 和当前成员资源请求；Page Task 不创建第二个 Provider、权限缓存、资源目录、角色管理或 `/roles` 页面。
-- 页面路由权限由步骤 7A 平台 RouteGuard 投影负责。Page Task 只生成页面、领域 API 调用和本页 Action 包装，不得修改路由、菜单、页面占位、共享 Router 或模板权限核心。
-- 业务请求继续通过 `src/apis/`、模板 `service` 和 `useRequest`；禁止页面或组件直接调用 `fetch`、`axios` 或 `service`。
+状态：已实施。
+
+- 前端 Page Task 只消费执行任务包中只读的 `authorization.actions` 权限约束。凡当前 Task 明确声明为受控的 Action，必须通过稳定 `actionId` 唯一定位到真实交互点，并使用模板 `Permission` 接入平台给定的精确 `resourceKey`；前端不生成或导入后端 Java `AuthConstants`，也不得自行拼写、转换或推断该键。保留或补充稳定 `data-action-id` 以支持确定性验收，未受控 Action 不增加权限包装。
+- Action 默认采用 `hidden`；仅当目标控件可靠支持禁用，且保留可见性具有明确交互价值时允许采用 `disabled`，无法确定时仍采用 `hidden`。
+- 应用级权限能力完全复用模板已有 `AuthProvider`、`RouteGuard`、`Permission` 和当前成员资源请求。Page Task 不得创建第二套 Provider、权限请求入口、权限缓存、资源目录、角色管理能力或 `/roles` 页面。
+- 页面路由权限由步骤 7A 的平台共享投影负责。Page Task 只实现页面业务、领域 API 调用及本 Task 声明的 Action 权限包装，不得修改路由权限配置、菜单权限、共享 Router、`AuthConstants` 或模板权限核心。
+- 页面和组件调用业务接口时统一通过 `useRequest` 调用 `src/apis/` 暴露的领域 API，由 `src/apis/` 内部复用模板 `service`；页面和组件不得直接调用 `fetch`、`axios` 或 `service`。
+- 若受控 Action、对应交互点或平台给定的权限符号无法唯一定位，Task 必须失败，不得猜测、跳过、创建替代资源或扩大权限包装范围。任务完成后必须验证每个受控 Action 恰好存在一个符合约束的 `Permission` 接入，且未受控 Action 未被新增权限包装。
 
 ##### 步骤 7C：后端 Endpoint 注解接入
 
-- 后端执行任务包从 `task.source_refs.authorization` 投射只读 `implementation_contract.authorization_constraints`，包含 Endpoint 身份、精确 `operationResourceKeys`、ANY-OF 语义及平台给定 AuthConstants 符号。
-- 非空资源集合仅允许在真实 Controller Endpoint 上添加或校正一个 `@RequireAnyResource`；多资源置于同一注解中，保持 ANY-OF。空集合不新增注解。
-- Entity、Repository、Service 和外部 API Client 不实现权限判断；不得从请求参数、请求头、角色名或调用来源推断权限。
-- 不得修改 AuthConstants、权限切面、权限表、权限管理 Controller、Bootstrap 或异常映射；符号、Endpoint 或模板注解无法唯一定位时任务失败，不得创建替代实现。
+状态：已实施。
+
+- 平台在后端任务派发前，根据 `task.source_refs.authorization` 生成只读 `implementation_contract.authorization_constraints`；Backend Agent 只能消费该 Contract，不得重新解析或加工权限事实。Contract 至少包含由 HTTP Method、规范化 Path 和 Controller Method 唯一确定的 Endpoint 身份、精确 `operationResourceKeys`、ANY-OF 语义以及平台给定的 `AuthConstants` 符号。
+- 对非空资源集合，Backend Agent 仅允许在目标 Controller Method 上添加或校正一个 `@RequireAnyResource`，并使用平台给定的 `AuthConstants` 符号；多个资源必须位于同一注解中并保持 ANY-OF 语义，不得拆分为多个权限判断。
+- 空资源集合不新增权限注解；若目标 Endpoint 已存在与 Contract 不一致的 `@RequireAnyResource` 或其他无法确定来源的资源权限实现，则任务失败并报告冲突，不得自行保留、删除或重新解释其权限语义。
+- Entity、Repository、Service 和外部 API Client 不实现资源权限判断；不得根据请求参数、请求头、角色名、调用来源、业务名称或现有代码推断资源权限。
+- Backend Agent 不得修改 `AuthConstants`、权限切面、权限表、权限管理 Controller、Bootstrap、异常映射或其他模板权限核心。AuthConstants 符号、Endpoint 或模板注解无法唯一定位，或现有实现与 Contract 冲突时，任务必须失败，不得创建替代实现。
+- 任务完成后必须验证：每个非空资源 Endpoint 恰好存在一个匹配 Contract 的 `@RequireAnyResource`；资源集合与 Contract 完全一致；空资源 Endpoint 未由本 Task 新增权限注解；且 Controller 之外不存在本 Task 新增的资源权限判断。
+
 
 ##### 步骤 7D：Repair 与 EDD
 
-- Repair Task 原样继承父任务的 `source_refs.authorization`、Unit 和文件范围；模型返回的权限字段由平台覆盖。Repair 不得扩大资源、修改 ANY-OF、触碰共享投影或权限核心；需要改变权限事实时返回步骤 4 正式修订。
-- 权限验收始终启用，不受业务自检开关影响：前端验证 Action/Permission/资源键/模式，后端验证 Controller 目标、唯一注解、常量集合和 ANY-OF。可归属任务的失败进入现有 Scheduler/Repair 闭环。
-- Build 完成后执行纯只读 EDD，不得再次调用投影写入函数掩盖漂移。EDD 验证共享 RouteGuard、AuthConstants、单一 AuthProvider、精确 Permission、Controller 注解、空绑定无守卫，以及 Service/Repository 无操作权限或数据权限逻辑。
-- 资源、角色、角色资源关系、管理员成员、成员角色关系、revision 和 manifest fingerprint 的初始化仍由模板 Bootstrap 负责；步骤 7 不生成初始化 SQL、seed 文件、脚本调用或第二套初始化器。
+状态：已实施。
+
+- Repair Task 必须原样继承父任务已确认的 `source_refs.authorization`、Unit 身份及权限约束；实际 `repair_scope` 只能位于父任务允许的文件和代码范围内，不得扩大修改边界。权限事实由平台强制注入，不属于 RepairPlanner 或模型可生成、修改的输出字段；模型输出与既有权限事实冲突时视为约束违规，不得采纳。
+- Repair 仅用于修复当前实现与既有权限约束之间的偏差，不得扩大资源集合、修改 ANY-OF 语义、改变 Action/Endpoint 与资源的绑定、触碰步骤 7A 共享投影或模板权限核心。若问题来源于 DAG 任务或权限引用投射错误，则返回步骤 6 重新规划；若需要修改 TechnicalPlan 中的权限资源或绑定事实，则返回步骤 4 通过正式变更流程修订。
+- 权限验收始终启用，不受普通业务自检开关影响。前端确定性验证受控 Action、稳定 `action_id`、`Permission`、平台给定权限常量及 `hidden/disabled` 模式；后端确定性验证 Controller Method 身份、唯一 `@RequireAnyResource`、权限常量集合及 ANY-OF 语义。能够明确归属于 Page/API Task 实现偏差的失败进入现有 Scheduler/Repair 闭环；共享投影、模板契约或上游权限事实错误不得下放给叶子 Repair Task。
+- 所有 Build Task 完成后执行一次纯只读权限 EDD。EDD 只读取最终源码和 Build 证据，不得再次调用权限投影、Bootstrap 或其他写入函数修正结果。验收至少覆盖：步骤 7A 共享路由权限投影和 `AuthConstants` 与绑定计划一致；未新增第二套应用级 `AuthProvider` 或权限状态源；所有受控 Action 均存在且仅存在正确的 `Permission` 接入；所有受控 Controller Endpoint 均存在且仅存在匹配 Contract 的权限注解；空绑定对象未由本次 Build 新增资源权限守卫；Service、Repository、Entity 和外部 API Client 未新增资源操作权限判断。
+- 资源、角色、角色资源关系、初始管理员成员、成员角色关系以及 Bootstrap revision、manifest fingerprint 等初始化状态仍完全由模板 Bootstrap 负责。步骤 7 不生成初始化 SQL、seed 文件、Bootstrap 脚本调用或第二套初始化器，也不得通过 Repair 或 EDD 修改 Bootstrap 数据。
+
 
 步骤 7 启动验收：
 

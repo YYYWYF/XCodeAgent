@@ -105,6 +105,9 @@ class ProjectState(TypedDict, total=False):
     build_task_plan_confirmation: dict[str, Any]
     dag_generation_progress: dict[str, Any]
     build_task_plan_path: str
+    build_run_id: str
+    build_run_plan_path: str
+    build_run_plan_sha256: str
     retry_failed_tasks: bool
     build_units: dict[str, dict[str, Any]]
     unit_graph: dict[str, Any]
@@ -116,6 +119,7 @@ class ProjectState(TypedDict, total=False):
     pending_build_results: list[dict[str, Any]]
     build_results: list[dict[str, Any]]
     build_summary: dict[str, Any]
+    authorization_platform_projection_evidence: dict[str, Any]
     build_events: Annotated[list[str], add]
     test_target: dict[str, Any]
     test_phase_confirmation: dict[str, Any]

@@ -146,8 +146,58 @@ def task_implementation_contract(
             if str(detail.get("entity_id") or "") in entity_ids
             and str(detail.get("status") or "") == "confirmed"
         ],
+        "authorization_constraints": _endpoint_authorization_constraints(task),
         "language": {"java_version": "8"},
         "verification_policy": _OUTER_VERIFICATION_POLICY,
+    }
+
+
+def _endpoint_authorization_constraints(task: dict[str, Any]) -> dict[str, Any] | None:
+    """把平台注入的单 Endpoint 权限切片收敛为只读 Java 实现契约。"""
+
+    source_refs = task.get("source_refs")
+    source_refs = source_refs if isinstance(source_refs, dict) else {}
+    authorization = source_refs.get("authorization")
+    if not isinstance(authorization, dict):
+        return None
+    endpoints = [
+        dict(item)
+        for item in authorization.get("endpoints") or []
+        if isinstance(item, dict)
+    ]
+    if len(endpoints) != 1:
+        raise ValueError("Backend Endpoint Task 的平台权限切片必须恰好包含一个 Endpoint。")
+    endpoint = endpoints[0]
+    contract_id = str(endpoint.get("apiContractId") or "").strip()
+    endpoint_id = str(endpoint.get("endpointId") or "").strip()
+    http_method = str(endpoint.get("httpMethod") or "").strip().upper()
+    path = str(endpoint.get("path") or "").strip()
+    resource_keys = _string_items(endpoint.get("operationResourceKeys"))
+    if not contract_id or not endpoint_id or not http_method or not path.startswith("/"):
+        raise ValueError("Backend Endpoint Task 的平台权限切片缺少唯一 Endpoint HTTP 身份。")
+    if str(endpoint.get("semantics") or "") != "ANY_OF":
+        raise ValueError("Backend Endpoint Task 的权限语义必须是 ANY_OF。")
+    constants = [
+        {"name": str(item.get("name") or "").strip(), "resourceKey": str(item.get("resourceKey") or "").strip()}
+        for item in authorization.get("authConstants") or []
+        if isinstance(item, dict)
+    ]
+    constant_by_key = {item["resourceKey"]: item["name"] for item in constants if item["name"] and item["resourceKey"]}
+    if resource_keys and set(constant_by_key) != set(resource_keys):
+        raise ValueError("Backend Endpoint Task 的 AuthConstants 符号与操作资源集合不一致。")
+    return {
+        "endpointIdentity": {
+            "apiContractId": contract_id,
+            "endpointId": endpoint_id,
+            "httpMethod": http_method,
+            "path": path,
+        },
+        "operationResourceKeys": resource_keys,
+        "semantics": "ANY_OF",
+        "authConstants": [
+            {"name": constant_by_key[key], "resourceKey": key}
+            for key in resource_keys
+        ],
     }
 
 

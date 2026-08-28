@@ -8,6 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from app.graph.subgraphs.build import (
+    _bound_build_task_plan_for_build,
+    _build_run_plan_drift_errors,
     _execute_ready_tasks,
     _latest_build_task_plan_for_build,
     _verify_business_results,
@@ -70,8 +72,8 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
 
         self.assertEqual(loaded, snapshot)
 
-    def test_build_gate_rechecks_frontend_endpoint_ownership(self) -> None:
-        """即使落盘 JSON 伪造 validation=true，Build 入口也必须拒绝重复 Endpoint owner。"""
+    def test_build_gate_does_not_repeat_dag_semantic_validation(self) -> None:
+        """已确认 DAG 的 owner 语义只由步骤 6 校验，Build 入口不重复判定。"""
 
         check = {
             "kind": "frontend.api_contract",
@@ -116,9 +118,35 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             _ready_build_state(workspace, {"build_task_plan": plan})
             _, errors = _latest_build_task_plan_for_build({"workspace": workspace})
 
-        self.assertIn("multiple implementation owners", str(errors))
-        self.assertIn("homeApi.ts", str(errors))
-        self.assertIn("roleApi.ts", str(errors))
+        self.assertEqual(errors, [])
+
+    def test_build_run_binds_immutable_plan_copy_and_rejects_source_drift(self) -> None:
+        """Build Run 必须持续使用首次绑定的副本，规划文件变化后不得继续派发任务。"""
+
+        plan = {
+            "schema_version": "build-dag.v3",
+            "status": "ready",
+            "confirmation_status": "confirmed",
+            "build_execution_scope": {},
+            "task_registry": {},
+            "task_graph": {"nodes": [], "validation": {"is_valid": True, "errors": []}},
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            state = _ready_build_state(workspace, {"workspace": workspace, "build_task_plan": plan})
+            snapshot, binding, errors = _bound_build_task_plan_for_build(state)
+            self.assertEqual(errors, [])
+            self.assertTrue(os.path.isfile(binding["build_run_plan_path"]))
+            self.assertEqual(snapshot, state["build_task_plan"])
+
+            changed_plan = {**plan, "generated_at": "2026-08-28T00:00:00+00:00"}
+            _ready_build_state(workspace, {"workspace": workspace, "build_task_plan": changed_plan})
+            _snapshot, _next_binding, drift_errors = _bound_build_task_plan_for_build(
+                {**state, **binding}
+            )
+            dispatch_drift_errors = _build_run_plan_drift_errors({**state, **binding})
+
+        self.assertIn("已变化", "；".join(drift_errors))
+        self.assertIn("已变化", "；".join(dispatch_drift_errors))
 
     def test_backend_and_page_owners_execute_in_parallel_with_isolated_changes(self) -> None:
         """同批 backend/page 必须并发执行，并只认领各自授权文件。"""

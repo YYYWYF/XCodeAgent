@@ -19,7 +19,10 @@ def _project_plan(*, enabled: bool = True) -> dict:
         "api_contracts": [
             {
                 "id": "orders_api",
-                "endpoints": [{"id": "orders.list"}, {"id": "orders.approve"}],
+                "endpoints": [
+                    {"id": "orders.list", "method": "GET", "path": "/orders"},
+                    {"id": "orders.approve", "method": "POST", "path": "/orders/approve"},
+                ],
             }
         ],
         "authorization_manifest": {
@@ -102,6 +105,8 @@ class AuthorizationOverlayTests(unittest.TestCase):
                     {
                         "apiContractId": "orders_api",
                         "endpointId": "orders.approve",
+                        "httpMethod": "POST",
+                        "path": "/orders/approve",
                         "operationResourceKeys": ["orders_approve", "orders_recheck"],
                         "semantics": "ANY_OF",
                     }

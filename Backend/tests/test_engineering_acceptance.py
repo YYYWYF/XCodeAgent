@@ -19,6 +19,261 @@ from app.services.engineering_acceptance_verifier import (
 
 
 class EngineeringAcceptanceTests(unittest.TestCase):
+    def test_backend_endpoint_permission_requires_one_exact_any_of_annotation(self) -> None:
+        """后端受控 Endpoint 只能在精确 Controller Method 上使用平台常量。"""
+
+        task = {
+            "id": "endpoint-orders-approve",
+            "owner": "backend",
+            "unit_id": "backend:endpoint:orders_api:orders.approve",
+            "source_refs": {
+                "authorization": {
+                    "endpoints": [
+                        {
+                            "apiContractId": "orders_api",
+                            "endpointId": "orders.approve",
+                            "httpMethod": "POST",
+                            "path": "/orders/approve",
+                            "operationResourceKeys": ["orders_approve", "orders_recheck"],
+                            "semantics": "ANY_OF",
+                        }
+                    ],
+                    "authConstants": [
+                        {"name": "ORDERS_APPROVE_RESOURCE", "resourceKey": "orders_approve"},
+                        {"name": "ORDERS_RECHECK_RESOURCE", "resourceKey": "orders_recheck"},
+                    ],
+                }
+            },
+            "deliverables": [
+                {
+                    "kind": "backend.endpoint_controller",
+                    "paths": ["backend/src/main/java/example/OrdersController.java"],
+                }
+            ],
+            "change_scope": [
+                {"operation": "add", "path": "backend/src/main/java/example/OrdersController.java"}
+            ],
+        }
+        compiled = compile_engineering_acceptance([task])[0]
+        self.assertIn("backend_authorization", [item["kind"] for item in compiled["acceptance_checks"]])
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            controller = root / "backend/src/main/java/example/OrdersController.java"
+            controller.parent.mkdir(parents=True)
+            controller.write_text(
+                "@RestController\n@RequestMapping(\"/orders\")\nclass OrdersController {\n"
+                "  @PostMapping(\"/approve\")\n"
+                "  @RequireAnyResource({AuthConstants.ORDERS_APPROVE_RESOURCE, AuthConstants.ORDERS_RECHECK_RESOURCE})\n"
+                "  public void approve() {}\n}\n",
+                encoding="utf-8",
+            )
+            _, errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={"files": [{"path": controller.relative_to(root).as_posix(), "changeType": "added"}]},
+                workspace_root=workspace,
+            )
+            controller.write_text(
+                "@RestController\n@RequestMapping(\"/orders\")\nclass OrdersController {\n"
+                "  @PostMapping(\"/approve\")\n"
+                "  @RequireAnyResource({AuthConstants.ORDERS_APPROVE_RESOURCE})\n"
+                "  public void approve() {}\n}\n",
+                encoding="utf-8",
+            )
+            _, mismatch_errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={"files": [{"path": controller.relative_to(root).as_posix(), "changeType": "added"}]},
+                workspace_root=workspace,
+            )
+
+        self.assertFalse(errors, errors)
+        self.assertTrue(any("常量集合不匹配" in error for error in mismatch_errors), mismatch_errors)
+
+    def test_frontend_action_permission_uses_platform_resource_key(self) -> None:
+        """页面受控操作必须唯一映射到平台切片给定的 Permission。"""
+
+        task = {
+            "id": "page-orders",
+            "owner": "frontend",
+            "unit_id": "page:orders",
+            "source_refs": {
+                "authorization": {
+                    "actions": [
+                        {
+                            "pageId": "orders",
+                            "actionId": "approve",
+                            "resourceKey": "orders_approve",
+                        }
+                    ]
+                },
+                "page_implementation_contract": {
+                    "actionBindings": [
+                        {"actionId": "approve"},
+                        {"actionId": "export"},
+                    ]
+                },
+            },
+            "deliverables": [
+                {
+                    "kind": "frontend.page",
+                    "target_id": "orders",
+                    "paths": ["frontend/src/pages/Orders/index.tsx"],
+                }
+            ],
+            "change_scope": [
+                {
+                    "operation": "add",
+                    "path": "frontend/src/pages/Orders/index.tsx",
+                }
+            ],
+        }
+        compiled = compile_engineering_acceptance([task])[0]
+        self.assertIn(
+            "frontend_authorization",
+            [check["kind"] for check in compiled["acceptance_checks"]],
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            page_file = root / "frontend/src/pages/Orders/index.tsx"
+            page_file.parent.mkdir(parents=True)
+            page_file.write_text(
+                "import { Permission } from '@/authorization';\n"
+                "export default function Orders() {\n"
+                "  return <Permission resourceKey=\"orders_approve\" mode=\"hidden\">\n"
+                "    <button data-action-id=\"approve\">批准</button>\n"
+                "  </Permission>;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            evidence, errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={
+                    "files": [
+                        {
+                            "path": page_file.relative_to(root).as_posix(),
+                            "changeType": "added",
+                        }
+                    ]
+                },
+                workspace_root=workspace,
+            )
+
+        self.assertFalse(errors, errors)
+        self.assertTrue(
+            any(item["kind"] == "frontend_authorization" and item["status"] == "passed" for item in evidence)
+        )
+
+    def test_frontend_action_permission_rejects_wrong_key_uncontrolled_wrap_and_http(self) -> None:
+        """页面不得改写资源键、包装未受控操作或绕过领域 API 边界。"""
+
+        task = {
+            "id": "page-orders",
+            "owner": "frontend",
+            "unit_id": "page:orders",
+            "source_refs": {
+                "authorization": {
+                    "actions": [
+                        {"actionId": "approve", "resourceKey": "orders_approve"}
+                    ]
+                },
+                "page_implementation_contract": {
+                    "actionBindings": [
+                        {"actionId": "approve"},
+                        {"actionId": "export"},
+                    ]
+                },
+            },
+            "deliverables": [
+                {
+                    "kind": "frontend.page",
+                    "paths": ["frontend/src/pages/Orders/index.tsx"],
+                }
+            ],
+            "change_scope": [
+                {"operation": "add", "path": "frontend/src/pages/Orders/index.tsx"}
+            ],
+        }
+        compiled = compile_engineering_acceptance([task])[0]
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            page_file = root / "frontend/src/pages/Orders/index.tsx"
+            page_file.parent.mkdir(parents=True)
+            page_file.write_text(
+                "import { Permission } from '@/authorization';\n"
+                "export default function Orders() {\n"
+                "  return <>\n"
+                "    <Permission resourceKey=\"wrong\" mode=\"hidden\"><button data-action-id=\"approve\">批准</button></Permission>\n"
+                "    <Permission resourceKey=\"orders_export\" mode=\"hidden\"><button data-action-id=\"export\">导出</button></Permission>\n"
+                "  </>;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            _, errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={
+                    "files": [
+                        {
+                            "path": page_file.relative_to(root).as_posix(),
+                            "changeType": "added",
+                        }
+                    ]
+                },
+                workspace_root=workspace,
+            )
+
+            page_file.write_text(
+                "import { Permission } from '@/authorization';\n"
+                "export default function Orders() {\n"
+                "  fetch('/api/orders');\n"
+                "  return <Permission resourceKey=\"orders_approve\" mode=\"hidden\"><button data-action-id=\"approve\">批准</button></Permission>;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            _, http_errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={
+                    "files": [
+                        {
+                            "path": page_file.relative_to(root).as_posix(),
+                            "changeType": "added",
+                        }
+                    ]
+                },
+                workspace_root=workspace,
+            )
+
+            page_file.write_text(
+                "import { Permission } from '@/authorization';\n"
+                "export default function Orders() {\n"
+                "  return <>\n"
+                "    <Permission resourceKey=\"orders_approve\" mode=\"hidden\"><button data-action-id=\"approve\">批准</button></Permission>\n"
+                "    <Permission resourceKey=\"orders_export\" mode=\"hidden\"><button data-action-id=\"export\">导出</button></Permission>\n"
+                "  </>;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            _, uncontrolled_errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={
+                    "files": [
+                        {
+                            "path": page_file.relative_to(root).as_posix(),
+                            "changeType": "added",
+                        }
+                    ]
+                },
+                workspace_root=workspace,
+            )
+
+        self.assertTrue(any("orders_approve" in error for error in errors), errors)
+        self.assertTrue(any("fetch、axios 或 service" in error for error in http_errors), http_errors)
+        self.assertTrue(any("未受控 Action export" in error for error in uncontrolled_errors), uncontrolled_errors)
+
     def test_business_acceptance_is_not_copied_into_build_task(self) -> None:
         """角色过滤等业务验收必须保留在详情上下文，但不得进入 Build Task。"""
 
@@ -58,7 +313,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
         self.assertNotIn("acceptance_criteria", compiled)
         self.assertEqual(
             [check["kind"] for check in compiled["acceptance_checks"]],
-            ["file_operation", "scope_boundary"],
+            ["file_operation", "scope_boundary", "frontend_api_boundary"],
         )
 
     def test_frontend_mock_source_skips_service_get_binding_check(self) -> None:

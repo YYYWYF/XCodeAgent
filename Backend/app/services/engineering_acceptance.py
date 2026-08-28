@@ -111,6 +111,9 @@ def _compile_task(
         checks.extend(_file_operation_checks(task))
         checks.append(_scope_boundary_check(task))
         checks.extend(_page_structure_checks(task))
+        checks.extend(_frontend_api_boundary_checks(task))
+        checks.extend(_frontend_authorization_checks(task))
+        checks.extend(_backend_authorization_checks(task))
     compiled["acceptance_checks"] = checks
     if (
         compiled.get("status") == "already_satisfied"
@@ -234,6 +237,154 @@ def _page_structure_checks(task: dict[str, Any]) -> list[dict[str, Any]]:
                 )
             )
     return checks
+
+
+def _frontend_authorization_checks(task: dict[str, Any]) -> list[dict[str, Any]]:
+    """为带平台 Action 权限约束的页面任务编译确定性接入检查。"""
+
+    if str(task.get("owner") or "") != "frontend" or not str(
+        task.get("unit_id") or ""
+    ).startswith("page:"):
+        return []
+    source_refs = _dict_value(task.get("source_refs"))
+    authorization = _dict_value(source_refs.get("authorization"))
+    actions = [
+        {
+            "actionId": str(item.get("actionId") or "").strip(),
+            "resourceKey": str(item.get("resourceKey") or "").strip(),
+        }
+        for item in _dict_items(authorization.get("actions"))
+        if str(item.get("actionId") or "").strip()
+        and str(item.get("resourceKey") or "").strip()
+    ]
+    if not actions:
+        return []
+    bindings = _dict_value(source_refs.get("page_implementation_contract")).get(
+        "actionBindings"
+    )
+    all_action_ids = {
+        str(item.get("actionId") or "").strip()
+        for item in _dict_items(bindings)
+        if str(item.get("actionId") or "").strip()
+    }
+    controlled_action_ids = {item["actionId"] for item in actions}
+    paths = [
+        _normalize_path(path)
+        for deliverable in _dict_items(task.get("deliverables"))
+        if str(deliverable.get("kind") or "") == "frontend.page"
+        for path in _string_list(deliverable.get("paths"))
+        if _normalize_path(path).casefold().endswith(".tsx")
+    ]
+    if not paths:
+        paths = [
+            path
+            for path in _allowed_paths(task)
+            if path.casefold().endswith(".tsx")
+        ]
+    if not paths:
+        return []
+    return [
+        _check(
+            task,
+            kind="frontend_authorization",
+            description="受控页面操作必须以平台给定 resourceKey 接入唯一 hidden Permission，且页面不得直连 HTTP 客户端。",
+            target_paths=_dedupe(paths),
+            expected={
+                "controlledActions": actions,
+                "uncontrolledActionIds": sorted(all_action_ids - controlled_action_ids),
+            },
+        )
+    ]
+
+
+def _frontend_api_boundary_checks(task: dict[str, Any]) -> list[dict[str, Any]]:
+    """为页面任务禁止直接 HTTP 客户端调用的边界编译检查。"""
+
+    if str(task.get("owner") or "") != "frontend" or not str(
+        task.get("unit_id") or ""
+    ).startswith("page:"):
+        return []
+    paths = [
+        _normalize_path(path)
+        for deliverable in _dict_items(task.get("deliverables"))
+        if str(deliverable.get("kind") or "") == "frontend.page"
+        for path in _string_list(deliverable.get("paths"))
+        if _normalize_path(path).casefold().endswith(".tsx")
+    ]
+    if not paths:
+        paths = [
+            path
+            for path in _allowed_paths(task)
+            if path.casefold().endswith(".tsx")
+        ]
+    if not paths:
+        return []
+    return [
+        _check(
+            task,
+            kind="frontend_api_boundary",
+            description="页面和任务内组件不得直接调用 fetch、axios 或 service；业务接口必须经 src/apis/ 与 useRequest。",
+            target_paths=_dedupe(paths),
+            expected={},
+        )
+    ]
+
+
+def _backend_authorization_checks(task: dict[str, Any]) -> list[dict[str, Any]]:
+    """为后端 Endpoint 任务编译唯一 Controller ANY-OF 注解检查。"""
+
+    if str(task.get("owner") or "") != "backend" or not str(
+        task.get("unit_id") or ""
+    ).startswith("backend:endpoint:"):
+        return []
+    source_refs = _dict_value(task.get("source_refs"))
+    authorization = _dict_value(source_refs.get("authorization"))
+    endpoints = _dict_items(authorization.get("endpoints"))
+    if len(endpoints) != 1:
+        return []
+    endpoint = endpoints[0]
+    http_method = str(endpoint.get("httpMethod") or "").strip().upper()
+    path = str(endpoint.get("path") or "").strip()
+    resource_keys = _string_list(endpoint.get("operationResourceKeys"))
+    if not http_method or not path.startswith("/") or str(endpoint.get("semantics") or "") != "ANY_OF":
+        return []
+    constants = {
+        str(item.get("resourceKey") or "").strip(): str(item.get("name") or "").strip()
+        for item in _dict_items(authorization.get("authConstants"))
+    }
+    if resource_keys and any(not constants.get(key) for key in resource_keys):
+        return []
+    paths = [
+        _normalize_path(path)
+        for deliverable in _dict_items(task.get("deliverables"))
+        if str(deliverable.get("kind") or "") == "backend.endpoint_controller"
+        for path in _string_list(deliverable.get("paths"))
+        if _normalize_path(path).casefold().endswith(".java")
+    ]
+    if not paths:
+        return []
+    return [
+        _check(
+            task,
+            kind="backend_authorization",
+            description="Controller 目标 Endpoint 必须且只能以一个 RequireAnyResource 使用平台给定常量实现 ANY-OF。",
+            target_paths=_dedupe(paths),
+            expected={
+                "endpointIdentity": {
+                    "apiContractId": str(endpoint.get("apiContractId") or "").strip(),
+                    "endpointId": str(endpoint.get("endpointId") or "").strip(),
+                    "httpMethod": http_method,
+                    "path": path,
+                },
+                "operationResourceKeys": resource_keys,
+                "semantics": "ANY_OF",
+                "authConstants": [
+                    {"name": constants[key], "resourceKey": key}
+                    for key in resource_keys
+                ],
+            },
+        )
+    ]
 
 
 def _scope_boundary_check(task: dict[str, Any]) -> dict[str, Any]:

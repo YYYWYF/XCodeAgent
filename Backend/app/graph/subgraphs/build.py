@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+from uuid import uuid4
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -30,13 +31,9 @@ from app.services.build_repair_planner import (
 )
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
-from app.services.authorization_route_projection import (
-    AuthorizationRouteProjectionError,
-    apply_authorization_route_projection,
-)
-from app.services.authorization_constants_projection import (
-    AuthorizationConstantsProjectionError,
-    apply_authorization_constants_projection,
+from app.services.authorization_platform_projection import (
+    AuthorizationPlatformProjectionError,
+    apply_authorization_platform_projections,
 )
 from app.services.authorization_edd import verify_authorization_edd
 from app.services.business_acceptance_verifier import verify_business_acceptance
@@ -44,7 +41,6 @@ from app.services.engineering_acceptance_verifier import (
     unauthorized_batch_paths,
 )
 from app.services.build_task_planner import (
-    frontend_endpoint_ownership_errors,
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
 )
@@ -72,9 +68,11 @@ from app.workspace.code_changes import (
     merge_code_change_sets,
 )
 from app.workspace.task_documents import (
+    build_run_task_plan_json_path,
+    build_task_plan_sha256,
     build_task_plan_json_path,
     load_build_task_plan_json,
-    write_build_task_plan_json,
+    write_build_run_task_plan_json,
 )
 from app.workspace.task_documents import write_repair_task_plan_json
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
@@ -754,11 +752,8 @@ def _apply_scheduler_results(
             repaired_tasks,
             updated.get("build_results", []),
         )
-    build_task_plan_path = write_build_task_plan_json(state, updated["build_task_plan"])
-    return {
-        **updated,
-        "build_task_plan_path": build_task_plan_path,
-    }
+    # 调度状态由 Graph checkpoint 保存，不能回写 Build Run 的只读计划副本或规划权威文件。
+    return updated
 
 
 def _results_for_tasks(
@@ -922,9 +917,6 @@ def _latest_build_task_plan_for_build(
         errors.extend(str(error) for error in graph_errors if str(error).strip())
         if not graph_errors:
             errors.append("Build DAG task_graph.validation 未通过。")
-    errors.extend(
-        frontend_endpoint_ownership_errors(tasks_from_build_task_plan(build_task_plan))
-    )
     current_scope = state.get("build_execution_scope")
     current_scope = current_scope if isinstance(current_scope, dict) else {}
     planned_scope = build_task_plan.get("build_execution_scope")
@@ -935,6 +927,116 @@ def _latest_build_task_plan_for_build(
             f"planned={planned_scope} current={current_scope}。"
         )
     return build_task_plan, _dedupe_build_gate_errors(errors)
+
+
+def _bound_build_task_plan_for_build(
+    state: ProjectState,
+) -> tuple[dict[str, Any], dict[str, str], list[str]]:
+    """创建或重读当前 Build Run 的只读计划副本，并拒绝规划文件漂移。"""
+
+    bound_run_id = str(state.get("build_run_id") or "").strip()
+    bound_path = str(state.get("build_run_plan_path") or "").strip()
+    bound_sha256 = str(state.get("build_run_plan_sha256") or "").strip()
+    latest_plan, latest_errors = _latest_build_task_plan_for_build(state)
+    if bound_run_id or bound_path or bound_sha256:
+        if not (bound_run_id and bound_path and bound_sha256):
+            return {}, {}, ["当前 Build Run 的任务计划绑定不完整。"]
+        try:
+            expected_snapshot_path = build_run_task_plan_json_path(state, bound_run_id)
+        except ValueError as exc:
+            return {}, {}, [str(exc)]
+        if Path(bound_path).expanduser().resolve() != expected_snapshot_path.resolve():
+            return {}, {}, ["Build Run 的任务计划副本路径与运行标识不一致。"]
+        if latest_errors:
+            return {}, {}, ["当前规划任务计划已失效，不能继续已绑定 Build Run。", *latest_errors]
+        if build_task_plan_sha256(latest_plan) != bound_sha256:
+            return {}, {}, ["已绑定 Build Run 的任务计划已变化；请以新的已确认计划重新启动 Build。"]
+        try:
+            snapshot = load_build_task_plan_json(bound_path)
+        except (OSError, ValueError, TypeError):
+            return {}, {}, ["Build Run 的只读任务计划副本无法读取。"]
+        if not isinstance(snapshot, dict) or build_task_plan_sha256(snapshot) != bound_sha256:
+            return {}, {}, ["Build Run 的只读任务计划副本摘要不匹配。"]
+        return snapshot, {
+            "build_run_id": bound_run_id,
+            "build_run_plan_path": bound_path,
+            "build_run_plan_sha256": bound_sha256,
+        }, []
+
+    if latest_errors:
+        return latest_plan, {}, latest_errors
+    build_run_id = f"build-{uuid4().hex}"
+    try:
+        snapshot_path = write_build_run_task_plan_json(
+            state,
+            build_run_id=build_run_id,
+            build_task_plan=latest_plan,
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        return latest_plan, {}, [f"无法创建 Build Run 的只读任务计划副本：{exc}"]
+    return latest_plan, {
+        "build_run_id": build_run_id,
+        "build_run_plan_path": snapshot_path,
+        "build_run_plan_sha256": build_task_plan_sha256(latest_plan),
+    }, []
+
+
+def _build_run_plan_drift_errors(state: ProjectState) -> list[str]:
+    """在每次叶子任务派发前确认规划权威文件仍等于当前 Build Run 绑定。"""
+
+    bound_sha256 = str(state.get("build_run_plan_sha256") or "").strip()
+    if not bound_sha256:
+        return ["当前 Build Run 缺少任务计划摘要绑定。"]
+    latest_plan, latest_errors = _latest_build_task_plan_for_build(state)
+    if latest_errors:
+        return ["当前规划任务计划已失效，不能继续已绑定 Build Run。", *latest_errors]
+    if build_task_plan_sha256(latest_plan) != bound_sha256:
+        return ["已绑定 Build Run 的任务计划已变化；请以新的已确认计划重新启动 Build。"]
+    return []
+
+
+def _build_run_plan_drift_result(
+    current_state: ProjectState,
+    *,
+    errors: list[str],
+    build_events: list[str],
+    build_execution_scope: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """保留已执行结果并终止发生计划漂移的当前 Build Run。"""
+
+    tasks = list(current_state.get("tasks") or [])
+    return {
+        "phase": "build",
+        "status": "failed",
+        "build_task_plan": current_state.get("build_task_plan", {}),
+        "build_task_plan_path": current_state.get("build_run_plan_path"),
+        "tasks": tasks,
+        "build_results": list(current_state.get("build_results") or []),
+        "build_summary": {
+            "status": "failed",
+            "total": len(tasks),
+            "completed": sum(1 for task in tasks if task.get("status") == "completed"),
+            "failed": sum(1 for task in tasks if task.get("status") == "failed"),
+            "pending": sum(1 for task in tasks if task.get("status") == "pending"),
+            "gate_errors": errors,
+        },
+        "build_execution_scope": build_execution_scope or {},
+        "error": "；".join(errors),
+        "clarification": {
+            "mode": "build_task_plan_generation_error",
+            "status": "failed",
+            "message": "已绑定 Build Run 的任务计划发生变化，必须重新确认后启动新 Build。",
+            "errors": errors,
+        },
+        "build_events": [*build_events, "scheduler:build_run_plan_changed"],
+        "authorization_platform_projection_evidence": current_state.get(
+            "authorization_platform_projection_evidence", {}
+        ),
+        "build_run_id": current_state.get("build_run_id"),
+        "build_run_plan_path": current_state.get("build_run_plan_path"),
+        "build_run_plan_sha256": current_state.get("build_run_plan_sha256"),
+        "timeline": ["build"],
+    }
 
 
 def _build_gate_result(
@@ -1010,38 +1112,45 @@ def run_build_scheduler(
 ) -> dict[str, Any]:
     """按 build_execution_scope 裁剪任务图，并持续调度到当前切片完成或阻塞。"""
 
-    build_task_plan, gate_errors = _latest_build_task_plan_for_build(state)
+    build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)
     if gate_errors:
         return _build_gate_result(state, build_task_plan, gate_errors)
     try:
-        # 用户确认 DAG 后、叶子任务分发前由平台写入共享 RouteGuard 托管区。
-        apply_authorization_route_projection(
-            workspace_from_state(state) or "",
-            build_task_plan.get("authorization_route_projection"),
+        # 平台在 Agent 获取工作区快照前重放确认投影，源码差异单列为平台证据。
+        authorization_platform_projection_evidence = (
+            apply_authorization_platform_projections(
+                workspace_from_state(state) or "",
+                build_task_plan,
+                build_run_id=build_run_binding.get("build_run_id"),
+                plan_sha256=build_run_binding.get("build_run_plan_sha256"),
+            )
         )
-    except (AuthorizationRouteProjectionError, OSError) as exc:
-        return _build_gate_result(
+    except AuthorizationPlatformProjectionError as exc:
+        blocked = _build_gate_result(
             state,
             build_task_plan,
-            [f"共享 RouteGuard 投影写入失败，Build 已阻断：{exc}"],
+            [f"权限共享投影写入失败，Build 已阻断：{exc}"],
         )
-    try:
-        # 平台常量先于 Endpoint 任务写入，保证 Controller 仅引用已存在的稳定符号。
-        apply_authorization_constants_projection(
-            workspace_from_state(state) or "",
-            build_task_plan.get("authorization_constants_projection"),
-        )
-    except (AuthorizationConstantsProjectionError, OSError, ValueError) as exc:
-        return _build_gate_result(
-            state,
-            build_task_plan,
-            [f"AuthConstants 投影写入失败，Build 已阻断：{exc}"],
-        )
+        return {
+            **blocked,
+            "authorization_platform_projection_evidence": {
+                "status": "failed",
+                "source": "platform.authorization_projection",
+                "buildRunId": build_run_binding.get("build_run_id"),
+                "planSha256": build_run_binding.get("build_run_plan_sha256"),
+                "error": str(exc),
+                "files": [],
+                "summary": {"files": 0, "additions": 0, "deletions": 0},
+            },
+        }
     # 当前契约直接使用最新计划，不对历史 DAG 做运行时迁移或字段回填。
     canonical_tasks = list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
     build_task_plan = replace_build_task_plan_tasks(build_task_plan, canonical_tasks)
     state = {
         **state,
+        **build_run_binding,
+        "build_task_plan_path": build_run_binding.get("build_run_plan_path"),
+        "authorization_platform_projection_evidence": authorization_platform_projection_evidence,
         "build_results": hydrate_missing_failed_results(
             canonical_tasks,
             list(state.get("build_results", [])),
@@ -1243,6 +1352,15 @@ def run_build_scheduler(
             build_events.append("scheduler:blocked")
             break
 
+        drift_errors = _build_run_plan_drift_errors(current_state)
+        if drift_errors:
+            return _build_run_plan_drift_result(
+                current_state,
+                errors=drift_errors,
+                build_events=build_events,
+                build_execution_scope=build_execution_scope,
+            )
+
         ready_ids = selection["ready_task_ids"]
         build_events.append(f"scheduler:dispatch:{','.join(ready_ids)}")
         running_tasks = mark_tasks_running(current_state["tasks"], ready_ids)
@@ -1425,11 +1543,6 @@ def run_build_scheduler(
                 "repair_task_plan_path": repair_task_plan_path,
                 "repair_tasks": repair_task_plan["tasks"],
             }
-            build_task_plan_path = write_build_task_plan_json(
-                current_state,
-                next_build_task_plan,
-            )
-            current_state["build_task_plan_path"] = build_task_plan_path
             build_events.append(f"scheduler:repair_planned:{len(repair_task_plan['tasks'])}")
             _emit_build_progress(
                 progress_writer,
@@ -1514,8 +1627,9 @@ def run_build_scheduler(
             "build_task_plan", state.get("build_task_plan", {})
         ),
         "build_task_plan_path": current_state.get(
-            "build_task_plan_path", state.get("build_task_plan_path")
+            "build_run_plan_path", state.get("build_run_plan_path")
         ),
+        **build_run_binding,
         "tasks": current_state["tasks"],
         "ready_tasks": [],
         "build_results": build_results,
@@ -1530,6 +1644,7 @@ def run_build_scheduler(
         "build_events": build_events,
         "repair_iteration": int(state.get("repair_iteration", 0) or 0)
         + (1 if repair_dispatched else 0),
+        "authorization_platform_projection_evidence": authorization_platform_projection_evidence,
         **code_change_state_update(merged_code_changes),
         "timeline": ["build"],
     }

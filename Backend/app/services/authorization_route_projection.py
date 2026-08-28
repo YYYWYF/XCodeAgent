@@ -60,6 +60,38 @@ def apply_authorization_route_projection(
     return {"applied": True, "path": str(target.relative_to(workspace_path)), "count": len(items)}
 
 
+def verify_authorization_route_projection(
+    workspace: str | Path,
+    projection: Any,
+) -> dict[str, Any]:
+    """只读验证 RouteGuard 托管区与确认投影完全一致，不写入任何文件。"""
+
+    items = _projection_items(projection)
+    if not items:
+        return {"verified": False, "reason": "authorization_disabled_or_no_controlled_pages"}
+    workspace_path = Path(workspace).expanduser().resolve()
+    try:
+        manifest = load_template_generation_manifest(workspace_path)
+    except ApplicationTemplateGenerationError as exc:
+        raise AuthorizationRouteProjectionError(str(exc)) from exc
+    if _frontend_branch(manifest) != "auth":
+        raise AuthorizationRouteProjectionError("权限路由投影存在，但前端模板不是 auth 分支。")
+    descriptor = _load_descriptor(workspace_path)
+    target = _target_path(workspace_path, descriptor)
+    content = target.read_text(encoding="utf-8")
+    start_marker = _required_text(descriptor, "startMarker")
+    end_marker = _required_text(descriptor, "endMarker")
+    start = content.find(start_marker)
+    end = content.find(end_marker)
+    if start < 0 or end < 0 or end <= start:
+        raise AuthorizationRouteProjectionError("RouteGuard 托管文件缺少有效边界标记。")
+    body_start = start + len(start_marker)
+    expected = content[:body_start] + "\n" + _render_projection(items) + content[end:]
+    if content != expected:
+        raise AuthorizationRouteProjectionError("RouteGuard 托管区与确认投影不一致。")
+    return {"verified": True, "path": str(target.relative_to(workspace_path)), "count": len(items)}
+
+
 def _projection_items(value: Any) -> list[dict[str, str]]:
     """校验 DAG 中持久化的页面权限投影，拒绝模糊或重复映射。"""
 

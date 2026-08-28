@@ -216,6 +216,42 @@ class BuildRepairPlannerTests(unittest.TestCase):
         self.assertNotIn("acceptance_criteria", repair_task)
         self.assertEqual(repair_task["business_acceptance_checks"], [])
 
+    def test_repair_task_preserves_platform_authorization_slice(self) -> None:
+        """RepairPlanner 不得替换或扩大父任务的权限事实。"""
+
+        task = {
+            "id": "orders-approve",
+            "owner": "backend",
+            "unit_id": "backend:endpoint:orders_api:orders.approve",
+            "status": "failed",
+            "change_scope": [{"operation": "modify", "path": "backend/OrdersController.java"}],
+            "allowed_paths": ["backend/OrdersController.java"],
+            "source_refs": {
+                "authorization": {
+                    "endpoints": [{"endpointId": "orders.approve", "operationResourceKeys": ["orders_approve"]}],
+                    "authConstants": [{"name": "ORDERS_APPROVE_RESOURCE", "resourceKey": "orders_approve"}],
+                }
+            },
+        }
+        result = {
+            "task_id": "orders-approve",
+            "status": "failed",
+            "failure_category": "acceptance_verification_failed",
+            "scheduler_decision": {"action": "repair"},
+        }
+        plan = create_build_failure_repair_plan(
+            failed_results=[result],
+            tasks=[task],
+            repair_planner=lambda _input: {
+                "decision": "repair",
+                "strategy": "仅修复注解",
+                "repair_tasks": [{"change_scope": [{"path": "backend/OrdersController.java"}]}],
+            },
+        )
+
+        self.assertEqual(plan["tasks"][0]["unit_id"], task["unit_id"])
+        self.assertEqual(plan["tasks"][0]["source_refs"]["authorization"], task["source_refs"]["authorization"])
+
     def test_formal_source_change_requires_dag_replan_instead_of_repair(self) -> None:
         """正式产物哈希变化时必须终止当前 Repair，并要求重新生成 Build DAG。"""
 

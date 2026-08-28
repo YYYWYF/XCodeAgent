@@ -44,7 +44,8 @@ def _authorization_fact_extraction_prompt(
 
     existing_roles = (
         existing_spec.get("user_roles")
-        if isinstance(existing_spec, dict) and isinstance(existing_spec.get("user_roles"), list)
+        if isinstance(existing_spec, dict)
+        and isinstance(existing_spec.get("user_roles"), list)
         else []
     )
     page_candidates = [
@@ -95,7 +96,11 @@ def _is_lower_snake_case(value: Any) -> bool:
 def _string_list(value: Any) -> list[str]:
     """将不可信列表收敛为非空字符串列表。"""
 
-    return [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else []
+    return (
+        [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, list)
+        else []
+    )
 
 
 def _validate_authorization_fact_output(
@@ -109,7 +114,9 @@ def _validate_authorization_fact_output(
     errors: list[str] = []
     expected_root = {"user_roles", "authorization_requirements"}
     if set(value) != expected_root:
-        errors.append("权限事实模型输出根字段必须且只能包含 user_roles、authorization_requirements。")
+        errors.append(
+            "权限事实模型输出根字段必须且只能包含 user_roles、authorization_requirements。"
+        )
     roles = value.get("user_roles")
     if not isinstance(roles, list):
         errors.append("权限事实模型输出.user_roles 必须是数组。")
@@ -121,14 +128,23 @@ def _validate_authorization_fact_output(
             continue
         role_id = str(role.get("id") or "").strip()
         if not _is_lower_snake_case(role_id) or role_id in role_ids:
-            errors.append(f"权限事实模型输出.user_roles[{index}].id 必须唯一且为 lower_snake_case。")
+            errors.append(
+                f"权限事实模型输出.user_roles[{index}].id 必须唯一且为 lower_snake_case。"
+            )
         role_ids.add(role_id)
-        if not str(role.get("name") or "").strip() or not str(role.get("description") or "").strip():
+        if (
+            not str(role.get("name") or "").strip()
+            or not str(role.get("description") or "").strip()
+        ):
             errors.append(f"权限事实模型输出.user_roles[{index}] 缺少名称或职责。")
     authorization = value.get("authorization_requirements")
     if not isinstance(authorization, dict):
         return [*errors, "权限事实模型输出.authorization_requirements 必须是对象。"]
-    expected_authorization = {"restrictedPages", "restrictedOperations", "dataAuthorizationIssues"}
+    expected_authorization = {
+        "restrictedPages",
+        "restrictedOperations",
+        "dataAuthorizationIssues",
+    }
     if set(authorization) != expected_authorization:
         errors.append("权限事实模型输出.authorization_requirements 字段不符合契约。")
     page_ids = {
@@ -142,48 +158,71 @@ def _validate_authorization_fact_output(
             errors.append(f"权限事实模型输出.{field_name} 必须是数组。")
             continue
         for index, item in enumerate(items):
-            expected = {
-                "name",
-                "targetPageId",
-                "description",
-                "rationale",
-                "sourceRefs",
-                "defaultGrantedRoleIds",
-            } if field_name == "restrictedPages" else {
-                "name",
-                "description",
-                "rationale",
-                "sourceRefs",
-                "defaultGrantedRoleIds",
-            }
+            expected = (
+                {
+                    "name",
+                    "targetPageId",
+                    "description",
+                    "rationale",
+                    "sourceRefs",
+                    "defaultGrantedRoleIds",
+                }
+                if field_name == "restrictedPages"
+                else {
+                    "name",
+                    "description",
+                    "rationale",
+                    "sourceRefs",
+                    "defaultGrantedRoleIds",
+                }
+            )
             if not isinstance(item, dict) or set(item) != expected:
-                errors.append(f"权限事实模型输出.{field_name}[{index}] 字段不符合契约。")
+                errors.append(
+                    f"权限事实模型输出.{field_name}[{index}] 字段不符合契约。"
+                )
                 continue
-            if any(not str(item.get(key) or "").strip() for key in ("name", "description", "rationale")):
+            if any(
+                not str(item.get(key) or "").strip()
+                for key in ("name", "description", "rationale")
+            ):
                 errors.append(f"权限事实模型输出.{field_name}[{index}] 缺少业务语义。")
             if field_name == "restrictedPages":
                 target_page_id = str(item.get("targetPageId") or "").strip()
                 if not target_page_id:
-                    errors.append(f"权限事实模型输出.{field_name}[{index}] 缺少 targetPageId。")
+                    errors.append(
+                        f"权限事实模型输出.{field_name}[{index}] 缺少 targetPageId。"
+                    )
                 elif page_ids and target_page_id not in page_ids:
-                    errors.append(f"权限事实模型输出.{field_name}[{index}].targetPageId 未引用页面目录。")
+                    errors.append(
+                        f"权限事实模型输出.{field_name}[{index}].targetPageId 未引用页面目录。"
+                    )
             if not _string_list(item.get("sourceRefs")):
-                errors.append(f"权限事实模型输出.{field_name}[{index}] 缺少 sourceRefs。")
+                errors.append(
+                    f"权限事实模型输出.{field_name}[{index}] 缺少 sourceRefs。"
+                )
             grants = _string_list(item.get("defaultGrantedRoleIds"))
             if any(role_id not in role_ids for role_id in grants):
-                errors.append(f"权限事实模型输出.{field_name}[{index}] 默认角色授权无效。")
+                errors.append(
+                    f"权限事实模型输出.{field_name}[{index}] 默认角色授权无效。"
+                )
     data_issues = authorization.get("dataAuthorizationIssues")
     if not isinstance(data_issues, list):
         return [*errors, "权限事实模型输出.dataAuthorizationIssues 必须是数组。"]
     for index, item in enumerate(data_issues):
         expected = {"description", "sourceRefs"}
         if not isinstance(item, dict) or set(item) != expected:
-            errors.append(f"权限事实模型输出.dataAuthorizationIssues[{index}] 字段不符合契约。")
+            errors.append(
+                f"权限事实模型输出.dataAuthorizationIssues[{index}] 字段不符合契约。"
+            )
             continue
         if not str(item.get("description") or "").strip():
-            errors.append(f"权限事实模型输出.dataAuthorizationIssues[{index}] 缺少业务说明。")
+            errors.append(
+                f"权限事实模型输出.dataAuthorizationIssues[{index}] 缺少业务说明。"
+            )
         if not _string_list(item.get("sourceRefs")):
-            errors.append(f"权限事实模型输出.dataAuthorizationIssues[{index}] 缺少 sourceRefs。")
+            errors.append(
+                f"权限事实模型输出.dataAuthorizationIssues[{index}] 缺少 sourceRefs。"
+            )
     return errors
 
 
@@ -199,9 +238,14 @@ def _extract_authorization_facts(
     for _attempt in range(_AUTHORIZATION_FACT_EXTRACTION_ATTEMPTS):
         prompt = _authorization_fact_extraction_prompt(request, existing_spec, pages)
         if feedback:
-            prompt += "\n\nPrevious output failed validation. Return a corrected complete JSON only:\n" + feedback
+            prompt += (
+                "\n\nPrevious output failed validation. Return a corrected complete JSON only:\n"
+                + feedback
+            )
         result = create_chat_model(settings).invoke(prompt)
-        payload = extract_json_object(_coerce_content_text(getattr(result, "content", "")) or "")
+        payload = extract_json_object(
+            _coerce_content_text(getattr(result, "content", "")) or ""
+        )
         errors = _validate_authorization_fact_output(payload, pages)
         if not errors:
             return payload
@@ -224,7 +268,9 @@ def _merge_authorization_facts(
     authorization = merged.get("authorization_requirements")
     authorization = deepcopy(authorization) if isinstance(authorization, dict) else {}
     fact_authorization = facts.get("authorization_requirements")
-    fact_authorization = fact_authorization if isinstance(fact_authorization, dict) else {}
+    fact_authorization = (
+        fact_authorization if isinstance(fact_authorization, dict) else {}
+    )
     for field_name in ("restrictedPages", "restrictedOperations"):
         fact_items = fact_authorization.get(field_name)
         if isinstance(fact_items, list):
@@ -257,7 +303,9 @@ def _requirements_prompt(
 ) -> str:
     """构建产品需求提示；实体归技术规划阶段。"""
 
-    bounded_round = max(0, min(clarification_round, MAX_REQUIREMENT_CLARIFICATION_ROUNDS))
+    bounded_round = max(
+        0, min(clarification_round, MAX_REQUIREMENT_CLARIFICATION_ROUNDS)
+    )
     next_round = min(
         bounded_round + 1,
         MAX_REQUIREMENT_CLARIFICATION_ROUNDS,
@@ -390,6 +438,7 @@ def _requirements_prompt(
         "without markdown fences or commentary. The JSON must contain exactly these top-level fields: "
         "version, status, generated_at, app_info, user_roles, feature_modules, pages, business_flows, "
         "authorization_requirements. Do not include any other field. "
+        "app_info MUST include non-empty name and summary. Use summary as the only application-summary field; "
         "Do not return assumptions, product risks, or acceptance_criteria. "
         "Product acceptance criteria belong to the later ProductPlan and must not be generated in the "
         "RequirementSpec confirmation document. "
@@ -466,9 +515,9 @@ def _invoke_live_chat_model(
         final_tool_calls = getattr(merged_chunk, "tool_calls", None) or []
         final = AIMessage(
             content=accumulated_text,
-            tool_calls=final_tool_calls
-            if hasattr(merged_chunk, "tool_calls")
-            else None,
+            tool_calls=(
+                final_tool_calls if hasattr(merged_chunk, "tool_calls") else None
+            ),
             id=merged_chunk.id if hasattr(merged_chunk, "id") else None,
         )
         return {"messages": [final]}
@@ -578,8 +627,7 @@ def _analyze_requirements_once(
         agent_spec=effective_agent_spec,
         existing_spec=existing_spec,
         authoritative_agent_spec=(
-            isinstance(effective_agent_spec, dict)
-            and isinstance(existing_spec, dict)
+            isinstance(effective_agent_spec, dict) and isinstance(existing_spec, dict)
         ),
         datasource_type=datasource_type,
         # 实时模型的 RequirementSpec 必须完全来自模型或用户明确回答，禁止启用固定页面兜底。
@@ -643,13 +691,19 @@ def _authorization_config_conflict_from_agent_spec(
 ) -> dict[str, Any] | None:
     """识别模型发现的业务权限要求与关闭配置之间的冲突，不使用关键词猜测业务。"""
 
-    if _authorization_enabled_from_request(request) is not False or not isinstance(agent_spec, dict):
+    if _authorization_enabled_from_request(request) is not False or not isinstance(
+        agent_spec, dict
+    ):
         return None
     conflict = agent_spec.get("authorization_config_conflict")
     if not isinstance(conflict, dict) or conflict.get("requested") is not True:
         return None
     evidence = conflict.get("evidence")
-    evidence_items = [str(item).strip() for item in evidence if str(item).strip()] if isinstance(evidence, list) else []
+    evidence_items = (
+        [str(item).strip() for item in evidence if str(item).strip()]
+        if isinstance(evidence, list)
+        else []
+    )
     # 配置冲突必须有模型给出的原始需求证据，避免仅凭“管理员”等角色名称产生误报。
     if not evidence_items:
         return None
@@ -673,9 +727,7 @@ def _requirement_spec_fields_missing(agent_spec: Any) -> bool:
     )
 
 
-def _recover_requirement_spec_json(
-    agent_note: str, agent_spec: Any
-) -> Any:
+def _recover_requirement_spec_json(agent_note: str, agent_spec: Any) -> Any:
     """模型 JSON 引号损坏时的受控恢复：修复后重解析，仅在能拿到完整顶层字段时采用。
 
     与 build_result_coordinator 的恢复模式一致：只在文本里存在契约标记时尝试，
@@ -720,9 +772,10 @@ def _validate_complete_requirement_spec(
     ]
     if not isinstance(app_info, dict):
         missing_fields.insert(0, "app_info")
-    elif not str(app_info.get("name") or "").strip() or not str(
-        app_info.get("summary") or ""
-    ).strip():
+    elif (
+        not str(app_info.get("name") or "").strip()
+        or not str(app_info.get("summary") or "").strip()
+    ):
         missing_fields.insert(0, "app_info.name/summary")
     for field_name in ("feature_modules", "pages"):
         value = agent_spec.get(field_name)

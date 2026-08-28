@@ -44,6 +44,7 @@ def compile_authorization_overlay(
         {
             "apiContractId": api_contract_id,
             "endpointId": endpoint_id,
+            **_endpoint_http_identity(project_plan, api_contract_id, endpoint_id),
             "operationResourceKeys": list(endpoint_bindings.get(endpoint_id, [])),
             "semantics": "ANY_OF",
         }
@@ -190,6 +191,25 @@ def _endpoint_binding_map(value: Any) -> dict[str, list[str]]:
         if endpoint_id:
             result[endpoint_id] = resource_keys
     return result
+
+
+def _endpoint_http_identity(
+    project_plan: dict[str, Any], api_contract_id: str, endpoint_id: str
+) -> dict[str, str]:
+    """从确认 API Contract 读取 Endpoint 的唯一 HTTP 定位信息。"""
+
+    for contract in _dict_items(project_plan.get("api_contracts")):
+        if str(contract.get("id") or "").strip() != api_contract_id:
+            continue
+        for endpoint in _dict_items(contract.get("endpoints")):
+            if str(endpoint.get("id") or "").strip() != endpoint_id:
+                continue
+            method = str(endpoint.get("method") or "GET").strip().upper()
+            path = str(endpoint.get("path") or "").strip()
+            if not path.startswith("/"):
+                raise ValueError(f"受控 Endpoint {api_contract_id}:{endpoint_id} 缺少合法 HTTP Path。")
+            return {"httpMethod": method, "path": path}
+    raise ValueError(f"受控 Endpoint {api_contract_id}:{endpoint_id} 不存在于确认 API Contract。")
 
 
 def _route_guard_projection(

@@ -7,6 +7,11 @@ from typing import Any
 
 from app.services.engineering_acceptance import ensure_engineering_acceptance
 from app.services.business_acceptance_verifiers.common import strip_comments
+from app.services.business_acceptance_verifiers.java_inspection_support import (
+    _find_controller_method,
+    _inspect_or_block,
+    _type_has_suffix,
+)
 
 
 def unauthorized_batch_paths(
@@ -132,6 +137,12 @@ def _verify_check(
         return _verify_page_placeholder(check, root=root)
     if kind == "page_component_reachability":
         return _verify_page_component_reachability(check, root=root)
+    if kind == "frontend_api_boundary":
+        return _verify_frontend_api_boundary(check, root=root)
+    if kind == "frontend_authorization":
+        return _verify_frontend_authorization(check, root=root)
+    if kind == "backend_authorization":
+        return _verify_backend_authorization(check, root=root)
     return f"不支持的工程验收检查类型：{kind or '<empty>'}", "检查类型无法执行。"
 
 
@@ -345,6 +356,161 @@ def _verify_page_component_reachability(
             "页面入口未发现任务内组件的可达引用。",
         )
     return None, f"组件 {component_path} 已导出并由页面入口引用。"
+
+
+def _verify_frontend_authorization(
+    check: dict[str, Any],
+    *,
+    root: Path | None,
+) -> tuple[str | None, str]:
+    """验证页面受控操作的 Permission 接入及页面层 HTTP 边界。"""
+
+    expected = _dict_value(check.get("expected"))
+    actions = [
+        {
+            "actionId": str(item.get("actionId") or "").strip(),
+            "resourceKey": str(item.get("resourceKey") or "").strip(),
+        }
+        for item in _dict_items(expected.get("controlledActions"))
+        if str(item.get("actionId") or "").strip()
+        and str(item.get("resourceKey") or "").strip()
+    ]
+    paths = _string_list(check.get("target_paths"))
+    sources: list[str] = []
+    for path in paths:
+        source, error = _read_workspace_file(root, _normalize_path(path))
+        if error:
+            return error, error
+        sources.append(strip_comments(source or ""))
+    merged = "\n".join(sources)
+    if not re.search(
+        r'import\s*\{[^}]*\bPermission\b[^}]*\}\s*from\s*["\'][^"\']*authorization[^"\']*["\']',
+        merged,
+    ):
+        return "页面受控操作未从模板 authorization 模块导入 Permission。", "未发现 Permission 导入。"
+    blocks = list(
+        re.finditer(
+            r"<Permission\b(?P<attrs>[^>]*)>(?P<body>[\s\S]*?)</Permission\s*>",
+            merged,
+        )
+    )
+    controlled_ids = {item["actionId"] for item in actions}
+    uncontrolled_ids = set(_string_list(expected.get("uncontrolledActionIds")))
+    for action in actions:
+        marker = re.compile(
+            rf"\bdata-action-id\s*=\s*([\"']){re.escape(action['actionId'])}\1"
+        )
+        occurrences = list(marker.finditer(merged))
+        if len(occurrences) != 1:
+            return (
+                f"受控 Action {action['actionId']} 必须恰好有一个字面 data-action-id，实际为 {len(occurrences)} 个。",
+                "无法唯一定位受控交互点。",
+            )
+        matched_blocks = [
+            block
+            for block in blocks
+            if marker.search(block.group("body") or "")
+            and _permission_block_matches(block.group("attrs") or "", action["resourceKey"])
+        ]
+        if len(matched_blocks) != 1:
+            return (
+                f"受控 Action {action['actionId']} 必须恰好由一个 mode=hidden 的 Permission 使用精确 resourceKey {action['resourceKey']} 包装。",
+                "Permission 包装与平台权限约束不一致。",
+            )
+    for action_id in uncontrolled_ids:
+        marker = re.compile(rf"\bdata-action-id\s*=\s*([\"']){re.escape(action_id)}\1")
+        if any(marker.search(block.group("body") or "") for block in blocks):
+            return (
+                f"未受控 Action {action_id} 被新增 Permission 包装。",
+                "权限包装范围超出平台 action 约束。",
+            )
+    # 只允许确认任务已声明的 Action 出现在 Permission 包装内，避免扩权。
+    for block in blocks:
+        for action_id in re.findall(r"\bdata-action-id\s*=\s*[\"']([^\"']+)[\"']", block.group("body") or ""):
+            if action_id not in controlled_ids:
+                return (
+                    f"Permission 包装了未声明为受控的 Action {action_id}。",
+                    "权限包装范围超出平台 action 约束。",
+                )
+    return None, f"已验证 {len(actions)} 个受控 Action 的唯一 Permission 接入。"
+
+
+def _verify_frontend_api_boundary(
+    check: dict[str, Any],
+    *,
+    root: Path | None,
+) -> tuple[str | None, str]:
+    """验证页面及其任务内组件未绕过领域 API 层直接访问 HTTP 客户端。"""
+
+    for path in _string_list(check.get("target_paths")):
+        source, error = _read_workspace_file(root, _normalize_path(path))
+        if error:
+            return error, error
+        if re.search(r"\bfetch\s*\(|\baxios\s*\.|\bservice\s*\.", strip_comments(source or "")):
+            return (
+                "页面或组件直接调用 fetch、axios 或 service；业务接口必须经 src/apis/ 与 useRequest。",
+                f"在 {path} 发现页面层直连 HTTP 客户端。",
+            )
+    return None, "页面及任务内组件未发现直连 HTTP 客户端。"
+
+
+def _verify_backend_authorization(
+    check: dict[str, Any],
+    *,
+    root: Path | None,
+) -> tuple[str | None, str]:
+    """验证目标 Controller Method 的唯一 RequireAnyResource 与 ANY-OF 常量集合。"""
+
+    expected = _dict_value(check.get("expected"))
+    identity = _dict_value(expected.get("endpointIdentity"))
+    method = str(identity.get("httpMethod") or "").upper()
+    path = str(identity.get("path") or "")
+    resource_keys = _string_list(expected.get("operationResourceKeys"))
+    constants = [
+        str(item.get("name") or "").strip()
+        for item in _dict_items(expected.get("authConstants"))
+        if str(item.get("name") or "").strip()
+    ]
+    sources: dict[str, str] = {}
+    for target_path in _string_list(check.get("target_paths")):
+        source, error = _read_workspace_file(root, _normalize_path(target_path))
+        if error:
+            return error, error
+        sources[_normalize_path(target_path)] = source or ""
+    model = _inspect_or_block(sources)
+    if isinstance(model, dict):
+        return str(model.get("reason") or "Controller 权限验收无法安全解析源码。"), "Java AST 无法解析 Controller 源码。"
+    controllers = [item for item in model.types if _type_has_suffix(item, "Controller", "Resource", "Endpoint", "Handler")]
+    matched = _find_controller_method(controllers, method, path)
+    if matched is None:
+        return f"无法唯一定位 Controller Endpoint：{method} {path}。", "未发现与平台 Endpoint 身份匹配的 Controller Method。"
+    _controller, handler = matched
+    annotations = [item for item in handler.annotations if item.name == "RequireAnyResource"]
+    if not resource_keys:
+        if annotations:
+            return f"未受控 Endpoint {method} {path} 不得新增 RequireAnyResource。", "空资源集合存在权限注解。"
+        return None, f"未受控 Endpoint {method} {path} 未发现 RequireAnyResource。"
+    if len(annotations) != 1:
+        return f"受控 Endpoint {method} {path} 必须恰好存在一个 RequireAnyResource，实际为 {len(annotations)} 个。", "权限注解数量不符合唯一性约束。"
+    annotation_text = annotations[0].text
+    actual_constants = set(re.findall(r"(?:AuthConstants\s*\.\s*)?([A-Z][A-Z0-9_]*_RESOURCE)\b", annotation_text))
+    if actual_constants != set(constants):
+        return (
+            f"Endpoint {method} {path} 的 RequireAnyResource 常量集合不匹配：期望 {', '.join(constants)}，实际 {', '.join(sorted(actual_constants)) or '<empty>'}。",
+            "权限常量集合未精确匹配平台 Contract。",
+        )
+    if any("@RequireAnyResource" in text for source_path, text in sources.items() if source_path != _controller.source_path):
+        return "Controller 之外的任务目标文件出现 RequireAnyResource。", "资源权限判断越过 Controller 边界。"
+    return None, f"已验证 {method} {path} 的唯一 RequireAnyResource，包含 {len(resource_keys)} 个 ANY-OF 常量。"
+
+
+def _permission_block_matches(attributes: str, resource_key: str) -> bool:
+    """判断 Permission 属性是否精确匹配平台资源键和默认隐藏模式。"""
+
+    escaped_key = re.escape(resource_key)
+    resource_pattern = rf"\bresourceKey\s*=\s*(?:[\"']{escaped_key}[\"']|\{{\s*[\"']{escaped_key}[\"']\s*\}})"
+    hidden_pattern = r"\bmode\s*=\s*(?:[\"']hidden[\"']|\{\s*[\"']hidden[\"']\s*\})"
+    return bool(re.search(resource_pattern, attributes) and re.search(hidden_pattern, attributes))
 
 
 def _check_path(check: dict[str, Any], expected_key: str) -> str:
