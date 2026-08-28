@@ -17,6 +17,7 @@ import type {
   ProcessStepRecord,
   WorkspaceInspectionProgress
 } from '../../../../service/agUiAgent'
+import { isCompactProcessStepNode } from '../../../../service/processStepHistory'
 import { cx } from '../../../../utils'
 import { openLocalReportFile } from '../../../../utils/reportFile'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
@@ -216,17 +217,19 @@ function ProcessStep({
   const hasRepairPanel = hasRepairActivity || hasRepairCompletion
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
+  const titleOnly = isCompactProcessStepNode(step.nodeName)
   const expandable =
-    hasDetail ||
-    hasResult ||
-    hasChecks ||
-    hasBuildRun ||
-    hasDagGeneration ||
-    hasProjectPlanUpdate ||
-    hasWorkspaceInspection ||
-    hasWorkspaceInspectionProgress ||
-    hasRepairPanel
-  const awaitingInput = waitingForInput && step.status === 'requires_user_input'
+    !titleOnly &&
+    (hasDetail ||
+      hasResult ||
+      hasChecks ||
+      hasBuildRun ||
+      hasDagGeneration ||
+      hasProjectPlanUpdate ||
+      hasWorkspaceInspection ||
+      hasWorkspaceInspectionProgress ||
+      hasRepairPanel)
+  const awaitingInput = !titleOnly && waitingForInput && step.status === 'requires_user_input'
   const [open, setOpen] = useState(
     expandable &&
       (step.status === 'running' ||

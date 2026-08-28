@@ -1580,6 +1580,62 @@ test('没有详情的步骤保持静态且只有验证步骤可以展开', () =>
   assert.match(markup, /前端构建检查/)
 })
 
+test('验收阶段步骤只展示标题且等待确认时也不展开动作详情', () => {
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: false,
+      waitingForInput: true,
+      waitingPrompt: '不应展示的等待提示',
+      steps: [
+        {
+          id: 'workflow:acceptance_phase_confirmation',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 验收阶段确认',
+          detail: '不应展示的确认详情',
+          nodeName: 'acceptance_phase_confirmation',
+          sequence: 1
+        },
+        {
+          id: 'workflow:acceptance_review',
+          kind: 'workflow',
+          status: 'requires_user_input',
+          title: '等待确认 用户验收',
+          detail: '验收=False',
+          nodeName: 'acceptance_review',
+          sequence: 2
+        },
+        {
+          id: 'workflow:launch_project',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已执行 启动本地预览',
+          detail: '前后端服务均已就绪，可以开始预览。',
+          nodeName: 'launch_project',
+          sequence: 3
+        },
+        {
+          id: 'workflow:finalize_project',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已执行 完成项目',
+          detail: '正在执行：完成项目',
+          nodeName: 'finalize_project',
+          sequence: 4
+        }
+      ]
+    })
+  )
+
+  assert.equal(markup.match(/<details/g)?.length, 1)
+  assert.equal(markup.match(/<summary/g)?.length, 1)
+  assert.match(markup, /已完成 验收阶段确认/)
+  assert.match(markup, /等待确认 用户验收/)
+  assert.match(markup, /已执行 启动本地预览/)
+  assert.match(markup, /已执行 完成项目/)
+  assert.doesNotMatch(markup, /动作详情|验收=False|前后端服务均已就绪|正在执行：完成项目/)
+})
+
 test('结构化步骤存在时隐藏重复 Workflow 摘要并保留真实回复', () => {
   const workflow = {
     runId: 'run-summary',

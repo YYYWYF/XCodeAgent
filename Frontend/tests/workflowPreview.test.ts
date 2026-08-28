@@ -227,7 +227,7 @@ test('审查和验收阶段所有节点均隐藏代码差异', () => {
   assert.equal(workflowShouldShowCodeChanges(workflow('completed')), false)
 })
 
-test('审查流程三个节点隐藏动作详情且其他步骤保持不变', () => {
+test('审查与验收流程节点仅展示标题且其他步骤保持不变', () => {
   const workflow = previewWorkflow({ phase: 'code_review', status: 'completed' })
   const steps = processStepsForMessageDisplay(
     [
@@ -262,6 +262,46 @@ test('审查流程三个节点隐藏动作详情且其他步骤保持不变', ()
         sequence: 3
       },
       {
+        id: 'launch-project',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已执行 启动本地预览',
+        detail: '不应展示的预览详情',
+        result: '不应展示的预览结果',
+        nodeName: 'launch_project',
+        sequence: 4
+      },
+      {
+        id: 'acceptance-review',
+        kind: 'workflow',
+        status: 'requires_user_input',
+        title: '等待确认 用户验收',
+        detail: '不应展示的验收动作详情',
+        result: '不应展示的验收动作结果',
+        nodeName: 'acceptance_review',
+        sequence: 5
+      },
+      {
+        id: 'acceptance',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成 用户验收',
+        detail: '不应展示的验收详情',
+        result: '不应展示的验收结果',
+        nodeName: 'acceptance',
+        sequence: 6
+      },
+      {
+        id: 'finalize-project',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已执行 完成项目',
+        detail: '不应展示的交付详情',
+        result: '不应展示的交付结果',
+        nodeName: 'finalize_project',
+        sequence: 7
+      },
+      {
         id: 'integration-test',
         kind: 'workflow',
         status: 'completed',
@@ -269,18 +309,68 @@ test('审查流程三个节点隐藏动作详情且其他步骤保持不变', ()
         detail: '仍需展示的测试详情',
         result: '仍需展示的测试结果',
         nodeName: 'integration_test',
+        sequence: 8
+      }
+    ],
+    workflow
+  )
+
+  for (const step of steps?.slice(0, 7) || []) {
+    assert.equal(step.detail, '')
+    assert.equal(step.result, '')
+  }
+  assert.equal(steps?.[7].detail, '仍需展示的测试详情')
+  assert.equal(steps?.[7].result, '仍需展示的测试结果')
+})
+
+test('验收阶段隐藏正在执行的用户验收预测步骤', () => {
+  const workflow = previewWorkflow({ phase: 'launch_project', status: 'in_progress' })
+  const steps = processStepsForMessageDisplay(
+    [
+      {
+        id: 'acceptance-confirmation',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成 验收阶段确认',
+        detail: '',
+        nodeName: 'acceptance_phase_confirmation',
+        sequence: 1
+      },
+      {
+        id: 'acceptance-review-running',
+        kind: 'workflow',
+        status: 'running',
+        title: '正在执行 用户验收',
+        detail: '',
+        nodeName: 'acceptance_review',
+        sequence: 2
+      },
+      {
+        id: 'acceptance-running',
+        kind: 'workflow',
+        status: 'running',
+        title: '正在执行 用户验收',
+        detail: '',
+        nodeName: 'acceptance',
+        sequence: 3
+      },
+      {
+        id: 'launch-project',
+        kind: 'workflow',
+        status: 'running',
+        title: '正在执行 启动本地预览',
+        detail: '',
+        nodeName: 'launch_project',
         sequence: 4
       }
     ],
     workflow
   )
 
-  assert.equal(steps?.[0].detail, '')
-  assert.equal(steps?.[0].result, '')
-  assert.equal(steps?.[1].detail, '')
-  assert.equal(steps?.[2].result, '')
-  assert.equal(steps?.[3].detail, '仍需展示的测试详情')
-  assert.equal(steps?.[3].result, '仍需展示的测试结果')
+  assert.deepEqual(
+    steps?.map((step) => step.id),
+    ['acceptance-confirmation', 'launch-project']
+  )
 })
 
 test('同一路径的审查报告在新的 Workflow 运行中获得新的自动聚焦键', () => {

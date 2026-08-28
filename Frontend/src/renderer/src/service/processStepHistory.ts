@@ -30,11 +30,23 @@ const WORKFLOW_NODE_LABELS: Record<string, string> = {
   handle_failure: '失败处理'
 }
 
-const REVIEW_DETAIL_HIDDEN_NODES = new Set([
+// 审查与验收阶段只展示步骤标题，隐藏内部动作摘要并禁用步骤展开交互。
+const COMPACT_PROCESS_STEP_NODES = new Set([
   'review_phase_confirmation',
   'code_review',
-  'acceptance_phase_confirmation'
+  'acceptance_phase_confirmation',
+  'launch_project',
+  'acceptance_review',
+  'acceptance',
+  'finalize_project'
 ])
+
+const HIDDEN_RUNNING_ACCEPTANCE_NODES = new Set(['acceptance_review', 'acceptance'])
+
+/** 判断步骤是否只应展示标题，避免审查与验收阶段泄露内部动作摘要。 */
+export function isCompactProcessStepNode(nodeName?: string): boolean {
+  return COMPACT_PROCESS_STEP_NODES.has(String(nodeName || ''))
+}
 
 type CompletedIntegrationTestCheckSnapshot = {
   checks: NonNullable<ReturnType<typeof readIntegrationTestChecks>>
@@ -216,11 +228,17 @@ export function processStepsForMessageDisplay(
   // 自由对话需要展示工具和当前动作；正式 Workflow 则隐藏底层工具，避免重复渲染。
   if (isConversationWorkflow(workflow)) return displaySteps
 
-  const stableSteps = displaySteps.filter((step) => step.kind !== 'tool' && step.kind !== 'command')
+  const stableSteps = displaySteps.filter(
+    (step) =>
+      step.kind !== 'tool' &&
+      step.kind !== 'command' &&
+      !(
+        step.status === 'running' &&
+        HIDDEN_RUNNING_ACCEPTANCE_NODES.has(String(step.nodeName || ''))
+      )
+  )
   return stableSteps.map((step) =>
-    REVIEW_DETAIL_HIDDEN_NODES.has(String(step.nodeName || ''))
-      ? { ...step, detail: '', result: '' }
-      : step
+    isCompactProcessStepNode(step.nodeName) ? { ...step, detail: '', result: '' } : step
   )
 }
 
