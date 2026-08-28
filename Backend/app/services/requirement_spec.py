@@ -466,6 +466,11 @@ def validate_requirement_spec_confirmation_readiness(spec: dict[str, Any]) -> li
     else:
         if not str(app_info.get("name") or "").strip():
             errors.append("应用名称不能为空")
+        # 模型有时用 description 代替 summary，兼容回退
+        if not str(app_info.get("summary") or "").strip() and str(
+            app_info.get("description") or ""
+        ).strip():
+            app_info["summary"] = app_info["description"]
         if not str(app_info.get("summary") or "").strip():
             errors.append("应用需求摘要不能为空")
 
