@@ -1175,6 +1175,7 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "project_planning",
             "inspect_workspace",
             "prepare_build_tasks",
+            "authorization_bootstrap",
             "build",
             "unit_test",
             "unit_test_repair",

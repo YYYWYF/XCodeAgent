@@ -7,6 +7,7 @@ from app.graph.workflow import (
     route_application_revision,
     route_acceptance,
     route_acceptance_phase_confirmation,
+    route_authorization_bootstrap,
     route_build_result,
     route_development_readiness,
     route_entity_source_binding,
@@ -125,6 +126,28 @@ class WorkflowRoutingTests(unittest.TestCase):
             route_prepare_build_tasks({"status": "completed"}),
             "build",
         )
+
+    def test_prepare_build_tasks_enters_authorization_bootstrap_when_enabled(self) -> None:
+        """权限开启的已确认技术规划必须在 Build 前经过平台 Bootstrap。"""
+
+        self.assertEqual(
+            route_prepare_build_tasks(
+                {
+                    "status": "completed",
+                    "technical_plan": {
+                        "artifact_type": "technical-plan",
+                        "confirmation_status": "confirmed",
+                        "authorization_manifest": {
+                            "enabled": True,
+                            "fingerprint": "sha256:test",
+                        },
+                    },
+                }
+            ),
+            "authorization_bootstrap",
+        )
+        self.assertEqual(route_authorization_bootstrap({"status": "completed"}), "build")
+        self.assertEqual(route_authorization_bootstrap({"status": "failed"}), "handle_failure")
 
     def test_integration_test_passes_to_review_confirmation(self) -> None:
         self.assertEqual(

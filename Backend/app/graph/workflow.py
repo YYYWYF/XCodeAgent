@@ -3,6 +3,7 @@ from langgraph.graph import END, START, StateGraph
 from app.graph import nodes
 from app.graph.subgraphs import acceptance_subgraph
 from app.graph.state import ProjectState
+from app.services.authorization_bootstrap import authorization_bootstrap_enabled
 from app.persistence.checkpoints import (
     workflow_checkpoint_db_path,
     workflow_checkpointer,
@@ -29,7 +30,13 @@ def route_workflow_start(state: ProjectState) -> str:
     if state.get("resume_from") == "prepare_build_tasks":
         return "prepare_build_tasks"
     if state.get("resume_from") == "build":
-        return "build"
+        return (
+            "authorization_bootstrap"
+            if authorization_bootstrap_enabled(state.get("technical_plan"))
+            else "build"
+        )
+    if state.get("resume_from") == "authorization_bootstrap":
+        return "authorization_bootstrap"
     if state.get("resume_from") == "unit_test":
         return "unit_test"
     if state.get("resume_from") == "unit_test_repair":
@@ -211,7 +218,17 @@ def route_prepare_build_tasks(state: ProjectState) -> str:
         return "await_user_input"
     if state.get("status") == "failed":
         return "handle_failure"
-    return "build"
+    return (
+        "authorization_bootstrap"
+        if authorization_bootstrap_enabled(state.get("technical_plan"))
+        else "build"
+    )
+
+
+def route_authorization_bootstrap(state: ProjectState) -> str:
+    """权限 Bootstrap 成功后才允许继续 Build。"""
+
+    return "build" if state.get("status") == "completed" else "handle_failure"
 
 
 def route_acceptance(state: ProjectState) -> str:
@@ -234,6 +251,7 @@ def build_graph(*, checkpointer):
     builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
     builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
+    builder.add_node("authorization_bootstrap", nodes.authorization_bootstrap)
     builder.add_node("build", nodes.build)
     builder.add_node("unit_test", nodes.unit_test)
     builder.add_node("unit_test_repair", nodes.unit_test_repair)
@@ -260,6 +278,7 @@ def build_graph(*, checkpointer):
             "project_planning": "project_planning",
             "inspect_workspace": "inspect_workspace",
             "prepare_build_tasks": "prepare_build_tasks",
+            "authorization_bootstrap": "authorization_bootstrap",
             "build": "build",
             "unit_test": "unit_test",
             "unit_test_repair": "unit_test_repair",
@@ -317,9 +336,15 @@ def build_graph(*, checkpointer):
         route_prepare_build_tasks,
         {
             "build": "build",
+            "authorization_bootstrap": "authorization_bootstrap",
             "await_user_input": END,
             "handle_failure": "handle_failure",
         },
+    )
+    builder.add_conditional_edges(
+        "authorization_bootstrap",
+        route_authorization_bootstrap,
+        {"build": "build", "handle_failure": "handle_failure"},
     )
     builder.add_conditional_edges(
         "build",

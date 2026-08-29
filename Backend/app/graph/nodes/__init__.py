@@ -1,4 +1,5 @@
 from app.graph.nodes.tasks import prepare_build_tasks
+from app.graph.nodes.authorization_bootstrap import authorization_bootstrap
 from app.graph.nodes.application_revision import start_application_revision
 from app.graph.nodes.classification import classify_request_complexity
 from app.graph.nodes.lifecycle import (
@@ -26,6 +27,7 @@ from app.graph.subgraphs import build
 
 __all__ = [
     "acceptance",
+    "authorization_bootstrap",
     "build",
     "classify_request_complexity",
     "development_readiness_gate",

@@ -449,7 +449,19 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             return []
         if update.get("status") == "failed":
             return ["handle_failure"]
-        return ["build"]
+        technical_plan = update.get("technical_plan")
+        manifest = (
+            technical_plan.get("authorization_manifest")
+            if isinstance(technical_plan, dict)
+            else None
+        )
+        return (
+            ["authorization_bootstrap"]
+            if isinstance(manifest, dict) and manifest.get("enabled") is True
+            else ["build"]
+        )
+    if node_name == "authorization_bootstrap":
+        return ["build"] if update.get("status") == "completed" else ["handle_failure"]
     if node_name == "build":
         build_summary = update.get("build_summary")
         summary_status = (
@@ -540,6 +552,17 @@ def _public_workflow_state(
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
+    bootstrap = value.get("authorization_bootstrap_result")
+    public_state.pop("authorization_bootstrap_result", None)
+    if isinstance(bootstrap, dict):
+        public_state["authorizationBootstrap"] = {
+            "status": bootstrap.get("status"),
+            "manifestFingerprint": bootstrap.get("manifest_fingerprint"),
+            "durationMs": bootstrap.get("duration_ms"),
+            "exitCode": bootstrap.get("exit_code"),
+            "failureCategory": bootstrap.get("failure_category"),
+            "logDirectory": bootstrap.get("log_directory"),
+        }
     retry = _workflow_code_review_retry(value.get("code_review_retry"))
     public_state.pop("code_review_retry", None)
     public_state["codeReviewRetry"] = retry
@@ -827,6 +850,22 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "buildExecutionSlice": update.get("build_execution_slice"),
                 "buildEvents": update.get("build_events", []),
                 "buildResults": update.get("build_results", []),
+            },
+        }
+    if node_name == "authorization_bootstrap":
+        result = update.get("authorization_bootstrap_result")
+        result = result if isinstance(result, dict) else {}
+        return {
+            "message": str(update.get("message") or "权限数据库初始化完成。"),
+            "data": {
+                "authorizationBootstrap": {
+                    "status": result.get("status"),
+                    "manifestFingerprint": result.get("manifest_fingerprint"),
+                    "durationMs": result.get("duration_ms"),
+                    "exitCode": result.get("exit_code"),
+                    "failureCategory": result.get("failure_category"),
+                    "logDirectory": result.get("log_directory"),
+                }
             },
         }
     if node_name == "unit_test":

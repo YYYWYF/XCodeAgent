@@ -947,7 +947,7 @@ deleteSubjectAuthorization
 - 若模板尚未接入 Spring Security，本工作包只增加由 Spring Boot BOM 管理的 `spring-security-core` 编译依赖，用于 `SecurityContextHolder`/`Authentication` 类型；不得引入会默认保护全站的 starter 或伪造认证 Filter。实际一号通认证和 Web Security 配置由步骤 7 接入。
 - `auth` 分支不保留 `xcodeagent.authorization.enabled` 运行时开关；公开 `/api/authorization/status` 和管理接口骨架始终注册。默认就绪状态为 `ready=false`；状态接口返回 200，其他接口统一返回结构化 503 `authorization_not_ready`。
 - `CurrentSubjectProvider` 固定读取 Spring Security `Authentication.getName()`，但本工作包不伪造身份、不信任前端 subject，也不复制一号通认证协议。
-- `auth` 分支应提供权限表、数据访问和固定授权 Bootstrap 脚本。模板下载完成后，该脚本负责创建所需权限表，并将已确认 TechnicalPlan 中的资源、角色、角色资源关系、初始管理员成员及成员角色关系写入数据库；脚本采用“缺失则新增、同键同内容跳过、同键冲突失败、永不删除”的幂等策略。脚本、DDL、数据库写入和初始化器实现均属于后端模板交付，不属于 XCodeAgent 项目实施范围；本文只记录其输入、结果和与 Build 的边界。
+- `auth` 分支应提供权限表、数据访问和固定授权 Bootstrap 脚本。脚本、DDL、数据库写入和初始化器实现属于后端模板交付；XCodeAgent 不解析 SQL 或重写初始化逻辑，但会在已确认 DAG 后、Build 前以平台节点显式调用该脚本。
 - 保持 Spring Boot 2.7 和 Java 8 兼容，所有新增或实质修改的方法按模板工程规范添加中文用途注释。
 
 ##### 既有前端模板分支公约（不属于本步骤交付）
@@ -987,9 +987,10 @@ deleteSubjectAuthorization
 - 从已持久化的 `application.json.authorization.enabled` 确定唯一 `templateBranch`：关闭为 `main`，开启为 `auth`；前后端必须使用同一分支，并通过 `git clone --branch <templateBranch> --single-branch --depth 1` 浅克隆到生成项目的 `frontend/` 和 `backend/`。
 - 分支选择不得来自前端自由输入或请求参数。用户自定义模板仓库 URL 可以保留；目标分支不存在或获取失败时初始化失败，不得回退到其他分支。
 - `auth` 分支固有提供 `/roles` 与权限接口，`main` 分支不包含权限能力；XCodeAgent 不为分支写入前后端权限开关配置，也不修改、生成或校验模板内权限实现。
-- 权限开启时，先完成后端模板 Bootstrap，再初始化业务页面并校验所有业务路由不得与 `/roles` 冲突；权限关闭时直接初始化业务页面。固定页面不读取 UiDesign，不创建普通 PageImplementationContract、业务 Endpoint 授权逻辑或业务开发任务。
+- 权限开启时，模板初始化只负责下载、页面/菜单初始化和 `/roles` 路由冲突校验；后端模板 Bootstrap 延后至 Build DAG 确认后的平台节点执行。权限关闭时不创建该节点。固定页面不读取 UiDesign，不创建普通 PageImplementationContract、业务 Endpoint 授权逻辑或业务开发任务。
 - 沿用既有模板来源记录与复用规则，记录前后端仓库 URL、所选 `templateBranch` 及各自实际 commit SHA；已有模板目录的来源 URL、分支或 commit SHA 不匹配时 fail closed，不能覆盖或混用。步骤 5 不写 `.xcodeagent/authorization/` 权限基础产物，也不新增权限专属 manifest 字段。
-- 权限开启时，模板下载完成后的授权 Bootstrap 属于后端模板初始化方案：它读取已确认 TechnicalPlan 的 `authorization_manifest` 和 `application.json.authorization.initialAdministratorSubjects`，完成建表与初始种子落库后才允许继续页面/菜单初始化。XCodeAgent 不实现该脚本、DDL、数据库写入或初始化器；仅在后续集成时消费模板侧提供的非敏感成功/失败结果。
+- 权限开启时，`authorization_bootstrap` 由 XCodeAgent 平台在 Build 前调用模板固定脚本。节点只接受已确认 TechnicalPlan 的 `authorization_manifest` 和 `application.json.authorization.initialAdministratorSubjects`；以固定 argv、受限环境、600 秒超时和工作区级互斥运行，不经 Agent 或 Build DAG。脚本成功后按 `authorization_manifest.fingerprint` 写入 `.xcodeagent/runtime/authorization-bootstrap/<fingerprint>/result.json`；同 fingerprint 后续 Build 显示“已复用”，失败不写成功标记并阻断 Build。
+- 当前复用键按已确认的 `authorization_manifest.fingerprint` 定义。仅修改初始管理员名单、数据库目标、脚本或 DDL 而不改变该 fingerprint 时不会自动重跑；这属于当前明确接受的运行时缓存边界，需删除对应 runtime 成功标记后手动重新执行。
 - XCodeAgent 的规划、配置持久化、模板生成进度、成功和失败仍通过 AG-UI 完整生命周期传递；不能为该流程新增普通 JSON/REST 产品接口。
 
 步骤产物：
@@ -1013,16 +1014,16 @@ authorization.enabled=false：
 
 主要入口：TechnicalPlan 最终确认门禁、task preparer、tasks node、build context resolver、unit compiler、build task planner 和 task documents。
 
-步骤状态：部分实施。当前 Overlay 已能按 Build Unit 编译只读权限事实；本步骤只负责生成、确认和校验 `build-dag.v3`，不派发前后端 Agent、不写生成应用源码，也不执行权限运行时验收。授权 Bootstrap 已前移至模板下载完成后的后端模板初始化方案；本步骤不建表、不写资源/角色/成员数据、不执行 Bootstrap 脚本，也不创建 `authorization:*` Unit。
+步骤状态：部分实施。当前 Overlay 已能按 Build Unit 编译只读权限事实；本步骤负责生成、确认和校验 `build-dag.v3`，不派发前后端 Agent、不写生成应用源码。权限数据库 Bootstrap 不属于 DAG Unit：用户确认 DAG 后，平台以独立 `authorization_bootstrap` 节点调用模板脚本，再进入 Build。
 
 ##### 步骤 6A：授权初始化完成与 Build 前置门禁
 
 - `prepare_build_tasks` 必须从工作区重新读取最新 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan 和模板就绪状态，不信任 checkpoint 中的旧副本。
 - 只接受 `artifact_type=technical-plan`、`confirmation_status=confirmed` 且当前 schema/fingerprint 有效的 TechnicalPlan；校验其上游哈希、应用 `authorization.enabled`、已选 `main/auth` 模板分支和 manifest `enabled` 状态一致。
 - 同时校验当前范围所需的 PageImplementationContract、Endpoint 契约、EntitySourceBinding 和模板初始化门禁均已就绪。
-- `authorization.enabled=true` 时，前后端必须都来自 `auth` 分支，并通过只读模板能力检查：前端已在应用入口挂载 `AuthProvider`、进入应用会获取当前成员资源点、已有 `RouteGuard` 和支持 `hidden/disabled` 的 `Permission`、业务 API 可复用 `src/apis/service.ts` 和 ahooks `useRequest`；后端已有 `RequireAnyResource` 注解和 `AuthConstants`。同时必须存在模板侧 Bootstrap 的非敏感成功结果，且其中 manifest fingerprint 与当前 TechnicalPlan 一致。Build 只能调用这些既有接口，不能复制或改写模板授权核心。
+- `authorization.enabled=true` 时，前后端必须都来自 `auth` 分支，并通过只读模板能力检查：前端已在应用入口挂载 `AuthProvider`、进入应用会获取当前成员资源点、已有 `RouteGuard` 和支持 `hidden/disabled` 的 `Permission`、业务 API 可复用 `src/apis/service.ts` 和 ahooks `useRequest`；后端已有 `RequireAnyResource` 注解和 `AuthConstants`。Build 只能在紧邻其前的 `authorization_bootstrap` 节点成功或复用同 fingerprint 成功记录后开始，不能复制或改写模板授权核心。
 - `authorization.enabled=false` 时，前后端必须都来自 `main` 分支，不编译权限 Overlay，不生成路由、操作或 Endpoint 权限接入。
-- 若模板侧 Bootstrap 缺失、失败、fingerprint 过期，或模板能力、正式产物、确认状态、schema/fingerprint、上游哈希或分支配对不一致，必须在叶子任务生成前失败并返回模板初始化或步骤 4 正式修订入口；Build 不重新运行 4E，不补全、修复或推断权限设计，也不执行、补建或修复模板 Bootstrap。
+- 若模板侧 Bootstrap 缺失或执行失败，平台在 Build 前失败并保留本地日志；模板能力、正式产物、确认状态、schema/fingerprint、上游哈希或分支配对不一致仍在 DAG/Build 门禁阻断。Build Agent 不补全、修复或推断权限设计，也不执行、补建或修复模板 Bootstrap。
 
 ##### 步骤 6B：在叶子任务生成前权限约束投影
 
@@ -1108,12 +1109,12 @@ authorization.enabled=false：
 - Repair 仅用于修复当前实现与既有权限约束之间的偏差，不得扩大资源集合、修改 ANY-OF 语义、改变 Action/Endpoint 与资源的绑定、触碰步骤 7A 共享投影或模板权限核心。若问题来源于 DAG 任务或权限引用投射错误，则返回步骤 6 重新规划；若需要修改 TechnicalPlan 中的权限资源或绑定事实，则返回步骤 4 通过正式变更流程修订。
 - 权限验收始终启用，不受普通业务自检开关影响。前端确定性验证受控 Action、稳定 `action_id`、`Permission`、平台给定权限常量及 `hidden/disabled` 模式；后端确定性验证 Controller Method 身份、唯一 `@RequireAnyResource`、权限常量集合及 ANY-OF 语义。能够明确归属于 Page/API Task 实现偏差的失败进入现有 Scheduler/Repair 闭环；共享投影、模板契约或上游权限事实错误不得下放给叶子 Repair Task。
 - 所有 Build Task 完成后执行一次纯只读权限 EDD。EDD 只读取最终源码和 Build 证据，不得再次调用权限投影、Bootstrap 或其他写入函数修正结果。验收至少覆盖：步骤 7A 共享路由权限投影和 `AuthConstants` 与绑定计划一致；未新增第二套应用级 `AuthProvider` 或权限状态源；所有受控 Action 均存在且仅存在正确的 `Permission` 接入；所有受控 Controller Endpoint 均存在且仅存在匹配 Contract 的权限注解；空绑定对象未由本次 Build 新增资源权限守卫；Service、Repository、Entity 和外部 API Client 未新增资源操作权限判断。
-- 资源、角色、角色资源关系、初始管理员成员、成员角色关系以及 Bootstrap revision、manifest fingerprint 等初始化状态仍完全由模板 Bootstrap 负责。步骤 7 不生成初始化 SQL、seed 文件、Bootstrap 脚本调用或第二套初始化器，也不得通过 Repair 或 EDD 修改 Bootstrap 数据。
+- 资源、角色、角色资源关系、初始管理员成员、成员角色关系以及 Bootstrap 数据状态仍完全由模板 Bootstrap 负责；XCodeAgent 只负责脚本编排、成功标记和 AG-UI 投影。步骤 7 不生成初始化 SQL、seed 文件或第二套初始化器，也不得通过 Repair 或 EDD 修改 Bootstrap 数据。
 
 
 步骤 7 启动验收：
 
-- 验证模板下载后的 Bootstrap 先于页面/菜单初始化完成：权限表、资源、角色、角色资源关系、初始管理员成员及成员角色关系均来自已确认 TechnicalPlan；同键同内容重试无重复写入、缺失项仅新增、同键冲突失败且不删除历史数据。该脚本和数据库初始化仅记录为后端模板方案，不在 XCodeAgent 项目实施范围。
+- 验证权限开启时在 DAG 确认后显示 `authorization_bootstrap` 节点，首次 Build 显式调用模板脚本；相同 manifest fingerprint 后续 Build 显示复用，不重复写入；脚本失败阻断 Build 并保留日志。权限关闭时不显示该节点。
 - 权限关闭时不生成任何权限 Overlay、RouteGuard/Permission 接入、业务权限常量或 Endpoint 注解；仅页面、仅 action、页面+action 时只覆盖精确 Page/Action/Endpoint，不扩大到同页其他目标。
 - 不同页面使用相同 `actionId` 时仍生成不同操作资源；`ENDPOINT_AUTHORIZATION_MIXED_CONTROL`、资源键冲突、V2 字段和未确认/过期 TechnicalPlan 均在进入 Task 生成前阻止，并回到步骤 4 而不是由 Build 修复。
 - 验证无权限页面菜单隐藏、直接访问路由被 RouteGuard 拒绝；受控操作同时覆盖 `hidden` 和可可靠禁用控件的 `disabled`，且资源键不串页、不串 action。
