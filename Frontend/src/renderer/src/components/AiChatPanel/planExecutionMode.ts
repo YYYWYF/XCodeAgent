@@ -1,9 +1,4 @@
-import type {
-  ApplicationLifecycle,
-  WorkbenchExecution,
-  WorkflowAcceptanceAdjustmentType,
-  WorkflowRunPayload
-} from '../../typings'
+import type { ApplicationLifecycle, WorkbenchExecution, WorkflowRunPayload } from '../../typings'
 import { isConversationWorkflow } from './conversationMode'
 
 export type PlanExecutionMode =
@@ -29,15 +24,6 @@ export type PagePlanExecutionContext = {
 }
 
 export type WorkflowInteractionAvailability = 'active' | 'stale' | 'unavailable'
-
-/** 将验收调整类型映射到主 Workflow 的安全恢复节点。 */
-export function acceptanceAdjustmentResumeNode(
-  adjustmentType: WorkflowAcceptanceAdjustmentType
-): string {
-  if (adjustmentType === 'local_fix') return 'small_task_repair'
-  if (adjustmentType === 'data_source_change') return 'entity_source_binding'
-  return 'project_planning'
-}
 
 /** 根据后端权威生命周期判断历史 Workflow 确认是否仍可提交。 */
 export function workflowInteractionAvailability(

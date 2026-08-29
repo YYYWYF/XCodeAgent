@@ -103,6 +103,7 @@ APPLICATION_PLANNING_REVISION_STAGES = {
     ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
     ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+    ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
 }
 
 APPLICATION_PLANNING_ACTIVE_STAGES = {
@@ -288,11 +289,16 @@ def restart_application_planning_lifecycle(
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ApplicationLifecycleConflictError("生命周期状态尚未初始化。")
-    if current.initialization.stage not in APPLICATION_PLANNING_ACTIVE_STAGES:
+    if current.initialization.stage not in {
+        *APPLICATION_PLANNING_ACTIVE_STAGES,
+        ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+    }:
         raise ApplicationLifecycleConflictError(
-            "只有尚未完成的创建规划可以修订设计产物，当前阶段为 "
+            "只有原创建规划或已进入工作台的应用可以修订设计产物，当前阶段为 "
             f"{current.initialization.stage.value}。"
         )
+    if not str(current.initialization.thread_id or "").strip():
+        raise ApplicationLifecycleConflictError("设计修订缺少原 application planning thread。")
     updated = current.model_copy(
         update={
             "updated_at": utc_now(),
@@ -503,14 +509,26 @@ def complete_workbench_execution(
         )
 
 
-def end_workbench_execution(workspace: str | Path, *, run_id: str) -> ApplicationLifecycle:
+def end_workbench_execution(
+    workspace: str | Path,
+    *,
+    run_id: str,
+    missing_ok: bool = False,
+) -> ApplicationLifecycle:
     """终止当前计划并释放工作区输入锁，同时保留最后执行快照供审计。"""
 
     path = application_lifecycle_path(workspace)
     with _application_lifecycle_lock(path):
         current = load_application_lifecycle(workspace)
-        if current is None or run_id not in current.active_executions:
+        if current is None:
+            raise ApplicationLifecycleConflictError("生命周期状态尚未初始化。")
+        if run_id not in current.active_executions:
+            if missing_ok:
+                # discard 边界可能与节点自身的 close 并发到达；已经收口时
+                # 返回当前快照即可，不能再次递增 revision 或误删其他运行。
+                return current
             raise ApplicationLifecycleConflictError("当前没有可结束的工作台计划执行。")
+        ending_execution = current.active_executions[run_id]
         remaining = dict(current.active_executions)
         remaining.pop(run_id, None)
         return _persist_workbench_execution_removal(
@@ -518,6 +536,10 @@ def end_workbench_execution(workspace: str | Path, *, run_id: str) -> Applicatio
             current=current,
             executions=remaining,
             resource_locks=_resource_locks_without_run(current.resource_locks, run_id),
+            clear_active_formal_revision=execution_belongs_to_active_revision(
+                current,
+                ending_execution,
+            ),
         )
 
 
@@ -597,6 +619,7 @@ def _persist_workbench_execution_snapshot(
             "initialization": ApplicationInitialization(
                 stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
                 status=ApplicationLifecycleStatus.COMPLETED,
+                threadId=current.initialization.thread_id,
             ),
             "active_run_id": execution.run_id,
             "active_executions": executions,
@@ -616,8 +639,9 @@ def _persist_workbench_execution_removal(
     current: ApplicationLifecycle,
     executions: dict[str, WorkbenchExecution],
     resource_locks: ExecutionResourceLocks,
+    clear_active_formal_revision: bool = False,
 ) -> ApplicationLifecycle:
-    """原子移除指定运行，并保持创建生命周期不受工作台状态影响。"""
+    """原子移除指定运行，并按明确结束语义释放其 formal revision。"""
 
     next_revision = current.revision + 1
     latest = max(executions.values(), key=lambda item: item.updated_at) if executions else None
@@ -628,10 +652,16 @@ def _persist_workbench_execution_removal(
             "initialization": ApplicationInitialization(
                 stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
                 status=ApplicationLifecycleStatus.COMPLETED,
+                threadId=current.initialization.thread_id,
             ),
             "active_run_id": latest.run_id if latest else None,
             "active_executions": executions,
             "resource_locks": resource_locks,
+            **(
+                {"active_formal_revision": None}
+                if clear_active_formal_revision
+                else {}
+            ),
         }
     )
     return write_application_lifecycle(workspace, updated, expected_revision=current.revision)
@@ -651,6 +681,30 @@ def _primary_resource_claim(scope: str, target_id: str) -> ExecutionResourceClai
         role=ExecutionResourceRole.PRIMARY,
         reason=ExecutionResourceReason.PRIMARY_TARGET,
     )
+
+
+def execution_belongs_to_active_revision(
+    lifecycle: ApplicationLifecycle,
+    execution: WorkbenchExecution,
+) -> bool:
+    """判断用户明确结束的运行是否承载当前唯一 formal revision。"""
+
+    active = lifecycle.active_formal_revision
+    if active is None:
+        return False
+    # 工作台草稿节点只服务 formal revision，无需再依赖易变化的 target 投影。
+    if execution.phase == "application_revision":
+        return True
+    target = active.target
+    if target.type == "application":
+        return execution.scope == "application" and execution.target_id == "application"
+    if target.type == "page":
+        page_id = str(target.page_id or "")
+        return execution.scope == "page" and (
+            execution.target_id == page_id or execution.page_id == page_id
+        )
+    endpoint_id = str(target.endpoint_id or "")
+    return execution.scope == "endpoint" and execution.target_id == endpoint_id
 
 
 def _resource_claim_key(claim: ExecutionResourceClaim) -> str:
@@ -802,11 +856,7 @@ def transition_application_lifecycle(
             "initialization": ApplicationInitialization(
                 stage=stage,
                 status=status,
-                threadId=(
-                    None
-                    if stage == ApplicationLifecycleStage.READY_FOR_WORKBENCH
-                    else state.initialization.thread_id
-                ),
+                threadId=state.initialization.thread_id,
             ),
             "active_run_id": active_run_id or state.active_run_id,
             "error": error,

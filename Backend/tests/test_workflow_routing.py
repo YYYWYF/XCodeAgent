@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 
 from app.graph.workflow import (
+    build_graph,
+    route_application_revision,
     route_acceptance,
     route_acceptance_phase_confirmation,
     route_build_result,
@@ -41,6 +43,27 @@ class WorkflowRoutingTests(unittest.TestCase):
         self.assertEqual(
             route_workflow_start({"resume_from": "project_planning"}),
             "project_planning",
+        )
+
+    def test_workflow_start_can_resume_from_application_revision(self) -> None:
+        """正式修订动作必须进入已注册的 application_revision 节点。"""
+
+        self.assertEqual(
+            route_workflow_start({"resume_from": "application_revision"}),
+            "application_revision",
+        )
+        self.assertIn("application_revision", build_graph(checkpointer=None).get_graph().nodes)
+
+    def test_application_revision_enters_development_readiness_after_artifacts_confirmed(self) -> None:
+        """草稿确认门停图，正式产物确认后先经过开发就绪门禁。"""
+
+        self.assertEqual(
+            route_application_revision({"status": "requires_user_input"}),
+            "await_user_input",
+        )
+        self.assertEqual(
+            route_application_revision({"status": "revision_artifacts_confirmed"}),
+            "development_readiness_gate",
         )
 
     def test_project_planning_waits_for_confirmation(self) -> None:

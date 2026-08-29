@@ -24,6 +24,15 @@ class ProjectState(TypedDict, total=False):
     complexity_decision: dict[str, Any]
     conversation_intent: str
     conversation_response: str
+    change_impact_enabled: bool
+    change_impact_analysis: dict[str, Any]
+    change_impact_context: dict[str, Any]
+    change_impact_code_scan_required: bool
+    change_impact_code_scan: dict[str, Any]
+    revision_impact: dict[str, Any]
+    revision_continuation: dict[str, Any]
+    revision_draft: dict[str, Any]
+    revision_interaction: dict[str, Any]
     design_change_submission: bool
     design_change_request: str
     design_change_target: str
@@ -43,6 +52,7 @@ class ProjectState(TypedDict, total=False):
     direct_modification_approved_paths: list[str]
     direct_modification_handoff_decision: str
     direct_modification_target_paths: list[str]
+    direct_modification_resume_node: str
     direct_modification_result: dict[str, Any]
     direct_stage_results: dict[str, dict[str, Any]]
     direct_code_change_sets: list[dict[str, Any]]
@@ -191,7 +201,6 @@ class ProjectState(TypedDict, total=False):
     launch_result: dict[str, Any]
     acceptance_request: dict[str, Any]
     acceptance_decision: str
-    acceptance_adjustment: dict[str, Any]
     accepted: bool
     status: str
     message: str

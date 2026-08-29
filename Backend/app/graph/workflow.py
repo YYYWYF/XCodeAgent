@@ -16,6 +16,10 @@ def route_workflow_start(state: ProjectState) -> str:
         return "entity_source_binding"
     if state.get("resume_from") == "development_readiness_gate":
         return "development_readiness_gate"
+    if state.get("resume_from") == "application_revision":
+        return "application_revision"
+    if state.get("resume_from") == "technical_planning":
+        return "technical_planning"
     if state.get("resume_from") == "project_planning":
         return "project_planning"
     if state.get("resume_from") == "inspect_workspace":
@@ -49,6 +53,16 @@ def route_workflow_start(state: ProjectState) -> str:
     if str(state.get("selected_entity_id") or "").strip():
         return "entity_source_binding"
     return "development_readiness_gate"
+
+
+def route_application_revision(state: ProjectState) -> str:
+    """正式产物收口完成后先经过开发就绪门禁，再进入工作区检查。"""
+
+    return (
+        "development_readiness_gate"
+        if state.get("status") == "revision_artifacts_confirmed"
+        else "await_user_input"
+    )
 
 
 def route_test_validation(state: ProjectState) -> str:
@@ -212,6 +226,10 @@ def build_graph(*, checkpointer):
     builder = StateGraph(ProjectState)
 
     builder.add_node("development_readiness_gate", nodes.development_readiness_gate)
+    builder.add_node("application_revision", nodes.start_application_revision)
+    # TechnicalPlan 二次修改使用同一实现节点，但以真实 technical_planning
+    # 入口暴露给运行时，避免把用户确认后的规划请求显示成未知的 revision 流程。
+    builder.add_node("technical_planning", nodes.start_application_revision)
     builder.add_node("entity_source_binding", nodes.entity_source_binding)
     builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
@@ -236,6 +254,8 @@ def build_graph(*, checkpointer):
         route_workflow_start,
         {
             "development_readiness_gate": "development_readiness_gate",
+            "application_revision": "application_revision",
+            "technical_planning": "technical_planning",
             "entity_source_binding": "entity_source_binding",
             "project_planning": "project_planning",
             "inspect_workspace": "inspect_workspace",
@@ -251,6 +271,22 @@ def build_graph(*, checkpointer):
             "small_task_repair": "small_task_repair",
             "acceptance": "acceptance",
             "finalize_project": "finalize_project",
+        },
+    )
+    builder.add_conditional_edges(
+        "application_revision",
+        route_application_revision,
+        {
+            "development_readiness_gate": "development_readiness_gate",
+            "await_user_input": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "technical_planning",
+        route_application_revision,
+        {
+            "development_readiness_gate": "development_readiness_gate",
+            "await_user_input": END,
         },
     )
     builder.add_conditional_edges(

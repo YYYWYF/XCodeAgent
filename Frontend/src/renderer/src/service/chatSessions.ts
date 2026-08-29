@@ -5,6 +5,7 @@ import type {
   EditorMode,
   ChatMessageSkill,
   WorkflowBuildExecutionSlice,
+  WorkflowFormalRevisionBranch,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet,
 } from '../typings';
@@ -26,7 +27,33 @@ export type ChatSessionMessage = {
   error?: string;
   toolCalls?: ToolCallRecord[];
   processSteps?: ProcessStepRecord[];
+  revisionHandoff?: ChatSessionRevisionHandoff;
   createdAt: number;
+};
+
+export type ChatSessionRevisionHandoff = {
+  kind: 'formal_revision' | 'revision_development';
+  formalBranch: WorkflowFormalRevisionBranch;
+  targetSessionId: string;
+  targetConversationThreadId: string;
+  impactInteractionId: string;
+  changeId?: string;
+  request: string;
+};
+
+export type ChatSessionRevisionContext = {
+  kind: 'formal_revision';
+  sessionRole: 'design' | 'development';
+  formalBranch: WorkflowFormalRevisionBranch;
+  impactInteractionId: string;
+  sourceSessionId: string;
+  sourceConversationThreadId: string;
+  sourceRunId: string;
+  planningThreadId: string;
+  changeId?: string;
+  handoffFromSessionId?: string;
+  handoffFromConversationThreadId?: string;
+  technicalPlanSha256?: string;
 };
 
 export type ChatSessionRecord = {
@@ -41,6 +68,7 @@ export type ChatSessionRecord = {
   entityId?: string;
   entityLabel?: string;
   pageId?: string;
+  revisionContext?: ChatSessionRevisionContext;
   workspaceRoot: string;
   messages: ChatSessionMessage[];
   createdAt: number;
@@ -59,6 +87,7 @@ export type ChatSessionSummary = {
   entityId?: string;
   entityLabel?: string;
   pageId?: string;
+  revisionContext?: ChatSessionRevisionContext;
   createdAt: number;
   updatedAt: number;
   messageCount: number;
@@ -77,16 +106,52 @@ export type SessionWorkspaceSummary = {
 const CHAT_SESSION_EDITOR_MODES: EditorMode[] = ['frontend', 'backend'];
 const CHAT_SESSION_WORKBENCH_PHASES: WorkbenchPhase[] = [
   'product',
+  'planning',
   'development',
   'test',
   'review',
   'acceptance',
 ];
+const ACTIVE_SESSION_STORAGE_PREFIX = 'xcodeagent:active-session:';
 
 type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>;
 
 function storageKey(workspaceRoot: string, editorMode: EditorMode): string {
   return `xcode-agent-sessions:${workspaceRoot}:${editorMode}`;
+}
+
+/** 生成指定应用和编辑模式的当前会话恢复键。 */
+function activeSessionStorageKey(
+  applicationId: string,
+  editorMode: EditorMode,
+  phase: WorkbenchPhase,
+): string {
+  return `${ACTIVE_SESSION_STORAGE_PREFIX}${applicationId}:${editorMode}:${phase}`;
+}
+
+/** 读取用户退出应用前最后打开的会话标识。 */
+export function getPersistedActiveSessionId(
+  applicationId: string,
+  editorMode: EditorMode,
+  phase: WorkbenchPhase,
+): string | undefined {
+  const sessionId = window.localStorage.getItem(
+    activeSessionStorageKey(applicationId, editorMode, phase),
+  );
+  return sessionId?.trim() || undefined;
+}
+
+/** 持久化用户当前打开的会话；传入空值时清除已保存选择。 */
+export function setPersistedActiveSessionId(
+  applicationId: string,
+  editorMode: EditorMode,
+  phase: WorkbenchPhase,
+  sessionId: string | undefined,
+): void {
+  const key = activeSessionStorageKey(applicationId, editorMode, phase);
+  const normalizedSessionId = sessionId?.trim() || '';
+  if (normalizedSessionId) window.localStorage.setItem(key, normalizedSessionId);
+  else window.localStorage.removeItem(key);
 }
 
 /** 清理指定工作区的浏览器兜底会话，桌面主进程中的正式会话由项目删除 IPC 负责。 */
@@ -132,6 +197,7 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
         typeof item.error === 'string' && item.error.trim() ? item.error.trim() : undefined,
       toolCalls: normalizeToolCalls(item.toolCalls),
       processSteps: normalizeProcessSteps(item.processSteps),
+      revisionHandoff: normalizeRevisionSessionHandoff(item.revisionHandoff),
       approvalStatus:
         item.approvalStatus === 'approved_once' ||
         item.approvalStatus === 'approved_always' ||
@@ -142,6 +208,43 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
             : undefined,
       createdAt: Number(item.createdAt || Date.now()),
     }));
+}
+
+/** 规范化来源会话中的二次修改跳转回执，避免任意本地路径或外部链接进入消息。 */
+function normalizeRevisionSessionHandoff(
+  value: unknown,
+): ChatSessionRevisionHandoff | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const handoff = value as Partial<ChatSessionRevisionHandoff>;
+  const kind = String(handoff.kind || '');
+  if (!['formal_revision', 'revision_development'].includes(kind)) {
+    return undefined;
+  }
+  const formalBranch = normalizeEndpointField(handoff.formalBranch);
+  const targetSessionId = normalizeEndpointField(handoff.targetSessionId);
+  const targetConversationThreadId = normalizeEndpointField(handoff.targetConversationThreadId);
+  const impactInteractionId = normalizeEndpointField(handoff.impactInteractionId);
+  const changeId = normalizeEndpointField(handoff.changeId);
+  const request = typeof handoff.request === 'string' ? handoff.request.trim().slice(0, 16_000) : '';
+  if (
+    !['design_stage_revision', 'workbench_plan_revision'].includes(formalBranch || '') ||
+    !targetSessionId ||
+    !targetConversationThreadId ||
+    !impactInteractionId ||
+    !request
+  ) {
+    return undefined;
+  }
+  if (kind === 'revision_development' && !changeId) return undefined;
+  return {
+    kind: kind as ChatSessionRevisionHandoff['kind'],
+    formalBranch: formalBranch as WorkflowFormalRevisionBranch,
+    targetSessionId,
+    targetConversationThreadId,
+    impactInteractionId,
+    changeId,
+    request,
+  };
 }
 
 /** 过滤并规范化会话消息中的技能展示快照。 */
@@ -253,6 +356,7 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
       entityContext?.entityLabel ||
       inferEntityLabelFromTitle(session.title),
     pageId: normalizePageId(session.pageId) || inferPageIdFromMessages(session.messages),
+    revisionContext: normalizeRevisionSessionContext(session.revisionContext),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
     createdAt: Number(session.createdAt || Date.now()),
@@ -274,6 +378,7 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     entityId: session.entityId,
     entityLabel: session.entityLabel,
     pageId: session.pageId,
+    revisionContext: session.revisionContext,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
@@ -298,6 +403,7 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       entityId: normalizeEndpointField(item.entityId),
       entityLabel: normalizeEndpointField(item.entityLabel),
       pageId: normalizePageId(item.pageId),
+      revisionContext: normalizeRevisionSessionContext(item.revisionContext),
       createdAt: Number(item.createdAt || Date.now()),
       updatedAt: Number(item.updatedAt || Date.now()),
       messageCount: Number(item.messageCount || 0),
@@ -320,6 +426,63 @@ function normalizePageId(value: unknown): string | undefined {
 function normalizeEndpointField(value: unknown): string | undefined {
   const text = typeof value === 'string' ? value.trim() : '';
   return text || undefined;
+}
+
+/** 规范化正式二次修改的最小会话身份，拒绝缺少分支、来源或原规划线程的记录。 */
+export function normalizeRevisionSessionContext(
+  value: unknown,
+): ChatSessionRevisionContext | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const context = value as Partial<ChatSessionRevisionContext>;
+  if (context.kind !== 'formal_revision') return undefined;
+  const sessionRole = normalizeEndpointField(context.sessionRole);
+  const formalBranch = normalizeEndpointField(context.formalBranch);
+  const impactInteractionId = normalizeEndpointField(context.impactInteractionId);
+  const sourceSessionId = normalizeEndpointField(context.sourceSessionId);
+  const sourceConversationThreadId = normalizeEndpointField(context.sourceConversationThreadId);
+  const sourceRunId = normalizeEndpointField(context.sourceRunId);
+  const planningThreadId = normalizeEndpointField(context.planningThreadId);
+  const changeId = normalizeEndpointField(context.changeId);
+  const handoffFromSessionId = normalizeEndpointField(context.handoffFromSessionId);
+  const handoffFromConversationThreadId = normalizeEndpointField(
+    context.handoffFromConversationThreadId,
+  );
+  const technicalPlanSha256 = normalizeEndpointField(context.technicalPlanSha256);
+  if (
+    !['design', 'development'].includes(sessionRole || '') ||
+    !['design_stage_revision', 'workbench_plan_revision'].includes(formalBranch || '') ||
+    !impactInteractionId ||
+    !sourceSessionId ||
+    !sourceConversationThreadId ||
+    !sourceRunId ||
+    !planningThreadId
+  ) {
+    return undefined;
+  }
+  if (
+    sessionRole === 'development' &&
+    (!changeId ||
+      !handoffFromSessionId ||
+      !handoffFromConversationThreadId ||
+      !technicalPlanSha256 ||
+      !/^[0-9a-f]{64}$/.test(technicalPlanSha256))
+  ) {
+    return undefined;
+  }
+  return {
+    kind: 'formal_revision',
+    sessionRole: sessionRole as ChatSessionRevisionContext['sessionRole'],
+    formalBranch: formalBranch as WorkflowFormalRevisionBranch,
+    impactInteractionId,
+    sourceSessionId,
+    sourceConversationThreadId,
+    sourceRunId,
+    planningThreadId,
+    ...(changeId ? { changeId } : {}),
+    ...(handoffFromSessionId ? { handoffFromSessionId } : {}),
+    ...(handoffFromConversationThreadId ? { handoffFromConversationThreadId } : {}),
+    ...(technicalPlanSha256 ? { technicalPlanSha256 } : {}),
+  };
 }
 
 /** 从旧会话保存的 Workflow 快照中恢复页面归属。 */

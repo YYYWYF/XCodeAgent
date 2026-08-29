@@ -17,10 +17,16 @@ from app.agents.tool_activity_stream import (
 from app.agents.workspace_assistant.agent import workspace_assistant_prompt
 from app.config import Settings
 from app.middleware.direct_modification import DIRECT_MODIFICATION_MODE_MARKER
+from app.domain.application_revision import (
+    EarliestRevisionArtifact,
+    FormalRevisionBranch,
+    RevisionType,
+)
 from app.services.direct_modification import (
     direct_path_matches_owner,
     parse_direct_modification_agent_result,
 )
+from app.services.revision_routing import enforce_revision_routing
 from app.utils.model_output import extract_json_object
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
@@ -28,9 +34,9 @@ from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 ConversationIntent = Literal[
     "casual_chat",
     "workspace_question",
-    "workspace_change",
-    "formal_workflow",
-    "needs_clarification",
+    "clarification",
+    "implementation_fix",
+    "formal_revision",
 ]
 DirectModificationOwner = Literal[
     "frontend",
@@ -44,8 +50,8 @@ DirectModificationScope = Literal[
     "respond",
     "read_only",
     "direct",
-    "requires_planning",
-    "needs_clarification",
+    "formal_revision",
+    "clarification",
 ]
 
 _MAX_CONVERSATION_SUMMARY_CHARS = 4_000
@@ -94,6 +100,11 @@ class DirectModificationDecision:
     clarification_question: str
     response: str = ""
     target_paths: tuple[str, ...] = ()
+    formal_branch: FormalRevisionBranch | None = None
+    revision_type: RevisionType | None = None
+    earliest_artifact: EarliestRevisionArtifact | None = None
+    affected_artifact_keys: tuple[str, ...] = ()
+    affected_resource_keys: tuple[str, ...] = ()
 
 
 def _direct_modification_classifier_prompt(
@@ -106,17 +117,57 @@ def _direct_modification_classifier_prompt(
 
     return (
         "Route one message in an application-development workbench. Return exactly one JSON object "
-        "and no Markdown. Classify by the user's requested outcome, not isolated keywords.\n\n"
+        "and no Markdown. Classify by the user's requested outcome, not isolated keywords. "
+        "You are conservative about write authorization, not about collecting design details: when the "
+        "user's business intent is clear, route it to the matching workflow even if page paths, components, "
+        "API details, visual tokens, or recommendation logic are not provided. The downstream workflow owns "
+        "requirements clarification, design completion, implementation planning, and source-file discovery.\n\n"
         "Intents:\n"
         "- casual_chat: greetings, identity questions, general conversation, explanations, or general "
-        "knowledge that does not require inspecting the current workspace.\n"
+        "knowledge that does not require inspecting the current workspace. Examples: '你是谁', '解释一下 "
+        "什么是 REST API', '帮我梳理一下这个概念'.\n"
         "- workspace_question: read-only questions that require inspecting or explaining the current "
-        "workspace, code, configuration, documentation, or architecture.\n"
-        "- workspace_change: a localized request to edit code, tests, documentation, configuration, or "
-        "other ordinary workspace files.\n"
-        "- formal_workflow: a new application, broad architecture replacement, database migration, formal "
-        "RequirementSpec/ProjectPlan change, confirmed contract change, or unresolved product decision.\n"
-        "- needs_clarification: the desired outcome is too ambiguous to answer or act on safely.\n\n"
+        "workspace, code, configuration, documentation, or architecture. Examples: '订单列表页面在哪个 "
+        "文件', '项目现在用的是什么状态管理', '检查登录接口的调用链，但不要修改代码'.\n"
+        "- implementation_fix: a localized code-level correction where confirmed product and technical "
+        "semantics remain unchanged. This includes small changes to an existing page's UI appearance, "
+        "layout, spacing, copy, responsive behavior, or browser interaction. Route these UI-only requests "
+        "to owner=frontend and execute them in the current workbench; do not send them back to any design "
+        "stage. It may edit frontend/backend code only after the user confirms the proposed implementation "
+        "scope; ordinary workspace files are the only implementation fixes that do not need this extra "
+        "confirmation. Examples: '订单页的提交按钮点了没反应，修一下', '修复头像加载失败的前端报错', "
+        "'订单卡片改成双列', '详情页换成深色视觉', '把表格间距调大', '接口已经确定，只把空值校验补上'.\n"
+        "- formal_revision: a change to confirmed product or technical semantics. It must include "
+        "formalBranch, revisionType, earliestArtifact and affected keys. A clear product request does not "
+        "become clarification merely because implementation details are missing. Examples: '新增一个页面', "
+        "'订单管理增加批量归档', '接口增加筛选字段'. "
+        "For a new object with no existing ID, affectedArtifactKeys and affectedResourceKeys may be empty; "
+        "never invent IDs or source paths.\n"
+        "- clarification: use only when neither the business object/action nor the desired outcome can be "
+        "identified. Do not use it to ask for a route, component list, implementation approach, or visual "
+        "recommendation that the downstream workflow can determine. Examples: '帮我改一下', '这里有问题，"
+        "处理下', '优化一下' (with no object, behavior, or expected result).\n\n"
+        "Formal branches and revision types:\n"
+        "- design_stage_revision only for requirement_scope_change or product_behavior_change; "
+        "earliestArtifact is requirement-spec or product-plan. Existing-page UI-only changes are never "
+        "design_stage_revision and never use ui-design as earliestArtifact.\n"
+        "- workbench_plan_revision for technical_contract_change, endpoint_implementation_change, or "
+        "data_source_change; earliestArtifact is technical-plan.\n"
+        "Formal examples (choose the earliest semantic layer; do not ask for source paths):\n"
+        "- requirement_scope_change -> design_stage_revision / requirement-spec: '新增一个客户管理页面', "
+        "'增加供应商管理模块', '支持管理员角色'. Even without a route, component, or recommendation, "
+        "route here and let the requirements workflow fill them in.\n"
+        "- product_behavior_change -> design_stage_revision / product-plan: '订单支持批量归档', "
+        "'审批通过后通知申请人', '增加导出订单操作'.\n"
+        "- existing-page UI-only -> implementation_fix / frontend: '订单卡片改成双列', "
+        "'详情页换成深色视觉', '把表格间距调大'. These are immediate small edits, not a design-stage "
+        "revision. A new page, new behavior, or new data field is not UI-only.\n"
+        "- technical_contract_change -> workbench_plan_revision / technical-plan: '列表接口增加状态和"
+        "时间筛选参数', '响应里增加 total 字段'.\n"
+        "- endpoint_implementation_change -> workbench_plan_revision / technical-plan: '删除改成软删除', "
+        "'给订单接口增加审计记录'.\n"
+        "- data_source_change -> workbench_plan_revision / technical-plan: '把 mock 数据换成 MySQL', "
+        "'订单列表改从真实数据库读取'.\n\n"
         "Owners:\n"
         "- frontend: only UI, React, styling, browser interaction, or frontend API-consumption code.\n"
         "- backend: only server, data model, persistence, validation, or API implementation code.\n"
@@ -131,19 +182,33 @@ def _direct_modification_classifier_prompt(
         "When the current request contains an original user request followed by a latest user supplement, "
         "treat them as one continuation. The latest supplement is authoritative; a concrete path or directory "
         "provided there is already answered, so do not ask the same clarification again.\n\n"
-        "The workspace was scanned before this routing decision. Use the bounded scan context below to resolve "
-        "named existing pages, components, routes, APIs, and ownership. If the user names an existing page or "
-        "component and gives a concrete localized outcome, classify it as workspace_change even when the exact "
-        "source file still needs to be located by the execution Agent. For example, changing every card on an "
-        "existing photo-list page to width 200px is a direct frontend workspace_change, not a clarification. "
-        "Ask a clarification only when the desired behavior remains materially ambiguous after considering the "
-        "scan context. Treat the scan as partial evidence: absence from the bounded context does not prove that "
-        "a file or symbol does not exist.\n\n"
+        "下面可能包含上一轮缓存的有界工作区上下文；它只用于辅助本次路由分类，不要求输出额外的"
+        "影响范围证据。请结合已有页面、组件、路由和 API，"
+        "但必须先判断用户请求是否改变了已确认的产品、设计或技术语义，再选择 owner；其中既有页面 UI-only "
+        "微调不算设计语义变化。改变页面的存在或范围、角色、"
+        "模块、流程、操作、验收规则或正式契约的存在、范围、生命周期或业务含义，属于 formal_revision。"
+        "去掉、移除、取消、下线、删除等口语表达应按实际语义理解；不能因为可以通过编辑或删除源文件实现，"
+        "就把语义变更降级为 implementation_fix。既有页面的 UI 视觉、布局、间距、文案、响应式和交互微调"
+        "都属于 implementation_fix/frontend，应由当前工作台立即执行，不得回退到 UI 设计阶段。"
+        "只有在已确认产品/技术语义保持不变时，才使用 implementation_fix，例如修复按钮无响应、渲染错误"
+        "或已确认交互的代码实现。如果产品/技术语义已经明确，"
+        "即使没有页面路径、组件、接口细节或推荐逻辑，也必须选择对应 formal_revision；这些细节由后续 "
+        "workflow 通过澄清和设计节点补齐。只有连业务对象、动作或期望结果都无法识别时，才使用 clarification。"
+        "此时也不要猜测代码路径。工作区上下文只是局部证据，未在上下文中出现不代表文件或符号不存在。\n\n"
+        "分类优先级：产品或技术语义变化 -> formal_revision；既有页面 UI-only 小改动 -> implementation_fix/frontend；"
+        "目标或结果不明确 -> clarification；只读检查或解释 -> workspace_question。"
+        "frontend/backend owner 不能覆盖更高优先级的 formal_revision 判断；UI-only 小改动本身不是 formal_revision。\n\n"
+        "关键反例：‘用户请求新增一个页面，但未指定页面路径、组件和推荐逻辑’不能回答“无法安全执行”，"
+        "也不能进入 clarification；应路由为 formal_revision/design_stage_revision/requirement-spec，"
+        "并让后续需求节点补齐页面目标和实现细节。formal_revision 不需要猜测 candidatePaths，缺少既有路径时留空即可。\n\n"
         "For a localized frontend/backend change, put every exact existing file required by the user's outcome "
         "but located outside the normal source roots in targetPaths. This is not limited to known config-file "
         "types. Never propose a directory, broad glob, lockfile, secret file, installed dependency, generated "
         "output, migration, schema, or .xcodeagent artifact. targetPaths are only candidates; backend policy "
         "decides whether they are added to this run's file scope.\n\n"
+        "For formal_revision, keep clarificationQuestion and questions empty: the next step is the formal "
+        "revision confirmation, not a request for detailed design. For implementation_fix, do not ask for "
+        "implementation details that the execution Agent can discover from the bounded workspace context.\n\n"
         "For casual_chat, answer the user's message directly in response. The response must be in the "
         "user's language, concise, natural, and ready to display as the final assistant message. Do not "
         "describe this routing decision, ask for modification details, or claim workspace inspection. "
@@ -151,11 +216,15 @@ def _direct_modification_classifier_prompt(
         "For every other intent, response must be an empty string.\n\n"
         "Return this shape:\n"
         '{"response":"final answer only for casual_chat",'
-        '"intent":"casual_chat|workspace_question|workspace_change|formal_workflow|needs_clarification",'
+        '"route":"casual_chat|workspace_question|clarification|implementation_fix|formal_revision",'
+        '"formalBranch":"design_stage_revision|workbench_plan_revision|null",'
+        '"revisionType":"requirement_scope_change|product_behavior_change|technical_contract_change|endpoint_implementation_change|data_source_change|null",'
+        '"earliestArtifact":"requirement-spec|product-plan|technical-plan|null",'
         '"owner":"frontend|backend|fullstack|workspace|none|unknown",'
         '"confidence":0.0,"reason":"short reason",'
         '"clarificationQuestion":"question when clarification is needed",'
-        '"targetPaths":["precise/relative/path"]}\n\n'
+        '"candidatePaths":["precise/relative/path"],'
+        '"affectedArtifactKeys":[],"affectedResourceKeys":[],"questions":[]}\n\n'
         f"Bounded workspace scan context:\n{_workspace_routing_context(workspace_snapshot)}\n\n"
         f"Bounded quick-chat summary:\n{conversation_summary or '(empty)'}\n\n"
         f"Current user request:\n{user_request}"
@@ -178,7 +247,8 @@ def classify_direct_modification_intent(
         messages = [
             SystemMessage(
                 content=(
-                    "You are a conservative workbench conversation router. Output JSON only. "
+                    "You are a workbench intent router. Be conservative only about write authorization; "
+                    "route clear product intent even when design details are missing. Output JSON only. "
                     "All human-readable routing fields must use Simplified Chinese."
                 )
             ),
@@ -197,7 +267,11 @@ def classify_direct_modification_intent(
             text = _coerce_content_text(getattr(response, "content", "")) or ""
         else:
             text = _stream_classifier_response(model, messages, on_response_delta)
-        return _normalize_direct_modification_decision(extract_json_object(text) or {})
+        return _normalize_direct_modification_decision(
+            extract_json_object(text) or {},
+            user_request=user_request,
+            target=(workspace_snapshot or {}).get("currentTarget"),
+        )
     except Exception as exc:
         return _clarification_fallback(
             f"意图识别失败（{type(exc).__name__}），需要用户补充后重试。"
@@ -270,44 +344,39 @@ def _bounded_routing_items(value: Any, *, limit: int) -> list[Any]:
 
 def _normalize_direct_modification_decision(
     payload: dict[str, Any],
+    *,
+    user_request: str = "",
+    target: dict[str, Any] | None = None,
 ) -> DirectModificationDecision:
     """校验模型分类结果，并对低置信度结果执行安全降级。"""
 
-    intent = str(payload.get("intent") or "needs_clarification")
-    owner = str(payload.get("owner") or "unknown")
-    if intent not in {
-        "casual_chat",
-        "workspace_question",
-        "workspace_change",
-        "formal_workflow",
-        "needs_clarification",
-    }:
-        intent = "needs_clarification"
-    if owner not in {"frontend", "backend", "fullstack", "workspace", "none", "unknown"}:
-        owner = "unknown"
     try:
-        confidence = max(0.0, min(1.0, float(payload.get("confidence", 0.0))))
+        routed = enforce_revision_routing(
+            payload,
+            user_request=user_request,
+            target=target,
+        )
+        candidate = routed.candidate
     except (TypeError, ValueError):
-        confidence = 0.0
-    reason = str(payload.get("reason") or "模型没有提供有效的分类依据。").strip()
+        return _clarification_fallback("模型没有返回符合当前二次修改合同的路由。")
+    intent = candidate.route.value
+    owner = candidate.owner
+    confidence = candidate.confidence
+    reason = candidate.reason
     clarification_question = _chinese_clarification_question(
         payload.get("clarificationQuestion")
         or payload.get("clarification_question")
         or "请补充要修改的功能、页面、组件或接口，以及期望结果。"
     )
     response = str(payload.get("response") or payload.get("answer") or "").strip()
-    target_paths = tuple(_safe_target_paths(payload.get("targetPaths") or payload.get("target_paths")))
-    if intent in {"casual_chat", "workspace_question", "formal_workflow"}:
-        owner = "none"
-    if intent == "workspace_change" and owner == "workspace" and not target_paths:
-        intent = "needs_clarification"
-        owner = "unknown"
-        clarification_question = "请补充需要修改的具体文档、配置、测试或脚本路径。"
-    if confidence < 0.65 or owner == "unknown" or intent == "needs_clarification":
+    target_paths = tuple(_safe_target_paths(candidate.candidate_paths))
+    if intent == "implementation_fix" and owner == "workspace" and not target_paths:
+        return _clarification_fallback("工作区普通文件修改缺少精确路径。")
+    if intent == "clarification":
         return DirectModificationDecision(
-            intent="needs_clarification",
+            intent="clarification",
             owner="unknown",
-            scope="needs_clarification",
+            scope="clarification",
             confidence=confidence,
             reason=reason,
             clarification_question=clarification_question,
@@ -317,8 +386,8 @@ def _normalize_direct_modification_decision(
     scope_by_intent = {
         "casual_chat": "respond",
         "workspace_question": "read_only",
-        "workspace_change": "direct",
-        "formal_workflow": "requires_planning",
+        "implementation_fix": "direct",
+        "formal_revision": "formal_revision",
     }
     return DirectModificationDecision(
         intent=intent,  # type: ignore[arg-type]
@@ -329,6 +398,11 @@ def _normalize_direct_modification_decision(
         clarification_question=clarification_question,
         response=response if intent == "casual_chat" else "",
         target_paths=target_paths,
+        formal_branch=candidate.formal_branch,
+        revision_type=candidate.revision_type,
+        earliest_artifact=candidate.earliest_artifact,
+        affected_artifact_keys=tuple(candidate.affected_artifact_keys),
+        affected_resource_keys=tuple(candidate.affected_resource_keys),
     )
 
 
@@ -345,9 +419,9 @@ def _clarification_fallback(reason: str) -> DirectModificationDecision:
     """在分类不可用时返回不修改代码的澄清结果。"""
 
     return DirectModificationDecision(
-        intent="needs_clarification",
+        intent="clarification",
         owner="unknown",
-        scope="needs_clarification",
+        scope="clarification",
         confidence=0.0,
         reason=reason,
         clarification_question="请补充要修改的功能、页面、组件或接口，以及期望结果。",

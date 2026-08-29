@@ -33,6 +33,9 @@ import type {
   WorkflowConfirmationArtifact,
   WorkflowCodeReviewResult,
   WorkflowCodeReviewRepair,
+  WorkflowRevisionDraft,
+  WorkflowRevisionDraftInteraction,
+  WorkflowRevisionImpact,
   WorkflowTestTarget,
   WorkflowRunPayload
 } from '../../../../typings'
@@ -48,6 +51,8 @@ import AgentApprovalCard from '../AgentApprovalCard'
 import { approveToolRequest, rejectToolRequest } from '../../../../service/workspaceTools'
 import type { ToolApproval } from '../../../../service/workspaceTools'
 import ConfirmationArtifact from './ConfirmationArtifact'
+import RevisionImpactReview from '../ApplicationRevisionCard/RevisionImpactReview'
+import RevisionDraftReview from '../ApplicationRevisionCard/RevisionDraftReview'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import DetailReview from './DetailReview'
 import EntityDesignGateCard from './EntityDesignGateCard'
@@ -182,6 +187,8 @@ export default function WorkflowRunCard({
   const frontendPerformanceConfirmation =
     clarification?.mode === 'frontend_performance_confirmation' &&
     !staleFrontendPerformanceConfirmation
+  const revisionImpact = workflowRevisionImpact(workflow, clarification)
+  const revisionDraftBinding = workflowRevisionDraftBinding(workflow, clarification)
   const dagConfirmation = clarification?.mode === 'build_task_plan_confirmation'
   const testPhaseConfirmation = clarification?.mode === 'test_phase_confirmation'
   const testTarget = (clarification?.testTarget ||
@@ -425,7 +432,29 @@ export default function WorkflowRunCard({
               type="error"
             />
           )}
-          {planningStageEntry && requiresConfirmation ? (
+          {revisionImpact && requiresConfirmation ? (
+            <RevisionImpactReview
+              disabled={disabled || interactionAvailability !== 'active'}
+              impact={revisionImpact}
+              onDecision={(decision) =>
+                onSubmitClarification?.(workflow, {
+                  revision_impact_confirmation: decision
+                })
+              }
+            />
+          ) : revisionDraftBinding && requiresConfirmation ? (
+            <RevisionDraftReview
+              disabled={disabled || interactionAvailability !== 'active'}
+              draft={revisionDraftBinding.draft}
+              interaction={revisionDraftBinding.interaction}
+              key={revisionDraftBinding.draft.draftSha256}
+              onAction={(interaction) =>
+                onSubmitClarification?.(workflow, {
+                  revision_draft_interaction: interaction
+                })
+              }
+            />
+          ) : planningStageEntry && requiresConfirmation ? (
             <PlanningStageEntryCard
               disabled={disabled || interactionAvailability !== 'active'}
               onEnterPlanning={() =>
@@ -667,6 +696,81 @@ export default function WorkflowRunCard({
       )}
     </div>
   )
+}
+
+/** 从 clarification、summary 或公开 state/result 读取只读 revision impact。 */
+function workflowRevisionImpact(
+  workflow: WorkflowRunPayload,
+  clarification?: WorkflowClarification
+): WorkflowRevisionImpact | undefined {
+  const clarificationImpact = (clarification as Record<string, unknown> | undefined)
+    ?.revisionImpact
+  const candidates = [
+    clarificationImpact,
+    workflow.summary.revisionImpact,
+    workflow.state?.revision_impact,
+    workflow.result?.revision_impact
+  ]
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue
+    const impact = candidate as Partial<WorkflowRevisionImpact>
+    if (
+      typeof impact.interactionId === 'string' &&
+      ['design_stage_revision', 'workbench_plan_revision'].includes(
+        String(impact.formalBranch)
+      )
+    ) {
+      return impact as WorkflowRevisionImpact
+    }
+  }
+  return undefined
+}
+
+/** 组合公开草稿、active change 与当前 lifecycle pending interaction，历史卡片不会得到绑定。 */
+function workflowRevisionDraftBinding(
+  workflow: WorkflowRunPayload,
+  clarification?: WorkflowClarification
+): {
+  draft: WorkflowRevisionDraft
+  interaction: Omit<WorkflowRevisionDraftInteraction, 'action' | 'editedMarkdown' | 'feedback'>
+} | undefined {
+  if (clarification?.mode !== 'revision_draft_confirmation') return undefined
+  const clarificationDraft = (clarification as Record<string, unknown>).revisionDraft
+  const candidates = [
+    clarificationDraft,
+    workflow.summary.revisionDraft,
+    workflow.state?.revision_draft,
+    workflow.result?.revision_draft
+  ]
+  const draft = candidates.find(
+    (candidate) =>
+      candidate &&
+      typeof candidate === 'object' &&
+      typeof (candidate as Partial<WorkflowRevisionDraft>).artifactKey === 'string' &&
+      typeof (candidate as Partial<WorkflowRevisionDraft>).draftSha256 === 'string'
+  ) as WorkflowRevisionDraft | undefined
+  const lifecycle = workflow.summary.lifecycle
+  const active = lifecycle?.activeFormalRevision
+  if (!draft || !lifecycle || !active?.changeId || active.currentArtifact !== draft.artifactKey) {
+    return undefined
+  }
+  const pending = Object.values(lifecycle.activeExecutions || {})
+    .map((execution) => execution.pendingInteraction)
+    .find(
+      (interaction) =>
+        interaction?.type === 'revision_draft_confirmation' && !interaction.submittedAt
+    )
+  if (!pending || pending.basedOnRevision !== lifecycle.revision) return undefined
+  return {
+    draft,
+    interaction: {
+      changeId: active.changeId,
+      interactionId: pending.id,
+      basedOnLifecycleRevision: pending.basedOnRevision,
+      artifactKey: draft.artifactKey,
+      draftSha256: draft.draftSha256
+    }
+  }
 }
 
 /** 从 summary/state/result 读取审查结果，保证审查节点推进到启动节点后卡片仍可渲染。 */

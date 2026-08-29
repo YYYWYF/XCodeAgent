@@ -14,12 +14,11 @@ from app.services.small_task import (
     execute_small_task_batch,
 )
 from app.services.small_task_scope import (
-    _task_paths,
     apply_confirmed_scope,
     select_parallel_small_task_batch,
     small_task_preflight,
-    workflow_target_for_small_task,
 )
+from app.services.revision_routing import build_small_task_revision_confirmation
 from app.workspace.code_changes import merge_code_change_sets
 
 
@@ -42,27 +41,29 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
         if decision == "rejected":
             return _handoff_rejected(state, tasks)
         if decision == "approved":
-            if handoff.get("mode") == "small_task_scope_confirmation":
-                tasks = apply_confirmed_scope(
+            if handoff.get("mode") != "small_task_scope_confirmation":
+                # 当前 SmallTask 合同只允许确认局部源码范围；旧的“直接跳转
+                # Workflow 节点”载荷不能从 checkpoint 复活并绕过影响分析。
+                return _small_task_failure(
+                    state,
                     tasks,
-                    task_ids=_string_list(handoff.get("taskIds"), limit=100),
-                    requested_paths=_string_list(handoff.get("requestedPaths"), limit=100),
+                    [
+                        dict(item)
+                        for item in state.get("small_task_results", [])
+                        if isinstance(item, dict)
+                    ],
+                    [
+                        dict(item)
+                        for item in state.get("small_task_code_change_sets", [])
+                        if isinstance(item, dict)
+                    ],
+                    "当前 SmallTask 只支持确认局部源码范围，旧升级载荷已停止。",
                 )
-            else:
-                target_node = workflow_target_for_small_task(handoff)
-                return {
-                    "phase": repair_phase,
-                    "status": "in_progress",
-                    "message": f"已确认升级，转入 {target_node} 节点继续处理。",
-                    "small_task_handoff": {},
-                    "small_task_handoff_submission": {},
-                    "small_task_route": target_node,
-                    "integration_next_action": target_node,
-                    "clarification": {},
-                    "repair_tasks": tasks,
-                    "small_task_tasks": tasks,
-                    "timeline": ["small_task_repair"],
-                }
+            tasks = apply_confirmed_scope(
+                tasks,
+                task_ids=_string_list(handoff.get("taskIds"), limit=100),
+                requested_paths=_string_list(handoff.get("requestedPaths"), limit=100),
+            )
     elif handoff:
         return _await_handoff(state, tasks, handoff)
 
@@ -98,14 +99,12 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
             )
         preflight = _first_small_task_preflight(batch)
         if preflight:
-            handoff_payload = build_small_task_handoff(
-                mode="small_task_workflow_handoff",
-                reason=preflight["reason"],
-                tasks=batch,
+            revision_confirmation = build_small_task_revision_confirmation(
+                state=state,
                 escalation=preflight,
-                target_node=workflow_target_for_small_task(preflight),
+                reason=str(preflight.get("reason") or "SmallTask 需要正式修改。"),
             )
-            return _await_handoff(
+            return _await_revision_impact(
                 {
                     **state,
                     "small_task_tasks": working_tasks,
@@ -113,7 +112,7 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
                     "small_task_code_change_sets": all_change_sets,
                 },
                 working_tasks,
-                handoff_payload,
+                revision_confirmation,
             )
 
         dispatched = True
@@ -123,11 +122,7 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
             on_tool_activity=_small_task_tool_activity_writer(
                 "unit_test_repair" if repair_return_node == "unit_test" else "small_task_repair"
             ),
-            source=(
-                "acceptance_adjustment"
-                if isinstance(state.get("acceptance_adjustment"), dict)
-                else f"{repair_return_node}.small_task"
-            ),
+            source=f"{repair_return_node}.small_task",
         )
         batch_results = execution["results"]
         all_results.extend(batch_results)
@@ -167,14 +162,28 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
         )
         if escalation_result:
             escalation = escalation_result.get("escalation") or {}
-            mode = (
-                "small_task_scope_confirmation"
-                if escalation_result.get("status") == "requires_user_confirmation"
-                else "small_task_workflow_handoff"
-            )
-            target_node = workflow_target_for_small_task(escalation)
+            if escalation_result.get("status") == "requires_workflow":
+                revision_confirmation = build_small_task_revision_confirmation(
+                    state=state,
+                    escalation=escalation,
+                    reason=(
+                        str(escalation.get("reason") or "").strip()
+                        or str(escalation_result.get("summary") or "")
+                        or "SmallTask 需要正式修改。"
+                    ),
+                )
+                return _await_revision_impact(
+                    {
+                        **state,
+                        "small_task_tasks": working_tasks,
+                        "small_task_results": all_results,
+                        "small_task_code_change_sets": all_change_sets,
+                    },
+                    working_tasks,
+                    revision_confirmation,
+                )
             handoff_payload = build_small_task_handoff(
-                mode=mode,
+                mode="small_task_scope_confirmation",
                 reason=(
                     str(escalation.get("reason") or "").strip()
                     or str(escalation_result.get("summary") or "")
@@ -185,7 +194,7 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
                     if str(task.get("id") or "") == str(escalation_result.get("taskId") or "")
                 ],
                 escalation=escalation,
-                target_node=target_node,
+                target_node="small_task_repair",
             )
             return _await_handoff(
                 {
@@ -244,7 +253,6 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
         "unit_test_next_action": (
             repair_return_node if repair_return_node == "unit_test" else state.get("unit_test_next_action", "")
         ),
-        "acceptance_adjustment": {},
         iteration_key: next_iteration,
         "code_changes": merged_changes or state.get("code_changes", {}),
         "clarification": {},
@@ -255,67 +263,11 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
 def _initial_tasks(state: ProjectState) -> list[dict[str, Any]]:
     """读取恢复态或集成测试刚生成的小任务列表。"""
 
-    # 验收局部修改必须优先创建本轮新任务，不能误执行上一次已经完成的修复任务。
-    adjustment = state.get("acceptance_adjustment")
-    if isinstance(adjustment, dict) and adjustment.get("type") == "local_fix":
-        feedback = str(adjustment.get("feedback") or "").strip()
-        paths = _acceptance_adjustment_paths(state)
-        return [
-            {
-                "id": "acceptance-local-fix",
-                "kind": "acceptance_local_fix",
-                "owner": _acceptance_adjustment_owner(state),
-                "title": "处理用户验收反馈",
-                "description": feedback,
-                "allowed_paths": paths,
-                "target_files": paths,
-                "engineering_acceptance_checks": [
-                    {
-                        "id": "acceptance-local-fix:feedback",
-                        "kind": "user_feedback",
-                        "description": feedback,
-                        "required": True,
-                        "target_paths": paths,
-                        "verification_stage": "integration_test",
-                    },
-                ],
-                "business_acceptance_checks": [],
-                "dependencies": [],
-                "status": "pending",
-            }
-        ]
-
     candidates = state.get("small_task_tasks") or state.get("repair_tasks") or []
     tasks = [deepcopy(task) for task in candidates if isinstance(task, dict)]
     if tasks:
         return tasks
     return []
-
-
-def _acceptance_adjustment_paths(state: ProjectState) -> list[str]:
-    """从当前页面已确认构建任务提取局部修改的精确文件范围。"""
-
-    candidates = state.get("tasks") or []
-    if not isinstance(candidates, list):
-        candidates = []
-    paths: list[str] = []
-    for task in candidates:
-        if not isinstance(task, dict):
-            continue
-        paths.extend(_task_paths(task))
-    return list(dict.fromkeys(paths))[:100]
-
-
-def _acceptance_adjustment_owner(state: ProjectState) -> str:
-    """按当前执行范围决定局部验收修复的 Agent owner，避免接口修复误投前端 Agent。"""
-
-    scope = state.get("build_execution_scope")
-    scope_type = str(scope.get("type") or "").strip() if isinstance(scope, dict) else ""
-    if scope_type in {"endpoint", "data_source"}:
-        return "backend"
-    if scope_type == "page":
-        return "frontend"
-    return "backend" if state.get("editor_mode") == "backend" else "frontend"
 
 
 def _await_handoff(
@@ -353,6 +305,21 @@ def _await_handoff(
         ),
         "clarification": handoff,
         "timeline": ["small_task_repair"],
+    }
+
+
+def _await_revision_impact(
+    state: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    revision_confirmation: dict[str, Any],
+) -> dict[str, Any]:
+    """保留 SmallTask 证据并切换到统一 revision impact 显式确认门。"""
+
+    return {
+        **_await_handoff(state, tasks, {}),
+        **revision_confirmation,
+        "message": "SmallTask 发现正式语义变化，已暂停写入。",
+        "small_task_handoff": {},
     }
 
 

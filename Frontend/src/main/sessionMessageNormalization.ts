@@ -26,6 +26,7 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
   const skills = normalizeSessionMessageSkills(message.skills)
   const toolCalls = normalizeSessionToolCalls(message.toolCalls)
   const processSteps = normalizeSessionProcessSteps(message.processSteps)
+  const revisionHandoff = normalizeSessionRevisionHandoff(message.revisionHandoff)
   const approvalStatus =
     typeof message.approvalStatus === 'string' &&
     MESSAGE_APPROVAL_STATUSES.has(message.approvalStatus)
@@ -41,7 +42,8 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
     ...(workflow ? { workflow } : {}),
     ...(skills.length > 0 ? { skills } : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
-    ...(processSteps.length > 0 ? { processSteps } : {})
+    ...(processSteps.length > 0 ? { processSteps } : {}),
+    ...(revisionHandoff ? { revisionHandoff } : {})
   }
 }
 
@@ -52,6 +54,41 @@ function cloneJsonRecord(value: unknown): JsonRecord | undefined {
     return JSON.parse(JSON.stringify(value)) as JsonRecord
   } catch {
     return undefined
+  }
+}
+
+/** 只保留来源会话跳转所需的本地 session/thread 与 impact 身份。 */
+function normalizeSessionRevisionHandoff(value: unknown): JsonRecord | undefined {
+  if (
+    !isJsonRecord(value) ||
+    !['formal_revision', 'revision_development'].includes(stringValue(value.kind))
+  ) return undefined
+  const formalBranch = stringValue(value.formalBranch).trim()
+  const targetSessionId = stringValue(value.targetSessionId).trim().slice(0, 512)
+  const targetConversationThreadId = stringValue(value.targetConversationThreadId)
+    .trim()
+    .slice(0, 512)
+  const impactInteractionId = stringValue(value.impactInteractionId).trim().slice(0, 256)
+  const changeId = stringValue(value.changeId).trim().slice(0, 256)
+  const request = stringValue(value.request).trim().slice(0, 16_000)
+  if (
+    !['design_stage_revision', 'workbench_plan_revision'].includes(formalBranch) ||
+    !targetSessionId ||
+    !targetConversationThreadId ||
+    !impactInteractionId ||
+    !request
+  ) {
+    return undefined
+  }
+  if (value.kind === 'revision_development' && !changeId) return undefined
+  return {
+    kind: value.kind,
+    formalBranch,
+    targetSessionId,
+    targetConversationThreadId,
+    impactInteractionId,
+    ...(changeId ? { changeId } : {}),
+    request
   }
 }
 

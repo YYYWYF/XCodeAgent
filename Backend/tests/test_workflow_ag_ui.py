@@ -1315,6 +1315,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             ) as project,
             patch("app.protocols.workflow.runtime.stop_workflow_lifecycle") as stop,
             patch("app.protocols.workflow.runtime.fail_workflow_lifecycle") as fail,
+            patch("app.protocols.workflow.runtime.workspace_run_leases.acquire") as acquire,
         ):
             frames = asyncio.run(collect())
 
@@ -1323,6 +1324,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         project.assert_not_called()
         stop.assert_not_called()
         fail.assert_not_called()
+        acquire.assert_not_called()
 
     def test_workbench_lifecycle_is_projected_before_first_node_snapshot(self) -> None:
         """资源锁写入成功后应立即广播，不能等待首个 Graph 节点完成。"""

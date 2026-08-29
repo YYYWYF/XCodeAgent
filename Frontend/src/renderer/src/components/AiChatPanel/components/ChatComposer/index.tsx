@@ -5,7 +5,7 @@ import {
   StopOutlined,
   ToolOutlined
 } from '@ant-design/icons'
-import { Button, Input, Radio, Select, Tag, Tooltip, Typography } from 'antd'
+import { Button, Input, Select, Tag, Tooltip, Typography } from 'antd'
 import type { KeyboardEvent, ReactElement } from 'react'
 import { useState } from 'react'
 import type {
@@ -19,7 +19,6 @@ import { cx } from '../../../../utils'
 import { skillsAfterEmptyBackspace } from '../../skillSelection'
 import type { ChatCopy } from '../../types'
 import ResourceSkillMenu from './ResourceSkillMenu'
-import type { ChatInputMode } from '../../conversationMode'
 import { workflowDebugBuildScope } from '../../debugExecutionScope'
 import './ChatComposer.less'
 
@@ -51,15 +50,12 @@ const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; lab
 
 type ChatComposerProps = {
   activeWorkflow?: WorkflowRunPayload
-  inputMode?: ChatInputMode
-  inputModeDisabled?: boolean
   copy: ChatCopy[EditorMode]
   debugOnly?: boolean
   draft: string
   initialResumeFrom?: string
   loading: boolean
   onDraftChange: (value: string) => void
-  onInputModeChange?: (mode: ChatInputMode) => void
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
   onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   onStopGenerating: () => void
@@ -71,15 +67,12 @@ type ChatComposerProps = {
 
 export default function ChatComposer({
   activeWorkflow,
-  inputMode = 'conversation',
-  inputModeDisabled = false,
   copy,
   debugOnly = false,
   draft,
   initialResumeFrom = 'development_readiness_gate',
   loading,
   onDraftChange,
-  onInputModeChange,
   onSelectedSkillsChange,
   onSend,
   onStopGenerating,
@@ -273,20 +266,6 @@ export default function ChatComposer({
               <Text className={cx('workflow-debug-resume-label')}>选择要重新开始执行的节点</Text>
             ) : (
               <div className={cx('composer-toolbar')}>
-                {onInputModeChange && (
-                  <Radio.Group
-                    aria-label="输入模式"
-                    className={cx('composer-mode-switch')}
-                    disabled={inputModeDisabled || loading}
-                    onChange={(event) => onInputModeChange(event.target.value as ChatInputMode)}
-                    optionType="button"
-                    size="small"
-                    value={inputMode}
-                  >
-                    <Radio.Button value="design">设计修改</Radio.Button>
-                    <Radio.Button value="conversation">自由协作</Radio.Button>
-                  </Radio.Group>
-                )}
                 <ResourceSkillMenu
                   disabled={loading || workspaceBusy}
                   onSelectedSkillsChange={onSelectedSkillsChange}

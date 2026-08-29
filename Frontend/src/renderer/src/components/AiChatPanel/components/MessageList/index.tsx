@@ -7,7 +7,7 @@ import {
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import { Spin, Tag, Typography } from 'antd'
+import { Button, Spin, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWorkbenchPhase } from '../../../../context'
@@ -145,6 +145,41 @@ function PlanningPendingCard({
   )
 }
 
+/** 展示来源会话中的正式二次修改交接回执，并允许用户打开独立会话。 */
+function RevisionHandoffCard({
+  handoff,
+  onOpen
+}: {
+  handoff: NonNullable<AgentChatMessage['revisionHandoff']>
+  onOpen?: (handoff: NonNullable<AgentChatMessage['revisionHandoff']>) => void
+}): ReactElement {
+  const developmentHandoff = handoff.kind === 'revision_development'
+  const planningRevision = handoff.formalBranch === 'workbench_plan_revision'
+  const title = developmentHandoff
+    ? 'TechnicalPlan 已确认，已转入独立开发会话'
+    : planningRevision
+      ? '已转入独立技术规划会话'
+      : '已转入独立需求设计会话'
+  const buttonText = developmentHandoff
+    ? '打开开发会话'
+    : planningRevision
+      ? '打开技术规划会话'
+      : '打开需求设计会话'
+  return (
+    <section className={cx('revision-session-handoff')}>
+      <div className={cx('revision-session-handoff-copy')}>
+        <Text strong>{title}</Text>
+        <Text className={cx('revision-session-handoff-request')}>{handoff.request}</Text>
+      </div>
+      {onOpen ? (
+        <Button onClick={() => onOpen(handoff)} type="default">
+          {buttonText}
+        </Button>
+      ) : null}
+    </section>
+  )
+}
+
 /** 从已答澄清卡之后的最近一条 user 留痕解析「header：答案」行，用于历史卡只读回填。 */
 function parseAnsweredClarificationTrace(
   messages: AgentChatMessage[],
@@ -183,6 +218,8 @@ function messageAgentPhase(
 
 type MessageListProps = {
   applicationLifecycle?: ApplicationLifecycle
+  /** 仅首次新建且尚未进入开发的应用允许展示模板准备卡。 */
+  applicationTemplatePreparationEligible: boolean
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
   entityDesignSession?: boolean
@@ -219,6 +256,8 @@ type MessageListProps = {
   loading: boolean
   messages: AgentChatMessage[]
   onEntityDesignGateJump?: (entityId: string) => void
+  /** 从来源会话回执打开对应的独立需求设计会话。 */
+  onOpenRevisionSession?: (handoff: NonNullable<AgentChatMessage['revisionHandoff']>) => void
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
   onSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -235,6 +274,7 @@ type MessageListProps = {
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
   applicationLifecycle,
+  applicationTemplatePreparationEligible,
   codeChangeActionsDisabled,
   conversationRunning,
   entityDesignSession = false,
@@ -253,6 +293,7 @@ export default function MessageList({
   loading,
   messages,
   onEntityDesignGateJump,
+  onOpenRevisionSession,
   onOpenCodeChangeFile,
   onRevertCodeChanges,
   onRetryError,
@@ -282,12 +323,12 @@ export default function MessageList({
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
-  const currentPlanningPhase = designPhasePlanning
-    ? planningWorkflowPhase(planningWorkflow)
-    : ''
+  const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
   const templatePreparationVisible =
-    designPhasePlanning && (generatingTemplate || isTemplatePreparing(applicationLifecycle))
+    applicationTemplatePreparationEligible &&
+    designPhasePlanning &&
+    (generatingTemplate || isTemplatePreparing(applicationLifecycle))
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -387,9 +428,7 @@ export default function MessageList({
                   <MessageAgentHeader agentKey={currentPhase} />
                   <PlanningPendingCard
                     agentKey={currentPhase}
-                    detail={
-                      currentPhase === 'planning' ? '正在恢复规划阶段…' : '正在准备需求确认…'
-                    }
+                    detail={currentPhase === 'planning' ? '正在恢复规划阶段…' : '正在准备需求确认…'}
                   />
                 </div>
               </article>
@@ -611,6 +650,12 @@ export default function MessageList({
                         <MessageAgentHeader
                           agentKey={messageAgentPhase(message.workflow, currentPhase)}
                         />
+                        {message.revisionHandoff ? (
+                          <RevisionHandoffCard
+                            handoff={message.revisionHandoff}
+                            onOpen={onOpenRevisionSession}
+                          />
+                        ) : null}
                         {messageError ? (
                           <AgentErrorCard
                             error={messageError}
@@ -810,9 +855,7 @@ export default function MessageList({
                 <AgentErrorCard
                   error={visibleError}
                   onRetry={onRetryError}
-                  title={
-                    /确认卡|中断|过期|版本/.test(visibleError) ? '规划确认未完成' : undefined
-                  }
+                  title={/确认卡|中断|过期|版本/.test(visibleError) ? '规划确认未完成' : undefined}
                 />
               </div>
             </article>
@@ -882,7 +925,7 @@ function findLatestVersionReminderMessageId(messages: AgentChatMessage[]): numbe
       workflow &&
       codeChanges?.files.length &&
       isConversationWorkflow(workflow) &&
-      workflow.summary.intent === 'workspace_change' &&
+      workflow.summary.intent === 'implementation_fix' &&
       ['completed', 'failed'].includes(String(workflow.summary.status))
     ) {
       return message.id

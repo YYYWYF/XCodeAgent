@@ -8,7 +8,9 @@ import {
 import type { ApplicationLifecycle } from '../typings';
 import {
   deriveWorkbenchPhase,
+  getPersistedWorkbenchPhase,
   isObjectEditableInPhase,
+  setPersistedWorkbenchPhase,
   WORKBENCH_PHASE_AGENTS,
   type EditableObjectType,
   type WorkbenchAgentIdentity,
@@ -48,10 +50,12 @@ export function WorkbenchPhaseProvider({
   children: ReactNode;
 }): JSX.Element {
   const derivedPhase = deriveWorkbenchPhase(lifecycle);
-  // 独立规划窗口首帧直接锁到规划阶段；普通窗口仍按 lifecycle 推导。
-  const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>(() =>
-    initialPhase ? { [applicationId]: initialPhase } : {}
-  );
+  // 优先使用独立规划窗口传入的首屏阶段，否则恢复用户上次手动选择的阶段。
+  const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>(() => {
+    if (initialPhase) return { [applicationId]: initialPhase };
+    const persistedPhase = getPersistedWorkbenchPhase(applicationId);
+    return persistedPhase ? { [applicationId]: persistedPhase } : {};
+  });
   const manualOverride = overrides[applicationId] ?? null;
 
   const value = useMemo<WorkbenchPhaseContextValue>(() => {
@@ -60,8 +64,11 @@ export function WorkbenchPhaseProvider({
       phase,
       derivedPhase,
       manualOverride,
-      switchPhase: (next) =>
-        setOverrides((current) => ({ ...current, [applicationId]: next ?? null })),
+      switchPhase: (next) => {
+        // 只持久化用户明确的界面覆盖；传 null 表示恢复生命周期自动阶段。
+        setPersistedWorkbenchPhase(applicationId, next);
+        setOverrides((current) => ({ ...current, [applicationId]: next ?? null }));
+      },
       agent: WORKBENCH_PHASE_AGENTS[phase],
       canEdit: (objectType) => isObjectEditableInPhase(objectType, phase)
     };

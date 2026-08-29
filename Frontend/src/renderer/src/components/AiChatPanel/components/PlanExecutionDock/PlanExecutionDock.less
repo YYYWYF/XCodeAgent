@@ -200,55 +200,6 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
   --wb-text-secondary: #a6a6aa;
 }
 
-.@{class-prefix}-plan-execution-adjustment-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding-top: 4px;
-
-  > .ant-typography {
-    color: var(--plan-modal-text-secondary);
-    line-height: 1.6;
-  }
-
-  .ant-input {
-    color: var(--plan-modal-text);
-    background: var(--plan-modal-control);
-    border-color: var(--plan-modal-border);
-    border-radius: 8px;
-    font-size: 13px;
-  }
-
-  .@{class-prefix}-plan-execution-adjustment-type {
-    display: flex;
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 10px;
-
-    .ant-typography {
-      color: var(--plan-modal-text);
-      font-size: 13px;
-    }
-
-    .ant-select {
-      width: 100%;
-      color: var(--plan-modal-text);
-    }
-
-    .ant-select-selector {
-      color: var(--plan-modal-text);
-      background: var(--plan-modal-control) !important;
-      border-color: var(--plan-modal-border) !important;
-      border-radius: 8px !important;
-    }
-  }
-
-  .ant-input-textarea-show-count::after,
-  .ant-select-arrow {
-    color: var(--plan-modal-text-secondary);
-  }
-}
-
 @media (max-width: 780px) {
   .@{class-prefix}-plan-execution-dock-main {
     align-items: flex-start;

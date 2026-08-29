@@ -16,6 +16,7 @@ WORKFLOW_NODE_LABELS = {
     "ui_confirmation": "UI 设计",
     "planning_stage_entry": "进入规划阶段",
     "technical_planning": "技术规划",
+    "application_revision": "正式产物二次修改",
     "development_readiness_gate": "开发前置检查",
     "entity_source_binding": "实体数据源绑定",
     "project_planning": "技术规划调整",
@@ -48,6 +49,7 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "ui_confirmation": ["planning_stage_entry"],
     "planning_stage_entry": ["technical_planning"],
     "technical_planning": [],
+    "application_revision": ["inspect_workspace"],
     "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build", "handle_failure"],
     "build": ["unit_test"],
@@ -121,7 +123,25 @@ def workflow_capabilities() -> dict[str, Any]:
                     "通过 clarificationAnswers.acceptance_phase_confirmation 提交结构化 confirm 动作；"
                     "确认后恢复验收阶段确认并进入 acceptance 子图。"
                 ),
+                "start_revision": (
+                    "批准当前 lifecycle 绑定的 workbench_plan_revision impact 后，"
+                    "固定进入隔离正式草稿节点。"
+                ),
+                "start_technical_revision": (
+                    "批准 workbench_plan_revision impact 后恢复原 planning checkpoint 的 technical_planning 节点，重新生成 TechnicalPlan。"
+                ),
+                "submit_revision_interaction": (
+                    "提交绑定 changeId、lifecycle revision、interaction、artifact 和 draft hash "
+                    "的 confirm/save/revise/discard 动作；客户端不能指定 Graph 节点。"
+                ),
+                "continue_revision_build": (
+                    "消费任一 formal revision 的 TechnicalPlan 确认后签发的一次性 token，"
+                    "固定进入开发前置检查，通过后进入工作区扫描与 Build DAG；token 绑定 application/change/thread/"
+                    "TechnicalPlan hash/lifecycle revision/target；独立 application_planning 分支直接创建开发 execution，"
+                    "主 Workflow 分支如携带有效来源 execution 则执行原子替换。"
+                ),
             },
+            "clientNodeSelectionAllowed": False,
         },
         "clarificationModes": {
             "unit_test_confirmation": {
@@ -157,16 +177,6 @@ def workflow_capabilities() -> dict[str, Any]:
                 "answerField": "clarificationAnswers.acceptance_phase_confirmation",
                 "answer": {"action": "confirm"},
                 "lifecycleInteraction": "acceptance_phase_confirmation",
-            },
-        },
-        "acceptanceAdjustments": {
-            "requestField": "clarificationAnswers.acceptance_adjustment",
-            "values": {
-                "local_fix": "仅修改当前已确认范围内的局部实现，不改变产品语义。",
-                "page_design_change": "页面实现变化按 TechnicalPlan 调整处理。",
-                "endpoint_change": "返回 TechnicalPlan 调整并重新确认接口契约。",
-                "data_source_change": "进入独立 EntitySourceBinding 并重新确认数据源绑定。",
-                "project_plan_change": "重新生成并确认 TechnicalPlan，然后重新执行开发前置检查。",
             },
         },
         "skillSelection": {
@@ -209,7 +219,14 @@ def workflow_capabilities() -> dict[str, Any]:
                 "agent-process",
                 "workflow.run.finished",
                 "workflow.run.failed",
+                "application-revision",
             ],
+            "revisionProjection": {
+                "impactMode": "revision_impact_confirmation",
+                "draftMode": "revision_draft_confirmation",
+                "continuationField": "revisionContinuation",
+                "completionEvent": "application-revision",
+            },
             "agentProcess": {
                 "name": PROCESS_EVENT_NAME,
                 "optionalFields": {

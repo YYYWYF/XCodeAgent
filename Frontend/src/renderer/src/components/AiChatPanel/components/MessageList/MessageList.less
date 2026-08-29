@@ -263,6 +263,58 @@
   }
 }
 
+.@{class-prefix}-revision-session-handoff {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px;
+  background: color-mix(in srgb, var(--wb-canvas) 88%, var(--wb-accent-soft));
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 8px;
+
+  .ant-btn {
+    flex: 0 0 auto;
+    color: var(--wb-accent);
+    background: var(--wb-surface);
+    border-color: var(--wb-accent-border);
+
+    &:hover,
+    &:focus {
+      color: var(--wb-accent-hover);
+      background: var(--wb-accent-soft);
+      border-color: var(--wb-accent);
+    }
+  }
+}
+
+.@{class-prefix}-revision-session-handoff-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+
+  .ant-typography {
+    margin: 0;
+    color: var(--wb-text);
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+  }
+}
+
+.@{class-prefix}-revision-session-handoff-request.ant-typography {
+  display: -webkit-box;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  font-size: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .@{class-prefix}-planning-workflow-activity-intent.ant-tag {
   width: fit-content;
   max-width: 100%;
@@ -349,5 +401,14 @@
 @media (max-width: 1000px) {
   .@{class-prefix}-ai-message-column {
     padding: 32px 24px 24px;
+  }
+
+  .@{class-prefix}-revision-session-handoff {
+    align-items: stretch;
+    flex-direction: column;
+
+    .ant-btn {
+      width: fit-content;
+    }
   }
 }

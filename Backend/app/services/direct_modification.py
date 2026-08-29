@@ -182,6 +182,7 @@ def _normalize_escalation(value: Any) -> dict[str, Any]:
     """裁剪共享小任务 Agent 的升级信息，供自由对话继续路由。"""
 
     payload = value if isinstance(value, dict) else {}
+    raw_analysis = payload.get("changeImpactAnalysis") or payload.get("change_impact_analysis")
     return {
         "reasonCode": str(
             payload.get("reasonCode") or payload.get("reason_code") or ""
@@ -197,6 +198,11 @@ def _normalize_escalation(value: Any) -> dict[str, Any]:
         "workflowIntent": str(
             payload.get("workflowIntent") or payload.get("workflow_intent") or ""
         )[:120],
+        # 只保留有界的原始分析；进入 Router 前仍会按当前 JSON 重新复核，
+        # 不能因为 SmallTask 在升级包里携带了分析就直接取得写权限。
+        "changeImpactAnalysis": (
+            _bounded_json_value(raw_analysis) if isinstance(raw_analysis, dict) else {}
+        ),
     }
 
 

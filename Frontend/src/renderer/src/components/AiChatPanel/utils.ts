@@ -350,7 +350,7 @@ export function workflowPreviewTarget(
 ): WorkflowPreviewTarget | undefined {
   const conversationChangeCompleted =
     workflow?.summary.phase === 'conversation' &&
-    workflow?.summary.intent === 'workspace_change' &&
+    workflow?.summary.intent === 'implementation_fix' &&
     workflow.summary.status === 'completed'
   const workflowLaunchReady =
     ['launch_project', 'acceptance'].includes(String(workflow?.summary.phase || '')) &&
@@ -367,10 +367,9 @@ export function workflowPreviewTarget(
   }
 }
 
-/** 进入开发阶段时先要求用户选择开发目标，已有页面设计也允许重新选择页面继续开发。 */
+/** 仅在当前工作区还没有任何已持久化设计时显示首次详细设计目标选择器。 */
 export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): boolean {
-  void hasPageDesigns
-  return true
+  return !hasPageDesigns
 }
 
 type DevelopmentTargetSelectorState = {
@@ -396,7 +395,8 @@ export function shouldShowDevelopmentTargetSelector({
   isApplicationPlanningPhase
 }: DevelopmentTargetSelectorState): boolean {
   if (isApplicationPlanningPhase) return false
-  if (developmentEntrySelectionPending) return true
+  // 已有页面/API/Endpoint 设计时，重新进入开发只恢复工作台，不再强制弹出目标选择器。
+  if (developmentEntrySelectionPending) return initialDetailDesignSelectionRequired
   return (
     developmentPlanningReady &&
     initialDetailDesignSelectionRequired &&

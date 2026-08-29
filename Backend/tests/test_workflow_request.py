@@ -1045,27 +1045,21 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertTrue(inputs["workflow_debug_enabled"])
 
-    def test_acceptance_local_fix_routes_to_small_task_repair(self) -> None:
-        inputs = workflow_run_inputs(
-            {
-                "clarificationAnswers": {
-                    "page_acceptance": "changes_requested",
-                    "acceptance_adjustment": {
-                        "type": "local_fix",
-                        "feedback": "把页面右上角的按钮间距调大。",
-                    },
-                }
-            }
-        )
+    def test_removed_acceptance_adjustments_are_rejected(self) -> None:
+        """current contract 不再按验收类型恢复内部节点，修改必须重新进入统一路由。"""
 
-        self.assertEqual(inputs["resume_from"], "small_task_repair")
-        self.assertEqual(
-            inputs["resume_values"]["acceptance_adjustment"],
-            {
-                "type": "local_fix",
-                "feedback": "把页面右上角的按钮间距调大。",
-            },
-        )
+        with self.assertRaisesRegex(ValueError, "已移除"):
+            workflow_run_inputs(
+                {
+                    "clarificationAnswers": {
+                        "page_acceptance": "changes_requested",
+                        "acceptance_adjustment": {
+                            "type": "local_fix",
+                            "feedback": "把页面右上角的按钮间距调大。",
+                        },
+                    }
+                }
+            )
 
     def test_acceptance_design_and_plan_changes_route_to_their_confirmation_nodes(self) -> None:
         for adjustment_type, expected_node in (
@@ -1074,8 +1068,11 @@ class WorkflowRequestTests(unittest.TestCase):
             ("data_source_change", "entity_source_binding"),
             ("project_plan_change", "project_planning"),
         ):
-            with self.subTest(adjustment_type=adjustment_type):
-                inputs = workflow_run_inputs(
+            with self.subTest(adjustment_type=adjustment_type), self.assertRaisesRegex(
+                ValueError,
+                "已移除",
+            ):
+                workflow_run_inputs(
                     {
                         "clarificationAnswers": {
                             "page_acceptance": "changes_requested",
@@ -1086,24 +1083,9 @@ class WorkflowRequestTests(unittest.TestCase):
                         }
                     }
                 )
-                self.assertEqual(inputs["resume_from"], expected_node)
 
-    def test_acceptance_adjustment_rejects_unknown_types(self) -> None:
-        with self.assertRaises(ValueError):
-            workflow_run_inputs(
-                {
-                    "clarificationAnswers": {
-                        "page_acceptance": "changes_requested",
-                        "acceptance_adjustment": {
-                            "type": "unknown",
-                            "feedback": "不应被静默路由。",
-                        },
-                    }
-                }
-            )
-
-    def test_debug_resume_ignores_empty_acceptance_adjustment_snapshot(self) -> None:
-        """节点调试恢复不应把公开快照中的空验收调整误判为非法输入。"""
+    def test_debug_resume_ignores_unrecognized_snapshot_fields(self) -> None:
+        """节点调试只恢复白名单字段，未知公开字段不能进入 Graph State。"""
 
         inputs = workflow_run_inputs(
             {
@@ -1115,7 +1097,7 @@ class WorkflowRequestTests(unittest.TestCase):
                     "resumeState": {
                         "runId": "previous-run",
                         "state": {
-                            "acceptanceAdjustment": {},
+                            "retiredProductField": {},
                             "selectedPageId": "pet_list_page",
                             "buildExecutionScope": {
                                 "type": "page",
@@ -1128,7 +1110,7 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
-        self.assertNotIn("acceptance_adjustment", inputs["resume_values"])
+        self.assertNotIn("retiredProductField", inputs["resume_values"])
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],
             {"type": "page", "targetId": "pet_list_page"},

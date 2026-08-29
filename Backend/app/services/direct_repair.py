@@ -152,7 +152,7 @@ def normalize_direct_repair_tasks(
 
 
 def repair_plan_handoff(plan: dict[str, Any]) -> dict[str, Any]:
-    """把 RepairPlanner 的范围升级转换为现有 SmallTask 确认卡。"""
+    """把 RepairPlanner 的代码路径扩展转换为 SmallTask 范围确认卡。"""
 
     requested_paths = [
         str(path) for path in plan.get("requestedPaths", []) if str(path).strip()
@@ -166,12 +166,10 @@ def repair_plan_handoff(plan: dict[str, Any]) -> dict[str, Any]:
         ),
         "workflowIntent": "development_readiness_gate",
     }
+    if not requested_paths:
+        raise ValueError("无代码路径的 RepairPlanner 升级必须进入统一 revision routing。")
     return build_small_task_handoff(
-        mode=(
-            "small_task_scope_confirmation"
-            if requested_paths
-            else "small_task_workflow_handoff"
-        ),
+        mode="small_task_scope_confirmation",
         reason=escalation["reason"],
         tasks=candidate_repair_tasks(plan),
         escalation=escalation,

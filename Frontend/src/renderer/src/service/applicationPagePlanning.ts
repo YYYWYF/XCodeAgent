@@ -1,7 +1,12 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
-import type { ApplicationConfig, WorkflowConfirmationArtifact } from '../typings'
+import type {
+  ApplicationConfig,
+  WorkflowConfirmationArtifact,
+  WorkflowRevisionContinuation,
+  WorkflowRunPayload
+} from '../typings'
 import { DatasourceEnum } from '../typings'
 import { AgUiChatSession } from './agUiAgent'
 import { createAgUiHttpAgent } from './authentication'
@@ -18,7 +23,7 @@ type RequirementSpecDraftPayload = {
 }
 
 // 读取包含设计、显式规划入口和 TechnicalPlan 的创建规划 Graph 地址。
-function getApplicationPlanningUrl(): string {
+export function getApplicationPlanningUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/application-page-planning/run`
@@ -33,6 +38,36 @@ export function createPagePlanningThreadId(): string {
 // 创建复用标准 Workflow AG-UI 协议的独立规划会话。
 export function createApplicationPlanningSession(threadId: string): AgUiChatSession {
   return new AgUiChatSession(threadId, getApplicationPlanningUrl())
+}
+
+/** 从最终规划或工作台草稿快照读取完整的一次性 continuation，不从节点名推导。 */
+export function revisionContinuationFromWorkflow(
+  workflow: WorkflowRunPayload | undefined
+): WorkflowRevisionContinuation | undefined {
+  if (!workflow) return undefined
+  const candidates = [
+    workflow.summary.revisionContinuation,
+    workflow.state?.revisionContinuation,
+    workflow.state?.revision_continuation,
+    workflow.result?.revisionContinuation,
+    workflow.result?.revision_continuation
+  ]
+  return candidates.find((candidate): candidate is WorkflowRevisionContinuation => {
+    if (!candidate || typeof candidate !== 'object') return false
+    const value = candidate as Partial<WorkflowRevisionContinuation>
+    return (
+      value.action === 'continue_revision_build' &&
+      ['design_stage_revision', 'workbench_plan_revision'].includes(
+        String(value.formalBranch || '')
+      ) &&
+      typeof value.changeId === 'string' &&
+      value.changeId.length > 0 &&
+      typeof value.token === 'string' &&
+      value.token.length >= 32 &&
+      typeof value.technicalPlanSha256 === 'string' &&
+      /^[0-9a-f]{64}$/.test(value.technicalPlanSha256)
+    )
+  })
 }
 
 // 校验需求文档草稿保存动作的 AG-UI 响应信封。

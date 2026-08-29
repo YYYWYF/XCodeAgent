@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.application_revision import ActiveFormalRevision, PendingRevisionImpact
+
 
 class ApplicationLifecycleStage(StrEnum):
     """定义用户可见的应用开发业务阶段。"""
@@ -60,6 +62,7 @@ class PendingInteractionType(StrEnum):
     CODE_REVIEW_REPAIR_CONFIRMATION = "code_review_repair_confirmation"
     ACCEPTANCE_PHASE_CONFIRMATION = "acceptance_phase_confirmation"
     PLAN_ADJUSTMENT = "plan_adjustment"
+    REVISION_DRAFT_CONFIRMATION = "revision_draft_confirmation"
 
 
 class WorkbenchExecutionStatus(StrEnum):
@@ -222,6 +225,14 @@ class ApplicationLifecycle(ApplicationLifecycleModel):
     resource_locks: ExecutionResourceLocks = Field(
         default_factory=ExecutionResourceLocks,
         alias="resourceLocks",
+    )
+    pending_revision_impact: PendingRevisionImpact | None = Field(
+        default=None,
+        alias="pendingRevisionImpact",
+    )
+    active_formal_revision: ActiveFormalRevision | None = Field(
+        default=None,
+        alias="activeFormalRevision",
     )
     error: ApplicationLifecycleError | None = None
     extensions: dict[str, Any] = Field(default_factory=dict)

@@ -6,18 +6,27 @@ import {
   getConversationUrl,
   getWorkflowUrl
 } from '../../../service/agUiAgent'
+import {
+  getApplicationPlanningUrl,
+  revisionContinuationFromWorkflow
+} from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
 import type {
   ApplicationConfig,
+  ApplicationPlanningInteraction,
   ApplicationLifecycle,
   ChatMessageSkill,
   EditorMode,
-  WorkflowAcceptanceAdjustmentType,
   WorkflowBuildExecutionScope,
   WorkflowBuildTaskPlanConfirmation,
   WorkflowDebugOptions,
   WorkflowAction,
+  WorkflowDesignStageRevisionStart,
+  WorkflowWorkbenchPlanRevisionStart,
+  WorkflowRevisionDraftInteraction,
+  WorkflowRevisionImpact,
+  WorkflowRevisionContinuation,
   WorkflowRunPayload,
   WorkflowTestTarget
 } from '../../../typings'
@@ -75,7 +84,7 @@ type ConversationTarget =
       endpointId: string
     }
 
-/** 从会话身份提取当前页面或接口目标，让“这个页面”等指代随自由协作请求到达后端。 */
+/** 从会话身份提取当前页面或接口目标，让“这个页面”等指代随普通自然语言请求到达后端。 */
 function conversationTargetFromIdentity(identity: SessionIdentity): ConversationTarget | undefined {
   if (identity.apiContractId && identity.endpointId) {
     return {
@@ -126,6 +135,11 @@ type UseWorkflowConversationParams = {
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
+  onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
+  onStartWorkbenchPlanRevision: (
+    input: WorkflowWorkbenchPlanRevisionStart
+  ) => Promise<SessionIdentity>
+  onRevisionContinuation: (continuation: WorkflowRevisionContinuation) => Promise<void>
   onEnterTestPhase: () => void
   onEnterReviewPhase: () => void
   onEnterAcceptancePhase: () => void
@@ -142,9 +156,9 @@ type UseWorkflowConversationResult = {
   conversationRunning: boolean
   error?: string
   handleAcceptPreview: () => Promise<boolean>
-  handleAdjustPlan: (
-    feedback: string,
-    adjustmentType: WorkflowAcceptanceAdjustmentType
+  handleContinueRevisionBuild: (
+    continuation: WorkflowRevisionContinuation,
+    sessionIdentity: SessionIdentity
   ) => Promise<boolean>
   handleEndPlan: (runId?: string) => Promise<void>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
@@ -307,7 +321,20 @@ function workflowClarificationMode(workflow: WorkflowRunPayload): string {
 
 /** 判断用户是否在 SmallTask 正式工作流升级卡上明确选择了确认。 */
 function smallTaskHandoffApproved(answers: ClarificationAnswers): boolean {
-  const answer = answers.small_task_handoff
+  return confirmationAnswerApproved(answers, 'small_task_handoff')
+}
+
+/** 判断用户是否确认继续执行前后端实现修复。 */
+function implementationFixConfirmationApproved(answers: ClarificationAnswers): boolean {
+  return confirmationAnswerApproved(answers, 'implementation_fix_confirmation')
+}
+
+/** 解析通用 yes/no 确认答案，兼容结构化单选和字符串答案。 */
+function confirmationAnswerApproved(
+  answers: ClarificationAnswers,
+  key: 'small_task_handoff' | 'implementation_fix_confirmation'
+): boolean {
+  const answer = answers[key]
   if (typeof answer === 'string') {
     return ['是', 'yes', 'approved', 'approve', '同意', '确认', '批准'].includes(
       answer.trim().toLowerCase()
@@ -322,6 +349,101 @@ function smallTaskHandoffApproved(answers: ClarificationAnswers): boolean {
       String(item).trim().toLowerCase()
     )
   )
+}
+
+/** 读取当前 impact 卡以及用户对该卡的一次性决定。 */
+function revisionImpactSubmission(
+  workflow: WorkflowRunPayload,
+  answers: ClarificationAnswers
+): { impact: WorkflowRevisionImpact; decision: 'approved' | 'rejected' } | undefined {
+  const rawImpact =
+    (workflowClarification(workflow) as Record<string, unknown> | undefined)?.revisionImpact ||
+    workflow.summary.revisionImpact ||
+    workflow.state?.revision_impact
+  const decision = answers.revision_impact_confirmation
+  if (!rawImpact || typeof rawImpact !== 'object') return undefined
+  if (decision !== 'approved' && decision !== 'rejected') return undefined
+  return { impact: rawImpact as WorkflowRevisionImpact, decision }
+}
+
+/** 从专用草稿卡读取已经绑定 change/lifecycle/hash 的当前结构化动作。 */
+function revisionDraftInteractionSubmission(
+  answers: ClarificationAnswers
+): WorkflowRevisionDraftInteraction | undefined {
+  const value = answers.revision_draft_interaction
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const interaction = value as Partial<WorkflowRevisionDraftInteraction>
+  if (
+    !interaction.changeId ||
+    !interaction.interactionId ||
+    !interaction.artifactKey ||
+    !interaction.draftSha256 ||
+    !interaction.basedOnLifecycleRevision ||
+    !['confirm', 'save', 'revise', 'discard'].includes(String(interaction.action))
+  ) {
+    return undefined
+  }
+  return interaction as WorkflowRevisionDraftInteraction
+}
+
+/** 把 TechnicalPlan 原生确认卡转换为 planning Graph 的结构化恢复动作。 */
+function technicalPlanConfirmationSubmission(
+  workflow: WorkflowRunPayload,
+  answers: ClarificationAnswers,
+  request: string
+): ApplicationPlanningInteraction | undefined {
+  // TechnicalPlan 的 gateId/artifactRevision 只存在服务端原生 interrupt 中；
+  // clarification 只是展示文案，不能作为恢复信封的唯一来源。
+  const interrupt = [workflow.result, workflow.state]
+    .map((source) => source?.application_planning_interrupt)
+    .find((value) => value && typeof value === 'object' && !Array.isArray(value)) as
+    | Record<string, unknown>
+    | undefined
+  const clarification = (interrupt?.clarification || workflowClarification(workflow)) as
+    | Record<string, unknown>
+    | undefined
+  if (clarification?.mode !== 'technical_plan_confirmation') return undefined
+  const gateId = String(interrupt?.gateId || '').trim()
+  const artifactRevision = String(interrupt?.artifactRevision || '').trim()
+  if (!gateId || !artifactRevision) return undefined
+  const value = answers.technical_plan_confirmation
+  const selected =
+    typeof value === 'string'
+      ? value.trim().toLowerCase()
+      : value && typeof value === 'object' && !Array.isArray(value) && 'selected' in value
+        ? String((value as { selected?: unknown }).selected || '').trim().toLowerCase()
+        : ''
+  const action =
+    [
+      'confirm',
+      '确认',
+      'yes',
+      '是',
+      '正确',
+      '正确，继续',
+      '正确,继续',
+      '继续',
+      '确认当前版本'
+    ].includes(selected)
+      ? 'confirm'
+      : 'revise'
+  return {
+    gateId,
+    artifact: 'technical_plan',
+    artifactRevision,
+    action,
+    request: request.trim() || (action === 'confirm' ? '确认当前 TechnicalPlan。' : '')
+  }
+}
+
+/** 为草稿结构化动作生成历史消息，实际执行语义仍只来自 revisionInteraction。 */
+function revisionDraftInteractionMessage(action: WorkflowRevisionDraftInteraction['action']): string {
+  return {
+    save: '保存当前正式产物草稿。',
+    revise: '已提交草稿修改意见，请重新生成当前草稿。',
+    confirm: '确认当前正式产物版本，并继续收口受影响产物。',
+    discard: '放弃当前未确认草稿，已经确认的计划保持不变。'
+  }[action]
 }
 
 /** 从 SmallTask 确认卡读取用户批准的具体路径。 */
@@ -365,6 +487,9 @@ export function useWorkflowConversation({
   getSessionMessages,
   persistSession,
   onApplicationLifecycleChange,
+  onStartDesignStageRevision,
+  onStartWorkbenchPlanRevision,
+  onRevisionContinuation,
   onEnterTestPhase,
   onEnterReviewPhase,
   onEnterAcceptancePhase,
@@ -494,12 +619,31 @@ export function useWorkflowConversation({
     })
   }
 
+  /** 在开发阶段会话中消费 TechnicalPlan continuation，并进入工作区扫描与 DAG 链。 */
+  const handleContinueRevisionBuild = async (
+    continuation: WorkflowRevisionContinuation,
+    sessionIdentity: SessionIdentity
+  ): Promise<boolean> => {
+    if (loading || workspaceBusy) return false
+    return sendWorkflowMessage('TechnicalPlan 已确认，进入工作区扫描并重新生成 Build DAG。', {
+      workflowAction: 'continue_revision_build',
+      revisionContinuation: {
+        changeId: continuation.changeId,
+        token: continuation.token
+      },
+      sessionIdentity,
+      titleFrom: 'TechnicalPlan 修改 · 生成 DAG',
+      conversation: false
+    })
+  }
+
   /** 发送并持久化 Workflow 对话，认证失败时恢复发送前的界面状态。 */
   const sendWorkflowMessage = async (
     message: string,
     options?: {
       clearDraft?: boolean
       clarificationAnswers?: ClarificationAnswers
+      applicationPlanningInteraction?: ApplicationPlanningInteraction
       originalRequest?: string
       selectedSkills?: ChatMessageSkill[]
       resumeState?: WorkflowRunPayload
@@ -527,6 +671,11 @@ export function useWorkflowConversation({
       conversationTarget?: ConversationTarget
       conversationApprovedPaths?: string[]
       conversationHandoffDecision?: 'approved' | 'rejected'
+      conversationImpactInteractionId?: string
+      revisionRequest?: Record<string, unknown>
+      revisionContinuation?: { changeId: string; token: string }
+      revisionInteraction?: WorkflowRevisionDraftInteraction
+      workflowScope?: string
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
@@ -541,7 +690,11 @@ export function useWorkflowConversation({
       return false
     }
 
-    const endpointUrl = options?.conversation ? getConversationUrl() : getWorkflowUrl()
+    const endpointUrl = options?.conversation
+      ? getConversationUrl()
+      : options?.workflowScope === 'application_planning'
+        ? getApplicationPlanningUrl()
+        : getWorkflowUrl()
     const currentAgUiSession = agUiSessionsRef.current[identity.key]
     const agUiSession =
       currentAgUiSession && currentAgUiSession.endpointUrl === endpointUrl
@@ -664,6 +817,7 @@ export function useWorkflowConversation({
         editorMode: identity.editorMode,
         application,
         clarificationAnswers: options?.clarificationAnswers,
+        applicationPlanningInteraction: options?.applicationPlanningInteraction,
         originalRequest: options?.originalRequest,
         onApplicationLifecycle: onApplicationLifecycleChange,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
@@ -686,6 +840,11 @@ export function useWorkflowConversation({
           options?.conversationTarget || conversationTargetFromIdentity(identity),
         conversationApprovedPaths: options?.conversationApprovedPaths,
         conversationHandoffDecision: options?.conversationHandoffDecision,
+        conversationImpactInteractionId: options?.conversationImpactInteractionId,
+        revisionRequest: options?.revisionRequest,
+        revisionContinuation: options?.revisionContinuation,
+        revisionInteraction: options?.revisionInteraction,
+        workflowScope: options?.workflowScope,
         onContent: (content) => {
           streamedContent = content
           updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
@@ -738,6 +897,10 @@ export function useWorkflowConversation({
         pageId: identity.pageId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
+      if (options?.workflowAction === 'submit_revision_interaction') {
+        const continuation = revisionContinuationFromWorkflow(finalWorkflow)
+        if (continuation) await onRevisionContinuation(continuation)
+      }
       publishAiMessage(identity.editorMode, answer)
       return true
     } catch (caughtError) {
@@ -858,6 +1021,14 @@ export function useWorkflowConversation({
     const originalRequest = workflowOriginalRequest(workflow)
     const clarificationMode = workflowClarificationMode(workflow)
     const handoffApproved = smallTaskHandoffApproved(answers)
+    const implementationFixApproved = implementationFixConfirmationApproved(answers)
+    const revisionSubmission = revisionImpactSubmission(workflow, answers)
+    const revisionDraftInteraction = revisionDraftInteractionSubmission(answers)
+    const technicalPlanInteraction = technicalPlanConfirmationSubmission(
+      workflow,
+      answers,
+      originalRequest
+    )
     const endpointScope = endpointExecutionScopeForWorkflow(
       workflow,
       activeSession,
@@ -870,6 +1041,119 @@ export function useWorkflowConversation({
       : workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId
     const continuationEntityId =
       workflowSelectedEntityId(workflow) || activeSession?.entityId || selectedEntityId
+    if (conversation && clarificationMode === 'revision_impact_confirmation' && revisionSubmission) {
+      const { impact, decision } = revisionSubmission
+      if (decision === 'rejected') {
+        return sendWorkflowMessage('用户已取消本次正式修改，当前正式产物保持不变。', {
+          originalRequest,
+          conversation: true,
+          conversationHandoffDecision: 'rejected',
+          conversationImpactInteractionId: impact.interactionId,
+          titleFrom: originalRequest || '取消正式修改'
+        })
+      }
+      if (!originalRequest || loading || workspaceBusy) return false
+      const sourceIdentity = activeSession || (await ensureActiveSession())
+      const target = conversationTargetFromIdentity(sourceIdentity) || { type: 'application' }
+      if (impact.formalBranch === 'design_stage_revision') {
+        try {
+          await onStartDesignStageRevision({
+            request: originalRequest,
+            target,
+            impact,
+            sourceSessionId: sourceIdentity.sessionId,
+            sourceConversationThreadId: sourceIdentity.threadId,
+            sourceRunId: workflow.runId
+          })
+          return true
+        } catch (error) {
+          // handoff 失败时把原因写回来源会话，避免按钮点击后只有无反馈的静默 Promise rejection。
+          const message = error instanceof Error ? error.message : String(error)
+          const errorKey = activeRuntimeKey || draftKey
+          setErrors((current) => ({ ...current, [errorKey]: message }))
+          return false
+        }
+      }
+      const revisionIdentity = await onStartWorkbenchPlanRevision({
+        request: originalRequest,
+        target,
+        impact,
+        sourceSessionId: sourceIdentity.sessionId,
+        sourceConversationThreadId: sourceIdentity.threadId,
+        sourceRunId: workflow.runId
+      })
+      // 影响范围确认已经由结构化 revisionRequest 表达；复用原始请求作为协议消息，
+      // 避免把确认提示伪装成新的用户输入，具体恢复节点由服务端 action 路由决定。
+      return sendWorkflowMessage(originalRequest, {
+        originalRequest,
+        workflowAction: 'start_technical_revision',
+        workflowScope: 'application_planning',
+        revisionRequest: {
+          source: 'conversation_handoff',
+          formalBranch: impact.formalBranch,
+          target,
+          request: originalRequest,
+          confirmedImpact: { interactionId: impact.interactionId }
+        },
+        sessionIdentity: revisionIdentity,
+        conversation: false,
+        titleFrom: originalRequest
+      })
+    }
+    if (
+      !conversation &&
+      clarificationMode === 'technical_plan_confirmation' &&
+      technicalPlanInteraction
+    ) {
+      if (loading || workspaceBusy) return false
+      const confirmationMessage =
+        technicalPlanInteraction.request || '确认当前 TechnicalPlan。'
+      return sendWorkflowMessage(confirmationMessage, {
+        originalRequest: originalRequest || confirmationMessage,
+        workflowScope: 'application_planning',
+        applicationPlanningInteraction: technicalPlanInteraction,
+        titleFrom: 'TechnicalPlan 重新规划确认',
+        conversation: false
+      })
+    }
+    if (!conversation && clarificationMode === 'technical_plan_confirmation') {
+      // 缺少原生 interrupt 时禁止落入通用 continuation（它会误发到主 Workflow，
+      // 进而显示 Build 前置门禁）；要求重新获取当前 planning checkpoint。
+      setErrors((current) => ({
+        ...current,
+        [activeRuntimeKey || draftKey]:
+          '当前 TechnicalPlan 确认缺少服务端 planning checkpoint，请刷新后重试。'
+      }))
+      return false
+    }
+    if (
+      !conversation &&
+      clarificationMode === 'revision_draft_confirmation' &&
+      revisionDraftInteraction
+    ) {
+      if (loading || workspaceBusy) return false
+      return sendWorkflowMessage(revisionDraftInteractionMessage(revisionDraftInteraction.action), {
+        originalRequest,
+        workflowAction: 'submit_revision_interaction',
+        revisionInteraction: revisionDraftInteraction,
+        buildExecutionScope: workflowBuildScope,
+        titleFrom: `正式产物：${revisionDraftInteraction.artifactKey}`,
+        conversation: false
+      })
+    }
+    if (conversation && clarificationMode === 'implementation_fix_confirmation') {
+      return sendWorkflowMessage(
+        implementationFixApproved
+          ? '用户已确认实现修改范围，请继续执行。'
+          : '用户未确认实现修改范围，本次修改已停止。',
+        {
+          originalRequest,
+          conversation: true,
+          conversationHandoffDecision: implementationFixApproved ? 'approved' : 'rejected',
+          titleFrom: originalRequest || '实现修改确认'
+        }
+      )
+    }
     if (conversation && clarificationMode === 'small_task_scope_confirmation') {
       return sendWorkflowMessage(
         handoffApproved
@@ -883,27 +1167,6 @@ export function useWorkflowConversation({
           titleFrom: originalRequest || 'SmallTask 范围确认'
         }
       )
-    }
-    if (conversation && clarificationMode === 'small_task_workflow_handoff' && handoffApproved) {
-      if (!originalRequest || loading || workspaceBusy) return false
-      return sendWorkflowMessage('用户已确认，请进入正式工作流处理该需求。', {
-        originalRequest,
-        selectedPageId: continuationPageId,
-        selectedApiContractId: endpointScope?.apiContractId,
-        selectedEndpointId: endpointScope?.targetId,
-        detailTargetType: endpointScope ? 'endpoint' : continuationPageId ? 'page' : undefined,
-        buildExecutionScope: endpointScope,
-        titleFrom: originalRequest,
-        conversation: false
-      })
-    }
-    if (conversation && clarificationMode === 'small_task_workflow_handoff') {
-      return sendWorkflowMessage('用户未确认进入正式工作流，本次修改已停止。', {
-        originalRequest,
-        conversation: true,
-        conversationHandoffDecision: 'rejected',
-        titleFrom: originalRequest || '正式工作流确认'
-      })
     }
     if (!conversation && clarificationMode === 'build_task_plan_confirmation') {
       const action = buildTaskPlanConfirmationAction(answers)
@@ -1293,43 +1556,6 @@ export function useWorkflowConversation({
     })
   }
 
-  /** 使用受控反馈重新生成执行任务，输入仅在用户主动调整计划时开放。 */
-  const handleAdjustPlan = async (
-    feedback: string,
-    adjustmentType: WorkflowAcceptanceAdjustmentType
-  ): Promise<boolean> => {
-    const normalizedFeedback = feedback.trim()
-    if (!activeWorkflow || !normalizedFeedback || loading || workspaceBusy) return false
-    const execution = planExecutionForPage(
-      activeWorkflow.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
-    )
-    const endpointScope = workflowEndpointExecutionScope(activeWorkflow)
-    return sendWorkflowMessage(`调整执行计划：${normalizedFeedback}`, {
-      clarificationAnswers: {
-        page_acceptance: 'changes_requested',
-        acceptance_adjustment: {
-          type: adjustmentType,
-          feedback: normalizedFeedback
-        }
-      },
-      resumeState: activeWorkflow,
-      resumeExecutionRunId:
-        execution?.status === 'stopped' || execution?.status === 'failed'
-          ? execution.runId
-          : undefined,
-      selectedPageId: endpointScope
-        ? ''
-        : workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
-      selectedApiContractId: endpointScope?.apiContractId,
-      selectedEndpointId: endpointScope?.targetId,
-      detailTargetType: endpointScope ? 'endpoint' : undefined,
-      buildExecutionScope: endpointScope,
-      titleFrom: '调整执行计划'
-    })
-  }
-
   /** 通过同一 AG-UI 端点结束计划并释放生命周期中的工作区锁。 */
   const handleEndPlan = async (runId?: string): Promise<void> => {
     const execution = planExecutionForPage(
@@ -1416,7 +1642,7 @@ export function useWorkflowConversation({
     conversationRunning,
     error,
     handleAcceptPreview,
-    handleAdjustPlan,
+    handleContinueRevisionBuild,
     handleEndPlan,
     handleResumePlan,
     handleRetryCodeReview,

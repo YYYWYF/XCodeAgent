@@ -335,7 +335,10 @@ export default function VersionCommitReminder({
 function quickModificationOutcome(
   workflow: WorkflowRunPayload
 ): 'completed' | 'failed' | undefined {
-  if (workflow.summary.phase !== 'conversation' || workflow.summary.intent !== 'workspace_change') {
+  if (
+    workflow.summary.phase !== 'conversation' ||
+    workflow.summary.intent !== 'implementation_fix'
+  ) {
     return undefined
   }
   if (

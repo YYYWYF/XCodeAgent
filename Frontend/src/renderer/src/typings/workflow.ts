@@ -29,7 +29,6 @@ export type WorkflowSummary = {
   artifacts?: Record<string, string>
   clarification?: WorkflowClarification
   requirementsConfirmed?: boolean
-  acceptanceAdjustment?: WorkflowAcceptanceAdjustment
   smallTaskTasks?: WorkflowSmallTask[]
   smallTaskResults?: WorkflowSmallTaskResult[]
   smallTaskHandoff?: WorkflowSmallTaskHandoff
@@ -62,7 +61,84 @@ export type WorkflowSummary = {
   unitTestMaxRepairIterations?: number
   repairReturnNode?: 'unit_test' | 'integration_test' | string
   lifecycle?: ApplicationLifecycle
+  revisionImpact?: WorkflowRevisionImpact
+  revisionContinuation?: WorkflowRevisionContinuation
+  revisionDraft?: WorkflowRevisionDraft
   [key: string]: unknown
+}
+
+export type WorkflowFormalRevisionBranch =
+  | 'design_stage_revision'
+  | 'workbench_plan_revision'
+
+export type WorkflowRevisionImpact = {
+  interactionId: string
+  formalBranch: WorkflowFormalRevisionBranch
+  revisionType:
+    | 'requirement_scope_change'
+    | 'product_behavior_change'
+    | 'ui_visual_change'
+    | 'technical_contract_change'
+    | 'endpoint_implementation_change'
+    | 'data_source_change'
+  earliestArtifact:
+    | 'requirement-spec'
+    | 'product-plan'
+    | 'ui-design'
+    | 'technical-plan'
+  affectedArtifacts: string[]
+  affectedResources: string[]
+  reason: string
+  risks: string[]
+  /** 只读确认 JSON 的逐条定位证据；不包含 Markdown 文档内容。 */
+  evidence: WorkflowContractEvidence[]
+  analysisStatus?: 'completed' | 'insufficient_evidence' | string
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+}
+
+export type WorkflowContractEvidence = {
+  artifactKey: string
+  jsonPointer: string
+  selector?: Record<string, string>
+  artifactSha256?: string
+  contractStage: 'requirement_design' | 'planning_design' | string
+  existingFact: string
+  requestedChange: string
+  conflictRelation:
+    | 'contradicts'
+    | 'removes'
+    | 'reassigns'
+    | 'modifies'
+    | 'preserves'
+    | string
+  reason: string
+}
+
+export type WorkflowRevisionContinuation = {
+  changeId: string
+  formalBranch: WorkflowFormalRevisionBranch
+  action: 'continue_revision_build'
+  token: string
+  technicalPlanSha256: string
+}
+
+export type WorkflowRevisionDraft = {
+  artifactKey: string
+  markdown: string
+  draftSha256: string
+  basedOn: Array<{ artifactKey: string; sha256: string }>
+  status: 'pending_user_confirmation'
+}
+
+export type WorkflowRevisionDraftInteraction = {
+  changeId: string
+  interactionId: string
+  basedOnLifecycleRevision: number
+  artifactKey: string
+  draftSha256: string
+  action: 'confirm' | 'save' | 'revise' | 'discard'
+  feedback?: string
+  editedMarkdown?: string
 }
 
 /** 项目启动子图通过 AG-UI 实时投影的当前子步骤。 */
@@ -419,7 +495,6 @@ export type WorkflowClarificationAnswer =
   | WorkflowClarificationChoiceAnswer
   | WorkflowDetailReviewSubmission
   | WorkflowEntityDesignAction
-  | WorkflowAcceptanceAdjustment
   | WorkflowRequirementSpecEdit
   | WorkflowBuildTaskPlanConfirmation
   | Record<string, unknown>
@@ -445,6 +520,12 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   acceptance_phase_confirmation?: WorkflowAcceptancePhaseConfirmation
   /** 代码审查问题的一键修复动作。 */
   code_review_repair_confirmation?: WorkflowCodeReviewRepairConfirmation
+  /** 正式修改影响范围的结构化批准或拒绝动作。 */
+  revision_impact_confirmation?: 'approved' | 'rejected'
+  /** 前后端实现修复开始前的用户确认。 */
+  implementation_fix_confirmation?: 'approved' | 'rejected'
+  /** 正式草稿交互必须携带服务端绑定的 change、revision 与 hash。 */
+  revision_draft_interaction?: WorkflowRevisionDraftInteraction
 }
 
 /** 开发完成后恢复测试阶段确认节点的协议答案。 */
@@ -598,7 +679,7 @@ export type WorkflowSmallTaskResult = {
 }
 
 export type WorkflowSmallTaskHandoff = {
-  mode?: 'small_task_scope_confirmation' | 'small_task_workflow_handoff' | string
+  mode?: 'small_task_scope_confirmation' | string
   status?: string
   reason?: string
   requestedPaths?: string[]
@@ -709,6 +790,7 @@ export type LifecyclePendingInteractionType =
   | 'review_phase_confirmation'
   | 'code_review_repair_confirmation'
   | 'acceptance_phase_confirmation'
+  | 'revision_draft_confirmation'
   | 'plan_adjustment'
 
 export type LifecycleError = {
@@ -768,6 +850,20 @@ export type ApplicationLifecycle = {
     dataSources: Record<string, ExecutionResourceLock>
   }
   error?: LifecycleError
+  pendingRevisionImpact?: Record<string, unknown>
+  activeFormalRevision?: {
+    changeId: string
+    formalBranch: WorkflowFormalRevisionBranch
+    impactInteractionId: string
+    sourceThreadId: string
+    sourceRunId: string
+    planningThreadId: string
+    status: string
+    currentArtifact?: string | null
+    remainingArtifacts?: string[]
+    continuationSourceRunId?: string
+    [key: string]: unknown
+  }
   recovery?: Record<string, unknown>
   extensions: Record<string, unknown>
 }
@@ -783,12 +879,31 @@ export type WorkflowRunPayload = {
   result?: Record<string, unknown>
 }
 
-export type WorkflowAction = 'retry_failed_tasks' | 'retry_code_review'
+export type WorkflowAction =
+  | 'retry_failed_tasks'
+  | 'retry_code_review'
+  | 'start_design_revision'
+  | 'start_technical_revision'
+  | 'start_revision'
+  | 'submit_revision_interaction'
+  | 'continue_revision_build'
 
 export type WorkflowCodeReviewRetry = {
   available: true
   target: 'scan' | 'repair'
 }
+
+export type WorkflowDesignStageRevisionStart = {
+  request: string
+  target: Record<string, unknown>
+  impact: WorkflowRevisionImpact
+  sourceSessionId: string
+  sourceConversationThreadId: string
+  sourceRunId: string
+}
+
+/** TechnicalPlan-only 正式修订进入独立规划会话时使用的前端交接合同。 */
+export type WorkflowWorkbenchPlanRevisionStart = WorkflowDesignStageRevisionStart
 
 export type WorkflowDebugOptions = {
   enabled: boolean

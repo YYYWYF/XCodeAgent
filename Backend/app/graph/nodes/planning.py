@@ -675,7 +675,6 @@ def _entity_source_binding_implementation(state: ProjectState) -> dict:
                 selected_entity_id=selected_entity_id,
             ),
             "entity_design_action": {},
-            "acceptance_adjustment": {},
             "timeline": ["entity_source_binding"],
         }
 

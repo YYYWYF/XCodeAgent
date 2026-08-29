@@ -14,6 +14,7 @@ import type {
   WorkflowAction,
   WorkflowEvent,
   WorkflowProjectPlanUpdate,
+  WorkflowRevisionDraftInteraction,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../typings'
@@ -40,6 +41,12 @@ export type SendWorkflowMessageOptions = {
   detailTargetType?: 'page' | 'endpoint' | 'entity'
   buildExecutionScope?: WorkflowBuildExecutionScope
   workflowAction?: WorkflowAction
+  revisionRequest?: Record<string, unknown>
+  revisionContinuation?: {
+    changeId: string
+    token: string
+  }
+  revisionInteraction?: WorkflowRevisionDraftInteraction
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
@@ -69,6 +76,7 @@ export type SendWorkflowMessageOptions = {
       }
   conversationApprovedPaths?: string[]
   conversationHandoffDecision?: 'approved' | 'rejected'
+  conversationImpactInteractionId?: string
 }
 
 /** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能、控制和恢复字段。 */
@@ -92,6 +100,9 @@ export function buildWorkflowForwardedProps(
     selectedEntityId: options.selectedEntityId,
     detailTargetType: options.detailTargetType,
     workflowAction: options.workflowAction,
+    revisionRequest: options.revisionRequest,
+    revisionContinuation: options.revisionContinuation,
+    revisionInteraction: options.revisionInteraction,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
     buildExecutionScope:
@@ -118,6 +129,9 @@ export function buildWorkflowForwardedProps(
             : {}),
           ...(options.conversationHandoffDecision !== undefined
             ? { handoffDecision: options.conversationHandoffDecision }
+            : {}),
+          ...(options.conversationImpactInteractionId !== undefined
+            ? { impactInteractionId: options.conversationImpactInteractionId }
             : {})
         }
       : undefined

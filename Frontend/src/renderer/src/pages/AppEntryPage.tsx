@@ -12,6 +12,8 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   WorkflowClarificationAnswers,
+  WorkflowDesignStageRevisionStart,
+  WorkflowRevisionContinuation,
   WorkflowRunPayload
 } from '../typings'
 import WelcomePage from './WelcomePage'
@@ -105,6 +107,21 @@ function AppEntryContent(): JSX.Element {
       | undefined
     >
   >({})
+  // 工作台确认卡可能先于隐藏的规划 Modal 完成挂载；句柄暂未注册时先缓存提交，
+  // 避免用户点击后被静默丢弃，等 Modal 注册后立即转发本次提交。
+  const pendingPlanningSubmitByAppRef = useRef<
+    Record<
+      string,
+      | {
+          workflow: WorkflowRunPayload
+          answers: WorkflowClarificationAnswers
+          editedRequirementSpec?: Record<string, unknown>
+          requirementSpecFeedback?: string
+          designChangeRequest?: string
+        }
+      | undefined
+    >
+  >({})
   const [planningSubmitRevision, setPlanningSubmitRevision] = useState(0)
   const planningLaunchOpenedRef = useRef(false)
   const planningLaunchSubmittedRef = useRef(false)
@@ -112,6 +129,27 @@ function AppEntryContent(): JSX.Element {
   // 规划重试句柄：由 Modal 通过 onRetryHandlerChange 注册，
   // 聊天区域错误卡片的重试按钮直接调用它，不弹出全屏 Modal。
   const planningRetryByAppRef = useRef<Record<string, (() => void) | undefined>>({})
+
+  // design revision 起始句柄由原 planning Modal 注册；已进入开发的应用会先重新挂载
+  // 该 Modal，再消费排队动作，避免另建临时 planning session。
+  const planningDesignRevisionByAppRef = useRef<
+    Record<string, ((input: WorkflowDesignStageRevisionStart) => Promise<void>) | undefined>
+  >({})
+  const pendingDesignRevisionByAppRef = useRef<
+    Record<
+      string,
+      | {
+          input: WorkflowDesignStageRevisionStart
+          reject: (reason?: unknown) => void
+          resolve: () => void
+          timer: number
+        }
+      | undefined
+    >
+  >({})
+  const revisionContinuationByAppRef = useRef<
+    Record<string, ((continuation: WorkflowRevisionContinuation) => Promise<void>) | undefined>
+  >({})
 
   // 规划流式数据注入句柄：由工作台 AiChatPanel 注册，Modal 转发 onContent/onWorkflow 时调用，
   // 把规划流式内容注入工作台 MessageList（设计阶段产品 Agent 对话 + 工作流卡片）。
@@ -201,6 +239,38 @@ function AppEntryContent(): JSX.Element {
     onOpenWorkbench: openWorkbench,
     theme
   })
+
+  // 设计阶段二次修改始终恢复应用创建时的 planning Graph；若开发阶段已卸载规划
+  // Modal，则先用持久化 planningThreadId 后台挂载，等其注册句柄后再开始本轮请求。
+  const handleStartDesignStageRevision = useCallback(
+    async (
+      application: ApplicationConfig,
+      input: WorkflowDesignStageRevisionStart
+    ): Promise<void> => {
+      const registered = planningDesignRevisionByAppRef.current[application.id]
+      if (registered) {
+        await registered(input)
+        return
+      }
+      const lifecycle = await getApplicationLifecycle(application)
+      const threadId = application.planningThreadId || lifecycle.initialization.threadId
+      if (!threadId) throw new Error('当前应用缺少原 planning thread，无法返回设计阶段。')
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          delete pendingDesignRevisionByAppRef.current[application.id]
+          reject(new Error('原 planning 会话挂载超时，请重新打开应用后重试。'))
+        }, 5000)
+        pendingDesignRevisionByAppRef.current[application.id] = {
+          input,
+          reject,
+          resolve,
+          timer
+        }
+        planningController.startPlanning(application, threadId, lifecycle, false)
+      })
+    },
+    [planningController]
+  )
 
   // 同步当前活动工作台的规划线程标识到 ref，供 deliverPlanningChunk 按 threadId 过滤。
   // 只有匹配该 threadId 的规划流式才注入工作台，避免后台其他应用规划串入对话。
@@ -397,6 +467,31 @@ function AppEntryContent(): JSX.Element {
           onSubmitClarificationChange={(handler) => {
             planningSubmitByAppRef.current[planning.application.id] = handler ?? undefined
             setPlanningSubmitRevision((current) => current + 1)
+            if (!handler) return
+            const pending = pendingPlanningSubmitByAppRef.current[planning.application.id]
+            if (!pending) return
+            delete pendingPlanningSubmitByAppRef.current[planning.application.id]
+            handler(
+              pending.workflow,
+              pending.answers,
+              pending.editedRequirementSpec,
+              pending.requirementSpecFeedback,
+              pending.designChangeRequest
+            )
+          }}
+          onStartDesignRevisionChange={(handler) => {
+            planningDesignRevisionByAppRef.current[planning.application.id] = handler ?? undefined
+            const pending = pendingDesignRevisionByAppRef.current[planning.application.id]
+            if (!handler || !pending) return
+            delete pendingDesignRevisionByAppRef.current[planning.application.id]
+            window.clearTimeout(pending.timer)
+            void handler(pending.input).then(pending.resolve, pending.reject)
+          }}
+          onRevisionContinuation={(continuation) => {
+            const handler = revisionContinuationByAppRef.current[planning.application.id]
+            return handler
+              ? handler(continuation)
+              : Promise.reject(new Error('开发工作台尚未接管 revision continuation。'))
           }}
           onPlanningContent={(content) => {
             deliverPlanningChunk(planning.threadId, { content, workflow: undefined })
@@ -442,16 +537,32 @@ function AppEntryContent(): JSX.Element {
               designChangeRequest
             ) => {
               const submit = planningSubmitByAppRef.current[activeApplication.id]
-              if (submit)
-                submit(
+              if (!submit) {
+                // Modal 尚未注册句柄时保留最新一次用户提交；注册回调会负责补发。
+                pendingPlanningSubmitByAppRef.current[activeApplication.id] = {
                   workflow,
                   answers,
                   editedRequirementSpec,
                   requirementSpecFeedback,
                   designChangeRequest
-                )
+                }
+                return
+              }
+              submit(
+                workflow,
+                answers,
+                editedRequirementSpec,
+                requirementSpecFeedback,
+                designChangeRequest
+              )
             }}
             onStopPlanning={() => planningController.stopPlanning(activeApplication.id)}
+            onStartDesignStageRevision={(input) =>
+              handleStartDesignStageRevision(activeApplication, input)
+            }
+            onRevisionContinuationHandlerChange={(handler) => {
+              revisionContinuationByAppRef.current[activeApplication.id] = handler ?? undefined
+            }}
             onThemeChange={setTheme}
             onPlanningStreamReady={handlePlanningStreamReady}
             onRetryPlanning={

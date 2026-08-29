@@ -9,6 +9,8 @@ import type {
   DevelopmentPlanningPageOption,
   EditorMode,
   WorkflowClarificationAnswers,
+  WorkflowDesignStageRevisionStart,
+  WorkflowRevisionContinuation,
   WorkflowRunPayload
 } from '../../typings'
 import { cx } from '../../utils'
@@ -41,6 +43,10 @@ type Props = {
     requirementSpecFeedback?: string
   ) => void
   onStopPlanning: () => Promise<void>
+  onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
+  onRevisionContinuationHandlerChange: (
+    handler?: (continuation: WorkflowRevisionContinuation) => Promise<void>
+  ) => void
   onThemeChange: (theme: 'light' | 'dark') => void
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
@@ -80,6 +86,8 @@ export default function LeftPanel({
   onReturnWelcome,
   onSubmitPlanningClarification,
   onStopPlanning,
+  onStartDesignStageRevision,
+  onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
   generatingTemplate,
@@ -115,6 +123,8 @@ export default function LeftPanel({
             onReturnWelcome={onReturnWelcome}
             onSubmitPlanningClarification={onSubmitPlanningClarification}
             onStopPlanning={onStopPlanning}
+            onStartDesignStageRevision={onStartDesignStageRevision}
+            onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
             onThemeChange={onThemeChange}
             onPlanningStreamReady={onPlanningStreamReady}
             generatingTemplate={generatingTemplate}

@@ -8,11 +8,13 @@ import type {
   ApplicationLifecycle,
   WorkflowClarification,
   WorkflowClarificationAnswers,
+  WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
 } from '../../typings'
 import {
   buildApplicationPlanningRequest,
   createApplicationPlanningSession,
+  revisionContinuationFromWorkflow,
   saveRequirementSpecDraft
 } from '../../service/applicationPagePlanning'
 import { getApplicationLifecycle } from '../../service/applicationLifecycle'
@@ -72,6 +74,12 @@ type Props = {
         ) => void)
       | null
   ) => void
+  onStartDesignRevisionChange: (
+    handler: ((input: WorkflowDesignStageRevisionStart) => Promise<void>) | null
+  ) => void
+  onRevisionContinuation: (
+    continuation: import('../../typings').WorkflowRevisionContinuation
+  ) => Promise<void>
   onPlanningContent?: (content: string) => void
   onPlanningWorkflow?: (workflow: WorkflowRunPayload) => void
   onTechnicalPlanConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
@@ -379,6 +387,8 @@ export default function ApplicationPagePlanningModal({
   visible,
   onReturnHome,
   onSubmitClarificationChange,
+  onStartDesignRevisionChange,
+  onRevisionContinuation,
   onPlanningContent,
   onPlanningWorkflow,
   onTechnicalPlanConfirmed,
@@ -524,7 +534,8 @@ export default function ApplicationPagePlanningModal({
   // 运行初始或原生中断恢复轮次，并在技术规划确认后直接打开工作台。
   const runPlanning = async (
     messageText: string,
-    interaction?: ApplicationPlanningInteraction
+    interaction?: ApplicationPlanningInteraction,
+    designRevision?: WorkflowDesignStageRevisionStart
   ): Promise<void> => {
     if (!application.workspaceRoot) return
     const runToken = planningRunTokenRef.current + 1
@@ -544,7 +555,17 @@ export default function ApplicationPagePlanningModal({
         applicationPlanningInteraction: interaction,
         editorMode: 'frontend',
         originalRequest,
-        workflowDebug: interaction
+        workflowAction: designRevision ? 'start_design_revision' : undefined,
+        revisionRequest: designRevision
+          ? {
+              source: 'conversation_handoff',
+              formalBranch: designRevision.impact.formalBranch,
+              target: designRevision.target,
+              request: designRevision.request,
+              confirmedImpact: { interactionId: designRevision.impact.interactionId }
+            }
+          : undefined,
+        workflowDebug: interaction || designRevision
           ? undefined
           : {
               enabled: true,
@@ -583,6 +604,12 @@ export default function ApplicationPagePlanningModal({
         const mergedWorkflow = handleWorkflowChange(result.workflow)
         // sendMessage 完整结束后才把待输入/终态发布到工作台；此时 checkpoint 已稳定。
         if (mergedWorkflow) onPlanningWorkflow?.(mergedWorkflow)
+      }
+      const continuation = revisionContinuationFromWorkflow(result.workflow)
+      if (continuation) {
+        completedRef.current = true
+        await onRevisionContinuation(continuation)
+        return
       }
       const confirmation = workflowConfirmation(result.workflow)
       if (confirmation && !completedRef.current) {
@@ -800,6 +827,22 @@ export default function ApplicationPagePlanningModal({
   // 用 ref 持有最新引用，避免注册的 handler 捕获旧闭包导致 resumeFrom 永远是初始阶段。
   const handleSubmitClarificationRef = useRef(handleSubmitClarification)
   handleSubmitClarificationRef.current = handleSubmitClarification
+
+  // 把 design revision 起始动作注册给应用根部；始终通过当前 Modal 持有的原 planning
+  // session/thread 恢复 Graph，后续确认继续复用同一个 runPlanning 入口。
+  const startDesignRevisionRef = useRef<(input: WorkflowDesignStageRevisionStart) => Promise<void>>()
+  startDesignRevisionRef.current = async (input) => {
+    // 影响范围确认本身已经通过结构化 action 完成；这里仅把原始修改请求作为
+    // AG-UI 协议消息传给服务端，首节点由服务端 lifecycle/Graph 决定，不能再用
+    // “用户已确认……”这类机器生成文案伪装成一条新的用户需求。
+    await runPlanning(input.request, undefined, input)
+  }
+  useEffect(() => {
+    onStartDesignRevisionChange((input) => startDesignRevisionRef.current?.(input) || Promise.resolve())
+    return () => onStartDesignRevisionChange(null)
+    // 注册句柄只绑定当前 Modal 实例，响应式输入通过 ref 读取最新值。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 把重试能力暴露给外部（聊天区域错误卡片），重试时不弹出全屏 Modal，
   // 直接在后台重新运行规划，错误状态更新到聊天区域卡片。

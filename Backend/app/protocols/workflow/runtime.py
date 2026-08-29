@@ -395,18 +395,21 @@ def build_workflow_ag_ui_stream(
                 workspace=workspace,
                 project_id=project_id,
             )
-            workspace_lease = workspace_run_leases.acquire(
-                workspace_root=workspace,
-                project_id=project_id,
-                execution_scope=workflow_inputs.get("resume_values", {}).get(
-                    "build_execution_scope"
-                ),
-                resource_claims=workflow_inputs.get("resume_values", {}).get(
-                    "execution_resource_claims"
-                ),
-                thread_id=thread_id,
-                run_id=run_id,
-            )
+            if workflow_scope != "application_planning":
+                # 创建规划只维护自己的 AG-UI/Graph 生命周期；在 TechnicalPlan
+                # 确认前不应登记工作台写租约，更不能让普通规划占住应用资源。
+                workspace_lease = workspace_run_leases.acquire(
+                    workspace_root=workspace,
+                    project_id=project_id,
+                    execution_scope=workflow_inputs.get("resume_values", {}).get(
+                        "build_execution_scope"
+                    ),
+                    resource_claims=workflow_inputs.get("resume_values", {}).get(
+                        "execution_resource_claims"
+                    ),
+                    thread_id=thread_id,
+                    run_id=run_id,
+                )
             resume_from = workflow_inputs.get("resume_from") or None
             checkpoint_values: dict[str, Any] = {}
             if (
@@ -1316,12 +1319,27 @@ def build_workflow_ag_ui_stream(
                     current_phase = node_name
                     if not workflow_scope:
                         # 创建规划节点沿用自身的确认状态，不投射工作台执行边界。
+                        lifecycle_update = {**initial_state, **update}
                         lifecycle_payload = project_workflow_lifecycle_boundary(
                             workspace,
                             run_id=run_id,
                             node_name=node_name,
-                            update=update,
+                            update=lifecycle_update,
                         )
+                        completion = lifecycle_update.get(
+                            "application_revision_completion"
+                        )
+                        if isinstance(completion, dict):
+                            update["application_revision_completion"] = completion
+                            _workflow_event(
+                                events,
+                                "application-revision",
+                                run_id=run_id,
+                                thread_id=thread_id,
+                                status="completed",
+                                message="应用二次修改已通过最终验收。",
+                                data={"changeId": completion.get("changeId")},
+                            )
                         if lifecycle_payload is not None:
                             update["lifecycle"] = lifecycle_payload
                             # 先广播最新 revision，再继续发送节点投影。

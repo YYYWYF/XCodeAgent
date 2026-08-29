@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
@@ -39,6 +41,7 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
     persist_application_lifecycle_transition,
 )
+from app.services.application_revision_lifecycle import issue_revision_continuation
 
 
 def _route_start(state: ProjectState) -> str:
@@ -327,12 +330,39 @@ def _technical_planning(state: ProjectState) -> dict:
             )
         merged_state = {**node_state, **update}
         confirmation = confirm_application_planning_artifacts(merged_state)
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
-            status=ApplicationLifecycleStatus.RUNNING,
-            active_run_id=state.get("active_run_id"),
-        )
+        revision_continuation: dict[str, Any] = {}
+        active_revision = lifecycle.active_formal_revision
+        if (
+            active_revision is not None
+            and active_revision.formal_branch.value
+            in {"design_stage_revision", "workbench_plan_revision"}
+        ):
+            # 应用模板只在首次创建时生成一次。正式二次修改确认 TechnicalPlan
+            # 后直接签发主 Workflow continuation，由 application_revision 收口并
+            # 进入 inspect_workspace/prepare_build_tasks，不得再次进入模板阶段。
+            token, issued = issue_revision_continuation(
+                workspace,
+                change_id=active_revision.change_id,
+                technical_plan_path=(
+                    Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+                ),
+            )
+            lifecycle = load_application_lifecycle(workspace) or lifecycle
+            revision_continuation = {
+                "changeId": issued.change_id,
+                "formalBranch": issued.formal_branch.value,
+                "action": "continue_revision_build",
+                "token": token,
+                "technicalPlanSha256": issued.technical_plan_sha256,
+            }
+        else:
+            # 只有首次创建流程会在 TechnicalPlan 确认后准备应用模板。
+            lifecycle = persist_application_lifecycle_transition(
+                workspace,
+                stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+                status=ApplicationLifecycleStatus.RUNNING,
+                active_run_id=state.get("active_run_id"),
+            )
         # 技术规划完成即整条创建/变更链路终结，重置设计变更上下文，
         # 避免旧变更指令残留在 checkpoint 中影响后续轮次。
         return {
@@ -343,6 +373,7 @@ def _technical_planning(state: ProjectState) -> dict:
                     **update,
                     "workflow_scope": "application_planning",
                     "application_planning_confirmation": confirmation,
+                    "revision_continuation": revision_continuation,
                     "lifecycle": application_lifecycle_payload(lifecycle),
                 },
             ),

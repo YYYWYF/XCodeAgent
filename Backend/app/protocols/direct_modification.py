@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agents.workspace_scope import resolve_workspace_root
+from app.domain.application_revision import RevisionImpact, RevisionTarget
 from app.graph.direct_modification_workflow import (
     direct_modification_graph_for_request,
     direct_next_node_name,
@@ -38,12 +39,67 @@ from app.protocols.workflow.stream_events import (
     integration_test_check_summary,
     integration_test_checks,
 )
+from app.services.application_lifecycle import (
+    application_lifecycle_payload,
+    load_application_lifecycle,
+)
+from app.services.application_revision_lifecycle import (
+    register_revision_impact,
+    submit_revision_impact,
+)
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
 CONVERSATION_EVENT_NAME = "conversation"
 CONVERSATION_STATE_KEY = "conversation"
+
+_DIRECT_CONFIRMATION_MODES = {
+    "implementation_fix_confirmation",
+    "small_task_scope_confirmation",
+}
+
+_DIRECT_CONTINUATION_STATE_KEYS = (
+    "conversation_intent",
+    "conversation_response",
+    "change_impact_enabled",
+    "change_impact_analysis",
+    "change_impact_context",
+    "change_impact_code_scan_required",
+    "change_impact_code_scan",
+    "direct_modification_owner",
+    "direct_modification_scope",
+    "direct_modification_confidence",
+    "direct_modification_reason",
+    "direct_modification_summary",
+    "direct_modification_target_paths",
+    "direct_modification_approved_paths",
+    "direct_modification_result",
+    "direct_stage_results",
+    "direct_code_change_sets",
+    "backend_handoff",
+    "repair_iteration",
+    "max_repair_iterations",
+    "repair_task_plan",
+    "repair_tasks",
+    "small_task_tasks",
+    "small_task_results",
+    "small_task_code_change_sets",
+    "small_task_handoff",
+    "small_task_handoff_submission",
+    "small_task_route",
+    "test_results",
+    "test_report",
+    "test_report_path",
+    "test_report_json_path",
+    "quality_gate_passed",
+    "integration_next_action",
+    "workspace_snapshot_summary",
+    "workspace_snapshot_path",
+    "workspace_snapshot_hash",
+    "workspace_revision",
+    "code_graph_index",
+)
 
 
 class DirectModificationTarget(BaseModel):
@@ -102,6 +158,11 @@ class DirectModificationInput(BaseModel):
         alias="handoffDecision",
         max_length=32,
     )
+    impact_interaction_id: str | None = Field(
+        default=None,
+        alias="impactInteractionId",
+        max_length=256,
+    )
 
 
 def conversation_capabilities() -> dict[str, Any]:
@@ -117,18 +178,24 @@ def conversation_capabilities() -> dict[str, Any]:
         "intents": [
             "casual_chat",
             "workspace_question",
-            "workspace_change",
-            "formal_workflow",
-            "needs_clarification",
+            "clarification",
+            "implementation_fix",
+            "formal_revision",
         ],
         "owners": ["frontend", "backend", "fullstack", "workspace", "none", "unknown"],
         "statuses": [
             "in_progress",
             "completed",
             "requires_user_input",
-            "requires_planning",
             "failed",
         ],
+        "formalRevision": {
+            "impactConfirmationMode": "revision_impact_confirmation",
+            "branches": ["design_stage_revision", "workbench_plan_revision"],
+            "clientNodeSelectionAllowed": False,
+            "additionalModelImpactAnalysis": False,
+            "userVisibleExplanation": "reason-only",
+        },
         "workflowIndependent": True,
         "targetRequired": False,
         "target": {
@@ -149,12 +216,19 @@ def conversation_capabilities() -> dict[str, Any]:
         "executionPolicy": {
             "subagentsEnabled": False,
             "todoPlanningEnabled": False,
-        },
-        "scan": {
-            "node": "scan_workspace_code",
-            "label": "扫描工作区代码",
-            "progressEvent": "workspace_inspection.progress",
-            "fallback": "workspace_search",
+            "implementationFixConfirmation": {
+                "requiredOwners": ["frontend", "backend", "fullstack"],
+                "workspaceOwnerBypasses": True,
+                "mode": "implementation_fix_confirmation",
+            },
+            "confirmationContinuation": {
+                "source": "server-checkpoint",
+                "modes": [
+                    "implementation_fix_confirmation",
+                    "small_task_scope_confirmation",
+                ],
+                "skips": ["scan_workspace_code", "classify_intent"],
+            },
         },
     }
 
@@ -167,6 +241,113 @@ def conversation_input(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
     value = forwarded_props.get("conversation")
     return value if isinstance(value, dict) else None
+
+
+def _direct_confirmation_continuation(
+    *,
+    request: DirectModificationInput,
+    thread_id: str,
+    checkpoint_values: Any,
+) -> dict[str, Any] | None:
+    """校验确认动作并从同一会话 checkpoint 恢复服务端权威的修改上下文。"""
+
+    decision = str(request.handoff_decision or "").strip().lower()
+    if decision not in {"approved", "rejected"}:
+        return None
+    values = checkpoint_values if isinstance(checkpoint_values, dict) else {}
+    clarification = values.get("clarification")
+    clarification = clarification if isinstance(clarification, dict) else {}
+    mode = str(clarification.get("mode") or "").strip()
+    # 正式 revision 的 rejected 也复用 handoffDecision，但它必须由 impact
+    # interaction 回写逻辑处理，不能被误当成实现修复续跑。
+    if mode not in _DIRECT_CONFIRMATION_MODES:
+        if decision == "rejected" and str(request.impact_interaction_id or "").strip():
+            return None
+        raise ValueError("确认续跑找不到匹配的实现修改确认 checkpoint。")
+    if values.get("status") != "requires_user_input":
+        raise ValueError("实现修改确认已过期，不能继续写入。")
+    if values.get("conversation_intent") != "implementation_fix":
+        raise ValueError("确认 checkpoint 的修改意图已变化，不能继续写入。")
+    owner = str(values.get("direct_modification_owner") or "").strip()
+    if owner not in {"frontend", "backend", "fullstack"}:
+        raise ValueError("确认 checkpoint 缺少有效的代码修改归属。")
+    saved_thread_id = str(values.get("active_thread_id") or "").strip()
+    if saved_thread_id and saved_thread_id != thread_id:
+        raise ValueError("确认动作与原始会话不匹配。")
+
+    saved_request = str(values.get("request") or "").strip()
+    supplied_original = str(request.original_request or "").strip()
+    if not saved_request:
+        raise ValueError("确认 checkpoint 缺少原始修改请求。")
+    if supplied_original and supplied_original != saved_request:
+        raise ValueError("确认动作与原始修改请求不匹配。")
+
+    saved_target = values.get("change_target")
+    saved_target = saved_target if isinstance(saved_target, dict) else {}
+    supplied_target = (
+        request.target.model_dump(by_alias=True, exclude_none=True)
+        if request.target is not None
+        else {}
+    )
+    if saved_target and supplied_target and saved_target != supplied_target:
+        raise ValueError("确认动作与原始页面或接口目标不匹配。")
+    target = saved_target or supplied_target
+
+    submitted_paths = _safe_approved_paths(request.approved_paths)
+    checkpoint_paths = _safe_approved_paths(values.get("direct_modification_approved_paths"))
+    requested_paths = _safe_approved_paths(clarification.get("requestedPaths"))
+    allowed_paths = set(requested_paths) | set(checkpoint_paths)
+    if any(path not in allowed_paths for path in submitted_paths):
+        raise ValueError("确认动作包含未被上一轮确认卡授权的文件路径。")
+    approved_paths = list(dict.fromkeys([*checkpoint_paths, *submitted_paths]))[:100]
+
+    continuation: dict[str, Any] = {
+        key: values[key]
+        for key in _DIRECT_CONTINUATION_STATE_KEYS
+        if key in values
+    }
+    continuation.update(
+        {
+            "request": saved_request,
+            "active_thread_id": thread_id,
+            "change_target": target,
+            "direct_modification_handoff_decision": decision,
+            "direct_modification_approved_paths": approved_paths,
+            "clarification": {},
+            "timeline": [],
+        }
+    )
+    if decision == "rejected":
+        continuation.update(
+            {
+                "status": "failed",
+                "phase": "finalize_direct_modification",
+                "message": "用户已取消本次修改确认，本次工作区不会继续写入。",
+                "direct_modification_resume_node": "finalize_direct_modification",
+            }
+        )
+        return continuation
+
+    owner_node = {
+        "frontend": "execute_frontend",
+        "backend": "execute_backend",
+        "fullstack": "execute_backend",
+    }[owner]
+    resume_node = owner_node
+    if (
+        mode == "implementation_fix_confirmation"
+        and values.get("change_impact_code_scan_required") is True
+    ):
+        resume_node = "scan_change_impact_code"
+    continuation.update(
+        {
+            "status": "in_progress",
+            "phase": resume_node,
+            "message": "用户已确认实现修改范围，继续执行原修改。",
+            "direct_modification_resume_node": resume_node,
+        }
+    )
+    return continuation
 
 
 def build_conversation_ag_ui_stream(
@@ -206,10 +387,12 @@ def build_conversation_ag_ui_stream(
             await report_text(delta)
 
         request = DirectModificationInput.model_validate(raw_input)
-        # 恢复澄清时同时保留上一轮原始需求和本轮最新回答；不能让 originalRequest 覆盖 AG-UI 最新用户消息。
+        latest_user_request = _last_user_message(normalized_payload.get("messages"))
+        # 普通澄清需要合并原始需求和本轮回答；确认续跑稍后会用服务端
+        # checkpoint 中的原始请求覆盖确认按钮文案，避免再次触发自然语言分类。
         user_request = _conversation_request(
             original_request=request.original_request,
-            latest_user_request=_last_user_message(normalized_payload.get("messages")),
+            latest_user_request=latest_user_request,
         )
         if not user_request:
             raise ValueError("自由对话请求必须包含一条用户消息。")
@@ -218,6 +401,18 @@ def build_conversation_ag_ui_stream(
         if resolved_workspace is None:
             raise ValueError("自由对话请求必须提供有效的 workspaceRoot。")
         workspace_root = str(resolved_workspace)
+
+        formal_revision_rejected = (
+            request.handoff_decision == "rejected"
+            and bool(str(request.impact_interaction_id or "").strip())
+        )
+        # 正式 revision 拒绝需要回写 impact；实现修复和 SmallTask 范围拒绝由 Graph 收口。
+        if formal_revision_rejected:
+            submit_revision_impact(
+                workspace_root,
+                interaction_id=str(request.impact_interaction_id),
+                decision="rejected",
+            )
         await cleanup_workflow_checkpoints(workspace=workspace_root)
         active_graph = await direct_modification_graph_for_request(
             workspace=workspace_root
@@ -240,8 +435,14 @@ def build_conversation_ag_ui_stream(
                 if request.target is not None
                 else {}
             ),
+            # 二次修改由一次分类 JSON 决定路由，不再追加 Contract Evidence 模型分析。
+            "change_impact_enabled": False,
+            "change_impact_analysis": {},
+            "change_impact_code_scan_required": False,
+            "change_impact_code_scan": {},
             "direct_modification_approved_paths": _safe_approved_paths(request.approved_paths),
             "direct_modification_handoff_decision": str(request.handoff_decision or ""),
+            "direct_modification_resume_node": "",
             "integration_repair_enabled": False,
             "frontend_performance_test_enabled": False,
             "repair_iteration": 0,
@@ -256,29 +457,79 @@ def build_conversation_ag_ui_stream(
             "small_task_route": "",
             "timeline": [],
         }
-        try:
-            config = {
-                "configurable": {
-                    "thread_id": f"conversation:{thread_id}",
-                },
-                "run_name": "xcodeagent-conversation",
-                "tags": ["xcodeagent", "conversation"],
-                "metadata": {
-                    "run_id": run_id,
-                    "thread_id": thread_id,
-                    "workspace": workspace_root,
-                    "selected_skill_names": list(request.selected_skill_names),
-                },
-            }
-            await _report_direct_node_started(
-                report,
-                node_name="scan_workspace_code",
-                state=state_view,
-                events=events,
-                run_id=run_id,
-                thread_id=thread_id,
-                percent=0,
+        if formal_revision_rejected:
+            # 影响范围卡的取消是成功的用户决策：直接从收口节点结束，
+            # 既不重扫工作区/重做意图识别，也不把取消投影为运行失败。
+            state_view.update(
+                {
+                    "request": str(request.original_request or user_request).strip(),
+                    "phase": "finalize_direct_modification",
+                    "status": "completed",
+                    "message": "已取消本次正式修改，当前正式产物保持不变。",
+                    "conversation_intent": "formal_revision",
+                    "direct_modification_owner": "none",
+                    "direct_modification_scope": "formal",
+                    "direct_modification_resume_node": "finalize_direct_modification",
+                    "clarification": {},
+                }
             )
+        persisted_revision_impact_ids: set[str] = set()
+        config = {
+            "configurable": {
+                "thread_id": f"conversation:{thread_id}",
+            },
+            "run_name": "xcodeagent-conversation",
+            "tags": ["xcodeagent", "conversation"],
+            "metadata": {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "workspace": workspace_root,
+                "selected_skill_names": list(request.selected_skill_names),
+            },
+        }
+        try:
+            if (
+                request.handoff_decision in {"approved", "rejected"}
+                and not formal_revision_rejected
+            ):
+                checkpoint = await active_graph.aget_state(config)
+                continuation = _direct_confirmation_continuation(
+                    request=request,
+                    thread_id=thread_id,
+                    checkpoint_values=getattr(checkpoint, "values", {}),
+                )
+                if continuation is not None:
+                    state_view.update(continuation)
+                    user_request = str(continuation.get("request") or user_request)
+                    state_view["request"] = user_request
+
+            initial_node_name = str(
+                state_view.get("direct_modification_resume_node")
+                or "scan_workspace_code"
+            )
+            if (
+                initial_node_name in {"execute_frontend", "execute_backend"}
+                and state_view.get("direct_modification_handoff_decision") == "approved"
+            ):
+                # 小任务范围确认可能已经完成过 code.scan；此时首节点就是写入
+                # Agent，必须在 Graph 执行前取得租约，不能等节点完成后再加锁。
+                lease = workspace_run_leases.acquire(
+                    workspace_root=workspace_root,
+                    project_id=None,
+                    execution_scope={"type": "application", "targetId": "conversation"},
+                    thread_id=thread_id,
+                    run_id=run_id,
+                )
+            if not formal_revision_rejected:
+                await _report_direct_node_started(
+                    report,
+                    node_name=initial_node_name,
+                    state=state_view,
+                    events=events,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    percent=0,
+                )
             async for stream_mode, chunk in active_graph.astream(
                 state_view,
                 config=config,
@@ -299,11 +550,58 @@ def build_conversation_ag_ui_stream(
                     if not isinstance(update, dict):
                         continue
                     state_view.update(update)
+                    if formal_revision_rejected:
+                        # 取消分支只借收口节点清理同一 thread 的 checkpoint，
+                        # 不对用户展示任何 Graph 执行步骤。
+                        continue
+                    revision_impact = state_view.get("revision_impact")
+                    impact_interaction_id = (
+                        str(revision_impact.get("interactionId") or "")
+                        if isinstance(revision_impact, dict)
+                        else ""
+                    )
+                    # 前后端实现修复在确认前不得占用写租约；workspace 直改或确认后的续跑才可加锁。
                     if (
-                        node_name == "classify_intent"
-                        and state_view.get("conversation_intent") == "workspace_change"
-                        and lease is None
+                        state_view.get("conversation_intent") == "formal_revision"
+                        and impact_interaction_id
+                        and impact_interaction_id not in persisted_revision_impact_ids
                     ):
+                        state_view["lifecycle"] = _persist_revision_impact(
+                            workspace_root=workspace_root,
+                            source_thread_id=thread_id,
+                            source_run_id=run_id,
+                            request=user_request,
+                            state=state_view,
+                        )
+                        persisted_revision_impact_ids.add(impact_interaction_id)
+                    code_scan_findings = (
+                        state_view.get("change_impact_code_scan", {}).get("findings", [])
+                        if isinstance(state_view.get("change_impact_code_scan"), dict)
+                        else []
+                    )
+                    acquire_after_contract_gate = (
+                        node_name == "classify_intent"
+                        and state_view.get("conversation_intent") == "implementation_fix"
+                        and state_view.get("status") == "in_progress"
+                        and state_view.get("change_impact_code_scan_required") is not True
+                    )
+                    acquire_after_code_scan = (
+                        node_name == "scan_change_impact_code"
+                        and state_view.get("status") == "in_progress"
+                        and bool(code_scan_findings)
+                    )
+                    acquire_after_confirmation_entry = (
+                        node_name in {"execute_frontend", "execute_backend"}
+                        and state_view.get("status") == "in_progress"
+                        and state_view.get("direct_modification_handoff_decision") == "approved"
+                    )
+                    if (
+                        acquire_after_contract_gate
+                        or acquire_after_code_scan
+                        or acquire_after_confirmation_entry
+                    ) and lease is None:
+                        # 实现修复只有在契约门通过且（如需要）取得真实代码发现后
+                        # 才登记写租约；纯契约分析/无发现的澄清阶段不占用资源。
                         lease = workspace_run_leases.acquire(
                             workspace_root=workspace_root,
                             project_id=None,
@@ -543,6 +841,43 @@ def _conversation_request(*, original_request: str | None, latest_user_request: 
             latest,
         ]
     ).strip()
+
+
+def _persist_revision_impact(
+    *,
+    workspace_root: str,
+    source_thread_id: str,
+    source_run_id: str,
+    request: str,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """把只读 impact 卡绑定到 lifecycle，但在批准前不创建 change、draft 或 lease。"""
+
+    raw_impact = state.get("revision_impact")
+    if not isinstance(raw_impact, dict):
+        raise ValueError("formal_revision 缺少 revision impact。")
+    raw_target = state.get("change_target")
+    if not isinstance(raw_target, dict) or not raw_target:
+        raw_target = {"type": "application"}
+    register_revision_impact(
+        workspace_root,
+        interaction_id=str(raw_impact.get("interactionId") or ""),
+        source_thread_id=source_thread_id,
+        source_run_id=source_run_id,
+        request=request,
+        target=RevisionTarget.model_validate(raw_target),
+        impact=RevisionImpact.model_validate(
+            {
+                key: value
+                for key, value in raw_impact.items()
+                if key not in {"interactionId", "status"}
+            }
+        ),
+    )
+    lifecycle = load_application_lifecycle(workspace_root)
+    if lifecycle is None:
+        raise ValueError("application lifecycle 尚未初始化。")
+    return application_lifecycle_payload(lifecycle)
 
 
 def _cancel_run_id(payload: dict[str, Any]) -> str:

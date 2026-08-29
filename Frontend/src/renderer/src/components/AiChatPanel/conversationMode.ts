@@ -3,9 +3,9 @@ import type { WorkflowDebugOptions, WorkflowRunPayload } from '../../typings'
 const CONVERSATION_INTENTS = new Set([
   'casual_chat',
   'workspace_question',
-  'workspace_change',
-  'formal_workflow',
-  'needs_clarification'
+  'clarification',
+  'implementation_fix',
+  'formal_revision'
 ])
 
 export type ChatInputMode = 'design' | 'conversation'

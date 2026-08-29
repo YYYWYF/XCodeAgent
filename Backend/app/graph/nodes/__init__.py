@@ -1,4 +1,5 @@
 from app.graph.nodes.tasks import prepare_build_tasks
+from app.graph.nodes.application_revision import start_application_revision
 from app.graph.nodes.classification import classify_request_complexity
 from app.graph.nodes.lifecycle import (
     acceptance,

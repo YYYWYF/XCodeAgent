@@ -166,7 +166,7 @@ export async function loadWorkspaceApplicationConfig(
   return result.application as unknown as ApplicationSchemaConfig;
 }
 
-// 检查正式规划产物，并返回 ProjectPlan 页面大纲及 pages 目录设计状态。
+// 检查正式规划产物，并返回页面/API/Endpoint 详细设计是否已有持久化记录。
 export async function inspectWorkspacePlanningArtifacts(
   workspaceRoot: string
 ): Promise<{

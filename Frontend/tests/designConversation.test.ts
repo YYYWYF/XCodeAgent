@@ -25,9 +25,24 @@ import {
   shouldBackfillPlanningWorkflow,
   shouldCreatePlanningWindow
 } from '../src/renderer/src/components/Welcome/planningWorkflowState'
-import type { WorkflowRunPayload } from '../src/renderer/src/typings'
+import type {
+  ApplicationLifecycle,
+  WorkflowDesignStageRevisionStart,
+  WorkflowRunPayload
+} from '../src/renderer/src/typings'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import { sessionsForPlanningThread } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
+import {
+  activeFormalRevisionConversationThreadId,
+  bindRevisionSessionChangeId,
+  createFormalRevisionSessionContext,
+  createRevisionDevelopmentSessionContext,
+  formalRevisionSessionPhase,
+  revisionDevelopmentSessionForContinuation
+} from '../src/renderer/src/components/AiChatPanel/hooks/revisionSession'
+import { createSessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
+import type { ChatSessionSummary } from '../src/renderer/src/service/chatSessions'
+import { revisionContinuationFromWorkflow } from '../src/renderer/src/service/applicationPagePlanning'
 
 const planningInteraction = {
   gateId: 'requirement_spec:revision-1',
@@ -53,6 +68,204 @@ const phasePlanningSessions = [
 assert.deepEqual(sessionsForPlanningThread(phasePlanningSessions, 'planning', 'shared-thread'), [
   phasePlanningSessions[1]
 ])
+
+const designRevisionInput = {
+  request: '把订单页改成双列布局',
+  target: { type: 'page', pageId: 'orders' },
+  impact: {
+    interactionId: 'impact-1',
+    formalBranch: 'design_stage_revision',
+    revisionType: 'ui_visual_change',
+    earliestArtifact: 'ui-design',
+    affectedArtifacts: ['ui-design', 'technical-plan'],
+    affectedResources: ['page:orders'],
+    reason: '页面布局发生变化',
+    risks: []
+  },
+  sourceSessionId: 'source-session',
+  sourceConversationThreadId: 'source-thread',
+  sourceRunId: 'source-run'
+} as WorkflowDesignStageRevisionStart
+const designRevisionContext = createFormalRevisionSessionContext(
+  designRevisionInput,
+  'planning-graph-thread'
+)
+assert.deepEqual(designRevisionContext, {
+  kind: 'formal_revision',
+  sessionRole: 'design',
+  formalBranch: 'design_stage_revision',
+  impactInteractionId: 'impact-1',
+  sourceSessionId: 'source-session',
+  sourceConversationThreadId: 'source-thread',
+  sourceRunId: 'source-run',
+  planningThreadId: 'planning-graph-thread'
+})
+
+const activeRevisionLifecycle = {
+  activeFormalRevision: {
+    changeId: 'change-1',
+    formalBranch: 'design_stage_revision',
+    impactInteractionId: 'impact-1',
+    sourceThreadId: 'source-thread',
+    sourceRunId: 'source-run',
+    planningThreadId: 'planning-graph-thread',
+    status: 'design_planning'
+  }
+} as ApplicationLifecycle
+const revisionSessionBase = {
+  title: '二次修改 · 产品 Agent',
+  editorMode: 'frontend' as const,
+  workbenchPhase: 'product' as const,
+  createdAt: 1,
+  updatedAt: 1,
+  messageCount: 1
+}
+const revisionSessionCandidates: ChatSessionSummary[] = [
+  {
+    ...revisionSessionBase,
+    id: 'wrong-source',
+    threadId: 'wrong-source-thread',
+    revisionContext: {
+      ...designRevisionContext,
+      sourceConversationThreadId: 'another-source',
+      changeId: 'change-1'
+    }
+  },
+  {
+    ...revisionSessionBase,
+    id: 'wrong-change',
+    threadId: 'wrong-change-thread',
+    revisionContext: { ...designRevisionContext, changeId: 'change-2' }
+  },
+  {
+    ...revisionSessionBase,
+    id: 'wrong-planning',
+    threadId: 'wrong-planning-thread',
+    revisionContext: {
+      ...designRevisionContext,
+      planningThreadId: 'another-planning-thread',
+      changeId: 'change-1'
+    }
+  },
+  {
+    ...revisionSessionBase,
+    id: 'matching',
+    threadId: 'revision-conversation-thread',
+    revisionContext: { ...designRevisionContext, changeId: 'change-1' }
+  }
+]
+assert.equal(
+  activeFormalRevisionConversationThreadId(revisionSessionCandidates, activeRevisionLifecycle),
+  'revision-conversation-thread'
+)
+assert.equal(
+  activeFormalRevisionConversationThreadId(
+    revisionSessionCandidates.slice(0, 3),
+    activeRevisionLifecycle
+  ),
+  undefined
+)
+assert.equal(formalRevisionSessionPhase('design_stage_revision'), 'product')
+assert.equal(formalRevisionSessionPhase('workbench_plan_revision'), 'planning')
+
+const workbenchRevisionContext = createFormalRevisionSessionContext(
+  {
+    ...designRevisionInput,
+    impact: {
+      ...designRevisionInput.impact,
+      formalBranch: 'workbench_plan_revision',
+      earliestArtifact: 'technical-plan'
+    }
+  },
+  'planning-graph-thread'
+)
+assert.equal(workbenchRevisionContext.formalBranch, 'workbench_plan_revision')
+assert.deepEqual(
+  revisionContinuationFromWorkflow({
+    runId: 'run-workbench-continuation',
+    threadId: 'thread-workbench-continuation',
+    events: [],
+    summary: {
+      revisionContinuation: {
+        changeId: 'change-workbench',
+        formalBranch: 'workbench_plan_revision',
+        action: 'continue_revision_build',
+        token: 't'.repeat(48),
+        technicalPlanSha256: 'a'.repeat(64)
+      }
+    }
+  } as WorkflowRunPayload),
+  {
+    changeId: 'change-workbench',
+    formalBranch: 'workbench_plan_revision',
+    action: 'continue_revision_build',
+    token: 't'.repeat(48),
+    technicalPlanSha256: 'a'.repeat(64)
+  }
+)
+assert.deepEqual(bindRevisionSessionChangeId(designRevisionContext, activeRevisionLifecycle), {
+  ...designRevisionContext,
+  changeId: 'change-1'
+})
+
+const boundDesignRevisionContext = bindRevisionSessionChangeId(
+  designRevisionContext,
+  activeRevisionLifecycle
+)
+const designRevisionIdentity = createSessionIdentity({
+  workspaceRoot: '/workspace',
+  editorMode: 'frontend',
+  sessionId: 'revision-design-session',
+  threadId: 'revision-design-thread',
+  revisionContext: boundDesignRevisionContext
+})
+const developmentContinuation = {
+  changeId: 'change-1',
+  formalBranch: 'design_stage_revision' as const,
+  action: 'continue_revision_build' as const,
+  token: 't'.repeat(48),
+  technicalPlanSha256: 'b'.repeat(64)
+}
+const developmentRevisionContext = createRevisionDevelopmentSessionContext(
+  designRevisionIdentity,
+  developmentContinuation
+)
+assert.deepEqual(developmentRevisionContext, {
+  ...boundDesignRevisionContext,
+  sessionRole: 'development',
+  changeId: 'change-1',
+  handoffFromSessionId: 'revision-design-session',
+  handoffFromConversationThreadId: 'revision-design-thread',
+  technicalPlanSha256: 'b'.repeat(64)
+})
+const developmentSession = {
+  ...revisionSessionBase,
+  id: 'revision-development-session',
+  threadId: 'revision-development-thread',
+  workbenchPhase: 'development' as const,
+  revisionContext: developmentRevisionContext
+}
+assert.equal(
+  revisionDevelopmentSessionForContinuation(
+    [...revisionSessionCandidates, developmentSession],
+    developmentContinuation
+  )?.id,
+  'revision-development-session'
+)
+assert.equal(
+  activeFormalRevisionConversationThreadId(
+    [developmentSession],
+    activeRevisionLifecycle
+  ),
+  undefined
+)
+assert.deepEqual(
+  bindRevisionSessionChangeId(
+    { ...designRevisionContext, sourceRunId: 'another-run' },
+    activeRevisionLifecycle
+  ),
+  { ...designRevisionContext, sourceRunId: 'another-run' }
+)
 
 assert.equal(
   planningRequirementsConfirmed({
@@ -391,6 +604,21 @@ assert.equal(
 )
 assert.equal(
   planningWorkflowNeedsChatLoading(summaryOnlyQuestionsWorkflow, true, true, true, ''),
+  false
+)
+// TechnicalPlan 二次修改确认后的主 Workflow 已进入开发前置门禁，
+// 规划会话不应再显示“恢复规划阶段”的 loading 占位。
+assert.equal(
+  planningWorkflowNeedsChatLoading(
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'development_readiness_gate' }
+    } as WorkflowRunPayload,
+    true,
+    false,
+    false,
+    ''
+  ),
   false
 )
 

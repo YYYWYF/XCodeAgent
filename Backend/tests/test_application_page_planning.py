@@ -21,6 +21,7 @@ from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
 )
+from app.domain.application_revision import RevisionImpact, RevisionTarget
 from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
@@ -32,6 +33,10 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
     transition_application_lifecycle,
     write_application_lifecycle,
+)
+from app.services.application_revision_lifecycle import (
+    register_revision_impact,
+    submit_revision_impact,
 )
 from app.services.requirement_spec import create_requirement_spec
 from app.services.product_plan import create_product_plan
@@ -99,12 +104,17 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
     return state
 
 
-def _write_planning_stage_entry_lifecycle(workspace: Path) -> None:
+def _write_planning_stage_entry_lifecycle(
+    workspace: Path,
+    *,
+    initialization_thread_id: str | None = None,
+) -> None:
     """把测试生命周期推进到等待进入规划阶段，模拟已确认或已跳过 UI。"""
 
     state = create_application_lifecycle(
         application_id=workspace.name,
         application_name="业务管理应用",
+        initialization_thread_id=initialization_thread_id,
     )
     for stage, status in (
         (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, ApplicationLifecycleStatus.RUNNING),
@@ -558,6 +568,143 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["workflow_scope"], "application_planning")
             self.assertIn("application_planning_confirmation", result)
+            self.assertEqual(result["revision_continuation"], {})
+            lifecycle = load_application_lifecycle(workspace)
+            assert lifecycle is not None
+            self.assertEqual(
+                lifecycle.initialization.stage,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            )
+
+    def test_design_revision_technical_plan_issues_continuation_without_template_stage(self) -> None:
+        """二次修改确认 TechnicalPlan 后应直接续接 Build，不能再次生成应用模板。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = _confirmed_state(workspace)
+            _write_planning_stage_entry_lifecycle(
+                workspace,
+                initialization_thread_id="planning-thread",
+            )
+            register_revision_impact(
+                workspace,
+                interaction_id="impact-design",
+                source_thread_id="conversation-thread",
+                source_run_id="conversation-run",
+                request="把订单页改成双列布局",
+                target=RevisionTarget(type="page", pageId="orders"),
+                impact=RevisionImpact(
+                    formalBranch="design_stage_revision",
+                    revisionType="ui_visual_change",
+                    earliestArtifact="ui-design",
+                    affectedArtifacts=["ui-design", "technical-plan"],
+                    affectedResources=["page:orders"],
+                    reason="页面视觉目标变化",
+                ),
+            )
+            active = submit_revision_impact(
+                workspace,
+                interaction_id="impact-design",
+                decision="approved",
+            )
+            assert active is not None
+            state["application_planning_interaction"] = {
+                "action": "enter_planning",
+                "artifact": "ui_designs",
+            }
+            update = {
+                "phase": "technical_planning",
+                "status": "completed",
+                "technical_plan": state["technical_plan"],
+                "technical_plan_path": state["technical_plan_path"],
+            }
+
+            with patch(
+                "app.graph.application_planning_workflow.nodes.project_planning",
+                return_value=update,
+            ):
+                result = _technical_planning(
+                    {**state, "workflow_scope": "application_planning"}
+                )
+
+            continuation = result["revision_continuation"]
+            self.assertEqual(continuation["action"], "continue_revision_build")
+            self.assertEqual(continuation["changeId"], active.change_id)
+            lifecycle = load_application_lifecycle(workspace)
+            assert lifecycle is not None
+            self.assertEqual(
+                lifecycle.initialization.stage,
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            )
+            self.assertNotEqual(
+                lifecycle.initialization.stage,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            )
+            assert lifecycle.active_formal_revision is not None
+            self.assertEqual(lifecycle.active_formal_revision.status, "continuation_ready")
+
+    def test_workbench_revision_technical_plan_issues_continuation_without_execution_binding(self) -> None:
+        """独立 application_planning 完成 TechnicalPlan 后不要求工作台 execution。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = _confirmed_state(workspace)
+            _write_planning_stage_entry_lifecycle(
+                workspace,
+                initialization_thread_id="planning-thread",
+            )
+            register_revision_impact(
+                workspace,
+                interaction_id="impact-workbench",
+                source_thread_id="conversation-thread",
+                source_run_id="conversation-run",
+                request="修改订单接口契约",
+                target=RevisionTarget(type="application"),
+                impact=RevisionImpact(
+                    formalBranch="workbench_plan_revision",
+                    revisionType="technical_contract_change",
+                    earliestArtifact="technical-plan",
+                    affectedArtifacts=["technical-plan"],
+                    affectedResources=["application"],
+                    reason="接口契约变化",
+                ),
+            )
+            active = submit_revision_impact(
+                workspace,
+                interaction_id="impact-workbench",
+                decision="approved",
+            )
+            assert active is not None
+            state["active_run_id"] = "planning-run"
+            state["application_planning_interaction"] = {
+                "action": "enter_planning",
+                "artifact": "ui_designs",
+            }
+            update = {
+                "phase": "technical_planning",
+                "status": "completed",
+                "technical_plan": state["technical_plan"],
+                "technical_plan_path": state["technical_plan_path"],
+            }
+
+            with patch(
+                "app.graph.application_planning_workflow.nodes.project_planning",
+                return_value=update,
+            ):
+                result = _technical_planning(
+                    {**state, "workflow_scope": "application_planning"}
+                )
+
+            continuation = result["revision_continuation"]
+            self.assertEqual(continuation["action"], "continue_revision_build")
+            self.assertEqual(continuation["changeId"], active.change_id)
+            lifecycle = load_application_lifecycle(workspace)
+            assert lifecycle is not None and lifecycle.active_formal_revision is not None
+            self.assertEqual(
+                lifecycle.active_formal_revision.status,
+                "continuation_ready",
+            )
+            self.assertFalse(lifecycle.active_executions)
 
     def test_technical_planning_cannot_run_before_stage_entry(self) -> None:
         """直接调度 TechnicalPlan 时必须在模型调用前拒绝，不能绕过规划入口。"""

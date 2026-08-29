@@ -5,9 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.domain.acceptance_adjustment import (
-    acceptance_adjustment_resume_node,
-    normalize_acceptance_adjustment,
+from app.domain.application_revision import (
+    FormalRevisionBranch,
+    RevisionContinuationRequest,
+    StartRevisionRequest,
 )
 from app.services.entity_design import normalize_entity_design_action
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
@@ -24,7 +25,16 @@ from app.workspace.task_documents import (
 )
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 from app.services.build_task_planner import tasks_from_build_task_plan
+from app.services.application_revision_lifecycle import (
+    consume_revision_continuation,
+    submit_revision_impact,
+)
+from app.services.application_lifecycle import load_application_lifecycle
 from app.services.workspace_inspector import snapshot_hash
+from app.protocols.workflow.revision import (
+    bind_revision_draft_interaction,
+    parse_revision_draft_interaction,
+)
 
 
 MAX_SELECTED_SKILLS = 64
@@ -69,6 +79,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         payload.get("clarificationAnswers")
         or forwarded_props.get("clarificationAnswers")
     )
+    if isinstance(clarification_answers, dict) and (
+        "acceptance_adjustment" in clarification_answers
+        or "acceptanceAdjustment" in clarification_answers
+    ):
+        raise ValueError(
+            "acceptance_adjustment 已移除；请通过统一自然语言入口提交新的修改目标。"
+        )
     build_task_plan_confirmation = _build_task_plan_confirmation(
         clarification_answers
     )
@@ -134,6 +151,19 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("workflowAction"))
         or _optional_text(forwarded_props.get("workflow_action"))
     )
+    revision_continuation = _revision_continuation_request(
+        forwarded_props.get("revisionContinuation")
+    )
+    revision_start = _revision_start_request(forwarded_props.get("revisionRequest"))
+    revision_interaction = parse_revision_draft_interaction(
+        forwarded_props.get("revisionInteraction")
+    )
+    if workflow_action == "continue_revision_build" and revision_continuation is None:
+        raise ValueError("continue_revision_build 必须提供 revisionContinuation。")
+    if workflow_action == "start_revision" and revision_start is None:
+        raise ValueError("start_revision 必须提供 revisionRequest。")
+    if workflow_action == "submit_revision_interaction" and revision_interaction is None:
+        raise ValueError("submit_revision_interaction 必须提供 revisionInteraction。")
     workflow_scope = (
         _optional_text(payload.get("workflowScope"))
         or _optional_text(forwarded_props.get("workflowScope"))
@@ -161,6 +191,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _resume_from_state(resume_state, workflow_scope=workflow_scope),
         workflow_scope=workflow_scope,
     )
+    if workflow_action in {
+        "continue_revision_build",
+        "start_revision",
+        "submit_revision_interaction",
+    } and explicit_resume_from:
+        raise ValueError(f"{workflow_action} 不接受 node 或 resume_from。")
     # UI 卡片的结构化动作是 ui_confirmation 的直接调用，不属于自由输入设计变更。
     # 即使恢复快照或错误客户端参数带有意图入口痕迹，也必须由该动作覆盖。
     if application_planning_interaction:
@@ -263,13 +299,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if entity_source_binding_submission or entity_design_action:
         resume_from = "entity_source_binding"
     acceptance_decision = _page_acceptance_decision(clarification_answers)
-    acceptance_adjustment = _acceptance_adjustment(clarification_answers)
     frontend_performance_decision = _frontend_performance_decision(
         clarification_answers
     )
-    if acceptance_adjustment:
-        resume_from = acceptance_adjustment_resume_node(acceptance_adjustment)
-    elif acceptance_decision:
+    if acceptance_decision:
         resume_from = "acceptance"
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
@@ -324,6 +357,93 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("workspaceRoot"))
         or _optional_text(application.get("workspaceRoot"))
     )
+    continuation_change_id = ""
+    revision_continuation_replaces_run_id = ""
+    revision_interaction_binding: dict[str, Any] = {}
+    if workflow_action == "submit_revision_interaction":
+        assert revision_interaction is not None
+        revision_interaction_binding = bind_revision_draft_interaction(
+            workspace,
+            revision_interaction,
+        )
+        resume_from = "application_revision"
+        resume_values_from_state = {}
+        request = str(revision_interaction_binding["request"])
+        continuation_change_id = revision_interaction.change_id
+        bound_target = revision_interaction_binding["target"]
+        if bound_target.get("type") == "page":
+            selectedPageId = str(bound_target.get("pageId") or "")
+            selected_api_contract_id = ""
+            selected_endpoint_id = ""
+            detail_target_type = "page"
+        elif bound_target.get("type") == "endpoint":
+            selectedPageId = ""
+            selected_api_contract_id = str(bound_target.get("apiContractId") or "")
+            selected_endpoint_id = str(bound_target.get("endpointId") or "")
+            detail_target_type = "endpoint"
+    if workflow_action == "continue_revision_build":
+        assert revision_continuation is not None
+        active_revision = consume_revision_continuation(
+            workspace,
+            change_id=revision_continuation.change_id,
+            token=revision_continuation.token,
+            technical_plan_path=(
+                Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+            ),
+        )
+        # continuation 的 request、target 和固定开发入口全部以 lifecycle 为权威；
+        # TechnicalPlan 已在 application_planning 完成，不再重复进入 application_revision。
+        request = active_revision.request
+        resume_from = "development_readiness_gate"
+        resume_values_from_state = {}
+        continuation_change_id = active_revision.change_id
+        revision_continuation_replaces_run_id = str(
+            active_revision.continuation_source_run_id or ""
+        )
+        if active_revision.target.type == "page":
+            selectedPageId = str(active_revision.target.page_id or "")
+            selected_api_contract_id = ""
+            selected_endpoint_id = ""
+            detail_target_type = "page"
+        elif active_revision.target.type == "endpoint":
+            selectedPageId = ""
+            selected_api_contract_id = str(active_revision.target.api_contract_id or "")
+            selected_endpoint_id = str(active_revision.target.endpoint_id or "")
+            detail_target_type = "endpoint"
+    if workflow_action == "start_revision":
+        assert revision_start is not None
+        if revision_start.formal_branch != FormalRevisionBranch.WORKBENCH_PLAN_REVISION:
+            raise ValueError("start_revision 只接受 workbench_plan_revision。")
+        lifecycle = load_application_lifecycle(workspace)
+        pending = lifecycle.pending_revision_impact if lifecycle is not None else None
+        if (
+            pending is None
+            or pending.request != revision_start.request
+            or pending.target != revision_start.target
+            or pending.impact.formal_branch != revision_start.formal_branch
+        ):
+            raise ValueError("revisionRequest 与当前 impact 绑定事实不匹配。")
+        active_revision = submit_revision_impact(
+            workspace,
+            interaction_id=revision_start.confirmed_impact.interaction_id,
+            decision="approved",
+        )
+        if active_revision is None:
+            raise ValueError("revision impact 未批准。")
+        request = active_revision.request
+        # TechnicalPlan 二次修改必须从明确的规划节点开始；节点内部仍复用
+        # formal revision 草稿实现，确认后再签发 Build continuation。
+        resume_from = "technical_planning"
+        resume_values_from_state = {}
+        continuation_change_id = active_revision.change_id
+        if active_revision.target.type == "page":
+            selectedPageId = str(active_revision.target.page_id or "")
+            detail_target_type = "page"
+        elif active_revision.target.type == "endpoint":
+            selectedPageId = ""
+            selected_api_contract_id = str(active_revision.target.api_contract_id or "")
+            selected_endpoint_id = str(active_revision.target.endpoint_id or "")
+            detail_target_type = "endpoint"
     if workflow_action == "retry_failed_tasks" and resume_from == "build":
         # 失败运行的公开快照可能只保留摘要；重试必须从工作区落盘计划补回真实修复候选。
         resume_values_from_state = {
@@ -395,6 +515,21 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "retry_failed_tasks": (
             workflow_action == "retry_failed_tasks" and resume_from == "build"
         ),
+        **({"change_id": continuation_change_id} if continuation_change_id else {}),
+        **(
+            {
+                "revision_continuation_replaces_run_id": (
+                    revision_continuation_replaces_run_id
+                )
+            }
+            if revision_continuation_replaces_run_id
+            else {}
+        ),
+        **(
+            {"revision_interaction": revision_interaction_binding["interaction"]}
+            if revision_interaction_binding
+            else {}
+        ),
         **(
             {"build_task_plan_confirmation": build_task_plan_confirmation}
             if build_task_plan_confirmation
@@ -430,11 +565,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **({"ui_design_action": ui_design_action} if ui_design_action else {}),
         **({"acceptance_decision": acceptance_decision} if acceptance_decision else {}),
         **(
-            {"acceptance_adjustment": acceptance_adjustment}
-            if acceptance_adjustment
-            else {}
-        ),
-        **(
             {"small_task_handoff_submission": small_task_handoff_submission}
             if small_task_handoff_submission
             else {}
@@ -466,7 +596,17 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
         **(
-            {"lifecycle_interaction_submission": _lifecycle_interaction_submission(resume_state)}
+            {
+                "lifecycle_interaction_submission": revision_interaction_binding[
+                    "lifecycleSubmission"
+                ]
+            }
+            if revision_interaction_binding
+            else {
+                "lifecycle_interaction_submission": _lifecycle_interaction_submission(
+                    resume_state
+                )
+            }
             if _lifecycle_interaction_submission(resume_state)
             else {}
         ),
@@ -797,7 +937,18 @@ def _optional_text(value: Any) -> str:
 def _supported_workflow_action(value: str) -> str:
     """限制主 Workflow 当前允许的显式控制动作，避免未知动作悄悄改变恢复路由。"""
 
-    return value if value in {"retry_failed_tasks", "retry_code_review"} else ""
+    return (
+        value
+        if value
+        in {
+            "retry_failed_tasks",
+            "retry_code_review",
+            "start_revision",
+            "continue_revision_build",
+            "submit_revision_interaction",
+        }
+        else ""
+    )
 
 
 def _code_review_retry_target(value: dict[str, Any] | None) -> str:
@@ -871,6 +1022,26 @@ def _code_review_retry_values(
         "code_review_repair_iteration": max(0, failed_attempt - 1),
         "code_review_repair_status": "repairing",
     }
+
+
+def _revision_continuation_request(value: Any) -> RevisionContinuationRequest | None:
+    """严格解析 continuation，并禁止附带 artifact、target、request 或节点字段。"""
+
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("revisionContinuation 必须是对象。")
+    return RevisionContinuationRequest.model_validate(value)
+
+
+def _revision_start_request(value: Any) -> StartRevisionRequest | None:
+    """严格解析 formal revision 启动请求，不接受多余 Graph 控制字段。"""
+
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("revisionRequest 必须是对象。")
+    return StartRevisionRequest.model_validate(value)
 
 
 def _optional_dict(value: Any) -> dict[str, Any] | None:
@@ -1126,7 +1297,6 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "clarification",
         "selected_skill_names",
         "workflow_scope",
-        "acceptance_adjustment",
         "preview_url",
         "launch_result",
         "acceptance_request",
@@ -1228,19 +1398,6 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         and test_report_path == ".xcodeagent/reports/test-report.md"
     ):
         resumed_values["test_report_path"] = test_report_path
-    raw_adjustment = resumed_values.get("acceptance_adjustment") or merged.get(
-        "acceptanceAdjustment"
-    )
-    # 公开 Workflow 快照会用空对象表示“尚未提交验收调整”；恢复其他节点时应视为缺省值。
-    empty_adjustment = raw_adjustment is None or raw_adjustment == {} or (
-        isinstance(raw_adjustment, str) and not raw_adjustment.strip()
-    )
-    if empty_adjustment:
-        resumed_values.pop("acceptance_adjustment", None)
-    else:
-        resumed_values["acceptance_adjustment"] = normalize_acceptance_adjustment(
-            raw_adjustment
-        ) or {}
     # 前端快照使用 camelCase；Graph State 只保留 snake_case，避免同一语义双字段流转。
     selected_api_contract_id = _optional_text(
         merged.get("selected_api_contract_id") or merged.get("selectedApiContractId")
@@ -1854,19 +2011,6 @@ def _page_acceptance_decision(value: Any) -> str:
         return ""
     decision = _optional_text(value.get("page_acceptance"))
     return decision if decision in {"accepted", "changes_requested"} else ""
-
-
-def _acceptance_adjustment(value: Any) -> dict[str, str] | None:
-    """从结构化验收答案读取调整类型，并在协议边界完成校验。"""
-
-    if not isinstance(value, dict):
-        return None
-    raw_adjustment = value.get("acceptance_adjustment") or value.get(
-        "acceptanceAdjustment"
-    )
-    if raw_adjustment is None:
-        return None
-    return normalize_acceptance_adjustment(raw_adjustment)
 
 
 def _small_task_handoff_submission(value: Any) -> dict[str, str] | None:

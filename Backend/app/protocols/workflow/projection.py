@@ -246,6 +246,8 @@ def _workflow_progress_summary(
     result: dict[str, Any],
     events: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """生成运行中摘要，并投射当前 revision impact、草稿和 continuation。"""
+
     last_event = events[-1] if events else {}
     completed_nodes = [
         event for event in events if event.get("type") == "workflow.node.completed"
@@ -325,6 +327,9 @@ def _workflow_progress_summary(
         "smallTaskTasks": result.get("small_task_tasks", []),
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
+        "revisionImpact": result.get("revision_impact"),
+        "revisionDraft": result.get("revision_draft"),
+        "revisionContinuation": result.get("revision_continuation"),
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
@@ -1289,6 +1294,9 @@ def _workflow_summary(
         "smallTaskTasks": result.get("small_task_tasks", []),
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
+        "revisionImpact": result.get("revision_impact"),
+        "revisionDraft": result.get("revision_draft"),
+        "revisionContinuation": result.get("revision_continuation"),
         "buildSummary": build_summary,
         "buildTaskPlan": result.get("build_task_plan", {}),
         "buildExecutionScope": result.get("build_execution_scope"),
@@ -1352,7 +1360,6 @@ def _workflow_user_input_message(
         "entity_source_binding": "实体数据源绑定已生成，请确认后继续。",
         "entity_source_binding_required": "请先完成当前目标依赖实体的数据源绑定。",
         "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",
-        "small_task_workflow_handoff": "小任务需要确认后转入正式工作流。",
         "unit_test_confirmation": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "test_phase_confirmation": "开发已完成，请确认进入测试阶段。",
@@ -1438,6 +1445,8 @@ def _workflow_visual_payload(
         "smallTaskTasks": result.get("small_task_tasks", []),
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
+        "revisionImpact": result.get("revision_impact"),
+        "revisionDraft": result.get("revision_draft"),
         "clarification": result.get("clarification", {}),
         **_requirements_confirmation_projection(result),
         "design_change_submission": result.get("design_change_submission", False),
@@ -1465,7 +1474,7 @@ def _workflow_visual_payload(
         ),
         "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
         "selectedSkillNames": result.get("selected_skill_names", []),
-        "acceptanceAdjustment": result.get("acceptance_adjustment"),
+        "revisionContinuation": result.get("revision_continuation"),
         "lifecycle": result.get("lifecycle"),
         "ui_designs": result.get("ui_designs"),
         "workspaceInspectionProgress": result.get("workspace_scan_progress"),

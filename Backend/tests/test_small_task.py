@@ -162,30 +162,6 @@ class SmallTaskScopeTests(unittest.TestCase):
         self.assertEqual(result["escalation"]["workflowIntent"], "project_planning")
         self.assertEqual(result["escalation"]["requestedPaths"], ["Backend/app/api.py"])
 
-    def test_acceptance_local_fix_replaces_stale_repair_tasks(self) -> None:
-        """验收局部修改必须创建新任务，不能重复执行旧修复列表。"""
-
-        tasks = _initial_tasks(
-            {
-                "acceptance_adjustment": {
-                    "type": "local_fix",
-                    "feedback": "调整按钮间距。",
-                },
-                "tasks": [
-                    {
-                        "target_files": ["Frontend/src/pages/Inventory.tsx"],
-                        "allowed_paths": ["Frontend/src/pages/Inventory.tsx"],
-                    }
-                ],
-                "small_task_tasks": [_task("old-repair", "Frontend/src/Old.tsx")],
-                "repair_tasks": [_task("older-repair", "Frontend/src/Older.tsx")],
-            }
-        )
-
-        self.assertEqual([task["id"] for task in tasks], ["acceptance-local-fix"])
-        self.assertEqual(tasks[0]["allowed_paths"], ["Frontend/src/pages/Inventory.tsx"])
-
-
 class SmallTaskExecutionTests(unittest.TestCase):
     """验证局部 Agent 的并行执行和主图升级状态。"""
 
@@ -366,7 +342,7 @@ class SmallTaskExecutionTests(unittest.TestCase):
         self.assertEqual(result["repair_iteration"], 1)
 
     def test_main_node_stops_for_complex_task_confirmation(self) -> None:
-        """SmallTask 返回复杂升级时主图必须暂停并生成正式工作流确认卡。"""
+        """SmallTask 返回复杂升级时主图必须暂停并生成统一影响确认卡。"""
 
         tasks = [_task("new-api", "Backend/app/api.py")]
         with patch(
@@ -401,11 +377,13 @@ class SmallTaskExecutionTests(unittest.TestCase):
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
             result["clarification"]["mode"],
-            "small_task_workflow_handoff",
+            "revision_impact_confirmation",
         )
+        self.assertEqual(result["conversation_intent"], "formal_revision")
+        self.assertEqual(result["small_task_handoff"], {})
         self.assertEqual(
-            result["clarification"]["workflowIntent"],
-            "project_planning",
+            result["clarification"]["revisionImpact"]["earliestArtifact"],
+            "technical-plan",
         )
 
 

@@ -60,14 +60,12 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 ApplicationLifecycleStatus.AWAITING_USER,
             ),
             (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, ApplicationLifecycleStatus.RUNNING),
-            (ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC, ApplicationLifecycleStatus.RUNNING),
             (
-                ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                ApplicationLifecycleStatus.AWAITING_USER,
+                ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                ApplicationLifecycleStatus.RUNNING,
             ),
-            (ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN, ApplicationLifecycleStatus.RUNNING),
             (
-                ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                 ApplicationLifecycleStatus.AWAITING_USER,
             ),
             (ApplicationLifecycleStage.GENERATING_UI_DESIGNS, ApplicationLifecycleStatus.RUNNING),
@@ -98,7 +96,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
 
         self.assertEqual(state.initialization.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
-        self.assertIsNone(state.initialization.thread_id)
+        self.assertEqual(state.initialization.thread_id, "thread-init")
         self.assertEqual(state.revision, 1 + len(sequence))
 
     def test_three_creation_interruptions_survive_reload(self) -> None:
@@ -106,7 +104,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
         targets = [
             ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-            ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
             ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
         ]
         for target_stage in targets:
@@ -120,10 +118,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
                     ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
                     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
                     ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-                    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                     ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
                     ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
                     ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
@@ -164,11 +160,11 @@ class ApplicationLifecycleTests(unittest.TestCase):
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                     ApplicationLifecycleStatus.AWAITING_USER,
                 ),
             ):
@@ -276,9 +272,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
             route = [
                 ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-                ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-                ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
                 ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
                 ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
@@ -345,9 +340,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
             route = [
                 ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-                ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-                ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
                 ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
                 ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
@@ -473,17 +467,12 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
             state = transition_application_lifecycle(
                 state,
-                stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
                 status=ApplicationLifecycleStatus.RUNNING,
             )
             state = transition_application_lifecycle(
                 state,
-                stage=ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-                status=ApplicationLifecycleStatus.RUNNING,
-            )
-            state = transition_application_lifecycle(
-                state,
-                stage=ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                 status=ApplicationLifecycleStatus.AWAITING_USER,
             )
             for stage, status in (

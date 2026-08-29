@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agents.design_conversation import classify_design_conversation
+from app.agents.design_conversation import (
+    DesignConversationDecision,
+    classify_design_conversation,
+)
 from app.domain.application_lifecycle import ApplicationLifecycleStage
 from app.graph.state import ProjectState
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
+    load_application_lifecycle,
     restart_application_planning_lifecycle,
 )
 
@@ -24,6 +28,12 @@ DESIGN_CHANGE_NEXT_NODE = {
     "technical_planning": "",
 }
 
+_FORMAL_REVISION_DESIGN_TARGETS = {
+    "requirement-spec": "requirements",
+    "product-plan": "product_planning",
+    "ui-design": "ui_confirmation",
+}
+
 
 def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
     """识别最早受影响产物，并把原创建生命周期回退到对应真实节点。"""
@@ -31,19 +41,35 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
     request = str(state.get("request") or "").strip()
     if not request:
         raise ValueError("设计变更必须提供用户输入。")
-    decision = classify_design_conversation(
-        request,
-        requirement_spec=_dict_value(state.get("requirement_spec")),
-        product_plan=_dict_value(state.get("product_plan")),
-        ui_designs=_dict_value(state.get("ui_designs")),
-    )
-    target = earliest_available_design_target(
-        decision.target,
-        requirement_spec=_dict_value(state.get("requirement_spec")),
-        product_plan=_dict_value(state.get("product_plan")),
-    )
+    authoritative_target, authoritative_page_ids = _formal_revision_context(state)
+    if authoritative_target is not None:
+        # 正式二次修改已经在影响确认阶段固定最早产物和目标资源；用户点击
+        # “确认并返回设计阶段”后必须立即进入真实生成节点，不能再调用一次
+        # 设计分类模型形成额外等待、失败点或目标漂移。
+        target = authoritative_target
+        decision = DesignConversationDecision(
+            target=target,
+            reason=(
+                f"formal revision 起点由 lifecycle.currentArtifact 固定为 {target}，"
+                "直接进入对应正式产物生成节点。"
+            ),
+            affected_page_ids=authoritative_page_ids,
+            response="",
+        )
+    else:
+        decision = classify_design_conversation(
+            request,
+            requirement_spec=_dict_value(state.get("requirement_spec")),
+            product_plan=_dict_value(state.get("product_plan")),
+            ui_designs=_dict_value(state.get("ui_designs")),
+        )
+        target = earliest_available_design_target(
+            decision.target,
+            requirement_spec=_dict_value(state.get("requirement_spec")),
+            product_plan=_dict_value(state.get("product_plan")),
+        )
     reason = decision.reason
-    if target != decision.target:
+    if authoritative_target is None and target != decision.target:
         reason = f"{reason}；上游产物尚未确认，先回到 {target}。"
     update: dict[str, Any] = {
         "workflow_scope": "application_planning",
@@ -82,6 +108,29 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
             update["product_plan_path"] = ""
             update["product_plan_json_path"] = ""
     return update
+
+
+def _formal_revision_context(state: ProjectState) -> tuple[str | None, list[str]]:
+    """读取 formal revision 的生命周期起点和服务端目标页面上下文。"""
+
+    workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
+    if not workspace:
+        return None, []
+    lifecycle = load_application_lifecycle(workspace)
+    active = lifecycle.active_formal_revision if lifecycle is not None else None
+    if active is None or active.formal_branch.value != "design_stage_revision":
+        return None, []
+    artifact = str(active.current_artifact or "").strip()
+    target = _FORMAL_REVISION_DESIGN_TARGETS.get(artifact)
+    if target is None:
+        raise ValueError(
+            "design_stage_revision 的 lifecycle.currentArtifact 无法映射到当前设计节点。"
+        )
+    page_ids: list[str] = []
+    revision_target = active.target
+    if revision_target.type == "page" and str(revision_target.page_id or "").strip():
+        page_ids.append(str(revision_target.page_id).strip())
+    return target, page_ids
 
 
 def route_design_intent(state: ProjectState) -> str:

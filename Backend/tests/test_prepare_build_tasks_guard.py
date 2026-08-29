@@ -19,6 +19,7 @@ from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
 )
+from app.services.artifact_invalidation import canonical_sha256
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.entity_definitions import confirmed_entity_designs
 from app.services.project_plan import create_project_plan
@@ -89,6 +90,166 @@ def _write_formal_build_artifacts(
 
 
 class PrepareBuildTasksGuardTests(unittest.TestCase):
+    def test_build_gate_ignores_removed_endpoint_detail_artifacts(self) -> None:
+        """当前 Build 门禁不得重新依赖已移除的 EndpointDetail 产物。"""
+
+        technical_plan = {
+            "artifact_type": "technical-plan",
+            "confirmation_status": "confirmed",
+            "api_contracts": [
+                {
+                    "id": "orders-api",
+                    "endpoints": [{"id": "orders.list"}],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks.inspect_template_generation_readiness",
+            return_value={"errors": []},
+        ):
+            _write_formal_build_artifacts(workspace)
+            technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
+            technical_path.write_text(json.dumps(technical_plan), encoding="utf-8")
+            endpoint_path = (
+                Path(workspace)
+                / ".xcodeagent/plans/endpoints/endpoint--orders-api--orders-list.json"
+            )
+            endpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            endpoint_path.write_text(
+                json.dumps(
+                    {
+                        "status": "stale",
+                        "confirmation_status": "stale",
+                        "basedOn": [
+                            {"artifactKey": "technical-plan", "sha256": "0" * 64}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = {
+                "build_execution_scope": {
+                    "type": "endpoint",
+                    "targetId": "orders.list",
+                    "apiContractId": "orders-api",
+                }
+            }
+            stale_errors = _build_prerequisite_errors(
+                state,
+                technical_plan,
+                workspace=workspace,
+            )
+            endpoint_path.write_text(
+                json.dumps(
+                    {
+                        "status": "confirmed",
+                        "confirmation_status": "confirmed",
+                        "basedOn": [
+                            {"artifactKey": "technical-plan", "sha256": "0" * 64}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            mismatch_errors = _build_prerequisite_errors(
+                state,
+                technical_plan,
+                workspace=workspace,
+            )
+            endpoint_path.write_text(
+                json.dumps(
+                    {
+                        "status": "confirmed",
+                        "confirmation_status": "confirmed",
+                        "basedOn": [
+                            {
+                                "artifactKey": "technical-plan",
+                                "sha256": canonical_sha256(technical_path),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            confirmed_errors = _build_prerequisite_errors(
+                state,
+                technical_plan,
+                workspace=workspace,
+            )
+
+        for errors in (stale_errors, mismatch_errors, confirmed_errors):
+            self.assertFalse(any("endpoint-detail:" in error for error in errors))
+
+    def test_page_endpoint_gate_ignores_unrelated_stale_endpoint(self) -> None:
+        """页面 Build 只门禁直接依赖接口，不被无关 endpoint 的 stale 状态阻断。"""
+
+        technical_plan = {
+            "artifact_type": "technical-plan",
+            "confirmation_status": "confirmed",
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "references": {
+                        "endpoint_dependencies": [
+                            {
+                                "api_contract_id": "orders-api",
+                                "endpoint_id": "orders.list",
+                            }
+                        ]
+                    },
+                }
+            ],
+            "api_contracts": [
+                {
+                    "id": "orders-api",
+                    "endpoints": [
+                        {"id": "orders.list"},
+                        {"id": "customers.list"},
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks.inspect_template_generation_readiness",
+            return_value={"errors": []},
+        ):
+            _write_formal_build_artifacts(workspace)
+            technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
+            technical_path.write_text(json.dumps(technical_plan), encoding="utf-8")
+            endpoint_dir = Path(workspace) / ".xcodeagent/plans/endpoints"
+            endpoint_dir.mkdir(parents=True, exist_ok=True)
+            endpoint_dir.joinpath("endpoint--orders-api--orders-list.json").write_text(
+                json.dumps(
+                    {
+                        "status": "confirmed",
+                        "confirmation_status": "confirmed",
+                        "basedOn": [
+                            {
+                                "artifactKey": "technical-plan",
+                                "sha256": canonical_sha256(technical_path),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            endpoint_dir.joinpath("endpoint--orders-api--customers-list.json").write_text(
+                json.dumps({"status": "stale", "confirmation_status": "stale"}),
+                encoding="utf-8",
+            )
+            errors = _build_prerequisite_errors(
+                {
+                    "build_execution_scope": {
+                        "type": "page",
+                        "targetId": "orders",
+                    }
+                },
+                technical_plan,
+                workspace=workspace,
+            )
+
+        self.assertFalse(any("endpoint-detail:" in error for error in errors))
+
     def test_prerequisite_gate_reads_workspace_plan_over_stale_checkpoint(self) -> None:
         """正式 TechnicalPlan 已确认时，不应被 checkpoint 的 pending 状态阻断。"""
 

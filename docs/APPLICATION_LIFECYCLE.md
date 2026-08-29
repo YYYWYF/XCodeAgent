@@ -12,7 +12,7 @@
 
 ## Schema 与一致性
 
-顶层只保存 application 标识、UTC `updatedAt`、单调递增 `revision`、`initialization`、活动 run 引用、按 runId 索引的 `activeExecutions`、按稳定业务标识索引的 `resourceLocks`、错误和扩展容器，不保存 schema 版本字段。应用标识同时作为当前工作区业务身份，不再重复保存同值的 project 标识。`initialization.threadId` 仅在初始化期间定位同一 LangGraph checkpoint，进入 `ready_for_workbench` 时清空。工作台待交互与错误只嵌入各自 execution，避免一个页面的确认覆盖另一个页面。
+顶层只保存 application 标识、UTC `updatedAt`、单调递增 `revision`、`initialization`、活动 run 引用、按 runId 索引的 `activeExecutions`、按稳定业务标识索引的 `resourceLocks`、当前 revision impact/formal revision、错误和扩展容器，不保存 schema 版本字段。应用标识同时作为当前工作区业务身份，不再重复保存同值的 project 标识。`initialization.threadId` 定位原 application-planning checkpoint；进入 `ready_for_workbench` 后继续保留，但只能由 lifecycle 绑定且经用户确认的 `design_stage_revision` 恢复，不能重新打开初始化状态。工作台待交互与错误只嵌入各自 execution，避免一个页面的确认覆盖另一个页面。
 
 写入使用同目录临时文件、文件 fsync、原子替换和目录 fsync。损坏或不符合当前结构的文件会显式拒绝读取，不根据旧索引、localStorage、checkpoint 或正式文档反向生成状态文件。所有状态文件和动作输入先经过 Pydantic 校验。
 
@@ -65,7 +65,7 @@ Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase
   "initialization": {
     "stage": "ready_for_workbench",
     "status": "completed",
-    "threadId": null
+    "threadId": "planning-thread-original"
   },
   "activeExecutions": {
     "run-orders-7": {

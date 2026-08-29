@@ -14,14 +14,21 @@ from app.domain.application_lifecycle import (
     WorkbenchExecutionStatus,
     utc_now,
 )
+from app.domain.application_revision import RevisionImpact, RevisionTarget
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
     application_lifecycle_payload,
     complete_workbench_execution,
+    end_workbench_execution,
     load_application_lifecycle,
     persist_workbench_interaction_submission,
     start_workbench_execution,
     update_workbench_execution,
+)
+from app.services.application_revision_lifecycle import (
+    complete_active_revision,
+    register_revision_impact,
+    update_active_revision_progress,
 )
 
 
@@ -37,6 +44,10 @@ def begin_workflow_lifecycle(
     workspace = str(workflow_inputs.get("workspace") or "").strip()
     lifecycle = load_application_lifecycle(workspace) if workspace else None
     if lifecycle is None:
+        return None
+    if workflow_inputs.get("workflow_scope") == "application_planning":
+        # 创建规划有独立的 lifecycle/Graph 边界，不属于工作台执行；即使
+        # 未来调用方误用本适配器，也不能登记 execution 或资源锁。
         return None
     resume_values = workflow_inputs.get("resume_values")
     resume_values = resume_values if isinstance(resume_values, dict) else {}
@@ -86,6 +97,18 @@ def begin_workflow_lifecycle(
                 workflow_inputs.get("workflow_debug_enabled")
             ),
         )
+    revision_continuation_replaces_run_id = (
+        str(resume_values.get("revision_continuation_replaces_run_id") or "").strip()
+        if workflow_inputs.get("workflow_action") == "continue_revision_build"
+        else ""
+    )
+    if revision_continuation_replaces_run_id:
+        _validate_revision_continuation_replacement(
+            lifecycle,
+            run_id=revision_continuation_replaces_run_id,
+            scope=scope_type,
+            target_id=target_id,
+        )
     submission_run_id = (
         str(submission.get("runId") or "")
         if isinstance(submission, dict)
@@ -99,10 +122,44 @@ def begin_workflow_lifecycle(
         thread_id=thread_id,
         run_id=run_id,
         phase=phase,
-        replaces_run_id=explicit_resume_run_id or submission_run_id or None,
+        replaces_run_id=(
+            revision_continuation_replaces_run_id
+            or explicit_resume_run_id
+            or submission_run_id
+            or None
+        ),
         resource_claims=resource_claims,
     )
+    # application_revision 仍可能停在草稿确认门，只有节点确认全部正式产物后
+    # 才能把 formal revision 切成 building，避免运行登记提前改变业务事实。
+    if phase != "application_revision":
+        _sync_active_revision_status(workspace, "building")
+        state = load_application_lifecycle(workspace) or state
     return application_lifecycle_payload(state)
+
+
+def _validate_revision_continuation_replacement(
+    lifecycle: ApplicationLifecycle,
+    *,
+    run_id: str,
+    scope: str,
+    target_id: str,
+) -> None:
+    """校验存在来源 execution 时的 continuation 原子接管边界。"""
+
+    active_revision = lifecycle.active_formal_revision
+    execution = lifecycle.active_executions.get(run_id)
+    if (
+        active_revision is None
+        or active_revision.status != "building"
+        or active_revision.continuation_consumed_at is None
+        or active_revision.continuation_source_run_id != run_id
+        or execution is None
+        or execution.phase != "application_revision"
+    ):
+        raise ApplicationLifecycleConflictError("revision continuation 的规划执行绑定无效。")
+    if execution.scope != scope or execution.target_id != target_id:
+        raise ApplicationLifecycleConflictError("revision continuation 的开发目标与规划执行不一致。")
 
 
 def _validate_resumable_execution(
@@ -211,11 +268,24 @@ def project_workflow_lifecycle_boundary(
     if lifecycle is None or run_id not in lifecycle.active_executions:
         return None
     if node_name == "finalize_project" and update.get("status") == "completed":
-        return application_lifecycle_payload(
-            complete_workbench_execution(workspace, run_id=run_id)
-        )
+        complete_workbench_execution(workspace, run_id=run_id)
+        change_id = complete_active_revision(workspace)
+        if change_id:
+            update["application_revision_completion"] = {"changeId": change_id}
+        completed = load_application_lifecycle(workspace)
+        return application_lifecycle_payload(completed) if completed is not None else None
 
     status = str(update.get("status") or "")
+    if node_name == "application_revision" and status == "discarded":
+        # 丢弃正式草稿会结束本次主 Workflow；节点已经释放 active formal
+        # revision，这里只收口其工作台 execution 和全部资源锁，不能再把
+        # discarded 当成普通 running 快照留下孤儿执行。
+        ended = end_workbench_execution(workspace, run_id=run_id, missing_ok=True)
+        update["application_revision_discarded"] = {
+            "changeId": str(update.get("change_id") or ""),
+            "status": "discarded",
+        }
+        return application_lifecycle_payload(ended)
     if (
         node_name == "launch_project" or clarification_mode(update) == "page_acceptance"
     ) and status == "requires_user_input":
@@ -238,6 +308,14 @@ def project_workflow_lifecycle_boundary(
             pending_type=pending_type,
             pending_payload=pending_payload,
         )
+        if pending_type == PendingInteractionType.IMPACT_CONFIRMATION:
+            _register_revision_impact_boundary(
+                workspace,
+                update,
+                source_thread_id=lifecycle.active_executions[run_id].thread_id,
+                source_run_id=run_id,
+            )
+            state = load_application_lifecycle(workspace) or state
         return application_lifecycle_payload(state)
     if status == "failed" or node_name == "handle_failure":
         message = str(update.get("error") or update.get("message") or "计划执行失败。")
@@ -290,6 +368,8 @@ def stop_workflow_lifecycle(
         phase=phase,
         status=WorkbenchExecutionStatus.STOPPED,
     )
+    _sync_active_revision_status(workspace, "stopped")
+    state = load_application_lifecycle(workspace) or state
     return application_lifecycle_payload(state)
 
 
@@ -318,6 +398,8 @@ def fail_workflow_lifecycle(
             details={"phase": phase, "type": type(error).__name__},
         ),
     )
+    _sync_active_revision_status(workspace, "failed")
+    state = load_application_lifecycle(workspace) or state
     return application_lifecycle_payload(state)
 
 
@@ -343,6 +425,8 @@ def _pending_interaction(
         "entity_source_binding": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "entity_source_binding_required": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "agent_approval": PendingInteractionType.AGENT_APPROVAL,
+        "revision_draft_confirmation": PendingInteractionType.REVISION_DRAFT_CONFIRMATION,
+        "revision_impact_confirmation": PendingInteractionType.IMPACT_CONFIRMATION,
     }.get(mode, PendingInteractionType.PLAN_ADJUSTMENT)
     return interaction_type, clarification
 
@@ -352,6 +436,71 @@ def clarification_mode(update: dict[str, Any]) -> str:
 
     clarification = update.get("clarification")
     return str(clarification.get("mode") or "") if isinstance(clarification, dict) else ""
+
+
+def _register_revision_impact_boundary(
+    workspace: str,
+    update: dict[str, Any],
+    *,
+    source_thread_id: str,
+    source_run_id: str,
+) -> None:
+    """在主 Workflow SmallTask 升级时登记与 lifecycle revision 绑定的 impact。"""
+
+    raw_impact = update.get("revision_impact")
+    if not isinstance(raw_impact, dict):
+        raise ValueError("revision impact confirmation 缺少结构化影响范围。")
+    lifecycle = load_application_lifecycle(workspace)
+    interaction_id = str(raw_impact.get("interactionId") or "")
+    if (
+        lifecycle is not None
+        and lifecycle.pending_revision_impact is not None
+        and lifecycle.pending_revision_impact.interaction_id == interaction_id
+    ):
+        return
+    raw_target = update.get("change_target")
+    raw_target = (
+        raw_target
+        if isinstance(raw_target, dict) and raw_target
+        else {"type": "application"}
+    )
+    register_revision_impact(
+        workspace,
+        interaction_id=interaction_id,
+        source_thread_id=source_thread_id,
+        source_run_id=source_run_id,
+        request=str(
+            update.get("request")
+            or raw_impact.get("reason")
+            or "SmallTask 正式升级"
+        ),
+        target=RevisionTarget.model_validate(raw_target),
+        impact=RevisionImpact.model_validate(
+            {
+                key: value
+                for key, value in raw_impact.items()
+                if key not in {"interactionId", "status"}
+            }
+        ),
+    )
+
+
+def _sync_active_revision_status(workspace: str, status: str) -> None:
+    """在工作台执行开始、停止或失败时同步现有 formal revision 状态。"""
+
+    lifecycle = load_application_lifecycle(workspace)
+    active = lifecycle.active_formal_revision if lifecycle is not None else None
+    if active is None or active.status == status:
+        return
+    if status not in {"building", "stopped", "failed"}:
+        raise ValueError("不支持的 formal revision 执行状态。")
+    update_active_revision_progress(
+        workspace,
+        change_id=active.change_id,
+        status=status,
+        current_artifact=active.current_artifact,
+        remaining_artifacts=active.remaining_artifacts,
+    )
 
 
 def _acceptance_payload(update: dict[str, Any]) -> dict[str, Any]:

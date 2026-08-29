@@ -554,16 +554,19 @@ async function mergeWorkbenchApiStatus(
   )
 }
 
-/** 判断是否已存在实体数据源绑定，供工作台展示独立实体入口状态。 */
-async function pageDesignDirectoryHasEntries(workspaceRoot: string): Promise<boolean> {
-  try {
-    const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', 'entities'))
-    return entries.length > 0
-  } catch (error: unknown) {
-    const errnoException = error as NodeJS.ErrnoException
-    if (errnoException?.code !== 'ENOENT') throw error
-    return false
+/** 判断页面、Endpoint 或实体详细设计目录是否已有持久化产物；UI Manifest 不计入此状态。 */
+async function hasPersistedDetailDesigns(workspaceRoot: string): Promise<boolean> {
+  for (const directory of ['pages', 'endpoints', 'entities']) {
+    try {
+      const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', directory))
+      if (entries.length > 0) return true
+    } catch (error: unknown) {
+      const errnoException = error as NodeJS.ErrnoException
+      if (errnoException?.code === 'ENOENT') continue
+      throw error
+    }
   }
+  return false
 }
 
 /** 校验当前正式规划产物，并从 ProductPlan/TechnicalPlan 投射工作台大纲。 */
@@ -674,7 +677,8 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   const pagesById = new Map(pages.map((page) => [page.pageId, page]))
   apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
   entities = await mergeWorkbenchEntityStatus(workspaceRoot, entities)
-  const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
+  // 首次目标选择只针对完全没有详细设计记录的工作区；UI Manifest 不会跳过该入口。
+  const hasPageDesigns = await hasPersistedDetailDesigns(workspaceRoot)
 
   return {
     ready: missing.length === 0 && invalid.length === 0,
@@ -689,7 +693,22 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
 }
 
 type EditorMode = 'frontend' | 'backend'
-type WorkbenchPhase = 'product' | 'development' | 'test' | 'review' | 'acceptance'
+type WorkbenchPhase = 'product' | 'planning' | 'development' | 'test' | 'review' | 'acceptance'
+
+type ChatSessionRevisionContext = {
+  kind: 'formal_revision'
+  sessionRole: 'design' | 'development'
+  formalBranch: 'design_stage_revision' | 'workbench_plan_revision'
+  impactInteractionId: string
+  sourceSessionId: string
+  sourceConversationThreadId: string
+  sourceRunId: string
+  planningThreadId: string
+  changeId?: string
+  handoffFromSessionId?: string
+  handoffFromConversationThreadId?: string
+  technicalPlanSha256?: string
+}
 
 type SessionWorkspaceSummary = {
   workspaceRoot: string
@@ -713,6 +732,7 @@ type ChatSessionSummary = {
   entityId?: string
   entityLabel?: string
   pageId?: string
+  revisionContext?: ChatSessionRevisionContext
   createdAt: number
   updatedAt: number
   messageCount: number
@@ -732,6 +752,7 @@ type NormalizedChatSession = {
   entityId?: string
   entityLabel?: string
   pageId?: string
+  revisionContext?: ChatSessionRevisionContext
   createdAt: number
   updatedAt: number
   workspaceRoot: string
@@ -1094,6 +1115,7 @@ function assertEditorMode(value: unknown): EditorMode {
 function assertWorkbenchPhase(value: unknown): WorkbenchPhase {
   if (
     value !== 'product' &&
+    value !== 'planning' &&
     value !== 'development' &&
     value !== 'test' &&
     value !== 'review' &&
@@ -1191,6 +1213,7 @@ function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
     entityId: session.entityId,
     entityLabel: session.entityLabel,
     pageId: session.pageId,
+    revisionContext: session.revisionContext,
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
     messageCount: messages.length
@@ -1218,6 +1241,7 @@ function normalizeSession(session: unknown): NormalizedChatSession {
   const pageId = normalizeSessionPageId(session.pageId) || inferSessionPageId(messages)
   const endpointContext = normalizeSessionEndpointContext(session, messages)
   const entityContext = normalizeSessionEntityContext(session, messages)
+  const revisionContext = normalizeSessionRevisionContext(session.revisionContext)
   return {
     id,
     title: String(session.title || '新对话'),
@@ -1230,6 +1254,7 @@ function normalizeSession(session: unknown): NormalizedChatSession {
     ...(entityContext.entityId ? { entityId: entityContext.entityId } : {}),
     ...(entityContext.entityLabel ? { entityLabel: entityContext.entityLabel } : {}),
     ...(pageId ? { pageId } : {}),
+    ...(revisionContext ? { revisionContext } : {}),
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
     workspaceRoot: typeof session.workspaceRoot === 'string' ? session.workspaceRoot : '',
@@ -1247,6 +1272,59 @@ function normalizeSessionPageId(value: unknown): string | undefined {
 function normalizeSessionEndpointField(value: unknown): string | undefined {
   const text = typeof value === 'string' ? value.trim() : ''
   return text || undefined
+}
+
+/** 规范化二次修改会话的来源、业务 change 与原规划 checkpoint 身份。 */
+function normalizeSessionRevisionContext(value: unknown): ChatSessionRevisionContext | undefined {
+  if (!isJsonRecord(value) || value.kind !== 'formal_revision') return undefined
+  const sessionRole = normalizeSessionEndpointField(value.sessionRole)
+  const formalBranch = normalizeSessionEndpointField(value.formalBranch)
+  const impactInteractionId = normalizeSessionEndpointField(value.impactInteractionId)
+  const sourceSessionId = normalizeSessionEndpointField(value.sourceSessionId)
+  const sourceConversationThreadId = normalizeSessionEndpointField(value.sourceConversationThreadId)
+  const sourceRunId = normalizeSessionEndpointField(value.sourceRunId)
+  const planningThreadId = normalizeSessionEndpointField(value.planningThreadId)
+  const changeId = normalizeSessionEndpointField(value.changeId)
+  const handoffFromSessionId = normalizeSessionEndpointField(value.handoffFromSessionId)
+  const handoffFromConversationThreadId = normalizeSessionEndpointField(
+    value.handoffFromConversationThreadId
+  )
+  const technicalPlanSha256 = normalizeSessionEndpointField(value.technicalPlanSha256)
+  if (
+    !['design', 'development'].includes(sessionRole || '') ||
+    !['design_stage_revision', 'workbench_plan_revision'].includes(formalBranch || '') ||
+    !impactInteractionId ||
+    !sourceSessionId ||
+    !sourceConversationThreadId ||
+    !sourceRunId ||
+    !planningThreadId
+  ) {
+    return undefined
+  }
+  if (
+    sessionRole === 'development' &&
+    (!changeId ||
+      !handoffFromSessionId ||
+      !handoffFromConversationThreadId ||
+      !technicalPlanSha256 ||
+      !/^[0-9a-f]{64}$/.test(technicalPlanSha256))
+  ) {
+    return undefined
+  }
+  return {
+    kind: 'formal_revision',
+    sessionRole: sessionRole as ChatSessionRevisionContext['sessionRole'],
+    formalBranch: formalBranch as ChatSessionRevisionContext['formalBranch'],
+    impactInteractionId,
+    sourceSessionId,
+    sourceConversationThreadId,
+    sourceRunId,
+    planningThreadId,
+    ...(changeId ? { changeId } : {}),
+    ...(handoffFromSessionId ? { handoffFromSessionId } : {}),
+    ...(handoffFromConversationThreadId ? { handoffFromConversationThreadId } : {}),
+    ...(technicalPlanSha256 ? { technicalPlanSha256 } : {})
+  }
 }
 
 /** 从会话字段或旧版 Workflow 快照推断 API endpoint 会话归属。 */

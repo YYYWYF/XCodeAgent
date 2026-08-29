@@ -10,6 +10,12 @@ from app.agents.main.task_preparer_prompt import planning_context_mode
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.artifact_invalidation import (
+    ArtifactInvalidationError,
+    assert_confirmed_artifact_closure,
+    canonical_sha256,
+    stale_artifact_keys,
+)
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.development_readiness import development_readiness
 from app.services.build_task_planner import (
@@ -553,6 +559,17 @@ def _build_prerequisite_errors(
         or technical_plan.get("confirmation_status") != "confirmed"
     ):
         errors.append("TechnicalPlan 缺失、类型不正确或未确认。")
+    errors.extend(
+        _formal_artifact_hash_errors(
+            workspace,
+            {
+                "requirement-spec": requirement_spec,
+                "product-plan": product_plan,
+                "ui-design": ui_designs,
+                "technical-plan": technical_plan,
+            },
+        )
+    )
     if not isinstance(project_plan, dict) or project_plan.get("artifact_type") != "technical-plan":
         errors.append("Build 运行时 project_plan 不是当前 TechnicalPlan 的只读投影。")
     scope = build_execution_scope if isinstance(build_execution_scope, dict) else {}
@@ -587,6 +604,49 @@ def _build_prerequisite_errors(
     else:
         errors.append("缺少 workspace，无法校验模板初始化 manifest。")
     return _dedupe_texts(errors)
+
+
+def _load_json_object(path: Path) -> dict[str, Any]:
+    """严格读取一个正式 JSON 对象，供 Build 前置门禁使用。"""
+
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("正式产物必须是 JSON 对象。")
+    return value
+
+
+def _formal_artifact_hash_errors(
+    workspace: str | None,
+    artifacts: dict[str, dict[str, Any]],
+) -> list[str]:
+    """对采用当前 basedOn 合同的正式产物执行 Build 前直接上游哈希门禁。"""
+
+    if not workspace or not any(artifact.get("basedOn") for artifact in artifacts.values()):
+        return []
+    root = Path(workspace)
+    paths = {
+        "requirement-spec": root / ".xcodeagent/specs/requirement-spec.json",
+        "product-plan": root / ".xcodeagent/plans/product-plan.json",
+        "ui-design": root / ".xcodeagent/specs/ui-designs.json",
+        "technical-plan": root / ".xcodeagent/plans/technical-plan.json",
+    }
+    try:
+        hashes = {
+            artifact_key: canonical_sha256(path)
+            for artifact_key, path in paths.items()
+            if path.is_file()
+        }
+        stale = stale_artifact_keys(
+            {
+                artifact_key: artifact
+                for artifact_key, artifact in artifacts.items()
+                if artifact.get("basedOn")
+            },
+            canonical_hashes=hashes,
+        )
+    except ArtifactInvalidationError as exc:
+        return [str(exc)]
+    return [f"{artifact_key} 的直接上游哈希不匹配，状态必须重新确认。" for artifact_key in stale]
 
 
 def _load_formal_artifacts(

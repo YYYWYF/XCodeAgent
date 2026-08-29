@@ -5,6 +5,11 @@ from typing import Any, AsyncIterator, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.application_revision import (
+    FormalRevisionBranch,
+    StartRevisionRequest,
+)
+from app.domain.application_lifecycle import ApplicationLifecycleStage
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.protocols.application_planning_interrupt import (
     project_application_planning_interrupt,
@@ -15,7 +20,9 @@ from app.protocols.workflow.projection import _workflow_summary, _workflow_visua
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
+    restart_application_planning_lifecycle,
 )
+from app.services.application_revision_lifecycle import submit_revision_impact
 from app.services.requirement_spec import (
     SaveRequirementSpecDraftRequest,
     save_requirement_spec_draft,
@@ -61,6 +68,9 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "incrementalArtifacts": True,
             "existingArtifactsStateField": "design_change_existing_artifacts",
             "resumePrimitive": "langgraph-interrupt-command",
+            "formalRevisionAction": "start_design_revision",
+            "technicalRevisionAction": "start_technical_revision",
+            "clientNodeSelectionAllowed": False,
         },
         "confirmationArtifacts": [
             "requirement_spec",
@@ -131,6 +141,25 @@ def build_application_page_planning_ag_ui_stream(
         **payload,
         "workflowScope": "application_planning",
     }
+    start_design_revision = _start_design_revision_input(normalized_payload)
+    if start_design_revision is not None:
+        try:
+            normalized_payload = _prepare_start_design_revision_payload(
+                normalized_payload,
+                start_design_revision,
+            )
+        except Exception as exc:
+            return _build_start_design_revision_error_stream(
+                payload=normalized_payload,
+                error=exc,
+                action=str(
+                    (normalized_payload.get("forwardedProps") or {}).get(
+                        "workflowAction"
+                    )
+                    or "start_design_revision"
+                ),
+                accept=accept,
+            )
     draft_input = _requirement_spec_draft_input(normalized_payload)
     if draft_input is not None:
         return _build_requirement_spec_draft_ag_ui_stream(
@@ -294,3 +323,120 @@ def _application_planning_recovery_input(
         return None
     value = forwarded_props.get("applicationPlanningRecovery")
     return value if isinstance(value, dict) else None
+
+
+def _start_design_revision_input(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """读取设计或技术规划回退 action 的 revisionRequest，不接受客户端节点字段。"""
+
+    forwarded_props = payload.get("forwardedProps")
+    if not isinstance(forwarded_props, dict):
+        return None
+    action = str(forwarded_props.get("workflowAction") or "").strip()
+    if action not in {"start_design_revision", "start_technical_revision"}:
+        return None
+    for key in ("resumeFrom", "resume_from", "node"):
+        if key in forwarded_props or key in payload:
+            raise ValueError("revision action 不接受客户端节点或 resume_from。")
+    value = forwarded_props.get("revisionRequest")
+    if not isinstance(value, dict):
+        raise ValueError("revision action 必须提供 revisionRequest。")
+    return value
+
+
+def _prepare_start_design_revision_payload(
+    payload: dict[str, Any],
+    raw_request: dict[str, Any],
+) -> dict[str, Any]:
+    """校验 impact 绑定并从 lifecycle 选择原 planning thread 和固定意图入口。"""
+
+    request = StartRevisionRequest.model_validate(raw_request)
+    action = str((payload.get("forwardedProps") or {}).get("workflowAction") or "").strip()
+    expected_branch = (
+        FormalRevisionBranch.DESIGN_STAGE_REVISION
+        if action == "start_design_revision"
+        else FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+    )
+    if request.formal_branch != expected_branch:
+        raise ValueError(f"{action} 与 formal revision branch 不匹配。")
+    forwarded_props = dict(payload.get("forwardedProps") or {})
+    workspace = str(forwarded_props.get("workspaceRoot") or "").strip()
+    if not workspace:
+        application = forwarded_props.get("application")
+        application = application if isinstance(application, dict) else {}
+        workspace = str(application.get("workspaceRoot") or "").strip()
+    lifecycle = load_application_lifecycle(workspace)
+    pending = lifecycle.pending_revision_impact if lifecycle is not None else None
+    if pending is None:
+        raise ValueError("没有可消费的 revision impact confirmation。")
+    if pending.request != request.request:
+        raise ValueError("revisionRequest 不能覆盖 impact 绑定的原始请求。")
+    if pending.target != request.target:
+        raise ValueError("revisionRequest target 与 impact 绑定目标不匹配。")
+    if pending.impact.formal_branch != request.formal_branch:
+        raise ValueError("revisionRequest branch 与 impact 绑定分支不匹配。")
+    active = submit_revision_impact(
+        workspace,
+        interaction_id=request.confirmed_impact.interaction_id,
+        decision="approved",
+    )
+    if active is None:
+        raise ValueError("revision impact 未批准。")
+    next_forwarded = {
+        **forwarded_props,
+        "workflowAction": None,
+        "revisionRequest": None,
+    }
+    if action == "start_technical_revision":
+        # TechnicalPlan 二次修改恢复原 planning checkpoint，由原节点重新调用模型。
+        restart_application_planning_lifecycle(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+        )
+        next_forwarded["resumeState"] = {
+            "state": {
+                "technical_plan": {},
+                "technical_plan_path": "",
+                "technical_plan_json_path": "",
+            }
+        }
+    return {
+        **payload,
+        "threadId": active.planning_thread_id,
+        "request": active.request,
+        "resumeFrom": (
+            "design_intent_analysis"
+            if action == "start_design_revision"
+            else "technical_planning"
+        ),
+        "forwardedProps": next_forwarded,
+    }
+
+
+def _build_start_design_revision_error_stream(
+    *,
+    payload: dict[str, Any],
+    error: Exception,
+    action: str,
+    accept: str | None,
+) -> AsyncIterator[str]:
+    """把可预期的 design handoff 拒绝包装为完整 AG-UI 失败生命周期。"""
+
+    async def operation() -> AgUiActionResult:
+        """在标准 action stream 内重新抛出已校验的业务错误。"""
+
+        raise error
+
+    return build_ag_ui_action_stream(
+        payload=payload,
+        event_name="workflow-run",
+        state_key="workflow",
+        run_id_prefix="start-design-revision",
+        operation=operation,
+        error_message_prefix=(
+            "返回技术规划阶段失败"
+            if action == "start_technical_revision"
+            else "返回设计阶段失败"
+        ),
+        error_data=lambda _exc: {"action": action},
+        accept=accept,
+    )

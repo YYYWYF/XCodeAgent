@@ -5,6 +5,7 @@ import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
   requiresEndpointDetailDesign,
+  requiresInitialDetailDesignSelection,
   sessionDetailTargetKey,
   shouldShowDevelopmentTargetSelector,
   shouldShowEndpointDetailDesignEntry,
@@ -17,7 +18,6 @@ import {
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
-  acceptanceAdjustmentResumeNode,
   planExecutionContextForEndpoint,
   planExecutionContextForPage,
   planExecutionForPage,
@@ -62,6 +62,7 @@ import {
 } from '../src/renderer/src/utils/previewUrl'
 import {
   deriveWorkbenchPhase,
+  isApplicationTemplatePreparationEligible,
   isObjectEditableInPhase,
   workbenchPhaseForNode
 } from '../src/renderer/src/workbenchPhase'
@@ -103,7 +104,7 @@ test('预览 tab 不依赖运行地址状态且始终允许进入', () => {
 
 test('自由对话代码修改完成并启动后直接生成预览目标', () => {
   const target = workflowPreviewTarget(
-    previewWorkflow({ phase: 'conversation', intent: 'workspace_change', status: 'completed' }),
+    previewWorkflow({ phase: 'conversation', intent: 'implementation_fix', status: 'completed' }),
     true
   )
 
@@ -137,14 +138,6 @@ test('实体设计动作生成对应的继续消息', () => {
     '已批准生成目标表结构，请继续。'
   )
   assert.equal(entityDesignActionContinuationMessage(undefined), '')
-})
-
-test('验收调整类型映射到对应的安全恢复节点', () => {
-  assert.equal(acceptanceAdjustmentResumeNode('local_fix'), 'small_task_repair')
-  assert.equal(acceptanceAdjustmentResumeNode('page_design_change'), 'project_planning')
-  assert.equal(acceptanceAdjustmentResumeNode('endpoint_change'), 'project_planning')
-  assert.equal(acceptanceAdjustmentResumeNode('data_source_change'), 'entity_source_binding')
-  assert.equal(acceptanceAdjustmentResumeNode('project_plan_change'), 'project_planning')
 })
 
 test('历史、失败、非启动阶段和缺少地址的 Workflow 不触发预览', () => {
@@ -520,7 +513,7 @@ test('待设计 API 在开始前显示绿色设计入口，已有运行消息后
   )
 })
 
-test('模板就绪后显式进入开发优先显示目标选择器', () => {
+test('模板就绪后没有任何设计时显式进入开发显示目标选择器', () => {
   assert.equal(
     shouldShowDevelopmentTargetSelector({
       developmentEntrySelectionPending: true,
@@ -544,6 +537,24 @@ test('模板就绪后显式进入开发优先显示目标选择器', () => {
       hasActiveDetailWorkflow: false,
       initialDetailDesignSelectionRequired: true,
       isApplicationPlanningPhase: true
+    }),
+    false
+  )
+})
+
+test('已有页面或接口设计时重新进入开发不再显示目标选择器', () => {
+  assert.equal(requiresInitialDetailDesignSelection(false), true)
+  assert.equal(requiresInitialDetailDesignSelection(true), false)
+  assert.equal(
+    shouldShowDevelopmentTargetSelector({
+      developmentEntrySelectionPending: true,
+      developmentPlanningReady: true,
+      detailConfirmationWaitingReview: false,
+      detailProgressVisible: false,
+      freeChatSelected: false,
+      hasActiveDetailWorkflow: false,
+      initialDetailDesignSelectionRequired: false,
+      isApplicationPlanningPhase: false
     }),
     false
   )
@@ -663,6 +674,12 @@ test('未写入永久确认标记的新应用仍可由当前初始化完成状�
   assert.equal(canOpenApplicationWorkbench(application, planLifecycle(pageExecution())), true)
 })
 
+test('应用模板卡只允许首次新建且尚未进入开发时显示', () => {
+  assert.equal(isApplicationTemplatePreparationEligible('new', false), true)
+  assert.equal(isApplicationTemplatePreparationEligible('new', true), false)
+  assert.equal(isApplicationTemplatePreparationEligible('existing-workspace', false), false)
+})
+
 test('最近项目订阅会响应应用索引变化并在清理后停止响应', () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   const eventTarget = new EventTarget()
@@ -716,14 +733,19 @@ test('独立 AG-UI lifecycle 事件只接收完整的业务投影', () => {
   assert.equal(readApplicationLifecycle({ revision: 3 }), undefined)
 })
 
-test('Build 确认门仍属于开发阶段，集成测试、审查和验收分别进入后续阶段', () => {
+test('正式产物收口与 Build 确认门属于开发阶段，后续节点进入各自阶段', () => {
   const lifecycle = planLifecycle({ phase: 'test_phase_confirmation', status: 'running' })
   assert.equal(deriveWorkbenchPhase(lifecycle), 'development')
+  assert.equal(
+    deriveWorkbenchPhase(planLifecycle({ phase: 'application_revision', status: 'awaiting_user' })),
+    'development'
+  )
   assert.equal(
     deriveWorkbenchPhase(planLifecycle({ phase: 'integration_test', status: 'running' })),
     'test'
   )
   assert.equal(workbenchPhaseForNode('integration_test', 'development'), 'test')
+  assert.equal(workbenchPhaseForNode('application_revision', 'product'), 'development')
   assert.equal(workbenchPhaseForNode('acceptance_phase_confirmation', 'test'), 'review')
   assert.equal(workbenchPhaseForNode('acceptance', 'review'), 'acceptance')
 })
@@ -745,6 +767,46 @@ test('UI 完成后仍停留设计阶段，进入后 TechnicalPlan 属于独立�
   assert.equal(workbenchPhaseForNode('technical_planning', 'product'), 'planning')
   assert.equal(isObjectEditableInPhase('project_plan', 'product'), false)
   assert.equal(isObjectEditableInPhase('project_plan', 'planning'), true)
+})
+
+test('设计阶段二次修改批准后在 Graph 回写前仍恢复到独立设计会话阶段', () => {
+  const lifecycle = planLifecycle(pageExecution({ status: 'completed' }))
+  lifecycle.activeFormalRevision = {
+    changeId: 'change-1',
+    formalBranch: 'design_stage_revision',
+    impactInteractionId: 'impact-1',
+    sourceThreadId: 'source-thread',
+    sourceRunId: 'source-run',
+    planningThreadId: 'planning-thread',
+    status: 'design_planning',
+    currentArtifact: 'product-plan'
+  }
+
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'product')
+  lifecycle.activeFormalRevision.currentArtifact = 'technical-plan'
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
+})
+
+test('TechnicalPlan 二次修改只在草稿阶段进入规划，continuation 后回到开发', () => {
+  const lifecycle = planLifecycle(pageExecution({ status: 'completed' }))
+  lifecycle.activeFormalRevision = {
+    changeId: 'change-technical-plan',
+    formalBranch: 'workbench_plan_revision',
+    impactInteractionId: 'impact-technical-plan',
+    sourceThreadId: 'source-thread',
+    sourceRunId: 'source-run',
+    planningThreadId: 'planning-thread',
+    status: 'drafting',
+    currentArtifact: 'technical-plan'
+  }
+
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
+  lifecycle.activeFormalRevision.status = 'awaiting_user'
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
+  lifecycle.activeFormalRevision.status = 'continuation_ready'
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'development')
+  lifecycle.activeFormalRevision.status = 'building'
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'development')
 })
 
 test('测试和审查阶段不允许编辑验收结果，验收编辑权限只在验收阶段开放', () => {

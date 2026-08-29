@@ -2,6 +2,28 @@ import type { ApplicationLifecycle } from './typings'
 
 const DEVELOPMENT_ENTRY_STORAGE_PREFIX = 'xcodeagent:enter-dev-confirmed:'
 const DEVELOPMENT_ENTRY_EVENT = 'xcodeagent:development-entered'
+const WORKBENCH_PHASE_STORAGE_PREFIX = 'xcodeagent:workbench-phase:'
+
+/** 生成指定应用的界面阶段恢复键。 */
+function workbenchPhaseStorageKey(applicationId: string): string {
+  return `${WORKBENCH_PHASE_STORAGE_PREFIX}${applicationId}`
+}
+
+/** 读取用户上次手动选择的工作台阶段，空值表示跟随生命周期。 */
+export function getPersistedWorkbenchPhase(applicationId: string): WorkbenchPhase | null {
+  const value = window.localStorage.getItem(workbenchPhaseStorageKey(applicationId))
+  return isWorkbenchPhase(value) ? value : null
+}
+
+/** 持久化用户手动选择的工作台阶段；传 null 清除覆盖并恢复生命周期推导。 */
+export function setPersistedWorkbenchPhase(
+  applicationId: string,
+  phase: WorkbenchPhase | null
+): void {
+  const key = workbenchPhaseStorageKey(applicationId)
+  if (phase) window.localStorage.setItem(key, phase)
+  else window.localStorage.removeItem(key)
+}
 
 /** 生成应用进入开发阶段的持久化键。 */
 function developmentEntryStorageKey(applicationId: string): string {
@@ -17,6 +39,14 @@ export function hasApplicationEnteredDevelopment(applicationId: string): boolean
 export function markApplicationEnteredDevelopment(applicationId: string): void {
   window.localStorage.setItem(developmentEntryStorageKey(applicationId), '1')
   window.dispatchEvent(new CustomEvent(DEVELOPMENT_ENTRY_EVENT, { detail: { applicationId } }))
+}
+
+/** 判断首次新建应用的模板准备卡是否仍有资格出现。 */
+export function isApplicationTemplatePreparationEligible(
+  applicationSource: 'new' | 'existing-workspace' | undefined,
+  enteredDevelopment: boolean
+): boolean {
+  return applicationSource === 'new' && !enteredDevelopment
 }
 
 /** 监听指定应用进入开发阶段的决定，兼顾当前窗口操作与其他窗口同步。 */
@@ -54,6 +84,18 @@ export type WorkbenchPhase =
   | 'test'
   | 'review'
   | 'acceptance'
+
+/** 判断持久化值是否属于当前支持的工作台阶段。 */
+function isWorkbenchPhase(value: string | null): value is WorkbenchPhase {
+  return (
+    value === 'product' ||
+    value === 'planning' ||
+    value === 'development' ||
+    value === 'test' ||
+    value === 'review' ||
+    value === 'acceptance'
+  )
+}
 
 export type WorkbenchAgentIdentity = {
   key: WorkbenchPhase
@@ -163,6 +205,7 @@ export function isInitialPlanningPhase(lifecycle?: ApplicationLifecycle): boolea
 
 /** 开发阶段的工作流节点 phase（开发前置检查 → 工作区检查 → DAG → Build →单元测试-> 测试确认）。 */
 const DEVELOPMENT_PHASE_NODES = new Set([
+  'application_revision',
   'development_readiness_gate',
   'entity_source_binding',
   'inspect_workspace',
@@ -241,6 +284,22 @@ export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): Workbenc
   // 工作台里 lifecycle 尚未加载时默认研发（工作台本就是研发领地；产品阶段由手动切回触发）。
   if (!lifecycle) return 'development'
 
+  // 影响范围刚批准但原 planning Graph 尚未写回 initialization stage 时，
+  // active formal revision 已是更及时的恢复事实，不能短暂回落到开发阶段。
+  const activeFormalRevision = lifecycle.activeFormalRevision
+  if (
+    activeFormalRevision?.formalBranch === 'design_stage_revision' &&
+    activeFormalRevision.status === 'design_planning'
+  ) {
+    return activeFormalRevision.currentArtifact === 'technical-plan' ? 'planning' : 'product'
+  }
+  if (
+    activeFormalRevision?.formalBranch === 'workbench_plan_revision' &&
+    ['drafting', 'awaiting_user'].includes(activeFormalRevision.status)
+  ) {
+    return 'planning'
+  }
+
   const stage = lifecycle.initialization?.stage
   if (stage && TECHNICAL_PLANNING_STAGES.has(stage)) return 'planning'
   if (
@@ -287,6 +346,7 @@ const INITIALIZATION_STAGE_LABELS: Record<string, string> = {
 
 /** 工作台 execution.phase 的中文节点标签。 */
 const EXECUTION_PHASE_LABELS: Record<string, string> = {
+  application_revision: '确认正式修改产物',
   development_readiness_gate: '检查开发前置',
   entity_source_binding: '实体数据源绑定',
   inspect_workspace: '检查工作区',

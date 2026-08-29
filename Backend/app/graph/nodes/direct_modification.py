@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 from langgraph.config import get_stream_writer
 
 from app.agents.direct_modification import (
+    DirectModificationDecision,
     answer_casual_conversation,
     answer_workspace_question,
     classify_direct_modification_intent,
@@ -12,6 +16,11 @@ from app.agents.direct_modification import (
     invoke_frontend_direct_modification,
     invoke_workspace_direct_modification,
     parse_direct_modification_agent_result,
+)
+from app.agents.change_impact_analyzer import (
+    _analysis_queries,
+    analyze_change_impact,
+    validate_change_impact_analysis,
 )
 from app.agents.tool_activity_stream import ToolActivityCallback
 from app.graph.nodes.common import (
@@ -24,12 +33,24 @@ from app.graph.state import ProjectState
 from app.graph.subgraphs.testing import integration_test
 from app.services.direct_modification import (
     append_direct_conversation_summary,
+    direct_path_matches_owner,
     direct_final_message,
     direct_state_message,
     direct_test_log_paths,
     validated_dynamic_workspace_paths,
     validated_direct_stage_result,
 )
+from app.services.revision_routing import (
+    build_small_task_revision_confirmation,
+    route_from_change_impact,
+)
+from app.domain.change_impact import (
+    AnalysisStatus,
+    ChangeImpactAnalysis,
+    ContractStage,
+)
+from app.services.change_code_scan import sanitize_code_scan_evidence, scan_targeted_code
+from app.services.change_contracts import load_confirmed_contract_corpus
 from app.workspace.code_changes import CapturedWorkspaceChanges, merge_code_change_sets
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
@@ -38,12 +59,25 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
     """识别快速修改归属，并在不安全时转为澄清或正式规划提示。"""
 
     request = str(state.get("request") or "").strip()
-    decision = classify_direct_modification_intent(
-        user_request=request,
-        conversation_summary=str(state.get("direct_modification_summary") or ""),
-        workspace_snapshot=_workspace_snapshot_for_classification(state),
-        on_response_delta=_conversation_text_delta_writer(),
-    )
+    if state.get("direct_modification_handoff_decision") == "rejected":
+        # 用户已经拒绝上一轮写入确认时，不再重新调用任何分析模型。
+        decision = DirectModificationDecision(
+            intent="clarification",
+            owner="unknown",
+            scope="clarification",
+            confidence=1.0,
+            reason="用户已取消本次修改。",
+            clarification_question="本次修改已取消。",
+        )
+    else:
+        decision = classify_direct_modification_intent(
+            user_request=request,
+            conversation_summary=str(state.get("direct_modification_summary") or ""),
+            workspace_snapshot=_workspace_snapshot_for_classification(state),
+            on_response_delta=_conversation_text_delta_writer(),
+        )
+    # 二次修改只消费分类模型返回的路由 JSON；不再额外调用模型生成 Contract Evidence。
+    # 正式分支仍由后续一次性 interaction 和用户确认控制，不能因省略证据而绕过确认门。
     dynamic_workspace_paths = validated_dynamic_workspace_paths(
         workspace=workspace_from_state(state),
         request=request,
@@ -71,6 +105,9 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         "direct_modification_result": {},
         "direct_modification_target_paths": list(decision.target_paths),
         "direct_modification_approved_paths": approved_paths,
+        "change_impact_analysis": {},
+        "change_impact_code_scan_required": False,
+        "change_impact_code_scan": {},
         "backend_handoff": {},
         "integration_repair_enabled": False,
         "unit_test_generation_enabled": False,
@@ -100,26 +137,100 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         return {
             **base,
             "status": "failed",
-            "message": "用户未批准 SmallTask Agent 的升级范围，本次自由对话修改已停止。",
+            "message": "用户已取消本次修改确认，本次工作区不会继续写入。",
             "clarification": {},
         }
-    if decision.intent == "formal_workflow":
-        message = "该需求超出小任务 Agent 的安全边界，需要确认后转入正式工作流。"
+    if decision.intent == "formal_revision":
+        interaction_id = f"impact_{uuid4().hex}"
+        formal_branch = str(decision.formal_branch or "")
+        earliest_artifact = str(decision.earliest_artifact or "")
+        revision_type = str(decision.revision_type or "")
+        affected_artifacts = list(decision.affected_artifact_keys)
+        if earliest_artifact and earliest_artifact not in affected_artifacts:
+            affected_artifacts.insert(0, earliest_artifact)
+        impact = {
+            "interactionId": interaction_id,
+            "formalBranch": formal_branch,
+            "revisionType": revision_type,
+            "earliestArtifact": earliest_artifact,
+            "affectedArtifacts": affected_artifacts,
+            "affectedResources": _revision_affected_resources(
+                state.get("change_target"),
+                list(decision.affected_resource_keys),
+            ),
+            "reason": decision.reason,
+            "evidence": [],
+            "analysisStatus": "completed",
+            "risks": [
+                "所有受影响正式产物必须重新确认后才能进入 Build。",
+                (
+                    "确认后恢复原 planning thread，并重新经过原设计确认门。"
+                    if formal_branch == "design_stage_revision"
+                    else "确认后才创建隔离草稿，当前 canonical 暂不改变。"
+                ),
+            ],
+            "status": "pending",
+        }
+        confirmation_label = (
+            "确认并返回设计阶段"
+            if formal_branch == "design_stage_revision"
+            else "确认并进入规划阶段"
+        )
+        message = "该请求会修改已确认的正式语义，请确认是否进入正式修改流程。"
         return {
             **base,
             "status": "requires_user_input",
             "message": message,
+            "revision_impact": impact,
             "clarification": {
-                "mode": "small_task_workflow_handoff",
+                "mode": "revision_impact_confirmation",
                 "status": "requires_user_input",
                 "message": message,
                 "reason": decision.reason,
                 "workflowIntent": "development_readiness_gate",
                 "questions": [
                     {
-                        "id": "small_task_handoff",
-                        "header": "正式工作流",
-                        "question": "该需求可能涉及较大范围修改、确认过的契约或产品决策，是否进入正式工作流？",
+                        "id": "revision_impact_confirmation",
+                        "header": "正式修改确认",
+                        "question": f"是否{confirmation_label}？",
+                        "type": "yesno",
+                        "allowOther": False,
+                    }
+                ],
+            },
+        }
+    if (
+        decision.intent == "implementation_fix"
+        and decision.owner in {"frontend", "backend", "fullstack"}
+        and str(state.get("direct_modification_handoff_decision") or "").strip().lower()
+        != "approved"
+    ):
+        target_resources = _revision_affected_resources(
+            state.get("change_target"),
+            list(decision.affected_resource_keys),
+        )
+        owner_label = {
+            "frontend": "前端代码",
+            "backend": "后端代码",
+            "fullstack": "前后端代码",
+        }[decision.owner]
+        return {
+            **base,
+            "status": "requires_user_input",
+            "message": f"该请求属于{owner_label}实现修复，请先确认修改范围。",
+            "clarification": {
+                "mode": "implementation_fix_confirmation",
+                "status": "requires_user_input",
+                "message": f"该请求属于不改变已确认产品语义的{owner_label}实现修复。",
+                "reason": decision.reason,
+                "requestedPaths": list(decision.target_paths),
+                "requestedResources": target_resources,
+                "owner": decision.owner,
+                "questions": [
+                    {
+                        "id": "implementation_fix_confirmation",
+                        "header": "实现修改确认",
+                        "question": f"将直接修改{owner_label}并执行后续检查，是否确认继续？",
                         "type": "yesno",
                         "allowOther": False,
                     }
@@ -135,7 +246,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
             "clarification": {},
             "timeline": ["classify_intent"],
         }
-    if decision.intent == "needs_clarification" or decision.owner == "unknown":
+    if decision.intent == "clarification" or decision.owner == "unknown":
         question = decision.clarification_question
         return {
             **base,
@@ -165,7 +276,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
 
 
 def _workspace_snapshot_for_classification(state: ProjectState) -> dict[str, Any]:
-    """读取扫描节点刚生成的完整快照，并附带当前页面或接口目标。"""
+    """读取已有的可选工作区摘要，并附带当前页面或接口目标。"""
 
     snapshot: dict[str, Any] = {}
     snapshot_path = str(state.get("workspace_snapshot_path") or "").strip()
@@ -185,12 +296,428 @@ def _workspace_snapshot_for_classification(state: ProjectState) -> dict[str, Any
     return {**snapshot, "currentTarget": target}
 
 
+def _should_run_change_impact_analysis(
+    request: str,
+    decision: DirectModificationDecision,
+) -> bool:
+    """判断自由对话是否需要契约先行分析，避免分类器误把语义修改当作普通问答。"""
+
+    intent = str(decision.intent or "")
+    if intent in {"implementation_fix", "formal_revision", "clarification"}:
+        return True
+    if intent not in {"casual_chat", "workspace_question"}:
+        return True
+    text = str(request or "").casefold()
+    mutation_markers = (
+        "删除", "移除", "去掉", "下线", "新增", "添加", "增加", "迁移", "搬到",
+        "修改", "改成", "调整", "替换", "重构", "修复", "修一下", "fix", "remove",
+        "delete", "add", "change", "modify", "refactor", "update",
+    )
+    if not any(marker in text for marker in mutation_markers):
+        return False
+    # 明确的普通工作区文件修改已有精确路径边界；它不需要用产品契约阻断。
+    if decision.owner == "workspace" and decision.target_paths:
+        return False
+    return True
+
+
+def _run_change_impact_analyzer(
+    state: ProjectState,
+    request: str,
+) -> ChangeImpactAnalysis:
+    """在任何代码写入前读取已确认 JSON 并执行窄职责影响分析。"""
+
+    workspace = workspace_from_state(state)
+    target = state.get("change_target")
+    target = target if isinstance(target, dict) else None
+    if not workspace:
+        # 没有显式工作区时不能凭模型猜测契约，统一返回安全 unknown。
+        from app.agents.change_impact_analyzer import _insufficient_analysis
+
+        return _insufficient_analysis("没有显式 workspaceRoot，无法读取已确认 JSON 契约。")
+    return analyze_change_impact(
+        request,
+        workspace,
+        target=target,
+        allow_code_scan=False,
+    )
+
+
+def _decision_from_impact_analysis(
+    decision: Any,
+    analysis: ChangeImpactAnalysis,
+    *,
+    request: str,
+    workspace: str | None = None,
+) -> Any:
+    """把 Analyzer 的事实结果转换为本节点可用的局部执行候选。"""
+
+    try:
+        routing = route_from_change_impact(
+            analysis,
+            user_request=request,
+            workspace=workspace,
+            owner=str(getattr(decision, "owner", "unknown") or "unknown"),
+            # 契约阶段只负责证明 preserves；先取得只读 code.scan 证据，
+            # 不把“待扫描”误降级成澄清，也不因此获得代码写权限。
+            allow_pending_code_scan=True,
+        )
+    except Exception:  # noqa: BLE001 - 证据失败不能阻断已明确的正式修订判定
+        if _is_complete_formal_revision(decision):
+            # 正式修订本身仍需用户确认；Analyzer 只负责补充 JSON 证据，不能把
+            # “新增页面”等没有既有事实可引用的明确语义改写成普通澄清。
+            return decision
+        return replace(
+            decision,
+            intent="clarification",
+            owner="unknown",
+            scope="clarification",
+            confidence=0.0,
+            reason="契约影响证据无法在当前 JSON 中复核。",
+            clarification_question="请重新描述具体业务对象、页面或接口及期望行为。",
+        )
+    candidate = routing.candidate
+    if candidate.route.value == "clarification":
+        if _is_complete_formal_revision(decision):
+            # 新增页面/模块等请求可能没有对应的既有 JSON 条目。此时保留模型
+            # 已明确的 formal branch，影响卡会标记证据不足，但仍要求用户确认。
+            return decision
+        return replace(
+            decision,
+            intent="clarification",
+            owner="unknown",
+            scope="clarification",
+            confidence=min(float(getattr(decision, "confidence", 0.0) or 0.0), 0.69),
+            reason="当前已确认 JSON 契约不足，不能安全判断这是契约修改还是实现问题。",
+            clarification_question="请补充要修改的业务对象、页面或接口，以及期望保持不变的行为。",
+        )
+    if candidate.route.value == "formal_revision":
+        evidence = list(analysis.invalidated_contracts)
+        earliest = analysis.earliest_affected_contract_stage
+        # Router 已经依据最早失效产物展开了确定性的下游闭包；这里不能再只
+        # 取直接 evidence，否则影响卡会漏掉 UiDesign/TechnicalPlan 等必然需要
+        # 重新确认的后继产物。资源同样优先使用 Router 的归一化结果，避免把
+        # 影响卡重新退化为 Analyzer 的局部命中列表。
+        artifact_keys = list(
+            dict.fromkeys(
+                candidate.affected_artifact_keys
+                or (item.artifact_key for item in evidence)
+            )
+        )
+        resource_keys = list(
+            dict.fromkeys(
+                candidate.affected_resource_keys
+                or _resource_keys_from_evidence(evidence)
+            )
+        )
+        return replace(
+            decision,
+            intent="formal_revision",
+            owner="none",
+            scope="formal_revision",
+            reason=(analysis.request_summary or request)[:2_048],
+            formal_branch=candidate.formal_branch.value if candidate.formal_branch else None,
+            revision_type=candidate.revision_type.value if candidate.revision_type else None,
+            earliest_artifact=candidate.earliest_artifact.value if candidate.earliest_artifact else (
+                _artifact_for_stage(evidence, earliest) if earliest else None
+            ),
+            affected_artifact_keys=tuple(artifact_keys),
+            affected_resource_keys=tuple(resource_keys),
+        )
+    if candidate.owner not in {"frontend", "backend", "fullstack", "workspace"} or (
+        candidate.owner == "workspace" and not getattr(decision, "target_paths", ())
+    ):
+        # Analyzer 只证明契约保持，并不替分类器猜测实现归属；没有安全 owner
+        # 时必须停在澄清，不得让 graph 以 implementation_fix 继续写入。
+        return replace(
+            decision,
+            intent="clarification",
+            owner="unknown",
+            scope="clarification",
+            confidence=min(float(getattr(decision, "confidence", 0.0) or 0.0), 0.69),
+            reason="契约保持，但无法安全确定实现修改归属。",
+            clarification_question="请补充具体的前端页面、后端接口或源码位置。",
+        )
+    # 没有失效事实时保留原 owner；后续节点才可以取得目标导向代码证据。
+    return replace(
+        decision,
+        intent="implementation_fix",
+        scope="direct",
+        reason=(analysis.request_summary or getattr(decision, "reason", ""))[:2_048],
+    )
+
+
+def _is_complete_formal_revision(decision: Any) -> bool:
+    """判断初始分类是否已提供足够正式修订字段，允许保留影响确认门。"""
+
+    return bool(
+        getattr(decision, "intent", "") == "formal_revision"
+        and getattr(decision, "formal_branch", None)
+        and getattr(decision, "revision_type", None)
+        and getattr(decision, "earliest_artifact", None)
+        and float(getattr(decision, "confidence", 0.0) or 0.0) >= 0.70
+    )
+
+
+def _artifact_for_stage(evidence: list[Any], stage: ContractStage) -> str:
+    """从最早层证据映射现有正式产物名称。"""
+
+    preferred = {
+        "requirement-spec",
+        "product-plan",
+        "ui-design",
+        "technical-plan",
+    }
+    for item in evidence:
+        if getattr(item, "contract_stage", None) == stage and getattr(item, "artifact_key", "") in preferred:
+            return str(item.artifact_key)
+    return "requirement-spec" if stage == ContractStage.REQUIREMENT_DESIGN else "technical-plan"
+
+
+def _resource_keys_from_evidence(evidence: list[Any]) -> list[str]:
+    """从 JSON 事实选择器提取页面、操作和接口资源键。"""
+
+    result: list[str] = []
+    for item in evidence:
+        selector = getattr(item, "selector", {})
+        if not isinstance(selector, dict):
+            continue
+        for key, prefix in (
+            ("pageId", "page"),
+            ("page_id", "page"),
+            ("actionId", "action"),
+            ("action_id", "action"),
+            ("endpointId", "endpoint"),
+            ("endpoint_id", "endpoint"),
+            ("entityId", "entity"),
+            ("entity_id", "entity"),
+        ):
+            value = str(selector.get(key) or "").strip()
+            if value:
+                candidate = f"{prefix}:{value}"
+                if candidate not in result:
+                    result.append(candidate)
+    return result
+
+
+def scan_change_impact_code(state: ProjectState) -> dict[str, Any]:
+    """在契约 preserves 后执行一次限定代码扫描，并把原始发现写入状态。"""
+
+    if state.get("change_impact_code_scan_required") is not True:
+        return {
+            "phase": "change_impact_code_scan",
+            "status": "requires_user_input",
+            "message": "当前运行尚未通过契约 preserves 闸门，禁止执行代码扫描。",
+            "change_impact_code_scan_required": False,
+            "clarification": {
+                "mode": "change_impact_insufficient_evidence",
+                "status": "requires_user_input",
+                "message": "当前运行尚未通过契约 preserves 闸门，暂不扫描或修改代码。",
+                "questions": [],
+            },
+            "timeline": ["change_impact_code_scan"],
+        }
+    raw_analysis = state.get("change_impact_analysis")
+    if not isinstance(raw_analysis, dict):
+        return {
+            "phase": "change_impact_code_scan",
+            "status": "failed",
+            "message": "缺少契约影响分析，禁止执行代码扫描。",
+            "change_impact_code_scan_required": False,
+            "timeline": ["change_impact_code_scan"],
+        }
+    try:
+        analysis = ChangeImpactAnalysis.model_validate(raw_analysis)
+    except Exception:
+        return {
+            "phase": "change_impact_code_scan",
+            "status": "requires_user_input",
+            "message": "契约影响分析无法复核，暂不修改代码。",
+            "clarification": {
+                "mode": "change_impact_insufficient_evidence",
+                "status": "requires_user_input",
+                "message": "当前证据不足以证明这是实现问题，请补充具体页面、接口和预期行为。",
+                "questions": [
+                    {
+                        "id": "change_impact_insufficient_evidence",
+                        "header": "补充实现证据",
+                        "question": "请补充具体页面、接口、操作和预期行为。",
+                        "type": "text",
+                    }
+                ],
+            },
+            "change_impact_code_scan_required": False,
+            "timeline": ["change_impact_code_scan"],
+        }
+    if analysis.earliest_affected_contract_stage is not None or any(
+        change.contract_impact != "preserves" for change in analysis.atomic_changes
+    ):
+        return {
+            "phase": "change_impact_code_scan",
+            "status": "failed",
+            "message": "已发现契约失效或未知事实，禁止继续扫描代码。",
+            "change_impact_code_scan_required": False,
+            "timeline": ["change_impact_code_scan"],
+        }
+    workspace = workspace_from_state(state)
+    if not workspace:
+        return {
+            "phase": "change_impact_code_scan",
+            "status": "requires_user_input",
+            "message": "没有显式 workspaceRoot，无法取得实现证据。",
+            "change_impact_code_scan_required": False,
+            "clarification": {
+                "mode": "change_impact_insufficient_evidence",
+                "status": "requires_user_input",
+                "message": "请提供当前工程工作区后再判断实现问题。",
+                "questions": [],
+            },
+            "timeline": ["change_impact_code_scan"],
+        }
+    target = state.get("change_target")
+    target = target if isinstance(target, dict) else None
+    request = str(state.get("request") or "")
+    try:
+        # 代码扫描节点不能信任 checkpoint 里保存的旧分析：重新读取当前确认
+        # JSON、重新建立 bounded candidates，并复核正文/阶段/selector/hash，
+        # 防止伪造 state 或文件在两节点之间变化后绕过契约门。
+        corpus = load_confirmed_contract_corpus(workspace)
+        candidate_facts = corpus.search(
+            _analysis_queries(request, target=target),
+            top_k=80,
+        )
+        if not candidate_facts:
+            raise ValueError("当前 JSON 中没有与请求相关的候选事实。")
+        if (
+            corpus.relevant_unavailable_artifacts(request, target=target)
+            or corpus.relevant_skipped_artifacts(request, target=target)
+        ):
+            raise ValueError("相关已确认 JSON 产物缺失，覆盖不完整。")
+        validate_change_impact_analysis(
+            analysis,
+            corpus=corpus,
+            candidate_facts=candidate_facts,
+        )
+        if analysis.analysis_status != AnalysisStatus.COMPLETED:
+            raise ValueError("契约分析尚未完成。")
+        if any(
+            change.code_scan.performed or change.code_scan.findings
+            for change in analysis.atomic_changes
+        ):
+            # contract-only Analyzer 的 codeScan 必须为空；已有扫描结果来自
+            # 不可信恢复态时丢弃并重新扫描，而不是直接交给写 Agent。
+            raise ValueError("恢复态携带了未经本节点执行的 code.scan 结果。")
+    except Exception:  # noqa: BLE001 - 任何复核失败都只能停在澄清
+        return {
+            "phase": "change_impact_code_scan",
+            "status": "requires_user_input",
+            "message": "当前契约证据无法在最新已确认 JSON 中复核，暂不写入代码。",
+            "clarification": {
+                "mode": "change_impact_insufficient_evidence",
+                "status": "requires_user_input",
+                "message": "当前证据不足以证明这是实现问题，请刷新已确认 JSON 或补充具体页面、接口和预期行为。",
+                "questions": [
+                    {
+                        "id": "change_impact_insufficient_evidence",
+                        "header": "补充实现证据",
+                        "question": "请补充具体页面、接口、操作和预期行为。",
+                        "type": "text",
+                    }
+                ],
+            },
+            "change_impact_code_scan_required": False,
+            "timeline": ["change_impact_code_scan"],
+        }
+    scan = sanitize_code_scan_evidence(
+        scan_targeted_code(
+            workspace=workspace,
+            request=request,
+            candidate_paths=state.get("direct_modification_target_paths", []),
+            target=target,
+            max_results=20,
+        ),
+        workspace=workspace,
+        max_results=20,
+        require_exists=True,
+    )
+    scan_json = scan.model_dump(mode="json", by_alias=True)
+    changes = [
+        item.model_copy(update={"code_scan": scan}).model_dump(mode="json", by_alias=True)
+        for item in analysis.atomic_changes
+    ]
+    # 直接更新 JSON，避免把模型对象重新构造成不同的 schema 形状。
+    updated_analysis = {**raw_analysis, "atomicChanges": changes}
+    if not scan.findings:
+        return {
+            "phase": "change_impact_code_scan",
+            "status": "requires_user_input",
+            "message": "契约保持，但没有取得足够的实现层代码证据，暂不写入代码。",
+            "change_impact_analysis": updated_analysis,
+            "change_impact_code_scan": scan_json,
+            "change_impact_code_scan_required": False,
+            "clarification": {
+                "mode": "change_impact_insufficient_evidence",
+                "status": "requires_user_input",
+                "message": "没有找到能证明实现问题的源码位置，请补充具体文件、组件或接口。",
+                "questions": [
+                    {
+                        "id": "change_impact_insufficient_evidence",
+                        "header": "补充实现证据",
+                        "question": "请补充具体文件、组件或接口位置，以及期望行为。",
+                        "type": "text",
+                    }
+                ],
+            },
+            "timeline": ["change_impact_code_scan"],
+        }
+    return {
+        "phase": "change_impact_code_scan",
+        "status": "in_progress",
+        "message": "契约事实保持，已取得目标代码实现证据。",
+        "change_impact_analysis": updated_analysis,
+        "change_impact_code_scan": scan_json,
+        "change_impact_code_scan_required": False,
+        "clarification": {},
+        "timeline": ["change_impact_code_scan"],
+    }
+
+
 def _direct_source_candidates(
     state: ProjectState,
     *,
     owner: str,
 ) -> list[str]:
-    """从前置扫描快照提取源码候选，让执行 Agent 优先读取业务代码。"""
+    """从代码证据和扫描快照提取源码候选，让执行 Agent 优先读取业务代码。"""
+
+    candidates: list[str] = []
+
+    # ChangeImpactAnalyzer 的 code.scan 已经给出局部定位时优先使用它；
+    # 重新校验路径和 owner，避免把模型或扫描器返回的越界路径直接交给写 Agent。
+    scan = state.get("change_impact_code_scan")
+    findings = scan.get("findings") if isinstance(scan, dict) else []
+    workspace = workspace_from_state(state)
+    if isinstance(findings, list):
+        root = Path(workspace).expanduser().resolve() if workspace else None
+        for item in findings:
+            if not isinstance(item, dict):
+                continue
+            raw_path = str(item.get("path") or "").strip().replace("\\", "/").lstrip("/")
+            if (
+                not raw_path
+                or _is_generated_or_dependency_path(raw_path)
+                or not direct_path_matches_owner(raw_path, owner)
+                or root is None
+            ):
+                continue
+            candidate = (root / raw_path).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                continue
+            if candidate.is_file() and raw_path not in candidates:
+                candidates.append(raw_path)
+            if len(candidates) >= 100:
+                return candidates
 
     snapshot = _workspace_snapshot_for_classification(state)
     section = snapshot.get("frontend" if owner == "frontend" else "backend")
@@ -200,7 +727,6 @@ def _direct_source_candidates(
         if owner == "frontend"
         else ("api_routes", "models")
     )
-    candidates: list[str] = []
     for key in keys:
         values = section.get(key)
         if not isinstance(values, list):
@@ -241,6 +767,24 @@ def _classification_message(intent: str, owner: str) -> str:
     if intent == "workspace_question":
         return "已识别为只读工作区问答。"
     return f"已识别为 {owner} 局部工作区修改。"
+
+
+def _revision_affected_resources(target: Any, resources: list[str]) -> list[str]:
+    """把当前会话目标确定性补入影响资源，避免模型遗漏 page 或 endpoint。"""
+
+    result = list(dict.fromkeys(resources))
+    if not isinstance(target, dict):
+        return result
+    target_type = str(target.get("type") or "")
+    target_id = ""
+    if target_type == "page":
+        target_id = str(target.get("pageId") or "").strip()
+    elif target_type == "endpoint":
+        target_id = str(target.get("endpointId") or "").strip()
+    key = f"{target_type}:{target_id}" if target_type and target_id else ""
+    if key and key not in result:
+        result.insert(0, key)
+    return result
 
 
 def respond_to_casual_conversation(state: ProjectState) -> dict[str, Any]:
@@ -482,16 +1026,18 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
 
     current_status = str(state.get("status") or "failed")
     launch_result = state.get("launch_result") if isinstance(state.get("launch_result"), dict) else {}
-    conversation_intent = str(state.get("conversation_intent") or "workspace_change")
+    conversation_intent = str(state.get("conversation_intent") or "implementation_fix")
     is_answer = conversation_intent in {"casual_chat", "workspace_question"}
+    is_cancelled = (
+        str(state.get("direct_modification_handoff_decision") or "").strip().lower()
+        == "rejected"
+    )
     if is_answer and current_status == "completed":
         status = "completed"
     elif launch_result and launch_result.get("status") != "failed":
         status = "completed"
     elif current_status == "requires_user_input":
         status = "requires_user_input"
-    elif current_status == "requires_planning":
-        status = "requires_planning"
     elif current_status == "failed" or launch_result.get("status") == "failed":
         status = "failed"
     else:
@@ -508,7 +1054,7 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
     ]
     message = (
         str(state.get("conversation_response") or direct_state_message(state)).strip()
-        if is_answer
+        if is_answer or is_cancelled
         else direct_final_message(
             status=status,
             current_message=direct_state_message(state),
@@ -528,7 +1074,7 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         "status": status,
         "intent": conversation_intent,
         "owner": state.get("direct_modification_owner", "unknown"),
-        "scope": state.get("direct_modification_scope", "needs_clarification"),
+        "scope": state.get("direct_modification_scope", "clarification"),
         "summary": message,
         "stageResults": stage_results,
         "codeChanges": code_changes or {},
@@ -545,6 +1091,8 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         "repairTaskPlan": state.get("repair_task_plan", {}),
         "repairTasks": state.get("repair_tasks", []),
         "smallTaskResults": state.get("small_task_results", []),
+        "changeImpactAnalysis": state.get("change_impact_analysis", {}),
+        "changeImpactCodeScan": state.get("change_impact_code_scan", {}),
     }
     return {
         "phase": "conversation",
@@ -611,17 +1159,20 @@ def _stage_update(
         "direct_code_change_sets": change_sets,
         "code_changes": code_change_set or state.get("code_changes", {}),
         **({"code_graph_index": code_graph_index} if code_graph_index else {}),
-        "clarification": (
-            _direct_small_task_handoff(stage_result)
+        **(
+            _direct_small_task_handoff(state, stage_result)
             if escalated
-            else {}
+            else {"clarification": {}}
         ),
         "timeline": [phase],
     }
 
 
-def _direct_small_task_handoff(stage_result: dict[str, Any]) -> dict[str, Any]:
-    """把自由对话 SmallTask Agent 的升级结果转换为确认卡。"""
+def _direct_small_task_handoff(
+    state: ProjectState,
+    stage_result: dict[str, Any],
+) -> dict[str, Any]:
+    """范围扩展保留确认卡；正式升级重新路由并生成统一只读影响确认。"""
 
     escalation = stage_result.get("escalation")
     escalation = escalation if isinstance(escalation, dict) else {}
@@ -631,28 +1182,30 @@ def _direct_small_task_handoff(stage_result: dict[str, Any]) -> dict[str, Any]:
         or stage_result.get("summary")
         or "该修改需要正式工作流。"
     )[:2_000]
-    return {
-        "mode": "small_task_scope_confirmation"
-        if stage_result.get("status") == "requires_user_confirmation"
-        else "small_task_workflow_handoff",
+    if stage_result.get("status") == "requires_workflow":
+        return build_small_task_revision_confirmation(
+            state=state,
+            escalation=escalation,
+            reason=reason,
+        )
+    clarification = {
+        "mode": "small_task_scope_confirmation",
         "status": "requires_user_input",
         "message": "自由对话修改需要确认后才能继续。",
         "reason": reason,
-        "workflowIntent": target,
         "requestedPaths": escalation.get("requestedPaths", []),
         "requestedResources": escalation.get("requestedResources", []),
         "questions": [
             {
                 "id": "small_task_handoff",
                 "header": "修改升级确认",
-                "question": (
-                    f"该修改需要转入 {target} 节点处理。原因：{reason} 是否确认？"
-                ),
+                "question": f"该修改需要扩大代码范围。原因：{reason} 是否确认？",
                 "type": "yesno",
                 "allowOther": False,
             }
         ],
     }
+    return {"clarification": clarification}
 
 
 def _direct_result_from_capture(captured: CapturedWorkspaceChanges) -> dict[str, Any]:

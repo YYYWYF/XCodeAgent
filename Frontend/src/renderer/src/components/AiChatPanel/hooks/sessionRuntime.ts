@@ -1,5 +1,8 @@
 import type { EditorMode } from '../../../typings'
-import type { ChatSessionSummary } from '../../../service/chatSessions'
+import type {
+  ChatSessionRevisionContext,
+  ChatSessionSummary
+} from '../../../service/chatSessions'
 
 export type SessionIdentity = {
   key: string
@@ -11,6 +14,7 @@ export type SessionIdentity = {
   entityId?: string
   entityLabel?: string
   pageId?: string
+  revisionContext?: ChatSessionRevisionContext
   editorMode: EditorMode
   workspaceRoot: string
 }
@@ -49,6 +53,7 @@ export function createSessionIdentity(input: {
   entityId?: string
   entityLabel?: string
   pageId?: string
+  revisionContext?: ChatSessionRevisionContext
 }): SessionIdentity {
   return {
     ...input,
@@ -76,7 +81,8 @@ export function sessionIdentityFromSummary(
     endpointLabel: summary.endpointLabel,
     entityId: summary.entityId,
     entityLabel: summary.entityLabel,
-    pageId: summary.pageId
+    pageId: summary.pageId,
+    revisionContext: summary.revisionContext
   })
 }
 

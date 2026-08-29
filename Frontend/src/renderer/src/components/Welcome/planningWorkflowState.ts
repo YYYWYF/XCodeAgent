@@ -254,7 +254,19 @@ export function planningWorkflowNeedsChatLoading(
   if (hasWorkflowCard || planningWorkflowSettlesLoading(workflow)) return false
   if (loadingPlaceholder) return true
   if (!designPhasePlanning) return false
-  if (workflow?.summary.status === 'running') return !content.trim()
+  // 二次修改 TechnicalPlan 确认后的主 Workflow 已进入开发前置门禁，
+  // 即使当前界面仍在 planning 会话，也不能再显示规划恢复 loading。
+  const phase = planningWorkflowPhase(workflow)
+  const planningPhases = new Set([
+    'requirements',
+    'product_planning',
+    'ui_confirmation',
+    'planning_stage_entry',
+    'technical_planning'
+  ])
+  if (workflow?.summary.status === 'running') {
+    return planningPhases.has(phase) && !content.trim()
+  }
   // 规划快照尚未到达的窗口期：仅对当前正在推进的最后一条 assistant 消息生效。
   // 该窗口内无 workflow 的消息只可能来自规划流式 token（中间态输出），不能以纯文本裸露；
   // 历史遗留的无 workflow 消息（后面已有后续消息）不受影响，仍正常展示原文。

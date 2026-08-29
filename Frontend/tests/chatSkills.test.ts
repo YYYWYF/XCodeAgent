@@ -16,6 +16,7 @@ import {
   readProjectPlanUpdate,
   readWorkspaceInspectionSnapshot
 } from '../src/renderer/src/service/agUiAgent'
+import { revisionContinuationFromWorkflow } from '../src/renderer/src/service/applicationPagePlanning'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
 import ApplicationPlanningQuestionPanel from '../src/renderer/src/components/Welcome/ApplicationPlanningQuestionPanel'
 import { ToolCallChain } from '../src/renderer/src/components/AiChatPanel/components/ToolCallCard'
@@ -36,7 +37,10 @@ import {
   workflowMessageContentForDisplay
 } from '../src/renderer/src/service/processStepHistory'
 import { normalizePersistentSessionMessage } from '../src/main/sessionMessageNormalization'
-import { normalizeMessageSkills } from '../src/renderer/src/service/chatSessions'
+import {
+  normalizeMessageSkills,
+  normalizeRevisionSessionContext
+} from '../src/renderer/src/service/chatSessions'
 import {
   chatCopy,
   DEFAULT_DIFF_PANEL_WIDTH
@@ -74,6 +78,40 @@ test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   })
 
   assert.deepEqual(scope, { type: 'page', targetId: 'pet_list_page' })
+})
+
+test('design TechnicalPlan 完成后只读取完整的一次性 continuation 合同', () => {
+  const continuation = revisionContinuationFromWorkflow({
+    runId: 'planning-run',
+    threadId: 'planning-thread',
+    summary: {
+      revisionContinuation: {
+        changeId: 'chg-1',
+        formalBranch: 'design_stage_revision',
+        action: 'continue_revision_build',
+        token: 't'.repeat(48),
+        technicalPlanSha256: 'a'.repeat(64)
+      }
+    },
+    events: []
+  })
+  const invalid = revisionContinuationFromWorkflow({
+    runId: 'planning-run',
+    threadId: 'planning-thread',
+    summary: {
+      revisionContinuation: {
+        changeId: 'chg-1',
+        formalBranch: 'design_stage_revision',
+        action: 'continue_revision_build',
+        token: 'inspect_workspace',
+        technicalPlanSha256: 'a'.repeat(64)
+      }
+    },
+    events: []
+  })
+
+  assert.equal(continuation?.changeId, 'chg-1')
+  assert.equal(invalid, undefined)
 })
 
 const skillCatalog: UserSkillCatalog = {
@@ -123,7 +161,7 @@ test('简单模式等待补充时直接展示问题并隐藏步骤标题和图�
     summary: {
       status: 'requires_user_input',
       phase: 'conversation',
-      intent: 'needs_clarification',
+      intent: 'clarification',
       owner: 'unknown',
       message: '请说明要修改哪个页面或接口，以及期望结果。'
     },
@@ -157,14 +195,14 @@ test('简单模式等待补充时直接展示问题并隐藏步骤标题和图�
   assert.doesNotMatch(markup, /process-step-icon/)
 })
 
-test('简单模式 requires_planning 不显示为等待补充', () => {
+test('简单模式 formal revision 影响确认显示为等待输入', () => {
   const workflow = {
     runId: 'direct-planning-run',
     threadId: 'direct-thread',
     summary: {
-      status: 'requires_planning',
+      status: 'requires_user_input',
       phase: 'conversation',
-      intent: 'formal_workflow',
+      intent: 'formal_revision',
       owner: 'unknown'
     },
     events: []
@@ -187,9 +225,9 @@ test('简单模式 requires_planning 不显示为等待补充', () => {
     })
   )
 
-  assert.equal(waitingForInput, false)
-  assert.match(markup, /Agent 执行完成/)
-  assert.doesNotMatch(markup, /Agent 等待补充|请补充输入/)
+  assert.equal(waitingForInput, true)
+  assert.match(markup, /Agent 等待补充/)
+  assert.match(markup, /请补充输入/)
 })
 
 test('简单模式等待补充后仍复用独立端点', () => {
@@ -199,7 +237,7 @@ test('简单模式等待补充后仍复用独立端点', () => {
     summary: {
       status: 'requires_user_input',
       phase: 'conversation',
-      intent: 'needs_clarification',
+      intent: 'clarification',
       owner: 'unknown'
     },
     events: []
@@ -319,7 +357,7 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
       summary: {
         status: 'completed',
         phase: 'conversation',
-        intent: 'workspace_change',
+        intent: 'implementation_fix',
         message: '快速修改完成',
         owner: 'frontend'
       },
@@ -390,7 +428,7 @@ test('自由对话运行时展示实时步骤与工具活动', () => {
   const workflow = {
     runId: 'direct-run',
     threadId: 'direct-thread',
-    summary: { status: 'in_progress', phase: 'conversation', intent: 'workspace_change' },
+    summary: { status: 'in_progress', phase: 'conversation', intent: 'implementation_fix' },
     events: []
   }
   const steps = [
@@ -485,7 +523,7 @@ test('自由对话保留全部过程步骤，正式 Workflow 仍保留稳定步�
   const directWorkflow = {
     runId: 'direct-run',
     threadId: 'direct-thread',
-    summary: { status: 'completed', phase: 'conversation', intent: 'workspace_change' },
+    summary: { status: 'completed', phase: 'conversation', intent: 'implementation_fix' },
     events: []
   }
   const mainWorkflow = {
@@ -509,17 +547,17 @@ test('自由对话保留全部过程步骤，正式 Workflow 仍保留稳定步�
   )
 })
 
-test('简单模式转正式工作流前确认卡可提交并保留原始问题', () => {
+test('简单模式正式升级使用统一影响确认并保留原始问题', () => {
   const workflow = {
     runId: 'direct-handoff-run',
     threadId: 'direct-thread',
     summary: {
       status: 'requires_user_input',
       phase: 'conversation',
-      intent: 'formal_workflow',
+      intent: 'formal_revision',
       request: '创建一个订单管理系统',
       clarification: {
-        mode: 'small_task_workflow_handoff',
+        mode: 'revision_impact_confirmation',
         status: 'requires_user_input'
       }
     },
@@ -2161,6 +2199,105 @@ test('会话恢复只保留有效技能名称与描述字段', () => {
       { name: '', description: 'invalid' }
     ]),
     [{ name: 'alpha', description: 'first' }]
+  )
+})
+
+test('会话恢复保留有效的二次修改交接回执并拒绝残缺回执', () => {
+  const normalized = normalizePersistentSessionMessage({
+    id: 1,
+    role: 'assistant',
+    content: '',
+    createdAt: 1,
+    revisionHandoff: {
+      kind: 'formal_revision',
+      formalBranch: 'workbench_plan_revision',
+      targetSessionId: 'revision-session',
+      targetConversationThreadId: 'revision-thread',
+      impactInteractionId: 'impact-1',
+      request: '把订单页改成双列布局',
+      unsafe: 'ignored'
+    }
+  })
+  const malformed = normalizePersistentSessionMessage({
+    id: 2,
+    role: 'assistant',
+    content: '',
+    createdAt: 2,
+    revisionHandoff: {
+      kind: 'formal_revision',
+      formalBranch: 'workbench_plan_revision',
+      targetSessionId: 'revision-session'
+    }
+  })
+
+  assert.deepEqual(normalized.revisionHandoff, {
+    kind: 'formal_revision',
+    formalBranch: 'workbench_plan_revision',
+    targetSessionId: 'revision-session',
+    targetConversationThreadId: 'revision-thread',
+    impactInteractionId: 'impact-1',
+    request: '把订单页改成双列布局'
+  })
+  assert.equal('revisionHandoff' in malformed, false)
+
+  const development = normalizePersistentSessionMessage({
+    id: 3,
+    role: 'assistant',
+    content: '',
+    createdAt: 3,
+    revisionHandoff: {
+      kind: 'revision_development',
+      formalBranch: 'design_stage_revision',
+      targetSessionId: 'development-session',
+      targetConversationThreadId: 'development-thread',
+      impactInteractionId: 'impact-1',
+      changeId: 'change-1',
+      request: '新增报表页'
+    }
+  })
+  assert.equal(
+    (development.revisionHandoff as Record<string, unknown>).changeId,
+    'change-1'
+  )
+})
+
+test('二次修改会话身份必须完整绑定来源、原规划线程和可选 changeId', () => {
+  assert.deepEqual(
+    normalizeRevisionSessionContext({
+      kind: 'formal_revision',
+      sessionRole: 'design',
+      formalBranch: 'workbench_plan_revision',
+      impactInteractionId: 'impact-1',
+      sourceSessionId: 'source-session',
+      sourceConversationThreadId: 'source-thread',
+      sourceRunId: 'source-run',
+      planningThreadId: 'planning-thread',
+      changeId: 'change-1',
+      unsafe: 'ignored'
+    }),
+    {
+      kind: 'formal_revision',
+      sessionRole: 'design',
+      formalBranch: 'workbench_plan_revision',
+      impactInteractionId: 'impact-1',
+      sourceSessionId: 'source-session',
+      sourceConversationThreadId: 'source-thread',
+      sourceRunId: 'source-run',
+      planningThreadId: 'planning-thread',
+      changeId: 'change-1'
+    }
+  )
+  assert.equal(
+    normalizeRevisionSessionContext({
+      kind: 'formal_revision',
+      sessionRole: 'design',
+      formalBranch: 'workbench_plan_revision',
+      impactInteractionId: 'impact-1',
+      sourceSessionId: 'source-session',
+      sourceConversationThreadId: 'source-thread',
+      planningThreadId: 'planning-thread'
+    }),
+    undefined
   )
 })
 

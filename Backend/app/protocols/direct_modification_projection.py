@@ -13,6 +13,7 @@ from app.services.direct_modification import direct_state_message
 
 DIRECT_NODE_LABELS = {
     "classify_intent": "识别对话意图",
+    "scan_change_impact_code": "取得目标代码证据",
     "scan_workspace_code": "扫描工作区代码",
     "respond_conversation": "生成对话回复",
     "answer_workspace": "读取工作区并回答",
@@ -27,6 +28,7 @@ DIRECT_NODE_LABELS = {
 DIRECT_NODE_PERCENT = {
     "scan_workspace_code": 5,
     "classify_intent": 20,
+    "scan_change_impact_code": 30,
     "respond_conversation": 80,
     "answer_workspace": 80,
     "execute_backend": 40,
@@ -101,6 +103,9 @@ def direct_summary(state: dict[str, Any], *, status: str) -> dict[str, Any]:
         "integrationNextAction": state.get("integration_next_action"),
         "changeId": state.get("change_id") or None,
         "target": state.get("change_target") or None,
+        "revisionImpact": state.get("revision_impact") or None,
+        "changeImpactAnalysis": state.get("change_impact_analysis") or None,
+        "changeImpactCodeScan": state.get("change_impact_code_scan") or None,
     }
 
 
@@ -120,6 +125,10 @@ def public_direct_state(state: dict[str, Any]) -> dict[str, Any]:
         "direct_modification_scope",
         "direct_modification_confidence",
         "direct_modification_reason",
+        "revision_impact",
+        "change_impact_analysis",
+        "change_impact_code_scan",
+        "change_impact_code_scan_required",
         "clarification",
         "direct_stage_results",
         "backend_handoff",

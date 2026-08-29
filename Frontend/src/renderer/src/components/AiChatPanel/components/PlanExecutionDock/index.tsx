@@ -6,20 +6,16 @@ import {
   PauseCircleOutlined,
   RedoOutlined
 } from '@ant-design/icons'
-import { Button, Input, Modal, Popconfirm, Select, Typography } from 'antd'
+import { Button, Modal, Popconfirm, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import type {
-  WorkbenchExecution,
-  WorkflowAcceptanceAdjustmentType
-} from '../../../../typings'
+import type { WorkbenchExecution } from '../../../../typings'
 import { cx } from '../../../../utils'
 import type { PlanExecutionMode } from '../../planExecutionMode'
 import { planExecutionPhaseLabel } from '../../planExecutionMode'
 import './PlanExecutionDock.less'
 
 const { Text } = Typography
-const { TextArea } = Input
 
 type Props = {
   canRetryFailedTasks?: boolean
@@ -29,10 +25,6 @@ type Props = {
   mode: Exclude<PlanExecutionMode, 'idle'>
   ownerPageId?: string
   onAccept: () => Promise<boolean>
-  onAdjust: (
-    feedback: string,
-    adjustmentType: WorkflowAcceptanceAdjustmentType
-  ) => Promise<boolean>
   onConfirmInteraction: (decision: 'reject' | 'once' | 'always') => void
   onEnd: () => void
   onOpenPreview: () => void
@@ -40,16 +32,6 @@ type Props = {
   onStop: () => void
   onViewPlan: () => void
 }
-
-const ACCEPTANCE_ADJUSTMENT_OPTIONS: Array<{
-  label: string
-  value: WorkflowAcceptanceAdjustmentType
-}> = [
-  { label: '局部修复（不改变产品语义）', value: 'local_fix' },
-  { label: '接口行为或字段调整', value: 'endpoint_change' },
-  { label: '数据来源或数据库调整', value: 'data_source_change' },
-  { label: '项目计划或架构调整', value: 'project_plan_change' }
-]
 
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
 export default function PlanExecutionDock({
@@ -60,7 +42,6 @@ export default function PlanExecutionDock({
   mode,
   ownerPageId,
   onAccept,
-  onAdjust,
   onConfirmInteraction,
   onEnd,
   onOpenPreview,
@@ -68,36 +49,14 @@ export default function PlanExecutionDock({
   onStop,
   onViewPlan
 }: Props): ReactElement {
-  const [adjusting, setAdjusting] = useState(false)
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
-  const [submittingAdjustment, setSubmittingAdjustment] = useState(false)
-  const [feedback, setFeedback] = useState('')
-  const [adjustmentType, setAdjustmentType] =
-    useState<WorkflowAcceptanceAdjustmentType>('local_fix')
   const pending = execution?.pendingInteraction
 
   useEffect(() => {
-    setAdjusting(false)
     setAcceptanceConfirmOpen(false)
     setAccepting(false)
-    setSubmittingAdjustment(false)
-    setFeedback('')
-    setAdjustmentType('local_fix')
   }, [mode, pending?.id])
-
-  /** 提交受控计划调整意见，成功后关闭编辑框，失败时保留内容供重试。 */
-  const submitAdjustment = async (): Promise<void> => {
-    const normalized = feedback.trim()
-    if (!normalized || submittingAdjustment) return
-    setSubmittingAdjustment(true)
-    try {
-      const succeeded = await onAdjust(normalized, adjustmentType)
-      if (succeeded) setAdjusting(false)
-    } finally {
-      setSubmittingAdjustment(false)
-    }
-  }
 
   /** 确认最终验收并等待 AG-UI 成功接收，失败时保留对话框供用户重试。 */
   const confirmAcceptance = async (): Promise<void> => {
@@ -212,7 +171,14 @@ export default function PlanExecutionDock({
             {mode === 'awaiting_acceptance' && (
               <>
                 <Button onClick={onOpenPreview}>全屏预览</Button>
-                <Button onClick={() => setAdjusting(true)}>提出修改</Button>
+                <Popconfirm
+                  cancelText="取消"
+                  okText="结束并重新描述"
+                  onConfirm={onEnd}
+                  title="结束当前执行后，请在统一输入框直接描述希望修改的结果。"
+                >
+                  <Button>提出修改</Button>
+                </Popconfirm>
                 <Button
                   icon={<CheckCircleOutlined />}
                   onClick={() => setAcceptanceConfirmOpen(true)}
@@ -229,7 +195,6 @@ export default function PlanExecutionDock({
                     {mode === 'failed' ? '重试失败任务' : '继续执行'}
                   </Button>
                 )}
-                <Button onClick={() => setAdjusting(true)}>调整计划</Button>
                 <Popconfirm
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
@@ -270,51 +235,6 @@ export default function PlanExecutionDock({
           <span />
         </div>
       ) : null}
-
-      <Modal
-        cancelButtonProps={{ disabled: submittingAdjustment }}
-        cancelText="取消"
-        centered
-        closable={!submittingAdjustment}
-        confirmLoading={submittingAdjustment}
-        destroyOnClose
-        keyboard={!submittingAdjustment}
-        maskClosable={!submittingAdjustment}
-        okButtonProps={{ disabled: !feedback.trim() }}
-        okText="提交修改"
-        onCancel={() => setAdjusting(false)}
-        onOk={() => void submitAdjustment()}
-        open={!dependencyLocked && adjusting}
-        title="提出验收修改"
-        wrapClassName={cx('plan-execution-modal')}
-      >
-        <div className={cx('plan-execution-adjustment-form')}>
-          <Text type="secondary">
-            选择修改范围并说明具体问题。提交后会回到对应工作流节点，修改完成后需要重新验收。
-          </Text>
-          <div className={cx('plan-execution-adjustment-type')}>
-            <Text strong>修改类型</Text>
-            <Select<WorkflowAcceptanceAdjustmentType>
-              aria-label="验收调整类型"
-              disabled={submittingAdjustment}
-              onChange={setAdjustmentType}
-              options={ACCEPTANCE_ADJUSTMENT_OPTIONS}
-              value={adjustmentType}
-            />
-          </div>
-          <TextArea
-            aria-label="验收修改意见"
-            autoFocus
-            autoSize={{ minRows: 4, maxRows: 8 }}
-            disabled={submittingAdjustment}
-            maxLength={4000}
-            placeholder="请说明哪里不符合预期、希望改成什么样，以及必要的验收条件…"
-            showCount
-            value={feedback}
-            onChange={(event) => setFeedback(event.target.value)}
-          />
-        </div>
-      </Modal>
 
       <Modal
         cancelButtonProps={{ disabled: accepting }}

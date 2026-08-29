@@ -1,4 +1,5 @@
 import type { ProcessStepRecord, ToolCallRecord } from '../../service/agUiAgent'
+import type { ChatSessionRevisionHandoff } from '../../service/chatSessions'
 import type {
   ChatMessageSkill,
   EditorMode,
@@ -17,6 +18,8 @@ export type AgentChatMessage = {
   codeChanges?: WorkspaceCodeChangeSet
   toolCalls?: ToolCallRecord[]
   processSteps?: ProcessStepRecord[]
+  /** 来源会话中的正式二次修改跳转回执。 */
+  revisionHandoff?: ChatSessionRevisionHandoff
   createdAt: number
   /** 设计阶段规划占位标记：用户提交操作后追加的 assistant 占位消息，
    *  流式 chunk 到达前显示 loading 态；chunk 到达后清除。 */

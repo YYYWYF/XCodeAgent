@@ -123,7 +123,7 @@ flowchart TD
 3. TechnicalPlan 确认后，前端才拉取前后端模板、写页面占位和 `BIZ_MENUS`，再提交模板生成 lifecycle。应用打开、进入工作台、应用重启和模板生成失败都不会再次触发；成功后才允许进入工作台。
 4. 工作台进入时会先通过 `/api/projects/launch` 异步尝试启动“当前模板工程预览”。这是工作台预览初始化，不是主 Workflow 测试通过后的 `launch_project`，两次启动的时机和失败语义不同。
 5. 正式开发前先从 ProjectPlan 选择页面或具体 endpoint。页面设计可选 `commonTable`、`multiForm`、`tabsTable` 三种参考模板并预览，选择结果以 `pageTemplate={id,name,sourcePath}` 送入 `/workflow/run`；endpoint 使用 `detailTargetType=endpoint + selectedApiContractId + selectedEndpointId`。
-6. 页面和 endpoint 各自拥有会话、thread 和历史。目标输入默认走“设计修改”模式的 `/workflow/run`；已设计目标可切到“自由协作”模式的 `/conversation/run`。每条消息可选择当前启用的用户 Skill，选中列表随消息和会话快照传递。
+6. 页面和 endpoint 各自拥有会话、thread 和历史。工作台普通自然语言统一走 `/conversation/run`，由 Coordinator 自动分类并决定后续路由；设计阶段专用变更输入仍进入原 application planning Graph。每条消息可选择当前启用的用户 Skill，选中列表随消息和会话快照传递。
 7. 正式运行期间只用 `PlanExecutionDock` 替换底部输入区，消息、流程步骤、侧栏和预览仍保留。Build Run 卡嵌在对应 Build 步骤内，展示 scope、任务状态、依赖、文件范围、验收项和失败证据；运行中任务可展示非持久化工具活动。
 8. Workflow `launch_project` 返回正式 `preview_url` 后打开右侧预览。用户可以验收通过，或提交 `local_fix/page_design_change/endpoint_change/data_source_change/project_plan_change`；调整请求在协议边界直接选择恢复节点，通常不先执行 `acceptance` 节点。
 
@@ -600,11 +600,11 @@ flowchart TD
 ### 9.2 `acceptance / 用户验收`
 
 - **类型**：确定性结构化决策节点；无 LLM 提示词。
-- **输入**：`acceptance_decision`；验收调整由请求边界规范化为 `acceptance_adjustment`。
+- **输入**：结构化 `acceptance_decision=accepted`；修改请求必须从统一自然语言入口创建新 revision routing。
 - **输出**：当前节点的主要有效输出是 `accepted=true`。
-- **校验规则**：只有结构化 `decision=accepted` 放行；普通文本不能冒充验收。`changes_requested` 在 `protocols/workflow/request.py` 先被规范化为 `acceptance_adjustment`，并直接恢复到 SmallTask、详情设计或项目规划，通常不会执行 `acceptance` 节点；调整类型只允许 `local_fix/page_design_change/endpoint_change/data_source_change/project_plan_change`，feedback 1–4000 字符。
-- **依赖文件**：`graph/nodes/lifecycle.py`、`domain/acceptance_adjustment.py`、`protocols/workflow/request.py`。
-- **依赖节点**：上游是预览后的新验收请求；accepted 进入 `finalize_project`。调整请求由协议适配器直接路由到 SmallTask、详细设计或项目规划。
+- **校验规则**：只有结构化 `decision=accepted` 放行；普通文本不能冒充验收。旧 `acceptance_adjustment` 被当前请求合同明确拒绝，前端不能提交内部节点或 `resume_from`。用户提出修改时结束当前执行并在统一输入框描述目标，由五类 revision route 重新判定。
+- **依赖文件**：`graph/nodes/lifecycle.py`、`domain/application_revision.py`、`protocols/workflow/request.py`。
+- **依赖节点**：上游是预览后的新验收请求；accepted 进入 `finalize_project`。修改请求作为新一轮自然语言目标进入统一 revision routing。
 
 ### 9.3 `finalize_project / 项目完成`
 
@@ -670,10 +670,10 @@ flowchart TD
 ### 10.1 `classify_intent / 分类消息意图`
 
 - **类型**：直接 ChatModel 路由器。
-- **当前提示词**：System Prompt 和 `agents/direct_modification.py::_direct_modification_classifier_prompt`。要求基于前置扫描事实按结果分类 `casual_chat/workspace_question/workspace_change/formal_workflow/needs_clarification`，识别 owner，输出唯一 JSON；已存在页面/组件且结果明确的局部修改必须直接分类为 workspace change。局部修改需要默认源码根之外的任意现有文件时仍保留对应 owner，并输出精确文件路径作为本次授权候选，不受配置文件类型白名单限制，置信度不足时才保守澄清。
+- **当前提示词**：System Prompt 和 `agents/direct_modification.py::_direct_modification_classifier_prompt`。要求基于前置扫描事实按结果分类 `casual_chat/workspace_question/clarification/implementation_fix/formal_revision`，识别 owner，并为正式修改输出 branch、revision type、最早产物和影响范围；已存在页面/组件且不改变正式语义的明确局部修改必须分类为 `implementation_fix`。局部修改需要默认源码根之外的任意现有文件时仍保留对应 owner，并输出精确文件路径作为本次授权候选，置信度不足时才保守澄清。
 - **输入**：当前消息、最多 4000 字符会话摘要、最多 16000 字符的页面/组件/入口/高价值配置/API 路由/共享契约/代码图扫描上下文、已有 handoff 决策。
 - **输出**：intent、owner、scope、confidence、reason、target paths、可选 casual response 或 clarification。
-- **校验规则**：confidence 必须不低于 0.65；workspace owner 必须有窄且可验证的相对路径范围；前后端额外文件候选不检查文件类型，只在当前请求是修改意图、路径属于 owner、位于 workspace 内且文件真实存在时动态并入本次 `approvedPaths`；拒绝宽目录范围、lockfile、`.env`/凭据文件、依赖/生成目录、schema/migration、`.xcodeagent` 和 `..`；正式 Workflow 需要用户确认后 handoff。classifier 若已为 `casual_chat` 返回自然语言 `response`，分类节点会直接完成并进入 finalize；只有缺少 response 时才调用 `respond_conversation` 兜底。
+- **校验规则**：低置信度或 unknown owner 转澄清；workspace owner 必须有窄且可验证的相对路径范围；前后端额外文件候选只在路径属于 owner、位于 workspace 内且真实存在时动态并入本次 `approvedPaths`；拒绝宽目录范围、lockfile、`.env`/凭据文件、依赖/生成目录、schema/migration、`.xcodeagent` 和 `..`。正式修改先登记 lifecycle 绑定的只读 impact，不直接 handoff 内部节点；classifier 若已为 `casual_chat` 返回自然语言 `response`，分类节点直接完成，只有缺少 response 时才调用兜底节点。
 - **依赖文件**：`agents/direct_modification.py`、`graph/nodes/direct_modification.py`、`services/direct_modification.py`。
 - **依赖节点**：上游 `scan_workspace_code`；下游对话、问答、frontend/backend/workspace 修改或 finalize。
 
@@ -1084,7 +1084,7 @@ flowchart TD
 | Testing Subgraph                      | `Backend/app/graph/subgraphs/testing.py`                                                                                                                                                                                     |
 | Integration checks/quality gate       | `Backend/app/services/integration_test_runner.py`、`test_validation.py`                                                                                                                                                      |
 | SmallTask/Repair                      | `Backend/app/graph/nodes/small_task.py`、`direct_repair.py`、`Backend/app/agents/small_task/`、`repair_planner/`                                                                                                             |
-| Launch/Acceptance                     | `Backend/app/graph/nodes/lifecycle.py`、`Backend/app/domain/acceptance_adjustment.py`、`Backend/app/protocols/workflow/request.py`                                                                                           |
+| Launch/Acceptance / Revision          | `Backend/app/graph/nodes/lifecycle.py`、`Backend/app/domain/application_revision.py`、`Backend/app/protocols/workflow/request.py`、`Backend/app/protocols/workflow/revision.py`                                             |
 | Application lifecycle / recovery      | `Backend/app/services/application_lifecycle.py`、`Backend/app/domain/application_lifecycle.py`、`Backend/app/protocols/workflow/lifecycle.py`、`Backend/app/protocols/workflow/run_control.py`                               |
 | 模板物化                              | `Frontend/src/renderer/src/hooks/useApplicationTemplateGeneration.ts`、`Frontend/src/renderer/src/service/templateApi.ts`                                                                                                    |
 | 工作台目标选择与参考模板              | `Frontend/src/renderer/src/components/DetailConfirmationPageSelector/`、`Frontend/src/renderer/src/service/templateService.ts`、`Frontend/src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation.ts`          |

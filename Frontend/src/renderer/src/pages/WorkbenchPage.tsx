@@ -17,6 +17,8 @@ import type {
   DevelopmentPlanningPageOption,
   EditorMode,
   WorkflowClarificationAnswers,
+  WorkflowDesignStageRevisionStart,
+  WorkflowRevisionContinuation,
   WorkflowRunPayload
 } from '../typings'
 import { cx, previewOrigin } from '../utils'
@@ -41,6 +43,10 @@ type Props = {
     designChangeRequest?: string
   ) => void
   onStopPlanning: () => Promise<void>
+  onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
+  onRevisionContinuationHandlerChange: (
+    handler?: (continuation: WorkflowRevisionContinuation) => Promise<void>
+  ) => void
   onThemeChange: (theme: Theme) => void
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
@@ -74,6 +80,8 @@ function WorkbenchPage({
   onReturnWelcome,
   onSubmitPlanningClarification,
   onStopPlanning,
+  onStartDesignStageRevision,
+  onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
   generatingTemplate,
@@ -392,6 +400,8 @@ function WorkbenchPage({
                 onReturnWelcome={onReturnWelcome}
                 onSubmitPlanningClarification={onSubmitPlanningClarification}
                 onStopPlanning={onStopPlanning}
+                onStartDesignStageRevision={onStartDesignStageRevision}
+                onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
                 onThemeChange={handleThemeChange}
                 onPlanningStreamReady={onPlanningStreamReady}
                 generatingTemplate={generatingTemplate}

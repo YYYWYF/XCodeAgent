@@ -32,6 +32,7 @@ from app.services.small_task_scope import (
     select_parallel_small_task_batch,
     workflow_target_for_small_task,
 )
+from app.services.revision_routing import build_small_task_revision_confirmation
 from app.workspace.code_changes import merge_code_change_sets
 
 
@@ -149,6 +150,36 @@ def direct_modification_repair(state: ProjectState) -> dict[str, Any]:
     plan = captured.value if isinstance(captured.value, dict) else {}
     plan_path = persist_direct_repair_plan(state, plan)
     if plan.get("decision") == "requires_user_confirmation" or plan.get("status") == "requires_user_confirmation":
+        requested_paths = plan.get("requestedPaths")
+        if not isinstance(requested_paths, list) or not any(
+            str(path).strip() for path in requested_paths
+        ):
+            revision_confirmation = build_small_task_revision_confirmation(
+                state=state,
+                escalation={
+                    "reason": str(plan.get("reason") or "自动修复需要正式修改。"),
+                    "requestedPaths": [],
+                    "requestedResources": plan.get("requestedResources", []),
+                },
+                reason=str(plan.get("reason") or "自动修复需要正式修改。"),
+            )
+            return {
+                **_repair_wait(
+                    state,
+                    iteration=iteration,
+                    maximum=maximum,
+                    message="自动修复需要改变正式语义，已暂停写入。",
+                    plan=plan,
+                    plan_path=plan_path,
+                    tasks=candidate_repair_tasks(plan),
+                    results=previous_small_task_results,
+                    small_task_changes=previous_small_task_changes,
+                    direct_changes=previous_direct_changes,
+                    handoff={},
+                ),
+                **revision_confirmation,
+                "small_task_handoff": {},
+            }
         handoff = repair_plan_handoff(plan)
         return _repair_wait(
             state,
@@ -210,26 +241,28 @@ def direct_modification_repair(state: ProjectState) -> dict[str, Any]:
 
     preflight = first_direct_repair_preflight(tasks)
     if preflight:
-        handoff = build_small_task_handoff(
-            mode="small_task_workflow_handoff",
-            reason=preflight["reason"],
-            tasks=tasks,
+        revision_confirmation = build_small_task_revision_confirmation(
+            state=state,
             escalation=preflight,
-            target_node=workflow_target_for_small_task(preflight),
+            reason=str(preflight.get("reason") or "自动修复需要正式修改。"),
         )
-        return _repair_wait(
+        return {
+            **_repair_wait(
             state,
             iteration=iteration,
             maximum=maximum,
-            message="自动修复触及需要正式工作流处理的范围，已暂停写入。",
+            message="自动修复触及正式语义，已暂停并等待影响范围确认。",
             plan=plan,
             plan_path=plan_path,
             tasks=tasks,
             results=previous_small_task_results,
             small_task_changes=previous_small_task_changes,
             direct_changes=previous_direct_changes,
-            handoff=handoff,
-        )
+            handoff={},
+            ),
+            **revision_confirmation,
+            "small_task_handoff": {},
+        }
 
     working_tasks = [deepcopy(task) for task in tasks]
     all_results = [*previous_small_task_results]
@@ -312,13 +345,36 @@ def direct_modification_repair(state: ProjectState) -> dict[str, Any]:
         )
         if escalation_result:
             escalation = escalation_result.get("escalation") or {}
-            mode = (
-                "small_task_scope_confirmation"
-                if escalation_result.get("status") == "requires_user_confirmation"
-                else "small_task_workflow_handoff"
-            )
+            if escalation_result.get("status") == "requires_workflow":
+                reason = (
+                    str(escalation.get("reason") or "").strip()
+                    or str(escalation_result.get("summary") or "")
+                    or "SmallTask 自动修复需要正式修改。"
+                )
+                revision_confirmation = build_small_task_revision_confirmation(
+                    state=state,
+                    escalation=escalation,
+                    reason=reason,
+                )
+                return {
+                    **_repair_wait(
+                        state,
+                        iteration=iteration,
+                        maximum=maximum,
+                        message="SmallTask 发现正式语义变化，已暂停写入。",
+                        plan=plan,
+                        plan_path=plan_path,
+                        tasks=working_tasks,
+                        results=all_results,
+                        small_task_changes=all_small_task_changes,
+                        direct_changes=[*previous_direct_changes, *new_direct_changes],
+                        handoff={},
+                    ),
+                    **revision_confirmation,
+                    "small_task_handoff": {},
+                }
             handoff = build_small_task_handoff(
-                mode=mode,
+                mode="small_task_scope_confirmation",
                 reason=(
                     str(escalation.get("reason") or "").strip()
                     or str(escalation_result.get("summary") or "")
