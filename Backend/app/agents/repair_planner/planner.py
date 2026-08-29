@@ -40,12 +40,15 @@ def _test_repair_planning_prompt(
         "Return only one JSON object using this contract:\n"
         "{\n"
         '  "decision": "repair" | "requires_user_confirmation" | "terminal_failure",\n'
+        '  "escalationKind": "code_scope" | "formal_revision" | null,\n'
         '  "strategy": "short repair strategy",\n'
         '  "reason": "required for confirmation or terminal failure",\n'
         '  "failure_handling": "how the workflow should handle this failure"\n'
         "}\n\n"
-        "Choose requires_user_confirmation only when repair requires expanding product scope, "
-        "changing confirmed requirements, or making a product decision. Choose "
+        "Choose requires_user_confirmation only when repair requires expanding code scope, "
+        "changing confirmed requirements, or making a product decision. Set escalationKind "
+        "to formal_revision only for confirmed product or contract semantics; missing file paths "
+        "alone are not formal revision evidence. Choose "
         "terminal_failure when evidence is insufficient or the failure is not "
         "automatically actionable.\n\n"
         f"TestReport:\n{json.dumps(test_report, ensure_ascii=False, indent=2)}\n\n"
@@ -206,6 +209,12 @@ def plan_repairs_with_repair_planner_agent(
             "summary": {"total": 0, "frontend": 0, "backend": 0, "database": 0},
             "agent_note": agent_note,
             "reason": planner_decision.get("reason", ""),
+            "escalationKind": (
+                planner_decision.get("escalationKind")
+                if planner_decision.get("escalationKind")
+                in {"code_scope", "formal_revision"}
+                else None
+            ),
             "failure_handling": planner_decision.get("failure_handling", ""),
             "prepared_by": {
                 "agent": "repair-planner-agent",

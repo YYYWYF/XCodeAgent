@@ -8,8 +8,9 @@ import {
 } from '../../../service/agUiAgent'
 import {
   getApplicationPlanningUrl,
-  revisionContinuationFromWorkflow
+  revisionContinuationHandoffFromWorkflow
 } from '../../../service/applicationPagePlanning'
+import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
 import type {
@@ -139,7 +140,11 @@ type UseWorkflowConversationParams = {
   onStartWorkbenchPlanRevision: (
     input: WorkflowWorkbenchPlanRevisionStart
   ) => Promise<SessionIdentity>
-  onRevisionContinuation: (continuation: WorkflowRevisionContinuation) => Promise<void>
+  onRollbackFormalRevisionSession: (
+    input: WorkflowWorkbenchPlanRevisionStart,
+    identity: SessionIdentity
+  ) => Promise<void>
+  onRevisionContinuation: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   onEnterTestPhase: () => void
   onEnterReviewPhase: () => void
   onEnterAcceptancePhase: () => void
@@ -489,6 +494,7 @@ export function useWorkflowConversation({
   onApplicationLifecycleChange,
   onStartDesignStageRevision,
   onStartWorkbenchPlanRevision,
+  onRollbackFormalRevisionSession,
   onRevisionContinuation,
   onEnterTestPhase,
   onEnterReviewPhase,
@@ -898,8 +904,8 @@ export function useWorkflowConversation({
         titleFrom: options?.titleFrom || trimmedMessage
       })
       if (options?.workflowAction === 'submit_revision_interaction') {
-        const continuation = revisionContinuationFromWorkflow(finalWorkflow)
-        if (continuation) await onRevisionContinuation(continuation)
+        const continuationHandoff = revisionContinuationHandoffFromWorkflow(finalWorkflow)
+        if (continuationHandoff) await onRevisionContinuation(continuationHandoff)
       }
       publishAiMessage(identity.editorMode, answer)
       return true
@@ -1074,31 +1080,40 @@ export function useWorkflowConversation({
           return false
         }
       }
-      const revisionIdentity = await onStartWorkbenchPlanRevision({
+      const revisionInput: WorkflowWorkbenchPlanRevisionStart = {
         request: originalRequest,
         target,
         impact,
         sourceSessionId: sourceIdentity.sessionId,
         sourceConversationThreadId: sourceIdentity.threadId,
         sourceRunId: workflow.runId
-      })
+      }
+      const revisionIdentity = await onStartWorkbenchPlanRevision(revisionInput)
       // 影响范围确认已经由结构化 revisionRequest 表达；复用原始请求作为协议消息，
       // 避免把确认提示伪装成新的用户输入，具体恢复节点由服务端 action 路由决定。
-      return sendWorkflowMessage(originalRequest, {
-        originalRequest,
-        workflowAction: 'start_technical_revision',
-        workflowScope: 'application_planning',
-        revisionRequest: {
-          source: 'conversation_handoff',
-          formalBranch: impact.formalBranch,
-          target,
-          request: originalRequest,
-          confirmedImpact: { interactionId: impact.interactionId }
-        },
-        sessionIdentity: revisionIdentity,
-        conversation: false,
-        titleFrom: originalRequest
-      })
+      let started: boolean
+      try {
+        started = await sendWorkflowMessage(originalRequest, {
+          originalRequest,
+          workflowAction: 'start_technical_revision',
+          workflowScope: 'application_planning',
+          revisionRequest: {
+            source: 'conversation_handoff',
+            formalBranch: impact.formalBranch,
+            target,
+            request: originalRequest,
+            confirmedImpact: { interactionId: impact.interactionId }
+          },
+          sessionIdentity: revisionIdentity,
+          conversation: false,
+          titleFrom: originalRequest
+        })
+      } catch (error) {
+        await onRollbackFormalRevisionSession(revisionInput, revisionIdentity)
+        throw error
+      }
+      if (!started) await onRollbackFormalRevisionSession(revisionInput, revisionIdentity)
+      return started
     }
     if (
       !conversation &&

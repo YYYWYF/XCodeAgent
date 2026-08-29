@@ -635,10 +635,17 @@ test('API 大纲只移除路径边界完整匹配的 base path', () => {
 test('最终结果标题区分成功和失败 Workflow', () => {
   assert.deepEqual(workflowFinalResultPresentation(previewWorkflow()), {
     failed: false,
+    terminal: false,
+    title: ''
+  })
+  assert.deepEqual(workflowFinalResultPresentation(previewWorkflow({ status: 'completed' })), {
+    failed: false,
+    terminal: true,
     title: '任务已完成'
   })
   assert.deepEqual(workflowFinalResultPresentation(previewWorkflow({ status: 'failed' })), {
     failed: true,
+    terminal: true,
     title: '任务执行失败'
   })
 })

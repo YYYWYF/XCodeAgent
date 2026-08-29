@@ -55,17 +55,24 @@ export function createRevisionDevelopmentSessionContext(
 /** 按 changeId 和 TechnicalPlan 哈希寻找已创建的开发会话，供重复点击幂等复用。 */
 export function revisionDevelopmentSessionForContinuation(
   sessions: ChatSessionSummary[],
+  source: SessionIdentity,
   continuation: WorkflowRevisionContinuation
 ): ChatSessionSummary | undefined {
+  const entryKey = `revision-development:${continuation.changeId}:${continuation.technicalPlanSha256}`
   return sessions.find((session) => {
     const context = session.revisionContext
     return (
+      session.workflowId === source.workflowId &&
       session.workbenchPhase === 'development' &&
+      session.stage === 'DEVELOPMENT' &&
+      session.entryKey === entryKey &&
       context?.kind === 'formal_revision' &&
       context.sessionRole === 'development' &&
       context.changeId === continuation.changeId &&
       context.formalBranch === continuation.formalBranch &&
-      context.technicalPlanSha256 === continuation.technicalPlanSha256
+      context.technicalPlanSha256 === continuation.technicalPlanSha256 &&
+      context.handoffFromSessionId === source.sessionId &&
+      context.handoffFromConversationThreadId === source.threadId
     )
   })
 }
@@ -90,16 +97,33 @@ export function bindRevisionSessionChangeId(
   return { ...context, changeId: active.changeId }
 }
 
-/** 冷恢复时只按 active revision 的完整身份选择独立会话，禁止按标题或原 Graph thread 猜测。 */
-export function activeFormalRevisionConversationThreadId(
+/** 为一次设计到规划的入口生成稳定去重键；新的 revision 或门禁必须得到不同键。 */
+export function planningStageTransitionKey(
+  checkpointThreadId: string,
+  gateIdentity: string,
+  context?: ChatSessionRevisionContext
+): string {
+  const revisionIdentity = String(context?.changeId || context?.impactInteractionId || '').trim()
+  return revisionIdentity
+    ? `revision-plan:${revisionIdentity}:${gateIdentity.trim()}`
+    : `planning-entry:${checkpointThreadId.trim()}:${gateIdentity.trim()}`
+}
+
+/** 冷恢复时按当前业务阶段和完整 revision 身份选择 StageSession。 */
+export function activeFormalRevisionStageSession(
   sessions: ChatSessionSummary[],
-  lifecycle: ApplicationLifecycle | undefined
-): string | undefined {
+  lifecycle: ApplicationLifecycle | undefined,
+  workflowId: string,
+  phase: 'product' | 'planning'
+): ChatSessionSummary | undefined {
   const active = lifecycle?.activeFormalRevision
   if (!active) return undefined
   return sessions.find((session) => {
     const context = session.revisionContext
     if (
+      session.workflowId !== workflowId ||
+      session.workbenchPhase !== phase ||
+      session.stage !== (phase === 'product' ? 'DESIGN' : 'PLAN') ||
       !context ||
       context.kind !== 'formal_revision' ||
       context.sessionRole !== 'design' ||
@@ -114,11 +138,11 @@ export function activeFormalRevisionConversationThreadId(
       return false
     }
     return !context.changeId || context.changeId === active.changeId
-  })?.threadId
+  })
 }
 
-/** 根据 formal branch 返回独立二次修改会话所属的可见阶段。 */
-export function formalRevisionSessionPhase(
+/** 根据 formal branch 返回正式修改首次进入的可见阶段。 */
+export function initialFormalRevisionPhase(
   branch: WorkflowFormalRevisionBranch
 ): 'product' | 'planning' {
   return branch === 'design_stage_revision' ? 'product' : 'planning'

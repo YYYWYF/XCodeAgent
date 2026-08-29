@@ -27,7 +27,7 @@ from app.graph.direct_modification_workflow import (
     _route_direct_repair,
     _route_direct_entry,
     _route_frontend,
-    _route_integration_test,
+    _route_direct_validation,
     _route_scan_workspace,
     build_direct_modification_graph,
     direct_next_node_name,
@@ -40,7 +40,7 @@ from app.graph.nodes.direct_modification import (
     finalize_direct_modification,
     respond_to_casual_conversation,
     respond_to_workspace_question,
-    run_direct_modification_integration_test,
+    validate_direct_fix,
 )
 from app.graph.nodes.direct_repair import direct_modification_repair
 from app.protocols.direct_modification import (
@@ -669,6 +669,30 @@ class DirectModificationNodeTests(unittest.TestCase):
         )
         self.assertNotIn("启动预览", finalized["message"])
 
+    def test_implementation_rejection_overrides_stale_failure_status(self) -> None:
+        """实现修改取消必须以成功终态收口，即使恢复快照仍残留失败状态。"""
+
+        finalized = finalize_direct_modification(
+            {
+                "request": "修复登录按钮无响应",
+                "status": "failed",
+                "message": "用户已取消本次修改确认，本次工作区不会继续写入。",
+                "conversation_intent": "implementation_fix",
+                "direct_modification_owner": "frontend",
+                "direct_modification_scope": "direct",
+                "direct_modification_handoff_decision": "rejected",
+                "direct_stage_results": {},
+                "direct_code_change_sets": [],
+            }
+        )
+
+        self.assertEqual(finalized["status"], "completed")
+        self.assertEqual(
+            finalized["message"],
+            "用户已取消本次修改确认，本次工作区不会继续写入。",
+        )
+        self.assertEqual(finalized["direct_modification_result"]["status"], "completed")
+
     def test_workspace_question_uses_read_only_answer_node(self) -> None:
         """工程解释类问题应进入只读工作区节点并保留自然语言回复。"""
 
@@ -956,32 +980,49 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertIn("最终验收", stage_result["summary"])
         self.assertIn("最终验收", finalized["message"])
 
-    def test_integration_disables_contract_and_repair(self) -> None:
-        """快速测试必须复用节点但关闭 Testing Subgraph 的 RepairPlanner。"""
+    def test_direct_validation_only_checks_real_changed_layers(self) -> None:
+        """快速验证必须只执行真实差异所属层，并跳过重复依赖安装。"""
 
-        captured_state: dict = {}
+        captured: dict = {}
 
-        def fake_integration(state):
-            """记录集成测试收到的快速模式开关。"""
+        def fake_checks(state, **kwargs):
+            """记录范围验证参数并返回前端通过证据。"""
 
-            captured_state.update(state)
+            captured["state"] = state
+            captured.update(kwargs)
             return {
-                "quality_gate_passed": False,
-                "test_results": [],
-                "code_change_sets": [],
+                "test_results": [
+                    {
+                        "id": "frontend_build",
+                        "name": "前端构建检查",
+                        "passed": True,
+                        "required": True,
+                        "evidence": "ok",
+                    }
+                ],
+                "test_events": ["frontend_build"],
             }
 
-        with patch(
-            "app.graph.nodes.direct_modification.integration_test",
-            side_effect=fake_integration,
-        ):
-            update = run_direct_modification_integration_test(
-                {"direct_code_change_sets": []}
-            )
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.direct_modification.run_integration_checks",
+                side_effect=fake_checks,
+            ):
+                update = validate_direct_fix(
+                    {
+                        "workspace": workspace,
+                        "direct_code_change_sets": [
+                            {"files": [{"path": "Frontend/src/Page.tsx"}]}
+                        ],
+                    }
+                )
 
-        self.assertIs(captured_state["integration_repair_enabled"], False)
-        self.assertEqual(update["status"], "failed")
-        self.assertEqual(_route_integration_test(update), "finalize")
+        self.assertEqual(captured["affected_layers"], {"frontend"})
+        self.assertIs(captured["install_frontend_dependencies"], False)
+        self.assertEqual(captured["state"]["unit_test_affected_layers"], ["frontend"])
+        self.assertEqual(update["status"], "completed")
+        self.assertEqual(update["integration_next_action"], "finalize_direct_modification")
+        self.assertEqual(_route_direct_validation(update), "finalize")
 
     def test_failed_free_conversation_test_enters_bounded_repair_node(self) -> None:
         """自由对话测试失败且有精确证据时应进入独立自动修复节点。"""
@@ -994,11 +1035,81 @@ class DirectModificationNodeTests(unittest.TestCase):
             "max_repair_iterations": 3,
         }
 
-        self.assertEqual(_route_integration_test(state), "direct_modification_repair")
+        self.assertEqual(_route_direct_validation(state), "direct_modification_repair")
         self.assertEqual(
-            direct_next_node_name("integration_test", state),
+            direct_next_node_name("validate_direct_fix", state),
             "direct_modification_repair",
         )
+
+    def test_direct_validation_ignores_unattributed_same_layer_failure(self) -> None:
+        """同层检查失败未指向本次文件时只记录告警，不得触发自动修复。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.direct_modification.run_integration_checks",
+                return_value={
+                    "test_results": [
+                        {
+                            "id": "frontend_build",
+                            "name": "前端构建检查",
+                            "layer": "frontend",
+                            "passed": False,
+                            "required": True,
+                            "evidence": "Frontend/src/LegacyPanel.tsx 存在历史类型错误。",
+                        }
+                    ],
+                    "test_events": ["frontend_build"],
+                },
+            ):
+                update = validate_direct_fix(
+                    {
+                        "workspace": workspace,
+                        "direct_code_change_sets": [
+                            {"files": [{"path": "Frontend/src/Page.tsx"}]}
+                        ],
+                    }
+                )
+
+        self.assertEqual(update["status"], "completed")
+        self.assertTrue(update["quality_gate_passed"])
+        self.assertEqual(update["revision_requests"], [])
+        self.assertTrue(update["test_results"][0]["advisory"])
+
+    def test_direct_validation_repairs_failure_attributed_to_changed_file(self) -> None:
+        """检查证据命中真实变更文件时仍应进入有界自动修复。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.direct_modification.run_integration_checks",
+                return_value={
+                    "test_results": [
+                        {
+                            "id": "frontend_build",
+                            "name": "前端构建检查",
+                            "layer": "frontend",
+                            "passed": False,
+                            "required": True,
+                            "evidence": "Frontend/src/Page.tsx:12 类型不匹配。",
+                        }
+                    ],
+                    "test_events": ["frontend_build"],
+                },
+            ):
+                update = validate_direct_fix(
+                    {
+                        "workspace": workspace,
+                        "direct_code_change_sets": [
+                            {"files": [{"path": "Frontend/src/Page.tsx"}]}
+                        ],
+                        "repair_iteration": 0,
+                        "max_repair_iterations": 3,
+                    }
+                )
+
+        self.assertEqual(update["status"], "failed")
+        self.assertFalse(update["quality_gate_passed"])
+        self.assertEqual(update["integration_next_action"], "direct_modification_repair")
+        self.assertEqual(len(update["revision_requests"]), 1)
 
     def test_direct_repair_executes_bounded_task_and_returns_to_test(self) -> None:
         """自由对话修复应只使用实际变更文件，并在成功后回到集成测试。"""
@@ -1091,9 +1202,9 @@ class DirectModificationNodeTests(unittest.TestCase):
         executor.assert_called_once()
         self.assertEqual(update["status"], "in_progress")
         self.assertEqual(update["repair_iteration"], 1)
-        self.assertEqual(update["integration_next_action"], "integration_test")
+        self.assertEqual(update["integration_next_action"], "validate_direct_fix")
         self.assertEqual(update["direct_code_change_sets"], execution["codeChangeSets"])
-        self.assertEqual(_route_direct_repair(update), "integration_test")
+        self.assertEqual(_route_direct_repair(update), "validate_direct_fix")
 
     def test_direct_repair_stops_before_planner_when_budget_is_exhausted(self) -> None:
         """达到三轮修复上限时不能再次调用 Planner 或 SmallTask。"""
@@ -1119,13 +1230,127 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(update["integration_next_action"], "handle_failure")
         self.assertIn("3 轮上限", update["message"])
 
-    def test_launch_success_is_finalized_without_acceptance_gate(self) -> None:
-        """启动成功后快速通道直接完成并清除正式验收字段。"""
+    def test_direct_repair_missing_file_scope_fails_without_formal_revision(self) -> None:
+        """修复任务缺少真实文件时必须停止，不能伪造 TechnicalPlan 正式升级。"""
+
+        plan = {
+            "version": "0.1.0",
+            "status": "ready",
+            "decision": "repair",
+            "tasks": [
+                {
+                    "id": "repair:frontend_build",
+                    "owner": "frontend",
+                    "status": "pending",
+                    "allowed_paths": [
+                        "<no file paths — repair is a command-level operation>"
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.nodes.direct_repair.plan_repairs_with_repair_planner_agent",
+                    return_value=plan,
+                ),
+                patch(
+                    "app.graph.nodes.direct_repair.execute_small_task_batch"
+                ) as executor,
+            ):
+                update = direct_modification_repair(
+                    {
+                        "workspace": workspace,
+                        "revision_requests": [
+                            {
+                                "id": "revision:frontend_build",
+                                "owner": "frontend",
+                                "owners": ["frontend"],
+                                "failed_check": {
+                                    "id": "frontend_build",
+                                    "name": "前端构建检查",
+                                    "passed": False,
+                                    "evidence": "TS error",
+                                },
+                            }
+                        ],
+                        "direct_stage_results": {
+                            "frontend": {"changedFiles": ["Frontend/src/App.tsx"]}
+                        },
+                        "direct_code_change_sets": [],
+                        "small_task_results": [],
+                        "small_task_code_change_sets": [],
+                        "repair_iteration": 0,
+                        "max_repair_iterations": 3,
+                    }
+                )
+
+        executor.assert_not_called()
+        self.assertEqual(update["status"], "failed")
+        self.assertNotIn("revision_impact", update)
+        self.assertEqual(update["clarification"], {})
+        self.assertIn("真实代码文件范围", update["message"])
+
+    def test_direct_repair_explicit_formal_escalation_keeps_confirmation(self) -> None:
+        """RepairPlanner 明确证明正式语义变化时仍应保留正式修改确认门。"""
+
+        plan = {
+            "version": "0.1.0",
+            "status": "requires_user_confirmation",
+            "decision": "requires_user_confirmation",
+            "escalationKind": "formal_revision",
+            "reason": "修复需要改变已确认的 API 契约。",
+            "requestedPaths": [],
+            "tasks": [],
+            "candidateTasks": [],
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.direct_repair.plan_repairs_with_repair_planner_agent",
+                return_value=plan,
+            ):
+                update = direct_modification_repair(
+                    {
+                        "workspace": workspace,
+                        "request": "修复接口调用",
+                        "revision_requests": [
+                            {
+                                "id": "revision:backend_build",
+                                "owner": "backend",
+                                "owners": ["backend"],
+                                "failed_check": {
+                                    "id": "backend_build",
+                                    "name": "后端构建检查",
+                                    "passed": False,
+                                    "evidence": "contract mismatch",
+                                },
+                            }
+                        ],
+                        "direct_stage_results": {
+                            "backend": {"changedFiles": ["Backend/app/api.py"]}
+                        },
+                        "direct_code_change_sets": [],
+                        "small_task_results": [],
+                        "small_task_code_change_sets": [],
+                        "repair_iteration": 0,
+                        "max_repair_iterations": 3,
+                    }
+                )
+
+        self.assertEqual(update["status"], "requires_user_input")
+        self.assertEqual(
+            update["clarification"]["mode"],
+            "revision_impact_confirmation",
+        )
+        self.assertEqual(update["revision_impact"]["reason"], plan["reason"])
+
+    def test_validation_success_is_finalized_without_preview_or_acceptance(self) -> None:
+        """范围验证通过后快速通道直接完成，不生成预览或正式验收状态。"""
 
         update = finalize_direct_modification(
             {
                 "request": "修改页面",
-                "status": "requires_user_input",
+                "status": "completed",
                 "direct_modification_owner": "frontend",
                 "direct_modification_scope": "direct",
                 "direct_stage_results": {
@@ -1133,14 +1358,15 @@ class DirectModificationNodeTests(unittest.TestCase):
                 },
                 "direct_code_change_sets": [],
                 "test_report_path": "/private/workspace/.xcodeagent/reports/test-report.md",
-                "launch_result": {"status": "running"},
-                "preview_url": "http://127.0.0.1:3000",
+                "quality_gate_passed": True,
             }
         )
 
         self.assertEqual(update["status"], "completed")
         self.assertEqual(update["acceptance_request"], {})
         self.assertEqual(update["clarification"], {})
+        self.assertEqual(update["direct_modification_result"]["launchResult"], {})
+        self.assertIsNone(update["direct_modification_result"]["previewUrl"])
         self.assertEqual(
             update["direct_modification_result"]["tests"]["reportPath"],
             ".xcodeagent/reports/test-report.md",
@@ -1151,7 +1377,7 @@ class DirectModificationNodeTests(unittest.TestCase):
 
         state = {"status": "in_progress", "direct_modification_owner": "fullstack"}
         self.assertEqual(_route_backend(state), "execute_frontend")
-        self.assertEqual(_route_frontend(state), "integration_test")
+        self.assertEqual(_route_frontend(state), "validate_direct_fix")
 
     def test_progress_projection_uses_graph_route_for_next_running_step(self) -> None:
         """节点完成后必须沿真实路由立即投射下一节点的运行中状态。"""
@@ -1420,6 +1646,47 @@ class DirectModificationProtocolTests(unittest.TestCase):
         self.assertEqual(continuation["direct_modification_owner"], "frontend")
         self.assertEqual(continuation["request"], "修复登录按钮无响应")
         self.assertEqual(continuation["status"], "in_progress")
+
+    def test_rejected_implementation_confirmation_is_completed_terminal_state(self) -> None:
+        """取消实现修改确认必须直接成功收口，不得成为失败 Workflow。"""
+
+        request = DirectModificationInput.model_validate(
+            {
+                "workspaceRoot": "/workspace",
+                "originalRequest": "修复登录按钮无响应",
+                "handoffDecision": "rejected",
+            }
+        )
+        continuation = _direct_confirmation_continuation(
+            request=request,
+            thread_id="conversation-thread",
+            checkpoint_values={
+                "request": "修复登录按钮无响应",
+                "active_thread_id": "conversation-thread",
+                "status": "requires_user_input",
+                "conversation_intent": "implementation_fix",
+                "direct_modification_owner": "frontend",
+                "direct_modification_scope": "direct",
+                "direct_modification_target_paths": ["Frontend/src/Login.tsx"],
+                "direct_modification_approved_paths": [],
+                "change_impact_code_scan_required": True,
+                "clarification": {
+                    "mode": "implementation_fix_confirmation",
+                    "requestedPaths": [],
+                },
+            },
+        )
+
+        self.assertIsNotNone(continuation)
+        self.assertEqual(continuation["status"], "completed")
+        self.assertEqual(
+            continuation["direct_modification_resume_node"],
+            "finalize_direct_modification",
+        )
+        self.assertEqual(
+            continuation["message"],
+            "用户已取消本次修改确认，本次工作区不会继续写入。",
+        )
 
     def test_confirmation_without_matching_checkpoint_fails_closed(self) -> None:
         """没有匹配的服务端确认 checkpoint 时禁止把批准动作当新请求重分类。"""
@@ -1826,6 +2093,8 @@ class DirectModificationProtocolTests(unittest.TestCase):
         self.assertEqual(process_step["status"], "running")
         self.assertEqual(process_step["title"], "read_file")
         self.assertEqual(process_step["detail"], "正在读取文件：/src/App.tsx")
+        self.assertEqual(process_step["nodeName"], "execute_frontend")
+        self.assertEqual(process_step["sequence"], 65)
 
     def test_text_delta_projects_to_ag_ui_stream_without_process_noise(self) -> None:
         """模型正文增量必须进入文本流，而不是伪装成“正在思考”进度。"""
@@ -1910,19 +2179,11 @@ class DirectModificationProtocolTests(unittest.TestCase):
                     }
                 }
                 yield "updates", {
-                    "integration_test": {
-                        "phase": "integration_test",
-                        "status": "in_progress",
-                        "message": "快速修改验证通过。",
+                    "validate_direct_fix": {
+                        "phase": "validate_direct_fix",
+                        "status": "completed",
+                        "message": "本次修改范围验证通过。",
                         "quality_gate_passed": True,
-                    }
-                }
-                yield "updates", {
-                    "launch_project": {
-                        "phase": "launch_project",
-                        "status": "requires_user_input",
-                        "message": "本地预览启动完成。",
-                        "launch_result": {"status": "running"},
                     }
                 }
                 yield "updates", {"finalize_direct_modification": final_state}
@@ -1971,6 +2232,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
         self.assertIn("STATE_SNAPSHOT", frames)
         self.assertIn("RUN_FINISHED", frames)
         self.assertIn("正在执行 识别对话意图", frames)
+        self.assertNotIn("启动本地预览", frames)
         self.assertLess(
             frames.index("正在执行 执行前端修改"),
             frames.index("已完成 执行前端修改"),

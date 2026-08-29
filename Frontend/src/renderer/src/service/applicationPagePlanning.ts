@@ -3,13 +3,20 @@ import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import type {
   ApplicationConfig,
+  ApplicationLifecycle,
   WorkflowConfirmationArtifact,
   WorkflowRevisionContinuation,
   WorkflowRunPayload
 } from '../typings'
 import { DatasourceEnum } from '../typings'
 import { AgUiChatSession } from './agUiAgent'
+import { workflowApplicationLifecycle } from './activeApplicationPlanning'
 import { createAgUiHttpAgent } from './authentication'
+
+export type WorkflowRevisionContinuationHandoff = {
+  continuation: WorkflowRevisionContinuation
+  lifecycle: ApplicationLifecycle
+}
 
 type RequirementSpecDraftPayload = {
   schemaVersion: 1
@@ -68,6 +75,27 @@ export function revisionContinuationFromWorkflow(
       /^[0-9a-f]{64}$/.test(value.technicalPlanSha256)
     )
   })
+}
+
+/** 从签发 continuation 的同一份 Workflow 快照读取并校验权威生命周期。 */
+export function revisionContinuationHandoffFromWorkflow(
+  workflow: WorkflowRunPayload | undefined
+): WorkflowRevisionContinuationHandoff | undefined {
+  const continuation = revisionContinuationFromWorkflow(workflow)
+  if (!continuation) return undefined
+  const lifecycle = workflowApplicationLifecycle(workflow)
+  const activeRevision = lifecycle?.activeFormalRevision
+  if (
+    !lifecycle ||
+    !activeRevision ||
+    activeRevision.changeId !== continuation.changeId ||
+    activeRevision.formalBranch !== continuation.formalBranch ||
+    activeRevision.status !== 'continuation_ready' ||
+    activeRevision.technicalPlanSha256 !== continuation.technicalPlanSha256
+  ) {
+    throw new Error('revision continuation 缺少匹配的权威 lifecycle 快照。')
+  }
+  return { continuation, lifecycle }
 }
 
 // 校验需求文档草稿保存动作的 AG-UI 响应信封。

@@ -150,25 +150,24 @@ def direct_modification_repair(state: ProjectState) -> dict[str, Any]:
     plan = captured.value if isinstance(captured.value, dict) else {}
     plan_path = persist_direct_repair_plan(state, plan)
     if plan.get("decision") == "requires_user_confirmation" or plan.get("status") == "requires_user_confirmation":
-        requested_paths = plan.get("requestedPaths")
-        if not isinstance(requested_paths, list) or not any(
-            str(path).strip() for path in requested_paths
-        ):
+        if plan.get("escalationKind") == "formal_revision":
+            reason = str(plan.get("reason") or "自动修复需要改变已确认的正式语义。")
             revision_confirmation = build_small_task_revision_confirmation(
                 state=state,
                 escalation={
-                    "reason": str(plan.get("reason") or "自动修复需要正式修改。"),
+                    "reasonCode": "formal_revision",
+                    "reason": reason,
                     "requestedPaths": [],
                     "requestedResources": plan.get("requestedResources", []),
                 },
-                reason=str(plan.get("reason") or "自动修复需要正式修改。"),
+                reason=reason,
             )
             return {
                 **_repair_wait(
                     state,
                     iteration=iteration,
                     maximum=maximum,
-                    message="自动修复需要改变正式语义，已暂停写入。",
+                    message="自动修复明确需要改变正式语义，已暂停写入。",
                     plan=plan,
                     plan_path=plan_path,
                     tasks=candidate_repair_tasks(plan),
@@ -180,6 +179,22 @@ def direct_modification_repair(state: ProjectState) -> dict[str, Any]:
                 **revision_confirmation,
                 "small_task_handoff": {},
             }
+        requested_paths = plan.get("requestedPaths")
+        if not isinstance(requested_paths, list) or not any(
+            str(path).strip() for path in requested_paths
+        ):
+            return _repair_failure(
+                state,
+                iteration=iteration,
+                maximum=maximum,
+                reason="RepairPlanner 没有提供可验证的真实代码文件范围，已停止自动修复。",
+                plan=plan,
+                plan_path=plan_path,
+                tasks=candidate_repair_tasks(plan),
+                results=previous_small_task_results,
+                small_task_changes=previous_small_task_changes,
+                direct_changes=previous_direct_changes,
+            )
         handoff = repair_plan_handoff(plan)
         return _repair_wait(
             state,
@@ -241,6 +256,19 @@ def direct_modification_repair(state: ProjectState) -> dict[str, Any]:
 
     preflight = first_direct_repair_preflight(tasks)
     if preflight:
+        if preflight.get("reasonCode") == "missing_code_scope":
+            return _repair_failure(
+                state,
+                iteration=iteration,
+                maximum=maximum,
+                reason=str(preflight.get("reason") or "自动修复缺少真实代码文件范围。"),
+                plan=plan,
+                plan_path=plan_path,
+                tasks=tasks,
+                results=previous_small_task_results,
+                small_task_changes=previous_small_task_changes,
+                direct_changes=previous_direct_changes,
+            )
         revision_confirmation = build_small_task_revision_confirmation(
             state=state,
             escalation=preflight,
@@ -464,10 +492,10 @@ def direct_modification_repair(state: ProjectState) -> dict[str, Any]:
         "small_task_code_change_sets": all_small_task_changes,
         "small_task_handoff": {},
         "small_task_handoff_submission": {},
-        "small_task_route": "integration_test",
+        "small_task_route": "validate_direct_fix",
         "repair_iteration": next_iteration,
         "max_repair_iterations": maximum,
-        "integration_next_action": "integration_test",
+        "integration_next_action": "validate_direct_fix",
         "direct_code_change_sets": direct_changes,
         "code_changes": merge_code_change_sets(direct_changes) or state.get("code_changes", {}),
         "clarification": {},

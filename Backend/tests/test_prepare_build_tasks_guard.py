@@ -531,6 +531,107 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ],
         )
 
+    def test_latest_technical_plan_rematerializes_page_contracts_from_formal_artifacts(self) -> None:
+        """Build 重读正式 TechnicalPlan 后必须恢复运行时页面实现契约。"""
+
+        requirement_spec = {
+            "confirmation_status": "confirmed",
+            "app_info": {"name": "人名", "summary": "录入并查看人名。"},
+            "user_roles": [],
+            "feature_modules": [],
+            "acceptance_criteria": [],
+        }
+        product_plan = {
+            "confirmation_status": "confirmed",
+            "app": {"name": "人名", "summary": "录入并查看人名。"},
+            "business_flows": [],
+            "product_acceptance_criteria": [],
+            "pages": [
+                {
+                    "pageId": "home",
+                    "name": "首页",
+                    "path": "/page/home",
+                    "actions": [
+                        {
+                            "actionId": "export_names_excel",
+                            "name": "导出 Excel",
+                            "behavior": {"type": "business"},
+                        }
+                    ],
+                    "navigation_targets": [],
+                    "acceptance_criteria": [],
+                }
+            ],
+        }
+        ui_designs = {
+            "confirmation_status": "skipped",
+            "pages": [],
+        }
+        technical_plan = {
+            "artifact_type": "technical-plan",
+            "confirmation_status": "confirmed",
+            "pages": [
+                {
+                    "pageId": "home",
+                    "references": {
+                        "endpoint_dependencies": [
+                            {"endpoint_id": "person_name_api.export"},
+                        ],
+                        "action_implementations": [
+                            {
+                                "actionId": "export_names_excel",
+                                "endpointId": "person_name_api.export",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "api_contracts": [
+                {
+                    "id": "person_name_api",
+                    "endpoints": [{"id": "person_name_api.export"}],
+                }
+            ],
+            "entities": [],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
+            technical_path.parent.mkdir(parents=True, exist_ok=True)
+            technical_path.write_text(json.dumps(technical_plan), encoding="utf-8")
+            latest_plan = _latest_project_plan(
+                {
+                    "workspace": workspace,
+                    "project_plan": {
+                        **technical_plan,
+                        "page_implementation_contracts": [{"pageId": "stale"}],
+                    },
+                    "project_plan_json_path": str(technical_path),
+                },
+                formal_artifacts={
+                    "requirement_spec": requirement_spec,
+                    "product_plan": product_plan,
+                    "ui_designs": ui_designs,
+                    "technical_plan": technical_plan,
+                },
+            )
+
+        self.assertNotIn("page_implementation_contracts", technical_plan)
+        self.assertEqual(
+            latest_plan["page_implementation_contracts"][0]["pageId"],
+            "home",
+        )
+        self.assertEqual(
+            latest_plan["page_implementation_contracts"][0]["requiredEndpointIds"],
+            ["person_name_api.export"],
+        )
+        self.assertEqual(
+            latest_plan["page_implementation_contracts"][0]["actionBindings"][0][
+                "endpointId"
+            ],
+            "person_name_api.export",
+        )
+
     def test_page_scope_prepares_only_direct_units_and_context(self) -> None:
         """页面 scope 只编译当前页面、直接数据源和必要公共 Unit 的叶子任务。"""
 

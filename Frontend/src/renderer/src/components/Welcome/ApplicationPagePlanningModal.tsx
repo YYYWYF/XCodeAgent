@@ -14,9 +14,11 @@ import type {
 import {
   buildApplicationPlanningRequest,
   createApplicationPlanningSession,
-  revisionContinuationFromWorkflow,
+  revisionContinuationHandoffFromWorkflow,
   saveRequirementSpecDraft
 } from '../../service/applicationPagePlanning'
+import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
+import { workflowApplicationLifecycle } from '../../service/activeApplicationPlanning'
 import { getApplicationLifecycle } from '../../service/applicationLifecycle'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { cx } from '../../utils'
@@ -71,15 +73,13 @@ type Props = {
           editedRequirementSpec?: Record<string, unknown>,
           requirementSpecFeedback?: string,
           designChangeRequest?: string
-        ) => void)
+        ) => Promise<void>)
       | null
   ) => void
   onStartDesignRevisionChange: (
     handler: ((input: WorkflowDesignStageRevisionStart) => Promise<void>) | null
   ) => void
-  onRevisionContinuation: (
-    continuation: import('../../typings').WorkflowRevisionContinuation
-  ) => Promise<void>
+  onRevisionContinuation: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   onPlanningContent?: (content: string) => void
   onPlanningWorkflow?: (workflow: WorkflowRunPayload) => void
   onTechnicalPlanConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
@@ -509,6 +509,8 @@ export default function ApplicationPagePlanningModal({
     const mergedWorkflow = retainApplicationPlanningInterrupt(workflowRef.current, nextWorkflow)
     workflowRef.current = mergedWorkflow
     setWorkflow(mergedWorkflow)
+    const lifecycle = workflowApplicationLifecycle(mergedWorkflow)
+    if (lifecycle) onLifecycleChange(lifecycle)
     if (publishExternally) onWorkflowChange(mergedWorkflow)
     return mergedWorkflow
   }
@@ -605,10 +607,10 @@ export default function ApplicationPagePlanningModal({
         // sendMessage 完整结束后才把待输入/终态发布到工作台；此时 checkpoint 已稳定。
         if (mergedWorkflow) onPlanningWorkflow?.(mergedWorkflow)
       }
-      const continuation = revisionContinuationFromWorkflow(result.workflow)
-      if (continuation) {
+      const continuationHandoff = revisionContinuationHandoffFromWorkflow(result.workflow)
+      if (continuationHandoff) {
         completedRef.current = true
-        await onRevisionContinuation(continuation)
+        await onRevisionContinuation(continuationHandoff)
         return
       }
       const confirmation = workflowConfirmation(result.workflow)
@@ -739,34 +741,36 @@ export default function ApplicationPagePlanningModal({
   }
 
   // 提交当前确认卡答案，并用服务端中断标识精确恢复同一个审阅门。
-  const handleSubmitClarification = (
+  const handleSubmitClarification = async (
     currentWorkflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
     designChangeRequest?: string
-  ): void => {
-    void (async () => {
-      try {
-        // 空答案 = UI 设计稿生成池轮询（no-op resume）：不构造 interaction，
-        // 直接以 undefined 传入 runPlanning，后端走恢复路径重读 ui-designs.json。
-        if (Object.keys(answers).length === 0) {
-          void runPlanning('请根据本轮确认继续创建规划。', undefined)
-          return
-        }
-        const submittable = await loadSubmittablePlanningWorkflow(currentWorkflow)
-        const interaction = buildPlanningInteraction(
-          submittable,
-          answers,
-          editedRequirementSpec,
-          requirementSpecFeedback,
-          designChangeRequest
-        )
-        void runPlanning(designChangeRequest?.trim() || '请根据本轮确认继续创建规划。', interaction)
-      } catch (reason) {
-        setError(formatError(reason, designChangeRequest ? '设计变更提交失败' : '创建规划确认失败'))
+  ): Promise<void> => {
+    try {
+      // 空答案 = UI 设计稿生成池轮询（no-op resume）：不构造 interaction，
+      // 直接以 undefined 传入 runPlanning，后端走恢复路径重读 ui-designs.json。
+      if (Object.keys(answers).length === 0) {
+        await runPlanning('请根据本轮确认继续创建规划。', undefined)
+        return
       }
-    })()
+      const submittable = await loadSubmittablePlanningWorkflow(currentWorkflow)
+      const interaction = buildPlanningInteraction(
+        submittable,
+        answers,
+        editedRequirementSpec,
+        requirementSpecFeedback,
+        designChangeRequest
+      )
+      await runPlanning(
+        designChangeRequest?.trim() || '请根据本轮确认继续创建规划。',
+        interaction
+      )
+    } catch (reason) {
+      setError(formatError(reason, designChangeRequest ? '设计变更提交失败' : '创建规划确认失败'))
+      throw reason
+    }
   }
 
   // 把提交确认的能力注册给 AppEntryPage，供工作台中间区的 ApplicationPlanningQuestionPanel
@@ -779,7 +783,7 @@ export default function ApplicationPagePlanningModal({
         editedRequirementSpec?: Record<string, unknown>,
         requirementSpecFeedback?: string,
         designChangeRequest?: string
-      ) => {
+      ) =>
         handleSubmitClarificationRef.current(
           workflow,
           answers,
@@ -787,7 +791,6 @@ export default function ApplicationPagePlanningModal({
           requirementSpecFeedback,
           designChangeRequest
         )
-      }
     )
     return () => onSubmitClarificationChange(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps

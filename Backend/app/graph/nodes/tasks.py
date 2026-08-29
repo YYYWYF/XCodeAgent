@@ -46,6 +46,7 @@ from app.services.build_unit_skeleton import (
 from app.services.entity_definitions import entity_design_summaries, plan_data_sources
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_dependencies import validate_project_plan_dependencies
+from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
     load_project_plan_json,
@@ -59,8 +60,12 @@ from app.workspace.task_documents import (
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
-def _latest_project_plan(state: ProjectState) -> dict:
-    """优先从 ProjectPlan JSON 读取并回填最新详情，避免 Build 使用 checkpoint 中的旧对象。"""
+def _latest_project_plan(
+        state: ProjectState,
+        *,
+        formal_artifacts: dict[str, dict[str, Any]] | None = None,
+) -> dict:
+    """读取最新正式计划，并为当前 TechnicalPlan 重新物化 Build 运行时投影。"""
 
     project_plan = state["project_plan"]
     if project_plan.get("confirmation_status") != "confirmed":
@@ -69,16 +74,40 @@ def _latest_project_plan(state: ProjectState) -> dict:
         return project_plan
     path = project_plan_json_path(state)
     if path.is_file():
-        return load_project_plan_json(path, hydrate_detail_designs=True)
+        latest_plan = load_project_plan_json(path, hydrate_detail_designs=True)
+        if latest_plan.get("artifact_type") != "technical-plan":
+            return latest_plan
+        artifacts = formal_artifacts or {}
+        requirement_spec = (
+            artifacts.get("requirement_spec") or state.get("requirement_spec")
+        )
+        product_plan = artifacts.get("product_plan") or state.get("product_plan")
+        ui_designs = artifacts.get("ui_designs") or state.get("ui_designs")
+        if not all(
+                isinstance(artifact, dict) and artifact
+                for artifact in (requirement_spec, product_plan, ui_designs)
+        ):
+            return latest_plan
+        # 正式 TechnicalPlan 不持久化 PageImplementationContract；Build 每次都必须
+        # 使用最新正式上游重新编译，不能让磁盘重载抹掉运行时派生契约。
+        return materialize_technical_plan_runtime(
+            latest_plan,
+            requirement_spec,
+            product_plan,
+            ui_designs,
+        )
     return project_plan
 
 
 def prepare_build_tasks(state: ProjectState) -> dict:
     """按应用、页面、数据源或 endpoint 范围编译任务子图并持久化 Build DAG。"""
-    project_plan = _latest_project_plan(state)
     workspace = workspace_from_state(state)
-    build_execution_scope = _build_execution_scope_from_state(state)
     formal_artifacts = _load_formal_artifacts(workspace)
+    project_plan = _latest_project_plan(
+        state,
+        formal_artifacts=formal_artifacts,
+    )
+    build_execution_scope = _build_execution_scope_from_state(state)
     formal_artifact_state = _formal_artifact_state_update(formal_artifacts)
     prerequisite_errors = _build_prerequisite_errors(
         state,

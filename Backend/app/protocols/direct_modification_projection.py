@@ -20,9 +20,8 @@ DIRECT_NODE_LABELS = {
     "execute_backend": "执行后端修改",
     "execute_frontend": "执行前端修改",
     "execute_workspace": "执行工作区修改",
-    "integration_test": "验证项目",
+    "validate_direct_fix": "验证本次修改",
     "direct_modification_repair": "自动修复局部代码",
-    "launch_project": "启动本地预览",
     "finalize_direct_modification": "整理修改结果",
 }
 DIRECT_NODE_PERCENT = {
@@ -34,9 +33,8 @@ DIRECT_NODE_PERCENT = {
     "execute_backend": 40,
     "execute_frontend": 65,
     "execute_workspace": 80,
-    "integration_test": 80,
+    "validate_direct_fix": 80,
     "direct_modification_repair": 90,
-    "launch_project": 95,
     "finalize_direct_modification": 100,
 }
 
@@ -233,7 +231,7 @@ def direct_node_process_step(
     label = DIRECT_NODE_LABELS.get(node_name, node_name)
     checks = (
         integration_test_checks(update.get("test_results", []))
-        if node_name == "integration_test"
+        if node_name == "validate_direct_fix"
         else None
     )
     detail = direct_state_message(update)

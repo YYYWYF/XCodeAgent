@@ -438,7 +438,8 @@ test('自由对话运行时展示实时步骤与工具活动', () => {
       status: 'running' as const,
       title: '正在执行 执行前端修改',
       detail: '正在执行：执行前端修改',
-      sequence: 60
+      sequence: 65,
+      nodeName: 'execute_frontend'
     },
     {
       id: 'direct-tool:read-old',
@@ -446,7 +447,8 @@ test('自由对话运行时展示实时步骤与工具活动', () => {
       status: 'completed' as const,
       title: 'grep',
       detail: '已完成搜索代码：旧调用',
-      sequence: 100
+      sequence: 65,
+      nodeName: 'execute_frontend'
     },
     {
       id: 'direct-tool:read-current',
@@ -454,7 +456,8 @@ test('自由对话运行时展示实时步骤与工具活动', () => {
       status: 'running' as const,
       title: 'read_file',
       detail: '正在读取文件：/src/App.tsx',
-      sequence: 101
+      sequence: 65,
+      nodeName: 'execute_frontend'
     }
   ]
 
@@ -481,6 +484,63 @@ test('自由对话运行时展示实时步骤与工具活动', () => {
   assert.match(markup, /展开调用链/)
   assert.match(markup, /已记录 2 次调用/)
   assert.doesNotMatch(markup, /已调用 grep 工具/)
+})
+
+test('自由对话把工具调用链放入所属节点并保留失败与等待状态', () => {
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      conversation: true,
+      loading: false,
+      steps: [
+        {
+          id: 'direct:execute_frontend',
+          kind: 'workflow' as const,
+          status: 'completed' as const,
+          title: '已完成 执行前端修改',
+          detail: '前端修改完成。',
+          sequence: 65,
+          nodeName: 'execute_frontend'
+        },
+        {
+          id: 'direct-tool:read-app',
+          kind: 'tool' as const,
+          status: 'completed' as const,
+          title: 'read_file',
+          detail: '已完成读取文件：/frontend/src/App.tsx',
+          sequence: 65,
+          nodeName: 'execute_frontend'
+        },
+        {
+          id: 'direct:validate_direct_fix',
+          kind: 'workflow' as const,
+          status: 'failed' as const,
+          title: '执行失败 验证本次修改',
+          detail: '构建失败。',
+          sequence: 80,
+          nodeName: 'validate_direct_fix'
+        },
+        {
+          id: 'direct:direct_modification_repair',
+          kind: 'workflow' as const,
+          status: 'requires_user_input' as const,
+          title: '等待输入 自动修复局部代码',
+          detail: '需要确认影响范围。',
+          sequence: 90,
+          nodeName: 'direct_modification_repair'
+        }
+      ]
+    })
+  )
+
+  const executionStart = markup.indexOf('已完成修改前端文件')
+  const toolChain = markup.indexOf('aria-label="工具调用链"')
+  const executionEnd = markup.indexOf('</details>', executionStart)
+  const validation = markup.indexOf('验证本次修改失败')
+  assert.ok(executionStart >= 0)
+  assert.ok(toolChain > executionStart && toolChain < executionEnd)
+  assert.ok(validation > executionEnd)
+  assert.match(markup, /等待确认 · 自动修复局部代码/)
+  assert.doesNotMatch(markup, /已完成验证修改/)
 })
 
 test('标准 AG-UI 工具事件默认只展示最新调用', () => {
@@ -1592,12 +1652,13 @@ test('没有详情的步骤保持静态且只有验证步骤可以展开', () =>
           sequence: 10
         },
         {
-          id: 'direct:integration_test',
+          id: 'direct:validate_direct_fix',
           kind: 'workflow',
           status: 'completed',
-          title: '已完成 验证项目',
+          title: '已完成 验证本次修改',
           detail: '',
           sequence: 80,
+          nodeName: 'validate_direct_fix',
           checks: [
             {
               id: 'frontend_build',
@@ -2255,10 +2316,32 @@ test('会话恢复保留有效的二次修改交接回执并拒绝残缺回执',
       request: '新增报表页'
     }
   })
-  assert.equal(
-    (development.revisionHandoff as Record<string, unknown>).changeId,
-    'change-1'
-  )
+  assert.equal((development.revisionHandoff as Record<string, unknown>).changeId, 'change-1')
+
+  const planning = normalizePersistentSessionMessage({
+    id: 4,
+    role: 'assistant',
+    content: '',
+    createdAt: 4,
+    revisionHandoff: {
+      kind: 'revision_planning',
+      formalBranch: 'design_stage_revision',
+      targetSessionId: 'planning-session',
+      targetConversationThreadId: 'planning-thread',
+      impactInteractionId: 'impact-1',
+      changeId: 'change-1',
+      request: '需求设计已确认，进入技术规划阶段'
+    }
+  })
+  assert.deepEqual(planning.revisionHandoff, {
+    kind: 'revision_planning',
+    formalBranch: 'design_stage_revision',
+    targetSessionId: 'planning-session',
+    targetConversationThreadId: 'planning-thread',
+    impactInteractionId: 'impact-1',
+    changeId: 'change-1',
+    request: '需求设计已确认，进入技术规划阶段'
+  })
 })
 
 test('二次修改会话身份必须完整绑定来源、原规划线程和可选 changeId', () => {

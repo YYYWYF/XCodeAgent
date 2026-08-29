@@ -96,12 +96,13 @@ SmallTask 禁止通过该路径：
 
 这里的“返回现有设计阶段”同时包含两个不同层面的身份，二者不能混用：
 
-- 前端创建一个新的、用户可见的二次修改需求设计会话，并原样写入本次修改请求；产品阶段和规划阶段分别保存自己的 session 记录，但共享同一个新的 conversation thread，使整轮需求修改在会话历史中独立且连续。
+- 前端为二次修改的 DESIGN、PLAN、DEVELOPMENT 三个业务阶段分别创建独立 StageSession 和独立 conversation thread；同一轮通过 `workflowId + changeId + revisionContext` 保持 lineage，不复制聊天上下文，也不复用跨阶段 thread。
 - 后端不创建第二个设计 Graph，仍以 lifecycle 中的原 `planningThreadId` 恢复原 `application_planning_workflow` checkpoint；新的 conversation thread 只承接前端消息展示和流式投影，不作为 Graph 恢复依据。
 - 二次修改 session 持久化绑定 `impactInteractionId + sourceSessionId + sourceConversationThreadId + sourceRunId + planningThreadId + changeId`。其中 `changeId` 由审批后的 lifecycle 补齐，冷恢复必须按完整身份匹配，不能按标题猜测或退回原可见规划会话。
 - 发起二次修改的来源会话保留一条交接回执，记录目标 session/thread 和原始请求，并提供“打开二次修改会话”入口；交接回执不是新的审批，也不改变原 checkpoint 的权威性。
+- DESIGN 确认进入 PLAN 时同样在 DESIGN 来源会话写入可点击交接回执；阶段启动失败时先撤销回执，再删除尚未成功进入的预创建 StageSession，并保留来源会话供用户重试。若回执撤销无法落盘，则保留其目标 StageSession，不能制造悬空跳转。
 - TechnicalPlan 确认后再创建一个新的、用户可见的二次修改开发会话；该会话使用新的 AG-UI conversation thread，但通过同一个 `changeId`、TechnicalPlan 哈希和来源需求设计会话与 revision lineage 绑定。
-- “进入开发”是显式且幂等的 handoff：重复触发同一 `changeId + technicalPlanSha256` 时复用已持久化的开发会话；只有开发 Workflow 成功接管 continuation 后才切换到开发阶段并写入来源回执。创建或启动失败时保留在需求设计会话，允许重试。
+- “进入开发”是显式且幂等的 handoff：重复触发同一 `workflowId + changeId + technicalPlanSha256 + 来源 PLAN session/thread` 时复用已持久化的开发会话；只有开发 Workflow 成功接管 continuation 后才切换到开发阶段并写入来源回执。创建或启动失败时保留在 PLAN 会话，清理未成功进入且没有成功回执指向的预创建 DEVELOPMENT StageSession，并允许重试。
 
 该 branch 不新建第二套设计 Graph，不复制设计节点，不改变 UiDesign 当前内部增量/重建策略。
 
@@ -168,7 +169,7 @@ TechnicalPlan 草稿 -> 确认并成为 canonical -> Build DAG
 
 代码不是正式计划草稿：
 
-- `implementation_fix` 的 workspace owner 可直接写入精确授权的普通工作区文件；frontend/backend/fullstack owner 必须先通过 `implementation_fix_confirmation`，再写入代码并执行独立验证。
+- `implementation_fix` 的 workspace owner 可直接写入精确授权的普通工作区文件；frontend/backend/fullstack owner 必须先通过 `implementation_fix_confirmation`，再写入代码并执行独立验证。用户取消确认时以正常完成终态结束且不展示异常卡；独立验证通过后直接完成当前小修改，不启动项目预览，也不进入正式验收。
 - formal revision 不以“计划已修改”为终点。所有受影响正式产物确认且非 stale 后，必须生成并确认 Build DAG，再进入代码修改、测试、预览和验收。
 - 设计 branch 完成原 TechnicalPlan 确认后，由系统自动继续同一次 revision；用户不需要回到工作台重新输入需求或再次确认影响范围。
 - Build/Test 后的用户反馈重新进入统一路由，形成下一次向前修正；不自动恢复代码或已确认正式产物。
@@ -326,12 +327,14 @@ flowchart TD
     E -- casual_chat --> F["直接回答"]
     E -- workspace_question --> G["只读工作区回答"]
     E -- clarification --> H["等待结构化澄清"]
-    E -- implementation_fix --> I["非 workspace 先确认实现范围，再 SmallTask -> Test -> 完成"]
+    E -- implementation_fix --> I["非 workspace 先确认实现范围，再 SmallTask -> 范围验证 -> 完成"]
     E -- formal_revision --> J["展示影响范围确认卡"]
     J -- 取消 --> K["结束，不执行 branch"]
     J -- 确认返回设计阶段 --> L["现有设计阶段修订"]
     J -- 确认生成草稿 --> M["工作台正式草稿流程"]
 ```
+
+`implementation_fix` 不复用正式 Workflow 的完整 `integration_test`。代码写入后由 `validate_direct_fix` 读取本轮真实 diff，只执行受影响的 frontend/backend 构建与对应测试；同层失败只有在证据命中真实变更文件，或本轮修改了 package、tsconfig、pom 等工程级配置时才阻断，无法归因的既有失败只作为 advisory。验证失败后的自动修复仍限制在这些真实文件内。缺少或仅有占位文件路径时直接停止并展示失败证据，不能据此推断正式语义变化；只有 RepairPlanner 显式输出 `formal_revision` 才展示正式修改确认。
 
 ### 5.2 工作台正式草稿流程
 

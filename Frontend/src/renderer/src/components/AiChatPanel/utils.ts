@@ -16,6 +16,7 @@ export type WorkflowPreviewTarget = {
 
 export type WorkflowFinalResultPresentation = {
   failed: boolean
+  terminal: boolean
   title: string
 }
 
@@ -336,10 +337,13 @@ export function workflowCodeChangesBeforeConfirmation(
 export function workflowFinalResultPresentation(
   workflow: WorkflowRunPayload | undefined
 ): WorkflowFinalResultPresentation {
-  const failed = workflow?.summary.status === 'failed'
+  const status = workflow?.summary.status
+  const failed = status === 'failed'
+  const completed = status === 'completed' || status === 'passed'
   return {
     failed,
-    title: failed ? '任务执行失败' : '任务已完成'
+    terminal: failed || completed,
+    title: failed ? '任务执行失败' : completed ? '任务已完成' : ''
   }
 }
 

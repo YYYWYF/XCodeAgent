@@ -13,6 +13,7 @@
     "test:auth": "node scripts/run-auth-tests.mjs",
     "test:chat-skills": "node scripts/run-chat-skills-tests.mjs",
     "test:design-conversation": "node scripts/run-design-conversation-tests.mjs",
+    "test:stage-sessions": "node scripts/run-stage-session-tests.mjs",
     "test:message-list-scroll": "node scripts/run-message-list-scroll-tests.mjs",
     "test:managed-workspace": "node scripts/run-managed-workspace-tests.mjs",
     "test:application-authorization": "node scripts/run-application-authorization-tests.mjs",

@@ -28,9 +28,8 @@ from app.graph.nodes.common import (
     refresh_code_graph_after_changes,
     workspace_from_state,
 )
-from app.graph.nodes.lifecycle import launch_project
 from app.graph.state import ProjectState
-from app.graph.subgraphs.testing import integration_test
+from app.graph.subgraphs.testing import _check_progress_snapshot_writer
 from app.services.direct_modification import (
     append_direct_conversation_summary,
     direct_path_matches_owner,
@@ -40,10 +39,12 @@ from app.services.direct_modification import (
     validated_dynamic_workspace_paths,
     validated_direct_stage_result,
 )
+from app.services.integration_test_runner import run_integration_checks
 from app.services.revision_routing import (
     build_small_task_revision_confirmation,
     route_from_change_impact,
 )
+from app.services.test_validation import evaluate_quality_gate
 from app.domain.change_impact import (
     AnalysisStatus,
     ChangeImpactAnalysis,
@@ -52,6 +53,7 @@ from app.domain.change_impact import (
 from app.services.change_code_scan import sanitize_code_scan_evidence, scan_targeted_code
 from app.services.change_contracts import load_confirmed_contract_corpus
 from app.workspace.code_changes import CapturedWorkspaceChanges, merge_code_change_sets
+from app.workspace.test_documents import write_test_report_json, write_test_report_markdown
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
@@ -136,7 +138,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
     if state.get("direct_modification_handoff_decision") == "rejected":
         return {
             **base,
-            "status": "failed",
+            "status": "completed",
             "message": "用户已取消本次修改确认，本次工作区不会继续写入。",
             "clarification": {},
         }
@@ -942,83 +944,187 @@ def execute_workspace_direct_modification(state: ProjectState) -> dict[str, Any]
     return update
 
 
-def run_direct_modification_integration_test(state: ProjectState) -> dict[str, Any]:
-    """复用集成测试节点，并把失败证据交给独立自由对话修复节点。"""
+def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
+    """只检查本轮真实改动所属工程层，并把可归因失败交给局部修复节点。"""
 
     repair_iteration = max(0, int(state.get("repair_iteration", 0) or 0))
     max_repair_iterations = max(
         1,
         int(state.get("max_repair_iterations", 3) or 3),
     )
-    result = integration_test(
-        {
-            **state,
-            "integration_repair_enabled": False,
-            "unit_test_generation_enabled": False,
-            "frontend_performance_test_enabled": False,
-            "repair_iteration": repair_iteration,
-            "max_repair_iterations": max_repair_iterations,
-        }
+    changed_paths = _direct_fix_changed_paths(state)
+    affected_layers = set(changed_paths)
+    validation_state = {
+        **state,
+        "unit_test_affected_layers": sorted(affected_layers),
+        "repair_iteration": repair_iteration,
+        "max_repair_iterations": max_repair_iterations,
+    }
+    result = run_integration_checks(
+        validation_state,
+        on_progress=_check_progress_snapshot_writer(),
+        phase="all",
+        artifact_namespace="direct-fix",
+        affected_layers=affected_layers,
+        install_frontend_dependencies=False,
     )
-    passed = result.get("quality_gate_passed") is True
-    revision_requests = [
-        item
-        for item in result.get("revision_requests", [])
-        if isinstance(item, dict)
-    ]
+    test_results = _scope_direct_validation_results(
+        [item for item in result.get("test_results", []) if isinstance(item, dict)],
+        changed_paths=changed_paths,
+    )
+    scope_valid = bool(affected_layers) and bool(test_results)
+    if not scope_valid:
+        test_results = [
+            {
+                "id": "direct_fix_scope",
+                "name": "快速修改范围检查",
+                "passed": False,
+                "required": True,
+                "blocking": True,
+                "evidence": "本轮真实差异无法映射到 Frontend 或 Backend 代码层。",
+            }
+        ]
+    report = evaluate_quality_gate(
+        test_results=test_results,
+        source="direct_fix_validation",
+    )
+    passed = scope_valid and report["passed"] is True
+    revision_requests = (
+        [item for item in report.get("revision_requests", []) if isinstance(item, dict)]
+        if scope_valid
+        else []
+    )
     can_repair = (
         not passed
         and bool(revision_requests)
         and repair_iteration < max_repair_iterations
     )
-    test_sets = [
-        item
-        for item in result.get("code_change_sets", [])
-        if isinstance(item, dict)
-    ]
+    report_json_path = write_test_report_json(validation_state, report)
+    report_path = write_test_report_markdown(validation_state, report)
     return {
-        **result,
-        "phase": "integration_test",
-        "status": "in_progress" if passed else "failed",
+        "phase": "validate_direct_fix",
+        "status": "completed" if passed else "failed",
         "message": (
-            "快速修改验证通过。"
+            "本次修改范围验证通过。"
             if passed
             else (
-                f"快速修改验证失败，准备执行第 {repair_iteration + 1}/{max_repair_iterations} 轮自动修复。"
+                f"本次修改范围验证失败，准备执行第 {repair_iteration + 1}/{max_repair_iterations} 轮自动修复。"
                 if can_repair
                 else (
-                    f"快速修改验证失败，自动修复已达到 {max_repair_iterations} 轮上限。"
+                    f"本次修改范围验证失败，自动修复已达到 {max_repair_iterations} 轮上限。"
                     if revision_requests and repair_iteration >= max_repair_iterations
-                    else "快速修改验证失败，请查看测试日志。"
+                    else "本次修改缺少可验证的真实代码范围。"
+                    if not scope_valid
+                    else "本次修改范围验证失败，请查看测试日志。"
                 )
             )
         ),
+        "test_results": test_results,
+        "test_events": result.get("test_events", []),
+        "test_report": report,
+        "test_report_path": report_path,
+        "test_report_json_path": report_json_path,
+        "quality_gate_passed": passed,
+        "needs_revision": bool(revision_requests),
         "revision_requests": revision_requests,
         "repair_iteration": repair_iteration,
         "max_repair_iterations": max_repair_iterations,
         "integration_next_action": (
-            "launch_project" if passed else "direct_modification_repair" if can_repair else "handle_failure"
+            "finalize_direct_modification"
+            if passed
+            else "direct_modification_repair"
+            if can_repair
+            else "handle_failure"
         ),
         "repair_task_plan": state.get("repair_task_plan", {}),
         "repair_tasks": state.get("repair_tasks", []),
         "small_task_tasks": state.get("small_task_tasks", []),
-        "small_task_results": result.get(
-            "small_task_results", state.get("small_task_results", [])
-        ),
-        "small_task_code_change_sets": result.get(
-            "small_task_code_change_sets", state.get("small_task_code_change_sets", [])
-        ),
-        "direct_code_change_sets": [
-            *state.get("direct_code_change_sets", []),
-            *test_sets,
-        ],
+        "small_task_results": state.get("small_task_results", []),
+        "small_task_code_change_sets": state.get("small_task_code_change_sets", []),
+        "direct_code_change_sets": state.get("direct_code_change_sets", []),
+        "clarification": {},
+        "timeline": ["validate_direct_fix"],
     }
 
 
-def launch_direct_modification_project(state: ProjectState) -> dict[str, Any]:
-    """复用项目启动节点，并保留其真实构建和启动证据。"""
+def _direct_fix_changed_paths(state: ProjectState) -> dict[str, list[str]]:
+    """按工程层汇总本轮真实差异路径，作为快速验证和失败归因的唯一边界。"""
 
-    return launch_project(state)
+    paths: dict[str, list[str]] = {"frontend": [], "backend": []}
+    for change_set in state.get("direct_code_change_sets", []):
+        if not isinstance(change_set, dict):
+            continue
+        for item in change_set.get("files", []):
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip().replace("\\", "/").lstrip("/")
+            root = path.split("/", 1)[0].casefold() if path else ""
+            if root in paths and path.casefold() not in {
+                existing.casefold() for existing in paths[root]
+            }:
+                paths[root].append(path)
+    return {layer: values for layer, values in paths.items() if values}
+
+
+def _scope_direct_validation_results(
+    results: list[dict[str, Any]],
+    *,
+    changed_paths: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    """把无法归因到本轮真实差异的同层历史失败降为非阻断告警。"""
+
+    scoped: list[dict[str, Any]] = []
+    for result in results:
+        layer = str(result.get("layer") or "").strip().lower()
+        paths = changed_paths.get(layer, [])
+        if result.get("passed") is True or _direct_failure_matches_changes(result, paths):
+            scoped.append(result)
+            continue
+        scoped.append(
+            {
+                **result,
+                "blocking": False,
+                "advisory": True,
+                "evidence": (
+                    f"{str(result.get('evidence') or '').strip()}；"
+                    "失败证据未指向本次真实改动文件，按既有或无关失败记录。"
+                ).strip("；"),
+            }
+        )
+    return scoped
+
+
+def _direct_failure_matches_changes(result: dict[str, Any], paths: list[str]) -> bool:
+    """判断失败证据是否指向变更文件；工程级配置变更默认影响所属层全部检查。"""
+
+    if not paths:
+        return False
+    check_id = str(result.get("id") or "").casefold()
+    if check_id.endswith("_unit_tests"):
+        return True
+    global_markers = (
+        "package.json",
+        "pnpm-lock",
+        "package-lock",
+        "yarn.lock",
+        "tsconfig",
+        "vite.config",
+        "pom.xml",
+        "pyproject.toml",
+        "requirements.txt",
+    )
+    normalized_paths = [path.replace("\\", "/").casefold() for path in paths]
+    if any(marker in path for path in normalized_paths for marker in global_markers):
+        return True
+    evidence = "\n".join(
+        str(result.get(key) or "")
+        for key in ("evidence", "command")
+    ).replace("\\", "/").casefold()
+    return any(
+        path in evidence or Path(path).name.casefold() in evidence
+        for path in normalized_paths
+        if path
+    )
 
 
 def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
@@ -1032,7 +1138,9 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         str(state.get("direct_modification_handoff_decision") or "").strip().lower()
         == "rejected"
     )
-    if is_answer and current_status == "completed":
+    if is_cancelled:
+        status = "completed"
+    elif is_answer and current_status == "completed":
         status = "completed"
     elif launch_result and launch_result.get("status") != "failed":
         status = "completed"

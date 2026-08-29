@@ -10,9 +10,9 @@ import type {
   EditorMode,
   WorkflowClarificationAnswers,
   WorkflowDesignStageRevisionStart,
-  WorkflowRevisionContinuation,
   WorkflowRunPayload
 } from '../../typings'
+import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
 import { cx } from '../../utils'
 import AiChatPanel from '../AiChatPanel'
 import './LeftPanel.less'
@@ -41,11 +41,11 @@ type Props = {
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
-  ) => void
+  ) => Promise<void>
   onStopPlanning: () => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onRevisionContinuationHandlerChange: (
-    handler?: (continuation: WorkflowRevisionContinuation) => Promise<void>
+    handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
   onThemeChange: (theme: 'light' | 'dark') => void
   onPlanningStreamReady?: (

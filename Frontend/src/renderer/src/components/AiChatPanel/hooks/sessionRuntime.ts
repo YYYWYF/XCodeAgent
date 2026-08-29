@@ -1,5 +1,7 @@
 import type { EditorMode } from '../../../typings'
 import type {
+  AgentStage,
+  ChatSessionTargetType,
   ChatSessionRevisionContext,
   ChatSessionSummary
 } from '../../../service/chatSessions'
@@ -8,6 +10,11 @@ export type SessionIdentity = {
   key: string
   sessionId: string
   threadId: string
+  workflowId: string
+  targetType: ChatSessionTargetType
+  stage?: AgentStage
+  sequence?: number
+  entryKey?: string
   apiContractId?: string
   endpointId?: string
   endpointLabel?: string
@@ -47,6 +54,11 @@ export function createSessionIdentity(input: {
   editorMode: EditorMode
   sessionId: string
   threadId: string
+  workflowId: string
+  targetType: ChatSessionTargetType
+  stage?: AgentStage
+  sequence?: number
+  entryKey?: string
   apiContractId?: string
   endpointId?: string
   endpointLabel?: string
@@ -76,6 +88,11 @@ export function sessionIdentityFromSummary(
     editorMode,
     sessionId: summary.id,
     threadId: summary.threadId,
+    workflowId: summary.workflowId,
+    targetType: summary.targetType,
+    stage: summary.stage,
+    sequence: summary.sequence,
+    entryKey: summary.entryKey,
     apiContractId: summary.apiContractId,
     endpointId: summary.endpointId,
     endpointLabel: summary.endpointLabel,

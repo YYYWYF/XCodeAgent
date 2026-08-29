@@ -154,14 +154,19 @@ function RevisionHandoffCard({
   onOpen?: (handoff: NonNullable<AgentChatMessage['revisionHandoff']>) => void
 }): ReactElement {
   const developmentHandoff = handoff.kind === 'revision_development'
+  const planningHandoff = handoff.kind === 'revision_planning'
   const planningRevision = handoff.formalBranch === 'workbench_plan_revision'
   const title = developmentHandoff
     ? 'TechnicalPlan 已确认，已转入独立开发会话'
+    : planningHandoff
+      ? '需求设计已确认，已转入独立技术规划会话'
     : planningRevision
       ? '已转入独立技术规划会话'
       : '已转入独立需求设计会话'
   const buttonText = developmentHandoff
     ? '打开开发会话'
+    : planningHandoff
+      ? '打开技术规划会话'
     : planningRevision
       ? '打开技术规划会话'
       : '打开需求设计会话'
@@ -724,7 +729,7 @@ export default function MessageList({
                           !hasConversationToolActivity && (
                             <ToolCallChain toolCalls={message.toolCalls} />
                           )}
-                        {!messageLoading && visibleCodeChanges && (
+                        {!messageLoading && visibleCodeChanges && finalResult.terminal && (
                           <div
                             className={cx('final-result-heading', finalResult.failed && 'failed')}
                           >

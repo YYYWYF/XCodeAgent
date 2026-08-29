@@ -75,13 +75,19 @@ def small_task_preflight(task: dict[str, Any]) -> dict[str, str]:
             "reason": "数据库结构、迁移或 DDL 变更必须由实体设计确认或专门数据库流程处理。",
             "workflowIntent": "entity_source_binding",
         }
-    if not paths or any(_is_placeholder_path(path) for path in paths) or any(
+    if not paths or any(_is_placeholder_path(path) for path in paths):
+        return {
+            "reasonCode": "missing_code_scope",
+            "reason": "任务没有可验证的真实代码文件范围，不能自动执行或升级为正式修改。",
+            "workflowIntent": "handle_failure",
+        }
+    if any(
         any(marker in path for marker in _FORMAL_PATH_MARKERS)
         for path in normalized_paths
     ):
         return {
-            "reasonCode": "formal_artifact_or_missing_scope",
-            "reason": "任务需要正式工件或没有可验证的代码文件范围。",
+            "reasonCode": "formal_artifact_change",
+            "reason": "任务需要修改正式工件，不能作为局部代码修复执行。",
             "workflowIntent": "prepare_build_tasks",
         }
     return {}

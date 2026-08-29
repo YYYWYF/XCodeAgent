@@ -15,10 +15,18 @@ import {
   readManagedWorkspaceApplication,
   resolveApplicationTemplateBranch
 } from './managedWorkspace'
+import { endpointDesignDocumentExists, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
 import {
-  endpointDesignDocumentExists,
-  PRODUCT_PLAN_SCHEMA_VERSION
-} from './planningArtifactStatus'
+  assertChatSessionTargetBinding,
+  assertChatSessionTargetType,
+  nextStageSessionSequence,
+  stageForWorkbenchPhase,
+  withStageSessionCreationLock,
+  type AgentStage,
+  type ChatSessionTargetType,
+  type EditorMode,
+  type WorkbenchPhase
+} from './stageSessions'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -692,9 +700,6 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   }
 }
 
-type EditorMode = 'frontend' | 'backend'
-type WorkbenchPhase = 'product' | 'planning' | 'development' | 'test' | 'review' | 'acceptance'
-
 type ChatSessionRevisionContext = {
   kind: 'formal_revision'
   sessionRole: 'design' | 'development'
@@ -725,6 +730,11 @@ type ChatSessionSummary = {
   title: string
   editorMode: EditorMode
   workbenchPhase: WorkbenchPhase
+  workflowId: string
+  targetType: ChatSessionTargetType
+  stage?: AgentStage
+  sequence?: number
+  entryKey?: string
   threadId: string
   apiContractId?: string
   endpointId?: string
@@ -745,6 +755,11 @@ type NormalizedChatSession = {
   title: string
   editorMode: EditorMode
   workbenchPhase: WorkbenchPhase
+  workflowId: string
+  targetType: ChatSessionTargetType
+  stage?: AgentStage
+  sequence?: number
+  entryKey?: string
   threadId: string
   apiContractId?: string
   endpointId?: string
@@ -1206,6 +1221,11 @@ function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
     title: String(session.title || '新对话'),
     editorMode: assertEditorMode(session.editorMode),
     workbenchPhase: assertWorkbenchPhase(session.workbenchPhase),
+    workflowId: session.workflowId,
+    targetType: session.targetType,
+    stage: session.stage,
+    sequence: session.sequence,
+    entryKey: session.entryKey,
     threadId: String(session.threadId || ''),
     apiContractId: session.apiContractId,
     endpointId: session.endpointId,
@@ -1233,26 +1253,50 @@ function normalizeSession(session: unknown): NormalizedChatSession {
 
   const editorMode = assertEditorMode(session.editorMode)
   const workbenchPhase = assertWorkbenchPhase(session.workbenchPhase)
+  const workflowId = normalizeSessionEndpointField(session.workflowId)
+  if (!workflowId) throw new Error('workflowId must be a non-empty string')
+  const targetType = assertChatSessionTargetType(session.targetType)
+  const stage = stageForWorkbenchPhase(workbenchPhase)
   const id = assertSessionId(session.id)
+  const threadId = normalizeSessionEndpointField(session.threadId)
+  if (!threadId) throw new Error('threadId must be a non-empty string')
   const messages = Array.isArray(session.messages)
     ? session.messages.filter(isJsonRecord).map(normalizePersistentSessionMessage)
     : []
 
-  const pageId = normalizeSessionPageId(session.pageId) || inferSessionPageId(messages)
-  const endpointContext = normalizeSessionEndpointContext(session, messages)
-  const entityContext = normalizeSessionEntityContext(session, messages)
+  const pageId = normalizeSessionPageId(session.pageId)
+  const apiContractId = normalizeSessionEndpointField(session.apiContractId)
+  const endpointId = normalizeSessionEndpointField(session.endpointId)
+  const endpointLabel = normalizeSessionEndpointField(session.endpointLabel)
+  const entityId = normalizeSessionEndpointField(session.entityId)
+  const entityLabel = normalizeSessionEndpointField(session.entityLabel)
+  assertChatSessionTargetBinding(targetType, { pageId, apiContractId, endpointId, entityId })
+  const sequence = Number(session.sequence)
+  const entryKey = normalizeSessionEndpointField(session.entryKey)
+  if (
+    stage &&
+    (session.stage !== stage || !Number.isInteger(sequence) || sequence < 1 || !entryKey)
+  ) {
+    throw new Error('stage session identity is incomplete')
+  }
+  if (!stage && (session.stage || session.sequence || session.entryKey)) {
+    throw new Error('non-stage session cannot declare stage identity')
+  }
   const revisionContext = normalizeSessionRevisionContext(session.revisionContext)
   return {
     id,
     title: String(session.title || '新对话'),
     editorMode,
     workbenchPhase,
-    threadId: String(session.threadId || id),
-    ...(endpointContext.apiContractId ? { apiContractId: endpointContext.apiContractId } : {}),
-    ...(endpointContext.endpointId ? { endpointId: endpointContext.endpointId } : {}),
-    ...(endpointContext.endpointLabel ? { endpointLabel: endpointContext.endpointLabel } : {}),
-    ...(entityContext.entityId ? { entityId: entityContext.entityId } : {}),
-    ...(entityContext.entityLabel ? { entityLabel: entityContext.entityLabel } : {}),
+    workflowId,
+    targetType,
+    ...(stage ? { stage, sequence, entryKey } : {}),
+    threadId,
+    ...(apiContractId ? { apiContractId } : {}),
+    ...(endpointId ? { endpointId } : {}),
+    ...(endpointLabel ? { endpointLabel } : {}),
+    ...(entityId ? { entityId } : {}),
+    ...(entityLabel ? { entityLabel } : {}),
     ...(pageId ? { pageId } : {}),
     ...(revisionContext ? { revisionContext } : {}),
     createdAt: Number(session.createdAt || Date.now()),
@@ -1327,132 +1371,6 @@ function normalizeSessionRevisionContext(value: unknown): ChatSessionRevisionCon
   }
 }
 
-/** 从会话字段或旧版 Workflow 快照推断 API endpoint 会话归属。 */
-function normalizeSessionEndpointContext(
-  session: JsonRecord,
-  messages: JsonRecord[]
-): { apiContractId?: string; endpointId?: string; endpointLabel?: string } {
-  const explicit = {
-    apiContractId: normalizeSessionEndpointField(session.apiContractId),
-    endpointId: normalizeSessionEndpointField(session.endpointId),
-    endpointLabel: normalizeSessionEndpointField(session.endpointLabel)
-  }
-  if (explicit.apiContractId && explicit.endpointId) return explicit
-  const inferred = inferSessionEndpointContext(messages)
-  return {
-    apiContractId: explicit.apiContractId || inferred.apiContractId,
-    endpointId: explicit.endpointId || inferred.endpointId,
-    endpointLabel:
-      explicit.endpointLabel || inferred.endpointLabel || inferEndpointLabelFromTitle(session.title)
-  }
-}
-
-/** 从会话字段或旧版 Workflow 快照推断实体会话归属。 */
-function normalizeSessionEntityContext(
-  session: JsonRecord,
-  messages: JsonRecord[]
-): { entityId?: string; entityLabel?: string } {
-  const explicit = {
-    entityId: normalizeSessionEndpointField(session.entityId),
-    entityLabel: normalizeSessionEndpointField(session.entityLabel)
-  }
-  if (explicit.entityId) return explicit
-  const inferred = inferSessionEntityContext(messages)
-  return {
-    entityId: explicit.entityId || inferred.entityId,
-    entityLabel:
-      explicit.entityLabel ||
-      inferred.entityLabel ||
-      inferSessionEntityLabelFromTitle(session.title)
-  }
-}
-
-/** 从旧版消息中的 Workflow 状态快照推断页面会话归属。 */
-function inferSessionPageId(messages: JsonRecord[]): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const workflow = messages[index].workflow
-    if (!isJsonRecord(workflow)) continue
-    const state = isJsonRecord(workflow.state) ? workflow.state : undefined
-    const result = isJsonRecord(workflow.result) ? workflow.result : undefined
-    const pageId =
-      normalizeSessionPageId(state?.selectedPageId) ||
-      normalizeSessionPageId(result?.selectedPageId)
-    if (pageId) return pageId
-  }
-  return undefined
-}
-
-/** 从旧版消息中的 Workflow 状态快照推断 API endpoint 会话归属。 */
-function inferSessionEndpointContext(messages: JsonRecord[]): {
-  apiContractId?: string
-  endpointId?: string
-  endpointLabel?: string
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const workflow = messages[index].workflow
-    if (!isJsonRecord(workflow)) continue
-    const state = isJsonRecord(workflow.state) ? workflow.state : undefined
-    const result = isJsonRecord(workflow.result) ? workflow.result : undefined
-    const summary = isJsonRecord(workflow.summary) ? workflow.summary : undefined
-    const clarification = isJsonRecord(summary?.clarification) ? summary.clarification : undefined
-    const review = isJsonRecord(clarification?.review) ? clarification.review : undefined
-    const reviewSummary = isJsonRecord(review?.summary) ? review.summary : undefined
-    const apiContractId =
-      normalizeSessionEndpointField(state?.selectedApiContractId) ||
-      normalizeSessionEndpointField(state?.selected_api_contract_id) ||
-      normalizeSessionEndpointField(result?.selectedApiContractId) ||
-      normalizeSessionEndpointField(result?.selected_api_contract_id) ||
-      normalizeSessionEndpointField(reviewSummary?.selectedApiContractId)
-    const endpointId =
-      normalizeSessionEndpointField(state?.selectedEndpointId) ||
-      normalizeSessionEndpointField(state?.selected_endpoint_id) ||
-      normalizeSessionEndpointField(result?.selectedEndpointId) ||
-      normalizeSessionEndpointField(result?.selected_endpoint_id) ||
-      normalizeSessionEndpointField(reviewSummary?.selectedEndpointId)
-    if (apiContractId && endpointId) return { apiContractId, endpointId }
-  }
-  return {}
-}
-
-/** 从旧版消息中的 Workflow 状态快照推断实体会话归属。 */
-function inferSessionEntityContext(messages: JsonRecord[]): {
-  entityId?: string
-  entityLabel?: string
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const workflow = messages[index].workflow
-    if (!isJsonRecord(workflow)) continue
-    const state = isJsonRecord(workflow.state) ? workflow.state : undefined
-    const result = isJsonRecord(workflow.result) ? workflow.result : undefined
-    const summary = isJsonRecord(workflow.summary) ? workflow.summary : undefined
-    const clarification = isJsonRecord(summary?.clarification) ? summary.clarification : undefined
-    const review = isJsonRecord(clarification?.review) ? clarification.review : undefined
-    const reviewSummary = isJsonRecord(review?.summary) ? review.summary : undefined
-    const entityId =
-      normalizeSessionEndpointField(state?.selectedEntityId) ||
-      normalizeSessionEndpointField(state?.selected_entity_id) ||
-      normalizeSessionEndpointField(result?.selectedEntityId) ||
-      normalizeSessionEndpointField(result?.selected_entity_id) ||
-      normalizeSessionEndpointField(reviewSummary?.selectedEntityId)
-    if (entityId) return { entityId }
-  }
-  return {}
-}
-
-/** 从会话标题中恢复实体展示名，兼容旧标题。 */
-function inferSessionEntityLabelFromTitle(value: unknown): string | undefined {
-  const title = typeof value === 'string' ? value.trim() : ''
-  const matched = title.match(/(?:设计实体|确认实体|开始设计实体|查看已生成实体计划)：(.+)$/)
-  return matched?.[1]?.trim() || undefined
-}
-
-/** 从会话标题中恢复接口展示名，兼容旧标题。 */
-function inferEndpointLabelFromTitle(value: unknown): string | undefined {
-  const title = typeof value === 'string' ? value.trim() : ''
-  const matched = title.match(/(?:设计接口|确认接口|开始设计接口|查看已生成接口计划)：(.+)$/)
-  return matched?.[1]?.trim() || undefined
-}
-
 async function readSessionSummariesFromDir(
   sessionsDir: string,
   editorMode: EditorMode
@@ -1477,6 +1395,104 @@ async function readSessionSummariesFromDir(
     }
   }
   return sessions
+}
+
+/** 读取工作区当前契约下的全部会话，供阶段幂等与 sequence 分配使用。 */
+async function readWorkspaceSessions(workspaceRoot: string): Promise<NormalizedChatSession[]> {
+  const sessions: NormalizedChatSession[] = []
+  for (const editorMode of ['frontend', 'backend'] as const) {
+    const sessionsDir = getSessionsDir(workspaceRoot, editorMode)
+    let entries
+    try {
+      entries = await fs.readdir(sessionsDir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+      try {
+        const rawValue = await fs.readFile(path.join(sessionsDir, entry.name), 'utf8')
+        const session = normalizeSession(JSON.parse(rawValue || '{}'))
+        if (session.editorMode === editorMode) sessions.push(session)
+      } catch {
+        // 当前契约不读取旧格式或损坏记录。
+      }
+    }
+  }
+  return sessions
+}
+
+/** 创建当前会话记录；前三阶段在锁内分配独立 Thread 与全局递增 sequence。 */
+async function createChatSession(
+  workspaceRootValue: unknown,
+  inputValue: unknown
+): Promise<NormalizedChatSession> {
+  if (!isJsonRecord(inputValue)) throw new Error('session create input must be an object')
+  const workspaceRoot = resolveWorkspaceRoot(workspaceRootValue)
+  const editorMode = assertEditorMode(inputValue.editorMode)
+  const workbenchPhase = assertWorkbenchPhase(inputValue.workbenchPhase)
+  const workflowId = normalizeSessionEndpointField(inputValue.workflowId)
+  if (!workflowId) throw new Error('workflowId must be a non-empty string')
+  const targetType = assertChatSessionTargetType(inputValue.targetType)
+  const pageId = normalizeSessionPageId(inputValue.pageId)
+  const apiContractId = normalizeSessionEndpointField(inputValue.apiContractId)
+  const endpointId = normalizeSessionEndpointField(inputValue.endpointId)
+  const entityId = normalizeSessionEndpointField(inputValue.entityId)
+  assertChatSessionTargetBinding(targetType, { pageId, apiContractId, endpointId, entityId })
+  const stage = stageForWorkbenchPhase(workbenchPhase)
+  const entryKey = stage
+    ? normalizeSessionEndpointField(inputValue.entryKey) || `session:${crypto.randomUUID()}`
+    : undefined
+  const lockKey = `${pathComparisonKey(workspaceRoot)}:${workflowId}:${stage || workbenchPhase}`
+
+  return withStageSessionCreationLock(lockKey, async () => {
+    const existingSessions = await readWorkspaceSessions(workspaceRoot)
+    if (stage && entryKey) {
+      const existing = existingSessions.find(
+        (session) =>
+          session.workflowId === workflowId &&
+          session.stage === stage &&
+          session.entryKey === entryKey
+      )
+      if (existing) {
+        const identityMatches =
+          existing.editorMode === editorMode &&
+          existing.workbenchPhase === workbenchPhase &&
+          existing.targetType === targetType &&
+          existing.pageId === pageId &&
+          existing.apiContractId === apiContractId &&
+          existing.endpointId === endpointId &&
+          existing.entityId === entityId
+        if (!identityMatches) throw new Error('entryKey is already bound to another session target')
+        return existing
+      }
+    }
+    const sequence = stage
+      ? nextStageSessionSequence(existingSessions, workflowId, stage)
+      : undefined
+    const now = Date.now()
+    const session = normalizeSession({
+      ...inputValue,
+      id: crypto.randomUUID(),
+      workflowId,
+      targetType,
+      workbenchPhase,
+      editorMode,
+      ...(stage ? { stage, sequence, entryKey } : {}),
+      threadId: crypto.randomUUID(),
+      workspaceRoot,
+      messages: [],
+      createdAt: now,
+      updatedAt: now
+    })
+    await ensureSessionsDir(workspaceRoot, editorMode)
+    await fs.writeFile(
+      getSessionFile(workspaceRoot, editorMode, session.id),
+      `${JSON.stringify(session, null, 2)}\n`,
+      'utf8'
+    )
+    return session
+  })
 }
 
 async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
@@ -1817,18 +1833,35 @@ function setupSessionStorageIpc(): void {
     return { session: normalizeSession(JSON.parse(rawValue || '{}')) }
   })
 
+  ipcMain.handle('sessions:create', async (_event, payload = {}) => {
+    const session = await createChatSession(payload.workspaceRoot, payload.session)
+    return { ok: true, session }
+  })
+
   ipcMain.handle('sessions:save', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
     const session = normalizeSession({
       ...payload.session,
       workspaceRoot
     })
-    await ensureSessionsDir(workspaceRoot, session.editorMode)
-    await fs.writeFile(
-      getSessionFile(workspaceRoot, session.editorMode, session.id),
-      `${JSON.stringify(session, null, 2)}\n`,
-      'utf8'
-    )
+    const sessionFile = getSessionFile(workspaceRoot, session.editorMode, session.id)
+    const existing = normalizeSession(JSON.parse(await fs.readFile(sessionFile, 'utf8')))
+    const immutableIdentityChanged =
+      existing.workflowId !== session.workflowId ||
+      existing.workbenchPhase !== session.workbenchPhase ||
+      existing.stage !== session.stage ||
+      existing.sequence !== session.sequence ||
+      existing.entryKey !== session.entryKey ||
+      existing.threadId !== session.threadId ||
+      existing.targetType !== session.targetType ||
+      existing.pageId !== session.pageId ||
+      existing.apiContractId !== session.apiContractId ||
+      existing.endpointId !== session.endpointId ||
+      existing.entityId !== session.entityId
+    if (immutableIdentityChanged) {
+      throw new Error('session identity and target binding are immutable')
+    }
+    await fs.writeFile(sessionFile, `${JSON.stringify(session, null, 2)}\n`, 'utf8')
     return { ok: true, session: sessionSummary(session) }
   })
 

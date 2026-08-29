@@ -7,13 +7,13 @@ import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlan
 import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
+import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
 import { stopProjectPreview } from '../service/projectLaunch'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
   WorkflowClarificationAnswers,
   WorkflowDesignStageRevisionStart,
-  WorkflowRevisionContinuation,
   WorkflowRunPayload
 } from '../typings'
 import WelcomePage from './WelcomePage'
@@ -103,7 +103,7 @@ function AppEntryContent(): JSX.Element {
           editedRequirementSpec?: Record<string, unknown>,
           requirementSpecFeedback?: string,
           designChangeRequest?: string
-        ) => void)
+        ) => Promise<void>)
       | undefined
     >
   >({})
@@ -118,6 +118,8 @@ function AppEntryContent(): JSX.Element {
           editedRequirementSpec?: Record<string, unknown>
           requirementSpecFeedback?: string
           designChangeRequest?: string
+          resolve: () => void
+          reject: (reason?: unknown) => void
         }
       | undefined
     >
@@ -148,7 +150,7 @@ function AppEntryContent(): JSX.Element {
     >
   >({})
   const revisionContinuationByAppRef = useRef<
-    Record<string, ((continuation: WorkflowRevisionContinuation) => Promise<void>) | undefined>
+    Record<string, ((handoff: WorkflowRevisionContinuationHandoff) => Promise<void>) | undefined>
   >({})
 
   // 规划流式数据注入句柄：由工作台 AiChatPanel 注册，Modal 转发 onContent/onWorkflow 时调用，
@@ -303,10 +305,10 @@ function AppEntryContent(): JSX.Element {
     const submit = planningSubmitByAppRef.current[launchContext.applicationId]
     if (!workflow || !submit || !isPlanningStageEntryWorkflow(workflow)) return
     planningLaunchSubmittedRef.current = true
-    submit(workflow, {
+    void submit(workflow, {
       planning_stage_entry: 'enter',
       __applicationPlanningAction: 'enter_planning'
-    })
+    }).catch((error) => console.warn('规划阶段入口提交失败。', error))
   }, [activePlanning?.workflow, launchContext, planningSubmitRevision])
 
   useEffect(() => {
@@ -471,13 +473,13 @@ function AppEntryContent(): JSX.Element {
             const pending = pendingPlanningSubmitByAppRef.current[planning.application.id]
             if (!pending) return
             delete pendingPlanningSubmitByAppRef.current[planning.application.id]
-            handler(
+            void handler(
               pending.workflow,
               pending.answers,
               pending.editedRequirementSpec,
               pending.requirementSpecFeedback,
               pending.designChangeRequest
-            )
+            ).then(pending.resolve, pending.reject)
           }}
           onStartDesignRevisionChange={(handler) => {
             planningDesignRevisionByAppRef.current[planning.application.id] = handler ?? undefined
@@ -487,10 +489,10 @@ function AppEntryContent(): JSX.Element {
             window.clearTimeout(pending.timer)
             void handler(pending.input).then(pending.resolve, pending.reject)
           }}
-          onRevisionContinuation={(continuation) => {
+          onRevisionContinuation={(handoff) => {
             const handler = revisionContinuationByAppRef.current[planning.application.id]
             return handler
-              ? handler(continuation)
+              ? handler(handoff)
               : Promise.reject(new Error('开发工作台尚未接管 revision continuation。'))
           }}
           onPlanningContent={(content) => {
@@ -535,20 +537,25 @@ function AppEntryContent(): JSX.Element {
               editedRequirementSpec,
               requirementSpecFeedback,
               designChangeRequest
-            ) => {
+            ): Promise<void> => {
               const submit = planningSubmitByAppRef.current[activeApplication.id]
               if (!submit) {
                 // Modal 尚未注册句柄时保留最新一次用户提交；注册回调会负责补发。
-                pendingPlanningSubmitByAppRef.current[activeApplication.id] = {
-                  workflow,
-                  answers,
-                  editedRequirementSpec,
-                  requirementSpecFeedback,
-                  designChangeRequest
-                }
-                return
+                return new Promise<void>((resolve, reject) => {
+                  const previous = pendingPlanningSubmitByAppRef.current[activeApplication.id]
+                  previous?.reject(new Error('规划提交已被更新的用户操作替代。'))
+                  pendingPlanningSubmitByAppRef.current[activeApplication.id] = {
+                    workflow,
+                    answers,
+                    editedRequirementSpec,
+                    requirementSpecFeedback,
+                    designChangeRequest,
+                    resolve,
+                    reject
+                  }
+                })
               }
-              submit(
+              return submit(
                 workflow,
                 answers,
                 editedRequirementSpec,

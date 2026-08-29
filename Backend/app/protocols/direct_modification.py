@@ -211,7 +211,7 @@ def conversation_capabilities() -> dict[str, Any]:
             "enabled": True,
             "node": "direct_modification_repair",
             "maxIterations": 3,
-            "retryAfter": "integration_test",
+            "retryAfter": "validate_direct_fix",
         },
         "executionPolicy": {
             "subagentsEnabled": False,
@@ -320,7 +320,7 @@ def _direct_confirmation_continuation(
     if decision == "rejected":
         continuation.update(
             {
-                "status": "failed",
+                "status": "completed",
                 "phase": "finalize_direct_modification",
                 "message": "用户已取消本次修改确认，本次工作区不会继续写入。",
                 "direct_modification_resume_node": "finalize_direct_modification",
@@ -776,7 +776,9 @@ async def _report_custom_progress(
                         "status": status if status in {"running", "completed", "failed"} else "running",
                         "title": str(activity.get("tool") or "工作区工具"),
                         "detail": str(activity.get("message") or ""),
-                        "sequence": len(events) + 100,
+                        "sequence": DIRECT_NODE_PERCENT.get(
+                            str(progress.get("node_name") or "agent"), 50
+                        ),
                         "nodeName": str(progress.get("node_name") or "agent"),
                     },
                 ),
@@ -789,7 +791,7 @@ async def _report_custom_progress(
             return
         await report(
             AgUiActionProgress(
-                stage="integration_test",
+                stage="validate_direct_fix",
                 message="正在验证快速修改。",
                 detail=integration_test_check_summary(checks),
                 percent=80,
@@ -797,13 +799,13 @@ async def _report_custom_progress(
                     state,
                     events=events,
                     process_step={
-                        "id": "direct:integration_test",
+                        "id": "direct:validate_direct_fix",
                         "kind": "workflow",
                         "status": "running",
-                        "title": "正在执行 验证项目",
+                        "title": "正在执行 验证本次修改",
                         "detail": integration_test_check_summary(checks),
                         "sequence": 800,
-                        "nodeName": "integration_test",
+                        "nodeName": "validate_direct_fix",
                         "checks": checks,
                     },
                 ),

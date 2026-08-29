@@ -32,7 +32,7 @@ export type ChatSessionMessage = {
 };
 
 export type ChatSessionRevisionHandoff = {
-  kind: 'formal_revision' | 'revision_development';
+  kind: 'formal_revision' | 'revision_planning' | 'revision_development';
   formalBranch: WorkflowFormalRevisionBranch;
   targetSessionId: string;
   targetConversationThreadId: string;
@@ -56,11 +56,20 @@ export type ChatSessionRevisionContext = {
   technicalPlanSha256?: string;
 };
 
+export type AgentStage = 'DESIGN' | 'PLAN' | 'DEVELOPMENT';
+
+export type ChatSessionTargetType = 'workflow' | 'page' | 'api' | 'entity';
+
 export type ChatSessionRecord = {
   id: string;
   title: string;
   editorMode: EditorMode;
   workbenchPhase: WorkbenchPhase;
+  workflowId: string;
+  targetType: ChatSessionTargetType;
+  stage?: AgentStage;
+  sequence?: number;
+  entryKey?: string;
   threadId: string;
   apiContractId?: string;
   endpointId?: string;
@@ -80,6 +89,11 @@ export type ChatSessionSummary = {
   title: string;
   editorMode: EditorMode;
   workbenchPhase: WorkbenchPhase;
+  workflowId: string;
+  targetType: ChatSessionTargetType;
+  stage?: AgentStage;
+  sequence?: number;
+  entryKey?: string;
   threadId: string;
   apiContractId?: string;
   endpointId?: string;
@@ -91,6 +105,23 @@ export type ChatSessionSummary = {
   createdAt: number;
   updatedAt: number;
   messageCount: number;
+};
+
+export type CreateChatSessionInput = {
+  workspaceRoot: string;
+  workflowId: string;
+  editorMode: EditorMode;
+  workbenchPhase: WorkbenchPhase;
+  targetType: ChatSessionTargetType;
+  entryKey?: string;
+  title?: string;
+  apiContractId?: string;
+  endpointId?: string;
+  endpointLabel?: string;
+  entityId?: string;
+  entityLabel?: string;
+  pageId?: string;
+  revisionContext?: ChatSessionRevisionContext;
 };
 
 export type SessionWorkspaceSummary = {
@@ -112,6 +143,7 @@ const CHAT_SESSION_WORKBENCH_PHASES: WorkbenchPhase[] = [
   'review',
   'acceptance',
 ];
+const CHAT_SESSION_TARGET_TYPES: ChatSessionTargetType[] = ['workflow', 'page', 'api', 'entity'];
 const ACTIVE_SESSION_STORAGE_PREFIX = 'xcodeagent:active-session:';
 
 type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>;
@@ -119,7 +151,6 @@ type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>;
 function storageKey(workspaceRoot: string, editorMode: EditorMode): string {
   return `xcode-agent-sessions:${workspaceRoot}:${editorMode}`;
 }
-
 /** 生成指定应用和编辑模式的当前会话恢复键。 */
 function activeSessionStorageKey(
   applicationId: string,
@@ -217,7 +248,7 @@ function normalizeRevisionSessionHandoff(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const handoff = value as Partial<ChatSessionRevisionHandoff>;
   const kind = String(handoff.kind || '');
-  if (!['formal_revision', 'revision_development'].includes(kind)) {
+  if (!['formal_revision', 'revision_planning', 'revision_development'].includes(kind)) {
     return undefined;
   }
   const formalBranch = normalizeEndpointField(handoff.formalBranch);
@@ -235,7 +266,9 @@ function normalizeRevisionSessionHandoff(
   ) {
     return undefined;
   }
-  if (kind === 'revision_development' && !changeId) return undefined;
+  if ((kind === 'revision_planning' || kind === 'revision_development') && !changeId) {
+    return undefined;
+  }
   return {
     kind: kind as ChatSessionRevisionHandoff['kind'],
     formalBranch: formalBranch as WorkflowFormalRevisionBranch,
@@ -324,44 +357,65 @@ function normalizeToolCalls(value: unknown): ToolCallRecord[] | undefined {
 
 /** 校验并规范化完整会话，阶段字段缺失或非法时拒绝进入当前存储契约。 */
 function normalizeSession(value: unknown): ChatSessionRecord | null {
-  if (!value || typeof value !== 'object') return null;
-  const session = value as Partial<ChatSessionRecord>;
+  if (!value || typeof value !== 'object') return null
+  const session = value as Partial<ChatSessionRecord>
   if (
     !session.id ||
     !session.editorMode ||
+    !session.workflowId ||
+    !CHAT_SESSION_TARGET_TYPES.includes(session.targetType as ChatSessionTargetType) ||
     !session.threadId ||
     !isWorkbenchPhase(session.workbenchPhase)
-  ) return null;
-  const endpointContext = inferEndpointContextFromMessages(session.messages);
-  const entityContext = inferEntityContextFromMessages(session.messages);
+  )
+    return null
+  const stage = stageForWorkbenchPhase(session.workbenchPhase)
+  if (
+    stage &&
+    (session.stage !== stage ||
+      !Number.isInteger(session.sequence) ||
+      Number(session.sequence) < 1 ||
+      !normalizeEndpointField(session.entryKey))
+  )
+    return null
+  if (!stage && (session.stage || session.sequence || session.entryKey)) return null
+  const pageId = normalizePageId(session.pageId)
+  const apiContractId = normalizeEndpointField(session.apiContractId)
+  const endpointId = normalizeEndpointField(session.endpointId)
+  const entityId = normalizeEndpointField(session.entityId)
+  if (
+    (session.targetType === 'workflow' && (pageId || apiContractId || endpointId || entityId)) ||
+    (session.targetType === 'page' && (!pageId || apiContractId || endpointId || entityId)) ||
+    (session.targetType === 'api' && (!apiContractId || !endpointId || pageId || entityId)) ||
+    (session.targetType === 'entity' && (!entityId || pageId || apiContractId || endpointId))
+  )
+    return null
   return {
     id: String(session.id),
     title: String(session.title || '新对话'),
     editorMode: session.editorMode,
     workbenchPhase: session.workbenchPhase,
+    workflowId: String(session.workflowId),
+    targetType: session.targetType as ChatSessionTargetType,
+    ...(stage
+      ? {
+          stage,
+          sequence: Number(session.sequence),
+          entryKey: String(session.entryKey)
+        }
+      : {}),
     threadId: String(session.threadId),
-    apiContractId:
-      normalizeEndpointField(session.apiContractId) ||
-      endpointContext?.apiContractId,
-    endpointId:
-      normalizeEndpointField(session.endpointId) ||
-      endpointContext?.endpointId,
-    endpointLabel:
-      normalizeEndpointField(session.endpointLabel) ||
-      endpointContext?.endpointLabel ||
-      inferEndpointLabelFromTitle(session.title),
-    entityId: normalizeEndpointField(session.entityId) || entityContext?.entityId,
-    entityLabel:
-      normalizeEndpointField(session.entityLabel) ||
-      entityContext?.entityLabel ||
-      inferEntityLabelFromTitle(session.title),
-    pageId: normalizePageId(session.pageId) || inferPageIdFromMessages(session.messages),
+    apiContractId,
+    endpointId,
+    endpointLabel: normalizeEndpointField(session.endpointLabel),
+    entityId,
+    entityLabel: normalizeEndpointField(session.entityLabel),
+    pageId,
     revisionContext: normalizeRevisionSessionContext(session.revisionContext),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
     createdAt: Number(session.createdAt || Date.now()),
-    updatedAt: Number(session.updatedAt || Date.now()),
-  };
+    updatedAt: Number(session.updatedAt || Date.now())
+  }
 }
 
 /** 将完整会话投影为包含阶段归属的列表摘要。 */
@@ -371,6 +425,11 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     title: session.title,
     editorMode: session.editorMode,
     workbenchPhase: session.workbenchPhase,
+    workflowId: session.workflowId,
+    targetType: session.targetType,
+    stage: session.stage,
+    sequence: session.sequence,
+    entryKey: session.entryKey,
     threadId: session.threadId,
     apiContractId: session.apiContractId,
     endpointId: session.endpointId,
@@ -381,39 +440,86 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     revisionContext: session.revisionContext,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    messageCount: session.messages.length,
-  };
+    messageCount: session.messages.length
+  }
 }
 
 /** 规范化会话摘要列表，并剔除不属于当前阶段契约的记录。 */
 function normalizeSummaries(value: unknown): ChatSessionSummary[] {
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) return []
   return value
-    .filter((item): item is Partial<ChatSessionSummary> => Boolean(item && typeof item === 'object'))
-    .filter((item) => isWorkbenchPhase(item.workbenchPhase))
-    .map((item) => ({
-      id: String(item.id || ''),
-      title: String(item.title || '新对话'),
-      editorMode: item.editorMode || 'frontend',
-      workbenchPhase: item.workbenchPhase as WorkbenchPhase,
-      threadId: String(item.threadId || item.id || ''),
-      apiContractId: normalizeEndpointField(item.apiContractId),
-      endpointId: normalizeEndpointField(item.endpointId),
-      endpointLabel: normalizeEndpointField(item.endpointLabel),
-      entityId: normalizeEndpointField(item.entityId),
-      entityLabel: normalizeEndpointField(item.entityLabel),
-      pageId: normalizePageId(item.pageId),
-      revisionContext: normalizeRevisionSessionContext(item.revisionContext),
-      createdAt: Number(item.createdAt || Date.now()),
-      updatedAt: Number(item.updatedAt || Date.now()),
-      messageCount: Number(item.messageCount || 0),
-    }))
-    .filter((item) => item.id);
+    .filter((item): item is Partial<ChatSessionSummary> =>
+      Boolean(item && typeof item === 'object')
+    )
+    .map((item) => normalizeSummary(item))
+    .filter((item): item is ChatSessionSummary => Boolean(item))
+}
+
+/** 校验主进程返回的会话摘要，拒绝缺少当前阶段身份或目标绑定的记录。 */
+function normalizeSummary(item: Partial<ChatSessionSummary>): ChatSessionSummary | null {
+  if (
+    !item.id ||
+    (item.editorMode !== 'frontend' && item.editorMode !== 'backend') ||
+    !item.workflowId ||
+    !item.threadId ||
+    !isWorkbenchPhase(item.workbenchPhase) ||
+    !CHAT_SESSION_TARGET_TYPES.includes(item.targetType as ChatSessionTargetType)
+  )
+    return null
+  const stage = stageForWorkbenchPhase(item.workbenchPhase)
+  if (
+    (stage &&
+      (item.stage !== stage ||
+        !Number.isInteger(item.sequence) ||
+        Number(item.sequence) < 1 ||
+        !normalizeEndpointField(item.entryKey))) ||
+    (!stage && (item.stage || item.sequence || item.entryKey))
+  )
+    return null
+  const pageId = normalizePageId(item.pageId)
+  const apiContractId = normalizeEndpointField(item.apiContractId)
+  const endpointId = normalizeEndpointField(item.endpointId)
+  const entityId = normalizeEndpointField(item.entityId)
+  if (
+    (item.targetType === 'workflow' && (pageId || apiContractId || endpointId || entityId)) ||
+    (item.targetType === 'page' && (!pageId || apiContractId || endpointId || entityId)) ||
+    (item.targetType === 'api' && (!apiContractId || !endpointId || pageId || entityId)) ||
+    (item.targetType === 'entity' && (!entityId || pageId || apiContractId || endpointId))
+  )
+    return null
+  return {
+    id: String(item.id),
+    title: String(item.title || '新对话'),
+    editorMode: item.editorMode,
+    workbenchPhase: item.workbenchPhase,
+    workflowId: String(item.workflowId),
+    targetType: item.targetType as ChatSessionTargetType,
+    ...(stage ? { stage, sequence: Number(item.sequence), entryKey: String(item.entryKey) } : {}),
+    threadId: String(item.threadId),
+    apiContractId,
+    endpointId,
+    endpointLabel: normalizeEndpointField(item.endpointLabel),
+    entityId,
+    entityLabel: normalizeEndpointField(item.entityLabel),
+    pageId,
+    revisionContext: normalizeRevisionSessionContext(item.revisionContext),
+    createdAt: Number(item.createdAt || Date.now()),
+    updatedAt: Number(item.updatedAt || Date.now()),
+    messageCount: Number(item.messageCount || 0)
+  }
 }
 
 /** 判断持久化会话是否声明了当前支持的工作台阶段。 */
 function isWorkbenchPhase(value: unknown): value is WorkbenchPhase {
-  return CHAT_SESSION_WORKBENCH_PHASES.includes(value as WorkbenchPhase);
+  return CHAT_SESSION_WORKBENCH_PHASES.includes(value as WorkbenchPhase)
+}
+
+/** 将前三个工作台阶段映射为阶段会话契约，后三阶段不创建 StageSession。 */
+export function stageForWorkbenchPhase(value: WorkbenchPhase): AgentStage | undefined {
+  if (value === 'product') return 'DESIGN'
+  if (value === 'planning') return 'PLAN'
+  if (value === 'development') return 'DEVELOPMENT'
+  return undefined
 }
 
 /** 规范化页面会话标识，空值不写入本地会话契约。 */
@@ -483,101 +589,6 @@ export function normalizeRevisionSessionContext(
     ...(handoffFromConversationThreadId ? { handoffFromConversationThreadId } : {}),
     ...(technicalPlanSha256 ? { technicalPlanSha256 } : {}),
   };
-}
-
-/** 从旧会话保存的 Workflow 快照中恢复页面归属。 */
-function inferPageIdFromMessages(value: unknown): string | undefined {
-  if (!Array.isArray(value)) return undefined;
-  for (let index = value.length - 1; index >= 0; index -= 1) {
-    const message = value[index];
-    if (!message || typeof message !== 'object') continue;
-    const workflow = (message as { workflow?: unknown }).workflow;
-    if (!workflow || typeof workflow !== 'object') continue;
-    const payload = workflow as {
-      state?: { selectedPageId?: unknown };
-      result?: { selectedPageId?: unknown };
-    };
-    const pageId = normalizePageId(payload.state?.selectedPageId)
-      || normalizePageId(payload.result?.selectedPageId);
-    if (pageId) return pageId;
-  }
-  return undefined;
-}
-
-/** 从旧会话保存的 Workflow 快照中恢复 API endpoint 归属。 */
-function inferEndpointContextFromMessages(value: unknown): {
-  apiContractId?: string;
-  endpointId?: string;
-  endpointLabel?: string;
-} | undefined {
-  if (!Array.isArray(value)) return undefined;
-  for (let index = value.length - 1; index >= 0; index -= 1) {
-    const message = value[index];
-    if (!message || typeof message !== 'object') continue;
-    const workflow = (message as { workflow?: unknown }).workflow;
-    if (!workflow || typeof workflow !== 'object') continue;
-    const payload = workflow as {
-      state?: Record<string, unknown>;
-      result?: Record<string, unknown>;
-      summary?: { clarification?: { review?: { summary?: Record<string, unknown> } } };
-    };
-    const reviewSummary = payload.summary?.clarification?.review?.summary;
-    const apiContractId = normalizeEndpointField(
-      payload.state?.selectedApiContractId ||
-      payload.result?.selectedApiContractId ||
-      reviewSummary?.selectedApiContractId
-    );
-    const endpointId = normalizeEndpointField(
-      payload.state?.selectedEndpointId ||
-      payload.result?.selectedEndpointId ||
-      reviewSummary?.selectedEndpointId
-    );
-    if (apiContractId && endpointId) {
-      return { apiContractId, endpointId };
-    }
-  }
-  return undefined;
-}
-
-/** 从旧会话保存的 Workflow 快照中恢复实体归属。 */
-function inferEntityContextFromMessages(value: unknown): {
-  entityId?: string;
-  entityLabel?: string;
-} | undefined {
-  if (!Array.isArray(value)) return undefined;
-  for (let index = value.length - 1; index >= 0; index -= 1) {
-    const message = value[index];
-    if (!message || typeof message !== 'object') continue;
-    const workflow = (message as { workflow?: unknown }).workflow;
-    if (!workflow || typeof workflow !== 'object') continue;
-    const payload = workflow as {
-      state?: Record<string, unknown>;
-      result?: Record<string, unknown>;
-      summary?: { clarification?: { review?: { summary?: Record<string, unknown> } } };
-    };
-    const reviewSummary = payload.summary?.clarification?.review?.summary;
-    const entityId = normalizeEndpointField(
-      payload.state?.selectedEntityId ||
-      payload.result?.selectedEntityId ||
-      reviewSummary?.selectedEntityId
-    );
-    if (entityId) return { entityId };
-  }
-  return undefined;
-}
-
-/** 从会话标题中恢复接口展示名，兼容旧的“设计接口：METHOD path”标题。 */
-function inferEndpointLabelFromTitle(value: unknown): string | undefined {
-  const title = typeof value === 'string' ? value.trim() : '';
-  const matched = title.match(/(?:设计接口|确认接口|开始设计接口|查看已生成接口计划)：(.+)$/);
-  return matched?.[1]?.trim() || undefined;
-}
-
-/** 从会话标题中恢复实体展示名，兼容旧的“设计实体：name”标题。 */
-function inferEntityLabelFromTitle(value: unknown): string | undefined {
-  const title = typeof value === 'string' ? value.trim() : '';
-  const matched = title.match(/(?:设计实体|确认实体|开始设计实体|查看已生成实体计划)：(.+)$/);
-  return matched?.[1]?.trim() || undefined;
 }
 
 function normalizeSessionWorkspaces(value: unknown): SessionWorkspaceSummary[] {
@@ -701,27 +712,86 @@ export async function readChatSession(
   return session;
 }
 
-export async function saveChatSession(session: ChatSessionRecord): Promise<ChatSessionSummary> {
-  const sessionApi = window.xcodeAgent?.sessions;
-  if (sessionApi) {
-    try {
-      const result = await sessionApi.save({
-        workspaceRoot: session.workspaceRoot,
-        session,
-      });
-      return normalizeSummaries([result.session])[0] ?? toSummary(session);
-    } catch (error) {
-      console.warn(error);
-    }
+/** 通过主进程统一创建实际聊天会话，并为前三阶段分配不可变的 Thread 与 sequence。 */
+export async function createChatSession(input: CreateChatSessionInput): Promise<ChatSessionRecord> {
+  const sessionApi = window.xcodeAgent?.sessions
+  if (sessionApi?.create) {
+    const result = await sessionApi.create(input)
+    const session = normalizeSession(result.session)
+    if (!session) throw new Error('主进程返回的会话不符合当前契约。')
+    return session
   }
 
-  const sessions = readFallbackSessions(session.workspaceRoot, session.editorMode);
-  const nextSessions = [
-    session,
-    ...sessions.filter((item) => item.id !== session.id),
-  ].sort((a, b) => b.updatedAt - a.updatedAt);
-  writeFallbackSessions(session.workspaceRoot, session.editorMode, nextSessions);
-  return toSummary(session);
+  const now = Date.now()
+  const id = createChatSessionId()
+  const stage = stageForWorkbenchPhase(input.workbenchPhase)
+  const entryKey = stage ? input.entryKey?.trim() || `session:${id}` : undefined
+  const existingSessions = [
+    ...readFallbackSessions(input.workspaceRoot, 'frontend'),
+    ...readFallbackSessions(input.workspaceRoot, 'backend')
+  ]
+  const existing = stage
+    ? existingSessions.find(
+        (session) =>
+          session.workflowId === input.workflowId &&
+          session.stage === stage &&
+          session.entryKey === entryKey
+      )
+    : undefined
+  if (existing) {
+    const identityMatches =
+      existing.editorMode === input.editorMode &&
+      existing.workbenchPhase === input.workbenchPhase &&
+      existing.targetType === input.targetType &&
+      existing.pageId === normalizePageId(input.pageId) &&
+      existing.apiContractId === normalizeEndpointField(input.apiContractId) &&
+      existing.endpointId === normalizeEndpointField(input.endpointId) &&
+      existing.entityId === normalizeEndpointField(input.entityId)
+    if (!identityMatches) throw new Error('entryKey 已绑定到另一个会话目标。')
+    return existing
+  }
+  const sequence = stage
+    ? Math.max(
+        0,
+        ...existingSessions
+          .filter((session) => session.workflowId === input.workflowId && session.stage === stage)
+          .map((session) => Number(session.sequence || 0))
+      ) + 1
+    : undefined
+  const candidate = normalizeSession({
+    ...input,
+    id,
+    threadId: createChatSessionId(),
+    ...(stage ? { stage, sequence, entryKey } : {}),
+    title: input.title || '新对话',
+    messages: [],
+    createdAt: now,
+    updatedAt: now
+  })
+  if (!candidate) throw new Error('会话目标与阶段身份不符合当前契约。')
+  const sessions = readFallbackSessions(input.workspaceRoot, input.editorMode)
+  writeFallbackSessions(input.workspaceRoot, input.editorMode, [candidate, ...sessions])
+  return candidate
+}
+
+export async function saveChatSession(session: ChatSessionRecord): Promise<ChatSessionSummary> {
+  const sessionApi = window.xcodeAgent?.sessions
+  if (sessionApi) {
+    const result = await sessionApi.save({
+      workspaceRoot: session.workspaceRoot,
+      session
+    })
+    const summary = normalizeSummaries([result.session])[0]
+    if (!summary) throw new Error('主进程返回的会话摘要不符合当前契约。')
+    return summary
+  }
+
+  const sessions = readFallbackSessions(session.workspaceRoot, session.editorMode)
+  const nextSessions = [session, ...sessions.filter((item) => item.id !== session.id)].sort(
+    (a, b) => b.updatedAt - a.updatedAt
+  )
+  writeFallbackSessions(session.workspaceRoot, session.editorMode, nextSessions)
+  return toSummary(session)
 }
 
 export async function deleteChatSession(

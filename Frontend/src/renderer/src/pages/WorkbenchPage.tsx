@@ -8,6 +8,7 @@ import {
   loadWorkspaceApplicationConfig
 } from '../service/applicationStorage'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
+import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -18,7 +19,6 @@ import type {
   EditorMode,
   WorkflowClarificationAnswers,
   WorkflowDesignStageRevisionStart,
-  WorkflowRevisionContinuation,
   WorkflowRunPayload
 } from '../typings'
 import { cx, previewOrigin } from '../utils'
@@ -41,11 +41,11 @@ type Props = {
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
     designChangeRequest?: string
-  ) => void
+  ) => Promise<void>
   onStopPlanning: () => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onRevisionContinuationHandlerChange: (
-    handler?: (continuation: WorkflowRevisionContinuation) => Promise<void>
+    handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
   onThemeChange: (theme: Theme) => void
   onPlanningStreamReady?: (

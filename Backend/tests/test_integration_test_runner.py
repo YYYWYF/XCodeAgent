@@ -13,6 +13,58 @@ from app.services.test_validation import create_revision_requests, evaluate_qual
 
 
 class IntegrationTestRunnerTests(unittest.TestCase):
+    def test_direct_frontend_scope_skips_install_and_backend_checks(self) -> None:
+        """快速前端修复只验证前端层，不重复安装依赖或执行后端命令。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            frontend = root / "frontend"
+            backend = root / "backend"
+            frontend.mkdir()
+            backend.mkdir()
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"vite build"}}',
+                encoding="utf-8",
+            )
+            (frontend / "pnpm-lock.yaml").write_text(
+                "lockfileVersion: '9.0'",
+                encoding="utf-8",
+            )
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def fake_run(argv, **_kwargs):
+                """记录实际执行命令并统一返回成功。"""
+
+                calls.append(argv)
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with (
+                patch(
+                    "app.services.integration_test_runner.shutil.which",
+                    side_effect=lambda name: name,
+                ),
+                patch(
+                    "app.services.integration_test_runner.subprocess.run",
+                    side_effect=fake_run,
+                ),
+            ):
+                result = run_integration_checks(
+                    {
+                        "workspace": workspace,
+                        "unit_test_affected_layers": ["frontend"],
+                    },
+                    affected_layers={"frontend"},
+                    install_frontend_dependencies=False,
+                )
+
+        self.assertNotIn(["pnpm", "install"], calls)
+        self.assertIn(["pnpm", "run", "build"], calls)
+        self.assertFalse(any("mvn" in str(part) for call in calls for part in call))
+        self.assertTrue(
+            all(item["layer"] == "frontend" for item in result["test_results"])
+        )
+
     def test_build_reuses_supplied_frontend_install_result(self) -> None:
         """审查修复已安装依赖时只执行 Build，不重复运行 pnpm install。"""
 

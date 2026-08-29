@@ -37,8 +37,10 @@ def run_integration_checks(
     phase: IntegrationCheckPhase = "all",
     artifact_namespace: str = "tests",
     frontend_install_result: dict[str, Any] | None = None,
+    affected_layers: set[str] | None = None,
+    install_frontend_dependencies: bool = True,
 ) -> dict[str, Any]:
-    """按阶段执行集成检查，支持构建和单元测试之间的显式生成门。"""
+    """按阶段和受影响层执行检查，支持快速修改复用同一套确定性命令。"""
 
     if phase not in {"all", "build", "unit"}:
         raise ValueError(f"不支持的集成检查阶段：{phase}")
@@ -50,6 +52,12 @@ def run_integration_checks(
     frontend = _find_frontend_package(root)
     datasource_type = _configured_datasource_type(root)
     affected_unit_test_layers = _unit_test_affected_layers(state)
+    selected_layers = (
+        {"frontend", "backend"}
+        if affected_layers is None
+        else {str(layer).strip().lower() for layer in affected_layers}
+        & {"frontend", "backend"}
+    )
 
     results: list[dict[str, Any]] = []
     events: list[str] = []
@@ -62,32 +70,39 @@ def run_integration_checks(
         or "backend" in affected_unit_test_layers
     )
 
-    if phase in {"all", "build"}:
-        frontend_results = _frontend_checks(
-            root,
-            log_root,
-            frontend,
-            state=state,
-            unit_tests_affected=frontend_unit_tests_affected,
-            include_unit_tests=phase == "all",
-            on_progress=on_progress,
-            preinstalled_result=frontend_install_result,
-        )
-    else:
-        frontend_results = _frontend_unit_checks(
-            root,
-            log_root,
-            frontend,
-            state=state,
-            unit_tests_affected=frontend_unit_tests_affected,
-            on_progress=on_progress,
-        )
+    frontend_results: list[dict[str, Any]] = []
+    if "frontend" in selected_layers:
+        if phase in {"all", "build"}:
+            frontend_results = _frontend_checks(
+                root,
+                log_root,
+                frontend,
+                state=state,
+                unit_tests_affected=frontend_unit_tests_affected,
+                include_unit_tests=phase == "all",
+                on_progress=on_progress,
+                preinstalled_result=frontend_install_result,
+                install_dependencies=install_frontend_dependencies,
+            )
+        else:
+            frontend_results = _frontend_unit_checks(
+                root,
+                log_root,
+                frontend,
+                state=state,
+                unit_tests_affected=frontend_unit_tests_affected,
+                on_progress=on_progress,
+            )
     for result in frontend_results:
         results.append(result)
         events.append(result["id"])
     # Static 是纯前端运行时，即使模板保留 pom.xml 也不得触发后端质量门。
-    if datasource_type != "static":
-        if frontend is not None and _has_blocking_failure(frontend_results):
+    if "backend" in selected_layers and datasource_type != "static":
+        if (
+            "frontend" in selected_layers
+            and frontend is not None
+            and _has_blocking_failure(frontend_results)
+        ):
             backend_results = _backend_checks_skipped_after_frontend_failure(
                 phase=phase,
                 on_progress=on_progress,
@@ -175,6 +190,7 @@ def _frontend_checks(
     include_unit_tests: bool = True,
     on_progress: CheckProgressCallback | None = None,
     preinstalled_result: dict[str, Any] | None = None,
+    install_dependencies: bool = True,
 ) -> list[dict[str, Any]]:
     """依次执行前端安装、构建和可选的单元测试。"""
 
@@ -218,14 +234,18 @@ def _frontend_checks(
             required=True,
             on_progress=on_progress,
         )
-        if package_manager_command
+        if package_manager_command and install_dependencies
         else _missing_tool_result(
             check_id="frontend_install",
             name="前端依赖安装检查",
             layer="frontend",
             language="typescript",
-            evidence=f"未找到包管理器命令：{frontend.package_manager}。",
-            required=True,
+            evidence=(
+                "快速修改验证复用工作区现有依赖，不重复执行依赖安装。"
+                if not install_dependencies
+                else f"未找到包管理器命令：{frontend.package_manager}。"
+            ),
+            required=install_dependencies,
             on_progress=on_progress,
         )
     )

@@ -40,7 +40,7 @@ type Props = {
 }
 
 type ProcessDisplayItem =
-  | { kind: 'step'; step: ProcessStepRecord }
+  | { kind: 'step'; step: ProcessStepRecord; toolSteps?: ProcessStepRecord[] }
   | { kind: 'tool-chain'; steps: ProcessStepRecord[] }
 
 /** 渲染一条可折叠的 Agent 执行轨迹，并在测试步骤中保留结构化检查结果。 */
@@ -154,6 +154,7 @@ export default function ProcessSteps({
               key={item.step.id}
               settled={!loading}
               step={item.step}
+              toolSteps={item.toolSteps}
               waitingForInput={waitingForInput}
               waitingPrompt={waitingPrompt}
             />
@@ -164,27 +165,41 @@ export default function ProcessSteps({
   )
 }
 
-/** 为自由对话把连续工具步骤折叠成一个调用链，其余阶段保持原有时间线。 */
+/** 为自由对话把工具步骤归入所属节点，缺少节点归属时才保留顶层调用链。 */
 function buildProcessDisplayItems(
   steps: ProcessStepRecord[],
   conversation: boolean
 ): ProcessDisplayItem[] {
   if (!conversation) return steps.map((step) => ({ kind: 'step', step }))
 
-  const toolSteps = steps.filter((step) => isToolActivityStep(step))
-  if (!toolSteps.length) return steps.map((step) => ({ kind: 'step', step }))
+  const workflowNodeNames = new Set(
+    steps
+      .filter((step) => !isToolActivityStep(step) && step.nodeName)
+      .map((step) => String(step.nodeName))
+  )
+  const toolStepsByNode = new Map<string, ProcessStepRecord[]>()
+  const orphanToolSteps: ProcessStepRecord[] = []
+  for (const step of steps.filter((candidate) => isToolActivityStep(candidate))) {
+    const nodeName = String(step.nodeName || '')
+    if (!nodeName || !workflowNodeNames.has(nodeName)) {
+      orphanToolSteps.push(step)
+      continue
+    }
+    toolStepsByNode.set(nodeName, [...(toolStepsByNode.get(nodeName) || []), step])
+  }
 
-  let toolChainAdded = false
   const items: ProcessDisplayItem[] = []
+  let orphanToolChainAdded = false
   for (const step of steps) {
     if (isToolActivityStep(step)) {
-      if (!toolChainAdded) {
-        items.push({ kind: 'tool-chain', steps: toolSteps })
-        toolChainAdded = true
+      if (orphanToolSteps.includes(step) && !orphanToolChainAdded) {
+        items.push({ kind: 'tool-chain', steps: orphanToolSteps })
+        orphanToolChainAdded = true
       }
       continue
     }
-    items.push({ kind: 'step', step })
+    const toolSteps = step.nodeName ? toolStepsByNode.get(step.nodeName) : undefined
+    items.push({ kind: 'step', step, ...(toolSteps?.length ? { toolSteps } : {}) })
   }
   return items
 }
@@ -195,6 +210,7 @@ function ProcessStep({
   isLast,
   settled,
   step,
+  toolSteps = [],
   waitingForInput,
   waitingPrompt
 }: {
@@ -202,6 +218,7 @@ function ProcessStep({
   isLast: boolean
   settled: boolean
   step: ProcessStepRecord
+  toolSteps?: ProcessStepRecord[]
   waitingForInput: boolean
   waitingPrompt: string
 }): ReactElement {
@@ -217,11 +234,13 @@ function ProcessStep({
   const hasRepairPanel = hasRepairActivity || hasRepairCompletion
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
+  const hasToolActivity = toolSteps.length > 0
   const titleOnly = isCompactProcessStepNode(step.nodeName)
   const expandable =
-    !titleOnly &&
+    (!titleOnly || hasToolActivity) &&
     (hasDetail ||
       hasResult ||
+      hasToolActivity ||
       hasChecks ||
       hasBuildRun ||
       hasDagGeneration ||
@@ -240,7 +259,8 @@ function ProcessStep({
         hasProjectPlanUpdate ||
         hasWorkspaceInspection ||
         hasWorkspaceInspectionProgress ||
-        hasRepairPanel)
+        hasRepairPanel ||
+        hasToolActivity)
   )
 
   useEffect(() => {
@@ -268,6 +288,7 @@ function ProcessStep({
     hasWorkspaceInspection,
     hasWorkspaceInspectionProgress,
     hasRepairPanel,
+    hasToolActivity,
     step.status
   ])
 
@@ -338,6 +359,15 @@ function ProcessStep({
         {hasRepairPanel && (
           <RepairInProgressPanel completed={hasRepairCompletion} detail={step.detail} />
         )}
+        {hasToolActivity && (
+          <NodeToolActivityChain
+            conversation={conversation}
+            loading={!settled}
+            steps={toolSteps}
+            waitingForInput={waitingForInput}
+            waitingPrompt={waitingPrompt}
+          />
+        )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
         {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
         {step.projectPlanUpdate && <ProjectPlanUpdatePanel update={step.projectPlanUpdate} />}
@@ -353,6 +383,44 @@ function ProcessStep({
         {step.result && <DetailBlock label="执行结果" value={step.result} />}
       </div>
     </details>
+  )
+}
+
+/** 在所属流程节点的详情区渲染该节点自己的工具调用链。 */
+function NodeToolActivityChain({
+  conversation,
+  loading,
+  steps,
+  waitingForInput,
+  waitingPrompt
+}: {
+  conversation: boolean
+  loading: boolean
+  steps: ProcessStepRecord[]
+  waitingForInput: boolean
+  waitingPrompt: string
+}): ReactElement {
+  const latestStep = steps[steps.length - 1]
+  return (
+    <ToolActivityChain
+      count={steps.length}
+      isLast
+      latestDetail={latestStep.detail}
+      latestIcon={stepIcon(latestStep, !loading)}
+      latestTitle={processStepTitle(latestStep, conversation, !loading)}
+    >
+      {steps.map((step, index) => (
+        <ProcessStep
+          conversation={conversation}
+          isLast={index === steps.length - 1}
+          key={step.id}
+          settled={!loading}
+          step={step}
+          waitingForInput={waitingForInput}
+          waitingPrompt={waitingPrompt}
+        />
+      ))}
+    </ToolActivityChain>
   )
 }
 
@@ -542,6 +610,8 @@ function processStepTitle(
     execute_backend: '修改后端文件',
     execute_workspace: '修改工作区文件',
     integration_test: '验证修改',
+    validate_direct_fix: '验证本次修改',
+    direct_modification_repair: '自动修复局部代码',
     unit_test: '执行单元测试',
     unit_test_repair: '修复单元测试失败',
     acceptance_phase_confirmation: '确认进入验收阶段',
@@ -551,6 +621,8 @@ function processStepTitle(
   }
   const label =
     labels[step.nodeName || ''] || step.title.replace(/^正在执行\s*/, '').replace(/^已完成\s*/, '')
+  if (step.status === 'failed') return `${label}失败`
+  if (step.status === 'requires_user_input') return `等待确认 · ${label}`
   return step.status === 'running' && !settled ? `正在${label}` : `已完成${label}`
 }
 

@@ -13,18 +13,19 @@ type AgentErrorCardProps = {
   title?: string
 }
 
-/** 把模型连接失败、运行失败和后端返回的异常统一呈现为可理解的错误卡片。 */
+/** 按真实错误类型区分模型连接异常和普通任务失败，避免把所有失败误报为模型问题。 */
 export default function AgentErrorCard({
   error,
   onRetry,
   retrying,
-  title = '模型服务异常'
+  title
 }: AgentErrorCardProps): ReactElement {
   const copy = readableAgentError(error)
+  const resolvedTitle = title || (copy.modelServiceError ? '模型服务异常' : '任务执行异常')
 
   return (
     <section
-      aria-label={title}
+      aria-label={resolvedTitle}
       aria-live="assertive"
       className={cx('agent-error-card')}
       role="alert"
@@ -34,11 +35,11 @@ export default function AgentErrorCard({
       </span>
       <div className={cx('agent-error-card-copy')}>
         <Text className={cx('agent-error-card-title')} strong>
-          {title}
+          {resolvedTitle}
         </Text>
         <Text className={cx('agent-error-card-message')}>{copy.message}</Text>
         <Text className={cx('agent-error-card-hint')} type="secondary">
-          请检查模型服务地址、密钥配置、后端状态和网络连接后重试。
+          {copy.hint}
         </Text>
         {copy.detail ? (
           <Text className={cx('agent-error-card-detail')} type="secondary">
@@ -61,19 +62,29 @@ export default function AgentErrorCard({
   )
 }
 
-/** 将浏览器网络层的笼统异常翻译成用户能采取行动的提示，并保留原始详情。 */
-function readableAgentError(error?: string): { message: string; detail?: string } {
+/** 将连接异常和普通运行异常分别翻译成可操作提示，并保留原始详情。 */
+function readableAgentError(error?: string): {
+  message: string
+  hint: string
+  modelServiceError: boolean
+  detail?: string
+} {
   const normalized = error?.trim() || ''
-  const isConnectionError = /failed to fetch|networkerror|load failed|fetch failed|econnrefused|econnreset|etimedout|网络请求失败|无法连接/i.test(
-    normalized
-  )
+  const isConnectionError =
+    /failed to fetch|networkerror|load failed|fetch failed|econnrefused|econnreset|etimedout|网络请求失败|无法连接/i.test(
+      normalized
+    )
   if (isConnectionError) {
     return {
       message: '暂时无法连接模型服务。',
+      hint: '请检查模型服务地址、密钥配置、后端状态和网络连接后重试。',
+      modelServiceError: true,
       detail: normalized || undefined
     }
   }
   return {
-    message: normalized || '模型服务没有返回有效结果。'
+    message: normalized || '任务没有返回有效结果。',
+    hint: '请查看错误详情和相关执行记录后重试。',
+    modelServiceError: false
   }
 }

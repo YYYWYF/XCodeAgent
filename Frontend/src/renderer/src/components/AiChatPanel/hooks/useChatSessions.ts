@@ -3,7 +3,7 @@ import type { MutableRefObject, SetStateAction } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import {
-  createChatSessionId,
+  createChatSession,
   createChatSessionTitle,
   deleteChatSession,
   getPersistedActiveSessionId,
@@ -40,7 +40,6 @@ import {
   revisionDevelopmentSessionForContinuation
 } from './revisionSession'
 import {
-  sessionsForPlanningThread,
   sessionsForWorkbenchPhase,
   selectedSessionIdForPhase,
   withSelectedSessionForPhase,
@@ -94,55 +93,6 @@ function mergeRevisionSessionContext(
   }
 }
 
-/** 从待保存消息中的 Workflow 快照推断 API endpoint 会话归属。 */
-function inferEndpointContextFromMessages(messages: ChatSessionMessage[]): {
-  apiContractId?: string
-  endpointId?: string
-  endpointLabel?: string
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const workflow = messages[index]?.workflow
-    const state = workflow?.state || {}
-    const result = workflow?.result || {}
-    const reviewSummary = workflow?.summary.clarification?.review?.summary || {}
-    const apiContractId = String(
-      state.selectedApiContractId ||
-      result.selectedApiContractId ||
-      reviewSummary.selectedApiContractId ||
-      ''
-    ).trim()
-    const endpointId = String(
-      state.selectedEndpointId ||
-      result.selectedEndpointId ||
-      reviewSummary.selectedEndpointId ||
-      ''
-    ).trim()
-    if (apiContractId && endpointId) return { apiContractId, endpointId }
-  }
-  return {}
-}
-
-/** 从待保存消息中的 Workflow 快照推断实体会话归属。 */
-function inferEntityContextFromMessages(messages: ChatSessionMessage[]): {
-  entityId?: string
-  entityLabel?: string
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const workflow = messages[index]?.workflow
-    const state = workflow?.state || {}
-    const result = workflow?.result || {}
-    const reviewSummary = workflow?.summary.clarification?.review?.summary || {}
-    const entityId = String(
-      state.selectedEntityId ||
-      result.selectedEntityId ||
-      reviewSummary.selectedEntityId ||
-      ''
-    ).trim()
-    if (entityId) return { entityId }
-  }
-  return {}
-}
-
 /** 判断会话是否为不绑定页面或 API 的自由对话。 */
 function isFreeChatSession(session: ChatSessionSummary): boolean {
   return !session.pageId && !session.apiContractId && !session.endpointId && !session.entityId
@@ -175,6 +125,7 @@ type UseChatSessionsResult = {
   createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
   createReviewSession: (target: ReviewPhaseSessionTarget) => Promise<SessionIdentity>
   createAcceptanceSession: (target: AcceptancePhaseSessionTarget) => Promise<SessionIdentity>
+  discardPreparedSession: (identity: SessionIdentity) => Promise<void>
   ensureActiveSession: () => Promise<SessionIdentity>
   ensurePlanningSession: (
     threadId: string,
@@ -416,6 +367,11 @@ export function useChatSessions({
       editorMode: mode,
       sessionId: session.id,
       threadId: session.threadId,
+      workflowId: session.workflowId,
+      targetType: session.targetType,
+      stage: session.stage,
+      sequence: session.sequence,
+      entryKey: session.entryKey,
       apiContractId: session.apiContractId,
       endpointId: session.endpointId,
       endpointLabel: session.endpointLabel,
@@ -459,8 +415,14 @@ export function useChatSessions({
         session.threadId === handoff.targetConversationThreadId &&
         session.workbenchPhase === phase &&
         session.revisionContext?.impactInteractionId === handoff.impactInteractionId &&
-        (handoff.kind !== 'revision_development' ||
-          (session.revisionContext.sessionRole === 'development' &&
+        (handoff.kind === 'formal_revision' ||
+          (handoff.kind === 'revision_planning' &&
+            session.stage === 'PLAN' &&
+            session.revisionContext.sessionRole === 'design' &&
+            session.revisionContext.changeId === handoff.changeId) ||
+          (handoff.kind === 'revision_development' &&
+            session.stage === 'DEVELOPMENT' &&
+            session.revisionContext.sessionRole === 'development' &&
             session.revisionContext.changeId === handoff.changeId))
     )
     if (!summary) throw new Error('目标二次修改会话不存在、身份不匹配或已被删除。')
@@ -561,7 +523,7 @@ export function useChatSessions({
     },
     options?: {
       activate?: boolean
-      threadId?: string
+      entryKey?: string
       title?: string
       workbenchPhase?: WorkbenchPhase
       revisionContext?: ChatSessionRevisionContext
@@ -571,15 +533,23 @@ export function useChatSessions({
       throw new Error('创建会话前需要选择工作目录。')
     }
 
-    const now = Date.now()
     const sessionWorkbenchPhase = options?.workbenchPhase || workbenchPhase
-    const sessionId = createChatSessionId()
-    const agUiSession = new AgUiChatSession(options?.threadId)
-    const identity = createSessionIdentity({
+    const session = await createChatSession({
       workspaceRoot: application.workspaceRoot,
+      workflowId: application.id,
       editorMode,
-      sessionId,
-      threadId: agUiSession.threadId,
+      workbenchPhase: sessionWorkbenchPhase,
+      targetType: entityContext ? 'entity' : endpointContext ? 'api' : pageId ? 'page' : 'workflow',
+      entryKey: options?.entryKey,
+      title: options?.title
+        ? options.title
+        : entityContext
+          ? `实体新会话：${entityContext.entityLabel}`
+          : endpointContext
+            ? `接口新会话：${endpointContext.endpointLabel}`
+            : pageLabel
+              ? `页面新会话：${pageLabel}`
+              : '新对话',
       apiContractId: endpointContext?.apiContractId,
       endpointId: endpointContext?.endpointId,
       endpointLabel: endpointContext?.endpointLabel,
@@ -588,34 +558,30 @@ export function useChatSessions({
       pageId,
       revisionContext: options?.revisionContext
     })
-    const session: ChatSessionRecord = {
-      id: sessionId,
-      title: options?.title
-        ? options.title
-        : entityContext
-        ? `实体新会话：${entityContext.entityLabel}`
-        : endpointContext
-          ? `接口新会话：${endpointContext.endpointLabel}`
-          : pageLabel
-            ? `页面新会话：${pageLabel}`
-            : '新对话',
-      editorMode,
-      workbenchPhase: sessionWorkbenchPhase,
-      threadId: identity.threadId,
-      apiContractId: identity.apiContractId,
-      endpointId: identity.endpointId,
-      endpointLabel: identity.endpointLabel,
-      entityId: identity.entityId,
-      entityLabel: identity.entityLabel,
-      pageId: identity.pageId,
-      revisionContext: identity.revisionContext,
-      workspaceRoot: application.workspaceRoot,
-      messages: [],
-      createdAt: now,
-      updatedAt: now
+    if (session.editorMode !== editorMode) {
+      throw new Error('同一阶段入口已由另一个编辑模式创建，不能重复接管。')
     }
+    const identity = createSessionIdentity({
+      workspaceRoot: application.workspaceRoot,
+      editorMode,
+      sessionId: session.id,
+      threadId: session.threadId,
+      workflowId: session.workflowId,
+      targetType: session.targetType,
+      stage: session.stage,
+      sequence: session.sequence,
+      entryKey: session.entryKey,
+      apiContractId: session.apiContractId,
+      endpointId: session.endpointId,
+      endpointLabel: session.endpointLabel,
+      entityId: session.entityId,
+      entityLabel: session.entityLabel,
+      pageId: session.pageId,
+      revisionContext: session.revisionContext
+    })
+    const agUiSession = new AgUiChatSession(session.threadId)
 
-    registerSession(identity, [], agUiSession)
+    registerSession(identity, session.messages, agUiSession)
     setDraftByKey(identity.key, '')
     if (options?.activate !== false) {
       setActiveSessionIds((current) =>
@@ -626,8 +592,10 @@ export function useChatSessions({
     }
 
     try {
-      const summary = await saveChatSession(session)
-      replaceSessionSummary(editorMode, summary)
+      replaceSessionSummary(editorMode, {
+        ...session,
+        messageCount: session.messages.length
+      })
       return identity
     } catch (error) {
       removeSession(identity.key)
@@ -643,22 +611,19 @@ export function useChatSessions({
     return createNewSession()
   }
 
-  /** 创建规划会话：产品阶段可绑定 Graph thread，规划阶段则绑定新的独立聊天 thread。
-   *  Graph 仍由 ApplicationPagePlanningModal 的原 checkpoint session 跑，本会话只承接转发流。 */
+  /** 创建或恢复同一阶段入口的可见会话；Graph checkpoint 与该会话 Thread 始终分离。 */
   const ensurePlanningSession = async (
-    threadId: string,
+    entryKey: string,
     phase: WorkbenchPhase = 'product',
     revisionContext?: ChatSessionRevisionContext
   ): Promise<SessionIdentity> => {
-    const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId) throw new Error('规划线程标识不能为空。')
-    // 已存在同 threadId 的会话则复用并激活。
-    // 可能有多个同 threadId 的重复 session（历史 bug 产生），优先选消息最多的；
-    // 同时检查内存中 messagesRef 是否有历史消息（未落盘的规划对话）。
-    const sameThreadSessions = sessionsForPlanningThread(
-      sessionSummaries[editorMode],
-      phase,
-      normalizedThreadId
+    const normalizedEntryKey = entryKey.trim()
+    if (!normalizedEntryKey) throw new Error('阶段入口标识不能为空。')
+    const sameThreadSessions = sessionSummaries[editorMode].filter(
+      (session) =>
+        session.workflowId === application.id &&
+        session.workbenchPhase === phase &&
+        (session.entryKey === normalizedEntryKey || session.threadId === normalizedEntryKey)
     )
     if (sameThreadSessions.length > 0) {
       // 选消息最多或内存中有消息的 session，避免选中空壳重复 session 丢失历史对话。
@@ -703,41 +668,15 @@ export function useChatSessions({
           withSelectedSessionForPhase(current, editorMode, phase, best.id)
         )
         setPersistedActiveSessionId(application.id, editorMode, phase, best.id)
-        // 清理同 threadId 的重复空壳 session（消息数 0 且非选中），避免再次串用。
-        for (const duplicate of sameThreadSessions) {
-          if (duplicate.id === best.id) continue
-          const dupKey = sessionRuntimeKey(application.workspaceRoot || '', editorMode, duplicate.id)
-          const dupMemCount = getSessionMessages(dupKey).length
-          if (duplicate.messageCount === 0 && dupMemCount === 0) {
-            try {
-              await deleteChatSession(application.workspaceRoot || '', editorMode, duplicate.id)
-              removeSession(dupKey)
-              setSessionSummaries((current) => ({
-                ...current,
-                [editorMode]: current[editorMode].filter((s) => s.id !== duplicate.id)
-              }))
-            } catch {
-              // 删除失败不阻塞，下次再清理。
-            }
-          }
-        }
         return identity
       }
     }
-    const identity = await createNewSession(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      {
-        threadId: normalizedThreadId,
-        title: phase === 'planning'
-          ? '规划 Agent'
-          : '产品 Agent',
-        workbenchPhase: phase,
-        revisionContext
-      }
-    )
+    const identity = await createNewSession(undefined, undefined, undefined, undefined, {
+      entryKey: normalizedEntryKey,
+      title: phase === 'planning' ? '规划 Agent' : '产品 Agent',
+      workbenchPhase: phase,
+      revisionContext
+    })
     planningSessionActivatedRef.current = true
     return identity
   }
@@ -749,16 +688,32 @@ export function useChatSessions({
   ): Promise<SessionIdentity> => {
     const existing = revisionDevelopmentSessionForContinuation(
       sessionSummariesRef.current[editorMode],
+      source,
       continuation
     )
     if (existing) return loadChatSessionIdentity(editorMode, existing.id)
     const revisionContext = createRevisionDevelopmentSessionContext(source, continuation)
-    return createNewSession(undefined, undefined, undefined, undefined, {
-      activate: false,
-      title: '二次修改 · 开发 Agent',
-      workbenchPhase: 'development',
-      revisionContext
-    })
+    return createNewSession(
+      source.pageId,
+      undefined,
+      source.apiContractId && source.endpointId
+        ? {
+            apiContractId: source.apiContractId,
+            endpointId: source.endpointId,
+            endpointLabel: source.endpointLabel || source.endpointId
+          }
+        : undefined,
+      source.entityId
+        ? { entityId: source.entityId, entityLabel: source.entityLabel || source.entityId }
+        : undefined,
+      {
+        activate: false,
+        entryKey: `revision-development:${continuation.changeId}:${continuation.technicalPlanSha256}`,
+        title: '二次修改 · 开发 Agent',
+        workbenchPhase: 'development',
+        revisionContext
+      }
+    )
   }
 
   /** 仅在开发 Workflow 已成功接管后激活目标会话。 */
@@ -1076,45 +1031,92 @@ export function useChatSessions({
     }
   }
 
+  /** 删除尚未成功进入的预创建 StageSession，并清理其运行时与阶段选择。 */
+  const discardPreparedSession = async (identity: SessionIdentity): Promise<void> => {
+    if (!application.workspaceRoot || identity.workspaceRoot !== application.workspaceRoot) return
+    if (runningSessionsRef.current.has(identity.key)) {
+      throw new Error('会话仍在运行，不能回滚阶段入口。')
+    }
+    const summary = sessionSummariesRef.current[identity.editorMode].find(
+      (session) =>
+        session.id === identity.sessionId &&
+        session.threadId === identity.threadId &&
+        session.entryKey === identity.entryKey
+    )
+    if (!summary) return
+    await deleteChatSession(application.workspaceRoot, identity.editorMode, identity.sessionId)
+    const nextModeSummaries = sessionSummariesRef.current[identity.editorMode].filter(
+      (session) => session.id !== identity.sessionId
+    )
+    sessionSummariesRef.current = {
+      ...sessionSummariesRef.current,
+      [identity.editorMode]: nextModeSummaries
+    }
+    setSessionSummaries((current) => ({
+      ...current,
+      [identity.editorMode]: current[identity.editorMode].filter(
+        (session) => session.id !== identity.sessionId
+      )
+    }))
+    setActiveSessionIds((current) =>
+      withoutDeletedSessionSelection(current, identity.editorMode, identity.sessionId)
+    )
+    if (
+      getPersistedActiveSessionId(
+        application.id,
+        identity.editorMode,
+        summary.workbenchPhase
+      ) === identity.sessionId
+    ) {
+      setPersistedActiveSessionId(
+        application.id,
+        identity.editorMode,
+        summary.workbenchPhase,
+        undefined
+      )
+    }
+    removeSession(identity.key)
+  }
+
   /** 持久化消息时保留会话原有阶段归属，避免异步完成后被当前顶部阶段改写。 */
   const persistSession = async (input: PersistSessionInput): Promise<void> => {
     if (!application.workspaceRoot) return
     const existingSummary = sessionSummariesRef.current[input.editorMode].find(
       (summary) => summary.id === input.sessionId
     )
-    const inferredEndpoint = inferEndpointContextFromMessages(input.messages)
-    const inferredEntity = inferEntityContextFromMessages(input.messages)
+    if (!existingSummary) throw new Error('会话尚未通过统一入口创建，不能直接保存。')
     const now = Date.now()
     const session: ChatSessionRecord = {
       id: input.sessionId,
       title:
         input.titleFrom &&
-        (!existingSummary ||
-          existingSummary.title === '新对话' ||
+        (existingSummary.title === '新对话' ||
           existingSummary.title.startsWith('页面新会话：') ||
           existingSummary.title.startsWith('接口新会话：') ||
           existingSummary.title.startsWith('实体新会话：'))
           ? createChatSessionTitle(input.titleFrom)
           : existingSummary?.title || '新对话',
       editorMode: input.editorMode,
-      workbenchPhase: existingSummary?.workbenchPhase || workbenchPhase,
+      workbenchPhase: existingSummary.workbenchPhase,
+      workflowId: existingSummary.workflowId,
+      targetType: existingSummary.targetType,
+      stage: existingSummary.stage,
+      sequence: existingSummary.sequence,
+      entryKey: existingSummary.entryKey,
       threadId: input.threadId,
-      apiContractId:
-        input.apiContractId || existingSummary?.apiContractId || inferredEndpoint.apiContractId,
-      endpointId:
-        input.endpointId || existingSummary?.endpointId || inferredEndpoint.endpointId,
-      endpointLabel:
-        input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint.endpointLabel,
-      entityId: input.entityId || existingSummary?.entityId || inferredEntity.entityId,
-      entityLabel: input.entityLabel || existingSummary?.entityLabel || inferredEntity.entityLabel,
-      pageId: input.pageId || existingSummary?.pageId,
+      apiContractId: existingSummary.apiContractId,
+      endpointId: existingSummary.endpointId,
+      endpointLabel: existingSummary.endpointLabel,
+      entityId: existingSummary.entityId,
+      entityLabel: existingSummary.entityLabel,
+      pageId: existingSummary.pageId,
       revisionContext: mergeRevisionSessionContext(
         existingSummary?.revisionContext,
         input.revisionContext
       ),
       workspaceRoot: application.workspaceRoot,
       messages: input.messages,
-      createdAt: existingSummary?.createdAt || now,
+      createdAt: existingSummary.createdAt,
       updatedAt: now
     }
     const summary = await saveChatSession(session)
@@ -1131,6 +1133,7 @@ export function useChatSessions({
     createTestSession,
     createReviewSession,
     createAcceptanceSession,
+    discardPreparedSession,
     deletingSessionId,
     draft,
     draftKey,

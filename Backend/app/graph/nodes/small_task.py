@@ -99,6 +99,14 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
             )
         preflight = _first_small_task_preflight(batch)
         if preflight:
+            if preflight.get("reasonCode") == "missing_code_scope":
+                return _small_task_failure(
+                    state,
+                    working_tasks,
+                    all_results,
+                    all_change_sets,
+                    str(preflight.get("reason") or "SmallTask 缺少真实代码文件范围。"),
+                )
             revision_confirmation = build_small_task_revision_confirmation(
                 state=state,
                 escalation=preflight,

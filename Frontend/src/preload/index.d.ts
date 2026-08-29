@@ -115,6 +115,22 @@ declare global {
           editorMode: 'frontend' | 'backend'
           sessionId: string
         }) => Promise<{ session?: unknown }>
+        create: (payload: {
+          workspaceRoot: string
+          workflowId: string
+          editorMode: 'frontend' | 'backend'
+          workbenchPhase: 'product' | 'planning' | 'development' | 'test' | 'review' | 'acceptance'
+          targetType: 'workflow' | 'page' | 'api' | 'entity'
+          entryKey?: string
+          title?: string
+          apiContractId?: string
+          endpointId?: string
+          endpointLabel?: string
+          entityId?: string
+          entityLabel?: string
+          pageId?: string
+          revisionContext?: unknown
+        }) => Promise<{ ok?: boolean; session?: unknown }>
         save: (payload: {
           workspaceRoot: string
           session: unknown

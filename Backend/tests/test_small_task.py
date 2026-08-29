@@ -90,7 +90,9 @@ class SmallTaskScopeTests(unittest.TestCase):
 
         self.assertEqual(database["workflowIntent"], "entity_source_binding")
         self.assertEqual(formal["workflowIntent"], "prepare_build_tasks")
-        self.assertEqual(command_only["workflowIntent"], "prepare_build_tasks")
+        self.assertEqual(formal["reasonCode"], "formal_artifact_change")
+        self.assertEqual(command_only["workflowIntent"], "handle_failure")
+        self.assertEqual(command_only["reasonCode"], "missing_code_scope")
         self.assertEqual(
             workflow_target_for_small_task({"reasonCode": "new_page"}),
             "project_planning",

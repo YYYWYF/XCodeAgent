@@ -10,10 +10,9 @@ from app.graph.nodes.direct_modification import (
     execute_frontend_direct_modification,
     execute_workspace_direct_modification,
     finalize_direct_modification,
-    launch_direct_modification_project,
     respond_to_casual_conversation,
     respond_to_workspace_question,
-    run_direct_modification_integration_test,
+    validate_direct_fix,
     scan_change_impact_code,
 )
 from app.graph.nodes.workspace_inspection import scan_workspace_code
@@ -87,7 +86,7 @@ def _route_scan_workspace(
 
 def _route_backend(
     state: ProjectState,
-) -> Literal["execute_frontend", "integration_test", "finalize"]:
+) -> Literal["execute_frontend", "validate_direct_fix", "finalize"]:
     """后端成功后按 fullstack 或单端路径继续。"""
 
     if state.get("status") != "in_progress":
@@ -95,25 +94,25 @@ def _route_backend(
     return (
         "execute_frontend"
         if state.get("direct_modification_owner") == "fullstack"
-        else "integration_test"
+        else "validate_direct_fix"
     )
 
 
 def _route_frontend(
     state: ProjectState,
-) -> Literal["integration_test", "finalize"]:
-    """前端失败立即结束，成功后统一进入集成测试。"""
+) -> Literal["validate_direct_fix", "finalize"]:
+    """前端失败立即结束，成功后只验证本轮真实修改范围。"""
 
-    return "finalize" if state.get("status") != "in_progress" else "integration_test"
+    return "finalize" if state.get("status") != "in_progress" else "validate_direct_fix"
 
 
-def _route_integration_test(
+def _route_direct_validation(
     state: ProjectState,
-) -> Literal["launch_project", "direct_modification_repair", "finalize"]:
-    """测试通过后启动预览，失败且有证据时进入自由对话修复节点。"""
+) -> Literal["direct_modification_repair", "finalize"]:
+    """范围验证通过后直接收口，失败且有证据时进入自由对话修复节点。"""
 
     if state.get("quality_gate_passed") is True:
-        return "launch_project"
+        return "finalize"
     if state.get("integration_next_action") == "direct_modification_repair":
         return "direct_modification_repair"
     return "finalize"
@@ -121,14 +120,14 @@ def _route_integration_test(
 
 def _route_direct_repair(
     state: ProjectState,
-) -> Literal["integration_test", "finalize"]:
+) -> Literal["validate_direct_fix", "finalize"]:
     """修复节点成功后重新验收，失败或需要确认时结束本次自由运行。"""
 
     if (
         state.get("status") == "in_progress"
-        and state.get("integration_next_action") == "integration_test"
+        and state.get("integration_next_action") == "validate_direct_fix"
     ):
-        return "integration_test"
+        return "validate_direct_fix"
     return "finalize"
 
 
@@ -162,14 +161,12 @@ def direct_next_node_name(node_name: str, state: ProjectState) -> str | None:
         return "finalize_direct_modification" if route == "finalize" else route
     if node_name == "execute_workspace":
         return "finalize_direct_modification"
-    if node_name == "integration_test":
-        route = _route_integration_test(state)
+    if node_name == "validate_direct_fix":
+        route = _route_direct_validation(state)
         return "finalize_direct_modification" if route == "finalize" else route
     if node_name == "direct_modification_repair":
         route = _route_direct_repair(state)
         return "finalize_direct_modification" if route == "finalize" else route
-    if node_name == "launch_project":
-        return "finalize_direct_modification"
     return None
 
 
@@ -185,9 +182,8 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
     builder.add_node("execute_frontend", execute_frontend_direct_modification)
     builder.add_node("execute_backend", execute_backend_direct_modification)
     builder.add_node("execute_workspace", execute_workspace_direct_modification)
-    builder.add_node("integration_test", run_direct_modification_integration_test)
+    builder.add_node("validate_direct_fix", validate_direct_fix)
     builder.add_node("direct_modification_repair", direct_modification_repair)
-    builder.add_node("launch_project", launch_direct_modification_project)
     builder.add_node("finalize_direct_modification", finalize_direct_modification)
 
     # 新请求先建立有界的工作区上下文，再由分类节点读取当前 JSON 契约。
@@ -252,7 +248,7 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
         _route_backend,
         {
             "execute_frontend": "execute_frontend",
-            "integration_test": "integration_test",
+            "validate_direct_fix": "validate_direct_fix",
             "finalize": "finalize_direct_modification",
         },
     )
@@ -260,16 +256,15 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
         "execute_frontend",
         _route_frontend,
         {
-            "integration_test": "integration_test",
+            "validate_direct_fix": "validate_direct_fix",
             "finalize": "finalize_direct_modification",
         },
     )
     builder.add_edge("execute_workspace", "finalize_direct_modification")
     builder.add_conditional_edges(
-        "integration_test",
-        _route_integration_test,
+        "validate_direct_fix",
+        _route_direct_validation,
         {
-            "launch_project": "launch_project",
             "direct_modification_repair": "direct_modification_repair",
             "finalize": "finalize_direct_modification",
         },
@@ -278,11 +273,10 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
         "direct_modification_repair",
         _route_direct_repair,
         {
-            "integration_test": "integration_test",
+            "validate_direct_fix": "validate_direct_fix",
             "finalize": "finalize_direct_modification",
         },
     )
-    builder.add_edge("launch_project", "finalize_direct_modification")
     builder.add_edge("finalize_direct_modification", END)
     return builder.compile(checkpointer=checkpointer)
 

@@ -10,6 +10,7 @@ import {
   subscribeApplicationDevelopmentEntry,
   shouldAutoEnterAcceptancePhase
 } from '../../workbenchPhase'
+import type { WorkbenchPhase } from '../../workbenchPhase'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -30,10 +31,8 @@ import type {
 } from '../../typings'
 import { CLASS_PREFIX, composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
 import { readWorkspaceFile } from '../../service/workspaceTools'
-import {
-  createPagePlanningThreadId,
-  saveRequirementSpecDraft
-} from '../../service/applicationPagePlanning'
+import { saveRequirementSpecDraft } from '../../service/applicationPagePlanning'
+import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { formatError } from '../Welcome/utils'
 import {
@@ -84,10 +83,11 @@ import { useCodeReviewReportPanel } from './hooks/useCodeReviewReportPanel'
 import { useTestReportPanel } from './hooks/useTestReportPanel'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import {
-  activeFormalRevisionConversationThreadId,
+  activeFormalRevisionStageSession,
   bindRevisionSessionChangeId,
   createFormalRevisionSessionContext,
-  formalRevisionSessionPhase
+  initialFormalRevisionPhase,
+  planningStageTransitionKey
 } from './hooks/revisionSession'
 import { sessionRuntimeKey } from './hooks/sessionRuntime'
 import type { SessionIdentity } from './hooks/sessionRuntime'
@@ -217,11 +217,11 @@ type Props = {
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
     designChangeRequest?: string
-  ) => void
+  ) => Promise<void>
   onStopPlanning: () => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onRevisionContinuationHandlerChange: (
-    handler?: (continuation: WorkflowRevisionContinuation) => Promise<void>
+    handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
   onThemeChange: (theme: 'light' | 'dark') => void
   onPlanningStreamReady?: (
@@ -842,6 +842,7 @@ export default function AiChatPanel({
   // 同一 impact 只允许创建一个前端二次修改会话，失败后才放开重试。
   const designRevisionStartInteractionRef = useRef('')
   const formalRevisionSessionIdentitiesRef = useRef<Record<string, SessionIdentity>>({})
+  const formalRevisionSourcePhasesRef = useRef<Record<string, WorkbenchPhase>>({})
   const [pendingRevisionContinuation, setPendingRevisionContinuation] = useState<{
     continuation: WorkflowRevisionContinuation
     reject: (reason?: unknown) => void
@@ -869,6 +870,7 @@ export default function AiChatPanel({
   const { publishAiMessage } = useWorkbench()
   const {
     phase: activeWorkbenchPhase,
+    derivedPhase: derivedWorkbenchPhase,
     manualOverride: workbenchPhaseOverride,
     switchPhase
   } = useWorkbenchPhase()
@@ -1488,6 +1490,7 @@ export default function AiChatPanel({
     createTestSession,
     createReviewSession,
     createAcceptanceSession,
+    discardPreparedSession,
     clearActiveSession,
     deletingSessionId,
     draft,
@@ -1533,7 +1536,8 @@ export default function AiChatPanel({
 
   /** 为已确认 TechnicalPlan 准备唯一开发会话；准备成功前不离开需求设计会话。 */
   const handleRevisionContinuation = useCallback(
-    (continuation: WorkflowRevisionContinuation): Promise<void> => {
+    (handoff: WorkflowRevisionContinuationHandoff): Promise<void> => {
+      const { continuation, lifecycle } = handoff
       const inFlight = revisionDevelopmentHandoffPromisesRef.current[continuation.changeId]
       if (inFlight) return inFlight
       const promise = new Promise<void>((resolve, reject) => {
@@ -1542,10 +1546,10 @@ export default function AiChatPanel({
           reject(reason)
         }
         void (async () => {
-          const activeRevision = applicationLifecycle?.activeFormalRevision
+          const activeRevision = lifecycle.activeFormalRevision
           const revisionContext = bindRevisionSessionChangeId(
             activeSession?.revisionContext,
-            applicationLifecycle
+            lifecycle
           )
           if (
             !activeSession ||
@@ -1578,20 +1582,25 @@ export default function AiChatPanel({
       return promise
     }, [
       activeSession,
-      applicationLifecycle,
       ensureRevisionDevelopmentSession
     ]
   )
   // 冷恢复 formal revision 时按 change/source/planning 完整身份选择独立会话；
   // 普通首次规划才允许按固定规划 Agent 标题恢复。
-  const activeRevisionConversationThreadId = activeFormalRevisionConversationThreadId(
-    allSessions,
-    applicationLifecycle
-  )
+  const activeRevisionStageSession = isApplicationPlanningPhase
+    ? activeFormalRevisionStageSession(
+        allSessions,
+        applicationLifecycle,
+        application.id,
+        isTechnicalPlanningPhase ? 'planning' : 'product'
+      )
+    : undefined
   const restoredPlanningConversationThreadId = applicationLifecycle?.activeFormalRevision
-    ? activeRevisionConversationThreadId
+    ? activeRevisionStageSession?.threadId
     : isTechnicalPlanningPhase
-      ? sessions.find((session) => session.title === '规划 Agent')?.threadId
+      ? sessions.find(
+          (session) => session.workflowId === application.id && session.stage === 'PLAN'
+        )?.threadId
       : undefined
   // 切换到其他会话时清除“不通过后恢复对话”的局部状态，避免串用普通输入模式。
   useEffect(() => {
@@ -1622,11 +1631,12 @@ export default function AiChatPanel({
         throw new Error('当前应用缺少原 planning checkpoint，无法创建独立正式修改会话。')
       }
       setGeneratingDetailTargetKey('')
-      const conversationThreadId = createPagePlanningThreadId()
-      const sessionPhase = formalRevisionSessionPhase(input.impact.formalBranch)
+      const stageEntryKey = `revision:${input.impact.formalBranch}:${input.impact.interactionId}`
+      const sessionPhase = initialFormalRevisionPhase(input.impact.formalBranch)
+      formalRevisionSourcePhasesRef.current[input.impact.interactionId] = activeWorkbenchPhase
       const revisionContext = createFormalRevisionSessionContext(input, checkpointThreadId)
       const revisionIdentity = await ensurePlanningSession(
-        conversationThreadId,
+        stageEntryKey,
         sessionPhase,
         revisionContext
       )
@@ -1674,8 +1684,10 @@ export default function AiChatPanel({
           ]
       setSessionMessages(revisionIdentity.key, revisionMessages)
       if (!sourceReceiptExists) setSessionMessages(sourceSessionKey, nextSourceMessages)
-      await Promise.all([
-        persistSession({
+      try {
+        // 先持久化目标会话，再写来源回执；回执失败时可以安全删除尚未进入的目标，
+        // 避免并行写入只成功一半后无法判断哪一侧才是权威状态。
+        await persistSession({
           editorMode: revisionIdentity.editorMode,
           messages: revisionMessages,
           sessionId: revisionIdentity.sessionId,
@@ -1685,20 +1697,29 @@ export default function AiChatPanel({
             input.impact.formalBranch === 'workbench_plan_revision'
               ? 'TechnicalPlan 二次修改'
               : '设计阶段二次修改'
-        }),
-        ...(sourceReceiptExists
-          ? []
-          : [
-              persistSession({
-                editorMode,
-                messages: nextSourceMessages,
-                sessionId: input.sourceSessionId,
-                threadId: input.sourceConversationThreadId
-              })
-            ])
-      ])
+        })
+        if (!sourceReceiptExists) {
+          await persistSession({
+            editorMode,
+            messages: nextSourceMessages,
+            sessionId: input.sourceSessionId,
+            threadId: input.sourceConversationThreadId
+          })
+        }
+      } catch (error) {
+        if (!sourceReceiptExists) setSessionMessages(sourceSessionKey, sourceMessages)
+        // 已有来源回执时保留其目标，避免一次重复准备失败制造悬空跳转。
+        if (!sourceReceiptExists) {
+          try {
+            await discardPreparedSession(revisionIdentity)
+          } catch (rollbackError) {
+            message.warning(formatError(rollbackError, '正式修改会话准备失败，预创建会话清理失败'))
+          }
+        }
+        throw error
+      }
       formalRevisionSessionIdentitiesRef.current[input.impact.interactionId] = revisionIdentity
-      setLocalPlanningConversationThreadId(conversationThreadId)
+      setLocalPlanningConversationThreadId(revisionIdentity.threadId)
       switchPhase(sessionPhase)
       return revisionIdentity
     },
@@ -1706,6 +1727,8 @@ export default function AiChatPanel({
       application.planningThreadId,
       application.workspaceRoot,
       applicationLifecycle,
+      activeWorkbenchPhase,
+      discardPreparedSession,
       editorMode,
       ensurePlanningSession,
       getSessionMessages,
@@ -1716,20 +1739,76 @@ export default function AiChatPanel({
     ]
   )
 
+  /** 阶段启动失败时撤销来源回执、删除预创建会话并恢复发起阶段。 */
+  const rollbackFormalRevisionSession = useCallback(
+    async (
+      input: WorkflowDesignStageRevisionStart | WorkflowWorkbenchPlanRevisionStart,
+      identity: SessionIdentity
+    ): Promise<void> => {
+      const sourceSessionKey = sessionRuntimeKey(
+        String(application.workspaceRoot || ''),
+        editorMode,
+        input.sourceSessionId
+      )
+      const sourceMessages = getSessionMessages(sourceSessionKey)
+      const nextSourceMessages = sourceMessages.filter(
+        (item) =>
+          item.revisionHandoff?.impactInteractionId !== input.impact.interactionId ||
+          item.revisionHandoff.targetSessionId !== identity.sessionId
+      )
+      try {
+        if (nextSourceMessages.length !== sourceMessages.length) {
+          setSessionMessages(sourceSessionKey, nextSourceMessages)
+          try {
+            await persistSession({
+              editorMode,
+              messages: nextSourceMessages,
+              sessionId: input.sourceSessionId,
+              threadId: input.sourceConversationThreadId
+            })
+          } catch (error) {
+            // 回执没有成功撤销时必须保留目标会话，避免磁盘回执指向已删除会话。
+            setSessionMessages(sourceSessionKey, sourceMessages)
+            throw error
+          }
+        }
+        await discardPreparedSession(identity)
+      } finally {
+        const sourcePhase =
+          formalRevisionSourcePhasesRef.current[input.impact.interactionId] || 'development'
+        delete formalRevisionSessionIdentitiesRef.current[input.impact.interactionId]
+        delete formalRevisionSourcePhasesRef.current[input.impact.interactionId]
+        setLocalPlanningConversationThreadId('')
+        switchPhase(sourcePhase)
+      }
+    },
+    [
+      application.workspaceRoot,
+      discardPreparedSession,
+      editorMode,
+      getSessionMessages,
+      persistSession,
+      setSessionMessages,
+      switchPhase
+    ]
+  )
+
   /** 设计层 formal revision 创建会话后，再让原 planning Graph 恢复到权威节点。 */
   const handleStartDesignStageRevision = useCallback(
     async (input: WorkflowDesignStageRevisionStart): Promise<void> => {
       if (designRevisionStartInteractionRef.current === input.impact.interactionId) return
       designRevisionStartInteractionRef.current = input.impact.interactionId
+      let revisionIdentity: SessionIdentity | undefined
       try {
-        await prepareFormalRevisionSession(input)
+        revisionIdentity = await prepareFormalRevisionSession(input)
         await onStartDesignStageRevision(input)
       } catch (error) {
         designRevisionStartInteractionRef.current = ''
+        if (revisionIdentity) await rollbackFormalRevisionSession(input, revisionIdentity)
         throw error
       }
     },
-    [onStartDesignStageRevision, prepareFormalRevisionSession]
+    [onStartDesignStageRevision, prepareFormalRevisionSession, rollbackFormalRevisionSession]
   )
 
   /** TechnicalPlan-only revision 创建规划会话；主 Workflow 请求由会话 hook 使用该身份发送。 */
@@ -1782,6 +1861,7 @@ export default function AiChatPanel({
     onApplicationLifecycleChange,
     onStartDesignStageRevision: handleStartDesignStageRevision,
     onStartWorkbenchPlanRevision: handleStartWorkbenchPlanRevision,
+    onRollbackFormalRevisionSession: rollbackFormalRevisionSession,
     onRevisionContinuation: handleRevisionContinuation,
     onEnterTestPhase: handleEnterTestPhase,
     onEnterReviewPhase: handleEnterReviewPhase,
@@ -1882,10 +1962,30 @@ export default function AiChatPanel({
       await activateRevisionDevelopmentSession(pending.targetIdentity)
       switchPhase(null)
       pending.resolve()
-    })().catch(pending.reject)
+    })().catch(async (error) => {
+      // 服务端可能已经成功接管，只是本地激活或回执写盘后的后续步骤失败；
+      // 来源会话已有指向该目标的成功回执时，保留开发会话供恢复和再次进入。
+      const sourceMessages = getSessionMessages(pending.sourceIdentity.key)
+      const successfulReceiptExists = sourceMessages.some(
+        (item) =>
+          item.revisionHandoff?.kind === 'revision_development' &&
+          item.revisionHandoff.changeId === pending.continuation.changeId &&
+          item.revisionHandoff.targetSessionId === pending.targetIdentity.sessionId &&
+          item.revisionHandoff.targetConversationThreadId === pending.targetIdentity.threadId
+      )
+      if (!successfulReceiptExists) {
+        try {
+          await discardPreparedSession(pending.targetIdentity)
+        } catch (rollbackError) {
+          message.warning(formatError(rollbackError, '开发会话启动失败，预创建会话清理失败'))
+        }
+      }
+      pending.reject(error)
+    })
   }, [
     activateRevisionDevelopmentSession,
     applicationLifecycle,
+    discardPreparedSession,
     getSessionMessages,
     handleContinueRevisionBuild,
     pendingRevisionContinuation,
@@ -1925,8 +2025,8 @@ export default function AiChatPanel({
   const planningNewRoundRef = useRef(false)
   // 规划消息自增 id 计数器，避免同一毫秒内新增多条消息导致 React key 重复。
   const planningMessageIdRef = useRef(0)
-  // 锁定一次设计到规划的原地交接，避免连续点击重复创建会话或恢复 Graph。
-  const planningStageTransitionRef = useRef(false)
+  // 按入口门禁锁定设计到规划的原地交接；新 revision 的新门禁不能复用旧锁。
+  const planningStageTransitionRef = useRef('')
   // 用 ref 持有最新的 session 操作函数，避免 effect 依赖它们导致循环。
   const getSessionMessagesRef = useRef(getSessionMessages)
   const setSessionMessagesRef = useRef(setSessionMessages)
@@ -2227,21 +2327,44 @@ export default function AiChatPanel({
     formalRevisionPlanningActive
       ? localPlanningConversationThreadId
       : planningConversationThreadId || localPlanningConversationThreadId
+  const businessPlanningSessionActive = Boolean(
+    (formalRevisionPlanningActive &&
+      activeFormalRevision &&
+      activeWorkbenchPhase === derivedWorkbenchPhase) ||
+      (applicationLifecycle &&
+        applicationLifecycle.initialization.stage !== 'ready_for_workbench' &&
+        activeWorkbenchPhase === derivedWorkbenchPhase)
+  )
+  const planningSessionLookupKey =
+    activePlanningConversationThreadId ||
+    restoredPlanningConversationThreadId ||
+    (formalRevisionPlanningActive ? undefined : planningThreadId)
+  const planningSessionPhase = isTechnicalPlanningPhase ? 'planning' : 'product'
+  const existingPlanningSessionThreadId = useMemo(
+    () =>
+      allSessions.find(
+        (session) =>
+          session.workflowId === application.id &&
+          session.workbenchPhase === planningSessionPhase &&
+          (session.entryKey === planningSessionLookupKey ||
+            session.threadId === planningSessionLookupKey)
+      )?.threadId,
+    [allSessions, application.id, planningSessionLookupKey, planningSessionPhase]
+  )
 
   useEffect(() => {
     // 正式二次修改只能恢复其独立前端会话；匹配失败时禁止退回原 Graph thread，
     // 否则会把新的修改消息写入初次需求设计的可见会话。
-    const planningSessionThreadId =
-      activePlanningConversationThreadId ||
-      restoredPlanningConversationThreadId ||
-      (formalRevisionPlanningActive ? undefined : planningThreadId)
-    if (!isApplicationPlanningPhase || !planningSessionThreadId) return
+    if (!isApplicationPlanningPhase || !planningSessionLookupKey) return
     // 等 session 列表加载完再 ensure，避免 sessionSummaries 为空时找不到已有 session
     // 而创建新 session，导致历史对话丢失。
     if (loadingSessions) return
+    // 顶部阶段栏只负责浏览：非业务规划期间只能打开既有会话，禁止因 phase 切换补建会话。
+    if (!businessPlanningSessionActive && !existingPlanningSessionThreadId) return
+    const sessionLookupKey = existingPlanningSessionThreadId || planningSessionLookupKey
     let cancelled = false
     void ensurePlanningSessionRef
-      .current(planningSessionThreadId, isTechnicalPlanningPhase ? 'planning' : 'product')
+      .current(sessionLookupKey, planningSessionPhase)
       .then((identity) => {
         if (cancelled) return
         planningSessionKeyRef.current = identity.key
@@ -2288,11 +2411,10 @@ export default function AiChatPanel({
     isApplicationPlanningPhase,
     isTechnicalPlanningPhase,
     loadingSessions,
-    activePlanningConversationThreadId,
-    applicationLifecycle?.activeFormalRevision?.formalBranch,
-    applicationLifecycle?.activeFormalRevision?.status,
-    planningThreadId,
-    restoredPlanningConversationThreadId
+    businessPlanningSessionActive,
+    planningSessionLookupKey,
+    planningSessionPhase,
+    existingPlanningSessionThreadId
   ])
 
   // 外层规划状态始终保留最新 Workflow；稳定快照到达时主动补齐可能漏掉的流式确认卡。
@@ -3252,7 +3374,9 @@ export default function AiChatPanel({
       const phase =
         handoff.kind === 'revision_development'
           ? 'development'
-          : formalRevisionSessionPhase(handoff.formalBranch)
+          : handoff.kind === 'revision_planning'
+            ? 'planning'
+            : initialFormalRevisionPhase(handoff.formalBranch)
       switchPhase(phase)
       await openSessionForPhase(handoff, phase)
     } catch (error) {
@@ -3274,7 +3398,7 @@ export default function AiChatPanel({
       // 直接把空 answers 传给 onSubmitPlanningClarification，由 Modal 拦截走恢复路径。
       const isUiDesignPoll = !answers || Object.keys(answers).length === 0
       if (isUiDesignPoll) {
-        onSubmitPlanningClarification(workflow, {}, editedRequirementSpec)
+        void onSubmitPlanningClarification(workflow, {}, editedRequirementSpec).catch(() => undefined)
         return
       }
       const planningAnswers = ensureApplicationPlanningAction(workflow, answers)
@@ -3299,42 +3423,141 @@ export default function AiChatPanel({
       if (!isUiDesignPageAction) {
         planningNewRoundRef.current = true
         if (planningAnswers.__applicationPlanningAction === 'enter_planning') {
-          if (planningStageTransitionRef.current) return
           const checkpointThreadId = String(planningThreadId || workflow.threadId || '').trim()
           if (!checkpointThreadId) {
             message.error('当前规划 checkpoint 标识缺失，请重新打开应用后重试。')
             return
           }
-          planningStageTransitionRef.current = true
           // 每次从设计阶段进入规划阶段都创建新的前端会话；后端仍复用原 planning
           // checkpoint thread，避免二次修改沿用旧设计会话导致入口提交没有新会话承载。
-          const conversationThreadId = createPagePlanningThreadId()
+          const sourceIdentity = activeSession
+          const revisionContext = bindRevisionSessionChangeId(
+            sourceIdentity?.revisionContext,
+            applicationLifecycle
+          )
+          const planningInterrupt = [workflow.result, workflow.state]
+            .map((value) => value?.application_planning_interrupt)
+            .find(
+              (value) => value && typeof value === 'object' && !Array.isArray(value)
+            ) as Record<string, unknown> | undefined
+          const gateIdentity =
+            String(planningInterrupt?.gateId || '').trim() ||
+            String(planningInterrupt?.artifactRevision || '').trim() ||
+            workflow.runId
+          const stageEntryKey = planningStageTransitionKey(
+            checkpointThreadId,
+            gateIdentity,
+            revisionContext
+          )
+          if (planningStageTransitionRef.current === stageEntryKey) return
+          planningStageTransitionRef.current = stageEntryKey
+          let planningIdentity: SessionIdentity | undefined
+          let sourceMessages: AgentChatMessage[] = []
+          let sourceMessagesWithReceipt: AgentChatMessage[] = []
+          let sourceReceiptAdded = false
+          let sourceReceiptPersisted = false
           try {
             // 先落好新的规划 Agent 会话，再切阶段和恢复原 Graph，避免首帧空白或流式消息串入产品会话。
-            const planningIdentity = await ensurePlanningSession(
-              conversationThreadId,
+            planningIdentity = await ensurePlanningSession(
+              stageEntryKey,
               'planning',
-              activeSession?.revisionContext
+              revisionContext
             )
+            if (revisionContext?.changeId && sourceIdentity) {
+              sourceMessages = getSessionMessages(sourceIdentity.key)
+              const receiptExists = sourceMessages.some(
+                (item) =>
+                  item.revisionHandoff?.kind === 'revision_planning' &&
+                  item.revisionHandoff.changeId === revisionContext.changeId &&
+                  item.revisionHandoff.targetSessionId === planningIdentity?.sessionId
+              )
+              if (!receiptExists) {
+                sourceReceiptAdded = true
+                const receiptId = Date.now() * 1000
+                const nextSourceMessages: AgentChatMessage[] = [
+                  ...sourceMessages,
+                  {
+                    id: receiptId,
+                    role: 'assistant',
+                    content: '',
+                    revisionHandoff: {
+                      kind: 'revision_planning',
+                      formalBranch: revisionContext.formalBranch,
+                      targetSessionId: planningIdentity.sessionId,
+                      targetConversationThreadId: planningIdentity.threadId,
+                      impactInteractionId: revisionContext.impactInteractionId,
+                      changeId: revisionContext.changeId,
+                      request: String(
+                        activeFormalRevision?.request ||
+                          '需求设计已确认，进入本次二次修改的技术规划阶段。'
+                      )
+                    },
+                    createdAt: receiptId
+                  }
+                ]
+                sourceMessagesWithReceipt = nextSourceMessages
+                setSessionMessages(sourceIdentity.key, nextSourceMessages)
+                await persistSession({
+                  editorMode: sourceIdentity.editorMode,
+                  messages: nextSourceMessages,
+                  sessionId: sourceIdentity.sessionId,
+                  threadId: sourceIdentity.threadId,
+                  revisionContext
+                })
+                sourceReceiptPersisted = true
+              }
+            }
             planningSessionKeyRef.current = planningIdentity.key
-            setLocalPlanningConversationThreadId(conversationThreadId)
+            setLocalPlanningConversationThreadId(planningIdentity.threadId)
             appendPlanningUserMessage(planningAnswers)
             switchPhase('planning')
-            onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec)
+            await onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec)
           } catch (error) {
-            planningStageTransitionRef.current = false
+            if (planningStageTransitionRef.current === stageEntryKey) {
+              planningStageTransitionRef.current = ''
+            }
+            let sourceReceiptRolledBack = true
+            if (sourceIdentity && sourceReceiptAdded) {
+              setSessionMessages(sourceIdentity.key, sourceMessages)
+              if (sourceReceiptPersisted) {
+                try {
+                  await persistSession({
+                    editorMode: sourceIdentity.editorMode,
+                    messages: sourceMessages,
+                    sessionId: sourceIdentity.sessionId,
+                    threadId: sourceIdentity.threadId,
+                    revisionContext
+                  })
+                } catch (rollbackError) {
+                  sourceReceiptRolledBack = false
+                  // 磁盘仍保留回执时，内存也恢复为同一状态，并保留目标会话维持可跳转关系。
+                  setSessionMessages(sourceIdentity.key, sourceMessagesWithReceipt)
+                  message.warning(formatError(rollbackError, '规划阶段交接回执回滚失败'))
+                }
+              }
+            }
+            if (planningIdentity && sourceReceiptRolledBack) {
+              try {
+                await discardPreparedSession(planningIdentity)
+              } catch (rollbackError) {
+                message.warning(formatError(rollbackError, '预创建规划会话清理失败'))
+              }
+            }
+            setLocalPlanningConversationThreadId('')
+            switchPhase('product')
             message.error(formatError(error, '进入规划阶段失败'))
           }
           return
         } else {
           // 其它确认/放弃/填表操作继续保留用户消息与即时加载占位。
-          // TechnicalPlan 二次修改确认后立即切到开发阶段，后续复用新增应用的
-          // development_readiness_gate；不再把这轮 continuation 显示成规划恢复。
-          if (revisionTechnicalPlanConfirmed) switchPhase('development')
+          // TechnicalPlan 二次修改确认后继续停留在当前规划会话；只有服务端
+          // continuation 被开发 Workflow 成功接管后，才激活 DEVELOPMENT StageSession。
           appendPlanningUserMessage(planningAnswers, !revisionTechnicalPlanConfirmed)
         }
       }
-      onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec)
+      void onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec).catch(
+        () => undefined
+      )
       return
     }
     await handleSubmitClarification(workflow, answers)
@@ -3388,7 +3611,9 @@ export default function AiChatPanel({
     setGeneratingDetailTargetKey('')
     planningNewRoundRef.current = true
     appendPlanningUserMessage({ design_change_request: trimmed })
-    onSubmitPlanningClarification(planningWorkflow, {}, undefined, undefined, trimmed)
+    void onSubmitPlanningClarification(planningWorkflow, {}, undefined, undefined, trimmed).catch(
+      () => undefined
+    )
     setDraftByKey(draftKey, '')
   }
 

@@ -18,7 +18,6 @@ function readEncodedArgument(prefix: string): string {
     return '';
   }
 }
-
 const planningApplicationId = readEncodedArgument(PLANNING_APPLICATION_ARG_PREFIX);
 const planningGraphThreadId = readEncodedArgument(PLANNING_GRAPH_THREAD_ARG_PREFIX);
 const planningConversationThreadId = readEncodedArgument(PLANNING_CONVERSATION_THREAD_ARG_PREFIX);
@@ -82,6 +81,10 @@ const xcodeAgentApi = {
     listWorkspaces: () => ipcRenderer.invoke('sessions:list-workspaces'),
     list: (payload) => ipcRenderer.invoke('sessions:list', payload),
     read: (payload) => ipcRenderer.invoke('sessions:read', payload),
+    create: (payload) => ipcRenderer.invoke('sessions:create', {
+      workspaceRoot: payload.workspaceRoot,
+      session: payload,
+    }),
     save: (payload) => ipcRenderer.invoke('sessions:save', payload),
     delete: (payload) => ipcRenderer.invoke('sessions:delete', payload),
   },
