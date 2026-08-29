@@ -98,7 +98,14 @@ def compile_authorization_manifest(requirement_spec: dict[str, Any], product_pla
         return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "enabled": False, "resources": [], "bindings": {"pages": [], "actions": [], "endpoints": []}, "defaultRoleAuthorization": {"roles": [], "roleResourceGrants": [], "initialAdminRoleSeedKey": ""}})
     targets = product_plan.get("authorizationTargets") if isinstance(product_plan.get("authorizationTargets"), dict) else {}
     page_targets = {str(item.get("ruleId") or "").strip(): str(item.get("pageId") or "").strip() for item in _dict_items(targets.get("pageRules"))}
-    action_targets = {str(item.get("ruleId") or "").strip(): (str(item.get("pageId") or "").strip(), str(item.get("actionId") or "").strip()) for item in _dict_items(targets.get("operationRules"))}
+    action_targets = {
+        str(item.get("ruleId") or "").strip(): (
+            str(item.get("pageId") or "").strip(),
+            str(item.get("actionId") or "").strip(),
+            str(item.get("mode") or "hidden").strip() or "hidden",
+        )
+        for item in _dict_items(targets.get("operationRules"))
+    }
     resources: dict[str, dict[str, Any]] = {SYSTEM_RESOURCE_KEY: {"resourceKey": SYSTEM_RESOURCE_KEY, "origin": "system", "type": "system", "name": "权限管理", "description": "管理角色、成员角色与角色资源关系。", "sourceRuleIds": [], "targetResourceRef": "system:authorization_management"}}
     page_bindings: dict[str, dict[str, str]] = {}; action_bindings: dict[tuple[str, str], dict[str, str]] = {}; grants: dict[str, set[str]] = {}
     for rule in _dict_items(authorization.get("restrictedPages")):
@@ -108,8 +115,9 @@ def compile_authorization_manifest(requirement_spec: dict[str, Any], product_pla
         resource["sourceRuleIds"] = _text_items([*resource["sourceRuleIds"], rule_id]); page_bindings[page_id] = {"pageId": page_id, "resourceKey": page_id}
         for role_id in _text_items(rule.get("defaultGrantedRoleIds")): grants.setdefault(role_id, set()).add(page_id)
     for rule in _dict_items(authorization.get("restrictedOperations")):
-        rule_id = str(rule.get("ruleId") or "").strip(); page_id, action_id = action_targets.get(rule_id, ("", ""))
+        rule_id = str(rule.get("ruleId") or "").strip(); page_id, action_id, mode = action_targets.get(rule_id, ("", "", "hidden"))
         if not rule_id or not page_id or not action_id: raise ValueError("权限 manifest 的操作规则缺少已确认 pageId/actionId 目标。")
+        if mode not in {"hidden", "disabled"}: raise ValueError("权限 manifest 的操作规则 mode 必须是 hidden 或 disabled。")
         resource_key = f"{page_id}_{action_id}"
         existing = resources.get(resource_key)
         if existing is not None and (
@@ -118,7 +126,7 @@ def compile_authorization_manifest(requirement_spec: dict[str, Any], product_pla
         ):
             raise ValueError(f"权限资源键跨类型或跨目标碰撞：{resource_key}。")
         resource = resources.setdefault(resource_key, {"resourceKey": resource_key, "origin": "business", "type": "operation", "name": str(rule.get("name") or action_id), "description": str(rule.get("description") or ""), "sourceRuleIds": [], "targetResourceRef": f"action:{page_id}:{action_id}"})
-        resource["sourceRuleIds"] = _text_items([*resource["sourceRuleIds"], rule_id]); action_bindings[(page_id, action_id)] = {"pageId": page_id, "actionId": action_id, "resourceKey": resource_key}
+        resource["sourceRuleIds"] = _text_items([*resource["sourceRuleIds"], rule_id]); action_bindings[(page_id, action_id)] = {"pageId": page_id, "actionId": action_id, "resourceKey": resource_key, "mode": mode}
         for role_id in _text_items(rule.get("defaultGrantedRoleIds")): grants.setdefault(role_id, set()).add(resource_key)
     if any(not _LOWER_SNAKE_CASE.match(key) for key in resources): raise ValueError("权限资源键必须全局唯一且使用 lower_snake_case。")
     endpoint_resources: dict[str, set[str]] = {}; endpoint_control: dict[str, set[bool]] = {}

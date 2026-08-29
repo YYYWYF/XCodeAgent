@@ -66,7 +66,13 @@ class AuthorizationManifestTests(unittest.TestCase):
             page_contract["permissionBindings"],
             [
                 {"targetType": "page", "pageId": "people", "resourceKey": "people"},
-                {"targetType": "action", "pageId": "people", "actionId": "edit_person", "resourceKey": "people_edit_person"},
+                {
+                    "targetType": "action",
+                    "pageId": "people",
+                    "actionId": "edit_person",
+                    "resourceKey": "people_edit_person",
+                    "mode": "hidden",
+                },
             ],
         )
         self.assertEqual(validate_authorization_manifest(manifest, requirement, product, contracts, pages), [])

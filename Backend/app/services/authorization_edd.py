@@ -6,20 +6,20 @@ from pathlib import Path
 from typing import Any
 
 from app.services.authorization_constants_projection import verify_authorization_constants_projection
-from app.services.authorization_route_projection import verify_authorization_route_projection
+from app.services.authorization_frontend_projection import verify_authorization_frontend_projection
 
 
 def verify_authorization_edd(workspace: str | Path, build_task_plan: dict[str, Any]) -> list[str]:
     """在 Build 完成后验证共享投影、页面 Permission 与 Controller ANY-OF 证据。"""
 
-    route_projection = build_task_plan.get("authorization_route_projection")
+    frontend_projection = build_task_plan.get("authorization_frontend_projection")
     constants_projection = build_task_plan.get("authorization_constants_projection")
-    if route_projection is None and constants_projection is None:
+    if frontend_projection is None and constants_projection is None:
         return []
     errors: list[str] = []
     # EDD 必须是纯只读阶段：仅核对模板声明、托管区标记和内容，不得重放投影。
     try:
-        verify_authorization_route_projection(workspace, route_projection)
+        verify_authorization_frontend_projection(workspace, frontend_projection)
         verify_authorization_constants_projection(workspace, constants_projection)
     except (ValueError, OSError) as exc:
         return [f"权限共享投影 EDD 失败：{exc}"]

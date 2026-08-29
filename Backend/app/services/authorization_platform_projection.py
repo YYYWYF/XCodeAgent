@@ -9,9 +9,9 @@ from app.services.authorization_constants_projection import (
     AuthorizationConstantsProjectionError,
     apply_authorization_constants_projection,
 )
-from app.services.authorization_route_projection import (
-    AuthorizationRouteProjectionError,
-    apply_authorization_route_projection,
+from app.services.authorization_frontend_projection import (
+    AuthorizationFrontendProjectionError,
+    apply_authorization_frontend_projection,
 )
 from app.workspace.task_documents import build_task_plan_sha256
 from app.workspace.code_changes import capture_workspace_changes
@@ -35,9 +35,9 @@ def apply_authorization_platform_projections(
     actual_plan_sha256 = build_task_plan_sha256(build_task_plan)
     if plan_sha256 and plan_sha256 != actual_plan_sha256:
         raise AuthorizationPlatformProjectionError("Build Run 绑定的任务计划摘要与投影输入不一致。")
-    route_projection = build_task_plan.get("authorization_route_projection")
+    frontend_projection = build_task_plan.get("authorization_frontend_projection")
     constants_projection = build_task_plan.get("authorization_constants_projection")
-    if route_projection is None and constants_projection is None:
+    if frontend_projection is None and constants_projection is None:
         return {
             "status": "skipped",
             "source": "platform.authorization_projection",
@@ -53,13 +53,13 @@ def apply_authorization_platform_projections(
         raise AuthorizationPlatformProjectionError("权限共享投影工作区不存在或不是目录。")
 
     def _apply() -> dict[str, Any]:
-        """严格按确认 DAG 的内容调用两个模板托管区写入器。"""
+        """严格按确认 DAG 的内容调用前端和后端平台写入器。"""
 
         try:
             return {
-                "routeGuard": apply_authorization_route_projection(
+                "frontend": apply_authorization_frontend_projection(
                     workspace_path,
-                    route_projection,
+                    frontend_projection,
                 ),
                 "authConstants": apply_authorization_constants_projection(
                     workspace_path,
@@ -67,7 +67,7 @@ def apply_authorization_platform_projections(
                 ),
             }
         except (
-            AuthorizationRouteProjectionError,
+            AuthorizationFrontendProjectionError,
             AuthorizationConstantsProjectionError,
             OSError,
             ValueError,
@@ -86,7 +86,7 @@ def apply_authorization_platform_projections(
         "source": "platform.authorization_projection",
         "buildRunId": build_run_id,
         "planSha256": actual_plan_sha256,
-        "routeGuard": captured.value["routeGuard"],
+        "frontend": captured.value["frontend"],
         "authConstants": captured.value["authConstants"],
         "files": list(change_set.get("files") or []),
         "summary": dict(

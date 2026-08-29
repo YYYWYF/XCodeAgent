@@ -96,6 +96,40 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertIn("provided array order", data_source_prompt)
         self.assertNotIn("regular backend verification", data_source_prompt)
 
+    def test_frontend_execution_prompt_requires_exact_resources_import(self) -> None:
+        """受控页面任务必须收到唯一 RESOURCES 目录的精确导入约束。"""
+
+        prompt = _frontend_generation_prompt(
+            project_plan={"app": {"name": "demo"}},
+            build_task_plan={"summary": {}},
+            tasks=[
+                {
+                    "id": "page:assets",
+                    "allowed_paths": ["frontend/src/pages/Assets/index.tsx"],
+                    "source_refs": {
+                        "authorization": {
+                            "actions": [
+                                {
+                                    "actionId": "create_asset",
+                                    "resourceKey": "assets_create_asset",
+                                    "resourceConstant": {
+                                        "group": "OPERATION",
+                                        "name": "ASSETS_CREATE_ASSET",
+                                    },
+                                }
+                            ]
+                        }
+                    },
+                }
+            ],
+        )
+
+        self.assertIn(
+            "import { RESOURCES } from '@/authorization/resources';",
+            prompt,
+        )
+        self.assertIn("Do not use a relative path, barrel export, default import, or alias.", prompt)
+
     def test_external_api_execution_prompt_does_not_load_database_rules(self) -> None:
         """外部 API 后端执行批次只要求外部集成 Skill。"""
 

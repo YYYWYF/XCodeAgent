@@ -1075,15 +1075,15 @@ authorization.enabled=false：
 
 - Build 启动时只加载步骤 6 当前已确认且已通过 `dag_validation` 的 `build-task-plan.json`，并将其绑定为本次 Build Run 的唯一执行计划。平台记录 `schema_version`、规范化内容 SHA-256，并保存本次运行使用的只读副本；后续前后端 Agent、Testing、Retry 和 Repair 均不得重新读取或切换到其他版本的任务计划。执行阶段不再进行 DAG 权限语义校验、权限设计或权限事实补全。
 - `schema_version` 只表示格式兼容性；计划身份只由 SHA-256 表示。每次恢复 Build 前重新比对规划权威文件与绑定 SHA-256；若已变化，终止当前 Build，由新的已确认计划重新启动 Build Run。
-- 任何叶子任务派发前，由平台根据本次 Build Run 绑定的任务计划幂等执行共享权限投影。模板已有 `RouteGuard` 等权限基础能力只做声明、目标文件和托管边界验证；平台仅写入模板明确声明的 `AuthConstants` 及路由权限托管配置。验证或投影失败时 fail closed，Page Task、API Task 及其他 Build Agent 不得补写共享 Router、`AuthConstants` 或推断权限关系。
+- 任何叶子任务派发前，平台根据本次 Build Run 绑定的任务计划幂等生成 `frontend/src/authorization/resources.ts`，并只替换 `frontend/src/routes/index.tsx` 中模板固定声明的业务路由托管区。平台直接生成全部业务页面的显式 RouteObject：受控页面必须使用 `<RouteGuard resourceKey={RESOURCES.PAGE.<NAME>}>` 包裹，未受控页面不得生成 `RouteGuard`；固定 `/roles` 路由使用 `<RouteGuard resourceKey={RESOURCES.SYSTEM.AUTHORIZATION_MANAGEMENT}>`。验证或生成失败时 fail closed，Page Task、API Task 及其他 Build Agent 不得补写共享 Router、`RESOURCES`、`AuthConstants` 或推断权限关系。
 - 平台投影的源码变化、Build Run 标识及计划 SHA-256 单独记录为平台执行证据，不归属前后端 Build Agent。Retry 和 Repair 必须继续使用本次 Build Run 已绑定的同一任务计划，只能重新执行或恢复既有投影，不得新增、修改、删除、补全或重新推断权限事实。
 
 ##### 步骤 7B：前端业务权限接入
 
 状态：已实施。
 
-- 前端 Page Task 只消费执行任务包中只读的 `authorization.actions` 权限约束。凡当前 Task 明确声明为受控的 Action，必须通过稳定 `actionId` 唯一定位到真实交互点，并使用模板 `Permission` 接入平台给定的精确 `resourceKey`；前端不生成或导入后端 Java `AuthConstants`，也不得自行拼写、转换或推断该键。保留或补充稳定 `data-action-id` 以支持确定性验收，未受控 Action 不增加权限包装。
-- Action 默认采用 `hidden`；仅当目标控件可靠支持禁用，且保留可见性具有明确交互价值时允许采用 `disabled`，无法确定时仍采用 `hidden`。
+- 前端 Page Task 只消费执行任务包中只读的 `authorization.actions` 权限约束。凡当前 Task 明确声明为受控的 Action，必须通过稳定 `actionId` 唯一定位到真实交互点，并从 `@/authorization/resources` 导入 `RESOURCES`，以平台给定的 `RESOURCES.OPERATION.<NAME>` 接入模板 `Permission`；不得使用资源字符串、后端 Java `AuthConstants` 或自行推断键。保留或补充稳定 `data-action-id` 以支持确定性验收，未受控 Action 不增加权限包装。
+- Action 的 `mode` 优先采用已确认的 `hidden`/`disabled`；缺失时平台归一化为 `hidden`，Agent 不得自行选择或改写。
 - 应用级权限能力完全复用模板已有 `AuthProvider`、`RouteGuard`、`Permission` 和当前成员资源请求。Page Task 不得创建第二套 Provider、权限请求入口、权限缓存、资源目录、角色管理能力或 `/roles` 页面。
 - 页面路由权限由步骤 7A 的平台共享投影负责。Page Task 只实现页面业务、领域 API 调用及本 Task 声明的 Action 权限包装，不得修改路由权限配置、菜单权限、共享 Router、`AuthConstants` 或模板权限核心。
 - 页面和组件调用业务接口时统一通过 `useRequest` 调用 `src/apis/` 暴露的领域 API，由 `src/apis/` 内部复用模板 `service`；页面和组件不得直接调用 `fetch`、`axios` 或 `service`。

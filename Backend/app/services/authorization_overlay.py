@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.frontend_page_tree import project_plan_page_records
+from app.services.authorization_frontend_projection import (
+    compile_frontend_authorization_projection,
+    resource_constant_reference,
+)
 
 
 def compile_authorization_overlay(
@@ -36,6 +39,7 @@ def compile_authorization_overlay(
             "pageId": str(binding["pageId"]),
             "actionId": str(binding["actionId"]),
             "resourceKey": str(binding["resourceKey"]),
+            "mode": str(binding.get("mode") or "hidden"),
         }
         for binding in action_bindings.values()
         if str(binding.get("pageId") or "") in page_ids
@@ -51,15 +55,29 @@ def compile_authorization_overlay(
         for api_contract_id, endpoint_id in endpoint_refs
         if endpoint_id in endpoint_keys
     ]
-    route_guard_projection = _route_guard_projection(project_plan, pages)
     auth_constants_projection = _auth_constants_projection(endpoints)
     return {
         **build_context,
         "authorization_constraints": {
             "pages": pages,
-            "actions": sorted(actions, key=lambda item: (item["pageId"], item["actionId"])),
+            "actions": sorted(
+                [
+                    {
+                        **item,
+                        "mode": str(item["mode"]),
+                        "resourceConstant": resource_constant_reference(
+                            str(item["resourceKey"]),
+                            "operation",
+                            page_id=str(item["pageId"]),
+                            action_id=str(item["actionId"]),
+                        ),
+                    }
+                    for item in actions
+                ],
+                key=lambda item: (item["pageId"], item["actionId"]),
+            ),
             "endpoints": endpoints,
-            "routeGuardProjection": route_guard_projection,
+            "frontendProjection": compile_frontend_authorization_projection(project_plan),
             "authConstantsProjection": auth_constants_projection,
         },
     }
@@ -210,37 +228,6 @@ def _endpoint_http_identity(
                 raise ValueError(f"受控 Endpoint {api_contract_id}:{endpoint_id} 缺少合法 HTTP Path。")
             return {"httpMethod": method, "path": path}
     raise ValueError(f"受控 Endpoint {api_contract_id}:{endpoint_id} 不存在于确认 API Contract。")
-
-
-def _route_guard_projection(
-    project_plan: dict[str, Any], pages: list[dict[str, str]]
-) -> list[dict[str, str]]:
-    """将受控页面绑定为共享 Router 可消费的精确路由投影。"""
-
-    paths_by_page_id: dict[str, str] = {}
-    for page in project_plan_page_records(project_plan):
-        page_id = str(page.get("pageId") or page.get("id") or "").strip()
-        route = str(page.get("path") or "").strip()
-        if page_id and route:
-            paths_by_page_id[page_id] = route
-    result: list[dict[str, str]] = []
-    seen_routes: set[str] = set()
-    for binding in pages:
-        page_id = str(binding["pageId"])
-        route = paths_by_page_id.get(page_id)
-        if not route or not route.startswith("/"):
-            raise ValueError(f"受控页面 {page_id} 缺少合法路由，无法编译 RouteGuard 投影。")
-        if route in seen_routes:
-            raise ValueError(f"受控页面路由重复，无法唯一投影 RouteGuard：{route}。")
-        seen_routes.add(route)
-        result.append(
-            {
-                "pageId": page_id,
-                "route": route,
-                "resourceKey": str(binding["resourceKey"]),
-            }
-        )
-    return sorted(result, key=lambda item: (item["route"], item["pageId"]))
 
 
 def _auth_constants_projection(endpoints: list[dict[str, Any]]) -> list[dict[str, str]]:

@@ -138,9 +138,9 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             page_file = root / "frontend/src/pages/Orders/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text(
-                "import { Permission } from '@/authorization';\n"
+                "import { Permission } from '@/authorization';\nimport { RESOURCES } from '@/authorization/resources';\n"
                 "export default function Orders() {\n"
-                "  return <Permission resourceKey=\"orders_approve\" mode=\"hidden\">\n"
+                "  return <Permission resourceKey={RESOURCES.OPERATION.ORDERS_APPROVE} mode=\"hidden\">\n"
                 "    <button data-action-id=\"approve\">批准</button>\n"
                 "  </Permission>;\n"
                 "}\n",
@@ -201,7 +201,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             page_file = root / "frontend/src/pages/Orders/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text(
-                "import { Permission } from '@/authorization';\n"
+                "import { Permission } from '@/authorization';\nimport { RESOURCES } from '@/authorization/resources';\n"
                 "export default function Orders() {\n"
                 "  return <>\n"
                 "    <Permission resourceKey=\"wrong\" mode=\"hidden\"><button data-action-id=\"approve\">批准</button></Permission>\n"
@@ -225,10 +225,10 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             )
 
             page_file.write_text(
-                "import { Permission } from '@/authorization';\n"
+                "import { Permission } from '@/authorization';\nimport { RESOURCES } from '@/authorization/resources';\n"
                 "export default function Orders() {\n"
                 "  fetch('/api/orders');\n"
-                "  return <Permission resourceKey=\"orders_approve\" mode=\"hidden\"><button data-action-id=\"approve\">批准</button></Permission>;\n"
+                "  return <Permission resourceKey={RESOURCES.OPERATION.ORDERS_APPROVE} mode=\"hidden\"><button data-action-id=\"approve\">批准</button></Permission>;\n"
                 "}\n",
                 encoding="utf-8",
             )
@@ -247,10 +247,10 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             )
 
             page_file.write_text(
-                "import { Permission } from '@/authorization';\n"
+                "import { Permission } from '@/authorization';\nimport { RESOURCES } from '@/authorization/resources';\n"
                 "export default function Orders() {\n"
                 "  return <>\n"
-                "    <Permission resourceKey=\"orders_approve\" mode=\"hidden\"><button data-action-id=\"approve\">批准</button></Permission>\n"
+                "    <Permission resourceKey={RESOURCES.OPERATION.ORDERS_APPROVE} mode=\"hidden\"><button data-action-id=\"approve\">批准</button></Permission>\n"
                 "    <Permission resourceKey=\"orders_export\" mode=\"hidden\"><button data-action-id=\"export\">导出</button></Permission>\n"
                 "  </>;\n"
                 "}\n",
@@ -270,7 +270,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 workspace_root=workspace,
             )
 
-        self.assertTrue(any("orders_approve" in error for error in errors), errors)
+        self.assertTrue(any("RESOURCES" in error for error in errors), errors)
         self.assertTrue(any("fetch、axios 或 service" in error for error in http_errors), http_errors)
         self.assertTrue(any("未受控 Action export" in error for error in uncontrolled_errors), uncontrolled_errors)
 

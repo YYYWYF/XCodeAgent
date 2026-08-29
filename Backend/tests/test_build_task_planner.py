@@ -2939,6 +2939,44 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(scope["frontend/src/apis/service.ts"], "modify")
         self.assertEqual(scope["frontend/src/apis/missing.ts"], "add")
 
+    def test_authorization_page_accepts_matching_page_unit(self) -> None:
+        """页面权限约束存在匹配 Page Unit 时不应产生校验错误。"""
+
+        self.assertEqual(
+            _authorization_coverage_errors(
+                [
+                    {
+                        "id": "page:page_personal_assets::page",
+                        "unit_id": "page:page_personal_assets",
+                        "owner": "frontend",
+                    }
+                ],
+                {
+                    "authorization_constraints": {
+                        "pages": [{"pageId": "page_personal_assets"}]
+                    }
+                },
+            ),
+            [],
+        )
+
+    def test_authorization_page_reports_missing_page_unit(self) -> None:
+        """页面权限约束缺少匹配 Page Unit 时应返回可诊断的校验错误。"""
+
+        self.assertEqual(
+            _authorization_coverage_errors(
+                [],
+                {
+                    "authorization_constraints": {
+                        "pages": [{"pageId": "page_personal_assets"}]
+                    }
+                },
+            ),
+            [
+                "Authorization page page_personal_assets is missing its page Unit task."
+            ],
+        )
+
     def test_authorization_endpoint_requires_controller_only_for_required_backend_unit(self) -> None:
         """权限 endpoint 仅在当前后端 Unit 内要求 Controller 交付物。"""
 

@@ -34,6 +34,7 @@ def _project_plan(*, enabled: bool = True) -> dict:
                         "pageId": "orders",
                         "actionId": "approve",
                         "resourceKey": "orders_approve",
+                        "mode": "hidden",
                     }
                 ],
                 "endpoints": [
@@ -44,6 +45,11 @@ def _project_plan(*, enabled: bool = True) -> dict:
                 ],
             },
             "defaultRoleAuthorization": {"roles": [{"roleSeedKey": "admin"}]},
+            "resources": [
+                {"resourceKey": "orders", "type": "page", "targetResourceRef": "page:orders"},
+                {"resourceKey": "orders_approve", "type": "operation", "targetResourceRef": "action:orders:approve"},
+                {"resourceKey": "orders_recheck", "type": "operation", "targetResourceRef": "action:orders:recheck"},
+            ],
         },
     }
 
@@ -76,20 +82,20 @@ class AuthorizationOverlayTests(unittest.TestCase):
                         "pageId": "orders",
                         "actionId": "approve",
                         "resourceKey": "orders_approve",
+                        "mode": "hidden",
+                        "resourceConstant": {
+                            "group": "OPERATION",
+                            "name": "ORDERS_APPROVE",
+                            "resourceKey": "orders_approve",
+                        },
                     }
                 ],
             },
         )
         self.assertIsNone(unit_authorization_slice("frontend:api-client", context))
         self.assertEqual(
-            context["authorization_constraints"]["routeGuardProjection"],
-            [
-                {
-                    "pageId": "orders",
-                    "route": "/orders",
-                    "resourceKey": "orders",
-                }
-            ],
+            context["authorization_constraints"]["frontendProjection"]["pages"],
+            [{"pageId": "orders", "path": "/orders", "pageKey": "Orders", "resourceGroup": "PAGE", "resourceName": "ORDERS"}],
         )
         self.assertEqual(
             context["authorization_constraints"]["authConstantsProjection"],

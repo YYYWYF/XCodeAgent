@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any
 
+from app.services.authorization_frontend_projection import resource_constant_reference
+
 
 _CHANGE_TYPES = {
     "add": "added",
@@ -252,6 +254,19 @@ def _frontend_authorization_checks(task: dict[str, Any]) -> list[dict[str, Any]]
         {
             "actionId": str(item.get("actionId") or "").strip(),
             "resourceKey": str(item.get("resourceKey") or "").strip(),
+            "mode": str(item.get("mode") or "hidden").strip() or "hidden",
+            "resourceConstant": (
+                _dict_value(item.get("resourceConstant"))
+                or resource_constant_reference(
+                    str(item.get("resourceKey") or "").strip(),
+                    "operation",
+                    page_id=(
+                        str(item.get("pageId") or "").strip()
+                        or str(task.get("unit_id") or "").removeprefix("page:")
+                    ),
+                    action_id=str(item.get("actionId") or "").strip(),
+                )
+            ),
         }
         for item in _dict_items(authorization.get("actions"))
         if str(item.get("actionId") or "").strip()
@@ -287,7 +302,7 @@ def _frontend_authorization_checks(task: dict[str, Any]) -> list[dict[str, Any]]
         _check(
             task,
             kind="frontend_authorization",
-            description="受控页面操作必须以平台给定 resourceKey 接入唯一 hidden Permission，且页面不得直连 HTTP 客户端。",
+            description="受控页面操作必须以平台给定 RESOURCES 常量接入唯一 Permission，且页面不得直连 HTTP 客户端。",
             target_paths=_dedupe(paths),
             expected={
                 "controlledActions": actions,

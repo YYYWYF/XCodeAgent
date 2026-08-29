@@ -490,7 +490,8 @@ def _authorization_targets(
         rule_id = str(rule.get("ruleId") or "").strip()
         candidates = action_by_name.get(_authorization_target_key(rule.get("name")), [])
         if rule_id and len(candidates) == 1:
-            operation_rules.append({"ruleId": rule_id, **candidates[0]})
+            mode = str(rule.get("mode") or "hidden").strip() or "hidden"
+            operation_rules.append({"ruleId": rule_id, **candidates[0], "mode": mode})
     return {
         # 页面权限直接消费 RequirementSpec 已确认的稳定绑定，绝不再按展示名称猜测。
         "pageRules": page_rules,
@@ -778,10 +779,11 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
                 f"ProductPlan.authorizationTargets.{mapping_field} 必须与已确认 {requirement_field} 一一对应。"
             )
         for mapping in mappings:
-            if set(mapping) != expected_mapping_keys:
+            allowed_mapping_keys = expected_mapping_keys | ({"mode"} if mapping_field == "operationRules" else set())
+            if not set(mapping).issubset(allowed_mapping_keys) or not expected_mapping_keys.issubset(mapping):
                 errors.append(
                     f"ProductPlan.authorizationTargets.{mapping_field} 映射字段必须为 "
-                    + "、".join(sorted(expected_mapping_keys))
+                    + "、".join(sorted(allowed_mapping_keys))
                     + "。"
                 )
                 continue
@@ -796,6 +798,8 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
                     errors.append(
                         "ProductPlan.authorizationTargets.operationRules 引用了不存在的 pageId/actionId。"
                     )
+                if mapping.get("mode") is not None and str(mapping.get("mode") or "") not in {"hidden", "disabled"}:
+                    errors.append("ProductPlan.authorizationTargets.operationRules.mode 必须是 hidden 或 disabled。")
     if authorization.get("enabled") is True:
         errors.extend(_authorization_resource_candidate_errors(product_plan))
     return errors

@@ -926,6 +926,7 @@ def _authorization_coverage_errors(
     if not isinstance(constraints, dict):
         return []
     errors: list[str] = []
+    units = {str(task.get("unit_id") or "") for task in tasks}
     task_paths = [
         path
         for task in tasks

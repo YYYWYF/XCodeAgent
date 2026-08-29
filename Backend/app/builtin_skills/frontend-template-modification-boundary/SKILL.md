@@ -1,11 +1,11 @@
 ---
 name: frontend-template-modification-boundary
-description: 前端模板工程文件修改边界规范（前端 skill）。当大模型在从远程拉取的前端模板工程中生成或修改前端页面代码、新增业务页面、新增业务 API、登记菜单、新增类型/常量/hooks/工具函数/可复用组件时使用此技能，明确哪些前端文件禁止修改、哪些只能增量追加、哪些可以自由编写，避免破坏前端模板工程的框架骨架与自动路由机制。涉及前端 src/pages、src/typings、src/constants、src/hooks、src/utils、src/components、src/apis、src/constants/menus.ts、路由自动生成、layout/providers/入口文件、package.json/tailwind.config.js 等配置文件时使用。
+description: 前端模板工程文件修改边界规范（前端 skill）。当大模型在从远程拉取的前端模板工程中生成或修改前端页面代码、新增业务页面、新增业务 API、新增类型/常量/hooks/工具函数/可复用组件时使用，明确哪些前端文件禁止修改、哪些只能增量追加、哪些可以自由编写，避免破坏前端模板工程的框架骨架与平台托管路由。涉及前端 src/pages、src/typings、src/constants、src/hooks、src/utils、src/components、src/apis、routes、layout/providers/入口文件、package.json/tailwind.config.js 等配置文件时使用。
 ---
 
 # 前端模板工程文件修改边界规范
 
-本技能规定大模型在**从远程拉取的前端模板工程**中生成前端页面代码时，各文件的**修改边界**与**放置位置**。模板工程是带自动路由、自动菜单、统一请求封装、统一布局的前端脚手架，框架骨架不能被破坏，业务代码只能在指定区域、按指定方式生成。
+本技能规定大模型在**从远程拉取的前端模板工程**中生成前端页面代码时，各文件的**修改边界**与**放置位置**。模板工程提供统一请求封装、布局和平台托管路由；框架骨架不能被破坏，业务代码只能在指定区域生成。
 
 ## 虚拟路径前缀（重要）
 
@@ -86,11 +86,11 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 
 ## 核心原则
 
-模板工程的路由是**自动生成**的：`src/utils/route.tsx` 用 `import.meta.glob('@/pages/**/index.tsx')` 静态扫描页面，再根据 `src/constants/menus.ts` 里每个菜单项的 `key` 解析到 `src/pages/<key>/index.tsx`。因此：
+业务路由由 Build 平台根据已确认的权限清单直接写入 `src/routes/index.tsx` 的固定托管区，不再由页面 Agent 自动扫描、登记或改写。页面 Agent 只生成 `src/pages/<PageKey>/index.tsx`，并且：
 
-- 页面文件路径**必须**是 `src/pages/<PageKey>/index.tsx`，`<PageKey>` 即菜单项的 `key`，二者必须完全一致。
-- 页面要能被访问，`menus.ts` 的 `BIZ_MENUS` 任意层级中必须存在合法的 `{ path, name, key }` 菜单项；如果当前页面尚未注册，把新菜单项追加到 `BIZ_MENUS` 顶层数组末尾。
-- 框架骨架文件（入口、路由生成器、布局、Provider、守卫、配置）**禁止修改**。
+- 页面文件路径必须是 `src/pages/<PageKey>/index.tsx`；`<PageKey>` 由已确认页面设计提供。
+- 不得修改 `src/routes/index.tsx`、`src/utils/route.tsx`、`src/constants/menus.ts` 或任何路由/菜单配置；受控页面的 `RouteGuard` 由平台生成，操作控件的 `Permission` 只按任务提供的 `RESOURCES.OPERATION` 绑定生成。
+- 框架骨架文件（入口、路由、布局、Provider、守卫、配置）**禁止修改**。
 - 页面的类型、常量、hooks、工具函数**统一放公共目录**（`src/typings`、`src/constants`、`src/hooks`、`src/utils`），不放在页面目录内；可复用组件放 `src/components`。
 
 ## 文件修改边界总览
@@ -98,7 +98,7 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 | 分类 | 含义 | 涉及文件 |
 | --- | --- | --- |
 | 🔴 禁止修改 | 前端框架骨架与配置，改了会破坏整个工程 | 入口、路由、布局、Provider、守卫、常量、类型、配置、请求封装、全局样式 |
-| 🟡 只能增量 | 只能追加新文件/新内容，不能删改现有项 | `menus.ts` 的BIZ_MENUS数组顶层、`src/apis/`、`src/typings/`、`src/constants/`、`src/hooks/`、`src/utils/`、`src/components/`、`src/pages/` |
+| 🟡 只能增量 | 只能追加新文件/新内容，不能删改现有项 | `src/apis/`、`src/typings/`、`src/constants/`、`src/hooks/`、`src/utils/`、`src/components/`、`src/pages/` |
 | 🟢 自由编写 | 业务代码生成目标，可任意编写 | `src/pages/<PageKey>/index.tsx`（页面主组件） |
 
 ## 🔴 禁止修改的文件（前端框架骨架）
@@ -108,8 +108,8 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 ### 入口与路由生成
 - `src/index.tsx` — React 挂载入口
 - `src/App.tsx` — 应用根组件（BrowserRouter / ConfigProvider / Provider 装配）
-- `src/routes/index.tsx` — 路由注册器，从菜单自动生成路由
-- `src/utils/route.tsx` — 菜单转路由工具，依赖 `import.meta.glob` 静态扫描页面
+- `src/routes/index.tsx` — 路由注册器；业务路由托管区仅由 Build 平台写入
+- `src/utils/route.tsx` — 模板路由工具（如存在）
 
 ### 布局与全局上下文
 - `src/layout/index.tsx` 及 `src/layout/components/**` — ProLayout 布局壳、Header/Sider 渲染
@@ -153,9 +153,11 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 
 以下区域**只能新增文件或追加内容**，**不得删除或修改**框架已有的文件：
 
-### `src/constants/menus.ts` — 菜单登记
+### `src/constants/menus.ts` — 平台菜单配置
 
-若当前页面尚未在 `BIZ_MENUS` 任意层级注册，**只能**在 `BIZ_MENUS` 顶层数组末尾**追加**新菜单项；若已存在合法菜单项，无论位于顶层还是深层 `children`，都视为已注册，**不得**：
+页面 Agent 不得登记或修改菜单。若模板需要业务菜单，必须由对应的 Build 平台步骤在模板声明的托管区生成，并与显式业务路由使用同一份确认权限清单。以下旧式自动菜单路由规则仅用于识别不兼容模板，页面 Agent 不得据此生成代码：
+
+若当前页面尚未在 `BIZ_MENUS` 任意层级注册，旧模板只能在 `BIZ_MENUS` 顶层数组末尾追加新菜单项；若已存在合法菜单项，无论位于顶层还是深层 `children`，都视为已注册，且不得：
 - 删除或修改已有的 `DefaultPage` 等菜单项
 - 移动、提升、拍平、重排或重写已有深层合法菜单项
 - 修改 `SYSTEM_MENUS`（系统菜单由框架维护）
@@ -371,14 +373,14 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 5. **新增 hooks/工具函数（如需）**：分别在 `src/hooks/`、`src/utils/` 下新建文件。
 6. **编写页面主组件**：替换 `src/pages/<PageKey>/index.tsx` 的占位内容为真实业务代码，从公共目录 import 类型/常量/hooks/API。
 7. **拆分可复用组件（如需）**：页面太长且有可复用模块时，拆到 `src/components/<Module>/`。
-8. **不要碰菜单**：菜单登记由脚手架在创建页面时已完成，生成代码阶段不需要再改 `menus.ts`（除非用户明确要求新增菜单项，且当前页面未在 `BIZ_MENUS` 任意层级注册，此时追加到 `BIZ_MENUS` 顶层数组末尾；若新增项 `path` 包含 React Router 路径参数，必须同时设置 `hideInMenu: true`）。
+8. **不要碰菜单**：菜单登记和资源控制由 Build 平台处理；生成代码阶段不得改 `menus.ts`。
 
 ## 禁止行为清单
 
 - ❌ 在 `/frontend/` 根目录下创建任何新文件（`.py`、`.sh`、`.md`、`.json`、`.env` 等）
 - ❌ 在工作区**任何位置**（`/frontend/`、`/tmp/`、工作区根等）生成脚本文件（`.sh`/`.py`/`.js`/`.mjs` 等检查脚本、安装脚本、部署脚本）。Frontend task 的项目级验证由外层 integration-test 阶段统一执行，Agent 不得自行调用验证命令。
 - ❌ 在 `/frontend/` 下生成非前端代码文件（Python、Shell、Bash 等）
-- ❌ 修改 `src/routes/index.tsx`、`src/utils/route.tsx` 以手动注册路由（路由由菜单自动生成）
+- ❌ 修改 `src/routes/index.tsx`、`src/utils/route.tsx` 以手动注册路由（业务路由由 Build 平台托管）
 - ❌ 修改 `src/App.tsx`、`src/index.tsx` 入口装配
 - ❌ 修改 `src/layout/**`、`src/providers/**`、`src/hooks/useGuard.ts`
 - ❌ 修改 `src/apis/service.ts` 请求封装（新增 API 复用即可）

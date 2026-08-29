@@ -370,6 +370,8 @@ def _verify_frontend_authorization(
         {
             "actionId": str(item.get("actionId") or "").strip(),
             "resourceKey": str(item.get("resourceKey") or "").strip(),
+            "mode": str(item.get("mode") or "hidden").strip() or "hidden",
+            "resourceConstant": _dict_value(item.get("resourceConstant")),
         }
         for item in _dict_items(expected.get("controlledActions"))
         if str(item.get("actionId") or "").strip()
@@ -388,6 +390,11 @@ def _verify_frontend_authorization(
         merged,
     ):
         return "页面受控操作未从模板 authorization 模块导入 Permission。", "未发现 Permission 导入。"
+    if not re.search(
+        r'import\s*\{[^}]*\bRESOURCES\b[^}]*\}\s*from\s*["\']@/authorization/resources["\']',
+        merged,
+    ):
+        return "页面受控操作未从唯一资源目录导入 RESOURCES。", "未发现 RESOURCES 导入。"
     blocks = list(
         re.finditer(
             r"<Permission\b(?P<attrs>[^>]*)>(?P<body>[\s\S]*?)</Permission\s*>",
@@ -410,11 +417,11 @@ def _verify_frontend_authorization(
             block
             for block in blocks
             if marker.search(block.group("body") or "")
-            and _permission_block_matches(block.group("attrs") or "", action["resourceKey"])
+            and _permission_block_matches(block.group("attrs") or "", action)
         ]
         if len(matched_blocks) != 1:
             return (
-                f"受控 Action {action['actionId']} 必须恰好由一个 mode=hidden 的 Permission 使用精确 resourceKey {action['resourceKey']} 包装。",
+                f"受控 Action {action['actionId']} 必须恰好由一个 Permission 使用精确 RESOURCES 常量和 mode={action['mode']} 包装。",
                 "Permission 包装与平台权限约束不一致。",
             )
     for action_id in uncontrolled_ids:
@@ -504,13 +511,16 @@ def _verify_backend_authorization(
     return None, f"已验证 {method} {path} 的唯一 RequireAnyResource，包含 {len(resource_keys)} 个 ANY-OF 常量。"
 
 
-def _permission_block_matches(attributes: str, resource_key: str) -> bool:
-    """判断 Permission 属性是否精确匹配平台资源键和默认隐藏模式。"""
+def _permission_block_matches(attributes: str, action: dict[str, Any]) -> bool:
+    """判断 Permission 是否使用平台指定 RESOURCES 常量及确认后的展示模式。"""
 
-    escaped_key = re.escape(resource_key)
-    resource_pattern = rf"\bresourceKey\s*=\s*(?:[\"']{escaped_key}[\"']|\{{\s*[\"']{escaped_key}[\"']\s*\}})"
-    hidden_pattern = r"\bmode\s*=\s*(?:[\"']hidden[\"']|\{\s*[\"']hidden[\"']\s*\})"
-    return bool(re.search(resource_pattern, attributes) and re.search(hidden_pattern, attributes))
+    constant = _dict_value(action.get("resourceConstant"))
+    group = re.escape(str(constant.get("group") or ""))
+    name = re.escape(str(constant.get("name") or ""))
+    mode = re.escape(str(action.get("mode") or "hidden"))
+    resource_pattern = rf"\bresourceKey\s*=\s*\{{\s*RESOURCES\.{group}\.{name}\s*\}}"
+    mode_pattern = rf"\bmode\s*=\s*(?:[\"']{mode}[\"']|\{{\s*[\"']{mode}[\"']\s*\}})"
+    return bool(re.search(resource_pattern, attributes) and re.search(mode_pattern, attributes))
 
 
 def _check_path(check: dict[str, Any], expected_key: str) -> str:

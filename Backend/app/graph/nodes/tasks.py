@@ -489,16 +489,16 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "confirmed_at": None,
     }
     authorization_constraints = build_context.get("authorization_constraints")
-    route_guard_projection = (
-        authorization_constraints.get("routeGuardProjection")
+    frontend_projection = (
+        authorization_constraints.get("frontendProjection")
         if isinstance(authorization_constraints, dict)
         else None
     )
-    if route_guard_projection is None:
-        build_task_plan.pop("authorization_route_projection", None)
+    if frontend_projection is None:
+        build_task_plan.pop("authorization_frontend_projection", None)
     else:
-        # 路由投影属于待确认 DAG 的平台事实，不能交由 Page Agent 生成或修改。
-        build_task_plan["authorization_route_projection"] = route_guard_projection
+        # 显式业务路由和完整 RESOURCES 均属于平台事实，不能交由 Page Agent 修改。
+        build_task_plan["authorization_frontend_projection"] = frontend_projection
     auth_constants_projection = (
         authorization_constraints.get("authConstantsProjection")
         if isinstance(authorization_constraints, dict)

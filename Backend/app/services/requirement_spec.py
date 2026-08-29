@@ -265,6 +265,9 @@ def normalize_authorization_requirements(
                 str(item.get("targetPageId") or "").strip()
                 or str(existing_rule.get("targetPageId") or "").strip()
             )
+        elif str(item.get("mode") or existing_rule.get("mode") or "").strip():
+            # 操作权限模式是已确认的展示事实；缺失时由 ProductPlan 编译为 hidden。
+            normalized["mode"] = str(item.get("mode") or existing_rule.get("mode") or "").strip()
         normalized["rationale"] = str(item.get("rationale") or "")
         return normalized
 
@@ -421,6 +424,9 @@ def validate_authorization_requirements(
             errors.append("受控操作缺少业务操作名称")
         if not str(item.get("description") or "").strip():
             errors.append(f"受控操作 {operation_name or '未命名'} 缺少业务描述")
+        mode = str(item.get("mode") or "").strip()
+        if mode and mode not in {"hidden", "disabled"}:
+            errors.append(f"受控操作 {operation_name or '未命名'} 的 mode 必须是 hidden 或 disabled")
         _validate_authorization_rule_metadata(
             item, operation_name or "未命名", rule_ids, role_ids, errors
         )
