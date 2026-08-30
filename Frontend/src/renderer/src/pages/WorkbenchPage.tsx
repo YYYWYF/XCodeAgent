@@ -109,6 +109,7 @@ function WorkbenchPage({
   const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
     DevelopmentPlanningEntityOption[]
   >([])
+  const [chatSessionHistoryReady, setChatSessionHistoryReady] = useState(false)
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [previewBaseUrl, setPreviewBaseUrl] = useState('')
   const [previewLaunchError, setPreviewLaunchError] = useState('')
@@ -331,14 +332,20 @@ function WorkbenchPage({
   }, [application.id, application.workspaceRoot, onApplicationLifecycleChange])
 
   useEffect(() => {
-    if (!developmentPlanningPagesLoaded || entryStage !== 'loading') return
+    if (
+      !developmentPlanningPagesLoaded ||
+      !chatSessionHistoryReady ||
+      entryStage !== 'loading'
+    ) {
+      return
+    }
     const remainingVisibleTime = Math.max(
       0,
       WORKBENCH_ENTRY_MIN_VISIBLE_MS - (Date.now() - entryStartedAtRef.current)
     )
     const timer = window.setTimeout(() => setEntryStage('leaving'), remainingVisibleTime)
     return () => window.clearTimeout(timer)
-  }, [developmentPlanningPagesLoaded, entryStage])
+  }, [chatSessionHistoryReady, developmentPlanningPagesLoaded, entryStage])
 
   useEffect(() => {
     if (entryStage !== 'leaving') return
@@ -404,6 +411,7 @@ function WorkbenchPage({
                 onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
                 onThemeChange={handleThemeChange}
                 onPlanningStreamReady={onPlanningStreamReady}
+                onSessionHistoryReadyChange={setChatSessionHistoryReady}
                 generatingTemplate={generatingTemplate}
                 planningError={planningError}
                 onRetryPlanning={onRetryPlanning}
@@ -434,7 +442,7 @@ function WorkbenchPage({
             </div>
             <div className={cx('workbench-entry-kicker')}>XCODEAGENT WORKSPACE</div>
             <h1>正在进入工作台</h1>
-            <p>正在同步项目配置与页面设计状态</p>
+            <p>正在同步项目配置、页面设计与历史会话</p>
             <div className={cx('workbench-entry-progress')} aria-hidden="true">
               <span />
               <span />

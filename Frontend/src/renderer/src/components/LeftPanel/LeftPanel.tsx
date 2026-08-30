@@ -51,6 +51,7 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
+  onSessionHistoryReadyChange: (ready: boolean) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 设计阶段后台规划窗口的模型错误。 */
@@ -90,6 +91,7 @@ export default function LeftPanel({
   onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
+  onSessionHistoryReadyChange,
   generatingTemplate,
   planningError,
   onRetryPlanning,
@@ -127,6 +129,7 @@ export default function LeftPanel({
             onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
             onThemeChange={onThemeChange}
             onPlanningStreamReady={onPlanningStreamReady}
+            onSessionHistoryReadyChange={onSessionHistoryReadyChange}
             generatingTemplate={generatingTemplate}
             planningError={planningError}
             onRetryPlanning={onRetryPlanning}

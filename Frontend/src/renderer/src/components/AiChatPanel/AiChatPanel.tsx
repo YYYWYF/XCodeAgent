@@ -233,6 +233,7 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
+  onSessionHistoryReadyChange: (ready: boolean) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 设计阶段规划 Graph 的错误，来自仍在后台挂载的规划窗口。 */
@@ -805,6 +806,7 @@ export default function AiChatPanel({
   onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
+  onSessionHistoryReadyChange,
   generatingTemplate,
   planningError,
   onRetryPlanning,
@@ -2601,6 +2603,18 @@ export default function AiChatPanel({
     [allSessions, application.id, planningSessionLookupKey, planningSessionPhase]
   )
   const existingPlanningSessionThreadId = existingPlanningSession?.threadId
+  const planningSessionHistoryReady = Boolean(
+    !isApplicationPlanningPhase ||
+      !planningSessionLookupKey ||
+      (activeSession?.workflowId === application.id &&
+        (activeSession.entryKey === planningSessionLookupKey ||
+          activeSession.threadId === planningSessionLookupKey))
+  )
+
+  // 首次进入工作台时同时等待会话列表、消息正文和设计阶段规划会话激活，避免遮罩结束后短暂显示空对话。
+  useEffect(() => {
+    onSessionHistoryReadyChange(!loadingSessions && planningSessionHistoryReady)
+  }, [loadingSessions, onSessionHistoryReadyChange, planningSessionHistoryReady])
 
   useEffect(() => {
     // 正式二次修改只能恢复其独立前端会话；匹配失败时禁止退回原 Graph thread，
