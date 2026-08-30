@@ -359,9 +359,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
             (workspace / "frontend/src/constants").mkdir(parents=True)
             (workspace / "frontend/package.json").write_text("{}", encoding="utf-8")
-            (workspace / "frontend/src/constants/menus.ts").write_text(
-                "export const BIZ_MENUS = []\n", encoding="utf-8"
-            )
+            (workspace / "frontend/src/constants/resources.ts").write_text("export const RESOURCES = {} as const;\n", encoding="utf-8")
+            (workspace / "frontend/src/constants/routes.tsx").write_text("// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n", encoding="utf-8")
             (workspace / "backend").mkdir()
             (workspace / "backend/pom.xml").write_text("<project />", encoding="utf-8")
             prepare_application_template_generation(
@@ -370,8 +369,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
                     "status": "succeeded",
                     "failedTargets": [],
                     "targets": {
-                        "frontend": {"status": "succeeded", "attempt": 0},
-                        "backend": {"status": "succeeded", "attempt": 0},
+                        "frontend": {"status": "succeeded", "attempt": 0, "branch": "auth"},
+                        "backend": {"status": "succeeded", "attempt": 0, "branch": "auth"},
                     },
                 },
             )

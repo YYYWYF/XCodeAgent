@@ -12,8 +12,8 @@ from typing import Any
 from app.services.ui_design_generator import derive_page_key
 
 
-RESOURCES_RELATIVE_PATH = Path("frontend/src/authorization/resources.ts")
-ROUTES_RELATIVE_PATH = Path("frontend/src/routes/index.tsx")
+RESOURCES_RELATIVE_PATH = Path("frontend/src/constants/resources.ts")
+ROUTES_RELATIVE_PATH = Path("frontend/src/constants/routes.tsx")
 IMPORT_START = "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START"
 IMPORT_END = "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END"
 ROUTES_START = "// XCODEAGENT_BUSINESS_ROUTES_START"
@@ -42,7 +42,7 @@ def compile_frontend_authorization_projection(project_plan: dict[str, Any]) -> d
 
 
 def apply_authorization_frontend_projection(workspace: str | Path, projection: Any) -> dict[str, Any]:
-    """原子写入 resources.ts，并在模板托管区生成显式业务 RouteGuard 路由。"""
+    """为受控注册任务写入资源目录和 PAGE_ROUTES 插槽。"""
 
     if projection is None:
         return {"applied": False, "reason": "authorization_disabled"}
@@ -51,7 +51,7 @@ def apply_authorization_frontend_projection(workspace: str | Path, projection: A
     resources_path = root / RESOURCES_RELATIVE_PATH
     routes_path = root / ROUTES_RELATIVE_PATH
     if not routes_path.is_file():
-        raise AuthorizationFrontendProjectionError("auth 模板缺少 frontend/src/routes/index.tsx。")
+        raise AuthorizationFrontendProjectionError("auth 模板缺少 frontend/src/constants/routes.tsx。")
     route_source = routes_path.read_text(encoding="utf-8")
     _managed_bounds(route_source, IMPORT_START, IMPORT_END)
     _managed_bounds(route_source, ROUTES_START, ROUTES_END)
@@ -70,7 +70,7 @@ def apply_authorization_frontend_projection(workspace: str | Path, projection: A
 
 
 def verify_authorization_frontend_projection(workspace: str | Path, projection: Any) -> dict[str, Any]:
-    """只读验证资源常量和显式业务路由与确认投影一致。"""
+    """只读验证资源常量和 PAGE_ROUTES 插槽与确认投影一致。"""
 
     if projection is None:
         return {"verified": False, "reason": "authorization_disabled"}
@@ -88,7 +88,7 @@ def verify_authorization_frontend_projection(workspace: str | Path, projection: 
     if source[imports_start + len(IMPORT_START):imports_end] != "\n" + _render_imports(value["pages"]):
         raise AuthorizationFrontendProjectionError("前端业务路由 import 与确认页面不一致。")
     if source[routes_start + len(ROUTES_START):routes_end] != "\n" + _render_routes(value["pages"]):
-        raise AuthorizationFrontendProjectionError("前端业务 RouteGuard 与确认页面权限不一致。")
+        raise AuthorizationFrontendProjectionError("前端业务 PAGE_ROUTES 与确认页面权限不一致。")
     return {"verified": True, "resourceCount": len(value["resources"]), "pageCount": len(value["pages"])}
 
 
@@ -150,7 +150,13 @@ def _page_projection_items(project_plan: dict[str, Any], page_keys: dict[str, st
             raise AuthorizationFrontendProjectionError("TechnicalPlan 页面缺少合法 pageId 或 path。")
         page_key = derive_page_key(page, used_keys)
         used_keys.add(page_key)
-        item = {"pageId": page_id, "path": route, "pageKey": page_key}
+        item = {
+            "pageId": page_id,
+            "path": route,
+            "pageKey": page_key,
+            "name": str(page.get("name") or page_id),
+            "menu": not any(part.startswith(":") for part in route.split("/")),
+        }
         resource_key = page_keys.get(page_id)
         if resource_key:
             reference = resource_by_key.get(resource_key)
@@ -188,25 +194,26 @@ def _render_resources(resources: list[dict[str, str]]) -> str:
 
 
 def _render_imports(pages: list[dict[str, str]]) -> str:
-    """渲染业务页面和资源常量 import 托管区。"""
+    """渲染业务页面组件 import 托管区。"""
 
-    lines = ["import { RESOURCES } from '@/authorization/resources';"]
-    lines.extend(f"import {item['pageKey']} from '@/pages/{item['pageKey']}';" for item in pages)
+    lines = [f"import {item['pageKey']} from '@/pages/{item['pageKey']}';" for item in pages]
     return "\n".join(lines) + "\n"
 
 
 def _render_routes(pages: list[dict[str, str]]) -> str:
-    """渲染全部业务页面的显式 Layout 子路由。"""
+    """渲染 PAGE_ROUTES 配置；模板负责 RouteGuard 和菜单派生。"""
 
     lines: list[str] = []
     for item in pages:
-        element = f"<{item['pageKey']} />"
+        lines.extend(["{", f"  path: {json.dumps(item['path'], ensure_ascii=False)},"])
         if item.get("resourceGroup") and item.get("resourceName"):
-            element = (
-                f"<RouteGuard resourceKey={{RESOURCES.{item['resourceGroup']}.{item['resourceName']}}}>"
-                f"\n          <{item['pageKey']} />\n        </RouteGuard>"
+            lines.append(f"  resourceKey: RESOURCES.{item['resourceGroup']}.{item['resourceName']},")
+        if item.get("menu"):
+            lines.append(
+                f"  menu: {{ key: {json.dumps(item['pageId'], ensure_ascii=False)}, "
+                f"label: {json.dumps(item['name'], ensure_ascii=False)} }},"
             )
-        lines.extend(["{", f"  path: {json.dumps(item['path'], ensure_ascii=False)},", "  element: <Layout />,", "  children: [", "    {", "      index: true,", "      element: (", f"        {element}", "      ),", "    },", "  ],", "},"])
+        lines.extend([f"  element: <{item['pageKey']} />", "},"])
     return "\n".join(lines) + ("\n" if lines else "")
 
 
@@ -216,7 +223,7 @@ def _managed_bounds(content: str, start_marker: str, end_marker: str) -> tuple[i
     start = content.find(start_marker)
     end = content.find(end_marker)
     if start < 0 or end < 0 or end <= start:
-        raise AuthorizationFrontendProjectionError("auth 模板 routes/index.tsx 缺少有效业务路由托管标记。")
+        raise AuthorizationFrontendProjectionError("auth 模板 constants/routes.tsx 缺少有效业务路由托管标记。")
     return start, end
 
 

@@ -59,10 +59,14 @@ _TEMPLATE_BOUNDARY_PATHS = {
     "src/constants/menus.ts",
     "frontend/src/constants/routes.ts",
     "src/constants/routes.ts",
-    "frontend/src/utils/route.tsx",
-    "src/utils/route.tsx",
     "frontend/src/routes/index.tsx",
     "src/routes/index.tsx",
+    "frontend/src/utils/route.tsx",
+    "src/utils/route.tsx",
+}
+_FRONTEND_ROUTE_REGISTRY_PATHS = {
+    "frontend/src/constants/resources.ts",
+    "frontend/src/constants/routes.tsx",
 }
 _TEMPLATE_PAGE_ENTRY_PREFIXES = ("frontend/src/pages/", "src/pages/")
 _FRONTEND_ENDPOINT_IMPLEMENTATION_CHECK_KINDS = {
@@ -94,6 +98,35 @@ def tasks_from_build_task_plan(build_task_plan: dict[str, Any]) -> list[dict[str
         for task_id in task_ids
         if isinstance(registry.get(task_id), dict)
     ]
+
+
+def strip_platform_owned_candidate_tasks(
+    tasks: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """移除模型误输出的平台保留任务及其余任务对它的依赖。"""
+
+    ignored_ids = {
+        str(task.get("id") or "")
+        for task in tasks
+        if str(task.get("unit_id") or "") == "frontend:route-registry"
+        and str(task.get("id") or "")
+    }
+    if not ignored_ids:
+        return tasks, []
+    sanitized: list[dict[str, Any]] = []
+    for task in tasks:
+        if str(task.get("id") or "") in ignored_ids:
+            continue
+        next_task = dict(task)
+        dependencies = next_task.get("dependencies")
+        if isinstance(dependencies, list):
+            next_task["dependencies"] = [
+                dependency
+                for dependency in dependencies
+                if str(dependency) not in ignored_ids
+            ]
+        sanitized.append(next_task)
+    return sanitized, sorted(ignored_ids)
 
 
 def _string_list(value: Any) -> list[str]:
@@ -878,7 +911,13 @@ def _task_semantic_errors(
         unit_id = str(task.get("unit_id") or "")
         task_type = str(task.get("task_type") or "")
         paths = _task_declared_paths(task)
-        errors.extend(_template_boundary_errors(task, paths=paths))
+        errors.extend(
+            _template_boundary_errors(
+                task,
+                paths=paths,
+                template_variant=str(build_context.get("template_variant") or "main"),
+            )
+        )
         if validate_task_scope and required_unit_ids and unit_id not in required_unit_ids:
             errors.append(
                 f"Task {task_id} is outside the current Build scope: Unit {unit_id}."
@@ -912,6 +951,7 @@ def _task_semantic_errors(
                 task,
                 # 只对未被本轮替换的历史基线任务放宽缺失交付物，当前模型新任务仍必须完整声明。
                 allow_missing_deliverable=task_id in allow_missing_deliverable_task_ids,
+                context=build_context,
             )
         )
         errors.extend(engineering_acceptance_contract_errors(task))
@@ -999,11 +1039,23 @@ def _template_boundary_errors(
     task: dict[str, Any],
     *,
     paths: list[str],
+    template_variant: str,
 ) -> list[str]:
-    """显式报告模板职责越界，不修改候选任务以掩盖规划边界错误。"""
+    """按模板变体报告职责越界，不修改候选任务以掩盖规划错误。"""
 
     task_id = str(task.get("id") or "")
     errors: list[str] = []
+    route_registry = str(task.get("unit_id") or "") == "frontend:route-registry"
+    if template_variant != "auth":
+        if route_registry:
+            return [f"Task {task_id} is auth-only and cannot run for main template."]
+        boundary_paths = sorted(path for path in paths if _is_template_boundary_path(path))
+        if boundary_paths:
+            errors.append(
+                f"Task {task_id} crosses the template initialization boundary and must not "
+                f"modify shared menu or route files: {', '.join(boundary_paths)}."
+            )
+        return errors
     boundary_paths = sorted(
         {
             path
@@ -1017,14 +1069,19 @@ def _template_boundary_errors(
             "modify shared menu or route files: "
             f"{', '.join(boundary_paths)}."
         )
+    registry_paths = {normalize_repo_path(path) for path in paths}
+    if route_registry:
+        errors.append(
+            f"Task {task_id} is platform-owned and must not be emitted by the model."
+        )
+    elif registry_paths & _FRONTEND_ROUTE_REGISTRY_PATHS:
+        errors.append(
+            f"Task {task_id} must not modify frontend route registry files: "
+            f"{', '.join(sorted(registry_paths & _FRONTEND_ROUTE_REGISTRY_PATHS))}."
+        )
     for change in _dict_items(task.get("change_scope")):
         path = str(change.get("path") or change.get("file") or "").strip()
         operation = str(change.get("operation") or "modify").strip().lower()
-        if _is_template_page_entry_path(path) and operation == "add":
-            errors.append(
-                f"Task {task_id} must not add template page entry {path}; "
-                "template initialization must create it before DAG generation."
-            )
     return errors
 
 
@@ -1223,7 +1280,7 @@ def compile_build_task_plan_scope(
 ) -> dict[str, Any]:
     """编译本轮任务契约，并在保留历史契约的前提下重建任务图。"""
 
-    context = build_context if isinstance(build_context, dict) else {}
+    context = dict(build_context) if isinstance(build_context, dict) else {}
     preserved_ids = preserve_compiled_task_ids or set()
     scoped_tasks = apply_unit_compilation(
         build_task_plan,
@@ -1330,6 +1387,7 @@ def create_build_task_plan(
         **base_plan,
         "version": "3.0.0",
         "schema_version": "build-dag.v3",
+        "template_variant": str(context.get("template_variant") or "main"),
         "status": (
             "ready"
             if task_graph["validation"]["is_valid"] and not blocked_batches

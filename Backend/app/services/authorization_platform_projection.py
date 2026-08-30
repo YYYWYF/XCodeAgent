@@ -47,13 +47,17 @@ def apply_authorization_platform_projections(
             "files": [],
             "summary": {"files": 0, "additions": 0, "deletions": 0},
         }
+    if str(build_task_plan.get("template_variant") or "") != "auth":
+        raise AuthorizationPlatformProjectionError(
+            "权限共享投影只能在 auth 模板 Build 中执行。"
+        )
 
     workspace_path = Path(workspace).expanduser().resolve()
     if not workspace_path.is_dir():
         raise AuthorizationPlatformProjectionError("权限共享投影工作区不存在或不是目录。")
 
     def _apply() -> dict[str, Any]:
-        """严格按确认 DAG 的内容调用前端和后端平台写入器。"""
+        """严格按确认 DAG 的内容写入前端注册表和后端权限常量。"""
 
         try:
             return {

@@ -120,6 +120,31 @@ system_authorization_management  system，targetResourceRef=authorization-api.v1
 | 第一阶段：页面、操作与系统权限完整闭环  | 实施中 | 应用配置、RequirementSpec、ProductPlan 与 UiDesign 已有基线；仍需按步骤收敛 V1 当前契约，完成 TechnicalPlan、模板、Build 运行时、目录协调和端到端启动验收。                              |
 | 第二阶段：数据权限                       | 未启动 | 当前只保留设计储备，不实施 data resource、Data Policy、Relation、Source Binding 或 Endpoint 数据权限执行；必须等待第一阶段完成并另行确认实施计划。                                     |
 
+## Auth 前端模板代码生成契约
+
+模板下载 manifest 的 `templateVariant` 由前后端 `branch` 共同决定：仅双端均为
+`auth` 才进入本节流程；双端均为 `main` 保持既有页面占位和 `BIZ_MENUS` 初始化；
+分支不一致必须失败。auth 分支前端模板的唯一业务注册入口是
+`src/constants/resources.ts` 与 `src/constants/routes.tsx` 的两个 XCODEAGENT 托管区。
+auth 初始化只验证这两个文件、标记和可选 `resourceKey` 协议；不得创建业务页面、
+`BIZ_MENUS` 或旧 `src/authorization/` 目录。
+
+- `authorization_manifest` 是唯一权限事实。只有已绑定 PAGE、OPERATION 或
+  SYSTEM 资源才写入 `RESOURCES` 并参与前端权限控制；未绑定业务页面和操作
+  默认不受 RBAC 控制。
+- Build 平台在 auth 模板的任何 Agent 任务派发前，根据确认投影写入资源目录和
+  routes 托管区；`page:<pageId>` 只写页面业务代码，页面任务不得写共享注册文件。
+- 平台投影为每个页面写唯一绝对路径和组件；仅已绑定 PAGE 资源写
+  `resourceKey`。未绑定页面仍可注册并显示菜单。动态详情/编辑页及关闭菜单的
+  应用省略 `menu`。
+- `src/routes/index.tsx`、`src/utils/route.tsx`、`src/hooks/usePageMenus.ts`、
+  Layout 和 Provider 均由模板维护，任何 Build Agent 不得修改。模板依靠
+  `PAGE_ROUTES` 自动派生 RouteGuard、菜单和 `/page` 首个可访问入口。
+- 平台 Build 前只投影后端
+  `src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java` 的
+  `XCODEAGENT_AUTH_CONSTANTS_START/END` 托管区；不读取额外 descriptor。前端资源与
+  路由是注册任务的受限写入结果，并由 EDD 在 Build 后按确认 manifest 只读验证。
+
 ### 当前工作流适配（本次实施）
 
 需求与产品规划现在构成一个用户可见的“需求文档”联合节点：RequirementSpec 先记录业务角色及其职责和权限候选，ProductPlan 在同一节点内消费已校验草稿生成页面与操作；二者只能通过一次 `requirement_document_confirmation` 联合确认后，UiDesign、TechnicalPlan 才能读取正式文件。内部继续保留各自 Markdown/JSON，ProductPlan 的 `requirement_spec_sha256` 必须等于同轮已确认 RequirementSpec 的确定性哈希；不生成 `requirement-document-manifest.json`。因此本文所有“RequirementSpec 确认后再生成 ProductPlan”的旧描述均以此规则为准替换。
@@ -1075,19 +1100,21 @@ authorization.enabled=false：
 
 - Build 启动时只加载步骤 6 当前已确认且已通过 `dag_validation` 的 `build-task-plan.json`，并将其绑定为本次 Build Run 的唯一执行计划。平台记录 `schema_version`、规范化内容 SHA-256，并保存本次运行使用的只读副本；后续前后端 Agent、Testing、Retry 和 Repair 均不得重新读取或切换到其他版本的任务计划。执行阶段不再进行 DAG 权限语义校验、权限设计或权限事实补全。
 - `schema_version` 只表示格式兼容性；计划身份只由 SHA-256 表示。每次恢复 Build 前重新比对规划权威文件与绑定 SHA-256；若已变化，终止当前 Build，由新的已确认计划重新启动 Build Run。
-- 任何叶子任务派发前，平台根据本次 Build Run 绑定的任务计划幂等生成 `frontend/src/authorization/resources.ts`，并只替换 `frontend/src/routes/index.tsx` 中模板固定声明的业务路由托管区。平台直接生成全部业务页面的显式 RouteObject：受控页面必须使用 `<RouteGuard resourceKey={RESOURCES.PAGE.<NAME>}>` 包裹，未受控页面不得生成 `RouteGuard`；固定 `/roles` 路由使用 `<RouteGuard resourceKey={RESOURCES.SYSTEM.AUTHORIZATION_MANAGEMENT}>`。验证或生成失败时 fail closed，Page Task、API Task 及其他 Build Agent 不得补写共享 Router、`RESOURCES`、`AuthConstants` 或推断权限关系。
+- 已确认 Build DAG 必须在计划顶层持久化当前 `template_variant`；`build_context` 中的同名字段仅用于规划诊断，不能替代 Build Run 的模板边界依据。
+- 对页面目标 Build，`TargetBuildContext.target.page_key` 是唯一页面入口目录事实：页面任务必须恰好声明一个 `frontend.page` 交付物，并将 `frontend/src/pages/<PageKey>/index.tsx` 同时列入 `change_scope`、`allowed_paths` 与交付物 `paths`；auth 模板未预建该页面时，任务以 `add` 创建该业务入口。
+- 对 auth 模板，Build 启动前的平台投影根据本次 Build Run 绑定的计划写入 `frontend/src/constants/resources.ts` 与 `frontend/src/constants/routes.tsx` 的固定托管区；模板由可选 `resourceKey` 自动派生 RouteGuard 和菜单。main 模板不进入该投影，继续使用既有菜单初始化。验证或生成失败时 fail closed，Page Task、API Task 及其他 Build Agent 不得补写不属于其模板变体的共享 Router、`RESOURCES`、`AuthConstants` 或推断权限关系。
 - 平台投影的源码变化、Build Run 标识及计划 SHA-256 单独记录为平台执行证据，不归属前后端 Build Agent。Retry 和 Repair 必须继续使用本次 Build Run 已绑定的同一任务计划，只能重新执行或恢复既有投影，不得新增、修改、删除、补全或重新推断权限事实。
 
 ##### 步骤 7B：前端业务权限接入
 
 状态：已实施。
 
-- 前端 Page Task 只消费执行任务包中只读的 `authorization.actions` 权限约束。凡当前 Task 明确声明为受控的 Action，必须通过稳定 `actionId` 唯一定位到真实交互点，并从 `@/authorization/resources` 导入 `RESOURCES`，以平台给定的 `RESOURCES.OPERATION.<NAME>` 接入模板 `Permission`；不得使用资源字符串、后端 Java `AuthConstants` 或自行推断键。保留或补充稳定 `data-action-id` 以支持确定性验收，未受控 Action 不增加权限包装。
+- 前端 Page Task 只消费执行任务包中只读的 `authorization.actions` 权限约束。凡当前 Task 明确声明为受控的 Action，必须从 `@/constants/resources` 导入 `RESOURCES`，以平台给定的 `RESOURCES.OPERATION.<NAME>` 和确认的 `mode` 接入模板 `Permission`；不得使用资源字符串、后端 Java `AuthConstants` 或自行推断键。`data-action-id` 如被 UI Design 使用，仍属于产品交互追溯标记，但不是前端权限接入或权限验收的前提。
 - Action 的 `mode` 优先采用已确认的 `hidden`/`disabled`；缺失时平台归一化为 `hidden`，Agent 不得自行选择或改写。
 - 应用级权限能力完全复用模板已有 `AuthProvider`、`RouteGuard`、`Permission` 和当前成员资源请求。Page Task 不得创建第二套 Provider、权限请求入口、权限缓存、资源目录、角色管理能力或 `/roles` 页面。
 - 页面路由权限由步骤 7A 的平台共享投影负责。Page Task 只实现页面业务、领域 API 调用及本 Task 声明的 Action 权限包装，不得修改路由权限配置、菜单权限、共享 Router、`AuthConstants` 或模板权限核心。
 - 页面和组件调用业务接口时统一通过 `useRequest` 调用 `src/apis/` 暴露的领域 API，由 `src/apis/` 内部复用模板 `service`；页面和组件不得直接调用 `fetch`、`axios` 或 `service`。
-- 若受控 Action、对应交互点或平台给定的权限符号无法唯一定位，Task 必须失败，不得猜测、跳过、创建替代资源或扩大权限包装范围。任务完成后必须验证每个受控 Action 恰好存在一个符合约束的 `Permission` 接入，且未受控 Action 未被新增权限包装。
+- 若平台给定的权限符号无法定位，Task 必须失败，不得猜测、跳过、创建替代资源或扩大权限包装范围。任务完成后必须验证每个受控 Action 声明的 `RESOURCES` 常量和 `mode` 均至少存在一个匹配的 `Permission` 接入，且页面内任何 `Permission` 不得使用当前 Task 未声明的资源常量或展示模式。
 
 ##### 步骤 7C：后端 Endpoint 注解接入
 

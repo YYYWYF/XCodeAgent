@@ -1691,6 +1691,45 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
   --modal-accent-hover: #b89aff;
 }
 
+// 技术规划修改意见弹窗与工作台主题保持一致；Modal portal 脱离工作台变量域，需显式提供明暗配色。
+.@{class-prefix}-technical-plan-revision-modal {
+  --technical-revision-surface: #ffffff;
+  --technical-revision-field: #faf9ff;
+  --technical-revision-border: rgba(107, 60, 240, 0.3);
+  --technical-revision-text: #202124;
+  --technical-revision-secondary: #65666a;
+
+  .ant-modal-body {
+    display: grid;
+    gap: 12px;
+  }
+
+  .ant-typography {
+    color: var(--technical-revision-secondary);
+  }
+
+  .ant-input {
+    color: var(--technical-revision-text);
+    border-color: var(--technical-revision-border);
+    background: var(--technical-revision-field);
+
+    &:focus,
+    &:hover {
+      border-color: var(--modal-accent, #6b3cf0);
+      box-shadow: 0 0 0 2px rgba(107, 60, 240, 0.12);
+    }
+  }
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
+  .@{class-prefix}-technical-plan-revision-modal {
+  --technical-revision-surface: #28282b;
+  --technical-revision-field: #1f1f22;
+  --technical-revision-border: #5b4b7d;
+  --technical-revision-text: #e6e6e8;
+  --technical-revision-secondary: #b7b4be;
+}
+
 .@{class-prefix}-planning-artifact-card {
   overflow: hidden;
   border: 1px solid var(--wb-border);

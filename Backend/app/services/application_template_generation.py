@@ -1,4 +1,4 @@
-"""应用模板页面/菜单增量初始化、manifest 持久化和完成门禁。"""
+"""应用模板契约检查、manifest 持久化和完成门禁。"""
 
 from __future__ import annotations
 
@@ -18,8 +18,6 @@ from app.services.frontend_scaffold import (
     ensure_frontend_page_placeholders,
     inspect_frontend_menu_entries,
 )
-
-
 TEMPLATE_GENERATION_MANIFEST_RELATIVE_PATH = Path(
     ".xcodeagent/template-generation-manifest.json"
 )
@@ -53,7 +51,7 @@ def load_template_generation_manifest(workspace: str | Path) -> dict[str, Any]:
 
 
 def inspect_template_generation_readiness(workspace: str | Path) -> dict[str, Any]:
-    """只读检查模板 manifest、真实页面入口和菜单是否满足 DAG 前置条件。"""
+    """按 manifest 模板变体只读检查前端代码生成前置条件。"""
 
     workspace_path = Path(workspace).expanduser().resolve()
     errors: list[str] = []
@@ -62,8 +60,11 @@ def inspect_template_generation_readiness(workspace: str | Path) -> dict[str, An
     except ApplicationTemplateGenerationError as exc:
         return {"ready": False, "errors": [str(exc)], "manifest": {}}
 
+    variant, variant_error = _template_variant(manifest)
+    if variant_error:
+        errors.append(variant_error)
     steps = manifest.get("steps") if isinstance(manifest.get("steps"), dict) else {}
-    for step_name in ("download", "templateFiles", "menus", "gate"):
+    for step_name in _required_step_names(variant, include_gate=True):
         step = steps.get(step_name) if isinstance(steps, dict) else None
         if not isinstance(step, dict) or step.get("status") != "succeeded":
             errors.append(f"模板 manifest 步骤 {step_name} 未完成")
@@ -76,41 +77,39 @@ def inspect_template_generation_readiness(workspace: str | Path) -> dict[str, An
         if target_error:
             errors.append(target_error)
 
-    try:
-        product_plan, ui_designs = _load_template_planning_artifacts(workspace_path)
-        pages = collect_template_pages(product_plan, ui_designs)
-    except (ApplicationTemplateGenerationError, ValueError) as exc:
-        return {
-            "ready": False,
-            "errors": [*errors, str(exc)],
-            "manifest": manifest,
-        }
-    missing_pages = [
-        f"frontend/src/pages/{page['key']}/index.tsx"
-        for page in pages
-        if not (workspace_path / f"frontend/src/pages/{page['key']}/index.tsx").is_file()
-    ]
-    if missing_pages:
-        errors.append("页面入口缺失：" + "、".join(missing_pages))
-    menu_check = inspect_frontend_menu_entries(workspace_path / "frontend", pages)
-    if menu_check.get("error"):
-        errors.append(f"菜单文件无效：{menu_check['error']}")
-    elif menu_check.get("missingKeys"):
-        errors.append("菜单项缺失：" + "、".join(menu_check["missingKeys"]))
-    return {
+    result = {
         "ready": not errors,
         "errors": errors,
         "manifest": manifest,
-        "pages": pages,
-        "menu": menu_check,
+        "templateVariant": variant,
     }
+    if variant == "auth":
+        contract_errors = _frontend_template_contract_errors(workspace_path / "frontend")
+        errors.extend(contract_errors)
+        result["templateContract"] = {"valid": not contract_errors}
+    elif variant == "main":
+        try:
+            pages = _load_template_pages(workspace_path)
+            missing = [f"frontend/src/pages/{page['key']}/index.tsx" for page in pages if not (workspace_path / f"frontend/src/pages/{page['key']}/index.tsx").is_file()]
+            menu = inspect_frontend_menu_entries(workspace_path / "frontend", pages)
+            if missing:
+                errors.append("页面入口缺失：" + "、".join(missing))
+            if menu.get("error"):
+                errors.append(f"菜单文件无效：{menu['error']}")
+            elif menu.get("missingKeys"):
+                errors.append("菜单项缺失：" + "、".join(menu["missingKeys"]))
+            result.update({"pages": pages, "menu": menu})
+        except (ApplicationTemplateGenerationError, ValueError) as exc:
+            errors.append(str(exc))
+    result["ready"] = not errors
+    return result
 
 
 def prepare_application_template_generation(
     workspace: str | Path,
     download_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """读取最新正式产物，并行补齐页面和菜单后统一写 manifest。"""
+    """按下载分支执行 main 初始化或 auth 模板契约检查。"""
 
     workspace_path = Path(workspace).expanduser().resolve()
     with _template_lock(workspace_path):
@@ -130,52 +129,33 @@ def prepare_application_template_generation(
             _write_manifest_atomically(workspace_path, manifest)
             raise ApplicationTemplateGenerationError(manifest["overall"]["error"])
 
-        try:
-            product_plan, ui_designs = _load_template_planning_artifacts(workspace_path)
-            pages = collect_template_pages(product_plan, ui_designs)
-            frontend_dir = workspace_path / "frontend"
-            jobs: dict[str, Callable[[], dict[str, Any]]] = {
-                "templateFiles": lambda: ensure_frontend_page_placeholders(
-                    frontend_dir, pages
-                ),
-                "menus": lambda: ensure_frontend_menu_entries(frontend_dir, pages),
-            }
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                futures = {
-                    name: executor.submit(_run_template_step, job)
-                    for name, job in jobs.items()
-                }
-                results = {name: future.result() for name, future in futures.items()}
-        except Exception as exc:
-            manifest["overall"].update(
-                status="failed",
-                error=str(exc),
-                updatedAt=utc_now().isoformat(),
-            )
+        variant, variant_error = _template_variant(manifest)
+        if variant_error:
+            manifest["overall"].update(status="failed", error=variant_error, updatedAt=utc_now().isoformat())
             _write_manifest_atomically(workspace_path, manifest)
-            raise ApplicationTemplateGenerationError(str(exc)) from exc
-
-        manifest["steps"].update(results)
-        failed_steps = [
-            name for name, result in results.items() if result.get("status") != "succeeded"
-        ]
-        manifest["overall"].update(
-            status="failed" if failed_steps else "running",
-            lastCompletedStep="menus" if not failed_steps else None,
-            error=(
-                "模板初始化步骤失败：" + "、".join(failed_steps)
-                if failed_steps
-                else None
-            ),
-            updatedAt=utc_now().isoformat(),
-        )
+            raise ApplicationTemplateGenerationError(variant_error)
+        if variant == "auth":
+            errors = _frontend_template_contract_errors(workspace_path / "frontend")
+            manifest["steps"]["templateContract"] = {"status": "failed" if errors else "succeeded", "errors": errors, "resourcesPath": "frontend/src/constants/resources.ts", "routesPath": "frontend/src/constants/routes.tsx"}
+            last_step = "templateContract"
+        else:
+            try:
+                pages = _load_template_pages(workspace_path)
+                jobs: dict[str, Callable[[], dict[str, Any]]] = {
+                    "templateFiles": lambda: ensure_frontend_page_placeholders(workspace_path / "frontend", pages),
+                    "menus": lambda: ensure_frontend_menu_entries(workspace_path / "frontend", pages),
+                }
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    results = {name: future.result() for name, future in {name: executor.submit(job) for name, job in jobs.items()}.items()}
+                manifest["steps"].update(results)
+                errors = [f"模板初始化步骤失败：{name}" for name, result in results.items() if result.get("status") != "succeeded"]
+            except Exception as exc:
+                errors = [str(exc)]
+            last_step = "menus"
+        manifest["overall"].update(status="failed" if errors else "running", lastCompletedStep=last_step if not errors else None, error="；".join(errors) if errors else None, updatedAt=utc_now().isoformat())
         _write_manifest_atomically(workspace_path, manifest)
-        if failed_steps:
-            details = "; ".join(
-                f"{name}: {results[name].get('error') or 'unknown error'}"
-                for name in failed_steps
-            )
-            raise ApplicationTemplateGenerationError(details)
+        if errors:
+            raise ApplicationTemplateGenerationError("；".join(errors))
         return manifest
 
 
@@ -185,11 +165,12 @@ def validate_application_template_generation(workspace: str | Path) -> dict[str,
     workspace_path = Path(workspace).expanduser().resolve()
     with _template_lock(workspace_path):
         manifest = load_template_generation_manifest(workspace_path)
-        product_plan, ui_designs = _load_template_planning_artifacts(workspace_path)
-        pages = collect_template_pages(product_plan, ui_designs)
         errors: list[str] = []
+        variant, variant_error = _template_variant(manifest)
+        if variant_error:
+            errors.append(variant_error)
         steps = manifest.get("steps") if isinstance(manifest.get("steps"), dict) else {}
-        for step_name in ("download", "templateFiles", "menus"):
+        for step_name in _required_step_names(variant, include_gate=False):
             step = steps.get(step_name) if isinstance(steps, dict) else None
             if not isinstance(step, dict) or step.get("status") != "succeeded":
                 errors.append(f"manifest 步骤 {step_name} 未完成")
@@ -198,21 +179,21 @@ def validate_application_template_generation(workspace: str | Path) -> dict[str,
             target_error = _template_target_error(workspace_path, target)
             if target_error:
                 errors.append(target_error)
-        expected_pages = [
-            f"frontend/src/pages/{page['key']}/index.tsx" for page in pages
-        ]
-        missing_pages = [
-            relative_path
-            for relative_path in expected_pages
-            if not (workspace_path / relative_path).is_file()
-        ]
-        if missing_pages:
-            errors.append("页面占位缺失：" + "、".join(missing_pages))
-        menu_check = inspect_frontend_menu_entries(workspace_path / "frontend", pages)
-        if menu_check.get("error"):
-            errors.append(f"菜单文件无效：{menu_check['error']}")
-        elif menu_check["missingKeys"]:
-            errors.append("菜单项缺失：" + "、".join(menu_check["missingKeys"]))
+        if variant == "auth":
+            errors.extend(_frontend_template_contract_errors(workspace_path / "frontend"))
+        elif variant == "main":
+            try:
+                pages = _load_template_pages(workspace_path)
+                missing = [f"frontend/src/pages/{page['key']}/index.tsx" for page in pages if not (workspace_path / f"frontend/src/pages/{page['key']}/index.tsx").is_file()]
+                if missing:
+                    errors.append("页面占位缺失：" + "、".join(missing))
+                menu = inspect_frontend_menu_entries(workspace_path / "frontend", pages)
+                if menu.get("error"):
+                    errors.append(f"菜单文件无效：{menu['error']}")
+                elif menu.get("missingKeys"):
+                    errors.append("菜单项缺失：" + "、".join(menu["missingKeys"]))
+            except (ApplicationTemplateGenerationError, ValueError) as exc:
+                errors.append(str(exc))
 
         checked_at = utc_now().isoformat()
         steps["gate"] = {
@@ -222,7 +203,7 @@ def validate_application_template_generation(workspace: str | Path) -> dict[str,
         }
         manifest["overall"].update(
             status="failed" if errors else "succeeded",
-            lastCompletedStep="menus" if errors else "gate",
+            lastCompletedStep=(_required_step_names(variant, include_gate=False)[-1] if errors else "gate"),
             error="；".join(errors) if errors else None,
             updatedAt=checked_at,
         )
@@ -233,23 +214,21 @@ def validate_application_template_generation(workspace: str | Path) -> dict[str,
 
 
 def _base_manifest(workspace: Path, download_step: dict[str, Any]) -> dict[str, Any]:
-    """创建不携带计划版本和 API 骨架字段的本轮 manifest。"""
+    """创建按下载分支隔离的本轮 manifest。"""
 
     now = utc_now().isoformat()
     pending = {"status": "pending", "error": None}
+    variant, _ = _template_variant_from_download(download_step)
+    steps = {"download": download_step, "gate": {**pending, "checkedAt": None}}
+    if variant == "main":
+        steps.update({"templateFiles": dict(pending), "menus": dict(pending)})
+    else:
+        steps["templateContract"] = dict(pending)
     return {
         "generationId": f"generation-{uuid.uuid4().hex}",
         "workspaceRoot": str(workspace),
-        "planningArtifacts": {
-            "productPlanJsonPath": ".xcodeagent/plans/product-plan.json",
-            "uiDesignsJsonPath": ".xcodeagent/specs/ui-designs.json",
-        },
-        "steps": {
-            "download": download_step,
-            "templateFiles": dict(pending),
-            "menus": dict(pending),
-            "gate": {**pending, "checkedAt": None},
-        },
+        "templateVariant": variant,
+        "steps": steps,
         "overall": {
             "status": "running",
             "lastCompletedStep": "download" if download_step["status"] == "succeeded" else None,
@@ -309,6 +288,67 @@ def _normalize_download_step(workspace: Path, value: dict[str, Any]) -> dict[str
     }
 
 
+def _template_variant(manifest: dict[str, Any]) -> tuple[str, str | None]:
+    """读取 manifest 模板变体，并以下载记录复核其一致性。"""
+
+    download = manifest.get("steps", {}).get("download") if isinstance(manifest.get("steps"), dict) else {}
+    derived, error = _template_variant_from_download(download if isinstance(download, dict) else {})
+    stored = str(manifest.get("templateVariant") or "").strip()
+    if stored and stored != derived:
+        return derived, "模板 manifest 的 templateVariant 与下载分支不一致。"
+    return derived, error
+
+
+def _template_variant_from_download(download: dict[str, Any]) -> tuple[str, str | None]:
+    """根据双端下载分支确定模板变体，拒绝混合分支。"""
+
+    targets = download.get("targets") if isinstance(download.get("targets"), dict) else {}
+    frontend = targets.get("frontend") if isinstance(targets.get("frontend"), dict) else {}
+    backend = targets.get("backend") if isinstance(targets.get("backend"), dict) else {}
+    frontend_branch = str(frontend.get("branch") or "").strip()
+    backend_branch = str(backend.get("branch") or "").strip()
+    if frontend_branch not in {"main", "auth"} or backend_branch not in {"main", "auth"}:
+        return "invalid", "模板下载结果缺少有效的 frontend/backend 分支。"
+    if frontend_branch != backend_branch:
+        return "invalid", f"前后端模板分支不一致：frontend={frontend_branch}，backend={backend_branch}。"
+    return frontend_branch, None
+
+
+def _required_step_names(variant: str, *, include_gate: bool) -> tuple[str, ...]:
+    """返回指定模板变体必须完成的 manifest 步骤。"""
+
+    names = ("download", "templateFiles", "menus") if variant == "main" else ("download", "templateContract")
+    return (*names, "gate") if include_gate else names
+
+
+def _load_template_pages(workspace: Path) -> list[dict[str, Any]]:
+    """读取 main 模板初始化依赖的已确认正式规划产物。"""
+
+    product_plan = _load_json_object(workspace / ".xcodeagent/plans/product-plan.json", "正式 ProductPlan")
+    if product_plan.get("confirmation_status") != "confirmed":
+        raise ApplicationTemplateGenerationError("正式 ProductPlan 尚未确认。")
+    if product_plan.get("schema_version") != "product-plan.v5":
+        raise ApplicationTemplateGenerationError("正式 ProductPlan 不是 product-plan.v5。")
+    ui_designs = _load_json_object(workspace / ".xcodeagent/specs/ui-designs.json", "正式 UiDesign Manifest")
+    if ui_designs.get("schema_version") != "ui-manifest.v3":
+        raise ApplicationTemplateGenerationError("正式 UiDesign Manifest 不是 ui-manifest.v3。")
+    return collect_template_pages(product_plan, ui_designs)
+
+
+def _load_json_object(path: Path, label: str) -> dict[str, Any]:
+    """读取单个 JSON 对象，避免 main 初始化在损坏输入上继续执行。"""
+
+    if not path.is_file():
+        raise ApplicationTemplateGenerationError(f"{label} 不存在。")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ApplicationTemplateGenerationError(f"{label} 损坏或无法读取。") from exc
+    if not isinstance(value, dict):
+        raise ApplicationTemplateGenerationError(f"{label} 必须是 JSON 对象。")
+    return value
+
+
 def _template_target_error(workspace: Path, target_name: str) -> str | None:
     """检查前后端模板目录是否包含可识别的工程入口。"""
 
@@ -327,49 +367,26 @@ def _template_target_error(workspace: Path, target_name: str) -> str | None:
     return None if any(marker.is_file() for marker in markers) else f"{target_name} 模板入口文件缺失"
 
 
-def _load_template_planning_artifacts(workspace: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """读取模板页面和菜单所需的最新 ProductPlan 与 UiDesign Manifest。"""
+def _frontend_template_contract_errors(frontend: Path) -> list[str]:
+    """验证 auth 前端模板的资源和路由插槽契约。"""
 
-    product_plan = _load_json_object(
-        workspace / ".xcodeagent/plans/product-plan.json",
-        "正式 ProductPlan",
-    )
-    if product_plan.get("confirmation_status") != "confirmed":
-        raise ApplicationTemplateGenerationError("正式 ProductPlan 尚未确认。")
-    if product_plan.get("schema_version") != "product-plan.v5":
-        raise ApplicationTemplateGenerationError("正式 ProductPlan 不是 product-plan.v5。")
-    ui_designs = _load_json_object(
-        workspace / ".xcodeagent/specs/ui-designs.json",
-        "正式 UiDesign Manifest",
-    )
-    if ui_designs.get("schema_version") != "ui-manifest.v3":
-        raise ApplicationTemplateGenerationError("正式 UiDesign 不是 ui-manifest.v3。")
-    if ui_designs.get("confirmation_status") not in {"confirmed", "skipped"}:
-        raise ApplicationTemplateGenerationError("正式 UiDesign 尚未确认或明确跳过。")
-    return product_plan, ui_designs
-
-
-def _load_json_object(path: Path, label: str) -> dict[str, Any]:
-    """严格读取指定正式 JSON 对象并保留明确错误。"""
-
-    if not path.is_file():
-        raise ApplicationTemplateGenerationError(f"{label}不存在：{path}")
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ApplicationTemplateGenerationError(f"{label}无法读取或格式错误。") from exc
-    if not isinstance(value, dict):
-        raise ApplicationTemplateGenerationError(f"{label}根节点必须是对象。")
-    return value
-
-
-def _run_template_step(job: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    """执行单个并行步骤并把异常转换成结构化失败结果。"""
-
-    try:
-        return job()
-    except Exception as exc:
-        return {"status": "failed", "error": str(exc)}
+    resources = frontend / "src/constants/resources.ts"
+    routes = frontend / "src/constants/routes.tsx"
+    errors: list[str] = []
+    if not resources.is_file():
+        errors.append("auth 前端模板缺少 src/constants/resources.ts")
+    if not routes.is_file():
+        return [*errors, "auth 前端模板缺少 src/constants/routes.tsx"]
+    source = routes.read_text(encoding="utf-8")
+    for marker in (
+        "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START",
+        "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END",
+        "// XCODEAGENT_BUSINESS_ROUTES_START",
+        "// XCODEAGENT_BUSINESS_ROUTES_END",
+    ):
+        if marker not in source:
+            errors.append(f"auth 前端模板 routes.tsx 缺少托管标记：{marker}")
+    return errors
 
 
 def _template_lock(workspace: Path) -> threading.RLock:

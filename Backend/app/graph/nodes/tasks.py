@@ -21,6 +21,7 @@ from app.services.development_readiness import development_readiness
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     merge_exact_duplicate_tasks,
+    strip_platform_owned_candidate_tasks,
     tasks_from_build_task_plan,
 )
 from app.services.application_template_generation import (
@@ -259,6 +260,9 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "timeline": ["prepare_build_tasks"],
             **formal_artifact_state,
         }
+    # 模板分支是 Build 任务边界的唯一事实源，不能仅由权限开关推断。
+    template_readiness = inspect_template_generation_readiness(workspace)
+    build_context["template_variant"] = template_readiness.get("templateVariant")
     progress.complete(
         "authorization_overlay",
         "已完成当前 Unit 的只读权限切片编译。",
@@ -625,6 +629,13 @@ def _build_prerequisite_errors(
             errors.append(str(exc))
     if workspace:
         readiness = inspect_template_generation_readiness(workspace)
+        authorization_manifest = project_plan.get("authorization_manifest")
+        authorization_enabled = (
+            isinstance(authorization_manifest, dict)
+            and authorization_manifest.get("enabled") is True
+        )
+        if authorization_enabled and readiness.get("templateVariant") != "auth":
+            errors.append("权限已启用，但前后端模板不是配套的 auth 分支。")
         errors.extend(
             f"模板初始化：{error}"
             for error in readiness.get("errors", [])
@@ -1830,6 +1841,11 @@ def _merge_prepared_scope_tasks(
     generated_tasks = tasks_from_build_task_plan(prepared_plan)
     if not generated_tasks and isinstance(prepared_plan.get("tasks"), list):
         generated_tasks = [task for task in prepared_plan["tasks"] if isinstance(task, dict)]
+    # 资源和路由注册由平台在 Build 启动前确定性执行；模型误输出时丢弃，
+    # 并同步移除依赖，避免候选图引用不存在的节点。
+    generated_tasks, ignored_platform_task_ids = strip_platform_owned_candidate_tasks(
+        generated_tasks
+    )
     out_of_scope_unit_ids = sorted(
         {
             str(task.get("unit_id") or "")
@@ -1905,9 +1921,25 @@ def _merge_prepared_scope_tasks(
             unit["reuse_evidence"] = reuse_evidence
         else:
             unit["status"] = "not_prepared"
+    # 权限共享投影在 Build Run 绑定的计划顶层读取模板变体，不能只保留在调试用构建上下文。
     result = {
         **merged,
-        "prepared_by": prepared_plan.get("prepared_by", merged.get("prepared_by", {})),
+        "template_variant": str(build_context.get("template_variant") or ""),
+        "prepared_by": {
+            **(
+                prepared_plan.get("prepared_by", merged.get("prepared_by", {}))
+                if isinstance(
+                    prepared_plan.get("prepared_by", merged.get("prepared_by", {})),
+                    dict,
+                )
+                else {}
+            ),
+            **(
+                {"ignoredPlatformCandidateTaskIds": ignored_platform_task_ids}
+                if ignored_platform_task_ids
+                else {}
+            ),
+        },
         "preparation_source": prepared_plan.get(
             "preparation_source", merged.get("preparation_source")
         ),

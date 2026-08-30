@@ -598,6 +598,9 @@ export default function WorkflowRunCard({
                 onConfirm={() =>
                   onSubmitClarification?.(workflow, { [artifactAnswerKey]: '正确，继续' })
                 }
+                onRevise={(request) =>
+                  onSubmitClarification?.(workflow, { technical_plan_confirmation: request })
+                }
                 plan={
                   clarification?.mode === 'requirement_document_confirmation'
                     ? productPlanObject
@@ -967,11 +970,12 @@ function readRequirementsConfirmed(workflow: WorkflowRunPayload): boolean {
 }
 
 /** 规划文档确认卡片：展示当前文档并提交放弃或确认操作。 */
-function PlanConfirmationCard({
+export function PlanConfirmationCard({
   artifact,
   disabled,
   onAbandon,
   onConfirm,
+  onRevise,
   plan,
   planType,
   requiresConfirmation,
@@ -981,15 +985,40 @@ function PlanConfirmationCard({
   disabled: boolean
   onAbandon: () => void
   onConfirm: () => void
+  onRevise: (request: string) => void
   plan?: Record<string, unknown>
   planType: 'product' | 'technical' | 'project'
   requiresConfirmation: boolean
   title: string
 }): ReactElement {
   const [viewing, setViewing] = useState(false)
+  const [revising, setRevising] = useState(false)
+  const [revisionRequest, setRevisionRequest] = useState('')
   const canView = Boolean(artifact || plan)
+  const canRevise = planType === 'technical'
   const documentLabel =
     planType === 'product' ? '需求文档' : planType === 'technical' ? '技术规划' : '项目计划书'
+
+  /** 打开技术规划修改意见窗口时清空上一轮未提交输入，避免误提交过期需求。 */
+  const startRevision = (): void => {
+    setRevisionRequest('')
+    setRevising(true)
+  }
+
+  /** 仅把非空意见提交给既有 revise 协议，后端负责版本失效、重新生成和一致性校验。 */
+  const submitRevision = (): void => {
+    const request = revisionRequest.trim()
+    if (!request) return
+    setRevising(false)
+    onRevise(request)
+  }
+
+  /** 关闭修改意见窗口并丢弃本地未提交内容，不触发任何工作流动作。 */
+  const cancelRevision = (): void => {
+    setRevising(false)
+    setRevisionRequest('')
+  }
+
   return (
     <div className={cx('artifact-auth-bar', 'project-plan-confirmation-card')}>
       <div className={cx('artifact-auth-bar-footer')}>
@@ -1003,9 +1032,15 @@ function PlanConfirmationCard({
               查看{documentLabel}
             </Button>
           ) : null}
-          <Button disabled={disabled} onClick={onAbandon}>
-            放弃
-          </Button>
+          {canRevise ? (
+            <Button className={cx('requirement-spec-edit-btn')} disabled={disabled} onClick={startRevision}>
+              修改
+            </Button>
+          ) : (
+            <Button disabled={disabled} onClick={onAbandon}>
+              放弃
+            </Button>
+          )}
           <Button disabled={disabled || !requiresConfirmation} onClick={onConfirm} type="primary">
             确认保存
           </Button>
@@ -1031,6 +1066,31 @@ function PlanConfirmationCard({
         ) : artifact ? (
           <ConfirmationArtifact artifact={artifact} />
         ) : null}
+      </Modal>
+      <Modal
+        cancelText="取消"
+        centered
+        className={cx('technical-plan-revision-modal')}
+        okButtonProps={{ disabled: disabled || !revisionRequest.trim() }}
+        okText="提交并重新生成"
+        onCancel={cancelRevision}
+        onOk={submitRevision}
+        open={revising}
+        title="修改技术规划"
+        width={680}
+        destroyOnClose
+      >
+        <Text type="secondary">
+          提交后，当前技术规划版本将失效；系统会依据你的意见重新生成并再次要求确认。
+        </Text>
+        <TextArea
+          aria-label="技术规划修改意见"
+          autoFocus
+          onChange={(event) => setRevisionRequest(event.target.value)}
+          placeholder="例如：为订单列表补充分页 API，并明确分页请求和响应 Schema。"
+          rows={6}
+          value={revisionRequest}
+        />
       </Modal>
     </div>
   )

@@ -30,9 +30,11 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | `src/utils/<page>.ts` | `/frontend/src/utils/<page>.ts` |
 | `src/components/<Module>/index.tsx` | `/frontend/src/components/<Module>/index.tsx` |
 | `src/apis/<biz>Api.ts` | `/frontend/src/apis/<biz>Api.ts` |
-| `src/constants/menus.ts` | `/frontend/src/constants/menus.ts` |
+| `src/constants/menus.ts` | `/frontend/src/constants/menus.ts`（main 模板平台初始化） |
+| `src/constants/resources.ts` | `/frontend/src/constants/resources.ts`（仅 auth，Build 平台投影） |
+| `src/constants/routes.tsx` | `/frontend/src/constants/routes.tsx`（仅 auth，Build 平台投影） |
 
-**生成代码前，务必先用 `list_files` 确认 `/frontend/src/pages/` 下已存在的页面目录与脚手架占位文件，再按上表前缀写入。** 不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
+**生成代码前，读取 `/.xcodeagent/template-generation-manifest.json` 的 `templateVariant` 和当前任务允许路径。** `main` 模板已由平台创建页面占位和 `BIZ_MENUS`；`auth` 模板在任何 Agent 任务前由 Build 平台写入共享资源与路由注册文件。不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
 
 ## 🔴 前端工程根目录禁止创建文件
 
@@ -86,10 +88,13 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 
 ## 核心原则
 
-业务路由由 Build 平台根据已确认的权限清单直接写入 `src/routes/index.tsx` 的固定托管区，不再由页面 Agent 自动扫描、登记或改写。页面 Agent 只生成 `src/pages/<PageKey>/index.tsx`，并且：
+模板变体必须隔离：
+
+- `main`：平台已创建页面占位并登记 `BIZ_MENUS`；不得创建 auth 权限目录、修改路由树或共享菜单。
+- `auth`：页面任务只生成 `src/pages/<PageKey>/index.tsx`；Build 平台根据已确认的 `authorization_manifest` 在 Agent 派发前写入 `src/constants/resources.ts` 和 `src/constants/routes.tsx` 的固定托管区。
 
 - 页面文件路径必须是 `src/pages/<PageKey>/index.tsx`；`<PageKey>` 由已确认页面设计提供。
-- 不得修改 `src/routes/index.tsx`、`src/utils/route.tsx`、`src/constants/menus.ts` 或任何路由/菜单配置；受控页面的 `RouteGuard` 由平台生成，操作控件的 `Permission` 只按任务提供的 `RESOURCES.OPERATION` 绑定生成。
+- 页面任务不得修改 `src/routes/index.tsx`、`src/utils/route.tsx` 或任一变体的平台共享注册文件。受控页面的 `RouteGuard` 由 auth 模板从 `resourceKey` 自动派生，操作控件只按任务提供的 `RESOURCES.OPERATION` 绑定生成。
 - 框架骨架文件（入口、路由、布局、Provider、守卫、配置）**禁止修改**。
 - 页面的类型、常量、hooks、工具函数**统一放公共目录**（`src/typings`、`src/constants`、`src/hooks`、`src/utils`），不放在页面目录内；可复用组件放 `src/components`。
 

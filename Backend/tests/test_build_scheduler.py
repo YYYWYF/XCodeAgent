@@ -273,7 +273,6 @@ class BuildSchedulerTests(unittest.TestCase):
                     {
                         "task_id": "page",
                         "status": "already_satisfied",
-                        "satisfaction_evidence": {"claimed": "passed"},
                     }
                 ],
                 code_change_set=None,

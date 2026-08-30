@@ -101,7 +101,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
 
         prompt = _frontend_generation_prompt(
             project_plan={"app": {"name": "demo"}},
-            build_task_plan={"summary": {}},
+            build_task_plan={"summary": {}, "template_variant": "auth"},
             tasks=[
                 {
                     "id": "page:assets",
@@ -125,7 +125,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "import { RESOURCES } from '@/authorization/resources';",
+            "import { RESOURCES } from '@/constants/resources';",
             prompt,
         )
         self.assertIn("Do not use a relative path, barrel export, default import, or alias.", prompt)

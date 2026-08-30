@@ -30,7 +30,6 @@ from app.services.revision_routing import enforce_revision_routing
 from app.utils.model_output import extract_json_object
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
-
 ConversationIntent = Literal[
     "casual_chat",
     "workspace_question",
@@ -61,6 +60,7 @@ _DIRECT_IGNORED_PATH_PARTS = frozenset(
     {".next", ".turbo", ".venv", "build", "coverage", "dist", "node_modules", "target"}
 )
 _FRONTEND_REQUIRED_SKILLS = (
+    "/.xcodeagent/builtin-skills/frontend-template-modification-boundary/SKILL.md",
     "/.xcodeagent/builtin-skills/code-block-template/SKILL.md",
     "/.xcodeagent/builtin-skills/react-develop-specification/SKILL.md",
 )
@@ -294,13 +294,19 @@ def _workspace_routing_context(snapshot: dict[str, Any] | None) -> str:
         "techStack": _bounded_routing_items(snapshot.get("tech_stack"), limit=30),
         "projectRoots": _bounded_routing_items(snapshot.get("project_roots"), limit=30),
         "entrypoints": _bounded_routing_items(snapshot.get("entrypoints"), limit=50),
-        "highValueFiles": _bounded_routing_items(snapshot.get("high_value_files"), limit=100),
-        "buildCommands": _bounded_routing_items(snapshot.get("build_commands"), limit=30),
+        "highValueFiles": _bounded_routing_items(
+            snapshot.get("high_value_files"), limit=100
+        ),
+        "buildCommands": _bounded_routing_items(
+            snapshot.get("build_commands"), limit=30
+        ),
         "testCommands": _bounded_routing_items(snapshot.get("test_commands"), limit=30),
         "frontend": {
             "pages": _bounded_routing_items(frontend.get("pages"), limit=200),
             "components": _bounded_routing_items(frontend.get("components"), limit=200),
-            "apiClients": _bounded_routing_items(frontend.get("api_clients"), limit=100),
+            "apiClients": _bounded_routing_items(
+                frontend.get("api_clients"), limit=100
+            ),
         },
         "backend": {
             "apiRoutes": _bounded_routing_items(backend.get("api_routes"), limit=100),
@@ -508,7 +514,9 @@ def _safe_target_paths(value: Any) -> list[str]:
     return result
 
 
-def answer_casual_conversation(*, user_request: str, conversation_summary: str = "") -> str:
+def answer_casual_conversation(
+    *, user_request: str, conversation_summary: str = ""
+) -> str:
     """使用无工具 ChatModel 回答身份、常规交流和通用知识问题。"""
 
     model = create_chat_model(Settings.from_env())

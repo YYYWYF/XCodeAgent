@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import tempfile
@@ -12,10 +11,12 @@ from typing import Any
 from app.services.application_template_generation import load_template_generation_manifest
 
 
-AUTH_CONSTANTS_DESCRIPTOR_RELATIVE_PATH = Path(
-    "backend/.xcodeagent/auth-constants-projection.json"
+# auth 模板以固定常量类和标记区声明平台唯一可写的业务资源常量位置。
+AUTH_CONSTANTS_RELATIVE_PATH = Path(
+    "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java"
 )
-AUTH_CONSTANTS_DESCRIPTOR_SCHEMA = "xcodeagent.auth-constants-projection.v1"
+AUTH_CONSTANTS_START = "// XCODEAGENT_AUTH_CONSTANTS_START"
+AUTH_CONSTANTS_END = "// XCODEAGENT_AUTH_CONSTANTS_END"
 
 
 class AuthorizationConstantsProjectionError(ValueError):
@@ -35,16 +36,10 @@ def apply_authorization_constants_projection(
     manifest = load_template_generation_manifest(workspace_path)
     if _backend_branch(manifest) != "auth":
         raise AuthorizationConstantsProjectionError("权限常量投影存在，但后端模板不是 auth 分支。")
-    descriptor = _load_descriptor(workspace_path)
-    target = _target_path(workspace_path, descriptor)
-    start_marker = _required_text(descriptor, "startMarker")
-    end_marker = _required_text(descriptor, "endMarker")
+    target = _auth_constants_path(workspace_path)
     content = target.read_text(encoding="utf-8")
-    start = content.find(start_marker)
-    end = content.find(end_marker)
-    if start < 0 or end < 0 or end <= start:
-        raise AuthorizationConstantsProjectionError("AuthConstants 托管文件缺少有效边界标记。")
-    body_start = start + len(start_marker)
+    start, end = _managed_bounds(content)
+    body_start = start + len(AUTH_CONSTANTS_START)
     updated = content[:body_start] + "\n" + _render_projection(items) + content[end:]
     if updated != content:
         _write_text_atomically(target, updated)
@@ -64,16 +59,10 @@ def verify_authorization_constants_projection(
     manifest = load_template_generation_manifest(workspace_path)
     if _backend_branch(manifest) != "auth":
         raise AuthorizationConstantsProjectionError("权限常量投影存在，但后端模板不是 auth 分支。")
-    descriptor = _load_descriptor(workspace_path)
-    target = _target_path(workspace_path, descriptor)
+    target = _auth_constants_path(workspace_path)
     content = target.read_text(encoding="utf-8")
-    start_marker = _required_text(descriptor, "startMarker")
-    end_marker = _required_text(descriptor, "endMarker")
-    start = content.find(start_marker)
-    end = content.find(end_marker)
-    if start < 0 or end < 0 or end <= start:
-        raise AuthorizationConstantsProjectionError("AuthConstants 托管文件缺少有效边界标记。")
-    body_start = start + len(start_marker)
+    start, end = _managed_bounds(content)
+    body_start = start + len(AUTH_CONSTANTS_START)
     expected = content[:body_start] + "\n" + _render_projection(items) + content[end:]
     if content != expected:
         raise AuthorizationConstantsProjectionError("AuthConstants 托管区与确认投影不一致。")
@@ -109,31 +98,25 @@ def _projection_items(value: Any) -> list[dict[str, str]]:
     return sorted(result, key=lambda item: item["name"])
 
 
-def _load_descriptor(workspace: Path) -> dict[str, Any]:
-    """读取 auth 后端模板提供的 AuthConstants 托管区声明。"""
+def _auth_constants_path(workspace: Path) -> Path:
+    """定位 auth 模板唯一且受平台管理的 AuthConstants 常量文件。"""
 
-    path = workspace / AUTH_CONSTANTS_DESCRIPTOR_RELATIVE_PATH
-    if not path.is_file():
+    target = (workspace / AUTH_CONSTANTS_RELATIVE_PATH).resolve()
+    if not target.is_file():
         raise AuthorizationConstantsProjectionError(
-            f"auth 模板缺少 AuthConstants 托管区声明：{path.relative_to(workspace)}。"
+            f"auth 模板缺少 AuthConstants 托管文件：{AUTH_CONSTANTS_RELATIVE_PATH}。"
         )
-    try:
-        descriptor = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise AuthorizationConstantsProjectionError("AuthConstants 托管区声明无法读取。") from exc
-    if not isinstance(descriptor, dict) or descriptor.get("schemaVersion") != AUTH_CONSTANTS_DESCRIPTOR_SCHEMA:
-        raise AuthorizationConstantsProjectionError("AuthConstants 托管区声明 schema 无效。")
-    return descriptor
-
-
-def _target_path(workspace: Path, descriptor: dict[str, Any]) -> Path:
-    """将模板目标限定在 backend 目录内的现有 Java 常量文件。"""
-
-    target = (workspace / "backend" / _required_text(descriptor, "targetPath")).resolve()
-    backend_root = (workspace / "backend").resolve()
-    if backend_root not in target.parents or target.suffix != ".java" or not target.is_file():
-        raise AuthorizationConstantsProjectionError("AuthConstants 托管目标必须是 backend 内已有 Java 文件。")
     return target
+
+
+def _managed_bounds(content: str) -> tuple[int, int]:
+    """校验并定位固定 AuthConstants 业务常量插槽，拒绝模板漂移。"""
+
+    start = content.find(AUTH_CONSTANTS_START)
+    end = content.find(AUTH_CONSTANTS_END)
+    if start < 0 or end < 0 or end <= start:
+        raise AuthorizationConstantsProjectionError("AuthConstants 托管文件缺少有效边界标记。")
+    return start, end
 
 
 def _backend_branch(manifest: dict[str, Any]) -> str:

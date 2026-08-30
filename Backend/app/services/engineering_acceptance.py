@@ -274,15 +274,6 @@ def _frontend_authorization_checks(task: dict[str, Any]) -> list[dict[str, Any]]
     ]
     if not actions:
         return []
-    bindings = _dict_value(source_refs.get("page_implementation_contract")).get(
-        "actionBindings"
-    )
-    all_action_ids = {
-        str(item.get("actionId") or "").strip()
-        for item in _dict_items(bindings)
-        if str(item.get("actionId") or "").strip()
-    }
-    controlled_action_ids = {item["actionId"] for item in actions}
     paths = [
         _normalize_path(path)
         for deliverable in _dict_items(task.get("deliverables"))
@@ -302,11 +293,10 @@ def _frontend_authorization_checks(task: dict[str, Any]) -> list[dict[str, Any]]
         _check(
             task,
             kind="frontend_authorization",
-            description="受控页面操作必须以平台给定 RESOURCES 常量接入唯一 Permission，且页面不得直连 HTTP 客户端。",
+            description="受控页面操作必须以平台给定 RESOURCES 常量和展示模式接入 Permission，且页面不得直连 HTTP 客户端。",
             target_paths=_dedupe(paths),
             expected={
                 "controlledActions": actions,
-                "uncontrolledActionIds": sorted(all_action_ids - controlled_action_ids),
             },
         )
     ]

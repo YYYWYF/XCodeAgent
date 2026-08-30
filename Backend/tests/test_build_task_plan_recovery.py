@@ -115,6 +115,27 @@ def _page_task(task_id: str, page_id: str, page_key: str) -> dict:
 
 
 class BuildTaskPlanRecoveryTests(unittest.TestCase):
+    def test_scope_merge_promotes_template_variant_to_plan_root(self) -> None:
+        """合并后的确认 DAG 必须把模板变体保留在 Build 读取的顶层。"""
+
+        base_plan = _base_unit_plan("page:dashboard")
+        build_context = {
+            "target": {"type": "page", "id": "dashboard", "page_key": "Dashboard"},
+            "required_unit_ids": ["page:dashboard"],
+            "template_variant": "auth",
+        }
+        prepared_plan = create_build_task_plan(
+            {"version": "1.0.0"},
+            agent_plan={"tasks": [_page_task("dashboard-task", "dashboard", "Dashboard")]},
+            base_build_task_plan=base_plan,
+            build_context=build_context,
+        )
+
+        merged = _merge_prepared_scope_tasks(base_plan, prepared_plan, build_context)
+
+        self.assertEqual(merged["template_variant"], "auth")
+        self.assertEqual(merged["build_context"]["template_variant"], "auth")
+
     def test_incremental_page_merge_preserves_retained_business_acceptance(self) -> None:
         """生成新页面时不得用当前页面契约重编译历史页面的业务检查。"""
 

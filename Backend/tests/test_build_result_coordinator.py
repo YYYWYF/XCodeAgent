@@ -63,6 +63,25 @@ class BuildResultCoordinatorTests(unittest.TestCase):
             "请补充冲突处理规则",
         )
 
+    def test_strict_schema_accepts_already_satisfied_without_agent_evidence(self) -> None:
+        """已满足状态的可信证据应由平台工程验收生成，而非要求 Agent 自报。"""
+
+        results = create_agent_task_results(
+            [{"id": "backend-bootstrap", "owner": "backend"}],
+            """{
+              "task_results": [{
+                "task_id": "backend-bootstrap",
+                "status": "already_satisfied",
+                "summary": "现有工程配置已满足要求"
+              }]
+            }""",
+            require_structured=True,
+            strict_schema=True,
+        )
+
+        self.assertEqual(results[0]["status"], "already_satisfied")
+        self.assertIsNone(results[0]["satisfaction_evidence"])
+
     def test_strict_schema_rejects_duplicate_unknown_missing_and_extra_top_level(self) -> None:
         """严格协议必须拒绝重复、未知、缺失任务以及额外顶层字段。"""
 

@@ -182,6 +182,34 @@ def _task(kind: str, *, path: str, owner: str, unit_id: str, target_id: str = ""
 
 
 class BusinessAcceptanceCompilationTests(unittest.TestCase):
+    def test_target_page_key_requires_entry_in_all_page_task_path_fields(self) -> None:
+        """目标页构建必须用 page_key 的入口并在三类路径声明中保持一致。"""
+
+        entry = "frontend/src/pages/AssetList/index.tsx"
+        task = {
+            "id": "page:asset_list::implementation",
+            "owner": "frontend",
+            "unit_id": "page:asset_list",
+            "change_scope": [{"operation": "add", "path": entry}],
+            "allowed_paths": [entry],
+            "deliverables": [
+                {
+                    "id": "page:asset_list::implementation::deliverable",
+                    "kind": "frontend.page",
+                    "target_id": "asset_list",
+                    "paths": [entry],
+                    "provides": ["asset_list.render"],
+                }
+            ],
+        }
+        context = {"target": {"type": "page", "id": "asset_list", "page_key": "AssetList"}}
+
+        self.assertEqual(business_acceptance_contract_errors(task, context=context), [])
+        task["allowed_paths"] = []
+        self.assertTrue(
+            any("allowed_paths" in error for error in business_acceptance_contract_errors(task, context=context))
+        )
+
     """验证业务检查只由平台按正式输入生成。"""
 
     def test_all_phase_two_kinds_compile(self) -> None:

@@ -298,7 +298,7 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 从 `PageImple
 - `application:root` 表示整应用根；
 - `backend:bootstrap` 表示数据库来源后端所需的 Maven、数据源与 MyBatis-Plus 基础能力；外部 API-only 与静态范围不创建该 Unit；
 - `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
-- `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；菜单、路由和隐藏路由由模板初始化独占，不建立 Build Unit；
+- `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；auth 模板的 `resources.ts` 与 `routes.tsx` 托管区由 Build 启动前的平台投影登记，不属于 Build Unit；
 - `page:<pageId>` 表示页面实现范围。
 
 页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。只有包含 database 实体的范围才要求 `backend:bootstrap`，并由 Unit Graph 建立 `backend:bootstrap → backend:endpoint:*`；external_api-only endpoint 不依赖该 Unit。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。
@@ -315,7 +315,7 @@ Build Task 不复制 ProductPlan、UiDesign 或 TechnicalPlan 中的业务验收
 
 任务编译器不再按 Schema gap 自动删除、补齐或生成数据库任务，也不会推导缺失的 `database_scope`。正常 Build 只消费实体确认阶段的表结构、字段绑定和执行证据，生成后端持久化代码任务。
 
-Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_files` 的代码实现任务。仅检查已有前端壳、菜单、路由或布局的候选任务会被 DAG 校验拒绝并自动重生成，统一交给模板 manifest 和 `integration_test` 验证；`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
+Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_files` 的代码实现任务。仅检查已有前端壳、路由树、布局或 Provider 的候选任务会被 DAG 校验拒绝并自动重生成；auth 模板的资源目录和 routes 托管区仅由 Build 启动前的平台投影修改，main 模板继续使用既有页面与菜单初始化边界。`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
 
 该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。模型负责将当前已确认的 PageImplementationContract、TechnicalPlan Endpoint 语义、实体绑定摘要、API Contract 和当前工程结构转换成后端/前端可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性结构字段编译与 DAG 校验，任何任务边界越界都保留错误并自动重生成，再交给后续 Build Subgraph 执行。
 
@@ -585,7 +585,7 @@ acceptance.START
 任务编译和执行还必须遵守以下确定性边界：
 
 - 页面任务进入 DAG 前，以实时工作区校对模型计划路径。只有当计划入口不存在，且实时 `frontend/src/pages` 中存在唯一的同义目录（忽略大小写、分隔符和 `Page` 后缀）时，才把目标路径改写到该既有入口；保留模型声明的 `add/modify` 操作，若仍违反页面初始化边界则写入校验错误并自动重生成；多候选时不得猜测。这样可修复 WorkspaceSnapshot 在长流程中变旧造成的 `DashboardPage`/`Dashboard` 重复入口，同时保留可审计的 `path_reconciliation`。
-- 模板页面的占位文件、菜单和路由必须在模板初始化阶段完成。DAG 只读校验既有页面入口和菜单状态；模型误返回共享菜单、路由、隐藏路由或页面占位注册任务时，编译器保留原候选并把任务 ID、字段和路径写入 `task_graph.validation.errors`，随后自动重生成；不创建兜底任务、不修剪混合页面任务，也不修改共享注册文件。
+- 模板初始化按 manifest 的双端分支选择变体：`main` 保持页面占位与 `BIZ_MENUS` 初始化；`auth` 只检查资源与 routes 托管区，Build 启动前的平台根据确认 manifest 写入资源常量和页面配置，页面任务仅创建业务页面。双端分支不一致或权限开启但不是 auth 变体时 fail closed；模型误输出平台保留注册任务时确定性丢弃并清理其依赖，其他任务触及共享注册文件、路由树、隐藏路由或模板基础设施时仍写入 `task_graph.validation.errors` 后自动重生成。
 - 任何具有精确 `target_files` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
 - Frontend/Data Source owner Agent 只负责任务范围内的源码读取和实现，不在 task 内执行依赖安装、build、lint、typecheck、unit test 或 dev-server 命令；依赖、Build、性能和集成检查由后续 `integration_test` 执行，单元测试由开发阶段 `unit_test` 执行，缺少依赖或命令时由 Agent 在结构化结果中报告，不得自行安装恢复。
 - 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`，但状态声明和自然语言证据都不构成项目级质量结论。当前 Build 调度器只负责结果归一化和真实文件 diff 的任务归属，不再执行 `engineering_acceptance`/`acceptance_checks` 逐项工程验收，也不因批次快照中出现额外的编译产物或生成文件而阻断代码生成。菜单、API/Spring 契约和数据库等项目级正确性由开发阶段 `unit_test` 的单测门禁与测试阶段 `integration_test` 的 install、build、性能和集成质量门禁共同处理；`acceptance_checks` 仍保留在任务计划和修复上下文中，供审计或后续重新启用。合法 JSON 遗漏已派发任务时记为 `runner_protocol_error`；明显未转义双引号会先做一次确定性恢复，仍损坏的顶层报告记为 `invalid_structured_response` 并进入受控重试分类。

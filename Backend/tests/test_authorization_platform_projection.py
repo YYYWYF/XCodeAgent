@@ -32,7 +32,7 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
             self._write_template(workspace)
             plan = self._plan()
             apply_authorization_platform_projections(workspace, plan)
-            route_file = workspace / "frontend/src/routes/index.tsx"
+            route_file = workspace / "frontend/src/constants/routes.tsx"
             route_file.write_text("// drift", encoding="utf-8")
             errors = verify_authorization_edd(workspace, plan)
 
@@ -42,6 +42,7 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
         """构造最小确认 Build DAG 权限投影。"""
 
         return {
+            "template_variant": "auth",
             "authorization_frontend_projection": {
                 "resources": [
                     {"group": "SYSTEM", "name": "AUTHORIZATION_MANAGEMENT", "resourceKey": "system_authorization_management"},
@@ -56,10 +57,10 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
     def _write_template(self, workspace: Path) -> None:
         """创建带固定业务路由托管区的最小 auth 模板。"""
 
-        self._write(workspace / ".xcodeagent/template-generation-manifest.json", json.dumps({"steps": {"download": {"targets": {"backend": {"branch": "auth"}}}}}))
-        self._write(workspace / "frontend/src/routes/index.tsx", "import { Layout } from '@/layout';\nimport { RouteGuard } from '@/authorization/RouteGuard';\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\nexport const routes = [\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n];\n")
-        self._write(workspace / "backend/.xcodeagent/auth-constants-projection.json", json.dumps({"schemaVersion": "xcodeagent.auth-constants-projection.v1", "targetPath": "src/main/java/example/AuthConstants.java", "startMarker": "// XCODEAGENT_AUTH_CONSTANTS_START", "endMarker": "// XCODEAGENT_AUTH_CONSTANTS_END"}))
-        self._write(workspace / "backend/src/main/java/example/AuthConstants.java", "// XCODEAGENT_AUTH_CONSTANTS_START\n// XCODEAGENT_AUTH_CONSTANTS_END\n")
+        self._write(workspace / ".xcodeagent/template-generation-manifest.json", json.dumps({"templateVariant": "auth", "steps": {"download": {"targets": {"frontend": {"branch": "auth"}, "backend": {"branch": "auth"}}}}}))
+        self._write(workspace / "frontend/src/constants/resources.ts", "export const RESOURCES = {} as const;\n")
+        self._write(workspace / "frontend/src/constants/routes.tsx", "import { RESOURCES } from '@/constants/resources';\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\nexport const PAGE_ROUTES = [\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n];\n")
+        self._write(workspace / "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java", "// XCODEAGENT_AUTH_CONSTANTS_START\n// XCODEAGENT_AUTH_CONSTANTS_END\n")
 
     def _write(self, path: Path, content: str) -> None:
         """创建测试用 UTF-8 文件。"""

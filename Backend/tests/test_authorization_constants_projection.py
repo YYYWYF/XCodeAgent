@@ -49,7 +49,7 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
                 )
 
     def _write_auth_template_contract(self, workspace: Path) -> Path:
-        """构造最小 auth 下载 manifest、声明和 Java 常量托管文件。"""
+        """构造最小 auth 下载 manifest 和固定 Java 常量托管文件。"""
 
         manifest = workspace / ".xcodeagent/template-generation-manifest.json"
         manifest.parent.mkdir(parents=True)
@@ -57,20 +57,10 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
             json.dumps({"steps": {"download": {"targets": {"backend": {"branch": "auth"}}}}}),
             encoding="utf-8",
         )
-        descriptor = workspace / "backend/.xcodeagent/auth-constants-projection.json"
-        descriptor.parent.mkdir(parents=True)
-        descriptor.write_text(
-            json.dumps(
-                {
-                    "schemaVersion": "xcodeagent.auth-constants-projection.v1",
-                    "targetPath": "src/main/java/example/AuthConstants.java",
-                    "startMarker": "// XCODEAGENT_AUTH_CONSTANTS_START",
-                    "endMarker": "// XCODEAGENT_AUTH_CONSTANTS_END",
-                }
-            ),
-            encoding="utf-8",
+        target = workspace / (
+            "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/"
+            "AuthConstants.java"
         )
-        target = workspace / "backend/src/main/java/example/AuthConstants.java"
         target.parent.mkdir(parents=True)
         target.write_text(
             "template-owned prefix\n// XCODEAGENT_AUTH_CONSTANTS_START\nold\n"

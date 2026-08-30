@@ -197,8 +197,8 @@ def _strict_result_condition_error(report: dict[str, Any]) -> str:
         return "must not include failure fields unless status is failed."
     if status != "already_satisfied" and "satisfaction_evidence" in report:
         return "must not include satisfaction_evidence for this status."
-    if status == "already_satisfied" and not report.get("satisfaction_evidence"):
-        return "must include non-empty satisfaction_evidence."
+    # 已满足状态的可信证据只能由调度器基于当前磁盘与工程检查生成；
+    # Agent 的自报内容不能作为完成依据，因此这里不把它设为前置条件。
 
     if status != "failed":
         if "change_request" in report:

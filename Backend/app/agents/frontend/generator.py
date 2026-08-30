@@ -157,6 +157,7 @@ def _frontend_generation_prompt(
     # 静态规则只由当前派发任务的来源引用触发，不读取整个 ProjectPlan 的数据源清单。
     task_source_types = _task_frontend_source_types(tasks)
     has_static_data_source = "static" in task_source_types
+    template_variant = str(build_task_plan.get("template_variant") or "main")
     data_source_instruction = (
         "## CRITICAL: Data source is STATIC with effective_source=frontend_mock\n"
         "The data source for this page's entities declares type=static. Implement the approved "
@@ -182,6 +183,19 @@ def _frontend_generation_prompt(
         "business arrays. READ THIS before writing a static data module.\n"
         if has_static_data_source
         else ""
+    )
+    authorization_boundary = (
+        "## Authorization boundary for auth template\n"
+        "A task may contain platform-owned `source_refs.authorization.actions`. This is the only action-permission input. "
+        "For every listed action, add this exact named import in the task file that renders the controlled interaction: "
+        "`import { RESOURCES } from '@/constants/resources';`. Do not use a relative path, barrel export, default import, or alias. "
+        "Then use the existing template `Permission` component and wrap exactly one real interaction with the supplied `RESOURCES` reference. "
+        "Do not create AuthProvider instances, permission caches, authorization API clients, resource catalogs, role-management UI, route guards, menus, routers, or shared authorization files. "
+        "The platform has already generated route registration before this task starts; do not modify "
+        "`src/constants/resources.ts` or `src/constants/routes.tsx`.\n\n"
+        if template_variant == "auth"
+        else "## Main template boundary\n"
+        "This is the main template. Its pages and BIZ_MENUS entries were initialized before Build; do not import auth-only RESOURCES, create permission wrappers, or modify shared menu or route files.\n\n"
     )
     return (
         "You are the Frontend Generation Agent in an app-generation workflow.\n"
@@ -209,18 +223,10 @@ def _frontend_generation_prompt(
         + _page_template_instruction(page_template)
         + _ui_design_reference_instruction(ui_designs)
         + data_source_instruction
-        + "## Authorization boundary for page tasks\n"
-        "A task may contain platform-owned `source_refs.authorization.actions`. This is the only action-permission input. "
-        "For every listed action, add this exact named import in the task file that renders the controlled interaction: "
-        "`import { RESOURCES } from '@/authorization/resources';`. Do not use a relative path, barrel export, default import, or alias. "
-        "Then use the existing template `Permission` component, "
-        "and wrap exactly one real interaction with `<Permission resourceKey={RESOURCES.<provided group>.<provided name>} mode=\"<provided mode>\">`, "
-        "and keep or add exactly one literal `data-action-id=\"<actionId>\"` on that interaction. Use the supplied RESOURCES group/name exactly; "
-        "do not derive, rename, replace it with a role check, or create a frontend AuthConstants copy. Do not wrap unlisted actions. "
-        "Do not create AuthProvider instances, permission caches, authorization API clients, resource catalogs, role-management UI, `/roles`, "
-        "route guards, menus, routers, or shared authorization files. Route access is platform-owned. For business APIs, import functions from `src/apis/` "
+        + authorization_boundary
+        + "For business APIs, import functions from `src/apis/` "
         "and invoke them through `useRequest`; page and component code must never call `fetch`, `axios`, or `service` directly. "
-        "If an action, its real interaction, or its supplied resourceKey cannot be uniquely located, return that task as failed rather than guessing.\n\n"
+        "If a declared action cannot be uniquely located, return that task as failed rather than guessing.\n\n"
         + "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
         "Before generating or modifying any frontend code, you MUST read the following "
         "the required built-in skills with read_file(limit=400) and follow their instructions. "
@@ -228,7 +234,7 @@ def _frontend_generation_prompt(
         "1. `/.xcodeagent/builtin-skills/frontend-template-modification-boundary/SKILL.md` — "
         "file modification boundary: which files you MUST NOT modify (framework skeleton, "
         "package.json, tailwind.config.js, vite.config.ts, etc.), which are append-only "
-        "(menus.ts top-level BIZ_MENUS array, src/apis, src/typings, src/constants, src/hooks, "
+        "(template-variant-specific shared registration files, src/apis, src/typings, src/constants, src/hooks, "
         "src/utils, src/components), and where to place page types/constants/hooks/utils/"
         "components. Violating this destroys the template scaffold. READ THIS FIRST.\n"
         "2. `/.xcodeagent/builtin-skills/code-block-template/SKILL.md` — the AUTHORITATIVE "

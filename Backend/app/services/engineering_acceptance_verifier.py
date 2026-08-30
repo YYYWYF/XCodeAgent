@@ -391,7 +391,7 @@ def _verify_frontend_authorization(
     ):
         return "页面受控操作未从模板 authorization 模块导入 Permission。", "未发现 Permission 导入。"
     if not re.search(
-        r'import\s*\{[^}]*\bRESOURCES\b[^}]*\}\s*from\s*["\']@/authorization/resources["\']',
+        r'import\s*\{[^}]*\bRESOURCES\b[^}]*\}\s*from\s*["\']@/constants/resources["\']',
         merged,
     ):
         return "页面受控操作未从唯一资源目录导入 RESOURCES。", "未发现 RESOURCES 导入。"
@@ -401,45 +401,25 @@ def _verify_frontend_authorization(
             merged,
         )
     )
-    controlled_ids = {item["actionId"] for item in actions}
-    uncontrolled_ids = set(_string_list(expected.get("uncontrolledActionIds")))
     for action in actions:
-        marker = re.compile(
-            rf"\bdata-action-id\s*=\s*([\"']){re.escape(action['actionId'])}\1"
-        )
-        occurrences = list(marker.finditer(merged))
-        if len(occurrences) != 1:
-            return (
-                f"受控 Action {action['actionId']} 必须恰好有一个字面 data-action-id，实际为 {len(occurrences)} 个。",
-                "无法唯一定位受控交互点。",
-            )
         matched_blocks = [
             block
             for block in blocks
-            if marker.search(block.group("body") or "")
-            and _permission_block_matches(block.group("attrs") or "", action)
+            if _permission_block_matches(block.group("attrs") or "", action)
         ]
-        if len(matched_blocks) != 1:
+        if not matched_blocks:
             return (
-                f"受控 Action {action['actionId']} 必须恰好由一个 Permission 使用精确 RESOURCES 常量和 mode={action['mode']} 包装。",
+                f"受控 Action {action['actionId']} 必须由 Permission 使用精确 RESOURCES 常量和 mode={action['mode']} 包装。",
                 "Permission 包装与平台权限约束不一致。",
             )
-    for action_id in uncontrolled_ids:
-        marker = re.compile(rf"\bdata-action-id\s*=\s*([\"']){re.escape(action_id)}\1")
-        if any(marker.search(block.group("body") or "") for block in blocks):
-            return (
-                f"未受控 Action {action_id} 被新增 Permission 包装。",
-                "权限包装范围超出平台 action 约束。",
-            )
-    # 只允许确认任务已声明的 Action 出现在 Permission 包装内，避免扩权。
+    # Permission 只允许使用当前任务声明的资源常量和展示模式；不依赖 UI 标记推断动作身份。
     for block in blocks:
-        for action_id in re.findall(r"\bdata-action-id\s*=\s*[\"']([^\"']+)[\"']", block.group("body") or ""):
-            if action_id not in controlled_ids:
-                return (
-                    f"Permission 包装了未声明为受控的 Action {action_id}。",
-                    "权限包装范围超出平台 action 约束。",
-                )
-    return None, f"已验证 {len(actions)} 个受控 Action 的唯一 Permission 接入。"
+        if not any(_permission_block_matches(block.group("attrs") or "", action) for action in actions):
+            return (
+                "Permission 使用了当前任务未声明的 RESOURCES 常量或展示模式。",
+                "权限包装范围超出平台资源约束。",
+            )
+    return None, f"已验证 {len(actions)} 个受控 Action 的 Permission 资源接入。"
 
 
 def _verify_frontend_api_boundary(

@@ -242,9 +242,7 @@ function buildTaskPlanConfirmationMessage(
 }
 
 /** 从开发完成确认载荷读取测试目标，确保刷新后仍能生成一致的用户消息。 */
-function testPhaseConfirmationTarget(
-  workflow: WorkflowRunPayload
-): WorkflowTestTarget | undefined {
+function testPhaseConfirmationTarget(workflow: WorkflowRunPayload): WorkflowTestTarget | undefined {
   const clarification = workflowClarification(workflow)
   const candidates = [
     clarification?.testTarget,
@@ -252,14 +250,13 @@ function testPhaseConfirmationTarget(
     workflow.state?.testTarget,
     workflow.result?.testTarget
   ]
-  return candidates.find(
-    (value): value is WorkflowTestTarget =>
-      Boolean(
-        value &&
-          typeof value === 'object' &&
-          !Array.isArray(value) &&
-          String((value as Record<string, unknown>).label || '').trim()
-      )
+  return candidates.find((value): value is WorkflowTestTarget =>
+    Boolean(
+      value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        String((value as Record<string, unknown>).label || '').trim()
+    )
   )
 }
 
@@ -392,7 +389,7 @@ function revisionDraftInteractionSubmission(
 }
 
 /** 把 TechnicalPlan 原生确认卡转换为 planning Graph 的结构化恢复动作。 */
-function technicalPlanConfirmationSubmission(
+export function technicalPlanConfirmationSubmission(
   workflow: WorkflowRunPayload,
   answers: ClarificationAnswers,
   request: string
@@ -416,22 +413,23 @@ function technicalPlanConfirmationSubmission(
     typeof value === 'string'
       ? value.trim().toLowerCase()
       : value && typeof value === 'object' && !Array.isArray(value) && 'selected' in value
-        ? String((value as { selected?: unknown }).selected || '').trim().toLowerCase()
+        ? String((value as { selected?: unknown }).selected || '')
+            .trim()
+            .toLowerCase()
         : ''
-  const action =
-    [
-      'confirm',
-      '确认',
-      'yes',
-      '是',
-      '正确',
-      '正确，继续',
-      '正确,继续',
-      '继续',
-      '确认当前版本'
-    ].includes(selected)
-      ? 'confirm'
-      : 'revise'
+  const action = [
+    'confirm',
+    '确认',
+    'yes',
+    '是',
+    '正确',
+    '正确，继续',
+    '正确,继续',
+    '继续',
+    '确认当前版本'
+  ].includes(selected)
+    ? 'confirm'
+    : 'revise'
   return {
     gateId,
     artifact: 'technical_plan',
@@ -442,7 +440,9 @@ function technicalPlanConfirmationSubmission(
 }
 
 /** 为草稿结构化动作生成历史消息，实际执行语义仍只来自 revisionInteraction。 */
-function revisionDraftInteractionMessage(action: WorkflowRevisionDraftInteraction['action']): string {
+function revisionDraftInteractionMessage(
+  action: WorkflowRevisionDraftInteraction['action']
+): string {
   return {
     save: '保存当前正式产物草稿。',
     revise: '已提交草稿修改意见，请重新生成当前草稿。',
@@ -575,14 +575,12 @@ export function useWorkflowConversation({
       acceptanceConversationSessionKey && activeSession?.key === acceptanceConversationSessionKey
         ? activeSession
         : undefined
-    const sessionIdentity = acceptanceConversationSession ||
+    const sessionIdentity =
+      acceptanceConversationSession ||
       (isConversationWorkflow(activeWorkflow) && matchingActiveSession
         ? matchingActiveSession
         : selectedEntityId
-          ? await ensureEntitySession(
-              selectedEntityId,
-              selectedEntityLabel || selectedEntityId
-            )
+          ? await ensureEntitySession(selectedEntityId, selectedEntityLabel || selectedEntityId)
           : selectedApiContractId && selectedEndpointId
             ? await ensureEndpointSession(
                 selectedApiContractId,
@@ -612,9 +610,7 @@ export function useWorkflowConversation({
           : undefined,
       selectedSkills,
       selectedPageId:
-        selectedEntityId || (selectedApiContractId && selectedEndpointId)
-          ? ''
-          : selectedPageId,
+        selectedEntityId || (selectedApiContractId && selectedEndpointId) ? '' : selectedPageId,
       sessionIdentity,
       titleFrom: message,
       workflowDebug,
@@ -844,8 +840,7 @@ export function useWorkflowConversation({
         resumeState: options?.resumeState,
         pageTemplate: options?.pageTemplate,
         conversation: options?.conversation,
-        conversationTarget:
-          options?.conversationTarget || conversationTargetFromIdentity(identity),
+        conversationTarget: options?.conversationTarget || conversationTargetFromIdentity(identity),
         conversationApprovedPaths: options?.conversationApprovedPaths,
         conversationHandoffDecision: options?.conversationHandoffDecision,
         conversationImpactInteractionId: options?.conversationImpactInteractionId,
@@ -1049,7 +1044,11 @@ export function useWorkflowConversation({
       : workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId
     const continuationEntityId =
       workflowSelectedEntityId(workflow) || activeSession?.entityId || selectedEntityId
-    if (conversation && clarificationMode === 'revision_impact_confirmation' && revisionSubmission) {
+    if (
+      conversation &&
+      clarificationMode === 'revision_impact_confirmation' &&
+      revisionSubmission
+    ) {
       const { impact, decision } = revisionSubmission
       if (decision === 'rejected') {
         return sendWorkflowMessage('用户已取消本次正式修改，当前正式产物保持不变。', {
@@ -1123,8 +1122,7 @@ export function useWorkflowConversation({
       technicalPlanInteraction
     ) {
       if (loading || workspaceBusy) return false
-      const confirmationMessage =
-        technicalPlanInteraction.request || '确认当前 TechnicalPlan。'
+      const confirmationMessage = technicalPlanInteraction.request || '确认当前 TechnicalPlan。'
       return sendWorkflowMessage(confirmationMessage, {
         originalRequest: originalRequest || confirmationMessage,
         workflowScope: 'application_planning',
@@ -1413,24 +1411,21 @@ export function useWorkflowConversation({
   ): Promise<boolean> => {
     if (!selectedPageId || loading || workspaceBusy) return false
     const identity = await ensurePageSession(selectedPageId, pageLabel)
-    return sendWorkflowMessage(
-      `开始开发页面：${pageLabel}`,
-      {
-        selectedPageId,
-        detailTargetType: 'page',
-        sessionIdentity: identity,
-        titleFrom: `开发页面：${pageLabel}`,
-        ...(templateParams?.templateSourcePath
-          ? {
-              pageTemplate: {
-                id: templateParams.templateId,
-                name: templateParams.templateName,
-                sourcePath: templateParams.templateSourcePath
-              }
+    return sendWorkflowMessage(`开始开发页面：${pageLabel}`, {
+      selectedPageId,
+      detailTargetType: 'page',
+      sessionIdentity: identity,
+      titleFrom: `开发页面：${pageLabel}`,
+      ...(templateParams?.templateSourcePath
+        ? {
+            pageTemplate: {
+              id: templateParams.templateId,
+              name: templateParams.templateName,
+              sourcePath: templateParams.templateSourcePath
             }
-          : {})
-      }
-    )
+          }
+        : {})
+    })
   }
 
   /** 以用户选择的具体 endpoint 作为开发就绪检查起点。 */
@@ -1446,23 +1441,20 @@ export function useWorkflowConversation({
       target.endpointId,
       target.endpointLabel
     )
-    return sendWorkflowMessage(
-      `开始开发接口：${target.endpointLabel}`,
-      {
-        selectedApiContractId: target.apiContractId,
-        selectedEndpointId: target.endpointId,
-        selectedPageId: '',
-        detailTargetType: 'endpoint',
-        buildExecutionScope: {
-          type: 'endpoint',
-          targetId: target.endpointId,
-          apiContractId: target.apiContractId
-        },
-        endpointLabel: target.endpointLabel,
-        sessionIdentity: identity,
-        titleFrom: `开发接口：${target.endpointLabel}`
-      }
-    )
+    return sendWorkflowMessage(`开始开发接口：${target.endpointLabel}`, {
+      selectedApiContractId: target.apiContractId,
+      selectedEndpointId: target.endpointId,
+      selectedPageId: '',
+      detailTargetType: 'endpoint',
+      buildExecutionScope: {
+        type: 'endpoint',
+        targetId: target.endpointId,
+        apiContractId: target.apiContractId
+      },
+      endpointLabel: target.endpointLabel,
+      sessionIdentity: identity,
+      titleFrom: `开发接口：${target.endpointLabel}`
+    })
   }
 
   /** 以用户选择的实体作为独立 EntitySourceBinding 起点。 */

@@ -1771,6 +1771,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                                     "path": "frontend/src/pages/DashboardPage/index.tsx",
                                 }
                             ],
+                            "deliverables": [
+                                {
+                                    "id": "page:dashboard_page",
+                                    "kind": "frontend.page",
+                                    "target_id": "dashboard_page",
+                                    "paths": ["frontend/src/pages/DashboardPage/index.tsx"],
+                                    "provides": ["dashboard_page.render"],
+                                }
+                            ],
                         }
                     ]
                 },

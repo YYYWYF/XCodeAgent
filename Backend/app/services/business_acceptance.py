@@ -116,6 +116,7 @@ def business_acceptance_contract_errors(
     task: dict[str, Any],
     *,
     allow_missing_deliverable: bool = False,
+    context: dict[str, Any] | None = None,
 ) -> list[str]:
     """校验交付物、业务检查、路径和来源是否满足当前 DAG 契约。"""
 
@@ -170,10 +171,9 @@ def business_acceptance_contract_errors(
             if normalized_key in owned_paths:
                 errors.append(f"Task {task_id} assigns path {path} to multiple deliverables.")
             owned_paths.add(normalized_key)
-        if kind == "frontend.page":
-            errors.extend(_page_deliverable_errors(task, deliverable))
         if kind == "backend.endpoint_controller":
             errors.extend(_endpoint_deliverable_errors(task, deliverable))
+    errors.extend(_page_deliverable_errors(task, deliverables, context or {}))
 
     source_refs = _dict_value(task.get("source_refs"))
     entity_ids = set(_string_list(source_refs.get("entity_ids")))
@@ -914,28 +914,59 @@ def _expected_field_errors(check_id: str, kind: str, value: Any) -> list[str]:
     ]
 
 
-def _page_deliverable_errors(task: dict[str, Any], deliverable: dict[str, Any]) -> list[str]:
-    """校验页面交付物包含当前页面入口。"""
+def _page_deliverable_errors(
+    task: dict[str, Any], deliverables: list[dict[str, Any]], context: dict[str, Any]
+) -> list[str]:
+    """校验页面 Unit 唯一交付物完整声明平台给定的页面入口。"""
 
     unit_id = _text(task.get("unit_id"))
-    page_id = unit_id.split(":", 1)[1] if unit_id.startswith("page:") else _text(deliverable.get("target_id"))
-    if not page_id:
+    if not unit_id.startswith("page:"):
         return []
-    expected_keys = {_page_key(page_id).casefold()}
-    # 既有 React 模板同时使用 ``Orders`` 和 ``OrdersPage`` 目录命名，
-    # 校验只接受这两个由当前 PageKey 确定的形式，不依赖宿主系统大小写策略。
-    expected_keys.add(f"{_page_key(page_id)}Page".casefold())
-    if not any(
-        "/pages/" in f"/{normalize_repo_path(path).casefold()}/"
-        and normalize_repo_path(path).casefold().endswith("/index.tsx")
-        and any(
-            f"/pages/{expected}/" in f"/{normalize_repo_path(path).casefold()}/"
-            for expected in expected_keys
-        )
-        for path in deliverable.get("paths", [])
-    ):
+    page_id = unit_id.split(":", 1)[1]
+    page_deliverables = [item for item in deliverables if item.get("kind") == "frontend.page"]
+    if not page_deliverables:
+        return []
+    if len(page_deliverables) != 1:
+        return [f"Page Unit {unit_id} must declare exactly one frontend.page deliverable."]
+    expected_paths, strict_path = _page_entry_paths(page_id, context)
+    deliverable = page_deliverables[0]
+    declared_paths = {normalize_repo_path(path) for path in deliverable.get("paths", [])}
+    expected_path = expected_paths[0]
+    if not any(path in declared_paths for path in expected_paths):
         return [f"Page deliverable {deliverable['id']} must include the {page_id} page entry."]
-    return []
+    if not strict_path:
+        return []
+    change_paths = {
+        normalize_repo_path(item.get("path"))
+        for item in _dict_items(task.get("change_scope"))
+    }
+    allowed_paths = {normalize_repo_path(path) for path in _string_list(task.get("allowed_paths"))}
+    errors: list[str] = []
+    if expected_path not in change_paths:
+        errors.append(f"Page task {task.get('id')} must include {expected_path} in change_scope.")
+    if expected_path not in allowed_paths:
+        errors.append(f"Page task {task.get('id')} must include {expected_path} in allowed_paths.")
+    return errors
+
+
+def _page_entry_paths(page_id: str, context: dict[str, Any]) -> tuple[list[str], bool]:
+    """优先使用 TargetBuildContext 的 page_key，兼容无精确上下文的既有页面目录。"""
+
+    target = _dict_value(context.get("target"))
+    page_key = (
+        _text(target.get("page_key"))
+        if target.get("type") == "page" and _text(target.get("id")) == page_id
+        else ""
+    )
+    if page_key:
+        return [f"frontend/src/pages/{page_key}/index.tsx"], True
+    fallback_key = _page_key(page_id)
+    return [
+        f"frontend/src/pages/{fallback_key}/index.tsx",
+        f"frontend/src/pages/{fallback_key}Page/index.tsx",
+        f"src/pages/{fallback_key}/index.tsx",
+        f"src/pages/{fallback_key}Page/index.tsx",
+    ], False
 
 
 def _endpoint_deliverable_errors(task: dict[str, Any], deliverable: dict[str, Any]) -> list[str]:

@@ -17,6 +17,7 @@ import {
   readWorkspaceInspectionSnapshot
 } from '../src/renderer/src/service/agUiAgent'
 import { revisionContinuationFromWorkflow } from '../src/renderer/src/service/applicationPagePlanning'
+import { technicalPlanConfirmationSubmission } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
 import ApplicationPlanningQuestionPanel from '../src/renderer/src/components/Welcome/ApplicationPlanningQuestionPanel'
 import { ToolCallChain } from '../src/renderer/src/components/AiChatPanel/components/ToolCallCard'
@@ -27,6 +28,7 @@ import {
 import { workflowDebugBuildScope } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
 import WorkflowRunCard, {
   buildToolActivityPlacement,
+  PlanConfirmationCard,
   workflowOriginalRequest
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import { workflowInteractionAvailability } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
@@ -1915,6 +1917,68 @@ test('技术规划确认不依赖 Markdown confirmationArtifact 也能展示结�
   assert.match(markup, /开发技术规划/)
   assert.match(markup, /React/)
   assert.doesNotMatch(markup, /结构化数据暂不可用/)
+})
+
+test('技术规划确认卡展示修改入口，其他计划确认保持原有放弃入口', () => {
+  const technicalMarkup = renderToStaticMarkup(
+    createElement(PlanConfirmationCard, {
+      disabled: false,
+      onAbandon: () => undefined,
+      onConfirm: () => undefined,
+      onRevise: () => undefined,
+      plan: { artifact_type: 'technical-plan', architecture: {}, entities: [], api_contracts: [], pages: [] },
+      planType: 'technical',
+      requiresConfirmation: true,
+      title: '技术规划'
+    })
+  )
+  const projectMarkup = renderToStaticMarkup(
+    createElement(PlanConfirmationCard, {
+      disabled: false,
+      onAbandon: () => undefined,
+      onConfirm: () => undefined,
+      onRevise: () => undefined,
+      plan: { app: { name: '测试应用' } },
+      planType: 'project',
+      requiresConfirmation: true,
+      title: '项目计划'
+    })
+  )
+
+  assert.match(technicalMarkup, /修\s*改/)
+  assert.doesNotMatch(technicalMarkup, /放\s*弃/)
+  assert.match(projectMarkup, /放\s*弃/)
+})
+
+test('技术规划修改意见映射为 revise 并保留原始请求', () => {
+  const workflow = {
+    runId: 'technical-plan-revision-submission',
+    threadId: 'technical-plan-revision-submission-thread',
+    summary: { status: 'requires_user_input' },
+    events: [],
+    state: {
+      application_planning_interrupt: {
+        gateId: 'technical_plan:current-revision',
+        artifactRevision: 'current-revision',
+        clarification: { mode: 'technical_plan_confirmation' }
+      }
+    },
+    result: {}
+  }
+
+  const submission = technicalPlanConfirmationSubmission(
+    workflow,
+    { technical_plan_confirmation: '为订单列表补充分页 API。' },
+    '为订单列表补充分页 API。'
+  )
+
+  assert.deepEqual(submission, {
+    gateId: 'technical_plan:current-revision',
+    artifact: 'technical_plan',
+    artifactRevision: 'current-revision',
+    action: 'revise',
+    request: '为订单列表补充分页 API。'
+  })
 })
 
 test('Electron 会话持久化保留 Agent 步骤、检查清单和工具调用', () => {

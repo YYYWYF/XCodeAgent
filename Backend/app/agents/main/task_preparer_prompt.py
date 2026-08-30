@@ -120,7 +120,7 @@ def build_task_preparation_prompt(
             prompt_context,
             validation_feedback,
         ),
-        _task_rules_section(mode, source_types),
+        _task_rules_section(mode, source_types, prompt_context),
         _dependency_rules_section(source_types),
         _forbidden_output_section(mode, source_types),
         _workspace_context_section(snapshot, prompt_context, project_plan),
@@ -204,7 +204,13 @@ def _planning_algorithm_section(
 ) -> str:
     """生成按 Unit 和数据源执行的确定性候选任务规划步骤。"""
 
-    rules = ["Read the effective planning Unit IDs and process each Unit exactly once."]
+    rules = [
+        "Read the effective planning Unit IDs and process each Unit exactly once.",
+        "`frontend:route-registry` is platform-owned: never emit that Unit, never modify "
+        "`frontend/src/constants/resources.ts` or `frontend/src/constants/routes.tsx`, and "
+        "never depend on a route-registry task. The platform writes those auth template files "
+        "before any Agent task starts.",
+    ]
     planning_units = {
         str(unit_id)
         for unit_id in build_context.get("planning_unit_ids")
@@ -312,7 +318,9 @@ def _planning_algorithm_section(
     return "## 3. Planning Algorithm\n" + "\n".join(numbered_rules)
 
 
-def _task_rules_section(mode: str, source_types: set[str]) -> str:
+def _task_rules_section(
+    mode: str, source_types: set[str], build_context: dict[str, Any]
+) -> str:
     """生成变更范围语义和路径边界规则。"""
 
     fragments = [
@@ -335,10 +343,21 @@ def _task_rules_section(mode: str, source_types: set[str]) -> str:
     if mode in {"page", "combined", "static"} or "static" in source_types:
         fragments.append("All frontend paths are under `/frontend/`.")
     if mode in {"page", "combined", "static"}:
+        target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
+        page_id = str(target.get("id") or "").strip()
+        page_key = str(target.get("page_key") or "").strip()
         fragments.append(
-            "The existing page entry uses the exact TargetBuildContext.target.page_key at "
-            "`frontend/src/pages/<PageKey>/index.tsx`."
+            "For every page:* Unit, declare exactly one frontend.page deliverable. Its page "
+            "entry path must appear identically in change_scope, allowed_paths, and "
+            "deliverables[].paths. This is the business page implementation, never a route "
+            "or placeholder task."
         )
+        if page_id and page_key:
+            fragments.append(
+                f"For page:{page_id}, the exact required entry is "
+                f"`frontend/src/pages/{page_key}/index.tsx`; create it with operation=add "
+                "when it is absent from WorkspaceSnapshot."
+            )
     if source_types & _ENDPOINT_BACKEND_SOURCE_TYPES:
         fragments.append(
             "All backend business source paths are under `/backend/src/main/java/` or "
