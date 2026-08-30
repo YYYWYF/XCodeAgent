@@ -315,6 +315,40 @@ class BuildSchedulerTests(unittest.TestCase):
         self.assertEqual(results[0]["failure_category"], "acceptance_verification_failed")
         self.assertIn("frontend/src/apis/pageApi.ts", results[0]["failure_reason"])
 
+    def test_completed_without_authorized_changes_becomes_already_satisfied(self) -> None:
+        """幂等任务无写入时必须按当前磁盘状态验收，而不是强制伪造差异。"""
+
+        task = {
+            "id": "backend-bootstrap",
+            "owner": "backend",
+            "change_scope": [
+                {"operation": "modify", "path": "backend/pom.xml"},
+                {
+                    "operation": "modify",
+                    "path": "backend/src/main/resources/application.yml",
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            (root / "backend/pom.xml").parent.mkdir(parents=True)
+            (root / "backend/pom.xml").write_text("<project />", encoding="utf-8")
+            config = root / "backend/src/main/resources/application.yml"
+            config.parent.mkdir(parents=True)
+            config.write_text("spring: {}\n", encoding="utf-8")
+            results = verify_task_file_changes(
+                results=[{"task_id": "backend-bootstrap", "status": "completed"}],
+                code_change_set=None,
+                tasks=[task],
+                workspace_root=workspace,
+            )
+
+        self.assertEqual(results[0]["status"], "already_satisfied")
+        self.assertEqual(results[0]["scheduler_decision"]["action"], "complete")
+        self.assertTrue(
+            all(item["status"] == "passed" for item in results[0]["acceptance_evidence"])
+        )
+
     def test_completed_rejects_wrong_change_type_and_batch_scope_violation(self) -> None:
         """文件操作类型不符或批次越权时，任务不得标记完成。"""
 

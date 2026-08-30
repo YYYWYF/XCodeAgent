@@ -378,9 +378,13 @@ def verify_task_file_changes(
         attributed_paths = [
             path for path in changed_paths if _path_matches_any(path, authorized_paths)
         ]
+        status = _normalize_noop_completed_status(
+            status=str(status),
+            attributed_paths=attributed_paths,
+        )
         acceptance_evidence, acceptance_errors = verify_engineering_acceptance(
             task=task,
-            status=str(status),
+            status=status,
             code_change_set=code_change_set,
             workspace_root=workspace_root,
             batch_unauthorized_paths=batch_unauthorized_paths,
@@ -408,6 +412,17 @@ def verify_task_file_changes(
             verified_result["scheduler_decision"] = classify_task_result(verified_result)
         verified.append(verified_result)
     return verified
+
+
+def _normalize_noop_completed_status(*, status: str, attributed_paths: list[str]) -> str:
+    """将无授权范围差异的 completed 收敛为由磁盘验证的已满足状态。"""
+
+    # Bootstrap 等幂等任务可能检查后确认现有工程已满足而不写入文件。
+    # 此时不能按 completed 强制要求虚假的 modified 差异；后续仍会以
+    # already_satisfied 路径逐项检查目标文件及其他工程验收条件。
+    if status == "completed" and not attributed_paths:
+        return "already_satisfied"
+    return status
 
 
 def attribute_task_file_changes(
