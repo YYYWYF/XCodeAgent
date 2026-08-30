@@ -195,7 +195,7 @@ test('简单模式等待补充时直接展示问题并隐藏步骤标题和图�
   assert.doesNotMatch(markup, /process-step-icon/)
 })
 
-test('简单模式 formal revision 影响确认显示为等待输入', () => {
+test('简单模式 formal revision 只让确认卡等待，分类步骤显示为完成', () => {
   const workflow = {
     runId: 'direct-planning-run',
     threadId: 'direct-thread',
@@ -210,24 +210,28 @@ test('简单模式 formal revision 影响确认显示为等待输入', () => {
   const waitingForInput = isConversationWaitingForInput(workflow)
   const markup = renderToStaticMarkup(
     createElement(ProcessSteps, {
+      conversation: true,
       loading: false,
       waitingForInput,
       steps: [
         {
           id: 'direct:classify_intent',
           kind: 'workflow',
-          status: 'requires_user_input',
-          title: '等待输入 识别修改意图',
+          status: 'completed',
+          title: '已完成 判断修改类型',
           detail: '该需求需要正式设计工作流。',
-          sequence: 10
+          sequence: 10,
+          nodeName: 'classify_intent'
         }
       ]
     })
   )
 
   assert.equal(waitingForInput, true)
-  assert.match(markup, /Agent 等待补充/)
-  assert.match(markup, /请补充输入/)
+  assert.match(markup, /等待你的确认/)
+  assert.match(markup, /已完成判断修改类型/)
+  assert.doesNotMatch(markup, /等待确认 · 判断修改类型/)
+  assert.doesNotMatch(markup, /整理结果/)
 })
 
 test('简单模式等待补充后仍复用独立端点', () => {
@@ -973,6 +977,43 @@ test('工作区检查快照过滤绝对路径并渲染默认展开的科技感�
   assert.match(markup, /代码图暂不可用/)
   assert.ok((markup.match(/ open=""/g) || []).length >= 2)
   assert.doesNotMatch(markup, /private\/workspace|snapshot\.json/)
+})
+
+test('二次修改的工作区扫描完成后默认收起大图', () => {
+  const snapshot = readWorkspaceInspectionSnapshot({
+    schemaVersion: '1.0.0',
+    revision: 'revision-direct-scan',
+    cacheHit: true,
+    fileManifest: { totalFiles: 128, sourceFiles: 96, truncated: false },
+    techStack: ['FastAPI', 'React'],
+    projectRoots: [{ path: 'Backend/app', kind: 'backend' }],
+    entrypoints: [{ path: 'Frontend/src/renderer/src/main.tsx', kind: 'frontend_renderer' }],
+    codeGraph: { provider: 'none', available: false }
+  })
+  assert.ok(snapshot)
+
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      conversation: true,
+      loading: false,
+      steps: [
+        {
+          id: 'direct:scan_workspace_code',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 扫描工作区代码',
+          detail: '已索引 128 个文件',
+          sequence: 1,
+          nodeName: 'scan_workspace_code',
+          workspaceInspection: snapshot
+        }
+      ]
+    })
+  )
+
+  assert.match(markup, /扫描工作区代码/)
+  assert.match(markup, /WORKSPACE SCAN/)
+  assert.equal((markup.match(/ open=""/g) || []).length, 1)
 })
 
 test('AG-UI 工作区完成帧解析并保留结构化扫描结果', async () => {
@@ -2317,6 +2358,26 @@ test('会话恢复保留有效的二次修改交接回执并拒绝残缺回执',
     }
   })
   assert.equal((development.revisionHandoff as Record<string, unknown>).changeId, 'change-1')
+
+  const developmentEntry = normalizePersistentSessionMessage({
+    id: 31,
+    role: 'assistant',
+    content: '',
+    createdAt: 31,
+    revisionHandoff: {
+      kind: 'revision_development_entry',
+      formalBranch: 'design_stage_revision',
+      targetSessionId: 'development-session',
+      targetConversationThreadId: 'development-thread',
+      impactInteractionId: 'impact-1',
+      changeId: 'change-1',
+      request: '新增报表页'
+    }
+  })
+  assert.equal(
+    (developmentEntry.revisionHandoff as Record<string, unknown>).kind,
+    'revision_development_entry'
+  )
 
   const planning = normalizePersistentSessionMessage({
     id: 4,

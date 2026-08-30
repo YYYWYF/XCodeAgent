@@ -825,6 +825,35 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(_route_classification(continued), "execute_frontend")
         self.assertEqual(_route_scan_workspace({"status": "completed"}), "classify_intent")
 
+    def test_confirmation_gate_completes_classification_step(self) -> None:
+        """分类成功生成独立确认卡时，分类步骤自身必须显示为完成。"""
+
+        step = direct_node_process_step(
+            "classify_intent",
+            {
+                "status": "requires_user_input",
+                "message": "该请求会修改已确认的正式语义，请确认是否进入正式修改流程。",
+                "clarification": {
+                    "mode": "revision_impact_confirmation",
+                    "status": "requires_user_input",
+                },
+            },
+        )
+
+        self.assertEqual(step["status"], "completed")
+        self.assertEqual(step["title"], "已完成 判断修改类型")
+
+    def test_progress_payload_can_hide_internal_process_step(self) -> None:
+        """内部收尾仍可更新状态和事件，但不得强制生成用户可见步骤。"""
+
+        payload = direct_progress_payload(
+            {"status": "requires_user_input", "phase": "conversation"},
+            events=[],
+            process_step=None,
+        )
+
+        self.assertNotIn("processStep", payload)
+
     def test_frontend_execution_uses_real_workspace_diff(self) -> None:
         """前端阶段以工作区快照为权威变更清单。"""
 
@@ -1393,7 +1422,7 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(next_node, "classify_intent")
         self.assertNotEqual(running_step["id"], completed_step["id"])
         self.assertEqual(running_step["status"], "running")
-        self.assertEqual(running_step["title"], "正在执行 识别对话意图")
+        self.assertEqual(running_step["title"], "正在执行 判断修改类型")
         self.assertEqual(completed_step["status"], "completed")
 
     def test_preserves_route_requires_code_scan_before_owner_execution(self) -> None:
@@ -1822,7 +1851,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
             captured_states[0]["direct_modification_resume_node"],
             "scan_change_impact_code",
         )
-        self.assertNotIn("识别对话意图", frames)
+        self.assertNotIn("判断修改类型", frames)
         self.assertIn("取得目标代码证据", frames)
 
     def test_stream_rejected_revision_impact_finishes_without_scan_or_error(self) -> None:
@@ -1911,7 +1940,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
         )
         self.assertIn("已取消本次正式修改", frames)
         self.assertNotIn("扫描工作区代码", frames)
-        self.assertNotIn("识别对话意图", frames)
+        self.assertNotIn("判断修改类型", frames)
         self.assertNotIn("RUN_ERROR", frames)
         self.assertNotIn("执行失败", frames)
 
@@ -2125,6 +2154,79 @@ class DirectModificationProtocolTests(unittest.TestCase):
         self.assertEqual(text_deltas, ["我是 XCodeAgent。"])
         self.assertEqual(reported, [])
 
+    def test_stream_hides_pending_finalizer_process_step(self) -> None:
+        """正式修改待确认时只展示已完成的分类步骤，不展示内部收尾步骤。"""
+
+        waiting_state = {
+            "phase": "conversation",
+            "status": "requires_user_input",
+            "message": "该请求会修改已确认的正式语义，请确认是否进入正式修改流程。",
+            "conversation_intent": "formal_revision",
+            "direct_modification_owner": "none",
+            "direct_modification_scope": "formal",
+            "clarification": {
+                "mode": "revision_impact_confirmation",
+                "status": "requires_user_input",
+                "message": "该请求会修改已确认的正式语义，请确认是否进入正式修改流程。",
+            },
+            "direct_modification_result": {
+                "status": "requires_user_input",
+                "summary": "该请求会修改已确认的正式语义，请确认是否进入正式修改流程。",
+            },
+        }
+
+        class FakeGraph:
+            """提供正式修改待确认投影测试所需的最小 Graph。"""
+
+            async def astream(self, *_args, **_kwargs):
+                """依次发送分类确认与内部收尾更新。"""
+
+                yield "updates", {"classify_intent": waiting_state}
+                yield "updates", {"finalize_direct_modification": waiting_state}
+
+            async def aget_state(self, _config):
+                """返回与更新一致的待确认终态。"""
+
+                return SimpleNamespace(values=waiting_state)
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.protocols.direct_modification.direct_modification_graph_for_request",
+                    new=AsyncMock(return_value=FakeGraph()),
+                ),
+                patch(
+                    "app.protocols.direct_modification.cleanup_workflow_checkpoints",
+                    new=AsyncMock(return_value=0),
+                ),
+            ):
+                stream = build_conversation_ag_ui_stream(
+                    payload={
+                        "threadId": "formal-wait-thread",
+                        "runId": "formal-wait-run",
+                        "messages": [
+                            {"id": "message-1", "role": "user", "content": "删除订单导出功能"}
+                        ],
+                        "forwardedProps": {
+                            "conversation": {
+                                "workspaceRoot": workspace,
+                                "selectedSkillNames": [],
+                            }
+                        },
+                    }
+                )
+
+                async def collect() -> str:
+                    """消费正式修改待确认事件流。"""
+
+                    return "".join([frame async for frame in stream])
+
+                frames = asyncio.run(collect())
+
+        self.assertIn('direct:classify_intent', frames)
+        self.assertNotIn('direct:finalize_direct_modification', frames)
+        self.assertIn('已完成 判断修改类型', frames)
+
     def test_stream_emits_complete_ag_ui_lifecycle(self) -> None:
         """独立 Graph 结果必须发送自定义事件、快照和正常完成事件。"""
 
@@ -2231,7 +2333,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
         self.assertIn("RUN_STARTED", frames)
         self.assertIn("STATE_SNAPSHOT", frames)
         self.assertIn("RUN_FINISHED", frames)
-        self.assertIn("正在执行 识别对话意图", frames)
+        self.assertIn("正在执行 判断修改类型", frames)
         self.assertNotIn("启动本地预览", frames)
         self.assertLess(
             frames.index("正在执行 执行前端修改"),

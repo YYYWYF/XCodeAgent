@@ -12,7 +12,7 @@ from app.services.direct_modification import direct_state_message
 
 
 DIRECT_NODE_LABELS = {
-    "classify_intent": "识别对话意图",
+    "classify_intent": "判断修改类型",
     "scan_change_impact_code": "取得目标代码证据",
     "scan_workspace_code": "扫描工作区代码",
     "respond_conversation": "生成对话回复",
@@ -43,7 +43,7 @@ def direct_progress_payload(
     state: dict[str, Any],
     *,
     events: list[dict[str, Any]],
-    process_step: dict[str, Any],
+    process_step: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """构造可被现有会话组件消费的快速修改增量投影。"""
 
@@ -54,7 +54,7 @@ def direct_progress_payload(
         "state": public_direct_state(state),
         "result": state.get("direct_modification_result", {}),
         "codeChanges": state.get("code_changes", {}),
-        "processStep": process_step,
+        **({"processStep": process_step} if process_step is not None else {}),
     }
 
 
@@ -289,6 +289,19 @@ def direct_node_status(node_name: str, update: dict[str, Any]) -> str:
     status = str(update.get("status") or "")
     if status == "failed":
         return "failed"
+    clarification = update.get("clarification")
+    clarification_mode = (
+        str(clarification.get("mode") or "")
+        if isinstance(clarification, dict)
+        else ""
+    )
+    # 分类节点已经成功决定修改路径时，等待职责属于独立确认卡，不能把分类本身也显示成确认门。
+    if node_name == "classify_intent" and clarification_mode in {
+        "implementation_fix_confirmation",
+        "revision_impact_confirmation",
+        "small_task_scope_confirmation",
+    }:
+        return "completed"
     if status in {"requires_user_input", "requires_planning"} and node_name != "launch_project":
         return "requires_user_input"
     return "completed"

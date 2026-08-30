@@ -288,6 +288,8 @@ export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): Workbenc
   // 影响范围刚批准但原 planning Graph 尚未写回 initialization stage 时，
   // active formal revision 已是更及时的恢复事实，不能短暂回落到开发阶段。
   const activeFormalRevision = lifecycle.activeFormalRevision
+  // TechnicalPlan 已确认且 continuation 已签发时，过时的 initialization 不能再把界面锁回规划。
+  if (activeFormalRevision?.status === 'continuation_ready') return 'development'
   if (
     activeFormalRevision?.formalBranch === 'design_stage_revision' &&
     activeFormalRevision.status === 'design_planning'

@@ -236,6 +236,10 @@ class ApplicationDesignConversationTests(unittest.TestCase):
 
         update = design_node_update(
             {
+                "revision_continuation": {
+                    "changeId": "old-change",
+                    "token": "old-continuation-token",
+                },
                 "design_change_request": "新增报表页",
                 "design_change_target": "requirements",
                 "design_change_reason": "页面清单发生变化",
@@ -256,6 +260,7 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         self.assertEqual(update["design_change_request"], "新增报表页")
         self.assertEqual(update["design_change_target"], "requirements")
         self.assertEqual(update["design_change_generation_target"], "requirements")
+        self.assertEqual(update["revision_continuation"], {})
         self.assertFalse(
             update["design_change_existing_artifacts"]["technical_planning"]
         )

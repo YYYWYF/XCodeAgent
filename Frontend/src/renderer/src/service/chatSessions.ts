@@ -32,7 +32,11 @@ export type ChatSessionMessage = {
 };
 
 export type ChatSessionRevisionHandoff = {
-  kind: 'formal_revision' | 'revision_planning' | 'revision_development';
+  kind:
+    | 'formal_revision'
+    | 'revision_planning'
+    | 'revision_development'
+    | 'revision_development_entry';
   formalBranch: WorkflowFormalRevisionBranch;
   targetSessionId: string;
   targetConversationThreadId: string;
@@ -122,6 +126,8 @@ export type CreateChatSessionInput = {
   entityLabel?: string;
   pageId?: string;
   revisionContext?: ChatSessionRevisionContext;
+  /** 仅用于恢复已消费 continuation 但本地会话缺失的工作台 execution。 */
+  recoveryExecutionRunId?: string;
 };
 
 export type SessionWorkspaceSummary = {
@@ -248,7 +254,14 @@ function normalizeRevisionSessionHandoff(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const handoff = value as Partial<ChatSessionRevisionHandoff>;
   const kind = String(handoff.kind || '');
-  if (!['formal_revision', 'revision_planning', 'revision_development'].includes(kind)) {
+  if (
+    ![
+      'formal_revision',
+      'revision_planning',
+      'revision_development',
+      'revision_development_entry',
+    ].includes(kind)
+  ) {
     return undefined;
   }
   const formalBranch = normalizeEndpointField(handoff.formalBranch);
@@ -266,7 +279,10 @@ function normalizeRevisionSessionHandoff(
   ) {
     return undefined;
   }
-  if ((kind === 'revision_planning' || kind === 'revision_development') && !changeId) {
+  if (
+    ['revision_planning', 'revision_development', 'revision_development_entry'].includes(kind) &&
+    !changeId
+  ) {
     return undefined;
   }
   return {

@@ -4,11 +4,12 @@ import type {
 } from '../../../service/chatSessions'
 import type {
   ApplicationLifecycle,
+  WorkbenchExecution,
   WorkflowDesignStageRevisionStart,
-  WorkflowFormalRevisionBranch
+  WorkflowFormalRevisionBranch,
+  WorkflowRevisionContinuation
 } from '../../../typings'
-import type { WorkflowRevisionContinuation } from '../../../typings'
-import type { SessionIdentity } from './sessionRuntime'
+import { hasSameSessionTargetBinding, type SessionIdentity } from './sessionRuntime'
 
 /** 为一次已批准的 formal revision 创建独立前端会话身份。 */
 export function createFormalRevisionSessionContext(
@@ -52,7 +53,7 @@ export function createRevisionDevelopmentSessionContext(
   }
 }
 
-/** 按 changeId 和 TechnicalPlan 哈希寻找已创建的开发会话，供重复点击幂等复用。 */
+/** 按 changeId、TechnicalPlan 哈希和来源目标寻找本次 revision 的独立开发会话。 */
 export function revisionDevelopmentSessionForContinuation(
   sessions: ChatSessionSummary[],
   source: SessionIdentity,
@@ -66,6 +67,7 @@ export function revisionDevelopmentSessionForContinuation(
       session.workbenchPhase === 'development' &&
       session.stage === 'DEVELOPMENT' &&
       session.entryKey === entryKey &&
+      hasSameSessionTargetBinding(session, source) &&
       context?.kind === 'formal_revision' &&
       context.sessionRole === 'development' &&
       context.changeId === continuation.changeId &&
@@ -75,6 +77,61 @@ export function revisionDevelopmentSessionForContinuation(
       context.handoffFromConversationThreadId === source.threadId
     )
   })
+}
+
+/** 从当前 lifecycle 中选择尚未绑定可见会话的 continuation execution。 */
+export function recoverableRevisionDevelopmentExecution(
+  sessions: ChatSessionSummary[],
+  lifecycle: ApplicationLifecycle | undefined,
+  workflowId: string
+): WorkbenchExecution | undefined {
+  const active = lifecycle?.activeFormalRevision
+  const technicalPlanSha256 = String(active?.technicalPlanSha256 || '').trim()
+  if (
+    !active ||
+    !technicalPlanSha256 ||
+    !['building', 'failed', 'stopped'].includes(String(active.status || '')) ||
+    sessions.some(
+      (session) =>
+        session.workflowId === workflowId &&
+        session.stage === 'DEVELOPMENT' &&
+        session.revisionContext?.changeId === active.changeId &&
+        session.revisionContext.technicalPlanSha256 === technicalPlanSha256
+    )
+  ) {
+    return undefined
+  }
+  const target = active.target && typeof active.target === 'object'
+    ? (active.target as Record<string, unknown>)
+    : {}
+  const targetType = String(target.type || '')
+  const targetId = String(
+    targetType === 'page'
+      ? target.pageId || ''
+      : targetType === 'endpoint'
+        ? target.endpointId || ''
+        : targetType === 'entity'
+          ? target.entityId || ''
+          : 'application'
+  ).trim()
+  return Object.values(lifecycle.activeExecutions || {})
+    .filter(
+      (execution) =>
+        ['running', 'failed', 'stopped'].includes(execution.status) &&
+        !sessions.some((session) => session.threadId === execution.threadId) &&
+        ((targetType === 'page' &&
+          execution.scope === 'page' &&
+          (execution.pageId || execution.targetId) === targetId) ||
+          (targetType === 'endpoint' &&
+            execution.scope === 'endpoint' &&
+            execution.targetId === targetId) ||
+          (targetType === 'entity' &&
+            execution.scope === 'data_source' &&
+            execution.targetId === targetId) ||
+          (!['page', 'endpoint', 'entity'].includes(targetType) &&
+            execution.scope === 'application'))
+    )
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
 }
 
 /** 用 lifecycle 权威 active revision 为前端会话补上服务端签发的 changeId。 */
@@ -139,6 +196,27 @@ export function activeFormalRevisionStageSession(
     }
     return !context.changeId || context.changeId === active.changeId
   })
+}
+
+/** DESIGN → PLAN 交接时只接受 lifecycle 完整匹配的正式需求设计会话。 */
+export function formalRevisionPlanningSourceSession(
+  sessions: ChatSessionSummary[],
+  lifecycle: ApplicationLifecycle | undefined,
+  workflowId: string
+): ChatSessionSummary | undefined {
+  return activeFormalRevisionStageSession(sessions, lifecycle, workflowId, 'product')
+}
+
+/** continuation 到达时优先选择规划会话；规划会话缺失时退回同一 revision 的产品会话。 */
+export function formalRevisionContinuationSourceSession(
+  sessions: ChatSessionSummary[],
+  lifecycle: ApplicationLifecycle | undefined,
+  workflowId: string
+): ChatSessionSummary | undefined {
+  return (
+    activeFormalRevisionStageSession(sessions, lifecycle, workflowId, 'planning') ||
+    formalRevisionPlanningSourceSession(sessions, lifecycle, workflowId)
+  )
 }
 
 /** 根据 formal branch 返回正式修改首次进入的可见阶段。 */

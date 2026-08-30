@@ -297,7 +297,13 @@ export default function WorkflowRunCard({
   }, [workflow.threadId, clarificationFingerprint])
 
   return (
-    <div className={cx('workflow-run-card', requiresConfirmation && 'workflow-run-card-pending')}>
+    <div
+      className={cx(
+        'workflow-run-card',
+        requiresConfirmation && 'workflow-run-card-pending',
+        revisionImpact && requiresConfirmation && 'workflow-run-card-revision-impact'
+      )}
+    >
       <div className={cx('workflow-run-header')}>
         <div className={cx('workflow-run-title')}>
           <span className={cx('workflow-run-signal')} aria-hidden="true" />
@@ -312,6 +318,7 @@ export default function WorkflowRunCard({
         </Tag>
       </div>
       {workflow.summary.message &&
+        !revisionImpact &&
         !entityDesignReview &&
         !uiDesignConfirmation &&
         !planningStageEntry &&
@@ -383,7 +390,7 @@ export default function WorkflowRunCard({
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
           <div className={cx('workflow-clarification')}>
-            {!entityDesignReview && !entityDesignGate && !planningStageEntry && (
+            {!revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
               <div className={cx('workflow-clarification-header')}>
                 <div>
                   <Text strong>待确认事项</Text>

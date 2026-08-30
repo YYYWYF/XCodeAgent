@@ -12,6 +12,43 @@ export function sessionsForWorkbenchPhase<
   return sessions.filter((session) => session.workbenchPhase === phase)
 }
 
+type RestorablePhaseSession = {
+  id: string
+  workbenchPhase: WorkbenchPhase
+  pageId?: string
+  endpointId?: string
+  messageCount: number
+}
+
+/** 按显式交接、持久化选择、阶段默认值的顺序解析唯一恢复会话。 */
+export function sessionToRestoreForPhase<Session extends RestorablePhaseSession>(
+  sessions: Session[],
+  phase: WorkbenchPhase,
+  explicitSessionId?: string,
+  persistedSessionId?: string
+): Session | undefined {
+  const phaseSessions = sessionsForWorkbenchPhase(sessions, phase)
+  if (explicitSessionId) {
+    // 显式阶段交接必须 fail closed；目标缺失时不能退回旧 persisted session。
+    return phaseSessions.find((session) => session.id === explicitSessionId)
+  }
+  const persistedSession = persistedSessionId
+    ? phaseSessions.find((session) => session.id === persistedSessionId)
+    : undefined
+  if (persistedSession) return persistedSession
+
+  const shouldRestoreLatestPhaseSession = ['test', 'review', 'acceptance'].includes(phase)
+  return (
+    phaseSessions.find(
+      (session) => (session.pageId || session.endpointId) && session.messageCount > 0
+    ) ||
+    phaseSessions.find((session) => session.pageId || session.endpointId) ||
+    (shouldRestoreLatestPhaseSession
+      ? phaseSessions.find((session) => session.messageCount > 0) || phaseSessions[0]
+      : undefined)
+  )
+}
+
 /** 读取指定编辑模式和工作台阶段各自选中的会话，避免跨阶段复用最后会话。 */
 export function selectedSessionIdForPhase(
   selection: PhaseSessionSelection,

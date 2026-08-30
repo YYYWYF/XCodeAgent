@@ -616,6 +616,11 @@ def build_conversation_ag_ui_stream(
                         thread_id=thread_id,
                     )
                     events.append(event)
+                    hide_pending_finalizer = (
+                        node_name == "finalize_direct_modification"
+                        and state_view.get("status") == "requires_user_input"
+                    )
+                    # 收尾节点仍负责持久化待确认状态，但确认卡已是唯一用户交互，不再重复投影步骤。
                     await report(
                         AgUiActionProgress(
                             stage=node_name,
@@ -625,12 +630,21 @@ def build_conversation_ag_ui_stream(
                             data=direct_progress_payload(
                                 state_view,
                                 events=events,
-                                process_step=direct_node_process_step(node_name, update),
+                                process_step=(
+                                    None
+                                    if hide_pending_finalizer
+                                    else direct_node_process_step(node_name, update)
+                                ),
                             ),
                         )
                     )
                     next_node_name = direct_next_node_name(node_name, state_view)
-                    if next_node_name:
+                    # 待确认状态会在 Graph 内部经过收尾节点保存摘要；它不是新的用户可见动作。
+                    hide_next_pending_finalizer = (
+                        next_node_name == "finalize_direct_modification"
+                        and state_view.get("status") == "requires_user_input"
+                    )
+                    if next_node_name and not hide_next_pending_finalizer:
                         await _report_direct_node_started(
                             report,
                             node_name=next_node_name,

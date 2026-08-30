@@ -2,6 +2,7 @@ import { MIN_ASSISTANT_PANEL_RATIO, MIN_RIGHT_PANEL_RATIO } from './constants'
 import type {
   DevelopmentPlanningApiEndpoint,
   DevelopmentPlanningEntityOption,
+  DevelopmentPlanningPageOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeFile,
   WorkspaceCodeChangeSet
@@ -416,6 +417,33 @@ export function requiresEntitySourceBinding(
   entity: DevelopmentPlanningEntityOption | undefined
 ): boolean {
   return Boolean(entity && !entity.designed && !entity.hasDetailPlan)
+}
+
+/** 以页面详细设计文档状态判断是否需要显示开始详细设计入口。 */
+export function requiresPageDetailDesign(
+  page: DevelopmentPlanningPageOption | undefined
+): boolean {
+  return Boolean(page && !page.designed && !page.hasDetailPlan)
+}
+
+/** 页面是否已设计以工作区是否存在对应页面会话为准。 */
+export function pageDesignedBySession(
+  pageId: string,
+  sessions: ReadonlyArray<{ pageId?: string }>
+): boolean {
+  const normalizedPageId = pageId.trim()
+  return Boolean(
+    normalizedPageId &&
+      sessions.some((session) => String(session.pageId || '').trim() === normalizedPageId)
+  )
+}
+
+/** 判断待设计页面是否应显示锁定蒙层；页面已有工作区会话时不再重复引导。 */
+export function shouldShowPageDetailDesignEntry(
+  page: DevelopmentPlanningPageOption | undefined,
+  pageSessionExists: boolean
+): boolean {
+  return requiresPageDetailDesign(page) && !pageSessionExists
 }
 
 /** 以 endpoint 文档状态判断接口是否需要显示开始详细设计入口。 */

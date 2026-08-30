@@ -1,4 +1,5 @@
-import { Alert, Button, Typography } from 'antd'
+import { EditOutlined } from '@ant-design/icons'
+import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { WorkflowRevisionImpact } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -20,11 +21,24 @@ export default function RevisionImpactReview({
 }: RevisionImpactReviewProps): ReactElement {
   const designBranch = impact.formalBranch === 'design_stage_revision'
   return (
-    <section className={cx('application-revision-impact')}>
+    <section aria-label="正式修改确认" className={cx('application-revision-impact')}>
       <div className={cx('application-revision-impact-heading')}>
-        <Text strong>正式修改确认</Text>
+        <span className={cx('application-revision-impact-icon')} aria-hidden="true">
+          <EditOutlined />
+        </span>
+        <div className={cx('application-revision-impact-heading-copy')}>
+          <Text className={cx('application-revision-impact-title')} strong>
+            正式修改确认
+          </Text>
+          <Text className={cx('application-revision-impact-subtitle')} type="secondary">
+            该请求会调整已确认内容，请确认是否进入正式修改流程
+          </Text>
+        </div>
       </div>
-      <Alert description={impact.reason} message="修改原因" showIcon type="info" />
+      <div className={cx('application-revision-impact-reason')}>
+        <Text className={cx('application-revision-impact-reason-label')}>修改原因</Text>
+        <Text className={cx('application-revision-impact-reason-copy')}>{impact.reason}</Text>
+      </div>
       <div className={cx('application-revision-impact-actions')}>
         <Button disabled={disabled} onClick={() => onDecision('rejected')}>
           取消

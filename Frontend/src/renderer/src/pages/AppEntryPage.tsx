@@ -152,6 +152,53 @@ function AppEntryContent(): JSX.Element {
   const revisionContinuationByAppRef = useRef<
     Record<string, ((handoff: WorkflowRevisionContinuationHandoff) => Promise<void>) | undefined>
   >({})
+  const pendingRevisionContinuationByAppRef = useRef<
+    Record<
+      string,
+      | {
+          handoff: WorkflowRevisionContinuationHandoff
+          promise: Promise<void>
+          reject: (reason?: unknown) => void
+          resolve: () => void
+        }
+      | undefined
+    >
+  >({})
+
+  /** 将规划 Graph 签发的 continuation 转交给工作台；句柄尚未挂载时保留同一次交接。 */
+  const dispatchRevisionContinuation = useCallback(
+    (
+      applicationId: string,
+      handoff: WorkflowRevisionContinuationHandoff
+    ): Promise<void> => {
+      const handler = revisionContinuationByAppRef.current[applicationId]
+      if (handler) return handler(handoff)
+
+      const pending = pendingRevisionContinuationByAppRef.current[applicationId]
+      if (
+        pending?.handoff.continuation.changeId === handoff.continuation.changeId &&
+        pending.handoff.continuation.token === handoff.continuation.token
+      ) {
+        return pending.promise
+      }
+      pending?.reject(new Error('revision continuation 已被更新的服务端状态替代。'))
+
+      let resolvePending!: () => void
+      let rejectPending!: (reason?: unknown) => void
+      const promise = new Promise<void>((resolve, reject) => {
+        resolvePending = resolve
+        rejectPending = reject
+      })
+      pendingRevisionContinuationByAppRef.current[applicationId] = {
+        handoff,
+        promise,
+        reject: rejectPending,
+        resolve: resolvePending
+      }
+      return promise
+    },
+    []
+  )
 
   // 规划流式数据注入句柄：由工作台 AiChatPanel 注册，Modal 转发 onContent/onWorkflow 时调用，
   // 把规划流式内容注入工作台 MessageList（设计阶段产品 Agent 对话 + 工作流卡片）。
@@ -489,12 +536,9 @@ function AppEntryContent(): JSX.Element {
             window.clearTimeout(pending.timer)
             void handler(pending.input).then(pending.resolve, pending.reject)
           }}
-          onRevisionContinuation={(handoff) => {
-            const handler = revisionContinuationByAppRef.current[planning.application.id]
-            return handler
-              ? handler(handoff)
-              : Promise.reject(new Error('开发工作台尚未接管 revision continuation。'))
-          }}
+          onRevisionContinuation={(handoff) =>
+            dispatchRevisionContinuation(planning.application.id, handoff)
+          }
           onPlanningContent={(content) => {
             deliverPlanningChunk(planning.threadId, { content, workflow: undefined })
           }}
@@ -569,6 +613,10 @@ function AppEntryContent(): JSX.Element {
             }
             onRevisionContinuationHandlerChange={(handler) => {
               revisionContinuationByAppRef.current[activeApplication.id] = handler ?? undefined
+              const pending = pendingRevisionContinuationByAppRef.current[activeApplication.id]
+              if (!handler || !pending) return
+              delete pendingRevisionContinuationByAppRef.current[activeApplication.id]
+              void handler(pending.handoff).then(pending.resolve, pending.reject)
             }}
             onThemeChange={setTheme}
             onPlanningStreamReady={handlePlanningStreamReady}

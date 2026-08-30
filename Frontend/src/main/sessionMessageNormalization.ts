@@ -61,9 +61,12 @@ function cloneJsonRecord(value: unknown): JsonRecord | undefined {
 function normalizeSessionRevisionHandoff(value: unknown): JsonRecord | undefined {
   if (
     !isJsonRecord(value) ||
-    !['formal_revision', 'revision_planning', 'revision_development'].includes(
-      stringValue(value.kind)
-    )
+    ![
+      'formal_revision',
+      'revision_planning',
+      'revision_development',
+      'revision_development_entry'
+    ].includes(stringValue(value.kind))
   ) return undefined
   const formalBranch = stringValue(value.formalBranch).trim()
   const targetSessionId = stringValue(value.targetSessionId).trim().slice(0, 512)
@@ -83,7 +86,9 @@ function normalizeSessionRevisionHandoff(value: unknown): JsonRecord | undefined
     return undefined
   }
   if (
-    (value.kind === 'revision_planning' || value.kind === 'revision_development') &&
+    ['revision_planning', 'revision_development', 'revision_development_entry'].includes(
+      stringValue(value.kind)
+    ) &&
     !changeId
   ) return undefined
   return {

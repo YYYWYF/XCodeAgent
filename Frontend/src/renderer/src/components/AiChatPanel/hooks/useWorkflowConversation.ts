@@ -630,7 +630,9 @@ export function useWorkflowConversation({
     continuation: WorkflowRevisionContinuation,
     sessionIdentity: SessionIdentity
   ): Promise<boolean> => {
-    if (loading || workspaceBusy) return false
+    // continuation 绑定新 DEVELOPMENT 会话和服务端一次性 token；不能被来源规划会话
+    // 尚未收口的全局 loading/workspaceBusy 抢占。新会话并发和资源合法性分别由
+    // runningSessionsRef 与服务端 lifecycle/CAS 校验。
     return sendWorkflowMessage('TechnicalPlan 已确认，进入工作区扫描并重新生成 Build DAG。', {
       workflowAction: 'continue_revision_build',
       revisionContinuation: {

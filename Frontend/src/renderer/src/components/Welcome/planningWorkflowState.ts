@@ -274,6 +274,21 @@ export function planningWorkflowNeedsChatLoading(
   return false
 }
 
+/** 二次修改 TechnicalPlan 已确认时吞掉规划端过渡帧，避免把 checkpoint resume 误画成重新生成。 */
+export function shouldSuppressConfirmedTechnicalPlanTransitionChunk(
+  workflow: WorkflowRunPayload | undefined,
+  confirmationPending: boolean
+): boolean {
+  if (!confirmationPending) return false
+  // AG-UI 文本通常先于 workflow 快照到达；确认交接期间两者都不应创建规划消息卡。
+  if (!workflow) return true
+  return (
+    workflow.summary.status === 'running' &&
+    planningWorkflowPhase(workflow) === 'technical_planning' &&
+    !planningWorkflowRequiresUserInput(workflow)
+  )
+}
+
 // 判断权威快照是否可以回填聊天区；用户已提交新一轮时禁止复用上一轮待确认内容。
 export function shouldBackfillPlanningWorkflow(
   workflow: WorkflowRunPayload | undefined,

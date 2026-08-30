@@ -7,6 +7,7 @@ import {
   isSupersededPlanningPhaseMessage,
   isSupersededPlanningProgressMessage,
   isSupersededPlanningStageEntryMessage,
+  isSupersededTechnicalPlanTransitionMessage,
   isTemplateSupersededPlanningProgressMessage,
   latestUiDesignPreviewMessageIndex
 } from '../src/renderer/src/components/AiChatPanel/components/MessageList/uiDesignPreviewHistory'
@@ -23,7 +24,8 @@ import {
   planningWorkflowUiDesignSkipped,
   retainApplicationPlanningInterrupt,
   shouldBackfillPlanningWorkflow,
-  shouldCreatePlanningWindow
+  shouldCreatePlanningWindow,
+  shouldSuppressConfirmedTechnicalPlanTransitionChunk
 } from '../src/renderer/src/components/Welcome/planningWorkflowState'
 import type {
   ApplicationLifecycle,
@@ -36,11 +38,21 @@ import {
   bindRevisionSessionChangeId,
   createFormalRevisionSessionContext,
   createRevisionDevelopmentSessionContext,
+  formalRevisionContinuationSourceSession,
+  formalRevisionPlanningSourceSession,
   initialFormalRevisionPhase,
   planningStageTransitionKey,
   revisionDevelopmentSessionForContinuation
 } from '../src/renderer/src/components/AiChatPanel/hooks/revisionSession'
-import { createSessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
+import {
+  sessionToRestoreForPhase,
+  sessionsForWorkbenchPhase
+} from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
+import {
+  createSessionIdentity,
+  hasSameSessionTargetBinding,
+  inheritedSessionTargetBinding
+} from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import type { ChatSessionSummary } from '../src/renderer/src/service/chatSessions'
 import {
   revisionContinuationFromWorkflow,
@@ -194,6 +206,22 @@ assert.equal(
   'revision-design-thread'
 )
 assert.equal(
+  formalRevisionPlanningSourceSession(
+    [
+      {
+        ...revisionSessionBase,
+        id: 'active-but-ordinary',
+        threadId: 'ordinary-product-thread',
+        revisionContext: undefined
+      },
+      ...revisionSessionCandidates
+    ],
+    activeRevisionLifecycle,
+    'workflow-1'
+  )?.threadId,
+  'revision-design-thread'
+)
+assert.equal(
   activeFormalRevisionStageSession(
     [...revisionSessionCandidates].reverse(),
     activeRevisionLifecycle,
@@ -201,6 +229,29 @@ assert.equal(
     'planning'
   )?.threadId,
   'revision-plan-thread'
+)
+assert.equal(
+  formalRevisionContinuationSourceSession(
+    [
+      {
+        ...revisionSessionBase,
+        id: 'orphan-plan',
+        workbenchPhase: 'planning',
+        stage: 'PLAN',
+        entryKey: 'planning-entry:old-thread:old-gate',
+        threadId: 'orphan-plan-thread',
+        revisionContext: undefined
+      },
+      {
+        ...revisionSessionCandidates[3],
+        targetType: 'page',
+        pageId: 'orders'
+      }
+    ],
+    activeRevisionLifecycle,
+    'workflow-1'
+  )?.threadId,
+  'revision-design-thread'
 )
 assert.equal(initialFormalRevisionPhase('design_stage_revision'), 'product')
 assert.equal(initialFormalRevisionPhase('workbench_plan_revision'), 'planning')
@@ -267,6 +318,23 @@ assert.deepEqual(revisionContinuationHandoffFromWorkflow(continuationWorkflow), 
   continuation: continuationWorkflow.summary.revisionContinuation,
   lifecycle: continuationLifecycle
 })
+assert.equal(
+  revisionContinuationHandoffFromWorkflow({
+    ...continuationWorkflow,
+    result: {
+      lifecycle: {
+        ...continuationLifecycle,
+        activeFormalRevision: {
+          ...continuationLifecycle.activeFormalRevision,
+          changeId: 'next-change',
+          status: 'design_planning',
+          technicalPlanSha256: null
+        }
+      }
+    }
+  } as WorkflowRunPayload),
+  undefined
+)
 assert.throws(
   () =>
     revisionContinuationHandoffFromWorkflow({
@@ -298,7 +366,8 @@ const designRevisionIdentity = createSessionIdentity({
   sessionId: 'revision-design-session',
   threadId: 'revision-design-thread',
   workflowId: 'workflow-1',
-  targetType: 'workflow',
+  targetType: 'page',
+  pageId: 'orders',
   stage: 'PLAN',
   sequence: 3,
   entryKey: 'revision-plan:change-1:gate-1',
@@ -331,8 +400,64 @@ const developmentSession = {
   stage: 'DEVELOPMENT' as const,
   sequence: 1,
   entryKey: `revision-development:change-1:${'b'.repeat(64)}`,
+  targetType: 'page' as const,
+  pageId: 'orders',
   revisionContext: developmentRevisionContext
 }
+assert.deepEqual(inheritedSessionTargetBinding(designRevisionIdentity), { pageId: 'orders' })
+assert.deepEqual(
+  inheritedSessionTargetBinding({
+    ...designRevisionIdentity,
+    targetType: 'api',
+    pageId: undefined,
+    apiContractId: 'orders-api',
+    endpointId: 'list-orders',
+    endpointLabel: '查询订单'
+  }),
+  {
+    endpointContext: {
+      apiContractId: 'orders-api',
+      endpointId: 'list-orders',
+      endpointLabel: '查询订单'
+    }
+  }
+)
+assert.deepEqual(
+  inheritedSessionTargetBinding({
+    ...designRevisionIdentity,
+    targetType: 'entity',
+    pageId: undefined,
+    entityId: 'Order',
+    entityLabel: '订单'
+  }),
+  { entityContext: { entityId: 'Order', entityLabel: '订单' } }
+)
+assert.equal(hasSameSessionTargetBinding(designRevisionIdentity, developmentSession), true)
+const oldDevelopmentSession = {
+  ...developmentSession,
+  id: 'old-development-session',
+  threadId: 'old-development-thread',
+  updatedAt: 999
+}
+assert.equal(
+  sessionToRestoreForPhase(
+    [oldDevelopmentSession, developmentSession],
+    'development',
+    developmentSession.id,
+    oldDevelopmentSession.id
+  )?.id,
+  developmentSession.id
+)
+assert.equal(
+  sessionToRestoreForPhase(
+    [oldDevelopmentSession, developmentSession],
+    'development',
+    'missing-explicit-session',
+    oldDevelopmentSession.id
+  ),
+  undefined
+)
+assert.deepEqual(sessionsForWorkbenchPhase([oldDevelopmentSession], 'planning'), [])
 assert.equal(
   revisionDevelopmentSessionForContinuation(
     [...revisionSessionCandidates, developmentSession],
@@ -340,6 +465,17 @@ assert.equal(
     developmentContinuation
   )?.id,
   'revision-development-session'
+)
+assert.equal(
+  revisionDevelopmentSessionForContinuation(
+    [
+      ...revisionSessionCandidates,
+      { ...developmentSession, targetType: 'workflow', pageId: undefined }
+    ],
+    designRevisionIdentity,
+    developmentContinuation
+  ),
+  undefined
 )
 assert.equal(
   revisionDevelopmentSessionForContinuation(
@@ -661,6 +797,34 @@ assert.deepEqual(
   compactPlanningMessageHistory(planningHandoffMessages).map((message) => message.id),
   [11]
 )
+const confirmedTechnicalPlanTransitionMessages = [
+  planningHandoffMessages[1],
+  {
+    id: 12,
+    role: 'assistant',
+    content: '',
+    createdAt: 12,
+    revisionHandoff: {
+      kind: 'revision_development',
+      formalBranch: 'design_stage_revision',
+      targetSessionId: 'development-session',
+      targetConversationThreadId: 'development-thread',
+      impactInteractionId: 'impact-1',
+      changeId: 'change-1',
+      request: '删除导出功能'
+    }
+  }
+] as AgentChatMessage[]
+assert.equal(
+  isSupersededTechnicalPlanTransitionMessage(confirmedTechnicalPlanTransitionMessages, 0),
+  true
+)
+assert.deepEqual(
+  compactPlanningMessageHistory(confirmedTechnicalPlanTransitionMessages).map(
+    (message) => message.id
+  ),
+  [12]
+)
 assert.equal(planningWorkflowSettlesLoading(summaryOnlyQuestionsWorkflow), true)
 assert.equal(
   planningWorkflowNeedsChatLoading(
@@ -720,6 +884,38 @@ assert.equal(
   ),
   false
 )
+assert.equal(shouldSuppressConfirmedTechnicalPlanTransitionChunk(undefined, true), true)
+assert.equal(
+  shouldSuppressConfirmedTechnicalPlanTransitionChunk(
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'technical_planning' }
+    } as WorkflowRunPayload,
+    true
+  ),
+  true
+)
+assert.equal(
+  shouldSuppressConfirmedTechnicalPlanTransitionChunk(
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'development_readiness_gate' }
+    } as WorkflowRunPayload,
+    true
+  ),
+  false
+)
+assert.equal(
+  shouldSuppressConfirmedTechnicalPlanTransitionChunk(
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'failed', phase: 'technical_planning' }
+    } as WorkflowRunPayload,
+    true
+  ),
+  false
+)
+assert.equal(shouldSuppressConfirmedTechnicalPlanTransitionChunk(undefined, false), false)
 
 const pendingQuestionMessage = {
   id: 12,

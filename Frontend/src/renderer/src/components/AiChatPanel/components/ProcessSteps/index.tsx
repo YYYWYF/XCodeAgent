@@ -228,6 +228,10 @@ function ProcessStep({
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
+  const collapseCompletedWorkspaceScan =
+    step.nodeName === 'scan_workspace_code' &&
+    hasWorkspaceInspection &&
+    step.status === 'completed'
   const isRepairStep = step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair'
   const hasRepairActivity = isRepairStep && step.status === 'running'
   const hasRepairCompletion = isRepairStep && step.status === 'completed'
@@ -257,13 +261,18 @@ function ProcessStep({
         hasBuildRun ||
         hasDagGeneration ||
         hasProjectPlanUpdate ||
-        hasWorkspaceInspection ||
+        (hasWorkspaceInspection && !collapseCompletedWorkspaceScan) ||
         hasWorkspaceInspectionProgress ||
         hasRepairPanel ||
         hasToolActivity)
   )
 
   useEffect(() => {
+    // 二次修改的导航扫描完成后只保留节点摘要，避免工作区大图持续占满对话区。
+    if (collapseCompletedWorkspaceScan) {
+      setOpen(false)
+      return
+    }
     if (
       expandable &&
       (step.status === 'running' ||
@@ -283,6 +292,7 @@ function ProcessStep({
     expandable,
     hasBuildRun,
     hasChecks,
+    collapseCompletedWorkspaceScan,
     hasDagGeneration,
     hasProjectPlanUpdate,
     hasWorkspaceInspection,
@@ -603,7 +613,7 @@ function processStepTitle(
       : `已${action} ${step.title} ${noun}`
   }
   const labels: Record<string, string> = {
-    classify_intent: '准备回答',
+    classify_intent: '判断修改类型',
     respond_conversation: '生成回答',
     answer_workspace: '读取工作区并回答',
     execute_frontend: '修改前端文件',

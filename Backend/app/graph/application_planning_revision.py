@@ -224,6 +224,9 @@ def design_node_update(
     """保留修订展示上下文，并在目标生成节点完成后消费一次修改指令。"""
 
     normalized_update = {
+        # 新一轮设计修订复用原 planning checkpoint；新 TechnicalPlan 尚未确认前，
+        # 上一轮已签发的 continuation 不再有效，必须由每个设计节点显式清空。
+        "revision_continuation": {},
         **update,
         "application_planning_interaction": {},
         "design_interaction_origin": "",

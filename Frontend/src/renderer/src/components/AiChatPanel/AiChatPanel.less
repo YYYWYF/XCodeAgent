@@ -344,23 +344,6 @@
   border-radius: 8px;
 }
 
-.@{class-prefix}-detail-progress-card {
-  width: 100%;
-  max-width: 1080px;
-  margin: 8px auto;
-  padding: 0 38px;
-  box-sizing: border-box;
-
-  // 内层 PageDesignProgress 自带卡片样式（外层不再包裹卡片）
-  .@{class-prefix}-detail-page-progress {
-    padding: 18px 20px;
-    border: 1px solid var(--wb-border-strong, #e5e7eb);
-    border-radius: 14px;
-    background: var(--wb-surface-subtle, #f7f8fa);
-    box-shadow: 0 14px 30px rgba(45, 30, 104, 0.04);
-  }
-}
-
 // 验收聚焦只隐藏中间对话区，左侧应用大纲始终保留，预览占据其余可用宽度。
 .@{class-prefix}-ai-chat-panel.@{class-prefix}-acceptance-preview-focus {
   flex-direction: row;

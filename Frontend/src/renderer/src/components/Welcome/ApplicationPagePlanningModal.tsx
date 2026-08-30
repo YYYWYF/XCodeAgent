@@ -630,7 +630,7 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
-  // 冷启动时只读恢复同一线程的 checkpoint，禁止借恢复动作执行任何规划节点。
+  // 冷启动时只读恢复同一线程的 checkpoint；若已签发 continuation，则转交工作台消费。
   const recoverPlanning = async (): Promise<void> => {
     if (!application.workspaceRoot) return
     setRunning(true)
@@ -663,6 +663,11 @@ export default function ApplicationPagePlanningModal({
       if (result.workflow) {
         const mergedWorkflow = handleWorkflowChange(result.workflow)
         if (mergedWorkflow) onPlanningWorkflow?.(mergedWorkflow)
+        const continuationHandoff = revisionContinuationHandoffFromWorkflow(mergedWorkflow)
+        if (continuationHandoff) {
+          completedRef.current = true
+          await onRevisionContinuation(continuationHandoff)
+        }
       }
     } catch (reason) {
       if (isAuthenticationFailure(reason)) return

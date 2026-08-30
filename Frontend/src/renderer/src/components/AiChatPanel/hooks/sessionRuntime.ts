@@ -26,6 +26,24 @@ export type SessionIdentity = {
   workspaceRoot: string
 }
 
+export type SessionTargetBinding = {
+  pageId?: string
+  endpointContext?: {
+    apiContractId: string
+    endpointId: string
+    endpointLabel: string
+  }
+  entityContext?: {
+    entityId: string
+    entityLabel: string
+  }
+}
+
+type SessionTargetIdentity = Pick<
+  SessionIdentity,
+  'targetType' | 'pageId' | 'apiContractId' | 'endpointId' | 'entityId'
+>
+
 export type SessionRunStatus = 'running' | 'stopping'
 
 export function sessionRuntimeKey(
@@ -101,6 +119,50 @@ export function sessionIdentityFromSummary(
     pageId: summary.pageId,
     revisionContext: summary.revisionContext
   })
+}
+
+/** 提取会话的业务目标绑定，供阶段转接创建新会话时继承页面、接口或实体归属。 */
+export function inheritedSessionTargetBinding(
+  identity: SessionIdentity | undefined
+): SessionTargetBinding {
+  if (!identity || identity.targetType === 'workflow') return {}
+  if (identity.targetType === 'page') {
+    if (!identity.pageId) throw new Error('页面会话缺少页面标识，无法转接。')
+    return { pageId: identity.pageId }
+  }
+  if (identity.targetType === 'api') {
+    if (!identity.apiContractId || !identity.endpointId) {
+      throw new Error('接口会话缺少接口标识，无法转接。')
+    }
+    return {
+      endpointContext: {
+        apiContractId: identity.apiContractId,
+        endpointId: identity.endpointId,
+        endpointLabel: identity.endpointLabel || identity.endpointId
+      }
+    }
+  }
+  if (!identity.entityId) throw new Error('实体会话缺少实体标识，无法转接。')
+  return {
+    entityContext: {
+      entityId: identity.entityId,
+      entityLabel: identity.entityLabel || identity.entityId
+    }
+  }
+}
+
+/** 判断两个会话是否绑定同一个工作流、页面、接口或实体目标。 */
+export function hasSameSessionTargetBinding(
+  left: SessionTargetIdentity,
+  right: SessionTargetIdentity
+): boolean {
+  return (
+    left.targetType === right.targetType &&
+    left.pageId === right.pageId &&
+    left.apiContractId === right.apiContractId &&
+    left.endpointId === right.endpointId &&
+    left.entityId === right.entityId
+  )
 }
 
 /** 查找可直接打开的接口会话；空白历史不应阻止目标切换后显示详细设计挡板。 */

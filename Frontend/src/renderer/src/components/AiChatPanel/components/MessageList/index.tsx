@@ -7,7 +7,7 @@ import {
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import { Button, Spin, Tag, Typography } from 'antd'
+import { Button, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWorkbenchPhase } from '../../../../context'
@@ -24,7 +24,6 @@ import {
 } from '../../../Welcome/planningWorkflowState'
 import type {
   ApplicationLifecycle,
-  DevelopmentPlanningPageOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../../../typings'
@@ -41,7 +40,6 @@ import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
 import TemplatePreparingCard, {
   isTemplatePreparing
 } from '../WorkflowRunCard/TemplatePreparingCard'
-import DetailBlockerCard from '../../../DetailConfirmationPageSelector/DetailBlockerCard'
 import {
   isStructuredPlanningWorkflow,
   processStepsForMessageDisplay,
@@ -65,6 +63,7 @@ import {
   isSupersededPlanningStageEntryMessage,
   isSupersededPlanningPhaseMessage,
   isSupersededPlanningProgressMessage,
+  isSupersededTechnicalPlanTransitionMessage,
   isTemplateSupersededPlanningProgressMessage,
   latestUiDesignPreviewMessageIndex
 } from './uiDesignPreviewHistory'
@@ -145,7 +144,7 @@ function PlanningPendingCard({
   )
 }
 
-/** 展示来源会话中的正式二次修改交接回执，并允许用户打开独立会话。 */
+/** 展示来源会话中的正式二次修改交接回执，并允许用户打开对应阶段会话。 */
 function RevisionHandoffCard({
   handoff,
   onOpen
@@ -154,9 +153,12 @@ function RevisionHandoffCard({
   onOpen?: (handoff: NonNullable<AgentChatMessage['revisionHandoff']>) => void
 }): ReactElement {
   const developmentHandoff = handoff.kind === 'revision_development'
+  const developmentEntry = handoff.kind === 'revision_development_entry'
   const planningHandoff = handoff.kind === 'revision_planning'
   const planningRevision = handoff.formalBranch === 'workbench_plan_revision'
-  const title = developmentHandoff
+  const title = developmentEntry
+    ? '本次需求的前置产物已更新完成，将在当前会话继续开发'
+    : developmentHandoff
     ? 'TechnicalPlan 已确认，已转入独立开发会话'
     : planningHandoff
       ? '需求设计已确认，已转入独立技术规划会话'
@@ -176,7 +178,7 @@ function RevisionHandoffCard({
         <Text strong>{title}</Text>
         <Text className={cx('revision-session-handoff-request')}>{handoff.request}</Text>
       </div>
-      {onOpen ? (
+      {onOpen && !developmentEntry ? (
         <Button onClick={() => onOpen(handoff)} type="default">
           {buttonText}
         </Button>
@@ -256,8 +258,6 @@ type MessageListProps = {
    *  UI 设计稿确认卡片优先用它渲染，绕过消息对象里可能滞留的旧 message.workflow，
    *  保证后台生成池写入的最新页面状态实时反映到卡片。 */
   planningWorkflow?: WorkflowRunPayload
-  /** 开发阶段：detailBlocker 卡片点击「开始详细设计」。 */
-  onStartDetailDesign?: (page: DevelopmentPlanningPageOption) => void
   loading: boolean
   messages: AgentChatMessage[]
   onEntityDesignGateJump?: (entityId: string) => void
@@ -294,7 +294,6 @@ export default function MessageList({
   onEnterDevelopment,
   generatingTemplate,
   planningWorkflow,
-  onStartDetailDesign,
   loading,
   messages,
   onEntityDesignGateJump,
@@ -323,9 +322,6 @@ export default function MessageList({
     : ''
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
   const showStandaloneError = Boolean(visibleError && visibleError !== latestAssistantMessageError)
-  const hasStreamingProcess = messages.some(
-    (message) => message.id === activeAssistantMessageId && Boolean(message.processSteps?.length)
-  )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
@@ -466,6 +462,14 @@ export default function MessageList({
               if (
                 designPhasePlanning &&
                 isSupersededPlanningStageEntryMessage(messages, messageIndex)
+              ) {
+                return null
+              }
+              // 二次修改已交接到开发会话后，不保留 checkpoint resume 产生的
+              // technical_planning running 卡片；它不是一次新的技术规划生成。
+              if (
+                designPhasePlanning &&
+                isSupersededTechnicalPlanTransitionMessage(messages, messageIndex)
               ) {
                 return null
               }
@@ -614,6 +618,7 @@ export default function MessageList({
                 designPhasePlanning && message.workflow?.summary?.status === 'running'
               const showPlanningLoading =
                 !messageError &&
+                !message.revisionHandoff &&
                 planningWorkflowNeedsChatLoading(
                   message.workflow,
                   designPhasePlanning,
@@ -695,22 +700,6 @@ export default function MessageList({
                         message.workflow ? (
                           <PlanningWorkflowActivity workflow={message.workflow} />
                         ) : null}
-                        {/* 开发阶段 detailBlocker：研发 Agent 流内挡板卡，
-                            选中待设计页面时注入，展示「尚未进行详细设计」+ 开始按钮。 */}
-                        {message.detailBlocker && (
-                          <DetailBlockerCard
-                            disabled={loading}
-                            onStart={(page) => onStartDetailDesign?.(page)}
-                            selectedPage={{
-                              pageId: message.detailBlocker!.pageId,
-                              key: message.detailBlocker!.pageId,
-                              label: message.detailBlocker!.label,
-                              path: message.detailBlocker!.path || '/',
-                              purpose: message.detailBlocker!.purpose || '',
-                              designed: false
-                            }}
-                          />
-                        )}
                         {!hideEntityWorkflowChrome &&
                           visibleProcessSteps &&
                           visibleProcessSteps.length > 0 &&
@@ -875,14 +864,6 @@ export default function MessageList({
               </div>
             </article>
           ) : null}
-          {loading && !hasStreamingProcess && (
-            <div className={cx('ai-message', 'assistant', 'loading')}>
-              <Spin size="small" />
-              <Text type="secondary">
-                {conversationRunning ? '正在运行...' : '正在运行 Workflow...'}
-              </Text>
-            </div>
-          )}
         </div>
       </div>
       {showScrollToBottom && (

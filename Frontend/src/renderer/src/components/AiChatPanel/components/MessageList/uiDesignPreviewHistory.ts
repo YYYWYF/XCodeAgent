@@ -65,6 +65,24 @@ export function isSupersededPlanningStageEntryMessage(
     .some((message) => planningMessagePhase(message) === 'technical_planning')
 }
 
+/** 开发会话回执已到达后，TechnicalPlan 确认产生的 running 过渡帧不再属于规划历史。 */
+export function isSupersededTechnicalPlanTransitionMessage(
+  messages: AgentChatMessage[],
+  messageIndex: number
+): boolean {
+  const message = messages[messageIndex]
+  if (
+    message.role !== 'assistant' ||
+    message.workflow?.summary?.status !== 'running' ||
+    planningMessagePhase(message) !== 'technical_planning'
+  ) {
+    return false
+  }
+  return messages
+    .slice(messageIndex + 1)
+    .some((item) => item.revisionHandoff?.kind === 'revision_development')
+}
+
 /** 判断入口点击后的 assistant 消息是否只是失败恢复残留。 */
 function isFailedPlanningEntryAttempt(message: AgentChatMessage): boolean {
   if (message.role !== 'assistant') return false
@@ -154,6 +172,9 @@ export function compactPlanningMessageHistory(
       removedIndexes.add(index)
     }
     if (isSupersededPlanningStageEntryMessage(messages, index)) {
+      removedIndexes.add(index)
+    }
+    if (isSupersededTechnicalPlanTransitionMessage(messages, index)) {
       removedIndexes.add(index)
     }
   })

@@ -3,12 +3,15 @@ import { test } from 'node:test'
 import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
+  pageDesignedBySession,
   pageDetailTargetKey,
   requiresEndpointDetailDesign,
   requiresInitialDetailDesignSelection,
+  requiresPageDetailDesign,
   sessionDetailTargetKey,
   shouldShowDevelopmentTargetSelector,
   shouldShowEndpointDetailDesignEntry,
+  shouldShowPageDetailDesignEntry,
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
   workflowPreviewTarget,
@@ -513,6 +516,30 @@ test('待设计 API 在开始前显示绿色设计入口，已有运行消息后
   )
 })
 
+test('待设计页面仅在没有会话时使用锁定蒙层', () => {
+  const pendingPage = {
+    pageId: 'page-home',
+    key: 'page-home',
+    label: '首页',
+    path: '/page/page-home',
+    purpose: '应用首页',
+    designed: false,
+    hasDetailPlan: false
+  }
+
+  assert.equal(requiresPageDetailDesign(pendingPage), true)
+  assert.equal(shouldShowPageDetailDesignEntry(pendingPage, false), true)
+  assert.equal(shouldShowPageDetailDesignEntry(pendingPage, true), false)
+  assert.equal(requiresPageDetailDesign({ ...pendingPage, designed: true }), false)
+  assert.equal(requiresPageDetailDesign({ ...pendingPage, hasDetailPlan: true }), false)
+})
+
+test('页面 designed 以工作区是否存在页面会话为最高优先级', () => {
+  assert.equal(pageDesignedBySession('page-home', []), false)
+  assert.equal(pageDesignedBySession('page-home', [{ pageId: 'page-orders' }]), false)
+  assert.equal(pageDesignedBySession('page-home', [{ pageId: ' page-home ' }]), true)
+})
+
 test('模板就绪后没有任何设计时显式进入开发显示目标选择器', () => {
   assert.equal(
     shouldShowDevelopmentTargetSelector({
@@ -792,6 +819,12 @@ test('设计阶段二次修改批准后在 Graph 回写前仍恢复到独立设�
   assert.equal(deriveWorkbenchPhase(lifecycle), 'product')
   lifecycle.activeFormalRevision.currentArtifact = 'technical-plan'
   assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
+  lifecycle.initialization = {
+    stage: 'awaiting_technical_plan_confirmation',
+    status: 'awaiting_user'
+  }
+  lifecycle.activeFormalRevision.status = 'continuation_ready'
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'development')
 })
 
 test('TechnicalPlan 二次修改只在草稿阶段进入规划，continuation 后回到开发', () => {

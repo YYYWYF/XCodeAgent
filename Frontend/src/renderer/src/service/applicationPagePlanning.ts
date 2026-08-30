@@ -85,6 +85,10 @@ export function revisionContinuationHandoffFromWorkflow(
   if (!continuation) return undefined
   const lifecycle = workflowApplicationLifecycle(workflow)
   const activeRevision = lifecycle?.activeFormalRevision
+  // 新一轮设计修订会复用原 planning checkpoint；在新 TechnicalPlan 确认前，
+  // checkpoint 可能仍投影上一轮 continuation。当前 lifecycle 尚未签发 continuation
+  // 时忽略该残留，避免把合法的需求/UI 确认误报为 lifecycle 身份冲突。
+  if (activeRevision && activeRevision.status !== 'continuation_ready') return undefined
   if (
     !lifecycle ||
     !activeRevision ||
