@@ -107,6 +107,12 @@
   padding-left: 42px;
 }
 
+// 模板首节点也会显示等待态，但不能套用补充输入的额外缩进，避免点击后整组节点横向跳动。
+.@{class-prefix}-process-steps.@{class-prefix}-has-inline-first-node
+  .@{class-prefix}-process-steps-list {
+  padding-left: 14px;
+}
+
 .@{class-prefix}-process-step-clarification {
   padding: 0 0 18px;
 
@@ -172,6 +178,25 @@
   margin: 0;
 }
 
+// 节点内的确认动作沿用时间线的内容区，不额外制造一张悬浮卡片。
+.@{class-prefix}-process-step-interaction-detail {
+  gap: 0;
+  padding-top: 4px;
+}
+
+// 模板预览属于节点内容宽度，状态切换时不允许按内容反向撑开时间线。
+.@{class-prefix}-process-step-interactive {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+
+  // 首节点标题承担卡片标题职责，避免节点外再重复一层标题。
+  > .@{class-prefix}-process-step-summary .ant-typography {
+    color: var(--wb-text);
+    font-weight: 600;
+  }
+}
+
 .@{class-prefix}-process-step-summary {
   position: relative;
   min-height: 24px;
@@ -210,6 +235,8 @@
 
 .@{class-prefix}-process-step-detail {
   display: flex;
+  width: 100%;
+  min-width: 0;
   flex-direction: column;
   gap: 10px;
   padding: 10px 0 0;

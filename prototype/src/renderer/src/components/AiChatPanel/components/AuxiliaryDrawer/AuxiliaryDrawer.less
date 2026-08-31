@@ -1,0 +1,256 @@
+/* 临时对话等辅助抽屉：与后台任务抽屉同款同位，定位在裁剪宿主内从菜单栏右边线滑出。 */
+.@{class-prefix}-auxiliary-drawer {
+  position: absolute;
+  z-index: 30;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  width: 420px;
+  min-width: 0;
+  flex-direction: column;
+  background: var(--wb-canvas);
+  border-right: 1px solid var(--wb-border);
+  box-shadow: 12px 0 30px rgba(27, 20, 55, 0.14);
+  animation: auxiliary-drawer-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes auxiliary-drawer-in {
+  from {
+    /* 起点整体藏在裁剪边界之外，滑入时从菜单栏右边线移出。 */
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+.@{class-prefix}-auxiliary-drawer > header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 62px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-auxiliary-drawer > header > div {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.@{class-prefix}-auxiliary-drawer > header strong {
+  color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.@{class-prefix}-auxiliary-drawer > header small {
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-auxiliary-drawer > header button {
+  display: inline-flex;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-text-secondary);
+  cursor: pointer;
+}
+
+.@{class-prefix}-auxiliary-drawer > header button:hover {
+  background: var(--wb-surface-hover);
+  color: var(--wb-text);
+}
+
+/* 头部图标徽标：与后台任务抽屉同款的主题紫软底方块。 */
+.@{class-prefix}-auxiliary-drawer-badge {
+  display: inline-flex;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+}
+
+.@{class-prefix}-auxiliary-drawer-badge-icon {
+  display: inline-block;
+  width: 17px;
+  height: 17px;
+  background: var(--wb-accent);
+  mask: var(--auxiliary-drawer-badge-source) center / contain no-repeat;
+  -webkit-mask: var(--auxiliary-drawer-badge-source) center / contain no-repeat;
+}
+
+.@{class-prefix}-auxiliary-drawer-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: auto;
+  padding: 16px;
+}
+
+.@{class-prefix}-auxiliary-drawer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.@{class-prefix}-temporary-conversation-messages {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  padding: 18px 0;
+}
+
+.@{class-prefix}-temporary-message {
+  max-width: 84%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  color: var(--wb-text);
+  line-height: 1.55;
+
+  &.@{class-prefix}-assistant {
+    align-self: flex-start;
+    background: var(--wb-surface-subtle);
+  }
+
+  &.@{class-prefix}-user {
+    align-self: flex-end;
+    background: color-mix(in srgb, var(--wb-accent) 14%, var(--wb-canvas));
+  }
+}
+
+.@{class-prefix}-temporary-conversation-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 8px 8px 8px 12px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 12px;
+  background: var(--wb-canvas);
+  transition: border-color 0.15s ease;
+
+  &:focus-within {
+    border-color: var(--wb-accent-border);
+  }
+
+  .ant-input-textarea {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  textarea {
+    color: var(--wb-text);
+    font-size: 12px;
+    line-height: 20px;
+    padding: 4px 0;
+  }
+}
+
+/* 内嵌圆形发送按钮：与主题一致，空输入时置灰。 */
+.@{class-prefix}-temporary-conversation-send {
+  display: inline-flex;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--wb-accent);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: var(--wb-accent-hover);
+  }
+
+  &:disabled {
+    background: var(--wb-surface-selected);
+    color: var(--wb-text-tertiary);
+    cursor: default;
+  }
+}
+
+.@{class-prefix}-test-preparation-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.@{class-prefix}-test-preparation-summary {
+  padding: 14px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface-subtle);
+
+  > div:first-child {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  span {
+    color: var(--wb-text-tertiary);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-test-preparation-content {
+  .ant-collapse {
+    background: transparent;
+  }
+
+  .ant-collapse-item {
+    border-color: var(--wb-border);
+  }
+
+  .ant-collapse-header,
+  .ant-collapse-content {
+    color: var(--wb-text);
+  }
+
+  .ant-collapse-content {
+    background: transparent;
+  }
+
+  .@{class-prefix}-completed {
+    color: var(--wb-success);
+  }
+}
+
+.@{class-prefix}-test-preparation-actions {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 32px;
+}
+

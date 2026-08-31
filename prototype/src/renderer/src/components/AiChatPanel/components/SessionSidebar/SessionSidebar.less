@@ -1293,22 +1293,6 @@
   }
 }
 
-.@{class-prefix}-sidebar-phase-index {
-  display: inline-flex;
-  width: 17px;
-  height: 17px;
-  flex: 0 0 17px;
-  align-items: center;
-  justify-content: center;
-  color: var(--wb-text-secondary);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-  background: var(--wb-surface-subtle);
-  border: 1px solid var(--wb-border);
-  border-radius: 5px;
-}
-
 .@{class-prefix}-task-conversation-delete,
 .@{class-prefix}-task-conversation-rename {
   position: absolute;
@@ -1447,6 +1431,12 @@
   margin-left: 12px;
   padding-left: 7px;
   border-left: 1px solid var(--wb-border);
+
+  &.@{class-prefix}-flat {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
 }
 
 .@{class-prefix}-artifact-section-row {
@@ -1506,20 +1496,12 @@
   &:hover,
   &:focus-within {
     background: var(--outline-hover-bg);
-
-    .@{class-prefix}-artifact-more {
-      opacity: 1;
-    }
   }
 
   /* 不可用产物不给任何 hover 反馈：禁用只靠灰化呈现，避免暗示可交互。 */
   &:has(> .@{class-prefix}-artifact-row:disabled):hover,
   &:has(> .@{class-prefix}-artifact-row:disabled):focus-within {
     background: transparent;
-
-    .@{class-prefix}-artifact-more {
-      opacity: 0;
-    }
   }
 }
 
@@ -1530,7 +1512,7 @@
   height: 34px;
   align-items: center;
   gap: 7px;
-  padding: 0 31px 0 8px;
+  padding: 0 8px;
   color: var(--wb-text-secondary);
   font-size: 12px;
   text-align: left;
@@ -1586,30 +1568,34 @@
   &.@{class-prefix}-completed {
     background: #36ad72;
   }
+  // 实现排队：空心紫圈，与「进行中」的实心紫点区分。
+  &.@{class-prefix}-impl-queued {
+    background: transparent;
+    border: 1.5px solid var(--wb-accent-border);
+  }
+  // 实现中：主题紫呼吸点，表达后台任务正在执行。
+  &.@{class-prefix}-implementing {
+    background: var(--wb-accent);
+    animation: artifact-dot-breathing 1.6s ease-in-out infinite;
+  }
+  // 待验收：主题紫点 + 外圈光晕，提示回任务中心/产物详情完成人工验收。
+  &.@{class-prefix}-awaiting-review {
+    background: var(--wb-accent);
+    box-shadow: 0 0 0 3px var(--wb-accent-soft);
+  }
+  // 失败：红色警示点。
+  &.@{class-prefix}-failed {
+    background: var(--wb-danger);
+  }
 }
 
-.@{class-prefix}-artifact-more {
-  position: absolute;
-  right: 4px;
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  color: var(--wb-text-tertiary);
-  background: var(--outline-panel);
-  border: 0;
-  border-radius: 5px;
-  cursor: pointer;
-  opacity: 0;
-
-  &:hover,
-  &:focus-visible {
-    color: var(--wb-accent);
-    background: var(--wb-surface);
-    outline: none;
+@keyframes artifact-dot-breathing {
+  0%,
+  100% {
     opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
   }
 }
 
@@ -1622,41 +1608,6 @@
   color: var(--wb-text-tertiary);
   font-size: 11px;
   white-space: nowrap;
-}
-
-.@{class-prefix}-artifact-conversation-menu.ant-dropdown-menu {
-  width: 250px;
-  padding: 5px;
-  background: var(--wb-surface, #fff);
-  border: 1px solid var(--wb-border, #e7e7ef);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(31, 24, 58, 0.13);
-
-  .ant-dropdown-menu-item-group-title {
-    color: var(--wb-text-tertiary, #8b91a3);
-    font-size: 10px;
-  }
-
-  .ant-dropdown-menu-item {
-    overflow: hidden;
-    color: var(--wb-text-secondary, #596176);
-    font-size: 12px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    border-radius: 5px;
-  }
-}
-
-// 产物操作菜单挂载到页面根节点，脱离侧栏滚动裁切并完整接管鼠标事件。
-.@{class-prefix}-artifact-conversation-overlay.ant-dropdown {
-  z-index: 1400;
-  pointer-events: auto;
-  opacity: 1;
-
-  .@{class-prefix}-artifact-conversation-menu.ant-dropdown-menu {
-    opacity: 1;
-    backdrop-filter: none;
-  }
 }
 
 @media (max-width: 900px) {

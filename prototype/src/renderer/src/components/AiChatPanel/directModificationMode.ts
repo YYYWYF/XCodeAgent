@@ -2,7 +2,7 @@ import type { WorkflowDebugOptions, WorkflowRunPayload } from '../../typings'
 
 /** 判断 Workflow 是否来自独立简单修改 Graph，兼容分类完成前后不同投影阶段。 */
 export function isDirectModificationWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
-  if (workflow?.summary.phase === 'direct_modification') return true
+  if (workflow?.summary?.phase === 'direct_modification') return true
   return ['frontend', 'backend', 'fullstack', 'unknown'].includes(String(workflow?.summary?.owner))
 }
 

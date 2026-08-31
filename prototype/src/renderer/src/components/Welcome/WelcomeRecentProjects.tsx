@@ -9,6 +9,7 @@ import {
   removeStoredApplication
 } from '../../service/applicationStorage'
 import type { ApplicationConfig } from '../../typings'
+import { purgeApplicationTasks } from '../../backgroundTasks'
 import { currentVersion } from '../../service/applicationVersions'
 import { cx } from '../../utils'
 import './WelcomeModal.less'
@@ -91,6 +92,8 @@ export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX
         await deleteStoredProject(applicationToDelete.workspaceRoot)
       }
       await removeStoredApplication(applicationToDelete.id)
+      // 任务流水跟着应用走：应用删除时同步清空它的后台任务记录。
+      purgeApplicationTasks(applicationToDelete.id)
       setApplications((current) =>
         current.filter((application) => application.id !== applicationToDelete.id)
       )

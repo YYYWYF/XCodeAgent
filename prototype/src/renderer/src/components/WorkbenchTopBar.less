@@ -91,13 +91,6 @@
     font-weight: 400;
   }
 
-  .@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-active[disabled]
-    .@{class-prefix}-workbench-topbar-phase-index {
-    color: var(--wb-text);
-    background: var(--wb-surface-subtle);
-    border-color: currentColor;
-    opacity: 0.78;
-  }
 }
 
 .@{class-prefix}-workbench-topbar-stepper {
@@ -151,29 +144,82 @@
   }
 }
 
-.@{class-prefix}-workbench-topbar-phase-index {
+/* 测试用例数量的宿主单元格：芯片与阶段按钮互为兄弟，保证阶段禁用时芯片仍可点击。 */
+.@{class-prefix}-workbench-topbar-phase-cell {
+  position: relative;
   display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  align-items: center;
-  justify-content: center;
-  color: currentColor;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-  background: var(--wb-surface-subtle);
-  border: 1px solid currentColor;
-  border-radius: 5px;
-  opacity: 0.78;
 }
 
+/* 测试阶段按钮为独立数字芯片预留右侧空间。 */
+.@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-has-queue-chip {
+  padding-right: 36px;
+}
+
+/* 开发阶段的对象数量直接嵌在阶段按钮内，仅作展示。 */
+.@{class-prefix}-workbench-development-artifact-progress {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  color: currentColor;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 16px;
+  opacity: 0.86;
+  white-space: nowrap;
+
+  &.@{class-prefix}-completed {
+    font-weight: 600;
+    opacity: 1;
+  }
+}
+
+/* 测试用例数量芯片：独立可点的后台任务入口，叠加在阶段胶囊右侧，不随阶段禁用失效。 */
+.@{class-prefix}-workbench-test-case-progress {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--wb-surface-selected);
+  color: var(--wb-text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: background 0.15s ease, color 0.15s ease;
+
+  &:hover {
+    background: var(--wb-accent);
+    color: #fff;
+  }
+
+  /* 队列抽屉展开时芯片保持高亮，提示当前入口处于激活状态。 */
+  &.@{class-prefix}-expanded {
+    background: var(--wb-accent);
+    color: #fff;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 1px;
+  }
+}
+
+/* 激活态紫色胶囊内的芯片改用半透明白，保持对比度。 */
 .@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-active
-  .@{class-prefix}-workbench-topbar-phase-index {
-  color: var(--wb-accent);
-  background: #fff;
-  border-color: #fff;
-  opacity: 1;
+  + .@{class-prefix}-workbench-test-case-progress {
+  background: rgba(255, 255, 255, 0.24);
+  color: #fff;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.42);
+    color: #fff;
+  }
 }
 
 .@{class-prefix}-workbench-topbar-node {
@@ -228,7 +274,4 @@
     padding-left: 5px;
   }
 
-  .@{class-prefix}-workbench-topbar-phase-index {
-    display: none;
-  }
 }

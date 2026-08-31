@@ -17,6 +17,8 @@ type DetailTargetType = "page" | "endpoint";
 
 type Props = {
   disabled: boolean;
+  /** 是否嵌入流程节点；嵌入时由节点标题承载卡片标题。 */
+  embedded?: boolean;
   /** 仅在当前工作流正在启动时显示按钮加载态；历史卡片禁用但不显示转圈。 */
   loading?: boolean;
   onStart?: (
@@ -50,6 +52,7 @@ type Props = {
  * 由对话区承载，不再整列覆盖弹框。 */
 export default function DetailConfirmationPageSelector({
   disabled,
+  embedded = false,
   loading = false,
   onStart,
   selectedEndpoint: progressEndpoint,
@@ -124,21 +127,29 @@ export default function DetailConfirmationPageSelector({
   };
 
   return (
-    <div className={cx("detail-page-selector-inline", disabled && "disabled")}>
+    <div
+      className={cx(
+        "detail-page-selector-inline",
+        disabled && "disabled",
+        embedded && "embedded",
+      )}
+    >
       {/* 卡片只承载模板选择，不再混入页面详细设计说明。 */}
-      <div className={cx("detail-page-selector-inline-header")}>
-        <div className={cx("detail-page-selector-inline-title")}>
-          <span className={cx("detail-page-selector-inline-signal")} aria-hidden="true" />
-          <Text className={cx("detail-page-selector-inline-name")} strong>
-            {progressTargetType === "endpoint" ? "接口详细设计" : "选择页面模板"}
-          </Text>
+      {!embedded && (
+        <div className={cx("detail-page-selector-inline-header")}>
+          <div className={cx("detail-page-selector-inline-title")}>
+            <span className={cx("detail-page-selector-inline-signal")} aria-hidden="true" />
+            <Text className={cx("detail-page-selector-inline-name")} strong>
+              {progressTargetType === "endpoint" ? "接口详细设计" : "选择页面模板"}
+            </Text>
+          </div>
+          {lockedTemplateVisible && (
+            <Text className={cx("detail-page-selector-template-stepper")} type="secondary">
+              第 {focusedTemplateIndex + 1} / {templates.length} 个
+            </Text>
+          )}
         </div>
-        {lockedTemplateVisible && (
-          <Text className={cx("detail-page-selector-template-stepper")} type="secondary">
-            第 {focusedTemplateIndex + 1} / {templates.length} 个
-          </Text>
-        )}
-      </div>
+      )}
 
       {lockedTemplateVisible && (
         <section className={cx("detail-page-selector-locked-template")}>

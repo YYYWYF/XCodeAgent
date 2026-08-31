@@ -1,6 +1,7 @@
 import {
   BugOutlined,
   FileSearchOutlined,
+  PaperClipOutlined,
   PauseCircleOutlined,
   SendOutlined,
   ToolOutlined
@@ -8,6 +9,7 @@ import {
 import { Alert, Button, Input, Select, Tag, Tooltip, Typography } from 'antd'
 import type { KeyboardEvent, ReactElement } from 'react'
 import { useState } from 'react'
+import type { WorkspaceSourceFile } from '../../../../mock/workspaceFiles'
 import type {
   ChatMessageSkill,
   EditorMode,
@@ -18,7 +20,7 @@ import type {
 import { cx } from '../../../../utils'
 import { skillsAfterEmptyBackspace } from '../../skillSelection'
 import type { ChatCopy } from '../../types'
-import ResourceSkillMenu, { type ComposerArtifactResource } from './ResourceSkillMenu'
+import ResourceSkillMenu from './ResourceSkillMenu'
 import './ChatComposer.less'
 
 const { Text } = Typography
@@ -46,7 +48,7 @@ const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; lab
 
 type ChatComposerProps = {
   activeWorkflow?: WorkflowRunPayload
-  artifactResources?: ComposerArtifactResource[]
+  availableFiles: WorkspaceSourceFile[]
   copy: ChatCopy[EditorMode]
   debugOnly?: boolean
   draft: string
@@ -54,9 +56,8 @@ type ChatComposerProps = {
   initialResumeFrom?: string
   loading: boolean
   onDraftChange: (value: string) => void
-  onArtifactAttach?: (artifactId: string) => Promise<void>
+  onSend: (workflowDebug?: WorkflowDebugOptions, selectedFilePaths?: string[]) => Promise<void>
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
-  onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   onStopGenerating: () => void
   readOnly?: boolean
   readOnlyMessage?: string
@@ -68,7 +69,7 @@ type ChatComposerProps = {
 
 export default function ChatComposer({
   activeWorkflow,
-  artifactResources,
+  availableFiles,
   copy,
   debugOnly = false,
   draft,
@@ -76,7 +77,6 @@ export default function ChatComposer({
   initialResumeFrom = 'detail_confirmation',
   loading,
   onDraftChange,
-  onArtifactAttach,
   onSelectedSkillsChange,
   onSend,
   onStopGenerating,
@@ -93,6 +93,7 @@ export default function ChatComposer({
   const [buildScopeType, setBuildScopeType] =
     useState<WorkflowBuildExecutionScope['type']>('application')
   const [buildScopeTargetId, setBuildScopeTargetId] = useState('')
+  const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>([])
   const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
   const isBuildTaskDebug = debugEnabled && resumeFrom === 'prepare_build_tasks'
   const hasBuildScopeTarget = buildScopeType === 'application' || Boolean(buildScopeTargetId.trim())
@@ -121,14 +122,17 @@ export default function ChatComposer({
 
   /** 校验当前状态并提交对话内容。 */
   const handleSend = (): void => {
-    if (!hasDebugNode) return
-    onSend(currentDebugOptions())
+    // Agent 运行中允许继续编辑草稿，但不重复提交；真正不可用的只读态同样不能发送。
+    if (!hasDebugNode || loading || readOnly || workspaceBusy) return
+    void onSend(currentDebugOptions(), selectedFilePaths).then(() => {
+      setSelectedFilePaths([])
+    }).catch(() => undefined)
   }
 
   /** 处理输入区键盘操作，空文本时 Backspace 依次删除最后一个技能标签。 */
   const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     const nextSkills = skillsAfterEmptyBackspace(event.key, draft, selectedSkills)
-    if (!nextSkills || loading) return
+    if (!nextSkills) return
     event.preventDefault()
     onSelectedSkillsChange(nextSkills)
   }
@@ -137,13 +141,20 @@ export default function ChatComposer({
     <div className={cx('ai-chat-composer', debugOnly && 'debug-only')}>
       <div className={cx('ai-chat-composer-column')}>
         {error && <Alert message={error} showIcon type="error" />}
-        <div className={cx('ai-chat-composer-frame', (loading || readOnly) && 'is-disabled')}>
+        <div
+          aria-label="对话输入区"
+          className={cx(
+            'ai-chat-composer-frame',
+            readOnly && 'is-disabled',
+            loading && !readOnly && 'is-loading'
+          )}
+        >
           <div className={cx('composer-inline-input')}>
             {!debugOnly && selectedSkills.length > 0 && (
               <div className={cx('composer-selected-skills')}>
                 {selectedSkills.map((skill) => (
                   <Tag
-                    closable={!loading}
+                    closable={!readOnly}
                     key={skill.name}
                     onClose={() =>
                       onSelectedSkillsChange(
@@ -158,12 +169,29 @@ export default function ChatComposer({
                 ))}
               </div>
             )}
+            {!debugOnly && selectedFilePaths.length > 0 && (
+              <div className={cx('composer-selected-files')}>
+                {selectedFilePaths.map((path) => (
+                  <Tag
+                    closable={!readOnly}
+                    key={path}
+                    onClose={() =>
+                      setSelectedFilePaths((current) => current.filter((item) => item !== path))
+                    }
+                    title={path}
+                  >
+                    <PaperClipOutlined />
+                    <span>{path.split('/').pop() || path}</span>
+                  </Tag>
+                ))}
+              </div>
+            )}
             {!debugOnly && (
               <TextArea
                 aria-label={`${copy.title}输出内容`}
                 autoSize={{ minRows: 1, maxRows: 6 }}
                 bordered={false}
-                readOnly={readOnly || loading}
+                readOnly={readOnly}
                 placeholder={copy.placeholder}
                 value={draft}
                 onChange={(event) => onDraftChange(event.target.value)}
@@ -244,10 +272,11 @@ export default function ChatComposer({
             ) : (
               <div className={cx('composer-toolbar')}>
                 <ResourceSkillMenu
-                  artifactResources={artifactResources}
-                  disabled={loading || workspaceBusy || readOnly}
-                  onArtifactAttach={onArtifactAttach}
+                  availableFiles={availableFiles}
+                  disabled={workspaceBusy || readOnly}
+                  onSelectedFilePathsChange={setSelectedFilePaths}
                   onSelectedSkillsChange={onSelectedSkillsChange}
+                  selectedFilePaths={selectedFilePaths}
                   selectedSkills={selectedSkills}
                 />
                 <Tooltip
@@ -284,7 +313,7 @@ export default function ChatComposer({
             )}
             {workspaceBusy && (
               <Text className={cx('workspace-busy-label')} type="warning">
-                其他会话正在执行
+                当前 Workflow 正在执行
               </Text>
             )}
             {readOnly ? (

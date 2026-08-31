@@ -3,7 +3,6 @@ import type { ChatSessionSummary } from '../../../service/chatSessions'
 import type { WorkbenchSessionKind } from '../../../workbenchDomain'
 
 export type SessionIdentity = {
-  artifactIds?: string[]
   key: string
   sessionId: string
   threadId: string
@@ -27,7 +26,6 @@ export function sessionRuntimeKey(
 }
 
 export function createSessionIdentity(input: {
-  artifactIds?: string[]
   workspaceRoot: string
   editorMode: EditorMode
   sessionId: string
@@ -55,7 +53,6 @@ export function sessionIdentityFromSummary(
 ): SessionIdentity | undefined {
   if (!summary || !workspaceRoot) return undefined
   return createSessionIdentity({
-    artifactIds: summary.artifactIds,
     workspaceRoot,
     editorMode,
     sessionId: summary.id,
@@ -92,11 +89,23 @@ export function sessionIdentityMatchesTarget(
     apiContractId?: string
     endpointId?: string
     pageId?: string
+    allowDevelopmentMainSession?: boolean
   }
 ): boolean {
   const apiContractId = target.apiContractId?.trim() || ''
   const endpointId = target.endpointId?.trim() || ''
   const pageId = target.pageId?.trim() || ''
+  // 开发阶段只有一条应用级主对话；页面/API 只是本轮 Workflow 的目标，
+  // 因此主对话在切换产物后仍须继续匹配运行态，不能按单产物会话隔离。
+  if (
+    target.allowDevelopmentMainSession &&
+    identity.sessionKind === 'development' &&
+    !identity.pageId &&
+    !identity.apiContractId &&
+    !identity.endpointId
+  ) {
+    return true
+  }
   if (apiContractId || endpointId) {
     return identity.apiContractId === apiContractId && identity.endpointId === endpointId
   }

@@ -1,0 +1,103 @@
+// 开发准入门弹框的任务类型选择样式；弹框外壳统一由 PhaseGateModal 提供。
+.@{class-prefix}-test-case-task-type-hint {
+  margin: 0 0 10px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+
+  // 用例数量由计划阶段确认，属确定信息：放大、加粗并使用主题强调色突出展示。
+  strong {
+    color: var(--wb-accent);
+    font-size: 14px;
+    font-weight: 700;
+  }
+}
+
+.@{class-prefix}-test-case-task-type-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+}
+
+.@{class-prefix}-test-case-task-type-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  color: var(--wb-text);
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface-subtle);
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+
+  &:hover {
+    border-color: var(--wb-accent-border);
+    background: var(--wb-surface);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: 2px;
+  }
+
+  &.@{class-prefix}-selected {
+    border-color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  }
+}
+
+.@{class-prefix}-test-case-task-type-option-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--wb-accent);
+  font-size: 15px;
+  border-radius: 8px;
+  background: var(--wb-accent-soft);
+}
+
+.@{class-prefix}-test-case-task-type-option-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+
+  strong {
+    color: var(--wb-text);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  span {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  // 任务说明中的「码豆」红色强调；需与上面 span 规则同级书写以覆盖默认文字色。
+  .@{class-prefix}-test-case-task-type-credit {
+    color: var(--wb-danger);
+  }
+}
+
+.@{class-prefix}-test-case-task-type-option-radio {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 50%;
+  background: var(--wb-canvas);
+
+  .@{class-prefix}-selected & {
+    border: 5px solid var(--wb-accent);
+  }
+}

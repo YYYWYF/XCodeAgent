@@ -64,10 +64,10 @@ type UseWorkflowConversationParams = {
   selectedSkills: ChatMessageSkill[]
   selectedApiContractId?: string
   selectedEndpointId?: string
-  selectedEndpointLabel?: string
   selectedPageId?: string
-  selectedPageLabel?: string
   directModificationEnabled: boolean
+  /** 当前是否处于开发阶段；仅此阶段允许主会话匹配任意产物目标。 */
+  developmentPhase?: boolean
   designPhase?: boolean
   /** 当前查看阶段是否为计划阶段，用于选择项目 Agent 的默认会话。 */
   planningPhase?: boolean
@@ -82,6 +82,8 @@ type UseWorkflowConversationParams = {
   autoStartReview?: boolean
   editorMode: EditorMode
   ensureActiveSession: () => Promise<SessionIdentity>
+  /** 创建/复用研发 Agent 的开发阶段主对话。 */
+  ensureDevelopmentSession: () => Promise<SessionIdentity>
   /** 创建/复用产品 Agent 的分析阶段默认会话。 */
   ensureAnalysisSession: () => Promise<SessionIdentity>
   /** 创建/复用项目 Agent 的计划阶段默认会话。 */
@@ -102,7 +104,6 @@ type UseWorkflowConversationParams = {
     pageLabel: string,
     endpointContext?: RelatedEndpointContext
   ) => Promise<SessionIdentity>
-  attachArtifactsToActiveSession: (artifactIds: string[]) => Promise<void>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -129,7 +130,15 @@ type UseWorkflowConversationResult = {
     explicitMessage?: string,
     options?: {
       sessionIdentity?: SessionIdentity
+      selectedFilePaths?: string[]
       suppressUserMessage?: boolean
+      /** 结构化入口显式指定的产物目标，覆盖当前查看上下文（如后台任务的验收入口）。 */
+      selectedPageId?: string
+      selectedApiContractId?: string
+      selectedEndpointId?: string
+      detailTargetType?: 'page' | 'endpoint' | 'application'
+      /** 结构化入口显式指定的工作流范围（如 artifact_acceptance）。 */
+      workflowScope?: string
     }
   ) => Promise<void>
   handleStartDetailConfirmation: (
@@ -194,7 +203,11 @@ function workflowEndpointExecutionScope(
 
 /** 从工作流快照读取规划确认模式，决定确认后是否切换阶段默认会话。 */
 function workflowClarificationMode(workflow: WorkflowRunPayload): string {
-  for (const source of [workflow.summary?.clarification, workflow.state?.clarification, workflow.result?.clarification]) {
+  for (const source of [
+    workflow.summary?.clarification,
+    workflow.state?.clarification,
+    workflow.result?.clarification
+  ]) {
     if (source && typeof source === 'object') {
       const mode = (source as { mode?: unknown }).mode
       if (typeof mode === 'string') return mode
@@ -204,10 +217,7 @@ function workflowClarificationMode(workflow: WorkflowRunPayload): string {
 }
 
 /** 读取 yes/no 确认答案，供需求或计划退回当前阶段继续修改。 */
-function clarificationAnswerIsYes(
-  answers: ClarificationAnswers,
-  key: string
-): boolean {
+function clarificationAnswerIsYes(answers: ClarificationAnswers, key: string): boolean {
   const value = answers[key]
   if (value && typeof value === 'object' && !Array.isArray(value) && 'selected' in value) {
     const selected = value.selected
@@ -246,6 +256,21 @@ function agentPhaseForSession(
   return fallback
 }
 
+/** 读取测试 Workflow 身份；同一用例的后续节点复用消息，下一条用例切换到新消息。 */
+function workflowSegmentKey(workflow?: WorkflowRunPayload): string {
+  const state = (workflow?.state || {}) as Record<string, unknown>
+  const result = (workflow?.result || {}) as Record<string, unknown>
+  return String(
+    state.testWorkflowKey ||
+      result.testWorkflowKey ||
+      state.testWorkflowType ||
+      state.workflowType ||
+      result.testWorkflowType ||
+      result.workflowType ||
+      ''
+  ).trim()
+}
+
 export function useWorkflowConversation({
   activeSession,
   agUiSessionsRef,
@@ -256,10 +281,9 @@ export function useWorkflowConversation({
   selectedSkills,
   selectedApiContractId,
   selectedEndpointId,
-  selectedEndpointLabel,
   selectedPageId,
-  selectedPageLabel,
   directModificationEnabled,
+  developmentPhase = false,
   designPhase,
   planningPhase,
   testingPhase,
@@ -269,14 +293,12 @@ export function useWorkflowConversation({
   acceptancePhase,
   editorMode,
   ensureActiveSession,
+  ensureDevelopmentSession,
   ensureAnalysisSession,
   ensurePlanningSession,
   ensureReviewSession,
   ensureTestingSession,
   ensureAcceptanceSession,
-  ensureEndpointSession,
-  ensurePageSession,
-  attachArtifactsToActiveSession,
   getSessionMessages,
   persistSession,
   onApplicationLifecycleChange,
@@ -302,7 +324,8 @@ export function useWorkflowConversation({
   const selectedTarget = {
     apiContractId: selectedApiContractId,
     endpointId: selectedEndpointId,
-    pageId: selectedPageId
+    pageId: selectedPageId,
+    allowDevelopmentMainSession: developmentPhase
   }
   const matchingActiveSession =
     activeSession && sessionIdentityMatchesTarget(activeSession, selectedTarget)
@@ -327,7 +350,7 @@ export function useWorkflowConversation({
       ? liveWorkflows[activeRuntimeKey]
       : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
-  // 当前阶段允许同工作区与同页面的独立会话并行，busy 只保留为现有组件接口兼容值。
+  // 每个阶段只有一个主对话，Workflow 调度不再需要通过会话 owner 互相抢占写权限。
   const workspaceBusy = false
   const sessionRunStates = useMemo(
     () =>
@@ -368,7 +391,6 @@ export function useWorkflowConversation({
       setSelectedSkillsByKey(draftKey, [])
     }
     await persistSession({
-      artifactIds: identity.artifactIds,
       editorMode: identity.editorMode,
       messages: nextMessages,
       sessionId: identity.sessionId,
@@ -388,7 +410,15 @@ export function useWorkflowConversation({
     explicitMessage?: string,
     options?: {
       sessionIdentity?: SessionIdentity
+      selectedFilePaths?: string[]
       suppressUserMessage?: boolean
+      /** 结构化入口显式指定的产物目标，覆盖当前查看上下文（如后台任务的验收入口）。 */
+      selectedPageId?: string
+      selectedApiContractId?: string
+      selectedEndpointId?: string
+      detailTargetType?: 'page' | 'endpoint' | 'application'
+      /** 结构化入口显式指定的工作流范围（如 artifact_acceptance）。 */
+      workflowScope?: string
     }
   ): Promise<void> => {
     const message = (explicitMessage || draft).trim() || workflowDebugMessage(workflowDebug)
@@ -413,12 +443,15 @@ export function useWorkflowConversation({
       }))
       return
     }
-    const sessionIdentity = options?.sessionIdentity ||
+    const sessionIdentity =
+      options?.sessionIdentity ||
       (automaticStageSession
-        ? autoStartTesting
-          ? await ensureTestingSession()
-          : autoStartReview
-            ? await ensureReviewSession()
+        ? // 审查是比测试更靠后的阶段；同一次渲染里两个自动开启标志可能尚未互斥，
+          // 必须让 autoStartReview 优先命中审查会话，否则审查开启消息会被误投到测试会话并重放测试剧本。
+          autoStartReview
+          ? await ensureReviewSession()
+          : autoStartTesting
+            ? await ensureTestingSession()
             : await ensureAcceptanceSession()
         : activeSession ||
           (acceptanceFeedback
@@ -428,13 +461,9 @@ export function useWorkflowConversation({
               : testingPhase
                 ? await ensureTestingSession()
                 : selectedApiContractId && selectedEndpointId
-                  ? await ensureEndpointSession(
-                      selectedApiContractId,
-                      selectedEndpointId,
-                      selectedEndpointLabel || selectedEndpointId
-                    )
+                  ? await ensureDevelopmentSession()
                   : selectedPageId
-                    ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
+                    ? await ensureDevelopmentSession()
                     : designPhase
                       ? planningDesignConversation
                         ? await ensurePlanningSession()
@@ -451,42 +480,46 @@ export function useWorkflowConversation({
     const designWorkflowScope = planningDesignConversation
       ? 'application_workbench_planning'
       : 'application_analysis'
+    // 结构化入口（如后台任务的验收入口）可显式指定产物目标，覆盖当前查看上下文。
+    const targetApiContractId = options?.selectedApiContractId ?? selectedApiContractId
+    const targetEndpointId = options?.selectedEndpointId ?? selectedEndpointId
+    const targetPageId = options?.selectedPageId ?? selectedPageId
     await sendWorkflowMessage(message, {
       clearDraft: true,
       detailTargetType: acceptanceFeedback
         ? 'application'
-        : selectedApiContractId && selectedEndpointId
+        : targetApiContractId && targetEndpointId
           ? 'endpoint'
-          : undefined,
-      selectedApiContractId: acceptanceFeedback ? undefined : selectedApiContractId,
-      selectedEndpointId: acceptanceFeedback ? undefined : selectedEndpointId,
+          : options?.detailTargetType,
+      selectedApiContractId: acceptanceFeedback ? undefined : targetApiContractId,
+      selectedEndpointId: acceptanceFeedback ? undefined : targetEndpointId,
       buildExecutionScope:
-        !acceptanceFeedback && selectedApiContractId && selectedEndpointId
+        !acceptanceFeedback && targetApiContractId && targetEndpointId
           ? {
               type: 'endpoint',
-              targetId: selectedEndpointId,
-              apiContractId: selectedApiContractId
+              targetId: targetEndpointId,
+              apiContractId: targetApiContractId
             }
           : undefined,
       selectedSkills,
       originalRequest: acceptanceFeedback ? message : undefined,
+      selectedFilePaths: acceptanceFeedback ? undefined : options?.selectedFilePaths,
       selectedPageId: acceptanceFeedback
         ? undefined
-        : selectedApiContractId && selectedEndpointId
+        : targetApiContractId && targetEndpointId
           ? ''
-          : selectedPageId,
+          : targetPageId,
       sessionIdentity,
-      titleFrom:
-        acceptanceFeedback
-          ? '应用验收'
-          : designPhase && !selectedApiContractId && !selectedEndpointId
+      titleFrom: acceptanceFeedback
+        ? '应用验收'
+        : designPhase && !selectedApiContractId && !selectedEndpointId
           ? planningDesignConversation
             ? '项目计划'
             : '需求分析'
-          : autoStartTesting || testingPhase
-            ? '应用测试'
-            : autoStartReview
-              ? '代码审查'
+          : autoStartReview
+            ? '代码审查'
+            : autoStartTesting || testingPhase
+              ? '应用测试'
               : message,
       workflowDebug,
       suppressUserMessage: options?.suppressUserMessage,
@@ -495,15 +528,17 @@ export function useWorkflowConversation({
         ? false
         : shouldUseDirectModification(directModificationEnabled, activeWorkflow, workflowDebug),
       workflowScope:
-        acceptanceFeedback
+        options?.workflowScope ||
+        (acceptanceFeedback
           ? 'application_acceptance_feedback'
-          : designPhase && !selectedApiContractId && !selectedEndpointId
-          ? designWorkflowScope
-          : autoStartTesting || testingPhase
-              ? 'application_testing'
-            : autoStartReview
+          : designPhase && !targetApiContractId && !targetEndpointId
+            ? designWorkflowScope
+            : // 与会话路由一致：审查开启必须优先于测试判定，避免误标为 application_testing。
+              autoStartReview
               ? 'application_review'
-              : undefined
+              : autoStartTesting || testingPhase
+                ? 'application_testing'
+                : undefined)
     })
   }
 
@@ -515,6 +550,7 @@ export function useWorkflowConversation({
       clarificationAnswers?: ClarificationAnswers
       originalRequest?: string
       selectedSkills?: ChatMessageSkill[]
+      selectedFilePaths?: string[]
       resumeState?: WorkflowRunPayload
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
@@ -582,7 +618,7 @@ export function useWorkflowConversation({
       skills: optimisticSkills.messageSkills,
       createdAt: Date.now()
     }
-    const assistantMessageId = reusableAssistantMessage?.id || Date.now() + 1
+    let assistantMessageId = reusableAssistantMessage?.id || Date.now() + 1
     const assistantMessage: AgentChatMessage = {
       id: assistantMessageId,
       role: 'assistant',
@@ -622,6 +658,7 @@ export function useWorkflowConversation({
 
     let streamedContent = ''
     let streamedWorkflow: WorkflowRunPayload | undefined
+    let streamedWorkflowSegmentKey = ''
     let streamedToolCalls: ToolCallRecord[] = []
     let streamedProcessSteps: ProcessStepRecord[] = reusableAssistantMessage?.processSteps || []
     let latestMessages = nextMessages
@@ -652,6 +689,31 @@ export function useWorkflowConversation({
 
     /** 在 AG-UI 实时回调中立即转交一次成功启动信号，避免被最终运行态更新批处理丢失。 */
     const updateWorkflow = (nextWorkflow: WorkflowRunPayload): void => {
+      const nextSegmentKey = workflowSegmentKey(nextWorkflow)
+      if (
+        identity.sessionKind === 'testing' &&
+        streamedWorkflow &&
+        nextSegmentKey &&
+        nextSegmentKey !== streamedWorkflowSegmentKey
+      ) {
+        // 测试阶段主对话固定不变，同一用例继续更新原消息，切换下一用例时才追加消息。
+        const nextMessageId =
+          Math.max(Date.now(), ...latestMessages.map((message) => message.id)) + 1
+        const nextAssistantMessage: AgentChatMessage = {
+          id: nextMessageId,
+          role: 'assistant',
+          content: '',
+          agentPhase: 'testing',
+          createdAt: Date.now()
+        }
+        latestMessages = [...latestMessages, nextAssistantMessage]
+        setSessionMessages(identity.key, latestMessages)
+        assistantMessageId = nextMessageId
+        streamedContent = ''
+        streamedToolCalls = []
+        streamedProcessSteps = []
+      }
+      streamedWorkflowSegmentKey = nextSegmentKey
       streamedWorkflow = nextWorkflow
       setLiveWorkflows((current) => ({ ...current, [identity.key]: nextWorkflow }))
       updateAssistantMessage(streamedContent, nextWorkflow, streamedToolCalls)
@@ -665,7 +727,6 @@ export function useWorkflowConversation({
 
     try {
       await persistSession({
-        artifactIds: identity.artifactIds,
         editorMode: identity.editorMode,
         messages: nextMessages,
         sessionId: identity.sessionId,
@@ -690,6 +751,7 @@ export function useWorkflowConversation({
         originalRequest: options?.originalRequest,
         onApplicationLifecycle: onApplicationLifecycleChange,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
+        selectedFilePaths: options?.selectedFilePaths,
         selectedPageId:
           options && 'selectedPageId' in options ? options.selectedPageId : identity.pageId,
         selectedApiContractId: options?.selectedApiContractId,
@@ -705,9 +767,6 @@ export function useWorkflowConversation({
         pageTemplate: options?.pageTemplate,
         directModification: options?.directModification,
         workflowScope: options?.workflowScope,
-        onArtifactDiscovered: (artifactIds) => {
-          void attachArtifactsToActiveSession(artifactIds)
-        },
         onContent: (content) => {
           streamedContent = content
           updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
@@ -752,7 +811,6 @@ export function useWorkflowConversation({
       }
 
       await persistSession({
-        artifactIds: identity.artifactIds,
         editorMode: identity.editorMode,
         messages: completedMessages,
         sessionId: identity.sessionId,
@@ -774,7 +832,6 @@ export function useWorkflowConversation({
           setSelectedSkillsByKey(identity.key, rollbackSkillSelection(options.selectedSkills))
         }
         await persistSession({
-          artifactIds: identity.artifactIds,
           editorMode: identity.editorMode,
           messages: previousMessages,
           sessionId: identity.sessionId,
@@ -804,7 +861,6 @@ export function useWorkflowConversation({
           }))
         }
         await persistSession({
-          artifactIds: identity.artifactIds,
           editorMode: identity.editorMode,
           messages: completedMessages,
           sessionId: identity.sessionId,
@@ -846,10 +902,18 @@ export function useWorkflowConversation({
     if (!continuationMessage || loading || workspaceBusy) return false
     const originalRequest = workflowOriginalRequest(workflow)
     const clarificationMode = workflowClarificationMode(workflow)
-    // 开发、测试报告和审查报告 Diff 都复用原工作流消息；需求/计划文档确认仍保留独立回复。
+    // 开发/审查 Diff 与测试用例确认均复用原工作流消息，避免确认动作凭空拆出新的工作流卡片。
     const fileAcceptanceContinuation =
-      ['build', 'test_report', 'code_review'].includes(String(workflow.summary?.phase || '')) &&
+      ['build', 'code_review'].includes(String(workflow.summary?.phase || '')) &&
       (clarificationMode === 'file_acceptance' || answers.file_acceptance !== undefined)
+    // 产物验收/后台执行方式选择的续跑复用原工作流消息，交互卡在原地落为完成态。
+    const acceptanceContinuation =
+      clarificationMode === 'page_acceptance' && answers.page_acceptance !== undefined
+    // 页面轮与接口轮分别提交（background_dispatch / background_dispatch_endpoint），两键任一出现即复用原工作流消息。
+    const backgroundDispatchContinuation =
+      clarificationMode === 'background_dispatch' &&
+      (answers.background_dispatch !== undefined ||
+        answers.background_dispatch_endpoint !== undefined)
     const requirementConfirmation = clarificationMode === 'requirement_spec_confirmation'
     const requirementNeedsRevision =
       requirementConfirmation &&
@@ -859,7 +923,9 @@ export function useWorkflowConversation({
     const planningDesignContinuation =
       Boolean(designPhase) &&
       !requirementNeedsRevision &&
-      (requirementConfirmation || Boolean(planningPhase) || activeSession?.sessionKind === 'planning')
+      (requirementConfirmation ||
+        Boolean(planningPhase) ||
+        activeSession?.sessionKind === 'planning')
     const sessionIdentity = designPhase
       ? requirementNeedsRevision
         ? await ensureAnalysisSession()
@@ -867,26 +933,30 @@ export function useWorkflowConversation({
           ? await ensurePlanningSession()
           : await ensureAnalysisSession()
       : undefined
-    // 应用验收、测试报告与审查确认必须续传到各自的应用级剧本，避免落回页面/API工作流。
+    // 应用验收、测试用例检查与审查确认必须续传到各自的应用级剧本，避免落回页面/API工作流。
     const applicationAcceptanceResume =
       workflow.summary?.phase === 'acceptance' &&
       !workflowSelectedPageId(workflow) &&
       !workflowEndpointExecutionScope(workflow)
     const reviewResume = workflow.summary?.phase === 'code_review'
-    const testingResume = workflow.summary?.phase === 'test_report'
+    const testingResume =
+      activeSession?.sessionKind === 'testing' ||
+      ['application_test', 'business_test'].includes(String(workflow.summary?.phase || ''))
     return sendWorkflowMessage(continuationMessage, {
       clarificationAnswers: answers,
       originalRequest,
       resumeState: workflow,
       selectedPageId: workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId,
       buildExecutionScope: workflowEndpointExecutionScope(workflow),
-      titleFrom: planningDesignContinuation
-        ? '项目计划'
-        : originalRequest || '需求分析',
+      titleFrom: planningDesignContinuation ? '项目计划' : originalRequest || '需求分析',
       sessionIdentity,
       directModification,
       suppressUserMessage: true,
-      reuseAssistantMessage: fileAcceptanceContinuation,
+      reuseAssistantMessage:
+        fileAcceptanceContinuation ||
+        testingResume ||
+        acceptanceContinuation ||
+        backgroundDispatchContinuation,
       // 分析/计划阶段确认必须继续走对应的工作台规划剧本，否则会被默认路由到
       // replayWorkbench，导致提交确认后不推进规划节点。
       workflowScope:
@@ -894,15 +964,15 @@ export function useWorkflowConversation({
           ? requirementNeedsRevision
             ? 'application_analysis'
             : requirementConfirmation || planningPhase || activeSession?.sessionKind === 'planning'
-            ? 'application_workbench_planning'
-            : 'application_analysis'
+              ? 'application_workbench_planning'
+              : 'application_analysis'
           : applicationAcceptanceResume
-              ? 'application_acceptance'
-            : testingResume
-              ? 'application_testing'
+            ? 'application_acceptance'
             : reviewResume
               ? 'application_review'
-              : undefined
+              : testingResume
+                ? 'application_testing'
+                : undefined
     })
   }
 
@@ -919,8 +989,8 @@ export function useWorkflowConversation({
     relatedEndpoint?: RelatedEndpointContext
   ): Promise<boolean> => {
     if (!selectedPageId || loading || workspaceBusy) return false
-    // 页面会话先只绑定页面；接口依赖由开发工作流分析节点确认后动态加入。
-    const identity = await ensurePageSession(selectedPageId, pageLabel)
+    // 开发阶段统一复用阶段主对话；页面只作为本轮 Workflow 的目标，不再创建页面专属会话。
+    const identity = await ensureDevelopmentSession()
     return sendWorkflowMessage(
       `${hasDetailPlan ? '继续实现' : '开始实现'}：${pageLabel}${
         relatedEndpoint ? `（包含 ${relatedEndpoint.endpointLabel}）` : ''
@@ -930,8 +1000,8 @@ export function useWorkflowConversation({
         selectedApiContractId: relatedEndpoint?.apiContractId,
         selectedEndpointId: relatedEndpoint?.endpointId,
         detailTargetType: 'page',
-      sessionIdentity: identity,
-      titleFrom: `实现${pageLabel}`,
+        sessionIdentity: identity,
+        titleFrom: `实现${pageLabel}`,
         ...(templateParams?.templateSourcePath
           ? {
               pageTemplate: {
@@ -941,6 +1011,8 @@ export function useWorkflowConversation({
               }
             }
           : {}),
+        // 复用模板选择节点所在的 assistant 消息，保持详细设计、Diff 和预览在同一条 Workflow 轨迹。
+        reuseAssistantMessage: true,
         // 模板选择已经由卡片表达，不能再把“开始实现 + 模板名”重复渲染成用户消息。
         suppressUserMessage: true
       }
@@ -955,11 +1027,8 @@ export function useWorkflowConversation({
     hasDetailPlan?: boolean
   }): Promise<boolean> => {
     if (!target.apiContractId || !target.endpointId || loading || workspaceBusy) return false
-    const identity = await ensureEndpointSession(
-      target.apiContractId,
-      target.endpointId,
-      target.endpointLabel
-    )
+    // 开发阶段统一复用阶段主对话；接口身份仅通过本轮 Workflow 参数传递。
+    const identity = await ensureDevelopmentSession()
     return sendWorkflowMessage(
       `${target.hasDetailPlan ? '继续实现接口' : '开始实现接口'}：${target.endpointLabel}`,
       {
@@ -975,6 +1044,7 @@ export function useWorkflowConversation({
         endpointLabel: target.endpointLabel,
         sessionIdentity: identity,
         titleFrom: `实现${target.endpointLabel}`,
+        reuseAssistantMessage: true,
         // 接口目标选择同样由产物卡片承载，历史只保留 Agent 的执行承接与节点过程。
         suppressUserMessage: true
       }
@@ -1138,7 +1208,7 @@ export function useWorkflowConversation({
     return () => window.clearTimeout(timer)
   }, [autoStartDesign, loading, planningPhase, workspaceBusy])
 
-  // 用户确认开发完成后进入测试阶段，测试 Agent 负责生成唯一测试报告。
+  // 用户确认开发完成后进入测试阶段，测试 Agent 负责执行完整用例集。
   const autoStartTestingRef = useRef(false)
   useEffect(() => {
     if (!autoStartTesting) autoStartTestingRef.current = false

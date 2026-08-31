@@ -30,6 +30,8 @@ type Props = {
   pages?: DevelopmentPlanningPageOption[]
   previewBaseUrl?: string
   selectedPagePath?: string
+  /** 开发产物内容区只展示页面效果，不重复展示浏览器工具栏。 */
+  showToolbar?: boolean
   /** 在应用预览中显示验收意见与确认控件。 */
   acceptanceEnabled?: boolean
   /** 当前版本是否已经完成验收。 */
@@ -66,6 +68,7 @@ export default function BrowserPreviewPanel({
   pages = [],
   previewBaseUrl = '',
   selectedPagePath = '',
+  showToolbar = true,
   acceptanceEnabled = false,
   acceptanceAccepted = false,
   onAcceptApplication,
@@ -167,7 +170,7 @@ export default function BrowserPreviewPanel({
 
   return (
     <section className={cx('browser-preview-panel', applicationMode && 'application-mode')}>
-      {!applicationMode ? (
+      {!applicationMode && showToolbar ? (
         <BrowserPreviewToolbar
           draftUrl={draftUrl}
           elementInspectorActive={elementInspector.active}
@@ -237,7 +240,6 @@ export default function BrowserPreviewPanel({
                 type="default"
               >
                 <span className={cx('browser-preview-acceptance-action-full')}>不通过，进入对话</span>
-                <span className={cx('browser-preview-acceptance-action-compact')}>不通过</span>
               </Button>
               <Button
                 aria-label="验收通过"
@@ -247,7 +249,6 @@ export default function BrowserPreviewPanel({
                 type="primary"
               >
                 <span className={cx('browser-preview-acceptance-action-full')}>验收通过</span>
-                <span className={cx('browser-preview-acceptance-action-compact')}>通过</span>
               </Button>
             </div>
           )}

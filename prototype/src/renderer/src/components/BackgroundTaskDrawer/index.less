@@ -1,0 +1,379 @@
+/* 后台任务队列抽屉：定位在裁剪宿主（菜单栏右边线）之内，滑出即从边线开始。 */
+.@{class-prefix}-background-task-drawer {
+  position: absolute;
+  z-index: 30;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  width: 420px;
+  flex-direction: column;
+  background: var(--wb-canvas);
+  border-right: 1px solid var(--wb-border);
+  box-shadow: 12px 0 30px rgba(27, 20, 55, 0.14);
+  /* 收起时整体平移一个自身宽度：右边缘恰好停在裁剪边界上，滑入即从菜单栏右边线移出。 */
+  transform: translateX(-100%);
+  transition: transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+  visibility: hidden;
+
+  &.@{class-prefix}-open {
+    transform: translateX(0);
+    visibility: visible;
+  }
+}
+
+/* —— 头部：图标徽标 + 标题说明 + 关闭按钮，对齐辅助抽屉头部。 —— */
+.@{class-prefix}-background-task-drawer-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-background-task-drawer-badge {
+  display: inline-flex;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  color: var(--wb-accent);
+  font-size: 15px;
+}
+
+.@{class-prefix}-background-task-drawer-titles {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+
+  strong {
+    color: var(--wb-text);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 18px;
+  }
+
+  small {
+    overflow: hidden;
+    color: var(--wb-text-tertiary);
+    font-size: 11px;
+    line-height: 15px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-background-task-drawer-close {
+  display: inline-flex;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-text-secondary);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+    color: var(--wb-text);
+  }
+}
+
+/* 异步/潮汐是任务执行属性，只作为标题旁的轻量标签呈现。 */
+.@{class-prefix}-background-task-drawer-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+
+  strong {
+    overflow: hidden;
+    color: var(--wb-text);
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* 任务种类标签：代码实现 / 用例生成，弱化呈现，不与状态争抢视觉层级。 */
+.@{class-prefix}-background-task-drawer-task-kind {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  color: var(--wb-text-tertiary);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  border-radius: 4px;
+  background: var(--wb-surface-subtle);
+}
+
+/* 同步执行标记：仅异步系统抽屉中的同步执行记录携带，说明其未经过后台队列。 */
+.@{class-prefix}-background-task-drawer-task-type {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  border-radius: 4px;
+  color: var(--wb-text-tertiary);
+  background: var(--wb-surface-subtle);
+}
+
+/* 已完成条目的后续步骤入口（如「验收」）：启动对应工作流的轻量按钮。 */
+.@{class-prefix}-background-task-drawer-accept {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 2px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--wb-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+  transition: background 0.16s ease;
+
+  &:hover {
+    background: var(--wb-accent-hover);
+  }
+
+  &:active {
+    background: var(--wb-accent-active);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+
+  // 验收工作流已在其它入口触发时置灰，防止重复发起。
+  &:disabled {
+    background: var(--wb-surface-subtle);
+    color: var(--wb-text-tertiary);
+    cursor: default;
+  }
+}
+
+/* 排队中条目的队列切换入口：与加载图标同权的无框图标，完整文案走 hover title 与 aria-label。 */
+.@{class-prefix}-background-task-drawer-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text-tertiary);
+  cursor: pointer;
+  transition: color 0.16s ease;
+
+  &:hover {
+    color: var(--wb-accent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+}
+
+/* —— 分段 Tab：样式对齐右侧工作区 Tab 条（底边框 + active 紫色下划线）。 —— */
+.@{class-prefix}-background-task-drawer-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-background-task-drawer-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  em {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--wb-surface-selected);
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+    font-style: normal;
+    font-weight: 600;
+    line-height: 16px;
+  }
+
+  &:hover {
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+  }
+
+  &.@{class-prefix}-active {
+    color: var(--wb-accent);
+    font-weight: 600;
+
+    em {
+      background: var(--wb-accent-soft);
+      color: var(--wb-accent);
+    }
+
+    &::after {
+      content: '';
+      position: absolute;
+      right: 8px;
+      bottom: 0;
+      left: 8px;
+      height: 2px;
+      border-radius: 2px;
+      background: var(--wb-accent);
+    }
+  }
+}
+
+/* —— 队列列表：当前 Tab 的单一滚动区。 —— */
+.@{class-prefix}-background-task-drawer-queue {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 16px 16px;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.@{class-prefix}-background-task-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-background-task-drawer-order {
+  display: inline-flex;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--wb-surface-subtle);
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-background-task-drawer-item-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  min-width: 0;
+  color: var(--wb-text);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-background-task-drawer-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  align-items: center;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+
+  // 状态文案后的加载动画图标与切换图标保持同色同尺寸，整列视觉对齐。
+  .anticon {
+    font-size: 12px;
+  }
+}
+
+/* 运行态：主题紫强调；失败态：红色警示。 */
+.@{class-prefix}-background-task-drawer-item.@{class-prefix}-running {
+  border-color: var(--wb-accent-border);
+  background: var(--wb-accent-soft);
+
+  .@{class-prefix}-background-task-drawer-order {
+    background: var(--wb-accent);
+    color: #fff;
+  }
+
+  .@{class-prefix}-background-task-drawer-status {
+    color: var(--wb-accent);
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-background-task-drawer-item.@{class-prefix}-validating {
+  border-color: var(--wb-accent-border);
+
+  .@{class-prefix}-background-task-drawer-status {
+    color: var(--wb-accent);
+  }
+}
+
+.@{class-prefix}-background-task-drawer-item.@{class-prefix}-failed {
+  border-color: var(--wb-danger-border);
+
+  .@{class-prefix}-background-task-drawer-status {
+    color: var(--wb-danger);
+  }
+}
+
+/* 已完成 Tab：紧凑弱化行，大批量时保持轻量。 */
+.@{class-prefix}-background-task-drawer-queue.@{class-prefix}-is-done {
+  gap: 6px;
+}
+
+.@{class-prefix}-background-task-drawer-item.@{class-prefix}-done {
+  padding: 6px 10px;
+  border-color: var(--wb-border-soft);
+  background: transparent;
+
+  .@{class-prefix}-background-task-drawer-order {
+    background: transparent;
+    color: var(--wb-text-tertiary);
+  }
+
+  .@{class-prefix}-background-task-drawer-item-title {
+    color: var(--wb-text-secondary);
+    font-weight: 400;
+  }
+}
+
+.@{class-prefix}-background-task-drawer-empty {
+  margin: 24px 16px;
+  color: var(--wb-text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}

@@ -23,6 +23,21 @@ export type ChatSessionMessage = {
   workflow?: WorkflowRunPayload
   toolCalls?: ToolCallRecord[]
   processSteps?: ProcessStepRecord[]
+  /** 开发阶段主对话中的页面模板选择卡，必须随历史会话恢复。 */
+  detailBlocker?: {
+    type: 'page'
+    pageId: string
+    label: string
+    path?: string
+    purpose?: string
+  } | {
+    type: 'endpoint'
+    apiContractId: string
+    endpointId: string
+    label: string
+    path?: string
+    purpose?: string
+  }
   createdAt: number
 }
 
@@ -34,7 +49,6 @@ export type ChatSessionSavedFile = {
 }
 
 export type ChatSessionRecord = {
-  artifactIds?: string[]
   savedFiles?: ChatSessionSavedFile[]
   id: string
   title: string
@@ -53,7 +67,6 @@ export type ChatSessionRecord = {
 }
 
 export type ChatSessionSummary = {
-  artifactIds?: string[]
   savedFiles?: ChatSessionSavedFile[]
   id: string
   title: string
@@ -121,6 +134,10 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
           : undefined,
       toolCalls: normalizeToolCalls(item.toolCalls),
       processSteps: normalizeProcessSteps(item.processSteps),
+      detailBlocker:
+        item.detailBlocker && typeof item.detailBlocker === 'object'
+          ? (item.detailBlocker as ChatSessionMessage['detailBlocker'])
+          : undefined,
       approvalStatus:
         item.approvalStatus === 'approved_once' ||
         item.approvalStatus === 'approved_always' ||
@@ -222,24 +239,39 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
   if (!value || typeof value !== 'object') return null
   const session = value as Partial<ChatSessionRecord>
   if (!session.id || !session.editorMode || !session.threadId) return null
-  const endpointContext = inferEndpointContextFromMessages(session.messages)
+  const normalizedSessionKind = normalizeSessionKind(session.sessionKind)
+  const explicitPageId = normalizePageId(session.pageId)
+  const explicitApiContractId = normalizeEndpointField(session.apiContractId)
+  const explicitEndpointId = normalizeEndpointField(session.endpointId)
+  // 开发阶段主对话允许承载多个页面/接口；不能从最新 Workflow 反推单一目标，
+  // 否则会话重新读取后会被错误绑定到第一个页面，导致后续预览选中态漂移。
+  const isDevelopmentMainSession =
+    normalizedSessionKind === 'development' && session.title === '应用开发'
+  const endpointContext = isDevelopmentMainSession
+    ? undefined
+    : inferEndpointContextFromMessages(session.messages)
   return {
-    artifactIds: Array.isArray(session.artifactIds)
-      ? [...new Set(session.artifactIds.map(String).filter(Boolean))]
-      : undefined,
     savedFiles: normalizeSavedFiles(session.savedFiles),
     id: String(session.id),
     title: String(session.title || '新对话'),
     editorMode: session.editorMode,
     threadId: String(session.threadId),
-    apiContractId: normalizeEndpointField(session.apiContractId) || endpointContext?.apiContractId,
-    endpointId: normalizeEndpointField(session.endpointId) || endpointContext?.endpointId,
+    apiContractId: isDevelopmentMainSession
+      ? undefined
+      : explicitApiContractId || endpointContext?.apiContractId,
+    endpointId: isDevelopmentMainSession
+      ? undefined
+      : explicitEndpointId || endpointContext?.endpointId,
     endpointLabel:
-      normalizeEndpointField(session.endpointLabel) ||
-      endpointContext?.endpointLabel ||
-      inferEndpointLabelFromTitle(session.title),
-    pageId: normalizePageId(session.pageId) || inferPageIdFromMessages(session.messages),
-    sessionKind: normalizeSessionKind(session.sessionKind),
+      isDevelopmentMainSession
+        ? undefined
+        : normalizeEndpointField(session.endpointLabel) ||
+          endpointContext?.endpointLabel ||
+          inferEndpointLabelFromTitle(session.title),
+    pageId: isDevelopmentMainSession
+      ? undefined
+      : explicitPageId || inferPageIdFromMessages(session.messages),
+    sessionKind: normalizedSessionKind,
     versionId: normalizeEndpointField(session.versionId),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
@@ -250,7 +282,6 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
 
 function toSummary(session: ChatSessionRecord): ChatSessionSummary {
   return {
-    artifactIds: session.artifactIds,
     savedFiles: session.savedFiles,
     id: session.id,
     title: session.title,
@@ -275,9 +306,6 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       Boolean(item && typeof item === 'object')
     )
     .map((item) => ({
-      artifactIds: Array.isArray(item.artifactIds)
-        ? [...new Set(item.artifactIds.map(String).filter(Boolean))]
-        : undefined,
       savedFiles: normalizeSavedFiles(item.savedFiles),
       id: String(item.id || ''),
       title: String(item.title || '新对话'),

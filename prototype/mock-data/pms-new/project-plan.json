@@ -36,6 +36,14 @@
       "summary": "我的回检单分页查询"
     }
   ],
+  "test_case_estimate": {
+    "total": 6,
+    "groups": [
+      { "id": "introduction", "label": "回检介绍", "total": 1, "coverage": "页面访问、流程说明与进入回检入口" },
+      { "id": "my-rechecks", "label": "我的回检", "total": 3, "coverage": "列表加载、回检提交、必填校验与状态筛选" },
+      { "id": "query-api", "label": "回检查询接口", "total": 2, "coverage": "当前用户数据、分页参数与状态筛选" }
+    ]
+  },
   "execution_order": [
     {
       "order": 1,

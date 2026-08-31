@@ -1,9 +1,6 @@
 import {
   CheckOutlined,
-  ApiOutlined,
-  DatabaseOutlined,
   FileTextOutlined,
-  LockOutlined,
   PaperClipOutlined,
   PlusOutlined,
   RightOutlined,
@@ -13,6 +10,7 @@ import {
 import { Button, Empty, Input, message, Popover, Spin, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { WorkspaceSourceFile } from '../../../../mock/workspaceFiles'
 import { requestUserSkills } from '../../../../service/userSkills'
 import type { ChatMessageSkill, UserSkill } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -21,21 +19,12 @@ import { enabledUserSkills, reconcileEnabledChatSkills } from '../../../SkillsPa
 const { Text } = Typography
 
 type ResourceSkillMenuProps = {
-  artifactResources?: ComposerArtifactResource[]
+  availableFiles: WorkspaceSourceFile[]
   disabled: boolean
-  onArtifactAttach?: (artifactId: string) => Promise<void>
+  onSelectedFilePathsChange: (paths: string[]) => void
   selectedSkills: ChatMessageSkill[]
+  selectedFilePaths: string[]
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
-}
-
-export type ComposerArtifactResource = {
-  accessMessage: string
-  accessMode: 'unavailable' | 'read' | 'write'
-  attached: boolean
-  id: string
-  name: string
-  path: string
-  type: 'document' | 'page' | 'endpoint' | 'entity'
 }
 
 /** 把菜单挂到输入框内，使浅色样式变量和定位上下文保持一致。 */
@@ -45,16 +34,16 @@ function getResourcePopupContainer(triggerNode: HTMLElement): HTMLElement {
 
 /** 提供资源一级菜单与可搜索、多选的技能二级菜单。 */
 export default function ResourceSkillMenu({
-  artifactResources = [],
+  availableFiles,
   disabled,
-  onArtifactAttach,
+  onSelectedFilePathsChange,
   selectedSkills,
+  selectedFilePaths,
   onSelectedSkillsChange
 }: ResourceSkillMenuProps): ReactElement {
   const [visible, setVisible] = useState(false)
   const [skillPanelOpen, setSkillPanelOpen] = useState(false)
-  const [artifactPanelOpen, setArtifactPanelOpen] = useState(false)
-  const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([])
+  const [filePanelOpen, setFilePanelOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [skills, setSkills] = useState<UserSkill[]>([])
   const [loading, setLoading] = useState(false)
@@ -72,6 +61,11 @@ export default function ResourceSkillMenu({
       `${skill.name}\n${skill.description}`.toLocaleLowerCase().includes(query)
     )
   }, [search, skills])
+  const filteredFiles = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase()
+    if (!query) return availableFiles
+    return availableFiles.filter((file) => file.path.toLocaleLowerCase().includes(query))
+  }, [availableFiles, search])
 
   useEffect(() => {
     selectedSkillsRef.current = selectedSkills
@@ -118,7 +112,7 @@ export default function ResourceSkillMenu({
     setVisible(nextVisible)
     if (!nextVisible) {
       setSkillPanelOpen(false)
-      setArtifactPanelOpen(false)
+      setFilePanelOpen(false)
       setSearch('')
     }
   }
@@ -132,19 +126,121 @@ export default function ResourceSkillMenu({
     handleVisibleChange(false)
   }
 
-  /** 把可用产物加入当前上下文；只读产物可引用但不会获得编辑权。 */
-  const handleToggleArtifact = async (artifact: ComposerArtifactResource): Promise<void> => {
-    if (artifact.accessMode === 'unavailable') return
-    const selected = selectedArtifactIds.includes(artifact.id)
-    setSelectedArtifactIds((current) =>
+  /** 切换本次 Workflow 要读取的文件，只更新当前输入上下文，不写入会话归属。 */
+  const handleToggleFile = (file: WorkspaceSourceFile): void => {
+    const selected = selectedFilePaths.includes(file.path)
+    onSelectedFilePathsChange(
       selected
-        ? current.filter((artifactId) => artifactId !== artifact.id)
-        : [...current, artifact.id]
+        ? selectedFilePaths.filter((path) => path !== file.path)
+        : [...selectedFilePaths, file.path]
     )
-    if (!selected && artifact.accessMode === 'write' && !artifact.attached) {
-      await onArtifactAttach?.(artifact.id)
-    }
   }
+
+  const skillPanel = (
+    <div className={cx('composer-skill-panel')}>
+      <div className={cx('composer-skill-heading')}>
+        <ToolOutlined />
+        <Text strong>添加技能</Text>
+      </div>
+      <Input
+        allowClear
+        aria-label="搜索技能"
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="搜索技能"
+        prefix={<SearchOutlined />}
+        value={search}
+      />
+      <div className={cx('composer-skill-list')}>
+        {loading ? (
+          <div className={cx('composer-skill-state')}>
+            <Spin size="small" />
+          </div>
+        ) : error ? (
+          <div className={cx('composer-skill-state', 'error')}>
+            <Text type="danger">{error}</Text>
+          </div>
+        ) : filteredSkills.length === 0 ? (
+          <Empty
+            description={search ? '没有匹配技能' : '暂无可用技能'}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        ) : (
+          filteredSkills.map((skill) => {
+            const selected = selectedNames.has(skill.name)
+            return (
+              <button
+                aria-pressed={selected}
+                className={cx('composer-skill-item', selected && 'selected')}
+                key={`${skill.directoryName}:${skill.name}`}
+                onClick={() => handleToggleSkill(skill)}
+                type="button"
+              >
+                <span className={cx('composer-skill-avatar')}>
+                  {skill.name.slice(0, 1).toUpperCase()}
+                </span>
+                <span className={cx('composer-skill-copy')}>
+                  <Text>{skill.name}</Text>
+                  <Text type="secondary">{skill.description || '暂无描述'}</Text>
+                </span>
+                <span className={cx('composer-skill-check')}>{selected && <CheckOutlined />}</span>
+              </button>
+            )
+          })
+        )}
+      </div>
+    </div>
+  )
+
+  const filePanel = (
+    <div className={cx('composer-file-panel')}>
+      <header>
+        <Text strong>添加文件</Text>
+        <Text type="secondary">本次发送时带入 Workflow</Text>
+      </header>
+      <Input
+        allowClear
+        aria-label="搜索文件"
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="搜索文件"
+        prefix={<SearchOutlined />}
+        value={search}
+      />
+      <div className={cx('composer-file-list')}>
+        {filteredFiles.length > 0 ? (
+          filteredFiles.map((file) => {
+            const selected = selectedFilePaths.includes(file.path)
+            const fileName = file.path.split('/').pop() || file.path
+            return (
+              <button
+                aria-pressed={selected}
+                className={cx('composer-file-item', selected && 'selected')}
+                key={file.path}
+                onClick={() => handleToggleFile(file)}
+                title={file.path}
+                type="button"
+              >
+                <span className={cx('composer-file-icon')}>
+                  <FileTextOutlined />
+                </span>
+                <span className={cx('composer-file-copy')}>
+                  <Text>{fileName}</Text>
+                  <Text code type="secondary">
+                    {file.path}
+                  </Text>
+                </span>
+                <span className={cx('composer-file-check')}>{selected && <CheckOutlined />}</span>
+              </button>
+            )
+          })
+        ) : (
+          <Empty
+            description={search ? '没有匹配文件' : '暂无可选文件'}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        )}
+      </div>
+    </div>
+  )
 
   const content = (
     <div className={cx('composer-resource-popover')}>
@@ -152,8 +248,9 @@ export default function ResourceSkillMenu({
         <button
           className={cx('composer-resource-item', skillPanelOpen && 'active')}
           onClick={() => {
-            setArtifactPanelOpen(false)
+            setFilePanelOpen(false)
             setSkillPanelOpen(true)
+            setSearch('')
           }}
           type="button"
         >
@@ -162,129 +259,22 @@ export default function ResourceSkillMenu({
           <RightOutlined />
         </button>
         <button
-          className={cx('composer-resource-item', artifactPanelOpen && 'active')}
+          className={cx('composer-resource-item', filePanelOpen && 'active')}
           onClick={() => {
             setSkillPanelOpen(false)
-            setArtifactPanelOpen(true)
+            setFilePanelOpen(true)
+            setSearch('')
           }}
           type="button"
         >
           <PaperClipOutlined />
           <span>添加文件</span>
+          {selectedFilePaths.length > 0 ? <small>{selectedFilePaths.length}</small> : null}
           <RightOutlined />
         </button>
       </div>
-      {skillPanelOpen && (
-        <div className={cx('composer-skill-panel')}>
-          <Input
-            allowClear
-            aria-label="搜索技能"
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜索技能"
-            prefix={<SearchOutlined />}
-            value={search}
-          />
-          <div className={cx('composer-skill-list')}>
-            {loading ? (
-              <div className={cx('composer-skill-state')}>
-                <Spin size="small" />
-              </div>
-            ) : error ? (
-              <div className={cx('composer-skill-state', 'error')}>
-                <Text type="danger">{error}</Text>
-              </div>
-            ) : filteredSkills.length === 0 ? (
-              <Empty
-                description={search ? '没有匹配技能' : '暂无可用技能'}
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
-            ) : (
-              filteredSkills.map((skill) => {
-                const selected = selectedNames.has(skill.name)
-                return (
-                  <button
-                    aria-pressed={selected}
-                    className={cx('composer-skill-item', selected && 'selected')}
-                    key={`${skill.directoryName}:${skill.name}`}
-                    onClick={() => handleToggleSkill(skill)}
-                    type="button"
-                  >
-                    <span className={cx('composer-skill-avatar')}>
-                      {skill.name.slice(0, 1).toUpperCase()}
-                    </span>
-                    <span className={cx('composer-skill-copy')}>
-                      <Text>{skill.name}</Text>
-                      <Text type="secondary">{skill.description || '暂无描述'}</Text>
-                    </span>
-                    <span className={cx('composer-skill-check')}>
-                      {selected && <CheckOutlined />}
-                    </span>
-                  </button>
-                )
-              })
-            )}
-          </div>
-        </div>
-      )}
-      {artifactPanelOpen && (
-        <div className={cx('composer-artifact-panel')}>
-          <header>
-            <Text strong>应用产物</Text>
-            <Text type="secondary">编辑权随默认对话锁定</Text>
-          </header>
-          <div className={cx('composer-artifact-list')}>
-            {artifactResources.length > 0 ? (
-              artifactResources.map((artifact) => {
-                const selected = selectedArtifactIds.includes(artifact.id)
-                const locked = artifact.accessMode !== 'write'
-                return (
-                  <button
-                    aria-pressed={selected}
-                    className={cx(
-                      'composer-artifact-item',
-                      selected && 'selected',
-                      artifact.accessMode
-                    )}
-                    disabled={artifact.accessMode === 'unavailable'}
-                    key={artifact.id}
-                    onClick={() => void handleToggleArtifact(artifact)}
-                    title={artifact.accessMessage}
-                    type="button"
-                  >
-                    <span className={cx('composer-artifact-icon')}>
-                      {artifact.type === 'endpoint' ? (
-                        <ApiOutlined />
-                      ) : artifact.type === 'entity' ? (
-                        <DatabaseOutlined />
-                      ) : (
-                        <FileTextOutlined />
-                      )}
-                    </span>
-                    <span className={cx('composer-artifact-copy')}>
-                      <Text>{artifact.name}</Text>
-                      <Text code type="secondary">
-                        {artifact.path}
-                      </Text>
-                    </span>
-                    <span className={cx('composer-artifact-access', artifact.accessMode)}>
-                      {locked ? <LockOutlined /> : <CheckOutlined />}
-                      {artifact.attached
-                        ? '已关联'
-                        : artifact.accessMode === 'write'
-                          ? '可编辑'
-                          : artifact.accessMode === 'read'
-                            ? '只读'
-                            : '未生成'}
-                    </span>
-                  </button>
-                )
-              })
-            ) : (
-              <Empty description="暂无可引用产物" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-            )}
-          </div>
-        </div>
-      )}
+      {skillPanelOpen ? skillPanel : null}
+      {filePanelOpen ? filePanel : null}
     </div>
   )
 
@@ -299,7 +289,7 @@ export default function ResourceSkillMenu({
       onVisibleChange={handleVisibleChange}
     >
       <Button
-        aria-label="添加资源"
+        aria-label="添加技能或文件"
         className={cx('composer-resource-button')}
         disabled={disabled}
         icon={<PlusOutlined />}

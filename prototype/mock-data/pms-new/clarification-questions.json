@@ -55,7 +55,7 @@
     "type": "text",
     "required": false,
     "question": "还有其他需要补充的业务约束或合规要求吗？（选填）",
-    "presetAnswer": "回检数据统一存储于分行 MySQL，审批与操作留痕，满足审计要求。",
+    "presetAnswer": "数据存分行 MySQL，审批留痕，满足审计。",
     "placeholder": "例如：需对接分行统一认证、数据留存审计等"
   }
 ]

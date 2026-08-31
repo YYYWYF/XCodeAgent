@@ -41,7 +41,8 @@ import {
 import { mockApplicationInPlanning } from './mockHttpAgent'
 import { isEndpointDesigned, isPageDesigned } from './designState'
 
-const MOCK_APPLICATION_PREVIEW_URL = 'http://127.0.0.1:5190'
+// 预览地址跟随当前页面主机名：本机访问走 127.0.0.1，局域网设备访问时自动指向原型所在机器。
+const MOCK_APPLICATION_PREVIEW_URL = `http://${window.location.hostname || '127.0.0.1'}:5190`
 
 // 模拟 ipcRenderer.invoke 的成功返回。
 const ok = <T>(data: T): Promise<T> => Promise.resolve(data)
@@ -193,7 +194,7 @@ const xcodeAgent = {
         (editorMode || 'frontend') as never
       ) as Array<{
         id: string; title: string; editorMode: string; threadId: string; pageId?: string
-        artifactIds?: string[]; savedFiles?: unknown[]; apiContractId?: string; endpointId?: string; sessionKind?: string; versionId?: string
+        savedFiles?: unknown[]; apiContractId?: string; endpointId?: string; sessionKind?: string; versionId?: string
         createdAt: number; updatedAt: number; messages: unknown[]
       }>
       // 合并走完的实时会话（页面/接口开发、审查），否则切回开发阶段后大纲点页面/接口，
@@ -205,12 +206,11 @@ const xcodeAgent = {
         title: s.title,
         editorMode: s.editorMode,
         threadId: s.threadId,
-        artifactIds: s.artifactIds,
         savedFiles: s.savedFiles,
         pageId: s.pageId,
         apiContractId: s.apiContractId,
         endpointId: s.endpointId,
-        // 阶段默认会话依赖该字段声明文档产物归属；丢失后点击需求/计划/测试报告只会换右侧文档，
+        // 阶段默认会话依赖该字段声明文档产物归属；丢失后点击需求/计划只会换右侧文档，
         // 对话仍停留在原会话。
         sessionKind: s.sessionKind,
         versionId: s.versionId,

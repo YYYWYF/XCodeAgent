@@ -29,6 +29,7 @@ export type SendWorkflowMessageOptions = {
   }
   originalRequest?: string
   selectedSkillNames?: string[]
+  selectedFilePaths?: string[]
   selectedPageId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
@@ -42,8 +43,6 @@ export type SendWorkflowMessageOptions = {
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onToolCalls?: (toolCalls: ToolCallRecord[]) => void
   onProcessSteps?: (steps: ProcessStepRecord[]) => void
-  /** 工作流分析出新的关联产物时通知会话层动态扩展产物关系。 */
-  onArtifactDiscovered?: (artifactIds: string[]) => void
   planControlAction?: 'stop' | 'end'
   planControlRunId?: string
   resumeExecutionRunId?: string
@@ -71,6 +70,7 @@ export function buildWorkflowForwardedProps(
     applicationPlanningRecovery: options.applicationPlanningRecovery,
     originalRequest: options.originalRequest,
     selectedSkillNames: options.selectedSkillNames,
+    selectedFilePaths: options.selectedFilePaths,
     selectedPageId: options.selectedPageId,
     selectedApiContractId: options.selectedApiContractId,
     selectedEndpointId: options.selectedEndpointId,
@@ -306,7 +306,7 @@ export class AgUiChatSession {
       void message
       const [
         { replayPlanning, replayDesignPhase },
-        { replayApplicationAcceptance, replayApplicationTesting, replayWorkbench, replayCodeReview }
+        { replayApplicationAcceptance, replayApplicationTesting, replayWorkbench, replayArtifactAcceptance, replayCodeReview }
       ] = await Promise.all([
         import('../mock/scripts/planning'),
         import('../mock/scripts/workbench')
@@ -320,8 +320,7 @@ export class AgUiChatSession {
         onContent: trackContent,
         onWorkflow: options.onWorkflow,
         onApplicationLifecycle: options.onApplicationLifecycle,
-        onProcessSteps: options.onProcessSteps,
-        onArtifactDiscovered: options.onArtifactDiscovered
+        onProcessSteps: options.onProcessSteps
       }
       const result =
         options.workflowScope === 'application_planning'
@@ -336,7 +335,9 @@ export class AgUiChatSession {
                 ? await replayApplicationTesting(this.threadId, options, callbacks)
             : options.workflowScope === 'application_review'
               ? await replayCodeReview(this.threadId, options, callbacks)
-              : await replayWorkbench(this.threadId, options, callbacks)
+              : options.workflowScope === 'artifact_acceptance'
+                ? await replayArtifactAcceptance(this.threadId, options, callbacks)
+                : await replayWorkbench(this.threadId, options, callbacks)
       return {
         threadId: this.threadId,
         runId: result?.runId || 'mock-run',

@@ -26,10 +26,9 @@ export function makeCompleteLifecycle(appId: string, appName: string): Applicati
       }
     },
     extensions: {
-      testReportStatus: 'passed',
-      testReportRound: 2,
-      testReportBasedOnRevision: 1,
-      testReportDefects: [],
+    testExecutionStatus: 'passed',
+    testCasesCompleted: 6,
+    testCasesTotal: 6,
       reviewStatus: 'passed',
       acceptanceStatus: 'passed',
       phaseValidity: {

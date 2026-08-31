@@ -34,8 +34,8 @@
 
 .@{class-prefix}-embedded-preview-open {
   .@{class-prefix}-ai-chat-assistant {
-    flex: 0 0 var(--assistant-panel-width, 660px);
-    width: var(--assistant-panel-width, 660px);
+    flex: 0 0 var(--assistant-panel-width, 520px);
+    width: var(--assistant-panel-width, 520px);
     border-right: 0;
   }
 }
@@ -158,12 +158,24 @@
   background: var(--wb-canvas);
   container-name: ai-chat-main;
   container-type: inline-size;
+
+  /* 明确拆分上下两块：消息区占据剩余高度，输入区固定在底部且保持可交互。 */
+  > .@{class-prefix}-ai-message-list-shell {
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  > .@{class-prefix}-ai-chat-composer-area {
+    min-height: 0;
+    flex: 0 0 auto;
+    pointer-events: auto;
+  }
 }
 
 .@{class-prefix}-composer-code-change-slot {
   width: 100%;
   flex: 0 0 auto;
-  padding: 8px 30px 0;
+  padding: 6px 18px 0;
   box-sizing: border-box;
 
   > .@{class-prefix}-code-change-card {
@@ -176,7 +188,7 @@
 .@{class-prefix}-ai-chat-composer-area {
   flex: 0 0 auto;
   border-top: 1px solid var(--wb-border);
-  background: var(--wb-canvas);
+  background: var(--wb-surface-subtle);
 }
 
 .@{class-prefix}-preview-action-error.ant-alert {

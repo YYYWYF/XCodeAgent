@@ -4,15 +4,36 @@ import {
   LoadingOutlined,
   CloudUploadOutlined,
   CheckCircleFilled,
+  HourglassOutlined,
+  MoonOutlined,
   PlusOutlined,
   HistoryOutlined
 } from '@ant-design/icons'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactElement } from 'react'
 import { LeftPanel } from '../components'
 import WorkbenchTopBar from '../components/WorkbenchTopBar'
+import BackgroundTaskDrawer, {
+  type BackgroundTaskItem
+} from '../components/BackgroundTaskDrawer'
+import {
+  BACKGROUND_TASK_KIND_LABEL,
+  BACKGROUND_TASK_NEXT_STEP_LABEL,
+  BACKGROUND_TASK_SYSTEM_LABEL,
+  retainBackgroundTasksWithinApplications,
+  switchBackgroundTaskQueue,
+  type BackgroundTask,
+  type BackgroundTaskSystem
+} from '../backgroundTasks'
+import { useBackgroundTasks, backgroundTasksForVersion } from '../hooks/useBackgroundTasks'
+import type { TestCaseGenerationTaskType } from '../testCasePreparation'
+import AuxiliaryDrawer, {
+  type AuxiliaryDrawerMode
+} from '../components/AiChatPanel/components/AuxiliaryDrawer'
 import { WorkbenchPhaseProvider } from '../context'
 import {
   inspectWorkspacePlanningArtifacts,
+  loadCachedApplications,
   loadWorkspaceApplicationConfig
 } from '../service/applicationStorage'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
@@ -38,8 +59,10 @@ import type {
   DevelopmentPlanningPageOption,
   EditorMode
 } from '../typings'
+import type { WorkbenchArtifactProgress } from '../workbenchDomain'
 import { cx, previewOrigin } from '../utils'
 import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
+import { useAsyncTestCasePreparation } from '../hooks/useAsyncTestCasePreparation'
 import './WorkbenchPage.less'
 
 type Props = {
@@ -63,6 +86,50 @@ const mockCommitSha = (): string =>
 // 生成版本弹框的默认日志(新建应用旅程演示预填):写死一句具体业务功能描述。
 function buildDefaultVersionLog(): string {
   return '新增回检单填报与审核功能'
+}
+
+/** 抽屉空间有限：运行中只对外表达整体是否在执行（执行中/排队中），不展示内部子节点阶段。 */
+function backgroundTaskPhaseText(task: BackgroundTask): string {
+  if (task.status === 'queued') return '排队中'
+  return '执行中'
+}
+
+/** 把一条后台任务映射为抽屉条目；两套系统共用同一映射，保证交互结构完全一致。 */
+function mapBackgroundTaskItem(
+  task: BackgroundTask,
+  onAccept: (taskId: string) => void,
+  onSwitchQueue: (taskId: string, target: BackgroundTaskSystem) => void,
+  acceptDisabled: boolean
+): BackgroundTaskItem {
+  const nextStepPending = Boolean(
+    task.kind === 'artifact_implementation' && task.nextStep && !task.nextStep.done
+  )
+  // 排队中（未开始）的任务允许在两条算力队列间切换；运行中/已结束不提供入口。
+  const switchTarget: BackgroundTaskSystem | undefined =
+    task.status === 'queued' ? (task.pool === 'async' ? 'tide' : 'async') : undefined
+  return {
+    key: task.id,
+    status: task.status,
+    title: task.title,
+    kindLabel: BACKGROUND_TASK_KIND_LABEL[task.kind],
+    statusText:
+      task.status === 'queued' || task.status === 'running'
+        ? backgroundTaskPhaseText(task)
+        : task.kind === 'test_case_generation' && task.status === 'completed'
+          ? '已就绪'
+          : undefined,
+    nextStepLabel: nextStepPending
+      ? BACKGROUND_TASK_NEXT_STEP_LABEL[task.nextStep!.type]
+      : undefined,
+    onNextStep: nextStepPending ? () => onAccept(task.id) : undefined,
+    nextStepDisabled: nextStepPending && acceptDisabled,
+    switchLabel:
+      switchTarget !== undefined
+        ? `转到${BACKGROUND_TASK_SYSTEM_LABEL[switchTarget]}`
+        : undefined,
+    onSwitchQueue:
+      switchTarget !== undefined ? () => onSwitchQueue(task.id, switchTarget) : undefined
+  }
 }
 
 // 新迭代版本的初始 lifecycle(回到 collecting_requirement,走完整旅程)。
@@ -89,7 +156,7 @@ function WorkbenchPage({
   const [viewingVersionId, setViewingVersionId] = useState(application.currentVersionId || '')
   const [rollbackTargetId, setRollbackTargetId] = useState('')
   const [developmentPlanningPagesLoaded, setDevelopmentPlanningPagesLoaded] = useState(false)
-  const [hasPageDesigns, setHasPageDesigns] = useState(false)
+  const [, setHasPageDesigns] = useState(false)
   const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<
     DevelopmentPlanningPageOption[]
   >([])
@@ -111,8 +178,69 @@ function WorkbenchPage({
   // “允不允许进入”与“当前进没进去”是两个状态，分别由这两个 state 承载。
   const [testingEntryAvailable, setTestingEntryAvailable] = useState(false)
   const [testingEntryRequest, setTestingEntryRequest] = useState(0)
+  // 开发准入门（计划确认后的进入开发弹框）：与测试/审查共用“可进入 + 重新唤起请求”模式。
+  const [developmentEntryAvailable, setDevelopmentEntryAvailable] = useState(false)
+  const [developmentEntryRequest, setDevelopmentEntryRequest] = useState(0)
   const [reviewEntryAvailable, setReviewEntryAvailable] = useState(false)
   const [reviewEntryRequest, setReviewEntryRequest] = useState(0)
+  const [developmentArtifactProgress, setDevelopmentArtifactProgress] =
+    useState<WorkbenchArtifactProgress>({ completed: 0, total: 0 })
+  const [testPreparationOpenRequest, setTestPreparationOpenRequest] = useState(0)
+  // 两套任务系统各自的抽屉与临时对话抽屉统一由工作台页持有：同一时间只允许打开一个。
+  const [backgroundTasksDrawer, setBackgroundTasksDrawer] = useState<BackgroundTaskSystem | null>(
+    null
+  )
+  // 点击待验收任务的「验收」入口时通过自增请求通知聊天面板启动验收工作流。
+  const [backgroundTaskAcceptRequest, setBackgroundTaskAcceptRequest] = useState<{
+    nonce: number
+    taskId: string
+  }>({ nonce: 0, taskId: '' })
+  // 验收工作流进行中的任务：入口触发后即禁用其它入口，结束（成败皆算）后解除。
+  const [acceptanceInFlight, setAcceptanceInFlight] = useState<Record<string, true>>({})
+  const handleAcceptBackgroundTask = useCallback((taskId: string): void => {
+    setAcceptanceInFlight((current) => ({ ...current, [taskId]: true }))
+    setBackgroundTasksDrawer(null)
+    setBackgroundTaskAcceptRequest((current) => ({ nonce: current.nonce + 1, taskId }))
+  }, [])
+  const handleBackgroundTaskAcceptanceSettled = useCallback((taskId: string): void => {
+    setAcceptanceInFlight((current) => {
+      const next = { ...current }
+      delete next[taskId]
+      return next
+    })
+  }, [])
+  const [testCaseGenerationTaskType, setTestCaseGenerationTaskType] =
+    useState<TestCaseGenerationTaskType>()
+  const [auxiliaryDrawerMode, setAuxiliaryDrawerMode] = useState<AuxiliaryDrawerMode | null>(null)
+  /** 打开临时对话抽屉，并互斥关闭两套任务系统的抽屉。 */
+  const openTemporaryConversation = (): void => {
+    setBackgroundTasksDrawer(null)
+    setAuxiliaryDrawerMode('temporary-conversation')
+  }
+  /** 打开指定任务系统的队列抽屉，并互斥关闭临时对话抽屉。 */
+  const openBackgroundTasksDrawer = (system: BackgroundTaskSystem): void => {
+    setAuxiliaryDrawerMode(null)
+    setBackgroundTasksDrawer(system)
+  }
+  /** 再点已打开的同系统入口时收起抽屉；入口是「展开/收起」的切换而不是单向打开。 */
+  const toggleBackgroundTasksDrawer = (system: BackgroundTaskSystem): void => {
+    if (backgroundTasksDrawer === system) {
+      closeBackgroundTasksDrawer()
+      return
+    }
+    openBackgroundTasksDrawer(system)
+  }
+  /** 关闭后台任务抽屉。 */
+  const closeBackgroundTasksDrawer = (): void => {
+    setBackgroundTasksDrawer(null)
+  }
+  /** 关闭临时对话抽屉。 */
+  const closeAuxiliaryDrawer = (): void => {
+    setAuxiliaryDrawerMode(null)
+  }
+  // 用例生成队列动态绑定：顶部芯片打开用例任务实际所在的任务系统抽屉。
+  const testCaseQueueSystem: BackgroundTaskSystem =
+    testCaseGenerationTaskType === 'tide' ? 'tide' : 'async'
   // 生成版本:版本描述(提交日志)+ 多步骤进度态(打包/提交码云/打Tag)。
   const [versionDescription, setVersionDescription] = useState('')
   const [generating, setGenerating] = useState<{ stepIndex: number } | null>(null)
@@ -353,6 +481,21 @@ function WorkbenchPage({
     isViewingActiveVersion && viewedVersion?.lifecycle && applicationLifecycle
       ? latestApplicationLifecycle(viewedVersion.lifecycle, applicationLifecycle)
       : viewedVersion?.lifecycle || applicationLifecycle
+  const testCasePreparationEnabled = new Set([
+    'generating_ui_designs',
+    'awaiting_ui_design_confirmation',
+    'generating_technical_plan',
+    'awaiting_technical_plan_confirmation',
+    'generating_application_template_files',
+    'ready_for_workbench'
+  ]).has(String(versionLifecycle?.initialization?.stage || ''))
+  const testCasePreparation = useAsyncTestCasePreparation(
+    workspaceApplication.id,
+    viewedVersion?.id || activeVersionId || 'current',
+    testCasePreparationEnabled,
+    // 类型未选定前保持为空：后台任务在开发准入门选定类型时才创建。
+    testCaseGenerationTaskType
+  )
   const releaseVersion = isViewingActiveVersion ? viewedVersion : undefined
 
   const versionReleasable = Boolean(
@@ -361,6 +504,75 @@ function WorkbenchPage({
       releaseVersion.status === 'iterating' &&
       isVersionReleasable({ ...releaseVersion, lifecycle: versionLifecycle })
   )
+
+  // 将当前版本的统一后台任务流水映射为抽屉条目：任务类型随条目携带，
+  // 运行中显示执行阶段文案，待验收任务附「验收」入口。
+  const allBackgroundTasks = useBackgroundTasks()
+  useEffect(() => {
+    // 任务流水跟着应用走：启动工作台时清理不属于任何已知应用的任务，
+    // 避免不持久化应用的旧任务跨旅程残留在抽屉里。
+    const validIds = new Set(['app-pms-new'])
+    loadCachedApplications().forEach((app) => validIds.add(app.id))
+    retainBackgroundTasksWithinApplications([...validIds])
+  }, [])
+  const versionBackgroundTasks = useMemo(
+    () =>
+      backgroundTasksForVersion(
+        allBackgroundTasks,
+        workspaceApplication.id,
+        viewedVersion?.id || activeVersionId || 'current'
+      ),
+    [activeVersionId, allBackgroundTasks, viewedVersion?.id, workspaceApplication.id]
+  )
+  /** 点击排队中任务的「转到××任务」入口：把任务迁到另一条算力队列重新排队。 */
+  const handleSwitchBackgroundTaskQueue = useCallback(
+    (taskId: string, target: BackgroundTaskSystem): void => {
+      switchBackgroundTaskQueue(taskId, target)
+    },
+    []
+  )
+  /** 两套任务系统的抽屉条目按各自流水独立映射；交互结构一致，仅数据源不同。 */
+  const backgroundTaskItems = useMemo<Record<BackgroundTaskSystem, BackgroundTaskItem[]>>(
+    () => ({
+      // 抽屉是后台队列任务的唯一入口；同步执行在工作流内当场完成，不进任何任务池。
+      async: versionBackgroundTasks
+        .filter((task) => task.pool === 'async')
+        .map((task) =>
+          mapBackgroundTaskItem(
+            task,
+            handleAcceptBackgroundTask,
+            handleSwitchBackgroundTaskQueue,
+            Boolean(acceptanceInFlight[task.id])
+          )
+        ),
+      tide: versionBackgroundTasks
+        .filter((task) => task.pool === 'tide')
+        .map((task) =>
+          mapBackgroundTaskItem(
+            task,
+            handleAcceptBackgroundTask,
+            handleSwitchBackgroundTaskQueue,
+            Boolean(acceptanceInFlight[task.id])
+          )
+        )
+    }),
+    [
+      acceptanceInFlight,
+      handleAcceptBackgroundTask,
+      handleSwitchBackgroundTaskQueue,
+      versionBackgroundTasks
+    ]
+  )
+  // 两套系统抽屉的说明文案：压缩到头部一行内完整显示，算力来源与计费口径与选择卡一致。
+  const backgroundTaskDescriptions: Record<BackgroundTaskSystem, string> = {
+    async: '常规算力队列，后台执行，消耗码豆。',
+    tide: '闲时算力队列，低优先级执行，不消耗码豆。'
+  }
+  // 抽屉头部徽标与左侧菜单入口共用同一套图标语言：同步=闪电，异步=沙漏，潮汐=月亮。
+  const backgroundTaskIcons: Record<BackgroundTaskSystem, ReactElement> = {
+    async: <HourglassOutlined />,
+    tide: <MoonOutlined />
+  }
 
   // 生成版本弹框：审查通过(finalize completed)后自动弹出(仅首次)，也由顶栏生成版本按钮手动打开。
   useEffect(() => {
@@ -539,15 +751,24 @@ function WorkbenchPage({
               onVersionSelect={handleVersionSelect}
               canEnterTestingStage={testingEntryAvailable}
               onRequestEnterTesting={() => setTestingEntryRequest((count) => count + 1)}
+              canEnterDevelopmentStage={developmentEntryAvailable}
+              onRequestEnterDevelopment={() => setDevelopmentEntryRequest((count) => count + 1)}
               canEnterReviewStage={reviewEntryAvailable}
               onRequestEnterReview={() => setReviewEntryRequest((count) => count + 1)}
+              developmentArtifactProgress={developmentArtifactProgress}
+              planConfirmed={testCasePreparationEnabled}
+              testCasePreparation={testCasePreparation.snapshot}
+              onOpenTestPreparation={() =>
+                setTestPreparationOpenRequest((count) => count + 1)
+              }
+              onOpenTestCaseQueue={() => toggleBackgroundTasksDrawer(testCaseQueueSystem)}
+              testCaseQueueOpen={backgroundTasksDrawer === testCaseQueueSystem}
             />
             <div className={cx('workbench-shell-body')}>
               <LeftPanel
                 application={viewedApplication}
                 applicationLifecycle={versionLifecycle}
                 developmentPlanningReady={developmentPlanningPagesLoaded}
-                hasPageDesigns={hasPageDesigns}
                 developmentPlanningPages={developmentPlanningPages}
                 developmentPlanningPageTree={developmentPlanningPageTree}
                 developmentPlanningApiContracts={developmentPlanningApiContracts}
@@ -563,10 +784,60 @@ function WorkbenchPage({
                 versionPreviewOnly={!isViewingActiveVersion}
                 testingEntryRequest={testingEntryRequest}
                 onTestingEntryAvailableChange={setTestingEntryAvailable}
+                developmentEntryRequest={developmentEntryRequest}
+                onDevelopmentEntryAvailableChange={setDevelopmentEntryAvailable}
                 reviewEntryRequest={reviewEntryRequest}
                 onReviewEntryAvailableChange={setReviewEntryAvailable}
+                onDevelopmentArtifactProgressChange={setDevelopmentArtifactProgress}
+                testCasePreparation={testCasePreparation.snapshot}
+                testPreparationOpenRequest={testPreparationOpenRequest}
+                onRetryTestCases={testCasePreparation.retry}
+                onTestCaseGenerationTaskTypeChange={setTestCaseGenerationTaskType}
+                backgroundTasksDrawer={backgroundTasksDrawer}
+                onOpenBackgroundTasks={toggleBackgroundTasksDrawer}
+                onOpenTemporaryConversation={openTemporaryConversation}
+                onCloseAuxiliaryDrawer={() => setAuxiliaryDrawerMode(null)}
+                backgroundTaskAcceptRequest={backgroundTaskAcceptRequest}
+                onBackgroundTaskAcceptanceSettled={handleBackgroundTaskAcceptanceSettled}
               />
+              {/* 后台任务与临时对话抽屉：统一挂在裁剪宿主内，从左侧菜单栏右边线滑出，
+                  宿主裁剪保证抽屉任何时刻都不会越过菜单栏或盖到菜单栏之上。 */}
+              <div className={cx('workbench-drawer-host')}>
+                {/* 抽屉不是模态图层：打开时铺一层透明遮罩拦截工作区首次点击用于快速收起，
+                    左侧菜单栏在宿主之外不受影响，菜单入口仍可直接切换抽屉。 */}
+                {(backgroundTasksDrawer || auxiliaryDrawerMode) && (
+                  <div
+                    aria-hidden="true"
+                    className={cx('workbench-drawer-outside-mask')}
+                    onClick={() => {
+                      closeBackgroundTasksDrawer()
+                      closeAuxiliaryDrawer()
+                    }}
+                  />
+                )}
+                {(['async', 'tide'] as const).map((system) => (
+                  <BackgroundTaskDrawer
+                    description={backgroundTaskDescriptions[system]}
+                    emptyText={`当前没有${BACKGROUND_TASK_SYSTEM_LABEL[system]}。`}
+                    icon={backgroundTaskIcons[system]}
+                    key={system}
+                    onClose={closeBackgroundTasksDrawer}
+                    open={backgroundTasksDrawer === system}
+                    tasks={backgroundTaskItems[system]}
+                    title={BACKGROUND_TASK_SYSTEM_LABEL[system]}
+                  />
+                ))}
+                {auxiliaryDrawerMode ? (
+                  <AuxiliaryDrawer
+                    mode={auxiliaryDrawerMode}
+                    onClose={() => setAuxiliaryDrawerMode(null)}
+                    onRetryTestCases={testCasePreparation.retry}
+                    testPreparation={testCasePreparation.snapshot}
+                  />
+                ) : null}
+              </div>
             </div>
+
           </div>
         </WorkbenchPhaseProvider>
       ) : null}

@@ -54,6 +54,51 @@
   }
 }
 
+// 用例授权是轻量启动动作：标题、提示和按钮保持同一行，避免套用问答卡片的多层布局。
+.@{class-prefix}-workflow-run-card-test-case-authorization {
+  min-height: 42px;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+
+  .@{class-prefix}-workflow-run-signal {
+    flex: 0 0 auto;
+  }
+
+  .@{class-prefix}-workflow-run-name,
+  .@{class-prefix}-workflow-test-case-authorization-copy {
+    overflow: hidden;
+    min-width: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .@{class-prefix}-workflow-test-case-authorization-copy {
+    flex: 1 1 auto;
+    color: var(--wb-text-secondary);
+  }
+
+  .@{class-prefix}-workflow-test-case-authorization-action {
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+}
+
+// 执行方式选择复用授权行的紧凑布局：选项行占满剩余宽度，可用性提示折行独占。
+.@{class-prefix}-workflow-run-card-test-case-authorization {
+  flex-wrap: wrap;
+
+  .@{class-prefix}-background-dispatch-card {
+    flex: 1 1 auto;
+  }
+
+  .@{class-prefix}-workflow-dispatch-availability {
+    flex: 1 1 100%;
+    margin: 0;
+  }
+}
+
 .@{class-prefix}-workflow-artifacts,
 .@{class-prefix}-workflow-clarification,
 .@{class-prefix}-workflow-build-progress,
@@ -907,3 +952,17 @@
 }
 
 @import './WorkflowRunCardConsole.less';
+
+// 内嵌到“确认执行用例”节点时复用控制台卡片语义，并保留紧凑的矩形边界。
+.@{class-prefix}-workflow-run-card-embedded {
+  gap: 7px;
+  min-height: 42px;
+  margin: 0;
+  padding: 7px 10px;
+  background:
+    linear-gradient(135deg, var(--wb-accent-soft), transparent 38%),
+    var(--wb-surface-subtle);
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 55%, var(--wb-border-strong));
+  border-radius: 8px;
+  box-shadow: 0 14px 30px rgba(45, 30, 104, 0.04);
+}

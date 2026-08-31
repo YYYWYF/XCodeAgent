@@ -1,12 +1,13 @@
 .@{class-prefix}-ai-chat-composer {
   flex: 0 0 auto;
-  padding: 14px 30px 24px;
-  background: var(--wb-canvas);
+  padding: 8px 10px 10px;
+  background: var(--wb-surface-subtle);
 }
 
 .@{class-prefix}-ai-chat-composer-column {
   display: flex;
-  width: min(100%, 1080px);
+  width: 100%;
+  max-width: 1080px;
   flex-direction: column;
   gap: 8px;
   margin: 0 auto;
@@ -24,14 +25,14 @@
 
 .@{class-prefix}-ai-chat-composer-frame {
   display: flex;
-  min-height: 148px;
+  min-height: 122px;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px 12px;
+  gap: 6px;
+  padding: 10px 12px 8px;
   background: var(--wb-canvas);
-  border: 1px solid var(--wb-accent-border);
-  border-radius: 18px;
-  box-shadow: 0 8px 26px rgba(107, 60, 240, 0.07);
+  border: 1px solid var(--wb-border);
+  border-radius: 14px;
+  box-shadow: none;
 
   // 执行中 / 已发布锁死：整个对话框灰化（不只是输入框背景）。
   &.@{class-prefix}-is-disabled {
@@ -119,7 +120,7 @@
 .@{class-prefix}-composer-inline-input {
   display: flex;
   min-width: 0;
-  min-height: 72px;
+  min-height: 62px;
   flex: 1 1 auto;
   flex-wrap: wrap;
   align-content: flex-start;
@@ -175,7 +176,8 @@
   padding-top: 4px;
 }
 
-.@{class-prefix}-composer-selected-skills {
+.@{class-prefix}-composer-selected-skills,
+.@{class-prefix}-composer-selected-files {
   display: contents;
 
   .ant-tag {
@@ -289,7 +291,7 @@
 
 .@{class-prefix}-composer-resource-popover {
   display: flex;
-  max-width: min(470px, calc(100vw - 32px));
+  max-width: min(680px, calc(100vw - 32px));
   color: var(--wb-text);
 }
 
@@ -318,10 +320,21 @@
   align-items: center;
   padding: 6px 8px;
   border-radius: 7px;
-  grid-template-columns: 18px 1fr 12px;
+  grid-template-columns: 18px minmax(0, 1fr) auto 12px;
   gap: 6px;
   font-size: 13px;
   text-align: left;
+
+  > .anticon:last-child {
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+  }
+
+  > small {
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
 
   &:hover,
   &:focus-visible,
@@ -329,16 +342,11 @@
     outline: 0;
     background: var(--wb-surface-hover);
   }
-
-  &[disabled] {
-    color: var(--wb-text-tertiary);
-    cursor: default;
-  }
 }
 
 .@{class-prefix}-composer-skill-panel {
   display: flex;
-  width: 310px;
+  width: min(310px, calc(100vw - 32px));
   min-width: 0;
   flex-direction: column;
   gap: 6px;
@@ -370,9 +378,22 @@
   }
 }
 
-.@{class-prefix}-composer-artifact-panel {
+.@{class-prefix}-composer-skill-heading {
   display: flex;
-  width: 340px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px 2px;
+  color: var(--wb-text);
+  font-size: 12px;
+
+  .anticon {
+    color: var(--wb-accent);
+  }
+}
+
+.@{class-prefix}-composer-file-panel {
+  display: flex;
+  width: 360px;
   min-width: 0;
   flex-direction: column;
   gap: 7px;
@@ -405,7 +426,7 @@
   }
 }
 
-.@{class-prefix}-composer-artifact-list {
+.@{class-prefix}-composer-file-list {
   display: flex;
   max-height: 280px;
   min-height: 88px;
@@ -418,7 +439,7 @@
   }
 }
 
-.@{class-prefix}-composer-artifact-item {
+.@{class-prefix}-composer-file-item {
   display: grid;
   min-width: 0;
   min-height: 44px;
@@ -431,7 +452,7 @@
   border: 0;
   border-radius: 7px;
   cursor: pointer;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) 18px;
 
   &:hover,
   &:focus-visible,
@@ -439,20 +460,15 @@
     background: var(--wb-surface-hover);
     outline: none;
   }
-
-  &:disabled {
-    cursor: default;
-    opacity: 0.52;
-  }
 }
 
-.@{class-prefix}-composer-artifact-icon {
+.@{class-prefix}-composer-file-icon {
   color: var(--wb-accent);
   font-size: 14px;
   text-align: center;
 }
 
-.@{class-prefix}-composer-artifact-copy {
+.@{class-prefix}-composer-file-copy {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -474,17 +490,9 @@
   }
 }
 
-.@{class-prefix}-composer-artifact-access {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--wb-text-tertiary);
-  font-size: 10px;
-  white-space: nowrap;
-
-  &.@{class-prefix}-write {
-    color: var(--wb-accent);
-  }
+.@{class-prefix}-composer-file-check {
+  color: var(--wb-accent);
+  text-align: center;
 }
 
 .@{class-prefix}-composer-skill-list {
@@ -752,27 +760,23 @@
 
 @media (max-width: 820px) {
   .@{class-prefix}-ai-chat-composer {
-    padding: 12px 16px 16px;
+    padding: 6px 8px 8px;
   }
 
   .@{class-prefix}-composer-resource-popover {
-    width: min(92vw, 360px);
+    width: min(92vw, 680px);
     flex-direction: column;
   }
 
   .@{class-prefix}-composer-resource-primary,
   .@{class-prefix}-composer-skill-panel,
-  .@{class-prefix}-composer-artifact-panel {
+  .@{class-prefix}-composer-file-panel {
     width: 100%;
     flex-basis: auto;
   }
 
-  .@{class-prefix}-composer-skill-panel {
-    border-top: 1px solid var(--wb-border);
-    border-left: 0;
-  }
-
-  .@{class-prefix}-composer-artifact-panel {
+  .@{class-prefix}-composer-skill-panel,
+  .@{class-prefix}-composer-file-panel {
     border-top: 1px solid var(--wb-border);
     border-left: 0;
   }

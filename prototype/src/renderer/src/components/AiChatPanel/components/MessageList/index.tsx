@@ -13,6 +13,7 @@ import type {
   ApplicationLifecycle,
   WorkflowRunPayload
 } from '../../../../typings'
+import type { ProcessStepRecord } from '../../../../service/agUiAgent'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import ToolCallCard from '../ToolCallCard'
@@ -86,13 +87,27 @@ function workflowTitleForAgent(agentKey: WorkbenchPhase): string {
   return titles[agentKey]
 }
 
+/** 测试阶段按 Workflow 类型显示固定的工作流模板名称，用例名称由节点和右侧目录承载。 */
+function testingWorkflowTitle(workflow: WorkflowRunPayload | undefined): string | undefined {
+  const state = (workflow?.state || {}) as Record<string, unknown>
+  const workflowType = String(state.testWorkflowType || '')
+  if (workflowType === 'non-functional') return '非功测试工作流'
+  if (workflowType === 'case') return '用例测试工作流'
+  return undefined
+}
+
 /** 从工作流节点反推消息所属阶段，作为旧会话缺少显式 Agent 标记时的稳定兜底。 */
 function workflowPhaseToAgentPhase(
   workflow?: WorkflowRunPayload
 ): WorkbenchPhase | undefined {
   const phase = String(workflow?.summary?.phase || '')
   if (['requirements', 'requirement_spec_confirmation'].includes(phase)) return 'analysis'
-  if (['project_planning', 'project_plan_confirmation'].includes(phase)) return 'planning'
+  if (
+    ['project_planning', 'project_plan_confirmation', 'development_entry_confirmation'].includes(
+      phase
+    )
+  )
+    return 'planning'
   if (
     [
       'detail_confirmation',
@@ -107,7 +122,7 @@ function workflowPhaseToAgentPhase(
     return 'development'
   }
   if (phase === 'acceptance') return 'acceptance'
-  if (['application_test', 'test_report', 'generate_test_report', 'test', 'testing'].includes(phase)) {
+  if (['application_test', 'business_test', 'test', 'testing'].includes(phase)) {
     return 'testing'
   }
   if (['code_review', 'lint_check', 'security_scan', 'health_check', 'finalize_project'].includes(phase)) {
@@ -134,6 +149,14 @@ function isSyntheticArtifactCompletionMessage(message: AgentChatMessage): boolea
   if (message.role !== 'assistant') return false
   const content = message.content.trim()
   return /代码产物已完成[\s\S]*进入测试阶段/.test(content)
+}
+
+/** 隐藏旧剧本在开发准入后追加的过渡消息；阶段切换应直接由确认弹框完成。 */
+function isRedundantDevelopmentEntryMessage(message: AgentChatMessage): boolean {
+  if (message.role !== 'assistant') return false
+  return /^项目计划已确认，已创建(?:业务)?测试用例.*，即将进入开发阶段。$/.test(
+    message.content.trim()
+  )
 }
 
 /** 隐藏测试阶段旧剧本的启动与结果提示，测试节点和 Diff 授权本身已经表达完整流程。 */
@@ -165,7 +188,7 @@ function isRedundantAcceptanceStartMessage(message: AgentChatMessage): boolean {
 function isCompletedEmptyAssistantMessage(message: AgentChatMessage): boolean {
   if (message.role !== 'assistant' || message.content.trim()) return false
   if (message.detailBlocker || message.codeChanges || message.processSteps?.length) return false
-  return message.workflow?.summary.status === 'completed'
+  return message.workflow?.summary?.status === 'completed'
 }
 
 /** assistant 消息头：标识当前是哪个阶段的 Agent 在回复。 */
@@ -237,6 +260,7 @@ export default function MessageList({
     (message) =>
       !isSyntheticWorkflowActionMessage(message) &&
       !isSyntheticArtifactCompletionMessage(message) &&
+      !isRedundantDevelopmentEntryMessage(message) &&
       !isRedundantTestingMessage(message) &&
       !isRedundantReviewStartMessage(message) &&
       !isRedundantAcceptanceStartMessage(message) &&
@@ -331,7 +355,12 @@ export default function MessageList({
       return undefined
     }
 
-    // 后续消息/卡片出现时才跟随最新，确保流式工作流持续落在可视范围内。
+    // 只有用户原本就在底部时才跟随新增消息；阅读历史时追加下一条 Workflow 不抢走滚动位置。
+    // 这样同一主会话追加第二个产物时，列表保持连续，不会表现成整段内容被刷新。
+    if (!followLatestContentRef.current && !isMessageListNearBottom(container)) {
+      setShowScrollToBottom(shouldShowScrollToBottom(container))
+      return undefined
+    }
     followLatestContentRef.current = true
     container.scrollTo({ top: container.scrollHeight, behavior: 'auto' })
     scheduleScrollUpdate()
@@ -387,7 +416,8 @@ export default function MessageList({
                 conversationPhase ||
                 agentPhase ||
                 currentPhase
-              const workflowTitle = workflowTitleForAgent(messageAgentKey)
+              const workflowTitle =
+                testingWorkflowTitle(message.workflow) || workflowTitleForAgent(messageAgentKey)
               const requiresClarification =
                 message.workflow &&
                 workflowClarification(message.workflow)?.status === 'requires_user_input'
@@ -413,16 +443,36 @@ export default function MessageList({
                   : 'stale'
               // 测试会话刚创建时查看阶段可能还没从开发阶段同步过来，不能只看 agentPhase；
               // 以测试 Workflow 自身的运行状态兜底，保证第一条节点消息首次挂载就是展开态。
-              const testWorkflowPhase = message.workflow?.summary.phase
-              const testWorkflowStatus = message.workflow?.summary.status
+              const testWorkflowPhase = message.workflow?.summary?.phase
+              const testWorkflowStatus = message.workflow?.summary?.status
               const testWorkflowRunning =
-                (testWorkflowPhase === 'application_test' || testWorkflowPhase === 'test_report') &&
+                (testWorkflowPhase === 'application_test' || testWorkflowPhase === 'business_test') &&
                 testWorkflowStatus === 'running'
-              const visibleAssistantContent = workflowMessageContentForDisplay(
-                message.content,
-                message.workflow,
+              const inlineTestCaseAuthorization =
+                Boolean(message.workflow) &&
+                workflowClarification(message.workflow)?.mode === 'test_case_execute' &&
+                requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
-              )
+              // 产物验收卡与用例授权同构：内嵌在「确认验收」节点上，不单独渲染。
+              const inlineArtifactAcceptance =
+                Boolean(message.workflow) &&
+                workflowClarification(message.workflow)?.mode === 'page_acceptance' &&
+                requiresClarification &&
+                Boolean(visibleProcessSteps?.length)
+              // 执行方式选择卡内嵌在「选择执行方式」节点上；节点轨迹存在时不再重复渲染独立卡。
+              const inlineBackgroundDispatch =
+                Boolean(message.workflow) &&
+                workflowClarification(message.workflow)?.mode === 'background_dispatch' &&
+                requiresClarification &&
+                Boolean(visibleProcessSteps?.length)
+              // 模板选择详设卡已经承载完整引导，隐藏历史中重复保存的普通说明正文。
+              const visibleAssistantContent = message.detailBlocker
+                ? ''
+                : workflowMessageContentForDisplay(
+                    message.content,
+                    message.workflow,
+                    Boolean(visibleProcessSteps?.length)
+                  )
               const detailBlockerTargetKey =
                 message.detailBlocker?.type === 'endpoint'
                   ? endpointDetailTargetKey(
@@ -433,6 +483,72 @@ export default function MessageList({
                     ? pageDetailTargetKey(message.detailBlocker.pageId)
                     : ''
               const detailBlockerWorkflowStarted = hasWorkflowForTarget(detailBlockerTargetKey)
+              const developmentTemplateSelector =
+                message.detailBlocker?.type === 'page' ? (
+                  <DetailConfirmationPageSelector
+                    embedded
+                    disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
+                    loading={loading}
+                    onStart={onStartDetailDesign}
+                    selectedPage={{
+                      pageId: message.detailBlocker.pageId,
+                      key: message.detailBlocker.pageId,
+                      label: message.detailBlocker.label,
+                      path: message.detailBlocker.path || '/',
+                      purpose: message.detailBlocker.purpose || '',
+                      designed: false
+                    }}
+                  />
+                ) : message.detailBlocker?.type === 'endpoint' ? (
+                  <DetailConfirmationPageSelector
+                    embedded
+                    disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
+                    loading={loading}
+                    onStart={onStartDetailDesign}
+                    selectedEndpoint={{
+                      apiContractId: message.detailBlocker.apiContractId,
+                      endpointId: message.detailBlocker.endpointId,
+                      label: message.detailBlocker.label,
+                      path: message.detailBlocker.path,
+                      purpose: message.detailBlocker.purpose
+                    }}
+                  />
+                ) : undefined
+              const developmentProcessSteps: ProcessStepRecord[] | undefined =
+                developmentTemplateSelector
+                  ? (() => {
+                      const templateStepId = `detail-template-${detailBlockerTargetKey || message.id}`
+                      const hasTemplateStep = Boolean(
+                        visibleProcessSteps?.some((step) => step.id === templateStepId)
+                      )
+                      const templateStep: ProcessStepRecord = {
+                        id: templateStepId,
+                        kind: 'workflow',
+                        status: detailBlockerWorkflowStarted
+                          ? 'completed'
+                          : 'requires_user_input',
+                        title:
+                          message.detailBlocker?.type === 'endpoint'
+                            ? '确认接口详细设计'
+                            : '选择页面模板',
+                        detail: detailBlockerWorkflowStarted
+                          ? '模板已确认，继续执行详细设计 Workflow。'
+                          : '请选择页面模板后开始详细设计。',
+                        sequence: 1,
+                        nodeName: 'detail_confirmation'
+                      }
+                      const nextSteps: ProcessStepRecord[] = (visibleProcessSteps || []).map(
+                        (step): ProcessStepRecord =>
+                        step.id === templateStepId && detailBlockerWorkflowStarted
+                          ? { ...step, status: 'completed', detail: templateStep.detail }
+                          : {
+                              ...step,
+                              sequence: step.sequence + (hasTemplateStep ? 0 : 1)
+                            }
+                      )
+                      return hasTemplateStep ? nextSteps : [templateStep, ...nextSteps]
+                    })()
+                  : visibleProcessSteps
               return (
                 <article
                   className={cx(
@@ -447,42 +563,23 @@ export default function MessageList({
                     {message.role === 'assistant' ? (
                       <>
                         <MessageAgentHeader agentKey={messageAgentKey} loading={messageLoading} />
-                        {message.detailBlocker?.type === 'page' && (
-                          <DetailConfirmationPageSelector
-                            disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
-                            loading={loading}
-                            onStart={onStartDetailDesign}
-                            selectedPage={{
-                              pageId: message.detailBlocker.pageId,
-                              key: message.detailBlocker.pageId,
-                              label: message.detailBlocker.label,
-                              path: message.detailBlocker.path || '/',
-                              purpose: message.detailBlocker.purpose || '',
-                              designed: false
-                            }}
-                          />
-                        )}
-                        {message.detailBlocker?.type === 'endpoint' && (
-                          <DetailConfirmationPageSelector
-                            disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
-                            loading={loading}
-                            onStart={onStartDetailDesign}
-                            selectedEndpoint={{
-                              apiContractId: message.detailBlocker.apiContractId,
-                              endpointId: message.detailBlocker.endpointId,
-                              label: message.detailBlocker.label,
-                              path: message.detailBlocker.path,
-                              purpose: message.detailBlocker.purpose
-                            }}
-                          />
-                        )}
-                        {visibleProcessSteps && visibleProcessSteps.length > 0 && (
+                        {developmentProcessSteps && developmentProcessSteps.length > 0 && (
                           <ProcessSteps
                             loading={messageLoading || testWorkflowRunning}
-                            steps={visibleProcessSteps}
+                            steps={developmentProcessSteps}
                             workflowTitle={workflowTitle}
+                            inlineFirstNode={developmentTemplateSelector}
+                            inlineFirstNodePending={
+                              Boolean(developmentTemplateSelector) &&
+                              !detailBlockerWorkflowStarted &&
+                              !interactionsDisabled
+                            }
+                            workflow={message.workflow}
+                            interactionAvailability={interactionAvailability}
+                            interactionDisabled={interactionsDisabled || loading || messageLoading}
+                            onSubmitClarification={onSubmitClarification}
                             waitingForInput={waitingForDirectModificationInput}
-                            waitingPrompt={message.workflow?.summary.message}
+                            waitingPrompt={message.workflow?.summary?.message}
                           />
                         )}
                         {!SLIM_CONVERSATION &&
@@ -514,7 +611,11 @@ export default function MessageList({
                             <MarkdownContent content={visibleAssistantContent} />
                           </div>
                         )}
-                        {message.workflow && requiresClarification && (
+                        {message.workflow &&
+                          requiresClarification &&
+                          !inlineTestCaseAuthorization &&
+                          !inlineArtifactAcceptance &&
+                          !inlineBackgroundDispatch && (
                           <WorkflowRunCard
                             disabled={
                               interactionsDisabled ||
@@ -530,6 +631,12 @@ export default function MessageList({
                       </>
                     ) : (
                       <>
+                        <div className={cx('ai-message-user-head')}>
+                          <span className={cx('ai-message-user-avatar')} aria-hidden="true">
+                            S
+                          </span>
+                          <span className={cx('ai-message-user-name')}>Steve Jobs</span>
+                        </div>
                         {message.skills && message.skills.length > 0 && (
                           <div className={cx('message-skill-labels')}>
                             {message.skills.map((skill) => (

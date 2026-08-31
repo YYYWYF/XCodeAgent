@@ -12,8 +12,14 @@ import {
 import { Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { IntegrationTestCheckRecord, ProcessStepRecord } from '../../../../service/agUiAgent'
+import type { WorkflowRunPayload } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { BuildExecutionRunCard } from '../WorkflowRunCard'
+import WorkflowRunCard, {
+  type ClarificationAnswers,
+  BuildExecutionRunCard,
+  workflowClarification
+} from '../WorkflowRunCard'
+import type { WorkflowInteractionAvailability } from '../../planExecutionMode'
 import DagGenerationProgress from './DagGenerationProgress'
 import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
 import './ProcessSteps.less'
@@ -25,6 +31,14 @@ type Props = {
   steps: ProcessStepRecord[]
   /** 当前消息对应的具体工作流名称。 */
   workflowTitle: string
+  /** 开发工作流首节点的模板选择交互。 */
+  inlineFirstNode?: ReactElement
+  inlineFirstNodePending?: boolean
+  /** 当前消息的 Workflow，用于把需要操作的节点交互嵌入节点轨迹。 */
+  workflow?: WorkflowRunPayload
+  interactionAvailability?: WorkflowInteractionAvailability
+  interactionDisabled?: boolean
+  onSubmitClarification?: (workflow: WorkflowRunPayload, answers: ClarificationAnswers) => void
   waitingPrompt?: string
   waitingForInput?: boolean
 }
@@ -34,18 +48,41 @@ export default function ProcessSteps({
   loading,
   steps,
   workflowTitle,
+  inlineFirstNode,
+  inlineFirstNodePending = false,
+  workflow,
+  interactionAvailability = 'stale',
+  interactionDisabled = false,
+  onSubmitClarification,
   waitingPrompt = '',
   waitingForInput = false
 }: Props): ReactElement {
-  const statusClassName = loading ? 'running' : waitingForInput ? 'waiting' : 'completed'
+  // 执行方式选择、用例授权与产物验收同构：交互卡内嵌在对应节点上，不再脱离流程轨迹单独渲染。
+  const dispatchPending =
+    workflowClarification(workflow)?.mode === 'background_dispatch' &&
+    workflowClarification(workflow)?.status === 'requires_user_input'
+  const statusClassName =
+    loading ? 'running' : waitingForInput || inlineFirstNodePending || dispatchPending ? 'waiting' : 'completed'
+  const testCaseAuthorizationPending =
+    workflowClarification(workflow)?.mode === 'test_case_execute' &&
+    workflowClarification(workflow)?.status === 'requires_user_input'
+  const artifactAcceptancePending =
+    workflowClarification(workflow)?.mode === 'page_acceptance' &&
+    workflowClarification(workflow)?.status === 'requires_user_input'
 
   return (
-    <div className={cx('process-steps', statusClassName)}>
+    <div
+      className={cx(
+        'process-steps',
+        statusClassName,
+        inlineFirstNode && 'has-inline-first-node'
+      )}
+    >
       <div className={cx('process-steps-summary')}>
         <span className={cx('process-steps-status')}>
           {loading ? (
             <LoadingOutlined spin />
-          ) : waitingForInput ? (
+          ) : waitingForInput || inlineFirstNodePending || dispatchPending ? (
             <PauseCircleOutlined />
           ) : (
             <CheckCircleOutlined />
@@ -59,7 +96,13 @@ export default function ProcessSteps({
             </Text>
           </span>
           {loading ? <Text type="secondary">{currentStepLabel(steps)}</Text> : null}
-          {waitingForInput ? <Text type="secondary">请根据下方提示补充修改需求</Text> : null}
+          {inlineFirstNodePending ? (
+            <Text type="secondary">请选择页面模板后开始详细设计</Text>
+          ) : dispatchPending ? (
+            <Text type="secondary">请选择执行方式后继续</Text>
+          ) : waitingForInput ? (
+            <Text type="secondary">请根据下方提示补充修改需求</Text>
+          ) : null}
         </span>
       </div>
       <div className={cx('process-steps-list')}>
@@ -69,6 +112,14 @@ export default function ProcessSteps({
             key={step.id}
             settled={!loading}
             step={step}
+            showTestCaseAuthorization={testCaseAuthorizationPending}
+            showArtifactAcceptance={artifactAcceptancePending}
+            showBackgroundDispatch={dispatchPending}
+            inlineContent={index === 0 ? inlineFirstNode : undefined}
+            workflow={workflow}
+            interactionAvailability={interactionAvailability}
+            interactionDisabled={interactionDisabled}
+            onSubmitClarification={onSubmitClarification}
             waitingForInput={waitingForInput}
             waitingPrompt={waitingPrompt}
           />
@@ -83,12 +134,28 @@ function ProcessStep({
   isLast,
   settled,
   step,
+  inlineContent,
+  showTestCaseAuthorization,
+  showArtifactAcceptance,
+  showBackgroundDispatch,
+  workflow,
+  interactionAvailability,
+  interactionDisabled,
+  onSubmitClarification,
   waitingForInput,
   waitingPrompt
 }: {
   isLast: boolean
   settled: boolean
   step: ProcessStepRecord
+  inlineContent?: ReactElement
+  showTestCaseAuthorization: boolean
+  showArtifactAcceptance: boolean
+  showBackgroundDispatch: boolean
+  workflow?: WorkflowRunPayload
+  interactionAvailability: WorkflowInteractionAvailability
+  interactionDisabled: boolean
+  onSubmitClarification?: (workflow: WorkflowRunPayload, answers: ClarificationAnswers) => void
   waitingForInput: boolean
   waitingPrompt: string
 }): ReactElement {
@@ -101,6 +168,12 @@ function ProcessStep({
   const expandable =
     hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration || hasWorkspaceInspection
   const awaitingInput = waitingForInput && step.status === 'requires_user_input'
+  const awaitingTestCaseAuthorization =
+    showTestCaseAuthorization && step.status === 'requires_user_input'
+  const awaitingArtifactAcceptance =
+    showArtifactAcceptance && step.status === 'requires_user_input'
+  const awaitingBackgroundDispatch =
+    showBackgroundDispatch && step.status === 'requires_user_input'
 
   const className = cx(
     'process-step',
@@ -119,6 +192,72 @@ function ProcessStep({
       <Text>{settled ? settledTitle(step.title) : step.title}</Text>
     </>
   )
+
+  // 开发阶段的模板选择是工作流首节点内容，节点标题和卡片动作保持同一条时间线。
+  if (inlineContent) {
+    return (
+      <div className={`${className} ${cx('process-step-interactive')}`}>
+        <div className={cx('process-step-summary')}>{summaryContent}</div>
+        <div className={cx('process-step-detail', 'process-step-interaction-detail')}>
+          {inlineContent}
+        </div>
+      </div>
+    )
+  }
+
+  // 用例授权是“确认执行用例”节点的动作，不再脱离流程轨迹单独渲染。
+  if (awaitingTestCaseAuthorization && workflow) {
+    return (
+      <div className={`${className} ${cx('process-step-interactive')}`}>
+        <div className={cx('process-step-summary')}>{summaryContent}</div>
+        <div className={cx('process-step-detail', 'process-step-interaction-detail')}>
+          <WorkflowRunCard
+            embedded
+            disabled={interactionDisabled}
+            interactionAvailability={interactionAvailability}
+            onSubmitClarification={onSubmitClarification}
+            workflow={workflow}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // 产物验收是「确认验收」节点的动作，与用例授权同样内嵌在节点轨迹中。
+  if (awaitingArtifactAcceptance && workflow) {
+    return (
+      <div className={`${className} ${cx('process-step-interactive')}`}>
+        <div className={cx('process-step-summary')}>{summaryContent}</div>
+        <div className={cx('process-step-detail', 'process-step-interaction-detail')}>
+          <WorkflowRunCard
+            embedded
+            disabled={interactionDisabled}
+            interactionAvailability={interactionAvailability}
+            onSubmitClarification={onSubmitClarification}
+            workflow={workflow}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // 执行方式选择是“选择执行方式”节点的动作，与用例授权同样内嵌在节点轨迹中。
+  if (awaitingBackgroundDispatch && workflow) {
+    return (
+      <div className={`${className} ${cx('process-step-interactive')}`}>
+        <div className={cx('process-step-summary')}>{summaryContent}</div>
+        <div className={cx('process-step-detail', 'process-step-interaction-detail')}>
+          <WorkflowRunCard
+            embedded
+            disabled={interactionDisabled}
+            interactionAvailability={interactionAvailability}
+            onSubmitClarification={onSubmitClarification}
+            workflow={workflow}
+          />
+        </div>
+      </div>
+    )
+  }
 
   if (awaitingInput) {
     const clarificationText =

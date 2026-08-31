@@ -58,7 +58,7 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     key: 'testing',
     label: '测试',
     role: '测试 Agent',
-    responsibility: '从完整应用视角测试并生成测试报告'
+    responsibility: '按业务用例执行完整应用测试'
   },
   review: {
     key: 'review',
@@ -84,7 +84,6 @@ export type EditableObjectType =
   | 'page_spec'
   | 'endpoint_spec'
   | 'code'
-  | 'test_report'
   | 'review_report'
 
 /** 各阶段可编辑的对象集合；不在集合里的对象在该阶段只读。 */
@@ -95,8 +94,8 @@ const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
   planning: ['project_plan'],
   // 开发阶段负责页面、接口、实体的实现和开发自验证。
   development: ['page_spec', 'endpoint_spec', 'code'],
-  // 测试 Agent 产出测试报告，但不直接修改开发代码。
-  testing: ['test_report'],
+  // 测试阶段只执行用例，不在工作台编辑或确认报告。
+  testing: [],
   // 审查 Agent 默认只读代码，只维护审查报告。
   review: ['review_report'],
   // 验收阶段只承载用户确认，不新增可编辑的正式产物。
@@ -142,16 +141,14 @@ const DEVELOPMENT_PHASE_NODES = new Set([
   'build'
 ])
 
-/** 测试阶段的工作流节点，覆盖启动、非功能、业务测试和测试报告生成。 */
+/** 测试阶段的工作流节点，覆盖启动、非功能和业务用例执行。 */
 const TESTING_PHASE_NODES = new Set([
   'startup_test',
   'non_functional_test',
   'business_test',
   'application_test',
   'test',
-  'testing',
-  'test_report',
-  'generate_test_report'
+  'testing'
 ])
 
 /** 审查阶段的工作流节点；审查 Agent 默认不写开发代码。 */
@@ -206,11 +203,11 @@ export function deriveWorkbenchReachedPhase(lifecycle?: ApplicationLifecycle): W
     (highest, phase) => (compareWorkbenchPhases(phase, highest) > 0 ? phase : highest),
     'development' as WorkbenchPhase
   )
-  // 测试报告合格后只开放审查阶段入口；必须经过用户确认或已有审查 execution，才算真正到达审查阶段。
-  const testReportStatus = String(lifecycle.extensions?.testReportStatus || '')
+  // 全部业务用例通过后只开放审查阶段入口；必须经过用户确认或已有审查 execution，才算真正到达审查阶段。
+  const testExecutionStatus = String(lifecycle.extensions?.testExecutionStatus || '')
   const reviewEntryConfirmed = lifecycle.extensions?.reviewEntryConfirmed === true
   if (
-    ['passed', 'qualified', '合格'].includes(testReportStatus) &&
+    testExecutionStatus === 'passed' &&
     (reviewEntryConfirmed || compareWorkbenchPhases(executionReachedPhase, 'review') >= 0)
   ) {
     const reviewStatus = String(lifecycle.extensions?.reviewStatus || '')

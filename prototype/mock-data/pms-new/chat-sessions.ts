@@ -9,13 +9,17 @@ import type { ProcessStepRecord } from '../../src/renderer/src/service/agUiAgent
 import {
   buildEndpointSource,
   buildPageSource,
+  buildProjectPlanDoc,
+  buildRequirementSpecDoc,
   buildReviewReport,
-  buildTestReport,
+  testCaseEstimateFromSource,
   type PageDesign
 } from '../../src/renderer/src/workbenchArtifacts'
 import { appPath, WORKSPACE_DOC_PATHS } from '../../src/renderer/src/mock/workspaceFiles'
 import pageDesigns from './page-designs.json'
 import endpointDesigns from './endpoint-designs.json'
+import requirementSpec from './requirement-spec.json'
+import projectPlan from './project-plan.json'
 
 const VERSION_ID = 'app-pms-new-v1-3'
 
@@ -53,7 +57,7 @@ function generatedPageFile(pageId: string, savedAt: number): ChatSessionSavedFil
   return savedFile(appPath(source.filePath), source.content, savedAt)
 }
 
-/** 生成 V1.3 接口代码快照，供发布版本的代码文件树和历史产物会话共同消费。 */
+/** 生成 V1.3 接口代码快照，供发布版本的代码文件树和 Workflow 输出记录共同消费。 */
 function generatedEndpointFile(endpointId: string, savedAt: number): ChatSessionSavedFile {
   const design = (endpointDesigns as unknown as Record<string, Record<string, unknown>>)[endpointId]
   const source = buildEndpointSource(design)
@@ -97,7 +101,7 @@ function pageBuildSlice(): ProcessStepRecord['buildExecutionSlice'] {
       task_id: 'task-page-filter',
       unit_id: 'page:my-rechecks',
       owner: 'frontend',
-      title: '扩展关键词与紧急程度筛选',
+      title: '补充回检状态筛选',
       status: 'completed',
       target_files: ['frontend/pages/my-rechecks.tsx']
     },
@@ -106,16 +110,16 @@ function pageBuildSlice(): ProcessStepRecord['buildExecutionSlice'] {
       task_id: 'task-page-table',
       unit_id: 'page:my-rechecks',
       owner: 'frontend',
-      title: '补充更新时间列与排序',
+      title: '补充回检状态展示',
       status: 'completed',
       target_files: ['frontend/pages/my-rechecks.tsx']
     },
     {
-      id: 'task-page-export',
+      id: 'task-page-empty-state',
       task_id: 'task-page-export',
       unit_id: 'page:my-rechecks',
       owner: 'frontend',
-      title: '接入台账导出交互',
+      title: '补充分页与空数据展示',
       status: 'completed',
       target_files: ['frontend/pages/my-rechecks.tsx']
     }
@@ -136,7 +140,7 @@ function apiBuildSlice(): ProcessStepRecord['buildExecutionSlice'] {
       task_id: 'task-api-query',
       unit_id: 'endpoint:rechecks:ep-my-rechecks',
       owner: 'backend',
-      title: '扩展分页查询参数与校验',
+      title: '补充分页参数与校验',
       status: 'completed',
       target_files: ['backend/rechecks-controller.java']
     },
@@ -145,16 +149,16 @@ function apiBuildSlice(): ProcessStepRecord['buildExecutionSlice'] {
       task_id: 'task-api-scope',
       unit_id: 'endpoint:rechecks:ep-my-rechecks',
       owner: 'backend',
-      title: '固化当前用户数据权限',
+      title: '校验回检查询参数',
       status: 'completed',
       target_files: ['backend/rechecks-controller.java']
     },
     {
-      id: 'task-api-export',
+      id: 'task-api-pagination',
       task_id: 'task-api-export',
       unit_id: 'endpoint:rechecks:ep-my-rechecks',
       owner: 'backend',
-      title: '补充台账导出查询能力',
+      title: '补充分页查询返回 total',
       status: 'completed',
       target_files: ['backend/rechecks-controller.java']
     }
@@ -186,30 +190,27 @@ export function mockChatSessions(
       workspaceRoot,
       createdAt: now - 1.8 * day,
       updatedAt: now - 1.3 * day,
-      savedFiles: [
-        {
-          path: appPath(WORKSPACE_DOC_PATHS.testReport),
-          content: buildTestReport({ round: 2, status: 'passed', basedOnRevision: 1, defects: [] }),
-          savedAt: now - 1.3 * day
-        }
-      ],
       messages: [
         message(
           351,
           'assistant',
-          '启动、非功能和业务测试均已完成，测试报告已生成并保存。',
+          '启动、非功能和业务测试均已完成，6 条业务用例全部通过。',
           now - 1.8 * day,
           {
             workflow: completedWorkflow(
               'thread-testing-v1-3',
-              'test_report',
-              '测试报告已生成'
+              'business_test',
+              '全部业务测试用例已完成'
             ),
             processSteps: [
               step('testing-startup-v1-3', 1, '启动测试', '确认应用启动、主路由和基础页面加载正常。'),
-              step('testing-non-functional-v1-3', 2, '非功能测试', '检查异常反馈、响应稳定性和权限边界。'),
-              step('testing-business-v1-3', 3, '业务测试', '完成需求文档、项目计划和页面接口组合路径验证。'),
-              step('testing-report-v1-3', 4, '生成测试报告', '汇总测试证据并写入测试报告。')
+              step('testing-non-functional-v1-3', 2, '非功能测试', '检查异常反馈、响应稳定性和恢复路径。'),
+              step(
+                'testing-business-v1-3',
+                3,
+                '业务测试',
+                `完成 ${testCaseEstimateFromSource().total}/${testCaseEstimateFromSource().total} 条业务测试用例验证。`
+              )
             ]
           }
         )
@@ -228,7 +229,7 @@ export function mockChatSessions(
       savedFiles: [
         {
           path: appPath(WORKSPACE_DOC_PATHS.codeReview),
-          content: buildReviewReport({ round: 2, status: 'passed', basedOnRevision: 1, defects: [] }),
+          content: buildReviewReport({ completed: 6, status: 'passed', total: 6 }),
           savedAt: now - 3600000
         }
       ],
@@ -260,8 +261,8 @@ export function mockChatSessions(
               step(
                 'review-security',
                 3,
-                '检查权限与输入边界',
-                '确认填报人身份取自登录上下文，查询参数均经过枚举和长度校验。'
+                '检查输入与错误边界',
+                '确认查询参数经过格式校验，异常响应能够被页面正确呈现。'
               ),
               step('review-tests', 4, '运行生成版本前验证', '', {
                 checks: [
@@ -277,7 +278,7 @@ export function mockChatSessions(
                     name: '接口契约校验',
                     status: 'passed',
                     required: true,
-                    evidence: '查询和导出字段一致。'
+                    evidence: '查询字段与页面数据绑定一致。'
                   },
                   {
                     id: 'review-health',
@@ -291,6 +292,72 @@ export function mockChatSessions(
             ]
           }
         )
+      ]
+    },
+    {
+      // 当前原型的开发剧本使用一条阶段主对话承接两条产物 Workflow。
+      id: 'session-development-v1-3',
+      title: '应用开发',
+      sessionKind: 'development',
+      editorMode,
+      threadId: 'thread-development-v1-3',
+      versionId: VERSION_ID,
+      workspaceRoot,
+      savedFiles: [
+        generatedPageFile('recheck-introduction', now - 3 * day),
+        generatedPageFile('my-rechecks', now - 2.2 * day),
+        generatedEndpointFile('ep-my-rechecks', now - 2.2 * day)
+      ],
+      createdAt: now - 5 * day,
+      updatedAt: now - 2 * day,
+      messages: [
+        message(
+          201,
+          'user',
+          '实现“回检介绍”静态页面，说明适用场景和填报、审核、整改、归档流程，不需要调用接口。',
+          now - 5 * day
+        ),
+        message(204, 'assistant', '回检介绍页面代码已完成并保存。', now - 3 * day, {
+          workflow: completedWorkflow(
+            'thread-development-v1-3',
+            'build',
+            '静态页面代码产物已完成',
+            { pageId: 'recheck-introduction' }
+          ),
+          processSteps: [
+            step('intro-inspect', 1, '读取需求与计划', '确认页面只承载说明内容，不需要接口或模型。'),
+            step('intro-build', 2, '生成静态页面代码', '完成介绍区、四步流程和回检入口。'),
+            step('intro-delivery', 3, '交付页面文件', '页面代码已保存，后续启动与业务验证统一在测试阶段执行。')
+          ]
+        }),
+        message(
+          301,
+          'user',
+          '继续实现“我的回检”页面及其 GET /api/rechecks/my 接口，完成查询、筛选和状态跟踪。',
+          now - 3 * day
+        ),
+        message(304, 'assistant', '我的回检页面与查询接口代码产物已完成并保存。', now - 2.2 * day, {
+          workflow: completedWorkflow(
+            'thread-development-v1-3',
+            'build',
+            '页面与接口代码产物已完成',
+            {
+              pageId: 'my-rechecks',
+              apiContractId: 'rechecks',
+              endpointId: 'ep-my-rechecks'
+            }
+          ),
+          processSteps: [
+            step('feature-inspect', 1, '汇总页面与接口上下文', '读取页面设计、接口契约和当前用户数据权限约束。'),
+            step('feature-api-build', 2, '实现 GET /api/rechecks/my', '先交付页面依赖的查询接口文件。', {
+              buildExecutionSlice: apiBuildSlice()
+            }),
+            step('feature-page-build', 3, '实现“我的回检”页面', '按已确认的接口契约完成筛选、列表和状态展示。', {
+              buildExecutionSlice: pageBuildSlice()
+            }),
+            step('feature-delivery', 4, '交付页面与接口文件', '页面与接口文件已保存，两个 Workflow 已连续追加到同一主对话。')
+          ]
+        })
       ]
     },
     {
@@ -314,7 +381,7 @@ export function mockChatSessions(
         message(
           301,
           'user',
-          '完成“我的回检”查询与列表展示，同时实现页面依赖的 GET /api/rechecks/my；增加关键词、紧急程度、更新时间排序和台账导出。',
+          '完成“我的回检”查询与列表展示，同时实现页面依赖的 GET /api/rechecks/my；支持状态筛选和回检状态跟踪。',
           now - 3 * day
         ),
         message(
@@ -353,14 +420,14 @@ export function mockChatSessions(
               'feature-page-build',
               3,
               '实现“我的回检”页面',
-              '按已确认的接口契约完成筛选、列表和导出页面文件。',
+               '按已确认的接口契约完成筛选、列表和状态展示。',
               { buildExecutionSlice: pageBuildSlice() }
             ),
             step(
               'feature-delivery',
               4,
               '交付页面与接口文件',
-              '页面与接口文件均已保存，产物关系保持在同一开发对话中。'
+              '页面与接口文件均已保存，本轮交付由 Workflow 输出记录统一追踪。'
             )
           ]
         })
@@ -412,7 +479,10 @@ export function mockChatSessions(
       savedFiles: [
         {
           path: appPath(WORKSPACE_DOC_PATHS.requirementSpec),
-          content: '# 需求文档 · 武汉分行需求回检系统\n\n已确认 v1.3 的需求范围与验收标准。',
+          content: buildRequirementSpecDoc(
+            requirementSpec as unknown as Record<string, unknown>,
+            '武汉分行需求回检系统'
+          ),
           savedAt: now - 7.8 * day
         }
       ],
@@ -420,13 +490,13 @@ export function mockChatSessions(
         message(
           101,
           'user',
-          '基于已生成版本的 v1.2 发起迭代。回检单越来越多，需要关键词检索、紧急程度筛选、更新时间展示，并支持按当前条件导出台账。',
+          '基于已生成版本的 v1.2 发起迭代。回检单越来越多，需要按审核状态筛选并持续跟踪处理状态。',
           now - 8 * day
         ),
         message(
           102,
           'assistant',
-          '已完成需求澄清：本次只扩展“我的回检”和既有查询契约，不新增角色与审批流程；导出必须继承筛选条件和当前用户的数据权限。',
+          '已完成需求澄清：本次只扩展“我的回检”和既有查询契约，不新增登录、角色或审批流程；页面按审核状态筛选并跟踪回检状态。',
           now - 7.8 * day,
           {
             workflow: completedWorkflow(
@@ -441,7 +511,7 @@ export function mockChatSessions(
                 '读取 v1.2 版本基线',
                 '恢复已生成版本的页面、接口契约与数据权限约束。'
               ),
-              step('design-diff', 2, '分析迭代差异', '识别 4 项体验增量和 1 项权限不变约束。'),
+              step('design-diff', 2, '分析迭代差异', '识别状态筛选与列表跟踪需求，确认不新增认证功能。'),
               step('design-spec', 3, '生成需求文档', '形成可验收的 v1.3 增量需求与非目标。')
             ]
           }
@@ -461,7 +531,10 @@ export function mockChatSessions(
       savedFiles: [
         {
           path: appPath(WORKSPACE_DOC_PATHS.projectPlan),
-          content: '# 项目计划 · 武汉分行需求回检系统\n\n已确认 v1.3 的页面、接口与执行计划。',
+          content: buildProjectPlanDoc(
+            projectPlan as unknown as Record<string, unknown>,
+            '武汉分行需求回检系统'
+          ),
           savedAt: now - 6 * day
         }
       ],
@@ -470,7 +543,7 @@ export function mockChatSessions(
         message(
           104,
           'assistant',
-          '项目计划已生成：共 2 个页面和 1 个接口，组织为“实现回检介绍”和“实现我的回检”两个开发对话。',
+          '项目计划已生成：共 2 个页面和 1 个接口，开发阶段由一个主对话连续承接 2 条 Workflow；计划确认后后台预计生成 6 条业务测试用例。',
           now - 7 * day,
           {
             workflow: completedWorkflow(
@@ -498,7 +571,7 @@ export function mockChatSessions(
         message(
           106,
           'assistant',
-          '需求文档与项目计划均已确认。两个开发对话覆盖 2 个页面和 1 个接口，全部完成后会自动进入代码审查。',
+          '需求文档与项目计划均已确认。开发主对话将连续承接 2 条页面/接口 Workflow，全部完成后进入测试阶段。',
           now - 6 * day
         )
       ]

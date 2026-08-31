@@ -1,5 +1,6 @@
 import {
   AppstoreOutlined,
+  CheckSquareOutlined,
   CodeOutlined,
   FileMarkdownOutlined,
   FolderOpenOutlined,
@@ -10,7 +11,7 @@ import { cx } from '../../../../utils'
 import type { WorkspaceDocKey } from '../../types'
 import './RightPanelTabs.less'
 
-/** 工作区 tab 键：预览/源码/文档/过程 + 设计阶段的三份产物文档（需求文档/项目计划/构建任务）。 */
+/** 工作区 tab 键：阶段专属工作台、预览/源码/文档/过程与设计阶段文档。 */
 export type WorkspaceTabKey =
   | 'preview'
   | 'application-preview'
@@ -22,13 +23,15 @@ export type WorkspaceTabKey =
   | 'endpoint-source'
   | 'detail-doc'
   | 'process'
+  | 'development-artifacts'
+  | 'test-cases'
   | WorkspaceDocKey
 
 export type WorkspaceTab = {
   key: WorkspaceTabKey
   label: string
   available: boolean
-  icon?: 'application' | 'browser' | 'code' | 'document' | 'project'
+  icon?: 'application' | 'artifacts' | 'browser' | 'code' | 'document' | 'project' | 'test-cases'
 }
 
 type Props = {
@@ -37,7 +40,7 @@ type Props = {
   onChange: (key: WorkspaceTabKey) => void
 }
 
-/** 右侧工作区的 tab 条：预览 / 源码 / 文档 / 过程。不可用的 tab 灰显。 */
+/** 右侧工作区的 tab 条：按阶段展示专属工作台或预览、源码、文档。不可用的 tab 灰显。 */
 export default function RightPanelTabs({
   tabs,
   active,
@@ -46,6 +49,8 @@ export default function RightPanelTabs({
   /** 按窗口内容类型返回统一线性图标。 */
   const renderIcon = (icon?: WorkspaceTab['icon']): ReactElement | null => {
     if (icon === 'application') return <AppstoreOutlined />
+    if (icon === 'artifacts') return <AppstoreOutlined />
+    if (icon === 'test-cases') return <CheckSquareOutlined />
     if (icon === 'browser') return <GlobalOutlined />
     if (icon === 'code') return <CodeOutlined />
     if (icon === 'document') return <FileMarkdownOutlined />

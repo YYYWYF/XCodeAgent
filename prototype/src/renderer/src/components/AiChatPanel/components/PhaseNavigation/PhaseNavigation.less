@@ -1,0 +1,180 @@
+/* 阶段主对话已经位于中间工作区，左侧固定为只承载功能入口的窄栏。 */
+/* 菜单栏层级压过抽屉：抽屉收起时整体藏在菜单栏底下，滑入时从菜单栏右边线移出。 */
+.@{class-prefix}-phase-navigation {
+  position: relative;
+  z-index: 31;
+  display: flex;
+  width: 60px;
+  min-width: 60px;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px 10px;
+  border-right: 1px solid var(--wb-border);
+  background: var(--wb-surface-subtle);
+}
+
+.@{class-prefix}-phase-navigation-tools {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 抽屉类入口组的收尾分隔线，与沉底的用户功能组遥相呼应。 */
+.@{class-prefix}-phase-navigation-divider {
+  width: 26px;
+  height: 1px;
+  margin: 5px 0;
+  background: var(--wb-border);
+}
+
+/* 用户功能组：与底部头像贴近，跟随 spacer 下沉。 */
+.@{class-prefix}-phase-navigation-user-tools {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.@{class-prefix}-phase-navigation-button {
+  position: relative;
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--wb-text-tertiary);
+  font-size: 17px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+
+  &:hover,
+  &:focus-visible,
+  &.@{class-prefix}-active {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent-border);
+    outline: none;
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 20%, transparent);
+  }
+}
+
+/* 后台任务运行特效：右上角呼吸圆点 + 向外扩散的波纹，提示有任务正在执行、可点开查看。 */
+.@{class-prefix}-phase-navigation-task-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--wb-accent);
+  pointer-events: none;
+
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: var(--wb-accent);
+    animation: xa-phase-nav-ping 1.6s ease-out infinite;
+  }
+}
+
+@keyframes xa-phase-nav-ping {
+  from {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(2.8);
+    opacity: 0;
+  }
+}
+
+.@{class-prefix}-phase-navigation-asset-icon {
+  display: inline-block;
+  width: 19px;
+  height: 19px;
+  background: currentColor;
+  mask: var(--phase-navigation-asset-source) center / contain no-repeat;
+  -webkit-mask: var(--phase-navigation-asset-source) center / contain no-repeat;
+}
+
+.@{class-prefix}-phase-navigation-spacer {
+  min-height: 12px;
+  flex: 1;
+}
+
+/* 真实工作台保留用户入口；窄栏只显示头像，不占用对话或功能按钮空间。 */
+.@{class-prefix}-phase-navigation-user {
+  display: flex;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+  color: var(--wb-text-secondary);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--wb-surface-hover);
+    outline: none;
+  }
+}
+
+/* 头像与上方用户功能组之间只保留极小间距，形成底部一组。 */
+.@{class-prefix}-phase-navigation-user-tools + .@{class-prefix}-phase-navigation-user {
+  margin-top: 6px;
+}
+
+.@{class-prefix}-phase-navigation-user-avatar {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  background: linear-gradient(145deg, #a97aff 0%, #7e50f4 52%, #6337e8 100%);
+  border-radius: 50%;
+}
+
+.@{class-prefix}-phase-navigation-user-name,
+.@{class-prefix}-phase-navigation-user > .anticon:last-child {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .@{class-prefix}-phase-navigation {
+    width: 54px;
+    min-width: 54px;
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+
+  .@{class-prefix}-phase-navigation-button {
+    width: 36px;
+    height: 36px;
+  }
+}

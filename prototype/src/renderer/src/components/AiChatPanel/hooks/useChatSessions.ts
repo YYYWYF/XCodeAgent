@@ -15,12 +15,7 @@ import {
   type ChatSessionSummary
 } from '../../../service/chatSessions'
 import type { ApplicationConfig, ChatMessageSkill, EditorMode } from '../../../typings'
-import {
-  artifactIdsForSession,
-  endpointArtifactId,
-  pageArtifactId,
-  type WorkbenchSessionKind
-} from '../../../workbenchDomain'
+import type { WorkbenchSessionKind } from '../../../workbenchDomain'
 import type { AgentChatMessage } from '../types'
 import {
   createSessionIdentity,
@@ -32,7 +27,6 @@ import {
 import { useSessionRuntimeStore } from './useSessionRuntimeStore'
 
 export type PersistSessionInput = {
-  artifactIds?: string[]
   editorMode: EditorMode
   messages: ChatSessionMessage[]
   sessionId: string
@@ -94,8 +88,6 @@ type UseChatSessionsResult = {
   activeSession?: SessionIdentity
   activeSessionId?: string
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
-  attachArtifactsToActiveSession: (artifactIds: string[]) => Promise<void>
-  attachArtifactsToSession: (sessionId: string, artifactIds: string[]) => Promise<void>
   clearActiveSession: () => void
   deletingSessionId?: string
   draft: string
@@ -103,6 +95,7 @@ type UseChatSessionsResult = {
   createReviewSession: () => Promise<SessionIdentity>
   createTestingSession: () => Promise<SessionIdentity>
   createAcceptanceSession: () => Promise<SessionIdentity>
+  ensureDevelopmentSession: () => Promise<SessionIdentity>
   ensureAnalysisSession: () => Promise<SessionIdentity>
   ensurePlanningSession: () => Promise<SessionIdentity>
   createEndpointSession: (
@@ -169,6 +162,10 @@ export function useChatSessions({
   // 会话列表异步恢复期间保留当前运行中的临时会话，避免新阶段被旧会话抢回。
   const activeSessionIdsRef = useRef<Partial<Record<EditorMode, string>>>({})
   const pageSessionPromisesRef = useRef<Record<string, Promise<SessionIdentity>>>({})
+  // 开发阶段只有一条主会话；并发入口必须共享同一个创建/恢复 Promise，避免生成两条空会话。
+  const developmentSessionPromiseRef = useRef<Promise<SessionIdentity> | undefined>()
+  // 当前版本的开发主会话身份必须固定在运行期，不能依赖异步会话目录的刷新时机重新查找。
+  const developmentSessionRef = useRef<SessionIdentity | undefined>()
   const transientSessionIdsRef = useRef<Set<string>>(new Set())
   const {
     agUiSessionsRef,
@@ -195,6 +192,8 @@ export function useChatSessions({
   }, [activeSessionIds])
 
   useEffect(() => {
+    developmentSessionPromiseRef.current = undefined
+    developmentSessionRef.current = undefined
     loadSessionsForMode(editorMode)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [application.currentVersionId, application.workspaceRoot, editorMode])
@@ -280,8 +279,7 @@ export function useChatSessions({
     const key = sessionRuntimeKey(application.workspaceRoot, mode, sessionId)
     if (!agUiSessionsRef.current[key]) {
       const session = await readChatSession(application.workspaceRoot, mode, sessionId)
-      const identity = createSessionIdentity({
-        artifactIds: session.artifactIds,
+    const identity = createSessionIdentity({
         workspaceRoot: application.workspaceRoot,
         editorMode: mode,
         sessionId: session.id,
@@ -390,15 +388,7 @@ export function useChatSessions({
     const now = Date.now()
     const sessionId = createChatSessionId()
     const agUiSession = new AgUiChatSession()
-    const initialArtifactIds = [
-      ...(pageId ? [pageArtifactId(pageId)] : []),
-      ...(endpointContext
-        ? [endpointArtifactId(endpointContext.apiContractId, endpointContext.endpointId)]
-        : []),
-      ...artifactIdsForSession({ sessionKind })
-    ]
     const identity = createSessionIdentity({
-      artifactIds: initialArtifactIds,
       workspaceRoot: application.workspaceRoot,
       editorMode,
       sessionId,
@@ -410,7 +400,6 @@ export function useChatSessions({
       sessionKind
     })
     const session: ChatSessionRecord = {
-      artifactIds: initialArtifactIds,
       id: sessionId,
       title:
         customTitle ||
@@ -439,7 +428,7 @@ export function useChatSessions({
     setActiveSessionIds((current) => ({ ...current, [editorMode]: session.id }))
 
     if (materializeImmediately) {
-      // 用户从产物入口显式创建的对话立即进入目录，并由该会话取得产物写锁。
+      // 阶段主对话需要立即进入目录，确保阶段切换后仍可恢复同一条会话。
       const summary = await saveChatSession(session)
       replaceSessionSummary(editorMode, summary)
     } else {
@@ -539,12 +528,6 @@ export function useChatSessions({
         if (identity) {
           if (!endpointContext) return identity
           const enrichedIdentity = createSessionIdentity({
-            artifactIds: [
-              ...new Set([
-                ...(identity.artifactIds || artifactIdsForSession(identity)),
-                endpointArtifactId(endpointContext.apiContractId, endpointContext.endpointId)
-              ])
-            ],
             workspaceRoot: identity.workspaceRoot,
             editorMode: identity.editorMode,
             sessionId: identity.sessionId,
@@ -609,6 +592,95 @@ export function useChatSessions({
       if (identity) return identity
     }
     return createNewSession(undefined, undefined, undefined, TESTING_TITLE, true, 'testing')
+  }
+
+  /** 创建或复用开发阶段唯一的应用级主对话，产物目标不再决定会话身份。 */
+  const ensureDevelopmentSession = async (): Promise<SessionIdentity> => {
+    const cachedDevelopment = developmentSessionRef.current
+    if (
+      cachedDevelopment &&
+      cachedDevelopment.workspaceRoot === workspaceRoot &&
+      cachedDevelopment.editorMode === editorMode
+    ) {
+      // 同一阶段后续 Workflow 只激活已固定的主会话，目录刷新不得把它替换成空会话。
+      const sanitizedDevelopment =
+        cachedDevelopment.pageId || cachedDevelopment.apiContractId || cachedDevelopment.endpointId
+          ? createSessionIdentity({
+              workspaceRoot: cachedDevelopment.workspaceRoot,
+              editorMode: cachedDevelopment.editorMode,
+              sessionId: cachedDevelopment.sessionId,
+              threadId: cachedDevelopment.threadId,
+              sessionKind: 'development'
+            })
+          : cachedDevelopment
+      if (sanitizedDevelopment !== cachedDevelopment) {
+        registerSession(sanitizedDevelopment, getSessionMessages(cachedDevelopment.key))
+        developmentSessionRef.current = sanitizedDevelopment
+      }
+      ensureAgent(sanitizedDevelopment)
+      activeSessionIdsRef.current = {
+        ...activeSessionIdsRef.current,
+        [editorMode]: sanitizedDevelopment.sessionId
+      }
+      setActiveSessionIds((current) => ({
+        ...current,
+        [editorMode]: sanitizedDevelopment.sessionId
+      }))
+      return sanitizedDevelopment
+    }
+    const inFlight = developmentSessionPromiseRef.current
+    if (inFlight) return inFlight
+    const DEVELOPMENT_TITLE = '应用开发'
+    const sessionPromise = (async (): Promise<SessionIdentity> => {
+      // 以消息较多的会话优先，兼容并发创建留下的重复空壳，保证历史轨迹不被新空会话遮住。
+      const existingDevelopment = sessionSummariesRef.current[editorMode]
+        .filter(
+          (session) =>
+            session.sessionKind === 'development' &&
+            session.title === DEVELOPMENT_TITLE
+        )
+        .sort(
+          (left, right) =>
+            right.messageCount - left.messageCount || right.updatedAt - left.updatedAt
+        )[0]
+      if (existingDevelopment) {
+        await openChatSession(editorMode, existingDevelopment.id)
+        const key = sessionRuntimeKey(workspaceRoot, editorMode, existingDevelopment.id)
+        const storedIdentity =
+          getIdentity(key) ||
+          sessionIdentityFromSummary(existingDevelopment, editorMode, workspaceRoot)
+        if (storedIdentity) {
+          const identity = createSessionIdentity({
+            workspaceRoot,
+            editorMode,
+            sessionId: storedIdentity.sessionId,
+            threadId: storedIdentity.threadId,
+            sessionKind: 'development'
+          })
+          registerSession(identity, getSessionMessages(key))
+          developmentSessionRef.current = identity
+          return identity
+        }
+      }
+      const identity = await createNewSession(
+        undefined,
+        undefined,
+        undefined,
+        DEVELOPMENT_TITLE,
+        true,
+        'development'
+      )
+      developmentSessionRef.current = identity
+      return identity
+    })()
+    developmentSessionPromiseRef.current = sessionPromise
+    try {
+      return await sessionPromise
+    } finally {
+      if (developmentSessionPromiseRef.current === sessionPromise) {
+        developmentSessionPromiseRef.current = undefined
+      }
+    }
   }
 
   /** 创建或复用阶段默认的应用级验收会话，保持验收与审查对话完全隔离。 */
@@ -774,52 +846,7 @@ export function useChatSessions({
     replaceSessionSummary(editorMode, summary)
   }
 
-  /** 把产物加入指定会话并持久化多产物归属，供测试缺陷回退自动附加报告。 */
-  const attachArtifactsToSession = async (sessionId: string, artifactIds: string[]): Promise<void> => {
-    if (!application.workspaceRoot || !sessionId || artifactIds.length === 0) return
-    const sessionSummary = sessionSummariesRef.current[editorMode].find((item) => item.id === sessionId)
-    const key = sessionRuntimeKey(application.workspaceRoot, editorMode, sessionId)
-    const identity =
-      getIdentity(key) ||
-      sessionIdentityFromSummary(sessionSummary, editorMode, application.workspaceRoot)
-    if (!identity) return
-    const current = await readChatSession(
-      application.workspaceRoot,
-      editorMode,
-      sessionId
-    )
-    const currentArtifactIds = artifactIdsForSession(current)
-    const nextArtifactIds = [
-      ...new Set([
-        ...currentArtifactIds,
-        ...(identity.artifactIds || []),
-        ...artifactIds.filter(Boolean)
-      ])
-    ]
-    // 资源已挂载时直接结束，避免重复写入会话摘要触发无意义的渲染链。
-    if (artifactIds.filter(Boolean).every((artifactId) => currentArtifactIds.includes(artifactId))) {
-      return
-    }
-    const enrichedIdentity = createSessionIdentity({
-      ...identity,
-      artifactIds: nextArtifactIds
-    })
-    registerSession(enrichedIdentity, getSessionMessages(identity.key))
-    const summary = await saveChatSession({
-      ...current,
-      artifactIds: nextArtifactIds,
-      updatedAt: Date.now()
-    })
-    replaceSessionSummary(editorMode, summary)
-  }
-
-  /** 把用户在输入框中明确选择的产物加入当前对话，并持久化多产物归属。 */
-  const attachArtifactsToActiveSession = async (artifactIds: string[]): Promise<void> => {
-    if (!activeSession) return
-    await attachArtifactsToSession(activeSession.sessionId, artifactIds)
-  }
-
-  /** 把已获授权的 Diff 固化到所属会话；右侧文件树和产物状态都只读取此处的正式快照。 */
+  /** 把 Workflow 已确认的 Diff 固化为正式文件快照；会话仅作为本地历史载体。 */
   const recordAcceptedFile = async (
     sessionId: string,
     file: Omit<ChatSessionSavedFile, 'savedAt'>
@@ -843,20 +870,12 @@ export function useChatSessions({
     const existingSummary = sessionSummariesRef.current[input.editorMode].find(
       (summary) => summary.id === input.sessionId
     )
+    const isDevelopmentMainSession =
+      (input.sessionKind || existingSummary?.sessionKind) === 'development' &&
+      (input.titleFrom === '应用开发' || existingSummary?.title === '应用开发')
     const inferredEndpoint = inferEndpointContextFromMessages(input.messages)
     const now = Date.now()
     const session: ChatSessionRecord = {
-      artifactIds: [
-        ...new Set([
-          ...(input.artifactIds || []),
-          ...(existingSummary?.artifactIds || []),
-          ...(input.pageId ? [pageArtifactId(input.pageId)] : []),
-          ...(input.apiContractId && input.endpointId
-            ? [endpointArtifactId(input.apiContractId, input.endpointId)]
-            : []),
-          ...artifactIdsForSession({ sessionKind: input.sessionKind })
-        ])
-      ],
       // 继续执行工作流时沿用本次会话已经确认的文件，不能让新消息把正式文件快照覆盖掉。
       savedFiles: existingSummary?.savedFiles,
       id: input.sessionId,
@@ -874,12 +893,17 @@ export function useChatSessions({
           : existingSummary?.title || '新对话',
       editorMode: input.editorMode,
       threadId: input.threadId,
-      apiContractId:
-        input.apiContractId || existingSummary?.apiContractId || inferredEndpoint.apiContractId,
-      endpointId: input.endpointId || existingSummary?.endpointId || inferredEndpoint.endpointId,
+      apiContractId: isDevelopmentMainSession
+        ? undefined
+        : input.apiContractId || existingSummary?.apiContractId || inferredEndpoint.apiContractId,
+      endpointId: isDevelopmentMainSession
+        ? undefined
+        : input.endpointId || existingSummary?.endpointId || inferredEndpoint.endpointId,
       endpointLabel:
-        input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint.endpointLabel,
-      pageId: input.pageId || existingSummary?.pageId,
+        isDevelopmentMainSession
+          ? undefined
+          : input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint.endpointLabel,
+      pageId: isDevelopmentMainSession ? undefined : input.pageId || existingSummary?.pageId,
       sessionKind: input.sessionKind || existingSummary?.sessionKind,
       versionId: application.currentVersionId,
       workspaceRoot: application.workspaceRoot,
@@ -896,12 +920,11 @@ export function useChatSessions({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
-    attachArtifactsToActiveSession,
-    attachArtifactsToSession,
     clearActiveSession,
     createReviewSession,
     createTestingSession,
     createAcceptanceSession,
+    ensureDevelopmentSession,
     ensureAnalysisSession,
     ensurePlanningSession,
     createEndpointSession,

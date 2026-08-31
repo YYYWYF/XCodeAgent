@@ -195,6 +195,31 @@ const projectPlanConfirmationPayload = (
     }
   )
 
+/** 项目计划确认后的独立开发准入门：不再携带 Diff，只等待用户选择后台任务类型。 */
+const developmentEntryConfirmationPayload = (threadId: string): WorkflowRunPayload =>
+  wf(
+    threadId,
+    'development_entry_confirmation',
+    'requires_user_input',
+    {
+      clarification: {
+        mode: 'development_entry_confirmation',
+        status: 'requires_user_input',
+        message: '项目计划已确认，可以进入开发阶段。',
+        questions: []
+      },
+      project_plan_confirmed: true
+    },
+    {
+      result: { project_plan_confirmed: true },
+      summary: {
+        phase: 'development_entry_confirmation',
+        status: 'requires_user_input',
+        message: '项目计划已确认，可以进入开发阶段。'
+      }
+    }
+  )
+
 // 澄清问题文案里的应用名与当前应用对齐（澄清题文案里的应用名统一替换为当前应用名）。
 const clarificationPayload = (
   threadId: string,
@@ -402,8 +427,13 @@ export async function replayPlanning(
       onWorkflow?.(revision)
       return revision
     }
-    onContent?.('项目计划已确认，设计阶段完成，即将进入开发阶段。')
-    await delay(300)
+    onContent?.('项目计划已确认，可以进入开发阶段。')
+    const entryGate = developmentEntryConfirmationPayload(threadId)
+    onWorkflow?.(entryGate)
+    return entryGate
+  }
+
+  if (mode === 'development_entry_confirmation') {
     const confirmation = wf(
       threadId,
       'ready_for_workbench',

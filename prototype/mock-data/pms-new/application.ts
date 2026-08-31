@@ -133,10 +133,10 @@ export const pmsNewApplication: ApplicationConfig = {
       createdAt: Date.now() - 86400000,
       releasedAt: Date.now() - 3600000,
       lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统'),
-      description: '新增关键词检索、紧急程度、更新时间列和台账导出。',
+      description: '完善我的回检查询、状态筛选和状态跟踪。',
       snapshot: {
         pageIds: ['/recheck-introduction', '/my-rechecks'],
-        requirementSummary: '新增关键词检索、紧急程度、更新时间列和台账导出。'
+        requirementSummary: '完善我的回检查询、状态筛选和状态跟踪。'
       }
     }
   ],

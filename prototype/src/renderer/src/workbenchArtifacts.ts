@@ -4,6 +4,11 @@
  */
 
 import { backendControllerPath, frontendPagePath } from './mock/workspaceFiles'
+import {
+  TEST_CASE_ESTIMATE_GROUPS,
+  type TestCaseExecutionSnapshot,
+  type TestCaseEstimateGroup
+} from './testCasePreparation'
 
 export type PageDesignRegion = { name?: string; responsibility?: string }
 export type PageDesignApiDep = {
@@ -38,6 +43,53 @@ export type PageDesign = {
   acceptance_criteria?: string[]
   dependent_pages?: string[]
   [key: string]: unknown
+}
+
+export type TestCaseEstimate = {
+  total: number
+  groups: TestCaseEstimateGroup[]
+}
+
+/** 从需求或计划剧本读取预计用例概要，缺省时使用统一的演示基线。 */
+export function testCaseEstimateFromSource(source?: Record<string, unknown>): TestCaseEstimate {
+  const rawEstimate = source?.test_case_estimate
+  const rawGroups =
+    rawEstimate && typeof rawEstimate === 'object'
+      ? (rawEstimate as { groups?: unknown }).groups
+      : undefined
+  if (Array.isArray(rawGroups) && rawGroups.length > 0) {
+    const groups = rawGroups
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+      .map((item, index) => ({
+        id: String(item.id || `group-${index + 1}`),
+        label: String(item.label || `业务场景 ${index + 1}`),
+        total: Math.max(0, Number(item.total || 0)),
+        coverage: String(item.coverage || '核心业务路径与异常边界')
+      }))
+      .filter((group) => group.total > 0)
+    if (groups.length > 0) {
+      return { groups, total: groups.reduce((sum, group) => sum + group.total, 0) }
+    }
+  }
+  return {
+    groups: TEST_CASE_ESTIMATE_GROUPS,
+    total: TEST_CASE_ESTIMATE_GROUPS.reduce((sum, group) => sum + group.total, 0)
+  }
+}
+
+/** 渲染需求文档与计划文档共用的预计测试用例概要表。 */
+function buildTestCaseEstimateSection(source?: Record<string, unknown>): string[] {
+  const estimate = testCaseEstimateFromSource(source)
+  return [
+    '## 预计测试用例',
+    '',
+    `计划确认后将后台异步生成约 **${estimate.total}** 条业务测试用例，按场景分批生成和校验。`,
+    '',
+    '| 业务场景 | 预计数量 | 覆盖范围 |',
+    '| --- | ---: | --- |',
+    ...estimate.groups.map((group) => `| ${group.label} | ${group.total} | ${group.coverage} |`),
+    ''
+  ]
 }
 
 /** 把页面详细设计序列化为富 markdown（覆盖目标/布局/交互/接口/验收等）。 */
@@ -321,6 +373,7 @@ export function buildRequirementSpecDoc(
       lines.push(`  ${step.step_id}. ${step.description}`)
     }
   }
+  lines.push('', ...buildTestCaseEstimateSection(spec))
   lines.push('', '## 验收标准')
   for (const criterion of (spec.acceptance_criteria || []) as string[]) lines.push(`- ${criterion}`)
   lines.push('', '## 假设')
@@ -354,6 +407,7 @@ export function buildProjectPlanDoc(
   for (const step of (plan.execution_order || []) as Array<Record<string, any>>) {
     lines.push(`${step.order}. ${step.task}`)
   }
+  lines.push('', ...buildTestCaseEstimateSection(plan))
   return lines.join('\n')
 }
 
@@ -506,11 +560,11 @@ export function buildLineDiff(oldText: string, newText: string, path: string): s
   return `--- a/${path}\n+++ b/${path}\n@@ -1,${oldLines.length} +1,${newLines.length} @@\n${body}`
 }
 
-/** 审查阶段右侧面板的代码审查报告，明确当前审查消费的测试报告依据。 */
-export function buildReviewReport(testReport?: TestReportSnapshot): string {
-  const testBasis = testReport
-    ? `第 ${testReport.round} 轮测试报告 · 代码 revision：${testReport.basedOnRevision} · 结论：合格`
-    : '当前版本的合格测试报告'
+/** 审查阶段右侧面板的代码审查报告，明确当前审查消费的用例执行结果。 */
+export function buildReviewReport(testExecution?: TestCaseExecutionSnapshot): string {
+  const testBasis = testExecution
+    ? `${testExecution.completed}/${testExecution.total} 条业务测试用例执行通过`
+    : '全部业务测试用例已执行'
   return `# 代码审查报告
 
 > 审查依据：${testBasis} · 审查范围：全部页面与接口模块 · 结论：**通过，可生成版本**
@@ -546,95 +600,4 @@ export function buildReviewReport(testReport?: TestReportSnapshot): string {
 - 页面：我的回检
 - 接口：GET /api/rechecks/my
 `
-}
-
-export type TestReportStatus = 'running' | 'failed' | 'passed'
-
-export type TestReportDefect = {
-  id: string
-  severity: '高' | '中' | '低'
-  title: string
-  summary: string
-  evidence: string
-  artifactIds: string[]
-  artifactLabels: string[]
-}
-
-export type TestReportSnapshot = {
-  round: number
-  status: TestReportStatus
-  basedOnRevision: number
-  defects: TestReportDefect[]
-}
-
-/** 生成测试阶段唯一的应用级测试报告；缺陷明细和产物关联来自同一轮测试快照。 */
-export function buildTestReport(report?: TestReportSnapshot): string {
-  if (!report || report.status === 'running') {
-    return '# 测试报告\n\n测试 Agent 正在执行完整应用测试，报告生成后会在此更新。\n'
-  }
-
-  const failed = report.status === 'failed'
-  const lines = [
-    '# 测试报告',
-    '',
-    `> 测试轮次：第 ${report.round} 轮 · 代码 revision：${report.basedOnRevision} · 总体结论：**${
-      failed ? '不合格' : '合格，可进入审查阶段'
-    }**`,
-    '',
-    '## 测试范围',
-    '',
-    '- 页面和接口组合行为',
-    '- 启动测试：应用启动、主路由和基础运行环境',
-    '- 非功能测试：异常反馈、响应稳定性、权限边界与恢复路径',
-    '- 业务测试：需求文档和项目计划中的核心业务旅程',
-    '',
-    '## 结果',
-    '',
-    `- 应用级检查：${failed ? '⚠️ 发现缺陷' : '✅ 通过'}`,
-    `- 缺陷数量：${report.defects.length}`,
-    ''
-  ]
-
-  if (failed) {
-    lines.push(
-      '## 缺陷清单',
-      '',
-      '| 编号 | 严重级别 | 缺陷 | 受影响产物 |',
-      '| --- | --- | --- | --- |',
-      ...report.defects.map(
-        (defect) =>
-          `| ${defect.id} | ${defect.severity} | ${defect.title}：${defect.summary} | ${defect.artifactLabels.join('、')} |`
-      ),
-      '',
-      '## 修复引导',
-      '',
-      '- 受影响产物保持开发阶段原有状态，缺陷只记录在本轮测试报告中。',
-      '- 需要复测时，请继续在测试阶段会话中补充验证结果。',
-      '',
-      '## 关键证据',
-      '',
-      ...report.defects.map((defect) => `- ${defect.id}：${defect.evidence}`),
-      ''
-    )
-  } else {
-    lines.push(
-      '## 缺陷清单',
-      '',
-      '本轮未发现缺陷，启动、非功能和业务测试均已通过。',
-      '',
-      '## 下一步',
-      '',
-      '- 当前测试报告绑定本轮代码 revision，可进入审查阶段。',
-      ''
-    )
-  }
-
-  lines.push(
-    '## 未覆盖范围',
-    '',
-    '- 专业测试人员的正式验收',
-    '- 长时间运行和生产数据规模压测',
-    ''
-  )
-  return lines.join('\n')
 }

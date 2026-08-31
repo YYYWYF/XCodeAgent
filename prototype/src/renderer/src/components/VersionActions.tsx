@@ -36,7 +36,7 @@ function statusLabelFor(version: ApplicationVersion, isActive: boolean): string 
 /** 根据当前生命周期返回生成版本按钮的阻塞原因，避免在验收阶段仍显示审查文案。 */
 function releaseBlockedTitle(lifecycle?: ApplicationLifecycle): string {
   const extensions = lifecycle?.extensions || {}
-  if (String(extensions.testReportStatus || '') !== 'passed') return '测试通过后可生成新版本'
+  if (String(extensions.testExecutionStatus || '') !== 'passed') return '全部测试用例通过后可生成新版本'
   if (String(extensions.reviewStatus || '') !== 'passed') return '审查通过后可生成新版本'
   if (String(extensions.acceptanceStatus || '') !== 'passed') return '验收通过后可生成新版本'
   return '完成当前版本前置流程后可生成新版本'

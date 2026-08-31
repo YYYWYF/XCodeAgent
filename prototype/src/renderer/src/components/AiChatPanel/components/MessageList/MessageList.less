@@ -16,6 +16,8 @@
   overflow: auto;
   background: var(--wb-canvas);
   scrollbar-width: thin;
+  // 首节点展开/切换状态时保持滚动条槽位，避免内容区瞬间向左偏移再回弹。
+  scrollbar-gutter: stable;
 }
 
 .@{class-prefix}-scroll-to-bottom-button {
@@ -64,18 +66,19 @@
 
 .@{class-prefix}-ai-message-column {
   display: flex;
-  width: min(100%, 1080px);
+  width: 100%;
+  max-width: 1080px;
   min-height: 100%;
   box-sizing: border-box;
   flex-direction: column;
-  gap: 24px;
-  padding: 42px 38px 32px;
+  gap: 12px;
+  padding: 24px 18px 20px;
   margin: 0 auto;
 }
 
 // 同一 Agent 连续输出属于同一段工作流，使用更紧凑的间距，避免视觉上像缺少一条隐藏消息。
 .@{class-prefix}-ai-message.@{class-prefix}-consecutive-assistant {
-  margin-top: -8px;
+  margin-top: -4px;
 }
 
 .@{class-prefix}-ai-message-empty {
@@ -115,20 +118,22 @@
   display: flex;
   width: 100%;
   flex-direction: column;
+  padding: 4px 0;
 
   &.@{class-prefix}-user {
+    align-self: flex-end;
+    width: fit-content;
+    max-width: 92%;
     align-items: flex-end;
-    padding-bottom: 0;
-    border-bottom: 0;
+    padding: 4px 0;
 
     .@{class-prefix}-ai-message-content {
-      width: fit-content;
-      max-width: 78%;
+      width: auto;
+      max-width: none;
       margin-top: 0;
-      padding: 13px 16px;
-      background: var(--wb-accent-soft);
-      border: 1px solid var(--wb-accent-border);
-      border-radius: 8px;
+      padding: 0;
+      background: transparent;
+      border: 0;
     }
   }
 
@@ -144,9 +149,9 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 14px 16px;
+  padding: 11px 13px;
   border: 1px solid var(--wb-border-strong, #e5e7eb);
   border-radius: 10px;
   background: var(--wb-surface, #ffffff);
@@ -179,8 +184,8 @@
 .@{class-prefix}-ai-message-content {
   min-width: 0;
   color: var(--wb-text);
-  font-size: 14px;
-  line-height: 1.75;
+  font-size: 13.5px;
+  line-height: 1.65;
 
   .ant-typography,
   .markdown-body {
@@ -188,19 +193,47 @@
   }
 }
 
+.@{class-prefix}-ai-message-user-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 5px;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-ai-message-user-avatar {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  background: linear-gradient(145deg, #a97aff 0%, #7e50f4 52%, #6337e8 100%);
+  border-radius: 50%;
+}
+
+.@{class-prefix}-ai-message-user-name {
+  line-height: 1;
+}
+
 .@{class-prefix}-ai-message-agent {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin-bottom: 8px;
+  gap: 6px;
+  margin-bottom: 5px;
 }
 
 .@{class-prefix}-ai-message-agent-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   color: #fff;
   font-size: 11px;
@@ -231,7 +264,7 @@
 }
 
 .@{class-prefix}-ai-message-agent-name {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--wb-text-secondary);
 }
@@ -290,8 +323,8 @@
 
 .@{class-prefix}-ai-message-text.ant-typography {
   color: var(--wb-text);
-  font-size: 14px;
-  line-height: 1.75;
+  font-size: 13.5px;
+  line-height: 1.65;
   white-space: pre-wrap;
 }
 
@@ -299,20 +332,20 @@
   display: flex;
   max-width: 100%;
   flex-wrap: wrap;
-  gap: 5px;
-  margin-bottom: 7px;
+  gap: 4px;
+  margin-bottom: 5px;
 
   .ant-tag {
     max-width: 220px;
     margin: 0;
-    padding: 2px 8px;
+    padding: 1px 7px;
     overflow: hidden;
     color: var(--wb-text);
     background: var(--wb-surface-hover);
     border-color: transparent;
     border-radius: 7px;
-    font-size: 14px;
-    line-height: 24px;
+    font-size: 13px;
+    line-height: 22px;
     text-overflow: ellipsis;
     white-space: nowrap;
 
@@ -324,7 +357,7 @@
 
 @media (max-width: 1000px) {
   .@{class-prefix}-ai-message-column {
-    padding: 32px 24px 24px;
+    padding: 20px 14px 18px;
   }
 }
 
@@ -333,8 +366,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 8px 0;
-  padding: 8px 12px;
+  margin: 4px 0;
+  padding: 6px 10px;
   border: 1px solid var(--wb-accent-border);
   border-radius: 8px;
   background: var(--wb-accent-soft);

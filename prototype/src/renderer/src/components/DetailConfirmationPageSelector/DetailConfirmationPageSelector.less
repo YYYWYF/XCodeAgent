@@ -4,6 +4,7 @@
 .@{class-prefix}-detail-page-selector-inline {
   position: relative;
   display: flex;
+  box-sizing: border-box;
   flex-direction: column;
   gap: 8px;
   width: 100%;
@@ -25,6 +26,39 @@
     height: 2px;
     content: '';
     background: linear-gradient(90deg, var(--wb-accent), transparent 72%);
+  }
+}
+
+// 嵌入开发工作流首节点时由时间线承载标题，只保留模板内容和操作区。
+.@{class-prefix}-detail-page-selector-inline.@{class-prefix}-embedded {
+  margin-top: 0;
+  padding: 10px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, var(--wb-accent-soft), transparent 38%),
+    var(--wb-surface-subtle);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 14px;
+  box-shadow: 0 14px 30px rgba(45, 30, 104, 0.04);
+
+  &::before {
+    display: block;
+  }
+
+  // 预览区只是卡片内容，不再额外套一层带底色和边框的子卡片。
+  .@{class-prefix}-detail-page-selector-locked-template {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+  }
+
+  // 采用内容分组间距替代分隔线，让操作区自然落在同一张卡片内。
+  .@{class-prefix}-detail-page-selector-inline-actions {
+    margin-top: 2px;
+    padding-top: 0;
+    border-top: 0;
   }
 }
 

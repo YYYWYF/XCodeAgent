@@ -8,7 +8,6 @@ import react from '@vitejs/plugin-react'
 import styleConfig from './src/renderer/src/config/style.json'
 
 const rootDir = process.cwd()
-const MOCK_APPLICATION_HOST = '127.0.0.1'
 const MOCK_APPLICATION_PORT = 5190
 
 // 在独立端口运行“被生成应用”，避免预览地址误指向 XCodeAgent 原型自身。
@@ -33,13 +32,13 @@ function mockPreviewAppPlugin(): Plugin {
       previewServer.on('error', (error: NodeJS.ErrnoException): void => {
         if (error.code === 'EADDRINUSE') {
           server.config.logger.info(
-            `预览应用已运行在 http://${MOCK_APPLICATION_HOST}:${MOCK_APPLICATION_PORT}`
+            `预览应用已运行在 0.0.0.0:${MOCK_APPLICATION_PORT}`
           )
           return
         }
         server.config.logger.error(`预览应用启动失败：${error.message}`)
       })
-      previewServer.listen(MOCK_APPLICATION_PORT, MOCK_APPLICATION_HOST)
+      previewServer.listen(MOCK_APPLICATION_PORT, '0.0.0.0')
       server.httpServer?.once('close', (): void => {
         if (previewServer.listening) previewServer.close()
       })
@@ -73,6 +72,8 @@ export default defineConfig({
     }
   },
   server: {
+    // 监听全部网卡，允许同一局域网内的其它设备访问原型演示地址。
+    host: true,
     open: '/',
     port: 5180,
     strictPort: false

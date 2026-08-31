@@ -42,6 +42,37 @@ export function workflowInteractionAvailability(
   const snapshotPending = snapshotExecution?.pendingInteraction
   const activeExecution = lifecycle.activeExecutions[workflow.runId]
   const activePending = activeExecution?.pendingInteraction
+
+  // 测试用例授权是当前用例 Workflow 的启动动作。旧快照可能还没有写入
+  // pendingInteraction，但只要同一条 application execution 仍在等待用户，
+  // 当前最后一张授权卡就必须保持可操作，不能误判为失效。
+  const workflowState = (workflow.state || {}) as Record<string, unknown>
+  const clarificationState = workflowState.clarification
+  const isTestCaseAuthorization =
+    workflowState.testWorkflowType === 'case' &&
+    clarificationState &&
+    typeof clarificationState === 'object' &&
+    (clarificationState as { mode?: unknown }).mode === 'test_case_execute'
+  // 产物验收同理：验收工作流的确认卡挂在同一条 execution 的等待态上，
+  // execution 仍在等待用户时验收卡保持可操作。
+  // 后台执行方式选择卡也是启动动作：挂起期间用户必须能点选算力类型。
+  const isArtifactAcceptanceInteraction =
+    clarificationState &&
+    typeof clarificationState === 'object' &&
+    (clarificationState as { mode?: unknown }).mode === 'page_acceptance'
+  const isBackgroundDispatchInteraction =
+    clarificationState &&
+    typeof clarificationState === 'object' &&
+    (clarificationState as { mode?: unknown }).mode === 'background_dispatch'
+  if (
+    (isTestCaseAuthorization || isArtifactAcceptanceInteraction || isBackgroundDispatchInteraction) &&
+    activeExecution?.status === 'awaiting_user' &&
+    activeExecution.threadId === workflow.threadId &&
+    activeExecution.runId === workflow.runId &&
+    !activePending?.submittedAt
+  ) {
+    return 'active'
+  }
   if (!snapshotPending || !activePending) return 'stale'
 
   return activeExecution.status === 'awaiting_user' &&

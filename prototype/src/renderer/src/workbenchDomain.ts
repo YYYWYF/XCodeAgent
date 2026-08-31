@@ -6,7 +6,22 @@ import {
 } from './workbenchPhase'
 
 export type WorkbenchArtifactType = 'document' | 'page' | 'endpoint' | 'entity'
-export type WorkbenchArtifactStatus = 'not-started' | 'in-progress' | 'completed'
+/**
+ * 开发产物扩展状态：文档类沿用三档；开发对象在后台实现任务接入后增加
+ * 实现排队/实现中/待验收/失败四档，由统一后台任务流水推导。
+ */
+export type WorkbenchArtifactStatus =
+  | 'not-started'
+  | 'in-progress'
+  | 'impl-queued'
+  | 'implementing'
+  | 'awaiting-review'
+  | 'completed'
+  | 'failed'
+export type WorkbenchArtifactProgress = {
+  completed: number
+  total: number
+}
 export type WorkbenchSessionKind =
   | 'analysis'
   | 'planning'
@@ -20,7 +35,6 @@ export type WorkbenchArtifactLockReason =
   | 'future-phase'
   | 'version-locked'
   | 'phase-locked'
-  | 'conversation-locked'
   | 'editable'
 
 export type WorkbenchArtifact = {
@@ -33,31 +47,15 @@ export type WorkbenchArtifact = {
   available: boolean
 }
 
-export type WorkbenchSessionArtifactClaim = {
-  artifactIds: readonly string[]
-  createdAt: number
-  sessionId: string
-}
-
-export type WorkbenchSessionArtifactIdentity = {
-  artifactIds?: readonly string[]
-  apiContractId?: string
-  endpointId?: string
-  pageId?: string
-  sessionKind?: WorkbenchSessionKind
-  title?: string
-}
-
 export type WorkbenchArtifactAccess = {
   mode: WorkbenchArtifactAccessMode
-  ownerSessionId?: string
   reason: WorkbenchArtifactLockReason
   message: string
 }
 
 /** 生成设计文档产物的稳定领域标识。 */
 export function documentArtifactId(
-  key: 'requirement-spec' | 'project-plan' | 'test-report' | 'code-review'
+  key: 'requirement-spec' | 'project-plan' | 'code-review'
 ): string {
   return `document:${key}`
 }
@@ -79,65 +77,19 @@ export function entityArtifactId(entityId: string): string {
 
 
 /**
- * 把当前会话显式声明转换为统一产物集合；artifactIds 支持一条对话拥有任意多个产物。
- * pageId/API 字段和标题推断只用于兼容旧会话，不再按静态计划依赖提前扩张编辑范围。
- */
-export function artifactIdsForSession(session: WorkbenchSessionArtifactIdentity): string[] {
-  const artifactIds = new Set((session.artifactIds || []).filter(Boolean))
-  if (session.pageId) {
-    artifactIds.add(pageArtifactId(session.pageId))
-  }
-  if (session.apiContractId && session.endpointId) {
-    artifactIds.add(endpointArtifactId(session.apiContractId, session.endpointId))
-  }
-  if (session.sessionKind === 'analysis') {
-    artifactIds.add(documentArtifactId('requirement-spec'))
-  }
-  if (session.sessionKind === 'planning') {
-    artifactIds.add(documentArtifactId('project-plan'))
-  }
-  if (session.sessionKind === 'testing') artifactIds.add(documentArtifactId('test-report'))
-  if ((session.title || '').includes('代码审查')) {
-    artifactIds.add(documentArtifactId('code-review'))
-  }
-  return [...artifactIds]
-}
-
-/** 从全部对话声明中为每个产物选出唯一且稳定的默认对话。 */
-export function resolveArtifactOwners(
-  claims: readonly WorkbenchSessionArtifactClaim[]
-): Record<string, string> {
-  const owners: Record<string, string> = {}
-  const orderedClaims = [...claims].sort(
-    (left, right) =>
-      left.createdAt - right.createdAt || left.sessionId.localeCompare(right.sessionId)
-  )
-  orderedClaims.forEach((claim) => {
-    claim.artifactIds.forEach((artifactId) => {
-      if (artifactId && !owners[artifactId]) owners[artifactId] = claim.sessionId
-    })
-  })
-  return owners
-}
-
-/**
- * 统一判定产物可用性、版本锁、阶段锁和对话写锁。
- * 优先级固定为：未来阶段 > 版本锁 > 阶段锁 > 对话写锁 > 可编辑。
+ * 统一判定产物可用性、版本锁和阶段锁。
+ * 产物写入由活动 Workflow 的 DAG/Task 范围控制，不再由对话身份控制。
  */
 export function resolveArtifactAccess(input: {
   artifact: WorkbenchArtifact
   currentPhase: WorkbenchPhase
-  currentSessionId?: string
-  ownerSessionId?: string
   reachedPhase: WorkbenchPhase
   versionLocked: boolean
 }): WorkbenchArtifactAccess {
-  const { artifact, currentPhase, currentSessionId, ownerSessionId, reachedPhase, versionLocked } =
-    input
+  const { artifact, currentPhase, reachedPhase, versionLocked } = input
   if (!artifact.available || compareWorkbenchPhases(artifact.phase, reachedPhase) > 0) {
     return {
       mode: 'unavailable',
-      ownerSessionId,
       reason: 'future-phase',
       message: '当前阶段尚未生成该产物'
     }
@@ -145,7 +97,6 @@ export function resolveArtifactAccess(input: {
   if (versionLocked) {
     return {
       mode: 'read',
-      ownerSessionId,
       reason: 'version-locked',
       message: '已生成版本中的产物只读'
     }
@@ -153,24 +104,14 @@ export function resolveArtifactAccess(input: {
   if (artifact.phase !== currentPhase) {
     return {
       mode: 'read',
-      ownerSessionId,
       reason: 'phase-locked',
       message: `请先切换到${phaseLabel(artifact.phase)}后再编辑`
     }
   }
-  if (ownerSessionId && ownerSessionId !== currentSessionId) {
-    return {
-      mode: 'read',
-      ownerSessionId,
-      reason: 'conversation-locked',
-      message: '编辑权由该产物的默认对话持有'
-    }
-  }
   return {
     mode: 'write',
-    ownerSessionId,
     reason: 'editable',
-    message: ownerSessionId ? '当前对话拥有编辑权' : '尚未分配默认对话，可在当前对话中编辑'
+    message: '正式写入由当前 Workflow 的任务范围控制'
   }
 }
 

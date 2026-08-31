@@ -51,6 +51,10 @@ export type RightPanelState =
   | { type: 'process' }
   | { type: 'doc'; docKey?: WorkspaceDocKey }
   | { type: 'source' }
+  /** 开发阶段的交付清单；仅用于选择当前 Workflow 目标，不承载写入权限。 */
+  | { type: 'development-artifacts' }
+  /** 测试阶段的业务用例目录与结果内容区。 */
+  | { type: 'test-cases' }
 
 /** 右侧公共工作区的三档展示尺寸。 */
 export type RightPanelLayout = 'hidden' | 'split' | 'full'

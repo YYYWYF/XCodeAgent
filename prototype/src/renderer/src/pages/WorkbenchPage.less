@@ -187,11 +187,47 @@
 }
 
 .@{class-prefix}-workbench-shell-body {
+  /* 作为后台任务抽屉的定位宿主：抽屉只覆盖顶部栏以下的主体区域。 */
+  position: relative;
   display: flex;
   flex-direction: row;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+}
+
+/* 抽屉裁剪宿主：紧贴菜单栏右边线，超出左侧的内容被裁剪，
+   使抽屉滑出时永远从菜单栏右边线出现，且图层与对话区同级、菜单栏在外。 */
+.@{class-prefix}-workbench-drawer-host {
+  position: absolute;
+  z-index: 30;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 60px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* 抽屉自身恢复接收交互；空隙区域仍穿透给对话区。 */
+.@{class-prefix}-workbench-drawer-host > * {
+  pointer-events: auto;
+}
+
+/* 抽屉外点遮罩：完全透明，只负责拦截工作区首次点击来收起抽屉；
+   视觉上无任何遮暗，保持抽屉的非模态图层感。遮罩在 DOM 中先于抽屉渲染，层级更低。 */
+.@{class-prefix}-workbench-drawer-outside-mask {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: transparent;
+  cursor: default;
+}
+
+@media (max-width: 900px) {
+  .@{class-prefix}-workbench-drawer-host {
+    left: 54px;
+  }
 }
 
 /* 生成版本弹框：审查通过自动弹出，风格对齐 PhaseSwitchConfirmModal（头部渐变 + body + footer）。 */

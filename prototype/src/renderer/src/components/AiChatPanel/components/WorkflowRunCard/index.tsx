@@ -2,8 +2,11 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
+  HourglassOutlined,
   LoadingOutlined,
-  PauseCircleOutlined
+  MoonOutlined,
+  PauseCircleOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons'
 import {
   Alert,
@@ -31,8 +34,11 @@ import type {
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import type { WorkspaceDocKey } from '../../types'
-import { pageAcceptanceContinuationMessage } from '../../workflowContinuation'
+import { pageAcceptanceContinuationMessage, backgroundDispatchContinuationMessage } from '../../workflowContinuation'
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode'
+import BackgroundDispatchCard, {
+  type BackgroundDispatchOption
+} from '../BackgroundDispatchCard'
 import { DetailReviewAuthBar } from './DetailReview'
 import {
   taskId,
@@ -73,8 +79,32 @@ const ARTIFACT_CONFIRMATION_MAP: Record<
 
 export type ClarificationAnswers = WorkflowClarificationAnswers
 
+/** 执行方式选择卡的固定选项：同步执行或进入某套任务系统；描述与任务抽屉头部同一套口径。 */
+const BACKGROUND_DISPATCH_OPTIONS: BackgroundDispatchOption[] = [
+  {
+    key: 'sync',
+    label: '同步任务',
+    description: '常规算力，当场执行并实时展示生成过程，执行完成前需要等待。',
+    icon: <ThunderboltOutlined />
+  },
+  {
+    key: 'async',
+    label: '异步任务',
+    description: '常规算力队列，后台执行，消耗码豆。',
+    icon: <HourglassOutlined />
+  },
+  {
+    key: 'tide',
+    label: '潮汐任务',
+    description: '闲时算力队列，低优先级执行，不消耗码豆。',
+    icon: <MoonOutlined />
+  }
+]
+
 type WorkflowRunCardProps = {
   disabled?: boolean
+  /** 是否作为流程节点的内嵌动作渲染，避免形成独立的对话卡片。 */
+  embedded?: boolean
   interactionAvailability: WorkflowInteractionAvailability
   onDiscard?: (docKey: WorkspaceDocKey) => void
   onSubmitClarification?: (workflow: WorkflowRunPayload, answers: ClarificationAnswers) => void
@@ -83,6 +113,7 @@ type WorkflowRunCardProps = {
 
 export default function WorkflowRunCard({
   disabled,
+  embedded = false,
   interactionAvailability,
   onSubmitClarification,
   workflow
@@ -93,9 +124,10 @@ export default function WorkflowRunCard({
   const cardCopy = workflowCardCopy(clarification?.mode, workflow.summary.phase)
   const clarificationQuestions = clarification?.questions || []
   const isQuestionCard = clarificationQuestions.length > 0
+  const isTestCaseAuthorization = clarification?.mode === 'test_case_execute'
+  const isArtifactAcceptance = clarification?.mode === 'page_acceptance'
+  const isBackgroundDispatch = clarification?.mode === 'background_dispatch'
   const detailReview = clarification?.mode === 'detail_review' ? clarification.review : undefined
-  const isTestReportWorkflow =
-    clarification?.mode === 'test_report' || workflow.summary.phase === 'test_report'
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
     : undefined
@@ -113,10 +145,10 @@ export default function WorkflowRunCard({
     return initial
   })
   const [clarificationStep, setClarificationStep] = useState(0)
-  // 测试报告只通过右侧 Diff 授权完成保存，彻底移除对话区的交付确认卡。
-  if (isTestReportWorkflow) return null
   // 应用级验收的主交互位于右侧预览底部，避免在对话区重复渲染一张确认卡。
   if (clarification?.mode === 'application_acceptance') return null
+  // 开发准入由独立弹框承载，计划对话只保留项目 Agent 的确认消息。
+  if (clarification?.mode === 'development_entry_confirmation') return null
   const canSubmitClarification =
     clarification?.status === 'requires_user_input' &&
     clarificationQuestions.length > 0 &&
@@ -153,6 +185,115 @@ export default function WorkflowRunCard({
   // 对话区不再渲染“待确认事项 / 确认保存”卡片。
   if (detailReview) return null
 
+  // 执行方式选择是「选择执行方式」节点的动作：紧凑卡内嵌在节点轨迹中渲染，
+  // 不再脱离流程单独成块；选项即提交，解释话术收进选项的注释图标。
+  if (isBackgroundDispatch && requiresConfirmation) {
+    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-test-case-authorization',
+          'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {!embedded && <span className={cx('workflow-run-signal')} aria-hidden="true" />}
+        {!embedded && (
+          <Text className={cx('workflow-run-name')} strong>
+            选择执行方式
+          </Text>
+        )}
+        <BackgroundDispatchCard
+          disabled={disabled || interactionAvailability !== 'active'}
+          options={BACKGROUND_DISPATCH_OPTIONS}
+          answerKey={
+            String(workflow.state?.dispatchTarget || '') === 'endpoint'
+              ? 'background_dispatch_endpoint'
+              : 'background_dispatch'
+          }
+          onSelect={(key, answerKey) =>
+            onSubmitClarification?.(workflow, { [answerKey]: key })
+          }
+        />
+        {interactionAvailability !== 'active' && (
+          <Alert
+            className={cx('workflow-dispatch-availability')}
+            message={
+              interactionAvailability === 'unavailable'
+                ? '正在校准确认状态，请稍候。'
+                : '该确认已提交或已失效，请在当前工作流继续操作。'
+            }
+            showIcon
+            type="info"
+          />
+        )}
+      </div>
+    )
+  }
+
+  // 产物验收只负责启动动作；页面预览与接口调试统一放在右侧开发产物工作区，由验收工作流先行打开。
+  if (isArtifactAcceptance && requiresConfirmation) {    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-test-case-authorization',
+          'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {!embedded && <span className={cx('workflow-run-signal')} aria-hidden="true" />}
+        {!embedded && (
+          <Text className={cx('workflow-run-name')} strong>
+            产物验收
+          </Text>
+        )}
+        <Text className={cx('workflow-test-case-authorization-copy')}>
+          请在右侧预览确认实现内容，确认后接受产物。
+        </Text>
+        <Button
+          className={cx('workflow-test-case-authorization-action')}
+          type="primary"
+          disabled={disabled || interactionAvailability !== 'active'}
+          onClick={() => onSubmitClarification?.(workflow, { page_acceptance: 'accepted' })}
+        >
+          确认验收
+        </Button>
+      </div>
+    )
+  }
+
+  // 用例授权只负责启动动作；用例详情、脚本和预期结果统一放在右侧用例面板。
+  if (isTestCaseAuthorization && requiresConfirmation) {
+    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-test-case-authorization',
+          'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {!embedded && <span className={cx('workflow-run-signal')} aria-hidden="true" />}
+        {!embedded && (
+          <Text className={cx('workflow-run-name')} strong>
+            授权执行用例
+          </Text>
+        )}
+        <Text className={cx('workflow-test-case-authorization-copy')}>
+          请在右侧查看用例内容，确认后开始执行。
+        </Text>
+        <Button
+          className={cx('workflow-test-case-authorization-action')}
+          type="primary"
+          disabled={disabled || interactionAvailability !== 'active'}
+          onClick={() => onSubmitClarification?.(workflow, { confirm_test_case: '是' })}
+        >
+          开始执行
+        </Button>
+      </div>
+    )
+  }
+
   return (
     <div
       className={cx(
@@ -166,11 +307,11 @@ export default function WorkflowRunCard({
           <span className={cx('workflow-run-signal')} aria-hidden="true" />
           <div>
             <Text className={cx('workflow-run-name')} strong>
-              {isQuestionCard ? '待确认事项' : cardCopy.title}
+              {isTestCaseAuthorization ? cardCopy.title : isQuestionCard ? '待确认事项' : cardCopy.title}
             </Text>
           </div>
         </div>
-        {isQuestionCard ? (
+        {isQuestionCard && !isTestCaseAuthorization ? (
           <Text className={cx('workflow-clarification-stepper-header')} type="secondary">
             第 {safeStep + 1} / {totalQuestions} 项
           </Text>
@@ -208,7 +349,7 @@ export default function WorkflowRunCard({
               message={
                 interactionAvailability === 'unavailable'
                   ? '正在校准确认状态，请稍候。'
-                  : '该确认已提交或已失效，请使用当前计划操作继续。'
+                  : '该确认已提交或已失效，请在当前工作流继续操作。'
               }
               showIcon
               type="info"
@@ -323,6 +464,11 @@ function workflowCardCopy(mode?: string, phase?: string): WorkflowCardCopy {
       return {
         title: '页面验收',
         primaryAction: '确认验收'
+      }
+    case 'test_case_execute':
+      return {
+        title: '授权执行用例',
+        primaryAction: '开始执行'
       }
     default:
       // 没有明确交互类型时保留通用标题，兼容其它工作台过程卡片。
@@ -894,7 +1040,8 @@ function ClarificationQuestionControl({
       disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
       placeholder={question.placeholder || '请输入你的补充说明'}
-      rows={2}
+      // 单行输入保持每个确认步骤的底部操作栏在同一水平线上；超长内容仍可横向编辑滚动。
+      rows={1}
       value={typeof value === 'string' ? value : ''}
     />
   )
@@ -1015,6 +1162,8 @@ export function buildClarificationContinuationMessage(
   const clarification = workflowClarification(workflow)
   const acceptanceMessage = pageAcceptanceContinuationMessage(clarification, answers)
   if (acceptanceMessage) return acceptanceMessage
+  const dispatchMessage = backgroundDispatchContinuationMessage(clarification, answers)
+  if (dispatchMessage) return dispatchMessage
   if (clarification?.mode === 'detail_review' && answers.detail_review) {
     const submission = answers.detail_review
     if (
@@ -1030,8 +1179,8 @@ export function buildClarificationContinuationMessage(
   if (mode === 'file_acceptance') {
     return `已接受文件 ${String(answers.file_acceptance || '')} 的变更，请继续下一个文件。`
   }
-  if (mode === 'test_report') {
-    return '已查看当前测试报告。'
+  if (mode === 'development_entry_confirmation') {
+    return '确认进入开发阶段。'
   }
   if (
     mode === 'requirement_spec_confirmation' &&
@@ -1098,8 +1247,10 @@ function clarificationAnswerText(value: WorkflowClarificationAnswer | undefined)
 // 从 Workflow payload 的多个位置读取待确认载荷，兼容流式快照、最终结果和自定义事件。
 // eslint-disable-next-line react-refresh/only-export-components
 export function workflowClarification(
-  workflow: WorkflowRunPayload
+  workflow: WorkflowRunPayload | undefined
 ): WorkflowClarification | undefined {
+  // 历史会话可能残留不完整快照；读取确认信息时必须把它当作无交互工作流处理，不能让消息列表白屏。
+  if (!workflow || !workflow.summary || typeof workflow.summary !== 'object') return undefined
   const fromSummary = workflow.summary.clarification
   if (fromSummary && typeof fromSummary === 'object') return fromSummary
 
@@ -1113,7 +1264,7 @@ export function workflowClarification(
     return resultClarification as WorkflowClarification
   }
 
-  const clarificationEvent = workflow.events
+  const clarificationEvent = (Array.isArray(workflow.events) ? workflow.events : [])
     .slice()
     .reverse()
     .find((event) => {

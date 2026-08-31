@@ -1,0 +1,318 @@
+.@{class-prefix}-test-cases-panel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-test-cases-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.@{class-prefix}-test-cases-directory {
+  display: flex;
+  // 用例名称比开发产物更长，目录适度放宽，优先保证大部分名称完整可读。
+  flex: 0 0 280px;
+  flex-direction: column;
+  width: 280px;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--wb-border);
+  background: var(--wb-surface-subtle);
+}
+
+.@{class-prefix}-test-cases-directory-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px 12px 20px;
+  overflow-y: auto;
+}
+
+.@{class-prefix}-test-cases-group-row,
+.@{class-prefix}-test-cases-case-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+}
+
+.@{class-prefix}-test-cases-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px 0 8px;
+}
+
+.@{class-prefix}-test-cases-tree-node {
+  min-width: 0;
+}
+
+.@{class-prefix}-test-cases-group-row {
+  height: 30px;
+  gap: 7px;
+  padding: 0 7px;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+
+  > .anticon:first-child {
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+    font-size: 9px;
+    transition: transform 140ms ease;
+
+    &.@{class-prefix}-collapsed {
+      transform: rotate(-90deg);
+    }
+  }
+
+  > .anticon:nth-child(2) {
+    flex: 0 0 auto;
+    color: var(--wb-accent);
+  }
+
+  strong {
+    overflow: hidden;
+    min-width: 0;
+    flex: 1 1 auto;
+    color: var(--wb-text);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  small {
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &:hover,
+  &:focus-visible {
+    background: var(--wb-surface-hover);
+    outline: none;
+  }
+}
+
+.@{class-prefix}-test-cases-status-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #b6bcc7;
+
+  &.@{class-prefix}-in-progress {
+    background: var(--wb-accent);
+  }
+  &.@{class-prefix}-completed {
+    background: var(--wb-success);
+  }
+  &.@{class-prefix}-failed {
+    background: var(--wb-danger, #c65555);
+  }
+}
+
+.@{class-prefix}-test-cases-tree-children {
+  min-width: 0;
+  margin-left: 7px;
+  padding-left: 6px;
+  border-left: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-test-cases-case-row {
+  min-height: 34px;
+  gap: 7px;
+  padding: 0 31px 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+
+  > .anticon {
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+    font-size: 12px;
+  }
+  > span {
+    overflow: hidden;
+    min-width: 0;
+    flex: 1 1 auto;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:hover,
+  &.@{class-prefix}-selected {
+    border-color: var(--wb-accent-soft);
+    background: var(--wb-accent-soft);
+    color: var(--wb-text);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+
+    &:hover {
+      border-color: transparent;
+      background: transparent;
+      color: var(--wb-text-secondary);
+    }
+  }
+
+  > .@{class-prefix}-test-cases-status-dot {
+    margin-left: auto;
+  }
+}
+
+.@{class-prefix}-test-cases-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-test-case-detail {
+  width: min(900px, 100%);
+  padding: 18px 30px 40px;
+}
+
+.@{class-prefix}-test-case-section {
+  padding: 19px 0;
+  border-top: 1px solid var(--wb-border);
+
+  &:first-child {
+    border-top: 0;
+  }
+
+  h2 {
+    margin: 0 0 10px;
+    color: var(--wb-text);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  p,
+  li {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  ul,
+  ol {
+    margin: 0;
+    padding-left: 20px;
+  }
+
+  pre {
+    margin: 0;
+    padding: 10px 12px;
+    overflow: auto;
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    background: var(--wb-surface-subtle);
+    color: var(--wb-text-secondary);
+    font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+}
+
+.@{class-prefix}-test-case-defect-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.@{class-prefix}-test-case-defect-item {
+  padding: 10px 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  background: var(--wb-surface-subtle);
+
+  > div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  strong {
+    color: var(--wb-text);
+    font-size: 12px;
+  }
+
+  span {
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: var(--wb-accent-soft);
+    color: var(--wb-accent);
+    font-size: 10px;
+  }
+
+  p {
+    margin: 7px 0 5px;
+  }
+
+  small {
+    color: var(--wb-accent);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-test-case-evidence p {
+  color: var(--wb-text);
+}
+
+.@{class-prefix}-test-case-not-ready {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 0;
+  border-top: 1px solid var(--wb-border);
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+
+  button {
+    margin-left: 4px;
+    border: 0;
+    background: transparent;
+    color: var(--wb-accent);
+    cursor: pointer;
+  }
+}
+
+.@{class-prefix}-test-cases-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--wb-text-tertiary);
+  font-size: 12px;
+  .anticon {
+    color: var(--wb-accent);
+    font-size: 22px;
+  }
+  strong {
+    color: var(--wb-text);
+    font-size: 14px;
+  }
+}

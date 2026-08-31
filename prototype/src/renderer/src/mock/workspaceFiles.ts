@@ -17,7 +17,6 @@ export const workspaceScaffoldDirectories = [appPath('docs')]
 export const WORKSPACE_DOC_PATHS = {
   requirementSpec: 'docs/requirement-spec.md',
   projectPlan: 'docs/project-plan.md',
-  testReport: 'docs/test-report.md',
   codeReview: 'docs/code-review.md'
 } as const
 
