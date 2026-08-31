@@ -39,8 +39,8 @@ class TestGenerationTests(unittest.TestCase):
         self.assertIn("*Mapper", prompt)
         self.assertIn("Prefer Service tests", prompt)
 
-    def test_prompt_requires_plain_junit_and_mockito_for_controllers(self) -> None:
-        """Controller 单元测试也必须使用纯 JUnit/Mockito，不能加载 Spring 上下文。"""
+    def test_prompt_uses_existing_plain_backend_test_capabilities(self) -> None:
+        """Controller 单测仅能复用已有 JUnit/Mockito 能力且不加载 Spring 上下文。"""
 
         prompt = _build_prompt(
             {
@@ -51,6 +51,8 @@ class TestGenerationTests(unittest.TestCase):
         )
 
         self.assertIn("JUnit 5 and Mockito", prompt)
+        self.assertIn("only test libraries already available", prompt)
+        self.assertIn("Never add or request a build dependency", prompt)
         self.assertIn("MockMvcBuilders.standaloneSetup", prompt)
         self.assertIn("Never use or import @WebMvcTest", prompt)
         self.assertIn("@MockBean", prompt)
@@ -143,13 +145,26 @@ class TestGenerationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
+            received_prompts: list[str] = []
             source = root / "frontend" / "src" / "Orders.ts"
             source.parent.mkdir(parents=True)
             source.write_text("export const orders = () => 1;\n", encoding="utf-8")
+            (root / "frontend/package.json").write_text(
+                json.dumps(
+                    {
+                        "dependencies": {"react": "18.2.0"},
+                        "devDependencies": {
+                            "@testing-library/react": "16.2.0"
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             def invoke(_payload: dict) -> str:
                 """模拟 Agent 写入一个主要行为测试。"""
 
+                received_prompts.append(_payload["messages"][0]["content"])
                 test_path = root / "frontend" / "tests" / "page-orders.test.ts"
                 test_path.parent.mkdir(parents=True, exist_ok=True)
                 test_path.write_text(
@@ -178,6 +193,8 @@ class TestGenerationTests(unittest.TestCase):
 
             self.assertEqual(generated["status"], "completed")
             self.assertEqual(generated["test_files"], ["frontend/tests/page-orders.test.ts"])
+            self.assertIn("@testing-library/react", received_prompts[0])
+            self.assertNotIn("@testing-library/user-event", received_prompts[0])
             self.assertTrue((root / ".xcodeagent/cache/unit-test-mappings.json").is_file())
             with patch("app.agents.create_agent_bundle", side_effect=AssertionError()):
                 cached = generate_or_update_unit_tests_with_agent(state, workspace)

@@ -261,6 +261,16 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     elif unit_test_decision and workflow_scope != "application_planning":
         # 单元测试确认属于开发阶段门禁；提交后必须回到 unit_test，不能误入集成测试。
         resume_from = "unit_test"
+    if workflow_scope != "application_planning" and (
+        unit_test_decision
+        or explicit_resume_from
+        in {"unit_test", "unit_test_repair", "test_phase_confirmation"}
+    ):
+        # Build 任务、执行结果与摘要是服务端 checkpoint 的执行事实。节点调试或
+        # 单测确认恢复时不得用公开 UI 快照覆盖，否则落盘 DAG 的 pending 初始态
+        # 会抹掉已经完成的 Build；跨 thread 的测试阶段确认仍保留受控摘要交接。
+        for key in ("tasks", "build_results", "build_summary"):
+            resume_values_from_state.pop(key, None)
     if (
         resume_from == "review_phase_confirmation"
         and not review_phase_confirmation
@@ -1374,6 +1384,14 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     for snake_key, camel_key in camel_aliases.items():
         if snake_key not in resumed_values and merged.get(camel_key) is not None:
             resumed_values[snake_key] = merged[camel_key]
+    # Build 执行摘要由服务端 checkpoint 持有；公开投影的空对象不能覆盖已完成状态。
+    build_summary = resumed_values.get("build_summary")
+    public_build_summary = merged.get("buildSummary")
+    if not isinstance(build_summary, dict) or not build_summary:
+        if isinstance(public_build_summary, dict) and public_build_summary:
+            resumed_values["build_summary"] = public_build_summary
+        else:
+            resumed_values.pop("build_summary", None)
     normalized_test_report_path = str(
         resumed_values.get("test_report_path") or ""
     ).replace("\\", "/").strip()
@@ -1593,7 +1611,10 @@ def _debug_resume_values(
         build_task_plan = load_build_task_plan_json(build_task_plan_path)
         values["build_task_plan_path"] = str(build_task_plan_path)
         values["build_task_plan"] = build_task_plan
-        values["tasks"] = tasks_from_build_task_plan(build_task_plan)
+        if debug_resume_from in {"build", "authorization_bootstrap"}:
+            # 只有 Build 入口需要从权威 DAG 初始化任务；下游节点必须沿用
+            # checkpoint 中已经执行过的任务状态，不能重新注入 pending 任务。
+            values["tasks"] = tasks_from_build_task_plan(build_task_plan)
 
     workspace_snapshot_path = _resolve_debug_workspace_snapshot_path(
         debug_state,

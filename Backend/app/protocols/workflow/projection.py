@@ -282,7 +282,12 @@ def _workflow_progress_summary(
             result.get("acceptance_request") if _preview_visible_for_phase(phase) else None
         ),
         "launchProgress": _workflow_launch_progress(result, events),
-        "buildSummary": result.get("build_summary", {}),
+        **(
+            {"buildSummary": result["build_summary"]}
+            if isinstance(result.get("build_summary"), dict)
+            and result.get("build_summary")
+            else {}
+        ),
         "buildTaskPlan": result.get("build_task_plan", {}),
         "buildExecutionScope": result.get("build_execution_scope"),
         "lastPersistedBuildExecutionScope": result.get(
@@ -1336,7 +1341,7 @@ def _workflow_summary(
         "revisionImpact": result.get("revision_impact"),
         "revisionDraft": result.get("revision_draft"),
         "revisionContinuation": result.get("revision_continuation"),
-        "buildSummary": build_summary,
+        **({"buildSummary": build_summary} if build_summary else {}),
         "buildTaskPlan": result.get("build_task_plan", {}),
         "buildExecutionScope": result.get("build_execution_scope"),
         "buildTaskPlanConfirmation": (
@@ -1446,7 +1451,12 @@ def _workflow_visual_payload(
         "launchProgress": summary.get("launchProgress"),
         "tasks": result.get("tasks", []),
         "dagGeneration": result.get("dag_generation_progress"),
-        "buildSummary": result.get("build_summary", {}),
+        **(
+            {"buildSummary": result["build_summary"]}
+            if isinstance(result.get("build_summary"), dict)
+            and result.get("build_summary")
+            else {}
+        ),
         "buildTaskPlan": result.get("build_task_plan", {}),
         "buildExecutionScope": result.get("build_execution_scope"),
         "lastPersistedBuildExecutionScope": result.get(

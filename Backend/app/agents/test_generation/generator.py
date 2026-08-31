@@ -13,6 +13,10 @@ from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
 )
+from app.agents.test_generation.capabilities import (
+    load_frontend_test_capabilities,
+    unavailable_frontend_test_imports,
+)
 from app.utils.model_output import extract_json_object
 from app.workspace.code_changes import capture_workspace_changes
 
@@ -41,7 +45,12 @@ def generate_or_update_unit_tests_with_agent(
     try:
         from app.agents import create_agent_bundle
 
-        prompt = _build_prompt(context)
+        prompt_context = dict(context)
+        if "frontend" in _layers_for_sources(source_files):
+            prompt_context["frontend_test_capabilities"] = (
+                load_frontend_test_capabilities(workspace)
+            )
+        prompt = _build_prompt(prompt_context)
 
         def invoke() -> str:
             """执行一次无命令权限的测试 Agent 调用。"""
@@ -243,6 +252,9 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "technical_plan_json_path": context.get("technical_plan_json_path"),
         "build_execution_scope": context.get("build_execution_scope", {}),
         "build_execution_slice": context.get("build_execution_slice", {}),
+        "frontend_test_capabilities": context.get(
+            "frontend_test_capabilities", {}
+        ),
     }
     return (
         "Generate or update unit tests for this bounded change. Read inputs in this order: "
@@ -250,18 +262,26 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "confirmed Build task plan narrowed by the execution scope and slice; the current "
         "TechnicalPlan JSON; then only direct source dependencies needed for the test. "
         "Existing tests must be updated in place when they cover the changed source. Do not "
-        "create more than five test files.\n\n"
+        "create more than five test files. Frontend test filenames only need to remain flat "
+        "under frontend/tests and end in .test.ts or .test.tsx; do not require a separator "
+        "such as a hyphen. Before writing a frontend test, use only third-party packages "
+        "listed in frontend_test_capabilities.available_packages. Never import a package "
+        "that is absent from that list, never modify package.json or a lockfile, and never "
+        "request installation of a new npm package. If a preferred interaction helper is "
+        "unavailable, use capabilities already declared by the project or a native DOM API.\n\n"
         "Do not generate tests for backend mapping-only classes such as *Assembler, "
         "*Converter or *Mapper, including MapStruct implementations; also exclude DTO, "
         "entity, configuration and getter/setter-only classes. Prefer Service tests and "
         "route-contract tests only when their behavior changed. Every Java unit test, "
-        "including a Controller test, must use JUnit 5 and Mockito without loading a Spring "
-        "application context. Use @ExtendWith(MockitoExtension.class), Mockito @Mock and "
+        "including a Controller test, may use only test libraries already available from "
+        "the current backend build and existing tests. Never add or request a build "
+        "dependency. When JUnit 5 and Mockito are available, use them without loading a "
+        "Spring application context. Use @ExtendWith(MockitoExtension.class), Mockito @Mock and "
         "@InjectMocks. If a changed HTTP contract requires MockMvc and Spring Test is "
         "already available, use "
         "MockMvcBuilders.standaloneSetup. Never use or import @WebMvcTest, @SpringBootTest, "
-        "@MockBean, @Autowired or SpringExtension, and never modify build dependencies for a "
-        "generated test.\n\n"
+        "@MockBean, @Autowired or SpringExtension. If no compatible backend unit-test "
+        "capability exists, return a skipped result instead of modifying dependencies.\n\n"
         f"TestGenerationContext:\n{json.dumps(references, ensure_ascii=False, indent=2, default=str)[:28_000]}"
     )
 
@@ -274,17 +294,17 @@ def _validate_test_files(
     new_files: list[str] | None = None,
     source_files: list[str] | None = None,
 ) -> dict[str, Any]:
-    """确定性验证测试路径、命名和最小用例结构。"""
+    """确定性验证测试路径边界、可执行后缀和最小用例结构。"""
 
     root = Path(workspace).expanduser().resolve()
     invalid_paths: list[str] = []
     invalid_contents: list[str] = []
-    changed_set = set(new_files if new_files is not None else changed_files)
+    unavailable_imports: dict[str, list[str]] = {}
     source_files = source_files or []
+    frontend_capabilities = load_frontend_test_capabilities(workspace)
     for relative in test_files[:MAX_TEST_FILES]:
         path = root / relative
         normalized = relative.casefold()
-        is_new_or_changed = relative in changed_set
         if not _is_workspace_relative_path(root, relative):
             invalid_paths.append(relative)
             continue
@@ -294,10 +314,6 @@ def _validate_test_files(
                 name.endswith(".test.ts") or name.endswith(".test.tsx")
             ):
                 invalid_paths.append(relative)
-            elif is_new_or_changed:
-                feature_name = name.rsplit(".test.", 1)[0]
-                if "-" not in feature_name or feature_name.startswith("-") or feature_name.endswith("-"):
-                    invalid_paths.append(relative)
         elif normalized.startswith("backend/src/test/java/"):
             if not relative.endswith("Test.java"):
                 invalid_paths.append(relative)
@@ -333,6 +349,13 @@ def _validate_test_files(
                 )
             ):
                 invalid_contents.append(relative)
+            unavailable = unavailable_frontend_test_imports(
+                content,
+                frontend_capabilities,
+            )
+            if unavailable:
+                unavailable_imports[relative] = unavailable
+                invalid_contents.append(relative)
         elif normalized.endswith("test.java"):
             if "@Test" not in content or "@Disabled" in content or "@Ignore" in content:
                 invalid_contents.append(relative)
@@ -358,6 +381,7 @@ def _validate_test_files(
         "valid": not invalid_paths and not invalid_contents and not missing_files,
         "invalid_paths": list(dict.fromkeys(invalid_paths)),
         "invalid_contents": list(dict.fromkeys(invalid_contents)),
+        "unavailable_imports": unavailable_imports,
         "missing_files": missing_files,
         "changed_files": changed_files[:MAX_TEST_FILES],
     }
@@ -608,16 +632,8 @@ def _cached_test_result(
         source_files=source_files,
     )
     if not validation.get("valid"):
-        return {
-            "status": "failed",
-            "summary": "缓存关联的单元测试文件未通过确定性校验。",
-            "affected_layers": _layers_for_sources(source_files),
-            "test_files": mapped,
-            "warnings": [],
-            "validation": validation,
-            "code_change_sets": [],
-            "mapping_path": str(path),
-        }
+        # 依赖能力或校验规则变化后，旧映射不能阻止 Agent 重新生成测试。
+        return None
     return {
         "status": "completed",
         "summary": "源码摘要未变化，复用已关联单元测试文件。",

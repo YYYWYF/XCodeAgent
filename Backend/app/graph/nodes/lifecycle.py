@@ -4,6 +4,7 @@ from langgraph.config import get_stream_writer
 
 from app.graph.state import ProjectState
 from app.graph.subgraphs.acceptance import run_acceptance_subgraph
+from app.services.build_scheduler import summarize_build_runtime
 from app.services.project_launcher import launch_project_preview
 from app.workspace.spec_documents import workspace_root
 
@@ -212,15 +213,77 @@ def records_from_value(value: Any) -> list[dict[str, Any]]:
     )
 
 
+def _completed_build_summary(state: ProjectState) -> dict[str, Any] | None:
+    """读取或从服务端任务事实恢复已完成的 Build 摘要。"""
+
+    summary = state.get("build_summary")
+    if isinstance(summary, dict) and summary.get("status") == "completed":
+        return summary
+    tasks = [
+        item for item in state.get("tasks", []) if isinstance(item, dict)
+    ]
+    if not tasks:
+        return None
+    build_results = [
+        item for item in state.get("build_results", []) if isinstance(item, dict)
+    ]
+    recovered = summarize_build_runtime(tasks, build_results)
+    if recovered.get("status") == "completed":
+        return recovered
+
+    # 节点调试曾把落盘 DAG 中的 pending 任务覆盖到 checkpoint，但同一 Build Run
+    # 的执行切片与结果流仍是服务端事实。只有计划绑定存在、切片明确全部完成，且每个
+    # 当前任务的最后一次结果均成功时才恢复，避免旧结果误放行新的 Build 计划。
+    execution_slice = state.get("build_execution_slice")
+    execution_slice = execution_slice if isinstance(execution_slice, dict) else {}
+    slice_summary = execution_slice.get("summary")
+    slice_summary = slice_summary if isinstance(slice_summary, dict) else {}
+    task_ids = [str(item.get("id") or "").strip() for item in tasks]
+    slice_task_ids = [
+        str(item).strip()
+        for item in execution_slice.get("task_ids", [])
+        if str(item).strip()
+    ]
+    if (
+        not str(state.get("build_run_id") or "").strip()
+        or not str(state.get("build_run_plan_sha256") or "").strip()
+        or not task_ids
+        or any(not task_id for task_id in task_ids)
+        or len(set(task_ids)) != len(task_ids)
+        or set(slice_task_ids) != set(task_ids)
+        or slice_summary.get("completed") != len(task_ids)
+        or slice_summary.get("pending") != 0
+        or slice_summary.get("running") != 0
+        or slice_summary.get("failed") != 0
+    ):
+        return None
+
+    latest_results: dict[str, dict[str, Any]] = {}
+    for result in build_results:
+        result_task_id = str(result.get("task_id") or "").strip()
+        if result_task_id:
+            latest_results[result_task_id] = result
+    if any(
+        latest_results.get(task_id, {}).get("status")
+        not in {"completed", "already_satisfied"}
+        for task_id in task_ids
+    ):
+        return None
+
+    recovered_tasks = [
+        {**task, "status": latest_results[task_id]["status"]}
+        for task, task_id in zip(tasks, task_ids, strict=True)
+    ]
+    recovered = summarize_build_runtime(recovered_tasks, build_results)
+    return recovered if recovered.get("status") == "completed" else None
+
+
 def test_phase_confirmation(state: ProjectState) -> dict:
     """在 Build 与开发阶段单元测试门禁完成后暂停等待用户确认。"""
 
     target = _test_target_record(state)
-    build_summary = state.get("build_summary")
-    if (
-        not isinstance(build_summary, dict)
-        or build_summary.get("status") != "completed"
-    ):
+    build_summary = _completed_build_summary(state)
+    if build_summary is None:
         return {
             "phase": "test_phase_confirmation",
             "status": "failed",
@@ -244,6 +307,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
         return {
             "phase": "test_phase_confirmation",
             "status": "completed",
+            "build_summary": build_summary,
             "clarification": {},
             "test_target": target,
             "integration_next_action": "integration_test",
@@ -257,6 +321,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
     return {
         "phase": "test_phase_confirmation",
         "status": "requires_user_input",
+        "build_summary": build_summary,
         "clarification": {
             "mode": "test_phase_confirmation",
             "status": "requires_user_input",

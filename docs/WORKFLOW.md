@@ -69,6 +69,8 @@ START
 
 单元测试通过或跳过后才进入 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 或单测失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
 
+`build_summary`、`tasks` 与 `build_results` 是服务端 checkpoint 中的执行事实。AG-UI 只在存在非空 Build 摘要时投影 `buildSummary`；单元测试确认和 `unit_test/unit_test_repair/test_phase_confirmation` 节点调试恢复不得用前端快照覆盖这些字段，落盘 `build-task-plan.json` 也只能在 Build 入口初始化任务，不能把下游节点的已执行任务重置为 `pending`。对已经被旧快照污染的 checkpoint，`test_phase_confirmation` 优先从仍为终态的任务恢复摘要；任务被重置时，仅当同一 `build_run_id + build_run_plan_sha256` 存在、执行切片精确覆盖当前任务并显示全部完成、且每个任务的最新结果都是 `completed` 或 `already_satisfied` 时，才允许恢复为 `completed`。因此单测通过后必须稳定进入上述确认卡，不能因公开投影缺字段或调试产物重载而路由到 `handle_failure`。
+
 测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，只执行依赖安装、前后端 Build、前端性能测试和集成质量门禁。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。质量门禁通过后必须先经过 `review_phase_confirmation`；确认后由 `code_review` 子图只读扫描两个指定源码目录。扫描或修复 Agent 的模型网络异常、失败结果或响应业务校验失败会投影 `codeReviewRetry={available:true,target:"scan"|"repair"}`；前端错误卡通过 `workflowAction=retry_code_review` 在原审查 thread 和目标范围内恢复对应模型子步骤，修复重试直接复用问题快照并沿用失败前轮次，不重复扫描或消耗额外修复预算。审查构建失败、修复预算耗尽和普通停止不投影该重试能力。发现问题时暂停等待结构化 `repair_all`，修复和独立构建检查最多循环三轮；无问题或构建通过后进入 `acceptance_phase_confirmation`，只有用户提交结构化 `confirm` 才切换到独立验收会话并执行验收子图。验收子图先运行 `launch_project`，成功后由 `acceptance_review` 投影 `page_acceptance`、预览地址和启动结果；已有成功启动快照恢复时跳过启动节点，启动失败不进入待验收。
 
 ### 测试阶段 AG-UI 与生命周期契约
