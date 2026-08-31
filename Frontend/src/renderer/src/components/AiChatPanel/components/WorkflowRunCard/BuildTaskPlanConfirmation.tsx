@@ -21,6 +21,7 @@ const { TextArea } = Input
 
 type BuildTaskPlanConfirmationProps = {
   disabled?: boolean
+  dockedActions?: boolean
   plan?: WorkflowBuildTaskPlan
   errors?: string[]
   onSubmit: (action: WorkflowBuildTaskPlanConfirmation) => void
@@ -37,6 +38,7 @@ type TaskTone = (typeof TASK_TONES)[number]
 /** 展示待确认的 Build DAG，并将可编辑字段限制在任务名称和描述。 */
 export default function BuildTaskPlanConfirmation({
   disabled,
+  dockedActions,
   plan,
   errors,
   onSubmit
@@ -79,169 +81,171 @@ export default function BuildTaskPlanConfirmation({
   })
 
   return (
-    <div className={cx('workflow-dag-confirmation')}>
-      <div className={cx('workflow-dag-confirmation-overview')}>
-        <div className={cx('workflow-dag-confirmation-overview-copy')}>
-          <span className={cx('workflow-dag-confirmation-overview-icon')}>
-            <CodeOutlined />
-          </span>
-          <div className={cx('workflow-dag-confirmation-overview-text')}>
-            <div className={cx('workflow-dag-confirmation-overview-title')}>
-              <Typography.Text strong>Build DAG 待确认</Typography.Text>
+    <div className={cx('workflow-dag-confirmation', dockedActions && 'docked-actions')}>
+      <div className={cx('workflow-dag-confirmation-scroll-region')}>
+        <div className={cx('workflow-dag-confirmation-overview')}>
+          <div className={cx('workflow-dag-confirmation-overview-copy')}>
+            <span className={cx('workflow-dag-confirmation-overview-icon')}>
+              <CodeOutlined />
+            </span>
+            <div className={cx('workflow-dag-confirmation-overview-text')}>
+              <div className={cx('workflow-dag-confirmation-overview-title')}>
+                <Typography.Text strong>Build DAG 待确认</Typography.Text>
+              </div>
+              <Typography.Text
+                className={cx('workflow-dag-confirmation-overview-subtitle')}
+                type="secondary"
+              >
+                共 {tasks.length} 个任务 · {semanticUnitLabels.length} 类任务单元 ·{' '}
+                {dependencyCount} 条依赖 · 需确认后进入 Build 流程
+              </Typography.Text>
             </div>
-            <Typography.Text
-              className={cx('workflow-dag-confirmation-overview-subtitle')}
-              type="secondary"
-            >
-              共 {tasks.length} 个任务 · {semanticUnitLabels.length} 类任务单元 · {dependencyCount}{' '}
-              条依赖 · 需确认后进入 Build 流程
-            </Typography.Text>
           </div>
         </div>
-      </div>
-      {errors && errors.length > 0 ? (
-        <Alert
-          className={cx('workflow-dag-confirmation-errors')}
-          description={errors.join('；')}
-          message="需要先处理以下问题"
-          showIcon
-          type="warning"
-        />
-      ) : null}
-      {tasks.length === 0 ? (
-        <div className={cx('workflow-dag-confirmation-empty')}>暂无可确认的任务</div>
-      ) : null}
-      <div className={cx('workflow-dag-confirmation-task-section-heading')}>
-        <div>
-          <Typography.Text strong>任务详情</Typography.Text>
+        {errors && errors.length > 0 ? (
+          <Alert
+            className={cx('workflow-dag-confirmation-errors')}
+            description={errors.join('；')}
+            message="需要先处理以下问题"
+            showIcon
+            type="warning"
+          />
+        ) : null}
+        {tasks.length === 0 ? (
+          <div className={cx('workflow-dag-confirmation-empty')}>暂无可确认的任务</div>
+        ) : null}
+        <div className={cx('workflow-dag-confirmation-task-section-heading')}>
+          <div>
+            <Typography.Text strong>任务详情</Typography.Text>
+          </div>
+          <span className={cx('workflow-dag-confirmation-unit-count')}>
+            {semanticUnitLabels.length} 类任务单元
+          </span>
         </div>
-        <span className={cx('workflow-dag-confirmation-unit-count')}>
-          {semanticUnitLabels.length} 类任务单元
-        </span>
+        <Collapse
+          className={cx('workflow-dag-confirmation-tasks')}
+          defaultActiveKey={tasks.map((task) => task.id)}
+        >
+          {tasks.map((task, index) => {
+            const draft = drafts[task.id] || { title: task.title, description: task.description }
+            const dependencies = task.dependencies || []
+            const tone = taskToneById.get(task.id) || 'purple'
+            return (
+              <Collapse.Panel
+                header={
+                  <div className={cx('workflow-dag-confirmation-task-header')}>
+                    <div className={cx('workflow-dag-confirmation-task-header-main')}>
+                      <span
+                        className={cx(
+                          'workflow-dag-confirmation-task-index',
+                          `workflow-dag-confirmation-tone-${tone}`
+                        )}
+                      >
+                        {index + 1}
+                      </span>
+                      <span
+                        className={cx(
+                          'workflow-dag-confirmation-task-id',
+                          `workflow-dag-confirmation-tone-${tone}`
+                        )}
+                      >
+                        {task.id}
+                      </span>
+                      <span
+                        className={cx('workflow-dag-confirmation-task-unit')}
+                        title={task.unit_id || 'application:root'}
+                      >
+                        <span className={cx('workflow-dag-confirmation-task-unit-label')}>
+                          任务类型
+                        </span>
+                        <span className={cx('workflow-dag-confirmation-task-unit-value')}>
+                          {taskUnitLabel(task.unit_id)}
+                        </span>
+                      </span>
+                    </div>
+                    <div className={cx('workflow-dag-confirmation-task-dependencies')}>
+                      <span className={cx('workflow-dag-confirmation-task-dependency-label')}>
+                        前置任务
+                      </span>
+                      {dependencies.length > 0 ? (
+                        dependencies.map((dependency) => {
+                          const dependencyTone = taskToneById.get(dependency) || 'purple'
+                          return (
+                            <span
+                              className={cx(
+                                'workflow-dag-confirmation-dependency-chip',
+                                `workflow-dag-confirmation-tone-${dependencyTone}`
+                              )}
+                              key={dependency}
+                            >
+                              {dependency}
+                            </span>
+                          )
+                        })
+                      ) : (
+                        <span className={cx('workflow-dag-confirmation-task-dependency-empty')}>
+                          无
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                }
+                key={task.id}
+              >
+                <div className={cx('workflow-dag-confirmation-edit-grid')}>
+                  <label>
+                    <span className={cx('workflow-dag-confirmation-field-label')}>任务名称</span>
+                    <span className={cx('workflow-dag-confirmation-field-control')}>
+                      <Input
+                        disabled={disabled}
+                        size="small"
+                        value={draft.title}
+                        onChange={(event) =>
+                          updateDraft(task.id, 'title', event.target.value, setDrafts)
+                        }
+                      />
+                      <EditOutlined aria-hidden="true" />
+                    </span>
+                  </label>
+                  <label>
+                    <span className={cx('workflow-dag-confirmation-field-label')}>任务描述</span>
+                    <span className={cx('workflow-dag-confirmation-field-control')}>
+                      <TextArea
+                        autoSize={{ minRows: 1, maxRows: 3 }}
+                        disabled={disabled}
+                        size="small"
+                        value={draft.description}
+                        onChange={(event) =>
+                          updateDraft(task.id, 'description', event.target.value, setDrafts)
+                        }
+                      />
+                      <EditOutlined aria-hidden="true" />
+                    </span>
+                  </label>
+                </div>
+                <div className={cx('workflow-dag-confirmation-readonly')}>
+                  <div className={cx('workflow-dag-confirmation-readonly-item')}>
+                    <span className={cx('workflow-dag-confirmation-readonly-label')}>范围</span>
+                    <Typography.Text
+                      className={cx('workflow-dag-confirmation-readonly-value')}
+                      title={formatTaskPaths(task)}
+                    >
+                      {formatTaskPaths(task)}
+                    </Typography.Text>
+                  </div>
+                  <div className={cx('workflow-dag-confirmation-readonly-item')}>
+                    <span className={cx('workflow-dag-confirmation-readonly-label')}>验收</span>
+                    <Typography.Text className={cx('workflow-dag-confirmation-readonly-value')}>
+                      工程 {task.acceptance_checks?.length || 0} 项 · 业务{' '}
+                      {task.business_acceptance_checks?.length || 0} 项
+                    </Typography.Text>
+                  </div>
+                </div>
+              </Collapse.Panel>
+            )
+          })}
+        </Collapse>
       </div>
-      <Collapse
-        className={cx('workflow-dag-confirmation-tasks')}
-        defaultActiveKey={tasks.map((task) => task.id)}
-      >
-        {tasks.map((task, index) => {
-          const draft = drafts[task.id] || { title: task.title, description: task.description }
-          const dependencies = task.dependencies || []
-          const tone = taskToneById.get(task.id) || 'purple'
-          return (
-            <Collapse.Panel
-              header={
-                <div className={cx('workflow-dag-confirmation-task-header')}>
-                  <div className={cx('workflow-dag-confirmation-task-header-main')}>
-                    <span
-                      className={cx(
-                        'workflow-dag-confirmation-task-index',
-                        `workflow-dag-confirmation-tone-${tone}`
-                      )}
-                    >
-                      {index + 1}
-                    </span>
-                    <span
-                      className={cx(
-                        'workflow-dag-confirmation-task-id',
-                        `workflow-dag-confirmation-tone-${tone}`
-                      )}
-                    >
-                      {task.id}
-                    </span>
-                    <span
-                      className={cx('workflow-dag-confirmation-task-unit')}
-                      title={task.unit_id || 'application:root'}
-                    >
-                      <span className={cx('workflow-dag-confirmation-task-unit-label')}>
-                        任务类型
-                      </span>
-                      <span className={cx('workflow-dag-confirmation-task-unit-value')}>
-                        {taskUnitLabel(task.unit_id)}
-                      </span>
-                    </span>
-                  </div>
-                  <div className={cx('workflow-dag-confirmation-task-dependencies')}>
-                    <span className={cx('workflow-dag-confirmation-task-dependency-label')}>
-                      前置任务
-                    </span>
-                    {dependencies.length > 0 ? (
-                      dependencies.map((dependency) => {
-                        const dependencyTone = taskToneById.get(dependency) || 'purple'
-                        return (
-                          <span
-                            className={cx(
-                              'workflow-dag-confirmation-dependency-chip',
-                              `workflow-dag-confirmation-tone-${dependencyTone}`
-                            )}
-                            key={dependency}
-                          >
-                            {dependency}
-                          </span>
-                        )
-                      })
-                    ) : (
-                      <span className={cx('workflow-dag-confirmation-task-dependency-empty')}>
-                        无
-                      </span>
-                    )}
-                  </div>
-                </div>
-              }
-              key={task.id}
-            >
-              <div className={cx('workflow-dag-confirmation-edit-grid')}>
-                <label>
-                  <span className={cx('workflow-dag-confirmation-field-label')}>任务名称</span>
-                  <span className={cx('workflow-dag-confirmation-field-control')}>
-                    <Input
-                      disabled={disabled}
-                      size="small"
-                      value={draft.title}
-                      onChange={(event) =>
-                        updateDraft(task.id, 'title', event.target.value, setDrafts)
-                      }
-                    />
-                    <EditOutlined aria-hidden="true" />
-                  </span>
-                </label>
-                <label>
-                  <span className={cx('workflow-dag-confirmation-field-label')}>任务描述</span>
-                  <span className={cx('workflow-dag-confirmation-field-control')}>
-                    <TextArea
-                      autoSize={{ minRows: 1, maxRows: 3 }}
-                      disabled={disabled}
-                      size="small"
-                      value={draft.description}
-                      onChange={(event) =>
-                        updateDraft(task.id, 'description', event.target.value, setDrafts)
-                      }
-                    />
-                    <EditOutlined aria-hidden="true" />
-                  </span>
-                </label>
-              </div>
-              <div className={cx('workflow-dag-confirmation-readonly')}>
-                <div className={cx('workflow-dag-confirmation-readonly-item')}>
-                  <span className={cx('workflow-dag-confirmation-readonly-label')}>范围</span>
-                  <Typography.Text
-                    className={cx('workflow-dag-confirmation-readonly-value')}
-                    title={formatTaskPaths(task)}
-                  >
-                    {formatTaskPaths(task)}
-                  </Typography.Text>
-                </div>
-                <div className={cx('workflow-dag-confirmation-readonly-item')}>
-                  <span className={cx('workflow-dag-confirmation-readonly-label')}>验收</span>
-                  <Typography.Text className={cx('workflow-dag-confirmation-readonly-value')}>
-                    工程 {task.acceptance_checks?.length || 0} 项 · 业务{' '}
-                    {task.business_acceptance_checks?.length || 0} 项
-                  </Typography.Text>
-                </div>
-              </div>
-            </Collapse.Panel>
-          )
-        })}
-      </Collapse>
       <div className={cx('workflow-dag-confirmation-actions')}>
         <Space size={6} wrap>
           <Button

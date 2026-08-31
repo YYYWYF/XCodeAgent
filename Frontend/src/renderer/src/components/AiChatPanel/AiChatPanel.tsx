@@ -22,6 +22,7 @@ import type {
   ApplicationMenuItem,
   EditorMode,
   WorkflowDebugOptions,
+  WorkflowBuildTaskPlanConfirmation,
   WorkflowClarificationAnswers,
   WorkflowDesignStageRevisionStart,
   WorkflowWorkbenchPlanRevisionStart,
@@ -55,6 +56,7 @@ import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import DesignChangeLockDock from './components/DesignChangeLockDock'
 import DocPanel from './components/DocPanel'
 import SourcePanel from './components/SourcePanel'
+import StageOutputPanel from './components/StageOutputPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import {
@@ -98,6 +100,14 @@ import type { SessionIdentity } from './hooks/sessionRuntime'
 import { chatCopy } from './constants'
 import type { AgentChatMessage, WorkspaceDocKey } from './types'
 import {
+  currentDagConfirmationErrors,
+  currentDagConfirmationPlan,
+  latestDagGenerationSnapshot,
+  runningDagGenerationStage,
+  selectedDagGenerationStage,
+  stageOutputPhase
+} from './stageOutputState'
+import {
   endpointDetailTargetKey,
   pageDesignedBySession,
   pageDetailTargetKey,
@@ -122,6 +132,7 @@ import {
   shouldRenderPlanExecutionDock,
   workflowCanRetryFailedTasks,
   workflowCodeReviewRetry,
+  workflowInteractionAvailability,
   workflowResumeNode,
   type PlanExecutionMode
 } from './planExecutionMode'
@@ -1371,7 +1382,8 @@ export default function AiChatPanel({
     : [
         { key: 'preview', label: '预览', available: Boolean(runtimePreviewBaseUrl) },
         { key: 'source', label: '源码', available: Boolean(activePageOption) },
-        { key: 'doc', label: '文档', available: true }
+        { key: 'doc', label: '文档', available: true },
+        { key: 'stage-output', label: '阶段产物', available: true }
       ]
   const activeWorkspaceTab: WorkspaceTabKey = isApplicationPlanningPhase
     ? activeDesignDocKey ||
@@ -1382,7 +1394,9 @@ export default function AiChatPanel({
       ? 'preview'
       : rightPanel?.type === 'source'
         ? 'source'
-        : 'doc'
+        : rightPanel?.type === 'stage-output'
+          ? 'stage-output'
+          : 'doc'
   const openWorkspaceTab = useCallback(
     (key: WorkspaceTabKey) => {
       if (isApplicationPlanningPhase) {
@@ -1599,7 +1613,8 @@ export default function AiChatPanel({
       })
       revisionDevelopmentHandoffPromisesRef.current[continuation.changeId] = promise
       return promise
-    }, [allSessions, application.id, ensureRevisionDevelopmentSession, loadSessionIdentity]
+    },
+    [allSessions, application.id, ensureRevisionDevelopmentSession, loadSessionIdentity]
   )
 
   /** 在规划来源会话持久化可重复打开的 DEVELOPMENT 交接回执。 */
@@ -1908,11 +1923,7 @@ export default function AiChatPanel({
                 createdAt: messageBaseId
               }
             ]
-      const sourceSessionKey = sessionRuntimeKey(
-        workspaceRoot,
-        editorMode,
-        input.sourceSessionId
-      )
+      const sourceSessionKey = sessionRuntimeKey(workspaceRoot, editorMode, input.sourceSessionId)
       const sourceMessages = getSessionMessages(sourceSessionKey)
       const sourceReceiptExists = sourceMessages.some(
         (item) => item.revisionHandoff?.impactInteractionId === input.impact.interactionId
@@ -2329,10 +2340,7 @@ export default function AiChatPanel({
   // 同时追加一条 assistant 占位消息（loading 态），让用户看到产品 Agent 正在处理，
   // 避免操作后界面像卡死一样无反馈；后续流式 chunk 到达时更新该占位消息。
   const appendPlanningUserMessage = useCallback(
-    (
-      answers?: WorkflowClarificationAnswers,
-      withLoadingPlaceholder = true
-    ) => {
+    (answers?: WorkflowClarificationAnswers, withLoadingPlaceholder = true) => {
       const sessionKey = planningSessionKeyRef.current
       if (!sessionKey || !answers) return
       const text = planningUserMessageText(answers)
@@ -2574,10 +2582,9 @@ export default function AiChatPanel({
             activeFormalRevision.status
           )))
   )
-  const activePlanningConversationThreadId =
-    formalRevisionPlanningActive
-      ? localPlanningConversationThreadId
-      : planningConversationThreadId || localPlanningConversationThreadId
+  const activePlanningConversationThreadId = formalRevisionPlanningActive
+    ? localPlanningConversationThreadId
+    : planningConversationThreadId || localPlanningConversationThreadId
   const businessPlanningSessionActive = Boolean(
     (formalRevisionPlanningActive &&
       activeFormalRevision &&
@@ -2917,6 +2924,127 @@ export default function AiChatPanel({
         : activePageOption?.taskSummary
   )
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
+  const currentStageSessionTargetKey = sessionDetailTargetKey(activeSession)
+  const stageOutputContextAligned = activeTargetKey
+    ? currentStageSessionTargetKey === activeTargetKey
+    : !currentStageSessionTargetKey
+  const stageOutputMessages = stageOutputContextAligned ? messages : []
+  const stageOutputWorkflow = stageOutputContextAligned ? latestWorkflowForDisplay : undefined
+  const currentDagSnapshot = useMemo(
+    () => latestDagGenerationSnapshot(stageOutputMessages),
+    [stageOutputMessages]
+  )
+  const dagConfirmationPlan = useMemo(
+    () => currentDagConfirmationPlan(stageOutputWorkflow),
+    [stageOutputWorkflow]
+  )
+  const dagConfirmationErrors = useMemo(
+    () => currentDagConfirmationErrors(stageOutputWorkflow),
+    [stageOutputWorkflow]
+  )
+  const currentStageOutputPhase = stageOutputPhase(
+    stageOutputWorkflow,
+    currentDagSnapshot,
+    dagConfirmationPlan
+  )
+  const currentRunningDagStage = runningDagGenerationStage(currentDagSnapshot)
+  const stageOutputSessionKey = `${application.id}:${activeTargetKey || 'free-chat'}:${activeSession?.key || draftKey}`
+  const stageOutputMatchesSession =
+    rightPanel?.type === 'stage-output' && rightPanel.sessionKey === stageOutputSessionKey
+  const selectedDagStage = selectedDagGenerationStage(
+    currentDagSnapshot,
+    stageOutputMatchesSession && rightPanel?.type === 'stage-output'
+      ? rightPanel.stageId
+      : undefined
+  )
+  const activeDagStageId =
+    stageOutputMatchesSession && rightPanel?.type === 'stage-output' && rightPanel.view === 'stage'
+      ? rightPanel.stageId
+      : undefined
+  const manuallySelectedDagSessionRef = useRef('')
+  const lastStageOutputSessionRef = useRef('')
+  const lastStageOutputPhaseRef = useRef('')
+
+  // 右侧阶段产物只在切换会话或进入新的大阶段时自动跟随；同一 DAG 生成阶段内，
+  // 用户点选过其它子阶段后，后续流式快照只能更新内容，不能抢回当前选择。
+  useEffect(() => {
+    if (isApplicationPlanningPhase) return
+    const sessionChanged = lastStageOutputSessionRef.current !== stageOutputSessionKey
+    const phaseChanged = lastStageOutputPhaseRef.current !== currentStageOutputPhase
+
+    if (sessionChanged || phaseChanged) {
+      lastStageOutputSessionRef.current = stageOutputSessionKey
+      lastStageOutputPhaseRef.current = currentStageOutputPhase
+      manuallySelectedDagSessionRef.current = ''
+
+      if (currentStageOutputPhase === 'confirmation') {
+        if (!rightPanelOpen) onRightPanelOpenChange(true)
+        setRightPanel({
+          type: 'stage-output',
+          sessionKey: stageOutputSessionKey,
+          view: 'confirmation'
+        })
+        return
+      }
+      if (currentStageOutputPhase === 'generation') {
+        if (!rightPanelOpen) onRightPanelOpenChange(true)
+        setRightPanel({
+          type: 'stage-output',
+          sessionKey: stageOutputSessionKey,
+          view: 'stage',
+          stageId: currentRunningDagStage?.id
+        })
+        return
+      }
+      if (rightPanel?.type === 'stage-output') {
+        setRightPanel({ type: 'stage-output', sessionKey: stageOutputSessionKey })
+      }
+      return
+    }
+
+    if (!rightPanelOpen) return
+    if (
+      currentStageOutputPhase === 'generation' &&
+      manuallySelectedDagSessionRef.current !== stageOutputSessionKey &&
+      rightPanel?.type === 'stage-output' &&
+      rightPanel.sessionKey === stageOutputSessionKey &&
+      (rightPanel.view !== 'stage' || rightPanel.stageId !== currentRunningDagStage?.id)
+    ) {
+      setRightPanel({
+        type: 'stage-output',
+        sessionKey: stageOutputSessionKey,
+        view: 'stage',
+        stageId: currentRunningDagStage?.id
+      })
+    }
+  }, [
+    currentRunningDagStage?.id,
+    currentStageOutputPhase,
+    isApplicationPlanningPhase,
+    onRightPanelOpenChange,
+    rightPanel,
+    rightPanelOpen,
+    setRightPanel,
+    stageOutputSessionKey
+  ])
+
+  /** 从中间 DAG 卡片选择子阶段；点击运行中阶段时恢复自动跟随。 */
+  const handleDagStageSelect = useCallback(
+    (stageId: string): void => {
+      const target = selectedDagGenerationStage(currentDagSnapshot, stageId)
+      if (!target || (!target.output && target.status !== 'running')) return
+      manuallySelectedDagSessionRef.current =
+        target.status === 'running' ? '' : stageOutputSessionKey
+      onRightPanelOpenChange(true)
+      setRightPanel({
+        type: 'stage-output',
+        sessionKey: stageOutputSessionKey,
+        view: 'stage',
+        stageId
+      })
+    },
+    [currentDagSnapshot, onRightPanelOpenChange, setRightPanel, stageOutputSessionKey]
+  )
   const activeWorkflowPhase = String(
     activeWorkflow?.summary?.phase ||
       activeWorkflow?.result?.phase ||
@@ -2986,9 +3114,24 @@ export default function AiChatPanel({
       : !isApplicationPlanningPhase && rightPanel?.type === 'review-report'
         ? 'review-report'
         : activeWorkspaceTab
-  /** 在开发阶段处理测试/审查报告 tab，其余 tab 继续复用既有切换逻辑。 */
+  /** 在开发阶段处理阶段产物及测试/审查报告 tab，其余 tab 继续复用既有切换逻辑。 */
   const openDisplayedWorkspaceTab = useCallback(
     (key: WorkspaceTabKey): void => {
+      if (key === 'stage-output' && !isApplicationPlanningPhase) {
+        manuallySelectedDagSessionRef.current = ''
+        setRightPanel({
+          type: 'stage-output',
+          sessionKey: stageOutputSessionKey,
+          view:
+            currentStageOutputPhase === 'confirmation'
+              ? 'confirmation'
+              : currentStageOutputPhase === 'generation'
+                ? 'stage'
+                : undefined,
+          stageId: currentStageOutputPhase === 'generation' ? currentRunningDagStage?.id : undefined
+        })
+        return
+      }
       if (key === 'test-report' && !isApplicationPlanningPhase) {
         if (testReportAvailable) setRightPanel({ type: 'test-report' })
         return
@@ -3000,10 +3143,13 @@ export default function AiChatPanel({
       openWorkspaceTab(key)
     },
     [
+      currentRunningDagStage?.id,
+      currentStageOutputPhase,
       isApplicationPlanningPhase,
       openWorkspaceTab,
       reviewReportAvailable,
       setRightPanel,
+      stageOutputSessionKey,
       testReportAvailable
     ]
   )
@@ -3030,7 +3176,7 @@ export default function AiChatPanel({
       switchPhase('acceptance')
     }
   }, [activeWorkbenchPhase, activeWorkflowPhase, switchPhase, workbenchPhaseOverride])
-  const activeSessionTargetKey = sessionDetailTargetKey(activeSession)
+  const activeSessionTargetKey = currentStageSessionTargetKey
   const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const activeWorkflowMatchesTarget = Boolean(
     activeTargetKey &&
@@ -3642,7 +3788,9 @@ export default function AiChatPanel({
       // 直接把空 answers 传给 onSubmitPlanningClarification，由 Modal 拦截走恢复路径。
       const isUiDesignPoll = !answers || Object.keys(answers).length === 0
       if (isUiDesignPoll) {
-        void onSubmitPlanningClarification(workflow, {}, editedRequirementSpec).catch(() => undefined)
+        void onSubmitPlanningClarification(workflow, {}, editedRequirementSpec).catch(
+          () => undefined
+        )
         return
       }
       const planningAnswers = ensureApplicationPlanningAction(workflow, answers)
@@ -3677,11 +3825,7 @@ export default function AiChatPanel({
           // 首次创建沿用当前 DESIGN 会话作为交接来源；formal revision 必须按 lifecycle
           // 完整身份从所有会话中重新解析，不能信任可能被阶段恢复抢占的 activeSession。
           const formalRevisionSourceSession = activeFormalRevision
-            ? formalRevisionPlanningSourceSession(
-                allSessions,
-                applicationLifecycle,
-                application.id
-              )
+            ? formalRevisionPlanningSourceSession(allSessions, applicationLifecycle, application.id)
             : undefined
           const sourceIdentity = activeFormalRevision
             ? formalRevisionSourceSession
@@ -3706,9 +3850,9 @@ export default function AiChatPanel({
           }
           const planningInterrupt = [workflow.result, workflow.state]
             .map((value) => value?.application_planning_interrupt)
-            .find(
-              (value) => value && typeof value === 'object' && !Array.isArray(value)
-            ) as Record<string, unknown> | undefined
+            .find((value) => value && typeof value === 'object' && !Array.isArray(value)) as
+            | Record<string, unknown>
+            | undefined
           const gateIdentity =
             String(planningInterrupt?.gateId || '').trim() ||
             String(planningInterrupt?.artifactRevision || '').trim() ||
@@ -4055,10 +4199,12 @@ export default function AiChatPanel({
             )}
 
             <MessageList
+              activeDagStageId={activeDagStageId}
               applicationLifecycle={applicationLifecycle}
               applicationTemplatePreparationEligible={applicationTemplatePreparationEligible}
               codeChangeActionsDisabled={loading || workspaceBusy}
               conversationRunning={conversationRunning}
+              dagConfirmationInStageOutput={rightPanelOpen}
               entityDesignSession={entityDesignChatActive}
               designPhasePlanning={isApplicationPlanningPhase}
               error={planningError || error}
@@ -4066,6 +4212,7 @@ export default function AiChatPanel({
               loading={loading}
               messages={messages}
               onEntityDesignGateJump={handleEntityDesignGateJump}
+              onDagStageSelect={handleDagStageSelect}
               onOpenCodeChangeFile={handleOpenCodeChangeFile}
               onOpenRevisionSession={handleOpenRevisionSession}
               onRevertCodeChanges={requestCodeChangeRevert}
@@ -4382,6 +4529,45 @@ export default function AiChatPanel({
                   : undefined
               }
             />
+          </div>
+        </div>
+      )}
+
+      {showRightPanel && rightPanel?.type === 'stage-output' && (
+        <div className={cx('embedded-preview-pane', 'workspace-pane')}>
+          <RightPanelTabs
+            tabs={displayedWorkspaceTabs}
+            active={displayedWorkspaceTab}
+            onChange={openDisplayedWorkspaceTab}
+            onClose={() => {
+              setRightPanel(undefined)
+              onRightPanelOpenChange(false)
+            }}
+          />
+          <div className={cx('workspace-content')}>
+            {stageOutputMatchesSession ? (
+              rightPanel.view === 'confirmation' && dagConfirmationPlan ? (
+                <StageOutputPanel
+                  confirmationDisabled={
+                    loading ||
+                    workspaceBusy ||
+                    !stageOutputWorkflow ||
+                    workflowInteractionAvailability(stageOutputWorkflow, applicationLifecycle) !==
+                      'active'
+                  }
+                  confirmationErrors={dagConfirmationErrors}
+                  confirmationPlan={dagConfirmationPlan}
+                  onConfirmationSubmit={(action: WorkflowBuildTaskPlanConfirmation) => {
+                    if (!stageOutputWorkflow) return
+                    void handleSubmitWorkflowClarification(stageOutputWorkflow, {
+                      build_task_plan_confirmation: action
+                    })
+                  }}
+                />
+              ) : rightPanel.view === 'stage' && selectedDagStage?.output ? (
+                <StageOutputPanel stage={selectedDagStage} />
+              ) : null
+            ) : null}
           </div>
         </div>
       )}

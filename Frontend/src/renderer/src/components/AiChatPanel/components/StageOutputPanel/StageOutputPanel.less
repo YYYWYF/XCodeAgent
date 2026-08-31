@@ -1,0 +1,94 @@
+.@{class-prefix}-stage-output-panel {
+  height: 100%;
+  min-height: 0;
+  padding: 18px;
+  overflow: auto;
+  color: var(--wb-text);
+  background:
+    radial-gradient(circle at 10% 0, var(--wb-accent-soft), transparent 32%), var(--wb-canvas);
+}
+
+.@{class-prefix}-stage-output-panel-confirmation {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--wb-canvas);
+
+  .@{class-prefix}-workflow-dag-confirmation {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-scroll-region {
+    min-height: 0;
+    flex: 1 1 auto;
+    padding-right: 4px;
+    overflow: auto;
+    scrollbar-gutter: stable;
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-tasks.ant-collapse {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-actions {
+    z-index: 1;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 12px 0 0;
+    background: var(--wb-canvas);
+    box-shadow: 0 -10px 20px color-mix(in srgb, var(--wb-canvas) 92%, transparent);
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-actions .ant-space {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+.@{class-prefix}-stage-output-panel-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-stage-output-panel-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 9px;
+}
+
+.@{class-prefix}-stage-output-panel-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+
+  .ant-typography {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+.@{class-prefix}-stage-output-panel-body {
+  padding-top: 14px;
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-stage-output-panel {
+    padding: 14px;
+  }
+}

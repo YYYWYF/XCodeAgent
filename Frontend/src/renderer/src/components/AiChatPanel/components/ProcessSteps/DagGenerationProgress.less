@@ -178,24 +178,41 @@ details[open] > .@{class-prefix}-dag-generation-summary::after {
   animation: dag-generation-pulse 1.8s ease-in-out infinite;
 }
 
-.@{class-prefix}-dag-generation-stage-details {
-  min-width: 0;
-}
-
 .@{class-prefix}-dag-generation-stage-summary {
   display: flex;
   min-width: 0;
+  width: 100%;
   align-items: flex-start;
   gap: 8px;
   padding: 0 3px 8px 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
   cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
   user-select: none;
+
+  &:disabled {
+    cursor: default;
+  }
 
   &:focus-visible {
     outline: 2px solid var(--wb-accent);
     outline-offset: 3px;
     border-radius: 5px;
   }
+}
+
+.@{class-prefix}-dag-generation-stage.@{class-prefix}-selected
+  .@{class-prefix}-dag-generation-stage-summary {
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--wb-accent-soft) 76%, var(--wb-surface));
+  border-color: var(--wb-accent-border);
 }
 
 .@{class-prefix}-dag-generation-stage-copy {
@@ -215,22 +232,6 @@ details[open] > .@{class-prefix}-dag-generation-summary::after {
   color: var(--wb-text-secondary);
   font-size: 11px;
   line-height: 1.45;
-}
-
-.@{class-prefix}-dag-generation-stage-chevron {
-  margin-top: 4px;
-  color: var(--wb-text-tertiary);
-  font-size: 10px;
-  transition:
-    transform 160ms ease,
-    color 160ms ease;
-}
-
-details[open] > .@{class-prefix}-dag-generation-stage-summary {
-  .@{class-prefix}-dag-generation-stage-chevron {
-    color: var(--wb-accent);
-    transform: rotate(90deg);
-  }
 }
 
 .@{class-prefix}-dag-generation-stage-status.ant-typography,
@@ -596,8 +597,7 @@ details[open] > .@{class-prefix}-dag-generation-stage-summary {
 @media (prefers-reduced-motion: reduce) {
   .@{class-prefix}-dag-generation-stage.@{class-prefix}-running
     .@{class-prefix}-dag-generation-stage-icon,
-  .@{class-prefix}-dag-generation-summary::after,
-  .@{class-prefix}-dag-generation-stage-chevron {
+  .@{class-prefix}-dag-generation-summary::after {
     animation: none;
     transition: none;
   }

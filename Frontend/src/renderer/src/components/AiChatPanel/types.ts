@@ -46,6 +46,12 @@ export type RightPanelState =
   | { type: 'review-report' }
   | { type: 'source' }
   | { type: 'process' }
+  | {
+      type: 'stage-output'
+      sessionKey: string
+      view?: 'stage' | 'confirmation'
+      stageId?: string
+    }
 
 export type ChatCopy = Record<
   EditorMode,

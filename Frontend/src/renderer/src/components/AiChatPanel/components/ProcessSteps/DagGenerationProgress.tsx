@@ -33,11 +33,17 @@ import './DagGenerationProgress.less'
 const { Text } = Typography
 
 type Props = {
+  onStageSelect?: (stageId: string) => void
+  selectedStageId?: string
   snapshot: DagGenerationSnapshot
 }
 
-/** 展示 DAG 生成阶段、阶段产物和兼容摘要。 */
-export default function DagGenerationProgress({ snapshot }: Props): ReactElement {
+/** 展示 DAG 生成阶段、进度和兼容摘要，详细产物统一交给右侧面板。 */
+export default function DagGenerationProgress({
+  onStageSelect,
+  selectedStageId,
+  snapshot
+}: Props): ReactElement {
   const running = snapshot.stages.some((stage) => stage.status === 'running')
   const failed = snapshot.stages.some((stage) => stage.status === 'failed')
   const pending = snapshot.stages.some((stage) => stage.status === 'pending')
@@ -82,7 +88,13 @@ export default function DagGenerationProgress({ snapshot }: Props): ReactElement
       <div className={cx('dag-generation-content')}>
         <ol className={cx('dag-generation-stages')} aria-label="任务 DAG 生成阶段">
           {snapshot.stages.map((stage, index) => (
-            <DagGenerationStage index={index} key={stage.id} stage={stage} />
+            <DagGenerationStage
+              index={index}
+              key={stage.id}
+              onSelect={onStageSelect}
+              selected={stage.id === selectedStageId}
+              stage={stage}
+            />
           ))}
         </ol>
       </div>
@@ -90,42 +102,53 @@ export default function DagGenerationProgress({ snapshot }: Props): ReactElement
   )
 }
 
-/** 渲染单个阶段；详情默认关闭且不会因实时快照更新而自动展开。 */
+/** 渲染单个阶段进度；已有产物可回看，运行中阶段可点击恢复自动跟随。 */
 function DagGenerationStage({
   index,
+  onSelect,
+  selected,
   stage
 }: {
   index: number
+  onSelect?: (stageId: string) => void
+  selected: boolean
   stage: DagGenerationStageRecord
 }): ReactElement {
+  const selectable = Boolean(onSelect && (stage.output || stage.status === 'running'))
+  const selectionTitle =
+    stage.status === 'running'
+      ? `切回${stage.name}并自动跟随`
+      : stage.output
+        ? `在右侧查看${stage.name}产物`
+        : undefined
   return (
-    <li className={cx('dag-generation-stage', stage.status)}>
+    <li className={cx('dag-generation-stage', stage.status, selected && 'selected')}>
       <span className={cx('dag-generation-stage-index')}>{index + 1}</span>
       <span className={cx('dag-generation-stage-icon')}>{stageIcon(stage)}</span>
-      <details className={cx('dag-generation-stage-details')}>
-        <summary className={cx('dag-generation-stage-summary')}>
-          <span className={cx('dag-generation-stage-copy')}>
-            <Text strong={stage.status === 'running'}>{stage.name}</Text>
-            <Text
-              className={cx('dag-generation-stage-detail')}
-              aria-live={stage.status === 'running' ? 'polite' : undefined}
-            >
-              {stage.detail || '尚无阶段说明'}
-            </Text>
-          </span>
-          <RightOutlined className={cx('dag-generation-stage-chevron')} />
-        </summary>
-        <div className={cx('dag-generation-stage-output')}>
-          <StageOutput stage={stage} />
-        </div>
-      </details>
+      <button
+        className={cx('dag-generation-stage-summary')}
+        disabled={!selectable}
+        onClick={() => onSelect?.(stage.id)}
+        title={selectable ? selectionTitle : undefined}
+        type="button"
+      >
+        <span className={cx('dag-generation-stage-copy')}>
+          <Text strong={stage.status === 'running'}>{stage.name}</Text>
+          <Text
+            className={cx('dag-generation-stage-detail')}
+            aria-live={stage.status === 'running' ? 'polite' : undefined}
+          >
+            {stage.detail || '尚无阶段说明'}
+          </Text>
+        </span>
+      </button>
       <Text className={cx('dag-generation-stage-status')}>{stageStatusLabel(stage.status)}</Text>
     </li>
   )
 }
 
 /** 根据阶段产物类型渲染结构化详情。 */
-function StageOutput({ stage }: { stage: DagGenerationStageRecord }): ReactElement {
+export function StageOutput({ stage }: { stage: DagGenerationStageRecord }): ReactElement {
   if (!stage.output) {
     return (
       <div className={cx('dag-generation-output-empty')}>
@@ -387,7 +410,13 @@ function DagTask({ index, task }: { index: number; task: DagGenerationTaskRecord
           </Text>
         </summary>
         <div className={cx('dag-generation-task-details')}>
+          <TaskDetailList
+            label="任务说明"
+            values={task.description?.trim() ? [task.description.trim()] : []}
+          />
           <TaskDetailList label="变更文件" values={task.changePaths} />
+          <TaskDetailList label="允许范围" values={task.allowedPaths || []} />
+          <TaskDetailList label="交付物" values={recordDescriptions(task.deliverables || [])} />
           <TaskDetailList
             label="工程检查"
             values={checkDescriptions(task.engineeringAcceptanceChecks)}
@@ -409,6 +438,16 @@ function checkDescriptions(value: Array<Record<string, unknown>>): string[] {
     const kind = typeof item.kind === 'string' ? item.kind.trim() : ''
     if (!description) return []
     return [kind ? `${kind}：${description}` : description]
+  })
+}
+
+/** 从结构化交付物中提取名称或描述，避免右侧任务详情退化为原始 JSON。 */
+function recordDescriptions(value: Array<Record<string, unknown>>): string[] {
+  return value.flatMap((item) => {
+    const label = ['description', 'name', 'title', 'path']
+      .map((key) => (typeof item[key] === 'string' ? item[key].trim() : ''))
+      .find(Boolean)
+    return label ? [label] : []
   })
 }
 

@@ -159,19 +159,19 @@ function RevisionHandoffCard({
   const title = developmentEntry
     ? '本次需求的前置产物已更新完成，将在当前会话继续开发'
     : developmentHandoff
-    ? 'TechnicalPlan 已确认，已转入独立开发会话'
-    : planningHandoff
-      ? '需求设计已确认，已转入独立技术规划会话'
-    : planningRevision
-      ? '已转入独立技术规划会话'
-      : '已转入独立需求设计会话'
+      ? 'TechnicalPlan 已确认，已转入独立开发会话'
+      : planningHandoff
+        ? '需求设计已确认，已转入独立技术规划会话'
+        : planningRevision
+          ? '已转入独立技术规划会话'
+          : '已转入独立需求设计会话'
   const buttonText = developmentHandoff
     ? '打开开发会话'
     : planningHandoff
       ? '打开技术规划会话'
-    : planningRevision
-      ? '打开技术规划会话'
-      : '打开需求设计会话'
+      : planningRevision
+        ? '打开技术规划会话'
+        : '打开需求设计会话'
   return (
     <section className={cx('revision-session-handoff')}>
       <div className={cx('revision-session-handoff-copy')}>
@@ -224,11 +224,14 @@ function messageAgentPhase(
 }
 
 type MessageListProps = {
+  activeDagStageId?: string
   applicationLifecycle?: ApplicationLifecycle
   /** 仅首次新建且尚未进入开发的应用允许展示模板准备卡。 */
   applicationTemplatePreparationEligible: boolean
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
+  /** 右侧阶段产物面板可见时，把 Build DAG 确认卡从消息流移出以避免重复。 */
+  dagConfirmationInStageOutput?: boolean
   entityDesignSession?: boolean
   /** 当前会话最新一轮模型/Workflow 错误，优先在消息区展示统一错误卡片。 */
   error?: string
@@ -263,6 +266,8 @@ type MessageListProps = {
   onEntityDesignGateJump?: (entityId: string) => void
   /** 从来源会话回执打开对应的独立需求设计会话。 */
   onOpenRevisionSession?: (handoff: NonNullable<AgentChatMessage['revisionHandoff']>) => void
+  /** 点击 DAG 进度卡中的已生成子阶段时，在右侧展示当前会话最新产物。 */
+  onDagStageSelect?: (stageId: string) => void
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
   onSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -278,10 +283,12 @@ type MessageListProps = {
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
+  activeDagStageId,
   applicationLifecycle,
   applicationTemplatePreparationEligible,
   codeChangeActionsDisabled,
   conversationRunning,
+  dagConfirmationInStageOutput = false,
   entityDesignSession = false,
   designPhasePlanning = false,
   error,
@@ -296,6 +303,7 @@ export default function MessageList({
   planningWorkflow,
   loading,
   messages,
+  onDagStageSelect,
   onEntityDesignGateJump,
   onOpenRevisionSession,
   onOpenCodeChangeFile,
@@ -549,6 +557,10 @@ export default function MessageList({
                 message.workflow && messageClarification?.mode === 'review_phase_confirmation'
               const isAcceptancePhaseConfirmationCard =
                 message.workflow && messageClarification?.mode === 'acceptance_phase_confirmation'
+              const dagConfirmationMovedToStageOutput = Boolean(
+                dagConfirmationInStageOutput &&
+                  messageClarification?.mode === 'build_task_plan_confirmation'
+              )
               const isCodeReviewCard = workflowShouldShowCodeReview(message.workflow)
               // 创建规划的产品/技术阶段也展示 WorkflowRunCard，保证运行与确认状态连续可见。
               const isPlanningStageCard =
@@ -559,7 +571,9 @@ export default function MessageList({
                 message.workflow.summary?.status !== 'running'
               const showWorkflowCard = Boolean(
                 message.workflow &&
-                  ((requiresClarification && !isUiDesignConfirmationCard) ||
+                  ((requiresClarification &&
+                    !isUiDesignConfirmationCard &&
+                    !dagConfirmationMovedToStageOutput) ||
                     isLatestUiDesignConfirmationCard ||
                     isPlanningStageCard ||
                     isLaunchProjectCard ||
@@ -705,8 +719,10 @@ export default function MessageList({
                           visibleProcessSteps.length > 0 &&
                           !designPhasePlanning && (
                             <ProcessSteps
+                              activeDagStageId={activeDagStageId}
                               conversation={conversation}
                               loading={messageLoading}
+                              onDagStageSelect={onDagStageSelect}
                               steps={visibleProcessSteps}
                             />
                           )}
