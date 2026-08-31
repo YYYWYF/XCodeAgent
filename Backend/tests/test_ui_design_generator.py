@@ -7,8 +7,10 @@ from unittest.mock import MagicMock, patch
 
 from app.config import Settings
 from app.services.ui_design_generator import (
+    _auto_fix_missing_imports,
     _build_ui_design_prompt,
     _extract_tsx_code,
+    _find_undefined_refs,
     _is_likely_truncated,
     _merge_truncated_code,
     generate_page_react_code,
@@ -360,6 +362,94 @@ class ExtractTsxCodeTests(unittest.TestCase):
         code = _extract_tsx_code(text)
 
         self.assertTrue(code.lstrip().startswith("import React"))
+
+
+class AutoFixImportsTests(unittest.TestCase):
+    """程序化补 import：glm-5.2 长代码任务 thinking 占满 token，import 语句常被截断丢失。
+
+    校验发现"组件未 import"时按映射表确定性补回，不消耗模型 token，避免 repair 重试
+    再次因 thinking 截断而失败。
+    """
+
+    def test_adds_missing_antd_imports(self) -> None:
+        """代码完整但漏 antd 组件 import 时，程序化补回缺失组件。"""
+
+        code = (
+            "import React from 'react';\n"
+            "const Home = () => <div><Card><Button>ok</Button><Tag>x</Tag></Card></div>;\n"
+            "export default Home;\n"
+        )
+        self.assertEqual(_find_undefined_refs(code), ["Button", "Card", "Tag"])
+
+        fixed, unresolved = _auto_fix_missing_imports(code)
+
+        self.assertEqual(_find_undefined_refs(fixed), [])
+        self.assertEqual(unresolved, [])
+        self.assertIn("import { Button, Card, Tag } from 'antd';", fixed)
+
+    def test_separates_antd_and_pro_components(self) -> None:
+        """混合来源的缺失组件按 antd / pro-components 分别补到对应 import。"""
+
+        code = (
+            "import React from 'react';\n"
+            "const P = () => <div><ProTable /><Button>x</Button></div>;\n"
+            "export default P;\n"
+        )
+        fixed, unresolved = _auto_fix_missing_imports(code)
+
+        self.assertEqual(_find_undefined_refs(fixed), [])
+        self.assertEqual(unresolved, [])
+        self.assertIn("from 'antd'", fixed)
+        self.assertIn("Button", fixed)
+        self.assertIn("from '@ant-design/pro-components'", fixed)
+        self.assertIn("ProTable", fixed)
+
+    def test_merges_into_existing_import_block(self) -> None:
+        """已有同来源 import 块时，缺失组件合并进去而非新建 import。"""
+
+        code = (
+            "import React from 'react';\n"
+            "import { Button } from 'antd';\n"
+            "const X = () => <div><Button /><Input /><Tag /></div>;\n"
+            "export default X;\n"
+        )
+        fixed, _ = _auto_fix_missing_imports(code)
+
+        # 只有一行 antd import，且包含全部三个组件。
+        antd_imports = [
+            line for line in fixed.splitlines() if "from 'antd'" in line and "import" in line
+        ]
+        self.assertEqual(len(antd_imports), 1)
+        for name in ("Button", "Input", "Tag"):
+            self.assertIn(name, antd_imports[0])
+
+    def test_unmapped_components_left_unresolved(self) -> None:
+        """映射表未命中的组件（自定义组件、写错的图标名）留给模型 repair。"""
+
+        code = (
+            "import React from 'react';\n"
+            "const X = () => <div><ReviewItem /><CloseCircle /></div>;\n"
+            "export default X;\n"
+        )
+        fixed, unresolved = _auto_fix_missing_imports(code)
+
+        # ReviewItem 是自定义组件、CloseCircle 是写错的图标名（应为 CloseCircleOutlined），
+        # 都不在映射表，不自动补，留给模型 repair。
+        self.assertIn("ReviewItem", unresolved)
+        self.assertIn("CloseCircle", unresolved)
+
+    def test_no_undefined_returns_unchanged(self) -> None:
+        """代码无未定义引用时原样返回。"""
+
+        code = (
+            "import React from 'react';\n"
+            "import { Button } from 'antd';\n"
+            "const X = () => <Button />;\n"
+            "export default X;\n"
+        )
+        fixed, unresolved = _auto_fix_missing_imports(code)
+        self.assertEqual(fixed, code)
+        self.assertEqual(unresolved, [])
 
 
 if __name__ == "__main__":

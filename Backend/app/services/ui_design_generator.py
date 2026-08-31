@@ -511,6 +511,152 @@ _ALLOWED_IMPORT_SOURCES = {
     "dayjs",
 }
 
+# 组件名 → import 来源的映射表，供 _auto_fix_missing_imports 程序化补 import。
+# glm-5.2 在长代码任务上 thinking 压不掉（与正文共享 max_tokens），token 耗尽时
+# 正文代码的 import 语句常被截断丢失，导致"组件未 import"校验失败。模型 repair
+# 会再次消耗 thinking 预算、大概率在同一处再截断，2 次重试仍失败。这里在校验失败
+# 时直接按映射表程序化补回缺失的 import，确定性修复，不消耗模型 token。
+# antd v4 全量组件 + pro-components 常用组件 + 常见图标。
+_antd_components = {
+    "Affix", "Alert", "Anchor", "AutoComplete", "Avatar", "BackTop", "Badge",
+    "Breadcrumb", "Button", "Calendar", "Card", "Carousel", "Cascader", "Checkbox",
+    "Col", "Collapse", "Comment", "ConfigProvider", "DatePicker", "Descriptions",
+    "Divider", "Drawer", "Dropdown", "Empty", "Form", "Image", "Input", "InputNumber",
+    "Layout", "List", "Mentions", "Menu", "Modal", "PageHeader", "Pagination",
+    "Popconfirm", "Popover", "Progress", "Radio", "Rate", "Result", "Row",
+    "Segmented", "Select", "Skeleton", "Slider", "Space", "Spin", "Statistic",
+    "Steps", "Switch", "Table", "Tabs", "Tag", "Timeline", "TimePicker", "Tooltip",
+    "Transfer", "Tree", "TreeSelect", "Typography", "Upload",
+}
+_pro_components = {
+    "ProCard", "ProDescriptions", "ProForm", "ProFormText", "ProFormTextArea",
+    "ProFormSelect", "ProFormDigit", "ProFormDigitRange", "ProFormDatePicker",
+    "ProFormDateRangePicker", "ProFormDateTimePicker", "ProFormTimePicker",
+    "ProFormSwitch", "ProFormRadio", "ProFormCheckbox", "ProFormSlider",
+    "ProFormCascader", "ProFormTreeSelect", "ProFormList", "ProFormDependency",
+    "ProFormField", "ProFormFieldSet", "ProFormItem", "ProFormMoney",
+    "ProFormRate", "ProFormSegmented", "ProFormUploadButton", "ProFormUploadDragger",
+    "ProFormCaptcha", "ProFormColorPicker", "ProTable", "ProList", "ProLayout",
+    "ProSkeleton", "PageContainer", "FooterToolbar", "GridContent",
+}
+# 图标只补最常见的；图标数量庞大，未命中时仍走模型 repair。
+_icon_components = {
+    "PlusOutlined", "MinusOutlined", "DeleteOutlined", "EditOutlined",
+    "SearchOutlined", "ReloadOutlined", "CloseOutlined", "CloseCircleOutlined",
+    "CheckOutlined", "CheckCircleOutlined", "ExclamationCircleOutlined",
+    "InfoCircleOutlined", "WarningOutlined", "LoadingOutlined", "SettingOutlined",
+    "UserOutlined", "TeamOutlined", "EyeOutlined", "DownloadOutlined",
+    "UploadOutlined", "ExportOutlined", "ImportOutlined", "FilterOutlined",
+    "SortAscendingOutlined", "SortDescendingOutlined", "ArrowRightOutlined",
+    "ArrowLeftOutlined", "ArrowUpOutlined", "ArrowDownOutlined", "LeftOutlined",
+    "RightOutlined", "UpOutlined", "DownOutlined", "MoreOutlined", "EllipsisOutlined",
+    "PlusCircleOutlined", "MinusCircleOutlined", "QuestionCircleOutlined",
+    "SyncOutlined", "StarOutlined", "StarFilled", "HeartOutlined",
+    "HomeOutlined", "AppstoreOutlined", "MenuOutlined", "MenuFoldOutlined",
+    "MenuUnfoldOutlined", "BellOutlined", "MailOutlined", "PhoneOutlined",
+    "CalendarOutlined", "ClockCircleOutlined", "FileOutlined", "FileTextOutlined",
+    "FolderOutlined", "FolderOpenOutlined", "FolderAddOutlined", "FileAddOutlined",
+    "FileSearchOutlined", "FileDoneOutlined", "FilePdfOutlined", "FileExcelOutlined",
+    "FileWordOutlined", "FilePptOutlined", "FileImageOutlined", "FileZipOutlined",
+    "ProjectOutlined", "FundProjectionScreenOutlined", "DashboardOutlined",
+    "BarChartOutlined", "PieChartOutlined", "LineChartOutlined", "RadarChartOutlined",
+    "ToolOutlined", "SafetyOutlined", "LockOutlined", "UnlockOutlined",
+    "KeyOutlined", "EnvironmentOutlined", "GlobalOutlined", "CompassOutlined",
+    "AimOutlined", "ZoomInOutlined", "ZoomOutOutlined", "FullscreenOutlined",
+    "FullscreenExitOutlined", "ExpandOutlined", "CompressOutlined",
+    "ScissorOutlined", "ShareAltOutlined", "CopyOutlined", "SnippetsOutlined",
+    "DiffOutlined", "HighlightOutlined", "FormOutlined", "TableOutlined",
+    "LayoutOutlined", "DatabaseOutlined", "CloudOutlined", "DesktopOutlined",
+    "MobileOutlined", "LaptopOutlined", "PrinterOutlined", "CameraOutlined",
+    "VideoCameraOutlined", "SoundOutlined", "ApiOutlined", "BranchesOutlined",
+    "DeploymentUnitOutlined", "ClusterOutlined", "GatewayOutlined",
+    "HddOutlined", "CloudServerOutlined", "ConsoleSqlOutlined", "BugOutlined",
+    "ExperimentOutlined", "RocketOutlined", "FireOutlined", "ThunderboltOutlined",
+    "BulbOutlined", "CoffeeOutlined", "GiftOutlined", "TrophyOutlined",
+    "CrownOutlined", "DollarOutlined", "EuroOutlined", "ShoppingOutlined",
+    "ShoppingCartOutlined", "ShoppingOutlined", "ShopOutlined", "AccountBookOutlined",
+    "BookOutlined", "ReadOutlined", "SolutionOutlined", "ContactsOutlined",
+    "ProfileOutlined", "IdcardOutlined", "BankOutlined", "WalletOutlined",
+    "AuditOutlined", "InsuranceOutlined", "SafetyCertificateOutlined",
+    "AlertOutlined", "NotificationOutlined", "CarOutlined", "EnvironmentOutlined",
+    "EnvironmentFilled", "InteractionOutlined", "TransactionOutlined",
+    "ForkOutlined", "DisconnectOutlined", "LinkOutlined", "LinkOutlined",
+    "RobotOutlined", "ClusterOutlined", "DeploymentUnitOutlined",
+}
+
+
+def _component_import_source(name: str) -> str:
+    """返回组件名对应的 import 来源；未命中返回空串（留给模型 repair）。"""
+
+    if name in _antd_components:
+        return "antd"
+    if name in _pro_components:
+        return "@ant-design/pro-components"
+    if name in _icon_components:
+        return "@ant-design/icons"
+    return ""
+
+
+def _auto_fix_missing_imports(code: str) -> tuple[str, list[str]]:
+    """程序化补回 JSX 中使用但未 import 的组件。
+
+    glm-5.2 长代码任务 thinking 压不掉，token 耗尽时 import 语句常被截断丢失。
+    校验发现"未定义引用"时，按 _component_import_source 映射表把缺失组件按来源
+    分组，合并进已有的同来源 import 块（或新建 import 语句），确定性修复，不消耗
+    模型 token。返回 (修复后代码, 未能自动补的组件名列表)。
+    """
+
+    undefined = _find_undefined_refs(code)
+    if not undefined:
+        return code, []
+    # 按来源分组：antd / pro-components / icons
+    by_source: dict[str, list[str]] = {}
+    unresolved: list[str] = []
+    for name in undefined:
+        source = _component_import_source(name)
+        if source:
+            by_source.setdefault(source, []).append(name)
+        else:
+            unresolved.append(name)
+    if not by_source:
+        return code, unresolved
+    # 找到插入点：第一个 import 语句之前；没有 import 则插到文件开头。
+    lines = code.splitlines()
+    insert_index = 0
+    for i, line in enumerate(lines):
+        if re.match(r"^[\]}\'\s]*import\s", line):
+            insert_index = i
+            break
+    new_imports: list[str] = []
+    for source, names in by_source.items():
+        names_sorted = sorted(set(names))
+        # 尝试合并进已有的同来源 import 块；找不到则新建。
+        merged = False
+        for i in range(insert_index, min(len(lines), insert_index + 30)):
+            line = lines[i]
+            # 命名导入块：import { A, B } from 'source';
+            m = re.match(
+                r"^([\]}\'\s]*import\s+\{)([^}]*)(\}\s*from\s*['\"]"
+                + re.escape(source)
+                + r"['\"])",
+                line,
+            )
+            if m:
+                existing = {n.strip() for n in m.group(2).split(",") if n.strip()}
+                added = [n for n in names_sorted if n not in existing]
+                if added:
+                    all_names = sorted(existing | set(added))
+                    lines[i] = f"{m.group(1)} {', '.join(all_names)} {m.group(3)}"
+                merged = True
+                break
+        if not merged:
+            new_imports.append(
+                f"import {{ {', '.join(names_sorted)} }} from '{source}';"
+            )
+    if new_imports:
+        lines[insert_index:insert_index] = new_imports
+    return "\n".join(lines), unresolved
+
 # 常见禁用来源 → 修复指引。LLM 常误从这些库引路由/数据/导出功能。
 _FORBIDDEN_IMPORT_HINTS = {
     "umi": "umi 是框架，设计稿工程未安装。路由参数用 react-router-dom 的 "
@@ -900,6 +1046,20 @@ def generate_page_react_code(
 
     # 校验 + 自动修复重试闭环
     ok, err = validate_page_code(project_dir, code, page)
+    # 程序化补 import：glm-5.2 长代码任务 thinking 压不掉，token 耗尽时 import 语句
+    # 常被截断丢失，校验报"组件未 import"。模型 repair 会再消耗 thinking 预算、大概率
+    # 同处再截断；这里按映射表确定性补回缺失 import，不消耗模型 token，避免无谓重试。
+    if not ok and "未 import 或未定义" in err:
+        fixed_code, unresolved = _auto_fix_missing_imports(code)
+        if fixed_code != code:
+            logger.info(
+                "ui_design_auto_fix_imports page_id=%s fixed=%s unresolved=%s",
+                page_id,
+                len(code),
+                unresolved,
+            )
+            code = fixed_code
+            ok, err = validate_page_code(project_dir, code, page)
     attempt = 1
     continuation_used = False
     while not ok and attempt <= max_retries:
@@ -973,6 +1133,18 @@ def generate_page_react_code(
             repr(code[-200:]) if len(code) > 200 else "",
         )
         ok, err = validate_page_code(project_dir, code, page)
+        # repair 后的代码可能再次漏 import（thinking 仍占预算），程序化补一次。
+        if not ok and "未 import 或未定义" in err:
+            fixed_code, unresolved = _auto_fix_missing_imports(code)
+            if fixed_code != code:
+                logger.info(
+                    "ui_design_auto_fix_imports_repair page_id=%s attempt=%s unresolved=%s",
+                    page_id,
+                    attempt,
+                    unresolved,
+                )
+                code = fixed_code
+                ok, err = validate_page_code(project_dir, code, page)
 
     if not ok:
         # 全部重试仍失败：抛出，由节点标记 generation_failed，不写白屏代码。
