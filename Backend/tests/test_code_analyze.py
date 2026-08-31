@@ -243,7 +243,7 @@ class CodeAnalyzeTests(unittest.TestCase):
         )
 
     def test_normalizer_keeps_side_relative_path_security_boundaries(self) -> None:
-        """扫描根相对兼容不能放行依赖目录、跨端根或绝对越界路径。"""
+        """扫描结果中的依赖目录、跨端根或绝对越界路径应被忽略。"""
 
         base = {
             "status": "completed",
@@ -256,11 +256,8 @@ class CodeAnalyzeTests(unittest.TestCase):
             "/etc/passwd",
             "../package.json",
         ):
-            with self.subTest(file_path=file_path), self.assertRaisesRegex(
-                ValueError,
-                "越界源码路径|端类型与文件路径不匹配",
-            ):
-                normalize_code_review_result(
+            with self.subTest(file_path=file_path):
+                result = normalize_code_review_result(
                     {
                         **base,
                         "issues": [
@@ -273,6 +270,8 @@ class CodeAnalyzeTests(unittest.TestCase):
                         ],
                     }
                 )
+                self.assertEqual(result["issue_count"], 0)
+                self.assertEqual(result["issues"], [])
 
     def test_normalizer_rejects_unregistered_repair_action(self) -> None:
         """Skill 输出不能借 repair_actions 扩展为任意命令权限。"""
@@ -294,24 +293,26 @@ class CodeAnalyzeTests(unittest.TestCase):
                 }
             )
 
-    def test_normalizer_rejects_frontend_node_modules_issue(self) -> None:
-        """任何 node_modules 问题路径都不能进入公开扫描结果。"""
+    def test_normalizer_ignores_frontend_node_modules_issue(self) -> None:
+        """node_modules 问题路径应被忽略且不能导致扫描失败。"""
 
-        with self.assertRaisesRegex(ValueError, "越界源码路径"):
-            normalize_code_review_result(
-                {
-                    "status": "completed",
-                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
-                    "issues": [
-                        {
-                            "side": "frontend",
-                            "title": "越界依赖文件",
-                            "summary": "不应展示",
-                            "file": "frontend/node_modules/pkg/index.js",
-                        }
-                    ],
-                }
-            )
+        result = normalize_code_review_result(
+            {
+                "status": "completed",
+                "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                "issues": [
+                    {
+                        "side": "frontend",
+                        "title": "越界依赖文件",
+                        "summary": "不应展示",
+                        "file": "frontend/node_modules/pkg/index.js",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(result["issue_count"], 0)
+        self.assertEqual(result["issues"], [])
 
     def test_normalizer_accepts_logged_skill_and_target_shapes(self) -> None:
         """运行日志中的 Skill 文件对象和按端目标对象应归一为公开审查结构。"""
@@ -448,26 +449,30 @@ class CodeAnalyzeTests(unittest.TestCase):
         self.assertEqual(result["targets"][1]["root"], "backend/src/main/java")
         self.assertEqual(result["targets"][1]["scanned_file_count"], 17)
 
-    def test_normalizer_rejects_out_of_scope_scan_root(self) -> None:
-        """scan_root 别名不能绕过两个固定扫描目录的安全边界。"""
+    def test_normalizer_ignores_out_of_scope_scan_root(self) -> None:
+        """越界 scan_root 声明应被忽略且不能导致扫描失败。"""
 
-        with self.assertRaisesRegex(ValueError, "审查目标包含未授权目录"):
-            normalize_code_review_result(
-                {
-                    "status": "completed",
-                    "loaded_skills": [
-                        "frontend-code-scan",
-                        "backend-code-scan",
-                    ],
-                    "targets": [
-                        {
-                            "side": "backend",
-                            "scan_root": "/backend/src/test/java",
-                        }
-                    ],
-                    "issues": [],
-                }
-            )
+        result = normalize_code_review_result(
+            {
+                "status": "completed",
+                "loaded_skills": [
+                    "frontend-code-scan",
+                    "backend-code-scan",
+                ],
+                "targets": [
+                    {
+                        "side": "backend",
+                        "scan_root": "/backend/src/test/java",
+                    }
+                ],
+                "issues": [],
+            }
+        )
+
+        self.assertEqual(
+            [target["root"] for target in result["targets"]],
+            ["frontend", "backend/src/main/java"],
+        )
 
     @patch("app.agents.create_agent_bundle")
     @patch("app.agents.code_analyze.analyzer.invoke_agent_with_tool_activity")
@@ -607,29 +612,31 @@ class CodeAnalyzeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_code_review_result({**base, "status": "failed"})
 
-    def test_normalizer_rejects_absolute_out_of_scope_issue_path(self) -> None:
-        """绝对越界问题路径不能借由状态归一进入公开结果。"""
+    def test_normalizer_ignores_absolute_out_of_scope_issue_path(self) -> None:
+        """绝对越界问题路径应被忽略且不能导致扫描失败。"""
 
         base = {
             "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
             "targets": [],
             "issues": [],
         }
-        with self.assertRaises(ValueError):
-            normalize_code_review_result(
-                {
-                    **base,
-                    "status": "completed",
-                    "issues": [
-                        {
-                            "side": "backend",
-                            "file": "/etc/passwd",
-                            "title": "越界",
-                            "summary": "越界",
-                        }
-                    ],
-                }
-            )
+        result = normalize_code_review_result(
+            {
+                **base,
+                "status": "completed",
+                "issues": [
+                    {
+                        "side": "backend",
+                        "file": "/etc/passwd",
+                        "title": "越界",
+                        "summary": "越界",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(result["issue_count"], 0)
+        self.assertEqual(result["issues"], [])
 
     def test_normalizer_redacts_absolute_paths_in_review_text(self) -> None:
         """摘要和问题说明中的宿主路径不能进入公开审查结果。"""

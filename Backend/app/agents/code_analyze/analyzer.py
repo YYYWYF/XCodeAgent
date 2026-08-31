@@ -112,8 +112,14 @@ def normalize_code_review_result(
             workspace=workspace,
         )
         expected_prefix = "frontend/" if side == "frontend" else "backend/src/main/java/"
-        if not file_path.startswith(expected_prefix):
-            raise ValueError("审查问题的端类型与文件路径不匹配。")
+        # 模型可能在结果中声明工作区外、依赖目录或跨端文件；这些声明不再让
+        # 整次扫描失败，只从公开问题中丢弃。真实文件读取仍受只读 Backend 限制。
+        if (
+            side not in {"frontend", "backend"}
+            or not file_path.startswith(expected_prefix)
+            or not is_code_analyze_read_path(file_path)
+        ):
+            continue
         severity = str(raw.get("severity") or "medium").strip().lower()
         if severity not in {"critical", "high", "medium", "low"}:
             severity = "medium"
@@ -243,7 +249,9 @@ def _normalize_targets(
             }.get(side)
             root = _normalize_target_root(raw, expected=expected, workspace=workspace)
             if not expected or root != expected:
-                raise ValueError("审查目标包含未授权目录。")
+                # 越界目标仅是模型输出声明，不代表底层工具实际读取成功；忽略该项，
+                # 后续仍按两个固定安全根生成规范化目标，不再把审查整体标记失败。
+                continue
             status = str(raw.get("status") or "completed").strip().lower()
             if status not in {"completed", "skipped"}:
                 status = "completed"

@@ -509,8 +509,8 @@ code_scan
 ```
 
 首次进入只执行一次只读 `CodeAnalyzeAgent` 扫描；恢复 `repair_all` 时直接使用持久化的前 100 条问题，
-不重新扫描。前端 Skill 有规则时可读取整个 `frontend/**` 项目范围，但所有文件工具和结果归一化都确定性排除
-`node_modules` 与敏感文件；前端扫描目标固定为 `frontend`。问题可声明有限的内部 `repair_actions`，当前只支持
+不重新扫描。前端 Skill 有规则时可读取整个 `frontend/**` 项目范围；底层只读文件工具仍确定性拒绝
+`node_modules`、敏感文件和固定源码根外路径，但模型结果中声明的越界扫描目标、跨端问题路径或不可读问题路径只会被丢弃，不再让整次扫描失败。前端扫描目标固定为 `frontend`。问题可声明有限的内部 `repair_actions`，当前只支持
 `pnpm_install`，且不进入 AG-UI 公开问题结构。
 修复由独立 `CodeReviewRepairAgent` 完成，可读写除 `node_modules`、敏感文件和手工 lockfile 写入之外的
 `frontend/**`，后端仍限于非测试的 `backend/src/main/java/**`。当 Skill 要求 `pnpm_install` 时，Agent 必须先修改
