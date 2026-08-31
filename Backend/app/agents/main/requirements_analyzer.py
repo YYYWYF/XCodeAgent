@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from copy import deepcopy
+from hashlib import sha256
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -300,6 +301,7 @@ def _requirements_prompt(
     existing_spec: dict[str, Any] | None = None,
     datasource_type: DatasourceType = "database",
     clarification_round: int = 0,
+    format_correction: bool = False,
 ) -> str:
     """构建产品需求提示；实体归技术规划阶段。"""
 
@@ -381,11 +383,21 @@ def _requirements_prompt(
         and existing_spec.get("confirmation_status") == "pending_user_input"
         else ""
     )
+    format_correction_policy = (
+        "FORMAT CORRECTION: The previous response did not follow the required response protocol. "
+        "Do not repeat prose, explanations, markdown, or an unstructured clarification question. "
+        "If user input is required, call ask_user and return no prose. Otherwise return one complete JSON object "
+        "that follows every RequirementSpec field rule below. This instruction corrects only the response format; "
+        "it does not add, remove, or reinterpret any user requirement.\n"
+        if format_correction
+        else ""
+    )
     return (
         "You are the requirements model for an app-generation workflow.\n"
         "This is a requirements-only boundary. Do not call subagents, do not delegate tasks, "
         "do not create project plans, and do not generate or modify code.\n"
         "The only tool you may call is ask_user, and only when user input is required.\n"
+        f"{format_correction_policy}"
         "Analyze the user's application request and decide whether the requirement is clear enough "
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 业务参与者, 功能模块, "
@@ -484,6 +496,7 @@ def _invoke_live_chat_model(
     clarification_round: int = 0,
     settings: Settings | None = None,
     on_token: Callable[[str], None] | None = None,
+    format_correction: bool = False,
 ) -> dict[str, Any]:
     """调用绑定澄清工具的需求模型，可选流式吐词。"""
 
@@ -499,18 +512,21 @@ def _invoke_live_chat_model(
                     existing_spec,
                     datasource_type,
                     clarification_round,
+                    format_correction,
                 )
             )
             return {"messages": [result]}
 
         accumulated_text = ""
         merged_chunk: AIMessageChunk | None = None
+        complete_message: AIMessage | None = None
         for chunk in runnable.stream(
             _requirements_prompt(
                 request,
                 existing_spec,
                 datasource_type,
                 clarification_round,
+                format_correction,
             )
         ):
             if isinstance(chunk, AIMessageChunk):
@@ -523,15 +539,32 @@ def _invoke_live_chat_model(
                     accumulated_text += token
                     on_token(token)
                 merged_chunk = chunk if merged_chunk is None else merged_chunk + chunk
+            elif isinstance(chunk, AIMessage):
+                # LangChain 在原生流式关闭时会让 stream() 回退为单个完整消息；
+                # 必须保留该消息，否则已成功返回的正文和工具调用会被误判为空响应。
+                token = _coerce_content_text(chunk.content)
+                if token:
+                    on_token(token)
+                complete_message = chunk
+        if complete_message is not None:
+            return {"messages": [complete_message]}
         if merged_chunk is None:
             return {"messages": []}
         final_tool_calls = getattr(merged_chunk, "tool_calls", None) or []
+        response_metadata = getattr(merged_chunk, "response_metadata", None)
+        usage_metadata = getattr(merged_chunk, "usage_metadata", None)
         final = AIMessage(
             content=accumulated_text,
             tool_calls=(
                 final_tool_calls if hasattr(merged_chunk, "tool_calls") else None
             ),
             id=merged_chunk.id if hasattr(merged_chunk, "id") else None,
+            response_metadata=(
+                response_metadata if isinstance(response_metadata, dict) else {}
+            ),
+            usage_metadata=(
+                usage_metadata if isinstance(usage_metadata, dict) else None
+            ),
         )
         return {"messages": [final]}
 
@@ -550,7 +583,9 @@ def analyze_requirements_with_chat_model(
 
     settings = Settings.from_env()
 
-    def _analyze_once() -> dict[str, Any]:
+    def _analyze_once(*, format_correction: bool = False) -> dict[str, Any]:
+        """执行一次需求分析，并在内容重试时启用固定协议纠正。"""
+
         return _analyze_requirements_once(
             request,
             existing_spec=existing_spec,
@@ -558,6 +593,7 @@ def analyze_requirements_with_chat_model(
             clarification_round=clarification_round,
             settings=settings,
             on_token=on_token,
+            format_correction=format_correction,
         )
 
     try:
@@ -571,7 +607,7 @@ def analyze_requirements_with_chat_model(
             "requirement_spec_content_retry: 模型返回的需求 JSON 不完整，重试一次：%s",
             exc,
         )
-        return _analyze_once()
+        return _analyze_once(format_correction=True)
 
 
 def _is_malformed_spec_json_error(exc: ValueError) -> bool:
@@ -583,6 +619,43 @@ def _is_malformed_spec_json_error(exc: ValueError) -> bool:
     )
 
 
+def _log_requirement_model_response_diagnostics(
+    message: Any,
+    agent_note: str,
+    agent_spec: Any,
+    *,
+    configured_max_tokens: int | None,
+) -> None:
+    """记录需求模型响应的脱敏结构摘要，不输出用户需求或模型正文。"""
+
+    response_metadata = getattr(message, "response_metadata", None)
+    response_metadata = response_metadata if isinstance(response_metadata, dict) else {}
+    usage_metadata = getattr(message, "usage_metadata", None)
+    token_usage = response_metadata.get("token_usage")
+    usage = (
+        usage_metadata
+        if isinstance(usage_metadata, dict)
+        else token_usage
+        if isinstance(token_usage, dict)
+        else {}
+    )
+    output_tokens = usage.get("output_tokens") or usage.get("completion_tokens")
+    finish_reason = response_metadata.get("finish_reason") or response_metadata.get(
+        "finishReason"
+    )
+    logger.info(
+        "requirement_model_response response_chars=%s response_sha256=%s parsed_keys=%s "
+        "tool_call_count=%s finish_reason=%s output_tokens=%s configured_max_tokens=%s",
+        len(agent_note),
+        sha256(agent_note.encode("utf-8")).hexdigest()[:16],
+        sorted(str(key) for key in agent_spec) if isinstance(agent_spec, dict) else [],
+        len(getattr(message, "tool_calls", None) or []),
+        finish_reason,
+        output_tokens if isinstance(output_tokens, int) else None,
+        configured_max_tokens,
+    )
+
+
 def _analyze_requirements_once(
     request: str,
     *,
@@ -591,6 +664,7 @@ def _analyze_requirements_once(
     clarification_round: int,
     settings: Settings,
     on_token: Callable[[str], None] | None,
+    format_correction: bool = False,
 ) -> dict[str, Any]:
     """单次需求分析：调用模型、解析 RequirementSpec、合并澄清上下文。"""
 
@@ -601,9 +675,11 @@ def _analyze_requirements_once(
         clarification_round=clarification_round,
         settings=settings,
         on_token=on_token,
+        format_correction=format_correction,
     )
     messages = agent_result.get("messages", [])
-    content = getattr(messages[-1], "content", "") if messages else ""
+    message = messages[-1] if messages else None
+    content = getattr(message, "content", "") if message is not None else ""
     agent_note = _coerce_content_text(content) or ""
     analysis_source = "direct_chat_model"
 
@@ -613,6 +689,12 @@ def _analyze_requirements_once(
     )
     if not asks_for_clarification:
         agent_spec = _recover_requirement_spec_json(agent_note, agent_spec)
+    _log_requirement_model_response_diagnostics(
+        message,
+        agent_note,
+        agent_spec,
+        configured_max_tokens=getattr(settings, "default_max_tokens", None),
+    )
     if not asks_for_clarification and not isinstance(agent_spec, dict):
         # 需求已被判定为清晰时必须有完整 JSON，不能退回固定页面模板继续向下游传播。
         raise ValueError("需求 AI 未返回完整 RequirementSpec JSON。")

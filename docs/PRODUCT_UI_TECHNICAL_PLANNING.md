@@ -55,14 +55,47 @@ ProductPlan 使用 `business`、`navigation`、`interface`、`external`、`seque
 
 ProductPlan 中面向产品角色展示的验收标准，只描述生成应用的目标用户能够观察或完成的产品结果。XCodeAgent 自身的本地预览、代码生成、编译、构建、lint、typecheck、自动化/集成测试、质量门禁、工作流节点和“何时进入用户验收”等交付条件属于独立工程运行状态，不得写入应用产品验收标准；确定性归一化会剔除这类越界文案。
 
-正式 JSON 使用 `product-plan.v5`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。ProductPlan 不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
+正式 JSON 使用 `product-plan.v6`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。根级 `agents` 只承接 RequirementSpec 已确认的业务智能体，并定义用户可确认的业务能力、入口页面与操作、交互方式、状态要求、业务边界和验收标准；普通应用必须使用 `agents: []`。ProductPlan 不选择模型、Prompt、API、工具、Skill、知识库、运行时、存储或代码路径，也不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
 
 权限开启时，RequirementSpec 的每条 `restrictedPages` 都以已确认的 `targetPageId` 引用业务页面；服务端在模型输出校验后仅根据该稳定绑定确定性生成内部 `authorizationTargets.pageRules[{ruleId,pageId}]`，不得按页面展示名称匹配或猜测。操作规则必须为 `{ruleId,pageId,actionId}`。`actionId` 只在所属页面内唯一，不能脱离 `pageId` 作为权限目标；`stepId` 仅用于产品组合行为，绝不进入权限目标。ProductPlan 不保存资源键或角色授权；联合确认前只校验受控页面 `pageId`、受控操作 `<pageId>_<actionId>` 与固定 `system_authorization_management` 的全局候选是否碰撞，实际资源目录仍由 TechnicalPlan 编译。
 
 ```json
 {
-  "schema_version": "product-plan.v5",
+  "schema_version": "product-plan.v6",
   "app": {"name": "...", "summary": "..."},
+  "agents": [
+    {
+      "agentId": "order_assistant",
+      "name": "订单助手",
+      "purpose": "帮助用户理解订单状态并完成下一步操作",
+      "capabilities": [
+        {
+          "capabilityId": "explain_order_status",
+          "name": "解释订单状态",
+          "expectedResult": "用户理解当前状态及后续可执行操作"
+        }
+      ],
+      "entryPageIds": ["orders"],
+      "pageActionBindings": [
+        {"pageId": "orders", "actionIds": ["ask_order_assistant"]}
+      ],
+      "interaction": {
+        "mode": "conversation",
+        "supportsMultiTurn": true,
+        "inputDescription": "用户输入订单相关问题",
+        "outputDescription": "返回状态解释和业务建议",
+        "stateRequirements": {
+          "loading": "...",
+          "empty": "...",
+          "error": "...",
+          "success": "...",
+          "validation": "..."
+        }
+      },
+      "boundaries": ["不得绕过订单审批或直接修改受限状态"],
+      "acceptanceCriteria": ["能够根据当前订单上下文给出明确答复"]
+    }
+  ],
   "business_flows": [],
   "pages": [
     {
@@ -103,7 +136,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 }
 ```
 
-模型提示直接提供包含全部 RequirementSpec 页面身份的完整 JSON 响应示例；根对象只能包含 `app`、`business_flows`、`pages`、`product_acceptance_criteria`。页面、信息项、action、behavior、sequence step 和状态对象均拒绝未声明字段。`information_items` 必须是 JSON 对象，禁止把 Python/JSON 字典序列化成字符串。action 只表示用户主动触发且会改变可见状态、结果集、页面位置、业务信息或外部效果的产品意图。阅读、浏览、滚动或看见内容不是 action，应写入 `information_items` 或 `acceptance_criteria`；纯展示页面允许 `actions: []`。导航 action 必须声明 `targetPageId`，并同步进入 `navigation_targets`。
+模型提示直接提供包含全部 RequirementSpec 页面身份的完整 JSON 响应示例；根对象只能包含 `app`、`agents`、`business_flows`、`pages`、`product_acceptance_criteria`。`agents` 必须与 RequirementSpec 的 `agent_requirements` 按稳定 `agentId` 一一对应并保持顺序，能力名称、入口页面、交互模式和业务边界不得漂移；每个入口页面必须通过 `pageActionBindings` 引用该页面真实存在的 action。页面、智能体、能力、绑定、交互、信息项、action、behavior、sequence step 和状态对象均拒绝未声明字段。`information_items` 必须是 JSON 对象，禁止把 Python/JSON 字典序列化成字符串。action 只表示用户主动触发且会改变可见状态、结果集、页面位置、业务信息或外部效果的产品意图。阅读、浏览、滚动或看见内容不是 action，应写入 `information_items` 或 `acceptance_criteria`；纯展示页面允许 `actions: []`。导航 action 必须声明 `targetPageId`，并同步进入 `navigation_targets`。
 
 ### UiDesign
 

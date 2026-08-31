@@ -1,7 +1,7 @@
 # 智能体开发流程实现状态
 
 > 状态：当前事实台账
-> 基线日期：2026-08-27
+> 基线日期：2026-08-28
 > 变基目标：`origin/dev_agent` 的 `7b1eb34`
 > 原型功能基线：`603c10f`
 > 维护范围：智能体作为用户应用中的业务产物，从需求、设计、构建、测试、审查到验收的完整开发流程
@@ -33,15 +33,16 @@
 ## 3. 当前结论
 
 - `prototype/` 已实现业务智能体作为页面/API 同级产物的主要交互原型，包含设计确认、依赖检查、配置修订、代码 Diff、试聊预览和验收等状态。
-- 当前生产 `Backend/` 已开始在 RequirementSpec 中识别、归一化、校验和持久化业务智能体需求，并复用现有 Markdown 编辑与确认链路；ProductPlan、TechnicalPlan、工作台产物、构建与运行时仍未接入。
-- 因此当前总体状态是：**正式开发中，已完成 RequirementSpec 第一切片，尚未形成端到端智能体开发闭环**。
+- 当前生产 `Backend/` 已在 RequirementSpec 中识别、归一化、校验和持久化业务智能体需求，并由 ProductPlan v6 生成产品级智能体能力、入口页面/操作、交互状态、边界和验收契约；两者复用现有 Markdown 编辑与联合确认链路。
+- 正式前端需求文档面板已按需展示“智能体”章节，普通应用仍使用 `agents: []` 且不出现该章节。TechnicalPlan、工作台正式智能体产物、构建与运行时仍未接入。
+- 因此当前总体状态是：**正式开发中，已完成 RequirementSpec 与 ProductPlan 两个切片，尚未形成端到端智能体开发闭环**。
 - 原型脚本 `test:agent-development`、`test:new-app-agent-planning`、智能体配置样式测试与 `typecheck` 可作为原型验证入口；本次变基后已重新运行并通过。
 
 ## 4. 能力矩阵
 
 | 能力 | 原型状态 | 正式前端 | 正式后端/协议 | 当前缺口与下一步 |
 | --- | --- | --- | --- | --- |
-| 新建应用时声明业务智能体 | 原型已实现 | 复用现有需求文档 UI | 正式开发中 | RequirementSpec 已使用 `agent_requirements[]` 保存产品级职责、能力、入口页面、交互方式和业务边界；下一步由 ProductPlan 消费并规划正式智能体产物。 |
+| 新建应用时声明业务智能体 | 原型已实现 | 正式开发中 | 正式开发中 | RequirementSpec 使用 `agent_requirements[]` 保存业务需求；ProductPlan v6 生成产品级智能体契约并进入联合确认，前端按需展示智能体章节。下一步由 TechnicalPlan 定义实现依赖与运行时契约。 |
 | 智能体作为工作台同级产物 | 原型已实现 | 未开始 | 未开始 | 复用现有应用大纲、会话隔离、阶段状态和写锁，不新增平行工作台。 |
 | 模型、API、实体、知识依赖检查 | 原型已实现 | 未开始 | 未开始 | 定义正式引用契约、解析顺序、缺失依赖门禁及失效传播。 |
 | 十部分 Markdown 设计文档 | 原型已实现 | 未开始 | 未开始 | 决定正式产物 schema、Markdown/内部 JSON 同步和 revision/hash 机制。 |
@@ -93,7 +94,7 @@
 
 以下问题尚未由当前正式契约决定，任何实现批次不得自行假设：
 
-1. RequirementSpec 已确定使用 `agent_requirements[]` 保存产品级智能体需求；ProductPlan、TechnicalPlan 的字段归属、正式 artifact 名称与 schema 仍待确定。
+1. RequirementSpec 已确定使用 `agent_requirements[]` 保存产品级智能体需求，ProductPlan v6 已确定 `agents[]` 产品契约；TechnicalPlan 的实现字段、正式智能体 artifact 名称与 schema 仍待确定。
 2. 业务智能体运行时属于 XCodeAgent Python 后端、生成应用后端，还是通过受控适配层接入；不能因原型使用 Python 路径就直接确定。
 3. 智能体定义、工具适配、知识引用、配置和测试文件在生成应用中的正式目录与 owner。
 4. 模型、Skill、API、实体、知识库和页面之间的稳定引用结构及权限继承规则。
@@ -133,7 +134,7 @@
 - `Backend/app/workspace/spec_documents.py`
 - `Backend/tests/test_agent_requirement_spec.py`
 
-当前限制：ProductPlan v5 尚不消费 `agent_requirements`，因此确认后的智能体需求暂时不会生成工作台智能体产物；下一切片必须先完成 ProductPlan 当前契约扩展和联合确认闭环。
+当前限制：RequirementSpec 只定义用户需要什么智能体，不选择模型、API、工具、知识或运行时；这些实现事实必须等待后续 TechnicalPlan 切片。
 
 本切片验证：
 
@@ -150,3 +151,40 @@
 - 原型 `agent-development`、新建应用智能体规划、智能体配置样式三组脚本：通过；原型 TypeScript 检查和 Vite production bundle：通过。
 - 当前 shell 使用 Node 24.14.1，而仓库约定 Node 20.19.0；本机 pnpm 版本代理因受限网络无法校验并切换到 8.15.9，因此前端验证直接使用已安装在项目 `node_modules` 中的锁定二进制执行等价命令。
 - 原型全仓 ESLint 仍有 134 个错误和 2367 个警告，包含大量原型既有格式与显式类型问题；未在本次变基中自动修复或大面积改写。该结果不能记为原型全仓 Lint 通过。
+
+## 10. ProductPlan 第二切片
+
+2026-08-28 完成创建应用的智能体产品规划契约，范围只到 RequirementSpec + ProductPlan 联合确认，不提前决定技术实现：
+
+- ProductPlan 当前契约升级为 `product-plan.v6`，根对象固定包含 `agents`；普通应用必须使用空数组，历史 v5 不做迁移或兼容读取。
+- 每个智能体按 RequirementSpec 的稳定 `agentId` 一一对应，保留名称、职责、入口页面、交互模式和业务边界，并补充稳定能力 ID、能力预期结果、页面 action 绑定、五类交互状态和产品验收标准。
+- 每个 `entryPageId` 必须存在唯一 `pageActionBindings`，其中 action 必须真实存在于同一页面；模型输出遗漏、重复、越界引用或夹带技术字段都会在归一化前后被拒绝。
+- ProductPlan 明确禁止模型、Prompt、API、endpoint、工具、Skill、知识库、运行时、存储和代码路径；这些事实只能由后续 TechnicalPlan/详细设计决定。
+- ProductPlan Markdown 增加“智能体产品规划”章节，用户编辑后继续通过现有同步链路回写结构化 JSON，同时保护 RequirementSpec 已确认的稳定身份和边界。
+- 正式前端联合确认视图只在存在智能体时增加“智能体”页签，展示能力、入口/操作、交互状态、边界和验收标准；普通应用的概览、页面与业务流程视图不变。
+- 本切片没有新增产品 Endpoint、AG-UI 事件、依赖、平行工作流，也没有实现 TechnicalPlan 智能体运行时契约、工作台智能体产物或代码生成。
+
+正式代码证据：
+
+- `Backend/app/services/product_plan.py`
+- `Backend/app/agents/main/product_planner.py`
+- `Backend/app/agents/main/document_sync.py`
+- `Backend/app/workspace/product_plan_documents.py`
+- `Frontend/src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocPanel.tsx`
+- `Frontend/src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementAgentSection.tsx`
+- `Frontend/src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocPanelData.ts`
+- `Backend/tests/test_agent_product_plan.py`
+- `Frontend/tests/agentProductPlan.test.ts`
+
+当前限制：本切片只闭合“用户要什么智能体、从哪里进入、能做什么、用户看到什么结果”。模型/API/工具/知识依赖、生成目录、运行时配置、测试与验收证据仍属于后续切片，不能把原型字段直接复制进 ProductPlan。
+
+本切片验证：
+
+- `.venv/bin/python -m unittest tests.test_agent_product_plan -v`：6 项通过，覆盖普通应用空数组、智能体稳定引用、技术字段拒绝、模型输出覆盖、提示词边界、Markdown 同步与能力 ID 保持。
+- ProductPlan、RequirementSpec、规划重试、联合确认、模板生成、Workflow 请求和消息兼容定向回归：170 项通过。
+- 包含生命周期旧测试的扩大回归共执行 188 项，其中 181 项通过、7 项错误；错误均为测试继续引用已删除的 `GENERATING_REQUIREMENT_SPEC` / `AWAITING_REQUIREMENT_CONFIRMATION` 枚举，未指向 ProductPlan v6 或 `agents` 字段。本结果不能记为扩大回归全绿。
+- 所有变更 Python 文件 `py_compile`：通过；正式后端 `/health`：HTTP 200，`status=ok`，公开协议已报告 `product-plan.v6`。
+- 正式前端智能体产品规划测试 2 项、规划产物状态测试 5 项：通过；Node/Web TypeScript 检查与 Electron-Vite development bundle：通过。
+- 本次触及的前端文件定向 ESLint 和 Prettier：通过；全仓 ESLint 运行约 90 秒无输出且未结束，已中止，不能记为全仓 Lint 通过。
+- Electron 实机 UI 检查因 macOS 处于锁屏状态无法执行；自动化未尝试绕过锁屏，因此智能体页签的真实窗口交互、明暗主题和视觉布局仍待解锁后验收。
+- 当前 shell 为 Node 24.14.1，仓库约定 Node 20.19.0；系统 pnpm 版本代理拒绝切换，前端验证直接使用仓库已安装的锁定工具二进制完成。

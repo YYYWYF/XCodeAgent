@@ -17,6 +17,7 @@
     "test:message-list-scroll": "node scripts/run-message-list-scroll-tests.mjs",
     "test:managed-workspace": "node scripts/run-managed-workspace-tests.mjs",
     "test:application-authorization": "node scripts/run-application-authorization-tests.mjs",
+    "test:agent-product-plan": "node scripts/run-agent-product-plan-tests.mjs",
     "test:planning-artifact-status": "node scripts/run-planning-artifact-status-tests.mjs",
     "test:preview-inspector": "node scripts/run-preview-inspector-tests.mjs",
     "test:project-deletion": "node scripts/run-project-deletion-tests.mjs",

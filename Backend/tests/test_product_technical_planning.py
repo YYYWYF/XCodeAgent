@@ -121,8 +121,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
 
         self.assertTrue(any("requirement_spec_sha256" in error for error in errors))
 
-    def test_product_plan_v5_keeps_only_pages_and_closes_navigation(self) -> None:
-        """v5 必须规范产品行为，并从导航操作闭合页面跳转。"""
+    def test_product_plan_v6_keeps_only_pages_and_closes_navigation(self) -> None:
+        """v6 必须规范产品行为，并从导航操作闭合页面跳转。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
         first_page, second_page = requirement_spec["pages"][:2]
@@ -154,7 +154,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
 
         page = product_plan["pages"][0]
-        self.assertEqual(product_plan["schema_version"], "product-plan.v5")
+        self.assertEqual(product_plan["schema_version"], "product-plan.v6")
         self.assertNotIn("frontend_pages", product_plan)
         self.assertEqual(page["information_items"][0]["itemId"], "inventory-summary")
         self.assertIsInstance(page["information_items"][0], dict)
@@ -819,7 +819,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertNotIn("确认需求摘要：旧需求：使用统一喜好列表页。", markdown)
 
     def test_product_model_example_contains_every_page_and_no_duplicate_tree(self) -> None:
-        """模型完整 JSON 示例必须展开全部页面，并且只保留 pages。"""
+        """模型完整 JSON 示例必须展开全部页面和智能体产品契约。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
         example = json.loads(_product_plan_json_example(requirement_spec))
@@ -830,7 +830,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
         self.assertEqual(
             set(example),
-            {"app", "business_flows", "pages", "product_acceptance_criteria"},
+            {"app", "agents", "business_flows", "pages", "product_acceptance_criteria"},
         )
         self.assertNotIn("frontend_pages", example)
 

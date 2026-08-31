@@ -78,6 +78,17 @@ def _sync_prompt(
         "Preserve each hidden <!-- ruleId:... --> marker for an unchanged permission candidate; never invent it or emit dataRules, dataRuleKey, unauthorizedBehavior, or unauthenticated.\n\n"
         if artifact_name == "RequirementSpec"
         else (
+            "For ProductPlan, preserve agents as the product-visible business-agent contract. Every agent "
+            "must keep the confirmed RequirementSpec agentId, name, purpose, entryPageIds, interaction mode, "
+            "and boundaries. Synchronize capability expected results, pageActionBindings, interaction product "
+            "states, and acceptanceCriteria from the edited Markdown while preserving stable capabilityId, "
+            "pageId, and actionId references for unchanged content. Never add model/modelId, prompt, API or "
+            "endpoint details, tools, skills, knowledge sources, storage, runtime, implementation classes, "
+            "code paths, or build/test workflow fields. Return agents=[] when the confirmed RequirementSpec "
+            "contains no business agents.\n\n"
+        )
+        if artifact_name == "ProductPlan"
+        else (
             "For TechnicalPlan, preserve the complete top-level entities array with RequirementSpec "
             "ids/names/descriptions and the confirmed snake_case field definitions. API contracts bind "
             "one or more entities through entity_ids only. Never emit data_source_id, a top-level "

@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 from typing import Any, Callable
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
@@ -487,6 +487,12 @@ def _invoke_prompt_with_chat_model(
         if isinstance(chunk, AIMessageChunk):
             token = chunk.content
             if isinstance(token, str) and token:
+                accumulated_text += token
+                on_token(token)
+        elif isinstance(chunk, AIMessage):
+            # 原生流式关闭时 stream() 会回退为单个完整消息，不能丢弃正文。
+            token = _coerce_content_text(chunk.content)
+            if token:
                 accumulated_text += token
                 on_token(token)
     return accumulated_text
