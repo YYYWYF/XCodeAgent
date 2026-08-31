@@ -344,7 +344,7 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 
 `stages[].output` 是严格的 `kind` 判别联合：`unit_graph` 包含 Unit（id/type/status/taskCount）、Unit 依赖边和骨架校验；`build_context` 包含目标 type/id、关联 Unit/Endpoint/API Contract/数据源及数据库摘要状态；`contract_validation` 包含校验范围、通过状态和问题；`candidate_tasks` 包含候选任务、负责人、依赖和 owner 汇总；`compiled_tasks` 包含最终拓扑任务、变更文件、工程检查摘要、任务依赖边和 owner 汇总；`dag_validation` 包含根/叶任务、拓扑顺序、执行批次（串/并行）和校验错误；`artifacts` 仅包含 `build-task-plan.json` 的 JSON 安全标签和确认状态。列表字段最多 200 条、文本最多 1000 字符，依赖边最多 500 条并带 `truncated` 标记；顶层 `tasks`、`artifacts` 仅作为安全投影保留。阶段完成或失败后产物冻结，后续阶段更新不得覆盖早期详情。历史会话重入时，前端以已完成 Workflow 事件、状态和结果中的 DAG 快照回填已持久化的步骤；若多个来源同时存在，优先选择包含更多阶段 `output` 的完整快照，避免旧的中间进度帧覆盖完成产物。
 
-任务规划提示词按实际可替换 Unit 渐进注入上下文：endpoint Unit 获得 TechnicalPlan Endpoint、绑定实体摘要和当前数据源 Skill，page Unit 获得页面实现契约和前端事实；两类 Unit 同轮待生成时才组合当前范围。执行 Agent 使用 `source_refs.entity_designs` 选择相同 Skill，bootstrap 只继承 database 实体。
+任务规划提示词按实际可替换 Unit 渐进注入上下文：endpoint Unit 获得 TechnicalPlan Endpoint、绑定实体摘要和后端数据源规则，page Unit 获得页面实现契约和前端事实；两类 Unit 同轮待生成时才组合当前范围。任务规划阶段不读取或注入 Skill 内容；执行 Agent 仍使用 `source_refs.entity_designs` 选择对应 Skill，bootstrap 只继承 database 实体。
 
 该节点的结构化产物必须落盘，供后续恢复执行和单节点验证使用：
 

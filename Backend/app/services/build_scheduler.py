@@ -442,6 +442,14 @@ def attribute_task_file_changes(
                 for path in changed_paths
                 if _path_matches_any(path, authorized_paths)
             ]
+            attributed_result["acceptance_status"] = {
+                **(
+                    result.get("acceptance_status")
+                    if isinstance(result.get("acceptance_status"), dict)
+                    else {}
+                ),
+                "engineering": "skipped",
+            }
         attributed.append(attributed_result)
     return attributed
 

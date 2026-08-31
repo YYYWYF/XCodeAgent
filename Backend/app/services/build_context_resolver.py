@@ -13,6 +13,10 @@ from app.services.entity_definitions import (
     missing_entity_design_ids,
     plan_data_sources,
 )
+from app.services.entity_design import (
+    entity_design_endpoint_binding_errors,
+    entity_design_validation_errors,
+)
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 
 
@@ -40,9 +44,26 @@ def _endpoint_entity_designs(
     """读取 endpoint 所属契约的已确认实体设计，并返回缺失设计清单。"""
 
     contract = _endpoint_contract(project_plan, endpoint)
+    confirmed = confirmed_entity_designs(project_plan, contract)
+    invalid_ids = [
+        str(detail.get("entity_id") or "")
+        for detail in confirmed
+        if entity_design_validation_errors(project_plan, detail)
+        or entity_design_endpoint_binding_errors(
+            project_plan,
+            detail,
+            api_contract_id=str(endpoint.get("api_contract_id") or ""),
+            endpoint_id=str(endpoint.get("id") or ""),
+        )
+    ]
+    missing_ids = missing_entity_design_ids(project_plan, contract)
     return (
-        confirmed_entity_designs(project_plan, contract),
-        missing_entity_design_ids(project_plan, contract),
+        [
+            detail
+            for detail in confirmed
+            if str(detail.get("entity_id") or "") not in invalid_ids
+        ],
+        list(dict.fromkeys([*missing_ids, *invalid_ids])),
     )
 
 
@@ -164,7 +185,14 @@ def _page_context(
         "endpoint_ids": endpoint_ids,
         "required_endpoint_ids": endpoint_ids,
         "entity_ids": entity_ids,
-        "entity_designs": entity_design_summaries(project_plan, entity_ids),
+        "entity_designs": entity_design_summaries(
+            project_plan,
+            entity_ids,
+            {
+                (str(item.get("api_contract_id") or ""), str(item.get("id") or ""))
+                for item in endpoint_contracts
+            },
+        ),
         "required_unit_ids": [
             "frontend:shell",
             *(["frontend:api-client"] if not all_static else []),
@@ -246,7 +274,11 @@ def _endpoint_context(
         "endpoint_ids": [endpoint_id],
         "required_endpoint_ids": [endpoint_id],
         "entity_ids": entity_ids,
-        "entity_designs": entity_design_summaries(project_plan, entity_ids),
+        "entity_designs": entity_design_summaries(
+            project_plan,
+            entity_ids,
+            {(contract_id, endpoint_id)},
+        ),
         "required_unit_ids": required_unit_ids,
         "source_refs": {
             "technical_plan_endpoint": {

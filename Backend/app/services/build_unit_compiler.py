@@ -294,19 +294,34 @@ def _unit_source_refs(
             "entity_designs": _filter_entity_designs_by_source(entity_designs, {"static"}),
         }
     if unit_id.startswith("backend:endpoint:"):
+        contract_id, endpoint_id = _backend_endpoint_identity(unit_id)
+        endpoint_ids = [endpoint_id]
+        endpoint_refs = _matching_endpoint_refs(
+            refs.get("technical_plan_endpoints"),
+            endpoint_ids,
+        )
         return {
             **existing,
             "type": "technical_plan_endpoint",
-            "target": target,
-            "technical_plan_endpoint": _dict_value(refs.get("technical_plan_endpoint")),
-            "technical_plan_endpoints": _matching_endpoint_refs(
-                refs.get("technical_plan_endpoints"),
-                _string_list(build_context.get("endpoint_ids")),
+            "target": {
+                "type": "endpoint",
+                "id": endpoint_id,
+                "api_contract_id": contract_id,
+            },
+            "technical_plan_endpoint": (
+                endpoint_refs[0]
+                if endpoint_refs
+                else _dict_value(refs.get("technical_plan_endpoint"))
             ),
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_designs": _filter_entity_designs_by_source(
-                entity_designs,
-                {"database", "external_api"},
+            "technical_plan_endpoints": endpoint_refs,
+            "endpoint_ids": endpoint_ids,
+            "entity_designs": _scope_entity_designs_to_endpoint(
+                _filter_entity_designs_by_source(
+                    entity_designs,
+                    {"database", "external_api"},
+                ),
+                contract_id=contract_id,
+                endpoint_id=endpoint_id,
             ),
         }
     if unit_id == "backend:bootstrap":
@@ -382,6 +397,51 @@ def _filter_entity_designs_by_source(
         for design in entity_designs
         if str(design.get("data_source_type") or "").strip() in allowed_source_types
     ]
+
+
+def _backend_endpoint_identity(unit_id: str) -> tuple[str, str]:
+    """从当前 backend:endpoint Unit 标识提取稳定契约与 Endpoint 身份。"""
+
+    parts = str(unit_id or "").split(":", 3)
+    if len(parts) != 4 or parts[:2] != ["backend", "endpoint"]:
+        return "", ""
+    return parts[2].strip(), parts[3].strip()
+
+
+def _scope_entity_designs_to_endpoint(
+    entity_designs: list[dict[str, Any]],
+    *,
+    contract_id: str,
+    endpoint_id: str,
+) -> list[dict[str, Any]]:
+    """按 Unit Endpoint 裁剪外部 API 操作，数据库实体设计保持原样。"""
+
+    scoped: list[dict[str, Any]] = []
+    target_ref = (contract_id, endpoint_id)
+    for design in entity_designs:
+        copied = deepcopy(design)
+        if str(copied.get("data_source_type") or "") != "external_api":
+            scoped.append(copied)
+            continue
+        external = _dict_value(copied.get("external_api_design"))
+        operations = []
+        for operation in _entity_design_items(external.get("operations")):
+            refs = {
+                (
+                    str(ref.get("api_contract_id") or "").strip(),
+                    str(ref.get("endpoint_id") or "").strip(),
+                )
+                for ref in _entity_design_items(operation.get("endpoint_refs"))
+            }
+            if target_ref in refs:
+                operations.append(deepcopy(operation))
+        copied["external_api_design"] = {
+            **external,
+            "operation_count": len(operations),
+            "operations": operations,
+        }
+        scoped.append(copied)
+    return scoped
 
 
 def _matching_endpoint_refs(

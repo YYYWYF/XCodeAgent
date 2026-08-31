@@ -479,8 +479,8 @@ Repository 检查不证明真实 SQL 结果，ApplicationService 检查不证明
 
 | 交付物 | 业务输入 | 检查类型 | 验证重点 |
 | --- | --- | --- | --- |
-| `backend.external_api_client` | EntityDesign `external_api_design.api_info` | `backend.external_api_client_contract` | 上游 method/path、请求/响应 DTO、项目公共 HTTP Client、禁止凭空增加地址/字段或引入持久化代码 |
-| `backend.external_api_mapping` | EntityDesign `external_api_design.field_mappings`、API Schema | `backend.external_api_mapping_contract` | 每个 source_field 到 entity_field 的映射、嵌套路径、必要类型/枚举转换、映射责任不落入 Controller |
+| `backend.external_api_client` | EntityDesign `external_api_design.connection + operations[]` | `backend.external_api_client_contract` | 当前 Endpoint 关联操作的有效连接、上游 method/path、请求/响应 DTO、项目公共 HTTP Client；相同 `operation_id` 复用 Client 方法，禁止凭空增加地址/字段或引入持久化代码 |
+| `backend.external_api_mapping` | EntityDesign `external_api_design.operations[].response_handling + field_mappings`、API Schema | `backend.external_api_mapping_contract` | `entity_payload=true` 操作的载荷路径及每个 source_field 到 entity_field 映射、嵌套路径、必要类型/枚举转换；非实体响应不虚构映射，映射责任不落入 Controller |
 
 当前 Build 上下文的外部 API 实体摘要只包含 `mapping_count`，不足以生成字段级映射检查。
 BusinessAcceptanceCompiler 必须直接读取已确认 EntityDesign 的完整必需 `field_mappings` 切片并记录哈希；

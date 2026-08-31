@@ -153,7 +153,7 @@
 | DRI / 审核人 / 批准人 | task_preparer / build_task_planner 负责人；模型候选任务由确定性编译器“审核” |
 | 目标与非目标 | 目标：按 scope 编译后端/前端可执行任务 DAG（后端四阶段 stage 拆分、页面 API 服务文件、菜单登记）。非目标：模型不得生成数据库、验证或测试任务；不得越过 required Unit；不重建模板骨架 |
 | 触发条件 / 前置条件 | 上游 `inspect_workspace`；`resume_from=prepare_build_tasks`；前置：ProjectPlan confirmed（未确认先走确认/修订分支）、目标详情和绑定实体设计存在 |
-| 当前提示词及源码位置 | `agents/main/task_preparer.py::_task_preparation_prompt`（内联 springboot-mybatis-generate SKILL.md 全文、后端真实目录树、Java 8 约束、四阶段 stage 规则）；Static 走 `_static_task_preparation_prompt` |
+| 当前提示词及源码位置 | `agents/main/task_preparer_prompt.py::build_task_preparation_prompt`（规划器自有七段规则、后端真实目录树、Java 8 约束、四阶段 stage 规则；不读取或内联 Skill）；Static 复用同一 Prompt 的范围化规则 |
 | 输入 | 确认 ProjectPlan、`build_execution_scope`、PageDetail/EndpointDetail、有界实体设计摘要、WorkspaceSnapshot（裁剪到 80 项/12k 字符）、已有 DAG、可复用 Unit |
 | 输出 | `build-dag.v3`（build_units/unit_graph/task_registry/task_graph/tasks/execution batches）、`build_context`、`dag_generation_progress` 七阶段快照、`.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md` |
 | 成功与校验规则 | Unit skeleton 合法；契约校验（页面依赖、API contract scope）；模型任务归一化后强制置空验收字段，工程验收由确定性编译器按 change_scope/allowed_paths/菜单/API 契约生成；正常 Build 不含 database Unit/owner；任务 ID/依赖/拓扑/循环/批次校验；页面 PageKey 与实时唯一目录纠正、漏报菜单登记时确定性补齐 |

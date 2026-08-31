@@ -309,10 +309,10 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 )
 
         results_by_id = {result["task_id"]: result for result in results}
-        self.assertEqual(results_by_id["backend-bootstrap"]["status"], "failed")
-        self.assertIn(
-            "MyBatisPlusConfig.java",
-            results_by_id["backend-bootstrap"]["failure_reason"],
+        self.assertEqual(results_by_id["backend-bootstrap"]["status"], "completed")
+        self.assertEqual(
+            results_by_id["backend-bootstrap"]["acceptance_status"],
+            {"engineering": "skipped", "business": "skipped"},
         )
         self.assertEqual(results_by_id["frontend-api"]["status"], "completed")
         self.assertEqual(
@@ -321,7 +321,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(
             results_by_id["frontend-api"]["acceptance_status"],
-            {"engineering": "passed", "business": "skipped"},
+            {"engineering": "skipped", "business": "skipped"},
         )
 
     def test_business_acceptance_is_skipped_by_default(self) -> None:
@@ -359,8 +359,8 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             "skipped",
         )
 
-    def test_business_acceptance_runs_after_engineering_failure(self) -> None:
-        """工程验收失败后仍须独立执行业务验收，并保留两类失败证据。"""
+    def test_business_acceptance_runs_without_engineering_verification(self) -> None:
+        """跳过工程验收后仍须独立执行业务验收并保留业务失败证据。"""
 
         task = {
             "id": "frontend-api",
@@ -445,18 +445,11 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(
             result["acceptance_status"],
-            {"engineering": "failed", "business": "failed"},
+            {"engineering": "skipped", "business": "failed"},
         )
-        self.assertIn("extraApi.ts", result["failure_reason"])
         self.assertIn("业务验收未通过", result["failure_reason"])
         self.assertNotIn("API 契约不匹配", result["failure_reason"])
-        self.assertTrue(result["acceptance_evidence"])
-        self.assertTrue(
-            any(
-                "extraApi.ts" in str(item.get("error") or "")
-                for item in result["acceptance_evidence"]
-            )
-        )
+        self.assertNotIn("acceptance_evidence", result)
         self.assertTrue(result["business_acceptance_evidence"])
 
     def test_file_changes_are_attributed_to_each_task_scope(self) -> None:
@@ -483,8 +476,8 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual(results[1]["status"], "completed")
         self.assertEqual(results[1]["changed_files"], [])
 
-    def test_build_owner_execution_runs_engineering_and_business_verification(self) -> None:
-        """代码生成完成后必须先执行工程验收，再执行当前业务检查。"""
+    def test_build_owner_execution_skips_engineering_verification(self) -> None:
+        """代码生成完成后只归属真实差异，不再执行逐项工程验收。"""
 
         task = {
             "id": "page",
@@ -514,15 +507,9 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             return [{"task_id": "page", "owner": "frontend", "status": "completed"}]
 
         with tempfile.TemporaryDirectory() as workspace:
-            with (
-                patch(
-                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
-                    side_effect=complete_runner,
-                ),
-                patch(
-                    "app.graph.subgraphs.build.verify_task_file_changes",
-                    side_effect=lambda **kwargs: kwargs["results"],
-                ) as acceptance_verifier,
+            with patch(
+                "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                side_effect=complete_runner,
             ):
                 results, _ = _execute_ready_tasks(
                     {
@@ -535,7 +522,10 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
 
         self.assertEqual(results[0]["status"], "completed")
         self.assertEqual(results[0]["changed_files"], ["Frontend/src/Page.tsx"])
-        acceptance_verifier.assert_called_once()
+        self.assertEqual(
+            results[0]["acceptance_status"],
+            {"engineering": "skipped", "business": "skipped"},
+        )
 
     def test_build_scheduler_runs_dependency_order_until_complete(self) -> None:
         runner_skill_sets: list[list[str] | None] = []

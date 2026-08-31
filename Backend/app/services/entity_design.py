@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import datetime
+from urllib.parse import urlparse
 from copy import deepcopy
 from typing import Any
 
@@ -46,7 +47,6 @@ ENTITY_DESIGN_STAGE_CONFIRMED = "confirmed"
 
 ENTITY_DESIGN_ACTIONS = {
     "select_data_source",
-    "submit_external_api",
     "submit_static_data",
     "submit_bindings",
     "approve_table_generation",
@@ -63,6 +63,55 @@ _MAX_BINDINGS = 200
 _MAX_DIFFERENCES = 200
 _MAX_OPERATIONS = 100
 _MAX_SEED_ROWS = 200
+_MAX_API_PARAMETERS = 100
+_MAX_API_HEADERS = 50
+_MAX_API_MAPPING_ROWS = 200
+_MAX_API_OPERATIONS = 50
+_MAX_API_ENDPOINT_REFS = 100
+_MAX_API_PATH_LENGTH = 1000
+_MAX_API_CONFIG_KEY_LENGTH = 128
+_MAX_API_TIMEOUT_MS = 120000
+_SUPPORTED_API_METHODS = {"GET", "POST", "PUT", "DELETE"}
+_SENSITIVE_API_HEADERS = {
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "api-key",
+    "x-auth-token",
+}
+_FORBIDDEN_API_AUTH_FIELDS = {
+    "auth",
+    "authentication",
+    "authorization",
+    "credentials",
+    "credential",
+    "secret",
+    "secrets",
+    "apikey",
+    "bearertoken",
+    "accesstoken",
+    "oauth",
+}
+
+
+def _compact_security_name(value: Any) -> str:
+    """压缩鉴权字段或 Header 名称，统一识别连字符、下划线和大小写变体。"""
+
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _is_sensitive_api_header(value: Any) -> bool:
+    """判断 Header 是否承载常见凭据，避免 API Key/Token 变体进入正式产物。"""
+
+    lowered = str(value or "").strip().casefold()
+    compact = _compact_security_name(lowered)
+    return (
+        lowered in _SENSITIVE_API_HEADERS
+        or compact in {"authorization", "proxyauthorization", "cookie", "setcookie"}
+        or compact.endswith(("apikey", "authtoken", "accesstoken", "bearertoken"))
+    )
 
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:
@@ -134,10 +183,6 @@ def normalize_entity_design_action(value: Any) -> dict[str, Any] | None:
             return None
         normalized["data_source_type"] = raw_source_type
         return normalized
-    if action == "submit_external_api":
-        api_info = value.get("api_info") if isinstance(value.get("api_info"), dict) else {}
-        normalized["api_info"] = _normalize_external_api_info(api_info)
-        return normalized
     if action == "submit_static_data":
         normalized["seed_rows"] = _bounded_dict_list(value.get("seed_rows"), _MAX_SEED_ROWS)
         field_values = value.get("field_values")
@@ -170,6 +215,11 @@ def normalize_entity_design_action(value: Any) -> dict[str, Any] | None:
         if assist_type not in SUPPORTED_ASSIST_TYPES:
             return None
         normalized["assist_type"] = assist_type
+        operation_id = str(value.get("operation_id") or "").strip()[:160]
+        if assist_type == "api_mapping":
+            if not operation_id:
+                return None
+            normalized["operation_id"] = operation_id
         instruction = str(value.get("instruction") or "").strip()[:2000]
         if instruction:
             normalized["instruction"] = instruction
@@ -205,7 +255,11 @@ def normalize_entity_design_action(value: Any) -> dict[str, Any] | None:
         for key in ("database_design", "external_api_design", "static_design"):
             design = value.get(key)
             if isinstance(design, dict):
-                normalized[key] = design
+                normalized[key] = (
+                    _normalize_external_api_design(design)
+                    if key == "external_api_design"
+                    else design
+                )
         normalized["business_rules"] = _bounded_dict_list(
             value.get("business_rules"), _MAX_BINDINGS
         )
@@ -220,20 +274,268 @@ def normalize_entity_design_action(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def _normalize_external_api_info(value: Any) -> dict[str, Any]:
-    """规整外部 API 信息：路径、请求方式、请求体与返回体。"""
+def _normalize_external_api_headers(
+    value: Any,
+    validation_errors: list[str],
+) -> list[dict[str, str]]:
+    """规整非敏感固定 Header，并把被拒绝的凭据名称写入校验错误。"""
+
+    headers: list[dict[str, str]] = []
+    rejected_headers: list[str] = []
+    if isinstance(value, list) and len(value) > _MAX_API_HEADERS:
+        validation_errors.append(f"外部 API Header 最多 {_MAX_API_HEADERS} 个。")
+    for item in _dict_items(value)[:_MAX_API_HEADERS]:
+        name = str(item.get("name") or "").strip()[:120]
+        if not name:
+            if str(item.get("value") or "").strip():
+                validation_errors.append("外部 API Header 填写固定值时必须同时填写名称。")
+            continue
+        if _is_sensitive_api_header(name):
+            rejected_headers.append(name)
+            continue
+        headers.append({"name": name, "value": str(item.get("value") or "")[:1000]})
+    if rejected_headers:
+        validation_errors.append(f"不支持敏感 Header：{', '.join(rejected_headers)}")
+    return headers
+
+
+def _normalize_external_api_connection(value: Any) -> dict[str, Any]:
+    """规整实体级共享连接配置，连接信息不包含任何鉴权字段。"""
+
+    if not isinstance(value, dict):
+        value = {}
+    errors: list[str] = []
+    if any(_compact_security_name(key) in _FORBIDDEN_API_AUTH_FIELDS for key in value):
+        errors.append("外部 API 连接不允许提交鉴权或凭据字段。")
+    timeout_raw = value.get("timeout_ms", 10000)
+    try:
+        timeout_ms = int(timeout_raw)
+    except (TypeError, ValueError):
+        timeout_ms = 10000
+    normalized = {
+        "base_url": str(value.get("base_url") or "").strip()[:2000],
+        "base_url_config_key": str(value.get("base_url_config_key") or "").strip()[:_MAX_API_CONFIG_KEY_LENGTH],
+        "timeout_ms": max(100, min(timeout_ms, _MAX_API_TIMEOUT_MS)),
+        "headers": _normalize_external_api_headers(value.get("headers"), errors),
+    }
+    if errors:
+        normalized["validation_errors"] = list(dict.fromkeys(errors))
+    return normalized
+
+
+def _normalize_external_api_connection_override(value: Any) -> dict[str, Any]:
+    """规整单操作连接覆盖，只保留 URL、配置键和超时。"""
 
     if not isinstance(value, dict):
         return {}
-    method = str(value.get("method") or "GET").strip().upper()
-    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+    normalized: dict[str, Any] = {}
+    validation_errors: list[str] = []
+    if any(_compact_security_name(key) in _FORBIDDEN_API_AUTH_FIELDS for key in value):
+        validation_errors.append("外部 API 操作连接覆盖不允许提交鉴权或凭据字段。")
+    if "headers" in value:
+        _normalize_external_api_headers(value.get("headers"), validation_errors)
+    if "base_url" in value:
+        normalized["base_url"] = str(value.get("base_url") or "").strip()[:2000]
+    if "base_url_config_key" in value:
+        normalized["base_url_config_key"] = str(value.get("base_url_config_key") or "").strip()[:_MAX_API_CONFIG_KEY_LENGTH]
+    if "timeout_ms" in value:
+        try:
+            timeout_ms = int(value.get("timeout_ms"))
+        except (TypeError, ValueError):
+            timeout_ms = 10000
+        normalized["timeout_ms"] = max(100, min(timeout_ms, _MAX_API_TIMEOUT_MS))
+    if validation_errors:
+        normalized["validation_errors"] = validation_errors
+    return normalized
+
+
+def _normalize_external_api_info(value: Any) -> dict[str, Any]:
+    """规整单个外部 API 操作的请求、请求体与返回体。"""
+
+    if not isinstance(value, dict):
+        return {}
+    validation_errors: list[str] = []
+    raw_method = str(value.get("method") or "GET").strip().upper()
+    method = raw_method
+    if method not in _SUPPORTED_API_METHODS:
+        validation_errors.append(f"不支持的外部 API 请求方式：{raw_method or '空'}。")
         method = "GET"
+    forbidden_fields = [
+        str(key)
+        for key in value
+        if _compact_security_name(key) in _FORBIDDEN_API_AUTH_FIELDS
+    ]
+    if forbidden_fields:
+        validation_errors.append(
+            f"外部 API 首版不允许提交鉴权字段：{', '.join(forbidden_fields)}。"
+        )
+    parameters: list[dict[str, Any]] = []
+    if isinstance(value.get("parameters"), list) and len(value["parameters"]) > _MAX_API_PARAMETERS:
+        validation_errors.append(f"外部 API 参数最多 {_MAX_API_PARAMETERS} 个。")
+    for item in _dict_items(value.get("parameters"))[:_MAX_API_PARAMETERS]:
+        name = str(item.get("name") or "").strip()[:120]
+        location = str(item.get("in") or "query").strip().lower()
+        if not name or location not in {"path", "query"}:
+            validation_errors.append("外部 API 参数必须提供合法名称和位置（path/query）。")
+            continue
+        parameter_type = str(item.get("type") or "string").strip().lower()
+        if parameter_type not in {"string", "number", "boolean"}:
+            validation_errors.append(f"外部 API 参数 {name} 的类型必须是 string、number 或 boolean。")
+            parameter_type = "string"
+        parameter: dict[str, Any] = {
+            "name": name,
+            "in": location,
+            "type": parameter_type,
+            "required": bool(item.get("required")),
+        }
+        if item.get("example") is not None:
+            parameter["example"] = _bounded_json_like(item.get("example"))
+        parameters.append(parameter)
+    headers = _normalize_external_api_headers(value.get("headers"), validation_errors)
     return {
         "path": str(value.get("path") or "").strip()[:1000],
         "method": method,
+        "parameters": parameters,
+        "headers": headers,
         "request_body": _bounded_json_like(value.get("request_body")),
         "response_body": _bounded_json_like(value.get("response_body")),
+        **({"validation_errors": list(dict.fromkeys(validation_errors))} if validation_errors else {}),
     }
+
+
+def _normalize_external_api_response_handling(value: Any) -> dict[str, Any]:
+    """规整单操作响应语义，非实体响应会清除载荷、分页和映射相关字段。"""
+
+    response = value if isinstance(value, dict) else {}
+    entity_payload = response.get("entity_payload") is not False
+    cardinality = str(response.get("cardinality") or "object").strip().lower()
+    if cardinality not in {"object", "array", "page"}:
+        cardinality = "object"
+    if not entity_payload:
+        cardinality = "object"
+    success_codes: list[int] = []
+    raw_codes = response.get("success_status_codes")
+    if isinstance(raw_codes, list):
+        for code in raw_codes[:20]:
+            try:
+                number = int(code)
+            except (TypeError, ValueError):
+                continue
+            if 100 <= number <= 599 and number not in success_codes:
+                success_codes.append(number)
+    if not success_codes:
+        success_codes = [200]
+    normalized: dict[str, Any] = {
+        "entity_payload": entity_payload,
+        "cardinality": cardinality,
+        "payload_path": (
+            str(response.get("payload_path") or "").strip()[:_MAX_API_PATH_LENGTH]
+            if entity_payload
+            else ""
+        ),
+        "success_status_codes": success_codes,
+    }
+    error_path = str(response.get("error_message_path") or "").strip()
+    if error_path:
+        normalized["error_message_path"] = error_path[:_MAX_API_PATH_LENGTH]
+    if entity_payload:
+        total_path = str(response.get("total_path") or "").strip()
+        if total_path:
+            normalized["total_path"] = total_path[:_MAX_API_PATH_LENGTH]
+        pagination = response.get("pagination")
+        if isinstance(pagination, dict):
+            try:
+                page_index_base = int(pagination.get("page_index_base", 1))
+            except (TypeError, ValueError):
+                page_index_base = 1
+            normalized["pagination"] = {
+                "page_parameter": str(pagination.get("page_parameter") or "").strip()[:120],
+                "size_parameter": str(pagination.get("size_parameter") or "").strip()[:120],
+                "page_index_base": 0 if page_index_base == 0 else 1,
+            }
+    return normalized
+
+
+def _normalize_external_api_mappings(value: Any) -> list[dict[str, Any]]:
+    """规整单操作实体字段映射，并限制映射数量与路径长度。"""
+
+    mappings: list[dict[str, Any]] = []
+    for item in _dict_items(value)[:_MAX_API_MAPPING_ROWS]:
+        entity_field = str(item.get("entity_field") or "").strip()[:160]
+        source_field = str(item.get("source_field") or "").strip()[:_MAX_API_PATH_LENGTH]
+        if not entity_field:
+            continue
+        rule = str(item.get("rule") or "manual").strip().lower()
+        if rule not in {"same_name", "nested_match", "ai", "manual"}:
+            rule = "manual"
+        mappings.append({"entity_field": entity_field, "source_field": source_field, "rule": rule})
+    return mappings
+
+
+def _normalize_external_api_design(value: Any) -> dict[str, Any]:
+    """规整共享连接与多个上游操作组成的当前外部 API 契约。"""
+
+    if not isinstance(value, dict):
+        return {}
+    errors = _string_list(value.get("validation_errors"))
+    if any(_compact_security_name(key) in _FORBIDDEN_API_AUTH_FIELDS for key in value):
+        errors.append("外部 API 首版仅支持无鉴权公开接口，不允许提交鉴权或凭据字段。")
+    connection = _normalize_external_api_connection(value.get("connection"))
+    errors.extend(_string_list(connection.pop("validation_errors", [])))
+    operations: list[dict[str, Any]] = []
+    raw_operations = _dict_items(value.get("operations"))
+    if len(raw_operations) > _MAX_API_OPERATIONS:
+        errors.append(f"外部 API 操作最多 {_MAX_API_OPERATIONS} 个。")
+    for item in raw_operations[:_MAX_API_OPERATIONS]:
+        api_info = _normalize_external_api_info(item.get("api_info"))
+        operation_errors = _string_list(api_info.pop("validation_errors", []))
+        raw_endpoint_refs = item.get("endpoint_refs")
+        if isinstance(raw_endpoint_refs, list) and len(raw_endpoint_refs) > _MAX_API_ENDPOINT_REFS:
+            operation_errors.append(f"单个外部 API 操作最多关联 {_MAX_API_ENDPOINT_REFS} 个 Endpoint。")
+        endpoint_refs = [
+            {
+                "api_contract_id": str(ref.get("api_contract_id") or "").strip()[:160],
+                "endpoint_id": str(ref.get("endpoint_id") or "").strip()[:160],
+            }
+            for ref in _dict_items(item.get("endpoint_refs"))[:_MAX_API_ENDPOINT_REFS]
+            if str(ref.get("api_contract_id") or "").strip()
+            and str(ref.get("endpoint_id") or "").strip()
+        ]
+        raw_response = item.get("response_handling") if isinstance(item.get("response_handling"), dict) else {}
+        if raw_response.get("entity_payload") is False and (
+            str(raw_response.get("payload_path") or "").strip()
+            or raw_response.get("pagination")
+            or str(raw_response.get("total_path") or "").strip()
+            or bool(_dict_items(item.get("field_mappings")))
+        ):
+            operation_errors.append("非实体响应不得配置载荷、分页或字段映射。")
+        if isinstance(item.get("field_mappings"), list) and len(item["field_mappings"]) > _MAX_API_MAPPING_ROWS:
+            operation_errors.append(f"单个外部 API 操作最多配置 {_MAX_API_MAPPING_ROWS} 条字段映射。")
+        response_handling = _normalize_external_api_response_handling(item.get("response_handling"))
+        mappings = (
+            _normalize_external_api_mappings(item.get("field_mappings"))
+            if response_handling.get("entity_payload") is True
+            else []
+        )
+        operation: dict[str, Any] = {
+            "operation_id": str(item.get("operation_id") or "").strip()[:160],
+            "name": str(item.get("name") or "").strip()[:200],
+            "endpoint_refs": endpoint_refs,
+            "api_info": api_info,
+            "response_handling": response_handling,
+            "field_mappings": mappings,
+        }
+        connection_override = _normalize_external_api_connection_override(item.get("connection_override"))
+        operation_errors.extend(_string_list(connection_override.pop("validation_errors", [])))
+        if connection_override:
+            operation["connection_override"] = connection_override
+        if operation_errors:
+            operation["validation_errors"] = list(dict.fromkeys(operation_errors))
+        operations.append(operation)
+    normalized = {"connection": connection, "operations": operations}
+    if errors:
+        normalized["validation_errors"] = list(dict.fromkeys(errors))
+    return normalized
 
 
 def _bounded_json_like(value: Any) -> Any:
@@ -647,61 +949,11 @@ def _mysql_type_family(raw_type: str) -> str:
 
 
 def attach_external_api_design(detail: dict[str, Any], action: dict[str, Any]) -> dict[str, Any]:
-    """把用户补充的外部 API 信息与字段绑定写入实体设计。"""
+    """把用户提交的共享连接与多操作契约写入实体设计。"""
 
-    api_info = action.get("api_info") if isinstance(action.get("api_info"), dict) else {}
-    response_body = api_info.get("response_body")
-    response_fields = _extract_response_fields(response_body)
-    top_level_fields = {name for name in response_fields if "." not in name}
-    nested_by_leaf: dict[str, list[str]] = {}
-    for path in response_fields:
-        leaf = path.rsplit(".", 1)[-1]
-        nested_by_leaf.setdefault(leaf, []).append(path)
-    mappings: list[dict[str, Any]] = []
-    for field in _dict_items(detail.get("fields")):
-        field_name = str(field.get("name") or "")
-        if not field_name:
-            continue
-        if field_name in top_level_fields:
-            mappings.append(
-                {
-                    "entity_field": field_name,
-                    "source_field": field_name,
-                    "rule": "same_name",
-                    "suggestion": True,
-                }
-            )
-        elif (
-            field_name in nested_by_leaf
-            and len(nested_by_leaf[field_name]) == 1
-        ):
-            mappings.append(
-                {
-                    "entity_field": field_name,
-                    "source_field": nested_by_leaf[field_name][0],
-                    "rule": "nested_match",
-                    "suggestion": True,
-                }
-            )
-        else:
-            mappings.append(
-                {
-                    "entity_field": field_name,
-                    "source_field": "",
-                    "rule": "manual",
-                    "suggestion": False,
-                }
-            )
-    detail["external_api_design"] = {
-        "api_info": {
-            "path": str(api_info.get("path") or ""),
-            "method": str(api_info.get("method") or "GET"),
-            "request_body": api_info.get("request_body"),
-            "response_body": response_body,
-        },
-        "field_mappings": mappings,
-        "validation_errors": [],
-    }
+    detail["external_api_design"] = _normalize_external_api_design(
+        action.get("external_api_design")
+    )
     return detail
 
 
@@ -718,9 +970,7 @@ def _extract_response_fields(response_body: Any) -> set[str]:
             payload = json.loads(payload)
         except json.JSONDecodeError:
             return set()
-    if isinstance(payload, list):
-        payload = next((item for item in payload if isinstance(item, dict)), {})
-    if not isinstance(payload, dict):
+    if not isinstance(payload, (dict, list)):
         return set()
     paths: set[str] = set()
     _collect_response_paths(payload, "", paths, 0)
@@ -738,8 +988,15 @@ def _collect_response_paths(
     if depth > _MAX_RESPONSE_PATH_DEPTH or len(paths) >= _MAX_RESPONSE_PATHS:
         return
     if isinstance(node, list):
+        array_path = (
+            f"{prefix}[]"
+            if prefix and not prefix.endswith("[]")
+            else (prefix or "[]")
+        )
+        if array_path:
+            paths.add(array_path)
         if node:
-            _collect_response_paths(node[0], prefix, paths, depth)
+            _collect_response_paths(node[0], array_path, paths, depth)
         return
     if not isinstance(node, dict):
         return
@@ -783,10 +1040,6 @@ def apply_entity_design_action(
     entity = _find_entity(project_plan, str(detail.get("entity_id") or ""))
     if entity is None:
         raise ValueError(f"项目计划中不存在实体：{detail.get('entity_id')}")
-    if action_name == "submit_external_api":
-        attach_external_api_design(detail, action)
-        detail["design_stage"] = ENTITY_DESIGN_STAGE_REVIEW_READY
-        return detail
     if action_name == "submit_static_data":
         attach_static_design(detail, action)
         detail["design_stage"] = ENTITY_DESIGN_STAGE_REVIEW_READY
@@ -921,10 +1174,8 @@ def apply_complete_entity_design(
                     "columns": matched_schema_table.get("columns") or [],
                 }
     detail["database_design"] = merged_database_design
-    detail["external_api_design"] = (
+    detail["external_api_design"] = _normalize_external_api_design(
         action.get("external_api_design")
-        if isinstance(action.get("external_api_design"), dict)
-        else {}
     )
     detail["static_design"] = (
         action.get("static_design")
@@ -966,7 +1217,14 @@ def entity_design_validation_errors(
     if source_type == "database":
         errors.extend(_database_design_errors(project_plan, detail, allowed_columns, entity_fields))
     elif source_type == "external_api":
-        errors.extend(_external_api_design_errors(detail, allowed_columns, entity_fields))
+        errors.extend(
+            _external_api_design_errors(
+                project_plan,
+                detail,
+                allowed_columns,
+                entity_fields,
+            )
+        )
     elif source_type == "static":
         errors.extend(_static_design_errors(detail, allowed_columns, entity_fields))
     return list(dict.fromkeys(error for error in errors if error))
@@ -1035,29 +1293,295 @@ def _database_design_errors(
     return errors
 
 
+def entity_related_endpoints(
+    project_plan: dict[str, Any],
+    entity_id: str,
+) -> list[dict[str, str]]:
+    """按 TechnicalPlan 契约顺序投射与实体相关的全部本系统 Endpoint。"""
+
+    endpoints: list[dict[str, str]] = []
+    for contract in _dict_items(project_plan.get("api_contracts")):
+        contract_entity_ids = {
+            str(item).strip()
+            for item in contract.get("entity_ids") or []
+            if str(item).strip()
+        }
+        if entity_id not in contract_entity_ids:
+            continue
+        contract_id = str(contract.get("id") or "").strip()
+        for endpoint in _dict_items(contract.get("endpoints")):
+            endpoint_id = str(endpoint.get("id") or "").strip()
+            if not contract_id or not endpoint_id:
+                continue
+            endpoints.append(
+                {
+                    "api_contract_id": contract_id,
+                    "endpoint_id": endpoint_id,
+                    "method": str(endpoint.get("method") or "GET").upper(),
+                    "path": str(endpoint.get("path") or ""),
+                    "summary": str(endpoint.get("summary") or endpoint_id),
+                }
+            )
+    return endpoints
+
+
+def _external_api_url_errors(base_url: str, label: str) -> list[str]:
+    """校验 Base URL 仅包含可安全保存的 HTTP(S) 连接信息。"""
+
+    if not base_url:
+        return [f"{label}必须补充 Base URL。"]
+    try:
+        parsed_url = urlparse(base_url)
+    except ValueError:
+        parsed_url = None
+    if (
+        parsed_url is None
+        or parsed_url.scheme not in {"http", "https"}
+        or not parsed_url.netloc
+        or not parsed_url.hostname
+        or any(character.isspace() for character in base_url)
+    ):
+        return [f"{label}Base URL 必须是合法的 HTTP(S) 地址。"]
+    if parsed_url.username or parsed_url.password or parsed_url.query or parsed_url.fragment:
+        return [f"{label}Base URL 不得包含用户信息、查询参数或片段。"]
+    try:
+        parsed_url.port
+    except ValueError:
+        return [f"{label}Base URL 端口必须是合法数字。"]
+    return []
+
+
+def _external_api_connection_errors(
+    connection: dict[str, Any],
+    label: str,
+    *,
+    require_base: bool,
+) -> list[str]:
+    """校验共享连接或操作覆盖中的 URL、配置键与固定 Header。"""
+
+    errors: list[str] = []
+    base_url = str(connection.get("base_url") or "").strip()
+    config_key = str(connection.get("base_url_config_key") or "").strip()
+    if require_base or base_url:
+        errors.extend(_external_api_url_errors(base_url, label))
+    if require_base and not config_key:
+        errors.append(f"{label}必须补充 Base URL 配置键。")
+    elif config_key and not re.match(r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$", config_key):
+        errors.append(f"{label}Base URL 配置键格式不合法。")
+    if bool(base_url) != bool(config_key):
+        errors.append(f"{label}覆盖 Base URL 时必须同时提供配置键。")
+    header_names: set[str] = set()
+    for header in _dict_items(connection.get("headers")):
+        name = str(header.get("name") or "").strip()
+        if not name:
+            errors.append(f"{label}Header 名称不能为空。")
+            continue
+        lowered = name.casefold()
+        if _is_sensitive_api_header(name):
+            errors.append(f"不支持敏感 Header：{name}。")
+        if lowered in header_names:
+            errors.append(f"{label}Header 重复：{name}。")
+        header_names.add(lowered)
+    return errors
+
+
+def _external_api_operation_errors(
+    operation: dict[str, Any],
+    allowed_columns: set[str],
+    entity_fields: dict[str, dict[str, Any]],
+) -> list[str]:
+    """校验单个上游操作的请求、响应语义和独立字段覆盖。"""
+
+    operation_id = str(operation.get("operation_id") or "").strip()
+    label = f"外部 API 操作 {operation_id or '<未命名>'}："
+    errors = [f"{label}{error}" for error in _string_list(operation.get("validation_errors"))]
+    api_info = operation.get("api_info") if isinstance(operation.get("api_info"), dict) else {}
+    path = str(api_info.get("path") or "").strip()
+    if not path:
+        errors.append(f"{label}必须补充接口路径。")
+    elif not path.startswith("/"):
+        errors.append(f"{label}接口路径必须以 / 开头。")
+    placeholders = set(re.findall(r"\{([^{}]+)\}", path))
+    if "{" in re.sub(r"\{[^{}]+\}", "", path) or "}" in re.sub(r"\{[^{}]+\}", "", path):
+        errors.append(f"{label}路径占位符格式不合法。")
+    path_parameters: set[str] = set()
+    parameter_names: set[tuple[str, str]] = set()
+    for parameter in _dict_items(api_info.get("parameters")):
+        name = str(parameter.get("name") or "").strip()
+        location = str(parameter.get("in") or "").strip().lower()
+        if not name or location not in {"path", "query"}:
+            errors.append(f"{label}参数必须提供合法名称和位置（path/query）。")
+            continue
+        key = (location, name)
+        if key in parameter_names:
+            errors.append(f"{label}参数重复：{location}.{name}。")
+        parameter_names.add(key)
+        if location == "path":
+            path_parameters.add(name)
+            if not bool(parameter.get("required")):
+                errors.append(f"{label}Path 参数 {name} 必须标记为必填。")
+    if placeholders != path_parameters:
+        errors.append(f"{label}路径占位符必须与 Path 参数一一对应。")
+    errors.extend(_external_api_connection_errors({"headers": api_info.get("headers")}, label, require_base=False))
+    method = str(api_info.get("method") or "").strip().upper()
+    if method not in _SUPPORTED_API_METHODS:
+        errors.append(f"{label}请求方式必须是 GET、POST、PUT 或 DELETE。")
+    if method == "GET" and api_info.get("request_body") is not None:
+        errors.append(f"{label}GET 请求不应配置请求体。")
+    response_payload = api_info.get("response_body")
+    if isinstance(response_payload, str):
+        try:
+            response_payload = json.loads(response_payload)
+        except json.JSONDecodeError:
+            response_payload = None
+    if not isinstance(response_payload, (dict, list)):
+        errors.append(f"{label}返回体必须是合法 JSON 对象或数组。")
+    response = operation.get("response_handling") if isinstance(operation.get("response_handling"), dict) else {}
+    entity_payload = response.get("entity_payload") is True
+    cardinality = str(response.get("cardinality") or "object").strip().lower()
+    paths = _extract_response_fields(response_payload)
+    payload_path = str(response.get("payload_path") or "").strip()
+    total_path = str(response.get("total_path") or "").strip()
+    pagination = response.get("pagination") if isinstance(response.get("pagination"), dict) else {}
+    mappings = _dict_items(operation.get("field_mappings"))
+    if not entity_payload:
+        if cardinality != "object" or payload_path or total_path or pagination or mappings:
+            errors.append(f"{label}非实体响应不得配置载荷、分页或字段映射。")
+    else:
+        if cardinality not in {"object", "array", "page"}:
+            errors.append(f"{label}返回结果类型必须是 object、array 或 page。")
+        if cardinality in {"array", "page"} and not payload_path:
+            errors.append(f"{label}array/page 必须配置实体载荷路径。")
+        if payload_path and payload_path not in paths:
+            errors.append(f"{label}实体载荷路径不存在：{payload_path}。")
+        if cardinality == "page" and not total_path:
+            errors.append(f"{label}page 必须配置总数路径。")
+        if total_path and total_path not in paths:
+            errors.append(f"{label}总数路径不存在：{total_path}。")
+        if cardinality == "page":
+            query_parameters = {
+                str(item.get("name") or "").strip()
+                for item in _dict_items(api_info.get("parameters"))
+                if str(item.get("in") or "").strip().lower() == "query"
+            }
+            for key, text in (("page_parameter", "页码"), ("size_parameter", "大小")):
+                parameter_name = str(pagination.get(key) or "").strip()
+                if not parameter_name or parameter_name not in query_parameters:
+                    errors.append(f"{label}分页{text}参数必须引用已声明的 Query 参数。")
+        mappings_by_field: dict[str, dict[str, Any]] = {}
+        for mapping in mappings:
+            entity_field = str(mapping.get("entity_field") or "").strip()
+            source_field = str(mapping.get("source_field") or "").strip()
+            if not entity_field or entity_field not in allowed_columns:
+                errors.append(f"{label}映射包含不存在的实体字段：{entity_field or '<空>'}。")
+                continue
+            if entity_field in mappings_by_field:
+                errors.append(f"{label}实体字段重复映射：{entity_field}。")
+            mappings_by_field[entity_field] = mapping
+            if not source_field or source_field not in paths:
+                errors.append(f"{label}来源字段路径不存在：{source_field or '<空>'}。")
+        for field_name, field in entity_fields.items():
+            if bool(field.get("required")) and field_name not in mappings_by_field:
+                errors.append(f"{label}实体必填字段尚未映射：{field_name}。")
+    error_path = str(response.get("error_message_path") or "").strip()
+    if error_path and error_path not in paths:
+        errors.append(f"{label}错误信息路径不存在：{error_path}。")
+    return errors
+
+
 def _external_api_design_errors(
+    project_plan: dict[str, Any],
     detail: dict[str, Any],
     allowed_columns: set[str],
     entity_fields: dict[str, dict[str, Any]],
 ) -> list[str]:
-    """校验外部 API 方案：路径/方式必填，字段映射指向实体字段。"""
+    """校验多操作契约、Endpoint 唯一分配及全部相关接口覆盖。"""
 
-    del entity_fields
-    errors: list[str] = []
-    external_api_design = detail.get("external_api_design") if isinstance(detail.get("external_api_design"), dict) else {}
-    api_info = external_api_design.get("api_info") if isinstance(external_api_design.get("api_info"), dict) else {}
-    if not str(api_info.get("path") or "").strip():
-        errors.append("外部 API 方案必须补充接口路径。")
-    if not str(api_info.get("method") or "").strip():
-        errors.append("外部 API 方案必须补充请求方式。")
-    for mapping in _dict_items(external_api_design.get("field_mappings")):
-        entity_field = str(mapping.get("entity_field") or "").strip()
-        if not entity_field:
-            errors.append("外部 API 字段映射缺少 entity_field。")
-            continue
-        if entity_field not in allowed_columns:
-            errors.append(f"外部 API 映射字段 {entity_field} 不在实体定义内。")
+    design = detail.get("external_api_design") if isinstance(detail.get("external_api_design"), dict) else {}
+    errors = _string_list(design.get("validation_errors"))
+    connection = design.get("connection") if isinstance(design.get("connection"), dict) else {}
+    errors.extend(_string_list(connection.get("validation_errors")))
+    errors.extend(_external_api_connection_errors(connection, "外部 API 共享连接：", require_base=True))
+    operations = _dict_items(design.get("operations"))
+    if not operations:
+        errors.append("外部 API 方案必须至少配置一个上游操作。")
+    if len(operations) > _MAX_API_OPERATIONS:
+        errors.append(f"外部 API 操作最多 {_MAX_API_OPERATIONS} 个。")
+    related = entity_related_endpoints(project_plan, str(detail.get("entity_id") or ""))
+    related_keys = {
+        (item["api_contract_id"], item["endpoint_id"])
+        for item in related
+    }
+    operation_ids: set[str] = set()
+    assigned_refs: dict[tuple[str, str], str] = {}
+    for operation in operations:
+        operation_id = str(operation.get("operation_id") or "").strip()
+        name = str(operation.get("name") or "").strip()
+        if not operation_id:
+            errors.append("外部 API 操作缺少 operation_id。")
+        elif operation_id in operation_ids:
+            errors.append(f"外部 API operation_id 重复：{operation_id}。")
+        operation_ids.add(operation_id)
+        if not name:
+            errors.append(f"外部 API 操作 {operation_id or '<未命名>'} 缺少名称。")
+        override = operation.get("connection_override") if isinstance(operation.get("connection_override"), dict) else {}
+        errors.extend(_external_api_connection_errors(override, f"外部 API 操作 {operation_id} 连接覆盖：", require_base=False))
+        refs = _dict_items(operation.get("endpoint_refs"))
+        if not refs:
+            errors.append(f"外部 API 操作 {operation_id or '<未命名>'} 必须关联至少一个本系统 Endpoint。")
+        seen_operation_refs: set[tuple[str, str]] = set()
+        for ref in refs:
+            key = (
+                str(ref.get("api_contract_id") or "").strip(),
+                str(ref.get("endpoint_id") or "").strip(),
+            )
+            if key in seen_operation_refs:
+                errors.append(f"外部 API 操作 {operation_id} 重复关联 Endpoint {key[0]}/{key[1]}。")
+            seen_operation_refs.add(key)
+            if key not in related_keys:
+                errors.append(f"外部 API 操作 {operation_id} 引用了与当前实体无关的 Endpoint {key[0]}/{key[1]}。")
+            if key in assigned_refs and assigned_refs[key] != operation_id:
+                errors.append(f"Endpoint {key[0]}/{key[1]} 不能同时绑定多个上游操作。")
+            assigned_refs[key] = operation_id
+        errors.extend(_external_api_operation_errors(operation, allowed_columns, entity_fields))
     return errors
+
+
+def entity_design_endpoint_binding_errors(
+    project_plan: dict[str, Any],
+    detail: dict[str, Any],
+    *,
+    api_contract_id: str,
+    endpoint_id: str,
+) -> list[str]:
+    """按单个 Endpoint 检查外部 API 上游操作，供开发目标门禁使用。"""
+
+    if str(detail.get("data_source_type") or "").strip() != "external_api":
+        return []
+    contract_key = str(api_contract_id or "").strip()
+    endpoint_key = str(endpoint_id or "").strip()
+    if not contract_key or not endpoint_key:
+        return []
+    operation_ids = [
+        str(operation.get("operation_id") or "").strip()
+        for operation in _dict_items(
+            (
+                detail.get("external_api_design")
+                if isinstance(detail.get("external_api_design"), dict)
+                else {}
+            ).get("operations")
+        )
+        if any(
+            str(ref.get("api_contract_id") or "").strip() == contract_key
+            and str(ref.get("endpoint_id") or "").strip() == endpoint_key
+            for ref in _dict_items(operation.get("endpoint_refs"))
+        )
+    ]
+    if not operation_ids:
+        return [f"Endpoint {contract_key}/{endpoint_key} 尚未绑定上游操作。"]
+    if len(operation_ids) > 1:
+        return [f"Endpoint {contract_key}/{endpoint_key} 绑定了多个上游操作。"]
+    return []
 
 
 def _static_design_errors(
@@ -1364,11 +1888,52 @@ def entity_design_summary(detail: dict[str, Any]) -> dict[str, Any]:
         }
     external_api_design = detail.get("external_api_design") if isinstance(detail.get("external_api_design"), dict) else {}
     if external_api_design:
-        api_info = external_api_design.get("api_info") if isinstance(external_api_design.get("api_info"), dict) else {}
+        required_fields = {
+            str(field.get("name") or "")
+            for field in detail_fields
+            if bool(field.get("required")) and field.get("name")
+        }
+        operations = _dict_items(external_api_design.get("operations"))
+        operation_summaries: list[dict[str, Any]] = []
+        for operation in operations:
+            api_info = operation.get("api_info") if isinstance(operation.get("api_info"), dict) else {}
+            response_handling = operation.get("response_handling") if isinstance(operation.get("response_handling"), dict) else {}
+            mappings = _dict_items(operation.get("field_mappings"))
+            mapped_required = {
+                str(mapping.get("entity_field") or "")
+                for mapping in mappings
+                if str(mapping.get("source_field") or "").strip()
+            }
+            operation_summaries.append(
+                {
+                    "operation_id": operation.get("operation_id"),
+                    "name": operation.get("name"),
+                    "endpoint_refs": _dict_items(operation.get("endpoint_refs")),
+                    "method": api_info.get("method"),
+                    "path": api_info.get("path"),
+                    "entity_payload": response_handling.get("entity_payload") is True,
+                    "response_cardinality": response_handling.get("cardinality"),
+                    "mapping_count": len(mappings),
+                    "mapped_required_count": len(required_fields & mapped_required),
+                    "required_field_count": len(required_fields),
+                    "response_paths": [
+                        {"path": path}
+                        for path in sorted(_extract_response_fields(api_info.get("response_body")))
+                    ],
+                }
+            )
+        connection = external_api_design.get("connection") if isinstance(external_api_design.get("connection"), dict) else {}
         summary["external_api_design"] = {
-            "path": api_info.get("path"),
-            "method": api_info.get("method"),
-            "mapping_count": len(_dict_items(external_api_design.get("field_mappings"))),
+            "base_url": connection.get("base_url"),
+            "base_url_config_key": connection.get("base_url_config_key"),
+            "timeout_ms": connection.get("timeout_ms"),
+            "shared_header_count": len(_dict_items(connection.get("headers"))),
+            "operation_count": len(operations),
+            "endpoint_binding_count": sum(
+                len(_dict_items(operation.get("endpoint_refs")))
+                for operation in operations
+            ),
+            "operations": operation_summaries,
         }
     static_design = detail.get("static_design") if isinstance(detail.get("static_design"), dict) else {}
     if static_design:

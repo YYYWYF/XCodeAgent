@@ -8,49 +8,6 @@ from app.services.business_acceptance import DELIVERABLE_KINDS
 
 _ENDPOINT_SOURCE_TYPES = frozenset({"database", "external_api", "static"})
 _ENDPOINT_BACKEND_SOURCE_TYPES = frozenset({"database", "external_api"})
-_EXTERNAL_API_SKILL_NAME = "springboot-external-api-generate"
-_STATIC_DATA_SKILL_NAME = "frontend-static-data-generate"
-
-
-def _builtin_skill_document(skill_name: str, fallback: str) -> str:
-    """读取指定内置 Skill 文档，缺失时返回明确的保守降级规则。"""
-
-    from app.services.builtin_skills import read_builtin_skill_md
-
-    content = read_builtin_skill_md(skill_name)
-    return content if content else fallback
-
-
-def _springboot_mybatis_skill_document() -> str:
-    """读取数据库来源后端代码生成 Skill 的入口文档。"""
-
-    return _builtin_skill_document(
-        "springboot-mybatis-generate",
-        "(springboot-mybatis-generate SKILL.md 未找到：仍按 Java 8 Spring Boot + "
-        "MyBatis-Plus 的 objects → repository → service → controller 四阶段规划，"
-        "禁止生成数据库 DDL、迁移或种子数据。)",
-    )
-
-
-def _external_api_skill_document() -> str:
-    """读取外部 API 后端生成 Skill 文档。"""
-
-    return _builtin_skill_document(
-        _EXTERNAL_API_SKILL_NAME,
-        "(springboot-external-api-generate SKILL.md 未找到：按 Java 8 Spring Boot 的 "
-        "upstream → mapping → service → controller 四阶段规划，禁止生成持久化层、"
-        "迁移或数据库配置。)",
-    )
-
-
-def _static_data_skill_document() -> str:
-    """读取静态数据前端生成 Skill 文档。"""
-
-    return _builtin_skill_document(
-        _STATIC_DATA_SKILL_NAME,
-        "(frontend-static-data-generate SKILL.md 未找到：在 /frontend/src/apis/"
-        "<business>Api.ts 中实现模块级内存数据与异步契约函数，禁止生成后端接口。)",
-    )
 
 
 def endpoint_source_groups(
@@ -140,7 +97,7 @@ def build_task_preparation_prompt(
     build_context: dict[str, Any] | None = None,
     validation_feedback: list[str] | None = None,
 ) -> str:
-    """按本轮实际待生成 Unit 组装统一八段式任务规划 Prompt。"""
+    """按本轮实际待生成 Unit 组装统一七段式任务规划 Prompt。"""
 
     mode = planning_context_mode(build_context)
     source_groups = (
@@ -165,7 +122,6 @@ def build_task_preparation_prompt(
         ),
         _task_rules_section(mode, source_types),
         _dependency_rules_section(source_types),
-        _skill_injection_section(source_types),
         _forbidden_output_section(mode, source_types),
         _workspace_context_section(snapshot, prompt_context, project_plan),
     ]
@@ -270,13 +226,49 @@ def _planning_algorithm_section(
             "`service`, `controller`. Use IDs "
             "`<endpointUnitId>::<entityId>::<stage>`. Existing files do not remove a stage: "
             "use `modify` for paths present in WorkspaceSnapshot and `add` for missing "
-            "business paths; execution may prove the stage `already_satisfied`."
+            "business paths; execution may prove the stage `already_satisfied`. The objects "
+            "stage owns domain/PO/DTO conversion files, repository owns Mapper/XML and "
+            "repository files, service owns the application service, and controller owns "
+            "the endpoint adapter."
         )
     if "external_api" in source_groups:
         rules.append(
-            "For every confirmed external_api entity in each backend:endpoint:* Unit, "
-            "emit `upstream`, `mapping`, `service`, and `controller` tasks with IDs "
-            "`<endpointUnitId>::<entityId>::<stage>`; do not add persistence stages."
+            "For every confirmed external_api entity in each backend:endpoint:* Unit, first "
+            "match the Unit's exact api_contract_id + endpoint_id against operations[].endpoint_refs "
+            "and require exactly one matching operation. Then emit `upstream`, `mapping`, `service`, "
+            "and `controller` tasks with IDs `<endpointUnitId>::<entityId>::<stage>`. Reuse one "
+            "Client method and transport DTO set for the same operation_id, and do not add "
+            "persistence stages. Use these exact deliverable kinds: upstream = "
+            "`backend.external_api_client`, mapping = `backend.external_api_mapping`, service = "
+            "`backend.application_service`, controller = `backend.endpoint_controller`."
+        )
+        rules.append(
+            "For every external_api stage, make the Simplified Chinese numbered description "
+            "operation-specific and directly executable. Upstream must name operation_id, "
+            "base_url_config_key, timeout, upstream method/path, typed Path/Query parameters, "
+            "headers, request_shape, response_shape, and success status codes. The upstream task "
+            "must also own the runtime Base URL property: reuse the backend module's existing "
+            "Spring Boot application.yml, application.yaml, or application.properties; if none "
+            "exists, create application.yml under that module's existing src/main/resources. "
+            "Include that exact configuration file in target_files, allowed_paths, change_scope, "
+            "and the backend.external_api_client deliverable paths, and add the exact "
+            "base_url_config_key there. Write effective_connection.base_url directly as the "
+            "plain YAML or properties value for that key. Never wrap it in a `${ENV_NAME:default}` "
+            "expression, derive an environment-variable name, or emit another placeholder. This "
+            "configuration-file work belongs to upstream, never to "
+            "mapping, service, or controller. Mapping must name "
+            "mapped_entity_path, every source_field -> entity_field rule, and entity decimal, "
+            "datetime, and enum types. Service must bind internal request fields to upstream "
+            "request fields by exact name, call the Client, extract the declared mapped entity "
+            "path, and translate upstream errors. Controller must implement only the internal API "
+            "Contract method/path and delegate to the service; it must not expose the upstream "
+            "path. Treat request_shape and response_shape as type/field structure only: never "
+            "hard-code sample scalar values, and never put the design-time base_url in Java source "
+            "or a business constant. When field_mappings share "
+            "an array prefix such as list[], that mapped_entity_path is the entity collection even "
+            "when the response root/cardinality is object. If deterministic operation selection or "
+            "request binding is impossible, return no invented task semantics and let platform "
+            "validation reject the candidate."
         )
     if "static" in source_groups or mode == "static":
         rules.append(
@@ -377,47 +369,6 @@ def _task_rules_section(mode: str, source_types: set[str]) -> str:
     return "\n".join(fragments)
 
 
-def _skill_injection_section(source_types: set[str]) -> str:
-    """按数据库、外部 API、静态数据的固定顺序生成独立 Skill 注入段。"""
-
-    fragments = ["## 6. Skill Injection"]
-    if "database" in source_types:
-        fragments.extend(
-            [
-                "--- INJECTED springboot-mybatis-generate SKILL.md ---",
-                _springboot_mybatis_skill_document(),
-                "--- END INJECTED springboot-mybatis-generate SKILL.md ---",
-            ]
-        )
-    if "external_api" in source_types:
-        fragments.extend(
-            [
-                "--- INJECTED springboot-external-api-generate SKILL.md ---",
-                _external_api_skill_document(),
-                "--- END INJECTED springboot-external-api-generate SKILL.md ---",
-            ]
-        )
-    if "static" in source_types:
-        fragments.extend(
-            [
-                "--- INJECTED frontend-static-data-generate SKILL.md ---",
-                _static_data_skill_document(),
-                "--- END INJECTED frontend-static-data-generate SKILL.md ---",
-            ]
-        )
-    if len(fragments) == 1:
-        fragments.append(
-            "No source-specific Skill is required for the current planning scope."
-        )
-    else:
-        fragments.append(
-            "Any acceptance or verification guidance inside an injected Skill is subordinate "
-            "to the Output Contract. Do not copy acceptance content or platform-owned "
-            "verification fields into task output."
-        )
-    return "\n".join(fragments)
-
-
 def _dependency_rules_section(source_types: set[str]) -> str:
     """生成同 Unit 依赖和固定阶段链规则。"""
 
@@ -434,7 +385,8 @@ def _dependency_rules_section(source_types: set[str]) -> str:
         )
     if "external_api" in source_types:
         rules += (
-            " External API chains are upstream → mapping → service → controller."
+            " External API chains are upstream → mapping → service → controller and are "
+            "scoped by endpoint_refs; identical operation_id values share Client methods and DTOs."
         )
     if source_types & _ENDPOINT_BACKEND_SOURCE_TYPES:
         rules += (
@@ -450,10 +402,10 @@ def _dependency_rules_section(source_types: set[str]) -> str:
 
 
 def _forbidden_output_section(mode: str, source_types: set[str]) -> str:
-    """在所有 Skill 注入后集中声明平台级和来源级禁止项。"""
+    """集中声明平台级和来源级禁止项。"""
 
     rules = [
-        "## 7. Forbidden Output",
+        "## 6. Forbidden Output",
         "Never create a menu or route registration task, page placeholder, hidden route, or "
         "shared registration task. Never emit menu or route metadata and never modify shared "
         "menu, route, router, registration, framework entry, template dependency, lockfile, "
@@ -488,7 +440,8 @@ def _forbidden_output_section(mode: str, source_types: set[str]) -> str:
     if "external_api" in source_types:
         rules.append(
             "External API entities must not create Entity/PO, Mapper, Repository, datasource, "
-            "migration, or seed work."
+            "migration, or seed work. Never turn design-time base_url, request examples, response "
+            "examples, or upstream field names into hard-coded business constants."
         )
     return "\n".join(rules)
 
@@ -501,7 +454,7 @@ def _workspace_context_section(
     """把有界工作区、目标和正式计划上下文统一放在 Prompt 末尾。"""
 
     return (
-        "## 8. Workspace Context\n"
+        "## 7. Workspace Context\n"
         "### WorkspaceSnapshot\n"
         + json.dumps(workspace_snapshot, ensure_ascii=False, indent=2)
         + "\n\n### TargetBuildContext\n"

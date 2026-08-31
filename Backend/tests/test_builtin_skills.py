@@ -32,6 +32,37 @@ class BuiltinSkillsTests(unittest.TestCase):
             )
             self.assertTrue((skill_root / relative_path).is_file())
 
+    def test_backend_skills_are_execution_only_and_external_api_requires_resttemplate(self) -> None:
+        """后端 Skill 只约束执行阶段，外部 API 必须使用 RestTemplate。"""
+
+        root = builtin_skills.validate_required_builtin_skills()
+        mybatis = (
+            root / builtin_skills.SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        external_api = (
+            root
+            / builtin_skills.SPRINGBOOT_EXTERNAL_API_GENERATE_SKILL_NAME
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("implementation_contract", mybatis)
+        self.assertIn("allowed_paths", mybatis)
+        self.assertNotIn("任务规划阶段", mybatis)
+        self.assertNotIn("Task sequencing", external_api)
+        self.assertIn("Every external request MUST use", external_api)
+        self.assertIn("RestTemplate", external_api)
+        self.assertIn("Do not use WebClient, Feign, OkHttp", external_api)
+        self.assertIn("base_url_config_key", external_api)
+        self.assertIn("request_shape", external_api)
+        self.assertIn("mapped_entity_path", external_api)
+        self.assertIn("BigDecimal", external_api)
+        self.assertIn("Never hard-code example keywords", external_api)
+        self.assertIn("themselves authorize page semantics", external_api)
+        self.assertIn("Use a plain", external_api)
+        self.assertIn("never wrap it in `${ENV_NAME:default}`", external_api)
+        self.assertIn("product:", external_api)
+        self.assertIn("url: http://99.17.197.63:8090", external_api)
+
     def test_source_tree_skills_are_available_and_complete(self) -> None:
         """确认源码内置技能完整且能生成页面卡片元数据。"""
 

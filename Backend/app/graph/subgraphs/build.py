@@ -37,9 +37,6 @@ from app.services.authorization_platform_projection import (
 )
 from app.services.authorization_edd import verify_authorization_edd
 from app.services.business_acceptance_verifier import verify_business_acceptance
-from app.services.engineering_acceptance_verifier import (
-    unauthorized_batch_paths,
-)
 from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
@@ -60,7 +57,6 @@ from app.services.build_scheduler import (
     select_ready_build_batch,
     summarize_build_runtime,
     hydrate_missing_failed_results,
-    verify_task_file_changes,
 )
 from app.workspace.code_changes import (
     build_code_change_set,
@@ -463,15 +459,6 @@ def _execute_owner_tasks(
         }
         for result in attributed_results
     ]
-    unauthorized_paths = unauthorized_batch_paths(owner_change_set, owner_tasks)
-    if owner != "database":
-        sanitized_results = verify_task_file_changes(
-            results=sanitized_results,
-            code_change_set=owner_change_set,
-            tasks=owner_tasks,
-            workspace_root=str(workspace) if workspace else None,
-            batch_unauthorized_paths=unauthorized_paths,
-        )
     sanitized_results = _verify_business_results(
         state,
         owner_tasks,
@@ -511,8 +498,7 @@ def _verify_business_results(
     verified: list[dict[str, Any]] = []
     for result in results:
         task = tasks_by_id.get(str(result.get("task_id") or ""), {})
-        engineering_ran = isinstance(result.get("acceptance_evidence"), list)
-        if result.get("status") not in {"completed", "already_satisfied"} and not engineering_ran:
+        if result.get("status") not in {"completed", "already_satisfied"}:
             verified.append(result)
             continue
         business = verify_business_acceptance(
@@ -552,7 +538,7 @@ def _skip_business_acceptance(
     result: dict[str, Any],
     task: dict[str, Any],
 ) -> dict[str, Any]:
-    """关闭业务自检时记录明确的跳过证据，并保留工程校验的最终裁决。"""
+    """关闭业务自检时记录明确的跳过证据，并保留任务执行结果。"""
 
     checks = [
         check

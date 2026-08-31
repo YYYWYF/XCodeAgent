@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -240,8 +241,12 @@ def entity_design_source_type(detail: Any) -> str:
     )
 
 
-def entity_design_summaries(project_plan: Any, entity_ids: Any) -> list[dict[str, Any]]:
-    """把已确认实体设计压缩为有界摘要，供构建上下文与任务规划模型使用。"""
+def entity_design_summaries(
+    project_plan: Any,
+    entity_ids: Any,
+    endpoint_refs: set[tuple[str, str]] | None = None,
+) -> list[dict[str, Any]]:
+    """把已确认实体设计压缩为有界摘要，并按当前 Endpoint 裁剪上游操作。"""
 
     requested_ids = [
         str(item).strip()
@@ -256,13 +261,16 @@ def entity_design_summaries(project_plan: Any, entity_ids: Any) -> list[dict[str
         and str(detail.get("entity_id") or "")
     }
     return [
-        _entity_design_summary(confirmed_details[entity_id])
+        _entity_design_summary(confirmed_details[entity_id], endpoint_refs)
         for entity_id in requested_ids
         if entity_id in confirmed_details
     ]
 
 
-def _entity_design_summary(detail: dict[str, Any]) -> dict[str, Any]:
+def _entity_design_summary(
+    detail: dict[str, Any],
+    endpoint_refs: set[tuple[str, str]] | None = None,
+) -> dict[str, Any]:
     """把单个已确认实体设计压缩为任务规划可读的有界摘要。"""
 
     fields = detail.get("fields") if isinstance(detail.get("fields"), list) else []
@@ -276,6 +284,12 @@ def _entity_design_summary(detail: dict[str, Any]) -> dict[str, Any]:
                 "label": str(field.get("label") or field.get("name") or ""),
                 "type": str(field.get("type") or "text"),
                 "required": bool(field.get("required")),
+                "description": str(field.get("description") or "")[:500],
+                "enum_values": [
+                    str(item)[:200]
+                    for item in field.get("enum_values") or []
+                    if isinstance(item, str) and str(item).strip()
+                ][:100],
             }
             for field in fields[:100]
             if isinstance(field, dict) and field.get("name")
@@ -326,15 +340,80 @@ def _entity_design_summary(detail: dict[str, Any]) -> dict[str, Any]:
         else {}
     )
     if external_api_design:
-        api_info = (
-            external_api_design.get("api_info")
-            if isinstance(external_api_design.get("api_info"), dict)
+        required_fields = {
+            str(field.get("name") or "")
+            for field in fields
+            if isinstance(field, dict) and bool(field.get("required"))
+        }
+        connection = (
+            external_api_design.get("connection")
+            if isinstance(external_api_design.get("connection"), dict)
             else {}
         )
+        operation_summaries: list[dict[str, Any]] = []
+        for operation in _design_items(external_api_design.get("operations")):
+            refs = _design_items(operation.get("endpoint_refs"))
+            operation_ref_keys = {
+                (
+                    str(ref.get("api_contract_id") or ""),
+                    str(ref.get("endpoint_id") or ""),
+                )
+                for ref in refs
+            }
+            if endpoint_refs is not None and not (operation_ref_keys & endpoint_refs):
+                continue
+            api_info = operation.get("api_info") if isinstance(operation.get("api_info"), dict) else {}
+            response_handling = operation.get("response_handling") if isinstance(operation.get("response_handling"), dict) else {}
+            mappings = _design_items(operation.get("field_mappings"))
+            mapped_required = {
+                str(mapping.get("entity_field") or "")
+                for mapping in mappings
+                if str(mapping.get("source_field") or "").strip()
+            }
+            request_body = _external_json_value(api_info.get("request_body"))
+            response_body = _external_json_value(api_info.get("response_body"))
+            override = operation.get("connection_override") if isinstance(operation.get("connection_override"), dict) else {}
+            operation_headers = _design_items(api_info.get("headers"))
+            effective_headers = {
+                str(item.get("name") or "").casefold(): dict(item)
+                for item in _design_items(connection.get("headers"))
+                if str(item.get("name") or "").strip()
+            }
+            for header in operation_headers:
+                name = str(header.get("name") or "").strip()
+                if name:
+                    effective_headers[name.casefold()] = dict(header)
+            operation_summaries.append(
+                {
+                    "operation_id": operation.get("operation_id"),
+                    "name": operation.get("name"),
+                    "endpoint_refs": refs,
+                    "effective_connection": {
+                        "base_url": override.get("base_url") or connection.get("base_url"),
+                        "base_url_config_key": override.get("base_url_config_key") or connection.get("base_url_config_key"),
+                        "timeout_ms": override.get("timeout_ms") or connection.get("timeout_ms"),
+                        "headers": list(effective_headers.values()),
+                    },
+                    "api_info": {
+                        "method": api_info.get("method"),
+                        "path": api_info.get("path"),
+                        "parameters": _bounded_external_items(api_info.get("parameters")),
+                        "headers": _bounded_external_items(api_info.get("headers")),
+                        "request_shape": _external_json_shape(request_body),
+                        "response_shape": _external_json_shape(response_body),
+                    },
+                    "response_handling": _bounded_external_object(response_handling),
+                    "field_mappings": _bounded_external_items(mappings),
+                    "mapped_entity_path": _mapped_entity_path(mappings),
+                    "mapping_count": len(mappings),
+                    "required_field_count": len(required_fields),
+                    "mapped_required_count": len(required_fields & mapped_required),
+                }
+            )
         summary["external_api_design"] = {
-            "path": api_info.get("path"),
-            "method": api_info.get("method"),
-            "mapping_count": len(_design_items(external_api_design.get("field_mappings"))),
+            "connection": _bounded_external_connection(connection),
+            "operation_count": len(operation_summaries),
+            "operations": operation_summaries,
         }
     static_design = (
         detail.get("static_design")
@@ -353,6 +432,148 @@ def _design_items(value: Any) -> list[dict[str, Any]]:
     """只保留列表中的字典项，用于读取实体设计各方案段。"""
 
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _bounded_external_items(value: Any, limit: int = 200) -> list[dict[str, Any]]:
+    """限制外部 API 参数、Header 和映射摘要的条数并复制为稳定结构。"""
+
+    return [dict(item) for item in _design_items(value)[:limit]]
+
+
+def _bounded_external_connection(value: Any) -> dict[str, Any]:
+    """投射外部 API 共享连接的全部非敏感生成语义。"""
+
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "base_url": str(value.get("base_url") or "")[:2000],
+        "base_url_config_key": str(value.get("base_url_config_key") or "")[:128],
+        "timeout_ms": value.get("timeout_ms"),
+        "headers": _bounded_external_items(value.get("headers"), 50),
+    }
+
+
+def _bounded_external_object(value: Any) -> dict[str, Any]:
+    """只投影外部 API 响应处理语义，避免把样例值带入构建上下文。"""
+
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "entity_payload",
+        "cardinality",
+        "payload_path",
+        "success_status_codes",
+        "error_message_path",
+        "total_path",
+        "pagination",
+    }
+    return {key: value[key] for key in allowed if key in value}
+
+
+def _external_json_value(value: Any) -> Any:
+    """把已确认外部 API JSON 文本解析为结构值，非法文本按空值处理。"""
+
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _external_json_type(value: Any) -> str:
+    """返回外部 API 样例的稳定基础类型，区分整数与小数。"""
+
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "decimal"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    if value is None:
+        return "null"
+    return "string"
+
+
+def _external_json_shape(
+    value: Any,
+    max_depth: int = 6,
+    max_paths: int = 300,
+) -> dict[str, Any]:
+    """把请求或响应样例裁剪为根类型和有界路径类型，不暴露业务样例值。"""
+
+    fields: list[dict[str, str]] = []
+
+    def append(path: str, item_type: str) -> None:
+        """按首次出现顺序记录字段，并把数组样例中的整数/小数合并为小数。"""
+
+        if not path:
+            return
+        existing = next((item for item in fields if item["path"] == path), None)
+        if existing is not None:
+            current_type = existing["type"]
+            if {current_type, item_type} == {"integer", "decimal"}:
+                existing["type"] = "decimal"
+            elif current_type == "null" and item_type != "null":
+                existing["type"] = item_type
+            return
+        if len(fields) < max_paths:
+            fields.append({"path": path[:2000], "type": item_type})
+
+    def visit(node: Any, prefix: str, depth: int) -> None:
+        """递归展开对象和代表性数组元素，并统一附加数组方括号。"""
+
+        if depth > max_depth or len(fields) >= max_paths:
+            return
+        if isinstance(node, list):
+            array_path = prefix if prefix.endswith("[]") else f"{prefix}[]"
+            append(array_path or "[]", "array")
+            for child in node[:20]:
+                visit(child, array_path or "[]", depth + 1)
+            return
+        if not isinstance(node, dict):
+            return
+        for key, child in node.items():
+            if len(fields) >= max_paths:
+                break
+            normalized_key = str(key).strip()[:200]
+            if not normalized_key:
+                continue
+            path = f"{prefix}.{normalized_key}" if prefix else normalized_key
+            if isinstance(child, list):
+                visit(child, f"{path}[]", depth + 1)
+                continue
+            append(path, _external_json_type(child))
+            if isinstance(child, dict):
+                visit(child, path, depth + 1)
+
+    visit(value, "", 0)
+    return {"root_type": _external_json_type(value), "fields": fields}
+
+
+def _mapped_entity_path(mappings: list[dict[str, Any]]) -> str:
+    """从全部来源字段确定共同且最深的数组前缀，供映射层逐项提取实体。"""
+
+    prefix_sets: list[set[str]] = []
+    for mapping in mappings:
+        source_field = str(mapping.get("source_field") or "").strip()
+        if not source_field:
+            continue
+        parts = [part for part in source_field.split(".") if part]
+        prefixes = {
+            ".".join(parts[: index + 1])
+            for index, part in enumerate(parts)
+            if part.endswith("[]")
+        }
+        prefix_sets.append(prefixes)
+    if not prefix_sets:
+        return ""
+    common = set.intersection(*prefix_sets)
+    return max(common, key=lambda item: (item.count("."), len(item)), default="")
 
 
 def normalize_entity_field(

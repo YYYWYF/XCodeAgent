@@ -23,7 +23,6 @@ export function entityDesignActionContinuationMessage(
   const actionType = String((action as Record<string, unknown>).action || "");
   const labels: Record<string, string> = {
     select_data_source: "已选择数据源，请生成实体设计方案后继续。",
-    submit_external_api: "已补充外部 API 信息，请继续生成实体设计。",
     submit_static_data: "已补充静态数据设计，请继续生成实体设计。",
     submit_bindings: "已提交字段绑定，请继续生成实体设计。",
     approve_table_generation: "已批准生成目标表结构，请继续。",

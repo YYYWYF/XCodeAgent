@@ -8,7 +8,6 @@ import {
   DatabaseOutlined,
   DeleteOutlined,
   FileTextOutlined,
-  LinkOutlined,
   PlusOutlined,
   ReloadOutlined,
   UploadOutlined,
@@ -35,6 +34,13 @@ import type {
   WorkflowEntityDesignSummary,
 } from "../../../../typings";
 import {
+  ExternalApiDesignPanel,
+} from "./ExternalApiDesignPanel";
+import {
+  type ExternalApiDesignDraft,
+  useExternalApiDraft,
+} from "./useExternalApiDraft";
+import {
   fetchDatabaseTableColumns,
   listDatabaseTables,
 } from "../../../../service/workspaceTools";
@@ -51,8 +57,9 @@ import {
   parseJsonList,
   parseJsonRecord,
   recordItems,
+  responseFieldPaths,
+  serializeExternalApiDesign,
   resolveEntityDesignFields,
-  sameNameFieldMappings,
   seedRowsFromSuggestions,
   serializeSeedRows,
   tryParseJson,
@@ -476,89 +483,6 @@ export function EntityDesignDataSourcePanel({
   );
 }
 
-// ---------- 第 ② 步：外部 API 方案输入 ----------
-
-export function ExternalApiInputPanel({
-  disabled,
-  entityId,
-  onAction,
-  onBackToSource,
-}: {
-  disabled?: boolean
-  entityId: string
-  onAction?: (action: WorkflowEntityDesignAction) => void
-  onBackToSource?: () => void
-}): ReactElement {
-  const [path, setPath] = useState("");
-  const [method, setMethod] = useState("GET");
-  const [requestBody, setRequestBody] = useState("");
-  const [responseBody, setResponseBody] = useState("");
-  return (
-    <div className={cx("entity-design-panel")}>
-      <EntityDesignPanelHeader
-        eyebrow="实体设计 · 外部 API 方案"
-        onBack={onBackToSource}
-        title="补充外部 API 信息"
-      />
-      <div className={cx("entity-design-form-row")}>
-        <label className={cx("entity-design-form-field")}>
-          <Text type="secondary">请求路径</Text>
-          <Input
-            disabled={disabled}
-            onChange={(event) => setPath(event.target.value)}
-            placeholder="/api/products"
-            value={path}
-          />
-        </label>
-        <label className={cx("entity-design-form-field")}>
-          <Text type="secondary">请求方式</Text>
-          <Select
-            disabled={disabled}
-            onChange={(value) => setMethod(String(value))}
-            options={["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => ({
-              label: value,
-              value,
-            }))}
-            value={method}
-          />
-        </label>
-      </div>
-      <AdvancedJsonCollapse
-        disabled={disabled}
-        label="请求体（JSON，可选）"
-        onChange={setRequestBody}
-        value={requestBody}
-      />
-      <AdvancedJsonCollapse
-        disabled={disabled}
-        label="返回体（JSON）"
-        onChange={setResponseBody}
-        value={responseBody}
-      />
-      <div className={cx("entity-design-panel-actions")}>
-        <Button
-          disabled={disabled || !path.trim()}
-          onClick={() =>
-            onAction?.({
-              action: "submit_external_api",
-              entity_id: entityId,
-              api_info: {
-                path: path.trim(),
-                method,
-                request_body: tryParseJson(requestBody),
-                response_body: tryParseJson(responseBody),
-              },
-            })
-          }
-          type="primary"
-        >
-          生成返回体字段绑定建议
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 // ---------- 第 ② 步：静态数据方案输入 ----------
 
 export function StaticDataInputPanel({
@@ -932,35 +856,32 @@ function EntityExternalApiDesignSection({
   onChange: (field: string, value: unknown) => void
 }): ReactElement {
   const design = objectChange(changes.external_api_design, externalApiDesign);
-  const apiInfo = objectValue(design.api_info);
-  const mappings = recordListChange(design.field_mappings, externalApiDesign.field_mappings);
+  const operations = recordItems(design.operations);
+  const connection = objectValue(design.connection);
+  void disabled;
+  void onChange;
   return (
     <EntitySectionCard
-      title={`外部 API 方案 · ${String(apiInfo.method || "")} ${String(apiInfo.path || "")}`.trim()}
+      title="外部 API 方案"
     >
       <EntityMetricChips
         items={[
-          { label: "字段绑定", value: String(mappings.length) },
+          { label: "上游操作", value: String(operations.length) },
+          { label: "Base URL 配置键", value: String(connection.base_url_config_key || "-") },
         ]}
       />
-      <EntitySectionCard title="返回体字段绑定">
-        <RowListEditor
-          columns={[
-            { key: "entity_field", label: "目标字段", placeholder: "例如 product_name" },
-            { key: "source_field", label: "来源字段", placeholder: "例如 data.name" },
-            { key: "rule", label: "规则", placeholder: "可选" },
-          ]}
-          disabled={disabled}
-          emptyText="暂无绑定，点击下方添加。"
-          onChange={(rows) =>
-            onChange("external_api_design", {
-              ...design,
-              field_mappings: normalizeObjectRows(rows),
-            })
-          }
-          rows={mappings}
-        />
-      </EntitySectionCard>
+      {operations.map((operation) => {
+        const apiInfo = objectValue(operation.api_info);
+        const response = objectValue(operation.response_handling);
+        return (
+          <EntitySectionCard key={String(operation.operation_id || apiInfo.path || "operation")} title={`${String(operation.name || "未命名操作")} · ${String(apiInfo.method || "GET")} ${String(apiInfo.path || "")}`}>
+            <EntityMetricChips items={[
+              { label: "关联 Endpoint", value: String(recordItems(operation.endpoint_refs).length) },
+              { label: "实体映射", value: response.entity_payload === true ? String(recordItems(operation.field_mappings).length) : "不适用" },
+            ]} />
+          </EntitySectionCard>
+        );
+      })}
     </EntitySectionCard>
   );
 }
@@ -2023,11 +1944,7 @@ type EntityDesignDraft = {
   selectedTableName: string
   tableColumns: Array<Record<string, unknown>>
   bindings: Array<Record<string, unknown>>
-  apiPath: string
-  apiMethod: string
-  requestBody: string
-  responseBody: string
-  mappings: Array<Record<string, unknown>>
+  externalApiDraft: ExternalApiDesignDraft
   seedRows: Array<Record<string, unknown>>
   // 已自动应用的 AI 种子数据生成键（内容序列化），用于防止重复覆盖用户编辑。
   seedDataAppliedKeys: string[]
@@ -2166,26 +2083,25 @@ export function EntityDesignCard({
   const [bindings, setBindings] = useState<Array<Record<string, unknown>>>(() =>
     storedDraft?.bindings || initialBindingsFrom(existingDatabaseDesign, entityFields),
   );
-  const apiInfo = objectValue(existingExternalApiDesign.api_info);
-  const [apiPath, setApiPath] = useState(
-    () => storedDraft?.apiPath ?? String(apiInfo.path || ""),
-  );
-  const [apiMethod, setApiMethod] = useState(
-    () => storedDraft?.apiMethod || String(apiInfo.method || "GET"),
-  );
-  const [requestBody, setRequestBody] = useState(
-    () =>
-      storedDraft?.requestBody ??
-      (apiInfo.request_body ? JSON.stringify(apiInfo.request_body, null, 2) : ""),
-  );
-  const [responseBody, setResponseBody] = useState(
-    () =>
-      storedDraft?.responseBody ??
-      (apiInfo.response_body ? JSON.stringify(apiInfo.response_body, null, 2) : ""),
-  );
-  const [mappings, setMappings] = useState<Array<Record<string, unknown>>>(() =>
-    storedDraft?.mappings ||
-    recordListChange(undefined, existingExternalApiDesign.field_mappings),
+  const {
+    draft: externalApiDraft,
+    updateDraft: handleExternalApiDraftChange,
+    updateOperation: handleExternalApiOperationChange,
+  } = useExternalApiDraft({
+    existingDesign: existingExternalApiDesign,
+    storedDraft: storedDraft?.externalApiDraft,
+  });
+  const relatedEndpoints = (
+    entityTarget?.related_endpoints || entityDesign?.related_endpoints || []
+  ).map((item) => ({
+    api_contract_id: String(item.api_contract_id || ""),
+    endpoint_id: String(item.endpoint_id || ""),
+    method: item.method,
+    path: item.path,
+    summary: item.summary,
+  }));
+  const activeExternalOperation = externalApiDraft.operations.find(
+    (operation) => operation.operationId === externalApiDraft.activeOperationId,
   );
   const [seedRows, setSeedRows] = useState<Array<Record<string, unknown>>>(() =>
     storedDraft?.seedRows ||
@@ -2287,11 +2203,7 @@ export function EntityDesignCard({
       selectedTableName,
       tableColumns,
       bindings,
-      apiPath,
-      apiMethod,
-      requestBody,
-      responseBody,
-      mappings,
+      externalApiDraft,
       seedRows,
       seedDataAppliedKeys,
       fieldValues,
@@ -2315,11 +2227,7 @@ export function EntityDesignCard({
     selectedTableName,
     tableColumns,
     bindings,
-    apiPath,
-    apiMethod,
-    requestBody,
-    responseBody,
-    mappings,
+    externalApiDraft,
     seedRows,
     seedDataAppliedKeys,
     fieldValues,
@@ -2434,11 +2342,12 @@ export function EntityDesignCard({
       };
     }
     if (assistType === "api_mapping") {
+      const response = tryParseJson(activeExternalOperation?.responseBody || "");
       return {
         fields: entityFields,
-        current_mappings: mappings,
-        request_body: tryParseJson(requestBody) || null,
-        response_body: tryParseJson(responseBody) || null,
+        current_mappings: activeExternalOperation?.mappings || [],
+        response_body: response || null,
+        response_paths: responseFieldPaths(response),
       };
     }
     if (assistType === "seed_data") {
@@ -2468,6 +2377,9 @@ export function EntityDesignCard({
       action: "ai_assist",
       entity_id: entityId,
       assist_type: assistType,
+      ...(assistType === "api_mapping" && activeExternalOperation
+        ? { operation_id: activeExternalOperation.operationId }
+        : {}),
       context: buildAiAssistContext(assistType, trimmedMessage || undefined),
     });
     onInteraction?.();
@@ -2642,6 +2554,10 @@ export function EntityDesignCard({
 
   const visibleSuggestions = (assistType: string): WorkflowEntityDesignSuggestion[] => {
     if (aiSuggestions?.assist_type !== assistType) return [];
+    if (
+      assistType === "api_mapping" &&
+      String(aiSuggestions.operation_id || "") !== String(activeExternalOperation?.operationId || "")
+    ) return [];
     return (aiSuggestions.suggestions || []).filter(
       (suggestion) =>
         !suggestion.id ||
@@ -2729,11 +2645,15 @@ export function EntityDesignCard({
         >,
       );
     } else if (assistType === "api_mapping") {
-      setMappings((current) =>
-        applyEntityDesignSuggestion(assistType, current, suggestion) as Array<
-          Record<string, unknown>
-        >,
-      );
+      if (activeExternalOperation) {
+        handleExternalApiOperationChange(activeExternalOperation.operationId, {
+          mappings: applyEntityDesignSuggestion(
+            assistType,
+            activeExternalOperation.mappings,
+            suggestion,
+          ) as Array<Record<string, unknown>>,
+        });
+      }
     } else if (assistType === "seed_data") {
       setSeedRows((current) =>
         applyEntityDesignSuggestion(assistType, current, suggestion) as Array<
@@ -2774,9 +2694,10 @@ export function EntityDesignCard({
       (sourceType !== "database" ||
         (selectedTableName &&
           bindings.some((row) => String(row.table_column || "").trim() !== ""))) &&
-      (sourceType !== "external_api" || Boolean(apiPath.trim())),
+      (sourceType !== "external_api" || externalApiDraft.operations.length > 0),
   );
 
+  // 组装当前实体方案并通过既有 AG-UI 动作提交一次最终确认。
   const submitDesign = (): void => {
     if (!entityId || !sourceType) return;
     // 提交后设计进入后端持久化，清空本地草稿避免下次恢复旧状态。
@@ -2826,15 +2747,7 @@ export function EntityDesignCard({
         : {}),
       ...(sourceType === "external_api"
         ? {
-            external_api_design: {
-              api_info: {
-                path: apiPath.trim(),
-                method: apiMethod,
-                request_body: tryParseJson(requestBody),
-                response_body: tryParseJson(responseBody),
-              },
-              field_mappings: normalizeObjectRows(mappings),
-            },
+            external_api_design: serializeExternalApiDesign(externalApiDraft),
           }
         : {}),
       ...(sourceType === "static"
@@ -3250,100 +3163,19 @@ export function EntityDesignCard({
       ) : null}
 
       {sourceType === "external_api" ? (
-        <>
-          <EntitySectionCard title="外部 API 信息">
-            <div className={cx("entity-design-form-row")}>
-              <label className={cx("entity-design-form-field")}>
-                <Text type="secondary">请求路径</Text>
-                <Input
-                  disabled={cardDisabled}
-                  onChange={(event) => setApiPath(event.target.value)}
-                  placeholder="/api/products"
-                  value={apiPath}
-                />
-              </label>
-              <label className={cx("entity-design-form-field")}>
-                <Text type="secondary">请求方式</Text>
-                <Select
-                  disabled={cardDisabled}
-                  onChange={(value) => setApiMethod(String(value))}
-                  options={["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => ({
-                    label: value,
-                    value,
-                  }))}
-                  value={apiMethod}
-                />
-              </label>
-            </div>
-            <AdvancedJsonCollapse
-              disabled={cardDisabled}
-              label="请求体（JSON，可选）"
-              onChange={setRequestBody}
-              // 请求体只导入 JSON 文本，不触发字段映射。
-              onImport={() => undefined}
-              value={requestBody}
-            />
-            <AdvancedJsonCollapse
-              disabled={cardDisabled}
-              label="返回体（JSON）"
-              onChange={setResponseBody}
-              onImport={(text) => {
-                // 导入返回体后按同名路径补齐空映射，不覆盖用户已填内容。
-                setMappings((current) =>
-                  sameNameFieldMappings(entityFields, tryParseJson(text), current),
-                );
-              }}
-              value={responseBody}
-            />
-          </EntitySectionCard>
-          <EntitySectionCard
-            extra={
-              <div className={cx("entity-design-section-extra")}>
-                <Button
-                  disabled={cardDisabled || !entityId}
-                  icon={<LinkOutlined />}
-                  onClick={() =>
-                    setMappings((current) =>
-                      sameNameFieldMappings(
-                        entityFields,
-                        tryParseJson(responseBody),
-                        current,
-                      ),
-                    )
-                  }
-                  size="small"
-                >
-                  同名匹配
-                </Button>
-                <AiAssistTrigger
-                  assistType="api_mapping"
-                  disabled={cardDisabled || !entityId}
-                  loading={pendingAssistType === "api_mapping"}
-                  onSubmit={requestAiAssist}
-                />
-              </div>
-            }
-            title="返回体字段绑定"
-          >
-            <RowListEditor
-              columns={[
-                {
-                  key: "entity_field",
-                  label: "目标字段",
-                  placeholder: "例如 product_name",
-                },
-                {
-                  key: "source_field",
-                  label: "来源字段",
-                  placeholder: "例如 data.name",
-                },
-                { key: "rule", label: "规则", placeholder: "可选" },
-              ]}
-              disabled={cardDisabled}
-              emptyText="暂无绑定，点击下方添加。"
-              onChange={setMappings}
-              rows={mappings}
-            />
+        <ExternalApiDesignPanel
+          disabled={cardDisabled}
+          draft={externalApiDraft}
+          entityFields={entityFields}
+          onChange={handleExternalApiDraftChange}
+          onUpdateOperation={handleExternalApiOperationChange}
+          onConfirm={submitDesign}
+          onRequestAiMapping={(operationId) => {
+            handleExternalApiDraftChange({ activeOperationId: operationId });
+            requestAiAssist("api_mapping");
+          }}
+          relatedEndpoints={relatedEndpoints}
+          suggestionSlot={
             <AiSuggestionArea
               note={
                 aiSuggestions?.assist_type === "api_mapping"
@@ -3355,8 +3187,8 @@ export function EntityDesignCard({
               onDismiss={dismissSuggestion}
               suggestions={visibleSuggestions("api_mapping")}
             />
-          </EntitySectionCard>
-        </>
+          }
+        />
       ) : null}
 
       {sourceType === "static" ? (
@@ -3414,7 +3246,7 @@ export function EntityDesignCard({
         </>
       ) : null}
 
-      <div className={cx("entity-design-panel-actions")}>
+      {sourceType !== "external_api" ? <div className={cx("entity-design-panel-actions")}>
         <Button
           disabled={!canSubmit}
           icon={<CheckCircleOutlined />}
@@ -3424,7 +3256,7 @@ export function EntityDesignCard({
         >
           确认实体设计
         </Button>
-      </div>
+      </div> : null}
       </div>
       ) : null}
     </>

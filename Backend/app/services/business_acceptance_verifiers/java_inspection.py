@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.services.business_acceptance_verifiers.common import verification_result
@@ -17,6 +18,46 @@ from app.services.business_acceptance_verifiers.java_inspection_support import (
     _operation_present,
     _type_has_suffix,
 )
+
+
+def _java_name_candidates(value: Any) -> set[str]:
+    """把外部参数名转换为 Java 中常见的原名与 lowerCamelCase 候选。"""
+
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    parts = [part for part in re.split(r"[^A-Za-z0-9_$]+", text) if part]
+    camel = parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
+    return {text, camel}
+
+
+def _contract_name_present(model: Any, value: Any) -> bool:
+    """判断请求参数名是否真实出现在 Java 标识符或字符串字面量中。"""
+
+    candidates = _java_name_candidates(value)
+    return bool(candidates & (model.identifiers | model.literals))
+
+
+def _configuration_key_present(model: Any, value: Any) -> bool:
+    """识别配置键原文及 Spring ${配置键} 占位符字面量。"""
+
+    key = str(value or "").strip()
+    if not key:
+        return False
+    return key in model.identifiers or any(
+        literal == key or f"${{{key}}}" in literal
+        for literal in model.literals
+    )
+
+
+def _source_path_segments(value: Any) -> set[str]:
+    """提取响应路径中的可执行 Java 标识符，并过滤根数组产生的空段。"""
+
+    return {
+        cleaned
+        for segment in str(value or "").split(".")
+        if (cleaned := segment.replace("[]", "").strip())
+    }
 
 
 def verify_repository_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
@@ -146,7 +187,7 @@ def verify_endpoint_source(files: dict[str, str], expected: dict[str, Any]) -> d
 
 
 def verify_external_client_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
-    """通过 AST 验证外部 API Client 的 method/path 和 HTTP Client 调用。"""
+    """通过 AST 验证外部 API Client 的连接配置、method/path 和 HTTP Client 调用。"""
 
     model = _inspect_or_block(files)
     if isinstance(model, dict):
@@ -160,6 +201,13 @@ def verify_external_client_source(files: dict[str, str], expected: dict[str, Any
         matched = any(_external_api_implemented(client, method, path) for client in clients)
         if not matched:
             errors.append(f"外部 API Client 缺少 {method} {path} 的公共 HTTP Client 调用。")
+        config_key = str(info.get("base_url_config_key") or "").strip()
+        if config_key and not _configuration_key_present(model, config_key):
+            errors.append(f"外部 API Client 未读取 Base URL 配置键 {config_key}。")
+        for parameter in _dict_items(info.get("parameters")):
+            parameter_name = str(parameter.get("name") or "").strip()
+            if parameter_name and not _contract_name_present(model, parameter_name):
+                errors.append(f"外部 API Client 未实现请求参数 {parameter_name}。")
     if any(_type_has_suffix(item, "Repository", "Mapper") for item in model.types):
         errors.append("外部 API Client 不得引入持久化 Repository/Mapper。")
     if errors:
@@ -185,18 +233,33 @@ def verify_external_mapping_source(files: dict[str, str], expected: dict[str, An
     ]
     errors: list[str] = []
     mappings = 0
+    entity_payload_apis = 0
     for api in _dict_items(expected.get("external_apis")):
+        response_handling = _dict_value(api.get("response_handling"))
+        if response_handling.get("entity_payload") is not True:
+            continue
+        entity_payload_apis += 1
+        payload_path = str(response_handling.get("payload_path") or "").strip()
+        payload_segments = _source_path_segments(payload_path)
+        if payload_segments and not any(
+            payload_segments.issubset(method.identifiers)
+            for method in mapping_methods
+        ):
+            errors.append(f"缺少外部 API 实体载荷路径解析：{payload_path}。")
         for mapping in _dict_items(api.get("field_mappings")):
             source_field = str(mapping.get("source_field") or "")
             entity_field = str(mapping.get("entity_field") or "")
             if not source_field or not entity_field:
                 return verification_result("blocked", "正式外部 API field_mappings 缺少 source_field 或 entity_field。")
-            required = {*source_field.split("."), entity_field}
+            required = _source_path_segments(source_field)
+            required.add(entity_field)
             if not any(required.issubset(method.identifiers) for method in mapping_methods):
                 errors.append(f"缺少外部字段到实体字段的同方法映射 {source_field} -> {entity_field}。")
             mappings += 1
     if errors:
         return verification_result("failed", "；".join(errors), facts={"mapping_count": mappings})
+    if entity_payload_apis == 0:
+        return verification_result("passed", "上游操作均为非实体响应，无需字段映射。", facts={"mapping_count": 0})
     if not mappings:
         return verification_result("blocked", "正式输入没有可执行的外部 API 字段映射。")
     return verification_result("passed", f"已通过 AST 验证 {mappings} 条外部 API 字段映射。", facts={"mapping_count": mappings})

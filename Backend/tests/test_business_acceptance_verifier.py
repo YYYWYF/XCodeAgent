@@ -9,6 +9,10 @@ import unittest
 from app.services.business_acceptance import BUSINESS_ACCEPTANCE_KINDS, compile_business_acceptance
 from app.services.business_acceptance_verifier import verify_business_acceptance
 from app.services.business_acceptance_verifiers.backend_domain import verify_domain_mapping_source
+from app.services.business_acceptance_verifiers.backend_external_api import (
+    verify_external_api_client_source,
+    verify_external_api_mapping_source,
+)
 from app.services.business_acceptance_verifiers.typescript_inspection import (
     verify_api_contract_source,
 )
@@ -92,6 +96,80 @@ def _personal_info_domain_sources() -> dict[str, str]:
 
 class BusinessAcceptanceVerifierTests(unittest.TestCase):
     """验证 verifier 只接受当前工作区和当前正式来源的确定性证据。"""
+
+    def test_external_api_client_verifier_rejects_missing_parameter(self) -> None:
+        """外部 API Client 必须实现正式契约声明的 Path/Query 参数。"""
+
+        result = verify_external_api_client_source(
+            {
+                "OrderClient.java": (
+                    "class OrderClient { private RestTemplate restTemplate; "
+                    "OrderResponse get() { return restTemplate.getForObject(\"/orders\", OrderResponse.class); } }"
+                )
+            },
+            {
+                "external_apis": [{
+                    "api_info": {
+                        "method": "GET",
+                        "path": "/orders",
+                        "parameters": [{"name": "page", "in": "query"}],
+                    }
+                }]
+            },
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("请求参数 page", result["evidence"])
+
+    def test_external_api_mapping_verifier_supports_root_array_path(self) -> None:
+        """根数组规范路径 [].name 不应产生空 Java 标识符并误判生成代码。"""
+
+        result = verify_external_api_mapping_source(
+            {
+                "OrderMapper.java": (
+                    "class OrderMapper { Order map(Upstream value) { "
+                    "String name = value.name; return null; } }"
+                )
+            },
+            {
+                "external_apis": [{
+                    "response_handling": {
+                        "entity_payload": True,
+                        "cardinality": "array",
+                        "payload_path": "[]",
+                    },
+                    "field_mappings": [
+                        {"source_field": "[].name", "entity_field": "name"}
+                    ],
+                }]
+            },
+        )
+        self.assertEqual(result["status"], "passed")
+
+    def test_external_api_mapping_verifier_checks_payload_path(self) -> None:
+        """字段名偶然匹配时仍必须验证实体载荷路径的解析语义。"""
+
+        result = verify_external_api_mapping_source(
+            {
+                "OrderMapper.java": (
+                    "class OrderMapper { Order map(Upstream value) { "
+                    "String name = value.name; return null; } }"
+                )
+            },
+            {
+                "external_apis": [{
+                    "response_handling": {
+                        "entity_payload": True,
+                        "cardinality": "page",
+                        "payload_path": "data.items[]",
+                    },
+                    "field_mappings": [
+                        {"source_field": "name", "entity_field": "name"}
+                    ],
+                }]
+            },
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("实体载荷路径", result["evidence"])
 
     def test_frontend_api_contract_passes_with_cross_platform_target(self) -> None:
         """TypeScript API 模块在 Windows 分隔符目标下应通过。"""
@@ -682,14 +760,14 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
                 "}"
             ),
             "backend.external_api_client_contract": (
+                "@FeignClient(name = \"orders\", url = \"${integrations.orders.base-url}\")\n"
                 "class OrderClient {\n"
-                "  private RestTemplate restTemplate;\n"
-                "  OrderResponse get() { return restTemplate.getForObject(\"/upstream/orders\", OrderResponse.class); }\n"
+                "  @GetMapping(\"/upstream/orders\") OrderResponse get(@RequestParam(\"page\") int page);\n"
                 "}"
             ),
             "backend.external_api_mapping_contract": (
                 "class OrderMapper {\n"
-                "  Order map(Upstream value) { String id = value.id; String state = value.state.value; "
+                "  Order map(Upstream value) { String id = value.data.id; String state = value.data.state.value; "
                 "String status = state; return null; }\n"
                 "}"
             ),

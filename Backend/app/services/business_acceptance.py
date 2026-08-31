@@ -442,6 +442,7 @@ def _checks_for_deliverable(
         designs = _external_designs(formal)
         if not designs:
             return []
+        endpoints = _endpoint_expectations(formal)
         return [
             _business_check(
                 task,
@@ -449,7 +450,13 @@ def _checks_for_deliverable(
                 "backend.external_api_client_contract",
                 "外部 API Client 必须使用已确认上游 method/path、请求/响应 DTO 和公共 HTTP Client。",
                 [source for entity in designs for source in _entity_sources(formal, entity)],
-                {"external_apis": [_external_api_expectation(entity) for entity in designs]},
+                {
+                    "external_apis": [
+                        expectation
+                        for entity in designs
+                        for expectation in _external_api_expectations(entity, endpoints)
+                    ]
+                },
             )
         ]
     if kind == "backend.external_api_mapping":
@@ -466,7 +473,11 @@ def _checks_for_deliverable(
                 [source for entity in designs for source in _entity_sources(formal, entity)]
                 + _api_sources(formal, endpoints),
                 {
-                    "external_apis": [_external_api_expectation(entity) for entity in designs],
+                    "external_apis": [
+                        expectation
+                        for entity in designs
+                        for expectation in _external_api_expectations(entity, endpoints)
+                    ],
                     "endpoints": endpoints,
                 },
             )
@@ -519,6 +530,11 @@ def _formal_inputs(context: dict[str, Any], task: dict[str, Any]) -> dict[str, A
     endpoint_ids = _string_list(source_refs.get("endpoint_ids"))
     if not endpoint_ids:
         endpoint_ids = _string_list(context.get("endpoint_ids"))
+    source_target = _dict_value(source_refs.get("target"))
+    api_contract_ids = set(_string_list(source_refs.get("api_contract_ids")))
+    target_contract_id = _text(source_target.get("api_contract_id"))
+    if target_contract_id:
+        api_contract_ids.add(target_contract_id)
     contracts = _dict_items(project_plan.get("api_contracts")) or _dict_items(executable.get("api_contracts"))
     page_contract = _dict_value(context.get("page_implementation_contract"))
     if not page_contract:
@@ -559,6 +575,7 @@ def _formal_inputs(context: dict[str, Any], task: dict[str, Any]) -> dict[str, A
         "endpoint_details": endpoint_details,
         "entity_details": entity_details,
         "endpoint_ids": endpoint_ids,
+        "api_contract_ids": sorted(api_contract_ids),
         "source_refs": source_refs,
     }
 
@@ -567,9 +584,12 @@ def _endpoint_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
     """提取当前任务负责的 endpoint、参数和请求响应结构。"""
 
     endpoint_ids = set(_string_list(formal.get("endpoint_ids")))
+    api_contract_ids = set(_string_list(formal.get("api_contract_ids")))
     result: list[dict[str, Any]] = []
     for contract in _dict_items(formal.get("contracts")):
         contract_id = _text(contract.get("id"))
+        if api_contract_ids and contract_id not in api_contract_ids:
+            continue
         schemas = _dict_value(contract.get("schemas"))
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = _text(endpoint.get("id"))
@@ -698,28 +718,69 @@ def _entity_expectation(entity: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _external_api_expectation(entity: dict[str, Any]) -> dict[str, Any]:
-    """投射外部 API 上游接口和完整字段映射，不使用 mapping_count 摘要。"""
+def _external_api_expectations(
+    entity: dict[str, Any],
+    endpoints: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """按当前 Endpoint 范围投射上游操作、有效连接和完整字段映射。"""
 
     design = _dict_value(entity.get("external_api_design"))
-    api_info = _dict_value(design.get("api_info"))
-    return {
-        "entity_id": _text(entity.get("entity_id")),
-        "api_info": {
-            "method": _text(api_info.get("method"), "GET").upper(),
-            "path": _text(api_info.get("path")),
-            "request_body": api_info.get("request_body"),
-            "response_body": api_info.get("response_body"),
-        },
-        "field_mappings": [
-            {
-                "entity_field": _text(mapping.get("entity_field")),
-                "source_field": _text(mapping.get("source_field")),
-                "rule": _text(mapping.get("rule")),
-            }
-            for mapping in _dict_items(design.get("field_mappings"))[:_MAX_ITEMS]
-        ],
+    connection = _dict_value(design.get("connection"))
+    endpoint_refs = {
+        (_text(endpoint.get("api_contract_id")), _text(endpoint.get("endpoint_id")))
+        for endpoint in endpoints
     }
+    expectations: list[dict[str, Any]] = []
+    for operation in _dict_items(design.get("operations"))[:_MAX_ITEMS]:
+        api_info = _dict_value(operation.get("api_info"))
+        override = _dict_value(operation.get("connection_override"))
+        effective = _dict_value(operation.get("effective_connection"))
+        operation_refs = _dict_items(operation.get("endpoint_refs"))[:_MAX_ITEMS]
+        operation_ref_keys = {
+            (_text(ref.get("api_contract_id")), _text(ref.get("endpoint_id")))
+            for ref in operation_refs
+        }
+        if endpoint_refs and not (operation_ref_keys & endpoint_refs):
+            continue
+        effective_headers = {
+            _text(header.get("name")).casefold(): dict(header)
+            for header in _dict_items(connection.get("headers"))
+            if _text(header.get("name"))
+        }
+        for header in _dict_items(api_info.get("headers")):
+            name = _text(header.get("name"))
+            if name:
+                effective_headers[name.casefold()] = dict(header)
+        expectations.append(
+            {
+                "entity_id": _text(entity.get("entity_id")),
+                "operation_id": _text(operation.get("operation_id")),
+                "name": _text(operation.get("name")),
+                "endpoint_refs": operation_refs,
+                "api_info": {
+                    "base_url": _text(effective.get("base_url") or override.get("base_url") or connection.get("base_url")),
+                    "base_url_config_key": _text(effective.get("base_url_config_key") or override.get("base_url_config_key") or connection.get("base_url_config_key")),
+                    "method": _text(api_info.get("method"), "GET").upper(),
+                    "path": _text(api_info.get("path")),
+                    "timeout_ms": effective.get("timeout_ms") or override.get("timeout_ms") or connection.get("timeout_ms"),
+                    "parameters": _dict_items(api_info.get("parameters"))[:_MAX_ITEMS],
+                    "headers": _dict_items(effective.get("headers"))[:_MAX_ITEMS]
+                    or list(effective_headers.values())[:_MAX_ITEMS],
+                    "request_body": api_info.get("request_body"),
+                    "response_body": api_info.get("response_body"),
+                },
+                "response_handling": _dict_value(operation.get("response_handling")),
+                "field_mappings": [
+                    {
+                        "entity_field": _text(mapping.get("entity_field")),
+                        "source_field": _text(mapping.get("source_field")),
+                        "rule": _text(mapping.get("rule")),
+                    }
+                    for mapping in _dict_items(operation.get("field_mappings"))[:_MAX_ITEMS]
+                ],
+            }
+        )
+    return expectations
 
 
 def _entity_sources(formal: dict[str, Any], entity: dict[str, Any]) -> list[dict[str, Any]]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.services.builtin_skills import (
@@ -96,6 +97,8 @@ def execution_task_packet(
         **({"id": task["id"]} if "id" in task else {}),
         **({"unit_id": task["unit_id"]} if "unit_id" in task else {}),
         "kind": kind,
+        "stage": _task_stage(task),
+        "execution_steps": _task_execution_steps(task),
         "allowed_paths": list(task.get("allowed_paths") or []),
         "change_scope": [
             dict(item)
@@ -132,6 +135,11 @@ def task_implementation_contract(
         endpoint_ids,
         entity_ids,
     )
+    scoped_entity_designs = [
+        detail
+        for detail in task_entity_designs(task)
+        if str(detail.get("entity_id") or "") in entity_ids
+    ]
     return {
         "kind": "endpoint",
         "api_contract": api_contracts[0] if api_contracts else {},
@@ -141,10 +149,12 @@ def task_implementation_contract(
             endpoint_ids,
         ),
         "entities": [
-            _implementation_entity_binding(detail)
-            for detail in _dict_items(project_plan.get("entity_detail_plans"))
-            if str(detail.get("entity_id") or "") in entity_ids
-            and str(detail.get("status") or "") == "confirmed"
+            _implementation_entity_binding(
+                detail,
+                contract_ids=contract_ids,
+                endpoint_ids=endpoint_ids,
+            )
+            for detail in scoped_entity_designs
         ],
         "authorization_constraints": _endpoint_authorization_constraints(task),
         "language": {"java_version": "8"},
@@ -205,6 +215,41 @@ def _task_kind(task: dict[str, Any]) -> str:
     """根据稳定 Unit 标识区分基础设施任务与 Endpoint 实现任务。"""
 
     return "bootstrap" if str(task.get("unit_id") or "") == _BOOTSTRAP_UNIT_ID else "endpoint"
+
+
+def _task_stage(task: dict[str, Any]) -> str:
+    """从当前稳定任务 ID 提取执行阶段，避免 Agent 根据文件名猜测职责。"""
+
+    if _task_kind(task) == "bootstrap":
+        return "bootstrap"
+    task_id = str(task.get("id") or "").strip()
+    stage = task_id.rsplit("::", 1)[-1] if "::" in task_id else ""
+    allowed = {
+        "objects",
+        "repository",
+        "upstream",
+        "mapping",
+        "service",
+        "controller",
+    }
+    return stage if stage in allowed else "endpoint"
+
+
+def _task_execution_steps(task: dict[str, Any]) -> list[str]:
+    """从任务中文编号描述提取有界执行步骤，不把整段自由文本注入执行契约。"""
+
+    description = str(task.get("description") or "")[:12_000]
+    steps: list[str] = []
+    for line in description.splitlines():
+        match = re.match(r"^\s*\d+[.、)]\s*(.+?)\s*$", line)
+        if not match:
+            continue
+        step = match.group(1).strip()[:1000]
+        if step:
+            steps.append(step)
+        if len(steps) >= 50:
+            break
+    return steps
 
 
 def _task_scope_ids(tasks: list[dict[str, Any]]) -> tuple[set[str], set[str], set[str]]:
@@ -317,7 +362,12 @@ def _scoped_endpoint_detail(
     return {}
 
 
-def _implementation_entity_binding(detail: dict[str, Any]) -> dict[str, Any]:
+def _implementation_entity_binding(
+    detail: dict[str, Any],
+    *,
+    contract_ids: set[str],
+    endpoint_ids: set[str],
+) -> dict[str, Any]:
     """把已确认实体设计裁剪为 Java 实现所需的字段与来源绑定。"""
 
     source_type = str(detail.get("data_source_type") or "").strip()
@@ -326,6 +376,13 @@ def _implementation_entity_binding(detail: dict[str, Any]) -> dict[str, Any]:
         "external_api": "external_api_design",
     }.get(source_type, "")
     source_binding = detail.get(source_key) if source_key else {}
+    if source_type == "external_api":
+        source_binding = _endpoint_external_api_binding(
+            source_binding,
+            contract_ids=contract_ids,
+            endpoint_ids=endpoint_ids,
+            entity_id=str(detail.get("entity_id") or ""),
+        )
     return {
         "entity_id": detail.get("entity_id"),
         "entity_name": detail.get("entity_name"),
@@ -338,6 +395,51 @@ def _implementation_entity_binding(detail: dict[str, Any]) -> dict[str, Any]:
         "source_binding": (
             dict(source_binding) if isinstance(source_binding, dict) else {}
         ),
+    }
+
+
+def _endpoint_external_api_binding(
+    value: Any,
+    *,
+    contract_ids: set[str],
+    endpoint_ids: set[str],
+    entity_id: str,
+) -> dict[str, Any]:
+    """只保留当前 Endpoint 唯一上游操作，并在模型调用前拒绝错误关联。"""
+
+    design = dict(value) if isinstance(value, dict) else {}
+    target_refs = {
+        (contract_id, endpoint_id)
+        for contract_id in contract_ids
+        for endpoint_id in endpoint_ids
+    }
+    operations: list[dict[str, Any]] = []
+    for operation in _dict_items(design.get("operations")):
+        refs = {
+            (
+                str(ref.get("api_contract_id") or "").strip(),
+                str(ref.get("endpoint_id") or "").strip(),
+            )
+            for ref in _dict_items(operation.get("endpoint_refs"))
+        }
+        matched = bool(refs & target_refs) if target_refs else bool(
+            {ref[1] for ref in refs} & endpoint_ids
+        )
+        if matched:
+            operations.append(dict(operation))
+    if len(operations) != 1:
+        target = ", ".join(sorted(endpoint_ids)) or "<unknown>"
+        raise ValueError(
+            f"外部 API 实体 {entity_id or '<unknown>'} 对当前 Endpoint {target} "
+            f"必须且只能投射一个上游操作，实际为 {len(operations)} 个。"
+        )
+    return {
+        "connection": (
+            dict(design.get("connection"))
+            if isinstance(design.get("connection"), dict)
+            else {}
+        ),
+        "operations": operations,
     }
 
 

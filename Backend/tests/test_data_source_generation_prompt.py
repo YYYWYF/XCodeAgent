@@ -17,10 +17,13 @@ def _task(*, designs: list[dict]) -> dict:
     """构造包含调度冗余字段的后端 Endpoint 测试任务。"""
 
     return {
-        "id": "category.create.objects",
+        "id": "backend:endpoint:category_api:category.create::Category::objects",
         "unit_id": "backend:endpoint:category_api:category.create",
         "title": "创建分类对象",
-        "description": "实现当前分类接口的对象层。",
+        "description": (
+            "1. 读取 backend/src/main/java/Category.java 并实现当前分类对象。\n"
+            "2. 保留现有包结构和 Java 8 语法。"
+        ),
         "allowed_paths": ["backend/src/main/java/Category.java"],
         "target_files": ["backend/src/main/java/Category.java"],
         "change_scope": [
@@ -43,6 +46,93 @@ def _task(*, designs: list[dict]) -> dict:
         "acceptance_checks": [{"description": "UNRELATED_ACCEPTANCE_SENTINEL"}],
         "impact_scope": {"summary": "UNRELATED_IMPACT_SENTINEL"},
         "status": "running",
+    }
+
+
+def _external_product_design() -> dict:
+    """构造与当前商品外部 API JSON 一致的无样例值构建摘要。"""
+
+    return {
+        "entity_id": "Category",
+        "entity_name": "Product",
+        "data_source_type": "external_api",
+        "fields": [
+            {"name": "name", "type": "text", "required": True},
+            {"name": "price", "type": "decimal", "required": True},
+            {
+                "name": "status",
+                "type": "enum",
+                "required": True,
+                "enum_values": ["on", "off"],
+            },
+            {"name": "created_at", "type": "datetime", "required": True},
+        ],
+        "external_api_design": {
+            "connection": {
+                "base_url": "http://99.17.197.63:8090",
+                "base_url_config_key": "product.url",
+                "timeout_ms": 10000,
+                "headers": [],
+            },
+            "operations": [
+                {
+                    "operation_id": "external-op-product-list",
+                    "name": "查询商品列表",
+                    "endpoint_refs": [
+                        {
+                            "api_contract_id": "category_api",
+                            "endpoint_id": "category.create",
+                        }
+                    ],
+                    "effective_connection": {
+                        "base_url": "http://99.17.197.63:8090",
+                        "base_url_config_key": "product.url",
+                        "timeout_ms": 10000,
+                        "headers": [],
+                    },
+                    "api_info": {
+                        "method": "POST",
+                        "path": "/v1/product/list",
+                        "parameters": [],
+                        "headers": [],
+                        "request_shape": {
+                            "root_type": "object",
+                            "fields": [
+                                {"path": "keyword", "type": "string"},
+                                {"path": "pageSize", "type": "integer"},
+                                {"path": "current", "type": "integer"},
+                            ],
+                        },
+                        "response_shape": {
+                            "root_type": "object",
+                            "fields": [
+                                {"path": "total", "type": "integer"},
+                                {"path": "list[]", "type": "array"},
+                                {"path": "list[].name", "type": "string"},
+                                {"path": "list[].price", "type": "decimal"},
+                                {"path": "list[].status", "type": "string"},
+                                {"path": "list[].created_at", "type": "string"},
+                            ],
+                        },
+                    },
+                    "response_handling": {
+                        "entity_payload": True,
+                        "cardinality": "object",
+                        "payload_path": "",
+                        "success_status_codes": [200],
+                    },
+                    "mapped_entity_path": "list[]",
+                    "field_mappings": [
+                        {
+                            "entity_field": name,
+                            "source_field": f"list[].{name}",
+                            "rule": "nested_match",
+                        }
+                        for name in ("name", "price", "status", "created_at")
+                    ],
+                }
+            ],
+        },
     }
 
 
@@ -201,7 +291,16 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         """提示词排除全局计划与调度字段，同时保留目标正式设计。"""
 
         task = _task(
-            designs=[{"entity_id": "Category", "data_source_type": "database"}],
+            designs=[{
+                "entity_id": "Category",
+                "data_source_type": "database",
+                "database_design": {
+                    "matched_table": "category",
+                    "bindings": [
+                        {"entity_field": "name", "table_column": "category_name"}
+                    ],
+                },
+            }],
         )
         prompt = _data_source_generation_prompt(
             project_plan=_project_plan(),
@@ -239,7 +338,8 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertIn("You may read any relevant listed file", prompt)
         self.assertIn("path metadata, not file contents or write authorization", prompt)
         self.assertIn("prefer the current filesystem result", prompt)
-        self.assertIn("process those items in numeric order", prompt)
+        self.assertIn("execution_steps as the ordered task sequence", prompt)
+        self.assertIn("process those items in array order", prompt)
         self.assertIn("planner's snapshot-time existence classification", prompt)
         self.assertIn("only to detect WorkspaceSnapshot drift", prompt)
         self.assertIn("If an add target now exists", prompt)
@@ -256,7 +356,16 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         """Endpoint 实现契约只保留当前 API、行为与已确认来源绑定。"""
 
         task = _task(
-            designs=[{"entity_id": "Category", "data_source_type": "database"}],
+            designs=[{
+                "entity_id": "Category",
+                "data_source_type": "database",
+                "database_design": {
+                    "matched_table": "category",
+                    "bindings": [
+                        {"entity_field": "name", "table_column": "category_name"}
+                    ],
+                },
+            }],
         )
         context = task_implementation_contract(_project_plan(), task)
 
@@ -274,6 +383,10 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertEqual(
             [item["entity_id"] for item in context["entities"]],
             ["Category"],
+        )
+        self.assertEqual(
+            context["entities"][0]["source_binding"]["matched_table"],
+            "category",
         )
         self.assertNotIn("table_design", context["entities"][0])
 
@@ -316,6 +429,88 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             },
         )
 
+    def test_external_api_contract_keeps_only_endpoint_scoped_operations(self) -> None:
+        """Java 实现契约不得重新读取实体的其他上游操作。"""
+
+        design = _external_product_design()
+        design["external_api_design"]["operations"].append({
+            "operation_id": "unrelated-operation",
+            "endpoint_refs": [{
+                "api_contract_id": "category_api",
+                "endpoint_id": "category.delete",
+            }],
+        })
+        task = _task(designs=[design])
+        task["id"] = "backend:endpoint:category_api:category.create::Category::upstream"
+        task["description"] = (
+            "1. 创建 product.url 配置读取和商品上游请求 DTO。\n"
+            "2. 使用 POST /v1/product/list 实现 RestTemplate Client。"
+        )
+
+        context = task_implementation_contract(_project_plan(), task)
+
+        operations = context["entities"][0]["source_binding"]["operations"]
+        self.assertEqual(
+            [item["operation_id"] for item in operations],
+            ["external-op-product-list"],
+        )
+        self.assertEqual(operations[0]["mapped_entity_path"], "list[]")
+        self.assertNotIn("request_body", str(operations[0]))
+        self.assertNotIn("response_body", str(operations[0]))
+
+    def test_external_api_contract_rejects_missing_or_duplicate_endpoint_operation(self) -> None:
+        """当前 Endpoint 缺失或重复绑定上游操作时必须在 Agent 写入前失败。"""
+
+        missing = _external_product_design()
+        missing["external_api_design"]["operations"][0]["endpoint_refs"][0][
+            "endpoint_id"
+        ] = "category.delete"
+        with self.assertRaisesRegex(ValueError, "必须且只能投射一个上游操作"):
+            task_implementation_contract(_project_plan(), _task(designs=[missing]))
+
+        duplicate = _external_product_design()
+        duplicate["external_api_design"]["operations"].append(
+            {
+                **duplicate["external_api_design"]["operations"][0],
+                "operation_id": "duplicate-product-list",
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "实际为 2 个"):
+            task_implementation_contract(_project_plan(), _task(designs=[duplicate]))
+
+    def test_external_api_prompt_carries_shapes_stage_and_mapping_without_examples(self) -> None:
+        """DatasourceAgent Prompt 携带当前商品操作结构、阶段和映射规则。"""
+
+        task = _task(designs=[_external_product_design()])
+        task["id"] = "backend:endpoint:category_api:category.create::Category::mapping"
+        task["description"] = (
+            "1. 读取商品上游响应 DTO 并遍历 list[]。\n"
+            "2. 按 list[].price 到 price 等字段映射转换商品。"
+        )
+
+        prompt = _data_source_generation_prompt(
+            project_plan=_project_plan(),
+            workspace_snapshot=_workspace_snapshot(),
+            tasks=[task],
+        )
+
+        self.assertIn('"stage": "mapping"', prompt)
+        self.assertIn('"mapped_entity_path": "list[]"', prompt)
+        self.assertIn('"base_url_config_key": "product.url"', prompt)
+        self.assertIn('"path": "pageSize"', prompt)
+        self.assertIn('"path": "list[].price"', prompt)
+        self.assertIn("request_shape and response_shape as field/type structure", prompt)
+        self.assertIn("Persist effective_connection.base_url directly", prompt)
+        self.assertIn("plain YAML or properties value", prompt)
+        self.assertIn("never wrap it in a `${ENV_NAME:default}`", prompt)
+        self.assertIn("never place effective_connection.base_url in Java constants", prompt)
+        self.assertIn("For status=already_satisfied, satisfaction_evidence is mandatory", prompt)
+        self.assertIn("Never return already_satisfied with omitted", prompt)
+        self.assertIn('"target_files":["<inspected-relative-path>"]', prompt)
+        self.assertIn("If the task performs any write, return status=completed", prompt)
+        self.assertNotIn("PROMPT_SAMPLE_KEYWORD", prompt)
+        self.assertNotIn("PROMPT_SAMPLE_PRODUCT", prompt)
+
     def test_execution_packet_drops_scheduler_only_fields(self) -> None:
         """最小任务包不携带验收、状态和影响分析等调度字段。"""
 
@@ -332,6 +527,14 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertNotIn("title", packet)
         self.assertNotIn("description", packet)
         self.assertEqual(packet["kind"], "endpoint")
+        self.assertEqual(packet["stage"], "objects")
+        self.assertEqual(
+            packet["execution_steps"],
+            [
+                "读取 backend/src/main/java/Category.java 并实现当前分类对象。",
+                "保留现有包结构和 Java 8 语法。",
+            ],
+        )
         self.assertIn("implementation_contract", packet)
         self.assertNotIn("backend_working_directory", str(packet))
 
@@ -346,6 +549,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         packet = execution_task_packet(_project_plan(), task)
 
         self.assertEqual(packet["kind"], "bootstrap")
+        self.assertEqual(packet["stage"], "bootstrap")
         self.assertIn(
             "/.xcodeagent/builtin-skills/springboot-mybatis-generate/"
             "references/bootstrap.md",

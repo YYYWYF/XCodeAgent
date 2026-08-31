@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from copy import deepcopy
 from pathlib import Path
 import tempfile
 
@@ -110,18 +111,43 @@ def _entity_detail() -> dict:
             ]
         },
         "external_api_design": {
-            "api_info": {
-                "method": "GET",
-                "path": "/upstream/orders",
-                "request_body": {},
-                "response_body": {"id": "string"},
+            "connection": {
+                "base_url": "https://api.example.com",
+                "base_url_config_key": "integrations.orders.base-url",
+                "timeout_ms": 10000,
+                "headers": [],
             },
-            "field_mappings": [
-                {"source_field": "id", "entity_field": "id", "rule": "direct"},
+            "operations": [
                 {
-                    "source_field": "state.value",
-                    "entity_field": "status",
-                    "rule": "nested",
+                    "operation_id": "order-list",
+                    "name": "查询订单",
+                    "endpoint_refs": [
+                        {"api_contract_id": "orders-api", "endpoint_id": "orders.list"}
+                    ],
+                    "api_info": {
+                        "method": "GET",
+                        "path": "/upstream/orders",
+                        "parameters": [
+                            {"name": "page", "in": "query", "type": "number", "required": True},
+                        ],
+                        "headers": [],
+                        "request_body": None,
+                        "response_body": {"data": {"id": "string", "state": {"value": "open"}}},
+                    },
+                    "response_handling": {
+                        "entity_payload": True,
+                        "cardinality": "object",
+                        "payload_path": "data",
+                        "success_status_codes": [200],
+                    },
+                    "field_mappings": [
+                        {"source_field": "data.id", "entity_field": "id", "rule": "manual"},
+                        {
+                            "source_field": "data.state.value",
+                            "entity_field": "status",
+                            "rule": "manual",
+                        },
+                    ],
                 },
             ],
         },
@@ -343,6 +369,41 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
         self.assertNotEqual(
             repair["business_acceptance_checks"][0]["expected"],
             parent["business_acceptance_checks"][0]["expected"],
+        )
+
+    def test_external_api_acceptance_projects_only_linked_operation_and_merged_headers(self) -> None:
+        """外部 API 验收只投射当前 Endpoint 操作，且操作 Header 覆盖共享值。"""
+
+        context = _formal_context()
+        design = context["project_plan"]["entity_detail_plans"][0]["external_api_design"]
+        design["connection"]["headers"] = [{"name": "X-Locale", "value": "en-US"}]
+        design["operations"][0]["api_info"]["headers"] = [
+            {"name": "x-locale", "value": "zh-CN"}
+        ]
+        unrelated = deepcopy(design["operations"][0])
+        unrelated["operation_id"] = "orders-unrelated"
+        unrelated["endpoint_refs"] = [
+            {"api_contract_id": "orders-api", "endpoint_id": "orders.unrelated"}
+        ]
+        design["operations"].append(unrelated)
+        task = _task(
+            "backend.external_api_client",
+            path="backend/src/client/OrderClient.java",
+            owner="backend",
+            unit_id="backend:orders",
+            target_id="Order",
+        )
+
+        compiled = compile_business_acceptance([task], context)[0]
+        expected = compiled["business_acceptance_checks"][0]["expected"]
+
+        self.assertEqual(
+            [item["operation_id"] for item in expected["external_apis"]],
+            ["order-list"],
+        )
+        self.assertEqual(
+            expected["external_apis"][0]["api_info"]["headers"],
+            [{"name": "x-locale", "value": "zh-CN"}],
         )
 
     def test_page_engineering_checks_cover_entry_export_placeholder_and_component(self) -> None:

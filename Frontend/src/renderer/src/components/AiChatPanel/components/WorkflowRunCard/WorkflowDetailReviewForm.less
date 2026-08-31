@@ -6,6 +6,11 @@
   align-items: start;
 }
 
+// 实体设计主卡片统一使用单列工作区，所有数据源设计区占满可用宽度。
+.@{class-prefix}-entity-design-card.@{class-prefix}-workflow-detail-review-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .@{class-prefix}-workflow-detail-review-field {
   > .ant-typography-secondary {
     position: relative;
@@ -515,6 +520,247 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 150px;
   gap: 12px;
+}
+
+// 外部 API 四步设计器：把连接、样例、映射和确认分成可定位的工作区。
+.@{class-prefix}-entity-design-external-api-wizard {
+  grid-column: 1 / -1;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 12px;
+}
+
+.@{class-prefix}-entity-design-wizard-header,
+.@{class-prefix}-entity-design-json-editor-head,
+.@{class-prefix}-entity-design-response-paths-head,
+.@{class-prefix}-entity-design-mapping-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.@{class-prefix}-entity-design-wizard-header {
+  .ant-typography {
+    display: block;
+    margin: 0;
+  }
+}
+
+.@{class-prefix}-entity-design-operation-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.@{class-prefix}-entity-design-external-api-wizard > .ant-collapse {
+  background: transparent;
+  border-color: var(--wb-border-strong);
+
+  .ant-collapse-item,
+  .ant-collapse-content {
+    border-color: var(--wb-border-strong);
+  }
+
+  .ant-collapse-header,
+  .ant-collapse-content-box {
+    color: var(--wb-text);
+    background: var(--wb-canvas);
+  }
+}
+
+.@{class-prefix}-entity-design-wizard-step {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 10px;
+}
+
+.@{class-prefix}-entity-design-form-row.is-three {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 160px;
+}
+
+.@{class-prefix}-entity-design-api-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.@{class-prefix}-entity-design-api-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px 120px auto minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 8px;
+
+  &.is-invalid {
+    border-color: var(--wb-danger, #d4380d);
+  }
+}
+
+.@{class-prefix}-entity-design-json-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.@{class-prefix}-entity-design-json-editor-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.@{class-prefix}-entity-design-response-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--wb-surface-subtle);
+  border: 1px dashed var(--wb-border-strong);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-entity-design-response-path-list {
+  display: flex;
+  max-height: 150px;
+  flex-wrap: wrap;
+  gap: 4px;
+  overflow-y: auto;
+
+  .ant-btn {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-entity-design-mapping-toolbar {
+  align-items: center;
+
+  .ant-typography {
+    display: block;
+  }
+}
+
+.@{class-prefix}-entity-design-mapping-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.@{class-prefix}-entity-design-mapping-head,
+.@{class-prefix}-entity-design-mapping-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.5fr) 100px;
+  align-items: center;
+  gap: 10px;
+}
+
+.@{class-prefix}-entity-design-mapping-head {
+  padding: 8px 10px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-entity-design-mapping-row {
+  padding: 10px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 8px;
+
+  > span:first-child {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  code {
+    color: var(--wb-text-secondary);
+  }
+
+  &.is-invalid {
+    border-color: var(--wb-danger, #d4380d);
+  }
+}
+
+.@{class-prefix}-entity-design-review-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px;
+    background: var(--wb-surface-subtle);
+    border: 1px solid var(--wb-border-strong);
+    border-radius: 8px;
+
+    span,
+    strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+}
+
+.@{class-prefix}-entity-design-wizard-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0 -16px -16px;
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--wb-surface-subtle) 94%, transparent);
+  border-top: 1px solid var(--wb-border-strong);
+  border-radius: 0 0 12px 12px;
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-entity-design-form-row.is-three,
+  .@{class-prefix}-entity-design-review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-entity-design-api-table-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .@{class-prefix}-entity-design-mapping-head {
+    display: none;
+  }
+
+  .@{class-prefix}-entity-design-mapping-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .@{class-prefix}-entity-design-form-field {

@@ -230,6 +230,79 @@ def _normalize_suggestions(
     return normalized
 
 
+def _response_paths_from_context(context: dict[str, Any]) -> set[str]:
+    """只从真实响应样例计算规范化路径，不信任调用方声明的 response_paths。"""
+
+    paths: set[str] = set()
+    payload = context.get("response_body")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            payload = None
+
+    def visit(node: Any, prefix: str, depth: int) -> None:
+        """递归展开有限深度的响应样例，生成与前端一致的字段路径。"""
+
+        if depth > 3 or len(paths) >= 300:
+            return
+        if isinstance(node, list):
+            array_path = (
+                f"{prefix}[]"
+                if prefix and not prefix.endswith("[]")
+                else (prefix or "[]")
+            )
+            if array_path:
+                paths.add(array_path)
+            if node:
+                visit(node[0], array_path, depth)
+            return
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            name = str(key).strip()
+            if not name:
+                continue
+            path = f"{prefix}.{name}" if prefix else name
+            paths.add(path)
+            visit(value, path, depth + 1)
+
+    visit(payload, "", 0)
+    return paths
+
+
+def _filter_api_mapping_suggestions(
+    suggestions: list[dict[str, Any]],
+    entity: dict[str, Any],
+    response_paths: set[str],
+) -> list[dict[str, Any]]:
+    """过滤 AI 虚构的实体字段、响应路径及重复字段，确保建议可直接采纳。"""
+
+    normalized_entity = normalize_entity(entity, 0, with_types=True)
+    entity_fields = {
+        str(field.get("name") or "").strip()
+        for field in normalized_entity.get("fields", [])
+        if field.get("name")
+    }
+    valid: list[dict[str, Any]] = []
+    seen_fields: set[str] = set()
+    for suggestion in suggestions:
+        payload = suggestion.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        entity_field = str(payload.get("entity_field") or "").strip()
+        source_field = str(payload.get("source_field") or "").strip()
+        if not entity_field or entity_field not in entity_fields:
+            continue
+        if not source_field or source_field not in response_paths:
+            continue
+        if entity_field in seen_fields:
+            continue
+        seen_fields.add(entity_field)
+        valid.append(suggestion)
+    return valid
+
+
 def _missing_entity_field_names_by_real_columns(
     entity: dict[str, Any],
     table_name: str,
@@ -434,6 +507,15 @@ def entity_design_ai_suggestions(
         }
     # 表选型提示词补入候选表真实列名，避免模型因缺少列信息而无法绑定或臆造列。
     prompt_context = dict(context or {})
+    api_mapping_response_paths: set[str] = set()
+    if assist_type == "api_mapping":
+        # 服务端从响应样例重新计算结构；模型只接收实体字段、路径结构和当前映射，
+        # 不接收样例值，也不信任客户端可伪造的 response_paths。
+        api_mapping_response_paths = _response_paths_from_context(prompt_context)
+        prompt_context = {
+            "response_paths": sorted(api_mapping_response_paths),
+            "current_mappings": prompt_context.get("current_mappings") or [],
+        }
     if assist_type == "table_selection":
         target_table = entity_mysql_target_table(entity)
         prompt_context = {
@@ -477,6 +559,12 @@ def entity_design_ai_suggestions(
             assist_type,
             parsed.get("suggestions") if isinstance(parsed, dict) else None,
         )
+        if assist_type == "api_mapping":
+            suggestions = _filter_api_mapping_suggestions(
+                suggestions,
+                entity,
+                api_mapping_response_paths,
+            )
         # 表选型若判定无合适表需新建，用实体确定性目标表结构替换 AI 自由文本，
         # 保证建表提案能通过既有校验并在确认后执行。
         workspace_root = (

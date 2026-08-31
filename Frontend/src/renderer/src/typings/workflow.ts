@@ -295,7 +295,8 @@ export type WorkflowDetailReviewTarget = {
   default_constraints?: Array<Record<string, unknown>>
   table_design?: Record<string, unknown>
   database_design?: Record<string, unknown>
-  external_api_design?: Record<string, unknown>
+  external_api_design?: WorkflowExternalApiDesign
+  related_endpoints?: WorkflowExternalApiEndpointRef[]
   static_design?: Record<string, unknown>
   database_execution?: Record<string, unknown>
   table_operations_executed?: boolean
@@ -353,6 +354,7 @@ export type WorkflowEntityDesignSummary = {
   data_source_options?: WorkflowEntityDesignOption[]
   ai_suggestions?: {
     assist_type?: string
+    operation_id?: string
     text?: string
     messages?: Array<{
       role?: string
@@ -384,10 +386,15 @@ export type WorkflowEntityDesignSummary = {
     table_generation_approved?: boolean
   }
   external_api_design?: {
-    path?: string
-    method?: string
-    mapping_count?: number
+    base_url?: string
+    base_url_config_key?: string
+    timeout_ms?: number
+    shared_header_count?: number
+    operation_count?: number
+    endpoint_binding_count?: number
+    operations?: Array<Record<string, unknown>>
   }
+  related_endpoints?: WorkflowExternalApiEndpointRef[]
   ddl_execution?: {
     status?: 'completed' | 'failed' | 'already_satisfied'
     table_name?: string
@@ -440,7 +447,6 @@ export type WorkflowDetailReview = {
 export type WorkflowEntityDesignAction = {
   action:
     | 'select_data_source'
-    | 'submit_external_api'
     | 'submit_static_data'
     | 'submit_bindings'
     | 'approve_table_generation'
@@ -455,26 +461,88 @@ export type WorkflowEntityDesignAction = {
   table_name?: string
   matched_table?: string
   assist_type?: string
+  operation_id?: string
   instruction?: string
   context?: Record<string, unknown>
   fields?: Array<Record<string, unknown>>
   proposal?: Record<string, unknown>
   database_design?: Record<string, unknown>
-  external_api_design?: Record<string, unknown>
+  external_api_design?: WorkflowExternalApiDesign
   static_design?: Record<string, unknown>
   business_rules?: Array<Record<string, unknown>>
   relationships?: Array<Record<string, unknown>>
   acceptance_criteria?: string[]
   risks?: string[]
-  api_info?: {
-    path?: string
-    method?: string
-    request_body?: unknown
-    response_body?: unknown
-  }
   seed_rows?: Array<Record<string, unknown>>
   field_values?: Record<string, string[]>
   bindings?: Array<Record<string, unknown>>
+}
+
+/** 外部 API 请求参数的当前公共契约。 */
+export type WorkflowExternalApiParameter = {
+  name: string
+  in: 'path' | 'query'
+  type: 'string' | 'number' | 'boolean'
+  required: boolean
+  example?: unknown
+}
+
+/** 外部 API 响应分页语义的当前公共契约。 */
+export type WorkflowExternalApiPagination = {
+  page_parameter: string
+  size_parameter: string
+  page_index_base: 0 | 1
+}
+
+/** 外部 API 操作与本系统 Endpoint 的稳定关联。 */
+export type WorkflowExternalApiEndpointRef = {
+  api_contract_id: string
+  endpoint_id: string
+  method?: string
+  path?: string
+  summary?: string
+}
+
+/** 外部 API 绑定在 AG-UI 动作中的可执行契约。 */
+export type WorkflowExternalApiDesign = {
+  connection: {
+    base_url: string
+    base_url_config_key: string
+    timeout_ms: number
+    headers: Array<{ name: string; value: string }>
+  }
+  operations: Array<{
+    operation_id: string
+    name: string
+    endpoint_refs: WorkflowExternalApiEndpointRef[]
+    connection_override?: {
+      base_url?: string
+      base_url_config_key?: string
+      timeout_ms?: number
+    }
+    api_info: {
+      method: string
+      path: string
+      parameters: WorkflowExternalApiParameter[]
+      headers: Array<{ name: string; value: string }>
+      request_body: unknown
+      response_body: unknown
+    }
+    response_handling: {
+      entity_payload: boolean
+      cardinality: 'object' | 'array' | 'page'
+      payload_path: string
+      success_status_codes: number[]
+      error_message_path?: string
+      total_path?: string
+      pagination?: WorkflowExternalApiPagination
+    }
+    field_mappings: Array<{
+      entity_field: string
+      source_field: string
+      rule: 'same_name' | 'nested_match' | 'ai' | 'manual'
+    }>
+  }>
 }
 
 export type WorkflowDetailReviewSubmission = {

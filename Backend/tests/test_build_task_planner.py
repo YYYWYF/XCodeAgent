@@ -133,8 +133,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "endpoint",
         )
 
-    def test_prompt_uses_eight_ordered_sections_and_exact_top_level_contract(self) -> None:
-        """所有规划模式必须共享八段顺序和唯一顶层 JSON 契约。"""
+    def test_prompt_uses_seven_ordered_sections_and_exact_top_level_contract(self) -> None:
+        """所有规划模式必须共享七段顺序和唯一顶层 JSON 契约。"""
 
         prompt = build_task_preparation_prompt(
             {
@@ -159,9 +159,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "## 3. Planning Algorithm",
             "## 4. Task Rules",
             "## 5. Dependency Rules",
-            "## 6. Skill Injection",
-            "## 7. Forbidden Output",
-            "## 8. Workspace Context",
+            "## 6. Forbidden Output",
+            "## 7. Workspace Context",
         ]
         positions = [prompt.index(heading) for heading in headings]
         self.assertEqual(positions, sorted(positions))
@@ -245,28 +244,25 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("The platform will deterministically normalize add/modify", prompt)
         self.assertIn('"frontend/src/pages/Orders/index.tsx"', prompt)
 
-    def test_forbidden_output_follows_injected_skill_and_preserves_scope_semantics(self) -> None:
-        """Skill 后的平台禁止项必须覆盖冲突描述并保留 change_scope 契约。"""
+    def test_forbidden_output_is_owned_by_planner_and_preserves_scope_semantics(self) -> None:
+        """任务规划规则独立于 Skill，并保留 change_scope 契约。"""
 
-        with patch(
-            "app.agents.main.task_preparer_prompt._static_data_skill_document",
-            return_value="SKILL ALLOWS MENU APPEND",
-        ):
-            prompt = build_task_preparation_prompt(
-                {
-                    "executable_details": {
-                        "entity_designs": [
-                            {"entity_id": "Notice", "data_source_type": "static"}
-                        ]
-                    }
-                },
-                {},
-                {"required_unit_ids": ["frontend:data:static"]},
-            )
+        prompt = build_task_preparation_prompt(
+            {
+                "executable_details": {
+                    "entity_designs": [
+                        {"entity_id": "Notice", "data_source_type": "static"}
+                    ]
+                }
+            },
+            {},
+            {"required_unit_ids": ["frontend:data:static"]},
+        )
 
-        self.assertLess(prompt.index("## 5. Dependency Rules"), prompt.index("## 6. Skill Injection"))
-        self.assertLess(prompt.index("## 6. Skill Injection"), prompt.index("SKILL ALLOWS MENU APPEND"))
-        self.assertLess(prompt.index("SKILL ALLOWS MENU APPEND"), prompt.index("## 7. Forbidden Output"))
+        self.assertLess(prompt.index("## 5. Dependency Rules"), prompt.index("## 6. Forbidden Output"))
+        self.assertLess(prompt.index("## 6. Forbidden Output"), prompt.index("## 7. Workspace Context"))
+        self.assertNotIn("Skill", prompt)
+        self.assertNotIn("SKILL.md", prompt)
         self.assertIn("Never create a menu or route registration task", prompt)
         self.assertIn("planned file-operation intent, not a pure permission list", prompt)
         self.assertIn("`allowed_paths` remains the execution authorization boundary", prompt)
@@ -332,8 +328,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             self.assertNotIn(omitted_key, endpoint_snapshot)
         self.assertNotIn("workflow_nodes", endpoint_snapshot["backend"])
 
-    def test_page_prompt_does_not_inject_backend_skill(self) -> None:
-        """只生成页面时不读取 Spring/MyBatis 技能或后端快照。"""
+    def test_page_prompt_does_not_read_or_inject_any_skill(self) -> None:
+        """只生成页面时不读取或注入任何 Skill，也不携带后端快照。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -343,9 +339,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "api_contracts": [{"id": "orders-api"}],
             },
         }
-        with patch(
-            "app.agents.main.task_preparer_prompt._springboot_mybatis_skill_document"
-        ) as backend_skill:
+        with patch("app.services.builtin_skills.read_builtin_skill_md") as read_skill:
             prompt = build_task_preparation_prompt(
                 project_plan,
                 {
@@ -360,14 +354,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ["Task menu-task must not modify frontend/src/constants/menus.ts."],
             )
 
-        backend_skill.assert_not_called()
+        read_skill.assert_not_called()
         self.assertIn("Plan frontend page tasks only", prompt)
         self.assertIn("PageImplementationContract", prompt)
-        self.assertNotIn("INJECTED springboot-mybatis-generate", prompt)
-        self.assertIn(
-            "No source-specific Skill is required for the current planning scope.",
-            prompt,
-        )
+        self.assertNotIn("Skill", prompt)
+        self.assertNotIn("SKILL.md", prompt)
         self.assertNotIn('"backend"', prompt)
         self.assertNotIn("direct_endpoint_contracts", prompt)
         self.assertNotIn('"entity_designs"', prompt)
@@ -453,8 +444,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             projected["frontend"]["existing_files"],
         )
 
-    def test_endpoint_prompt_injects_backend_skill_only_for_endpoint_scope(self) -> None:
-        """只生成 endpoint 时注入后端技能和 endpoint 规则。"""
+    def test_endpoint_prompt_is_skill_independent_and_keeps_backend_rules(self) -> None:
+        """只生成 endpoint 时不读取 Skill，但保留后端任务规划规则。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -465,10 +456,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "api_contracts": [{"id": "orders-api"}],
             },
         }
-        with patch(
-            "app.agents.main.task_preparer_prompt._springboot_mybatis_skill_document",
-            return_value="SKILL BODY",
-        ) as backend_skill:
+        with patch("app.services.builtin_skills.read_builtin_skill_md") as read_skill:
             prompt = build_task_preparation_prompt(
                 project_plan,
                 {"backend": {"dir_structure": ["backend/src/main/java/"]}},
@@ -479,9 +467,10 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 },
             )
 
-        backend_skill.assert_called_once()
+        read_skill.assert_not_called()
         self.assertIn("Plan endpoint/data tasks only", prompt)
-        self.assertIn("SKILL BODY", prompt)
+        self.assertNotIn("Skill", prompt)
+        self.assertNotIn("SKILL.md", prompt)
         self.assertIn("endpoint_detail_plans", prompt)
         self.assertIn("Use `[]` for a root", prompt)
         self.assertIn("JSON array of prerequisite task IDs", prompt)
@@ -502,28 +491,24 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "api_contracts": [{"id": "orders-api"}],
             }
         }
-        with patch(
-            "app.agents.main.task_preparer_prompt._springboot_mybatis_skill_document",
-            return_value="DATABASE SKILL BODY",
-        ):
-            prompt = build_task_preparation_prompt(
-                project_plan,
-                {
-                    "high_value_files": [{"path": "backend/pom.xml"}],
-                    "backend": {"dir_structure": "backend/pom.xml"},
-                },
-                {
-                    "planning_context_mode": "endpoint",
-                    "planning_unit_ids": [
-                        "backend:bootstrap",
-                        "backend:endpoint:orders-api:orders.list",
-                    ],
-                    "required_unit_ids": [
-                        "backend:bootstrap",
-                        "backend:endpoint:orders-api:orders.list",
-                    ],
-                },
-            )
+        prompt = build_task_preparation_prompt(
+            project_plan,
+            {
+                "high_value_files": [{"path": "backend/pom.xml"}],
+                "backend": {"dir_structure": "backend/pom.xml"},
+            },
+            {
+                "planning_context_mode": "endpoint",
+                "planning_unit_ids": [
+                    "backend:bootstrap",
+                    "backend:endpoint:orders-api:orders.list",
+                ],
+                "required_unit_ids": [
+                    "backend:bootstrap",
+                    "backend:endpoint:orders-api:orders.list",
+                ],
+            },
+        )
 
         self.assertIn("exactly one backend:bootstrap root task", prompt)
         self.assertIn("`backend:bootstrap::bootstrap`", prompt)
@@ -545,27 +530,23 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "api_contracts": [{"id": "orders-api"}],
             },
         }
-        with patch(
-            "app.agents.main.task_preparer_prompt._springboot_mybatis_skill_document",
-            return_value="DATABASE SKILL BODY",
-        ):
-            prompt = build_task_preparation_prompt(
-                project_plan,
-                {"backend": {"dir_structure": "backend/pom.xml"}},
-                {
-                    "planning_context_mode": "combined",
-                    "planning_unit_ids": [
-                        "backend:bootstrap",
-                        "backend:endpoint:orders-api:orders.list",
-                        "page:orders",
-                    ],
-                    "required_unit_ids": [
-                        "backend:bootstrap",
-                        "backend:endpoint:orders-api:orders.list",
-                        "page:orders",
-                    ],
-                },
-            )
+        prompt = build_task_preparation_prompt(
+            project_plan,
+            {"backend": {"dir_structure": "backend/pom.xml"}},
+            {
+                "planning_context_mode": "combined",
+                "planning_unit_ids": [
+                    "backend:bootstrap",
+                    "backend:endpoint:orders-api:orders.list",
+                    "page:orders",
+                ],
+                "required_unit_ids": [
+                    "backend:bootstrap",
+                    "backend:endpoint:orders-api:orders.list",
+                    "page:orders",
+                ],
+            },
+        )
 
         self.assertIn("exactly one backend:bootstrap root task", prompt)
         self.assertIn("backend/pom.xml", prompt)
@@ -622,15 +603,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "planning_context_mode": "endpoint",
         }
 
-        with patch(
-            "app.agents.main.task_preparer_prompt._springboot_mybatis_skill_document",
-            return_value="DATABASE SKILL BODY",
-        ):
-            prompt = build_task_preparation_prompt(
-                project_plan,
-                {"backend": {"dir_structure": "backend/src/main/java"}},
-                build_context,
-            )
+        prompt = build_task_preparation_prompt(
+            project_plan,
+            {"backend": {"dir_structure": "backend/src/main/java"}},
+            build_context,
+        )
 
         prompt_context = scoped_prompt_build_context(build_context, "endpoint")
         self.assertEqual(
@@ -723,8 +700,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         )
         self.assertNotIn("application_skeleton", projected)
 
-    def test_external_api_endpoint_prompt_uses_external_skill_only(self) -> None:
-        """外部 API endpoint 只注入外部集成规则，不误用 MyBatis。"""
+    def test_external_api_endpoint_prompt_keeps_only_external_rules(self) -> None:
+        """外部 API endpoint 只保留自身规划规则，不读取任何 Skill。"""
 
         project_plan = {
             "application_skeleton": {
@@ -738,15 +715,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "api_contracts": [{"id": "weather-api"}],
             },
         }
-        with (
-            patch(
-                "app.agents.main.task_preparer_prompt._springboot_mybatis_skill_document"
-            ) as database_skill,
-            patch(
-                "app.agents.main.task_preparer_prompt._external_api_skill_document",
-                return_value="EXTERNAL SKILL BODY",
-            ) as external_skill,
-        ):
+        with patch("app.services.builtin_skills.read_builtin_skill_md") as read_skill:
             prompt = build_task_preparation_prompt(
                 project_plan,
                 {
@@ -761,18 +730,141 @@ class BuildTaskPlannerTests(unittest.TestCase):
             )
 
         self.assertEqual(endpoint_source_types(project_plan), {"external_api"})
-        database_skill.assert_not_called()
-        external_skill.assert_called_once()
-        self.assertIn("EXTERNAL SKILL BODY", prompt)
+        read_skill.assert_not_called()
+        self.assertNotIn("Skill", prompt)
+        self.assertNotIn("SKILL.md", prompt)
         self.assertIn("`upstream`, `mapping`, `service`, and `controller`", prompt)
         self.assertIn("external_api", prompt)
+        self.assertIn("api_contract_id + endpoint_id", prompt)
+        self.assertIn("`backend.external_api_client`", prompt)
+        self.assertIn("application.yml, application.yaml, or application.properties", prompt)
+        self.assertIn("Include that exact configuration file in target_files", prompt)
+        self.assertIn("add the exact base_url_config_key there", prompt)
+        self.assertIn("Write effective_connection.base_url directly", prompt)
+        self.assertIn("plain YAML or properties value", prompt)
+        self.assertIn("Never wrap it in a `${ENV_NAME:default}`", prompt)
+        self.assertNotIn("derive an uppercase underscore environment variable", prompt)
+        self.assertIn("configuration-file work belongs to upstream", prompt)
+        self.assertIn("mapped_entity_path", prompt)
+        self.assertIn("request_shape and response_shape as type/field structure", prompt)
+        self.assertIn("must not expose the upstream path", prompt)
         self.assertIn("For every owner=backend task", prompt)
         self.assertIn("database, and external_api tasks", prompt)
-        self.assertNotIn("INJECTED springboot-mybatis-generate", prompt)
         self.assertNotIn("DATABASE BOOTSTRAP TASK IS REQUIRED", prompt)
 
-    def test_mixed_endpoint_prompt_injects_exact_source_skill_union(self) -> None:
-        """混合 endpoint 按实体来源同时注入三类规则，但保留前后端边界。"""
+    def test_external_api_task_prompt_carries_product_operation_structure_without_samples(self) -> None:
+        """任务规划 Prompt 携带商品操作结构和映射，但不携带完整业务样例。"""
+
+        operation = {
+            "operation_id": "external-op-product-list",
+            "name": "查询商品列表",
+            "endpoint_refs": [
+                {
+                    "api_contract_id": "product_api",
+                    "endpoint_id": "product_api.list",
+                }
+            ],
+            "effective_connection": {
+                "base_url": "http://99.17.197.63:8090",
+                "base_url_config_key": "product.url",
+                "timeout_ms": 10000,
+                "headers": [],
+            },
+            "api_info": {
+                "method": "POST",
+                "path": "/v1/product/list",
+                "parameters": [],
+                "headers": [],
+                "request_shape": {
+                    "root_type": "object",
+                    "fields": [
+                        {"path": "keyword", "type": "string"},
+                        {"path": "pageSize", "type": "integer"},
+                        {"path": "current", "type": "integer"},
+                    ],
+                },
+                "response_shape": {
+                    "root_type": "object",
+                    "fields": [
+                        {"path": "list[]", "type": "array"},
+                        {"path": "list[].name", "type": "string"},
+                        {"path": "list[].price", "type": "decimal"},
+                    ],
+                },
+            },
+            "response_handling": {
+                "entity_payload": True,
+                "cardinality": "object",
+                "payload_path": "",
+                "success_status_codes": [200],
+            },
+            "mapped_entity_path": "list[]",
+            "field_mappings": [
+                {
+                    "entity_field": "name",
+                    "source_field": "list[].name",
+                    "rule": "nested_match",
+                },
+                {
+                    "entity_field": "price",
+                    "source_field": "list[].price",
+                    "rule": "nested_match",
+                },
+            ],
+        }
+        project_plan = {
+            "executable_details": {
+                "entity_designs": [
+                    {
+                        "entity_id": "Product",
+                        "data_source_type": "external_api",
+                        "external_api_design": {
+                            "connection": {
+                                "base_url_config_key": "product.url",
+                                "timeout_ms": 10000,
+                                "headers": [],
+                            },
+                            "operation_count": 1,
+                            "operations": [operation],
+                        },
+                    }
+                ],
+                "api_contracts": [
+                    {
+                        "id": "product_api",
+                        "endpoints": [{"id": "product_api.list"}],
+                    }
+                ],
+            },
+        }
+
+        prompt = build_task_preparation_prompt(
+            project_plan,
+            {"backend": {"dir_structure": "└── backend/"}},
+            {
+                "planning_context_mode": "endpoint",
+                "planning_unit_ids": [
+                    "backend:endpoint:product_api:product_api.list"
+                ],
+                "required_unit_ids": [
+                    "backend:endpoint:product_api:product_api.list"
+                ],
+            },
+        )
+
+        self.assertIn("external-op-product-list", prompt)
+        self.assertIn("product.url", prompt)
+        self.assertIn("/v1/product/list", prompt)
+        self.assertIn('"path": "pageSize"', prompt)
+        self.assertIn('"path": "list[].price"', prompt)
+        self.assertIn('"mapped_entity_path": "list[]"', prompt)
+        self.assertIn("Write effective_connection.base_url directly", prompt)
+        self.assertIn("Never wrap it in a `${ENV_NAME:default}`", prompt)
+        self.assertIn("never put the design-time base_url in Java source", prompt)
+        self.assertNotIn("PROMPT_SAMPLE_PRODUCT", prompt)
+
+    def test_mixed_endpoint_prompt_keeps_all_source_rules_without_skills(self) -> None:
+        """混合 endpoint 保留三类数据源规则，但不读取或注入 Skill。"""
 
         project_plan = {
             "application_skeleton": {
@@ -792,20 +884,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "api_contracts": [{"id": "dashboard-api"}],
             },
         }
-        with (
-            patch(
-                "app.agents.main.task_preparer_prompt._springboot_mybatis_skill_document",
-                return_value="DATABASE SKILL BODY",
-            ) as database_skill,
-            patch(
-                "app.agents.main.task_preparer_prompt._external_api_skill_document",
-                return_value="EXTERNAL SKILL BODY",
-            ) as external_skill,
-            patch(
-                "app.agents.main.task_preparer_prompt._static_data_skill_document",
-                return_value="STATIC SKILL BODY",
-            ) as static_skill,
-        ):
+        with patch("app.services.builtin_skills.read_builtin_skill_md") as read_skill:
             prompt = build_task_preparation_prompt(
                 project_plan,
                 {
@@ -829,20 +908,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
             endpoint_source_types(project_plan),
             {"database", "external_api", "static"},
         )
-        database_skill.assert_called_once()
-        external_skill.assert_called_once()
-        static_skill.assert_called_once()
-        for marker in ("DATABASE SKILL BODY", "EXTERNAL SKILL BODY", "STATIC SKILL BODY"):
-            self.assertIn(marker, prompt)
-        self.assertLess(prompt.index("DATABASE SKILL BODY"), prompt.index("EXTERNAL SKILL BODY"))
-        self.assertLess(prompt.index("EXTERNAL SKILL BODY"), prompt.index("STATIC SKILL BODY"))
-        self.assertLess(prompt.index("STATIC SKILL BODY"), prompt.index("## 7. Forbidden Output"))
+        read_skill.assert_not_called()
+        self.assertNotIn("Skill", prompt)
+        self.assertNotIn("SKILL.md", prompt)
         self.assertIn("`objects`, `repository`, `service`, `controller`", prompt)
         self.assertIn("`upstream`, `mapping`, `service`, and `controller`", prompt)
         self.assertIn("`<frontendDataUnitId>::data-module`", prompt)
 
-    def test_static_endpoint_prompt_uses_frontend_snapshot(self) -> None:
-        """纯 static endpoint 只注入前端快照和静态 Skill。"""
+    def test_static_endpoint_prompt_uses_frontend_snapshot_without_skill(self) -> None:
+        """纯 static endpoint 只使用前端快照和规划器自有规则。"""
 
         project_plan = {
             "executable_details": {
@@ -875,8 +949,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("All frontend paths are under `/frontend/`", prompt)
         self.assertIn("frontend/src/apis/noticeApi.ts", prompt)
         self.assertNotIn("backend/src/main/java/NoticeController.java", prompt)
-        self.assertIn("frontend-static-data-generate", prompt)
-        self.assertNotIn("springboot-mybatis-generate SKILL.md ---", prompt)
+        self.assertNotIn("frontend-static-data-generate", prompt)
+        self.assertNotIn("Skill", prompt)
+        self.assertNotIn("SKILL.md", prompt)
 
     def test_unit_inputs_filter_entity_designs_by_owner_source(self) -> None:
         """后端 endpoint 与前端 static Unit 只携带各自来源实体。"""
@@ -930,6 +1005,83 @@ class BuildTaskPlannerTests(unittest.TestCase):
             units["frontend:data:static"]["input_fingerprint"],
         )
 
+    def test_page_backend_units_scope_external_operations_to_their_endpoint(self) -> None:
+        """页面同时规划多个接口时，每个后端 Unit 只获得自身上游 operation。"""
+
+        entity_design = {
+            "entity_id": "Product",
+            "data_source_type": "external_api",
+            "external_api_design": {
+                "connection": {"base_url_config_key": "product.url"},
+                "operation_count": 2,
+                "operations": [
+                    {
+                        "operation_id": "product-list",
+                        "endpoint_refs": [
+                            {
+                                "api_contract_id": "product_api",
+                                "endpoint_id": "product_api.list",
+                            }
+                        ],
+                    },
+                    {
+                        "operation_id": "product-detail",
+                        "endpoint_refs": [
+                            {
+                                "api_contract_id": "product_api",
+                                "endpoint_id": "product_api.detail",
+                            }
+                        ],
+                    },
+                ],
+            },
+        }
+        build_context = {
+            "target": {"type": "page", "id": "products"},
+            "required_unit_ids": [
+                "backend:endpoint:product_api:product_api.list",
+                "backend:endpoint:product_api:product_api.detail",
+            ],
+            "endpoint_ids": ["product_api.list", "product_api.detail"],
+            "entity_ids": ["Product"],
+            "entity_designs": [entity_design],
+            "source_refs": {
+                "technical_plan_endpoints": [
+                    {"id": "product_api.list", "api_contract_id": "product_api"},
+                    {"id": "product_api.detail", "api_contract_id": "product_api"},
+                ]
+            },
+        }
+        units = annotate_unit_inputs(
+            {
+                unit_id: {"id": unit_id, "kind": "backend", "task_ids": []}
+                for unit_id in build_context["required_unit_ids"]
+            },
+            build_context,
+            {},
+        )
+
+        for endpoint_id, operation_id in (
+            ("product_api.list", "product-list"),
+            ("product_api.detail", "product-detail"),
+        ):
+            refs = units[
+                f"backend:endpoint:product_api:{endpoint_id}"
+            ]["source_refs"]
+            self.assertEqual(refs["endpoint_ids"], [endpoint_id])
+            self.assertEqual(refs["target"]["id"], endpoint_id)
+            operations = refs["entity_designs"][0]["external_api_design"][
+                "operations"
+            ]
+            self.assertEqual(
+                [operation["operation_id"] for operation in operations],
+                [operation_id],
+            )
+            self.assertEqual(
+                refs["entity_designs"][0]["external_api_design"]["operation_count"],
+                1,
+            )
+
     def test_delete_endpoint_name_does_not_make_create_table_high_risk(self) -> None:
         """来源 endpoint 名称中的 delete 不得被误判为高危数据库删除操作。"""
 
@@ -978,7 +1130,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("do not copy its task ids into dependencies", prompt)
 
     def test_static_task_prompt_excludes_backend_generation_requirements(self) -> None:
-        """Static 任务准备不读取或注入后端数据库技能。"""
+        """Static 任务准备不读取或注入任何 Skill。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -987,19 +1139,18 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
             "executable_details": {"data_sources": [], "api_contracts": []},
         }
-        with patch(
-            "app.agents.main.task_preparer_prompt._springboot_mybatis_skill_document"
-        ) as backend_skill:
+        with patch("app.services.builtin_skills.read_builtin_skill_md") as read_skill:
             prompt = build_task_preparation_prompt(
                 project_plan,
                 {},
                 {"required_unit_ids": ["frontend:data:orders", "page:orders"]},
             )
 
-        backend_skill.assert_not_called()
+        read_skill.assert_not_called()
         self.assertIn("frontend:data:*", prompt)
         self.assertIn("Never create database, backend", prompt)
-        self.assertNotIn("INJECTED springboot-mybatis-generate", prompt)
+        self.assertNotIn("Skill", prompt)
+        self.assertNotIn("SKILL.md", prompt)
         self.assertNotIn("WorkspaceNavigationContext", prompt)
 
     def test_model_usage_accepts_null_provider_token_usage(self) -> None:
@@ -2281,8 +2432,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "schema_version": "build-dag.v3",
             "build_units": {
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "frontend"},
-                "backend:endpoint:orders": {
-                    "id": "backend:endpoint:orders",
+                "backend:endpoint:orders-api:orders_api.list": {
+                    "id": "backend:endpoint:orders-api:orders_api.list",
                     "kind": "backend",
                 },
                 "page:orders": {"id": "page:orders", "kind": "page"},
@@ -2291,13 +2442,13 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "schema_version": "build-unit-graph.v3",
                 "nodes": [
                     "frontend:api-client",
-                    "backend:endpoint:orders",
+                    "backend:endpoint:orders-api:orders_api.list",
                     "page:orders",
                 ],
                 "edges": [
                     {"from": "frontend:api-client", "to": "page:orders", "type": "depends_on"},
                     {
-                        "from": "backend:endpoint:orders",
+                        "from": "backend:endpoint:orders-api:orders_api.list",
                         "to": "page:orders",
                         "type": "depends_on",
                     },
@@ -2309,7 +2460,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "target": {"type": "page", "id": "orders"},
             "required_unit_ids": [
                 "frontend:api-client",
-                "backend:endpoint:orders",
+                "backend:endpoint:orders-api:orders_api.list",
                 "page:orders",
             ],
             "endpoint_ids": ["orders_api.list"],
@@ -2338,7 +2489,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     },
                     {
                         "id": "task:orders-api",
-                        "unit_id": "backend:endpoint:orders",
+                        "unit_id": "backend:endpoint:orders-api:orders_api.list",
                         "owner": "backend",
                         "description": "实现订单 API",
                         "change_scope": [{"operation": "modify", "path": "Backend/app/orders.py"}],
@@ -2366,11 +2517,18 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "page_implementation_contract",
         )
         self.assertEqual(
-            plan["build_units"]["backend:endpoint:orders"]["source_refs"],
+            plan["build_units"]["backend:endpoint:orders-api:orders_api.list"]["source_refs"],
             {
                 "type": "technical_plan_endpoint",
-                "target": {"type": "page", "id": "orders"},
-                "technical_plan_endpoint": {},
+                "target": {
+                    "type": "endpoint",
+                    "id": "orders_api.list",
+                    "api_contract_id": "orders-api",
+                },
+                "technical_plan_endpoint": {
+                    "id": "orders_api.list",
+                    "api_contract_id": "orders-api",
+                },
                 "technical_plan_endpoints": [
                     {"id": "orders_api.list", "api_contract_id": "orders-api"}
                 ],

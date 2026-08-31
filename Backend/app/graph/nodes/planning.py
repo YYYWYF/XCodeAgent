@@ -34,6 +34,7 @@ from app.services.entity_design import (
     apply_complete_entity_design,
     apply_entity_design_action,
     entity_bound_design_gate,
+    entity_related_endpoints,
     entity_design_validation_errors,
     execute_entity_database_operations,
 )
@@ -75,6 +76,12 @@ from app.workspace.plan_documents import (
 
 logger = logging.getLogger("uvicorn.error")
 _TECHNICAL_PLAN_GENERATION_ATTEMPTS = 3
+
+
+def _dict_items(value: Any) -> list[dict[str, Any]]:
+    """过滤列表中的字典项，供规划节点读取当前契约集合。"""
+
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 def _detail_workspace_options(state: ProjectState) -> dict[str, str]:
@@ -959,12 +966,15 @@ def _build_entity_design_ai_suggestions(
             )
         except Exception:
             pass
-    return entity_design_ai_suggestions(
+    result = entity_design_ai_suggestions(
         entity,
         assist_type=assist_type,
         instruction=str(action.get("instruction") or ""),
         context=context,
     )
+    if assist_type == "api_mapping":
+        result["operation_id"] = str(action.get("operation_id") or "")
+    return result
 
 
 def _apply_entity_design_action(
@@ -1955,9 +1965,40 @@ def _entity_design_confirmed_payload(
         detail_target_type=detail_target_type or "entity",
     )
     payload["status"] = "clear"
-    payload["message"] = (
-        f"实体 `{selected_entity_id}` 的数据源绑定已确认并保存；请重新选择页面或 API 开始开发。"
+    message = f"实体 `{selected_entity_id}` 的数据源绑定已确认并保存；请重新选择页面或 API 开始开发。"
+    detail = next(
+        (
+            item
+            for item in _dict_items(project_plan.get("entity_detail_plans"))
+            if str(item.get("entity_id") or "") == selected_entity_id
+        ),
+        None,
     )
+    if isinstance(detail, dict) and str(detail.get("data_source_type") or "") == "external_api":
+        # 外部 API 允许按 Endpoint 分批确认，完成当前操作后把剩余工作量明确告知用户。
+        design = detail.get("external_api_design") if isinstance(detail.get("external_api_design"), dict) else {}
+        assigned = {
+            (
+                str(ref.get("api_contract_id") or "").strip(),
+                str(ref.get("endpoint_id") or "").strip(),
+            )
+            for operation in _dict_items(design.get("operations"))
+            for ref in _dict_items(operation.get("endpoint_refs"))
+        }
+        related = entity_related_endpoints(project_plan, selected_entity_id)
+        remaining = sum(
+            (
+                str(item.get("api_contract_id") or "").strip(),
+                str(item.get("endpoint_id") or "").strip(),
+            ) not in assigned
+            for item in related
+        )
+        if remaining:
+            message = (
+                f"实体 `{selected_entity_id}` 当前外部 API 操作已确认并保存；"
+                f"还有 {remaining} 个 Endpoint 未绑定，可继续逐个设计。"
+            )
+    payload["message"] = message
     return payload
 
 

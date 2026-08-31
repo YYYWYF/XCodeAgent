@@ -321,34 +321,95 @@ def _operation_table_text(operation: dict[str, Any]) -> str:
 
 
 def _external_api_design_markdown_section(detail: dict[str, Any]) -> list[str]:
-    """渲染外部 API 方案的接口信息与字段映射。"""
+    """渲染共享连接、多上游操作、Endpoint 关联和逐操作字段映射。"""
 
     external_api_design = (
         detail.get("external_api_design")
         if isinstance(detail.get("external_api_design"), dict)
         else {}
     )
-    api_info = (
-        external_api_design.get("api_info")
-        if isinstance(external_api_design.get("api_info"), dict)
-        else {}
-    )
-    mappings = _dict_items(external_api_design.get("field_mappings"))
+    connection = external_api_design.get("connection") if isinstance(external_api_design.get("connection"), dict) else {}
+    operations = _dict_items(external_api_design.get("operations"))
+    shared_headers = _dict_items(connection.get("headers"))
     lines = [
         "## 三-A、外部 API 方案",
         "",
-        f"- 请求路径：`{api_info.get('path') or '待补充'}`",
-        f"- 请求方式：`{api_info.get('method') or '待补充'}`",
-        f"- 请求体：{_json_brief(api_info.get('request_body'))}",
-        f"- 返回体：{_json_brief(api_info.get('response_body'))}",
+        "### 共享连接",
+        "",
+        f"- Base URL：`{connection.get('base_url') or '待补充'}`",
+        f"- Base URL 配置键：`{connection.get('base_url_config_key') or '待补充'}`",
+        f"- 超时：`{connection.get('timeout_ms') or 10000} ms`",
+        f"- 共享固定 Header：{len(shared_headers)} 项（不含鉴权）",
+        f"- 上游操作数：{len(operations)}",
     ]
-    if mappings:
-        lines.extend(["", "返回体字段绑定："])
+    if shared_headers:
         lines.extend(
-            f"- `{mapping.get('entity_field', '')}` <- `{mapping.get('source_field', '')}`"
-            f"（{mapping.get('rule', 'manual')}）"
-            for mapping in mappings
+            f"- 共享 Header `{header.get('name') or '待补充'}`：`{header.get('value') or ''}`"
+            for header in shared_headers
         )
+    for index, operation in enumerate(operations, start=1):
+        api_info = operation.get("api_info") if isinstance(operation.get("api_info"), dict) else {}
+        response = operation.get("response_handling") if isinstance(operation.get("response_handling"), dict) else {}
+        override = operation.get("connection_override") if isinstance(operation.get("connection_override"), dict) else {}
+        parameters = _dict_items(api_info.get("parameters"))
+        headers = _dict_items(api_info.get("headers"))
+        mappings = _dict_items(operation.get("field_mappings"))
+        refs = _dict_items(operation.get("endpoint_refs"))
+        endpoint_labels = ", ".join(
+            f"`{ref.get('api_contract_id')}/{ref.get('endpoint_id')}`"
+            for ref in refs
+        )
+        lines.extend(
+            [
+                "",
+                f"### 操作 {index}：{operation.get('name') or '未命名'}（`{operation.get('operation_id') or '待补充'}`）",
+                "",
+                f"- 关联 Endpoint：{endpoint_labels or '待补充'}",
+                f"- 请求：`{api_info.get('method') or 'GET'} {api_info.get('path') or '待补充'}`",
+                f"- 连接覆盖：`{override.get('base_url') or '使用共享连接'}`",
+                f"- 覆盖配置键：`{override.get('base_url_config_key') or '使用共享配置键'}`",
+                f"- 有效超时：`{override.get('timeout_ms') or connection.get('timeout_ms') or 10000} ms`",
+                f"- 请求参数：{len(parameters)} 项；操作 Header：{len(headers)} 项",
+                f"- 请求体：{_json_brief(api_info.get('request_body'))}",
+                f"- 返回体：{_json_brief(api_info.get('response_body'))}",
+                f"- 返回实体载荷：{'是' if response.get('entity_payload') is True else '否'}",
+                f"- 响应模式：`{response.get('cardinality') or 'object'}`",
+                f"- 实体载荷路径：`{response.get('payload_path') or '根节点/不适用'}`",
+                f"- 成功状态码：`{', '.join(str(code) for code in response.get('success_status_codes') or [200])}`",
+                f"- 错误信息路径：`{response.get('error_message_path') or '未配置'}`",
+            ]
+        )
+        if parameters:
+            lines.extend(["", "请求参数："])
+            lines.extend(
+                f"- `{item.get('in', 'query')}` `{item.get('name', '')}`：{item.get('type', 'string')}，"
+                f"{'必填' if item.get('required') else '可选'}"
+                for item in parameters
+            )
+        if headers:
+            lines.extend(["", "操作固定 Header："])
+            lines.extend(
+                f"- `{header.get('name') or '待补充'}`：`{header.get('value') or ''}`"
+                for header in headers
+            )
+        if response.get("pagination") and isinstance(response.get("pagination"), dict):
+            pagination = response["pagination"]
+            lines.extend(
+                [
+                    "",
+                    f"- 分页：页码 `{pagination.get('page_parameter') or '待补充'}`；"
+                    f"大小 `{pagination.get('size_parameter') or '待补充'}`；"
+                    f"页码基数 `{pagination.get('page_index_base') if pagination.get('page_index_base') in {0, 1} else 1}`；"
+                    f"总数路径 `{response.get('total_path') or '待补充'}`",
+                ]
+            )
+        if mappings:
+            lines.extend(["", "返回体字段绑定："])
+            lines.extend(
+                f"- `{mapping.get('entity_field', '')}` <- `{mapping.get('source_field', '')}`"
+                f"（{mapping.get('rule', 'manual')}）"
+                for mapping in mappings
+            )
     lines.append("")
     return lines
 

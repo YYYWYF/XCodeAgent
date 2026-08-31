@@ -1,43 +1,138 @@
 ---
 name: springboot-external-api-generate
-description: Generate Java 8 Spring Boot backend integrations for entities backed by confirmed external APIs, including upstream client adapters, mapping, application services, and internal controllers without introducing persistence code.
+description: Generate Java 8 Spring Boot backend integrations for confirmed external APIs with RestTemplate, typed transport boundaries, mapping, application services, and internal controllers without persistence code.
 ---
 
 # springboot-external-api-generate
 
-Use this skill only for backend tasks whose `source_refs.entity_designs` contain
-`data_source_type: external_api`.
+Use this skill only during Build execution for a backend task whose
+`source_refs.entity_designs` contains `data_source_type: external_api`. The platform has
+already selected the task, dependencies, write scope, and layer; this document governs
+implementation only and must not be used to redesign the task plan.
 
-## Required implementation boundary
+## Authoritative inputs and scope
 
-- Treat the confirmed `external_api_design` and API contract as authoritative. Preserve the upstream method, path, request/response shape, and every confirmed field mapping.
-- Reuse the project's existing HTTP client, configuration, exception, timeout, and serialization conventions discovered in the workspace. If no convention exists, use a small Java 8-compatible Spring `RestTemplate` adapter through centralized configuration; do not introduce WebClient, records, or an unapproved client framework.
-- Keep upstream request/response DTOs and transport code separate from the internal API contract. Put field conversion and normalization in a mapper/assembler or equivalent boundary class.
-- Generate only the layers needed for an external integration: upstream DTO/client or gateway, mapping/assembler, application service, and the internal REST controller that implements the confirmed contract.
-- The integration must not read or write a database for the external entity. Do not create Entity/PO, Mapper, Mapper.xml, Repository, migration, seed SQL, datasource configuration, or table-management tasks.
-- Follow existing package names, naming, error handling, authentication/configuration placeholders, and endpoint conventions. Never invent credentials, base URLs, headers, or response fields when the confirmed design does not provide them; surface a change request for missing implementation facts.
+- Treat `implementation_contract.entities[].source_binding`, the
+  endpoint-scoped `operations[]`, and `implementation_contract.api_contract` as the only
+  business authority. `operations[]` must contain exactly one operation linked to the
+  current endpoint; otherwise return `contract_mismatch` before writing.
+- Preserve each operation's stable `operation_id`, effective
+  `base_url_config_key`, HTTP method and path, typed Path/Query parameters, merged
+  non-sensitive headers, request/response shapes, payload/cardinality semantics, and
+  confirmed field mappings. Never invent a URL, credential, header, response field, or
+  mapping.
+- Write only the task's `allowed_paths` and declared `change_scope`. Do not modify formal
+  planning artifacts, the task DAG, API or Entity contracts, database schema, migrations,
+  seed data, or unrelated modules. If the confirmed contract cannot fit the scope, return
+  the execution protocol's `change_request` instead of expanding the scope.
+- Keep the external transport model separate from internal API DTOs. Conversion belongs in
+  a mapper/assembler boundary, not in the Controller or raw HTTP client.
+- Treat `request_shape` and `response_shape` as type/field descriptions derived from design
+  examples. Never hard-code example keywords, page numbers, page sizes, identifiers, prices,
+  timestamps, or other sample scalar values. Bind internal request fields to upstream Path,
+  Query, and body fields only by exact name; a required unmatched field is a
+  `contract_mismatch`, not permission to invent a value.
 
-## Task sequencing
+## Required operation sequence
 
-Keep independent source adapters separate from the endpoint-facing orchestration. A typical chain is:
+Execute the confirmed operation in this order without skipping or reordering semantics:
 
-1. upstream DTO and HTTP client/gateway;
-2. field mapping/assembler;
-3. application service that calls the adapter;
-4. internal controller implementing the confirmed API contract.
+1. Locate the single endpoint-linked operation and read its effective connection.
+2. Resolve the Base URL through `base_url_config_key`, then construct the encoded URI from
+   the confirmed method, path, Path parameters, and Query parameters.
+3. Create the typed request transport DTO from `request_shape`, bind exact-name internal
+   request inputs, and apply only confirmed non-sensitive headers.
+4. Call the upstream API with RestTemplate and deserialize the declared response root into
+   typed transport DTOs derived from `response_shape`.
+5. Accept only `success_status_codes`; translate other HTTP responses, declared
+   `error_message_path`, timeouts, and deserialization failures through existing exceptions.
+6. Traverse `mapped_entity_path` when present and apply every `field_mappings` entry exactly.
+7. Return the internal API Contract response through the application service and Controller.
 
-Each task owns only its layer's files and passes its exact produced paths, class names,
-and contracts to the next task. Use Java 8 syntax and APIs only. Do not add tests,
-build commands, or verification tasks to the generated task plan; the outer workflow
-owns verification.
+## Mandatory HTTP client: RestTemplate
 
-Write every backend task `description` as a Simplified Chinese ordered execution list
-using `1. ...`, `2. ...`, and so on. Name the exact target paths and layer responsibility.
-During planning, classify every target against `WorkspaceSnapshot.backend.existing_files`.
-Use `modify` for a listed path and make the ordered list directly require reading it and
-comparing its behavior with the complete confirmed requirements. Use `add` for an absent
-path and directly require creating it from the confirmed contract. Do not defer this first
-existence decision to execution. Leave an existing target unchanged when it already satisfies
-the task, and make only the minimum additions or corrections when it partially satisfies the
-task. Execution checks the live path only to detect changes after the WorkspaceSnapshot;
-return `already_satisfied` with evidence when the entire task requires no write.
+- Every external request MUST use Java 8-compatible Spring
+  `org.springframework.web.client.RestTemplate`. Do not use WebClient, Feign, OkHttp,
+  Apache HttpClient directly, `HttpURLConnection`, raw sockets, or a hand-written HTTP
+  client.
+- Reuse an existing compatible `RestTemplate` Bean and its project-approved error,
+  serialization, and timeout conventions when one is available. If none exists, add the
+  smallest integration-local Bean/adapter only when that path is already authorized by
+  the current task. If a new shared configuration path is required but unauthorized,
+  return a scope/contract change request; never widen the task silently.
+- Persist the confirmed `effective_connection.base_url` directly under
+  `base_url_config_key` in the authorized Spring Boot YAML/properties file. Use a plain
+  scalar value; never wrap it in `${ENV_NAME:default}`, derive an environment-variable
+  name, or emit another placeholder. For example, `base_url_config_key=product.url` and
+  `effective_connection.base_url=http://99.17.197.63:8090` must produce:
+
+  ```yaml
+  product:
+    url: http://99.17.197.63:8090
+  ```
+
+  Java code must still read the URL through the configuration key rather than a Java
+  constant. Build the request URI with the project convention (prefer
+  `UriComponentsBuilder`) so Path and Query parameters are typed, encoded, and passed
+  exactly once.
+- Apply only the confirmed non-sensitive headers and request body. Do not add
+  authentication, credential, cookie, tracing, or arbitrary headers. Configure the
+  confirmed connect/read timeout and preserve the project's centralized configuration
+  boundary.
+- Use typed `exchange`/equivalent `RestTemplate` calls with request and response DTOs;
+  preserve object, array, envelope, pagination, and `entity_payload` cardinality instead
+  of converting responses to untyped maps. Use Java 8 syntax and APIs only.
+- Keep JSON property spelling exactly as declared. When Java naming differs, use the
+  project's Jackson annotation convention instead of renaming the transport property.
+
+## Layer responsibilities
+
+Keep the approved layer boundaries independent:
+
+1. The upstream layer owns the RestTemplate adapter/client, transport request/response DTOs,
+   URI construction, headers, timeout, and upstream error translation.
+2. The mapping layer owns field conversion, payload-path traversal, array/cardinality
+   normalization, and internal entity mapping only when `entity_payload=true`.
+3. The application service owns endpoint-facing orchestration and business decisions; it
+   does not issue HTTP calls directly when an upstream adapter exists.
+4. The Controller owns the confirmed internal HTTP method/path, request validation,
+   response envelope/status mapping, and delegation to the application service.
+
+Operations with `entity_payload=false` are acknowledgement/status responses: preserve their
+declared response semantics and do not create an Entity/PO or an invented mapper. When the
+same `operation_id` is referenced by multiple internal endpoints, reuse one RestTemplate
+client method and one compatible transport DTO set; do not duplicate adapters.
+
+For entity responses, `mapped_entity_path` is derived deterministically from confirmed
+`source_field` paths and takes precedence for record extraction. When it is `list[]`, keep
+the response root DTO as an object, traverse its `list` collection, and map every element.
+When it is empty, apply each confirmed source path directly; never guess another envelope or
+array. `field_mappings` is the only assignment authority. Map entity `decimal` fields with
+`BigDecimal`; map `datetime` through the project's existing Java time and Jackson format;
+map `enum` only to the confirmed `enum_values`; and use project-compatible Java 8 types for
+other integer, boolean, string, object, and array fields.
+
+Implement pagination only when `response_handling.pagination` and `total_path` are both
+declared. Familiar names such as `total`, `current`, `pageSize`, `list`, or `items` do not by
+themselves authorize page semantics.
+
+## Error and safety behavior
+
+- Map upstream HTTP errors, connection/read timeouts, and deserialization failures through
+  the existing project exception/error conventions. Do not swallow errors, return a fake
+  success, or expose upstream credentials or raw sensitive response data.
+- This current contract is public/no-auth only. Reject or surface a change request for
+  authentication requirements, sensitive headers, missing Base URL/configuration key,
+  missing request/response semantics, or an operation that is not linked to the current
+  endpoint.
+- Do not create Entity/PO, MyBatis Mapper, Mapper.xml, Repository, datasource config,
+  migration, seed SQL, table-management code, tests, build commands, or verification tasks.
+
+## Execution protocol
+
+Before the first write, read the task's required instruction files, every current target,
+and the nearest relevant implementation. Reuse the real package structure and naming.
+For an existing target, leave it unchanged when it fully satisfies the contract and make
+only the minimum correction when it is partial. For an absent target, create it directly
+from the confirmed contract. Return `already_satisfied` with evidence when no write is
+needed; otherwise return the exact structured result required by the outer Build workflow.

@@ -107,7 +107,15 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                         "entity_id": "Weather",
                         "status": "confirmed",
                         "data_source_type": "external_api",
-                        "external_api_design": {"api_info": {"path": "/weather"}},
+                        "external_api_design": {
+                            "connection": {
+                                "base_url": "https://weather.example.com",
+                                "base_url_config_key": "integrations.weather.base-url",
+                                "timeout_ms": 10000,
+                                "headers": [],
+                            },
+                            "operations": [],
+                        },
                     }
                 ],
             },
@@ -116,11 +124,58 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
             },
             tasks=[
                 {
-                    "id": "weather-client",
+                    "id": "backend:endpoint:weather_api:weather.get::Weather::upstream",
+                    "unit_id": "backend:endpoint:weather_api:weather.get",
+                    "description": "1. 实现天气上游 Client。",
                     "allowed_paths": ["backend/src/main/java/**"],
                     "source_refs": {
+                        "target": {
+                            "type": "endpoint",
+                            "id": "weather.get",
+                            "api_contract_id": "weather_api",
+                        },
+                        "endpoint_ids": ["weather.get"],
                         "entity_designs": [
-                            {"entity_id": "Weather", "data_source_type": "external_api"}
+                            {
+                                "entity_id": "Weather",
+                                "data_source_type": "external_api",
+                                "external_api_design": {
+                                    "connection": {
+                                        "base_url_config_key": "integrations.weather.base-url"
+                                    },
+                                    "operations": [
+                                        {
+                                            "operation_id": "weather-get",
+                                            "endpoint_refs": [
+                                                {
+                                                    "api_contract_id": "weather_api",
+                                                    "endpoint_id": "weather.get",
+                                                }
+                                            ],
+                                            "api_info": {
+                                                "method": "GET",
+                                                "path": "/weather",
+                                                "request_shape": {
+                                                    "root_type": "null",
+                                                    "fields": [],
+                                                },
+                                                "response_shape": {
+                                                    "root_type": "object",
+                                                    "fields": [],
+                                                },
+                                            },
+                                            "response_handling": {
+                                                "entity_payload": True,
+                                                "cardinality": "object",
+                                                "payload_path": "",
+                                                "success_status_codes": [200],
+                                            },
+                                            "mapped_entity_path": "",
+                                            "field_mappings": [],
+                                        }
+                                    ],
+                                },
+                            }
                         ]
                     },
                 }

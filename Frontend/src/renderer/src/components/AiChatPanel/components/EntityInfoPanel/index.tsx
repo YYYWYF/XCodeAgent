@@ -143,17 +143,8 @@ export default function EntityInfoPanel({
     detail?.external_api_design && typeof detail.external_api_design === 'object'
       ? detail.external_api_design
       : undefined
-  const apiInfo =
-    externalApiDesign?.api_info && typeof externalApiDesign.api_info === 'object'
-      ? (externalApiDesign.api_info as Record<string, unknown>)
-      : undefined
-  const apiPath = String(apiInfo?.path || '')
-  const apiMethod = String(apiInfo?.method || '')
-  const apiMappings = Array.isArray(externalApiDesign?.field_mappings)
-    ? externalApiDesign.field_mappings.filter(
-        (item): item is Record<string, unknown> =>
-          Boolean(item && typeof item === 'object')
-      )
+  const apiOperations = Array.isArray(externalApiDesign?.operations)
+    ? externalApiDesign.operations.filter((item) => Boolean(item))
     : []
   const staticDesign =
     detail?.static_design && typeof detail.static_design === 'object'
@@ -371,43 +362,35 @@ export default function EntityInfoPanel({
               )}
             </div>
           ) : null}
-          {dataSourceType === 'external_api' && apiPath ? (
+          {dataSourceType === 'external_api' && apiOperations.length > 0 ? (
             <div className={cx('entity-info-design-block')}>
-              <Text type="secondary">外部 API 信息</Text>
-              <div className={cx('entity-info-meta')}>
-                <div className={cx('entity-info-meta-item')}>
-                  <Text type="secondary">请求方式</Text>
-                  <Text code>{apiMethod || '-'}</Text>
-                </div>
-                <div className={cx('entity-info-meta-item')}>
-                  <Text type="secondary">请求路径</Text>
-                  <Text code>{apiPath}</Text>
-                </div>
-              </div>
-            </div>
-          ) : null}
-          {dataSourceType === 'external_api' && apiMappings.length > 0 ? (
-            <div className={cx('entity-info-design-block')}>
-              <Text type="secondary">返回体字段映射</Text>
+              <Text type="secondary">外部 API 操作（{apiOperations.length} 个）</Text>
               <Table
                 className={cx('entity-info-fields-table')}
                 columns={[
                   {
-                    title: '实体字段',
-                    dataIndex: 'entity_field',
-                    key: 'entity_field',
+                    title: '操作',
+                    dataIndex: 'name',
+                    key: 'name',
                     render: (name: string) => <Text code>{name || '-'}</Text>
                   },
                   {
-                    title: '来源字段',
-                    dataIndex: 'source_field',
-                    key: 'source_field',
-                    render: (name: string) => <Text code>{name || '-'}</Text>
+                    title: '请求',
+                    dataIndex: 'request',
+                    key: 'request',
+                    render: (request: string) => <Text code>{request || '-'}</Text>
+                  },
+                  {
+                    title: 'Endpoint 数',
+                    dataIndex: 'endpointCount',
+                    key: 'endpointCount'
                   }
                 ]}
-                dataSource={apiMappings.map((item, index) => ({
+                dataSource={apiOperations.map((item, index) => ({
                   ...item,
-                  key: String(item.entity_field || index)
+                  key: String(item.operation_id || index),
+                  request: `${String(item.api_info.method || 'GET')} ${String(item.api_info.path || '')}`,
+                  endpointCount: Array.isArray(item.endpoint_refs) ? item.endpoint_refs.length : 0
                 }))}
                 pagination={false}
                 rowKey="key"

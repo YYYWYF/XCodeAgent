@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.entity_definitions import missing_entity_design_ids
+from app.services.entity_design import (
+    entity_design_endpoint_binding_errors,
+    entity_design_validation_errors,
+)
 from app.services.frontend_page_tree import project_plan_page_records
 
 
@@ -28,6 +32,38 @@ def development_readiness(
         for entity_id in missing_entity_design_ids(project_plan, contract):
             if entity_id not in missing_ids:
                 missing_ids.append(entity_id)
+        for entity_id in contract.get("entity_ids") or []:
+            normalized_id = str(entity_id).strip()
+            detail = next(
+                (
+                    item
+                    for item in _dict_items(project_plan.get("entity_detail_plans"))
+                    if str(item.get("entity_id") or "") == normalized_id
+                    and str(item.get("status") or "") == "confirmed"
+                ),
+                None,
+            )
+            if (
+                normalized_id
+                and isinstance(detail, dict)
+                and entity_design_validation_errors(project_plan, detail)
+                and normalized_id not in missing_ids
+            ):
+                missing_ids.append(normalized_id)
+                continue
+            if normalized_id and isinstance(detail, dict):
+                endpoint_binding_errors = [
+                    error
+                    for endpoint in _dict_items(contract.get("endpoints"))
+                    for error in entity_design_endpoint_binding_errors(
+                        project_plan,
+                        detail,
+                        api_contract_id=str(contract.get("id") or ""),
+                        endpoint_id=str(endpoint.get("id") or ""),
+                    )
+                ]
+                if endpoint_binding_errors and normalized_id not in missing_ids:
+                    missing_ids.append(normalized_id)
     names = {
         str(entity.get("id") or ""): str(entity.get("name") or entity.get("id") or "")
         for entity in _dict_items(project_plan.get("entities"))

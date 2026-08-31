@@ -4,7 +4,12 @@ import {
   applyEntityDesignSuggestion,
   constraintRowsToFieldValues,
   defaultConstraintRows,
+  externalApiCollectionValidationErrors,
+  externalApiConnectionValidationErrors,
+  externalApiValidationErrors,
   fieldValuesToConstraintRows,
+  formatJsonText,
+  isSensitiveApiHeader,
   normalizeFieldValues,
   normalizeObjectRows,
   normalizeStringList,
@@ -13,12 +18,19 @@ import {
   parseJsonRecord,
   resolveEntityDesignFields,
   responseFieldPaths,
+  responseFieldTypes,
   sameNameFieldMappings,
+  serializeExternalApiDesign,
+  serializeExternalApiMappings,
   seedRowsFromSuggestions,
   serializeSeedRows,
   tryParseJson
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/entityDesignSerialization'
 import { fetchDatabaseTableColumns } from '../src/renderer/src/service/workspaceTools'
+import {
+  createExternalApiOperation,
+  externalApiDesignDraftSeed
+} from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/useExternalApiDraft'
 
 test('fetchDatabaseTableColumns 合并同键并发请求并在结束后清理', async () => {
   const globalWithBrowser = globalThis as typeof globalThis & {
@@ -145,9 +157,42 @@ test('responseFieldPaths 收集顶层与嵌套路径，数组取首元素', () =
     data: { items: [{ name: '商品A', price: 1 }] },
     page: 1
   })
-  assert.deepEqual(paths, ['data', 'data.items', 'data.items.name', 'data.items.price', 'page'])
+  assert.deepEqual(paths, ['data', 'data.items', 'data.items[]', 'data.items[].name', 'data.items[].price', 'page'])
+  assert.deepEqual(responseFieldPaths([{ name: '商品A' }]), ['[]', '[].name'])
+  assert.deepEqual(responseFieldTypes({ data: { items: [{ name: '商品A' }] } }), {
+    data: 'object',
+    'data.items': 'array',
+    'data.items[]': 'array',
+    'data.items[].name': 'string'
+  })
   assert.deepEqual(responseFieldPaths('not-json'), [])
   assert.deepEqual(responseFieldPaths(null), [])
+})
+
+test('formatJsonText 与 externalApiValidationErrors 校验可执行契约', () => {
+  assert.deepEqual(formatJsonText('{"data": {"name": "A"}}'), {
+    ok: true,
+    text: '{\n  "data": {\n    "name": "A"\n  }\n}'
+  })
+  const errors = externalApiValidationErrors({
+    baseUrl: 'https://api.example.com',
+    baseUrlConfigKey: 'integrations.product.base-url',
+    method: 'GET',
+    path: '/products/{id}',
+    parameters: [{ name: 'id', in: 'path', type: 'string', required: true }],
+    headers: [],
+    requestBody: '',
+    responseBody: { data: { items: [{ name: 'A' }], total: 1 } },
+    responseHandling: {
+      cardinality: 'page',
+      payload_path: 'data.items[]',
+      total_path: 'data.total',
+      pagination: { page_parameter: 'page', size_parameter: 'size' }
+    },
+    mappings: [{ entity_field: 'name', source_field: 'data.items[].name' }],
+    entityFields: [{ name: 'name', required: true }]
+  })
+  assert.ok(errors.some((error) => error.includes('分页页码参数')))
 })
 
 test('sameNameFieldMappings 顶层同名优先、嵌套唯一路径兜底且不覆盖已填映射', () => {
@@ -171,12 +216,194 @@ test('sameNameFieldMappings 顶层同名优先、嵌套唯一路径兜底且不�
   assert.equal(byField.get('name')?.source_field, 'data.title')
   assert.equal(byField.get('name')?.rule, 'manual')
   // 嵌套唯一叶子路径
-  assert.equal(byField.get('price')?.source_field, 'data.items.price')
+  assert.equal(byField.get('price')?.source_field, 'data.items[].price')
   assert.equal(byField.get('price')?.rule, 'nested_match')
   // 嵌套叶子路径同样适配其他字段
-  assert.equal(byField.get('status')?.source_field, 'data.items.status')
-  // 返回体中不存在的字段保持空来源字段
-  assert.equal(byField.get('description')?.source_field, '')
+  assert.equal(byField.get('status')?.source_field, 'data.items[].status')
+  // 返回体中不存在的选填字段不生成空映射行
+  assert.equal(byField.has('description'), false)
+})
+
+test('外部 API 校验拒绝 GET 残留请求体、失效错误路径与空 Header 名称', () => {
+  const errors = externalApiValidationErrors({
+    baseUrl: 'https://api.example.com',
+    baseUrlConfigKey: 'integrations.product.base-url',
+    method: 'GET',
+    path: '/products',
+    parameters: [],
+    headers: [{ name: '', value: 'application/json' }],
+    requestBody: '{"name":"A"}',
+    responseBody: { data: { name: 'A' } },
+    responseHandling: { cardinality: 'object', payload_path: 'data', error_message_path: 'error.message' },
+    mappings: [{ entity_field: 'name', source_field: 'data.name' }],
+    entityFields: [{ name: 'name', required: true }]
+  })
+  assert.ok(errors.some((error) => error.includes('GET 请求')))
+  assert.ok(errors.some((error) => error.includes('错误信息路径不存在')))
+  assert.ok(errors.some((error) => error.includes('Header')))
+})
+
+test('serializeExternalApiMappings 丢弃选填字段空映射并规范化规则', () => {
+  assert.deepEqual(serializeExternalApiMappings([
+    { entity_field: 'name', source_field: 'data.name', rule: 'same_name' },
+    { entity_field: 'description', source_field: '', rule: '' },
+    { entity_field: 'status', source_field: 'data.status', rule: 'unknown' }
+  ]), [
+    { entity_field: 'name', source_field: 'data.name', rule: 'same_name' },
+    { entity_field: 'status', source_field: 'data.status', rule: 'manual' }
+  ])
+})
+
+test('isSensitiveApiHeader 识别 API Key 与 Token 名称变体', () => {
+  assert.equal(isSensitiveApiHeader('X_API_KEY'), true)
+  assert.equal(isSensitiveApiHeader('client-access-token'), true)
+  assert.equal(isSensitiveApiHeader('Accept-Language'), false)
+})
+
+test('外部 API 当前契约不支持 PATCH 请求方式', () => {
+  const errors = externalApiValidationErrors({
+    baseUrl: 'https://api.example.com',
+    baseUrlConfigKey: 'integrations.product.base-url',
+    method: 'PATCH',
+    path: '/products',
+    parameters: [],
+    headers: [],
+    requestBody: '{"name":"A"}',
+    responseBody: { name: 'A' },
+    responseHandling: { cardinality: 'object', payload_path: '' },
+    mappings: [{ entity_field: 'name', source_field: 'name' }],
+    entityFields: [{ name: 'name', required: true }]
+  })
+  assert.ok(errors.some((error) => error.includes('请求方式必须是 GET、POST、PUT 或 DELETE')))
+})
+
+test('外部 API 多操作契约校验 Endpoint 唯一分配且允许分批覆盖', () => {
+  const relatedEndpoints = [
+    { api_contract_id: 'products-api', endpoint_id: 'products.list' },
+    { api_contract_id: 'products-api', endpoint_id: 'products.detail' }
+  ]
+  const errors = externalApiCollectionValidationErrors({
+    relatedEndpoints,
+    operations: [
+      {
+        operationId: 'products-query',
+        name: '查询商品',
+        endpointRefs: [relatedEndpoints[0], relatedEndpoints[0]]
+      },
+      {
+        operationId: 'products-copy',
+        name: '重复查询',
+        endpointRefs: [relatedEndpoints[0]]
+      }
+    ]
+  })
+  assert.ok(errors.some((error) => error.includes('重复关联同一 Endpoint')))
+  assert.ok(errors.some((error) => error.includes('不能同时绑定操作')))
+  assert.ok(!errors.some((error) => error.includes('products.detail')))
+})
+
+test('外部 API 连接覆盖要求 Base URL 与配置键成对填写', () => {
+  assert.ok(externalApiConnectionValidationErrors({
+    baseUrl: 'https://other.example.com',
+    baseUrlConfigKey: '',
+    required: false
+  }).some((error) => error.includes('同时提供配置键')))
+})
+
+test('非实体响应无需字段映射但拒绝分页语义', () => {
+  const errors = externalApiValidationErrors({
+    baseUrl: 'https://api.example.com',
+    baseUrlConfigKey: 'integrations.product.base-url',
+    method: 'DELETE',
+    path: '/products/{id}',
+    parameters: [{ name: 'id', in: 'path', type: 'string', required: true }],
+    headers: [],
+    requestBody: '',
+    responseBody: { success: true },
+    responseHandling: { entity_payload: false, cardinality: 'page', payload_path: 'data' },
+    mappings: [],
+    entityFields: [{ name: 'name', required: true }],
+    entityPayload: false
+  })
+  assert.ok(errors.some((error) => error.includes('非实体响应不得配置')))
+  assert.ok(!errors.some((error) => error.includes('必填字段尚未映射')))
+})
+
+test('多操作草稿最终序列化为当前 connection + operations 契约', () => {
+  const design = serializeExternalApiDesign({
+    connection: {
+      baseUrl: ' https://api.example.com ',
+      baseUrlConfigKey: ' integrations.product.base-url ',
+      timeoutMs: 10000,
+      headers: [{ name: ' X-Locale ', value: 'zh-CN' }, { name: '', value: '' }]
+    },
+    activeOperationId: 'products-delete',
+    operations: [{
+      operationId: 'products-delete',
+      name: ' 删除商品 ',
+      endpointRefs: [{ api_contract_id: 'products-api', endpoint_id: 'products.delete' }],
+      overrideBaseUrl: '',
+      overrideBaseUrlConfigKey: '',
+      overrideTimeoutMs: undefined,
+      method: 'DELETE',
+      path: ' /v1/products/{id} ',
+      parameters: [{ name: 'id', in: 'path', type: 'string', required: true }],
+      headers: [],
+      requestBody: '',
+      responseBody: '{"success":true}',
+      responseHandling: {
+        entity_payload: false,
+        cardinality: 'page',
+        payload_path: 'data',
+        success_status_codes: ['204'],
+        pagination: { page_parameter: 'page', size_parameter: 'size' },
+        total_path: 'total'
+      },
+      mappings: [{ entity_field: 'id', source_field: 'data.id', rule: 'manual' }]
+    }]
+  })
+
+  assert.equal(design.connection.base_url, 'https://api.example.com')
+  assert.deepEqual(design.connection.headers, [{ name: 'X-Locale', value: 'zh-CN' }])
+  assert.equal(design.operations[0].response_handling.entity_payload, false)
+  assert.equal(design.operations[0].response_handling.cardinality, 'object')
+  assert.equal(design.operations[0].response_handling.payload_path, '')
+  assert.equal(design.operations[0].response_handling.success_status_codes[0], 204)
+  assert.equal(design.operations[0].response_handling.pagination, undefined)
+  assert.deepEqual(design.operations[0].field_mappings, [])
+})
+
+test('外部 API 草稿只恢复当前多操作契约并生成独立操作 ID', () => {
+  const draft = externalApiDesignDraftSeed({
+    connection: {
+      base_url: 'https://api.example.com',
+      base_url_config_key: 'integrations.product.base-url',
+      timeout_ms: 5000,
+      headers: []
+    },
+    operations: [{
+      operation_id: 'products-list',
+      name: '查询商品',
+      endpoint_refs: [{ api_contract_id: 'products-api', endpoint_id: 'products.list' }],
+      api_info: {
+        method: 'GET',
+        path: '/products',
+        parameters: [],
+        headers: [],
+        response_body: { items: [] }
+      },
+      response_handling: { entity_payload: true, cardinality: 'array', payload_path: 'items' },
+      field_mappings: []
+    }]
+  })
+  const removedShape = externalApiDesignDraftSeed({
+    api_info: { method: 'GET', path: '/removed' }
+  })
+
+  assert.equal(draft.activeOperationId, 'products-list')
+  assert.equal(draft.operations[0].path, '/products')
+  assert.equal(removedShape.operations.length, 0)
+  assert.notEqual(createExternalApiOperation('copy-id').operationId, draft.operations[0].operationId)
 })
 
 test('seedRowsFromSuggestions 提取有效种子记录并忽略非法项', () => {

@@ -10,6 +10,7 @@ from app.services.entity_design import (
     entity_design_selection_summary,
     entity_design_stage,
     entity_design_summary,
+    entity_related_endpoints,
 )
 
 
@@ -165,6 +166,10 @@ def _entity_binding_items(
                 "table_design": _dict_value(detail.get("table_design")),
                 "database_design": _dict_value(detail.get("database_design")),
                 "external_api_design": _dict_value(detail.get("external_api_design")),
+                "related_endpoints": entity_related_endpoints(
+                    project_plan,
+                    selected_entity_id,
+                ),
                 "static_design": _dict_value(detail.get("static_design")),
                 "database_execution": _dict_value(detail.get("database_execution")),
                 "table_operations_executed": bool(detail.get("table_operations_executed")),
@@ -186,7 +191,7 @@ def _entity_binding_summary(
 
     if entities:
         item = entities[0]
-        return entity_design_summary(
+        summary = entity_design_summary(
             {
                 "entity_id": item.get("entity_id"),
                 "entity_name": item.get("name"),
@@ -200,6 +205,11 @@ def _entity_binding_summary(
                 "database_execution": item.get("database_execution"),
             }
         )
+        summary["related_endpoints"] = entity_related_endpoints(
+            project_plan,
+            selected_entity_id,
+        )
+        return summary
     entity = next(
         (
             item
@@ -208,11 +218,16 @@ def _entity_binding_summary(
         ),
         None,
     )
-    return (
-        entity_design_selection_summary(entity)
-        if isinstance(entity, dict)
-        else {"stage": "data_source_selection", "entity_id": selected_entity_id}
-    )
+    if isinstance(entity, dict):
+        # 首次选择数据源时尚未有 EntityDetail，也必须把当前实体的真实 Endpoint
+        # 清单投射给前端，否则外部 API 操作卡无法建立 endpoint_refs 关联。
+        summary = entity_design_selection_summary(entity)
+        summary["related_endpoints"] = entity_related_endpoints(
+            project_plan,
+            selected_entity_id,
+        )
+        return summary
+    return {"stage": "data_source_selection", "entity_id": selected_entity_id}
 
 
 def _dict_value(value: Any) -> dict[str, Any]:
