@@ -1315,7 +1315,13 @@ export default function AiChatPanel({
     const phaseDoc = phaseDocKey ? designDocs?.find((doc) => doc.key === phaseDocKey) : undefined
     const firstAvailable = designDocs?.find((doc) => doc.available)
     const target = phaseDoc || firstAvailable || designDocs?.[0]
-    if (target) setRightPanel({ type: 'doc', docKey: target.key })
+    if (target) {
+      setRightPanel({ type: 'doc', docKey: target.key })
+    } else if (phaseDocKey) {
+      // designDocs 尚未就绪（新建工作区首帧文档未生成）：按当前阶段占住默认 tab，
+      // 内容区 DocPanel 显示 loading。避免与 Effect B 同帧清空竞争导致面板不显示。
+      setRightPanel({ type: 'doc', docKey: phaseDocKey })
+    }
   }, [isApplicationPlanningPhase, rightPanelOpen, rightPanel, designDocs, planningPhase, setRightPanel])
 
   // 需求文档确认阶段：需求文档（含合并的产品规划）生成后自动切到"需求文档"tab 展示内容。
