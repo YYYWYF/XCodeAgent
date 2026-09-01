@@ -9,6 +9,7 @@ import unittest
 from app.graph.nodes.tasks import (
     _existing_build_task_plan,
     _merge_prepared_scope_tasks,
+    _retained_frontend_endpoint_owner_constraints,
     _resolve_build_context,
 )
 from app.services.build_task_planner import (
@@ -115,6 +116,72 @@ def _page_task(task_id: str, page_id: str, page_key: str) -> dict:
 
 
 class BuildTaskPlanRecoveryTests(unittest.TestCase):
+    def test_retained_owner_constraints_follow_replaceable_units_and_ignore_repair(self) -> None:
+        """owner 表只读取真实保留的普通任务，不携带模型声明路径。"""
+
+        check = {
+            "kind": "frontend.api_contract",
+            "target_paths": ["frontend/src/apis/personalInfo.ts"],
+            "expected": {
+                "endpoints": [
+                    {
+                        "api_contract_id": "personal_info_api",
+                        "endpoint_id": "personal_info_api.query",
+                    }
+                ]
+            },
+        }
+        plan = _base_unit_plan("frontend:api-client", "page:personal-info")
+        plan = replace_build_task_plan_tasks(
+            plan,
+            [
+                {
+                    "id": "frontend:api-client::personalInfoApi",
+                    "unit_id": "frontend:api-client",
+                    "owner": "frontend",
+                    "business_acceptance_checks": [check],
+                },
+                {
+                    "id": "repair:personalInfoApi",
+                    "kind": "repair",
+                    "unit_id": "frontend:api-client",
+                    "owner": "frontend",
+                    "business_acceptance_checks": [check],
+                },
+                {
+                    "id": "page:personal-info::api",
+                    "unit_id": "page:personal-info",
+                    "owner": "frontend",
+                    "business_acceptance_checks": [check],
+                },
+            ],
+        )
+
+        constraints, errors = _retained_frontend_endpoint_owner_constraints(
+            plan,
+            {"page:personal-info"},
+        )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            constraints,
+            [
+                {
+                    "api_contract_id": "personal_info_api",
+                    "endpoint_id": "personal_info_api.query",
+                    "owner_task_id": "frontend:api-client::personalInfoApi",
+                    "owner_unit_id": "frontend:api-client",
+                    "policy": "reuse_only",
+                }
+            ],
+        )
+        _, retained_base_errors = _retained_frontend_endpoint_owner_constraints(
+            plan,
+            set(),
+        )
+        self.assertEqual(len(retained_base_errors), 1)
+        self.assertIn("multiple implementation owners", retained_base_errors[0])
+
     def test_scope_merge_promotes_template_variant_to_plan_root(self) -> None:
         """合并后的确认 DAG 必须把模板变体保留在 Build 读取的顶层。"""
 

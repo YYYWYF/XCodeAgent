@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.tasks import (
+    _api_contract_inconsistency_payload,
+    _build_context_error_payload,
     _build_task_plan_confirmation_payload,
     _build_prerequisite_errors,
     _handle_build_task_plan_confirmation,
@@ -90,6 +92,23 @@ def _write_formal_build_artifacts(
 
 
 class PrepareBuildTasksGuardTests(unittest.TestCase):
+    def test_non_retryable_planning_errors_require_manual_action_without_routing(self) -> None:
+        """上下文和契约前置错误必须明确停止，并由用户自行处理。"""
+
+        scope = {"type": "page", "targetId": "personal-info"}
+        payloads = [
+            _build_context_error_payload("缺少页面详情。", scope),
+            _api_contract_inconsistency_payload(["Endpoint 字段不一致。"], scope),
+        ]
+
+        for payload in payloads:
+            self.assertFalse(payload["automatic_routing"])
+            self.assertEqual(payload["target"], scope)
+            self.assertTrue(payload["code"])
+            self.assertTrue(payload["artifact"])
+            self.assertTrue(payload["errors"])
+            self.assertTrue(payload["recommended_action"])
+
     def test_build_gate_ignores_removed_endpoint_detail_artifacts(self) -> None:
         """当前 Build 门禁不得重新依赖已移除的 EndpointDetail 产物。"""
 
@@ -1210,6 +1229,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["mode"], "build_prerequisite_error")
+        self.assertEqual(
+            result["clarification"]["code"],
+            "build_prerequisite_not_ready",
+        )
+        self.assertFalse(result["clarification"]["automatic_routing"])
+        self.assertTrue(result["clarification"]["recommended_action"])
         self.assertTrue(any("RequirementSpec" in error for error in result["clarification"]["errors"]))
         self.assertEqual(result["phase"], "prepare_build_tasks")
 
@@ -1345,6 +1370,9 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
 
         with patch(
             "app.graph.nodes.tasks._build_prerequisite_errors", return_value=[]
+        ), patch(
+            "app.graph.nodes.tasks.inspect_template_generation_readiness",
+            return_value={"templateVariant": "main", "errors": []},
         ), patch(
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             side_effect=AssertionError("must not generate tasks with contract drift"),

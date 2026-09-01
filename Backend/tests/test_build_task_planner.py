@@ -25,8 +25,10 @@ from app.services.build_task_planner import (
     _database_task_requires_approval,
     build_task_candidate_contract_errors,
     create_build_task_plan,
+    frontend_endpoint_implementation_owners,
     frontend_endpoint_ownership_errors,
     merge_exact_duplicate_tasks,
+    retained_frontend_endpoint_owner_conflict_errors,
     tasks_from_build_task_plan,
 )
 from app.services.business_acceptance import DELIVERABLE_KINDS
@@ -1288,6 +1290,75 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn('singular field "path" is not supported', retry_prompt)
         self.assertNotIn("must declare at least one deliverable", retry_prompt)
 
+    def test_full_dag_finalization_error_uses_the_same_regeneration_loop(self) -> None:
+        """候选单独有效但完整 DAG 无效时必须沿同一 attempt 计数重新生成。"""
+
+        response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "page-task",
+                        "unit_id": "page:dashboard",
+                        "owner": "frontend",
+                        "description": "实现页面内容。",
+                        "change_scope": ["frontend/src/pages/Dashboard/index.tsx"],
+                        "deliverables": [
+                            {
+                                "id": "page:dashboard",
+                                "kind": "frontend.page",
+                                "target_id": "dashboard",
+                                "paths": ["frontend/src/pages/Dashboard/index.tsx"],
+                                "provides": ["dashboard.render"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        finalized_attempts = 0
+
+        def finalize_candidate(candidate: dict) -> dict:
+            """首轮模拟合并冲突，第二轮返回完整有效图。"""
+
+            nonlocal finalized_attempts
+            finalized_attempts += 1
+            if finalized_attempts == 1:
+                candidate["task_graph"]["validation"] = {
+                    "is_valid": False,
+                    "errors": ["merged retained owner conflict"],
+                }
+            return candidate
+
+        settings = SimpleNamespace(
+            model_name="test-model",
+            model_api_name="test-model",
+            default_max_tokens=4096,
+            build_task_plan_max_retries=2,
+        )
+        with (
+            patch(
+                "app.agents.main.task_preparer.Settings.from_env",
+                return_value=settings,
+            ),
+            patch(
+                "app.agents.main.task_preparer._invoke_live_main_agent",
+                side_effect=[response, response],
+            ) as invoke_model,
+        ):
+            plan = prepare_build_tasks_with_main_agent(
+                {"version": "1.0.0"},
+                build_context={"required_unit_ids": ["page:dashboard"]},
+                candidate_finalizer=finalize_candidate,
+            )
+
+        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
+        self.assertEqual(finalized_attempts, 2)
+        self.assertEqual(invoke_model.call_count, 2)
+        self.assertEqual(
+            invoke_model.call_args_list[1].kwargs["validation_feedback"],
+            ["merged retained owner conflict"],
+        )
+
     def test_invalid_candidate_is_automatically_regenerated(self) -> None:
         """平台边界错误回喂模型自动重生成，不要求用户修正任务拆分。"""
 
@@ -2433,6 +2504,180 @@ class BuildTaskPlannerTests(unittest.TestCase):
         ]
 
         self.assertEqual(frontend_endpoint_ownership_errors(tasks), [])
+
+    def test_frontend_page_endpoint_usage_does_not_claim_implementation_owner(self) -> None:
+        """页面消费检查不得被误计为 API 模块实现 owner。"""
+
+        page_usage = {
+            "kind": "frontend.page_endpoint_usage",
+            "expected": {
+                "endpoints": [
+                    {
+                        "api_contract_id": "personal_info_api",
+                        "endpoint_id": "personal_info_api.query",
+                    }
+                ]
+            },
+        }
+        tasks = [
+            {
+                "id": "page:personal-info::page",
+                "unit_id": "page:personal-info",
+                "owner": "frontend",
+                "business_acceptance_checks": [page_usage],
+            }
+        ]
+
+        self.assertEqual(frontend_endpoint_implementation_owners(tasks), [])
+        self.assertEqual(frontend_endpoint_ownership_errors(tasks), [])
+
+    def test_candidate_compilation_rejects_retained_endpoint_owner_constraint(self) -> None:
+        """候选编译后的业务检查必须与临时 retained owner 表交叉校验。"""
+
+        plan = create_build_task_plan(
+            {
+                "api_contracts": [
+                    {
+                        "id": "personal_info_api",
+                        "endpoints": [
+                            {
+                                "id": "personal_info_api.query",
+                                "method": "GET",
+                                "path": "/api/personal-info",
+                                "parameters": [],
+                            }
+                        ],
+                        "schemas": {},
+                    }
+                ]
+            },
+            agent_plan={
+                "tasks": [
+                    {
+                        "id": "task_page_personal_info_query",
+                        "unit_id": "page:page_personal_info_query",
+                        "owner": "frontend",
+                        "description": "重复实现个人信息 API。",
+                        "change_scope": ["frontend/src/apis/personalInfoPage.ts"],
+                        "deliverables": [
+                            {
+                                "id": "page-personal-info-api",
+                                "kind": "frontend.api_module",
+                                "target_id": "personal_info_api.query",
+                                "paths": ["frontend/src/apis/personalInfoPage.ts"],
+                                "provides": ["personal_info_api.query"],
+                            }
+                        ],
+                    }
+                ]
+            },
+            build_context={
+                "required_unit_ids": ["page:page_personal_info_query"],
+                "endpoint_ids": ["personal_info_api.query"],
+                "frontend_endpoint_owner_constraints": [
+                    {
+                        "api_contract_id": "personal_info_api",
+                        "endpoint_id": "personal_info_api.query",
+                        "owner_task_id": "frontend:api-client::personalInfoApi",
+                        "owner_unit_id": "frontend:api-client",
+                        "policy": "reuse_only",
+                    }
+                ],
+            },
+        )
+
+        errors = plan["task_graph"]["validation"]["errors"]
+        self.assertTrue(
+            any("retained_frontend_endpoint_owner_conflict" in error for error in errors)
+        )
+
+    def test_retained_endpoint_owner_constraint_has_no_path_and_blocks_candidate_owner(self) -> None:
+        """规划约束只携带稳定 owner 身份，并确定性拒绝候选重复实现。"""
+
+        check = {
+            "kind": "frontend.api_contract",
+            "target_paths": ["frontend/src/apis/personalInfo.ts"],
+            "expected": {
+                "endpoints": [
+                    {
+                        "api_contract_id": "personal_info_api",
+                        "endpoint_id": "personal_info_api.query",
+                    }
+                ]
+            },
+        }
+        retained_task = {
+            "id": "frontend:api-client::personalInfoApi",
+            "unit_id": "frontend:api-client",
+            "owner": "frontend",
+            "business_acceptance_checks": [check],
+        }
+        owners = frontend_endpoint_implementation_owners([retained_task])
+        constraint = dict(owners[0])
+        constraint["policy"] = "reuse_only"
+        candidate_task = {
+            "id": "task_page_personal_info_query",
+            "unit_id": "page:page_personal_info_query",
+            "owner": "frontend",
+            "business_acceptance_checks": [check],
+        }
+
+        self.assertNotIn("planned_paths", constraint)
+        errors = retained_frontend_endpoint_owner_conflict_errors(
+            [candidate_task],
+            [constraint],
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("retained_frontend_endpoint_owner_conflict", errors[0])
+        self.assertIn("frontend:api-client::personalInfoApi", errors[0])
+        self.assertNotIn("personalInfo.ts", errors[0])
+
+    def test_ordinary_candidate_cannot_emit_repair_task(self) -> None:
+        """普通 DAG 规划中的 repair 必须作为协议错误进入自动重生成。"""
+
+        errors = build_task_candidate_contract_errors(
+            {
+                "tasks": [
+                    {
+                        "id": "repair:page",
+                        "kind": "repair",
+                        "unit_id": "page:dashboard",
+                        "owner": "frontend",
+                    }
+                ]
+            }
+        )
+
+        self.assertIn(
+            "Task repair:page must not use kind=repair in ordinary Build DAG planning.",
+            errors,
+        )
+
+    def test_prompt_treats_retained_endpoint_owner_as_reuse_only_authority(self) -> None:
+        """Prompt 必须显式禁止页面候选重建保留的 API owner。"""
+
+        prompt = build_task_preparation_prompt(
+            {"version": "1.0.0"},
+            {},
+            {
+                "planning_context_mode": "page",
+                "required_unit_ids": ["page:personal-info"],
+                "frontend_endpoint_owner_constraints": [
+                    {
+                        "api_contract_id": "personal_info_api",
+                        "endpoint_id": "personal_info_api.query",
+                        "owner_task_id": "frontend:api-client::personalInfoApi",
+                        "owner_unit_id": "frontend:api-client",
+                        "policy": "reuse_only",
+                    }
+                ],
+            },
+        )
+
+        self.assertIn("platform-authoritative index", prompt)
+        self.assertIn("frontend_endpoint_owner_constraints", prompt)
+        self.assertIn("frontend:api-client::personalInfoApi", prompt)
+        self.assertNotIn("personalInfo.ts", prompt)
 
     def test_compiles_unit_dependencies_and_source_refs(self) -> None:
         """页面任务只继承前端公共 Unit，后端 Unit 仅保留接口来源引用。"""

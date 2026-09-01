@@ -555,10 +555,61 @@ def frontend_endpoint_ownership_errors(tasks: list[dict[str, Any]]) -> list[str]
     """拒绝多个普通前端任务重复实现同一个正式 Endpoint。"""
 
     owners_by_endpoint: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for owner in _frontend_endpoint_implementation_owner_records(tasks):
+        endpoint_key = (
+            str(owner.get("api_contract_id") or "").casefold(),
+            str(owner.get("endpoint_id") or "").casefold(),
+        )
+        owners_by_endpoint.setdefault(endpoint_key, []).append(owner)
+
+    errors: list[str] = []
+    for owners in owners_by_endpoint.values():
+        if len(owners) < 2:
+            continue
+        first = owners[0]
+        endpoint_label = (
+            f"{first['api_contract_id']} + {first['endpoint_id']}"
+            if first["api_contract_id"]
+            else first["endpoint_id"]
+        )
+        owner_labels = [
+            f"{owner['owner_task_id']} ({', '.join(owner['planned_paths']) or 'no target path'})"
+            for owner in owners
+        ]
+        errors.append(
+            f"Frontend endpoint {endpoint_label} has multiple implementation owners: "
+            f"{'; '.join(owner_labels)}. Keep one API module owner and make other tasks reuse it."
+        )
+    return errors
+
+
+def frontend_endpoint_implementation_owners(
+    tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """从已编译业务检查提取不含路径推断的前端 Endpoint owner 表。"""
+
+    return [
+        {
+            "api_contract_id": str(owner.get("api_contract_id") or ""),
+            "endpoint_id": str(owner.get("endpoint_id") or ""),
+            "owner_task_id": str(owner.get("owner_task_id") or ""),
+            "owner_unit_id": str(owner.get("owner_unit_id") or ""),
+        }
+        for owner in _frontend_endpoint_implementation_owner_records(tasks)
+    ]
+
+
+def _frontend_endpoint_implementation_owner_records(
+    tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """提取 Endpoint owner 及仅供最终错误诊断使用的计划路径。"""
+
+    owners: list[dict[str, Any]] = []
     for task in tasks:
         if str(task.get("owner") or "") != "frontend" or task.get("kind") == "repair":
             continue
         task_id = str(task.get("id") or "<unknown>")
+        unit_id = str(task.get("unit_id") or "")
         seen_task_endpoints: set[tuple[str, str]] = set()
         for check in _dict_items(task.get("business_acceptance_checks")):
             if str(check.get("kind") or "") not in _FRONTEND_ENDPOINT_IMPLEMENTATION_CHECK_KINDS:
@@ -583,34 +634,54 @@ def frontend_endpoint_ownership_errors(tasks: list[dict[str, Any]]) -> list[str]
                 if endpoint_key in seen_task_endpoints:
                     continue
                 seen_task_endpoints.add(endpoint_key)
-                owners_by_endpoint.setdefault(endpoint_key, []).append(
+                owners.append(
                     {
-                        "task_id": task_id,
-                        "contract_id": contract_id,
+                        "api_contract_id": contract_id,
                         "endpoint_id": endpoint_id,
-                        "paths": paths,
+                        "owner_task_id": task_id,
+                        "owner_unit_id": unit_id,
+                        # 路径只用于既有最终校验的诊断文案，不进入规划约束事实表。
+                        "planned_paths": paths,
                     }
                 )
+    return owners
 
+
+def retained_frontend_endpoint_owner_conflict_errors(
+    tasks: list[dict[str, Any]],
+    owner_constraints: list[dict[str, Any]],
+) -> list[str]:
+    """拒绝候选任务重新声明保留 DAG 中已有的前端 Endpoint 实现。"""
+
+    retained_by_endpoint = {
+        (
+            str(owner.get("api_contract_id") or "").casefold(),
+            str(owner.get("endpoint_id") or "").casefold(),
+        ): owner
+        for owner in owner_constraints
+        if str(owner.get("endpoint_id") or "").strip()
+    }
     errors: list[str] = []
-    for owners in owners_by_endpoint.values():
-        if len(owners) < 2:
+    for candidate in frontend_endpoint_implementation_owners(tasks):
+        endpoint_key = (
+            str(candidate.get("api_contract_id") or "").casefold(),
+            str(candidate.get("endpoint_id") or "").casefold(),
+        )
+        retained = retained_by_endpoint.get(endpoint_key)
+        if not retained:
             continue
-        first = owners[0]
-        endpoint_label = (
-            f"{first['contract_id']} + {first['endpoint_id']}"
-            if first["contract_id"]
-            else first["endpoint_id"]
-        )
-        owner_labels = [
-            f"{owner['task_id']} ({', '.join(owner['paths']) or 'no target path'})"
-            for owner in owners
-        ]
         errors.append(
-            f"Frontend endpoint {endpoint_label} has multiple implementation owners: "
-            f"{'; '.join(owner_labels)}. Keep one API module owner and make other tasks reuse it."
+            "retained_frontend_endpoint_owner_conflict: "
+            f"api_contract_id={retained.get('api_contract_id') or ''}, "
+            f"endpoint_id={retained.get('endpoint_id') or ''}, "
+            f"retained_task_id={retained.get('owner_task_id') or ''}, "
+            f"retained_unit_id={retained.get('owner_unit_id') or ''}, "
+            f"candidate_task_id={candidate.get('owner_task_id') or ''}, "
+            f"candidate_unit_id={candidate.get('owner_unit_id') or ''}. "
+            "Required action: remove the candidate frontend API/static-data implementation "
+            "deliverable and keep only page endpoint usage; cross-Unit reuse is platform-compiled."
         )
-    return errors
+    return _dedupe_strings(errors)
 
 
 def _exact_duplicate_key(task: dict[str, Any]) -> str:
@@ -732,6 +803,10 @@ def build_task_candidate_contract_errors(
         owner = _text(task.get("owner"))
         unit_id = _text(task.get("unit_id"))
         task_kind = _text(task.get("kind"))
+        if task_kind == "repair":
+            errors.append(
+                f"Task {task_id} must not use kind=repair in ordinary Build DAG planning."
+            )
         requires_deliverable = (
             task_kind != "repair"
             and owner in {"frontend", "backend"}
@@ -905,6 +980,12 @@ def _task_semantic_errors(
     )
     errors.extend(_required_bootstrap_task_errors(tasks, build_context))
     errors.extend(frontend_endpoint_ownership_errors(tasks))
+    errors.extend(
+        retained_frontend_endpoint_owner_conflict_errors(
+            tasks,
+            _dict_items(build_context.get("frontend_endpoint_owner_constraints")),
+        )
+    )
     for task in tasks:
         task_id = str(task.get("id") or "")
         owner = str(task.get("owner") or "")

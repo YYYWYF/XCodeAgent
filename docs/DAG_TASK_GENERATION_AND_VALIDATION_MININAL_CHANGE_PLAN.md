@@ -260,7 +260,13 @@ DAG 生成时只做前置条件检查：
 `business_acceptance_checks` 后，以 `api_contract_id + endpoint_id` 为键建立唯一 owner。
 同一普通前端任务可以负责多个 Endpoint，但同一 Endpoint 不得同时属于两个普通任务或两个业务 API 文件；
 后续页面只能通过 Unit 依赖复用已有 owner。Repair 任务继承父任务的业务检查，不作为新的 owner 参与统计。
-冲突不会在执行阶段自动合并，而是写入 `task_graph.validation.errors` 并触发候选 DAG 自动重生成。
+每次 DAG 生成在计算实际可替换 Unit 后，从保留的非 Repair 任务实时提取 owner 表；该表只包含
+`api_contract_id`、`endpoint_id`、`owner_task_id`、`owner_unit_id` 和 `policy=reuse_only`，不使用
+`deliverable.paths`，不独立持久化，也不进入供 Build 执行的正式 `build_context`。它只作为本轮 Prompt 和候选确定性校验的临时约束。
+
+候选单独校验、owner 约束校验、保留任务合并和完整 DAG 校验必须属于同一个有界重生成循环；
+完整图冲突会回灌模型并重新生成本轮候选。若保留基线在调用模型前就已经存在多个 owner，则平台不猜测正确 owner、
+不自动回退上游，也不覆盖现有 JSON，而是返回带错误码、目标、产物和建议操作的明确提示，由用户手动处理后重新发起。
 
 ### 4.6 优化阻断错误
 
@@ -270,7 +276,8 @@ DAG 生成时只做前置条件检查：
 | --- | --- |
 | owner、path、operation 的可确定格式问题 | 自动归一化，不阻断 |
 | 完全重复任务 | 自动合并，不阻断 |
-| 同一前端 Endpoint 存在多个实现 owner | 阻断，列出 `api_contract_id`、`endpoint_id`、task ID 和目标文件，并自动重生成 |
+| 本轮候选导致同一前端 Endpoint 存在多个实现 owner | 阻断，列出 `api_contract_id`、`endpoint_id` 和新旧 task/Unit ID，并在完整 DAG 的同一循环内自动重生成 |
+| 保留基线在模型调用前已存在多个 Endpoint owner | 阻断并明确提示用户手动修正；不自动选择 owner、不自动回退上游、不覆盖现有 JSON |
 | 缺失依赖或循环依赖 | 阻断，并列出 task ID 和依赖 ID |
 | 文件范围越权或并行写冲突 | 阻断，并列出 task ID 和路径 |
 | 缺少 PageImplementationContract、Endpoint 契约或 EntitySourceBinding | 阻断，并说明缺失的上游产物 |

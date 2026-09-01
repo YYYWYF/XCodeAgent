@@ -20,6 +20,8 @@ from app.services.build_context_resolver import resolve_target_build_context
 from app.services.development_readiness import development_readiness
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
+    frontend_endpoint_implementation_owners,
+    frontend_endpoint_ownership_errors,
     merge_exact_duplicate_tasks,
     strip_platform_owned_candidate_tasks,
     tasks_from_build_task_plan,
@@ -205,7 +207,10 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             ),
             "build_task_plan_persisted": False,
             "dag_generation_progress": progress.snapshot(),
-            "clarification": _build_context_error_payload(str(exc)),
+            "clarification": _build_context_error_payload(
+                str(exc),
+                build_execution_scope,
+            ),
             "timeline": ["prepare_build_tasks"],
             **formal_artifact_state,
         }
@@ -256,7 +261,10 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "build_execution_scope": build_execution_scope,
             "build_task_plan_persisted": False,
             "dag_generation_progress": progress.snapshot(),
-            "clarification": _build_context_error_payload(str(exc)),
+            "clarification": _build_context_error_payload(
+                str(exc),
+                build_execution_scope,
+            ),
             "timeline": ["prepare_build_tasks"],
             **formal_artifact_state,
         }
@@ -313,7 +321,10 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             ),
             "build_task_plan_persisted": False,
             "dag_generation_progress": progress.snapshot(),
-            "clarification": _api_contract_inconsistency_payload(contract_errors),
+            "clarification": _api_contract_inconsistency_payload(
+                contract_errors,
+                build_execution_scope,
+            ),
             "timeline": ["prepare_build_tasks"],
             **formal_artifact_state,
         }
@@ -331,13 +342,57 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_context,
             set(build_context.get("required_unit_ids") or []),
         )
+        owner_constraints, retained_owner_errors = (
+            _retained_frontend_endpoint_owner_constraints(
+                build_task_plan,
+                planning_unit_ids,
+            )
+        )
+        if retained_owner_errors:
+            attempt_plan = _build_task_plan_attempt_view(
+                build_task_plan,
+                build_execution_scope,
+                status="failed",
+            )
+            progress.fail(
+                "model_planning",
+                "保留任务中存在前端 Endpoint 多 owner，已停止本轮 DAG 生成。",
+                build_task_plan=attempt_plan,
+                output=project_candidate_tasks_output(attempt_plan),
+            )
+            return {
+                **_retained_endpoint_owner_blocked_result(
+                    project_plan,
+                    build_task_plan,
+                    progress,
+                    retained_owner_errors,
+                    build_execution_scope,
+                ),
+                **formal_artifact_state,
+            }
         planning_build_context = {
             **build_context,
             "planning_unit_ids": sorted(planning_unit_ids),
+            # 该索引仅约束本轮模型规划，不写入正式 build_context 或 Build DAG。
+            "frontend_endpoint_owner_constraints": owner_constraints,
         }
         planning_build_context["planning_context_mode"] = planning_context_mode(
             planning_build_context
         )
+        finalized_plan: dict[str, dict[str, Any]] = {}
+
+        def finalize_candidate(candidate_plan: dict[str, Any]) -> dict[str, Any]:
+            """把当前候选合并进保留任务，并返回需参与同轮校验的完整 DAG。"""
+
+            merged_plan = _merge_prepared_scope_tasks(
+                build_task_plan,
+                candidate_plan,
+                build_context,
+                project_plan=project_plan,
+            )
+            finalized_plan["value"] = merged_plan
+            return merged_plan
+
         prepared_plan = prepare_build_tasks_with_main_agent(
             _task_preparation_project_plan(
                 project_plan,
@@ -348,6 +403,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_context=planning_build_context,
             build_task_plan=build_task_plan,
             build_execution_scope=build_execution_scope,
+            candidate_finalizer=finalize_candidate,
         )
     except ValueError as exc:
         attempt_plan = _build_task_plan_attempt_view(
@@ -394,7 +450,9 @@ def prepare_build_tasks(state: ProjectState) -> dict:
 
     progress.start("task_compilation", "正在编译任务字段、Unit 与任务依赖。")
     try:
-        build_task_plan = _merge_prepared_scope_tasks(
+        # 正常运行时最终化已在唯一重试循环内完成；测试替身或旧调用边界未执行
+        # callback 时仍在这里合并一次，保证节点边界保持确定性。
+        build_task_plan = finalized_plan.get("value") or _merge_prepared_scope_tasks(
             build_task_plan,
             prepared_plan,
             build_context,
@@ -777,8 +835,16 @@ def _build_prerequisite_blocked_result(
     payload.update(
         {
             "mode": "build_prerequisite_error",
+            "code": "build_prerequisite_not_ready",
             "message": "Build DAG 前置条件未满足，已阻止任务生成。",
             "errors": errors,
+            "target": build_execution_scope,
+            "artifact": (
+                "RequirementSpec / ProductPlan / UiManifest / TechnicalPlan / "
+                "template-generation-manifest.json / EntitySourceBinding"
+            ),
+            "recommended_action": "手动完成并确认错误所指向的前置产物后重新发起 DAG 生成。",
+            "automatic_routing": False,
             "upstreamStages": [
                 "requirements",
                 "product_planning",
@@ -2187,6 +2253,38 @@ def _replaceable_unit_ids(
     return replaceable
 
 
+def _retained_frontend_endpoint_owner_constraints(
+    build_task_plan: dict,
+    replaceable_unit_ids: set[str],
+) -> tuple[list[dict[str, str]], list[str]]:
+    """按实际合并边界从保留的普通任务实时提取 Endpoint owner 约束。"""
+
+    retained_tasks = [
+        task
+        for task in tasks_from_build_task_plan(build_task_plan)
+        if str(task.get("unit_id") or "") not in replaceable_unit_ids
+    ]
+    errors = frontend_endpoint_ownership_errors(retained_tasks)
+    constraints = sorted(
+        [
+            {
+                "api_contract_id": str(owner.get("api_contract_id") or ""),
+                "endpoint_id": str(owner.get("endpoint_id") or ""),
+                "owner_task_id": str(owner.get("owner_task_id") or ""),
+                "owner_unit_id": str(owner.get("owner_unit_id") or ""),
+                "policy": "reuse_only",
+            }
+            for owner in frontend_endpoint_implementation_owners(retained_tasks)
+        ],
+        key=lambda item: (
+            item["api_contract_id"].casefold(),
+            item["endpoint_id"].casefold(),
+            item["owner_task_id"],
+        ),
+    )
+    return constraints, errors
+
+
 def _is_reusable_public_unit(unit_id: str) -> bool:
     """判断 Unit 是否属于可复用的前端公共能力。"""
 
@@ -2222,7 +2320,12 @@ def _target_unit_id(target: dict) -> str:
     return ""
 
 
-def _api_contract_inconsistency_payload(errors: list[str]) -> dict:
+def _api_contract_inconsistency_payload(
+    errors: list[str],
+    build_execution_scope: dict[str, str],
+) -> dict:
+    """构造契约不一致时由用户手动处理的结构化阻断说明。"""
+
     payload = build_ask_user_payload(
         [
             AskUserQuestion(
@@ -2236,13 +2339,25 @@ def _api_contract_inconsistency_payload(errors: list[str]) -> dict:
             )
         ]
     )
-    payload["mode"] = "api_contract_consistency_error"
-    payload["message"] = "API 契约一致性校验失败，已阻止任务拆分和代码生成。"
-    payload["errors"] = errors
+    payload.update(
+        {
+            "mode": "api_contract_consistency_error",
+            "code": "api_contract_consistency_error",
+            "message": "API 契约一致性校验失败，已阻止任务拆分和代码生成。",
+            "target": build_execution_scope,
+            "artifact": ".xcodeagent/plans/technical-plan.json",
+            "errors": errors,
+            "recommended_action": "手动修订并确认 API 契约或页面字段引用后重新发起 DAG 生成。",
+            "automatic_routing": False,
+        }
+    )
     return payload
 
 
-def _build_context_error_payload(error: str) -> dict:
+def _build_context_error_payload(
+    error: str,
+    build_execution_scope: dict[str, str],
+) -> dict:
     """构造目标页面或 endpoint 详情不足时的 AG-UI 阻止说明。"""
 
     payload = build_ask_user_payload(
@@ -2258,9 +2373,18 @@ def _build_context_error_payload(error: str) -> dict:
             )
         ]
     )
-    payload["mode"] = "build_context_error"
-    payload["message"] = "目标构建上下文不完整，已阻止任务拆分和代码生成。"
-    payload["error"] = error
+    payload.update(
+        {
+            "mode": "build_context_error",
+            "code": "build_context_incomplete",
+            "message": "目标构建上下文不完整，已阻止任务拆分和代码生成。",
+            "target": build_execution_scope,
+            "artifact": "PageImplementationContract / Endpoint Contract / EntitySourceBinding",
+            "errors": [error],
+            "recommended_action": "手动补齐并确认缺失的范围详情后重新发起 DAG 生成。",
+            "automatic_routing": False,
+        }
+    )
     return payload
 
 
@@ -2293,6 +2417,63 @@ def _build_task_plan_generation_failed_result(
         "dag_generation_progress": progress.snapshot(),
         "error": reason,
         "message": "Build DAG 自动重生成未得到有效任务计划，已停止代码生成。",
+        "timeline": ["prepare_build_tasks"],
+    }
+
+
+def _retained_endpoint_owner_blocked_result(
+    project_plan: dict,
+    build_task_plan: dict,
+    progress: Any,
+    errors: list[str],
+    build_execution_scope: dict[str, str],
+) -> dict:
+    """将保留基线 owner 冲突投影为用户手动处理提示，不自动回退上游。"""
+
+    failed_plan = _build_task_plan_attempt_view(
+        build_task_plan,
+        build_execution_scope,
+        status="failed",
+    )
+    payload = build_ask_user_payload(
+        [
+            AskUserQuestion(
+                header="DAG 基线冲突",
+                question=(
+                    "当前已保留的 Build 任务对同一前端 Endpoint 声明了多个实现 owner，"
+                    "平台无法安全选择其中一个。请手动修正现有任务规划后重新发起 DAG 生成。"
+                ),
+                type="text",
+                placeholder="请保留一个 API 模块 owner，并让页面任务只复用该实现。",
+            )
+        ]
+    )
+    payload.update(
+        {
+            "mode": "retained_endpoint_owner_conflict",
+            "code": "retained_frontend_endpoint_owner_conflict",
+            "message": "保留 Build DAG 已存在前端 Endpoint 多 owner，未调用模型生成新候选。",
+            "target": build_execution_scope,
+            "artifact": ".xcodeagent/plans/build-task-plan.json",
+            "errors": errors,
+            "recommended_action": "手动修正现有 Build Task Plan 的重复 API 实现归属后重新生成 DAG。",
+            "automatic_routing": False,
+        }
+    )
+    persisted_scope = build_task_plan.get("build_execution_scope")
+    return {
+        "phase": "prepare_build_tasks",
+        "status": "requires_user_input",
+        "project_plan": project_plan,
+        "build_task_plan": failed_plan,
+        "build_execution_scope": build_execution_scope,
+        "last_persisted_build_execution_scope": (
+            persisted_scope if isinstance(persisted_scope, dict) else None
+        ),
+        "build_task_plan_persisted": False,
+        "dag_generation_progress": progress.snapshot(),
+        "clarification": payload,
+        "message": payload["message"],
         "timeline": ["prepare_build_tasks"],
     }
 

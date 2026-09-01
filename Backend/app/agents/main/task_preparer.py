@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from app.agents.main.task_preparer_prompt import build_task_preparation_prompt
 from app.agents.messages import _coerce_content_text
@@ -59,8 +59,9 @@ def prepare_build_tasks_with_main_agent(
     build_task_plan: dict[str, Any] | None = None,
     build_execution_scope: dict[str, Any] | None = None,
     validation_feedback: list[str] | None = None,
+    candidate_finalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """通过直接模型边界生成并自动修复当前范围的 Build DAG 候选任务。"""
+    """在单一重试循环中生成候选，并可最终化为合并后的完整 Build DAG。"""
 
     settings = Settings.from_env()
     max_retries = max(0, int(getattr(settings, "build_task_plan_max_retries", 2)))
@@ -130,6 +131,44 @@ def prepare_build_tasks_with_main_agent(
                 )
             feedback = last_errors
             continue
+
+        if candidate_finalizer is not None:
+            try:
+                build_task_plan = candidate_finalizer(build_task_plan)
+            except ValueError as exc:
+                last_errors = [str(exc)]
+                logger.warning(
+                    "build_task_plan_finalization_failed attempt=%s/%s response_sha256=%s "
+                    "error=%s",
+                    attempt + 1,
+                    max_retries + 1,
+                    _response_fingerprint(agent_note),
+                    str(exc),
+                )
+                if attempt >= max_retries:
+                    raise ValueError(
+                        "Build DAG 自动重生成耗尽，最后一次完整任务图无法编译："
+                        + "；".join(last_errors)
+                    ) from exc
+                feedback = last_errors
+                continue
+            last_errors = _build_task_plan_validation_errors(build_task_plan)
+            if last_errors:
+                logger.warning(
+                    "build_task_plan_final_validation_retry attempt=%s/%s "
+                    "response_sha256=%s errors=%s",
+                    attempt + 1,
+                    max_retries + 1,
+                    _response_fingerprint(agent_note),
+                    last_errors,
+                )
+                if attempt >= max_retries:
+                    raise ValueError(
+                        "Build DAG 自动重生成耗尽，最后一次完整任务图仍未通过校验："
+                        + "；".join(last_errors)
+                    )
+                feedback = last_errors
+                continue
 
         build_task_plan["prepared_by"] = {
             "agent": "chat-model",

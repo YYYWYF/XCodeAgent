@@ -308,6 +308,16 @@ def _planning_algorithm_section(
         "and one business API module path. A second page that consumes the same endpoint "
         "must reuse that owner task and module through Unit dependencies."
     )
+    owner_constraints = build_context.get("frontend_endpoint_owner_constraints")
+    if isinstance(owner_constraints, list) and owner_constraints:
+        rules.append(
+            "TargetBuildContext.frontend_endpoint_owner_constraints is a platform-authoritative "
+            "index of retained Endpoint implementations. For every entry with policy=reuse_only, "
+            "do not emit frontend.api_module or frontend.static_data_module deliverables, do not "
+            "rename or replace the retained owner, and do not copy retained task IDs into "
+            "dependencies. A consuming page emits only its frontend.page deliverable; the "
+            "platform compiles cross-Unit reuse."
+        )
     feedback = _task_plan_retry_feedback(validation_feedback)
     if feedback:
         rules.append(feedback)
@@ -538,6 +548,7 @@ def scoped_prompt_build_context(
             "required_unit_ids",
             "source_refs",
             "reusable_tasks_by_unit",
+            "frontend_endpoint_owner_constraints",
             "authorization_constraints",
         }
         return {key: value for key, value in context.items() if key in allowed_keys}
