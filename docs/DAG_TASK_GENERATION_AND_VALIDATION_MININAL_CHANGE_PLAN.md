@@ -106,7 +106,7 @@ inspect_workspace → prepare_build_tasks → build
 候选任务校验失败时，平台将具体错误回灌给任务规划模型并自动重新生成完整候选；只有通过校验的 DAG
 才进入用户确认。达到自动重生成上限仍失败时，工作流进入平台失败处理，不展示要求用户编辑或拆分任务的人工修正问题。
 
-这里需要扩展的是现有恢复协议，而不是新增普通问题文本：DAG 确认、任务 patch 和全量重新生成必须通过
+这里需要扩展的是现有恢复协议，而不是新增普通问题文本：DAG 确认和全量重新生成必须通过
 AG-UI 结构化动作恢复，并使用独立的 `build_task_plan_confirmation` mode，不能复用正式文档确认 mode。
 
 ## 4. 第一批：修复流程阻塞
@@ -310,54 +310,44 @@ DAG 编译和校验通过后：
 
 ### 5.2 用户确认内容
 
-默认每个任务只展示两个可编辑字段：
+确认页为只读核对界面，不提供任务字段编辑。首层合并展示本次开发目标与范围；任务列表默认折叠，
+折叠态只展示任务名称和目的，展开后展示修改范围、业务验收与工程验收。owner、任务 ID、Unit、
+依赖边和执行批次属于系统执行信息，不在本期用户界面中暴露。
 
-1. 任务名称 `title`；
-2. 任务描述 `description`。
+确认载荷同时提供一个不写回累计 DAG 的只读视图：
 
-以下字段只读或折叠展示：
+1. 页面目标读取运行时 `PageImplementationContract.productAcceptance`，其正式来源是 ProductPlan 页面的 `acceptance_criteria`；
+2. 页面只有在存在直接关联 Endpoint 时才返回 `relatedEndpoints`，接口摘要来自 TechnicalPlan `api_contracts[].endpoints[]`；
+3. 直接开发 Endpoint 时只返回该 Endpoint 目标，不伪造页面；
+4. `scopeTasks` 完整返回当前 `required_unit_ids` 范围内的任务；
+5. 当前任务跨范围依赖的既有任务以 `reusedPrerequisites` 最小字段返回；
+6. 其余累计任务只在 `retainedTaskSummary` 中按状态汇总。
 
-- owner；
-- 依赖关系；
-- 修改范围；
-- 工程完成检查。
-
-不要求用户逐项确认或编辑 `acceptance_checks`。它由后端确定性生成，是执行后的工程门禁，不是用户需要理解的业务验收标准。
+上述字段属于 AG-UI 确认投影，不删除、裁剪或改写 `.xcodeagent/plans/build-task-plan.json` 的累计任务注册表。
+确认载荷不再下发完整历史 `taskPlan.tasks`；界面只消费 `scopeTasks`、`reusedPrerequisites` 和
+`retainedTaskSummary`。页面没有直接关联 Endpoint 时不返回也不渲染接口内容。
 
 确认界面通过 AG-UI 传递结构化动作，最小载荷如下：
 
 ```json
 {
   "mode": "build_task_plan_confirmation",
-  "action": "patch",
-  "patches": [
-    {
-      "task_id": "task-001",
-      "title": "可选的新任务名称",
-      "description": "可选的新任务描述"
-    }
-  ]
+  "action": "confirm"
 }
 ```
 
-`action` 的允许值为 `confirm`、`patch`、`regenerate`；上例展示任务 patch。
-
-只有 `title` 和 `description` 可由用户 patch；后端必须拒绝通过同一 patch 修改 owner、Unit、依赖、
-路径范围、operation、数据库范围或 `acceptance_checks`。`confirm` 不调用模型，`patch` 重新执行归一化、
-重复合并、工程验收编译和 DAG 校验，`regenerate` 才重新调用候选任务模型。
+`action` 的允许值仅为 `confirm`、`regenerate`。`confirm` 不调用模型；`regenerate` 重新调用候选任务模型。
+未知动作以及已经移除的任务 `patch` 必须在 AG-UI 请求边界被拒绝。
 
 ### 5.3 用户操作
 
 | 操作 | 处理方式 |
 | --- | --- |
 | 确认并继续 | 校验工作区中的最新 JSON，将其标记为 confirmed，进入 Build |
-| 修改一个任务 | 提交一个任务 patch，重新归一化、编译、校验和确认 |
-| 批量修改任务 | 提交多个任务 patch，处理流程与单任务修改相同 |
 | 全量重新生成 | 重新调用候选任务生成，从模型规划阶段重新执行 |
 
-单任务修改和批量修改共用同一个结构化 patch 协议，只通过 patch 数量区分，不增加两套后端流程。
-
-每次修改或重新生成都会直接覆盖工作区中的最新 `build-task-plan.json`，并把 `confirmation_status` 重置为 `pending`。用户通过结构化确认界面查看和修改任务，不再使用 Markdown 作为确认载体。
+重新生成会覆盖工作区中的最新 `build-task-plan.json`，并把 `confirmation_status` 重置为 `pending`。
+用户通过结构化确认界面核对任务，不再使用 Markdown 作为确认载体。
 
 ### 5.4 修改后的恢复路径
 
@@ -369,14 +359,6 @@ DAG 编译和校验通过后：
 → confirmation_status=confirmed
 → 现有确认恢复分支校验最新 JSON
 → Build
-```
-
-```text
-用户修改一个或多个任务
-→ confirmation_status=pending
-→ 从任务归一化阶段重新执行
-→ 覆盖保存最新 JSON
-→ 再次确认
 ```
 
 ```text
@@ -442,13 +424,13 @@ checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更�
 
 - 首次生成有效 DAG：`confirmation_status=pending`、`confirmed_at=null`；
 - 用户确认：`confirmation_status=confirmed`，写入 `confirmed_at`；
-- 用户修改或重新生成：覆盖最新 JSON，并重置为 `confirmation_status=pending`、`confirmed_at=null`；
+- 用户重新生成：覆盖最新 JSON，并重置为 `confirmation_status=pending`、`confirmed_at=null`；
 - 任务执行状态变化不清除确认状态；
 - 任务规划内容变化必须清除原确认状态并重新确认。
 
 重建任务 registry、执行批次或 Unit 元数据时必须显式区分“执行状态更新”和“任务规划内容变化”：
 普通任务完成、失败、重试以及现有修复审批产生的运行时结果不得静默清除初始 DAG confirmation；
-如果 patch 或重新生成改变了任务规划内容，则必须先重置为 pending。
+如果重新生成改变了任务规划内容，则必须先重置为 pending。
 
 ### 6.2 删除 Markdown 产物
 
@@ -499,7 +481,7 @@ confirmation_status == confirmed
 - 不允许为了兼容旧产物而默认视为已确认。
 
 门禁只读取并校验 `.xcodeagent/plans/build-task-plan.json` 中的最新计划，至少检查 `schema_version`、
-`status`、`confirmation_status`、当前 `build_execution_scope` 和任务图校验结果。任何任务修改或重新生成都必须先把
+`status`、`confirmation_status`、当前 `build_execution_scope` 和任务图校验结果。任何重新生成都必须先把
 该字段重置为 `pending`，避免旧确认状态被新计划继承。
 
 `replace_build_task_plan_tasks`、修复任务追加和 scheduler 结果回写必须保留确认字段；普通任务状态更新不得清除
@@ -512,7 +494,7 @@ confirmation_status == confirmed
 
 | 模块 | 最小改动内容 |
 | --- | --- |
-| `Backend/app/graph/nodes/tasks.py` | 只消费已确认正式产物、模板 manifest 和范围详细设计；移除上游计划回写；处理 DAG pending、确认、patch 和重新生成 |
+| `Backend/app/graph/nodes/tasks.py` | 只消费已确认正式产物、模板 manifest 和范围详细设计；移除上游计划回写；处理 DAG pending、确认和重新生成 |
 | `Backend/app/services/build_task_planner.py` | 完全重复任务确定性合并；按 `api_contract_id + endpoint_id` 校验前端唯一实现 owner；写入 scope 和确认字段；对菜单、路由、页面占位和数据库职责越界执行显式 DAG 校验，不修改或删除候选；保留 Unit 级 fingerprint |
 | `Backend/app/services/build_task_menu.py` | 删除 DAG 菜单/路由任务生成、菜单任务修剪和 canonical page entry 注入逻辑；仅保留已存在页面入口的只读路径校对和必要的菜单状态解析 |
 | `Backend/app/services/build_unit_skeleton.py` | 保持数据库已在实体确认阶段落地的当前边界，不为 Normal Build 创建 `database:*` Unit |
@@ -528,10 +510,10 @@ confirmation_status == confirmed
 | `Backend/app/graph/subgraphs/build.py` | 在 Build/scheduler/直接恢复入口增加最新 JSON 确认门禁；任务结果和修复流程不再写入 Markdown |
 | `Backend/app/graph/workflow.py` | 保持现有 Graph 节点关系，但区分 DAG confirmation 等待和进入 Build 的恢复路由 |
 | `Backend/app/graph/state.py`、`Backend/app/protocols/workflow/definition.py` | 移除 `build_task_dag_path`；确认状态只存于计划内部，不新增重复 Graph State 字段 |
-| `Backend/app/protocols/workflow/request.py` | 增加 `build_task_plan_confirmation` 的 confirm/patch/regenerate 结构化恢复动作；恢复时读取最新 JSON |
-| `Backend/app/protocols/workflow/projection.py`、`runtime.py` | 投影 DAG confirmation、scope、任务可编辑字段和局部错误；不再将 DAG Markdown 作为确认 artifact |
-| `Frontend/src/renderer/src/typings/workflow.ts`、`service/agUiAgent.ts` | 增加 DAG confirmation、patch、scope 和 JSON-safe snapshot 类型；移除 Markdown DAG artifact 类型 |
-| `Frontend/src/renderer/src/components/WorkflowRunCard`、`AiChatPanel.tsx`、`processStepHistory.ts`、`workbenchPhase.ts` | 展示任务名称/描述和 pending/confirmed 状态，支持确认、批量 patch、全量重新生成及恢复；不复用正式文档确认卡片 |
+| `Backend/app/protocols/workflow/request.py` | 增加 `build_task_plan_confirmation` 的 confirm/regenerate 结构化恢复动作；恢复时读取最新 JSON |
+| `Backend/app/protocols/workflow/projection.py`、`runtime.py` | 投影 DAG confirmation、当前目标、范围任务和局部错误；不再将 DAG Markdown 作为确认 artifact |
+| `Frontend/src/renderer/src/typings/workflow.ts`、`service/agUiAgent.ts` | 增加 DAG confirmation、目标、scope 和 JSON-safe snapshot 类型；移除 Markdown DAG artifact 类型 |
+| `Frontend/src/renderer/src/components/WorkflowRunCard`、`AiChatPanel.tsx`、`processStepHistory.ts`、`workbenchPhase.ts` | 分层展示目标与范围、页面验收、实际关联接口和只读任务详情，支持确认、全量重新生成及恢复；不复用正式文档确认卡片 |
 
 ## 9. 验收场景
 
@@ -548,8 +530,8 @@ confirmation_status == confirmed
 9. 当前范围缺少 PageImplementationContract、Endpoint 契约或 EntitySourceBinding 时，会在 DAG 生成前阻断；
 10. DAG 校验通过后不会直接进入 Build；
 11. 用户确认最新任务规划后才能进入 Build；
-12. 用户修改一个任务时，其他任务保持不变，最新 JSON 的确认状态重置为 pending；
-13. 单个或批量 patch 只通过同一个结构化 AG-UI 协议提交，且不能修改 owner、依赖、路径范围或工程验收；
+12. 确认页只展示当前范围任务，跨范围依赖以既有能力摘要展示，其余累计任务只返回汇总；
+13. 任务字段不可编辑，AG-UI 请求边界拒绝已移除的 patch 动作；
 14. 全量重新生成会覆盖最新 JSON 并重新确认；
 15. 完全重复任务被自动合并，依赖引用、Unit task_ids 和 source_refs 同步改写；
 16. 同一前端 Endpoint 被不同 API 文件重复实现时，DAG 在确认前阻断并自动重生成；正常 Repair 不会被误判为第二个 owner；

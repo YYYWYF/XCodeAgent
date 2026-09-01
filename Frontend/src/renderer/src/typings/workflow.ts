@@ -616,16 +616,9 @@ export type WorkflowCodeReviewRepairConfirmation = {
   action: 'repair_all'
 }
 
-export type WorkflowBuildTaskPlanPatch = {
-  task_id: string
-  title?: string
-  description?: string
-}
-
 export type WorkflowBuildTaskPlanConfirmation = {
   mode?: 'build_task_plan_confirmation' | string
-  action: 'confirm' | 'patch' | 'regenerate'
-  patches?: WorkflowBuildTaskPlanPatch[]
+  action: 'confirm' | 'regenerate'
 }
 
 export type ApplicationPlanningInteraction = {
@@ -672,6 +665,7 @@ export type WorkflowClarification = {
     entity_name?: string
   }>
   taskPlan?: WorkflowBuildTaskPlan
+  targetReview?: WorkflowBuildTargetReview
   buildExecutionScope?: WorkflowBuildExecutionScope
   testTarget?: WorkflowTestTarget
   confirmationStatus?: 'pending' | 'confirmed' | string
@@ -694,10 +688,62 @@ export type WorkflowBuildTaskPlan = {
   status?: 'ready' | 'blocked' | string
   confirmationStatus?: 'pending' | 'confirmed' | string
   summary?: Record<string, unknown>
-  tasks?: WorkflowBuildTaskPlanTask[]
-  taskGraph?: {
-    edges?: Array<Record<string, unknown>>
+  scopeTasks?: WorkflowBuildTaskPlanTask[]
+  reusedPrerequisites?: WorkflowBuildTaskPlanPrerequisite[]
+  retainedTaskSummary?: WorkflowBuildTaskPlanRetainedSummary
+}
+
+export type WorkflowBuildTaskPlanPrerequisite = {
+  id: string
+  title: string
+  owner?: string
+  unitId?: string
+  status?: string
+  dependencies?: string[]
+}
+
+export type WorkflowBuildTaskPlanRetainedSummary = {
+  total: number
+  completed: number
+  active: number
+  failed: number
+  other: number
+  statusCounts: Record<string, number>
+}
+
+export type WorkflowBuildTargetReviewEndpoint = {
+  id: string
+  label: string
+  apiContractId: string
+  method: string
+  path: string
+  summary: string
+  parameters: Array<Record<string, unknown>>
+  requestSchemaRef?: string | null
+  responseSchemaRef?: string | null
+  errorCodes: string[]
+  authentication: Record<string, unknown>
+  source: {
+    artifact: 'technical-plan'
+    field: 'api_contracts[].endpoints[]'
   }
+}
+
+export type WorkflowBuildTargetReview = {
+  target: {
+    type: 'page' | 'endpoint' | 'application' | 'data_source' | string
+    id: string
+    label: string
+    path?: string
+    description?: string
+    acceptanceCriteria?: string[]
+    acceptanceSource?: {
+      artifact: 'product-plan'
+      field: 'pages[].acceptance_criteria'
+      runtimeField: 'PageImplementationContract.productAcceptance'
+    }
+  } & Partial<WorkflowBuildTargetReviewEndpoint>
+  relatedEndpoints?: WorkflowBuildTargetReviewEndpoint[]
 }
 
 export type WorkflowBuildTaskPlanTask = {

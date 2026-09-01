@@ -1886,15 +1886,11 @@ def _build_task_plan_confirmation(value: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     action = _optional_text(raw.get("action")).lower()
-    if action not in {"confirm", "patch", "regenerate"}:
+    if action not in {"confirm", "regenerate"}:
         return {}
-    patches = raw.get("patches")
     return {
         "mode": "build_task_plan_confirmation",
         "action": action,
-        "patches": [dict(item) for item in patches if isinstance(item, dict)]
-        if isinstance(patches, list)
-        else [],
     }
 
 
