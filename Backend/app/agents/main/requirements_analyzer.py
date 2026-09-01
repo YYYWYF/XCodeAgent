@@ -439,6 +439,7 @@ def _requirements_prompt(
         "version, status, generated_at, app_info, user_roles, feature_modules, pages, business_flows, "
         "authorization_requirements. Do not include any other field. "
         "app_info MUST include non-empty name and summary. Use summary as the only application-summary field; "
+        "the field is named summary, not description. "
         "Do not return assumptions, product risks, or acceptance_criteria. "
         "Product acceptance criteria belong to the later ProductPlan and must not be generated in the "
         "RequirementSpec confirmation document. "
@@ -772,11 +773,17 @@ def _validate_complete_requirement_spec(
     ]
     if not isinstance(app_info, dict):
         missing_fields.insert(0, "app_info")
-    elif (
-        not str(app_info.get("name") or "").strip()
-        or not str(app_info.get("summary") or "").strip()
-    ):
-        missing_fields.insert(0, "app_info.name/summary")
+    else:
+        # 模型有时用 description 代替 summary，兼容回退
+        if not str(app_info.get("summary") or "").strip() and str(
+            app_info.get("description") or ""
+        ).strip():
+            app_info["summary"] = app_info["description"]
+        if (
+            not str(app_info.get("name") or "").strip()
+            or not str(app_info.get("summary") or "").strip()
+        ):
+            missing_fields.insert(0, "app_info.name/summary")
     for field_name in ("feature_modules", "pages"):
         value = agent_spec.get(field_name)
         if isinstance(value, list) and not value:

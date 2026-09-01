@@ -80,6 +80,41 @@ def _attribute(attrs: str, name: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def _has_dynamic_binding(attrs: str, name: str) -> bool:
+    """检测 JSX 开始标签中某属性是否以 ``name={{...}}`` 表达式形式绑定。
+
+    静态分析无法解析运行时表达式的值，但识别到表达式绑定即可知道该标签已绑定
+    该属性（值未知），不应再判为 unowned 或缺失。用于兼容 ``.map()`` 回调里
+    ``data-information-item-id={m.itemId}`` 这种合理的 React 动态写法。
+    """
+
+    return bool(re.search(_EXPR_ATTRIBUTE_TEMPLATE.format(attribute=re.escape(name)), attrs))
+
+
+# 从 .map() 数据源数组字面量里提取产品 id 字面量。key 为 "itemId" 或 "actionId"。
+# 形如 ``const cards = [{ itemId: 'a', ... }, { itemId: 'b', ... }]`` → ['a', 'b']。
+# 这是静态分析 ``<Tag data-information-item-id={m.itemId}>`` 绑定值的唯一可靠途径：
+# 模型把多个 ProductPlan id 放进数组用 .map() 渲染时，id 仍以字面量形式存在于源码。
+_MAP_SOURCE_ID_RE = r"{key}\s*:\s*['\"]([^'\"]+)['\"]"
+
+
+def _extract_map_source_ids(code: str, key: str) -> list[str]:
+    """从代码里所有 ``key: 'xxx'`` 字面量提取 id（去重保序）。
+
+    用于解析 ``.map()`` 回调里 ``{m.itemId}`` 动态绑定的运行时值：模型把
+    ProductPlan 的 itemId/actionId 写进数组字面量再循环渲染时，这些 id 仍以
+    字符串字面量存在于源码，可静态提取后与 expected 集合精确匹配。
+    """
+
+    matches = re.findall(_MAP_SOURCE_ID_RE.format(key=re.escape(key)), code)
+    seen: list[str] = []
+    for value in matches:
+        value = value.strip()
+        if value and value not in seen:
+            seen.append(value)
+    return seen
+
+
 def _expression_bound_hint(code: str, attribute: str) -> str:
     """当静态校验判"缺少"某 data-* 绑定时，检测代码里是否存在该属性的表达式绑定。
 
@@ -90,9 +125,10 @@ def _expression_bound_hint(code: str, attribute: str) -> str:
     if not re.search(_EXPR_ATTRIBUTE_TEMPLATE.format(attribute=re.escape(attribute)), code):
         return ""
     return (
-        f" 检测到 `{attribute}={{...}}` 表达式绑定（如 .map() 回调变量或模板字符串），"
-        "静态校验无法解析运行时表达式，一律判为缺失。请把每一项展开为独立 JSX 元素，"
-        f"在标签上直接写死字符串字面量（如 `{attribute}=\"<id>\"`）。"
+        f" 检测到 `{attribute}={{...}}` 表达式绑定（如 .map() 回调变量或模板字符串）。"
+        "静态校验会从 .map() 的数据源字面量提取 id 登记为已绑定，但若数据源为空或无法解析，"
+        "该 id 会被判缺失。建议在表格列 render 里直接写死静态字符串字面量"
+        f"（如 `{attribute}=\"<id>\"`），同一 action 跨行重复使用同一 id 即可，无需展开每行。"
     )
 
 
@@ -106,6 +142,11 @@ def _expected_ids(page: dict[str, Any], collection: str, key: str) -> list[str]:
     ]
 
 
+# 属性表达式内是否含 JSX 标签（render props，如 submitter={{ render: () => [<Button/>] }}）。
+# 命中才对 attrs 子串递归扫描，纯文本 attrs 不做无谓的二次解析。
+_ATTR_INNER_JSX_RE = re.compile(r"<[A-Za-z/]")
+
+
 def _jsx_opening_tags(code: str) -> list[tuple[str, str, bool, bool]]:
     """扫描 JSX 标签，返回 ``(tag, attrs, self_closing, is_closing)``。
 
@@ -114,6 +155,11 @@ def _jsx_opening_tags(code: str) -> list[tuple[str, str, bool, bool]]:
     - 闭合标签 ``</Tag>`` → ``(tag, "", False, True)``
 
     保留表达式内部箭头函数中的 ``>`` 字符（通过 brace_depth 保护）。
+    属性表达式内的 JSX（render props）随父标签 attrs 被整体消费，这里对含 JSX 的
+    attrs 递归扫描并把其中的标签展平进结果，否则其中的 data-action-id /
+    data-control-id 无法登记，校验会误报缺失。父标签返回的 attrs 已把花括号
+    表达式主体置空（保留 ``{}`` 骨架），嵌套 JSX 的 data-* 标记只归属给递归出的
+    子标签，避免 _attribute 的首个匹配把它们错误配对到父标签。
     """
 
     tags: list[tuple[str, str, bool, bool]] = []
@@ -151,25 +197,45 @@ def _jsx_opening_tags(code: str) -> list[tuple[str, str, bool, bool]]:
         cursor = attrs_start
         brace_depth = 0
         quote = ""
+        # 父标签自身属性：花括号表达式（事件回调 / render props）的主体置空，只保留
+        # `{}` 骨架。表达式内的 data-* 标记属于嵌套 JSX（下方递归扫描会以独立标签
+        # 登记），不剥离会被 _attribute 的首个匹配错误配对到父标签。
+        own_attrs: list[str] = []
         while cursor < length:
             char = code[cursor]
             if quote:
                 if char == "\\":
+                    if not brace_depth:
+                        own_attrs.append(code[cursor : cursor + 2])
                     cursor += 2
                     continue
                 if char == quote:
                     quote = ""
+                if not brace_depth:
+                    own_attrs.append(char)
             elif char in {'"', "'", "`"}:
                 quote = char
+                if not brace_depth:
+                    own_attrs.append(char)
             elif char == "{":
                 brace_depth += 1
+                own_attrs.append(char)
             elif char == "}" and brace_depth:
                 brace_depth -= 1
+                own_attrs.append(char)
             elif char == ">" and brace_depth == 0:
                 self_closing = cursor > attrs_start and code[cursor - 1] == "/"
-                tags.append((tag, code[attrs_start:cursor], self_closing, False))
+                attrs = code[attrs_start:cursor]
+                tags.append((tag, "".join(own_attrs), self_closing, False))
+                # render props 里的 JSX 随父标签 attrs 被整体消费，不递归扫描就登记
+                # 不到其中的 data-action-id / data-control-id（多按钮时只会有一个
+                # 被看见），导致校验误报"缺失"。
+                if _ATTR_INNER_JSX_RE.search(attrs):
+                    tags.extend(_jsx_opening_tags(attrs))
                 cursor += 1
                 break
+            elif not brace_depth:
+                own_attrs.append(char)
             cursor += 1
         index = max(cursor, start + 1)
     return tags
@@ -191,6 +257,11 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
     unowned_displays: list[str] = []
     # 祖先栈：(tag_name, has_information_item_id, has_preview_only)
     ancestor_stack: list[tuple[str, bool, bool]] = []
+    # 预提取 .map() 数据源里的产品 id 字面量：模型用 ``cards.map((m) =>
+    # <Tag data-information-item-id={m.itemId}>)`` 渲染多个 ProductPlan 项时，
+    # id 仍以字面量存在于数组定义，可静态解析后与 expected 精确匹配。
+    source_item_ids = _extract_map_source_ids(code, "itemId")
+    source_action_ids = _extract_map_source_ids(code, "actionId")
     for tag, attrs, self_closing, is_closing in _jsx_opening_tags(code):
         if is_closing:
             # 从栈顶向下找最近的同名标签，弹出它及之上的所有标签
@@ -205,6 +276,21 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
         interaction_effect = _attribute(attrs, "data-ui-effect")
         action_step_id = _attribute(attrs, "data-action-step-id")
         preview_only = _attribute(attrs, "data-preview-only").lower() == "true"
+        # 动态表达式绑定（{m.itemId} 等）：静态分析取不到具体值，但标签已绑定该属性。
+        # 把 .map() 数据源里提取到的 id 全部登记为已绑定（control_id 未知用占位），
+        # 这样动态写法不再被判"缺失"或 unowned。无数据源时仅标记已绑定、不补 id。
+        action_dynamic = _has_dynamic_binding(attrs, "data-action-id")
+        item_dynamic = _has_dynamic_binding(attrs, "data-information-item-id")
+        if action_dynamic and not action_id:
+            for source_id in source_action_ids:
+                actions.setdefault(source_id, [])
+                if not actions[source_id]:
+                    actions[source_id].append("")
+        if item_dynamic and not information_item_id:
+            for source_id in source_item_ids:
+                information_items.setdefault(source_id, [])
+                if not information_items[source_id]:
+                    information_items[source_id].append("")
         # 检查祖先链：只要有一个祖先绑定了 informationItemId 或 preview-only，
         # 当前展示组件就被视为该信息项的子展示，不单独要求绑定。
         ancestor_has_item = any(s[1] for s in ancestor_stack)
@@ -229,7 +315,14 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
         # 组件即使带交互属性，要么是容器（其内嵌按钮才是 action）、要么是装饰，都不
         # 该要求绑 actionId。真交互控件已在白名单内，带 onClick 时仍会被判，不会漏。
         interactive = tag in _INTERACTIVE_TAGS and not decorative
-        if interactive and not action_id and not information_item_id and not preview_only:
+        if (
+            interactive
+            and not action_id
+            and not information_item_id
+            and not preview_only
+            and not action_dynamic
+            and not item_dynamic
+        ):
             unowned_interactions.append(tag)
         if (
             tag in _BUSINESS_DISPLAY_TAGS
@@ -238,11 +331,14 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
             and not preview_only
             and not ancestor_has_item
             and not ancestor_has_preview
+            and not item_dynamic
         ):
             unowned_displays.append(tag)
-        # 非自闭合标签入栈，供后续子组件检查祖先
+        # 非自闭合标签入栈，供后续子组件检查祖先。
+        # 动态绑定的标签同样视为已绑定 informationItemId，让内嵌展示组件被豁免。
+        has_item = bool(information_item_id) or item_dynamic
         if not self_closing:
-            ancestor_stack.append((tag, bool(information_item_id), preview_only))
+            ancestor_stack.append((tag, has_item, preview_only))
     return {
         "actions": actions,
         "interaction_effects": interaction_effects,

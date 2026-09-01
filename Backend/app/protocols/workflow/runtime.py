@@ -242,6 +242,13 @@ def _application_planning_resume_node(interaction: Any) -> str:
         return "design_intent_analysis"
     if interaction.get("action") == "enter_planning":
         return "planning_stage_entry"
+    # UI 单页动作（选模板/换一换/调整）由 ui_confirmation 节点处理：Command(resume=...)
+    # 恢复同一 thread 的原生中断，LangGraph 从 ui_confirmation interrupt 点继续执行。
+    # 必须返回 ui_confirmation 作为展示 phase，否则 fallback 到 _workflow_start_node("")
+    # 得到 "requirements"，started 帧 phase=requirements 与实际节点不符，前端
+    # isUiDesignConfirmationCard 失配导致 UI 确认卡片闪烁。
+    if interaction.get("action") == "ui_action":
+        return "ui_confirmation"
     return {
         "requirement_spec": "requirements",
         "product_plan": "product_planning",
@@ -631,10 +638,12 @@ def build_workflow_ag_ui_stream(
                         and not initial_state.get("ui_design_action")
                     )
                 )
-            if resume_from == "ui_confirmation":
-                # 恢复 phase/clarification/ui_designs：轮询 no-op resume 的
-                # result 为空 dict 没有 phase，前端收到 phase=None 会误判
-                # 不是 UI 确认卡片导致卡片消失闪烁。
+            if first_node_name == "ui_confirmation":
+                # UI 确认阶段 started 帧复用 checkpoint 的 phase/clarification/ui_designs：
+                # 轮询 no-op resume 的 result 为空 dict 没有 phase，选模板/换一换 run 的
+                # resume_from 为空（Command(resume=interaction) 恢复原生中断，不走 resume_from），
+                # 两者 started_result 都缺 phase/clarification，前端收到 phase=None 或
+                # clarification 丢失会误判不是 UI 确认卡片导致卡片消失闪烁。
                 if "phase" not in started_result and initial_state.get("phase") is not None:
                     started_result["phase"] = initial_state.get("phase")
                 if "clarification" not in started_result and initial_state.get("clarification") is not None:

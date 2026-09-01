@@ -630,9 +630,16 @@ export default function MessageList({
               // 只要当前仍在运行且消息没有正文/确认卡，就继续显示生成中，避免只剩 Agent 头像。
               const isPlanningWorkflowRunning =
                 designPhasePlanning && message.workflow?.summary?.status === 'running'
+              // UI 确认阶段的轮询 no-op resume 会经历 running→requires_user_input 抖动。
+              // running 期间 showWorkflowCard 可能因 requiresClarification/index 抖动瞬间为 false，
+              // 导致 planningWorkflowNeedsChatLoading 返回 true、闪现"正在生成设计方案"loading 卡片，
+              // 随后 requires_user_input 到达又切回 UI 确认卡，如此循环闪烁。UI 确认卡本身就能
+              // 覆盖 running 态（卡片内 actingPageIds 显示逐页生成中），不需要外层 loading 卡片。
+              // 只要这张消息是 UI 确认卡（phase=ui_confirmation），强制不显示 loading。
               const showPlanningLoading =
                 !messageError &&
                 !message.revisionHandoff &&
+                !isUiDesignConfirmationCard &&
                 planningWorkflowNeedsChatLoading(
                   message.workflow,
                   designPhasePlanning,

@@ -706,6 +706,13 @@ async def ui_confirmation(state: ProjectState) -> dict:
         and not _has_explicit_user_submission(state)
     ):
         latest = await _latest_ui_designs(state, existing)
+        # [poll-diag] 轮询恢复路径：打印磁盘读到的 page status，确认是否反映最新生成结果
+        _pages = latest.get("pages") if isinstance(latest, dict) else []
+        print(
+            f"[poll-diag] resume_path confirmation_status={latest.get('confirmation_status') if isinstance(latest, dict) else 'n/a'} "
+            f"pages={[(p.get('pageId'), p.get('status')) for p in (_pages or []) if isinstance(p, dict)]}",
+            flush=True,
+        )
         return {
             "phase": "ui_confirmation",
             "status": "requires_user_input",

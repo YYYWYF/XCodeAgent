@@ -22,10 +22,6 @@ import './UiDesignConfirmationPanel.less'
 
 const { Paragraph, Text } = Typography
 
-// 轮询看门狗：一轮 no-op 轮询正常 2-3 秒内经 running→requires_user_input 完成并复位
-// runInFlightRef。SSE 流被网关掐断时该序列永远走不完，runInFlightRef 卡死、轮询停摆。
-// 超过此时长未完成即判定流已断，强制复位放行下一轮（只读 resume，重发安全）。
-const RUN_WATCHDOG_MS = 30000
 const { TextArea } = Input
 
 type PageDesign = {
@@ -132,13 +128,19 @@ export default function UiDesignConfirmationPanel({
   const [internalActingPageIds, setInternalActingPageIds] = useState<string[]>([])
   const actingPageIds = controlledActingPageIds ?? internalActingPageIds
   const actingSet = useMemo(() => new Set(actingPageIds), [actingPageIds])
+  // 用 ref 持有最新 actingPageIds，让 setActingPageIds 引用稳定（不随 actingPageIds 变化），
+  // 避免 cleanup-effect 依赖 setActingPageIds 时形成"set → 引用变 → effect 重跑 → 又 set"
+  // 的自激循环导致 actingPageIds 在 []/[x] 间反复抖动、界面闪烁。
+  const actingPageIdsRef = useRef(actingPageIds)
+  actingPageIdsRef.current = actingPageIds
   const setActingPageIds = useCallback(
     (next: string[] | ((prev: string[]) => string[])) => {
-      const resolved = typeof next === 'function' ? next(actingPageIds) : next
+      const prev = actingPageIdsRef.current
+      const resolved = typeof next === 'function' ? next(prev) : next
       if (onActingPageIdsChange) onActingPageIdsChange(resolved)
       else setInternalActingPageIds(resolved)
     },
-    [actingPageIds, onActingPageIdsChange]
+    [onActingPageIdsChange]
   )
   // 待提交动作队列 + 进行中 run 标记。
   // 点击即入队并加入 acting 集合（立即禁用该页按钮 + 显示"生成中"）。
@@ -150,10 +152,12 @@ export default function UiDesignConfirmationPanel({
     Array<{ pageId: string; action: 'select_template' | 'regenerate'; templateId?: string }>
   >([])
   const runInFlightRef = useRef(false)
-  // 本轮 run 发起时间戳（看门狗用）：SSE 流被网关中途掐断时，runInFlightRef 会永远
-  // 卡在 true（等不到 requires_user_input），导致轮询停摆、卡片冻结。记录发起时间，
-  // 超过 RUN_WATCHDOG_MS 未完成就强制复位放行下一轮（no-op 轮询是只读 resume，重发安全）。
-  const runStartedAtRef = useRef(0)
+  // 用 ref 持有最新的 onSubmit/workflow，供 flushPendingActions 等稳定 callback 使用，
+  // 避免 callback 依赖 workflow（每次轮询都变）导致引用变化触发 effect 自激循环。
+  const onSubmitRef = useRef(onSubmit)
+  onSubmitRef.current = onSubmit
+  const workflowRef = useRef(workflow)
+  workflowRef.current = workflow
   // 是否已观察到本轮 run 真正进入 running（后端流式推送 status=running）。
   // flush 瞬间 workflowStatus 可能还是上一轮残留的 requires_user_input（run 尚未开始
   // 流式），若据此判定 run 完成会提前重置 runInFlightRef，导致同 thread 并发新 run
@@ -272,8 +276,11 @@ export default function UiDesignConfirmationPanel({
       batch.length === 1
         ? { pageId: batch[0].pageId, action: batch[0].action, ...(batch[0].templateId ? { templateId: batch[0].templateId } : {}) }
         : { action: 'multi', actions: batch }
-    onSubmit(workflow, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
-  }, [onSubmit, workflow])
+    // 用 ref 持有的最新 onSubmit/workflow，避免本 callback 依赖 workflow
+    // （workflow 每次轮询都会变，会让 flushPendingActions 引用变化，进而触发
+    // cleanup-effect 依赖它而反复重跑、形成 actingPageIds 抖动闪烁）。
+    onSubmitRef.current(workflowRef.current, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
+  }, [])
 
   // 逐页"选模板"或"重新生成"：点击即把该页加入 acting 集合（立即禁用该页按钮 +
   // 显示"生成中"）并入队。生成已解耦到进程级 worker pool，单页 run 只负责入队 +
@@ -328,7 +335,6 @@ export default function UiDesignConfirmationPanel({
     if (!instruction) return
     setActingPageIds(['adjust'])
     runInFlightRef.current = true
-    runStartedAtRef.current = Date.now()
     observedRunningRef.current = false
     onSubmit(workflow, {
       ui_design_action: {
@@ -449,6 +455,11 @@ export default function UiDesignConfirmationPanel({
     if (!runInFlightRef.current && pendingActionsRef.current.length === 0) return
     observedRunningRef.current = false
     runInFlightRef.current = false
+    setRefreshing(false)
+    if (refreshingTimeoutRef.current) {
+      window.clearTimeout(refreshingTimeoutRef.current)
+      refreshingTimeoutRef.current = undefined
+    }
     if (pendingActionsRef.current.length > 0) {
       // 下一批：保留这些 pageId 的 acting 态（run 中继续显示生成中 + 禁用按钮），
       // 清掉已完成的。必须在 flushPendingActions（splice 清空队列）之前读 pageId。
@@ -460,38 +471,28 @@ export default function UiDesignConfirmationPanel({
     }
   }, [workflowStatus, flushPendingActions, setActingPageIds])
 
-  // 后台生成池轮询：有页面处于 queued/generating 时，周期性发起 no-op resume
-  // （空澄清答案 → 后端 resume 路径重读 ui-designs.json，不触发动作/确认分支），
-  // 直到全部页面进入 confirmed / generation_failed 终态后停止。用 ref 持有最新的
-  // onSubmit/workflow，避免父级每次渲染重建 onSubmit 导致定时器反复重启；effect 只依赖
-  // generatingPageIds.length（是否仍有页面在生成）。
-  const onSubmitRef = useRef(onSubmit)
-  onSubmitRef.current = onSubmit
-  const workflowRef = useRef(workflow)
-  workflowRef.current = workflow
-  useEffect(() => {
-    if (generatingPageIds.length === 0) return
-    const timer = setInterval(() => {
-      // 无 run 在飞时才发起轮询，避免与动作 run 并发（同 thread 不能并发 Graph run）。
-      if (runInFlightRef.current) {
-        // 看门狗：本轮 run 超过 RUN_WATCHDOG_MS 未完成，判定 SSE 流已被网关掐断
-        // （永远等不到 requires_user_input），强制复位放行下一轮，避免卡片冻结。
-        if (Date.now() - runStartedAtRef.current > RUN_WATCHDOG_MS) {
-          runInFlightRef.current = false
-          observedRunningRef.current = false
-        } else {
-          return
-        }
-      }
-      runInFlightRef.current = true
-      runStartedAtRef.current = Date.now()
-      // 轮询是 no-op resume，后端直接返回 requires_user_input 不经过 running 阶段，
-      // 预置 observedRunningRef=true 让完成检测逻辑能清除 acting 加载态。
-      observedRunningRef.current = true
-      onSubmitRef.current(workflowRef.current, {})
-    }, 1500)
-    return () => clearInterval(timer)
-  }, [generatingPageIds.length])
+  // 手动刷新：用户点击刷新按钮发起一次 no-op resume（空澄清答案 → 后端重读
+  // ui-designs.json，不触发动作/确认分支），拉取后台生成池最新进度。不再用
+  // setInterval 自动轮询——自动轮询会与正在跑的 run 在同 thread 并发，SSE 流被
+  // session.stop() 取消导致 ERR_INCOMPLETE_CHUNKED_ENCODING，且 cleanup-effect 依赖
+  // 链形成 actingPageIds 抖动自激循环，界面闪烁。手动刷新由用户按需触发，无并发。
+  // refreshing state 驱动按钮 loading 态：正常 2-3 秒后端往返后 cleanup-effect 清除；
+  // 若 SSE 流中断导致 cleanup-effect 不触发，5 秒兜底复位避免按钮永久禁用。
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshingTimeoutRef = useRef<number | undefined>(undefined)
+  const refreshUiDesigns = useCallback((): void => {
+    if (runInFlightRef.current || refreshing) return
+    runInFlightRef.current = true
+    observedRunningRef.current = true
+    setRefreshing(true)
+    onSubmitRef.current(workflowRef.current, {})
+    if (refreshingTimeoutRef.current) window.clearTimeout(refreshingTimeoutRef.current)
+    refreshingTimeoutRef.current = window.setTimeout(() => {
+      runInFlightRef.current = false
+      observedRunningRef.current = false
+      setRefreshing(false)
+    }, 5000)
+  }, [refreshing])
 
   if (!clarification) return null
 
@@ -509,8 +510,8 @@ export default function UiDesignConfirmationPanel({
           {actingPageIds.length > 0 || generatingPageIds.length > 0 ? (
             <span className={cx('ui-design-processing-hint')}>
               {actingSet.has('adjust')
-                ? '正在调整设计稿，请稍候…'
-                : `正在生成 ${new Set([...actingPageIds, ...generatingPageIds]).size} 个页面设计稿，请稍候…`}
+                ? '正在调整设计稿，完成后点「刷新」查看结果…'
+                : `正在生成 ${new Set([...actingPageIds, ...generatingPageIds]).size} 个页面设计稿，完成后点「刷新」查看结果…`}
             </span>
           ) : null}
         </div>
@@ -529,6 +530,18 @@ export default function UiDesignConfirmationPanel({
             type="primary"
           >
             全部生成
+          </Button>
+        ) : null}
+        {generatingPageIds.length > 0 ? (
+          <Button
+            className={cx('ui-design-refresh-btn')}
+            disabled={disabled || refreshing}
+            icon={<ReloadOutlined />}
+            loading={refreshing}
+            onClick={refreshUiDesigns}
+            title="刷新查看后台生成池最新进度"
+          >
+            刷新
           </Button>
         ) : null}
       </header>

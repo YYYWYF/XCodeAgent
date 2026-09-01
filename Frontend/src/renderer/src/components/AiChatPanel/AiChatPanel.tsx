@@ -1359,7 +1359,13 @@ export default function AiChatPanel({
     const phaseDoc = phaseDocKey ? designDocs?.find((doc) => doc.key === phaseDocKey) : undefined
     const firstAvailable = designDocs?.find((doc) => doc.available)
     const target = phaseDoc || firstAvailable || designDocs?.[0]
-    if (target) setRightPanel({ type: 'doc', docKey: target.key })
+    if (target) {
+      setRightPanel({ type: 'doc', docKey: target.key })
+    } else if (phaseDocKey) {
+      // designDocs 尚未就绪（新建工作区首帧文档未生成）：按当前阶段占住默认 tab，
+      // 内容区 DocPanel 显示 loading。避免与 Effect B 同帧清空竞争导致面板不显示。
+      setRightPanel({ type: 'doc', docKey: phaseDocKey })
+    }
   }, [
     isApplicationPlanningPhase,
     rightPanelOpen,
@@ -2189,6 +2195,13 @@ export default function AiChatPanel({
   // 用户提交规划确认后置 true，下一次 workflow chunk 到达时新增消息卡片（新一轮），
   // 而非覆盖上一轮的对话卡片。同 runId 续跑也能正确区分轮次。
   const planningNewRoundRef = useRef(false)
+  // 记录最近一次见到的 UI 确认阶段 workflow runId。UI 确认阶段轮询 no-op resume 时，
+  // 后端会先流式发出 summary.message（"UI设计稿已生成…"）作为纯 content，再发 workflow
+  // 快照。纯 content 到达时 lastMessage 可能已无 workflow（被前一次 content 合并污染），
+  // 导致 lastIsUiDesignConfirmationCard 判断失效、新增无 workflow 的 content 消息卡片，
+  // 之后所有轮询 chunk 都因 lastMessage 无 workflow 而重复新增卡片。用此 ref 标记"当前
+  // 处于 UI 确认阶段"，纯 content 分支据此丢弃轮询 content，只让 workflow 快照更新卡片。
+  const lastUiDesignRunIdRef = useRef<string | undefined>(undefined)
   // 二次修改 TechnicalPlan 确认只是在原 checkpoint 上签发开发 continuation；
   // 期间不展示 technical_planning 的 resume 过渡帧，避免误导为再次生成技术规划。
   const suppressRevisionTechnicalPlanTransitionRef = useRef(false)
@@ -2348,18 +2361,36 @@ export default function AiChatPanel({
       // 中途流式快照可能丢失 mode（undefined），此时沿用最后一张确认卡的判定；
       // 只有 chunk 明确带了不同 mode 才不算同轮。
       (!chunkMode || chunkMode === lastMode)
+    // UI 设计稿确认阶段的轮询 no-op resume 每次产生新 runId，且中途流式快照可能
+    // 丢失 clarification.mode，导致 sameDesignConfirmation 失效、走"新一轮"分支
+    // 每次新增一张"UI设计稿已生成"消息卡片。phase=ui_confirmation 在 running 期间
+    // 不丢失，用它作为权威判据：最后一条已是 UI 确认卡时，同阶段 chunk 视为同轮更新，
+    // 只刷新卡片页面状态，不新增消息。
+    const lastPhase = lastMessage?.workflow?.summary?.phase
+    const chunkPhase = chunk.workflow?.summary?.phase
+    const sameUiDesignPhase =
+      !planningNewRoundRef.current &&
+      lastMessage?.role === 'assistant' &&
+      Boolean(lastWorkflowRunId) &&
+      lastPhase === 'ui_confirmation' &&
+      (!chunkPhase || chunkPhase === 'ui_confirmation')
 
     if (chunk.workflow) {
       const incomingWorkflow = chunk.workflow
+      // 记录最近一次 UI 确认阶段 workflow 的 runId，供纯 content 分支识别轮询 content。
+      if (incomingWorkflow.summary?.phase === 'ui_confirmation') {
+        lastUiDesignRunIdRef.current = incomingWorkflow.runId
+      }
       // 新一轮 content 先于 workflow 到达时，content 已新增为无 workflow 的消息；
       // workflow 到达时应合并到该消息，而非再新增一条。
       const mergeIntoContentOnly =
         !sameRun &&
         !sameDesignConfirmation &&
+        !sameUiDesignPhase &&
         lastMessage?.role === 'assistant' &&
         !lastWorkflowRunId &&
         (planningNewRoundRef.current || currentMessages.length > 0)
-      if (sameRun || sameDesignConfirmation || mergeIntoContentOnly) {
+      if (sameRun || sameDesignConfirmation || sameUiDesignPhase || mergeIntoContentOnly) {
         // 同一轮或合并 content-only 消息：更新最后一条消息的 workflow 与 content。
         planningNewRoundRef.current = false
         // 判断该 chunk 是否已经携带可见状态。首次创建沿用原有阶段判定；
@@ -2424,6 +2455,17 @@ export default function AiChatPanel({
       // 到该卡片，而非新增重复卡片。
       // 用户刚提交后（planningNewRoundRef=true）追加的 assistant 占位消息（无 workflow）
       // 也应被流式 content 更新，而非新增重复卡片。
+      // UI 确认阶段轮询 no-op resume 会先流式发出 summary.message（"UI设计稿已生成…"）
+      // 作为纯 content，再发 workflow 快照。轮询每次产生新 runId，且中途 workflow 快照的
+      // phase 可能为 null、lastMessage 的 workflow 可能残缺，导致 lastIsUiDesignConfirmationCard
+      // 和基于 lastMessage 的判断全部失效，纯 content 被放行新增无 workflow 卡片，之后所有
+      // 轮询 chunk 都因 lastMessage 无 workflow 而重复新增。这里用 lastUiDesignRunIdRef 兜底：
+      // 只要最近见过 UI 确认阶段 workflow 且未显式开启新轮，就认定纯 content 是 UI 轮询的
+      // summary.message 噪音，直接丢弃，只让 workflow 快照更新卡片。不依赖 lastMessage 的
+      // phase/runId——它们在轮询期间不可靠。
+      const uiPollContentGuard =
+        !planningNewRoundRef.current && Boolean(lastUiDesignRunIdRef.current)
+      if (uiPollContentGuard) return
       const lastIsPlanningStage =
         lastMessage?.role === 'assistant' &&
         ['product_planning', 'project_planning', 'technical_planning'].includes(
@@ -3255,8 +3297,16 @@ export default function AiChatPanel({
   }, [activeApiEndpoint, displayedPlanningPages, detailTargetSelectionRequired])
 
   // 打开历史页面或接口会话时同步目标上下文，避免标题与消息归属不一致。
+  // sessions 是每次渲染重新计算的派生数组（引用每次都变），不能作为 effect 依赖，
+  // 否则 setActiveDetailTarget 设置的新对象引用会触发重渲染 → sessions 新引用 →
+  // effect 再触发 → Maximum update depth exceeded 无限循环。用 ref 持有最新值，
+  // effect 只依赖 activeSessionId，session 不变时不再触发。
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
+  const displayedPlanningPagesRef = useRef(displayedPlanningPages)
+  displayedPlanningPagesRef.current = displayedPlanningPages
   useEffect(() => {
-    const session = sessions.find((item) => item.id === activeSessionId)
+    const session = sessionsRef.current.find((item) => item.id === activeSessionId)
     if (!session) return
     // sessions 是按阶段过滤后每次渲染都会得到新数组；只有值真的变化时才更新目标状态，
     // 避免 effect 反复写入新对象导致 Maximum update depth exceeded。
@@ -3304,7 +3354,10 @@ export default function AiChatPanel({
       setActiveDetailTarget((current) => (current.type === 'none' ? current : { type: 'none' }))
       return
     }
-    const resolvedPageId = resolvePlanningPageId(displayedPlanningPages, sessionPageId)
+    const resolvedPageId = resolvePlanningPageId(
+      displayedPlanningPagesRef.current,
+      sessionPageId
+    )
     if (resolvedPageId) {
       setActiveDetailTarget((current) =>
         current.type === 'page' && current.pageId === resolvedPageId
@@ -3312,7 +3365,7 @@ export default function AiChatPanel({
           : { type: 'page', pageId: resolvedPageId }
       )
     }
-  }, [activeSessionId, displayedPlanningPages, sessions])
+  }, [activeSessionId])
 
   /** 在右侧工作区打开当前页面预览。 */
   const handleOpenPage = (): void => {
@@ -3746,6 +3799,9 @@ export default function AiChatPanel({
           : false
       if (!isUiDesignPageAction) {
         planningNewRoundRef.current = true
+        // 离开 UI 确认阶段（确认全部/跳过/进入规划）：清空 UI 确认阶段标记，
+        // 避免后续阶段的纯 content 被误当作 UI 轮询 content 丢弃。
+        lastUiDesignRunIdRef.current = undefined
         if (planningAnswers.__applicationPlanningAction === 'enter_planning') {
           const checkpointThreadId = String(planningThreadId || workflow.threadId || '').trim()
           if (!checkpointThreadId) {
@@ -3962,6 +4018,7 @@ export default function AiChatPanel({
     // 设计阶段二次修改同样不能沿用开发阶段页面的临时生成状态。
     setGeneratingDetailTargetKey('')
     planningNewRoundRef.current = true
+    lastUiDesignRunIdRef.current = undefined
     appendPlanningUserMessage({ design_change_request: trimmed })
     void onSubmitPlanningClarification(planningWorkflow, {}, undefined, undefined, trimmed).catch(
       () => undefined
