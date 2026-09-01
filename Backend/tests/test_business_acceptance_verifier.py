@@ -120,6 +120,30 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("请求参数 page", result["evidence"])
 
+    def test_external_api_client_verifier_accepts_resttemplate(self) -> None:
+        """客户端类型不是业务验收条件，完整 RestTemplate 调用仍可通过。"""
+
+        result = verify_external_api_client_source(
+            {
+                "OrderClient.java": (
+                    "class OrderClient { private RestTemplate restTemplate; "
+                    "OrderResponse get(int page) { return restTemplate.getForObject("
+                    '"/orders", OrderResponse.class, page); } }'
+                )
+            },
+            {
+                "external_apis": [{
+                    "api_info": {
+                        "method": "GET",
+                        "path": "/orders",
+                        "parameters": [{"name": "page", "in": "query"}],
+                    }
+                }]
+            },
+        )
+
+        self.assertEqual(result["status"], "passed")
+
     def test_external_api_mapping_verifier_supports_root_array_path(self) -> None:
         """根数组规范路径 [].name 不应产生空 Java 标识符并误判生成代码。"""
 

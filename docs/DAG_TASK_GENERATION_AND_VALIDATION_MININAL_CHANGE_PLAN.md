@@ -167,9 +167,10 @@ DAG 阶段只负责任务规划、页面内容实现、API 调用和后端实现
 | 页面 API 调用 | DAG / Build | 按已确认设计生成实现任务 |
 | 数据库表结构和数据源操作 | 实体确认流程 | DAG 只消费已确认的实体上下文 |
 
-数据库来源后端还必须拥有独立的 `backend:bootstrap` 基础能力任务：它幂等检查现有
-`backend/pom.xml`、数据源配置和 MyBatis-Plus 配置，只补充确实缺失的能力，不生成业务分层代码。
-endpoint-only 与前后端混合规划使用相同规则；external_api-only 和 static-only 范围不创建或依赖该 Unit。
+数据库或外部 API 来源后端还必须拥有独立的 `backend:bootstrap` 基础能力任务：它幂等检查现有
+`backend/pom.xml`；数据库来源检查数据源和 MyBatis-Plus，外部 API 来源按模板 Spring Boot 2.7.2 / Spring Cloud 2021.0.3 基线检查 OpenFeign starter、BOM 和 `@EnableFeignClients`，只补充确实缺失的共享能力，不生成业务分层代码。
+DataSource Agent 通过单一 `springboot-backend-generate` 入口按数据源类型和 bootstrap/endpoint 模式展开 reference；混合来源仍只产生一个 Skill 入口记录。
+endpoint-only 与前后端混合规划使用相同规则；只有 static-only 范围不创建或依赖该 Unit。
 当 `backend:bootstrap` 位于本轮待规划 Unit 集合但模型遗漏对应任务时，确定性 DAG 校验必须报告错误并进入
 平台自动重生成，不能静默接受缺少前置能力的候选，也不能由编译器硬编码合成任务。
 

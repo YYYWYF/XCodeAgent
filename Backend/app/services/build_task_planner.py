@@ -1103,7 +1103,7 @@ def _required_bootstrap_task_errors(
     tasks: list[dict[str, Any]],
     build_context: dict[str, Any],
 ) -> list[str]:
-    """数据库规划范围要求 bootstrap 时，拒绝模型遗漏该可执行任务。"""
+    """后端能力规划范围要求 bootstrap 时，拒绝模型遗漏该可执行任务。"""
 
     planning_unit_ids = set(_string_list(build_context.get("planning_unit_ids")))
     if "backend:bootstrap" not in planning_unit_ids:
@@ -1111,8 +1111,8 @@ def _required_bootstrap_task_errors(
     if any(str(task.get("unit_id") or "") == "backend:bootstrap" for task in tasks):
         return []
     return [
-        "Database Build scope requires a backend:bootstrap task to validate Maven "
-        "dependencies and datasource/MyBatis configuration."
+        "Backend Build scope requires a backend:bootstrap task to validate Maven "
+        "dependencies and the required datasource/MyBatis or OpenFeign capability."
     ]
 
 

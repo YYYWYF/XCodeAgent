@@ -173,7 +173,7 @@
 | 节点名称 / node_id / 版本 | `data_source_agent`（registry 名 `data-source-generation-agent`）；build 任务 owner=`backend`，遵循 `build-dag.v3` |
 | 节点类型 | Deep Agent（`create_deep_agent`）+ 外层确定性 BuildScheduler 调度与工程验收 harness |
 | DRI / 审核人 / 批准人 | data_source Agent 负责人 / 确定性验收编译器 / 用户（仅高危数据库审批与修复范围扩大时） |
-| 目标与非目标 | 目标：执行批准的 Java 8 后端实现任务，按任务实体来源读取 springboot-mybatis-generate 或 springboot-external-api-generate，严格服从已确认 API Contract、EndpointDetail、EntityDesign 与允许路径。非目标：本阶段不执行数据库结构变更、迁移、种子数据、项目级构建/测试/安装；不改正式规划产物或 DAG；不静默改契约（改不了就返回 change_request） |
+| 目标与非目标 | 目标：执行批准的 Java 8 后端实现任务，读取单一 springboot-backend-generate 入口并按任务实体来源展开对应 reference，严格服从已确认 API Contract、EndpointDetail、EntityDesign 与允许路径。非目标：本阶段不执行数据库结构变更、迁移、种子数据、项目级构建/测试/安装；不改正式规划产物或 DAG；不静默改契约（改不了就返回 change_request） |
 | 触发条件 / 前置条件 | build 节点选择就绪批次后按 owner 分组派发；前置：同批数据库任务已完成（`_database_first_candidates`）、依赖满足、文件锁不冲突、任务已编译确定性验收检查 |
 | 当前提示词及源码位置 | System Prompt：`agents/data_source/agent.py::create_data_source_agent`；执行 Prompt：`agents/data_source/generator.py::_data_source_generation_prompt`；定向上下文与任务级 Skill 映射：`agents/data_source/prompt_context.py`。执行 Prompt 仅保留最小任务包、目标正式上下文、单份验证边界和 JSON 结果协议。 |
 | 输入 | backend owner 最小任务包（id/unit/description/change_scope/allowed_paths/target_files/实体与接口引用/required_skill_paths）、目标 API Contract + EndpointDetail + 完整 EntityDesign、`selected_skill_names`；工具：delete_file、受限 execute、get_mysql_config。完整 ProjectPlan、BuildTaskPlan summary、调度验收字段和 Code Graph 不进入 DataSource 模型上下文。 |

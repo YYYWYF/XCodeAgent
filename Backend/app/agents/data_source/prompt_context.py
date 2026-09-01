@@ -5,14 +5,13 @@ from typing import Any
 
 from app.services.builtin_skills import (
     BUILTIN_SKILLS_VIRTUAL_ROOT,
-    SPRINGBOOT_EXTERNAL_API_GENERATE_SKILL_NAME,
-    SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME,
+    SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME,
 )
 
 
-_SOURCE_SKILL_NAMES = {
-    "database": SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME,
-    "external_api": SPRINGBOOT_EXTERNAL_API_GENERATE_SKILL_NAME,
+_SOURCE_REFERENCE_DIRECTORIES = {
+    "database": "database",
+    "external_api": "external-api",
 }
 _SOURCE_SKILL_ORDER = ("database", "external_api")
 _BOOTSTRAP_UNIT_ID = "backend:bootstrap"
@@ -51,7 +50,7 @@ def task_required_skill_paths(task: dict[str, Any]) -> list[str]:
         for design in task_entity_designs(task)
         if str(design.get("data_source_type") or "").strip()
     }
-    unsupported = source_types - set(_SOURCE_SKILL_NAMES)
+    unsupported = source_types - set(_SOURCE_REFERENCE_DIRECTORIES)
     if "static" in unsupported:
         raise ValueError(
             f"DataSource 后端任务 {task.get('id') or '<unknown>'} 不得处理 static 实体。"
@@ -61,10 +60,11 @@ def task_required_skill_paths(task: dict[str, Any]) -> list[str]:
             f"DataSource 后端任务 {task.get('id') or '<unknown>'} 包含非法数据源类型："
             f"{', '.join(sorted(unsupported))}。"
         )
+    if not source_types:
+        return []
     return [
-        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}{_SOURCE_SKILL_NAMES[source_type]}/SKILL.md"
-        for source_type in _SOURCE_SKILL_ORDER
-        if source_type in source_types
+        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
+        f"{SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME}/SKILL.md"
     ]
 
 
@@ -72,17 +72,23 @@ def task_required_instruction_paths(task: dict[str, Any]) -> list[str]:
     """展开任务必须读取的 Skill 入口与当前任务类型对应的条件参考文档。"""
 
     paths = task_required_skill_paths(task)
-    database_skill_root = (
-        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
-        f"{SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME}/"
+    if not paths:
+        return paths
+    source_types = task_data_source_types([task])
+    reference_name = (
+        "bootstrap.md"
+        if _task_kind(task) == "bootstrap"
+        else "layer-implementation.md"
     )
-    if any(path.startswith(database_skill_root) for path in paths):
-        reference_name = (
-            "references/bootstrap.md"
-            if _task_kind(task) == "bootstrap"
-            else "references/layer-implementation.md"
-        )
-        paths.append(f"{database_skill_root}{reference_name}")
+    skill_root = (
+        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
+        f"{SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME}/references/"
+    )
+    paths.extend(
+        f"{skill_root}{_SOURCE_REFERENCE_DIRECTORIES[source_type]}/{reference_name}"
+        for source_type in _SOURCE_SKILL_ORDER
+        if source_type in source_types
+    )
     return paths
 
 
@@ -117,13 +123,45 @@ def task_implementation_contract(
     """按 bootstrap 或 endpoint 边界生成唯一且不混入全局计划的实现契约。"""
 
     if _task_kind(task) == "bootstrap":
+        source_types = task_data_source_types([task])
         return {
             "kind": "bootstrap",
             "java_version": "8",
             "build_system": "maven",
             "framework": "spring_boot",
-            "persistence": "mybatis_plus",
-            "database": "mysql",
+            "capabilities": [
+                capability
+                for source_type, capability in (
+                    ("database", "mybatis_plus_mysql"),
+                    ("external_api", "spring_cloud_openfeign"),
+                )
+                if source_type in source_types
+            ],
+            **(
+                {"persistence": "mybatis_plus", "database": "mysql"}
+                if "database" in source_types
+                else {}
+            ),
+            **(
+                {
+                    "http_client": "openfeign",
+                    "template_dependencies": {
+                        "spring_boot_version": "2.7.2",
+                        "spring_cloud_version": "2021.0.3",
+                        "starter": (
+                            "org.springframework.cloud:"
+                            "spring-cloud-starter-openfeign"
+                        ),
+                        "bom": (
+                            "org.springframework.cloud:"
+                            "spring-cloud-dependencies"
+                        ),
+                        "activation": "EnableFeignClients",
+                    },
+                }
+                if "external_api" in source_types
+                else {}
+            ),
             "configuration_policy": "reuse_existing_then_fill_missing",
             "verification_policy": _OUTER_VERIFICATION_POLICY,
         }

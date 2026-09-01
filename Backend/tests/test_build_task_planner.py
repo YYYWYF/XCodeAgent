@@ -726,8 +726,14 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 },
                 {
                     "planning_context_mode": "endpoint",
-                    "planning_unit_ids": ["backend:endpoint:weather-api:weather.get"],
-                    "required_unit_ids": ["backend:endpoint:weather-api:weather.get"],
+                    "planning_unit_ids": [
+                        "backend:bootstrap",
+                        "backend:endpoint:weather-api:weather.get",
+                    ],
+                    "required_unit_ids": [
+                        "backend:bootstrap",
+                        "backend:endpoint:weather-api:weather.get",
+                    ],
                 },
             )
 
@@ -739,6 +745,10 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("external_api", prompt)
         self.assertIn("api_contract_id + endpoint_id", prompt)
         self.assertIn("`backend.external_api_client`", prompt)
+        self.assertIn("exactly one backend:bootstrap root task", prompt)
+        self.assertIn("Spring Cloud OpenFeign", prompt)
+        self.assertIn("@EnableFeignClients", prompt)
+        self.assertIn("typed @FeignClient interface", prompt)
         self.assertIn("application.yml, application.yaml, or application.properties", prompt)
         self.assertIn("Include that exact configuration file in target_files", prompt)
         self.assertIn("add the exact base_url_config_key there", prompt)

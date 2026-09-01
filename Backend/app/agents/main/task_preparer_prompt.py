@@ -218,14 +218,26 @@ def _planning_algorithm_section(
         or []
         if str(unit_id).strip()
     }
+    backend_source_types = set(source_groups) & _ENDPOINT_BACKEND_SOURCE_TYPES
+    if backend_source_types and "backend:bootstrap" in planning_units:
+        bootstrap_capabilities = []
+        if "database" in backend_source_types:
+            bootstrap_capabilities.append("MyBatis-Plus/MySQL")
+        if "external_api" in backend_source_types:
+            bootstrap_capabilities.append("Spring Cloud OpenFeign")
+        rules.append(
+            "Emit exactly one backend:bootstrap root task with id "
+            "`backend:bootstrap::bootstrap`, unit_id `backend:bootstrap`, owner "
+            "`backend`, and dependencies `[]`. Keep it even when execution may report "
+            "`already_satisfied`. Its exact capability scope is "
+            f"{', '.join(bootstrap_capabilities)}. The task must inspect and own the existing "
+            "backend Maven pom.xml. For OpenFeign, it must also inspect and own the real "
+            "Spring Boot Application.java or existing Feign-enablement configuration, add "
+            "the smallest authorized @EnableFeignClients activation only when missing, and "
+            "include every such exact path in target_files, allowed_paths, change_scope, and "
+            "its backend.bootstrap deliverable. It must not generate endpoint Clients or DTOs."
+        )
     if "database" in source_groups:
-        if "backend:bootstrap" in planning_units:
-            rules.append(
-                "Emit exactly one backend:bootstrap root task with id "
-                "`backend:bootstrap::bootstrap`, unit_id `backend:bootstrap`, owner "
-                "`backend`, and dependencies `[]`. Keep it even when execution may report "
-                "`already_satisfied`."
-            )
         rules.append(
             "For every confirmed database entity in each backend:endpoint:* Unit, emit "
             "exactly four structural tasks in this order: `objects`, `repository`, "
@@ -243,7 +255,9 @@ def _planning_algorithm_section(
             "match the Unit's exact api_contract_id + endpoint_id against operations[].endpoint_refs "
             "and require exactly one matching operation. Then emit `upstream`, `mapping`, `service`, "
             "and `controller` tasks with IDs `<endpointUnitId>::<entityId>::<stage>`. Reuse one "
-            "Client method and transport DTO set for the same operation_id, and do not add "
+            "Client method and transport DTO set for the same operation_id, preferring OpenFeign "
+            "for a new Client while preserving an already-satisfying existing HTTP abstraction, "
+            "and do not add "
             "persistence stages. Use these exact deliverable kinds: upstream = "
             "`backend.external_api_client`, mapping = `backend.external_api_mapping`, service = "
             "`backend.application_service`, controller = `backend.endpoint_controller`."
@@ -252,7 +266,9 @@ def _planning_algorithm_section(
             "For every external_api stage, make the Simplified Chinese numbered description "
             "operation-specific and directly executable. Upstream must name operation_id, "
             "base_url_config_key, timeout, upstream method/path, typed Path/Query parameters, "
-            "headers, request_shape, response_shape, and success status codes. The upstream task "
+            "headers, request_shape, response_shape, and success status codes. For a new Client, "
+            "prefer a typed @FeignClient interface; do not force a technology migration when an "
+            "existing Client already satisfies the complete operation. The upstream task "
             "must also own the runtime Base URL property: reuse the backend module's existing "
             "Spring Boot application.yml, application.yaml, or application.properties; if none "
             "exists, create application.yml under that module's existing src/main/resources. "
@@ -452,9 +468,11 @@ def _forbidden_output_section(mode: str, source_types: set[str]) -> str:
         "Never create owner=database tasks, database:* Units, DDL, schema/table changes, "
         "migrations, or seed SQL. Never add CRUD operations, endpoints, fields, credentials, "
         "URLs, headers, or configuration outside confirmed contracts.",
-        "Only backend:bootstrap may plan modifications to the existing backend/pom.xml and "
-        "exact datasource/MyBatis configuration paths; ordinary endpoint tasks must not "
-        "modify global configuration.",
+        "Only backend:bootstrap may plan modifications to the existing backend/pom.xml, "
+        "datasource/MyBatis configuration, or global OpenFeign activation. External API "
+        "upstream tasks may modify only their exact Base URL/Feign client configuration "
+        "entries plus their Client/DTO/error-adapter source paths; other endpoint tasks must "
+        "not modify global configuration.",
     ]
     if mode == "page":
         rules.append(

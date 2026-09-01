@@ -262,19 +262,55 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
 
         self.assertEqual(
             task_required_skill_paths(database),
-            ["/.xcodeagent/builtin-skills/springboot-mybatis-generate/SKILL.md"],
+            ["/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md"],
         )
         self.assertEqual(
             task_required_skill_paths(external),
-            ["/.xcodeagent/builtin-skills/springboot-external-api-generate/SKILL.md"],
+            ["/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md"],
         )
-        self.assertEqual(len(task_required_skill_paths(mixed)), 2)
+        self.assertEqual(
+            task_required_skill_paths(mixed),
+            ["/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md"],
+        )
         self.assertEqual(
             task_required_instruction_paths(database),
             [
-                "/.xcodeagent/builtin-skills/springboot-mybatis-generate/SKILL.md",
-                "/.xcodeagent/builtin-skills/springboot-mybatis-generate/"
-                "references/layer-implementation.md",
+                "/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md",
+                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+                "references/database/layer-implementation.md",
+            ],
+        )
+        self.assertEqual(
+            task_required_instruction_paths(external),
+            [
+                "/.xcodeagent/builtin-skills/"
+                "springboot-backend-generate/SKILL.md",
+                "/.xcodeagent/builtin-skills/"
+                "springboot-backend-generate/"
+                "references/external-api/layer-implementation.md",
+            ],
+        )
+        self.assertEqual(
+            task_required_instruction_paths(mixed),
+            [
+                "/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md",
+                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+                "references/database/layer-implementation.md",
+                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+                "references/external-api/layer-implementation.md",
+            ],
+        )
+        mixed_bootstrap = dict(mixed)
+        mixed_bootstrap["id"] = "backend:bootstrap::bootstrap"
+        mixed_bootstrap["unit_id"] = "backend:bootstrap"
+        self.assertEqual(
+            task_required_instruction_paths(mixed_bootstrap),
+            [
+                "/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md",
+                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+                "references/database/bootstrap.md",
+                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+                "references/external-api/bootstrap.md",
             ],
         )
 
@@ -308,7 +344,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             tasks=[task],
         )
 
-        self.assertIn("springboot-mybatis-generate/SKILL.md", prompt)
+        self.assertIn("springboot-backend-generate/SKILL.md", prompt)
         self.assertIn("CategoryInput", prompt)
         self.assertIn("CategoryValue", prompt)
         self.assertIn("matched_table", prompt)
@@ -444,7 +480,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         task["id"] = "backend:endpoint:category_api:category.create::Category::upstream"
         task["description"] = (
             "1. 创建 product.url 配置读取和商品上游请求 DTO。\n"
-            "2. 使用 POST /v1/product/list 实现 RestTemplate Client。"
+            "2. 使用 POST /v1/product/list 实现 OpenFeign Client。"
         )
 
         context = task_implementation_contract(_project_plan(), task)
@@ -504,6 +540,19 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertIn("plain YAML or properties value", prompt)
         self.assertIn("never wrap it in a `${ENV_NAME:default}`", prompt)
         self.assertIn("never place effective_connection.base_url in Java constants", prompt)
+        self.assertIn("Prefer Spring Cloud OpenFeign", prompt)
+        self.assertIn("existing RestTemplate, WebClient", prompt)
+        self.assertIn("do not reject or rewrite it solely", prompt)
+        self.assertIn("backend:bootstrap task owns the Maven OpenFeign dependency", prompt)
+        self.assertIn(
+            "springboot-backend-generate/"
+            "references/external-api/layer-implementation.md",
+            prompt,
+        )
+        self.assertNotIn(
+            "springboot-backend-generate/references/external-api/bootstrap.md",
+            prompt,
+        )
         self.assertIn("For status=already_satisfied, satisfaction_evidence is mandatory", prompt)
         self.assertIn("Never return already_satisfied with omitted", prompt)
         self.assertIn('"target_files":["<inspected-relative-path>"]', prompt)
@@ -551,14 +600,44 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertEqual(packet["kind"], "bootstrap")
         self.assertEqual(packet["stage"], "bootstrap")
         self.assertIn(
-            "/.xcodeagent/builtin-skills/springboot-mybatis-generate/"
-            "references/bootstrap.md",
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "references/database/bootstrap.md",
             packet["instruction_paths"],
         )
         self.assertNotIn("references/layer-implementation.md", str(packet))
         self.assertEqual(packet["implementation_contract"]["kind"], "bootstrap")
+        self.assertEqual(
+            packet["implementation_contract"]["capabilities"],
+            ["mybatis_plus_mysql"],
+        )
+        self.assertNotIn("http_client", packet["implementation_contract"])
         self.assertNotIn("api_contract", packet["implementation_contract"])
         self.assertNotIn("entities", packet["implementation_contract"])
+
+    def test_external_api_bootstrap_packet_requires_openfeign_capability(self) -> None:
+        """外部 API bootstrap 必须加载 Feign 参考并携带模板依赖基线。"""
+
+        task = _task(
+            designs=[{"entity_id": "Weather", "data_source_type": "external_api"}],
+        )
+        task["id"] = "backend:bootstrap::bootstrap"
+        task["unit_id"] = "backend:bootstrap"
+        packet = execution_task_packet(_project_plan(), task)
+
+        self.assertIn(
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "references/external-api/bootstrap.md",
+            packet["instruction_paths"],
+        )
+        self.assertNotIn("references/layer-implementation.md", str(packet))
+        contract = packet["implementation_contract"]
+        self.assertEqual(contract["capabilities"], ["spring_cloud_openfeign"])
+        self.assertEqual(contract["http_client"], "openfeign")
+        self.assertEqual(
+            contract["template_dependencies"]["spring_cloud_version"],
+            "2021.0.3",
+        )
+        self.assertNotIn("persistence", contract)
 
 
 class DataSourceWorkspaceContextTests(unittest.TestCase):
@@ -669,8 +748,8 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
                 },
             )
 
-    def test_bootstrap_inherits_only_current_database_entity_sources(self) -> None:
-        """bootstrap 只继承当前目标中的 database 实体。"""
+    def test_bootstrap_inherits_current_backend_entity_sources(self) -> None:
+        """bootstrap 继承当前目标的数据库与外部 API 实体，但排除 static。"""
 
         tasks = apply_unit_compilation(
             {"build_units": {"backend:bootstrap": {"id": "backend:bootstrap"}}},
@@ -691,8 +770,9 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
         self.assertNotIn("entity_ids", tasks[0]["source_refs"])
         self.assertEqual(
             task_required_skill_paths(tasks[0]),
-            ["/.xcodeagent/builtin-skills/springboot-mybatis-generate/SKILL.md"],
+            ["/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md"],
         )
+        self.assertNotIn("static", str(tasks[0]["source_refs"]["entity_designs"]))
 
 
 if __name__ == "__main__":

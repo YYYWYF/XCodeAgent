@@ -13,8 +13,7 @@ BUILTIN_SKILLS_DIR_ENV = "XCODEAGENT_BUILTIN_SKILLS_DIR"
 BUILTIN_SKILLS_VIRTUAL_ROOT = "/.xcodeagent/builtin-skills/"
 REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
 CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
-SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME = "springboot-mybatis-generate"
-SPRINGBOOT_EXTERNAL_API_GENERATE_SKILL_NAME = "springboot-external-api-generate"
+SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME = "springboot-backend-generate"
 FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME = "frontend-static-data-generate"
 UI_DESIGN_SKILL_NAME = "antd-ui-design"
 FRONTEND_CODE_SCAN_SKILL_NAME = "frontend-code-scan"
@@ -37,9 +36,11 @@ _CODE_BLOCK_TEMPLATE_REFERENCE_FILES = [
     "references/page-templates.md",
 ]
 
-_SPRINGBOOT_MYBATIS_REFERENCE_FILES = [
-    "references/layer-implementation.md",
-    "references/bootstrap.md",
+_SPRINGBOOT_BACKEND_REFERENCE_FILES = [
+    "references/database/bootstrap.md",
+    "references/database/layer-implementation.md",
+    "references/external-api/bootstrap.md",
+    "references/external-api/layer-implementation.md",
 ]
 
 _BACKEND_CODE_SCAN_REFERENCE_FILES = ["references/rules-reference.md"]
@@ -47,11 +48,10 @@ _BACKEND_CODE_SCAN_REFERENCE_FILES = ["references/rules-reference.md"]
 REQUIRED_BUILTIN_SKILL_FILES = {
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
-    SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME: [
+    SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME: [
         "SKILL.md",
-        *_SPRINGBOOT_MYBATIS_REFERENCE_FILES,
+        *_SPRINGBOOT_BACKEND_REFERENCE_FILES,
     ],
-    SPRINGBOOT_EXTERNAL_API_GENERATE_SKILL_NAME: ["SKILL.md"],
     FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME: ["SKILL.md"],
     UI_DESIGN_SKILL_NAME: ["SKILL.md"],
     FRONTEND_CODE_SCAN_SKILL_NAME: ["SKILL.md"],

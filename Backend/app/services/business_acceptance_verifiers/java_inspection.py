@@ -187,7 +187,7 @@ def verify_endpoint_source(files: dict[str, str], expected: dict[str, Any]) -> d
 
 
 def verify_external_client_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
-    """通过 AST 验证外部 API Client 的连接配置、method/path 和 HTTP Client 调用。"""
+    """通过 AST 验证外部 API Client 的连接配置、method/path 和调用事实。"""
 
     model = _inspect_or_block(files)
     if isinstance(model, dict):
@@ -200,7 +200,7 @@ def verify_external_client_source(files: dict[str, str], expected: dict[str, Any
         path = str(info.get("path") or "")
         matched = any(_external_api_implemented(client, method, path) for client in clients)
         if not matched:
-            errors.append(f"外部 API Client 缺少 {method} {path} 的公共 HTTP Client 调用。")
+            errors.append(f"外部 API Client 缺少 {method} {path} 的 HTTP 调用声明。")
         config_key = str(info.get("base_url_config_key") or "").strip()
         if config_key and not _configuration_key_present(model, config_key):
             errors.append(f"外部 API Client 未读取 Base URL 配置键 {config_key}。")

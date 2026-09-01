@@ -197,7 +197,11 @@ def _page_context(
             "frontend:shell",
             *(["frontend:api-client"] if not all_static else []),
             *(["frontend:auth-guard"] if _page_requires_auth(page) else []),
-            *(["backend:bootstrap"] if "database" in source_types else []),
+            *(
+                ["backend:bootstrap"]
+                if set(source_types) & {"database", "external_api"}
+                else []
+            ),
             *(["frontend:data:static"] if "static" in source_types else []),
             *(list(dict.fromkeys(endpoint_unit_ids)) if not all_static else []),
             f"page:{page_id}",
@@ -257,7 +261,7 @@ def _endpoint_context(
     uses_static = "static" in source_types
     uses_backend = bool(set(source_types) & {"database", "external_api"})
     required_unit_ids = []
-    if "database" in source_types:
+    if uses_backend:
         required_unit_ids.append("backend:bootstrap")
     if uses_backend:
         required_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))

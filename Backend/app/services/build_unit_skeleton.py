@@ -12,7 +12,7 @@ from app.services.frontend_page_tree import project_plan_page_records
 
 
 def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
-    """按数据源类型选择公共 Unit，bootstrap 仅服务数据库后端能力。"""
+    """按数据源类型选择公共 Unit，bootstrap 服务数据库或外部 API 后端能力。"""
 
     source_types = {
         str(source.get("type") or "")
@@ -22,7 +22,7 @@ def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
     if not (source_types and source_types <= {"static"}):
         units.append("frontend:api-client")
     units.append("frontend:auth-guard")
-    if "database" in source_types:
+    if source_types & {"database", "external_api"}:
         units.append("backend:bootstrap")
     units.append("app:integration")
     return tuple(units)
@@ -270,7 +270,7 @@ def _unit_graph(
                 errors.append(f"API contract {contract_id} endpoint {endpoint_id} has no Unit.")
                 continue
             edges.append({"from": "application:root", "to": endpoint_unit_id, "type": "contains"})
-            if contract_source_type == "database":
+            if contract_source_type in {"database", "external_api"}:
                 edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
             edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
 

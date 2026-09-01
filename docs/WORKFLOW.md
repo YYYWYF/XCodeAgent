@@ -296,12 +296,14 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 从 `PageImple
 `build-dag.v3` 的 Unit ID 采用新的层次：
 
 - `application:root` 表示整应用根；
-- `backend:bootstrap` 表示数据库来源后端所需的 Maven、数据源与 MyBatis-Plus 基础能力；外部 API-only 与静态范围不创建该 Unit；
+- `backend:bootstrap` 表示后端共享基础能力：数据库来源幂等补齐 Maven、数据源与 MyBatis-Plus，外部 API 来源幂等补齐与模板 Spring Boot 2.7.2 对应的 Spring Cloud OpenFeign 依赖和全局扫描启用；static-only 范围不创建该 Unit；
 - `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
 - `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；auth 模板的 `resources.ts` 与 `routes.tsx` 托管区由 Build 启动前的平台投影登记，不属于 Build Unit；
 - `page:<pageId>` 表示页面实现范围。
 
-页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。只有包含 database 实体的范围才要求 `backend:bootstrap`，并由 Unit Graph 建立 `backend:bootstrap → backend:endpoint:*`；external_api-only endpoint 不依赖该 Unit。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。
+页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。包含 database 或 external_api 实体的范围都要求 `backend:bootstrap`，并由 Unit Graph 建立 `backend:bootstrap → backend:endpoint:*`；bootstrap 按实际来源组合 MyBatis/MySQL 与 OpenFeign 能力，只生成一个共享任务。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。
+
+DataSource Agent 对 database 和 external_api 统一加载 `springboot-backend-generate`；单来源任务只展开对应 reference，混合来源任务仅加载一次入口并按 database 后 external_api 的顺序展开当前 bootstrap/endpoint reference。
 
 代码图不参与 DAG 任务生成。进入 `build` 后，Frontend Agent 与承载 backend task 的 DataSource Agent 才按 `task_id` 使用绑定当前 `workspaceRoot` 的 `code_graph_context`：已有目标文件优先查询 `file_summary`，未知业务符号优先查询 `search_symbols`，命中后再按需查询引用、影响和相关测试。只有 `status=ready` 且 `matches/relations/relatedTests/impactedFiles` 至少一项非空的结果才作为导航；空结果、异常或不可用状态会立即降级为任务 `target_files/allowed_paths/change_scope` 内的文件搜索和真实源码读取，不会令任务失败或扩大写入授权。代码图始终不是源码事实，修改前必须读取当前文件。
 

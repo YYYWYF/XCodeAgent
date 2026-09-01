@@ -80,7 +80,7 @@ def _join_paths(base: str, leaf: str) -> str:
 
 
 def _external_api_implemented(client: JavaType, method: str, path: str) -> bool:
-    """验证 RestTemplate、WebClient 或 Feign 的同方法 method/path 事实。"""
+    """验证 Feign 或项目 HTTP Client 的同方法 method/path 事实。"""
 
     if _find_controller_method([client], method, path) is not None:
         return True

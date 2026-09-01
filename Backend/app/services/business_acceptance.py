@@ -448,7 +448,7 @@ def _checks_for_deliverable(
                 task,
                 deliverable,
                 "backend.external_api_client_contract",
-                "外部 API Client 必须使用已确认上游 method/path、请求/响应 DTO 和公共 HTTP Client。",
+                "外部 API Client 必须使用已确认上游 method/path 和请求/响应 DTO；新建实现优先 OpenFeign，已有兼容 HTTP Client 可复用。",
                 [source for entity in designs for source in _entity_sources(formal, entity)],
                 {
                     "external_apis": [

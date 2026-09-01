@@ -216,8 +216,9 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("springboot-external-api-generate", prompt)
-        self.assertNotIn("springboot-mybatis-generate/SKILL.md", prompt)
+        self.assertIn("springboot-backend-generate", prompt)
+        self.assertIn("references/external-api/layer-implementation.md", prompt)
+        self.assertNotIn("references/database/layer-implementation.md", prompt)
         self.assertIn("external_api", prompt)
 
     def test_frontend_static_skill_is_scoped_to_current_tasks(self) -> None:

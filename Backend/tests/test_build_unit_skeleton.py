@@ -155,7 +155,7 @@ class BuildUnitSkeletonTests(unittest.TestCase):
             },
             plan["unit_graph"]["edges"],
         )
-        self.assertNotIn(
+        self.assertIn(
             {
                 "from": "backend:bootstrap",
                 "to": "backend:endpoint:weather-api:weather.get",
@@ -164,8 +164,8 @@ class BuildUnitSkeletonTests(unittest.TestCase):
             plan["unit_graph"]["edges"],
         )
 
-    def test_external_api_only_skeleton_omits_database_bootstrap(self) -> None:
-        """纯外部 API 工程不创建数据库 bootstrap Unit 或依赖边。"""
+    def test_external_api_only_skeleton_requires_openfeign_bootstrap(self) -> None:
+        """纯外部 API 工程创建 OpenFeign bootstrap Unit 和依赖边。"""
 
         project_plan = confirm_entity_designs(
             _project_plan(),
@@ -173,13 +173,15 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         )
         plan = ensure_build_unit_skeleton(project_plan, {})
 
-        self.assertNotIn("backend:bootstrap", plan["build_units"])
+        self.assertIn("backend:bootstrap", plan["build_units"])
         self.assertIn("backend:endpoint:orders-api:orders.list", plan["build_units"])
-        self.assertFalse(
-            any(
-                edge.get("from") == "backend:bootstrap"
-                for edge in plan["unit_graph"]["edges"]
-            )
+        self.assertIn(
+            {
+                "from": "backend:bootstrap",
+                "to": "backend:endpoint:orders-api:orders.list",
+                "type": "depends_on",
+            },
+            plan["unit_graph"]["edges"],
         )
 
     def test_builds_all_plan_units_and_endpoint_page_edges(self) -> None:
