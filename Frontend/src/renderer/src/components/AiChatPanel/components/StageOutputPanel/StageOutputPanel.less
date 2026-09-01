@@ -74,6 +74,7 @@
 .@{class-prefix}-stage-output-panel-copy {
   display: flex;
   min-width: 0;
+  flex: 1;
   flex-direction: column;
   gap: 3px;
 
@@ -83,8 +84,67 @@
   }
 }
 
+.@{class-prefix}-stage-output-panel-return.ant-btn {
+  min-height: 32px;
+  flex: 0 0 auto;
+  color: var(--wb-canvas);
+  font-weight: 600;
+  background: var(--wb-accent);
+  border-color: var(--wb-accent);
+  border-radius: 7px;
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--wb-accent) 24%, transparent);
+  white-space: nowrap;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+
+  &:hover,
+  &:focus {
+    color: var(--wb-canvas);
+    background: var(--wb-accent-hover);
+    border-color: var(--wb-accent-hover);
+    box-shadow: 0 9px 22px color-mix(in srgb, var(--wb-accent) 30%, transparent);
+    transform: translateY(-1px);
+  }
+
+  &:active {
+    color: var(--wb-canvas);
+    background: var(--wb-accent-active);
+    border-color: var(--wb-accent-active);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--wb-accent) 22%, transparent);
+    transform: translateY(0);
+  }
+}
+
+.@{class-prefix}-stage-output-panel-return-hint.ant-typography {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--wb-accent);
+  font-size: 11px;
+  font-weight: 600;
+
+  &::before {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 6px;
+    content: '';
+    background: var(--wb-accent);
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px var(--wb-accent-soft);
+  }
+}
+
 .@{class-prefix}-stage-output-panel-body {
   padding-top: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .@{class-prefix}-stage-output-panel-return.ant-btn {
+    transition: none;
+  }
 }
 
 @media (max-width: 760px) {

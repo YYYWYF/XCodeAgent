@@ -1,5 +1,5 @@
-import { NodeIndexOutlined } from '@ant-design/icons'
-import { Typography } from 'antd'
+import { ArrowLeftOutlined, NodeIndexOutlined } from '@ant-design/icons'
+import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { DagGenerationStageRecord } from '../../../../service/agUiAgent'
 import type { WorkflowBuildTaskPlan, WorkflowBuildTaskPlanConfirmation } from '../../../../typings'
@@ -13,6 +13,7 @@ type Props = {
   confirmationErrors?: string[]
   confirmationPlan?: WorkflowBuildTaskPlan
   onConfirmationSubmit?: (action: WorkflowBuildTaskPlanConfirmation) => void
+  onReturnToConfirmation?: () => void
   stage?: DagGenerationStageRecord
 }
 
@@ -22,6 +23,7 @@ export default function StageOutputPanel({
   confirmationErrors,
   confirmationPlan,
   onConfirmationSubmit,
+  onReturnToConfirmation,
   stage
 }: Props): ReactElement | null {
   if (confirmationPlan) {
@@ -48,7 +50,23 @@ export default function StageOutputPanel({
         <span className={cx('stage-output-panel-copy')}>
           <Typography.Text strong>{stage.name}</Typography.Text>
           <Typography.Text type="secondary">{stage.detail}</Typography.Text>
+          {onReturnToConfirmation ? (
+            <Typography.Text className={cx('stage-output-panel-return-hint')}>
+              当前为历史阶段产物，任务确认仍待处理
+            </Typography.Text>
+          ) : null}
         </span>
+        {onReturnToConfirmation ? (
+          <Button
+            className={cx('stage-output-panel-return')}
+            icon={<ArrowLeftOutlined />}
+            onClick={onReturnToConfirmation}
+            size="small"
+            type="primary"
+          >
+            返回任务确认
+          </Button>
+        ) : null}
       </header>
       <div className={cx('stage-output-panel-body')}>
         <StageOutput stage={stage} />

@@ -2967,6 +2967,16 @@ export default function AiChatPanel({
     },
     [currentDagSnapshot, onRightPanelOpenChange, setRightPanel, stageOutputSessionKey]
   )
+
+  /** 从确认阶段的历史子阶段产物返回当前任务确认卡。 */
+  const handleReturnDagConfirmation = useCallback((): void => {
+    manuallySelectedDagSessionRef.current = ''
+    setRightPanel({
+      type: 'stage-output',
+      sessionKey: stageOutputSessionKey,
+      view: 'confirmation'
+    })
+  }, [setRightPanel, stageOutputSessionKey])
   const activeWorkflowPhase = String(
     activeWorkflow?.summary?.phase ||
       activeWorkflow?.result?.phase ||
@@ -4487,7 +4497,14 @@ export default function AiChatPanel({
                   }}
                 />
               ) : rightPanel.view === 'stage' && selectedDagStage?.output ? (
-                <StageOutputPanel stage={selectedDagStage} />
+                <StageOutputPanel
+                  onReturnToConfirmation={
+                    currentStageOutputPhase === 'confirmation' && dagConfirmationPlan
+                      ? handleReturnDagConfirmation
+                      : undefined
+                  }
+                  stage={selectedDagStage}
+                />
               ) : null
             ) : null}
           </div>
