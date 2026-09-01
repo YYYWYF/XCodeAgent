@@ -25,6 +25,7 @@ AgentWorkspaceMode = Literal[
     "code_analyze",
     "code_review_repair",
     "repair_planner",
+    "revision_investigator",
     "small_task",
     "test_generation",
     "workspace_assistant",
@@ -119,7 +120,12 @@ def create_workspace_permissions(
             )
         )
     permissions.extend(skill_permissions)
-    if mode in {"database", "repair_planner", "workspace_assistant"}:
+    if mode in {
+        "database",
+        "repair_planner",
+        "revision_investigator",
+        "workspace_assistant",
+    }:
         permissions.extend(
             [
                 FilesystemPermission(operations=["read"], paths=["/**"], mode="allow"),

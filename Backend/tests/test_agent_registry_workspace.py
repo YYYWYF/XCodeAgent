@@ -81,6 +81,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 side_effect=lambda model, **kwargs: ("repair_planner", kwargs),
             ) as repair_planner_factory,
             patch(
+                "app.agents.registry.create_revision_investigator_agent",
+                side_effect=lambda model, **kwargs: ("revision_investigator", kwargs),
+            ) as revision_investigator_factory,
+            patch(
                 "app.agents.registry.create_small_task_agent",
                 side_effect=lambda model, **kwargs: ("small_task", kwargs),
             ),
@@ -97,6 +101,7 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
         self.assertIsNot(first_bundle, second_bundle)
         self.assertEqual(frontend_factory.call_count, 2)
         self.assertEqual(repair_planner_factory.call_count, 2)
+        self.assertEqual(revision_investigator_factory.call_count, 2)
         self.assertEqual(
             first_bundle.frontend[1]["workspace_root"],
             str(Path(first_workspace).resolve()),
@@ -113,6 +118,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
         self.assertEqual(
             first_bundle.repair_planner[1]["agent_memory_backend"],
             "agent-memory",
+        )
+        self.assertEqual(
+            first_bundle.revision_investigator[1]["workspace_root"],
+            str(Path(first_workspace).resolve()),
         )
 
     def test_agent_bundle_cache_changes_with_skill_or_memory_revision(self) -> None:
@@ -167,6 +176,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                     "repair_planner",
                     kwargs,
                 ),
+            ),
+            patch(
+                "app.agents.registry.create_revision_investigator_agent",
+                side_effect=lambda model, **kwargs: ("revision_investigator", kwargs),
             ),
             patch(
                 "app.agents.registry.create_small_task_agent",
@@ -249,6 +262,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             patch(
                 "app.agents.registry.create_repair_planner_agent",
                 side_effect=lambda model, **kwargs: ("repair", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_revision_investigator_agent",
+                side_effect=lambda model, **kwargs: ("revision_investigator", kwargs),
             ),
             patch(
                 "app.agents.registry.create_small_task_agent",

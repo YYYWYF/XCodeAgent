@@ -17,6 +17,9 @@ from app.agents.direct_modification import (
     invoke_workspace_direct_modification,
     parse_direct_modification_agent_result,
 )
+from app.agents.revision_investigator.service import (
+    investigate_direct_modification_intent,
+)
 from app.agents.change_impact_analyzer import (
     _analysis_queries,
     analyze_change_impact,
@@ -72,12 +75,29 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
             clarification_question="本次修改已取消。",
         )
     else:
+        workspace_snapshot = _workspace_snapshot_for_classification(state)
         decision = classify_direct_modification_intent(
             user_request=request,
             conversation_summary=str(state.get("direct_modification_summary") or ""),
-            workspace_snapshot=_workspace_snapshot_for_classification(state),
+            workspace_snapshot=workspace_snapshot,
             on_response_delta=_conversation_text_delta_writer(),
         )
+        if decision.intent == "clarification":
+            workspace = workspace_from_state(state)
+            if workspace:
+                # 快速分类只有在证据不足或语义/实现边界无法确定时才进入
+                # 只读调查；高置信结果继续沿用原确定性路由，不增加模型延迟。
+                decision = investigate_direct_modification_intent(
+                    user_request=request,
+                    conversation_summary=str(
+                        state.get("direct_modification_summary") or ""
+                    ),
+                    workspace=workspace,
+                    workspace_snapshot=workspace_snapshot,
+                    fast_decision=decision,
+                    selected_skill_names=state.get("selected_skill_names"),
+                    on_tool_activity=_tool_activity_writer("classify_intent"),
+                )
     # 二次修改只消费分类模型返回的路由 JSON；不再额外调用模型生成 Contract Evidence。
     # 正式分支仍由后续一次性 interaction 和用户确认控制，不能因省略证据而绕过确认门。
     dynamic_workspace_paths = validated_dynamic_workspace_paths(

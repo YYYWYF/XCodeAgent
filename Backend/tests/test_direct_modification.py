@@ -21,6 +21,9 @@ from app.agents.direct_modification import (
     invoke_frontend_direct_modification,
     parse_direct_modification_agent_result,
 )
+from app.agents.revision_investigator.service import (
+    investigate_direct_modification_intent,
+)
 from app.graph.direct_modification_workflow import (
     _route_backend,
     _route_classification,
@@ -425,9 +428,133 @@ class DirectModificationPromptTests(unittest.TestCase):
             self.assertEqual(decision.scope, "clarification")
             self.assertTrue(decision.clarification_question)
 
+    def test_revision_investigator_result_reuses_deterministic_router(self) -> None:
+        """调查 Agent 输出仍必须经过原路由合同归一化，而不能直接决定节点。"""
+
+        fast_decision = DirectModificationDecision(
+            intent="clarification",
+            owner="unknown",
+            scope="clarification",
+            confidence=0.4,
+            reason="证据不足。",
+            clarification_question="请补充目标。",
+        )
+        with patch(
+            "app.agents.create_agent_bundle",
+            return_value=SimpleNamespace(revision_investigator=object()),
+        ), patch(
+            "app.agents.revision_investigator.service.invoke_agent_with_tool_activity",
+            return_value=json.dumps(
+                {
+                    "route": "formal_revision",
+                    "formalBranch": "design_stage_revision",
+                    "revisionType": "product_behavior_change",
+                    "earliestArtifact": "product-plan",
+                    "owner": "frontend",
+                    "confidence": 0.94,
+                    "reason": "增加批量归档会改变产品行为。",
+                    "affectedArtifactKeys": ["product-plan"],
+                    "affectedResourceKeys": ["page:orders"],
+                    "candidatePaths": ["Frontend/src/Orders.tsx"],
+                    "questions": [],
+                },
+                ensure_ascii=False,
+            ),
+        ):
+            decision = investigate_direct_modification_intent(
+                user_request="订单增加批量归档",
+                conversation_summary="",
+                workspace="/tmp/workspace",
+                workspace_snapshot={
+                    "currentTarget": {"type": "page", "pageId": "orders"}
+                },
+                fast_decision=fast_decision,
+            )
+
+        self.assertEqual(decision.intent, "formal_revision")
+        self.assertEqual(decision.owner, "none")
+        self.assertEqual(decision.formal_branch, "design_stage_revision")
+        self.assertEqual(decision.earliest_artifact, "product-plan")
+        self.assertEqual(decision.target_paths, ())
+        self.assertEqual(
+            decision.affected_artifact_keys,
+            ("product-plan", "ui-design", "technical-plan"),
+        )
+
 
 class DirectModificationNodeTests(unittest.TestCase):
     """验证分类、Agent 执行、测试和收口节点的快速模式语义。"""
+
+    def test_low_confidence_classification_uses_read_only_investigator(self) -> None:
+        """快速分类证据不足时必须先调查，再沿用现有正式修改确认门。"""
+
+        fast_decision = DirectModificationDecision(
+            intent="clarification",
+            owner="unknown",
+            scope="clarification",
+            confidence=0.42,
+            reason="语义与实现边界不明确。",
+            clarification_question="请补充具体修改目标。",
+        )
+        investigated_decision = DirectModificationDecision(
+            intent="formal_revision",
+            owner="none",
+            scope="formal_revision",
+            confidence=0.93,
+            reason="新增订单批量归档操作会改变已确认产品行为。",
+            clarification_question="",
+            formal_branch="design_stage_revision",
+            revision_type="product_behavior_change",
+            earliest_artifact="product-plan",
+            affected_artifact_keys=("product-plan", "ui-design", "technical-plan"),
+        )
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.direct_modification.classify_direct_modification_intent",
+            return_value=fast_decision,
+        ), patch(
+            "app.graph.nodes.direct_modification.investigate_direct_modification_intent",
+            return_value=investigated_decision,
+        ) as investigate:
+            update = classify_direct_modification(
+                {
+                    "request": "订单增加批量归档",
+                    "workspace": workspace,
+                    "change_target": {"type": "page", "pageId": "orders"},
+                }
+            )
+
+        investigate.assert_called_once()
+        self.assertEqual(update["conversation_intent"], "formal_revision")
+        self.assertEqual(update["status"], "requires_user_input")
+        self.assertEqual(update["clarification"]["mode"], "revision_impact_confirmation")
+
+    def test_high_confidence_classification_skips_read_only_investigator(self) -> None:
+        """高置信且语义明确的结果不得增加第二次 Agent 调用。"""
+
+        decision = DirectModificationDecision(
+            intent="implementation_fix",
+            owner="frontend",
+            scope="direct",
+            confidence=0.98,
+            reason="只修复既有按钮点击实现。",
+            clarification_question="",
+        )
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.direct_modification.classify_direct_modification_intent",
+            return_value=decision,
+        ), patch(
+            "app.graph.nodes.direct_modification.investigate_direct_modification_intent",
+        ) as investigate:
+            update = classify_direct_modification(
+                {
+                    "request": "修复订单按钮点击无反应",
+                    "workspace": workspace,
+                }
+            )
+
+        investigate.assert_not_called()
+        self.assertEqual(update["conversation_intent"], "implementation_fix")
+        self.assertEqual(update["clarification"]["mode"], "implementation_fix_confirmation")
 
     def test_code_implementation_fix_requires_user_confirmation(self) -> None:
         """前后端实现修复在写入代码前必须先展示确认门。"""

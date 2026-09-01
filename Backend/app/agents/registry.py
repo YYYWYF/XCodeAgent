@@ -11,6 +11,7 @@ from app.agents.data_source import create_data_source_agent
 from app.agents.frontend import create_frontend_agent
 from app.agents.model_factory import create_chat_model
 from app.agents.repair_planner import create_repair_planner_agent
+from app.agents.revision_investigator import create_revision_investigator_agent
 from app.agents.small_task import create_small_task_agent
 from app.agents.test_generation import create_test_generation_agent
 from app.agents.workspace_assistant import create_workspace_assistant_agent
@@ -42,6 +43,7 @@ class AgentBundle:
     data_source: Any
     database: Any
     repair_planner: Any
+    revision_investigator: Any
     small_task: Any
     workspace_assistant: Any
     selected_skill_names: tuple[str, ...] = ()
@@ -152,6 +154,10 @@ def _create_agent_bundle_for_workspace(
         agent_memory_backend=agent_memory.backend,
         required_user_skills_prompt=required_user_skills_prompt,
     )
+    revision_investigator = create_revision_investigator_agent(
+        chat_model,
+        workspace_root=workspace_root,
+    )
     small_task = create_small_task_agent(
         chat_model,
         workspace_root=workspace_root,
@@ -186,6 +192,7 @@ def _create_agent_bundle_for_workspace(
         data_source=data_source,
         database=database,
         repair_planner=repair_planner,
+        revision_investigator=revision_investigator,
         small_task=small_task,
         test_generation=test_generation,
         workspace_assistant=workspace_assistant,

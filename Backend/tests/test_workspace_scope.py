@@ -200,6 +200,24 @@ class WorkspaceScopeTests(unittest.TestCase):
             self.assertEqual(_check_fs_permission(permissions, "read", "/data.json"), "allow")
             self.assertEqual(_check_fs_permission(permissions, "write", "/data.json"), "deny")
 
+    def test_revision_investigator_permissions_deny_writes(self) -> None:
+        """二次修改调查 Agent 可读取工作区，但不能写入任何文件。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            permissions = create_workspace_permissions(
+                workspace,
+                mode="revision_investigator",
+            )
+
+            self.assertEqual(
+                _check_fs_permission(permissions, "read", "/.xcodeagent/plans/technical-plan.json"),
+                "allow",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "write", "/frontend/src/App.tsx"),
+                "deny",
+            )
+
     def test_code_review_repair_permissions_allow_frontend_project_without_dependencies(self) -> None:
         """代码审查修复允许前端项目文件，但拒绝依赖目录和手工 lockfile 写入。"""
 

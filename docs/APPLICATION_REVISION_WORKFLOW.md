@@ -5,7 +5,7 @@
 本文定义应用进入工作台后的二次修改流程。最终方案保持简单：
 
 1. 用户在工作台通过统一对话入口描述问题、代码修改或正式计划修改，不需要选择内部 Workflow 节点。
-2. `Workbench Conversation Coordinator` 负责只读分类和确定性路由，但它不是拥有全部工具的万能 Agent。
+2. `Workbench Conversation Coordinator` 先执行快速结构化分类；高置信、语义明确时直接进入确定性路由，只有结果仍为澄清/证据不足时才调用只暴露 `ls/read_file/glob/grep` 的只读 RevisionInvestigator。它不是拥有全部工具的万能 Agent。
 3. 不改变已确认产品或技术语义的修改走 `implementation_fix`；普通工作区文件可由现有 SmallTask 路径直接修改，前端/后端代码修改必须先弹出实现范围确认，再由 SmallTask 修改、验证并完成。
 4. 改变正式产品/技术语义的请求走 `formal_revision`，再确定是 `design_stage_revision` 还是 `workbench_plan_revision`。
 5. 改变 RequirementSpec 或 ProductPlan 语义的请求走 `design_stage_revision`：用户确认影响范围后返回现有设计阶段，复用原 `application_planning_workflow`、原 thread/checkpoint、最早节点路由和逐层确认逻辑；既有页面的 UI 小改动不走该分支。
@@ -218,19 +218,19 @@ formal_revision
 
 ### 3.3 分类优先级与安全校验
 
-Coordinator 先由模型按语义分类，再由服务端执行不依赖自然语言关键词的合同和安全校验：
+Coordinator 先由快速模型按语义分类；高置信、语义明确的结果直接进入服务端合同与安全校验。只有快速结果仍为 `clarification` 且存在真实工作区时，才调用只读 RevisionInvestigator 渐进读取最小必要的正式 JSON 或源码证据，并让其结果重新经过同一服务端校验：
 
 1. 新增、删除、移除、下线或重命名页面、实体、角色、模块、操作或业务流程，属于 `formal_revision`；口语表达与正式表达等价。
 2. API method、path、request、response、错误码、权限、数据来源、表、列、约束、事务或副作用变化，按模型输出进入对应 formal branch。
 3. 既有页面的视觉、布局、间距、文案、响应式和交互微调属于 `implementation_fix/frontend`；只有新增页面/模块或改变业务行为、验收规则等产品语义时才进入 `formal_revision`。
 4. 目标不唯一、期望结果存在实质歧义或置信度低于 0.70 时先澄清，不能猜测代码路径。
 5. 请求或候选路径涉及 `.xcodeagent` 正式产物时，服务端禁止 `implementation_fix`。
-6. 服务端校验 route、branch、revisionType、earliestArtifact、owner 和候选范围字段；只纠正不安全或不一致的结构，不重新解释用户自然语言，也不追加模型证据分析。
+6. 服务端校验 fast path 或 RevisionInvestigator 返回的 route、branch、revisionType、earliestArtifact、owner 和候选范围字段；只纠正不安全或不一致的结构，不接受 Agent 节点名或写权限请求。
 7. `implementation_fix` 的 frontend/backend/fullstack owner 必须先通过 `implementation_fix_confirmation`；workspace owner 的普通文件修改可以直接执行。
 
 ### 3.4 上下文输入
 
-Coordinator 分类只读取有界上下文：
+Coordinator 的快速分类只读取有界上下文：
 
 - 用户当前请求和最多 4000 字符会话摘要；
 - 当前 application/page/endpoint target；
@@ -238,6 +238,8 @@ Coordinator 分类只读取有界上下文：
 - 有界 WorkspaceSnapshot 和 code graph 导航摘要；
 - 当前 scoped dirty diff 摘要；
 - 当前页面/API 目标与会话上下文；普通自然语言由 Coordinator 自动分类。
+
+RevisionInvestigator 仅在快速结果仍为澄清/证据不足时启动。它显式接收快速结果、当前 target、当前请求和 4000 字符会话摘要，并最多使用六次 `ls/read_file/glob/grep` 渐进读取；不拥有写入、命令、待办、委派、Graph 恢复或 lifecycle 工具。
 
 输出示例：
 
@@ -321,8 +323,11 @@ confirmed formal artifacts
 ```mermaid
 flowchart TD
     A["用户自然语言输入"] --> B["加载 target 和有界上下文"]
-    B --> C["只读意图分类"]
-    C --> D["路由合同与安全校验"]
+    B --> C["快速结构化分类"]
+    C --> C1{"高置信且语义明确"}
+    C1 -- 是 --> D["路由合同与安全校验"]
+    C1 -- 否 --> C2["只读 RevisionInvestigator"]
+    C2 --> D
     D --> E{"route"}
     E -- casual_chat --> F["直接回答"]
     E -- workspace_question --> G["只读工作区回答"]
@@ -432,7 +437,7 @@ flowchart TD
 Coordinator 由以下部分组成，不新增 `main_agent.py`：
 
 1. `/conversation/run` 请求适配器和 `direct_modification_workflow`；
-2. 只读 Change Analysis 模型 wrapper；
+2. 快速结构化分类模型，以及只在澄清/证据不足时运行的只读 RevisionInvestigator；
 3. `RevisionRoutingService` 的模型结果合同、安全校验和 branch 对齐；
 4. 现有 `/application-page-planning/run`、`application_planning_workflow` 和 design revision adapter；
 5. `/workflow/run` 中的工作台 formal revision 节点，以及两个 branch 共用的正式产物收口、Build DAG 和代码执行 continuation；
@@ -647,7 +652,7 @@ discard
 
 | 决策/动作 | 负责人 |
 | --- | --- |
-| 输入分类候选 | 只读 Change Analysis 模型 |
+| 输入分类候选 | 快速结构化分类模型；证据不足时由只读 RevisionInvestigator 补充工作区调查 |
 | 确定性升级、formalBranch 与最早产物 | `RevisionRoutingService` |
 | 返回设计阶段后的最早节点 | 现有 `design_intent_analysis` + `earliest_available_design_target` |
 | 下游 stale 闭包 | `ArtifactInvalidationService` |
