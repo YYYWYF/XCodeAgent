@@ -60,6 +60,7 @@ import type {
   DevelopmentPlanningPageOption,
   EditorMode
 } from '../typings'
+import type { DevelopmentPlanningAgent } from '../agentDevelopment'
 import type { WorkbenchArtifactProgress } from '../workbenchDomain'
 import { cx, previewOrigin } from '../utils'
 import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
@@ -169,6 +170,9 @@ function WorkbenchPage({
   >([])
   const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
     DevelopmentPlanningEntity[]
+  >([])
+  const [developmentPlanningAgents, setDevelopmentPlanningAgents] = useState<
+    DevelopmentPlanningAgent[]
   >([])
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [previewBaseUrl, setPreviewBaseUrl] = useState('')
@@ -401,6 +405,7 @@ function WorkbenchPage({
         setDevelopmentPlanningEntities(
           Array.isArray(inspection.entities) ? inspection.entities : []
         )
+        setDevelopmentPlanningAgents(Array.isArray(inspection.agents) ? inspection.agents : [])
         setHasPageDesigns(inspection.hasPageDesigns)
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
@@ -411,6 +416,7 @@ function WorkbenchPage({
         setDevelopmentPlanningPageTree([])
         setDevelopmentPlanningApiContracts([])
         setDevelopmentPlanningEntities([])
+        setDevelopmentPlanningAgents([])
         setHasPageDesigns(false)
         console.warn('检查 specs/plans 规划产物失败。', error)
       } finally {
@@ -776,6 +782,7 @@ function WorkbenchPage({
                 developmentPlanningPageTree={developmentPlanningPageTree}
                 developmentPlanningApiContracts={developmentPlanningApiContracts}
                 developmentPlanningEntities={developmentPlanningEntities}
+                developmentPlanningAgents={developmentPlanningAgents}
                 editorMode={editorMode}
                 onApplicationUpdate={handleApplicationUpdate}
                 onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}

@@ -7,6 +7,7 @@ import type {
 } from '../../typings'
 import type { WorkbenchPhase } from '../../workbenchPhase'
 import type { AgentDetailBlocker } from '../../agentDevelopment'
+import type { ChatSessionMessage } from '../../service/chatSessions'
 
 export type AgentChatMessage = {
   id: number
@@ -20,23 +21,7 @@ export type AgentChatMessage = {
   toolCalls?: ToolCallRecord[]
   processSteps?: ProcessStepRecord[]
   /** 待设计目标挡板：作为对话历史消息持久化，支持页面、接口与智能体详细设计入口。 */
-  detailBlocker?:
-    | {
-        type: 'page'
-        pageId: string
-        label: string
-        path?: string
-        purpose?: string
-      }
-    | {
-        type: 'endpoint'
-        apiContractId: string
-        endpointId: string
-        label: string
-        path?: string
-        purpose?: string
-      }
-    | AgentDetailBlocker
+  detailBlocker?: ChatSessionMessage['detailBlocker'] | AgentDetailBlocker
   createdAt: number
 }
 

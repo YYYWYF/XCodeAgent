@@ -377,6 +377,36 @@ export default function WorkflowRunCard({
   if (clarification?.mode === 'application_acceptance') return null
   // 开发准入由独立弹框承载，计划对话只保留项目 Agent 的确认消息。
   if (clarification?.mode === 'development_entry_confirmation') return null
+  if (clarification?.mode === 'agent_dependency_gate') {
+    return (
+      <AgentDependencyGate
+        clarification={clarification}
+        disabled={disabled || interactionAvailability !== 'active'}
+        onSubmit={onSubmitClarification}
+        workflow={workflow}
+      />
+    )
+  }
+  if (clarification?.mode === 'agent_config_review') {
+    return (
+      <AgentConfigRevisionGate
+        clarification={clarification}
+        disabled={disabled || interactionAvailability !== 'active'}
+        onSubmit={onSubmitClarification}
+        workflow={workflow}
+      />
+    )
+  }
+  if (clarification?.mode === 'agent_acceptance' && requiresConfirmation) {
+    return (
+      <ArtifactAcceptanceGate
+        clarification={clarification}
+        disabled={disabled || interactionAvailability !== 'active'}
+        onSubmit={onSubmitClarification}
+        workflow={workflow}
+      />
+    )
+  }
   const canSubmitClarification =
     clarification?.status === 'requires_user_input' &&
     clarificationQuestions.length > 0 &&

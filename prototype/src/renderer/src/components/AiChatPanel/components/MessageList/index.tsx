@@ -473,19 +473,19 @@ export default function MessageList({
                 (testWorkflowPhase === 'application_test' || testWorkflowPhase === 'business_test') &&
                 testWorkflowStatus === 'running'
               const inlineTestCaseAuthorization =
-                Boolean(message.workflow) &&
+                message.workflow != null &&
                 workflowClarification(message.workflow)?.mode === 'test_case_execute' &&
                 requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
               // 产物验收卡与用例授权同构：内嵌在「确认验收」节点上，不单独渲染。
               const inlineArtifactAcceptance =
-                Boolean(message.workflow) &&
+                message.workflow != null &&
                 workflowClarification(message.workflow)?.mode === 'page_acceptance' &&
                 requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
               // 执行方式选择卡内嵌在「选择执行方式」节点上；节点轨迹存在时不再重复渲染独立卡。
               const inlineBackgroundDispatch =
-                Boolean(message.workflow) &&
+                message.workflow != null &&
                 workflowClarification(message.workflow)?.mode === 'background_dispatch' &&
                 requiresClarification &&
                 Boolean(visibleProcessSteps?.length)

@@ -55,6 +55,7 @@ export type AgentTrialTurn = {
 }
 
 export type AgentDetailBlocker = {
+  type: 'agent'
   targetType: 'agent'
   targetId: string
   agentId: string
@@ -88,6 +89,7 @@ export function sessionMatchesAgent(session: AgentSessionIdentity, agentId: stri
 /** 生成可持久化到智能体会话历史中的详细设计挡板。 */
 export function buildAgentDetailBlocker(agent: DevelopmentPlanningAgent): AgentDetailBlocker {
   return {
+    type: 'agent',
     targetType: 'agent',
     targetId: agent.id,
     agentId: agent.id,
@@ -354,7 +356,7 @@ export function buildAgentSource(
     ''
   ].join('\n')
   return {
-    filePath: `backend/agents/${moduleName}_agent.py`,
+    filePath: `agent-runtime/agents/${moduleName}.py`,
     content
   }
 }
@@ -391,7 +393,7 @@ export function buildAgentToolAdapterSource(
     ''
   ].join('\n')
   return {
-    filePath: `backend/agents/${moduleName}_tool_adapter.py`,
+    filePath: `agent-runtime/tools/${moduleName}_tools.py`,
     content
   }
 }

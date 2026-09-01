@@ -113,6 +113,7 @@ assert.equal(
 
 const detailBlocker = agentDevelopment.buildAgentDetailBlocker(agent)
 assert.deepEqual(detailBlocker, {
+  type: 'agent',
   targetType: 'agent',
   targetId: 'recheck-assistant',
   agentId: 'recheck-assistant',
@@ -283,7 +284,7 @@ function assertPythonSyntax(content, label) {
 }
 
 const sourceArtifact = agentDevelopment.buildAgentSource(agent)
-assert.equal(sourceArtifact.filePath, 'backend/agents/recheck_assistant_agent.py')
+assert.equal(sourceArtifact.filePath, 'agent-runtime/agents/recheck_assistant.py')
 assert.match(sourceArtifact.content, /class RecheckAssistantAgent:/)
 assert.match(sourceArtifact.content, /AgentDefinition\(/)
 assert.match(sourceArtifact.content, /查询我的回检单/)
@@ -295,7 +296,7 @@ assert.doesNotMatch(sourceArtifact.content, /\.java\b/)
 assertPythonSyntax(sourceArtifact.content, sourceArtifact.filePath)
 
 const toolArtifact = agentDevelopment.buildAgentToolAdapterSource(agent)
-assert.equal(toolArtifact.filePath, 'backend/agents/recheck_assistant_tool_adapter.py')
+assert.equal(toolArtifact.filePath, 'agent-runtime/tools/recheck_assistant_tools.py')
 assert.match(toolArtifact.content, /class RecheckAssistantToolAdapter:/)
 assert.match(toolArtifact.content, /ep-my-rechecks/)
 assert.match(toolArtifact.content, /def query\(/)
@@ -354,5 +355,36 @@ assert.equal(designState.isEntityDesigned('recheck-record', 'version-2'), false)
 designState.clearDesignState('version-1')
 assert.equal(designState.isAgentDesigned('recheck-assistant', 'version-1'), false)
 assert.equal(designState.isEntityDesigned('recheck-record', 'version-1'), false)
+
+/** 校验智能体在最新单会话工作台中仍有完整的数据投影、开发目标和确认入口。 */
+const workbenchPageSource = await readFile(
+  new URL('../src/renderer/src/pages/WorkbenchPage.tsx', import.meta.url),
+  'utf8'
+)
+const leftPanelSource = await readFile(
+  new URL('../src/renderer/src/components/LeftPanel/LeftPanel.tsx', import.meta.url),
+  'utf8'
+)
+const aiChatPanelSource = await readFile(
+  new URL('../src/renderer/src/components/AiChatPanel/AiChatPanel.tsx', import.meta.url),
+  'utf8'
+)
+const detailSelectorSource = await readFile(
+  new URL('../src/renderer/src/components/DetailConfirmationPageSelector/index.tsx', import.meta.url),
+  'utf8'
+)
+const workflowCardSource = await readFile(
+  new URL(
+    '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/index.tsx',
+    import.meta.url
+  ),
+  'utf8'
+)
+assert.match(workbenchPageSource, /setDevelopmentPlanningAgents/)
+assert.match(leftPanelSource, /developmentPlanningAgents/)
+assert.match(aiChatPanelSource, /developmentPlanningAgents/)
+assert.match(aiChatPanelSource, /kind: 'agent' as const/)
+assert.match(detailSelectorSource, /selectedAgent/)
+assert.match(workflowCardSource, /<AgentDependencyGate/)
 
 console.log('agent-development tests passed')

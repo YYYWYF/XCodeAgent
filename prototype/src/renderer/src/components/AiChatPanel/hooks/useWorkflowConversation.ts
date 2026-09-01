@@ -159,6 +159,11 @@ type UseWorkflowConversationResult = {
     endpointLabel: string
     hasDetailPlan?: boolean
   }) => Promise<boolean>
+  handleStartAgentDetailConfirmation: (target: {
+    agentId: string
+    agentLabel: string
+    hasDetailPlan?: boolean
+  }) => Promise<boolean>
   handleStopGenerating: () => void
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -1060,6 +1065,29 @@ export function useWorkflowConversation({
     )
   }
 
+  /** 以用户选择的业务智能体作为单会话开发 Workflow 的详细设计起点。 */
+  const handleStartAgentDetailConfirmation = async (target: {
+    agentId: string
+    agentLabel: string
+    hasDetailPlan?: boolean
+  }): Promise<boolean> => {
+    if (!target.agentId || loading || workspaceBusy) return false
+    const identity = await ensureDevelopmentSession()
+    return sendWorkflowMessage(
+      `${target.hasDetailPlan ? '继续实现智能体' : '开始实现智能体'}：${target.agentLabel}`,
+      {
+        selectedAgentId: target.agentId,
+        selectedPageId: '',
+        detailTargetType: 'agent',
+        buildExecutionScope: { type: 'agent', targetId: target.agentId },
+        sessionIdentity: identity,
+        titleFrom: `实现${target.agentLabel}`,
+        reuseAssistantMessage: true,
+        suppressUserMessage: true
+      }
+    )
+  }
+
   const handleStopGenerating = (): void => {
     const runningIdentity = activeRun?.identity
     if (!runningIdentity || !loading || stopping) return
@@ -1260,6 +1288,7 @@ export function useWorkflowConversation({
     handleRetryPlan,
     handleStopPlan,
     handleSend,
+    handleStartAgentDetailConfirmation,
     handleStartEndpointDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,

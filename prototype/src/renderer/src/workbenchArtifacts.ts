@@ -51,6 +51,42 @@ export type PageDesign = {
   [key: string]: unknown
 }
 
+type RequirementAgentSummary = {
+  id?: string
+  name?: string
+  label?: string
+  purpose?: string
+  pages?: string[]
+  interaction?: string
+  boundaries?: string[]
+  permissions?: string[]
+  acceptance_criteria?: string[]
+  acceptanceCriteria?: string[]
+}
+
+type ProjectPlanAgentApiReference = {
+  apiContractId?: string
+  endpointId?: string
+  method?: string
+  path?: string
+}
+
+type ProjectPlanAgentSummary = {
+  id?: string
+  name?: string
+  label?: string
+  purpose?: string
+  model?: string
+  modelId?: string
+  pages?: string[]
+  tools?: string[]
+  apiReferences?: ProjectPlanAgentApiReference[]
+  knowledgeReferences?: string[]
+  permissions?: string[]
+  integration?: string
+  acceptanceCriteria?: string[]
+}
+
 export type TestCaseEstimate = {
   total: number
   groups: TestCaseEstimateGroup[]
@@ -416,6 +452,23 @@ export function buildRequirementSpecDoc(spec: Record<string, any>, appName?: str
   for (const page of (spec.pages || []) as Array<Record<string, any>>) {
     lines.push(`- **${page.name}** \`${page.path}\`：${page.description}`)
   }
+  const agents = (spec.agents || spec.agent_requirements || []) as RequirementAgentSummary[]
+  if (agents.length) {
+    lines.push('', '## 智能体需求')
+    for (const agent of agents) {
+      lines.push(`- **${agent.name || agent.label || agent.id}**：${agent.purpose || ''}`)
+      if (Array.isArray(agent.pages) && agent.pages.length) {
+        lines.push(`  - 页面入口：${agent.pages.map((page) => `\`${page}\``).join('、')}`)
+      }
+      if (agent.interaction) lines.push(`  - 交互：${agent.interaction}`)
+      for (const boundary of agent.boundaries || agent.permissions || []) {
+        lines.push(`  - 边界：${boundary}`)
+      }
+      for (const criterion of agent.acceptance_criteria || agent.acceptanceCriteria || []) {
+        lines.push(`  - 验收：${criterion}`)
+      }
+    }
+  }
   lines.push('', '## 核心业务流程')
   for (const flow of (spec.business_flows || []) as Array<Record<string, any>>) {
     lines.push(`- **${flow.name}**：${flow.description}`)
@@ -463,6 +516,40 @@ export function buildProjectPlanDoc(plan: Record<string, any>, appName?: string)
   lines.push('', '## 接口契约')
   for (const api of (plan.apis || []) as Array<Record<string, any>>) {
     lines.push(`- **${api.method}** \`${api.path}\` · ${api.summary}`)
+  }
+  const agents = (plan.agents || []) as ProjectPlanAgentSummary[]
+  if (agents.length) {
+    lines.push('', '## 智能体')
+    for (const agent of agents) {
+      lines.push(
+        `- **${agent.name || agent.label || agent.id}** \`${agent.id || ''}\`：${agent.purpose || ''}`
+      )
+      if (agent.model) {
+        lines.push(`  - 模型：${agent.model}${agent.modelId ? `（\`${agent.modelId}\`）` : ''}`)
+      }
+      if (Array.isArray(agent.pages) && agent.pages.length) {
+        lines.push(`  - 页面：${agent.pages.map((page) => `\`${page}\``).join('、')}`)
+      }
+      if (Array.isArray(agent.tools) && agent.tools.length) {
+        lines.push(`  - 工具：${agent.tools.join('、')}`)
+      }
+      for (const reference of agent.apiReferences || []) {
+        lines.push(
+          `  - 接口：\`${String(reference.method || 'GET').toUpperCase()} ${reference.path || ''}\`（契约：\`${reference.apiContractId || ''}\`，端点：\`${reference.endpointId || ''}\`）`
+        )
+      }
+      if (Array.isArray(agent.knowledgeReferences) && agent.knowledgeReferences.length) {
+        lines.push(`  - 知识：${agent.knowledgeReferences.map((item) => `\`${item}\``).join('、')}`)
+      }
+      for (const permission of agent.permissions || []) lines.push(`  - 权限：${permission}`)
+      if (agent.integration) lines.push(`  - 页面集成：${agent.integration}`)
+      for (const criterion of agent.acceptanceCriteria || []) lines.push(`  - 验收：${criterion}`)
+    }
+  }
+  const agentAcceptanceCriteria = (plan.agent_acceptance_criteria || []) as string[]
+  if (agentAcceptanceCriteria.length) {
+    lines.push('', '## 智能体集成验收')
+    for (const criterion of agentAcceptanceCriteria) lines.push(`- ${criterion}`)
   }
   lines.push('', '## 执行顺序')
   for (const step of (plan.execution_order || []) as Array<Record<string, any>>) {

@@ -55,8 +55,8 @@
 
 构建目标固定为三类文件：
 
-- Python 智能体定义：`backend/agents/<agent>_agent.py`。
-- Python 工具适配器：`backend/agents/<agent>_tool_adapter.py`。
+- Python 智能体定义：`agent-runtime/agents/<agent>.py`。
+- Python 工具适配器：`agent-runtime/tools/<agent>_tools.py`。
 - 页面侧接入：`frontend/src/pages/<pageId>/components/<Agent>.tsx`。
 
 每次只提交一个文件的 `codeChanges`，Diff 中显示新增/删除行、来源工具、目标路径和接受状态；接受后保存到当前应用工作区，DAG 同步显示已完成、运行中和待执行任务。

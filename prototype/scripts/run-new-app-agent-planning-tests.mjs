@@ -36,10 +36,15 @@ assert.deepEqual(planningAgent.entityIds, ['recheck-record'])
 assert.ok(projectPlan.agent_acceptance_criteria.length >= 3)
 
 const workbenchArtifactsUrl = new URL('../src/renderer/src/workbenchArtifacts.ts', import.meta.url)
-const workbenchArtifactsSource = (await readFile(workbenchArtifactsUrl, 'utf8')).replace(
-  "import { backendControllerPath, frontendPagePath } from './mock/workspaceFiles'",
-  "const backendControllerPath = (...parts: string[]): string => parts.join('/'); const frontendPagePath = (...parts: string[]): string => parts.join('/')"
-)
+const workbenchArtifactsSource = (await readFile(workbenchArtifactsUrl, 'utf8'))
+  .replace(
+    "import { backendControllerPath, frontendPagePath } from './mock/workspaceFiles'",
+    "const backendControllerPath = (...parts: string[]): string => parts.join('/'); const frontendPagePath = (...parts: string[]): string => parts.join('/')"
+  )
+  .replace(
+    /import \{\s*TEST_CASE_ESTIMATE_GROUPS,[\s\S]*?\} from '\.\/testCasePreparation'/,
+    'const TEST_CASE_ESTIMATE_GROUPS: Array<{ id: string; label: string; total: number; coverage: string }> = []'
+  )
 const transpiledArtifacts = ts.transpileModule(workbenchArtifactsSource, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
