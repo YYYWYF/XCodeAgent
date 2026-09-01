@@ -87,8 +87,10 @@ Template initialization injects shared response, pagination, business-exception,
 exception-handler, and CORS classes. Locate their real files and packages before writing;
 treat them as read-only template dependencies.
 
-- When compatible with the confirmed internal response Schema, Controllers return the
-  template `common.response.ResponseEntity<T>` through `success()` / `success(body)`. Do not
+- The confirmed internal Endpoint `response_schema_ref` describes the business body type
+  `T`, not the HTTP JSON root. Controllers return that DTO through the template
+  `common.response.ResponseEntity<T>` via `success()` / `success(body)`. Do not add
+  `returnCode`, `errorMsg`, or `body` fields to the business DTO or API Contract, and do not
   accidentally import `org.springframework.http.ResponseEntity` or create another wrapper.
 - Use `PageParam` and `PageResult<T>` only when the confirmed internal Endpoint declares
   pagination. Their existence never authorizes new pagination semantics.
@@ -99,9 +101,11 @@ treat them as read-only template dependencies.
 - Reuse existing CORS configuration. Do not add `@CrossOrigin`, another
   `WebMvcConfigurer`, or edits to template `common` files.
 
-The API Contract remains authoritative. If its response/status Schema is incompatible with
-the injected common types, do not modify shared template code or force a wrapper; return a
-contract mismatch/change request when the task cannot satisfy both within scope.
+The API Contract remains authoritative for the internal business schemas and status
+behavior. `ResponseEntity<T>` is the separate fixed transport contract, so wrapping the
+confirmed response DTO is not a schema mismatch. If the actual common class cannot carry
+the confirmed `T`, do not modify shared template code; return a contract mismatch/change
+request when the task cannot satisfy both within scope.
 
 ## Mapping and Pagination
 

@@ -52,6 +52,71 @@ def _test_deliverable(task_id: str, unit_id: str, owner: str, path: str) -> dict
 
 
 class BuildTaskPlannerTests(unittest.TestCase):
+    def test_real_api_prompt_plans_one_shared_response_entity_adapter(self) -> None:
+        """真实接口公共 Unit 必须规划唯一响应适配器并约束同 Unit API 依赖。"""
+
+        prompt = build_task_preparation_prompt(
+            {
+                "version": "1.0.0",
+                "executable_details": {
+                    "entity_designs": [
+                        {"entity_id": "Order", "data_source_type": "database"}
+                    ]
+                },
+            },
+            {},
+            {"required_unit_ids": ["frontend:api-client"]},
+        )
+
+        self.assertIn("frontend:api-client::response-entity-adapter", prompt)
+        self.assertIn("frontend/src/apis/responseEntity.ts", prompt)
+        self.assertIn("frontend.response-entity-adapter", prompt)
+        self.assertIn("Every business `frontend.api_module` task in the same Unit", prompt)
+        self.assertIn("SUC0000 as the only success code", prompt)
+
+    def test_static_prompt_does_not_plan_response_entity_adapter(self) -> None:
+        """纯静态数据 Unit 没有 HTTP 传输层，不得生成响应适配器任务。"""
+
+        prompt = build_task_preparation_prompt(
+            {
+                "version": "1.0.0",
+                "executable_details": {
+                    "entity_designs": [
+                        {"entity_id": "Notice", "data_source_type": "static"}
+                    ]
+                },
+            },
+            {},
+            {"required_unit_ids": ["frontend:data:notices"]},
+        )
+
+        self.assertNotIn("frontend:api-client::response-entity-adapter", prompt)
+
+    def test_reusable_api_client_prompt_reuses_response_entity_adapter(self) -> None:
+        """已复用公共 Unit 时不得重建适配器或引用历史任务 ID。"""
+
+        prompt = build_task_preparation_prompt(
+            {
+                "version": "1.0.0",
+                "executable_details": {
+                    "entity_designs": [
+                        {"entity_id": "Order", "data_source_type": "external_api"}
+                    ]
+                },
+            },
+            {},
+            {
+                "required_unit_ids": ["frontend:api-client"],
+                "reusable_tasks_by_unit": {
+                    "frontend:api-client": ["retained-api-client-task"]
+                },
+            },
+        )
+
+        self.assertIn("already owns the shared ResponseEntity transport adapter", prompt)
+        self.assertIn("do not copy any retained task id into dependencies", prompt)
+        self.assertNotIn("Emit exactly one shared frontend transport task", prompt)
+
     def test_task_prompt_declares_exact_deliverable_kind_allowlist(self) -> None:
         """任务规划提示必须声明唯一完整的交付物结构和类型白名单。"""
 

@@ -135,6 +135,8 @@ START
 
 页面任务只继承 `frontend:*` 公共 Unit 和同页面 Unit 内部依赖，不把 `backend:endpoint:*` 或 `database:*` 编译成任务依赖。数据库前置任务完成后，BuildScheduler 可把依赖已满足且文件锁不重叠的 backend 与 page 任务放入同一批次，Build Subgraph 再按 owner 并发调用前后端 Agent；并发工作区快照按各自任务的 `change_scope/target_files/allowed_paths` 过滤后再归属，防止前端文件计入后端结果。API Contract 是并行期间的共同事实来源，`app:integration` 仍等待 endpoint 与 page 两边完成后统一验证。该设计沿用 learn-coding-agent 的契约先行、执行后验证循环，采用 OpenCode 的独立 owner/tool 执行边界，并让 Deep Agents 的专业 Agent 仅获得各自任务范围；每个 owner 仍只接收当前批次的紧凑任务与正式产物引用，符合 128k 上下文预算。
 
+真实后端接口的 `frontend:api-client` Unit 由一个唯一共享任务生成 `frontend/src/apis/responseEntity.ts`，同 Unit 的业务 API 模块依赖并复用它；已复用公共 Unit 时不得重建适配器或复制历史任务 ID。TechnicalPlan API Contract 保持原有业务 Schema：`response_schema_ref` 表示 `ResponseEntity<T>.body` 中的 `T`，后端 Controller 通过模板 `common.response.ResponseEntity<T>` 返回，前端 API 模块按实际 `service.ts` 返回约定统一解包后只向页面暴露 `Promise<T>`。成功码固定为 `SUC0000`；无响应 Schema 的空结果只校验 envelope，static 前端数据模块不使用该 HTTP 传输适配器。
+
 `inspect_workspace` 完成后固定进入 `prepare_build_tasks`。数据库数据源不再触发额外的 Schema 探测节点：EntitySourceBinding 已读取受控 MySQL 元数据、确认目标表与字段绑定，并在最终确认时执行获批的建表或补列操作，将执行证据写回实体绑定产物。
 
 任务准备只读取已确认实体绑定的有界摘要。数据库摘要包含表名、字段绑定、表生成确认状态和执行状态，不包含连接凭据、完整 Schema 快照或待执行 DDL。数据库连接、Schema Diff 与执行服务继续供 EntitySourceBinding 和专门数据库流程使用，但不会写入主 Graph State 或重复进入任务规划模型上下文。

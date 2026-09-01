@@ -226,10 +226,18 @@ class BuiltinSkillsTests(unittest.TestCase):
         external_layers = (
             backend_root / "references/external-api/layer-implementation.md"
         ).read_text(encoding="utf-8")
+        normalized_layers = tuple(
+            " ".join(content.split()) for content in (layers, external_layers)
+        )
 
         self.assertIn("as read-only dependencies", backend_skill)
-        for content in (layers, external_layers):
+        for content in normalized_layers:
             self.assertIn("ResponseEntity", content)
+            self.assertIn("response_schema_ref", content)
+            self.assertIn("business body type", content)
+            self.assertIn("not the HTTP JSON root", content)
+            self.assertIn("returnCode", content)
+            self.assertIn("separate fixed transport contract", content)
             self.assertIn("PageParam", content)
             self.assertIn("PageResult", content)
             self.assertIn("BizException", content)
@@ -238,6 +246,23 @@ class BuiltinSkillsTests(unittest.TestCase):
             self.assertIn("@CrossOrigin", content)
             self.assertIn("allowed_paths", content)
         self.assertIn("must not modify, copy, or regenerate", bootstrap)
+
+    def test_frontend_skill_requires_shared_response_entity_unwrap(self) -> None:
+        """前端边界 Skill 必须固定真实接口的公共响应解包规则。"""
+
+        root = builtin_skills.validate_required_builtin_skills()
+        content = (
+            root / "frontend-template-modification-boundary" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("src/apis/responseEntity.ts", content)
+        self.assertIn("ResponseEntityBusinessError", content)
+        self.assertIn("ResponseEntityProtocolError", content)
+        self.assertIn("unwrapResponseEntity<T>()", content)
+        self.assertIn("unwrapEmptyResponseEntity()", content)
+        self.assertIn("SUC0000", content)
+        self.assertIn("response.data", content)
+        self.assertIn("不得导入", content)
 
     def test_source_tree_skills_are_available_and_complete(self) -> None:
         """确认源码内置技能完整且能生成页面卡片元数据。"""

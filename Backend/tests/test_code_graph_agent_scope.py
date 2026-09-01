@@ -96,6 +96,36 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertIn("provided array order", data_source_prompt)
         self.assertNotIn("regular backend verification", data_source_prompt)
 
+    def test_frontend_execution_prompt_requires_shared_response_entity_adapter(self) -> None:
+        """真实业务 API 必须按公共适配器解包，页面侧只消费业务类型。"""
+
+        prompt = _frontend_generation_prompt(
+            project_plan={"app": {"name": "demo"}},
+            build_task_plan={"summary": {}},
+            tasks=[
+                {
+                    "id": "frontend:api-client::response-entity-adapter",
+                    "unit_id": "frontend:api-client",
+                    "allowed_paths": ["frontend/src/apis/responseEntity.ts"],
+                    "source_refs": {
+                        "entity_designs": [
+                            {"entity_id": "Order", "data_source_type": "database"}
+                        ]
+                    },
+                }
+            ],
+        )
+
+        self.assertIn("ResponseEntity transport boundary", prompt)
+        self.assertIn("`response_schema_ref` describes `T`", prompt)
+        self.assertIn("Read the actual `src/apis/service.ts`", prompt)
+        self.assertIn("pass `response.data` when it returns AxiosResponse", prompt)
+        self.assertIn("`src/apis/responseEntity.ts`", prompt)
+        self.assertIn("`unwrapResponseEntity<T>()`", prompt)
+        self.assertIn("`unwrapEmptyResponseEntity()`", prompt)
+        self.assertIn("never expose ResponseEntity or `.body` to pages", prompt)
+        self.assertIn("Keep `service.ts` untouched", prompt)
+
     def test_frontend_execution_prompt_requires_exact_resources_import(self) -> None:
         """受控页面任务必须收到唯一 RESOURCES 目录的精确导入约束。"""
 
@@ -262,6 +292,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertNotIn("Data source is STATIC", page_prompt)
         self.assertIn("frontend-static-data-generate", static_prompt)
         self.assertIn("Data source is STATIC", static_prompt)
+        self.assertIn("must not import ResponseEntity or the adapter", static_prompt)
 
     def test_empty_or_unavailable_tool_result_keeps_workspace_search_fallback(self) -> None:
         """空图结果和查询异常必须显式返回文件搜索降级信息。"""

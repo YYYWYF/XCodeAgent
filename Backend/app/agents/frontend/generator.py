@@ -184,6 +184,35 @@ def _frontend_generation_prompt(
         if has_static_data_source
         else ""
     )
+    response_entity_instruction = (
+        "## ResponseEntity transport boundary\n"
+        "The confirmed API Contract remains the business-data contract: an endpoint's "
+        "`response_schema_ref` describes `T`, which is the value carried by the backend "
+        "`common.response.ResponseEntity<T>.body`; it does not describe the HTTP JSON root. "
+        "For every real backend business API, keep page/hooks types as `T` and exported API "
+        "functions as `Promise<T>`. Read the actual `src/apis/service.ts` before writing the "
+        "API module. Use its one real return convention: pass `response` to the shared unwrap "
+        "helper when the interceptor returns response data directly, or pass `response.data` "
+        "when it returns AxiosResponse. Do not add a compatibility branch that accepts both. "
+        "Type the HTTP payload as `ResponseEntity<T>` and never expose ResponseEntity or "
+        "`.body` to pages, hooks, ProTable requests, or response bindings.\n"
+        "The task `frontend:api-client::response-entity-adapter`, when dispatched, must create "
+        "exactly `src/apis/responseEntity.ts`. It exports `ResponseEntity<T>` with "
+        "`returnCode`, nullable/optional `errorMsg`, and nullable/optional `body`; "
+        "`ResponseEntityBusinessError` carrying returnCode and errorMsg; "
+        "`ResponseEntityProtocolError` for a malformed envelope or a missing non-empty body; "
+        "`unwrapResponseEntity<T>()`, which accepts the envelope, requires returnCode "
+        "`SUC0000`, requires a non-null body, and returns `T`; and "
+        "`unwrapEmptyResponseEntity()`, which requires only a valid SUC0000 envelope and "
+        "returns void. Every function and method in that file must have a Chinese purpose "
+        "comment. Business API modules import these definitions from `./responseEntity`; they "
+        "must not redeclare the envelope, success code, errors, or unwrap logic.\n"
+        "Endpoints with `response_schema_ref` use `unwrapResponseEntity<T>()`. Endpoints "
+        "without a response schema, such as an empty delete result, use "
+        "`unwrapEmptyResponseEntity()`. Static frontend data modules have no HTTP transport: "
+        "they must not import ResponseEntity or the adapter and continue returning their "
+        "contract business value directly. Keep `service.ts` untouched.\n\n"
+    )
     authorization_boundary = (
         "## Authorization boundary for auth template\n"
         "A task may contain platform-owned `source_refs.authorization.actions`. This is the only action-permission input. "
@@ -223,6 +252,7 @@ def _frontend_generation_prompt(
         + _page_template_instruction(page_template)
         + _ui_design_reference_instruction(ui_designs)
         + data_source_instruction
+        + response_entity_instruction
         + authorization_boundary
         + "For business APIs, import functions from `src/apis/` "
         "and invoke them through `useRequest`; page and component code must never call `fetch`, `axios`, or `service` directly. "

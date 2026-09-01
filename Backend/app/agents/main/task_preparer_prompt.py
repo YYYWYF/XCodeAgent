@@ -219,6 +219,10 @@ def _planning_algorithm_section(
         if str(unit_id).strip()
     }
     backend_source_types = set(source_groups) & _ENDPOINT_BACKEND_SOURCE_TYPES
+    reusable_tasks_by_unit = build_context.get("reusable_tasks_by_unit")
+    reusable_tasks_by_unit = (
+        reusable_tasks_by_unit if isinstance(reusable_tasks_by_unit, dict) else {}
+    )
     if backend_source_types and "backend:bootstrap" in planning_units:
         bootstrap_capabilities = []
         if "database" in backend_source_types:
@@ -237,6 +241,30 @@ def _planning_algorithm_section(
             "include every such exact path in target_files, allowed_paths, change_scope, and "
             "its backend.bootstrap deliverable. It must not generate endpoint Clients or DTOs."
         )
+    if backend_source_types and "frontend:api-client" in planning_units:
+        if reusable_tasks_by_unit.get("frontend:api-client"):
+            rules.append(
+                "The reusable frontend:api-client Unit already owns the shared ResponseEntity "
+                "transport adapter. Do not recreate its adapter task and do not copy any retained "
+                "task id into dependencies. New business API modules must import the existing "
+                "`frontend/src/apis/responseEntity.ts` capability."
+            )
+        else:
+            rules.append(
+                "Emit exactly one shared frontend transport task with id "
+                "`frontend:api-client::response-entity-adapter`, unit_id "
+                "`frontend:api-client`, owner `frontend`, and dependencies `[]`. It owns only "
+                "`frontend/src/apis/responseEntity.ts` and declares one "
+                "`frontend.shared_capability` deliverable whose target_id is "
+                "`response-entity-adapter` and whose provides contains "
+                "`frontend.response-entity-adapter`. Its Simplified Chinese description must "
+                "require the current transport contract: ResponseEntity<T>, "
+                "ResponseEntityBusinessError, ResponseEntityProtocolError, "
+                "unwrapResponseEntity<T>(), unwrapEmptyResponseEntity(), and SUC0000 as the "
+                "only success code. Every business `frontend.api_module` task in the same Unit "
+                "must depend on this adapter task and import the shared module; no business API "
+                "task may repeat the envelope types, success code, errors, or unwrap logic."
+            )
     if "database" in source_groups:
         rules.append(
             "For every confirmed database entity in each backend:endpoint:* Unit, emit "

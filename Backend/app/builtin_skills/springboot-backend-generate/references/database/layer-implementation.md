@@ -128,10 +128,12 @@ These files are read-only infrastructure owned by the template. Endpoint object,
 repository, service, and Controller tasks must not copy, rename, or modify them, and must
 not create a second implementation with the same responsibility:
 
-- When the Controller return type is compatible with the confirmed response schema, use
-  the template's `common.response.ResponseEntity`. Do not accidentally import
-  `org.springframework.http.ResponseEntity`, and do not create `Result`, `ApiResponse`, or
-  another wrapper.
+- The confirmed Endpoint `response_schema_ref` describes the business body type `T`, not
+  the HTTP JSON root. The Controller must return that DTO through the template's
+  `common.response.ResponseEntity<T>` by calling `success()` or `success(body)`. Do not add
+  `returnCode`, `errorMsg`, or `body` fields to the business DTO or API Contract. Do not
+  accidentally import `org.springframework.http.ResponseEntity`, and do not create
+  `Result`, `ApiResponse`, or another wrapper.
 - Use the project's existing Bean Validation conventions so validation failures flow into
   `BaseExceptionHandler`. Controllers must not catch `BizException` or manually call
   `ResponseEntity.failed` to imitate global exception handling.
@@ -142,10 +144,11 @@ not create a second implementation with the same responsibility:
 - Reuse the existing CORS configuration. Do not add `@CrossOrigin` to a Controller or
   create or modify another `WebMvcConfigurer`.
 
-The API Contract remains authoritative for interface methods, status behavior, and
-schemas. If its explicit response structure is incompatible with the template's shared
-classes, do not modify `common` or force the template wrapper onto the contract. Return a
-contract mismatch or change request when the current write scope cannot implement it.
+The API Contract remains authoritative for interface methods, status behavior, and the
+business request/response schemas. `ResponseEntity<T>` is the separate fixed transport
+contract, so wrapping the confirmed response DTO is not a schema mismatch. If the actual
+template common class cannot carry the confirmed `T`, do not modify `common`; return a
+contract mismatch or change request when the current write scope cannot implement both.
 
 ## Mapping and Pagination
 
