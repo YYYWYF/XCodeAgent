@@ -143,7 +143,7 @@ def _deliverable_kind_contract_prompt() -> str:
         "deliverable; do not encode an implementation language or framework as `kind`. "
         "Business acceptance checks are platform-owned and must not be returned in the "
         "task plan.\n"
-        "Every executable frontend or backend task MUST declare a non-empty `deliverables` "
+        "Every executable frontend, backend, or agent task MUST declare a non-empty `deliverables` "
         "array. Every deliverable MUST use exactly this JSON shape: "
         "{\"id\": \"stable unique id\", \"kind\": \"one allowed value above\", "
         "\"target_id\": \"formal page, endpoint, entity, or capability id\", "
@@ -332,6 +332,30 @@ def _planning_algorithm_section(
             "count remains contract-driven; reuse the existing page entry and add only "
             "page-owned business modules required by the contract."
         )
+    agent_units = sorted(
+        unit_id for unit_id in planning_units if unit_id.startswith("agent:")
+    )
+    if agent_units:
+        if "agent:runtime" in agent_units:
+            rules.append(
+                "Emit exactly one `agent:runtime::bootstrap` task with unit_id `agent:runtime`, "
+                "owner `agent`, task_type `agent.code`, and paths only under `agent-runtime/`. "
+                "It creates or updates the Python 3.12 sidecar entrypoint and pyproject dependency manifest."
+            )
+        rules.append(
+            "For every `agent:<agentId>` Unit except `agent:runtime`, emit exactly one "
+            "`agent:<agentId>::implementation` task with owner `agent` and task_type `agent.code`. "
+            "Its change_scope and `agent.runtime` deliverable must use exactly the Agent Contract "
+            "artifacts.agentPath, toolAdapterPath, and testPath. Implement capabilityBindings and "
+            "toolBindings without changing the formal contract."
+        )
+        rules.append(
+            "For each Java backend Endpoint referenced as an Agent Contract "
+            "invocation.gatewayEndpointId, plan an AG-UI SSE gateway implementation that proxies "
+            "to invocation.internalPath with scoped user context. It is not a CRUD repository "
+            "endpoint. For each page action bound to that gateway, plan AG-UI client stream "
+            "integration rather than an ordinary REST JSON call."
+        )
     if set(source_groups) & _ENDPOINT_BACKEND_SOURCE_TYPES:
         rules.append(
             "Resolve backend naming in this exact priority: reuse an existing package and "
@@ -439,6 +463,11 @@ def _task_rules_section(
             "ANY-OF by passing all keys to that one annotation. Never create or modify AuthConstants, "
             "authorization services, repositories, request-derived permission checks, or data rules."
         )
+    fragments.append(
+        "Every owner=agent path must stay under `/agent-runtime/`. Agent tasks implement only "
+        "the fixed Python 3.12 + DeepAgents sidecar and its tests. They must not modify frontend, "
+        "Java backend, formal artifacts, API contracts, or the Build DAG."
+    )
     return "\n".join(fragments)
 
 

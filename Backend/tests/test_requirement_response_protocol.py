@@ -109,6 +109,71 @@ class RequirementResponseProtocolTests(unittest.TestCase):
         self.assertIn("call ask_user", model.prompts[1])
         self.assertIn("complete JSON object", model.prompts[1])
 
+    def test_missing_agent_boundaries_defaults_to_empty_without_retry(self) -> None:
+        """模型仅遗漏可空边界字段时应补为空数组，且不得浪费一次模型重试。"""
+
+        model_spec = create_requirement_spec("创建库存管理系统")
+        page_id = model_spec["pages"][0]["pageId"]
+        model_spec["agent_requirements"] = [
+            {
+                "agentId": "inventory_assistant",
+                "name": "库存助手",
+                "purpose": "帮助用户理解库存状态。",
+                "capabilities": ["解释库存状态"],
+                "entryPageIds": [page_id],
+                "interactionMode": "conversation",
+            }
+        ]
+
+        class FakeStreamingModel:
+            """返回结构完整但遗漏可空 boundaries 字段的 RequirementSpec。"""
+
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            def bind_tools(self, _tools: list[object]) -> "FakeStreamingModel":
+                """保持与 LangChain ChatModel bind_tools 接口兼容。"""
+
+                return self
+
+            def stream(self, prompt: str):
+                """记录提示并返回缺少 boundaries 的可解析 JSON。"""
+
+                self.prompts.append(prompt)
+                yield AIMessageChunk(
+                    content=json.dumps(model_spec, ensure_ascii=False),
+                )
+
+        model = FakeStreamingModel()
+        settings = type("Settings", (), {"model_name": "test-model"})()
+        with (
+            patch.object(
+                requirements_analyzer.Settings,
+                "from_env",
+                return_value=settings,
+            ),
+            patch.object(
+                requirements_analyzer,
+                "create_chat_model",
+                return_value=model,
+            ),
+            patch.object(
+                requirements_analyzer,
+                "_extract_authorization_facts",
+                return_value={},
+            ),
+        ):
+            result = requirements_analyzer.analyze_requirements_with_chat_model(
+                "创建带库存助手的库存管理系统",
+                on_token=lambda _token: None,
+            )
+
+        self.assertEqual(len(model.prompts), 1)
+        self.assertEqual(
+            result["requirement_spec"]["agent_requirements"][0]["boundaries"],
+            [],
+        )
+
     def test_streaming_response_preserves_completion_metadata(self) -> None:
         """流式消息重组后必须保留结束原因和 token 用量，供脱敏诊断使用。"""
 

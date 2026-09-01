@@ -178,6 +178,10 @@ def task_implementation_contract(
         for detail in task_entity_designs(task)
         if str(detail.get("entity_id") or "") in entity_ids
     ]
+    agent_contracts = _agent_contracts_for_gateway_endpoints(
+        project_plan,
+        endpoint_ids,
+    )
     return {
         "kind": "endpoint",
         "api_contract": api_contracts[0] if api_contracts else {},
@@ -195,9 +199,31 @@ def task_implementation_contract(
             for detail in scoped_entity_designs
         ],
         "authorization_constraints": _endpoint_authorization_constraints(task),
+        **({"agent_contracts": agent_contracts} if agent_contracts else {}),
         "language": {"java_version": "8"},
         "verification_policy": _OUTER_VERIFICATION_POLICY,
     }
+
+
+def _agent_contracts_for_gateway_endpoints(
+    project_plan: dict[str, Any],
+    endpoint_ids: set[str],
+) -> list[dict[str, Any]]:
+    """投射以当前 Java Endpoint 作为 AG-UI 网关的 Agent 技术契约。"""
+
+    return [
+        dict(contract)
+        for contract in _dict_items(project_plan.get("agent_contracts"))
+        if str(
+            (
+                contract.get("invocation")
+                if isinstance(contract.get("invocation"), dict)
+                else {}
+            ).get("gatewayEndpointId")
+            or ""
+        )
+        in endpoint_ids
+    ]
 
 
 def _endpoint_authorization_constraints(task: dict[str, Any]) -> dict[str, Any] | None:

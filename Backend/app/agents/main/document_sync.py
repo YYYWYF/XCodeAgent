@@ -12,6 +12,7 @@ from app.services.project_plan import (
     TECHNICAL_PLAN_ARTIFACT_TYPE,
     create_project_plan,
     create_technical_plan,
+    technical_agent_contract_model_input,
     validate_project_plan_datasource_policy,
 )
 from app.services.product_plan import create_product_plan, validate_product_plan
@@ -93,7 +94,12 @@ def _sync_prompt(
             "ids/names/descriptions and the confirmed snake_case field definitions. API contracts bind "
             "one or more entities through entity_ids only. Never emit data_source_id, a top-level "
             "data_sources field, or entity data_source; source selection belongs to EntityDesign. "
-            "module_boundaries describes code/service ownership and must not define entities or fields.\n\n"
+            "module_boundaries describes code/service ownership and must not define entities or fields. "
+            "Preserve agent_contracts for every confirmed ProductPlan agent, including stable agentId, "
+            "gateway Endpoint, capability/tool bindings, Python 3.12 + DeepAgents sidecar runtime, AG-UI "
+            "SSE invocation, security boundary, and artifact paths. Do not remove or redesign hidden Agent "
+            "contract fields unless the edited Markdown explicitly changes the corresponding visible Agent "
+            "technical section.\n\n"
         )
         if artifact_name == "TechnicalPlan"
         else (
@@ -228,10 +234,10 @@ def sync_project_plan_from_markdown(
                 )
             }
             | {
-                "authorization_data_bindings": (
-                    (existing_plan.get("authorization_manifest") or {})
-                    .get("bindings", {})
-                    .get("dataRules", [])
+                "agent_contracts": technical_agent_contract_model_input(
+                    synced.get("agent_contracts")
+                    if isinstance(synced.get("agent_contracts"), list)
+                    else existing_plan.get("agent_contracts")
                 )
             },
             datasource_type=datasource_type,

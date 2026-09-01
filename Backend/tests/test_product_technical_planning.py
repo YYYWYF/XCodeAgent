@@ -388,7 +388,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("do not include data_sources", _requirements_prompt("创建库存系统"))
         self.assertIn("Do not return assumptions, product risks", _requirements_prompt("创建库存系统"))
 
-    def test_technical_prompt_uses_current_four_part_contract(self) -> None:
+    def test_technical_prompt_uses_current_five_part_contract(self) -> None:
         """TechnicalPlan 提示词必须使用产品上下文生成实体和新分页字段。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
@@ -406,10 +406,14 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             None,
         )
 
-        self.assertIn("architecture, entities, api_contracts, and pages", prompt)
+        self.assertIn(
+            "architecture, entities, api_contracts, pages, and agent_contracts",
+            prompt,
+        )
         self.assertNotIn("authorization_data_bindings", prompt)
         self.assertIn("entity_field_ref", prompt)
         self.assertIn("computed, aggregated, and transport properties may omit the mapping", prompt)
+        self.assertIn("has exactly five sections", prompt)
         self.assertIn("has exactly four same-level properties", prompt)
         self.assertIn("total, pageSize, current, and list", prompt)
         self.assertIn("Product goal context", prompt)
@@ -909,12 +913,14 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                 "entities",
                 "api_contracts",
                 "pages",
+                "agent_contracts",
                 "authorization_manifest",
                 "product_plan_sha256",
                 "ui_designs_sha256",
             },
         )
         self.assertEqual(attached["artifact_type"], "technical-plan")
+        self.assertEqual(attached["agent_contracts"], [])
         self.assertNotIn("page_implementation_contracts", attached)
         self.assertNotIn("frontend_pages", attached)
         self.assertNotIn("requirements_overview", attached)

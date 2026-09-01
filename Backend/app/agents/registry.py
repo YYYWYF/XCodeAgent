@@ -5,6 +5,7 @@ from functools import lru_cache
 from typing import Any
 
 from app.agents.database import create_database_agent
+from app.agents.agent_runtime import create_agent_runtime_agent
 from app.agents.code_analyze import create_code_analyze_agent
 from app.agents.code_review_repair import create_code_review_repair_agent
 from app.agents.data_source import create_data_source_agent
@@ -41,6 +42,7 @@ class AgentBundle:
     frontend: Any
     data_source: Any
     database: Any
+    agent_runtime: Any
     repair_planner: Any
     small_task: Any
     workspace_assistant: Any
@@ -145,6 +147,13 @@ def _create_agent_bundle_for_workspace(
         agent_memory_backend=agent_memory.backend,
         required_user_skills_prompt=required_user_skills_prompt,
     )
+    agent_runtime = create_agent_runtime_agent(
+        chat_model,
+        workspace_root=workspace_root,
+        user_skills_backend=user_skills.backend,
+        agent_memory_backend=agent_memory.backend,
+        required_user_skills_prompt=required_user_skills_prompt,
+    )
     repair_planner = create_repair_planner_agent(
         chat_model,
         workspace_root=workspace_root,
@@ -185,6 +194,7 @@ def _create_agent_bundle_for_workspace(
         frontend=frontend,
         data_source=data_source,
         database=database,
+        agent_runtime=agent_runtime,
         repair_planner=repair_planner,
         small_task=small_task,
         test_generation=test_generation,

@@ -711,6 +711,9 @@ def _analyze_requirements_once(
     if isinstance(effective_agent_spec, dict):
         # 此标记只驱动配置前置澄清，不能成为正式需求文档的一部分。
         effective_agent_spec.pop("authorization_config_conflict", None)
+        effective_agent_spec = _normalize_optional_agent_requirement_fields(
+            effective_agent_spec
+        )
     if not asks_for_clarification:
         _validate_complete_requirement_spec(
             effective_agent_spec,
@@ -947,3 +950,19 @@ def _validate_complete_requirement_spec(
             "需求 AI 返回的新 RequirementSpec 缺少完整字段："
             + "、".join(missing_fields)
         )
+
+
+def _normalize_optional_agent_requirement_fields(
+    agent_spec: dict[str, Any],
+) -> dict[str, Any]:
+    """为模型遗漏的可空智能体边界补空数组，同时保留其他字段的严格校验。"""
+
+    normalized = deepcopy(agent_spec)
+    agent_requirements = normalized.get("agent_requirements")
+    if not isinstance(agent_requirements, list):
+        return normalized
+    for agent in agent_requirements:
+        if isinstance(agent, dict) and "boundaries" not in agent:
+            # boundaries 的空数组有明确契约语义，不需要模型或产品侧发明业务事实。
+            agent["boundaries"] = []
+    return normalized

@@ -140,6 +140,26 @@ class AgentRequirementSpecTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "agent_requirements"):
             _validate_complete_requirement_spec(spec)
 
+    def test_requirement_model_contract_rejects_invalid_agent_boundaries_type(self) -> None:
+        """模型显式返回非数组业务边界时仍必须拒绝，不能按缺失字段兜底。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        page_id = spec["pages"][0]["pageId"]
+        spec["agent_requirements"] = [
+            {
+                "agentId": "inventory_assistant",
+                "name": "库存助手",
+                "purpose": "解释库存状态。",
+                "capabilities": ["解释库存状态"],
+                "entryPageIds": [page_id],
+                "interactionMode": "conversation",
+                "boundaries": "不得修改库存数据",
+            }
+        ]
+
+        with self.assertRaisesRegex(ValueError, r"agent_requirements\[0\]\.boundaries"):
+            _validate_complete_requirement_spec(spec)
+
     def test_requirement_markdown_renders_business_agent_section(self) -> None:
         """需求文档必须展示职责、能力、入口、交互方式与业务边界。"""
 

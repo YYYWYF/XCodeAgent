@@ -15,6 +15,7 @@ from app.services.project_plan import (
     apply_project_plan_feedback,
     create_project_plan,
     create_technical_plan,
+    technical_agent_contract_model_input,
 )
 from app.utils.model_output import extract_json_object
 
@@ -24,7 +25,8 @@ BACKEND_TECH_STACK_REQUIREMENT = (
     "development language Java8; framework Springboot; database MySQL8; cache Redis. "
     "ProjectPlan.architecture.backend and architecture.data must explicitly mention this stack, "
     "and api/data planning must not choose Node.js, Python, Go, PostgreSQL, SQLite, MongoDB, "
-    "or any alternative backend/database/cache stack."
+    "or any alternative backend/database/cache stack. Python is allowed only in the separately "
+    "declared agent_runtime sidecar when ProductPlan.agents is non-empty."
 )
 DATASOURCE_PENDING_REQUIREMENT = (
     "The application has no app-level data source type. Do NOT emit data_source on any entity and "
@@ -47,6 +49,9 @@ def _technical_planning_prompt(
         else {}
     )
     pages = [item for item in product_plan.get("pages", []) if isinstance(item, dict)]
+    product_agents = [
+        item for item in product_plan.get("agents", []) if isinstance(item, dict)
+    ]
     entity = {
         "id": "Order",
         "name": "Order",
@@ -56,7 +61,11 @@ def _technical_planning_prompt(
     entity_id = str(entity.get("id") or "Order")
     entity_fields = [item for item in entity.get("fields", []) if isinstance(item, dict)]
     field_name = str((entity_fields[0] if entity_fields else {}).get("name") or "order_number")
-    page_id = str((pages[0] if pages else {}).get("pageId") or "order_list_page")
+    page_ids = [
+        str(page.get("pageId") or "").strip()
+        for page in pages
+        if str(page.get("pageId") or "").strip()
+    ] or ["order_list_page"]
     contract_id = f"{entity_id.lower()}_api"
     list_schema_id = f"{entity_id}ListOutput"
     item_schema_id = f"{entity_id}ListItem"
@@ -144,8 +153,104 @@ def _technical_planning_prompt(
                     "action_implementations": [],
                 },
             }
+            for page_id in page_ids
         ],
+        "agent_contracts": [],
     }
+    if product_agents:
+        example_agent = product_agents[0]
+        example_agent_id = str(example_agent.get("agentId") or "business_agent")
+        capabilities = [
+            item
+            for item in example_agent.get("capabilities", [])
+            if isinstance(item, dict)
+        ]
+        example_capability_id = str(
+            (capabilities[0] if capabilities else {}).get("capabilityId")
+            or "answer_business_question"
+        )
+        gateway_endpoint_id = f"{contract_id}.agent_message"
+        response_example["api_contracts"][0]["endpoints"].append(
+            {
+                "id": gateway_endpoint_id,
+                "method": "POST",
+                "path": f"/api/agents/{example_agent_id}/messages",
+                "summary": "Invoke the business agent through the Java AG-UI gateway.",
+                "parameters": [],
+                "request_schema_ref": None,
+                "response_schema_ref": None,
+                "error_codes": ["AGENT_UNAVAILABLE"],
+                "authentication": {"required": True},
+            }
+        )
+        example_pages_by_id = {
+            str(page.get("pageId") or ""): page
+            for page in response_example["pages"]
+            if isinstance(page, dict)
+        }
+        for page_binding in (
+            item
+            for item in example_agent.get("pageActionBindings", [])
+            if isinstance(item, dict)
+        ):
+            binding_page_id = str(page_binding.get("pageId") or "").strip()
+            example_page = example_pages_by_id.get(binding_page_id)
+            if example_page is None:
+                continue
+            references = example_page["references"]
+            references["endpoint_dependencies"].append(
+                {
+                    "endpoint_id": gateway_endpoint_id,
+                    "usage": "write",
+                    "trigger": "User sends an Agent message",
+                    "required_for_initial_load": False,
+                }
+            )
+            references["action_implementations"].extend(
+                {
+                    "actionId": str(action_id),
+                    "endpointId": gateway_endpoint_id,
+                }
+                for action_id in page_binding.get("actionIds", [])
+                if str(action_id).strip()
+            )
+        response_example["agent_contracts"] = [
+            {
+                "agentId": example_agent_id,
+                "invocation": {"gatewayEndpointId": gateway_endpoint_id},
+                "model": {"selection": "project_default"},
+                "capabilityBindings": [
+                    {
+                        "capabilityId": example_capability_id,
+                        "toolIds": ["query_business_data"],
+                    }
+                ],
+                "toolBindings": [
+                    {
+                        "toolId": "query_business_data",
+                        "apiContractId": contract_id,
+                        "endpointId": f"{contract_id}.list",
+                        "accessMode": "read",
+                    }
+                ],
+                "knowledgeReferences": [],
+                "session": {
+                    "supportsMultiTurn": bool(
+                        (example_agent.get("interaction") or {}).get(
+                            "supportsMultiTurn"
+                        )
+                    ),
+                    "memory": (
+                        "conversation"
+                        if (example_agent.get("interaction") or {}).get(
+                            "supportsMultiTurn"
+                        )
+                        is True
+                        else "none"
+                    ),
+                },
+            }
+        ]
     product_goal_context = {
         "app": {
             key: product_plan.get("app", {}).get(key)
@@ -180,6 +285,15 @@ def _technical_planning_prompt(
             if page.get("pageId")
         ]
     }
+    agent_context = {
+        "agents": product_agents,
+        "runtime_policy": {
+            "language": "Python 3.12",
+            "framework": "DeepAgents",
+            "deployment": "independent sidecar",
+            "client_transport": "AG-UI SSE through Java8/Springboot gateway",
+        },
+    }
     revision_context = (
         "Revise the existing TechnicalPlan according to planning_adjustment_request and return the complete five-part object.\n"
         f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"
@@ -188,7 +302,7 @@ def _technical_planning_prompt(
     )
     return (
         "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
-        "The object has exactly four sections: architecture, entities, api_contracts, and pages.\n\n"
+        "The object has exactly five sections: architecture, entities, api_contracts, pages, and agent_contracts.\n\n"
         "Field definitions:\n"
         "1. architecture is a technical summary. frontend describes the client form and communication style; "
         "backend describes the Java8/Springboot service boundary; data describes MySQL8 persistence and Redis caching.\n"
@@ -224,6 +338,17 @@ def _technical_planning_prompt(
         "uses {actionId, endpointId}; a business sequence uses {actionId, stepBindings:[{stepId, endpointId}]}. "
         "Every selected endpointId exists in api_contracts and also appears in that page's endpoint_dependencies. "
         "The page set covers every upstream ProductPlan pageId.\n"
+        "5. agent_contracts is empty when ProductPlan.agents is empty. Otherwise it covers ProductPlan.agents exactly "
+        "and in order. Each item has exactly agentId, invocation, model, capabilityBindings, toolBindings, "
+        "knowledgeReferences, and session. invocation contains only gatewayEndpointId, which references a Java "
+        "gateway Endpoint in api_contracts. model is exactly {selection: project_default}. capabilityBindings covers "
+        "every ProductPlan capabilityId in order and binds it to stable toolIds. Each toolBinding contains toolId, "
+        "apiContractId, endpointId, and accessMode(read or write), and references a real non-gateway Endpoint. session "
+        "contains supportsMultiTurn copied from ProductPlan; memory is conversation only when supportsMultiTurn is "
+        "true and otherwise is none. The platform adds the "
+        "fixed Python 3.12 + DeepAgents sidecar runtime, AG-UI SSE transport, internal path, security, artifact paths, "
+        "and required checks after validating these bindings. Never replace the Java8/Springboot business backend "
+        "with Python and never let the client call the Python sidecar directly.\n"
         "Do not emit authorization_manifest, resourceKey, roles, permission bindings, dataRules, policyKey, data-policy bindings, SQL, or executable authorization rules. The platform deterministically compiles all V1 page/action/system resources and Endpoint ANY-OF bindings after your output passes validation.\n\n"
         "Complete result example:\n"
         f"{json.dumps(response_example, ensure_ascii=False, indent=2)}\n\n"
@@ -241,6 +366,8 @@ def _technical_planning_prompt(
         f"{json.dumps(page_context, ensure_ascii=False)}\n\n"
         "- Business-action context: page-scoped ProductPlan actions. Use it to select endpoint implementations only for business actions and business steps.\n"
         f"{json.dumps(action_context, ensure_ascii=False)}\n\n"
+        "- Agent context: confirmed ProductPlan agent capabilities, entry actions, interaction behavior, and fixed runtime boundary.\n"
+        f"{json.dumps(agent_context, ensure_ascii=False)}\n\n"
         f"{revision_context}"
         f"planning_adjustment_request:\n{str(requirement_spec.get('planning_adjustment_request') or '').strip()}\n"
     )
@@ -670,6 +797,9 @@ def repair_technical_plan_api_contracts_with_chat_model(
             "entities": deepcopy(existing_plan.get("entities", [])),
             "api_contracts": merged_contracts,
             "pages": deepcopy(existing_plan.get("pages", [])),
+            "agent_contracts": technical_agent_contract_model_input(
+                existing_plan.get("agent_contracts")
+            ),
         },
     )
 

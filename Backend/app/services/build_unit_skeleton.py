@@ -172,6 +172,13 @@ def _build_units(
         f"page:{page_id}"
         for page_id in _ids(project_plan_page_records(project_plan), "pageId")
     )
+    agent_contracts = _dict_items(project_plan.get("agent_contracts"))
+    if agent_contracts:
+        unit_ids.append("agent:runtime")
+        unit_ids.extend(
+            f"agent:{agent_id}"
+            for agent_id in _ids(agent_contracts, "agentId")
+        )
     return {
         unit_id: _unit_definition(
             unit_id,
@@ -203,6 +210,7 @@ def _unit_definition(unit_id: str, existing_unit: Any) -> dict[str, Any]:
             if kind == "backend" and ":" in target_id
             else {}
         ),
+        **({"agent_id": target_id} if kind == "agent" and target_id != "runtime" else {}),
         "status": existing.get("status", "not_prepared"),
         "task_ids": list(existing.get("task_ids") or []),
         "depends_on_unit_ids": list(existing.get("depends_on_unit_ids") or []),
@@ -242,6 +250,15 @@ def _unit_graph(
         )
         for contract in contracts
     }
+    endpoint_units_by_id = {
+        str(endpoint.get("id") or ""): _endpoint_unit_id(
+            str(contract.get("id") or ""),
+            str(endpoint.get("id") or ""),
+        )
+        for contract in contracts
+        for endpoint in _dict_items(contract.get("endpoints"))
+        if contract.get("id") and endpoint.get("id")
+    }
     page_contracts_by_id = {
         str(contract.get("pageId") or contract.get("id")): contract
         for contract in _dict_items(project_plan.get("page_implementation_contracts"))
@@ -273,6 +290,55 @@ def _unit_graph(
             if contract_source_type in {"database", "external_api"}:
                 edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
             edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
+
+    agent_contracts = _dict_items(project_plan.get("agent_contracts"))
+    if agent_contracts:
+        edges.append(
+            {"from": "application:root", "to": "agent:runtime", "type": "contains"}
+        )
+    for contract in agent_contracts:
+        agent_id = str(contract.get("agentId") or "").strip()
+        if not agent_id:
+            errors.append("Agent contract without agentId has no Build Unit.")
+            continue
+        agent_unit_id = f"agent:{agent_id}"
+        if agent_unit_id not in build_units:
+            errors.append(f"Agent contract {agent_id} has no Unit.")
+            continue
+        edges.extend(
+            [
+                {"from": "application:root", "to": agent_unit_id, "type": "contains"},
+                {"from": "agent:runtime", "to": agent_unit_id, "type": "depends_on"},
+            ]
+        )
+        for binding in _dict_items(contract.get("toolBindings")):
+            endpoint_id = str(binding.get("endpointId") or "").strip()
+            endpoint_unit_id = endpoint_units_by_id.get(endpoint_id, "")
+            if endpoint_unit_id not in build_units:
+                errors.append(
+                    f"Agent {agent_id} tool {binding.get('toolId') or 'unknown'} references unknown endpoint Unit {endpoint_unit_id or endpoint_id}."
+                )
+                continue
+            edges.append(
+                {"from": endpoint_unit_id, "to": agent_unit_id, "type": "depends_on"}
+            )
+        invocation = (
+            contract.get("invocation")
+            if isinstance(contract.get("invocation"), dict)
+            else {}
+        )
+        gateway_endpoint_id = str(
+            invocation.get("gatewayEndpointId") or ""
+        ).strip()
+        gateway_unit_id = endpoint_units_by_id.get(gateway_endpoint_id, "")
+        if gateway_unit_id not in build_units:
+            errors.append(
+                f"Agent {agent_id} references unknown gateway endpoint Unit {gateway_unit_id or gateway_endpoint_id}."
+            )
+        else:
+            edges.append(
+                {"from": agent_unit_id, "to": gateway_unit_id, "type": "depends_on"}
+            )
 
     for page in project_plan_page_records(project_plan):
         page_id = str(page.get("pageId") or "")
@@ -367,6 +433,7 @@ def _skeleton_fingerprint(
         "pages": project_plan_page_records(project_plan),
         "data_sources": plan_data_sources(project_plan),
         "api_contracts": project_plan.get("api_contracts"),
+        "agent_contracts": project_plan.get("agent_contracts"),
         "workspace_revision": (workspace_snapshot or {}).get("workspace_revision"),
         "tech_stack": (workspace_snapshot or {}).get("tech_stack"),
         "entrypoints": (workspace_snapshot or {}).get("entrypoints"),
@@ -426,6 +493,8 @@ def _unit_identity(unit_id: str) -> tuple[str, str]:
         return "backend", unit_id.removeprefix("backend:endpoint:")
     if unit_id.startswith("backend:"):
         return "backend", unit_id.removeprefix("backend:")
+    if unit_id.startswith("agent:"):
+        return "agent", unit_id.removeprefix("agent:")
     if unit_id.startswith("frontend:"):
         return "frontend", unit_id.removeprefix("frontend:")
     return "application", ""

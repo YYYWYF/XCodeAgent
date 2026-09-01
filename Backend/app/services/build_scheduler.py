@@ -769,9 +769,9 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, str]:
-    """为调度选择提供稳定排序，数据库、后端、前端任务依次执行。"""
+    """为调度选择提供稳定排序，数据库、后端、Agent、前端任务依次排序。"""
 
-    owner_priority = {"database": 0, "backend": 1, "frontend": 2}
+    owner_priority = {"database": 0, "backend": 1, "agent": 2, "frontend": 3}
     return (owner_priority.get(str(task.get("owner")), 9), str(task.get("id")))
 
 

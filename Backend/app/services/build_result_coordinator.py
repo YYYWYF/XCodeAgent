@@ -283,7 +283,7 @@ def _task_result_from_report(
 def _task_status_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
     """统计任务状态和执行归属，用于构建阶段摘要。"""
 
-    return {
+    counts = {
         "total": len(tasks),
         "completed": len([task for task in tasks if task.get("status") == "completed"]),
         "already_satisfied": len([task for task in tasks if task.get("status") == "already_satisfied"]),
@@ -294,6 +294,9 @@ def _task_status_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
         "backend": len([task for task in tasks if task.get("owner") == "backend"]),
         "database": len([task for task in tasks if task.get("owner") == "database"]),
     }
+    if any(task.get("owner") == "agent" for task in tasks):
+        counts["agent"] = len([task for task in tasks if task.get("owner") == "agent"])
+    return counts
 
 
 def _failure_reason_from_result(result: dict[str, Any] | None) -> str:

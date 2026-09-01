@@ -12,6 +12,7 @@ from langgraph.config import get_stream_writer
 
 from app.config import dag_business_self_check_enabled
 from app.agents.database.generator import generate_database_with_deep_agent
+from app.agents.agent_runtime.generator import generate_agent_runtime_with_deep_agent
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
 from app.agents.frontend.generator import generate_frontend_with_deep_agent
 from app.agents.repair_planner import (
@@ -92,6 +93,8 @@ def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
         return "backend.deep_agent", generate_data_sources_with_deep_agent
     if owner == "frontend":
         return "frontend.deep_agent", generate_frontend_with_deep_agent
+    if owner == "agent":
+        return "agent.deep_agent", generate_agent_runtime_with_deep_agent
     return None
 
 
