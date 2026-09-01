@@ -290,6 +290,19 @@ DAG 生成时只做前置条件检查：
 `requires_user_input` 的前端投影也必须按实际原因区分正式产物前置失败、详细设计前置失败、DAG 校验失败和
 DAG 确认等待，不能把所有 `prepare_build_tasks` 用户输入都显示为“项目计划未确认”。
 
+### 4.7 业务智能体 Build Unit 与 CodeRunner
+
+TechnicalPlan `agent_contracts[]` 非空时，继续使用同一 `build-dag.v3` 和 BuildScheduler，不建立第二套任务计划或执行 Graph：
+
+- 建立共享 `agent:runtime` Unit，负责 `agent-runtime/main.py` 与 `agent-runtime/pyproject.toml` 等 Python 3.12 sidecar 基础文件；
+- 每个 `agentId` 建立 `agent:<agentId>` Unit，负责契约给出的 `artifacts.agentPath`、`toolAdapterPath` 和 `testPath`；
+- Unit 依赖固定为“工具 API Endpoint Unit → `agent:<agentId>` → Java AG-UI 网关 Endpoint Unit → 页面 Unit”，且 `agent:runtime → agent:<agentId>`；
+- `agent` owner 只允许 `task_type=agent.code`、`agent.runtime` 交付物和 `agent-runtime/**` 写入范围；前端、Java 后端、正式规划产物和 DAG 均不可写；
+- `agent:runtime` 生成一个 bootstrap 任务，每个业务智能体生成一个实现任务；Java 网关和页面仍分别由现有 backend/frontend owner 生成，但必须消费同一 Agent Contract，使用 AG-UI SSE，不得把智能体交互退化为普通 REST JSON；
+- Agent Runtime 使用独立 Deep Agent CodeRunner，写权限由 workspace permission 限定到 `agent-runtime/**`，执行结果继续进入现有 Diff 归属、工程检查、失败分类和受限 Repair 流程。
+
+普通应用固定使用 `agent_contracts: []`，Unit 骨架不创建 `agent:*`，现有 backend/frontend/database 任务算法、调度和摘要结构保持不变。
+
 ## 5. 第二批：补齐最小 DAG 确认
 
 ### 5.1 确认时机

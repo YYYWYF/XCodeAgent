@@ -283,7 +283,7 @@ SQLite checkpointer 保存主 Graph 状态；恢复只携带阻断节点需要�
 
 - 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为唯一工作区事实来源，不读取、创建、修改或删除代码文件，也不查询或注入 request-scoped 代码图上下文；
 - 生成稳定的 `task_id`；
-- Normal Build 只规划 `backend`、`frontend` 代码任务；`database` owner、`database:*` Unit 和数据库变更任务由实体确认流程负责，不进入本 DAG；
+- Normal Build 默认规划 `backend`、`frontend` 代码任务；TechnicalPlan 存在 `agent_contracts[]` 时额外规划受限的 `agent` 代码任务。`database` owner、`database:*` Unit 和数据库变更任务仍由实体确认流程负责，不进入本 DAG；
 - 后端任务类型使用 `backend.code`，前端任务类型使用 `frontend.code`，数据库表结构和数据源操作不从已确认实体上下文重新推导；
 - 计算任务依赖；
 - 标记可并行任务；
@@ -300,7 +300,8 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 从 `PageImple
 - `application:root` 表示整应用根；
 - `backend:bootstrap` 表示后端共享基础能力：数据库来源幂等补齐 Maven、数据源与 MyBatis-Plus，外部 API 来源幂等补齐与模板 Spring Boot 2.7.2 对应的 Spring Cloud OpenFeign 依赖和全局扫描启用；static-only 范围不创建该 Unit；
 - `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
-- `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；auth 模板的 `resources.ts` 与 `routes.tsx` 托管区由 Build 启动前的平台投影登记，不属于 Build Unit；
+- `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；菜单、普通/隐藏路由由模板初始化独占，auth 模板的 `resources.ts` 与 `routes.tsx` 托管区由 Build 启动前的平台投影登记，均不建立 Build Unit；
+- `agent:runtime` 表示独立 Python 3.12 + DeepAgents sidecar 的共享基础能力；`agent:<agentId>` 表示单个业务智能体定义、工具适配与测试。工具 Endpoint Unit 依赖先于 Agent Unit，Agent Unit 先于 Java AG-UI 网关 Endpoint Unit，页面继续依赖网关 Endpoint；普通应用不创建任何 `agent:*` Unit；
 - `page:<pageId>` 表示页面实现范围。
 
 页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。包含 database 或 external_api 实体的范围都要求 `backend:bootstrap`，并由 Unit Graph 建立 `backend:bootstrap → backend:endpoint:*`；bootstrap 按实际来源组合 MyBatis/MySQL 与 OpenFeign 能力，只生成一个共享任务。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。
@@ -401,7 +402,7 @@ scheduler loop:
 
 - `select_ready_build_batch`：只选择 `pending` 且依赖全部 `completed` 的任务；依赖 `failed` 的下游任务保持阻塞；
 - 文件锁来自 `lock_scope`、`change_scope.path`、`target_files` 和 `allowed_paths`，同一批 ready task 之间不能冲突；
-- 任务按 `owner` 派发给对应 CodeRunner：`database` 使用 Database Change Agent，`backend` 使用 Data Source Generation Agent，`frontend` 使用 Frontend Generation Agent；
+- 任务按 `owner` 派发给对应 CodeRunner：`database` 使用 Database Change Agent，`backend` 使用 Data Source Generation Agent，`agent` 使用 Agent Runtime Generation Agent，`frontend` 使用 Frontend Generation Agent；
 - CodeRunner 只返回结构化 `TaskResult`，不更新 DAG；
 - 同 owner 批次的 workspace diff 必须按每个任务的授权路径重新归属；一个任务只能记录命中自身范围的 `changed_files`，不能把整批变更复制给所有结果；
 - `database` owner 不参与 workspace diff 归属；它必须在执行前重新获取当前真实数据库摘要，由只读 Database Change Agent 生成 SQL 计划，再由确定性数据库执行服务完成风险分类、审批和执行证据记录；
@@ -430,7 +431,7 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 ### Skill 与上下文预算
 
-当前一等 Deep Agent 是 Frontend Generation、Data Source Generation、Database Change、Test、RepairPlanner、SmallTask。requirements、project_planning 和 prepare_build_tasks 等 direct ChatModel 节点不加载 Skill；development_readiness_gate 是纯确定性节点。
+当前一等 Deep Agent 是 Frontend Generation、Data Source Generation、Agent Runtime Generation、Database Change、Test、RepairPlanner、SmallTask。requirements、project_planning 和 prepare_build_tasks 等 direct ChatModel 节点不加载 Skill；development_readiness_gate 是纯确定性节点。
 
 内置 skill 的宿主目录在源码模式为 `Backend/app/builtin_skills/`，在 PyInstaller onedir 模式为后端资源目录 `_internal/app/builtin_skills/`。Agent 不接触宿主绝对路径，而是通过只读 CompositeBackend 路由 `/.xcodeagent/builtin-skills/` 发现和读取 skill；文件权限与 `delete_file` 都拒绝写入或删除该命名空间。Backend Python 是必需 skill 名称和文件的唯一事实来源：PyInstaller staging 和 Backend 启动执行完整性校验并在缺失时 fail fast；Electron 打包前和启动前只检查通用 `builtin_skills` 资源目录，不复制具体 skill 清单。
 
@@ -704,7 +705,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 
 ## 一等 Deep Agent
 
-本项目的一等 Deep Agent 包含 Frontend Generation、Data Source Generation、Database Change、Test、RepairPlanner、CodeAnalyze 和 CodeReviewRepair。`agents/main/` 只作为历史命名下的 direct ChatModel 边界目录，用于需求、规划、页面设计、任务准备和 Markdown 同步；它不再声明或创建 Main DeepAgent。
+本项目的一等 Deep Agent 包含 Frontend Generation、Data Source Generation、Agent Runtime Generation、Database Change、Test、RepairPlanner、CodeAnalyze 和 CodeReviewRepair。`agents/main/` 只作为历史命名下的 direct ChatModel 边界目录，用于需求、规划、页面设计、任务准备和 Markdown 同步；它不再声明或创建 Main DeepAgent。
 
 ### CodeAnalyze / CodeReviewRepair Agent
 
@@ -741,6 +742,18 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 数据源生成时使用绑定当前工作区的 `get_mysql_config` 读取 `.xcodeagent/application.json` 中的 `datasource.db.plantMode`，不读取 Backend 服务 `.env`；未绑定工作区的兼容入口直接失败。
 
 如果契约不可实现，应返回变更申请，不得静默修改契约。
+
+### Agent Runtime Generation Agent
+
+目录：`agents/agent_runtime/`
+
+职责：
+
+- 只执行 `owner=agent`、`task_type=agent.code` 的已批准任务；
+- 根据 TechnicalPlan `agent_contracts[]` 生成 Python 3.12 + DeepAgents sidecar、单 Agent 定义、API 工具适配和测试；
+- 只写任务授权的 `agent-runtime/**`，不能修改前端、Java 后端、正式规划产物、API 契约或 Build DAG；
+- 保持 Java 网关、内部 sidecar 路径、AG-UI SSE、受限用户上下文转发和禁止客户端直连的安全边界；
+- 返回与其他 CodeRunner 相同的结构化 TaskResult，并由现有 Diff 归属、调度和 Repair 机制处理。
 
 ### Database Change Agent
 

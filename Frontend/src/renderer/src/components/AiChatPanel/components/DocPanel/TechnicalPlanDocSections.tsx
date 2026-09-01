@@ -26,7 +26,13 @@ import { SchemaTree } from './TechnicalPlanSchemaTree'
 
 const { Text } = Typography
 
-export type SectionKey = 'architecture' | 'entities' | 'api-contracts' | 'page-bindings' | 'authorization'
+export type SectionKey =
+  | 'architecture'
+  | 'entities'
+  | 'api-contracts'
+  | 'agent-contracts'
+  | 'page-bindings'
+  | 'authorization'
 
 type SectionProps = {
   sectionKey: SectionKey
@@ -37,10 +43,12 @@ export function ArchitectureSection({
   architecture,
   sectionKey
 }: { architecture: JsonRecord } & SectionProps): ReactElement {
+  const agentRuntime = textValue(architecture.agent_runtime)
   const layers = [
     ['前端', textValue(architecture.frontend, '待补充')],
     ['后端', textValue(architecture.backend, '待补充')],
-    ['数据库', textValue(architecture.data, '待补充')]
+    ['数据库', textValue(architecture.data, '待补充')],
+    ...(agentRuntime ? [['智能体运行时', agentRuntime]] : [])
   ]
   return (
     <section
