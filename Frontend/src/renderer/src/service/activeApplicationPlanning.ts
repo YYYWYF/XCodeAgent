@@ -9,6 +9,8 @@ export type PersistedActivePlanning = {
   lifecycle: ApplicationLifecycle
   status: ActivePlanningStatus
   threadId: string
+  /** 当前 renderer 是否由持久化状态恢复该规划，用于只执行一次本地产物冷恢复。 */
+  restoreArtifactsFromDisk?: boolean
   /** 当前规划会话最近一次模型/Workflow 错误，仅用于前端实时展示。 */
   error?: string
   workflow?: WorkflowRunPayload
@@ -47,6 +49,7 @@ export async function loadActiveApplicationPlannings(): Promise<PersistedActiveP
       recoveredActive.push({
         application,
         lifecycle,
+        restoreArtifactsFromDisk: true,
         status: activePlanningStatus(lifecycle),
         threadId
       })

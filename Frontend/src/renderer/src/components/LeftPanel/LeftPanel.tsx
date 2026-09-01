@@ -62,6 +62,8 @@ type Props = {
   /** 规划阶段新窗口使用的独立前端会话 threadId。 */
   planningConversationThreadId?: string
   planningWorkflow?: WorkflowRunPayload
+  /** 仅冷恢复时允许从 .xcodeagent 读取当前阶段规划产物。 */
+  restorePlanningArtifactsFromDisk?: boolean
   theme: 'light' | 'dark'
   rightPanelOpen: boolean
   onRightPanelOpenChange: (open: boolean) => void
@@ -98,6 +100,7 @@ export default function LeftPanel({
   planningThreadId,
   planningConversationThreadId,
   planningWorkflow,
+  restorePlanningArtifactsFromDisk,
   theme,
   rightPanelOpen,
   onRightPanelOpenChange
@@ -136,6 +139,7 @@ export default function LeftPanel({
             planningThreadId={planningThreadId}
             planningConversationThreadId={planningConversationThreadId}
             planningWorkflow={planningWorkflow}
+            restorePlanningArtifactsFromDisk={restorePlanningArtifactsFromDisk}
             theme={theme}
             rightPanelOpen={rightPanelOpen}
             onRightPanelOpenChange={onRightPanelOpenChange}

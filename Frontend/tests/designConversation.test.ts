@@ -58,6 +58,17 @@ import {
   revisionContinuationFromWorkflow,
   revisionContinuationHandoffFromWorkflow
 } from '../src/renderer/src/service/applicationPagePlanning'
+import { planningArtifactRecoveryKeys } from '../src/renderer/src/components/AiChatPanel/planningArtifactRecovery'
+
+assert.deepEqual(planningArtifactRecoveryKeys(false, 'product'), [])
+assert.deepEqual(planningArtifactRecoveryKeys(false, 'planning'), [])
+assert.deepEqual(planningArtifactRecoveryKeys(true, 'product'), [
+  'requirement-spec',
+  'product-plan',
+  'ui-design'
+])
+assert.deepEqual(planningArtifactRecoveryKeys(true, 'planning'), ['product-plan', 'technical-plan'])
+assert.deepEqual(planningArtifactRecoveryKeys(true, 'development'), [])
 
 const planningInteraction = {
   gateId: 'requirement_spec:revision-1',
@@ -115,10 +126,7 @@ const revisionPlanningEntryKey = planningStageTransitionKey(
   'ui-designs:revision-gate',
   { ...designRevisionContext, changeId: 'change-1' }
 )
-assert.equal(
-  revisionPlanningEntryKey,
-  'revision-plan:change-1:ui-designs:revision-gate'
-)
+assert.equal(revisionPlanningEntryKey, 'revision-plan:change-1:ui-designs:revision-gate')
 assert.notEqual(revisionPlanningEntryKey, initialPlanningEntryKey)
 assert.notEqual(
   planningStageTransitionKey('planning-graph-thread', 'ui-designs:revision-gate', {
@@ -1037,14 +1045,7 @@ const technicalPlanningWithStaleEntry = {
 assert.equal(planningWorkflowRequiresUserInput(technicalPlanningWithStaleEntry), false)
 assert.equal(planningWorkflowCanPublishDuringRun(technicalPlanningWithStaleEntry), true)
 assert.equal(
-  planningWorkflowNeedsChatLoading(
-    technicalPlanningWithStaleEntry,
-    true,
-    false,
-    false,
-    '',
-    true
-  ),
+  planningWorkflowNeedsChatLoading(technicalPlanningWithStaleEntry, true, false, false, '', true),
   true
 )
 
@@ -1134,7 +1135,10 @@ const retainedUiDesignMessage = {
     summary: { status: 'requires_user_input', phase: 'ui_confirmation' }
   } as WorkflowRunPayload
 } as AgentChatMessage
-assert.equal(isSupersededPlanningPhaseMessage(retainedUiDesignMessage, 'planning_stage_entry'), false)
+assert.equal(
+  isSupersededPlanningPhaseMessage(retainedUiDesignMessage, 'planning_stage_entry'),
+  false
+)
 assert.equal(isSupersededPlanningPhaseMessage(retainedUiDesignMessage, 'technical_planning'), false)
 assert.deepEqual(
   compactPlanningMessageHistory(

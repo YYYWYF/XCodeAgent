@@ -59,6 +59,8 @@ type Props = {
   onRetryPlanning?: () => void
   planningThreadId?: string
   planningWorkflow?: WorkflowRunPayload
+  /** 仅冷恢复时允许从 .xcodeagent 读取当前阶段规划产物。 */
+  restorePlanningArtifactsFromDisk?: boolean
   /** 独立阶段窗口的首屏阶段，避免 lifecycle 拉取前短暂显示研发阶段。 */
   initialPhase?: WorkbenchPhase
   /** 规划 Agent 独立聊天会话标识，不替代后端 Graph checkpoint thread。 */
@@ -89,6 +91,7 @@ function WorkbenchPage({
   onRetryPlanning,
   planningThreadId,
   planningWorkflow,
+  restorePlanningArtifactsFromDisk,
   initialPhase,
   planningConversationThreadId,
   theme
@@ -148,8 +151,7 @@ function WorkbenchPage({
   // 进入开发阶段后自动异步尝试启动项目预览（首次创建和重新进入均生效）。
   // 新建应用必须同时满足模板就绪与用户已进入开发，避免在设计阶段末尾提前启动项目。
   useEffect(() => {
-    const workspacePath =
-      application.workspaceRoot || application.projectParentPath || ''
+    const workspacePath = application.workspaceRoot || application.projectParentPath || ''
     if (launchCleanupTimerRef.current !== undefined) {
       window.clearTimeout(launchCleanupTimerRef.current)
       launchCleanupTimerRef.current = undefined
@@ -332,11 +334,7 @@ function WorkbenchPage({
   }, [application.id, application.workspaceRoot, onApplicationLifecycleChange])
 
   useEffect(() => {
-    if (
-      !developmentPlanningPagesLoaded ||
-      !chatSessionHistoryReady ||
-      entryStage !== 'loading'
-    ) {
+    if (!developmentPlanningPagesLoaded || !chatSessionHistoryReady || entryStage !== 'loading') {
       return
     }
     const remainingVisibleTime = Math.max(
@@ -418,6 +416,7 @@ function WorkbenchPage({
                 planningThreadId={planningThreadId}
                 planningConversationThreadId={planningConversationThreadId}
                 planningWorkflow={planningWorkflow}
+                restorePlanningArtifactsFromDisk={restorePlanningArtifactsFromDisk}
                 theme={theme}
                 rightPanelOpen={rightPanelOpen}
                 onRightPanelOpenChange={setRightPanelOpen}

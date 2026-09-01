@@ -38,7 +38,10 @@ function isPlanningStageEntryWorkflow(workflow?: WorkflowRunPayload): boolean {
         : ''
     )
     .find(Boolean)
-  return workflow.summary?.phase === 'planning_stage_entry' || mode === 'planning_stage_entry_confirmation'
+  return (
+    workflow.summary?.phase === 'planning_stage_entry' ||
+    mode === 'planning_stage_entry_confirmation'
+  )
 }
 
 /** 读取应用实际绑定的预览工作区，用于区分不同生成项目进程。 */
@@ -167,10 +170,7 @@ function AppEntryContent(): JSX.Element {
 
   /** 将规划 Graph 签发的 continuation 转交给工作台；句柄尚未挂载时保留同一次交接。 */
   const dispatchRevisionContinuation = useCallback(
-    (
-      applicationId: string,
-      handoff: WorkflowRevisionContinuationHandoff
-    ): Promise<void> => {
+    (applicationId: string, handoff: WorkflowRevisionContinuationHandoff): Promise<void> => {
       const handler = revisionContinuationByAppRef.current[applicationId]
       if (handler) return handler(handoff)
 
@@ -203,8 +203,7 @@ function AppEntryContent(): JSX.Element {
   // 规划流式数据注入句柄：由工作台 AiChatPanel 注册，Modal 转发 onContent/onWorkflow 时调用，
   // 把规划流式内容注入工作台 MessageList（设计阶段产品 Agent 对话 + 工作流卡片）。
   const planningStreamRef = useRef<
-    | ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void)
-    | null
+    ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   >(null)
   // 当前活动工作台的规划线程标识：只有匹配该 threadId 的规划流式才注入工作台，
   // 避免后台其他应用规划的流式 chunk 串入当前工作台对话。
@@ -406,8 +405,7 @@ function AppEntryContent(): JSX.Element {
       }
       try {
         const lifecycle = await getApplicationLifecycle(application)
-        const readyForWorkbench =
-          lifecycle?.initialization?.stage === 'ready_for_workbench'
+        const readyForWorkbench = lifecycle?.initialization?.stage === 'ready_for_workbench'
         if (readyForWorkbench && enterDevConfirmed) {
           // lifecycle 已就绪且用户已确认进入开发：进开发阶段。
           const confirmedApplication = application.planningConfirmedAt
@@ -435,7 +433,7 @@ function AppEntryContent(): JSX.Element {
             await openWorkbench(existingPlanning.application, lifecycle)
             return
           }
-          planningController.startPlanning(application, threadId, lifecycle, false)
+          planningController.startPlanning(application, threadId, lifecycle, false, true)
           await openWorkbench(application, lifecycle)
           return
         }
@@ -639,6 +637,7 @@ function AppEntryContent(): JSX.Element {
             }
             planningWorkflow={activePlanning?.workflow}
             planningError={activePlanning?.error}
+            restorePlanningArtifactsFromDisk={activePlanning?.restoreArtifactsFromDisk === true}
             theme={theme}
           />
         </div>

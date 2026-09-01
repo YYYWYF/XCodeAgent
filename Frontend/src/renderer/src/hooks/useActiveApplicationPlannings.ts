@@ -42,7 +42,8 @@ type ActiveApplicationPlanningsController = {
     application: ApplicationConfig,
     threadId: string,
     lifecycle: ApplicationLifecycle,
-    visible?: boolean
+    visible?: boolean,
+    restoreArtifactsFromDisk?: boolean
   ) => void
   stopPlanning: (applicationId: string) => Promise<void>
   updatePlanningLifecycle: (applicationId: string, lifecycle: ApplicationLifecycle) => void
@@ -114,13 +115,15 @@ export function useActiveApplicationPlannings({
       application: ApplicationConfig,
       threadId: string,
       lifecycle: ApplicationLifecycle,
-      visible = true
+      visible = true,
+      restoreArtifactsFromDisk = false
     ): void => {
       refreshIdRef.current += 1
       commitPlannings((current) => [
         {
           application,
           lifecycle,
+          restoreArtifactsFromDisk,
           status: 'running',
           threadId
         },
