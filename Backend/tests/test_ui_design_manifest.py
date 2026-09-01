@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from app.services.ui_design_manifest import (
     UI_MANIFEST_SCHEMA_VERSION,
     build_ui_page_manifest,
+    inspect_ui_code_bindings,
     persisted_ui_manifest,
     validate_ui_design_code,
 )
@@ -276,6 +277,130 @@ export default Orders;
 """
 
         self.assertEqual(validate_ui_design_code(self.page, code), [])
+
+    def test_render_prop_buttons_all_registered(self) -> None:
+        """submitter.render 等 render props 里的按钮必须逐个登记 action 与 control-id。
+
+        回归：_jsx_opening_tags 曾把属性表达式里的 JSX 随父标签 attrs 整体消费，
+        _attribute 只取第一个匹配——ModalForm submitter.render 里两个按钮只有第一个
+        （取消）被登记，第二个（保存）被判"缺少 action + 缺少静态 data-control-id"，
+        模型重试 2 次仍用同种 ProComponents 标准写法而失败。现在 attrs 内的 JSX
+        会被递归扫描成独立标签。
+        """
+
+        page = {
+            "pageId": "project_detail",
+            "information_items": [],
+            "actions": [
+                {"actionId": "project_detail_cancel_edit"},
+                {"actionId": "project_detail_submit_edit"},
+            ],
+        }
+        code = """
+import React from 'react';
+import { Button } from 'antd';
+import { ModalForm, ProFormText } from '@ant-design/pro-components';
+const ProjectDetail = () => (
+  <ModalForm
+    title="编辑项目信息"
+    open={editOpen}
+    onOpenChange={setEditOpen}
+    modalProps={{ confirmLoading: submitting, destroyOnClose: true }}
+    submitter={{
+      render: () => [
+        <Button
+          key="cancel"
+          data-action-id="project_detail_cancel_edit"
+          data-control-id="project_detail_cancel_edit-control"
+          data-ui-effect="关闭编辑项目弹窗"
+          onClick={() => setEditOpen(false)}
+        >
+          取消
+        </Button>,
+        <Button
+          key="submit"
+          type="primary"
+          loading={submitting}
+          data-action-id="project_detail_submit_edit"
+          data-control-id="project_detail_submit_edit-control"
+          onClick={() => editForm.submit()}
+        >
+          保存
+        </Button>,
+      ],
+    }}
+  >
+    <ProFormText name="name" label="项目名称" />
+  </ModalForm>
+);
+export default ProjectDetail;
+"""
+
+        self.assertEqual(validate_ui_design_code(page, code), [])
+
+    def test_unbound_button_inside_render_prop_still_flagged(self) -> None:
+        """递归扫描后，render props 里未绑定 actionId 的 Button 不应漏检。"""
+
+        code = """
+import React from 'react';
+import { Button } from 'antd';
+import { ModalForm, ProFormText } from '@ant-design/pro-components';
+const Page = () => (
+  <ModalForm
+    title="示例"
+    submitter={{ render: () => [<Button key="x" onClick={() => undefined}>未绑定</Button>] }}
+  >
+    <ProFormText name="name" />
+  </ModalForm>
+);
+export default Page;
+"""
+
+        errors = validate_ui_design_code(self.page, code)
+        self.assertTrue(
+            any("Button" in error for error in errors),
+            "render props 里未绑 actionId 的 Button 应报未归属交互控件",
+        )
+
+    def test_nested_render_prop_marker_not_paired_to_parent_control(self) -> None:
+        """extra={Button} 的 action 归属按钮自身，父容器 control-id 不得错误配对。
+
+        父标签 attrs 含嵌套 JSX 时，_attribute 的首个匹配曾把嵌套按钮的 action
+        与父容器自己的 data-control-id 配对（如 open_edit_dialog 挂上
+        basic_info-display），污染 manifest bindings。父标签 attrs 的花括号表达式
+        主体置空后，嵌套标记只归属给递归出的子标签。
+        """
+
+        code = """
+import React from 'react';
+import { Button } from 'antd';
+import { ProDescriptions } from '@ant-design/pro-components';
+const Page = () => (
+  <ProDescriptions
+    data-information-item-id="orders-list"
+    data-control-id="orders-list-display"
+    extra={
+      <Button
+        data-action-id="search-orders"
+        data-control-id="search-orders-control"
+      >
+        编辑
+      </Button>
+    }
+  />
+);
+export default Page;
+"""
+
+        inspection = inspect_ui_code_bindings(code)
+        self.assertEqual(
+            inspection["actions"]["search-orders"],
+            ["search-orders-control"],
+        )
+        self.assertEqual(
+            inspection["information_items"]["orders-list"],
+            ["orders-list-display"],
+        )
 
     def test_form_container_with_on_finish_not_misjudged_as_interaction(self) -> None:
         """ProForm/Form 等表单容器带 onFinish 不应被误判为未绑定 actionId 的交互控件。

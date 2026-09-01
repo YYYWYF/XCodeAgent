@@ -125,9 +125,10 @@ def _expression_bound_hint(code: str, attribute: str) -> str:
     if not re.search(_EXPR_ATTRIBUTE_TEMPLATE.format(attribute=re.escape(attribute)), code):
         return ""
     return (
-        f" 检测到 `{attribute}={{...}}` 表达式绑定（如 .map() 回调变量或模板字符串），"
-        "静态校验无法解析运行时表达式，一律判为缺失。请把每一项展开为独立 JSX 元素，"
-        f"在标签上直接写死字符串字面量（如 `{attribute}=\"<id>\"`）。"
+        f" 检测到 `{attribute}={{...}}` 表达式绑定（如 .map() 回调变量或模板字符串）。"
+        "静态校验会从 .map() 的数据源字面量提取 id 登记为已绑定，但若数据源为空或无法解析，"
+        "该 id 会被判缺失。建议在表格列 render 里直接写死静态字符串字面量"
+        f"（如 `{attribute}=\"<id>\"`），同一 action 跨行重复使用同一 id 即可，无需展开每行。"
     )
 
 
@@ -141,6 +142,11 @@ def _expected_ids(page: dict[str, Any], collection: str, key: str) -> list[str]:
     ]
 
 
+# 属性表达式内是否含 JSX 标签（render props，如 submitter={{ render: () => [<Button/>] }}）。
+# 命中才对 attrs 子串递归扫描，纯文本 attrs 不做无谓的二次解析。
+_ATTR_INNER_JSX_RE = re.compile(r"<[A-Za-z/]")
+
+
 def _jsx_opening_tags(code: str) -> list[tuple[str, str, bool, bool]]:
     """扫描 JSX 标签，返回 ``(tag, attrs, self_closing, is_closing)``。
 
@@ -149,6 +155,11 @@ def _jsx_opening_tags(code: str) -> list[tuple[str, str, bool, bool]]:
     - 闭合标签 ``</Tag>`` → ``(tag, "", False, True)``
 
     保留表达式内部箭头函数中的 ``>`` 字符（通过 brace_depth 保护）。
+    属性表达式内的 JSX（render props）随父标签 attrs 被整体消费，这里对含 JSX 的
+    attrs 递归扫描并把其中的标签展平进结果，否则其中的 data-action-id /
+    data-control-id 无法登记，校验会误报缺失。父标签返回的 attrs 已把花括号
+    表达式主体置空（保留 ``{}`` 骨架），嵌套 JSX 的 data-* 标记只归属给递归出的
+    子标签，避免 _attribute 的首个匹配把它们错误配对到父标签。
     """
 
     tags: list[tuple[str, str, bool, bool]] = []
@@ -186,25 +197,45 @@ def _jsx_opening_tags(code: str) -> list[tuple[str, str, bool, bool]]:
         cursor = attrs_start
         brace_depth = 0
         quote = ""
+        # 父标签自身属性：花括号表达式（事件回调 / render props）的主体置空，只保留
+        # `{}` 骨架。表达式内的 data-* 标记属于嵌套 JSX（下方递归扫描会以独立标签
+        # 登记），不剥离会被 _attribute 的首个匹配错误配对到父标签。
+        own_attrs: list[str] = []
         while cursor < length:
             char = code[cursor]
             if quote:
                 if char == "\\":
+                    if not brace_depth:
+                        own_attrs.append(code[cursor : cursor + 2])
                     cursor += 2
                     continue
                 if char == quote:
                     quote = ""
+                if not brace_depth:
+                    own_attrs.append(char)
             elif char in {'"', "'", "`"}:
                 quote = char
+                if not brace_depth:
+                    own_attrs.append(char)
             elif char == "{":
                 brace_depth += 1
+                own_attrs.append(char)
             elif char == "}" and brace_depth:
                 brace_depth -= 1
+                own_attrs.append(char)
             elif char == ">" and brace_depth == 0:
                 self_closing = cursor > attrs_start and code[cursor - 1] == "/"
-                tags.append((tag, code[attrs_start:cursor], self_closing, False))
+                attrs = code[attrs_start:cursor]
+                tags.append((tag, "".join(own_attrs), self_closing, False))
+                # render props 里的 JSX 随父标签 attrs 被整体消费，不递归扫描就登记
+                # 不到其中的 data-action-id / data-control-id（多按钮时只会有一个
+                # 被看见），导致校验误报"缺失"。
+                if _ATTR_INNER_JSX_RE.search(attrs):
+                    tags.extend(_jsx_opening_tags(attrs))
                 cursor += 1
                 break
+            elif not brace_depth:
+                own_attrs.append(char)
             cursor += 1
         index = max(cursor, start + 1)
     return tags

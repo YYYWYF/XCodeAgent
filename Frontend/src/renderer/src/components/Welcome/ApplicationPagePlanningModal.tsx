@@ -527,6 +527,11 @@ export default function ApplicationPagePlanningModal({
     interaction?: ApplicationPlanningInteraction
   ): Promise<void> => {
     if (!application.workspaceRoot) return
+    // 轮询（无 interaction 的 no-op resume）发现有 run 在飞时直接跳过，不取消旧 run：
+    // 后端同 thread 不能并发 Graph run，旧 run 被 session.stop() 取消会导致 SSE 流中断
+    // （ASGI callable returned without completing response），前端收不到完整快照、
+    // 界面卡在生成中。轮询只是重读 ui-designs.json，等当前 run 自然结束即可。
+    if (planningRunningRef.current && !interaction) return
     const runToken = planningRunTokenRef.current + 1
     planningRunTokenRef.current = runToken
     // 新一轮补充到达时先取消旧生成，避免旧请求在新需求之后继续写入状态。
@@ -580,6 +585,13 @@ export default function ApplicationPagePlanningModal({
       })
       if (runToken !== planningRunTokenRef.current) return
       if (result.workflow) {
+        // [poll-diag] sendMessage 完成后的 workflow 快照 page status
+        // eslint-disable-next-line no-console
+        console.log('[poll-diag] sendMessage-done', {
+          status: result.workflow.summary?.status,
+          phase: result.workflow.summary?.phase,
+          pages: (result.workflow.summary?.clarification as { pages?: Array<{ pageId?: string; status?: string }> } | undefined)?.pages?.map((p) => [p.pageId, p.status])
+        })
         const mergedWorkflow = handleWorkflowChange(result.workflow)
         // sendMessage 完整结束后才把待输入/终态发布到工作台；此时 checkpoint 已稳定。
         if (mergedWorkflow) onPlanningWorkflow?.(mergedWorkflow)
@@ -590,6 +602,12 @@ export default function ApplicationPagePlanningModal({
       }
     } catch (reason) {
       if (runToken !== planningRunTokenRef.current) return
+      // [poll-diag] sendMessage 抛错
+      // eslint-disable-next-line no-console
+      console.log('[poll-diag] sendMessage-error', {
+        runToken, hadInteraction: Boolean(interaction),
+        error: String(reason).slice(0, 120)
+      })
       console.error('[planning-modal] runPlanning error', reason)
       if (isAuthenticationFailure(reason)) return
       setError(formatError(reason, '创建规划运行失败'))
