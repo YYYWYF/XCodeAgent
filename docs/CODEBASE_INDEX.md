@@ -1,6 +1,6 @@
 # XCodeAgent Codebase Index
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 Use this file before broad code exploration. It is a routing map, not full documentation: read the matching row, then inspect only the listed entry files and nearby code.
 
@@ -24,6 +24,7 @@ For small local edits that do not change structure or ownership, leave the index
 | `contracts/authorization-api.v1.yaml` | 权限管理前后端共享的本地 OpenAPI 唯一事实源；后端 `auth` 分支副本必须与其 SHA-256 一致，前端只生成类型并通过既有 `service.ts` 发起请求。 | Read before changing authorization management APIs, auth-template generation, generated authorization types, or service wrappers. |
 | `docs/WORKFLOW.md`                  | Design notes for the LangGraph workflow that coordinates requirement confirmation, project planning, code generation, integration testing, and acceptance. | Read before changing workflow phases, agent boundaries, Graph State shape, build/test subgraphs, or context/persistence strategy. |
 | `docs/DAG_TASK_GENERATION_AND_VALIDATION_MININAL_CHANGE_PLAN.md` | Current minimal-change contract for Build DAG generation, deterministic validation, platform-owned regeneration, latest JSON confirmation, and the boundary between template initialization, runtime context, and Build execution. | Read before changing task preparation, DAG validation, Build gates, task-confirmation actions, or menu/route/page-placeholder ownership. |
+| `docs/DAG_TASK_GENERATION_UNIT_CANDIDATE_PLAN.md` | Target architecture for refactoring Scope-level combined task generation into current-PlanningRun UnitCandidate generation, local validation/retry, confirmed-DAG-based reuse, serialized Scope assembly, and attributable global validation. | Read after the minimal-change plan and before designing or implementing PlanningRun state, per-Unit model requests, candidate persistence, reuse facts, progress events, or local retry orchestration. |
 | `docs/APPLICATION_REVISION_WORKFLOW.md` | Canonical design for post-creation Change lifecycle: stable change identity, target-aware impact analysis, candidate artifacts, confirmation gates, invalidation closure, Build DAG execution, acceptance, promotion, rollback, resource locking, and AG-UI projection. | Read first before changing secondary modification, acceptance adjustment, revision events/cards, candidate promotion, or quick-modification completion semantics. |
 | `docs/APPLICATION_DEVELOPMENT_PLANNING.md` | Workbench page/API selection, development-readiness gating, independent EntitySourceBinding, Build DAG confirmation, and numbered development-task planning. | Read before changing workbench target selection, entity-binding readiness, development planning, or `menus.developmentTasks`. |
 | `docs/PRODUCT_UI_TECHNICAL_PLANNING.md` | Canonical creation design: RequirementSpec → ProductPlan → React UiDesign → explicit planning-stage entry → TechnicalPlan, including Endpoint implementation semantics, PageImplementationContract, EntitySourceBinding boundary, and 128k context budget. | Read first when changing creation planning phases, ProductPlan/TechnicalPlan storage, UI authority, page implementation contracts, or Endpoint semantics. |
