@@ -14,6 +14,7 @@ class ProjectState(TypedDict, total=False):
     active_run_id: str
     change_id: str
     change_target: dict[str, Any]
+    element_context: dict[str, Any]
     lifecycle: dict[str, Any]
     lifecycle_interaction_submission: dict[str, Any]
     selected_skill_names: list[str]

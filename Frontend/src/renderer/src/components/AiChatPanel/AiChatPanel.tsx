@@ -21,6 +21,7 @@ import type {
   ApplicationDevelopmentTask,
   ApplicationMenuItem,
   EditorMode,
+  InspectedElementContext,
   WorkflowDebugOptions,
   WorkflowBuildTaskPlanConfirmation,
   WorkflowClarificationAnswers,
@@ -856,6 +857,7 @@ export default function AiChatPanel({
   // 验收阶段拒绝结果仅恢复普通对话，不改变后端 page_acceptance 待验收状态。
   const [acceptanceConversationSessionKey, setAcceptanceConversationSessionKey] = useState('')
   const [elementInspectionActive, setElementInspectionActive] = useState(false)
+  const [inspectedElementContext, setInspectedElementContext] = useState<InspectedElementContext>()
   // UI 设计稿预览：右侧"UI设计稿"tab 当前选中的页面 id（由中间区卡片或右侧列表驱动）。
   const [uiDesignActivePageId, setUiDesignActivePageId] = useState('')
   // UI 设计稿：当前正在执行动作（选模板/换一换）的 pageId 集合，用于右侧预览逐页显示加载态。
@@ -1269,6 +1271,11 @@ export default function AiChatPanel({
     },
     designPhasePlanning: isApplicationPlanningPhase
   })
+
+  // DOM 源码定位仅绑定当前会话，切换页面、接口或自由会话后要求用户重新选择。
+  useEffect(() => {
+    setInspectedElementContext(undefined)
+  }, [draftKey])
 
   // 当前选中页面的规划配置。必须提前到 workspaceTabs / 读取源码的 useEffect 之前，
   // 否则这些位置（尤其 useEffect 依赖数组）会在 const 暂时性死区里访问未初始化的
@@ -2063,6 +2070,9 @@ export default function AiChatPanel({
     onEnterTestPhase: handleEnterTestPhase,
     onEnterReviewPhase: handleEnterReviewPhase,
     onEnterAcceptancePhase: handleEnterAcceptancePhase,
+    onElementContextConsumed: (context) => {
+      setInspectedElementContext((current) => (current === context ? undefined : current))
+    },
     onPreviewReady: handlePreviewReady,
     publishAiMessage,
     runningSessionsRef,
@@ -2076,6 +2086,7 @@ export default function AiChatPanel({
     selectedSkills,
     selectedPageId: activePageOption?.pageId || activePageOption?.key,
     selectedPageLabel: activePageOption?.label,
+    inspectedElementContext,
     // 普通输入统一进入 Coordinator 对话端点，由后端自动分类意图。
     conversationEnabled: true,
     inputMode: 'conversation',
@@ -4283,8 +4294,10 @@ export default function AiChatPanel({
                   activeWorkflow={activeWorkflow}
                   copy={copy}
                   draft={draft}
+                  inspectedElementContext={inspectedElementContext}
                   loading={loading}
                   onDraftChange={(value) => setDraftByKey(draftKey, value)}
+                  onInspectedElementContextClear={() => setInspectedElementContext(undefined)}
                   onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
                   // 设计阶段仍可修订时，专用输入先做设计意图识别；模板就绪后恢复普通 Coordinator 对话。
                   // 当前节点的澄清和确认只能通过上方结构化卡片提交，不能劫持普通输入语义。
@@ -4348,9 +4361,6 @@ export default function AiChatPanel({
               />
             ) : null}
           </div>
-        )}
-        {elementInspectionActive && (
-          <div aria-hidden="true" className={cx('element-inspection-interaction-mask')} />
         )}
       </div>
 
@@ -4492,6 +4502,7 @@ export default function AiChatPanel({
             selectedPagePath={activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/'}
             errorMessage={runtimePreviewLaunchError}
             onInspectingChange={setElementInspectionActive}
+            onElementContextChange={setInspectedElementContext}
           />
           {acceptanceAwaiting && (
             <AcceptanceDecisionDock

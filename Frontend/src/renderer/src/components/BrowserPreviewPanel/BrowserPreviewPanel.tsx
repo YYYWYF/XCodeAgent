@@ -14,7 +14,8 @@ import type { ReactElement } from 'react'
 import type {
   ApplicationConfig,
   ApplicationMenuItem,
-  DevelopmentPlanningPageOption
+  DevelopmentPlanningPageOption,
+  InspectedElementContext
 } from '../../typings'
 import {
   composePreviewUrl,
@@ -39,6 +40,7 @@ type Props = {
   previewBaseUrl?: string
   selectedPagePath?: string
   onInspectingChange?: (active: boolean) => void
+  onElementContextChange?: (context: InspectedElementContext | undefined) => void
 }
 
 type PreviewPageOption = {
@@ -63,6 +65,7 @@ export default function BrowserPreviewPanel({
   pages = [],
   previewBaseUrl = '',
   selectedPagePath = '',
+  onElementContextChange,
   onInspectingChange
 }: Props): ReactElement {
   const pageOptions = useMemo<PreviewPageOption[]>(() => {
@@ -89,6 +92,7 @@ export default function BrowserPreviewPanel({
   const frameKey = `${previewUrl}-${refreshKey}`
   const elementInspector = useElementInspector({
     frameKey,
+    onElementContextChange,
     onInspectingChange,
     previewUrl
   })

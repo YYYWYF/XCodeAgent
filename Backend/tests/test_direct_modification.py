@@ -44,6 +44,7 @@ from app.graph.nodes.direct_modification import (
 )
 from app.graph.nodes.direct_repair import direct_modification_repair
 from app.protocols.direct_modification import (
+    DirectModificationElementContext,
     DirectModificationInput,
     _report_custom_progress,
     _direct_confirmation_continuation,
@@ -51,6 +52,7 @@ from app.protocols.direct_modification import (
     build_conversation_ag_ui_stream,
     conversation_capabilities,
     conversation_input,
+    resolve_direct_element_context,
 )
 from app.protocols.direct_modification_projection import (
     direct_progress_payload,
@@ -109,6 +111,13 @@ class DirectModificationPromptTests(unittest.TestCase):
                 user_request="把宠物照片卡片宽度改成200px",
                 conversation_summary="",
                 backend_handoff=None,
+                element_context={
+                    "tagName": "div",
+                    "sourcePath": "/src/pages/PetPhotoList/index.tsx",
+                    "line": 18,
+                    "column": 5,
+                    "workspacePath": "frontend/src/pages/PetPhotoList/index.tsx",
+                },
                 candidate_files=[
                     "frontend/src/pages/PetPhotoList/index.tsx",
                     "frontend/node_modules/pkg/index.js",
@@ -130,6 +139,8 @@ class DirectModificationPromptTests(unittest.TestCase):
                 "frontend/vite.config.ts",
             ],
         )
+        self.assertEqual(packet["elementContext"]["line"], 18)
+        self.assertIn("Selected DOM source context", packet["legacyInstructions"])
         self.assertEqual(
             packet["candidateFiles"],
             [
@@ -264,6 +275,13 @@ class DirectModificationPromptTests(unittest.TestCase):
                         }
                     ],
                 },
+                "currentElement": {
+                    "tagName": "button",
+                    "sourcePath": "/src/pages/PetPhotoList/index.tsx",
+                    "line": 24,
+                    "column": 7,
+                    "workspacePath": "frontend/src/pages/PetPhotoList/index.tsx",
+                },
             },
         )
 
@@ -273,6 +291,8 @@ class DirectModificationPromptTests(unittest.TestCase):
         self.assertIn("latest user supplement", prompt)
         self.assertIn("do not ask the same clarification again", prompt)
         self.assertIn("PetPhotoList", prompt)
+        self.assertIn('"currentElement"', prompt)
+        self.assertIn('"line":24', prompt)
         self.assertIn("必须先判断用户请求是否改变了已确认的产品、设计或技术语义", prompt)
         self.assertIn("不能因为可以通过编辑或删除源文件实现", prompt)
         self.assertIn("formal_revision/design_stage_revision/requirement-spec", prompt)
@@ -454,6 +474,43 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(update["status"], "requires_user_input")
         self.assertEqual(update["clarification"]["mode"], "implementation_fix_confirmation")
         self.assertEqual(_route_classification(update), "finalize")
+
+    def test_dom_context_prioritizes_frontend_target_path(self) -> None:
+        """DOM 定位文件应进入实现确认和后续 Frontend Agent 的首选候选。"""
+
+        decision = DirectModificationDecision(
+            intent="implementation_fix",
+            owner="frontend",
+            scope="direct",
+            confidence=0.99,
+            reason="仅修改已存在按钮的视觉样式。",
+            clarification_question="",
+        )
+        state = {
+            "request": "把这个按钮改成蓝色",
+            "workspace": "/tmp/workspace",
+            "element_context": {
+                "tagName": "button",
+                "sourcePath": "/src/pages/PageAgeEntry/index.tsx",
+                "line": 24,
+                "column": 7,
+                "workspacePath": "frontend/src/pages/PageAgeEntry/index.tsx",
+            },
+        }
+        with patch(
+            "app.graph.nodes.direct_modification.classify_direct_modification_intent",
+            return_value=decision,
+        ):
+            update = classify_direct_modification(state)
+
+        self.assertEqual(
+            update["direct_modification_target_paths"],
+            ["frontend/src/pages/PageAgeEntry/index.tsx"],
+        )
+        self.assertEqual(
+            update["clarification"]["requestedPaths"],
+            ["frontend/src/pages/PageAgeEntry/index.tsx"],
+        )
 
     def test_workspace_implementation_fix_keeps_direct_path(self) -> None:
         """普通工作区文件实现修复不增加代码修改确认门。"""
@@ -1641,6 +1698,42 @@ class DirectModificationNodeTests(unittest.TestCase):
 class DirectModificationProtocolTests(unittest.TestCase):
     """验证快速修改公开 AG-UI 契约。"""
 
+    def test_element_context_resolves_to_existing_frontend_source(self) -> None:
+        """DOM 虚拟路径必须安全解析成工作区内真实前端文件。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            source = Path(workspace) / "frontend" / "src" / "pages" / "Age" / "index.tsx"
+            source.parent.mkdir(parents=True)
+            source.write_text("export default null\n", encoding="utf-8")
+            context = DirectModificationElementContext.model_validate(
+                {
+                    "tagName": "BUTTON",
+                    "sourcePath": "/src/pages/Age/index.tsx",
+                    "line": 24,
+                    "column": 7,
+                }
+            )
+
+            resolved = resolve_direct_element_context(context, workspace_root=workspace)
+
+        self.assertEqual(resolved["tagName"], "button")
+        self.assertEqual(resolved["workspacePath"], "frontend/src/pages/Age/index.tsx")
+
+    def test_element_context_rejects_missing_source(self) -> None:
+        """源码已失效时必须要求重新选择，不能把不可信路径交给 Agent。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            context = DirectModificationElementContext.model_validate(
+                {
+                    "tagName": "div",
+                    "sourcePath": "/src/missing.tsx",
+                    "line": 1,
+                    "column": 1,
+                }
+            )
+            with self.assertRaisesRegex(ValueError, "重新选择元素"):
+                resolve_direct_element_context(context, workspace_root=workspace)
+
     def test_approved_implementation_confirmation_uses_server_checkpoint(self) -> None:
         """实现确认必须复用服务端分类结果并从代码扫描节点继续。"""
 
@@ -1662,6 +1755,13 @@ class DirectModificationProtocolTests(unittest.TestCase):
                 "direct_modification_owner": "frontend",
                 "direct_modification_scope": "direct",
                 "direct_modification_target_paths": ["Frontend/src/Login.tsx"],
+                "element_context": {
+                    "tagName": "button",
+                    "sourcePath": "/src/Login.tsx",
+                    "line": 8,
+                    "column": 3,
+                    "workspacePath": "Frontend/src/Login.tsx",
+                },
                 "direct_modification_approved_paths": [],
                 "change_impact_code_scan_required": True,
                 "clarification": {
@@ -1677,6 +1777,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
         self.assertEqual(continuation["direct_modification_owner"], "frontend")
         self.assertEqual(continuation["request"], "修复登录按钮无响应")
         self.assertEqual(continuation["status"], "in_progress")
+        self.assertEqual(continuation["element_context"]["line"], 8)
 
     def test_rejected_implementation_confirmation_is_completed_terminal_state(self) -> None:
         """取消实现修改确认必须直接成功收口，不得成为失败 Workflow。"""

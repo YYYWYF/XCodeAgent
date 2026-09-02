@@ -13,7 +13,8 @@ import type {
   EditorMode,
   WorkflowBuildExecutionScope,
   WorkflowDebugOptions,
-  WorkflowRunPayload
+  WorkflowRunPayload,
+  InspectedElementContext
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { skillsAfterEmptyBackspace } from '../../skillSelection'
@@ -54,8 +55,10 @@ type ChatComposerProps = {
   debugOnly?: boolean
   draft: string
   initialResumeFrom?: string
+  inspectedElementContext?: InspectedElementContext
   loading: boolean
   onDraftChange: (value: string) => void
+  onInspectedElementContextClear?: () => void
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
   onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   onStopGenerating: () => void
@@ -71,8 +74,10 @@ export default function ChatComposer({
   debugOnly = false,
   draft,
   initialResumeFrom = 'development_readiness_gate',
+  inspectedElementContext,
   loading,
   onDraftChange,
+  onInspectedElementContextClear,
   onSelectedSkillsChange,
   onSend,
   onStopGenerating,
@@ -183,6 +188,18 @@ export default function ChatComposer({
               />
             )}
           </div>
+          {!debugOnly && inspectedElementContext && (
+            <div className={cx('composer-selected-element')}>
+              <Tooltip
+                overlayClassName={cx('composer-tool-tooltip')}
+                title={`${inspectedElementContext.sourcePath}:${inspectedElementContext.line}:${inspectedElementContext.column}`}
+              >
+                <Tag closable={!loading} onClose={onInspectedElementContextClear}>
+                  已选择 {inspectedElementContext.tagName}
+                </Tag>
+              </Tooltip>
+            </div>
+          )}
           {(debugEnabled || traceOpen) && (
             <div className={cx('workflow-debug-box', debugEnabled && 'enabled')}>
               {debugEnabled && (

@@ -3,6 +3,7 @@ import type { MutableRefObject, SetStateAction } from 'react'
 import {
   AgUiChatSession,
   AgUiRunError,
+  appendElementContextToConversationPrompt,
   getConversationUrl,
   getWorkflowUrl
 } from '../../../service/agUiAgent'
@@ -19,6 +20,7 @@ import type {
   ApplicationLifecycle,
   ChatMessageSkill,
   EditorMode,
+  InspectedElementContext,
   WorkflowBuildExecutionScope,
   WorkflowBuildTaskPlanConfirmation,
   WorkflowDebugOptions,
@@ -118,6 +120,7 @@ type UseWorkflowConversationParams = {
   selectedEntityLabel?: string
   selectedPageId?: string
   selectedPageLabel?: string
+  inspectedElementContext?: InspectedElementContext
   conversationEnabled: boolean
   inputMode: ChatInputMode
   editorMode: EditorMode
@@ -148,6 +151,7 @@ type UseWorkflowConversationParams = {
   onEnterTestPhase: () => void
   onEnterReviewPhase: () => void
   onEnterAcceptancePhase: () => void
+  onElementContextConsumed: (context: InspectedElementContext) => void
   onPreviewReady: (target: WorkflowPreviewTarget) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
@@ -475,6 +479,7 @@ export function useWorkflowConversation({
   selectedEntityLabel,
   selectedPageId,
   selectedPageLabel,
+  inspectedElementContext,
   conversationEnabled,
   inputMode,
   editorMode,
@@ -496,6 +501,7 @@ export function useWorkflowConversation({
   onEnterTestPhase,
   onEnterReviewPhase,
   onEnterAcceptancePhase,
+  onElementContextConsumed,
   onPreviewReady,
   publishAiMessage,
   runningSessionsRef,
@@ -587,7 +593,13 @@ export function useWorkflowConversation({
             : selectedPageId
               ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
               : await ensureActiveSession())
-    await sendWorkflowMessage(message, {
+    const conversation =
+      Boolean(acceptanceConversationSession) ||
+      shouldUseConversation(conversationEnabled, activeWorkflow, workflowDebug, inputMode)
+    const requestMessage = conversation
+      ? appendElementContextToConversationPrompt(message, inspectedElementContext)
+      : message
+    const sent = await sendWorkflowMessage(requestMessage, {
       clearDraft: true,
       detailTargetType: selectedEntityId
         ? 'entity'
@@ -612,10 +624,12 @@ export function useWorkflowConversation({
       titleFrom: message,
       workflowDebug,
       // 验收“不通过”只恢复普通对话；即使之前输入模式是 workflow，也必须走 conversation 端点。
-      conversation:
-        Boolean(acceptanceConversationSession) ||
-        shouldUseConversation(conversationEnabled, activeWorkflow, workflowDebug, inputMode)
+      conversation,
+      conversationElementContext: conversation ? inspectedElementContext : undefined
     })
+    if (sent && conversation && inspectedElementContext) {
+      onElementContextConsumed(inspectedElementContext)
+    }
   }
 
   /** 在开发阶段会话中消费 TechnicalPlan continuation，并进入工作区扫描与 DAG 链。 */
@@ -670,6 +684,7 @@ export function useWorkflowConversation({
       }
       conversation?: boolean
       conversationTarget?: ConversationTarget
+      conversationElementContext?: InspectedElementContext
       conversationApprovedPaths?: string[]
       conversationHandoffDecision?: 'approved' | 'rejected'
       conversationImpactInteractionId?: string
@@ -838,6 +853,7 @@ export function useWorkflowConversation({
         pageTemplate: options?.pageTemplate,
         conversation: options?.conversation,
         conversationTarget: options?.conversationTarget || conversationTargetFromIdentity(identity),
+        conversationElementContext: options?.conversationElementContext,
         conversationApprovedPaths: options?.conversationApprovedPaths,
         conversationHandoffDecision: options?.conversationHandoffDecision,
         conversationImpactInteractionId: options?.conversationImpactInteractionId,

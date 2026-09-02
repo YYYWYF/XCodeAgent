@@ -324,6 +324,11 @@ def _workspace_routing_context(snapshot: dict[str, Any] | None) -> str:
                 limit=100,
             ),
         },
+        "currentElement": (
+            snapshot.get("currentElement")
+            if isinstance(snapshot.get("currentElement"), dict)
+            else None
+        ),
     }
     encoded = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
     return encoded[:_MAX_WORKSPACE_ROUTING_CONTEXT_CHARS]
@@ -578,6 +583,7 @@ def _frontend_direct_modification_prompt(
     user_request: str,
     conversation_summary: str,
     backend_handoff: dict[str, Any] | None = None,
+    element_context: dict[str, Any] | None = None,
 ) -> str:
     """构造不依赖正式计划产物的前端快速修改 Prompt。"""
 
@@ -613,6 +619,8 @@ def _frontend_direct_modification_prompt(
         "the JSON object.\n\n"
         f"Bounded quick-chat summary:\n{conversation_summary or '(empty)'}\n\n"
         f"Backend handoff for this run:\n{handoff}\n\n"
+        "Selected DOM source context:\n"
+        f"{json.dumps(element_context or {}, ensure_ascii=False)}\n\n"
         f"Current user request:\n{user_request}"
     )
 
@@ -679,6 +687,7 @@ def invoke_frontend_direct_modification(
     user_request: str,
     conversation_summary: str,
     backend_handoff: dict[str, Any] | None,
+    element_context: dict[str, Any] | None = None,
     candidate_files: list[str] | None = None,
     approved_paths: list[str] | None = None,
     workspace: str | None,
@@ -703,10 +712,12 @@ def invoke_frontend_direct_modification(
             "request": user_request,
             "conversationSummary": conversation_summary[-4_000:],
             "backendHandoff": backend_handoff or {},
+            "elementContext": element_context or {},
             "legacyInstructions": _frontend_direct_modification_prompt(
                 user_request=user_request,
                 conversation_summary=conversation_summary,
                 backend_handoff=backend_handoff,
+                element_context=element_context,
             ),
         },
         workspace=workspace,

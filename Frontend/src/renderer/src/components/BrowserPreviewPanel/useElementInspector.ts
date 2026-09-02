@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { message as antdMessage } from 'antd'
+import type { InspectedElementContext } from '../../typings'
 import {
   createElementInspectorCommand,
   elementInspectorPreviewOrigin,
+  inspectedElementContextFromMessage,
   isExpectedElementInspectorOrigin,
   parseElementInspectorMessage
 } from './elementInspectorProtocol'
 
 type Options = {
   frameKey: string
+  onElementContextChange?: (context: InspectedElementContext | undefined) => void
   onInspectingChange?: (active: boolean) => void
   previewUrl: string
 }
@@ -26,6 +29,7 @@ const ELEMENT_INSPECTOR_MESSAGE_KEY = 'element-inspector-selection'
 /** 管理跨域 iframe 审查协议、就绪状态以及 renderer 内的选中结果反馈。 */
 export function useElementInspector({
   frameKey,
+  onElementContextChange,
   onInspectingChange,
   previewUrl
 }: Options): ElementInspectorController {
@@ -35,6 +39,7 @@ export function useElementInspector({
   const activeRef = useRef(false)
   const previewOrigin = useMemo(() => elementInspectorPreviewOrigin(previewUrl), [previewUrl])
   const inspectingChangeRef = useRef(onInspectingChange)
+  const elementContextChangeRef = useRef(onElementContextChange)
 
   /** 向当前 iframe 文档发送明确 targetOrigin 的审查命令。 */
   const postActiveCommand = useCallback(
@@ -51,10 +56,11 @@ export function useElementInspector({
 
   useEffect(() => {
     inspectingChangeRef.current = onInspectingChange
+    elementContextChangeRef.current = onElementContextChange
     postActiveCommandRef.current = postActiveCommand
-  }, [onInspectingChange, postActiveCommand])
+  }, [onElementContextChange, onInspectingChange, postActiveCommand])
 
-  /** 切换审查状态并同步父级遮罩和 iframe 运行时。 */
+  /** 切换审查状态并同步父级布局状态和 iframe 运行时。 */
   const toggle = useCallback((): void => {
     if (!activeRef.current && !ready) return
     const nextActive = !activeRef.current
@@ -66,6 +72,7 @@ export function useElementInspector({
 
   useEffect(() => {
     setReady(false)
+    elementContextChangeRef.current?.(undefined)
   }, [frameKey])
 
   useEffect(() => {
@@ -80,13 +87,16 @@ export function useElementInspector({
         if (activeRef.current) postActiveCommand(true)
         return
       }
-      let selectionContent: string
-      if (message.sourceLocation) {
-        const { sourcePath, line, column } = message.sourceLocation
-        selectionContent = `<${message.tagName}> ${sourcePath}:${line}:${column}`
-        console.log(`[ElementInspector] <${message.tagName}> ${sourcePath}:${line}:${column}`)
+      const context = inspectedElementContextFromMessage(message)
+      const selectionContent = context
+        ? `<${context.tagName}> ${context.sourcePath}:${context.line}:${context.column}`
+        : `<${message.tagName}> 无法定位源码`
+      if (context) {
+        console.log(
+          `[ElementInspector] <${context.tagName}> ${context.sourcePath}:${context.line}:${context.column}`
+        )
+        elementContextChangeRef.current?.(context)
       } else {
-        selectionContent = `<${message.tagName}> source unavailable`
         console.log(`[ElementInspector] <${message.tagName}> source unavailable`)
       }
       antdMessage.info({
