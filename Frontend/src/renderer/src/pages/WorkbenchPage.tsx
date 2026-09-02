@@ -378,8 +378,6 @@ function WorkbenchPage({
               workspaceRoot={
                 workspaceApplication.workspaceRoot || workspaceApplication.projectParentPath || ''
               }
-              theme={theme}
-              onThemeChange={handleThemeChange}
               onReturnWelcome={onReturnWelcome}
               lifecycle={applicationLifecycle}
               rightPanelOpen={rightPanelOpen}

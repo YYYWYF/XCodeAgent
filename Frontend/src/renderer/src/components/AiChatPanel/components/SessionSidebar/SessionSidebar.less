@@ -919,13 +919,28 @@
 }
 
 .@{class-prefix}-session-footer-nav {
+  display: flex;
   flex: 0 0 auto;
+  flex-direction: column;
   margin: 0 -18px 8px;
   padding: 4px 18px 12px;
   border-bottom: 1px solid var(--outline-line);
   // 展开态：功能菜单贴底部（应用大纲在上）。折叠态由下方 collapsed 规则覆盖为顶部。
   order: 2;
   margin-top: auto;
+
+  .@{class-prefix}-session-rail-primary,
+  .@{class-prefix}-session-rail-secondary {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .@{class-prefix}-session-rail-divider {
+    display: block;
+    height: 1px;
+    margin: 10px 0;
+    background: var(--outline-line);
+  }
 
   .@{class-prefix}-free-chat-nav-row {
     display: flex;
@@ -1100,13 +1115,7 @@
   background: transparent;
   border: 0;
   border-radius: 6px;
-  cursor: pointer;
-
-  &:hover,
-  &:focus-visible {
-    background: var(--outline-hover-bg);
-    outline: none;
-  }
+  cursor: default;
 
   > .anticon:last-child {
     margin-left: auto;
@@ -1147,7 +1156,6 @@
   }
 
   .@{class-prefix}-session-brand,
-  .@{class-prefix}-session-theme-toggle,
   .@{class-prefix}-session-workspace-copy,
   .@{class-prefix}-session-workspace-arrow,
   .@{class-prefix}-session-section-title,
@@ -1158,12 +1166,32 @@
     display: none;
   }
 
-  // 折叠态：功能菜单贴顶部（应用大纲已隐藏），取消底部贴边与分隔线。
+  // 折叠态按设计稿拆成顶部与底部两组，保留中部弹性留白。
   .@{class-prefix}-session-footer-nav {
+    height: 100%;
+    flex: 1 1 auto;
     order: 0;
-    margin-top: 0;
-    margin-bottom: 0;
+    margin: 0 -12px;
+    padding: 18px 12px 10px;
     border-bottom: none;
+  }
+
+  .@{class-prefix}-session-rail-primary,
+  .@{class-prefix}-session-rail-secondary {
+    width: 100%;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .@{class-prefix}-session-rail-divider {
+    width: 36px;
+    flex: 0 0 1px;
+    margin: 12px auto 0;
+  }
+
+  .@{class-prefix}-session-rail-secondary {
+    gap: 10px;
+    margin-top: auto;
   }
 
   .@{class-prefix}-free-chat-new-session {
@@ -1171,8 +1199,8 @@
   }
 
   .@{class-prefix}-free-chat-nav-row {
-    flex-direction: column;
-    gap: 2px;
+    width: 38px;
+    height: 38px;
     background: transparent;
 
     &:hover,
@@ -1186,8 +1214,9 @@
 
   button.@{class-prefix}-free-chat-nav-main,
   button.@{class-prefix}-free-chat-history-trigger {
-    width: 34px;
-    flex: 0 0 34px;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
     justify-content: center;
     gap: 0;
     padding: 0;
@@ -1209,11 +1238,11 @@
   .@{class-prefix}-free-chat-history-trigger-count {
     top: 1px;
     right: -3px;
-    min-width: 14px;
-    height: 14px;
-    padding: 0 3px;
-    font-size: 8px;
-    line-height: 14px;
+    min-width: 13px;
+    height: 13px;
+    padding: 0 2px;
+    font-size: 7px;
+    line-height: 13px;
     border: 2px solid var(--outline-panel);
     border-radius: 8px;
   }
@@ -1244,27 +1273,39 @@
   }
 
   .@{class-prefix}-session-footer-nav {
-    margin: 0 -12px;
-    padding: 10px 12px 4px;
-
     button {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 38px;
       justify-content: center;
       gap: 0;
       padding: 0;
 
       .anticon {
         width: auto;
+        font-size: 18px;
       }
       .@{class-prefix}-session-footer-icon {
-        width: 16px;
+        width: 18px;
+        height: 18px;
+        flex-basis: 18px;
       }
     }
   }
 
   .@{class-prefix}-session-user {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
     justify-content: center;
     gap: 0;
     padding: 0;
+  }
+
+  .@{class-prefix}-session-user-avatar {
+    width: 32px;
+    height: 32px;
+    font-size: 15px;
   }
 }
 

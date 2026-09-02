@@ -1,16 +1,18 @@
 import {
   FolderOutlined,
   HistoryOutlined,
+  HourglassOutlined,
   LeftOutlined,
+  MoonOutlined,
   PlusOutlined,
   RightOutlined,
   SettingOutlined,
+  SunOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
 import type { CSSProperties, ReactElement } from 'react'
 import { useState } from 'react'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
-import recommendedTasksIcon from '../../../../assets/icons/recommended-tasks.svg'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import type {
   ApplicationConfig,
@@ -108,6 +110,7 @@ export default function SessionSidebar({
   onApiEndpointSelect,
   onEntitySelect,
   onPageSelect,
+  onThemeChange,
   onShowFiles,
   onShowSettings,
   onShowSkills,
@@ -247,17 +250,28 @@ export default function SessionSidebar({
           </div>
         ) : null}
         <nav className={cx('session-footer-nav')} aria-label="快捷入口">
-          <div className={cx('free-chat-nav-row', temporaryChatActive && 'active')}>
-            <button
-              aria-current={temporaryChatActive ? 'page' : undefined}
-              className={cx('free-chat-nav-main')}
-              onClick={() => handleRailNavigation(onOpenTemporaryChat)}
-              title="临时对话"
-              type="button"
-            >
-              <SidebarAssetIcon source={freeChatIcon} />
-              <span>临时对话</span>
-            </button>
+          <div className={cx('session-rail-primary')}>
+            <div className={cx('free-chat-nav-row', temporaryChatActive && 'active')}>
+              <button
+                aria-current={temporaryChatActive ? 'page' : undefined}
+                className={cx('free-chat-nav-main')}
+                onClick={() => handleRailNavigation(onOpenTemporaryChat)}
+                title="临时对话"
+                type="button"
+              >
+                <SidebarAssetIcon source={freeChatIcon} />
+                <span>临时对话</span>
+              </button>
+              <button
+                aria-label="新建自由对话"
+                className={cx('free-chat-new-session')}
+                onClick={handleCreateHistorySession}
+                title="新建自由对话"
+                type="button"
+              >
+                <PlusOutlined />
+              </button>
+            </div>
             <button
               aria-expanded={historyOpen}
               aria-label={historyOpen ? '关闭历史对话' : '打开历史对话'}
@@ -267,53 +281,62 @@ export default function SessionSidebar({
               type="button"
             >
               <HistoryOutlined />
+              <span>历史对话</span>
               {sessions.length > 0 ? (
                 <span className={cx('free-chat-history-trigger-count')}>
                   {sessions.length > 99 ? '99+' : sessions.length}
                 </span>
               ) : null}
             </button>
+            <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
+              <HourglassOutlined />
+              <span>推荐任务</span>
+            </button>
             <button
-              aria-label="新建自由对话"
-              className={cx('free-chat-new-session')}
-              onClick={handleCreateHistorySession}
-              title="新建自由对话"
+              aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
+              className={cx('session-theme-toggle')}
+              onClick={() => onThemeChange(theme === 'dark' ? 'light' : 'dark')}
+              title={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
               type="button"
             >
-              <PlusOutlined />
+              {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+              <span>{theme === 'dark' ? '浅色主题' : '深色主题'}</span>
             </button>
           </div>
-          <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
-            <SidebarAssetIcon source={recommendedTasksIcon} />
-            <span>推荐任务</span>
-          </button>
-          <button
-            className={cx(skillsActive && 'active')}
-            onClick={() => handleRailNavigation(onShowSkills)}
-            title="技能"
-            type="button"
-          >
-            <ThunderboltOutlined />
-            <span>技能</span>
-          </button>
-          <button
-            className={cx(filesActive && 'active')}
-            onClick={() => handleRailNavigation(onShowFiles)}
-            title="文件"
-            type="button"
-          >
-            <FolderOutlined />
-            <span>文件</span>
-          </button>
-          <button
-            className={cx(settingsActive && 'active')}
-            onClick={() => handleRailNavigation(onShowSettings)}
-            title="设置"
-            type="button"
-          >
-            <SettingOutlined />
-            <span>设置</span>
-          </button>
+          <span className={cx('session-rail-divider')} aria-hidden="true" />
+          <div className={cx('session-rail-secondary')}>
+            <button
+              className={cx(filesActive && 'active')}
+              onClick={() => handleRailNavigation(onShowFiles)}
+              title="文件"
+              type="button"
+            >
+              <FolderOutlined />
+              <span>文件</span>
+            </button>
+            <button
+              className={cx(skillsActive && 'active')}
+              onClick={() => handleRailNavigation(onShowSkills)}
+              title="技能"
+              type="button"
+            >
+              <ThunderboltOutlined />
+              <span>技能</span>
+            </button>
+            <button
+              className={cx(settingsActive && 'active')}
+              onClick={() => handleRailNavigation(onShowSettings)}
+              title="设置"
+              type="button"
+            >
+              <SettingOutlined />
+              <span>设置</span>
+            </button>
+            <span className={cx('session-user')} aria-label="当前用户 S" title="当前用户">
+              <span className={cx('session-user-avatar')}>S</span>
+              <span className={cx('session-user-name')}>S</span>
+            </span>
+          </div>
         </nav>
 
         {!effectiveCollapsed ? (

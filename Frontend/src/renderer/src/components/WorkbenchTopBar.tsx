@@ -1,12 +1,6 @@
 import { Fragment, useState } from 'react'
 import { Tag } from 'antd'
-import {
-  BlockOutlined,
-  DownOutlined,
-  FolderOutlined,
-  MoonOutlined,
-  SunOutlined
-} from '@ant-design/icons'
+import { BlockOutlined, DownOutlined, FolderOutlined } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import { useWorkbenchPhase } from '../context'
@@ -31,8 +25,6 @@ const PHASE_ORDER: WorkbenchPhase[] = [
 type Props = {
   application: ApplicationConfig
   workspaceRoot: string
-  theme: 'light' | 'dark'
-  onThemeChange: (theme: 'light' | 'dark') => void
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
   rightPanelOpen: boolean
@@ -41,13 +33,11 @@ type Props = {
 
 /**
  * 工作台顶部单条：左 = Logo(XCodeAgent)，分隔线后 = 应用卡 + 阶段横排 stepper，
- * 右侧 = 状态提示（当前 Agent + 跟随旅程）+ 主题切换（不相关功能放最右上角）。
+ * 右侧 = 状态提示（当前 Agent + 跟随旅程）+ 预览开关，主题入口统一放在左侧快捷栏。
  */
 export default function WorkbenchTopBar({
   application,
   workspaceRoot,
-  theme,
-  onThemeChange,
   onReturnWelcome,
   rightPanelOpen,
   onToggleRightPanel
@@ -98,7 +88,8 @@ export default function WorkbenchTopBar({
           {PHASE_ORDER.map((phaseKey, idx) => {
             const isActive = phase === phaseKey
             // 测试确认成功后先由会话切换立即设置当前阶段，生命周期异步回传前也不能把当前按钮置灰。
-            const reached = Math.max(PHASE_ORDER.indexOf(derivedPhase), PHASE_ORDER.indexOf(phase)) >= idx
+            const reached =
+              Math.max(PHASE_ORDER.indexOf(derivedPhase), PHASE_ORDER.indexOf(phase)) >= idx
             return (
               <Fragment key={phaseKey}>
                 {idx > 0 ? (
@@ -147,15 +138,6 @@ export default function WorkbenchTopBar({
         aria-pressed={rightPanelOpen}
       >
         <BlockOutlined />
-      </button>
-
-      <button
-        className={cx('workbench-topbar-theme')}
-        onClick={() => onThemeChange(theme === 'dark' ? 'light' : 'dark')}
-        title={theme === 'dark' ? '浅色' : '深色'}
-        type="button"
-      >
-        {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
       </button>
 
       <PhaseSwitchConfirmModal
