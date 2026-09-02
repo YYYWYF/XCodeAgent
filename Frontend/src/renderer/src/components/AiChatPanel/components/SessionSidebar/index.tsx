@@ -52,13 +52,14 @@ type SessionSidebarProps = {
   apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
   deletingSessionId?: string
-  freeChatActive: boolean
+  temporaryChatActive: boolean
   filesActive: boolean
   forceCollapsed?: boolean
   loadingSessions: boolean
+  onCloseTemporaryChat: () => void
   onCreateFreeChatSession: () => void
   onDeleteSession: (sessionId: string) => Promise<void>
-  onOpenFreeChat: () => void
+  onOpenTemporaryChat: () => void
   onOpenSession: (sessionId: string) => Promise<void>
   outlineLocked: boolean
   onApiEndpointSelect: (target: {
@@ -95,16 +96,17 @@ export default function SessionSidebar({
   apiContracts = [],
   deletingSessionId,
   entities = [],
-  freeChatActive,
+  temporaryChatActive,
   filesActive,
   forceCollapsed = false,
   loadingSessions,
+  onCloseTemporaryChat,
   onCreateFreeChatSession,
   onDeleteSession,
-  onOpenFreeChat,
+  onOpenTemporaryChat,
+  onOpenSession,
   onApiEndpointSelect,
   onEntitySelect,
-  onOpenSession,
   onPageSelect,
   onShowFiles,
   onShowSettings,
@@ -137,9 +139,16 @@ export default function SessionSidebar({
     navigate()
   }
 
-  /** 从历史侧栏新建自由对话，并保留历史栏以便继续浏览会话。 */
+  /** 从历史侧栏新建自由对话，并保留原有持久会话能力。 */
   const handleCreateHistorySession = (): void => {
     onCreateFreeChatSession()
+  }
+
+  /** 打开历史会话面板时先关闭临时对话，避免两个浮层相互遮挡。 */
+  const handleHistoryToggle = (): void => {
+    const next = !historyOpen
+    if (next) onCloseTemporaryChat()
+    setHistoryOpen(next)
   }
 
   /** 从历史侧栏切换会话，保留侧栏以明确当前会话并支持连续切换。 */
@@ -238,26 +247,22 @@ export default function SessionSidebar({
           </div>
         ) : null}
         <nav className={cx('session-footer-nav')} aria-label="快捷入口">
-          <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
-            <SidebarAssetIcon source={recommendedTasksIcon} />
-            <span>推荐任务</span>
-          </button>
-          <div className={cx('free-chat-nav-row', freeChatActive && 'active')}>
+          <div className={cx('free-chat-nav-row', temporaryChatActive && 'active')}>
             <button
-              aria-current={freeChatActive ? 'page' : undefined}
+              aria-current={temporaryChatActive ? 'page' : undefined}
               className={cx('free-chat-nav-main')}
-              onClick={() => handleRailNavigation(onOpenFreeChat)}
-              title="自由对话"
+              onClick={() => handleRailNavigation(onOpenTemporaryChat)}
+              title="临时对话"
               type="button"
             >
               <SidebarAssetIcon source={freeChatIcon} />
-              <span>自由对话</span>
+              <span>临时对话</span>
             </button>
             <button
               aria-expanded={historyOpen}
               aria-label={historyOpen ? '关闭历史对话' : '打开历史对话'}
               className={cx('free-chat-history-trigger', historyOpen && 'active')}
-              onClick={() => setHistoryOpen((current) => !current)}
+              onClick={handleHistoryToggle}
               title={historyOpen ? '关闭历史对话' : '打开历史对话'}
               type="button"
             >
@@ -278,6 +283,10 @@ export default function SessionSidebar({
               <PlusOutlined />
             </button>
           </div>
+          <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
+            <SidebarAssetIcon source={recommendedTasksIcon} />
+            <span>推荐任务</span>
+          </button>
           <button
             className={cx(skillsActive && 'active')}
             onClick={() => handleRailNavigation(onShowSkills)}

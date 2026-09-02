@@ -73,6 +73,7 @@ import RightPanelTabs, {
   type WorkspaceTabKey
 } from './components/RightPanelTabs'
 import SessionSidebar from './components/SessionSidebar'
+import TemporaryChatOverlay from './components/TemporaryChatOverlay'
 import WorkspaceDebugDock from './components/WorkspaceDebugDock'
 import EntityInfoPanel from './components/EntityInfoPanel'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
@@ -808,6 +809,8 @@ export default function AiChatPanel({
 }: Props): ReactElement {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
+  // 临时对话仅控制覆盖层可见性，不切换当前工作流会话或持久化上下文。
+  const [temporaryChatOpen, setTemporaryChatOpen] = useState(false)
   // 记录用户是否主动进入自由对话，用于切换工作台上下文和设计入口状态。
   const [freeChatSelected, setFreeChatSelected] = useState(false)
   // 用户从模板就绪卡片进入开发后，必须先选择页面、接口或实体，不能被残留规划会话跳过。
@@ -1207,7 +1210,6 @@ export default function AiChatPanel({
     openSessionForPhase,
     handleSelectEndpoint,
     handleSelectEntity,
-    handleSelectFreeChat,
     handleSelectPage,
     loadSessionIdentity,
     loadingSessions,
@@ -3309,25 +3311,39 @@ export default function AiChatPanel({
   }
 
   const handleShowSkills = (): void => {
+    setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('skills')
   }
 
   const handleShowFiles = (): void => {
+    setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('files')
   }
 
   const handleShowSettings = (): void => {
+    setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('settings')
   }
 
-  /** 新建普通对话时退出页面/API 目标上下文，避免后续消息被旧目标接管。 */
+  /** 打开独立临时对话浮层，不改变底层工作区选择和会话上下文。 */
+  const handleOpenTemporaryChat = (): void => {
+    setTemporaryChatOpen(true)
+  }
+
+  /** 关闭临时对话浮层并完整保留底层工作区状态。 */
+  const handleCloseTemporaryChat = useCallback((): void => {
+    setTemporaryChatOpen(false)
+  }, [])
+
+  /** 从历史面板新建普通对话，完整保留原有持久会话和上下文切换行为。 */
   const handleCreateChatSession = (): void => {
+    setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
@@ -3336,18 +3352,6 @@ export default function AiChatPanel({
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ type: 'none' })
     handleCreateSessionFromList()
-  }
-
-  /** 进入自由对话时只恢复最近会话，不隐式创建新会话。 */
-  const handleOpenFreeChat = (): void => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('chat')
-    setFreeChatSelected(true)
-    setInteractingDetailTargetKey('')
-    setGeneratingDetailTargetKey('')
-    setActiveDetailTarget({ type: 'none' })
-    handleSelectFreeChat().catch(() => undefined)
   }
 
   /** 从应用大纲切换页面；页面只改变当前工作目标，不再切换会话。 */
@@ -3554,7 +3558,9 @@ export default function AiChatPanel({
     )
   }
 
+  /** 从历史面板恢复原有会话，并关闭临时对话浮层避免遮挡持久会话。 */
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
+    setTemporaryChatOpen(false)
     setActiveView('chat')
     setFreeChatSelected(true)
     setInteractingDetailTargetKey('')
@@ -3917,16 +3923,15 @@ export default function AiChatPanel({
           application={application}
           deletingSessionId={deletingSessionId}
           forceCollapsed
-          freeChatActive={
-            freeChatSelected && activeView === 'chat' && activeDetailTarget.type === 'none'
-          }
           loadingSessions={loadingSessions}
+          temporaryChatActive={temporaryChatOpen}
           outlineLocked={detailTargetSelectionRequired}
+          onCloseTemporaryChat={handleCloseTemporaryChat}
           onCreateFreeChatSession={handleCreateChatSession}
           onDeleteSession={handleDeleteSession}
           onEntitySelect={handleEntitySelect}
           onApiEndpointSelect={handleApiEndpointSelect}
-          onOpenFreeChat={handleOpenFreeChat}
+          onOpenTemporaryChat={handleOpenTemporaryChat}
           onOpenSession={handleOpenChatSession}
           onPageSelect={handlePageSelect}
           onReturnWelcome={onReturnWelcome}
@@ -3950,7 +3955,6 @@ export default function AiChatPanel({
           theme={theme}
           workspaceRoot={workspaceRoot}
         />
-
         {activeView === 'skills' ? (
           <SkillsPage onSkillDisabled={handleSkillDisabled} theme={theme} />
         ) : activeView === 'files' ? (
@@ -4171,6 +4175,8 @@ export default function AiChatPanel({
           </div>
         )}
       </div>
+
+      {temporaryChatOpen ? <TemporaryChatOverlay onClose={handleCloseTemporaryChat} /> : null}
 
       {showRightPanel && (
         <div
