@@ -48,11 +48,7 @@ import {
   sessionToRestoreForPhase,
   sessionsForWorkbenchPhase
 } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
-import {
-  createSessionIdentity,
-  hasSameSessionTargetBinding,
-  inheritedSessionTargetBinding
-} from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
+import { createSessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import type { ChatSessionSummary } from '../src/renderer/src/service/chatSessions'
 import {
   revisionContinuationFromWorkflow,
@@ -152,7 +148,6 @@ const revisionSessionBase = {
   editorMode: 'frontend' as const,
   workbenchPhase: 'product' as const,
   workflowId: 'workflow-1',
-  targetType: 'workflow' as const,
   stage: 'DESIGN' as const,
   sequence: 2,
   entryKey: 'revision:design_stage_revision:impact-1',
@@ -250,11 +245,7 @@ assert.equal(
         threadId: 'orphan-plan-thread',
         revisionContext: undefined
       },
-      {
-        ...revisionSessionCandidates[3],
-        targetType: 'page',
-        pageId: 'orders'
-      }
+      revisionSessionCandidates[3]
     ],
     activeRevisionLifecycle,
     'workflow-1'
@@ -374,8 +365,6 @@ const designRevisionIdentity = createSessionIdentity({
   sessionId: 'revision-design-session',
   threadId: 'revision-design-thread',
   workflowId: 'workflow-1',
-  targetType: 'page',
-  pageId: 'orders',
   stage: 'PLAN',
   sequence: 3,
   entryKey: 'revision-plan:change-1:gate-1',
@@ -408,39 +397,8 @@ const developmentSession = {
   stage: 'DEVELOPMENT' as const,
   sequence: 1,
   entryKey: `revision-development:change-1:${'b'.repeat(64)}`,
-  targetType: 'page' as const,
-  pageId: 'orders',
   revisionContext: developmentRevisionContext
 }
-assert.deepEqual(inheritedSessionTargetBinding(designRevisionIdentity), { pageId: 'orders' })
-assert.deepEqual(
-  inheritedSessionTargetBinding({
-    ...designRevisionIdentity,
-    targetType: 'api',
-    pageId: undefined,
-    apiContractId: 'orders-api',
-    endpointId: 'list-orders',
-    endpointLabel: '查询订单'
-  }),
-  {
-    endpointContext: {
-      apiContractId: 'orders-api',
-      endpointId: 'list-orders',
-      endpointLabel: '查询订单'
-    }
-  }
-)
-assert.deepEqual(
-  inheritedSessionTargetBinding({
-    ...designRevisionIdentity,
-    targetType: 'entity',
-    pageId: undefined,
-    entityId: 'Order',
-    entityLabel: '订单'
-  }),
-  { entityContext: { entityId: 'Order', entityLabel: '订单' } }
-)
-assert.equal(hasSameSessionTargetBinding(designRevisionIdentity, developmentSession), true)
 const oldDevelopmentSession = {
   ...developmentSession,
   id: 'old-development-session',
@@ -473,17 +431,6 @@ assert.equal(
     developmentContinuation
   )?.id,
   'revision-development-session'
-)
-assert.equal(
-  revisionDevelopmentSessionForContinuation(
-    [
-      ...revisionSessionCandidates,
-      { ...developmentSession, targetType: 'workflow', pageId: undefined }
-    ],
-    designRevisionIdentity,
-    developmentContinuation
-  ),
-  undefined
 )
 assert.equal(
   revisionDevelopmentSessionForContinuation(

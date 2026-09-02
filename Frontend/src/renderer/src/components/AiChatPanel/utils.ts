@@ -45,13 +45,6 @@ export type WorkspacePathParts = {
   fileName: string
 }
 
-type DetailSessionIdentity = {
-  apiContractId?: string
-  endpointId?: string
-  entityId?: string
-  pageId?: string
-}
-
 /** 生成页面详情目标键，供临时运行状态按页面隔离。 */
 export function pageDetailTargetKey(pageId: string): string {
   return pageId ? `page:${pageId}` : ''
@@ -78,17 +71,6 @@ export function apiEndpointDisplayPath(endpointPath: string, basePath: string): 
     return normalizedEndpointPath
   }
   return normalizedEndpointPath.slice(normalizedBasePath.length) || '/'
-}
-
-/** 从持久化会话归属生成详情目标键。 */
-export function sessionDetailTargetKey(session: DetailSessionIdentity | undefined): string {
-  if (session?.apiContractId && session.endpointId) {
-    return endpointDetailTargetKey(session.apiContractId, session.endpointId)
-  }
-  if (session?.entityId) {
-    return entityDetailTargetKey(session.entityId)
-  }
-  return pageDetailTargetKey(session?.pageId || '')
 }
 
 /** 从 Workflow 快照读取详情目标键，避免历史运行状态串到当前页面。 */
@@ -426,24 +408,12 @@ export function requiresPageDetailDesign(
   return Boolean(page && !page.designed && !page.hasDetailPlan)
 }
 
-/** 页面是否已设计以工作区是否存在对应页面会话为准。 */
-export function pageDesignedBySession(
-  pageId: string,
-  sessions: ReadonlyArray<{ pageId?: string }>
-): boolean {
-  const normalizedPageId = pageId.trim()
-  return Boolean(
-    normalizedPageId &&
-      sessions.some((session) => String(session.pageId || '').trim() === normalizedPageId)
-  )
-}
-
-/** 判断待设计页面是否应显示锁定蒙层；页面已有工作区会话时不再重复引导。 */
+/** 判断待设计页面是否应显示锁定蒙层；正式开发产物存在时不再重复引导。 */
 export function shouldShowPageDetailDesignEntry(
   page: DevelopmentPlanningPageOption | undefined,
-  pageSessionExists: boolean
+  developmentArtifactExists: boolean
 ): boolean {
-  return requiresPageDetailDesign(page) && !pageSessionExists
+  return requiresPageDetailDesign(page) && !developmentArtifactExists
 }
 
 /** 以 endpoint 文档状态判断接口是否需要显示开始详细设计入口。 */

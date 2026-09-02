@@ -32,7 +32,6 @@ import { cx } from '../../../../utils'
 import { apiEndpointDisplayPath } from '../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
-import PageSessionHistory from './PageSessionHistory'
 import FreeChatHistory from './FreeChatHistory'
 import './SessionSidebar.less'
 
@@ -68,13 +67,7 @@ type SessionSidebarProps = {
   filesActive: boolean
   forceCollapsed?: boolean
   loadingSessions: boolean
-  onCreateEndpointSession: (
-    apiContractId: string,
-    endpointId: string,
-    endpointLabel: string
-  ) => Promise<void>
   onCreateFreeChatSession: () => void
-  onCreatePageSession: (pageId: string, pageLabel: string) => Promise<void>
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenFreeChat: () => void
   onOpenSession: (sessionId: string) => Promise<void>
@@ -108,20 +101,11 @@ type SessionSidebarProps = {
 }
 
 type OutlineRowProps = {
-  activeSessionId?: string
-  deletingSessionId?: string
   disabled?: boolean
   item: ApplicationMenuItem
   level: number
-  loadingSessions: boolean
-  onCreatePageSession: (pageId: string, pageLabel: string) => Promise<void>
-  onDeleteSession: (sessionId: string) => Promise<void>
-  onOpenSession: (sessionId: string) => Promise<void>
   onSelect: (key: string) => void
   selectedKey: string
-  sessionError?: string
-  sessionRunStates: Record<string, SessionRunStatus>
-  sessions: ChatSessionSummary[]
   visibleKeys: Set<string>
 }
 
@@ -133,20 +117,11 @@ function outlineLeafCount(item: ApplicationMenuItem): number {
 
 /** 渲染单个页面目录节点，并展示其详细设计状态。 */
 function OutlineRow({
-  activeSessionId,
-  deletingSessionId,
   disabled = false,
   item,
   level,
-  loadingSessions,
-  onCreatePageSession,
-  onDeleteSession,
-  onOpenSession,
   onSelect,
   selectedKey,
-  sessionError,
-  sessionRunStates,
-  sessions,
   visibleKeys
 }: OutlineRowProps): ReactElement {
   const [expanded, setExpanded] = useState(true)
@@ -201,43 +176,16 @@ function OutlineRow({
           ) : null}
         </span>
       </button>
-      {!isFolder && !disabled ? (
-        <PageSessionHistory
-          activeSessionId={activeSessionId}
-          deletingSessionId={deletingSessionId}
-          loadingSessions={loadingSessions}
-          onCreateSession={() => onCreatePageSession(item.pageKey || item.key, item.label)}
-          onDeleteSession={onDeleteSession}
-          onOpenSession={onOpenSession}
-          deleteTitle="删除这个页面会话？"
-          emptyDescription="当前页面暂无历史会话"
-          sessionError={sessionError}
-          sessionRunStates={sessionRunStates}
-          sessions={sessions}
-          targetLabel={item.label}
-        />
-      ) : null}
       {isFolder && expanded && children.length > 0 ? (
         <div className={cx('outline-children')}>
           {children.map((child) => (
             <OutlineRow
-              activeSessionId={activeSessionId}
-              deletingSessionId={deletingSessionId}
               disabled={disabled}
               item={child}
               key={child.key}
               level={level + 1}
-              loadingSessions={loadingSessions}
-              onCreatePageSession={onCreatePageSession}
-              onDeleteSession={onDeleteSession}
-              onOpenSession={onOpenSession}
               onSelect={onSelect}
               selectedKey={selectedKey}
-              sessionError={sessionError}
-              sessionRunStates={sessionRunStates}
-              sessions={sessions.filter(
-                (session) => session.pageId === (child.pageKey || child.key)
-              )}
               visibleKeys={visibleKeys}
             />
           ))}
@@ -328,11 +276,6 @@ function apiEndpointSelectionKey(contractId: string, endpointId: string): string
   return `${contractId}:${endpointId}`
 }
 
-/** 判断会话是否属于没有页面、API 或实体归属的自由对话。 */
-function isFreeChatSession(session: ChatSessionSummary): boolean {
-  return !session.pageId && !session.apiContractId && !session.endpointId && !session.entityId
-}
-
 /** 使用 ProjectPlan 页面清单组织工作台左侧大纲与快捷入口。 */
 export default function SessionSidebar({
   activeSessionId,
@@ -343,9 +286,7 @@ export default function SessionSidebar({
   filesActive,
   forceCollapsed = false,
   loadingSessions,
-  onCreateEndpointSession,
   onCreateFreeChatSession,
-  onCreatePageSession,
   onDeleteSession,
   onOpenFreeChat,
   onApiEndpointSelect,
@@ -402,40 +343,7 @@ export default function SessionSidebar({
     ),
     [pageTree, pages]
   )
-  const sessionsByPageId = useMemo(() => {
-    const groupedSessions = new Map<string, ChatSessionSummary[]>()
-    sessions.forEach((session) => {
-      if (!session.pageId) return
-      const pageSessions = groupedSessions.get(session.pageId) || []
-      pageSessions.push(session)
-      groupedSessions.set(session.pageId, pageSessions)
-    })
-    return groupedSessions
-  }, [sessions])
-  const sessionsByEndpointKey = useMemo(() => {
-    const groupedSessions = new Map<string, ChatSessionSummary[]>()
-    sessions.forEach((session) => {
-      const apiContractId = session.apiContractId
-      const endpointId = session.endpointId
-      if (!apiContractId || !endpointId) return
-      const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
-      const endpointSessions = groupedSessions.get(endpointKey) || []
-      endpointSessions.push(session)
-      groupedSessions.set(endpointKey, endpointSessions)
-    })
-    return groupedSessions
-  }, [sessions])
-  const sessionsByEntityId = useMemo(() => {
-    const groupedSessions = new Map<string, ChatSessionSummary[]>()
-    sessions.forEach((session) => {
-      if (!session.entityId) return
-      const entitySessions = groupedSessions.get(session.entityId) || []
-      entitySessions.push(session)
-      groupedSessions.set(session.entityId, entitySessions)
-    })
-    return groupedSessions
-  }, [sessions])
-  const freeChatSessions = useMemo(() => sessions.filter(isFreeChatSession), [sessions])
+  const freeChatSessions = sessions
   const selectedKey = selectedApiEndpointKey
     ? ''
     : containsMenuKey(pageItems, selectedPageId)
@@ -692,24 +600,15 @@ export default function SessionSidebar({
                     .filter((item) => visibleKeys.has(item.key))
                     .map((item) => (
                       <OutlineRow
-                        activeSessionId={activeSessionId}
-                        deletingSessionId={deletingSessionId}
                         disabled={outlineLocked}
                         item={item}
                         key={item.key}
                         level={0}
-                        loadingSessions={loadingSessions}
-                        onCreatePageSession={onCreatePageSession}
-                        onDeleteSession={onDeleteSession}
-                        onOpenSession={onOpenSession}
                         onSelect={(key) => {
                           const selectedPage = pagesById.get(key)
                           if (selectedPage) onPageSelect(selectedPage)
                         }}
                         selectedKey={selectedKey}
-                        sessionError={selectedKey === item.key ? sessionError : undefined}
-                        sessionRunStates={sessionRunStates}
-                        sessions={sessionsByPageId.get(item.pageKey || item.key) || []}
                         visibleKeys={visibleKeys}
                       />
                     ))}
@@ -762,7 +661,6 @@ export default function SessionSidebar({
                               const endpointDesigned = Boolean(
                                 endpoint.designed || endpoint.hasDetailPlan
                               )
-                              const endpointSessions = sessionsByEndpointKey.get(endpointKey) || []
                               return (
                                 <div className={cx('api-node')} key={endpointKey}>
                                   <button
@@ -802,30 +700,6 @@ export default function SessionSidebar({
                                       {endpointDesigned ? '已设计' : '待设计'}
                                     </span>
                                   </button>
-                                  <PageSessionHistory
-                                    activeSessionId={activeSessionId}
-                                    deletingSessionId={deletingSessionId}
-                                    deleteTitle="删除这个接口会话？"
-                                    emptyDescription="当前接口暂无历史会话"
-                                    loadingSessions={loadingSessions}
-                                    onCreateSession={() =>
-                                      onCreateEndpointSession(
-                                        apiContractId,
-                                        endpointId,
-                                        endpointLabel
-                                      )
-                                    }
-                                    onDeleteSession={onDeleteSession}
-                                    onOpenSession={onOpenSession}
-                                    sessionError={
-                                      selectedApiEndpointKey === endpointKey
-                                        ? sessionError
-                                        : undefined
-                                    }
-                                    sessionRunStates={sessionRunStates}
-                                    sessions={endpointSessions}
-                                    targetLabel={endpointLabel}
-                                  />
                                 </div>
                               )
                             })}
@@ -890,20 +764,6 @@ export default function SessionSidebar({
                             </span>
                           </span>
                         </button>
-                        <PageSessionHistory
-                          activeSessionId={activeSessionId}
-                          deletingSessionId={deletingSessionId}
-                          loadingSessions={loadingSessions}
-                          onCreateSession={async () => onEntitySelect(entity)}
-                          onDeleteSession={onDeleteSession}
-                          onOpenSession={onOpenSession}
-                          deleteTitle="删除这个实体会话？"
-                          emptyDescription="当前实体暂无历史会话"
-                          sessionError={sessionError}
-                          sessionRunStates={sessionRunStates}
-                          sessions={sessionsByEntityId.get(entity.id) || []}
-                          targetLabel={entity.label}
-                        />
                       </div>
                     )
                   })}

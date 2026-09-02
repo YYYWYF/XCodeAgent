@@ -3,12 +3,10 @@ import { test } from 'node:test'
 import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
-  pageDesignedBySession,
   pageDetailTargetKey,
   requiresEndpointDetailDesign,
   requiresInitialDetailDesignSelection,
   requiresPageDetailDesign,
-  sessionDetailTargetKey,
   shouldShowDevelopmentTargetSelector,
   shouldShowEndpointDetailDesignEntry,
   shouldShowPageDetailDesignEntry,
@@ -36,11 +34,6 @@ import {
   entityDesignActionContinuationMessage,
   pageAcceptanceContinuationMessage
 } from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
-import {
-  createSessionIdentity,
-  selectableEndpointSessionId,
-  sessionIdentityMatchesTarget
-} from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import {
   APPLICATIONS_CHANGED_EVENT,
   canOpenApplicationWorkbench,
@@ -478,44 +471,6 @@ test('项目异步启动成功后将 about:blank 自动导航到当前页面', (
   )
 })
 
-test('切换 API 时只恢复有消息的同接口会话', () => {
-  const sessions = [
-    {
-      id: 'page-running',
-      title: '概览页',
-      editorMode: 'frontend',
-      threadId: 'thread-page',
-      pageId: 'overview',
-      workspaceRoot: '/workspace',
-      messageCount: 2,
-      createdAt: 1,
-      updatedAt: 3
-    },
-    {
-      id: 'endpoint-empty',
-      title: 'GET /stats',
-      editorMode: 'frontend',
-      threadId: 'thread-endpoint-empty',
-      apiContractId: 'core-api',
-      endpointId: 'stats',
-      workspaceRoot: '/workspace',
-      messageCount: 0,
-      createdAt: 1,
-      updatedAt: 2
-    }
-  ]
-
-  assert.equal(selectableEndpointSessionId(sessions, 'core-api', 'stats'), undefined)
-  assert.equal(
-    selectableEndpointSessionId(
-      [...sessions, { ...sessions[1], id: 'endpoint-ready', messageCount: 1 }],
-      ' core-api ',
-      ' stats '
-    ),
-    'endpoint-ready'
-  )
-})
-
 test('待设计 API 在开始前显示绿色设计入口，已有运行消息后让出对话区', () => {
   const pendingEndpoint = {
     id: 'stats',
@@ -536,7 +491,7 @@ test('待设计 API 在开始前显示绿色设计入口，已有运行消息后
   )
 })
 
-test('待设计页面仅在没有会话时使用锁定蒙层', () => {
+test('待设计页面仅在没有正式开发产物时使用锁定蒙层', () => {
   const pendingPage = {
     pageId: 'page-home',
     key: 'page-home',
@@ -552,12 +507,6 @@ test('待设计页面仅在没有会话时使用锁定蒙层', () => {
   assert.equal(shouldShowPageDetailDesignEntry(pendingPage, true), false)
   assert.equal(requiresPageDetailDesign({ ...pendingPage, designed: true }), false)
   assert.equal(requiresPageDetailDesign({ ...pendingPage, hasDetailPlan: true }), false)
-})
-
-test('页面 designed 以工作区是否存在页面会话为最高优先级', () => {
-  assert.equal(pageDesignedBySession('page-home', []), false)
-  assert.equal(pageDesignedBySession('page-home', [{ pageId: 'page-orders' }]), false)
-  assert.equal(pageDesignedBySession('page-home', [{ pageId: ' page-home ' }]), true)
 })
 
 test('模板就绪后没有任何设计时显式进入开发显示目标选择器', () => {
@@ -607,48 +556,12 @@ test('已有页面或接口设计时重新进入开发不再显示目标选择�
   )
 })
 
-test('页面运行态不会在切换到 API 后被复用为接口设计进度', () => {
-  const pageIdentity = createSessionIdentity({
-    workspaceRoot: '/workspace',
-    editorMode: 'frontend',
-    sessionId: 'page-session',
-    threadId: 'page-thread',
-    pageId: 'overview'
-  })
-  const endpointIdentity = createSessionIdentity({
-    workspaceRoot: '/workspace',
-    editorMode: 'frontend',
-    sessionId: 'endpoint-session',
-    threadId: 'endpoint-thread',
-    apiContractId: 'core-api',
-    endpointId: 'stats'
-  })
-
-  assert.equal(
-    sessionIdentityMatchesTarget(pageIdentity, {
-      apiContractId: 'core-api',
-      endpointId: 'stats'
-    }),
-    false
-  )
-  assert.equal(
-    sessionIdentityMatchesTarget(endpointIdentity, {
-      apiContractId: 'core-api',
-      endpointId: 'stats'
-    }),
-    true
-  )
-  assert.equal(sessionIdentityMatchesTarget(pageIdentity, { pageId: 'overview' }), true)
-  assert.equal(sessionIdentityMatchesTarget(endpointIdentity, { pageId: 'overview' }), false)
-})
-
-test('页面、接口、会话和 Workflow 使用一致的详情目标键', () => {
+test('页面、接口和 Workflow 使用一致的详情目标键', () => {
   assert.equal(pageDetailTargetKey('page-orders'), 'page:page-orders')
   assert.equal(
     endpointDetailTargetKey('orders-api', 'list-orders'),
     'endpoint:orders-api:list-orders'
   )
-  assert.equal(sessionDetailTargetKey({ pageId: 'page-orders' }), 'page:page-orders')
   assert.equal(
     workflowDetailTargetKey({
       state: { selectedPageId: 'page-orders' }

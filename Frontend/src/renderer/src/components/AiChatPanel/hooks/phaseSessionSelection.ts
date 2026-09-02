@@ -15,8 +15,6 @@ export function sessionsForWorkbenchPhase<
 type RestorablePhaseSession = {
   id: string
   workbenchPhase: WorkbenchPhase
-  pageId?: string
-  endpointId?: string
   messageCount: number
 }
 
@@ -37,16 +35,7 @@ export function sessionToRestoreForPhase<Session extends RestorablePhaseSession>
     : undefined
   if (persistedSession) return persistedSession
 
-  const shouldRestoreLatestPhaseSession = ['test', 'review', 'acceptance'].includes(phase)
-  return (
-    phaseSessions.find(
-      (session) => (session.pageId || session.endpointId) && session.messageCount > 0
-    ) ||
-    phaseSessions.find((session) => session.pageId || session.endpointId) ||
-    (shouldRestoreLatestPhaseSession
-      ? phaseSessions.find((session) => session.messageCount > 0) || phaseSessions[0]
-      : undefined)
-  )
+  return phaseSessions.find((session) => session.messageCount > 0) || phaseSessions[0]
 }
 
 /** 读取指定编辑模式和工作台阶段各自选中的会话，避免跨阶段复用最后会话。 */

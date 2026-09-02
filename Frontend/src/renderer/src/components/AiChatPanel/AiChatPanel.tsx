@@ -111,12 +111,10 @@ import {
 } from './stageOutputState'
 import {
   endpointDetailTargetKey,
-  pageDesignedBySession,
   pageDetailTargetKey,
   requiresEndpointDetailDesign,
   requiresInitialDetailDesignSelection,
   requiresEntitySourceBinding,
-  sessionDetailTargetKey,
   shouldShowDevelopmentTargetSelector,
   shouldShowEndpointDetailDesignEntry,
   shouldShowPageDetailDesignEntry,
@@ -723,23 +721,6 @@ function findPageMenuItem(
   return undefined
 }
 
-/** 以工作区真实存在的页面会话同步菜单树设计状态。 */
-function applyPageSessionDesignToTree(
-  nodes: DevelopmentPlanningPageTreeNode[],
-  sessions: ReadonlyArray<{ pageId?: string }>
-): DevelopmentPlanningPageTreeNode[] {
-  return nodes.map((node) => {
-    if (node.type === 'menu') {
-      return {
-        ...node,
-        children: applyPageSessionDesignToTree(node.children || [], sessions)
-      }
-    }
-    const pageId = String(node.pageId || node.key || '').trim()
-    return { ...node, designed: pageDesignedBySession(pageId, sessions) }
-  })
-}
-
 /** 根据页面设计、开发任务和当前执行态生成顶部上下文栏的可信状态。 */
 function pageContextStatus(
   designed: boolean,
@@ -786,25 +767,6 @@ function pageContextStatus(
     return { details, label: '开发中', tone: 'active' }
   }
   return { details, label: '已设计', tone: 'success' }
-}
-
-/** 在最新 ProjectPlan 页面目录中解析会话保存的页面标识，避免旧 pageId 覆盖当前选择。 */
-function resolvePlanningPageId(pages: DevelopmentPlanningPageOption[], pageId: string): string {
-  const normalizedPageId = pageId.trim()
-  if (!normalizedPageId) return ''
-  const matched = pages.find((page) => page.pageId === normalizedPageId)
-  if (matched) return matched.pageId
-  const alias = pageIdAlias(normalizedPageId)
-  return pages.find((page) => pageIdAlias(page.pageId) === alias)?.pageId || ''
-}
-
-/** 生成页面标识的宽松别名，兼容历史会话里的 page- 前缀差异。 */
-function pageIdAlias(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/_/g, '-')
-    .replace(/^page-/, '')
 }
 
 /** 组织应用侧栏、对话区、页面信息与预览面板的主工作台。 */
@@ -1221,8 +1183,6 @@ export default function AiChatPanel({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
-    createEndpointSession,
-    createPageSession,
     createTestSession,
     createReviewSession,
     createAcceptanceSession,
@@ -1264,7 +1224,7 @@ export default function AiChatPanel({
     application,
     editorMode,
     workbenchPhase: activeWorkbenchPhase,
-    // 开发阶段切换页面/接口会话时保留右侧面板（源码/预览/文档随选中目标自动更新），
+    // 开发阶段切换页面/接口目标时保留右侧面板（源码/预览/文档随选中目标自动更新），
     // 仅设计阶段切换规划会话时清空右侧文档面板。
     onCloseRightPanel: () => {
       if (isApplicationPlanningPhase) setRightPanel(undefined)
@@ -1280,18 +1240,8 @@ export default function AiChatPanel({
   // 当前选中页面的规划配置。必须提前到 workspaceTabs / 读取源码的 useEffect 之前，
   // 否则这些位置（尤其 useEffect 依赖数组）会在 const 暂时性死区里访问未初始化的
   // activePageOption，抛 ReferenceError: Cannot access 'activePageOption' before initialization。
-  const displayedPlanningPages = useMemo(
-    () =>
-      developmentPlanningPages.map((page) => ({
-        ...page,
-        designed: pageDesignedBySession(page.pageId, allSessions)
-      })),
-    [allSessions, developmentPlanningPages]
-  )
-  const displayedPlanningPageTree = useMemo(
-    () => applyPageSessionDesignToTree(developmentPlanningPageTree, allSessions),
-    [allSessions, developmentPlanningPageTree]
-  )
+  const displayedPlanningPages = developmentPlanningPages
+  const displayedPlanningPageTree = developmentPlanningPageTree
   const activePageId = activeDetailTarget.type === 'page' ? activeDetailTarget.pageId : ''
   const activePageOption = useMemo(
     () => displayedPlanningPages.find((page) => page.pageId === activePageId),
@@ -1662,12 +1612,6 @@ export default function AiChatPanel({
           messages: nextTargetMessages,
           sessionId: targetIdentity.sessionId,
           threadId: targetIdentity.threadId,
-          apiContractId: targetIdentity.apiContractId,
-          endpointId: targetIdentity.endpointId,
-          endpointLabel: targetIdentity.endpointLabel,
-          entityId: targetIdentity.entityId,
-          entityLabel: targetIdentity.entityLabel,
-          pageId: targetIdentity.pageId,
           revisionContext: targetIdentity.revisionContext,
           titleFrom: '二次修改 · 继续开发'
         })
@@ -2257,10 +2201,6 @@ export default function AiChatPanel({
           messages: msgs,
           sessionId: identity.sessionId,
           threadId: identity.threadId,
-          apiContractId: identity.apiContractId,
-          endpointId: identity.endpointId,
-          endpointLabel: identity.endpointLabel,
-          pageId: identity.pageId,
           revisionContext: bindRevisionSessionChangeId(
             identity.revisionContext,
             applicationLifecycleRef.current
@@ -2900,7 +2840,7 @@ export default function AiChatPanel({
         : activePageOption?.taskSummary
   )
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
-  const currentStageSessionTargetKey = sessionDetailTargetKey(activeSession)
+  const currentStageSessionTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const stageOutputContextAligned = activeTargetKey
     ? currentStageSessionTargetKey === activeTargetKey
     : !currentStageSessionTargetKey
@@ -3215,28 +3155,18 @@ export default function AiChatPanel({
     (session) => session.id === activeSessionId
   )?.updatedAt
   const entityDetailTarget = activeDetailTarget.type === 'entity' ? activeDetailTarget : undefined
-  // 实体已绑定专属会话时直接展示设计对话；已设计且无活动会话时展示信息面板（查看设计）；
+  // 当前目标启动阶段会话后直接展示设计对话；已设计且无活动会话时展示信息面板（查看设计）；
   // 未设计实体与页面/接口保持一致，由锁定引导卡片接管，避免直接落入对话区。
-  const entitySessionActive = Boolean(
-    entityDetailTarget && activeSession?.entityId === entityDetailTarget.entityId
-  )
-  const endpointSessionActive = Boolean(
-    activeApiEndpoint &&
-      activeSession?.apiContractId === activeApiEndpoint.apiContractId &&
-      activeSession?.endpointId === activeApiEndpoint.endpointId
-  )
+  const entitySessionActive = Boolean(entityDetailTarget && activeSession)
+  const endpointSessionActive = Boolean(activeApiEndpoint && activeSession)
   const showEndpointDetailDesignEntry = shouldShowEndpointDetailDesignEntry(
     activeApiEndpointOption?.endpoint,
     endpointSessionActive,
     messages.length
   )
-  const activePageSessionExists = Boolean(
-    activeDetailTarget.type === 'page' &&
-      pageDesignedBySession(activeDetailTarget.pageId, allSessions)
-  )
   const showPageDetailDesignEntry = Boolean(
     activeDetailTarget.type === 'page' &&
-      shouldShowPageDetailDesignEntry(activePageOption, activePageSessionExists)
+      shouldShowPageDetailDesignEntry(activePageOption, false)
   )
   const showEntityInfoPanel = Boolean(
     entityDetailTarget &&
@@ -3312,76 +3242,12 @@ export default function AiChatPanel({
     })
   }, [activeApiEndpoint, displayedPlanningPages, detailTargetSelectionRequired])
 
-  // 打开历史页面或接口会话时同步目标上下文，避免标题与消息归属不一致。
-  // sessions 是每次渲染重新计算的派生数组（引用每次都变），不能作为 effect 依赖，
-  // 否则 setActiveDetailTarget 设置的新对象引用会触发重渲染 → sessions 新引用 →
-  // effect 再触发 → Maximum update depth exceeded 无限循环。用 ref 持有最新值，
-  // effect 只依赖 activeSessionId，session 不变时不再触发。
-  const sessionsRef = useRef(sessions)
-  sessionsRef.current = sessions
-  const displayedPlanningPagesRef = useRef(displayedPlanningPages)
-  displayedPlanningPagesRef.current = displayedPlanningPages
+  // 自动恢复阶段会话时仅在没有显式工作目标的情况下激活自由对话；目标入口新建会话时保留当前目标。
   useEffect(() => {
-    const session = sessionsRef.current.find((item) => item.id === activeSessionId)
-    if (!session) return
-    // sessions 是按阶段过滤后每次渲染都会得到新数组；只有值真的变化时才更新目标状态，
-    // 避免 effect 反复写入新对象导致 Maximum update depth exceeded。
-    const nextFreeChatSelected =
-      !session.pageId && !session.apiContractId && !session.endpointId && !session.entityId
-    setFreeChatSelected((current) =>
-      current === nextFreeChatSelected ? current : nextFreeChatSelected
-    )
-    if (session?.apiContractId && session.endpointId) {
-      const nextTarget: ActiveDetailTarget = {
-        type: 'endpoint',
-        apiContractId: session.apiContractId,
-        endpointId: session.endpointId,
-        endpointKey: `${session.apiContractId}:${session.endpointId}`,
-        label: session.endpointLabel || session.title
-      }
-      setActiveDetailTarget((current) =>
-        current.type === 'endpoint' &&
-        current.apiContractId === nextTarget.apiContractId &&
-        current.endpointId === nextTarget.endpointId &&
-        current.endpointKey === nextTarget.endpointKey &&
-        current.label === nextTarget.label
-          ? current
-          : nextTarget
-      )
-      return
-    }
-    if (session?.entityId) {
-      const nextTarget: ActiveDetailTarget = {
-        type: 'entity',
-        entityId: session.entityId,
-        label: session.entityLabel || session.title
-      }
-      setActiveDetailTarget((current) =>
-        current.type === 'entity' &&
-        current.entityId === nextTarget.entityId &&
-        current.label === nextTarget.label
-          ? current
-          : nextTarget
-      )
-      return
-    }
-    const sessionPageId = session?.pageId
-    if (!sessionPageId) {
-      setActiveDetailTarget((current) => (current.type === 'none' ? current : { type: 'none' }))
-      return
-    }
-    const resolvedPageId = resolvePlanningPageId(
-      displayedPlanningPagesRef.current,
-      sessionPageId
-    )
-    if (resolvedPageId) {
-      setActiveDetailTarget((current) =>
-        current.type === 'page' && current.pageId === resolvedPageId
-          ? current
-          : { type: 'page', pageId: resolvedPageId }
-      )
-    }
-  }, [activeSessionId])
+    const session = sessions.find((item) => item.id === activeSessionId)
+    if (!session || activeDetailTarget.type !== 'none') return
+    setFreeChatSelected(true)
+  }, [activeDetailTarget.type, activeSessionId, sessions])
 
   /** 在右侧工作区打开当前页面预览。 */
   const handleOpenPage = (): void => {
@@ -3479,19 +3345,7 @@ export default function AiChatPanel({
     handleSelectFreeChat().catch(() => undefined)
   }
 
-  /** 在指定页面下新建独立会话，并立即切换到该页面。 */
-  const handleCreatePageSession = async (pageId: string, pageLabel: string): Promise<void> => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('chat')
-    setFreeChatSelected(false)
-    setInteractingDetailTargetKey(pageDetailTargetKey(pageId))
-    setGeneratingDetailTargetKey('')
-    setActiveDetailTarget({ type: 'page', pageId })
-    await createPageSession(pageId, pageLabel)
-  }
-
-  /** 从应用大纲切换页面；已有会话时恢复会话，无会话的待设计页面显示锁定蒙层。 */
+  /** 从应用大纲切换页面；页面只改变当前工作目标，不再切换会话。 */
   const handlePageSelect = (page: DevelopmentPlanningPageOption): void => {
     setPreviewError('')
     setActiveView('chat')
@@ -3523,7 +3377,7 @@ export default function AiChatPanel({
           candidate.apiContractId === target.apiContractId &&
           candidate.endpoint.id === target.endpointId
       )?.endpoint
-    // 待设计接口与未绑定实体一致：点击大纲先回到绿色设计入口，历史会话仍可从子列表打开。
+    // 待设计接口与未绑定实体一致：点击大纲先回到绿色设计入口。
     if (requiresEndpointDetailDesign(endpoint)) {
       clearActiveSession()
       return
@@ -3543,29 +3397,7 @@ export default function AiChatPanel({
     handleSelectEntity(entity.id).catch(() => undefined)
   }
 
-  /** 为当前 API endpoint 新建一条独立会话历史。 */
-  const handleCreateEndpointSession = async (
-    apiContractId: string,
-    endpointId: string,
-    endpointLabel: string
-  ): Promise<void> => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('chat')
-    setFreeChatSelected(false)
-    setInteractingDetailTargetKey(endpointDetailTargetKey(apiContractId, endpointId))
-    setGeneratingDetailTargetKey('')
-    setActiveDetailTarget({
-      type: 'endpoint',
-      apiContractId,
-      endpointId,
-      endpointKey: `${apiContractId}:${endpointId}`,
-      label: endpointLabel
-    })
-    await createEndpointSession(apiContractId, endpointId, endpointLabel)
-  }
-
-  /** 启动当前页面的详细设计；会话创建成功后由会话列表自动更新页面状态。 */
+  /** 启动当前页面的详细设计；页面状态后续由正式开发产物更新。 */
   const handleStartPageDesign = async (
     pageId: string,
     pageLabel: string,
@@ -3719,37 +3551,10 @@ export default function AiChatPanel({
 
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
     setActiveView('chat')
-    const session = sessions.find((item) => item.id === sessionId)
-    setFreeChatSelected(
-      Boolean(
-        session &&
-          !session.pageId &&
-          !session.apiContractId &&
-          !session.endpointId &&
-          !session.entityId
-      )
-    )
-    setInteractingDetailTargetKey(sessionDetailTargetKey(session))
+    setFreeChatSelected(true)
+    setInteractingDetailTargetKey('')
     setGeneratingDetailTargetKey('')
-    if (session?.apiContractId && session.endpointId) {
-      setActiveDetailTarget({
-        type: 'endpoint',
-        apiContractId: session.apiContractId,
-        endpointId: session.endpointId,
-        endpointKey: `${session.apiContractId}:${session.endpointId}`,
-        label: session.endpointLabel || session.title
-      })
-    } else if (session?.entityId) {
-      setActiveDetailTarget({
-        type: 'entity',
-        entityId: session.entityId,
-        label: session.entityLabel || session.title
-      })
-    } else if (session?.pageId) {
-      setActiveDetailTarget({ type: 'page', pageId: session.pageId })
-    } else {
-      setActiveDetailTarget({ type: 'none' })
-    }
+    setActiveDetailTarget({ type: 'none' })
     await handleOpenSession(sessionId)
   }
 
@@ -4113,8 +3918,6 @@ export default function AiChatPanel({
           loadingSessions={loadingSessions}
           outlineLocked={detailTargetSelectionRequired}
           onCreateFreeChatSession={handleCreateChatSession}
-          onCreatePageSession={handleCreatePageSession}
-          onCreateEndpointSession={handleCreateEndpointSession}
           onDeleteSession={handleDeleteSession}
           onEntitySelect={handleEntitySelect}
           onApiEndpointSelect={handleApiEndpointSelect}

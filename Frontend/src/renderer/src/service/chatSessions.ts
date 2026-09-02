@@ -62,25 +62,16 @@ export type ChatSessionRevisionContext = {
 
 export type AgentStage = 'DESIGN' | 'PLAN' | 'DEVELOPMENT';
 
-export type ChatSessionTargetType = 'workflow' | 'page' | 'api' | 'entity';
-
 export type ChatSessionRecord = {
   id: string;
   title: string;
   editorMode: EditorMode;
   workbenchPhase: WorkbenchPhase;
   workflowId: string;
-  targetType: ChatSessionTargetType;
   stage?: AgentStage;
   sequence?: number;
   entryKey?: string;
   threadId: string;
-  apiContractId?: string;
-  endpointId?: string;
-  endpointLabel?: string;
-  entityId?: string;
-  entityLabel?: string;
-  pageId?: string;
   revisionContext?: ChatSessionRevisionContext;
   workspaceRoot: string;
   messages: ChatSessionMessage[];
@@ -94,17 +85,10 @@ export type ChatSessionSummary = {
   editorMode: EditorMode;
   workbenchPhase: WorkbenchPhase;
   workflowId: string;
-  targetType: ChatSessionTargetType;
   stage?: AgentStage;
   sequence?: number;
   entryKey?: string;
   threadId: string;
-  apiContractId?: string;
-  endpointId?: string;
-  endpointLabel?: string;
-  entityId?: string;
-  entityLabel?: string;
-  pageId?: string;
   revisionContext?: ChatSessionRevisionContext;
   createdAt: number;
   updatedAt: number;
@@ -116,15 +100,8 @@ export type CreateChatSessionInput = {
   workflowId: string;
   editorMode: EditorMode;
   workbenchPhase: WorkbenchPhase;
-  targetType: ChatSessionTargetType;
   entryKey?: string;
   title?: string;
-  apiContractId?: string;
-  endpointId?: string;
-  endpointLabel?: string;
-  entityId?: string;
-  entityLabel?: string;
-  pageId?: string;
   revisionContext?: ChatSessionRevisionContext;
   /** 仅用于恢复已消费 continuation 但本地会话缺失的工作台 execution。 */
   recoveryExecutionRunId?: string;
@@ -149,7 +126,6 @@ const CHAT_SESSION_WORKBENCH_PHASES: WorkbenchPhase[] = [
   'review',
   'acceptance',
 ];
-const CHAT_SESSION_TARGET_TYPES: ChatSessionTargetType[] = ['workflow', 'page', 'api', 'entity'];
 const ACTIVE_SESSION_STORAGE_PREFIX = 'xcodeagent:active-session:';
 
 type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>;
@@ -379,7 +355,6 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
     !session.id ||
     !session.editorMode ||
     !session.workflowId ||
-    !CHAT_SESSION_TARGET_TYPES.includes(session.targetType as ChatSessionTargetType) ||
     !session.threadId ||
     !isWorkbenchPhase(session.workbenchPhase)
   )
@@ -394,24 +369,12 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
   )
     return null
   if (!stage && (session.stage || session.sequence || session.entryKey)) return null
-  const pageId = normalizePageId(session.pageId)
-  const apiContractId = normalizeEndpointField(session.apiContractId)
-  const endpointId = normalizeEndpointField(session.endpointId)
-  const entityId = normalizeEndpointField(session.entityId)
-  if (
-    (session.targetType === 'workflow' && (pageId || apiContractId || endpointId || entityId)) ||
-    (session.targetType === 'page' && (!pageId || apiContractId || endpointId || entityId)) ||
-    (session.targetType === 'api' && (!apiContractId || !endpointId || pageId || entityId)) ||
-    (session.targetType === 'entity' && (!entityId || pageId || apiContractId || endpointId))
-  )
-    return null
   return {
     id: String(session.id),
     title: String(session.title || '新对话'),
     editorMode: session.editorMode,
     workbenchPhase: session.workbenchPhase,
     workflowId: String(session.workflowId),
-    targetType: session.targetType as ChatSessionTargetType,
     ...(stage
       ? {
           stage,
@@ -420,12 +383,6 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
         }
       : {}),
     threadId: String(session.threadId),
-    apiContractId,
-    endpointId,
-    endpointLabel: normalizeEndpointField(session.endpointLabel),
-    entityId,
-    entityLabel: normalizeEndpointField(session.entityLabel),
-    pageId,
     revisionContext: normalizeRevisionSessionContext(session.revisionContext),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
@@ -442,17 +399,10 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     editorMode: session.editorMode,
     workbenchPhase: session.workbenchPhase,
     workflowId: session.workflowId,
-    targetType: session.targetType,
     stage: session.stage,
     sequence: session.sequence,
     entryKey: session.entryKey,
     threadId: session.threadId,
-    apiContractId: session.apiContractId,
-    endpointId: session.endpointId,
-    endpointLabel: session.endpointLabel,
-    entityId: session.entityId,
-    entityLabel: session.entityLabel,
-    pageId: session.pageId,
     revisionContext: session.revisionContext,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -471,15 +421,14 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
     .filter((item): item is ChatSessionSummary => Boolean(item))
 }
 
-/** 校验主进程返回的会话摘要，拒绝缺少当前阶段身份或目标绑定的记录。 */
+/** 校验主进程返回的会话摘要，拒绝缺少当前阶段身份的记录。 */
 function normalizeSummary(item: Partial<ChatSessionSummary>): ChatSessionSummary | null {
   if (
     !item.id ||
     (item.editorMode !== 'frontend' && item.editorMode !== 'backend') ||
     !item.workflowId ||
     !item.threadId ||
-    !isWorkbenchPhase(item.workbenchPhase) ||
-    !CHAT_SESSION_TARGET_TYPES.includes(item.targetType as ChatSessionTargetType)
+    !isWorkbenchPhase(item.workbenchPhase)
   )
     return null
   const stage = stageForWorkbenchPhase(item.workbenchPhase)
@@ -492,32 +441,14 @@ function normalizeSummary(item: Partial<ChatSessionSummary>): ChatSessionSummary
     (!stage && (item.stage || item.sequence || item.entryKey))
   )
     return null
-  const pageId = normalizePageId(item.pageId)
-  const apiContractId = normalizeEndpointField(item.apiContractId)
-  const endpointId = normalizeEndpointField(item.endpointId)
-  const entityId = normalizeEndpointField(item.entityId)
-  if (
-    (item.targetType === 'workflow' && (pageId || apiContractId || endpointId || entityId)) ||
-    (item.targetType === 'page' && (!pageId || apiContractId || endpointId || entityId)) ||
-    (item.targetType === 'api' && (!apiContractId || !endpointId || pageId || entityId)) ||
-    (item.targetType === 'entity' && (!entityId || pageId || apiContractId || endpointId))
-  )
-    return null
   return {
     id: String(item.id),
     title: String(item.title || '新对话'),
     editorMode: item.editorMode,
     workbenchPhase: item.workbenchPhase,
     workflowId: String(item.workflowId),
-    targetType: item.targetType as ChatSessionTargetType,
     ...(stage ? { stage, sequence: Number(item.sequence), entryKey: String(item.entryKey) } : {}),
     threadId: String(item.threadId),
-    apiContractId,
-    endpointId,
-    endpointLabel: normalizeEndpointField(item.endpointLabel),
-    entityId,
-    entityLabel: normalizeEndpointField(item.entityLabel),
-    pageId,
     revisionContext: normalizeRevisionSessionContext(item.revisionContext),
     createdAt: Number(item.createdAt || Date.now()),
     updatedAt: Number(item.updatedAt || Date.now()),
@@ -536,12 +467,6 @@ export function stageForWorkbenchPhase(value: WorkbenchPhase): AgentStage | unde
   if (value === 'planning') return 'PLAN'
   if (value === 'development') return 'DEVELOPMENT'
   return undefined
-}
-
-/** 规范化页面会话标识，空值不写入本地会话契约。 */
-function normalizePageId(value: unknown): string | undefined {
-  const pageId = typeof value === 'string' ? value.trim() : '';
-  return pageId || undefined;
 }
 
 /** 规范化 API endpoint 会话字段，空值不写入本地会话契约。 */
@@ -757,13 +682,8 @@ export async function createChatSession(input: CreateChatSessionInput): Promise<
   if (existing) {
     const identityMatches =
       existing.editorMode === input.editorMode &&
-      existing.workbenchPhase === input.workbenchPhase &&
-      existing.targetType === input.targetType &&
-      existing.pageId === normalizePageId(input.pageId) &&
-      existing.apiContractId === normalizeEndpointField(input.apiContractId) &&
-      existing.endpointId === normalizeEndpointField(input.endpointId) &&
-      existing.entityId === normalizeEndpointField(input.entityId)
-    if (!identityMatches) throw new Error('entryKey 已绑定到另一个会话目标。')
+      existing.workbenchPhase === input.workbenchPhase
+    if (!identityMatches) throw new Error('entryKey 已绑定到另一个阶段会话。')
     return existing
   }
   const sequence = stage
@@ -784,7 +704,7 @@ export async function createChatSession(input: CreateChatSessionInput): Promise<
     createdAt: now,
     updatedAt: now
   })
-  if (!candidate) throw new Error('会话目标与阶段身份不符合当前契约。')
+  if (!candidate) throw new Error('会话阶段身份不符合当前契约。')
   const sessions = readFallbackSessions(input.workspaceRoot, input.editorMode)
   writeFallbackSessions(input.workspaceRoot, input.editorMode, [candidate, ...sessions])
   return candidate
