@@ -757,7 +757,6 @@ export type WorkflowBuildTaskPlanTask = {
   allowed_paths?: string[]
   change_scope?: Array<Record<string, unknown>>
   deliverables?: Array<Record<string, unknown>>
-  acceptance_checks?: Array<Record<string, unknown>>
   business_acceptance_checks?: Array<Record<string, unknown>>
   business_acceptance_evidence?: Array<Record<string, unknown>>
   business_acceptance_summary?: Record<string, unknown>
