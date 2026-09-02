@@ -1,11 +1,11 @@
-import { DeleteOutlined, HistoryOutlined } from '@ant-design/icons'
-import { Button, Empty, Popconfirm, Popover, Spin, Typography } from 'antd'
+import { CloseOutlined, DeleteOutlined, HistoryOutlined, PlusOutlined } from '@ant-design/icons'
+import { Button, Empty, Popconfirm, Spin, Typography } from 'antd'
 import type { ReactElement } from 'react'
-import { useState } from 'react'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import { cx } from '../../../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { formatSessionTime } from '../../utils'
+import './FreeChatHistory.less'
 
 const { Text } = Typography
 
@@ -13,6 +13,8 @@ type FreeChatHistoryProps = {
   activeSessionId?: string
   deletingSessionId?: string
   loadingSessions: boolean
+  onClose: () => void
+  onCreateSession: () => void
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
   sessionError?: string
@@ -21,11 +23,13 @@ type FreeChatHistoryProps = {
   theme: 'light' | 'dark'
 }
 
-/** 通过按需打开的浮层展示自由对话历史，避免固定列表挤压应用大纲。 */
+/** 以全高侧栏展示当前阶段的自由对话历史，并真实占用工作台横向空间。 */
 export default function FreeChatHistory({
   activeSessionId,
   deletingSessionId,
   loadingSessions,
+  onClose,
+  onCreateSession,
   onDeleteSession,
   onOpenSession,
   sessionError,
@@ -33,104 +37,115 @@ export default function FreeChatHistory({
   sessions,
   theme
 }: FreeChatHistoryProps): ReactElement {
-  const [open, setOpen] = useState(false)
-  const historyContent = (
-    <div className={cx('free-chat-history-popover-content')}>
-      <div className={cx('free-chat-history-popover-header')}>
-        <Text strong>最近对话</Text>
-        <span className={cx('free-chat-history-popover-count')}>{sessions.length}</span>
-      </div>
-
-      {loadingSessions ? (
-        <div className={cx('page-session-history-loading')}>
-          <Spin size="small" />
-          <Text>读取会话...</Text>
-        </div>
-      ) : sessions.length === 0 ? (
-        <Empty description="还没有自由对话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-      ) : (
-        <div className={cx('page-session-history-list', 'free-chat-history-popover-list')}>
-          {sessions.map((session) => {
-            const runStatus = sessionRunStates[session.id]
-            const active = activeSessionId === session.id
-            return (
-              <div
-                className={cx(
-                  'page-session-history-item',
-                  active && 'active',
-                  runStatus && 'running'
-                )}
-                key={session.id}
-              >
-                <button
-                  aria-current={active ? 'page' : undefined}
-                  className={cx('page-session-history-open')}
-                  onClick={() => {
-                    setOpen(false)
-                    void onOpenSession(session.id)
-                  }}
-                  type="button"
-                >
-                  <span className={cx('page-session-history-title')}>{session.title}</span>
-                  <span className={cx('page-session-history-meta')}>
-                    {runStatus === 'stopping'
-                      ? '正在停止...'
-                      : runStatus === 'running'
-                        ? `运行中 · ${session.messageCount} 条消息`
-                        : `${formatSessionTime(session.updatedAt)} · ${session.messageCount} 条消息`}
-                  </span>
-                </button>
-                <Popconfirm
-                  cancelText="取消"
-                  disabled={Boolean(runStatus)}
-                  okButtonProps={{ danger: true }}
-                  okText="删除"
-                  onConfirm={() => onDeleteSession(session.id)}
-                  title="删除这个自由对话？"
-                >
-                  <Button
-                    aria-label={`删除会话 ${session.title}`}
-                    danger
-                    disabled={loadingSessions || Boolean(runStatus)}
-                    icon={<DeleteOutlined />}
-                    loading={deletingSessionId === session.id}
-                    size="small"
-                    title="删除会话"
-                    type="text"
-                  />
-                </Popconfirm>
-              </div>
-            )
-          })}
-        </div>
-      )}
-      {sessionError ? (
-        <Text className={cx('page-session-history-error')}>{sessionError}</Text>
-      ) : null}
-    </div>
-  )
-
   return (
-    <Popover
-      content={historyContent}
-      onOpenChange={setOpen}
-      open={open}
-      overlayClassName={cx('free-chat-history-popover', theme === 'dark' && 'dark')}
-      placement="rightBottom"
-      trigger="click"
+    <section
+      aria-label="历史对话"
+      className={cx('free-chat-history-panel', theme === 'dark' && 'dark')}
     >
-      <button
-        aria-expanded={open}
-        aria-label="查看最近自由对话"
-        className={cx('free-chat-history-trigger')}
-        title="查看最近自由对话"
-        type="button"
-      >
-        <HistoryOutlined />
-        {sessions.length > 0 ? (
-          <span className={cx('free-chat-history-trigger-count')}>{sessions.length}</span>
+      <header className={cx('free-chat-history-header')}>
+        <div className={cx('free-chat-history-heading-row')}>
+          <div className={cx('free-chat-history-heading')}>
+            <span className={cx('free-chat-history-heading-icon')}>
+              <HistoryOutlined />
+            </span>
+            <div>
+              <Text strong>历史对话</Text>
+              <Text>{sessions.length > 0 ? `${sessions.length} 个自由对话` : '自由对话记录'}</Text>
+            </div>
+          </div>
+          <Button
+            aria-label="关闭历史对话"
+            className={cx('free-chat-history-close')}
+            icon={<CloseOutlined />}
+            onClick={onClose}
+            size="small"
+            title="关闭历史对话"
+            type="text"
+          />
+        </div>
+        <Button
+          className={cx('free-chat-history-create')}
+          icon={<PlusOutlined />}
+          onClick={onCreateSession}
+          size="small"
+          type="default"
+        >
+          新建对话
+        </Button>
+      </header>
+
+      <div className={cx('free-chat-history-body')}>
+        {loadingSessions ? (
+          <div className={cx('free-chat-history-loading')}>
+            <Spin size="small" />
+            <Text>读取会话...</Text>
+          </div>
+        ) : sessions.length === 0 ? (
+          <Empty description="还没有自由对话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <div className={cx('free-chat-history-list')}>
+            {sessions.map((session) => {
+              const runStatus = sessionRunStates[session.id]
+              const active = activeSessionId === session.id
+              return (
+                <div
+                  className={cx(
+                    'free-chat-history-item',
+                    active && 'active',
+                    runStatus && 'running'
+                  )}
+                  key={session.id}
+                >
+                  <button
+                    aria-current={active ? 'page' : undefined}
+                    className={cx('free-chat-history-open')}
+                    onClick={() => {
+                      void onOpenSession(session.id)
+                    }}
+                    type="button"
+                  >
+                    <span className={cx('free-chat-history-title-row')}>
+                      <span className={cx('free-chat-history-title')}>{session.title}</span>
+                      {active ? (
+                        <span className={cx('free-chat-history-active-label')}>当前</span>
+                      ) : null}
+                    </span>
+                    <span className={cx('free-chat-history-meta')}>
+                      {runStatus === 'stopping'
+                        ? '正在停止...'
+                        : runStatus === 'running'
+                          ? `运行中 · ${session.messageCount} 条消息`
+                          : `${formatSessionTime(session.updatedAt)} · ${session.messageCount} 条消息`}
+                    </span>
+                  </button>
+                  <Popconfirm
+                    cancelText="取消"
+                    disabled={Boolean(runStatus)}
+                    okButtonProps={{ danger: true }}
+                    okText="删除"
+                    onConfirm={() => onDeleteSession(session.id)}
+                    title="删除这个自由对话？"
+                  >
+                    <Button
+                      aria-label={`删除会话 ${session.title}`}
+                      danger
+                      disabled={loadingSessions || Boolean(runStatus)}
+                      icon={<DeleteOutlined />}
+                      loading={deletingSessionId === session.id}
+                      size="small"
+                      title="删除会话"
+                      type="text"
+                    />
+                  </Popconfirm>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {sessionError ? (
+          <Text className={cx('free-chat-history-error')}>{sessionError}</Text>
         ) : null}
-      </button>
-    </Popover>
+      </div>
+    </section>
   )
 }

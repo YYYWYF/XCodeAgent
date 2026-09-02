@@ -1,5 +1,6 @@
 import {
   FolderOutlined,
+  HistoryOutlined,
   LeftOutlined,
   PlusOutlined,
   RightOutlined,
@@ -122,13 +123,29 @@ export default function SessionSidebar({
   theme
 }: SessionSidebarProps): ReactElement {
   const [collapsed, setCollapsed] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [resizing, setResizing] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
-  const freeChatSessions = sessions
   const compactLayout = useCompactWorkbench()
   // 设计阶段（forceCollapsed）折叠成图标栏：不显示 Page/API 大纲，只留快捷入口图标。
   // 小屏（compactLayout）与大屏共用 collapsed 状态：默认展开常驻左侧，仅手动折叠成图标栏。
   const effectiveCollapsed = forceCollapsed ? true : collapsed
+
+  /** 关闭历史侧栏并执行用户选择的左栏导航。 */
+  const handleRailNavigation = (navigate: () => void): void => {
+    setHistoryOpen(false)
+    navigate()
+  }
+
+  /** 从历史侧栏新建自由对话，并保留历史栏以便继续浏览会话。 */
+  const handleCreateHistorySession = (): void => {
+    onCreateFreeChatSession()
+  }
+
+  /** 从历史侧栏切换会话，保留侧栏以明确当前会话并支持连续切换。 */
+  const handleOpenHistorySession = async (sessionId: string): Promise<void> => {
+    await onOpenSession(sessionId)
+  }
 
   /** 在常规宽度下启动侧栏拖动调整，窄屏覆盖层保持固定宽度。 */
   const handleResizeStart = (event: React.MouseEvent<HTMLDivElement>): void => {
@@ -180,126 +197,147 @@ export default function SessionSidebar({
   }
 
   return (
-    <aside
-      className={cx(
-        'session-sidebar',
-        effectiveCollapsed && 'collapsed',
-        compactLayout && 'compact-layout',
-        resizing && 'resizing'
-      )}
-      aria-label="开发产物"
-      style={
-        {
-          '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
-        } as React.CSSProperties
-      }
-    >
-      {!forceCollapsed ? (
-        <div
-          aria-label="调整左侧菜单宽度"
-          aria-orientation="vertical"
-          aria-valuemax={MAX_SIDEBAR_WIDTH}
-          aria-valuemin={COLLAPSED_SIDEBAR_WIDTH}
-          aria-valuenow={effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}
-          className={cx('session-resize-handle')}
-          onKeyDown={handleResizeKeyDown}
-          onMouseDown={handleResizeStart}
-          role="separator"
-          tabIndex={0}
-        >
+    <>
+      <aside
+        className={cx(
+          'session-sidebar',
+          effectiveCollapsed && 'collapsed',
+          compactLayout && 'compact-layout',
+          resizing && 'resizing'
+        )}
+        aria-label="开发产物"
+        style={
+          {
+            '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
+          } as React.CSSProperties
+        }
+      >
+        {!forceCollapsed ? (
+          <div
+            aria-label="调整左侧菜单宽度"
+            aria-orientation="vertical"
+            aria-valuemax={MAX_SIDEBAR_WIDTH}
+            aria-valuemin={COLLAPSED_SIDEBAR_WIDTH}
+            aria-valuenow={effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}
+            className={cx('session-resize-handle')}
+            onKeyDown={handleResizeKeyDown}
+            onMouseDown={handleResizeStart}
+            role="separator"
+            tabIndex={0}
+          >
+            <button
+              aria-label={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
+              className={cx('session-collapse-button')}
+              onClick={() => setCollapsed((current) => !current)}
+              onMouseDown={(event) => event.stopPropagation()}
+              title={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
+              type="button"
+            >
+              {effectiveCollapsed ? <RightOutlined /> : <LeftOutlined />}
+            </button>
+          </div>
+        ) : null}
+        <nav className={cx('session-footer-nav')} aria-label="快捷入口">
+          <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
+            <SidebarAssetIcon source={recommendedTasksIcon} />
+            <span>推荐任务</span>
+          </button>
+          <div className={cx('free-chat-nav-row', freeChatActive && 'active')}>
+            <button
+              aria-current={freeChatActive ? 'page' : undefined}
+              className={cx('free-chat-nav-main')}
+              onClick={() => handleRailNavigation(onOpenFreeChat)}
+              title="自由对话"
+              type="button"
+            >
+              <SidebarAssetIcon source={freeChatIcon} />
+              <span>自由对话</span>
+            </button>
+            <button
+              aria-expanded={historyOpen}
+              aria-label={historyOpen ? '关闭历史对话' : '打开历史对话'}
+              className={cx('free-chat-history-trigger', historyOpen && 'active')}
+              onClick={() => setHistoryOpen((current) => !current)}
+              title={historyOpen ? '关闭历史对话' : '打开历史对话'}
+              type="button"
+            >
+              <HistoryOutlined />
+              {sessions.length > 0 ? (
+                <span className={cx('free-chat-history-trigger-count')}>
+                  {sessions.length > 99 ? '99+' : sessions.length}
+                </span>
+              ) : null}
+            </button>
+            <button
+              aria-label="新建自由对话"
+              className={cx('free-chat-new-session')}
+              onClick={handleCreateHistorySession}
+              title="新建自由对话"
+              type="button"
+            >
+              <PlusOutlined />
+            </button>
+          </div>
           <button
-            aria-label={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
-            className={cx('session-collapse-button')}
-            onClick={() => setCollapsed((current) => !current)}
-            onMouseDown={(event) => event.stopPropagation()}
-            title={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
+            className={cx(skillsActive && 'active')}
+            onClick={() => handleRailNavigation(onShowSkills)}
+            title="技能"
             type="button"
           >
-            {effectiveCollapsed ? <RightOutlined /> : <LeftOutlined />}
+            <ThunderboltOutlined />
+            <span>技能</span>
           </button>
-        </div>
-      ) : null}
-      <nav className={cx('session-footer-nav')} aria-label="快捷入口">
-        <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
-          <SidebarAssetIcon source={recommendedTasksIcon} />
-          <span>推荐任务</span>
-        </button>
-        <div className={cx('free-chat-nav-row', freeChatActive && 'active')}>
           <button
-            aria-current={freeChatActive ? 'page' : undefined}
-            className={cx('free-chat-nav-main')}
-            onClick={onOpenFreeChat}
-            title="自由对话"
+            className={cx(filesActive && 'active')}
+            onClick={() => handleRailNavigation(onShowFiles)}
+            title="文件"
             type="button"
           >
-            <SidebarAssetIcon source={freeChatIcon} />
-            <span>自由对话</span>
+            <FolderOutlined />
+            <span>文件</span>
           </button>
-          <FreeChatHistory
-            activeSessionId={activeSessionId}
-            deletingSessionId={deletingSessionId}
-            loadingSessions={loadingSessions}
-            onDeleteSession={onDeleteSession}
-            onOpenSession={onOpenSession}
-            sessionError={sessionError}
-            sessionRunStates={sessionRunStates}
-            sessions={freeChatSessions}
-            theme={theme}
-          />
           <button
-            aria-label="新建自由对话"
-            className={cx('free-chat-new-session')}
-            onClick={onCreateFreeChatSession}
-            title="新建自由对话"
+            className={cx(settingsActive && 'active')}
+            onClick={() => handleRailNavigation(onShowSettings)}
+            title="设置"
             type="button"
           >
-            <PlusOutlined />
+            <SettingOutlined />
+            <span>设置</span>
           </button>
-        </div>
-        <button
-          className={cx(skillsActive && 'active')}
-          onClick={onShowSkills}
-          title="技能"
-          type="button"
-        >
-          <ThunderboltOutlined />
-          <span>技能</span>
-        </button>
-        <button
-          className={cx(filesActive && 'active')}
-          onClick={onShowFiles}
-          title="文件"
-          type="button"
-        >
-          <FolderOutlined />
-          <span>文件</span>
-        </button>
-        <button
-          className={cx(settingsActive && 'active')}
-          onClick={onShowSettings}
-          title="设置"
-          type="button"
-        >
-          <SettingOutlined />
-          <span>设置</span>
-        </button>
-      </nav>
+        </nav>
 
-      {!effectiveCollapsed ? (
-        <ApplicationOutline
-          apiContracts={apiContracts}
-          entities={entities}
-          onApiEndpointSelect={onApiEndpointSelect}
-          onEntitySelect={onEntitySelect}
-          onPageSelect={onPageSelect}
-          outlineLocked={outlineLocked}
-          pages={pages}
-          pageTree={pageTree}
-          selectedApiEndpointKey={selectedApiEndpointKey}
-          selectedEntityId={selectedEntityId}
-          selectedPageId={selectedPageId}
+        {!effectiveCollapsed ? (
+          <ApplicationOutline
+            apiContracts={apiContracts}
+            entities={entities}
+            onApiEndpointSelect={onApiEndpointSelect}
+            onEntitySelect={onEntitySelect}
+            onPageSelect={onPageSelect}
+            outlineLocked={outlineLocked}
+            pages={pages}
+            pageTree={pageTree}
+            selectedApiEndpointKey={selectedApiEndpointKey}
+            selectedEntityId={selectedEntityId}
+            selectedPageId={selectedPageId}
+          />
+        ) : null}
+      </aside>
+      {historyOpen ? (
+        <FreeChatHistory
+          activeSessionId={activeSessionId}
+          deletingSessionId={deletingSessionId}
+          loadingSessions={loadingSessions}
+          onClose={() => setHistoryOpen(false)}
+          onCreateSession={handleCreateHistorySession}
+          onDeleteSession={onDeleteSession}
+          onOpenSession={handleOpenHistorySession}
+          sessionError={sessionError}
+          sessionRunStates={sessionRunStates}
+          sessions={sessions}
+          theme={theme}
         />
       ) : null}
-    </aside>
+    </>
   )
 }
