@@ -1009,8 +1009,8 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertIn("最终验收", stage_result["summary"])
         self.assertIn("最终验收", finalized["message"])
 
-    def test_direct_validation_only_checks_real_changed_layers(self) -> None:
-        """快速验证必须只执行真实差异所属层，并跳过重复依赖安装。"""
+    def test_direct_validation_only_builds_real_changed_layers(self) -> None:
+        """快速验证必须只构建真实差异所属层，不生成或执行单元测试。"""
 
         captured: dict = {}
 
@@ -1047,8 +1047,10 @@ class DirectModificationNodeTests(unittest.TestCase):
                 )
 
         self.assertEqual(captured["affected_layers"], {"frontend"})
+        self.assertEqual(captured["phase"], "build")
         self.assertIs(captured["install_frontend_dependencies"], False)
-        self.assertEqual(captured["state"]["unit_test_affected_layers"], ["frontend"])
+        self.assertIs(captured["state"]["unit_test_generation_enabled"], False)
+        self.assertNotIn("unit_test_affected_layers", captured["state"])
         self.assertEqual(update["status"], "completed")
         self.assertEqual(update["integration_next_action"], "finalize_direct_modification")
         self.assertEqual(_route_direct_validation(update), "finalize")

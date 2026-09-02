@@ -945,7 +945,7 @@ def execute_workspace_direct_modification(state: ProjectState) -> dict[str, Any]
 
 
 def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
-    """只检查本轮真实改动所属工程层，并把可归因失败交给局部修复节点。"""
+    """只构建检查本轮真实改动所属工程层，并把可归因失败交给局部修复节点。"""
 
     repair_iteration = max(0, int(state.get("repair_iteration", 0) or 0))
     max_repair_iterations = max(
@@ -956,14 +956,15 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
     affected_layers = set(changed_paths)
     validation_state = {
         **state,
-        "unit_test_affected_layers": sorted(affected_layers),
+        # 快速修改只做受影响层的构建验证，既不生成也不执行单元测试。
+        "unit_test_generation_enabled": False,
         "repair_iteration": repair_iteration,
         "max_repair_iterations": max_repair_iterations,
     }
     result = run_integration_checks(
         validation_state,
         on_progress=_check_progress_snapshot_writer(),
-        phase="all",
+        phase="build",
         artifact_namespace="direct-fix",
         affected_layers=affected_layers,
         install_frontend_dependencies=False,
@@ -1015,7 +1016,7 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
                     if revision_requests and repair_iteration >= max_repair_iterations
                     else "本次修改缺少可验证的真实代码范围。"
                     if not scope_valid
-                    else "本次修改范围验证失败，请查看测试日志。"
+                    else "本次修改范围验证失败，请查看验证日志。"
                 )
             )
         ),
@@ -1099,9 +1100,6 @@ def _direct_failure_matches_changes(result: dict[str, Any], paths: list[str]) ->
 
     if not paths:
         return False
-    check_id = str(result.get("id") or "").casefold()
-    if check_id.endswith("_unit_tests"):
-        return True
     global_markers = (
         "package.json",
         "pnpm-lock",

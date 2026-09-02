@@ -334,7 +334,7 @@ flowchart TD
     J -- 确认生成草稿 --> M["工作台正式草稿流程"]
 ```
 
-`implementation_fix` 不复用正式 Workflow 的完整 `integration_test`。代码写入后由 `validate_direct_fix` 读取本轮真实 diff，只执行受影响的 frontend/backend 构建与对应测试；同层失败只有在证据命中真实变更文件，或本轮修改了 package、tsconfig、pom 等工程级配置时才阻断，无法归因的既有失败只作为 advisory。验证失败后的自动修复仍限制在这些真实文件内。缺少或仅有占位文件路径时直接停止并展示失败证据，不能据此推断正式语义变化；只有 RepairPlanner 显式输出 `formal_revision` 才展示正式修改确认。
+`implementation_fix` 不复用正式 Workflow 的完整 `integration_test`。代码写入后由 `validate_direct_fix` 读取本轮真实 diff，只执行受影响的 frontend/backend 构建与静态检查，不生成新的单元测试，也不执行已有单元测试；同层失败只有在证据命中真实变更文件，或本轮修改了 package、tsconfig、pom 等工程级配置时才阻断，无法归因的既有失败只作为 advisory。验证失败后的自动修复仍限制在这些真实文件内。缺少或仅有占位文件路径时直接停止并展示失败证据，不能据此推断正式语义变化；只有 RepairPlanner 显式输出 `formal_revision` 才展示正式修改确认。
 
 ### 5.2 工作台正式草稿流程
 
