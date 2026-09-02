@@ -45,6 +45,7 @@ export type RightPanelState =
   | { type: 'test-report' }
   | { type: 'review-report' }
   | { type: 'source' }
+  | { type: 'outline' }
   | { type: 'process' }
   | {
       type: 'stage-output'

@@ -58,6 +58,7 @@ import DesignChangeLockDock from './components/DesignChangeLockDock'
 import DocPanel from './components/DocPanel'
 import SourcePanel from './components/SourcePanel'
 import StageOutputPanel from './components/StageOutputPanel'
+import ApplicationOutline from './components/ApplicationOutline'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import {
@@ -1153,7 +1154,7 @@ export default function AiChatPanel({
   // 开发阶段：右侧文档区无设计阶段产物，显示引导文案（选中页面/端点后由后续逻辑填充）。
   const designDocContent = isApplicationPlanningPhase
     ? activeDesignDoc?.content || ''
-    : '从左侧大纲选择页面或接口，查看设计文档。'
+    : '从应用大纲选择页面或接口，查看设计文档。'
   const designDocName = isApplicationPlanningPhase ? activeDesignDoc?.title : undefined
   const designDocTitle = isApplicationPlanningPhase
     ? activeDesignDoc?.key === 'requirement-spec' && !requirementsConfirmed
@@ -1258,6 +1259,7 @@ export default function AiChatPanel({
         available: doc.available || doc.key === generatingDesignDocKey
       }))
     : [
+        { key: 'outline', label: '应用大纲', available: true },
         { key: 'preview', label: '预览', available: Boolean(runtimePreviewBaseUrl) },
         { key: 'source', label: '源码', available: Boolean(activePageOption) },
         { key: 'doc', label: '文档', available: true },
@@ -1268,13 +1270,15 @@ export default function AiChatPanel({
       designDocs?.find((doc) => doc.available)?.key ||
       designDocs?.[0]?.key ||
       'requirement-spec'
-    : rightPanel?.type === 'preview'
-      ? 'preview'
-      : rightPanel?.type === 'source'
-        ? 'source'
-        : rightPanel?.type === 'stage-output'
-          ? 'stage-output'
-          : 'doc'
+    : rightPanel?.type === 'outline'
+      ? 'outline'
+      : rightPanel?.type === 'preview'
+        ? 'preview'
+        : rightPanel?.type === 'source'
+          ? 'source'
+          : rightPanel?.type === 'stage-output'
+            ? 'stage-output'
+            : 'doc'
   const openWorkspaceTab = useCallback(
     (key: WorkspaceTabKey) => {
       if (isApplicationPlanningPhase) {
@@ -1282,6 +1286,8 @@ export default function AiChatPanel({
         const target = designDocs?.find((doc) => doc.key === key)
         if (!target || (!target.available && target.key !== generatingDesignDocKey)) return
         setRightPanel({ type: 'doc', docKey: key as WorkspaceDocKey })
+      } else if (key === 'outline') {
+        setRightPanel({ type: 'outline' })
       } else if (key === 'preview') {
         setRightPanel({ type: 'preview' })
       } else if (key === 'source') {
@@ -1296,14 +1302,14 @@ export default function AiChatPanel({
   useEffect(() => {
     if (isApplicationPlanningPhase) return
     if (!rightPanelOpen) return
-    // 设计阶段遗留的 rightPanel（带 docKey）在开发阶段无效，重置为默认文档。
+    // 设计阶段遗留的 rightPanel（带 docKey）在开发阶段无效，重置为应用大纲。
     if (rightPanel?.type === 'doc' && 'docKey' in rightPanel && rightPanel.docKey) {
-      setRightPanel({ type: 'doc' })
+      setRightPanel({ type: 'outline' })
       return
     }
-    // 开发阶段首次进入且右侧面板未设置：默认打开文档 tab。
+    // 开发阶段首次进入且右侧面板未设置：默认打开应用大纲 tab。
     if (!rightPanel) {
-      setRightPanel({ type: 'doc' })
+      setRightPanel({ type: 'outline' })
     }
   }, [isApplicationPlanningPhase, rightPanelOpen, rightPanel, setRightPanel])
   // 设计阶段首次进入或文档就绪时自动打开右侧文档面板；
@@ -3165,8 +3171,7 @@ export default function AiChatPanel({
     messages.length
   )
   const showPageDetailDesignEntry = Boolean(
-    activeDetailTarget.type === 'page' &&
-      shouldShowPageDetailDesignEntry(activePageOption, false)
+    activeDetailTarget.type === 'page' && shouldShowPageDetailDesignEntry(activePageOption, false)
   )
   const showEntityInfoPanel = Boolean(
     entityDetailTarget &&
@@ -3911,7 +3916,7 @@ export default function AiChatPanel({
           activeSessionId={activeSessionId}
           application={application}
           deletingSessionId={deletingSessionId}
-          forceCollapsed={isApplicationPlanningPhase}
+          forceCollapsed
           freeChatActive={
             freeChatSelected && activeView === 'chat' && activeDetailTarget.type === 'none'
           }
@@ -4181,6 +4186,37 @@ export default function AiChatPanel({
           title="拖动调整左右面板宽度"
         >
           <HolderOutlined className={cx('panel-split-handle-icon')} />
+        </div>
+      )}
+
+      {showRightPanel && rightPanel?.type === 'outline' && (
+        <div className={cx('embedded-preview-pane', 'workspace-pane')}>
+          <RightPanelTabs
+            tabs={displayedWorkspaceTabs}
+            active={displayedWorkspaceTab}
+            onChange={openDisplayedWorkspaceTab}
+            onClose={() => {
+              setRightPanel(undefined)
+              onRightPanelOpenChange(false)
+            }}
+          />
+          <div className={cx('workspace-content')}>
+            <ApplicationOutline
+              apiContracts={developmentPlanningApiContracts}
+              entities={developmentPlanningEntities}
+              onApiEndpointSelect={handleApiEndpointSelect}
+              onEntitySelect={handleEntitySelect}
+              onPageSelect={handlePageSelect}
+              outlineLocked={detailTargetSelectionRequired}
+              pages={displayedPlanningPages}
+              pageTree={displayedPlanningPageTree}
+              selectedApiEndpointKey={activeApiEndpoint?.endpointKey || ''}
+              selectedEntityId={
+                activeDetailTarget.type === 'entity' ? activeDetailTarget.entityId : ''
+              }
+              selectedPageId={activePageId}
+            />
+          </div>
         </div>
       )}
 
