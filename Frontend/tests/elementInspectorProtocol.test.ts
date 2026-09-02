@@ -7,6 +7,7 @@ import {
   createElementInspectorCommand,
   elementInspectorPreviewOrigin,
   inspectedElementContextFromMessage,
+  inspectedElementLocationMessage,
   isExpectedElementInspectorOrigin,
   parseElementInspectorMessage
 } from '../src/renderer/src/components/BrowserPreviewPanel/elementInspectorProtocol'
@@ -38,6 +39,11 @@ assert.deepEqual(selection && inspectedElementContextFromMessage(selection), {
   line: 15,
   column: 9
 })
+assert.equal(
+  selection &&
+    inspectedElementLocationMessage(inspectedElementContextFromMessage(selection)!),
+  '定位到该元素位于/src/page/index.tsx文件15行处'
+)
 
 assert.equal(
   inspectedElementContextFromMessage(

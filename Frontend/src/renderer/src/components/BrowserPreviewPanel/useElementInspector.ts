@@ -6,6 +6,7 @@ import {
   createElementInspectorCommand,
   elementInspectorPreviewOrigin,
   inspectedElementContextFromMessage,
+  inspectedElementLocationMessage,
   isExpectedElementInspectorOrigin,
   parseElementInspectorMessage
 } from './elementInspectorProtocol'
@@ -89,7 +90,7 @@ export function useElementInspector({
       }
       const context = inspectedElementContextFromMessage(message)
       const selectionContent = context
-        ? `<${context.tagName}> ${context.sourcePath}:${context.line}:${context.column}`
+        ? inspectedElementLocationMessage(context)
         : `<${message.tagName}> 无法定位源码`
       if (context) {
         console.log(

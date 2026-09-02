@@ -40,6 +40,11 @@ export function inspectedElementContextFromMessage(
   }
 }
 
+/** 将有效 DOM 源码定位格式化为用户可读的即时提示。 */
+export function inspectedElementLocationMessage(context: InspectedElementContext): string {
+  return `定位到该元素位于${context.sourcePath}文件${context.line}行处`
+}
+
 export type ElementInspectorCommand = {
   channel: typeof ELEMENT_INSPECTOR_CHANNEL
   version: typeof ELEMENT_INSPECTOR_VERSION

@@ -21,6 +21,7 @@ import {
   composePreviewUrl,
   cx,
   navigatePreviewHistory,
+  navigatePreviewToStartedProject,
   normalizePreviewUrl,
   openExternalPreviewUrl
 } from '../../utils'
@@ -110,6 +111,15 @@ export default function BrowserPreviewPanel({
     setLaunchError('')
     setNavigation((current) => navigatePreviewHistory(current, requestedUrl))
   }, [requestKey, requestedUrl])
+
+  useEffect(() => {
+    if (!previewBaseUrl) return
+    // 预览面板可能在项目启动完成前以 about:blank 挂载；启动地址到达后自动进入当前页面。
+    setLaunchError('')
+    setNavigation((current) =>
+      navigatePreviewToStartedProject(current, previewBaseUrl, selectedPage)
+    )
+  }, [previewBaseUrl, selectedPage])
 
   useEffect(() => {
     setLaunchError(externalError || '')

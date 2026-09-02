@@ -61,6 +61,7 @@ import {
 import {
   composePreviewUrl,
   navigatePreviewHistory,
+  navigatePreviewToStartedProject,
   previewOrigin
 } from '../src/renderer/src/utils/previewUrl'
 import {
@@ -456,6 +457,25 @@ test('页面预览使用当前启动端口和所选页面路由拼接真实地�
 test('缺少有效前端启动地址时不生成页面预览 URL', () => {
   assert.equal(composePreviewUrl('', '/orders'), '')
   assert.equal(composePreviewUrl('not a url', '/orders'), '')
+})
+
+test('项目异步启动成功后将 about:blank 自动导航到当前页面', () => {
+  const blank = { history: ['about:blank'], index: 0 }
+  const started = navigatePreviewToStartedProject(
+    blank,
+    'http://127.0.0.1:5178',
+    '/page/age'
+  )
+
+  assert.deepEqual(started, {
+    history: ['about:blank', 'http://127.0.0.1:5178/page/age'],
+    index: 1
+  })
+  assert.equal(navigatePreviewToStartedProject(started, '', '/page/age'), started)
+  assert.equal(
+    navigatePreviewToStartedProject(started, 'http://127.0.0.1:5178', '/page/age'),
+    started
+  )
 })
 
 test('切换 API 时只恢复有消息的同接口会话', () => {

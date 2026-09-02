@@ -59,6 +59,16 @@ export function navigatePreviewHistory(
   }
 }
 
+/** 在项目异步启动成功后，将空白预览导航到当前页面的真实前端地址。 */
+export function navigatePreviewToStartedProject(
+  state: PreviewNavigationState,
+  previewBaseUrl: string,
+  pagePath: string
+): PreviewNavigationState {
+  const targetUrl = composePreviewUrl(previewBaseUrl, pagePath)
+  return targetUrl ? navigatePreviewHistory(state, targetUrl) : state
+}
+
 /** 使用系统浏览器打开规范化后的预览地址。 */
 export async function openExternalPreviewUrl(url: string): Promise<void> {
   const targetUrl = normalizePreviewUrl(url)
