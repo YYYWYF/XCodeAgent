@@ -20,6 +20,7 @@ from app.services.build_context_resolver import resolve_target_build_context
 from app.services.build_task_confirmation import (
     build_task_confirmation_read_model,
 )
+from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.development_readiness import development_readiness
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
@@ -1300,6 +1301,7 @@ def _resolve_build_context(
         "entity_ids": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
+        "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }, build_task_plan)
 
 

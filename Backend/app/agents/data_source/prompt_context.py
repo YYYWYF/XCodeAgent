@@ -6,7 +6,9 @@ from typing import Any
 from app.services.builtin_skills import (
     BUILTIN_SKILLS_VIRTUAL_ROOT,
     SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME,
+    SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME,
 )
+from app.services.template_scaffold_injection import prebuilt_files_for_plan
 
 
 _SOURCE_REFERENCE_DIRECTORIES = {
@@ -64,7 +66,9 @@ def task_required_skill_paths(task: dict[str, Any]) -> list[str]:
         return []
     return [
         f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
-        f"{SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME}/SKILL.md"
+        f"{SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME}/SKILL.md",
+        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
+        f"{SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME}/SKILL.md",
     ]
 
 
@@ -88,6 +92,20 @@ def task_required_instruction_paths(task: dict[str, Any]) -> list[str]:
         f"{skill_root}{_SOURCE_REFERENCE_DIRECTORIES[source_type]}/{reference_name}"
         for source_type in _SOURCE_SKILL_ORDER
         if source_type in source_types
+    )
+    # 后端模板修改边界 skill 的参考文档：让 Agent 知道预置代码和修改边界。
+    boundary_root = (
+        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
+        f"{SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME}/references/"
+    )
+    paths.extend(
+        [
+            f"{boundary_root}module-layout.md",
+            f"{boundary_root}entity-template.md",
+            f"{boundary_root}repository-template.md",
+            f"{boundary_root}dto-template.md",
+            f"{boundary_root}controller-template.md",
+        ]
     )
     return paths
 
@@ -164,6 +182,7 @@ def task_implementation_contract(
             ),
             "configuration_policy": "reuse_existing_then_fill_missing",
             "verification_policy": _OUTER_VERIFICATION_POLICY,
+            "prebuilt_files": prebuilt_files_for_plan(project_plan),
         }
 
     contract_ids, endpoint_ids, entity_ids = _task_scope_ids([task])
@@ -197,6 +216,7 @@ def task_implementation_contract(
         "authorization_constraints": _endpoint_authorization_constraints(task),
         "language": {"java_version": "8"},
         "verification_policy": _OUTER_VERIFICATION_POLICY,
+        "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }
 
 

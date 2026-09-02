@@ -42,6 +42,20 @@ from app.services.application_lifecycle import (
     persist_application_lifecycle_transition,
 )
 from app.services.application_revision_lifecycle import issue_revision_continuation
+from app.services.authorization_frontend_projection import (
+    apply_authorization_frontend_projection,
+    compile_frontend_authorization_projection,
+)
+from app.services.frontend_scaffold import (
+    collect_template_pages,
+    ensure_frontend_page_placeholders,
+)
+from app.services.template_scaffold_injection import (
+    inject_deterministic_backend_skeleton,
+)
+from app.workspace.plan_documents import technical_plan_json_path
+from app.workspace.product_plan_documents import confirmed_product_plan_json_path
+from app.workspace.spec_documents import ui_designs_json_path, load_ui_designs_json
 
 
 def _route_start(state: ProjectState) -> str:
@@ -340,6 +354,10 @@ def _technical_planning(state: ProjectState) -> dict:
             # 应用模板只在首次创建时生成一次。正式二次修改确认 TechnicalPlan
             # 后直接签发主 Workflow continuation，由 application_revision 收口并
             # 进入 inspect_workspace/prepare_build_tasks，不得再次进入模板阶段。
+            # 在签发 continuation 前，把可确定性推导的后端骨架代码注入模板工程，
+            # 让开发阶段 Agent 只需补充业务逻辑，不必从零生成 Entity/PO/Mapper 等
+            # 确定性文件。模板工程已在首次创建时拉取到工作区，此处只写不删。
+            _inject_revision_scaffold(workspace, node_state)
             token, issued = issue_revision_continuation(
                 workspace,
                 change_id=active_revision.change_id,
@@ -585,6 +603,72 @@ def _workspace(state: ProjectState) -> str:
     if not workspace:
         raise ValueError("创建应用规划必须提供 workspaceRoot。")
     return workspace
+
+
+def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
+    """二次修改确认 TechnicalPlan 后，把确定性代码增量注入模板工程。
+
+    只在模板工程已存在时注入（首次创建走 prepare_template_generation，不在此注入）。
+    注入失败不阻断主流程——确定性代码缺失时 Agent 仍可在 build 阶段补生成。
+
+    注入内容：
+    - 前端路由/权限资源（auth 分支）：从 TechnicalPlan 的 authorization_manifest 编译并写入 routes.tsx/resources.ts
+    - 前端页面占位：从 ProductPlan + UiDesign 收集页面并创建占位文件
+    - 后端骨架：从 TechnicalPlan 的 entities 推导 Entity/PO/Mapper/Repository/DTO/Controller
+    全部幂等——已存在且内容一致的文件跳过，不覆盖用户手改。
+    """
+
+    try:
+        plan_path = technical_plan_json_path(state)
+        if not plan_path.is_file():
+            return
+        import json
+        with plan_path.open(encoding="utf-8") as handle:
+            technical_plan = json.load(handle)
+        if not isinstance(technical_plan, dict):
+            return
+        # 前端确定性注入：路由/权限资源（auth 分支）
+        _inject_frontend_authorization(workspace, technical_plan)
+        # 前端确定性注入：页面占位文件
+        _inject_frontend_page_placeholders(workspace, state)
+        # 后端确定性注入：Entity/PO/Mapper/Repository/DTO/Controller 骨架
+        inject_deterministic_backend_skeleton(workspace, technical_plan)
+    except Exception:
+        # 确定性注入是优化项，失败不阻断二次修改主流程；Agent 仍可补生成。
+        pass
+
+
+def _inject_frontend_authorization(workspace: str, technical_plan: dict[str, Any]) -> None:
+    """auth 分支模板：从 TechnicalPlan 编译并写入前端路由/权限资源。"""
+
+    frontend_dir = Path(workspace) / "frontend"
+    routes_path = frontend_dir / "src" / "constants" / "routes.tsx"
+    if not routes_path.is_file():
+        return  # 非 auth 分支或模板未拉取，跳过
+    projection = compile_frontend_authorization_projection(technical_plan)
+    if projection is not None:
+        apply_authorization_frontend_projection(workspace, projection)
+
+
+def _inject_frontend_page_placeholders(workspace: str, state: dict[str, Any]) -> None:
+    """从 ProductPlan + UiDesign 收集页面并创建占位文件（main/auth 通用）。"""
+
+    frontend_dir = Path(workspace) / "frontend"
+    if not (frontend_dir / "src").is_dir():
+        return  # 模板未拉取，跳过
+    product_plan_path = confirmed_product_plan_json_path(state)
+    if not product_plan_path.is_file():
+        return
+    import json
+    with product_plan_path.open(encoding="utf-8") as handle:
+        product_plan = json.load(handle)
+    if not isinstance(product_plan, dict):
+        return
+    ui_designs_path = ui_designs_json_path(state)
+    ui_designs = load_ui_designs_json(ui_designs_path) if ui_designs_path.is_file() else {}
+    pages = collect_template_pages(product_plan, ui_designs)
+    if pages:
+        ensure_frontend_page_placeholders(frontend_dir, pages)
 
 
 def build_application_planning_graph(*, checkpointer):
