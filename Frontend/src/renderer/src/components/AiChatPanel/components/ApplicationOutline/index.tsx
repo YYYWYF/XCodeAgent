@@ -49,7 +49,7 @@ export type ApplicationOutlineProps = {
   selectedPageId: string
 }
 
-/** 渲染可在任意工作区容器复用的应用大纲，保持原有搜索、筛选与选择逻辑。 */
+/** 渲染开发产物列表，提供搜索、筛选、分组展开与产物浏览入口。 */
 export default function ApplicationOutline({
   apiContracts = [],
   entities = [],
@@ -141,21 +141,18 @@ export default function ApplicationOutline({
 
   return (
     <div className={cx('application-outline')}>
-      <Text className={cx('session-section-title')} strong>
-        开发产物
-      </Text>
       <fieldset
         aria-disabled={outlineLocked}
-        aria-label={outlineLocked ? '页面大纲暂不可操作，API 与实体仍可选择' : '应用大纲'}
+        aria-label={outlineLocked ? '页面产物暂不可操作，API 与实体仍可选择' : '开发产物'}
         className={cx('session-outline-lock-shell')}
       >
         <div className={cx('session-outline-content')}>
           <Input
             allowClear
-            aria-label="搜索页面、API 或实体"
+            aria-label="搜索页面、接口或实体"
             className={cx('session-search')}
             onChange={(event) => setOutlineQuery(event.target.value)}
-            placeholder="搜索页面、API 或实体"
+            placeholder="搜索页面、接口或实体"
             prefix={<SearchOutlined />}
             value={outlineQuery}
           />
@@ -181,7 +178,7 @@ export default function ApplicationOutline({
                 type="button"
               >
                 <CaretDownOutlined className={cx(!pagesExpanded && 'collapsed')} />
-                <span>Pages</span>
+                <span>页面</span>
               </button>
               {pagesExpanded ? (
                 <div className={cx('outline-tree')}>
@@ -216,7 +213,7 @@ export default function ApplicationOutline({
                 type="button"
               >
                 <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
-                <span>API</span>
+                <span>接口</span>
               </button>
               {apiExpanded ? (
                 <div className={cx('api-group')}>
@@ -245,9 +242,6 @@ export default function ApplicationOutline({
                                 contract.label
                               )
                               const endpointLabel = `${endpoint.method} ${displayPath}`.trim()
-                              const endpointDesigned = Boolean(
-                                endpoint.designed || endpoint.hasDetailPlan
-                              )
                               return (
                                 <div className={cx('api-node')} key={endpointKey}>
                                   <button
@@ -278,14 +272,6 @@ export default function ApplicationOutline({
                                       {endpoint.method}
                                     </span>
                                     <code>{displayPath}</code>
-                                    <span
-                                      className={cx(
-                                        'outline-design-status',
-                                        endpointDesigned ? 'designed' : 'undesign'
-                                      )}
-                                    >
-                                      {endpointDesigned ? '已设计' : '待设计'}
-                                    </span>
                                   </button>
                                 </div>
                               )
@@ -312,12 +298,11 @@ export default function ApplicationOutline({
                 type="button"
               >
                 <CaretDownOutlined className={cx(!entitiesExpanded && 'collapsed')} />
-                <span>Entities</span>
+                <span>实体</span>
               </button>
               {entitiesExpanded ? (
                 <div className={cx('entity-group')}>
                   {visibleEntities.map((entity) => {
-                    const entityDesigned = Boolean(entity.designed || entity.hasDetailPlan)
                     return (
                       <div className={cx('entity-node')} key={entity.id}>
                         <button
@@ -333,14 +318,6 @@ export default function ApplicationOutline({
                           <span className={cx('entity-copy')}>
                             <span className={cx('outline-label-row')}>
                               <span className={cx('outline-label')}>{entity.label}</span>
-                              <span
-                                className={cx(
-                                  'outline-design-status',
-                                  entityDesigned ? 'designed' : 'undesign'
-                                )}
-                              >
-                                {entityDesigned ? '已设计' : '待设计'}
-                              </span>
                             </span>
                             <span className={cx('entity-meta')}>{entity.id}</span>
                           </span>

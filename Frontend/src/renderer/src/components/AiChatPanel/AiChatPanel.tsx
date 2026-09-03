@@ -60,7 +60,7 @@ import DesignChangeLockDock from './components/DesignChangeLockDock'
 import DocPanel from './components/DocPanel'
 import SourcePanel from './components/SourcePanel'
 import StageOutputPanel from './components/StageOutputPanel'
-import ApplicationOutline from './components/ApplicationOutline'
+import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import {
@@ -87,6 +87,7 @@ import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
+import { useDevelopmentArtifactDetail } from './hooks/useDevelopmentArtifactDetail'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useCodeReviewReportPanel } from './hooks/useCodeReviewReportPanel'
 import { useTestReportPanel } from './hooks/useTestReportPanel'
@@ -121,7 +122,6 @@ import {
 import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
-  requiresEndpointDetailDesign,
   requiresEntitySourceBinding,
   shouldShowEndpointDetailDesignEntry,
   shouldShowPageDetailDesignEntry,
@@ -932,6 +932,11 @@ export default function AiChatPanel({
     setRightPanel,
     splitDragging
   } = useAssistantPreviewLayout({ rightPanelOpen })
+  const { artifactDetailLabel, artifactOutlineProps } = useDevelopmentArtifactDetail({
+    applicationId: application.id,
+    setRightPanel,
+    onRightPanelOpenChange
+  })
   // 中间区卡片点"查看设计稿"时：切到右侧"UI设计稿"tab 并选中该页。
   const handleUiDesignActivePageChange = useCallback(
     (pageId: string) => {
@@ -1152,7 +1157,7 @@ export default function AiChatPanel({
   // 开发阶段：右侧文档区无设计阶段产物，显示引导文案（选中页面/端点后由后续逻辑填充）。
   const designDocContent = isApplicationPlanningPhase
     ? activeDesignDoc?.content || ''
-    : '从应用大纲选择页面或接口，查看设计文档。'
+    : '当前暂无设计文档。'
   const designDocName = isApplicationPlanningPhase ? activeDesignDoc?.title : undefined
   const designDocTitle = isApplicationPlanningPhase
     ? activeDesignDoc?.key === 'requirement-spec' && !requirementsConfirmed
@@ -1200,9 +1205,6 @@ export default function AiChatPanel({
     handleDeleteSession,
     handleOpenSession,
     openSessionForPhase,
-    handleSelectEndpoint,
-    handleSelectEntity,
-    handleSelectPage,
     loadSessionIdentity,
     loadingSessions,
     messages,
@@ -1253,7 +1255,7 @@ export default function AiChatPanel({
         available: doc.available || doc.key === generatingDesignDocKey
       }))
     : [
-        { key: 'outline', label: '应用大纲', available: true },
+        { key: 'outline', label: '开发产物', available: true },
         { key: 'preview', label: '预览', available: Boolean(runtimePreviewBaseUrl) },
         { key: 'source', label: '源码', available: Boolean(activePageOption) },
         { key: 'doc', label: '文档', available: true },
@@ -1296,12 +1298,12 @@ export default function AiChatPanel({
   useEffect(() => {
     if (isApplicationPlanningPhase) return
     if (!rightPanelOpen) return
-    // 设计阶段遗留的 rightPanel（带 docKey）在开发阶段无效，重置为应用大纲。
+    // 设计阶段遗留的 rightPanel（带 docKey）在开发阶段无效，重置为开发产物。
     if (rightPanel?.type === 'doc' && 'docKey' in rightPanel && rightPanel.docKey) {
       setRightPanel({ type: 'outline' })
       return
     }
-    // 开发阶段首次进入且右侧面板未设置：默认打开应用大纲 tab。
+    // 开发阶段首次进入且右侧面板未设置：默认打开开发产物 tab。
     if (!rightPanel) {
       setRightPanel({ type: 'outline' })
     }
@@ -3348,55 +3350,6 @@ export default function AiChatPanel({
     handleCreateSessionFromList()
   }
 
-  /** 从应用大纲切换页面；页面只改变当前工作目标，不再切换会话。 */
-  const handlePageSelect = (page: DevelopmentPlanningPageOption): void => {
-    setPreviewError('')
-    setActiveView('chat')
-    setInteractingDetailTargetKey(pageDetailTargetKey(page.pageId))
-    setGeneratingDetailTargetKey('')
-    setActiveDetailTarget({ type: 'page', pageId: page.pageId })
-    handleSelectPage(page.pageId).catch(() => undefined)
-  }
-
-  /** 从应用大纲切换 API；页面和 API 目标互斥，因此会清空当前页面选中态。 */
-  const handleApiEndpointSelect = (target: ActiveApiEndpointTarget): void => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('chat')
-    setInteractingDetailTargetKey(endpointDetailTargetKey(target.apiContractId, target.endpointId))
-    setGeneratingDetailTargetKey('')
-    setActiveDetailTarget({ ...target, type: 'endpoint' })
-    const endpoint = developmentPlanningApiContracts
-      .flatMap((contract) =>
-        contract.endpoints.map((candidate) => ({
-          apiContractId: candidate.apiContractId || contract.id,
-          endpoint: candidate
-        }))
-      )
-      .find(
-        (candidate) =>
-          candidate.apiContractId === target.apiContractId &&
-          candidate.endpoint.id === target.endpointId
-      )?.endpoint
-    // 待设计接口与未绑定实体一致：点击大纲先回到绿色设计入口。
-    if (requiresEndpointDetailDesign(endpoint)) {
-      clearActiveSession()
-      return
-    }
-    handleSelectEndpoint(target.apiContractId, target.endpointId).catch(() => undefined)
-  }
-
-  /** 从应用大纲切换实体；实体与页面/API 目标互斥，因此会清空当前页面和接口选中态。 */
-  const handleEntitySelect = (entity: DevelopmentPlanningEntityOption): void => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('chat')
-    setInteractingDetailTargetKey(`entity:${entity.id}`)
-    setGeneratingDetailTargetKey('')
-    setActiveDetailTarget({ type: 'entity', entityId: entity.id, label: entity.label })
-    handleSelectEntity(entity.id).catch(() => undefined)
-  }
-
   /** 启动当前页面的详细设计；页面状态后续由正式开发产物更新。 */
   const handleStartPageDesign = async (
     pageId: string,
@@ -3996,11 +3949,8 @@ export default function AiChatPanel({
           onCloseTemporaryChat={handleCloseTemporaryChat}
           onCreateFreeChatSession={handleCreateChatSession}
           onDeleteSession={handleDeleteSession}
-          onEntitySelect={handleEntitySelect}
-          onApiEndpointSelect={handleApiEndpointSelect}
           onOpenTemporaryChat={handleOpenTemporaryChat}
           onOpenSession={handleOpenChatSession}
-          onPageSelect={handlePageSelect}
           onReturnWelcome={onReturnWelcome}
           onShowFiles={handleShowFiles}
           onShowSettings={handleShowSettings}
@@ -4010,9 +3960,7 @@ export default function AiChatPanel({
           pageTree={displayedPlanningPageTree}
           apiContracts={developmentPlanningApiContracts}
           entities={developmentPlanningEntities}
-          selectedApiEndpointKey={activeApiEndpoint?.endpointKey || ''}
-          selectedEntityId={activeDetailTarget.type === 'entity' ? activeDetailTarget.entityId : ''}
-          selectedPageId={activePageId}
+          {...artifactOutlineProps}
           filesActive={activeView === 'files'}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
@@ -4272,20 +4220,14 @@ export default function AiChatPanel({
             }}
           />
           <div className={cx('workspace-content')}>
-            <ApplicationOutline
+            <DevelopmentArtifactsPanel
               apiContracts={developmentPlanningApiContracts}
               entities={developmentPlanningEntities}
-              onApiEndpointSelect={handleApiEndpointSelect}
-              onEntitySelect={handleEntitySelect}
-              onPageSelect={handlePageSelect}
+              detailLabel={artifactDetailLabel}
               outlineLocked={false}
               pages={displayedPlanningPages}
               pageTree={displayedPlanningPageTree}
-              selectedApiEndpointKey={activeApiEndpoint?.endpointKey || ''}
-              selectedEntityId={
-                activeDetailTarget.type === 'entity' ? activeDetailTarget.entityId : ''
-              }
-              selectedPageId={activePageId}
+              {...artifactOutlineProps}
             />
           </div>
         </div>

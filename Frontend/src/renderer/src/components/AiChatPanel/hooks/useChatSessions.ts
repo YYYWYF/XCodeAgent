@@ -134,9 +134,6 @@ type UseChatSessionsResult = {
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
   openSessionForPhase: (handoff: ChatSessionRevisionHandoff, phase: WorkbenchPhase) => Promise<void>
-  handleSelectEndpoint: (apiContractId: string, endpointId: string) => Promise<void>
-  handleSelectEntity: (entityId: string) => Promise<void>
-  handleSelectPage: (pageId: string) => Promise<void>
   loadingSessions: boolean
   messages: AgentChatMessage[]
   selectedSkills: ChatMessageSkill[]
@@ -418,44 +415,6 @@ export function useChatSessions({
       }
       throw error
     }
-  }
-
-  /** 切换页面时只切换当前开发目标，不再按页面恢复或绑定会话。 */
-  const handleSelectPage = async (pageId: string): Promise<void> => {
-    const normalizedPageId = pageId.trim()
-    if (!normalizedPageId || loadingSessions) return
-    setActiveSessionIds((current) =>
-      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
-    )
-    setPersistedActiveSessionId(application.id, editorMode, workbenchPhase, undefined)
-    onCloseRightPanel()
-  }
-
-  /** 切换接口时只切换当前开发目标，不再按接口恢复或绑定会话。 */
-  const handleSelectEndpoint = async (
-    _apiContractId: string,
-    _endpointId: string
-  ): Promise<void> => {
-    if (loadingSessions) return
-    void _apiContractId
-    void _endpointId
-    setActiveSessionIds((current) =>
-      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
-    )
-    setPersistedActiveSessionId(application.id, editorMode, workbenchPhase, undefined)
-    onCloseRightPanel()
-  }
-
-  /** 切换实体时只定位到实体信息展示界面（已设计）或锁定引导卡片（未设计），
-   *  不自动打开历史会话；设计会话保留在左侧大纲历史中可再次打开。 */
-  const handleSelectEntity = async (_entityId: string): Promise<void> => {
-    if (loadingSessions) return
-    void _entityId
-    setActiveSessionIds((current) =>
-      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
-    )
-    setPersistedActiveSessionId(application.id, editorMode, workbenchPhase, undefined)
-    onCloseRightPanel()
   }
 
   /** 清空当前会话选择，用于实体设计确认后回到实体信息展示界面。 */
@@ -902,9 +861,6 @@ export function useChatSessions({
     handleDeleteSession,
     handleOpenSession,
     openSessionForPhase,
-    handleSelectEndpoint,
-    handleSelectEntity,
-    handleSelectPage,
     clearActiveSession,
     loadingSessions,
     messages,

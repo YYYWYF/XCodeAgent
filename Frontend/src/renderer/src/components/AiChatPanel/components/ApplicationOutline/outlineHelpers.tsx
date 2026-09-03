@@ -24,7 +24,7 @@ function outlineLeafCount(item: ApplicationMenuItem): number {
   return (item.children || []).reduce((total, child) => total + outlineLeafCount(child), 0)
 }
 
-/** 渲染单个页面目录节点，并展示其详细设计状态。 */
+/** 渲染单个页面目录节点，展示名称、路径和目录页面数量。 */
 export function OutlineRow({
   disabled = false,
   item,
@@ -37,7 +37,6 @@ export function OutlineRow({
   const children = item.children?.filter((child) => visibleKeys.has(child.key)) || []
   const isFolder = item.type === 'menu' || children.length > 0
   const selected = selectedKey === item.key
-  const designed = Boolean(item.designed)
   const childPageCount = isFolder ? outlineLeafCount(item) : 0
 
   return (
@@ -65,11 +64,7 @@ export function OutlineRow({
             <span className={cx('outline-label')}>{item.label}</span>
             {isFolder ? (
               <span className={cx('outline-menu-count')}>{childPageCount} 个页面</span>
-            ) : (
-              <span className={cx('outline-design-status', designed ? 'designed' : 'undesign')}>
-                {designed ? '已设计' : '待设计'}
-              </span>
-            )}
+            ) : null}
           </span>
           {item.path ? <span className={cx('outline-meta')}>{item.path}</span> : null}
         </span>
