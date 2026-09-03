@@ -66,6 +66,8 @@ type SessionSidebarProps = {
   deletingSessionId?: string
   freeChatActive: boolean
   filesActive: boolean
+  dataSourcesActive: boolean
+  dataSourcesEnabled: boolean
   forceCollapsed?: boolean
   loadingSessions: boolean
   onCreateEndpointSession: (
@@ -89,6 +91,7 @@ type SessionSidebarProps = {
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   onReturnWelcome: () => void
   onShowFiles: () => void
+  onShowDataSources: () => void
   onShowSettings: () => void
   onShowSkills: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
@@ -341,6 +344,8 @@ export default function SessionSidebar({
   entities = [],
   freeChatActive,
   filesActive,
+  dataSourcesActive,
+  dataSourcesEnabled,
   forceCollapsed = false,
   loadingSessions,
   onCreateEndpointSession,
@@ -353,6 +358,7 @@ export default function SessionSidebar({
   onOpenSession,
   onPageSelect,
   onShowFiles,
+  onShowDataSources,
   onShowSettings,
   onShowSkills,
   outlineLocked,
@@ -583,6 +589,17 @@ export default function SessionSidebar({
           <SidebarAssetIcon source={recommendedTasksIcon} />
           <span>推荐任务</span>
         </button>
+        {dataSourcesEnabled ? (
+          <button
+            className={cx(dataSourcesActive && 'active')}
+            onClick={onShowDataSources}
+            title="数据源"
+            type="button"
+          >
+            <DatabaseOutlined />
+            <span>数据源</span>
+          </button>
+        ) : null}
         <div className={cx('free-chat-nav-row', freeChatActive && 'active')}>
           <button
             aria-current={freeChatActive ? 'page' : undefined}

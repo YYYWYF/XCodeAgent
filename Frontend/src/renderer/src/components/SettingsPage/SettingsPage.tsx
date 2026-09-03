@@ -1,21 +1,17 @@
 import {
   AppstoreOutlined,
   BankOutlined,
-  CheckCircleFilled,
   CloudOutlined,
   CodeOutlined,
   DashboardOutlined,
-  DatabaseOutlined,
   DeleteOutlined,
   DesktopOutlined,
   FundOutlined,
   LayoutOutlined,
-  LinkOutlined,
   LockOutlined,
   MessageOutlined,
   PlusOutlined,
   RadarChartOutlined,
-  SafetyCertificateOutlined,
   SaveOutlined,
   SettingOutlined,
   ShopOutlined,
@@ -31,13 +27,12 @@ import {
   Form,
   Input,
   Radio,
-  Select,
   Switch,
   Typography,
   message
 } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState } from 'react'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
 import { applicationIconOptions, trackMethodOptions } from '../Welcome/constants'
@@ -75,7 +70,7 @@ type Props = {
 
 type SettingsFormValues = Pick<
   ApplicationConfig,
-  'appName' | 'appIcon' | 'senario' | 'layout' | 'auth' | 'track' | 'apiTrack' | 'database'
+  'appName' | 'appIcon' | 'senario' | 'layout' | 'auth' | 'track' | 'apiTrack'
 > & {
   envVariables: EnvVariable[]
 }
@@ -128,11 +123,6 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
     Form.useWatch(['layout', 'useHeader'], form) ?? application?.layout?.useHeader ?? true
   const useFooterEnabled =
     Form.useWatch(['layout', 'useFooter'], form) ?? application?.layout?.useFooter ?? false
-  const dbConnectionMode =
-    Form.useWatch(['database', 'connectionMode'], form) ??
-    application?.database?.connectionMode ??
-    'dbid'
-
   // 环境变量 — 将 { dev:[], prod:[] } 合并为统一的 flat list
   const safeEnvVariables = useMemo<EnvVariable[]>(() => {
     const devVars = application?.environment?.dev ?? []
@@ -147,51 +137,6 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
   }, [application?.environment?.dev, application?.environment?.prod])
 
   const envVars: EnvVariable[] = Form.useWatch('envVariables', form) ?? safeEnvVariables
-
-  const envVarOptions = useMemo(
-    () =>
-      (envVars ?? [])
-        .filter((v) => v.key)
-        .map((v) => ({ label: `\${${v.key}}`, value: `\${${v.key}}` })),
-    [envVars]
-  )
-  const encryptedEnvVarOptions = useMemo(
-    () =>
-      (envVars ?? [])
-        .filter((v) => v.key && v.encrypted)
-        .map((v) => ({ label: `\${${v.key}}`, value: `\${${v.key}}` })),
-    [envVars]
-  )
-
-  const scrollToEnvironment = () => {
-    document.getElementById('settings-environment')?.scrollIntoView({ behavior: 'smooth' })
-  }
-
-  // 环境变量名被删除时，自动清除数据库卡片中已引用但已不存在的变量
-  useEffect(() => {
-    const validValues = new Set((envVars ?? []).filter((v) => v.key).map((v) => `\${${v.key}}`))
-    const validEncrypted = new Set(
-      (envVars ?? []).filter((v) => v.key && v.encrypted).map((v) => `\${${v.key}}`)
-    )
-
-    const fieldsToClear: Array<{ name: string[]; value: undefined }> = []
-
-    ;(['host', 'port', 'username'] as const).forEach((field) => {
-      const current = form.getFieldValue(['database', field])
-      if (current && !validValues.has(current)) {
-        fieldsToClear.push({ name: ['database', field], value: undefined })
-      }
-    })
-
-    const pwdCurrent = form.getFieldValue(['database', 'password'])
-    if (pwdCurrent && !validEncrypted.has(pwdCurrent)) {
-      fieldsToClear.push({ name: ['database', 'password'], value: undefined })
-    }
-
-    if (fieldsToClear.length > 0) {
-      form.setFields(fieldsToClear)
-    }
-  }, [envVars, form])
 
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
@@ -281,17 +226,6 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
     traceBaggage: '',
     apiTrackHost: ''
   }
-  const safeDatabase = application?.database ?? {
-    connectionMode: 'dbid' as const,
-    schema: '',
-    devDbid: '',
-    prodDbid: '',
-    host: '',
-    port: '',
-    username: '',
-    password: ''
-  }
-
   return (
     <div className={cx('settings-page')}>
       <header className={cx('settings-page-header')}>
@@ -378,15 +312,6 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
                 </span>
               }
             />
-            <Anchor.Link
-              href="#settings-database"
-              title={
-                <span className={cx('settings-anchor-item')}>
-                  <DatabaseOutlined />
-                  <span>数据库</span>
-                </span>
-              }
-            />
           </Anchor>
         </aside>
         <div className={cx('settings-page-scroll')}>
@@ -401,8 +326,7 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
               auth: safeAuth,
               track: safeTrack,
               apiTrack: safeApiTrack,
-              envVariables: safeEnvVariables,
-              database: safeDatabase
+              envVariables: safeEnvVariables
             }}
             labelCol={{ flex: '0 0 170px' }}
             wrapperCol={{ flex: 'auto' }}
@@ -768,202 +692,6 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
               </Form.List>
             </SettingsCard>
 
-            <SettingsCard id="settings-database" icon={<DatabaseOutlined />} title="数据库">
-              <Form.Item label="数据库类型">
-                <div style={{ lineHeight: '22px' }}>
-                  <Text>TDSQL</Text>
-                  <br />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    符合我行国产化验收标准
-                  </Text>
-                </div>
-              </Form.Item>
-
-              <Form.Item
-                label="连接方式"
-                name={['database', 'connectionMode']}
-                rules={[{ required: true, message: '请选择连接方式' }]}
-              >
-                <div className={cx('settings-db-mode-cards')}>
-                  <div
-                    className={cx(
-                      'settings-db-mode-card',
-                      dbConnectionMode === 'dbid' && 'settings-db-mode-card--selected'
-                    )}
-                    onClick={() => form.setFieldValue(['database', 'connectionMode'], 'dbid')}
-                  >
-                    {dbConnectionMode === 'dbid' && (
-                      <CheckCircleFilled className={cx('settings-db-mode-check')} />
-                    )}
-                    <SafetyCertificateOutlined className={cx('settings-db-mode-icon')} />
-                    <div className={cx('settings-db-mode-body')}>
-                      <Text strong className={cx('settings-db-mode-title')}>
-                        DBID密码服务
-                      </Text>
-                      <Text type="secondary" className={cx('settings-db-mode-desc')}>
-                        安全连接方式，须通过审批流程获取
-                      </Text>
-                    </div>
-                  </div>
-                  <div
-                    className={cx(
-                      'settings-db-mode-card',
-                      dbConnectionMode === 'connectionString' && 'settings-db-mode-card--selected'
-                    )}
-                    onClick={() =>
-                      form.setFieldValue(['database', 'connectionMode'], 'connectionString')
-                    }
-                  >
-                    {dbConnectionMode === 'connectionString' && (
-                      <CheckCircleFilled className={cx('settings-db-mode-check')} />
-                    )}
-                    <LinkOutlined className={cx('settings-db-mode-icon')} />
-                    <div className={cx('settings-db-mode-body')}>
-                      <Text strong className={cx('settings-db-mode-title')}>
-                        数据库连接字符串
-                      </Text>
-                      <Text type="secondary" className={cx('settings-db-mode-desc')}>
-                        传统连接方式，通过环境变量配置
-                      </Text>
-                    </div>
-                  </div>
-                </div>
-              </Form.Item>
-
-              {dbConnectionMode === 'dbid' ? (
-                <>
-                  <Form.Item
-                    label="数据库名称(Schema名)"
-                    name={['database', 'schema']}
-                    rules={[{ required: true, message: '请输入数据库名称' }]}
-                  >
-                    <Input />
-                  </Form.Item>
-                  <Form.Item
-                    label="开发环境DBID"
-                    name={['database', 'devDbid']}
-                    rules={[{ required: true, message: '请输入开发环境DBID' }]}
-                  >
-                    <Input />
-                  </Form.Item>
-                  <Form.Item
-                    label="生产环境DBID"
-                    name={['database', 'prodDbid']}
-                    rules={[{ required: true, message: '请输入生产环境DBID' }]}
-                  >
-                    <Input />
-                  </Form.Item>
-                </>
-              ) : (
-                <>
-                  <Form.Item
-                    label="数据库地址"
-                    name={['database', 'host']}
-                    rules={[{ required: true, message: '请选择数据库地址' }]}
-                  >
-                    <Select
-                      options={envVarOptions}
-                      placeholder="选择环境变量"
-                      notFoundContent="暂无环境变量"
-                      dropdownRender={(menu) => (
-                        <>
-                          {menu}
-                          <div
-                            className={cx('settings-db-select-footer')}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={scrollToEnvironment}
-                          >
-                            <Text type="secondary">没有找到？去</Text>
-                            <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
-                            <Text type="secondary">新建或修改</Text>
-                          </div>
-                        </>
-                      )}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label="端口号"
-                    name={['database', 'port']}
-                    rules={[{ required: true, message: '请选择端口号' }]}
-                  >
-                    <Select
-                      options={envVarOptions}
-                      placeholder="选择环境变量"
-                      notFoundContent="暂无环境变量"
-                      dropdownRender={(menu) => (
-                        <>
-                          {menu}
-                          <div
-                            className={cx('settings-db-select-footer')}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={scrollToEnvironment}
-                          >
-                            <Text type="secondary">没有找到？去</Text>
-                            <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
-                            <Text type="secondary">新建或修改</Text>
-                          </div>
-                        </>
-                      )}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label="用户名"
-                    name={['database', 'username']}
-                    rules={[{ required: true, message: '请选择用户名' }]}
-                  >
-                    <Select
-                      options={envVarOptions}
-                      placeholder="选择环境变量"
-                      notFoundContent="暂无环境变量"
-                      dropdownRender={(menu) => (
-                        <>
-                          {menu}
-                          <div
-                            className={cx('settings-db-select-footer')}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={scrollToEnvironment}
-                          >
-                            <Text type="secondary">没有找到？去</Text>
-                            <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
-                            <Text type="secondary">新建或修改</Text>
-                          </div>
-                        </>
-                      )}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label="密码"
-                    name={['database', 'password']}
-                    rules={[{ required: true, message: '请选择密码' }]}
-                    extra={
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        仅限密文类型
-                      </Text>
-                    }
-                  >
-                    <Select
-                      options={encryptedEnvVarOptions}
-                      placeholder="选择加密环境变量"
-                      notFoundContent="暂无加密环境变量"
-                      dropdownRender={(menu) => (
-                        <>
-                          {menu}
-                          <div
-                            className={cx('settings-db-select-footer')}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={scrollToEnvironment}
-                          >
-                            <Text type="secondary">没有找到？去</Text>
-                            <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
-                            <Text type="secondary">新建或修改</Text>
-                          </div>
-                        </>
-                      )}
-                    />
-                  </Form.Item>
-                </>
-              )}
-            </SettingsCard>
           </Form>
         </div>
       </div>

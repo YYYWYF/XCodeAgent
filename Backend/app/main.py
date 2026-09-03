@@ -37,6 +37,8 @@ from app.protocols.code_changes import (
     build_code_changes_ag_ui_stream,
     code_changes_capabilities,
 )
+from app.protocols.data_sources import data_sources_capabilities
+from app.routes.data_sources import data_sources_router
 from app.protocols.version_control import (
     build_version_control_ag_ui_stream,
     version_control_capabilities,
@@ -90,6 +92,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.include_router(data_sources_router)
 
 
 class ApprovalActionRequest(BaseModel):
@@ -123,6 +126,7 @@ async def health() -> dict[str, object]:
             "application_development_planning": application_development_planning_capabilities(),
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
+            "data_sources": data_sources_capabilities(),
             "code_changes": code_changes_capabilities(),
             "version_control": version_control_capabilities(),
             "conversation": conversation_capabilities(),

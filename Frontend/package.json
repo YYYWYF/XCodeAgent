@@ -25,6 +25,7 @@
     "test:entity-design": "node scripts/run-entity-design-tests.mjs",
     "test:dag-generation": "node scripts/run-dag-generation-tests.mjs",
     "test:database-crypto": "node scripts/run-database-credential-crypto-tests.mjs",
+    "test:json-structure": "node scripts/run-json-structure-tests.mjs",
     "start": "electron-vite preview",
     "dev": "cross-env APP_ENV=dev electron-vite dev",
     "dev:st": "cross-env APP_ENV=st electron-vite dev",

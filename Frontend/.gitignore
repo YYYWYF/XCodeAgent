@@ -6,3 +6,4 @@ resources/backend/
 .eslintcache
 *.log*
 .venv/
+electron.vite.config.*.mjs

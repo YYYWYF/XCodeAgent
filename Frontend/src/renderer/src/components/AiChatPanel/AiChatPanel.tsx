@@ -75,6 +75,7 @@ import WorkspaceDebugDock from './components/WorkspaceDebugDock'
 import EntityInfoPanel from './components/EntityInfoPanel'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
+import DataSourcesPage from '../DataSourcesPage/DataSourcesPage'
 import DetailConfirmationPageSelector from '../DetailConfirmationPageSelector'
 import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
@@ -266,7 +267,7 @@ type Props = {
   onRightPanelOpenChange: (open: boolean) => void
 }
 
-type ActiveView = 'chat' | 'skills' | 'files' | 'settings'
+type ActiveView = 'chat' | 'skills' | 'files' | 'settings' | 'dataSources'
 
 type ActiveApiEndpointTarget = {
   apiContractId: string
@@ -3439,6 +3440,14 @@ export default function AiChatPanel({
     setActiveView('settings')
   }
 
+  /** 打开独立数据源管理页，并退出当前对话目标上下文。 */
+  const handleShowDataSources = (): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('dataSources')
+    setFreeChatSelected(false)
+  }
+
   /** 新建普通对话时退出页面/API 目标上下文，避免后续消息被旧目标接管。 */
   const handleCreateChatSession = (): void => {
     setPreviewError('')
@@ -4107,6 +4116,7 @@ export default function AiChatPanel({
           onPageSelect={handlePageSelect}
           onReturnWelcome={onReturnWelcome}
           onShowFiles={handleShowFiles}
+          onShowDataSources={handleShowDataSources}
           onShowSettings={handleShowSettings}
           onShowSkills={handleShowSkills}
           onThemeChange={onThemeChange}
@@ -4118,6 +4128,8 @@ export default function AiChatPanel({
           selectedEntityId={activeDetailTarget.type === 'entity' ? activeDetailTarget.entityId : ''}
           selectedPageId={activePageId}
           filesActive={activeView === 'files'}
+          dataSourcesActive={activeView === 'dataSources'}
+          dataSourcesEnabled={!isApplicationPlanningPhase && Boolean(application.workspaceRoot)}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
           sessions={sessions}
@@ -4129,6 +4141,8 @@ export default function AiChatPanel({
 
         {activeView === 'skills' ? (
           <SkillsPage onSkillDisabled={handleSkillDisabled} theme={theme} />
+        ) : activeView === 'dataSources' ? (
+          <DataSourcesPage theme={theme} workspaceRoot={application.workspaceRoot || ''} />
         ) : activeView === 'files' ? (
           <AgentFilesPage />
         ) : activeView === 'settings' ? (
