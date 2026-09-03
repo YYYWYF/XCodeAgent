@@ -6,8 +6,10 @@ import json
 import os
 import tempfile
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
@@ -23,6 +25,9 @@ TEMPLATE_GENERATION_MANIFEST_RELATIVE_PATH = Path(
 )
 _TEMPLATE_LOCKS: dict[str, threading.RLock] = {}
 _TEMPLATE_LOCKS_GUARD = threading.Lock()
+_TEMPLATE_ACTIVITY = threading.Condition(threading.Lock())
+_ACTIVE_TEMPLATE_OPERATIONS: dict[str, int] = {}
+_DELETING_TEMPLATE_WORKSPACES: set[str] = set()
 
 
 class ApplicationTemplateGenerationError(ValueError):
@@ -105,6 +110,33 @@ def inspect_template_generation_readiness(workspace: str | Path) -> dict[str, An
     return result
 
 
+def _track_template_operation(operation: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+    """跟踪可能写入模板文件的同步操作，并拒绝删除栅栏后的新调用。"""
+
+    @wraps(operation)
+    def wrapped(workspace: str | Path, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """在真实同步操作前后登记工作区活跃计数。"""
+
+        key = _template_workspace_key(workspace)
+        with _TEMPLATE_ACTIVITY:
+            if key in _DELETING_TEMPLATE_WORKSPACES:
+                raise ApplicationTemplateGenerationError("应用正在删除，已拒绝新的模板生成写入。")
+            _ACTIVE_TEMPLATE_OPERATIONS[key] = _ACTIVE_TEMPLATE_OPERATIONS.get(key, 0) + 1
+        try:
+            return operation(workspace, *args, **kwargs)
+        finally:
+            with _TEMPLATE_ACTIVITY:
+                remaining = _ACTIVE_TEMPLATE_OPERATIONS.get(key, 1) - 1
+                if remaining > 0:
+                    _ACTIVE_TEMPLATE_OPERATIONS[key] = remaining
+                else:
+                    _ACTIVE_TEMPLATE_OPERATIONS.pop(key, None)
+                _TEMPLATE_ACTIVITY.notify_all()
+
+    return wrapped
+
+
+@_track_template_operation
 def prepare_application_template_generation(
     workspace: str | Path,
     download_result: dict[str, Any],
@@ -159,6 +191,7 @@ def prepare_application_template_generation(
         return manifest
 
 
+@_track_template_operation
 def validate_application_template_generation(workspace: str | Path) -> dict[str, Any]:
     """重读正式产物、manifest 和真实文件，执行只读完成门禁。"""
 
@@ -395,6 +428,45 @@ def _template_lock(workspace: Path) -> threading.RLock:
     key = os.path.normcase(str(workspace))
     with _TEMPLATE_LOCKS_GUARD:
         return _TEMPLATE_LOCKS.setdefault(key, threading.RLock())
+
+
+def _template_workspace_key(workspace: str | Path) -> str:
+    """返回模板任务登记使用的规范化工作区键。"""
+
+    return os.path.normcase(str(Path(workspace).expanduser().resolve(strict=False)))
+
+
+def begin_application_template_deletion(workspace: str | Path) -> None:
+    """封锁目标工作区后续模板生成和完成门禁写入。"""
+
+    with _TEMPLATE_ACTIVITY:
+        _DELETING_TEMPLATE_WORKSPACES.add(_template_workspace_key(workspace))
+
+
+def wait_for_application_template_idle(
+    workspace: str | Path,
+    *,
+    timeout_seconds: float = 30.0,
+) -> bool:
+    """等待已经进入同步线程的模板操作退出，避免删除后继续落盘。"""
+
+    key = _template_workspace_key(workspace)
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    with _TEMPLATE_ACTIVITY:
+        while _ACTIVE_TEMPLATE_OPERATIONS.get(key, 0) > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _TEMPLATE_ACTIVITY.wait(timeout=remaining)
+        return True
+
+
+def clear_application_template_lock(workspace: str | Path) -> bool:
+    """在模板任务结束后移除目标工作区的进程内互斥锁缓存。"""
+
+    key = os.path.normcase(str(Path(workspace).expanduser().resolve(strict=False)))
+    with _TEMPLATE_LOCKS_GUARD:
+        return _TEMPLATE_LOCKS.pop(key, None) is not None
 
 
 def _write_manifest_atomically(workspace: Path, manifest: dict[str, Any]) -> None:

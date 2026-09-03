@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from app.middleware.approvals import ApprovalGrant, approval_store, operation_fingerprint
+from app.services.workspace_process_registry import workspace_process_registry
 
 
 DEFAULT_IGNORED_DIRS = {
@@ -734,8 +735,9 @@ def terminal_exec(request: TerminalExecRequest) -> Dict[str, Any]:
         return approval_response
 
     try:
-        completed = subprocess.run(
+        completed = workspace_process_registry.run(
             argv,
+            workspace=root,
             cwd=str(cwd),
             text=True,
             capture_output=True,
@@ -852,8 +854,9 @@ def _workspace_payload(root: Path) -> Dict[str, Any]:
 def _git_info(root: Path) -> Dict[str, Any]:
     if not shutil.which("git"):
         return {"available": False, "is_repo": False}
-    completed = subprocess.run(
+    completed = workspace_process_registry.run(
         ["git", "rev-parse", "--show-toplevel"],
+        workspace=root,
         cwd=str(root),
         text=True,
         capture_output=True,
@@ -876,8 +879,9 @@ def _assert_git_repo(root: Path) -> None:
 
 
 def _run_git(args: List[str], root: Path, *, max_chars: int) -> Dict[str, Any]:
-    completed = subprocess.run(
+    completed = workspace_process_registry.run(
         args,
+        workspace=root,
         cwd=str(root),
         text=True,
         capture_output=True,
@@ -1219,8 +1223,9 @@ def _search_text_with_rg(request: SearchTextRequest, root: Path, base: Path) -> 
         args.extend(["--glob", f"!{ignored}/**"])
     args.extend([request.query, _relative_path(base, root)])
 
-    completed = subprocess.run(
+    completed = workspace_process_registry.run(
         args,
+        workspace=root,
         cwd=str(root),
         text=True,
         capture_output=True,

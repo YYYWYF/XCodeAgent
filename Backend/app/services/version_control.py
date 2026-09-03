@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.services.workspace_process_registry import workspace_process_registry
 from app.workspace.workspace import _is_sensitive_path
 
 
@@ -272,7 +273,7 @@ def _normalize_requested_paths(workspace_root: Path, values: list[str]) -> list[
 def _read_status(repository_root: Path) -> tuple[bytes, list[VersionControlFile]]:
     """使用 NUL 分隔的 porcelain 输出读取全部暂存、未暂存和未跟踪文件。"""
 
-    completed = subprocess.run(
+    completed = workspace_process_registry.run(
         [
             "git",
             "-c",
@@ -282,6 +283,7 @@ def _read_status(repository_root: Path) -> tuple[bytes, list[VersionControlFile]
             "-z",
             "--untracked-files=all",
         ],
+        workspace=repository_root,
         cwd=str(repository_root),
         capture_output=True,
         check=False,
@@ -348,8 +350,9 @@ def _build_fingerprint(
     digest.update(b"\0")
     digest.update(status_bytes)
     for arguments in (["diff", "--binary"], ["diff", "--cached", "--binary"]):
-        completed = subprocess.run(
+        completed = workspace_process_registry.run(
             ["git", *arguments],
+            workspace=repository_root,
             cwd=str(repository_root),
             capture_output=True,
             check=False,
@@ -376,8 +379,9 @@ def _build_fingerprint(
 def _read_staged_paths(repository_root: Path) -> list[str]:
     """读取提交前暂存区的精确文件集合。"""
 
-    completed = subprocess.run(
+    completed = workspace_process_registry.run(
         ["git", "diff", "--cached", "--name-only", "-z"],
+        workspace=repository_root,
         cwd=str(repository_root),
         capture_output=True,
         check=False,
@@ -395,8 +399,9 @@ def _read_staged_paths(repository_root: Path) -> list[str]:
 def _unstage_selected_paths(repository_root: Path, selected_paths: list[str]) -> None:
     """提交失败时只还原本轮创建的暂存状态，不触碰工作区内容。"""
 
-    subprocess.run(
+    workspace_process_registry.run(
         ["git", "restore", "--staged", "--", *selected_paths],
+        workspace=repository_root,
         cwd=str(repository_root),
         text=True,
         capture_output=True,
@@ -413,8 +418,9 @@ def _run_git(
 ) -> subprocess.CompletedProcess[str]:
     """以固定参数和超时执行无 shell 的 Git 子命令。"""
 
-    return subprocess.run(
+    return workspace_process_registry.run(
         ["git", *arguments],
+        workspace=repository_root,
         cwd=str(repository_root),
         text=True,
         capture_output=True,

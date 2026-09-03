@@ -475,5 +475,10 @@ async def workflow_graph_for_request(
     return cached[1]
 
 
-def clear_workflow_graph_cache() -> None:
-    _WORKFLOW_GRAPHS.clear()
+def clear_workflow_graph_cache(*, cache_key: str | None = None) -> None:
+    """清理全部或单个 checkpoint 数据库对应的主 Workflow Graph 缓存。"""
+
+    if cache_key is None:
+        _WORKFLOW_GRAPHS.clear()
+    else:
+        _WORKFLOW_GRAPHS.pop(cache_key, None)

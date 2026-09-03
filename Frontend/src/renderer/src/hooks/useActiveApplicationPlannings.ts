@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { message, Modal } from 'antd'
 import {
   activePlanningStatus,
   loadActiveApplicationPlannings,
@@ -7,14 +6,8 @@ import {
   type ActivePlanningStatus,
   type PersistedActivePlanning
 } from '../service/activeApplicationPlanning'
-import {
-  APPLICATIONS_CHANGED_EVENT,
-  deleteStoredAgentDirectory,
-  removeStoredApplication
-} from '../service/applicationStorage'
+import { APPLICATIONS_CHANGED_EVENT } from '../service/applicationStorage'
 import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
-import { cx } from '../utils'
-import { useSessionRuntimeStore } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
 type UseActiveApplicationPlanningsOptions = {
@@ -22,20 +15,18 @@ type UseActiveApplicationPlanningsOptions = {
     application: ApplicationConfig,
     lifecycle: ApplicationLifecycle
   ) => Promise<void> | void
-  theme: 'dark' | 'light'
 }
 
 type ActiveApplicationPlanningsController = {
   activePlannings: PersistedActivePlanning[]
-  deletingPlanningIds: ReadonlySet<string>
   dismissPlanning: (applicationId: string) => void
   /** 只隐藏规划 Modal（清 visiblePlanningId），不删除 activePlannings 中的 planning。 */
   hidePlanning: (applicationId: string) => void
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
   generatingAppIds: ReadonlySet<string>
   onTechnicalPlanConfirmed: (applicationId: string) => Promise<boolean>
+  prepareApplicationDeletion: (applicationId: string) => Promise<void>
   registerStopHandler: (applicationId: string, handler?: () => Promise<void>) => void
-  removePlanning: (applicationId: string) => void
   returnHome: () => void
   showPlanning: (applicationId: string) => void
   startPlanning: (
@@ -53,15 +44,12 @@ type ActiveApplicationPlanningsController = {
   visiblePlanningId?: string
 }
 
-// 维护最多三个相互隔离的应用初始化会话及其后台模板生成任务。
+// 维护相互隔离的应用初始化会话及其后台模板生成任务。
 export function useActiveApplicationPlannings({
-  onOpenWorkbench,
-  theme
+  onOpenWorkbench
 }: UseActiveApplicationPlanningsOptions): ActiveApplicationPlanningsController {
-  const { clearWorkspace } = useSessionRuntimeStore()
   const [activePlannings, setActivePlannings] = useState<PersistedActivePlanning[]>([])
   const [visiblePlanningId, setVisiblePlanningId] = useState<string>()
-  const [deletingPlanningIds, setDeletingPlanningIds] = useState<Set<string>>(() => new Set())
   const activePlanningsRef = useRef<PersistedActivePlanning[]>([])
   const visiblePlanningIdRef = useRef<string>()
   const refreshIdRef = useRef(0)
@@ -246,7 +234,7 @@ export function useActiveApplicationPlannings({
     (): string | undefined => visiblePlanningIdRef.current,
     []
   )
-  const { generateApplicationTemplateFiles, waitForTemplateGeneration, generatingAppIds } =
+  const { generateApplicationTemplateFiles, generatingAppIds } =
     useApplicationTemplateGeneration({
       commitPlannings,
       hidePlanning,
@@ -254,69 +242,25 @@ export function useActiveApplicationPlannings({
       onOpenWorkbench
     })
 
-  // 打开指定规划；模板生成失败只展示失败状态，不在打开时重新触发生成。
+  // 显示指定应用已经挂载的规划容器，供工作台错误恢复入口使用。
   const showPlanning = useCallback(
     (applicationId: string): void => {
-      const planning = activePlanningsRef.current.find(
-        (candidate) => candidate.application.id === applicationId
-      )
-      if (!planning) return
+      if (
+        !activePlanningsRef.current.some((planning) => planning.application.id === applicationId)
+      ) {
+        return
+      }
       setVisiblePlanning(applicationId)
     },
     [setVisiblePlanning]
   )
 
-  // 停止并删除指定初始化计划，连同 .xcodeagent 目录和聊天记录一起移入系统回收站，不触碰其他应用的任务和文件。
-  const deletePlanning = useCallback(
-    async (planning: PersistedActivePlanning): Promise<void> => {
-      const applicationId = planning.application.id
-      const workspaceRoot = planning.application.workspaceRoot
-      if (!workspaceRoot || deletingPlanningIds.has(applicationId)) return
-      setDeletingPlanningIds((current) => new Set(current).add(applicationId))
-      try {
-        await stopHandlersRef.current.get(applicationId)?.()
-        await waitForTemplateGeneration(applicationId)?.catch(() => undefined)
-        // 先停止并清理内存中的会话运行态，再由主进程转移磁盘上的目录与会话文件。
-        await clearWorkspace(workspaceRoot)
-        await deleteStoredAgentDirectory(workspaceRoot)
-        await removeStoredApplication(applicationId)
-        dismissPlanning(applicationId)
-        message.success(
-          `「${planning.application.appName}」初始化计划已删除，.xcodeagent 目录和聊天记录已移至系统回收站`
-        )
-      } catch (reason) {
-        const errorMessage = reason instanceof Error ? reason.message : String(reason)
-        message.error(`删除「${planning.application.appName}」初始化计划失败：${errorMessage}`)
-      } finally {
-        setDeletingPlanningIds((current) => {
-          const next = new Set(current)
-          next.delete(applicationId)
-          return next
-        })
-      }
+  // 后端销毁准备完成后卸载该应用规划容器；实际运行停止由工作区级协议统一负责。
+  const prepareApplicationDeletion = useCallback(
+    async (applicationId: string): Promise<void> => {
+      dismissPlanning(applicationId)
     },
-    [clearWorkspace, deletingPlanningIds, dismissPlanning, waitForTemplateGeneration]
-  )
-
-  // 二次确认单个计划的停止、目录清理和聊天记录转移范围。
-  const removePlanning = useCallback(
-    (applicationId: string): void => {
-      const planning = activePlanningsRef.current.find(
-        (candidate) => candidate.application.id === applicationId
-      )
-      if (!planning || deletingPlanningIds.has(applicationId)) return
-      Modal.confirm({
-        title: `停止并删除「${planning.application.appName}」的初始化计划？`,
-        content:
-          '会停止该应用的规划，并把 .xcodeagent 目录（含规划文档）和该项目的全部聊天记录一起移到系统回收站；清空回收站前仍可找回。',
-        okText: '确认移到回收站',
-        okButtonProps: { danger: true },
-        cancelText: '取消',
-        onOk: () => deletePlanning(planning),
-        wrapClassName: cx('welcome-modal', `theme-${theme}`)
-      })
-    },
-    [deletePlanning, deletingPlanningIds, theme]
+    [dismissPlanning]
   )
 
   // 仅确认回调所属应用的模板任务，忽略其他会话的完成状态。
@@ -337,13 +281,12 @@ export function useActiveApplicationPlannings({
 
   return {
     activePlannings,
-    deletingPlanningIds,
     dismissPlanning,
     hidePlanning,
     generatingAppIds,
     onTechnicalPlanConfirmed,
+    prepareApplicationDeletion,
     registerStopHandler,
-    removePlanning,
     returnHome,
     showPlanning,
     startPlanning,

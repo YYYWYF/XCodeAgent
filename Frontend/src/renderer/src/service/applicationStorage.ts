@@ -7,7 +7,13 @@ import type {
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption
 } from '../typings';
-import { clearWorkspaceChatSessionCache } from './chatSessions';
+import {
+  clearApplicationActiveSessionCache,
+  clearWorkspaceChatSessionCache,
+  listChatSessions,
+  readChatSession,
+} from './chatSessions';
+import { clearApplicationWorkbenchState } from '../workbenchPhase';
 
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
@@ -16,22 +22,6 @@ export const APPLICATIONS_CHANGED_EVENT = 'xcode-agent-applications-changed';
 // 判断创建规划是否已经完成；工作台内部运行状态不得影响该结果。
 export function isApplicationCreationComplete(lifecycle?: ApplicationLifecycle): boolean {
   return lifecycle?.initialization.stage === 'ready_for_workbench';
-}
-
-// 判断应用是否已永久完成创建规划；持久确认标记优先，当前生命周期也可直接放行。
-export function canOpenApplicationWorkbench(
-  application: ApplicationConfig,
-  lifecycle?: ApplicationLifecycle
-): boolean {
-  if (application.source !== 'new') return true;
-  if (
-    typeof application.planningConfirmedAt === 'number' &&
-    Number.isFinite(application.planningConfirmedAt) &&
-    application.planningConfirmedAt > 0
-  ) {
-    return true;
-  }
-  return isApplicationCreationComplete(lifecycle);
 }
 
 function normalizeApplications(value: unknown): ApplicationConfig[] {
@@ -141,14 +131,52 @@ export async function deleteStoredProject(workspaceRoot: string) {
   clearWorkspaceChatSessionCache(workspaceRoot);
 }
 
-// 请求桌面主进程将工作区内由初始化计划生成的 .xcodeagent 目录和聊天记录一起移入系统回收站。
-export async function deleteStoredAgentDirectory(workspaceRoot: string) {
-  const electronApplications = window.xcodeAgent?.applications;
-  if (!electronApplications?.deleteAgentDirectory) {
-    throw new Error('当前环境不支持删除初始化计划目录');
+// 清理项目删除后仍可能保留在 Chromium 存储中的应用级恢复键和表单草稿。
+export async function clearDeletedApplicationClientState(application: ApplicationConfig) {
+  const workspaceRoot = application.workspaceRoot?.trim()
+  if (!workspaceRoot) return
+  const summaries = (
+    await Promise.all(
+      (['frontend', 'backend'] as const).map((editorMode) =>
+        listChatSessions(workspaceRoot, editorMode).catch(() => [])
+      )
+    )
+  ).flat()
+  const threadIds = new Set(
+    [application.planningThreadId, ...summaries.map((summary) => summary.threadId)].filter(
+      (threadId): threadId is string => Boolean(threadId)
+    )
+  )
+  const changeSetIds = new Set<string>()
+  await Promise.all(
+    summaries.map(async (summary) => {
+      const session = await readChatSession(workspaceRoot, summary.editorMode, summary.id).catch(
+        () => undefined
+      )
+      session?.messages.forEach((item) => {
+        const changeSetId = item.codeChanges?.id
+        if (changeSetId) changeSetIds.add(changeSetId)
+      })
+    })
+  )
+
+  clearWorkspaceChatSessionCache(workspaceRoot)
+  clearApplicationActiveSessionCache(application.id)
+  clearApplicationWorkbenchState(application.id)
+  for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.localStorage.key(index)
+    if (
+      key &&
+      [...threadIds].some((threadId) =>
+        key.startsWith(`xcodeagent:clarification-draft:${threadId}:`)
+      )
+    ) {
+      window.localStorage.removeItem(key)
+    }
   }
-  await electronApplications.deleteAgentDirectory({ workspaceRoot });
-  clearWorkspaceChatSessionCache(workspaceRoot);
+  changeSetIds.forEach((changeSetId) => {
+    window.sessionStorage.removeItem(`xcodeagent:version-control:deferred:${changeSetId}`)
+  })
 }
 
 export async function loadWorkspaceApplicationConfig(

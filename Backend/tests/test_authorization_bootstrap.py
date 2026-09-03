@@ -35,7 +35,7 @@ class AuthorizationBootstrapTests(unittest.TestCase):
         ddl.write_text("create table role (id int);", encoding="utf-8")
         return root
 
-    @patch("app.services.authorization_bootstrap.subprocess.run")
+    @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
     def test_success_is_cached_by_manifest_fingerprint(self, run_mock) -> None:
         """同一 manifest 指纹成功后不应重复调用数据库脚本。"""
 
@@ -54,7 +54,7 @@ class AuthorizationBootstrapTests(unittest.TestCase):
                 json.loads(marker.read_text(encoding="utf-8"))["status"], "executed"
             )
 
-    @patch("app.services.authorization_bootstrap.subprocess.run")
+    @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
     def test_failed_run_is_not_cached(self, run_mock) -> None:
         """脚本失败必须阻断 Build，且不能写入可复用成功标记。"""
 

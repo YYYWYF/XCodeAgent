@@ -52,7 +52,7 @@ export default function WorkbenchTopBar({
       return
     }
     // 用户主动切到开发阶段时，标记已确认进入开发（与对话区"进入开发"按钮一致），
-    // 避免重挂载后 planningConfirmedAt effect 再次锁回 product。
+    // 避免重挂载后自动阶段推导再次回到 product。
     if (phaseKey === 'development') {
       markApplicationEnteredDevelopment(application.id)
     }

@@ -41,6 +41,12 @@ export function markApplicationEnteredDevelopment(applicationId: string): void {
   window.dispatchEvent(new CustomEvent(DEVELOPMENT_ENTRY_EVENT, { detail: { applicationId } }))
 }
 
+/** 删除应用时清除工作台阶段和进入开发门禁的本地持久化状态。 */
+export function clearApplicationWorkbenchState(applicationId: string): void {
+  window.localStorage.removeItem(workbenchPhaseStorageKey(applicationId))
+  window.localStorage.removeItem(developmentEntryStorageKey(applicationId))
+}
+
 /** 判断首次新建应用的模板准备卡是否仍有资格出现。 */
 export function isApplicationTemplatePreparationEligible(
   applicationSource: 'new' | 'existing-workspace' | undefined,

@@ -6,7 +6,7 @@
 
 ## 权威边界
 
-`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台执行和资源锁的持久化权威来源。应用索引中的 `planningConfirmedAt` 是“初始化已完成、允许永久进入工作台”的不可逆准入事实。`checkpoints.sqlite` 继续负责 LangGraph 技术断点；RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 各自负责正式内容与确认状态；Build DAG、ExecutionRun 和 TestReport 继续负责执行和测试事实。
+`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台执行和资源锁的持久化权威来源。应用索引只负责统一列出和打开应用，不保存阶段准入事实；设计、规划或开发阶段均可进入工作台。`checkpoints.sqlite` 继续负责 LangGraph 技术断点；RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 各自负责正式内容与确认状态；Build DAG、ExecutionRun 和 TestReport 继续负责执行和测试事实。
 
 生命周期文件只承担冷启动、断线重连和显式校准，不作为渲染进程的实时轮询源。后端每次原子写入成功后，必须先通过主 Workflow AG-UI 流发送独立的 `application-lifecycle` 自定义事件，再继续投影对应节点或控制动作。工作台顶层 application store 按应用标识与单调 `revision` 合并冷启动读取、重连校准和实时事件；页面控制栏、应用大纲及 API 大纲只消费这一个 store。较旧的文件读取结果不得覆盖更新的实时 revision。
 
@@ -40,9 +40,8 @@ UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不
 
 ## 全应用生命周期与计划执行模式
 
-创建流程与工作台执行是互不覆盖的两套状态。创建流程完成后，应用索引持久化
-`planningConfirmedAt` 并永久放行工作台；顶层 `initialization.stage/status` 固定保持
-`ready_for_workbench/completed`，用于创建状态校验；
+创建流程与工作台执行是互不覆盖的两套状态。应用从创建开始就出现在统一首页列表并可进入工作台；顶层 `initialization.stage/status` 在创建流程完成后固定保持
+`ready_for_workbench/completed`，用于模板、开发和预览就绪校验，不作为首页显示或工作台入口门禁；
 页面设计、代码生成、等待确认、失败、停止和验收记录在 `activeExecutions`，
 不得反向把初始化改回待确认或运行中。不符合当前结构的阶段和字段不做迁移或兼容，
 读取时直接拒绝。
@@ -56,6 +55,14 @@ UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不
 底部计划执行模式只按当前页面或当前 Workflow 身份读取 execution，并由 `execution.status + execution.pendingInteraction.type` 派生；`resourceLocks` 不参与输入或操作门禁，关联页面不会因资源登记进入只读状态。控制栏开放停止/结束、查看计划、Agent 授权、RepairPlanner 范围确认、失败后的重试/调整/结束，以及页面预览验收。最终 `page_acceptance=accepted` 是结构化动作；普通文本和澄清回答不能冒充验收通过。
 
 Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase_confirmation` 等待用户确认。该交互的 payload 携带 `mode=test_phase_confirmation` 和稳定 `testTarget`；前端创建新的测试会话/thread，并提交结构化 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，以 `resumeExecutionRunId` 替换原 execution。测试阶段构建检查完成后，`frontend_performance_confirmation` 作为独立的可恢复待交互类型承载执行或跳过选择；它只允许同一测试 thread、scope 和 target 恢复。集成质量门禁通过后，execution 会以 `pendingInteraction.type=review_phase_confirmation` 等待审查确认；前端创建新的审查会话/thread，并提交 `clarificationAnswers.review_phase_confirmation={action:"confirm"}`。确认节点完成后 execution 的 phase 立即更新为 `code_review`，顶部阶段与实际审查同步。
+
+## 应用销毁边界
+
+“删除本地项目”是独立于当前生命周期阶段的完整销毁事务，不再要求规划先自然停止。Renderer 先调用 `/application-deletion/run`；后端按规范化 `workspaceRoot` 建立删除栅栏，拒绝新的 Workflow、独立 AG-UI 动作、模板写入、UI 设计生成和工作区命令，并取消已登记运行。同步命令使用独立进程组登记，删除时先终止、超时后强杀；前后端预览和 UI 设计预览也必须全部停止。已经进入同步模板线程或 UI 设计模型调用的工作会被等待到取消检查边界，确认不会再落盘后，接口才返回 `readyForTrash=true`。
+
+停机后，后端按工作区正文、metadata 和已知 lifecycle thread 清理共享 SQLite 中的 checkpoint 行；工作区本地 checkpointer 还要关闭连接并逐项驱逐主 Workflow、创建规划和 Conversation Graph 缓存。随后释放 workspace lease、规划恢复锁和生命周期/模板锁。Electron 再终止仍在下载模板的 `git clone`，将环境级会话目录和整个受管项目目录依次移入系统回收站；因此项目源码以及 `.xcodeagent` 下的 lifecycle、正式文档、草稿、运行日志、报告、cache、UI 设计稿、模板 manifest、checkpoint SQLite/WAL/SHM 都随项目一起删除。最后才从应用索引移除条目，并清理 Chromium 中按应用、工作区、thread 和 change-set 保存的恢复键。
+
+销毁默认不触碰平台级数据库加密私钥、用户 Skills、AGENTS.md、登录态、全局设置、外部 MySQL 数据、远程 trace 或 Git 远端。首页“仅移除索引”仍是另一项操作：它不停止运行、不删除会话，也不移动任何项目文件。
 
 示意快照（省略无关字段）：
 

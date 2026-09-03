@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.workspace_process_registry import workspace_process_registry
 from app.workspace.workspace import _is_sensitive_path
 
 
@@ -118,8 +119,9 @@ def _resolve_git_root(workspace_root: Path) -> Path:
 
     if not shutil.which("git"):
         raise CodeChangeRevertError("未检测到 Git，无法撤销本次修改。")
-    completed = subprocess.run(
+    completed = workspace_process_registry.run(
         ["git", "rev-parse", "--show-toplevel"],
+        workspace=workspace_root,
         cwd=str(workspace_root),
         text=True,
         capture_output=True,
@@ -181,8 +183,9 @@ def _assert_revertible_file(
 def _assert_no_staged_changes(git_root: Path, repository_paths: list[str]) -> None:
     """拒绝撤销包含暂存区改动的目标文件，避免工作区与索引不一致。"""
 
-    completed = subprocess.run(
+    completed = workspace_process_registry.run(
         ["git", "diff", "--cached", "--name-only", "--", *repository_paths],
+        workspace=git_root,
         cwd=str(git_root),
         text=True,
         capture_output=True,
@@ -306,8 +309,9 @@ def _apply_reverse_patch(git_root: Path, patch: str, *, check_only: bool) -> Non
     args = ["git", "apply", "--reverse", "--whitespace=nowarn"]
     if check_only:
         args.append("--check")
-    completed = subprocess.run(
+    completed = workspace_process_registry.run(
         args,
+        workspace=git_root,
         cwd=str(git_root),
         input=patch,
         text=True,

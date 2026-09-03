@@ -25,6 +25,10 @@ from app.protocols.application_development_planning import (
     application_development_planning_capabilities,
     build_application_development_planning_ag_ui_stream,
 )
+from app.protocols.application_deletion import (
+    application_deletion_capabilities,
+    build_application_deletion_ag_ui_stream,
+)
 from app.protocols.application_lifecycle import (
     application_lifecycle_capabilities,
     build_application_lifecycle_ag_ui_stream,
@@ -124,6 +128,7 @@ async def health() -> dict[str, object]:
             "application_page_planning": application_page_planning_capabilities(),
             "application_lifecycle": application_lifecycle_capabilities(),
             "application_development_planning": application_development_planning_capabilities(),
+            "application_deletion": application_deletion_capabilities(),
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
             "data_sources": data_sources_capabilities(),
@@ -180,6 +185,20 @@ async def run_application_development_planning(
             payload=input_data,
             accept=accept,
         ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/application-deletion/run")
+async def run_application_deletion(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """在 Electron 移动目录前执行工作区级应用销毁准备。"""
+
+    return StreamingResponse(
+        build_application_deletion_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

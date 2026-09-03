@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from app.config import Settings
 from app.services.ui_design_generator import (
@@ -68,7 +68,15 @@ class UiDesignGenerationTask:
     template_id: str = ""
 
 
-def generate_page_entry(task: UiDesignGenerationTask) -> dict[str, Any]:
+class UiDesignGenerationCancelled(RuntimeError):
+    """表示应用删除已经撤销当前页面设计生成，不应再写入工作区。"""
+
+
+def generate_page_entry(
+    task: UiDesignGenerationTask,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     """同步执行单页生成（worker 在 to_thread 里跑），返回带 code/status 的清单条目。
 
     regenerate：删旧稿 + 调 LLM 全新生成；select_template：把模板仅作视觉参考
@@ -77,6 +85,8 @@ def generate_page_entry(task: UiDesignGenerationTask) -> dict[str, Any]:
     """
 
     page = task.spec_page
+    if should_cancel and should_cancel():
+        raise UiDesignGenerationCancelled("应用正在删除，页面设计生成已取消。")
     if task.action == "select_template":
         if not task.project_dir or not task.template_id:
             return build_ui_page_manifest(
@@ -94,6 +104,8 @@ def generate_page_entry(task: UiDesignGenerationTask) -> dict[str, Any]:
                 template_code,
                 _TEMPLATE_ADAPT_INSTRUCTION,
             )
+            if should_cancel and should_cancel():
+                raise UiDesignGenerationCancelled("应用正在删除，页面设计生成已取消。")
             code_path = persist_page_code(task.project_dir, task.page_key, code)
             return build_ui_page_manifest(
                 page,
@@ -104,6 +116,8 @@ def generate_page_entry(task: UiDesignGenerationTask) -> dict[str, Any]:
                 template_id=task.template_id,
                 template_source_path=f"src/renderer/src/templates/{task.template_id}",
             )
+        except UiDesignGenerationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 - 汇总为 generation_failed 反馈给前端
             logger.exception("ui_design_template_failed page_id=%s", task.page_id)
             return build_ui_page_manifest(
@@ -118,6 +132,8 @@ def generate_page_entry(task: UiDesignGenerationTask) -> dict[str, Any]:
     delete_page_code(task.project_dir, task.page_key)
     try:
         code = generate_page_react_code(page, task.page_key, task.project_dir)
+        if should_cancel and should_cancel():
+            raise UiDesignGenerationCancelled("应用正在删除，页面设计生成已取消。")
         code_path = persist_page_code(task.project_dir, task.page_key, code)
         return build_ui_page_manifest(
             page,
@@ -126,6 +142,8 @@ def generate_page_entry(task: UiDesignGenerationTask) -> dict[str, Any]:
             code=code,
             status="confirmed",
         )
+    except UiDesignGenerationCancelled:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("ui_design_regenerate_failed page_id=%s", task.page_id)
         return build_ui_page_manifest(
@@ -144,6 +162,8 @@ class UiDesignGenerationPool:
         self._queue: asyncio.Queue[UiDesignGenerationTask] = asyncio.Queue()
         # 已排队/生成中的 (workspace, page_id) 集合，用于去重与 is_active。
         self._pending_ids: set[tuple[str, str]] = set()
+        self._active_ids: set[tuple[str, str]] = set()
+        self._deleting_workspaces: set[str] = set()
         # 每个工作区一把写锁：多个 worker 并发更新同一工作区清单时串行化写文件。
         self._locks: dict[str, asyncio.Lock] = {}
         self._started = False
@@ -214,6 +234,8 @@ class UiDesignGenerationPool:
         # 按工作区分组，逐工作区加锁写 queued 状态，避免与在跑的 worker 写文件冲突。
         by_workspace: dict[str, list[UiDesignGenerationTask]] = {}
         for task in tasks:
+            if task.workspace in self._deleting_workspaces:
+                continue
             by_workspace.setdefault(task.workspace, []).append(task)
         for workspace, ws_tasks in by_workspace.items():
             async with self._lock_for(workspace):
@@ -248,8 +270,14 @@ class UiDesignGenerationPool:
     async def _worker_loop(self) -> None:
         while True:
             task = await self._queue.get()
+            key = (task.workspace, task.page_id)
             try:
+                if task.workspace in self._deleting_workspaces:
+                    continue
+                self._active_ids.add(key)
                 await self._process(task)
+            except UiDesignGenerationCancelled:
+                pass
             except Exception as exc:  # noqa: BLE001 - worker 兜底，避免整池崩溃
                 logger.exception("ui_design_pool_worker_crashed page_id=%s", task.page_id)
                 await self._write_result(
@@ -262,7 +290,8 @@ class UiDesignGenerationPool:
                     ),
                 )
             finally:
-                self._pending_ids.discard((task.workspace, task.page_id))
+                self._active_ids.discard(key)
+                self._pending_ids.discard(key)
                 self._queue.task_done()
 
     async def _process(self, task: UiDesignGenerationTask) -> None:
@@ -276,8 +305,51 @@ class UiDesignGenerationPool:
                 template_id=task.template_id,
             ),
         )
-        entry = await asyncio.to_thread(generate_page_entry, task)
+        entry = await asyncio.to_thread(
+            generate_page_entry,
+            task,
+            should_cancel=lambda: task.workspace in self._deleting_workspaces,
+        )
+        if task.workspace in self._deleting_workspaces:
+            raise UiDesignGenerationCancelled("应用正在删除，页面设计生成已取消。")
         await self._write_result(task, entry)
+
+    async def cancel_workspace(self, workspace: str, *, timeout_seconds: float = 30.0) -> dict[str, Any]:
+        """封锁工作区后续设计任务，并等待已经进入模型调用的任务停止写入。"""
+
+        self._deleting_workspaces.add(workspace)
+        queued_ids = {
+            page_id
+            for pending_workspace, page_id in self._pending_ids
+            if pending_workspace == workspace
+            and (pending_workspace, page_id) not in self._active_ids
+        }
+        for page_id in queued_ids:
+            self._pending_ids.discard((workspace, page_id))
+
+        async def wait_until_idle() -> None:
+            """等待该工作区已进入同步生成函数的任务完成取消检查。"""
+
+            while any(active_workspace == workspace for active_workspace, _page_id in self._active_ids):
+                await asyncio.sleep(0.05)
+
+        try:
+            await asyncio.wait_for(wait_until_idle(), timeout=max(timeout_seconds, 0.1))
+        except TimeoutError:
+            remaining = sorted(
+                page_id
+                for active_workspace, page_id in self._active_ids
+                if active_workspace == workspace
+            )
+            return {
+                "cancelledQueuedCount": len(queued_ids),
+                "remainingPageIds": remaining,
+            }
+        self._locks.pop(workspace, None)
+        return {
+            "cancelledQueuedCount": len(queued_ids),
+            "remainingPageIds": [],
+        }
 
     async def _write_result(
         self, task: UiDesignGenerationTask, entry: dict[str, Any]

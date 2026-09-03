@@ -2,7 +2,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.services.application_template_generation import ApplicationTemplateGenerationError, inspect_template_generation_readiness, prepare_application_template_generation, validate_application_template_generation
+from app.services.application_template_generation import (
+    ApplicationTemplateGenerationError,
+    begin_application_template_deletion,
+    inspect_template_generation_readiness,
+    prepare_application_template_generation,
+    validate_application_template_generation,
+)
 
 
 class ApplicationTemplateGenerationTests(unittest.TestCase):
@@ -69,6 +75,17 @@ class ApplicationTemplateGenerationTests(unittest.TestCase):
             self.assertEqual(manifest["templateVariant"], "main")
             self.assertTrue((root / "frontend/src/pages/Dashboard/index.tsx").is_file())
             self.assertIn('key: "Dashboard"', (root / "frontend/src/constants/menus.ts").read_text(encoding="utf-8"))
+
+    def test_deletion_fence_rejects_new_template_writes(self) -> None:
+        """应用开始删除后不得再次执行模板初始化或完成门禁写入。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._workspace(root)
+            begin_application_template_deletion(root)
+
+            with self.assertRaisesRegex(ApplicationTemplateGenerationError, "正在删除"):
+                prepare_application_template_generation(root, self._download())
 
 
 if __name__ == "__main__":

@@ -114,6 +114,18 @@ def _application_planning_resume_lock(thread_id: str) -> asyncio.Lock:
     return lock
 
 
+def clear_application_planning_resume_locks(thread_ids: set[str]) -> int:
+    """在应用运行全部停止后移除其创建规划线程恢复锁。"""
+
+    removed = 0
+    for thread_id in thread_ids:
+        lock = _APPLICATION_PLANNING_RESUME_LOCKS.get(thread_id)
+        if lock is not None and not lock.locked():
+            _APPLICATION_PLANNING_RESUME_LOCKS.pop(thread_id, None)
+            removed += 1
+    return removed
+
+
 def _validate_application_planning_resume(
     snapshot: Any,
     interaction: dict[str, Any],
@@ -350,14 +362,17 @@ def build_workflow_ag_ui_stream(
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")
-        workflow_run_registry.register(run_id, task)
-
         yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
         yield encoder.encode(
             TextMessageStartEvent(messageId=message_id, role="assistant")
         )
 
         try:
+            workflow_run_registry.register(
+                run_id,
+                task,
+                workspace=workflow_inputs.get("workspace") or None,
+            )
             request = workflow_inputs["request"]
             if not request:
                 raise ValueError(

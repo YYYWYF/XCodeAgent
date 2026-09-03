@@ -119,9 +119,9 @@ START
 
 进入工作台后的主 Workflow 不再改写应用初始化阶段；运行、等待确认、失败、停止和验收只更新对应 execution。后端从正式 ProjectPlan 为页面执行解析页面、导航关联页、API 契约和数据源资源集合并写入 `resourceLocks`，但当前不以集合交集、同页面、同工作区或应用级范围拒绝新运行；进程内 lease 同样只跟踪活动 run 的释放，不再执行互斥。重叠资源键显示最近一次写入的 owner，完成或明确结束只清理该 run 当前拥有的登记。中央消息、现有进度卡、侧栏与预览布局不改变。停止、结束、结构化确认、重试、计划调整和最终验收均复用 `/workflow/run` 的 AG-UI 完整事件生命周期。停止操作先用本地 Workflow 快照即时显示 `stopping/stopped`，并让该瞬时状态优先于可能 revision 更高但尚未刷新的文件快照；后端 AG-UI 回包随后校准权威 execution，乐观更新不得改写顶层 `initialization`。
 
-新应用在创建目录后立即通过 `applicationLifecycle.action = create` 建立 lifecycle；后续启动只使用 `get` 读取已有文件。实现不读取旧 active-planning localStorage、旧完成线程列表、`planningThreadId/planningConfirmedAt` 或 checkpoint 来推导业务阶段，缺失、损坏和未来版本都会显式失败。
+新应用在创建目录后立即通过 `applicationLifecycle.action = create` 建立 lifecycle；后续启动只使用 `get` 读取已有文件。业务阶段只以 lifecycle 为准，不读取旧 active-planning localStorage、旧完成线程列表、应用索引字段或 checkpoint 反向推导；前端 `planningThreadId` 只用于定位原规划 checkpoint。缺失、损坏和未来版本都会显式失败。
 
-首页最多同时挂载三个未完成的新应用初始化计划；每个计划按 application id 和独立 `threadId` 隔离 Workflow 快照、AG-UI 会话、停止句柄、删除状态与模板生成任务。一次只显示用户选中的全屏规划页，其余会话保持挂载并在后台继续运行。后台计划完成时只更新自己的应用索引和 lifecycle，不得抢占当前规划页或切换当前工作台；只有三个名额都被未完成计划占用时，“新建应用”才禁用。
+首页只展示一个由应用索引驱动的统一项目列表，不按设计、规划或开发阶段分区，也不限制未完成应用数量。点击任意应用都进入工作台，再由 lifecycle 恢复其当前阶段；每个未完成计划仍按 application id 和独立 `threadId` 隔离 Workflow 快照、AG-UI 会话、停止句柄与模板生成任务。后台计划完成时只更新自己的应用索引和 lifecycle，不得抢占其他应用的工作台。
 
 参考架构映射保持克制：learn-coding-agent 当前公开提交只能核验 README 中的 JSONL 会话恢复、HITL、关键消息同步写和上下文压缩，不能声称存在未发布的 `src/*` 原子状态实现；OpenCode 采用稳定 session/message/question/permission ID 与事件投影，并把读取待处理问题和提交回答分成不同动作；Deep Agents/LangGraph 要求同一 thread/checkpointer 保存暂停状态，并只用显式 decision 恢复。XCodeAgent 因而把冷启动 checkpoint 读取与用户确认提交分离，同时继续由业务 lifecycle 协调首页和跨会话阶段。状态文件不复制文档、DAG、日志或会话历史，读取时按引用渐进加载，继续满足 128k 上下文预算。
 

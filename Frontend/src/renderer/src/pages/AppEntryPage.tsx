@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { message } from 'antd'
 import { SessionRuntimeProvider } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
-import { saveApplication } from '../components/Welcome/applicationService'
 import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
 import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlannings'
 import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
@@ -231,8 +229,7 @@ function AppEntryContent(): JSX.Element {
   )
 
   const planningController = useActiveApplicationPlannings({
-    onOpenWorkbench: openWorkbench,
-    theme
+    onOpenWorkbench: openWorkbench
   })
 
   // 设计阶段二次修改始终恢复应用创建时的 planning Graph；若开发阶段已卸载规划
@@ -313,65 +310,42 @@ function AppEntryContent(): JSX.Element {
   // 中间区完成，不弹"生成应用规划"全屏 Modal。Modal 仍挂载跑规划 graph，但 visible=false。
   // 提交确认时由工作台中间区的 ApplicationPlanningQuestionPanel 通过 planningSubmitByAppRef 调用。
 
-  // 已完成应用直接进入工作台；未完成应用只打开其对应的独立规划会话。
+  // 所有应用都直接进入工作台；新建应用同时恢复其当前设计或规划会话。
   const handleOpenApplication = useCallback(
     async (application: ApplicationConfig): Promise<void> => {
-      // 用户是否已确认进入开发（持久化标志，跨会话保留）。模板生成完但用户还没点
-      // "进入开发"按钮时此标志为空，应进设计阶段回显历史卡片，而非直接进开发。
-      const enterDevConfirmed = hasApplicationEnteredDevelopment(application.id)
       if (application.source !== 'new') {
-        // 已有工作区不属于新建应用模板生命周期，保持原有直接打开语义。
         await openWorkbench(application)
         return
       }
+
+      const existingPlanning = planningController.activePlannings.find(
+        (planning) => planning.application.id === application.id
+      )
+      if (existingPlanning) {
+        await openWorkbench(existingPlanning.application, existingPlanning.lifecycle)
+        return
+      }
+
       try {
         const lifecycle = await getApplicationLifecycle(application)
         const readyForWorkbench = lifecycle?.initialization?.stage === 'ready_for_workbench'
-        if (readyForWorkbench && enterDevConfirmed) {
-          // lifecycle 已就绪且用户已确认进入开发：进开发阶段。
-          const confirmedApplication = application.planningConfirmedAt
-            ? application
-            : { ...application, planningConfirmedAt: Date.now() }
-          const persistedApplication =
-            confirmedApplication !== application
-              ? await saveApplication(confirmedApplication)
-              : confirmedApplication
+        if (readyForWorkbench && hasApplicationEnteredDevelopment(application.id)) {
           planningController.dismissPlanning(application.id)
-          await openWorkbench(persistedApplication, lifecycle)
-          return
-        }
-        // 模板已生成（ready_for_workbench）但用户尚未确认进入开发：进设计阶段，
-        // 用持久化的 planningThreadId 恢复规划会话以回显历史卡片。
-        // 后端在 ready_for_workbench 时清空了 lifecycle.threadId，故优先用 application.planningThreadId。
-        const threadId = lifecycle?.initialization?.threadId || application.planningThreadId
-        if (threadId) {
-          // 已有活动规划（之前进入过、Modal 仍挂载）则直接进工作台，不重复 startPlanning，
-          // 避免重置 workflow 快照导致右侧 UI 设计稿预览和确认卡丢失。
-          const existingPlanning = planningController.activePlannings.find(
-            (planning) => planning.application.id === application.id
-          )
-          if (existingPlanning) {
-            await openWorkbench(existingPlanning.application, lifecycle)
-            return
-          }
-          planningController.startPlanning(application, threadId, lifecycle, false, true)
           await openWorkbench(application, lifecycle)
           return
         }
+
+        // 后端在模板就绪后会清空 lifecycle.threadId；仍用应用持久化的原线程恢复规划历史。
+        const threadId = lifecycle?.initialization?.threadId || application.planningThreadId
+        if (threadId) {
+          planningController.startPlanning(application, threadId, lifecycle, false, true)
+        }
+        await openWorkbench(application, lifecycle)
       } catch (error) {
-        console.warn('读取或校验应用 readiness 失败', error)
-        message.error(error instanceof Error ? error.message : '应用 readiness 校验失败')
-        return
+        // 生命周期读取失败不能再成为工作台入口门禁；工作台内部仍可通过实时事件继续校准。
+        console.warn('读取应用生命周期失败，直接进入工作台。', error)
+        await openWorkbench(application)
       }
-      const activePlanning = planningController.activePlannings.find(
-        (planning) => planning.application.id === application.id
-      )
-      if (activePlanning) {
-        // 已有活动规划（Modal 后台挂载跑 graph）：直接进工作台，不重复 startPlanning。
-        await openWorkbench(activePlanning.application, activePlanning.lifecycle)
-        return
-      }
-      message.info('请先完成并确认应用计划')
     },
     [openWorkbench, planningController]
   )
@@ -385,20 +359,10 @@ function AppEntryContent(): JSX.Element {
         hidden={activeSurface !== 'welcome' || planningVisible}
       >
         <WelcomePage
-          activePlannings={planningController.activePlannings}
-          deletingPlanningIds={planningController.deletingPlanningIds}
-          onDeletePlanning={planningController.removePlanning}
+          onBeforeDeleteApplication={(application) =>
+            planningController.prepareApplicationDeletion(application.id)
+          }
           onOpenApplication={handleOpenApplication}
-          onOpenPlanning={(applicationId) => {
-            const planning = planningController.activePlannings.find(
-              (item) => item.application.id === applicationId
-            )
-            if (planning) {
-              void handleOpenApplication(planning.application)
-            } else {
-              planningController.showPlanning(applicationId)
-            }
-          }}
           onStartPlanning={handleOpenWorkbenchAfterCreate}
           theme={theme}
         />

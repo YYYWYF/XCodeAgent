@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from app.services.workspace_process_registry import workspace_process_registry
+
 from app.agents.messages import _coerce_content_text, strip_thinking_fragments
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -1425,8 +1427,10 @@ def validate_tsx(project_dir: str, code: str) -> tuple[bool, str]:
         # 显式指定 UTF-8：Windows 上 text=True 默认用 locale 编码（中文系统为 GBK），
         # 当生成代码含 GBK 无法编码的字符时，写 stdin 会抛 UnicodeEncodeError；
         # errors="replace" 同时避免子进程输出含异常字节时再次中断校验。
-        proc = subprocess.run(
+        workspace = Path(project_dir).expanduser().resolve(strict=False).parents[1]
+        proc = workspace_process_registry.run(
             ["node", "-e", script, main_path],
+            workspace=workspace,
             input=code,
             capture_output=True,
             text=True,

@@ -52,6 +52,7 @@ def build_code_changes_ag_ui_stream(
         error_message_prefix="撤销代码变更失败",
         error_data=lambda _exc: {"action": action},
         accept=accept,
+        workspace_root=str(action_input.get("workspaceRoot") or "") or None,
     )
 
 

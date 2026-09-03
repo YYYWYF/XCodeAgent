@@ -12,6 +12,7 @@ from app.services.frontend_project_launcher import (
     launch_frontend_project,
     stop_frontend_project,
 )
+from app.services.workspace_process_registry import workspace_process_registry
 from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
@@ -200,8 +201,9 @@ def run_frontend_performance_check(
             "LHCI_BUILD_CONTEXT__CURRENT_BRANCH": "local",
         }
         try:
-            completed = subprocess.run(
+            completed = workspace_process_registry.run(
                 argv,
+                workspace=root,
                 cwd=str(runtime_dir),
                 text=True,
                 capture_output=True,

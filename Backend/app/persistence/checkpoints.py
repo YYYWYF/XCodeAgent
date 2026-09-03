@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -144,6 +146,120 @@ async def close_workflow_checkpointer() -> None:
     await _CHECKPOINT_EXIT_STACK.aclose()
     _CHECKPOINT_SAVERS.clear()
     _CHECKPOINT_IDENTITIES.clear()
+
+
+async def delete_workflow_checkpoints_for_workspace(
+    *,
+    workspace: str,
+    project_id: str | None = None,
+    thread_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """按工作区正文、metadata 或已知线程删除目标应用的全部 checkpoint。"""
+
+    normalized_workspace = os.path.normcase(
+        str(Path(workspace).expanduser().resolve(strict=False))
+    )
+    saver = await workflow_checkpointer(workspace=workspace, project_id=project_id)
+    thread_keys: set[tuple[str, str]] = set()
+    async with saver.lock:
+        cursor = await saver.conn.execute(
+            "SELECT thread_id, checkpoint_ns, type, checkpoint, metadata FROM checkpoints"
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        known_thread_ids = {str(thread_id) for thread_id in (thread_ids or set())}
+        for thread_id, checkpoint_ns, type_tag, checkpoint_blob, raw_metadata in rows:
+            metadata = _checkpoint_metadata(raw_metadata)
+            checkpoint = _deserialize_checkpoint(saver, type_tag, checkpoint_blob)
+            channel_values = checkpoint.get("channel_values")
+            channel_values = channel_values if isinstance(channel_values, dict) else {}
+            candidate_workspace = str(
+                metadata.get("workspace")
+                or channel_values.get("workspace")
+                or ""
+            ).strip()
+            candidate = (
+                os.path.normcase(
+                    str(Path(candidate_workspace).expanduser().resolve(strict=False))
+                )
+                if candidate_workspace
+                else ""
+            )
+            if candidate == normalized_workspace or str(thread_id) in known_thread_ids:
+                thread_keys.add((str(thread_id), str(checkpoint_ns or "")))
+        if thread_keys:
+            await saver.conn.executemany(
+                "DELETE FROM writes WHERE thread_id = ? AND checkpoint_ns = ?",
+                sorted(thread_keys),
+            )
+            await saver.conn.executemany(
+                "DELETE FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ?",
+                sorted(thread_keys),
+            )
+            await saver.conn.commit()
+    return {
+        "databasePath": str(
+            workflow_checkpoint_db_path(workspace=workspace, project_id=project_id)
+        ),
+        "deletedThreadCount": len(thread_keys),
+    }
+
+
+async def close_workflow_checkpointer_for_workspace(
+    *,
+    workspace: str,
+    project_id: str | None = None,
+) -> bool:
+    """关闭工作区本地 checkpoint 连接；共享数据库只删行而不影响其他应用。"""
+
+    settings = Settings.from_env()
+    if settings.checkpoint_db_path:
+        return False
+    db_path = workflow_checkpoint_db_path(workspace=workspace, project_id=project_id)
+    cache_key = str(db_path)
+    async with _CHECKPOINT_LOCK:
+        saver = _CHECKPOINT_SAVERS.pop(cache_key, None)
+        _CHECKPOINT_IDENTITIES.pop(cache_key, None)
+        if saver is None:
+            return False
+        await saver.conn.close()
+        return True
+
+
+def _checkpoint_metadata(raw_metadata: Any) -> dict[str, Any]:
+    """把 SQLite 中的 JSON metadata 安全转换为字典。"""
+
+    if isinstance(raw_metadata, bytes):
+        try:
+            raw_metadata = raw_metadata.decode("utf-8")
+        except UnicodeDecodeError:
+            return {}
+    if not isinstance(raw_metadata, str):
+        return {}
+    try:
+        value = json.loads(raw_metadata)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _deserialize_checkpoint(
+    saver: AsyncSqliteSaver,
+    type_tag: Any,
+    checkpoint_blob: Any,
+) -> dict[str, Any]:
+    """安全反序列化 checkpoint 正文，仅用于识别其 workspace channel。"""
+
+    if not isinstance(type_tag, str) or not isinstance(
+        checkpoint_blob,
+        (bytes, bytearray, memoryview),
+    ):
+        return {}
+    try:
+        value = saver.serde.loads_typed((type_tag, bytes(checkpoint_blob)))
+    except Exception:  # noqa: BLE001 - 损坏行不能阻断其余应用级清理
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _checkpoint_timestamp(item: Any) -> datetime:

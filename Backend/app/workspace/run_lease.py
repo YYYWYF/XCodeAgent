@@ -99,6 +99,25 @@ class WorkspaceRunLeaseRegistry:
                 None,
             )
 
+    def release_workspace(
+        self,
+        *,
+        workspace_root: str | None,
+        project_id: str | None,
+    ) -> int:
+        """删除目标工作区遗留的全部运行租约，并返回释放数量。"""
+
+        workspace_key = effective_workspace_key(workspace_root, project_id)
+        with self._lock:
+            owner_keys = [
+                owner_key
+                for owner_key, owner in self._active.items()
+                if owner.workspace_key == workspace_key
+            ]
+            for owner_key in owner_keys:
+                self._active.pop(owner_key, None)
+        return len(owner_keys)
+
 
 def _scope_type(scope: dict[str, str] | None) -> str:
     """缺少显式范围时按应用级执行处理，保持旧调用的安全语义。"""

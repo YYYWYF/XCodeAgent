@@ -183,4 +183,5 @@ def build_application_lifecycle_ag_ui_stream(
         error_message_prefix="应用生命周期操作失败",
         error_data=lambda _exc: {"action": resolved_input.get("action")},
         accept=accept,
+        workspace_root=str(resolved_input.get("workspaceRoot") or "") or None,
     )

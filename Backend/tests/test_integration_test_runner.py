@@ -45,7 +45,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -101,7 +101,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -152,7 +152,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -205,7 +205,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -251,7 +251,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -317,7 +317,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -379,7 +379,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -446,7 +446,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -480,7 +480,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     "app.services.integration_test_runner.shutil.which",
                     return_value=None,
                 ),
-                patch("app.services.integration_test_runner.subprocess.run") as run,
+                patch("app.services.integration_test_runner.workspace_process_registry.run") as run,
             ):
                 result = run_integration_checks({"workspace": workspace})
 
@@ -501,7 +501,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker), tempfile.TemporaryDirectory() as workspace:
                 (Path(workspace) / marker).write_text(content, encoding="utf-8")
-                with patch("app.services.integration_test_runner.subprocess.run") as run:
+                with patch("app.services.integration_test_runner.workspace_process_registry.run") as run:
                     result = run_integration_checks({"workspace": workspace})
 
                 backend_build = next(
@@ -539,7 +539,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
             with patch(
-                "app.services.integration_test_runner.subprocess.run",
+                "app.services.integration_test_runner.workspace_process_registry.run",
                 side_effect=fake_run,
             ):
                 run_integration_checks({"workspace": workspace})
@@ -576,7 +576,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -626,7 +626,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -678,7 +678,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -733,7 +733,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     side_effect=lambda name: name,
                 ),
                 patch(
-                    "app.services.integration_test_runner.subprocess.run",
+                    "app.services.integration_test_runner.workspace_process_registry.run",
                     side_effect=fake_run,
                 ),
             ):
@@ -768,7 +768,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             )
 
             with patch(
-                "app.services.integration_test_runner.subprocess.run",
+                "app.services.integration_test_runner.workspace_process_registry.run",
                 side_effect=timeout,
             ):
                 result = run_integration_checks({"workspace": workspace})
@@ -810,7 +810,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
             with patch(
-                "app.services.integration_test_runner.subprocess.run",
+                "app.services.integration_test_runner.workspace_process_registry.run",
                 side_effect=fake_run,
             ):
                 run_integration_checks(
@@ -842,7 +842,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("app.services.integration_test_runner.subprocess.run") as run:
+            with patch("app.services.integration_test_runner.workspace_process_registry.run") as run:
                 result = run_integration_checks({"workspace": workspace})
 
         backend_build = next(

@@ -40,7 +40,6 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
 import {
   APPLICATIONS_CHANGED_EVENT,
-  canOpenApplicationWorkbench,
   isApplicationCreationComplete,
   subscribeApplicationsChanged
 } from '../src/renderer/src/service/applicationStorage'
@@ -714,35 +713,12 @@ test('最终结果标题区分成功和失败 Workflow', () => {
   })
 })
 
-test('只有初始化完成阶段允许 lifecycle 直接放行工作台', () => {
+test('只有初始化完成阶段视为模板与开发预览就绪', () => {
   const lifecycle = planLifecycle(pageExecution())
 
   assert.equal(isApplicationCreationComplete(lifecycle), true)
   lifecycle.initialization.stage = 'awaiting_project_plan_confirmation'
   assert.equal(isApplicationCreationComplete(lifecycle), false)
-})
-
-test('应用计划确认标记永久放行工作台且不依赖后续 lifecycle', () => {
-  const application = {
-    id: 'app-1',
-    source: 'new',
-    planningConfirmedAt: 1
-  } as Parameters<typeof canOpenApplicationWorkbench>[0]
-  const unrelatedPagePlanningLifecycle = planLifecycle(pageExecution())
-  unrelatedPagePlanningLifecycle.initialization.stage = 'awaiting_project_plan_confirmation'
-
-  assert.equal(canOpenApplicationWorkbench(application), true)
-  assert.equal(canOpenApplicationWorkbench(application, unrelatedPagePlanningLifecycle), true)
-})
-
-test('未写入永久确认标记的新应用仍可由当前初始化完成状态放行', () => {
-  const application = {
-    id: 'app-1',
-    source: 'new'
-  } as Parameters<typeof canOpenApplicationWorkbench>[0]
-
-  assert.equal(canOpenApplicationWorkbench(application), false)
-  assert.equal(canOpenApplicationWorkbench(application, planLifecycle(pageExecution())), true)
 })
 
 test('应用模板卡只允许首次新建且尚未进入开发时显示', () => {

@@ -2,12 +2,13 @@ import { AppstoreOutlined, CodeOutlined, DeleteOutlined, GlobalOutlined } from '
 import { Button, message, Modal, Radio } from 'antd'
 import { useEffect, useState } from 'react'
 import {
-  canOpenApplicationWorkbench,
+  clearDeletedApplicationClientState,
   subscribeApplicationsChanged,
   deleteStoredProject,
   loadStoredApplications,
   removeStoredApplication
 } from '../../service/applicationStorage'
+import { prepareApplicationDeletion } from '../../service/applicationDeletion'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
 import { useSessionRuntimeStore } from '../AiChatPanel/hooks/useSessionRuntimeStore'
@@ -15,6 +16,7 @@ import './WelcomeModal.less'
 import './WelcomeRecentProjects.less'
 
 type Props = {
+  onBeforeDeleteApplication: (application: ApplicationConfig) => Promise<void>
   onOpenApplication: (application: ApplicationConfig) => void
   theme: 'dark' | 'light'
 }
@@ -34,7 +36,11 @@ function formatRecentTime(value: number): string {
   return days < 30 ? `${days} 天前` : new Intl.DateTimeFormat('zh-CN').format(value)
 }
 
-export default function WelcomeRecentProjects({ onOpenApplication, theme }: Props): JSX.Element {
+export default function WelcomeRecentProjects({
+  onBeforeDeleteApplication,
+  onOpenApplication,
+  theme
+}: Props): JSX.Element {
   const { clearWorkspace } = useSessionRuntimeStore()
   const [applications, setApplications] = useState<ApplicationConfig[]>([])
   const [loading, setLoading] = useState(true)
@@ -52,10 +58,8 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
       try {
         const storedApplications = await loadStoredApplications()
         if (active && currentRefreshId === refreshId) {
-          // 未完成初始化的新应用只保留在上方计划入口，最近项目仅展示可进入工作台的应用。
-          setApplications(
-            storedApplications.filter((application) => canOpenApplicationWorkbench(application))
-          )
+          // 首页使用统一应用列表，设计、规划和开发阶段不再影响应用是否可见。
+          setApplications(storedApplications)
         }
       } finally {
         if (active && currentRefreshId === refreshId) setLoading(false)
@@ -92,13 +96,14 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
         if (!application.workspaceRoot) {
           throw new Error('该项目没有可删除的本地目录')
         }
+        await prepareApplicationDeletion(application)
+        await clearDeletedApplicationClientState(application)
         await clearWorkspace(application.workspaceRoot)
+        await onBeforeDeleteApplication(application)
         await deleteStoredProject(application.workspaceRoot)
       }
       await removeStoredApplication(application.id)
-      setApplications((current) =>
-        current.filter((candidate) => candidate.id !== application.id)
-      )
+      setApplications((current) => current.filter((candidate) => candidate.id !== application.id))
       message.success(
         confirmedDeleteMode === 'project'
           ? '本地项目和聊天历史已移至系统回收站，首页索引已移除'
@@ -200,7 +205,7 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
         ) : (
           <div className={cx('welcome-project-empty')}>
             <CodeOutlined />
-            <span>完成应用初始化或打开工作目录后，最近项目会显示在这里。</span>
+            <span>创建应用或打开工作目录后，项目会显示在这里。</span>
           </div>
         )}
       </div>

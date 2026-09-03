@@ -2,9 +2,9 @@
 
 The deepagents ``FilesystemMiddleware`` does not support ``SandboxBackendProtocol``
 backends when ``FilesystemPermission`` rules are in use — it raises
-``NotImplementedError``.  Rather than pushing execute into the backend layer,
-this tool uses ``subprocess.run`` directly in the workspace root, bypassing the
-middleware permission system entirely.
+``NotImplementedError``. Rather than pushing execute into the backend layer,
+this tool uses the workspace process registry in the workspace root, preserving
+deletion-time process cancellation while bypassing middleware execution.
 
 This is intentionally NOT a ``SandboxBackendProtocol.execute()`` implementation —
 it's a standalone tool passed via ``create_deep_agent(tools=[...])``.
@@ -19,6 +19,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+
+from app.services.workspace_process_registry import workspace_process_registry
 
 WORKSPACE_ROOT: str | None = None
 """Injected workspace root — set by :func:`create_execute_tool` once per agent."""
@@ -61,8 +63,9 @@ def create_execute_tool(workspace_root: str | None):
         for those if needed.
         """
         try:
-            result = subprocess.run(
+            result = workspace_process_registry.run(
                 command,
+                workspace=cwd,
                 shell=True,
                 capture_output=True,
                 text=True,

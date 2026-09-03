@@ -217,6 +217,14 @@ def _application_lifecycle_lock(path: Path) -> threading.RLock:
         return lock
 
 
+def clear_application_lifecycle_lock(workspace: str | Path) -> bool:
+    """在应用全部运行停止后移除该工作区的生命周期互斥锁缓存。"""
+
+    key = str(application_lifecycle_path(workspace))
+    with _STATE_LOCKS_GUARD:
+        return _STATE_LOCKS.pop(key, None) is not None
+
+
 def ensure_application_lifecycle(
     workspace: str | Path,
     *,

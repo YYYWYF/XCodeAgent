@@ -115,7 +115,7 @@ generating_application_template_files
 - 新编排器只读取正式 ProductPlan 和 UiDesign，并生成原子 manifest。
 - 生命周期成功提交会重读 manifest 和真实文件，不再信任客户端布尔值。
 - API 候选骨架和静默预加载逻辑已删除。
-- `planningConfirmedAt` 快速放行路径已从实际应用打开流程移除。
+- 首页阶段分区、`canOpenApplicationWorkbench` 和 `planningConfirmedAt` 准入字段已删除，应用索引统一承担所有阶段的工作台入口。
 
 ## 5. 改进原则
 
@@ -153,7 +153,7 @@ RequirementSpec 和 TechnicalPlan 由完成门禁读取，用于确认状态校�
 7. 原子更新本轮 manifest；
 8. 执行完成门禁。
 
-`planningConfirmedAt` 只记录初始化成功事实，不是模板 readiness 的触发条件。应用最终是否可以进入开发，以生命周期、manifest 和真实文件门禁结果为准。
+应用进入工作台不依赖模板 readiness。是否可以进入开发并启动预览，仍以生命周期、manifest 和真实文件门禁结果为准。
 
 ### 5.3 增量而非重建
 

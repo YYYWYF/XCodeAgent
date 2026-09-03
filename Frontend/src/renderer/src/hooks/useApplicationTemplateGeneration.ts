@@ -28,7 +28,6 @@ type UseApplicationTemplateGenerationOptions = {
 
 type ApplicationTemplateGenerationController = {
   generateApplicationTemplateFiles: (planning: PersistedActivePlanning) => Promise<boolean>
-  waitForTemplateGeneration: (applicationId: string) => Promise<boolean> | undefined
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
   generatingAppIds: ReadonlySet<string>
 }
@@ -62,7 +61,6 @@ export function useApplicationTemplateGeneration({
           )
           const confirmedApplication = {
             ...planning.application,
-            planningConfirmedAt: Date.now(),
             planningThreadId: planning.threadId
           }
           const persistedApplication = await saveApplication(confirmedApplication)
@@ -140,11 +138,5 @@ export function useApplicationTemplateGeneration({
     [commitPlannings, hidePlanning, getVisiblePlanningId, onOpenWorkbench]
   )
 
-  // 返回指定应用正在执行的模板任务，供删除流程只等待该应用。
-  const waitForTemplateGeneration = useCallback(
-    (applicationId: string): Promise<boolean> | undefined => tasksRef.current.get(applicationId),
-    []
-  )
-
-  return { generateApplicationTemplateFiles, waitForTemplateGeneration, generatingAppIds }
+  return { generateApplicationTemplateFiles, generatingAppIds }
 }

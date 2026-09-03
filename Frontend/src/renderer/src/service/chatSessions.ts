@@ -198,6 +198,15 @@ export function clearWorkspaceChatSessionCache(workspaceRoot: string): void {
   });
 }
 
+/** 清理指定应用全部阶段的当前会话选择，避免同 ID 重建后继承旧 UI 状态。 */
+export function clearApplicationActiveSessionCache(applicationId: string): void {
+  CHAT_SESSION_EDITOR_MODES.forEach((editorMode) => {
+    CHAT_SESSION_WORKBENCH_PHASES.forEach((phase) => {
+      window.localStorage.removeItem(activeSessionStorageKey(applicationId, editorMode, phase))
+    })
+  })
+}
+
 function getElectronInvoke(): ElectronInvoke | undefined {
   const electronApi = window.electron as
     | { ipcRenderer?: { invoke?: ElectronInvoke } }

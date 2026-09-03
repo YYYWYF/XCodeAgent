@@ -21,6 +21,7 @@ from app.services.database_credentials import (
     resolve_application_mysql_config,
 )
 from app.utils.subprocess_output import subprocess_output_text
+from app.services.workspace_process_registry import workspace_process_registry
 
 
 BACKEND_BUILD_TIMEOUT_SECONDS = 600
@@ -167,6 +168,7 @@ def _launch_backend_project_locked(
 
     build_result = _run_backend_build(
         maven_command=maven_command,
+        workspace=root,
         cwd=backend_root,
         runtime_root=runtime_root,
     )
@@ -214,6 +216,7 @@ def _launch_backend_project_locked(
         # 这类工程的普通 JAR 没有 Main-Class，必须在启动前补执行 repackage。
         repackage_result = _run_backend_repackage(
             maven_command=maven_command,
+            workspace=root,
             cwd=backend_root,
             runtime_root=runtime_root,
         )
@@ -409,6 +412,7 @@ def stop_workspace_backend_project(workspace_path: str | Path) -> dict[str, Any]
 def _run_backend_build(
     *,
     maven_command: str,
+    workspace: Path,
     cwd: Path,
     runtime_root: Path,
 ) -> dict[str, Any]:
@@ -417,8 +421,9 @@ def _run_backend_build(
     argv = [maven_command, "clean", "install"]
     started_at = datetime.now(UTC).isoformat()
     try:
-        completed = subprocess.run(
+        completed = workspace_process_registry.run(
             argv,
+            workspace=workspace,
             cwd=str(cwd),
             text=True,
             capture_output=True,
@@ -465,6 +470,7 @@ def _run_backend_build(
 def _run_backend_repackage(
     *,
     maven_command: str,
+    workspace: Path,
     cwd: Path,
     runtime_root: Path,
 ) -> dict[str, Any]:
@@ -473,8 +479,9 @@ def _run_backend_repackage(
     argv = [maven_command, "-B", "package", "spring-boot:repackage"]
     started_at = datetime.now(UTC).isoformat()
     try:
-        completed = subprocess.run(
+        completed = workspace_process_registry.run(
             argv,
+            workspace=workspace,
             cwd=str(cwd),
             text=True,
             capture_output=True,

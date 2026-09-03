@@ -232,6 +232,39 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         self.assertEqual(len(pages), 1)
         self.assertEqual(pages[0]["status"], "generation_failed")
 
+    def test_cancel_workspace_prevents_late_page_code_write(self) -> None:
+        """删除栅栏在模型返回后阻止设计代码和最终 manifest 再写入工作区。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task = _task(self.workspace, self.project_dir)
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_generate(page, page_key, project_dir):
+            started.set()
+            release.wait(timeout=10)
+            return FAKE_CODE
+
+        with patch(
+            "app.services.ui_design_generation_pool.generate_page_react_code",
+            side_effect=slow_generate,
+        ):
+            async def scenario():
+                await pool.submit([task])
+                self.assertTrue(await asyncio.to_thread(started.wait, 5))
+                cancellation = asyncio.create_task(pool.cancel_workspace(self.workspace))
+                await asyncio.sleep(0)
+                release.set()
+                result = await cancellation
+                await pool._queue.join()
+                return result
+
+            result = asyncio.run(scenario())
+
+        self.assertEqual(result["remainingPageIds"], [])
+        self.assertFalse((Path(self.project_dir) / "pages" / "orders" / "index.tsx").exists())
+        self.assertEqual(self._manifest_pages()[0]["status"], UI_DESIGN_STATUS_GENERATING)
+
 
 if __name__ == "__main__":
     unittest.main()

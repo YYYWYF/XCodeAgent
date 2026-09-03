@@ -21,6 +21,8 @@ from ag_ui.core import (
 from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
+from app.protocols.workflow.run_control import workflow_run_registry
+
 
 @dataclass(frozen=True)
 class AgUiActionResult:
@@ -71,6 +73,7 @@ def build_ag_ui_action_stream(
     error_data: ErrorDataFactory | None = None,
     accept: str | None = None,
     emit_progress_text: bool = True,
+    workspace_root: str | None = None,
 ) -> AsyncIterator[str]:
     """
     业务异常会被编码为失败结果，并正常发送 RUN_FINISHED，使 HttpAgent可以用与成功响应相同的流结构消费失败信息。
@@ -93,11 +96,19 @@ def build_ag_ui_action_stream(
     async def stream() -> AsyncIterator[str]:
         """发送标准生命周期，并在长耗时操作期间持续转发阶段进度。"""
 
+        current_task = asyncio.current_task()
+        operation_task: asyncio.Task[AgUiActionResult] | None = None
         yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
         yield encoder.encode(
             TextMessageStartEvent(messageId=message_id, role="assistant")
         )
         try:
+            if workspace_root and current_task is not None:
+                workflow_run_registry.register(
+                    run_id,
+                    current_task,
+                    workspace=workspace_root,
+                )
             if progress_operation or streaming_operation:
                 event_queue: asyncio.Queue[
                     AgUiActionProgress | AgUiActionTextDelta
@@ -190,6 +201,14 @@ def build_ag_ui_action_stream(
                 "error": {"type": type(exc).__name__, "message": str(exc)},
             }
             message = f"{error_message_prefix}：{type(exc).__name__}: {exc}"
+
+        finally:
+            if operation_task is not None and not operation_task.done():
+                operation_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await operation_task
+            if workspace_root and current_task is not None:
+                workflow_run_registry.unregister(run_id, current_task)
 
         safe_payload = jsonable_encoder(response_payload)
         yield encoder.encode(CustomEvent(name=event_name, value=safe_payload))

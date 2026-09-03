@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.services.data_source_policy import read_application_datasource_type
+from app.services.workspace_process_registry import workspace_process_registry
 from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
@@ -743,8 +744,9 @@ def _run_command_result(
     timed_out = False
     error: str | None = None
     try:
-        completed = subprocess.run(
+        completed = workspace_process_registry.run(
             argv,
+            workspace=root,
             cwd=str(cwd),
             text=True,
             capture_output=True,

@@ -15,6 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from app.utils.subprocess_output import subprocess_output_text
+from app.services.workspace_process_registry import workspace_process_registry
 INSTALL_TIMEOUT_SECONDS = 120
 SERVER_READY_TIMEOUT_SECONDS = 20
 SERVER_READY_INTERVAL_SECONDS = 1
@@ -122,6 +123,7 @@ def launch_frontend_project(
     else:
         install_result = _run_install(
             package_manager_command=package_manager_command,
+            workspace=root,
             cwd=package_path.parent,
             runtime_root=runtime_root,
         )
@@ -344,14 +346,16 @@ def _select_package_manager(cwd: Path) -> str:
 def _run_install(
     *,
     package_manager_command: str,
+    workspace: Path,
     cwd: Path,
     runtime_root: Path,
 ) -> dict[str, Any]:
     argv = [package_manager_command, "install"]
     started_at = datetime.now(UTC).isoformat()
     try:
-        completed = subprocess.run(
+        completed = workspace_process_registry.run(
             argv,
+            workspace=workspace,
             cwd=str(cwd),
             text=True,
             capture_output=True,

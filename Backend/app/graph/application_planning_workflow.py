@@ -745,7 +745,10 @@ async def application_planning_graph_for_request(*, workspace: str | None = None
     return cached[1]
 
 
-def clear_application_planning_graph_cache() -> None:
-    """清理创建规划 Graph 缓存，供应用退出时释放资源。"""
+def clear_application_planning_graph_cache(*, cache_key: str | None = None) -> None:
+    """清理全部或单个 checkpoint 数据库对应的创建规划 Graph 缓存。"""
 
-    _APPLICATION_PLANNING_GRAPHS.clear()
+    if cache_key is None:
+        _APPLICATION_PLANNING_GRAPHS.clear()
+    else:
+        _APPLICATION_PLANNING_GRAPHS.pop(cache_key, None)

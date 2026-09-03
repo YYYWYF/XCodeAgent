@@ -64,6 +64,7 @@ def build_version_control_ag_ui_stream(
         error_message_prefix="版本控制操作失败",
         error_data=lambda _exc: {"action": action},
         accept=accept,
+        workspace_root=str(version_control_input.get("workspaceRoot") or "") or None,
     )
 
 

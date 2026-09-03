@@ -123,10 +123,15 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
 
     root = Path(workspace_path).expanduser().resolve()
     frontend = stop_frontend_project(root)
+    ui_design_frontend = stop_frontend_project(root, runtime_subdir="launch-ui-design")
     backend = stop_workspace_backend_project(root)
     failed_parts = [
         name
-        for name, result in (("frontend", frontend), ("backend", backend))
+        for name, result in (
+            ("frontend", frontend),
+            ("ui_design_frontend", ui_design_frontend),
+            ("backend", backend),
+        )
         if result.get("status") == "failed"
     ]
     return {
@@ -138,6 +143,7 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
         ),
         "workspace": str(root),
         "frontend": frontend,
+        "ui_design_frontend": ui_design_frontend,
         "backend": backend,
     }
 

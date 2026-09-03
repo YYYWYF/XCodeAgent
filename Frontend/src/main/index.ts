@@ -1,7 +1,8 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import crypto from 'node:crypto'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import icon from '../../resources/icon.png?asset'
@@ -39,6 +40,7 @@ let tray: Tray | null = null
 let isQuitting = false
 const previewWindows = new Set<BrowserWindow>()
 const launchedPreviewWorkspaces = new Map<string, string>()
+const templateCloneProcesses = new Map<string, Set<ChildProcess>>()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 let primaryStartupPromise: Promise<boolean> | null = null
 
@@ -837,40 +839,87 @@ async function trashProjectDirectory(workspaceRoot: unknown): Promise<void> {
   await movePathToTrashIfPresent(projectRoot, (targetPath) => shell.trashItem(targetPath))
 }
 
-/** 仅将受控工作区内部由 XCodeAgent 生成的规划与运行目录移入系统回收站。 */
-async function trashProjectAgentDirectory(workspaceRoot: unknown): Promise<void> {
-  const projectRoot = resolveWorkspaceRoot(workspaceRoot)
-  const protectedRoots = new Set(
-    [
-      path.parse(projectRoot).root,
-      path.resolve(app.getPath('home')),
-      path.resolve(app.getPath('userData')),
-      path.resolve(getXcodeAgentDataDir())
-    ].map(pathComparisonKey)
-  )
-  if (protectedRoots.has(pathComparisonKey(projectRoot))) {
-    throw new Error('不能清理系统、用户或 XCodeAgent 数据目录')
-  }
+/** 登记模板下载子进程，使应用删除可以按完整工作区立即终止 clone。 */
+function registerTemplateCloneProcess(workspaceRoot: string, child: ChildProcess): void {
+  const workspaceKey = pathComparisonKey(workspaceRoot)
+  const processes = templateCloneProcesses.get(workspaceKey) || new Set<ChildProcess>()
+  processes.add(child)
+  templateCloneProcesses.set(workspaceKey, processes)
+  child.once('close', () => {
+    processes.delete(child)
+    if (processes.size === 0) templateCloneProcesses.delete(workspaceKey)
+  })
+}
 
-  const projectStats = await lstatIfPresent(projectRoot)
-  if (!projectStats) return
-  if (!projectStats.isDirectory() || projectStats.isSymbolicLink()) {
-    throw new Error('只能清理非符号链接的项目目录')
-  }
-
-  const agentDirectory = path.join(projectRoot, '.xcodeagent')
-  const agentStats = await lstatIfPresent(agentDirectory)
-  if (!agentStats) return
-  if (!agentStats.isDirectory() || agentStats.isSymbolicLink()) {
-    throw new Error('只能删除工作区内非符号链接的 .xcodeagent 目录')
+/** 向模板下载的完整进程树发送停止信号，避免 git 派生进程继续写目标目录。 */
+async function signalTemplateCloneProcessTree(
+  child: ChildProcess,
+  force: boolean
+): Promise<void> {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        'taskkill',
+        ['/PID', String(child.pid), '/T', ...(force ? ['/F'] : [])],
+        { windowsHide: true },
+        (error) => {
+          if (error && child.exitCode === null && child.signalCode === null) reject(error)
+          else resolve()
+        }
+      )
+    })
+    return
   }
   try {
-    await fs.access(getWorkspaceApplicationFile(projectRoot))
-  } catch {
-    throw new Error('该目录不包含 XCodeAgent 应用标识，不能清理')
+    process.kill(-child.pid, force ? 'SIGKILL' : 'SIGTERM')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
   }
+}
 
-  await movePathToTrashIfPresent(agentDirectory, (targetPath) => shell.trashItem(targetPath))
+/** 终止指定工作区仍在运行的模板下载进程，并等待进程句柄关闭。 */
+async function stopTemplateCloneProcesses(workspaceRoot: string): Promise<number> {
+  const workspaceKey = pathComparisonKey(workspaceRoot)
+  const processes = [...(templateCloneProcesses.get(workspaceKey) || [])].filter(
+    (child) => child.exitCode === null && child.signalCode === null
+  )
+  await Promise.all(
+    processes.map(
+      (child) =>
+        new Promise<void>((resolve, reject) => {
+          let settled = false
+          const finish = (error?: Error): void => {
+            if (settled) return
+            settled = true
+            clearTimeout(forceTimer)
+            clearTimeout(failureTimer)
+            if (error) reject(error)
+            else resolve()
+          }
+          const forceTimer = setTimeout(() => {
+            void signalTemplateCloneProcessTree(child, true).catch((error) =>
+              finish(error instanceof Error ? error : new Error(String(error)))
+            )
+          }, 2_000)
+          const failureTimer = setTimeout(
+            () => finish(new Error(`模板下载进程 ${child.pid || 'unknown'} 无法终止`)),
+            5_000
+          )
+          child.once('close', () => finish())
+          void signalTemplateCloneProcessTree(child, false).catch((error) =>
+            finish(error instanceof Error ? error : new Error(String(error)))
+          )
+        })
+    )
+  )
+  templateCloneProcesses.delete(workspaceKey)
+  return processes.length
+}
+
+/** 应用退出时终止所有仍在运行的模板下载进程树。 */
+async function stopAllTemplateCloneProcesses(): Promise<void> {
+  await Promise.all([...templateCloneProcesses.keys()].map(stopTemplateCloneProcesses))
 }
 
 /** 注册应用列表读取和保存所需的 IPC。 */
@@ -886,21 +935,14 @@ function setupApplicationStorageIpc(): void {
 
   ipcMain.handle('applications:delete-project', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    await stopTemplateCloneProcesses(workspaceRoot)
+    await stopGeneratedProjectPreview(workspaceRoot)
+    launchedPreviewWorkspaces.delete(pathComparisonKey(workspaceRoot))
+    // 先转移环境级会话；即使随后项目目录移动失败，仍可用原工作区重试删除事务。
+    await movePathToTrashIfPresent(getWorkspaceSessionRoot(workspaceRoot), (targetPath) =>
+      shell.trashItem(targetPath)
+    )
     await trashProjectDirectory(workspaceRoot)
-    // 项目移入回收站后同步转移环境级会话，避免同一路径重建时继承旧项目历史。
-    await movePathToTrashIfPresent(getWorkspaceSessionRoot(workspaceRoot), (targetPath) =>
-      shell.trashItem(targetPath)
-    )
-    return { ok: true }
-  })
-
-  ipcMain.handle('applications:delete-agent-directory', async (_event, payload = {}) => {
-    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
-    await trashProjectAgentDirectory(workspaceRoot)
-    // .xcodeagent 移入回收站后同步转移环境级会话，避免同一路径重建时继承旧项目聊天历史。
-    await movePathToTrashIfPresent(getWorkspaceSessionRoot(workspaceRoot), (targetPath) =>
-      shell.trashItem(targetPath)
-    )
     return { ok: true }
   })
 }
@@ -1605,27 +1647,50 @@ function setupWorkspaceIpc(): void {
       }
       try {
         await new Promise<void>((resolve, reject) => {
-          execFile(
+          const child = spawn(
             'git',
             ['clone', '--branch', templateBranch, '--single-branch', '--depth', '1', templateUrl, targetDir],
             {
-              timeout: 120000,
-              maxBuffer: 10 * 1024 * 1024,
+              detached: process.platform !== 'win32',
               windowsHide: true,
+              stdio: ['ignore', 'ignore', 'pipe'],
               env: {
                 ...process.env,
                 GIT_TERMINAL_PROMPT: '0',
                 GCM_INTERACTIVE: 'Never'
               }
-            },
-            (error, _stdout, stderr) => {
-              if (error) {
-                reject(new Error(`git clone 失败：${error.message}${stderr ? `\n${stderr}` : ''}`))
-                return
-              }
-              resolve()
             }
           )
+          registerTemplateCloneProcess(projectPath, child)
+          let settled = false
+          let timedOut = false
+          let stderr = ''
+          const finish = (error?: Error): void => {
+            if (settled) return
+            settled = true
+            clearTimeout(timeoutTimer)
+            if (error) reject(error)
+            else resolve()
+          }
+          const timeoutTimer = setTimeout(() => {
+            timedOut = true
+            void signalTemplateCloneProcessTree(child, true).catch((error) =>
+              finish(error instanceof Error ? error : new Error(String(error)))
+            )
+          }, 120_000)
+          child.stderr?.on('data', (chunk) => {
+            if (stderr.length < 10 * 1024 * 1024) stderr += String(chunk)
+          })
+          child.once('error', (error) => finish(error))
+          child.once('close', (code) => {
+            if (timedOut) {
+              finish(new Error(`git clone 超时：${stderr.trim() || '120 秒内未完成'}`))
+            } else if (code !== 0) {
+              finish(new Error(`git clone 失败（exit ${code ?? 'unknown'}）：${stderr.trim()}`))
+            } else {
+              finish()
+            }
+          })
         })
         if (!(await isTemplateDirectoryReady(targetDir, targetDirName))) {
           throw new Error(`git clone 完成，但 ${targetDirName} 模板缺少工程入口文件。`)
@@ -2104,6 +2169,12 @@ async function cleanupBeforeQuit(): Promise<void> {
     await clearAuthState()
   } catch (error) {
     console.error('Failed to clear auth token', error)
+  }
+
+  try {
+    await stopAllTemplateCloneProcesses()
+  } catch (error) {
+    console.error('Failed to stop template clone processes', error)
   }
 
   try {

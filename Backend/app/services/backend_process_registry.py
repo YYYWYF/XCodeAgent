@@ -38,6 +38,20 @@ def register_backend_process(
         _BACKEND_PROCESSES[_workspace_key(workspace)] = process
 
 
+def clear_backend_process_registry_workspace(workspace: str | Path) -> bool:
+    """预览进程停止后移除目标工作区遗留的进程和启动锁缓存。"""
+
+    workspace_path = Path(workspace).expanduser().resolve(strict=False)
+    workspace_key = _workspace_key(workspace_path)
+    with _BACKEND_REGISTRY_GUARD:
+        process = _BACKEND_PROCESSES.get(workspace_key)
+        if process is not None and process.poll() is None:
+            return False
+        removed_process = _BACKEND_PROCESSES.pop(workspace_key, None) is not None
+        removed_lock = _BACKEND_LAUNCH_LOCKS.pop(workspace_key, None) is not None
+        return removed_process or removed_lock
+
+
 def stop_previous_backend_process(
     *,
     workspace: Path,

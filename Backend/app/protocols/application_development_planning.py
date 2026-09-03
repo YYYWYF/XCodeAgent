@@ -110,6 +110,7 @@ def build_application_development_planning_ag_ui_stream(
         streaming_operation=operation,
         error_message_prefix="应用开发计划失败",
         accept=accept,
+        workspace_root=str(planning_input.get("workspaceRoot") or "") or None,
     )
 
 

@@ -2,28 +2,19 @@ import { QuestionCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import { Button, message, Tooltip } from 'antd'
 import {
   CreateApplicationAction,
-  ActivePlanningAction,
   OpenWorkspaceAction,
   WelcomeAgentTrack,
   WelcomeHero,
   WelcomeRecentProjects
 } from '../components/Welcome'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
-import {
-  MAX_ACTIVE_APPLICATION_PLANS,
-  type PersistedActivePlanning
-} from '../service/activeApplicationPlanning'
-import { canOpenApplicationWorkbench } from '../service/applicationStorage'
 import { cx } from '../utils'
 import './WelcomePage.less'
 import './WelcomePageLight.less'
 
 type Props = {
-  activePlannings: PersistedActivePlanning[]
-  deletingPlanningIds: ReadonlySet<string>
-  onDeletePlanning: (applicationId: string) => void
+  onBeforeDeleteApplication: (application: ApplicationConfig) => Promise<void>
   onOpenApplication: (application: ApplicationConfig) => void
-  onOpenPlanning: (applicationId: string) => void
   onStartPlanning: (
     application: ApplicationConfig,
     threadId: string,
@@ -34,26 +25,15 @@ type Props = {
 
 type WelcomeTheme = 'dark' | 'light'
 
-// 渲染首页，并为每个未完成规划显示相互隔离的恢复入口。
+// 渲染首页，并以统一项目列表承载所有设计、规划和开发阶段的应用入口。
 export default function WelcomePage({
-  activePlannings,
-  deletingPlanningIds,
-  onDeletePlanning,
+  onBeforeDeleteApplication,
   onOpenApplication,
-  onOpenPlanning,
   onStartPlanning,
   theme
 }: Props): JSX.Element {
-  // 已完成初始化的规划仍需保留在内存中供工作台回显，但首页只展示真正未完成的规划。
-  const unfinishedPlannings = activePlannings.filter(
-    (planning) => !canOpenApplicationWorkbench(planning.application, planning.lifecycle)
-  )
-
   return (
-    <main
-      className={cx('welcome-page', unfinishedPlannings.length > 0 && 'has-active-planning')}
-      data-theme={theme}
-    >
+    <main className={cx('welcome-page')} data-theme={theme}>
       <section className={cx('welcome-shell')}>
         <header className={cx('welcome-topbar')}>
           <div className={cx('welcome-brand')} aria-label="XCodeAgent">
@@ -88,32 +68,15 @@ export default function WelcomePage({
             <WelcomeHero />
 
             <section className={cx('welcome-actions')} aria-label="开始使用 XCodeAgent">
-              <CreateApplicationAction
-                activePlanningCount={unfinishedPlannings.length}
-                disabled={unfinishedPlannings.length >= MAX_ACTIVE_APPLICATION_PLANS}
-                onStartPlanning={onStartPlanning}
-                theme={theme}
-              />
+              <CreateApplicationAction onStartPlanning={onStartPlanning} theme={theme} />
               <OpenWorkspaceAction onOpenApplication={onOpenApplication} theme={theme} />
             </section>
 
-            {unfinishedPlannings.length > 0 ? (
-              <section className={cx('active-planning-list')} aria-label="未完成的应用计划">
-                {unfinishedPlannings.map((planning) => (
-                  <ActivePlanningAction
-                    application={planning.application}
-                    deleting={deletingPlanningIds.has(planning.application.id)}
-                    key={planning.application.id}
-                    lifecycle={planning.lifecycle}
-                    onDelete={() => onDeletePlanning(planning.application.id)}
-                    onOpen={() => onOpenPlanning(planning.application.id)}
-                    status={planning.status}
-                  />
-                ))}
-              </section>
-            ) : null}
-
-            <WelcomeRecentProjects onOpenApplication={onOpenApplication} theme={theme} />
+            <WelcomeRecentProjects
+              onBeforeDeleteApplication={onBeforeDeleteApplication}
+              onOpenApplication={onOpenApplication}
+              theme={theme}
+            />
           </section>
 
           <WelcomeAgentTrack />
