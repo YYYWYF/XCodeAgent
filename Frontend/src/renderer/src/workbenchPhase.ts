@@ -247,17 +247,12 @@ const PRODUCT_PHASE_NODES = new Set([
 ])
 const PLANNING_PHASE_NODES = new Set(['technical_planning', 'technical_planning_review'])
 
-/** 仅纠正审查阶段遗留覆盖值，用户主动切到测试等阶段时不得强制跳回验收。 */
-export function shouldAutoEnterAcceptancePhase(
-  activePhase: WorkbenchPhase,
-  manualOverride: WorkbenchPhase | null,
-  workflowPhase: string | undefined
-): boolean {
-  return (
-    activePhase !== 'acceptance' &&
-    manualOverride === 'review' &&
-    ACCEPTANCE_PHASE_NODES.has(String(workflowPhase || '').trim())
-  )
+/** 解析工作台实际阶段，确保用户手动选择优先于生命周期自动阶段。 */
+export function resolveWorkbenchPhase(
+  derivedPhase: WorkbenchPhase,
+  manualOverride: WorkbenchPhase | null
+): WorkbenchPhase {
+  return manualOverride ?? derivedPhase
 }
 
 /** 根据 Workflow 节点归属选择消息应显示的 Agent 阶段。 */

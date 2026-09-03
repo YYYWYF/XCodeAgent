@@ -2,6 +2,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readDagGenerationSnapshot } from '../src/renderer/src/service/agUiAgent'
 import { processStepsForDisplay } from '../src/renderer/src/service/processStepHistory'
+import {
+  pendingDagConfirmationExecution,
+  pendingDagConfirmationWorkflow
+} from '../src/renderer/src/components/AiChatPanel/stageOutputState'
+import type { ApplicationLifecycle, WorkflowRunPayload } from '../src/renderer/src/typings'
 
 /** 构造最小 DAG 阶段事件，减少协议测试样板。 */
 function stage(id: string, output: Record<string, unknown>): Record<string, unknown> {
@@ -220,4 +225,65 @@ test('重入会话时用完成态 DAG 快照回填持久化步骤产物', () => 
 
   assert.equal(steps?.[0]?.detail, '任务数=10，任务 DAG 已按范围生成')
   assert.equal(steps?.[0]?.dagGeneration?.stages[0]?.output?.kind, 'unit_graph')
+})
+
+test('待确认 DAG 由持久化 lifecycle 锁定且只匹配原 run 和 thread 的会话', () => {
+  const execution = {
+    scope: 'page',
+    targetId: 'home',
+    pageId: 'home',
+    threadId: 'thread-dag',
+    runId: 'run-dag',
+    phase: 'prepare_build_tasks',
+    status: 'awaiting_user',
+    pendingInteraction: {
+      id: 'interaction-dag',
+      type: 'plan_adjustment',
+      basedOnRevision: 8,
+      payload: { mode: 'build_task_plan_confirmation' },
+      artifactRefs: [],
+      createdAt: '2026-09-03T00:00:00Z'
+    },
+    startedAt: '2026-09-03T00:00:00Z',
+    updatedAt: '2026-09-03T00:00:00Z'
+  } as const
+  const lifecycle = {
+    activeExecutions: { 'run-dag': execution }
+  } as unknown as ApplicationLifecycle
+  const workflow = {
+    runId: 'run-dag',
+    threadId: 'thread-dag',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      clarification: {
+        mode: 'build_task_plan_confirmation',
+        taskPlan: { scopeTasks: [] }
+      }
+    }
+  } as unknown as WorkflowRunPayload
+
+  assert.equal(pendingDagConfirmationExecution(lifecycle)?.runId, 'run-dag')
+  assert.equal(
+    pendingDagConfirmationWorkflow(
+      [{ id: 1, role: 'assistant', content: '', createdAt: 1, workflow }],
+      execution
+    ),
+    workflow
+  )
+  assert.equal(
+    pendingDagConfirmationWorkflow(
+      [
+        {
+          id: 2,
+          role: 'assistant',
+          content: '',
+          createdAt: 2,
+          workflow: { ...workflow, threadId: 'other-thread' }
+        }
+      ],
+      execution
+    ),
+    undefined
+  )
 })

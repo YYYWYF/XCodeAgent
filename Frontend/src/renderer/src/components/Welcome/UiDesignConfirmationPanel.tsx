@@ -879,7 +879,7 @@ export default function UiDesignConfirmationPanel({
               size="large"
               type="primary"
             >
-              进入技术规划
+              进入规划阶段
             </Button>
           </div>
         </div>

@@ -4,7 +4,7 @@
 
 本文描述从创建应用到开始生成 Build DAG 之前的关键流程。
 
-UI 设计是可选节点：选择 UI 设计时先完成页面视觉稿确认，跳过时保存明确的 skipped 状态。两条路径都只到达“等待进入规划阶段”。用户点击绿色入口卡后，Electron 为该应用创建或聚焦唯一的规划窗口；窗口跳过欢迎页和通用工作台入场，直接进入规划阶段。启动上下文显式区分恢复原初始化 Graph checkpoint 的 `graphThreadId` 与规划 Agent 独立前端会话的 `conversationThreadId`，并只由规划窗口提交一次 `enter_planning`，然后才生成技术规划。
+UI 设计是可选节点：选择 UI 设计时先完成页面视觉稿确认，跳过时保存明确的 skipped 状态。两条路径都只到达“等待进入规划阶段”。用户点击绿色入口卡后，当前工作台创建或恢复该应用的独立 PLAN StageSession，并原地切换到规划阶段。后端继续使用原初始化 Graph checkpoint，规划 Agent 使用独立的前端 conversation thread；当前工作台只提交一次 `enter_planning`，然后才生成技术规划。
 
 ## 流程图
 

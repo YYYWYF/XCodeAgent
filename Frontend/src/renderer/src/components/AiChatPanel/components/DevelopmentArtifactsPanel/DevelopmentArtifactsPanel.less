@@ -1,0 +1,86 @@
+.@{class-prefix}-development-artifacts-panel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-development-artifacts-menu {
+  flex: 0 0 clamp(240px, 32%, 280px);
+  max-width: 55%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  border-right: 1px solid var(--wb-border);
+
+  .@{class-prefix}-application-outline {
+    padding: 16px 12px 14px;
+  }
+
+  // 分栏菜单无需预留旧侧栏操作按钮的位置，让名称和路径优先占用可用宽度。
+  .@{class-prefix}-outline-node > .@{class-prefix}-outline-row,
+  .@{class-prefix}-api-row,
+  .@{class-prefix}-entity-row {
+    padding-right: 4px;
+  }
+
+  .@{class-prefix}-api-list {
+    margin-left: 12px;
+    padding-left: 8px;
+  }
+
+  .@{class-prefix}-session-filter-row {
+    gap: 6px;
+
+    > span {
+      min-width: 0;
+      gap: 4px;
+    }
+
+    .ant-switch {
+      flex-shrink: 0;
+    }
+  }
+}
+
+.@{class-prefix}-development-artifacts-detail {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-development-artifacts-placeholder {
+  display: flex;
+  min-height: 100%;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 20px;
+  text-align: center;
+  overflow-wrap: anywhere;
+
+  h3 {
+    max-width: 100%;
+    margin: 0;
+    color: var(--wb-text);
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+
+  p {
+    max-width: 100%;
+    margin: 0;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+}

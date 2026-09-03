@@ -17,13 +17,10 @@ import {
 } from './managedWorkspace'
 import { endpointDesignDocumentExists, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
 import {
-  assertChatSessionTargetBinding,
-  assertChatSessionTargetType,
   nextStageSessionSequence,
   stageForWorkbenchPhase,
   withStageSessionCreationLock,
   type AgentStage,
-  type ChatSessionTargetType,
   type EditorMode,
   type WorkbenchPhase
 } from './stageSessions'
@@ -41,7 +38,6 @@ let loginWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 const previewWindows = new Set<BrowserWindow>()
-const planningWindows = new Map<string, BrowserWindow>()
 const launchedPreviewWorkspaces = new Map<string, string>()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 let primaryStartupPromise: Promise<boolean> | null = null
@@ -430,13 +426,17 @@ function mergeWorkbenchPageStatus(
   pages: WorkbenchPageOption[],
   buildTaskPlan?: Record<string, unknown>
 ): WorkbenchPageOption[] {
-  return pages.map((page) => ({
-    ...page,
-    designed: false,
-    detailPlanStatus: '',
-    hasDetailPlan: false,
-    taskSummary: pageBuildTaskSummary(buildTaskPlan, page.pageId)
-  }))
+  return pages.map((page) => {
+    const taskSummary = pageBuildTaskSummary(buildTaskPlan, page.pageId)
+    const hasBuildArtifact = Boolean(taskSummary)
+    return {
+      ...page,
+      designed: hasBuildArtifact,
+      detailPlanStatus: hasBuildArtifact ? 'generated' : '',
+      hasDetailPlan: hasBuildArtifact,
+      taskSummary
+    }
+  })
 }
 
 /** 把页面叶子的开发状态回写到页面目录树，保留菜单层级不变。 */
@@ -731,17 +731,10 @@ type ChatSessionSummary = {
   editorMode: EditorMode
   workbenchPhase: WorkbenchPhase
   workflowId: string
-  targetType: ChatSessionTargetType
   stage?: AgentStage
   sequence?: number
   entryKey?: string
   threadId: string
-  apiContractId?: string
-  endpointId?: string
-  endpointLabel?: string
-  entityId?: string
-  entityLabel?: string
-  pageId?: string
   revisionContext?: ChatSessionRevisionContext
   createdAt: number
   updatedAt: number
@@ -756,17 +749,10 @@ type NormalizedChatSession = {
   editorMode: EditorMode
   workbenchPhase: WorkbenchPhase
   workflowId: string
-  targetType: ChatSessionTargetType
   stage?: AgentStage
   sequence?: number
   entryKey?: string
   threadId: string
-  apiContractId?: string
-  endpointId?: string
-  endpointLabel?: string
-  entityId?: string
-  entityLabel?: string
-  pageId?: string
   revisionContext?: ChatSessionRevisionContext
   createdAt: number
   updatedAt: number
@@ -988,90 +974,6 @@ function setupBrowserIpc(): void {
   })
 }
 
-type PlanningWindowPayload = {
-  applicationId: string
-  graphThreadId: string
-  conversationThreadId: string
-  theme: 'dark' | 'light'
-}
-
-/** 校验独立规划窗口的应用与会话标识，禁止把任意启动参数注入渲染进程。 */
-function normalizePlanningWindowPayload(value: unknown): PlanningWindowPayload {
-  const payload = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
-  const applicationId = String(payload.applicationId || '').trim()
-  const graphThreadId = String(payload.graphThreadId || '').trim()
-  const conversationThreadId = String(payload.conversationThreadId || '').trim()
-  const theme = payload.theme === 'dark' || payload.theme === 'light' ? payload.theme : undefined
-  if (!applicationId || !graphThreadId || !conversationThreadId || !theme) {
-    throw new Error(
-      '打开规划窗口必须提供 applicationId、graphThreadId、conversationThreadId 和 theme'
-    )
-  }
-  return { applicationId, graphThreadId, conversationThreadId, theme }
-}
-
-/** 创建或聚焦指定应用唯一的规划阶段窗口，并通过 preload 传递双线程上下文。 */
-function createPlanningWindow(payload: PlanningWindowPayload): { reused: boolean } {
-  const existingWindow = planningWindows.get(payload.applicationId)
-  if (existingWindow && !existingWindow.isDestroyed()) {
-    if (existingWindow.isMinimized()) existingWindow.restore()
-    existingWindow.show()
-    existingWindow.focus()
-    return { reused: true }
-  }
-  planningWindows.delete(payload.applicationId)
-
-  const planningWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 720,
-    minHeight: 600,
-    title: 'XCode Agent · 规划阶段',
-    backgroundColor: payload.theme === 'dark' ? '#111217' : '#f5f7fb',
-    show: false,
-    autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-      additionalArguments: [
-        `--xcode-agent-base-url=${getBackendBaseUrl()}`,
-        `--xcode-agent-planning-application-id=${encodeURIComponent(payload.applicationId)}`,
-        `--xcode-agent-planning-graph-thread-id=${encodeURIComponent(payload.graphThreadId)}`,
-        `--xcode-agent-planning-conversation-thread-id=${encodeURIComponent(payload.conversationThreadId)}`
-      ]
-    }
-  })
-
-  planningWindows.set(payload.applicationId, planningWindow)
-  planningWindow.setMenuBarVisibility(false)
-  planningWindow.once('closed', () => {
-    if (planningWindows.get(payload.applicationId) === planningWindow) {
-      planningWindows.delete(payload.applicationId)
-    }
-  })
-  planningWindow.once('ready-to-show', () => {
-    planningWindow.show()
-    planningWindow.focus()
-  })
-  planningWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
-    return { action: 'deny' }
-  })
-  loadRendererPage(planningWindow, 'index')
-  return { reused: false }
-}
-
-/** 注册工作台多窗口 IPC；规划窗口拥有独立的前端会话 threadId。 */
-function setupWorkbenchWindowIpc(): void {
-  ipcMain.handle('windows:open-planning', async (_event, value) => {
-    const result = createPlanningWindow(normalizePlanningWindowPayload(value))
-    return { ok: true, ...result }
-  })
-}
-
 /** 记录本次 Electron 会话中被工作台启动过的项目预览工作区。 */
 function setupProjectPreviewIpc(): void {
   ipcMain.handle('project-preview:register-workspace', async (_event, payload = {}) => {
@@ -1222,17 +1124,10 @@ function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
     editorMode: assertEditorMode(session.editorMode),
     workbenchPhase: assertWorkbenchPhase(session.workbenchPhase),
     workflowId: session.workflowId,
-    targetType: session.targetType,
     stage: session.stage,
     sequence: session.sequence,
     entryKey: session.entryKey,
     threadId: String(session.threadId || ''),
-    apiContractId: session.apiContractId,
-    endpointId: session.endpointId,
-    endpointLabel: session.endpointLabel,
-    entityId: session.entityId,
-    entityLabel: session.entityLabel,
-    pageId: session.pageId,
     revisionContext: session.revisionContext,
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
@@ -1255,7 +1150,6 @@ function normalizeSession(session: unknown): NormalizedChatSession {
   const workbenchPhase = assertWorkbenchPhase(session.workbenchPhase)
   const workflowId = normalizeSessionEndpointField(session.workflowId)
   if (!workflowId) throw new Error('workflowId must be a non-empty string')
-  const targetType = assertChatSessionTargetType(session.targetType)
   const stage = stageForWorkbenchPhase(workbenchPhase)
   const id = assertSessionId(session.id)
   const threadId = normalizeSessionEndpointField(session.threadId)
@@ -1264,13 +1158,6 @@ function normalizeSession(session: unknown): NormalizedChatSession {
     ? session.messages.filter(isJsonRecord).map(normalizePersistentSessionMessage)
     : []
 
-  const pageId = normalizeSessionPageId(session.pageId)
-  const apiContractId = normalizeSessionEndpointField(session.apiContractId)
-  const endpointId = normalizeSessionEndpointField(session.endpointId)
-  const endpointLabel = normalizeSessionEndpointField(session.endpointLabel)
-  const entityId = normalizeSessionEndpointField(session.entityId)
-  const entityLabel = normalizeSessionEndpointField(session.entityLabel)
-  assertChatSessionTargetBinding(targetType, { pageId, apiContractId, endpointId, entityId })
   const sequence = Number(session.sequence)
   const entryKey = normalizeSessionEndpointField(session.entryKey)
   if (
@@ -1289,27 +1176,14 @@ function normalizeSession(session: unknown): NormalizedChatSession {
     editorMode,
     workbenchPhase,
     workflowId,
-    targetType,
     ...(stage ? { stage, sequence, entryKey } : {}),
     threadId,
-    ...(apiContractId ? { apiContractId } : {}),
-    ...(endpointId ? { endpointId } : {}),
-    ...(endpointLabel ? { endpointLabel } : {}),
-    ...(entityId ? { entityId } : {}),
-    ...(entityLabel ? { entityLabel } : {}),
-    ...(pageId ? { pageId } : {}),
     ...(revisionContext ? { revisionContext } : {}),
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
     workspaceRoot: typeof session.workspaceRoot === 'string' ? session.workspaceRoot : '',
     messages
   }
-}
-
-/** 规范化页面会话标识，避免空字符串污染持久化索引。 */
-function normalizeSessionPageId(value: unknown): string | undefined {
-  const pageId = typeof value === 'string' ? value.trim() : ''
-  return pageId || undefined
 }
 
 /** 规范化接口会话标识，避免空字符串污染持久化索引。 */
@@ -1433,12 +1307,6 @@ async function createChatSession(
   const workbenchPhase = assertWorkbenchPhase(inputValue.workbenchPhase)
   const workflowId = normalizeSessionEndpointField(inputValue.workflowId)
   if (!workflowId) throw new Error('workflowId must be a non-empty string')
-  const targetType = assertChatSessionTargetType(inputValue.targetType)
-  const pageId = normalizeSessionPageId(inputValue.pageId)
-  const apiContractId = normalizeSessionEndpointField(inputValue.apiContractId)
-  const endpointId = normalizeSessionEndpointField(inputValue.endpointId)
-  const entityId = normalizeSessionEndpointField(inputValue.entityId)
-  assertChatSessionTargetBinding(targetType, { pageId, apiContractId, endpointId, entityId })
   const stage = stageForWorkbenchPhase(workbenchPhase)
   const entryKey = stage
     ? normalizeSessionEndpointField(inputValue.entryKey) || `session:${crypto.randomUUID()}`
@@ -1460,13 +1328,8 @@ async function createChatSession(
       if (existing) {
         const identityMatches =
           existing.editorMode === editorMode &&
-          existing.workbenchPhase === workbenchPhase &&
-          existing.targetType === targetType &&
-          existing.pageId === pageId &&
-          existing.apiContractId === apiContractId &&
-          existing.endpointId === endpointId &&
-          existing.entityId === entityId
-        if (!identityMatches) throw new Error('entryKey is already bound to another session target')
+          existing.workbenchPhase === workbenchPhase
+        if (!identityMatches) throw new Error('entryKey is already bound to another phase session')
         return existing
       }
     }
@@ -1510,20 +1373,21 @@ async function createChatSession(
       const executionStatus = normalizeSessionEndpointField(execution?.status) || ''
       const executionScope = normalizeSessionEndpointField(execution?.scope)
       const executionTargetId = normalizeSessionEndpointField(execution?.targetId)
-      const executionPageId = normalizeSessionPageId(execution?.pageId)
+      const executionPageId = normalizeSessionEndpointField(execution?.pageId)
+      const activePageId = normalizeSessionEndpointField(activeTarget?.pageId)
+      const activeEndpointId = normalizeSessionEndpointField(activeTarget?.endpointId)
+      const activeEntityId = normalizeSessionEndpointField(activeTarget?.entityId)
       const targetMatches =
-        (targetType === 'page' &&
-          executionScope === 'page' &&
-          pageId === (executionPageId || executionTargetId) &&
-          normalizeSessionPageId(activeTarget?.pageId) === pageId) ||
-        (targetType === 'api' &&
-          executionScope === 'endpoint' &&
-          endpointId === executionTargetId &&
-          normalizeSessionEndpointField(activeTarget?.endpointId) === endpointId) ||
-        (targetType === 'entity' &&
-          executionScope === 'data_source' &&
-          entityId === executionTargetId) ||
-        (targetType === 'workflow' && executionScope === 'application')
+        (executionScope === 'page' &&
+          Boolean(activePageId) &&
+          activePageId === (executionPageId || executionTargetId)) ||
+        (executionScope === 'endpoint' &&
+          Boolean(activeEndpointId) &&
+          activeEndpointId === executionTargetId) ||
+        (executionScope === 'data_source' &&
+          Boolean(activeEntityId) &&
+          activeEntityId === executionTargetId) ||
+        executionScope === 'application'
       if (
         !revisionContext ||
         revisionContext.sessionRole !== 'development' ||
@@ -1549,7 +1413,6 @@ async function createChatSession(
       ...inputValue,
       id: crypto.randomUUID(),
       workflowId,
-      targetType,
       workbenchPhase,
       editorMode,
       ...(stage ? { stage, sequence, entryKey } : {}),
@@ -1926,14 +1789,9 @@ function setupSessionStorageIpc(): void {
       existing.stage !== session.stage ||
       existing.sequence !== session.sequence ||
       existing.entryKey !== session.entryKey ||
-      existing.threadId !== session.threadId ||
-      existing.targetType !== session.targetType ||
-      existing.pageId !== session.pageId ||
-      existing.apiContractId !== session.apiContractId ||
-      existing.endpointId !== session.endpointId ||
-      existing.entityId !== session.entityId
+      existing.threadId !== session.threadId
     if (immutableIdentityChanged) {
-      throw new Error('session identity and target binding are immutable')
+      throw new Error('session phase identity is immutable')
     }
     await fs.writeFile(sessionFile, `${JSON.stringify(session, null, 2)}\n`, 'utf8')
     return { ok: true, session: sessionSummary(session) }
@@ -2190,7 +2048,6 @@ async function initializePrimaryApplication(): Promise<boolean> {
   setupApplicationSettingsIpc()
   setupAuthIpc()
   setupBrowserIpc()
-  setupWorkbenchWindowIpc()
   setupProjectPreviewIpc()
   setupWorkspaceIpc()
   setupSessionStorageIpc()

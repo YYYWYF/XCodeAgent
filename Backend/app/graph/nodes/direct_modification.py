@@ -80,11 +80,19 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         )
     # 二次修改只消费分类模型返回的路由 JSON；不再额外调用模型生成 Contract Evidence。
     # 正式分支仍由后续一次性 interaction 和用户确认控制，不能因省略证据而绕过确认门。
+    target_paths = list(decision.target_paths)
+    element_path = _direct_element_workspace_path(state)
+    if (
+        decision.intent == "implementation_fix"
+        and decision.owner in {"frontend", "fullstack"}
+        and element_path
+    ):
+        target_paths = list(dict.fromkeys([element_path, *target_paths]))[:100]
     dynamic_workspace_paths = validated_dynamic_workspace_paths(
         workspace=workspace_from_state(state),
         request=request,
         owner=decision.owner,
-        target_paths=decision.target_paths,
+        target_paths=target_paths,
     )
     approved_paths = list(
         dict.fromkeys(
@@ -105,7 +113,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         "direct_stage_results": {},
         "direct_code_change_sets": [],
         "direct_modification_result": {},
-        "direct_modification_target_paths": list(decision.target_paths),
+        "direct_modification_target_paths": target_paths,
         "direct_modification_approved_paths": approved_paths,
         "change_impact_analysis": {},
         "change_impact_code_scan_required": False,
@@ -225,7 +233,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
                 "status": "requires_user_input",
                 "message": f"该请求属于不改变已确认产品语义的{owner_label}实现修复。",
                 "reason": decision.reason,
-                "requestedPaths": list(decision.target_paths),
+                "requestedPaths": target_paths,
                 "requestedResources": target_resources,
                 "owner": decision.owner,
                 "questions": [
@@ -292,10 +300,23 @@ def _workspace_snapshot_for_classification(state: ProjectState) -> dict[str, Any
     if not snapshot:
         summary = state.get("workspace_snapshot_summary")
         snapshot = summary if isinstance(summary, dict) else {}
+    context = dict(snapshot)
     target = state.get("change_target")
-    if not isinstance(target, dict) or not target:
-        return snapshot
-    return {**snapshot, "currentTarget": target}
+    if isinstance(target, dict) and target:
+        context["currentTarget"] = target
+    element_context = state.get("element_context")
+    if isinstance(element_context, dict) and element_context:
+        context["currentElement"] = element_context
+    return context
+
+
+def _direct_element_workspace_path(state: ProjectState) -> str:
+    """读取协议边界已解析的 DOM 源码工作区相对路径。"""
+
+    context = state.get("element_context")
+    if not isinstance(context, dict):
+        return ""
+    return str(context.get("workspacePath") or "").strip().replace("\\", "/").lstrip("/")
 
 
 def _should_run_change_impact_analysis(
@@ -691,7 +712,12 @@ def _direct_source_candidates(
 ) -> list[str]:
     """从代码证据和扫描快照提取源码候选，让执行 Agent 优先读取业务代码。"""
 
-    candidates: list[str] = []
+    element_path = _direct_element_workspace_path(state)
+    candidates: list[str] = (
+        [element_path]
+        if element_path and owner == "frontend" and direct_path_matches_owner(element_path, owner)
+        else []
+    )
 
     # ChangeImpactAnalyzer 的 code.scan 已经给出局部定位时优先使用它；
     # 重新校验路径和 owner，避免把模型或扫描器返回的越界路径直接交给写 Agent。
@@ -838,6 +864,7 @@ def execute_frontend_direct_modification(state: ProjectState) -> dict[str, Any]:
             user_request=str(state.get("request") or ""),
             conversation_summary=str(state.get("direct_modification_summary") or ""),
             backend_handoff=state.get("backend_handoff"),
+            element_context=state.get("element_context"),
             candidate_files=_direct_source_candidates(state, owner="frontend"),
             approved_paths=state.get("direct_modification_approved_paths"),
             workspace=workspace,
@@ -945,7 +972,7 @@ def execute_workspace_direct_modification(state: ProjectState) -> dict[str, Any]
 
 
 def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
-    """只检查本轮真实改动所属工程层，并把可归因失败交给局部修复节点。"""
+    """只构建检查本轮真实改动所属工程层，并把可归因失败交给局部修复节点。"""
 
     repair_iteration = max(0, int(state.get("repair_iteration", 0) or 0))
     max_repair_iterations = max(
@@ -956,14 +983,15 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
     affected_layers = set(changed_paths)
     validation_state = {
         **state,
-        "unit_test_affected_layers": sorted(affected_layers),
+        # 快速修改只做受影响层的构建验证，既不生成也不执行单元测试。
+        "unit_test_generation_enabled": False,
         "repair_iteration": repair_iteration,
         "max_repair_iterations": max_repair_iterations,
     }
     result = run_integration_checks(
         validation_state,
         on_progress=_check_progress_snapshot_writer(),
-        phase="all",
+        phase="build",
         artifact_namespace="direct-fix",
         affected_layers=affected_layers,
         install_frontend_dependencies=False,
@@ -1015,7 +1043,7 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
                     if revision_requests and repair_iteration >= max_repair_iterations
                     else "本次修改缺少可验证的真实代码范围。"
                     if not scope_valid
-                    else "本次修改范围验证失败，请查看测试日志。"
+                    else "本次修改范围验证失败，请查看验证日志。"
                 )
             )
         ),
@@ -1099,9 +1127,6 @@ def _direct_failure_matches_changes(result: dict[str, Any], paths: list[str]) ->
 
     if not paths:
         return False
-    check_id = str(result.get("id") or "").casefold()
-    if check_id.endswith("_unit_tests"):
-        return True
     global_markers = (
         "package.json",
         "pnpm-lock",

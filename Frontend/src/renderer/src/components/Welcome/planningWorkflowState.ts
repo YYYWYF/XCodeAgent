@@ -109,7 +109,7 @@ export function retainApplicationPlanningInterrupt(
   const sameRun =
     previous?.threadId === incoming.threadId && previous?.runId === incoming.runId
   // 同一恢复轮一旦开始生成 TechnicalPlan，晚到的入口 checkpoint 帧只能视为旧投影，
-  // 不能把规划窗口重新拉回“进入规划阶段”的确认卡。
+  // 不能把规划阶段重新拉回“进入规划阶段”的确认卡。
   if (
     sameRun &&
     planningWorkflowPhase(previous) === 'technical_planning' &&
@@ -364,11 +364,6 @@ export function planningWorkflowUiDesignSkipped(workflow?: WorkflowRunPayload): 
     }
   }
   return false
-}
-
-/** 判断当前确认动作是否应创建独立规划窗口；已有规划窗口只恢复原 Graph，不再递归开窗。 */
-export function shouldCreatePlanningWindow(conversationThreadId?: string): boolean {
-  return !String(conversationThreadId || '').trim()
 }
 
 // 从 Workflow 或生命周期快照读取当前需求是否已通过用户确认门禁。

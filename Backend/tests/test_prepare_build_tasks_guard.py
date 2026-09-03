@@ -16,6 +16,8 @@ from app.graph.nodes.tasks import (
     _latest_project_plan,
     prepare_build_tasks,
 )
+from app.graph.subgraphs.build import _build_gate_result
+from app.protocols.workflow.request import _build_task_plan_confirmation
 from app.services.build_task_planner import (
     create_build_task_plan,
     replace_build_task_plan_tasks,
@@ -57,6 +59,26 @@ def _page_implementation_contract(page_id: str, endpoint_ids: list[str]) -> dict
         "pageId": page_id,
         "uiDesignRef": {"path": f".xcodeagent/ui-design/pages/{page_id}.tsx"},
         "requiredEndpointIds": endpoint_ids,
+    }
+
+
+def _confirmation_plan(tasks: list[dict], build_context: dict) -> dict:
+    """构造带稳定拓扑和持久化 Build 上下文的确认投影测试计划。"""
+
+    task_ids = [str(task["id"]) for task in tasks]
+    return {
+        "version": "3.0.0",
+        "schema_version": "build-dag.v3",
+        "status": "ready",
+        "confirmation_status": "pending",
+        "build_context": build_context,
+        "task_registry": {str(task["id"]): task for task in tasks},
+        "task_graph": {
+            "nodes": task_ids,
+            "edges": [],
+            "topological_order": task_ids,
+            "validation": {"is_valid": True, "errors": []},
+        },
     }
 
 
@@ -391,14 +413,252 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(persisted["confirmation_status"], "confirmed")
 
     def test_build_task_plan_confirmation_exposes_only_supported_actions(self) -> None:
-        """DAG 确认卡只暴露确认、局部修改和重新生成动作。"""
+        """只读任务确认卡只暴露确认和放弃动作。"""
 
         payload = _build_task_plan_confirmation_payload(
             {"confirmation_status": "pending"},
             {"type": "application", "targetId": "application"},
         )
 
-        self.assertEqual(payload["actionValues"], ["confirm", "patch", "regenerate"])
+        self.assertEqual(payload["actionValues"], ["confirm", "abandon"])
+        self.assertNotIn("editableFields", payload)
+        self.assertNotIn("tasks", payload["taskPlan"])
+
+    def test_build_task_plan_confirmation_rejects_removed_patch_action(self) -> None:
+        """AG-UI 恢复边界必须拒绝已经移除的任务 patch 动作。"""
+
+        self.assertEqual(
+            _build_task_plan_confirmation(
+                {
+                    "build_task_plan_confirmation": {
+                        "action": "patch",
+                        "patches": [{"task_id": "task-1", "title": "修改标题"}],
+                    }
+                }
+            ),
+            {},
+        )
+
+    def test_build_task_plan_abandon_does_not_enter_graph_resume(self) -> None:
+        """放弃动作由计划控制流处理，不能被解析成 prepare_build_tasks 恢复。"""
+
+        self.assertEqual(
+            _build_task_plan_confirmation(
+                {"build_task_plan_confirmation": {"action": "abandon"}}
+            ),
+            {},
+        )
+
+    def test_direct_build_gate_rebuilds_read_only_confirmation_projection(self) -> None:
+        """直接恢复 Build 的待确认门禁也不得回退下发完整累计任务。"""
+
+        result = _build_gate_result(
+            {},
+            {
+                "version": "3.0.0",
+                "schema_version": "build-dag.v3",
+                "status": "ready",
+                "confirmation_status": "pending",
+                "build_execution_scope": {
+                    "type": "application",
+                    "targetId": "application",
+                },
+                "task_registry": {},
+            },
+            ["Build DAG 尚未确认。"],
+        )
+
+        clarification = result["clarification"]
+        self.assertEqual(clarification["actionValues"], ["confirm", "abandon"])
+        self.assertIn("scopeTasks", clarification["taskPlan"])
+        self.assertNotIn("tasks", clarification["taskPlan"])
+
+    def test_build_task_plan_confirmation_projects_page_target_and_task_layers(self) -> None:
+        """页面确认投影应展示产品验收、关联接口和分层后的累计任务。"""
+
+        endpoint = {
+            "id": "orders.list",
+            "api_contract_id": "orders-api",
+            "method": "GET",
+            "path": "/api/orders",
+            "summary": "查询订单列表",
+            "parameters": [{"name": "current", "in": "query"}],
+            "request_schema_ref": None,
+            "response_schema_ref": "OrderListOutput",
+            "error_codes": ["ORDER_QUERY_FAILED"],
+            "authentication": {"required": True},
+        }
+        build_context = {
+            "target": {"type": "page", "id": "orders"},
+            "required_unit_ids": [
+                "backend:endpoint:orders-api:orders.list",
+                "page:orders",
+            ],
+            "page_implementation_contract": {
+                "pageId": "orders",
+                "productAcceptance": ["用户可以按条件查询订单。"],
+                "requiredEndpointIds": ["orders.list"],
+            },
+            "direct_endpoint_contracts": [endpoint],
+        }
+        tasks = [
+            {
+                "id": "history-completed",
+                "title": "历史页面",
+                "unit_id": "page:history",
+                "dependencies": [],
+                "status": "completed",
+            },
+            {
+                "id": "shared-base",
+                "title": "既有公共基础",
+                "unit_id": "application:root",
+                "dependencies": [],
+                "status": "completed",
+            },
+            {
+                "id": "shared-client",
+                "title": "既有请求客户端",
+                "unit_id": "frontend:api-client",
+                "dependencies": ["shared-base"],
+                "status": "pending",
+            },
+            {
+                "id": "orders-backend",
+                "title": "实现订单查询接口",
+                "unit_id": "backend:endpoint:orders-api:orders.list",
+                "dependencies": ["shared-client"],
+                "acceptance_checks": [
+                    {"description": "内部工程检查不得进入用户确认投影。"}
+                ],
+                "business_acceptance_checks": [
+                    {"description": "用户可以按条件查询订单。"}
+                ],
+                "status": "pending",
+            },
+            {
+                "id": "orders-page",
+                "title": "实现订单页面",
+                "unit_id": "page:orders",
+                "dependencies": ["orders-backend"],
+                "status": "pending",
+            },
+        ]
+        plan = _confirmation_plan(tasks, build_context)
+        persisted_plan_before_projection = deepcopy(plan)
+        payload = _build_task_plan_confirmation_payload(
+            plan,
+            {"type": "page", "targetId": "orders"},
+            project_plan={
+                "artifact_type": "technical-plan",
+                "pages": [
+                    {
+                        "pageId": "orders",
+                        "name": "订单管理",
+                        "path": "/orders",
+                        "description": "查询和查看订单。",
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(plan, persisted_plan_before_projection)
+        self.assertEqual(payload["targetReview"]["target"]["label"], "订单管理")
+        self.assertEqual(
+            payload["targetReview"]["target"]["acceptanceCriteria"],
+            ["用户可以按条件查询订单。"],
+        )
+        self.assertEqual(
+            payload["targetReview"]["relatedEndpoints"][0]["path"],
+            "/api/orders",
+        )
+        self.assertNotIn("tasks", payload["taskPlan"])
+        self.assertEqual(
+            [task["id"] for task in payload["taskPlan"]["scopeTasks"]],
+            ["orders-backend", "orders-page"],
+        )
+        projected_backend_task = payload["taskPlan"]["scopeTasks"][0]
+        self.assertNotIn("acceptance_checks", projected_backend_task)
+        self.assertEqual(
+            projected_backend_task["business_acceptance_checks"],
+            [{"description": "用户可以按条件查询订单。"}],
+        )
+        self.assertEqual(
+            [task["id"] for task in payload["taskPlan"]["reusedPrerequisites"]],
+            ["shared-base", "shared-client"],
+        )
+        self.assertEqual(
+            payload["taskPlan"]["retainedTaskSummary"],
+            {
+                "total": 1,
+                "completed": 1,
+                "active": 0,
+                "failed": 0,
+                "other": 0,
+                "statusCounts": {"completed": 1},
+            },
+        )
+
+    def test_build_task_plan_confirmation_omits_unrelated_endpoint_section(self) -> None:
+        """页面未关联 Endpoint 时确认投影不得输出空接口区块。"""
+
+        build_context = {
+            "target": {"type": "page", "id": "about"},
+            "required_unit_ids": ["page:about"],
+            "page_implementation_contract": {
+                "pageId": "about",
+                "productAcceptance": ["用户可以查看产品介绍。"],
+                "requiredEndpointIds": [],
+            },
+            "direct_endpoint_contracts": [],
+        }
+        payload = _build_task_plan_confirmation_payload(
+            _confirmation_plan([], build_context),
+            {"type": "page", "targetId": "about"},
+            project_plan={
+                "artifact_type": "technical-plan",
+                "pages": [{"pageId": "about", "name": "产品介绍"}],
+            },
+            build_context=build_context,
+        )
+
+        self.assertNotIn("relatedEndpoints", payload["targetReview"])
+
+    def test_build_task_plan_confirmation_projects_direct_endpoint_without_page(self) -> None:
+        """直接开发 Endpoint 时应只返回所选接口目标，不伪造页面信息。"""
+
+        endpoint = {
+            "id": "orders.detail",
+            "api_contract_id": "orders-api",
+            "method": "GET",
+            "path": "/api/orders/{orderId}",
+            "summary": "查询订单详情",
+            "parameters": [],
+            "response_schema_ref": "OrderDetailOutput",
+        }
+        build_context = {
+            "target": {
+                "type": "endpoint",
+                "id": "orders.detail",
+                "api_contract_id": "orders-api",
+            },
+            "required_unit_ids": ["backend:endpoint:orders-api:orders.detail"],
+            "endpoint_contract": endpoint,
+            "direct_endpoint_contracts": [endpoint],
+        }
+        payload = _build_task_plan_confirmation_payload(
+            _confirmation_plan([], build_context),
+            {
+                "type": "endpoint",
+                "targetId": "orders.detail",
+                "apiContractId": "orders-api",
+            },
+            build_context=build_context,
+        )
+
+        self.assertEqual(payload["targetReview"]["target"]["type"], "endpoint")
+        self.assertEqual(payload["targetReview"]["target"]["path"], "/api/orders/{orderId}")
+        self.assertNotIn("relatedEndpoints", payload["targetReview"])
 
     def test_confirmed_plan_from_other_page_does_not_bypass_generation(self) -> None:
         """切换页面后不得把上一页已确认 DAG 当作当前页计划直接进入 Build。"""

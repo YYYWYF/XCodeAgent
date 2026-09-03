@@ -97,7 +97,7 @@ type WorkflowRunCardProps = {
   interactionAvailability: WorkflowInteractionAvailability
   /** 已答完的历史澄清卡：header→答案 映射，存在时按原控件形态回填答案并以禁用态展示。 */
   historicalClarificationAnswers?: Record<string, string>
-  onEntityDesignGateJump?: (entityId: string) => void
+  onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
@@ -171,9 +171,6 @@ export default function WorkflowRunCard({
         String((item as { entity_id?: string }).entity_id || '').trim()
     )
   )
-  const entityGateAnswerKey = gateQuestion
-    ? clarificationQuestionKey(gateQuestion, 0)
-    : 'entity_source_binding_required'
   const detailReview =
     clarification?.mode === 'entity_source_binding' ? clarification.review : undefined
   // 实体设计评审：确认对象包含实体目标或实体设计摘要时，视为实体设计场景，
@@ -194,8 +191,7 @@ export default function WorkflowRunCard({
   const testTarget = (clarification?.testTarget ||
     workflow.summary?.testTarget ||
     workflow.state?.testTarget) as WorkflowTestTarget | undefined
-  const dagTaskPlan =
-    (clarification?.taskPlan as WorkflowBuildTaskPlan | undefined) || workflow.summary.buildTaskPlan
+  const dagTaskPlan = clarification?.taskPlan as WorkflowBuildTaskPlan | undefined
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -248,7 +244,7 @@ export default function WorkflowRunCard({
   const confirmationItemCount = detailReview
     ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
     : dagConfirmation
-      ? dagTaskPlan?.tasks?.length || 0
+      ? dagTaskPlan?.scopeTasks?.length || 0
       : testPhaseConfirmation
         ? 1
         : reviewPhaseConfirmation
@@ -516,6 +512,7 @@ export default function WorkflowRunCard({
                 })
               }
               plan={dagTaskPlan}
+              targetReview={clarification?.targetReview}
             />
           ) : unitTestConfirmation && requiresConfirmation ? (
             <UnitTestConfirmationPanel
@@ -566,12 +563,7 @@ export default function WorkflowRunCard({
               disabled={disabled}
               entities={entityGateEntities}
               explanation={clarification?.message || String(gateQuestion?.question || '')}
-              onJump={(entityId) => onEntityDesignGateJump?.(entityId)}
-              onRetry={() =>
-                onSubmitClarification?.(workflow, {
-                  [entityGateAnswerKey]: '已完成实体设计，请重新检测并继续生成页面/接口详细设计。'
-                })
-              }
+              onJump={(entityId) => onEntityDesignGateJump?.(entityId, workflow)}
             />
           ) : artifactConfirmation && requiresConfirmation ? (
             clarification?.mode === 'requirement_document_confirmation' ? (

@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react'
 import type { MutableRefObject, SetStateAction } from 'react'
+import { randomUUID } from '@ag-ui/client'
 import {
   AgUiChatSession,
   AgUiRunError,
+  appendElementContextToConversationPrompt,
   getConversationUrl,
   getWorkflowUrl
 } from '../../../service/agUiAgent'
@@ -19,11 +21,13 @@ import type {
   ApplicationLifecycle,
   ChatMessageSkill,
   EditorMode,
+  InspectedElementContext,
   WorkflowBuildExecutionScope,
   WorkflowBuildTaskPlanConfirmation,
   WorkflowDebugOptions,
   WorkflowAction,
   WorkflowDesignStageRevisionStart,
+  WorkflowDevelopmentContinuation,
   WorkflowWorkbenchPlanRevisionStart,
   WorkflowRevisionDraftInteraction,
   WorkflowRevisionImpact,
@@ -43,6 +47,7 @@ import {
 } from '../components/WorkflowRunCard'
 import { workflowClarification } from '../components/WorkflowRunCard/workflowClarification'
 import type { AgentChatMessage } from '../types'
+import { developmentContinuationFromWorkflow } from '../developmentContinuation'
 import {
   beginOptimisticSkillSend,
   rollbackSkillSelection,
@@ -57,7 +62,8 @@ import type {
   TestPhaseSessionTarget
 } from './useChatSessions'
 import {
-  sessionIdentityMatchesTarget,
+  isSessionExecutionOwner,
+  type SessionExecutionEntry,
   type SessionIdentity,
   type SessionRunStatus
 } from './sessionRuntime'
@@ -85,25 +91,36 @@ type ConversationTarget =
       endpointId: string
     }
 
-/** 从会话身份提取当前页面或接口目标，让“这个页面”等指代随普通自然语言请求到达后端。 */
-function conversationTargetFromIdentity(identity: SessionIdentity): ConversationTarget | undefined {
-  if (identity.apiContractId && identity.endpointId) {
+/** 从当前工作台选择提取页面或接口目标，让“这个页面”等指代随普通自然语言请求到达后端。 */
+function conversationTargetFromSelection(
+  pageId?: string,
+  apiContractId?: string,
+  endpointId?: string
+): ConversationTarget | undefined {
+  const normalizedApiContractId = String(apiContractId || '').trim()
+  const normalizedEndpointId = String(endpointId || '').trim()
+  if (normalizedApiContractId && normalizedEndpointId) {
     return {
       type: 'endpoint',
-      apiContractId: identity.apiContractId,
-      endpointId: identity.endpointId
+      apiContractId: normalizedApiContractId,
+      endpointId: normalizedEndpointId
     }
   }
-  if (identity.pageId) {
+  const normalizedPageId = String(pageId || '').trim()
+  if (normalizedPageId) {
     return {
       type: 'page',
-      pageId: identity.pageId
+      pageId: normalizedPageId
     }
   }
   return undefined
 }
 
 type UseWorkflowConversationParams = {
+  acquireSessionExecution: (
+    identity: SessionIdentity,
+    conversation: boolean
+  ) => SessionExecutionEntry | undefined
   activeSession?: SessionIdentity
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   application: ApplicationConfig
@@ -113,11 +130,10 @@ type UseWorkflowConversationParams = {
   selectedSkills: ChatMessageSkill[]
   selectedApiContractId?: string
   selectedEndpointId?: string
-  selectedEndpointLabel?: string
   selectedEntityId?: string
-  selectedEntityLabel?: string
   selectedPageId?: string
   selectedPageLabel?: string
+  inspectedElementContext?: InspectedElementContext
   conversationEnabled: boolean
   inputMode: ChatInputMode
   editorMode: EditorMode
@@ -126,13 +142,6 @@ type UseWorkflowConversationParams = {
   createAcceptanceSession: (target: AcceptancePhaseSessionTarget) => Promise<SessionIdentity>
   acceptanceConversationSessionKey?: string
   ensureActiveSession: () => Promise<SessionIdentity>
-  ensureEndpointSession: (
-    apiContractId: string,
-    endpointId: string,
-    endpointLabel: string
-  ) => Promise<SessionIdentity>
-  ensureEntitySession: (entityId: string, entityLabel: string) => Promise<SessionIdentity>
-  ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -148,12 +157,16 @@ type UseWorkflowConversationParams = {
   onEnterTestPhase: () => void
   onEnterReviewPhase: () => void
   onEnterAcceptancePhase: () => void
+  onElementContextConsumed: (context: InspectedElementContext) => void
   onPreviewReady: (target: WorkflowPreviewTarget) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
-  runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
+  releaseSessionExecution: (sessionKey: string) => void
+  sessionExecutions: SessionExecutionEntry[]
   setDraftByKey: (sessionKey: string, value: string) => void
   setSelectedSkillsByKey: (sessionKey: string, value: ChatMessageSkill[]) => void
   setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
+  updateSessionExecutionStatus: (sessionKey: string, status: SessionRunStatus) => void
+  workbenchPhase: import('../../../workbenchPhase').WorkbenchPhase
 }
 
 type UseWorkflowConversationResult = {
@@ -164,6 +177,9 @@ type UseWorkflowConversationResult = {
   handleContinueRevisionBuild: (
     continuation: WorkflowRevisionContinuation,
     sessionIdentity: SessionIdentity
+  ) => Promise<boolean>
+  handleContinueDevelopment: (
+    continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
   ) => Promise<boolean>
   handleEndPlan: (runId?: string) => Promise<void>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
@@ -191,14 +207,18 @@ type UseWorkflowConversationResult = {
     entityId: string
     entityLabel: string
     hasDetailPlan?: boolean
+    continuation?: WorkflowDevelopmentContinuation
   }) => Promise<boolean>
   handleStopGenerating: () => void
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
-    answers: ClarificationAnswers
+    answers: ClarificationAnswers,
+    options?: ClarificationSubmissionOptions
   ) => Promise<boolean>
   loading: boolean
   planEnded: boolean
+  phaseExecution?: SessionExecutionEntry
+  sessionExecutionLocked: boolean
   sessionRunStates: Record<string, SessionRunStatus>
   stopping: boolean
   workspaceBusy: boolean
@@ -220,12 +240,10 @@ function buildTaskPlanConfirmationAction(
   const value = answers.build_task_plan_confirmation
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const action = String((value as Record<string, unknown>).action || '')
-  if (!['confirm', 'patch', 'regenerate'].includes(action)) return undefined
-  const patches = (value as Record<string, unknown>).patches
+  if (!['confirm', 'abandon'].includes(action)) return undefined
   return {
     mode: 'build_task_plan_confirmation',
-    action: action as WorkflowBuildTaskPlanConfirmation['action'],
-    ...(Array.isArray(patches) ? { patches } : {})
+    action: action as WorkflowBuildTaskPlanConfirmation['action']
   }
 }
 
@@ -235,10 +253,14 @@ function buildTaskPlanConfirmationMessage(
 ): string {
   const messages: Record<WorkflowBuildTaskPlanConfirmation['action'], string> = {
     confirm: '已确认 Build DAG，请进入 Build。',
-    patch: '已提交 Build DAG 任务修改，请重新校验并确认。',
-    regenerate: '请重新生成 Build DAG。'
+    abandon: '放弃当前 Build DAG 并停止流程。'
   }
   return messages[action]
+}
+
+type ClarificationSubmissionOptions = {
+  onExecutionStarted?: () => void
+  sessionIdentity?: SessionIdentity
 }
 
 /** 从开发完成确认载荷读取测试目标，确保刷新后仍能生成一致的用户消息。 */
@@ -303,14 +325,13 @@ function workflowEndpointExecutionScope(
 /** 优先恢复 Workflow 中的 endpoint 目标，再使用当前 API 会话补齐 handoff 上下文。 */
 function endpointExecutionScopeForWorkflow(
   workflow: WorkflowRunPayload,
-  activeSession?: SessionIdentity,
   selectedApiContractId?: string,
   selectedEndpointId?: string
 ): WorkflowBuildExecutionScope | undefined {
   const workflowScope = workflowEndpointExecutionScope(workflow)
   if (workflowScope) return workflowScope
-  const apiContractId = String(activeSession?.apiContractId || selectedApiContractId || '').trim()
-  const endpointId = String(activeSession?.endpointId || selectedEndpointId || '').trim()
+  const apiContractId = String(selectedApiContractId || '').trim()
+  const endpointId = String(selectedEndpointId || '').trim()
   return apiContractId && endpointId
     ? { type: 'endpoint', targetId: endpointId, apiContractId }
     : undefined
@@ -464,6 +485,7 @@ function smallTaskRequestedPaths(workflow: WorkflowRunPayload): string[] {
 }
 
 export function useWorkflowConversation({
+  acquireSessionExecution,
   activeSession,
   agUiSessionsRef,
   application,
@@ -473,11 +495,10 @@ export function useWorkflowConversation({
   selectedSkills,
   selectedApiContractId,
   selectedEndpointId,
-  selectedEndpointLabel,
   selectedEntityId,
-  selectedEntityLabel,
   selectedPageId,
   selectedPageLabel,
+  inspectedElementContext,
   conversationEnabled,
   inputMode,
   editorMode,
@@ -486,9 +507,6 @@ export function useWorkflowConversation({
   createAcceptanceSession,
   acceptanceConversationSessionKey,
   ensureActiveSession,
-  ensureEndpointSession,
-  ensureEntitySession,
-  ensurePageSession,
   getSessionMessages,
   persistSession,
   onApplicationLifecycleChange,
@@ -499,12 +517,16 @@ export function useWorkflowConversation({
   onEnterTestPhase,
   onEnterReviewPhase,
   onEnterAcceptancePhase,
+  onElementContextConsumed,
   onPreviewReady,
   publishAiMessage,
-  runningSessionsRef,
+  releaseSessionExecution,
+  sessionExecutions,
   setDraftByKey,
   setSelectedSkillsByKey,
-  setSessionMessages
+  setSessionMessages,
+  updateSessionExecutionStatus,
+  workbenchPhase
 }: UseWorkflowConversationParams): UseWorkflowConversationResult {
   const stopRequestedRef = useRef<Record<string, boolean>>({})
   const notifiedPreviewTargetsRef = useRef<Set<string>>(new Set())
@@ -522,27 +544,27 @@ export function useWorkflowConversation({
   // 记录用户已明确结束的会话，保证自由输入不依赖后端控制请求或生命周期回传时序。
   const [endedPlanSessionKeys, setEndedPlanSessionKeys] = useState<Record<string, boolean>>({})
 
-  const selectedTarget = {
-    apiContractId: selectedApiContractId,
-    endpointId: selectedEndpointId,
-    entityId: selectedEntityId,
-    pageId: selectedPageId
-  }
-  const matchingActiveSession =
-    activeSession && sessionIdentityMatchesTarget(activeSession, selectedTarget)
-      ? activeSession
-      : undefined
-  // 首次创建目标会话时 React 还未提交 activeSession；只接住同一页面、接口或自由对话的运行态，避免进度跨目标串线。
-  const activeRun =
-    (matchingActiveSession ? runStates[matchingActiveSession.key] : undefined) ||
-    Object.values(runStates).find(
-      (entry) =>
-        entry.identity.workspaceRoot === application.workspaceRoot &&
-        entry.identity.editorMode === editorMode &&
-        sessionIdentityMatchesTarget(entry.identity, selectedTarget)
-    )
-  const activeRuntimeKey = matchingActiveSession?.key || activeRun?.identity.key
-  const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
+  const phaseExecution = sessionExecutions.find(
+    (entry) =>
+      entry.identity.workspaceRoot === application.workspaceRoot &&
+      entry.identity.workflowId === application.id &&
+      entry.identity.workbenchPhase === workbenchPhase
+  )
+  const matchingActiveSession = activeSession
+  const activeSessionOwnsExecution = isSessionExecutionOwner(phaseExecution, matchingActiveSession)
+  // 持有者始终沿用原有运行、调试和停止控制；局部状态短暂缺失时从中央登记恢复。
+  const activeRun = matchingActiveSession
+    ? runStates[matchingActiveSession.key] ||
+      (activeSessionOwnsExecution && phaseExecution
+        ? {
+            identity: phaseExecution.identity,
+            status: phaseExecution.status,
+            conversation: phaseExecution.conversation
+          }
+        : undefined)
+    : undefined
+  const activeRuntimeKey = activeRun?.identity.key || matchingActiveSession?.key
+  const loading = Boolean(activeRun)
   const stopping = activeRun?.status === 'stopping'
   const conversationRunning = Boolean(activeRun?.conversation)
   const planEnded = Boolean(endedPlanSessionKeys[activeRuntimeKey || draftKey])
@@ -552,9 +574,10 @@ export function useWorkflowConversation({
       ? liveWorkflows[activeRuntimeKey]
       : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
-  // 当前阶段允许同工作区与同页面的独立会话并行，busy 只保留为现有组件接口兼容值。
-  const workspaceBusy = false
-  const sessionRunStates = Object.values(runStates).reduce<Record<string, SessionRunStatus>>(
+  // 只有非持有者会话只读；是否有局部 activeRun 不再参与所有权判断。
+  const sessionExecutionLocked = Boolean(phaseExecution && !activeSessionOwnsExecution)
+  const workspaceBusy = sessionExecutionLocked
+  const sessionRunStates = sessionExecutions.reduce<Record<string, SessionRunStatus>>(
     (states, entry) => {
       if (
         entry.identity.workspaceRoot === application.workspaceRoot &&
@@ -567,7 +590,7 @@ export function useWorkflowConversation({
     {}
   )
 
-  /** 首次发送时创建目标会话；简单模式补充输入优先复用当前会话和 thread。 */
+  /** 首次发送时创建阶段会话；简单模式补充输入优先复用当前会话和 thread。 */
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
@@ -577,20 +600,16 @@ export function useWorkflowConversation({
         : undefined
     const sessionIdentity =
       acceptanceConversationSession ||
-      (isConversationWorkflow(activeWorkflow) && matchingActiveSession
+      (isConversationWorkflow(activeWorkflow) && activeSession
         ? matchingActiveSession
-        : selectedEntityId
-          ? await ensureEntitySession(selectedEntityId, selectedEntityLabel || selectedEntityId)
-          : selectedApiContractId && selectedEndpointId
-            ? await ensureEndpointSession(
-                selectedApiContractId,
-                selectedEndpointId,
-                selectedEndpointLabel || selectedEndpointId
-              )
-            : selectedPageId
-              ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
-              : await ensureActiveSession())
-    await sendWorkflowMessage(message, {
+        : await ensureActiveSession())
+    const conversation =
+      Boolean(acceptanceConversationSession) ||
+      shouldUseConversation(conversationEnabled, activeWorkflow, workflowDebug, inputMode)
+    const requestMessage = conversation
+      ? appendElementContextToConversationPrompt(message, inspectedElementContext)
+      : message
+    const sent = await sendWorkflowMessage(requestMessage, {
       clearDraft: true,
       detailTargetType: selectedEntityId
         ? 'entity'
@@ -615,10 +634,12 @@ export function useWorkflowConversation({
       titleFrom: message,
       workflowDebug,
       // 验收“不通过”只恢复普通对话；即使之前输入模式是 workflow，也必须走 conversation 端点。
-      conversation:
-        Boolean(acceptanceConversationSession) ||
-        shouldUseConversation(conversationEnabled, activeWorkflow, workflowDebug, inputMode)
+      conversation,
+      conversationElementContext: conversation ? inspectedElementContext : undefined
     })
+    if (sent && conversation && inspectedElementContext) {
+      onElementContextConsumed(inspectedElementContext)
+    }
   }
 
   /** 在开发阶段会话中消费 TechnicalPlan continuation，并进入工作区扫描与 DAG 链。 */
@@ -641,6 +662,30 @@ export function useWorkflowConversation({
     })
   }
 
+  /** 消费实体绑定签发的一次性 continuation，并在原 thread 恢复原开发 execution。 */
+  const handleContinueDevelopment = async (
+    continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
+  ): Promise<boolean> => {
+    if (loading || workspaceBusy) return false
+    const identity = await ensureActiveSession()
+    let accepted = false
+    const completed = await sendWorkflowMessage(`继续开发${continuation.target.type === 'page' ? '页面' : '接口'}。`, {
+      workflowAction: 'continue_after_entity_binding',
+      developmentContinuation: {
+        id: continuation.id,
+        token: continuation.token
+      },
+      executionThreadId: continuation.sourceThreadId,
+      sessionIdentity: identity,
+      titleFrom: `继续开发：${continuation.target.label}`,
+      onExecutionStarted: () => { accepted = true },
+      conversation: false
+    })
+    // 新 execution 已登记即代表 token 已消费；后续扫描/构建失败走该运行的重试，
+    // 不能把已消费的续接卡错误恢复成可点击状态。
+    return accepted || completed
+  }
+
   /** 发送并持久化 Workflow 对话，认证失败时恢复发送前的界面状态。 */
   const sendWorkflowMessage = async (
     message: string,
@@ -654,6 +699,9 @@ export function useWorkflowConversation({
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
       workflowAction?: WorkflowAction
+      developmentContinuation?: { id: string; token?: string }
+      executionThreadId?: string
+      onExecutionStarted?: () => void
       buildExecutionScope?: WorkflowBuildExecutionScope
       planControlAction?: 'stop' | 'end'
       planControlRunId?: string
@@ -672,7 +720,9 @@ export function useWorkflowConversation({
         sourcePath?: string
       }
       conversation?: boolean
-      conversationTarget?: ConversationTarget
+      /** null 表示本轮明确不继承工作区当前页面或 Endpoint 选择。 */
+      conversationTarget?: ConversationTarget | null
+      conversationElementContext?: InspectedElementContext
       conversationApprovedPaths?: string[]
       conversationHandoffDecision?: 'approved' | 'rejected'
       conversationImpactInteractionId?: string
@@ -684,12 +734,22 @@ export function useWorkflowConversation({
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
     if (!trimmedMessage) return false
-
-    const identity = options?.sessionIdentity || (await ensureActiveSession())
-    if (runningSessionsRef.current.has(identity.key)) {
+    // 空白草稿发送前先检查当前渲染快照，避免已被同阶段 Run 锁定时仍落盘一个空会话。
+    if (!options?.sessionIdentity && !activeSession && phaseExecution) {
       setErrors((current) => ({
         ...current,
-        [identity.key]: '当前会话正在执行。'
+        [draftKey]: '当前阶段有其他会话正在执行。'
+      }))
+      return false
+    }
+
+    const identity = options?.sessionIdentity || (await ensureActiveSession())
+    const blockingExecution = acquireSessionExecution(identity, Boolean(options?.conversation))
+    if (blockingExecution) {
+      const sameSession = blockingExecution.identity.key === identity.key
+      setErrors((current) => ({
+        ...current,
+        [identity.key]: sameSession ? '当前会话正在执行。' : '当前阶段有其他会话正在执行。'
       }))
       return false
     }
@@ -699,12 +759,16 @@ export function useWorkflowConversation({
       : options?.workflowScope === 'application_planning'
         ? getApplicationPlanningUrl()
         : getWorkflowUrl()
+    const executionThreadId =
+      options?.executionThreadId || options?.resumeState?.threadId || identity.threadId
     const currentAgUiSession = agUiSessionsRef.current[identity.key]
     const agUiSession =
-      currentAgUiSession && currentAgUiSession.endpointUrl === endpointUrl
+      currentAgUiSession &&
+      currentAgUiSession.endpointUrl === endpointUrl &&
+      currentAgUiSession.threadId === executionThreadId
         ? currentAgUiSession
         : (agUiSessionsRef.current[identity.key] = new AgUiChatSession(
-            identity.threadId,
+            executionThreadId,
             endpointUrl
           ))
     const optimisticSkills = beginOptimisticSkillSend(options?.selectedSkills || [])
@@ -725,12 +789,11 @@ export function useWorkflowConversation({
     const previousMessages = getSessionMessages(identity.key)
     const nextMessages = [...previousMessages, userMessage, assistantMessage]
 
-    runningSessionsRef.current.set(identity.key, identity)
     setRunStates((current) => ({
       ...current,
       [identity.key]: {
         identity,
-        status: 'running',
+        status: 'starting',
         conversation: Boolean(options?.conversation)
       }
     }))
@@ -758,6 +821,7 @@ export function useWorkflowConversation({
     let streamedToolCalls: ToolCallRecord[] = []
     let streamedProcessSteps: ProcessStepRecord[] = []
     let latestMessages = nextMessages
+    let executionStartedNotified = false
     const updateAssistantMessage = (
       content: string,
       workflow?: WorkflowRunPayload,
@@ -787,6 +851,13 @@ export function useWorkflowConversation({
 
     /** 在 AG-UI 实时回调中立即转交一次成功启动信号，避免被最终运行态更新批处理丢失。 */
     const updateWorkflow = (nextWorkflow: WorkflowRunPayload): void => {
+      if (
+        !executionStartedNotified &&
+        nextWorkflow.summary.lifecycle?.activeExecutions?.[nextWorkflow.runId]
+      ) {
+        executionStartedNotified = true
+        options?.onExecutionStarted?.()
+      }
       streamedWorkflow = nextWorkflow
       setLiveWorkflows((current) => ({ ...current, [identity.key]: nextWorkflow }))
       updateAssistantMessage(streamedContent, nextWorkflow, streamedToolCalls)
@@ -804,14 +875,17 @@ export function useWorkflowConversation({
         messages: nextMessages,
         sessionId: identity.sessionId,
         threadId: identity.threadId,
-        apiContractId: identity.apiContractId,
-        endpointId: identity.endpointId,
-        endpointLabel: identity.endpointLabel,
-        entityId: identity.entityId,
-        entityLabel: identity.entityLabel,
-        pageId: identity.pageId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
+      updateSessionExecutionStatus(identity.key, 'running')
+      setRunStates((current) => ({
+        ...current,
+        [identity.key]: {
+          identity,
+          status: 'running',
+          conversation: Boolean(options?.conversation)
+        }
+      }))
       const {
         answer: rawAnswer,
         workflow,
@@ -826,7 +900,7 @@ export function useWorkflowConversation({
         onApplicationLifecycle: onApplicationLifecycleChange,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
         selectedPageId:
-          options && 'selectedPageId' in options ? options.selectedPageId : identity.pageId,
+          options && 'selectedPageId' in options ? options.selectedPageId : selectedPageId,
         selectedApiContractId: options?.selectedApiContractId,
         selectedEndpointId: options?.selectedEndpointId,
         selectedEntityId: options?.selectedEntityId,
@@ -840,12 +914,22 @@ export function useWorkflowConversation({
         resumeState: options?.resumeState,
         pageTemplate: options?.pageTemplate,
         conversation: options?.conversation,
-        conversationTarget: options?.conversationTarget || conversationTargetFromIdentity(identity),
+        conversationTarget:
+          options?.conversationTarget === null
+            ? undefined
+            : options?.conversationTarget ||
+              conversationTargetFromSelection(
+                options && 'selectedPageId' in options ? options.selectedPageId : selectedPageId,
+                options?.selectedApiContractId || selectedApiContractId,
+                options?.selectedEndpointId || selectedEndpointId
+              ),
+        conversationElementContext: options?.conversationElementContext,
         conversationApprovedPaths: options?.conversationApprovedPaths,
         conversationHandoffDecision: options?.conversationHandoffDecision,
         conversationImpactInteractionId: options?.conversationImpactInteractionId,
         revisionRequest: options?.revisionRequest,
         revisionContinuation: options?.revisionContinuation,
+        developmentContinuation: options?.developmentContinuation,
         revisionInteraction: options?.revisionInteraction,
         workflowScope: options?.workflowScope,
         onContent: (content) => {
@@ -880,6 +964,19 @@ export function useWorkflowConversation({
         rawToolCalls.length > 0 ? rawToolCalls : streamedToolCalls,
         streamedProcessSteps
       )
+      // 在运行完成边界生成并持久化续接卡，避免依赖当前选中实体或组件 effect，
+      // 即使用户切换了大纲/历史会话，原对话的确认结果仍然完整。
+      const continuation = !stopped && developmentContinuationFromWorkflow(finalWorkflow)
+      if (continuation) {
+        completedMessages.push({
+          id: assistantMessageId + 1,
+          role: 'assistant',
+          content: '',
+          developmentContinuation: continuation,
+          createdAt: Date.now()
+        })
+        setSessionMessages(identity.key, completedMessages)
+      }
       if (finalWorkflow) {
         setLiveWorkflows((current) => ({
           ...current,
@@ -892,12 +989,6 @@ export function useWorkflowConversation({
         messages: completedMessages,
         sessionId: identity.sessionId,
         threadId: identity.threadId,
-        apiContractId: identity.apiContractId,
-        endpointId: identity.endpointId,
-        endpointLabel: identity.endpointLabel,
-        entityId: identity.entityId,
-        entityLabel: identity.entityLabel,
-        pageId: identity.pageId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
       if (options?.workflowAction === 'submit_revision_interaction') {
@@ -917,13 +1008,7 @@ export function useWorkflowConversation({
           editorMode: identity.editorMode,
           messages: previousMessages,
           sessionId: identity.sessionId,
-          threadId: identity.threadId,
-          apiContractId: identity.apiContractId,
-          endpointId: identity.endpointId,
-          endpointLabel: identity.endpointLabel,
-          entityId: identity.entityId,
-          entityLabel: identity.entityLabel,
-          pageId: identity.pageId
+          threadId: identity.threadId
         })
         // 认证失败由全局登录门禁处理，同时在当前对话区保留可见错误，避免门禁未及时出现时形成空白。
         setErrors((current) => ({
@@ -952,12 +1037,6 @@ export function useWorkflowConversation({
           messages: completedMessages,
           sessionId: identity.sessionId,
           threadId: identity.threadId,
-          apiContractId: identity.apiContractId,
-          endpointId: identity.endpointId,
-          endpointLabel: identity.endpointLabel,
-          entityId: identity.entityId,
-          entityLabel: identity.entityLabel,
-          pageId: identity.pageId,
           titleFrom: message
         })
         publishAiMessage(identity.editorMode, answer)
@@ -990,12 +1069,6 @@ export function useWorkflowConversation({
         messages: failedMessages,
         sessionId: identity.sessionId,
         threadId: identity.threadId,
-        apiContractId: identity.apiContractId,
-        endpointId: identity.endpointId,
-        endpointLabel: identity.endpointLabel,
-        entityId: identity.entityId,
-        entityLabel: identity.entityLabel,
-        pageId: identity.pageId,
         titleFrom: options?.titleFrom || message
       })
       setErrors((current) => ({
@@ -1004,7 +1077,7 @@ export function useWorkflowConversation({
       }))
       return false
     } finally {
-      runningSessionsRef.current.delete(identity.key)
+      releaseSessionExecution(identity.key)
       setRunStates((current) => omitKey(current, identity.key))
       stopRequestedRef.current[identity.key] = false
     }
@@ -1013,7 +1086,8 @@ export function useWorkflowConversation({
   /** 将结构化确认转换为可追踪的用户消息，并通过当前 AG-UI 会话恢复 Workflow。 */
   const handleSubmitClarification = async (
     workflow: WorkflowRunPayload,
-    answers: ClarificationAnswers
+    answers: ClarificationAnswers,
+    options?: ClarificationSubmissionOptions
   ): Promise<boolean> => {
     const conversation = isConversationWorkflow(workflow)
     if (
@@ -1034,16 +1108,14 @@ export function useWorkflowConversation({
     )
     const endpointScope = endpointExecutionScopeForWorkflow(
       workflow,
-      activeSession,
       selectedApiContractId,
       selectedEndpointId
     )
     const workflowBuildScope = workflow.summary.buildExecutionScope || endpointScope
     const continuationPageId = endpointScope
       ? undefined
-      : workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId
-    const continuationEntityId =
-      workflowSelectedEntityId(workflow) || activeSession?.entityId || selectedEntityId
+      : workflowSelectedPageId(workflow) || selectedPageId
+    const continuationEntityId = workflowSelectedEntityId(workflow) || selectedEntityId
     if (
       conversation &&
       clarificationMode === 'revision_impact_confirmation' &&
@@ -1061,7 +1133,11 @@ export function useWorkflowConversation({
       }
       if (!originalRequest || loading || workspaceBusy) return false
       const sourceIdentity = activeSession || (await ensureActiveSession())
-      const target = conversationTargetFromIdentity(sourceIdentity) || { type: 'application' }
+      const target = conversationTargetFromSelection(
+        continuationPageId,
+        endpointScope?.apiContractId,
+        endpointScope?.targetId
+      ) || { type: 'application' }
       if (impact.formalBranch === 'design_stage_revision') {
         try {
           await onStartDesignStageRevision({
@@ -1186,11 +1262,22 @@ export function useWorkflowConversation({
     if (!conversation && clarificationMode === 'build_task_plan_confirmation') {
       const action = buildTaskPlanConfirmationAction(answers)
       if (!action || loading || workspaceBusy) return false
+      if (action.action === 'abandon') {
+        return sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
+          planControlAction: 'end',
+          planControlRunId: workflow.runId,
+          sessionIdentity: options?.sessionIdentity,
+          titleFrom: '放弃 Build DAG',
+          conversation: false
+        })
+      }
       return sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
         clarificationAnswers: answers,
         originalRequest,
         resumeState: workflow,
         buildExecutionScope: workflowBuildScope,
+        onExecutionStarted: options?.onExecutionStarted,
+        sessionIdentity: options?.sessionIdentity,
         titleFrom: 'Build DAG 确认',
         conversation: false
       })
@@ -1216,14 +1303,12 @@ export function useWorkflowConversation({
       try {
         testSession = await createTestSession({
           targetLabel: target?.label || '当前应用',
-          pageId: activeSession?.pageId || (target?.type === 'page' ? targetId : undefined),
-          apiContractId: activeSession?.apiContractId || workflowBuildScope?.apiContractId,
-          endpointId:
-            activeSession?.endpointId || (target?.type === 'endpoint' ? targetId : undefined),
-          endpointLabel: activeSession?.endpointLabel || target?.label,
-          entityId:
-            activeSession?.entityId || (target?.type === 'data_source' ? targetId : undefined),
-          entityLabel: activeSession?.entityLabel || target?.label
+          pageId: target?.type === 'page' ? targetId : continuationPageId,
+          apiContractId: workflowBuildScope?.apiContractId,
+          endpointId: target?.type === 'endpoint' ? targetId : endpointScope?.targetId,
+          endpointLabel: target?.label,
+          entityId: target?.type === 'data_source' ? targetId : continuationEntityId,
+          entityLabel: target?.label
         })
       } catch {
         testPhaseTransitionRunIdsRef.current.delete(workflow.runId)
@@ -1264,14 +1349,12 @@ export function useWorkflowConversation({
       try {
         reviewSession = await createReviewSession({
           targetLabel: target?.label || '当前应用',
-          pageId: activeSession?.pageId || (target?.type === 'page' ? targetId : undefined),
-          apiContractId: activeSession?.apiContractId || workflowBuildScope?.apiContractId,
-          endpointId:
-            activeSession?.endpointId || (target?.type === 'endpoint' ? targetId : undefined),
-          endpointLabel: activeSession?.endpointLabel || target?.label,
-          entityId:
-            activeSession?.entityId || (target?.type === 'data_source' ? targetId : undefined),
-          entityLabel: activeSession?.entityLabel || target?.label
+          pageId: target?.type === 'page' ? targetId : continuationPageId,
+          apiContractId: workflowBuildScope?.apiContractId,
+          endpointId: target?.type === 'endpoint' ? targetId : endpointScope?.targetId,
+          endpointLabel: target?.label,
+          entityId: target?.type === 'data_source' ? targetId : continuationEntityId,
+          entityLabel: target?.label
         })
       } catch {
         reviewPhaseTransitionRunIdsRef.current.delete(workflow.runId)
@@ -1314,15 +1397,13 @@ export function useWorkflowConversation({
       onEnterAcceptancePhase()
       try {
         acceptanceSession = await createAcceptanceSession({
-          targetLabel: target?.label || selectedPageLabel || activeSession?.pageId || '当前应用',
-          pageId: activeSession?.pageId || (target?.type === 'page' ? targetId : undefined),
-          apiContractId: activeSession?.apiContractId || workflowBuildScope?.apiContractId,
-          endpointId:
-            activeSession?.endpointId || (target?.type === 'endpoint' ? targetId : undefined),
-          endpointLabel: activeSession?.endpointLabel || target?.label,
-          entityId:
-            activeSession?.entityId || (target?.type === 'data_source' ? targetId : undefined),
-          entityLabel: activeSession?.entityLabel || target?.label
+          targetLabel: target?.label || selectedPageLabel || '当前应用',
+          pageId: target?.type === 'page' ? targetId : continuationPageId,
+          apiContractId: workflowBuildScope?.apiContractId,
+          endpointId: target?.type === 'endpoint' ? targetId : endpointScope?.targetId,
+          endpointLabel: target?.label,
+          entityId: target?.type === 'data_source' ? targetId : continuationEntityId,
+          entityLabel: target?.label
         })
       } catch {
         onEnterReviewPhase()
@@ -1410,8 +1491,10 @@ export function useWorkflowConversation({
     }
   ): Promise<boolean> => {
     if (!selectedPageId || loading || workspaceBusy) return false
-    const identity = await ensurePageSession(selectedPageId, pageLabel)
+    const identity = await ensureActiveSession()
     return sendWorkflowMessage(`开始开发页面：${pageLabel}`, {
+      conversation: false,
+      executionThreadId: randomUUID(),
       selectedPageId,
       detailTargetType: 'page',
       sessionIdentity: identity,
@@ -1436,12 +1519,10 @@ export function useWorkflowConversation({
     hasDetailPlan?: boolean
   }): Promise<boolean> => {
     if (!target.apiContractId || !target.endpointId || loading || workspaceBusy) return false
-    const identity = await ensureEndpointSession(
-      target.apiContractId,
-      target.endpointId,
-      target.endpointLabel
-    )
+    const identity = await ensureActiveSession()
     return sendWorkflowMessage(`开始开发接口：${target.endpointLabel}`, {
+      conversation: false,
+      executionThreadId: randomUUID(),
       selectedApiContractId: target.apiContractId,
       selectedEndpointId: target.endpointId,
       selectedPageId: '',
@@ -1457,14 +1538,15 @@ export function useWorkflowConversation({
     })
   }
 
-  /** 以用户选择的实体作为独立 EntitySourceBinding 起点。 */
+  /** 在当前通用历史会话中以独立 execution 启动实体绑定，并保留后端续接合同。 */
   const handleStartEntityDetailConfirmation = async (target: {
     entityId: string
     entityLabel: string
     hasDetailPlan?: boolean
+    continuation?: WorkflowDevelopmentContinuation
   }): Promise<boolean> => {
     if (!target.entityId || loading || workspaceBusy) return false
-    const identity = await ensureEntitySession(target.entityId, target.entityLabel)
+    const identity = await ensureActiveSession()
     return sendWorkflowMessage(
       `${target.hasDetailPlan ? '查看实体数据源绑定' : '开始实体数据源绑定'}：${target.entityLabel}`,
       {
@@ -1474,6 +1556,12 @@ export function useWorkflowConversation({
         selectedApiContractId: '',
         selectedEndpointId: '',
         detailTargetType: 'entity',
+        workflowAction: target.continuation ? 'start_entity_binding' : undefined,
+        developmentContinuation: target.continuation
+          ? { id: target.continuation.id }
+          : undefined,
+        executionThreadId: randomUUID(),
+        buildExecutionScope: { type: 'data_source', targetId: target.entityId },
         sessionIdentity: identity,
         titleFrom: `实体数据源绑定：${target.entityLabel}`
       }
@@ -1495,6 +1583,7 @@ export function useWorkflowConversation({
         conversation: Boolean(current[runningIdentity.key]?.conversation)
       }
     }))
+    updateSessionExecutionStatus(runningIdentity.key, 'stopping')
     setLiveWorkflows((current) => {
       const workflow = current[runningIdentity.key]
       const stoppingWorkflow = withWorkflowExecutionStatus(workflow, 'stopping')
@@ -1512,16 +1601,15 @@ export function useWorkflowConversation({
   /** 从当前可恢复节点重新执行失败或已停止的计划切片。 */
   const handleRetryPlan = async (): Promise<void> => {
     if (!activeWorkflow || loading || workspaceBusy) return
-    const execution = planExecutionForPage(
-      activeWorkflow.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
-    )
+    const execution = planExecutionForPage(activeWorkflow.summary.lifecycle, selectedPageId, {
+      runId: activeWorkflow.runId,
+      threadId: activeWorkflow.threadId
+    })
     const isStopped = execution?.status === 'stopped' || activeWorkflow.summary.status === 'stopped'
     await sendWorkflowMessage('重试当前计划任务。', {
       resumeState: activeWorkflow,
       resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
+      selectedPageId: workflowSelectedPageId(activeWorkflow) || selectedPageId,
       titleFrom: '重试计划任务',
       ...(!isStopped ? { workflowAction: 'retry_failed_tasks' as const } : {})
     })
@@ -1532,15 +1620,14 @@ export function useWorkflowConversation({
     if (!activeWorkflow || !workflowCodeReviewRetry(activeWorkflow) || loading || workspaceBusy) {
       return
     }
-    const execution = planExecutionForPage(
-      activeWorkflow.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
-    )
+    const execution = planExecutionForPage(activeWorkflow.summary.lifecycle, selectedPageId, {
+      runId: activeWorkflow.runId,
+      threadId: activeWorkflow.threadId
+    })
     await sendWorkflowMessage('重试当前代码审查请求。', {
       resumeState: activeWorkflow,
       resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
+      selectedPageId: workflowSelectedPageId(activeWorkflow) || selectedPageId,
       buildExecutionScope: activeWorkflow.summary.buildExecutionScope,
       titleFrom: '重试代码审查',
       workflowAction: 'retry_code_review'
@@ -1550,16 +1637,15 @@ export function useWorkflowConversation({
   /** 按暂停态调试面板选择的节点恢复当前计划，并保留原执行身份与状态快照。 */
   const handleResumePlan = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     if (!activeWorkflow || !workflowDebug?.resumeFrom || loading || workspaceBusy) return
-    const execution = planExecutionForPage(
-      activeWorkflow.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
-    )
+    const execution = planExecutionForPage(activeWorkflow.summary.lifecycle, selectedPageId, {
+      runId: activeWorkflow.runId,
+      threadId: activeWorkflow.threadId
+    })
     await sendWorkflowMessage(`从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`, {
       resumeState: activeWorkflow,
       // Mock 或旧会话可能没有 lifecycle projection，但 Workflow runId 仍是可校验的恢复令牌。
       resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
+      selectedPageId: workflowSelectedPageId(activeWorkflow) || selectedPageId,
       titleFrom: '从指定节点继续执行',
       workflowDebug
     })
@@ -1567,11 +1653,10 @@ export function useWorkflowConversation({
 
   /** 通过同一 AG-UI 端点结束计划并释放生命周期中的工作区锁。 */
   const handleEndPlan = async (runId?: string): Promise<void> => {
-    const execution = planExecutionForPage(
-      activeWorkflow?.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow?.runId, threadId: activeWorkflow?.threadId }
-    )
+    const execution = planExecutionForPage(activeWorkflow?.summary.lifecycle, selectedPageId, {
+      runId: activeWorkflow?.runId,
+      threadId: activeWorkflow?.threadId
+    })
     const targetRunId = runId || execution?.runId || activeWorkflow?.runId
     const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
     const endedSessionKeys = Array.from(
@@ -1607,7 +1692,7 @@ export function useWorkflowConversation({
     await sendWorkflowMessage('结束当前计划。', {
       planControlAction: 'end',
       planControlRunId: targetRunId,
-      selectedPageId: activeSession?.pageId || selectedPageId,
+      selectedPageId,
       sessionIdentity: controlIdentity,
       titleFrom: '结束计划'
     })
@@ -1616,11 +1701,10 @@ export function useWorkflowConversation({
   /** 在当前 Run 已暂停等待时暂停计划，但保留 checkpoint 和恢复入口。 */
   const handleStopPlan = async (runId?: string): Promise<void> => {
     if (loading || workspaceBusy) return
-    const execution = planExecutionForPage(
-      activeWorkflow?.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow?.runId, threadId: activeWorkflow?.threadId }
-    )
+    const execution = planExecutionForPage(activeWorkflow?.summary.lifecycle, selectedPageId, {
+      runId: activeWorkflow?.runId,
+      threadId: activeWorkflow?.threadId
+    })
     const targetRunId = runId || execution?.runId || activeWorkflow?.runId
     if (!targetRunId) return
     const resumeWorkflow = activeWorkflow
@@ -1634,7 +1718,7 @@ export function useWorkflowConversation({
     const stopped = await sendWorkflowMessage('暂停当前计划执行。', {
       planControlAction: 'stop',
       planControlRunId: targetRunId,
-      selectedPageId: activeSession?.pageId || selectedPageId,
+      selectedPageId,
       titleFrom: '暂停计划'
     })
     if (stopped && activeRuntimeKey && resumeWorkflow) {
@@ -1652,6 +1736,7 @@ export function useWorkflowConversation({
     error,
     handleAcceptPreview,
     handleContinueRevisionBuild,
+    handleContinueDevelopment,
     handleEndPlan,
     handleResumePlan,
     handleRetryCodeReview,
@@ -1665,6 +1750,8 @@ export function useWorkflowConversation({
     handleSubmitClarification,
     loading,
     planEnded,
+    phaseExecution,
+    sessionExecutionLocked,
     sessionRunStates,
     stopping,
     workspaceBusy

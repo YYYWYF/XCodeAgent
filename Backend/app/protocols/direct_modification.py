@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+import re
 from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.agents.workspace_scope import resolve_workspace_root
 from app.domain.application_revision import RevisionImpact, RevisionTarget
@@ -62,6 +64,7 @@ _DIRECT_CONFIRMATION_MODES = {
 _DIRECT_CONTINUATION_STATE_KEYS = (
     "conversation_intent",
     "conversation_response",
+    "element_context",
     "change_impact_enabled",
     "change_impact_analysis",
     "change_impact_context",
@@ -130,6 +133,43 @@ class DirectModificationTarget(BaseModel):
         return self
 
 
+class DirectModificationElementContext(BaseModel):
+    """校验预览 DOM 对应的源码标签、路径和行列位置。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    tag_name: str = Field(alias="tagName", min_length=1, max_length=64)
+    source_path: str = Field(alias="sourcePath", min_length=6, max_length=1024)
+    line: int = Field(gt=0, le=2_147_483_647, strict=True)
+    column: int = Field(gt=0, le=2_147_483_647, strict=True)
+
+    @field_validator("tag_name")
+    @classmethod
+    def validate_tag_name(cls, value: str) -> str:
+        """规范化 DOM 标签并拒绝无法安全展示的名称。"""
+
+        normalized = value.strip().lower()
+        if re.fullmatch(r"[a-z][a-z0-9-]{0,63}", normalized) is None:
+            raise ValueError("DOM tagName 格式无效。")
+        return normalized
+
+    @field_validator("source_path")
+    @classmethod
+    def validate_source_path(cls, value: str) -> str:
+        """限定 Vite 注入的 /src/ 虚拟路径并拒绝目录穿越。"""
+
+        normalized = value.strip()
+        parts = normalized.split("/")
+        if (
+            not normalized.startswith("/src/")
+            or "\\" in normalized
+            or ".." in parts
+            or any(character in normalized for character in ("\x00", "?", "#"))
+        ):
+            raise ValueError("DOM sourcePath 必须是安全的 /src/ 路径。")
+        return normalized
+
+
 class DirectModificationInput(BaseModel):
     """校验快速修改 AG-UI forwardedProps 的最小业务参数。"""
 
@@ -147,6 +187,10 @@ class DirectModificationInput(BaseModel):
         max_length=16_000,
     )
     target: DirectModificationTarget | None = None
+    element_context: DirectModificationElementContext | None = Field(
+        default=None,
+        alias="elementContext",
+    )
     change_id: str | None = Field(default=None, alias="changeId", max_length=256)
     approved_paths: list[str] = Field(
         default_factory=list,
@@ -205,6 +249,11 @@ def conversation_capabilities() -> dict[str, Any]:
                 "endpoint": ["apiContractId", "endpointId"],
             },
         },
+        "elementContext": {
+            "optional": True,
+            "fields": ["tagName", "sourcePath", "line", "column"],
+            "sourcePathPrefix": "/src/",
+        },
         "changeIdSupported": True,
         "conversationSummaryMaxChars": 4_000,
         "automaticRepair": {
@@ -241,6 +290,36 @@ def conversation_input(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
     value = forwarded_props.get("conversation")
     return value if isinstance(value, dict) else None
+
+
+def resolve_direct_element_context(
+    context: DirectModificationElementContext | None,
+    *,
+    workspace_root: str,
+) -> dict[str, Any]:
+    """把预览 /src/ 定位解析成工作区内真实且存在的前端源码文件。"""
+
+    if context is None:
+        return {}
+    workspace = Path(workspace_root).resolve()
+    source_suffix = context.source_path.removeprefix("/src/")
+    for frontend_name in ("frontend", "Frontend"):
+        frontend_root = (workspace / frontend_name).resolve()
+        source_root = (frontend_root / "src").resolve()
+        candidate = (source_root / source_suffix).resolve()
+        try:
+            frontend_root.relative_to(workspace)
+            source_root.relative_to(workspace)
+            candidate.relative_to(source_root)
+            workspace_path = candidate.relative_to(workspace).as_posix()
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return {
+                **context.model_dump(by_alias=True),
+                "workspacePath": workspace_path,
+            }
+    raise ValueError("所选 DOM 的源码文件已不存在，请刷新预览后重新选择元素。")
 
 
 def _direct_confirmation_continuation(
@@ -401,6 +480,10 @@ def build_conversation_ag_ui_stream(
         if resolved_workspace is None:
             raise ValueError("自由对话请求必须提供有效的 workspaceRoot。")
         workspace_root = str(resolved_workspace)
+        element_context = resolve_direct_element_context(
+            request.element_context,
+            workspace_root=workspace_root,
+        )
 
         formal_revision_rejected = (
             request.handoff_decision == "rejected"
@@ -435,6 +518,7 @@ def build_conversation_ag_ui_stream(
                 if request.target is not None
                 else {}
             ),
+            "element_context": element_context,
             # 二次修改由一次分类 JSON 决定路由，不再追加 Contract Evidence 模型分析。
             "change_impact_enabled": False,
             "change_impact_analysis": {},
@@ -502,6 +586,19 @@ def build_conversation_ag_ui_stream(
                     state_view.update(continuation)
                     user_request = str(continuation.get("request") or user_request)
                     state_view["request"] = user_request
+                    saved_element_context = state_view.get("element_context")
+                    if isinstance(saved_element_context, dict) and saved_element_context:
+                        state_view["element_context"] = resolve_direct_element_context(
+                            DirectModificationElementContext.model_validate(
+                                {
+                                    "tagName": saved_element_context.get("tagName"),
+                                    "sourcePath": saved_element_context.get("sourcePath"),
+                                    "line": saved_element_context.get("line"),
+                                    "column": saved_element_context.get("column"),
+                                }
+                            ),
+                            workspace_root=workspace_root,
+                        )
 
             initial_node_name = str(
                 state_view.get("direct_modification_resume_node")

@@ -27,6 +27,9 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
   const toolCalls = normalizeSessionToolCalls(message.toolCalls)
   const processSteps = normalizeSessionProcessSteps(message.processSteps)
   const revisionHandoff = normalizeSessionRevisionHandoff(message.revisionHandoff)
+  const developmentContinuation = normalizeSessionDevelopmentContinuation(
+    message.developmentContinuation
+  )
   const approvalStatus =
     typeof message.approvalStatus === 'string' &&
     MESSAGE_APPROVAL_STATUSES.has(message.approvalStatus)
@@ -43,7 +46,8 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
     ...(skills.length > 0 ? { skills } : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
     ...(processSteps.length > 0 ? { processSteps } : {}),
-    ...(revisionHandoff ? { revisionHandoff } : {})
+    ...(revisionHandoff ? { revisionHandoff } : {}),
+    ...(developmentContinuation ? { developmentContinuation } : {})
   }
 }
 
@@ -67,7 +71,8 @@ function normalizeSessionRevisionHandoff(value: unknown): JsonRecord | undefined
       'revision_development',
       'revision_development_entry'
     ].includes(stringValue(value.kind))
-  ) return undefined
+  )
+    return undefined
   const formalBranch = stringValue(value.formalBranch).trim()
   const targetSessionId = stringValue(value.targetSessionId).trim().slice(0, 512)
   const targetConversationThreadId = stringValue(value.targetConversationThreadId)
@@ -90,7 +95,8 @@ function normalizeSessionRevisionHandoff(value: unknown): JsonRecord | undefined
       stringValue(value.kind)
     ) &&
     !changeId
-  ) return undefined
+  )
+    return undefined
   return {
     kind: value.kind,
     formalBranch,
@@ -100,6 +106,46 @@ function normalizeSessionRevisionHandoff(value: unknown): JsonRecord | undefined
     ...(changeId ? { changeId } : {}),
     request
   }
+}
+
+/** 只保留实体完成续接卡所需的一次性目标与消费状态。 */
+function normalizeSessionDevelopmentContinuation(value: unknown): JsonRecord | undefined {
+  if (!isJsonRecord(value) || !isJsonRecord(value.target)) return undefined
+  const status = value.status === 'started' ? 'started' : 'ready'
+  const id = stringValue(value.id).trim().slice(0, 256)
+  const sourceThreadId = stringValue(value.sourceThreadId).trim().slice(0, 512)
+  const sourceRunId = stringValue(value.sourceRunId).trim().slice(0, 512)
+  const token = stringValue(value.token).trim().slice(0, 1024)
+  const technicalPlanSha256 = stringValue(value.technicalPlanSha256).trim()
+  const type = stringValue(value.target.type).trim()
+  const label = stringValue(value.target.label).trim().slice(0, 500)
+  if (
+    !id ||
+    !sourceThreadId ||
+    !sourceRunId ||
+    token.length < 32 ||
+    !/^[0-9a-f]{64}$/.test(technicalPlanSha256)
+  ) return undefined
+  const common = {
+    id,
+    status,
+    sourceThreadId,
+    sourceRunId,
+    token,
+    technicalPlanSha256
+  }
+  if (type === 'page') {
+    const pageId = stringValue(value.target.pageId).trim().slice(0, 512)
+    return pageId && label ? { ...common, target: { type, pageId, label } } : undefined
+  }
+  if (type === 'endpoint') {
+    const apiContractId = stringValue(value.target.apiContractId).trim().slice(0, 512)
+    const endpointId = stringValue(value.target.endpointId).trim().slice(0, 512)
+    return apiContractId && endpointId && label
+      ? { ...common, target: { type, apiContractId, endpointId, label } }
+      : undefined
+  }
+  return undefined
 }
 
 /** 判断未知值是否为非数组 JSON 对象。 */

@@ -22,7 +22,7 @@ import type {
 import {
   deriveWorkbenchPhase,
   isObjectEditableInPhase,
-  shouldAutoEnterAcceptancePhase,
+  resolveWorkbenchPhase,
   WORKBENCH_PHASE_AGENTS,
   workbenchPhaseForNode
 } from '../src/renderer/src/workbenchPhase'
@@ -166,13 +166,10 @@ test('项目启动进度选择后续子步骤，不被旧工程识别事件覆�
   assert.deepEqual(projectLaunchProgress(workflow), workflow.state.launchProgress)
 })
 
-test('验收自动切换只纠正审查覆盖，不覆盖用户主动返回测试阶段', () => {
-  assert.equal(shouldAutoEnterAcceptancePhase('review', 'review', 'acceptance'), true)
-  assert.equal(shouldAutoEnterAcceptancePhase('test', 'test', 'acceptance'), false)
-  assert.equal(
-    shouldAutoEnterAcceptancePhase('development', 'development', 'launch_project'),
-    false
-  )
+test('验收阶段允许用户手动返回审查或测试阶段', () => {
+  assert.equal(resolveWorkbenchPhase('acceptance', 'review'), 'review')
+  assert.equal(resolveWorkbenchPhase('acceptance', 'test'), 'test')
+  assert.equal(resolveWorkbenchPhase('acceptance', null), 'acceptance')
 })
 
 test('验收确认 phase 覆盖流式快照中遗留的进入审查确认', () => {

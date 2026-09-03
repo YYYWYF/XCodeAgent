@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from threading import Lock
 from typing import Any, AsyncIterator
 
@@ -20,7 +21,14 @@ from ag_ui.encoder import EventEncoder
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     end_workbench_execution,
+    load_application_lifecycle,
     stop_workbench_execution,
+)
+from app.domain.application_lifecycle import PendingInteractionType
+from app.workspace.task_documents import (
+    build_task_plan_json_path,
+    load_build_task_plan_json,
+    write_build_task_plan_json,
 )
 
 
@@ -52,6 +60,39 @@ class WorkflowRunRegistry:
 
 
 workflow_run_registry = WorkflowRunRegistry()
+
+
+def abandon_pending_build_task_plan(workspace: str, *, run_id: str) -> bool:
+    """把指定 execution 正在等待确认的 DAG 标记为已放弃，其他计划结束不改动 DAG。"""
+
+    lifecycle = load_application_lifecycle(workspace)
+    execution = lifecycle.active_executions.get(run_id) if lifecycle else None
+    pending = execution.pending_interaction if execution else None
+    pending_mode = str(pending.payload.get("mode") or "") if pending else ""
+    if pending is None or (
+        pending.type != PendingInteractionType.TASK_PLAN_CONFIRMATION
+        and pending_mode != "build_task_plan_confirmation"
+    ):
+        return False
+
+    path = build_task_plan_json_path({"workspace": workspace})
+    if not path.exists():
+        raise ValueError("工作区中不存在待放弃的 build-task-plan.json。")
+    plan = load_build_task_plan_json(path)
+    confirmation_status = str(plan.get("confirmation_status") or "")
+    if confirmation_status not in {"pending", "abandoned"}:
+        raise ValueError("当前 Build DAG 已不处于待确认状态，不能放弃。")
+    if confirmation_status == "abandoned":
+        return True
+    write_build_task_plan_json(
+        {"workspace": workspace},
+        {
+            **plan,
+            "confirmation_status": "abandoned",
+            "abandoned_at": datetime.now(UTC).isoformat(),
+        },
+    )
+    return True
 
 
 def build_workflow_cancellation_ag_ui_stream(
@@ -114,13 +155,20 @@ def build_workflow_plan_control_ag_ui_stream(
             raise ValueError(f"不支持的计划控制动作：{action}")
         if not target_run_id:
             raise ValueError("计划控制动作缺少目标 runId。")
+        abandoned_task_plan = (
+            abandon_pending_build_task_plan(workspace, run_id=target_run_id)
+            if action == "end"
+            else False
+        )
         lifecycle = application_lifecycle_payload(
             end_workbench_execution(workspace, run_id=target_run_id)
             if action == "end"
             else stop_workbench_execution(workspace, run_id=target_run_id)
         )
         message = (
-            "计划已结束，工作区已恢复自由输入。"
+            "Build DAG 已放弃，当前流程已停止。"
+            if abandoned_task_plan
+            else "计划已结束，工作区已恢复自由输入。"
             if action == "end"
             else "计划执行已暂停，可继续执行、调整计划或结束。"
         )

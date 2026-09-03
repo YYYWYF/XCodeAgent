@@ -1,15 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
-  pageDesignedBySession,
   pageDetailTargetKey,
   requiresEndpointDetailDesign,
-  requiresInitialDetailDesignSelection,
   requiresPageDetailDesign,
-  sessionDetailTargetKey,
-  shouldShowDevelopmentTargetSelector,
   shouldShowEndpointDetailDesignEntry,
   shouldShowPageDetailDesignEntry,
   workflowDetailTargetKey,
@@ -18,6 +16,10 @@ import {
   workflowShouldShowCodeChanges,
   workflowShouldShowCodeReview
 } from '../src/renderer/src/components/AiChatPanel/utils'
+import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide/quickTasks'
+import { developmentContinuationFromWorkflow } from '../src/renderer/src/components/AiChatPanel/developmentContinuation'
+import DevelopmentContinuationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/DevelopmentContinuationCard'
+import RemainingEntityBindingsCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/RemainingEntityBindingsCard'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
@@ -36,11 +38,6 @@ import {
   entityDesignActionContinuationMessage,
   pageAcceptanceContinuationMessage
 } from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
-import {
-  createSessionIdentity,
-  selectableEndpointSessionId,
-  sessionIdentityMatchesTarget
-} from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import {
   APPLICATIONS_CHANGED_EVENT,
   canOpenApplicationWorkbench,
@@ -61,6 +58,7 @@ import {
 import {
   composePreviewUrl,
   navigatePreviewHistory,
+  navigatePreviewToStartedProject,
   previewOrigin
 } from '../src/renderer/src/utils/previewUrl'
 import {
@@ -458,41 +456,22 @@ test('缺少有效前端启动地址时不生成页面预览 URL', () => {
   assert.equal(composePreviewUrl('not a url', '/orders'), '')
 })
 
-test('切换 API 时只恢复有消息的同接口会话', () => {
-  const sessions = [
-    {
-      id: 'page-running',
-      title: '概览页',
-      editorMode: 'frontend',
-      threadId: 'thread-page',
-      pageId: 'overview',
-      workspaceRoot: '/workspace',
-      messageCount: 2,
-      createdAt: 1,
-      updatedAt: 3
-    },
-    {
-      id: 'endpoint-empty',
-      title: 'GET /stats',
-      editorMode: 'frontend',
-      threadId: 'thread-endpoint-empty',
-      apiContractId: 'core-api',
-      endpointId: 'stats',
-      workspaceRoot: '/workspace',
-      messageCount: 0,
-      createdAt: 1,
-      updatedAt: 2
-    }
-  ]
+test('项目异步启动成功后将 about:blank 自动导航到当前页面', () => {
+  const blank = { history: ['about:blank'], index: 0 }
+  const started = navigatePreviewToStartedProject(
+    blank,
+    'http://127.0.0.1:5178',
+    '/page/age'
+  )
 
-  assert.equal(selectableEndpointSessionId(sessions, 'core-api', 'stats'), undefined)
+  assert.deepEqual(started, {
+    history: ['about:blank', 'http://127.0.0.1:5178/page/age'],
+    index: 1
+  })
+  assert.equal(navigatePreviewToStartedProject(started, '', '/page/age'), started)
   assert.equal(
-    selectableEndpointSessionId(
-      [...sessions, { ...sessions[1], id: 'endpoint-ready', messageCount: 1 }],
-      ' core-api ',
-      ' stats '
-    ),
-    'endpoint-ready'
+    navigatePreviewToStartedProject(started, 'http://127.0.0.1:5178', '/page/age'),
+    started
   )
 })
 
@@ -516,7 +495,7 @@ test('待设计 API 在开始前显示绿色设计入口，已有运行消息后
   )
 })
 
-test('待设计页面仅在没有会话时使用锁定蒙层', () => {
+test('待设计页面仅在没有正式开发产物时使用锁定蒙层', () => {
   const pendingPage = {
     pageId: 'page-home',
     key: 'page-home',
@@ -534,101 +513,159 @@ test('待设计页面仅在没有会话时使用锁定蒙层', () => {
   assert.equal(requiresPageDetailDesign({ ...pendingPage, hasDetailPlan: true }), false)
 })
 
-test('页面 designed 以工作区是否存在页面会话为最高优先级', () => {
-  assert.equal(pageDesignedBySession('page-home', []), false)
-  assert.equal(pageDesignedBySession('page-home', [{ pageId: 'page-orders' }]), false)
-  assert.equal(pageDesignedBySession('page-home', [{ pageId: ' page-home ' }]), true)
-})
-
-test('模板就绪后没有任何设计时显式进入开发显示目标选择器', () => {
-  assert.equal(
-    shouldShowDevelopmentTargetSelector({
-      developmentEntrySelectionPending: true,
-      developmentPlanningReady: false,
-      detailConfirmationWaitingReview: false,
-      detailProgressVisible: false,
-      freeChatSelected: true,
-      hasActiveDetailWorkflow: true,
-      initialDetailDesignSelectionRequired: true,
-      isApplicationPlanningPhase: false
-    }),
-    true
+test('页面和 Endpoint 快捷任务保留本次运行目标且不生成会话绑定字段', () => {
+  const tasks = buildQuickTasks(
+    [
+      {
+        pageId: 'page-home',
+        key: 'page-home',
+        label: '首页',
+        path: '/home',
+        purpose: '应用首页',
+        designed: false,
+        hasDetailPlan: false
+      }
+    ],
+    [
+      {
+        id: 'orders-api',
+        label: '订单接口',
+        endpoints: [
+          {
+            id: 'list-orders',
+            method: 'get',
+            path: '/orders',
+            summary: '查询订单',
+            designed: true,
+            hasDetailPlan: true
+          }
+        ]
+      }
+    ],
+    []
   )
-  assert.equal(
-    shouldShowDevelopmentTargetSelector({
-      developmentEntrySelectionPending: true,
-      developmentPlanningReady: true,
-      detailConfirmationWaitingReview: false,
-      detailProgressVisible: false,
-      freeChatSelected: false,
-      hasActiveDetailWorkflow: false,
-      initialDetailDesignSelectionRequired: true,
-      isApplicationPlanningPhase: true
-    }),
-    false
-  )
-})
-
-test('已有页面或接口设计时重新进入开发不再显示目标选择器', () => {
-  assert.equal(requiresInitialDetailDesignSelection(false), true)
-  assert.equal(requiresInitialDetailDesignSelection(true), false)
-  assert.equal(
-    shouldShowDevelopmentTargetSelector({
-      developmentEntrySelectionPending: true,
-      developmentPlanningReady: true,
-      detailConfirmationWaitingReview: false,
-      detailProgressVisible: false,
-      freeChatSelected: false,
-      hasActiveDetailWorkflow: false,
-      initialDetailDesignSelectionRequired: false,
-      isApplicationPlanningPhase: false
-    }),
-    false
-  )
-})
-
-test('页面运行态不会在切换到 API 后被复用为接口设计进度', () => {
-  const pageIdentity = createSessionIdentity({
-    workspaceRoot: '/workspace',
-    editorMode: 'frontend',
-    sessionId: 'page-session',
-    threadId: 'page-thread',
-    pageId: 'overview'
+  assert.deepEqual(tasks[0], {
+    description: '应用首页',
+    hasDetailPlan: false,
+    id: 'page:page-home',
+    kind: 'page',
+    meta: '/home',
+    pageId: 'page-home',
+    pageLabel: '首页',
+    title: '首页'
   })
-  const endpointIdentity = createSessionIdentity({
-    workspaceRoot: '/workspace',
-    editorMode: 'frontend',
-    sessionId: 'endpoint-session',
-    threadId: 'endpoint-thread',
-    apiContractId: 'core-api',
-    endpointId: 'stats'
+  assert.deepEqual(tasks[1], {
+    apiContractId: 'orders-api',
+    description: '查询订单',
+    endpointId: 'list-orders',
+    endpointLabel: 'GET /orders',
+    hasDetailPlan: true,
+    id: 'endpoint:orders-api:list-orders',
+    kind: 'endpoint',
+    meta: 'GET',
+    title: '/orders'
   })
-
-  assert.equal(
-    sessionIdentityMatchesTarget(pageIdentity, {
-      apiContractId: 'core-api',
-      endpointId: 'stats'
-    }),
-    false
-  )
-  assert.equal(
-    sessionIdentityMatchesTarget(endpointIdentity, {
-      apiContractId: 'core-api',
-      endpointId: 'stats'
-    }),
-    true
-  )
-  assert.equal(sessionIdentityMatchesTarget(pageIdentity, { pageId: 'overview' }), true)
-  assert.equal(sessionIdentityMatchesTarget(endpointIdentity, { pageId: 'overview' }), false)
+  assert.equal('sessionId' in tasks[0], false)
+  assert.equal('threadId' in tasks[1], false)
 })
 
-test('页面、接口、会话和 Workflow 使用一致的详情目标键', () => {
+test('实体完成续接只接受后端签发的完整原页面合同', () => {
+  const workflow = previewWorkflow({
+    phase: 'entity_source_binding',
+    status: 'completed',
+    developmentContinuation: {
+      id: 'devcont-page-home',
+      status: 'ready',
+      action: 'continue_after_entity_binding',
+      sourceThreadId: 'thread-page-home',
+      sourceRunId: 'run-page-home',
+      token: 't'.repeat(48),
+      technicalPlanSha256: 'a'.repeat(64),
+      target: { type: 'page', pageId: 'page-home', label: '首页' },
+      requiredEntityIds: ['Order'],
+      remainingEntityIds: []
+    }
+  })
+  const continuation = developmentContinuationFromWorkflow(
+    workflow,
+    [
+      {
+        pageId: 'page-home',
+        key: 'page-home',
+        label: '首页',
+        path: '/home',
+        purpose: '应用首页',
+        designed: false
+      }
+    ],
+    []
+  )
+
+  assert.deepEqual(continuation, {
+    id: 'devcont-page-home',
+    status: 'ready',
+    sourceThreadId: 'thread-page-home',
+    sourceRunId: 'run-page-home',
+    token: 't'.repeat(48),
+    technicalPlanSha256: 'a'.repeat(64),
+    target: { type: 'page', pageId: 'page-home', label: '首页' }
+  })
+})
+
+test('实体完成续接卡明确提示并提供原页面开发动作', () => {
+  const markup = renderToStaticMarkup(
+    createElement(DevelopmentContinuationCard, {
+      continuation: {
+        id: 'devcont-page-home',
+        status: 'ready',
+        sourceThreadId: 'thread-page-home',
+        sourceRunId: 'run-page-home',
+        token: 't'.repeat(48),
+        technicalPlanSha256: 'a'.repeat(64),
+        target: { type: 'page', pageId: 'page-home', label: '首页' }
+      },
+      onContinue: () => undefined
+    })
+  )
+
+  assert.match(markup, /实体设计已完成/)
+  assert.match(markup, /继续开发页面/)
+  assert.match(markup, /首页/)
+})
+
+test('实体部分确认后仍显示原接口的剩余实体，且不提前提供开发续接', () => {
+  const workflow = previewWorkflow({
+    phase: 'entity_source_binding',
+    status: 'completed',
+    developmentContinuation: {
+      id: 'devcont-orders',
+      status: 'awaiting_entity_binding',
+      action: 'start_entity_binding',
+      sourceThreadId: 'source-thread',
+      sourceRunId: 'source-run',
+      target: { type: 'endpoint', apiContractId: 'orders-api', endpointId: 'list', label: 'GET /orders' },
+      requiredEntityIds: ['Order', 'Customer'],
+      remainingEntityIds: ['Customer']
+    }
+  })
+  assert.equal(developmentContinuationFromWorkflow(workflow), undefined)
+  const markup = renderToStaticMarkup(createElement(RemainingEntityBindingsCard, { workflow }))
+  assert.match(markup, /GET \/orders/)
+  assert.match(markup, /Customer/)
+  assert.match(markup, /去设计实体/)
+  assert.doesNotMatch(markup, /<button[^>]*disabled/)
+  const historicalMarkup = renderToStaticMarkup(createElement(RemainingEntityBindingsCard, {
+    workflow, disabled: true
+  }))
+  assert.match(historicalMarkup, /disabled/)
+})
+
+test('页面、接口和 Workflow 使用一致的详情目标键', () => {
   assert.equal(pageDetailTargetKey('page-orders'), 'page:page-orders')
   assert.equal(
     endpointDetailTargetKey('orders-api', 'list-orders'),
     'endpoint:orders-api:list-orders'
   )
-  assert.equal(sessionDetailTargetKey({ pageId: 'page-orders' }), 'page:page-orders')
   assert.equal(
     workflowDetailTargetKey({
       state: { selectedPageId: 'page-orders' }

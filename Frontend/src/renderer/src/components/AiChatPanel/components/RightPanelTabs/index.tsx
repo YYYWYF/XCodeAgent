@@ -12,6 +12,7 @@ export type WorkspaceTabKey =
   | 'doc'
   | 'test-report'
   | 'review-report'
+  | 'outline'
   | 'process'
   | 'stage-output'
   | WorkspaceDocKey

@@ -45,13 +45,6 @@ export type WorkspacePathParts = {
   fileName: string
 }
 
-type DetailSessionIdentity = {
-  apiContractId?: string
-  endpointId?: string
-  entityId?: string
-  pageId?: string
-}
-
 /** 生成页面详情目标键，供临时运行状态按页面隔离。 */
 export function pageDetailTargetKey(pageId: string): string {
   return pageId ? `page:${pageId}` : ''
@@ -78,17 +71,6 @@ export function apiEndpointDisplayPath(endpointPath: string, basePath: string): 
     return normalizedEndpointPath
   }
   return normalizedEndpointPath.slice(normalizedBasePath.length) || '/'
-}
-
-/** 从持久化会话归属生成详情目标键。 */
-export function sessionDetailTargetKey(session: DetailSessionIdentity | undefined): string {
-  if (session?.apiContractId && session.endpointId) {
-    return endpointDetailTargetKey(session.apiContractId, session.endpointId)
-  }
-  if (session?.entityId) {
-    return entityDetailTargetKey(session.entityId)
-  }
-  return pageDetailTargetKey(session?.pageId || '')
 }
 
 /** 从 Workflow 快照读取详情目标键，避免历史运行状态串到当前页面。 */
@@ -372,46 +354,6 @@ export function workflowPreviewTarget(
   }
 }
 
-/** 仅在当前工作区还没有任何已持久化设计时显示首次详细设计目标选择器。 */
-export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): boolean {
-  return !hasPageDesigns
-}
-
-type DevelopmentTargetSelectorState = {
-  developmentEntrySelectionPending: boolean
-  developmentPlanningReady: boolean
-  detailConfirmationWaitingReview: boolean
-  detailProgressVisible: boolean
-  freeChatSelected: boolean
-  hasActiveDetailWorkflow: boolean
-  initialDetailDesignSelectionRequired: boolean
-  isApplicationPlanningPhase: boolean
-}
-
-/** 判断开发对象选择器是否应接管主区域；显式进入开发必须优先于残留会话状态。 */
-export function shouldShowDevelopmentTargetSelector({
-  developmentEntrySelectionPending,
-  developmentPlanningReady,
-  detailConfirmationWaitingReview,
-  detailProgressVisible,
-  freeChatSelected,
-  hasActiveDetailWorkflow,
-  initialDetailDesignSelectionRequired,
-  isApplicationPlanningPhase
-}: DevelopmentTargetSelectorState): boolean {
-  if (isApplicationPlanningPhase) return false
-  // 已有页面/API/Endpoint 设计时，重新进入开发只恢复工作台，不再强制弹出目标选择器。
-  if (developmentEntrySelectionPending) return initialDetailDesignSelectionRequired
-  return (
-    developmentPlanningReady &&
-    initialDetailDesignSelectionRequired &&
-    !hasActiveDetailWorkflow &&
-    !detailProgressVisible &&
-    !detailConfirmationWaitingReview &&
-    !freeChatSelected
-  )
-}
-
 /** 以当前实体的数据源绑定状态判断是否需要锁定对话区。 */
 export function requiresEntitySourceBinding(
   entity: DevelopmentPlanningEntityOption | undefined
@@ -420,30 +362,16 @@ export function requiresEntitySourceBinding(
 }
 
 /** 以页面详细设计文档状态判断是否需要显示开始详细设计入口。 */
-export function requiresPageDetailDesign(
-  page: DevelopmentPlanningPageOption | undefined
-): boolean {
+export function requiresPageDetailDesign(page: DevelopmentPlanningPageOption | undefined): boolean {
   return Boolean(page && !page.designed && !page.hasDetailPlan)
 }
 
-/** 页面是否已设计以工作区是否存在对应页面会话为准。 */
-export function pageDesignedBySession(
-  pageId: string,
-  sessions: ReadonlyArray<{ pageId?: string }>
-): boolean {
-  const normalizedPageId = pageId.trim()
-  return Boolean(
-    normalizedPageId &&
-      sessions.some((session) => String(session.pageId || '').trim() === normalizedPageId)
-  )
-}
-
-/** 判断待设计页面是否应显示锁定蒙层；页面已有工作区会话时不再重复引导。 */
+/** 判断待设计页面是否应显示锁定蒙层；正式开发产物存在时不再重复引导。 */
 export function shouldShowPageDetailDesignEntry(
   page: DevelopmentPlanningPageOption | undefined,
-  pageSessionExists: boolean
+  developmentArtifactExists: boolean
 ): boolean {
-  return requiresPageDetailDesign(page) && !pageSessionExists
+  return requiresPageDetailDesign(page) && !developmentArtifactExists
 }
 
 /** 以 endpoint 文档状态判断接口是否需要显示开始详细设计入口。 */

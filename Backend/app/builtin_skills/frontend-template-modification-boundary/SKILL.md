@@ -34,7 +34,7 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | `src/constants/resources.ts` | `/frontend/src/constants/resources.ts`（仅 auth，Build 平台投影） |
 | `src/constants/routes.tsx` | `/frontend/src/constants/routes.tsx`（仅 auth，Build 平台投影） |
 
-**生成代码前，读取 `/.xcodeagent/template-generation-manifest.json` 的 `templateVariant` 和当前任务允许路径。** `main` 模板已由平台创建页面占位和 `BIZ_MENUS`；`auth` 模板在任何 Agent 任务前由 Build 平台写入共享资源与路由注册文件。不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
+**生成代码前，读取 `/.xcodeagent/template-generation-manifest.json` 的 `templateVariant` 和当前任务允许路径。** `main` 模板已由平台创建页面占位和 `BIZ_MENUS`；`auth` 模板在进入开发阶段前（二次修改时在 TechnicalPlan 确认后）由平台写入共享资源与路由注册文件。不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
 
 ## 🔴 前端工程根目录禁止创建文件
 
@@ -91,7 +91,7 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 模板变体必须隔离：
 
 - `main`：平台已创建页面占位并登记 `BIZ_MENUS`；不得创建 auth 权限目录、修改路由树或共享菜单。
-- `auth`：页面任务只生成 `src/pages/<PageKey>/index.tsx`；Build 平台根据已确认的 `authorization_manifest` 在 Agent 派发前写入 `src/constants/resources.ts` 和 `src/constants/routes.tsx` 的固定托管区。
+- `auth`：页面任务只生成 `src/pages/<PageKey>/index.tsx`；平台在进入开发阶段前（二次修改时在 TechnicalPlan 确认后）根据已确认的 `authorization_manifest` 写入 `src/constants/resources.ts` 和 `src/constants/routes.tsx` 的固定托管区，并创建页面占位文件。
 
 - 页面文件路径必须是 `src/pages/<PageKey>/index.tsx`；`<PageKey>` 由已确认页面设计提供。
 - 页面任务不得修改 `src/routes/index.tsx`、`src/utils/route.tsx` 或任一变体的平台共享注册文件。受控页面的 `RouteGuard` 由 auth 模板从 `resourceKey` 自动派生，操作控件只按任务提供的 `RESOURCES.OPERATION` 绑定生成。

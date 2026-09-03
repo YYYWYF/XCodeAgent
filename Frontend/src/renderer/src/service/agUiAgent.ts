@@ -16,7 +16,8 @@ import type {
   WorkflowProjectPlanUpdate,
   WorkflowRevisionDraftInteraction,
   WorkflowRunPayload,
-  WorkspaceCodeChangeSet
+  WorkspaceCodeChangeSet,
+  InspectedElementContext
 } from '../typings'
 
 export type SendWorkflowMessageOptions = {
@@ -46,6 +47,10 @@ export type SendWorkflowMessageOptions = {
     changeId: string
     token: string
   }
+  developmentContinuation?: {
+    id: string
+    token?: string
+  }
   revisionInteraction?: WorkflowRevisionDraftInteraction
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
@@ -74,9 +79,21 @@ export type SendWorkflowMessageOptions = {
         apiContractId: string
         endpointId: string
       }
+  conversationElementContext?: InspectedElementContext
   conversationApprovedPaths?: string[]
   conversationHandoffDecision?: 'approved' | 'rejected'
   conversationImpactInteractionId?: string
+}
+
+/** 将已选 DOM 的源码文件和行号直接附加到普通二次修改需求。 */
+export function appendElementContextToConversationPrompt(
+  message: string,
+  context?: InspectedElementContext
+): string {
+  if (!context) return message
+  const sourcePath = context.sourcePath.replace(/^\/+/, '')
+  const frontendPath = `frontend/${sourcePath}`
+  return `${message}\n\n代码实现位于${frontendPath}文件 的${context.line}行附近处，请参考${frontendPath}文件 的${context.line}行附近处的相关代码实现进行修改。`
 }
 
 /** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能、控制和恢复字段。 */
@@ -102,6 +119,7 @@ export function buildWorkflowForwardedProps(
     workflowAction: options.workflowAction,
     revisionRequest: options.revisionRequest,
     revisionContinuation: options.revisionContinuation,
+    developmentContinuation: options.developmentContinuation,
     revisionInteraction: options.revisionInteraction,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
@@ -120,6 +138,9 @@ export function buildWorkflowForwardedProps(
           selectedSkillNames: options.selectedSkillNames,
           ...(options.conversationTarget !== undefined
             ? { target: options.conversationTarget }
+            : {}),
+          ...(options.conversationElementContext !== undefined
+            ? { elementContext: options.conversationElementContext }
             : {}),
           ...(options.originalRequest !== undefined
             ? { originalRequest: options.originalRequest }

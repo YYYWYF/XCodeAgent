@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.graph.state import ProjectState
 from app.services.development_readiness import development_readiness
+from app.services.frontend_page_tree import project_plan_page_records
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 
 
@@ -36,6 +37,19 @@ def development_readiness_gate(state: ProjectState) -> dict:
             "timeline": ["development_readiness_gate"],
         }
     missing = readiness["missing_entities"]
+    # 门禁保存可展示的原目标名称，独立实体运行结束时无需靠当前大纲选择补齐。
+    target_label = target_id
+    if target_type == "page":
+        page = next((item for item in project_plan_page_records(project_plan)
+                     if str(item.get("pageId") or item.get("id") or "") == target_id), {})
+        target_label = str(page.get("name") or page.get("label") or target_id)
+    else:
+        for contract in project_plan.get("api_contracts") or []:
+            if str(contract.get("id") or "") != str(readiness.get("api_contract_id") or ""):
+                continue
+            endpoint = next((item for item in contract.get("endpoints") or []
+                             if str(item.get("id") or "") == target_id), {})
+            target_label = f"{endpoint.get('method') or 'API'} {endpoint.get('path') or target_id}"
     labels = "、".join(
         str(item.get("entity_name") or item.get("entity_id") or "") for item in missing
     )
@@ -45,10 +59,10 @@ def development_readiness_gate(state: ProjectState) -> dict:
                 header="实体绑定前置",
                 question=(
                     f"当前目标依赖实体 {labels}，尚未完成 EntitySourceBinding。"
-                    "请从左侧实体列表手动进入对应实体的数据源绑定，确认后重新发起当前页面/API开发。"
+                    "请在当前会话进入对应实体的数据源绑定；确认后通过续接卡恢复当前页面/API开发。"
                 ),
                 type="text",
-                placeholder="完成实体数据源绑定后，重新点击开始开发。",
+                placeholder="完成实体数据源绑定后，通过续接卡继续开发。",
             )
         ]
     )
@@ -61,6 +75,7 @@ def development_readiness_gate(state: ProjectState) -> dict:
             "development_target": {
                 "type": target_type,
                 "id": target_id,
+                "label": target_label,
                 "api_contract_id": readiness.get("api_contract_id"),
             },
         }

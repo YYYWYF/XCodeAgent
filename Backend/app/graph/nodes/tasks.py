@@ -17,6 +17,10 @@ from app.services.artifact_invalidation import (
     stale_artifact_keys,
 )
 from app.services.build_context_resolver import resolve_target_build_context
+from app.services.build_task_confirmation import (
+    build_task_confirmation_read_model,
+)
+from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.development_readiness import development_readiness
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
@@ -30,7 +34,6 @@ from app.services.application_template_generation import (
     inspect_template_generation_readiness,
 )
 from app.services.authorization_overlay import compile_authorization_overlay
-from app.services.engineering_acceptance import compile_engineering_acceptance
 from app.services.build_task_progress import (
     build_task_artifacts,
     create_build_task_progress_tracker,
@@ -608,10 +611,14 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "build_task_plan_confirmation": _build_task_plan_confirmation_payload(
             build_task_plan,
             build_execution_scope,
+            project_plan=project_plan,
+            build_context=build_context,
         ),
         "clarification": _build_task_plan_confirmation_payload(
             build_task_plan,
             build_execution_scope,
+            project_plan=project_plan,
+            build_context=build_context,
         ),
         "timeline": ["prepare_build_tasks"],
         **formal_artifact_state,
@@ -892,35 +899,23 @@ def _build_task_plan_confirmation_payload(
     build_task_plan: dict[str, Any],
     build_execution_scope: dict[str, Any] | None,
     *,
+    project_plan: dict[str, Any] | None = None,
+    build_context: dict[str, Any] | None = None,
     errors: list[str] | None = None,
 ) -> dict[str, Any]:
-    """构造 DAG 确认专用结构化载荷，只允许前端编辑标题和描述。"""
+    """构造 DAG 确认载荷，并附加不写回累计计划的只读确认投影。"""
 
-    tasks = []
-    for task in tasks_from_build_task_plan(build_task_plan):
-        tasks.append(
-            {
-                "id": task.get("id"),
-                "title": task.get("title") or "",
-                "description": task.get("description") or "",
-                "owner": task.get("owner"),
-                "unit_id": task.get("unit_id"),
-                "dependencies": task.get("dependencies") or [],
-                "target_files": task.get("target_files") or [],
-                "allowed_paths": task.get("allowed_paths") or [],
-                "change_scope": task.get("change_scope") or [],
-                "deliverables": task.get("deliverables") or [],
-                "acceptance_checks": task.get("acceptance_checks") or [],
-                "business_acceptance_checks": task.get("business_acceptance_checks") or [],
-                "status": task.get("status") or "pending",
-            }
-        )
+    read_model = build_task_confirmation_read_model(
+        build_task_plan,
+        build_execution_scope,
+        project_plan=project_plan,
+        build_context=build_context,
+    )
     payload: dict[str, Any] = {
         "mode": "build_task_plan_confirmation",
         "status": "requires_user_input",
         "message": "Build DAG 已生成，请确认任务规划后再进入 Build。",
-        "actionValues": ["confirm", "patch", "regenerate"],
-        "editableFields": ["title", "description"],
+        "actionValues": ["confirm", "abandon"],
         "confirmationStatus": build_task_plan.get("confirmation_status") or "pending",
         "buildExecutionScope": build_execution_scope or build_task_plan.get("build_execution_scope") or {},
         "taskPlan": {
@@ -929,13 +924,11 @@ def _build_task_plan_confirmation_payload(
             "status": build_task_plan.get("status"),
             "confirmationStatus": build_task_plan.get("confirmation_status"),
             "summary": build_task_plan.get("summary") or {},
-            "tasks": tasks,
-            "taskGraph": {
-                "edges": (build_task_plan.get("task_graph") or {}).get("edges", [])
-                if isinstance(build_task_plan.get("task_graph"), dict)
-                else [],
-            },
+            "scopeTasks": read_model["scopeTasks"],
+            "reusedPrerequisites": read_model["reusedPrerequisites"],
+            "retainedTaskSummary": read_model["retainedTaskSummary"],
         },
+        "targetReview": read_model["targetReview"],
     }
     if errors:
         payload["errors"] = errors
@@ -948,7 +941,7 @@ def _handle_build_task_plan_confirmation(
     project_plan: dict[str, Any],
     build_execution_scope: dict[str, str],
 ) -> dict[str, Any] | None:
-    """处理 DAG confirm、patch、regenerate，不调用上游计划模型。"""
+    """处理 DAG confirm；放弃由 AG-UI 计划控制流终止，不进入 Graph。"""
 
     action_payload = state.get("build_task_plan_confirmation")
     if not isinstance(action_payload, dict) or not action_payload.get("action"):
@@ -984,8 +977,6 @@ def _handle_build_task_plan_confirmation(
         return None
 
     action = str(action_payload.get("action") or "").strip().lower()
-    if action == "regenerate":
-        return None
     latest_plan = _latest_build_task_plan_from_workspace(state)
     if not latest_plan:
         return _pending_build_task_plan_result(
@@ -1031,22 +1022,6 @@ def _handle_build_task_plan_confirmation(
             confirmed_plan,
             build_execution_scope,
             path=path,
-        )
-    if action == "patch":
-        if freshness_errors:
-            return _pending_build_task_plan_result(
-                state,
-                project_plan,
-                latest_plan,
-                build_execution_scope,
-                errors=plan_errors,
-            )
-        return _patch_build_task_plan(
-            state,
-            project_plan,
-            latest_plan,
-            build_execution_scope,
-            action_payload.get("patches"),
         )
     return _pending_build_task_plan_result(
         state,
@@ -1131,6 +1106,7 @@ def _pending_build_task_plan_result(
     clarification = _build_task_plan_confirmation_payload(
         build_task_plan,
         build_execution_scope,
+        project_plan=project_plan,
         errors=errors,
     )
     return {
@@ -1179,112 +1155,6 @@ def _confirmed_build_task_plan_result(
         },
         "clarification": {},
     }
-
-
-def _patch_build_task_plan(
-    state: ProjectState,
-    project_plan: dict[str, Any],
-    build_task_plan: dict[str, Any],
-    build_execution_scope: dict[str, str],
-    raw_patches: Any,
-) -> dict[str, Any]:
-    """只应用任务 title/description patch，并重新编译确认前的 DAG。"""
-
-    patches = raw_patches if isinstance(raw_patches, list) else []
-    tasks = tasks_from_build_task_plan(build_task_plan)
-    tasks_by_id = {str(task.get("id") or ""): task for task in tasks}
-    errors: list[str] = []
-    allowed_keys = {"task_id", "taskId", "title", "description"}
-    for patch in patches:
-        if not isinstance(patch, dict):
-            errors.append("任务 patch 必须是对象。")
-            continue
-        forbidden = sorted(set(patch) - allowed_keys)
-        if forbidden:
-            errors.append(
-                f"任务 patch 只能修改 title 和 description，禁止字段：{', '.join(forbidden)}。"
-            )
-        task_id = str(patch.get("task_id") or patch.get("taskId") or "").strip()
-        if not task_id or task_id not in tasks_by_id:
-            errors.append(f"任务 patch 指向不存在的 task_id：{task_id or '<empty>'}。")
-            continue
-        for field in ("title", "description"):
-            if field in patch:
-                value = str(patch.get(field) or "").strip()
-                if not value:
-                    errors.append(f"任务 {task_id} 的 {field} 不能为空。")
-                elif len(value) > 4_000:
-                    errors.append(f"任务 {task_id} 的 {field} 超过 4000 字符。")
-                else:
-                    tasks_by_id[task_id][field] = value
-    if errors or not patches:
-        return _pending_build_task_plan_result(
-            state,
-            project_plan,
-            build_task_plan,
-            build_execution_scope,
-            errors=errors or ["patch 动作至少需要一个任务 patch。"],
-        )
-    try:
-        context = state.get("build_context")
-        if not isinstance(context, dict) or not context:
-            context = _resolve_build_context(
-                state,
-                project_plan,
-                build_execution_scope,
-                build_task_plan,
-            )
-        patched_tasks = merge_exact_duplicate_tasks(list(tasks_by_id.values()))
-        acceptance_context = {
-            **context,
-            "project_plan": project_plan,
-            "executable_details": (
-                _dict_value(project_plan.get("executable_details"))
-                or _dict_value(context.get("executable_details"))
-            ),
-        }
-        patched_tasks = compile_engineering_acceptance(
-            patched_tasks,
-            acceptance_context,
-        )
-        next_plan = compile_build_task_plan_scope(
-            {
-                **build_task_plan,
-                "build_execution_scope": build_execution_scope,
-            },
-            patched_tasks,
-            acceptance_context,
-            # patch 只允许修改标题和描述，不得借当前页面上下文重编译既有业务验收来源。
-            preserve_compiled_task_ids=set(tasks_by_id),
-        )
-    except (ValueError, TypeError) as exc:
-        return _pending_build_task_plan_result(
-            state,
-            project_plan,
-            build_task_plan,
-            build_execution_scope,
-            errors=[f"任务 patch 重新编译失败：{exc}"],
-        )
-    next_plan.update(
-        {
-            "status": _build_task_plan_status(next_plan),
-            "confirmation_status": "pending",
-            "confirmed_at": None,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "build_execution_scope": build_execution_scope,
-        }
-    )
-    write_build_task_plan_json(state, next_plan)
-    graph = next_plan.get("task_graph") if isinstance(next_plan.get("task_graph"), dict) else {}
-    validation = graph.get("validation") if isinstance(graph.get("validation"), dict) else {}
-    graph_errors = validation.get("errors") if isinstance(validation.get("errors"), list) else []
-    return _pending_build_task_plan_result(
-        state,
-        project_plan,
-        next_plan,
-        build_execution_scope,
-        errors=[str(error) for error in graph_errors] if graph_errors else None,
-    )
 
 
 def _workspace_snapshot_from_state(state: ProjectState) -> dict:
@@ -1429,6 +1299,7 @@ def _resolve_build_context(
         "entity_ids": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
+        "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }, build_task_plan)
 
 

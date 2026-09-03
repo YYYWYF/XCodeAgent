@@ -31,6 +31,7 @@ from app.services.build_repair_planner import (
 )
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
+from app.services.build_task_confirmation import build_task_confirmation_read_model
 from app.services.authorization_platform_projection import (
     AuthorizationPlatformProjectionError,
     apply_authorization_platform_projections,
@@ -1037,14 +1038,36 @@ def _build_gate_result(
         error == "Build DAG 尚未确认。" for error in errors
     )
     if pending:
+        build_execution_scope = (
+            build_task_plan.get("build_execution_scope")
+            or state.get("build_execution_scope")
+            or {}
+        )
+        # 直接恢复到 Build 时也必须重建同一份只读确认投影，禁止回退到完整累计计划。
+        read_model = build_task_confirmation_read_model(
+            build_task_plan,
+            build_execution_scope,
+            project_plan=state.get("project_plan"),
+            build_context=state.get("build_context"),
+        )
         clarification = {
             "mode": "build_task_plan_confirmation",
             "status": "requires_user_input",
             "message": "Build DAG 已生成，请先确认最新任务规划。",
-            "actionValues": ["confirm", "patch", "regenerate"],
-            "editableFields": ["title", "description"],
+            "actionValues": ["confirm", "abandon"],
             "errors": errors,
-            "buildExecutionScope": build_task_plan.get("build_execution_scope") or state.get("build_execution_scope") or {},
+            "buildExecutionScope": build_execution_scope,
+            "taskPlan": {
+                "version": build_task_plan.get("version"),
+                "schemaVersion": build_task_plan.get("schema_version"),
+                "status": build_task_plan.get("status"),
+                "confirmationStatus": confirmation_status,
+                "summary": build_task_plan.get("summary") or {},
+                "scopeTasks": read_model["scopeTasks"],
+                "reusedPrerequisites": read_model["reusedPrerequisites"],
+                "retainedTaskSummary": read_model["retainedTaskSummary"],
+            },
+            "targetReview": read_model["targetReview"],
         }
         workflow_status = "requires_user_input"
         summary_status = "requires_confirmation"

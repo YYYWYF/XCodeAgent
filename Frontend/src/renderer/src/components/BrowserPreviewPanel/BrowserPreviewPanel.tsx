@@ -14,12 +14,14 @@ import type { ReactElement } from 'react'
 import type {
   ApplicationConfig,
   ApplicationMenuItem,
-  DevelopmentPlanningPageOption
+  DevelopmentPlanningPageOption,
+  InspectedElementContext
 } from '../../typings'
 import {
   composePreviewUrl,
   cx,
   navigatePreviewHistory,
+  navigatePreviewToStartedProject,
   normalizePreviewUrl,
   openExternalPreviewUrl
 } from '../../utils'
@@ -39,6 +41,7 @@ type Props = {
   previewBaseUrl?: string
   selectedPagePath?: string
   onInspectingChange?: (active: boolean) => void
+  onElementContextChange?: (context: InspectedElementContext | undefined) => void
 }
 
 type PreviewPageOption = {
@@ -63,6 +66,7 @@ export default function BrowserPreviewPanel({
   pages = [],
   previewBaseUrl = '',
   selectedPagePath = '',
+  onElementContextChange,
   onInspectingChange
 }: Props): ReactElement {
   const pageOptions = useMemo<PreviewPageOption[]>(() => {
@@ -89,6 +93,7 @@ export default function BrowserPreviewPanel({
   const frameKey = `${previewUrl}-${refreshKey}`
   const elementInspector = useElementInspector({
     frameKey,
+    onElementContextChange,
     onInspectingChange,
     previewUrl
   })
@@ -106,6 +111,15 @@ export default function BrowserPreviewPanel({
     setLaunchError('')
     setNavigation((current) => navigatePreviewHistory(current, requestedUrl))
   }, [requestKey, requestedUrl])
+
+  useEffect(() => {
+    if (!previewBaseUrl) return
+    // 预览面板可能在项目启动完成前以 about:blank 挂载；启动地址到达后自动进入当前页面。
+    setLaunchError('')
+    setNavigation((current) =>
+      navigatePreviewToStartedProject(current, previewBaseUrl, selectedPage)
+    )
+  }, [previewBaseUrl, selectedPage])
 
   useEffect(() => {
     setLaunchError(externalError || '')

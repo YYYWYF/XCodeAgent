@@ -9,7 +9,7 @@ import type {
   WorkflowFormalRevisionBranch,
   WorkflowRevisionContinuation
 } from '../../../typings'
-import { hasSameSessionTargetBinding, type SessionIdentity } from './sessionRuntime'
+import type { SessionIdentity } from './sessionRuntime'
 
 /** 为一次已批准的 formal revision 创建独立前端会话身份。 */
 export function createFormalRevisionSessionContext(
@@ -53,7 +53,7 @@ export function createRevisionDevelopmentSessionContext(
   }
 }
 
-/** 按 changeId、TechnicalPlan 哈希和来源目标寻找本次 revision 的独立开发会话。 */
+/** 按 changeId、TechnicalPlan 哈希和来源会话寻找本次 revision 的独立开发会话。 */
 export function revisionDevelopmentSessionForContinuation(
   sessions: ChatSessionSummary[],
   source: SessionIdentity,
@@ -67,7 +67,6 @@ export function revisionDevelopmentSessionForContinuation(
       session.workbenchPhase === 'development' &&
       session.stage === 'DEVELOPMENT' &&
       session.entryKey === entryKey &&
-      hasSameSessionTargetBinding(session, source) &&
       context?.kind === 'formal_revision' &&
       context.sessionRole === 'development' &&
       context.changeId === continuation.changeId &&

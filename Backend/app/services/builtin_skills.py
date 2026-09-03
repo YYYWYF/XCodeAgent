@@ -18,6 +18,7 @@ FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME = "frontend-static-data-generate"
 UI_DESIGN_SKILL_NAME = "antd-ui-design"
 FRONTEND_CODE_SCAN_SKILL_NAME = "frontend-code-scan"
 BACKEND_CODE_SCAN_SKILL_NAME = "backend-code-scan"
+SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME = "springboot-template-modification-boundary"
 
 _REACT_DEV_SPEC_REFERENCE_FILES = [
     "references/00-framework-intro.md",
@@ -45,6 +46,14 @@ _SPRINGBOOT_BACKEND_REFERENCE_FILES = [
 
 _BACKEND_CODE_SCAN_REFERENCE_FILES = ["references/rules-reference.md"]
 
+_SPRINGBOOT_TEMPLATE_BOUNDARY_REFERENCE_FILES = [
+    "references/entity-template.md",
+    "references/repository-template.md",
+    "references/dto-template.md",
+    "references/controller-template.md",
+    "references/module-layout.md",
+]
+
 REQUIRED_BUILTIN_SKILL_FILES = {
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
@@ -58,6 +67,10 @@ REQUIRED_BUILTIN_SKILL_FILES = {
     BACKEND_CODE_SCAN_SKILL_NAME: [
         "SKILL.md",
         *_BACKEND_CODE_SCAN_REFERENCE_FILES,
+    ],
+    SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME: [
+        "SKILL.md",
+        *_SPRINGBOOT_TEMPLATE_BOUNDARY_REFERENCE_FILES,
     ],
 }
 

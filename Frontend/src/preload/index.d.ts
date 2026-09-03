@@ -13,12 +13,6 @@ declare global {
       isElectron: boolean
       agentBaseUrl: string
       platform: string
-      launchContext?: {
-        applicationId: string
-        phase: 'planning'
-        graphThreadId: string
-        conversationThreadId: string
-      }
       auth: {
         login: () => Promise<{ ok: true }>
         status: () => Promise<{ authenticated: boolean }>
@@ -120,15 +114,8 @@ declare global {
           workflowId: string
           editorMode: 'frontend' | 'backend'
           workbenchPhase: 'product' | 'planning' | 'development' | 'test' | 'review' | 'acceptance'
-          targetType: 'workflow' | 'page' | 'api' | 'entity'
           entryKey?: string
           title?: string
-          apiContractId?: string
-          endpointId?: string
-          endpointLabel?: string
-          entityId?: string
-          entityLabel?: string
-          pageId?: string
           revisionContext?: unknown
           recoveryExecutionRunId?: string
         }) => Promise<{ ok?: boolean; session?: unknown }>
@@ -146,14 +133,6 @@ declare global {
         openExternal: (url: string) => Promise<{ ok?: boolean }>
         openPreviewWindow?: (url: string) => Promise<{ ok?: boolean }>
         openReportFile?: (reportPath: string) => Promise<{ ok?: boolean }>
-      }
-      windows?: {
-        openPlanning: (payload: {
-          applicationId: string
-          graphThreadId: string
-          conversationThreadId: string
-          theme: 'dark' | 'light'
-        }) => Promise<{ ok?: boolean; reused?: boolean }>
       }
       projectPreview?: {
         registerWorkspace: (payload: { workspaceRoot: string }) => Promise<{ ok?: boolean }>

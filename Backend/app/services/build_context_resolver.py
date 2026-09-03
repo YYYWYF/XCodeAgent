@@ -18,6 +18,7 @@ from app.services.entity_design import (
     entity_design_validation_errors,
 )
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
+from app.services.template_scaffold_injection import prebuilt_files_for_plan
 
 
 def _endpoint_contract(
@@ -123,10 +124,14 @@ def resolve_target_build_context(
     """解析目标详情、直接 endpoint/API 依赖与编译所需的 Unit 标识。"""
 
     if target_type == "page":
-        return _page_context(project_plan, target_id, project_plan_path)
-    if target_type == "endpoint":
-        return _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
-    raise ValueError(f"Unsupported build target type: {target_type}.")
+        context = _page_context(project_plan, target_id, project_plan_path)
+    elif target_type == "endpoint":
+        context = _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
+    else:
+        raise ValueError(f"Unsupported build target type: {target_type}.")
+    # 把平台预置的后端骨架文件清单传给 Agent，让它知道哪些文件已存在、只需补业务逻辑。
+    context["prebuilt_files"] = prebuilt_files_for_plan(project_plan)
+    return context
 
 
 def _page_context(

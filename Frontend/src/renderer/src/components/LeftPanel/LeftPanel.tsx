@@ -23,7 +23,6 @@ type Props = {
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
   developmentPlanningReady: boolean
-  hasPageDesigns: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
@@ -54,13 +53,11 @@ type Props = {
   onSessionHistoryReadyChange: (ready: boolean) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
-  /** 设计阶段后台规划窗口的模型错误。 */
+  /** 设计阶段后台规划任务的模型错误。 */
   planningError?: string
-  /** 从工作台错误卡片重新打开设计阶段规划窗口。 */
+  /** 从工作台错误卡片重试设计阶段规划任务。 */
   onRetryPlanning?: () => void
   planningThreadId?: string
-  /** 规划阶段新窗口使用的独立前端会话 threadId。 */
-  planningConversationThreadId?: string
   planningWorkflow?: WorkflowRunPayload
   /** 仅冷恢复时允许从 .xcodeagent 读取当前阶段规划产物。 */
   restorePlanningArtifactsFromDisk?: boolean
@@ -74,7 +71,6 @@ export default function LeftPanel({
   application,
   applicationLifecycle,
   developmentPlanningReady,
-  hasPageDesigns,
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
@@ -98,7 +94,6 @@ export default function LeftPanel({
   planningError,
   onRetryPlanning,
   planningThreadId,
-  planningConversationThreadId,
   planningWorkflow,
   restorePlanningArtifactsFromDisk,
   theme,
@@ -113,7 +108,6 @@ export default function LeftPanel({
             application={application}
             applicationLifecycle={applicationLifecycle}
             developmentPlanningReady={developmentPlanningReady}
-            hasPageDesigns={hasPageDesigns}
             developmentPlanningPages={developmentPlanningPages}
             developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}
@@ -137,7 +131,6 @@ export default function LeftPanel({
             planningError={planningError}
             onRetryPlanning={onRetryPlanning}
             planningThreadId={planningThreadId}
-            planningConversationThreadId={planningConversationThreadId}
             planningWorkflow={planningWorkflow}
             restorePlanningArtifactsFromDisk={restorePlanningArtifactsFromDisk}
             theme={theme}

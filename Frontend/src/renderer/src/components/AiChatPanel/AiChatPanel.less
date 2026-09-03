@@ -65,14 +65,6 @@
   }
 }
 
-.@{class-prefix}-element-inspection-interaction-mask {
-  position: absolute;
-  z-index: 100;
-  inset: 0;
-  cursor: not-allowed;
-  background: rgba(0, 0, 0, 0.45);
-}
-
 .@{class-prefix}-panel-split-handle {
   position: relative;
   z-index: 5;
@@ -200,7 +192,7 @@
 
 @media (max-width: 1500px) {
   .@{class-prefix}-embedded-preview-open {
-    .@{class-prefix}-session-sidebar {
+    .@{class-prefix}-session-sidebar:not(.@{class-prefix}-collapsed) {
       display: none;
     }
   }
@@ -344,7 +336,7 @@
   border-radius: 8px;
 }
 
-// 验收聚焦只隐藏中间对话区，左侧应用大纲始终保留，预览占据其余可用宽度。
+// 验收聚焦只隐藏中间对话区，左侧图标栏始终保留，预览占据其余可用宽度。
 .@{class-prefix}-ai-chat-panel.@{class-prefix}-acceptance-preview-focus {
   flex-direction: row;
 

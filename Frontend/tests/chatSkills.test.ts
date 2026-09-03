@@ -11,6 +11,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/skillSelection'
 import {
   AgUiChatSession,
+  appendElementContextToConversationPrompt,
   buildWorkflowForwardedProps,
   readDagGenerationSnapshot,
   readProjectPlanUpdate,
@@ -326,6 +327,43 @@ test('快速修改只在独立字段发送工作区和技能且不包含 target'
     Object.hasOwn(forwardedProps.conversation as Record<string, unknown>, 'target'),
     false
   )
+})
+
+test('快速修改通过独立结构发送 DOM 源码上下文', () => {
+  const elementContext = {
+    tagName: 'button',
+    sourcePath: '/src/pages/PageAgeEntry/index.tsx',
+    line: 24,
+    column: 7
+  }
+  const forwardedProps = buildWorkflowForwardedProps({
+    editorMode: 'frontend',
+    workspaceRoot: '/workspace',
+    conversation: true,
+    conversationElementContext: elementContext
+  })
+
+  assert.deepEqual(forwardedProps.conversation, {
+    workspaceRoot: '/workspace',
+    selectedSkillNames: undefined,
+    elementContext
+  })
+})
+
+test('快速修改将 DOM 文件和行号直接追加到用户需求', () => {
+  const message = '把这个区域的标题改成红色'
+  const elementContext = {
+    tagName: 'div',
+    sourcePath: '/src/pages/PageAgeEntry/index.tsx',
+    line: 24,
+    column: 7
+  }
+
+  assert.equal(
+    appendElementContextToConversationPrompt(message, elementContext),
+    `${message}\n\n代码实现位于frontend/src/pages/PageAgeEntry/index.tsx文件 的24行附近处，请参考frontend/src/pages/PageAgeEntry/index.tsx文件 的24行附近处的相关代码实现进行修改。`
+  )
+  assert.equal(appendElementContextToConversationPrompt(message), message)
 })
 
 test('SmallTask handoff 只在确认续跑时携带原请求、路径和决定', () => {
@@ -1926,7 +1964,13 @@ test('技术规划确认卡展示修改入口，其他计划确认保持原有�
       onAbandon: () => undefined,
       onConfirm: () => undefined,
       onRevise: () => undefined,
-      plan: { artifact_type: 'technical-plan', architecture: {}, entities: [], api_contracts: [], pages: [] },
+      plan: {
+        artifact_type: 'technical-plan',
+        architecture: {},
+        entities: [],
+        api_contracts: [],
+        pages: []
+      },
       planType: 'technical',
       requiresConfirmation: true,
       title: '技术规划'
@@ -2467,6 +2511,56 @@ test('会话恢复保留有效的二次修改交接回执并拒绝残缺回执',
     changeId: 'change-1',
     request: '需求设计已确认，进入技术规划阶段'
   })
+})
+
+test('会话恢复保留消息级开发续接目标且不接受残缺目标', () => {
+  const normalized = normalizePersistentSessionMessage({
+    id: 5,
+    role: 'assistant',
+    content: '',
+    createdAt: 5,
+    developmentContinuation: {
+      id: 'devcont-movies',
+      status: 'ready',
+      sourceThreadId: 'thread-movies',
+      sourceRunId: 'run-movies',
+      token: 't'.repeat(48),
+      technicalPlanSha256: 'a'.repeat(64),
+      target: {
+        type: 'endpoint',
+        apiContractId: 'movies-api',
+        endpointId: 'list-movies',
+        label: 'GET /movies',
+        unsafe: 'ignored'
+      }
+    }
+  })
+  const malformed = normalizePersistentSessionMessage({
+    id: 6,
+    role: 'assistant',
+    content: '',
+    createdAt: 6,
+    developmentContinuation: {
+      status: 'ready',
+      target: { type: 'page', label: '首页' }
+    }
+  })
+
+  assert.deepEqual(normalized.developmentContinuation, {
+    id: 'devcont-movies',
+    status: 'ready',
+    sourceThreadId: 'thread-movies',
+    sourceRunId: 'run-movies',
+    token: 't'.repeat(48),
+    technicalPlanSha256: 'a'.repeat(64),
+    target: {
+      type: 'endpoint',
+      apiContractId: 'movies-api',
+      endpointId: 'list-movies',
+      label: 'GET /movies'
+    }
+  })
+  assert.equal('developmentContinuation' in malformed, false)
 })
 
 test('二次修改会话身份必须完整绑定来源、原规划线程和可选 changeId', () => {

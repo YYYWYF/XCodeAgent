@@ -1,3 +1,5 @@
+import type { InspectedElementContext } from '../../typings'
+
 export const ELEMENT_INSPECTOR_CHANNEL = 'xcode-agent:element-inspector' as const
 export const ELEMENT_INSPECTOR_VERSION = 1 as const
 
@@ -24,6 +26,24 @@ export type ElementInspectorSelectionMessage = {
 export type ElementInspectorInboundMessage =
   | ElementInspectorReadyMessage
   | ElementInspectorSelectionMessage
+
+/** 从已校验的审查消息提取可发送的完整源码上下文，无源码位置时不产生选择。 */
+export function inspectedElementContextFromMessage(
+  message: ElementInspectorInboundMessage
+): InspectedElementContext | null {
+  if (message.type !== 'element-selected' || !message.sourceLocation) return null
+  return {
+    tagName: message.tagName,
+    sourcePath: message.sourceLocation.sourcePath,
+    line: message.sourceLocation.line,
+    column: message.sourceLocation.column
+  }
+}
+
+/** 将有效 DOM 源码定位格式化为用户可读的即时提示。 */
+export function inspectedElementLocationMessage(context: InspectedElementContext): string {
+  return `定位到该元素位于${context.sourcePath}文件${context.line}行处`
+}
 
 export type ElementInspectorCommand = {
   channel: typeof ELEMENT_INSPECTOR_CHANNEL

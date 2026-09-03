@@ -14,6 +14,7 @@ class ProjectState(TypedDict, total=False):
     active_run_id: str
     change_id: str
     change_target: dict[str, Any]
+    element_context: dict[str, Any]
     lifecycle: dict[str, Any]
     lifecycle_interaction_submission: dict[str, Any]
     selected_skill_names: list[str]
@@ -94,6 +95,7 @@ class ProjectState(TypedDict, total=False):
     entity_source_binding_submission: dict[str, Any]
     entity_design_action: dict[str, Any]
     development_readiness: dict[str, Any]
+    development_continuation_id: str
     application_planning_confirmation: dict[str, Any]
     ui_designs: dict[str, Any]
     ui_design_action: dict[str, Any]

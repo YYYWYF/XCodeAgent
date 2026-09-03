@@ -494,7 +494,7 @@ export default function ApplicationPagePlanningModal({
     onStatusChange(status)
   }, [awaitingUserInput, error, onStatusChange, running, workflow])
 
-  // 规划窗口可能被工作台隐藏，错误仍需同步到工作台消息区，保证失败可见。
+  // 规划容器可能被工作台隐藏，错误仍需同步到工作台消息区，保证失败可见。
   useEffect(() => {
     onErrorChange(error || undefined)
   }, [error, onErrorChange])
