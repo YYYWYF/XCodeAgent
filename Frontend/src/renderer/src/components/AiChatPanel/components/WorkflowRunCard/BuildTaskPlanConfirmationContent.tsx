@@ -1,5 +1,5 @@
 import { ApiOutlined, CheckCircleOutlined, FileTextOutlined } from '@ant-design/icons'
-import { Collapse, Typography } from 'antd'
+import { Typography } from 'antd'
 import type {
   WorkflowBuildTargetReview,
   WorkflowBuildTargetReviewEndpoint,
@@ -149,76 +149,52 @@ export function TaskHeader({
       <span className={cx('workflow-dag-confirmation-task-index')}>{index + 1}</span>
       <span className={cx('workflow-dag-confirmation-task-copy')}>
         <Typography.Text strong>{task.title || `开发任务 ${index + 1}`}</Typography.Text>
+        {task.description ? <Typography.Text type="secondary">{task.description}</Typography.Text> : null}
       </span>
     </div>
   )
 }
 
-/** 展示任务执行说明，并按需展开修改范围与业务验收标准。 */
+/** 展示单任务的修改边界与可核对验收标准。 */
 export function TaskDetails({ task }: { task: WorkflowBuildTaskPlanTask }): JSX.Element {
   const paths = taskPaths(task)
   const businessChecks = acceptanceTexts(task.business_acceptance_checks)
+  const engineeringChecks = acceptanceTexts(task.acceptance_checks)
   return (
     <div className={cx('workflow-dag-confirmation-task-details')}>
       <div className={cx('workflow-dag-confirmation-task-detail-block')}>
         <Typography.Text className={cx('workflow-dag-confirmation-subsection-title')} strong>
-          执行说明
+          修改范围
         </Typography.Text>
-        <Typography.Paragraph className={cx('workflow-dag-confirmation-instructions')}>
-          {task.description || '未提供单独的执行说明'}
-        </Typography.Paragraph>
+        {paths.length > 0 ? (
+          <div className={cx('workflow-dag-confirmation-paths')}>
+            {paths.map((path) => (
+              <code key={path}>{path}</code>
+            ))}
+          </div>
+        ) : (
+          <Typography.Text type="secondary">未声明具体文件路径</Typography.Text>
+        )}
       </div>
-      <Collapse
-        bordered={false}
-        className={cx('workflow-dag-confirmation-task-disclosures')}
-        expandIconPosition="right"
-      >
-        <Collapse.Panel
-          header={<DisclosureHeader count={paths.length} label="修改范围" />}
-          key="scope"
-        >
-          {paths.length > 0 ? (
-            <ul className={cx('workflow-dag-confirmation-paths')}>
-              {paths.map((path) => (
-                <li key={path}>
-                  <code>{path}</code>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <Typography.Text type="secondary">未声明具体文件路径</Typography.Text>
-          )}
-        </Collapse.Panel>
+      <div className={cx('workflow-dag-confirmation-task-detail-block')}>
+        <Typography.Text className={cx('workflow-dag-confirmation-subsection-title')} strong>
+          验收标准
+        </Typography.Text>
         {businessChecks.length > 0 ? (
-          <Collapse.Panel
-            header={<DisclosureHeader count={businessChecks.length} label="业务验收标准" />}
-            key="business-acceptance"
-          >
-            <AcceptanceList items={businessChecks} />
-          </Collapse.Panel>
+          <AcceptanceList items={businessChecks} title="业务验收" />
         ) : null}
-      </Collapse>
-      {businessChecks.length === 0 ? (
-        <div className={cx('workflow-dag-confirmation-business-empty')}>
-          <Typography.Text>业务验收标准</Typography.Text>
-          <Typography.Text type="secondary">本任务无独立业务验收标准</Typography.Text>
-        </div>
-      ) : null}
+        {engineeringChecks.length > 0 ? (
+          <AcceptanceList items={engineeringChecks} title="工程验收" />
+        ) : null}
+        {businessChecks.length === 0 && engineeringChecks.length === 0 ? (
+          <Typography.Text type="secondary">该任务未提供独立验收标准</Typography.Text>
+        ) : null}
+      </div>
     </div>
   )
 }
 
-/** 展示二级折叠项名称与内容数量，帮助用户判断是否需要展开。 */
-function DisclosureHeader({ count, label }: { count: number; label: string }): JSX.Element {
-  return (
-    <span className={cx('workflow-dag-confirmation-disclosure-header')}>
-      <Typography.Text>{label}</Typography.Text>
-      <small>{count} 项</small>
-    </span>
-  )
-}
-
-/** 以紧凑清单展示用户可核对的业务验收文本。 */
+/** 以紧凑清单展示业务或工程验收文本。 */
 function AcceptanceList({
   emptyText,
   items,
@@ -226,15 +202,13 @@ function AcceptanceList({
 }: {
   emptyText?: string
   items: string[]
-  title?: string
+  title: string
 }): JSX.Element {
   return (
     <div className={cx('workflow-dag-confirmation-acceptance')}>
-      {title ? (
-        <Typography.Text className={cx('workflow-dag-confirmation-acceptance-title')}>
-          {title}
-        </Typography.Text>
-      ) : null}
+      <Typography.Text className={cx('workflow-dag-confirmation-acceptance-title')}>
+        {title}
+      </Typography.Text>
       {items.length > 0 ? (
         <ul>
           {items.map((item) => (

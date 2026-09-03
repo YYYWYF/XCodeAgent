@@ -29,6 +29,7 @@ def project_build_task(task: dict[str, Any]) -> dict[str, Any]:
         "allowed_paths": task.get("allowed_paths") or [],
         "change_scope": task.get("change_scope") or [],
         "deliverables": task.get("deliverables") or [],
+        "acceptance_checks": task.get("acceptance_checks") or [],
         "business_acceptance_checks": task.get("business_acceptance_checks") or [],
         "status": task.get("status") or "pending",
     }

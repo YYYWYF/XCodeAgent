@@ -518,12 +518,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "title": "实现订单查询接口",
                 "unit_id": "backend:endpoint:orders-api:orders.list",
                 "dependencies": ["shared-client"],
-                "acceptance_checks": [
-                    {"description": "内部工程检查不得进入用户确认投影。"}
-                ],
-                "business_acceptance_checks": [
-                    {"description": "用户可以按条件查询订单。"}
-                ],
                 "status": "pending",
             },
             {
@@ -566,12 +560,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(
             [task["id"] for task in payload["taskPlan"]["scopeTasks"]],
             ["orders-backend", "orders-page"],
-        )
-        projected_backend_task = payload["taskPlan"]["scopeTasks"][0]
-        self.assertNotIn("acceptance_checks", projected_backend_task)
-        self.assertEqual(
-            projected_backend_task["business_acceptance_checks"],
-            [{"description": "用户可以按条件查询订单。"}],
         )
         self.assertEqual(
             [task["id"] for task in payload["taskPlan"]["reusedPrerequisites"]],
