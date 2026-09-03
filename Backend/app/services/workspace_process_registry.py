@@ -78,6 +78,12 @@ class WorkspaceProcessRegistry:
         with self._lock:
             self._deleting_workspaces.add(_workspace_key(workspace))
 
+    def end_workspace_deletion(self, workspace: str | Path) -> None:
+        """仅解除目标工作区的删除栅栏，允许停机失败后继续启动命令。"""
+
+        with self._lock:
+            self._deleting_workspaces.discard(_workspace_key(workspace))
+
     def cancel_workspace(
         self,
         workspace: str | Path,

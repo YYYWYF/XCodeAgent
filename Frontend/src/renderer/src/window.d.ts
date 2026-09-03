@@ -30,7 +30,10 @@ declare global {
       applications: {
         load: () => Promise<{ applications?: unknown }>
         save: (applications: unknown[]) => Promise<{ ok?: boolean }>
-        deleteProject: (payload: { workspaceRoot: string }) => Promise<{ ok?: boolean }>
+        deleteProject: (payload: {
+          applicationId: string
+          workspaceRoot: string
+        }) => Promise<{ ok?: boolean }>
       }
       workspace?: {
         selectDirectory: (options?: {

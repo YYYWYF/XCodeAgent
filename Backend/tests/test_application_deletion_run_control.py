@@ -38,6 +38,40 @@ class ApplicationDeletionRunControlTests(unittest.IsolatedAsyncioTestCase):
             second.cancel()
             await asyncio.gather(second, return_exceptions=True)
 
+    async def test_workspace_cancellation_returns_when_task_ignores_cancel(self) -> None:
+        """不响应首次取消的任务必须在超时后作为 remainingRunIds 返回。"""
+
+        registry = WorkflowRunRegistry()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def ignore_first_cancellation() -> None:
+            """捕获取消并等待测试主动释放，模拟无法及时退出的工作流。"""
+
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await release.wait()
+
+        with TemporaryDirectory() as directory:
+            workspace = f"{directory}/stubborn"
+            task = asyncio.create_task(ignore_first_cancellation())
+            registry.register("run-stubborn", task, workspace=workspace)
+            await started.wait()
+            try:
+                result = await asyncio.wait_for(
+                    registry.cancel_workspace(workspace, timeout_seconds=0.01),
+                    timeout=0.5,
+                )
+
+                self.assertEqual(result["requestedRunIds"], ["run-stubborn"])
+                self.assertEqual(result["remainingRunIds"], ["run-stubborn"])
+                self.assertFalse(task.done())
+            finally:
+                release.set()
+                await asyncio.gather(task, return_exceptions=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -86,8 +86,19 @@ class WorkflowRunRegistry:
         with self._lock:
             self._deleting_workspaces.add(workspace_key)
 
-    async def cancel_workspace(self, workspace: str) -> dict[str, Any]:
-        """取消并等待指定工作区当前登记的全部 Workflow/Conversation 任务。"""
+    def end_workspace_deletion(self, workspace: str) -> None:
+        """仅解除目标工作区的删除栅栏，供可逆停机阶段失败后恢复使用。"""
+
+        with self._lock:
+            self._deleting_workspaces.discard(_workspace_key(workspace))
+
+    async def cancel_workspace(
+        self,
+        workspace: str,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """取消指定工作区任务并有限等待，超时任务交由删除协议拒绝后续清理。"""
 
         workspace_key = _workspace_key(workspace)
         current_task = asyncio.current_task()
@@ -102,7 +113,10 @@ class WorkflowRunRegistry:
             if not task.done():
                 task.cancel()
         if entries:
-            await asyncio.gather(*(task for _run_id, task in entries), return_exceptions=True)
+            await asyncio.wait(
+                [task for _run_id, task in entries],
+                timeout=max(0.0, timeout_seconds),
+            )
         with self._lock:
             remaining_run_ids = [
                 run_id

@@ -26,8 +26,10 @@ from app.protocols.application_development_planning import (
     build_application_development_planning_ag_ui_stream,
 )
 from app.protocols.application_deletion import (
+    ApplicationDeletionRequest,
     application_deletion_capabilities,
     build_application_deletion_ag_ui_stream,
+    prepare_application_deletion,
 )
 from app.protocols.application_lifecycle import (
     application_lifecycle_capabilities,
@@ -202,6 +204,15 @@ async def run_application_deletion(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/application-deletion/prepare")
+async def prepare_application_deletion_direct(
+        request: ApplicationDeletionRequest,
+) -> dict[str, Any]:
+    """供 Electron 主进程在移动目录前直接复用应用销毁准备门禁。"""
+
+    return await prepare_application_deletion(request)
 
 
 @app.post("/skills/run")

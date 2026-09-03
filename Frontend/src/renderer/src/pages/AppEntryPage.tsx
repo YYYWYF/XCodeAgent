@@ -359,9 +359,9 @@ function AppEntryContent(): JSX.Element {
         hidden={activeSurface !== 'welcome' || planningVisible}
       >
         <WelcomePage
-          onBeforeDeleteApplication={(application) =>
-            planningController.prepareApplicationDeletion(application.id)
-          }
+          onBeforeDeleteApplication={async (application) => {
+            planningController.dismissPlanning(application.id)
+          }}
           onOpenApplication={handleOpenApplication}
           onStartPlanning={handleOpenWorkbenchAfterCreate}
           theme={theme}

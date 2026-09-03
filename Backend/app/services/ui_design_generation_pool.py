@@ -351,6 +351,11 @@ class UiDesignGenerationPool:
             "remainingPageIds": [],
         }
 
+    def end_workspace_deletion(self, workspace: str) -> None:
+        """仅解除目标工作区的删除栅栏，不恢复已经取消的页面任务。"""
+
+        self._deleting_workspaces.discard(workspace)
+
     async def _write_result(
         self, task: UiDesignGenerationTask, entry: dict[str, Any]
     ) -> None:

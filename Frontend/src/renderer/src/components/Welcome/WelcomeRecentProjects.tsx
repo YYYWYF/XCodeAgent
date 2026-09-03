@@ -8,7 +8,6 @@ import {
   loadStoredApplications,
   removeStoredApplication
 } from '../../service/applicationStorage'
-import { prepareApplicationDeletion } from '../../service/applicationDeletion'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
 import { useSessionRuntimeStore } from '../AiChatPanel/hooks/useSessionRuntimeStore'
@@ -96,11 +95,10 @@ export default function WelcomeRecentProjects({
         if (!application.workspaceRoot) {
           throw new Error('该项目没有可删除的本地目录')
         }
-        await prepareApplicationDeletion(application)
+        await deleteStoredProject(application.id, application.workspaceRoot)
         await clearDeletedApplicationClientState(application)
         await clearWorkspace(application.workspaceRoot)
         await onBeforeDeleteApplication(application)
-        await deleteStoredProject(application.workspaceRoot)
       }
       await removeStoredApplication(application.id)
       setApplications((current) => current.filter((candidate) => candidate.id !== application.id))

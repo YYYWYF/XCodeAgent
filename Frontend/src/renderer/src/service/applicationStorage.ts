@@ -121,13 +121,13 @@ export async function removeStoredApplication(applicationId: string) {
   );
 }
 
-// 请求桌面主进程删除受 XCodeAgent 管理的真实项目目录。
-export async function deleteStoredProject(workspaceRoot: string) {
+// 请求桌面主进程先完成后端停机门禁，再删除受 XCodeAgent 管理的真实项目目录。
+export async function deleteStoredProject(applicationId: string, workspaceRoot: string) {
   const electronApplications = window.xcodeAgent?.applications;
   if (!electronApplications?.deleteProject) {
     throw new Error('当前环境不支持删除本地项目目录');
   }
-  await electronApplications.deleteProject({ workspaceRoot });
+  await electronApplications.deleteProject({ applicationId, workspaceRoot });
   clearWorkspaceChatSessionCache(workspaceRoot);
 }
 

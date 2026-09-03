@@ -922,6 +922,55 @@ async function stopAllTemplateCloneProcesses(): Promise<void> {
   await Promise.all([...templateCloneProcesses.keys()].map(stopTemplateCloneProcesses))
 }
 
+/** 校验应用标识，避免 Electron 删除门禁向后端发送空目标。 */
+function assertApplicationId(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('applicationId must be a non-empty string')
+  }
+  return value
+}
+
+/** 调用后端统一销毁准备逻辑，并严格核对允许移入回收站的目标身份。 */
+async function prepareApplicationDeletionWithBackend(
+  applicationId: string,
+  workspaceRoot: string
+): Promise<void> {
+  const response = await fetch(
+    `${getBackendBaseUrl().replace(/\/$/, '')}/application-deletion/prepare`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'prepare',
+        applicationId,
+        workspaceRoot
+      })
+    }
+  )
+  const result = (await response.json().catch(() => undefined)) as
+    | {
+        applicationId?: unknown
+        workspaceRoot?: unknown
+        readyForTrash?: unknown
+        detail?: unknown
+      }
+    | undefined
+  if (!response.ok) {
+    throw new Error(
+      typeof result?.detail === 'string'
+        ? result.detail
+        : `Application deletion prepare failed: ${response.status}`
+    )
+  }
+  if (
+    result?.readyForTrash !== true ||
+    result.applicationId !== applicationId ||
+    result.workspaceRoot !== workspaceRoot
+  ) {
+    throw new Error('Backend did not confirm the requested application is ready for trash')
+  }
+}
+
 /** 注册应用列表读取和保存所需的 IPC。 */
 function setupApplicationStorageIpc(): void {
   ipcMain.handle('applications:load', async () => ({
@@ -935,8 +984,9 @@ function setupApplicationStorageIpc(): void {
 
   ipcMain.handle('applications:delete-project', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    const applicationId = assertApplicationId(payload.applicationId)
     await stopTemplateCloneProcesses(workspaceRoot)
-    await stopGeneratedProjectPreview(workspaceRoot)
+    await prepareApplicationDeletionWithBackend(applicationId, workspaceRoot)
     launchedPreviewWorkspaces.delete(pathComparisonKey(workspaceRoot))
     // 先转移环境级会话；即使随后项目目录移动失败，仍可用原工作区重试删除事务。
     await movePathToTrashIfPresent(getWorkspaceSessionRoot(workspaceRoot), (targetPath) =>

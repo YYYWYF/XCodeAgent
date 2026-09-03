@@ -25,7 +25,6 @@ type ActiveApplicationPlanningsController = {
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
   generatingAppIds: ReadonlySet<string>
   onTechnicalPlanConfirmed: (applicationId: string) => Promise<boolean>
-  prepareApplicationDeletion: (applicationId: string) => Promise<void>
   registerStopHandler: (applicationId: string, handler?: () => Promise<void>) => void
   returnHome: () => void
   showPlanning: (applicationId: string) => void
@@ -255,14 +254,6 @@ export function useActiveApplicationPlannings({
     [setVisiblePlanning]
   )
 
-  // 后端销毁准备完成后卸载该应用规划容器；实际运行停止由工作区级协议统一负责。
-  const prepareApplicationDeletion = useCallback(
-    async (applicationId: string): Promise<void> => {
-      dismissPlanning(applicationId)
-    },
-    [dismissPlanning]
-  )
-
   // 仅确认回调所属应用的模板任务，忽略其他会话的完成状态。
   const onTechnicalPlanConfirmed = useCallback(
     (applicationId: string): Promise<boolean> => {
@@ -285,7 +276,6 @@ export function useActiveApplicationPlannings({
     hidePlanning,
     generatingAppIds,
     onTechnicalPlanConfirmed,
-    prepareApplicationDeletion,
     registerStopHandler,
     returnHome,
     showPlanning,

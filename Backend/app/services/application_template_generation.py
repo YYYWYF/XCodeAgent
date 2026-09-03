@@ -443,6 +443,13 @@ def begin_application_template_deletion(workspace: str | Path) -> None:
         _DELETING_TEMPLATE_WORKSPACES.add(_template_workspace_key(workspace))
 
 
+def end_application_template_deletion(workspace: str | Path) -> None:
+    """仅解除目标工作区的模板删除栅栏，保留模板互斥锁原有状态。"""
+
+    with _TEMPLATE_ACTIVITY:
+        _DELETING_TEMPLATE_WORKSPACES.discard(_template_workspace_key(workspace))
+
+
 def wait_for_application_template_idle(
     workspace: str | Path,
     *,
