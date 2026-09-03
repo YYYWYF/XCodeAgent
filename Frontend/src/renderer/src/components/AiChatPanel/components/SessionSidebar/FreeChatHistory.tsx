@@ -17,6 +17,7 @@ type FreeChatHistoryProps = {
   onCreateSession: () => void
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
+  sessionCreationDisabled: boolean
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
@@ -32,6 +33,7 @@ export default function FreeChatHistory({
   onCreateSession,
   onDeleteSession,
   onOpenSession,
+  sessionCreationDisabled,
   sessionError,
   sessionRunStates,
   sessions,
@@ -65,6 +67,7 @@ export default function FreeChatHistory({
         </div>
         <Button
           className={cx('free-chat-history-create')}
+          disabled={sessionCreationDisabled}
           icon={<PlusOutlined />}
           onClick={onCreateSession}
           size="small"
@@ -72,6 +75,11 @@ export default function FreeChatHistory({
         >
           新建对话
         </Button>
+        {sessionCreationDisabled ? (
+          <Text className={cx('free-chat-history-running-hint')}>
+            当前阶段有流程未结束，确认、放弃或运行结束后可新建对话。
+          </Text>
+        ) : null}
       </header>
 
       <div className={cx('free-chat-history-body')}>
@@ -113,6 +121,8 @@ export default function FreeChatHistory({
                     <span className={cx('free-chat-history-meta')}>
                       {runStatus === 'stopping'
                         ? '正在停止...'
+                        : runStatus === 'starting'
+                          ? `正在启动 · ${session.messageCount} 条消息`
                         : runStatus === 'running'
                           ? `运行中 · ${session.messageCount} 条消息`
                           : `${formatSessionTime(session.updatedAt)} · ${session.messageCount} 条消息`}

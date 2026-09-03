@@ -47,7 +47,11 @@ import {
   sessionToRestoreForPhase,
   sessionsForWorkbenchPhase
 } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
-import { createSessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
+import {
+  createSessionIdentity,
+  isSameSessionExecutionScope,
+  isSessionExecutionOwner
+} from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import type { ChatSessionSummary } from '../src/renderer/src/service/chatSessions'
 import {
   revisionContinuationFromWorkflow,
@@ -364,11 +368,44 @@ const designRevisionIdentity = createSessionIdentity({
   sessionId: 'revision-design-session',
   threadId: 'revision-design-thread',
   workflowId: 'workflow-1',
+  workbenchPhase: 'planning',
   stage: 'PLAN',
   sequence: 3,
   entryKey: 'revision-plan:change-1:gate-1',
   revisionContext: boundDesignRevisionContext
 })
+assert.equal(
+  isSameSessionExecutionScope(designRevisionIdentity, {
+    ...designRevisionIdentity,
+    key: 'another-session',
+    sessionId: 'another-session',
+    editorMode: 'backend'
+  }),
+  true
+)
+assert.equal(
+  isSameSessionExecutionScope(designRevisionIdentity, {
+    ...designRevisionIdentity,
+    key: 'development-session',
+    sessionId: 'development-session',
+    workbenchPhase: 'development'
+  }),
+  false
+)
+assert.equal(
+  isSessionExecutionOwner(
+    { identity: designRevisionIdentity, status: 'running', conversation: false },
+    designRevisionIdentity
+  ),
+  true
+)
+assert.equal(
+  isSessionExecutionOwner(
+    { identity: designRevisionIdentity, status: 'running', conversation: false },
+    { ...designRevisionIdentity, key: 'other-session', sessionId: 'other-session' }
+  ),
+  false
+)
 const developmentContinuation = {
   changeId: 'change-1',
   formalBranch: 'design_stage_revision' as const,

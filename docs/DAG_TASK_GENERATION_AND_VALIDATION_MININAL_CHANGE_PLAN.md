@@ -337,17 +337,17 @@ DAG 编译和校验通过后：
 }
 ```
 
-`action` 的允许值仅为 `confirm`、`regenerate`。`confirm` 不调用模型；`regenerate` 重新调用候选任务模型。
-未知动作以及已经移除的任务 `patch` 必须在 AG-UI 请求边界被拒绝。
+确认卡只允许 `confirm`、`abandon`。`confirm` 不调用模型并恢复原 checkpoint；`abandon` 通过
+AG-UI 计划控制流把当前 DAG 标记为 `abandoned`、停止流程并释放 lifecycle/resource 锁。
+未知动作、已经移除的任务 `patch` 和旧的 `regenerate` 都必须在 AG-UI 请求边界被拒绝。
 
 ### 5.3 用户操作
 
 | 操作 | 处理方式 |
 | --- | --- |
 | 确认并继续 | 校验工作区中的最新 JSON，将其标记为 confirmed，进入 Build |
-| 全量重新生成 | 重新调用候选任务生成，从模型规划阶段重新执行 |
+| 放弃流程 | 将最新 pending JSON 标记为 abandoned，终止当前 execution 并释放资源锁 |
 
-重新生成会覆盖工作区中的最新 `build-task-plan.json`，并把 `confirmation_status` 重置为 `pending`。
 用户通过结构化确认界面核对任务，不再使用 Markdown 作为确认载体。
 
 ### 5.4 修改后的恢复路径
@@ -360,6 +360,14 @@ DAG 编译和校验通过后：
 → confirmation_status=confirmed
 → 现有确认恢复分支校验最新 JSON
 → Build
+```
+
+```text
+用户放弃
+→ confirmation_status=abandoned
+→ 结束当前 execution
+→ 释放 lifecycle/resource/session 输入门禁
+→ 当前流程停止
 ```
 
 ```text
@@ -495,7 +503,7 @@ confirmation_status == confirmed
 
 | 模块 | 最小改动内容 |
 | --- | --- |
-| `Backend/app/graph/nodes/tasks.py` | 只消费已确认正式产物、模板 manifest 和范围详细设计；移除上游计划回写；处理 DAG pending、确认和重新生成 |
+| `Backend/app/graph/nodes/tasks.py` | 只消费已确认正式产物、模板 manifest 和范围详细设计；移除上游计划回写；处理 DAG pending 与确认，放弃由计划控制流收口 |
 | `Backend/app/services/build_task_planner.py` | 完全重复任务确定性合并；按 `api_contract_id + endpoint_id` 校验前端唯一实现 owner；写入 scope 和确认字段；对菜单、路由、页面占位和数据库职责越界执行显式 DAG 校验，不修改或删除候选；保留 Unit 级 fingerprint |
 | `Backend/app/services/build_task_menu.py` | 删除 DAG 菜单/路由任务生成、菜单任务修剪和 canonical page entry 注入逻辑；仅保留已存在页面入口的只读路径校对和必要的菜单状态解析 |
 | `Backend/app/services/build_unit_skeleton.py` | 保持数据库已在实体确认阶段落地的当前边界，不为 Normal Build 创建 `database:*` Unit |
@@ -511,7 +519,7 @@ confirmation_status == confirmed
 | `Backend/app/graph/subgraphs/build.py` | 在 Build/scheduler/直接恢复入口增加最新 JSON 确认门禁；任务结果和修复流程不再写入 Markdown |
 | `Backend/app/graph/workflow.py` | 保持现有 Graph 节点关系，但区分 DAG confirmation 等待和进入 Build 的恢复路由 |
 | `Backend/app/graph/state.py`、`Backend/app/protocols/workflow/definition.py` | 移除 `build_task_dag_path`；确认状态只存于计划内部，不新增重复 Graph State 字段 |
-| `Backend/app/protocols/workflow/request.py` | 增加 `build_task_plan_confirmation` 的 confirm/regenerate 结构化恢复动作；恢复时读取最新 JSON |
+| `Backend/app/protocols/workflow/request.py` | 接收 `build_task_plan_confirmation.confirm` 并恢复原 checkpoint；`abandon` 由 plan control 终止 execution |
 | `Backend/app/protocols/workflow/projection.py`、`runtime.py` | 投影 DAG confirmation、当前目标、范围任务和局部错误；不再将 DAG Markdown 作为确认 artifact |
 | `Frontend/src/renderer/src/typings/workflow.ts`、`service/agUiAgent.ts` | 增加 DAG confirmation、目标、scope 和 JSON-safe snapshot 类型；移除 Markdown DAG artifact 类型 |
 | `Frontend/src/renderer/src/components/WorkflowRunCard`、`AiChatPanel.tsx`、`processStepHistory.ts`、`workbenchPhase.ts` | 分层展示目标与范围、页面验收、实际关联接口和只读任务详情，支持确认、全量重新生成及恢复；不复用正式文档确认卡片 |

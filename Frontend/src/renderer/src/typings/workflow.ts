@@ -641,7 +641,7 @@ export type WorkflowCodeReviewRepairConfirmation = {
 
 export type WorkflowBuildTaskPlanConfirmation = {
   mode?: 'build_task_plan_confirmation' | string
-  action: 'confirm' | 'regenerate'
+  action: 'confirm' | 'abandon'
 }
 
 export type ApplicationPlanningInteraction = {

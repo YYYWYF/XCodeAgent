@@ -1,10 +1,5 @@
-import {
-  CodeOutlined,
-  FileTextOutlined,
-  PlayCircleOutlined,
-  ReloadOutlined
-} from '@ant-design/icons'
-import { Alert, Button, Collapse, Space, Typography } from 'antd'
+import { CodeOutlined, FileTextOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons'
+import { Alert, Button, Collapse, Popconfirm, Space, Typography } from 'antd'
 import type {
   WorkflowBuildTargetReview,
   WorkflowBuildTaskPlan,
@@ -108,14 +103,18 @@ export default function BuildTaskPlanConfirmation({
 
       <footer className={cx('workflow-dag-confirmation-actions')}>
         <Space size={8} wrap>
-          <Button
+          <Popconfirm
+            cancelText="继续确认"
             disabled={disabled}
-            icon={<ReloadOutlined />}
-            onClick={() => onSubmit({ mode: 'build_task_plan_confirmation', action: 'regenerate' })}
-            size="small"
+            okButtonProps={{ danger: true }}
+            okText="放弃并停止"
+            onConfirm={() => onSubmit({ mode: 'build_task_plan_confirmation', action: 'abandon' })}
+            title="放弃后当前流程会停止，确定继续吗？"
           >
-            重新生成
-          </Button>
+            <Button danger disabled={disabled} icon={<StopOutlined />} size="small">
+              放弃流程
+            </Button>
+          </Popconfirm>
           <Button
             disabled={disabled || tasks.length === 0}
             icon={<PlayCircleOutlined />}

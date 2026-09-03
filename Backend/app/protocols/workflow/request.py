@@ -1994,7 +1994,7 @@ def _build_task_plan_confirmation(value: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     action = _optional_text(raw.get("action")).lower()
-    if action not in {"confirm", "regenerate"}:
+    if action != "confirm":
         return {}
     return {
         "mode": "build_task_plan_confirmation",

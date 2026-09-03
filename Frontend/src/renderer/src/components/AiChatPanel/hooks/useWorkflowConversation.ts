@@ -61,7 +61,12 @@ import type {
   ReviewPhaseSessionTarget,
   TestPhaseSessionTarget
 } from './useChatSessions'
-import type { SessionIdentity, SessionRunStatus } from './sessionRuntime'
+import {
+  isSessionExecutionOwner,
+  type SessionExecutionEntry,
+  type SessionIdentity,
+  type SessionRunStatus
+} from './sessionRuntime'
 import {
   planExecutionForPage,
   withWorkflowExecutionStatus,
@@ -112,6 +117,10 @@ function conversationTargetFromSelection(
 }
 
 type UseWorkflowConversationParams = {
+  acquireSessionExecution: (
+    identity: SessionIdentity,
+    conversation: boolean
+  ) => SessionExecutionEntry | undefined
   activeSession?: SessionIdentity
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   application: ApplicationConfig
@@ -151,10 +160,13 @@ type UseWorkflowConversationParams = {
   onElementContextConsumed: (context: InspectedElementContext) => void
   onPreviewReady: (target: WorkflowPreviewTarget) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
-  runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
+  releaseSessionExecution: (sessionKey: string) => void
+  sessionExecutions: SessionExecutionEntry[]
   setDraftByKey: (sessionKey: string, value: string) => void
   setSelectedSkillsByKey: (sessionKey: string, value: ChatMessageSkill[]) => void
   setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
+  updateSessionExecutionStatus: (sessionKey: string, status: SessionRunStatus) => void
+  workbenchPhase: import('../../../workbenchPhase').WorkbenchPhase
 }
 
 type UseWorkflowConversationResult = {
@@ -200,10 +212,13 @@ type UseWorkflowConversationResult = {
   handleStopGenerating: () => void
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
-    answers: ClarificationAnswers
+    answers: ClarificationAnswers,
+    options?: ClarificationSubmissionOptions
   ) => Promise<boolean>
   loading: boolean
   planEnded: boolean
+  phaseExecution?: SessionExecutionEntry
+  sessionExecutionLocked: boolean
   sessionRunStates: Record<string, SessionRunStatus>
   stopping: boolean
   workspaceBusy: boolean
@@ -225,7 +240,7 @@ function buildTaskPlanConfirmationAction(
   const value = answers.build_task_plan_confirmation
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const action = String((value as Record<string, unknown>).action || '')
-  if (!['confirm', 'regenerate'].includes(action)) return undefined
+  if (!['confirm', 'abandon'].includes(action)) return undefined
   return {
     mode: 'build_task_plan_confirmation',
     action: action as WorkflowBuildTaskPlanConfirmation['action']
@@ -238,9 +253,14 @@ function buildTaskPlanConfirmationMessage(
 ): string {
   const messages: Record<WorkflowBuildTaskPlanConfirmation['action'], string> = {
     confirm: '已确认 Build DAG，请进入 Build。',
-    regenerate: '请重新生成 Build DAG。'
+    abandon: '放弃当前 Build DAG 并停止流程。'
   }
   return messages[action]
+}
+
+type ClarificationSubmissionOptions = {
+  onExecutionStarted?: () => void
+  sessionIdentity?: SessionIdentity
 }
 
 /** 从开发完成确认载荷读取测试目标，确保刷新后仍能生成一致的用户消息。 */
@@ -465,6 +485,7 @@ function smallTaskRequestedPaths(workflow: WorkflowRunPayload): string[] {
 }
 
 export function useWorkflowConversation({
+  acquireSessionExecution,
   activeSession,
   agUiSessionsRef,
   application,
@@ -499,10 +520,13 @@ export function useWorkflowConversation({
   onElementContextConsumed,
   onPreviewReady,
   publishAiMessage,
-  runningSessionsRef,
+  releaseSessionExecution,
+  sessionExecutions,
   setDraftByKey,
   setSelectedSkillsByKey,
-  setSessionMessages
+  setSessionMessages,
+  updateSessionExecutionStatus,
+  workbenchPhase
 }: UseWorkflowConversationParams): UseWorkflowConversationResult {
   const stopRequestedRef = useRef<Record<string, boolean>>({})
   const notifiedPreviewTargetsRef = useRef<Set<string>>(new Set())
@@ -520,11 +544,27 @@ export function useWorkflowConversation({
   // 记录用户已明确结束的会话，保证自由输入不依赖后端控制请求或生命周期回传时序。
   const [endedPlanSessionKeys, setEndedPlanSessionKeys] = useState<Record<string, boolean>>({})
 
+  const phaseExecution = sessionExecutions.find(
+    (entry) =>
+      entry.identity.workspaceRoot === application.workspaceRoot &&
+      entry.identity.workflowId === application.id &&
+      entry.identity.workbenchPhase === workbenchPhase
+  )
   const matchingActiveSession = activeSession
-  // 空白草稿和历史会话完全隔离；没有活动会话时不得借用同工作区其他 Run 的控制状态。
-  const activeRun = matchingActiveSession ? runStates[matchingActiveSession.key] : undefined
-  const activeRuntimeKey = matchingActiveSession?.key || activeRun?.identity.key
-  const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
+  const activeSessionOwnsExecution = isSessionExecutionOwner(phaseExecution, matchingActiveSession)
+  // 持有者始终沿用原有运行、调试和停止控制；局部状态短暂缺失时从中央登记恢复。
+  const activeRun = matchingActiveSession
+    ? runStates[matchingActiveSession.key] ||
+      (activeSessionOwnsExecution && phaseExecution
+        ? {
+            identity: phaseExecution.identity,
+            status: phaseExecution.status,
+            conversation: phaseExecution.conversation
+          }
+        : undefined)
+    : undefined
+  const activeRuntimeKey = activeRun?.identity.key || matchingActiveSession?.key
+  const loading = Boolean(activeRun)
   const stopping = activeRun?.status === 'stopping'
   const conversationRunning = Boolean(activeRun?.conversation)
   const planEnded = Boolean(endedPlanSessionKeys[activeRuntimeKey || draftKey])
@@ -534,9 +574,10 @@ export function useWorkflowConversation({
       ? liveWorkflows[activeRuntimeKey]
       : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
-  // 当前阶段允许同工作区的独立会话并行，busy 只保留为现有组件接口兼容值。
-  const workspaceBusy = false
-  const sessionRunStates = Object.values(runStates).reduce<Record<string, SessionRunStatus>>(
+  // 只有非持有者会话只读；是否有局部 activeRun 不再参与所有权判断。
+  const sessionExecutionLocked = Boolean(phaseExecution && !activeSessionOwnsExecution)
+  const workspaceBusy = sessionExecutionLocked
+  const sessionRunStates = sessionExecutions.reduce<Record<string, SessionRunStatus>>(
     (states, entry) => {
       if (
         entry.identity.workspaceRoot === application.workspaceRoot &&
@@ -693,12 +734,22 @@ export function useWorkflowConversation({
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
     if (!trimmedMessage) return false
-
-    const identity = options?.sessionIdentity || (await ensureActiveSession())
-    if (runningSessionsRef.current.has(identity.key)) {
+    // 空白草稿发送前先检查当前渲染快照，避免已被同阶段 Run 锁定时仍落盘一个空会话。
+    if (!options?.sessionIdentity && !activeSession && phaseExecution) {
       setErrors((current) => ({
         ...current,
-        [identity.key]: '当前会话正在执行。'
+        [draftKey]: '当前阶段有其他会话正在执行。'
+      }))
+      return false
+    }
+
+    const identity = options?.sessionIdentity || (await ensureActiveSession())
+    const blockingExecution = acquireSessionExecution(identity, Boolean(options?.conversation))
+    if (blockingExecution) {
+      const sameSession = blockingExecution.identity.key === identity.key
+      setErrors((current) => ({
+        ...current,
+        [identity.key]: sameSession ? '当前会话正在执行。' : '当前阶段有其他会话正在执行。'
       }))
       return false
     }
@@ -738,12 +789,11 @@ export function useWorkflowConversation({
     const previousMessages = getSessionMessages(identity.key)
     const nextMessages = [...previousMessages, userMessage, assistantMessage]
 
-    runningSessionsRef.current.set(identity.key, identity)
     setRunStates((current) => ({
       ...current,
       [identity.key]: {
         identity,
-        status: 'running',
+        status: 'starting',
         conversation: Boolean(options?.conversation)
       }
     }))
@@ -771,6 +821,7 @@ export function useWorkflowConversation({
     let streamedToolCalls: ToolCallRecord[] = []
     let streamedProcessSteps: ProcessStepRecord[] = []
     let latestMessages = nextMessages
+    let executionStartedNotified = false
     const updateAssistantMessage = (
       content: string,
       workflow?: WorkflowRunPayload,
@@ -800,7 +851,11 @@ export function useWorkflowConversation({
 
     /** 在 AG-UI 实时回调中立即转交一次成功启动信号，避免被最终运行态更新批处理丢失。 */
     const updateWorkflow = (nextWorkflow: WorkflowRunPayload): void => {
-      if (nextWorkflow.summary.lifecycle?.activeExecutions?.[nextWorkflow.runId]) {
+      if (
+        !executionStartedNotified &&
+        nextWorkflow.summary.lifecycle?.activeExecutions?.[nextWorkflow.runId]
+      ) {
+        executionStartedNotified = true
         options?.onExecutionStarted?.()
       }
       streamedWorkflow = nextWorkflow
@@ -822,6 +877,15 @@ export function useWorkflowConversation({
         threadId: identity.threadId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
+      updateSessionExecutionStatus(identity.key, 'running')
+      setRunStates((current) => ({
+        ...current,
+        [identity.key]: {
+          identity,
+          status: 'running',
+          conversation: Boolean(options?.conversation)
+        }
+      }))
       const {
         answer: rawAnswer,
         workflow,
@@ -1013,7 +1077,7 @@ export function useWorkflowConversation({
       }))
       return false
     } finally {
-      runningSessionsRef.current.delete(identity.key)
+      releaseSessionExecution(identity.key)
       setRunStates((current) => omitKey(current, identity.key))
       stopRequestedRef.current[identity.key] = false
     }
@@ -1022,7 +1086,8 @@ export function useWorkflowConversation({
   /** 将结构化确认转换为可追踪的用户消息，并通过当前 AG-UI 会话恢复 Workflow。 */
   const handleSubmitClarification = async (
     workflow: WorkflowRunPayload,
-    answers: ClarificationAnswers
+    answers: ClarificationAnswers,
+    options?: ClarificationSubmissionOptions
   ): Promise<boolean> => {
     const conversation = isConversationWorkflow(workflow)
     if (
@@ -1197,11 +1262,22 @@ export function useWorkflowConversation({
     if (!conversation && clarificationMode === 'build_task_plan_confirmation') {
       const action = buildTaskPlanConfirmationAction(answers)
       if (!action || loading || workspaceBusy) return false
+      if (action.action === 'abandon') {
+        return sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
+          planControlAction: 'end',
+          planControlRunId: workflow.runId,
+          sessionIdentity: options?.sessionIdentity,
+          titleFrom: '放弃 Build DAG',
+          conversation: false
+        })
+      }
       return sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
         clarificationAnswers: answers,
         originalRequest,
         resumeState: workflow,
         buildExecutionScope: workflowBuildScope,
+        onExecutionStarted: options?.onExecutionStarted,
+        sessionIdentity: options?.sessionIdentity,
         titleFrom: 'Build DAG 确认',
         conversation: false
       })
@@ -1507,6 +1583,7 @@ export function useWorkflowConversation({
         conversation: Boolean(current[runningIdentity.key]?.conversation)
       }
     }))
+    updateSessionExecutionStatus(runningIdentity.key, 'stopping')
     setLiveWorkflows((current) => {
       const workflow = current[runningIdentity.key]
       const stoppingWorkflow = withWorkflowExecutionStatus(workflow, 'stopping')
@@ -1673,6 +1750,8 @@ export function useWorkflowConversation({
     handleSubmitClarification,
     loading,
     planEnded,
+    phaseExecution,
+    sessionExecutionLocked,
     sessionRunStates,
     stopping,
     workspaceBusy

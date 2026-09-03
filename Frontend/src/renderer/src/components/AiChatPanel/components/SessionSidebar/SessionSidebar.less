@@ -981,6 +981,15 @@
       color: var(--outline-hover-text);
       background: var(--outline-hover-bg);
     }
+
+    &:disabled,
+    &:disabled:hover,
+    &:disabled:focus-visible {
+      color: var(--wb-text-secondary);
+      background: transparent;
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
   }
 
   .@{class-prefix}-free-chat-history-trigger.@{class-prefix}-active,

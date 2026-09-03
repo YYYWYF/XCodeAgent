@@ -5,12 +5,18 @@ import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/Entit
 import type { ChatMessageSkill } from '../../../typings'
 import type { AgentChatMessage } from '../types'
 import {
+  isSameSessionExecutionScope,
   sessionRuntimeKeyBelongsToWorkspace,
+  type SessionExecutionEntry,
   type SessionIdentity
 } from './sessionRuntime'
 
 export type SessionRuntimeStore = {
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
+  acquireSessionExecution: (
+    identity: SessionIdentity,
+    conversation: boolean
+  ) => SessionExecutionEntry | undefined
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
   clearWorkspace: (workspaceRoot: string) => Promise<void>
   draftForKey: (sessionKey: string) => string
@@ -25,9 +31,15 @@ export type SessionRuntimeStore = {
     agent?: AgUiChatSession
   ) => void
   removeSession: (sessionKey: string) => void
+  releaseSessionExecution: (sessionKey: string) => void
+  sessionExecutions: SessionExecutionEntry[]
   setDraftByKey: (sessionKey: string, value: string) => void
   setSelectedSkillsByKey: (sessionKey: string, value: ChatMessageSkill[]) => void
   setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
+  updateSessionExecutionStatus: (
+    sessionKey: string,
+    status: SessionExecutionEntry['status']
+  ) => void
 }
 
 const SessionRuntimeContext = createContext<SessionRuntimeStore | undefined>(undefined)
@@ -56,6 +68,10 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
   >({})
   const agUiSessionsRef = useRef<Record<string, AgUiChatSession>>({})
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
+  const sessionExecutionsRef = useRef<Record<string, SessionExecutionEntry>>({})
+  const [sessionExecutions, setSessionExecutions] = useState<Record<string, SessionExecutionEntry>>(
+    {}
+  )
   const identitiesRef = useRef<Record<string, SessionIdentity>>({})
   const messagesRef = useRef<Record<string, AgentChatMessage[]>>({})
 
@@ -104,6 +120,44 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setSessionMessages(identity.key, messages)
   }
 
+  /** 原子获取同一应用阶段的执行权；返回占用者表示本次获取失败。 */
+  const acquireSessionExecution = (
+    identity: SessionIdentity,
+    conversation: boolean
+  ): SessionExecutionEntry | undefined => {
+    const blockingExecution = Object.values(sessionExecutionsRef.current).find((entry) =>
+      isSameSessionExecutionScope(entry.identity, identity)
+    )
+    if (blockingExecution) return blockingExecution
+    const entry: SessionExecutionEntry = { identity, status: 'starting', conversation }
+    sessionExecutionsRef.current = { ...sessionExecutionsRef.current, [identity.key]: entry }
+    runningSessionsRef.current.set(identity.key, identity)
+    setSessionExecutions(sessionExecutionsRef.current)
+    return undefined
+  }
+
+  /** 更新已占用执行权的会话状态，未知会话不得凭空创建运行记录。 */
+  const updateSessionExecutionStatus = (
+    sessionKey: string,
+    status: SessionExecutionEntry['status']
+  ): void => {
+    const current = sessionExecutionsRef.current[sessionKey]
+    if (!current || current.status === status) return
+    sessionExecutionsRef.current = {
+      ...sessionExecutionsRef.current,
+      [sessionKey]: { ...current, status }
+    }
+    setSessionExecutions(sessionExecutionsRef.current)
+  }
+
+  /** 在 AG-UI Run 到达终态后释放阶段执行权，使其他历史会话可以重新输入。 */
+  const releaseSessionExecution = (sessionKey: string): void => {
+    runningSessionsRef.current.delete(sessionKey)
+    if (!sessionExecutionsRef.current[sessionKey]) return
+    sessionExecutionsRef.current = omitKey(sessionExecutionsRef.current, sessionKey)
+    setSessionExecutions(sessionExecutionsRef.current)
+  }
+
   /** 从内存运行态中清理已删除会话的全部关联状态。 */
   const removeSession = (sessionKey: string): void => {
     delete agUiSessionsRef.current[sessionKey]
@@ -136,6 +190,11 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
       delete messagesRef.current[sessionKey]
       runningSessionsRef.current.delete(sessionKey)
     })
+    sessionExecutionsRef.current = omitWorkspaceExecutionEntries(
+      sessionExecutionsRef.current,
+      workspaceRoot
+    )
+    setSessionExecutions(sessionExecutionsRef.current)
     setMessagesBySession((current) => omitWorkspaceKeys(current, workspaceRoot))
     setDrafts((current) => omitWorkspaceKeys(current, workspaceRoot))
     setSelectedSkillsBySession((current) => omitWorkspaceKeys(current, workspaceRoot))
@@ -144,6 +203,7 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
   }
 
   return {
+    acquireSessionExecution,
     agUiSessionsRef,
     clearWorkspace,
     draftForKey: (sessionKey) => drafts[sessionKey] || '',
@@ -155,10 +215,23 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     selectedSkillsForKey: (sessionKey) => selectedSkillsBySession[sessionKey] || [],
     registerSession,
     removeSession,
+    releaseSessionExecution,
+    sessionExecutions: Object.values(sessionExecutions),
     setDraftByKey,
     setSelectedSkillsByKey,
-    setSessionMessages
+    setSessionMessages,
+    updateSessionExecutionStatus
   }
+}
+
+/** 删除指定工作区的执行登记，避免应用删除后留下阶段锁。 */
+function omitWorkspaceExecutionEntries(
+  record: Record<string, SessionExecutionEntry>,
+  workspaceRoot: string
+): Record<string, SessionExecutionEntry> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, entry]) => entry.identity.workspaceRoot !== workspaceRoot)
+  )
 }
 
 /** 返回移除指定工作区全部会话键后的新对象，覆盖已注册会话和未发送草稿。 */

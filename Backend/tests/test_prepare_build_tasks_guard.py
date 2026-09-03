@@ -413,14 +413,14 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(persisted["confirmation_status"], "confirmed")
 
     def test_build_task_plan_confirmation_exposes_only_supported_actions(self) -> None:
-        """只读任务确认卡只暴露确认和重新生成动作。"""
+        """只读任务确认卡只暴露确认和放弃动作。"""
 
         payload = _build_task_plan_confirmation_payload(
             {"confirmation_status": "pending"},
             {"type": "application", "targetId": "application"},
         )
 
-        self.assertEqual(payload["actionValues"], ["confirm", "regenerate"])
+        self.assertEqual(payload["actionValues"], ["confirm", "abandon"])
         self.assertNotIn("editableFields", payload)
         self.assertNotIn("tasks", payload["taskPlan"])
 
@@ -435,6 +435,16 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "patches": [{"task_id": "task-1", "title": "修改标题"}],
                     }
                 }
+            ),
+            {},
+        )
+
+    def test_build_task_plan_abandon_does_not_enter_graph_resume(self) -> None:
+        """放弃动作由计划控制流处理，不能被解析成 prepare_build_tasks 恢复。"""
+
+        self.assertEqual(
+            _build_task_plan_confirmation(
+                {"build_task_plan_confirmation": {"action": "abandon"}}
             ),
             {},
         )
@@ -459,7 +469,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         )
 
         clarification = result["clarification"]
-        self.assertEqual(clarification["actionValues"], ["confirm", "regenerate"])
+        self.assertEqual(clarification["actionValues"], ["confirm", "abandon"])
         self.assertIn("scopeTasks", clarification["taskPlan"])
         self.assertNotIn("tasks", clarification["taskPlan"])
 

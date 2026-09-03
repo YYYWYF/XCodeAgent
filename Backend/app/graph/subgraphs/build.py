@@ -1054,7 +1054,7 @@ def _build_gate_result(
             "mode": "build_task_plan_confirmation",
             "status": "requires_user_input",
             "message": "Build DAG 已生成，请先确认最新任务规划。",
-            "actionValues": ["confirm", "regenerate"],
+            "actionValues": ["confirm", "abandon"],
             "errors": errors,
             "buildExecutionScope": build_execution_scope,
             "taskPlan": {

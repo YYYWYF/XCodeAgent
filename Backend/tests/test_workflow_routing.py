@@ -321,6 +321,21 @@ class WorkflowRoutingTests(unittest.TestCase):
         self.assertEqual(interaction_type, PendingInteractionType.TEST_PHASE_CONFIRMATION)
         self.assertEqual(payload["testTarget"]["id"], "app")
 
+    def test_build_task_plan_confirmation_uses_typed_lifecycle_interaction(self) -> None:
+        """DAG 确认不得回退为通用 plan_adjustment 类型。"""
+
+        interaction_type, payload = _pending_interaction(
+            {
+                "clarification": {
+                    "mode": "build_task_plan_confirmation",
+                    "status": "requires_user_input",
+                }
+            }
+        )
+
+        self.assertEqual(interaction_type, PendingInteractionType.TASK_PLAN_CONFIRMATION)
+        self.assertEqual(payload["mode"], "build_task_plan_confirmation")
+
     def test_frontend_performance_confirmation_uses_typed_lifecycle_interaction(self) -> None:
         """性能测试选择应投影为可恢复的独立生命周期交互类型。"""
 

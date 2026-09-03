@@ -455,6 +455,7 @@ def _pending_interaction(
     clarification = clarification if isinstance(clarification, dict) else {}
     mode = str(clarification.get("mode") or "")
     interaction_type = {
+        "build_task_plan_confirmation": PendingInteractionType.TASK_PLAN_CONFIRMATION,
         "repair_scope_confirmation": PendingInteractionType.REPAIR_SCOPE_CONFIRMATION,
         "unit_test_confirmation": PendingInteractionType.UNIT_TEST_CONFIRMATION,
         "frontend_performance_confirmation": (

@@ -1,6 +1,8 @@
 import type { DagGenerationSnapshot, DagGenerationStageRecord } from '../../service/agUiAgent'
 import { processStepsForDisplay } from '../../service/processStepHistory'
 import type {
+  ApplicationLifecycle,
+  WorkbenchExecution,
   WorkflowBuildTargetReview,
   WorkflowBuildTaskPlan,
   WorkflowRunPayload
@@ -8,6 +10,37 @@ import type {
 import type { AgentChatMessage } from './types'
 
 export type StageOutputPhase = 'generation' | 'confirmation' | 'other'
+
+/** 从持久化生命周期中读取当前唯一的 Build DAG 待确认 execution。 */
+export function pendingDagConfirmationExecution(
+  lifecycle: ApplicationLifecycle | undefined
+): WorkbenchExecution | undefined {
+  return Object.values(lifecycle?.activeExecutions || {}).find(
+    (execution) =>
+      execution.status === 'awaiting_user' &&
+      (execution.pendingInteraction?.type === 'task_plan_confirmation' ||
+        execution.pendingInteraction?.payload?.mode === 'build_task_plan_confirmation')
+  )
+}
+
+/** 在某个持久化会话中定位与 lifecycle execution 对应的 DAG 确认快照。 */
+export function pendingDagConfirmationWorkflow(
+  messages: AgentChatMessage[],
+  execution: WorkbenchExecution | undefined
+): WorkflowRunPayload | undefined {
+  if (!execution) return undefined
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const workflow = messages[index].workflow
+    if (
+      workflow?.runId === execution.runId &&
+      workflow.threadId === execution.threadId &&
+      currentDagConfirmationPlan(workflow)
+    ) {
+      return workflow
+    }
+  }
+  return undefined
+}
 
 /** 从当前会话消息末尾读取最新、最完整的 DAG 生成快照。 */
 export function latestDagGenerationSnapshot(

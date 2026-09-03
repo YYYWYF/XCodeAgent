@@ -103,6 +103,21 @@
     background: rgba(107, 60, 240, 0.09);
     border-color: rgba(107, 60, 240, 0.28);
   }
+
+  &[disabled],
+  &[disabled]:hover,
+  &[disabled]:focus {
+    color: var(--wb-text-secondary);
+    background: var(--wb-canvas-muted);
+    border-color: var(--wb-border);
+  }
+}
+
+.@{class-prefix}-free-chat-history-running-hint.ant-typography {
+  margin: -6px 2px 0;
+  color: var(--wb-text-secondary);
+  font-size: 10px;
+  line-height: 16px;
 }
 
 .@{class-prefix}-free-chat-history-body {
@@ -325,6 +340,14 @@
       color: #d0c0f5;
       background: rgba(167, 130, 255, 0.13);
       border-color: rgba(167, 130, 255, 0.27);
+    }
+
+    &[disabled],
+    &[disabled]:hover,
+    &[disabled]:focus {
+      color: var(--wb-text-secondary);
+      background: var(--wb-canvas-muted);
+      border-color: var(--wb-border);
     }
   }
 

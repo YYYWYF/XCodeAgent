@@ -1,4 +1,5 @@
 import type { EditorMode } from '../../../typings'
+import type { WorkbenchPhase } from '../../../workbenchPhase'
 import type {
   AgentStage,
   ChatSessionRevisionContext,
@@ -10,6 +11,7 @@ export type SessionIdentity = {
   sessionId: string
   threadId: string
   workflowId: string
+  workbenchPhase: WorkbenchPhase
   stage?: AgentStage
   sequence?: number
   entryKey?: string
@@ -18,7 +20,13 @@ export type SessionIdentity = {
   workspaceRoot: string
 }
 
-export type SessionRunStatus = 'running' | 'stopping'
+export type SessionRunStatus = 'starting' | 'running' | 'stopping'
+
+export type SessionExecutionEntry = {
+  identity: SessionIdentity
+  status: SessionRunStatus
+  conversation: boolean
+}
 
 export function sessionRuntimeKey(
   workspaceRoot: string,
@@ -47,6 +55,7 @@ export function createSessionIdentity(input: {
   sessionId: string
   threadId: string
   workflowId: string
+  workbenchPhase: WorkbenchPhase
   stage?: AgentStage
   sequence?: number
   entryKey?: string
@@ -56,6 +65,26 @@ export function createSessionIdentity(input: {
     ...input,
     key: sessionRuntimeKey(input.workspaceRoot, input.editorMode, input.sessionId)
   }
+}
+
+/** 判断两个会话是否竞争同一应用阶段的单会话执行权，不按编辑模式拆锁。 */
+export function isSameSessionExecutionScope(
+  left: SessionIdentity,
+  right: SessionIdentity
+): boolean {
+  return (
+    left.workspaceRoot === right.workspaceRoot &&
+    left.workflowId === right.workflowId &&
+    left.workbenchPhase === right.workbenchPhase
+  )
+}
+
+/** 判断当前选中会话是否就是阶段执行权持有者，避免用局部渲染状态推断所有权。 */
+export function isSessionExecutionOwner(
+  execution: SessionExecutionEntry | undefined,
+  identity: SessionIdentity | undefined
+): boolean {
+  return Boolean(execution && identity && execution.identity.key === identity.key)
 }
 
 export function pendingDraftKey(workspaceRoot: string, editorMode: EditorMode): string {
@@ -74,6 +103,7 @@ export function sessionIdentityFromSummary(
     sessionId: summary.id,
     threadId: summary.threadId,
     workflowId: summary.workflowId,
+    workbenchPhase: summary.workbenchPhase,
     stage: summary.stage,
     sequence: summary.sequence,
     entryKey: summary.entryKey,

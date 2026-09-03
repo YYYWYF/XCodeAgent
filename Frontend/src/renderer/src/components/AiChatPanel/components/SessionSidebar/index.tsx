@@ -84,6 +84,7 @@ type SessionSidebarProps = {
   selectedEntityId: string
   selectedPageId: string
   sessionError?: string
+  sessionCreationDisabled: boolean
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
   settingsActive: boolean
@@ -121,6 +122,7 @@ export default function SessionSidebar({
   selectedEntityId,
   selectedPageId,
   sessionError,
+  sessionCreationDisabled,
   sessionRunStates,
   sessions,
   settingsActive,
@@ -144,6 +146,7 @@ export default function SessionSidebar({
 
   /** 从历史侧栏新建自由对话，并保留原有持久会话能力。 */
   const handleCreateHistorySession = (): void => {
+    if (sessionCreationDisabled) return
     onCreateFreeChatSession()
   }
 
@@ -265,8 +268,9 @@ export default function SessionSidebar({
               <button
                 aria-label="新建自由对话"
                 className={cx('free-chat-new-session')}
+                disabled={sessionCreationDisabled}
                 onClick={handleCreateHistorySession}
-                title="新建自由对话"
+                title={sessionCreationDisabled ? '当前阶段有流程未结束' : '新建自由对话'}
                 type="button"
               >
                 <PlusOutlined />
@@ -364,6 +368,7 @@ export default function SessionSidebar({
           onCreateSession={handleCreateHistorySession}
           onDeleteSession={onDeleteSession}
           onOpenSession={handleOpenHistorySession}
+          sessionCreationDisabled={sessionCreationDisabled}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
           sessions={sessions}
