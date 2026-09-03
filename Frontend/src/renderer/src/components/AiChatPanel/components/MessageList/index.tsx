@@ -60,6 +60,7 @@ import {
   workflowShouldShowProjectLaunch
 } from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
+import { phasePendingDetail } from './phasePending'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
 import {
@@ -125,8 +126,8 @@ function MessageAgentHeader({ agentKey }: { agentKey: WorkbenchPhase }): ReactEl
   )
 }
 
-/** 创建规划快照未到达时的加载卡，文案跟随当前产品/规划 Agent 身份。 */
-function PlanningPendingCard({
+/** 创建阶段快照未到达时的加载卡，文案跟随当前阶段 Agent 身份。 */
+function PhasePendingCard({
   agentKey,
   detail
 }: {
@@ -345,6 +346,7 @@ export default function MessageList({
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
+  const pendingPhaseDetail = phasePendingDetail(currentPhase)
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
   const templatePreparationVisible =
     applicationTemplatePreparationEligible &&
@@ -447,10 +449,17 @@ export default function MessageList({
               <article className={cx('ai-message', 'assistant')}>
                 <div className={cx('ai-message-content')}>
                   <MessageAgentHeader agentKey={currentPhase} />
-                  <PlanningPendingCard
+                  <PhasePendingCard
                     agentKey={currentPhase}
                     detail={currentPhase === 'planning' ? '正在恢复规划阶段…' : '正在准备需求确认…'}
                   />
+                </div>
+              </article>
+            ) : pendingPhaseDetail ? (
+              <article className={cx('ai-message', 'assistant')}>
+                <div className={cx('ai-message-content')}>
+                  <MessageAgentHeader agentKey={currentPhase} />
+                  <PhasePendingCard agentKey={currentPhase} detail={pendingPhaseDetail} />
                 </div>
               </article>
             ) : emptyContent ? (
@@ -723,7 +732,7 @@ export default function MessageList({
                           (planningActivity && message.workflow ? (
                             <PlanningWorkflowActivity workflow={message.workflow} />
                           ) : (
-                            <PlanningPendingCard
+                            <PhasePendingCard
                               agentKey={messageAgentPhase(message.workflow, currentPhase)}
                               detail={
                                 isPlanningWorkflowRunning

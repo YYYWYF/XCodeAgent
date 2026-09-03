@@ -547,7 +547,7 @@ acceptance.START
 
 `launch_project` 继续复用现有工程识别、前后端启动、健康检查和 `launch_project.progress` 事件，
 但在子图内成功状态为 `completed`；启动失败直接结束子图。恢复已有成功启动快照时不得重复启动。
-`page_acceptance` 显式映射生命周期 `PAGE_ACCEPTANCE`。当前前端“不通过，进入对话”只恢复原分栏并让普通
+`page_acceptance` 显式映射生命周期 `PAGE_ACCEPTANCE`。验收项目启动期间与预览就绪后都保留验收 Agent 对话区，右侧预览以分栏形式打开；当前前端“不通过，进入对话”让普通
 消息走 `/conversation/run`，不提交验收结果；“验收通过”仅提示功能暂未开放，后端 accepted/finalize 能力保留。
 
 验收运行态的 AG-UI 最终投影必须包含 `previewUrl`、`launchResult` 和 `acceptanceRequest`，而启动过程的实时进度

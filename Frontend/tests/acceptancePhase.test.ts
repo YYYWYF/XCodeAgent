@@ -13,6 +13,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 import { projectLaunchProgress } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/projectLaunchProgress'
+import { phasePendingDetail } from '../src/renderer/src/components/AiChatPanel/components/MessageList/phasePending'
 import { sessionsForWorkbenchPhase } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
 import type {
   ApplicationLifecycle,
@@ -233,4 +234,14 @@ test('验收 Agent 头像拥有可见的阶段背景', () => {
     messageListStyles,
     /\.@\{class-prefix\}-ai-message-agent\.@\{class-prefix\}-acceptance\s+\.@\{class-prefix\}-ai-message-agent-avatar\s*\{[^}]*background:/s
   )
+})
+
+test('验收空白会话展示验收 Agent 启动提示且预览不隐藏对话区', () => {
+  const panelStyles = readFileSync(
+    path.join(process.cwd(), 'src/renderer/src/components/AiChatPanel/AiChatPanel.less'),
+    'utf8'
+  )
+
+  assert.equal(phasePendingDetail('acceptance'), '正在启动项目准备验收…')
+  assert.doesNotMatch(panelStyles, /acceptance-preview-focus/)
 })

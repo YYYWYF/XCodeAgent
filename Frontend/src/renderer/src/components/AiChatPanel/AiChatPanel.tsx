@@ -3361,15 +3361,6 @@ export default function AiChatPanel({
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
   const acceptanceAwaiting = displayedPlanExecutionMode === 'awaiting_acceptance'
-  const acceptanceConversationActive = Boolean(
-    acceptanceConversationSessionKey && activeSession?.key === acceptanceConversationSessionKey
-  )
-  const acceptancePreviewFocus =
-    activeWorkbenchPhase === 'acceptance' &&
-    acceptanceAwaiting &&
-    showRightPanel &&
-    rightPanel?.type === 'preview' &&
-    !acceptanceConversationActive
   const activeSessionTargetKey = currentStageSessionTargetKey
   const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const activeWorkflowMatchesTarget = Boolean(
@@ -3537,7 +3528,7 @@ export default function AiChatPanel({
     setRightPanel(undefined)
   }
 
-  /** 验收不通过只恢复原对话区和分栏，不向后端提交验收结果。 */
+  /** 验收不通过只解锁当前验收会话的普通对话，不向后端提交验收结果。 */
   const handleAcceptanceReject = useCallback((): void => {
     setAcceptanceConversationSessionKey(activeSession?.key || draftKey)
   }, [activeSession?.key, draftKey])
@@ -4247,7 +4238,6 @@ export default function AiChatPanel({
         showRightPanel && 'embedded-preview-open',
         rightPanel?.type === 'diff' && 'diff-panel-open',
         acceptanceAwaiting && 'acceptance-awaiting',
-        acceptancePreviewFocus && 'acceptance-preview-focus',
         elementInspectionActive && 'element-inspection-active',
         splitDragging && 'split-dragging'
       )}
