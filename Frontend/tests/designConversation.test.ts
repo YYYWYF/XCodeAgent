@@ -24,7 +24,6 @@ import {
   planningWorkflowUiDesignSkipped,
   retainApplicationPlanningInterrupt,
   shouldBackfillPlanningWorkflow,
-  shouldCreatePlanningWindow,
   shouldSuppressConfirmedTechnicalPlanTransitionChunk
 } from '../src/renderer/src/components/Welcome/planningWorkflowState'
 import type {
@@ -1058,9 +1057,6 @@ assert.equal(
   } as WorkflowRunPayload),
   true
 )
-assert.equal(shouldCreatePlanningWindow(undefined), true)
-assert.equal(shouldCreatePlanningWindow('planning-conversation-thread'), false)
-
 const entryAuthoritativeWorkflow = {
   ...summaryOnlyQuestionsWorkflow,
   summary: {

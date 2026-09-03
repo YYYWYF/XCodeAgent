@@ -166,7 +166,7 @@ export function useActiveApplicationPlannings({
     [commitPlannings]
   )
 
-  // 将隐藏规划窗口捕获到的模型错误同步到工作台，避免后台失败只剩空白占位。
+  // 将后台规划容器捕获到的模型错误同步到工作台，避免后台失败只剩空白占位。
   const updatePlanningError = useCallback(
     (applicationId: string, error?: string): void => {
       const normalizedError = error?.trim() || undefined

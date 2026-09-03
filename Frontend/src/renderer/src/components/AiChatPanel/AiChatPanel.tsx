@@ -257,13 +257,11 @@ type Props = {
   onSessionHistoryReadyChange: (ready: boolean) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
-  /** 设计阶段规划 Graph 的错误，来自仍在后台挂载的规划窗口。 */
+  /** 设计阶段规划 Graph 的错误，来自仍在后台挂载的规划容器。 */
   planningError?: string
-  /** 从工作台错误卡片重新打开规划窗口，复用规划窗口内的重试动作。 */
+  /** 从工作台错误卡片重试规划 Graph。 */
   onRetryPlanning?: () => void
   planningThreadId?: string
-  /** 规划 Agent 独立聊天会话标识；后端规划恢复仍使用 planningThreadId。 */
-  planningConversationThreadId?: string
   planningWorkflow?: WorkflowRunPayload
   /** 仅冷恢复时允许从 .xcodeagent 读取当前阶段规划产物。 */
   restorePlanningArtifactsFromDisk?: boolean
@@ -803,7 +801,6 @@ export default function AiChatPanel({
   planningError,
   onRetryPlanning,
   planningThreadId,
-  planningConversationThreadId,
   planningWorkflow,
   restorePlanningArtifactsFromDisk,
   theme,
@@ -2045,7 +2042,7 @@ export default function AiChatPanel({
     [handleSend]
   )
 
-  // 规划窗口只签发 continuation；工作台负责准备、启动并切换本次 revision 的独立开发会话。
+  // 规划 Graph 只签发 continuation；工作台负责准备、启动并切换本次 revision 的独立开发会话。
   useEffect(() => {
     // 冷启动先等完整会话列表恢复，避免用空列表误判 revision 来源会话不存在。
     if (loadingSessions) return
@@ -2495,9 +2492,7 @@ export default function AiChatPanel({
             activeFormalRevision.status
           )))
   )
-  const activePlanningConversationThreadId = formalRevisionPlanningActive
-    ? localPlanningConversationThreadId
-    : planningConversationThreadId || localPlanningConversationThreadId
+  const activePlanningConversationThreadId = localPlanningConversationThreadId
   const businessPlanningSessionActive = Boolean(
     (formalRevisionPlanningActive &&
       activeFormalRevision &&
@@ -2589,7 +2584,7 @@ export default function AiChatPanel({
             injectPlanningChunk(identity.key, chunk)
           }
         }
-        // 阶段窗口回放完缓存后仍无消息时注入即时占位，避免只显示 Agent 头像。
+        // 规划会话回放完缓存后仍无消息时注入即时占位，避免只显示 Agent 头像。
         const currentMsgs = getSessionMessagesRef.current(identity.key)
         if (currentMsgs.length === 0) {
           const placeholderId = Date.now() * 1000 + (planningMessageIdRef.current++ % 1000)

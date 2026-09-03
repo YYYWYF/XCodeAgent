@@ -4,32 +4,6 @@ const AGENT_ARG_PREFIX = '--xcode-agent-base-url=';
 const agentBaseUrl =
   process.argv.find((argument) => argument.startsWith(AGENT_ARG_PREFIX))?.slice(AGENT_ARG_PREFIX.length) ||
   'http://127.0.0.1:8000';
-const PLANNING_APPLICATION_ARG_PREFIX = '--xcode-agent-planning-application-id=';
-const PLANNING_GRAPH_THREAD_ARG_PREFIX = '--xcode-agent-planning-graph-thread-id=';
-const PLANNING_CONVERSATION_THREAD_ARG_PREFIX = '--xcode-agent-planning-conversation-thread-id=';
-
-/** 安全读取 URI 编码的 Electron 启动参数，格式异常时按未提供处理。 */
-function readEncodedArgument(prefix: string): string {
-  const rawValue = process.argv.find((argument) => argument.startsWith(prefix))?.slice(prefix.length);
-  if (!rawValue) return '';
-  try {
-    return decodeURIComponent(rawValue).trim();
-  } catch {
-    return '';
-  }
-}
-const planningApplicationId = readEncodedArgument(PLANNING_APPLICATION_ARG_PREFIX);
-const planningGraphThreadId = readEncodedArgument(PLANNING_GRAPH_THREAD_ARG_PREFIX);
-const planningConversationThreadId = readEncodedArgument(PLANNING_CONVERSATION_THREAD_ARG_PREFIX);
-const launchContext =
-  planningApplicationId && planningGraphThreadId && planningConversationThreadId
-    ? {
-        applicationId: planningApplicationId,
-        phase: 'planning',
-        graphThreadId: planningGraphThreadId,
-        conversationThreadId: planningConversationThreadId,
-      }
-    : undefined;
 
 type ProjectPreviewWorkspacePayload = {
   workspaceRoot: string
@@ -42,7 +16,6 @@ const xcodeAgentApi = {
   isElectron: true,
   agentBaseUrl,
   platform: process.platform,
-  launchContext,
   auth: {
     login: () => ipcRenderer.invoke('auth:login'),
     status: () => ipcRenderer.invoke('auth:status'),
@@ -107,9 +80,6 @@ const xcodeAgentApi = {
       }
       return ipcRenderer.invoke('browser:open-report-file', reportPath);
     },
-  },
-  windows: {
-    openPlanning: (payload) => ipcRenderer.invoke('windows:open-planning', payload),
   },
   projectPreview: {
     registerWorkspace: (payload: ProjectPreviewWorkspacePayload) =>

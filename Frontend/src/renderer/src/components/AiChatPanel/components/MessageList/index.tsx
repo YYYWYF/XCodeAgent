@@ -473,14 +473,14 @@ export default function MessageList({
                 return null
               }
               // 以 activePlannings 的当前权威阶段收口冲突消息：保留 UI 设计稿历史，
-              // 只隐藏过早生成的 TechnicalPlan，进入规划窗口后也不回显旧入口卡。
+              // 只隐藏过早生成的 TechnicalPlan，进入规划阶段后也不回显旧入口卡。
               if (
                 designPhasePlanning &&
                 isSupersededPlanningPhaseMessage(message, currentPlanningPhase)
               ) {
                 return null
               }
-              // TechnicalPlan 已开始后，入口动作已经消费；不在规划窗口继续展示可点击入口卡。
+                // TechnicalPlan 已开始后，入口动作已经消费；不在规划阶段继续展示可点击入口卡。
               if (
                 designPhasePlanning &&
                 isSupersededPlanningStageEntryMessage(messages, messageIndex)

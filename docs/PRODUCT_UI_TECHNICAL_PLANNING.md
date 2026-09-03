@@ -114,7 +114,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 负责人：产品。
 
-生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。用户也可以明确跳过 UI 设计；此时不生成页面 TSX，Manifest 使用 `confirmation_status: skipped` 和空 `pages`。确认或跳过都只到达 `awaiting_planning_stage_entry`，用户点击绿色入口卡后，Electron 客户端为该应用创建或聚焦唯一的规划窗口。窗口跳过欢迎页与通用工作台入场，首屏直接锁定到 Planning 阶段，只展示 TechnicalPlan 规划文档。启动上下文使用 `graphThreadId` 恢复 lifecycle 中的原初始化 Graph checkpoint，并用独立的 `conversationThreadId` 创建规划 Agent 前端会话；只有该规划窗口提交一次 `enter_planning`，避免复制或丢失已确认的 RequirementSpec、ProductPlan 与 UiDesign 状态。
+生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。用户也可以明确跳过 UI 设计；此时不生成页面 TSX，Manifest 使用 `confirmation_status: skipped` 和空 `pages`。确认或跳过都只到达 `awaiting_planning_stage_entry`，用户点击绿色入口卡后，当前工作台为该应用创建或恢复独立的 PLAN StageSession，并原地切换到 Planning 阶段。后端继续使用 lifecycle 中的原初始化 Graph checkpoint，规划 Agent 使用独立的 conversation thread；只有当前工作台提交一次 `enter_planning`，避免复制或丢失已确认的 RequirementSpec、ProductPlan 与 UiDesign 状态。
 
 `ui-designs.json` 使用 `ui-manifest.v3`，它是 React 稿的引用与校验证据，不是另一份页面详设，也不是第二份产品事实。正式落盘文件不保存 TSX 正文，不重复页面名称、正式路由、描述、角色、状态要求、业务标签或验收标准；确认界面需要这些文案时，仅从当前 ProductPlan 临时投影。核心结构为：
 

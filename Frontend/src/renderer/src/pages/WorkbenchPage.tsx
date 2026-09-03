@@ -25,8 +25,7 @@ import { cx, previewOrigin } from '../utils'
 import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
 import {
   hasApplicationEnteredDevelopment,
-  subscribeApplicationDevelopmentEntry,
-  type WorkbenchPhase
+  subscribeApplicationDevelopmentEntry
 } from '../workbenchPhase'
 import './WorkbenchPage.less'
 
@@ -53,18 +52,14 @@ type Props = {
   ) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
-  /** 设计阶段后台规划窗口的模型错误。 */
+  /** 设计阶段后台规划任务的模型错误。 */
   planningError?: string
-  /** 从工作台错误卡片重新打开设计阶段规划窗口。 */
+  /** 从工作台错误卡片重试设计阶段规划任务。 */
   onRetryPlanning?: () => void
   planningThreadId?: string
   planningWorkflow?: WorkflowRunPayload
   /** 仅冷恢复时允许从 .xcodeagent 读取当前阶段规划产物。 */
   restorePlanningArtifactsFromDisk?: boolean
-  /** 独立阶段窗口的首屏阶段，避免 lifecycle 拉取前短暂显示研发阶段。 */
-  initialPhase?: WorkbenchPhase
-  /** 规划 Agent 独立聊天会话标识，不替代后端 Graph checkpoint thread。 */
-  planningConversationThreadId?: string
   theme: Theme
 }
 
@@ -92,8 +87,6 @@ function WorkbenchPage({
   planningThreadId,
   planningWorkflow,
   restorePlanningArtifactsFromDisk,
-  initialPhase,
-  planningConversationThreadId,
   theme
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
@@ -117,10 +110,7 @@ function WorkbenchPage({
   const [previewLaunchError, setPreviewLaunchError] = useState('')
   // 预览启动中状态：驱动左侧上下文头“预览页面”按钮的 loading 呈现。
   const [previewLaunchLoading, setPreviewLaunchLoading] = useState(false)
-  const stageWindow = initialPhase === 'planning'
-  const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>(() =>
-    stageWindow ? 'ready' : 'loading'
-  )
+  const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const entryStartedAtRef = useRef(Date.now())
   const launchedWorkspaceRef = useRef<string>()
@@ -363,11 +353,10 @@ function WorkbenchPage({
 
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
-      {developmentPlanningPagesLoaded || stageWindow ? (
+      {developmentPlanningPagesLoaded ? (
         <WorkbenchPhaseProvider
           applicationId={workspaceApplication.id}
           lifecycle={applicationLifecycle}
-          initialPhase={initialPhase}
         >
           <div className={cx('workbench-shell-column')}>
             <WorkbenchTopBar
@@ -408,7 +397,6 @@ function WorkbenchPage({
                 planningError={planningError}
                 onRetryPlanning={onRetryPlanning}
                 planningThreadId={planningThreadId}
-                planningConversationThreadId={planningConversationThreadId}
                 planningWorkflow={planningWorkflow}
                 restorePlanningArtifactsFromDisk={restorePlanningArtifactsFromDisk}
                 theme={theme}

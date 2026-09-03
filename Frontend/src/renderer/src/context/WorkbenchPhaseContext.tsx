@@ -41,18 +41,15 @@ const WorkbenchPhaseContext = createContext<WorkbenchPhaseContextValue | null>(n
 export function WorkbenchPhaseProvider({
   applicationId,
   lifecycle,
-  initialPhase,
   children
 }: {
   applicationId: string;
   lifecycle?: ApplicationLifecycle;
-  initialPhase?: WorkbenchPhase;
   children: ReactNode;
 }): JSX.Element {
   const derivedPhase = deriveWorkbenchPhase(lifecycle);
-  // 优先使用独立规划窗口传入的首屏阶段，否则恢复用户上次手动选择的阶段。
+  // 恢复用户上次手动选择的阶段；未覆盖时始终跟随后端生命周期。
   const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>(() => {
-    if (initialPhase) return { [applicationId]: initialPhase };
     const persistedPhase = getPersistedWorkbenchPhase(applicationId);
     return persistedPhase ? { [applicationId]: persistedPhase } : {};
   });
