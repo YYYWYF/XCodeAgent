@@ -811,48 +811,166 @@ export default function AiChatPanel({
   // 临时对话仅控制覆盖层可见性，不切换当前工作流会话或持久化上下文。
   const [temporaryChatOpen, setTemporaryChatOpen] = useState(false)
   // 设计阶段自由变更是主规划 Workflow 的显式中断模式，默认保持锁定。
-  const [designChangeUnlocked, setDesignChangeUnlocked] = useState(false)
   const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
   const [generatingDetailTargetKey, setGeneratingDetailTargetKey] = useState('')
-  const [previewError, setPreviewError] = useState('')
   // 验收阶段拒绝结果仅恢复普通对话，不改变后端 page_acceptance 待验收状态。
   const [acceptanceConversationSessionKey, setAcceptanceConversationSessionKey] = useState('')
-  const [elementInspectionActive, setElementInspectionActive] = useState(false)
-  const [inspectedElementContext, setInspectedElementContext] = useState<InspectedElementContext>()
-  // UI 设计稿预览：右侧"UI设计稿"tab 当前选中的页面 id（由中间区卡片或右侧列表驱动）。
-  const [uiDesignActivePageId, setUiDesignActivePageId] = useState('')
-  // UI 设计稿：当前正在执行动作（选模板/换一换）的 pageId 集合，用于右侧预览逐页显示加载态。
-  const [uiDesignActingPageIds, setUiDesignActingPageIds] = useState<string[]>([])
-  // 设计阶段右侧文档：仅缓存用户实际打开过的 Markdown；确认完成后按需从磁盘读取，避免右侧 tab 显示待生成。
-  const [designDocFileContent, setDesignDocFileContent] = useState<Record<string, string>>({})
-  const [designDocFilePath, setDesignDocFilePath] = useState<Record<string, string>>({})
-  // TechnicalPlan 右侧展示使用内部 JSON，Markdown 仅作为正式用户工件保留。
-  const [technicalPlanFile, setTechnicalPlanFile] = useState<Record<string, unknown>>()
-  const [productPlanFile, setProductPlanFile] = useState<Record<string, unknown>>()
-  const [requirementSpecFile, setRequirementSpecFile] = useState<Record<string, unknown>>()
-  const [uiDesignFile, setUiDesignFile] = useState<Record<string, unknown>>()
-  const [technicalPlanFileLoading, setTechnicalPlanFileLoading] = useState(false)
+  // 元素审查：是否激活 + 当前审查的元素上下文。两者语义相关，合并减少 state 数量。
+  const [inspection, setInspection] = useState<{
+    active: boolean
+    context: InspectedElementContext | undefined
+  }>({ active: false, context: undefined })
+  // 兼容别名：保持下游调用点不变。
+  const elementInspectionActive = inspection.active
+  const inspectedElementContext = inspection.context
+  const setElementInspectionActive = useCallback(
+    (active: boolean) => setInspection((s) => ({ ...s, active })),
+    []
+  )
+  const setInspectedElementContext = useCallback(
+    (context: InspectedElementContext | undefined | ((prev: InspectedElementContext | undefined) => InspectedElementContext | undefined)) =>
+      setInspection((s) => ({
+        ...s,
+        context: typeof context === 'function' ? context(s.context) : context
+      })),
+    []
+  )
+  // UI 设计稿预览：当前选中页面 id + 正在执行动作的 pageId 集合。两者语义相关，合并减少 state 数量。
+  const [uiDesignPreview, setUiDesignPreview] = useState<{
+    activePageId: string
+    actingPageIds: string[]
+  }>({ activePageId: '', actingPageIds: [] })
+  // 兼容别名：保持下游调用点不变。
+  const uiDesignActivePageId = uiDesignPreview.activePageId
+  const uiDesignActingPageIds = uiDesignPreview.actingPageIds
+  const setUiDesignActivePageId = useCallback(
+    (activePageId: string) => setUiDesignPreview((s) => ({ ...s, activePageId })),
+    []
+  )
+  const setUiDesignActingPageIds = useCallback(
+    (actingPageIds: string[]) => setUiDesignPreview((s) => ({ ...s, actingPageIds })),
+    []
+  )
+  // 设计阶段右侧文档：文件内容/路径缓存 + 各产物 JSON + 加载态。
+  // 这 7 个 state 在磁盘恢复时一起 set（行 ~1161-1176），合并减少渲染批次。
+  // 注意：不能叫 designDocs，因为行 ~1092 已有派生变量 designDocs。
+  const [designDocState, setDesignDocState] = useState<{
+    fileContent: Record<string, string>
+    filePath: Record<string, string>
+    technicalPlan: Record<string, unknown> | undefined
+    productPlan: Record<string, unknown> | undefined
+    requirementSpec: Record<string, unknown> | undefined
+    uiDesign: Record<string, unknown> | undefined
+    loading: boolean
+  }>({
+    fileContent: {},
+    filePath: {},
+    technicalPlan: undefined,
+    productPlan: undefined,
+    requirementSpec: undefined,
+    uiDesign: undefined,
+    loading: false
+  })
+  // 兼容别名：保持下游调用点不变。
+  const designDocFileContent = designDocState.fileContent
+  const designDocFilePath = designDocState.filePath
+  const technicalPlanFile = designDocState.technicalPlan
+  const productPlanFile = designDocState.productPlan
+  const requirementSpecFile = designDocState.requirementSpec
+  const uiDesignFile = designDocState.uiDesign
+  const technicalPlanFileLoading = designDocState.loading
+  const setDesignDocFileContent = useCallback(
+    (fileContent: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) =>
+      setDesignDocState((s) => ({
+        ...s,
+        fileContent: typeof fileContent === 'function' ? fileContent(s.fileContent) : fileContent
+      })),
+    []
+  )
+  const setDesignDocFilePath = useCallback(
+    (filePath: Record<string, string>) => setDesignDocState((s) => ({ ...s, filePath })),
+    []
+  )
+  const setTechnicalPlanFile = useCallback(
+    (technicalPlan: Record<string, unknown> | undefined) => setDesignDocState((s) => ({ ...s, technicalPlan })),
+    []
+  )
+  const setProductPlanFile = useCallback(
+    (productPlan: Record<string, unknown> | undefined) => setDesignDocState((s) => ({ ...s, productPlan })),
+    []
+  )
+  const setRequirementSpecFile = useCallback(
+    (requirementSpec: Record<string, unknown> | undefined) => setDesignDocState((s) => ({ ...s, requirementSpec })),
+    []
+  )
+  const setUiDesignFile = useCallback(
+    (uiDesign: Record<string, unknown> | undefined) => setDesignDocState((s) => ({ ...s, uiDesign })),
+    []
+  )
+  const setTechnicalPlanFileLoading = useCallback(
+    (loading: boolean) => setDesignDocState((s) => ({ ...s, loading })),
+    []
+  )
   // 当前工作台进入规划阶段时创建独立聊天线程；后端 Graph 继续复用原 planningThreadId。
   const [localPlanningConversationThreadId, setLocalPlanningConversationThreadId] = useState('')
   // 同一 impact 只允许创建一个前端二次修改会话，失败后才放开重试。
   const designRevisionStartInteractionRef = useRef('')
   const formalRevisionSessionIdentitiesRef = useRef<Record<string, SessionIdentity>>({})
   const formalRevisionSourcePhasesRef = useRef<Record<string, WorkbenchPhase>>({})
-  const [pendingRevisionContinuation, setPendingRevisionContinuation] = useState<{
-    continuation: WorkflowRevisionContinuation
-    reject: (reason?: unknown) => void
-    resolve: () => void
-    sourceIdentity: SessionIdentity
-    targetIdentity: SessionIdentity
-  }>()
+  // 二次修改：待处理的 continuation + 设计变更解锁标记。两者语义相关，合并减少 state 数量。
+  const [revisionState, setRevisionState] = useState<{
+    pendingContinuation: {
+      continuation: WorkflowRevisionContinuation
+      reject: (reason?: unknown) => void
+      resolve: () => void
+      sourceIdentity: SessionIdentity
+      targetIdentity: SessionIdentity
+    } | undefined
+    designChangeUnlocked: boolean
+  }>({ pendingContinuation: undefined, designChangeUnlocked: false })
+  // 兼容别名：保持下游调用点不变。
+  const pendingRevisionContinuation = revisionState.pendingContinuation
+  const designChangeUnlocked = revisionState.designChangeUnlocked
+  const setPendingRevisionContinuation = useCallback(
+    (pendingContinuation: typeof revisionState.pendingContinuation) =>
+      setRevisionState((s) => ({ ...s, pendingContinuation })),
+    []
+  )
+  const setDesignChangeUnlocked = useCallback(
+    (designChangeUnlocked: boolean) =>
+      setRevisionState((s) => ({ ...s, designChangeUnlocked })),
+    []
+  )
   // 同一 change 的 handoff 在当前进程只执行一次；失败后删除，允许用户显式重试。
   const revisionDevelopmentHandoffPromisesRef = useRef<Record<string, Promise<void>>>({})
   // 同一 lifecycle execution 只恢复一次缺失的 DEVELOPMENT 会话和规划回执。
   const revisionDevelopmentRecoveryRef = useRef('')
-  const [runtimePreviewBaseUrl, setRuntimePreviewBaseUrl] = useState(() =>
-    previewOrigin(previewBaseUrl)
+  // 预览：错误信息 + 运行时 baseUrl + 启动错误。三者强联动（一起 set），合并减少 state 数量。
+  const [preview, setPreview] = useState<{
+    error: string
+    baseUrl: string
+    launchError: string | undefined
+  }>(() => ({
+    error: '',
+    baseUrl: previewOrigin(previewBaseUrl),
+    launchError: previewLaunchError
+  }))
+  // 兼容别名：保持下游调用点不变。
+  const previewError = preview.error
+  const runtimePreviewBaseUrl = preview.baseUrl
+  const runtimePreviewLaunchError = preview.launchError
+  const setPreviewError = useCallback(
+    (error: string) => setPreview((s) => ({ ...s, error })),
+    []
   )
-  const [runtimePreviewLaunchError, setRuntimePreviewLaunchError] = useState(previewLaunchError)
+  const setRuntimePreviewBaseUrl = useCallback(
+    (baseUrl: string) => setPreview((s) => ({ ...s, baseUrl })),
+    []
+  )
+  const setRuntimePreviewLaunchError = useCallback(
+    (launchError: string | undefined) => setPreview((s) => ({ ...s, launchError })),
+    []
+  )
   const handledPreviewTargetRef = useRef('')
   // 已处理过完成跳转的实体设计运行，避免打开历史会话时再次跳回信息面板。
   const handledEntityDesignRunRef = useRef<Set<string>>(new Set())
