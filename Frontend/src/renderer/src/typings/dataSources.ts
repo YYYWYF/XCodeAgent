@@ -18,6 +18,14 @@ export type DataSourceParameter = {
   description: string
 }
 
+/** 使用 JSON Schema 标准关键词保存请求体或响应体的结构与字段说明。 */
+export type DataSourceJsonStructure = {
+  type: DataSourceFieldType | DataSourceFieldType[]
+  description?: string
+  properties?: Record<string, DataSourceJsonStructure>
+  items?: DataSourceJsonStructure
+}
+
 /** 描述外部 API 操作模板。 */
 export type DataSourceOperation = {
   id: string
@@ -29,10 +37,8 @@ export type DataSourceOperation = {
   headers: DataSourceHeader[]
   requestSample?: unknown
   responseSample?: unknown
-  requestFieldDescriptions: Record<string, string>
-  responseFieldDescriptions: Record<string, string>
-  requestFieldTypes: Record<string, DataSourceFieldType>
-  responseFieldTypes: Record<string, DataSourceFieldType>
+  requestStructure: DataSourceJsonStructure | null
+  responseStructure: DataSourceJsonStructure | null
 }
 
 /** 描述外部 API 域名下的普通接口目录。 */

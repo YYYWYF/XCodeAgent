@@ -483,16 +483,16 @@ class DataSourcesServiceTests(unittest.TestCase):
                                 "path": "/products",
                                 "requestSample": {"filter.value": "书", "items": [{"sku": "A1", "name": "商品"}]},
                                 "responseSample": {"data": {"items": [{"sku": "A1"}], "total": 1}},
-                                "requestFieldDescriptions": {
-                                    '$["filter.value"]': "过滤文本",
-                                    '$["items"][]': "请求商品数组元素",
-                                    '$["items"][]["sku"]': "商品编码",
-                                },
-                                "responseFieldDescriptions": {
-                                    '$["data"]': "响应包装对象",
-                                    '$["data"]["items"][]': "响应商品元素",
-                                    '$["data"]["total"]': "结果总数",
-                                },
+                                "requestStructure": {"type": "object", "properties": {
+                                    "filter.value": {"type": "string", "description": "过滤文本"},
+                                    "items": {"type": "array", "items": {"type": "object", "description": "请求商品数组元素", "properties": {"sku": {"type": "string", "description": "商品编码"}}}},
+                                }},
+                                "responseStructure": {"type": "object", "properties": {
+                                    "data": {"type": "object", "description": "响应包装对象", "properties": {
+                                        "items": {"type": "array", "items": {"type": "object", "description": "响应商品元素"}},
+                                        "total": {"type": "integer", "description": "结果总数"},
+                                    }},
+                                }},
                             }
                         ],
                     }
@@ -501,8 +501,8 @@ class DataSourcesServiceTests(unittest.TestCase):
         )
 
         operation = created.sources[0].directories[1].operations[0]
-        self.assertEqual(operation.request_field_descriptions['$["filter.value"]'], "过滤文本")
-        self.assertEqual(operation.response_field_descriptions['$["data"]["total"]'], "结果总数")
+        self.assertEqual(operation.request_structure.properties["filter.value"].description, "过滤文本")
+        self.assertEqual(operation.response_structure.properties["data"].properties["total"].description, "结果总数")
         source_id = created.sources[0].id
         operation_id = created.sources[0].directories[1].operations[0].id
         persisted_operation = json.loads(
@@ -516,7 +516,7 @@ class DataSourcesServiceTests(unittest.TestCase):
                 / f"{operation_id}.json"
             ).read_text(encoding="utf-8")
         )
-        self.assertIn('$["items"][]["sku"]', persisted_operation["requestFieldDescriptions"])
+        self.assertEqual(persisted_operation["requestStructure"]["properties"]["items"]["items"]["properties"]["sku"]["description"], "商品编码")
 
         updated = mutate_catalog(
             self.workspace,
@@ -538,8 +538,10 @@ class DataSourcesServiceTests(unittest.TestCase):
             },
         )
         updated_operation = updated.sources[0].directories[0].operations[0]
-        self.assertEqual(updated_operation.request_field_descriptions, {'$["filter.value"]': "过滤文本"})
-        self.assertEqual(updated_operation.response_field_descriptions, {'$["data"]': "响应包装对象", '$["data"]["total"]': "结果总数"})
+        self.assertEqual(set(updated_operation.request_structure.properties), {"filter.value"})
+        self.assertEqual(updated_operation.request_structure.properties["filter.value"].description, "过滤文本")
+        self.assertEqual(set(updated_operation.response_structure.properties["data"].properties), {"total"})
+        self.assertEqual(updated_operation.response_structure.properties["data"].description, "响应包装对象")
 
     def test_json_field_descriptions_reject_invalid_path_and_length(self) -> None:
         """字段说明保存时应清理无效路径，并拒绝超过单条长度限制的文本。"""
@@ -553,12 +555,14 @@ class DataSourcesServiceTests(unittest.TestCase):
                 "baseUrl": "api.example.com",
                 "directories": [{"name": "默认", "operations": [{
                     "name": "接口", "method": "GET", "path": "/", "requestSample": {"id": 1},
-                    "requestFieldDescriptions": {'$["missing"]': "不存在", '$["id"]': "有效"},
+                    "requestStructure": {"type": "object", "properties": {"missing": {"type": "string", "description": "不存在"}, "id": {"type": "integer", "description": "有效"}}},
                 }]}],
             },
         )
-        self.assertEqual(cleaned.sources[0].directories[1].operations[0].request_field_descriptions, {'$["id"]': "有效"})
-        with self.assertRaisesRegex(DataSourceError, "不能超过 1024"):
+        structure = cleaned.sources[0].directories[1].operations[0].request_structure
+        self.assertEqual(set(structure.properties), {"id"})
+        self.assertEqual(structure.properties["id"].description, "有效")
+        with self.assertRaisesRegex(ValueError, "1024"):
             mutate_catalog(
                 self.workspace,
                 action="create",
@@ -568,7 +572,7 @@ class DataSourcesServiceTests(unittest.TestCase):
                     "baseUrl": "api.example.com",
                     "directories": [{"name": "默认", "operations": [{
                         "name": "接口", "method": "GET", "path": "/", "requestSample": {"id": 1},
-                        "requestFieldDescriptions": {'$["id"]': "x" * 1025},
+                        "requestStructure": {"type": "object", "properties": {"id": {"type": "integer", "description": "x" * 1025}}},
                     }]}],
                 },
             )

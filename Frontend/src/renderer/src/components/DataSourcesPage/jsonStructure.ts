@@ -1,3 +1,5 @@
+import type { DataSourceJsonStructure } from '../../typings/dataSources'
+
 /** 描述 JSON 结构推导过程中使用的节点形状。 */
 export type JsonShape = {
   kind: string
@@ -107,6 +109,37 @@ export function normalizeJsonFieldDescriptions(value: unknown, descriptions: Rec
 export function inferJsonStructure(value: unknown): { shape: JsonShape; truncated: boolean } {
   const context: ShapeContext = { depthLimit: 8, nodeLimit: 300, nodes: 0, truncated: false }
   return { shape: inferShape(value, context, 0), truncated: context.truncated }
+}
+
+/** 把已保存的完整结构投影到只读树，显示截断不会修改或重新推导持久化内容。 */
+export function projectStoredJsonStructure(structure: DataSourceJsonStructure): { shape: JsonShape; truncated: boolean; descriptions: Record<string, string> } {
+  const descriptions: Record<string, string> = Object.create(null)
+  const context: ShapeContext = { depthLimit: 8, nodeLimit: 300, nodes: 0, truncated: false }
+  /** 只读取结构节点自身的类型和说明，并在界面层限制可见节点数。 */
+  const visit = (node: DataSourceJsonStructure, path: string, depth: number): JsonShape => {
+    if (context.nodes >= context.nodeLimit) {
+      context.truncated = true
+      return emptyShape('…')
+    }
+    context.nodes += 1
+    if (depth > context.depthLimit) {
+      context.truncated = true
+      return emptyShape('…')
+    }
+    descriptions[path] = node.description || ''
+    const types = Array.isArray(node.type) ? node.type : [node.type]
+    const shape = emptyShape(types.join(' | '))
+    if (node.items) shape.arrayItem = visit(node.items, jsonArrayItemPath(path), depth + 1)
+    for (const [name, child] of Object.entries(node.properties || {})) {
+      if (context.nodes >= context.nodeLimit) { context.truncated = true; break }
+      shape.childOrder.push(name)
+      shape.children[name] = visit(child, jsonPropertyPath(path, name), depth + 1)
+    }
+    shape.kind = types.map((type) => type === 'array' ? shape.arrayItem ? `array<${shape.arrayItem.kind}>` : 'array（空）' : type).join(' | ')
+    return shape
+  }
+  const shape = visit(structure, '$', 0)
+  return { shape, truncated: context.truncated, descriptions }
 }
 
 /** 安全格式化 JSON 样例，兼容非对象值和无法序列化的运行时值。 */

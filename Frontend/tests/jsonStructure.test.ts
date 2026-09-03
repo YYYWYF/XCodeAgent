@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { collectJsonFieldPaths, inferJsonStructure, jsonPropertyPath, normalizeJsonFieldDescriptions, parseJsonSampleText } from '../src/renderer/src/components/DataSourcesPage/jsonStructure'
 import './jsonFieldTypes.test'
+import './jsonSchema.test'
 
 const nested = inferJsonStructure({ user: { id: 1, name: 'Ada' }, items: [{ name: 'one' }, { name: 'two', active: true }] })
 assert.equal(nested.shape.kind, 'object')

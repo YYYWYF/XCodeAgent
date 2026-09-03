@@ -21,7 +21,7 @@ from app.services.database_crypto import DatabaseCryptoError, decrypt_password, 
 from app.services.data_source_json_fields import (
     DataSourceFieldType,
     DataSourceJsonFieldError,
-    MAX_FIELD_DESCRIPTIONS,
+    JsonStructureNode,
     PATH_FIELD_TYPES,
     normalize_operation_fields,
     validate_operation_fields,
@@ -73,18 +73,8 @@ class ApiOperation(DataSourceModel):
     headers: list[HeaderEntry] = Field(default_factory=list, max_length=50)
     request_sample: Any = Field(default=None, alias="requestSample")
     response_sample: Any = Field(default=None, alias="responseSample")
-    request_field_descriptions: dict[str, str] = Field(
-        default_factory=dict, alias="requestFieldDescriptions", max_length=MAX_FIELD_DESCRIPTIONS
-    )
-    response_field_descriptions: dict[str, str] = Field(
-        default_factory=dict, alias="responseFieldDescriptions", max_length=MAX_FIELD_DESCRIPTIONS
-    )
-    request_field_types: dict[str, DataSourceFieldType] = Field(
-        default_factory=dict, alias="requestFieldTypes", max_length=MAX_FIELD_DESCRIPTIONS
-    )
-    response_field_types: dict[str, DataSourceFieldType] = Field(
-        default_factory=dict, alias="responseFieldTypes", max_length=MAX_FIELD_DESCRIPTIONS
-    )
+    request_structure: JsonStructureNode | None = Field(default=None, alias="requestStructure")
+    response_structure: JsonStructureNode | None = Field(default=None, alias="responseStructure")
 
 
 class ApiDirectory(DataSourceModel):
@@ -190,7 +180,7 @@ def _read_catalog(
         if target is None:
             raise DataSourceError("目标数据源不存在。")
         if operation_id is None:
-            _validate_source(target)
+            _validate_source(target, stored=True)
         else:
             # 按接口读取时，其余接口只是索引摘要，不能执行完整的参数和样例校验。
             target_copy = dict(target)
@@ -200,7 +190,7 @@ def _read_catalog(
                 ]}
                 for directory in target.get("directories", [])
             ]
-            _validate_source(target_copy)
+            _validate_source(target_copy, stored=True)
     return sources
 
 
@@ -367,7 +357,7 @@ def _validate_header_entries(headers: list[HeaderEntry]) -> None:
         names.add(normalized)
 
 
-def _validate_operation(operation: ApiOperation) -> None:
+def _validate_operation(operation: ApiOperation, *, stored: bool = False) -> None:
     """校验一个外部 API 操作模板的结构与安全边界。"""
 
     if not operation.path.startswith("/"):
@@ -403,12 +393,12 @@ def _validate_operation(operation: ApiOperation) -> None:
             if len(encoded) > MAX_SAMPLE_BYTES:
                 raise DataSourceError("API 请求/响应样例不能超过 256 KiB。")
     try:
-        validate_operation_fields(operation.model_dump(by_alias=True))
+        validate_operation_fields(operation.model_dump(by_alias=True, exclude_none=True), stored=stored)
     except DataSourceJsonFieldError as exc:
         raise DataSourceError(str(exc)) from exc
 
 
-def _validate_source(source: dict[str, Any]) -> None:
+def _validate_source(source: dict[str, Any], *, stored: bool = False) -> None:
     """校验并规范单个内部数据源对象。"""
 
     source_type = str(source.get("type") or "")
@@ -450,7 +440,7 @@ def _validate_source(source: dict[str, Any]) -> None:
                     raise DataSourceError("外部 API 操作 ID 不能重复。")
                 if operation.id:
                     operation_ids.add(operation.id)
-                _validate_operation(operation)
+                _validate_operation(operation, stored=stored)
         if operation_count > MAX_OPERATIONS:
             raise DataSourceError(f"单个外部 API 域名下的接口不能超过 {MAX_OPERATIONS} 个。")
         return
@@ -557,7 +547,7 @@ def _validate_stored_sources(sources: list[dict[str, Any]]) -> None:
                 if directory_name in directory_names:
                     raise DataSourceError("同一外部 API 域名下的目录名称不能重复。")
                 directory_names.add(directory_name)
-        _validate_source(source)
+        _validate_source(source, stored=True)
     if database_count > 1:
         raise DataSourceError("当前应用最多配置一个数据库数据源。")
 

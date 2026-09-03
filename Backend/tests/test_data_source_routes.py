@@ -102,7 +102,8 @@ class DataSourceRouteTests(unittest.TestCase):
                     "pathParameters": [{"name": "id", "type": "integer", "required": True}],
                     "queryParameters": [{"name": "keyword", "type": "string", "required": False}],
                     "requestSample": {"id": 0}, "responseSample": {"id": "0"},
-                    "requestFieldTypes": {'$["id"]': "number"}, "responseFieldTypes": {'$["id"]': "string"},
+                    "requestStructure": {"type": "object", "properties": {"id": {"type": "number"}}},
+                    "responseStructure": {"type": "object", "properties": {"id": {"type": "string"}}},
                 },
                 {
                     "id": "op-two", "name": "二", "method": "GET", "path": "/two/{id}",
@@ -120,22 +121,24 @@ class DataSourceRouteTests(unittest.TestCase):
         self.assertNotIn('"parameters":', detail.text)
         self.assertNotIn('"location":', detail.text)
         operation = source["directories"][0]["operations"][0]
-        for field in ("requestFieldTypes", "responseFieldTypes"):
+        for field in ("requestStructure", "responseStructure"):
             self.assertIn(f'"{field}":' + json.dumps(operation[field], separators=(",", ":")), detail.text)
+        for field in ("requestFieldTypes", "responseFieldTypes", "requestFieldDescriptions", "responseFieldDescriptions"):
+            self.assertNotIn(field, detail.text)
         invalid = json.loads(json.dumps(source))
         invalid["directories"][0]["operations"][0]["pathParameters"][0]["required"] = False
         failed = self.client.post("/data-sources/update", json=self.payload(source=invalid))
         self.assertIn('"status":"failed"', failed.text)
         self.assertIn("Path", failed.text)
         invalid["directories"][0]["operations"][0]["pathParameters"][0]["required"] = True
-        invalid["directories"][0]["operations"][0]["requestFieldTypes"] = {'$["id"]': "date"}
+        invalid["directories"][0]["operations"][0]["requestStructure"] = {"type": "date"}
         invalid_type = self.client.post("/data-sources/update", json=self.payload(source=invalid))
         self.assertIn('"status":"failed"', invalid_type.text)
         for response in (detail, failed, invalid_type):
             for event in ("RUN_STARTED", "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END", "CUSTOM", "STATE_SNAPSHOT", "RUN_FINISHED"):
                 self.assertIn(event, response.text)
         still_saved = public_catalog(self.workspace, source_id="domain-typed", operation_id="op-one")
-        self.assertEqual(still_saved.sources[0].directories[1].operations[0].request_field_types, {'$["id"]': "number"})
+        self.assertEqual(still_saved.sources[0].directories[1].operations[0].request_structure.properties["id"].type, "number")
 
     def test_create_update_delete_and_validate_use_separate_endpoints(self) -> None:
         """创建、更新、删除和校验应通过各自端点完成。"""

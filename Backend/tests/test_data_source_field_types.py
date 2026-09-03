@@ -8,9 +8,8 @@ import unittest
 from pathlib import Path
 
 from app.services.data_source_json_fields import (
-    DataSourceJsonFieldError,
+    build_json_structure,
     matches_field_type,
-    normalize_field_types,
 )
 from app.services.data_sources import DataSourceError, mutate_catalog, public_catalog, validate_source
 
@@ -35,10 +34,8 @@ class DataSourceFieldTypeTests(unittest.TestCase):
             "queryParameters": [{"name": "id", "type": "string", "required": False}],
             "requestSample": {"count": 0, "items": [{"id": 1}]},
             "responseSample": {"count": "0"},
-            "requestFieldDescriptions": {'$["count"]': "请求数量"},
-            "responseFieldDescriptions": {'$["count"]': "响应数量"},
-            "requestFieldTypes": {'$["count"]': "number", '$["items"][]["id"]': "integer"},
-            "responseFieldTypes": {'$["count"]': "string"},
+            "requestStructure": {"type": "object", "properties": {"count": {"type": "number", "description": "请求数量"}, "items": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer"}}}}}},
+            "responseStructure": {"type": "object", "properties": {"count": {"type": "string", "description": "响应数量"}}},
             **operation_changes,
         }
         return {
@@ -54,11 +51,13 @@ class DataSourceFieldTypeTests(unittest.TestCase):
         operation = detail.sources[0].directories[1].operations[0]
         self.assertEqual(operation.path_parameters[0].type, "integer")
         self.assertEqual(operation.query_parameters[0].type, "string")
-        self.assertEqual(operation.request_field_types['$["count"]'], "number")
-        self.assertEqual(operation.response_field_types['$["count"]'], "string")
+        self.assertEqual(operation.request_structure.properties["count"].type, "number")
+        self.assertEqual(operation.response_structure.properties["count"].type, "string")
         root = self.workspace / ".xcodeagent" / "datasource"
         persisted = json.loads((root / "external-apis" / source.id / "operations" / "operation-typed.json").read_text("utf-8"))
-        self.assertEqual(persisted["requestFieldTypes"], self.source()["directories"][0]["operations"][0]["requestFieldTypes"])
+        self.assertEqual(persisted["requestStructure"], self.source()["directories"][0]["operations"][0]["requestStructure"])
+        for field in ("requestFieldTypes", "responseFieldTypes", "requestFieldDescriptions", "responseFieldDescriptions"):
+            self.assertNotIn(field, persisted)
         self.assertEqual(persisted["pathParameters"][0]["type"], "integer")
         self.assertEqual(persisted["queryParameters"][0]["type"], "string")
         self.assertNotIn("parameters", persisted)
@@ -117,30 +116,32 @@ class DataSourceFieldTypeTests(unittest.TestCase):
         source = created.sources[0].model_dump(by_alias=True)
         operation = source["directories"][1]["operations"][0]
         operation["requestSample"] = {"count": "changed", "items": [{"id": 1}, {"id": "mixed"}]}
-        operation["requestFieldTypes"]['$["removed"]'] = "array"
+        operation["requestStructure"]["properties"]["removed"] = {"type": "array"}
         updated = mutate_catalog(self.workspace, action="update", source=source)
         updated_operation = updated.sources[0].directories[1].operations[0]
-        self.assertEqual(updated_operation.request_field_types, {})
+        self.assertEqual(updated_operation.request_structure.properties["count"].type, "string")
+        self.assertNotIn("removed", updated_operation.request_structure.properties)
         self.assertEqual(updated_operation.request_sample, operation["requestSample"])
-        self.assertEqual(updated_operation.request_field_descriptions, {'$["count"]': "请求数量"})
-        self.assertEqual(updated_operation.response_field_types, {'$["count"]': "string"})
+        self.assertEqual(updated_operation.request_structure.properties["count"].description, "请求数量")
+        self.assertEqual(updated_operation.response_structure.properties["count"].type, "string")
         operation["responseSample"] = None
         cleared = mutate_catalog(self.workspace, action="update", source=source).sources[0].directories[1].operations[0]
-        self.assertEqual(cleared.response_field_types, {})
-        self.assertEqual(cleared.response_field_descriptions, {})
+        self.assertIsNone(cleared.response_structure)
 
     def test_complete_paths_and_boolean_numeric_distinction(self) -> None:
         """字段类型使用完整深层样例并正确处理特殊键和布尔值。"""
         sample = {"items": [{"id": index} for index in range(35)], "a.b": {"q\"[]": 2}}
-        field_types = {'$["items"][]["id"]': "integer", '$["a.b"]["q\\\"[]"]': "number"}
-        self.assertEqual(normalize_field_types(sample, field_types), field_types)
+        structure = {"type": "object", "properties": {"items": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer"}}}}, "a.b": {"type": "object", "properties": {'q"[]': {"type": "number"}}}}}
+        self.assertEqual(build_json_structure(sample, structure), structure)
         sample["items"][34]["id"] = "not integer"
-        self.assertNotIn('$["items"][]["id"]', normalize_field_types(sample, field_types))
+        self.assertEqual(build_json_structure(sample, structure)["properties"]["items"]["items"]["properties"]["id"]["type"], ["integer", "string"])
         deep_sample = {"id": 4}
         for _ in range(12):
             deep_sample = {"child": deep_sample}
-        deep_path = '$' + '["child"]' * 12 + '["id"]'
-        self.assertEqual(normalize_field_types(deep_sample, {deep_path: "integer"}), {deep_path: "integer"})
+        deep_structure = build_json_structure(deep_sample)
+        for _ in range(12):
+            deep_structure = deep_structure["properties"]["child"]
+        self.assertEqual(deep_structure["properties"]["id"]["type"], "integer")
         self.assertFalse(matches_field_type(True, "integer"))
         self.assertFalse(matches_field_type(False, "number"))
         self.assertFalse(matches_field_type(9007199254740992, "integer"))
@@ -149,20 +150,23 @@ class DataSourceFieldTypeTests(unittest.TestCase):
 
     def test_invalid_mappings_fail_before_write_and_stored_corruption_is_reported(self) -> None:
         """非法映射写入前失败，损坏的已保存声明读取时不静默丢弃。"""
-        for field_types in ([], {'$': "date"}, {'x' * 4097: "string"}, {str(index): "string" for index in range(1001)}):
-            with self.subTest(mapping_type=type(field_types).__name__):
-                with self.assertRaises(DataSourceJsonFieldError):
-                    normalize_field_types(None, field_types)
+        for structure in ([], {"type": "date"}, {"type": []}, {"type": ["number", "number"]}, {"type": "string", "description": "x" * 1025}):
+            with self.subTest(structure=structure):
+                with self.assertRaises(ValueError):
+                    build_json_structure(None, structure)
         created = mutate_catalog(self.workspace, action="create", source=self.source())
         operation_path = self.workspace / ".xcodeagent" / "datasource" / "external-apis" / created.sources[0].id / "operations" / "operation-typed.json"
         before = operation_path.read_bytes()
         with self.assertRaises(ValueError):
-            mutate_catalog(self.workspace, action="update", source=self.source(requestFieldTypes={'$["count"]': "invalid"}))
+            mutate_catalog(self.workspace, action="update", source=self.source(requestStructure={"type": "invalid"}))
+        for removed_field in ("requestFieldTypes", "responseFieldTypes", "requestFieldDescriptions", "responseFieldDescriptions"):
+            with self.assertRaises(ValueError):
+                mutate_catalog(self.workspace, action="update", source=self.source(**{removed_field: {}}))
         self.assertEqual(operation_path.read_bytes(), before)
         persisted = json.loads(before)
-        persisted["requestFieldTypes"] = {'$["count"]': "string"}
+        persisted["requestStructure"]["properties"]["count"]["type"] = "string"
         operation_path.write_text(json.dumps(persisted), encoding="utf-8")
-        with self.assertRaisesRegex(DataSourceError, "类型与样例不一致"):
+        with self.assertRaisesRegex(DataSourceError, "结构与样例"):
             public_catalog(self.workspace, source_id=created.sources[0].id, operation_id="operation-typed")
 
 

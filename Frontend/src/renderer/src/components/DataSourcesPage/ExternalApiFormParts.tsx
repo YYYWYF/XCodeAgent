@@ -7,6 +7,7 @@ import { JsonSampleTabs } from './JsonStructureViewer'
 import DataSourceParameterEditor, { type ParameterDraft } from './DataSourceParameterEditor'
 import { convertJsonFieldType } from './jsonFieldTypes'
 import { parseJsonSampleText } from './jsonStructure'
+import { readJsonSchemaMetadata } from './jsonSchema'
 
 const { Text } = Typography
 
@@ -34,10 +35,8 @@ export function emptyOperation(): OperationDraft {
     headers: [],
     requestSample: undefined,
     responseSample: undefined,
-    requestFieldDescriptions: {},
-    responseFieldDescriptions: {},
-    requestFieldTypes: {},
-    responseFieldTypes: {},
+    requestStructure: null,
+    responseStructure: null,
     requestSampleText: '',
     responseSampleText: '',
     requestFieldDescriptionsDraft: {},
@@ -50,19 +49,19 @@ export function emptyOperation(): OperationDraft {
 /** 将已保存接口转换为可编辑草稿。 */
 export function operationDraftFromSource(operation?: DataSourceOperation): OperationDraft {
   if (!operation) return emptyOperation()
+  const request = readJsonSchemaMetadata(operation.requestStructure)
+  const response = readJsonSchemaMetadata(operation.responseStructure)
   return {
     ...operation,
     pathParameters: operation.pathParameters.map((parameter) => ({ ...parameter, rowId: crypto.randomUUID() })),
     queryParameters: operation.queryParameters.map((parameter) => ({ ...parameter, rowId: crypto.randomUUID() })),
     headers: operation.headers.map((header) => ({ ...header })),
-    requestFieldDescriptions: { ...operation.requestFieldDescriptions },
-    responseFieldDescriptions: { ...operation.responseFieldDescriptions },
     requestSampleText: operation.requestSample === undefined ? '' : JSON.stringify(operation.requestSample, null, 2),
     responseSampleText: operation.responseSample === undefined ? '' : JSON.stringify(operation.responseSample, null, 2),
-    requestFieldDescriptionsDraft: { ...operation.requestFieldDescriptions },
-    responseFieldDescriptionsDraft: { ...operation.responseFieldDescriptions },
-    requestFieldTypesDraft: { ...operation.requestFieldTypes },
-    responseFieldTypesDraft: { ...operation.responseFieldTypes }
+    requestFieldDescriptionsDraft: request.descriptions,
+    responseFieldDescriptionsDraft: response.descriptions,
+    requestFieldTypesDraft: request.fieldTypes,
+    responseFieldTypesDraft: response.fieldTypes
   }
 }
 

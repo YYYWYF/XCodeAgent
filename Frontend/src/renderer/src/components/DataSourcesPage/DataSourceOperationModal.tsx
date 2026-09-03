@@ -4,8 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { DataSourceDirectory, DataSourceOperation } from '../../typings'
 import { cx } from '../../utils'
 import { OperationFields, operationDraftFromSource, type OperationDraft } from './ExternalApiFormParts'
-import { normalizeJsonFieldDescriptions } from './jsonStructure'
-import { normalizeJsonFieldTypes } from './jsonFieldTypes'
+import { buildJsonSchema } from './jsonSchema'
 import { validateOperationParameters } from './dataSourceOperations'
 
 type Props = {
@@ -68,10 +67,8 @@ export default function DataSourceOperationModal({ directories, editing, initial
         headers: operation.headers,
         requestSample,
         responseSample,
-        requestFieldDescriptions: normalizeJsonFieldDescriptions(requestSample, operation.requestFieldDescriptionsDraft),
-        responseFieldDescriptions: normalizeJsonFieldDescriptions(responseSample, operation.responseFieldDescriptionsDraft),
-        requestFieldTypes: normalizeJsonFieldTypes(requestSample, operation.requestFieldTypesDraft),
-        responseFieldTypes: normalizeJsonFieldTypes(responseSample, operation.responseFieldTypesDraft)
+        requestStructure: buildJsonSchema(requestSample, operation.requestFieldDescriptionsDraft, operation.requestFieldTypesDraft),
+        responseStructure: buildJsonSchema(responseSample, operation.responseFieldDescriptionsDraft, operation.responseFieldTypesDraft)
       }
       await onSave(next, directoryId)
     } catch (caughtError) {

@@ -80,8 +80,8 @@ assert.throws(() => validateOperationParameters('/items/{id}', [pathParameter], 
 const operation: DataSourceOperation = {
   id: 'op-a', name: '查询', method: 'GET', path: '/items/{id}', pathParameters: [pathParameter], queryParameters: [queryParameter],
   headers: [{ name: 'X-Version', value: '2' }], requestSample: { id: 0 }, responseSample: { id: '1' },
-  requestFieldDescriptions: { '$["id"]': '请求编号' }, responseFieldDescriptions: { '$["id"]': '响应编号' },
-  requestFieldTypes: { '$["id"]': 'number' }, responseFieldTypes: { '$["id"]': 'string' }
+  requestStructure: { type: 'object', properties: { id: { type: 'number', description: '请求编号' } } },
+  responseStructure: { type: 'object', properties: { id: { type: 'string', description: '响应编号' } } }
 }
 const otherOperation: DataSourceOperation = { ...operation, id: 'op-b', name: '另一个接口' }
 const latest: ExternalApiDataSource = {
@@ -93,7 +93,7 @@ const latest: ExternalApiDataSource = {
 }
 const latestBefore = JSON.stringify(latest)
 // 模拟详情切换后接口再次变成列表摘要，历史加载标记不能让它覆盖完整配置。
-const summaryOperation: DataSourceOperation = { id: operation.id, name: operation.name, method: operation.method, path: operation.path, pathParameters: [], queryParameters: [], headers: [], requestFieldDescriptions: {}, responseFieldDescriptions: {}, requestFieldTypes: {}, responseFieldTypes: {} }
+const summaryOperation: DataSourceOperation = { id: operation.id, name: operation.name, method: operation.method, path: operation.path, pathParameters: [], queryParameters: [], headers: [], requestStructure: null, responseStructure: null }
 const candidate: ExternalApiDataSource = {
   ...latest, timeoutMs: 10000, headers: [], baseUrlConfigKey: undefined,
   directories: [{ id: 'dir-a', name: '重命名', operations: [{ ...summaryOperation, id: 'op-b' }] }, { id: 'dir-b', name: '二', operations: [summaryOperation] }]
@@ -105,7 +105,7 @@ assert.deepEqual(merged.headers, latest.headers)
 assert.equal(merged.directories[0].name, '重命名')
 assert.deepEqual(merged.directories[0].operations[0], otherOperation)
 assert.deepEqual(merged.directories[1].operations[0], operation)
-const edited = { ...operation, name: '已编辑', requestSample: { id: '1' }, requestFieldTypes: { '$["id"]': 'string' as const } }
+const edited: DataSourceOperation = { ...operation, name: '已编辑', requestSample: { id: '1' }, requestStructure: { type: 'object', properties: { id: { type: 'string', description: '请求编号' } } } }
 const editMerged = mergeExternalSourceChanges(latest, candidate, edited)
 assert.deepEqual(editMerged.directories[1].operations[0], edited)
 assert.deepEqual(editMerged.directories[0].operations[0], otherOperation)

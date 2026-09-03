@@ -89,8 +89,8 @@ function OperationDetails({ directory, operation, onDelete, onEdit }: { director
           }} />
         </section>)}
         <section className={cx('data-source-manager-detail-section')}><div className={cx('data-source-manager-detail-section-title')}>接口 Header</div><DetailList items={operation.headers} renderItem={(item, index) => { const header = item as DataSourceOperation['headers'][number]; return <div className={cx('data-source-manager-detail-list-row')} key={`${header.name}-${index}`}><span>{header.name || `Header ${index + 1}`}</span><Text className={cx('data-source-manager-detail-value')} ellipsis={{ tooltip: header.value }} type="secondary">{header.value || '空值'}</Text></div> }} /></section>
-        <JsonSampleTabs descriptions={operation.requestFieldDescriptions} fieldTypes={operation.requestFieldTypes} label="请求体" value={operation.requestSample} />
-        <JsonSampleTabs descriptions={operation.responseFieldDescriptions} fieldTypes={operation.responseFieldTypes} label="响应体" value={operation.responseSample} />
+        <JsonSampleTabs structure={operation.requestStructure} label="请求体" value={operation.requestSample} />
+        <JsonSampleTabs structure={operation.responseStructure} label="响应体" value={operation.responseSample} />
       </div>
     </article>
   )
