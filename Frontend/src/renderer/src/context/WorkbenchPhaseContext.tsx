@@ -10,6 +10,7 @@ import {
   deriveWorkbenchPhase,
   getPersistedWorkbenchPhase,
   isObjectEditableInPhase,
+  resolveWorkbenchPhase,
   setPersistedWorkbenchPhase,
   WORKBENCH_PHASE_AGENTS,
   type EditableObjectType,
@@ -56,7 +57,7 @@ export function WorkbenchPhaseProvider({
   const manualOverride = overrides[applicationId] ?? null;
 
   const value = useMemo<WorkbenchPhaseContextValue>(() => {
-    const phase = manualOverride ?? derivedPhase;
+    const phase = resolveWorkbenchPhase(derivedPhase, manualOverride);
     return {
       phase,
       derivedPhase,

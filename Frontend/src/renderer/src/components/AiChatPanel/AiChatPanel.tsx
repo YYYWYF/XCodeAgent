@@ -7,8 +7,7 @@ import {
   hasApplicationEnteredDevelopment,
   isApplicationTemplatePreparationEligible,
   markApplicationEnteredDevelopment,
-  subscribeApplicationDevelopmentEntry,
-  shouldAutoEnterAcceptancePhase
+  subscribeApplicationDevelopmentEntry
 } from '../../workbenchPhase'
 import type { WorkbenchPhase } from '../../workbenchPhase'
 import type {
@@ -867,7 +866,6 @@ export default function AiChatPanel({
   const {
     phase: activeWorkbenchPhase,
     derivedPhase: derivedWorkbenchPhase,
-    manualOverride: workbenchPhaseOverride,
     switchPhase
   } = useWorkbenchPhase()
   const isDesignPhase = activeWorkbenchPhase === 'product'
@@ -3090,18 +3088,6 @@ export default function AiChatPanel({
     showRightPanel &&
     rightPanel?.type === 'preview' &&
     !acceptanceConversationActive
-  // 兜底修正旧审查覆盖值：验收 Workflow 已运行时，顶部和阶段会话必须同步切到验收。
-  useEffect(() => {
-    if (
-      shouldAutoEnterAcceptancePhase(
-        activeWorkbenchPhase,
-        workbenchPhaseOverride,
-        activeWorkflowPhase
-      )
-    ) {
-      switchPhase('acceptance')
-    }
-  }, [activeWorkbenchPhase, activeWorkflowPhase, switchPhase, workbenchPhaseOverride])
   const activeSessionTargetKey = currentStageSessionTargetKey
   const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const activeWorkflowMatchesTarget = Boolean(
