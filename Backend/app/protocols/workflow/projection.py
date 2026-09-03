@@ -335,6 +335,7 @@ def _workflow_progress_summary(
         "revisionImpact": result.get("revision_impact"),
         "revisionDraft": result.get("revision_draft"),
         "revisionContinuation": result.get("revision_continuation"),
+        "developmentContinuation": result.get("development_continuation"),
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
@@ -554,6 +555,7 @@ def _public_workflow_state(
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。
             "technical_plan_repair_candidate",
             "technical_plan_repair_errors",
+            "development_continuation_id",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
@@ -580,6 +582,9 @@ def _public_workflow_state(
         public_state["workspaceInspection"] = inspection
     if "requirements_confirmed" in value:
         public_state["requirementsConfirmed"] = value.get("requirements_confirmed") is True
+    if "development_continuation" in value:
+        public_state.pop("development_continuation", None)
+        public_state["developmentContinuation"] = value["development_continuation"]
     if "code_review_result" in value:
         public_state.pop("code_review_result", None)
         public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
@@ -761,7 +766,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 },
             }
         return {
-            "message": "实体数据源绑定已确认；请重新选择页面或 API 开始开发。",
+            "message": "实体数据源绑定已确认。",
             "data": {
                 "detailSelection": update.get("detail_selection"),
                 "detailPlans": update.get("detail_plans", []),
@@ -1341,6 +1346,7 @@ def _workflow_summary(
         "revisionImpact": result.get("revision_impact"),
         "revisionDraft": result.get("revision_draft"),
         "revisionContinuation": result.get("revision_continuation"),
+        "developmentContinuation": result.get("development_continuation"),
         **({"buildSummary": build_summary} if build_summary else {}),
         "buildTaskPlan": result.get("build_task_plan", {}),
         "buildExecutionScope": result.get("build_execution_scope"),
@@ -1524,6 +1530,7 @@ def _workflow_visual_payload(
         "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
         "selectedSkillNames": result.get("selected_skill_names", []),
         "revisionContinuation": result.get("revision_continuation"),
+        "developmentContinuation": result.get("development_continuation"),
         "lifecycle": result.get("lifecycle"),
         "ui_designs": result.get("ui_designs"),
         "workspaceInspectionProgress": result.get("workspace_scan_progress"),

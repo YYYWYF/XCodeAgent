@@ -28,7 +28,31 @@ export type ChatSessionMessage = {
   toolCalls?: ToolCallRecord[];
   processSteps?: ProcessStepRecord[];
   revisionHandoff?: ChatSessionRevisionHandoff;
+  developmentContinuation?: ChatSessionDevelopmentContinuation;
   createdAt: number;
+};
+
+export type ChatSessionDevelopmentTarget =
+  | {
+      type: 'page';
+      pageId: string;
+      label: string;
+    }
+  | {
+      type: 'endpoint';
+      apiContractId: string;
+      endpointId: string;
+      label: string;
+    };
+
+export type ChatSessionDevelopmentContinuation = {
+  id: string;
+  status: 'ready' | 'started';
+  sourceThreadId: string;
+  sourceRunId: string;
+  token: string;
+  technicalPlanSha256: string;
+  target: ChatSessionDevelopmentTarget;
 };
 
 export type ChatSessionRevisionHandoff = {
@@ -211,6 +235,7 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
       toolCalls: normalizeToolCalls(item.toolCalls),
       processSteps: normalizeProcessSteps(item.processSteps),
       revisionHandoff: normalizeRevisionSessionHandoff(item.revisionHandoff),
+      developmentContinuation: normalizeDevelopmentContinuation(item.developmentContinuation),
       approvalStatus:
         item.approvalStatus === 'approved_once' ||
         item.approvalStatus === 'approved_always' ||
@@ -221,6 +246,63 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
             : undefined,
       createdAt: Number(item.createdAt || Date.now()),
     }));
+}
+
+/** 规范化实体设计完成后的开发续接卡，目标只属于这条消息，不升级为会话归属。 */
+function normalizeDevelopmentContinuation(
+  value: unknown,
+): ChatSessionDevelopmentContinuation | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const continuation = value as Partial<ChatSessionDevelopmentContinuation>;
+  const status = continuation.status === 'started' ? 'started' : 'ready';
+  const id = normalizeEndpointField(continuation.id);
+  const sourceThreadId = normalizeEndpointField(continuation.sourceThreadId);
+  const sourceRunId = normalizeEndpointField(continuation.sourceRunId);
+  const token = normalizeEndpointField(continuation.token);
+  const technicalPlanSha256 = normalizeEndpointField(continuation.technicalPlanSha256);
+  const target = continuation.target;
+  if (
+    !id ||
+    !sourceThreadId ||
+    !sourceRunId ||
+    !token ||
+    !technicalPlanSha256 ||
+    !target ||
+    typeof target !== 'object' ||
+    Array.isArray(target)
+  ) return undefined;
+  const candidate = target as Partial<ChatSessionDevelopmentTarget> & Record<string, unknown>;
+  const label = normalizeEndpointField(candidate.label);
+  if (candidate.type === 'page') {
+    const pageId = normalizeEndpointField(candidate.pageId);
+    return pageId && label
+      ? {
+          id,
+          status,
+          sourceThreadId,
+          sourceRunId,
+          token,
+          technicalPlanSha256,
+          target: { type: 'page', pageId, label },
+        }
+      : undefined;
+  }
+  if (candidate.type === 'endpoint') {
+    const apiContractId = normalizeEndpointField(candidate.apiContractId);
+    const endpointId = normalizeEndpointField(candidate.endpointId);
+    return apiContractId && endpointId && label
+      ? {
+          id,
+          status,
+          sourceThreadId,
+          sourceRunId,
+          token,
+          technicalPlanSha256,
+          target: { type: 'endpoint', apiContractId, endpointId, label },
+        }
+      : undefined;
+  }
+  return undefined;
 }
 
 /** 规范化来源会话中的二次修改跳转回执，避免任意本地路径或外部链接进入消息。 */

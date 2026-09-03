@@ -330,6 +330,7 @@ def start_workbench_execution(
     phase: str,
     replaces_run_id: str | None = None,
     resource_claims: list[ExecutionResourceClaim] | None = None,
+    development_continuation_consume: dict[str, str] | None = None,
 ) -> ApplicationLifecycle:
     """原子登记计划执行及全部资源锁，并保持初始化完成状态不变。"""
 
@@ -343,6 +344,27 @@ def start_workbench_execution(
                 "应用尚未完成创建规划，当前阶段 "
                 f"{current.initialization.stage.value} 不能启动工作台计划执行。"
             )
+        if development_continuation_consume is not None:
+            # 同一把生命周期锁内复验 token，并把消费状态与 execution 原子写入。
+            # 请求解析、模型校验或写盘失败都不能单独烧掉一次性续接凭据。
+            from app.services.development_continuation import validate_development_continuation
+
+            continuation = validate_development_continuation(
+                workspace,
+                continuation_id=development_continuation_consume["id"],
+                token=development_continuation_consume["token"],
+                thread_id=thread_id,
+                lifecycle=current,
+            )
+            source = current.active_executions[continuation.source_run_id]
+            if replaces_run_id != source.run_id or scope != source.scope or target_id != source.target_id:
+                raise ApplicationLifecycleConflictError("续接运行必须接替原开发目标。")
+            current = current.model_copy(update={"development_continuations": {
+                **current.development_continuations,
+                continuation.id: continuation.model_copy(update={
+                    "status": "consumed", "token_sha256": None, "consumed_at": utc_now(),
+                }),
+            }})
         resource_locks = current.resource_locks
         transferred_claims: list[ExecutionResourceClaim] = []
         if replaces_run_id and replaces_run_id in current.active_executions:
@@ -828,7 +850,11 @@ def _resource_locks_without_run(
 def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]:
     """生成可安全放入 Graph State 和 AG-UI 快照的生命周期对象。"""
 
-    return state.model_dump(mode="json", by_alias=True)
+    payload = state.model_dump(mode="json", by_alias=True)
+    # continuation 的原请求和 token 哈希只属于服务端控制面；公开运行结果通过
+    # developmentContinuation 单独投射当前可执行动作，生命周期快照不暴露内部登记表。
+    payload.pop("developmentContinuations", None)
+    return payload
 
 
 def transition_application_lifecycle(

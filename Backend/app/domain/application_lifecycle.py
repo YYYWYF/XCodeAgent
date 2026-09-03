@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.application_revision import ActiveFormalRevision, PendingRevisionImpact
 
@@ -210,6 +210,62 @@ class WorkbenchExecution(ApplicationLifecycleModel):
     updated_at: datetime = Field(alias="updatedAt")
 
 
+class DevelopmentContinuationTarget(ApplicationLifecycleModel):
+    """保存待恢复页面或 Endpoint 的唯一业务目标。"""
+
+    type: Literal["page", "endpoint"]
+    page_id: str | None = Field(default=None, alias="pageId", max_length=512)
+    api_contract_id: str | None = Field(
+        default=None,
+        alias="apiContractId",
+        max_length=512,
+    )
+    endpoint_id: str | None = Field(default=None, alias="endpointId", max_length=512)
+    label: str = Field(min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_target_identity(self) -> "DevelopmentContinuationTarget":
+        """确保页面与 Endpoint continuation 只携带各自完整的稳定标识。"""
+
+        if self.type == "page" and not str(self.page_id or "").strip():
+            raise ValueError("页面开发 continuation 必须提供 pageId。")
+        if self.type == "page" and (self.api_contract_id or self.endpoint_id):
+            raise ValueError("页面开发 continuation 不能携带 Endpoint 标识。")
+        if self.type == "endpoint" and (
+            not str(self.api_contract_id or "").strip()
+            or not str(self.endpoint_id or "").strip()
+        ):
+            raise ValueError("Endpoint 开发 continuation 必须提供完整接口标识。")
+        if self.type == "endpoint" and self.page_id:
+            raise ValueError("Endpoint 开发 continuation 不能携带 pageId。")
+        return self
+
+
+class DevelopmentContinuation(ApplicationLifecycleModel):
+    """记录实体绑定前置与原开发 execution 之间的一次性恢复合同。"""
+
+    id: str = Field(min_length=1, max_length=256)
+    source_thread_id: str = Field(alias="sourceThreadId", min_length=1, max_length=512)
+    source_run_id: str = Field(alias="sourceRunId", min_length=1, max_length=512)
+    request: str = Field(min_length=1, max_length=16_000)
+    target: DevelopmentContinuationTarget
+    required_entity_ids: list[str] = Field(alias="requiredEntityIds", min_length=1, max_length=100)
+    status: Literal["awaiting_entity_binding", "ready", "consumed"]
+    technical_plan_sha256: str | None = Field(
+        default=None,
+        alias="technicalPlanSha256",
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    token_sha256: str | None = Field(
+        default=None,
+        alias="tokenSha256",
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    created_at: datetime = Field(alias="createdAt")
+    ready_at: datetime | None = Field(default=None, alias="readyAt")
+    consumed_at: datetime | None = Field(default=None, alias="consumedAt")
+
+
 class ApplicationLifecycle(ApplicationLifecycleModel):
     """表示 application-lifecycle.json 的完整业务快照。"""
 
@@ -221,6 +277,10 @@ class ApplicationLifecycle(ApplicationLifecycleModel):
     active_executions: dict[str, WorkbenchExecution] = Field(
         default_factory=dict,
         alias="activeExecutions",
+    )
+    development_continuations: dict[str, DevelopmentContinuation] = Field(
+        default_factory=dict,
+        alias="developmentContinuations",
     )
     resource_locks: ExecutionResourceLocks = Field(
         default_factory=ExecutionResourceLocks,

@@ -505,6 +505,9 @@ def build_workflow_ag_ui_stream(
             # 维护当前运行的增量状态；custom 进度帧不能回退到本轮恢复前的快照，
             # 否则修复完成后的构建检查会被旧的 awaiting_user 状态覆盖。
             stream_state: dict[str, Any] = dict(initial_state)
+            # 生命周期签发的控制结果不属于 Graph checkpoint；统一保留到终帧，
+            # 避免 aget_state 把门禁合同或一次性续接 token 覆盖掉。
+            boundary_state: dict[str, Any] = {}
 
             config = {
                 "configurable": {"thread_id": thread_id},
@@ -1328,7 +1331,7 @@ def build_workflow_ag_ui_stream(
                     current_phase = node_name
                     if not workflow_scope:
                         # 创建规划节点沿用自身的确认状态，不投射工作台执行边界。
-                        lifecycle_update = {**initial_state, **update}
+                        lifecycle_update = dict(stream_state)
                         lifecycle_payload = project_workflow_lifecycle_boundary(
                             workspace,
                             run_id=run_id,
@@ -1349,6 +1352,12 @@ def build_workflow_ag_ui_stream(
                                 message="应用二次修改已通过最终验收。",
                                 data={"changeId": completion.get("changeId")},
                             )
+                        development_continuation = lifecycle_update.get(
+                            "development_continuation"
+                        )
+                        if isinstance(development_continuation, dict):
+                            update["development_continuation"] = development_continuation
+                            boundary_state["development_continuation"] = development_continuation
                         if lifecycle_payload is not None:
                             update["lifecycle"] = lifecycle_payload
                             # 先广播最新 revision，再继续发送节点投影。
@@ -1358,6 +1367,9 @@ def build_workflow_ag_ui_stream(
                                     value=lifecycle_payload,
                                 )
                             )
+
+                    stream_state.update(update)
+                    result = dict(stream_state)
 
                     for frame in _pending_tool_frames(
                         encoder,
@@ -1552,6 +1564,7 @@ def build_workflow_ag_ui_stream(
                 result = dict(snapshot.values)
                 if workflow_scope == "application_planning":
                     result = project_application_planning_interrupt(result, snapshot)
+            result.update(boundary_state)
             if lifecycle_payload is not None:
                 result["lifecycle"] = lifecycle_payload
             summary = _workflow_summary(result, events)

@@ -125,6 +125,13 @@ def workflow_capabilities() -> dict[str, Any]:
                     "通过 clarificationAnswers.acceptance_phase_confirmation 提交结构化 confirm 动作；"
                     "确认后恢复验收阶段确认并进入 acceptance 子图。"
                 ),
+                "start_entity_binding": (
+                    "引用开发门禁登记的 continuation，在独立 thread 启动缺失实体的 "
+                    "EntitySourceBinding execution。"
+                ),
+                "continue_after_entity_binding": (
+                    "消费实体确认后由后端签发的一次性 token，恢复原开发 thread 并重新执行前置检查。"
+                ),
             },
         },
         "clarificationModes": {
@@ -1283,6 +1290,10 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
     }
     if "requirements_confirmed" in value:
         public_state["requirementsConfirmed"] = value.get("requirements_confirmed") is True
+    if "development_continuation" in value:
+        public_state.pop("development_continuation", None)
+        public_state["developmentContinuation"] = value.get("development_continuation")
+    public_state.pop("development_continuation_id", None)
     if "code_review_result" in value:
         public_state.pop("code_review_result", None)
         public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
@@ -1461,7 +1472,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 },
             }
         return {
-            "message": "实体数据源绑定已确认；请重新选择页面或 API 开始开发。",
+            "message": "实体数据源绑定已确认。",
             "data": {
                 "detailSelection": update.get("detail_selection"),
                 "detailPlans": update.get("detail_plans", []),
@@ -1689,6 +1700,7 @@ def _workflow_summary(
         "repairIteration": result.get("repair_iteration"),
         "maxRepairIterations": result.get("max_repair_iterations"),
         "buildSummary": build_summary,
+        "developmentContinuation": result.get("development_continuation"),
         "testTarget": _workflow_test_target(result),
         "lastPersistedBuildExecutionScope": result.get(
             "last_persisted_build_execution_scope"

@@ -8,7 +8,7 @@ import {
   UserOutlined
 } from '@ant-design/icons'
 import { Button, Tag, Typography } from 'antd'
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWorkbenchPhase } from '../../../../context'
 import {
@@ -37,6 +37,8 @@ import VersionCommitReminder from '../VersionCommitReminder'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
 import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
 import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
+import DevelopmentContinuationCard from '../WorkflowRunCard/DevelopmentContinuationCard'
+import RemainingEntityBindingsCard from '../WorkflowRunCard/RemainingEntityBindingsCard'
 import TemplatePreparingCard, {
   isTemplatePreparing
 } from '../WorkflowRunCard/TemplatePreparingCard'
@@ -46,6 +48,7 @@ import {
   workflowMessageContentForDisplay
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage } from '../../types'
+import type { ChatSessionDevelopmentContinuation } from '../../../../service/chatSessions'
 import { isConversationWorkflow } from '../../conversationMode'
 import {
   isEntityDesignWorkflow,
@@ -233,6 +236,8 @@ type MessageListProps = {
   /** 右侧阶段产物面板可见时，把 Build DAG 确认卡从消息流移出以避免重复。 */
   dagConfirmationInStageOutput?: boolean
   entityDesignSession?: boolean
+  /** 普通自由对话没有消息时使用的工作区级快捷任务内容。 */
+  emptyContent?: ReactNode
   /** 当前会话最新一轮模型/Workflow 错误，优先在消息区展示统一错误卡片。 */
   error?: string
   /** 设计阶段：规划 workflow 确认卡始终可提交（由 planningSubmitRef 驱动），
@@ -263,7 +268,12 @@ type MessageListProps = {
   planningWorkflow?: WorkflowRunPayload
   loading: boolean
   messages: AgentChatMessage[]
-  onEntityDesignGateJump?: (entityId: string) => void
+  onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
+  /** 在当前会话中恢复实体门禁前的页面或 Endpoint 正式任务。 */
+  onContinueDevelopment?: (
+    messageId: number,
+    continuation: ChatSessionDevelopmentContinuation
+  ) => void
   /** 从来源会话回执打开对应的独立需求设计会话。 */
   onOpenRevisionSession?: (handoff: NonNullable<AgentChatMessage['revisionHandoff']>) => void
   /** 点击 DAG 进度卡中的已生成子阶段时，在右侧展示当前会话最新产物。 */
@@ -290,6 +300,7 @@ export default function MessageList({
   conversationRunning,
   dagConfirmationInStageOutput = false,
   entityDesignSession = false,
+  emptyContent,
   designPhasePlanning = false,
   error,
   uiDesignActivePageId,
@@ -305,6 +316,7 @@ export default function MessageList({
   messages,
   onDagStageSelect,
   onEntityDesignGateJump,
+  onContinueDevelopment,
   onOpenRevisionSession,
   onOpenCodeChangeFile,
   onRevertCodeChanges,
@@ -441,6 +453,8 @@ export default function MessageList({
                   />
                 </div>
               </article>
+            ) : emptyContent ? (
+              emptyContent
             ) : (
               <div className={cx('ai-message-empty')}>
                 <span className={cx('ai-message-empty-mark')}>
@@ -687,6 +701,15 @@ export default function MessageList({
                             onOpen={onOpenRevisionSession}
                           />
                         ) : null}
+                        {message.developmentContinuation ? (
+                          <DevelopmentContinuationCard
+                            continuation={message.developmentContinuation}
+                            disabled={loading}
+                            onContinue={() =>
+                              onContinueDevelopment?.(message.id, message.developmentContinuation!)
+                            }
+                          />
+                        ) : null}
                         {messageError ? (
                           <AgentErrorCard
                             error={messageError}
@@ -811,6 +834,14 @@ export default function MessageList({
                               workspaceRoot={workspaceRoot}
                             />
                           ) : null)}
+                        {message.workflow ? (
+                          <RemainingEntityBindingsCard
+                            disabled={loading || messageIndex !== messages.length - 1}
+                            lifecycle={applicationLifecycle}
+                            onJump={onEntityDesignGateJump}
+                            workflow={message.workflow}
+                          />
+                        ) : null}
                         {entityDesignSession && messageLoading && !requiresClarification && (
                           <EntityDesignChatCard loading />
                         )}

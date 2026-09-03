@@ -1462,6 +1462,58 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
   }
 }
 
+.@{class-prefix}-workflow-development-continuation-card {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--wb-accent-soft) 56%, var(--wb-surface));
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 10px;
+
+  > .ant-btn {
+    flex: 0 0 auto;
+  }
+}
+
+.@{class-prefix}-workflow-development-continuation-icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  font-size: 18px;
+  background: var(--wb-surface);
+  border-radius: 9px;
+}
+
+.@{class-prefix}-workflow-development-continuation-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+
+  .ant-typography {
+    margin: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-workflow-development-continuation-card {
+    align-items: flex-start;
+    flex-wrap: wrap;
+
+    > .ant-btn {
+      width: 100%;
+      margin-left: 42px;
+    }
+  }
+}
+
 .@{class-prefix}-artifact-auth-bar {
   display: flex;
   flex-direction: column;

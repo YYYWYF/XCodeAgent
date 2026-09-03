@@ -106,13 +106,6 @@ type UseChatSessionsResult = {
   deletingSessionId?: string
   draft: string
   draftKey: string
-  createEndpointSession: (
-    apiContractId: string,
-    endpointId: string,
-    endpointLabel: string
-  ) => Promise<SessionIdentity>
-  createEntitySession: (entityId: string, entityLabel: string) => Promise<SessionIdentity>
-  createPageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
   createReviewSession: (target: ReviewPhaseSessionTarget) => Promise<SessionIdentity>
   createAcceptanceSession: (target: AcceptancePhaseSessionTarget) => Promise<SessionIdentity>
@@ -134,26 +127,15 @@ type UseChatSessionsResult = {
     execution: WorkbenchExecution
   ) => Promise<SessionIdentity>
   activateRevisionDevelopmentSession: (identity: SessionIdentity) => Promise<void>
-  ensureEndpointSession: (
-    apiContractId: string,
-    endpointId: string,
-    endpointLabel: string
-  ) => Promise<SessionIdentity>
-  ensureEntitySession: (entityId: string, entityLabel: string) => Promise<SessionIdentity>
-  ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   clearActiveSession: () => void
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   loadSessionIdentity: (sessionId: string) => Promise<SessionIdentity>
   handleCreateSessionFromList: () => void
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
-  openSessionForPhase: (
-    handoff: ChatSessionRevisionHandoff,
-    phase: WorkbenchPhase
-  ) => Promise<void>
+  openSessionForPhase: (handoff: ChatSessionRevisionHandoff, phase: WorkbenchPhase) => Promise<void>
   handleSelectEndpoint: (apiContractId: string, endpointId: string) => Promise<void>
   handleSelectEntity: (entityId: string) => Promise<void>
-  handleSelectFreeChat: () => Promise<void>
   handleSelectPage: (pageId: string) => Promise<void>
   loadingSessions: boolean
   messages: AgentChatMessage[]
@@ -191,7 +173,6 @@ export function useChatSessions({
     {}
   )
   const sessionSummariesRef = useRef(sessionSummaries)
-  const pageSessionPromisesRef = useRef<Record<string, Promise<SessionIdentity>>>({})
   // 显式阶段交接目标优先于 localStorage 恢复值，直到目标阶段完成一次权威加载。
   const explicitPhaseSessionTargetsRef = useRef<
     Partial<Record<EditorMode, Partial<Record<WorkbenchPhase, string>>>>
@@ -274,10 +255,7 @@ export function useChatSessions({
   }
 
   /** 加载会话并只为当前工作台阶段恢复最近的目标会话。 */
-  const loadSessionsForMode = async (
-    mode: EditorMode,
-    phase: WorkbenchPhase
-  ): Promise<void> => {
+  const loadSessionsForMode = async (mode: EditorMode, phase: WorkbenchPhase): Promise<void> => {
     const generation = (sessionLoadGenerationRef.current[mode] || 0) + 1
     sessionLoadGenerationRef.current[mode] = generation
     if (!application.workspaceRoot) {
@@ -454,7 +432,10 @@ export function useChatSessions({
   }
 
   /** 切换接口时只切换当前开发目标，不再按接口恢复或绑定会话。 */
-  const handleSelectEndpoint = async (_apiContractId: string, _endpointId: string): Promise<void> => {
+  const handleSelectEndpoint = async (
+    _apiContractId: string,
+    _endpointId: string
+  ): Promise<void> => {
     if (loadingSessions) return
     void _apiContractId
     void _endpointId
@@ -486,45 +467,15 @@ export function useChatSessions({
     onCloseRightPanel()
   }
 
-  /** 进入自由对话时恢复当前阶段最近会话，不因点击入口重复新建。 */
-  const handleSelectFreeChat = async (): Promise<void> => {
-    if (loadingSessions) return
-    const sessionToOpen = sessions[0]
-    if (sessionToOpen) {
-      await handleOpenSession(sessionToOpen.id)
-      return
-    }
-
-    setActiveSessionIds((current) =>
-      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
-    )
-    setPersistedActiveSessionId(application.id, editorMode, workbenchPhase, undefined)
-    onCloseRightPanel()
-  }
-
   /** 创建只归属于工作台阶段的独立会话。 */
-  const createNewSession = async (
-    _pageId?: string,
-    pageLabel?: string,
-    endpointContext?: {
-      apiContractId: string
-      endpointId: string
-      endpointLabel: string
-    },
-    entityContext?: {
-      entityId: string
-      entityLabel: string
-    },
-    options?: {
-      activate?: boolean
-      entryKey?: string
-      title?: string
-      workbenchPhase?: WorkbenchPhase
-      revisionContext?: ChatSessionRevisionContext
-      recoveryExecutionRunId?: string
-    }
-  ): Promise<SessionIdentity> => {
-    void _pageId
+  const createNewSession = async (options?: {
+    activate?: boolean
+    entryKey?: string
+    title?: string
+    workbenchPhase?: WorkbenchPhase
+    revisionContext?: ChatSessionRevisionContext
+    recoveryExecutionRunId?: string
+  }): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
       throw new Error('创建会话前需要选择工作目录。')
     }
@@ -536,15 +487,7 @@ export function useChatSessions({
       editorMode,
       workbenchPhase: sessionWorkbenchPhase,
       entryKey: options?.entryKey,
-      title: options?.title
-        ? options.title
-        : entityContext
-          ? `实体新会话：${entityContext.entityLabel}`
-          : endpointContext
-            ? `接口新会话：${endpointContext.endpointLabel}`
-            : pageLabel
-              ? `页面新会话：${pageLabel}`
-              : '新对话',
+      title: options?.title || '新对话',
       revisionContext: options?.revisionContext,
       recoveryExecutionRunId: options?.recoveryExecutionRunId
     })
@@ -619,11 +562,7 @@ export function useChatSessions({
           candidate.id
         )
         const candidateMemCount = getSessionMessages(candidateKey).length
-        const pickedKey = sessionRuntimeKey(
-          application.workspaceRoot || '',
-          editorMode,
-          picked.id
-        )
+        const pickedKey = sessionRuntimeKey(application.workspaceRoot || '', editorMode, picked.id)
         const pickedMemCount = getSessionMessages(pickedKey).length
         // 优先比内存消息数（未落盘的规划对话），再比磁盘 messageCount。
         const candidateScore = candidateMemCount * 1000 + candidate.messageCount
@@ -656,18 +595,12 @@ export function useChatSessions({
         return identity
       }
     }
-    const identity = await createNewSession(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      {
-        entryKey: normalizedEntryKey,
-        title: phase === 'planning' ? '规划 Agent' : '产品 Agent',
-        workbenchPhase: phase,
-        revisionContext
-      }
-    )
+    const identity = await createNewSession({
+      entryKey: normalizedEntryKey,
+      title: phase === 'planning' ? '规划 Agent' : '产品 Agent',
+      workbenchPhase: phase,
+      revisionContext
+    })
     planningSessionActivatedRef.current = true
     return identity
   }
@@ -684,19 +617,13 @@ export function useChatSessions({
     )
     if (existing) return loadChatSessionIdentity(editorMode, existing.id)
     const revisionContext = createRevisionDevelopmentSessionContext(source, continuation)
-    return createNewSession(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      {
-        activate: false,
-        entryKey: `revision-development:${continuation.changeId}:${continuation.technicalPlanSha256}`,
-        title: '二次修改 · 开发 Agent',
-        workbenchPhase: 'development',
-        revisionContext
-      }
-    )
+    return createNewSession({
+      activate: false,
+      entryKey: `revision-development:${continuation.changeId}:${continuation.technicalPlanSha256}`,
+      title: '二次修改 · 开发 Agent',
+      workbenchPhase: 'development',
+      revisionContext
+    })
   }
 
   /** 为已消费 continuation 但本地记录缺失的 execution 恢复同 thread 开发会话。 */
@@ -724,20 +651,14 @@ export function useChatSessions({
     )
     if (existing) return loadChatSessionIdentity(editorMode, existing.id)
     const revisionContext = createRevisionDevelopmentSessionContext(source, continuation)
-    const identity = await createNewSession(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      {
-        activate: false,
-        entryKey: `revision-development:${active.changeId}:${technicalPlanSha256}`,
-        title: '二次修改 · 开发 Agent',
-        workbenchPhase: 'development',
-        revisionContext,
-        recoveryExecutionRunId: execution.runId
-      }
-    )
+    const identity = await createNewSession({
+      activate: false,
+      entryKey: `revision-development:${active.changeId}:${technicalPlanSha256}`,
+      title: '二次修改 · 开发 Agent',
+      workbenchPhase: 'development',
+      revisionContext,
+      recoveryExecutionRunId: execution.runId
+    })
     if (identity.threadId !== execution.threadId) {
       throw new Error('恢复后的开发会话 thread 与 lifecycle execution 不匹配。')
     }
@@ -745,9 +666,7 @@ export function useChatSessions({
   }
 
   /** 仅在开发 Workflow 已成功接管后激活本次 revision 的独立开发会话。 */
-  const activateRevisionDevelopmentSession = async (
-    identity: SessionIdentity
-  ): Promise<void> => {
+  const activateRevisionDevelopmentSession = async (identity: SessionIdentity): Promise<void> => {
     const summary = sessionSummariesRef.current[editorMode].find(
       (session) =>
         session.id === identity.sessionId &&
@@ -778,72 +697,11 @@ export function useChatSessions({
   const loadSessionIdentity = (sessionId: string): Promise<SessionIdentity> =>
     loadChatSessionIdentity(editorMode, sessionId)
 
-  /** 从页面入口创建新的阶段会话；页面只用于初始标题，不成为会话归属。 */
-  const createPageSession = async (pageId: string, pageLabel: string): Promise<SessionIdentity> => {
-    const normalizedPageId = pageId.trim()
-    if (!normalizedPageId) throw new Error('页面标识不能为空。')
-    try {
-      return await createNewSession(normalizedPageId, pageLabel)
-    } catch (caughtError) {
-      reportSessionError(caughtError)
-      throw caughtError
-    }
-  }
-
-  /** 从接口入口创建新的阶段会话；接口只用于初始标题，不成为会话归属。 */
-  const createEndpointSession = async (
-    apiContractId: string,
-    endpointId: string,
-    endpointLabel: string
-  ): Promise<SessionIdentity> => {
-    const normalizedApiContractId = apiContractId.trim()
-    const normalizedEndpointId = endpointId.trim()
-    if (!normalizedApiContractId || !normalizedEndpointId) {
-      throw new Error('接口标识不能为空。')
-    }
-    try {
-      return await createNewSession(undefined, undefined, {
-        apiContractId: normalizedApiContractId,
-        endpointId: normalizedEndpointId,
-        endpointLabel
-      })
-    } catch (caughtError) {
-      reportSessionError(caughtError)
-      throw caughtError
-    }
-  }
-
-  /** 从实体入口创建新的阶段会话；实体只用于初始标题，不成为会话归属。 */
-  const createEntitySession = async (
-    entityId: string,
-    entityLabel: string
-  ): Promise<SessionIdentity> => {
-    const normalizedEntityId = entityId.trim()
-    if (!normalizedEntityId) {
-      throw new Error('实体标识不能为空。')
-    }
-    try {
-      return await createNewSession(undefined, undefined, undefined, {
-        entityId: normalizedEntityId,
-        entityLabel
-      })
-    } catch (caughtError) {
-      reportSessionError(caughtError)
-      throw caughtError
-    }
-  }
-
   /** 为测试阶段创建独立的空白会话和 AG-UI thread，只保留测试阶段归属。 */
   const createTestSession = async (target: TestPhaseSessionTarget): Promise<SessionIdentity> => {
     const targetLabel = target.targetLabel.trim() || '当前应用'
     try {
-      return await createNewSession(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        { title: `测试：${targetLabel}`, workbenchPhase: 'test' }
-      )
+      return await createNewSession({ title: `测试：${targetLabel}`, workbenchPhase: 'test' })
     } catch (caughtError) {
       reportSessionError(caughtError)
       throw caughtError
@@ -856,13 +714,7 @@ export function useChatSessions({
   ): Promise<SessionIdentity> => {
     const targetLabel = target.targetLabel.trim() || '当前应用'
     try {
-      return await createNewSession(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        { title: `审查：${targetLabel}`, workbenchPhase: 'review' }
-      )
+      return await createNewSession({ title: `审查：${targetLabel}`, workbenchPhase: 'review' })
     } catch (caughtError) {
       reportSessionError(caughtError)
       throw caughtError
@@ -875,77 +727,25 @@ export function useChatSessions({
   ): Promise<SessionIdentity> => {
     const targetLabel = target.targetLabel.trim() || '当前应用'
     try {
-      return await createNewSession(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        { title: `验收：${targetLabel}`, workbenchPhase: 'acceptance' }
-      )
+      return await createNewSession({ title: `验收：${targetLabel}`, workbenchPhase: 'acceptance' })
     } catch (caughtError) {
       reportSessionError(caughtError)
       throw caughtError
     }
   }
 
-  /** 页面开发复用当前阶段会话；没有活动会话时创建一条自由对话。 */
-  const ensurePageSession = async (pageId: string, pageLabel: string): Promise<SessionIdentity> => {
-    const normalizedPageId = pageId.trim()
-    if (!normalizedPageId) throw new Error('页面标识不能为空。')
-    const promiseKey = `${editorMode}:${normalizedPageId}`
-    const pendingPromise = pageSessionPromisesRef.current[promiseKey]
-    if (pendingPromise) return pendingPromise
-
-    const sessionPromise = (async (): Promise<SessionIdentity> => {
-      if (activeSession) return activeSession
-      return createNewSession(normalizedPageId, pageLabel)
-    })()
-    pageSessionPromisesRef.current[promiseKey] = sessionPromise
-    try {
-      return await sessionPromise
-    } catch (caughtError) {
-      reportSessionError(caughtError)
-      throw caughtError
-    } finally {
-      delete pageSessionPromisesRef.current[promiseKey]
-    }
-  }
-
-  /** 接口开发复用当前阶段会话；没有活动会话时创建一条自由对话。 */
-  const ensureEndpointSession = async (
-    apiContractId: string,
-    endpointId: string,
-    endpointLabel: string
-  ): Promise<SessionIdentity> => {
-    const normalizedApiContractId = apiContractId.trim()
-    const normalizedEndpointId = endpointId.trim()
-    if (!normalizedApiContractId || !normalizedEndpointId) {
-      throw new Error('接口标识不能为空。')
-    }
-    if (activeSession) return activeSession
-    return createEndpointSession(
-      normalizedApiContractId,
-      normalizedEndpointId,
-      endpointLabel
-    )
-  }
-
-  /** 实体设计复用当前阶段会话；没有活动会话时创建一条自由对话。 */
-  const ensureEntitySession = async (
-    entityId: string,
-    entityLabel: string
-  ): Promise<SessionIdentity> => {
-    const normalizedEntityId = entityId.trim()
-    if (!normalizedEntityId) {
-      throw new Error('实体标识不能为空。')
-    }
-    if (activeSession) return activeSession
-    return createEntitySession(normalizedEntityId, entityLabel)
-  }
-
+  /** 新建对话只进入空白草稿态，首轮真实发送时才创建并持久化历史会话。 */
   const handleCreateSessionFromList = (): void => {
     if (!application.workspaceRoot) return
-    createNewSession().catch(reportSessionError)
+    const pendingKey = pendingDraftKey(application.workspaceRoot, editorMode)
+    setDraftByKey(pendingKey, '')
+    setSelectedSkillsByKey(pendingKey, [])
+    setActiveSessionIds((current) =>
+      withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
+    )
+    setPersistedActiveSessionId(application.id, editorMode, workbenchPhase, undefined)
+    setSessionErrors((current) => ({ ...current, [editorMode]: undefined }))
+    onCloseRightPanel()
   }
 
   const reportSessionError = (caughtError: unknown): void => {
@@ -1033,11 +833,8 @@ export function useChatSessions({
       withoutDeletedSessionSelection(current, identity.editorMode, identity.sessionId)
     )
     if (
-      getPersistedActiveSessionId(
-        application.id,
-        identity.editorMode,
-        summary.workbenchPhase
-      ) === identity.sessionId
+      getPersistedActiveSessionId(application.id, identity.editorMode, summary.workbenchPhase) ===
+      identity.sessionId
     ) {
       setPersistedActiveSessionId(
         application.id,
@@ -1060,11 +857,7 @@ export function useChatSessions({
     const session: ChatSessionRecord = {
       id: input.sessionId,
       title:
-        input.titleFrom &&
-        (existingSummary.title === '新对话' ||
-          existingSummary.title.startsWith('页面新会话：') ||
-          existingSummary.title.startsWith('接口新会话：') ||
-          existingSummary.title.startsWith('实体新会话：'))
+        input.titleFrom && existingSummary.title === '新对话'
           ? createChatSessionTitle(input.titleFrom)
           : existingSummary?.title || '新对话',
       editorMode: input.editorMode,
@@ -1091,9 +884,6 @@ export function useChatSessions({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
-    createEndpointSession,
-    createEntitySession,
-    createPageSession,
     createTestSession,
     createReviewSession,
     createAcceptanceSession,
@@ -1106,9 +896,6 @@ export function useChatSessions({
     ensureRevisionDevelopmentSession,
     recoverRevisionDevelopmentSession,
     activateRevisionDevelopmentSession,
-    ensureEndpointSession,
-    ensureEntitySession,
-    ensurePageSession,
     getSessionMessages,
     loadSessionIdentity,
     handleCreateSessionFromList,
@@ -1117,7 +904,6 @@ export function useChatSessions({
     openSessionForPhase,
     handleSelectEndpoint,
     handleSelectEntity,
-    handleSelectFreeChat,
     handleSelectPage,
     clearActiveSession,
     loadingSessions,

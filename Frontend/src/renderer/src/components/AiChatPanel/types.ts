@@ -1,5 +1,8 @@
 import type { ProcessStepRecord, ToolCallRecord } from '../../service/agUiAgent'
-import type { ChatSessionRevisionHandoff } from '../../service/chatSessions'
+import type {
+  ChatSessionDevelopmentContinuation,
+  ChatSessionRevisionHandoff
+} from '../../service/chatSessions'
 import type {
   ChatMessageSkill,
   EditorMode,
@@ -20,6 +23,8 @@ export type AgentChatMessage = {
   processSteps?: ProcessStepRecord[]
   /** 来源会话中的正式二次修改跳转回执。 */
   revisionHandoff?: ChatSessionRevisionHandoff
+  /** 实体设计完成后在同一会话中恢复原页面或 Endpoint 正式任务的操作卡。 */
+  developmentContinuation?: ChatSessionDevelopmentContinuation
   createdAt: number
   /** 设计阶段规划占位标记：用户提交操作后追加的 assistant 占位消息，
    *  流式 chunk 到达前显示 loading 态；chunk 到达后清除。 */

@@ -141,6 +141,14 @@ def workflow_capabilities() -> dict[str, Any]:
                     "TechnicalPlan hash/lifecycle revision/target；独立 application_planning 分支直接创建开发 execution，"
                     "主 Workflow 分支如携带有效来源 execution 则执行原子替换。"
                 ),
+                "start_entity_binding": (
+                    "引用开发门禁登记的 continuation，在独立 thread 启动缺失实体的 "
+                    "EntitySourceBinding execution。"
+                ),
+                "continue_after_entity_binding": (
+                    "消费实体确认后由后端签发的一次性 token，校验原 execution、目标与 "
+                    "TechnicalPlan 哈希后恢复原开发 thread，并重新执行开发前置检查。"
+                ),
             },
             "clientNodeSelectionAllowed": False,
         },

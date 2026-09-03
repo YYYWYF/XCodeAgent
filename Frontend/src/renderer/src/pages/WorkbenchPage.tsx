@@ -99,7 +99,6 @@ function WorkbenchPage({
   const editorMode: EditorMode = 'frontend'
   const [workspaceApplication, setWorkspaceApplication] = useState(application)
   const [developmentPlanningPagesLoaded, setDevelopmentPlanningPagesLoaded] = useState(false)
-  const [hasPageDesigns, setHasPageDesigns] = useState(false)
   const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<
     DevelopmentPlanningPageOption[]
   >([])
@@ -288,7 +287,6 @@ function WorkbenchPage({
         setDevelopmentPlanningEntities(
           Array.isArray(inspection.entities) ? inspection.entities : []
         )
-        setHasPageDesigns(inspection.hasPageDesigns)
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
         }
@@ -298,7 +296,6 @@ function WorkbenchPage({
         setDevelopmentPlanningPageTree([])
         setDevelopmentPlanningApiContracts([])
         setDevelopmentPlanningEntities([])
-        setHasPageDesigns(false)
         console.warn('检查 specs/plans 规划产物失败。', error)
       } finally {
         if (active) setDevelopmentPlanningPagesLoaded(true)
@@ -388,7 +385,6 @@ function WorkbenchPage({
                 application={workspaceApplication}
                 applicationLifecycle={applicationLifecycle}
                 developmentPlanningReady={developmentPlanningPagesLoaded}
-                hasPageDesigns={hasPageDesigns}
                 developmentPlanningPages={developmentPlanningPages}
                 developmentPlanningPageTree={developmentPlanningPageTree}
                 developmentPlanningApiContracts={developmentPlanningApiContracts}

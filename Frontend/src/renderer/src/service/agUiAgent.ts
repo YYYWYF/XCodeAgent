@@ -47,6 +47,10 @@ export type SendWorkflowMessageOptions = {
     changeId: string
     token: string
   }
+  developmentContinuation?: {
+    id: string
+    token?: string
+  }
   revisionInteraction?: WorkflowRevisionDraftInteraction
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
@@ -115,6 +119,7 @@ export function buildWorkflowForwardedProps(
     workflowAction: options.workflowAction,
     revisionRequest: options.revisionRequest,
     revisionContinuation: options.revisionContinuation,
+    developmentContinuation: options.developmentContinuation,
     revisionInteraction: options.revisionInteraction,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,

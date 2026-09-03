@@ -32,7 +32,7 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 ```text
 START
   → development_readiness_gate //校验页面/API关联实体均已完成数据源绑定
-      └─ 缺少绑定 → 提示用户手动进入独立 EntitySourceBinding，本轮结束
+      └─ 缺少绑定 → 当前会话进入独立 EntitySourceBinding 运行，完成后显示原目标续接卡
   → inspect_workspace //确定性工作区快照
   → prepare_build_tasks //二次复检实体绑定并生成静态 Build DAG
   → await_user_input //用户确认 Build DAG
@@ -77,7 +77,7 @@ START
 
 `unit_test`、`unit_test_repair`、`test_phase_confirmation`、`review_phase_confirmation`、`code_review`、`acceptance_phase_confirmation` 和 `acceptance` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员；`launch_project` 与 `acceptance_review` 是验收子图内部节点，启动进度仍以 `nodeName=launch_project` 输出。`unit_test_confirmation`、`frontend_performance_confirmation`、`code_review_repair_confirmation` 和 `acceptance_phase_confirmation` 是生命周期待交互类型，分别使用对应的 `run/skip`、`confirm`、`repair_all` 或 `confirm` 结构化答案恢复原节点；恢复必须携带原执行的 `resumeExecutionRunId`，其中性能测试确认只允许同一测试 thread 接管，验收阶段确认允许从审查 thread 原子转交到新的验收 thread。各阶段确认门、代码修复门和验收等待的 AG-UI 快照分别投影固定文案；恢复都校验原执行的 scope/target。审查确认提交后生命周期立即投影 `code_review`，验收阶段确认提交后立即投影 `acceptance`，使顶部阶段在新会话首帧前同步高亮。生命周期快照不再包含 schema 版本字段。
 
-需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 读取 `.xcodeagent/plans/technical-plan.json`；页面选择从 `pages[].references` 解析实现范围并在运行时编译 PageImplementationContract，API 选择直接读取 TechnicalPlan Endpoint。两者都先进入 `development_readiness_gate`，只在关联实体均有已确认 EntitySourceBinding 时继续。门禁不会自动跳转实体；用户完成独立绑定后必须重新发起原目标开发。
+需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 读取 `.xcodeagent/plans/technical-plan.json`；页面选择从 `pages[].references` 解析实现范围并在运行时编译 PageImplementationContract，API 选择直接读取 TechnicalPlan Endpoint。两者都先进入 `development_readiness_gate`，只在关联实体均有已确认 EntitySourceBinding 时继续。门禁卡允许在当前通用历史会话启动独立 thread 的实体 execution；确认完成后由后端签发的消息级续接卡恢复原目标，用户显式点击并消费一次性 token 后回到原开发 thread 重新执行门禁。
 
 ### 主 Graph 起点的参考架构映射与上下文预算
 
@@ -256,11 +256,13 @@ API 契约在此阶段作为前后端共享事实生成。每个 Endpoint 保存
 
 ### `development_readiness_gate` 与 `entity_source_binding`
 
-页面/API开发入口只做确定性就绪检查，不调用设计模型。页面从 `PageImplementationContract.requiredEndpointIds` 收集 Endpoint，API直接定位所选 Endpoint，再通过 Contract `entity_ids` 收集关联实体。缺少已确认绑定时返回 `entity_source_binding_required`，前端提示用户手动选择实体；门禁不自动跳转，也不保留自动续跑动作。
+页面/API开发入口只做确定性就绪检查，不调用设计模型。页面从 `PageImplementationContract.requiredEndpointIds` 收集 Endpoint，API直接定位所选 Endpoint，再通过 Contract `entity_ids` 收集关联实体。缺少已确认绑定时返回 `entity_source_binding_required`，并在 `application-lifecycle.json` 内登记原开发 execution 的 continuation；前端只引用其 ID 启动独立实体 thread。实体确认后，后端使用最新 TechnicalPlan 复检原目标并签发一次性 token；消息级续接卡只保存这份服务端合同，不把目标升级为会话归属，也不会自动执行正式开发。
 
 EntitySourceBinding 是独立主 Graph 分支：以 `selectedEntityId` 进入，从 TechnicalPlan `entities` 定位实体，支持数据库、外部 API 和静态数据。数据库方案读取受控元数据，生成字段绑定和建表/补列操作，高危 DDL 必须审批；外部 API 方案保存路径、方法和字段映射；静态方案保存字段取值与种子数据。确认后写入 `.xcodeagent/plans/entities/entity--<entityId>.json/.md` 和实体 `source_binding` 引用，并结束本轮，不自动进入 Build。
 
-SQLite checkpointer 保存主 Graph 状态；恢复只携带阻断节点需要的小型结构化状态。开发就绪门缺失绑定时不保存自动跳转或自动续跑指令，用户重新选择页面/API后重新计算当前正式绑定状态。
+SQLite checkpointer 保存各 execution thread 的主 Graph 状态；恢复只携带阻断节点需要的小型结构化状态。开发就绪门缺失绑定时不在原 thread 写入实体目标；实体设计使用独立 thread，避免 `selected_entity_id` 污染原页面/API checkpoint。前端在同一历史会话的消息中持久化显式续接卡，用户点击后由后端校验 token、原 execution、目标和 TechnicalPlan 哈希，再在原开发 thread 新建 run 并重新计算当前正式绑定状态。
+
+实体确认后仍有缺项时，在当前对话展示剩余实体并继续补齐；全部完成后才显示继续开发入口。实体 thread 在每轮节点更新中保留 checkpoint 内的 continuation ID，生命周期产生的公开合同独立于 Graph 状态并贯穿最终 AG-UI 快照。续接卡在消息运行完成时持久化，切换大纲或会话不影响保存。消费 token 与接替原 execution 原子提交，解析请求或启动失败不会提前烧掉 token。
 
 `prepare_build_tasks` 生成任务 DAG 前必须执行确定性的 API 契约一致性检查：数据源不得包含独立 `schema`；所有 schema/endpoint 引用必须存在；页面 `response_bindings.source_path` 必须来自所依赖 endpoint 的响应 Schema；写接口必须声明请求 Schema，非删除接口必须声明响应 Schema。任何错误都会在任务拆分前阻止构建；`integration_test` 不重复校验已经确认并通过任务准备门禁的 ProjectPlan。
 

@@ -63,6 +63,7 @@ export type WorkflowSummary = {
   lifecycle?: ApplicationLifecycle
   revisionImpact?: WorkflowRevisionImpact
   revisionContinuation?: WorkflowRevisionContinuation
+  developmentContinuation?: WorkflowDevelopmentContinuation
   revisionDraft?: WorkflowRevisionDraft
   [key: string]: unknown
 }
@@ -120,6 +121,28 @@ export type WorkflowRevisionContinuation = {
   action: 'continue_revision_build'
   token: string
   technicalPlanSha256: string
+}
+
+export type WorkflowDevelopmentTarget =
+  | { type: 'page'; pageId: string; label: string }
+  | {
+      type: 'endpoint'
+      apiContractId: string
+      endpointId: string
+      label: string
+    }
+
+export type WorkflowDevelopmentContinuation = {
+  id: string
+  status: 'awaiting_entity_binding' | 'ready' | 'consumed'
+  action: 'start_entity_binding' | 'continue_after_entity_binding'
+  sourceThreadId: string
+  sourceRunId: string
+  target: WorkflowDevelopmentTarget
+  requiredEntityIds: string[]
+  remainingEntityIds: string[]
+  token?: string
+  technicalPlanSha256?: string
 }
 
 export type WorkflowRevisionDraft = {
@@ -890,6 +913,7 @@ export type LifecyclePendingInteractionType =
   | 'requirement_clarification'
   | 'requirement_document_confirmation'
   | 'technical_plan_confirmation'
+  | 'entity_source_binding'
   | 'page_design_confirmation'
   | 'task_plan_confirmation'
   | 'impact_confirmation'
@@ -1000,6 +1024,8 @@ export type WorkflowAction =
   | 'start_revision'
   | 'submit_revision_interaction'
   | 'continue_revision_build'
+  | 'start_entity_binding'
+  | 'continue_after_entity_binding'
 
 export type WorkflowCodeReviewRetry = {
   available: true

@@ -23,7 +23,6 @@ type Props = {
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
   developmentPlanningReady: boolean
-  hasPageDesigns: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
@@ -74,7 +73,6 @@ export default function LeftPanel({
   application,
   applicationLifecycle,
   developmentPlanningReady,
-  hasPageDesigns,
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
@@ -113,7 +111,6 @@ export default function LeftPanel({
             application={application}
             applicationLifecycle={applicationLifecycle}
             developmentPlanningReady={developmentPlanningReady}
-            hasPageDesigns={hasPageDesigns}
             developmentPlanningPages={developmentPlanningPages}
             developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}

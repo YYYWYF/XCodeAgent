@@ -559,6 +559,9 @@ def entity_source_binding(state: ProjectState) -> dict:
     result["phase"] = "entity_source_binding"
     result["timeline"] = ["entity_source_binding"]
     result["entity_source_binding_submission"] = {}
+    # 每轮设计确认只从该实体 thread 的 checkpoint 取关联，不能依赖客户端
+    # 回传或本轮 initial_state；确认通常已经是独立的后续 AG-UI run。
+    result["development_continuation_id"] = str(state.get("development_continuation_id") or "")
     clarification = result.get("clarification")
     if isinstance(clarification, dict):
         clarification.setdefault("workflow_phase", "entity_source_binding")
@@ -1965,7 +1968,7 @@ def _entity_design_confirmed_payload(
         detail_target_type=detail_target_type or "entity",
     )
     payload["status"] = "clear"
-    message = f"实体 `{selected_entity_id}` 的数据源绑定已确认并保存；请重新选择页面或 API 开始开发。"
+    message = f"实体 `{selected_entity_id}` 的数据源绑定已确认并保存。"
     detail = next(
         (
             item

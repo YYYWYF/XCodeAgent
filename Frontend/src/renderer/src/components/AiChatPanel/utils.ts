@@ -354,46 +354,6 @@ export function workflowPreviewTarget(
   }
 }
 
-/** 仅在当前工作区还没有任何已持久化设计时显示首次详细设计目标选择器。 */
-export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): boolean {
-  return !hasPageDesigns
-}
-
-type DevelopmentTargetSelectorState = {
-  developmentEntrySelectionPending: boolean
-  developmentPlanningReady: boolean
-  detailConfirmationWaitingReview: boolean
-  detailProgressVisible: boolean
-  freeChatSelected: boolean
-  hasActiveDetailWorkflow: boolean
-  initialDetailDesignSelectionRequired: boolean
-  isApplicationPlanningPhase: boolean
-}
-
-/** 判断开发对象选择器是否应接管主区域；显式进入开发必须优先于残留会话状态。 */
-export function shouldShowDevelopmentTargetSelector({
-  developmentEntrySelectionPending,
-  developmentPlanningReady,
-  detailConfirmationWaitingReview,
-  detailProgressVisible,
-  freeChatSelected,
-  hasActiveDetailWorkflow,
-  initialDetailDesignSelectionRequired,
-  isApplicationPlanningPhase
-}: DevelopmentTargetSelectorState): boolean {
-  if (isApplicationPlanningPhase) return false
-  // 已有页面/API/Endpoint 设计时，重新进入开发只恢复工作台，不再强制弹出目标选择器。
-  if (developmentEntrySelectionPending) return initialDetailDesignSelectionRequired
-  return (
-    developmentPlanningReady &&
-    initialDetailDesignSelectionRequired &&
-    !hasActiveDetailWorkflow &&
-    !detailProgressVisible &&
-    !detailConfirmationWaitingReview &&
-    !freeChatSelected
-  )
-}
-
 /** 以当前实体的数据源绑定状态判断是否需要锁定对话区。 */
 export function requiresEntitySourceBinding(
   entity: DevelopmentPlanningEntityOption | undefined
@@ -402,9 +362,7 @@ export function requiresEntitySourceBinding(
 }
 
 /** 以页面详细设计文档状态判断是否需要显示开始详细设计入口。 */
-export function requiresPageDetailDesign(
-  page: DevelopmentPlanningPageOption | undefined
-): boolean {
+export function requiresPageDetailDesign(page: DevelopmentPlanningPageOption | undefined): boolean {
   return Boolean(page && !page.designed && !page.hasDetailPlan)
 }
 

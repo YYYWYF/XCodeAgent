@@ -1,0 +1,471 @@
+.@{class-prefix}-quick-task-guide {
+  display: flex;
+  width: min(100%, 1000px);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 4px 0 8px;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 18px;
+}
+
+.@{class-prefix}-quick-task-guide-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  h3.ant-typography {
+    margin: 0;
+    color: var(--wb-text);
+    font-size: 23px;
+    line-height: 1.3;
+  }
+
+  .ant-typography-secondary {
+    max-width: 680px;
+    color: var(--wb-text-secondary);
+    font-size: 13px;
+    line-height: 1.65;
+  }
+}
+
+.@{class-prefix}-quick-task-guide-mark {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  font-size: 18px;
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 13px;
+}
+
+.@{class-prefix}-quick-task-guide-eyebrow.ant-typography {
+  color: var(--wb-accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.@{class-prefix}-quick-task-grid {
+  display: grid;
+  min-height: 0;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.@{class-prefix}-quick-task-section {
+  display: flex;
+  min-width: 0;
+  min-height: 220px;
+  max-height: min(390px, calc(100vh - 300px));
+  padding: 12px;
+  background: color-mix(in srgb, var(--wb-surface) 76%, transparent);
+  border: 1px solid var(--wb-border);
+  border-radius: 16px;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.@{class-prefix}-quick-task-section-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 2px;
+
+  .ant-typography {
+    margin: 0;
+    color: var(--wb-text);
+    font-size: 12px;
+  }
+
+  .ant-typography-secondary {
+    min-width: 20px;
+    padding: 0 6px;
+    color: var(--wb-text-tertiary);
+    text-align: center;
+    background: var(--wb-surface-subtle);
+    border-radius: 999px;
+  }
+}
+
+.@{class-prefix}-quick-task-section-icon {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-quick-task-list {
+  display: flex;
+  min-height: 0;
+  padding: 1px 2px 0 0;
+  overflow-y: auto;
+  scrollbar-color: color-mix(in srgb, var(--wb-text-tertiary) 24%, transparent) transparent;
+  scrollbar-width: thin;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.@{class-prefix}-quick-task-tooltip-anchor {
+  display: block;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.@{class-prefix}-quick-task-tooltip {
+  max-width: 330px;
+  padding-bottom: 7px;
+
+  .ant-tooltip-arrow {
+    display: none;
+  }
+
+  .ant-tooltip-inner {
+    min-width: 240px;
+    max-width: 320px;
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 14px;
+  }
+}
+
+.@{class-prefix}-quick-task-tooltip-content {
+  display: flex;
+  padding: 13px 14px 14px;
+  flex-direction: column;
+}
+
+.@{class-prefix}-quick-task-tooltip-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 9px;
+}
+
+.@{class-prefix}-quick-task-tooltip-icon {
+  display: inline-flex;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 23px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.@{class-prefix}-quick-task-tooltip-kind {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-quick-task-tooltip-meta {
+  max-width: 58%;
+  margin-left: auto;
+  overflow: hidden;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-quick-task-tooltip-title {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.@{class-prefix}-quick-task-tooltip-description {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
+  .@{class-prefix}-quick-task-tooltip .ant-tooltip-inner {
+    color: #202124;
+    background: radial-gradient(circle at 0 0, rgba(107, 60, 240, 0.09), transparent 48%), #ffffff;
+    border-color: rgba(107, 60, 240, 0.2);
+    box-shadow:
+      0 18px 45px rgba(35, 24, 68, 0.16),
+      0 2px 8px rgba(35, 24, 68, 0.08);
+  }
+
+  .@{class-prefix}-quick-task-tooltip-icon,
+  .@{class-prefix}-quick-task-tooltip-meta {
+    color: #6b3cf0;
+    background: rgba(107, 60, 240, 0.08);
+  }
+
+  .@{class-prefix}-quick-task-tooltip-kind,
+  .@{class-prefix}-quick-task-tooltip-description {
+    color: #65666a;
+  }
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
+  .@{class-prefix}-quick-task-tooltip .ant-tooltip-inner {
+    color: #f2f2f4;
+    background: radial-gradient(circle at 0 0, rgba(167, 130, 255, 0.14), transparent 50%), #24232c;
+    border-color: rgba(167, 130, 255, 0.28);
+    box-shadow:
+      0 20px 48px rgba(0, 0, 0, 0.4),
+      0 2px 10px rgba(0, 0, 0, 0.24);
+  }
+
+  .@{class-prefix}-quick-task-tooltip-icon,
+  .@{class-prefix}-quick-task-tooltip-meta {
+    color: #b59aff;
+    background: rgba(167, 130, 255, 0.13);
+  }
+
+  .@{class-prefix}-quick-task-tooltip-kind,
+  .@{class-prefix}-quick-task-tooltip-description {
+    color: #aeadb6;
+  }
+}
+
+.@{class-prefix}-quick-task-item {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+  color: var(--wb-text);
+  text-align: left;
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 11px;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    transform 0.16s ease;
+
+  &:hover,
+  &:focus-visible {
+    background: color-mix(in srgb, var(--wb-accent-soft) 58%, var(--wb-canvas));
+    border-color: var(--wb-accent-border);
+    outline: none;
+    transform: translateY(-1px);
+
+    .@{class-prefix}-quick-task-item-arrow {
+      color: var(--wb-accent);
+      transform: translateX(2px);
+    }
+  }
+
+  &:disabled {
+    cursor: wait;
+    opacity: 0.55;
+    transform: none;
+  }
+}
+
+.@{class-prefix}-quick-task-item-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.@{class-prefix}-quick-task-item-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-quick-task-item-title.ant-typography {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: 12px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-quick-task-item-meta.ant-typography {
+  flex: 0 0 auto;
+  max-width: 44%;
+  overflow: hidden;
+  padding: 1px 6px;
+  color: var(--wb-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--wb-accent-soft);
+  border-radius: 5px;
+}
+
+.@{class-prefix}-quick-task-item-description.ant-typography {
+  display: block;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  font-size: 10px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-quick-task-item-arrow {
+  flex: 0 0 auto;
+  color: var(--wb-text-tertiary);
+  font-size: 10px;
+  transition:
+    color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.@{class-prefix}-quick-task-empty.ant-typography {
+  display: flex;
+  min-height: 118px;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  text-align: center;
+  background: var(--wb-surface-subtle);
+  border: 1px dashed var(--wb-border);
+  border-radius: 11px;
+}
+
+.@{class-prefix}-quick-task-loading {
+  padding: 18px;
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 16px;
+}
+
+@container ai-chat-main (max-width: 680px) {
+  .@{class-prefix}-quick-task-guide {
+    padding-top: 2px;
+  }
+
+  .@{class-prefix}-quick-task-grid {
+    gap: 6px;
+  }
+
+  .@{class-prefix}-quick-task-section {
+    min-height: 210px;
+    max-height: min(330px, calc(100vh - 270px));
+    padding: 7px;
+    gap: 7px;
+    border-radius: 12px;
+  }
+
+  .@{class-prefix}-quick-task-section-header {
+    gap: 4px;
+    padding-inline: 0;
+
+    .ant-typography {
+      font-size: 10px;
+    }
+
+    .ant-typography-secondary {
+      min-width: 17px;
+      padding-inline: 4px;
+    }
+  }
+
+  .@{class-prefix}-quick-task-section-icon {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    border-radius: 6px;
+    font-size: 11px;
+  }
+
+  .@{class-prefix}-quick-task-list {
+    gap: 5px;
+    padding-right: 0;
+  }
+
+  .@{class-prefix}-quick-task-item {
+    min-height: 57px;
+    gap: 4px;
+    padding: 7px;
+    border-radius: 8px;
+  }
+
+  .@{class-prefix}-quick-task-item-title-row {
+    display: block;
+  }
+
+  .@{class-prefix}-quick-task-item-title.ant-typography {
+    font-size: 10px;
+    line-height: 15px;
+  }
+
+  .@{class-prefix}-quick-task-item-meta.ant-typography {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    margin-top: 3px;
+    padding-inline: 4px;
+    font-size: 8px;
+    line-height: 13px;
+  }
+
+  .@{class-prefix}-quick-task-item-description.ant-typography {
+    display: none;
+  }
+
+  .@{class-prefix}-quick-task-item-arrow {
+    font-size: 8px;
+  }
+}
+
+@container ai-chat-main (min-width: 681px) and (max-width: 900px) {
+  .@{class-prefix}-quick-task-guide-heading {
+    gap: 12px;
+  }
+
+  .@{class-prefix}-quick-task-section {
+    padding: 10px;
+  }
+
+  .@{class-prefix}-quick-task-section-header {
+    gap: 6px;
+  }
+
+  .@{class-prefix}-quick-task-item {
+    padding: 9px;
+  }
+}

@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
   pageDetailTargetKey,
   requiresEndpointDetailDesign,
-  requiresInitialDetailDesignSelection,
   requiresPageDetailDesign,
-  shouldShowDevelopmentTargetSelector,
   shouldShowEndpointDetailDesignEntry,
   shouldShowPageDetailDesignEntry,
   workflowDetailTargetKey,
@@ -16,6 +16,10 @@ import {
   workflowShouldShowCodeChanges,
   workflowShouldShowCodeReview
 } from '../src/renderer/src/components/AiChatPanel/utils'
+import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide/quickTasks'
+import { developmentContinuationFromWorkflow } from '../src/renderer/src/components/AiChatPanel/developmentContinuation'
+import DevelopmentContinuationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/DevelopmentContinuationCard'
+import RemainingEntityBindingsCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/RemainingEntityBindingsCard'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
@@ -509,51 +513,151 @@ test('待设计页面仅在没有正式开发产物时使用锁定蒙层', () =>
   assert.equal(requiresPageDetailDesign({ ...pendingPage, hasDetailPlan: true }), false)
 })
 
-test('模板就绪后没有任何设计时显式进入开发显示目标选择器', () => {
-  assert.equal(
-    shouldShowDevelopmentTargetSelector({
-      developmentEntrySelectionPending: true,
-      developmentPlanningReady: false,
-      detailConfirmationWaitingReview: false,
-      detailProgressVisible: false,
-      freeChatSelected: true,
-      hasActiveDetailWorkflow: true,
-      initialDetailDesignSelectionRequired: true,
-      isApplicationPlanningPhase: false
-    }),
-    true
+test('页面和 Endpoint 快捷任务保留本次运行目标且不生成会话绑定字段', () => {
+  const tasks = buildQuickTasks(
+    [
+      {
+        pageId: 'page-home',
+        key: 'page-home',
+        label: '首页',
+        path: '/home',
+        purpose: '应用首页',
+        designed: false,
+        hasDetailPlan: false
+      }
+    ],
+    [
+      {
+        id: 'orders-api',
+        label: '订单接口',
+        endpoints: [
+          {
+            id: 'list-orders',
+            method: 'get',
+            path: '/orders',
+            summary: '查询订单',
+            designed: true,
+            hasDetailPlan: true
+          }
+        ]
+      }
+    ],
+    []
   )
-  assert.equal(
-    shouldShowDevelopmentTargetSelector({
-      developmentEntrySelectionPending: true,
-      developmentPlanningReady: true,
-      detailConfirmationWaitingReview: false,
-      detailProgressVisible: false,
-      freeChatSelected: false,
-      hasActiveDetailWorkflow: false,
-      initialDetailDesignSelectionRequired: true,
-      isApplicationPlanningPhase: true
-    }),
-    false
-  )
+  assert.deepEqual(tasks[0], {
+    description: '应用首页',
+    hasDetailPlan: false,
+    id: 'page:page-home',
+    kind: 'page',
+    meta: '/home',
+    pageId: 'page-home',
+    pageLabel: '首页',
+    title: '首页'
+  })
+  assert.deepEqual(tasks[1], {
+    apiContractId: 'orders-api',
+    description: '查询订单',
+    endpointId: 'list-orders',
+    endpointLabel: 'GET /orders',
+    hasDetailPlan: true,
+    id: 'endpoint:orders-api:list-orders',
+    kind: 'endpoint',
+    meta: 'GET',
+    title: '/orders'
+  })
+  assert.equal('sessionId' in tasks[0], false)
+  assert.equal('threadId' in tasks[1], false)
 })
 
-test('已有页面或接口设计时重新进入开发不再显示目标选择器', () => {
-  assert.equal(requiresInitialDetailDesignSelection(false), true)
-  assert.equal(requiresInitialDetailDesignSelection(true), false)
-  assert.equal(
-    shouldShowDevelopmentTargetSelector({
-      developmentEntrySelectionPending: true,
-      developmentPlanningReady: true,
-      detailConfirmationWaitingReview: false,
-      detailProgressVisible: false,
-      freeChatSelected: false,
-      hasActiveDetailWorkflow: false,
-      initialDetailDesignSelectionRequired: false,
-      isApplicationPlanningPhase: false
-    }),
-    false
+test('实体完成续接只接受后端签发的完整原页面合同', () => {
+  const workflow = previewWorkflow({
+    phase: 'entity_source_binding',
+    status: 'completed',
+    developmentContinuation: {
+      id: 'devcont-page-home',
+      status: 'ready',
+      action: 'continue_after_entity_binding',
+      sourceThreadId: 'thread-page-home',
+      sourceRunId: 'run-page-home',
+      token: 't'.repeat(48),
+      technicalPlanSha256: 'a'.repeat(64),
+      target: { type: 'page', pageId: 'page-home', label: '首页' },
+      requiredEntityIds: ['Order'],
+      remainingEntityIds: []
+    }
+  })
+  const continuation = developmentContinuationFromWorkflow(
+    workflow,
+    [
+      {
+        pageId: 'page-home',
+        key: 'page-home',
+        label: '首页',
+        path: '/home',
+        purpose: '应用首页',
+        designed: false
+      }
+    ],
+    []
   )
+
+  assert.deepEqual(continuation, {
+    id: 'devcont-page-home',
+    status: 'ready',
+    sourceThreadId: 'thread-page-home',
+    sourceRunId: 'run-page-home',
+    token: 't'.repeat(48),
+    technicalPlanSha256: 'a'.repeat(64),
+    target: { type: 'page', pageId: 'page-home', label: '首页' }
+  })
+})
+
+test('实体完成续接卡明确提示并提供原页面开发动作', () => {
+  const markup = renderToStaticMarkup(
+    createElement(DevelopmentContinuationCard, {
+      continuation: {
+        id: 'devcont-page-home',
+        status: 'ready',
+        sourceThreadId: 'thread-page-home',
+        sourceRunId: 'run-page-home',
+        token: 't'.repeat(48),
+        technicalPlanSha256: 'a'.repeat(64),
+        target: { type: 'page', pageId: 'page-home', label: '首页' }
+      },
+      onContinue: () => undefined
+    })
+  )
+
+  assert.match(markup, /实体设计已完成/)
+  assert.match(markup, /继续开发页面/)
+  assert.match(markup, /首页/)
+})
+
+test('实体部分确认后仍显示原接口的剩余实体，且不提前提供开发续接', () => {
+  const workflow = previewWorkflow({
+    phase: 'entity_source_binding',
+    status: 'completed',
+    developmentContinuation: {
+      id: 'devcont-orders',
+      status: 'awaiting_entity_binding',
+      action: 'start_entity_binding',
+      sourceThreadId: 'source-thread',
+      sourceRunId: 'source-run',
+      target: { type: 'endpoint', apiContractId: 'orders-api', endpointId: 'list', label: 'GET /orders' },
+      requiredEntityIds: ['Order', 'Customer'],
+      remainingEntityIds: ['Customer']
+    }
+  })
+  assert.equal(developmentContinuationFromWorkflow(workflow), undefined)
+  const markup = renderToStaticMarkup(createElement(RemainingEntityBindingsCard, { workflow }))
+  assert.match(markup, /GET \/orders/)
+  assert.match(markup, /Customer/)
+  assert.match(markup, /去设计实体/)
+  assert.doesNotMatch(markup, /<button[^>]*disabled/)
+  const historicalMarkup = renderToStaticMarkup(createElement(RemainingEntityBindingsCard, {
+    workflow, disabled: true
+  }))
+  assert.match(historicalMarkup, /disabled/)
 })
 
 test('页面、接口和 Workflow 使用一致的详情目标键', () => {

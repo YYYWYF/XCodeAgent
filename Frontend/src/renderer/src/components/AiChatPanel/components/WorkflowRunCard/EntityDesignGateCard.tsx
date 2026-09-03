@@ -1,8 +1,4 @@
-import {
-  ArrowRightOutlined,
-  ExclamationCircleOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons'
+import { ArrowRightOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import { Button, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
@@ -19,16 +15,14 @@ type EntityDesignGateCardProps = {
   explanation: string
   entities: EntityDesignGateEntity[]
   onJump: (entityId: string) => void
-  onRetry: () => void
 }
 
-/** 实体数据源绑定门禁卡片：展示缺失实体并支持一键跳转绑定、完成后再重新检测。 */
+/** 实体数据源绑定门禁卡片：展示尚缺实体并在当前会话补齐前置条件。 */
 export default function EntityDesignGateCard({
   disabled,
   explanation,
   entities,
-  onJump,
-  onRetry,
+  onJump
 }: EntityDesignGateCardProps): ReactElement {
   return (
     <div className={cx('workflow-entity-gate-card')}>
@@ -58,7 +52,7 @@ export default function EntityDesignGateCard({
                   size="small"
                   type="primary"
                 >
-                  前往绑定
+                  去设计实体
                 </Button>
               </div>
             )
@@ -66,17 +60,7 @@ export default function EntityDesignGateCard({
         </div>
       ) : null}
       <div className={cx('workflow-entity-gate-actions')}>
-        <Text type="secondary">
-          完成实体数据源绑定后点击重新检测，继续当前页面/API开发。
-        </Text>
-        <Button
-          disabled={disabled}
-          icon={<ReloadOutlined />}
-          onClick={onRetry}
-          type="primary"
-        >
-          重新检测
-        </Button>
+        <Text type="secondary">全部所需实体确认后，会显示原任务的继续开发按钮。</Text>
       </div>
     </div>
   )
