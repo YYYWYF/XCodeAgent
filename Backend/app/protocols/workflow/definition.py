@@ -106,7 +106,8 @@ def workflow_capabilities() -> dict[str, Any]:
                     "修复重试复用原问题快照和失败前轮次。"
                 ),
                 "build_task_plan_confirmation": (
-                    "通过 clarificationAnswers 提交只读 Build 任务计划的 confirm 或 regenerate 动作。"
+                    "通过 clarificationAnswers 提交 Build DAG 的 confirm、patch 或 regenerate 动作；"
+                    "确认对象只允许修改任务 title 和 description。"
                 ),
                 "test_phase_confirmation": (
                     "通过 clarificationAnswers.test_phase_confirmation 提交结构化 confirm 动作；"

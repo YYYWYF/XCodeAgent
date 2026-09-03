@@ -2,11 +2,7 @@ import { ArrowLeftOutlined, NodeIndexOutlined } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { DagGenerationStageRecord } from '../../../../service/agUiAgent'
-import type {
-  WorkflowBuildTargetReview,
-  WorkflowBuildTaskPlan,
-  WorkflowBuildTaskPlanConfirmation
-} from '../../../../typings'
+import type { WorkflowBuildTaskPlan, WorkflowBuildTaskPlanConfirmation } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { StageOutput } from '../ProcessSteps/DagGenerationProgress'
 import BuildTaskPlanConfirmation from '../WorkflowRunCard/BuildTaskPlanConfirmation'
@@ -16,7 +12,6 @@ type Props = {
   confirmationDisabled?: boolean
   confirmationErrors?: string[]
   confirmationPlan?: WorkflowBuildTaskPlan
-  confirmationTargetReview?: WorkflowBuildTargetReview
   onConfirmationSubmit?: (action: WorkflowBuildTaskPlanConfirmation) => void
   onReturnToConfirmation?: () => void
   stage?: DagGenerationStageRecord
@@ -27,7 +22,6 @@ export default function StageOutputPanel({
   confirmationDisabled,
   confirmationErrors,
   confirmationPlan,
-  confirmationTargetReview,
   onConfirmationSubmit,
   onReturnToConfirmation,
   stage
@@ -41,7 +35,6 @@ export default function StageOutputPanel({
           errors={confirmationErrors}
           onSubmit={(action) => onConfirmationSubmit?.(action)}
           plan={confirmationPlan}
-          targetReview={confirmationTargetReview}
         />
       </section>
     )

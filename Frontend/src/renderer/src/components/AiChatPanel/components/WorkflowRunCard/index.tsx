@@ -191,7 +191,8 @@ export default function WorkflowRunCard({
   const testTarget = (clarification?.testTarget ||
     workflow.summary?.testTarget ||
     workflow.state?.testTarget) as WorkflowTestTarget | undefined
-  const dagTaskPlan = clarification?.taskPlan as WorkflowBuildTaskPlan | undefined
+  const dagTaskPlan =
+    (clarification?.taskPlan as WorkflowBuildTaskPlan | undefined) || workflow.summary.buildTaskPlan
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -244,7 +245,7 @@ export default function WorkflowRunCard({
   const confirmationItemCount = detailReview
     ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
     : dagConfirmation
-      ? dagTaskPlan?.scopeTasks?.length || 0
+      ? dagTaskPlan?.tasks?.length || 0
       : testPhaseConfirmation
         ? 1
         : reviewPhaseConfirmation
@@ -512,7 +513,6 @@ export default function WorkflowRunCard({
                 })
               }
               plan={dagTaskPlan}
-              targetReview={clarification?.targetReview}
             />
           ) : unitTestConfirmation && requiresConfirmation ? (
             <UnitTestConfirmationPanel

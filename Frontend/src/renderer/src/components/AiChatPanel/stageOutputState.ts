@@ -1,10 +1,6 @@
 import type { DagGenerationSnapshot, DagGenerationStageRecord } from '../../service/agUiAgent'
 import { processStepsForDisplay } from '../../service/processStepHistory'
-import type {
-  WorkflowBuildTargetReview,
-  WorkflowBuildTaskPlan,
-  WorkflowRunPayload
-} from '../../typings'
+import type { WorkflowBuildTaskPlan, WorkflowRunPayload } from '../../typings'
 import type { AgentChatMessage } from './types'
 
 export type StageOutputPhase = 'generation' | 'confirmation' | 'other'
@@ -31,14 +27,7 @@ export function currentDagConfirmationPlan(
 ): WorkflowBuildTaskPlan | undefined {
   const clarification = currentDagConfirmationPayload(workflow)
   if (!clarification) return undefined
-  return clarification.taskPlan
-}
-
-/** 读取当前 DAG 确认目标，供右侧确认卡展示页面及其实际关联接口。 */
-export function currentDagConfirmationTargetReview(
-  workflow: WorkflowRunPayload | undefined
-): WorkflowBuildTargetReview | undefined {
-  return currentDagConfirmationPayload(workflow)?.targetReview
+  return clarification.taskPlan || workflow?.summary.buildTaskPlan
 }
 
 /** 读取当前 DAG 确认卡的结构化错误，供右侧交互卡复用原始反馈。 */
@@ -52,13 +41,7 @@ export function currentDagConfirmationErrors(workflow: WorkflowRunPayload | unde
 /** 从 Workflow 当前投影位置解析 DAG 确认载荷，不读取历史阶段快照。 */
 function currentDagConfirmationPayload(
   workflow: WorkflowRunPayload | undefined
-):
-  | {
-      taskPlan?: WorkflowBuildTaskPlan
-      targetReview?: WorkflowBuildTargetReview
-      errors?: unknown
-    }
-  | undefined {
+): { taskPlan?: WorkflowBuildTaskPlan; errors?: unknown } | undefined {
   if (!workflow) return undefined
   return [
     workflow.summary.clarification,
@@ -70,13 +53,7 @@ function currentDagConfirmationPayload(
       value &&
       typeof value === 'object' &&
       String((value as { mode?: string }).mode || '') === 'build_task_plan_confirmation'
-  ) as
-    | {
-        taskPlan?: WorkflowBuildTaskPlan
-        targetReview?: WorkflowBuildTargetReview
-        errors?: unknown
-      }
-    | undefined
+  ) as { taskPlan?: WorkflowBuildTaskPlan; errors?: unknown } | undefined
 }
 
 /** 区分 DAG 生成、DAG 确认和其它大阶段，供右侧面板只在大阶段变化时自动跟随。 */

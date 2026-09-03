@@ -225,10 +225,12 @@ function buildTaskPlanConfirmationAction(
   const value = answers.build_task_plan_confirmation
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const action = String((value as Record<string, unknown>).action || '')
-  if (!['confirm', 'regenerate'].includes(action)) return undefined
+  if (!['confirm', 'patch', 'regenerate'].includes(action)) return undefined
+  const patches = (value as Record<string, unknown>).patches
   return {
     mode: 'build_task_plan_confirmation',
-    action: action as WorkflowBuildTaskPlanConfirmation['action']
+    action: action as WorkflowBuildTaskPlanConfirmation['action'],
+    ...(Array.isArray(patches) ? { patches } : {})
   }
 }
 
@@ -238,6 +240,7 @@ function buildTaskPlanConfirmationMessage(
 ): string {
   const messages: Record<WorkflowBuildTaskPlanConfirmation['action'], string> = {
     confirm: '已确认 Build DAG，请进入 Build。',
+    patch: '已提交 Build DAG 任务修改，请重新校验并确认。',
     regenerate: '请重新生成 Build DAG。'
   }
   return messages[action]

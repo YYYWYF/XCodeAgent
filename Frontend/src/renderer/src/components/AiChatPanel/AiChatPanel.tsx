@@ -112,7 +112,6 @@ import {
 import {
   currentDagConfirmationErrors,
   currentDagConfirmationPlan,
-  currentDagConfirmationTargetReview,
   latestDagGenerationSnapshot,
   runningDagGenerationStage,
   selectedDagGenerationStage,
@@ -2966,10 +2965,6 @@ export default function AiChatPanel({
     () => currentDagConfirmationPlan(stageOutputWorkflow),
     [stageOutputWorkflow]
   )
-  const dagConfirmationTargetReview = useMemo(
-    () => currentDagConfirmationTargetReview(stageOutputWorkflow),
-    [stageOutputWorkflow]
-  )
   const dagConfirmationErrors = useMemo(
     () => currentDagConfirmationErrors(stageOutputWorkflow),
     [stageOutputWorkflow]
@@ -4513,7 +4508,6 @@ export default function AiChatPanel({
                   }
                   confirmationErrors={dagConfirmationErrors}
                   confirmationPlan={dagConfirmationPlan}
-                  confirmationTargetReview={dagConfirmationTargetReview}
                   onConfirmationSubmit={(action: WorkflowBuildTaskPlanConfirmation) => {
                     if (!stageOutputWorkflow) return
                     void handleSubmitWorkflowClarification(stageOutputWorkflow, {
