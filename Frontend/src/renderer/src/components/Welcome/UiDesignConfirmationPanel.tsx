@@ -119,7 +119,7 @@ export default function UiDesignConfirmationPanel({
   )
   // 全屏查看的设计稿页面（null=关闭）。
   const [fullscreenPage, setFullscreenPage] = useState<PageDesign | null>(null)
-  // 页面模板列表（与 DetailConfirmationPageSelector 共用同一份 templateService）。
+  // 页面模板列表统一从 templateService 读取，确保设计确认区使用当前模板清单。
   const templates = useMemo(() => getAvailableTemplates(), [])
   // 正在为哪个页面挑选模板（pageId，null=关闭模板选择弹窗）。
   const [templatePickerFor, setTemplatePickerFor] = useState<string | null>(null)

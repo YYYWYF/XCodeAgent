@@ -84,7 +84,6 @@ import EntityInfoPanel from './components/EntityInfoPanel'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import DataSourcesPage from '../DataSourcesPage/DataSourcesPage'
-import DetailConfirmationPageSelector from '../DetailConfirmationPageSelector'
 import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
@@ -127,9 +126,6 @@ import {
 import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
-  requiresEntitySourceBinding,
-  shouldShowEndpointDetailDesignEntry,
-  shouldShowPageDetailDesignEntry,
   workflowShouldShowCodeChanges,
   workflowDetailTargetKey,
   type WorkflowPreviewTarget
@@ -983,9 +979,6 @@ export default function AiChatPanel({
   // 标记当前实体会话是否在本应用会话内真实运行过（经历过 loading）。
   // 历史会话恢复的最后一条消息也是已完成快照，不能据其触发跳回信息面板。
   const entityRunWasLiveRef = useRef(false)
-  // 实体设计整轮结束后正在跳回信息面板：刷新期间实体仍显示未设计，
-  // 用该标记抑制引导卡片闪现，直到大纲状态刷新为已设计。
-  const [entityDesignReturning, setEntityDesignReturning] = useState(false)
   const { publishAiMessage } = useWorkbench()
   const {
     phase: activeWorkbenchPhase,
@@ -2990,17 +2983,6 @@ export default function AiChatPanel({
       }
     )
   }, [activeDetailTarget, developmentPlanningEntities])
-  const activeEndpointSelectorTarget = activeApiEndpoint
-    ? {
-        ...activeApiEndpoint,
-        hasDetailPlan: Boolean(
-          activeApiEndpointOption?.endpoint.designed ||
-            activeApiEndpointOption?.endpoint.hasDetailPlan
-        ),
-        path: activeApiEndpointOption?.endpoint.path,
-        purpose: activeApiEndpointOption?.endpoint.summary
-      }
-    : undefined
   const activeHeaderTarget =
     activeDetailTarget.type === 'entity'
       ? {
@@ -3391,18 +3373,8 @@ export default function AiChatPanel({
     (session) => session.id === activeSessionId
   )?.updatedAt
   const entityDetailTarget = activeDetailTarget.type === 'entity' ? activeDetailTarget : undefined
-  // 当前目标启动阶段会话后直接展示设计对话；已设计且无活动会话时展示信息面板（查看设计）；
-  // 未设计实体与页面/接口保持一致，由锁定引导卡片接管，避免直接落入对话区。
+  // 当前目标启动阶段会话后直接展示设计对话；已设计且无活动会话时展示信息面板（查看设计）。
   const entitySessionActive = Boolean(entityDetailTarget && activeSession)
-  const endpointSessionActive = Boolean(activeApiEndpoint && activeSession)
-  const showEndpointDetailDesignEntry = shouldShowEndpointDetailDesignEntry(
-    activeApiEndpointOption?.endpoint,
-    endpointSessionActive,
-    messages.length
-  )
-  const showPageDetailDesignEntry = Boolean(
-    activeDetailTarget.type === 'page' && shouldShowPageDetailDesignEntry(activePageOption, false)
-  )
   const showEntityInfoPanel = Boolean(
     entityDetailTarget &&
       Boolean(activeEntityOption?.designed || activeEntityOption?.hasDetailPlan) &&
@@ -3466,7 +3438,6 @@ export default function AiChatPanel({
       }
       setGeneratingDetailTargetKey('')
     } else {
-      setEntityDesignReturning(true)
       clearActiveSession()
     }
     onPlanningArtifactsRefresh()
@@ -3480,16 +3451,6 @@ export default function AiChatPanel({
     loading,
     onPlanningArtifactsRefresh,
   ])
-
-  // 大纲刷新把实体标记为已设计后，解除返回态抑制，避免误锁后续入口。
-  useEffect(() => {
-    if (
-      entityDesignReturning &&
-      Boolean(activeEntityOption?.designed || activeEntityOption?.hasDetailPlan)
-    ) {
-      setEntityDesignReturning(false)
-    }
-  }, [activeEntityOption, entityDesignReturning])
 
   // 页面目录刷新时保留当前页面上下文；仅在清单稳定且当前页面失效时回退。
   useEffect(() => {
@@ -3689,56 +3650,31 @@ export default function AiChatPanel({
     return started
   }
 
-  /** 根据锁定入口里的目标类型启动页面、接口或实体详细设计。 */
-  const handleStartDetailDesign = async (
-    targetType: 'page' | 'endpoint' | 'entity',
-    targetId: string,
-    targetLabel: string,
+  /** 从快捷任务或实体门禁启动实体数据源绑定，并刷新开发产物状态。 */
+  const handleStartEntityDesign = async (
+    entityId: string,
+    entityLabel: string,
     hasDetailPlan: boolean,
     targetContext?: {
-      apiContractId?: string
-      endpointId?: string
-      templateId?: string
-      templateName?: string
-      templateSourcePath?: string
       continuation?: WorkflowDevelopmentContinuation
     }
   ): Promise<void> => {
     if (pendingDagExecution) return
-    if (targetType === 'endpoint') {
-      await handleStartEndpointDesign(targetId, targetLabel, hasDetailPlan, targetContext)
-      return
-    }
-    if (targetType === 'entity') {
-      const targetKey = `entity:${targetId}`
-      setInteractingDetailTargetKey(targetKey)
-      setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
-      setActiveDetailTarget({ type: 'entity', entityId: targetId, label: targetLabel })
-      const started = await handleStartEntityDetailConfirmation({
-        entityId: targetId,
-        entityLabel: targetLabel,
-        hasDetailPlan,
-        continuation: targetContext?.continuation
-      })
-      if (started) {
-        onPlanningArtifactsRefresh()
-      } else {
-        setGeneratingDetailTargetKey((current) => (current === targetKey ? '' : current))
-      }
-      return
-    }
-    await handleStartPageDesign(
-      targetId,
-      targetLabel,
+    const targetKey = `entity:${entityId}`
+    setInteractingDetailTargetKey(targetKey)
+    setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
+    setActiveDetailTarget({ type: 'entity', entityId, label: entityLabel })
+    const started = await handleStartEntityDetailConfirmation({
+      entityId,
+      entityLabel,
       hasDetailPlan,
-      targetContext && (targetContext.templateId || targetContext.templateSourcePath)
-        ? {
-            templateId: targetContext.templateId,
-            templateName: targetContext.templateName,
-            templateSourcePath: targetContext.templateSourcePath
-          }
-        : undefined
-    )
+      continuation: targetContext?.continuation
+    })
+    if (started) {
+      onPlanningArtifactsRefresh()
+    } else {
+      setGeneratingDetailTargetKey((current) => (current === targetKey ? '' : current))
+    }
   }
 
   /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置页面、Endpoint 或实体目标。 */
@@ -3753,12 +3689,7 @@ export default function AiChatPanel({
       return
     }
     if (task.kind === 'entity') {
-      await handleStartDetailDesign(
-        'entity',
-        task.entityId,
-        task.entityLabel,
-        task.hasDetailPlan
-      )
+      await handleStartEntityDesign(task.entityId, task.entityLabel, task.hasDetailPlan)
       return
     }
     await handleStartEndpointDesign(task.endpointId, task.endpointLabel, task.hasDetailPlan, {
@@ -3844,8 +3775,7 @@ export default function AiChatPanel({
       message.error('当前实体门禁缺少有效的开发续接合同，请重新发起页面或接口开发。')
       return
     }
-    await handleStartDetailDesign(
-      'entity',
+    await handleStartEntityDesign(
       entityId,
       entity?.label || entityId,
       Boolean(entity?.hasDetailPlan),
@@ -4483,39 +4413,6 @@ export default function AiChatPanel({
                 ) : null}
               </>
             )}
-
-            {/* 未完成的页面、实体绑定与 endpoint 设计都先显示统一锁定蒙层。 */}
-            {((requiresEntitySourceBinding(activeEntityOption) &&
-              entityDesignChatActive &&
-              !entitySessionActive &&
-              !entityDesignReturning) ||
-              showEndpointDetailDesignEntry ||
-              showPageDetailDesignEntry) &&
-            displayedPlanExecutionMode === 'idle' &&
-            !detailConfirmationWaitingReview ? (
-              <DetailConfirmationPageSelector
-                disabled={loading || workflowInputLocked}
-                entities={developmentPlanningEntities}
-                generating={false}
-                loading={false}
-                mode="locked"
-                onStart={handleStartDetailDesign}
-                pages={displayedPlanningPages}
-                selectedEntity={
-                  activeDetailTarget.type === 'entity'
-                    ? {
-                        entityId: activeDetailTarget.entityId,
-                        label: activeDetailTarget.label,
-                        hasDetailPlan: Boolean(activeEntityOption?.hasDetailPlan),
-                        purpose: activeEntityOption?.purpose
-                      }
-                    : undefined
-                }
-                selectedEndpoint={activeEndpointSelectorTarget}
-                selectedPage={activePageOption}
-                workflowEvents={activeWorkflow?.events}
-              />
-            ) : null}
           </div>
         )}
       </div>

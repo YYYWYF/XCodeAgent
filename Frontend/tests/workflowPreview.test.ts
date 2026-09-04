@@ -6,10 +6,6 @@ import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
   pageDetailTargetKey,
-  requiresEndpointDetailDesign,
-  requiresPageDetailDesign,
-  shouldShowEndpointDetailDesignEntry,
-  shouldShowPageDetailDesignEntry,
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
   workflowPreviewTarget,
@@ -472,44 +468,6 @@ test('项目异步启动成功后将 about:blank 自动导航到当前页面', (
     navigatePreviewToStartedProject(started, 'http://127.0.0.1:5178', '/page/age'),
     started
   )
-})
-
-test('待设计 API 在开始前显示绿色设计入口，已有运行消息后让出对话区', () => {
-  const pendingEndpoint = {
-    id: 'stats',
-    method: 'GET',
-    path: '/stats',
-    summary: '统计信息',
-    designed: false,
-    hasDetailPlan: false
-  }
-
-  assert.equal(requiresEndpointDetailDesign(pendingEndpoint), true)
-  assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, false, 0), true)
-  assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, true, 0), true)
-  assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, true, 1), false)
-  assert.equal(
-    requiresEndpointDetailDesign({ ...pendingEndpoint, designed: true, hasDetailPlan: true }),
-    false
-  )
-})
-
-test('待设计页面仅在没有正式开发产物时使用锁定蒙层', () => {
-  const pendingPage = {
-    pageId: 'page-home',
-    key: 'page-home',
-    label: '首页',
-    path: '/page/page-home',
-    purpose: '应用首页',
-    designed: false,
-    hasDetailPlan: false
-  }
-
-  assert.equal(requiresPageDetailDesign(pendingPage), true)
-  assert.equal(shouldShowPageDetailDesignEntry(pendingPage, false), true)
-  assert.equal(shouldShowPageDetailDesignEntry(pendingPage, true), false)
-  assert.equal(requiresPageDetailDesign({ ...pendingPage, designed: true }), false)
-  assert.equal(requiresPageDetailDesign({ ...pendingPage, hasDetailPlan: true }), false)
 })
 
 test('页面和 Endpoint 快捷任务保留本次运行目标且不生成会话绑定字段', () => {
