@@ -290,7 +290,10 @@ class FrontendShellPrerequisiteTests(unittest.TestCase):
                 with patch("app.graph.nodes.tasks.prepare_build_tasks_with_main_agent") as model:
                     result = prepare_build_tasks(state)
                 model.assert_not_called()
-                self.assertEqual(result["clarification"]["mode"], "build_prerequisite_error")
+                self.assertEqual(result["clarification"]["mode"], "confirmed_baseline_error")
+                self.assertEqual(result["clarification"]["code"], "confirmed_baseline_invalid")
+                self.assertEqual(result["clarification"]["artifact"], PLAN_PATH)
+                self.assertFalse(result["build_task_plan_persisted"])
                 self.assertIn("ConfirmedPlan", str(result["clarification"]["errors"]))
                 self.assertEqual((root / PLAN_PATH).read_text(encoding="utf-8"), contents)
 

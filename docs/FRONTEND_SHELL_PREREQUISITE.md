@@ -37,6 +37,30 @@ Planning 继续沿用正式路径 `.xcodeagent/plans/build-task-plan.json`。
 入口必须阻断生成，不能按空基线继续或回退到 checkpoint/pending sidecar。
 既有确认恢复分支不启动 Planning，仍可处理当前 pending DAG 的确认。
 
+T2.4 收尾补丁将非法正式基线独立投影：
+
+```text
+mode = confirmed_baseline_error
+code = confirmed_baseline_invalid
+artifact = .xcodeagent/plans/build-task-plan.json
+status = requires_user_input
+issue.code = CONFIRMED_BASELINE_INVALID
+issue.level = pre_generation
+issue.category = platform
+retryable = false
+automatic_routing = false
+```
+
+外层 `requires_user_input` 表示等待人工处置；恢复要求平台维护者检查文件内容、
+读取权限、确认状态及 DAG 校验结果，修复并验证为合法 ConfirmedPlan 后重新发起规划。
+不携带上游阶段路由，不提示重做 TechnicalPlan、模板或 EntitySourceBinding；
+普通回复不豁免正式基线检查。节点事件、最终摘要、公开快照及 `/health` 能力元数据
+使用一致的独立错误身份。上游 prerequisite 缺项仍使用原有投影。
+
+收尾补丁修改 `Backend/app/graph/nodes/tasks.py`、
+`Backend/app/protocols/workflow/projection.py`、`definition.py`，更新原有 shell 门禁断言，
+新增 `Backend/tests/test_confirmed_baseline_projection.py`，并同步本文和代码索引。
+
 ## 范围
 
 没有新增产品 API、shell Task、菜单、路由、占位页、layout、provider 或模板修复职责。
@@ -79,3 +103,28 @@ Task 依赖隔离、workspace revision 缺失、ready=false 且 errors 为空、
 79 项（其中本 Task 新增 10 项），合计 223 项全部通过。修改文件的 `py_compile`、
 `git diff --check` 通过，后端 `/health` 返回 `status=ok`。
 T2.4 无未解决事项；工作区并行发生的权限资源目录改动不属于本 Task，未修改或回退。
+
+## 收尾补丁验证
+
+R-PLAN / R-TEMPLATE 合计 144 项通过；以下新增及相关投影回归 37 项通过，
+其中 `test_confirmed_baseline_projection.py` 新增 6 项，包含真实 Graph 与完整 AG-UI 流：
+
+```sh
+.venv/bin/python -m unittest tests.test_confirmed_baseline_projection tests.test_frontend_shell_prerequisite tests.test_workflow_projection
+```
+
+修改文件 `py_compile`、`git diff --check` 通过。实时 `/health` 返回 `ok`，并包含
+`clarificationModes.confirmed_baseline_error` 元数据。没有前端代码改动，未运行前端构建/UI 验证。
+
+额外运行下面命令时，`test_workflow_ag_ui` 中有两个本补丁之前已存在的失败：
+
+```sh
+.venv/bin/python -m unittest tests.test_confirmed_baseline_projection tests.test_frontend_shell_prerequisite tests.test_workflow_projection tests.test_workflow_ag_ui
+```
+
+- `WorkflowAgUiStreamTests.test_confirmation_artifact_is_limited_to_the_active_gate`
+- `WorkflowAgUiStreamTests.test_unconfirmed_requirement_projects_draft_markdown_artifact`
+
+两项均为需求 Markdown 工件投影返回 None；将 HEAD 版 `projection.py` 只读加载到内存，
+使用修改前的 `_workflow_confirmation_artifact` 重跑这两项，失败均可复现。
+它们不涉及 Confirmed baseline 投影，未扩大范围修复；收尾补丁相关测试均已通过。

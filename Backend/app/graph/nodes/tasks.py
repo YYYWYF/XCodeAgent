@@ -53,6 +53,7 @@ from app.services.build_unit_skeleton import (
 from app.services.entity_definitions import entity_design_summaries, plan_data_sources
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_dependencies import validate_project_plan_dependencies
+from app.services.planning_issues import ValidationIssue
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
@@ -148,7 +149,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         existing_build_task_plan = _existing_build_task_plan(state)
     except (OSError, ValueError) as exc:
         return {
-            **_build_prerequisite_blocked_result(
+            **_confirmed_baseline_blocked_result(
                 project_plan, build_execution_scope,
                 [f"正式 build-task-plan.json 无法作为 ConfirmedPlan：{exc}"],
             ),
@@ -902,6 +903,48 @@ def _build_prerequisite_blocked_result(
         "project_plan": project_plan,
         "build_execution_scope": build_execution_scope,
         "clarification": payload,
+        "timeline": ["prepare_build_tasks"],
+    }
+
+
+def _confirmed_baseline_blocked_result(
+    project_plan: dict[str, Any],
+    build_execution_scope: dict[str, str],
+    errors: list[str],
+) -> dict[str, Any]:
+    """将非法正式 DAG 单独投影为平台基线问题，等待人工修复后重新校验。"""
+
+    artifact = ".xcodeagent/plans/build-task-plan.json"
+    recovery = (
+        "请由平台维护者检查正式 Build Task Plan 的文件内容、读取权限、确认状态和 DAG 校验结果；"
+        "修复并验证为合法 ConfirmedPlan 后，重新发起任务规划。"
+    )
+    issue = ValidationIssue(
+        code="CONFIRMED_BASELINE_INVALID", level="pre_generation", category="platform",
+        retryable=False, message="正式 Confirmed baseline 非法或无法读取。",
+        details={"artifact": artifact, "errors": errors},
+    )
+    payload = build_ask_user_payload([
+        AskUserQuestion(
+            header="DAG 基线非法",
+            question=f"正式任务基线 {artifact} 非法或无法读取，本轮规划已阻断。{recovery}",
+            type="text", placeholder="请先完成正式基线修复；回复确认不能代替基线校验。",
+        )
+    ])
+    payload.update({
+        "mode": "confirmed_baseline_error",
+        "code": "confirmed_baseline_invalid",
+        "message": f"正式任务基线 {artifact} 非法或无法读取，等待平台维护者处理。",
+        "artifact": artifact, "target": build_execution_scope,
+        "errors": errors, "issues": [issue.model_dump(mode="json")],
+        "recommended_action": recovery, "automatic_routing": False,
+        "retryable": False,
+    })
+    return {
+        "phase": "prepare_build_tasks", "status": "requires_user_input",
+        "project_plan": project_plan, "build_execution_scope": build_execution_scope,
+        "build_task_plan_persisted": False,
+        "clarification": payload, "message": payload["message"],
         "timeline": ["prepare_build_tasks"],
     }
 

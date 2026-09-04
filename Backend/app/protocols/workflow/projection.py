@@ -1210,6 +1210,10 @@ def _prepare_build_tasks_input_message(
     messages = {
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "build_prerequisite_error": "Build DAG 的正式产物或模板前置条件未满足，已返回上游流程。",
+        "confirmed_baseline_error": (
+            "正式任务基线 .xcodeagent/plans/build-task-plan.json 非法或无法读取，"
+            "请由平台维护者修复并验证为合法 ConfirmedPlan 后重新发起规划。"
+        ),
         "build_context_error": "当前构建范围缺少已确认的实体数据源绑定或技术契约。",
         "api_contract_consistency_error": "当前构建范围的 API 契约校验未通过，已阻止代码生成。",
         "build_task_plan_validation_error": "Build DAG 校验未通过，平台已停止代码生成。",
@@ -1401,6 +1405,7 @@ def _workflow_user_input_message(
         return "项目预览已就绪，请确认是否符合预期。"
 
     confirmation_labels = {
+        "confirmed_baseline_error": _prepare_build_tasks_input_message(clarification, 0),
         "requirement_document_confirmation": "需求文档草稿已生成，请确认后同时固化需求与页面操作规划。",
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
         "technical_plan_confirmation": "技术规划已生成，请确认后继续。",

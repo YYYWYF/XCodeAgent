@@ -155,6 +155,16 @@ def workflow_capabilities() -> dict[str, Any]:
             "clientNodeSelectionAllowed": False,
         },
         "clarificationModes": {
+            "confirmed_baseline_error": {
+                "code": "confirmed_baseline_invalid",
+                "artifact": ".xcodeagent/plans/build-task-plan.json",
+                "issueCode": "CONFIRMED_BASELINE_INVALID",
+                "level": "pre_generation",
+                "category": "platform",
+                "retryable": False,
+                "automaticRouting": False,
+                "recovery": "人工修复并验证正式 ConfirmedPlan 后重新发起规划；回复不能豁免校验。",
+            },
             "unit_test_confirmation": {
                 "answerField": "clarificationAnswers.unit_test_confirmation",
                 "answer": {"selected": ["run"], "values": ["run", "skip"]},

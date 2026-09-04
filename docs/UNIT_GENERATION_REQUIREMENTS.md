@@ -104,7 +104,7 @@ endpoint_controller。这里列出职责，不创建 Task 或规定模型必须�
 目标路径固定为 `frontend/src/constants/resources.ts`。R1 不能满足 R2。
 
 本 Task 不读取或验证实际 resources.ts，也不调整现有平台资源写入职责。
-T2.2 当前只产生 shell 外部能力；资源文件精确验证证据的生产者仍待后续任务。
+T2.5B 已通过 ReuseFacts 提供 auth workspace 精确验证证据；本模块仍不直接读取 workspace。
 
 ## 失败与验证
 
