@@ -772,10 +772,11 @@ export default function ApplicationPagePlanningModal({
     designChangeRequest?: string
   ): Promise<void> => {
     try {
-      // 空答案 = UI 设计稿生成池轮询（no-op resume）：不构造 interaction，
-      // 直接以 undefined 传入 runPlanning，后端走恢复路径重读 ui-designs.json。
-      if (Object.keys(answers).length === 0) {
-        await runPlanning('请根据本轮确认继续创建规划。', undefined)
+      // 只有没有设计变更文本的空答案才是 UI 生成轮询；轮询只读恢复
+      // checkpoint，不再启动 Graph。底部自由输入虽然 answers 为空，但必须继续
+      // 构造 design_change interaction，不能被误吞成轮询。
+      if (Object.keys(answers).length === 0 && !designChangeRequest?.trim()) {
+        await recoverPlanning()
         return
       }
       const submittable = await loadSubmittablePlanningWorkflow(currentWorkflow)
@@ -845,6 +846,10 @@ export default function ApplicationPagePlanningModal({
   const retryAfterFailure = async (): Promise<void> => {
     const confirmation = workflowConfirmation(workflow)
     if (confirmation) return
+    if (initialLifecycle.initialization.status === 'awaiting_user') {
+      await recoverPlanning()
+      return
+    }
     await runPlanning(originalRequest)
   }
 

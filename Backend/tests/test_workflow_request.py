@@ -4,6 +4,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.agents.test_generation.generator import _build_prompt
 from app.graph.subgraphs.testing import collect_unit_test_targets
@@ -16,6 +18,174 @@ from app.protocols.workflow.request import (
 
 
 class WorkflowRequestTests(unittest.TestCase):
+    def test_application_revision_continuation_ignores_stale_client_scope(self) -> None:
+        """application continuation 必须清空旧目标并直接进入工作区扫描。"""
+
+        active_revision = SimpleNamespace(
+            request="调整全局技术方案",
+            change_id="chg_application",
+            continuation_source_run_id=None,
+            target=SimpleNamespace(
+                type="application",
+                page_id=None,
+                api_contract_id=None,
+                endpoint_id=None,
+            ),
+        )
+        with patch(
+            "app.protocols.workflow.request.consume_revision_continuation",
+            return_value=active_revision,
+        ):
+            inputs = workflow_run_inputs(
+                {
+                    "request": "继续旧页面开发",
+                    "forwardedProps": {
+                        "workflowAction": "continue_revision_build",
+                        "revisionContinuation": {
+                            "changeId": "chg_application",
+                            "token": "x" * 48,
+                        },
+                        "selectedPageId": "old-page",
+                        "selectedEntityId": "old-entity",
+                        "detailTargetType": "entity",
+                        "buildExecutionScope": {
+                            "type": "page",
+                            "targetId": "old-page",
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["request"], "调整全局技术方案")
+        self.assertEqual(inputs["resume_from"], "inspect_workspace")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "application", "targetId": "application"},
+        )
+        self.assertNotIn("selectedPageId", inputs["resume_values"])
+        self.assertNotIn("selected_endpoint_id", inputs["resume_values"])
+        self.assertNotIn("selected_entity_id", inputs["resume_values"])
+        self.assertNotIn("detail_target_type", inputs["resume_values"])
+
+    def test_page_revision_continuation_ignores_stale_application_scope(self) -> None:
+        """page continuation 由 lifecycle 锁定页面并保留实体绑定门禁。"""
+
+        active_revision = SimpleNamespace(
+            request="修改订单页",
+            change_id="chg_page",
+            continuation_source_run_id=None,
+            target=SimpleNamespace(
+                type="page",
+                page_id="orders",
+                api_contract_id=None,
+                endpoint_id=None,
+            ),
+        )
+        with patch(
+            "app.protocols.workflow.request.consume_revision_continuation",
+            return_value=active_revision,
+        ):
+            inputs = workflow_run_inputs(
+                {
+                    "forwardedProps": {
+                        "workflowAction": "continue_revision_build",
+                        "revisionContinuation": {
+                            "changeId": "chg_page",
+                            "token": "x" * 48,
+                        },
+                        "buildExecutionScope": {
+                            "type": "application",
+                            "targetId": "application",
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
+        self.assertEqual(inputs["resume_values"]["selectedPageId"], "orders")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "page", "targetId": "orders"},
+        )
+
+    def test_endpoint_revision_continuation_ignores_stale_page_scope(self) -> None:
+        """endpoint continuation 由 lifecycle 锁定完整接口标识并保留门禁。"""
+
+        active_revision = SimpleNamespace(
+            request="修改订单查询接口",
+            change_id="chg_endpoint",
+            continuation_source_run_id=None,
+            target=SimpleNamespace(
+                type="endpoint",
+                page_id=None,
+                api_contract_id="orders-api",
+                endpoint_id="orders.list",
+            ),
+        )
+        with patch(
+            "app.protocols.workflow.request.consume_revision_continuation",
+            return_value=active_revision,
+        ):
+            inputs = workflow_run_inputs(
+                {
+                    "forwardedProps": {
+                        "workflowAction": "continue_revision_build",
+                        "revisionContinuation": {
+                            "changeId": "chg_endpoint",
+                            "token": "x" * 48,
+                        },
+                        "selectedPageId": "old-page",
+                        "buildExecutionScope": {
+                            "type": "page",
+                            "targetId": "old-page",
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
+        self.assertNotIn("selectedPageId", inputs["resume_values"])
+        self.assertEqual(inputs["resume_values"]["selected_api_contract_id"], "orders-api")
+        self.assertEqual(inputs["resume_values"]["selected_endpoint_id"], "orders.list")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {
+                "type": "endpoint",
+                "targetId": "orders.list",
+                "apiContractId": "orders-api",
+            },
+        )
+
+    def test_revision_continuation_rejects_malformed_lifecycle_target(self) -> None:
+        """lifecycle 页面目标不完整时必须失败，不得回退为 application。"""
+
+        active_revision = SimpleNamespace(
+            request="修改页面",
+            change_id="chg_invalid",
+            continuation_source_run_id=None,
+            target=SimpleNamespace(
+                type="page",
+                page_id="",
+                api_contract_id=None,
+                endpoint_id=None,
+            ),
+        )
+        with patch(
+            "app.protocols.workflow.request.consume_revision_continuation",
+            return_value=active_revision,
+        ), self.assertRaisesRegex(ValueError, "缺少 pageId"):
+            workflow_run_inputs(
+                {
+                    "forwardedProps": {
+                        "workflowAction": "continue_revision_build",
+                        "revisionContinuation": {
+                            "changeId": "chg_invalid",
+                            "token": "x" * 48,
+                        },
+                    },
+                }
+            )
+
     def test_resume_values_restore_test_report_from_public_result(self) -> None:
         """恢复公开快照时应把 Markdown 测试报告路径写回内部状态字段。"""
 
@@ -1529,6 +1699,44 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
         self.assertFalse(inputs["resume_values"]["retry_failed_tasks"])
+
+    def test_failed_application_revision_gate_retries_from_workspace_inspection(self) -> None:
+        """已消费 continuation 的 application execution 应从扫描节点恢复原任务。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowAction": "retry_failed_tasks",
+                    "resumeExecutionRunId": "failed-revision-run",
+                    "selectedPageId": "currently-selected-page",
+                    "resumeState": {
+                        "events": [
+                            {
+                                "status": "failed",
+                                "nodeName": "development_readiness_gate",
+                            }
+                        ],
+                        "state": {
+                            "buildExecutionScope": {
+                                "type": "application",
+                                "targetId": "application",
+                            }
+                        },
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "inspect_workspace")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "application", "targetId": "application"},
+        )
+        self.assertNotIn("selectedPageId", inputs["resume_values"])
+        self.assertEqual(
+            inputs["resume_values"]["resume_execution_run_id"],
+            "failed-revision-run",
+        )
 
     def test_scope_mismatch_retry_recovers_without_gate_error_projection(self) -> None:
         """历史快照缺少 gate_errors 时也应根据计划范围不一致恢复 DAG 生成。"""

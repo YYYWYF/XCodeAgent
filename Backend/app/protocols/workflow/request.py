@@ -430,6 +430,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             detail_target_type = "endpoint"
     continuation_change_id = ""
     revision_continuation_replaces_run_id = ""
+    revision_build_target_type = ""
     revision_interaction_binding: dict[str, Any] = {}
     if workflow_action == "submit_revision_interaction":
         assert revision_interaction is not None
@@ -465,22 +466,44 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         # continuation 的 request、target 和固定开发入口全部以 lifecycle 为权威；
         # TechnicalPlan 已在 application_planning 完成，不再重复进入 application_revision。
         request = active_revision.request
-        resume_from = "development_readiness_gate"
         resume_values_from_state = {}
         continuation_change_id = active_revision.change_id
         revision_continuation_replaces_run_id = str(
             active_revision.continuation_source_run_id or ""
         )
-        if active_revision.target.type == "page":
-            selectedPageId = str(active_revision.target.page_id or "")
+        revision_build_target_type = active_revision.target.type
+        # revision continuation 必须清空客户端与旧会话目标，再由 lifecycle
+        # 唯一重建入口和构建范围，避免历史 page/endpoint/entity scope 回流。
+        selectedPageId = ""
+        selected_api_contract_id = ""
+        selected_endpoint_id = ""
+        selected_entity_id = ""
+        detail_target_type = ""
+        if revision_build_target_type == "application":
+            resume_from = "inspect_workspace"
+        elif revision_build_target_type == "page":
+            selectedPageId = str(active_revision.target.page_id or "").strip()
+            if not selectedPageId:
+                raise ValueError("revision lifecycle 页面目标缺少 pageId。")
+            resume_from = "development_readiness_gate"
             selected_api_contract_id = ""
             selected_endpoint_id = ""
             detail_target_type = "page"
-        elif active_revision.target.type == "endpoint":
-            selectedPageId = ""
-            selected_api_contract_id = str(active_revision.target.api_contract_id or "")
-            selected_endpoint_id = str(active_revision.target.endpoint_id or "")
+        elif revision_build_target_type == "endpoint":
+            selected_api_contract_id = str(
+                active_revision.target.api_contract_id or ""
+            ).strip()
+            selected_endpoint_id = str(
+                active_revision.target.endpoint_id or ""
+            ).strip()
+            if not selected_api_contract_id or not selected_endpoint_id:
+                raise ValueError("revision lifecycle Endpoint 目标缺少完整接口标识。")
+            resume_from = "development_readiness_gate"
             detail_target_type = "endpoint"
+        else:
+            raise ValueError(
+                f"revision lifecycle 包含不支持的目标类型：{revision_build_target_type or '<empty>'}。"
+            )
     if workflow_action == "start_revision":
         assert revision_start is not None
         if revision_start.formal_branch != FormalRevisionBranch.WORKBENCH_PLAN_REVISION:
@@ -544,15 +567,63 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         project_plan_start_values.get("project_plan"),
         selectedPageId,
     )
-    build_execution_scope = _build_execution_scope(
-        payload,
-        forwarded_props=forwarded_props,
-        resume_values=resume_values_from_state,
-        selected_page_id=selectedPageId,
-        selected_api_contract_id=selected_api_contract_id,
-        selected_endpoint_id=selected_endpoint_id,
-        project_plan=project_plan_start_values.get("project_plan"),
+    # formal revision continuation 不解析客户端构建范围；它的 scope 与
+    # entry node 已由同一 lifecycle target 决定，必须保持原子一致。
+    if revision_build_target_type == "application":
+        build_execution_scope = {"type": "application", "targetId": "application"}
+    elif revision_build_target_type == "page":
+        build_execution_scope = {"type": "page", "targetId": selectedPageId}
+    elif revision_build_target_type == "endpoint":
+        build_execution_scope = {
+            "type": "endpoint",
+            "targetId": selected_endpoint_id,
+            "apiContractId": selected_api_contract_id,
+        }
+    else:
+        build_execution_scope = _build_execution_scope(
+            payload,
+            forwarded_props=forwarded_props,
+            resume_values=resume_values_from_state,
+            selected_page_id=selectedPageId,
+            selected_api_contract_id=selected_api_contract_id,
+            selected_endpoint_id=selected_endpoint_id,
+            project_plan=project_plan_start_values.get("project_plan"),
+        )
+    retry_scope = (
+        _optional_dict(resume_values_from_state.get("build_execution_scope"))
+        if workflow_action == "retry_failed_tasks"
+        else None
     )
+    if retry_scope:
+        # 失败 execution 只能在自己已登记的范围上恢复；公开快照中的
+        # scope 会在 lifecycle 层与 resumeExecutionRunId 复验，当前 UI 选择不得改写它。
+        build_execution_scope = _build_execution_scope(
+            {},
+            forwarded_props={},
+            resume_values={"build_execution_scope": retry_scope},
+            selected_page_id="",
+            selected_api_contract_id="",
+            selected_endpoint_id="",
+            project_plan=project_plan_start_values.get("project_plan"),
+        )
+        retry_scope_type = str(build_execution_scope.get("type") or "")
+        selectedPageId = ""
+        selected_api_contract_id = ""
+        selected_endpoint_id = ""
+        selected_entity_id = ""
+        detail_target_type = ""
+        if retry_scope_type == "page":
+            selectedPageId = str(build_execution_scope.get("targetId") or "")
+            detail_target_type = "page"
+        elif retry_scope_type == "endpoint":
+            selected_api_contract_id = str(
+                build_execution_scope.get("apiContractId") or ""
+            )
+            selected_endpoint_id = str(build_execution_scope.get("targetId") or "")
+            detail_target_type = "endpoint"
+        elif retry_scope_type == "data_source":
+            selected_entity_id = str(build_execution_scope.get("targetId") or "")
+            detail_target_type = "entity"
     # 续接的目标和作用域只由后端登记决定，不能被客户端旧实体 scope 覆盖。
     if workflow_action == "continue_after_entity_binding":
         build_execution_scope = (
@@ -1231,7 +1302,7 @@ def _retry_failed_execution_node(
     resume_state: dict[str, Any] | None,
     resume_values: dict[str, Any],
 ) -> str:
-    """让 Build 门禁或 DAG 生成失败回到任务生成，其余失败沿用 Build 重试。"""
+    """让失败 execution 回到当前范围最早需要重做的可恢复节点。"""
 
     current_scope = resume_values.get("build_execution_scope")
     build_task_plan = resume_values.get("build_task_plan")
@@ -1266,6 +1337,19 @@ def _retry_failed_execution_node(
             node_name = _optional_text(event.get("nodeName"))
             node = _optional_dict(event.get("node"))
             node_name = node_name or (_optional_text(node.get("id")) if node else "")
+            if node_name == "development_readiness_gate":
+                scope_type = (
+                    str(current_scope.get("type") or "")
+                    if isinstance(current_scope, dict)
+                    else ""
+                )
+                return (
+                    "inspect_workspace"
+                    if scope_type == "application"
+                    else "development_readiness_gate"
+                )
+            if node_name == "inspect_workspace":
+                return "inspect_workspace"
             if node_name == "prepare_build_tasks":
                 return "prepare_build_tasks"
             if node_name == "build":

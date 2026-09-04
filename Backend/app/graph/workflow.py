@@ -63,13 +63,17 @@ def route_workflow_start(state: ProjectState) -> str:
 
 
 def route_application_revision(state: ProjectState) -> str:
-    """正式产物收口完成后先经过开发就绪门禁，再进入工作区检查。"""
+    """正式产物收口后按 lifecycle 构建范围选择目标门禁或工作区检查。"""
 
-    return (
-        "development_readiness_gate"
-        if state.get("status") == "revision_artifacts_confirmed"
-        else "await_user_input"
-    )
+    if state.get("status") != "revision_artifacts_confirmed":
+        return "await_user_input"
+    scope = state.get("build_execution_scope")
+    scope_type = str(scope.get("type") or "") if isinstance(scope, dict) else ""
+    if scope_type == "application":
+        return "inspect_workspace"
+    if scope_type in {"page", "endpoint"}:
+        return "development_readiness_gate"
+    raise ValueError("正式修订已确认，但 lifecycle 构建范围缺失或不合法。")
 
 
 def route_test_validation(state: ProjectState) -> str:
@@ -297,6 +301,7 @@ def build_graph(*, checkpointer):
         route_application_revision,
         {
             "development_readiness_gate": "development_readiness_gate",
+            "inspect_workspace": "inspect_workspace",
             "await_user_input": END,
         },
     )
@@ -305,6 +310,7 @@ def build_graph(*, checkpointer):
         route_application_revision,
         {
             "development_readiness_gate": "development_readiness_gate",
+            "inspect_workspace": "inspect_workspace",
             "await_user_input": END,
         },
     )

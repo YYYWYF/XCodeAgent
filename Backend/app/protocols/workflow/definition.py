@@ -50,7 +50,7 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "ui_confirmation": ["planning_stage_entry"],
     "planning_stage_entry": ["technical_planning"],
     "technical_planning": [],
-    "application_revision": ["inspect_workspace"],
+    "application_revision": ["development_readiness_gate", "inspect_workspace"],
     "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["authorization_bootstrap", "build", "handle_failure"],
     "authorization_bootstrap": ["build", "handle_failure"],
@@ -98,7 +98,8 @@ def workflow_capabilities() -> dict[str, Any]:
             "requestField": "forwardedProps.workflowAction",
             "values": {
                 "retry_failed_tasks": (
-                    "恢复当前 Build 切片中的失败任务：优先重试 retry 分类的瞬时失败；"
+                    "恢复当前 execution 中的失败阶段：前置检查、工作区扫描或 DAG 失败"
+                    "回到对应节点；Build 阶段优先重试 retry 分类的瞬时失败；"
                     "没有瞬时候选时，执行已生成且无需额外确认的 RepairPlanner 修复任务。"
                 ),
                 "retry_code_review": (
@@ -137,7 +138,8 @@ def workflow_capabilities() -> dict[str, Any]:
                 ),
                 "continue_revision_build": (
                     "消费任一 formal revision 的 TechnicalPlan 确认后签发的一次性 token，"
-                    "固定进入开发前置检查，通过后进入工作区扫描与 Build DAG；token 绑定 application/change/thread/"
+                    "application 目标直接进入工作区扫描，page/endpoint 目标先经过实体绑定门禁；"
+                    "target、入口和构建范围均由 lifecycle 决定；token 绑定 application/change/thread/"
                     "TechnicalPlan hash/lifecycle revision/target；独立 application_planning 分支直接创建开发 execution，"
                     "主 Workflow 分支如携带有效来源 execution 则执行原子替换。"
                 ),

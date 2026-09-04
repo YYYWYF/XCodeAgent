@@ -165,6 +165,9 @@ def resume_application_planning_review(
         return Command(
             update={
                 **runtime_update,
+                # design_change 会提前跳转到意图分析；在跳转前就消费旧 START
+                # 指令，避免意图分析失败时 checkpoint 继续保留错误入口。
+                "resume_from": "",
                 "request": submission.request.strip(),
                 "design_interaction_origin": node_name,
                 "application_planning_interaction": {},
@@ -174,6 +177,8 @@ def resume_application_planning_review(
 
     update: dict[str, Any] = {
         **runtime_update,
+        # 原生 interrupt 已精确决定恢复节点，本轮开始后必须消费旧 START 指令。
+        "resume_from": "",
         "request": submission.request.strip(),
         "application_planning_interaction": submission.model_dump(
             by_alias=False,

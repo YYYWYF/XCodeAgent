@@ -55,17 +55,53 @@ class WorkflowRoutingTests(unittest.TestCase):
         )
         self.assertIn("application_revision", build_graph(checkpointer=None).get_graph().nodes)
 
-    def test_application_revision_enters_development_readiness_after_artifacts_confirmed(self) -> None:
-        """草稿确认门停图，正式产物确认后先经过开发就绪门禁。"""
+    def test_application_revision_routes_confirmed_artifacts_by_lifecycle_scope(self) -> None:
+        """application 直接扫描工作区，page/endpoint 仍经过实体门禁。"""
 
         self.assertEqual(
             route_application_revision({"status": "requires_user_input"}),
             "await_user_input",
         )
         self.assertEqual(
-            route_application_revision({"status": "revision_artifacts_confirmed"}),
+            route_application_revision(
+                {
+                    "status": "revision_artifacts_confirmed",
+                    "build_execution_scope": {
+                        "type": "application",
+                        "targetId": "application",
+                    },
+                }
+            ),
+            "inspect_workspace",
+        )
+        self.assertEqual(
+            route_application_revision(
+                {
+                    "status": "revision_artifacts_confirmed",
+                    "build_execution_scope": {"type": "page", "targetId": "orders"},
+                }
+            ),
             "development_readiness_gate",
         )
+        self.assertEqual(
+            route_application_revision(
+                {
+                    "status": "revision_artifacts_confirmed",
+                    "build_execution_scope": {
+                        "type": "endpoint",
+                        "targetId": "orders.list",
+                        "apiContractId": "orders-api",
+                    },
+                }
+            ),
+            "development_readiness_gate",
+        )
+
+    def test_application_revision_rejects_missing_confirmed_scope(self) -> None:
+        """正式修订缺少 scope 时不得静默降级为 application。"""
+
+        with self.assertRaisesRegex(ValueError, "lifecycle 构建范围缺失"):
+            route_application_revision({"status": "revision_artifacts_confirmed"})
 
     def test_project_planning_waits_for_confirmation(self) -> None:
         self.assertEqual(

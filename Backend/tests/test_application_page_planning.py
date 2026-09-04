@@ -29,6 +29,7 @@ from app.protocols.application_page_planning import (
 from app.protocols.workflow.projection import _workflow_confirmation_artifact
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.application_lifecycle import (
+    ApplicationLifecycleConflictError,
     create_application_lifecycle,
     load_application_lifecycle,
     transition_application_lifecycle,
@@ -384,14 +385,22 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         """独立创建 Graph 应把技术规划放在设计与开发之间的独立规划阶段。"""
 
         self.assertEqual(_route_start({}), "requirements")
-        self.assertEqual(_route_start({"resume_from": "project_planning"}), "requirements")
+        with self.assertRaisesRegex(
+            ApplicationLifecycleConflictError,
+            "不支持恢复入口",
+        ):
+            _route_start({"resume_from": "project_planning"})
         self.assertEqual(_route_start({"resume_from": "product_planning"}), "product_planning")
         self.assertEqual(_route_start({"resume_from": "ui_confirmation"}), "ui_confirmation")
         self.assertEqual(
             _route_start({"resume_from": "planning_stage_entry"}),
             "planning_stage_entry",
         )
-        self.assertEqual(_route_start({"resume_from": "detail_confirmation"}), "requirements")
+        with self.assertRaisesRegex(
+            ApplicationLifecycleConflictError,
+            "不支持恢复入口",
+        ):
+            _route_start({"resume_from": "detail_confirmation"})
         self.assertEqual(
             _route_ui_confirmation({"clarification": {"status": "clear", "skipped": True}}),
             "planning_stage_entry",
@@ -418,6 +427,74 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             ),
             "product_planning",
         )
+
+    def test_existing_planning_lifecycle_without_resume_fails_closed(self) -> None:
+        """已有规划生命周期缺少恢复动作时不能静默回到 requirements。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+                initialization_thread_id="planning-thread",
+            )
+            lifecycle = transition_application_lifecycle(
+                lifecycle,
+                stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                status=ApplicationLifecycleStatus.RUNNING,
+            )
+            write_application_lifecycle(directory, lifecycle)
+
+            with self.assertRaisesRegex(
+                ApplicationLifecycleConflictError,
+                "缺少明确的 interaction 或 resume_from",
+            ):
+                _route_start({"workspace": directory, "resume_from": ""})
+
+    def test_stale_requirements_resume_is_rejected_during_technical_planning(self) -> None:
+        """TechnicalPlan 阶段即使显式携带旧 requirements 入口也必须拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+                initialization_thread_id="planning-thread",
+            )
+            for stage, status in (
+                (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, ApplicationLifecycleStatus.RUNNING),
+                (ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT, ApplicationLifecycleStatus.RUNNING),
+                (
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+                    ApplicationLifecycleStatus.AWAITING_USER,
+                ),
+                (ApplicationLifecycleStage.GENERATING_UI_DESIGNS, ApplicationLifecycleStatus.RUNNING),
+                (
+                    ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                    ApplicationLifecycleStatus.AWAITING_USER,
+                ),
+                (
+                    ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+                    ApplicationLifecycleStatus.AWAITING_USER,
+                ),
+                (ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN, ApplicationLifecycleStatus.RUNNING),
+                (
+                    ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+                    ApplicationLifecycleStatus.AWAITING_USER,
+                ),
+            ):
+                lifecycle = transition_application_lifecycle(
+                    lifecycle,
+                    stage=stage,
+                    status=status,
+                )
+            write_application_lifecycle(directory, lifecycle)
+
+            with self.assertRaisesRegex(
+                ApplicationLifecycleConflictError,
+                "恢复入口与 lifecycle 不匹配",
+            ):
+                _route_start(
+                    {"workspace": directory, "resume_from": "requirements"}
+                )
 
     def test_requirement_failure_and_retry_update_lifecycle(self) -> None:
         """需求生成失败应持久化错误，同一阶段重试后可恢复到待澄清。"""
@@ -574,6 +651,57 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             self.assertEqual(
                 lifecycle.initialization.stage,
                 ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            )
+
+    def test_old_confirmed_plan_does_not_advance_lifecycle_before_regeneration(self) -> None:
+        """进入规划时旧 confirmed TechnicalPlan 不能提前触发待确认生命周期。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = _confirmed_state(workspace)
+            _write_planning_stage_entry_lifecycle(workspace)
+            state["application_planning_interaction"] = {
+                "action": "enter_planning",
+                "artifact": "ui_designs",
+            }
+            observed_stages: list[ApplicationLifecycleStage] = []
+
+            def project_planning(_state: dict[str, object]) -> dict[str, object]:
+                """记录模型节点执行时的生命周期，并返回本轮新待确认计划。"""
+
+                current = load_application_lifecycle(workspace)
+                assert current is not None
+                observed_stages.append(current.initialization.stage)
+                return {
+                    "phase": "technical_planning",
+                    "status": "requires_user_input",
+                    "technical_plan": {
+                        **state["technical_plan"],
+                        "confirmation_status": "pending_user_confirmation",
+                    },
+                    "clarification": {
+                        "status": "requires_user_input",
+                        "mode": "technical_plan_confirmation",
+                    },
+                }
+
+            with patch(
+                "app.graph.application_planning_workflow.nodes.project_planning",
+                side_effect=project_planning,
+            ):
+                _technical_planning(
+                    {**state, "workflow_scope": "application_planning"}
+                )
+
+            self.assertEqual(
+                observed_stages,
+                [ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN],
+            )
+            lifecycle = load_application_lifecycle(workspace)
+            assert lifecycle is not None
+            self.assertEqual(
+                lifecycle.initialization.stage,
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
             )
 
     def test_design_revision_technical_plan_issues_continuation_without_template_stage(self) -> None:

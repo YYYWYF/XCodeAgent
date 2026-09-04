@@ -65,6 +65,10 @@ from app.graph.application_planning_interrupts import (
 )
 from app.graph.application_planning_revision import cleared_design_change_context
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
+from app.services.application_lifecycle import (
+    application_lifecycle_payload,
+    load_application_lifecycle,
+)
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
@@ -406,13 +410,14 @@ def build_workflow_ag_ui_stream(
                 else graph
             )
             if workflow_scope == "application_planning":
-                if isinstance(application_planning_interaction, dict):
-                    # 同一创建规划 thread 的恢复请求必须从快照校验一直串行到本轮流结束。
-                    application_planning_resume_lock = _application_planning_resume_lock(
-                        thread_id
-                    )
-                    await application_planning_resume_lock.acquire()
-                    application_planning_resume_lock_acquired = True
+                # 同一 planning thread 的所有 Graph 写运行必须串行。无 interaction 的
+                # 显式重试同样会修改 checkpoint，不能与确认恢复并发；snapshot-only
+                # 请求持锁时间很短，只保证读取到前一写运行完成后的稳定快照。
+                application_planning_resume_lock = _application_planning_resume_lock(
+                    thread_id
+                )
+                await application_planning_resume_lock.acquire()
+                application_planning_resume_lock_acquired = True
             await cleanup_workflow_checkpoints(
                 workspace=workspace,
                 project_id=project_id,
@@ -434,6 +439,7 @@ def build_workflow_ag_ui_stream(
                 )
             resume_from = workflow_inputs.get("resume_from") or None
             checkpoint_values: dict[str, Any] = {}
+            checkpoint_snapshot: Any | None = None
             if (
                 workflow_scope == "application_planning"
                 and hasattr(active_graph, "aget_state")
@@ -450,6 +456,84 @@ def build_workflow_ag_ui_stream(
                         application_planning_interaction,
                     )
                 checkpoint_values = dict(checkpoint_snapshot.values)
+            snapshot_only = (
+                workflow_scope == "application_planning"
+                and bool(checkpoint_values)
+                and not isinstance(application_planning_interaction, dict)
+                and not resume_from
+            )
+            if snapshot_only:
+                # 已有 checkpoint 的无动作请求只负责返回当前确认门；把 dict 再交给
+                # astream 会从 START 重跑，并可能让旧 resume_from 把流程带回 requirements。
+                result = project_application_planning_interrupt(
+                    checkpoint_values,
+                    checkpoint_snapshot,
+                )
+                current_lifecycle = (
+                    load_application_lifecycle(workspace) if workspace else None
+                )
+                if current_lifecycle is not None:
+                    lifecycle_payload = application_lifecycle_payload(current_lifecycle)
+                    result["lifecycle"] = lifecycle_payload
+                _workflow_event(
+                    events,
+                    "workflow.run.started",
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    status="running",
+                    message="读取当前 application planning checkpoint。",
+                    data={"request": request, "snapshotOnly": True},
+                )
+                summary = _workflow_summary(result, events)
+                finished_event = _workflow_event(
+                    events,
+                    "workflow.run.finished",
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    status=str(summary.get("status") or "completed"),
+                    message=str(summary.get("message") or "Workflow run finished."),
+                    data={"summary": summary, "snapshotOnly": True},
+                )
+                final_payload = _workflow_visual_payload(
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    summary=summary,
+                    events=events,
+                    result=result,
+                )
+                for frame in _workflow_ag_ui_frames(
+                    encoder,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    events=events,
+                    result=result,
+                    visual_payload=final_payload,
+                ):
+                    yield frame
+                for frame in _text_delta_frames(
+                    encoder,
+                    message_id,
+                    f"{summary.get('message') or finished_event['message']}\n",
+                ):
+                    yield frame
+                yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+                yield encoder.encode(
+                    RunFinishedEvent(
+                        threadId=thread_id,
+                        runId=run_id,
+                        result=jsonable_encoder(
+                            {
+                                "messageId": message_id,
+                                "agentMode": "workflow",
+                                "workflow": final_payload,
+                                "summary": summary,
+                                "events": events,
+                                "result": _public_workflow_state(result),
+                            }
+                        ),
+                    )
+                )
+                return
             initial_state: dict[str, Any] = {
                 **checkpoint_values,
                 "request": request,
@@ -499,8 +583,9 @@ def build_workflow_ag_ui_stream(
                         )
                     )
 
-            if resume_from:
-                initial_state["resume_from"] = resume_from
+            # resume_from 只属于本次 START 调度，必须覆盖 checkpoint 中的旧值；
+            # 首个真实节点还会将其清空，避免再次持久化为业务状态。
+            initial_state["resume_from"] = resume_from or ""
 
             if project_id:
                 initial_state["project_id"] = project_id

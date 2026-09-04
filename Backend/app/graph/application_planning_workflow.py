@@ -36,6 +36,7 @@ from app.domain.application_lifecycle import (
 from app.persistence.checkpoints import workflow_checkpoint_db_path, workflow_checkpointer
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.application_lifecycle import (
+    ApplicationLifecycleConflictError,
     application_lifecycle_payload,
     ensure_application_lifecycle,
     load_application_lifecycle,
@@ -61,17 +62,60 @@ from app.workspace.spec_documents import ui_designs_json_path, load_ui_designs_j
 def _route_start(state: ProjectState) -> str:
     """根据原创建规划 thread 的恢复点选择正常阶段或设计意图入口。"""
 
-    resume_from = state.get("resume_from")
+    resume_from = str(state.get("resume_from") or "").strip()
+    workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
+    lifecycle = load_application_lifecycle(workspace) if workspace else None
     if resume_from == "design_intent_analysis":
         return "design_intent_analysis"
-    if resume_from in {
-        "product_planning",
-        "ui_confirmation",
-        "planning_stage_entry",
-        "technical_planning",
-    }:
+    allowed_resume_stages = {
+        "requirements": {
+            ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+            ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+        },
+        "product_planning": {
+            ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+        },
+        "ui_confirmation": {
+            ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+            ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+        },
+        "planning_stage_entry": {
+            ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+        },
+        "technical_planning": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        },
+    }
+    if resume_from in allowed_resume_stages:
+        if (
+            lifecycle is not None
+            and lifecycle.initialization.stage
+            not in allowed_resume_stages[resume_from]
+        ):
+            raise ApplicationLifecycleConflictError(
+                "application_planning 恢复入口与 lifecycle 不匹配："
+                f"resume_from={resume_from}，"
+                f"lifecycle={lifecycle.initialization.stage.value}。"
+            )
         return resume_from
-    return "requirements"
+    if resume_from:
+        raise ApplicationLifecycleConflictError(
+            f"application_planning 不支持恢复入口：{resume_from}"
+        )
+    if (
+        lifecycle is None
+        or lifecycle.initialization.stage
+        == ApplicationLifecycleStage.COLLECTING_REQUIREMENT
+    ):
+        return "requirements"
+    raise ApplicationLifecycleConflictError(
+        "application_planning 已存在生命周期，但本次执行缺少明确的 "
+        "interaction 或 resume_from，当前 lifecycle="
+        f"{lifecycle.initialization.stage.value}。"
+    )
 
 
 def _route_requirements(state: ProjectState) -> str:
@@ -342,6 +386,18 @@ def _technical_planning(state: ProjectState) -> dict:
                     "lifecycle": application_lifecycle_payload(lifecycle),
                 },
             )
+        if (
+            lifecycle.initialization.stage
+            == ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
+        ):
+            # 只有本轮节点已经返回完成结果后才补齐确认边；这既允许正常确认
+            # 进入模板/continuation，也不会再被 checkpoint 中的旧计划提前触发。
+            lifecycle = persist_application_lifecycle_transition(
+                workspace,
+                stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+                status=ApplicationLifecycleStatus.AWAITING_USER,
+                active_run_id=state.get("active_run_id"),
+            )
         merged_state = {**node_state, **update}
         confirmation = confirm_application_planning_artifacts(merged_state)
         revision_continuation: dict[str, Any] = {}
@@ -428,56 +484,24 @@ def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: Proj
     common = {
         "active_run_id": state.get("active_run_id"),
     }
-    if lifecycle.initialization.stage == ApplicationLifecycleStage.COLLECTING_REQUIREMENT:
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-            status=ApplicationLifecycleStatus.RUNNING,
-            **common,
-        )
-    if lifecycle.initialization.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT:
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
-            status=ApplicationLifecycleStatus.RUNNING,
-            **common,
-        )
-    if (
-        lifecycle.initialization.stage
-        == ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT
-    ):
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
-            status=ApplicationLifecycleStatus.AWAITING_USER,
-            **common,
-        )
-    if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION:
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-            status=ApplicationLifecycleStatus.RUNNING,
-            **common,
-        )
-    if lifecycle.initialization.stage == ApplicationLifecycleStage.GENERATING_UI_DESIGNS:
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
-            status=ApplicationLifecycleStatus.AWAITING_USER,
-            **common,
-        )
-    if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION:
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
-            status=ApplicationLifecycleStatus.AWAITING_USER,
-            **common,
-        )
+    interaction = state.get("application_planning_interaction")
+    action = str(interaction.get("action") or "") if isinstance(interaction, dict) else ""
     if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY:
-        interaction = state.get("application_planning_interaction")
-        action = str(interaction.get("action") or "") if isinstance(interaction, dict) else ""
         if action != "enter_planning":
             raise ValueError("TechnicalPlan 必须由用户明确进入规划阶段后才能生成。")
+        lifecycle = persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            status=ApplicationLifecycleStatus.RUNNING,
+            **common,
+        )
+    elif (
+        lifecycle.initialization.stage
+        == ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
+        and action == "revise"
+    ):
+        # 用户要求重做当前 TechnicalPlan 时先回到生成态；确认动作则继续留在
+        # awaiting 状态，由 project_planning 同步 Markdown 并完成确认。
         lifecycle = persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
@@ -491,21 +515,6 @@ def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: Proj
         raise ValueError(
             "TechnicalPlan 只能在用户明确进入规划阶段后生成，当前生命周期为 "
             f"{lifecycle.initialization.stage.value}。"
-        )
-    technical_plan = state.get("technical_plan")
-    if (
-        lifecycle.initialization.stage == ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
-        and isinstance(technical_plan, dict)
-        and technical_plan.get("confirmation_status") in {
-            "pending_user_confirmation",
-            "confirmed",
-        }
-    ):
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-            status=ApplicationLifecycleStatus.AWAITING_USER,
-            **common,
         )
     return lifecycle
 

@@ -374,7 +374,12 @@ class RevisionRoutingTests(unittest.TestCase):
         self.assertEqual(update["design_change_target"], "ui_confirmation")
         self.assertEqual(update["design_change_generation_target"], "ui_confirmation")
         self.assertEqual(update["design_change_affected_page_ids"], ["orders"])
+        self.assertEqual(update["resume_from"], "")
         self.assertIn("currentArtifact", update["design_change_reason"])
+        self.assertEqual(update["technical_plan"], {})
+        self.assertEqual(update["technical_plan_path"], "")
+        self.assertEqual(update["technical_plan_json_path"], "")
+        self.assertEqual(update["revision_continuation"], {})
 
     def test_old_route_and_short_continuation_token_are_rejected(self) -> None:
         """current-contract-only 不接受旧枚举或不透明度不足的 continuation。"""

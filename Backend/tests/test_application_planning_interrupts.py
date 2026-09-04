@@ -341,7 +341,11 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         config = {"configurable": {"thread_id": thread_id}}
         _ = [
             chunk
-            async for chunk in graph.astream({}, config=config, stream_mode="updates")
+            async for chunk in graph.astream(
+                {"resume_from": "requirements"},
+                config=config,
+                stream_mode="updates",
+            )
         ]
         snapshot = await graph.aget_state(config)
         pending = snapshot.tasks[0].interrupts[0].value
@@ -373,6 +377,65 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(frames)
         self.assertEqual(completed.values["status"], "completed")
         self.assertFalse(completed.tasks)
+
+    async def test_existing_checkpoint_without_action_is_snapshot_only(self) -> None:
+        """无 interaction/resume 的已有 planning checkpoint 只能读取，不能重跑 START。"""
+
+        graph = _interrupt_test_graph()
+        thread_id = "planning-snapshot-only"
+        config = {"configurable": {"thread_id": thread_id}}
+        _ = [
+            chunk
+            async for chunk in graph.astream({}, config=config, stream_mode="updates")
+        ]
+        before = await graph.aget_state(config)
+
+        class CountingGraph:
+            """代理真实测试图并记录 runtime 是否错误调用 astream。"""
+
+            def __init__(self) -> None:
+                self.stream_calls = 0
+
+            async def aget_state(self, graph_config):
+                """读取底层真实 checkpoint。"""
+
+                return await graph.aget_state(graph_config)
+
+            async def astream(self, initial_state, *, config, stream_mode):
+                """记录写运行；snapshot-only 场景不应进入这里。"""
+
+                self.stream_calls += 1
+                async for item in graph.astream(
+                    initial_state,
+                    config=config,
+                    stream_mode=stream_mode,
+                ):
+                    yield item
+
+        counting_graph = CountingGraph()
+        with TemporaryDirectory() as workspace:
+            frames = [
+                frame
+                async for frame in build_workflow_ag_ui_stream(
+                    graph=counting_graph,
+                    payload={
+                        "threadId": thread_id,
+                        "runId": "planning-snapshot-run",
+                        "message": "读取当前规划状态",
+                        "forwardedProps": {
+                            "workspaceRoot": workspace,
+                            "workflowScope": "application_planning",
+                            "editorMode": "frontend",
+                        },
+                    },
+                )
+            ]
+
+        after = await graph.aget_state(config)
+        self.assertEqual(counting_graph.stream_calls, 0)
+        self.assertEqual(after.values, before.values)
+        self.assertTrue(any('"type":"RUN_FINISHED"' in frame for frame in frames))
+        self.assertFalse(any('"type":"RUN_ERROR"' in frame for frame in frames))
 
     async def test_planning_entry_can_retry_after_valid_gate_action_is_rejected(self) -> None:
         """入口动作校验失败不得留下重复运行元数据，下一次显式进入应正常续跑。"""

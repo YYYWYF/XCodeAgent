@@ -35,6 +35,23 @@ _FORMAL_REVISION_DESIGN_TARGETS = {
 }
 
 
+def invalidated_downstream_planning_state() -> dict[str, Any]:
+    """清空已被上游设计变更淘汰的当前 TechnicalPlan 及其确认投影。"""
+
+    return {
+        "technical_plan": {},
+        "technical_plan_path": "",
+        "technical_plan_json_path": "",
+        "technical_plan_repair_candidate": {},
+        "technical_plan_repair_errors": [],
+        "project_plan": {},
+        "project_plan_path": "",
+        "project_plan_json_path": "",
+        "revision_continuation": {},
+        "application_planning_confirmation": {},
+    }
+
+
 def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
     """识别最早受影响产物，并把原创建生命周期回退到对应真实节点。"""
 
@@ -73,6 +90,9 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         reason = f"{reason}；上游产物尚未确认，先回到 {target}。"
     update: dict[str, Any] = {
         "workflow_scope": "application_planning",
+        # design_intent_analysis 已消费本次 START 指令；即使下游生成中断，
+        # checkpoint 也不能继续携带旧入口污染下一次恢复。
+        "resume_from": "",
         "phase": "design_intent_analysis",
         "status": "completed",
         "design_change_submission": True,
@@ -88,6 +108,9 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         "timeline": ["design_intent_analysis"],
     }
     if target in DESIGN_CHANGE_TARGET_NODES:
+        # RequirementSpec、ProductPlan 或 UiDesign 任一上游发生变化后，上一版
+        # TechnicalPlan 只能作为磁盘历史保留，不能继续充当当前 checkpoint 产物。
+        update.update(invalidated_downstream_planning_state())
         lifecycle = restart_application_planning_lifecycle(
             _workspace(state),
             stage={
@@ -224,6 +247,9 @@ def design_node_update(
     """保留修订展示上下文，并在目标生成节点完成后消费一次修改指令。"""
 
     normalized_update = {
+        # resume_from 只负责选择本次 START 入口；首个真实节点完成后立即消费，
+        # 禁止旧启动指令随 checkpoint 残留到后续确认或轮询请求。
+        "resume_from": "",
         # 新一轮设计修订复用原 planning checkpoint；新 TechnicalPlan 尚未确认前，
         # 上一轮已签发的 continuation 不再有效，必须由每个设计节点显式清空。
         "revision_continuation": {},
@@ -265,6 +291,7 @@ def begin_current_artifact_revision(
     if not instruction:
         raise ValueError("修订当前设计产物必须提供修改意见。")
     update = {
+        **invalidated_downstream_planning_state(),
         "application_planning_confirmation": {},
         "design_change_submission": True,
         "design_change_request": instruction,
