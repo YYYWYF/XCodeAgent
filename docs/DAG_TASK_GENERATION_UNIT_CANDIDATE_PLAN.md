@@ -840,6 +840,11 @@ Global repair rounds = 2
 SDK infrastructure retry = 0
 ```
 
+第一版 Local=3、Global=2 是固定策略，不开放 Settings 构造参数或环境变量覆盖；
+`dag_unit_local_max_attempts`、`dag_global_repair_limit` 仅暴露只读固定值。
+`UnitGenerationPolicy.local_max_attempts` 同样只接受 3；Global 额度归后续 Run Controller 管理，不放入 Unit Policy。
+并发保持可配置，默认 3；token budget 保持 DAG 独立配置。
+
 以下属于实现保护参数：
 
 ```text
@@ -850,6 +855,18 @@ model turn limit
 ```
 
 必须可配置，但具体默认值在实现和压测阶段确定。
+
+### T2 接入前置项：保护参数配置来源（待完成）
+
+在首次构建生产 `UnitGenerationPolicy`、接入 Scheduler/Generation Session 之前必须完成：
+
+- 为 `request_timeout`、`unit_session_timeout`、`model_turn_limit`，以及合同读取次数、累计字节数提供集中配置入口；明确变量名、时间/大小单位、合法范围和默认值依据。
+- 在唯一的 Settings → Policy 适配位置完成映射；Builder、Scheduler 和 Worker 不得散落预算字面量，Context 不携带这些策略字段。
+- 合同读取预算须明确包含次数与累计大小两个限制；不能只传任意具名空字典就视为生产保护配置完成。
+- 验收覆盖环境覆盖、非法值、与全局 Agent 配置隔离、映射一致性，以及 Session/读取/轮数达到上限后的行为。
+
+当前 T1 仅要求调用方显式提供保护参数；测试中的数值不是生产默认值。
+此项完成前不得把试验数值当作生成会话的隐式默认值。本次契约修正不实现配置适配器或执行逻辑。
 
 ---
 
@@ -932,10 +949,7 @@ task-order-api
 ```text
 CandidateAttempt
 ├── candidate_id
-├── planning_run_id
-├── unit_id
-├── generation_round
-├── attempt_in_round
+├── identity: AttemptIdentity
 ├── input_fingerprint
 ├── status
 │   ├── valid
@@ -1570,12 +1584,36 @@ round_exhausted
 # 35. Attempt Identity
 
 ```text
-planning_run_id
-unit_id
-generation_round
-attempt_in_round
-attempt_id
+AttemptIdentity
+├── planning_run_id
+├── unit_id
+├── generation_round
+├── attempt_in_round
+└── attempt_id
+
+UnitAttemptJob
+├── identity: AttemptIdentity
+├── context: UnitGenerationContext
+└── policy: UnitGenerationPolicy
+
+UnitGenerationAttemptResult
+├── identity: AttemptIdentity
+├── input_fingerprint
+├── raw_response
+├── tasks[]
+├── validation_issues[]
+└── generation_metadata
 ```
+
+平台在 dispatch 前通过 `AttemptIdentity.allocate()` 分配独立 `attempt-<uuid>`；
+Worker 必须回传原身份，反序列化缺少 `attempt_id` 时拒绝输入，不补发 ID。
+`candidate_id` 使用独立的 `candidate-<uuid>`，Task ID 仍由模型提供，三者不可互相代替。
+Job 构造时必须校验 identity 与 Context 的 Run/Unit 一致；Candidate 与 Result 只保存嵌套 identity，
+不保留第二套可冲突的平铺身份字段。
+
+Context、Job、Result、Candidate 及其 `ValidationIssue` 为不可变快照；Issue 的 ID 序列为 tuple，
+details 递归只读。JSON 导出仍使用数组和对象，导出副本可编辑但不改变原快照；复制更新重新验证契约。
+Issue 的消息和详情仍不参与去重身份或重试路由。
 
 结果写状态前必须验证：
 

@@ -1,6 +1,5 @@
 """T1.1 ValidationIssue 序列化、身份、路由与非法契约回归。"""
 
-from copy import deepcopy
 import json
 import unittest
 
@@ -87,11 +86,11 @@ class PlanningIssueTests(unittest.TestCase):
         second = ValidationIssue.model_validate(_payload(code="missing_dependency"))
         duplicate = ValidationIssue.model_validate(_payload(message="另一描述", details={"later": True}))
         issues = [first, second, duplicate, second]
-        before = deepcopy(issues)
+        before = [issue.model_dump(mode="json") for issue in issues]
         result = dedupe_issues(iter(issues))
         self.assertEqual(result, [first, second])
         self.assertIs(result[0], first)
-        self.assertEqual(issues, before)
+        self.assertEqual([issue.model_dump(mode="json") for issue in issues], before)
 
     def test_details_do_not_affect_issue_identity(self) -> None:
         """不同诊断路径和嵌套详情不产生新身份。"""
@@ -143,7 +142,7 @@ class PlanningIssueTests(unittest.TestCase):
             with self.subTest(unit_ids=involved):
                 issue = ValidationIssue.model_validate(_payload(unit_ids=involved))
                 self.assertEqual(group_issues_by_retry_unit([issue]), {"page:current": [issue]})
-                self.assertEqual(issue.unit_ids, involved)
+                self.assertEqual(issue.unit_ids, tuple(involved))
 
     def test_message_changes_do_not_change_identity_or_retry_routing(self) -> None:
         """消息含重试指令、否定词、其他 Unit ID 或任意语言均不改变路由。"""
@@ -157,37 +156,55 @@ class PlanningIssueTests(unittest.TestCase):
                 blocked = ValidationIssue.model_validate(_payload(message=message, retryable=False, retry_unit_ids=[]))
                 self.assertEqual(group_issues_by_retry_unit([blocked]), {})
 
-    def test_helpers_revalidate_mutated_or_unvalidated_issue_instances(self) -> None:
-        """集合操作拒绝构造后变坏的对象，不静默丢弃非法重试目标。"""
+    def test_helpers_revalidate_unvalidated_issue_instances(self) -> None:
+        """即使绕过构造校验，集合操作仍拒绝非法字段和重试目标。"""
 
-        missing_target = ValidationIssue.model_validate(_payload())
-        missing_target.retry_unit_ids.clear()
-        hidden_target = ValidationIssue.model_validate(_payload(retryable=False, retry_unit_ids=[]))
-        hidden_target.retry_unit_ids.append("page:hidden")
-        blank_target = ValidationIssue.model_validate(_payload())
-        blank_target.retry_unit_ids.append(" ")
-        unchecked_copy = ValidationIssue.model_validate(_payload()).model_copy(update={"retryable": "false"})
-        for issue in (missing_target, hidden_target, blank_target, unchecked_copy):
-            with self.subTest(issue=issue):
+        for change in (
+            {"retry_unit_ids": ()}, {"retryable": False},
+            {"retry_unit_ids": (" ",)}, {"retryable": "false"},
+        ):
+            issue = ValidationIssue.model_construct(**{**ValidationIssue.model_validate(_payload()).__dict__, **change})
+            with self.assertRaises(ValidationError):
+                assert_issue_invariants(issue)
+            for operation in (dedupe_issues, group_issues_by_retry_unit):
                 with self.assertRaises(ValidationError):
-                    assert_issue_invariants(issue)
-                with self.assertRaises(ValidationError):
-                    dedupe_issues([issue])
-                with self.assertRaises(ValidationError):
-                    group_issues_by_retry_unit([issue])
+                    operation([issue])
         with self.assertRaises(TypeError):
             assert_issue_invariants("retry page:current")
+        with self.assertRaises(ValidationError):
+            ValidationIssue.model_validate(_payload()).model_copy(update={"retryable": False})
+
+    def test_issue_is_deeply_frozen_and_json_projections_are_detached(self) -> None:
+        """Issue 字段、目标与嵌套详情均只读，输入和导出修改不影响快照。"""
+
+        payload = _payload()
+        issue = ValidationIssue.model_validate(payload)
+        before = issue.model_dump(mode="json")
+        with self.assertRaises(ValidationError):
+            issue.message = "changed"
+        for ids in (issue.unit_ids, issue.task_ids, issue.retry_unit_ids):
+            with self.assertRaises(AttributeError):
+                ids.append("page:other")
+        with self.assertRaises(TypeError):
+            issue.details["path"] = "changed"
+        with self.assertRaises(AttributeError):
+            issue.details["evidence"].append("changed")
+        payload["retry_unit_ids"].clear()
+        payload["details"]["evidence"].clear()
+        exported = issue.model_dump(mode="json")
+        exported["retry_unit_ids"].clear()
+        exported["details"]["evidence"].clear()
+        self.assertEqual(issue.model_dump(mode="json"), before)
+        self.assertEqual(issue.model_copy(deep=True), issue)
 
     def test_empty_collections_and_defaults_do_not_infer_targets(self) -> None:
-        """空输入与无目标问题返回空分组，默认列表和详情不跨实例共享。"""
+        """空输入与无目标问题返回空分组；默认序列和详情也是只读对象。"""
 
         self.assertEqual(dedupe_issues(iter([])), [])
         self.assertEqual(group_issues_by_retry_unit(iter([])), {})
-        values = {"code": "input_missing", "level": "pre_generation", "category": "input", "retryable": False, "message": "输入缺失"}
-        first = ValidationIssue(**values)
-        second = ValidationIssue(**values)
-        first.unit_ids.append("page:current")
-        first.details["path"] = "example"
-        self.assertEqual(second.unit_ids, [])
-        self.assertEqual(second.details, {})
-        self.assertEqual(group_issues_by_retry_unit([first, second]), {})
+        issue = ValidationIssue(code="input_missing", level="pre_generation", category="input", retryable=False, message="输入缺失")
+        self.assertEqual(issue.unit_ids, ())
+        self.assertEqual(issue.details, {})
+        with self.assertRaises(TypeError):
+            issue.details["path"] = "changed"
+        self.assertEqual(group_issues_by_retry_unit([issue]), {})

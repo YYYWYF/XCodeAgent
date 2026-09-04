@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_generation_contracts import (
-    CandidateAttempt, GenerationRequirement, UnitGenerationAttemptResult,
+    AttemptIdentity, UnitAttemptJob, CandidateAttempt, GenerationRequirement, UnitGenerationAttemptResult,
     UnitGenerationContext, UnitGenerationPolicy,
 )
 
@@ -43,12 +43,20 @@ def _policy_payload() -> dict:
     }
 
 
+def _identity_payload() -> dict:
+    """固定测试 dispatch 身份，确保序列化与结果回传可逐项比较。"""
+
+    return {
+        "planning_run_id": "planning-run-1", "unit_id": "page:orders",
+        "generation_round": 1, "attempt_in_round": 1, "attempt_id": "attempt-" + "a" * 32,
+    }
+
+
 def _candidate_payload(status: str = "valid") -> dict:
     """构造平台候选元数据，任务正文只使用模型原始 ID。"""
 
     return {
-        "planning_run_id": "planning-run-1", "unit_id": "page:orders",
-        "generation_round": 1, "attempt_in_round": 1, "input_fingerprint": "input-digest",
+        "identity": _identity_payload(), "input_fingerprint": "input-digest",
         "status": status, "tasks": [{"id": "model-task-orders", "dependencies": []}],
         "validation_issues": [], "generation_metadata": {"model": "test-model", "tokens": 10},
     }
@@ -58,7 +66,7 @@ def _result_payload() -> dict:
     """构造未经 Local Validator 判定的单次响应。"""
 
     return {
-        "planning_run_id": "planning-run-1", "unit_id": "page:orders", "input_fingerprint": "input-digest",
+        "identity": _identity_payload(), "input_fingerprint": "input-digest",
         "raw_response": '{"tasks":[{"id":"model-task-orders"}]}',
         "tasks": [{"id": "model-task-orders"}],
         "validation_issues": [], "generation_metadata": {"finish_reason": "stop"},
@@ -67,9 +75,11 @@ def _result_payload() -> dict:
 
 class UnitGenerationContractTests(unittest.TestCase):
     def test_all_models_serialize_and_round_trip(self) -> None:
-        """五种模型均输出标准 JSON，反序列化保持业务内容和平台候选身份。"""
+        """所有模型均输出标准 JSON，反序列化保持业务内容和平台候选身份。"""
 
         cases = (
+            (AttemptIdentity, _identity_payload()),
+            (UnitAttemptJob, {"identity": _identity_payload(), "context": _context_payload(), "policy": UnitGenerationPolicy(**_policy_payload()).model_dump(mode="json")}),
             (GenerationRequirement, _context_payload()["generation_requirements"][0]),
             (UnitGenerationContext, _context_payload()), (UnitGenerationPolicy, _policy_payload()),
             (CandidateAttempt, _candidate_payload()), (UnitGenerationAttemptResult, _result_payload()),
@@ -92,8 +102,8 @@ class UnitGenerationContractTests(unittest.TestCase):
             (GenerationRequirement, _context_payload()["generation_requirements"][0], ("requirement_id", "description")),
             (UnitGenerationContext, _context_payload(), tuple(_context_payload())),
             (UnitGenerationPolicy, _policy_payload(), tuple(_policy_payload())),
-            (CandidateAttempt, _candidate_payload(), ("planning_run_id", "unit_id", "generation_round", "attempt_in_round", "input_fingerprint", "status", "tasks")),
-            (UnitGenerationAttemptResult, _result_payload(), ("planning_run_id", "unit_id", "input_fingerprint", "raw_response", "tasks")),
+            (CandidateAttempt, _candidate_payload(), ("identity", "input_fingerprint", "status", "tasks")),
+            (UnitGenerationAttemptResult, _result_payload(), ("identity", "input_fingerprint", "raw_response", "tasks")),
         )
         for model, payload, required in cases:
             for field in required:
@@ -179,7 +189,7 @@ class UnitGenerationContractTests(unittest.TestCase):
         policy = UnitGenerationPolicy(**_policy_payload())
         self.assertEqual((policy.local_max_attempts, policy.model_max_retries, policy.model_max_tokens), (3, 0, 4096))
         for change in (
-            {"local_max_attempts": 4}, {"model_max_retries": 1}, {"model_max_retries": False},
+            {"local_max_attempts": 1}, {"local_max_attempts": 4}, {"model_max_retries": 1}, {"model_max_retries": False},
             {"model_max_tokens": 0}, {"model_max_tokens": "4096"},
             {"request_timeout": 0}, {"request_timeout": float("inf")},
             {"unit_session_timeout": -1}, {"unit_session_timeout": float("nan")},

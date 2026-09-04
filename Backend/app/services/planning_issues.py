@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
+from pydantic import BeforeValidator, Field, StringConstraints, model_validator
+
+from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel, tuple_input
 
 
 IssueLevel = Literal["pre_generation", "unit", "global", "system"]
@@ -16,26 +18,25 @@ _IssueIdentity = tuple[
 ]
 
 
-class ValidationIssue(BaseModel):
+class ValidationIssue(FrozenPlanningModel):
     """表示规则命中时产生的问题；message/details 仅供展示和诊断。
 
     unit_ids/task_ids 表示涉及对象，retry_unit_ids 表示规则明确指定的重试目标。
     两组 Unit 可以相同，也可以不同；本契约不推导目标或施加子集关系。
     使用 model_dump(mode="json") / model_dump_json() 序列化，model_validate_json()
     恢复时重新校验契约；不提供字符串错误到 Issue 的兼容解析。
+    ID 序列与 details 递归只读；需修改时构造新 Issue 或通过 model_copy 重新验证。
     """
-
-    model_config = ConfigDict(extra="forbid", strict=True, revalidate_instances="always")
 
     code: _Identifier
     level: IssueLevel
     category: IssueCategory
-    unit_ids: list[_Identifier] = Field(default_factory=list)
-    task_ids: list[_Identifier] = Field(default_factory=list)
-    retry_unit_ids: list[_Identifier] = Field(default_factory=list)
+    unit_ids: Annotated[tuple[_Identifier, ...], BeforeValidator(tuple_input)] = ()
+    task_ids: Annotated[tuple[_Identifier, ...], BeforeValidator(tuple_input)] = ()
+    retry_unit_ids: Annotated[tuple[_Identifier, ...], BeforeValidator(tuple_input)] = ()
     retryable: bool
     message: str
-    details: dict[str, JsonValue] = Field(default_factory=dict)
+    details: FrozenJsonObject = Field(default_factory=dict, validate_default=True)
 
     @model_validator(mode="after")
     def validate_retry_contract(self) -> ValidationIssue:
@@ -49,7 +50,7 @@ class ValidationIssue(BaseModel):
 
 
 def assert_issue_invariants(issue: ValidationIssue) -> None:
-    """校验完整 Issue 契约，包含构造后列表修改及未验证复制导致的非法状态。"""
+    """校验完整 Issue 契约，拒绝通过未验证构造绕过约束的非法对象。"""
 
     if not isinstance(issue, ValidationIssue):
         raise TypeError("必须提供 ValidationIssue；规则层应显式构造结构化问题。")

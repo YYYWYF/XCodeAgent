@@ -3,68 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from types import MappingProxyType
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import (
-    AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, JsonValue,
-    PlainSerializer, StringConstraints,
-)
+from pydantic import AfterValidator, BeforeValidator, Field, PlainSerializer, StringConstraints, model_validator
 
 from app.domain.models import BuildUnitKind
 from app.services.planning_issues import ValidationIssue
-
-
-def _plain_json(value: Any) -> Any:
-    """将只读对象和元组投影为独立 JSON 容器，用于验证及序列化。"""
-
-    if isinstance(value, Mapping):
-        return {key: _plain_json(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain_json(item) for item in value]
-    return value
-
-
-def _freeze_json(value: Any) -> Any:
-    """递归复制并冻结 JSON 容器，避免调用方或并发 Attempt 改写业务快照。"""
-
-    if isinstance(value, Mapping):
-        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_json(item) for item in value)
-    return value
-
-
-def _tuple_input(value: Any) -> Any:
-    """接受 JSON 数组作为不可变序列输入，不转换字符串或任意迭代对象。"""
-
-    return tuple(value) if isinstance(value, list) else value
+from app.services.planning_frozen import (
+    FrozenJsonObject as _FrozenJsonObject, FrozenPlanningModel as _GenerationModel,
+    freeze_json as _freeze_json, plain_json as _plain_json, tuple_input as _tuple_input,
+)
 
 
 _Identifier = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 _PositiveInt = Annotated[int, Field(gt=0)]
 _PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
-_FrozenJsonObject = Annotated[
-    Mapping[str, JsonValue], BeforeValidator(_plain_json), AfterValidator(_freeze_json),
-    PlainSerializer(_plain_json, return_type=dict[str, JsonValue]),
-]
 _ReadLimits = Annotated[
     Mapping[_Identifier, _PositiveInt], BeforeValidator(_plain_json), AfterValidator(_freeze_json),
     PlainSerializer(_plain_json, return_type=dict[str, int]),
 ]
-
-
-class _GenerationModel(BaseModel):
-    """拒绝未知字段和隐式标量转换；字段更新必须构造并验证新的 DTO。"""
-
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True, revalidate_instances="always")
-
-    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
-        """复制时始终重建独立容器并校验，防止默认未验证 update 绕过字段边界。"""
-
-        del deep  # 冻结快照始终使用独立 JSON 容器重建，不共享可变输入。
-        return type(self).model_validate({**self.model_dump(mode="json"), **(update or {})})
 
 
 class GenerationRequirement(_GenerationModel):
@@ -117,8 +75,54 @@ class UnitGenerationPolicy(_GenerationModel):
     frozen_contract_read_limits: _ReadLimits
 
 
+def _new_attempt_id() -> str:
+    """在平台 dispatch 前分配 Attempt 身份，不使用 Candidate 或模型 Task ID。"""
+
+    return f"attempt-{uuid4().hex}"
+
+
+class AttemptIdentity(_GenerationModel):
+    """一次 dispatch 的平台身份；结果必须原样回传，不能在响应到达时重新分配。"""
+
+    planning_run_id: _Identifier
+    unit_id: _Identifier
+    generation_round: _PositiveInt
+    attempt_in_round: _PositiveInt
+    attempt_id: Annotated[str, StringConstraints(pattern=r"^attempt-[0-9a-f]{32}$")]
+
+    @classmethod
+    def allocate(
+        cls, *, planning_run_id: str, unit_id: str, generation_round: int, attempt_in_round: int,
+    ) -> "AttemptIdentity":
+        """仅供平台在 dispatch 前分配身份；反序列化必须提供已有 attempt_id。"""
+
+        return cls(
+            planning_run_id=planning_run_id, unit_id=unit_id,
+            generation_round=generation_round, attempt_in_round=attempt_in_round,
+            attempt_id=_new_attempt_id(),
+        )
+
+
+class UnitAttemptJob(_GenerationModel):
+    """Worker 输入的冻结封装；仅校验身份一致性，不执行调度或过期结果判断。"""
+
+    identity: AttemptIdentity
+    context: UnitGenerationContext
+    policy: UnitGenerationPolicy
+
+    @model_validator(mode="after")
+    def validate_context_identity(self) -> "UnitAttemptJob":
+        """拒绝将其他 Run 或 Unit 的 Context 错投给当前 Attempt。"""
+
+        if (self.identity.planning_run_id, self.identity.unit_id) != (
+            self.context.planning_run_id, self.context.unit_id,
+        ):
+            raise ValueError("Attempt identity 与 Context 的 planning_run_id/unit_id 必须一致。")
+        return self
+
+
 def _new_candidate_id() -> str:
-    """在平台创建 Attempt 时分配独立身份，绝不从模型 Task ID 推导。"""
+    """在平台创建 Candidate 时分配独立身份，绝不从模型 Task ID 推导。"""
 
     return f"candidate-{uuid4().hex}"
 
@@ -133,10 +137,7 @@ class CandidateAttempt(_GenerationModel):
     """
 
     candidate_id: Annotated[str, StringConstraints(pattern=r"^candidate-[0-9a-f]{32}$")] = Field(default_factory=_new_candidate_id)
-    planning_run_id: _Identifier
-    unit_id: _Identifier
-    generation_round: _PositiveInt
-    attempt_in_round: _PositiveInt
+    identity: AttemptIdentity
     input_fingerprint: _Identifier
     status: Literal["valid", "invalid", "superseded"]
     tasks: Annotated[tuple[_FrozenJsonObject, ...], BeforeValidator(_tuple_input)]
@@ -151,8 +152,7 @@ class UnitGenerationAttemptResult(_GenerationModel):
     由后续平台 Validator 决定。这里只定义 DTO，不实现解析器或 LLM 调用。
     """
 
-    planning_run_id: _Identifier
-    unit_id: _Identifier
+    identity: AttemptIdentity
     input_fingerprint: _Identifier
     raw_response: str
     tasks: Annotated[tuple[_FrozenJsonObject, ...], BeforeValidator(_tuple_input)]

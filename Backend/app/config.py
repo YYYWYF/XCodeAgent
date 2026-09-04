@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -53,8 +53,9 @@ class Settings:
     # DAG Unit Generation 独立预算；仅提供配置，不改变其他 Agent 的模型参数。
     dag_unit_max_tokens: int = 4096
     dag_unit_generation_concurrency: int = 3
-    dag_unit_local_max_attempts: int = 3
-    dag_global_repair_limit: int = 2
+    # 第一版固定策略，不作为构造参数或环境变量配置开放。
+    dag_unit_local_max_attempts: int = field(default=3, init=False)
+    dag_global_repair_limit: int = field(default=2, init=False)
     dag_business_self_check_enabled: bool = False
     checkpoint_db_path: str = ""  # populated in from_env
     checkpoint_retention_days: int = 30
@@ -116,12 +117,6 @@ class Settings:
             ),
             dag_unit_generation_concurrency=_env_int(
                 "XCODEAGENT_DAG_UNIT_CONCURRENCY", default=3, minimum=1
-            ),
-            dag_unit_local_max_attempts=_env_int(
-                "XCODEAGENT_DAG_UNIT_LOCAL_MAX_ATTEMPTS", default=3, minimum=1
-            ),
-            dag_global_repair_limit=_env_int(
-                "XCODEAGENT_DAG_GLOBAL_REPAIR_LIMIT", default=2, minimum=0
             ),
             dag_business_self_check_enabled=_env_bool(
                 "XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED", default=False

@@ -19,8 +19,6 @@ _MODEL_ENV = {
 _DAG_FIELDS = {
     "XCODEAGENT_DAG_UNIT_MAX_TOKENS": ("dag_unit_max_tokens", 4096),
     "XCODEAGENT_DAG_UNIT_CONCURRENCY": ("dag_unit_generation_concurrency", 3),
-    "XCODEAGENT_DAG_UNIT_LOCAL_MAX_ATTEMPTS": ("dag_unit_local_max_attempts", 3),
-    "XCODEAGENT_DAG_GLOBAL_REPAIR_LIMIT": ("dag_global_repair_limit", 2),
 }
 
 
@@ -63,7 +61,7 @@ class DagSettingsTests(unittest.TestCase):
             "XCODEAGENT_UI_DESIGN_MAX_TOKENS": "12000", "XCODEAGENT_UI_DESIGN_CONCURRENCY": "2",
         }
         expected = asdict(_settings(**globals_env))
-        overrides = dict(zip(_DAG_FIELDS, ("6000", "1", "2", "0")))
+        overrides = dict(zip(_DAG_FIELDS, ("6000", "1")))
         settings = _settings(**globals_env, **overrides)
         for variable, value in overrides.items():
             expected[_DAG_FIELDS[variable][0]] = int(value)
@@ -72,7 +70,7 @@ class DagSettingsTests(unittest.TestCase):
         self.assertEqual(settings.model_max_retries, 5)
 
     def test_global_overrides_do_not_change_dag_defaults(self) -> None:
-        """只修改全局参数不会改变四个 DAG 默认值。"""
+        """只修改全局参数不会改变 DAG 可配置项默认值。"""
 
         settings = _settings(AGENT_MAX_TOKENS="16384", MODEL_MAX_RETRIES="0", BUILD_TASK_PLAN_MAX_RETRIES="8")
         for field, expected in _DAG_FIELDS.values():
@@ -90,22 +88,21 @@ class DagSettingsTests(unittest.TestCase):
                     _settings(**{variable: value})
 
     def test_negative_values_and_zero_positive_budgets_are_rejected(self) -> None:
-        """所有配置拒绝负数，token、并发和 Local 总尝试次数另拒绝零。"""
+        """token 与并发配置均拒绝负数和零。"""
 
         for variable in _DAG_FIELDS:
-            invalid_values = ("-1",) if variable == "XCODEAGENT_DAG_GLOBAL_REPAIR_LIMIT" else ("-1", "0")
+            invalid_values = ("-1", "0")
             for value in invalid_values:
                 with self.subTest(variable=variable, value=value), self.assertRaisesRegex(ValueError, variable):
                     _settings(**{variable: value})
 
-    def test_minimum_values_support_serial_generation_and_no_global_repair(self) -> None:
-        """允许并发为 1 的验证配置和 Global=0，保持配置可显式覆盖。"""
+    def test_minimum_values_support_serial_generation(self) -> None:
+        """允许并发为 1，固定重试策略不受影响。"""
 
         settings = _settings(
             XCODEAGENT_DAG_UNIT_MAX_TOKENS="1", XCODEAGENT_DAG_UNIT_CONCURRENCY="1",
-            XCODEAGENT_DAG_UNIT_LOCAL_MAX_ATTEMPTS="1", XCODEAGENT_DAG_GLOBAL_REPAIR_LIMIT="0",
         )
-        self.assertEqual([getattr(settings, field) for field, _ in _DAG_FIELDS.values()], [1, 1, 1, 0])
+        self.assertEqual([getattr(settings, field) for field, _ in _DAG_FIELDS.values()], [1, 1])
 
     def test_example_environment_documents_exact_names_and_defaults(self) -> None:
         """示例配置与 Settings 默认值一致，只读取 .env.example，不读取本机 .env。"""
@@ -113,3 +110,16 @@ class DagSettingsTests(unittest.TestCase):
         example = dotenv_values(Path(__file__).resolve().parents[1] / ".env.example", interpolate=False)
         for variable, (_, expected) in _DAG_FIELDS.items():
             self.assertEqual(example[variable], str(expected))
+
+    def test_retry_strategy_is_fixed_for_env_and_direct_construction(self) -> None:
+        """Local/Global 不再是环境或构造入口；所有可构造配置都保持 3/2。"""
+
+        for value in ("1", "4", "0", "invalid"):
+            settings = _settings(XCODEAGENT_DAG_UNIT_LOCAL_MAX_ATTEMPTS=value, XCODEAGENT_DAG_GLOBAL_REPAIR_LIMIT=value)
+            self.assertEqual((settings.dag_unit_local_max_attempts, settings.dag_global_repair_limit), (3, 2))
+        for field in ("dag_unit_local_max_attempts", "dag_global_repair_limit"):
+            with self.assertRaises(TypeError):
+                Settings(model_base_url="test", model_api_key="test", model_name="test", **{field: 1})
+        example = dotenv_values(Path(__file__).resolve().parents[1] / ".env.example", interpolate=False)
+        self.assertNotIn("XCODEAGENT_DAG_UNIT_LOCAL_MAX_ATTEMPTS", example)
+        self.assertNotIn("XCODEAGENT_DAG_GLOBAL_REPAIR_LIMIT", example)
