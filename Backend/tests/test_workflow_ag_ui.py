@@ -643,6 +643,89 @@ class FakeDagGenerationProgressGraph:
         )
 
 
+class FakePlanningRunProgressGraph:
+    """模拟新 PlanningRun 完整快照通过既有 custom event 到达 AG-UI。"""
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        """发送一个 active 快照和一个 failed 快照，保持事件类型不变。"""
+
+        del initial_state, config, stream_mode
+        base_snapshot = {
+            "schemaVersion": "dag-generation.v1",
+            "planningRunId": "planning-run-1",
+            "status": "active",
+            "phase": "generating_units",
+            "globalRepairRound": 0,
+            "globalRepairLimit": 2,
+            "units": [
+                {
+                    "id": "page:orders",
+                    "kind": "page",
+                    "participation": "generate_only",
+                    "generationStrategy": "model",
+                    "status": "pending",
+                    "generationRound": 1,
+                    "attemptInRound": 0,
+                    "localAttemptLimit": 3,
+                    "totalAttempts": 0,
+                    "retainedTaskCount": 0,
+                    "reusableCapabilityCount": 0,
+                    "candidateTaskCount": 0,
+                    "issues": [],
+                }
+            ],
+            "globalIssues": [],
+            "summary": {
+                "unitCount": 1,
+                "readyUnitCount": 0,
+                "pendingUnitCount": 1,
+                "activeUnitCount": 0,
+                "roundExhaustedUnitCount": 0,
+                "abortedUnitCount": 0,
+                "retainedTaskCount": 0,
+                "candidateTaskCount": 0,
+                "unitIssueCount": 0,
+                "globalIssueCount": 0,
+                "failureIssueCount": 0,
+            },
+        }
+        yield "custom", {
+            "type": "prepare_build_tasks.progress",
+            "status": "running",
+            "message": "PlanningRun 已开始。",
+            "dag_generation": {**base_snapshot, "revision": 1},
+        }
+        yield "custom", {
+            "type": "prepare_build_tasks.progress",
+            "status": "failed",
+            "message": "PlanningRun 已失败。",
+            "dag_generation": {
+                **base_snapshot,
+                "revision": 2,
+                "status": "failed",
+                "units": [{**base_snapshot["units"][0], "status": "aborted"}],
+                "summary": {
+                    **base_snapshot["summary"],
+                    "pendingUnitCount": 0,
+                    "abortedUnitCount": 1,
+                    "failureIssueCount": 1,
+                },
+            },
+        }
+
+    async def aget_state(self, config):
+        """返回失败终态，供 runtime 正常完成模拟流收口。"""
+
+        del config
+        return SimpleNamespace(
+            values={
+                "phase": "prepare_build_tasks",
+                "status": "failed",
+                "timeline": ["prepare_build_tasks"],
+            }
+        )
+
+
 class FakeRepairLoopGraph:
     """模拟 build → test failed → small task repair → retest 的更新序列。"""
 
@@ -1553,6 +1636,40 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertEqual(dag_frames[1]["dagGeneration"]["stages"][1]["status"], "running")
         self.assertEqual(dag_frames[-1]["dagGeneration"]["tasks"][0]["id"], "page")
         self.assertLess(dag_frames[-2]["sequence"], dag_frames[-1]["sequence"])
+
+    def test_stream_forwards_planning_run_snapshot_and_terminal_status(self) -> None:
+        """新 payload 经既有 event 分支完整透传，failed 不再显示为运行中。"""
+
+        async def collect() -> list[str]:
+            """收集 PlanningRun progress 对应的 AG-UI 帧。"""
+
+            stream = build_workflow_ag_ui_stream(
+                graph=FakePlanningRunProgressGraph(),
+                payload={
+                    "threadId": "thread-planning-run-progress",
+                    "runId": "run-planning-run-progress",
+                    "messages": [{"role": "user", "content": "生成任务 DAG"}],
+                    "forwardedProps": {"resumeFrom": "prepare_build_tasks"},
+                },
+            )
+            return [frame async for frame in stream]
+
+        frames = _decode_agent_process_frames(asyncio.run(collect()))
+        dag_frames = [
+            frame
+            for frame in frames
+            if frame.get("id") == "workflow:prepare_build_tasks"
+            and isinstance(frame.get("dagGeneration"), dict)
+            and frame["dagGeneration"].get("schemaVersion") == "dag-generation.v1"
+        ]
+
+        self.assertEqual([frame["status"] for frame in dag_frames], ["running", "failed"])
+        self.assertEqual(
+            [frame["dagGeneration"]["revision"] for frame in dag_frames],
+            [1, 2],
+        )
+        self.assertEqual(dag_frames[-1]["dagGeneration"]["status"], "failed")
+        self.assertEqual(dag_frames[-1]["dagGeneration"]["units"][0]["status"], "aborted")
 
     def test_stream_attaches_workspace_inspection_to_completed_step(self) -> None:
         """工作区完成帧应复用节点事件中的安全结构化摘要。"""

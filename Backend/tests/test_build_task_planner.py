@@ -1944,7 +1944,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "frontend/src/pages/Dashboard/index.tsx",
         )
         self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
-        self.assertIn("must not add template page entry", str(plan["task_graph"]["validation"]["errors"]))
+        # 当前失败来自交付物未同步到已校对路径；不把已移除的 add 禁令当作门禁。
+        self.assertIn("must include the dashboard_page page entry", str(plan["task_graph"]["validation"]["errors"]))
         self.assertNotIn("frontend/src/constants/menus.ts", page_task["allowed_paths"])
 
     def test_existing_page_entry_is_used_when_model_omits_page_path(self) -> None:

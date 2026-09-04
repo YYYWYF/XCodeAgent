@@ -337,6 +337,8 @@ def build_workflow_ag_ui_stream(
             action=plan_control_action,
             workspace=workflow_inputs["workspace"] or "",
             target_run_id=workflow_inputs.get("plan_control_run_id") or "",
+            planning_run_id=workflow_inputs.get("plan_control_planning_run_id") or "",
+            draft_digest=workflow_inputs.get("plan_control_draft_digest") or "",
             thread_id=thread_id,
             run_id=run_id,
             accept=accept,
@@ -1100,6 +1102,7 @@ def build_workflow_ag_ui_stream(
                             if isinstance(progress.get("dag_generation"), dict)
                             else {}
                         )
+                        progress_status = str(progress.get("status") or "running")
                         process_sequence += 1
                         task_attempt = _current_node_attempt(
                             node_attempts, "prepare_build_tasks"
@@ -1108,7 +1111,11 @@ def build_workflow_ag_ui_stream(
                             encoder,
                             id=_process_step_id("prepare_build_tasks", task_attempt),
                             kind="workflow",
-                            status="running",
+                            status=(
+                                "failed"
+                                if progress_status in {"failed", "cancelled"}
+                                else "running"
+                            ),
                             title=f"正在执行 {_workflow_node_label('prepare_build_tasks')}",
                             detail=str(
                                 progress.get("message") or "构建任务 DAG 进度已更新。"

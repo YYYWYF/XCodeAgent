@@ -383,6 +383,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("workspaceRoot"))
         or _optional_text(application.get("workspaceRoot"))
     )
+    # 页面会话是 PendingPlan 的业务归属；同一会话可跨多个 Workflow Run 继续操作。
+    owner_session_id = (
+        _optional_text(payload.get("sessionId"))
+        or _optional_text(payload.get("session_id"))
+        or _optional_text(forwarded_props.get("sessionId"))
+        or _optional_text(forwarded_props.get("session_id"))
+    )
     request_thread_id = (
         _optional_text(payload.get("thread_id"))
         or _optional_text(payload.get("threadId"))
@@ -663,6 +670,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **resume_values_from_state,
         **project_plan_start_values,
         **_debug_resume_values(debug_state, workspace=workspace),
+        **({"owner_session_id": owner_session_id} if owner_session_id else {}),
         "retry_failed_tasks": (
             workflow_action == "retry_failed_tasks" and resume_from == "build"
         ),
@@ -796,6 +804,18 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(payload.get("plan_control_action"))
             or _optional_text(forwarded_props.get("planControlAction"))
             or _optional_text(forwarded_props.get("plan_control_action"))
+        ),
+        "plan_control_planning_run_id": (
+            _optional_text(payload.get("planningRunId"))
+            or _optional_text(payload.get("planning_run_id"))
+            or _optional_text(forwarded_props.get("planningRunId"))
+            or _optional_text(forwarded_props.get("planning_run_id"))
+        ),
+        "plan_control_draft_digest": (
+            _optional_text(payload.get("draftDigest"))
+            or _optional_text(payload.get("draft_digest"))
+            or _optional_text(forwarded_props.get("draftDigest"))
+            or _optional_text(forwarded_props.get("draft_digest"))
         ),
         "cancel_run_id": (
             _optional_text(payload.get("cancelRunId"))
@@ -2070,7 +2090,11 @@ def _clarification_answers_to_text(value: Any) -> str:
 
 
 def _build_task_plan_confirmation(value: Any) -> dict[str, Any]:
-    """提取并限制 DAG 确认动作，保持其与正式文档确认协议隔离。"""
+    """提取 DAG 确认动作，并转发服务端签发的精确 DraftIdentity。
+
+    只接受 confirm 或 regenerate；abandon 仍由计划控制流终止，不进入 Graph。身份字段只做
+    透传，权威性由 Backend lifecycle 用重建输入复验，绝不信任前端指纹。
+    """
 
     if not isinstance(value, dict):
         return {}
@@ -2078,12 +2102,23 @@ def _build_task_plan_confirmation(value: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     action = _optional_text(raw.get("action")).lower()
-    if action != "confirm":
+    if action not in {"confirm", "regenerate"}:
         return {}
-    return {
+    confirmation: dict[str, Any] = {
         "mode": "build_task_plan_confirmation",
         "action": action,
     }
+    planning_run_id = _optional_text(raw.get("planningRunId")) or _optional_text(
+        raw.get("planning_run_id")
+    )
+    draft_digest = _optional_text(raw.get("draftDigest")) or _optional_text(
+        raw.get("draft_digest")
+    )
+    if planning_run_id:
+        confirmation["planning_run_id"] = planning_run_id
+    if draft_digest:
+        confirmation["draft_digest"] = draft_digest
+    return confirmation
 
 
 def _test_phase_confirmation_submission(value: Any) -> dict[str, str]:

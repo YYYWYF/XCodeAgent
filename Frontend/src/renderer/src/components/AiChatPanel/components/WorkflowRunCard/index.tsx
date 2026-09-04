@@ -63,6 +63,10 @@ import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
 import { workflowClarification } from './workflowClarification'
+import {
+  bindDagConfirmationDraftIdentity,
+  currentDagConfirmationDraftIdentity
+} from '../../stageOutputState'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -192,6 +196,14 @@ export default function WorkflowRunCard({
     workflow.summary?.testTarget ||
     workflow.state?.testTarget) as WorkflowTestTarget | undefined
   const dagTaskPlan = clarification?.taskPlan as WorkflowBuildTaskPlan | undefined
+  // Confirm/Abandon/Regenerate 必须精确绑定服务端 DraftIdentity；缺失时禁止提交（fail closed）。
+  const dagDraftIdentity = currentDagConfirmationDraftIdentity(workflow)
+  const dagConfirmationErrors = dagDraftIdentity
+    ? clarification?.errors
+    : [
+        ...(Array.isArray(clarification?.errors) ? clarification.errors : []),
+        '当前任务规划缺少服务端 DraftIdentity，请刷新后重试。'
+      ]
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -504,13 +516,15 @@ export default function WorkflowRunCard({
             />
           ) : dagConfirmation && requiresConfirmation ? (
             <BuildTaskPlanConfirmation
-              disabled={disabled || interactionAvailability !== 'active'}
-              errors={clarification?.errors}
-              onSubmit={(action: WorkflowBuildTaskPlanConfirmation) =>
+              disabled={disabled || interactionAvailability !== 'active' || !dagDraftIdentity}
+              errors={dagConfirmationErrors}
+              onSubmit={(action: WorkflowBuildTaskPlanConfirmation) => {
+                const identityBoundAction = bindDagConfirmationDraftIdentity(workflow, action)
+                if (!identityBoundAction) return
                 onSubmitClarification?.(workflow, {
-                  build_task_plan_confirmation: action
+                  build_task_plan_confirmation: identityBoundAction
                 })
-              }
+              }}
               plan={dagTaskPlan}
               targetReview={clarification?.targetReview}
             />

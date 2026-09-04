@@ -48,6 +48,8 @@ class GenerationWorkspacePathTests(unittest.TestCase):
     def test_data_source_agent_receives_scoped_bundle_without_host_path_in_prompt(
         self,
     ) -> None:
+        """使用当前快照接口验证数据源 Agent 路径边界，宿主路径不进入提示词。"""
+
         workspace = "C:\\Users\\sbw\\Downloads\\test\\manage"
         agent = RecordingAgent()
 
@@ -57,7 +59,7 @@ class GenerationWorkspacePathTests(unittest.TestCase):
         ) as create_bundle:
             result = _invoke_live_data_source_agent(
                 project_plan={"app": {"name": "Manage"}},
-                build_task_plan={"summary": {"data_source": 1}},
+                workspace_snapshot={"backend": {"dir_structure": "backend/\n└── pom.xml"}},
                 tasks=[{"allowed_paths": ["app/backend/**"]}],
                 workspace=workspace,
                 selected_skill_names=None,

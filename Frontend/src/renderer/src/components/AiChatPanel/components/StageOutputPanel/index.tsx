@@ -1,14 +1,14 @@
 import { ArrowLeftOutlined, NodeIndexOutlined } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
-import type { DagGenerationStageRecord } from '../../../../service/agUiAgent'
+import type { DagGenerationSnapshot } from '../../../../service/agUiAgent'
 import type {
   WorkflowBuildTargetReview,
   WorkflowBuildTaskPlan,
   WorkflowBuildTaskPlanConfirmation
 } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { StageOutput } from '../ProcessSteps/DagGenerationProgress'
+import DagGenerationProgress from '../ProcessSteps/DagGenerationProgress'
 import BuildTaskPlanConfirmation from '../WorkflowRunCard/BuildTaskPlanConfirmation'
 import './StageOutputPanel.less'
 
@@ -19,10 +19,10 @@ type Props = {
   confirmationTargetReview?: WorkflowBuildTargetReview
   onConfirmationSubmit?: (action: WorkflowBuildTaskPlanConfirmation) => void
   onReturnToConfirmation?: () => void
-  stage?: DagGenerationStageRecord
+  snapshot?: DagGenerationSnapshot
 }
 
-/** 在右侧“阶段产物”工作区展示当前子阶段，或承载完整 DAG 确认交互卡。 */
+/** 在右侧工作区展示 Unit 进度，或承载完整 DAG 确认交互卡。 */
 export default function StageOutputPanel({
   confirmationDisabled,
   confirmationErrors,
@@ -30,7 +30,7 @@ export default function StageOutputPanel({
   confirmationTargetReview,
   onConfirmationSubmit,
   onReturnToConfirmation,
-  stage
+  snapshot
 }: Props): ReactElement | null {
   if (confirmationPlan) {
     return (
@@ -46,7 +46,7 @@ export default function StageOutputPanel({
       </section>
     )
   }
-  if (!stage?.output) return null
+  if (!snapshot) return null
 
   return (
     <section className={cx('stage-output-panel')}>
@@ -55,11 +55,13 @@ export default function StageOutputPanel({
           <NodeIndexOutlined />
         </span>
         <span className={cx('stage-output-panel-copy')}>
-          <Typography.Text strong>{stage.name}</Typography.Text>
-          <Typography.Text type="secondary">{stage.detail}</Typography.Text>
+          <Typography.Text strong>PlanningRun Unit 进度</Typography.Text>
+          <Typography.Text type="secondary">
+            展示服务端当前 revision 的完整状态，不推算百分比
+          </Typography.Text>
           {onReturnToConfirmation ? (
             <Typography.Text className={cx('stage-output-panel-return-hint')}>
-              当前为历史阶段产物，任务确认仍待处理
+              当前为生成进度，任务确认仍待处理
             </Typography.Text>
           ) : null}
         </span>
@@ -76,7 +78,7 @@ export default function StageOutputPanel({
         ) : null}
       </header>
       <div className={cx('stage-output-panel-body')}>
-        <StageOutput stage={stage} />
+        <DagGenerationProgress snapshot={snapshot} />
       </div>
     </section>
   )

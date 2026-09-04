@@ -12,6 +12,7 @@ class ProjectState(TypedDict, total=False):
     application_name: str
     active_thread_id: str
     active_run_id: str
+    owner_session_id: str
     change_id: str
     change_target: dict[str, Any]
     element_context: dict[str, Any]
@@ -108,6 +109,8 @@ class ProjectState(TypedDict, total=False):
     build_execution_scope: dict[str, str]
     last_persisted_build_execution_scope: dict[str, str] | None
     build_task_plan_persisted: bool
+    pending_build_task_plan_path: str
+    pending_build_task_plan_persisted: bool
     execution_resource_claims: list[dict[str, Any]]
     build_execution_slice: dict[str, Any]
     build_context: dict[str, Any]
@@ -115,6 +118,8 @@ class ProjectState(TypedDict, total=False):
     database_approval_requests: list[dict[str, Any]]
     build_task_plan: dict[str, Any]
     build_task_plan_confirmation: dict[str, Any]
+    planning_run_id: str
+    draft_digest: str
     dag_generation_progress: dict[str, Any]
     build_task_plan_path: str
     build_run_id: str

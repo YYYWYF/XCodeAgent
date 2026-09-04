@@ -10,18 +10,24 @@ from app.services.authorization_platform_projection import apply_authorization_p
 
 
 class AuthorizationPlatformProjectionTests(unittest.TestCase):
-    """验证显式前端路由和后端常量由平台统一投影。"""
+    """验证显式前端路由和后端常量由 Build 平台统一投影。"""
 
-    def test_records_frontend_and_backend_diffs(self) -> None:
-        """首次生成三处平台文件，重复执行不再产生差异。"""
+    def test_preprojection_records_routes_and_backend_without_resources(self) -> None:
+        """首次仅更新 routes/AuthConstants，resources.ts 保持 auth-guard 前状态。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             self._write_template(workspace)
+            resources = workspace / "frontend/src/constants/resources.ts"
+            resources_before = resources.read_text(encoding="utf-8")
             first = apply_authorization_platform_projections(workspace, self._plan())
             second = apply_authorization_platform_projections(workspace, self._plan())
 
-        self.assertEqual(first["summary"]["files"], 3)
+            self.assertEqual(resources.read_text(encoding="utf-8"), resources_before)
+            routes = (workspace / "frontend/src/constants/routes.tsx").read_text(encoding="utf-8")
+            self.assertIn("RESOURCES.PAGE.ORDERS", routes)
+
+        self.assertEqual(first["summary"]["files"], 2)
         self.assertEqual(second["summary"]["files"], 0)
 
     def test_edd_reports_route_drift_without_rewrite(self) -> None:

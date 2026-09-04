@@ -107,7 +107,8 @@ def workflow_capabilities() -> dict[str, Any]:
                     "修复重试复用原问题快照和失败前轮次。"
                 ),
                 "build_task_plan_confirmation": (
-                    "通过 clarificationAnswers 提交只读 Build 任务计划的 confirm 动作；abandon 走 plan control。"
+                    "通过 clarificationAnswers 提交只读 Build 任务计划的 confirm/regenerate 动作；"
+                    "abandon 走 plan control。"
                 ),
                 "test_phase_confirmation": (
                     "通过 clarificationAnswers.test_phase_confirmation 提交结构化 confirm 动作；"
@@ -154,7 +155,29 @@ def workflow_capabilities() -> dict[str, Any]:
             },
             "clientNodeSelectionAllowed": False,
         },
+        "pendingOwnership": {
+            "requestField": "forwardedProps.sessionId",
+            "storageField": "draft_identity.owner_session_id",
+            "refreshField": "extensions.planningRefresh.ownerSessionId",
+            "semantics": "页面对话拥有 PendingPlan；同一对话可跨多个 Workflow Run，Regenerate 继承原 owner。",
+        },
+        "planControl": {
+            "requestField": "forwardedProps.planControlAction",
+            "actions": ["stop", "end", "abandon"],
+            "abandonIdentityFields": ["planningRunId", "draftDigest"],
+            "abandonSemantics": "删除精确匹配的 PendingPlan，结束对应 Workflow execution；不取消 active Scheduler。",
+        },
         "clarificationModes": {
+            "confirmed_baseline_error": {
+                "code": "confirmed_baseline_invalid",
+                "artifact": ".xcodeagent/plans/build-task-plan.json",
+                "issueCode": "CONFIRMED_BASELINE_INVALID",
+                "level": "pre_generation",
+                "category": "platform",
+                "retryable": False,
+                "automaticRouting": False,
+                "recovery": "人工修复并验证正式 ConfirmedPlan 后重新发起规划；回复不能豁免校验。",
+            },
             "unit_test_confirmation": {
                 "answerField": "clarificationAnswers.unit_test_confirmation",
                 "answer": {"selected": ["run"], "values": ["run", "skip"]},

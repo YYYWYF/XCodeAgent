@@ -59,7 +59,7 @@ import {
   workflowShouldShowCodeReview,
   workflowShouldShowProjectLaunch
 } from '../../utils'
-import { workflowInteractionAvailability } from '../../planExecutionMode'
+import { workflowMessageInteractionAvailability } from '../../planExecutionMode'
 import { phasePendingDetail } from './phasePending'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
@@ -228,7 +228,6 @@ function messageAgentPhase(
 }
 
 type MessageListProps = {
-  activeDagStageId?: string
   applicationLifecycle?: ApplicationLifecycle
   /** 仅首次新建且尚未进入开发的应用允许展示模板准备卡。 */
   applicationTemplatePreparationEligible: boolean
@@ -277,8 +276,6 @@ type MessageListProps = {
   ) => void
   /** 从来源会话回执打开对应的独立需求设计会话。 */
   onOpenRevisionSession?: (handoff: NonNullable<AgentChatMessage['revisionHandoff']>) => void
-  /** 点击 DAG 进度卡中的已生成子阶段时，在右侧展示当前会话最新产物。 */
-  onDagStageSelect?: (stageId: string) => void
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
   onSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -294,7 +291,6 @@ type MessageListProps = {
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
-  activeDagStageId,
   applicationLifecycle,
   applicationTemplatePreparationEligible,
   codeChangeActionsDisabled,
@@ -315,7 +311,6 @@ export default function MessageList({
   planningWorkflow,
   loading,
   messages,
-  onDagStageSelect,
   onEntityDesignGateJump,
   onContinueDevelopment,
   onOpenRevisionSession,
@@ -489,7 +484,7 @@ export default function MessageList({
               ) {
                 return null
               }
-                // TechnicalPlan 已开始后，入口动作已经消费；不在规划阶段继续展示可点击入口卡。
+              // TechnicalPlan 已开始后，入口动作已经消费；不在规划阶段继续展示可点击入口卡。
               if (
                 designPhasePlanning &&
                 isSupersededPlanningStageEntryMessage(messages, messageIndex)
@@ -608,11 +603,12 @@ export default function MessageList({
               // 即证明它已被回答。历史待答卡渲染为失效态，避免旧表单以空白可填样式误导。
               const interactionAvailability =
                 message.workflow && requiresClarification
-                  ? messageIndex < messages.length - 1
-                    ? 'stale'
-                    : conversation || designPhasePlanning
-                      ? 'active'
-                      : workflowInteractionAvailability(message.workflow, applicationLifecycle)
+                  ? workflowMessageInteractionAvailability(
+                      message.workflow,
+                      applicationLifecycle,
+                      messageIndex < messages.length - 1,
+                      Boolean(conversation || designPhasePlanning)
+                    )
                   : 'stale'
               // 已答过的历史澄清卡：从其后最近的 user 留痕解析「header：答案」行回填为
               // 只读摘要，避免旧表单以空白可填样式重现（恢复会话时 localStorage 草稿已丢）。
@@ -758,10 +754,8 @@ export default function MessageList({
                           visibleProcessSteps.length > 0 &&
                           !designPhasePlanning && (
                             <ProcessSteps
-                              activeDagStageId={activeDagStageId}
                               conversation={conversation}
                               loading={messageLoading}
-                              onDagStageSelect={onDagStageSelect}
                               steps={visibleProcessSteps}
                             />
                           )}

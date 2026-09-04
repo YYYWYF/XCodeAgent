@@ -10,7 +10,7 @@ from langgraph.types import Command
 
 from app.graph.application_planning_interrupts import (
     planning_stage_entry,
-    requirements_review,
+    ui_confirmation_review,
 )
 from app.graph.state import ProjectState
 from app.protocols.application_planning_interrupt import (
@@ -19,47 +19,47 @@ from app.protocols.application_planning_interrupt import (
 from app.protocols.workflow import build_workflow_ag_ui_stream
 
 
-def _requirements_fixture(state: ProjectState) -> dict:
-    """构造可确认的最小需求节点，用于验证真实 interrupt 往返。"""
+def _ui_confirmation_fixture(state: ProjectState) -> dict:
+    """构造可确认的最小 UI 节点，用于验证真实 interrupt 往返。"""
 
     interaction = state.get("application_planning_interaction")
     if isinstance(interaction, dict) and interaction.get("action") == "confirm":
         return {
-            "phase": "requirements",
+            "phase": "ui_confirmation",
             "status": "completed",
-            "requirement_spec": {"confirmation_status": "confirmed"},
+            "ui_designs": {"confirmation_status": "confirmed"},
             "clarification": {"status": "clear"},
         }
     if isinstance(interaction, dict) and interaction.get("action") == "revise":
         return {
-            "phase": "requirements",
+            "phase": "ui_confirmation",
             "status": "requires_user_input",
-            "requirement_spec": {
+            "ui_designs": {
                 "confirmation_status": "pending_user_confirmation",
                 "name": str(state.get("request") or "修订需求"),
             },
             "clarification": {
                 "status": "requires_user_input",
-                "mode": "requirement_document_confirmation",
+                "mode": "ui_design_confirmation",
             },
             "application_planning_interaction": {},
         }
     return {
-        "phase": "requirements",
+        "phase": "ui_confirmation",
         "status": "requires_user_input",
-        "requirement_spec": {
+        "ui_designs": {
             "confirmation_status": "pending_user_confirmation",
             "name": "任务中心",
         },
         "clarification": {
             "status": "requires_user_input",
-            "mode": "requirement_document_confirmation",
+            "mode": "ui_design_confirmation",
         },
     }
 
 
-def _route_requirements_fixture(state: ProjectState) -> str:
-    """确认完成时结束测试图，否则进入需求审阅中断。"""
+def _route_ui_confirmation_fixture(state: ProjectState) -> str:
+    """确认完成时结束测试图，否则进入 UI 审阅中断。"""
 
     return "completed" if state.get("status") == "completed" else "review"
 
@@ -71,17 +71,17 @@ def _design_intent_fixture(state: ProjectState) -> ProjectState:
 
 
 def _interrupt_test_graph():
-    """构建只包含需求产物与原生审阅门的最小测试 Graph。"""
+    """构建只包含 UI 产物与原生审阅门的最小测试 Graph。"""
 
     builder = StateGraph(ProjectState)
-    builder.add_node("requirements", _requirements_fixture)
-    builder.add_node("requirements_review", requirements_review)
+    builder.add_node("ui_confirmation", _ui_confirmation_fixture)
+    builder.add_node("ui_confirmation_review", ui_confirmation_review)
     builder.add_node("design_intent_analysis", _design_intent_fixture)
-    builder.add_edge(START, "requirements")
+    builder.add_edge(START, "ui_confirmation")
     builder.add_conditional_edges(
-        "requirements",
-        _route_requirements_fixture,
-        {"review": "requirements_review", "completed": END},
+        "ui_confirmation",
+        _route_ui_confirmation_fixture,
+        {"review": "ui_confirmation_review", "completed": END},
     )
     return builder.compile(checkpointer=InMemorySaver())
 
@@ -93,7 +93,7 @@ def _counting_interrupt_test_graph(
 ):
     """构造带真实异步下游副作用的中断 Graph，用于验证恢复串行化。"""
 
-    async def counting_requirements(state: ProjectState) -> dict:
+    async def counting_ui_confirmation(state: ProjectState) -> dict:
         """在确认恢复时计数并等待测试释放，制造可观测的并发窗口。"""
 
         interaction = state.get("application_planning_interaction")
@@ -102,22 +102,22 @@ def _counting_interrupt_test_graph(
             downstream_entered.set()
             await release_downstream.wait()
             return {
-                "phase": "requirements",
+                "phase": "ui_confirmation",
                 "status": "completed",
-                "requirement_spec": {"confirmation_status": "confirmed"},
+                "ui_designs": {"confirmation_status": "confirmed"},
                 "clarification": {"status": "clear"},
             }
-        return _requirements_fixture(state)
+        return _ui_confirmation_fixture(state)
 
     builder = StateGraph(ProjectState)
-    builder.add_node("requirements", counting_requirements)
-    builder.add_node("requirements_review", requirements_review)
+    builder.add_node("ui_confirmation", counting_ui_confirmation)
+    builder.add_node("ui_confirmation_review", ui_confirmation_review)
     builder.add_node("design_intent_analysis", _design_intent_fixture)
-    builder.add_edge(START, "requirements")
+    builder.add_edge(START, "ui_confirmation")
     builder.add_conditional_edges(
-        "requirements",
-        _route_requirements_fixture,
-        {"review": "requirements_review", "completed": END},
+        "ui_confirmation",
+        _route_ui_confirmation_fixture,
+        {"review": "ui_confirmation_review", "completed": END},
     )
     return builder.compile(checkpointer=InMemorySaver())
 
@@ -213,7 +213,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         completed = await graph.aget_state(config)
         self.assertEqual(completed.values["status"], "completed")
         self.assertEqual(
-            completed.values["requirement_spec"]["confirmation_status"],
+            completed.values["ui_designs"]["confirmation_status"],
             "confirmed",
         )
         self.assertFalse(completed.tasks)
@@ -236,7 +236,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
                 async for chunk in graph.astream(
                     Command(
                         resume={
-                            "gate_id": "requirement_spec:stale",
+                            "gate_id": "ui_designs:stale",
                             "artifact": pending["artifact"],
                             "artifact_revision": pending["artifactRevision"],
                             "action": "confirm",
@@ -285,7 +285,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(revisions[0]["gateId"], revisions[1]["gateId"])
         self.assertNotEqual(revisions[1]["gateId"], latest_pending["gateId"])
         self.assertEqual(
-            latest.values["requirement_spec"]["name"],
+            latest.values["ui_designs"]["name"],
             "审批角色改为财务复核员",
         )
 
@@ -327,10 +327,10 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(projected["status"], "requires_user_input")
-        self.assertEqual(projected["phase"], "requirements")
+        self.assertEqual(projected["phase"], "ui_confirmation")
         self.assertEqual(
             projected["application_planning_interrupt"]["artifact"],
-            "requirement_spec",
+            "ui_designs",
         )
 
     async def test_ag_ui_runtime_uses_command_resume(self) -> None:
@@ -526,7 +526,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
                         run_id="planning-stale-runtime-run",
                         workspace=workspace,
                         pending=pending,
-                        gate_id="requirement_spec:stale",
+                        gate_id="ui_designs:stale",
                         action="revise",
                         request="增加审批角色",
                     ),
