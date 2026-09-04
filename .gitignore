@@ -7,3 +7,7 @@
 .codex/
 .zcode/
 .mcp.json
+.venv/
+__pycache__/
+*.pyc
+*.bak
