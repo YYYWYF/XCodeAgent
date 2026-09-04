@@ -49,6 +49,7 @@ from app.services.authorization_frontend_projection import (
 )
 from app.services.frontend_scaffold import (
     collect_template_pages,
+    ensure_frontend_menu_entries,
     ensure_frontend_page_placeholders,
 )
 from app.services.template_scaffold_injection import (
@@ -660,7 +661,12 @@ def _inject_frontend_authorization(workspace: str, technical_plan: dict[str, Any
 
 
 def _inject_frontend_page_placeholders(workspace: str, state: dict[str, Any]) -> None:
-    """从 ProductPlan + UiDesign 收集页面并创建占位文件（main/auth 通用）。"""
+    """从 ProductPlan + UiDesign 收集页面并同步占位文件与菜单入口（main/auth 通用）。
+
+    创建/删除页面占位文件后，同步 ``BIZ_MENUS`` 顶层菜单项：追加新增页面入口、
+    移除已删除页面入口，使应用启动后菜单与 ProductPlan 保持一致。菜单同步失败
+    不阻断主流程——与占位文件写入一样作为确定性优化项处理。
+    """
 
     frontend_dir = Path(workspace) / "frontend"
     if not (frontend_dir / "src").is_dir():
@@ -678,6 +684,10 @@ def _inject_frontend_page_placeholders(workspace: str, state: dict[str, Any]) ->
     pages = collect_template_pages(product_plan, ui_designs)
     if pages:
         ensure_frontend_page_placeholders(frontend_dir, pages)
+        # 同步 BIZ_MENUS 菜单入口，避免新增/删除页面后菜单与实际页面不一致。
+        menus_path = frontend_dir / "src" / "constants" / "menus.ts"
+        if menus_path.is_file():
+            ensure_frontend_menu_entries(frontend_dir, pages)
 
 
 def build_application_planning_graph(*, checkpointer):
