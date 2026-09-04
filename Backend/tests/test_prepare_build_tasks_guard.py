@@ -34,12 +34,15 @@ from app.workspace.plan_documents import (
 )
 from app.workspace.task_documents import write_build_task_plan_json
 from tests.entity_design_test_utils import confirm_entity_designs
+from tests.test_build_task_reuse_workspace import _ready_template
 
 
 def _write_current_plan(workspace: str, project_plan: dict) -> str:
     """把当前 TechnicalPlan 测试夹具写入正式 JSON 路径。"""
 
     workspace_root = Path(workspace)
+    if not (workspace_root / "frontend").exists():
+        _ready_template(workspace_root)
     plan_path = workspace_root / ".xcodeagent/plans/project-plan.json"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(project_plan), encoding="utf-8")
@@ -147,7 +150,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as workspace, patch(
             "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"errors": []},
+            return_value={"ready": True, "errors": []},
         ):
             _write_formal_build_artifacts(workspace)
             technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
@@ -253,7 +256,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as workspace, patch(
             "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"errors": []},
+            return_value={"ready": True, "errors": []},
         ):
             _write_formal_build_artifacts(workspace)
             technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
@@ -311,7 +314,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace, patch(
             "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"errors": []},
+            return_value={"ready": True, "errors": []},
         ):
             _write_formal_build_artifacts(workspace)
             errors = _build_prerequisite_errors(
@@ -338,7 +341,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace, patch(
             "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"errors": []},
+            return_value={"ready": True, "errors": []},
         ):
             _write_formal_build_artifacts(workspace, include_technical_plan=False)
             errors = _build_prerequisite_errors(
@@ -362,6 +365,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             _write_formal_build_artifacts(workspace)
             result = prepare_build_tasks(
                 {
+                    "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                     "workspace": workspace,
                     "project_plan": {
                         "artifact_type": "technical-plan",
@@ -983,6 +987,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             project_plan_path = _write_current_plan(workspace, project_plan)
             result = prepare_build_tasks(
                 {
+                    "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                     "request": "生成订单页面",
                     "workspace": workspace,
                     "project_plan": state_project_plan,
@@ -1077,6 +1082,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             write_build_task_plan_json({"workspace": workspace}, first_plan)
             customer_result = prepare_build_tasks(
                 {
+                    "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                     "request": "生成客户页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
@@ -1090,7 +1096,9 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertIn("shared-shell-task", customer_result["build_task_plan"]["task_registry"])
         self.assertIn("orders-page-task", customer_result["build_task_plan"]["task_registry"])
         customer_context = customer_preparer.call_args.kwargs["build_context"]
-        self.assertEqual(customer_context["reusable_tasks_by_unit"]["frontend:shell"], ["shared-shell-task"])
+        self.assertNotIn("frontend:shell", customer_context.get("reusable_tasks_by_unit", {}))
+        self.assertEqual(customer_context["external_capabilities"][0]["capability_id"], "frontend.shell.ready")
+        self.assertNotIn("frontend:shell", customer_context["planning_unit_ids"])
 
     def test_page_scope_rejects_out_of_scope_unit_tasks(self) -> None:
         """页面 scope 模型若返回其他页面 Unit，必须阻止而不是扩展当前 DAG。"""
@@ -1151,6 +1159,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     {
                         "schema_version": "build-dag.v3",
                         "status": "ready",
+                        "confirmation_status": "confirmed",
                         "task_registry": {},
                         "task_graph": {
                             "nodes": [],
@@ -1169,6 +1178,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             )
             result = prepare_build_tasks(
                 {
+                    "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                     "request": "生成订单页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
@@ -1287,6 +1297,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             write_build_task_plan_json({"workspace": workspace}, base_plan)
             result = prepare_build_tasks(
                 {
+                    "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                     "request": "生成订单页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
@@ -1380,6 +1391,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             project_plan_path = _write_current_plan(workspace, project_plan)
             first_result = prepare_build_tasks(
                 {
+                    "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                     "request": "生成订单页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
@@ -1453,6 +1465,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             write_build_task_plan_json({"workspace": workspace}, first_plan)
             second_result = prepare_build_tasks(
                 {
+                    "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                     "request": "生成订单报表页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
@@ -1522,6 +1535,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ) as preparer:
                 result = prepare_build_tasks(
                     {
+                        "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                         "request": "正确，继续",
                         "workspace": workspace,
                         "project_plan": project_plan,
@@ -1535,10 +1549,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(result["project_plan"]["confirmation_status"], "pending_user_confirmation")
 
     def test_prepare_build_tasks_persists_pending_json_and_does_not_report_code_changes(self) -> None:
+        """用合法共享 API 候选验证 pending 确认边界，不再把 shell 当作任务生成单元。"""
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
         project_plan["confirmation_status"] = "confirmed"
 
         with tempfile.TemporaryDirectory() as workspace:
+            _ready_template(Path(workspace))
             with patch(
                 "app.graph.nodes.tasks._build_prerequisite_errors",
                 return_value=[],
@@ -1548,20 +1564,20 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "tasks": [
                         {
                             "id": "application-task",
-                            "unit_id": "frontend:shell",
+                            "unit_id": "frontend:api-client",
                             "owner": "frontend",
-                            "title": "实现首页",
-                            "description": "实现首页内容",
+                            "title": "实现共享 API 适配器",
+                            "description": "实现共享 API 传输适配器",
                             "change_scope": [
-                                {"operation": "modify", "path": "frontend/src/App.tsx"}
+                                {"operation": "modify", "path": "frontend/src/apis/response.ts"}
                             ],
                             "deliverables": [
                                 {
-                                    "id": "capability:app-shell",
+                                    "id": "capability:api-client",
                                     "kind": "frontend.shared_capability",
-                                    "target_id": "frontend:shell",
-                                    "paths": ["frontend/src/App.tsx"],
-                                    "provides": ["app.home"],
+                                    "target_id": "frontend:api-client",
+                                    "paths": ["frontend/src/apis/response.ts"],
+                                    "provides": ["frontend.response-entity-adapter"],
                                 }
                             ],
                         }
@@ -1571,6 +1587,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ):
                 result = prepare_build_tasks(
                     {
+                        "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                         "request": "开始任务拆分",
                         "workspace": workspace,
                         "project_plan": project_plan,
@@ -1621,6 +1638,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ) as preparer:
                 result = prepare_build_tasks(
                     {
+                        "workspace_snapshot": {"workspace_revision": "guard-snapshot"},
                         "request": continuation_message,
                         "workspace": workspace,
                         "project_plan": project_plan,

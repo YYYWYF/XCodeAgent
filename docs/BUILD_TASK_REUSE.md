@@ -6,13 +6,15 @@ ReuseFacts 回答 confirmed DAG 已登记哪些职责、workspace 已证明哪�
 它不回答任务是否执行成功，也不计算本轮缺项、`planning_unit_ids`、
 `generation_requirements`、Candidate、Scope Assembly 或执行依赖。
 
-现有 `tasks.py` 的 `_unit_tasks_are_reusable` 依赖任务完成状态，
-`_replaceable_unit_ids` 与 `_merge_prepared_scope_tasks` 按整 Unit 替换，
-与新规划基线不同。T2.2 提供独立事实层，暂不把结果接入这些旧决策。
+T2.4 已移除 `tasks.py` 中按历史 Task completed 判断 shell reuse 的分支；
+shell 改为只消费 `resolve_template_prerequisite_facts` 的外部能力证据。
+其他 Unit 的 `_replaceable_unit_ids` 与 `_merge_prepared_scope_tasks` 仍按整 Unit 替换，
+与新规划基线不同。T2.2 的完整事实层尚未接入这些旧决策。
 后续接入必须同时遵守“同一共享 Unit 可 retain + generate”和 append-only 约束。
 
 T2.3 的 `unit_generation_requirements.py` 已消费本层事实计算缺项；输入、精确职责身份
-和生成策略见 `docs/UNIT_GENERATION_REQUIREMENTS.md`。两层仍未接入旧 Planning 主流程。
+和生成策略见 `docs/UNIT_GENERATION_REQUIREMENTS.md`。除 shell 外，两层仍未接入旧 Planning 主流程。
+shell 的独立接口与验收见 `docs/FRONTEND_SHELL_PREREQUISITE.md`。
 
 ## 接口
 
@@ -25,6 +27,7 @@ resolve_reuse_facts(
     workspace_snapshot,
     formal_plan,
     template_readiness=None,
+    auth_resource_inspection=None,
 ) -> ReuseFacts
 ```
 
@@ -40,6 +43,9 @@ resolve_reuse_facts(
 - `template_readiness`：可选，必须由调用方在同次工作区检查中调用现有
   `inspect_template_generation_readiness` 获得，不能由模型生成。
   本 Task 不改变 WorkspaceSnapshot 存储格式。
+- `auth_resource_inspection`：T2.5B 可选权限资源检查证据，由调用方在同次 workspace
+  检查中使用当前确认 catalog 调用 `inspect_authorization_resource_catalog` 获得。
+  不能从扫描结果、模型陈述或旧 catalog 的检查结果补造该证据。
 
 ## 输出
 
@@ -69,7 +75,8 @@ capability 和正式 Endpoint owner。不会因此产生 orders API 的 capabili
 也不会产生 Unit 级 `reuse_only` 决策。
 
 `frontend.auth.resources:R1` 与 `frontend.auth.resources:R2` 是不同身份。
-本层保留已经声明的精确身份，不在 T2.2 中计算资源目录 fingerprint 或生成 auth Task。
+本层保留已经声明的精确身份。T2.5B 使用 T2.5A 的 canonical catalog fingerprint
+匹配当前 R；不生成 auth Task，也不删除旧 R 的 Task。
 
 ## Endpoint owner 规则
 
@@ -102,8 +109,58 @@ capability 和正式 Endpoint owner。不会因此产生 orders API 的 capabili
 都不构成能力证明。当前服务不从这些弱线索推导 adapter、Endpoint 或权限资源已满足。
 其他 workspace 能力必须先有相应的平台精确验证契约，不能添加猜测式 fallback。
 
+## T2.5B Auth ReuseFacts
+
+```python
+catalog = compile_frontend_resource_catalog(formal_plan["authorization_manifest"])
+inspection = inspect_authorization_resource_catalog(
+    workspace_root, catalog, workspace_revision=workspace_snapshot["workspace_revision"],
+)
+facts = resolve_reuse_facts(
+    confirmed_plan=confirmed_plan,
+    unit_skeleton=unit_skeleton,
+    build_context=build_context,
+    workspace_snapshot=workspace_snapshot,
+    formal_plan=formal_plan,
+    auth_resource_inspection=inspection,
+)
+```
+
+以上检查仅适用于权限启用且 catalog 非空的情况。当前 TechnicalPlan 必须 confirmed。
+事实层仍是纯函数；新增 helper 只读取固定路径 `frontend/src/constants/resources.ts`，
+不读取路由，不执行 TypeScript，不写入文件，不改变 WorkspaceSnapshot 存储结构。
+
+判定顺序：
+
+1. `frontend:auth-guard` 已有精确 `frontend.auth.resources:<R>` provider：
+   保留全部 provider，不检查 Task execution status，也不重复发布 external capability。
+   此分支不消费 workspace 证据；调用方可省略文件检查。
+2. 无当前 provider，且 workspace 文件与当前 catalog 的完整确定性投影逐字节一致：
+   发布 `source=authorization_resource_catalog` 的 external capability，记录 R、
+   workspace revision、固定相对路径、实际内容及预期投影 SHA-256。
+3. 缺少检查、文件不存在、投影不匹配、无法读取或路径越出 workspace：
+   不发布当前 capability。现有 `resolve_generation_requirements` 因缺项返回
+   deterministic 职责；本层不创建 Candidate 或 Task。
+
+匹配复用前端投影的同一 renderer，要求全部 SYSTEM/PAGE/OPERATION 分组及内容一致。
+额外语句、缺项、值变化、空白或换行格式漂移均不会被当作已满足。
+这不改变 T2.5A 的规则：源 catalog fingerprint 本身仍不依赖生成文件空白。
+检查不能从 TypeScript 反推源身份；不同源身份可能产生相同常量投影，但旧 R 的
+检查结果不得改名冒充新 R，必须重新对当前 catalog 检查。
+
+声称 satisfied 的证据若缺少或不匹配当前 R、revision、路径、完整投影摘要，
+返回不可重试的 `AUTH_RESOURCE_EVIDENCE_INVALID`；非法或未确认的当前源数据返回
+`AUTH_RESOURCE_INPUT_INVALID`。有 issues 时调用方继续遵循既有阻断规则。
+证据只说明同次检查时的 workspace 状态，不承诺之后文件不变，不替代 Build 验证。
+
+历史 R1 provider 和 workspace 的 R2 external capability 可以同时存在。
+本任务不接入旧 Planning 主流程、不修改 Build execution、writer ownership 或 Page dependency compile。
+
 ## 验证入口
 
 - 新增：`Backend/tests/test_build_task_reuse.py`、`test_build_task_reuse_workspace.py`。
 - 前置契约：`test_planning_issues.py`、`test_unit_generation_contracts.py`、`test_confirmed_build_task_plan_loader.py`。
 - 必须回归：R-PLAN、R-TEMPLATE、R-AUTH 全部文件。
+- T2.5B 新增：`Backend/tests/test_build_task_reuse_auth.py`；必须回归 R-AUTH、R-PLAN，
+  并复查 `test_build_task_reuse.py`、`test_build_task_reuse_workspace.py`、
+  `test_authorization_resource_catalog.py`、`test_unit_generation_requirements_auth.py`。

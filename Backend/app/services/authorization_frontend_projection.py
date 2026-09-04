@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import tempfile
 from pathlib import Path
 from typing import Any
 
+from app.services.authorization_resource_catalog import (
+    AuthorizationFrontendProjectionError,
+    compile_frontend_resource_catalog,
+    resource_constant_reference,
+)
 from app.services.ui_design_generator import derive_page_key
 
 
@@ -18,10 +22,6 @@ IMPORT_START = "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START"
 IMPORT_END = "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END"
 ROUTES_START = "// XCODEAGENT_BUSINESS_ROUTES_START"
 ROUTES_END = "// XCODEAGENT_BUSINESS_ROUTES_END"
-
-
-class AuthorizationFrontendProjectionError(ValueError):
-    """表示前端资源常量或业务路由无法按确认权限事实安全生成。"""
 
 
 def compile_frontend_authorization_projection(project_plan: dict[str, Any]) -> dict[str, Any] | None:
@@ -36,7 +36,7 @@ def compile_frontend_authorization_projection(project_plan: dict[str, Any]) -> d
         for item in _dict_items(bindings.get("pages"))
         if str(item.get("pageId") or "").strip() and str(item.get("resourceKey") or "").strip()
     }
-    resources = _resource_catalog(manifest.get("resources"))
+    resources = compile_frontend_resource_catalog(manifest).frontend_resources()
     pages = _page_projection_items(project_plan, page_resource_keys, resources)
     return {"resources": resources, "pages": pages}
 
@@ -90,50 +90,6 @@ def verify_authorization_frontend_projection(workspace: str | Path, projection: 
     if source[routes_start + len(ROUTES_START):routes_end] != "\n" + _render_routes(value["pages"]):
         raise AuthorizationFrontendProjectionError("前端业务 PAGE_ROUTES 与确认页面权限不一致。")
     return {"verified": True, "resourceCount": len(value["resources"]), "pageCount": len(value["pages"])}
-
-
-def resource_constant_reference(resource_key: str, resource_type: str, *, page_id: str = "", action_id: str = "") -> dict[str, str]:
-    """把确认资源键转换为前端 RESOURCES 的稳定分组与属性名。"""
-
-    group = {"system": "SYSTEM", "page": "PAGE", "operation": "OPERATION"}.get(resource_type)
-    if not group:
-        raise AuthorizationFrontendProjectionError(f"不支持的前端资源类型：{resource_type}。")
-    if resource_type == "system":
-        source = resource_key.removeprefix("system_")
-    elif resource_type == "page":
-        source = (page_id or resource_key).removeprefix("page_")
-    else:
-        source = "_".join(part for part in ((page_id or "").removeprefix("page_"), action_id) if part)
-        source = source or resource_key.removeprefix("page_")
-    name = re.sub(r"[^A-Za-z0-9]+", "_", source).strip("_").upper()
-    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
-        raise AuthorizationFrontendProjectionError(f"资源 {resource_key} 无法生成合法 RESOURCES 常量名。")
-    return {"group": group, "name": name, "resourceKey": resource_key}
-
-
-def _resource_catalog(value: Any) -> list[dict[str, str]]:
-    """收敛完整 manifest 资源目录，拒绝重复前端常量符号。"""
-
-    result: list[dict[str, str]] = []
-    symbols: set[tuple[str, str]] = set()
-    for item in _dict_items(value):
-        resource_key = str(item.get("resourceKey") or "").strip()
-        resource_type = str(item.get("type") or "").strip()
-        target = str(item.get("targetResourceRef") or "")
-        page_id = target.removeprefix("page:") if target.startswith("page:") else ""
-        action_parts = target.removeprefix("action:").split(":", 1) if target.startswith("action:") else []
-        reference = resource_constant_reference(
-            resource_key,
-            resource_type,
-            page_id=page_id or (action_parts[0] if len(action_parts) == 2 else ""),
-            action_id=action_parts[1] if len(action_parts) == 2 else "",
-        )
-        symbol = (reference["group"], reference["name"])
-        if symbol in symbols:
-            raise AuthorizationFrontendProjectionError(f"RESOURCES 常量名冲突：{reference['group']}.{reference['name']}。")
-        symbols.add(symbol)
-        result.append(reference)
-    return sorted(result, key=lambda item: (item["group"], item["name"]))
 
 
 def _page_projection_items(project_plan: dict[str, Any], page_keys: dict[str, str], resources: list[dict[str, str]]) -> list[dict[str, str]]:

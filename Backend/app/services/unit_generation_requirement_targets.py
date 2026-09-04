@@ -1,12 +1,13 @@
 """从当前正式 TechnicalPlan 和 Scope 提取职责目标，不读取文件或规划历史 Task。"""
 
 from collections.abc import Mapping
-from hashlib import sha256
-import json
 from typing import Any
 from urllib.parse import quote
 
-from app.services.authorization_frontend_projection import compile_frontend_authorization_projection
+from app.services.authorization_resource_catalog import (
+    compile_frontend_resource_catalog,
+    resource_catalog_fingerprint as fingerprint_catalog,
+)
 from app.services.unit_generation_contracts import GenerationRequirement
 from app.services.unit_generation_requirements_contracts import fail_requirement_input
 
@@ -98,7 +99,7 @@ def endpoint_source_types(plan: dict, endpoints: Mapping) -> dict[tuple[str, str
 
 
 def resource_catalog_fingerprint(plan: dict) -> str | None:
-    """仅对现有投影的完整资源目录计算 SHA-256；不把页面路由放入资源身份。"""
+    """校验正式确认门禁后委托完整资源目录计算身份，不依赖页面路由编译。"""
 
     if plan.get("confirmation_status") != "confirmed":
         fail_requirement_input("AUTH_RESOURCE_INPUT_UNCONFIRMED", "资源目录指纹必须来自已确认的正式 TechnicalPlan。")
@@ -113,11 +114,10 @@ def resource_catalog_fingerprint(plan: dict) -> str | None:
     if not resources:
         fail_requirement_input("AUTH_RESOURCE_INPUT_INVALID", "已启用权限的正式资源目录不能为空。")
     try:
-        projection = compile_frontend_authorization_projection(plan)
+        catalog = compile_frontend_resource_catalog(manifest)
     except ValueError as exc:
         fail_requirement_input("AUTH_RESOURCE_INPUT_INVALID", str(exc), unit_ids=["frontend:auth-guard"])
-    canonical = json.dumps(projection["resources"], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return sha256(canonical.encode("utf-8")).hexdigest()
+    return fingerprint_catalog(catalog)
 
 
 def responsibility(responsibility_kind: str, *identities: str, description: str, **source_refs: Any) -> GenerationRequirement:

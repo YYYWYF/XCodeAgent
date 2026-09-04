@@ -5,6 +5,8 @@ from hashlib import sha256
 import json
 from typing import Any
 
+from app.services.authorization_resource_catalog import compile_frontend_resource_catalog, resource_catalog_fingerprint
+from app.services.authorization_resource_inspection import verified_auth_resource_capability
 from app.services.build_task_reuse_contracts import ExternalCapability, RetainedEndpointOwner, ReuseFacts
 from app.services.planning_frozen import plain_json
 from app.services.planning_issues import IssueCategory, ValidationIssue
@@ -238,16 +240,68 @@ def _external_capabilities(
     )]
 
 
+def resolve_template_prerequisite_facts(
+    *, unit_skeleton: Mapping[str, Any], build_context: Mapping[str, Any],
+    workspace_snapshot: Mapping[str, Any], template_readiness: Mapping[str, Any],
+) -> ReuseFacts:
+    """严格校验骨架中的模板前置事实，不接入其他 Unit 的复用和缺项决策。"""
+
+    issues: list[ValidationIssue] = []
+    # 模板门禁适用于整个 Planning 入口，Endpoint Scope 也不能跳过二次检查失败。
+    context = {**build_context, "required_unit_ids": ["frontend:shell"]}
+    capabilities = _external_capabilities(
+        set(unit_skeleton.get("build_units", {})), context,
+        workspace_snapshot, template_readiness, issues,
+    )
+    return ReuseFacts(
+        retained_task_ids_by_unit={}, reusable_capabilities_by_unit={},
+        retained_endpoint_owners=(), external_capabilities=capabilities, issues=issues,
+    )
+
+
+def _auth_external_capabilities(
+    units: set[str], capabilities: Mapping, formal_plan: Mapping, workspace_snapshot: Mapping,
+    inspection: Mapping | None, issues: list[ValidationIssue],
+) -> list[ExternalCapability]:
+    """先确认当前 R 的历史 provider；仅在缺失时接纳完整 workspace 投影证据。"""
+
+    unit_id = "frontend:auth-guard"
+    manifest = formal_plan.get("authorization_manifest")
+    if unit_id not in units or manifest is None:
+        return []
+    try:
+        catalog = compile_frontend_resource_catalog(plain_json(manifest))
+        if catalog is None:
+            return []
+        if formal_plan.get("confirmation_status") != "confirmed":
+            raise ValueError("权限资源复用必须来自已确认的正式 TechnicalPlan。")
+    except ValueError as exc:
+        issues.append(_issue("AUTH_RESOURCE_INPUT_INVALID", str(exc), units=[unit_id], category="input"))
+        return []
+    capability_id = f"frontend.auth.resources:{resource_catalog_fingerprint(catalog)}"
+    if capabilities.get(unit_id, {}).get(capability_id):
+        return []
+    try:
+        external = verified_auth_resource_capability(catalog, workspace_snapshot, inspection)
+    except ValueError as exc:
+        issues.append(_issue("AUTH_RESOURCE_EVIDENCE_INVALID", str(exc), units=[unit_id], category="input"))
+        return []
+    return [external] if external is not None else []
+
+
 def resolve_reuse_facts(
     *, confirmed_plan: Mapping[str, Any] | None, unit_skeleton: Mapping[str, Any],
     build_context: Mapping[str, Any], workspace_snapshot: Mapping[str, Any],
     formal_plan: Mapping[str, Any], template_readiness: Mapping[str, Any] | None = None,
+    auth_resource_inspection: Mapping[str, Any] | None = None,
 ) -> ReuseFacts:
     """计算全部 confirmed 职责事实，返回冻结且顺序稳定的结果，不读写文件或计算缺项。
 
     confirmed_plan 由 load_confirmed_build_task_plan 提供；formal_plan 是完整正式
     TechnicalPlan 运行时投影。template_readiness 必须来自同次 workspace 检查的
     inspect_template_generation_readiness 结果；缺少该证据就不声明外部能力。
+    auth_resource_inspection 来自同次 inspect_authorization_resource_catalog；当前 R
+    有 confirmed provider 时优先保留，否则只接纳匹配 R 和 revision 的完整投影证据。
     required_unit_ids 仅用于模板前置问题归因，不裁剪历史 Task；有 issues 必须阻断。
     """
 
@@ -268,6 +322,9 @@ def resolve_reuse_facts(
             capabilities[unit_id].setdefault(capability, []).append(task_id)
     owners = _endpoint_owners(tasks, _formal_endpoints(formal_plan, issues), issues)
     external = _external_capabilities(unit_ids, build_context, workspace_snapshot, template_readiness, issues)
+    external.extend(_auth_external_capabilities(
+        unit_ids, capabilities, formal_plan, workspace_snapshot, auth_resource_inspection, issues,
+    ))
     return ReuseFacts(
         retained_task_ids_by_unit=retained,
         reusable_capabilities_by_unit={unit: dict(sorted(values.items())) for unit, values in capabilities.items()},

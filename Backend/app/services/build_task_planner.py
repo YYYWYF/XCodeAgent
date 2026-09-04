@@ -802,6 +802,10 @@ def build_task_candidate_contract_errors(
             )
         owner = _text(task.get("owner"))
         unit_id = _text(task.get("unit_id"))
+        if unit_id == "frontend:shell":
+            errors.append(
+                f"Task {task_id} must not belong to prerequisite_only frontend:shell."
+            )
         task_kind = _text(task.get("kind"))
         if task_kind == "repair":
             errors.append(

@@ -479,6 +479,9 @@ def _forbidden_output_section(mode: str, source_types: set[str]) -> str:
 
     rules = [
         "## 6. Forbidden Output",
+        "frontend:shell is prerequisite_only. frontend.shell.ready is proven by the "
+        "platform template gate; never generate a shell task or use historical shell "
+        "task status as readiness evidence.",
         "Never create a menu or route registration task, page placeholder, hidden route, or "
         "shared registration task. Never emit menu or route metadata and never modify shared "
         "menu, route, router, registration, framework entry, template dependency, lockfile, "
@@ -563,8 +566,12 @@ def scoped_prompt_build_context(
 
     context = dict(build_context) if isinstance(build_context, dict) else {}
     planning_unit_ids = context.get("planning_unit_ids")
+    if isinstance(planning_unit_ids, list):
+        context["planning_unit_ids"] = [unit for unit in planning_unit_ids if unit != "frontend:shell"]
     if isinstance(planning_unit_ids, list) and planning_unit_ids:
-        context["required_unit_ids"] = list(planning_unit_ids)
+        context["required_unit_ids"] = list(context["planning_unit_ids"])
+    elif isinstance(context.get("required_unit_ids"), list):
+        context["required_unit_ids"] = [unit for unit in context["required_unit_ids"] if unit != "frontend:shell"]
     source_refs = context.get("source_refs")
     if isinstance(source_refs, dict):
         source_refs = dict(source_refs)

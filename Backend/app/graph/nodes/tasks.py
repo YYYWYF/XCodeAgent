@@ -20,6 +20,7 @@ from app.services.build_context_resolver import resolve_target_build_context
 from app.services.build_task_confirmation import (
     build_task_confirmation_read_model,
 )
+from app.services.build_task_reuse import resolve_template_prerequisite_facts
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.development_readiness import development_readiness
 from app.services.build_task_planner import (
@@ -143,7 +144,16 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         return {**confirmation_result, **formal_artifact_state}
 
     workspace_snapshot = _workspace_snapshot_from_state(state)
-    existing_build_task_plan = _existing_build_task_plan(state)
+    try:
+        existing_build_task_plan = _existing_build_task_plan(state)
+    except (OSError, ValueError) as exc:
+        return {
+            **_build_prerequisite_blocked_result(
+                project_plan, build_execution_scope,
+                [f"正式 build-task-plan.json 无法作为 ConfirmedPlan：{exc}"],
+            ),
+            **formal_artifact_state,
+        }
     progress = create_build_task_progress_tracker()
 
     progress.start("unit_skeleton", "正在根据已确认项目计划生成 Unit DAG 骨架。")
@@ -339,6 +349,25 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         build_task_plan=build_task_plan,
         output=project_contract_validation_output(build_context, []),
     )
+
+    # shell 只使用平台模板证据，历史任务状态和模型工作区摘要均不授予前置能力。
+    prerequisite_facts = resolve_template_prerequisite_facts(
+        unit_skeleton=build_task_plan, build_context=build_context,
+        workspace_snapshot=workspace_snapshot, template_readiness=template_readiness,
+    )
+    if prerequisite_facts.issues:
+        result = _build_prerequisite_blocked_result(
+            project_plan, build_execution_scope,
+            [issue.message for issue in prerequisite_facts.issues],
+        )
+        result["clarification"]["issues"] = [
+            issue.model_dump(mode="json") for issue in prerequisite_facts.issues
+        ]
+        return {**result, **formal_artifact_state}
+    build_context["external_capabilities"] = [
+        capability.model_dump(mode="json")
+        for capability in prerequisite_facts.external_capabilities
+    ]
 
     progress.start("model_planning", "正在调用任务规划模型生成候选构建任务。")
     try:
@@ -708,6 +737,8 @@ def _build_prerequisite_errors(
             for error in readiness.get("errors", [])
             if str(error).strip()
         )
+        if readiness.get("ready") is not True and not readiness.get("errors"):
+            errors.append("模板初始化：模板前置门禁未就绪。")
     else:
         errors.append("缺少 workspace，无法校验模板初始化 manifest。")
     return _dedupe_texts(errors)
@@ -1196,9 +1227,13 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
 
 
 def _existing_build_task_plan(state: ProjectState) -> dict:
-    """仅以当前工作区正式且已确认的 DAG 作为本轮规划基线。"""
+    """正式文件缺失可开始首次规划；文件存在但不合格必须阻断，禁止退化为空基线。"""
 
-    return load_confirmed_build_task_plan(workspace_root(state)) or {}
+    plan = load_confirmed_build_task_plan(workspace_root(state))
+    path = build_task_plan_json_path(state)
+    if plan is None and (path.exists() or path.is_symlink()):
+        raise ValueError("正式文件存在但不是已确认且通过校验的 build-dag.v3。")
+    return plan or {}
 
 
 def _is_valid_build_task_plan(value: object) -> bool:
@@ -1284,8 +1319,8 @@ def _resolve_build_context(
             project_plan_path=state.get("project_plan_json_path")
                               or project_plan_json_path(state),
         )
-        return _add_reusable_task_context(context, build_task_plan)
-    return _add_reusable_task_context({
+        return context
+    return {
         "target": {"type": "application", "id": "application"},
         "page_implementation_contract": None,
         "endpoint_contract": None,
@@ -1295,20 +1330,7 @@ def _resolve_build_context(
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
-    }, build_task_plan)
-
-
-def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> dict:
-    """向模型公开已完成的公共任务，避免后续范围重复生成稳定能力。"""
-
-    reusable_tasks = {
-        unit_id: list(unit.get("task_ids") or [])
-        for unit_id, unit in (build_task_plan.get("build_units") or {}).items()
-        if isinstance(unit, dict)
-           and _is_reusable_public_unit(unit_id)
-           and _unit_tasks_are_reusable(build_task_plan, unit_id)
     }
-    return {**build_context, "reusable_tasks_by_unit": reusable_tasks}
 
 
 def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> dict:
@@ -1319,11 +1341,11 @@ def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> d
     if mode == "endpoint":
         executable_details.pop("page_implementation_contracts", None)
 
-    allowed_unit_ids = list(
+    allowed_unit_ids = [unit_id for unit_id in (
         build_context.get("planning_unit_ids")
         or build_context.get("required_unit_ids")
         or []
-    )
+    ) if unit_id != "frontend:shell"]
     if mode == "endpoint":
         return {
             "architecture": _scoped_task_architecture(
@@ -1773,6 +1795,8 @@ def _merge_prepared_scope_tasks(
     generated_tasks = tasks_from_build_task_plan(prepared_plan)
     if not generated_tasks and isinstance(prepared_plan.get("tasks"), list):
         generated_tasks = [task for task in prepared_plan["tasks"] if isinstance(task, dict)]
+    if any(task.get("unit_id") == "frontend:shell" for task in generated_tasks):
+        raise ValueError("frontend:shell 是 prerequisite_only，禁止产生 Candidate Task。")
     # 资源和路由注册由平台在 Build 启动前确定性执行；模型误输出时丢弃，
     # 并同步移除依赖，避免候选图引用不存在的节点。
     generated_tasks, ignored_platform_task_ids = strip_platform_owned_candidate_tasks(
@@ -1847,12 +1871,7 @@ def _merge_prepared_scope_tasks(
         if unit.get("task_ids"):
             unit["status"] = "prepared"
             continue
-        reuse_evidence = _existing_application_unit_evidence(unit_id, prepared_plan)
-        if reuse_evidence:
-            unit["status"] = "reused"
-            unit["reuse_evidence"] = reuse_evidence
-        else:
-            unit["status"] = "not_prepared"
+        unit["status"] = "not_prepared"
     # 权限共享投影在 Build Run 绑定的计划顶层读取模板变体，不能只保留在调试用构建上下文。
     result = {
         **merged,
@@ -1879,38 +1898,6 @@ def _merge_prepared_scope_tasks(
         "build_context": build_context,
     }
     return result
-
-
-def _existing_application_unit_evidence(
-        unit_id: str,
-        prepared_plan: dict,
-) -> dict[str, object] | None:
-    """根据任务规划前的工作区检查证据识别可复用的前端壳 Unit。"""
-
-    if unit_id != "frontend:shell":
-        return None
-    analysis = prepared_plan.get("workspace_analysis")
-    if not isinstance(analysis, dict) or analysis.get("inspection_status") != "completed":
-        return None
-    paths = [
-        str(path)
-        for key in ("entry_files", "inspected_directories")
-        for path in analysis.get(key, [])
-        if str(path).strip()
-    ]
-    lowered = [path.lower() for path in paths]
-    matched = [
-        path
-        for path, normalized in zip(paths, lowered)
-        if any(token in normalized for token in ("package.json", "/main.", "/app."))
-    ]
-    if not matched:
-        return None
-    return {
-        "source": "workspace_snapshot",
-        "paths": matched,
-        "reason": "Existing capability is reused; integration_test owns verification.",
-    }
 
 
 def _tasks_by_unit_id(tasks: list[dict]) -> dict[str, list[dict]]:
@@ -2099,15 +2086,9 @@ def _replaceable_unit_ids(
     """仅替换目标 Unit 与尚无任务的依赖 Unit，已准备依赖任务始终复用。"""
 
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
+    required_unit_ids = required_unit_ids - {"frontend:shell"}
     if target.get("type") == "application":
-        return {
-            unit_id
-            for unit_id in required_unit_ids
-            if not (
-                    _is_reusable_public_unit(unit_id)
-                    and _unit_tasks_are_reusable(build_task_plan, unit_id)
-            )
-        }
+        return required_unit_ids
     target_unit_id = _target_unit_id(target)
     units = build_task_plan.get("build_units") or {}
     replaceable: set[str] = set()
@@ -2149,28 +2130,6 @@ def _retained_frontend_endpoint_owner_constraints(
         ),
     )
     return constraints, errors
-
-
-def _is_reusable_public_unit(unit_id: str) -> bool:
-    """判断 Unit 是否属于可复用的前端公共能力。"""
-
-    return unit_id == "frontend:shell"
-
-
-def _unit_tasks_are_reusable(build_task_plan: dict, unit_id: str) -> bool:
-    """仅当 Unit 的全部登记任务均已完成时，才允许后续规划复用该 Unit。"""
-
-    units = build_task_plan.get("build_units")
-    unit = units.get(unit_id) if isinstance(units, dict) else None
-    task_ids = list(unit.get("task_ids") or []) if isinstance(unit, dict) else []
-    registry = build_task_plan.get("task_registry")
-    if not task_ids or not isinstance(registry, dict):
-        return False
-    return all(
-        isinstance(registry.get(task_id), dict)
-        and registry[task_id].get("status") in {"completed", "already_satisfied"}
-        for task_id in task_ids
-    )
 
 
 def _target_unit_id(target: dict) -> str:

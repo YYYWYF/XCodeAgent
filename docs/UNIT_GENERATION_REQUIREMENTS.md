@@ -8,6 +8,8 @@
 本模块调用纯函数，输出冻结数据；不生成 Candidate，不调用模型，不实现 Retry、
 Scheduler、Assembly、文件读写或确认流程。本 Task 未切换 `tasks.py` 的旧主流程。
 旧流程仍采用整 Unit 替换；接入新结果需要与后续 append-only Assembly 一起完成。
+T2.4 仅将 shell 模板前置事实接入现有入口，并固定 shell 的非生成状态；
+不切换本模块对其他 Unit 的生成决策，见 `docs/FRONTEND_SHELL_PREREQUISITE.md`。
 
 ## 接口和输入
 

@@ -20,6 +20,7 @@ from tests.dag_planning_baseline_fixtures import (
     build_context, candidate_tasks, confirmed_baseline, execution_scope, formal_artifacts, project_plan,
     workspace_snapshot, write_json,
 )
+from tests.test_build_task_reuse_workspace import _ready_template
 
 
 PLAN_PATH = ".xcodeagent/plans/build-task-plan.json"
@@ -74,7 +75,7 @@ class DagPlanningBaselineGateTests(unittest.TestCase):
                 if has_baseline:
                     write_json(root, PLAN_PATH, baseline)
                 # 只隔离模型 I/O 和模板工程准备；Context、校验、编译及正式门禁全部真实运行。
-                with patch("app.graph.nodes.tasks.inspect_template_generation_readiness", return_value={"errors": []}), patch(
+                with patch("app.graph.nodes.tasks.inspect_template_generation_readiness", return_value=_ready_template(root)), patch(
                     "app.agents.main.task_preparer._invoke_live_main_agent",
                     return_value=json.dumps({"tasks": candidate_tasks(build_context(plan, scope))}),
                 ) as model, patch(
@@ -99,7 +100,7 @@ class DagPlanningBaselineGateTests(unittest.TestCase):
         artifacts = formal_artifacts(plan)
         for ui_status in ("confirmed", "skipped"):
             with self.subTest(ui_status=ui_status), tempfile.TemporaryDirectory() as workspace, patch(
-                "app.graph.nodes.tasks.inspect_template_generation_readiness", return_value={"errors": []}
+                "app.graph.nodes.tasks.inspect_template_generation_readiness", return_value={"ready": True, "errors": []}
             ):
                 artifacts["ui_designs"]["confirmation_status"] = ui_status
                 before = deepcopy(artifacts)
@@ -115,7 +116,7 @@ class DagPlanningBaselineGateTests(unittest.TestCase):
         for missing_key in ARTIFACT_PATHS:
             for status in (None, "pending"):
                 with self.subTest(artifact=missing_key, status=status), tempfile.TemporaryDirectory() as workspace, patch(
-                    "app.graph.nodes.tasks.inspect_template_generation_readiness", return_value={"errors": []}
+                    "app.graph.nodes.tasks.inspect_template_generation_readiness", return_value={"ready": True, "errors": []}
                 ), patch("app.graph.nodes.tasks.prepare_build_tasks_with_main_agent") as preparer:
                     artifacts = formal_artifacts(plan)
                     for key, relative in ARTIFACT_PATHS.items():

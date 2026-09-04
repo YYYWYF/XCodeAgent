@@ -142,13 +142,11 @@ class ConfirmedBuildTaskPlanLoaderTests(unittest.TestCase):
                 write_build_task_plan_json(self.state, formal)
 
                 self.assertIsNone(load_confirmed_build_task_plan(self.workspace))
-                self.assertEqual(
+                with self.assertRaisesRegex(ValueError, "正式文件存在"):
                     _existing_build_task_plan({
                         **self.state,
                         "build_task_plan": _confirmed_plan("checkpoint-task"),
-                    }),
-                    {},
-                )
+                    })
 
     def test_failed_or_invalid_formal_is_not_a_baseline(self) -> None:
         """保留既有有效 DAG 约束，确认标记不能让失败或无效计划成为基线。"""

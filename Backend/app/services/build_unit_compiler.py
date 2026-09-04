@@ -174,10 +174,11 @@ def _apply_unit_task_dependencies(
         # 接口并行生成：前端通过 api-client（已封装 service.get + 契约 schema）
         # 调接口，无需等后端实现。前后端契约一致性由 app:integration 集成测试兜底。
         page_frontend_only = unit_id.startswith("page:")
+        # shell 边仅表达模板架构前置；即使登记过历史任务，也不能变为执行依赖。
         inherited_dependencies = [
             dependency_task_id
             for dependency_unit_id in dependency_units.get(unit_id, [])
-            if (
+            if dependency_unit_id != "frontend:shell" and (
                 not page_frontend_only
                 or dependency_unit_id.startswith("frontend:")
                 or (
@@ -233,6 +234,7 @@ def _apply_unit_task_dependencies(
                     dependency_unit_id
                     for dependency_unit_id in dependency_units.get(unit_id, [])
                     if dependency_unit_id in units
+                    and dependency_unit_id != "frontend:shell"
                     and not tasks_by_unit.get(dependency_unit_id)
                 ],
                 "invalid_dependencies": [

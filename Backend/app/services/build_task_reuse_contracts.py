@@ -37,7 +37,7 @@ class ExternalCapability(FrozenPlanningModel):
 
     unit_id: _Identity
     capability_id: _Identity
-    source: Literal["template_generation_readiness"]
+    source: Literal["template_generation_readiness", "authorization_resource_catalog"]
     workspace_revision: _Identity
     source_refs: FrozenJsonObject
 
