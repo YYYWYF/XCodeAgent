@@ -61,6 +61,7 @@ import type {
   ReviewPhaseSessionTarget,
   TestPhaseSessionTarget
 } from './useChatSessions'
+import { preparePhaseTransitionSession } from './phaseSessionSelection'
 import {
   isSessionExecutionOwner,
   type SessionExecutionEntry,
@@ -1393,20 +1394,21 @@ export function useWorkflowConversation({
       const target = testPhaseConfirmationTarget(workflow)
       const targetId = target?.id || workflowBuildScope?.targetId
       let acceptanceSession: SessionIdentity
-      // 先切换顶部阶段，让后续新会话选择直接落在验收阶段，避免审查阶段覆盖值滞留。
-      onEnterAcceptancePhase()
       try {
-        acceptanceSession = await createAcceptanceSession({
-          targetLabel: target?.label || selectedPageLabel || '当前应用',
-          pageId: target?.type === 'page' ? targetId : continuationPageId,
-          apiContractId: workflowBuildScope?.apiContractId,
-          endpointId: target?.type === 'endpoint' ? targetId : endpointScope?.targetId,
-          endpointLabel: target?.label,
-          entityId: target?.type === 'data_source' ? targetId : continuationEntityId,
-          entityLabel: target?.label
-        })
+        acceptanceSession = await preparePhaseTransitionSession(
+          () =>
+            createAcceptanceSession({
+              targetLabel: target?.label || selectedPageLabel || '当前应用',
+              pageId: target?.type === 'page' ? targetId : continuationPageId,
+              apiContractId: workflowBuildScope?.apiContractId,
+              endpointId: target?.type === 'endpoint' ? targetId : endpointScope?.targetId,
+              endpointLabel: target?.label,
+              entityId: target?.type === 'data_source' ? targetId : continuationEntityId,
+              entityLabel: target?.label
+            }),
+          onEnterAcceptancePhase
+        )
       } catch {
-        onEnterReviewPhase()
         acceptancePhaseTransitionRunIdsRef.current.delete(workflow.runId)
         return false
       }
