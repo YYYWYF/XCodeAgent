@@ -50,6 +50,11 @@ class Settings:
     # 调用 LLM 生成设计稿的并发上限。默认 3，避免单 API Key 触发模型服务限流。
     ui_design_concurrency: int = 3
     build_task_plan_max_retries: int = 2
+    # DAG Unit Generation 独立预算；仅提供配置，不改变其他 Agent 的模型参数。
+    dag_unit_max_tokens: int = 4096
+    dag_unit_generation_concurrency: int = 3
+    dag_unit_local_max_attempts: int = 3
+    dag_global_repair_limit: int = 2
     dag_business_self_check_enabled: bool = False
     checkpoint_db_path: str = ""  # populated in from_env
     checkpoint_retention_days: int = 30
@@ -67,7 +72,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        """从环境变量加载模型、UI 设计生成和持久化配置。"""
+        """从环境变量加载模型、UI/DAG 专属生成和持久化配置。"""
 
         base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL")
         model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
@@ -106,6 +111,18 @@ class Settings:
             build_task_plan_max_retries=int(
                 os.getenv("BUILD_TASK_PLAN_MAX_RETRIES", "2")
             ),
+            dag_unit_max_tokens=_env_int(
+                "XCODEAGENT_DAG_UNIT_MAX_TOKENS", default=4096, minimum=1
+            ),
+            dag_unit_generation_concurrency=_env_int(
+                "XCODEAGENT_DAG_UNIT_CONCURRENCY", default=3, minimum=1
+            ),
+            dag_unit_local_max_attempts=_env_int(
+                "XCODEAGENT_DAG_UNIT_LOCAL_MAX_ATTEMPTS", default=3, minimum=1
+            ),
+            dag_global_repair_limit=_env_int(
+                "XCODEAGENT_DAG_GLOBAL_REPAIR_LIMIT", default=2, minimum=0
+            ),
             dag_business_self_check_enabled=_env_bool(
                 "XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED", default=False
             ),
@@ -132,6 +149,21 @@ def _required_any(*names: str) -> str:
         if value:
             return value
     raise RuntimeError(f"Missing required environment variable: {' or '.join(names)}")
+
+
+def _env_int(name: str, *, default: int, minimum: int) -> int:
+    """严格读取有下界的整数配置，非法值报告变量名而不静默回退默认值。"""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer >= {minimum}.") from exc
+    if value < minimum:
+        raise ValueError(f"{name} must be an integer >= {minimum}.")
+    return value
 
 
 def _env_bool(name: str, *, default: bool) -> bool:
