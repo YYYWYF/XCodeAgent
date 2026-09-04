@@ -1,7 +1,6 @@
 import type {
   ApplicationConfig,
   ApplicationSchemaConfig,
-  ApplicationLifecycle,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntity,
   DevelopmentPlanningPageTreeNode,
@@ -11,27 +10,6 @@ import type {
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
 export const APPLICATIONS_CHANGED_EVENT = 'xcode-agent-applications-changed';
-
-// 判断创建规划是否已经完成；工作台内部运行状态不得影响该结果。
-export function isApplicationCreationComplete(lifecycle?: ApplicationLifecycle): boolean {
-  return lifecycle?.initialization.stage === 'ready_for_workbench';
-}
-
-// 判断应用是否已永久完成创建规划；持久确认标记优先，当前生命周期也可直接放行。
-export function canOpenApplicationWorkbench(
-  application: ApplicationConfig,
-  lifecycle?: ApplicationLifecycle
-): boolean {
-  if (application.source !== 'new') return true;
-  if (
-    typeof application.planningConfirmedAt === 'number' &&
-    Number.isFinite(application.planningConfirmedAt) &&
-    application.planningConfirmedAt > 0
-  ) {
-    return true;
-  }
-  return isApplicationCreationComplete(lifecycle);
-}
 
 function normalizeApplications(value: unknown): ApplicationConfig[] {
   return Array.isArray(value) ? (value as ApplicationConfig[]) : [];

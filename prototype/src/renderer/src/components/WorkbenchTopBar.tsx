@@ -10,6 +10,7 @@ import { cx } from '../utils'
 import {
   WORKBENCH_PHASE_AGENTS,
   WORKBENCH_PHASE_ORDER,
+  workbenchPhaseTabText,
   type WorkbenchPhase
 } from '../workbenchPhase'
 import type { TestCasePreparationSnapshot } from '../testCasePreparation'
@@ -44,6 +45,10 @@ type Props = {
   canEnterTestingStage?: boolean
   /** 用户点击具备进入条件的测试阶段节点时，发起进入测试确认。 */
   onRequestEnterTesting?: () => void
+  /** 项目规划准入门是否待处理（需求文档确认后的进入项目规划弹框未完成确认）。 */
+  canEnterPlanningStage?: boolean
+  /** 用户点击具备进入条件的项目规划阶段节点时，再次唤起项目规划准入门弹框。 */
+  onRequestEnterPlanning?: () => void
   /** 开发准入门是否待处理（项目计划确认后的进入开发弹框未完成选择）。 */
   canEnterDevelopmentStage?: boolean
   /** 用户点击具备进入条件的开发阶段节点时，再次唤起开发准入门弹框。 */
@@ -81,6 +86,8 @@ export default function WorkbenchTopBar({
   onVersionSelect,
   canEnterTestingStage,
   onRequestEnterTesting,
+  canEnterPlanningStage,
+  onRequestEnterPlanning,
   canEnterDevelopmentStage,
   onRequestEnterDevelopment,
   developmentArtifactProgress,
@@ -104,6 +111,16 @@ export default function WorkbenchTopBar({
       return
     }
     const targetIndex = WORKBENCH_PHASE_ORDER.indexOf(phaseKey)
+    // 旅程尚未到达项目规划、但需求文档已确认（准入门等待确认）：
+    // 点击项目规划再次唤起准入门弹框，而不是直接切换。
+    if (
+      targetIndex > WORKBENCH_PHASE_ORDER.indexOf(reachedPhase) &&
+      phaseKey === 'planning' &&
+      canEnterPlanningStage
+    ) {
+      onRequestEnterPlanning?.()
+      return
+    }
     // 旅程尚未到达开发、但开发准入门已就绪（计划确认后等待选择任务类型）：
     // 点击开发阶段再次唤起准入门弹框，而不是直接切换。
     if (
@@ -186,6 +203,7 @@ export default function WorkbenchTopBar({
             // 测试阶段具备进入条件时视同“已到达”：沿用可点击的未选中样式，不新增视觉状态。
             const reachable =
               reached ||
+              (!locked && phaseKey === 'planning' && Boolean(canEnterPlanningStage)) ||
               (!locked && phaseKey === 'development' && Boolean(canEnterDevelopmentStage)) ||
               (!locked && phaseKey === 'testing' && Boolean(canEnterTestingStage)) ||
               (!locked && phaseKey === 'review' && Boolean(canEnterReviewStage))
@@ -220,7 +238,7 @@ export default function WorkbenchTopBar({
                 disabled={locked || !reachable}
                 onClick={() => handlePhaseClick(phaseKey)}
               >
-                {WORKBENCH_PHASE_AGENTS[phaseKey].label}阶段
+                {workbenchPhaseTabText(phaseKey)}
                 {planConfirmed && phaseKey === 'development' && developmentArtifactProgress?.total ? (
                   <small
                     aria-label={`开发产物 ${developmentArtifactProgress.completed}/${developmentArtifactProgress.total}`}

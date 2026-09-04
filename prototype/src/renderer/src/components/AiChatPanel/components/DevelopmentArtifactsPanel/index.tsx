@@ -8,7 +8,7 @@ import type {
 } from '../../../../typings'
 import type { WorkbenchArtifactStatus } from '../../../../workbenchDomain'
 import { cx } from '../../../../utils'
-import { DevelopmentArtifactTree } from '../SessionSidebar'
+import { DevelopmentArtifactTree } from '../SessionSidebar/DevelopmentArtifactTree'
 import './DevelopmentArtifactsPanel.less'
 
 export type DevelopmentArtifactItem = {
@@ -36,7 +36,7 @@ type Props = {
 /** 将领域状态转换为接口内容区使用的中文文案；实现阶段状态由后台任务流水推导，用词与任务抽屉一致。 */
 function statusLabel(status: WorkbenchArtifactStatus): string {
   if (status === 'completed') return '已完成'
-  if (status === 'awaiting-review') return '待验收'
+  if (status === 'awaiting-review') return '待继续'
   if (status === 'implementing') return '执行中'
   if (status === 'impl-queued') return '排队中'
   if (status === 'failed') return '失败'
@@ -157,7 +157,7 @@ function DevelopmentArtifactContent({
         <span>
           {activeItem.status === 'not-started'
             ? '开始详细设计并派发后台实现任务后，这里会显示最终页面效果。'
-            : '后台正在实现当前页面，任务到达待验收后即可在这里预览。'}
+            : '后台正在实现当前页面，任务进入待继续后即可在这里预览。'}
         </span>
       </div>
     )

@@ -12,9 +12,7 @@ import {
   deriveWorkbenchExecutionPhase,
   deriveWorkbenchPhaseValidity,
   deriveWorkbenchReachedPhase,
-  isObjectEditableInPhase,
   WORKBENCH_PHASE_AGENTS,
-  type EditableObjectType,
   type WorkbenchAgentIdentity,
   type WorkbenchPhase,
   type WorkbenchPhaseValidity
@@ -36,7 +34,6 @@ type WorkbenchPhaseContextValue = {
   /** 当前查看阶段的 Agent 身份。 */
   agent: WorkbenchAgentIdentity;
   /** 阶段门禁：某对象当前是否可编辑。 */
-  canEdit: (objectType: EditableObjectType) => boolean;
   /** 已生成版本锁死后，阶段只展示旅程位置，不再承担 Agent 调度。 */
   locked: boolean;
 };
@@ -62,7 +59,7 @@ export function WorkbenchPhaseProvider({
   const derivedReachedPhase = deriveWorkbenchReachedPhase(lifecycle);
   // 多应用切换时各自保留独立的覆盖值，避免互相串用。
   const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>({});
-  // 需求/计划回退会产生新的生命周期快照，但不能抹掉本版本此前已经到达的阶段。
+  // 需求分析/项目规划阶段回退会产生新的生命周期快照，但不能抹掉本版本此前已经到达的阶段。
   const [rememberedReachedPhases, setRememberedReachedPhases] = useState<
     Record<string, WorkbenchPhase>
   >({});
@@ -108,7 +105,6 @@ export function WorkbenchPhaseProvider({
         }));
       },
       agent: WORKBENCH_PHASE_AGENTS[viewingPhase],
-      canEdit: (objectType) => !locked && isObjectEditableInPhase(objectType, viewingPhase),
       locked
     };
   }, [applicationId, executionPhase, reachedPhase, phaseValidity, manualOverride, locked]);

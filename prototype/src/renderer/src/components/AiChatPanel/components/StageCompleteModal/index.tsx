@@ -20,7 +20,7 @@ export function DevelopmentStageCompleteModal({
   return (
     <PhaseGateModal
       cancelText="暂不进入"
-      confirmText="进入测试阶段"
+      confirmText="进入下一阶段"
       icon={<CheckCircleOutlined />}
       lead="测试用例由后台任务自动生成，未完成的用例会先在用例目录中置灰展示，不影响现在进入测试阶段。是否进入测试阶段？"
       onCancel={onCancel}
@@ -40,7 +40,7 @@ export function TestingStageCompleteModal({
   return (
     <PhaseGateModal
       cancelText="暂不进入"
-      confirmText="进入审查阶段"
+      confirmText="进入下一阶段"
       icon={<CheckCircleOutlined />}
       lead="全部业务测试用例已执行通过。是否进入审查阶段？"
       onCancel={onCancel}

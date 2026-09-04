@@ -38,6 +38,14 @@ export type WorkflowLaunchResult = {
   [key: string]: unknown
 }
 
+/**
+ * 产物审查目标：同步任务落终态时由剧本写入 result，
+ * 前端据此把右侧开发产物工作区定位到本次交付的产物（页面预览 / 接口调试）。
+ */
+export type WorkflowReviewTarget =
+  | { type: 'page'; pageId: string }
+  | { type: 'endpoint'; apiContractId: string; endpointId: string }
+
 export type WorkflowAcceptanceRequest = {
   status?: string
   message?: string

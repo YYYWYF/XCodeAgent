@@ -52,6 +52,14 @@ function artifactPhaseDelay(phase: string): number {
   return ARTIFACT_PHASE_DELAYS[phase] ?? 1000
 }
 
+/** 代码实现任务的阶段迁移顺序：用于追赶式推进时计算累计耗时应落在的相位。 */
+const ARTIFACT_NEXT_PHASE: Record<string, string> = {
+  build_dag: 'generating',
+  generating: 'building',
+  building: 'preview',
+  preview: 'completed'
+}
+
 /** 读取用例生成任务当前阶段的停留时长，节奏由所属任务系统决定。 */
 function casePhaseDelay(system: BackgroundTaskSystem, phase: string): number {
   const delays = SYSTEM_CASE_DELAYS[system]
@@ -104,37 +112,44 @@ function advanceArtifactTask(
     return
   }
   if (task.status !== 'running') return
-  const delay = artifactPhaseDelay(task.phase)
-  // 运行中任务先同步插值进度，保持百分比平滑；未到阶段延时时不做状态迁移。
-  const range = ARTIFACT_PHASE_PROGRESS[task.phase]
-  if (range) {
-    const progress = interpolatedProgress(task, range, delay)
-    if (progress !== task.progress) {
-      store.patchTask(task.id, { progress, updatedAt: task.updatedAt })
-    }
+  // 追赶式推进：浏览器会对失焦页面节流定时器，单次 tick 可能间隔很久；
+  // 按当前阶段起的累计耗时把相位一路推进到当前时间对应的位置，而不是每个 tick 只推进一步，
+  // 保证演示中切换窗口后回来任务状态仍与真实时间对齐。
+  let phase = task.phase
+  let phaseStartedAt = task.updatedAt
+  let elapsed = Date.now() - phaseStartedAt
+  while (phase !== 'completed') {
+    const delay = artifactPhaseDelay(phase)
+    if (elapsed < delay) break
+    elapsed -= delay
+    phaseStartedAt += delay
+    phase = ARTIFACT_NEXT_PHASE[phase] ?? 'completed'
   }
-  if (Date.now() - task.updatedAt < delay) return
-  switch (task.phase) {
-    case 'build_dag':
-      store.patchTask(task.id, { phase: 'generating', progress: 20 })
-      return
-    case 'generating':
-      store.patchTask(task.id, { phase: 'building', progress: 62 })
-      return
-    case 'building':
-      store.patchTask(task.id, { phase: 'preview', progress: 86 })
-      return
-    case 'preview':
-      // 后台无人值守执行到「完成」；产物验收是后续步骤，入口挂在任务条目上。
-      store.patchTask(task.id, {
-        status: 'completed',
-        phase: 'completed',
-        progress: 100,
-        nextStep: { type: 'artifact_acceptance', done: false }
-      })
-      return
-    default:
-      return
+  if (phase === 'completed') {
+    // 后台无人值守执行到「完成」；产物验收是后续步骤，入口挂在任务条目上。
+    store.patchTask(task.id, {
+      status: 'completed',
+      phase: 'completed',
+      progress: 100,
+      nextStep: { type: 'artifact_acceptance', done: false }
+    })
+    return
+  }
+  if (phase !== task.phase) {
+    const entryProgress = ARTIFACT_PHASE_PROGRESS[phase]?.[0] ?? task.progress
+    store.patchTask(task.id, { phase, progress: entryProgress, updatedAt: phaseStartedAt })
+  }
+  // 阶段内按耗时线性插值进度，保持抽屉里的百分比平滑增长。
+  const range = ARTIFACT_PHASE_PROGRESS[phase]
+  if (range) {
+    const progress = interpolatedProgress(
+      { ...task, phase, updatedAt: phaseStartedAt },
+      range,
+      artifactPhaseDelay(phase)
+    )
+    if (progress !== task.progress) {
+      store.patchTask(task.id, { progress, updatedAt: phaseStartedAt })
+    }
   }
 }
 
@@ -153,22 +168,36 @@ function advanceTestCaseTask(
     return
   }
   if (task.status !== 'running') return
-  const delay = casePhaseDelay(system, task.phase)
-  const range = CASE_PHASE_PROGRESS[task.phase]
-  if (range) {
-    const progress = interpolatedProgress(task, range, delay)
-    if (progress !== task.progress) {
-      store.patchTask(task.id, { progress, updatedAt: task.updatedAt })
-    }
+  // 与代码实现任务同款的追赶式推进：定时器被节流时按累计耗时对齐相位。
+  let phase = task.phase
+  let phaseStartedAt = task.updatedAt
+  let elapsed = Date.now() - phaseStartedAt
+  while (phase === 'generating' || phase === 'validating') {
+    const delay = casePhaseDelay(system, phase)
+    if (elapsed < delay) break
+    elapsed -= delay
+    phaseStartedAt += delay
+    phase = phase === 'generating' ? 'validating' : 'ready'
   }
-  if (Date.now() - task.updatedAt < delay) return
-  if (task.phase === 'generating') {
-    store.patchTask(task.id, { phase: 'validating', progress: 84 })
-    return
-  }
-  if (task.phase === 'validating') {
+  if (phase === 'ready') {
     // 全部用例生成和校验完成后自动就绪，不增加用户重复确认步骤。
     store.patchTask(task.id, { status: 'completed', phase: 'ready', progress: 100 })
+    return
+  }
+  if (phase !== task.phase) {
+    const entryProgress = CASE_PHASE_PROGRESS[phase]?.[0] ?? task.progress
+    store.patchTask(task.id, { phase, progress: entryProgress, updatedAt: phaseStartedAt })
+  }
+  const range = CASE_PHASE_PROGRESS[phase]
+  if (range) {
+    const progress = interpolatedProgress(
+      { ...task, phase, updatedAt: phaseStartedAt },
+      range,
+      casePhaseDelay(system, phase)
+    )
+    if (progress !== task.progress) {
+      store.patchTask(task.id, { progress, updatedAt: phaseStartedAt })
+    }
   }
 }
 

@@ -162,6 +162,28 @@ body:has(.@{class-prefix}-welcome-page[data-theme='light']) {
       background: var(--wb-control-hover);
       border-color: var(--wb-border-strong);
     }
+
+    // 外壳的主题覆盖会整组压掉 antd 的禁用配色，禁用按钮必须在此显式置灰，
+    // 与可用按钮一眼可辨（通用交互原则：静态置灰、默认光标、无悬停反馈）。
+    &[disabled],
+    &[disabled]:hover,
+    &[disabled]:focus {
+      color: var(--wb-text-tertiary);
+      background: var(--wb-surface-subtle);
+      border-color: var(--wb-border);
+    }
+  }
+
+  .ant-btn-primary {
+    // 主按钮的禁用态同样静态置灰，避免条件未满足时紫色主按钮看起来仍可点击。
+    &[disabled],
+    &[disabled]:hover,
+    &[disabled]:focus {
+      color: var(--wb-text-tertiary);
+      background: var(--wb-surface-subtle);
+      border-color: var(--wb-border);
+      box-shadow: none;
+    }
   }
 
   .ant-input,

@@ -347,7 +347,7 @@ export function buildAppRequirementDoc(
   return lines.join('\n')
 }
 
-// —— 设计阶段三份产物文档构建器（需求文档 / 项目计划 / 构建任务计划）——
+// —— 需求分析/项目规划阶段三份产物文档构建器（需求文档 / 项目计划 / 构建任务计划）——
 
 /** 从需求文档结构化数据渲染 Markdown。appName 优先用当前应用名。 */
 export function buildRequirementSpecDoc(

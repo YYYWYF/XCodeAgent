@@ -233,7 +233,7 @@ export default function BrowserPreviewPanel({
           ) : (
             <div className={cx('browser-preview-acceptance-actions')}>
               <Button
-                aria-label="验收不通过并进入对话"
+                aria-label="验收不通过并进入任务"
                 disabled={acceptanceReadOnly}
                 icon={<MessageOutlined />}
                 onClick={onSubmitAcceptanceFeedback}

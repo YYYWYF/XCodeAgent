@@ -35,10 +35,12 @@ export type AgentChatMessage = {
         path?: string
         purpose?: string
       }
+  /** 引导消息的快速动作：artifact-launch = 内嵌「选择产物并发起实施」快速按钮。 */
+  guideAction?: 'artifact-launch'
   createdAt: number
 }
 
-/** 设计阶段右侧「文档」的产物 key，作为工作区 tab 使用。 */
+/** 需求分析/项目规划阶段右侧「文档」的产物 key，作为工作区 tab 使用。 */
 export type WorkspaceDocKey = 'requirement-spec' | 'project-plan'
 
 export type RightPanelState =

@@ -1,25 +1,14 @@
 import {
-  AppstoreOutlined,
   ApiOutlined,
+  AppstoreOutlined,
   CaretDownOutlined,
   CaretRightOutlined,
   DatabaseOutlined,
-  DeleteOutlined,
-  DownOutlined,
-  EditOutlined,
   FileTextOutlined,
-  FolderOutlined,
-  LeftOutlined,
-  MessageOutlined,
-  PlusOutlined,
-  RightOutlined,
-  SettingOutlined,
-  ThunderboltOutlined
+  FolderOutlined
 } from '@ant-design/icons'
-import { Popconfirm, Segmented, Typography } from 'antd'
-import type { CSSProperties, ReactElement } from 'react'
+import type { ReactElement } from 'react'
 import { useMemo, useState } from 'react'
-import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import type { WorkspaceDocKey } from '../../types'
 import type {
   DevelopmentPlanningApiContract,
@@ -34,12 +23,7 @@ import type { WorkbenchArtifactAccess } from '../../../../workbenchDomain'
 import type { WorkbenchArtifactStatus } from '../../../../workbenchDomain'
 import './SessionSidebar.less'
 
-const { Text } = Typography
-const COLLAPSED_SIDEBAR_WIDTH = 68
-const DEFAULT_SIDEBAR_WIDTH = 248
 
-type NavigationView = 'tasks' | 'artifacts'
-type ArtifactFilter = 'all' | 'page' | 'endpoint' | 'entity'
 type ArtifactStatus = 'not-started' | 'in-progress' | 'completed'
 type WorkbenchDocumentKey = WorkspaceDocKey | 'code-review'
 type DesignArtifactItem = {
@@ -48,202 +32,6 @@ type DesignArtifactItem = {
   label: string
   path: string
   status: ArtifactStatus
-}
-
-type SessionSidebarProps = {
-  activeSessionId?: string
-  apiContracts: DevelopmentPlanningApiContract[]
-  entities: DevelopmentPlanningEntity[]
-  applicationName: string
-  artifactAccessById: Record<string, WorkbenchArtifactAccess>
-  artifactStatusById: Record<string, WorkbenchArtifactStatus>
-  designArtifacts: DesignArtifactItem[]
-  deletingSessionId?: string
-  filesActive: boolean
-  fixedOpen?: boolean
-  readOnly?: boolean
-  onApiEndpointSelect: (target: {
-    apiContractId: string
-    endpointId: string
-    endpointKey: string
-    label: string
-  }) => void
-  onCreateEndpointTask: (target: {
-    apiContractId: string
-    endpointId: string
-    endpointLabel: string
-  }) => void
-  onCreatePageTask: (page: DevelopmentPlanningPageOption) => void
-  onCreateSession: () => void
-  onCreateDocumentTask: (key: WorkbenchDocumentKey) => void
-  onDeleteSession: (sessionId: string) => Promise<void>
-  onDesignArtifactSelect: (key: WorkbenchDocumentKey) => void
-  onOpenSession: (sessionId: string) => Promise<void>
-  onRenameSession: (sessionId: string, title: string) => Promise<void>
-  onPageSelect: (page: DevelopmentPlanningPageOption) => void
-  onShowFiles: () => void
-  onShowSettings: () => void
-  onShowSkills: () => void
-  pages: DevelopmentPlanningPageOption[]
-  pageTree: DevelopmentPlanningPageTreeNode[]
-  selectedApiEndpointKey: string
-  selectedDesignArtifactKey?: WorkbenchDocumentKey
-  selectedPageId: string
-  sessions: ChatSessionSummary[]
-  settingsActive: boolean
-  showDevelopmentTasks: boolean
-  skillsActive: boolean
-}
-
-/** 渲染对话视图：最近对话保持单行，只按关联产物类型过滤。 */
-/** 渲染最近对话、类型筛选及对话级重命名和删除操作。 */
-function TaskNavigation({
-  activeSessionId,
-  deletingSessionId,
-  filter,
-  onCreateSession,
-  onDeleteSession,
-  onFilterChange,
-  onOpenSession,
-  onRenameSession,
-  readOnly,
-  sessions
-}: {
-  activeSessionId?: string
-  deletingSessionId?: string
-  filter: ArtifactFilter
-  onCreateSession: () => void
-  onDeleteSession: (sessionId: string) => Promise<void>
-  onFilterChange: (filter: ArtifactFilter) => void
-  onOpenSession: (sessionId: string) => Promise<void>
-  onRenameSession: (sessionId: string, title: string) => Promise<void>
-  readOnly: boolean
-  sessions: ChatSessionSummary[]
-}): ReactElement {
-  const [editingSessionId, setEditingSessionId] = useState('')
-  const [editingTitle, setEditingTitle] = useState('')
-  const visibleSessions = sessions.filter((session) => {
-    if (filter === 'page') return Boolean(session.pageId)
-    if (filter === 'endpoint') return Boolean(session.endpointId)
-    if (filter === 'entity') return false
-    return true
-  })
-
-  /** 提交有效的新名称；空名称回退为原名称，避免生成无标题目录项。 */
-  const commitRename = async (session: ChatSessionSummary): Promise<void> => {
-    const normalizedTitle = editingTitle.trim()
-    setEditingSessionId('')
-    setEditingTitle('')
-    if (!normalizedTitle || normalizedTitle === session.title) return
-    await onRenameSession(session.id, normalizedTitle)
-  }
-
-  return (
-    <section className={cx('task-navigation')}>
-      <header>
-        <Text strong>最近对话</Text>
-        <button aria-label="新建对话" disabled={readOnly} onClick={onCreateSession} type="button">
-          <PlusOutlined />
-        </button>
-      </header>
-      <Segmented
-        aria-label="产物类型筛选"
-        block
-        onChange={(value) => onFilterChange(value as ArtifactFilter)}
-        options={[
-          { label: '全部', value: 'all' },
-          { label: '页面', value: 'page' },
-          { label: '接口', value: 'endpoint' },
-          { label: '实体', value: 'entity' }
-        ]}
-        size="small"
-        value={filter}
-      />
-      <div className={cx('task-conversation-list')}>
-        {visibleSessions.map((session) => (
-          <div className={cx('task-conversation-shell')} key={session.id}>
-            {editingSessionId === session.id ? (
-              <div
-                className={cx(
-                  'task-conversation-row',
-                  'editing',
-                  activeSessionId === session.id && 'selected'
-                )}
-              >
-                <MessageOutlined />
-                <input
-                  aria-label="对话名称"
-                  autoFocus
-                  maxLength={40}
-                  onBlur={() => void commitRename(session)}
-                  onChange={(event) => setEditingTitle(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') event.currentTarget.blur()
-                    if (event.key === 'Escape') {
-                      setEditingSessionId('')
-                      setEditingTitle('')
-                    }
-                  }}
-                  value={editingTitle}
-                />
-              </div>
-            ) : (
-              <button
-                className={cx(
-                  'task-conversation-row',
-                  activeSessionId === session.id && 'selected'
-                )}
-                onClick={() => void onOpenSession(session.id)}
-                title={session.title}
-                type="button"
-              >
-                <MessageOutlined />
-                <span>{session.title || '新对话'}</span>
-              </button>
-            )}
-            <button
-              aria-label={`重命名${session.title}`}
-              className={cx('task-conversation-rename')}
-              disabled={readOnly}
-              onClick={() => {
-                setEditingSessionId(session.id)
-                setEditingTitle(session.title)
-              }}
-              type="button"
-            >
-              <EditOutlined />
-            </button>
-            <Popconfirm
-              cancelText="取消"
-              okText="删除"
-              onConfirm={() => onDeleteSession(session.id)}
-              placement="right"
-              title="删除这个对话？"
-            >
-              <button
-                aria-label={`删除${session.title}`}
-                className={cx('task-conversation-delete')}
-                disabled={readOnly || deletingSessionId === session.id}
-                type="button"
-              >
-                <DeleteOutlined />
-              </button>
-            </Popconfirm>
-          </div>
-        ))}
-        {visibleSessions.length === 0 ? (
-          <button
-            className={cx('task-conversation-empty')}
-            disabled={readOnly}
-            onClick={onCreateSession}
-            type="button"
-          >
-            {readOnly ? '该版本的对话记录只读' : '当前筛选下暂无对话，创建一个新对话'}
-          </button>
-        ) : null}
-      </div>
-    </section>
-  )
 }
 
 /** 递归统计菜单节点下页面总数和已完成数，测试发现缺陷时同步反映产物回到进行中。 */
@@ -378,33 +166,41 @@ function PageArtifactNode({
   )
 }
 
-type ArtifactNavigationProps = Pick<
-    SessionSidebarProps,
-    | 'apiContracts'
-    | 'entities'
-    | 'applicationName'
-    | 'artifactAccessById'
-    | 'artifactStatusById'
-    | 'designArtifacts'
-    | 'onApiEndpointSelect'
-    | 'onCreateEndpointTask'
-    | 'onCreateDocumentTask'
-    | 'onCreatePageTask'
-    | 'onDesignArtifactSelect'
-    | 'onPageSelect'
-    | 'pages'
-    | 'pageTree'
-    | 'selectedApiEndpointKey'
-    | 'selectedDesignArtifactKey'
-    | 'selectedPageId'
-    | 'showDevelopmentTasks'
-    | 'readOnly'
-  > & {
-    /** 开发产物工作区不展示设计阶段文档，只复用原有开发目录树。 */
-    hideDesignArtifacts?: boolean
-    /** 开发产物目录不展示应用根节点，页面/接口/实体直接作为一级分组。 */
-    hideApplicationRoot?: boolean
-  }
+/** 产物树自身的属性契约（原从 SessionSidebarProps Pick，侧栏删除后显式声明）。 */
+type ArtifactNavigationProps = {
+  apiContracts: DevelopmentPlanningApiContract[]
+  applicationName: string
+  artifactAccessById: Record<string, WorkbenchArtifactAccess>
+  artifactStatusById: Record<string, WorkbenchArtifactStatus>
+  designArtifacts: DesignArtifactItem[]
+  entities: DevelopmentPlanningEntity[]
+  /** 开发产物工作区不展示需求分析/项目规划阶段文档，只复用原有开发目录树。 */
+  hideDesignArtifacts?: boolean
+  /** 开发产物目录不展示应用根节点，页面/接口/实体直接作为一级分组。 */
+  hideApplicationRoot?: boolean
+  onApiEndpointSelect: (target: {
+    apiContractId: string
+    endpointId: string
+    endpointKey: string
+    label: string
+  }) => void
+  onCreateDocumentTask: (key: WorkbenchDocumentKey) => void
+  onCreateEndpointTask: (target: {
+    apiContractId: string
+    endpointId: string
+    endpointLabel: string
+  }) => void
+  onCreatePageTask: (page: DevelopmentPlanningPageOption) => void
+  onDesignArtifactSelect: (key: WorkbenchDocumentKey) => void
+  onPageSelect: (page: DevelopmentPlanningPageOption) => void
+  pages: DevelopmentPlanningPageOption[]
+  pageTree: DevelopmentPlanningPageTreeNode[]
+  readOnly?: boolean
+  selectedApiEndpointKey: string
+  selectedDesignArtifactKey?: WorkbenchDocumentKey
+  selectedPageId: string
+  showDevelopmentTasks: boolean
+}
 
 /** 渲染以应用为根的完整产物树，页面和接口分别保留业务分组。 */
 function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
@@ -801,126 +597,5 @@ export function DevelopmentArtifactTree({
       selectedPageId={selectedPageId}
       showDevelopmentTasks
     />
-  )
-}
-
-/** 在同一窄侧栏中切换最近对话与应用产物两种工作视角。 */
-export default function SessionSidebar(props: SessionSidebarProps): ReactElement {
-  const {
-    activeSessionId,
-    deletingSessionId,
-    filesActive,
-    fixedOpen = false,
-    onCreateSession,
-    onDeleteSession,
-    onShowFiles,
-    onShowSettings,
-    onShowSkills,
-    readOnly = false,
-    sessions,
-    settingsActive,
-    skillsActive
-  } = props
-  const [collapsed, setCollapsed] = useState(false)
-  const [filter, setFilter] = useState<ArtifactFilter>('all')
-  const [view, setView] = useState<NavigationView>('artifacts')
-
-  const orderedSessions = useMemo(
-    () => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt),
-    [sessions]
-  )
-  const effectiveCollapsed = fixedOpen ? false : collapsed
-
-  return (
-    <aside
-      aria-label="工作台导航"
-      className={cx('session-sidebar', effectiveCollapsed && 'collapsed')}
-      style={
-        {
-          '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : DEFAULT_SIDEBAR_WIDTH}px`
-        } as CSSProperties
-      }
-    >
-      {!fixedOpen ? (
-        <button
-          aria-label={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
-          className={cx('session-collapse-button', 'standalone')}
-          onClick={() => setCollapsed((value) => !value)}
-          type="button"
-        >
-          {effectiveCollapsed ? <RightOutlined /> : <LeftOutlined />}
-        </button>
-      ) : null}
-
-      <Segmented
-        aria-label="导航视图"
-        block
-        className={cx('navigation-view-switch')}
-        onChange={(value) => setView(value as NavigationView)}
-        options={[
-          { label: '产物视图', value: 'artifacts' },
-          { label: '对话视图', value: 'tasks' }
-        ]}
-        value={view}
-      />
-
-      <div className={cx('session-outline-scroll')}>
-        {view === 'tasks' ? (
-          <TaskNavigation
-            activeSessionId={activeSessionId}
-            deletingSessionId={deletingSessionId}
-            filter={filter}
-            onCreateSession={onCreateSession}
-            onDeleteSession={onDeleteSession}
-            onFilterChange={setFilter}
-            onOpenSession={props.onOpenSession}
-            onRenameSession={props.onRenameSession}
-            readOnly={readOnly}
-            sessions={orderedSessions}
-          />
-        ) : (
-          <ArtifactNavigation
-            {...props}
-          />
-        )}
-      </div>
-
-      <div className={cx('session-settings-shell')}>
-        <button
-          className={cx('session-settings-entry', settingsActive && 'active')}
-          onClick={onShowSettings}
-          type="button"
-        >
-          <SettingOutlined />
-          <span>应用配置</span>
-        </button>
-      </div>
-
-      <nav aria-label="快捷入口" className={cx('session-footer-nav')}>
-        <button
-          className={cx(skillsActive && 'active')}
-          onClick={onShowSkills}
-          title="技能"
-          type="button"
-        >
-          <ThunderboltOutlined />
-          <span>技能</span>
-        </button>
-        <button
-          className={cx(filesActive && 'active')}
-          onClick={onShowFiles}
-          title="文件"
-          type="button"
-        >
-          <FolderOutlined />
-          <span>文件</span>
-        </button>
-      </nav>
-      <button className={cx('session-user')} type="button">
-        <span className={cx('session-user-avatar')}>S</span>
-        <span className={cx('session-user-name')}>Steve Jobs</span>
-        <DownOutlined />
-      </button>
-    </aside>
   )
 }

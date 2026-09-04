@@ -1,18 +1,13 @@
-import { Input, Layout, Modal, notification, Progress, Steps } from 'antd'
-import RichLoading from '../components/AiChatPanel/components/DesignProgress/RichLoading'
+import { Layout, notification } from 'antd'
 import {
-  LoadingOutlined,
-  CloudUploadOutlined,
-  CheckCircleFilled,
   HourglassOutlined,
-  MoonOutlined,
-  PlusOutlined,
-  HistoryOutlined
+  MoonOutlined
 } from '@ant-design/icons'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { LeftPanel } from '../components'
 import WorkbenchTopBar from '../components/WorkbenchTopBar'
+import WorkbenchVersionModals from '../components/WorkbenchVersionModals'
 import BackgroundTaskDrawer, {
   type BackgroundTaskItem
 } from '../components/BackgroundTaskDrawer'
@@ -28,7 +23,8 @@ import {
 import { useBackgroundTasks, backgroundTasksForVersion } from '../hooks/useBackgroundTasks'
 import type { TestCaseGenerationTaskType } from '../testCasePreparation'
 import AuxiliaryDrawer, {
-  type AuxiliaryDrawerMode
+  type AuxiliaryDrawerMode,
+  type ConversationManagementContent
 } from '../components/AiChatPanel/components/AuxiliaryDrawer'
 import { WorkbenchPhaseProvider } from '../context'
 import {
@@ -38,6 +34,8 @@ import {
 } from '../service/applicationStorage'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { latestApplicationLifecycle } from '../hooks/useApplicationLifecycleStore'
+// 前端本地合成 lifecycle 快照的 revision 必须与剧本共享计数器，避免与下一帧撞号被拒合并
+import { nextSyntheticLifecycleRevision } from '../mock/scripts/revision'
 import {
   createIterationVersion,
   createRollbackVersion,
@@ -60,8 +58,8 @@ import type {
   EditorMode
 } from '../typings'
 import type { WorkbenchArtifactProgress } from '../workbenchDomain'
-import { cx, previewOrigin } from '../utils'
-import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
+import { cx } from '../utils'
+import { useProjectPreviewLaunch } from '../hooks/useProjectPreviewLaunch'
 import { useAsyncTestCasePreparation } from '../hooks/useAsyncTestCasePreparation'
 import './WorkbenchPage.less'
 
@@ -170,9 +168,13 @@ function WorkbenchPage({
     DevelopmentPlanningEntity[]
   >([])
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
-  const [previewBaseUrl, setPreviewBaseUrl] = useState('')
-  const [previewLaunchError, setPreviewLaunchError] = useState('')
-  const [publishModalOpen, setPublishModalOpen] = useState(false)
+
+  // 进入工作台时自动异步启动项目预览（首次创建和重新进入均生效）。
+  const { previewBaseUrl, previewLaunchError } = useProjectPreviewLaunch({
+    applicationId: application.id,
+    workspaceRoot: application.workspaceRoot || '',
+    projectParentPath: application.projectParentPath || ''
+  })
   const [iterationModalOpen, setIterationModalOpen] = useState(false)
   // 审查阶段进入口：聊天面板上报“允许进入”（全部开发产物完成），顶部阶段条发起“进入确认”。
   // “允不允许进入”与“当前进没进去”是两个状态，分别由这两个 state 承载。
@@ -181,12 +183,15 @@ function WorkbenchPage({
   // 开发准入门（计划确认后的进入开发弹框）：与测试/审查共用“可进入 + 重新唤起请求”模式。
   const [developmentEntryAvailable, setDevelopmentEntryAvailable] = useState(false)
   const [developmentEntryRequest, setDevelopmentEntryRequest] = useState(0)
+  // 项目规划准入门（需求文档确认后的进入项目规划弹框）：与开发准入门同一模式。
+  const [planningEntryAvailable, setPlanningEntryAvailable] = useState(false)
+  const [planningEntryRequest, setPlanningEntryRequest] = useState(0)
   const [reviewEntryAvailable, setReviewEntryAvailable] = useState(false)
   const [reviewEntryRequest, setReviewEntryRequest] = useState(0)
   const [developmentArtifactProgress, setDevelopmentArtifactProgress] =
     useState<WorkbenchArtifactProgress>({ completed: 0, total: 0 })
   const [testPreparationOpenRequest, setTestPreparationOpenRequest] = useState(0)
-  // 两套任务系统各自的抽屉与临时对话抽屉统一由工作台页持有：同一时间只允许打开一个。
+  // 两套任务系统各自的抽屉与临时任务抽屉统一由工作台页持有：同一时间只允许打开一个。
   const [backgroundTasksDrawer, setBackgroundTasksDrawer] = useState<BackgroundTaskSystem | null>(
     null
   )
@@ -212,12 +217,32 @@ function WorkbenchPage({
   const [testCaseGenerationTaskType, setTestCaseGenerationTaskType] =
     useState<TestCaseGenerationTaskType>()
   const [auxiliaryDrawerMode, setAuxiliaryDrawerMode] = useState<AuxiliaryDrawerMode | null>(null)
-  /** 打开临时对话抽屉，并互斥关闭两套任务系统的抽屉。 */
-  const openTemporaryConversation = (): void => {
+  // 任务管理抽屉的内容快照：打开抽屉时经聊天面板查询获得，抽屉打开期间定时重查保持新鲜。
+  const [conversationManagementContent, setConversationManagementContent] =
+    useState<ConversationManagementContent>()
+  // 新建/删除/切换查看对象都是异步落地，且落地时长不定：
+  // 抽屉打开期间定时重查快照，徽标、选中态与列表在动作完成后自动跟上，无需各动作各自回调。
+  /** 打开任务管理抽屉，并互斥关闭两套任务系统的抽屉。 */
+  const openConversationManagement = (): void => {
     setBackgroundTasksDrawer(null)
-    setAuxiliaryDrawerMode('temporary-conversation')
+    const base = getConversationManagementContentRef.current?.()
+    if (base) {
+      setConversationManagementContent(base)
+    }
+    setAuxiliaryDrawerMode('conversation-management')
   }
-  /** 打开指定任务系统的队列抽屉，并互斥关闭临时对话抽屉。 */
+  // 抽屉打开期间轮询快照；切走或关闭时停止。
+  useEffect(() => {
+    if (auxiliaryDrawerMode !== 'conversation-management') return
+    const refresh = (): void => {
+      const next = getConversationManagementContentRef.current?.()
+      if (next) setConversationManagementContent(next)
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 700)
+    return () => window.clearInterval(timer)
+  }, [auxiliaryDrawerMode])
+  /** 打开指定任务系统的队列抽屉，并互斥关闭任务管理抽屉。 */
   const openBackgroundTasksDrawer = (system: BackgroundTaskSystem): void => {
     setAuxiliaryDrawerMode(null)
     setBackgroundTasksDrawer(system)
@@ -234,14 +259,20 @@ function WorkbenchPage({
   const closeBackgroundTasksDrawer = (): void => {
     setBackgroundTasksDrawer(null)
   }
-  /** 关闭临时对话抽屉。 */
+  /** 关闭辅助抽屉。 */
   const closeAuxiliaryDrawer = (): void => {
     setAuxiliaryDrawerMode(null)
   }
+  // 任务管理内容查询函数由聊天面板注册（函数在其内部创建），用 ref 转接避免抽屉打开链路依赖渲染时序。
+  const getConversationManagementContentRef = useRef<(() => ConversationManagementContent) | undefined>()
+  const handleConversationManagementReady = useCallback((query: () => ConversationManagementContent) => {
+    getConversationManagementContentRef.current = query
+  }, [])
   // 用例生成队列动态绑定：顶部芯片打开用例任务实际所在的任务系统抽屉。
   const testCaseQueueSystem: BackgroundTaskSystem =
     testCaseGenerationTaskType === 'tide' ? 'tide' : 'async'
   // 生成版本:版本描述(提交日志)+ 多步骤进度态(打包/提交码云/打Tag)。
+  const [publishModalOpen, setPublishModalOpen] = useState(false)
   const [versionDescription, setVersionDescription] = useState('')
   const [generating, setGenerating] = useState<{ stepIndex: number } | null>(null)
   const generatingRef = useRef(false)
@@ -250,118 +281,6 @@ function WorkbenchPage({
   const autoPublishShownRef = useRef(false)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const entryStartedAtRef = useRef(Date.now())
-  const launchedWorkspaceRef = useRef<string>()
-  const activeLaunchWorkspaceRef = useRef('')
-  const launchRunIdRef = useRef(0)
-  const launchCleanupPendingRef = useRef(false)
-  const launchCleanupTimerRef = useRef<number>()
-
-  // 进入工作台时自动异步尝试启动项目预览（首次创建和重新进入均生效）
-  useEffect(() => {
-    const workspacePath = application.workspaceRoot || application.projectParentPath || ''
-    if (launchCleanupTimerRef.current !== undefined) {
-      window.clearTimeout(launchCleanupTimerRef.current)
-      launchCleanupTimerRef.current = undefined
-    }
-    launchCleanupPendingRef.current = false
-    if (!workspacePath) {
-      activeLaunchWorkspaceRef.current = ''
-      return
-    }
-    activeLaunchWorkspaceRef.current = workspacePath
-    if (launchedWorkspaceRef.current === workspacePath) {
-      const existingLaunchRunId = launchRunIdRef.current
-      return () => {
-        launchCleanupPendingRef.current = true
-        launchCleanupTimerRef.current = window.setTimeout(() => {
-          if (
-            launchRunIdRef.current === existingLaunchRunId &&
-            activeLaunchWorkspaceRef.current === workspacePath
-          ) {
-            activeLaunchWorkspaceRef.current = ''
-          }
-        }, 0)
-      }
-    }
-    const launchRunId = launchRunIdRef.current + 1
-    launchRunIdRef.current = launchRunId
-    launchedWorkspaceRef.current = workspacePath
-
-    const loadingKey = `project-launch-${application.id}-${launchRunId}`
-    notification.open({
-      key: loadingKey,
-      message: '项目正在启动中',
-      description: '正在安装依赖并启动开发服务器，请稍候...',
-      placement: 'bottomRight',
-      duration: null,
-      icon: <LoadingOutlined />,
-      className: cx('project-launch-loading')
-    })
-
-    startProjectLaunch(workspacePath)
-      .then((result) => {
-        const launchStillCurrent =
-          launchRunIdRef.current === launchRunId &&
-          activeLaunchWorkspaceRef.current === workspacePath &&
-          !launchCleanupPendingRef.current
-        notification.close(loadingKey)
-        if (!launchStillCurrent) {
-          if (result.status === 'running') {
-            void stopProjectPreview(workspacePath).finally(() => {
-              void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
-                workspaceRoot: workspacePath
-              })
-            })
-          }
-          return
-        }
-        if (result.status === 'running' && result.preview_url) {
-          void window.xcodeAgent?.projectPreview?.registerWorkspace({
-            workspaceRoot: workspacePath
-          })
-          setPreviewBaseUrl(previewOrigin(result.preview_url))
-          setPreviewLaunchError('')
-          notification.success({
-            message: '项目预览已启动',
-            description: '可在预览面板中查看效果',
-            placement: 'bottomRight',
-            duration: 3
-          })
-        } else {
-          const errorMsg = result.message || '未知错误'
-          setPreviewBaseUrl('')
-          setPreviewLaunchError(errorMsg)
-          notification.warning({
-            message: '项目预览启动失败',
-            description: `${errorMsg}，可在预览区查看详情`,
-            placement: 'bottomRight',
-            duration: 3
-          })
-        }
-      })
-      .catch((err) => {
-        notification.close(loadingKey)
-        const launchStillCurrent =
-          launchRunIdRef.current === launchRunId &&
-          activeLaunchWorkspaceRef.current === workspacePath &&
-          !launchCleanupPendingRef.current
-        if (!launchStillCurrent) return
-        const errorMsg = err instanceof Error ? err.message : '网络请求失败'
-        setPreviewBaseUrl('')
-        setPreviewLaunchError(errorMsg)
-      })
-    return () => {
-      launchCleanupPendingRef.current = true
-      launchCleanupTimerRef.current = window.setTimeout(() => {
-        if (
-          launchRunIdRef.current === launchRunId &&
-          activeLaunchWorkspaceRef.current === workspacePath
-        ) {
-          activeLaunchWorkspaceRef.current = ''
-        }
-      }, 0)
-    }
-  }, [application.id, application.projectParentPath, application.workspaceRoot])
 
   useEffect(() => {
     let active = true
@@ -605,6 +524,9 @@ function WorkbenchPage({
     const now = Date.now()
     const commitSha = mockCommitSha()
     const publishedLabel = releaseVersion.versionLabel
+    // 发布时把当前 lifecycle 固化进版本快照：版本是"当前资产快照"，回看历史版本
+    // 必须停在发布时刻的旅程位置，而不是退回新建时冻结的初始 collecting_requirement。
+    const releasedLifecycle = versionLifecycle
     setWorkspaceApplication((prev) => {
       const versions = (prev.versions || []).map((v) =>
         v.id === prev.currentVersionId
@@ -613,6 +535,7 @@ function WorkbenchPage({
               status: 'released' as const,
               releasedAt: now,
               description,
+              ...(releasedLifecycle ? { lifecycle: releasedLifecycle } : {}),
               gitRef: { commitSha, tag: releaseVersion.versionLabel, committedAt: now },
               artifactSummary: {
                 pageIds: prev.pages,
@@ -654,7 +577,7 @@ function WorkbenchPage({
     })
   }
 
-  /** 基于 historicalVersion 迭代：派生新顺序版本，lifecycle 重置回需求收集（进设计阶段），
+  /** 基于 historicalVersion 迭代：派生新顺序版本，lifecycle 重置回需求收集（进需求分析阶段），
    *  版本链以 currentHead 为父、restoredFromVersionId 标记内容来源，历史版本保持只读。 */
   const handleRollbackConfirm = (): void => {
     const restoredVersion = findVersion(workspaceApplication, rollbackTargetId)
@@ -663,7 +586,7 @@ function WorkbenchPage({
       setRollbackTargetId('')
       return
     }
-    const resetRevision = (applicationLifecycle?.revision ?? 0) + 1
+    const resetRevision = nextSyntheticLifecycleRevision(applicationLifecycle?.revision ?? 0)
     const initialLifecycle = {
       ...makeInitialLifecycle(application.id, application.name),
       revision: resetRevision
@@ -682,7 +605,7 @@ function WorkbenchPage({
       setViewingVersionId(next.id)
       autoPublishShownRef.current = false
       onApplicationLifecycleChange(initialLifecycle)
-      // 与发起新迭代一致：重置页面/接口开发任务，从设计阶段（迭代引导词）开始。
+      // 与发起新迭代一致：重置页面/接口开发任务，从需求分析阶段（迭代引导词）开始。
       setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
       setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
       setDevelopmentPlanningApiContracts(resetDevelopmentPlanningApiContracts)
@@ -692,7 +615,7 @@ function WorkbenchPage({
 
   // 确认发起新迭代后派生顺序版本，并清空本版本的任务完成态与对话上下文。
   const handleStartIterationConfirm = (): void => {
-    const resetRevision = (applicationLifecycle?.revision ?? 0) + 1
+    const resetRevision = nextSyntheticLifecycleRevision(applicationLifecycle?.revision ?? 0)
     const initialLifecycle = {
       ...makeInitialLifecycle(application.id, application.name),
       revision: resetRevision
@@ -753,6 +676,8 @@ function WorkbenchPage({
               onRequestEnterTesting={() => setTestingEntryRequest((count) => count + 1)}
               canEnterDevelopmentStage={developmentEntryAvailable}
               onRequestEnterDevelopment={() => setDevelopmentEntryRequest((count) => count + 1)}
+              canEnterPlanningStage={planningEntryAvailable}
+              onRequestEnterPlanning={() => setPlanningEntryRequest((count) => count + 1)}
               canEnterReviewStage={reviewEntryAvailable}
               onRequestEnterReview={() => setReviewEntryRequest((count) => count + 1)}
               developmentArtifactProgress={developmentArtifactProgress}
@@ -786,6 +711,8 @@ function WorkbenchPage({
                 onTestingEntryAvailableChange={setTestingEntryAvailable}
                 developmentEntryRequest={developmentEntryRequest}
                 onDevelopmentEntryAvailableChange={setDevelopmentEntryAvailable}
+                planningEntryRequest={planningEntryRequest}
+                onPlanningEntryAvailableChange={setPlanningEntryAvailable}
                 reviewEntryRequest={reviewEntryRequest}
                 onReviewEntryAvailableChange={setReviewEntryAvailable}
                 onDevelopmentArtifactProgressChange={setDevelopmentArtifactProgress}
@@ -795,12 +722,15 @@ function WorkbenchPage({
                 onTestCaseGenerationTaskTypeChange={setTestCaseGenerationTaskType}
                 backgroundTasksDrawer={backgroundTasksDrawer}
                 onOpenBackgroundTasks={toggleBackgroundTasksDrawer}
-                onOpenTemporaryConversation={openTemporaryConversation}
+                onOpenConversationManagement={openConversationManagement}
+                conversationDrawerOpen={auxiliaryDrawerMode === 'conversation-management'}
+                onConversationManagementReady={handleConversationManagementReady}
                 onCloseAuxiliaryDrawer={() => setAuxiliaryDrawerMode(null)}
                 backgroundTaskAcceptRequest={backgroundTaskAcceptRequest}
+                onRequestBackgroundTaskContinuation={handleAcceptBackgroundTask}
                 onBackgroundTaskAcceptanceSettled={handleBackgroundTaskAcceptanceSettled}
               />
-              {/* 后台任务与临时对话抽屉：统一挂在裁剪宿主内，从左侧菜单栏右边线滑出，
+              {/* 后台任务与临时任务抽屉：统一挂在裁剪宿主内，从左侧菜单栏右边线滑出，
                   宿主裁剪保证抽屉任何时刻都不会越过菜单栏或盖到菜单栏之上。 */}
               <div className={cx('workbench-drawer-host')}>
                 {/* 抽屉不是模态图层：打开时铺一层透明遮罩拦截工作区首次点击用于快速收起，
@@ -829,8 +759,13 @@ function WorkbenchPage({
                 ))}
                 {auxiliaryDrawerMode ? (
                   <AuxiliaryDrawer
+                    conversationManagement={conversationManagementContent}
                     mode={auxiliaryDrawerMode}
                     onClose={() => setAuxiliaryDrawerMode(null)}
+                    onOpenConversationManagement={() =>
+                      setAuxiliaryDrawerMode('conversation-management')
+                    }
+                    onOpenTemporaryConversation={() => setAuxiliaryDrawerMode('temporary-conversation')}
                     onRetryTestCases={testCasePreparation.retry}
                     testPreparation={testCasePreparation.snapshot}
                   />
@@ -842,234 +777,25 @@ function WorkbenchPage({
         </WorkbenchPhaseProvider>
       ) : null}
 
-      {releaseVersion && publishModalOpen ? (
-        <Modal
-          centered
-          className={cx('workbench-publish-modal', 'is-generate')}
-          closable={!generating}
-          footer={null}
-          maskClosable={!generating}
-          onCancel={() => {
-            if (!generating) setPublishModalOpen(false)
-          }}
-          open
-          width={460}
-        >
-          <div className={cx('workbench-publish-modal-inner')}>
-            <header className={cx('workbench-publish-modal-header')}>
-              <span className={cx('workbench-publish-modal-icon')} aria-hidden="true">
-                <CloudUploadOutlined />
-              </span>
-              <span className={cx('workbench-publish-modal-title')}>
-                <strong>生成版本 {releaseVersion.versionLabel}</strong>
-                <small>打包应用资产 · 提交码云 · 打 Tag</small>
-              </span>
-            </header>
-            <div className={cx('workbench-publish-modal-body')}>
-              {generating ? (
-                <div className={cx('workbench-generate-progress')}>
-                  <Progress
-                    percent={Math.round(((generating.stepIndex + 1) / 3) * 100)}
-                    showInfo={false}
-                    strokeColor={{ from: '#6b3cf0', to: '#3f6cf5' }}
-                  />
-                  <Steps current={generating.stepIndex} direction="vertical" size="small">
-                    <Steps.Step title="打包应用资产" description="页面 / 接口 / 数据源 / 配置" />
-                    <Steps.Step title="提交码云" description="创建提交记录" />
-                    <Steps.Step
-                      title={`打 Tag ${releaseVersion.versionLabel}`}
-                      description="标记版本里程碑"
-                    />
-                  </Steps>
-                </div>
-              ) : (
-                <>
-                  <div className={cx('workbench-generate-reminder')}>
-                    <p className={cx('workbench-generate-reminder-title')}>
-                      生成版本将执行以下操作:
-                    </p>
-                    <ul>
-                      <li>打包本版本全部应用资产(页面 / 接口 / 数据源 / 配置)</li>
-                      <li>
-                        提交到码云仓库并打上版本 Tag <strong>{releaseVersion.versionLabel}</strong>
-                      </li>
-                      <li>
-                        生成后该版本<strong>锁定为只读</strong>,后续改动需「发起新迭代」
-                      </li>
-                    </ul>
-                  </div>
-                  <div className={cx('workbench-generate-field')}>
-                    <label className={cx('workbench-generate-field-label')}>
-                      <span className={cx('workbench-generate-required')}>*</span>
-                      版本日志
-                    </label>
-                    <Input.TextArea
-                      value={versionDescription}
-                      onChange={(e) => setVersionDescription(e.target.value)}
-                      rows={3}
-                      maxLength={200}
-                      showCount
-                      placeholder="请填写当前版本的提交日志"
-                    />
-                  </div>
-                </>
-              )}
-            </div>
-            <footer className={cx('workbench-publish-modal-footer')}>
-              <button
-                className={cx('workbench-publish-modal-cancel')}
-                type="button"
-                disabled={!!generating}
-                onClick={() => setPublishModalOpen(false)}
-              >
-                取消
-              </button>
-              <button
-                className={cx('workbench-publish-modal-confirm')}
-                type="button"
-                disabled={!!generating || !versionDescription.trim()}
-                onClick={handleGenerateVersion}
-              >
-                {generating ? (
-                  <>
-                    <LoadingOutlined aria-hidden="true" /> 生成中…
-                  </>
-                ) : (
-                  <>
-                    <CloudUploadOutlined aria-hidden="true" /> 确认生成
-                  </>
-                )}
-              </button>
-            </footer>
-          </div>
-        </Modal>
-      ) : null}
-
-      {viewedVersion && iterationModalOpen ? (
-        <Modal
-          centered
-          className={cx('workbench-publish-modal')}
-          closable
-          footer={null}
-          onCancel={() => setIterationModalOpen(false)}
-          open
-          width={420}
-        >
-          <div className={cx('workbench-publish-modal-inner')}>
-            <header className={cx('workbench-publish-modal-header')}>
-              <span
-                className={cx('workbench-publish-modal-icon', 'is-iteration')}
-                aria-hidden="true"
-              >
-                <PlusOutlined />
-              </span>
-              <span className={cx('workbench-publish-modal-title')}>
-                <strong>发起新迭代</strong>
-                <small>创建新版本并重新进入设计阶段</small>
-              </span>
-            </header>
-            <div className={cx('workbench-publish-modal-body')}>
-              <p className={cx('workbench-publish-modal-lead')}>
-                将基于{' '}
-                <strong className={cx('workbench-publish-modal-version')}>
-                  {viewedVersion.versionLabel}
-                </strong>
-                创建 v{viewedVersion.major}.{viewedVersion.minor + 1}
-                。新版本会从设计阶段开始，使用全新的对话记录。
-              </p>
-              <div className={cx('workbench-publish-modal-meta')}>
-                <CheckCircleFilled aria-hidden="true" /> 已生成版本保持锁定，可随时切换查看
-              </div>
-            </div>
-            <footer className={cx('workbench-publish-modal-footer')}>
-              <button
-                className={cx('workbench-publish-modal-cancel')}
-                type="button"
-                onClick={() => setIterationModalOpen(false)}
-              >
-                取消
-              </button>
-              <button
-                className={cx('workbench-publish-modal-confirm')}
-                type="button"
-                onClick={handleStartIterationConfirm}
-              >
-                <PlusOutlined aria-hidden="true" /> 确认发起
-              </button>
-            </footer>
-          </div>
-        </Modal>
-      ) : null}
-
-      {rollbackTargetId ? (
-        <Modal
-          centered
-          className={cx('workbench-publish-modal')}
-          closable
-          footer={null}
-          onCancel={() => setRollbackTargetId('')}
-          open
-          width={420}
-        >
-          <div className={cx('workbench-publish-modal-inner')}>
-            <header className={cx('workbench-publish-modal-header')}>
-              <span
-                className={cx('workbench-publish-modal-icon', 'is-rollback')}
-                aria-hidden="true"
-              >
-                <HistoryOutlined />
-              </span>
-              <span className={cx('workbench-publish-modal-title')}>
-                <strong>基于此版本迭代</strong>
-                <small>以历史版本为基础生成新迭代版本</small>
-              </span>
-            </header>
-            <div className={cx('workbench-publish-modal-body')}>
-              <p className={cx('workbench-publish-modal-lead')}>
-                将基于{' '}
-                <strong className={cx('workbench-publish-modal-version')}>
-                  {findVersion(workspaceApplication, rollbackTargetId)?.versionLabel || '所选版本'}
-                </strong>{' '}
-                的内容生成新迭代版本{' '}
-                <strong className={cx('workbench-publish-modal-version')}>
-                  {(() => {
-                    const head = findVersion(workspaceApplication, activeVersionId)
-                    return head ? `v${head.major}.${head.minor + 1}` : '新版本'
-                  })()}
-                </strong>
-                ，以该历史版本为基础继续开发。原有版本保持只读、可随时切换查看，不会被覆盖。
-              </p>
-              <div className={cx('workbench-publish-modal-meta')}>
-                <CheckCircleFilled aria-hidden="true" /> 历史版本保持只读，可随时切换查看
-              </div>
-            </div>
-            <footer className={cx('workbench-publish-modal-footer')}>
-              <button
-                className={cx('workbench-publish-modal-cancel')}
-                type="button"
-                onClick={() => setRollbackTargetId('')}
-              >
-                取消
-              </button>
-              <button
-                className={cx('workbench-publish-modal-confirm')}
-                type="button"
-                onClick={handleRollbackConfirm}
-              >
-                <HistoryOutlined aria-hidden="true" /> 确认迭代
-              </button>
-            </footer>
-          </div>
-        </Modal>
-      ) : null}
-
-      {versionSwitching ? (
-        <div className={cx('workbench-version-switching-mask')} role="status" aria-live="polite">
-          <div className={cx('workbench-version-switching-card')}>
-            <RichLoading bare title={`正在加载 ${versionSwitching.targetLabel} 版本应用资产…`} />
-          </div>
-        </div>
-      ) : null}
+      <WorkbenchVersionModals
+        activeVersionId={activeVersionId}
+        application={workspaceApplication}
+        generating={generating}
+        iterationBaseVersionId={viewedVersion && iterationModalOpen ? viewedVersion.id : undefined}
+        publishDescription={versionDescription}
+        publishVersionLabel={
+          releaseVersion && publishModalOpen ? releaseVersion.versionLabel : undefined
+        }
+        rollbackTargetVersionId={rollbackTargetId || undefined}
+        switchingTargetLabel={versionSwitching?.targetLabel}
+        onCancelPublish={() => setPublishModalOpen(false)}
+        onCancelIteration={() => setIterationModalOpen(false)}
+        onCancelRollback={() => setRollbackTargetId('')}
+        onConfirmIteration={handleStartIterationConfirm}
+        onConfirmRollback={handleRollbackConfirm}
+        onDescriptionChange={setVersionDescription}
+        onGenerate={handleGenerateVersion}
+      />
 
       {entryStage !== 'ready' ? (
         <div

@@ -697,7 +697,58 @@
   border-top: 1px solid var(--wb-border);
 }
 
-/* 设计阶段产物授权操作行（CodeX 式，非卡片）：产物已生成状态 + 编辑 + 确认保存 */
+/* 已提交的历史澄清卡：保持向导形态可翻页回看，但输入控件与按钮整体灰化为只读观感。
+   禁用态只用静态置灰表达，不改变鼠标光标（通用交互原则见 PROTOTYPE_CONTEXT.md 十一）。 */
+.@{class-prefix}-workflow-run-card-readonly {
+  .@{class-prefix}-workflow-clarification-title {
+    .ant-typography.ant-typography-secondary {
+      color: var(--wb-text-tertiary);
+    }
+
+    .@{class-prefix}-workflow-required-hint.@{class-prefix}-required {
+      color: var(--wb-text-tertiary);
+      background: var(--wb-surface-subtle);
+    }
+  }
+
+  .@{class-prefix}-workflow-clarification-option,
+  .ant-radio-wrapper,
+  .ant-checkbox-wrapper {
+    color: var(--wb-text-tertiary);
+    cursor: default;
+  }
+
+  .ant-input[disabled] {
+    color: var(--wb-text-tertiary);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+    cursor: default;
+  }
+
+  .ant-radio-disabled,
+  .ant-checkbox-disabled,
+  .ant-radio-wrapper-disabled,
+  .ant-checkbox-wrapper-disabled,
+  input:disabled {
+    cursor: default;
+  }
+
+  .@{class-prefix}-workflow-clarification-nav .ant-btn {
+    color: var(--wb-text-tertiary);
+    background: transparent;
+    border-color: var(--wb-border);
+    box-shadow: none;
+
+    &:hover,
+    &:focus {
+      color: var(--wb-text-secondary);
+      background: var(--wb-surface-subtle);
+      border-color: var(--wb-border-strong);
+    }
+  }
+}
+
+/* 需求分析/项目规划阶段产物授权操作行（CodeX 式，非卡片）：产物已生成状态 + 编辑 + 确认保存 */
 .@{class-prefix}-artifact-auth-bar {
   display: flex;
   align-items: center;
@@ -953,7 +1004,9 @@
 
 @import './WorkflowRunCardConsole.less';
 
-// 内嵌到“确认执行用例”节点时复用控制台卡片语义，并保留紧凑的矩形边界。
+// 内嵌卡由流程节点标题承担语义，不再渲染“节点名 + 卡片标题”两层标题；
+// 但标题让位不等于框体让位：紧凑动作行沿用强调色描边承载，
+// 问答卡交给内层澄清框承担背景边框，视觉与独立澄清卡保持一致。
 .@{class-prefix}-workflow-run-card-embedded {
   gap: 7px;
   min-height: 42px;
@@ -965,4 +1018,72 @@
   border: 1px solid color-mix(in srgb, var(--wb-accent) 55%, var(--wb-border-strong));
   border-radius: 8px;
   box-shadow: 0 14px 30px rgba(45, 30, 104, 0.04);
+
+  // 问答类内嵌卡：外层卡壳整体退场（避免与澄清框形成双框，也去掉控制台的顶部光线），
+  // 由内层澄清框承担背景边框，恢复正常内边距与操作区分隔线，并去掉独立卡的固定行高。
+  &.@{class-prefix}-workflow-run-card-question {
+    gap: 0;
+    min-height: 0;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+
+    &::before {
+      display: none;
+    }
+
+    .@{class-prefix}-workflow-clarification {
+      gap: 10px;
+      padding: 12px 14px;
+      background: var(--wb-surface);
+      border: 1px solid var(--wb-border-strong);
+      border-radius: 8px;
+    }
+
+    .@{class-prefix}-workflow-clarification-body {
+      display: flex;
+      height: auto;
+      min-height: 0;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .@{class-prefix}-workflow-clarification-question {
+      gap: 6px;
+      padding-top: 0;
+      border-top: 0;
+    }
+
+    .@{class-prefix}-workflow-clarification-nav {
+      gap: 8px;
+      margin-top: 0;
+      padding-top: 12px;
+    }
+
+    // 问题行单行化：向导进度“第 X / Y 项”居行首，问题超长省略、必填/选填靠右，
+    // 整行不再换行，卡片压缩为“问题行 + 作答区 + 操作行”三段紧凑结构。
+    .@{class-prefix}-workflow-clarification-title {
+      align-items: center;
+
+      .@{class-prefix}-workflow-clarification-stepper-header {
+        flex: 0 0 auto;
+      }
+
+      .@{class-prefix}-workflow-clarification-question-text.ant-typography {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+
+    // 作答区按最高的单行控件（单行文本域）取最小高度，保证各步骤的按钮行纵向位置恒定，
+    // 演示时连续点击上一步/下一步不需要挪动鼠标找按钮。
+    .@{class-prefix}-workflow-clarification-question {
+      min-height: 60px;
+    }
+  }
 }

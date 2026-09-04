@@ -15,7 +15,7 @@ export type SessionIdentity = {
   workspaceRoot: string
 }
 
-export type SessionRunStatus = 'running' | 'stopping'
+export type SessionRunStatus = 'running' | 'stopping' | 'awaiting_user'
 
 export function sessionRuntimeKey(
   workspaceRoot: string,

@@ -17,7 +17,7 @@ const { Panel } = Collapse;
 const { Text } = Typography;
 const { TextArea } = Input;
 
-/** detail_review 确认卡精简为授权行（参考设计阶段产物授权）：设计产物在右侧文档区查看/编辑，
+/** detail_review 确认卡精简为授权行（参考需求分析/项目规划阶段产物授权）：产物在右侧文档区查看/编辑，
  * 对话区只保留「已生成 + 确认保存」。 */
 /** 在历史消息中概括本轮已确认的页面、接口及 API 契约产物。 */
 export function DetailReviewAuthBar({

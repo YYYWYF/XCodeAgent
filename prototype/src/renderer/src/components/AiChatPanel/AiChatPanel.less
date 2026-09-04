@@ -277,3 +277,32 @@
     cursor: pointer;
   }
 }
+
+.@{class-prefix}-conversation-view-notice {
+  display: flex;
+  min-height: 38px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 14px;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  line-height: 17px;
+  background: var(--wb-accent-soft);
+  border-bottom: 1px solid var(--wb-accent-border);
+
+  button {
+    flex: 0 0 auto;
+    padding: 0;
+    color: var(--wb-accent);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+
+    &:disabled {
+      color: var(--wb-text-tertiary);
+      cursor: not-allowed;
+    }
+  }
+}

@@ -95,6 +95,8 @@ type UseChatSessionsResult = {
   createReviewSession: () => Promise<SessionIdentity>
   createTestingSession: () => Promise<SessionIdentity>
   createAcceptanceSession: () => Promise<SessionIdentity>
+  /** 开发阶段按产物边界新建一条开发对话。 */
+  createDevelopmentSession: () => Promise<SessionIdentity>
   ensureDevelopmentSession: () => Promise<SessionIdentity>
   ensureAnalysisSession: () => Promise<SessionIdentity>
   ensurePlanningSession: () => Promise<SessionIdentity>
@@ -120,7 +122,7 @@ type UseChatSessionsResult = {
     endpointContext?: RelatedEndpointContext
   ) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
-  handleCreateSessionFromList: (sessionKind?: WorkbenchSessionKind) => void
+  handleCreateSessionFromList: (sessionKind?: WorkbenchSessionKind) => Promise<SessionIdentity>
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
   handleRenameSession: (sessionId: string, title: string) => Promise<void>
@@ -259,7 +261,9 @@ export function useChatSessions({
       }
       setSessionSummaries((current) => ({ ...current, [mode]: nextSessions }))
       // 会话列表只负责恢复目录，绝不擅自打开“最近一条”会话；当前会话由阶段入口或用户选择决定。
-      if (nextSessions.length === 0) {
+      // 目录为空不等于没有当前会话：运行期已打开的会话（含尚未物化的草稿）不能被一次
+      // 空目录重载踢下线，否则阶段入口会锁死在“正在切换阶段”，任务管理也显示为空。
+      if (nextSessions.length === 0 && !activeSessionIdsRef.current[mode]) {
         activeSessionIdsRef.current = { ...activeSessionIdsRef.current, [mode]: undefined }
         setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
       }
@@ -379,7 +383,8 @@ export function useChatSessions({
     endpointContext?: RelatedEndpointContext,
     customTitle?: string,
     materializeImmediately = false,
-    sessionKind?: WorkbenchSessionKind
+    sessionKind?: WorkbenchSessionKind,
+    createdByUser = false
   ): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
       throw new Error('创建会话前需要选择工作目录。')
@@ -400,6 +405,7 @@ export function useChatSessions({
       sessionKind
     })
     const session: ChatSessionRecord = {
+      createdByUser,
       id: sessionId,
       title:
         customTitle ||
@@ -594,7 +600,7 @@ export function useChatSessions({
     return createNewSession(undefined, undefined, undefined, TESTING_TITLE, true, 'testing')
   }
 
-  /** 创建或复用开发阶段唯一的应用级主对话，产物目标不再决定会话身份。 */
+  /** 创建或复用开发阶段的主对话「应用开发」；产物目标不再决定会话身份。 */
   const ensureDevelopmentSession = async (): Promise<SessionIdentity> => {
     const cachedDevelopment = developmentSessionRef.current
     if (
@@ -714,7 +720,7 @@ export function useChatSessions({
     return identity?.sessionKind === sessionKind ? identity : undefined
   }
 
-  /** 创建或复用产品 Agent 的分析阶段默认会话，只持有需求文档。 */
+  /** 创建或复用产品 Agent 的需求分析阶段默认会话，只持有需求文档。 */
   const ensureAnalysisSession = async (): Promise<SessionIdentity> => {
     const activeRuntimeSession = activeRuntimeDesignSession('analysis')
     if (activeRuntimeSession) return activeRuntimeSession
@@ -735,7 +741,7 @@ export function useChatSessions({
     return createNewSession(undefined, undefined, undefined, '需求分析', true, 'analysis')
   }
 
-  /** 创建或复用项目 Agent 的计划阶段默认会话，只持有项目计划。 */
+  /** 创建或复用项目 Agent 的项目规划阶段默认会话，只持有项目计划。 */
   const ensurePlanningSession = async (): Promise<SessionIdentity> => {
     const activeRuntimeSession = activeRuntimeDesignSession('planning')
     if (activeRuntimeSession) return activeRuntimeSession
@@ -783,9 +789,28 @@ export function useChatSessions({
   }
 
   /** 从对话视图显式创建当前阶段的额外持久会话，创建完成即成为当前会话。 */
-  const handleCreateSessionFromList = (sessionKind: WorkbenchSessionKind = 'general'): void => {
-    if (!application.workspaceRoot) return
-    createNewSession(undefined, undefined, undefined, '新对话', true, sessionKind).catch(reportSessionError)
+  const handleCreateSessionFromList = async (
+    sessionKind: WorkbenchSessionKind = 'general'
+  ): Promise<SessionIdentity> => {
+    if (!application.workspaceRoot) throw new Error('创建会话前需要选择工作目录。')
+    // 新任务默认命名「新任务」；首轮操作完成后由 AI 按产物/阶段自动命名，
+    // 用户也可在对话区顶部标题重命名——不再用「类型 + 序号」的机械命名。
+    return createNewSession(undefined, undefined, undefined, '新任务', true, sessionKind, true)
+  }
+
+  /**
+   * 开发阶段按产物边界新建一条开发对话：开发者可以把关联页面/接口归入同一条对话推进，
+   * 「应用开发」主对话始终保持存在；新增对话以序号命名并立即成为当前会话。
+   */
+  const createDevelopmentSession = async (): Promise<SessionIdentity> => {
+    if (!application.workspaceRoot) {
+      throw new Error('创建会话前需要选择工作目录。')
+    }
+    const existingCount = sessionSummariesRef.current[editorMode].filter(
+      (session) => session.sessionKind === 'development'
+    ).length
+    const title = existingCount === 0 ? '应用开发' : `开发对话 ${existingCount + 1}`
+    return createNewSession(undefined, undefined, undefined, title, true, 'development')
   }
 
   const reportSessionError = (caughtError: unknown): void => {
@@ -867,15 +892,28 @@ export function useChatSessions({
     if (!application.workspaceRoot) return
     // 草稿会话的用户消息只保存在运行时；首条 Agent 回复完成后才物化为正式对话。
     if (transientSessionIdsRef.current.has(input.sessionId) && input.materialize === false) return
-    const existingSummary = sessionSummariesRef.current[input.editorMode].find(
+    let existingSummary = sessionSummariesRef.current[input.editorMode].find(
       (summary) => summary.id === input.sessionId
     )
-    const isDevelopmentMainSession =
-      (input.sessionKind || existingSummary?.sessionKind) === 'development' &&
-      (input.titleFrom === '应用开发' || existingSummary?.title === '应用开发')
+    if (!existingSummary) {
+      // 目录刷新竞态：刚物化的会话摘要可能还没进入内存目录（异步加载/热切换期间），
+      // 从持久层补读一次既有记录，避免后续保存把已命名会话的标题覆盖成“新对话”。
+      const persisted = await readChatSession(
+        application.workspaceRoot,
+        input.editorMode,
+        input.sessionId
+      ).catch(() => undefined)
+      if (persisted) {
+        existingSummary = { ...persisted, messageCount: persisted.messages.length }
+      }
+    }
+    // 开发阶段对话（主对话与按边界拆分的对话）一律不绑定产物：产物写入归属由活动 Workflow 承载，
+    // 对话只负责交互轨迹，因此摘要上不落 pageId/endpoint 身份。
+    const isDevelopmentSession = (input.sessionKind || existingSummary?.sessionKind) === 'development'
     const inferredEndpoint = inferEndpointContextFromMessages(input.messages)
     const now = Date.now()
     const session: ChatSessionRecord = {
+      createdByUser: existingSummary?.createdByUser,
       // 继续执行工作流时沿用本次会话已经确认的文件，不能让新消息把正式文件快照覆盖掉。
       savedFiles: existingSummary?.savedFiles,
       id: input.sessionId,
@@ -893,17 +931,16 @@ export function useChatSessions({
           : existingSummary?.title || '新对话',
       editorMode: input.editorMode,
       threadId: input.threadId,
-      apiContractId: isDevelopmentMainSession
+      apiContractId: isDevelopmentSession
         ? undefined
         : input.apiContractId || existingSummary?.apiContractId || inferredEndpoint.apiContractId,
-      endpointId: isDevelopmentMainSession
+      endpointId: isDevelopmentSession
         ? undefined
         : input.endpointId || existingSummary?.endpointId || inferredEndpoint.endpointId,
-      endpointLabel:
-        isDevelopmentMainSession
-          ? undefined
-          : input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint.endpointLabel,
-      pageId: isDevelopmentMainSession ? undefined : input.pageId || existingSummary?.pageId,
+      endpointLabel: isDevelopmentSession
+        ? undefined
+        : input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint.endpointLabel,
+      pageId: isDevelopmentSession ? undefined : input.pageId || existingSummary?.pageId,
       sessionKind: input.sessionKind || existingSummary?.sessionKind,
       versionId: application.currentVersionId,
       workspaceRoot: application.workspaceRoot,
@@ -924,6 +961,7 @@ export function useChatSessions({
     createReviewSession,
     createTestingSession,
     createAcceptanceSession,
+    createDevelopmentSession,
     ensureDevelopmentSession,
     ensureAnalysisSession,
     ensurePlanningSession,

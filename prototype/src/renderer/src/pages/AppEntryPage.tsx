@@ -1,12 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
-import { message } from 'antd'
 import { SessionRuntimeProvider } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
-import { saveApplication } from '../components/Welcome/applicationService'
-import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
-import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlannings'
 import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
-import { getApplicationLifecycle } from '../service/applicationLifecycle'
-import { canOpenApplicationWorkbench } from '../service/applicationStorage'
 import { stopProjectPreview } from '../service/projectLaunch'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import WelcomePage from './WelcomePage'
@@ -19,21 +13,6 @@ function applicationPreviewWorkspace(application: ApplicationConfig): string {
   return application.workspaceRoot || application.projectParentPath || ''
 }
 
-// 设计阶段(规划中)的初始化 stage：这些状态的应用直接进工作台设计阶段，不弹独立规划框。
-const DESIGN_PHASE_STAGES = new Set([
-  'collecting_requirement',
-  'analyzing_requirement',
-  'awaiting_requirement_clarification',
-  'generating_requirement_spec',
-  'awaiting_requirement_confirmation',
-  'generating_project_plan',
-  'awaiting_project_plan_confirmation'
-])
-
-function isDesignPhaseStage(lifecycle?: ApplicationLifecycle): boolean {
-  return Boolean(lifecycle && DESIGN_PHASE_STAGES.has(lifecycle.initialization?.stage || ''))
-}
-
 /** 在应用根部持有不会随工作台显隐而销毁的会话运行管理器。 */
 export default function AppEntryPage(): JSX.Element {
   return (
@@ -43,7 +22,9 @@ export default function AppEntryPage(): JSX.Element {
   )
 }
 
-// 在欢迎页、多个全屏规划会话与应用工作台之间维护顶层导航。
+// 在欢迎页与应用工作台之间维护顶层导航。
+// 新建旅程的规则：需求确认与项目规划全部在工作台需求分析/项目规划阶段内完成，
+// 任何应用（含仍在需求分析/项目规划阶段的应用）都直接进入工作台，不再有独立规划弹窗。
 function AppEntryContent(): JSX.Element {
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
@@ -83,104 +64,42 @@ function AppEntryContent(): JSX.Element {
     [mergeApplicationLifecycle, stopPreviousPreviewIfNeeded]
   )
 
-  const planningController = useActiveApplicationPlannings({
-    onOpenWorkbench: openWorkbench
-  })
-
-  // 新建应用：创建完直接进工作台（设计阶段），规划在工作台内完成，不弹独立规划框。
+  // 新建应用：创建完直接进工作台（需求分析阶段），规划在工作台内完成。
   const handleOpenWorkbenchAfterCreate = useCallback(
-    async (application: ApplicationConfig, lifecycle: ApplicationLifecycle) => {
-      planningController.dismissPlanning(application.id)
-      await openWorkbench(application, lifecycle)
+    (application: ApplicationConfig, lifecycle: ApplicationLifecycle) => {
+      void openWorkbench(application, lifecycle)
     },
-    [openWorkbench, planningController]
+    [openWorkbench]
   )
 
-  // 从工作台直接返回欢迎页，后台任务由保持挂载的工作台和规划页继续运行。
+  // 从最近项目打开应用：仍处于需求分析/项目规划阶段的应用也直接进工作台；生命周期由工作台冷启动自行校准。
+  const handleOpenApplication = useCallback(
+    (application: ApplicationConfig) => {
+      void openWorkbench(application)
+    },
+    [openWorkbench]
+  )
+
+  // 从工作台直接返回欢迎页，工作台保持挂载，后台任务与工作流继续运行。
   const handleReturnWelcome = (): void => {
     setActiveSurface('welcome')
   }
 
-  // 已完成应用直接进入工作台；未完成应用只打开其对应的独立规划会话。
-  const handleOpenApplication = useCallback(
-    async (application: ApplicationConfig): Promise<void> => {
-      if (canOpenApplicationWorkbench(application)) {
-        planningController.dismissPlanning(application.id)
-        await openWorkbench(application)
-        return
-      }
-      try {
-        const lifecycle = await getApplicationLifecycle(application)
-        // 设计阶段(规划中)的应用也直接进工作台，规划在工作台设计阶段内完成。
-        if (canOpenApplicationWorkbench(application, lifecycle) || isDesignPhaseStage(lifecycle)) {
-          const confirmedApplication = application.planningConfirmedAt
-            ? application
-            : { ...application, planningConfirmedAt: Date.now() }
-          if (confirmedApplication !== application) {
-            await saveApplication(confirmedApplication)
-          }
-          planningController.dismissPlanning(application.id)
-          await openWorkbench(confirmedApplication, lifecycle)
-          return
-        }
-      } catch (error) {
-        console.warn('读取应用生命周期失败', error)
-      }
-      const hasActivePlanning = planningController.activePlannings.some(
-        (planning) => planning.application.id === application.id
-      )
-      if (hasActivePlanning) {
-        planningController.showPlanning(application.id)
-        return
-      }
-      message.info('请先完成并确认应用计划')
-    },
-    [openWorkbench, planningController]
-  )
-
-  const planningVisible = Boolean(planningController.visiblePlanningId)
-
-  // 切换欢迎页/工作台/规划会话时同步失焦：被隐藏的 surface 会带 aria-hidden，
+  // 切换欢迎页/工作台时同步失焦：被隐藏的 surface 会带 aria-hidden，
   // 若焦点仍停留在其内按钮上，浏览器会打印 a11y 警告，演示时造成控制台噪音。
   useLayoutEffect(() => {
     const active = document.activeElement as HTMLElement | null
     if (active && typeof active.blur === 'function') active.blur()
-  }, [activeSurface, planningVisible])
+  }, [activeSurface])
 
   return (
     <>
-      <div
-        aria-hidden={activeSurface !== 'welcome' || planningVisible}
-        hidden={activeSurface !== 'welcome' || planningVisible}
-      >
+      <div aria-hidden={activeSurface !== 'welcome'} hidden={activeSurface !== 'welcome'}>
         <WelcomePage
           onOpenApplication={handleOpenApplication}
           onOpenWorkbenchAfterCreate={handleOpenWorkbenchAfterCreate}
         />
       </div>
-
-      {planningController.activePlannings.map((planning) => (
-        <ApplicationPagePlanningModal
-          application={planning.application}
-          initialLifecycle={planning.lifecycle}
-          initialStatus={planning.status}
-          initialWorkflow={planning.workflow}
-          key={planning.threadId}
-          onConfirmed={() => planningController.onPlanningConfirmed(planning.application.id)}
-          onReturnHome={planningController.returnHome}
-          onStatusChange={(status) =>
-            planningController.updatePlanningStatus(planning.application.id, status)
-          }
-          onStopHandlerChange={(handler) =>
-            planningController.registerStopHandler(planning.application.id, handler)
-          }
-          onWorkflowChange={(workflow) =>
-            planningController.updatePlanningWorkflow(planning.application.id, workflow)
-          }
-          threadId={planning.threadId}
-          visible={planningController.visiblePlanningId === planning.application.id}
-        />
-      ))}
 
       {activeApplication ? (
         <div

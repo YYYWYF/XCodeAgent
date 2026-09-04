@@ -11,7 +11,7 @@ import { cx } from '../../../../utils'
 import type { WorkspaceDocKey } from '../../types'
 import './RightPanelTabs.less'
 
-/** 工作区 tab 键：阶段专属工作台、预览/源码/文档/过程与设计阶段文档。 */
+/** 工作区 tab 键：阶段专属工作台、预览/源码/文档/过程与需求分析/项目规划阶段文档。 */
 export type WorkspaceTabKey =
   | 'preview'
   | 'application-preview'

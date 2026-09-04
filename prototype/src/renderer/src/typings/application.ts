@@ -359,7 +359,6 @@ export interface ApplicationConfig extends ApplicationSchemaConfig {
   dynamicRouteDescription?: string;
   schema: ApplicationSchemaConfig;
   requirementPlan?: RequirementDevelopmentPlan;
-  planningConfirmedAt?: number;
   createdAt: number;
   /** 应用所有版本里程碑,按时间正序。 */
   versions?: ApplicationVersion[];

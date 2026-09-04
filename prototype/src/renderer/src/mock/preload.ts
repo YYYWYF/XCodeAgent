@@ -44,6 +44,64 @@ import { isEndpointDesigned, isPageDesigned } from './designState'
 // 预览地址跟随当前页面主机名：本机访问走 127.0.0.1，局域网设备访问时自动指向原型所在机器。
 const MOCK_APPLICATION_PREVIEW_URL = `http://${window.location.hostname || '127.0.0.1'}:5190`
 
+// 用户创建应用的持久化键：mock 环境里预置演示应用恒以静态数据为准（保证演示可重放），
+// 用户新建的应用落 localStorage，返回欢迎页或刷新后仍在"最近项目"里可重新打开。
+const USER_APPLICATIONS_KEY = 'xcodeagent:prototype:user-applications'
+
+/** 规范化工作区路径用于占用比较：统一分隔符并忽略大小写（Windows 路径语义）。 */
+function normalizeWorkspacePath(path: unknown): string {
+  return String(path ?? '')
+    .trim()
+    .replace(/[\\/]+/g, '\\')
+    .toLowerCase()
+}
+
+/** 读取预置应用 + 本机持久化的用户应用；按 id 与工作区路径去重，预置应用优先。 */
+function mergedMockApplications(): typeof mockApplications {
+  const presetIds = new Set<string>(mockApplications.map((app) => app.id))
+  // 预置演示应用的工作区路径不允许用户应用重复登记：新建旅程必须选择其它目录，
+  // 否则最近项目会出现同路径的两条应用，回退演示与新旅程互相污染。
+  const presetPaths = new Set(
+    mockApplications.map((app) => normalizeWorkspacePath(app.workspaceRoot))
+  )
+  let saved: unknown[] = []
+  try {
+    const raw = window.localStorage.getItem(USER_APPLICATIONS_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    if (Array.isArray(parsed)) saved = parsed
+  } catch {
+    saved = []
+  }
+  const userApps = saved.filter(
+    (app) =>
+      app &&
+      typeof app === 'object' &&
+      typeof (app as { id?: unknown }).id === 'string' &&
+      !presetIds.has((app as { id: string }).id) &&
+      !presetPaths.has(normalizeWorkspacePath((app as { workspaceRoot?: unknown }).workspaceRoot))
+  )
+  return [...mockApplications, ...(userApps as typeof mockApplications)]
+}
+
+/** 只把非预置应用写入持久层；预置应用的展示状态不落盘，刷新即恢复演示基线。 */
+function persistUserApplications(applications: unknown[]): unknown[] {
+  const presetIds = new Set<string>(mockApplications.map((app) => app.id))
+  const list = Array.isArray(applications) ? applications : []
+  const userApps = list.filter(
+    (app) =>
+      app &&
+      typeof app === 'object' &&
+      typeof (app as { id?: unknown }).id === 'string' &&
+      !presetIds.has((app as { id: string }).id)
+  )
+  try {
+    window.localStorage.setItem(USER_APPLICATIONS_KEY, JSON.stringify(userApps))
+  } catch {
+    // 隐私模式等场景写入失败时退化为内存态，不影响当次演示。
+  }
+  return list
+}
+
 // 模拟 ipcRenderer.invoke 的成功返回。
 const ok = <T>(data: T): Promise<T> => Promise.resolve(data)
 const noop = (): Promise<unknown> => Promise.resolve({})
@@ -162,17 +220,34 @@ const xcodeAgent = {
     reauthenticate: () => ok({ authenticated: true })
   },
   applications: {
-    load: () => ok({ applications: mockApplications }),
-    save: (applications: unknown[]) => ok({ applications }),
+    load: () => ok({ applications: mergedMockApplications() }),
+    save: (applications: unknown[]) => ok({ applications: persistUserApplications(applications) }),
     deleteProject: noop,
     deleteAgentDirectory: noop
   },
   workspace: {
-    // CreateApplicationAction 期望 { canceled, path }（目录选择器）
-    selectDirectory: () => ok({ canceled: false, path: newAppScenario().workspaceRoot }),
-    // CreateApplicationAction 用返回值的 .path 作为 application.workspaceRoot
-    createProjectDirectory: (payload: { workspacePath?: string }) =>
-      ok({ path: payload?.workspacePath || appDataByWorkspace().workspaceRoot }),
+    // CreateApplicationAction 期望 { canceled, path }（目录选择器）。
+    // mock 选择器返回一个全新目录：预置演示应用的工作区路径不能被新建旅程复用，
+    // 否则最近项目会出现同路径的两条应用，回退演示与新旅程互相污染。
+    selectDirectory: () => {
+      const demoRoot = newAppScenario().workspaceRoot
+      const demoParent = demoRoot.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]+$/, '')
+      return ok({ canceled: false, path: `${demoParent}\\new-app-${Date.now()}` })
+    },
+    // 拒绝复用已有应用的工作区目录，与桌面端“已有 XCodeAgent 应用目录不能复用”的规则一致；
+    // 手动输入预置演示应用路径同样会被拦截。
+    createProjectDirectory: (payload: { workspacePath?: string }) => {
+      const requested = normalizeWorkspacePath(payload?.workspacePath)
+      const occupied = mergedMockApplications().find(
+        (app) => normalizeWorkspacePath(app.workspaceRoot) === requested
+      )
+      if (occupied) {
+        return Promise.reject(
+          new Error(`该目录已被应用「${occupied.name}」使用，已有 XCodeAgent 应用目录不能复用。`)
+        )
+      }
+      return ok({ path: payload?.workspacePath || appDataByWorkspace().workspaceRoot })
+    },
     cloneTemplate: (payload: unknown) => ok(payload),
     writeTemplatePages: (payload: unknown) => ok(payload),
     readApplication: ({ workspaceRoot }: { workspaceRoot?: string }) =>
@@ -187,21 +262,26 @@ const xcodeAgent = {
     // 各应用镜像的对话历史来自 mock-data/{pms-new,pms-design,pms-dev}/chat-sessions.ts。
     listWorkspaces: () => ok([]),
     list: ({ workspaceRoot, editorMode, applicationId }: { workspaceRoot?: string; editorMode?: string; applicationId?: string }) => {
-      // 规划(设计)阶段的应用不返回已设计页会话，工作台只显示应用规划会话。
-      if (mockApplicationInPlanning(workspaceRoot || '', applicationId)) return ok({ sessions: [] })
-      const sessions = appDataByWorkspace(workspaceRoot).chatSessions(
-        workspaceRoot || '',
-        (editorMode || 'frontend') as never
-      ) as Array<{
-        id: string; title: string; editorMode: string; threadId: string; pageId?: string
-        savedFiles?: unknown[]; apiContractId?: string; endpointId?: string; sessionKind?: string; versionId?: string
-        createdAt: number; updatedAt: number; messages: unknown[]
-      }>
+      // 规划(需求分析/项目规划)阶段的应用不返回静态镜像的已设计页会话；但运行期保存的对话必须照常返回——
+      // 需求分析/项目规划旅程本就处于规划阶段集合，若连实时会话一起隐藏，任何一次目录重载
+      // 都会把默认常规对话清空，用户视角就是“默认对话点进去就没了”。
+      const inPlanning = mockApplicationInPlanning(workspaceRoot || '', applicationId)
+      const scriptedSessions = inPlanning
+        ? []
+        : (appDataByWorkspace(workspaceRoot).chatSessions(
+            workspaceRoot || '',
+            (editorMode || 'frontend') as never
+          ) as Array<{
+            id: string; title: string; editorMode: string; threadId: string; pageId?: string
+            createdByUser?: boolean; savedFiles?: unknown[]; apiContractId?: string; endpointId?: string; sessionKind?: string; versionId?: string
+            createdAt: number; updatedAt: number; messages: unknown[]
+          }>)
       // 合并走完的实时会话（页面/接口开发、审查），否则切回开发阶段后大纲点页面/接口，
       // list 只返回静态 mock，实时开发会话（messageCount>0）找不到 → 会话历史丢失。
       const saved = mockSavedSessions(workspaceRoot || '')
-      const merged = mergeMockSessions(sessions, saved)
+      const merged = mergeMockSessions(scriptedSessions, saved)
       const summaries = merged.map((s) => ({
+        createdByUser: s.createdByUser,
         id: s.id,
         title: s.title,
         editorMode: s.editorMode,
@@ -286,8 +366,18 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
   }
 
   if (path.includes('local-applications')) {
+    if ((init || {}).method === 'PUT') {
+      // 与 IPC mock 相同的持久化语义：只落非预置应用。
+      const rawBody = typeof (init || {}).body === 'string' ? ((init || {}).body as string) : ''
+      const body = rawBody ? JSON.parse(rawBody) : {}
+      persistUserApplications((body as { applications?: unknown[] }).applications || [])
+      return Promise.resolve(new Response(JSON.stringify({ applications: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+    }
     return Promise.resolve(
-      new Response(JSON.stringify({ applications: mockApplications }), {
+      new Response(JSON.stringify({ applications: mergedMockApplications() }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       })

@@ -1,11 +1,10 @@
 // 假 AG-UI HttpAgent：仅 lifecycle 动作返回统一信封，其余返回空 result。
 // 由 service/authentication.ts 在浏览器 mock 环境直接使用（不经 Vite 插件重定向）。
 import { appDataByWorkspace, mockApplications } from './fixtures'
-import { WORKSPACE_DOC_PATHS } from './workspaceFiles'
 import type { ApplicationLifecycle } from '../typings'
 
 // 模拟后端按工作区持久化的生命周期（appId 与阶段随动作演进）。
-// create → 进行中（收集需求）；complete_template_generation → 就绪；get → 返回已存状态。
+// create → 进行中（收集需求）；get → 返回已存状态。
 const lifecycleStore = new Map<string, { appId: string; appName: string; stage: string; status: string; threadId?: string }>()
 const createdLifecycleStore = new Map<string, { appId: string; appName: string; stage: string; status: string; threadId?: string }>()
 
@@ -60,13 +59,6 @@ function lifecyclePayload(threadId: string, action: Record<string, unknown>): Re
       status: 'running',
       threadId
     })
-  } else if (action.action === 'complete_template_generation') {
-    const current = createdLifecycleStore.get(requestedApplicationId) || lifecycleStore.get(workspaceRoot)
-    if (current) {
-      const next = { ...current, stage: 'ready_for_workbench', status: 'completed' }
-      if (createdLifecycleStore.has(current.appId)) createdLifecycleStore.set(current.appId, next)
-      else lifecycleStore.set(workspaceRoot, next)
-    }
   }
 
   const lifecycleApplicationId = requestedApplicationId || actionApplication?.id || ''
@@ -131,29 +123,6 @@ export function createMockHttpAgent(config: { url?: string; threadId?: string })
         subscriber?.onCustomEvent?.({ event: { name: 'application-lifecycle', value: payload } })
         subscriber?.onStateSnapshotEvent?.({ event: { snapshot: { applicationLifecycle: payload } } })
         return { result: { applicationLifecycle: payload }, status: 'completed' }
-      }
-      // 需求文档草稿保存：原样回传 spec + 一个需求文档 artifact。
-      const draftAction = props.requirementSpecDraft
-      if (draftAction && typeof draftAction === 'object') {
-        const spec = ((draftAction as Record<string, unknown>).spec as Record<string, unknown>) || {}
-        const draftPayload = {
-          schemaVersion: 1,
-          runId: `mock-spec-${Date.now()}`,
-          threadId,
-          status: 'completed',
-          action: 'save',
-          requirementSpec: spec,
-          artifact: {
-            id: 'requirement_spec',
-            name: '需求文档',
-            path: WORKSPACE_DOC_PATHS.requirementSpec,
-            format: 'markdown',
-            content: '# 需求文档（已编辑保存）\n\n已按你的编辑同步到 Markdown。'
-          }
-        }
-        subscriber?.onCustomEvent?.({ event: { name: 'requirement-spec-draft', value: draftPayload } })
-        subscriber?.onStateSnapshotEvent?.({ event: { snapshot: { requirementSpecDraft: draftPayload } } })
-        return { result: { requirementSpecDraft: draftPayload }, status: 'completed' }
       }
       return { result: {}, status: 'completed' }
     },

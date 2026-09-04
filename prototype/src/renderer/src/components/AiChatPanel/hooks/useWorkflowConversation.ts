@@ -23,6 +23,7 @@ import {
 } from '../directModificationMode'
 import {
   buildClarificationContinuationMessage,
+  workflowClarification,
   workflowOriginalRequest,
   type ClarificationAnswers
 } from '../components/WorkflowRunCard'
@@ -42,10 +43,8 @@ import {
   type SessionRunStatus
 } from './sessionRuntime'
 import {
-  planExecutionForPage,
   withWorkflowExecutionStatus,
-  workflowInteractionAvailability,
-  workflowResumeNode
+  workflowInteractionAvailability
 } from '../planExecutionMode'
 
 type SessionRunEntry = {
@@ -56,6 +55,8 @@ type SessionRunEntry = {
 
 type UseWorkflowConversationParams = {
   activeSession?: SessionIdentity
+  /** 用户显式持有编辑权限的常规任务；其它常规任务只能查看历史。 */
+  authorizedEditingSessionId?: string
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
@@ -69,7 +70,7 @@ type UseWorkflowConversationParams = {
   /** 当前是否处于开发阶段；仅此阶段允许主会话匹配任意产物目标。 */
   developmentPhase?: boolean
   designPhase?: boolean
-  /** 当前查看阶段是否为计划阶段，用于选择项目 Agent 的默认会话。 */
+  /** 当前查看阶段是否为项目规划阶段，用于选择项目 Agent 的默认会话。 */
   planningPhase?: boolean
   /** 当前是否处于测试阶段默认对话。 */
   testingPhase?: boolean
@@ -84,9 +85,9 @@ type UseWorkflowConversationParams = {
   ensureActiveSession: () => Promise<SessionIdentity>
   /** 创建/复用研发 Agent 的开发阶段主对话。 */
   ensureDevelopmentSession: () => Promise<SessionIdentity>
-  /** 创建/复用产品 Agent 的分析阶段默认会话。 */
+  /** 创建/复用产品 Agent 的需求分析阶段默认会话。 */
   ensureAnalysisSession: () => Promise<SessionIdentity>
-  /** 创建/复用项目 Agent 的计划阶段默认会话。 */
+  /** 创建/复用项目 Agent 的项目规划阶段默认会话。 */
   ensurePlanningSession: () => Promise<SessionIdentity>
   /** 创建/复用无页面归属的应用级会话(审查阶段专用)。 */
   ensureReviewSession: () => Promise<SessionIdentity>
@@ -117,14 +118,7 @@ type UseWorkflowConversationParams = {
 
 type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
-  directModificationRunning: boolean
   error?: string
-  handleAcceptPreview: () => Promise<boolean>
-  handleAdjustPlan: (feedback: string) => Promise<void>
-  handleEndPlan: (runId?: string) => Promise<void>
-  handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
-  handleRetryPlan: () => Promise<void>
-  handleStopPlan: (runId?: string) => Promise<void>
   handleSend: (
     workflowDebug?: WorkflowDebugOptions,
     explicitMessage?: string,
@@ -164,6 +158,7 @@ type UseWorkflowConversationResult = {
     answers: ClarificationAnswers
   ) => Promise<boolean>
   loading: boolean
+  editingSessionId?: string
   sessionRunStates: Record<string, SessionRunStatus>
   stopping: boolean
   workspaceBusy: boolean
@@ -273,6 +268,7 @@ function workflowSegmentKey(workflow?: WorkflowRunPayload): string {
 
 export function useWorkflowConversation({
   activeSession,
+  authorizedEditingSessionId,
   agUiSessionsRef,
   application,
   applicationLifecycle,
@@ -332,26 +328,35 @@ export function useWorkflowConversation({
       ? activeSession
       : undefined
   // 首次创建目标会话时 React 还未提交 activeSession；只接住同一页面、接口或自由对话的运行态，避免进度跨目标串线。
+  // 多开发对话并存时运行态必须归属当前会话（按 sessionId 收敛），禁止对话 A 的运行进度泄漏到对话 B。
   const activeRun =
     (matchingActiveSession ? runStates[matchingActiveSession.key] : undefined) ||
     Object.values(runStates).find(
       (entry) =>
         entry.identity.workspaceRoot === application.workspaceRoot &&
         entry.identity.editorMode === editorMode &&
-        sessionIdentityMatchesTarget(entry.identity, selectedTarget)
+        sessionIdentityMatchesTarget(entry.identity, selectedTarget) &&
+        (!activeSession || entry.identity.sessionId === activeSession.sessionId)
     )
   const activeRuntimeKey = matchingActiveSession?.key || activeRun?.identity.key
   const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
   const stopping = activeRun?.status === 'stopping'
-  const directModificationRunning = Boolean(activeRun?.directModification)
   const error = activeRuntimeKey ? errors[activeRuntimeKey] : undefined
   const activeWorkflow = activeRuntimeKey
     ? activeRun
       ? liveWorkflows[activeRuntimeKey]
       : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
-  // 每个阶段只有一个主对话，Workflow 调度不再需要通过会话 owner 互相抢占写权限。
-  const workspaceBusy = false
+  // 一个应用工作区同一时刻只保留一个正式编辑席位：运行、停止中和等待用户确认都继续占位。
+  // 用户仍可切换其它对话查看历史，但只有占位会话能够继续输入或提交交互卡。
+  const editingRun = Object.values(runStates).find(
+    (entry) =>
+      entry.identity.workspaceRoot === application.workspaceRoot &&
+      entry.identity.editorMode === editorMode &&
+      entry.identity.sessionKind === activeSession?.sessionKind
+  )
+  const editingSessionId = authorizedEditingSessionId || editingRun?.identity.sessionId
+  const workspaceBusy = Boolean(editingSessionId && editingSessionId !== activeSession?.sessionId)
   const sessionRunStates = useMemo(
     () =>
       Object.values(runStates).reduce<Record<string, SessionRunStatus>>((states, entry) => {
@@ -424,7 +429,10 @@ export function useWorkflowConversation({
     const message = (explicitMessage || draft).trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
     // 验收入口由应用预览承载；进入对话后只把用户意见追加到验收会话。
-    const acceptanceFeedback = Boolean(acceptancePhase)
+    // 产物验收入口（artifact_acceptance）属于开发对话的结构化动作，不按应用验收反馈分流，
+    // 否则在验收查看阶段从任务抽屉点「验收」会被误判为验收意见而拒绝启动。
+    const acceptanceFeedback =
+      Boolean(acceptancePhase) && options?.workflowScope !== 'artifact_acceptance'
     const workflowPhase = String(activeWorkflow?.summary?.phase || '')
     const planningDesignConversation =
       Boolean(designPhase) &&
@@ -435,7 +443,10 @@ export function useWorkflowConversation({
     const automaticStageSession = autoStartTesting || autoStartReview
     if (
       acceptanceFeedback &&
-      (options?.sessionIdentity || activeSession)?.sessionKind !== 'acceptance'
+      Boolean(
+        (options?.sessionIdentity || activeSession)?.pageId ||
+          (options?.sessionIdentity || activeSession)?.endpointId
+      )
     ) {
       setErrors((current) => ({
         ...current,
@@ -447,7 +458,7 @@ export function useWorkflowConversation({
       options?.sessionIdentity ||
       (automaticStageSession
         ? // 审查是比测试更靠后的阶段；同一次渲染里两个自动开启标志可能尚未互斥，
-          // 必须让 autoStartReview 优先命中审查会话，否则审查开启消息会被误投到测试会话并重放测试剧本。
+          // 必须让 autoStartReview 优先命中审查会话，否则审查开启消息会被误投到测试会话。
           autoStartReview
           ? await ensureReviewSession()
           : autoStartTesting
@@ -481,9 +492,21 @@ export function useWorkflowConversation({
       ? 'application_workbench_planning'
       : 'application_analysis'
     // 结构化入口（如后台任务的验收入口）可显式指定产物目标，覆盖当前查看上下文。
-    const targetApiContractId = options?.selectedApiContractId ?? selectedApiContractId
-    const targetEndpointId = options?.selectedEndpointId ?? selectedEndpointId
-    const targetPageId = options?.selectedPageId ?? selectedPageId
+    // 显式目标必须整体覆盖：未指明的维度清空，防止右侧面板残留的其它产物选中
+    // （例如刚验收完接口后残留的接口上下文）把页面验收误路由到接口。
+    const hasExplicitTarget = Boolean(
+      options &&
+        (options.selectedPageId !== undefined ||
+          options.selectedApiContractId !== undefined ||
+          options.selectedEndpointId !== undefined)
+    )
+    const targetApiContractId = hasExplicitTarget
+      ? options?.selectedApiContractId ?? ''
+      : selectedApiContractId
+    const targetEndpointId = hasExplicitTarget
+      ? options?.selectedEndpointId ?? ''
+      : selectedEndpointId
+    const targetPageId = hasExplicitTarget ? options?.selectedPageId ?? '' : selectedPageId
     await sendWorkflowMessage(message, {
       clearDraft: true,
       detailTargetType: acceptanceFeedback
@@ -593,6 +616,20 @@ export function useWorkflowConversation({
       setErrors((current) => ({
         ...current,
         [identity.key]: '当前会话正在执行。'
+      }))
+      return false
+    }
+    const occupiedSession = Object.values(runStates).find(
+      (entry) =>
+        entry.identity.workspaceRoot === identity.workspaceRoot &&
+        entry.identity.editorMode === identity.editorMode &&
+        entry.identity.sessionKind === identity.sessionKind &&
+        entry.identity.key !== identity.key
+    )
+    if (occupiedSession) {
+      setErrors((current) => ({
+        ...current,
+        [identity.key]: '另一条任务正在执行或等待确认，请先完成该工作流。'
       }))
       return false
     }
@@ -882,7 +919,19 @@ export function useWorkflowConversation({
       return false
     } finally {
       runningSessionsRef.current.delete(identity.key)
-      setRunStates((current) => omitKey(current, identity.key))
+      // Workflow 暂停等待用户确认时仍占用唯一编辑席位；完成、失败或停止后才释放。
+      setRunStates((current) =>
+        streamedWorkflow?.summary?.status === 'requires_user_input'
+          ? {
+              ...current,
+              [identity.key]: {
+                identity,
+                status: 'awaiting_user',
+                directModification: Boolean(options?.directModification)
+              }
+            }
+          : omitKey(current, identity.key)
+      )
       stopRequestedRef.current[identity.key] = false
     }
   }
@@ -899,9 +948,65 @@ export function useWorkflowConversation({
     )
       return false
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
-    if (!continuationMessage || loading || workspaceBusy) return false
-    const originalRequest = workflowOriginalRequest(workflow)
+    // 阶段准入门（规划/开发）是跨会话续跑：目标会话由剧本决定，与当前推进任务无关。
+    // 推进权已交给新建任务时仍必须能确认门禁，否则弹框会变成点了没反应的静默失效。
     const clarificationMode = workflowClarificationMode(workflow)
+    const stageEntryGate =
+      clarificationMode === 'planning_stage_entry' ||
+      clarificationMode === 'development_entry_confirmation'
+    if (!continuationMessage || loading || (workspaceBusy && !stageEntryGate)) return false
+    // 确认完成后把每题答案回写到原消息的 Workflow 快照；阶段切换后这张卡仍可只读回看。
+    if (activeSession) {
+      const historicalClarification = workflowClarification(workflow)
+      const nextMessages = getSessionMessages(activeSession.key).map((message) => {
+        if (message.workflow !== workflow) return message
+        const submittedClarification = historicalClarification
+          ? { ...historicalClarification, status: 'submitted' }
+          : undefined
+        return {
+          ...message,
+          // 已提交门禁对应的待输入节点同步落为完成态：跨阶段续跑不会再来更新原消息轨迹，
+          // 不落定的话历史回看会一直显示“等待确认”节点。
+          processSteps: (message.processSteps || []).map((step) =>
+            step.status === 'requires_user_input'
+              ? { ...step, status: 'completed' as const }
+              : step
+          ),
+          workflow: {
+            ...workflow,
+            summary: {
+              ...workflow.summary,
+              clarification: submittedClarification
+            },
+            state: {
+              ...workflow.state,
+              clarification: submittedClarification,
+              clarificationAnswers: answers
+            }
+          }
+        }
+      })
+      if (nextMessages.some((message, index) => message !== getSessionMessages(activeSession.key)[index])) {
+        setSessionMessages(activeSession.key, nextMessages)
+        await persistSession({
+          editorMode: activeSession.editorMode,
+          messages: nextMessages,
+          sessionId: activeSession.sessionId,
+          threadId: activeSession.threadId,
+          apiContractId: activeSession.apiContractId,
+          endpointId: activeSession.endpointId,
+          endpointLabel: activeSession.endpointLabel,
+          pageId: activeSession.pageId,
+          sessionKind: activeSession.sessionKind,
+          materialize: true
+        })
+      }
+      // 已提交的确认卡立即退出运行占位；后续续跑会按目标阶段/会话重新写入 running 状态。
+      // 不能让历史卡残留的 awaiting_user 把本阶段的新建任务入口永久锁住。
+      setRunStates((current) => omitKey(current, activeSession.key))
+      setLiveWorkflows((current) => omitKey(current, activeSession.key))
+    }
+    const originalRequest = workflowOriginalRequest(workflow)
     // 开发/审查 Diff 与测试用例确认均复用原工作流消息，避免确认动作凭空拆出新的工作流卡片。
     const fileAcceptanceContinuation =
       ['build', 'code_review'].includes(String(workflow.summary?.phase || '')) &&
@@ -919,15 +1024,19 @@ export function useWorkflowConversation({
       requirementConfirmation &&
       answers.confirm_requirement_spec !== undefined &&
       !clarificationAnswerIsYes(answers, 'confirm_requirement_spec')
-    // 需求确认完成后立即切换到项目 Agent 的独立默认对话，后续项目计划不再混入产品会话。
+    // 项目规划准入门：需求确认接受后，工作流停在分析会话的「进入项目规划阶段」节点上；
+    // Diff 确认是节点动作，不直接触发阶段切换，门禁确认才切到规划会话。
+    const planningStageEntry = clarificationMode === 'planning_stage_entry'
+    // 每个阶段都有独立默认对话；准入门确认后必须在计划对话继续，不能混入分析消息。
     const planningDesignContinuation =
       Boolean(designPhase) &&
       !requirementNeedsRevision &&
-      (requirementConfirmation ||
+      !requirementConfirmation &&
+      (planningStageEntry ||
         Boolean(planningPhase) ||
         activeSession?.sessionKind === 'planning')
     const sessionIdentity = designPhase
-      ? requirementNeedsRevision
+      ? requirementNeedsRevision || requirementConfirmation
         ? await ensureAnalysisSession()
         : planningDesignContinuation
           ? await ensurePlanningSession()
@@ -948,7 +1057,7 @@ export function useWorkflowConversation({
       resumeState: workflow,
       selectedPageId: workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId,
       buildExecutionScope: workflowEndpointExecutionScope(workflow),
-      titleFrom: planningDesignContinuation ? '项目计划' : originalRequest || '需求分析',
+      titleFrom: planningStageEntry || planningDesignContinuation ? '项目计划' : originalRequest || '需求分析',
       sessionIdentity,
       directModification,
       suppressUserMessage: true,
@@ -956,14 +1065,18 @@ export function useWorkflowConversation({
         fileAcceptanceContinuation ||
         testingResume ||
         acceptanceContinuation ||
-        backgroundDispatchContinuation,
-      // 分析/计划阶段确认必须继续走对应的工作台规划剧本，否则会被默认路由到
+        backgroundDispatchContinuation ||
+        // 需求分析/项目规划阶段同会话续跑复用原工作流消息：整阶段保持一条连续工作流轨迹。
+        // 跨阶段续跑（规划准入门 → 计划会话）目标会话尚无 assistant 消息，复用自然落空、另起新轨迹。
+        (Boolean(designPhase) && !directModification),
+      // 需求分析/项目规划阶段确认必须继续走对应的工作台规划剧本，否则会被默认路由到
       // replayWorkbench，导致提交确认后不推进规划节点。
       workflowScope:
         designPhase && !directModification
-          ? requirementNeedsRevision
-            ? 'application_analysis'
-            : requirementConfirmation || planningPhase || activeSession?.sessionKind === 'planning'
+          ? requirementNeedsRevision || requirementConfirmation
+            ? // 需求确认接受后回到分析剧本，推进到「进入项目规划阶段」准入门，不直接切阶段。
+              'application_analysis'
+            : planningStageEntry || planningPhase || activeSession?.sessionKind === 'planning'
               ? 'application_workbench_planning'
               : 'application_analysis'
           : applicationAcceptanceResume
@@ -989,8 +1102,11 @@ export function useWorkflowConversation({
     relatedEndpoint?: RelatedEndpointContext
   ): Promise<boolean> => {
     if (!selectedPageId || loading || workspaceBusy) return false
-    // 开发阶段统一复用阶段主对话；页面只作为本轮 Workflow 的目标，不再创建页面专属会话。
-    const identity = await ensureDevelopmentSession()
+    // 开发阶段复用当前打开的开发对话（主对话或按边界拆分的对话）；页面只作为本轮 Workflow 的目标。
+    const identity =
+      activeSession?.sessionKind === 'development'
+        ? activeSession
+        : await ensureDevelopmentSession()
     return sendWorkflowMessage(
       `${hasDetailPlan ? '继续实现' : '开始实现'}：${pageLabel}${
         relatedEndpoint ? `（包含 ${relatedEndpoint.endpointLabel}）` : ''
@@ -1027,8 +1143,11 @@ export function useWorkflowConversation({
     hasDetailPlan?: boolean
   }): Promise<boolean> => {
     if (!target.apiContractId || !target.endpointId || loading || workspaceBusy) return false
-    // 开发阶段统一复用阶段主对话；接口身份仅通过本轮 Workflow 参数传递。
-    const identity = await ensureDevelopmentSession()
+    // 开发阶段复用当前打开的开发对话；接口身份仅通过本轮 Workflow 参数传递。
+    const identity =
+      activeSession?.sessionKind === 'development'
+        ? activeSession
+        : await ensureDevelopmentSession()
     return sendWorkflowMessage(
       `${target.hasDetailPlan ? '继续实现接口' : '开始实现接口'}：${target.endpointLabel}`,
       {
@@ -1074,125 +1193,7 @@ export function useWorkflowConversation({
     agUiSession.stop()
   }
 
-  /** 通过结构化验收动作继续 acceptance 节点，禁止普通文本冒充验收通过。 */
-  const handleAcceptPreview = async (): Promise<boolean> => {
-    if (!activeWorkflow || loading || workspaceBusy) return false
-    return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
-  }
-
-  /** 从当前可恢复节点重新执行失败或已停止的计划切片。 */
-  const handleRetryPlan = async (): Promise<void> => {
-    if (!activeWorkflow || loading || workspaceBusy) return
-    const execution = planExecutionForPage(
-      activeWorkflow.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
-    )
-    const resumeFrom = workflowResumeNode(activeWorkflow, execution?.phase)
-    await sendWorkflowMessage('重试当前计划任务。', {
-      resumeState: activeWorkflow,
-      resumeExecutionRunId: execution?.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
-      titleFrom: '重试计划任务',
-      workflowDebug: { enabled: true, resumeFrom },
-      // 重试是工作流控制动作，按钮本身已经表达了用户意图，不再追加一条用户消息。
-      suppressUserMessage: true
-    })
-  }
-
-  /** 按暂停态调试面板选择的节点恢复当前计划，并保留原执行身份与状态快照。 */
-  const handleResumePlan = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
-    if (!activeWorkflow || !workflowDebug?.resumeFrom || loading || workspaceBusy) return
-    const execution = planExecutionForPage(
-      activeWorkflow.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
-    )
-    await sendWorkflowMessage(`从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`, {
-      resumeState: activeWorkflow,
-      resumeExecutionRunId: execution?.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
-      titleFrom: '从指定节点继续执行',
-      workflowDebug,
-      // 调试面板的节点选择属于结构化控制，不重复写入对话正文。
-      suppressUserMessage: true
-    })
-  }
-
-  /** 使用受控反馈重新生成执行任务，输入仅在用户主动调整计划时开放。 */
-  const handleAdjustPlan = async (feedback: string): Promise<void> => {
-    const normalizedFeedback = feedback.trim()
-    if (!activeWorkflow || !normalizedFeedback || loading || workspaceBusy) return
-    const execution = planExecutionForPage(
-      activeWorkflow.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
-    )
-    await sendWorkflowMessage(`调整执行计划：${normalizedFeedback}`, {
-      resumeState: activeWorkflow,
-      resumeExecutionRunId: execution?.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
-      titleFrom: '调整执行计划',
-      workflowDebug: { enabled: true, resumeFrom: 'prepare_build_tasks' }
-    })
-  }
-
-  /** 通过同一 AG-UI 端点结束计划并释放生命周期中的工作区锁。 */
-  const handleEndPlan = async (runId?: string): Promise<void> => {
-    if (loading || workspaceBusy) return
-    const execution = planExecutionForPage(
-      activeWorkflow?.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow?.runId, threadId: activeWorkflow?.threadId }
-    )
-    const targetRunId = runId || execution?.runId
-    if (!targetRunId) return
-    await sendWorkflowMessage('结束当前计划。', {
-      planControlAction: 'end',
-      planControlRunId: targetRunId,
-      selectedPageId: activeSession?.pageId || selectedPageId,
-      titleFrom: '结束计划',
-      // 结束按钮本身就是确认，不再制造一条“结束当前计划”的用户消息。
-      suppressUserMessage: true
-    })
-  }
-
-  /** 在当前 Run 已暂停等待时暂停计划，但保留 checkpoint 和恢复入口。 */
-  const handleStopPlan = async (runId?: string): Promise<void> => {
-    if (loading || workspaceBusy) return
-    const execution = planExecutionForPage(
-      activeWorkflow?.summary.lifecycle,
-      activeSession?.pageId || selectedPageId,
-      { runId: activeWorkflow?.runId, threadId: activeWorkflow?.threadId }
-    )
-    const targetRunId = runId || execution?.runId
-    if (!targetRunId) return
-    const resumeWorkflow = activeWorkflow
-    if (activeRuntimeKey && resumeWorkflow) {
-      setLiveWorkflows((current) => ({
-        ...current,
-        [activeRuntimeKey]:
-          withWorkflowExecutionStatus(resumeWorkflow, 'stopping', targetRunId) || resumeWorkflow
-      }))
-    }
-    const stopped = await sendWorkflowMessage('暂停当前计划执行。', {
-      planControlAction: 'stop',
-      planControlRunId: targetRunId,
-      selectedPageId: activeSession?.pageId || selectedPageId,
-      titleFrom: '暂停计划',
-      // 暂停属于工作流控制动作，保留状态变化即可。
-      suppressUserMessage: true
-    })
-    if (stopped && activeRuntimeKey && resumeWorkflow) {
-      setLiveWorkflows((current) => ({
-        ...current,
-        [activeRuntimeKey]:
-          withWorkflowExecutionStatus(resumeWorkflow, 'stopped', targetRunId) || resumeWorkflow
-      }))
-    }
-  }
-
-  // 分析/计划阶段：新应用或阶段回退后，默认 Agent 主动开启当前阶段对话。
+    // 需求分析/项目规划阶段：新应用或阶段回退后，默认 Agent 主动开启当前阶段对话。
   // 注意：ref 只在 timer 真正 fire（已发起发送）后置位，而非 effect body 里提前置位——
   // 否则 React.StrictMode 双调（mount→cleanup 清 timer→重 mount）会因 ref 已 true 而不再
   // 调度，handleSend 被 cleanup 吞掉，表现为“有时自动开始、有时不开始”。
@@ -1242,14 +1243,8 @@ export function useWorkflowConversation({
 
   return {
     activeWorkflow,
-    directModificationRunning,
+    editingSessionId,
     error,
-    handleAcceptPreview,
-    handleAdjustPlan,
-    handleEndPlan,
-    handleResumePlan,
-    handleRetryPlan,
-    handleStopPlan,
     handleSend,
     handleStartEndpointDetailConfirmation,
     handleStartDetailConfirmation,
