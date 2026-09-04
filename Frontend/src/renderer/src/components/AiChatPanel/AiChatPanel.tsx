@@ -1003,17 +1003,14 @@ export default function AiChatPanel({
   } = useSessionRuntimeStore()
 
   // 切换应用或规划线程时回到主流程锁定态，避免把上一个规划的自由变更模式带入新会话。
+  // 同时清空验收会话 key 和二次修改去重 ref——三者都在 application.id 变化时 reset，
+  // 合并为一个 effect 减少数量。各 reset 操作无顺序依赖（都是独立赋值）。
   useEffect(() => {
     setDesignChangeUnlocked(false)
-  }, [application.id, isApplicationPlanningPhase, planningThreadId])
-  useEffect(() => {
     setAcceptanceConversationSessionKey('')
-  }, [application.id, planningThreadId])
-  // 二次修改会话去重只在当前应用内有效；切换应用时必须清空，避免相同 interactionId 串用旧身份。
-  useEffect(() => {
     designRevisionStartInteractionRef.current = ''
     formalRevisionSessionIdentitiesRef.current = {}
-  }, [application.id, application.workspaceRoot])
+  }, [application.id, isApplicationPlanningPhase, planningThreadId, application.workspaceRoot])
   // 模板生成完成后（lifecycle 变为 ready_for_workbench），derivedPhase 自动变 development。
   // 前端拦截：保持 product 阶段，等用户点"进入开发"按钮后才放开（switchPhase(null) 恢复跟随旅程）。
   // 用 sessionStorage 按 applicationId 记录用户是否已确认进入开发，跨重挂载保持。
@@ -1432,14 +1429,45 @@ export default function AiChatPanel({
       setRightPanel({ type: 'outline' })
     }
   }, [isApplicationPlanningPhase, rightPanelOpen, rightPanel, setRightPanel])
-  // 设计阶段首次进入或文档就绪时自动打开右侧文档面板；
-  // 阶段切换后如果旧 rightPanel 指向已被过滤的 UI 设计稿，也必须立即替换为当前有效产物。
+  // 设计阶段右侧文档面板管理：合并原 3 个 effect（文档就绪自动打开 + 需求确认切 tab + 阶段切换自动同步）。
+  // 三者都管理设计阶段的 rightPanel 文档切换，依赖高度重叠，合并减少 effect 数量。
+  // 顺序：1. 阶段切换自动切 tab（用 ref 防止同阶段内覆盖用户手动选择）
+  //       2. 需求文档确认阶段自动切到需求文档 tab
+  //       3. 文档就绪时自动打开或替换失效文档
+  const lastAutoSyncedPhaseRef = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!isApplicationPlanningPhase || !rightPanelOpen) return
+
+    // --- 阶段切换自动切 tab ---
+    const phase = planningPhase
+    const docKey = phase ? PHASE_DOC_KEY[phase] : undefined
+    if (docKey && !(phase === 'ui_confirmation' && !uiDesignAvailable)) {
+      if (lastAutoSyncedPhaseRef.current !== phase) {
+        lastAutoSyncedPhaseRef.current = phase
+        if (!(rightPanel?.type === 'doc' && rightPanel.docKey === docKey)) {
+          setRightPanel({ type: 'doc', docKey })
+          return
+        }
+      }
+    }
+
+    // --- 需求文档确认阶段自动切到需求文档 tab ---
+    if (isDesignPhase) {
+      const mode = planningClarification?.mode
+      if (
+        mode === 'requirement_document_confirmation' &&
+        requirementDocAvailable &&
+        !(rightPanel?.type === 'doc' && rightPanel.docKey === 'requirement-spec')
+      ) {
+        setRightPanel({ type: 'doc', docKey: 'requirement-spec' })
+        return
+      }
+    }
+
+    // --- 文档就绪时自动打开或替换失效文档 ---
     const currentDocKey = rightPanel?.type === 'doc' ? rightPanel.docKey : undefined
-    // 当前文档仍属于本阶段时保留用户在同阶段内的手动选择。
     if (currentDocKey && designDocs?.some((doc) => doc.key === currentDocKey)) return
-    const phaseDocKey = planningPhase ? PHASE_DOC_KEY[planningPhase] : undefined
+    const phaseDocKey = phase ? PHASE_DOC_KEY[phase] : undefined
     const phaseDoc = phaseDocKey ? designDocs?.find((doc) => doc.key === phaseDocKey) : undefined
     const firstAvailable = designDocs?.find((doc) => doc.available)
     const target = phaseDoc || firstAvailable || designDocs?.[0]
@@ -1452,72 +1480,35 @@ export default function AiChatPanel({
     }
   }, [
     isApplicationPlanningPhase,
+    isDesignPhase,
     rightPanelOpen,
     rightPanel,
     designDocs,
     planningPhase,
-    setRightPanel
-  ])
-
-  // 需求文档确认阶段：需求文档（含合并的产品规划）生成后自动切到"需求文档"tab 展示内容。
-  useEffect(() => {
-    if (!isDesignPhase || !rightPanelOpen) return
-    const mode = planningClarification?.mode
-    if (mode !== 'requirement_document_confirmation') return
-    if (!requirementDocAvailable) return
-    if (rightPanel?.type === 'doc' && rightPanel.docKey === 'requirement-spec') return
-    setRightPanel({ type: 'doc', docKey: 'requirement-spec' })
-  }, [
-    isDesignPhase,
-    rightPanelOpen,
     planningClarification,
     requirementDocAvailable,
-    rightPanel,
-    setRightPanel
-  ])
-
-  // 设计阶段右侧 tab 跟随当前规划阶段自动切换：阶段变化时切到对应文档 tab，
-  // 同阶段内用户手动切到其他 tab 不被拉回。用 ref 记录上次自动同步的阶段，
-  // 仅在 planningPhase 真正变化时触发，避免覆盖用户的同阶段内手动切换。
-  const lastAutoSyncedPhaseRef = useRef<string | undefined>(undefined)
-  useEffect(() => {
-    if (!isApplicationPlanningPhase || !rightPanelOpen) return
-    const phase = planningPhase
-    const docKey = phase ? PHASE_DOC_KEY[phase] : undefined
-    if (!docKey) return
-    // UI 设计稿 tab 需等设计稿生成后才可用，未就绪时不切到灰显 tab。
-    if (phase === 'ui_confirmation' && !uiDesignAvailable) return
-    // 仅在阶段切换时自动切 tab；同阶段内不干预用户的手动选择。
-    if (lastAutoSyncedPhaseRef.current === phase) return
-    lastAutoSyncedPhaseRef.current = phase
-    if (rightPanel?.type === 'doc' && rightPanel.docKey === docKey) return
-    setRightPanel({ type: 'doc', docKey })
-  }, [
-    isApplicationPlanningPhase,
-    rightPanelOpen,
-    planningPhase,
     uiDesignAvailable,
-    rightPanel,
     setRightPanel
   ])
 
-  // 切换应用时重置自动同步标记并清空右侧面板，避免上次会话选中的 tab 残留。
+  // 切换应用时重置自动同步标记、清空右侧面板和本地文档缓存。
+  // 合并原 2 个 effect：rightPanel reset（依赖 application.id, isApplicationPlanningPhase）
+  // + designDoc 清空（依赖 application.id, application.workspaceRoot），都在 application.id 变化时 reset。
   useEffect(() => {
     lastAutoSyncedPhaseRef.current = undefined
     if (isApplicationPlanningPhase) {
       setRightPanel(undefined)
     }
-  }, [application.id, isApplicationPlanningPhase, setRightPanel])
-
-  // 切换工作区时清空上一应用的本地文档缓存，防止旧内容误放行 tab。
-  useEffect(() => {
-    setDesignDocFileContent({})
-    setDesignDocFilePath({})
-    setTechnicalPlanFile(undefined)
-    setProductPlanFile(undefined)
-    setRequirementSpecFile(undefined)
-    setUiDesignFile(undefined)
-  }, [application.id, application.workspaceRoot])
+    setDesignDocState({
+      fileContent: {},
+      filePath: {},
+      technicalPlan: undefined,
+      productPlan: undefined,
+      requirementSpec: undefined,
+      uiDesign: undefined,
+      loading: false
+    })
+  }, [application.id, isApplicationPlanningPhase, application.workspaceRoot, setRightPanel])
 
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
@@ -1564,9 +1555,13 @@ export default function AiChatPanel({
   }, [switchPhase])
 
   // 同步工作台自动启动返回的最新前端端口和错误，不进行任何浏览器持久化。
+  // useState 合并后用一次 setPreview 替代 2 次独立 setter 调用。
   useEffect(() => {
-    setRuntimePreviewBaseUrl(previewOrigin(previewBaseUrl))
-    setRuntimePreviewLaunchError(previewLaunchError)
+    setPreview((s) => ({
+      ...s,
+      baseUrl: previewOrigin(previewBaseUrl),
+      launchError: previewLaunchError
+    }))
   }, [previewBaseUrl, previewLaunchError])
 
   /** 为已确认 TechnicalPlan 准备本次 revision 的独立开发会话；成功前不离开规划会话。 */
@@ -3410,14 +3405,17 @@ export default function AiChatPanel({
   )
 
   // 实体会话真实开始运行（进入 loading）时记录，切换会话后复位。
+  // 合并原两个 effect：切换会话时 reset（依赖 activeSessionId），运行中 set true（依赖 loading 等）。
+  // 用 ref 记录上次 activeSessionId，在同一个 effect 里区分"切换会话"和"同会话内 loading 变化"。
+  const lastEntitySessionIdRef = useRef<string | undefined>(undefined)
   useEffect(() => {
-    entityRunWasLiveRef.current = false
-  }, [activeSessionId])
-
-  useEffect(() => {
+    if (lastEntitySessionIdRef.current !== activeSessionId) {
+      entityRunWasLiveRef.current = false
+      lastEntitySessionIdRef.current = activeSessionId
+    }
     if (!loading || activeDetailTarget.type !== 'entity' || !entitySessionActive) return
     entityRunWasLiveRef.current = true
-  }, [activeDetailTarget, entitySessionActive, loading])
+  }, [activeSessionId, activeDetailTarget, entitySessionActive, loading])
 
   // 实体设计确认后，恢复原开发目标的展示；续接卡由运行完成边界负责持久化。
   // 直接从大纲进入实体设计时仍回到实体信息页。设计过程中的每次动作都是一次
