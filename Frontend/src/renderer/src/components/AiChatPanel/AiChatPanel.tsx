@@ -995,6 +995,7 @@ export default function AiChatPanel({
   const isDesignPhase = activeWorkbenchPhase === 'product'
   const isTechnicalPlanningPhase = activeWorkbenchPhase === 'planning'
   const isApplicationPlanningPhase = isDesignPhase || isTechnicalPlanningPhase
+  const showDevelopmentSidebarActions = activeWorkbenchPhase === 'development'
   const {
     acquireSessionExecution,
     releaseSessionExecution,
@@ -1011,6 +1012,11 @@ export default function AiChatPanel({
     designRevisionStartInteractionRef.current = ''
     formalRevisionSessionIdentitiesRef.current = {}
   }, [application.id, isApplicationPlanningPhase, planningThreadId, application.workspaceRoot])
+
+  // 离开开发阶段时收回仅开发阶段开放的工具页面，保证非开发阶段只保留临时对话和主题切换。
+  useEffect(() => {
+    if (!showDevelopmentSidebarActions && activeView !== 'chat') setActiveView('chat')
+  }, [activeView, showDevelopmentSidebarActions])
   // 模板生成完成后（lifecycle 变为 ready_for_workbench），derivedPhase 自动变 development。
   // 前端拦截：保持 product 阶段，等用户点"进入开发"按钮后才放开（switchPhase(null) 恢复跟随旅程）。
   // 用 sessionStorage 按 applicationId 记录用户是否已确认进入开发，跨重挂载保持。
@@ -4274,6 +4280,7 @@ export default function AiChatPanel({
           sessionCreationDisabled={phaseSessionRunActive}
           sessionRunStates={displayedSessionRunStates}
           sessions={sessions}
+          showDevelopmentActions={showDevelopmentSidebarActions}
           settingsActive={activeView === 'settings'}
           skillsActive={activeView === 'skills'}
           theme={theme}
