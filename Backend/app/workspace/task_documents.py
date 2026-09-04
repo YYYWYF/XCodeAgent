@@ -80,6 +80,30 @@ def load_build_task_plan_json(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def load_confirmed_build_task_plan(workspace_root: str | Path) -> dict[str, Any] | None:
+    """只读正式路径中已确认且有效的 v3 DAG，缺失或不合格时返回空基线。"""
+
+    path = build_task_plan_json_path({"workspace": str(workspace_root)})
+    try:
+        plan = load_build_task_plan_json(path)
+    except FileNotFoundError:
+        return None
+
+    # 不读取 checkpoint 或 pending 文件，也不补齐状态；损坏 JSON 和其他读取错误直接上抛。
+    if (
+        not isinstance(plan, dict)
+        or plan.get("confirmation_status") != "confirmed"
+        or plan.get("schema_version") != "build-dag.v3"
+        or plan.get("status") == "failed"
+    ):
+        return None
+    task_graph = plan.get("task_graph")
+    validation = task_graph.get("validation") if isinstance(task_graph, dict) else None
+    if not isinstance(validation, dict) or validation.get("is_valid") is not True:
+        return None
+    return plan
+
+
 def write_repair_task_plan_json(
     state: dict[str, Any],
     repair_task_plan: dict[str, Any],

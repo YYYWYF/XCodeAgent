@@ -303,13 +303,14 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
         )
         self.assertTrue(merged["task_graph"]["validation"]["is_valid"])
 
-    def test_invalid_checkpoint_falls_back_to_last_valid_persisted_dag(self) -> None:
-        """无效 checkpoint 不得覆盖工作区中最后一次通过校验的 DAG。"""
+    def test_invalid_checkpoint_does_not_override_confirmed_formal_dag(self) -> None:
+        """无效 checkpoint 不得覆盖工作区正式且已确认的 DAG。"""
 
         valid_plan = replace_build_task_plan_tasks(
             _base_unit_plan("frontend:api-client"),
             [_task("persisted-api-task", "frontend:api-client", status="completed")],
         )
+        valid_plan["confirmation_status"] = "confirmed"
         invalid_plan = deepcopy(valid_plan)
         invalid_plan["task_graph"]["validation"] = {
             "is_valid": False,

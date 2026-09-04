@@ -58,9 +58,11 @@ from app.workspace.plan_documents import (
     load_project_plan_json,
     project_plan_json_path,
 )
+from app.workspace.spec_documents import workspace_root
 from app.workspace.task_documents import (
     build_task_plan_json_path,
     load_build_task_plan_json,
+    load_confirmed_build_task_plan,
     write_build_task_plan_json,
 )
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
@@ -1194,16 +1196,9 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
 
 
 def _existing_build_task_plan(state: ProjectState) -> dict:
-    """优先读取有效 checkpoint 计划，否则从工作区恢复最后一个有效 DAG。"""
+    """仅以当前工作区正式且已确认的 DAG 作为本轮规划基线。"""
 
-    in_state = state.get("build_task_plan")
-    if _is_valid_build_task_plan(in_state):
-        return in_state
-    plan_path = build_task_plan_json_path(state)
-    if not plan_path.is_file():
-        return {}
-    persisted = load_build_task_plan_json(plan_path)
-    return persisted if _is_valid_build_task_plan(persisted) else {}
+    return load_confirmed_build_task_plan(workspace_root(state)) or {}
 
 
 def _is_valid_build_task_plan(value: object) -> bool:

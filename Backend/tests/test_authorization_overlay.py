@@ -95,7 +95,8 @@ class AuthorizationOverlayTests(unittest.TestCase):
         self.assertIsNone(unit_authorization_slice("frontend:api-client", context))
         self.assertEqual(
             context["authorization_constraints"]["frontendProjection"]["pages"],
-            [{"pageId": "orders", "path": "/orders", "pageKey": "Orders", "resourceGroup": "PAGE", "resourceName": "ORDERS"}],
+            # 当前完整投影同时携带页面名称和菜单可见性，权限切片仍保持上方断言的边界。
+            [{"pageId": "orders", "path": "/orders", "pageKey": "Orders", "name": "orders", "menu": True, "resourceGroup": "PAGE", "resourceName": "ORDERS"}],
         )
         self.assertEqual(
             context["authorization_constraints"]["authConstantsProjection"],

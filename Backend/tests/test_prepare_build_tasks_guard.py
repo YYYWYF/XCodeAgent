@@ -32,6 +32,7 @@ from app.workspace.plan_documents import (
     load_project_plan_json,
     write_project_plan_document,
 )
+from app.workspace.task_documents import write_build_task_plan_json
 from tests.entity_design_test_utils import confirm_entity_designs
 
 
@@ -1071,6 +1072,9 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             return_value=customer_agent_plan,
         ) as customer_preparer:
             project_plan_path = _write_current_plan(workspace, project_plan)
+            # 跨页面复用必须以正式 confirmed 文件为基线，checkpoint 不授予确认。
+            first_plan["confirmation_status"] = "confirmed"
+            write_build_task_plan_json({"workspace": workspace}, first_plan)
             customer_result = prepare_build_tasks(
                 {
                     "request": "生成客户页面",
@@ -1278,6 +1282,9 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             return_value=agent_plan,
         ):
             project_plan_path = _write_current_plan(workspace, project_plan)
+            # 保留任务来自正式 confirmed 文件，继续验证既有 ID 冲突处理行为。
+            base_plan["confirmation_status"] = "confirmed"
+            write_build_task_plan_json({"workspace": workspace}, base_plan)
             result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
@@ -1441,6 +1448,9 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             return_value=second_agent_plan,
         ):
             project_plan_path = _write_current_plan(workspace, project_plan)
+            # 上一范围的任务经确认落盘后，才允许参与下一范围的复用。
+            first_plan["confirmation_status"] = "confirmed"
+            write_build_task_plan_json({"workspace": workspace}, first_plan)
             second_result = prepare_build_tasks(
                 {
                     "request": "生成订单报表页面",
