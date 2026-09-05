@@ -1277,10 +1277,18 @@ def replace_build_task_plan_tasks(
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
     build_context: dict[str, Any] | None = None,
+    *,
+    preserve_task_contract_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """用最新叶子任务重建 v2 注册表、任务图和执行批次。"""
+    """用最新叶子任务重建注册表、任务图和执行批次，可保留正式任务合同。"""
 
-    normalized_tasks = [_canonical_task(task) for task in tasks]
+    preserved_ids = preserve_task_contract_ids or set()
+    normalized_tasks = [
+        deepcopy(task)
+        if str(task.get("id") or "") in preserved_ids
+        else _canonical_task(task)
+        for task in tasks
+    ]
     annotated_tasks, execution_batches = _annotate_parallelism(normalized_tasks)
     build_units = deepcopy(
         build_task_plan.get("build_units")
@@ -1362,8 +1370,9 @@ def compile_build_task_plan_scope(
     *,
     validate_task_scope: bool = True,
     preserve_compiled_task_ids: set[str] | None = None,
+    preserve_task_contract_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """编译本轮任务契约，并在保留历史契约的前提下重建任务图。"""
+    """编译本轮任务契约，并按调用方指定范围保留历史合同后重建任务图。"""
 
     context = dict(build_context) if isinstance(build_context, dict) else {}
     preserved_ids = preserve_compiled_task_ids or set()
@@ -1403,6 +1412,7 @@ def compile_build_task_plan_scope(
             # 最终合并图只复核拓扑和职责，避免把保留任务误判为当前范围越界。
             "_validate_task_scope": validate_task_scope,
         },
+        preserve_task_contract_ids=preserve_task_contract_ids,
     )
     compiled["build_units"] = annotate_unit_inputs(
         compiled.get("build_units"),
