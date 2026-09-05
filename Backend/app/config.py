@@ -56,6 +56,13 @@ class Settings:
     langsmith_tracing_enabled: bool = False
     langsmith_project: str = ""
     langsmith_endpoint: str = ""
+    template_engine_base_url: str = ""
+    template_engine_token: str = ""
+    template_engine_connect_timeout_seconds: float = 10.0
+    template_engine_read_timeout_seconds: float = 120.0
+    template_package_max_bytes: int = 104857600
+    template_package_max_files: int = 10000
+    template_package_max_extracted_bytes: int = 524288000
 
     @property
     def model_api_name(self) -> str:
@@ -116,6 +123,27 @@ class Settings:
             langsmith_tracing_enabled=_env_bool("LANGSMITH_TRACING", default=False),
             langsmith_project=os.getenv("LANGSMITH_PROJECT", ""),
             langsmith_endpoint=os.getenv("LANGSMITH_ENDPOINT", ""),
+            template_engine_base_url=os.getenv(
+                "XCODEAGENT_TEMPLATE_ENGINE_BASE_URL", ""
+            ).rstrip("/"),
+            template_engine_token=os.getenv("XCODEAGENT_TEMPLATE_ENGINE_TOKEN", ""),
+            template_engine_connect_timeout_seconds=float(
+                os.getenv("XCODEAGENT_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10")
+            ),
+            template_engine_read_timeout_seconds=float(
+                os.getenv("XCODEAGENT_TEMPLATE_ENGINE_READ_TIMEOUT_SECONDS", "120")
+            ),
+            template_package_max_bytes=int(
+                os.getenv("XCODEAGENT_TEMPLATE_PACKAGE_MAX_BYTES", "104857600")
+            ),
+            template_package_max_files=int(
+                os.getenv("XCODEAGENT_TEMPLATE_PACKAGE_MAX_FILES", "10000")
+            ),
+            template_package_max_extracted_bytes=int(
+                os.getenv(
+                    "XCODEAGENT_TEMPLATE_PACKAGE_MAX_EXTRACTED_BYTES", "524288000"
+                )
+            ),
         )
 
 
