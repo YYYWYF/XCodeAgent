@@ -227,6 +227,53 @@ class UnitCandidateValidatorTests(unittest.TestCase):
                 self.assertIn(code, {issue.code for issue in issues})
                 self._assert_local_retry(issues, context.unit_id)
 
+    def test_deliverable_rejects_valid_requirement_with_unexpected_capability(self) -> None:
+        """合法 requirement 不能掩盖同一 provides 中夹带的未请求 capability。"""
+
+        context = _context()
+        task = _task()
+        task["deliverables"][0]["provides"].append("unexpected.capability")
+
+        issues = validate_unit_candidate(context, [task])
+
+        issue = next(
+            item for item in issues
+            if item.code == "CANDIDATE_UNREQUESTED_DELIVERABLE"
+        )
+        self.assertEqual(
+            issue.details["unexpected_capabilities"],
+            ("unexpected.capability",),
+        )
+        self._assert_local_retry(issues, context.unit_id)
+
+    def test_deliverable_cannot_mix_kind_and_target_across_requirements(self) -> None:
+        """一个 deliverable 必须逐项匹配 provides 中每个 requirement 的完整身份。"""
+
+        context_payload = _context("frontend:api-client").model_dump(mode="json")
+        api_requirement = _requirement("frontend:api-module")
+        shared_requirement = _requirement("frontend:api-client")
+        context_payload["generation_requirements"] = [
+            api_requirement,
+            shared_requirement,
+        ]
+        context = UnitGenerationContext(**context_payload)
+        task = _task("frontend:api-client")
+        task["deliverables"][0].update({
+            "kind": api_requirement["source_refs"]["kind"],
+            "target_id": shared_requirement["source_refs"]["target_id"],
+            "provides": [
+                api_requirement["requirement_id"],
+                shared_requirement["requirement_id"],
+            ],
+        })
+
+        issues = validate_unit_candidate(context, [task])
+
+        codes = {issue.code for issue in issues}
+        self.assertIn("CANDIDATE_REQUIREMENT_KIND_MISMATCH", codes)
+        self.assertIn("CANDIDATE_REQUIREMENT_TARGET_MISMATCH", codes)
+        self._assert_local_retry(issues, context.unit_id)
+
     def test_managed_files_are_rejected_without_sanitizing_paths(self) -> None:
         """模型触碰 managed file 时返回 Issue，原 Candidate 不被删路径或改 owner。"""
 

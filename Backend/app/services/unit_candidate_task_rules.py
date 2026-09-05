@@ -472,41 +472,46 @@ def _requirement_issues(
             context=context, requirement_id=requirement_id,
         ))
     for kind, target_id, capabilities, task_id in records:
-        matched = [requirements[capability] for capability in capabilities if capability in requirements]
-        if not matched:
+        unexpected_capabilities = sorted(set(capabilities) - set(requirements))
+        if unexpected_capabilities:
             issues.append(_issue(
                 "CANDIDATE_UNREQUESTED_DELIVERABLE",
-                f"Candidate Task {task_id} 输出了不属于本轮 generation requirements 的 deliverable。",
+                f"Candidate Task {task_id} 的 deliverable 声明了本轮未请求的 capability。",
                 context=context, task_ids=(task_id,), kind=kind, target_id=target_id,
+                unexpected_capabilities=unexpected_capabilities,
             ))
+        matched_capabilities = tuple(dict.fromkeys(
+            capability for capability in capabilities if capability in requirements
+        ))
+        if not matched_capabilities:
             continue
-        if not any(item.source_refs.get("kind") == kind for item in matched):
-            issues.append(_issue(
-                "CANDIDATE_REQUIREMENT_KIND_MISMATCH",
-                f"Candidate Task {task_id} 的 deliverable kind 与职责声明不一致。",
-                context=context, task_ids=(task_id,), kind=kind,
-            ))
-        target_field = (
-            "page_id" if kind == "frontend.page"
-            else "endpoint_id" if kind in {
-                "frontend.api_module", "frontend.static_data_module", "backend.endpoint_controller",
-            }
-            else "target_id" if kind == "frontend.shared_capability"
-            else "data_source_type" if kind == "backend.bootstrap"
-            else "entity_id"
-        )
-        expected_targets = {
-            str(item.source_refs[target_field])
-            for item in matched
-            if _identity(item.source_refs.get(target_field)) is not None
-        }
-        if expected_targets and target_id not in expected_targets:
-            issues.append(_issue(
-                "CANDIDATE_REQUIREMENT_TARGET_MISMATCH",
-                f"Candidate Task {task_id} 的 deliverable target_id 与冻结职责目标不一致。",
-                context=context, task_ids=(task_id,), target_id=target_id,
-                expected_targets=sorted(expected_targets),
-            ))
+        for capability in matched_capabilities:
+            requirement = requirements[capability]
+            expected_kind = _identity(requirement.source_refs.get("kind"))
+            if expected_kind != kind:
+                issues.append(_issue(
+                    "CANDIDATE_REQUIREMENT_KIND_MISMATCH",
+                    f"Candidate Task {task_id} 的 deliverable kind 与职责 {capability} 不一致。",
+                    context=context, task_ids=(task_id,), capability=capability,
+                    kind=kind, expected_kind=expected_kind,
+                ))
+            target_field = (
+                "page_id" if expected_kind == "frontend.page"
+                else "endpoint_id" if expected_kind in {
+                    "frontend.api_module", "frontend.static_data_module", "backend.endpoint_controller",
+                }
+                else "target_id" if expected_kind == "frontend.shared_capability"
+                else "data_source_type" if expected_kind == "backend.bootstrap"
+                else "entity_id"
+            )
+            expected_target = _identity(requirement.source_refs.get(target_field))
+            if expected_target is not None and target_id != expected_target:
+                issues.append(_issue(
+                    "CANDIDATE_REQUIREMENT_TARGET_MISMATCH",
+                    f"Candidate Task {task_id} 的 deliverable target_id 与职责 {capability} 不一致。",
+                    context=context, task_ids=(task_id,), capability=capability,
+                    target_id=target_id, expected_targets=(expected_target,),
+                ))
     return issues
 
 

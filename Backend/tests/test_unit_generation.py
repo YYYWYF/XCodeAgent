@@ -29,11 +29,18 @@ from tests.test_unit_generation_contracts import (
 class FakeAsyncModel:
     """记录一次异步模型 session 的 Prompt 与调用次数。"""
 
-    def __init__(self, content: str, *, exception: Exception | None = None) -> None:
-        """配置固定响应或需要向上抛出的传输异常。"""
+    def __init__(
+        self,
+        content: str,
+        *,
+        exception: Exception | None = None,
+        finish_reason: str = "stop",
+    ) -> None:
+        """配置固定响应、finish reason 或需要向上抛出的传输异常。"""
 
         self.content = content
         self.exception = exception
+        self.finish_reason = finish_reason
         self.prompts: list[str] = []
 
     async def ainvoke(self, prompt: str) -> SimpleNamespace:
@@ -44,7 +51,7 @@ class FakeAsyncModel:
             raise self.exception
         return SimpleNamespace(
             content=self.content,
-            response_metadata={"finish_reason": "stop"},
+            response_metadata={"finish_reason": self.finish_reason},
         )
 
 
@@ -139,6 +146,26 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
             "RAW_CANDIDATE_JSON_MALFORMED",
         )
         self.assertEqual(result.validation_issues[0].category, "generation")
+
+    async def test_length_finish_reason_rejects_even_valid_json_candidate(self) -> None:
+        """长度截断是内容失败，即使响应恰好为合法 JSON 也不得返回 Task。"""
+
+        raw_response = '{"tasks":[{"id":"task-orders","owner":"frontend"}]}'
+        result, _ = await self._generate(
+            FakeAsyncModel(raw_response, finish_reason="length")
+        )
+
+        self.assertEqual(result.raw_response, raw_response)
+        self.assertEqual(result.tasks, ())
+        self.assertEqual(result.generation_metadata["finish_reason"], "length")
+        self.assertEqual(len(result.validation_issues), 1)
+        issue = result.validation_issues[0]
+        self.assertEqual(issue.code, "UNIT_CANDIDATE_OUTPUT_TRUNCATED")
+        self.assertEqual(issue.level, "unit")
+        self.assertEqual(issue.category, "generation")
+        self.assertEqual(issue.unit_ids, ("page:orders",))
+        self.assertEqual(issue.retry_unit_ids, ("page:orders",))
+        self.assertTrue(issue.retryable)
 
     async def test_transport_exception_is_classified_and_raised(self) -> None:
         """传输异常直接以 infrastructure 分类上抛，不转换为内容 Issue。"""

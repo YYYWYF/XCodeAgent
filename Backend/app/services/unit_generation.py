@@ -69,6 +69,22 @@ def _generation_metadata(
     return metadata
 
 
+def _truncated_output_issue(unit_id: str) -> ValidationIssue:
+    """把 provider 明示的长度截断归因成当前 Unit 的可重试内容失败。"""
+
+    return ValidationIssue(
+        code="UNIT_CANDIDATE_OUTPUT_TRUNCATED",
+        level="unit",
+        category="generation",
+        unit_ids=(unit_id,),
+        task_ids=(),
+        retry_unit_ids=(unit_id,),
+        retryable=True,
+        message="模型输出因长度限制被截断，不能作为完整 Unit Candidate。",
+        details={"finish_reason": "length"},
+    )
+
+
 async def generate_unit_candidate_once(
     job: UnitAttemptJob,
     *,
@@ -80,8 +96,9 @@ async def generate_unit_candidate_once(
     """为一个已分配 Attempt 执行一次 inline-context Unit generation。
 
     本函数只构建一个 Unit Prompt、创建一个禁用 SDK retry 的模型并执行一次
-    ``ainvoke``。Raw Candidate 只经过严格结构解析；解析失败作为 Unit-scoped
-    ``ValidationIssue`` 返回，成功结果也不带 valid status，留给后续 Local Validator。
+    ``ainvoke``。Raw Candidate 只经过严格结构解析；解析失败或 provider 明示长度截断
+    均作为 Unit-scoped ``ValidationIssue`` 返回，成功结果也不带 valid status，留给后续
+    Local Validator。
     """
 
     frozen_job = UnitAttemptJob.model_validate(job)
@@ -119,16 +136,28 @@ async def generate_unit_candidate_once(
         ) from exc
 
     raw_response = _coerce_content_text(getattr(response, "content", "")) or ""
-    try:
-        tasks = parse_raw_unit_candidate(
-            raw_response,
-            unit_id=frozen_job.context.unit_id,
-        )
-        validation_issues: Sequence[ValidationIssue] = ()
-    except RawUnitCandidateParseError as exc:
-        # Parser 保证失败时不返回部分任务；外层 Scheduler 决定是否安排下一 Local attempt。
+    generation_metadata = _generation_metadata(
+        response,
+        settings=active_settings,
+        job=frozen_job,
+    )
+    if generation_metadata.get("finish_reason") == "length":
+        # 即使截断内容碰巧是合法 JSON，也不能把 provider 明示的不完整输出提升为 Candidate。
         tasks = []
-        validation_issues = exc.issues
+        validation_issues: Sequence[ValidationIssue] = (
+            _truncated_output_issue(frozen_job.context.unit_id),
+        )
+    else:
+        try:
+            tasks = parse_raw_unit_candidate(
+                raw_response,
+                unit_id=frozen_job.context.unit_id,
+            )
+            validation_issues = ()
+        except RawUnitCandidateParseError as exc:
+            # Parser 保证失败时不返回部分任务；外层 Scheduler 决定是否安排下一 Local attempt。
+            tasks = []
+            validation_issues = exc.issues
 
     return UnitGenerationAttemptResult(
         identity=frozen_job.identity,
@@ -136,9 +165,5 @@ async def generate_unit_candidate_once(
         raw_response=raw_response,
         tasks=tasks,
         validation_issues=validation_issues,
-        generation_metadata=_generation_metadata(
-            response,
-            settings=active_settings,
-            job=frozen_job,
-        ),
+        generation_metadata=generation_metadata,
     )
