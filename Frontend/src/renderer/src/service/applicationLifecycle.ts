@@ -8,7 +8,7 @@ type ApplicationLifecyclePayload = {
   runId: string
   threadId: string
   status: 'completed' | 'failed'
-  action?: 'create' | 'get' | 'prepare_template_generation' | 'complete_template_generation'
+  action?: 'create' | 'get' | 'bootstrap_template_generation' | 'workspace_attach'
   lifecycle?: ApplicationLifecycle
   error?: { message?: string }
 }
@@ -135,6 +135,18 @@ export async function getApplicationLifecycle(
       lifecycleReadRequests.delete(workspaceRoot)
     }
   }
+}
+
+// 由 Backend 持有真实任务，Renderer 只通过 AG-UI 触发并等待最终 lifecycle。
+export async function bootstrapApplicationTemplateGeneration(
+  application: ApplicationConfig,
+  threadId: string
+): Promise<ApplicationLifecycle> {
+  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
+  return runApplicationLifecycleAction(threadId, {
+    action: 'bootstrap_template_generation',
+    workspaceRoot: application.workspaceRoot
+  })
 }
 
 // 把模板下载明细提交给后端，并执行页面与菜单的增量初始化。

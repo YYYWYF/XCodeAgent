@@ -759,11 +759,11 @@ readiness 强制失败
 
 ### 退出标准
 
-- [ ] rollback 闭合；
-- [ ] deletion 两阶段语义闭合；
-- [ ] Workspace Attach 收尾幂等；
-- [ ] Git 使用 workspace_process_registry；
-- [ ] 不依赖 Frontend 即可验收。
+- [x] rollback 闭合；
+- [x] deletion 两阶段语义闭合；
+- [x] Workspace Attach 收尾幂等；
+- [x] Git 使用 workspace_process_registry；
+- [x] 不依赖 Frontend 即可验收。
 
 ---
 

@@ -18,6 +18,8 @@ from app.services.application_lifecycle import (
 from app.services.application_template_generation import (
     prepare_application_template_generation,
 )
+from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
+from app.services.workspace_bootstrap.service import WorkspaceBootstrapService
 
 
 APPLICATION_LIFECYCLE_EVENT_NAME = "application-lifecycle"
@@ -67,6 +69,8 @@ class ApplicationLifecycleAction(BaseModel):
         "get",
         "prepare_template_generation",
         "complete_template_generation",
+        "bootstrap_template_generation",
+        "workspace_attach",
     ]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     application: ApplicationLifecycleApplication | None = None
@@ -89,6 +93,8 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "get",
             "prepare_template_generation",
             "complete_template_generation",
+            "bootstrap_template_generation",
+            "workspace_attach",
         ],
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
         "stateSnapshotKey": "applicationLifecycle",
@@ -111,6 +117,7 @@ def build_application_lifecycle_ag_ui_stream(
     payload: dict[str, Any],
     lifecycle_input: dict[str, Any] | None = None,
     accept: str | None = None,
+    bootstrap_service: WorkspaceBootstrapService | None = None,
 ) -> AsyncIterator[str]:
     """执行独立生命周期动作并投射完整 AG-UI 生命周期。"""
 
@@ -155,6 +162,26 @@ def build_application_lifecycle_ag_ui_stream(
                 request.download_result.model_dump(mode="json", by_alias=True),
             )
             message = "页面和菜单增量初始化完成。"
+        elif request.action == "bootstrap_template_generation":
+            if bootstrap_service is None:
+                raise RuntimeError("Workspace Bootstrap 服务尚未初始化。")
+            task = await bootstrap_service.trigger(request.workspace_root)
+            result = await asyncio.shield(task)
+            state = load_application_lifecycle(request.workspace_root)
+            if state is None:
+                raise RuntimeError("Bootstrap 完成后缺少 lifecycle。")
+            message = "Workspace Bootstrap 已完成，可以进入工作台。"
+            data = {"action": request.action, **result, "lifecycle": application_lifecycle_payload(state)}
+            return AgUiActionResult(data=data, message=message)
+        elif request.action == "workspace_attach":
+            attached = await asyncio.to_thread(
+                template_mutation_coordinator.attach_workspace,
+                request.workspace_root,
+            )
+            state = load_application_lifecycle(request.workspace_root)
+            if state is None:
+                raise ValueError("application-lifecycle.json 不存在。")
+            message = "Workspace Attach 已完成。"
         else:
             if request.succeeded is None:
                 raise ValueError("complete_template_generation 必须提供 succeeded。")
@@ -170,6 +197,12 @@ def build_application_lifecycle_ag_ui_stream(
                 else "应用模板文件生成失败，已保留可重试状态。"
             )
         data = {"action": request.action, "lifecycle": application_lifecycle_payload(state)}
+        if request.action == "workspace_attach":
+            data["workspaceAttach"] = {
+                "action": attached.action,
+                "cleaned": attached.cleaned,
+                "lifecycleChanged": attached.lifecycle_changed,
+            }
         if request.action == "prepare_template_generation":
             data["templateGenerationManifest"] = manifest
         return AgUiActionResult(data=data, message=message)

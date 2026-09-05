@@ -43,6 +43,7 @@ from app.services.application_template_generation import (
 from app.services.project_launcher import stop_project_preview
 from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.workspace.run_lease import workspace_run_leases
 
 
@@ -144,6 +145,8 @@ async def prepare_application_deletion(
     thread_ids = _application_thread_ids(lifecycle)
     pool = get_ui_design_generation_pool()
 
+    # Bootstrap Preparation 可由删除取消；Commit Section 则必须先完成或回滚。
+    await asyncio.to_thread(template_mutation_coordinator.begin_deletion, workspace)
     begin_application_template_deletion(workspace)
     workflow_run_registry.begin_workspace_deletion(workspace_text)
     workspace_process_registry.begin_workspace_deletion(workspace)
@@ -195,6 +198,7 @@ async def prepare_application_deletion(
         if preview_result.get("status") == "failed":
             raise RuntimeError(str(preview_result.get("message") or "应用预览停止失败。"))
     except BaseException:
+        template_mutation_coordinator.cancel_deletion(workspace)
         end_application_template_deletion(workspace)
         workflow_run_registry.end_workspace_deletion(workspace_text)
         workspace_process_registry.end_workspace_deletion(workspace)

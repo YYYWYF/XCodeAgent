@@ -16,6 +16,7 @@ from app.domain.application_lifecycle import (
 from app.services.application_lifecycle import (
     begin_application_template_generation,
     complete_application_template_generation,
+    complete_workspace_bootstrap,
     complete_workbench_execution,
     ApplicationLifecycleConflictError,
     ApplicationLifecycleCorruptedError,
@@ -386,6 +387,51 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 loaded.initialization.stage,
                 ApplicationLifecycleStage.READY_FOR_WORKBENCH,
             )
+
+    def test_workspace_bootstrap_completion_uses_template_state_without_manifest(self) -> None:
+        """新 Bootstrap 只依赖正式产物、两个 root、Git 与 TemplateState，不读取 manifest。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            specs = workspace / ".xcodeagent/specs"
+            plans = workspace / ".xcodeagent/plans"
+            specs.mkdir(parents=True)
+            plans.mkdir(parents=True)
+            for path, payload in (
+                (specs / "requirement-spec.json", {"confirmation_status": "confirmed"}),
+                (plans / "product-plan.json", {"confirmation_status": "confirmed"}),
+                (specs / "ui-designs.json", {"confirmation_status": "skipped"}),
+                (plans / "technical-plan.json", {"confirmation_status": "confirmed", "artifact_type": "technical-plan"}),
+            ):
+                path.write_text(json.dumps(payload), encoding="utf-8")
+            for relative in ("frontend", "backend", ".git"):
+                (workspace / relative).mkdir()
+            state_path = workspace / ".xcodeagent/template-state.json"
+            state_path.write_text(
+                json.dumps({"templateRevision": "r1", "managedFiles": {}, "requested": {}, "effective": {}}),
+                encoding="utf-8",
+            )
+            state = create_application_lifecycle(application_id="app-1", application_name="任务中心")
+            for stage in (
+                ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+                ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            ):
+                state = transition_application_lifecycle(
+                    state, stage=stage, status=ApplicationLifecycleStatus.RUNNING
+                )
+            write_application_lifecycle(workspace, state)
+
+            ready = complete_workspace_bootstrap(workspace, succeeded=True)
+
+            self.assertEqual(ready.initialization.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
+            self.assertFalse((workspace / ".xcodeagent/template-generation-manifest.json").exists())
 
     def test_current_snapshot_loads_with_workbench_defaults(self) -> None:
         """当前初始化快照应获得空的工作台字段默认值且不包含 delivery。"""

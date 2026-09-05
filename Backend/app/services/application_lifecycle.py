@@ -967,6 +967,71 @@ def complete_application_template_generation(
     )
 
 
+def complete_workspace_bootstrap(
+    workspace: str | Path,
+    *,
+    succeeded: bool,
+    error_message: str | None = None,
+) -> ApplicationLifecycle:
+    """按新 TemplateState Bootstrap 契约提交 ready 或不可恢复失败结果。"""
+
+    current = load_application_lifecycle(workspace)
+    if current is None:
+        raise ApplicationLifecycleConflictError("Bootstrap 前必须先创建生命周期状态。")
+    if current.initialization.stage != ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES:
+        raise ApplicationLifecycleConflictError("当前生命周期不允许提交 Bootstrap 结果。")
+    if succeeded:
+        try:
+            _validate_workspace_bootstrap_readiness(Path(workspace).expanduser().resolve())
+        except Exception as exc:
+            succeeded = False
+            error_message = str(exc)
+    if succeeded:
+        return persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+            status=ApplicationLifecycleStatus.COMPLETED,
+        )
+    return persist_application_lifecycle_transition(
+        workspace,
+        stage=ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
+        status=ApplicationLifecycleStatus.FAILED,
+        error=ApplicationLifecycleError(
+            code="application_template_generation_failed",
+            message=(error_message or "Workspace Bootstrap 失败。")[:2048],
+            recoverable=False,
+            occurredAt=utc_now(),
+        ),
+    )
+
+
+def _validate_workspace_bootstrap_readiness(workspace: Path) -> None:
+    """验证新 Bootstrap 的正式产物确认、两个根、Git 和唯一 TemplateState。"""
+
+    from app.services.template_state import load_template_state
+
+    statuses = {
+        "RequirementSpec": _artifact_confirmation_status(workspace / ".xcodeagent/specs/requirement-spec.json"),
+        "ProductPlan": _artifact_confirmation_status(workspace / ".xcodeagent/plans/product-plan.json"),
+        "UiDesign": _artifact_confirmation_status(workspace / ".xcodeagent/specs/ui-designs.json"),
+        "TechnicalPlan": _artifact_confirmation_status(
+            workspace / ".xcodeagent/plans/technical-plan.json",
+            expected_artifact_type="technical-plan",
+        ),
+    }
+    if not (
+        statuses["RequirementSpec"] == "confirmed"
+        and statuses["ProductPlan"] == "confirmed"
+        and statuses["UiDesign"] in {"confirmed", "skipped"}
+        and statuses["TechnicalPlan"] == "confirmed"
+    ):
+        raise ApplicationLifecycleConflictError("正式产物未确认，不能完成 Workspace Bootstrap。")
+    for name in ("frontend", "backend", ".git"):
+        if not (workspace / name).is_dir() or (workspace / name).is_symlink():
+            raise ApplicationLifecycleConflictError(f"Bootstrap 缺少有效 {name}。")
+    load_template_state(workspace)
+
+
 def begin_application_template_generation(
     workspace: str | Path,
     *,
