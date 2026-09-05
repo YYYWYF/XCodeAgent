@@ -3,10 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import {
-  readManagedWorkspaceApplication,
-  resolveApplicationTemplateBranch
-} from '../src/main/managedWorkspace'
+import { readManagedWorkspaceApplication } from '../src/main/managedWorkspace'
 
 /** 创建隔离的临时工作区并在测试结束后清理。 */
 async function withTemporaryWorkspace(
@@ -20,7 +17,7 @@ async function withTemporaryWorkspace(
   }
 }
 
-/** 验证真实 .xcodeagent 目录和有效 v5 application.json 可以被识别。 */
+/** 验证真实 .xcodeagent 目录和有效 v6 application.json 可以被识别。 */
 test('允许添加规范的 XCodeAgent 本地项目', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
     const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
@@ -28,7 +25,8 @@ test('允许添加规范的 XCodeAgent 本地项目', async () => {
     await fs.writeFile(
       path.join(agentDirectory, 'application.json'),
       JSON.stringify({
-        schemaVersion: 5,
+        schemaVersion: 6,
+        configRevision: 1,
         appName: '本地项目',
         auth: { enable: false },
         authorization: {
@@ -44,26 +42,6 @@ test('允许添加规范的 XCodeAgent 本地项目', async () => {
   })
 })
 
-/** 验证模板分支只由已持久化的权限开关确定，调用方不能自行选择。 */
-test('根据已持久化权限开关确定唯一模板分支', () => {
-  const base = {
-    schemaVersion: 5,
-    appName: '模板分支项目',
-    auth: { enable: false },
-    authorization: { enabled: false, initialAdministratorSubjects: [] }
-  }
-
-  assert.equal(resolveApplicationTemplateBranch(base), 'main')
-  assert.equal(
-    resolveApplicationTemplateBranch({
-      ...base,
-      auth: { enable: true },
-      authorization: { enabled: true, initialAdministratorSubjects: ['ops@example.com'] }
-    }),
-    'auth'
-  )
-})
-
 /** 验证旧结构因不是当前 schemaVersion 而不能通过。 */
 test('拒绝缺少当前权限字段的旧结构', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
@@ -75,7 +53,7 @@ test('拒绝缺少当前权限字段的旧结构', async () => {
       'utf8'
     )
 
-    await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /schemaVersion 5/)
+    await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /schemaVersion 6/)
   })
 })
 
@@ -98,7 +76,7 @@ test('拒绝非当前 schemaVersion', async () => {
       'utf8'
     )
 
-    await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /schemaVersion 5/)
+    await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /schemaVersion 6/)
   })
 })
 
@@ -109,7 +87,8 @@ test('拒绝缺少认证或初始管理员的权限工作区', async () => {
     await fs.mkdir(agentDirectory)
     const applicationPath = path.join(agentDirectory, 'application.json')
     const base = {
-      schemaVersion: 5,
+      schemaVersion: 6,
+      configRevision: 1,
       appName: '权限项目',
       auth: { enable: false },
       authorization: {
@@ -133,7 +112,7 @@ test('拒绝缺少认证或初始管理员的权限工作区', async () => {
   })
 })
 
-/** 验证当前 v5 不接受已删除的权限 provider 或独立运行态页面字段。 */
+/** 验证当前 v6 不接受已删除的权限 provider 或独立运行态页面字段。 */
 test('拒绝旧权限字段', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
     const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
@@ -141,7 +120,8 @@ test('拒绝旧权限字段', async () => {
     await fs.writeFile(
       path.join(agentDirectory, 'application.json'),
       JSON.stringify({
-        schemaVersion: 5,
+        schemaVersion: 6,
+        configRevision: 1,
         appName: '旧权限字段项目',
         auth: { enable: false },
         authorization: {
@@ -166,7 +146,8 @@ test('拒绝关闭权限后残留初始管理员种子', async () => {
     await fs.writeFile(
       path.join(agentDirectory, 'application.json'),
       JSON.stringify({
-        schemaVersion: 5,
+        schemaVersion: 6,
+        configRevision: 1,
         appName: '配置冲突项目',
         auth: { enable: true },
         authorization: {

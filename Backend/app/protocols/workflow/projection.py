@@ -409,7 +409,10 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             return []
         return ["product_planning"]
     if node_name == "technical_planning":
-        return []
+        # 二次修改确认后的实际下一节点是 Template Reconcile。此处只负责
+        # AG-UI 时间线预测；若不投影 started 帧，前端会继续使用上一个
+        # technical_planning running 事件，错误地把模板更新显示为技术规划。
+        return ["template_reconcile"] if update.get("template_reconcile_pending") else []
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):
             return ["review_phase_confirmation"]
@@ -585,6 +588,9 @@ def _public_workflow_state(
     if "development_continuation" in value:
         public_state.pop("development_continuation", None)
         public_state["developmentContinuation"] = value["development_continuation"]
+    if "template_preparation" in value:
+        public_state.pop("template_preparation", None)
+        public_state["templatePreparation"] = value["template_preparation"]
     if "code_review_result" in value:
         public_state.pop("code_review_result", None)
         public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(

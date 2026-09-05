@@ -14,8 +14,7 @@ from app.domain.application_lifecycle import (
     WorkbenchExecutionStatus,
 )
 from app.services.application_lifecycle import (
-    begin_application_template_generation,
-    complete_application_template_generation,
+    complete_workspace_bootstrap,
     complete_workbench_execution,
     ApplicationLifecycleConflictError,
     ApplicationLifecycleCorruptedError,
@@ -24,13 +23,13 @@ from app.services.application_lifecycle import (
     application_lifecycle_path,
     load_application_lifecycle,
     persist_application_lifecycle_transition,
+    retry_application_template_generation,
     start_workbench_execution,
     stop_workbench_execution,
     transition_application_lifecycle,
     update_workbench_execution,
     write_application_lifecycle,
 )
-from app.services.application_template_generation import prepare_application_template_generation
 
 
 class ApplicationLifecycleTests(unittest.TestCase):
@@ -262,52 +261,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
             self.assertEqual(sorted(results), ["conflict", "written"])
 
-    def test_template_generation_failure_is_terminal(self) -> None:
-        """应用模板文件生成失败后不能从失败状态重新启动。"""
-
-        with tempfile.TemporaryDirectory() as directory:
-            state = create_application_lifecycle(
-                application_id="app-1",
-                application_name="任务中心",
-            )
-            route = [
-                ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
-                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
-                ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
-                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
-                ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
-            ]
-            for stage in route:
-                state = transition_application_lifecycle(
-                    state,
-                    stage=stage,
-                    status=ApplicationLifecycleStatus.RUNNING,
-                )
-            write_application_lifecycle(directory, state)
-
-            failed = complete_application_template_generation(
-                directory,
-                succeeded=False,
-                error_message="页面文件写入失败",
-            )
-            self.assertEqual(
-                failed.initialization.stage,
-                ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
-            )
-            assert failed.error is not None
-            self.assertEqual(failed.error.code, "application_template_generation_failed")
-
-            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "只有用户确认 TechnicalPlan"):
-                begin_application_template_generation(directory)
-            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "不能提交应用模板文件生成结果"):
-                complete_application_template_generation(directory, succeeded=True)
-
-    def test_template_generation_success_is_persisted_after_technical_confirmation(self) -> None:
-        """TechnicalPlan 确认后进入模板阶段，完成门禁才能进入工作台。"""
+    def test_workspace_bootstrap_completion_uses_template_state_without_manifest(self) -> None:
+        """新 Bootstrap 只依赖正式产物、两个 root、Git 与 TemplateState，不读取 manifest。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -315,30 +270,28 @@ class ApplicationLifecycleTests(unittest.TestCase):
             plans = workspace / ".xcodeagent/plans"
             specs.mkdir(parents=True)
             plans.mkdir(parents=True)
-            for path in (
-                specs / "requirement-spec.json",
-                plans / "product-plan.json",
-                specs / "ui-designs.json",
-                plans / "technical-plan.json",
+            for path, payload in (
+                (specs / "requirement-spec.json", {"confirmation_status": "confirmed"}),
+                (plans / "product-plan.json", {"confirmation_status": "confirmed"}),
+                (specs / "ui-designs.json", {"confirmation_status": "skipped"}),
+                (plans / "technical-plan.json", {"confirmation_status": "confirmed", "artifact_type": "technical-plan"}),
             ):
-                payload = {
-                    "confirmation_status": (
-                        "skipped" if path.name == "ui-designs.json" else "confirmed"
-                    )
-                }
-                if path.name == "product-plan.json":
-                    payload.update({"schema_version": "product-plan.v5", "pages": []})
-                if path.name == "ui-designs.json":
-                    payload.update({"schema_version": "ui-manifest.v3", "pages": []})
-                if path.name == "technical-plan.json":
-                    payload["artifact_type"] = "technical-plan"
                 path.write_text(json.dumps(payload), encoding="utf-8")
-
-            state = create_application_lifecycle(
-                application_id="app-1",
-                application_name="任务中心",
+            for relative in ("frontend", "backend", ".git"):
+                (workspace / relative).mkdir()
+            state_path = workspace / ".xcodeagent/template-state.json"
+            state_path.write_text(
+                json.dumps({
+                    "schemaVersion": 2,
+                    "templateRevision": "r1",
+                    "requested": {},
+                    "effective": {},
+                    "appliedAdditions": {},
+                }),
+                encoding="utf-8",
             )
-            route = [
+            state = create_application_lifecycle(application_id="app-1", application_name="任务中心")
+            for stage in (
                 ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
                 ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
                 ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
@@ -348,44 +301,56 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
-            ]
-            for stage in route:
+            ):
                 state = transition_application_lifecycle(
-                    state,
-                    stage=stage,
-                    status=ApplicationLifecycleStatus.RUNNING,
+                    state, stage=stage, status=ApplicationLifecycleStatus.RUNNING
+                )
+            write_application_lifecycle(workspace, state)
+
+            ready = complete_workspace_bootstrap(
+                workspace,
+                succeeded=True,
+                readiness_verified=True,
+            )
+
+            self.assertEqual(ready.initialization.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
+            self.assertFalse((workspace / ".xcodeagent/template-generation-manifest.json").exists())
+
+    def test_failed_workspace_bootstrap_can_enter_a_new_generation_attempt(self) -> None:
+        """模板失败后只能由显式重试动作清除错误并回到生成阶段。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(application_id="app-1", application_name="任务中心")
+            for stage in (
+                ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+                ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            ):
+                state = transition_application_lifecycle(
+                    state, stage=stage, status=ApplicationLifecycleStatus.RUNNING
                 )
             write_application_lifecycle(directory, state)
-
-            (workspace / "frontend/src/constants").mkdir(parents=True)
-            (workspace / "frontend/package.json").write_text("{}", encoding="utf-8")
-            (workspace / "frontend/src/constants/resources.ts").write_text("export const RESOURCES = {} as const;\n", encoding="utf-8")
-            (workspace / "frontend/src/constants/routes.tsx").write_text("// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n", encoding="utf-8")
-            (workspace / "backend").mkdir()
-            (workspace / "backend/pom.xml").write_text("<project />", encoding="utf-8")
-            prepare_application_template_generation(
-                workspace,
-                {
-                    "status": "succeeded",
-                    "failedTargets": [],
-                    "targets": {
-                        "frontend": {"status": "succeeded", "attempt": 0, "branch": "auth"},
-                        "backend": {"status": "succeeded", "attempt": 0, "branch": "auth"},
-                    },
-                },
+            complete_workspace_bootstrap(
+                directory,
+                succeeded=False,
+                error_message="Template Engine unavailable",
             )
 
-            ready = complete_application_template_generation(directory, succeeded=True)
+            retried = retry_application_template_generation(directory, active_run_id="retry-run")
+
             self.assertEqual(
-                ready.initialization.stage,
-                ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                retried.initialization.stage,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
             )
-            loaded = load_application_lifecycle(directory)
-            assert loaded is not None
-            self.assertEqual(
-                loaded.initialization.stage,
-                ApplicationLifecycleStage.READY_FOR_WORKBENCH,
-            )
+            self.assertEqual(retried.initialization.status, ApplicationLifecycleStatus.RUNNING)
+            self.assertEqual(retried.active_run_id, "retry-run")
+            self.assertIsNone(retried.error)
 
     def test_current_snapshot_loads_with_workbench_defaults(self) -> None:
         """当前初始化快照应获得空的工作台字段默认值且不包含 delivery。"""

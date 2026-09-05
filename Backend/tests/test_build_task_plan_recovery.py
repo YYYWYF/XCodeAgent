@@ -22,7 +22,7 @@ def _base_unit_plan(*unit_ids: str, edges: list[dict] | None = None) -> dict:
     """构造带有效空任务图的最小 Unit 计划，供增量合并回归测试复用。"""
 
     return {
-        "schema_version": "build-dag.v3",
+        "schema_version": "build-dag.v4",
         "build_units": {
             unit_id: {
                 "id": unit_id,
@@ -182,14 +182,14 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
         self.assertEqual(len(retained_base_errors), 1)
         self.assertIn("multiple implementation owners", retained_base_errors[0])
 
-    def test_scope_merge_promotes_template_variant_to_plan_root(self) -> None:
-        """合并后的确认 DAG 必须把模板变体保留在 Build 读取的顶层。"""
+    def test_scope_merge_promotes_template_context_to_plan_root(self) -> None:
+        """合并后的确认 DAG 必须把 TemplateState 绑定保留在 Build 读取的顶层。"""
 
         base_plan = _base_unit_plan("page:dashboard")
         build_context = {
             "target": {"type": "page", "id": "dashboard", "page_key": "Dashboard"},
             "required_unit_ids": ["page:dashboard"],
-            "template_variant": "auth",
+            "template_context": {"state_path": ".xcodeagent/template-state.json", "template_revision": "r1", "effective_capabilities": {"authorization": {"enabled": True}}},
         }
         prepared_plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -200,8 +200,8 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
 
         merged = _merge_prepared_scope_tasks(base_plan, prepared_plan, build_context)
 
-        self.assertEqual(merged["template_variant"], "auth")
-        self.assertEqual(merged["build_context"]["template_variant"], "auth")
+        self.assertEqual(merged["template_context"], build_context["template_context"])
+        self.assertEqual(merged["build_context"]["template_context"], build_context["template_context"])
 
     def test_incremental_page_merge_preserves_retained_business_acceptance(self) -> None:
         """生成新页面时不得用当前页面契约重编译历史页面的业务检查。"""

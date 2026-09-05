@@ -210,13 +210,6 @@ def sync_project_plan_from_markdown(
                     "api_contracts",
                     "pages",
                 )
-            }
-            | {
-                "authorization_data_bindings": (
-                    (existing_plan.get("authorization_manifest") or {})
-                    .get("bindings", {})
-                    .get("dataRules", [])
-                )
             },
             datasource_type=datasource_type,
         )

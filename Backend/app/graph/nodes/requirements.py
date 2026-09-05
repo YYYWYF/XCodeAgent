@@ -4,6 +4,7 @@ import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from langgraph.config import get_stream_writer
 
@@ -25,7 +26,11 @@ from app.services.data_source_policy import (
 from app.services.application_authorization_config import (
     ApplicationAuthorizationConfigError,
     authorization_configuration_can_enable,
+    authorization_configuration_is_enabled,
     persist_authorization_configuration,
+)
+from app.services.application_revision_lifecycle import (
+    stage_active_revision_initial_administrator_subjects,
 )
 from app.services.requirement_spec import (
     apply_requirement_spec_editor_changes,
@@ -195,21 +200,29 @@ def requirements(state: ProjectState) -> dict:
     # 处理前一轮权限配置冲突的用户选择；解决后才允许继续生成需求草稿。
     conflict = state.get("authorization_config_conflict")
     conflict_resolved = False
+    conflict_invalidated = False
     if (
         application_planning_scope
         and isinstance(conflict, dict)
         and conflict.get("requested") is True
     ):
-        resolution = _resolve_authorization_config_conflict(
-            state,
-            interaction,
-            conflict,
-            existing_spec if isinstance(existing_spec, dict) else {},
-        )
-        if resolution.get("result") is not None:
-            return resolution["result"]
-        request = str(resolution["request"])
-        conflict_resolved = True
+        # 权限初始化问题只能被创建它的需求修订事务消费；缺失或不匹配的
+        # revisionId 视为已失效，不能在新需求分析前截获本轮输入。
+        revision_id = str(state.get("requirement_revision_id") or "").strip()
+        if str(conflict.get("revisionId") or "").strip() != revision_id:
+            conflict = {}
+            conflict_invalidated = True
+        else:
+            resolution = _resolve_authorization_config_conflict(
+                state,
+                interaction,
+                conflict,
+                existing_spec if isinstance(existing_spec, dict) else {},
+            )
+            if resolution.get("result") is not None:
+                return resolution["result"]
+            request = str(resolution["request"])
+            conflict_resolved = True
     revision_requested = (
         interaction.get("action") == "revise"
         if application_planning_scope
@@ -285,25 +298,23 @@ def requirements(state: ProjectState) -> dict:
         clarification_round=clarification_round,
         on_token=_llm_token_callback,
     )
-    model_conflict = analysis.get("authorization_config_conflict")
-    if (
-        application_planning_scope
-        and isinstance(model_conflict, dict)
-        and model_conflict.get("requested") is True
-    ):
-        return _authorization_config_conflict_result(
-            apply_authoritative_datasource_type(
-                analysis["requirement_spec"],
-                datasource_type,
-            ),
-            state,
-            model_conflict,
-        )
     spec = apply_authoritative_datasource_type(
         analysis["requirement_spec"],
         datasource_type,
     )
     _apply_menus_root_path_to_pages(spec, state)
+    if (
+        application_planning_scope
+        and _authorization_requested_by_requirement(spec)
+        and not authorization_configuration_is_enabled(str(state.get("workspace") or ""))
+    ):
+        # 已验证的业务权限规则就是开启应用权限的意图；只收集无法从角色名推导的真实管理员 subjectId。
+        return _authorization_config_conflict_result(
+            spec,
+            state,
+            {"requested": True, "evidence": _authorization_requirement_evidence(spec)},
+            collecting_admin=True,
+        )
     clarification = analysis["clarification"]
     clarification = _without_technical_datasource_questions(clarification, spec)
     clarification = _without_non_substantive_completeness_questions(
@@ -425,7 +436,9 @@ def requirements(state: ProjectState) -> dict:
         "requirement_spec_json_path": str(requirement_spec_draft_json_path(state)),
         "clarification": clarification,
         "authorization_config_conflict": (
-            {} if conflict_resolved else state.get("authorization_config_conflict", {})
+            {}
+            if conflict_resolved or conflict_invalidated
+            else state.get("authorization_config_conflict", {})
         ),
         "timeline": ["requirements"],
     }
@@ -466,6 +479,7 @@ def _authorization_config_conflict_result(
     """构造配置冲突前置澄清，禁止在此之前写入 RequirementSpec 草稿。"""
 
     workspace = str(state.get("workspace") or "").strip()
+    revision_id = str(state.get("requirement_revision_id") or "").strip() or uuid4().hex
     can_enable = bool(workspace) and authorization_configuration_can_enable(workspace)
     if collecting_admin:
         questions = [
@@ -529,11 +543,47 @@ def _authorization_config_conflict_result(
         "requirement_spec_json_path": "",
         "authorization_config_conflict": {
             **conflict,
+            "revisionId": revision_id,
             "decision": "enable" if collecting_admin else "",
         },
+        "requirement_revision_id": revision_id,
         "clarification": clarification,
         "timeline": ["requirements"],
     }
+
+
+def _authorization_requested_by_requirement(spec: dict[str, Any]) -> bool:
+    """判断已归一化的需求是否包含明确的页面或操作权限控制。"""
+
+    authorization = spec.get("authorization_requirements")
+    if not isinstance(authorization, dict):
+        return False
+    return any(
+        isinstance(authorization.get(field_name), list)
+        and bool(authorization[field_name])
+        for field_name in ("restrictedPages", "restrictedOperations")
+    )
+
+
+def _authorization_requirement_evidence(spec: dict[str, Any]) -> list[str]:
+    """提取已验证权限规则的原始需求证据，供管理员初始化提示说明原因。"""
+
+    authorization = spec.get("authorization_requirements")
+    if not isinstance(authorization, dict):
+        return []
+    evidence: list[str] = []
+    for field_name in ("restrictedPages", "restrictedOperations"):
+        rules = authorization.get(field_name)
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            for source in rule.get("sourceRefs", []):
+                text = str(source).strip()
+                if text and text not in evidence:
+                    evidence.append(text)
+    return evidence[:8]
 
 
 def _resolve_authorization_config_conflict(
@@ -542,7 +592,7 @@ def _resolve_authorization_config_conflict(
     conflict: dict,
     existing_spec: dict,
 ) -> dict:
-    """处理前置澄清答案；只有管理员校验通过后才原子启用配置。"""
+    """处理前置澄清答案；正式修订仅暂存管理员，确认边界才提交配置。"""
 
     answers = interaction.get("answers") if isinstance(interaction, dict) else {}
     answers = answers if isinstance(answers, dict) else {}
@@ -571,13 +621,19 @@ def _resolve_authorization_config_conflict(
                     collecting_admin=True,
                 )
             }
-        try:
-            persist_authorization_configuration(
-                workspace,
-                initial_administrator_subjects=subjects,
-            )
-        except ApplicationAuthorizationConfigError as exc:
-            raise ValueError(str(exc)) from exc
+        staged_revision = stage_active_revision_initial_administrator_subjects(
+            workspace,
+            subjects=subjects,
+        )
+        if staged_revision is None:
+            # 首次创建没有 active formal revision，沿用既有初始化路径。
+            try:
+                persist_authorization_configuration(
+                    workspace,
+                    initial_administrator_subjects=subjects,
+                )
+            except ApplicationAuthorizationConfigError as exc:
+                raise ValueError(str(exc)) from exc
         return {
             "request": "\n".join(
                 [
@@ -696,7 +752,7 @@ def _clear_unselected_initial_admin(spec: dict, existing_spec: dict | None) -> N
     if str(existing_authorization.get("initialAdminRoleId") or "").strip():
         return
     authorization = spec.get("authorization_requirements")
-    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+    if not isinstance(authorization, dict) or not _authorization_requested_by_requirement(spec):
         return
     authorization.pop("initialAdminRoleId", None)
     roles = spec.get("user_roles")
@@ -716,7 +772,7 @@ def _next_authorization_business_question(
     """按页面和操作顺序返回一个权限业务梳理问题。"""
 
     authorization = spec.get("authorization_requirements")
-    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+    if not isinstance(authorization, dict) or not _authorization_requested_by_requirement(spec):
         return None
     answered_question_ids = answered_question_ids or set()
 
@@ -927,7 +983,7 @@ def _apply_authorization_business_answers(
     authorization = spec.get("authorization_requirements")
     if not isinstance(answers, dict) or not isinstance(authorization, dict):
         return set()
-    if authorization.get("enabled") is not True:
+    if not _authorization_requested_by_requirement(spec):
         return set()
 
     updated_authorization = deepcopy(authorization)

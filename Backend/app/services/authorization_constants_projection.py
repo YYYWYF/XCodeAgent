@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from app.services.application_template_generation import load_template_generation_manifest
+from app.services.template_state import has_capability, load_template_state
 
 
 # auth 模板以固定常量类和标记区声明平台唯一可写的业务资源常量位置。
@@ -33,9 +33,8 @@ def apply_authorization_constants_projection(
     if not items:
         return {"applied": False, "reason": "authorization_disabled_or_no_operation_resources"}
     workspace_path = Path(workspace).expanduser().resolve()
-    manifest = load_template_generation_manifest(workspace_path)
-    if _backend_branch(manifest) != "auth":
-        raise AuthorizationConstantsProjectionError("权限常量投影存在，但后端模板不是 auth 分支。")
+    if not has_capability(load_template_state(workspace_path), "authorization"):
+        raise AuthorizationConstantsProjectionError("权限常量投影要求 TemplateState.effective 含 authorization。")
     target = _auth_constants_path(workspace_path)
     content = target.read_text(encoding="utf-8")
     start, end = _managed_bounds(content)
@@ -56,9 +55,8 @@ def verify_authorization_constants_projection(
     if not items:
         return {"verified": False, "reason": "authorization_disabled_or_no_operation_resources"}
     workspace_path = Path(workspace).expanduser().resolve()
-    manifest = load_template_generation_manifest(workspace_path)
-    if _backend_branch(manifest) != "auth":
-        raise AuthorizationConstantsProjectionError("权限常量投影存在，但后端模板不是 auth 分支。")
+    if not has_capability(load_template_state(workspace_path), "authorization"):
+        raise AuthorizationConstantsProjectionError("权限常量投影要求 TemplateState.effective 含 authorization。")
     target = _auth_constants_path(workspace_path)
     content = target.read_text(encoding="utf-8")
     start, end = _managed_bounds(content)
@@ -117,16 +115,6 @@ def _managed_bounds(content: str) -> tuple[int, int]:
     if start < 0 or end < 0 or end <= start:
         raise AuthorizationConstantsProjectionError("AuthConstants 托管文件缺少有效边界标记。")
     return start, end
-
-
-def _backend_branch(manifest: dict[str, Any]) -> str:
-    """读取模板 manifest 中后端实际下载的分支。"""
-
-    steps = manifest.get("steps") if isinstance(manifest.get("steps"), dict) else {}
-    download = steps.get("download") if isinstance(steps.get("download"), dict) else {}
-    targets = download.get("targets") if isinstance(download.get("targets"), dict) else {}
-    backend = targets.get("backend") if isinstance(targets.get("backend"), dict) else {}
-    return str(backend.get("branch") or "").strip()
 
 
 def _required_text(value: dict[str, Any], key: str) -> str:

@@ -193,6 +193,49 @@ class ChangeImpactAnalyzerTests(unittest.TestCase):
         self.assertEqual(analysis.earliest_affected_contract_stage.value, "requirement_design")
         self.assertEqual(len(analysis.invalidated_contracts), 3)
         self.assertFalse(scanner_calls)
+
+    def test_role_page_access_change_cannot_start_from_product_plan(self) -> None:
+        """角色页面权限变更必须回到 RequirementSpec，即使模型只引用产品行为。"""
+
+        root = self._workspace()
+        corpus = load_confirmed_contract_corpus(root)
+        product_fact = self._evidence(corpus, "product-plan", "浏览图片列表和详情")
+        analysis = ChangeImpactAnalyzer(
+            model=_FakeModel(
+                {
+                    "analysisStatus": "completed",
+                    "requestSummary": "只有管理员才能看到列表页。",
+                    "atomicChanges": [
+                        {
+                            "changeId": "C1",
+                            "requestedChange": "添加权限功能，需要管理员才能看到列表页",
+                            "contractImpact": "invalidates",
+                            "contractEvidence": [
+                                {
+                                    **product_fact,
+                                    "requestedChange": "只有管理员可以访问列表页",
+                                    "conflictRelation": "modifies",
+                                    "reason": "列表页的角色可访问性发生变化。",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
+        ).analyze("我想添加权限功能，需要管理员才能看到列表页", root)
+
+        routing = route_from_change_impact(
+            analysis,
+            user_request="我想添加权限功能，需要管理员才能看到列表页",
+            workspace=str(root),
+        )
+
+        self.assertEqual(routing.candidate.earliest_artifact.value, "requirement-spec")
+        self.assertEqual(routing.candidate.revision_type.value, "requirement_scope_change")
+        self.assertEqual(
+            routing.candidate.affected_artifact_keys,
+            ["requirement-spec", "product-plan", "ui-design", "technical-plan"],
+        )
         self.assertTrue(
             all(not change.code_scan.performed for change in analysis.atomic_changes)
         )

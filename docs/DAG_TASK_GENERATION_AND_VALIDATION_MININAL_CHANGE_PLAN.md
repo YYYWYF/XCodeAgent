@@ -26,20 +26,20 @@ TechnicalPlan Endpoint 契约和 EntitySourceBinding。运行时的 `project_pla
 6. 增加轻量级 DAG 用户确认；
 7. 增加最小的 DAG scope 和 confirmation 字段；
 8. 增加“最新任务规划已经确认才能进入 Build”的门禁；
-9. 将当前正式产物、模板 manifest 和范围内详细设计作为 DAG 的显式前置条件；
+9. 将当前正式产物、TemplateState 和范围内详细设计作为 DAG 的显式前置条件；
 10. 将平台设计的任务边界校验失败交给模型自动重生成，不把任务拆分规则交给用户人工修正。
 11. 按稳定的 `api_contract_id + endpoint_id` 校验前端 Endpoint 唯一实现归属，禁止不同 API 模块重复封装同一接口。
 
 ### 2.2 本期明确不处理
 
-- 不升级 `build-dag.v3`；
+- 使用当前 `build-dag.v4`，并持久化 `template_context`；
 - 不拆分新的 LangGraph 节点或规划子图；
 - 不重新设计 Unit Graph、Task Graph、owner 或 Scheduler；
 - 不重新设计 `target_files`、`allowed_paths` 和 `change_scope` 的字段结构；保留当前将 `change_scope.path` 投影到
   `target_files`、并以 `target_files` 作为 `allowed_paths` 兜底的确定性归一化，不把三个字段合并成单一字段；
 - 不清理现有兼容字段和命名风格；
 - 不改 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan 或模板初始化本身的正式产物协议；
-- 不新增独立的“新增页面初始化”Graph 节点，新增页面继续复用现有模板初始化生命周期和 manifest 门禁；
+- 新增业务页面由 Build 实现；二次 TechnicalPlan 确认不触发首次 Bootstrap 或预建前端文件；
 - 不在 Normal Build 中新增 database-owner 任务或 `database:*` Unit，数据库操作继续由实体确认阶段负责；
 - 不增加基于自然语言相似度的任务判断；除完全重复任务合并外，只按稳定 Endpoint ID 做唯一实现归属校验；
 - 不维护 DAG revision 或历史版本，每次只保存最新任务规划；
@@ -77,7 +77,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["检查正式产物、模板 manifest 和范围前置条件"] --> B["生成 Unit 骨架和 BuildContext"]
+    A["检查正式产物、TemplateState 和范围前置条件"] --> B["生成 Unit 骨架和 BuildContext"]
     B --> C["模型生成候选任务"]
     C --> D["结构归一化 owner、path、operation 和 scope"]
     D --> E["合并完全重复任务"]
@@ -122,7 +122,7 @@ AG-UI 结构化动作恢复，并使用独立的 `build_task_plan_confirmation` 
 - ProductPlan 已确认；
 - UiManifest 已确认或明确跳过；
 - 当前 TechnicalPlan 的 `artifact_type=technical-plan` 且已确认；
-- 模板初始化完成，`.xcodeagent/template-generation-manifest.json` 的完成门禁通过；
+- Bootstrap 已完成，Engine-owned `.xcodeagent/template-state.json` 有效，Build 绑定其 revision 与 effective capabilities；
 - 当前范围需要的 PageImplementationContract、Endpoint 契约和 EntitySourceBinding 均已确认。
 
 调整后规则：
@@ -137,7 +137,7 @@ AG-UI 结构化动作恢复，并使用独立的 `build_task_plan_confirmation` 
 `sync_project_plan_from_markdown`、`revise_project_plan_with_chat_model` 或
 `write_project_plan_json` 来完成上游确认；上游 Markdown 编辑也必须回到对应的正式产物确认流程。
 
-上下游调整点：工作流恢复逻辑需要把正式产物、模板 manifest 和详细设计前置条件错误交回对应流程，
+上下游调整点：工作流恢复逻辑需要把正式产物、TemplateState 和详细设计前置条件错误交回对应流程，
 而不是由 DAG 节点修改计划或把运行时投影写回正式 TechnicalPlan。
 
 ### 4.2 移除菜单、路由和页面占位文件任务
@@ -159,13 +159,10 @@ DAG 阶段只负责任务规划、页面内容实现、API 调用和后端实现
 
 | 内容 | 负责阶段 | DAG 处理方式 |
 | --- | --- | --- |
-| 初始页面占位文件 | 模板初始化 | 只消费，不创建 |
-| 初始菜单和路由配置 | 模板初始化 | 只消费，不修改 |
-| 后续新增页面的占位文件 | 现有模板初始化的增量流程 | 只消费，不创建 |
-| 后续新增页面的菜单和路由 | 现有模板初始化的增量流程 | 只消费，不修改 |
-| 页面业务内容和交互实现 | DAG / Build | 生成页面实现任务 |
+| 初次或后续业务页面 | Build Agent | 声明真实页面入口和业务实现交付物 |
+| 通用路由、可选权限资源和 AuthConstants | 全部 Build 任务成功后的平台投影 | 只消费确认事实，不生成共享注册任务 |
 | 页面 API 调用 | DAG / Build | 按已确认设计生成实现任务 |
-| 数据库表结构和数据源操作 | 实体确认流程 | DAG 只消费已确认的实体上下文 |
+| 数据库表结构和数据源操作 | 实体确认流程 | 只消费已确认的实体上下文 |
 
 数据库或外部 API 来源后端还必须拥有独立的 `backend:bootstrap` 基础能力任务：它幂等检查现有
 `backend/pom.xml`；数据库来源检查数据源和 MyBatis-Plus，外部 API 来源按模板 Spring Boot 2.7.2 / Spring Cloud 2021.0.3 基线检查 OpenFeign starter、BOM 和 `@EnableFeignClients`，只补充确实缺失的共享能力，不生成业务分层代码。
@@ -174,41 +171,22 @@ endpoint-only 与前后端混合规划使用相同规则；只有 static-only �
 当 `backend:bootstrap` 位于本轮待规划 Unit 集合但模型遗漏对应任务时，确定性 DAG 校验必须报告错误并进入
 平台自动重生成，不能静默接受缺少前置能力的候选，也不能由编译器硬编码合成任务。
 
-新增页面必须在进入工作区检查和 DAG 之前完成以下前置动作。这里的页面初始化不是新的 Graph 节点，
-而是复用现有 `/application-lifecycle/run` 的模板准备和完成门禁：
+新增页面的正式 revision 顺序为：
 
 ```text
-更新并确认 ProductPlan
-→ 确认或跳过 UiDesign
-→ 更新并确认 TechnicalPlan
-→ 执行模板初始化增量流程（创建页面占位、菜单和路由）
-→ 更新并通过 .xcodeagent/template-generation-manifest.json 门禁
-→ Workbench 编译 PageImplementationContract
-→ 完成所需 EntitySourceBinding，并重新发起页面/API开发
+确认 ProductPlan / UiDesign / TechnicalPlan
+→ 完成当前 EntitySourceBinding
 → inspect_workspace
-→ prepare_build_tasks
+→ prepare_build_tasks（当前 TemplateState、template_context 和正式契约校验）
+→ 用户确认 build-dag.v4
+→ Agent 创建真实业务页面
+→ 全部任务成功后重放 Route / authorization / AuthConstants 投影
+→ 只读 EDD 验收最终工程
 ```
 
-DAG 生成时只做前置条件检查：
+二次规划确认不创建前端页面或导航文件。页面入口尚不存在是正常的首次实现场景，由 Agent 在任务范围中声明；编译器不得自行注入页面任务或占位文件。唯一实时页面目录可作为只读路径校对依据。
 
-- 页面入口文件存在；
-- 页面路径与 ProductPlan、UiManifest 和 PageImplementationContract 一致；
-- 菜单和路由已经由上游完成；
-- `.xcodeagent/template-generation-manifest.json` 的 `download`、`templateFiles`、`menus` 和 `gate` 状态均已完成；
-- 当前范围需要的 Endpoint 契约和 EntitySourceBinding 已就绪；无 Endpoint 的纯静态页面不阻断。
-
-任一前置条件缺失时，DAG 返回新增页面初始化或模板初始化流程恢复，不生成兜底任务，也不把缺失文件改写成普通页面开发任务。
-
-`reconcile_live_page_paths` 如继续保留，只能用于把任务路径校对到已经存在的页面入口，不得创建目录、占位文件或菜单、路由任务；
-它不负责修剪任务边界。
-
-`ensure_page_route_registration_task` 和 `_inject_canonical_page_entry` 不再作为 DAG 编译步骤调用；菜单和页面入口的
-存在性检查可以保留为只读前置校验。模型提示词也必须同步移除“DAG 负责登记菜单”和“允许修改 menus.ts”的描述。
-模型若仍返回共享菜单、路由、隐藏路由或页面占位变更，编译器必须保留原候选并把任务 ID、字段和路径写入
-`task_graph.validation.errors`，不得删除任务、剥离路径或把 `add` 改成 `modify`。
-
-上下游调整点：现有模板初始化流程必须完整负责页面占位文件、菜单和路由，并提供可供 DAG 校验的
-`.xcodeagent/template-generation-manifest.json` 状态；DAG 只消费该状态。
+模型若触碰共享菜单、路由或模板基础设施，保留候选并报告边界错误，不静默删除任务或修改其职责。Bootstrap readiness 只验证基础工程，业务页面与平台投影的真实性在 Build 后验收。
 
 ### 4.4 修复失败重试时的文件操作误判
 
@@ -393,7 +371,7 @@ checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更�
 
 ### 6.1 `build-task-plan.json`
 
-保持 `schema_version=build-dag.v3`，只增加确认闭环所需的最小字段。
+保持 `schema_version=build-dag.v4`，只增加确认闭环所需的最小字段。
 
 | 操作 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- |
@@ -402,19 +380,26 @@ checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更�
 | 增 | `confirmed_at` | string/null | 最新任务规划的确认时间；未确认时为 null |
 | 改 | `change_scope[].operation` | string | 字段结构不变，明确为规划操作意图；重试差异按 attempt 基线判断 |
 | 不动 | `status` | string | 继续使用 `ready` 或 `blocked`，避免影响 Scheduler |
-| 不动 | `version`、`schema_version` | string | 保持当前 v3 版本；不增加历史产物读取或旧格式默认确认逻辑 |
+| 当前 | `version`、`schema_version` | string | DAG schema 使用 v4；不增加历史产物读取或旧格式默认确认逻辑 |
+| 当前 | `template_context` | object | 冻结 state_path、template_revision、effective_capabilities；Build 必须核对当前 TemplateState |
+| 当前 | `route_projection` | object | 保存确认的全部业务页面路由事实；所有任务成功后由平台投影 |
 | 不动 | `task_registry`、`task_graph` | object | 保持 BuildScheduler 输入结构 |
 | 不动 | `build_units`、`unit_graph` | object | 不调整 Unit 结构 |
 | 不动 | `execution.batches` | array | 不调整现有执行批次结构 |
 | 保留 | `source_project_plan_version` | string | 保留现有字段名；当前值来自运行时所基于的 TechnicalPlan 版本，本期不做命名清理 |
 | 不动 | 任务字段 | object | 不删除或重命名现有任务字段 |
 
-示例：
+示例（省略 route_projection、交付物和任务图细节，不是可直接执行的完整 DAG）：
 
 ```json
 {
   "version": "3.0.0",
-  "schema_version": "build-dag.v3",
+  "schema_version": "build-dag.v4",
+  "template_context": {
+    "state_path": ".xcodeagent/template-state.json",
+    "template_revision": "example-revision",
+    "effective_capabilities": {}
+  },
   "status": "ready",
   "build_execution_scope": {
     "type": "page",
@@ -503,7 +488,7 @@ confirmation_status == confirmed
 
 | 模块 | 最小改动内容 |
 | --- | --- |
-| `Backend/app/graph/nodes/tasks.py` | 只消费已确认正式产物、模板 manifest 和范围详细设计；移除上游计划回写；处理 DAG pending 与确认，放弃由计划控制流收口 |
+| `Backend/app/graph/nodes/tasks.py` | 只消费已确认正式产物、TemplateState 和范围详细设计；移除上游计划回写；处理 DAG pending 与确认，放弃由计划控制流收口 |
 | `Backend/app/services/build_task_planner.py` | 完全重复任务确定性合并；按 `api_contract_id + endpoint_id` 校验前端唯一实现 owner；写入 scope 和确认字段；对菜单、路由、页面占位和数据库职责越界执行显式 DAG 校验，不修改或删除候选；保留 Unit 级 fingerprint |
 | `Backend/app/services/build_task_menu.py` | 删除 DAG 菜单/路由任务生成、菜单任务修剪和 canonical page entry 注入逻辑；仅保留已存在页面入口的只读路径校对和必要的菜单状态解析 |
 | `Backend/app/services/build_unit_skeleton.py` | 保持数据库已在实体确认阶段落地的当前边界，不为 Normal Build 创建 `database:*` Unit |
@@ -512,7 +497,7 @@ confirmation_status == confirmed
 | `Backend/app/agents/main/task_preparer.py` | 删除“DAG 负责菜单登记、允许修改 menus.ts”的提示词；将 DAG 校验错误自动回灌模型并有界重生成；保留页面内容和 API 实现边界 |
 | `Backend/app/services/engineering_acceptance.py` | 明确规划 operation 与 attempt 验收边界，使用 PageImplementationContract/TechnicalPlan Endpoint 术语 |
 | `Backend/app/services/engineering_acceptance_verifier.py`、`build_scheduler.py` | 重试时按本次 attempt 基线接受合理的 added/modified 差异，并把原任务 retry 信息传入验收 |
-| `Backend/app/services/application_template_generation.py`、`frontend_scaffold.py`、`application_lifecycle.py` | 提供并校验现有 `.xcodeagent/template-generation-manifest.json`；DAG 只消费模板就绪状态，不接管初始化 |
+| `Backend/app/services/workspace_bootstrap/`、`template_state.py`、`application_lifecycle.py` | Backend 事务内完成 Bootstrap Readiness；DAG 读取 TemplateState 并冻结 template_context |
 | `Backend/app/workspace/task_documents.py` | 只保留 Build Task Plan JSON 和 repair task plan JSON；删除 DAG Markdown 路径、渲染和写入逻辑 |
 | `Backend/app/services/build_task_progress.py` | 移除 `BUILD_TASK_DAG.md` artifact 摘要，改为输出 JSON 安全投影和 DAG confirmation 状态 |
 | `Backend/app/services/build_repair_planner.py` | 保持 repair-task-plan 独立产物和既有修复确认；追加修复任务时保留主计划 confirmation 语义 |
@@ -532,10 +517,10 @@ confirmation_status == confirmed
 2. Database 项目在实体确认阶段完成数据库操作后，DAG 能消费已确认实体上下文并生成允许的后端/前端任务，且 Normal Build 不生成 database-owner 任务；
 3. RequirementSpec、ProductPlan、UiManifest、TechnicalPlan 未满足当前确认门禁时，DAG 不修改或回写任何正式产物；
 4. 运行时 `project_plan` 不会被写回 `.xcodeagent/plans/technical-plan.json`；
-5. 模板 manifest 缺失、未完成或真实页面/菜单不一致时，会返回模板初始化流程，不生成 DAG 兜底任务；
+5. TemplateState 缺失、结构无效或与冻结绑定漂移时阻断，要求处理工作区或重新规划；不生成模板修复任务。
 6. 模型若返回菜单、路由、隐藏路由或共享注册文件修改任务，候选不会被静默删除，`task_graph.validation.errors` 会定位到任务和路径，并自动触发重生成；
 7. 模型若返回页面目录或 `index.tsx` 占位文件新增任务，候选不会被改写，平台会自动重生成；
-8. 新增页面的模板初始化增量流程完成后，DAG 只生成页面内容和 API 调用实现任务；
+8. 新增页面由 Agent 完成真实入口；全部任务成功后平台投影导航，不在规划阶段预建文件。
 9. 当前范围缺少 PageImplementationContract、Endpoint 契约或 EntitySourceBinding 时，会在 DAG 生成前阻断；
 10. DAG 校验通过后不会直接进入 Build；
 11. 用户确认最新任务规划后才能进入 Build；

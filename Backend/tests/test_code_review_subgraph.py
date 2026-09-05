@@ -148,7 +148,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             "app.graph.subgraphs.code_review.capture_agent_file_changes",
             return_value=captured,
         ), patch(
-            "app.graph.subgraphs.code_review.run_integration_checks",
+            "app.graph.subgraphs.code_review.run_project_restart_validation",
             return_value={
                 "test_results": [
                     {
@@ -549,7 +549,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
         """任一必需审查构建失败时必须回到修复轮次，不能提前启动项目。"""
 
         with patch(
-            "app.graph.subgraphs.code_review.run_integration_checks",
+            "app.graph.subgraphs.code_review.run_project_restart_validation",
             return_value={
                 "test_results": [
                     {
@@ -603,7 +603,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             "stderr_tail": "",
         }
         with patch(
-            "app.graph.subgraphs.code_review.run_integration_checks",
+            "app.graph.subgraphs.code_review.run_project_restart_validation",
             return_value={
                 "test_results": [
                     {
@@ -641,9 +641,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "completed")
-        supplied = checks.call_args.kwargs["frontend_install_result"]
-        self.assertEqual(supplied["id"], "frontend_install")
-        self.assertEqual(supplied["execution"]["tool"], "pnpm_install_frontend")
+        checks.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -11,6 +11,8 @@ import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
 type UseActiveApplicationPlanningsOptions = {
+  /** 同步模板 Bootstrap 终态到当前工作台的 lifecycle store。 */
+  onTemplateLifecycleResolved: (applicationId: string, lifecycle: ApplicationLifecycle) => void
   onOpenWorkbench: (
     application: ApplicationConfig,
     lifecycle: ApplicationLifecycle
@@ -25,6 +27,8 @@ type ActiveApplicationPlanningsController = {
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
   generatingAppIds: ReadonlySet<string>
   onTechnicalPlanConfirmed: (applicationId: string) => Promise<boolean>
+  /** 重试指定应用已失败的模板 Bootstrap。 */
+  retryApplicationTemplateGeneration: (applicationId: string) => Promise<boolean>
   registerStopHandler: (applicationId: string, handler?: () => Promise<void>) => void
   returnHome: () => void
   showPlanning: (applicationId: string) => void
@@ -45,6 +49,7 @@ type ActiveApplicationPlanningsController = {
 
 // 维护相互隔离的应用初始化会话及其后台模板生成任务。
 export function useActiveApplicationPlannings({
+  onTemplateLifecycleResolved,
   onOpenWorkbench
 }: UseActiveApplicationPlanningsOptions): ActiveApplicationPlanningsController {
   const [activePlannings, setActivePlannings] = useState<PersistedActivePlanning[]>([])
@@ -199,9 +204,13 @@ export function useActiveApplicationPlannings({
     []
   )
 
-  // 停止指定应用的主规划 Workflow，供工作台自由变更入口复用同一停止句柄。
+  // 停止指定应用的主规划 Workflow；停止句柄未注册时必须显式失败，不能伪装成已停止。
   const stopPlanning = useCallback(async (applicationId: string): Promise<void> => {
-    await stopHandlersRef.current.get(applicationId)?.()
+    const handler = stopHandlersRef.current.get(applicationId)
+    if (!handler) {
+      throw new Error('当前规划会话尚未就绪，无法确认已暂停。请稍后重试。')
+    }
+    await handler()
   }, [])
 
   // 从活动集合移除已经完成或删除的单个计划。
@@ -233,11 +242,12 @@ export function useActiveApplicationPlannings({
     (): string | undefined => visiblePlanningIdRef.current,
     []
   )
-  const { generateApplicationTemplateFiles, generatingAppIds } =
+  const { generateApplicationTemplateFiles, generatingAppIds, retryApplicationTemplateFiles } =
     useApplicationTemplateGeneration({
       commitPlannings,
       hidePlanning,
       getVisiblePlanningId,
+      onLifecycleResolved: onTemplateLifecycleResolved,
       onOpenWorkbench
     })
 
@@ -265,6 +275,17 @@ export function useActiveApplicationPlannings({
     [generateApplicationTemplateFiles]
   )
 
+  // 仅重试该应用的失败模板任务，不影响其他后台规划会话。
+  const retryApplicationTemplateGeneration = useCallback(
+    (applicationId: string): Promise<boolean> => {
+      const planning = activePlanningsRef.current.find(
+        (candidate) => candidate.application.id === applicationId
+      )
+      return planning ? retryApplicationTemplateFiles(planning) : Promise.resolve(false)
+    },
+    [retryApplicationTemplateFiles]
+  )
+
   // 返回首页时只隐藏当前规划，所有已挂载会话继续运行。
   const returnHome = useCallback((): void => {
     setVisiblePlanning(undefined)
@@ -276,6 +297,7 @@ export function useActiveApplicationPlannings({
     hidePlanning,
     generatingAppIds,
     onTechnicalPlanConfirmed,
+    retryApplicationTemplateGeneration,
     registerStopHandler,
     returnHome,
     showPlanning,

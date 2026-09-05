@@ -2,8 +2,7 @@
 
 设计稿是一段自包含的 .tsx（React + antd5 + @ant-design/pro-components），
 由 LLM 按 antd-ui-design SKILL.md 规范生成，写入可运行的设计稿工程
-UiDesignProject 的 src/pages/<PageKey>/index.tsx，并把页面注册到该工程的
-BIZ_MENUS 菜单。代码使用内联静态 Mock 数据，不接入 API；通过本地状态表达
+UiDesignProject 的 src/pages/<PageKey>/index.tsx。代码使用内联静态 Mock 数据，不接入 API；通过本地状态表达
 已确认的筛选、弹窗、表单和页面状态，作为可交互的产品 UI 原型。
 """
 
@@ -1170,8 +1169,8 @@ def _page_key_from_page_id(page_id: str) -> str:
     例：order_list_page → OrderListPage，dashboard_page → DashboardPage，
     login_page → LoginPage，user_detail_page → UserDetailPage。
 
-    与 build_context_resolver 和 frontend_scaffold 的共享调用保持一致，
-    避免 UI 确认、模板初始化和任务拆分阶段看到不同的 PageKey。
+    与 build_context_resolver 和 Route Projection 的共享派生规则保持一致，
+    避免 UI 确认、Build 任务和路由投影看到不同的 PageKey。
     """
 
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(page_id or "page")).strip("-")

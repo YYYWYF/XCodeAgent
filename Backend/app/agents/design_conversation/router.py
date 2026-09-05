@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
+from app.services.access_control_intent import (
+    has_explicit_business_access_control_change,
+)
 from app.utils.model_output import extract_json_object
 
 
@@ -41,6 +44,14 @@ def classify_design_conversation(
 ) -> DesignConversationDecision:
     """调用独立 ChatModel 判断最早需要回退的真实设计节点。"""
 
+    if has_explicit_business_access_control_change(request):
+        # 受控页面、操作或角色访问权属于 RequirementSpec 事实，不能交给路由模型猜测层级。
+        return DesignConversationDecision(
+            target="requirements",
+            reason="输入明确调整角色访问控制，必须先修订需求权限规则。",
+            affected_page_ids=_mentioned_page_ids(request, product_plan),
+            response="",
+        )
     active_settings = settings or Settings.from_env()
     prompt = _classification_prompt(
         request,
@@ -208,6 +219,9 @@ def _fallback_decision(
         "删除页面",
         "业务流程",
         "不需要这个页面",
+        "权限",
+        "授权",
+        "访问控制",
     )
     product_signals = (
         "产品规划",

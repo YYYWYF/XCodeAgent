@@ -1,8 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import crypto from 'node:crypto'
-import { execFile, spawn } from 'node:child_process'
-import type { ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import icon from '../../resources/icon.png?asset'
@@ -10,12 +8,8 @@ import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { setupApplicationSettingsIpc } from './applicationSettings'
-import { lstatIfPresent, movePathToTrashIfPresent, removeDirectoryIfPresent } from './filesystem'
-import {
-  assertCurrentApplicationSchema,
-  readManagedWorkspaceApplication,
-  resolveApplicationTemplateBranch
-} from './managedWorkspace'
+import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
+import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
 import { endpointDesignDocumentExists, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
 import {
   nextStageSessionSequence,
@@ -40,7 +34,6 @@ let tray: Tray | null = null
 let isQuitting = false
 const previewWindows = new Set<BrowserWindow>()
 const launchedPreviewWorkspaces = new Map<string, string>()
-const templateCloneProcesses = new Map<string, Set<ChildProcess>>()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 let primaryStartupPromise: Promise<boolean> | null = null
 
@@ -790,7 +783,29 @@ async function ensureApplicationsFile(): Promise<string> {
   return applicationsFile
 }
 
-/** 读取持久化应用列表，非数组内容按空列表处理。 */
+/** 校验 applications.json 索引记录，拒绝混入工作区配置副本。 */
+function assertApplicationIndex(value: unknown): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('application index must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const allowedKeys = ['id', 'workspaceRoot', 'name', 'lastOpenedAt']
+  if (
+    Object.keys(record).some((key) => !allowedKeys.includes(key)) ||
+    typeof record.id !== 'string' ||
+    !record.id.trim() ||
+    typeof record.workspaceRoot !== 'string' ||
+    !record.workspaceRoot.trim() ||
+    typeof record.name !== 'string' ||
+    !record.name.trim() ||
+    typeof record.lastOpenedAt !== 'number' ||
+    !Number.isFinite(record.lastOpenedAt)
+  ) {
+    throw new Error('application index contains invalid fields')
+  }
+}
+
+/** 读取持久化应用索引，非数组内容按空列表处理。 */
 async function readApplications(): Promise<unknown[]> {
   const applicationsFile = await ensureApplicationsFile()
   const rawValue = await fs.readFile(applicationsFile, 'utf8')
@@ -798,11 +813,12 @@ async function readApplications(): Promise<unknown[]> {
   return Array.isArray(parsed) ? parsed : []
 }
 
-/** 校验并持久化应用列表。 */
+/** 校验并持久化不含 application.json 配置副本的应用索引。 */
 async function writeApplications(applications: unknown): Promise<void> {
   if (!Array.isArray(applications)) {
     throw new Error('applications must be an array')
   }
+  applications.forEach(assertApplicationIndex)
 
   const applicationsFile = await ensureApplicationsFile()
   await fs.writeFile(applicationsFile, `${JSON.stringify(applications, null, 2)}\n`, 'utf8')
@@ -837,89 +853,6 @@ async function trashProjectDirectory(workspaceRoot: unknown): Promise<void> {
   }
 
   await movePathToTrashIfPresent(projectRoot, (targetPath) => shell.trashItem(targetPath))
-}
-
-/** 登记模板下载子进程，使应用删除可以按完整工作区立即终止 clone。 */
-function registerTemplateCloneProcess(workspaceRoot: string, child: ChildProcess): void {
-  const workspaceKey = pathComparisonKey(workspaceRoot)
-  const processes = templateCloneProcesses.get(workspaceKey) || new Set<ChildProcess>()
-  processes.add(child)
-  templateCloneProcesses.set(workspaceKey, processes)
-  child.once('close', () => {
-    processes.delete(child)
-    if (processes.size === 0) templateCloneProcesses.delete(workspaceKey)
-  })
-}
-
-/** 向模板下载的完整进程树发送停止信号，避免 git 派生进程继续写目标目录。 */
-async function signalTemplateCloneProcessTree(
-  child: ChildProcess,
-  force: boolean
-): Promise<void> {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
-  if (process.platform === 'win32') {
-    await new Promise<void>((resolve, reject) => {
-      execFile(
-        'taskkill',
-        ['/PID', String(child.pid), '/T', ...(force ? ['/F'] : [])],
-        { windowsHide: true },
-        (error) => {
-          if (error && child.exitCode === null && child.signalCode === null) reject(error)
-          else resolve()
-        }
-      )
-    })
-    return
-  }
-  try {
-    process.kill(-child.pid, force ? 'SIGKILL' : 'SIGTERM')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-  }
-}
-
-/** 终止指定工作区仍在运行的模板下载进程，并等待进程句柄关闭。 */
-async function stopTemplateCloneProcesses(workspaceRoot: string): Promise<number> {
-  const workspaceKey = pathComparisonKey(workspaceRoot)
-  const processes = [...(templateCloneProcesses.get(workspaceKey) || [])].filter(
-    (child) => child.exitCode === null && child.signalCode === null
-  )
-  await Promise.all(
-    processes.map(
-      (child) =>
-        new Promise<void>((resolve, reject) => {
-          let settled = false
-          const finish = (error?: Error): void => {
-            if (settled) return
-            settled = true
-            clearTimeout(forceTimer)
-            clearTimeout(failureTimer)
-            if (error) reject(error)
-            else resolve()
-          }
-          const forceTimer = setTimeout(() => {
-            void signalTemplateCloneProcessTree(child, true).catch((error) =>
-              finish(error instanceof Error ? error : new Error(String(error)))
-            )
-          }, 2_000)
-          const failureTimer = setTimeout(
-            () => finish(new Error(`模板下载进程 ${child.pid || 'unknown'} 无法终止`)),
-            5_000
-          )
-          child.once('close', () => finish())
-          void signalTemplateCloneProcessTree(child, false).catch((error) =>
-            finish(error instanceof Error ? error : new Error(String(error)))
-          )
-        })
-    )
-  )
-  templateCloneProcesses.delete(workspaceKey)
-  return processes.length
-}
-
-/** 应用退出时终止所有仍在运行的模板下载进程树。 */
-async function stopAllTemplateCloneProcesses(): Promise<void> {
-  await Promise.all([...templateCloneProcesses.keys()].map(stopTemplateCloneProcesses))
 }
 
 /** 校验应用标识，避免 Electron 删除门禁向后端发送空目标。 */
@@ -985,7 +918,6 @@ function setupApplicationStorageIpc(): void {
   ipcMain.handle('applications:delete-project', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
     const applicationId = assertApplicationId(payload.applicationId)
-    await stopTemplateCloneProcesses(workspaceRoot)
     await prepareApplicationDeletionWithBackend(applicationId, workspaceRoot)
     launchedPreviewWorkspaces.delete(pathComparisonKey(workspaceRoot))
     // 先转移环境级会话；即使随后项目目录移动失败，仍可用原工作区重试删除事务。
@@ -1591,6 +1523,27 @@ function setupWorkspaceIpc(): void {
     return { application: applicationConfig }
   })
 
+  ipcMain.handle('workspace:write-application', async (_event, payload = {}) => {
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    if (
+      !payload.application ||
+      typeof payload.application !== 'object' ||
+      Array.isArray(payload.application)
+    ) {
+      throw new Error('application must be an object')
+    }
+    const currentApplication = await readManagedWorkspaceApplication(workspaceRoot)
+    const nextApplication = { ...(payload.application as Record<string, unknown>) }
+    // 只有实际配置变化才递增版本，避免打开或刷新应用时制造过期规划产物。
+    if (JSON.stringify(currentApplication) !== JSON.stringify(nextApplication)) {
+      nextApplication.configRevision = Number(currentApplication.configRevision) + 1
+    }
+    assertCurrentApplicationSchema(nextApplication)
+    const applicationFile = getWorkspaceApplicationFile(workspaceRoot)
+    await fs.writeFile(applicationFile, `${JSON.stringify(nextApplication, null, 2)}\n`, 'utf8')
+    return { application: await readManagedWorkspaceApplication(workspaceRoot) }
+  })
+
   ipcMain.handle('workspace:select-directory', async (_event, options = {}) => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: typeof options.title === 'string' ? options.title : '选择工作目录',
@@ -1634,222 +1587,6 @@ function setupWorkspaceIpc(): void {
     }
   })
 
-  type TemplateCloneTargetResult = {
-    status: 'succeeded' | 'failed' | 'pending'
-    attempt: number
-    path: string
-    error?: string
-    repositoryUrl?: string
-    branch?: 'main' | 'auth'
-    commitSha?: string
-  }
-
-  /** 判断模板目录是否包含可识别的工程入口文件。 */
-  async function isTemplateDirectoryReady(
-    targetDir: string,
-    targetDirName: string
-  ): Promise<boolean> {
-    const markers =
-      targetDirName === 'frontend'
-        ? ['package.json']
-        : ['pom.xml', 'build.gradle', 'build.gradle.kts']
-    for (const marker of markers) {
-      if (await lstatIfPresent(path.join(targetDir, marker))) return true
-    }
-    return false
-  }
-
-  /** 拉取单个模板仓库；已有有效目录直接复用，失败时最多尝试三次。 */
-  async function cloneGitRepo(
-    templateUrl: string,
-    projectPath: string,
-    targetDirName: string,
-    templateBranch: 'main' | 'auth'
-  ): Promise<TemplateCloneTargetResult> {
-    const targetDir = path.join(projectPath, targetDirName)
-    await fs.mkdir(path.dirname(targetDir), { recursive: true })
-
-    if (await isTemplateDirectoryReady(targetDir, targetDirName)) {
-      return readExistingTemplateSource(targetDir, targetDirName, templateUrl, templateBranch)
-    }
-
-    const existing = await lstatIfPresent(targetDir)
-    if (existing) {
-      const entries = existing.isDirectory() ? await fs.readdir(targetDir) : ['occupied']
-      if (entries.length > 0) {
-        return {
-          status: 'failed',
-          attempt: 0,
-          path: targetDir,
-          error: `${targetDirName} 目录已存在但不是可识别的模板工程，为避免覆盖现有文件已停止下载。`
-        }
-      }
-    }
-
-    let cloneError: Error | null = null
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        await removeDirectoryIfPresent(targetDir)
-      } catch (error) {
-        cloneError = error instanceof Error ? error : new Error(String(error))
-        if (attempt === 3) break
-        continue
-      }
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const child = spawn(
-            'git',
-            ['clone', '--branch', templateBranch, '--single-branch', '--depth', '1', templateUrl, targetDir],
-            {
-              detached: process.platform !== 'win32',
-              windowsHide: true,
-              stdio: ['ignore', 'ignore', 'pipe'],
-              env: {
-                ...process.env,
-                GIT_TERMINAL_PROMPT: '0',
-                GCM_INTERACTIVE: 'Never'
-              }
-            }
-          )
-          registerTemplateCloneProcess(projectPath, child)
-          let settled = false
-          let timedOut = false
-          let stderr = ''
-          const finish = (error?: Error): void => {
-            if (settled) return
-            settled = true
-            clearTimeout(timeoutTimer)
-            if (error) reject(error)
-            else resolve()
-          }
-          const timeoutTimer = setTimeout(() => {
-            timedOut = true
-            void signalTemplateCloneProcessTree(child, true).catch((error) =>
-              finish(error instanceof Error ? error : new Error(String(error)))
-            )
-          }, 120_000)
-          child.stderr?.on('data', (chunk) => {
-            if (stderr.length < 10 * 1024 * 1024) stderr += String(chunk)
-          })
-          child.once('error', (error) => finish(error))
-          child.once('close', (code) => {
-            if (timedOut) {
-              finish(new Error(`git clone 超时：${stderr.trim() || '120 秒内未完成'}`))
-            } else if (code !== 0) {
-              finish(new Error(`git clone 失败（exit ${code ?? 'unknown'}）：${stderr.trim()}`))
-            } else {
-              finish()
-            }
-          })
-        })
-        if (!(await isTemplateDirectoryReady(targetDir, targetDirName))) {
-          throw new Error(`git clone 完成，但 ${targetDirName} 模板缺少工程入口文件。`)
-        }
-        cloneError = null
-        return readExistingTemplateSource(targetDir, targetDirName, templateUrl, templateBranch, attempt)
-      } catch (error) {
-        cloneError = error instanceof Error ? error : new Error(String(error))
-      }
-    }
-
-    try {
-      await removeDirectoryIfPresent(targetDir)
-    } catch (cleanupError) {
-      const cleanupMessage =
-        cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
-      cloneError = new Error(
-        `${cloneError?.message || '模板下载失败'}；清理半成品失败：${cleanupMessage}`
-      )
-    }
-    return {
-      status: 'failed',
-      attempt: 3,
-      path: targetDir,
-      error: cloneError?.message || `${targetDirName} 模板下载失败。`
-    }
-  }
-
-  /** 读取并校验现有浅克隆的来源、分支和提交，避免混用或覆盖模板。 */
-  async function readExistingTemplateSource(
-    targetDir: string,
-    targetDirName: string,
-    expectedUrl: string,
-    expectedBranch: 'main' | 'auth',
-    attempt = 0
-  ): Promise<TemplateCloneTargetResult> {
-    const readGit = (args: string[]): Promise<string> =>
-      new Promise((resolve, reject) => {
-        execFile('git', ['-C', targetDir, ...args], { windowsHide: true }, (error, stdout, stderr) => {
-          if (error) {
-            reject(new Error(`${targetDirName} 模板来源无法验证：${stderr || error.message}`))
-            return
-          }
-          resolve(stdout.trim())
-        })
-      })
-    try {
-      const [repositoryUrl, branch, commitSha] = await Promise.all([
-        readGit(['config', '--get', 'remote.origin.url']),
-        readGit(['branch', '--show-current']),
-        readGit(['rev-parse', 'HEAD'])
-      ])
-      if (repositoryUrl !== expectedUrl || branch !== expectedBranch || !commitSha) {
-        throw new Error(
-          `${targetDirName} 模板来源不匹配：期望 ${expectedUrl}@${expectedBranch}，实际 ${repositoryUrl || 'unknown'}@${branch || 'detached'}。`
-        )
-      }
-      return { status: 'succeeded', attempt, path: targetDir, repositoryUrl, branch: expectedBranch, commitSha }
-    } catch (error) {
-      return {
-        status: 'failed',
-        attempt,
-        path: targetDir,
-        error: error instanceof Error ? error.message : String(error)
-      }
-    }
-  }
-
-  // 从远程模板仓库拉取前后端模板工程，放到 <项目位置>/frontend/ 和 <项目位置>/backend/ 下。
-  ipcMain.handle('workspace:clone-template', async (_event, payload = {}) => {
-    if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
-      throw new Error('projectPath must be a non-empty string')
-    }
-    if (typeof payload.appName !== 'string' || !payload.appName.trim()) {
-      throw new Error('appName must be a non-empty string')
-    }
-    const frontendUrl =
-      typeof payload.frontendTemplateUrl === 'string' && payload.frontendTemplateUrl.trim()
-        ? payload.frontendTemplateUrl.trim()
-        : 'https://github.com/ruyue1/frontend-template.git'
-    const backendUrl =
-      typeof payload.backendTemplateUrl === 'string' && payload.backendTemplateUrl.trim()
-        ? payload.backendTemplateUrl.trim()
-        : 'https://github.com/Hupy2118/springboot-template.git'
-
-    const projectPath = path.resolve(payload.projectPath)
-    const applicationConfig = await readManagedWorkspaceApplication(projectPath)
-    const templateBranch = resolveApplicationTemplateBranch(applicationConfig)
-
-    const frontend = await cloneGitRepo(frontendUrl, projectPath, 'frontend', templateBranch)
-    const backend =
-      frontend.status === 'failed'
-        ? {
-            status: 'pending' as const,
-            attempt: 0,
-            path: path.join(projectPath, 'backend'),
-            error: '前端模板下载失败，后端模板尚未开始下载。'
-          }
-        : await cloneGitRepo(backendUrl, projectPath, 'backend', templateBranch)
-    const failedTargets = (['frontend', 'backend'] as const).filter(
-      (target) => ({ frontend, backend })[target].status === 'failed'
-    )
-    return {
-      ok: failedTargets.length === 0,
-      status: failedTargets.length === 0 ? 'succeeded' : 'failed',
-      failedTargets,
-      targets: { frontend, backend }
-    }
-  })
 }
 
 function setupSessionStorageIpc(): void {
@@ -2219,12 +1956,6 @@ async function cleanupBeforeQuit(): Promise<void> {
     await clearAuthState()
   } catch (error) {
     console.error('Failed to clear auth token', error)
-  }
-
-  try {
-    await stopAllTemplateCloneProcesses()
-  } catch (error) {
-    console.error('Failed to stop template clone processes', error)
   }
 
   try {

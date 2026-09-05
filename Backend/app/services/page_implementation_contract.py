@@ -254,7 +254,7 @@ def _permission_bindings(technical_plan: dict[str, Any], page_id: str, action_id
     """从已编译权限目录为页面及其业务操作投影最小权限绑定。"""
 
     manifest = technical_plan.get("authorization_manifest")
-    if not isinstance(manifest, dict) or manifest.get("enabled") is not True:
+    if not isinstance(manifest, dict):
         return []
     bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
     result = [

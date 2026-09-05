@@ -28,9 +28,12 @@ from app.services.application_lifecycle import (
 )
 from app.services.application_revision_lifecycle import (
     consume_revision_continuation,
+    commit_active_revision_application_config_changes,
     discard_active_revision,
+    effective_active_revision_application_config,
     issue_revision_continuation,
     register_revision_impact,
+    stage_active_revision_initial_administrator_subjects,
     submit_revision_impact,
     update_active_revision_progress,
 )
@@ -149,6 +152,177 @@ class RevisionRoutingTests(unittest.TestCase):
             assert current is not None and current.active_formal_revision is not None
             self.assertEqual(current.active_formal_revision.status, "awaiting_user")
 
+    def test_capability_change_commits_before_revision_planning_starts(self) -> None:
+        """影响确认批准后必须先提交能力开关，放弃后不得回滚当前配置事实。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config_directory = workspace / ".xcodeagent"
+            config_directory.mkdir()
+            application_file = config_directory / "application.json"
+            application_file.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 6,
+                        "configRevision": 1,
+                        "auth": {"enable": False},
+                        "authorization": {"enabled": False, "initialAdministratorSubjects": []},
+                        "track": {"enable": False},
+                        "apiTrack": {"enable": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lifecycle = create_application_lifecycle(
+                application_id="app-config-change",
+                application_name="配置测试",
+                initialization_thread_id="planning-thread",
+            )
+            lifecycle = lifecycle.model_copy(
+                update={
+                    "initialization": lifecycle.initialization.model_copy(
+                        update={
+                            "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                            "status": ApplicationLifecycleStatus.COMPLETED,
+                        }
+                    )
+                }
+            )
+            write_application_lifecycle(directory, lifecycle)
+            pending = register_revision_impact(
+                directory,
+                interaction_id="impact-config-change",
+                source_thread_id="conversation-thread",
+                source_run_id="conversation-run",
+                request="给应用增加登录功能",
+                target=RevisionTarget(type="application"),
+                impact=RevisionImpact(
+                    formalBranch="design_stage_revision",
+                    revisionType="requirement_scope_change",
+                    earliestArtifact="requirement-spec",
+                    affectedArtifacts=["requirement-spec"],
+                    affectedResources=["application"],
+                    reason="增加登录能力",
+                ),
+            )
+            self.assertEqual(
+                [item.model_dump(by_alias=True) for item in pending.pending_application_config_changes],
+                [{
+                    "path": "auth.enable",
+                    "operation": "set",
+                    "from": False,
+                    "to": True,
+                    "reason": "用户明确要求启用 auth.enable",
+                    "evidence": "给应用增加登录功能",
+                }],
+            )
+            active = submit_revision_impact(
+                directory,
+                interaction_id="impact-config-change",
+                decision="approved",
+            )
+            assert active is not None
+            self.assertEqual(active.pending_application_config_changes, [])
+            self.assertTrue(json.loads(application_file.read_text(encoding="utf-8"))["auth"]["enable"])
+
+            committed = commit_active_revision_application_config_changes(
+                directory,
+                change_id=active.change_id,
+            )
+            self.assertEqual(committed.pending_application_config_changes, [])
+            self.assertTrue(json.loads(application_file.read_text(encoding="utf-8"))["auth"]["enable"])
+
+            discard_active_revision(directory, change_id=active.change_id)
+
+            persisted = load_application_lifecycle(directory)
+            assert persisted is not None
+            self.assertIsNone(persisted.active_formal_revision)
+            self.assertTrue(json.loads(application_file.read_text(encoding="utf-8"))["auth"]["enable"])
+
+    def test_revision_commits_administrator_before_requirement_replanning(self) -> None:
+        """权限管理员澄清完成后，开关和管理员必须一起提交再继续重规划。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config_directory = workspace / ".xcodeagent"
+            config_directory.mkdir()
+            application_file = config_directory / "application.json"
+            application_file.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 6,
+                        "configRevision": 1,
+                        "datasource": {"type": "database"},
+                        "auth": {"enable": False},
+                        "authorization": {
+                            "enabled": False,
+                            "initialAdministratorSubjects": [],
+                        },
+                        "track": {"enable": False},
+                        "apiTrack": {"enable": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lifecycle = create_application_lifecycle(
+                application_id="app-authority-change",
+                application_name="权限配置测试",
+                initialization_thread_id="planning-thread",
+            )
+            write_application_lifecycle(directory, lifecycle)
+            register_revision_impact(
+                directory,
+                interaction_id="impact-authority-change",
+                source_thread_id="conversation-thread",
+                source_run_id="conversation-run",
+                request="开启权限管理",
+                target=RevisionTarget(type="application"),
+                impact=RevisionImpact(
+                    formalBranch="design_stage_revision",
+                    revisionType="requirement_scope_change",
+                    earliestArtifact="requirement-spec",
+                    affectedArtifacts=["requirement-spec"],
+                    affectedResources=["application"],
+                    reason="增加权限管理",
+                ),
+            )
+            active = submit_revision_impact(
+                directory,
+                interaction_id="impact-authority-change",
+                decision="approved",
+            )
+            assert active is not None
+
+            staged = stage_active_revision_initial_administrator_subjects(
+                directory,
+                subjects=[" ops@example.com ", "ops@example.com"],
+            )
+            assert staged is not None
+            self.assertEqual(staged.pending_initial_administrator_subjects, [])
+            current = json.loads(application_file.read_text(encoding="utf-8"))
+            self.assertTrue(current["auth"]["enable"])
+            self.assertTrue(current["authorization"]["enabled"])
+            effective = effective_active_revision_application_config(directory)
+            self.assertTrue(effective["auth"]["enable"])
+            self.assertTrue(effective["authorization"]["enabled"])
+            self.assertEqual(
+                effective["authorization"]["initialAdministratorSubjects"],
+                ["ops@example.com"],
+            )
+
+            committed = commit_active_revision_application_config_changes(
+                directory,
+                change_id=active.change_id,
+            )
+            self.assertEqual(committed.pending_initial_administrator_subjects, [])
+            persisted = json.loads(application_file.read_text(encoding="utf-8"))
+            self.assertTrue(persisted["auth"]["enable"])
+            self.assertTrue(persisted["authorization"]["enabled"])
+            self.assertEqual(
+                persisted["authorization"]["initialAdministratorSubjects"],
+                ["ops@example.com"],
+            )
+
     def test_formal_product_operation_uses_original_design_branch(self) -> None:
         """模型判定产品语义变化后必须从 ProductPlan 返回原设计规划流程。"""
 
@@ -169,6 +343,25 @@ class RevisionRoutingTests(unittest.TestCase):
         self.assertEqual(result.candidate.earliest_artifact.value, "product-plan")
         assert result.impact is not None
         self.assertIn("page:orders", result.impact.affected_resources)
+
+    def test_capability_change_forces_requirement_spec_regeneration(self) -> None:
+        """权限或登录开关不能被模型错误地从 ProductPlan 开始处理。"""
+
+        result = enforce_revision_routing(
+            _candidate(
+                "formal_revision",
+                owner="none",
+                formalBranch="design_stage_revision",
+                revisionType="product_behavior_change",
+                earliestArtifact="product-plan",
+            ),
+            user_request="我想添加权限控制",
+        )
+
+        self.assertEqual(result.candidate.earliest_artifact.value, "requirement-spec")
+        self.assertEqual(result.candidate.revision_type.value, "requirement_scope_change")
+        assert result.impact is not None
+        self.assertEqual(result.impact.affected_artifacts[0], "requirement-spec")
 
     def test_formal_contract_and_database_changes_use_workbench_branch(self) -> None:
         """模型判定 API 与数据库语义变化后必须从 TechnicalPlan 进入工作台草稿。"""

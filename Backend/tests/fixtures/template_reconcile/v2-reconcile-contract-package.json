@@ -1,0 +1,65 @@
+{
+  "protocolVersion": "2",
+  "packageId": "contract-reconcile",
+  "mode": "RECONCILE",
+  "sourceRevision": "2026.09.11.1",
+  "currentStateDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "nextStateDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "strategies": [
+    {
+      "strategyId": "route-container",
+      "index": 0,
+      "schemaVersion": 1,
+      "type": "ENSURE_ROUTE",
+      "target": "frontend/src/routes.tsx",
+      "precondition": {},
+      "parameters": {
+        "astSelector": {
+          "nodeType": "array",
+          "position": "beforeEnd"
+        },
+        "managedMarker": "xcodeagent:login-route",
+        "content": "// xcodeagent:login-route\n{ path: '/login' },\n"
+      },
+      "payloadRef": null
+    }
+  ],
+  "validationPlan": [
+    {
+      "validationId": "login-postcondition",
+      "index": 0,
+      "type": "CAPABILITY_POSTCONDITION",
+      "capabilityId": "login",
+      "workingDirectory": ".",
+      "path": null,
+      "containsAll": null,
+      "pointer": null,
+      "expected": null,
+      "checks": [
+        {
+          "type": "JSON_STRUCTURE_CHECK",
+          "path": "frontend/package.json",
+          "containsAll": null,
+          "pointer": "/dependencies/react",
+          "expected": "18.3.1"
+        }
+      ],
+      "blocking": true,
+      "timeoutSeconds": 30,
+      "executionMode": "REAL_WORKSPACE"
+    }
+  ],
+  "payloadManifest": {},
+  "nextTemplateState": {
+    "schemaVersion": 2,
+    "templateRevision": "2026.09.11.1",
+    "requested": {
+      "login": { "enabled": true, "config": {} }
+    },
+    "effective": {
+      "login": { "enabled": true, "config": {} }
+    },
+    "appliedAdditions": {}
+  },
+  "diagnostics": []
+}

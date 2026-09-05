@@ -32,6 +32,8 @@ These instructions apply to the whole XCodeAgent repository. Every Codex agent s
 
 ## Current-Contract-Only Rule
 
+- `.xcodeagent/application.json` is the sole authoritative source of current application-level configuration, including `auth.enable` and `authorization.enabled`. RequirementSpec describes business semantics and may project capability states; TechnicalPlan derives `template_capabilities` from application configuration. Historical requests, `source_request`, model output, and artifact projections must not independently override application configuration.
+- Natural-language configuration changes belong to the existing Formal Revision lifecycle: stage a pending delta, then let deterministic platform code commit it at the corresponding formal-artifact confirmation boundary. Pending deltas are revision-scoped proposals, not another persistent configuration source; clarification answers do not authorize a commit. Preserve the RequirementSpec/ProductPlan joint confirmation gate.
 - This project does not support historical data. During development, implement only the current contract and current storage shape.
 - Do not add version probing, migration code, legacy readers, fallback aliases, historical checkpoint recovery, compatibility branches, or dual-write logic unless the user explicitly requests that behavior in the same task.
 - When a contract changes, update the current producers, consumers, tests, and documentation together; do not preserve old fields or old file names for compatibility.

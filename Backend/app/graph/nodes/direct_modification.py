@@ -29,7 +29,6 @@ from app.graph.nodes.common import (
     workspace_from_state,
 )
 from app.graph.state import ProjectState
-from app.graph.subgraphs.testing import _check_progress_snapshot_writer
 from app.services.direct_modification import (
     append_direct_conversation_summary,
     direct_path_matches_owner,
@@ -39,7 +38,7 @@ from app.services.direct_modification import (
     validated_dynamic_workspace_paths,
     validated_direct_stage_result,
 )
-from app.services.integration_test_runner import run_integration_checks
+from app.services.project_launcher import run_project_restart_validation
 from app.services.revision_routing import (
     build_small_task_revision_confirmation,
     route_from_change_impact,
@@ -972,7 +971,7 @@ def execute_workspace_direct_modification(state: ProjectState) -> dict[str, Any]
 
 
 def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
-    """只构建检查本轮真实改动所属工程层，并把可归因失败交给局部修复节点。"""
+    """只启动验收本轮真实改动所属工程层，并把可归因失败交给局部修复节点。"""
 
     repair_iteration = max(0, int(state.get("repair_iteration", 0) or 0))
     max_repair_iterations = max(
@@ -988,14 +987,8 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
         "repair_iteration": repair_iteration,
         "max_repair_iterations": max_repair_iterations,
     }
-    result = run_integration_checks(
-        validation_state,
-        on_progress=_check_progress_snapshot_writer(),
-        phase="build",
-        artifact_namespace="direct-fix",
-        affected_layers=affected_layers,
-        install_frontend_dependencies=False,
-    )
+    # 快速修复只围绕已捕获的 ChangeSet 做真实启动验收，避免重新运行整个工程构建。
+    result = run_project_restart_validation(validation_state)
     test_results = _scope_direct_validation_results(
         [item for item in result.get("test_results", []) if isinstance(item, dict)],
         changed_paths=changed_paths,
@@ -1103,6 +1096,10 @@ def _scope_direct_validation_results(
 
     scoped: list[dict[str, Any]] = []
     for result in results:
+        # 启动验收失败不能依据日志中是否出现文件名降级；环境失败仍阻断但不返修代码。
+        if isinstance(result.get("startup"), dict):
+            scoped.append(result)
+            continue
         layer = str(result.get("layer") or "").strip().lower()
         paths = changed_paths.get(layer, [])
         if result.get("passed") is True or _direct_failure_matches_changes(result, paths):

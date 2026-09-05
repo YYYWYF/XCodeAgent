@@ -1,5 +1,6 @@
 import type {
   ApplicationConfig,
+  ApplicationIndex,
   ApplicationSchemaConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
@@ -24,16 +25,78 @@ export function isApplicationCreationComplete(lifecycle?: ApplicationLifecycle):
   return lifecycle?.initialization.stage === 'ready_for_workbench';
 }
 
-function normalizeApplications(value: unknown): ApplicationConfig[] {
-  return Array.isArray(value) ? (value as ApplicationConfig[]) : [];
+/** 校验并过滤应用索引，拒绝任何夹带 application.json 配置字段的记录。 */
+function normalizeApplicationIndexes(value: unknown): ApplicationIndex[] {
+  if (!Array.isArray(value)) return []
+  const allowedKeys = ['id', 'workspaceRoot', 'name', 'lastOpenedAt']
+  return value.filter(
+    (value): value is ApplicationIndex =>
+      Boolean(value) &&
+      typeof value === 'object' &&
+      Object.keys(value as Record<string, unknown>).every((key) => allowedKeys.includes(key)) &&
+      typeof (value as ApplicationIndex).id === 'string' &&
+      typeof (value as ApplicationIndex).workspaceRoot === 'string' &&
+      typeof (value as ApplicationIndex).name === 'string' &&
+      typeof (value as ApplicationIndex).lastOpenedAt === 'number'
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function cacheApplications(applications: ApplicationConfig[]) {
+function cacheApplications(applications: ApplicationIndex[]) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(applications));
+}
+
+/** 从运行时应用视图提取唯一允许写入 applications.json 的索引字段。 */
+export function applicationIndexOf(application: ApplicationConfig): ApplicationIndex {
+  const workspaceRoot = application.workspaceRoot?.trim()
+  if (!workspaceRoot) throw new Error('应用缺少工作区路径，不能保存到首页索引')
+  return {
+    id: application.id,
+    workspaceRoot,
+    name: application.appName.trim() || application.name,
+    lastOpenedAt: Date.now()
+  }
+}
+
+/** 从运行时应用视图剥离首页与界面元数据，得到可写入 application.json 的配置。 */
+export function applicationSchemaOf(application: ApplicationConfig): ApplicationSchemaConfig {
+  const {
+    id: _id,
+    name: _name,
+    workspaceRoot: _workspaceRoot,
+    lastOpenedAt: _lastOpenedAt,
+    projectParentPath: _projectParentPath,
+    projectDirectoryName: _projectDirectoryName,
+    source: _source,
+    audience: _audience,
+    legacyTheme: _legacyTheme,
+    legacyLayout: _legacyLayout,
+    enableTabs: _enableTabs,
+    pages: _pages,
+    defaultPage: _defaultPage,
+    hasDynamicRoutes: _hasDynamicRoutes,
+    dynamicRouteDescription: _dynamicRouteDescription,
+    requirementPlan: _requirementPlan,
+    planningThreadId: _planningThreadId,
+    ...schema
+  } = application
+  return schema
+}
+
+/** 读取工作区唯一 application.json 后与首页索引组装当前运行时应用视图。 */
+async function applicationViewFromIndex(index: ApplicationIndex): Promise<ApplicationConfig> {
+  const schema = await loadWorkspaceApplicationConfig(index.workspaceRoot)
+  return {
+    ...schema,
+    ...index,
+    name: schema.appName.trim() || index.name,
+    source: 'existing-workspace',
+    pages: ['工作台'],
+    defaultPage: '工作台'
+  }
 }
 
 // 通知当前渲染窗口重新校验依赖应用索引的派生状态。
@@ -47,25 +110,30 @@ export function subscribeApplicationsChanged(listener: () => void): () => void {
   return () => window.removeEventListener(APPLICATIONS_CHANGED_EVENT, listener);
 }
 
-export function loadCachedApplications() {
+export function loadCachedApplications(): ApplicationIndex[] {
   try {
     const rawValue = window.localStorage.getItem(STORAGE_KEY);
     if (!rawValue) return [];
-    return normalizeApplications(JSON.parse(rawValue));
+    return normalizeApplicationIndexes(JSON.parse(rawValue));
   } catch {
     return [];
   }
 }
 
-export async function loadStoredApplications() {
+/** 读取索引并从每个工作区重新加载 application.json，避免使用缓存配置。 */
+export async function loadStoredApplications(): Promise<ApplicationConfig[]> {
   const electronApplications = window.xcodeAgent?.applications;
 
   if (electronApplications) {
     try {
       const data = await electronApplications.load();
-      const applications = normalizeApplications(data.applications);
-      cacheApplications(applications);
-      return applications;
+      const indexes = normalizeApplicationIndexes(data.applications);
+      cacheApplications(indexes);
+      return (await Promise.allSettled(indexes.map(applicationViewFromIndex)))
+        .filter(
+          (result): result is PromiseFulfilledResult<ApplicationConfig> => result.status === 'fulfilled'
+        )
+        .map((result) => result.value)
     } catch (error) {
       console.warn(error);
     }
@@ -76,15 +144,24 @@ export async function loadStoredApplications() {
     if (!response.ok) throw new Error(`Load applications failed: ${response.status}`);
 
     const data = (await response.json()) as { applications?: unknown };
-    const applications = normalizeApplications(data.applications);
-    cacheApplications(applications);
-    return applications;
+    const indexes = normalizeApplicationIndexes(data.applications);
+    cacheApplications(indexes);
+    return (await Promise.allSettled(indexes.map(applicationViewFromIndex)))
+      .filter(
+        (result): result is PromiseFulfilledResult<ApplicationConfig> => result.status === 'fulfilled'
+      )
+      .map((result) => result.value)
   } catch {
-    return loadCachedApplications();
+    return (await Promise.allSettled(loadCachedApplications().map(applicationViewFromIndex)))
+      .filter(
+        (result): result is PromiseFulfilledResult<ApplicationConfig> => result.status === 'fulfilled'
+      )
+      .map((result) => result.value)
   }
 }
 
-export async function saveStoredApplications(applications: ApplicationConfig[]) {
+/** 保存应用索引；调用者不得传入任何 application.json 配置字段。 */
+export async function saveStoredApplications(applications: ApplicationIndex[]) {
   cacheApplications(applications);
 
   const electronApplications = window.xcodeAgent?.applications;
@@ -117,7 +194,9 @@ export async function saveStoredApplications(applications: ApplicationConfig[]) 
 export async function removeStoredApplication(applicationId: string) {
   const applications = await loadStoredApplications();
   await saveStoredApplications(
-    applications.filter((application) => application.id !== applicationId)
+    applications
+      .filter((application) => application.id !== applicationId)
+      .map(applicationIndexOf)
   );
 }
 
@@ -192,6 +271,22 @@ export async function loadWorkspaceApplicationConfig(
     throw new Error('工作区 application.json 格式无效');
   }
   return result.application as unknown as ApplicationSchemaConfig;
+}
+
+/** 将完整配置保存到其所属工作区，applications.json 绝不参与配置写入。 */
+export async function saveWorkspaceApplicationConfig(
+  workspaceRoot: string,
+  application: ApplicationSchemaConfig
+): Promise<ApplicationSchemaConfig> {
+  const workspaceApi = window.xcodeAgent?.workspace
+  if (!workspaceApi?.writeApplication) {
+    throw new Error('当前环境不支持保存工作区 application.json')
+  }
+  const result = await workspaceApi.writeApplication({ workspaceRoot, application })
+  if (!isRecord(result.application)) {
+    throw new Error('工作区 application.json 保存后格式无效')
+  }
+  return result.application as unknown as ApplicationSchemaConfig
 }
 
 // 检查正式规划产物，并返回页面/API/Endpoint 详细设计是否已有持久化记录。

@@ -539,6 +539,16 @@ const completedTechnicalPlanWorkflow = {
 } as WorkflowRunPayload
 
 assert.equal(planningTechnicalPlanConfirmed(completedTechnicalPlanWorkflow), true)
+assert.equal(planningWorkflowPhase(completedTechnicalPlanWorkflow), 'template_preparation')
+assert.deepEqual(planningWorkflowActivity({
+  ...completedTechnicalPlanWorkflow,
+  summary: { status: 'running', phase: 'technical_planning' }
+} as WorkflowRunPayload), {
+  status: 'running',
+  title: '正在准备应用模板',
+  detail: '正在下载模板代码、生成应用骨架并校验工作区就绪状态。',
+  intentLabel: undefined
+})
 assert.equal(
   planningRequirementsConfirmed({ state: { requirementsConfirmed: true } } as WorkflowRunPayload),
   true
@@ -1449,6 +1459,29 @@ assert.deepEqual(planningWorkflowActivity(regeneratingTechnicalPlan), {
   detail: '正在根据本次设计变更更新技术实现方案。',
   intentLabel: '产品规划层变更'
 })
+
+const reconcilingTemplateWorkflow = {
+  ...regeneratingTechnicalPlan,
+  summary: {
+    status: 'running',
+    phase: 'template_reconcile'
+  },
+  events: [
+    {
+      type: 'workflow.node.started',
+      nodeName: 'template_reconcile',
+      status: 'running'
+    }
+  ]
+} as WorkflowRunPayload
+
+assert.deepEqual(planningWorkflowActivity(reconcilingTemplateWorkflow), {
+  status: 'running',
+  title: '正在更新应用模板',
+  detail: '正在根据已确认的技术规划更新模板能力并校验工作区。',
+  intentLabel: undefined
+})
+assert.equal(planningWorkflowPhase(reconcilingTemplateWorkflow), 'template_reconcile')
 
 const uiCardActionWithHistoricalIntent = {
   ...regeneratingProductPlanWorkflow,

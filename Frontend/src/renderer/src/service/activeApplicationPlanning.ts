@@ -32,8 +32,8 @@ export function activePlanningStatus(lifecycle: ApplicationLifecycle): ActivePla
 export async function loadActiveApplicationPlannings(): Promise<PersistedActivePlanning[]> {
   const recoveredActive: PersistedActivePlanning[] = []
   const applications = (await loadStoredApplications())
-    .filter((application) => application.source === 'new' && application.workspaceRoot)
-    .sort((left, right) => right.createdAt - left.createdAt)
+    .filter((application) => application.workspaceRoot)
+    .sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
 
   for (const application of applications) {
     try {

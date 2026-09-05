@@ -1,11 +1,11 @@
 ---
 name: springboot-template-modification-boundary
-description: 后端 Spring Boot 模板工程文件修改边界规范（后端 skill）。当大模型在从远程拉取的 Spring Boot 模板工程中生成或修改后端 Java 代码、新增业务模块（entity/po/mapper/repository/service/dto/controller）、新增 Mapper XML 时使用，明确哪些后端文件禁止修改、哪些只能增量追加、哪些可以自由编写，避免破坏模板工程的 DDD 分层骨架与公共基础设施。涉及 backend/src/main/java、backend/src/main/resources/mapper、pom.xml、application.yml、common 公共模块、auth 权限模块时使用。
+description: 后端 Spring Boot 模板工程文件修改边界规范（后端 skill）。当大模型在 Workspace 后端工程中生成或修改 Java 代码、新增业务模块（entity/po/mapper/repository/service/dto/controller）、新增 Mapper XML 时使用，明确哪些后端文件禁止修改、哪些只能增量追加、哪些可以自由编写，避免破坏模板工程的 DDD 分层骨架与公共基础设施。涉及 backend/src/main/java、backend/src/main/resources/mapper、pom.xml、application.yml、common 公共模块、auth 权限模块时使用。
 ---
 
 # 后端 Spring Boot 模板工程文件修改边界规范
 
-本技能规定大模型在**从远程拉取的 Spring Boot 模板工程**中生成后端 Java 代码时，各文件的**修改边界**与**放置位置**。模板工程提供 DDD 分层骨架、公共响应/异常/分页/配置基础设施和 auth 权限模块；框架骨架不能被破坏，业务代码只能在指定区域生成。
+本技能规定大模型在 Workspace Spring Boot 工程中生成后端 Java 代码时，各文件的**修改边界**与**放置位置**。模板工程提供 DDD 分层骨架、公共响应/异常/分页/配置基础设施和 auth 权限模块；框架骨架不能被破坏，业务代码只能在指定区域生成。
 
 ## 虚拟路径前缀（重要）
 
@@ -35,7 +35,7 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 | `src/main/java/com/cmbchina/backend/<module>/application/assembler/<Entity>Assembler.java` | `/backend/src/main/java/com/cmbchina/backend/<module>/application/assembler/<Entity>Assembler.java` |
 | `src/main/java/com/cmbchina/backend/<module>/adapter/web/<Entity>Controller.java` | `/backend/src/main/java/com/cmbchina/backend/<module>/adapter/web/<Entity>Controller.java` |
 
-**生成代码前，读取 `/.xcodeagent/template-generation-manifest.json` 的 `templateVariant` 和当前任务允许路径。** 不要把文件写到工作区根下的裸 `src/` 或 `Backend/src/`，那会写到错误位置。
+**生成代码前，读取 `/.xcodeagent/template-state.json` 的 `effective` 与当前任务允许路径。** 不要把文件写到工作区根下的裸 `src/` 或 `Backend/src/`，那会写到错误位置。
 
 ## 🔴 后端工程根目录禁止创建文件
 
@@ -61,10 +61,10 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 
 ## 核心原则
 
-模板变体必须隔离：
+模板能力以 Engine-owned TemplateState 的 `effective` 为准：
 
-- **main**：后端模板只有 `common` 公共基础设施，没有 auth 权限模块。业务模块直接在 `com.cmbchina.backend.<module>` 下新建。
-- **auth**：后端模板包含 `common` 公共基础设施 + `auth` 权限模块（完整的 RBAC）。业务模块在 `com.cmbchina.backend.<module>` 下新建，**不得修改 `auth` 模块的任何已有文件**。
+- 未启用 authorization capability 时，业务模块复用已交付的公共基础设施，不推断或补建权限模块。
+- 启用 authorization capability 时，复用模板交付的 auth 权限基础设施；业务模块仍在 `com.cmbchina.backend.<module>` 下新建，**不得修改 `auth` 模块的任何已有文件**。
 
 - 业务模块包名固定为 `com.cmbchina.backend.<module>`，`<module>` 取业务实体名的小写驼峰（如 `project`、`orderItem`）。
 - DDD 分层固定为：`domain/entity` → `infrastructure/po` → `infrastructure/mapper` → `domain/repository` → `infrastructure/repository/impl` + `infrastructure/repository/converter` → `application/dto` + `application/assembler` + `application/service` → `adapter/web`。
@@ -97,7 +97,7 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 
 > 业务模块**复用**这些公共类：响应统一用 `ResponseEntity.success(body)` / `ResponseEntity.failed(errorCode)`，分页用 `PageParam`/`PageResult`，异常抛 `BizException`。**不得重复定义**响应体、异常基类、分页类。
 
-### auth 权限模块已有文件（仅 auth 分支模板）
+### auth 权限模块已有文件（authorization effective 时由平台提供）
 - `src/main/java/com/cmbchina/backend/auth/` 下的**所有已有文件** — 包括 `bootstrap/`、`adapter/web/`（4 个 Controller）、`application/service/`（4 个 Service）、`application/dto/`、`application/assembler/`、`common/`（拦截器/注解/上下文）、`domain/`、`infrastructure/`
 - `src/main/resources/mapper/auth/` 下的已有 XML
 
@@ -115,7 +115,7 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 
 ## 🟡 只能增量修改的目录与文件
 
-以下区域**只能新增文件或追加方法**，**不得删除或修改**框架已有的文件（仅 auth 分支）：
+以下区域**只能新增文件或追加方法**，**不得删除或修改**框架已有的权限基础设施文件：
 
 ### `auth/application/dto/` — 权限模块 DTO
 只能新增 DTO 类，不得修改已有的 `RoleDTO`、`MemberDTO`、`ResourceDTO` 等。

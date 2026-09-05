@@ -108,7 +108,9 @@ export interface ApplicationAuthorizationSeed {
 }
 
 export interface ApplicationSchemaConfig {
-  schemaVersion: 5
+  schemaVersion: 6
+  /** 标识 application.json 的当前配置事实版本，供规划和模板链路检测过期产物。 */
+  configRevision: number
   appName: string
   appIcon: string
   senario: string
@@ -375,16 +377,20 @@ export interface ApplicationDataSourceDefinition {
   seedStrategy: string
 }
 
-export interface ApplicationConfig extends ApplicationSchemaConfig {
+/** 描述 Electron applications.json 中仅用于定位工作区的应用索引。 */
+export interface ApplicationIndex {
   id: string
   name: string
-  workspaceRoot?: string
+  workspaceRoot: string
+  lastOpenedAt: number
+}
+
+/** 描述由工作区 application.json 与应用索引实时组装的应用视图。 */
+export interface ApplicationConfig extends ApplicationSchemaConfig, ApplicationIndex {
   projectParentPath?: string
   projectDirectoryName?: string
   source?: 'new' | 'existing-workspace'
   audience?: ApplicationAudience
-  enableAuth: boolean
-  enableTracking: boolean
   legacyTheme?: ApplicationTheme
   legacyLayout?: ApplicationLayout
   enableTabs?: boolean
@@ -392,12 +398,10 @@ export interface ApplicationConfig extends ApplicationSchemaConfig {
   defaultPage: string
   hasDynamicRoutes?: boolean
   dynamicRouteDescription?: string
-  schema: ApplicationSchemaConfig
   requirementPlan?: RequirementDevelopmentPlan
   /** 应用规划线程 id，模板生成时持久化，供从历史恢复设计阶段历史卡片使用
    *  （后端在 lifecycle=ready_for_workbench 时会清空 threadId，前端需自行保留）。 */
   planningThreadId?: string
-  createdAt: number
 }
 
 export interface ApplicationDraft {

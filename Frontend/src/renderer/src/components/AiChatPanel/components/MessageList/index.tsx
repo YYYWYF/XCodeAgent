@@ -342,16 +342,22 @@ export default function MessageList({
       workflowFailureMessage(latestAssistantMessage.workflow)
     : ''
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
-  const showStandaloneError = Boolean(visibleError && visibleError !== latestAssistantMessageError)
+  const templateGenerationFailed =
+    applicationLifecycle?.initialization.stage === 'application_template_generation_failed'
+  // 模板失败详情由 TemplatePreparingCard 唯一承载，避免与通用执行错误卡重复展示。
+  const showStandaloneError = Boolean(
+    !templateGenerationFailed && visibleError && visibleError !== latestAssistantMessageError
+  )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
   const pendingPhaseDetail = phasePendingDetail(currentPhase)
+  const templatePreparation = readTemplatePreparation(planningWorkflow)
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
   const templatePreparationVisible =
     applicationTemplatePreparationEligible &&
     designPhasePlanning &&
-    (generatingTemplate || isTemplatePreparing(applicationLifecycle))
+    (generatingTemplate || isTemplatePreparing(applicationLifecycle) || Boolean(templatePreparation))
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -668,8 +674,7 @@ export default function MessageList({
                   designPhasePlanning,
                   isPlanningLoadingPlaceholder,
                   showWorkflowCard,
-                  visibleAssistantContent,
-                  messageIndex === messages.length - 1
+                  visibleAssistantContent
                 )
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
               // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。
@@ -719,7 +724,8 @@ export default function MessageList({
                             }
                           />
                         ) : null}
-                        {messageError ? (
+                        {/* 模板失败由下方唯一的模板卡片展示后端详情，避免历史通用错误卡重复。 */}
+                        {messageError && !templateGenerationFailed ? (
                           <AgentErrorCard
                             error={messageError}
                             onRetry={isCurrentErrorMessage ? onRetryError : undefined}
@@ -922,7 +928,10 @@ export default function MessageList({
               <div className={cx('ai-message-content')}>
                 <TemplatePreparingCard
                   lifecycle={applicationLifecycle}
+                  templatePreparation={templatePreparation}
                   onEnterDevelopment={onEnterDevelopment}
+                  onRetry={onRetryError}
+                  retrying={Boolean(generatingTemplate && templateGenerationFailed)}
                 />
               </div>
             </article>
@@ -942,6 +951,18 @@ export default function MessageList({
       )}
     </div>
   )
+}
+
+/** 从规划 Workflow 的 summary、state 或 result 恢复 V2 Template Preparation 投影。 */
+function readTemplatePreparation(workflow?: WorkflowRunPayload): import('../../../../typings').WorkflowTemplatePreparation | undefined {
+  const candidates = [
+    workflow?.summary?.templatePreparation,
+    workflow?.state?.templatePreparation,
+    workflow?.result?.templatePreparation
+  ]
+  return candidates.find((value) => Boolean(value && typeof value === 'object')) as
+    | import('../../../../typings').WorkflowTemplatePreparation
+    | undefined
 }
 
 /** 从消息末尾向前查找当前正在流式更新的 Assistant 消息。 */

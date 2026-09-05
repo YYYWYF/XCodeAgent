@@ -248,6 +248,49 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
 
+    async def test_design_change_clears_pending_authorization_configuration_conflict(
+        self,
+    ) -> None:
+        """设计变更不能让上一轮权限初始化问题泄漏到新的需求修订。"""
+
+        graph = _interrupt_test_graph()
+        config = {"configurable": {"thread_id": "planning-design-change-auth-reset"}}
+        _ = [
+            chunk
+            async for chunk in graph.astream(
+                {
+                    "authorization_config_conflict": {
+                        "requested": True,
+                        "decision": "enable",
+                    }
+                },
+                config=config,
+                stream_mode="updates",
+            )
+        ]
+        snapshot = await graph.aget_state(config)
+        pending = snapshot.tasks[0].interrupts[0].value
+
+        _ = [
+            chunk
+            async for chunk in graph.astream(
+                Command(
+                    resume={
+                        "gateId": pending["gateId"],
+                        "artifact": pending["artifact"],
+                        "artifactRevision": pending["artifactRevision"],
+                        "action": "design_change",
+                        "request": "我想添加登录功能",
+                    }
+                ),
+                config=config,
+                stream_mode="updates",
+            )
+        ]
+
+        updated = await graph.aget_state(config)
+        self.assertEqual(updated.values["authorization_config_conflict"], {})
+
     async def test_same_artifact_can_be_revised_twice_before_confirmation(self) -> None:
         """同一产物连续二次修订时应生成新门禁，并只确认最后一个版本。"""
 

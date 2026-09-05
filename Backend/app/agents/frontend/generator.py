@@ -10,6 +10,7 @@ from app.agents.tool_activity_stream import (
 )
 from app.config import Settings
 from app.services.build_result_coordinator import create_agent_task_results
+from app.services.template_state import validate_template_context
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
@@ -157,7 +158,9 @@ def _frontend_generation_prompt(
     # 静态规则只由当前派发任务的来源引用触发，不读取整个 ProjectPlan 的数据源清单。
     task_source_types = _task_frontend_source_types(tasks)
     has_static_data_source = "static" in task_source_types
-    template_variant = str(build_task_plan.get("template_variant") or "main")
+    context_value = build_task_plan.get("template_context")
+    template_context = validate_template_context(context_value) if context_value else {}
+    authorization_effective = "authorization" in template_context.get("effective_capabilities", {})
     data_source_instruction = (
         "## CRITICAL: Data source is STATIC with effective_source=frontend_mock\n"
         "The data source for this page's entities declares type=static. Implement the approved "
@@ -214,7 +217,7 @@ def _frontend_generation_prompt(
         "contract business value directly. Keep `service.ts` untouched.\n\n"
     )
     authorization_boundary = (
-        "## Authorization boundary for auth template\n"
+        "## Authorization boundary\n"
         "A task may contain platform-owned `source_refs.authorization.actions`. This is the only action-permission input. "
         "For every listed action, add this exact named import in the task file that renders the controlled interaction: "
         "`import { RESOURCES } from '@/constants/resources';`. Do not use a relative path, barrel export, default import, or alias. "
@@ -222,9 +225,9 @@ def _frontend_generation_prompt(
         "Do not create AuthProvider instances, permission caches, authorization API clients, resource catalogs, role-management UI, route guards, menus, routers, or shared authorization files. "
         "The platform has already generated route registration before this task starts; do not modify "
         "`src/constants/resources.ts` or `src/constants/routes.tsx`.\n\n"
-        if template_variant == "auth"
-        else "## Main template boundary\n"
-        "This is the main template. Its pages and BIZ_MENUS entries were initialized before Build; do not import auth-only RESOURCES, create permission wrappers, or modify shared menu or route files.\n\n"
+        if authorization_effective
+        else "## Platform route boundary\n"
+        "Authorization is not effective for this application. Do not import RESOURCES, create permission wrappers, authorization clients, role-management UI, route guards, menus, routers, or shared authorization files. Do not modify shared menu or route files.\n\n"
     )
     return (
         "You are the Frontend Generation Agent in an app-generation workflow.\n"

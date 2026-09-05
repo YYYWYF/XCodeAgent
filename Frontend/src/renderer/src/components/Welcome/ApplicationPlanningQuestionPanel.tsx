@@ -474,6 +474,7 @@ export default function ApplicationPlanningQuestionPanel({
   // UI 确认阶段：用缓存的有效 UI workflow 渲染，保持布局不动，单页加载态由面板内控制。
   const knownConfirmationModes = new Set([
     'ui_design_confirmation',
+    'authorization_configuration_conflict',
     'requirement_document_confirmation',
     'technical_plan_confirmation',
     'technical_plan_generation_error',

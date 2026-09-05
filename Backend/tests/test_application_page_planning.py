@@ -5,12 +5,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.main import requirements_analyzer
 from app.graph.application_planning_workflow import (
+    _reconcile_confirmed_revision,
     _technical_planning,
     _requirements,
     _route_requirements,
@@ -38,6 +40,9 @@ from app.services.application_lifecycle import (
 from app.services.application_revision_lifecycle import (
     register_revision_impact,
     submit_revision_impact,
+)
+from app.services.template_reconcile.finalization import (
+    claim_template_reconcile_finalization,
 )
 from app.services.requirement_spec import create_requirement_spec
 from app.services.product_plan import create_product_plan
@@ -704,8 +709,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
             )
 
-    def test_design_revision_technical_plan_issues_continuation_without_template_stage(self) -> None:
-        """二次修改确认 TechnicalPlan 后应直接续接 Build，不能再次生成应用模板。"""
+    def test_design_revision_confirmation_commits_before_template_reconcile(self) -> None:
+        """二次修改确认先提交 TechnicalPlan，下一节点才执行模板收口。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -755,9 +760,9 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                     {**state, "workflow_scope": "application_planning"}
                 )
 
-            continuation = result["revision_continuation"]
-            self.assertEqual(continuation["action"], "continue_revision_build")
-            self.assertEqual(continuation["changeId"], active.change_id)
+            self.assertEqual(result["revision_continuation"], {})
+            self.assertTrue(result["template_reconcile_pending"])
+            self.assertEqual(result["application_planning_interaction"], {})
             lifecycle = load_application_lifecycle(workspace)
             assert lifecycle is not None
             self.assertEqual(
@@ -769,10 +774,10 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
             )
             assert lifecycle.active_formal_revision is not None
-            self.assertEqual(lifecycle.active_formal_revision.status, "continuation_ready")
+            self.assertEqual(lifecycle.active_formal_revision.status, "design_planning")
 
-    def test_workbench_revision_technical_plan_issues_continuation_without_execution_binding(self) -> None:
-        """独立 application_planning 完成 TechnicalPlan 后不要求工作台 execution。"""
+    def test_reconcile_retry_reuses_confirmed_plan_without_confirm_interaction(self) -> None:
+        """模板收口失败后只能重试收口，不得重放已消费的 TechnicalPlan 确认。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -823,16 +828,73 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                     {**state, "workflow_scope": "application_planning"}
                 )
 
-            continuation = result["revision_continuation"]
-            self.assertEqual(continuation["action"], "continue_revision_build")
-            self.assertEqual(continuation["changeId"], active.change_id)
+            self.assertTrue(result["template_reconcile_pending"])
+            self.assertEqual(result["application_planning_interaction"], {})
+
+            def failing_reconcile(root: str, change_id: str) -> None:
+                """模拟已取得 Reconcile 进入权后 Engine 更新失败。"""
+
+                claim_template_reconcile_finalization(
+                    root,
+                    change_id=change_id,
+                    technical_plan_path=workspace / ".xcodeagent" / "plans" / "technical-plan.json",
+                )
+                raise ValueError("engine update failed")
+
+            with patch(
+                "app.graph.application_planning_workflow._reconcile_revision_template_capabilities",
+                side_effect=failing_reconcile,
+            ):
+                with self.assertRaisesRegex(ValueError, "engine update failed"):
+                    _reconcile_confirmed_revision({**state, **result})
+
             lifecycle = load_application_lifecycle(workspace)
             assert lifecycle is not None and lifecycle.active_formal_revision is not None
             self.assertEqual(
                 lifecycle.active_formal_revision.status,
-                "continuation_ready",
+                "template_reconcile_failed",
             )
-            self.assertFalse(lifecycle.active_executions)
+            persisted = json.loads(
+                (workspace / ".xcodeagent" / "plans" / "technical-plan.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(persisted["confirmation_status"], "confirmed")
+            self.assertEqual(
+                _route_start(
+                    {"workspace": str(workspace), "resume_from": "technical_planning"}
+                ),
+                "template_reconcile",
+            )
+
+            issued = SimpleNamespace(
+                change_id=active.change_id,
+                formal_branch=active.formal_branch,
+                technical_plan_sha256="a" * 64,
+            )
+
+            def retry_reconcile(root: str, change_id: str) -> None:
+                """模拟重试时基于已确认 canonical TechnicalPlan 重新取得进入权。"""
+
+                claim_template_reconcile_finalization(
+                    root,
+                    change_id=change_id,
+                    technical_plan_path=workspace / ".xcodeagent" / "plans" / "technical-plan.json",
+                )
+
+            with patch(
+                "app.graph.application_planning_workflow._reconcile_revision_template_capabilities",
+                side_effect=retry_reconcile,
+            ) as reconcile, patch(
+                "app.graph.application_planning_workflow._inject_revision_backend_skeleton"
+            ), patch(
+                "app.graph.application_planning_workflow.issue_revision_continuation",
+                return_value=("continuation-token", issued),
+            ):
+                retried = _reconcile_confirmed_revision({**state, **result})
+
+            reconcile.assert_called_once_with(str(workspace), active.change_id)
+            self.assertEqual(retried["application_planning_interaction"], {})
+            self.assertFalse(retried["template_reconcile_pending"])
+            self.assertEqual(retried["revision_continuation"]["action"], "continue_revision_build")
 
     def test_technical_planning_cannot_run_before_stage_entry(self) -> None:
         """直接调度 TechnicalPlan 时必须在模型调用前拒绝，不能绕过规划入口。"""
@@ -895,6 +957,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "ui_confirmation",
                 "planning_stage_entry",
                 "technical_planning",
+                "template_reconcile",
             ],
         )
         self.assertEqual(

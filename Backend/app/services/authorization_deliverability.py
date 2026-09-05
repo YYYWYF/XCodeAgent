@@ -93,6 +93,8 @@ def authorization_deliverability_report(
     api_contracts: list[dict[str, Any]],
     pages: list[dict[str, Any]],
     page_implementation_contracts: list[dict[str, Any]],
+    *,
+    application_config: dict[str, Any],
 ) -> dict[str, Any]:
     """生成步骤 4E 的只读报告；报告本身不写入任何正式权限事实。"""
 
@@ -210,10 +212,22 @@ def authorization_deliverability_report(
         str(item.get("roleSeedKey") or "").strip(): set(_text_items(item.get("resourceKeys")))
         for item in _dict_items(authorization.get("roleResourceGrants"))
     }
-    initial_admin_failures = [] if not raw_manifest.get("enabled") else [
+    authorization_enabled = (
+        application_config.get("authorization", {}).get("enabled") is True
+        if isinstance(application_config.get("authorization"), dict)
+        else False
+    )
+    initial_admin_failures = [] if not authorization_enabled else [
         "Initial Admin 未拥有 system_authorization_management 系统资源。"
     ] if not initial_role or SYSTEM_RESOURCE_KEY not in grants.get(initial_role, set()) else []
-    integrity_failures = validate_authorization_manifest(manifest, requirement_spec, product_plan, api_contracts, pages)
+    integrity_failures = validate_authorization_manifest(
+        manifest,
+        requirement_spec,
+        product_plan,
+        api_contracts,
+        pages,
+        application_config=application_config,
+    )
 
     checks = [
         _check("manifest_integrity", "Manifest、数据权限与 fingerprint 完整性", integrity_failures),

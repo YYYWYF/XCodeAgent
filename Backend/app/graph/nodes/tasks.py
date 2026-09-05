@@ -30,10 +30,10 @@ from app.services.build_task_planner import (
     strip_platform_owned_candidate_tasks,
     tasks_from_build_task_plan,
 )
-from app.services.application_template_generation import (
-    inspect_template_generation_readiness,
-)
 from app.services.authorization_overlay import compile_authorization_overlay
+from app.services.application_config import read_application_config
+from app.services.route_projection import compile_route_projection
+from app.services.template_state import effective_capabilities, load_template_state, template_context
 from app.services.build_task_progress import (
     build_task_artifacts,
     create_build_task_progress_tracker,
@@ -244,7 +244,11 @@ def prepare_build_tasks(state: ProjectState) -> dict:
 
     progress.start("authorization_overlay", "正在按当前 Unit 编译只读权限 Overlay。")
     try:
-        build_context = compile_authorization_overlay(project_plan, build_context)
+        build_context = compile_authorization_overlay(
+            project_plan,
+            build_context,
+            application_config=read_application_config(workspace_from_state(state)),
+        )
     except ValueError as exc:
         attempt_plan = _build_task_plan_attempt_view(
             build_task_plan,
@@ -271,9 +275,30 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "timeline": ["prepare_build_tasks"],
             **formal_artifact_state,
         }
-    # 模板分支是 Build 任务边界的唯一事实源，不能仅由权限开关推断。
-    template_readiness = inspect_template_generation_readiness(workspace)
-    build_context["template_variant"] = template_readiness.get("templateVariant")
+    # Engine State 是唯一模板事实源；Build 仅持久化只读绑定快照。
+    try:
+        template_state = load_template_state(workspace)
+        build_context["template_context"] = template_context(template_state)
+    except ValueError as exc:
+        attempt_plan = _build_task_plan_attempt_view(build_task_plan, build_execution_scope)
+        progress.fail(
+            "authorization_overlay",
+            f"TemplateState 校验失败：{exc}",
+            build_task_plan=attempt_plan,
+            output=project_build_context_output({}, attempt_plan),
+        )
+        return {
+            "phase": "prepare_build_tasks",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "build_task_plan": attempt_plan,
+            "build_execution_scope": build_execution_scope,
+            "build_task_plan_persisted": False,
+            "dag_generation_progress": progress.snapshot(),
+            "clarification": _build_context_error_payload(str(exc), build_execution_scope),
+            "timeline": ["prepare_build_tasks"],
+            **formal_artifact_state,
+        }
     progress.complete(
         "authorization_overlay",
         "已完成当前 Unit 的只读权限切片编译。",
@@ -553,6 +578,8 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "confirmation_status": "pending",
         "confirmed_at": None,
     }
+    # 所有模板共享同一页面 Route Projection，权限仅作为后续可选 decoration。
+    build_task_plan["route_projection"] = compile_route_projection(project_plan)
     authorization_constraints = build_context.get("authorization_constraints")
     frontend_projection = (
         authorization_constraints.get("frontendProjection")
@@ -693,21 +720,20 @@ def _build_prerequisite_errors(
         except ValueError as exc:
             errors.append(str(exc))
     if workspace:
-        readiness = inspect_template_generation_readiness(workspace)
-        authorization_manifest = project_plan.get("authorization_manifest")
-        authorization_enabled = (
-            isinstance(authorization_manifest, dict)
-            and authorization_manifest.get("enabled") is True
-        )
-        if authorization_enabled and readiness.get("templateVariant") != "auth":
-            errors.append("权限已启用，但前后端模板不是配套的 auth 分支。")
-        errors.extend(
-            f"模板初始化：{error}"
-            for error in readiness.get("errors", [])
-            if str(error).strip()
-        )
+        try:
+            application_config = read_application_config(workspace)
+            authorization = application_config.get("authorization")
+            authorization_enabled = (
+                isinstance(authorization, dict)
+                and authorization.get("enabled") is True
+            )
+            capabilities = effective_capabilities(load_template_state(workspace))
+            if authorization_enabled and "authorization" not in capabilities:
+                errors.append("权限已启用，但 TemplateState.effective 缺少 authorization。")
+        except ValueError as exc:
+            errors.append(f"TemplateState：{exc}")
     else:
-        errors.append("缺少 workspace，无法校验模板初始化 manifest。")
+        errors.append("缺少 workspace，无法校验 TemplateState。")
     return _dedupe_texts(errors)
 
 
@@ -848,7 +874,7 @@ def _build_prerequisite_blocked_result(
             "target": build_execution_scope,
             "artifact": (
                 "RequirementSpec / ProductPlan / UiManifest / TechnicalPlan / "
-                "template-generation-manifest.json / EntitySourceBinding"
+                "template-state.json / EntitySourceBinding"
             ),
             "recommended_action": "手动完成并确认错误所指向的前置产物后重新发起 DAG 生成。",
             "automatic_routing": False,
@@ -1039,8 +1065,8 @@ def _build_task_plan_gate_errors(
     """检查最新 DAG 的 schema、ready 状态、确认前置和当前 scope。"""
 
     errors: list[str] = []
-    if build_task_plan.get("schema_version") != "build-dag.v3":
-        errors.append("最新 DAG schema_version 不是 build-dag.v3。")
+    if build_task_plan.get("schema_version") != "build-dag.v4":
+        errors.append("最新 DAG schema_version 不是 build-dag.v4。")
     if build_task_plan.get("status") != "ready":
         errors.append(f"最新 DAG status={build_task_plan.get('status') or 'unknown'}，不能进入 Build。")
     if build_task_plan.get("confirmation_status") not in {"pending", "confirmed"}:
@@ -1083,11 +1109,11 @@ def _build_task_plan_status(build_task_plan: dict[str, Any]) -> str:
 
 
 def _fill_missing_build_task_plan_status(value: Any) -> dict[str, Any]:
-    """为当前 build-dag.v3 产物补齐生成阶段漏写的顶层 status 字段。"""
+    """为当前 build-dag.v4 产物补齐生成阶段漏写的顶层 status 字段。"""
 
     if not isinstance(value, dict):
         return {}
-    if value.get("schema_version") != "build-dag.v3" or "status" in value:
+    if value.get("schema_version") != "build-dag.v4" or "status" in value:
         return value
     return {**value, "status": _build_task_plan_status(value)}
 
@@ -1209,7 +1235,7 @@ def _existing_build_task_plan(state: ProjectState) -> dict:
 def _is_valid_build_task_plan(value: object) -> bool:
     """仅接受通过任务图校验的 v3 DAG，避免失败 checkpoint 污染后续重试。"""
 
-    if not isinstance(value, dict) or value.get("schema_version") != "build-dag.v3":
+    if not isinstance(value, dict) or value.get("schema_version") != "build-dag.v4":
         return False
     if value.get("status") == "failed":
         return False
@@ -1858,10 +1884,10 @@ def _merge_prepared_scope_tasks(
             unit["reuse_evidence"] = reuse_evidence
         else:
             unit["status"] = "not_prepared"
-    # 权限共享投影在 Build Run 绑定的计划顶层读取模板变体，不能只保留在调试用构建上下文。
+    # TemplateState 绑定必须随合并后的最终 DAG 保留，供 Build Run 重读核对。
     result = {
         **merged,
-        "template_variant": str(build_context.get("template_variant") or ""),
+        "template_context": dict(build_context.get("template_context") or {}),
         "prepared_by": {
             **(
                 prepared_plan.get("prepared_by", merged.get("prepared_by", {}))

@@ -523,7 +523,9 @@ export default function ApplicationPagePlanningModal({
       const succeeded = await onTechnicalPlanConfirmed(confirmation)
       if (succeeded) return
       completedRef.current = false
-      setError('应用模板准备失败，模板生成已终止。')
+      // 失败详情由同步后的 lifecycle.error.message 在工作台模板卡片中展示，
+      // 不用泛化文案覆盖后端下载、校验或物化阶段返回的具体原因。
+      setError('')
     } catch (reason) {
       console.error('[planning-modal] completePlanning error', reason)
       completedRef.current = false
@@ -947,7 +949,7 @@ export default function ApplicationPagePlanningModal({
                   onSaveRequirementSpec={handleSaveRequirementSpec}
                   onReturnHome={onReturnHome}
                   onSubmit={handleSubmitClarification}
-                  rootPath={application.schema?.menus?.rootPath || '/'}
+                  rootPath={application.menus?.rootPath || '/'}
                   workflow={workflow}
                 />
               ) : null}

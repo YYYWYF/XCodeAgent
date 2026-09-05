@@ -23,6 +23,15 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.artifact_invalidation import canonical_sha256
+from app.services.access_control_intent import has_explicit_capability_change
+from app.services.application_config_change_resolver import (
+    resolve_application_config_changes,
+)
+from app.services.application_config import (
+    apply_application_config_changes,
+    preview_application_config_changes,
+    read_application_config,
+)
 from app.domain.application_lifecycle import (
     ApplicationInitialization,
     ApplicationLifecycleStage,
@@ -55,6 +64,7 @@ def register_revision_impact(
     )
     if active is not None and not orphaned_failed_revision:
         raise ApplicationLifecycleConflictError("当前 application 已有 formal revision 正在进行。")
+    pending_config_changes = _resolve_pending_application_config_changes(workspace, request)
     pending = PendingRevisionImpact(
         interactionId=interaction_id,
         sourceThreadId=source_thread_id,
@@ -62,6 +72,7 @@ def register_revision_impact(
         request=request,
         target=target,
         impact=impact,
+        pendingApplicationConfigChanges=pending_config_changes,
         basedOnLifecycleRevision=current.revision + 1,
     )
     updated = current.model_copy(
@@ -123,6 +134,7 @@ def submit_revision_impact(
             # remainingArtifacts 只作生命周期展示，不允许客户端反向改写起点。
             currentArtifact=current_artifact,
             remainingArtifacts=remaining_artifacts,
+            pendingApplicationConfigChanges=pending.pending_application_config_changes,
         )
     updated = current.model_copy(
         update={
@@ -133,6 +145,12 @@ def submit_revision_impact(
         }
     )
     write_application_lifecycle(workspace, updated, expected_revision=current.revision)
+    if active is not None and not _awaits_initial_administrator_subjects(active):
+        # 配置确认已经完成，必须在任何正式重规划开始前提交当前唯一事实源。
+        return commit_active_revision_application_config_changes(
+            workspace,
+            change_id=active.change_id,
+        )
     return active
 
 
@@ -240,7 +258,16 @@ def update_active_revision_progress(
     workspace: str | Path,
     *,
     change_id: str,
-    status: Literal["drafting", "awaiting_user", "building", "stopped", "failed"],
+    status: Literal[
+        "design_planning",
+        "drafting",
+        "awaiting_user",
+        "template_reconciling",
+        "template_reconcile_failed",
+        "building",
+        "stopped",
+        "failed",
+    ],
     current_artifact: str | None,
     remaining_artifacts: list[str] | None = None,
 ) -> ActiveFormalRevision:
@@ -289,6 +316,100 @@ def discard_active_revision(workspace: str | Path, *, change_id: str) -> None:
     write_application_lifecycle(workspace, updated, expected_revision=current.revision)
 
 
+def commit_active_revision_application_config_changes(
+    workspace: str | Path,
+    *,
+    change_id: str,
+) -> ActiveFormalRevision:
+    """在重规划入口前提交当前 Revision 的配置 Delta，并清空已提交提案。"""
+
+    current = _required_lifecycle(workspace)
+    active = current.active_formal_revision
+    if active is None or active.change_id != change_id:
+        raise ApplicationLifecycleConflictError("formal revision changeId 已过期。")
+    if (
+        not active.pending_application_config_changes
+        and not active.pending_initial_administrator_subjects
+    ):
+        return active
+    apply_application_config_changes(
+        workspace,
+        changes=active.pending_application_config_changes,
+        initial_administrator_subjects=(
+            active.pending_initial_administrator_subjects or None
+        ),
+        allow_existing_targets=True,
+    )
+    next_active = active.model_copy(
+        update={
+            "pending_application_config_changes": [],
+            "pending_initial_administrator_subjects": [],
+        }
+    )
+    updated = current.model_copy(
+        update={
+            "updated_at": utc_now(),
+            "revision": current.revision + 1,
+            "active_formal_revision": next_active,
+        }
+    )
+    write_application_lifecycle(workspace, updated, expected_revision=current.revision)
+    return next_active
+
+
+def stage_active_revision_initial_administrator_subjects(
+    workspace: str | Path,
+    *,
+    subjects: list[str],
+) -> ActiveFormalRevision | None:
+    """确认权限管理员后立即提交完整配置，再允许后续正式重规划。"""
+
+    current = load_application_lifecycle(workspace)
+    if current is None:
+        return None
+    active = current.active_formal_revision
+    if active is None:
+        return None
+    normalized_subjects = _normalize_initial_administrator_subjects(subjects)
+    next_active = active.model_copy(
+        update={"pending_initial_administrator_subjects": normalized_subjects}
+    )
+    updated = current.model_copy(
+        update={
+            "updated_at": utc_now(),
+            "revision": current.revision + 1,
+            "active_formal_revision": next_active,
+        }
+    )
+    write_application_lifecycle(workspace, updated, expected_revision=current.revision)
+    return commit_active_revision_application_config_changes(
+        workspace,
+        change_id=next_active.change_id,
+    )
+
+
+def effective_active_revision_application_config(
+    workspace: str | Path,
+    *,
+    change_id: str | None = None,
+) -> dict:
+    """返回当前已提交配置；仅管理员澄清尚未完成时保留临时预览。"""
+
+    current = load_application_lifecycle(workspace)
+    active = current.active_formal_revision if current is not None else None
+    if active is None:
+        return read_application_config(workspace)
+    if change_id is not None and active.change_id != change_id:
+        raise ApplicationLifecycleConflictError("formal revision changeId 已过期。")
+    return preview_application_config_changes(
+        workspace,
+        changes=active.pending_application_config_changes,
+        initial_administrator_subjects=(
+            active.pending_initial_administrator_subjects or None
+        ),
+    )
+
+
 def complete_active_revision(workspace: str | Path) -> str | None:
     """在最终验收完成后释放 active formal revision，并返回已完成 changeId。"""
 
@@ -314,6 +435,43 @@ def _required_lifecycle(workspace: str | Path):
     if current is None:
         raise ApplicationLifecycleConflictError("application lifecycle 尚未初始化。")
     return current
+
+
+def _resolve_pending_application_config_changes(
+    workspace: str | Path,
+    request: str,
+) -> list:
+    """仅为明确能力开关请求读取 canonical 配置并生成当前 Revision 的待确认 Delta。"""
+
+    if not has_explicit_capability_change(request):
+        return []
+    return resolve_application_config_changes(request, workspace_root=workspace)
+
+
+def _awaits_initial_administrator_subjects(active: ActiveFormalRevision) -> bool:
+    """仅在启用权限但尚未收集管理员时延后提交，避免写入不完整配置。"""
+
+    enabling_authorization = any(
+        change.path == "authorization.enabled" and change.to_value is True
+        for change in active.pending_application_config_changes
+    )
+    return enabling_authorization and not active.pending_initial_administrator_subjects
+
+
+def _normalize_initial_administrator_subjects(subjects: list[str]) -> list[str]:
+    """规范化正式修订中的管理员标识，并拒绝空值和占位符。"""
+
+    normalized: list[str] = []
+    for value in subjects:
+        subject = str(value).strip()
+        if not subject or subject in normalized:
+            continue
+        if subject == "current-user":
+            raise ApplicationLifecycleConflictError("初始管理员必须使用真实 subjectId，不能使用 current-user。")
+        normalized.append(subject)
+    if not normalized:
+        raise ApplicationLifecycleConflictError("启用权限控制时至少需要一个真实初始管理员 subjectId。")
+    return normalized
 
 
 def _token_sha256(token: str) -> str:

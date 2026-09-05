@@ -7,18 +7,32 @@ from typing import Any
 
 from app.services.authorization_constants_projection import verify_authorization_constants_projection
 from app.services.authorization_frontend_projection import verify_authorization_frontend_projection
+from app.services.route_projection import verify_route_projection
 
 
 def verify_authorization_edd(workspace: str | Path, build_task_plan: dict[str, Any]) -> list[str]:
     """在 Build 完成后验证共享投影、页面 Permission 与 Controller ANY-OF 证据。"""
 
+    route_projection = build_task_plan.get("route_projection")
     frontend_projection = build_task_plan.get("authorization_frontend_projection")
     constants_projection = build_task_plan.get("authorization_constants_projection")
+    if route_projection is None:
+        return ["通用 Route Projection EDD 失败：Build DAG 缺少 route_projection。"]
     if frontend_projection is None and constants_projection is None:
+        decorations = None
+    else:
+        decorations = frontend_projection.get("routeDecorations") if isinstance(frontend_projection, dict) else None
+    if frontend_projection is None and constants_projection is None:
+        # 无权限应用仍要验证通用路由，而无需读取权限资源或常量文件。
+        try:
+            verify_route_projection(workspace, route_projection)
+        except (ValueError, OSError) as exc:
+            return [f"通用 Route Projection EDD 失败：{exc}"]
         return []
     errors: list[str] = []
     # EDD 必须是纯只读阶段：仅核对模板声明、托管区标记和内容，不得重放投影。
     try:
+        verify_route_projection(workspace, route_projection, authorization_decorations=decorations)
         verify_authorization_frontend_projection(workspace, frontend_projection)
         verify_authorization_constants_projection(workspace, constants_projection)
     except (ValueError, OSError) as exc:

@@ -34,15 +34,10 @@ from app.services.authorization_bootstrap import clear_authorization_bootstrap_l
 from app.services.backend_process_registry import (
     clear_backend_process_registry_workspace,
 )
-from app.services.application_template_generation import (
-    begin_application_template_deletion,
-    clear_application_template_lock,
-    end_application_template_deletion,
-    wait_for_application_template_idle,
-)
 from app.services.project_launcher import stop_project_preview
 from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.workspace.run_lease import workspace_run_leases
 
 
@@ -144,7 +139,8 @@ async def prepare_application_deletion(
     thread_ids = _application_thread_ids(lifecycle)
     pool = get_ui_design_generation_pool()
 
-    begin_application_template_deletion(workspace)
+    # Bootstrap Preparation 可由删除取消；Commit Section 则必须先完成或回滚。
+    await asyncio.to_thread(template_mutation_coordinator.begin_deletion, workspace)
     workflow_run_registry.begin_workspace_deletion(workspace_text)
     workspace_process_registry.begin_workspace_deletion(workspace)
 
@@ -162,7 +158,6 @@ async def prepare_application_deletion(
             workflow_run_registry.cancel_workspace(workspace_text),
             pool.cancel_workspace(workspace_text),
             asyncio.to_thread(stop_project_preview, workspace),
-            asyncio.to_thread(wait_for_application_template_idle, workspace),
             asyncio.to_thread(
                 workspace_process_registry.cancel_workspace,
                 workspace,
@@ -176,8 +171,7 @@ async def prepare_application_deletion(
         run_result = cast(dict[str, Any], stage_results[0])
         design_result = cast(dict[str, Any], stage_results[1])
         preview_result = cast(dict[str, Any], stage_results[2])
-        template_idle = cast(bool, stage_results[3])
-        process_result = cast(dict[str, Any], stage_results[4])
+        process_result = cast(dict[str, Any], stage_results[3])
         remaining_runs = list(run_result.get("remainingRunIds") or [])
         remaining_designs = list(design_result.get("remainingPageIds") or [])
         remaining_processes = list(process_result.get("remainingProcessIds") or [])
@@ -185,17 +179,16 @@ async def prepare_application_deletion(
             remaining_runs
             or remaining_designs
             or remaining_processes
-            or not template_idle
         ):
             raise RuntimeError(
                 "应用仍有未退出的任务："
                 f"runs={remaining_runs or '[]'}, uiDesigns={remaining_designs or '[]'}, "
-                f"processes={remaining_processes or '[]'}, templateIdle={template_idle}"
+                f"processes={remaining_processes or '[]'}"
             )
         if preview_result.get("status") == "failed":
             raise RuntimeError(str(preview_result.get("message") or "应用预览停止失败。"))
     except BaseException:
-        end_application_template_deletion(workspace)
+        template_mutation_coordinator.cancel_deletion(workspace)
         workflow_run_registry.end_workspace_deletion(workspace_text)
         workspace_process_registry.end_workspace_deletion(workspace)
         pool.end_workspace_deletion(workspace_text)
@@ -243,7 +236,6 @@ async def prepare_application_deletion(
     )
     released_resume_locks = clear_application_planning_resume_locks(thread_ids)
     cleared_lifecycle_lock = clear_application_lifecycle_lock(workspace)
-    cleared_template_lock = clear_application_template_lock(workspace)
     cleared_authorization_lock = clear_authorization_bootstrap_lock(workspace)
     cleared_backend_process_cache = clear_backend_process_registry_workspace(workspace)
     report_data = {
@@ -263,10 +255,8 @@ async def prepare_application_deletion(
             "workspaceLeases": released_leases,
             "planningResumeLocks": released_resume_locks,
             "lifecycleLock": cleared_lifecycle_lock,
-            "templateLock": cleared_template_lock,
             "authorizationBootstrapLock": cleared_authorization_lock,
             "backendProcessCache": cleared_backend_process_cache,
-            "templateOperationsIdle": template_idle,
         },
     }
     if report is not None:

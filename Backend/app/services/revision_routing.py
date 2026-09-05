@@ -27,6 +27,10 @@ from app.agents.change_impact_analyzer import (
 )
 from app.services.change_code_scan import sanitize_code_scan_evidence
 from app.services.change_contracts import load_confirmed_contract_corpus
+from app.services.access_control_intent import (
+    has_explicit_capability_change,
+    has_explicit_business_access_control_change,
+)
 
 
 _ARTIFACT_PRIORITY = {
@@ -140,21 +144,40 @@ def route_from_change_impact(
         return RevisionRoutingResult(candidate=candidate)
     invalidated = list(normalized.invalidated_contracts)
     if invalidated:
-        earliest_stage = min(
-            (item.contract_stage for item in invalidated),
-            key=lambda stage: 0 if stage == ContractStage.REQUIREMENT_DESIGN else 1,
+        access_control_change = has_explicit_business_access_control_change(user_request)
+        capability_change = has_explicit_capability_change(user_request)
+        earliest_stage = (
+            ContractStage.REQUIREMENT_DESIGN
+            if access_control_change or capability_change
+            else min(
+                (item.contract_stage for item in invalidated),
+                key=lambda stage: 0 if stage == ContractStage.REQUIREMENT_DESIGN else 1,
+            )
         )
         artifact_keys = _artifact_closure(
-            item.artifact_key for item in invalidated
+            [
+                *(item.artifact_key for item in invalidated),
+                *(["requirement-spec"] if access_control_change or capability_change else []),
+            ]
         )
         resources = _resource_keys_from_evidence(invalidated)
-        earliest_artifact = _earliest_artifact_from_evidence(invalidated, earliest_stage)
+        # 页面/操作的角色可访问性由 RequirementSpec 持有。即使 Analyzer 只引用了
+        # ProductPlan 中的页面行为证据，也不能从 product-plan 开始而跳过权限需求重建。
+        earliest_artifact = (
+            EarliestRevisionArtifact.REQUIREMENT_SPEC
+            if access_control_change or capability_change
+            else _earliest_artifact_from_evidence(invalidated, earliest_stage)
+        )
         branch = (
             FormalRevisionBranch.DESIGN_STAGE_REVISION
             if earliest_stage == ContractStage.REQUIREMENT_DESIGN
             else FormalRevisionBranch.WORKBENCH_PLAN_REVISION
         )
-        revision_type = _revision_type_from_evidence(invalidated, user_request=user_request)
+        revision_type = (
+            RevisionType.REQUIREMENT_SCOPE_CHANGE
+            if access_control_change or capability_change
+            else _revision_type_from_evidence(invalidated, user_request=user_request)
+        )
         candidate = RevisionRoutingCandidate(
             route=RevisionRoute.FORMAL_REVISION,
             formalBranch=branch,
@@ -336,6 +359,21 @@ def enforce_revision_routing(
     """校验模型候选并执行正式产物安全、字段合同和低置信度规则。"""
 
     normalized = _normalize_candidate_payload(payload)
+    # 应用级能力开关是 application.json 的配置事实；无论模型把它误判为产品行为还是
+    # 局部实现修改，都必须从 RequirementSpec 重建下游规划，不能复用旧权限语义。
+    if has_explicit_capability_change(user_request):
+        normalized.update(
+            {
+                "route": RevisionRoute.FORMAL_REVISION,
+                "formalBranch": FormalRevisionBranch.DESIGN_STAGE_REVISION,
+                "revisionType": RevisionType.REQUIREMENT_SCOPE_CHANGE,
+                "earliestArtifact": EarliestRevisionArtifact.REQUIREMENT_SPEC,
+                "owner": "none",
+                "candidatePaths": [],
+                "affectedArtifactKeys": ["requirement-spec"],
+                "confidence": 1.0,
+            }
+        )
     target_paths = [str(path).strip() for path in normalized.get("candidatePaths", [])]
     forced = _forced_formal_artifact_classification(target_paths)
     if forced is not None:

@@ -258,8 +258,7 @@ function WorkbenchPage({
         if (!active) return
         setWorkspaceApplication({
           ...application,
-          ...applicationConfig,
-          schema: { ...application.schema, ...applicationConfig }
+          ...applicationConfig
         })
       } catch (error) {
         console.warn('读取工作区 application.json 失败，继续使用已保存应用配置。', error)

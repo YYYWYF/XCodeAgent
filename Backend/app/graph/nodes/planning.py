@@ -1,6 +1,8 @@
+import json
 import logging
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from langgraph.config import get_stream_writer
@@ -54,6 +56,7 @@ from app.services.authorization_deliverability import (
     authorization_deliverability_errors,
     authorization_deliverability_report,
 )
+from app.services.application_config import read_application_config
 from app.services.product_plan import require_current_product_plan
 from app.services.page_dependencies import (
     close_page_action_endpoint_dependencies,
@@ -183,10 +186,16 @@ def _technical_planning_requirement_spec(
         for key, value in requirement_spec.items()
         if key != "entities"
     }
+    application_file = Path(workspace_from_state(state)) / ".xcodeagent" / "application.json"
+    try:
+        application_config = json.loads(application_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("TechnicalPlan 缺少有效 application.json。") from exc
     return {
         **technical_input,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
+        "application_config": application_config,
     }
 
 
@@ -246,6 +255,7 @@ def _technical_plan_contract_errors(
                 if isinstance(plan.get("page_implementation_contracts"), list)
                 else []
             ),
+            application_config=read_application_config(workspace_from_state(state)),
         )
         errors.extend(authorization_deliverability_errors(report))
     return errors

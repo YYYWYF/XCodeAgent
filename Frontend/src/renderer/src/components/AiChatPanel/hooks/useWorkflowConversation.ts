@@ -14,6 +14,8 @@ import {
 } from '../../../service/applicationPagePlanning'
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
+import { getApplicationLifecycle } from '../../../service/applicationLifecycle'
+import { ensureApplicationTemplateReadiness } from '../../../service/templateApi'
 import { isAuthenticationFailure } from '../../../service/authentication'
 import type {
   ApplicationConfig,
@@ -115,6 +117,13 @@ function conversationTargetFromSelection(
     }
   }
   return undefined
+}
+
+const TEMPLATE_DOWNLOAD_DEBUG_NODE = 'bootstrap_template_generation'
+
+/** 判断当前调试请求是否应转交独立的 Workspace Bootstrap，而非恢复主 Workflow Graph。 */
+function isTemplateDownloadDebug(workflowDebug?: WorkflowDebugOptions): boolean {
+  return workflowDebug?.enabled === true && workflowDebug.resumeFrom === TEMPLATE_DOWNLOAD_DEBUG_NODE
 }
 
 type UseWorkflowConversationParams = {
@@ -593,8 +602,27 @@ export function useWorkflowConversation({
 
   /** 首次发送时创建阶段会话；简单模式补充输入优先复用当前会话和 thread。 */
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
+    if (loading || workspaceBusy) return
+    if (isTemplateDownloadDebug(workflowDebug)) {
+      try {
+        // Bootstrap 是独立 AG-UI 生命周期动作，不能伪造为主 Workflow 的 resumeFrom。
+        const lifecycle = await ensureApplicationTemplateReadiness(application, randomUUID())
+        onApplicationLifecycleChange(lifecycle)
+        publishAiMessage(editorMode, '模板下载调试完成，Workspace Bootstrap 已通过就绪校验。')
+      } catch (reason) {
+        // 下载失败后回读 lifecycle，让调试界面仍能展示后端记录的失败原因与阶段。
+        try {
+          onApplicationLifecycleChange(await getApplicationLifecycle(application))
+        } catch {
+          // 原始下载错误仍是本次调试失败的权威信息，回读失败不覆盖它。
+        }
+        const message = reason instanceof Error ? reason.message : String(reason)
+        publishAiMessage(editorMode, `模板下载调试失败：${message}`)
+      }
+      return
+    }
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
-    if (!message || loading || workspaceBusy) return
+    if (!message) return
     const acceptanceConversationSession =
       acceptanceConversationSessionKey && activeSession?.key === acceptanceConversationSessionKey
         ? activeSession

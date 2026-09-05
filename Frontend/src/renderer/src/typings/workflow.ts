@@ -61,11 +61,34 @@ export type WorkflowSummary = {
   unitTestMaxRepairIterations?: number
   repairReturnNode?: 'unit_test' | 'integration_test' | string
   lifecycle?: ApplicationLifecycle
+  templatePreparation?: WorkflowTemplatePreparation
   revisionImpact?: WorkflowRevisionImpact
   revisionContinuation?: WorkflowRevisionContinuation
   developmentContinuation?: WorkflowDevelopmentContinuation
   revisionDraft?: WorkflowRevisionDraft
   [key: string]: unknown
+}
+
+/** Template Reconcile V2 durable Attempt 投影；用于刷新后恢复模板准备进度。 */
+export type WorkflowTemplatePreparation = {
+  operationType: 'UPDATE' | string
+  attemptId?: string
+  retryOf?: string | null
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | string
+  phase: string
+  completedOperations: number
+  totalOperations: number
+  retryable: boolean
+  errorCode?: string | null
+  errorMessage?: string | null
+  startedAt?: string
+  updatedAt?: string
+  logs?: Array<{
+    timestamp: string
+    phase: string
+    level: 'INFO' | 'ERROR' | string
+    message: string
+  }>
 }
 
 export type WorkflowFormalRevisionBranch =
@@ -870,26 +893,6 @@ export type ApplicationLifecycleStage =
   | 'application_template_generation_failed'
   | 'ready_for_workbench'
 
-export type TemplateDownloadTargetResult = {
-  status: 'succeeded' | 'failed' | 'pending'
-  attempt: number
-  path: string
-  error?: string
-  repositoryUrl?: string
-  branch?: 'main' | 'auth'
-  commitSha?: string
-}
-
-export type TemplateDownloadResult = {
-  ok: boolean
-  status: 'succeeded' | 'failed'
-  failedTargets: Array<'frontend' | 'backend'>
-  targets: {
-    frontend: TemplateDownloadTargetResult
-    backend: TemplateDownloadTargetResult
-  }
-}
-
 export type WorkbenchExecutionStatus =
   | 'running'
   | 'stopping'
@@ -998,6 +1001,14 @@ export type ApplicationLifecycle = {
     status: string
     currentArtifact?: string | null
     remainingArtifacts?: string[]
+    pendingApplicationConfigChanges?: Array<{
+      path: 'auth.enable' | 'authorization.enabled' | 'track.enable' | 'apiTrack.enable'
+      operation: 'set'
+      from: boolean
+      to: boolean
+      reason: string
+      evidence: string
+    }>
     continuationSourceRunId?: string
     [key: string]: unknown
   }

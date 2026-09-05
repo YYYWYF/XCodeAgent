@@ -155,10 +155,7 @@ def _technical_planning_prompt(
         },
         "product_acceptance_criteria": product_plan.get("product_acceptance_criteria", []),
     }
-    authorization_context = {
-        "enabled": (requirement_spec.get("authorization_requirements") or {}).get("enabled") is True,
-        "authorizationTargets": product_plan.get("authorizationTargets", {}),
-    }
+    authorization_context = {"authorizationTargets": product_plan.get("authorizationTargets", {})}
     flow_context = {"business_flows": product_plan.get("business_flows", [])}
     page_context = {
         "pages": [

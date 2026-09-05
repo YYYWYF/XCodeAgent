@@ -31,6 +31,7 @@ def launch_frontend_project(
     project_dir: str | Path | None = None,
     runtime_subdir: str = "launch",
     skip_install: bool = False,
+    force_restart: bool = False,
 ) -> dict[str, Any]:
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
@@ -40,6 +41,8 @@ def launch_frontend_project(
     "launch-ui-design" 以独立 PID 文件避免与正式前端预览冲突。
     skip_install 为 True 时复用调用方已经完成的依赖安装，不再重复执行
     install；性能测试节点在集成测试完成安装后使用该模式。
+    force_restart 为 True 时不复用健康服务，而是停止 standard preview 后
+    重新安装、启动并执行 Ready 检查，供模板更新后的真实工程验收使用。
     """
 
     root = Path(workspace_path).expanduser().resolve()
@@ -74,7 +77,7 @@ def launch_frontend_project(
     runtime_root = root / ".xcodeagent" / "runtime" / runtime_subdir
     runtime_root.mkdir(parents=True, exist_ok=True)
     preview_url = _preview_url(scripts.get(script_name, ""))
-    existing_server = _reuse_ready_server(runtime_root, preview_url)
+    existing_server = None if force_restart else _reuse_ready_server(runtime_root, preview_url)
     if existing_server is not None:
         return {
             **_base_launch_payload(
