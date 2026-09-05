@@ -128,3 +128,24 @@ R-PLAN / R-TEMPLATE 合计 144 项通过；以下新增及相关投影回归 37 
 两项均为需求 Markdown 工件投影返回 None；将 HEAD 版 `projection.py` 只读加载到内存，
 使用修改前的 `_workflow_confirmation_artifact` 重跑这两项，失败均可复现。
 它们不涉及 Confirmed baseline 投影，未扩大范围修复；收尾补丁相关测试均已通过。
+
+## R-PERSIST 回归断言补齐
+
+2026-09-05，T5.4 执行 R-PERSIST 时发现 `test_build_task_plan_recovery.py` 的应用范围
+测试仍读取 T2.4 已移除的 `reusable_tasks_by_unit`。隔离 HEAD 副本可复现相同 KeyError，
+属于 T2.4 契约变更后的测试同步遗漏。
+
+该测试现改为 `test_application_scope_preserves_historical_shell_independent_of_execution_status`，
+覆盖历史 shell Task 的 pending、failed、completed 三种状态：历史记录和执行状态均保留，
+但不能证明模板前置能力，也不能成为新页面 Task 的执行依赖。继续检查 Unit 架构边、
+历史交付物/验收字段、累计任务图有效性及原输入不变；其他 Unit 仍按既有合并规则验证。
+本次仅调整测试及本文，不恢复旧字段、不修改生产行为、不提前接入完整 append-only 流程。
+
+使用现有 `.venv/bin/python -m unittest` 复跑：
+
+- R-PERSIST、R-PROGRESS 与 T5.1/T5.3/T5.4 状态机、文件持久化、Controller 测试：76 项通过。
+- R-PLAN 与 `test_frontend_shell_prerequisite`、`test_build_task_reuse`、
+  `test_build_task_reuse_workspace`：144 项通过。
+
+合计 220 项全部通过，原 R-PERSIST 阻塞已消除；`git diff --check` 通过，后端 `/health`
+返回 `status=ok`。没有前端改动，未运行前端构建/UI 验证。

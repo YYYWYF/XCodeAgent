@@ -331,8 +331,8 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
         self.assertEqual(set(resolved["task_registry"]), {"persisted-api-task"})
         self.assertTrue(resolved["task_graph"]["validation"]["is_valid"])
 
-    def test_application_scope_retains_only_completed_reusable_app_units(self) -> None:
-        """应用范围必须保留已完成公共 Unit，并替换未完成业务 Unit。"""
+    def test_application_scope_preserves_historical_shell_independent_of_execution_status(self) -> None:
+        """历史 shell 始终保留，但执行状态不能证明模板能力；其他 Unit 沿用当前合并规则。"""
 
         base_plan = replace_build_task_plan_tasks(
             _base_unit_plan(
@@ -357,46 +357,58 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
                 ),
             ],
         )
-        build_context = _resolve_build_context(
-            {},
-            {"version": "1.0.0"},
-            {"type": "application", "targetId": "application"},
-            base_plan,
-        )
-        prepared_plan = create_build_task_plan(
-            {"version": "1.0.0"},
-            agent_plan={
-                "tasks": [
-                    {
-                        **_task(
-                            "new-dashboard-task",
-                            "page:dashboard",
-                            with_deliverable=True,
-                        ),
-                        "description": "重新生成概览页。",
-                    }
-                ]
-            },
-            base_build_task_plan=base_plan,
-            build_context=build_context,
-        )
+        for status in ("pending", "failed", "completed"):
+            with self.subTest(shell_status=status):
+                history = deepcopy(base_plan)
+                history["task_registry"]["shared-shell-task"]["status"] = status
+                before = deepcopy(history)
+                build_context = _resolve_build_context(
+                    {},
+                    {"version": "1.0.0"},
+                    {"type": "application", "targetId": "application"},
+                    history,
+                )
+                # T2.4 已移除 completed-task reuse；没有模板证据也不能凭历史记录生成前置能力。
+                self.assertNotIn("reusable_tasks_by_unit", build_context)
+                self.assertFalse(build_context.get("external_capabilities"))
+                prepared_plan = create_build_task_plan(
+                    {"version": "1.0.0"},
+                    agent_plan={
+                        "tasks": [
+                            {
+                                **_task(
+                                    "new-dashboard-task",
+                                    "page:dashboard",
+                                    with_deliverable=True,
+                                ),
+                                "description": "重新生成概览页。",
+                            }
+                        ]
+                    },
+                    base_build_task_plan=history,
+                    build_context=build_context,
+                )
 
-        merged = _merge_prepared_scope_tasks(base_plan, prepared_plan, build_context)
+                merged = _merge_prepared_scope_tasks(history, prepared_plan, build_context)
 
-        self.assertEqual(
-            build_context["reusable_tasks_by_unit"],
-            {"frontend:shell": ["shared-shell-task"]},
-        )
-        self.assertEqual(
-            set(merged["task_registry"]),
-            {"shared-shell-task", "new-dashboard-task"},
-        )
-        self.assertIn("deliverables", merged["task_registry"]["shared-shell-task"])
-        self.assertIn(
-            "business_acceptance_checks",
-            merged["task_registry"]["shared-shell-task"],
-        )
-        self.assertTrue(merged["task_graph"]["validation"]["is_valid"])
+                self.assertEqual(
+                    set(merged["task_registry"]),
+                    {"shared-shell-task", "new-dashboard-task"},
+                )
+                retained = merged["task_registry"]["shared-shell-task"]
+                self.assertEqual(retained["status"], status)
+                self.assertEqual(retained["unit_id"], "frontend:shell")
+                self.assertEqual(retained["change_scope"], before["task_registry"]["shared-shell-task"]["change_scope"])
+                self.assertIn("deliverables", retained)
+                self.assertIn("business_acceptance_checks", retained)
+                # Unit 架构边仍保留，但不能把历史 shell Task 编译为新页面的执行前置。
+                self.assertIn(
+                    {"from": "frontend:shell", "to": "page:dashboard", "type": "depends_on"},
+                    merged["unit_graph"]["edges"],
+                )
+                self.assertNotIn("shared-shell-task", merged["task_registry"]["new-dashboard-task"]["dependencies"])
+                self.assertTrue(merged["task_graph"]["validation"]["is_valid"])
+                self.assertEqual(history, before)
 
     def test_page_scope_rewrites_retained_dependency_after_target_replacement(self) -> None:
         """页面任务 ID 改变后，保留的集成任务必须改为依赖新页面任务。"""
