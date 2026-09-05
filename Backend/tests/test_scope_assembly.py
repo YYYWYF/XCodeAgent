@@ -178,6 +178,31 @@ def _auth_inputs(*, providers: tuple[tuple[str, str, str], ...] = ()) -> tuple[d
 
 
 class ScopeAssemblyTests(unittest.TestCase):
+    def test_assembled_draft_never_claims_confirmation_lifecycle_status(self) -> None:
+        """无论图是否 ready，Assembly 都不能继承 confirmed 或提前声称正式 pending。"""
+
+        for blocked in (False, True):
+            with self.subTest(blocked=blocked):
+                inputs = _base_inputs()
+                if blocked:
+                    candidate_task = _customer_api_task()
+                    candidate_task["dependencies"] = ["missing-task"]
+                    inputs["candidates_by_unit"] = {
+                        SHARED_UNIT: _candidate(SHARED_UNIT, [candidate_task])
+                    }
+
+                result = assemble_scope_build_task_plan(**inputs)
+
+                self.assertEqual(
+                    result.assembled_plan["status"],
+                    "blocked" if blocked else "ready",
+                )
+                self.assertNotIn("confirmation_status", result.assembled_plan)
+                self.assertNotIn("confirmed_at", result.assembled_plan)
+                self.assertEqual(
+                    inputs["base_confirmed_plan"]["confirmation_status"], "confirmed"
+                )
+
     def test_shared_unit_retains_history_and_appends_current_candidate(self) -> None:
         """共享 Unit 同时保留正式职责和本轮新增职责，并输出完整来源索引。"""
 

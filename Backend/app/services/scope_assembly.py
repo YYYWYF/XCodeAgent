@@ -410,12 +410,12 @@ def assemble_scope_build_task_plan(
         raise ScopeAssemblyError(exc.issues) from exc
     graph_valid = assembled.get("task_graph", {}).get("validation", {}).get("is_valid") is True
     blocked_batches = assembled.get("execution", {}).get("blocked_batches", [])
-    assembled = {
-        **assembled,
-        "status": "ready" if graph_valid and not blocked_batches else "blocked",
-        "confirmation_status": "pending",
-        "confirmed_at": None,
-    }
+    assembled = dict(assembled)
+    # Assembly 只产生等待 Global Validation 的内存草稿；正式 PendingPlan 生命周期
+    # 由后续 Controller / persistence 在 Global success 后赋予，且不能继承 confirmed 基线。
+    assembled.pop("confirmation_status", None)
+    assembled.pop("confirmed_at", None)
+    assembled["status"] = "ready" if graph_valid and not blocked_batches else "blocked"
     task_origins = {
         **{task_id: "retained" for task_id in retained_task_ids},
         **{task_id: "candidate" for task_id in candidate_task_ids},
