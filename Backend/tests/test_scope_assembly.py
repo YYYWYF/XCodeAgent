@@ -3,7 +3,11 @@
 from copy import deepcopy
 import unittest
 
-from app.services.build_task_reuse_contracts import ReuseFacts
+from app.services.authorization_capability_dependency import (
+    AUTH_GUARD_UNIT_ID,
+    current_auth_resource_capability,
+)
+from app.services.build_task_reuse_contracts import ExternalCapability, ReuseFacts
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.planning_frozen import plain_json
 from app.services.scope_assembly import ScopeAssemblyError, assemble_scope_build_task_plan
@@ -103,6 +107,74 @@ def _base_inputs() -> dict:
         "generation_requirements_by_unit": {SHARED_UNIT: _requirement(SHARED_UNIT)},
         "candidates_by_unit": {SHARED_UNIT: candidate},
     }
+
+
+def _add_retained_auth_provider(
+    baseline: dict, task_id: str, capability: str, *, status: str = "pending"
+) -> None:
+    """向 confirmed 夹具追加一个字段完整的历史 auth capability provider。"""
+
+    provider = deepcopy(baseline["task_registry"]["orders:api"])
+    provider.update({
+        "id": task_id,
+        "unit_id": AUTH_GUARD_UNIT_ID,
+        "dependencies": [],
+        "status": status,
+        "provides_capabilities": [capability],
+    })
+    baseline["task_registry"][task_id] = provider
+    baseline["build_units"][AUTH_GUARD_UNIT_ID]["task_ids"].append(task_id)
+    baseline["task_graph"]["nodes"].append(task_id)
+    baseline["task_graph"]["topological_order"].insert(0, task_id)
+
+
+def _auth_inputs(*, providers: tuple[tuple[str, str, str], ...] = ()) -> tuple[dict, str, str]:
+    """构造当前 R2 页面 Scope，并可追加不同版本及状态的历史 provider。"""
+
+    inputs = _base_inputs()
+    inputs["project_plan"]["authorization_manifest"] = {
+        "enabled": True,
+        "resources": [
+            {
+                "resourceKey": "customers",
+                "type": "page",
+                "targetResourceRef": "page:customers",
+            },
+            {
+                "resourceKey": "customers_list",
+                "type": "operation",
+                "targetResourceRef": "action:customers:list",
+            },
+        ],
+    }
+    capability_r1 = "frontend.auth.resources:R1"
+    capability_r2 = current_auth_resource_capability(inputs["project_plan"])
+    if capability_r2 is None:
+        raise AssertionError("当前权限目录必须生成 R2 capability。")
+    for task_id, capability, status in providers:
+        _add_retained_auth_provider(
+            inputs["base_confirmed_plan"], task_id, capability, status=status
+        )
+    inputs["reuse_facts"] = _reuse_facts(inputs["base_confirmed_plan"])
+    inputs["skeleton_plan"]["unit_graph"]["edges"].append({
+        "from": AUTH_GUARD_UNIT_ID,
+        "to": "page:customers",
+        "type": "depends_on",
+    })
+    page_task = task(
+        "customers:page-current",
+        "page:customers",
+        "frontend.page",
+        "frontend/src/pages/Customers/index.tsx",
+        "customers",
+    )
+    inputs["generation_requirements_by_unit"] = {
+        "page:customers": _requirement("page:customers")
+    }
+    inputs["candidates_by_unit"] = {
+        "page:customers": _candidate("page:customers", [page_task], "d")
+    }
+    return inputs, capability_r1, capability_r2
 
 
 class ScopeAssemblyTests(unittest.TestCase):
@@ -263,6 +335,100 @@ class ScopeAssemblyTests(unittest.TestCase):
         self.assertIn("orders:api", result.assembled_plan["task_registry"])
         self.assertIn("orders:api-current-duplicate", result.assembled_plan["task_registry"])
         self.assertEqual(result.candidate_task_ids, ("orders:api-current-duplicate",))
+
+    def test_auth_r1_and_r2_provider_history_remains_append_only(self) -> None:
+        """精确依赖编译不得从累计 auth-guard registry 删除旧 R1 provider。"""
+
+        inputs, capability_r1, capability_r2 = _auth_inputs()
+        _add_retained_auth_provider(inputs["base_confirmed_plan"], "auth-r1", capability_r1)
+        _add_retained_auth_provider(inputs["base_confirmed_plan"], "auth-r2", capability_r2)
+        inputs["reuse_facts"] = _reuse_facts(inputs["base_confirmed_plan"])
+
+        registry = assemble_scope_build_task_plan(**inputs).assembled_plan["task_registry"]
+
+        self.assertEqual(registry["auth-r1"]["provides_capabilities"], (capability_r1,))
+        self.assertEqual(registry["auth-r2"]["provides_capabilities"], (capability_r2,))
+
+    def test_current_page_depends_only_on_exact_r2_provider(self) -> None:
+        """Page 需要当前 R2 时只编译 R2 provider Task，不继承整个 auth Unit 历史。"""
+
+        inputs, capability_r1, capability_r2 = _auth_inputs()
+        for task_id, capability in (("auth-r1", capability_r1), ("auth-r2", capability_r2)):
+            _add_retained_auth_provider(inputs["base_confirmed_plan"], task_id, capability)
+        inputs["reuse_facts"] = _reuse_facts(inputs["base_confirmed_plan"])
+
+        page = assemble_scope_build_task_plan(**inputs).assembled_plan["task_registry"]["customers:page-current"]
+
+        self.assertIn("auth-r2", page["dependencies"])
+        self.assertNotIn("auth-r1", page["dependencies"])
+        self.assertEqual(page["requires_capabilities"], (capability_r2,))
+
+    def test_external_r2_satisfaction_creates_no_task_dependency(self) -> None:
+        """ReuseFacts 明示 workspace 已满足当前 R2 时，Page 保留 capability 但无 provider 边。"""
+
+        inputs, capability_r1, capability_r2 = _auth_inputs()
+        _add_retained_auth_provider(inputs["base_confirmed_plan"], "auth-r1", capability_r1)
+        facts = _reuse_facts(inputs["base_confirmed_plan"])
+        inputs["reuse_facts"] = facts.model_copy(update={
+            "external_capabilities": [ExternalCapability(
+                unit_id=AUTH_GUARD_UNIT_ID,
+                capability_id=capability_r2,
+                source="authorization_resource_catalog",
+                workspace_revision="scope-r2",
+                source_refs={"resource_catalog_fingerprint": capability_r2.rsplit(":", 1)[1]},
+            )]
+        })
+
+        page = assemble_scope_build_task_plan(**inputs).assembled_plan["task_registry"]["customers:page-current"]
+
+        self.assertNotIn("auth-r1", page["dependencies"])
+        self.assertEqual(page["requires_capabilities"], (capability_r2,))
+
+    def test_missing_r2_provider_is_a_global_issue(self) -> None:
+        """当前 R2 无 provider 且未 external satisfied 时，Assembly 必须显式失败。"""
+
+        inputs, _, capability_r2 = _auth_inputs()
+
+        with self.assertRaises(ScopeAssemblyError) as raised:
+            assemble_scope_build_task_plan(**inputs)
+
+        issue = raised.exception.issues[0]
+        self.assertEqual(issue.code, "GLOBAL_AUTH_CAPABILITY_PROVIDER_MISSING")
+        self.assertEqual(issue.level, "global")
+        self.assertEqual(issue.details["capability_id"], capability_r2)
+
+    def test_duplicate_r2_providers_are_a_global_conflict(self) -> None:
+        """同一 R2 的多个 provider 不能按顺序任选其一。"""
+
+        inputs, _, capability_r2 = _auth_inputs()
+        for task_id in ("auth-r2-a", "auth-r2-b"):
+            _add_retained_auth_provider(inputs["base_confirmed_plan"], task_id, capability_r2)
+        inputs["reuse_facts"] = _reuse_facts(inputs["base_confirmed_plan"])
+
+        with self.assertRaises(ScopeAssemblyError) as raised:
+            assemble_scope_build_task_plan(**inputs)
+
+        issue = raised.exception.issues[0]
+        self.assertEqual(issue.code, "GLOBAL_AUTH_CAPABILITY_PROVIDER_CONFLICT")
+        self.assertEqual(set(issue.task_ids), {"auth-r2-a", "auth-r2-b"})
+        self.assertFalse(issue.retryable)
+
+    def test_failed_r1_does_not_block_page_that_requires_r2(self) -> None:
+        """历史 R1 的执行失败状态不应成为当前 R2 Page 的拓扑依赖。"""
+
+        inputs, capability_r1, capability_r2 = _auth_inputs()
+        _add_retained_auth_provider(
+            inputs["base_confirmed_plan"], "auth-r1-failed", capability_r1, status="failed"
+        )
+        _add_retained_auth_provider(inputs["base_confirmed_plan"], "auth-r2", capability_r2)
+        inputs["reuse_facts"] = _reuse_facts(inputs["base_confirmed_plan"])
+
+        result = assemble_scope_build_task_plan(**inputs)
+        page = result.assembled_plan["task_registry"]["customers:page-current"]
+
+        self.assertEqual(page["dependencies"].count("auth-r2"), 1)
+        self.assertNotIn("auth-r1-failed", page["dependencies"])
+        self.assertEqual(result.assembled_plan["execution"]["blocked_batches"], ())
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     tasks_from_build_task_plan,
 )
+from app.services.build_unit_compiler import BuildUnitCompilationError
 from app.services.build_task_reuse_contracts import ReuseFacts
 from app.services.planning_frozen import (
     FrozenJsonObject,
@@ -369,7 +370,7 @@ def assemble_scope_build_task_plan(
     )):
         _raise_input("SCOPE_ASSEMBLY_INPUT_INVALID", "Scope Assembly 的映射输入类型无效。")
     _, retained = _retained_tasks(base_confirmed_plan)
-    _validate_reuse_facts(reuse_facts, retained)
+    facts = _validate_reuse_facts(reuse_facts, retained)
     required_units = _required_candidate_units(generation_requirements_by_unit)
     candidates, candidate_unit_by_task_id = _candidate_tasks(candidates_by_unit, required_units)
     collision_issues = _collision_issues(retained, candidates, candidate_unit_by_task_id)
@@ -390,15 +391,23 @@ def assemble_scope_build_task_plan(
             else deepcopy(plain_json(build_context.get("executable_details") or {}))
         ),
         "_allow_missing_business_deliverable_task_ids": sorted(retained_id_set),
+        "_compile_auth_capability_dependencies": True,
+        "external_capabilities": [
+            capability.model_dump(mode="json")
+            for capability in facts.external_capabilities
+        ],
     }
-    assembled = compile_build_task_plan_scope(
-        skeleton,
-        all_tasks,
-        context,
-        validate_task_scope=False,
-        preserve_compiled_task_ids=retained_id_set,
-        preserve_task_contract_ids=retained_id_set,
-    )
+    try:
+        assembled = compile_build_task_plan_scope(
+            skeleton,
+            all_tasks,
+            context,
+            validate_task_scope=False,
+            preserve_compiled_task_ids=retained_id_set,
+            preserve_task_contract_ids=retained_id_set,
+        )
+    except BuildUnitCompilationError as exc:
+        raise ScopeAssemblyError(exc.issues) from exc
     graph_valid = assembled.get("task_graph", {}).get("validation", {}).get("is_valid") is True
     blocked_batches = assembled.get("execution", {}).get("blocked_batches", [])
     assembled = {

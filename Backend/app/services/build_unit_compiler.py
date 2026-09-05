@@ -5,7 +5,24 @@ from hashlib import sha256
 import json
 from typing import Any
 
+from app.services.authorization_capability_dependency import (
+    AUTH_GUARD_UNIT_ID,
+    AuthCapabilityDependencyResolution,
+    current_auth_resource_capability,
+    resolve_auth_capability_dependency,
+)
 from app.services.authorization_overlay import unit_authorization_slice
+from app.services.planning_issues import ValidationIssue
+
+
+class BuildUnitCompilationError(ValueError):
+    """携带 Unit dependency 编译产生的结构化 Global 问题。"""
+
+    def __init__(self, issues: list[ValidationIssue] | tuple[ValidationIssue, ...]) -> None:
+        """冻结完整问题集合，禁止调用方从错误文本反推问题类型。"""
+
+        self.issues = tuple(ValidationIssue.model_validate(issue) for issue in issues)
+        super().__init__("；".join(issue.message for issue in self.issues))
 
 
 def apply_unit_compilation(
@@ -27,7 +44,7 @@ def apply_unit_compilation(
         for task in tasks
     ]
     return _apply_unit_task_dependencies(
-        with_sources, units, build_task_plan.get("unit_graph")
+        with_sources, units, build_task_plan.get("unit_graph"), build_context
     )
 
 
@@ -151,6 +168,7 @@ def _apply_unit_task_dependencies(
     tasks: list[dict[str, Any]],
     units: dict[str, Any],
     unit_graph: Any,
+    build_context: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """仅保留同 Unit 显式依赖，并以 Unit Graph 编译唯一的跨 Unit 依赖。"""
 
@@ -166,6 +184,18 @@ def _apply_unit_task_dependencies(
             str(task.get("unit_id") or "application:root"), []
         ).append(str(task.get("id")))
     dependency_units = _unit_dependency_map(unit_graph)
+    auth_resolution = _auth_dependency_resolution(
+        tasks,
+        dependency_units,
+        build_context,
+    )
+    if auth_resolution is not None and auth_resolution.issues:
+        raise BuildUnitCompilationError(auth_resolution.issues)
+    auth_consumer_units = {
+        unit_id
+        for unit_id, dependencies in dependency_units.items()
+        if AUTH_GUARD_UNIT_ID in dependencies and unit_id.startswith("page:")
+    }
     result: list[dict[str, Any]] = []
     for task in tasks:
         unit_id = str(task.get("unit_id") or "application:root")
@@ -175,10 +205,9 @@ def _apply_unit_task_dependencies(
         # 调接口，无需等后端实现。前后端契约一致性由 app:integration 集成测试兜底。
         page_frontend_only = unit_id.startswith("page:")
         # shell 边仅表达模板架构前置；即使登记过历史任务，也不能变为执行依赖。
-        inherited_dependencies = [
-            dependency_task_id
-            for dependency_unit_id in dependency_units.get(unit_id, [])
-            if dependency_unit_id != "frontend:shell" and (
+        inherited_dependencies: list[str] = []
+        for dependency_unit_id in dependency_units.get(unit_id, []):
+            if dependency_unit_id == "frontend:shell" or not (
                 not page_frontend_only
                 or dependency_unit_id.startswith("frontend:")
                 or (
@@ -190,10 +219,20 @@ def _apply_unit_task_dependencies(
                         == dependency_unit_id
                     )
                 )
+            ):
+                continue
+            dependency_task_ids = tasks_by_unit.get(dependency_unit_id, [])
+            if (
+                auth_resolution is not None
+                and unit_id in auth_consumer_units
+                and dependency_unit_id == AUTH_GUARD_UNIT_ID
+            ):
+                dependency_task_ids = list(auth_resolution.provider_task_ids)
+            inherited_dependencies.extend(
+                dependency_task_id
+                for dependency_task_id in dependency_task_ids
+                if dependency_task_id and dependency_task_id != task.get("id")
             )
-            for dependency_task_id in tasks_by_unit.get(dependency_unit_id, [])
-            if dependency_task_id and dependency_task_id != task.get("id")
-        ]
         explicit_dependencies = _task_dependencies(task)
         removed_cross_unit_dependencies = [
             dependency
@@ -216,6 +255,14 @@ def _apply_unit_task_dependencies(
         result.append(
             {
                 **task,
+                "requires_capabilities": _dedupe_strings([
+                    *_string_list(task.get("requires_capabilities")),
+                    *(
+                        [auth_resolution.capability_id]
+                        if auth_resolution is not None and unit_id in auth_consumer_units
+                        else []
+                    ),
+                ]),
                 "dependencies": dependencies,
                 "unit_dependencies": dependency_units.get(unit_id, []),
                 "dependency_rewrites": [
@@ -235,6 +282,11 @@ def _apply_unit_task_dependencies(
                     for dependency_unit_id in dependency_units.get(unit_id, [])
                     if dependency_unit_id in units
                     and dependency_unit_id != "frontend:shell"
+                    and not (
+                        auth_resolution is not None
+                        and unit_id in auth_consumer_units
+                        and dependency_unit_id == AUTH_GUARD_UNIT_ID
+                    )
                     and not tasks_by_unit.get(dependency_unit_id)
                 ],
                 "invalid_dependencies": [
@@ -245,6 +297,50 @@ def _apply_unit_task_dependencies(
             }
         )
     return result
+
+
+def _auth_dependency_resolution(
+    tasks: list[dict[str, Any]],
+    dependency_units: dict[str, list[str]],
+    build_context: dict[str, Any],
+) -> AuthCapabilityDependencyResolution | None:
+    """在 Scope Assembly 明示启用时，为受控 Page 解析当前 R 的精确 provider。"""
+
+    if build_context.get("_compile_auth_capability_dependencies") is not True:
+        return None
+    task_unit_ids = {
+        str(task.get("unit_id") or "")
+        for task in tasks
+        if task.get("id")
+    }
+    consumer_units = sorted(
+        unit_id
+        for unit_id, dependencies in dependency_units.items()
+        if unit_id in task_unit_ids
+        and unit_id.startswith("page:")
+        and AUTH_GUARD_UNIT_ID in dependencies
+    )
+    if not consumer_units:
+        return None
+    project_plan = build_context.get("project_plan")
+    if not isinstance(project_plan, dict):
+        return None
+    capability_id = current_auth_resource_capability(project_plan)
+    if capability_id is None:
+        return None
+    consumer_task_ids = [
+        str(task.get("id"))
+        for task in tasks
+        if task.get("id") and str(task.get("unit_id") or "") in consumer_units
+    ]
+    external = build_context.get("external_capabilities")
+    return resolve_auth_capability_dependency(
+        capability_id=capability_id,
+        tasks=tasks,
+        external_capabilities=(external if isinstance(external, list) else []),
+        consumer_unit_ids=consumer_units,
+        consumer_task_ids=consumer_task_ids,
+    )
 
 
 def _unit_dependency_map(unit_graph: Any) -> dict[str, list[str]]:
