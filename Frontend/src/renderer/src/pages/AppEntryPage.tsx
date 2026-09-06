@@ -357,7 +357,7 @@ function AppEntryContent(): JSX.Element {
         >
           <WorkbenchPage
             application={activeApplication}
-            applicationLifecycle={applicationLifecycle}
+            applicationLifecycle={workbenchApplicationLifecycle}
             onApplicationLifecycleChange={mergeApplicationLifecycle}
             onApplicationLifecycleReset={resetApplicationLifecycle}
             onEntryLoadFailure={handleWorkbenchEntryFailure}

@@ -36,6 +36,7 @@ import type {
   ApplicationLifecycle,
   ApplicationVersion,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
@@ -140,6 +141,9 @@ function WorkbenchPage({
   const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
     DevelopmentPlanningEntityOption[]
   >([])
+  const [developmentPlanningAgents, setDevelopmentPlanningAgents] = useState<
+    DevelopmentPlanningAgentOption[]
+  >([])
   const [chatSessionHistoryReady, setChatSessionHistoryReady] = useState(false)
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
@@ -228,6 +232,7 @@ function WorkbenchPage({
         setDevelopmentPlanningEntities(
           Array.isArray(inspection.entities) ? inspection.entities : []
         )
+        setDevelopmentPlanningAgents(Array.isArray(inspection.agents) ? inspection.agents : [])
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
           if (lifecycleReadyForWorkbench) {
@@ -243,6 +248,7 @@ function WorkbenchPage({
         setDevelopmentPlanningPageTree([])
         setDevelopmentPlanningApiContracts([])
         setDevelopmentPlanningEntities([])
+        setDevelopmentPlanningAgents([])
         console.warn('检查 specs/plans 规划产物失败。', error)
         failWorkbenchEntry(formatWorkbenchEntryError(error, '检查工作区规划产物失败。'))
       } finally {
@@ -635,6 +641,7 @@ function WorkbenchPage({
                   developmentPlanningPages={developmentPlanningPages}
                   developmentPlanningPageTree={developmentPlanningPageTree}
                   developmentPlanningApiContracts={developmentPlanningApiContracts}
+                  developmentPlanningAgents={developmentPlanningAgents}
                   developmentPlanningEntities={developmentPlanningEntities}
                   editorMode={editorMode}
                   onApplicationUpdate={handleApplicationUpdate}

@@ -3427,8 +3427,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             [],
         )
 
-    def test_agent_unit_accepts_agent_owner_and_runtime_deliverable(self) -> None:
-        """Agent Unit 必须编译为 agent.code 任务并限制在 agent-runtime 路径。"""
+    def test_agent_unit_accepts_module_owner_and_runtime_deliverable(self) -> None:
+        """Agent Unit 必须接受平台七模块任务并限制在 agent-runtime 路径。"""
 
         unit_id = "agent:inventory_assistant"
         plan = create_build_task_plan(
@@ -3437,9 +3437,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     {
                         "agentId": "inventory_assistant",
                         "artifacts": {
-                            "agentPath": "agent-runtime/agents/inventory_assistant.py",
-                            "toolAdapterPath": "agent-runtime/tools/inventory_assistant_tools.py",
-                            "testPath": "agent-runtime/tests/test_inventory_assistant.py",
+                            "compositionPath": "agent-runtime/src/app/agent/factory.py",
+                            "testRoot": "agent-runtime/tests",
                         },
                     }
                 ]
@@ -3447,24 +3446,25 @@ class BuildTaskPlannerTests(unittest.TestCase):
             agent_plan={
                 "tasks": [
                     {
-                        "id": "agent:inventory_assistant::implementation",
+                        "id": "agent:inventory_assistant::prompt",
                         "unit_id": unit_id,
                         "owner": "agent",
+                        "task_type": "agent.code",
                         "title": "实现库存助手",
-                        "description": "实现 Agent、工具适配与测试。",
+                        "description": "实现 Agent Prompt 模块。",
+                        "source_refs": {
+                            "agent_id": "inventory_assistant",
+                            "agent_module": "prompt",
+                            "agent_contract_sha256": "sha256:" + "1" * 64,
+                            "module_config_sha256": "sha256:" + "2" * 64,
+                            "template_commit": "abc123",
+                            "template_policy_sha256": "sha256:" + "3" * 64,
+                        },
                         "dependencies": [],
                         "change_scope": [
                             {
-                                "operation": "add",
-                                "path": "agent-runtime/agents/inventory_assistant.py",
-                            },
-                            {
-                                "operation": "add",
-                                "path": "agent-runtime/tools/inventory_assistant_tools.py",
-                            },
-                            {
-                                "operation": "add",
-                                "path": "agent-runtime/tests/test_inventory_assistant.py",
+                                "operation": "modify",
+                                "path": "agent-runtime/src/app/agent/factory.py",
                             },
                         ],
                         "deliverables": [
@@ -3473,9 +3473,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                                 "kind": "agent.runtime",
                                 "target_id": "inventory_assistant",
                                 "paths": [
-                                    "agent-runtime/agents/inventory_assistant.py",
-                                    "agent-runtime/tools/inventory_assistant_tools.py",
-                                    "agent-runtime/tests/test_inventory_assistant.py",
+                                    "agent-runtime/src/app/agent/factory.py",
                                 ],
                                 "provides": ["agent.inventory_assistant.runtime"],
                             }
@@ -3510,8 +3508,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(task["task_type"], "agent.code")
         self.assertEqual(task["deliverables"][0]["kind"], "agent.runtime")
 
-    def test_task_prompt_exposes_agent_units_and_fixed_python_contract(self) -> None:
-        """任务规划提示必须为 Agent Unit 指定 owner、路径和正式契约来源。"""
+    def test_task_prompt_excludes_platform_compiled_agent_units(self) -> None:
+        """任务规划提示必须把七模块 Agent 任务留给平台确定性编译。"""
 
         prompt = build_task_preparation_prompt(
             {
@@ -3519,9 +3517,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     {
                         "agentId": "inventory_assistant",
                         "artifacts": {
-                            "agentPath": "agent-runtime/agents/inventory_assistant.py",
-                            "toolAdapterPath": "agent-runtime/tools/inventory_assistant_tools.py",
-                            "testPath": "agent-runtime/tests/test_inventory_assistant.py",
+                            "compositionPath": "agent-runtime/src/app/agent/factory.py",
+                            "testRoot": "agent-runtime/tests",
                         },
                     }
                 ]
@@ -3536,11 +3533,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("agent:runtime::bootstrap", prompt)
-        self.assertIn("agent:<agentId>::implementation", prompt)
-        self.assertIn("owner `agent`", prompt)
-        self.assertIn("agent.runtime", prompt)
-        self.assertIn("Python 3.12 + DeepAgents", prompt)
+        self.assertIn("Do not emit a Build task for `agent:runtime`", prompt)
+        self.assertNotIn("agent:runtime::bootstrap", prompt)
+        self.assertIn("Do not emit tasks for business `agent:<agentId>` Units", prompt)
+        self.assertIn("task_type=agent.code", prompt)
+        self.assertIn("seven owner=agent", prompt)
         self.assertIn("inventory_assistant", prompt)
 
 

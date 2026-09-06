@@ -21,6 +21,11 @@ import {
   type EditorMode,
   type WorkbenchPhase
 } from './stageSessions'
+import { gitRepositoriesEquivalent, templateCloneAttempts } from './templateRepository'
+import {
+  projectWorkbenchAgents,
+  type WorkbenchAgentOption
+} from './agentPlanningArtifactProjection'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -596,6 +601,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   pageTree: WorkbenchPageTreeNode[]
   apiContracts: WorkbenchApiContract[]
   entities: WorkbenchEntityOption[]
+  agents: WorkbenchAgentOption[]
 }> {
   const artifactRoot = path.join(workspaceRoot, '.xcodeagent')
   const artifacts = [
@@ -610,6 +616,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   let pageTree: WorkbenchPageTreeNode[] = []
   let apiContracts: WorkbenchApiContract[] = []
   let entities: WorkbenchEntityOption[] = []
+  let agents: WorkbenchAgentOption[] = []
 
   for (const artifact of artifacts) {
     const artifactPath = path.join(artifactRoot, artifact.relativePath)
@@ -687,6 +694,16 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   entities = projectPlanEntities(technicalPlan)
 
   const buildTaskPlan = await readBuildTaskPlan(workspaceRoot)
+  if (productPlan && technicalPlan) {
+    const agentProjection = await projectWorkbenchAgents(
+      workspaceRoot,
+      productPlan,
+      technicalPlan,
+      buildTaskPlan
+    )
+    agents = agentProjection.agents
+    invalid.push(...agentProjection.invalid)
+  }
   const pages = mergeWorkbenchPageStatus(
     projectPlanPageOptions({ pages: [...plannedPages.values()] }),
     buildTaskPlan
@@ -705,7 +722,8 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     pages,
     pageTree: mergeWorkbenchPageTreeStatus(pageTree, pagesById),
     apiContracts,
-    entities
+    entities,
+    agents
   }
 }
 
@@ -1405,6 +1423,7 @@ async function createChatSession(
   const entryKey = stage
     ? normalizeSessionEndpointField(inputValue.entryKey) || `session:${crypto.randomUUID()}`
     : undefined
+  const recoveryExecutionRunId = normalizeSessionEndpointField(inputValue.recoveryExecutionRunId)
   const lockKey = `${pathComparisonKey(workspaceRoot)}:${workflowId}:${stage || workbenchPhase}`
 
   return withStageSessionCreationLock(lockKey, async () => {
@@ -1426,6 +1445,76 @@ async function createChatSession(
     const sequence = stage
       ? nextStageSessionSequence(existingSessions, workflowId, stage)
       : undefined
+    let recoveredThreadId = ''
+    if (recoveryExecutionRunId) {
+      // 只允许用当前 lifecycle 中真实存在的 continuation execution 恢复缺失的
+      // DEVELOPMENT 会话；客户端不能任意指定 threadId 或接管其他执行。
+      if (stage !== 'DEVELOPMENT' || workbenchPhase !== 'development') {
+        throw new Error('only DEVELOPMENT sessions can recover an execution thread')
+      }
+      const revisionContext = normalizeSessionRevisionContext(inputValue.revisionContext)
+      const lifecycleValue = JSON.parse(
+        await fs.readFile(
+          path.join(workspaceRoot, '.xcodeagent', 'application-lifecycle.json'),
+          'utf8'
+        )
+      )
+      if (!isJsonRecord(lifecycleValue)) throw new Error('application lifecycle is invalid')
+      const activeRevision = isJsonRecord(lifecycleValue.activeFormalRevision)
+        ? lifecycleValue.activeFormalRevision
+        : undefined
+      const activeExecutions = isJsonRecord(lifecycleValue.activeExecutions)
+        ? lifecycleValue.activeExecutions
+        : undefined
+      const execution =
+        activeExecutions && isJsonRecord(activeExecutions[recoveryExecutionRunId])
+          ? activeExecutions[recoveryExecutionRunId]
+          : undefined
+      const activeTarget =
+        activeRevision && isJsonRecord(activeRevision.target) ? activeRevision.target : undefined
+      const technicalPlanSha256 = normalizeSessionEndpointField(activeRevision?.technicalPlanSha256)
+      const expectedEntryKey =
+        revisionContext?.changeId && technicalPlanSha256
+          ? `revision-development:${revisionContext.changeId}:${technicalPlanSha256}`
+          : ''
+      const executionStatus = normalizeSessionEndpointField(execution?.status) || ''
+      const executionScope = normalizeSessionEndpointField(execution?.scope)
+      const executionTargetId = normalizeSessionEndpointField(execution?.targetId)
+      const executionPageId = normalizeSessionEndpointField(execution?.pageId)
+      const activePageId = normalizeSessionEndpointField(activeTarget?.pageId)
+      const activeEndpointId = normalizeSessionEndpointField(activeTarget?.endpointId)
+      const activeEntityId = normalizeSessionEndpointField(activeTarget?.entityId)
+      const targetMatches =
+        (executionScope === 'page' &&
+          Boolean(activePageId) &&
+          activePageId === (executionPageId || executionTargetId)) ||
+        (executionScope === 'endpoint' &&
+          Boolean(activeEndpointId) &&
+          activeEndpointId === executionTargetId) ||
+        (executionScope === 'data_source' &&
+          Boolean(activeEntityId) &&
+          activeEntityId === executionTargetId) ||
+        executionScope === 'application'
+      if (
+        !revisionContext ||
+        revisionContext.sessionRole !== 'development' ||
+        revisionContext.changeId !== normalizeSessionEndpointField(activeRevision?.changeId) ||
+        revisionContext.formalBranch !== activeRevision?.formalBranch ||
+        revisionContext.impactInteractionId !== activeRevision?.impactInteractionId ||
+        revisionContext.technicalPlanSha256 !== technicalPlanSha256 ||
+        entryKey !== expectedEntryKey ||
+        !execution ||
+        !['running', 'failed', 'stopped'].includes(executionStatus) ||
+        !targetMatches
+      ) {
+        throw new Error('recovery execution does not match the active formal revision')
+      }
+      recoveredThreadId = normalizeSessionEndpointField(execution.threadId) || ''
+      if (!recoveredThreadId) throw new Error('recovery execution threadId is missing')
+      if (existingSessions.some((session) => session.threadId === recoveredThreadId)) {
+        throw new Error('recovery execution threadId is already bound to another session')
+      }
+    }
     const now = Date.now()
     const session = normalizeSession({
       ...inputValue,

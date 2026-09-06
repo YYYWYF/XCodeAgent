@@ -172,6 +172,7 @@ export type WorkflowDevelopmentTarget =
       endpointId: string
       label: string
     }
+  | { type: 'agent'; agentId: string; label: string }
 
 export type WorkflowDevelopmentContinuation = {
   id: string
@@ -207,7 +208,7 @@ export type WorkflowRevisionDraftInteraction = {
 
 /** 项目启动子图通过 AG-UI 实时投影的当前子步骤。 */
 export type WorkflowLaunchProgress = {
-  stage?: 'structure' | 'backend' | 'frontend' | 'ready' | string
+  stage?: 'structure' | 'backend' | 'agent_runtime' | 'frontend' | 'ready' | string
   status?: 'pending' | 'running' | 'completed' | 'skipped' | 'failed' | string
   message?: string
 }
@@ -241,6 +242,7 @@ export type WorkflowLaunchResult = {
   preview_url?: string
   server?: Record<string, unknown>
   backend?: WorkflowLaunchPart
+  agent_runtime?: WorkflowLaunchPart
   frontend?: WorkflowLaunchPart
   failed_stage?: string
   [key: string]: unknown
@@ -623,7 +625,7 @@ export type WorkflowDetailReview = {
     selectedApiContractId?: string
     selectedEndpointId?: string
     selectedEntityId?: string
-    detailTargetType?: 'page' | 'endpoint' | 'entity'
+    detailTargetType?: 'page' | 'endpoint' | 'entity' | 'agent'
     entityDesign?: WorkflowEntityDesignSummary
   }
 }
@@ -774,6 +776,8 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   acceptance_phase_confirmation?: WorkflowAcceptancePhaseConfirmation
   /** 代码审查问题的一键修复动作。 */
   code_review_repair_confirmation?: WorkflowCodeReviewRepairConfirmation
+  /** 仅当 Agent 只被实体绑定阻断时，显式跳过本次前置。 */
+  agent_entity_binding_skip?: { action: 'skip' }
   /** 正式修改影响范围的结构化批准或拒绝动作。 */
   revision_impact_confirmation?: 'approved' | 'rejected'
   /** 前后端实现修复开始前的用户确认。 */
@@ -1116,7 +1120,7 @@ export type LifecycleError = {
 export type WorkbenchExecution = {
   developmentPurpose?: 'initial' | 'revision' | null
   developmentTarget?: DevelopmentArtifactTarget | null
-  scope: 'application' | 'page' | 'data_source' | 'endpoint'
+  scope: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId: string
   pageId?: string
   threadId: string
@@ -1209,6 +1213,7 @@ export type ApplicationLifecycle = {
     endpoints?: Record<string, ExecutionResourceLock>
     apiContracts: Record<string, ExecutionResourceLock>
     dataSources: Record<string, ExecutionResourceLock>
+    agents?: Record<string, ExecutionResourceLock>
   }
   error?: LifecycleError
   pendingRevisionImpact?: Record<string, unknown>
@@ -1289,7 +1294,7 @@ export type WorkflowDebugOptions = {
 }
 
 export type WorkflowBuildExecutionScope = {
-  type: 'application' | 'page' | 'data_source' | 'endpoint'
+  type: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId?: string
   apiContractId?: string
 }
@@ -1308,6 +1313,7 @@ export type WorkflowBuildExecutionTask = {
   task_id?: string
   unit_id?: string
   owner?: string
+  task_type?: 'agent.code' | string
   title?: string
   description?: string
   status?: 'pending' | 'running' | 'completed' | 'already_satisfied' | 'failed' | string
@@ -1328,6 +1334,7 @@ export type WorkflowBuildExecutionTask = {
   businessAcceptanceSummary?: Record<string, unknown>
   business_acceptance_summary?: Record<string, unknown>
   source_refs?: Record<string, unknown>
+  engineering_context?: Record<string, unknown>
   failure_category?: string | null
   failure_reason?: string | null
   failure_detail?: Record<string, unknown> | null

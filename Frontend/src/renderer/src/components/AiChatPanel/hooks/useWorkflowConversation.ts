@@ -198,7 +198,7 @@ type UseWorkflowConversationResult = {
   handleContinueDevelopment: (
     continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
   ) => Promise<boolean>
-  handleEndPlan: (runId?: string) => Promise<void>
+  handleEndPlan: (runId?: string, sessionIdentity?: SessionIdentity) => Promise<boolean>
   handleProductStageConversation: (
     request: string,
     planningThreadId: string
@@ -223,6 +223,10 @@ type UseWorkflowConversationResult = {
     endpointId: string
     endpointLabel: string
     hasDetailPlan?: boolean
+  }) => Promise<boolean>
+  handleStartAgentDevelopment: (target: {
+    agentId: string
+    agentLabel: string
   }) => Promise<boolean>
   handleStartEntityDetailConfirmation: (target: {
     entityId: string
@@ -826,9 +830,10 @@ export function useWorkflowConversation({
       selectedApiContractId?: string
       selectedEndpointId?: string
       selectedEntityId?: string
+      selectedAgentId?: string
       selectedEntityLabel?: string
       endpointLabel?: string
-      detailTargetType?: 'page' | 'endpoint' | 'entity'
+      detailTargetType?: 'page' | 'endpoint' | 'entity' | 'agent'
       sessionIdentity?: SessionIdentity
       pageTemplate?: {
         id?: string
@@ -1131,6 +1136,7 @@ export function useWorkflowConversation({
         selectedApiContractId: effectiveSelectedApiContractId,
         selectedEndpointId: effectiveSelectedEndpointId,
         selectedEntityId: options?.selectedEntityId,
+        selectedAgentId: options?.selectedAgentId,
         detailTargetType: effectiveDetailTargetType,
         buildExecutionScope: effectiveBuildExecutionScope,
         workflowAction: options?.workflowAction,
@@ -1911,6 +1917,28 @@ export function useWorkflowConversation({
     })
   }
 
+  /** 以已确认 Agent Contract 作为现有主 Workflow 的开发就绪检查起点。 */
+  const handleStartAgentDevelopment = async (target: {
+    agentId: string
+    agentLabel: string
+  }): Promise<boolean> => {
+    if (!target.agentId || loading || workspaceBusy) return false
+    const identity = await ensureActiveSession()
+    return sendWorkflowMessage(`开始开发智能体：${target.agentLabel}`, {
+      conversation: false,
+      executionThreadId: randomUUID(),
+      selectedAgentId: target.agentId,
+      selectedPageId: '',
+      detailTargetType: 'agent',
+      buildExecutionScope: {
+        type: 'agent',
+        targetId: target.agentId
+      },
+      sessionIdentity: identity,
+      titleFrom: `开发智能体：${target.agentLabel}`
+    })
+  }
+
   /** 在当前通用历史会话中以独立 execution 启动实体绑定，并保留后端续接合同。 */
   const handleStartEntityDetailConfirmation = async (target: {
     entityId: string
@@ -2038,18 +2066,23 @@ export function useWorkflowConversation({
   }
 
   /** 通过同一 AG-UI 端点结束计划并释放生命周期中的工作区锁。 */
-  const handleEndPlan = async (runId?: string): Promise<void> => {
+  const handleEndPlan = async (
+    runId?: string,
+    sessionIdentity?: SessionIdentity
+  ): Promise<boolean> => {
     const execution = planExecutionForPage(activeWorkflow?.summary.lifecycle, selectedPageId, {
       runId: activeWorkflow?.runId,
       threadId: activeWorkflow?.threadId
     })
     const targetRunId = runId || execution?.runId || activeWorkflow?.runId
-    const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
+    const controlIdentity =
+      sessionIdentity || activeRun?.identity || matchingActiveSession || activeSession
     const endedSessionKeys = Array.from(
       new Set(
-        [activeRuntimeKey, controlIdentity?.key, draftKey].filter((key): key is string =>
-          Boolean(key)
-        )
+        (sessionIdentity
+          ? [sessionIdentity.key]
+          : [activeRuntimeKey, controlIdentity?.key, draftKey]
+        ).filter((key): key is string => Boolean(key))
       )
     )
 
@@ -2074,8 +2107,8 @@ export function useWorkflowConversation({
     }
 
     // 结束动作的 UI 解锁不等待后端；请求仍尽力释放服务端工作区锁。
-    if (loading || workspaceBusy || !targetRunId) return
-    await sendWorkflowMessage('结束当前计划。', {
+    if (loading || workspaceBusy || !targetRunId) return false
+    return sendWorkflowMessage('结束当前计划。', {
       planControlAction: 'end',
       planControlRunId: targetRunId,
       selectedPageId,
@@ -2131,6 +2164,7 @@ export function useWorkflowConversation({
     handleStopPlan,
     handleSend,
     handleStartEndpointDevelopment,
+    handleStartAgentDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
