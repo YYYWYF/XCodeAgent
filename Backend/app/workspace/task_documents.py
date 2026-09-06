@@ -8,10 +8,15 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from threading import RLock
 
 from app.services.build_task_plan_lifecycle import DraftIdentity
 from app.workspace.json_documents import write_json_atomic
 from app.workspace.spec_documents import workflow_artifact_root
+
+
+# 同一后端进程内，Pending 写入与 Confirm 的读验写删必须互斥。
+build_task_plan_lifecycle_lock = RLock()
 
 
 def build_task_plan_json_path(state: dict[str, Any]) -> Path:
@@ -183,7 +188,8 @@ def write_pending_build_task_plan_atomic(
     validate_pending_self_digest(pending_plan)
 
     path = build_task_plan_pending_json_path(state)
-    write_json_atomic(path, pending_plan)
+    with build_task_plan_lifecycle_lock:
+        write_json_atomic(path, pending_plan)
     return str(path)
 
 

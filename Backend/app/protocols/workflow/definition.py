@@ -154,6 +154,12 @@ def workflow_capabilities() -> dict[str, Any]:
             },
             "clientNodeSelectionAllowed": False,
         },
+        "planControl": {
+            "requestField": "forwardedProps.planControlAction",
+            "actions": ["stop", "end", "abandon"],
+            "abandonIdentityFields": ["planningRunId", "draftDigest"],
+            "abandonSemantics": "仅删除精确匹配的 PendingPlan，不取消 Scheduler 或结束 execution。",
+        },
         "clarificationModes": {
             "confirmed_baseline_error": {
                 "code": "confirmed_baseline_invalid",

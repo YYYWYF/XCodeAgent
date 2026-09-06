@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 
 from ag_ui.core import (
     CustomEvent,
@@ -23,14 +22,11 @@ from ag_ui.encoder import EventEncoder
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     end_workbench_execution,
-    load_application_lifecycle,
     stop_workbench_execution,
 )
-from app.domain.application_lifecycle import PendingInteractionType
-from app.workspace.task_documents import (
-    build_task_plan_json_path,
-    load_build_task_plan_json,
-    write_build_task_plan_json,
+from app.services.build_task_plan_lifecycle import (
+    AbandonPendingResult,
+    abandon_pending_build_task_plan,
 )
 
 
@@ -150,39 +146,6 @@ def _workspace_key(workspace: str | None) -> str:
     return os.path.normcase(str(resolved))
 
 
-def abandon_pending_build_task_plan(workspace: str, *, run_id: str) -> bool:
-    """把指定 execution 正在等待确认的 DAG 标记为已放弃，其他计划结束不改动 DAG。"""
-
-    lifecycle = load_application_lifecycle(workspace)
-    execution = lifecycle.active_executions.get(run_id) if lifecycle else None
-    pending = execution.pending_interaction if execution else None
-    pending_mode = str(pending.payload.get("mode") or "") if pending else ""
-    if pending is None or (
-        pending.type != PendingInteractionType.TASK_PLAN_CONFIRMATION
-        and pending_mode != "build_task_plan_confirmation"
-    ):
-        return False
-
-    path = build_task_plan_json_path({"workspace": workspace})
-    if not path.exists():
-        raise ValueError("工作区中不存在待放弃的 build-task-plan.json。")
-    plan = load_build_task_plan_json(path)
-    confirmation_status = str(plan.get("confirmation_status") or "")
-    if confirmation_status not in {"pending", "abandoned"}:
-        raise ValueError("当前 Build DAG 已不处于待确认状态，不能放弃。")
-    if confirmation_status == "abandoned":
-        return True
-    write_build_task_plan_json(
-        {"workspace": workspace},
-        {
-            **plan,
-            "confirmation_status": "abandoned",
-            "abandoned_at": datetime.now(UTC).isoformat(),
-        },
-    )
-    return True
-
-
 def build_workflow_cancellation_ag_ui_stream(
     *,
     thread_id: str,
@@ -229,6 +192,8 @@ def build_workflow_plan_control_ag_ui_stream(
     action: str,
     workspace: str,
     target_run_id: str,
+    planning_run_id: str = "",
+    draft_digest: str = "",
     thread_id: str,
     run_id: str,
     accept: str | None = None,
@@ -239,24 +204,32 @@ def build_workflow_plan_control_ag_ui_stream(
     message_id = f"plan-control:{run_id}"
 
     async def stream() -> AsyncIterator[str]:
-        if action not in {"stop", "end"}:
+        if action not in {"stop", "end", "abandon"}:
             raise ValueError(f"不支持的计划控制动作：{action}")
+        if action == "abandon":
+            result = abandon_pending_build_task_plan(
+                {"workspace": workspace},
+                planning_run_id=planning_run_id,
+                draft_digest=draft_digest,
+            )
+            for frame in _build_abandon_frames(
+                encoder=encoder,
+                thread_id=thread_id,
+                run_id=run_id,
+                message_id=message_id,
+                result=result,
+            ):
+                yield frame
+            return
         if not target_run_id:
             raise ValueError("计划控制动作缺少目标 runId。")
-        abandoned_task_plan = (
-            abandon_pending_build_task_plan(workspace, run_id=target_run_id)
-            if action == "end"
-            else False
-        )
         lifecycle = application_lifecycle_payload(
             end_workbench_execution(workspace, run_id=target_run_id)
             if action == "end"
             else stop_workbench_execution(workspace, run_id=target_run_id)
         )
         message = (
-            "Build DAG 已放弃，当前流程已停止。"
-            if abandoned_task_plan
-            else "计划已结束，工作区已恢复自由输入。"
+            "计划已结束，工作区已恢复自由输入。"
             if action == "end"
             else "计划执行已暂停，可继续执行、调整计划或结束。"
         )
@@ -290,3 +263,60 @@ def build_workflow_plan_control_ag_ui_stream(
         )
 
     return stream()
+
+
+def _build_abandon_frames(
+    *,
+    encoder: EventEncoder,
+    thread_id: str,
+    run_id: str,
+    message_id: str,
+    result: AbandonPendingResult,
+) -> Iterator[str]:
+    """把 Pending Abandon 结果编码成完整 AG-UI 生命周期，不触发 Graph 或取消。"""
+
+    messages = {
+        "abandoned": "当前 Pending Build DAG 已安全放弃。",
+        "no_pending": "当前没有可放弃的 Pending Build DAG。",
+        "stale_draft": "待放弃的 Build DAG 已变化，请刷新后基于当前版本操作。",
+    }
+    message = messages[result.status]
+    public_result = {
+        "status": result.status,
+        "message": message,
+        "errors": list(result.errors),
+    }
+    workflow_status = "completed" if result.status in {"abandoned", "no_pending"} else "requires_user_input"
+    workflow = {
+        "runId": run_id,
+        "threadId": thread_id,
+        "summary": {
+            "status": workflow_status,
+            "phase": "build_task_plan_abandon",
+            "message": message,
+        },
+        "events": [],
+        "state": {
+            "status": workflow_status,
+            "phase": "build_task_plan_abandon",
+            "buildTaskPlanAbandon": public_result,
+        },
+        "result": {
+            "status": workflow_status,
+            "phase": "build_task_plan_abandon",
+            "buildTaskPlanAbandon": public_result,
+        },
+    }
+    yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
+    yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
+    yield encoder.encode(CustomEvent(name="workflow-run", value=workflow))
+    yield encoder.encode(StateSnapshotEvent(snapshot={"workflow": workflow}))
+    yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=message))
+    yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+    yield encoder.encode(
+        RunFinishedEvent(
+            threadId=thread_id,
+            runId=run_id,
+            result={"workflow": workflow},
+        )
+    )

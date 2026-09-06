@@ -797,6 +797,18 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(forwarded_props.get("planControlAction"))
             or _optional_text(forwarded_props.get("plan_control_action"))
         ),
+        "plan_control_planning_run_id": (
+            _optional_text(payload.get("planningRunId"))
+            or _optional_text(payload.get("planning_run_id"))
+            or _optional_text(forwarded_props.get("planningRunId"))
+            or _optional_text(forwarded_props.get("planning_run_id"))
+        ),
+        "plan_control_draft_digest": (
+            _optional_text(payload.get("draftDigest"))
+            or _optional_text(payload.get("draft_digest"))
+            or _optional_text(forwarded_props.get("draftDigest"))
+            or _optional_text(forwarded_props.get("draft_digest"))
+        ),
         "cancel_run_id": (
             _optional_text(payload.get("cancelRunId"))
             or _optional_text(payload.get("cancel_run_id"))

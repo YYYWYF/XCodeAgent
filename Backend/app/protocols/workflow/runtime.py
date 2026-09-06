@@ -337,6 +337,8 @@ def build_workflow_ag_ui_stream(
             action=plan_control_action,
             workspace=workflow_inputs["workspace"] or "",
             target_run_id=workflow_inputs.get("plan_control_run_id") or "",
+            planning_run_id=workflow_inputs.get("plan_control_planning_run_id") or "",
+            draft_digest=workflow_inputs.get("plan_control_draft_digest") or "",
             thread_id=thread_id,
             run_id=run_id,
             accept=accept,
