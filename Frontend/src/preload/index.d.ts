@@ -1,6 +1,7 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   ApplicationSchemaConfig,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningPageTreeNode,
   TemplateDownloadResult
 } from '../renderer/src/typings'
@@ -45,6 +46,8 @@ declare global {
           appName: string
           frontendTemplateUrl?: string
           backendTemplateUrl?: string
+          agentRuntimeTemplateUrl?: string
+          agentRuntimeRequired: boolean
         }) => Promise<TemplateDownloadResult>
         readApplication: (payload: {
           workspaceRoot: string
@@ -98,6 +101,7 @@ declare global {
             hasDetailPlan: boolean
             designed: boolean
           }>
+          agents: DevelopmentPlanningAgentOption[]
         }>
       }
       sessions?: {

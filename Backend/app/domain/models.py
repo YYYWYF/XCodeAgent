@@ -3,8 +3,8 @@ from typing import Any, Literal
 
 
 TaskStatus = Literal["pending", "running", "completed", "failed"]
-BuildUnitKind = Literal["application", "database", "backend", "frontend", "page"]
-BuildTaskOwner = Literal["database", "backend", "frontend"]
+BuildUnitKind = Literal["application", "database", "backend", "frontend", "page", "agent"]
+BuildTaskOwner = Literal["database", "backend", "frontend", "agent"]
 BuildTaskType = Literal[
     "database.change",
     "database.seed",
@@ -13,6 +13,7 @@ BuildTaskType = Literal[
     "backend.verify",
     "frontend.code",
     "frontend.verify",
+    "agent.code",
 ]
 BuildTaskRisk = Literal["low", "medium", "high"]
 

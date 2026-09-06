@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -21,8 +22,38 @@ from app.services.frontend_scaffold import (
     inspect_frontend_menu_entries,
 )
 from app.services.product_plan import PRODUCT_PLAN_SCHEMA_VERSION
+from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
+
 TEMPLATE_GENERATION_MANIFEST_RELATIVE_PATH = Path(
     ".xcodeagent/template-generation-manifest.json"
+)
+AGENT_RUNTIME_TEMPLATE_REPOSITORY_URL = (
+    "https://github.com/Bettetman/agent-runtime-template.git"
+)
+AGENT_RUNTIME_TEMPLATE_BRANCH = "master"
+_AGENT_RUNTIME_REQUIRED_FILES = (
+    "README.md",
+    "pyproject.toml",
+    "uv.lock",
+    ".python-version",
+    ".env.example",
+    "src/app/main.py",
+    "src/app/settings.py",
+    "src/app/server/app.py",
+    "src/app/server/health.py",
+    "src/app/server/agui.py",
+    "src/app/agent/factory.py",
+    "src/app/agent/context.py",
+    "src/app/models/factory.py",
+    "src/app/tools/__init__.py",
+    "src/app/interaction/service.py",
+    "src/app/interaction/schemas.py",
+    "src/app/persistence/checkpointer.py",
+)
+_AGENT_RUNTIME_REQUIRED_DIRECTORIES = (
+    "src/app/agent",
+    "src/app/tools",
+    "tests",
 )
 _TEMPLATE_LOCKS: dict[str, threading.RLock] = {}
 _TEMPLATE_LOCKS_GUARD = threading.Lock()
@@ -33,6 +64,31 @@ _DELETING_TEMPLATE_WORKSPACES: set[str] = set()
 
 class ApplicationTemplateGenerationError(ValueError):
     """表示模板下载、增量初始化或完成门禁没有满足要求。"""
+
+
+def normalize_git_repository_identity(repository_url: str) -> str:
+    """规范化 GitHub HTTPS/SSH 仓库身份，忽略模板下载的传输协议差异。"""
+
+    value = repository_url.strip().rstrip("/")
+    if value.lower().endswith(".git"):
+        value = value[:-4]
+    lowered = value.lower()
+    https_prefix = "https://github.com/"
+    ssh_prefix = "git@github.com:"
+    ssh_protocol_prefix = "ssh://git@github.com/"
+    if lowered.startswith(https_prefix):
+        return f"github.com/{value[len(https_prefix):]}".lower()
+    if lowered.startswith(ssh_prefix):
+        return f"github.com/{value[len(ssh_prefix):]}".lower()
+    if lowered.startswith(ssh_protocol_prefix):
+        return f"github.com/{value[len(ssh_protocol_prefix):]}".lower()
+    return value
+
+
+def _git_repositories_equivalent(left: str, right: str) -> bool:
+    """判断两个 Git 仓库地址是否指向同一仓库。"""
+
+    return normalize_git_repository_identity(left) == normalize_git_repository_identity(right)
 
 
 def template_generation_manifest_path(workspace: str | Path) -> Path:
@@ -78,10 +134,7 @@ def inspect_template_generation_readiness(workspace: str | Path) -> dict[str, An
     if overall.get("status") != "succeeded":
         errors.append(f"模板 manifest 完成门禁状态为 {overall.get('status') or 'unknown'}")
 
-    for target in ("frontend", "backend"):
-        target_error = _template_target_error(workspace_path, target)
-        if target_error:
-            errors.append(target_error)
+    errors.extend(_download_target_errors(workspace_path, manifest))
 
     result = {
         "ready": not errors,
@@ -152,7 +205,8 @@ def prepare_application_template_generation(
             failure_details = "; ".join(
                 f"{name}(attempt={target['attempt']}): {target.get('error') or '未完成'}"
                 for name, target in download_step["targets"].items()
-                if target.get("status") != "succeeded"
+                if target.get("required") is True
+                and target.get("status") != "succeeded"
             )
             manifest["overall"].update(
                 status="failed",
@@ -209,10 +263,7 @@ def validate_application_template_generation(workspace: str | Path) -> dict[str,
             if not isinstance(step, dict) or step.get("status") != "succeeded":
                 errors.append(f"manifest 步骤 {step_name} 未完成")
 
-        for target in ("frontend", "backend"):
-            target_error = _template_target_error(workspace_path, target)
-            if target_error:
-                errors.append(target_error)
+        errors.extend(_download_target_errors(workspace_path, manifest))
         if variant == "auth":
             errors.extend(_frontend_template_contract_errors(workspace_path / "frontend"))
         elif variant == "main":
@@ -280,15 +331,32 @@ def _normalize_download_step(workspace: Path, value: dict[str, Any]) -> dict[str
     targets: dict[str, Any] = {}
     failed_targets: list[str] = []
     incomplete_targets: list[str] = []
-    for target_name in ("frontend", "backend"):
+    agent_runtime_required = _agent_runtime_required(workspace)
+    expected_required = {
+        "frontend": True,
+        "backend": True,
+        "agentRuntime": agent_runtime_required,
+    }
+    for target_name in ("frontend", "backend", "agentRuntime"):
         raw = raw_targets.get(target_name) if isinstance(raw_targets, dict) else None
         raw = raw if isinstance(raw, dict) else {}
         status = str(raw.get("status") or "failed")
         error = str(raw.get("error") or "").strip() or None
-        directory_error = _template_target_error(workspace, target_name)
-        if status not in {"pending", "succeeded", "failed"}:
+        required = expected_required[target_name]
+        declared_required = raw.get("required")
+        directory_error = (
+            _template_target_error(workspace, target_name) if required else None
+        )
+        allowed_statuses = {"pending", "succeeded", "failed"} if required else {"skipped"}
+        if declared_required is not required:
             status = "failed"
-            error = error or f"{target_name} 模板下载返回了非法状态。"
+            error = (
+                f"{target_name}.required 与已确认 TechnicalPlan 不一致："
+                f"期望 {str(required).lower()}。"
+            )
+        elif status not in allowed_statuses:
+            status = "failed"
+            error = error or f"{target_name} 模板下载返回了非法状态 {status}。"
         if status == "failed":
             error = error or directory_error or f"{target_name} 模板下载失败。"
             failed_targets.append(target_name)
@@ -296,7 +364,7 @@ def _normalize_download_step(workspace: Path, value: dict[str, Any]) -> dict[str
         elif status == "pending":
             error = error or f"{target_name} 模板下载尚未开始。"
             incomplete_targets.append(target_name)
-        elif directory_error:
+        elif status == "succeeded" and directory_error:
             status = "failed"
             error = directory_error
             failed_targets.append(target_name)
@@ -306,8 +374,9 @@ def _normalize_download_step(workspace: Path, value: dict[str, Any]) -> dict[str
         except (TypeError, ValueError):
             attempt = 0
         targets[target_name] = {
+            "required": required,
             "status": status,
-            "path": target_name,
+            "path": "agent-runtime" if target_name == "agentRuntime" else target_name,
             "attempt": max(0, min(attempt, 3)),
             "error": error,
             "repositoryUrl": str(raw.get("repositoryUrl") or "").strip() or None,
@@ -371,6 +440,27 @@ def _load_template_pages(workspace: Path) -> list[dict[str, Any]]:
     return collect_template_pages(product_plan, ui_designs)
 
 
+def _agent_runtime_required(workspace: Path) -> bool:
+    """从最新已确认 TechnicalPlan 派生 Agent Runtime 是否为必需模板。"""
+
+    technical_plan = _load_json_object(
+        workspace / ".xcodeagent/plans/technical-plan.json",
+        "正式 TechnicalPlan",
+    )
+    if technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE:
+        raise ApplicationTemplateGenerationError("正式 TechnicalPlan 类型无效。")
+    if technical_plan.get("confirmation_status") != "confirmed":
+        raise ApplicationTemplateGenerationError("正式 TechnicalPlan 尚未确认。")
+    agent_contracts = technical_plan.get("agent_contracts")
+    if not isinstance(agent_contracts, list) or any(
+        not isinstance(contract, dict) for contract in agent_contracts
+    ):
+        raise ApplicationTemplateGenerationError(
+            "正式 TechnicalPlan.agent_contracts 必须是对象数组。"
+        )
+    return bool(agent_contracts)
+
+
 def _load_json_object(path: Path, label: str) -> dict[str, Any]:
     """读取单个 JSON 对象，避免 main 初始化在损坏输入上继续执行。"""
 
@@ -386,11 +476,32 @@ def _load_json_object(path: Path, label: str) -> dict[str, Any]:
 
 
 def _template_target_error(workspace: Path, target_name: str) -> str | None:
-    """检查前后端模板目录是否包含可识别的工程入口。"""
+    """检查单个模板目录是否为真实目录并包含当前契约要求的入口。"""
 
-    directory = workspace / target_name
+    directory = workspace / ("agent-runtime" if target_name == "agentRuntime" else target_name)
+    if directory.is_symlink():
+        return f"{target_name} 模板目录不能是符号链接"
     if not directory.is_dir():
         return f"{target_name} 模板目录不存在"
+    if target_name == "agentRuntime":
+        missing_files = [
+            relative_path
+            for relative_path in _AGENT_RUNTIME_REQUIRED_FILES
+            if not (directory / relative_path).is_file()
+        ]
+        missing_directories = [
+            relative_path
+            for relative_path in _AGENT_RUNTIME_REQUIRED_DIRECTORIES
+            if not (directory / relative_path).is_dir()
+            or (directory / relative_path).is_symlink()
+        ]
+        if missing_files:
+            return "agent-runtime 模板文件缺失：" + "、".join(missing_files)
+        if missing_directories:
+            return "agent-runtime 模板目录缺失：" + "、".join(missing_directories)
+        if (directory / ".env").exists():
+            return "agent-runtime 模板不能包含真实 .env 文件"
+        return None
     markers = (
         (directory / "package.json",)
         if target_name == "frontend"
@@ -401,6 +512,99 @@ def _template_target_error(workspace: Path, target_name: str) -> str | None:
         )
     )
     return None if any(marker.is_file() for marker in markers) else f"{target_name} 模板入口文件缺失"
+
+
+def _git_template_value(directory: Path, *arguments: str) -> str:
+    """只读获取模板 Git 元数据，无法验证时返回明确的门禁错误。"""
+
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(directory), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ApplicationTemplateGenerationError(
+            f"agent-runtime 模板 Git 来源无法验证：{exc}"
+        ) from exc
+    return completed.stdout.strip()
+
+
+def _download_target_errors(workspace: Path, manifest: dict[str, Any]) -> list[str]:
+    """复核三目标 manifest、正式 TechnicalPlan 与 Agent Runtime Git 来源。"""
+
+    errors: list[str] = []
+    download = (
+        manifest.get("steps", {}).get("download")
+        if isinstance(manifest.get("steps"), dict)
+        else {}
+    )
+    targets = download.get("targets") if isinstance(download, dict) else {}
+    targets = targets if isinstance(targets, dict) else {}
+    try:
+        agent_runtime_required = _agent_runtime_required(workspace)
+    except ApplicationTemplateGenerationError as exc:
+        return [str(exc)]
+    for target_name in ("frontend", "backend"):
+        target = targets.get(target_name)
+        if not isinstance(target, dict) or target.get("required") is not True:
+            errors.append(f"manifest 缺少必需的 {target_name} 模板目标")
+            continue
+        if target.get("status") != "succeeded":
+            errors.append(f"manifest 中 {target_name} 模板未成功")
+        target_error = _template_target_error(workspace, target_name)
+        if target_error:
+            errors.append(target_error)
+
+    target = targets.get("agentRuntime")
+    if not isinstance(target, dict):
+        return [*errors, "manifest 缺少 agentRuntime 模板目标"]
+    if target.get("required") is not agent_runtime_required:
+        errors.append("manifest 中 agentRuntime.required 与已确认 TechnicalPlan 不一致")
+        return errors
+    directory = workspace / "agent-runtime"
+    if not agent_runtime_required:
+        if target.get("status") != "skipped":
+            errors.append("无业务 Agent 时 agentRuntime 必须为 skipped")
+        if directory.exists() or directory.is_symlink():
+            errors.append("无业务 Agent 时工作区不能包含 agent-runtime 模板目录")
+        return errors
+
+    if target.get("status") != "succeeded":
+        errors.append("manifest 中必需的 agentRuntime 模板未成功")
+    target_error = _template_target_error(workspace, "agentRuntime")
+    if target_error:
+        errors.append(target_error)
+        return errors
+    if not _git_repositories_equivalent(
+        str(target.get("repositoryUrl") or ""), AGENT_RUNTIME_TEMPLATE_REPOSITORY_URL
+    ):
+        errors.append("agent-runtime 模板仓库地址不匹配")
+    if target.get("branch") != AGENT_RUNTIME_TEMPLATE_BRANCH:
+        errors.append("agent-runtime 模板分支必须是 master")
+    commit_sha = str(target.get("commitSha") or "").strip()
+    if not commit_sha:
+        errors.append("agent-runtime 模板缺少 commitSha")
+        return errors
+    try:
+        actual_repository = _git_template_value(
+            directory, "config", "--get", "remote.origin.url"
+        )
+        actual_branch = _git_template_value(directory, "branch", "--show-current")
+        actual_commit = _git_template_value(directory, "rev-parse", "HEAD")
+    except ApplicationTemplateGenerationError as exc:
+        return [*errors, str(exc)]
+    if not _git_repositories_equivalent(
+        actual_repository, AGENT_RUNTIME_TEMPLATE_REPOSITORY_URL
+    ):
+        errors.append("agent-runtime 真实 Git 仓库来源不匹配")
+    if actual_branch != AGENT_RUNTIME_TEMPLATE_BRANCH:
+        errors.append("agent-runtime 真实 Git 分支不是 master")
+    if actual_commit != commit_sha:
+        errors.append("agent-runtime manifest commitSha 与真实 Git 提交不一致")
+    return errors
 
 
 def _frontend_template_contract_errors(frontend: Path) -> list[str]:

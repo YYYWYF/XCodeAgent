@@ -358,6 +358,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("selected_entity_id"))
         or _optional_text(resume_values_from_state.get("selected_entity_id"))
     )
+    selected_agent_id = (
+        _optional_text(payload.get("selectedAgentId"))
+        or _optional_text(payload.get("selected_agent_id"))
+        or _optional_text(forwarded_props.get("selectedAgentId"))
+        or _optional_text(forwarded_props.get("selected_agent_id"))
+        or _optional_text(resume_values_from_state.get("selected_agent_id"))
+    )
     page_template = _optional_dict(
         payload.get("pageTemplate")
         or forwarded_props.get("pageTemplate")
@@ -377,6 +384,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selectedPageId = ""
         selected_endpoint_id = ""
         selected_api_contract_id = ""
+        selected_agent_id = ""
+    # 智能体与页面、API、实体目标互斥，显式选择时清除恢复快照中的旧目标。
+    if detail_target_type == "agent" or selected_agent_id:
+        selectedPageId = ""
+        selected_endpoint_id = ""
+        selected_api_contract_id = ""
+        selected_entity_id = ""
     workspace = (
         _optional_text(payload.get("workspace"))
         or _optional_text(payload.get("workspaceRoot"))
@@ -421,13 +435,22 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_api_contract_id = ""
             selected_endpoint_id = ""
             selected_entity_id = ""
+            selected_agent_id = ""
             detail_target_type = "page"
-        else:
+        elif target.type == "endpoint":
             selectedPageId = ""
             selected_api_contract_id = str(target.api_contract_id or "")
             selected_endpoint_id = str(target.endpoint_id or "")
             selected_entity_id = ""
+            selected_agent_id = ""
             detail_target_type = "endpoint"
+        else:
+            selectedPageId = ""
+            selected_api_contract_id = ""
+            selected_endpoint_id = ""
+            selected_entity_id = ""
+            selected_agent_id = str(target.agent_id or "")
+            detail_target_type = "agent"
     continuation_change_id = ""
     revision_continuation_replaces_run_id = ""
     revision_build_target_type = ""
@@ -478,6 +501,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selected_api_contract_id = ""
         selected_endpoint_id = ""
         selected_entity_id = ""
+        selected_agent_id = ""
         detail_target_type = ""
         if revision_build_target_type == "application":
             resume_from = "inspect_workspace"
@@ -587,6 +611,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_page_id=selectedPageId,
             selected_api_contract_id=selected_api_contract_id,
             selected_endpoint_id=selected_endpoint_id,
+            selected_agent_id=selected_agent_id,
             project_plan=project_plan_start_values.get("project_plan"),
         )
     retry_scope = (
@@ -604,6 +629,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_page_id="",
             selected_api_contract_id="",
             selected_endpoint_id="",
+            selected_agent_id="",
             project_plan=project_plan_start_values.get("project_plan"),
         )
         retry_scope_type = str(build_execution_scope.get("type") or "")
@@ -611,6 +637,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selected_api_contract_id = ""
         selected_endpoint_id = ""
         selected_entity_id = ""
+        selected_agent_id = ""
         detail_target_type = ""
         if retry_scope_type == "page":
             selectedPageId = str(build_execution_scope.get("targetId") or "")
@@ -624,14 +651,21 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         elif retry_scope_type == "data_source":
             selected_entity_id = str(build_execution_scope.get("targetId") or "")
             detail_target_type = "entity"
+        elif retry_scope_type == "agent":
+            selected_agent_id = str(build_execution_scope.get("targetId") or "")
+            detail_target_type = "agent"
     # 续接的目标和作用域只由后端登记决定，不能被客户端旧实体 scope 覆盖。
     if workflow_action == "continue_after_entity_binding":
-        build_execution_scope = (
-            {"type": "page", "targetId": selectedPageId}
-            if detail_target_type == "page"
-            else {"type": "endpoint", "targetId": selected_endpoint_id,
-                  "apiContractId": selected_api_contract_id}
-        )
+        if detail_target_type == "page":
+            build_execution_scope = {"type": "page", "targetId": selectedPageId}
+        elif detail_target_type == "endpoint":
+            build_execution_scope = {
+                "type": "endpoint",
+                "targetId": selected_endpoint_id,
+                "apiContractId": selected_api_contract_id,
+            }
+        else:
+            build_execution_scope = {"type": "agent", "targetId": selected_agent_id}
     # endpoint scope 是正式 handoff 的权威目标；即使客户端只发送 scope，也要补回门禁所需的显式 ID。
     if build_execution_scope.get("type") == "endpoint":
         selected_api_contract_id = selected_api_contract_id or _optional_text(
@@ -642,6 +676,16 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         )
         detail_target_type = "endpoint"
         selectedPageId = ""
+        selected_agent_id = ""
+    if build_execution_scope.get("type") == "agent":
+        selected_agent_id = selected_agent_id or _optional_text(
+            build_execution_scope.get("targetId")
+        )
+        detail_target_type = "agent"
+        selectedPageId = ""
+        selected_api_contract_id = ""
+        selected_endpoint_id = ""
+        selected_entity_id = ""
     execution_resource_claims = (
         resolve_execution_resource_claims(
             project_plan_start_values.get("project_plan"),
@@ -734,12 +778,14 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **({"selected_api_contract_id": selected_api_contract_id} if selected_api_contract_id else {}),
         **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
         **({"selected_entity_id": selected_entity_id} if selected_entity_id else {}),
+        **({"selected_agent_id": selected_agent_id} if selected_agent_id else {}),
         **({"detail_target_type": detail_target_type} if detail_target_type else {}),
         **({
             "selectedPageId": selectedPageId,
             "selected_api_contract_id": selected_api_contract_id,
             "selected_endpoint_id": selected_endpoint_id,
             "selected_entity_id": "",
+            "selected_agent_id": selected_agent_id,
             "clarification": {},
         } if workflow_action == "continue_after_entity_binding" else {}),
         **(
@@ -849,9 +895,10 @@ def _build_execution_scope(
     selected_page_id: str,
     selected_api_contract_id: str,
     selected_endpoint_id: str,
+    selected_agent_id: str = "",
     project_plan: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    """标准化 AG-UI 构建范围，并为页面或 endpoint 详情入口推导局部 scope。"""
+    """标准化 AG-UI 构建范围，并为页面、Endpoint 或 Agent 推导局部 scope。"""
 
     explicit_scope = (
         _optional_dict(payload.get("buildExecutionScope"))
@@ -873,6 +920,8 @@ def _build_execution_scope(
             "targetId": selected_endpoint_id,
             "apiContractId": inferred_api_contract_id,
         }
+    if selected_agent_id and not explicit_scope:
+        return {"type": "agent", "targetId": selected_agent_id}
     if selected_page_id and not explicit_scope:
         return {"type": "page", "targetId": selected_page_id}
     raw_scope = explicit_scope or _optional_dict(
@@ -889,14 +938,16 @@ def _build_execution_scope(
     api_contract_id = _optional_text(
         raw_scope.get("apiContractId") or raw_scope.get("api_contract_id")
     )
-    if target_type not in {"application", "page", "data_source", "endpoint"}:
-        raise ValueError("buildExecutionScope.type 必须是 application、page、data_source 或 endpoint。")
+    if target_type not in {"application", "page", "data_source", "endpoint", "agent"}:
+        raise ValueError(
+            "buildExecutionScope.type 必须是 application、page、data_source、endpoint 或 agent。"
+        )
     if target_type == "application":
         if selected_page_id and not explicit_scope:
             return {"type": "page", "targetId": selected_page_id}
         return {"type": "application", "targetId": "application"}
     if not target_id:
-        raise ValueError("页面、数据源或 endpoint 构建必须提供 buildExecutionScope.targetId。")
+        raise ValueError("页面、数据源、endpoint 或 agent 构建必须提供 buildExecutionScope.targetId。")
     if target_type == "endpoint":
         api_contract_id = (
             api_contract_id
@@ -1248,9 +1299,9 @@ def _supported_editor_mode(value: str) -> str:
 
 
 def _supported_detail_target_type(value: str) -> str:
-    """校验详细设计目标类型；页面、endpoint 与实体三种目标均可选。"""
+    """校验开发详情目标类型。"""
 
-    return value if value in {"page", "endpoint", "entity"} else ""
+    return value if value in {"page", "endpoint", "entity", "agent"} else ""
 
 
 def _resume_from_state(
@@ -1420,6 +1471,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "selected_api_contract_id",
         "selected_endpoint_id",
         "selected_entity_id",
+        "selected_agent_id",
         "detail_target_type",
         "page_spec_draft",
         "data_source_spec_draft",
@@ -1619,6 +1671,9 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     selected_entity_id = _optional_text(
         merged.get("selected_entity_id") or merged.get("selectedEntityId")
     )
+    selected_agent_id = _optional_text(
+        merged.get("selected_agent_id") or merged.get("selectedAgentId")
+    )
     detail_target_type = _supported_detail_target_type(
         _optional_text(merged.get("detail_target_type") or merged.get("detailTargetType"))
     )
@@ -1628,6 +1683,8 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         resumed_values["selected_endpoint_id"] = selected_endpoint_id
     if selected_entity_id:
         resumed_values["selected_entity_id"] = selected_entity_id
+    if selected_agent_id:
+        resumed_values["selected_agent_id"] = selected_agent_id
     if detail_target_type:
         resumed_values["detail_target_type"] = detail_target_type
     return resumed_values
@@ -1671,6 +1728,11 @@ def _project_plan_start_values(
         product_plan,
         ui_designs,
     )
+    # 资源锁需要 ProductPlan 的 Agent 入口页面，但该事实不写回 TechnicalPlan。
+    project_plan = {
+        **project_plan,
+        "product_agents": _dict_items(product_plan.get("agents")),
+    }
     plan_pages = project_plan.get("pages", [])
     normalized_pages = [
         dict(page)

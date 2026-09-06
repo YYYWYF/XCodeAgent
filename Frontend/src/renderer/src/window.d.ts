@@ -3,6 +3,7 @@ export {}
 import type { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   ApplicationSchemaConfig,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningPageTreeNode,
   TemplateDownloadResult
 } from './typings'
@@ -48,6 +49,8 @@ declare global {
           appName: string
           frontendTemplateUrl?: string
           backendTemplateUrl?: string
+          agentRuntimeTemplateUrl?: string
+          agentRuntimeRequired: boolean
         }) => Promise<TemplateDownloadResult>
         readApplication: (payload: { workspaceRoot: string }) => Promise<{ application?: unknown }>
         inspectPlanningArtifacts: (payload: { workspaceRoot: string }) => Promise<{
@@ -97,6 +100,7 @@ declare global {
             hasDetailPlan: boolean
             designed: boolean
           }>
+          agents: DevelopmentPlanningAgentOption[]
         }>
       }
       sessions?: {

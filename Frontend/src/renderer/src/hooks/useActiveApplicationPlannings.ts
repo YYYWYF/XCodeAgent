@@ -7,7 +7,12 @@ import {
   type PersistedActivePlanning
 } from '../service/activeApplicationPlanning'
 import { APPLICATIONS_CHANGED_EVENT } from '../service/applicationStorage'
-import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
+import type {
+  ApplicationConfig,
+  ApplicationLifecycle,
+  ApplicationPlanningConfirmation,
+  WorkflowRunPayload
+} from '../typings'
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
 type UseActiveApplicationPlanningsOptions = {
@@ -24,7 +29,10 @@ type ActiveApplicationPlanningsController = {
   hidePlanning: (applicationId: string) => void
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
   generatingAppIds: ReadonlySet<string>
-  onTechnicalPlanConfirmed: (applicationId: string) => Promise<boolean>
+  onTechnicalPlanConfirmed: (
+    applicationId: string,
+    confirmation: ApplicationPlanningConfirmation
+  ) => Promise<boolean>
   registerStopHandler: (applicationId: string, handler?: () => Promise<void>) => void
   returnHome: () => void
   showPlanning: (applicationId: string) => void
@@ -256,11 +264,16 @@ export function useActiveApplicationPlannings({
 
   // 仅确认回调所属应用的模板任务，忽略其他会话的完成状态。
   const onTechnicalPlanConfirmed = useCallback(
-    (applicationId: string): Promise<boolean> => {
+    (
+      applicationId: string,
+      confirmation: ApplicationPlanningConfirmation
+    ): Promise<boolean> => {
       const planning = activePlanningsRef.current.find(
         (candidate) => candidate.application.id === applicationId
       )
-      return planning ? generateApplicationTemplateFiles(planning) : Promise.resolve(false)
+      return planning
+        ? generateApplicationTemplateFiles(planning, confirmation)
+        : Promise.resolve(false)
     },
     [generateApplicationTemplateFiles]
   )

@@ -18,6 +18,7 @@ import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import type {
   ApplicationConfig,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption
@@ -53,6 +54,7 @@ function SidebarAssetIcon({ source }: SidebarAssetIconProps): ReactElement {
 type SessionSidebarProps = {
   activeSessionId?: string
   apiContracts: DevelopmentPlanningApiContract[]
+  agents: DevelopmentPlanningAgentOption[]
   application: ApplicationConfig
   deletingSessionId?: string
   temporaryChatActive: boolean
@@ -74,6 +76,7 @@ type SessionSidebarProps = {
     label: string
   }) => void
   onEntitySelect: (entity: DevelopmentPlanningEntityOption) => void
+  onAgentSelect: (agent: DevelopmentPlanningAgentOption) => void
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   onReturnWelcome: () => void
   onShowFiles: () => void
@@ -86,6 +89,7 @@ type SessionSidebarProps = {
   entities: DevelopmentPlanningEntityOption[]
   selectedApiEndpointKey: string
   selectedEntityId: string
+  selectedAgentId: string
   selectedPageId: string
   sessionError?: string
   sessionCreationDisabled: boolean
@@ -102,6 +106,7 @@ type SessionSidebarProps = {
 export default function SessionSidebar({
   activeSessionId,
   apiContracts = [],
+  agents = [],
   deletingSessionId,
   entities = [],
   temporaryChatActive,
@@ -116,6 +121,7 @@ export default function SessionSidebar({
   onOpenTemporaryChat,
   onOpenSession,
   onApiEndpointSelect,
+  onAgentSelect,
   onEntitySelect,
   onPageSelect,
   onThemeChange,
@@ -127,6 +133,7 @@ export default function SessionSidebar({
   pages,
   pageTree,
   selectedApiEndpointKey,
+  selectedAgentId,
   selectedEntityId,
   selectedPageId,
   sessionError,
@@ -381,14 +388,17 @@ export default function SessionSidebar({
         {!effectiveCollapsed ? (
           <ApplicationOutline
             apiContracts={apiContracts}
+            agents={agents}
             entities={entities}
             onApiEndpointSelect={onApiEndpointSelect}
+            onAgentSelect={onAgentSelect}
             onEntitySelect={onEntitySelect}
             onPageSelect={onPageSelect}
             outlineLocked={outlineLocked}
             pages={pages}
             pageTree={pageTree}
             selectedApiEndpointKey={selectedApiEndpointKey}
+            selectedAgentId={selectedAgentId}
             selectedEntityId={selectedEntityId}
             selectedPageId={selectedPageId}
           />

@@ -850,7 +850,8 @@
   padding-bottom: 14px;
 }
 
-.@{class-prefix}-entity-group {
+.@{class-prefix}-entity-group,
+.@{class-prefix}-agent-group {
   position: relative;
   margin-left: 11px;
   padding-left: 17px;
@@ -866,11 +867,13 @@
   }
 }
 
-.@{class-prefix}-entity-node {
+.@{class-prefix}-entity-node,
+.@{class-prefix}-agent-node {
   position: relative;
 }
 
-.@{class-prefix}-entity-row {
+.@{class-prefix}-entity-row,
+.@{class-prefix}-agent-row {
   display: flex;
   width: 100%;
   min-height: 30px;
@@ -896,21 +899,24 @@
   }
 }
 
-.@{class-prefix}-entity-icon {
+.@{class-prefix}-entity-icon,
+.@{class-prefix}-agent-icon {
   display: inline-flex;
   flex: 0 0 auto;
   color: var(--outline-accent);
   font-size: 12px;
 }
 
-.@{class-prefix}-entity-copy {
+.@{class-prefix}-entity-copy,
+.@{class-prefix}-agent-copy {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 1px;
 }
 
-.@{class-prefix}-entity-meta {
+.@{class-prefix}-entity-meta,
+.@{class-prefix}-agent-meta {
   overflow: hidden;
   color: #7c8498;
   font-size: 10px;
@@ -1374,6 +1380,7 @@
   .@{class-prefix}-outline-row,
   .@{class-prefix}-api-row,
   .@{class-prefix}-entity-row,
+  .@{class-prefix}-agent-row,
   .@{class-prefix}-session-footer-nav button,
   .@{class-prefix}-session-user {
     color: #d9dce5;
@@ -1389,7 +1396,8 @@
 
   .@{class-prefix}-outline-children::before,
   .@{class-prefix}-api-list::before,
-  .@{class-prefix}-entity-group::before {
+  .@{class-prefix}-entity-group::before,
+  .@{class-prefix}-agent-group::before {
     background: #303646;
   }
   .@{class-prefix}-outline-empty {
@@ -1397,7 +1405,8 @@
   }
   .@{class-prefix}-outline-meta,
   .@{class-prefix}-outline-menu-count,
-  .@{class-prefix}-entity-meta {
+  .@{class-prefix}-entity-meta,
+  .@{class-prefix}-agent-meta {
     color: #8f96a8;
   }
   .@{class-prefix}-outline-design-status {

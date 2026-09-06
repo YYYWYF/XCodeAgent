@@ -79,6 +79,7 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
         "engineering_design": {"module_boundaries": [], "data_models": []},
         "api_contracts": [],
         "pages": [],
+        "agent_contracts": [],
     }
     state = {
         "workspace": str(workspace),
@@ -615,7 +616,33 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 ".xcodeagent/plans/technical-plan.json",
             )
             self.assertEqual(len(confirmation["artifacts"]["technicalPlan"]["markdown"]["sha256"]), 64)
-            self.assertEqual(set(confirmation), {"confirmedAt", "directories", "artifacts"})
+            self.assertEqual(
+                set(confirmation),
+                {"confirmedAt", "directories", "artifacts", "templateTargets"},
+            )
+            self.assertFalse(
+                confirmation["templateTargets"]["agentRuntimeRequired"]
+            )
+
+    def test_confirmation_projects_agent_runtime_requirement(self) -> None:
+        """确认结果应从正式 TechnicalPlan 派生第三模板下载信号。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = _confirmed_state(workspace)
+            technical_plan = state["technical_plan"]
+            assert isinstance(technical_plan, dict)
+            technical_plan["agent_contracts"] = [{"agentId": "assistant"}]
+            Path(str(state["technical_plan_path"])).with_suffix(".json").write_text(
+                json.dumps(technical_plan, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            confirmation = confirm_application_planning_artifacts(state)
+
+            self.assertTrue(
+                confirmation["templateTargets"]["agentRuntimeRequired"]
+            )
 
     def test_technical_planning_confirmation_validates_without_detail_node(self) -> None:
         """技术规划确认完成时应直接校验四阶段正式产物。"""

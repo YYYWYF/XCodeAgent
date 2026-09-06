@@ -131,6 +131,7 @@ export type WorkflowDevelopmentTarget =
       endpointId: string
       label: string
     }
+  | { type: 'agent'; agentId: string; label: string }
 
 export type WorkflowDevelopmentContinuation = {
   id: string
@@ -462,7 +463,7 @@ export type WorkflowDetailReview = {
     selectedApiContractId?: string
     selectedEndpointId?: string
     selectedEntityId?: string
-    detailTargetType?: 'page' | 'endpoint' | 'entity'
+    detailTargetType?: 'page' | 'endpoint' | 'entity' | 'agent'
     entityDesign?: WorkflowEntityDesignSummary
   }
 }
@@ -871,22 +872,24 @@ export type ApplicationLifecycleStage =
   | 'ready_for_workbench'
 
 export type TemplateDownloadTargetResult = {
-  status: 'succeeded' | 'failed' | 'pending'
+  required: boolean
+  status: 'succeeded' | 'failed' | 'pending' | 'skipped'
   attempt: number
   path: string
   error?: string
   repositoryUrl?: string
-  branch?: 'main' | 'auth'
+  branch?: 'main' | 'auth' | 'master'
   commitSha?: string
 }
 
 export type TemplateDownloadResult = {
   ok: boolean
   status: 'succeeded' | 'failed'
-  failedTargets: Array<'frontend' | 'backend'>
+  failedTargets: Array<'frontend' | 'backend' | 'agentRuntime'>
   targets: {
     frontend: TemplateDownloadTargetResult
     backend: TemplateDownloadTargetResult
+    agentRuntime: TemplateDownloadTargetResult
   }
 }
 
@@ -939,7 +942,7 @@ export type LifecycleError = {
 export type WorkbenchExecution = {
   developmentPurpose?: 'initial' | 'revision' | null
   developmentTarget?: DevelopmentArtifactTarget | null
-  scope: 'application' | 'page' | 'data_source' | 'endpoint'
+  scope: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId: string
   pageId?: string
   threadId: string
@@ -1016,6 +1019,7 @@ export type ApplicationLifecycle = {
     endpoints?: Record<string, ExecutionResourceLock>
     apiContracts: Record<string, ExecutionResourceLock>
     dataSources: Record<string, ExecutionResourceLock>
+    agents?: Record<string, ExecutionResourceLock>
   }
   error?: LifecycleError
   pendingRevisionImpact?: Record<string, unknown>
@@ -1086,7 +1090,7 @@ export type WorkflowDebugOptions = {
 }
 
 export type WorkflowBuildExecutionScope = {
-  type: 'application' | 'page' | 'data_source' | 'endpoint'
+  type: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId?: string
   apiContractId?: string
 }

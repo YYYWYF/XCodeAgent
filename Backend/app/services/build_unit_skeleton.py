@@ -311,8 +311,19 @@ def _unit_graph(
                 {"from": "agent:runtime", "to": agent_unit_id, "type": "depends_on"},
             ]
         )
-        for binding in _dict_items(contract.get("toolBindings")):
-            endpoint_id = str(binding.get("endpointId") or "").strip()
+        settings = (
+            contract.get("agentSettings")
+            if isinstance(contract.get("agentSettings"), dict)
+            else {}
+        )
+        tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
+        for binding in _dict_items(tools.get("bindings")):
+            endpoint = (
+                binding.get("endpoint")
+                if isinstance(binding.get("endpoint"), dict)
+                else {}
+            )
+            endpoint_id = str(endpoint.get("endpointId") or "").strip()
             endpoint_unit_id = endpoint_units_by_id.get(endpoint_id, "")
             if endpoint_unit_id not in build_units:
                 errors.append(

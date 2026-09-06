@@ -18,6 +18,99 @@ from app.workspace.plan_documents import render_project_plan_markdown
 class AgentTechnicalPlanTests(unittest.TestCase):
     """验证业务智能体进入 TechnicalPlan 的正式运行时与接口契约。"""
 
+    def _agent_settings(self, *, supports_multi_turn: bool = True) -> dict:
+        """构造当前 Runtime 已支持能力对应的七段 AgentSettings 候选。"""
+
+        return {
+            "prompt": {
+                "persona": {"role": "库存业务助手", "tone": "专业、清晰"},
+                "systemPrompt": "读取最新库存后解释状态，信息不足时先澄清。",
+                "constraints": ["不得直接修改库存数据"],
+            },
+            "model": {
+                "selection": "project_default",
+                "modelRef": "project_default",
+                "requiredCapabilities": {
+                    "streaming": True,
+                    "toolCalling": True,
+                    "structuredOutput": False,
+                    "vision": False,
+                },
+                "generation": {"temperature": 0.2},
+            },
+            "memory": {
+                "shortTerm": {
+                    "enabled": supports_multi_turn,
+                    "store": "sqlite" if supports_multi_turn else None,
+                    "connectionRef": (
+                        "agent_runtime_checkpoint" if supports_multi_turn else None
+                    ),
+                    "scope": "thread",
+                    "retention": "application_managed",
+                },
+                "longTerm": {
+                    "enabled": False,
+                    "store": None,
+                    "connectionRef": None,
+                    "scope": "user",
+                    "writePolicy": "explicit",
+                },
+                "archive": {
+                    "enabled": False,
+                    "store": None,
+                    "connectionRef": None,
+                },
+            },
+            "tools": {
+                "enabled": True,
+                "bindings": [
+                    {
+                        "toolId": "get_inventory_status",
+                        "name": "查询库存状态",
+                        "description": "需要最新库存数据时调用。",
+                        "endpointId": "inventory_api.get_status",
+                        "accessMode": "read",
+                    }
+                ],
+            },
+            "skills": {
+                "enabled": False,
+                "loadingPolicy": "explicit_only",
+                "bindings": [],
+            },
+            "knowledge": {
+                "enabled": False,
+                "sources": [],
+                "retrieval": {
+                    "strategy": "semantic",
+                    "topK": 5,
+                    "scoreThreshold": 0.7,
+                    "rerank": False,
+                },
+                "citationPolicy": "disabled",
+            },
+            "context": {
+                "sources": [
+                    {"type": "conversation", "enabled": True, "trust": "user_input"},
+                    {"type": "trusted_user_context", "enabled": True, "trust": "gateway_verified"},
+                    {"type": "tool_results", "enabled": True, "trust": "tool_output"},
+                    {"type": "knowledge_results", "enabled": False, "trust": "retrieved_content"},
+                ],
+                "budget": {
+                    "strategy": "model_window",
+                    "maxInputRatio": 0.7,
+                    "reserveOutputRatio": 0.2,
+                },
+                "compression": {
+                    "strategy": "none",
+                    "triggerRatio": None,
+                    "preserveRecentTurns": 8,
+                    "preserveSystemPrompt": True,
+                    "preserveToolCallPairs": True,
+                },
+            },
+        }
+
     def _requirement_with_product_agent(self) -> dict:
         """构造已确认且包含库存助手的 RequirementSpec 与 ProductPlan。"""
 
@@ -191,10 +284,7 @@ class AgentTechnicalPlanTests(unittest.TestCase):
             "agent_contracts": [
                 {
                     "agentId": "inventory_assistant",
-                    "invocation": {
-                        "gatewayEndpointId": "inventory_api.agent_message"
-                    },
-                    "model": {"selection": "project_default"},
+                    "gatewayEndpointId": "inventory_api.agent_message",
                     "capabilityBindings": [
                         {
                             "capabilityId": "explain_inventory_status",
@@ -205,19 +295,7 @@ class AgentTechnicalPlanTests(unittest.TestCase):
                             "toolIds": ["get_inventory_status"],
                         },
                     ],
-                    "toolBindings": [
-                        {
-                            "toolId": "get_inventory_status",
-                            "apiContractId": "inventory_api",
-                            "endpointId": "inventory_api.get_status",
-                            "accessMode": "read",
-                        }
-                    ],
-                    "knowledgeReferences": [],
-                    "session": {
-                        "supportsMultiTurn": True,
-                        "memory": "conversation",
-                    },
+                    "agentSettings": self._agent_settings(),
                 }
             ],
         }
@@ -238,11 +316,29 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         self.assertEqual(contract["runtime"]["pythonVersion"], "3.12")
         self.assertEqual(contract["runtime"]["framework"], "DeepAgents")
         self.assertEqual(contract["runtime"]["deployment"], "sidecar")
+        self.assertEqual(contract["runtime"]["agentFactory"], "create_deep_agent")
         self.assertEqual(contract["invocation"]["transport"], "ag-ui-sse")
         self.assertFalse(contract["security"]["directClientAccess"])
+        self.assertEqual(contract["identity"]["name"], "库存助手")
+        self.assertEqual(len(contract["capabilities"]), 2)
+        self.assertTrue(contract["source"]["productPlanSha256"].startswith("sha256:"))
+        self.assertEqual(
+            set(contract["agentSettings"]),
+            {"prompt", "model", "memory", "tools", "skills", "knowledge", "context"},
+        )
+        tool = contract["agentSettings"]["tools"]["bindings"][0]
+        self.assertEqual(tool["endpoint"]["apiContractId"], "inventory_api")
+        self.assertEqual(tool["endpoint"]["method"], "GET")
+        self.assertEqual(tool["approvalPolicy"], "platform_managed")
+        self.assertFalse(contract["agentSettings"]["skills"]["enabled"])
+        self.assertFalse(contract["agentSettings"]["knowledge"]["enabled"])
+        self.assertEqual(
+            contract["agentSettings"]["context"]["compression"]["strategy"],
+            "none",
+        )
         self.assertEqual(
             contract["artifacts"]["agentPath"],
-            "agent-runtime/agents/inventory_assistant.py",
+            "agent-runtime/src/app/agent/inventory_assistant.py",
         )
         self.assertEqual(
             validate_technical_plan_agent_contracts(
@@ -285,7 +381,7 @@ class AgentTechnicalPlanTests(unittest.TestCase):
             None,
             {},
             {"inventory_assistant": contract},
-            {key: value for key, value in contract.items() if key != "session"},
+            {key: value for key, value in contract.items() if key != "agentSettings"},
             {**contract, "agentId": "another_assistant"},
         ]
         for candidate in candidates:
@@ -317,7 +413,7 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         requirement = self._requirement_with_product_agent()
         raw_plan = self._technical_model_plan(requirement)
         contract = raw_plan["agent_contracts"][0]
-        contract["toolBindings"][0]["endpointId"] = "inventory_api.missing"
+        contract["agentSettings"]["tools"]["bindings"][0]["endpointId"] = "inventory_api.missing"
         raw_plan["agent_contracts"] = contract
         with self.assertRaisesRegex(ValueError, "inventory_api.missing"):
             create_technical_plan(requirement, agent_plan=raw_plan)
@@ -336,12 +432,34 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         self.assertNotIn("agent_runtime", plan["architecture"])
         self.assertNotIn("智能体运行时契约", render_project_plan_markdown(plan))
 
+    def test_ordinary_plan_rejects_non_object_agent_contract_items(self) -> None:
+        """普通应用也不能让非对象条目被静默过滤为空 Agent Contract。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(spec)
+        requirement = {**spec, "confirmed_product_plan": product_plan}
+
+        with self.assertRaisesRegex(ValueError, "每一项都必须是 JSON 对象"):
+            create_technical_plan(
+                requirement,
+                agent_plan={"entities": [], "agent_contracts": [None]},
+            )
+        self.assertEqual(
+            validate_technical_plan_agent_contracts(
+                {"agent_contracts": [None], "api_contracts": [], "pages": []},
+                product_plan,
+            ),
+            ["TechnicalPlan.agent_contracts 的每一项都必须是 JSON 对象。"],
+        )
+
     def test_agent_contract_rejects_unknown_tool_endpoint(self) -> None:
         """Agent 工具必须引用同一 TechnicalPlan 中存在的 API Endpoint。"""
 
         requirement = self._requirement_with_product_agent()
         raw_plan = self._technical_model_plan(requirement)
-        raw_plan["agent_contracts"][0]["toolBindings"][0]["endpointId"] = "inventory_api.missing"
+        raw_plan["agent_contracts"][0]["agentSettings"]["tools"]["bindings"][0][
+            "endpointId"
+        ] = "inventory_api.missing"
 
         with self.assertRaisesRegex(ValueError, "inventory_api.missing"):
             create_technical_plan(requirement, agent_plan=raw_plan)
@@ -358,14 +476,48 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "页面 action.*Agent 网关 Endpoint"):
             create_technical_plan(requirement, agent_plan=raw_plan)
 
-    def test_agent_contract_rejects_memory_mode_inconsistent_with_multi_turn(self) -> None:
-        """单轮/多轮交互与运行时会话 memory 必须保持确定性一致。"""
+    def test_agent_contract_rejects_memory_inconsistent_with_multi_turn(self) -> None:
+        """Short-term Memory 必须与 ProductPlan 多轮要求保持一致。"""
 
         requirement = self._requirement_with_product_agent()
         raw_plan = self._technical_model_plan(requirement)
-        raw_plan["agent_contracts"][0]["session"]["memory"] = "none"
+        raw_plan["agent_contracts"][0]["agentSettings"]["memory"]["shortTerm"][
+            "enabled"
+        ] = False
 
-        with self.assertRaisesRegex(ValueError, "session.memory.*supportsMultiTurn"):
+        with self.assertRaisesRegex(ValueError, "agentSettings.memory"):
+            create_technical_plan(requirement, agent_plan=raw_plan)
+
+    def test_agent_contract_rejects_unimplemented_skill_loader(self) -> None:
+        """Runtime Skill Loader 未实现前不得生成表面启用的 Skills 配置。"""
+
+        requirement = self._requirement_with_product_agent()
+        raw_plan = self._technical_model_plan(requirement)
+        raw_plan["agent_contracts"][0]["agentSettings"]["skills"]["enabled"] = True
+
+        with self.assertRaisesRegex(ValueError, "skills.*必须关闭"):
+            create_technical_plan(requirement, agent_plan=raw_plan)
+
+    def test_agent_contract_rejects_tool_access_mode_mismatched_with_endpoint(self) -> None:
+        """Tool 读写模式必须与实际 HTTP Endpoint 的方法语义一致。"""
+
+        requirement = self._requirement_with_product_agent()
+        raw_plan = self._technical_model_plan(requirement)
+        raw_plan["agent_contracts"][0]["agentSettings"]["tools"]["bindings"][0][
+            "accessMode"
+        ] = "write"
+
+        with self.assertRaisesRegex(ValueError, "accessMode.*Endpoint GET"):
+            create_technical_plan(requirement, agent_plan=raw_plan)
+
+    def test_agent_contract_rejects_non_array_capability_bindings(self) -> None:
+        """CapabilityBindings 必须保持显式数组，不能接受隐式对象形态。"""
+
+        requirement = self._requirement_with_product_agent()
+        raw_plan = self._technical_model_plan(requirement)
+        raw_plan["agent_contracts"][0]["capabilityBindings"] = {}
+
+        with self.assertRaisesRegex(ValueError, "capabilityBindings 必须是 JSON 数组"):
             create_technical_plan(requirement, agent_plan=raw_plan)
 
     def test_technical_prompt_contains_agent_contract_and_runtime_boundary(self) -> None:
@@ -380,15 +532,15 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         self.assertIn("AG-UI SSE", prompt)
         self.assertIn("Java8/Springboot", prompt)
         self.assertIn("Agent context", prompt)
+        self.assertIn("separate Agent gateway contract", prompt)
+        self.assertIn("never emit an empty entity_ids array", prompt)
         self.assertIn("inventory_assistant", prompt)
         example_text = prompt.split("Complete result example:\n", 1)[1].split(
             "\n\nDynamic context sections:",
             1,
         )[0]
         example = json.loads(example_text)
-        gateway_endpoint_id = example["agent_contracts"][0]["invocation"][
-            "gatewayEndpointId"
-        ]
+        gateway_endpoint_id = example["agent_contracts"][0]["gatewayEndpointId"]
         self.assertEqual(
             example["pages"][0]["references"]["action_implementations"],
             [
@@ -409,8 +561,8 @@ class AgentTechnicalPlanTests(unittest.TestCase):
 
         prompt = _technical_planning_prompt(requirement, None)
 
-        self.assertIn('"supportsMultiTurn": false', prompt)
-        self.assertIn('"memory": "none"', prompt)
+        self.assertIn('"enabled": false', prompt)
+        self.assertIn('"store": null', prompt)
 
 
 if __name__ == "__main__":

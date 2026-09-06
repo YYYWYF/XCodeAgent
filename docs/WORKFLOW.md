@@ -313,7 +313,7 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 从 `PageImple
 - `backend:bootstrap` 表示后端共享基础能力：数据库来源幂等补齐 Maven、数据源与 MyBatis-Plus，外部 API 来源幂等补齐与模板 Spring Boot 2.7.2 对应的 Spring Cloud OpenFeign 依赖和全局扫描启用；static-only 范围不创建该 Unit；
 - `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
 - `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；菜单、普通/隐藏路由由模板初始化独占，auth 模板的 `resources.ts` 与 `routes.tsx` 托管区由 Build 启动前的平台投影登记，均不建立 Build Unit；
-- `agent:runtime` 表示独立 Python 3.12 + DeepAgents sidecar 的共享基础能力；`agent:<agentId>` 表示单个业务智能体定义、工具适配与测试。工具 Endpoint Unit 依赖先于 Agent Unit，Agent Unit 先于 Java AG-UI 网关 Endpoint Unit，页面继续依赖网关 Endpoint；普通应用不创建任何 `agent:*` Unit；
+- `agent:runtime` 表示开发前已经由平台下载并验证的 Python 3.12 + DeepAgents sidecar 模板，不生成模型 Build 任务；`agent:<agentId>` 表示单个业务智能体定义、工具适配与测试。工具 Endpoint Unit 依赖先于 Agent Unit，Agent Unit 先于 Java AG-UI 网关 Endpoint Unit，页面继续依赖网关 Endpoint；普通应用不创建任何 `agent:*` Unit；
 - `page:<pageId>` 表示页面实现范围。
 
 页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。包含 database 或 external_api 实体的范围都要求 `backend:bootstrap`，并由 Unit Graph 建立 `backend:bootstrap → backend:endpoint:*`；bootstrap 按实际来源组合 MyBatis/MySQL 与 OpenFeign 能力，只生成一个共享任务。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。

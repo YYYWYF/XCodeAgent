@@ -1,6 +1,7 @@
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
+  ApplicationPlanningConfirmation,
   ApplicationSchemaConfig,
   TemplateDownloadResult
 } from '../typings'
@@ -14,6 +15,10 @@ export const DEFAULT_FRONTEND_TEMPLATE_REPO_URL = 'https://github.com/ruyue1/fro
 
 /** 默认后端模板仓库地址。 */
 export const DEFAULT_BACKEND_TEMPLATE_REPO_URL = 'https://github.com/Hupy2118/springboot-template.git'
+
+/** 默认 Agent Runtime 模板仓库地址。 */
+export const DEFAULT_AGENT_RUNTIME_TEMPLATE_REPO_URL =
+  'https://github.com/Bettetman/agent-runtime-template.git'
 
 /** 控制应用模板下载与初始化流程是否启用。 */
 export const APPLICATION_TEMPLATE_GENERATION_ENABLED = true
@@ -50,7 +55,8 @@ function templateDownloadErrorMessage(result: TemplateDownloadResult): string {
 /** 通过 Electron 主进程拉取或复用前后端模板，并返回每个仓库的尝试结果。 */
 export async function fetchTemplateCode(
   schema: ApplicationSchemaConfig,
-  projectPath: string
+  projectPath: string,
+  agentRuntimeRequired: boolean
 ): Promise<TemplateDownloadResult> {
   const appName = schema.appName.trim()
   if (!appName) throw new Error('应用名称不能为空，无法拉取模板工程。')
@@ -62,7 +68,9 @@ export async function fetchTemplateCode(
     projectPath,
     appName,
     frontendTemplateUrl: DEFAULT_FRONTEND_TEMPLATE_REPO_URL,
-    backendTemplateUrl: DEFAULT_BACKEND_TEMPLATE_REPO_URL
+    backendTemplateUrl: DEFAULT_BACKEND_TEMPLATE_REPO_URL,
+    agentRuntimeTemplateUrl: DEFAULT_AGENT_RUNTIME_TEMPLATE_REPO_URL,
+    agentRuntimeRequired
   })
   if (!result.ok) throw new TemplateDownloadError(templateDownloadErrorMessage(result), result)
   return result
@@ -71,13 +79,18 @@ export async function fetchTemplateCode(
 /** 执行一次模板 readiness：下载、页面/菜单增量对账，再通过后端完成门禁。 */
 async function runApplicationTemplateReadiness(
   application: ApplicationConfig,
-  threadId: string
+  threadId: string,
+  confirmation: ApplicationPlanningConfirmation
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot || application.projectParentPath || ''
   let failureMessage = ''
 
   try {
-    const downloadResult = await fetchTemplateCode(application.schema, workspaceRoot)
+    const downloadResult = await fetchTemplateCode(
+      application.schema,
+      workspaceRoot,
+      confirmation.templateTargets.agentRuntimeRequired
+    )
     await prepareApplicationTemplateGeneration(application, threadId, downloadResult)
   } catch (reason) {
     failureMessage = reason instanceof Error ? reason.message : String(reason)
@@ -107,7 +120,8 @@ async function runApplicationTemplateReadiness(
 /** 以工作区为粒度合并同一次 TechnicalPlan 确认触发的并发 readiness。 */
 export function ensureApplicationTemplateReadiness(
   application: ApplicationConfig,
-  threadId: string
+  threadId: string,
+  confirmation: ApplicationPlanningConfirmation
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot || application.projectParentPath || ''
   if (!workspaceRoot.trim()) return Promise.reject(new Error('应用缺少 workspaceRoot。'))
@@ -115,7 +129,7 @@ export function ensureApplicationTemplateReadiness(
   const current = readinessTasks.get(key)
   if (current) return current
 
-  const task = runApplicationTemplateReadiness(application, threadId)
+  const task = runApplicationTemplateReadiness(application, threadId, confirmation)
   readinessTasks.set(key, task)
   void task
     .finally(() => {

@@ -159,6 +159,16 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (workspace / ".xcodeagent/plans/technical-plan.json").write_text(
+                json.dumps(
+                    {
+                        "artifact_type": "technical-plan",
+                        "confirmation_status": "confirmed",
+                        "agent_contracts": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
             (workspace / ".xcodeagent/specs/ui-designs.json").write_text(
                 json.dumps(
                     {
@@ -189,16 +199,24 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                                 "failedTargets": [],
                                 "targets": {
                                     "frontend": {
+                                        "required": True,
                                         "status": "succeeded",
                                         "attempt": 0,
                                         "path": str(workspace / "frontend"),
                                         "branch": "auth",
                                     },
                                     "backend": {
+                                        "required": True,
                                         "status": "succeeded",
                                         "attempt": 0,
                                         "path": str(workspace / "backend"),
                                         "branch": "auth",
+                                    },
+                                    "agentRuntime": {
+                                        "required": False,
+                                        "status": "skipped",
+                                        "attempt": 0,
+                                        "path": str(workspace / "agent-runtime"),
                                     },
                                 },
                             },

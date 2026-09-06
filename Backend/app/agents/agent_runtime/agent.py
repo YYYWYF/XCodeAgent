@@ -29,8 +29,10 @@ def create_agent_runtime_agent(
         "runtime behavior and tool adapters. Write only task allowed_paths under "
         "/agent-runtime/. Never modify frontend, Java backend, formal planning artifacts, API "
         "contracts, or the Build DAG. Do not broaden capabilities, tools, model policy, or "
-        "security boundaries beyond the contract. Return only the structured task result "
-        "required by the execution prompt. "
+        "security boundaries beyond the contract. Before editing, read and follow "
+        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}agent-runtime-generate/SKILL.md and only the references "
+        "it routes for the current task. Return only the structured task result required by "
+        "the execution prompt. "
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}"
     )
     return create_deep_agent(

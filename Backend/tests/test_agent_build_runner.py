@@ -28,6 +28,30 @@ class AgentBuildRunnerTests(unittest.TestCase):
 
         prompt = _agent_runtime_generation_prompt(
             project_plan={
+                "api_contracts": [
+                    {
+                        "id": "inventory_api",
+                        "schemas": {
+                            "InventoryStatus": {
+                                "type": "object",
+                                "properties": {"sku": {"type": "string"}},
+                            }
+                        },
+                        "endpoints": [
+                            {
+                                "id": "inventory_api.get_status",
+                                "method": "GET",
+                                "path": "/api/inventory/{sku}",
+                                "response_schema_ref": "InventoryStatus",
+                            }
+                        ],
+                    },
+                    {
+                        "id": "unrelated_api",
+                        "schemas": {},
+                        "endpoints": [],
+                    },
+                ],
                 "agent_contracts": [
                     {
                         "agentId": "inventory_assistant",
@@ -41,9 +65,38 @@ class AgentBuildRunnerTests(unittest.TestCase):
                             "gatewayEndpointId": "inventory_api.agent_message",
                             "internalPath": "/internal/agents/inventory_assistant/run",
                         },
+                        "agentSettings": {
+                            "prompt": {
+                                "systemPrompt": "解释当前库存状态。",
+                            },
+                            "model": {
+                                "selection": "project_default",
+                            },
+                            "memory": {
+                                "shortTerm": {
+                                    "enabled": True,
+                                    "store": "sqlite",
+                                }
+                            },
+                            "tools": {
+                                "enabled": True,
+                                "bindings": [
+                                    {
+                                        "toolId": "get_inventory_status",
+                                        "endpoint": {
+                                            "apiContractId": "inventory_api",
+                                            "endpointId": "inventory_api.get_status",
+                                            "method": "GET",
+                                            "path": "/api/inventory/{sku}",
+                                            "responseSchemaRef": "inventory_api.InventoryStatus",
+                                        },
+                                    }
+                                ],
+                            },
+                        },
                         "artifacts": {
-                            "agentPath": "agent-runtime/agents/inventory_assistant.py",
-                            "toolAdapterPath": "agent-runtime/tools/inventory_assistant_tools.py",
+                            "agentPath": "agent-runtime/src/app/agent/inventory_assistant.py",
+                            "toolAdapterPath": "agent-runtime/src/app/tools/inventory_assistant_tools.py",
                             "testPath": "agent-runtime/tests/test_inventory_assistant.py",
                         },
                     }
@@ -54,8 +107,8 @@ class AgentBuildRunnerTests(unittest.TestCase):
                     "id": "agent:inventory_assistant::implementation",
                     "unit_id": "agent:inventory_assistant",
                     "allowed_paths": [
-                        "agent-runtime/agents/inventory_assistant.py",
-                        "agent-runtime/tools/inventory_assistant_tools.py",
+                        "agent-runtime/src/app/agent/inventory_assistant.py",
+                        "agent-runtime/src/app/tools/inventory_assistant_tools.py",
                         "agent-runtime/tests/test_inventory_assistant.py",
                     ],
                     "source_refs": {
@@ -73,6 +126,12 @@ class AgentBuildRunnerTests(unittest.TestCase):
         self.assertIn("inventory_assistant", prompt)
         self.assertIn("agent-runtime/", prompt)
         self.assertIn("must not modify frontend or Java backend", prompt)
+        self.assertIn("agent-runtime-generate/SKILL.md", prompt)
+        self.assertIn("create_agent(*, model, runtime_context, checkpointer)", prompt)
+        self.assertIn("never initialize a second model", prompt)
+        self.assertIn('"id": "inventory_api"', prompt)
+        self.assertIn('"InventoryStatus"', prompt)
+        self.assertNotIn('"id": "unrelated_api"', prompt)
 
     def test_agent_runtime_agent_does_not_expose_unrestricted_shell(self) -> None:
         """Agent Runtime 只能通过受权限中间件控制的文件工具修改 sidecar。"""
@@ -94,6 +153,10 @@ class AgentBuildRunnerTests(unittest.TestCase):
         tool_names = [str(getattr(tool, "name", "")) for tool in agent["tools"]]
         self.assertNotIn("execute", tool_names)
         self.assertNotIn("middleware", agent)
+        self.assertIn(
+            "/.xcodeagent/builtin-skills/agent-runtime-generate/SKILL.md",
+            agent["system_prompt"],
+        )
 
 
 if __name__ == "__main__":

@@ -3378,8 +3378,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     {
                         "agentId": "inventory_assistant",
                         "artifacts": {
-                            "agentPath": "agent-runtime/agents/inventory_assistant.py",
-                            "toolAdapterPath": "agent-runtime/tools/inventory_assistant_tools.py",
+                            "agentPath": "agent-runtime/src/app/agent/inventory_assistant.py",
+                            "toolAdapterPath": "agent-runtime/src/app/tools/inventory_assistant_tools.py",
                             "testPath": "agent-runtime/tests/test_inventory_assistant.py",
                         },
                     }
@@ -3397,11 +3397,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "change_scope": [
                             {
                                 "operation": "add",
-                                "path": "agent-runtime/agents/inventory_assistant.py",
+                                "path": "agent-runtime/src/app/agent/inventory_assistant.py",
                             },
                             {
                                 "operation": "add",
-                                "path": "agent-runtime/tools/inventory_assistant_tools.py",
+                                "path": "agent-runtime/src/app/tools/inventory_assistant_tools.py",
                             },
                             {
                                 "operation": "add",
@@ -3414,8 +3414,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                                 "kind": "agent.runtime",
                                 "target_id": "inventory_assistant",
                                 "paths": [
-                                    "agent-runtime/agents/inventory_assistant.py",
-                                    "agent-runtime/tools/inventory_assistant_tools.py",
+                                    "agent-runtime/src/app/agent/inventory_assistant.py",
+                                    "agent-runtime/src/app/tools/inventory_assistant_tools.py",
                                     "agent-runtime/tests/test_inventory_assistant.py",
                                 ],
                                 "provides": ["agent.inventory_assistant.runtime"],
@@ -3460,8 +3460,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     {
                         "agentId": "inventory_assistant",
                         "artifacts": {
-                            "agentPath": "agent-runtime/agents/inventory_assistant.py",
-                            "toolAdapterPath": "agent-runtime/tools/inventory_assistant_tools.py",
+                            "agentPath": "agent-runtime/src/app/agent/inventory_assistant.py",
+                            "toolAdapterPath": "agent-runtime/src/app/tools/inventory_assistant_tools.py",
                             "testPath": "agent-runtime/tests/test_inventory_assistant.py",
                         },
                     }
@@ -3477,7 +3477,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("agent:runtime::bootstrap", prompt)
+        self.assertIn("Do not emit a Build task for `agent:runtime`", prompt)
+        self.assertNotIn("agent:runtime::bootstrap", prompt)
         self.assertIn("agent:<agentId>::implementation", prompt)
         self.assertIn("owner `agent`", prompt)
         self.assertIn("agent.runtime", prompt)

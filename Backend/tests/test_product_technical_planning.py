@@ -948,6 +948,88 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertNotIn("UnrelatedSchema", prompt)
         self.assertNotIn("UNRELATED_ACTION_SENTINEL", prompt)
 
+    def test_contract_repair_exposes_entities_for_empty_agent_gateway_binding(self) -> None:
+        """Agent 网关绑定为空时，修复提示必须提供 Tool 推导的实体候选。"""
+
+        existing_plan = {
+            "entities": [
+                {"id": "Photo", "fields": [{"name": "id", "type": "text"}]},
+                {"id": "User", "fields": [{"name": "id", "type": "text"}]},
+            ],
+            "api_contracts": [
+                {
+                    "id": "agent_gateway_api",
+                    "entity_ids": [],
+                    "schemas": {},
+                    "endpoints": [{"id": "agent_gateway_api.run", "method": "POST"}],
+                },
+                {
+                    "id": "photo_api",
+                    "entity_ids": ["Photo"],
+                    "schemas": {"PhotoOutput": {"type": "object"}},
+                    "endpoints": [{"id": "photo_api.get", "method": "GET"}],
+                },
+            ],
+            "pages": [
+                {
+                    "pageId": "photo_page",
+                    "references": {
+                        "endpoint_dependencies": [
+                            {"endpoint_id": "agent_gateway_api.run"}
+                        ]
+                    },
+                }
+            ],
+            "agent_contracts": [
+                {
+                    "agentId": "photo_assistant",
+                    "invocation": {
+                        "gatewayEndpointId": "agent_gateway_api.run",
+                    },
+                    "agentSettings": {
+                        "tools": {
+                            "bindings": [
+                                {
+                                    "endpoint": {
+                                        "endpointId": "photo_api.get",
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                }
+            ],
+        }
+        requirement_spec = {
+            "confirmed_product_plan": {
+                "pages": [
+                    {
+                        "pageId": "photo_page",
+                        "actions": [{"actionId": "ask-photo-agent"}],
+                    }
+                ]
+            }
+        }
+        errors = [
+            "TechnicalPlan API Contract agent_gateway_api 必须声明非空 entity_ids。"
+        ]
+
+        prompt = _technical_contract_repair_prompt(
+            requirement_spec,
+            existing_plan,
+            errors,
+            _technical_contract_ids_for_errors(existing_plan, errors),
+        )
+
+        self.assertIn("Candidate TechnicalPlan entities", prompt)
+        self.assertIn('"id": "Photo"', prompt)
+        self.assertNotIn('"id": "User"', prompt)
+        self.assertIn("Related Agent gateway bindings", prompt)
+        self.assertIn('"gatewayEndpointId": "agent_gateway_api.run"', prompt)
+        self.assertIn('"toolEndpointIds": ["photo_api.get"]', prompt)
+        self.assertIn('"suggestedEntityIdsFromDeclaredTools": ["Photo"]', prompt)
+        self.assertIn("never invent a transport-only entity", prompt)
+
     def test_contract_repair_merges_replacement_without_rewriting_other_contracts(self) -> None:
         """Contract 修复结果只能替换目标 Contract，其他完整计划部分必须保持不变。"""
 

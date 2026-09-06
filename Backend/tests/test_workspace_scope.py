@@ -175,7 +175,7 @@ class WorkspaceScopeTests(unittest.TestCase):
                 _check_fs_permission(
                     permissions,
                     "write",
-                    "/agent-runtime/agents/inventory_assistant.py",
+                    "/agent-runtime/src/app/agent/inventory_assistant.py",
                 ),
                 "allow",
             )
