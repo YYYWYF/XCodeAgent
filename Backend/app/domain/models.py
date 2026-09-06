@@ -4,8 +4,8 @@ from typing import Any, Literal
 
 
 TaskStatus = Literal["pending", "running", "completed", "failed"]
-BuildUnitKind = Literal["application", "database", "backend", "frontend", "page"]
-BuildTaskOwner = Literal["database", "backend", "frontend"]
+BuildUnitKind = Literal["application", "database", "backend", "frontend", "page", "agent"]
+BuildTaskOwner = Literal["database", "backend", "frontend", "agent"]
 BuildTaskExecutionStrategy = Literal["agent", "deterministic"]
 BuildTaskPlatformExecutor = Literal["authorization.frontend_resources"]
 BuildTaskType = Literal[
@@ -16,6 +16,7 @@ BuildTaskType = Literal[
     "backend.verify",
     "frontend.code",
     "frontend.verify",
+    "agent.code",
 ]
 BuildTaskRisk = Literal["low", "medium", "high"]
 DETERMINISTIC_PLATFORM_EXECUTOR_ALLOWLIST = frozenset(

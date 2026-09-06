@@ -30,6 +30,10 @@ from app.services.application_lifecycle import (
     restart_application_planning_lifecycle,
 )
 from app.services.application_revision_lifecycle import submit_revision_impact
+from app.services.agent_settings_revision import (
+    execute_agent_settings_revision,
+    parse_agent_settings_revision_request,
+)
 from app.services.requirement_spec import (
     SaveRequirementSpecDraftRequest,
     save_requirement_spec_draft,
@@ -147,6 +151,23 @@ def application_page_planning_capabilities() -> dict[str, Any]:
                 ],
             }
         },
+        "agentSettingsRevision": {
+            "requestField": "forwardedProps.agentSettingsRevision",
+            "eventName": "agent-settings-revision",
+            "stateSnapshotKey": "agentSettingsRevision",
+            "actions": [
+                "get_agent_settings_revision",
+                "prepare_agent_settings_revision",
+                "confirm_agent_settings_revision",
+                "abandon_agent_settings_revision",
+            ],
+            "editableSections": ["prompt", "model"],
+            "writes": [
+                "drafts/revisions/<changeId>/technical-plan",
+                "plans/technical-plan.md",
+                "plans/technical-plan.json",
+            ],
+        },
         "draftArtifacts": {
             "product_plan": {
                 "writes": [
@@ -184,6 +205,13 @@ def build_application_page_planning_ag_ui_stream(
         **payload,
         "workflowScope": "application_planning",
     }
+    agent_settings_input = _agent_settings_revision_input(normalized_payload)
+    if agent_settings_input is not None:
+        return _build_agent_settings_revision_ag_ui_stream(
+            payload=normalized_payload,
+            revision_input=agent_settings_input,
+            accept=accept,
+        )
     product_stage_input = _product_stage_conversation_input(normalized_payload)
     if product_stage_input is not None:
         try:
@@ -240,6 +268,41 @@ def build_application_page_planning_ag_ui_stream(
         graph=graph,
         payload=normalized_payload,
         accept=accept,
+    )
+
+
+def _build_agent_settings_revision_ag_ui_stream(
+    *,
+    payload: dict[str, Any],
+    revision_input: dict[str, Any],
+    accept: str | None,
+) -> AsyncIterator[str]:
+    """把 Agent Settings 查询与正式修订动作包装为完整 AG-UI 生命周期。"""
+
+    async def operation() -> AgUiActionResult:
+        """执行严格的 Agent Settings action 并返回安全公开投影。"""
+
+        request = parse_agent_settings_revision_request(revision_input)
+        data, message = execute_agent_settings_revision(
+            request,
+            source_thread_id=str(payload.get("threadId") or "agent-settings"),
+            source_run_id=str(payload.get("runId") or "agent-settings"),
+        )
+        return AgUiActionResult(data=data, message=message)
+
+    return build_ag_ui_action_stream(
+        payload=payload,
+        event_name="agent-settings-revision",
+        state_key="agentSettingsRevision",
+        run_id_prefix="agent-settings-revision",
+        operation=operation,
+        error_message_prefix="Agent Settings 修改失败",
+        error_data=lambda _exc: {
+            "action": str(revision_input.get("action") or "unknown"),
+            "agentId": str(revision_input.get("agentId") or ""),
+        },
+        accept=accept,
+        workspace_root=str(revision_input.get("workspaceRoot") or "") or None,
     )
 
 
@@ -399,6 +462,16 @@ def _requirement_spec_draft_input(payload: dict[str, Any]) -> dict[str, Any] | N
     if not isinstance(forwarded_props, dict):
         return None
     value = forwarded_props.get("requirementSpecDraft")
+    return value if isinstance(value, dict) else None
+
+
+def _agent_settings_revision_input(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """从 AG-UI forwardedProps 读取可选的 Agent Settings 修订动作。"""
+
+    forwarded_props = payload.get("forwardedProps")
+    if not isinstance(forwarded_props, dict):
+        return None
+    value = forwarded_props.get("agentSettingsRevision")
     return value if isinstance(value, dict) else None
 
 

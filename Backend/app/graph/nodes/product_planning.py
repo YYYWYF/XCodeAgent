@@ -384,17 +384,43 @@ def _operation_coverage_update(
     state: ProjectState,
     candidate: dict[str, Any],
     coverage: list[dict[str, Any]],
+    *,
+    requirement_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """保存无法自动修复的候选，并以原生 AG-UI 澄清等待用户选择。"""
 
+    requirement_update: dict[str, Any] = {}
+    clarification_spec = state["requirement_spec"]
+    if requirement_spec is not None:
+        # 需求 Markdown 已改变时，操作归属澄清也必须绑定同一份新需求草稿。
+        pending_spec = {
+            **requirement_spec,
+            "confirmation_status": "pending_user_confirmation",
+        }
+        candidate = {
+            **candidate,
+            "confirmation_status": "pending_user_confirmation",
+            "requirement_spec_sha256": requirement_spec_sha256(pending_spec),
+        }
+        requirement_path = write_requirement_spec_draft_document(state, pending_spec)
+        clarification_spec = pending_spec
+        requirement_update = {
+            "requirement_spec": pending_spec,
+            "requirements_confirmed": False,
+            "requirement_spec_path": requirement_path,
+            "requirement_spec_json_path": str(requirement_spec_draft_json_path(state)),
+            "edited_requirement_spec": {},
+            "requirement_spec_feedback": "",
+        }
     markdown_path, json_path = write_product_plan_documents(state, candidate)
     return {
         "phase": "product_planning",
         "status": "requires_user_input",
+        **requirement_update,
         "product_plan": candidate,
         "product_plan_path": markdown_path,
         "product_plan_json_path": json_path,
-        "clarification": _operation_coverage_clarification(state["requirement_spec"], coverage),
+        "clarification": _operation_coverage_clarification(clarification_spec, coverage),
         "timeline": ["product_planning"],
     }
 
@@ -455,6 +481,45 @@ def _configuration_alignment_update(
             + "；".join(errors)
             + " 请修订两份草稿后再次联合确认。",
         },
+        "timeline": ["product_planning"],
+    }
+
+
+def _pending_joint_confirmation_update(
+    state: ProjectState,
+    requirement_spec: dict[str, Any],
+    product_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """成对保存编辑后的需求与修复后的产品规划，避免下一轮恢复到旧需求。"""
+
+    pending_spec = {
+        **requirement_spec,
+        "confirmation_status": "pending_user_confirmation",
+    }
+    pending_plan = {
+        **product_plan,
+        "confirmation_status": "pending_user_confirmation",
+        "requirement_spec_sha256": requirement_spec_sha256(pending_spec),
+    }
+    errors = validate_product_plan(pending_plan, pending_spec)
+    if errors:
+        raise ValueError("联合确认草稿仍未通过一致性校验：" + "；".join(errors))
+
+    requirement_path = write_requirement_spec_draft_document(state, pending_spec)
+    markdown_path, json_path = write_product_plan_documents(state, pending_plan)
+    return {
+        "phase": "product_planning",
+        "status": "requires_user_input",
+        "requirement_spec": pending_spec,
+        "requirements_confirmed": False,
+        "requirement_spec_path": requirement_path,
+        "requirement_spec_json_path": str(requirement_spec_draft_json_path(state)),
+        "edited_requirement_spec": {},
+        "requirement_spec_feedback": "",
+        "product_plan": pending_plan,
+        "product_plan_path": markdown_path,
+        "product_plan_json_path": json_path,
+        "clarification": _confirmation_payload(pending_plan),
         "timeline": ["product_planning"],
     }
 
@@ -557,8 +622,17 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
                     errors,
                 )
             except ProductPlanOperationCoverageError as exc:
-                return _operation_coverage_update(state, exc.candidate, exc.coverage)
-            return _pending_product_plan_update(state, repaired)
+                return _operation_coverage_update(
+                    state,
+                    exc.candidate,
+                    exc.coverage,
+                    requirement_spec=confirmed_requirement_spec,
+                )
+            return _pending_joint_confirmation_update(
+                state,
+                confirmed_requirement_spec,
+                repaired,
+            )
         application_file = Path(str(state.get("workspace") or "")) / ".xcodeagent" / "application.json"
         if application_planning_scope and application_file.is_file():
             # 正式修订进入规划前已提交配置，所有规划预检只读取唯一事实源。

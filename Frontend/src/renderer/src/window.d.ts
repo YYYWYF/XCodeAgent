@@ -3,6 +3,7 @@ export {}
 import type { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   ApplicationSchemaConfig,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningPageTreeNode
 } from './typings'
 
@@ -95,6 +96,7 @@ declare global {
             hasDetailPlan: boolean
             designed: boolean
           }>
+          agents: DevelopmentPlanningAgentOption[]
         }>
       }
       sessions?: {
