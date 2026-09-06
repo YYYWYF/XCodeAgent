@@ -803,7 +803,7 @@ def _normalized_scope(scope: dict[str, Any] | None) -> dict[str, str]:
     api_contract_id = str(
         value.get("apiContractId") or value.get("api_contract_id") or ""
     ).strip()
-    if target_type not in {"application", "page", "data_source", "endpoint"}:
+    if target_type not in {"application", "page", "data_source", "endpoint", "agent"}:
         target_type = "application"
     if target_type == "application":
         target_id = target_id or "application"
@@ -828,6 +828,8 @@ def _target_unit_ids(scope: dict[str, str]) -> list[str]:
     if scope["type"] == "endpoint" and scope.get("targetId"):
         api_contract_id = str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
         return [f"backend:endpoint:{api_contract_id}:{scope['targetId']}"] if api_contract_id else []
+    if scope["type"] == "agent" and scope.get("targetId"):
+        return [f"agent:{scope['targetId']}"]
     return ["application:root"]
 
 
@@ -843,6 +845,18 @@ def _execution_unit_ids(
     )
     if scope["type"] == "application":
         return unit_ids
+
+    if scope["type"] == "agent":
+        build_context = build_task_plan.get("build_context")
+        required = _string_list(
+            (build_context if isinstance(build_context, dict) else {}).get(
+                "required_unit_ids"
+            )
+        )
+        if not required:
+            return []
+        available = set(unit_ids)
+        return [unit_id for unit_id in required if unit_id in available]
 
     available = set(unit_ids)
     selected: list[str] = []

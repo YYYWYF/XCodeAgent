@@ -29,11 +29,12 @@ type StepState = 'pending' | 'running' | 'completed' | 'failed'
 const LAUNCH_STEPS = [
   { key: 'detect', label: '识别工程结构' },
   { key: 'backend', label: '启动后端服务' },
+  { key: 'agent-runtime', label: '启动 Agent Runtime' },
   { key: 'frontend', label: '启动前端服务' },
   { key: 'ready', label: '健康检查就绪' }
 ] as const
 
-/** 后端失败阶段到步骤序号的映射，用于失败时高亮具体步骤。 */
+/** 启动失败阶段到步骤序号的映射，用于失败时高亮具体步骤。 */
 const FAILED_STEP_INDEX: Record<string, number> = {
   backend_validation: 0,
   backend_database_config: 1,
@@ -42,10 +43,14 @@ const FAILED_STEP_INDEX: Record<string, number> = {
   backend_jar: 1,
   backend_repackage: 1,
   backend_start: 1,
-  frontend_start: 2
+  agent_runtime_validation: 0,
+  agent_runtime_cleanup: 2,
+  agent_runtime_install: 2,
+  agent_runtime_start: 2,
+  frontend_start: 3
 }
 
-/** 后端失败阶段代码到中文阶段名的映射。 */
+/** 启动失败阶段代码到中文阶段名的映射。 */
 const FAILED_STAGE_LABELS: Record<string, string> = {
   backend_validation: '后端环境检查',
   backend_database_config: '数据库配置',
@@ -54,6 +59,10 @@ const FAILED_STAGE_LABELS: Record<string, string> = {
   backend_jar: '后端打包产物',
   backend_repackage: '后端补打包',
   backend_start: '后端启动',
+  agent_runtime_validation: 'Agent Runtime 环境检查',
+  agent_runtime_cleanup: 'Agent Runtime 旧进程清理',
+  agent_runtime_install: 'Agent Runtime 依赖同步',
+  agent_runtime_start: 'Agent Runtime 启动',
   frontend_start: '前端启动'
 }
 
@@ -170,6 +179,11 @@ export default function ProjectLaunchCard({ workflow }: Props): ReactElement {
             launch.frontend.message ? (
               <Text type="secondary">{String(launch.frontend.message)}</Text>
             ) : null}
+            {launch?.agent_runtime &&
+            String(launch.agent_runtime.status) === 'failed' &&
+            launch.agent_runtime.message ? (
+              <Text type="secondary">{String(launch.agent_runtime.message)}</Text>
+            ) : null}
           </div>
         </div>
       )}
@@ -177,7 +191,7 @@ export default function ProjectLaunchCard({ workflow }: Props): ReactElement {
   )
 }
 
-/** 根据启动结果、Workflow 状态与实时进度事件推导四个步骤的展示状态。 */
+/** 根据启动结果、Workflow 状态与实时进度事件推导五个步骤的展示状态。 */
 function resolveStepStates(
   launch: WorkflowLaunchResult | undefined,
   status: string,
@@ -199,7 +213,7 @@ function resolveStepStates(
             : 'pending'
       )
     }
-    return ['running', 'pending', 'pending', 'pending']
+    return ['running', 'pending', 'pending', 'pending', 'pending']
   }
   if (status === 'failed') {
     const failedIndex = FAILED_STEP_INDEX[String(launch?.failed_stage || '')] ?? 0
@@ -207,7 +221,7 @@ function resolveStepStates(
       index < failedIndex ? 'completed' : index === failedIndex ? 'failed' : 'pending'
     )
   }
-  return ['completed', 'completed', 'completed', 'completed']
+  return ['completed', 'completed', 'completed', 'completed', 'completed']
 }
 
 /** 返回步骤状态对应的图标或占位圆点。 */

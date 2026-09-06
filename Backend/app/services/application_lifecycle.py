@@ -399,6 +399,26 @@ def start_workbench_execution(
                 expected_type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
                 error_message="任务规划确认已过期或不属于原 DAG 运行。",
             )
+        active_revision = current.active_formal_revision
+        active_revision_has_execution = bool(
+            active_revision is not None
+            and any(
+                execution_belongs_to_active_revision(current, execution)
+                for execution in current.active_executions.values()
+            )
+        )
+        # Agent Settings 预览直接占用 formal revision lease，但不会额外登记 Workflow
+        # execution；在确认或放弃前禁止普通 Build 越过该确认门读取旧 Contract。
+        if (
+            active_revision is not None
+            and active_revision.target.type == "agent"
+            and active_revision.status in {"drafting", "awaiting_user"}
+            and not active_revision_has_execution
+            and phase != "application_revision"
+        ):
+            raise ApplicationLifecycleConflictError(
+                "当前智能体有待确认的 Settings 修改，请先确认或放弃修改预览。"
+            )
         if development_continuation_consume is not None:
             # 同一把生命周期锁内复验 token，并把消费状态与 execution 原子写入。
             # 请求解析、模型校验或写盘失败都不能单独烧掉一次性续接凭据。
@@ -923,6 +943,7 @@ def _primary_resource_claim(scope: str, target_id: str) -> ExecutionResourceClai
         "page": ExecutionResourceType.PAGE,
         "data_source": ExecutionResourceType.DATA_SOURCE,
         "endpoint": ExecutionResourceType.ENDPOINT,
+        "agent": ExecutionResourceType.AGENT,
     }.get(scope, ExecutionResourceType.APPLICATION)
     return ExecutionResourceClaim(
         type=resource_type,
@@ -952,6 +973,8 @@ def execution_belongs_to_active_revision(
         return execution.scope == "page" and (
             execution.target_id == page_id or execution.page_id == page_id
         )
+    if target.type == "agent":
+        return execution.scope == "agent" and execution.target_id == str(target.agent_id or "")
     endpoint_id = str(target.endpoint_id or "")
     return execution.scope == "endpoint" and execution.target_id == endpoint_id
 
@@ -985,6 +1008,7 @@ def _resource_claims_for_run(
         (ExecutionResourceType.ENDPOINT, locks.endpoints),
         (ExecutionResourceType.API_CONTRACT, locks.api_contracts),
         (ExecutionResourceType.DATA_SOURCE, locks.data_sources),
+        (ExecutionResourceType.AGENT, locks.agents),
     )
     if locks.application is not None and locks.application.run_id == run_id:
         claims.append(
@@ -1024,6 +1048,7 @@ def _resource_locks_with_claims(
     endpoints = dict(locks.endpoints)
     api_contracts = dict(locks.api_contracts)
     data_sources = dict(locks.data_sources)
+    agents = dict(locks.agents)
     for claim in claims:
         lock = ExecutionResourceLock(
             runId=run_id,
@@ -1040,14 +1065,17 @@ def _resource_locks_with_claims(
             endpoints[claim.target_id] = lock
         elif claim.type == ExecutionResourceType.API_CONTRACT:
             api_contracts[claim.target_id] = lock
-        else:
+        elif claim.type == ExecutionResourceType.DATA_SOURCE:
             data_sources[claim.target_id] = lock
+        else:
+            agents[claim.target_id] = lock
     return ExecutionResourceLocks(
         application=application,
         pages=pages,
         endpoints=endpoints,
         apiContracts=api_contracts,
         dataSources=data_sources,
+        agents=agents,
     )
 
 
@@ -1071,6 +1099,7 @@ def _resource_locks_without_run(
         dataSources={
             key: value for key, value in locks.data_sources.items() if value.run_id != run_id
         },
+        agents={key: value for key, value in locks.agents.items() if value.run_id != run_id},
     )
 
 

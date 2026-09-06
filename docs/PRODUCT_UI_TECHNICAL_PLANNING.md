@@ -206,7 +206,7 @@ TechnicalPlan 包含：
 - `entities` 由技术规划模型根据已确认 ProductPlan 的页面、信息项、业务操作与业务流程独立生成，是实体与 API 的唯一字段事实源；技术规划不读取 RequirementSpec 的 `entities`；
 - API Contract 通过 `entity_ids` 关联实体；Schema 字段可使用 `entity_field_ref` 表示实体来源，计算、聚合和传输字段可以不做实体映射；
 - ProductPlan 中 `business` action/step 到 endpoint 的 `action_implementations`；
-- 根级 `agent_contracts`：与 ProductPlan `agents[]` 按 `agentId` 一一对应，定义能力到工具、工具到 API Endpoint、页面入口到 Java AG-UI 网关、会话、模型选择策略、安全边界和代码产物路径；普通应用固定为 `[]`；
+- 根级 `agent_contracts`：与 ProductPlan `agents[]` 按 `agentId` 一一对应，是包含产品派生快照、七段 `agentSettings`、Gateway、Runtime、安全、产物、检查和 Evaluation 的完整执行契约；普通应用固定为 `[]`；
 - ProductPlan 与 UiManifest 的上游内容哈希。
 
 正式 JSON 使用 `artifact_type: "technical-plan"`，只持久化本阶段新增的开发事实：
@@ -260,57 +260,34 @@ TechnicalPlan 包含：
 }
 ```
 
-包含业务智能体时，平台在模型给出的稳定绑定通过校验后确定性补齐运行时、安全和产物字段：
+包含业务智能体时，正式 `agent_contracts[]` 使用 [Agent Contract 重设计](./AGENT_CONTRACT_REDESIGN.md) 定义的当前完整契约。模型先返回 `agentId`、`gatewayEndpointId`、`capabilityBindings` 和七段 `agentSettings` 候选；平台再从已确认 ProductPlan 投影 identity、capabilities、interaction、boundaries 和产品验收标准，展开 API Endpoint，并补齐 invocation、Python 3.12 + DeepAgents runtime、security、artifacts、required checks 与 evaluation。
+每个正式 Contract 固定包含：
 
-```json
-{
-  "architecture": {
-    "agent_runtime": "独立 agent-runtime Python 3.12 + DeepAgents sidecar；客户端仅通过 Java8 + Springboot 网关使用 AG-UI SSE 调用。"
-  },
-  "agent_contracts": [
-    {
-      "agentId": "inventory_assistant",
-      "runtime": {
-        "language": "Python",
-        "pythonVersion": "3.12",
-        "framework": "DeepAgents",
-        "deployment": "sidecar",
-        "serviceName": "agent-runtime"
-      },
-      "invocation": {
-        "transport": "ag-ui-sse",
-        "gatewayEndpointId": "inventory_api.agent_message",
-        "internalPath": "/internal/agents/inventory_assistant/run"
-      },
-      "model": {"selection": "project_default"},
-      "capabilityBindings": [
-        {"capabilityId": "explain_inventory_status", "toolIds": ["get_inventory_status"]}
-      ],
-      "toolBindings": [
-        {
-          "toolId": "get_inventory_status",
-          "apiContractId": "inventory_api",
-          "endpointId": "inventory_api.get_status",
-          "accessMode": "read"
-        }
-      ],
-      "knowledgeReferences": [],
-      "session": {"supportsMultiTurn": true, "memory": "conversation"},
-      "security": {
-        "directClientAccess": false,
-        "authForwarding": "scoped-user-context"
-      },
-      "artifacts": {
-        "agentPath": "agent-runtime/agents/inventory_assistant.py",
-        "toolAdapterPath": "agent-runtime/tools/inventory_assistant_tools.py",
-        "testPath": "agent-runtime/tests/test_inventory_assistant.py"
-      }
-    }
-  ]
-}
+```text
+agentId
+source
+identity
+capabilities
+interaction
+agentSettings
+  ├── prompt
+  ├── model
+  ├── memory
+  ├── tools
+  ├── skills
+  ├── knowledge
+  └── context
+invocation
+runtime
+security
+artifacts
+requiredChecks
+evaluation
 ```
 
-技术规划模型返回对象固定为 `architecture`、`entities`、`api_contracts`、`pages`、`agent_contracts` 五段。模型只选择 `gatewayEndpointId`、能力/工具/API 绑定、项目默认模型策略、知识引用和会话模式；Python 版本、DeepAgents、sidecar、AG-UI SSE、禁止客户端直连、内部路径和代码路径由平台确定性生成，不能被模型改写。每个工具 Endpoint 必须存在于同一 TechnicalPlan，且不能与 Agent 网关 Endpoint 相同；Java 业务后端仍固定为 Java8 + Springboot，不因应用包含智能体而替换成 Python。
+当前 Runtime 只启用 project-default Model、SQLite Short-term Memory、Tools、AG-UI SSE 和基础无压缩 Context。MySQL Checkpointer、OSS/Long-term Memory、Skills、Knowledge/RAG、摘要压缩、Vision 和单 Agent 模型覆盖在对应 Runtime Adapter 完成前必须显式关闭。Short-term Memory 只允许 SQLite/MySQL，OSS 只用于 Long-term 或 Archive；追问策略属于 interaction，不属于 Model Capability。
+
+正式 Contract 是绑定 ProductPlan Hash 的完整执行快照，不是第二份产品事实。ProductPlan、Gateway/Tool Endpoint、Model/Memory/Skill/Knowledge/Context 或 Runtime 模板变化后必须使 Contract 以及下游 Build、测试、启动和验收证据失效。规划模型不能改写产品投影、平台安全规则、Runtime、物理凭据或确定性产物路径。
 
 TechnicalPlan 确认摘要和右侧阅读面板必须在 `agent_contracts` 非空时按需展示“智能体契约”，覆盖 Agent Runtime、Java 网关、能力→工具、工具→API Endpoint、会话/模型/安全、代码产物和 required checks；阅读面板默认打开该章节。普通应用 `agent_contracts=[]` 时不得出现该章节、Python 运行时或智能体指标。
 

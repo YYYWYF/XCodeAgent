@@ -1390,6 +1390,72 @@ class ProductPlanningRetryTests(unittest.TestCase):
             [],
         )
 
+    def test_edited_requirement_pages_and_repaired_product_plan_advance_together(
+        self,
+    ) -> None:
+        """需求 Markdown 改变页面后，两份联合草稿必须成对推进且下一次确认可完成。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        requirement_spec["confirmation_status"] = "pending_user_confirmation"
+        product_plan = create_product_plan(requirement_spec)
+        changed_requirement_spec = {
+            **deepcopy(requirement_spec),
+            "pages": list(reversed(deepcopy(requirement_spec["pages"]))),
+            "confirmation_status": "confirmed",
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.product_planning.prepare_requirement_spec_confirmation",
+                return_value=(changed_requirement_spec, None),
+            ):
+                pending = product_planning(
+                    {
+                        "workspace": workspace,
+                        "workflow_scope": "application_planning",
+                        "application_planning_interaction": {"action": "confirm"},
+                        "request": "确认需求文档，继续",
+                        "requirement_spec": requirement_spec,
+                        "product_plan": product_plan,
+                    }
+                )
+
+            self.assertEqual(pending["status"], "requires_user_input")
+            self.assertFalse(pending["requirements_confirmed"])
+            self.assertEqual(
+                [page["pageId"] for page in pending["requirement_spec"]["pages"]],
+                [page["pageId"] for page in changed_requirement_spec["pages"]],
+            )
+            self.assertEqual(
+                validate_product_plan(
+                    pending["product_plan"],
+                    pending["requirement_spec"],
+                ),
+                [],
+            )
+
+            confirmed = product_planning(
+                {
+                    **pending,
+                    "workspace": workspace,
+                    "workflow_scope": "application_planning",
+                    "application_planning_interaction": {"action": "confirm"},
+                    "request": "确认需求文档，继续",
+                }
+            )
+
+        self.assertEqual(confirmed["status"], "completed")
+        self.assertTrue(confirmed["requirements_confirmed"])
+        self.assertEqual(confirmed["requirement_spec"]["confirmation_status"], "confirmed")
+        self.assertEqual(confirmed["product_plan"]["confirmation_status"], "confirmed")
+        self.assertEqual(
+            validate_product_plan(
+                confirmed["product_plan"],
+                confirmed["requirement_spec"],
+            ),
+            [],
+        )
+
     def test_product_plan_stays_in_draft_until_confirmation(self) -> None:
         """ProductPlan 待确认期间只写草稿，确认后才提升为正式产物。"""
 

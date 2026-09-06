@@ -60,8 +60,13 @@
 .@{class-prefix}-quick-task-grid {
   display: grid;
   min-height: 0;
-  gap: 10px;
+  row-gap: 10px;
+  column-gap: 14px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+
+  &.@{class-prefix}-with-agent {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .@{class-prefix}-quick-task-section {
@@ -379,7 +384,12 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
   }
 
   .@{class-prefix}-quick-task-grid {
-    gap: 6px;
+    row-gap: 6px;
+    column-gap: 8px;
+
+    &.@{class-prefix}-with-agent {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
 
   .@{class-prefix}-quick-task-section {
@@ -453,6 +463,10 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
 }
 
 @container ai-chat-main (min-width: 681px) and (max-width: 900px) {
+  .@{class-prefix}-quick-task-grid.@{class-prefix}-with-agent {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .@{class-prefix}-quick-task-guide-heading {
     gap: 12px;
   }

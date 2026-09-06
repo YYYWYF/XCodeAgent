@@ -15,6 +15,7 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
@@ -291,6 +292,7 @@ type Props = {
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   developmentPlanningEntities: DevelopmentPlanningEntityOption[]
+  developmentPlanningAgents: DevelopmentPlanningAgentOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -346,6 +348,7 @@ type ActiveDetailTarget =
   | { type: 'page'; pageId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
   | { type: 'entity'; entityId: string; label: string }
+  | { type: 'agent'; agentId: string; label: string }
 
 /** 将持久化页面/API 会话目标转换为工作台当前详情目标。 */
 function activeDetailTargetFromSession(
@@ -852,6 +855,7 @@ export default function AiChatPanel({
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
   developmentPlanningEntities,
+  developmentPlanningAgents,
   editorMode,
   onApplicationUpdate,
   onApplicationLifecycleChange,
@@ -1235,6 +1239,12 @@ export default function AiChatPanel({
   const requirementSpecMemory = requirementSpecFromWorkflow(currentPlanningWorkflow)
   const productPlanMemory = productPlanFromWorkflow(currentPlanningWorkflow)
   const technicalPlanMemory = technicalPlanFromWorkflow(currentPlanningWorkflow)
+  // 冷恢复以外，从开发阶段切回设计/规划阶段时，Workflow 可能已不再携带
+  // 完整结构化产物；此时必须从当前工作区补读，不能把内存快照当成唯一来源。
+  const planningArtifactDiskRecoveryRequired =
+    restorePlanningArtifactsFromDisk === true ||
+    (isTechnicalPlanningPhase && (!technicalPlanMemory || !productPlanMemory)) ||
+    (isDesignPhase && (!requirementSpecMemory || !productPlanMemory))
   const requirementDocAvailable = Boolean(
     requirementDocContent.trim() || requirementSpecMemory || productPlanMemory
   )
@@ -1312,11 +1322,12 @@ export default function AiChatPanel({
     ? productPlanMemory || productPlanFile
     : undefined
 
-  // 只有明确的冷恢复入口才读本地产物；同一 renderer 内缓存 Promise，阶段、事件和 tab 均不会重读。
+  // 冷恢复或阶段切回后内存快照不完整时读本地产物；按产物集合缓存 Promise，
+  // 避免先读设计阶段后复用同一缓存、导致规划阶段永远缺少 TechnicalPlan。
   useEffect(() => {
     const workspaceRoot = application.workspaceRoot
     const recoveryKeys = planningArtifactRecoveryKeys(
-      restorePlanningArtifactsFromDisk === true,
+      planningArtifactDiskRecoveryRequired,
       activeWorkbenchPhase
     )
     if (!workspaceRoot || recoveryKeys.length === 0) {
@@ -1325,7 +1336,7 @@ export default function AiChatPanel({
     }
 
     let cancelled = false
-    const recoveryKey = `${application.id}:${workspaceRoot}`
+    const recoveryKey = `${application.id}:${workspaceRoot}:${[...recoveryKeys].sort().join(',')}`
     let recovery = localDesignRecoveryCache.get(recoveryKey)
     if (!recovery) {
       recovery = readLocalDesignWorkspaceSnapshot(workspaceRoot, recoveryKeys)
@@ -1368,7 +1379,7 @@ export default function AiChatPanel({
     activeWorkbenchPhase,
     application.id,
     application.workspaceRoot,
-    restorePlanningArtifactsFromDisk
+    planningArtifactDiskRecoveryRequired
   ])
   // 开发阶段：右侧文档区无设计阶段产物，显示引导文案（选中页面/端点后由后续逻辑填充）。
   const designDocContent = isApplicationPlanningPhase
@@ -1632,14 +1643,10 @@ export default function AiChatPanel({
     setRightPanel
   ])
 
-  // 切换应用时重置自动同步标记、清空右侧面板和本地文档缓存。
-  // 合并原 2 个 effect：rightPanel reset（依赖 application.id, isApplicationPlanningPhase）
-  // + designDoc 清空（依赖 application.id, application.workspaceRoot），都在 application.id 变化时 reset。
+  // 只在切换应用/工作区时重置右侧面板与本地产物缓存；普通阶段切换必须保留数据。
   useEffect(() => {
     lastAutoSyncedPhaseRef.current = undefined
-    if (isApplicationPlanningPhase) {
-      setRightPanel(undefined)
-    }
+    setRightPanel(undefined)
     setDesignDocState({
       fileContent: {},
       filePath: {},
@@ -1649,7 +1656,7 @@ export default function AiChatPanel({
       uiDesign: undefined,
       loading: false
     })
-  }, [application.id, isApplicationPlanningPhase, application.workspaceRoot, setRightPanel])
+  }, [application.id, application.workspaceRoot, setRightPanel])
 
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
@@ -2233,6 +2240,7 @@ export default function AiChatPanel({
     handleStopPlan,
     handleSend,
     handleStartEndpointDevelopment,
+    handleStartAgentDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
@@ -3618,7 +3626,7 @@ export default function AiChatPanel({
       if (continuation.target.type === 'page') {
         setActiveDetailTarget({ type: 'page', pageId: continuation.target.pageId })
         setInteractingDetailTargetKey(pageDetailTargetKey(continuation.target.pageId))
-      } else {
+      } else if (continuation.target.type === 'endpoint') {
         setActiveDetailTarget({
           type: 'endpoint',
           apiContractId: continuation.target.apiContractId,
@@ -3629,6 +3637,13 @@ export default function AiChatPanel({
         setInteractingDetailTargetKey(
           endpointDetailTargetKey(continuation.target.apiContractId, continuation.target.endpointId)
         )
+      } else {
+        setActiveDetailTarget({
+          type: 'agent',
+          agentId: continuation.target.agentId,
+          label: continuation.target.label
+        })
+        setInteractingDetailTargetKey(`agent:${continuation.target.agentId}`)
       }
       setGeneratingDetailTargetKey('')
     } else {
@@ -3652,6 +3667,7 @@ export default function AiChatPanel({
     setActiveDetailTarget((currentTarget) => {
       if (currentTarget.type === 'endpoint') return currentTarget
       if (currentTarget.type === 'entity') return currentTarget
+      if (currentTarget.type === 'agent') return currentTarget
       if (currentTarget.type === 'none') return currentTarget
       const currentPageId = currentTarget.pageId
       if (displayedPlanningPages.length === 0) return currentTarget
@@ -3801,6 +3817,63 @@ export default function AiChatPanel({
     return started
   }
 
+  /** 启动当前接口开发；后端先执行实体绑定前置检查。 */
+  const handleStartEndpointDesign = async (
+    endpointTargetId: string,
+    endpointLabel: string,
+    hasDetailPlan: boolean,
+    targetContext?: {
+      apiContractId?: string
+      endpointId?: string
+    }
+  ): Promise<boolean> => {
+    const targetKey = targetContext?.apiContractId
+      ? endpointDetailTargetKey(
+          targetContext.apiContractId,
+          targetContext.endpointId || endpointTargetId
+        )
+      : ''
+    setInteractingDetailTargetKey(targetKey)
+    setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
+    if (targetContext?.apiContractId) {
+      setActiveDetailTarget({
+        type: 'endpoint',
+        apiContractId: targetContext.apiContractId,
+        endpointId: targetContext.endpointId || endpointTargetId,
+        endpointKey: `${targetContext.apiContractId}:${targetContext.endpointId || endpointTargetId}`,
+        label: endpointLabel
+      })
+    } else {
+      setActiveDetailTarget({ type: 'none' })
+    }
+    const started = await handleStartEndpointDevelopment({
+      apiContractId: targetContext?.apiContractId,
+      endpointId: targetContext?.endpointId || endpointTargetId,
+      endpointLabel,
+      hasDetailPlan
+    })
+    if (started) {
+      onPlanningArtifactsRefresh()
+    } else {
+      setGeneratingDetailTargetKey((current) => (current === targetKey ? '' : current))
+    }
+    return started
+  }
+
+  /** 从只读 Agent Contract 详情启动现有 readiness 与 Build 主流程。 */
+  const handleStartAgentBuild = async (
+    agent: DevelopmentPlanningAgentOption
+  ): Promise<void> => {
+    if (pendingDagExecution) return
+    const targetKey = `agent:${agent.agentId}`
+    setActiveDetailTarget({ type: 'agent', agentId: agent.agentId, label: agent.label })
+    setInteractingDetailTargetKey(targetKey)
+    const started = await handleStartAgentDevelopment({
+      agentId: agent.agentId,
+      agentLabel: agent.label
+    })
+    if (started) onPlanningArtifactsRefresh()
+  }
   /** 从快捷任务或实体门禁启动实体数据源绑定，并刷新开发产物状态。 */
   const handleStartEntityDesign = async (
     entityId: string,
@@ -3828,7 +3901,7 @@ export default function AiChatPanel({
     }
   }
 
-  /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置页面、Endpoint 或实体目标。 */
+  /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置所选开发目标。 */
   const handleQuickTaskStart = async (task: QuickTaskItem): Promise<void> => {
     if (pendingPlanActionable) return
     setTemporaryChatOpen(false)
@@ -3843,11 +3916,14 @@ export default function AiChatPanel({
       await handleStartEntityDesign(task.entityId, task.entityLabel, task.hasDetailPlan)
       return
     }
-    await handleStartEndpointDevelopment({
+    if (task.kind === 'agent') {
+      const agent = developmentPlanningAgents.find((item) => item.agentId === task.agentId)
+      if (agent) await handleStartAgentBuild(agent)
+      return
+    }
+    await handleStartEndpointDesign(task.endpointId, task.endpointLabel, task.hasDetailPlan, {
       apiContractId: task.apiContractId,
-      endpointId: task.endpointId,
-      endpointLabel: task.endpointLabel,
-      hasDetailPlan: task.hasDetailPlan
+      endpointId: task.endpointId
     })
   }
 
@@ -3889,7 +3965,7 @@ export default function AiChatPanel({
         if (target.type === 'page') {
           setActiveDetailTarget({ type: 'page', pageId: target.pageId })
           setInteractingDetailTargetKey(pageDetailTargetKey(target.pageId))
-        } else {
+        } else if (target.type === 'endpoint') {
           setActiveDetailTarget({
             type: 'endpoint',
             apiContractId: target.apiContractId,
@@ -3900,6 +3976,13 @@ export default function AiChatPanel({
           setInteractingDetailTargetKey(
             endpointDetailTargetKey(target.apiContractId, target.endpointId)
           )
+        } else {
+          setActiveDetailTarget({
+            type: 'agent',
+            agentId: target.agentId,
+            label: target.label
+          })
+          setInteractingDetailTargetKey(`agent:${target.agentId}`)
         }
       }
       if (!started) await persistContinuationStatus(updateContinuationStatus('ready'))
@@ -4437,6 +4520,7 @@ export default function AiChatPanel({
           pages={displayedPlanningPages}
           pageTree={displayedPlanningPageTree}
           apiContracts={developmentPlanningApiContracts}
+          agents={developmentPlanningAgents}
           entities={developmentPlanningEntities}
           {...artifactOutlineProps}
           filesActive={activeView === 'files'}
@@ -4519,6 +4603,7 @@ export default function AiChatPanel({
                   <QuickTaskGuide
                     developmentArtifacts={applicationLifecycle?.developmentArtifacts}
                     apiContracts={developmentPlanningApiContracts}
+                    agents={developmentPlanningAgents}
                     disabled={loading || workflowInputLocked}
                     entities={developmentPlanningEntities}
                     loading={loadingSessions || !developmentPlanningReady}
@@ -4728,18 +4813,41 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
-              developmentArtifacts={applicationLifecycle?.developmentArtifacts}
+              applicationLifecycle={applicationLifecycle}
               apiContracts={developmentPlanningApiContracts}
+              agents={developmentPlanningAgents}
               entities={developmentPlanningEntities}
               detailLabel={artifactDetailLabel}
               apiTarget={apiTarget}
               apiDesignRefreshKey={`${apiDesignRefreshKey}:${workflowApiDesignRevisionKey(
                 latestWorkflowForDisplay
               )}`}
-              workspaceRoot={workspaceRoot}
+              developmentDisabled={loading || workflowInputLocked}
+              onAgentSettingsApplied={onPlanningArtifactsRefresh}
+              onEndAgentExecution={async (execution) => {
+                const session = allSessions.find(
+                  (item) =>
+                    item.workflowId === application.id && item.threadId === execution.threadId
+                )
+                const identity = session ? await loadSessionIdentity(session.id) : undefined
+                return handleEndPlan(execution.runId, identity)
+              }}
+              onOpenAgentExecution={async (execution) => {
+                const session = allSessions.find(
+                  (item) =>
+                    item.workflowId === application.id && item.threadId === execution.threadId
+                )
+                if (!session) {
+                  message.error('没有找到当前开发任务所属的本地会话。')
+                  return
+                }
+                await handleOpenChatSession(session.id)
+              }}
+              onStartAgentDevelopment={(agent) => void handleStartAgentBuild(agent)}
               outlineLocked={false}
               pages={displayedPlanningPages}
               pageTree={displayedPlanningPageTree}
+              workspaceRoot={application.workspaceRoot}
               {...artifactOutlineProps}
             />
           </div>
