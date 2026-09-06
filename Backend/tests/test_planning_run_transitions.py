@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.services import planning_run as sm
 from tests.planning_run_fixtures import (
+    repair_decision,
     AT, UNIT, candidate, exhausted, identity, invalid, issue, phases, ready, run, start, unit,
 )
 
@@ -32,7 +33,7 @@ class PlanningRunTransitionTests(unittest.TestCase):
             (sm.begin_assembly, (), {"global_check"}),
             (sm.begin_validation, (), {"assembling"}),
             (sm.begin_pending_persistence, (), {"validating"}),
-            (sm.begin_global_repair, ((issue(level="global"),),), {"global_check", "assembling", "validating"}),
+            (sm.begin_global_repair, (repair_decision(issue(level="global")),), {"global_check", "assembling", "validating"}),
             (sm.fail, (issue(retryable=False),), set(phases())),
             (sm.cancel, (), set(phases())),
         )
@@ -50,7 +51,7 @@ class PlanningRunTransitionTests(unittest.TestCase):
             events = (
                 (sm.begin_generation, ()), (sm.begin_global_check, ()), (sm.begin_assembly, ()),
                 (sm.begin_validation, ()), (sm.begin_pending_persistence, ()),
-                (sm.begin_global_repair, ((issue(level="global"),),)),
+                (sm.begin_global_repair, (repair_decision(issue(level="global")),)),
                 (sm.mark_unit_generating, (attempt,)), (sm.mark_unit_validating, (attempt,)),
                 (sm.record_candidate_ready, (result,)),
                 (sm.record_candidate_invalid, (result.model_copy(update={"status": "invalid", "validation_issues": (issue(),)}),)),
@@ -150,7 +151,7 @@ class PlanningRunTransitionTests(unittest.TestCase):
         )
         for issues in cases:
             with self.subTest(issues=issues):
-                self.assert_transition(state, sm.begin_global_repair, (issues,), False)
+                self.assert_transition(state, sm.begin_global_repair, (repair_decision(*issues),), False)
         self.assertTrue(all(item.status == "valid" for item in state.candidates.values()))
 
     def test_local_invalid_never_retries_non_content_or_other_unit_issues(self):

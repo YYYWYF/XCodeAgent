@@ -2,9 +2,10 @@
 
 from typing import TypeAlias
 
+from app.services.global_issue_attribution import GlobalRepairDecision
 from app.services.planning_frozen import FrozenPlanningModel
 from app.services.planning_issues import ValidationIssue
-from app.services.planning_run_contracts import Id, Issues
+from app.services.planning_run_contracts import Id
 from app.services.unit_generation_contracts import AttemptIdentity, CandidateAttempt
 
 
@@ -53,9 +54,9 @@ class GlobalCheckStarted(_Event):
 
 
 class GlobalRepairStarted(_Event):
-    """提交全部 Global Issues，按显式目标原子重开相关 Unit。"""
+    """原样传递 T4.1 完整聚合决策，不能摘取可修复的 Issue 子集。"""
 
-    issues: Issues
+    decision: GlobalRepairDecision
 
 
 class AssemblyStarted(_Event):

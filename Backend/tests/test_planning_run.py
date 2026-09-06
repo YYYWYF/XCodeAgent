@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.services import planning_run as sm
 from tests.planning_run_fixtures import (
+    repair_decision,
     AT, UNIT, candidate, exhausted, identity, invalid, issue, phases, ready, run, start, unit,
 )
 
@@ -60,7 +61,7 @@ class PlanningRunTests(unittest.TestCase):
         checking = sm.begin_global_check(state, at=AT)
         with self.assertRaises(sm.IllegalPlanningTransition):
             sm.begin_assembly(checking, at=AT)
-        reopened = sm.begin_global_repair(checking, (issue(level="global"),), at=AT)
+        reopened = sm.begin_global_repair(checking, repair_decision(issue(level="global")), at=AT)
         current = reopened.unit_states[UNIT]
         self.assertEqual((current.generation_status, current.generation_round, current.attempt_in_round, current.total_attempts), ("pending", 2, 0, 3))
         self.assertEqual(current.round_history[0].generation_status, "round_exhausted")
@@ -77,7 +78,7 @@ class PlanningRunTests(unittest.TestCase):
         old_id = checking.unit_states[UNIT].latest_candidate_id
         old_candidate = checking.candidates[old_id]
         feedback = issue(UNIT, UNIT, level="global")
-        reopened = sm.begin_global_repair(checking, (feedback, feedback), at=AT)
+        reopened = sm.begin_global_repair(checking, repair_decision(feedback, feedback), at=AT)
         current = reopened.unit_states[UNIT]
         self.assertEqual(reopened.global_repair_round, 1)
         self.assertEqual(reopened.revision, checking.revision + 1)
@@ -101,7 +102,7 @@ class PlanningRunTests(unittest.TestCase):
 
         checking = phases()["global_check"]
         old_id = checking.unit_states[UNIT].latest_candidate_id
-        state = sm.begin_global_repair(checking, (issue(level="global"),), at=AT)
+        state = sm.begin_global_repair(checking, repair_decision(issue(level="global")), at=AT)
         state, attempt = start(state)
         state = sm.mark_unit_validating(state, attempt, at=AT)
         rebound = candidate(state).model_copy(update={"candidate_id": old_id})
@@ -118,10 +119,10 @@ class PlanningRunTests(unittest.TestCase):
             self.assertEqual(state.unit_states[UNIT].total_attempts, round_number * 3)
             state = sm.begin_global_check(state, at=AT)
             if round_number < 3:
-                state = sm.begin_global_repair(state, (issue(level="global"),), at=AT)
+                state = sm.begin_global_repair(state, repair_decision(issue(level="global")), at=AT)
         before = state.model_dump_json()
         with self.assertRaises(sm.IllegalPlanningTransition):
-            sm.begin_global_repair(state, (issue(level="global"),), at=AT)
+            sm.begin_global_repair(state, repair_decision(issue(level="global")), at=AT)
         self.assertEqual(state.model_dump_json(), before)
         failed = sm.fail(state, issue(level="global", retryable=False), at=AT)
         self.assertEqual((failed.status, failed.global_repair_round), ("failed", 2))
@@ -138,7 +139,7 @@ class PlanningRunTests(unittest.TestCase):
             self.assertEqual(state.candidates[current.latest_candidate_id].identity.attempt_in_round, 1)
             state = sm.begin_global_check(state, at=AT)
             if round_number < 3:
-                state = sm.begin_global_repair(state, (issue(target, level="global"),), at=AT)
+                state = sm.begin_global_repair(state, repair_decision(issue(target, level="global")), at=AT)
         self.assertEqual(sum(item.status == "superseded" for item in state.candidates.values()), 2)
 
     def test_no_generation_participants_pass_without_tasks_or_model_attempts(self):
@@ -155,7 +156,7 @@ class PlanningRunTests(unittest.TestCase):
         state = sm.begin_global_check(state, at=AT)
         for current in fixtures:
             with self.subTest(reopen=current.unit_id), self.assertRaises(sm.IllegalPlanningTransition):
-                sm.begin_global_repair(state, (issue(current.unit_id, level="global"),), at=AT)
+                sm.begin_global_repair(state, repair_decision(issue(current.unit_id, level="global")), at=AT)
         state = sm.begin_pending_persistence(sm.begin_validation(sm.begin_assembly(state, at=AT), at=AT), at=AT)
         self.assertEqual(state.planning_unit_ids, ())
         self.assertEqual(dict(state.candidates), {})

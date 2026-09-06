@@ -4,8 +4,7 @@
 非法转换抛出 IllegalPlanningTransition，原状态保持不变。
 """
 
-from collections.abc import Sequence
-
+from app.services.global_issue_attribution import GlobalRepairDecision
 from app.services.planning_issues import ValidationIssue, dedupe_issues, group_issues_by_retry_unit
 from app.services.planning_run_contracts import PlanningRun, UnitRoundHistory, UnitRunState
 from app.services.unit_generation_contracts import AttemptIdentity, CandidateAttempt
@@ -146,14 +145,19 @@ def begin_global_check(run: PlanningRun, *, at: str) -> PlanningRun:
     return _apply(run, at=at, phase="global_check")
 
 
-def begin_global_repair(run: PlanningRun, issues: Sequence[ValidationIssue], *, at: str) -> PlanningRun:
-    """消费一次 Global 额度并原子重开所有显式归因目标，旧 valid Candidate 永久 supersede。"""
+def begin_global_repair(run: PlanningRun, decision: GlobalRepairDecision, *, at: str) -> PlanningRun:
+    """消费完整 T4.1 决策；禁止从子问题重算总开关，成功时原子 supersede 旧候选。"""
 
     _active(run, "global_check", "assembling", "validating")
-    issues = tuple(dedupe_issues(issues))
+    _require(isinstance(decision, GlobalRepairDecision), "Global repair 必须提供完整 GlobalRepairDecision，不能提交裸 issues。")
+    decision = GlobalRepairDecision.model_validate(decision)
+    _require(decision.retryable and bool(decision.retry_unit_ids), "Global 决策存在 blocker 或无需修复，不能启动部分 repair。")
+    issues = tuple(dedupe_issues(decision.issues))
     _require(bool(issues) and all(issue.level == "global" and issue.category == "generation" and issue.retryable for issue in issues), "必须提交全部可重试的 Global generation Issues。")
     _require(run.global_repair_round < run.global_repair_limit, "Global=2 已耗尽，应终止 Run。")
-    targets = group_issues_by_retry_unit(issues)
+    feedback_by_unit = group_issues_by_retry_unit(issues)
+    # 总目标只消费已验证 Decision；分组只用于每个目标的反馈，不重新做路由决策。
+    targets = {key: feedback_by_unit[key] for key in decision.retry_unit_ids}
     for key in targets:
         _require(_unit(run, key).generation_status in {"candidate_ready", "round_exhausted"}, "Global 只能重开已结束本轮的生成 Unit。")
     # 先验证全部目标，再在局部副本同时修改；任一错误不能部分 supersede 或消耗额度。

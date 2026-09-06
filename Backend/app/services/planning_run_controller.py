@@ -28,7 +28,7 @@ _TRANSITIONS = {
     CandidateReady: (transitions.record_candidate_ready, "candidate"),
     RoundExhausted: (transitions.mark_round_exhausted, "unit_id"),
     GlobalCheckStarted: (transitions.begin_global_check, None),
-    GlobalRepairStarted: (transitions.begin_global_repair, "issues"),
+    GlobalRepairStarted: (transitions.begin_global_repair, "decision"),
     AssemblyStarted: (transitions.begin_assembly, None),
     GlobalValidationStarted: (transitions.begin_validation, None),
     PendingPersistenceStarted: (transitions.begin_pending_persistence, None),

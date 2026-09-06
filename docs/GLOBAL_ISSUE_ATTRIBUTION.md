@@ -72,6 +72,25 @@ attribute_global_issues(
 该函数不接受计数器、不分配任何 ID；重复调用不消耗 Global round。
 输入和输出使用冻结契约，JSON 导出是独立副本。一个 Unit 多个问题只出现一个总目标。
 
+## T5 状态入口
+
+T5 通过 `GlobalRepairStarted(decision=decision, at=...)` 将完整结果交给 Controller，
+再原样传给 `begin_global_repair(run, decision, at=...)`。Event 和纯状态入口都重新验证
+`GlobalRepairDecision` 的聚合一致性；裸 `issues` 入口已移除，不提供兼容别名。
+
+总开关关闭或总目标为空时，整个事件被拒绝，不递增 revision/Global round，不 supersede、
+持久化或发布。总开关通过后仅使用 `decision.retry_unit_ids` 重开 Unit；逐项分组只提供反馈，
+不从可修复子集重新计算路由。任一 missing-candidate、platform 或 non-retryable blocker
+都必须保留在 T4.1 的完整结果中。
+
+Decision 是受信服务契约，不是能够证明来源的凭证：类型验证无法识别上游在调用 T4.1
+前已遗漏的问题，也无法阻止调用方另行构造一个内容自洽但不完整的 Decision。后续编排必须
+收集完整 Global Issue 集合并直接转交 T4.1 返回值，不能过滤 blocker 后重新构造决策。
+本次不提前实现 T6 编排、完整 DAG Validator 或跨阶段的决策存储机制。
+
+`tests/test_global_repair_controller.py` 覆盖真实 T4.1 → Event → Controller 链路中的
+完整成功、混合 blocker、missing Candidate、裸子集和未验证 Decision 反例。
+
 ## 验证
 
 在 `Backend` 下使用现有 unittest runner：

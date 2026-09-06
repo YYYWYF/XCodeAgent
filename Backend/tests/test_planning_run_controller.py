@@ -19,7 +19,7 @@ from app.services.planning_run_events import (
     UnitAttemptStarted, UnitValidationStarted,
 )
 from app.workspace.planning_run_documents import load_planning_run, project_planning_run
-from tests.planning_run_fixtures import AT, UNIT, candidate, identity, issue, run, unit
+from tests.planning_run_fixtures import AT, UNIT, candidate, identity, issue, repair_decision, run, unit
 
 
 class PlanningRunControllerTests(unittest.IsolatedAsyncioTestCase):
@@ -170,11 +170,11 @@ class PlanningRunControllerTests(unittest.IsolatedAsyncioTestCase):
             await self.controller.apply(CandidateInvalid(candidate=candidate(self.controller.snapshot, valid=False), at=AT))
         await self.controller.apply(RoundExhausted(unit_id=UNIT, at=AT))
         await self.controller.apply(GlobalCheckStarted(at=AT))
-        await self.controller.apply(GlobalRepairStarted(issues=(issue(level="global"),), at=AT))
+        await self.controller.apply(GlobalRepairStarted(decision=repair_decision(issue(level="global")), at=AT))
         ready = await self.make_ready()
         old_id = ready.unit_states[UNIT].latest_candidate_id
         await self.controller.apply(GlobalCheckStarted(at=AT))
-        reopened = await self.controller.apply(GlobalRepairStarted(issues=(issue(level="global"),), at=AT))
+        reopened = await self.controller.apply(GlobalRepairStarted(decision=repair_decision(issue(level="global")), at=AT))
         self.assertEqual(reopened.candidates[old_id].status, "superseded")
         self.assertEqual(reopened.unit_states[UNIT].total_attempts, 4)
         self.assertEqual(reopened.global_repair_round, 2)

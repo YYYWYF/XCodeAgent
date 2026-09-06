@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.services.planning_run_contracts import PlanningRun
+from app.services.planning_run_contracts import PlanningRun, PlanningRunProjection
 from app.workspace.json_documents import write_json_atomic
 from app.workspace.spec_documents import workflow_artifact_root
 
@@ -18,7 +18,7 @@ def planning_run_json_path(state: dict[str, Any]) -> Path:
 def load_planning_run(state: dict[str, Any]) -> dict[str, Any] | None:
     """读取轻量 PlanningRun 投影。
 
-    文件不存在时返回空，损坏内容直接报错。
+    文件不存在时返回空，JSON 或 schema 损坏均报错；不补默认事实、不恢复执行。
     """
 
     path = planning_run_json_path(state)
@@ -28,14 +28,15 @@ def load_planning_run(state: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not isinstance(payload, dict):
         raise ValueError("planning-run.json 必须是 JSON object。")
-    return payload
+    return PlanningRunProjection.model_validate(payload).model_dump(mode="json")
 
 
 def project_planning_run(planning_run: PlanningRun) -> dict[str, Any]:
     """以同一规则生成落盘和 Controller 发布的轻量副本，不暴露 Candidate 正文。"""
 
     snapshot = PlanningRun.model_validate(planning_run)
-    return snapshot.model_dump(mode="json", exclude={"candidates"})
+    payload = snapshot.model_dump(mode="json", exclude={"candidates"})
+    return PlanningRunProjection.model_validate(payload).model_dump(mode="json")
 
 
 def write_planning_run_atomic(

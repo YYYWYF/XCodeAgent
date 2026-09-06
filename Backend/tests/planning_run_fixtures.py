@@ -3,7 +3,8 @@
 from itertools import count
 
 from app.services import planning_run as sm
-from app.services.planning_issues import ValidationIssue
+from app.services.global_issue_attribution import GlobalRepairDecision
+from app.services.planning_issues import ValidationIssue, dedupe_issues
 from app.services.unit_generation_contracts import AttemptIdentity, CandidateAttempt
 
 
@@ -58,6 +59,15 @@ def issue(*targets, level="unit", category="generation", retryable=True) -> Vali
         retry_unit_ids=(targets or (UNIT,)) if retryable else (), retryable=retryable,
         message="测试校验问题", details={"nested": [{"source": "fixture"}]},
     )
+
+
+def repair_decision(*issues) -> GlobalRepairDecision:
+    """为纯状态转换测试显式构造完整决策；真实归因到 Controller 的链路另有集成测试。"""
+
+    unique = tuple(dedupe_issues(issues))
+    retryable = bool(unique) and all(item.retryable for item in unique)
+    targets = tuple(sorted({target for item in unique for target in item.retry_unit_ids})) if retryable else ()
+    return GlobalRepairDecision(retryable=retryable, retry_unit_ids=targets, issues=unique)
 
 
 def candidate(state, *, valid=True, unit_id=UNIT, attempt=None) -> CandidateAttempt:

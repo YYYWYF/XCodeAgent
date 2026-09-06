@@ -123,32 +123,41 @@ _Candidates = Annotated[
 ]
 
 
-class PlanningRun(FrozenPlanningModel):
-    """单写者持有的完整内存状态；纯转换返回新快照，旧快照不可作为新权威恢复。"""
+def _complete_projected_units(value):
+    """磁盘 Unit 证据必须显式包含全部状态字段，不用领域初态默认值补造遗漏事实。"""
+
+    if isinstance(value, Mapping):
+        for unit in value.values():
+            if isinstance(unit, Mapping) and set(UnitRunState.model_fields) - unit.keys():
+                raise ValueError("PlanningRunProjection 的 Unit 状态字段不完整。")
+    return value
+
+
+class PlanningRunProjection(FrozenPlanningModel):
+    """刷新/中断诊断的严格轻量证据；全部顶层字段必填，不含 Candidate 或恢复能力。"""
 
     planning_run_id: Id
     workflow_run_id: Id
     thread_id: Id
-    revision: Annotated[int, Field(ge=0)] = 0
-    status: Literal["active", "failed", "cancelled"] = "active"
-    phase: RunPhase = "preparing"
+    revision: Annotated[int, Field(ge=0)]
+    status: Literal["active", "failed", "cancelled"]
+    phase: RunPhase
     build_execution_scope: FrozenJsonObject
     input_fingerprint: Id
     base_confirmed_plan_digest: Id | None
     required_unit_ids: Ids
     planning_unit_ids: Ids
-    global_repair_round: Annotated[int, Field(ge=0, le=2)] = 0
-    global_repair_limit: Annotated[int, Field(ge=2, le=2)] = 2
-    global_issues: Issues = ()
-    unit_states: _UnitStates
-    candidates: _Candidates = Field(default_factory=dict, validate_default=True)
+    global_repair_round: Annotated[int, Field(ge=0, le=2)]
+    global_repair_limit: Annotated[int, Field(ge=2, le=2)]
+    global_issues: Issues
+    unit_states: Annotated[_UnitStates, BeforeValidator(_complete_projected_units)]
     started_at: Id
     updated_at: Id
-    failure: ValidationIssue | None = None
+    failure: ValidationIssue | None
 
     @model_validator(mode="after")
-    def validate_snapshot(self) -> PlanningRun:
-        """拒绝范围错配、悬空 Candidate、过期有效 Candidate 及终态在途任务。"""
+    def validate_projection(self) -> PlanningRunProjection:
+        """校验轻量字段的范围、终态、轮次及在途身份，不伪造正文来验证 Candidate。"""
 
         required = set(self.required_unit_ids)
         planning = {key for key, unit in self.unit_states.items() if unit.participation in GENERATING_PARTICIPATIONS}
@@ -159,7 +168,7 @@ class PlanningRun(FrozenPlanningModel):
         if (self.status == "failed") != (self.failure is not None):
             raise ValueError("failed 必须且只能携带 failure。")
         attempt_ids = []
-        current_ids = set()
+        candidate_ids = []
         for key, unit in self.unit_states.items():
             if key != unit.unit_id or unit.generation_round > self.global_repair_round + 1:
                 raise ValueError("Unit key/轮次必须属于当前 Run。")
@@ -169,6 +178,34 @@ class PlanningRun(FrozenPlanningModel):
                 if unit.expected_identity.planning_run_id != self.planning_run_id:
                     raise ValueError("在途身份不能属于其他 Run。")
                 attempt_ids.append(unit.expected_identity.attempt_id)
+            if unit.latest_candidate_id:
+                candidate_ids.append(unit.latest_candidate_id)
+        if len(set(attempt_ids)) != len(attempt_ids) or len(set(candidate_ids)) != len(candidate_ids):
+            raise ValueError("不同 Unit 不能共享同一在途 Attempt 或当前 Candidate 身份。")
+        return self
+
+
+class PlanningRun(PlanningRunProjection):
+    """单写者持有的完整内存状态；可创建初态，但不能从缺正文的投影恢复执行。"""
+
+    revision: Annotated[int, Field(ge=0)] = 0
+    status: Literal["active", "failed", "cancelled"] = "active"
+    phase: RunPhase = "preparing"
+    global_repair_round: Annotated[int, Field(ge=0, le=2)] = 0
+    global_repair_limit: Annotated[int, Field(ge=2, le=2)] = 2
+    global_issues: Issues = ()
+    unit_states: _UnitStates
+    failure: ValidationIssue | None = None
+    candidates: _Candidates = Field(default_factory=dict, validate_default=True)
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> PlanningRun:
+        """在轻量结构校验之外，严格核对内存 Candidate 正文、当前指针和唯一 Attempt。"""
+
+        planning = set(self.planning_unit_ids)
+        attempt_ids = [unit.expected_identity.attempt_id for unit in self.unit_states.values() if unit.expected_identity]
+        current_ids = set()
+        for key, unit in self.unit_states.items():
             if unit.latest_candidate_id:
                 candidate = self.candidates.get(unit.latest_candidate_id)
                 if candidate is None or candidate.status != "valid" or candidate.validation_issues or not candidate.tasks:
