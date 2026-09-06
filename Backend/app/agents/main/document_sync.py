@@ -95,11 +95,11 @@ def _sync_prompt(
             "one or more entities through entity_ids only. Never emit data_source_id, a top-level "
             "data_sources field, or entity data_source; source selection belongs to EntityDesign. "
             "module_boundaries describes code/service ownership and must not define entities or fields. "
-            "Preserve agent_contracts for every confirmed ProductPlan agent, including stable agentId, "
-            "gateway Endpoint, capability/tool bindings, Python 3.12 + DeepAgents sidecar runtime, AG-UI "
-            "SSE invocation, security boundary, and artifact paths. Do not remove or redesign hidden Agent "
-            "contract fields unless the edited Markdown explicitly changes the corresponding visible Agent "
-            "technical section.\n\n"
+            "Preserve the complete ProductPlan-derived agent_contracts for every confirmed Agent, including "
+            "identity, capabilities, interaction, seven-part agentSettings, Gateway Endpoint, runtime, security, "
+            "artifacts, checks, and evaluation. Only visible AgentSettings choices may change from Markdown; "
+            "the platform recompiles ProductPlan snapshots, resolved Endpoints, Runtime, security, and paths. "
+            "Never let edited Markdown override those derived or protected fields.\n\n"
         )
         if artifact_name == "TechnicalPlan"
         else (

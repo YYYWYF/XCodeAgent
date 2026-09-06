@@ -1194,6 +1194,58 @@ class EngineeringAcceptanceTests(unittest.TestCase):
         }
         return task, self._contract_context()
 
+    def test_agent_module_acceptance_binds_platform_template_policy(self) -> None:
+        """Agent 模块验收必须绑定当前模板 commit 和平台路径策略 Hash。"""
+
+        task = {
+            "id": "agent:inventory_assistant::prompt",
+            "owner": "agent",
+            "unit_id": "agent:inventory_assistant",
+            "task_type": "agent.code",
+            "source_refs": {
+                "agent_id": "inventory_assistant",
+                "agent_module": "prompt",
+                "agent_contract_sha256": "sha256:" + "1" * 64,
+                "module_config_sha256": "sha256:" + "2" * 64,
+                "template_commit": "abc123",
+                "template_policy_sha256": "sha256:" + "3" * 64,
+            },
+            "allowed_paths": ["agent-runtime/src/app/agent/factory.py"],
+            "change_scope": [
+                {
+                    "operation": "modify",
+                    "path": "agent-runtime/src/app/agent/factory.py",
+                }
+            ],
+        }
+        compiled = ensure_engineering_acceptance(task)
+        with tempfile.TemporaryDirectory() as workspace:
+            target = Path(workspace) / "agent-runtime/src/app/agent/factory.py"
+            target.parent.mkdir(parents=True)
+            target.write_text("# generated\n", encoding="utf-8")
+            evidence, errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={
+                    "files": [
+                        {
+                            "path": "agent-runtime/src/app/agent/factory.py",
+                            "changeType": "modified",
+                        }
+                    ]
+                },
+                workspace_root=workspace,
+            )
+
+        self.assertFalse(errors, errors)
+        self.assertTrue(
+            any(
+                item["kind"] == "agent_module_contract"
+                and item["status"] == "passed"
+                for item in evidence
+            )
+        )
+
     def _contract_context(self) -> dict:
         """构造带页面字段绑定的最小正式 API 契约。"""
 

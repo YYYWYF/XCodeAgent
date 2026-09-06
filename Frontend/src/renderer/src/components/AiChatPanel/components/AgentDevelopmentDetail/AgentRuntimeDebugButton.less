@@ -1,0 +1,31 @@
+.@{class-prefix}-agent-detail-hero-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-agent-runtime-debug-button {
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-subtle);
+  border-color: var(--wb-border);
+
+  &:hover,
+  &:focus {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent);
+  }
+
+  &.@{class-prefix}-is-running {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent);
+  }
+}
+
+@media (max-width: 900px) {
+  .@{class-prefix}-agent-detail-hero-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}
