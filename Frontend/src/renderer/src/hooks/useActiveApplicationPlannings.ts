@@ -231,7 +231,9 @@ export function useActiveApplicationPlannings({
       const planning = activePlanningsRef.current.find(
         (candidate) => candidate.application.id === applicationId
       )
-      return planning ? generateApplicationTemplateFiles(planning) : Promise.resolve(false)
+      return planning
+        ? generateApplicationTemplateFiles(planning, confirmation)
+        : Promise.resolve(false)
     },
     [generateApplicationTemplateFiles]
   )

@@ -10,6 +10,7 @@ type ArtifactSelection = {
   apiContractId?: string
   endpointId?: string
   entityId?: string
+  agentId?: string
 }
 
 type Options = {
@@ -26,9 +27,11 @@ type DevelopmentArtifactDetail = {
     | 'onPageSelect'
     | 'onApiEndpointSelect'
     | 'onEntitySelect'
+    | 'onAgentSelect'
     | 'selectedPageId'
     | 'selectedApiEndpointKey'
     | 'selectedEntityId'
+    | 'selectedAgentId'
   >
 }
 
@@ -68,6 +71,11 @@ export function useDevelopmentArtifactDetail({
     openDetail({ entityId: entity.id, label: entity.label })
   }
 
+  /** 点击智能体打开其只读 Contract 详情。 */
+  const onAgentSelect: ApplicationOutlineProps['onAgentSelect'] = (agent) => {
+    openDetail({ agentId: agent.agentId, label: agent.label })
+  }
+
   return {
     artifactDetailLabel: currentSelection?.label,
     apiTarget: currentSelection?.apiContractId && currentSelection.endpointId
@@ -77,9 +85,11 @@ export function useDevelopmentArtifactDetail({
       onPageSelect,
       onApiEndpointSelect,
       onEntitySelect,
+      onAgentSelect,
       selectedPageId: currentSelection?.pageId || '',
       selectedApiEndpointKey: currentSelection?.endpointKey || '',
-      selectedEntityId: currentSelection?.entityId || ''
+      selectedEntityId: currentSelection?.entityId || '',
+      selectedAgentId: currentSelection?.agentId || ''
     }
   }
 }

@@ -4,6 +4,7 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
@@ -32,6 +33,7 @@ type Props = {
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   developmentPlanningEntities: DevelopmentPlanningEntityOption[]
+  developmentPlanningAgents: DevelopmentPlanningAgentOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
   /** 把应用配置写回 application.json（见 AiChatPanel 的 onPersistApplication）。 */
@@ -94,6 +96,7 @@ export default function LeftPanel({
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
   developmentPlanningEntities,
+  developmentPlanningAgents,
   editorMode,
   onApplicationUpdate,
   onPersistApplication,
@@ -137,6 +140,7 @@ export default function LeftPanel({
             developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}
             developmentPlanningEntities={developmentPlanningEntities}
+            developmentPlanningAgents={developmentPlanningAgents}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}
             onPersistApplication={onPersistApplication}

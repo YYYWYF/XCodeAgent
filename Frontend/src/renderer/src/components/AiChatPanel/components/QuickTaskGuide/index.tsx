@@ -3,6 +3,7 @@ import {
   DatabaseOutlined,
   FileTextOutlined,
   MessageOutlined,
+  RobotOutlined,
   RightOutlined
 } from '@ant-design/icons'
 import { Skeleton, Tooltip, Typography } from 'antd'
@@ -11,6 +12,7 @@ import { useMemo } from 'react'
 import type {
   DevelopmentArtifacts,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption
 } from '../../../../typings'
@@ -28,6 +30,7 @@ type QuickTaskGuideProps = {
   /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
   currentBranch?: string
   apiContracts: DevelopmentPlanningApiContract[]
+  agents: DevelopmentPlanningAgentOption[]
   disabled: boolean
   entities: DevelopmentPlanningEntityOption[]
   loading: boolean
@@ -60,8 +63,10 @@ function QuickTaskSection({
       <FileTextOutlined />
     ) : type === 'endpoint' ? (
       <ApiOutlined />
-    ) : (
+    ) : type === 'entity' ? (
       <DatabaseOutlined />
+    ) : (
+      <RobotOutlined />
     )
   return (
     <section className={cx('quick-task-section')}>
@@ -145,11 +150,12 @@ function QuickTaskSection({
   )
 }
 
-/** 在空白对话区并排展示页面、接口与实体快捷任务，并保留底部自由输入入口。 */
+/** 在空白对话区展示当前规划中的开发目标快捷任务，并保留底部自由输入入口。 */
 export default function QuickTaskGuide({
   developmentArtifacts,
   currentBranch,
   apiContracts,
+  agents,
   disabled,
   entities,
   loading,
@@ -157,12 +163,13 @@ export default function QuickTaskGuide({
   pages
 }: QuickTaskGuideProps): ReactElement {
   const tasks = useMemo(
-    () => buildQuickTasks(pages, apiContracts, entities, developmentArtifacts),
-    [apiContracts, entities, pages, developmentArtifacts]
+    () => buildQuickTasks(pages, apiContracts, entities, developmentArtifacts, agents),
+    [agents, apiContracts, developmentArtifacts, entities, pages]
   )
   const pageTasks = tasks.filter((task) => task.kind === 'page')
   const endpointTasks = tasks.filter((task) => task.kind === 'endpoint')
   const entityTasks = tasks.filter((task) => task.kind === 'entity')
+  const agentTasks = tasks.filter((task) => task.kind === 'agent')
 
   return (
     <div className={cx('quick-task-guide')}>
@@ -173,7 +180,7 @@ export default function QuickTaskGuide({
         <div>
           <Title level={3}>今天想从哪里开始？</Title>
           <Text type="secondary">
-            选择一个页面、接口或实体开始正式任务，也可以直接在下方自由对话。
+            选择一个页面、Endpoint、实体或智能体开始正式任务，也可以直接在下方自由对话。
           </Text>
         </div>
       </header>
@@ -183,7 +190,7 @@ export default function QuickTaskGuide({
           <Skeleton active paragraph={{ rows: 5 }} title={false} />
         </div>
       ) : (
-        <div className={cx('quick-task-grid')}>
+        <div className={cx('quick-task-grid', agentTasks.length > 0 && 'with-agent')}>
           <QuickTaskSection
             currentBranch={currentBranch}
             disabled={disabled}
@@ -211,6 +218,16 @@ export default function QuickTaskGuide({
             title="实体"
             type="entity"
           />
+          {agentTasks.length > 0 ? (
+            <QuickTaskSection
+              disabled={disabled}
+              emptyText="项目计划中暂无智能体。"
+              items={agentTasks}
+              onStart={onStart}
+              title="智能体"
+              type="agent"
+            />
+          ) : null}
         </div>
       )}
     </div>

@@ -52,116 +52,214 @@
   }
 }
 
-.@{class-prefix}-technical-plan-agent-gateway {
-  display: grid;
-  grid-template-columns: minmax(76px, auto) minmax(0, 1fr);
-  gap: 6px 10px;
-  padding: 9px;
-  border: 1px solid var(--wb-border);
-  border-radius: 6px;
-  background: var(--wb-canvas);
-
-  > span {
-    grid-row: 1 / span 2;
-    align-self: center;
-    color: var(--wb-accent);
-    font-weight: 600;
-    text-transform: uppercase;
-  }
-
-  code {
-    overflow-wrap: anywhere;
-    color: var(--wb-text-secondary);
-    font-size: 10px;
-  }
-}
-
-.@{class-prefix}-technical-plan-agent-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-
-  > section {
-    display: grid;
-    align-content: start;
-    gap: 7px;
-    min-width: 0;
-  }
-
-  > section > strong {
-    color: var(--wb-text-secondary);
-    font-size: 10px;
-  }
-}
-
-.@{class-prefix}-technical-plan-agent-binding-list {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.@{class-prefix}-technical-plan-agent-binding-row,
-.@{class-prefix}-technical-plan-agent-tool-row {
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 7px;
-  border: 1px solid var(--wb-border);
-  border-radius: 5px;
-  background: var(--wb-canvas);
-
-  > code,
-  > span,
-  > div > code {
-    overflow-wrap: anywhere;
-    color: var(--wb-text-secondary);
-    font-size: 9px;
-  }
-
-  > .anticon {
-    color: var(--wb-accent);
-    font-size: 9px;
-  }
-}
-
-.@{class-prefix}-technical-plan-agent-tool-row > div {
+.@{class-prefix}-technical-plan-agent-subtitle,
+.@{class-prefix}-technical-plan-agent-setting-heading,
+.@{class-prefix}-technical-plan-agent-collapse-title {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
-  min-width: 0;
+  gap: 6px;
+
+  strong,
+  > .anticon {
+    color: var(--wb-text-secondary);
+  }
 
   .ant-tag {
     margin: 0;
-    color: var(--wb-text-secondary);
-    background: var(--wb-surface);
+    border-color: var(--wb-accent-border);
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
     font-size: 8px;
     line-height: 16px;
   }
 }
 
-.@{class-prefix}-technical-plan-agent-governance {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  padding: 8px;
+.@{class-prefix}-technical-plan-agent-product-facts,
+.@{class-prefix}-technical-plan-agent-settings {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
   border: 1px solid var(--wb-border);
-  border-radius: 6px;
+  border-radius: 7px;
   background: var(--wb-canvas);
+}
 
-  > .anticon {
-    margin-top: 2px;
+.@{class-prefix}-technical-plan-agent-fact-grid,
+.@{class-prefix}-technical-plan-agent-settings-grid,
+.@{class-prefix}-technical-plan-agent-platform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.@{class-prefix}-technical-plan-agent-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+
+  > span {
+    color: var(--wb-text-tertiary);
+    font-size: 9px;
+  }
+
+  > div,
+  code,
+  .ant-typography {
+    overflow-wrap: anywhere;
+    color: var(--wb-text-secondary);
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-technical-plan-agent-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+
+  .ant-tag {
+    margin: 0;
+    border-color: var(--wb-border);
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface);
+    font-size: 8px;
+    line-height: 16px;
+    white-space: normal;
+  }
+}
+
+.@{class-prefix}-technical-plan-agent-capabilities {
+  display: grid;
+  gap: 6px;
+
+  > div {
+    display: grid;
+    gap: 4px;
+    padding: 8px;
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    background: var(--wb-surface);
+  }
+
+  > div > div {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  code,
+  span,
+  .ant-typography {
+    overflow-wrap: anywhere;
+    color: var(--wb-text-secondary);
+    font-size: 9px;
+  }
+
+  span > .anticon {
     color: var(--wb-accent);
   }
+}
+
+.@{class-prefix}-technical-plan-agent-setting-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  background: var(--wb-surface);
+
+  > strong {
+    color: var(--wb-text-secondary);
+    font-size: 10px;
+  }
+
+  &.is-wide {
+    grid-column: 1 / -1;
+  }
+}
+
+.@{class-prefix}-technical-plan-agent-memory-grid,
+.@{class-prefix}-technical-plan-agent-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.@{class-prefix}-technical-plan-agent-memory-tier,
+.@{class-prefix}-technical-plan-agent-advanced-grid > section {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--wb-border);
+  border-radius: 5px;
+  background: var(--wb-canvas);
 
   > div {
     display: flex;
-    flex: 1;
-    flex-wrap: wrap;
-    gap: 4px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 5px;
+  }
+
+  .ant-tag {
+    margin: 0;
+  }
+
+  code,
+  span,
+  .ant-typography {
+    overflow-wrap: anywhere;
+    color: var(--wb-text-tertiary);
+    font-size: 9px;
+  }
+}
+
+.@{class-prefix}-technical-plan-agent-tool-list {
+  display: grid;
+  gap: 8px;
+
+  > div {
+    display: grid;
+    gap: 6px;
     min-width: 0;
+    padding: 9px;
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    background: var(--wb-canvas);
+  }
+
+  header,
+  header > div,
+  footer,
+  .@{class-prefix}-technical-plan-agent-endpoint {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  header {
+    justify-content: space-between;
+  }
+
+  code,
+  span,
+  .ant-typography {
+    overflow-wrap: anywhere;
+    color: var(--wb-text-secondary);
+    font-size: 9px;
+  }
+
+  footer {
+    color: var(--wb-text-tertiary);
   }
 
   .ant-tag {
@@ -172,23 +270,49 @@
     font-size: 8px;
     line-height: 16px;
   }
+}
 
-  > span {
-    color: var(--wb-text-tertiary);
-    font-size: 9px;
+.@{class-prefix}-technical-plan-agent-collapse {
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  background: var(--wb-surface);
+
+  > .ant-collapse-item {
+    border: 0;
+  }
+
+  .ant-collapse-header {
+    color: var(--wb-text-secondary) !important;
+    font-size: 10px;
+  }
+
+  .ant-collapse-content,
+  .ant-collapse-content-box {
+    color: var(--wb-text-secondary);
+    background: transparent;
+  }
+
+  &.is-platform {
+    background: var(--wb-canvas);
   }
 }
 
-.@{class-prefix}-technical-plan-agent-delivery {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+.@{class-prefix}-technical-plan-agent-advanced-grid > section:last-child {
+  grid-column: span 1;
+}
 
-  > div {
-    display: grid;
-    align-content: start;
-    gap: 5px;
-    min-width: 0;
+.@{class-prefix}-technical-plan-agent-platform-grid > section {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--wb-border);
+  border-radius: 5px;
+  background: var(--wb-surface);
+
+  &.is-wide {
+    grid-column: 1 / -1;
   }
 
   strong {
@@ -202,13 +326,15 @@
     font-size: 9px;
   }
 
-  span {
+  > span {
     display: flex;
     align-items: flex-start;
     gap: 5px;
+    color: var(--wb-text-tertiary);
+    font-size: 9px;
   }
 
-  span > .anticon {
+  > span > .anticon {
     margin-top: 2px;
     color: var(--wb-code-add-text);
     font-size: 9px;
@@ -216,13 +342,21 @@
 }
 
 @container (max-width: 620px) {
-  .@{class-prefix}-technical-plan-agent-grid,
-  .@{class-prefix}-technical-plan-agent-delivery {
+  .@{class-prefix}-technical-plan-agent-fact-grid,
+  .@{class-prefix}-technical-plan-agent-settings-grid,
+  .@{class-prefix}-technical-plan-agent-platform-grid,
+  .@{class-prefix}-technical-plan-agent-memory-grid,
+  .@{class-prefix}-technical-plan-agent-advanced-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .@{class-prefix}-technical-plan-agent-header,
-  .@{class-prefix}-technical-plan-agent-governance {
+  .@{class-prefix}-technical-plan-agent-setting-card.is-wide,
+  .@{class-prefix}-technical-plan-agent-platform-grid > section.is-wide,
+  .@{class-prefix}-technical-plan-agent-advanced-grid > section:last-child {
+    grid-column: auto;
+  }
+
+  .@{class-prefix}-technical-plan-agent-header {
     align-items: stretch;
     flex-direction: column;
   }

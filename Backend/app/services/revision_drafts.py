@@ -38,6 +38,7 @@ def create_revision_draft(
     markdown: str,
     artifact: dict[str, Any],
     based_on_paths: dict[str, str | Path],
+    hidden: dict[str, Any] | None = None,
 ) -> RevisionDraftMetadata:
     """基于当前 canonical 与直接上游哈希创建唯一当前草稿。"""
 
@@ -55,6 +56,7 @@ def create_revision_draft(
             for upstream_key, upstream_path in sorted(based_on_paths.items())
         ],
         generatedAt=datetime.now(UTC),
+        hidden=dict(hidden or {}),
     )
     draft_artifact = {
         **artifact,

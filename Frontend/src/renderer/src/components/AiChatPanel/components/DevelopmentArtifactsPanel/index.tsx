@@ -2,6 +2,12 @@ import { Button } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import ApplicationOutline from '../ApplicationOutline'
+import AgentDevelopmentDetail from '../AgentDevelopmentDetail'
+import type {
+  ApplicationLifecycle,
+  DevelopmentPlanningAgentOption,
+  WorkbenchExecution
+} from '../../../../typings'
 import type { ApplicationOutlineProps } from '../ApplicationOutline'
 import EndpointDesignResult from '../EndpointDesignResult'
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
@@ -12,8 +18,14 @@ type Props = ApplicationOutlineProps & {
   onEndpointRecovery?: EndpointRecoveryReporter
   detailLabel?: string
   apiTarget?: { apiContractId: string; endpointId: string }
+  apiDesignRefreshKey?: string
+  developmentDisabled?: boolean
+  applicationLifecycle?: ApplicationLifecycle
+  onEndAgentExecution?: (execution: WorkbenchExecution) => Promise<boolean>
+  onOpenAgentExecution?: (execution: WorkbenchExecution) => Promise<void>
+  onAgentSettingsApplied?: () => void
+  onStartAgentDevelopment?: (agent: DevelopmentPlanningAgentOption) => void
   workspaceRoot?: string
-  apiDesignRefreshKey?: number
   onConfigureApi?: (target: { apiContractId: string; endpointId: string; label?: string }) => void
 }
 
@@ -21,12 +33,21 @@ type Props = ApplicationOutlineProps & {
 export default function DevelopmentArtifactsPanel({
   detailLabel,
   apiTarget,
-  workspaceRoot,
   apiDesignRefreshKey,
   onConfigureApi,
   onEndpointRecovery,
+  developmentDisabled,
+  applicationLifecycle,
+  onEndAgentExecution,
+  onOpenAgentExecution,
+  onAgentSettingsApplied,
+  onStartAgentDevelopment,
+  workspaceRoot,
   ...outlineProps
 }: Props): ReactElement {
+  const selectedAgent = outlineProps.agents.find(
+    (agent) => agent.agentId === outlineProps.selectedAgentId
+  )
   const { detail, error, loading, reload } = useEndpointDesignDetail(
     workspaceRoot,
     apiTarget,
@@ -43,7 +64,18 @@ export default function DevelopmentArtifactsPanel({
         className={cx('development-artifacts-detail')}
       >
         {apiTarget && onConfigureApi ? <Button onClick={() => onConfigureApi({ ...apiTarget, label: detailLabel })}>打开字段映射</Button> : null}
-        {apiTarget ? (
+        {selectedAgent && onStartAgentDevelopment ? (
+          <AgentDevelopmentDetail
+            agent={selectedAgent}
+            applicationLifecycle={applicationLifecycle}
+            disabled={developmentDisabled}
+            onEndAgentExecution={onEndAgentExecution}
+            onOpenAgentExecution={onOpenAgentExecution}
+            onSettingsApplied={onAgentSettingsApplied || (() => undefined)}
+            onStartDevelopment={onStartAgentDevelopment}
+            workspaceRoot={workspaceRoot}
+          />
+        ) : apiTarget ? (
           loading ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>正在读取映射结果…</h3></div>
             : error ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>读取失败</h3>{onEndpointRecovery ? <p>请使用下方重试入口同步映射结果。</p> : <><p>{error}</p><Button onClick={reload} type="primary">重试</Button></>}</div>
               : <EndpointDesignResult detail={detail} />

@@ -101,6 +101,7 @@ class ProjectState(TypedDict, total=False):
     selected_endpoint_id: str
     selected_entity_id: str
     entity_test_entry_id: str
+    selected_agent_id: str
     detail_target_type: str
     page_template: dict[str, Any]
     data_source_spec_draft: dict[str, Any]
@@ -110,6 +111,7 @@ class ProjectState(TypedDict, total=False):
     development_readiness: dict[str, Any]
     api_design_gate_action: dict[str, Any]
     api_design_readiness: dict[str, Any]
+    agent_entity_binding_bypass: dict[str, Any]
     development_continuation_id: str
     application_planning_confirmation: dict[str, Any]
     template_reconcile_pending: bool

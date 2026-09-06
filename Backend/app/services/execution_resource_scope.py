@@ -37,6 +37,8 @@ def resolve_execution_resource_claims(
             target_id,
             str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip(),
         )
+    if target_type == "agent":
+        return _agent_claims(plan, target_id)
     raise ValueError(f"不支持的计划执行资源范围：{target_type}。")
 
 
@@ -195,6 +197,78 @@ def _endpoint_claims(
             page_id = str(page.get("pageId") or page.get("id") or "").strip()
             if page_id:
                 claims.append(_claim(ExecutionResourceType.PAGE, page_id))
+    return _deduplicated_claims(claims)
+
+
+def _agent_claims(
+    project_plan: dict[str, Any],
+    agent_id: str,
+) -> list[ExecutionResourceClaim]:
+    """解析业务智能体本身、网关、工具接口、实体数据源与入口页面。"""
+
+    matches = [
+        item
+        for item in _dict_items(project_plan.get("agent_contracts"))
+        if str(item.get("agentId") or "").strip() == agent_id
+    ]
+    if len(matches) != 1:
+        return [_claim(ExecutionResourceType.AGENT, agent_id, primary=True)]
+    contract = matches[0]
+    claims = [_claim(ExecutionResourceType.AGENT, agent_id, primary=True)]
+    endpoint_refs: list[tuple[str, str]] = []
+    invocation = contract.get("invocation") if isinstance(contract.get("invocation"), dict) else {}
+    gateway_id = str(invocation.get("gatewayEndpointId") or contract.get("gatewayEndpointId") or "").strip()
+    settings = contract.get("agentSettings") if isinstance(contract.get("agentSettings"), dict) else {}
+    tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
+    for binding in _dict_items(tools.get("bindings")):
+        endpoint = binding.get("endpoint") if isinstance(binding.get("endpoint"), dict) else {}
+        endpoint_refs.append(
+            (
+                str(endpoint.get("apiContractId") or "").strip(),
+                str(endpoint.get("endpointId") or "").strip(),
+            )
+        )
+    if gateway_id:
+        endpoint_refs.append(("", gateway_id))
+
+    endpoint_ids = {endpoint_id for _, endpoint_id in endpoint_refs if endpoint_id}
+    source_ids: set[str] = set()
+    for api_contract in _dict_items(project_plan.get("api_contracts")):
+        api_contract_id = str(api_contract.get("id") or "").strip()
+        matched_ids = {
+            str(endpoint.get("id") or "").strip()
+            for endpoint in _dict_items(api_contract.get("endpoints"))
+            if str(endpoint.get("id") or "").strip() in endpoint_ids
+        }
+        if not matched_ids:
+            continue
+        if api_contract_id:
+            claims.append(_claim(ExecutionResourceType.API_CONTRACT, api_contract_id))
+        source_id = contract_data_source_id(project_plan, api_contract).strip()
+        if source_id:
+            source_ids.add(source_id)
+            claims.append(_claim(ExecutionResourceType.DATA_SOURCE, source_id))
+        for endpoint_id in matched_ids:
+            claims.append(
+                _claim(
+                    ExecutionResourceType.ENDPOINT,
+                    f"{api_contract_id}:{endpoint_id}" if api_contract_id else endpoint_id,
+                )
+            )
+
+    product_agent = next(
+        (
+            item
+            for item in _dict_items(project_plan.get("product_agents"))
+            if str(item.get("agentId") or "").strip() == agent_id
+        ),
+        {},
+    )
+    entry_page_ids = product_agent.get("entryPageIds") or []
+    for page_id in entry_page_ids if isinstance(entry_page_ids, list) else []:
+        normalized_page_id = str(page_id or "").strip()
+        if normalized_page_id:
+            claims.append(_claim(ExecutionResourceType.PAGE, normalized_page_id))
     return _deduplicated_claims(claims)
 
 

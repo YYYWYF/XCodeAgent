@@ -532,6 +532,7 @@ def confirm_application_planning_artifacts(state: dict[str, Any]) -> dict[str, A
     workspace = Path(str(state.get("workspace") or "")).expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"应用工作区不存在：{workspace}")
+    technical_plan = state.get("technical_plan")
     confirmed_at = datetime.now(UTC).isoformat()
     return {
         "confirmedAt": confirmed_at,
@@ -540,4 +541,11 @@ def confirm_application_planning_artifacts(state: dict[str, Any]) -> dict[str, A
             "plans": ".devagentstudio/plans",
         },
         "artifacts": _confirmed_artifacts(state, workspace),
+        "templateTargets": {
+            "agentRuntimeRequired": bool(
+                technical_plan.get("agent_contracts")
+                if isinstance(technical_plan, dict)
+                else []
+            ),
+        },
     }

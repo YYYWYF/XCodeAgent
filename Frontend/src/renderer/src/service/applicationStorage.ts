@@ -3,6 +3,7 @@ import type {
   ApplicationIndex,
   ApplicationSchemaConfig,
   ApplicationLifecycle,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
@@ -299,6 +300,7 @@ export async function inspectWorkspacePlanningArtifacts(
   pageTree: DevelopmentPlanningPageTreeNode[];
   apiContracts: DevelopmentPlanningApiContract[];
   entities: DevelopmentPlanningEntityOption[];
+  agents: DevelopmentPlanningAgentOption[];
 }> {
   const workspaceApi = window.devAgentStudio?.workspace;
   if (!workspaceApi?.inspectPlanningArtifacts) {
