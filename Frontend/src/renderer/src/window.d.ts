@@ -48,6 +48,8 @@ declare global {
           appName: string
           frontendTemplateUrl?: string
           backendTemplateUrl?: string
+          agentRuntimeTemplateUrl?: string
+          agentRuntimeRequired: boolean
         }) => Promise<TemplateDownloadResult>
         readApplication: (payload: { workspaceRoot: string }) => Promise<{ application?: unknown }>
         inspectPlanningArtifacts: (payload: { workspaceRoot: string }) => Promise<{

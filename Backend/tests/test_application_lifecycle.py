@@ -262,8 +262,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
             self.assertEqual(sorted(results), ["conflict", "written"])
 
-    def test_template_generation_failure_is_terminal(self) -> None:
-        """应用模板文件生成失败后不能从失败状态重新启动。"""
+    def test_template_generation_failure_can_retry(self) -> None:
+        """应用模板文件生成失败后可以重新进入模板生成阶段。"""
 
         with tempfile.TemporaryDirectory() as directory:
             state = create_application_lifecycle(
@@ -300,11 +300,24 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
             assert failed.error is not None
             self.assertEqual(failed.error.code, "application_template_generation_failed")
+            self.assertTrue(failed.error.recoverable)
 
-            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "只有用户确认 TechnicalPlan"):
-                begin_application_template_generation(directory)
-            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "不能提交应用模板文件生成结果"):
-                complete_application_template_generation(directory, succeeded=True)
+            retrying = begin_application_template_generation(directory)
+            self.assertEqual(
+                retrying.initialization.stage,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            )
+            self.assertEqual(retrying.initialization.status, ApplicationLifecycleStatus.RUNNING)
+            self.assertIsNone(retrying.error)
+            failed_again = complete_application_template_generation(
+                directory,
+                succeeded=False,
+                error_message="重试仍失败",
+            )
+            self.assertEqual(
+                failed_again.initialization.stage,
+                ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
+            )
 
     def test_template_generation_success_is_persisted_after_technical_confirmation(self) -> None:
         """TechnicalPlan 确认后进入模板阶段，完成门禁才能进入工作台。"""
@@ -331,7 +344,12 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 if path.name == "ui-designs.json":
                     payload.update({"schema_version": "ui-manifest.v3", "pages": []})
                 if path.name == "technical-plan.json":
-                    payload["artifact_type"] = "technical-plan"
+                    payload.update(
+                        {
+                            "artifact_type": "technical-plan",
+                            "agent_contracts": [],
+                        }
+                    )
                 path.write_text(json.dumps(payload), encoding="utf-8")
 
             state = create_application_lifecycle(
@@ -369,8 +387,9 @@ class ApplicationLifecycleTests(unittest.TestCase):
                     "status": "succeeded",
                     "failedTargets": [],
                     "targets": {
-                        "frontend": {"status": "succeeded", "attempt": 0, "branch": "auth"},
-                        "backend": {"status": "succeeded", "attempt": 0, "branch": "auth"},
+                        "frontend": {"required": True, "status": "succeeded", "attempt": 0, "branch": "auth"},
+                        "backend": {"required": True, "status": "succeeded", "attempt": 0, "branch": "auth"},
+                        "agentRuntime": {"required": False, "status": "skipped", "attempt": 0, "path": "agent-runtime"},
                     },
                 },
             )

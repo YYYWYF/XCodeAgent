@@ -1147,6 +1147,12 @@ export default function AiChatPanel({
   const requirementSpecMemory = requirementSpecFromWorkflow(planningWorkflow)
   const productPlanMemory = productPlanFromWorkflow(planningWorkflow)
   const technicalPlanMemory = technicalPlanFromWorkflow(planningWorkflow)
+  // 冷恢复以外，从开发阶段切回设计/规划阶段时，Workflow 可能已不再携带
+  // 完整结构化产物；此时必须从当前工作区补读，不能把内存快照当成唯一来源。
+  const planningArtifactDiskRecoveryRequired =
+    restorePlanningArtifactsFromDisk === true ||
+    (isTechnicalPlanningPhase && (!technicalPlanMemory || !productPlanMemory)) ||
+    (isDesignPhase && (!requirementSpecMemory || !productPlanMemory))
   const requirementDocAvailable = Boolean(
     requirementDocContent.trim() || requirementSpecMemory || productPlanMemory
   )
@@ -1224,11 +1230,12 @@ export default function AiChatPanel({
     ? productPlanMemory || productPlanFile
     : undefined
 
-  // 只有明确的冷恢复入口才读本地产物；同一 renderer 内缓存 Promise，阶段、事件和 tab 均不会重读。
+  // 冷恢复或阶段切回后内存快照不完整时读本地产物；按产物集合缓存 Promise，
+  // 避免先读设计阶段后复用同一缓存、导致规划阶段永远缺少 TechnicalPlan。
   useEffect(() => {
     const workspaceRoot = application.workspaceRoot
     const recoveryKeys = planningArtifactRecoveryKeys(
-      restorePlanningArtifactsFromDisk === true,
+      planningArtifactDiskRecoveryRequired,
       activeWorkbenchPhase
     )
     if (!workspaceRoot || recoveryKeys.length === 0) {
@@ -1237,7 +1244,7 @@ export default function AiChatPanel({
     }
 
     let cancelled = false
-    const recoveryKey = `${application.id}:${workspaceRoot}`
+    const recoveryKey = `${application.id}:${workspaceRoot}:${[...recoveryKeys].sort().join(',')}`
     let recovery = localDesignRecoveryCache.get(recoveryKey)
     if (!recovery) {
       recovery = readLocalDesignWorkspaceSnapshot(workspaceRoot, recoveryKeys)
@@ -1280,7 +1287,7 @@ export default function AiChatPanel({
     activeWorkbenchPhase,
     application.id,
     application.workspaceRoot,
-    restorePlanningArtifactsFromDisk
+    planningArtifactDiskRecoveryRequired
   ])
   // 开发阶段：右侧文档区无设计阶段产物，显示引导文案（选中页面/端点后由后续逻辑填充）。
   const designDocContent = isApplicationPlanningPhase
@@ -1497,14 +1504,10 @@ export default function AiChatPanel({
     setRightPanel
   ])
 
-  // 切换应用时重置自动同步标记、清空右侧面板和本地文档缓存。
-  // 合并原 2 个 effect：rightPanel reset（依赖 application.id, isApplicationPlanningPhase）
-  // + designDoc 清空（依赖 application.id, application.workspaceRoot），都在 application.id 变化时 reset。
+  // 只在切换应用/工作区时重置右侧面板与本地产物缓存；普通阶段切换必须保留数据。
   useEffect(() => {
     lastAutoSyncedPhaseRef.current = undefined
-    if (isApplicationPlanningPhase) {
-      setRightPanel(undefined)
-    }
+    setRightPanel(undefined)
     setDesignDocState({
       fileContent: {},
       filePath: {},
@@ -1514,7 +1517,7 @@ export default function AiChatPanel({
       uiDesign: undefined,
       loading: false
     })
-  }, [application.id, isApplicationPlanningPhase, application.workspaceRoot, setRightPanel])
+  }, [application.id, application.workspaceRoot, setRightPanel])
 
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)

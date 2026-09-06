@@ -7,6 +7,19 @@ import {
   readManagedWorkspaceApplication,
   resolveApplicationTemplateBranch
 } from '../src/main/managedWorkspace'
+import { gitRepositoriesEquivalent, templateCloneAttempts } from '../src/main/templateRepository'
+
+/** 验证 GitHub HTTPS 首次不可达时会尝试等价 SSH 地址。 */
+test('GitHub 模板拉取支持 SSH 回退', () => {
+  const httpsUrl = 'https://github.com/Bettetman/agent-runtime-template.git'
+  const attempts = templateCloneAttempts(httpsUrl)
+
+  assert.equal(attempts.length, 3)
+  assert.equal(attempts[0].repositoryUrl, httpsUrl)
+  assert.equal(attempts[0].timeoutMs, 30_000)
+  assert.equal(attempts[1].repositoryUrl, 'git@github.com:Bettetman/agent-runtime-template.git')
+  assert.equal(gitRepositoriesEquivalent(attempts[1].repositoryUrl, httpsUrl), true)
+})
 
 /** 创建隔离的临时工作区并在测试结束后清理。 */
 async function withTemporaryWorkspace(

@@ -284,6 +284,10 @@ class BuiltinSkillsTests(unittest.TestCase):
             builtin_skills.FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME,
             available,
         )
+        self.assertIn(
+            builtin_skills.AGENT_RUNTIME_GENERATE_SKILL_NAME,
+            available,
+        )
         summaries = builtin_skills.list_builtin_skills(root)
         self.assertTrue(all(skill.description for skill in summaries))
         self.assertTrue(

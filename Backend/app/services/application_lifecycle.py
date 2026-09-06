@@ -97,6 +97,9 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
         ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
         ApplicationLifecycleStage.READY_FOR_WORKBENCH,
     },
+    ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED: {
+        ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+    },
 }
 
 APPLICATION_PLANNING_REVISION_STAGES = {
@@ -961,7 +964,7 @@ def complete_application_template_generation(
         error=ApplicationLifecycleError(
             code="application_template_generation_failed",
             message=(error_message or "应用模板文件生成失败。")[:2048],
-            recoverable=False,
+            recoverable=True,
             occurredAt=utc_now(),
         ),
     )
@@ -972,13 +975,23 @@ def begin_application_template_generation(
     *,
     active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
-    """只允许 TechnicalPlan 确认后的模板生成阶段执行初始化。"""
+    """允许 TechnicalPlan 确认后的模板生成阶段首次执行或失败重试。"""
 
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
     if current.initialization.stage == ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES:
         return current
+    if (
+        current.initialization.stage
+        == ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED
+    ):
+        return persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            status=ApplicationLifecycleStatus.RUNNING,
+            active_run_id=active_run_id,
+        )
     raise ApplicationLifecycleConflictError(
         "只有用户确认 TechnicalPlan 后才能开始模板初始化；当前阶段为 "
         f"{current.initialization.stage.value}。"

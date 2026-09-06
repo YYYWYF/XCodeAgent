@@ -34,9 +34,11 @@
 
 - `prototype/` 已实现业务智能体作为页面/API 同级产物的主要交互原型，包含设计确认、依赖检查、配置修订、代码 Diff、试聊预览和验收等状态。
 - 当前生产 `Backend/` 已在 RequirementSpec 中识别、归一化、校验和持久化业务智能体需求；新建应用能够结合业务提出合理智能体角色时，需求问答会先建议并等待用户选择，不再要求显著价值或复杂推理。适配判断依据完整需求的业务语义，不依赖应用名称、关键词或业务示例。ProductPlan v6 继续生成产品级智能体能力、入口页面/操作、交互状态、边界和验收契约；两者复用现有 Markdown 编辑与联合确认链路。
-- 正式前端需求文档面板已按需展示“智能体”章节；TechnicalPlan 已增加 `agent_contracts[]`、Python sidecar 架构、AG-UI 网关、工具/API 引用、安全和产物路径，并进入现有 Markdown 确认链路。TechnicalPlan 确认摘要和右侧阅读面板会按需展示“智能体契约”及运行时、网关、绑定、安全、产物和 required checks；普通应用仍使用 `agents: []`、`agent_contracts: []`，不出现智能体章节、契约页签或 Python 架构。
-- 现有 `build-dag.v3` 已增加 `agent:runtime`、`agent:<agentId>`、`agent` owner 和独立 Agent Runtime Generation CodeRunner，写权限只允许 `agent-runtime/**`；工作台智能体设计/配置产物、真实生成应用端到端运行、专属测试/审查证据和候选版本晋升仍未完成。
-- 因此当前总体状态是：**正式开发中，已完成 RequirementSpec、ProductPlan、TechnicalPlan 与 Build 接入切片，但尚未形成端到端智能体开发闭环**。
+- 正式前端需求文档面板已按需展示“智能体”章节；TechnicalPlan 的 `agent_contracts[]` 已升级为带 ProductPlan Hash 的完整派生执行快照，包含 identity、capabilities、interaction、七段 `agentSettings`、Invocation、Runtime、Security、Artifacts、Required checks 和 Evaluation。模型只返回候选设置和稳定引用，平台确定性展开 Endpoint 并拒绝派生字段漂移；TechnicalPlan Markdown 和右侧阅读面板已同步展示完整契约。普通应用仍使用 `agents: []`、`agent_contracts: []`，不出现智能体章节、契约页签或 Python 架构。
+- 现有 `build-dag.v3` 已增加平台 readiness `agent:runtime` Unit、业务 `agent:<agentId>` Unit、`agent` owner 和独立 Agent Runtime Generation CodeRunner；模型不再为 `agent:runtime` 生成 bootstrap 任务，业务 Agent 任务写权限只允许对应 `agent-runtime/**` 路径。CodeRunner 已强制读取专用生成 Skill，只接收当前 Agent Contract 和其 Tool 实际引用的 Java API Contract/Schema，并按模板固定入口生成业务模块。工作台智能体设计/配置产物、真实生成应用端到端运行、专属测试/审查证据和候选版本晋升仍未完成。
+- 已确认 [Agent Runtime 模板仓库与初始化流程设计](./AGENT_RUNTIME_TEMPLATE_AND_INITIALIZATION.md)，独立模板仓库 `Bettetman/agent-runtime-template@master` 可安装、测试、启动和基础对话。XCodeAgent 已把 `agentRuntime` 接入 TechnicalPlan 确认结果、Electron 模板下载、前后端协议类型、manifest 和 Backend readiness：`agent_contracts[]` 非空时下载并复核仓库、分支、commit 与关键文件，普通应用明确记录 skipped 且不创建目录。业务产物路径已统一切换到 `src/app/agent/`、`src/app/tools/`，`agent:runtime` 不再生成模型 bootstrap 任务；Testing、Code Review、Project Launch、Java Gateway 和 Electron 完整端到端仍未完成。
+- 已确认 [Agent Development Workbench 设计](./AGENT_DEVELOPMENT_WORKBENCH.md)：Agent 将与页面、API、实体并列成为开发目标，第一期以 ProductPlan/TechnicalPlan 为唯一规划事实，只读展示七段 Settings，扩展 `type=agent` 目标、依赖门禁和现有 Build 入口；运行试聊、专属证据和配置候选版本分后续批次实施。当前仅为设计完成，不是生产实现。
+- 因此当前总体状态是：**正式开发中，已完成 RequirementSpec、ProductPlan、TechnicalPlan、条件式 Runtime 初始化与业务 Agent Build 接入切片，但尚未形成测试、启动和验收端到端闭环**。
 - 原型脚本 `test:agent-development`、`test:new-app-agent-planning`、智能体配置样式测试与 `typecheck` 可作为原型验证入口；本次变基后已重新运行并通过。
 
 ## 4. 能力矩阵
@@ -44,12 +46,12 @@
 | 能力 | 原型状态 | 正式前端 | 正式后端/协议 | 当前缺口与下一步 |
 | --- | --- | --- | --- | --- |
 | 新建应用时声明业务智能体 | 原型已实现 | 正式开发中 | 正式开发中 | RequirementSpec 已支持显式需求和“适合但未提及”时的一次性适配建议，用户同意后才进入 ProductPlan v6 与 TechnicalPlan `agent_contracts[]`；仍需真实模型适配命中率以及确认后的 Build、运行和验收端到端验证。 |
-| 智能体作为工作台同级产物 | 原型已实现 | 未开始 | 未开始 | 复用现有应用大纲、会话隔离、阶段状态和写锁，不新增平行工作台。 |
-| 模型、API、实体、知识依赖检查 | 原型已实现 | 正式开发中 | 正式开发中 | TechnicalPlan 已展示 `project_default` 模型策略、能力/工具/API Endpoint、安全和知识引用摘要；知识目录、实体级工具授权和失效传播仍待后续切片。 |
+| 智能体作为工作台同级产物 | 原型已实现 | 设计完成 | 正式开发中 | 独立模板仓库、条件式主流程下载、manifest、readiness 和业务 Agent Build 入口已完成；已确认 Agent 大纲、一等目标、依赖门禁与分期方案，仍需正式 UI/协议实现、Launch 和真实运行闭环。 |
+| 模型、API、实体、知识依赖检查 | 原型已实现 | 正式开发中 | 正式开发中 | TechnicalPlan 已展示 `project_default` 模型策略、完整能力/工具/API Endpoint 快照、SQLite 短期记忆、安全、Skills、Knowledge 与 Context 状态；未实现的 Skills、Knowledge、Long-term Memory 和压缩能力固定关闭，正式 Catalog、实体级工具授权和失效传播仍待后续切片。 |
 | 十部分 Markdown 设计文档 | 原型已实现 | 未开始 | 未开始 | 决定正式产物 schema、Markdown/内部 JSON 同步和 revision/hash 机制。 |
 | 智能体设计显式确认 | 原型已实现 | 未开始 | 未开始 | 接入现有 artifact confirmation；澄清、保存草稿和确认必须分离。 |
-| Build DAG 与代码生成 | 原型已实现（模拟） | 正式开发中 | 正式开发中 | 已进入同一 `build-dag.v3`、BuildScheduler 和 Repair 边界；真实生成工程与运行证据仍待验证。 |
-| 智能体定义与工具适配代码 Diff | 原型已实现（模拟） | 未开始 | 正式开发中 | 已固定 `agent-runtime/` 路径、Python 3.12 + DeepAgents、`agent` owner 与受限 CodeRunner；尚无真实生成应用 Diff 验收。 |
+| Build DAG 与代码生成 | 原型已实现（模拟） | 正式开发中 | 正式开发中 | 已进入同一 `build-dag.v3`、BuildScheduler 和 Repair 边界；Agent CodeRunner 已按专用 Skill、完整 Contract 和相关 API Schema 生成固定三文件，真实生成工程与运行证据仍待验证。 |
+| 智能体定义与工具适配代码 Diff | 原型已实现（模拟） | 未开始 | 正式开发中 | 已固定 `agent-runtime/` 路径、Python 3.12 + DeepAgents、模板注入模型、动态业务模块入口、`agent` owner 与受限 CodeRunner；尚无真实生成应用 Diff 验收。 |
 | 页面集成与调用入口 | 原型已实现 | 正式开发中 | 正式开发中 | 页面 action、Java 网关与 Agent Contract 使用稳定 Endpoint 引用和 AG-UI SSE；尚未在生成应用中执行真实联调。 |
 | 配置 active/draft/candidate | 原型已实现 | 未开始 | 未开始 | 设计正式配置状态、候选版本、CAS、失效和回滚边界。 |
 | 配置确认后重新生成 | 原型已实现 | 未开始 | 未开始 | 必须走“确认变更 → 重新生成 → Diff → 测试 → 验收”，验收前不替换 active。 |
@@ -95,13 +97,14 @@
 
 以下问题尚未由当前正式契约决定，任何实现批次不得自行假设：
 
-1. RequirementSpec `agent_requirements[]`、ProductPlan v6 `agents[]` 和 TechnicalPlan `agent_contracts[]` 已确定，TechnicalPlan 契约页签已接入；独立十部分智能体设计 artifact 的正式 schema、revision/hash 和工作台展示仍待确定。
-2. 业务智能体运行时已确定为生成应用根目录下独立 `agent-runtime/` Python 3.12 + DeepAgents sidecar，Java8 + Springboot 保持业务网关；部署配置、进程启动和健康检查仍待模板/运行阶段闭合。
-3. 智能体定义、工具适配和测试文件路径以及 `agent` owner 已确定；共享 runtime bootstrap、知识文件和配置候选的正式持久化仍待完成。
-4. 能力→工具→API Endpoint、页面 action→Java AG-UI 网关的稳定引用已确定；Skill、知识库、实体级权限继承和工具写操作审批仍待确定。
+1. RequirementSpec `agent_requirements[]`、ProductPlan v6 `agents[]` 和 TechnicalPlan 完整 `agent_contracts[]` 已确定，七段 AgentSettings 与平台派生字段已进入契约页签；当前不新增独立智能体设计 Artifact，后续若需要独立配置候选、revision/hash 和工作台编辑体验，应基于本 Contract 的模型候选边界设计。
+2. 业务智能体运行时已确定为生成应用根目录下独立 `agent-runtime/` Python 3.12 + DeepAgents sidecar，Java8 + Springboot 保持业务网关；最小模板、AG-UI Chat、模型/交互/checkpoint、健康检查和条件式初始化下载已实现，Java 网关联调、生成应用启动和端到端验收仍待后续批次完成。
+3. 智能体定义、工具适配和测试文件路径以及 `agent` owner 已确定；共享 Runtime 改由独立模板提供，`agent:runtime` 目标上收敛为确定性模板 readiness，知识文件和配置候选的正式持久化仍待完成。
+4. 能力→工具→API Endpoint、页面 action→Java AG-UI 网关的稳定引用和 Endpoint 快照已确定；Skill、知识库、实体级权限继承和工具写操作审批的 Runtime 闭环仍待实现，当前 Contract 对未实现能力保持关闭。
 5. 配置 candidate 的持久化、激活、回滚、发布和历史只读模型。
 6. 智能体试聊使用 Mock、候选运行时或真实已发布运行时的边界，以及各状态的用户文案。
 7. 智能体专属 required checks 已写入 TechnicalPlan，但其实际执行、验收证据和失败后回到哪个正式上游产物仍待闭合。
+8. Agent Runtime 模板正式 URL 与 `master` 分支已固定，manifest 会记录每次实际下载 commit；是否进一步固定发布 commit，以及 checkpoint 清理策略仍需在对应实施批次确认，不得增加旧契约 fallback。
 
 这些决策必须在对应开发批次的计划和冲突分析中列出，获得用户确认后才能写入正式规范或代码。
 
@@ -258,7 +261,7 @@
 - 客户端调用固定经过 Java 网关并使用 AG-UI SSE；禁止浏览器直连 Python sidecar，Java 网关只转发受限用户上下文，工具适配器只能调用声明过的 Java API Endpoint。
 - 现有 `build-dag.v3` 在 Agent Contract 非空时增加 `agent:runtime` 和 `agent:<agentId>` Unit，并建立工具 API Endpoint → Agent → Java Agent 网关 Endpoint → 页面依赖；没有新建第二套任务计划或执行 Graph。
 - Build 任务增加 `agent` owner、`agent.code` task 与 `agent.runtime` deliverable。共享 runtime bootstrap 和单 Agent 定义/工具适配/测试分别写入确定性 `agent-runtime/**` 路径。
-- 新增独立 Agent Runtime Generation CodeRunner，通过现有 BuildScheduler/Build Subgraph 执行，文件权限只能写 `/agent-runtime/**`；Java 网关继续由 Data Source Generation Agent 负责，页面入口继续由 Frontend Generation Agent 负责。
+- 独立 Agent Runtime Generation CodeRunner 只执行 `agent:<agentId>` 业务实现任务，通过现有 BuildScheduler/Build Subgraph 执行，文件权限只能写任务授权的 `/agent-runtime/**`；`agent:runtime` 由开发前模板门禁确定性准备，不派发模型任务。Java 网关继续由 Data Source Generation Agent 负责，页面入口继续由 Frontend Generation Agent 负责。
 - Java 网关与前端生成提示按匹配 Agent Contract 增加 AG-UI 约束，防止把 Agent 实现在 Java 中、使用普通 REST 代替 AG-UI，或让前端直连 sidecar。
 
 正式代码证据：
@@ -319,3 +322,72 @@
 - 正式后端 `GET http://127.0.0.1:8000/health`：HTTP 200，`status=ok`，公开 `forcedAgents` 已包含 `agent_runtime`。
 - 合并前五轴代码审查发现并修复两项：移除 Agent Runtime Runner 可绕过文件权限的通用 shell 工具；修正 TechnicalPlan 动态示例中的页面 action→网关绑定和单轮 `memory=none`。
 - 本切片没有修改正式前端文件；不把后端提示词与 DAG 测试记为 Electron UI、明暗主题或真实生成应用联调通过。
+
+## 12. 完整 Agent Contract 第四切片
+
+2026-09-06 按已确认的 [Agent Contract 重设计](./AGENT_CONTRACT_REDESIGN.md) 完成当前契约升级：
+
+- ProductPlan 继续作为名称、用途、能力、交互、业务边界和产品验收标准的唯一权威；正式 Contract 保存规范化 ProductPlan JSON 的 `sha256:` 摘要和对应 `productAgentId`。
+- 技术规划模型只输出 `agentId`、`gatewayEndpointId`、`capabilityBindings` 和七段 `agentSettings` 候选。平台从 ProductPlan 与 TechnicalPlan API Contract 编译 `source`、`identity`、`capabilities`、`interaction`、Endpoint 快照、Invocation、Runtime、Security、Artifacts、Required checks 和 Evaluation。
+- `agentSettings` 固定包含 Prompt、Model、Memory、Tools、Skills、Knowledge 和 Context。当前只允许项目默认模型、按 ProductPlan 多轮要求启停的 SQLite Short-term Memory、真实 Java Endpoint Tool、固定 Context Budget 和 `compression.strategy=none`。
+- MySQL Checkpointer、OSS/Long-term Memory、Skill Loader、Knowledge Retriever、Summary Compression、Vision、结构化最终输出和单 Agent 模型覆盖尚未实现，候选校验会拒绝将这些能力伪装为已启用。
+- Tool Endpoint 被展开为 API Contract、Method、Path 和请求/响应 Schema 引用快照；Tool 的 `read/write` 必须与 HTTP 方法语义一致，Gateway Endpoint 不得同时注册为 Tool，写操作审批保持 `platform_managed`。
+- 正式 Contract 校验使用“反投影模型候选 → 调用同一编译器 → 完整对象比较”，因此 ProductPlan、Endpoint 或平台派生字段发生漂移时不能通过确认。
+- TechnicalPlan Markdown 同步只带回允许编辑的候选字段并重新编译；Markdown 与前端结构化阅读面板已展示身份、Prompt、Model、Memory、Capabilities/Tools、Skills、Knowledge、Context、Runtime、安全、产物和检查。
+- Build Unit 的 Tool 依赖改为读取 `agentSettings.tools.bindings[].endpoint.endpointId`；Agent Runtime 生成提示明确使用 `init_chat_model`、`create_deep_agent`、编译后的 System Prompt、解析后的 Tools 与短期 Checkpointer。
+
+正式代码证据：
+
+- `Backend/app/services/project_plan.py`
+- `Backend/app/agents/main/planner.py`
+- `Backend/app/agents/main/document_sync.py`
+- `Backend/app/workspace/plan_documents.py`
+- `Backend/app/services/build_unit_skeleton.py`
+- `Backend/app/agents/main/task_preparer_prompt.py`
+- `Backend/app/agents/agent_runtime/generator.py`
+- `Frontend/src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanAgentSection.tsx`
+- `Backend/tests/test_agent_technical_plan.py`
+- `Backend/tests/test_build_unit_skeleton.py`
+- `Frontend/tests/agentTechnicalPlanView.test.ts`
+
+当前限制：本切片只闭合规划、确认展示和 Build 输入契约，不等于生成应用已经实现七类 Runtime Adapter。真实“规划生成 → 用户确认 → Agent Runtime Build → Java Gateway → Electron 对话 → Testing/Review/Launch/Acceptance”端到端证据仍待完成。
+
+本切片验证：
+
+- `.venv/bin/python -m unittest tests.test_agent_technical_plan tests.test_build_unit_skeleton tests.test_agent_build_runner tests.test_product_technical_planning tests.test_project_planning_confirmation tests.test_technical_plan_response_protocol tests.test_technical_plan_settings tests.test_planning_stream_message_compatibility tests.test_project_plan`：118 项通过。
+- 新增和修改的后端 Python 文件 `py_compile`：通过；`git diff --check`：通过。
+- `node scripts/run-agent-technical-plan-view-tests.mjs`：通过。
+- Frontend Node/Web TypeScript 检查和 Electron-Vite production bundle 使用仓库内锁定二进制执行：通过。全局 pnpm 11.5.1 要求 Node 22.13，而当前 Node 为 20.20.2，因此未把失败的全局 `pnpm build` 包装脚本记为产品 Build 失败。
+- 正式后端当前未运行，`GET http://127.0.0.1:8000/health` 无法连接；本轮没有为了健康检查单独启动长期服务。
+- 未执行 Electron 实机交互、真实模型规划或生成应用端到端验证；用户将自行启动主流程验证。
+
+## 13. Contract 到 Runtime Generation 第五切片
+
+2026-09-06 完成完整 Agent Contract 到独立 Runtime 模板业务代码入口的最小闭合：
+
+- 新增内置 `agent-runtime-generate` Skill，定义业务 Agent 模块、Prompt 编译、模型/checkpointer 注入、Java Tool Adapter、可信身份与测试边界；Agent Runtime CodeRunner 在写文件前必须读取该 Skill。
+- Generator 根据当前 `agent:<agentId>` 任务筛选完整 Agent Contract，并从 `agentSettings.tools.bindings[].endpoint.apiContractId` 精确投射相关 Java API Contract 和 Schema；无关 API 不进入生成上下文。
+- 业务模块固定公开 `create_agent(*, model, runtime_context, checkpointer)`，调用 `create_deep_agent`；项目默认模型由模板统一通过 `init_chat_model` 创建和注入，业务模块不得二次初始化。
+- 独立模板 Factory 保留内置 `chat`，同时动态加载 `app.agent.<agent_id>`；Runtime Settings 提供经过 Origin 校验的 Java Backend 地址和独立 Tool Gateway 凭据读取边界。
+- Tool Adapter 只能访问 Contract 声明的 Java Endpoint，身份与 Scope 只能来自可信 `RuntimeContext`，不能由 Tool 参数覆盖。
+
+正式代码证据：
+
+- `Backend/app/builtin_skills/agent-runtime-generate/`
+- `Backend/app/agents/agent_runtime/agent.py`
+- `Backend/app/agents/agent_runtime/generator.py`
+- `Backend/app/services/builtin_skills.py`
+- `Backend/tests/test_agent_build_runner.py`
+- `Backend/tests/test_builtin_skills.py`
+- 独立仓库 `Bettetman/agent-runtime-template@master` 的 `src/app/agent/factory.py`、`src/app/settings.py` 与 `tests/test_runtime.py`
+
+当前限制：尚未让一个真实生成应用完成“规划确认 → Build 生成三文件 → Java Gateway → Python Tool → AG-UI 页面 Chat”的端到端运行；Testing、Code Review、Project Launch 和 Acceptance 仍未接入 Agent Runtime 专项证据。
+
+本切片验证：
+
+- Agent Runtime Runner、TechnicalPlan 与 Build Unit 聚焦测试 25 项通过；新增内置 Skill 完整性测试 1 项通过。
+- XCodeAgent 变更 Python 文件 `py_compile` 与 `git diff --check`：通过。
+- 独立模板使用自身 Python 3.12 执行 `compileall`：通过；模板 `git diff --check`：通过。
+- 模板完整 `pytest` 在依赖准备阶段因下载 `anthropic==1.3.0` 超时而未进入测试；不能记为测试通过或产品代码失败。
+- XCodeAgent 全量 `tests.test_builtin_skills` 有 1 项 Spring Boot Skill 文案断言差异；对比当前 HEAD 后确认预期句子与 Skill 缺失均已存在，本切片没有修改该 Skill。正式 Backend 未运行，`/health` 无法连接。
+- 未运行 Electron UI、真实模型、Java Gateway 或生成应用端到端验证。

@@ -4,7 +4,7 @@
 
 本文定义 TechnicalPlan 确认完成后，到应用具备进入开发条件之前的模板生成阶段，范围包括：
 
-1. 前端模板和后端模板下载；
+1. 前端、后端与条件式 Agent Runtime 模板下载；
 2. 页面占位文件增量注入；
 3. 菜单项增量注入；
 4. 模板生成 manifest；
@@ -13,11 +13,15 @@
 
 本文中的“进入”是指从欢迎页打开应用并准备进入开发会话，不是用户在工作台内切换页面或路由。模板生成仍然是一个整体业务阶段，不为下载、页面、菜单和门禁增加新的生命周期枚举。
 
+### 1.1 与 Agent Runtime 目标设计的关系
+
+当前契约始终初始化 `frontend/` 和 `backend/`，并在已确认 TechnicalPlan 的 `agent_contracts[]` 非空时增加同级 `agent-runtime/`。无 Agent 应用在 manifest 中记录 `agentRuntime.required=false/status=skipped` 且不创建目录；含 Agent 应用固定下载 `agent-runtime-template@master`，由后端复核正式计划、manifest、Git 来源、commit 和真实文件后才允许进入开发。完整设计见 [Agent Runtime 模板仓库与初始化流程设计](./AGENT_RUNTIME_TEMPLATE_AND_INITIALIZATION.md)。
+
 ## 2. 本阶段最终决策
 
 ### 2.1 核心目标
 
-- 在应用工作区准备可用的前端和后端模板工程。
+- 在应用工作区准备可用的前端、后端与按需 Agent Runtime 模板工程。
 - 根据最新正式 ProductPlan 页面清单补齐缺失页面占位文件。
 - 根据同一份 ProductPlan 补齐缺失菜单项。
 - 仅在用户确认 TechnicalPlan 后执行一次模板初始化；失败、重启、再次打开和进入工作台都不重新触发。
@@ -97,13 +101,13 @@ generating_application_template_files
 | 范围 | 当前能力 | 主要源码位置 |
 | --- | --- | --- |
 | 生命周期 | 持久化初始化阶段、状态、revision、线程 ID 和错误摘要 | `Backend/app/domain/application_lifecycle.py`、`Backend/app/services/application_lifecycle.py` |
-| 下载 | Electron 主进程复用有效目录，依次下载缺失的前后端模板，并返回分目标结构化结果 | `Frontend/src/main/index.ts` |
+| 下载 | Electron 主进程复用有效目录，依次下载缺失的前后端模板，并按 TechnicalPlan 条件式下载 `agent-runtime@master` | `Frontend/src/main/index.ts` |
 | 下载重试 | 每个仓库最多尝试 3 次，单次 Git 操作超时 120 秒；第三次失败向上抛错 | `Frontend/src/main/index.ts`、`Frontend/src/renderer/src/service/templateApi.ts` |
 | 页面写入 | 后端从最新正式 ProductPlan/UiDesign 推导 PageKey，只独占创建缺失占位文件 | `Backend/app/services/frontend_scaffold.py` |
 | 菜单写入 | 后端按稳定 PageKey 只追加缺失 `BIZ_MENUS` 项 | `Backend/app/services/frontend_scaffold.py` |
 | 并行编排与 manifest | 页面和菜单受控并行，单一写入者原子落盘 manifest | `Backend/app/services/application_template_generation.py` |
 | 生命周期动作 | 独立 AG-UI 动作执行 prepare 和 complete，文件任务不阻塞事件循环 | `Backend/app/protocols/application_lifecycle.py` |
-| 完成门禁 | 校验四份正式产物、manifest、模板入口、页面和菜单真实文件 | `Backend/app/services/application_lifecycle.py`、`Backend/app/services/application_template_generation.py` |
+| 完成门禁 | 校验四份正式产物、三目标 manifest、模板入口、Agent Runtime Git 来源、页面和菜单真实文件 | `Backend/app/services/application_lifecycle.py`、`Backend/app/services/application_template_generation.py` |
 | 触发边界 | 只有 TechnicalPlan 确认回调会启动 readiness；欢迎页打开、重启、进入工作台和失败态不启动 | `Frontend/src/renderer/src/components/Welcome/ApplicationPagePlanningModal.tsx`、`Frontend/src/renderer/src/pages/AppEntryPage.tsx` |
 
 ### 4.2 本轮已处理的旧问题
@@ -261,15 +265,24 @@ flowchart TD
       "failedTargets": [],
       "targets": {
         "frontend": {
+          "required": true,
           "status": "succeeded",
           "path": "frontend",
           "attempt": 1,
           "error": null
         },
         "backend": {
+          "required": true,
           "status": "succeeded",
           "path": "backend",
           "attempt": 1,
+          "error": null
+        },
+        "agentRuntime": {
+          "required": false,
+          "status": "skipped",
+          "path": "agent-runtime",
+          "attempt": 0,
           "error": null
         }
       }
@@ -309,8 +322,8 @@ flowchart TD
 
 - manifest 不包含 `apiSkeletons`。
 - manifest 不保存 ProductPlan hash、revision 或历史版本绑定。
-- status 使用 pending、running、succeeded、failed。
-- download.targets 记录每个模板的尝试次数和最终错误。
+- 步骤 status 使用 pending、running、succeeded、failed；下载目标额外支持 skipped。
+- download.targets 固定包含 frontend、backend、agentRuntime，并记录 required、尝试次数和最终错误。
 - 页面和菜单记录预期项、原有项、本次新增项和最终缺失项。
 - 页面和菜单任务不直接写 manifest，由编排器收齐两个结果后统一原子写入。
 - TechnicalPlan 确认时计算本次 expected 集合；后续打开应用不重新启动 readiness。
@@ -434,7 +447,7 @@ generating_application_template_files
 
 - 第 1 次或第 2 次下载失败、第 3 次成功时，可以继续初始化。
 - 连续 3 次下载失败时，manifest 记录 attempt = 3 和最终错误，并向上层抛错。
-- 前端或后端任一模板最终失败时，页面和菜单步骤不执行，也不能进入开发。
+- 任一 required 模板最终失败时，页面和菜单步骤不执行，也不能进入开发。
 - 已存在且有效的模板不会重复下载。
 - 非空但无法识别的目录不会被自动删除。
 - 应用重启、再次打开和进入工作台不依赖 Renderer workflow，也不会恢复或重新触发模板初始化。
@@ -449,6 +462,7 @@ generating_application_template_files
 - manifest 缺失、损坏、必需步骤未完成或真实产物缺失时，完成门禁拒绝进入开发。
 - 旧 manifest 成功或最新 ProductPlan 存在新增缺失项时，都不能直接触发模板生成；必须重新完成规划并确认 TechnicalPlan。
 - 完成门禁校验 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan、manifest、模板目录、页面和菜单。
+- Agent Runtime required 与正式 TechnicalPlan 不一致、仓库/分支/commit 不匹配或关键文件缺失时，完成门禁拒绝进入开发。
 - 模板阶段不创建、检查或修改任何业务 API 文件。
 - `_preload_api_skeletons()` 和 API 候选文件逻辑不再参与生命周期成功路径。
 - 当前 API 文件 `add/modify` 不一致明确留待后续任务处理。

@@ -10,7 +10,11 @@ import {
   APPLICATION_TEMPLATE_GENERATION_ENABLED,
   ensureApplicationTemplateReadiness
 } from '../service/templateApi'
-import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
+import type {
+  ApplicationConfig,
+  ApplicationLifecycle,
+  ApplicationPlanningConfirmation
+} from '../typings'
 
 type PlanningUpdater = (
   updater: (current: PersistedActivePlanning[]) => PersistedActivePlanning[]
@@ -27,7 +31,10 @@ type UseApplicationTemplateGenerationOptions = {
 }
 
 type ApplicationTemplateGenerationController = {
-  generateApplicationTemplateFiles: (planning: PersistedActivePlanning) => Promise<boolean>
+  generateApplicationTemplateFiles: (
+    planning: PersistedActivePlanning,
+    confirmation: ApplicationPlanningConfirmation
+  ) => Promise<boolean>
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
   generatingAppIds: ReadonlySet<string>
 }
@@ -44,7 +51,10 @@ export function useApplicationTemplateGeneration({
 
   // 为单个应用生成模板文件，并复用同一应用尚未结束的幂等任务。
   const generateApplicationTemplateFiles = useCallback(
-    (planning: PersistedActivePlanning): Promise<boolean> => {
+    (
+      planning: PersistedActivePlanning,
+      confirmation: ApplicationPlanningConfirmation
+    ): Promise<boolean> => {
       // 临时关闭模板生成时直接完成规划回调，不触发下载、初始化或生命周期结果提交。
       if (!APPLICATION_TEMPLATE_GENERATION_ENABLED) return Promise.resolve(true)
 
@@ -57,7 +67,8 @@ export function useApplicationTemplateGeneration({
         try {
           const lifecycle = await ensureApplicationTemplateReadiness(
             planning.application,
-            planning.threadId
+            planning.threadId,
+            confirmation
           )
           const confirmedApplication = {
             ...planning.application,

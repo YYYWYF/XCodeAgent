@@ -221,37 +221,122 @@ def _technical_planning_prompt(
         response_example["agent_contracts"] = [
             {
                 "agentId": example_agent_id,
-                "invocation": {"gatewayEndpointId": gateway_endpoint_id},
-                "model": {"selection": "project_default"},
+                "gatewayEndpointId": gateway_endpoint_id,
                 "capabilityBindings": [
                     {
                         "capabilityId": example_capability_id,
                         "toolIds": ["query_business_data"],
                     }
                 ],
-                "toolBindings": [
-                    {
-                        "toolId": "query_business_data",
-                        "apiContractId": contract_id,
-                        "endpointId": f"{contract_id}.list",
-                        "accessMode": "read",
-                    }
-                ],
-                "knowledgeReferences": [],
-                "session": {
-                    "supportsMultiTurn": bool(
-                        (example_agent.get("interaction") or {}).get(
-                            "supportsMultiTurn"
-                        )
-                    ),
-                    "memory": (
-                        "conversation"
-                        if (example_agent.get("interaction") or {}).get(
-                            "supportsMultiTurn"
-                        )
-                        is True
-                        else "none"
-                    ),
+                "agentSettings": {
+                    "prompt": {
+                        "persona": {
+                            "role": str(example_agent.get("name") or "业务助手"),
+                            "tone": "专业、清晰、可执行",
+                        },
+                        "systemPrompt": str(
+                            example_agent.get("purpose") or "完成已确认的业务能力。"
+                        ),
+                        "constraints": list(example_agent.get("boundaries") or []),
+                    },
+                    "model": {
+                        "selection": "project_default",
+                        "modelRef": "project_default",
+                        "requiredCapabilities": {
+                            "streaming": True,
+                            "toolCalling": True,
+                            "structuredOutput": False,
+                            "vision": False,
+                        },
+                        "generation": {"temperature": 0.2},
+                    },
+                    "memory": {
+                        "shortTerm": {
+                            "enabled": bool(
+                                (example_agent.get("interaction") or {}).get(
+                                    "supportsMultiTurn"
+                                )
+                            ),
+                            "store": (
+                                "sqlite"
+                                if (example_agent.get("interaction") or {}).get(
+                                    "supportsMultiTurn"
+                                )
+                                is True
+                                else None
+                            ),
+                            "connectionRef": (
+                                "agent_runtime_checkpoint"
+                                if (example_agent.get("interaction") or {}).get(
+                                    "supportsMultiTurn"
+                                )
+                                is True
+                                else None
+                            ),
+                            "scope": "thread",
+                            "retention": "application_managed",
+                        },
+                        "longTerm": {
+                            "enabled": False,
+                            "store": None,
+                            "connectionRef": None,
+                            "scope": "user",
+                            "writePolicy": "explicit",
+                        },
+                        "archive": {
+                            "enabled": False,
+                            "store": None,
+                            "connectionRef": None,
+                        },
+                    },
+                    "tools": {
+                        "enabled": True,
+                        "bindings": [
+                            {
+                                "toolId": "query_business_data",
+                                "name": "查询业务数据",
+                                "description": "需要读取当前业务数据时调用。",
+                                "endpointId": f"{contract_id}.list",
+                                "accessMode": "read",
+                            }
+                        ],
+                    },
+                    "skills": {
+                        "enabled": False,
+                        "loadingPolicy": "explicit_only",
+                        "bindings": [],
+                    },
+                    "knowledge": {
+                        "enabled": False,
+                        "sources": [],
+                        "retrieval": {
+                            "strategy": "semantic",
+                            "topK": 5,
+                            "scoreThreshold": 0.7,
+                            "rerank": False,
+                        },
+                        "citationPolicy": "disabled",
+                    },
+                    "context": {
+                        "sources": [
+                            {"type": "conversation", "enabled": True, "trust": "user_input"},
+                            {"type": "trusted_user_context", "enabled": True, "trust": "gateway_verified"},
+                            {"type": "tool_results", "enabled": True, "trust": "tool_output"},
+                            {"type": "knowledge_results", "enabled": False, "trust": "retrieved_content"},
+                        ],
+                        "budget": {
+                            "strategy": "model_window",
+                            "maxInputRatio": 0.7,
+                            "reserveOutputRatio": 0.2,
+                        },
+                        "compression": {
+                            "strategy": "none",
+                            "triggerRatio": None,
+                            "preserveRecentTurns": 8,
+                            "preserveSystemPrompt": True,
+                            "preserveToolCallPairs": True,
+                        },
+                    },
                 },
             }
         ]
@@ -316,7 +401,11 @@ def _technical_planning_prompt(
         "type, and required; enum fields also contain enum_values. type is one of text, long_text, "
         "number, decimal, date, datetime, enum, or boolean. Field names use snake_case.\n"
         "3. api_contracts is the interface contract collection. Each contract contains id, entity_ids, base_path, "
-        "authentication, schemas, and endpoints. entity_ids identifies every related business entity. A business "
+        "authentication, schemas, and endpoints. entity_ids identifies every related business entity and must be a "
+        "non-empty subset of the entities declared in this TechnicalPlan. This rule also applies to a separate Agent "
+        "gateway contract: prefer placing the gateway Endpoint in the Agent's related business contract; when a "
+        "separate gateway contract is required, bind it to the existing entities directly served by that Agent and "
+        "never emit an empty entity_ids array or invent a transport-only entity. A business "
         "Schema properties may use interface-specific names. Add entity_field_ref=<EntityId>.<field_name> when a "
         "property is directly sourced from an entity field; computed, aggregated, and transport properties may omit "
         "the mapping. Structural properties organize the response. A paginated list response object has exactly four "
@@ -343,16 +432,19 @@ def _technical_planning_prompt(
         "Every selected endpointId exists in api_contracts and also appears in that page's endpoint_dependencies. "
         "The page set covers every upstream ProductPlan pageId.\n"
         "5. agent_contracts is empty when ProductPlan.agents is empty. Otherwise it covers ProductPlan.agents exactly "
-        "and in order. Each item has exactly agentId, invocation, model, capabilityBindings, toolBindings, "
-        "knowledgeReferences, and session. invocation contains only gatewayEndpointId, which references a Java "
-        "gateway Endpoint in api_contracts. model is exactly {selection: project_default}. capabilityBindings covers "
-        "every ProductPlan capabilityId in order and binds it to stable toolIds. Each toolBinding contains toolId, "
-        "apiContractId, endpointId, and accessMode(read or write), and references a real non-gateway Endpoint. session "
-        "contains supportsMultiTurn copied from ProductPlan; memory is conversation only when supportsMultiTurn is "
-        "true and otherwise is none. The platform adds the "
-        "fixed Python 3.12 + DeepAgents sidecar runtime, AG-UI SSE transport, internal path, security, artifact paths, "
-        "and required checks after validating these bindings. Never replace the Java8/Springboot business backend "
-        "with Python and never let the client call the Python sidecar directly.\n"
+        "and in order. Each model item has exactly agentId, gatewayEndpointId, capabilityBindings, and agentSettings. "
+        "capabilityBindings covers every ProductPlan capabilityId in order and binds it to stable toolIds. "
+        "agentSettings has exactly prompt, model, memory, tools, skills, knowledge, and context. prompt contains "
+        "persona(role and tone), systemPrompt, and constraints. model uses project_default and declares streaming, "
+        "toolCalling, structuredOutput, and vision requirements. memory must follow the example: SQLite short-term "
+        "checkpoint only when ProductPlan supportsMultiTurn is true; long-term and archive remain disabled. tools "
+        "contains enabled and bindings; each binding has toolId, name, description, endpointId, and accessMode(read "
+        "or write), references a real non-gateway Endpoint, and uses read only for GET/HEAD/OPTIONS; other HTTP "
+        "methods use write. skills and knowledge remain disabled until their "
+        "Runtime adapters exist. context uses the fixed model-window budget and no compression. The platform expands "
+        "this candidate into a complete ProductPlan-derived Contract containing identity, capabilities, interaction, "
+        "resolved Endpoint snapshots, invocation, Python 3.12 + DeepAgents runtime, security, artifact paths, checks, "
+        "and evaluation. Never replace the Java8/Springboot backend or let the client call the sidecar directly.\n"
         "Do not emit authorization_manifest, resourceKey, roles, permission bindings, dataRules, policyKey, data-policy bindings, SQL, or executable authorization rules. The platform deterministically compiles all V1 page/action/system resources and Endpoint ANY-OF bindings after your output passes validation.\n\n"
         "Complete result example:\n"
         f"{json.dumps(response_example, ensure_ascii=False, indent=2)}\n\n"
@@ -706,7 +798,7 @@ def _technical_contract_repair_prompt(
     validation_errors: list[str],
     contract_ids: list[str],
 ) -> str:
-    """只投射失败 Contract 及其关联实体、页面动作，构造定向修复提示词。"""
+    """投射失败 Contract、候选实体及 Agent 网关关系，构造定向修复提示词。"""
 
     target_id_set = set(contract_ids)
     target_contracts = [
@@ -714,23 +806,105 @@ def _technical_contract_repair_prompt(
         for contract in existing_plan.get("api_contracts", [])
         if isinstance(contract, dict) and contract.get("id") in target_id_set
     ]
-    bound_entity_ids = {
-        str(entity_id)
-        for contract in target_contracts
-        for entity_id in contract.get("entity_ids", [])
-        if str(entity_id).strip()
-    }
-    entity_context = [
-        entity
-        for entity in existing_plan.get("entities", [])
-        if isinstance(entity, dict) and str(entity.get("id") or "") in bound_entity_ids
-    ]
     target_endpoint_ids = {
-        str(endpoint.get("id") or "")
+        str(endpoint.get("id") or "").strip()
         for contract in target_contracts
         for endpoint in contract.get("endpoints", [])
         if isinstance(endpoint, dict) and str(endpoint.get("id") or "").strip()
     }
+    endpoint_contract_index = {
+        str(endpoint.get("id") or "").strip(): contract
+        for contract in existing_plan.get("api_contracts", [])
+        if isinstance(contract, dict)
+        for endpoint in contract.get("endpoints", [])
+        if isinstance(endpoint, dict) and str(endpoint.get("id") or "").strip()
+    }
+    known_entity_ids = {
+        str(entity.get("id") or "").strip()
+        for entity in existing_plan.get("entities", [])
+        if isinstance(entity, dict) and str(entity.get("id") or "").strip()
+    }
+    bound_entity_ids = {
+        str(entity_id).strip()
+        for contract in target_contracts
+        for entity_id in (
+            contract.get("entity_ids")
+            if isinstance(contract.get("entity_ids"), list)
+            else []
+        )
+        if str(entity_id).strip()
+    }
+    related_agents: list[dict[str, Any]] = []
+    suggested_entity_ids: set[str] = set()
+    for agent_contract in existing_plan.get("agent_contracts", []):
+        if not isinstance(agent_contract, dict):
+            continue
+        invocation = (
+            agent_contract.get("invocation")
+            if isinstance(agent_contract.get("invocation"), dict)
+            else {}
+        )
+        gateway_endpoint_id = str(
+            invocation.get("gatewayEndpointId")
+            or agent_contract.get("gatewayEndpointId")
+            or ""
+        ).strip()
+        if gateway_endpoint_id not in target_endpoint_ids:
+            continue
+        settings = (
+            agent_contract.get("agentSettings")
+            if isinstance(agent_contract.get("agentSettings"), dict)
+            else {}
+        )
+        tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
+        tool_endpoint_ids: list[str] = []
+        for binding in tools.get("bindings", []):
+            if not isinstance(binding, dict):
+                continue
+            endpoint = (
+                binding.get("endpoint")
+                if isinstance(binding.get("endpoint"), dict)
+                else {}
+            )
+            endpoint_id = str(
+                endpoint.get("endpointId") or binding.get("endpointId") or ""
+            ).strip()
+            if endpoint_id and endpoint_id not in tool_endpoint_ids:
+                tool_endpoint_ids.append(endpoint_id)
+        agent_suggested_entity_ids: list[str] = []
+        for endpoint_id in tool_endpoint_ids:
+            contract = endpoint_contract_index.get(endpoint_id, {})
+            raw_entity_ids = (
+                contract.get("entity_ids")
+                if isinstance(contract.get("entity_ids"), list)
+                else []
+            )
+            for entity_id in raw_entity_ids:
+                normalized_entity_id = str(entity_id).strip()
+                if (
+                    normalized_entity_id in known_entity_ids
+                    and normalized_entity_id not in agent_suggested_entity_ids
+                ):
+                    agent_suggested_entity_ids.append(normalized_entity_id)
+                    suggested_entity_ids.add(normalized_entity_id)
+        related_agents.append(
+            {
+                "agentId": agent_contract.get("agentId"),
+                "gatewayEndpointId": gateway_endpoint_id,
+                "toolEndpointIds": tool_endpoint_ids,
+                "suggestedEntityIdsFromDeclaredTools": agent_suggested_entity_ids,
+            }
+        )
+    candidate_entity_ids = (bound_entity_ids & known_entity_ids) | suggested_entity_ids
+    if not candidate_entity_ids:
+        # 无已有绑定且 Tool 无法推导时，退回全部真实实体，让模型选择而不是继续面对空上下文。
+        candidate_entity_ids = known_entity_ids
+    entity_context = [
+        entity
+        for entity in existing_plan.get("entities", [])
+        if isinstance(entity, dict)
+        and str(entity.get("id") or "").strip() in candidate_entity_ids
+    ]
     related_page_ids = {
         str(page.get("pageId") or "")
         for page in existing_plan.get("pages", [])
@@ -750,11 +924,17 @@ def _technical_contract_repair_prompt(
         "ids, paths, and unrelated valid semantics. Resolve every schema reference inside the same contract. Decide "
         "whether a request body exists from operation semantics, not HTTP method: bodyless commands may use null "
         "request_schema_ref; operations that consume body fields must define and reference a real request schema. "
-        "Never add an empty request schema only to silence validation.\n\n"
+        "Never add an empty request schema only to silence validation. Every replacement API Contract must declare "
+        "a non-empty, duplicate-free entity_ids subset chosen only from Candidate TechnicalPlan entities. This also "
+        "applies to Agent gateway contracts. Use the related Agent and declared Tool bindings as evidence when they "
+        "exist; never invent a transport-only entity.\n\n"
         f"Requested contract ids:\n{json.dumps(contract_ids, ensure_ascii=False)}\n\n"
         f"Validation errors:\n{json.dumps(validation_errors[:12], ensure_ascii=False)}\n\n"
         f"Contracts to repair:\n{json.dumps(target_contracts, ensure_ascii=False)}\n\n"
-        f"Bound entities:\n{json.dumps(entity_context, ensure_ascii=False)}\n\n"
+        "Candidate TechnicalPlan entities:\n"
+        f"{json.dumps(entity_context, ensure_ascii=False)}\n\n"
+        "Related Agent gateway bindings:\n"
+        f"{json.dumps(related_agents, ensure_ascii=False)}\n\n"
         f"Related confirmed product actions:\n{json.dumps(product_actions, ensure_ascii=False)}\n"
     )
 

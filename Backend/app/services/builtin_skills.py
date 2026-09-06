@@ -19,6 +19,7 @@ UI_DESIGN_SKILL_NAME = "antd-ui-design"
 FRONTEND_CODE_SCAN_SKILL_NAME = "frontend-code-scan"
 BACKEND_CODE_SCAN_SKILL_NAME = "backend-code-scan"
 SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME = "springboot-template-modification-boundary"
+AGENT_RUNTIME_GENERATE_SKILL_NAME = "agent-runtime-generate"
 
 _REACT_DEV_SPEC_REFERENCE_FILES = [
     "references/00-framework-intro.md",
@@ -54,6 +55,11 @@ _SPRINGBOOT_TEMPLATE_BOUNDARY_REFERENCE_FILES = [
     "references/module-layout.md",
 ]
 
+_AGENT_RUNTIME_GENERATE_REFERENCE_FILES = [
+    "references/business-agent-module.md",
+    "references/java-tool-adapter.md",
+]
+
 REQUIRED_BUILTIN_SKILL_FILES = {
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
@@ -71,6 +77,10 @@ REQUIRED_BUILTIN_SKILL_FILES = {
     SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME: [
         "SKILL.md",
         *_SPRINGBOOT_TEMPLATE_BOUNDARY_REFERENCE_FILES,
+    ],
+    AGENT_RUNTIME_GENERATE_SKILL_NAME: [
+        "SKILL.md",
+        *_AGENT_RUNTIME_GENERATE_REFERENCE_FILES,
     ],
 }
 

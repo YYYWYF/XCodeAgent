@@ -17,12 +17,12 @@ const TECHNICAL_PLANNING_RECOVERY_KEYS: readonly PlanningArtifactRecoveryKey[] =
   'technical-plan'
 ]
 
-/** 只为明确的冷恢复返回当前阶段必需的本地产物，实时流程始终返回空集合。 */
+/** 为冷恢复或阶段切回缺少内存快照时返回当前阶段必需的本地产物。 */
 export function planningArtifactRecoveryKeys(
-  restoreFromDisk: boolean,
+  shouldRestoreFromDisk: boolean,
   phase: WorkbenchPhase
 ): readonly PlanningArtifactRecoveryKey[] {
-  if (!restoreFromDisk) return []
+  if (!shouldRestoreFromDisk) return []
   if (phase === 'product') return DESIGN_RECOVERY_KEYS
   if (phase === 'planning') return TECHNICAL_PLANNING_RECOVERY_KEYS
   return []

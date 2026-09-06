@@ -9,6 +9,7 @@ from app.agents.tool_activity_stream import (
 )
 from app.config import Settings
 from app.services.build_result_coordinator import create_agent_task_results
+from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:
@@ -39,6 +40,36 @@ def _contracts_for_tasks(
     ]
 
 
+def _api_contracts_for_agents(
+    project_plan: dict[str, Any],
+    contracts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """只投射当前 Agent Tool 实际引用的 Java API Contract 与 Schema。"""
+
+    referenced_contract_ids: set[str] = set()
+    for contract in contracts:
+        settings = (
+            contract.get("agentSettings")
+            if isinstance(contract.get("agentSettings"), dict)
+            else {}
+        )
+        tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
+        for binding in _dict_items(tools.get("bindings")):
+            endpoint = (
+                binding.get("endpoint")
+                if isinstance(binding.get("endpoint"), dict)
+                else {}
+            )
+            contract_id = str(endpoint.get("apiContractId") or "").strip()
+            if contract_id:
+                referenced_contract_ids.add(contract_id)
+    return [
+        contract
+        for contract in _dict_items(project_plan.get("api_contracts"))
+        if str(contract.get("id") or "").strip() in referenced_contract_ids
+    ]
+
+
 def _agent_runtime_generation_prompt(
     *,
     project_plan: dict[str, Any],
@@ -47,14 +78,21 @@ def _agent_runtime_generation_prompt(
     """构造只实现 Python sidecar 与 Agent Contract 的执行提示词。"""
 
     contracts = _contracts_for_tasks(project_plan, tasks)
+    api_contracts = _api_contracts_for_agents(project_plan, contracts)
     return (
         "Execute the approved Agent Runtime tasks in order. The formal Agent Contracts below "
-        "are the sole source for agentId, Python 3.12 + DeepAgents runtime, capabilityBindings, "
-        "toolBindings, model selection, session behavior, security, AG-UI SSE invocation, and "
-        "artifact paths. The shared agent:runtime bootstrap may create only the sidecar entrypoint "
-        "and dependency manifest under agent-runtime/. A per-agent task must implement exactly its "
-        "declared Agent module, API tool adapter, and test. Tool adapters call only their declared "
-        "Java API endpoints with scoped user context; the browser must never call the Python "
+        "are the sole source for the ProductPlan-derived identity, capabilities, interaction, "
+        "seven-part agentSettings, Python 3.12 + DeepAgents runtime, security, AG-UI SSE invocation, "
+        "evaluation, and artifact paths. The platform-owned Agent Runtime template is already present and must not "
+        "be modified. Each business-Agent task must implement exactly its declared Agent module, "
+        "API tool adapter, and test. First read "
+        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}agent-runtime-generate/SKILL.md. Compile agentSettings.prompt "
+        "with the locked platform rules. The template already resolves project_default through "
+        "init_chat_model and injects model, runtime_context, and checkpointer into the generated "
+        "create_agent(*, model, runtime_context, checkpointer) entry function; never initialize a "
+        "second model. Pass generated tools and the declared short-term checkpointer behavior to "
+        "create_deep_agent. Tool adapters call only their declared Java API endpoints with scoped "
+        "user context and environment-resolved service credentials; the browser must never call the Python "
         "sidecar directly. All writes must stay inside each task's allowed_paths under "
         "agent-runtime/; you must not modify frontend or Java backend, planning documents, API "
         "contracts, or task metadata. Do not install dependencies, start services, or run project "
@@ -64,6 +102,8 @@ def _agent_runtime_generation_prompt(
         "or failed), and a non-empty summary. Use failed with failure_category and failure_reason "
         "when the contract cannot be implemented in scope. Do not return markdown or free text.\n\n"
         f"Formal Agent Contracts:\n{json.dumps(contracts, ensure_ascii=False, indent=2)}\n\n"
+        "Resolved Java API Contracts for declared Tools:\n"
+        f"{json.dumps(api_contracts, ensure_ascii=False, indent=2)}\n\n"
         f"Approved tasks:\n{json.dumps(tasks, ensure_ascii=False, indent=2)}\n"
     )
 

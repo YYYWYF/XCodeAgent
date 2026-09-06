@@ -69,17 +69,21 @@ class BuildUnitSkeletonTests(unittest.TestCase):
                     "invocation": {
                         "gatewayEndpointId": "customers.list",
                     },
-                    "toolBindings": [
-                        {
-                            "toolId": "query_orders",
-                            "apiContractId": "orders-api",
-                            "endpointId": "orders.list",
-                            "accessMode": "read",
+                    "agentSettings": {
+                        "tools": {
+                            "enabled": True,
+                            "bindings": [
+                                {
+                                    "toolId": "query_orders",
+                                    "accessMode": "read",
+                                    "endpoint": {"endpointId": "orders.list"},
+                                }
+                            ],
                         }
-                    ],
+                    },
                     "artifacts": {
-                        "agentPath": "agent-runtime/agents/inventory_assistant.py",
-                        "toolAdapterPath": "agent-runtime/tools/inventory_assistant_tools.py",
+                        "agentPath": "agent-runtime/src/app/agent/inventory_assistant.py",
+                        "toolAdapterPath": "agent-runtime/src/app/tools/inventory_assistant_tools.py",
                         "testPath": "agent-runtime/tests/test_inventory_assistant.py",
                     },
                 }

@@ -25,6 +25,7 @@ import {
   type EditorMode,
   type WorkbenchPhase
 } from './stageSessions'
+import { gitRepositoriesEquivalent, templateCloneAttempts } from './templateRepository'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -852,10 +853,7 @@ function registerTemplateCloneProcess(workspaceRoot: string, child: ChildProcess
 }
 
 /** 向模板下载的完整进程树发送停止信号，避免 git 派生进程继续写目标目录。 */
-async function signalTemplateCloneProcessTree(
-  child: ChildProcess,
-  force: boolean
-): Promise<void> {
+async function signalTemplateCloneProcessTree(child: ChildProcess, force: boolean): Promise<void> {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
     await new Promise<void>((resolve, reject) => {
@@ -1403,9 +1401,7 @@ async function createChatSession(
   const entryKey = stage
     ? normalizeSessionEndpointField(inputValue.entryKey) || `session:${crypto.randomUUID()}`
     : undefined
-  const recoveryExecutionRunId = normalizeSessionEndpointField(
-    inputValue.recoveryExecutionRunId
-  )
+  const recoveryExecutionRunId = normalizeSessionEndpointField(inputValue.recoveryExecutionRunId)
   const lockKey = `${pathComparisonKey(workspaceRoot)}:${workflowId}:${stage || workbenchPhase}`
 
   return withStageSessionCreationLock(lockKey, async () => {
@@ -1419,8 +1415,7 @@ async function createChatSession(
       )
       if (existing) {
         const identityMatches =
-          existing.editorMode === editorMode &&
-          existing.workbenchPhase === workbenchPhase
+          existing.editorMode === editorMode && existing.workbenchPhase === workbenchPhase
         if (!identityMatches) throw new Error('entryKey is already bound to another phase session')
         return existing
       }
@@ -1453,15 +1448,13 @@ async function createChatSession(
         activeExecutions && isJsonRecord(activeExecutions[recoveryExecutionRunId])
           ? activeExecutions[recoveryExecutionRunId]
           : undefined
-      const activeTarget = activeRevision && isJsonRecord(activeRevision.target)
-        ? activeRevision.target
-        : undefined
-      const technicalPlanSha256 = normalizeSessionEndpointField(
-        activeRevision?.technicalPlanSha256
-      )
-      const expectedEntryKey = revisionContext?.changeId && technicalPlanSha256
-        ? `revision-development:${revisionContext.changeId}:${technicalPlanSha256}`
-        : ''
+      const activeTarget =
+        activeRevision && isJsonRecord(activeRevision.target) ? activeRevision.target : undefined
+      const technicalPlanSha256 = normalizeSessionEndpointField(activeRevision?.technicalPlanSha256)
+      const expectedEntryKey =
+        revisionContext?.changeId && technicalPlanSha256
+          ? `revision-development:${revisionContext.changeId}:${technicalPlanSha256}`
+          : ''
       const executionStatus = normalizeSessionEndpointField(execution?.status) || ''
       const executionScope = normalizeSessionEndpointField(execution?.scope)
       const executionTargetId = normalizeSessionEndpointField(execution?.targetId)
@@ -1634,13 +1627,16 @@ function setupWorkspaceIpc(): void {
     }
   })
 
+  type TemplateBranch = 'main' | 'auth' | 'master'
+
   type TemplateCloneTargetResult = {
-    status: 'succeeded' | 'failed' | 'pending'
+    required: boolean
+    status: 'succeeded' | 'failed' | 'pending' | 'skipped'
     attempt: number
     path: string
     error?: string
     repositoryUrl?: string
-    branch?: 'main' | 'auth'
+    branch?: TemplateBranch
     commitSha?: string
   }
 
@@ -1649,22 +1645,31 @@ function setupWorkspaceIpc(): void {
     targetDir: string,
     targetDirName: string
   ): Promise<boolean> {
-    const markers =
+    const requiredMarkers =
       targetDirName === 'frontend'
-        ? ['package.json']
-        : ['pom.xml', 'build.gradle', 'build.gradle.kts']
-    for (const marker of markers) {
-      if (await lstatIfPresent(path.join(targetDir, marker))) return true
+        ? [['package.json']]
+        : targetDirName === 'agent-runtime'
+          ? [['pyproject.toml'], ['uv.lock'], ['src/app/main.py']]
+          : [['pom.xml', 'build.gradle', 'build.gradle.kts']]
+    for (const alternatives of requiredMarkers) {
+      let found = false
+      for (const marker of alternatives) {
+        if (await lstatIfPresent(path.join(targetDir, marker))) {
+          found = true
+          break
+        }
+      }
+      if (!found) return false
     }
-    return false
+    return true
   }
 
-  /** 拉取单个模板仓库；已有有效目录直接复用，失败时最多尝试三次。 */
+  /** 拉取单个模板仓库；GitHub HTTPS 首次不可达时尝试等价 SSH，整体最多尝试三次。 */
   async function cloneGitRepo(
     templateUrl: string,
     projectPath: string,
     targetDirName: string,
-    templateBranch: 'main' | 'auth'
+    templateBranch: TemplateBranch
   ): Promise<TemplateCloneTargetResult> {
     const targetDir = path.join(projectPath, targetDirName)
     await fs.mkdir(path.dirname(targetDir), { recursive: true })
@@ -1678,6 +1683,7 @@ function setupWorkspaceIpc(): void {
       const entries = existing.isDirectory() ? await fs.readdir(targetDir) : ['occupied']
       if (entries.length > 0) {
         return {
+          required: true,
           status: 'failed',
           attempt: 0,
           path: targetDir,
@@ -1687,19 +1693,30 @@ function setupWorkspaceIpc(): void {
     }
 
     let cloneError: Error | null = null
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const cloneAttempts = templateCloneAttempts(templateUrl)
+    for (let attempt = 1; attempt <= cloneAttempts.length; attempt += 1) {
+      const cloneAttempt = cloneAttempts[attempt - 1]
       try {
         await removeDirectoryIfPresent(targetDir)
       } catch (error) {
         cloneError = error instanceof Error ? error : new Error(String(error))
-        if (attempt === 3) break
+        if (attempt === cloneAttempts.length) break
         continue
       }
       try {
         await new Promise<void>((resolve, reject) => {
           const child = spawn(
             'git',
-            ['clone', '--branch', templateBranch, '--single-branch', '--depth', '1', templateUrl, targetDir],
+            [
+              'clone',
+              '--branch',
+              templateBranch,
+              '--single-branch',
+              '--depth',
+              '1',
+              cloneAttempt.repositoryUrl,
+              targetDir
+            ],
             {
               detached: process.platform !== 'win32',
               windowsHide: true,
@@ -1727,16 +1744,24 @@ function setupWorkspaceIpc(): void {
             void signalTemplateCloneProcessTree(child, true).catch((error) =>
               finish(error instanceof Error ? error : new Error(String(error)))
             )
-          }, 120_000)
+          }, cloneAttempt.timeoutMs)
           child.stderr?.on('data', (chunk) => {
             if (stderr.length < 10 * 1024 * 1024) stderr += String(chunk)
           })
           child.once('error', (error) => finish(error))
           child.once('close', (code) => {
             if (timedOut) {
-              finish(new Error(`git clone 超时：${stderr.trim() || '120 秒内未完成'}`))
+              finish(
+                new Error(
+                  `git clone 超时（${cloneAttempt.repositoryUrl}）：${stderr.trim() || `${cloneAttempt.timeoutMs / 1000} 秒内未完成`}`
+                )
+              )
             } else if (code !== 0) {
-              finish(new Error(`git clone 失败（exit ${code ?? 'unknown'}）：${stderr.trim()}`))
+              finish(
+                new Error(
+                  `git clone 失败（${cloneAttempt.repositoryUrl}，exit ${code ?? 'unknown'}）：${stderr.trim()}`
+                )
+              )
             } else {
               finish()
             }
@@ -1746,7 +1771,13 @@ function setupWorkspaceIpc(): void {
           throw new Error(`git clone 完成，但 ${targetDirName} 模板缺少工程入口文件。`)
         }
         cloneError = null
-        return readExistingTemplateSource(targetDir, targetDirName, templateUrl, templateBranch, attempt)
+        return readExistingTemplateSource(
+          targetDir,
+          targetDirName,
+          templateUrl,
+          templateBranch,
+          attempt
+        )
       } catch (error) {
         cloneError = error instanceof Error ? error : new Error(String(error))
       }
@@ -1762,6 +1793,7 @@ function setupWorkspaceIpc(): void {
       )
     }
     return {
+      required: true,
       status: 'failed',
       attempt: 3,
       path: targetDir,
@@ -1774,18 +1806,23 @@ function setupWorkspaceIpc(): void {
     targetDir: string,
     targetDirName: string,
     expectedUrl: string,
-    expectedBranch: 'main' | 'auth',
+    expectedBranch: TemplateBranch,
     attempt = 0
   ): Promise<TemplateCloneTargetResult> {
     const readGit = (args: string[]): Promise<string> =>
       new Promise((resolve, reject) => {
-        execFile('git', ['-C', targetDir, ...args], { windowsHide: true }, (error, stdout, stderr) => {
-          if (error) {
-            reject(new Error(`${targetDirName} 模板来源无法验证：${stderr || error.message}`))
-            return
+        execFile(
+          'git',
+          ['-C', targetDir, ...args],
+          { windowsHide: true },
+          (error, stdout, stderr) => {
+            if (error) {
+              reject(new Error(`${targetDirName} 模板来源无法验证：${stderr || error.message}`))
+              return
+            }
+            resolve(stdout.trim())
           }
-          resolve(stdout.trim())
-        })
+        )
       })
     try {
       const [repositoryUrl, branch, commitSha] = await Promise.all([
@@ -1793,14 +1830,27 @@ function setupWorkspaceIpc(): void {
         readGit(['branch', '--show-current']),
         readGit(['rev-parse', 'HEAD'])
       ])
-      if (repositoryUrl !== expectedUrl || branch !== expectedBranch || !commitSha) {
+      if (
+        !gitRepositoriesEquivalent(repositoryUrl, expectedUrl) ||
+        branch !== expectedBranch ||
+        !commitSha
+      ) {
         throw new Error(
           `${targetDirName} 模板来源不匹配：期望 ${expectedUrl}@${expectedBranch}，实际 ${repositoryUrl || 'unknown'}@${branch || 'detached'}。`
         )
       }
-      return { status: 'succeeded', attempt, path: targetDir, repositoryUrl, branch: expectedBranch, commitSha }
+      return {
+        required: true,
+        status: 'succeeded',
+        attempt,
+        path: targetDir,
+        repositoryUrl,
+        branch: expectedBranch,
+        commitSha
+      }
     } catch (error) {
       return {
+        required: true,
         status: 'failed',
         attempt,
         path: targetDir,
@@ -1809,13 +1859,16 @@ function setupWorkspaceIpc(): void {
     }
   }
 
-  // 从远程模板仓库拉取前后端模板工程，放到 <项目位置>/frontend/ 和 <项目位置>/backend/ 下。
+  // 从远程模板仓库拉取必需模板，Agent Runtime 按已确认 TechnicalPlan 条件式下载。
   ipcMain.handle('workspace:clone-template', async (_event, payload = {}) => {
     if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
       throw new Error('projectPath must be a non-empty string')
     }
     if (typeof payload.appName !== 'string' || !payload.appName.trim()) {
       throw new Error('appName must be a non-empty string')
+    }
+    if (typeof payload.agentRuntimeRequired !== 'boolean') {
+      throw new Error('agentRuntimeRequired must be a boolean')
     }
     const frontendUrl =
       typeof payload.frontendTemplateUrl === 'string' && payload.frontendTemplateUrl.trim()
@@ -1825,6 +1878,10 @@ function setupWorkspaceIpc(): void {
       typeof payload.backendTemplateUrl === 'string' && payload.backendTemplateUrl.trim()
         ? payload.backendTemplateUrl.trim()
         : 'https://github.com/Hupy2118/springboot-template.git'
+    const agentRuntimeUrl =
+      typeof payload.agentRuntimeTemplateUrl === 'string' && payload.agentRuntimeTemplateUrl.trim()
+        ? payload.agentRuntimeTemplateUrl.trim()
+        : 'https://github.com/Bettetman/agent-runtime-template.git'
 
     const projectPath = path.resolve(payload.projectPath)
     const applicationConfig = await readManagedWorkspaceApplication(projectPath)
@@ -1834,20 +1891,38 @@ function setupWorkspaceIpc(): void {
     const backend =
       frontend.status === 'failed'
         ? {
+            required: true,
             status: 'pending' as const,
             attempt: 0,
             path: path.join(projectPath, 'backend'),
             error: '前端模板下载失败，后端模板尚未开始下载。'
           }
         : await cloneGitRepo(backendUrl, projectPath, 'backend', templateBranch)
-    const failedTargets = (['frontend', 'backend'] as const).filter(
-      (target) => ({ frontend, backend })[target].status === 'failed'
+    const agentRuntime = !payload.agentRuntimeRequired
+      ? {
+          required: false,
+          status: 'skipped' as const,
+          attempt: 0,
+          path: path.join(projectPath, 'agent-runtime')
+        }
+      : backend.status !== 'succeeded'
+        ? {
+            required: true,
+            status: 'pending' as const,
+            attempt: 0,
+            path: path.join(projectPath, 'agent-runtime'),
+            error: '前置模板下载失败，Agent Runtime 模板尚未开始下载。'
+          }
+        : await cloneGitRepo(agentRuntimeUrl, projectPath, 'agent-runtime', 'master')
+    const targets = { frontend, backend, agentRuntime }
+    const failedTargets = (['frontend', 'backend', 'agentRuntime'] as const).filter(
+      (target) => targets[target].status === 'failed'
     )
     return {
       ok: failedTargets.length === 0,
       status: failedTargets.length === 0 ? 'succeeded' : 'failed',
       failedTargets,
-      targets: { frontend, backend }
+      targets
     }
   })
 }

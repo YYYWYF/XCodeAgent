@@ -338,16 +338,16 @@ def _planning_algorithm_section(
     if agent_units:
         if "agent:runtime" in agent_units:
             rules.append(
-                "Emit exactly one `agent:runtime::bootstrap` task with unit_id `agent:runtime`, "
-                "owner `agent`, task_type `agent.code`, and paths only under `agent-runtime/`. "
-                "It creates or updates the Python 3.12 sidecar entrypoint and pyproject dependency manifest."
+                "Do not emit a Build task for `agent:runtime`. The platform has already downloaded "
+                "and deterministically validated the Python 3.12 + DeepAgents template before "
+                "Build planning; business tasks must not rewrite its shared infrastructure."
             )
         rules.append(
-            "For every `agent:<agentId>` Unit except `agent:runtime`, emit exactly one "
+            "For every business `agent:<agentId>` Unit, emit exactly one "
             "`agent:<agentId>::implementation` task with owner `agent` and task_type `agent.code`. "
             "Its change_scope and `agent.runtime` deliverable must use exactly the Agent Contract "
-            "artifacts.agentPath, toolAdapterPath, and testPath. Implement capabilityBindings and "
-            "toolBindings without changing the formal contract."
+            "artifacts.agentPath, toolAdapterPath, and testPath. Implement capabilities and the "
+            "seven-part agentSettings without changing the formal contract."
         )
         rules.append(
             "For each Java backend Endpoint referenced as an Agent Contract "

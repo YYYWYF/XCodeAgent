@@ -1036,6 +1036,11 @@ def _task_semantic_errors(
         if owner == "agent":
             if task_type != "agent.code":
                 errors.append(f"Task {task_id} is agent owner but task_type is {task_type}.")
+            if unit_id == "agent:runtime":
+                errors.append(
+                    f"Task {task_id} must not target platform-owned agent:runtime; "
+                    "template readiness is completed before Build planning."
+                )
             outside_agent_runtime = [
                 path for path in paths if not path.startswith("agent-runtime/")
             ]
