@@ -50,8 +50,12 @@ class GlobalRepairDecision(FrozenPlanningModel):
         return self
 
 
-def _decision(issues: Sequence[ValidationIssue]) -> GlobalRepairDecision:
-    """按完整 Issue 集合生成一次纯决策，不接收或消耗 Global round。"""
+def aggregate_global_repair_decision(issues: Sequence[ValidationIssue]) -> GlobalRepairDecision:
+    """聚合受信检查已归因的完整 Issues，不重新归因或消耗 Global round。
+
+    Candidate completeness 可直接提交全部缺失 Issues；完整 DAG 检查必须先经
+    attribute_global_issues 核验来源，不能把模型或未归因的问题直接交给本入口。
+    """
 
     unique = dedupe_issues(issues)
     retryable = bool(unique) and all(issue.retryable for issue in unique)
@@ -133,7 +137,7 @@ def attribute_global_issues(
         )]
     if blockers:
         # 输入无法验证时原有目标也失去可信身份，保留诊断并清空这些目标。
-        return _decision([*blockers, *[
+        return aggregate_global_repair_decision([*blockers, *[
             issue.model_copy(update={"retryable": False, "retry_unit_ids": ()})
             for issue in checked_issues
         ]])
@@ -141,4 +145,4 @@ def attribute_global_issues(
     for record in facts.task_provenance:
         by_task.setdefault(record.task_id, []).append(record)
     attributed = [_attribute_issue(issue, by_task) for issue in checked_issues]
-    return _decision(_reject_conflicting_attributions(attributed))
+    return aggregate_global_repair_decision(_reject_conflicting_attributions(attributed))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Annotated, Literal
 
 from pydantic import BeforeValidator, Field, StringConstraints, model_validator
@@ -9,11 +10,124 @@ from pydantic import BeforeValidator, Field, StringConstraints, model_validator
 from app.services.build_task_reuse_contracts import ReuseFacts
 from app.services.planning_frozen import FrozenPlanningModel, tuple_input
 from app.services.planning_issues import ValidationIssue, dedupe_issues
+from app.services.planning_run_contracts import UnitRunState
 from app.services.unit_generation_contracts import CandidateAttempt
 
 
 _Id = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
 _Ids = Annotated[tuple[_Id, ...], BeforeValidator(tuple_input)]
+_Issues = Annotated[tuple[ValidationIssue, ...], BeforeValidator(tuple_input)]
+
+
+class CandidateCompletenessResult(FrozenPlanningModel):
+    """generation round Barrier 后的 Candidate 齐全性结论。"""
+
+    complete: bool
+    ready_unit_ids: _Ids
+    missing_unit_ids: _Ids
+    issues: _Issues
+
+    @model_validator(mode="after")
+    def validate_completeness(self) -> CandidateCompletenessResult:
+        """强制 ready/missing 分离，并让每个缺失 Unit 都有唯一可归因 Issue。"""
+
+        ready = set(self.ready_unit_ids)
+        missing = set(self.missing_unit_ids)
+        if (
+            len(ready) != len(self.ready_unit_ids)
+            or len(missing) != len(self.missing_unit_ids)
+            or ready & missing
+        ):
+            raise ValueError("Candidate completeness 的 ready/missing Unit 必须唯一且互斥。")
+        if self.complete != (not missing) or bool(self.issues) != bool(missing):
+            raise ValueError("complete、missing_unit_ids 与 issues 必须表达同一完整性结论。")
+        issue_targets: list[str] = []
+        for issue in self.issues:
+            if (
+                issue.code != "GLOBAL_CANDIDATE_MISSING"
+                or issue.level != "global"
+                or issue.category != "generation"
+                or not issue.retryable
+                or len(issue.retry_unit_ids) != 1
+                or issue.unit_ids != issue.retry_unit_ids
+            ):
+                raise ValueError("Candidate 缺失 Issue 必须可归因到唯一 generation Unit。")
+            issue_targets.extend(issue.retry_unit_ids)
+        if sorted(issue_targets) != sorted(missing):
+            raise ValueError("Candidate 缺失 Issues 必须精确覆盖 missing_unit_ids。")
+        return self
+
+
+def _missing_candidate_issue(unit: UnitRunState) -> ValidationIssue:
+    """把 round_exhausted 转成后续 Global 决策可按 Unit 消费的问题。"""
+
+    return ValidationIssue(
+        code="GLOBAL_CANDIDATE_MISSING",
+        level="global",
+        category="generation",
+        unit_ids=(unit.unit_id,),
+        task_ids=(),
+        retry_unit_ids=(unit.unit_id,),
+        retryable=True,
+        message=f"Unit {unit.unit_id} 本轮未产生有效 Candidate。",
+        details={
+            "generation_round": unit.generation_round,
+            "generation_status": unit.generation_status,
+        },
+    )
+
+
+def check_candidate_completeness(
+    unit_states: Mapping[str, UnitRunState],
+) -> CandidateCompletenessResult:
+    """在 generation round Barrier 后检查全部生成 Unit 的 Candidate。
+
+    reuse_only、prerequisite_only 和 structural_only 不要求 Candidate；model 与
+    deterministic Unit 都必须到达 candidate_ready。调用方若传入尚未结束本轮的生成
+    Unit，说明 Barrier 尚未满足，本函数拒绝把暂时等待误报成 Candidate 缺失。
+    """
+
+    if not isinstance(unit_states, Mapping):
+        raise TypeError("Candidate completeness 必须接收 UnitRunState mapping。")
+    units: list[UnitRunState] = []
+    for key, value in unit_states.items():
+        unit = UnitRunState.model_validate(value)
+        if key != unit.unit_id:
+            raise ValueError("UnitRunState mapping key 必须与 unit_id 一致。")
+        units.append(unit)
+
+    planned = [
+        unit
+        for unit in units
+        if unit.generation_strategy in {"model", "deterministic"}
+    ]
+    waiting = sorted(
+        unit.unit_id
+        for unit in planned
+        if unit.generation_status not in {"candidate_ready", "round_exhausted"}
+    )
+    if waiting:
+        raise ValueError(
+            "Generation round Barrier 尚未满足：" + ", ".join(waiting)
+        )
+
+    ready = tuple(sorted(
+        unit.unit_id
+        for unit in planned
+        if unit.generation_status == "candidate_ready"
+    ))
+    missing_units = tuple(sorted(
+        (unit for unit in planned if unit.generation_status == "round_exhausted"),
+        key=lambda unit: unit.unit_id,
+    ))
+    missing = tuple(unit.unit_id for unit in missing_units)
+    issues = tuple(_missing_candidate_issue(unit) for unit in missing_units)
+    return CandidateCompletenessResult(
+        complete=not missing,
+        ready_unit_ids=ready,
+        missing_unit_ids=missing,
+        issues=issues,
+    )
 
 
 class TaskProvenance(FrozenPlanningModel):

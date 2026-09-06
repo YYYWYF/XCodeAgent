@@ -1,5 +1,7 @@
 """平台确定性 Unit 候选正文构造，不调用模型、不分配 Attempt、不读写工作区。"""
 
+from collections.abc import Mapping, Sequence
+import re
 from typing import Any
 
 from app.services.authorization_resource_catalog import (
@@ -13,6 +15,27 @@ from app.services.unit_generation_requirements_contracts import (
 
 AUTH_GUARD_UNIT_ID = "frontend:auth-guard"
 AUTH_RESOURCES_PATH = "frontend/src/constants/resources.ts"
+
+
+def is_deterministic_auth_resource_task(task: Mapping[str, Any], paths: Sequence[str]) -> bool:
+    """供新 Assembly 门禁识别精确平台资源任务，包括 append-only 保留的历史指纹。
+
+    仅识别 builder 的稳定身份、executor、资源 capability 与唯一写入路径；模型 Candidate
+    仍须经过 Local 的平台字段禁写检查，不能仅凭自报标记获得平台身份。
+    """
+
+    task_id = task.get("id")
+    if not isinstance(task_id, str) or re.fullmatch(r"frontend-auth-resources-[0-9a-f]{64}", task_id) is None:
+        return False
+    capability = f"frontend.auth.resources:{task_id.removeprefix('frontend-auth-resources-')}"
+    provided = task.get("provides_capabilities")
+    return (
+        task.get("unit_id") == AUTH_GUARD_UNIT_ID and task.get("owner") == "frontend"
+        and task.get("execution_strategy") == "deterministic"
+        and task.get("platform_executor") == "authorization.frontend_resources"
+        and isinstance(provided, (list, tuple)) and capability in provided
+        and set(paths) == {AUTH_RESOURCES_PATH}
+    )
 
 
 def _invalid_input(message: str) -> None:

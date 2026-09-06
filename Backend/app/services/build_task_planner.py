@@ -28,6 +28,7 @@ from app.services.build_unit_compiler import (
     apply_unit_compilation,
 )
 from app.services.task_scheduler import annotate_task_execution, build_execution_batches
+from app.services.deterministic_unit_candidates import is_deterministic_auth_resource_task
 
 
 logger = logging.getLogger(__name__)
@@ -1001,6 +1002,7 @@ def _task_semantic_errors(
                 task,
                 paths=paths,
                 template_variant=str(build_context.get("template_variant") or "main"),
+                allow_deterministic_auth_resources=build_context.get("_compile_auth_capability_dependencies") is True,
             )
         )
         if validate_task_scope and required_unit_ids and unit_id not in required_unit_ids:
@@ -1125,6 +1127,7 @@ def _template_boundary_errors(
     *,
     paths: list[str],
     template_variant: str,
+    allow_deterministic_auth_resources: bool = False,
 ) -> list[str]:
     """按模板变体报告职责越界，不修改候选任务以掩盖规划错误。"""
 
@@ -1159,7 +1162,9 @@ def _template_boundary_errors(
         errors.append(
             f"Task {task_id} is platform-owned and must not be emitted by the model."
         )
-    elif registry_paths & _FRONTEND_ROUTE_REGISTRY_PATHS:
+    elif registry_paths & _FRONTEND_ROUTE_REGISTRY_PATHS and not (
+        allow_deterministic_auth_resources and is_deterministic_auth_resource_task(task, paths)
+    ):
         errors.append(
             f"Task {task_id} must not modify frontend route registry files: "
             f"{', '.join(sorted(registry_paths & _FRONTEND_ROUTE_REGISTRY_PATHS))}."
