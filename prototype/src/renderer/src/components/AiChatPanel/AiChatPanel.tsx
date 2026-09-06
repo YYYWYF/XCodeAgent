@@ -454,16 +454,6 @@ function completeAcceptanceExecution(
   }
 }
 
-/** 为页面或接口生成稳定的前端目标键，隔离各目标的临时交互状态。 */
-function detailTargetKey(target: ActiveDetailTarget): string {
-  if (target.type === 'page') return pageDetailTargetKey(target.pageId)
-  if (target.type === 'agent') return agentArtifactId(target.agentId)
-  if (target.type === 'endpoint') {
-    return endpointDetailTargetKey(target.apiContractId, target.endpointId)
-  }
-  return ''
-}
-
 /** 从开发 Workflow 快照解析本轮真正交付的产物，避免按当前目录选中项误推进。 */
 function developmentWorkflowArtifactId(workflow?: WorkflowRunPayload): string {
   if (!workflow) return ''

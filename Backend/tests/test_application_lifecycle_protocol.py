@@ -132,10 +132,11 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
             state = create_application_lifecycle(application_id="app-1", application_name="任务中心")
             route = [
                 ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-                ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-                ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
                 ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
@@ -155,6 +156,16 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                         "schema_version": "product-plan.v6",
                         "confirmation_status": "confirmed",
                         "pages": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (workspace / ".xcodeagent/plans/technical-plan.json").write_text(
+                json.dumps(
+                    {
+                        "artifact_type": "technical-plan",
+                        "confirmation_status": "confirmed",
+                        "agent_contracts": [],
                     }
                 ),
                 encoding="utf-8",
@@ -189,16 +200,24 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                                 "failedTargets": [],
                                 "targets": {
                                     "frontend": {
+                                        "required": True,
                                         "status": "succeeded",
                                         "attempt": 0,
                                         "path": str(workspace / "frontend"),
                                         "branch": "auth",
                                     },
                                     "backend": {
+                                        "required": True,
                                         "status": "succeeded",
                                         "attempt": 0,
                                         "path": str(workspace / "backend"),
                                         "branch": "auth",
+                                    },
+                                    "agentRuntime": {
+                                        "required": False,
+                                        "status": "skipped",
+                                        "attempt": 0,
+                                        "path": str(workspace / "agent-runtime"),
                                     },
                                 },
                             },

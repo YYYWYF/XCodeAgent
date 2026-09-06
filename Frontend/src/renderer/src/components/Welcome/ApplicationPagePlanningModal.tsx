@@ -572,24 +572,25 @@ export default function ApplicationPagePlanningModal({
               confirmedImpact: { interactionId: designRevision.impact.interactionId }
             }
           : undefined,
-        workflowDebug: interaction || designRevision
-          ? undefined
-          : {
-              enabled: true,
-              resumeFrom:
-                initialLifecycle.initialization.stage === 'generating_technical_plan' ||
-                initialLifecycle.initialization.stage === 'awaiting_technical_plan_confirmation'
-                  ? 'technical_planning'
-                  : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
-                      initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
-                    ? 'ui_confirmation'
-                    : initialLifecycle.initialization.stage ===
-                          'generating_requirement_document' ||
-                        initialLifecycle.initialization.stage ===
-                          'awaiting_requirement_document_confirmation'
-                      ? 'product_planning'
-                      : 'requirements'
-            },
+        workflowDebug:
+          interaction || designRevision
+            ? undefined
+            : {
+                enabled: true,
+                resumeFrom:
+                  initialLifecycle.initialization.stage === 'generating_technical_plan' ||
+                  initialLifecycle.initialization.stage === 'awaiting_technical_plan_confirmation'
+                    ? 'technical_planning'
+                    : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
+                        initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
+                      ? 'ui_confirmation'
+                      : initialLifecycle.initialization.stage ===
+                            'generating_requirement_document' ||
+                          initialLifecycle.initialization.stage ===
+                            'awaiting_requirement_document_confirmation'
+                        ? 'product_planning'
+                        : 'requirements'
+              },
         workflowScope: 'application_planning',
         workspaceRoot: application.workspaceRoot,
         onContent: (content) => {
@@ -613,7 +614,11 @@ export default function ApplicationPagePlanningModal({
         console.log('[poll-diag] sendMessage-done', {
           status: result.workflow.summary?.status,
           phase: result.workflow.summary?.phase,
-          pages: (result.workflow.summary?.clarification as { pages?: Array<{ pageId?: string; status?: string }> } | undefined)?.pages?.map((p) => [p.pageId, p.status])
+          pages: (
+            result.workflow.summary?.clarification as
+              | { pages?: Array<{ pageId?: string; status?: string }> }
+              | undefined
+          )?.pages?.map((p) => [p.pageId, p.status])
         })
         const mergedWorkflow = handleWorkflowChange(result.workflow)
         // sendMessage 完整结束后才把待输入/终态发布到工作台；此时 checkpoint 已稳定。
@@ -634,7 +639,8 @@ export default function ApplicationPagePlanningModal({
       // [poll-diag] sendMessage 抛错
       // eslint-disable-next-line no-console
       console.log('[poll-diag] sendMessage-error', {
-        runToken, hadInteraction: Boolean(interaction),
+        runToken,
+        hadInteraction: Boolean(interaction),
         error: String(reason).slice(0, 120)
       })
       console.error('[planning-modal] runPlanning error', reason)
@@ -758,9 +764,7 @@ export default function ApplicationPagePlanningModal({
         lastError = reason
       }
     }
-    throw lastError instanceof Error
-      ? lastError
-      : new Error('读取待确认规划状态失败，请重试。')
+    throw lastError instanceof Error ? lastError : new Error('读取待确认规划状态失败，请重试。')
   }
 
   // 提交当前确认卡答案，并用服务端中断标识精确恢复同一个审阅门。
@@ -787,10 +791,7 @@ export default function ApplicationPagePlanningModal({
         requirementSpecFeedback,
         designChangeRequest
       )
-      await runPlanning(
-        designChangeRequest?.trim() || '请根据本轮确认继续创建规划。',
-        interaction
-      )
+      await runPlanning(designChangeRequest?.trim() || '请根据本轮确认继续创建规划。', interaction)
     } catch (reason) {
       setError(formatError(reason, designChangeRequest ? '设计变更提交失败' : '创建规划确认失败'))
       throw reason
@@ -842,9 +843,17 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
-  // 规划流程失败时只允许重跑尚未进入模板阶段的规划，不重试已确认的 TechnicalPlan。
+  // 模板失败时只重试 readiness；其他失败才恢复或重跑当前规划。
   const retryAfterFailure = async (): Promise<void> => {
     const confirmation = workflowConfirmation(workflow)
+    if (
+      confirmation &&
+      initialLifecycle.initialization.stage === 'application_template_generation_failed'
+    ) {
+      setError('')
+      await completePlanning(confirmation)
+      return
+    }
     if (confirmation) return
     if (initialLifecycle.initialization.status === 'awaiting_user') {
       await recoverPlanning()
@@ -861,7 +870,8 @@ export default function ApplicationPagePlanningModal({
 
   // 把 design revision 起始动作注册给应用根部；始终通过当前 Modal 持有的原 planning
   // session/thread 恢复 Graph，后续确认继续复用同一个 runPlanning 入口。
-  const startDesignRevisionRef = useRef<(input: WorkflowDesignStageRevisionStart) => Promise<void>>()
+  const startDesignRevisionRef =
+    useRef<(input: WorkflowDesignStageRevisionStart) => Promise<void>>()
   startDesignRevisionRef.current = async (input) => {
     // 影响范围确认本身已经通过结构化 action 完成；这里仅把原始修改请求作为
     // AG-UI 协议消息传给服务端，首节点由服务端 lifecycle/Graph 决定，不能再用
@@ -869,7 +879,9 @@ export default function ApplicationPagePlanningModal({
     await runPlanning(input.request, undefined, input)
   }
   useEffect(() => {
-    onStartDesignRevisionChange((input) => startDesignRevisionRef.current?.(input) || Promise.resolve())
+    onStartDesignRevisionChange(
+      (input) => startDesignRevisionRef.current?.(input) || Promise.resolve()
+    )
     return () => onStartDesignRevisionChange(null)
     // 注册句柄只绑定当前 Modal 实例，响应式输入通过 ref 读取最新值。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -921,7 +933,12 @@ export default function ApplicationPagePlanningModal({
           {error ? (
             <AgentErrorCard
               error={error}
-              onRetry={workflowConfirmation(workflow) ? undefined : () => void retryAfterFailure()}
+              onRetry={
+                workflowConfirmation(workflow) &&
+                initialLifecycle.initialization.stage !== 'application_template_generation_failed'
+                  ? undefined
+                  : () => void retryAfterFailure()
+              }
               retrying={running}
             />
           ) : (

@@ -22,6 +22,7 @@ from app.services.build_task_confirmation import (
 )
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.development_readiness import development_readiness
+from app.services.agent_development_readiness import inspect_agent_development_readiness
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     frontend_endpoint_implementation_owners,
@@ -692,6 +693,16 @@ def _build_prerequisite_errors(
                 errors.append(f"EntitySourceBinding 未完成：{missing}。")
         except ValueError as exc:
             errors.append(str(exc))
+    elif target_type == "agent" and target_id:
+        if not workspace:
+            errors.append("缺少 workspace，无法检查 Agent 开发前置条件。")
+        else:
+            readiness = inspect_agent_development_readiness(workspace, target_id)
+            errors.extend(
+                str(item.get("message") or "智能体开发前置条件未满足。")
+                for item in readiness.get("blockers") or []
+                if isinstance(item, dict)
+            )
     if workspace:
         readiness = inspect_template_generation_readiness(workspace)
         authorization_manifest = project_plan.get("authorization_manifest")
@@ -1174,7 +1185,7 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
     if isinstance(scope, dict):
         target_type = str(scope.get("type") or "").strip()
         target_id = str(scope.get("targetId") or scope.get("target_id") or "").strip()
-        if target_type in {"application", "page", "data_source", "endpoint"}:
+        if target_type in {"application", "page", "data_source", "endpoint", "agent"}:
             return {
                 "type": target_type,
                 "targetId": target_id or "application",
@@ -1186,6 +1197,9 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
                 ),
             }
     selected_page_id = str(state.get("selectedPageId") or "").strip()
+    selected_agent_id = str(state.get("selected_agent_id") or "").strip()
+    if selected_agent_id:
+        return {"type": "agent", "targetId": selected_agent_id}
     return (
         {"type": "page", "targetId": selected_page_id}
         if selected_page_id
@@ -1288,7 +1302,17 @@ def _resolve_build_context(
             ).strip() or None,
             project_plan_path=state.get("project_plan_json_path")
                               or project_plan_json_path(state),
+            product_plan=(
+                state.get("product_plan")
+                if isinstance(state.get("product_plan"), dict)
+                else {}
+            ),
         )
+        if target_type == "agent":
+            context["required_unit_ids"] = _required_unit_closure(
+                build_task_plan,
+                context.get("required_unit_root_ids") or [],
+            )
         return _add_reusable_task_context(context, build_task_plan)
     return _add_reusable_task_context({
         "target": {"type": "application", "id": "application"},
@@ -1302,6 +1326,45 @@ def _resolve_build_context(
         "source_refs": {},
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }, build_task_plan)
+
+
+def _required_unit_closure(
+    build_task_plan: dict[str, Any],
+    root_unit_ids: list[str],
+) -> list[str]:
+    """按 depends_on 反向收集 Agent、网关与入口页面的全部前置 Unit。"""
+
+    build_units = build_task_plan.get("build_units")
+    build_units = build_units if isinstance(build_units, dict) else {}
+    graph = build_task_plan.get("unit_graph")
+    edges = graph.get("edges") if isinstance(graph, dict) else []
+    prerequisites: dict[str, list[str]] = {}
+    for edge in edges if isinstance(edges, list) else []:
+        if not isinstance(edge, dict) or edge.get("type") != "depends_on":
+            continue
+        predecessor = str(edge.get("from") or "").strip()
+        consumer = str(edge.get("to") or "").strip()
+        if predecessor and consumer:
+            prerequisites.setdefault(consumer, []).append(predecessor)
+    ordered: list[str] = []
+    visiting: set[str] = set()
+
+    def visit(unit_id: str) -> None:
+        """深度优先加入前置 Unit，并保持 Unit Graph 的稳定顺序。"""
+
+        if unit_id in visiting:
+            return
+        if unit_id not in build_units:
+            raise ValueError(f"Agent 构建闭包引用了不存在的 Unit：{unit_id}。")
+        visiting.add(unit_id)
+        for predecessor in prerequisites.get(unit_id, []):
+            visit(predecessor)
+        if unit_id not in ordered:
+            ordered.append(unit_id)
+
+    for root_unit_id in root_unit_ids:
+        visit(str(root_unit_id))
+    return ordered
 
 
 def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> dict:
@@ -2194,6 +2257,8 @@ def _target_unit_id(target: dict) -> str:
     if target_type == "endpoint" and target_id:
         api_contract_id = str(target.get("api_contract_id") or "").strip()
         return f"backend:endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
+    if target_type == "agent" and target_id:
+        return f"agent:{target_id}"
     return ""
 
 

@@ -4,6 +4,7 @@ import {
   DatabaseOutlined,
   FilterOutlined,
   LockOutlined,
+  RobotOutlined,
   SearchOutlined
 } from '@ant-design/icons'
 import { Input, Switch, Typography } from 'antd'
@@ -12,6 +13,7 @@ import { useMemo, useState } from 'react'
 import type {
   ApplicationMenuItem,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption,
   DevelopmentPlanningPageTreeNode
@@ -33,6 +35,7 @@ const { Text } = Typography
 export type ApplicationOutlineProps = {
   apiContracts: DevelopmentPlanningApiContract[]
   entities: DevelopmentPlanningEntityOption[]
+  agents: DevelopmentPlanningAgentOption[]
   onApiEndpointSelect: (target: {
     apiContractId: string
     endpointId: string
@@ -40,19 +43,23 @@ export type ApplicationOutlineProps = {
     label: string
   }) => void
   onEntitySelect: (entity: DevelopmentPlanningEntityOption) => void
+  onAgentSelect: (agent: DevelopmentPlanningAgentOption) => void
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   outlineLocked: boolean
   pages: DevelopmentPlanningPageOption[]
   pageTree: DevelopmentPlanningPageTreeNode[]
   selectedApiEndpointKey: string
   selectedEntityId: string
+  selectedAgentId: string
   selectedPageId: string
 }
 
 /** 渲染开发产物列表，提供搜索、筛选、分组展开与产物浏览入口。 */
 export default function ApplicationOutline({
   apiContracts = [],
+  agents = [],
   entities = [],
+  onAgentSelect,
   onApiEndpointSelect,
   onEntitySelect,
   onPageSelect,
@@ -60,6 +67,7 @@ export default function ApplicationOutline({
   pages,
   pageTree,
   selectedApiEndpointKey,
+  selectedAgentId,
   selectedEntityId,
   selectedPageId
 }: ApplicationOutlineProps): ReactElement {
@@ -67,6 +75,7 @@ export default function ApplicationOutline({
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apiExpanded, setApiExpanded] = useState(true)
   const [entitiesExpanded, setEntitiesExpanded] = useState(true)
+  const [agentsExpanded, setAgentsExpanded] = useState(true)
   const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(
     () => new Set()
   )
@@ -128,6 +137,24 @@ export default function ApplicationOutline({
         entity.purpose.toLocaleLowerCase().includes(query)
     )
   }, [entities, outlineQuery])
+  const visibleAgents = useMemo(() => {
+    const query = outlineQuery.trim().toLocaleLowerCase()
+    const matches = agents.filter(
+      (agent) =>
+        !query ||
+        agent.agentId.toLocaleLowerCase().includes(query) ||
+        agent.label.toLocaleLowerCase().includes(query) ||
+        agent.purpose.toLocaleLowerCase().includes(query) ||
+        agent.capabilities.some((capability) =>
+          capability.name.toLocaleLowerCase().includes(query)
+        )
+    )
+    return onlyRelated && selectedAgentId
+      ? matches.filter((agent) => agent.agentId === selectedAgentId)
+      : onlyRelated
+        ? []
+        : matches
+  }, [agents, onlyRelated, outlineQuery, selectedAgentId])
 
   /** 独立切换一个 API contract 分组，避免多个资源同时收起或展开。 */
   const handleApiContractToggle = (contractId: string): void => {
@@ -149,10 +176,10 @@ export default function ApplicationOutline({
         <div className={cx('session-outline-content')}>
           <Input
             allowClear
-            aria-label="搜索页面、接口或实体"
+            aria-label="搜索页面、接口、实体或智能体"
             className={cx('session-search')}
             onChange={(event) => setOutlineQuery(event.target.value)}
-            placeholder="搜索页面、接口或实体"
+            placeholder="搜索页面、接口、实体或智能体"
             prefix={<SearchOutlined />}
             value={outlineQuery}
           />
@@ -329,6 +356,44 @@ export default function ApplicationOutline({
                     <div className={cx('outline-empty')}>
                       project_plan.json 的 entities 中暂无实体
                     </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+
+            <section className={cx('outline-section', 'agent-section')}>
+              <button
+                aria-expanded={agentsExpanded}
+                className={cx('outline-section-heading')}
+                onClick={() => setAgentsExpanded((current) => !current)}
+                type="button"
+              >
+                <CaretDownOutlined className={cx(!agentsExpanded && 'collapsed')} />
+                <span>智能体</span>
+              </button>
+              {agentsExpanded ? (
+                <div className={cx('agent-group')}>
+                  {visibleAgents.map((agent) => (
+                    <div className={cx('agent-node')} key={agent.agentId}>
+                      <button
+                        aria-current={selectedAgentId === agent.agentId ? 'true' : undefined}
+                        className={cx('agent-row', selectedAgentId === agent.agentId && 'selected')}
+                        onClick={() => onAgentSelect(agent)}
+                        title={agent.purpose}
+                        type="button"
+                      >
+                        <span className={cx('agent-icon')}>
+                          <RobotOutlined />
+                        </span>
+                        <span className={cx('agent-copy')}>
+                          <span className={cx('outline-label')}>{agent.label}</span>
+                          <span className={cx('agent-meta')}>{agent.agentId}</span>
+                        </span>
+                      </button>
+                    </div>
+                  ))}
+                  {visibleAgents.length === 0 ? (
+                    <div className={cx('outline-empty')}>当前计划中暂无智能体</div>
                   ) : null}
                 </div>
               ) : null}

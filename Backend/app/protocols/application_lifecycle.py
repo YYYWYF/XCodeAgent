@@ -37,24 +37,29 @@ class TemplateDownloadTarget(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    status: Literal["pending", "succeeded", "failed"]
+    required: bool
+    status: Literal["pending", "succeeded", "failed", "skipped"]
     path: str = Field(min_length=1, max_length=4096)
     attempt: int = Field(ge=0, le=3)
     error: str | None = Field(default=None, max_length=8192)
     repository_url: str | None = Field(default=None, alias="repositoryUrl", max_length=4096)
-    branch: Literal["main", "auth"] | None = None
+    branch: Literal["main", "auth", "master"] | None = None
     commit_sha: str | None = Field(default=None, alias="commitSha", min_length=7, max_length=128)
 
 
 class TemplateDownloadResult(BaseModel):
-    """校验 Renderer 提交的前后端模板下载汇总。"""
+    """校验 Renderer 提交的当前三目标模板下载汇总。"""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     ok: bool
     status: Literal["succeeded", "failed"]
-    failed_targets: list[Literal["frontend", "backend"]] = Field(alias="failedTargets")
-    targets: dict[Literal["frontend", "backend"], TemplateDownloadTarget]
+    failed_targets: list[Literal["frontend", "backend", "agentRuntime"]] = Field(
+        alias="failedTargets"
+    )
+    targets: dict[
+        Literal["frontend", "backend", "agentRuntime"], TemplateDownloadTarget
+    ]
 
 
 class ApplicationLifecycleAction(BaseModel):

@@ -272,9 +272,6 @@ function AppEntryContent(): JSX.Element {
       )
     : undefined
   const activePlanningThreadId = activePlanning?.threadId
-  const templateGenerationFailed =
-    activePlanning?.lifecycle.initialization.stage === 'application_template_generation_failed'
-
   useEffect(() => {
     activePlanningThreadIdRef.current = activePlanningThreadId
     // threadId 就绪后，如果 stream 已注册且有待回放的缓存，按 threadId 回放。
@@ -375,8 +372,8 @@ function AppEntryContent(): JSX.Element {
           initialStatus={planning.status}
           initialWorkflow={planning.workflow}
           key={planning.threadId}
-          onTechnicalPlanConfirmed={() =>
-            planningController.onTechnicalPlanConfirmed(planning.application.id)
+          onTechnicalPlanConfirmed={(confirmation) =>
+            planningController.onTechnicalPlanConfirmed(planning.application.id, confirmation)
           }
           onErrorChange={(error) =>
             planningController.updatePlanningError(planning.application.id, error)
@@ -493,15 +490,11 @@ function AppEntryContent(): JSX.Element {
             }}
             onThemeChange={setTheme}
             onPlanningStreamReady={handlePlanningStreamReady}
-            onRetryPlanning={
-              templateGenerationFailed
-                ? undefined
-                : () => {
-                    const retry = planningRetryByAppRef.current[activeApplication.id]
-                    if (retry) retry()
-                    else planningController.showPlanning(activeApplication.id)
-                  }
-            }
+            onRetryPlanning={() => {
+              const retry = planningRetryByAppRef.current[activeApplication.id]
+              if (retry) retry()
+              else planningController.showPlanning(activeApplication.id)
+            }}
             generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
             planningThreadId={activePlanningThreadId}
             planningWorkflow={activePlanning?.workflow}

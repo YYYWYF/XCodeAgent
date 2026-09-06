@@ -830,45 +830,115 @@ def _authorization_manifest_markdown(plan: dict[str, Any]) -> str:
 
 
 def _technical_agent_contract_markdown(contract: dict[str, Any]) -> str:
-    """渲染单个业务智能体的运行时、调用、工具和产物契约。"""
+    """把完整 Agent Contract 按七段设置和平台配置渲染为审核文档。"""
 
+    identity = contract.get("identity") if isinstance(contract.get("identity"), dict) else {}
+    interaction = (
+        contract.get("interaction")
+        if isinstance(contract.get("interaction"), dict)
+        else {}
+    )
+    settings = (
+        contract.get("agentSettings")
+        if isinstance(contract.get("agentSettings"), dict)
+        else {}
+    )
+    prompt = settings.get("prompt") if isinstance(settings.get("prompt"), dict) else {}
+    persona = prompt.get("persona") if isinstance(prompt.get("persona"), dict) else {}
+    model = settings.get("model") if isinstance(settings.get("model"), dict) else {}
+    memory = settings.get("memory") if isinstance(settings.get("memory"), dict) else {}
+    short_term = (
+        memory.get("shortTerm")
+        if isinstance(memory.get("shortTerm"), dict)
+        else {}
+    )
+    skills = settings.get("skills") if isinstance(settings.get("skills"), dict) else {}
+    knowledge = (
+        settings.get("knowledge")
+        if isinstance(settings.get("knowledge"), dict)
+        else {}
+    )
+    context = settings.get("context") if isinstance(settings.get("context"), dict) else {}
+    compression = (
+        context.get("compression")
+        if isinstance(context.get("compression"), dict)
+        else {}
+    )
+    tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
+    invocation = (
+        contract.get("invocation")
+        if isinstance(contract.get("invocation"), dict)
+        else {}
+    )
     runtime = contract.get("runtime") if isinstance(contract.get("runtime"), dict) else {}
-    invocation = contract.get("invocation") if isinstance(contract.get("invocation"), dict) else {}
+    security = contract.get("security") if isinstance(contract.get("security"), dict) else {}
     artifacts = contract.get("artifacts") if isinstance(contract.get("artifacts"), dict) else {}
-    tool_lines = [
-        "- `{tool}` → `{endpoint}`（{mode}）".format(
-            tool=item.get("toolId", ""),
-            endpoint=item.get("endpointId", ""),
-            mode=item.get("accessMode", ""),
-        )
-        for item in _dict_items(contract.get("toolBindings"))
-    ]
     capability_lines = [
-        "- `{capability}`：{tools}".format(
+        "- `{capability}`（{name}）→ {tools}".format(
             capability=item.get("capabilityId", ""),
+            name=item.get("name", ""),
             tools=", ".join(
                 f"`{tool_id}`" for tool_id in _text_items(item.get("toolIds"))
             )
             or "无工具",
         )
-        for item in _dict_items(contract.get("capabilityBindings"))
+        for item in _dict_items(contract.get("capabilities"))
     ]
+    tool_lines: list[str] = []
+    for item in _dict_items(tools.get("bindings")):
+        endpoint = item.get("endpoint") if isinstance(item.get("endpoint"), dict) else {}
+        tool_lines.append(
+            "- `{tool}`（{mode}）→ `{endpoint}`：{description}".format(
+                tool=item.get("toolId", ""),
+                mode=item.get("accessMode", ""),
+                endpoint=endpoint.get("endpointId", ""),
+                description=item.get("description", ""),
+            )
+        )
     return "\n".join(
         [
-            f"### {contract.get('agentId', 'unknown-agent')}",
+            f"### {identity.get('name') or contract.get('agentId', 'unknown-agent')}",
             "",
-            f"- 运行时：{runtime.get('language', 'Python')} {runtime.get('pythonVersion', '')} + {runtime.get('framework', 'DeepAgents')}（{runtime.get('deployment', 'sidecar')}）",
-            f"- 调用：AG-UI SSE，经 Java 网关 Endpoint `{invocation.get('gatewayEndpointId', '')}`",
-            f"- 内部路径：`{invocation.get('internalPath', '')}`",
+            f"- Agent ID：`{contract.get('agentId', '')}`",
+            f"- 用途：{identity.get('purpose', '')}",
+            f"- 交互：{interaction.get('mode', '')}；多轮：{'是' if interaction.get('supportsMultiTurn') else '否'}",
+            f"- Gateway：`{invocation.get('gatewayEndpointId', '')}`",
+            f"- Runtime：{runtime.get('language', '')} {runtime.get('pythonVersion', '')} + {runtime.get('framework', '')}",
+            "",
+            "#### Prompt",
+            "",
+            f"- 人设：{persona.get('role', '')}；语气：{persona.get('tone', '')}",
+            f"- System Prompt：{prompt.get('systemPrompt', '')}",
+            *[f"- 约束：{item}" for item in _text_items(prompt.get("constraints"))],
+            "",
+            "#### Model / Memory / Context",
+            "",
+            f"- 模型：{model.get('selection', 'project_default')}",
+            f"- Short-term Memory：{'启用' if short_term.get('enabled') else '关闭'}；Store：{short_term.get('store') or '无'}",
+            f"- Context Compression：{compression.get('strategy', 'none')}",
+            "",
+            "#### Capabilities / Tools",
+            "",
+            *(capability_lines or ["- 无能力"]),
+            "",
+            *(tool_lines or ["- 无工具"]),
+            "",
+            "#### Skills / Knowledge",
+            "",
+            f"- Skills：{'启用' if skills.get('enabled') else '关闭'}",
+            f"- Knowledge：{'启用' if knowledge.get('enabled') else '关闭'}",
+            "",
+            "#### 平台派生配置",
+            "",
+            f"- 调用：{invocation.get('transport', '')} → `{invocation.get('internalPath', '')}`",
+            f"- 安全：客户端直连={'允许' if security.get('directClientAccess') else '禁止'}；工具授权={security.get('toolAuthorization', '')}",
             f"- Agent 代码：`{artifacts.get('agentPath', '')}`",
             f"- 工具适配：`{artifacts.get('toolAdapterPath', '')}`",
             f"- 测试：`{artifacts.get('testPath', '')}`",
-            "",
-            "能力绑定：",
-            *(capability_lines or ["- 无"]),
-            "",
-            "工具绑定：",
-            *(tool_lines or ["- 无"]),
+            *[
+                f"- Required check：`{item}`"
+                for item in _text_items(contract.get("requiredChecks"))
+            ],
         ]
     )
 

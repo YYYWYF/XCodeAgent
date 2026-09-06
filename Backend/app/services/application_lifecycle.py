@@ -97,6 +97,9 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
         ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
         ApplicationLifecycleStage.READY_FOR_WORKBENCH,
     },
+    ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED: {
+        ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+    },
 }
 
 APPLICATION_PLANNING_REVISION_STAGES = {
@@ -704,6 +707,7 @@ def _primary_resource_claim(scope: str, target_id: str) -> ExecutionResourceClai
         "page": ExecutionResourceType.PAGE,
         "data_source": ExecutionResourceType.DATA_SOURCE,
         "endpoint": ExecutionResourceType.ENDPOINT,
+        "agent": ExecutionResourceType.AGENT,
     }.get(scope, ExecutionResourceType.APPLICATION)
     return ExecutionResourceClaim(
         type=resource_type,
@@ -766,6 +770,7 @@ def _resource_claims_for_run(
         (ExecutionResourceType.ENDPOINT, locks.endpoints),
         (ExecutionResourceType.API_CONTRACT, locks.api_contracts),
         (ExecutionResourceType.DATA_SOURCE, locks.data_sources),
+        (ExecutionResourceType.AGENT, locks.agents),
     )
     if locks.application is not None and locks.application.run_id == run_id:
         claims.append(
@@ -805,6 +810,7 @@ def _resource_locks_with_claims(
     endpoints = dict(locks.endpoints)
     api_contracts = dict(locks.api_contracts)
     data_sources = dict(locks.data_sources)
+    agents = dict(locks.agents)
     for claim in claims:
         lock = ExecutionResourceLock(
             runId=run_id,
@@ -821,14 +827,17 @@ def _resource_locks_with_claims(
             endpoints[claim.target_id] = lock
         elif claim.type == ExecutionResourceType.API_CONTRACT:
             api_contracts[claim.target_id] = lock
-        else:
+        elif claim.type == ExecutionResourceType.DATA_SOURCE:
             data_sources[claim.target_id] = lock
+        else:
+            agents[claim.target_id] = lock
     return ExecutionResourceLocks(
         application=application,
         pages=pages,
         endpoints=endpoints,
         apiContracts=api_contracts,
         dataSources=data_sources,
+        agents=agents,
     )
 
 
@@ -852,6 +861,7 @@ def _resource_locks_without_run(
         dataSources={
             key: value for key, value in locks.data_sources.items() if value.run_id != run_id
         },
+        agents={key: value for key, value in locks.agents.items() if value.run_id != run_id},
     )
 
 
@@ -961,7 +971,7 @@ def complete_application_template_generation(
         error=ApplicationLifecycleError(
             code="application_template_generation_failed",
             message=(error_message or "应用模板文件生成失败。")[:2048],
-            recoverable=False,
+            recoverable=True,
             occurredAt=utc_now(),
         ),
     )
@@ -972,13 +982,23 @@ def begin_application_template_generation(
     *,
     active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
-    """只允许 TechnicalPlan 确认后的模板生成阶段执行初始化。"""
+    """允许 TechnicalPlan 确认后的模板生成阶段首次执行或失败重试。"""
 
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
     if current.initialization.stage == ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES:
         return current
+    if (
+        current.initialization.stage
+        == ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED
+    ):
+        return persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            status=ApplicationLifecycleStatus.RUNNING,
+            active_run_id=active_run_id,
+        )
     raise ApplicationLifecycleConflictError(
         "只有用户确认 TechnicalPlan 后才能开始模板初始化；当前阶段为 "
         f"{current.initialization.stage.value}。"

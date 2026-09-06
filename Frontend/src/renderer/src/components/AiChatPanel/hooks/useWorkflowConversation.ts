@@ -204,6 +204,10 @@ type UseWorkflowConversationResult = {
     endpointLabel: string
     hasDetailPlan?: boolean
   }) => Promise<boolean>
+  handleStartAgentDevelopment: (target: {
+    agentId: string
+    agentLabel: string
+  }) => Promise<boolean>
   handleStartEntityDetailConfirmation: (target: {
     entityId: string
     entityLabel: string
@@ -711,9 +715,10 @@ export function useWorkflowConversation({
       selectedApiContractId?: string
       selectedEndpointId?: string
       selectedEntityId?: string
+      selectedAgentId?: string
       selectedEntityLabel?: string
       endpointLabel?: string
-      detailTargetType?: 'page' | 'endpoint' | 'entity'
+      detailTargetType?: 'page' | 'endpoint' | 'entity' | 'agent'
       sessionIdentity?: SessionIdentity
       pageTemplate?: {
         id?: string
@@ -905,6 +910,7 @@ export function useWorkflowConversation({
         selectedApiContractId: options?.selectedApiContractId,
         selectedEndpointId: options?.selectedEndpointId,
         selectedEntityId: options?.selectedEntityId,
+        selectedAgentId: options?.selectedAgentId,
         detailTargetType: options?.detailTargetType,
         buildExecutionScope: options?.buildExecutionScope,
         workflowAction: options?.workflowAction,
@@ -1540,6 +1546,28 @@ export function useWorkflowConversation({
     })
   }
 
+  /** 以已确认 Agent Contract 作为现有主 Workflow 的开发就绪检查起点。 */
+  const handleStartAgentDevelopment = async (target: {
+    agentId: string
+    agentLabel: string
+  }): Promise<boolean> => {
+    if (!target.agentId || loading || workspaceBusy) return false
+    const identity = await ensureActiveSession()
+    return sendWorkflowMessage(`开始开发智能体：${target.agentLabel}`, {
+      conversation: false,
+      executionThreadId: randomUUID(),
+      selectedAgentId: target.agentId,
+      selectedPageId: '',
+      detailTargetType: 'agent',
+      buildExecutionScope: {
+        type: 'agent',
+        targetId: target.agentId
+      },
+      sessionIdentity: identity,
+      titleFrom: `开发智能体：${target.agentLabel}`
+    })
+  }
+
   /** 在当前通用历史会话中以独立 execution 启动实体绑定，并保留后端续接合同。 */
   const handleStartEntityDetailConfirmation = async (target: {
     entityId: string
@@ -1746,6 +1774,7 @@ export function useWorkflowConversation({
     handleStopPlan,
     handleSend,
     handleStartEndpointDevelopment,
+    handleStartAgentDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,

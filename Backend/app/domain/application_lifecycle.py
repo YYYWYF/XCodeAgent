@@ -84,6 +84,7 @@ class ExecutionResourceType(StrEnum):
     ENDPOINT = "endpoint"
     API_CONTRACT = "api_contract"
     DATA_SOURCE = "data_source"
+    AGENT = "agent"
 
 
 class ExecutionResourceRole(StrEnum):
@@ -188,12 +189,13 @@ class ExecutionResourceLocks(ApplicationLifecycleModel):
         default_factory=dict,
         alias="dataSources",
     )
+    agents: dict[str, ExecutionResourceLock] = Field(default_factory=dict)
 
 
 class WorkbenchExecution(ApplicationLifecycleModel):
     """保存当前占用工作区的页面或应用级计划执行。"""
 
-    scope: Literal["application", "page", "data_source", "endpoint"]
+    scope: Literal["application", "page", "data_source", "endpoint", "agent"]
     target_id: str = Field(alias="targetId", min_length=1, max_length=512)
     page_id: str | None = Field(default=None, alias="pageId", max_length=512)
     thread_id: str = Field(alias="threadId", min_length=1, max_length=512)
@@ -211,9 +213,9 @@ class WorkbenchExecution(ApplicationLifecycleModel):
 
 
 class DevelopmentContinuationTarget(ApplicationLifecycleModel):
-    """保存待恢复页面或 Endpoint 的唯一业务目标。"""
+    """保存待恢复页面、Endpoint 或业务智能体的唯一业务目标。"""
 
-    type: Literal["page", "endpoint"]
+    type: Literal["page", "endpoint", "agent"]
     page_id: str | None = Field(default=None, alias="pageId", max_length=512)
     api_contract_id: str | None = Field(
         default=None,
@@ -221,23 +223,32 @@ class DevelopmentContinuationTarget(ApplicationLifecycleModel):
         max_length=512,
     )
     endpoint_id: str | None = Field(default=None, alias="endpointId", max_length=512)
+    agent_id: str | None = Field(default=None, alias="agentId", max_length=512)
     label: str = Field(min_length=1, max_length=512)
 
     @model_validator(mode="after")
     def validate_target_identity(self) -> "DevelopmentContinuationTarget":
-        """确保页面与 Endpoint continuation 只携带各自完整的稳定标识。"""
+        """确保不同 continuation 只携带各自完整的稳定标识。"""
 
         if self.type == "page" and not str(self.page_id or "").strip():
             raise ValueError("页面开发 continuation 必须提供 pageId。")
-        if self.type == "page" and (self.api_contract_id or self.endpoint_id):
-            raise ValueError("页面开发 continuation 不能携带 Endpoint 标识。")
+        if self.type == "page" and (
+            self.api_contract_id or self.endpoint_id or self.agent_id
+        ):
+            raise ValueError("页面开发 continuation 不能携带其他目标标识。")
         if self.type == "endpoint" and (
             not str(self.api_contract_id or "").strip()
             or not str(self.endpoint_id or "").strip()
         ):
             raise ValueError("Endpoint 开发 continuation 必须提供完整接口标识。")
-        if self.type == "endpoint" and self.page_id:
-            raise ValueError("Endpoint 开发 continuation 不能携带 pageId。")
+        if self.type == "endpoint" and (self.page_id or self.agent_id):
+            raise ValueError("Endpoint 开发 continuation 不能携带其他目标标识。")
+        if self.type == "agent" and not str(self.agent_id or "").strip():
+            raise ValueError("Agent 开发 continuation 必须提供 agentId。")
+        if self.type == "agent" and (
+            self.page_id or self.api_contract_id or self.endpoint_id
+        ):
+            raise ValueError("Agent 开发 continuation 不能携带其他目标标识。")
         return self
 
 
