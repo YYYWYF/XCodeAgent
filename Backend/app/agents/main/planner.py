@@ -579,13 +579,20 @@ def _technical_action_binding_repair_prompt(
         and str(page.get("pageId") or "").strip() in affected_page_ids
     ]
     return (
-        "You repair only missing TechnicalPlan business Action-to-Endpoint selections. Return exactly one JSON "
-        "object with the sole top-level key bindings. Do not return architecture, entities, api_contracts, pages, "
-        "ProductPlan, UI information, authorization, markdown, or commentary. Choose only endpointId values that "
-        "already exist in the supplied Endpoint catalog; never create or rename an Endpoint. ProductPlan already "
-        "decides whether an action or step is business, so do not reclassify behavior. For a direct business action, "
-        "return exactly {pageId, actionId, endpointId}. For a sequence, return exactly {pageId, actionId, "
-        "stepBindings:[{stepId, endpointId}]} and cover every and only requiredStepIds. Return one binding for every "
+        "You repair only missing TechnicalPlan business Action-to-Endpoint selections. First determine whether every "
+        "issue can be correctly implemented using only the existing Endpoint catalog. Return exactly one JSON "
+        "object. If every issue has a semantically suitable existing Endpoint, return exactly "
+        "{\"status\": \"resolved\", \"bindings\": [...]}. If any "
+        "issue requires an Endpoint that does not currently exist, do not guess, substitute, approximate, or reuse "
+        "an unrelated Endpoint. Return exactly {\"status\": \"requires_full_repair\", \"reason\": "
+        "\"no_suitable_endpoint\", \"bindings\": []}. An Endpoint being syntactically available does not make it "
+        "suitable: its method, path, summary, and business meaning must implement the confirmed ProductPlan action "
+        "semantics. Do not return architecture, entities, api_contracts, pages, ProductPlan, UI information, "
+        "authorization, markdown, or commentary. Choose only endpointId values that already exist in the supplied "
+        "Endpoint catalog; never create or rename an Endpoint. ProductPlan already decides whether an action or step "
+        "is business, so do not reclassify behavior. For a resolved direct business action, return exactly {pageId, "
+        "actionId, endpointId}. For a resolved sequence, return exactly {pageId, actionId, stepBindings:[{stepId, "
+        "endpointId}]} and cover every and only requiredStepIds. A resolved result must contain one binding for every "
         "issue and no unrelated binding. The backend will close endpoint_dependencies deterministically.\n\n"
         f"Structured binding issues:\n{json.dumps(binding_issues, ensure_ascii=False)}\n\n"
         f"Affected confirmed ProductPlan actions:\n{json.dumps(affected_actions, ensure_ascii=False)}\n\n"
@@ -613,7 +620,10 @@ def repair_technical_plan_action_bindings_with_chat_model(
         settings=settings,
         on_token=on_token,
     )
-    return extract_json_object(response_text)
+    parsed = extract_json_object(response_text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Action Binding 修复模型未返回有效 JSON object。")
+    return parsed
 
 
 def _technical_contract_ids_for_errors(

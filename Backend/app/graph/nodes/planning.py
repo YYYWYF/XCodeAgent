@@ -68,6 +68,7 @@ from app.services.page_implementation_contract import (
     validate_page_implementation_contracts,
 )
 from app.services.technical_action_binding_repair import (
+    action_binding_repair_requires_full_repair,
     apply_technical_action_binding_patch,
     validate_technical_action_binding_patch,
 )
@@ -1813,32 +1814,55 @@ def _repair_technical_plan_candidate(
             page_ids,
             action_ids,
         )
+        repair_result: dict[str, Any] | None = None
+        repair_abstained = False
         try:
-            patch = repair_technical_plan_action_bindings_with_chat_model(
+            repair_result = repair_technical_plan_action_bindings_with_chat_model(
                 requirement_spec,
                 current_plan,
                 binding_issues,
                 on_token=_planning_token_callback,
             )
             patch_errors = validate_technical_action_binding_patch(
-                patch,
+                repair_result,
                 binding_issues=binding_issues,
                 existing_plan=current_plan,
             )
             if patch_errors:
                 raise ValueError("；".join(patch_errors))
-            repaired = apply_technical_action_binding_patch(current_plan, patch)
+            if action_binding_repair_requires_full_repair(repair_result):
+                repair_abstained = True
+                raise ValueError(
+                    "Action Binding Scoped Repair 未找到语义匹配的现有 Endpoint。"
+                )
+            repaired = apply_technical_action_binding_patch(
+                current_plan,
+                repair_result,
+            )
             logger.info(
-                "technical_plan_action_binding_repair_succeeded: bindings=%s",
-                len(patch.get("bindings", [])),
+                "technical_plan_action_binding_patch_applied: bindings=%s",
+                len(repair_result.get("bindings", [])),
             )
             return repaired
         except ValueError as exc:
             action_repair_failed = True
-            logger.warning(
-                "technical_plan_action_binding_repair_failed: reason=%s fallback=full_plan",
-                exc,
-            )
+            if repair_abstained:
+                logger.warning(
+                    "technical_plan_action_binding_repair_abstained: "
+                    "reason=no_suitable_endpoint fallback=full_plan"
+                )
+            else:
+                failure_reason = (
+                    "invalid_model_output"
+                    if repair_result is None
+                    else "invalid_patch_or_merge"
+                )
+                logger.warning(
+                    "technical_plan_action_binding_repair_failed: "
+                    "reason=%s detail=%s fallback=full_plan",
+                    failure_reason,
+                    exc,
+                )
 
     contract_errors = _technical_plan_contract_validation_errors(
         current_plan,

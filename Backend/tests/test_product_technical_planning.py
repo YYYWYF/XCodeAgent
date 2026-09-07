@@ -14,6 +14,7 @@ from app.agents.main.planner import (
     _technical_contract_ids_for_errors,
     _technical_contract_repair_prompt,
     _technical_planning_prompt,
+    repair_technical_plan_action_bindings_with_chat_model,
     repair_technical_plan_api_contracts_with_chat_model,
     technical_plan_contract_repair_applicable,
 )
@@ -558,6 +559,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ],
         }
         invalid_patch = {
+            "status": "resolved",
             "bindings": [
                 {
                     "pageId": "orders",
@@ -567,6 +569,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ]
         }
         valid_patch = {
+            "status": "resolved",
             "bindings": [
                 {
                     "pageId": "orders",
@@ -576,6 +579,13 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ]
         }
 
+        self.assertTrue(
+            validate_technical_action_binding_patch(
+                None,
+                binding_issues=issues,
+                existing_plan=existing_plan,
+            )
+        )
         self.assertTrue(
             validate_technical_action_binding_patch(
                 invalid_patch,
@@ -629,6 +639,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ]
         }
         incomplete_patch = {
+            "status": "resolved",
             "bindings": [
                 {
                     "pageId": "orders",
@@ -640,6 +651,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ]
         }
         complete_patch = {
+            "status": "resolved",
             "bindings": [
                 {
                     "pageId": "orders",
@@ -730,7 +742,75 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("保存订单", prompt)
         self.assertNotIn("ShouldNotAppear", prompt)
         self.assertNotIn("打开详情", prompt)
-        self.assertIn("sole top-level key bindings", prompt)
+        self.assertIn('"status": "resolved"', prompt)
+        self.assertIn('"status": "requires_full_repair"', prompt)
+        self.assertIn("no_suitable_endpoint", prompt)
+        self.assertIn("do not guess, substitute, approximate", prompt)
+
+    def test_action_binding_repair_parser_rejects_non_object(self) -> None:
+        """模型 JSON 提取结果不是对象时不得把 None 泄漏给 Patch Validator。"""
+
+        with (
+            patch(
+                "app.agents.main.planner._invoke_prompt_with_chat_model",
+                return_value="not-json",
+            ),
+            patch(
+                "app.agents.main.planner.extract_json_object",
+                return_value=None,
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "未返回有效 JSON object"):
+                repair_technical_plan_action_bindings_with_chat_model(
+                    {"confirmed_product_plan": {"pages": []}},
+                    {"api_contracts": [], "pages": []},
+                    [],
+                )
+
+    def test_action_binding_repair_result_rejects_invalid_abstain_protocols(
+        self,
+    ) -> None:
+        """Abstain 不得携带绑定，且协议拒绝未定义状态。"""
+
+        issue = {
+            "kind": "missing_business_action_binding",
+            "pageId": "orders",
+            "actionId": "save",
+            "requiredStepIds": [],
+        }
+        existing_plan = {
+            "api_contracts": [
+                {"id": "orders_api", "endpoints": [{"id": "orders_api.save"}]}
+            ]
+        }
+        mixed_abstain = {
+            "status": "requires_full_repair",
+            "reason": "no_suitable_endpoint",
+            "bindings": [
+                {
+                    "pageId": "orders",
+                    "actionId": "save",
+                    "endpointId": "orders_api.save",
+                }
+            ],
+        }
+
+        self.assertTrue(
+            validate_technical_action_binding_patch(
+                mixed_abstain,
+                binding_issues=[issue],
+                existing_plan=existing_plan,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "只有 resolved"):
+            apply_technical_action_binding_patch(existing_plan, mixed_abstain)
+        self.assertTrue(
+            validate_technical_action_binding_patch(
+                {"status": "partial", "bindings": []},
+                binding_issues=[issue],
+                existing_plan=existing_plan,
+            )
+        )
 
     def test_technical_plan_entities_come_only_from_model_output(self) -> None:
         """TechnicalPlan 实体不得继承 RequirementSpec.entities。"""

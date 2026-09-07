@@ -353,6 +353,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
             ],
         }
         repair_patch = {
+            "status": "resolved",
             "bindings": [
                 {
                     "pageId": target_page["pageId"],
@@ -455,6 +456,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
             patch(
                 "app.graph.nodes.planning.repair_technical_plan_action_bindings_with_chat_model",
                 return_value={
+                    "status": "resolved",
                     "bindings": [
                         {
                             "pageId": "orders",
@@ -477,6 +479,132 @@ class ProductPlanningRetryTests(unittest.TestCase):
 
         action_repair_mock.assert_called_once()
         planner_mock.assert_called_once()
+        self.assertIs(repaired, full_repair)
+
+    def test_action_binding_invalid_json_falls_back_full_repair_in_same_attempt(
+        self,
+    ) -> None:
+        """Scoped Repair 非法输出必须在当前候选修复内立即升级整份修复。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "actions": [
+                        {"actionId": "save", "behavior": {"type": "business"}}
+                    ],
+                }
+            ]
+        }
+        current_plan = {
+            "artifact_type": "technical-plan",
+            "api_contracts": [
+                {"id": "orders_api", "endpoints": [{"id": "orders_api.save"}]}
+            ],
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "references": {"action_implementations": []},
+                }
+            ],
+        }
+        missing_error = (
+            "页面 orders 的 TechnicalPlan 缺少业务 action endpoint 实现：save。"
+        )
+        full_repair = {"artifact_type": "technical-plan", "sentinel": "full"}
+
+        with (
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_action_bindings_with_chat_model",
+                side_effect=ValueError(
+                    "Action Binding 修复模型未返回有效 JSON object。"
+                ),
+            ) as action_repair_mock,
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=full_repair,
+            ) as planner_mock,
+        ):
+            repaired = _repair_technical_plan_candidate(
+                {"confirmed_product_plan": product_plan},
+                current_plan,
+                [missing_error],
+            )
+
+        action_repair_mock.assert_called_once()
+        planner_mock.assert_called_once()
+        self.assertEqual(planner_mock.call_args.kwargs["existing_plan"], current_plan)
+        self.assertIs(repaired, full_repair)
+
+    def test_action_binding_no_suitable_endpoint_falls_back_full_repair(
+        self,
+    ) -> None:
+        """Scoped Repair 明确无合适 Endpoint 时必须在本轮升级整份修复。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "people",
+                    "actions": [
+                        {
+                            "actionId": "delete_personnel",
+                            "behavior": {"type": "business"},
+                        }
+                    ],
+                }
+            ]
+        }
+        current_plan = {
+            "artifact_type": "technical-plan",
+            "api_contracts": [
+                {
+                    "id": "personnel_api",
+                    "endpoints": [
+                        {"id": "personnel_api.list"},
+                        {"id": "personnel_api.profile"},
+                    ],
+                }
+            ],
+            "pages": [
+                {
+                    "pageId": "people",
+                    "references": {"action_implementations": []},
+                }
+            ],
+        }
+        missing_error = (
+            "页面 people 的 TechnicalPlan 缺少业务 action endpoint 实现："
+            "delete_personnel。"
+        )
+        full_repair = {"artifact_type": "technical-plan", "sentinel": "full"}
+
+        with (
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_action_bindings_with_chat_model",
+                return_value={
+                    "status": "requires_full_repair",
+                    "reason": "no_suitable_endpoint",
+                    "bindings": [],
+                },
+            ) as action_repair_mock,
+            patch(
+                "app.graph.nodes.planning.apply_technical_action_binding_patch"
+            ) as apply_patch_mock,
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=full_repair,
+            ) as planner_mock,
+        ):
+            repaired = _repair_technical_plan_candidate(
+                {"confirmed_product_plan": product_plan},
+                current_plan,
+                [missing_error],
+            )
+
+        action_repair_mock.assert_called_once()
+        apply_patch_mock.assert_not_called()
+        planner_mock.assert_called_once()
+        self.assertEqual(planner_mock.call_args.kwargs["existing_plan"], current_plan)
         self.assertIs(repaired, full_repair)
 
     def test_mixed_action_binding_and_contract_errors_skip_scoped_repair(self) -> None:
@@ -591,6 +719,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
             ],
         }
         patch_result = {
+            "status": "resolved",
             "bindings": [
                 {
                     "pageId": "page_personnel_list",

@@ -29,9 +29,27 @@ def validate_technical_action_binding_patch(
 ) -> list[str]:
     """严格校验局部 Action Binding Patch 的目标、形状和 Endpoint 引用。"""
 
+    if not isinstance(patch, dict):
+        return ["Action Binding 修复结果必须为 JSON object。"]
+
     errors: list[str] = []
-    if set(patch) != {"bindings"} or not isinstance(patch.get("bindings"), list):
-        return ["Action Binding 修复结果只能包含 bindings 数组。"]
+    status = patch.get("status")
+    if status == "requires_full_repair":
+        if (
+            set(patch) != {"status", "reason", "bindings"}
+            or patch.get("reason") != "no_suitable_endpoint"
+            or patch.get("bindings") != []
+        ):
+            return [
+                "requires_full_repair 结果必须仅声明 no_suitable_endpoint 且 bindings 为空数组。"
+            ]
+        return []
+    if status != "resolved":
+        return ["Action Binding 修复结果的 status 只能是 resolved 或 requires_full_repair。"]
+    if set(patch) != {"status", "bindings"} or not isinstance(
+        patch.get("bindings"), list
+    ):
+        return ["resolved Action Binding 修复结果只能包含 status 和 bindings 数组。"]
 
     issue_by_target = {
         (
@@ -119,11 +137,23 @@ def validate_technical_action_binding_patch(
     return list(dict.fromkeys(errors))
 
 
+def action_binding_repair_requires_full_repair(result: dict[str, Any]) -> bool:
+    """判断已通过协议校验的 Action Binding 结果是否要求升级整份修复。"""
+
+    return (
+        result.get("status") == "requires_full_repair"
+        and result.get("reason") == "no_suitable_endpoint"
+    )
+
+
 def apply_technical_action_binding_patch(
     technical_plan: dict[str, Any],
     patch: dict[str, Any],
 ) -> dict[str, Any]:
     """幂等替换指定 Action Binding，不改写 TechnicalPlan 的其他技术事实。"""
+
+    if patch.get("status") != "resolved":
+        raise ValueError("只有 resolved Action Binding Repair 才允许应用 Patch。")
 
     updated = deepcopy(technical_plan)
     pages = _dict_items(updated.get("pages"))
