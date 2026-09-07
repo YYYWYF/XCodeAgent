@@ -44,8 +44,8 @@ from app.services.application_lifecycle import (
 )
 from app.services.application_revision_lifecycle import issue_revision_continuation
 from app.services.authorization_frontend_projection import (
-    apply_authorization_frontend_projection,
-    compile_frontend_authorization_projection,
+    apply_frontend_routes_projection,
+    compile_frontend_routes_projection,
 )
 from app.services.frontend_scaffold import (
     collect_template_pages,
@@ -622,7 +622,7 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
     注入失败不阻断主流程——确定性代码缺失时 Agent 仍可在 build 阶段补生成。
 
     注入内容：
-    - 前端路由/权限资源（auth 分支）：从 TechnicalPlan 的 authorization_manifest 编译并写入 routes.tsx/resources.ts
+    - 前端路由（auth 分支）：从 TechnicalPlan 的 authorization_manifest 编译并写入 routes.tsx
     - 前端页面占位：从 ProductPlan + UiDesign 收集页面并创建占位文件
     - 后端骨架：从 TechnicalPlan 的 entities 推导 Entity/PO/Mapper/Repository/DTO/Controller
     全部幂等——已存在且内容一致的文件跳过，不覆盖用户手改。
@@ -637,7 +637,7 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
             technical_plan = json.load(handle)
         if not isinstance(technical_plan, dict):
             return
-        # 前端确定性注入：路由/权限资源（auth 分支）
+        # 前端确定性注入：仅写路由；resources.ts 由 auth-guard Build Task 唯一所有。
         _inject_frontend_authorization(workspace, technical_plan)
         # 前端确定性注入：页面占位文件
         _inject_frontend_page_placeholders(workspace, state)
@@ -649,15 +649,15 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
 
 
 def _inject_frontend_authorization(workspace: str, technical_plan: dict[str, Any]) -> None:
-    """auth 分支模板：从 TechnicalPlan 编译并写入前端路由/权限资源。"""
+    """auth 分支模板：从 TechnicalPlan 编译并仅写入前端路由。"""
 
     frontend_dir = Path(workspace) / "frontend"
     routes_path = frontend_dir / "src" / "constants" / "routes.tsx"
     if not routes_path.is_file():
         return  # 非 auth 分支或模板未拉取，跳过
-    projection = compile_frontend_authorization_projection(technical_plan)
+    projection = compile_frontend_routes_projection(technical_plan)
     if projection is not None:
-        apply_authorization_frontend_projection(workspace, projection)
+        apply_frontend_routes_projection(workspace, projection)
 
 
 def _inject_frontend_page_placeholders(workspace: str, state: dict[str, Any]) -> None:

@@ -10,7 +10,7 @@ import unittest
 
 from app.services.authorization_frontend_projection import (
     AuthorizationFrontendProjectionError,
-    apply_authorization_frontend_projection,
+    apply_frontend_resources_projection,
     compile_frontend_authorization_projection,
 )
 from app.services.authorization_resource_catalog import (
@@ -202,11 +202,8 @@ class AuthorizationResourceCatalogTests(unittest.TestCase):
         before = plan_fingerprint(plan)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            routes = root / "frontend/src/constants/routes.tsx"
-            routes.parent.mkdir(parents=True)
-            routes.write_text("// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n", encoding="utf-8")
-            apply_authorization_frontend_projection(root, projection)
-            resources = routes.with_name("resources.ts")
+            apply_frontend_resources_projection(root, projection)
+            resources = root / "frontend/src/constants/resources.ts"
             source = resources.read_text(encoding="utf-8")
             resources.write_text("\n\n" + source.replace("  ", "    ") + "\n", encoding="utf-8")
             self.assertNotEqual(source, resources.read_text(encoding="utf-8"))

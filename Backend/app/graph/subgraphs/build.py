@@ -14,6 +14,10 @@ from app.config import dag_business_self_check_enabled
 from app.agents.database.generator import generate_database_with_deep_agent
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
 from app.agents.frontend.generator import generate_frontend_with_deep_agent
+from app.domain.models import (
+    BuildTaskExecutionContractError,
+    resolve_build_task_execution_contract,
+)
 from app.agents.repair_planner import (
     plan_build_failure_repair_with_repair_planner_agent,
 )
@@ -58,6 +62,10 @@ from app.services.build_scheduler import (
     select_ready_build_batch,
     summarize_build_runtime,
     hydrate_missing_failed_results,
+)
+from app.services.platform_task_executors import (
+    PlatformTaskExecutorRegistryError,
+    resolve_platform_task_executor,
 )
 from app.workspace.code_changes import (
     build_code_change_set,
@@ -311,7 +319,7 @@ def _execute_ready_tasks(
     *,
     on_batch_tool_activity: BatchToolActivityCallback | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """把同一批就绪任务逐任务并发分发，隔离 Agent 写入归属和验收状态。"""
+    """把同一批就绪任务按独立 execution strategy 并发分发。"""
 
     all_results: list[dict[str, Any]] = []
     code_change_sets: list[dict[str, Any]] = []
@@ -324,10 +332,9 @@ def _execute_ready_tasks(
         futures = [
             executor.submit(
                 contextvars.copy_context().run,
-                _execute_owner_tasks,
+                _execute_task,
                 state,
-                str(task.get("owner") or ""),
-                [task],
+                task,
                 on_batch_tool_activity=on_batch_tool_activity,
             )
             for task in ready_tasks
@@ -343,6 +350,135 @@ def _execute_ready_tasks(
     return all_results, code_change_sets
 
 
+def _execute_task(
+    state: ProjectState,
+    task: dict[str, Any],
+    *,
+    on_batch_tool_activity: BatchToolActivityCallback | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """先按执行策略分流单个 Task，未知 deterministic executor 绝不回退给 Agent。"""
+
+    try:
+        contract = resolve_build_task_execution_contract(task)
+    except BuildTaskExecutionContractError as exc:
+        return (
+            normalize_task_results(
+                dispatched_tasks=[task],
+                raw_results=[
+                    {
+                        "task_id": task.get("id"),
+                        "owner": task.get("owner"),
+                        "status": "failed",
+                        "failure_category": "execution_contract_error",
+                        "failure_reason": str(exc),
+                        "agent_note": str(exc),
+                    }
+                ],
+            ),
+            None,
+        )
+    if contract.execution_strategy == "deterministic":
+        return _execute_deterministic_task(
+            state,
+            task,
+            str(contract.platform_executor or ""),
+        )
+    return _execute_owner_tasks(
+        state,
+        str(task.get("owner") or ""),
+        [task],
+        on_batch_tool_activity=on_batch_tool_activity,
+    )
+
+
+def _execute_deterministic_task(
+    state: ProjectState,
+    task: dict[str, Any],
+    platform_executor: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """调用注册的平台执行器，并把结果接入普通 Task 的结果归一化与变更归属。"""
+
+    try:
+        executor = resolve_platform_task_executor(platform_executor)
+    except PlatformTaskExecutorRegistryError as exc:
+        raw_result = _deterministic_dispatch_failure(
+            task,
+            category="execution_contract_error",
+            reason=str(exc),
+            platform_executor=platform_executor,
+        )
+        return normalize_task_results(
+            dispatched_tasks=[task],
+            raw_results=[raw_result],
+        ), None
+
+    workspace = workspace_from_state(state)
+    context = {
+        "workspace": workspace or "",
+        "formal_plan": state.get("project_plan"),
+    }
+    source_tool = platform_executor
+    try:
+        if workspace:
+            captured = capture_agent_file_changes(
+                workspace=workspace,
+                source_tool=source_tool,
+                action=lambda: executor(task, context),
+            )
+            raw_result = captured.value
+            change_set = _filter_change_set_for_tasks(
+                captured.code_change_set,
+                [task],
+                source_tool=source_tool,
+            )
+        else:
+            raw_result = executor(task, context)
+            change_set = None
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+        raw_result = _deterministic_dispatch_failure(
+            task,
+            category="runner_crash",
+            reason=f"平台确定性执行器异常退出：{reason}",
+            platform_executor=platform_executor,
+        )
+        change_set = None
+
+    return normalize_task_results(
+        dispatched_tasks=[task],
+        raw_results=[raw_result] if isinstance(raw_result, dict) else [],
+    ), change_set
+
+
+def _deterministic_dispatch_failure(
+    task: dict[str, Any],
+    *,
+    category: str,
+    reason: str,
+    platform_executor: str,
+) -> dict[str, Any]:
+    """构造 deterministic dispatch 自身失败时的标准 Task 结果。"""
+
+    return {
+        "task_id": task.get("id"),
+        "owner": task.get("owner"),
+        "execution_strategy": "deterministic",
+        "platform_executor": platform_executor,
+        "status": "failed",
+        "failure_category": category,
+        "failure_reason": reason,
+        "agent_note": reason,
+        "changed_files": [],
+        "commands": [],
+        "change_request": None,
+        "executed_by": {
+            "agent": "platform",
+            "mode": "deterministic",
+            "source": platform_executor,
+        },
+    }
+
+
 def _execute_owner_tasks(
     state: ProjectState,
     owner: str,
@@ -350,7 +486,7 @@ def _execute_owner_tasks(
     *,
     on_batch_tool_activity: BatchToolActivityCallback | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """执行一个任务 Agent，并只使用该 Agent 的真实写入完成文件归属。"""
+    """在 agent 策略内按代码领域 owner 选择专业 Agent，并归属真实写入。"""
 
     runner_entry = _runner_for_owner(owner)
     if runner_entry is None:

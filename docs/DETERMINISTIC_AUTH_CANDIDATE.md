@@ -59,9 +59,11 @@ provider 使用现有 `provides_capabilities` / `deliverables[].provides` 契约
 现有 `CandidateAttempt` 强制携带 AttemptIdentity；本 builder 不为确定性生成虚构模型 Attempt。
 候选记录的生命周期、持久化、Local/Global validation 和 Scope Assembly 由后续任务接入。
 
-旧 `build_task_planner` 的 Task 归一化尚未保留 `execution_strategy` / `platform_executor`，
-因此本任务不把输出送入旧归一化或 Build dispatch，也不修改 authorization projection writer。
-Task 的执行和完整资源投影验收仍属于后续 executor/validation 工作，本任务不声称已执行。
+`build_task_planner` 现会保留并校验 `execution_strategy` / `platform_executor`，旧 Task
+缺少策略时默认使用 `agent`。Build dispatch 先按策略分流，未知 deterministic executor
+会直接失败且不会回退到 owner 对应的 LLM；当前只登记
+`authorization.frontend_resources`。该 executor 已通过显式 registry 接入现有 ready batch，
+执行结果复用普通 Task lifecycle；资源投影失败不会回退到 LLM。
 
 ## 验证
 

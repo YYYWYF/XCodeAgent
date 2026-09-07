@@ -17,6 +17,36 @@ from app.services.build_scheduler import (
 
 
 class BuildSchedulerTests(unittest.TestCase):
+    def test_frontend_task_waits_for_deterministic_auth_dependency(self) -> None:
+        """依赖 auth Task 的前端任务必须等它完成后才进入 ready batch。"""
+
+        auth_task = {
+            "id": "auth-resources",
+            "owner": "frontend",
+            "execution_strategy": "deterministic",
+            "platform_executor": "authorization.frontend_resources",
+            "status": "pending",
+            "dependencies": [],
+            "change_scope": [
+                {"path": "frontend/src/constants/resources.ts"}
+            ],
+        }
+        page_task = {
+            "id": "orders-page",
+            "owner": "frontend",
+            "execution_strategy": "agent",
+            "status": "pending",
+            "dependencies": ["auth-resources"],
+            "change_scope": [{"path": "frontend/src/Page.tsx"}],
+        }
+
+        waiting = select_ready_build_batch([auth_task, page_task])
+        completed_auth = {**auth_task, "status": "completed"}
+        released = select_ready_build_batch([completed_auth, page_task])
+
+        self.assertEqual(waiting["ready_task_ids"], ["auth-resources"])
+        self.assertEqual(released["ready_task_ids"], ["orders-page"])
+
     def test_selects_dependency_ready_lock_compatible_batch(self) -> None:
         tasks = [
             {

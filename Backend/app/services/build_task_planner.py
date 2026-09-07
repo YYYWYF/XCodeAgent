@@ -8,6 +8,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.domain.models import (
+    BuildTaskExecutionContractError,
+    resolve_build_task_execution_contract,
+)
 from app.services.build_task_menu import (
     reconcile_live_page_paths,
 )
@@ -409,6 +413,8 @@ def _normalize_agent_tasks(
             _string_list(item.get("dependencies"))
         )
         can_parallel = bool(item.get("can_run_in_parallel", True))
+        execution_strategy = item.get("execution_strategy", "agent")
+        platform_executor = item.get("platform_executor")
         database_scope = _dict_value(item.get("database_scope"))
         allowed_paths = (
             _dedupe_normalized_strings(
@@ -437,6 +443,8 @@ def _normalize_agent_tasks(
             {
                 "id": task_id,
                 "owner": owner,
+                "execution_strategy": execution_strategy,
+                "platform_executor": platform_executor,
                 "task_type": _text(
                     item.get("task_type"),
                     default_task_type,
@@ -689,6 +697,10 @@ def _exact_duplicate_key(task: dict[str, Any]) -> str:
     """生成只包含确定性结构的完全重复任务键，不做语义相似度推断。"""
 
     owner = _normalized_text_key(_text(task.get("owner")))
+    execution_strategy = _normalized_text_key(
+        _text(task.get("execution_strategy"), "agent")
+    )
+    platform_executor = _normalized_text_key(_text(task.get("platform_executor")))
     unit_id = _normalized_text_key(_text(task.get("unit_id")))
     task_type = _normalized_text_key(_text(task.get("task_type")))
     target_files = sorted(
@@ -711,7 +723,17 @@ def _exact_duplicate_key(task: dict[str, Any]) -> str:
     target_key = _stable_json_key({"target_files": target_files, "change_scope": change_scope})
     if not target_files and not change_scope and not database_scope:
         return ""
-    return "|".join((owner, unit_id, task_type, target_key, database_scope))
+    return "|".join(
+        (
+            owner,
+            execution_strategy,
+            platform_executor,
+            unit_id,
+            task_type,
+            target_key,
+            database_scope,
+        )
+    )
 
 
 def _stable_json_key(value: Any) -> str:
@@ -783,6 +805,10 @@ def build_task_candidate_contract_errors(
         if not isinstance(task, dict):
             continue
         task_id = _text(task.get("id"), f"tasks[{task_index}]")
+        try:
+            resolve_build_task_execution_contract(task)
+        except BuildTaskExecutionContractError as exc:
+            errors.append(str(exc))
         source_refs = task.get("source_refs")
         if isinstance(source_refs, dict) and "authorization" in source_refs:
             errors.append(
@@ -997,6 +1023,10 @@ def _task_semantic_errors(
         unit_id = str(task.get("unit_id") or "")
         task_type = str(task.get("task_type") or "")
         paths = _task_declared_paths(task)
+        try:
+            resolve_build_task_execution_contract(task)
+        except BuildTaskExecutionContractError as exc:
+            errors.append(str(exc))
         errors.extend(
             _template_boundary_errors(
                 task,
@@ -1341,6 +1371,8 @@ def _canonical_task(task: dict[str, Any]) -> dict[str, Any]:
 
     canonical = dict(task)
     canonical["id"] = _text(task.get("id"), "task")
+    canonical["execution_strategy"] = task.get("execution_strategy", "agent")
+    canonical["platform_executor"] = task.get("platform_executor")
     canonical["unit_id"] = _text(task.get("unit_id"), "application:root")
     canonical["task_type"] = _text(
         task.get("task_type"),
