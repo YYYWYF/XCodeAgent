@@ -3,27 +3,44 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import json
 from typing import Annotated, Any
 
-from pydantic import BeforeValidator, StringConstraints, model_validator
+from pydantic import AfterValidator, BeforeValidator, StringConstraints, model_validator
 
 from app.domain.models import BuildUnitKind
 from app.services.frozen_contract_store import (
     ContractKind,
-    FrozenContract,
     FrozenContractStore,
 )
 from app.services.planning_frozen import (
     FrozenJsonObject,
     FrozenPlanningModel,
+    plain_json,
     tuple_input,
 )
 
 
 _Identifier = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
 _Selector = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
-_Identifiers = Annotated[tuple[_Identifier, ...], BeforeValidator(tuple_input)]
-_Selectors = Annotated[tuple[_Selector, ...], BeforeValidator(tuple_input)]
+
+
+def _sorted_strings(value: tuple[str, ...]) -> tuple[str, ...]:
+    """把已完成字符串校验的序列规范化为稳定字典序。"""
+
+    return tuple(sorted(value))
+
+
+_Identifiers = Annotated[
+    tuple[_Identifier, ...],
+    BeforeValidator(tuple_input),
+    AfterValidator(_sorted_strings),
+]
+_Selectors = Annotated[
+    tuple[_Selector, ...],
+    BeforeValidator(tuple_input),
+    AfterValidator(_sorted_strings),
+]
 
 
 class FormalContractSourceRef(FrozenPlanningModel):
@@ -38,7 +55,7 @@ class FormalContractSourceRef(FrozenPlanningModel):
 
     @model_validator(mode="after")
     def validate_binding(self) -> "FormalContractSourceRef":
-        """拒绝空、重复或顺序不稳定的职责和 selector 声明。"""
+        """拒绝空或重复声明；顺序已在字段边界统一规范化。"""
 
         if not self.requirement_ids or len(set(self.requirement_ids)) != len(self.requirement_ids):
             raise ValueError("正式来源绑定必须包含互不重复的 requirement_ids。")
@@ -69,6 +86,40 @@ class ContractCatalogBindingError(ValueError):
     """表示当前 Unit 的正式来源无法安全绑定到 Frozen Store。"""
 
 
+def _canonical_source(value: Mapping[str, Any]) -> str:
+    """把结构化来源编码为与映射插入顺序无关的稳定字符串。"""
+
+    return json.dumps(
+        plain_json(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def formal_source_ref_sort_key(
+    binding: FormalContractSourceRef,
+) -> tuple[str, str, str, str, tuple[str, ...], tuple[str, ...]]:
+    """返回 FormalContractSourceRef 的完整稳定排序键。"""
+
+    return (
+        binding.unit_id,
+        binding.unit_kind,
+        binding.kind,
+        _canonical_source(binding.source),
+        binding.requirement_ids,
+        binding.selectors,
+    )
+
+
+def canonicalize_formal_source_refs(
+    bindings: tuple[FormalContractSourceRef, ...],
+) -> tuple[FormalContractSourceRef, ...]:
+    """规范化顶层正式来源顺序，使语义等价输入产生相同序列化结果。"""
+
+    return tuple(sorted(bindings, key=formal_source_ref_sort_key))
+
+
 def _requirement_record(value: Any) -> tuple[str, Mapping[str, Any]]:
     """从冻结 DTO 或普通映射读取精确职责身份和正式 source_refs。"""
 
@@ -95,129 +146,22 @@ def _requirement_record(value: Any) -> tuple[str, Mapping[str, Any]]:
     return requirement_id, source_refs
 
 
-def _authorized_targets(
-    requirements: Mapping[str, Mapping[str, Any]],
-    store: FrozenContractStore,
-) -> tuple[set[str], set[str], set[str], set[str]]:
-    """由当前职责及 Store 内关系推导允许的 page、API、endpoint 和 entity 身份。"""
-
-    page_ids = {
-        value.get("page_id")
-        for value in requirements.values()
-        if isinstance(value.get("page_id"), str)
-    }
-    api_ids = {
-        value.get("api_contract_id")
-        for value in requirements.values()
-        if isinstance(value.get("api_contract_id"), str)
-    }
-    endpoint_ids = {
-        value.get("endpoint_id")
-        for value in requirements.values()
-        if isinstance(value.get("endpoint_id"), str)
-    }
-    entity_ids = {
-        value.get("entity_id")
-        for value in requirements.values()
-        if isinstance(value.get("entity_id"), str)
-    }
-    for contract in store.contracts.values():
-        if contract.kind == "page_contract" and contract.content.get("pageId") in page_ids:
-            required = contract.content.get("requiredEndpointIds", ())
-            if isinstance(required, (list, tuple)):
-                endpoint_ids.update(item for item in required if isinstance(item, str))
-    for contract in store.contracts.values():
-        if contract.kind != "api_contract":
-            continue
-        contract_id = contract.content.get("id")
-        endpoints = contract.content.get("endpoints", ())
-        endpoint_matches = {
-            item.get("id")
-            for item in endpoints
-            if isinstance(item, Mapping) and item.get("id") in endpoint_ids
-        } if isinstance(endpoints, (list, tuple)) else set()
-        if contract_id in api_ids or endpoint_matches:
-            if isinstance(contract_id, str):
-                api_ids.add(contract_id)
-            endpoint_ids.update(item for item in endpoint_matches if isinstance(item, str))
-            entities = contract.content.get("entity_ids", ())
-            if isinstance(entities, (list, tuple)):
-                entity_ids.update(item for item in entities if isinstance(item, str))
-    return page_ids, api_ids, endpoint_ids, entity_ids
-
-
-def _binding_matches_targets(
+def _current_unit_bindings(
     *,
     unit_id: str,
     unit_kind: BuildUnitKind,
-    binding: FormalContractSourceRef,
-    contract: FrozenContract,
-    targets: tuple[set[str], set[str], set[str], set[str]],
-) -> bool:
-    """拒绝真实 Store ref 被错误授权给不相关的 Page、API、Entity 或权限目标。"""
+    expected_requirements: set[str],
+    bindings: Sequence[FormalContractSourceRef],
+    allow_other_units: bool,
+) -> tuple[FormalContractSourceRef, ...]:
+    """筛选并验证当前 Unit 的绑定身份，不让外部 Unit 绑定参与比较。"""
 
-    page_ids, api_ids, endpoint_ids, entity_ids = targets
-    if binding.kind in {"product_plan", "technical_plan"}:
-        return True
-    if binding.kind == "page_contract":
-        page_id = contract.content.get("pageId")
-        return (
-            unit_kind == "page"
-            and isinstance(page_id, str)
-            and unit_id == f"page:{page_id}"
-            and page_id in page_ids
-        )
-    if binding.kind == "api_contract":
-        return contract.content.get("id") in api_ids
-    if binding.kind == "entity_binding":
-        return contract.content.get("entity_id") in entity_ids
-    if binding.kind == "authorization_slice":
-        if contract.content.get("pageId") in page_ids:
-            return True
-        endpoints = contract.content.get("endpoints", ())
-        return isinstance(endpoints, (list, tuple)) and any(
-            isinstance(item, Mapping) and item.get("endpointId") in endpoint_ids
-            for item in endpoints
-        )
-    return False
-
-
-def build_unit_contract_catalog(
-    *,
-    unit_id: str,
-    unit_kind: BuildUnitKind,
-    generation_requirements: Sequence[Any],
-    formal_source_refs: Sequence[FormalContractSourceRef | Mapping[str, Any]],
-    frozen_contract_store: FrozenContractStore,
-) -> tuple[ContractCatalogEntry, ...]:
-    """按当前 Unit 和职责构建只指向 Frozen Store 的确定性 allowlist。
-
-    这里只验证授权绑定和汇总 selector，不解释 selector、不读取合同 fragment，也不
-    接受实时文件路径。其他 Unit 的绑定会被过滤，当前 Unit 的错误绑定则立即失败。
-    """
-
-    if not isinstance(unit_id, str) or not unit_id or unit_id != unit_id.strip():
-        raise ContractCatalogBindingError("Unit contract catalog 缺少精确 unit_id。")
-    store = FrozenContractStore.model_validate(frozen_contract_store)
-    try:
-        requirement_records = tuple(_requirement_record(item) for item in generation_requirements)
-        bindings = tuple(FormalContractSourceRef.model_validate(item) for item in formal_source_refs)
-    except (TypeError, ValueError) as exc:
-        if isinstance(exc, ContractCatalogBindingError):
-            raise
-        raise ContractCatalogBindingError(f"正式来源绑定结构无效：{exc}") from exc
-    requirement_ids = tuple(item[0] for item in requirement_records)
-    if len(set(requirement_ids)) != len(requirement_ids):
-        raise ContractCatalogBindingError("当前 Unit 存在重复 generation requirement。")
-
-    expected_requirements = set(requirement_ids)
-    targets = _authorized_targets(dict(requirement_records), store)
-    covered_requirements: set[str] = set()
-    selectors_by_ref: dict[str, set[str]] = {}
-    kinds_by_ref: dict[str, ContractKind] = {}
+    result = []
     for binding in bindings:
         if binding.unit_id != unit_id:
-            continue
+            if allow_other_units:
+                continue
+            raise ContractCatalogBindingError("期望正式来源清单包含了其他 Unit 的绑定。")
         if binding.unit_kind != unit_kind:
             raise ContractCatalogBindingError(
                 f"Unit {unit_id} 的正式来源绑定 unit_kind 不一致。"
@@ -228,22 +172,128 @@ def build_unit_contract_catalog(
                 f"Unit {unit_id} 的正式来源绑定引用了非当前职责："
                 f"{', '.join(sorted(unknown_requirements))}。"
             )
+        result.append(binding)
+    return tuple(result)
+
+
+def _binding_atoms(
+    *,
+    unit_id: str,
+    bindings: Sequence[FormalContractSourceRef],
+    store: FrozenContractStore,
+) -> tuple[tuple[str, ContractKind, str, str], ...]:
+    """把绑定展开为 requirement/kind/ref/selector 原子并验证均指向当前 Store。"""
+
+    atoms = []
+    for binding in bindings:
         contract = store.get_by_source(kind=binding.kind, source=binding.source)
         if contract is None:
             raise ContractCatalogBindingError(
                 f"Unit {unit_id} 的正式来源绑定不属于当前 FrozenContractStore：{binding.kind}。"
             )
-        if not _binding_matches_targets(
-            unit_id=unit_id,
-            unit_kind=unit_kind,
-            binding=binding,
-            contract=contract,
-            targets=targets,
-        ):
-            raise ContractCatalogBindingError(
-                f"Unit {unit_id} 的正式来源绑定与当前职责目标不一致：{binding.kind}。"
-            )
-        covered_requirements.update(binding.requirement_ids)
+        atoms.extend(
+            (requirement_id, binding.kind, contract.ref_id, selector)
+            for requirement_id in binding.requirement_ids
+            for selector in binding.selectors
+        )
+    if len(set(atoms)) != len(atoms):
+        raise ContractCatalogBindingError(
+            f"Unit {unit_id} 的正式来源绑定包含重复授权。"
+        )
+    return tuple(sorted(atoms))
+
+
+def _binding_mismatch_summary(
+    atoms: set[tuple[str, ContractKind, str, str]],
+) -> str:
+    """把原子差异压缩为稳定的 requirement/kind 列表，避免暴露正文。"""
+
+    return ", ".join(sorted({f"{item[0]}/{item[1]}" for item in atoms}))
+
+
+def build_unit_contract_catalog(
+    *,
+    unit_id: str,
+    unit_kind: BuildUnitKind,
+    generation_requirements: Sequence[Any],
+    formal_source_refs: Sequence[FormalContractSourceRef | Mapping[str, Any]],
+    expected_formal_source_refs: Sequence[FormalContractSourceRef | Mapping[str, Any]],
+    frozen_contract_store: FrozenContractStore,
+) -> tuple[ContractCatalogEntry, ...]:
+    """按当前 Unit 和职责构建只指向 Frozen Store 的确定性 allowlist。
+
+    这里只验证授权绑定和汇总 selector，不解释 selector、不读取合同 fragment，也不
+    接受实时文件路径。其他 Unit 的绑定会被过滤，当前 Unit 的错误绑定则立即失败。
+    """
+
+    if not isinstance(unit_id, str) or not unit_id or unit_id != unit_id.strip():
+        raise ContractCatalogBindingError("Unit contract catalog 缺少精确 unit_id。")
+    if not isinstance(frozen_contract_store, FrozenContractStore):
+        raise ContractCatalogBindingError(
+            "Unit contract catalog 只接受已验证的 FrozenContractStore instance。"
+        )
+    store = frozen_contract_store
+    try:
+        requirement_records = tuple(_requirement_record(item) for item in generation_requirements)
+        bindings = tuple(FormalContractSourceRef.model_validate(item) for item in formal_source_refs)
+        expected_bindings = tuple(
+            FormalContractSourceRef.model_validate(item)
+            for item in expected_formal_source_refs
+        )
+    except (TypeError, ValueError) as exc:
+        if isinstance(exc, ContractCatalogBindingError):
+            raise
+        raise ContractCatalogBindingError(f"正式来源绑定结构无效：{exc}") from exc
+    requirement_ids = tuple(item[0] for item in requirement_records)
+    if len(set(requirement_ids)) != len(requirement_ids):
+        raise ContractCatalogBindingError("当前 Unit 存在重复 generation requirement。")
+
+    expected_requirements = set(requirement_ids)
+    current_bindings = _current_unit_bindings(
+        unit_id=unit_id,
+        unit_kind=unit_kind,
+        expected_requirements=expected_requirements,
+        bindings=bindings,
+        allow_other_units=True,
+    )
+    expected_current_bindings = _current_unit_bindings(
+        unit_id=unit_id,
+        unit_kind=unit_kind,
+        expected_requirements=expected_requirements,
+        bindings=expected_bindings,
+        allow_other_units=False,
+    )
+    manifest_requirements = {
+        requirement_id
+        for binding in expected_current_bindings
+        for requirement_id in binding.requirement_ids
+    }
+    if manifest_requirements != expected_requirements:
+        raise ContractCatalogBindingError(
+            f"Unit {unit_id} 的确定性期望清单未精确覆盖全部 generation requirements。"
+        )
+    actual_atoms = set(_binding_atoms(unit_id=unit_id, bindings=current_bindings, store=store))
+    expected_atoms = set(
+        _binding_atoms(unit_id=unit_id, bindings=expected_current_bindings, store=store)
+    )
+    missing_atoms = expected_atoms - actual_atoms
+    unexpected_atoms = actual_atoms - expected_atoms
+    if missing_atoms or unexpected_atoms:
+        details = []
+        if missing_atoms:
+            details.append(f"缺少 {_binding_mismatch_summary(missing_atoms)}")
+        if unexpected_atoms:
+            details.append(f"未授权 {_binding_mismatch_summary(unexpected_atoms)}")
+        raise ContractCatalogBindingError(
+            f"Unit {unit_id} 的正式来源绑定与确定性期望清单不一致：{'；'.join(details)}。"
+        )
+
+    selectors_by_ref: dict[str, set[str]] = {}
+    kinds_by_ref: dict[str, ContractKind] = {}
+    for binding in current_bindings:
+        contract = store.get_by_source(kind=binding.kind, source=binding.source)
+        if contract is None:  # pragma: no cover - 已由 _binding_atoms fail closed。
+            raise ContractCatalogBindingError("已验证的正式来源绑定无法再次解析。")
         kinds_by_ref.setdefault(contract.ref_id, binding.kind)
         if kinds_by_ref[contract.ref_id] != binding.kind:
             raise ContractCatalogBindingError(
@@ -251,12 +301,6 @@ def build_unit_contract_catalog(
             )
         selectors_by_ref.setdefault(contract.ref_id, set()).update(binding.selectors)
 
-    missing_requirements = expected_requirements - covered_requirements
-    if missing_requirements:
-        raise ContractCatalogBindingError(
-            f"Unit {unit_id} 的 generation requirements 缺少正式来源绑定："
-            f"{', '.join(sorted(missing_requirements))}。"
-        )
     return tuple(
         ContractCatalogEntry(
             ref_id=ref_id,

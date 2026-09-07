@@ -104,6 +104,19 @@ LangGraph adapter；业务编排归本服务所有。
 或 Frontend。T9.4/T9.5 只完成 Backend Attempt 拒收与 Scheduler cancellation correctness，
 不修改前端 Cancel UI。
 
+## Frozen Contract Catalog
+
+PlanningRun 只冻结一次正式 Store。每个 Unit 在 dispatch 前由当前 Scope、generation
+requirements 和 Store 独立编译 expected formal binding manifest，再把调用方声明的
+`formal_source_refs` 展开为 requirement/kind/ref/selector 原子做精确集合比较。缺少
+Page、required API、Entity 或所需 authorization slice，以及未知、跨目标、wrong-kind、
+额外 selector/source，均作为不可重试输入错误 fail closed；不会生成部分 catalog。
+
+`formal_source_refs`、每条绑定的 `requirement_ids` 和 `selectors` 都在
+`SequentialPlanningInputs` 边界规范化排序，因此仅组装顺序变化不会改变
+`input_fingerprint`。最终 `UnitGenerationContext.contract_catalog` 仍只包含
+`ref_id`、`kind` 和排序后的 `selectors`，不内联合同正文；retry 复用同一 Context。
+
 ## 验证
 
 在 `Backend` 中使用现有 unittest runner：

@@ -7,6 +7,8 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from app.services.dag_planning_orchestrator import DagPlanningError, plan_dag_sequential
+from app.services.dag_planning_inputs import SequentialPlanningInputs
+from app.services.frozen_contract_catalog import FormalContractSourceRef
 from app.services.frozen_contract_store import FrozenContractStore
 from app.services.planning_frozen import plain_json
 from app.services.unit_generation_contracts import UnitGenerationAttemptResult, UnitGenerationPolicy
@@ -126,6 +128,76 @@ class UnitContractCatalogTests(unittest.TestCase):
             {source_ref.unit_id for source_ref in inputs.formal_source_refs},
         )
 
+    def test_formal_source_order_is_canonical_for_input_fingerprint(self) -> None:
+        """顶层绑定及其 requirement/selector 换序不改变 Run 输入指纹。"""
+
+        unit_id = "backend:endpoint:orders-api:orders.list"
+        original = planning_inputs(
+            plan=project_plan(),
+            required=[unit_id],
+            scope=execution_scope(target_type="endpoint", name="orders"),
+        )
+        payload = original.model_dump(mode="json")
+        refs = payload["formal_source_refs"]
+        technical_indexes = [
+            index
+            for index, item in enumerate(refs)
+            if item["unit_id"] == unit_id and item["kind"] == "technical_plan"
+        ][:2]
+        self.assertEqual(len(technical_indexes), 2)
+        first, second = (refs[index] for index in technical_indexes)
+        combined = {
+            **first,
+            "requirement_ids": first["requirement_ids"] + second["requirement_ids"],
+        }
+        canonical_payload = json.loads(json.dumps(payload))
+        canonical_payload["formal_source_refs"] = [
+            item
+            for index, item in enumerate(refs)
+            if index not in technical_indexes
+        ] + [combined]
+        reordered_payload = json.loads(json.dumps(canonical_payload))
+        reordered_payload["formal_source_refs"].reverse()
+        for item in reordered_payload["formal_source_refs"]:
+            item["requirement_ids"].reverse()
+            item["selectors"].reverse()
+
+        canonical = SequentialPlanningInputs.model_validate(canonical_payload)
+        reordered = SequentialPlanningInputs.model_validate(reordered_payload)
+        requirements = canonical.requirements()
+        canonical_run = canonical.create_run(
+            requirements,
+            planning_run_id="canonical-run",
+            workflow_run_id="workflow-run",
+            thread_id="thread",
+            at=AT,
+        )
+        reordered_run = reordered.create_run(
+            reordered.requirements(),
+            planning_run_id="reordered-run",
+            workflow_run_id="workflow-run",
+            thread_id="thread",
+            at=AT,
+        )
+
+        self.assertEqual(canonical.formal_source_refs, reordered.formal_source_refs)
+        self.assertEqual(canonical_run.input_fingerprint, reordered_run.input_fingerprint)
+
+    def test_nested_formal_source_sequences_are_canonical(self) -> None:
+        """单条 binding 的 requirement_ids 与 selectors 在 DTO 边界稳定排序。"""
+
+        binding = FormalContractSourceRef(
+            unit_id="page:orders",
+            unit_kind="page",
+            requirement_ids=("requirement:b", "requirement:a"),
+            kind="page_contract",
+            source={"page_id": "orders", "artifact": "runtime-page-contracts"},
+            selectors=("/uiDesignRef", "/"),
+        )
+
+        self.assertEqual(binding.requirement_ids, ("requirement:a", "requirement:b"))
+        self.assertEqual(binding.selectors, ("/", "/uiDesignRef"))
+
 
 class UnitContractCatalogRetryTests(unittest.IsolatedAsyncioTestCase):
     """验证 retry 复用 catalog，并让非法来源绑定在模型调用前致命失败。"""
@@ -201,6 +273,74 @@ class UnitContractCatalogRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(caught.exception.snapshot)
         self.assertEqual(caught.exception.issues[0].code, "UNIT_CONTRACT_SOURCE_BINDING_INVALID")
         self.assertFalse(caught.exception.issues[0].retryable)
+
+    async def _assert_missing_page_binding_is_fatal(self, missing_kind: str) -> None:
+        """删除 Page 完整清单中的一种正式来源，并断言模型 dispatch 前失败。"""
+
+        plan = project_plan(authorization=True)
+        scope = execution_scope(name="orders")
+        context = build_context(plan, scope)
+        inputs = planning_inputs(
+            plan=plan,
+            scope=scope,
+            context=context,
+            required=["page:orders"],
+        )
+        refs = [
+            item.model_dump(mode="json")
+            for item in inputs.formal_source_refs
+            if not (item.unit_id == "page:orders" and item.kind == missing_kind)
+        ]
+        invalid = inputs.model_copy(update={"formal_source_refs": refs})
+        calls = []
+
+        async def generate(job, **_kwargs):
+            """记录意外调用；清单不完整时不允许进入 Local attempt。"""
+
+            calls.append(job)
+            raise AssertionError("缺失正式来源时不得进入模型 dispatch")
+
+        with TemporaryDirectory() as directory, self.assertRaises(DagPlanningError) as caught:
+            await plan_dag_sequential(
+                invalid,
+                workspace_state={"workspace": directory},
+                planning_run_id=f"catalog-missing-{missing_kind}-run",
+                workflow_run_id="workflow-run",
+                thread_id="thread",
+                policy=UnitGenerationPolicy(**_policy_payload()),
+                settings=_settings(),
+                generate_once=generate,
+                now=lambda: AT,
+            )
+
+        self.assertEqual(calls, [])
+        self.assertIsNone(caught.exception.snapshot)
+        self.assertEqual(
+            caught.exception.issues[0].code,
+            "UNIT_CONTRACT_SOURCE_BINDING_INVALID",
+        )
+        self.assertFalse(caught.exception.issues[0].retryable)
+        self.assertIn(missing_kind, caught.exception.issues[0].message)
+
+    async def test_missing_page_contract_is_fatal_before_model_dispatch(self) -> None:
+        """Page requirement 缺 page_contract 时必须 fail closed。"""
+
+        await self._assert_missing_page_binding_is_fatal("page_contract")
+
+    async def test_missing_required_api_contract_is_fatal_before_model_dispatch(self) -> None:
+        """Page requirement 缺 required API Contract 时必须 fail closed。"""
+
+        await self._assert_missing_page_binding_is_fatal("api_contract")
+
+    async def test_missing_required_entity_binding_is_fatal_before_model_dispatch(self) -> None:
+        """Page requirement 缺 required Entity binding 时必须 fail closed。"""
+
+        await self._assert_missing_page_binding_is_fatal("entity_binding")
+
+    async def test_missing_required_authorization_slice_is_fatal_before_model_dispatch(self) -> None:
+        """受保护 Page requirement 缺 authorization_slice 时必须 fail closed。"""
+
+        await self._assert_missing_page_binding_is_fatal("authorization_slice")
 
 
 if __name__ == "__main__":

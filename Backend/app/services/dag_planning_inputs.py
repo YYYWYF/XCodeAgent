@@ -1,18 +1,20 @@
-"""串行 Planning 的冻结输入、前置校验与单 Unit inline Context 构造。"""
+"""串行 Planning 的冻结输入、前置校验与单 Unit Catalog Context 构造。"""
 
 from collections.abc import Mapping
 from hashlib import sha256
 import json
 from typing import Annotated
 
-from pydantic import BeforeValidator
+from pydantic import AfterValidator, BeforeValidator
 
 from app.services.build_task_reuse_contracts import ReuseFacts
 from app.services.frozen_contract_catalog import (
     ContractCatalogBindingError,
     FormalContractSourceRef,
     build_unit_contract_catalog,
+    canonicalize_formal_source_refs,
 )
+from app.services.frozen_contract_manifest import compile_expected_unit_formal_source_refs
 from app.services.frozen_contract_store import FrozenContractStore, PlanningFormalInputs
 from app.services.planning_frozen import (
     FrozenJsonObject,
@@ -39,6 +41,7 @@ def _input_digest(value: Mapping) -> str:
 _FormalSourceRefs = Annotated[
     tuple[FormalContractSourceRef, ...],
     BeforeValidator(tuple_input),
+    AfterValidator(canonicalize_formal_source_refs),
 ]
 
 
@@ -149,11 +152,19 @@ class SequentialPlanningInputs(FrozenPlanningModel):
                 unit_ids=(unit_id,),
             )
         try:
+            expected_formal_source_refs = compile_expected_unit_formal_source_refs(
+                unit_id=unit_id,
+                unit_kind=unit.kind,
+                generation_requirements=duties,
+                scoped_endpoint_keys=tuple(endpoints),
+                frozen_contract_store=frozen_contract_store,
+            )
             contract_catalog = build_unit_contract_catalog(
                 unit_id=unit_id,
                 unit_kind=unit.kind,
                 generation_requirements=duties,
                 formal_source_refs=self.formal_source_refs,
+                expected_formal_source_refs=expected_formal_source_refs,
                 frozen_contract_store=frozen_contract_store,
             )
         except ContractCatalogBindingError as exc:
