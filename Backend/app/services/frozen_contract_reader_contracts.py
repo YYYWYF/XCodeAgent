@@ -12,6 +12,7 @@ from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel
 
 _Identifier = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
 _PositiveInt = Annotated[int, Field(gt=0)]
+_Utf8PageBytes = Annotated[int, Field(ge=4)]
 ContractReadErrorCode = Literal[
     "FROZEN_CONTRACT_READER_INPUT_INVALID",
     "FROZEN_CONTRACT_REF_UNAUTHORIZED",
@@ -28,7 +29,7 @@ class FrozenContractReadPolicy(FrozenPlanningModel):
 
     max_reads: _PositiveInt
     max_total_bytes: _PositiveInt
-    max_bytes_per_read: _PositiveInt
+    max_bytes_per_read: _Utf8PageBytes
 
     @model_validator(mode="after")
     def validate_page_budget(self) -> "FrozenContractReadPolicy":

@@ -7,6 +7,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from pydantic import ValidationError
+
 from app.services.frozen_contract_catalog import ContractCatalogEntry
 from app.services.frozen_contract_reader import (
     FrozenContractReadError,
@@ -103,6 +105,70 @@ class FrozenContractReaderTests(unittest.TestCase):
 
         self.assertEqual(json.loads("".join(pages)), "订单接口-很长的稳定标识")
         self.assertEqual(reader.accumulated_bytes, len("".join(pages).encode("utf-8")))
+
+    def test_page_budget_covers_every_utf8_code_point(self) -> None:
+        """1/2/3 字节页预算在 schema 层拒绝，4 字节可完整分页中文与 emoji。"""
+
+        for byte_limit in (1, 2, 3):
+            with self.subTest(byte_limit=byte_limit), self.assertRaises(ValidationError):
+                FrozenContractReadPolicy(
+                    max_reads=10,
+                    max_total_bytes=100,
+                    max_bytes_per_read=byte_limit,
+                )
+
+        payload = _formal_inputs()
+        payload["api_contracts"][0]["content"]["id"] = "中😀"
+        reader, _, ref_id = _reader(
+            payload=payload,
+            selectors=("/id",),
+            max_reads=10,
+            max_total_bytes=100,
+            max_bytes_per_read=4,
+        )
+        pages = []
+        cursor = None
+        while True:
+            result = read_frozen_contract_fragment(
+                reader,
+                ref_id=ref_id,
+                selector="/id",
+                cursor=cursor,
+            )
+            pages.append(result.content)
+            if result.complete:
+                break
+            cursor = result.next_cursor
+
+        self.assertEqual(json.loads("".join(pages)), "中😀")
+
+    def test_cursor_is_isolated_to_issuing_reader(self) -> None:
+        """一个 Reader 签发的 cursor 不能在并发 Unit 的另一 Reader 中使用。"""
+
+        first_reader, _, ref_id = _reader(
+            selectors=("/id",),
+            max_bytes_per_read=4,
+        )
+        other_reader, _, other_ref_id = _reader(
+            selectors=("/id",),
+            max_bytes_per_read=4,
+        )
+        first_page = read_frozen_contract_fragment(
+            first_reader,
+            ref_id=ref_id,
+            selector="/id",
+        )
+        self.assertIsNotNone(first_page.next_cursor)
+        self.assertEqual(ref_id, other_ref_id)
+
+        with self.assertRaises(FrozenContractReadError) as caught:
+            read_frozen_contract_fragment(
+                other_reader,
+                ref_id=other_ref_id,
+                selector="/id",
+                cursor=first_page.next_cursor,
+            )
+        self.assertEqual(caught.exception.code, "FROZEN_CONTRACT_CURSOR_INVALID")
 
     def test_unauthorized_ref_is_rejected_without_store_disclosure(self) -> None:
         """Store 中真实存在但不在当前 Unit catalog 的 ref 仍被拒绝。"""
