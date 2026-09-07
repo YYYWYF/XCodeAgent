@@ -2,6 +2,7 @@ import {
   DatabaseOutlined,
   LockOutlined,
   PlayCircleOutlined,
+  RobotOutlined,
   RocketOutlined,
 } from "@ant-design/icons";
 import { Button, Radio, Skeleton, Typography } from "antd";
@@ -9,6 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
@@ -20,17 +22,18 @@ import "./DetailConfirmationPageSelector.less";
 
 const { Text, Title } = Typography;
 
-type DetailTargetType = "page" | "endpoint" | "entity";
+type DetailTargetType = "page" | "endpoint" | "entity" | "agent";
 
 type Props = {
   apiContracts?: DevelopmentPlanningApiContract[];
   disabled: boolean;
   entities?: DevelopmentPlanningEntityOption[];
+  agents?: DevelopmentPlanningAgentOption[];
   generating?: boolean;
   loading: boolean;
   mode?: "initial" | "locked";
   onStart: (
-    targetType: "page" | "endpoint" | "entity",
+    targetType: "page" | "endpoint" | "entity" | "agent",
     targetId: string,
     targetLabel: string,
     hasDetailPlan: boolean,
@@ -86,6 +89,7 @@ function targetSelectionKey(type: DetailTargetType, id: string): string {
 /** 从单选值解析当前目标类型。 */
 function targetTypeFromSelection(value: string): DetailTargetType {
   if (value.startsWith("entity:")) return "entity";
+  if (value.startsWith("agent:")) return "agent";
   return value.startsWith("endpoint:") ? "endpoint" : "page";
 }
 
@@ -147,6 +151,7 @@ function renderPageTreeOptions(
 /** 在首次进入或选择待设计页面时提供唯一的详细设计入口。 */
 export default function DetailConfirmationPageSelector({
   apiContracts = [],
+  agents = [],
   disabled,
   entities = [],
   generating = false,
@@ -167,6 +172,15 @@ export default function DetailConfirmationPageSelector({
       ...entity
     }))
   }, [entities])
+  const agentOptions = useMemo(
+    () =>
+      agents.map((agent) => ({
+        agentKey: targetSelectionKey("agent", agent.agentId),
+        ...agent,
+        hasDetailPlan: true
+      })),
+    [agents]
+  )
   const endpointOptions = useMemo(() => {
     return apiContracts.flatMap((contract) => {
       return contract.endpoints.map((endpoint, endpointIndex) => {
@@ -211,17 +225,25 @@ export default function DetailConfirmationPageSelector({
       ),
     [entityOptions, selectedTargetKey],
   );
+  const selectedAgent = useMemo(
+    () => agentOptions.find((agent) => agent.agentKey === selectedTargetKey),
+    [agentOptions, selectedTargetKey]
+  );
   const selectedTargetType = selectedTargetKey
     ? targetTypeFromSelection(selectedTargetKey)
     : undefined;
   const selectedTarget =
-    selectedTargetType === "entity"
+    selectedTargetType === "agent"
+      ? selectedAgent
+      : selectedTargetType === "entity"
       ? selectedEntity
       : selectedTargetType === "endpoint"
         ? selectedEndpoint
         : selectedPage;
   const selectedTargetId =
-    selectedTargetType === "entity"
+    selectedTargetType === "agent"
+      ? selectedAgent?.agentId
+      : selectedTargetType === "entity"
       ? selectedEntity?.id
       : selectedTargetType === "endpoint"
         ? selectedEndpoint?.endpointId
@@ -233,10 +255,11 @@ export default function DetailConfirmationPageSelector({
     const pageKeys = pages.map((page) => targetSelectionKey("page", page.pageId));
     const endpointKeys = endpointOptions.map((endpoint) => endpoint.endpointKey);
     const entityKeys = entityOptions.map((entity) => entity.entityKey);
-    const availableKeys = [...pageKeys, ...endpointKeys, ...entityKeys];
+    const agentKeys = agentOptions.map((agent) => agent.agentKey);
+    const availableKeys = [...pageKeys, ...endpointKeys, ...entityKeys, ...agentKeys];
     if (!selectedTargetKey || availableKeys.includes(selectedTargetKey)) return;
     setSelectedTargetKey("");
-  }, [endpointOptions, entityOptions, generating, pages, selectedTargetKey]);
+  }, [agentOptions, endpointOptions, entityOptions, generating, pages, selectedTargetKey]);
 
   const progressTarget = progressEntity || progressEndpoint || progressPage;
   const progressTargetType: DetailTargetType | undefined = progressEntity
@@ -381,7 +404,7 @@ export default function DetailConfirmationPageSelector({
 
         {loading ? (
           <Skeleton active paragraph={{ rows: 4 }} title={false} />
-        ) : pages.length || endpointOptions.length || entityOptions.length ? (
+        ) : pages.length || endpointOptions.length || entityOptions.length || agentOptions.length ? (
           <Radio.Group
             aria-label="选择要开始设计的页面、接口或实体"
             className={cx("detail-page-selector-target-choice")}
@@ -420,6 +443,32 @@ export default function DetailConfirmationPageSelector({
                     type="secondary"
                   >
                     项目计划中暂无可设计页面。
+                  </Text>
+                )}
+              </section>
+
+              <section className={cx("detail-page-selector-target-section")}>
+                <Text className={cx("detail-page-selector-section-title")} strong>
+                  选择要开始开发的智能体
+                </Text>
+                {agentOptions.length ? (
+                  <div className={cx("detail-page-selector-options")}>
+                    {agentOptions.map((agent) => (
+                      <Radio.Button key={agent.agentId} value={agent.agentKey}>
+                        <span className={cx("detail-page-selector-name")}>
+                          <RobotOutlined />
+                          {agent.label}
+                        </span>
+                        <span className={cx("detail-page-selector-path")}>{agent.agentId}</span>
+                        <span className={cx("detail-page-selector-purpose")}>
+                          {agent.purpose}
+                        </span>
+                      </Radio.Button>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className={cx("detail-page-selector-empty")} type="secondary">
+                    当前计划中暂无智能体。
                   </Text>
                 )}
               </section>
@@ -525,7 +574,7 @@ export default function DetailConfirmationPageSelector({
           size="large"
           type="primary"
         >
-          开始详细设计「{selectedTarget?.label || "所选对象"}」
+          {selectedTargetType === "agent" ? "开始开发智能体" : "开始详细设计"}「{selectedTarget?.label || "所选对象"}」
         </Button>
         </div>
       </main>

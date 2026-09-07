@@ -43,6 +43,11 @@ export type ChatSessionDevelopmentTarget =
       apiContractId: string;
       endpointId: string;
       label: string;
+    }
+  | {
+      type: 'agent';
+      agentId: string;
+      label: string;
     };
 
 export type ChatSessionDevelopmentContinuation = {
@@ -308,6 +313,20 @@ function normalizeDevelopmentContinuation(
           token,
           technicalPlanSha256,
           target: { type: 'endpoint', apiContractId, endpointId, label },
+        }
+      : undefined;
+  }
+  if (candidate.type === 'agent') {
+    const agentId = normalizeEndpointField(candidate.agentId);
+    return agentId && label
+      ? {
+          id,
+          status,
+          sourceThreadId,
+          sourceRunId,
+          token,
+          technicalPlanSha256,
+          target: { type: 'agent', agentId, label },
         }
       : undefined;
   }

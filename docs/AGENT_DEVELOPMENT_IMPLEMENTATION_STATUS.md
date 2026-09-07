@@ -1,7 +1,7 @@
 # 智能体开发流程实现状态
 
 > 状态：当前事实台账
-> 基线日期：2026-08-31
+> 基线日期：2026-09-07
 > 变基目标：`origin/dev_agent` 的 `7b1eb34`
 > 原型功能基线：`603c10f`
 > 维护范围：智能体作为用户应用中的业务产物，从需求、设计、构建、测试、审查到验收的完整开发流程
@@ -37,8 +37,8 @@
 - 正式前端需求文档面板已按需展示“智能体”章节；TechnicalPlan 的 `agent_contracts[]` 已升级为带 ProductPlan Hash 的完整派生执行快照，包含 identity、capabilities、interaction、七段 `agentSettings`、Invocation、Runtime、Security、Artifacts、Required checks 和 Evaluation。模型只返回候选设置和稳定引用，平台确定性展开 Endpoint 并拒绝派生字段漂移；TechnicalPlan Markdown 和右侧阅读面板已同步展示完整契约。普通应用仍使用 `agents: []`、`agent_contracts: []`，不出现智能体章节、契约页签或 Python 架构。
 - 现有 `build-dag.v3` 已增加平台 readiness `agent:runtime` Unit、业务 `agent:<agentId>` Unit、`agent` owner 和独立 Agent Runtime Generation CodeRunner；模型不再为 `agent:runtime` 生成 bootstrap 任务，业务 Agent 任务写权限只允许对应 `agent-runtime/**` 路径。CodeRunner 已强制读取专用生成 Skill，只接收当前 Agent Contract 和其 Tool 实际引用的 Java API Contract/Schema，并按模板固定入口生成业务模块。工作台智能体设计/配置产物、真实生成应用端到端运行、专属测试/审查证据和候选版本晋升仍未完成。
 - 已确认 [Agent Runtime 模板仓库与初始化流程设计](./AGENT_RUNTIME_TEMPLATE_AND_INITIALIZATION.md)，独立模板仓库 `Bettetman/agent-runtime-template@master` 可安装、测试、启动和基础对话。XCodeAgent 已把 `agentRuntime` 接入 TechnicalPlan 确认结果、Electron 模板下载、前后端协议类型、manifest 和 Backend readiness：`agent_contracts[]` 非空时下载并复核仓库、分支、commit 与关键文件，普通应用明确记录 skipped 且不创建目录。业务产物路径已统一切换到 `src/app/agent/`、`src/app/tools/`，`agent:runtime` 不再生成模型 bootstrap 任务；Testing、Code Review、Project Launch、Java Gateway 和 Electron 完整端到端仍未完成。
-- 已确认 [Agent Development Workbench 设计](./AGENT_DEVELOPMENT_WORKBENCH.md)：Agent 将与页面、API、实体并列成为开发目标，第一期以 ProductPlan/TechnicalPlan 为唯一规划事实，只读展示七段 Settings，扩展 `type=agent` 目标、依赖门禁和现有 Build 入口；运行试聊、专属证据和配置候选版本分后续批次实施。当前仅为设计完成，不是生产实现。
-- 因此当前总体状态是：**正式开发中，已完成 RequirementSpec、ProductPlan、TechnicalPlan、条件式 Runtime 初始化与业务 Agent Build 接入切片，但尚未形成测试、启动和验收端到端闭环**。
+- 已完成 [Agent Development Workbench 第一期](./AGENT_DEVELOPMENT_PHASE1_IMPLEMENTATION_PLAN.md)：生产工作台已把 Agent 作为页面、API、实体同级开发目标，只读展示完整 Contract、七段 Settings、Runtime/Gateway/Tool/实体/页面依赖和固定实现文件状态；`type=agent` 已贯通 AG-UI 请求、Graph State、lifecycle、资源锁、EntitySourceBinding continuation、Build scope、required Unit 闭包及现有 Agent CodeRunner。实现未增加新的产品 Endpoint，也未改变页面、Endpoint、实体和应用级 Build 的既有行为。
+- 因此当前总体状态是：**正式开发中，已完成 RequirementSpec、ProductPlan、TechnicalPlan、条件式 Runtime 初始化、Agent Workbench 第一期与业务 Agent Build 接入切片，但尚未形成运行试聊、专属测试、启动和验收端到端闭环**。第一期自动化证据为 Backend 167 个定向测试和 Frontend Node/Renderer TypeScript + Electron/Vite Build 通过；Electron 实机完整 Agent Build 仍由用户验证。
 - 原型脚本 `test:agent-development`、`test:new-app-agent-planning`、智能体配置样式测试与 `typecheck` 可作为原型验证入口；本次变基后已重新运行并通过。
 
 ## 4. 能力矩阵
@@ -46,7 +46,7 @@
 | 能力 | 原型状态 | 正式前端 | 正式后端/协议 | 当前缺口与下一步 |
 | --- | --- | --- | --- | --- |
 | 新建应用时声明业务智能体 | 原型已实现 | 正式开发中 | 正式开发中 | RequirementSpec 已支持显式需求和“适合但未提及”时的一次性适配建议，用户同意后才进入 ProductPlan v6 与 TechnicalPlan `agent_contracts[]`；仍需真实模型适配命中率以及确认后的 Build、运行和验收端到端验证。 |
-| 智能体作为工作台同级产物 | 原型已实现 | 设计完成 | 正式开发中 | 独立模板仓库、条件式主流程下载、manifest、readiness 和业务 Agent Build 入口已完成；已确认 Agent 大纲、一等目标、依赖门禁与分期方案，仍需正式 UI/协议实现、Launch 和真实运行闭环。 |
+| 智能体作为工作台同级产物 | 原型已实现 | 已集成 | 已集成 | Agent 大纲、只读详情、`type=agent` AG-UI/Graph/lifecycle、确定性 readiness、实体续接、资源锁和 Agent scope Build 已进入现有生产工作台；仍需 Electron 实机完整 Build、Launch 和真实运行闭环。 |
 | 模型、API、实体、知识依赖检查 | 原型已实现 | 正式开发中 | 正式开发中 | TechnicalPlan 已展示 `project_default` 模型策略、完整能力/工具/API Endpoint 快照、SQLite 短期记忆、安全、Skills、Knowledge 与 Context 状态；未实现的 Skills、Knowledge、Long-term Memory 和压缩能力固定关闭，正式 Catalog、实体级工具授权和失效传播仍待后续切片。 |
 | 十部分 Markdown 设计文档 | 原型已实现 | 未开始 | 未开始 | 决定正式产物 schema、Markdown/内部 JSON 同步和 revision/hash 机制。 |
 | 智能体设计显式确认 | 原型已实现 | 未开始 | 未开始 | 接入现有 artifact confirmation；澄清、保存草稿和确认必须分离。 |

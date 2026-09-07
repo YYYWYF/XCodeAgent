@@ -333,7 +333,7 @@ def _repair_target_file_paths(
 
 
 def _repair_scope(build_execution_scope: dict[str, Any] | None) -> dict[str, str]:
-    """把页面、数据源、endpoint 或应用执行范围映射为稳定 Unit ID。"""
+    """把页面、数据源、Endpoint、Agent 或应用范围映射为稳定 Unit ID。"""
 
     scope = build_execution_scope if isinstance(build_execution_scope, dict) else {}
     scope_type = str(scope.get("type") or "application")
@@ -350,6 +350,8 @@ def _repair_scope(build_execution_scope: dict[str, Any] | None) -> dict[str, str
         if not unit_id:
             scope_type = "application"
             unit_id = "application:root"
+    elif scope_type == "agent" and target_id:
+        unit_id = f"agent:{target_id}"
     else:
         scope_type = "application"
         unit_id = "application:root"

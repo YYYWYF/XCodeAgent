@@ -19,6 +19,7 @@ from app.services.entity_design import (
 )
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
+from app.services.agent_development_readiness import agent_contract_sha256
 
 
 def _endpoint_contract(
@@ -120,6 +121,7 @@ def resolve_target_build_context(
     target_id: str,
     api_contract_id: str | None = None,
     project_plan_path: str | Path | None = None,
+    product_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """解析目标详情、直接 endpoint/API 依赖与编译所需的 Unit 标识。"""
 
@@ -127,11 +129,122 @@ def resolve_target_build_context(
         context = _page_context(project_plan, target_id, project_plan_path)
     elif target_type == "endpoint":
         context = _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
+    elif target_type == "agent":
+        context = _agent_context(project_plan, product_plan or {}, target_id)
     else:
         raise ValueError(f"Unsupported build target type: {target_type}.")
     # 把平台预置的后端骨架文件清单传给 Agent，让它知道哪些文件已存在、只需补业务逻辑。
     context["prebuilt_files"] = prebuilt_files_for_plan(project_plan)
     return context
+
+
+def _agent_context(
+    project_plan: dict[str, Any],
+    product_plan: dict[str, Any],
+    agent_id: str,
+) -> dict[str, Any]:
+    """只投射当前 Agent Contract、关联接口、实体、入口页和显式 Unit 根。"""
+
+    contracts = [
+        item
+        for item in _dict_items(project_plan.get("agent_contracts"))
+        if str(item.get("agentId") or "").strip() == agent_id
+    ]
+    product_agents = [
+        item
+        for item in _dict_items(product_plan.get("agents"))
+        if str(item.get("agentId") or "").strip() == agent_id
+    ]
+    if len(contracts) != 1 or len(product_agents) != 1:
+        raise ValueError(f"ProductPlan 与 TechnicalPlan 无法唯一定位 Agent {agent_id}。")
+    contract = contracts[0]
+    product_agent = product_agents[0]
+    endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
+    settings = contract.get("agentSettings") if isinstance(contract.get("agentSettings"), dict) else {}
+    tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
+    tool_endpoints: list[dict[str, Any]] = []
+    entity_ids: list[str] = []
+    entity_designs: list[dict[str, Any]] = []
+    for binding in _dict_items(tools.get("bindings")):
+        endpoint_ref = binding.get("endpoint") if isinstance(binding.get("endpoint"), dict) else {}
+        endpoint_id = str(endpoint_ref.get("endpointId") or "").strip()
+        api_contract_id = str(endpoint_ref.get("apiContractId") or "").strip()
+        endpoint = endpoint_index.get(f"{api_contract_id}\0{endpoint_id}")
+        if endpoint is None:
+            raise ValueError(f"Agent {agent_id} 的 Tool 引用了未知 Endpoint {endpoint_id}。")
+        designs, missing = _endpoint_entity_designs(project_plan, endpoint)
+        _assert_endpoint_entities_designed(endpoint_id, designs, missing)
+        tool_endpoints.append(endpoint)
+        for design in designs:
+            entity_id = str(design.get("entity_id") or "").strip()
+            if entity_id and entity_id not in entity_ids:
+                entity_ids.append(entity_id)
+                entity_designs.append(design)
+
+    invocation = contract.get("invocation") if isinstance(contract.get("invocation"), dict) else {}
+    gateway_id = str(invocation.get("gatewayEndpointId") or "").strip()
+    gateway = endpoint_index.get(gateway_id)
+    if gateway is None:
+        raise ValueError(f"Agent {agent_id} 的 Java Gateway Endpoint 不存在。")
+    gateway_contract_id = str(gateway.get("api_contract_id") or "").strip()
+    entry_page_ids = [
+        str(item or "").strip()
+        for item in product_agent.get("entryPageIds") or []
+        if str(item or "").strip()
+    ]
+    page_contracts = [
+        _page_implementation_contract(project_plan, page_id, None)
+        for page_id in entry_page_ids
+    ]
+    return {
+        "target": {"type": "agent", "id": agent_id},
+        "agent_contracts": [contract],
+        "contract_hash": agent_contract_sha256(contract),
+        "product_agent": product_agent,
+        "page_implementation_contract": None,
+        "page_implementation_contracts": page_contracts,
+        "endpoint_contract": gateway,
+        "direct_endpoint_contracts": [*tool_endpoints, gateway],
+        "endpoint_ids": list(
+            dict.fromkeys(
+                str(item.get("id") or "") for item in [*tool_endpoints, gateway]
+            )
+        ),
+        "required_endpoint_ids": list(
+            dict.fromkeys(
+                str(item.get("id") or "") for item in [*tool_endpoints, gateway]
+            )
+        ),
+        "entity_ids": entity_ids,
+        "entity_designs": entity_design_summaries(
+            project_plan,
+            entity_ids,
+            {
+                (str(item.get("api_contract_id") or ""), str(item.get("id") or ""))
+                for item in tool_endpoints
+            },
+        ),
+        "entry_pages": [
+            page
+            for page_id in entry_page_ids
+            if (page := find_frontend_page(project_plan_page_records(project_plan), page_id))
+            is not None
+        ],
+        "required_unit_root_ids": [
+            f"agent:{agent_id}",
+            _endpoint_unit_id(gateway_contract_id, gateway_id),
+            *(f"page:{page_id}" for page_id in entry_page_ids),
+        ],
+        "required_unit_ids": [],
+        "source_refs": {
+            "agent_contract": {"agentId": agent_id},
+            "gateway_endpoint": {
+                "id": gateway_id,
+                "api_contract_id": gateway_contract_id,
+            },
+            "entry_pages": [{"pageId": page_id} for page_id in entry_page_ids],
+        },
+    }
 
 
 def _page_context(

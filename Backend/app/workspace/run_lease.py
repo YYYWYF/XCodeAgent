@@ -123,7 +123,11 @@ def _scope_type(scope: dict[str, str] | None) -> str:
     """缺少显式范围时按应用级执行处理，保持旧调用的安全语义。"""
 
     value = str((scope or {}).get("type") or "application")
-    return value if value in {"application", "page", "data_source", "endpoint"} else "application"
+    return (
+        value
+        if value in {"application", "page", "data_source", "endpoint", "agent"}
+        else "application"
+    )
 
 
 def _scope_target(scope: dict[str, str] | None) -> str:

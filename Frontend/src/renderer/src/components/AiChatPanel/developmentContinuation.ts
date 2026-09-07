@@ -129,6 +129,11 @@ function developmentTarget(
         : text(candidate.label) || endpointId
     }
   }
+  if (type === 'agent') {
+    const agentId = text(candidate.agentId)
+    if (!agentId) return undefined
+    return { type, agentId, label: text(candidate.label) || agentId }
+  }
   return undefined
 }
 

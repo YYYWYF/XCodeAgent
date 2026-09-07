@@ -88,6 +88,7 @@ class ProjectState(TypedDict, total=False):
     selected_api_contract_id: str
     selected_endpoint_id: str
     selected_entity_id: str
+    selected_agent_id: str
     detail_target_type: str
     page_template: dict[str, Any]
     data_source_spec_draft: dict[str, Any]

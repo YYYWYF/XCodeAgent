@@ -498,7 +498,7 @@ def _register_entity_binding_continuation(
     raw_target = raw_target if isinstance(raw_target, dict) else {}
     target_type = str(raw_target.get("type") or "")
     target_id = str(raw_target.get("id") or "").strip()
-    if execution is None or target_type not in {"page", "endpoint"} or not target_id:
+    if execution is None or target_type not in {"page", "endpoint", "agent"} or not target_id:
         raise ApplicationLifecycleConflictError("实体门禁缺少可续接的原开发目标。")
     target = DevelopmentContinuationTarget(
         type=target_type,
@@ -509,6 +509,7 @@ def _register_entity_binding_continuation(
             else None
         ),
         endpointId=target_id if target_type == "endpoint" else None,
+        agentId=target_id if target_type == "agent" else None,
         label=str(raw_target.get("label") or target_id),
     )
     missing_entities = clarification.get("missing_entities")

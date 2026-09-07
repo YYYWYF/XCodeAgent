@@ -27,6 +27,10 @@ import {
 } from './stageSessions'
 import { gitRepositoriesEquivalent, templateCloneAttempts } from './templateRepository'
 import {
+  projectWorkbenchAgents,
+  type WorkbenchAgentOption
+} from './agentPlanningArtifactProjection'
+import {
   clearAuthState,
   ensureXcodeAgentDataDir,
   getAccessToken,
@@ -590,6 +594,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   pageTree: WorkbenchPageTreeNode[]
   apiContracts: WorkbenchApiContract[]
   entities: WorkbenchEntityOption[]
+  agents: WorkbenchAgentOption[]
 }> {
   const artifactRoot = path.join(workspaceRoot, '.xcodeagent')
   const artifacts = [
@@ -604,6 +609,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   let pageTree: WorkbenchPageTreeNode[] = []
   let apiContracts: WorkbenchApiContract[] = []
   let entities: WorkbenchEntityOption[] = []
+  let agents: WorkbenchAgentOption[] = []
 
   for (const artifact of artifacts) {
     const artifactPath = path.join(artifactRoot, artifact.relativePath)
@@ -681,6 +687,16 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   entities = projectPlanEntities(technicalPlan)
 
   const buildTaskPlan = await readBuildTaskPlan(workspaceRoot)
+  if (productPlan && technicalPlan) {
+    const agentProjection = await projectWorkbenchAgents(
+      workspaceRoot,
+      productPlan,
+      technicalPlan,
+      buildTaskPlan
+    )
+    agents = agentProjection.agents
+    invalid.push(...agentProjection.invalid)
+  }
   const pages = mergeWorkbenchPageStatus(
     projectPlanPageOptions({ pages: [...plannedPages.values()] }),
     buildTaskPlan
@@ -699,7 +715,8 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     pages,
     pageTree: mergeWorkbenchPageTreeStatus(pageTree, pagesById),
     apiContracts,
-    entities
+    entities,
+    agents
   }
 }
 

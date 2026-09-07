@@ -15,6 +15,7 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
@@ -235,6 +236,7 @@ type Props = {
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   developmentPlanningEntities: DevelopmentPlanningEntityOption[]
+  developmentPlanningAgents: DevelopmentPlanningAgentOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -289,6 +291,7 @@ type ActiveDetailTarget =
   | { type: 'page'; pageId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
   | { type: 'entity'; entityId: string; label: string }
+  | { type: 'agent'; agentId: string; label: string }
 
 const ACTIVE_DESIGN_WORKFLOW_STATUSES = new Set([
   'running',
@@ -787,6 +790,7 @@ export default function AiChatPanel({
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
   developmentPlanningEntities,
+  developmentPlanningAgents,
   editorMode,
   onApplicationUpdate,
   onApplicationLifecycleChange,
@@ -2110,6 +2114,7 @@ export default function AiChatPanel({
     handleStopPlan,
     handleSend,
     handleStartEndpointDevelopment,
+    handleStartAgentDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
@@ -3455,7 +3460,7 @@ export default function AiChatPanel({
       if (continuation.target.type === 'page') {
         setActiveDetailTarget({ type: 'page', pageId: continuation.target.pageId })
         setInteractingDetailTargetKey(pageDetailTargetKey(continuation.target.pageId))
-      } else {
+      } else if (continuation.target.type === 'endpoint') {
         setActiveDetailTarget({
           type: 'endpoint',
           apiContractId: continuation.target.apiContractId,
@@ -3466,6 +3471,13 @@ export default function AiChatPanel({
         setInteractingDetailTargetKey(
           endpointDetailTargetKey(continuation.target.apiContractId, continuation.target.endpointId)
         )
+      } else {
+        setActiveDetailTarget({
+          type: 'agent',
+          agentId: continuation.target.agentId,
+          label: continuation.target.label
+        })
+        setInteractingDetailTargetKey(`agent:${continuation.target.agentId}`)
       }
       setGeneratingDetailTargetKey('')
     } else {
@@ -3500,6 +3512,7 @@ export default function AiChatPanel({
     setActiveDetailTarget((currentTarget) => {
       if (currentTarget.type === 'endpoint') return currentTarget
       if (currentTarget.type === 'entity') return currentTarget
+      if (currentTarget.type === 'agent') return currentTarget
       if (currentTarget.type === 'none') return currentTarget
       const currentPageId = currentTarget.pageId
       if (displayedPlanningPages.length === 0) return currentTarget
@@ -3692,9 +3705,24 @@ export default function AiChatPanel({
     return started
   }
 
-  /** 根据锁定入口里的目标类型启动页面、接口或实体详细设计。 */
+  /** 从只读 Agent Contract 详情启动现有 readiness 与 Build 主流程。 */
+  const handleStartAgentBuild = async (
+    agent: DevelopmentPlanningAgentOption
+  ): Promise<void> => {
+    if (pendingDagExecution) return
+    const targetKey = `agent:${agent.agentId}`
+    setActiveDetailTarget({ type: 'agent', agentId: agent.agentId, label: agent.label })
+    setInteractingDetailTargetKey(targetKey)
+    const started = await handleStartAgentDevelopment({
+      agentId: agent.agentId,
+      agentLabel: agent.label
+    })
+    if (started) onPlanningArtifactsRefresh()
+  }
+
+  /** 根据锁定入口里的目标类型启动页面、接口、实体或 Agent 开发。 */
   const handleStartDetailDesign = async (
-    targetType: 'page' | 'endpoint' | 'entity',
+    targetType: 'page' | 'endpoint' | 'entity' | 'agent',
     targetId: string,
     targetLabel: string,
     hasDetailPlan: boolean,
@@ -3708,6 +3736,11 @@ export default function AiChatPanel({
     }
   ): Promise<void> => {
     if (pendingDagExecution) return
+    if (targetType === 'agent') {
+      const agent = developmentPlanningAgents.find((item) => item.agentId === targetId)
+      if (agent) await handleStartAgentBuild(agent)
+      return
+    }
     if (targetType === 'endpoint') {
       await handleStartEndpointDesign(targetId, targetLabel, hasDetailPlan, targetContext)
       return
@@ -3808,7 +3841,7 @@ export default function AiChatPanel({
         if (target.type === 'page') {
           setActiveDetailTarget({ type: 'page', pageId: target.pageId })
           setInteractingDetailTargetKey(pageDetailTargetKey(target.pageId))
-        } else {
+        } else if (target.type === 'endpoint') {
           setActiveDetailTarget({
             type: 'endpoint',
             apiContractId: target.apiContractId,
@@ -3819,6 +3852,13 @@ export default function AiChatPanel({
           setInteractingDetailTargetKey(
             endpointDetailTargetKey(target.apiContractId, target.endpointId)
           )
+        } else {
+          setActiveDetailTarget({
+            type: 'agent',
+            agentId: target.agentId,
+            label: target.label
+          })
+          setInteractingDetailTargetKey(`agent:${target.agentId}`)
         }
       }
       if (!started) await persistContinuationStatus(updateContinuationStatus('ready'))
@@ -4274,6 +4314,7 @@ export default function AiChatPanel({
           pages={displayedPlanningPages}
           pageTree={displayedPlanningPageTree}
           apiContracts={developmentPlanningApiContracts}
+          agents={developmentPlanningAgents}
           entities={developmentPlanningEntities}
           {...artifactOutlineProps}
           filesActive={activeView === 'files'}
@@ -4497,6 +4538,7 @@ export default function AiChatPanel({
             displayedPlanExecutionMode === 'idle' &&
             !detailConfirmationWaitingReview ? (
               <DetailConfirmationPageSelector
+                agents={developmentPlanningAgents}
                 disabled={loading || workflowInputLocked}
                 entities={developmentPlanningEntities}
                 generating={false}
@@ -4556,8 +4598,11 @@ export default function AiChatPanel({
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
               apiContracts={developmentPlanningApiContracts}
+              agents={developmentPlanningAgents}
               entities={developmentPlanningEntities}
               detailLabel={artifactDetailLabel}
+              developmentDisabled={loading || workflowInputLocked}
+              onStartAgentDevelopment={(agent) => void handleStartAgentBuild(agent)}
               outlineLocked={false}
               pages={displayedPlanningPages}
               pageTree={displayedPlanningPageTree}

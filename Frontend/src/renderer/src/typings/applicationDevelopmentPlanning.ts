@@ -132,6 +132,46 @@ export type DevelopmentPlanningEntityOption = {
   hasDetailPlan: boolean
   designed: boolean
 }
+export type DevelopmentPlanningAgentOption = {
+  key: string
+  agentId: string
+  label: string
+  purpose: string
+  boundaries: string[]
+  capabilities: Array<{
+    capabilityId: string
+    name: string
+    expectedResult: string
+    toolIds: string[]
+  }>
+  entryPageIds: string[]
+  entryActions: Array<{ pageId: string; pageLabel: string; actionIds: string[] }>
+  interaction: Record<string, unknown>
+  contractHash: string
+  agentSettings: Record<string, Record<string, unknown>>
+  dependencies: {
+    gateway: Record<string, unknown>
+    tools: Array<Record<string, unknown>>
+    entities: Array<Record<string, unknown>>
+    pages: Array<Record<string, unknown>>
+    runtime: Record<string, unknown>
+  }
+  runtime: Record<string, unknown>
+  security: Record<string, unknown>
+  artifacts: Array<{
+    kind: 'agent' | 'tool_adapter' | 'test'
+    path: string
+    exists: boolean
+  }>
+  requiredChecks: string[]
+  taskSummary?: {
+    total: number
+    pending: number
+    running: number
+    completed: number
+    failed: number
+  }
+}
 export type MenuDevelopmentPlan = {
   menuKey: string
   menuLabel: string

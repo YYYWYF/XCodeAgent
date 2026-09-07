@@ -707,6 +707,7 @@ def _primary_resource_claim(scope: str, target_id: str) -> ExecutionResourceClai
         "page": ExecutionResourceType.PAGE,
         "data_source": ExecutionResourceType.DATA_SOURCE,
         "endpoint": ExecutionResourceType.ENDPOINT,
+        "agent": ExecutionResourceType.AGENT,
     }.get(scope, ExecutionResourceType.APPLICATION)
     return ExecutionResourceClaim(
         type=resource_type,
@@ -769,6 +770,7 @@ def _resource_claims_for_run(
         (ExecutionResourceType.ENDPOINT, locks.endpoints),
         (ExecutionResourceType.API_CONTRACT, locks.api_contracts),
         (ExecutionResourceType.DATA_SOURCE, locks.data_sources),
+        (ExecutionResourceType.AGENT, locks.agents),
     )
     if locks.application is not None and locks.application.run_id == run_id:
         claims.append(
@@ -808,6 +810,7 @@ def _resource_locks_with_claims(
     endpoints = dict(locks.endpoints)
     api_contracts = dict(locks.api_contracts)
     data_sources = dict(locks.data_sources)
+    agents = dict(locks.agents)
     for claim in claims:
         lock = ExecutionResourceLock(
             runId=run_id,
@@ -824,14 +827,17 @@ def _resource_locks_with_claims(
             endpoints[claim.target_id] = lock
         elif claim.type == ExecutionResourceType.API_CONTRACT:
             api_contracts[claim.target_id] = lock
-        else:
+        elif claim.type == ExecutionResourceType.DATA_SOURCE:
             data_sources[claim.target_id] = lock
+        else:
+            agents[claim.target_id] = lock
     return ExecutionResourceLocks(
         application=application,
         pages=pages,
         endpoints=endpoints,
         apiContracts=api_contracts,
         dataSources=data_sources,
+        agents=agents,
     )
 
 
@@ -855,6 +861,7 @@ def _resource_locks_without_run(
         dataSources={
             key: value for key, value in locks.data_sources.items() if value.run_id != run_id
         },
+        agents={key: value for key, value in locks.agents.items() if value.run_id != run_id},
     )
 
 

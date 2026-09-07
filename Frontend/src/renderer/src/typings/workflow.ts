@@ -131,6 +131,7 @@ export type WorkflowDevelopmentTarget =
       endpointId: string
       label: string
     }
+  | { type: 'agent'; agentId: string; label: string }
 
 export type WorkflowDevelopmentContinuation = {
   id: string
@@ -462,7 +463,7 @@ export type WorkflowDetailReview = {
     selectedApiContractId?: string
     selectedEndpointId?: string
     selectedEntityId?: string
-    detailTargetType?: 'page' | 'endpoint' | 'entity'
+    detailTargetType?: 'page' | 'endpoint' | 'entity' | 'agent'
     entityDesign?: WorkflowEntityDesignSummary
   }
 }
@@ -939,7 +940,7 @@ export type LifecycleError = {
 }
 
 export type WorkbenchExecution = {
-  scope: 'application' | 'page' | 'data_source' | 'endpoint'
+  scope: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId: string
   pageId?: string
   threadId: string
@@ -987,6 +988,7 @@ export type ApplicationLifecycle = {
     endpoints?: Record<string, ExecutionResourceLock>
     apiContracts: Record<string, ExecutionResourceLock>
     dataSources: Record<string, ExecutionResourceLock>
+    agents?: Record<string, ExecutionResourceLock>
   }
   error?: LifecycleError
   pendingRevisionImpact?: Record<string, unknown>
@@ -1057,7 +1059,7 @@ export type WorkflowDebugOptions = {
 }
 
 export type WorkflowBuildExecutionScope = {
-  type: 'application' | 'page' | 'data_source' | 'endpoint'
+  type: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId?: string
   apiContractId?: string
 }
