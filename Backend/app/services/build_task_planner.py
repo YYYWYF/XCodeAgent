@@ -28,9 +28,17 @@ from app.services.build_unit_compiler import (
     apply_unit_compilation,
 )
 from app.services.task_scheduler import annotate_task_execution, build_execution_batches
+from app.services.template_state import validate_template_context
 
 
 logger = logging.getLogger(__name__)
+
+
+def _template_context(context: dict[str, Any]) -> dict[str, Any]:
+    """读取正式绑定快照；脱离 Workspace 的纯结构编译保留空值供 Build 门禁拒绝。"""
+
+    value = context.get("template_context")
+    return validate_template_context(value) if value is not None else {}
 
 
 TASK_STATUSES = ("pending", "running", "completed", "failed", "already_satisfied")
@@ -996,7 +1004,6 @@ def _task_semantic_errors(
             _template_boundary_errors(
                 task,
                 paths=paths,
-                template_variant=str(build_context.get("template_variant") or "main"),
             )
         )
         if validate_task_scope and required_unit_ids and unit_id not in required_unit_ids:
@@ -1120,23 +1127,12 @@ def _template_boundary_errors(
     task: dict[str, Any],
     *,
     paths: list[str],
-    template_variant: str,
 ) -> list[str]:
-    """按模板变体报告职责越界，不修改候选任务以掩盖规划错误。"""
+    """对所有 capability 统一报告平台路由与权限基础设施职责越界。"""
 
     task_id = str(task.get("id") or "")
     errors: list[str] = []
     route_registry = str(task.get("unit_id") or "") == "frontend:route-registry"
-    if template_variant != "auth":
-        if route_registry:
-            return [f"Task {task_id} is auth-only and cannot run for main template."]
-        boundary_paths = sorted(path for path in paths if _is_template_boundary_path(path))
-        if boundary_paths:
-            errors.append(
-                f"Task {task_id} crosses the template initialization boundary and must not "
-                f"modify shared menu or route files: {', '.join(boundary_paths)}."
-            )
-        return errors
     boundary_paths = sorted(
         {
             path
@@ -1467,8 +1463,8 @@ def create_build_task_plan(
     plan = {
         **base_plan,
         "version": "3.0.0",
-        "schema_version": "build-dag.v3",
-        "template_variant": str(context.get("template_variant") or "main"),
+        "schema_version": "build-dag.v4",
+        "template_context": deepcopy(_template_context(context)),
         "status": (
             "ready"
             if task_graph["validation"]["is_valid"] and not blocked_batches

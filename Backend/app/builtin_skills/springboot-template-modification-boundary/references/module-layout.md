@@ -26,7 +26,7 @@ backend/
 │   │   │   │   │   └── PageResult.java
 │   │   │   │   └── response/
 │   │   │   │       └── ResponseEntity.java
-│   │   │   ├── auth/                          🔴 禁止修改（仅 auth 分支，权限模块）
+│   │   │   ├── auth/                          🔴 禁止修改（权限基础设施模块）
 │   │   │   │   ├── adapter/web/
 │   │   │   │   ├── application/
 │   │   │   │   ├── bootstrap/

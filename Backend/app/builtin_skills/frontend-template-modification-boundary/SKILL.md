@@ -1,11 +1,11 @@
 ---
 name: frontend-template-modification-boundary
-description: 前端模板工程文件修改边界规范（前端 skill）。当大模型在从远程拉取的前端模板工程中生成或修改前端页面代码、新增业务页面、新增业务 API、新增类型/常量/hooks/工具函数/可复用组件时使用，明确哪些前端文件禁止修改、哪些只能增量追加、哪些可以自由编写，避免破坏前端模板工程的框架骨架与平台托管路由。涉及前端 src/pages、src/typings、src/constants、src/hooks、src/utils、src/components、src/apis、routes、layout/providers/入口文件、package.json/tailwind.config.js 等配置文件时使用。
+description: 前端模板工程文件修改边界规范（前端 skill）。当大模型在 Workspace 中生成或修改前端页面代码、新增业务页面、新增业务 API、新增类型/常量/hooks/工具函数/可复用组件时使用，明确哪些前端文件禁止修改、哪些只能增量追加、哪些可以自由编写，避免破坏前端模板工程的框架骨架与平台托管路由。涉及前端 src/pages、src/typings、src/constants、src/hooks、src/utils、src/components、src/apis、routes、layout/providers/入口文件、package.json/tailwind.config.js 等配置文件时使用。
 ---
 
 # 前端模板工程文件修改边界规范
 
-本技能规定大模型在**从远程拉取的前端模板工程**中生成前端页面代码时，各文件的**修改边界**与**放置位置**。模板工程提供统一请求封装、布局和平台托管路由；框架骨架不能被破坏，业务代码只能在指定区域生成。
+本技能规定大模型在 Workspace 前端工程中生成页面代码时，各文件的**修改边界**与**放置位置**。模板工程提供统一请求封装、布局和平台托管路由；框架骨架不能被破坏，业务代码只能在指定区域生成。
 
 ## 虚拟路径前缀（重要）
 
@@ -30,11 +30,10 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | `src/utils/<page>.ts` | `/frontend/src/utils/<page>.ts` |
 | `src/components/<Module>/index.tsx` | `/frontend/src/components/<Module>/index.tsx` |
 | `src/apis/<biz>Api.ts` | `/frontend/src/apis/<biz>Api.ts` |
-| `src/constants/menus.ts` | `/frontend/src/constants/menus.ts`（main 模板平台初始化） |
-| `src/constants/resources.ts` | `/frontend/src/constants/resources.ts`（仅 auth，Build 平台投影） |
-| `src/constants/routes.tsx` | `/frontend/src/constants/routes.tsx`（仅 auth，Build 平台投影） |
+| `src/constants/resources.ts` | `/frontend/src/constants/resources.ts`（authorization effective 时由平台投影） |
+| `src/constants/routes.tsx` | `/frontend/src/constants/routes.tsx`（所有应用由平台 Route Projection 管理） |
 
-**生成代码前，读取 `/.xcodeagent/template-generation-manifest.json` 的 `templateVariant` 和当前任务允许路径。** `main` 模板已由平台创建页面占位和 `BIZ_MENUS`；`auth` 模板在进入开发阶段前（二次修改时在 TechnicalPlan 确认后）由平台写入共享资源与路由注册文件。不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
+**生成代码前，读取 `/.xcodeagent/template-state.json` 的 `effective` 与当前任务允许路径。** 平台拥有共享路由；authorization effective 时平台额外拥有资源目录与权限 decoration。不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
 
 ## 🔴 前端工程根目录禁止创建文件
 
@@ -88,13 +87,10 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 
 ## 核心原则
 
-模板变体必须隔离：
-
-- `main`：平台已创建页面占位并登记 `BIZ_MENUS`；不得创建 auth 权限目录、修改路由树或共享菜单。
-- `auth`：页面任务只生成 `src/pages/<PageKey>/index.tsx`；平台在进入开发阶段前（二次修改时在 TechnicalPlan 确认后）根据已确认的 `authorization_manifest` 写入 `src/constants/resources.ts` 和 `src/constants/routes.tsx` 的固定托管区，并创建页面占位文件。
+TemplateState 是唯一模板能力事实源：页面任务只生成真实 `src/pages/<PageKey>/index.tsx`；平台在页面任务完成后写入共享路由。authorization effective 时，平台额外写入 `src/constants/resources.ts` 与 RouteGuard/resourceKey decoration。
 
 - 页面文件路径必须是 `src/pages/<PageKey>/index.tsx`；`<PageKey>` 由已确认页面设计提供。
-- 页面任务不得修改 `src/routes/index.tsx`、`src/utils/route.tsx` 或任一变体的平台共享注册文件。受控页面的 `RouteGuard` 由 auth 模板从 `resourceKey` 自动派生，操作控件只按任务提供的 `RESOURCES.OPERATION` 绑定生成。
+- 页面任务不得修改 `src/routes/index.tsx`、`src/utils/route.tsx`、`src/constants/routes.tsx` 或平台共享注册文件。受控页面的 RouteGuard 由平台 resourceKey decoration 派生，操作控件只按任务提供的 `RESOURCES.OPERATION` 绑定生成。
 - 框架骨架文件（入口、路由、布局、Provider、守卫、配置）**禁止修改**。
 - 页面的类型、常量、hooks、工具函数**统一放公共目录**（`src/typings`、`src/constants`、`src/hooks`、`src/utils`），不放在页面目录内；可复用组件放 `src/components`。
 
@@ -158,36 +154,9 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 
 以下区域**只能新增文件或追加内容**，**不得删除或修改**框架已有的文件：
 
-### `src/constants/menus.ts` — 平台菜单配置
+### 平台菜单与路由
 
-页面 Agent 不得登记或修改菜单。若模板需要业务菜单，必须由对应的 Build 平台步骤在模板声明的托管区生成，并与显式业务路由使用同一份确认权限清单。以下旧式自动菜单路由规则仅用于识别不兼容模板，页面 Agent 不得据此生成代码：
-
-若当前页面尚未在 `BIZ_MENUS` 任意层级注册，旧模板只能在 `BIZ_MENUS` 顶层数组末尾追加新菜单项；若已存在合法菜单项，无论位于顶层还是深层 `children`，都视为已注册，且不得：
-- 删除或修改已有的 `DefaultPage` 等菜单项
-- 移动、提升、拍平、重排或重写已有深层合法菜单项
-- 修改 `SYSTEM_MENUS`（系统菜单由框架维护）
-- 改动文件中的 `import`、`export`、类型注解
-
-追加的菜单项格式必须为：
-```ts
-{
-  path: 'duty-list',      // 路由路径，不带前导 /，与页面路由一致
-  name: '值班列表',        // 菜单显示名
-  key: 'DutyList'          // 必须与 src/pages/<key>/index.tsx 的目录名完全一致
-}
-```
-
-若追加菜单项的 `path` 包含 React Router 路径参数片段（如 `:id`、`detail/:id`），必须同时写入 `hideInMenu: true`，表示该不固定路径页面不出现在菜单中：
-```ts
-{
-  path: 'duty/:id',
-  name: '值班详情',
-  key: 'DutyDetail',
-  hideInMenu: true
-}
-```
-
-`key` 命名规则：PascalCase（如 `DutyList`、`PageDashboard`），且与 `src/pages/` 下对应页面目录名一字不差，否则路由无法解析到页面。
+页面 Agent 不得登记或修改菜单、共享路由或资源目录。页面入口必须由其页面任务真实生成；平台随后依据确认页面事实写入 route marker 区。
 
 ### `src/apis/` — 业务接口
 

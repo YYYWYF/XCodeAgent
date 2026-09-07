@@ -1793,7 +1793,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         task = tasks_from_build_task_plan(plan)[0]
 
         self.assertEqual(plan["version"], "3.0.0")
-        self.assertEqual(plan["schema_version"], "build-dag.v3")
+        self.assertEqual(plan["schema_version"], "build-dag.v4")
         self.assertEqual(plan["task_graph"]["nodes"], ["page-login"])
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
         self.assertEqual(plan["workspace_analysis"]["entry_files"], ["src/router/index.ts"])
@@ -2440,7 +2440,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(list(tasks), ["task-api"])
         self.assertNotIn("frontend/src/constants/menus.ts", str(tasks))
 
-    def test_v3_plan_contains_json_confirmation_fields(self) -> None:
+    def test_v4_plan_contains_json_confirmation_fields(self) -> None:
         plan = create_build_task_plan(
             {"version": "1.0.0"},
             agent_plan={
@@ -2455,7 +2455,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(plan["schema_version"], "build-dag.v3")
+        self.assertEqual(plan["schema_version"], "build-dag.v4")
         self.assertEqual(plan["confirmation_status"], "pending")
         self.assertIsNone(plan["confirmed_at"])
         self.assertEqual(plan["build_execution_scope"], {})

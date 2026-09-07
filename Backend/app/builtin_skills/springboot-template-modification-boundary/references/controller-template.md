@@ -93,9 +93,9 @@ throw new BizException(ProjectErrorCode.PROJECT_NOT_FOUND);
 
 前端 `service.ts` 拦截器统一处理 `returnCode`/`errorMsg`，Controller 只管业务逻辑。
 
-## 权限控制（仅 auth 分支）
+## 权限控制（authorization effective 时）
 
-auth 分支模板的 Controller 用 `@RequireAnyResource` 注解控制权限：
+authorization effective 模板的 Controller 用 `@RequireAnyResource` 注解控制权限：
 
 ```java
 @RestController
@@ -107,7 +107,7 @@ public class ProjectController {
 }
 ```
 
-> `AuthConstants.PAGE_PROJECT_MANAGEMENT` 是 auth 模块定义的资源常量。业务模块的 Controller 只在 auth 分支模板下加此注解，main 分支不需要。资源 key 由 `authorization_frontend_projection` 从 TechnicalPlan 的 `authorization_manifest` 派生。
+> `AuthConstants.PAGE_PROJECT_MANAGEMENT` 是平台权限基础设施定义的资源常量。仅当 TemplateState.effective 包含 authorization 且任务提供相应资源时，业务 Controller 才加此注解；资源 key 由平台授权投影从确认的 TechnicalPlan 派生。
 
 ## Agent 需补充的部分
 
@@ -120,7 +120,7 @@ public class ProjectController {
 Agent 需补充：
 - 🟡 `@Valid` 注解（如果预置时没加）
 - 🟡 `@ModelAttribute`/`@PathVariable`/`@RequestBody` 注解（如果预置时没加）
-- 🟡 权限注解 `@RequireAnyResource`（仅 auth 分支，需要时）
+- 🟡 权限注解 `@RequireAnyResource`（authorization effective 且任务要求时）
 - 🟡 Controller 层的参数预处理（如 trim）
 
 **不要**在 Controller 里写业务逻辑——业务逻辑在 ApplicationService 里。Controller 只做参数接收和调用转发。

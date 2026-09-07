@@ -47,6 +47,7 @@ from app.services.authorization_frontend_projection import (
     apply_authorization_frontend_projection,
     compile_frontend_authorization_projection,
 )
+from app.services.route_projection import apply_route_projection, compile_route_projection
 from app.services.frontend_scaffold import (
     collect_template_pages,
     ensure_frontend_menu_entries,
@@ -637,10 +638,10 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
             technical_plan = json.load(handle)
         if not isinstance(technical_plan, dict):
             return
-        # 前端确定性注入：路由/权限资源（auth 分支）
-        _inject_frontend_authorization(workspace, technical_plan)
         # 前端确定性注入：页面占位文件
         _inject_frontend_page_placeholders(workspace, state)
+        # 前端确定性注入：通用路由与可选权限资源
+        _inject_frontend_authorization(workspace, technical_plan)
         # 后端确定性注入：Entity/PO/Mapper/Repository/DTO/Controller 骨架
         inject_deterministic_backend_skeleton(workspace, technical_plan)
     except Exception:
@@ -649,15 +650,24 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
 
 
 def _inject_frontend_authorization(workspace: str, technical_plan: dict[str, Any]) -> None:
-    """auth 分支模板：从 TechnicalPlan 编译并写入前端路由/权限资源。"""
+    """从 TechnicalPlan 写入共享路由，并在存在权限事实时写入资源常量。"""
 
     frontend_dir = Path(workspace) / "frontend"
     routes_path = frontend_dir / "src" / "constants" / "routes.tsx"
     if not routes_path.is_file():
-        return  # 非 auth 分支或模板未拉取，跳过
-    projection = compile_frontend_authorization_projection(technical_plan)
-    if projection is not None:
-        apply_authorization_frontend_projection(workspace, projection)
+        return  # 模板未拉取或缺少固定 routes.tsx 托管区，跳过
+    authorization_projection = compile_frontend_authorization_projection(technical_plan)
+    apply_route_projection(
+        workspace,
+        compile_route_projection(technical_plan),
+        authorization_decorations=(
+            authorization_projection.get("routeDecorations")
+            if isinstance(authorization_projection, dict)
+            else None
+        ),
+    )
+    if authorization_projection is not None:
+        apply_authorization_frontend_projection(workspace, authorization_projection)
 
 
 def _inject_frontend_page_placeholders(workspace: str, state: dict[str, Any]) -> None:

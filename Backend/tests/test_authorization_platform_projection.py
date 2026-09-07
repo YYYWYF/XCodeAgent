@@ -42,14 +42,14 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
         """构造最小确认 Build DAG 权限投影。"""
 
         return {
-            "template_variant": "auth",
+            "route_projection": {"pages": [{"pageId": "orders", "path": "/orders", "pageKey": "Orders", "name": "订单", "menu": True}]},
             "authorization_frontend_projection": {
                 "resources": [
                     {"group": "SYSTEM", "name": "AUTHORIZATION_MANAGEMENT", "resourceKey": "system_authorization_management"},
                     {"group": "PAGE", "name": "ORDERS", "resourceKey": "orders"},
                     {"group": "OPERATION", "name": "ORDERS_APPROVE", "resourceKey": "orders_approve"},
                 ],
-                "pages": [{"pageId": "orders", "path": "/orders", "pageKey": "Orders", "resourceGroup": "PAGE", "resourceName": "ORDERS"}],
+                "routeDecorations": [{"pageId": "orders", "resourceKey": "orders"}],
             },
             "authorization_constants_projection": [{"name": "ORDERS_APPROVE_RESOURCE", "resourceKey": "orders_approve"}],
         }
@@ -57,9 +57,10 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
     def _write_template(self, workspace: Path) -> None:
         """创建带固定业务路由托管区的最小 auth 模板。"""
 
-        self._write(workspace / ".xcodeagent/template-generation-manifest.json", json.dumps({"templateVariant": "auth", "steps": {"download": {"targets": {"frontend": {"branch": "auth"}, "backend": {"branch": "auth"}}}}}))
+        self._write(workspace / ".xcodeagent/template-state.json", json.dumps({"templateRevision": "r1", "managedFiles": {}, "requested": {"authorization": {"enabled": True}}, "effective": {"authorization": {"enabled": True}}}))
         self._write(workspace / "frontend/src/constants/resources.ts", "export const RESOURCES = {} as const;\n")
         self._write(workspace / "frontend/src/constants/routes.tsx", "import { RESOURCES } from '@/constants/resources';\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\nexport const PAGE_ROUTES = [\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n];\n")
+        self._write(workspace / "frontend/src/pages/Orders/index.tsx", "export default null;\n")
         self._write(workspace / "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java", "// XCODEAGENT_AUTH_CONSTANTS_START\n// XCODEAGENT_AUTH_CONSTANTS_END\n")
 
     def _write(self, path: Path, content: str) -> None:

@@ -94,8 +94,8 @@ class AuthorizationOverlayTests(unittest.TestCase):
         )
         self.assertIsNone(unit_authorization_slice("frontend:api-client", context))
         self.assertEqual(
-            context["authorization_constraints"]["frontendProjection"]["pages"],
-            [{"pageId": "orders", "path": "/orders", "pageKey": "Orders", "resourceGroup": "PAGE", "resourceName": "ORDERS"}],
+            context["authorization_constraints"]["frontendProjection"]["routeDecorations"],
+            [{"pageId": "orders", "resourceKey": "orders"}],
         )
         self.assertEqual(
             context["authorization_constraints"]["authConstantsProjection"],

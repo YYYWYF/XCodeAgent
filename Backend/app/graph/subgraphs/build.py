@@ -42,6 +42,7 @@ from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
 )
+from app.services.template_state import assert_template_context_matches, load_template_state
 from app.services.build_tool_activity import (
     path_matches_task_scope,
     task_ids_for_tool_activity,
@@ -884,8 +885,18 @@ def _latest_build_task_plan_for_build(
     if not isinstance(build_task_plan, dict):
         return {}, ["最新 build-task-plan.json 根结构必须是对象。"]
     errors: list[str] = []
-    if build_task_plan.get("schema_version") != "build-dag.v3":
-        errors.append("最新 Build DAG schema_version 不是 build-dag.v3。")
+    if build_task_plan.get("schema_version") != "build-dag.v4":
+        errors.append("最新 Build DAG schema_version 不是 build-dag.v4。")
+    if "template_variant" in build_task_plan:
+        errors.append("最新 Build DAG 不得包含已删除的 template_variant。")
+    if workspace:
+        try:
+            assert_template_context_matches(
+                load_template_state(workspace),
+                build_task_plan.get("template_context"),
+            )
+        except ValueError as exc:
+            errors.append(f"Build DAG TemplateState 绑定失效：{exc}")
     if build_task_plan.get("status") != "ready":
         errors.append(
             f"最新 Build DAG status={build_task_plan.get('status') or 'unknown'}，不能进入 Build。"
