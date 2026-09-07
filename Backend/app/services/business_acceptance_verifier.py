@@ -294,6 +294,16 @@ def _current_source_hash(source: dict[str, Any], formal: dict[str, Any]) -> str:
 
     artifact = str(source.get("artifact") or "")
     target_id = str(source.get("target_id") or "")
+    if artifact == "api_design":
+        design = next(
+            (
+                item
+                for item in _formal_items(formal, "endpoint_designs")
+                if str(item.get("endpointId") or "") == target_id
+            ),
+            {},
+        )
+        return _stable_hash(design) if design else ""
     if artifact == "entity_design":
         detail = next(
             (

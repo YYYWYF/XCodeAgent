@@ -32,6 +32,33 @@ from tests.entity_design_test_utils import confirm_entity_designs
 class ExecutionResourceLockTests(unittest.TestCase):
     """验证页面、API、数据源资源锁的解析和完整生命周期。"""
 
+    def test_api_design_confirmation_keeps_execution_running(self) -> None:
+        """API 设计确认后生命周期应投影就绪检查，而不是提前完成 execution。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="endpoint",
+                target_id="orders.list",
+                page_id=None,
+                thread_id="api-thread",
+                run_id="api-run",
+                phase="api_design",
+            )
+
+            projected = project_workflow_lifecycle_boundary(
+                directory,
+                run_id="api-run",
+                node_name="api_design",
+                update={"status": "completed"},
+            )
+
+            assert projected is not None
+            execution = projected["activeExecutions"]["api-run"]
+            self.assertEqual(execution["status"], "running")
+            self.assertEqual(execution["phase"], "api_design_readiness_gate")
+
     def test_page_claims_include_related_page_api_and_data_source(self) -> None:
         """页面执行应锁住主页面、导航页面、API 契约及其数据源。"""
 

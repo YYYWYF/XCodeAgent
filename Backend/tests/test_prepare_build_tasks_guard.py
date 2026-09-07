@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import UTC, datetime
 import json
 import tempfile
 import unittest
@@ -26,6 +27,9 @@ from app.services.build_task_planner import (
 from app.services.artifact_invalidation import canonical_sha256
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.entity_definitions import confirmed_entity_designs
+from app.domain.api_design import EndpointApiDesign
+from app.services.api_design import endpoint_api_fields
+from app.workspace.endpoint_design_documents import technical_plan_sha256, write_endpoint_design
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import (
@@ -39,9 +43,49 @@ def _write_current_plan(workspace: str, project_plan: dict) -> str:
     """把当前 TechnicalPlan 测试夹具写入正式 JSON 路径。"""
 
     workspace_root = Path(workspace)
-    plan_path = workspace_root / ".xcodeagent/plans/project-plan.json"
+    plan_path = workspace_root / ".xcodeagent/plans/technical-plan.json"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(project_plan), encoding="utf-8")
+    for contract in project_plan.get("api_contracts") or []:
+        if not isinstance(contract, dict):
+            continue
+        contract_id = str(contract.get("id") or "")
+        for endpoint in contract.get("endpoints") or []:
+            if not isinstance(endpoint, dict) or not endpoint.get("id"):
+                continue
+            design = EndpointApiDesign.model_validate(
+                {
+                    "apiContractId": contract_id,
+                    "endpointId": str(endpoint["id"]),
+                    "artifactRevision": "0123456789abcdef0123456789abcdef",
+                    "endpointContract": endpoint,
+                    "sceneEntities": [],
+                    "fieldMappings": [
+                        {
+                            "endpointField": {
+                                key: field.get(key)
+                                for key in ("side", "location", "path", "type", "required", "description")
+                            },
+                            "mappingType": "business_description" if field.get("required") else "unconfigured",
+                            **(
+                                {"businessDescription": "测试夹具中的必填字段实现说明。"}
+                                if field.get("required")
+                                else {}
+                            ),
+                        }
+                        for field in endpoint_api_fields(contract, endpoint)
+                    ],
+                    "sourceSnapshots": [],
+                    "basedOn": [
+                        {
+                            "artifactKey": "technical-plan",
+                            "sha256": technical_plan_sha256(workspace_root),
+                        }
+                    ],
+                    "confirmedAt": datetime.now(UTC),
+                }
+            )
+            write_endpoint_design(workspace_root, design)
     return str(plan_path)
 
 
@@ -1015,7 +1059,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ["orders.list"],
         )
         self.assertNotIn("data_sources", executable_details)
-        self.assertIn("entity_designs", executable_details)
+        self.assertIn("endpoint_designs", executable_details)
         self.assertEqual(
             [
                 endpoint["id"]

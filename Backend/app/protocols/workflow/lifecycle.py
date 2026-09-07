@@ -379,7 +379,9 @@ def project_workflow_lifecycle_boundary(
     # 阶段确认节点完成后 Graph 会立即进入下一阶段。生命周期提前投影真实的下一节点，
     # 避免执行已经开始时顶部步骤条仍停留在上一阶段。
     projected_phase = node_name
-    if node_name == "test_phase_confirmation" and status == "completed":
+    if node_name == "api_design" and status == "completed":
+        projected_phase = "api_design_readiness_gate"
+    elif node_name == "test_phase_confirmation" and status == "completed":
         projected_phase = "integration_test"
     elif node_name == "review_phase_confirmation" and status == "completed":
         projected_phase = "code_review"
@@ -468,6 +470,8 @@ def _pending_interaction(
         "page_acceptance": PendingInteractionType.PAGE_ACCEPTANCE,
         "entity_source_binding": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "entity_source_binding_required": PendingInteractionType.ENTITY_SOURCE_BINDING,
+        "api_design": PendingInteractionType.API_DESIGN,
+        "api_design_required": PendingInteractionType.API_DESIGN,
         "agent_approval": PendingInteractionType.AGENT_APPROVAL,
         "revision_draft_confirmation": PendingInteractionType.REVISION_DRAFT_CONFIRMATION,
         "revision_impact_confirmation": PendingInteractionType.IMPACT_CONFIRMATION,

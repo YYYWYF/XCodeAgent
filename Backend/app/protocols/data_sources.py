@@ -7,11 +7,26 @@ from typing import Any, AsyncIterator, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
+from app.services.api_design import (
+    load_database_columns,
+    load_database_tables,
+    load_external_operation,
+)
 from app.services.data_sources import mutate_catalog, public_catalog, validate_saved_source, validate_source
 
 
 DATA_SOURCES_EVENT_NAME = "data-sources"
-DataSourceActionName = Literal["list", "create", "update", "delete", "validate", "detail"]
+DataSourceActionName = Literal[
+    "list",
+    "create",
+    "update",
+    "delete",
+    "validate",
+    "detail",
+    "database_tables",
+    "database_columns",
+    "external_operation",
+]
 
 
 class DataSourceRequest(BaseModel):
@@ -22,6 +37,8 @@ class DataSourceRequest(BaseModel):
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     source_id: str | None = Field(default=None, alias="sourceId", max_length=128)
     operation_id: str | None = Field(default=None, alias="operationId", max_length=128)
+    table: str | None = Field(default=None, max_length=256)
+    directory_id: str | None = Field(default=None, alias="directoryId", max_length=128)
     source: dict[str, Any] | None = None
 
 
@@ -32,7 +49,10 @@ def data_sources_capabilities() -> dict[str, Any]:
         "name": "data-sources",
         "basePath": "/data-sources",
         "transport": "ag-ui-sse",
-        "actions": ["list", "create", "update", "delete", "validate", "detail"],
+        "actions": [
+            "list", "create", "update", "delete", "validate", "detail",
+            "database_tables", "database_columns", "external_operation",
+        ],
         "endpoints": {
             "list": "/data-sources/list",
             "create": "/data-sources/create",
@@ -40,6 +60,9 @@ def data_sources_capabilities() -> dict[str, Any]:
             "delete": "/data-sources/delete",
             "validate": "/data-sources/validate",
             "detail": "/data-sources/detail",
+            "database_tables": "/data-sources/database-tables",
+            "database_columns": "/data-sources/database-columns",
+            "external_operation": "/data-sources/external-operation",
         },
         "customEventName": DATA_SOURCES_EVENT_NAME,
         "stateSnapshotKey": "dataSources",
@@ -80,6 +103,33 @@ def build_data_sources_ag_ui_stream(
             return AgUiActionResult(
                 data={"action": action, "catalog": catalog.model_dump(by_alias=True)},
                 message="已读取接口详情。",
+            )
+        if action == "database_tables":
+            metadata = load_database_tables(request.workspace_root, str(request.source_id or ""))
+            return AgUiActionResult(
+                data={"action": action, "metadata": metadata},
+                message="已读取数据库表清单。",
+            )
+        if action == "database_columns":
+            metadata = load_database_columns(
+                request.workspace_root,
+                str(request.source_id or ""),
+                str(request.table or ""),
+            )
+            return AgUiActionResult(
+                data={"action": action, "metadata": metadata},
+                message="已读取数据库表字段。",
+            )
+        if action == "external_operation":
+            metadata = load_external_operation(
+                request.workspace_root,
+                str(request.source_id or ""),
+                str(request.directory_id or ""),
+                str(request.operation_id or ""),
+            )
+            return AgUiActionResult(
+                data={"action": action, "metadata": metadata},
+                message="已读取外部 Operation Schema。",
             )
         if action == "validate":
             if request.source is not None:
@@ -127,6 +177,23 @@ def _validate_action_input(
             raise ValueError("读取数据源列表只需要 workspaceRoot，接口详情请使用 detail 端点。")
         if request.source_id is not None:
             raise ValueError("读取数据源列表只需要 workspaceRoot。")
+        return
+    if action == "database_tables":
+        if request.source is not None or not request.source_id:
+            raise ValueError("读取数据库表必须提供 sourceId。")
+        return
+    if action == "database_columns":
+        if request.source is not None or not request.source_id or not request.table:
+            raise ValueError("读取数据库字段必须提供 sourceId 和 table。")
+        return
+    if action == "external_operation":
+        if (
+            request.source is not None
+            or not request.source_id
+            or not request.directory_id
+            or not request.operation_id
+        ):
+            raise ValueError("读取外部 Operation 必须提供 sourceId、directoryId 和 operationId。")
         return
     if action == "detail":
         if request.source is not None or not request.source_id:

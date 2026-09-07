@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path, PureWindowsPath
 
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.protocol import BackendProtocol, WriteResult
@@ -44,6 +45,36 @@ _BLOCKED_SCRIPT_MESSAGE = (
     "from an owner task. The outer integration-test phase owns repository verification; report any "
     "missing dependency or command instead."
 )
+
+_WINDOWS_EXTENDED_PREFIX = "\\\\?\\"
+_WINDOWS_EXTENDED_UNC_PREFIX = "\\\\?\\UNC\\"
+
+
+def _windows_comparison_path(value: str | Path) -> PureWindowsPath:
+    """移除 Windows 扩展路径前缀，生成仅用于边界比较的等价路径。"""
+
+    raw = str(value)
+    if raw.casefold().startswith(_WINDOWS_EXTENDED_UNC_PREFIX.casefold()):
+        raw = "\\\\" + raw[len(_WINDOWS_EXTENDED_UNC_PREFIX):]
+    elif raw.startswith(_WINDOWS_EXTENDED_PREFIX):
+        raw = raw[len(_WINDOWS_EXTENDED_PREFIX):]
+    return PureWindowsPath(raw)
+
+
+def _is_windows_path_within_root(path: str | Path, root: str | Path) -> bool:
+    """按 Windows 路径语义判断扩展路径是否仍位于工作区根目录内。"""
+
+    try:
+        _windows_comparison_path(path).relative_to(_windows_comparison_path(root))
+    except ValueError:
+        return False
+    return True
+
+
+def _has_windows_extended_prefix(value: str | Path) -> bool:
+    """判断路径是否采用 Windows 的扩展长度前缀表示。"""
+
+    return str(value).startswith(_WINDOWS_EXTENDED_PREFIX)
 
 
 def _blocked_script_extension(file_path: str) -> str | None:
@@ -76,6 +107,30 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
     anywhere in the workspace — repository verification belongs to the outer
     integration-test phase rather than an owner task.
     """
+
+    def _resolve_path(self, file_path: str) -> Path:
+        """解析虚拟路径，并兼容 Windows 对同一路径返回的扩展前缀形式。"""
+
+        try:
+            return super()._resolve_path(file_path)
+        except ValueError:
+            if not self.virtual_mode:
+                raise
+            # 仅修复正常虚拟路径在 resolve 后产生的表示差异，不接纳宿主机绝对路径。
+            if PureWindowsPath(file_path).drive:
+                raise
+            virtual_path = file_path if file_path.startswith("/") else "/" + file_path
+            if ".." in virtual_path or virtual_path.startswith("~"):
+                raise
+            resolved = (self.cwd / virtual_path.lstrip("/")).resolve()
+            if not (
+                _has_windows_extended_prefix(resolved)
+                or _has_windows_extended_prefix(self.cwd)
+            ):
+                raise
+            if not _is_windows_path_within_root(resolved, self.cwd):
+                raise
+            return resolved
 
     def _overwrite(self, file_path: str, content: str) -> WriteResult:
         """Overwrite *file_path* with *content*, creating it if necessary."""

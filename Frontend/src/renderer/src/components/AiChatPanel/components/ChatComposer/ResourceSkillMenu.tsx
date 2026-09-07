@@ -193,8 +193,8 @@ export default function ResourceSkillMenu({
       overlayClassName={cx('composer-resource-overlay')}
       placement="topLeft"
       trigger="click"
-      visible={visible}
-      onVisibleChange={handleVisibleChange}
+      open={visible}
+      onOpenChange={handleVisibleChange}
     >
       <Button
         aria-label="添加资源"

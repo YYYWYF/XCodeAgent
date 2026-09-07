@@ -25,14 +25,14 @@ from app.services.business_acceptance_verifiers.java_inspection_support import _
 
 
 def verify_domain_mapping_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
-    """按实体隔离验证 Entity、PO、DTO、表列绑定和逐字段转换链。"""
+    """按 Endpoint API 设计中的局部实体语义验证对象、表列和转换链。"""
 
     model = _inspect_or_block(files)
     if isinstance(model, dict):
         return model
     entities = _dict_items(expected.get("entities"))
     if not entities:
-        return verification_result("blocked", "没有可验证的完整 EntityDesign 输入。")
+        return verification_result("blocked", "没有可验证的 Endpoint API 动态映射输入。")
     data_types = [item for item in model.types if type_role(item) != "conversion"]
     conversion_types = [item for item in model.types if type_role(item) == "conversion"]
     errors: list[str] = []
@@ -72,18 +72,28 @@ def _verify_entity(
     roles = {role: [item for item in related if type_role(item) == role] for role in ("entity", "po", "dto")}
     errors: list[str] = []
     blockers: list[str] = []
-    for role, label in (("entity", "Entity"), ("po", "PO"), ("dto", "DTO")):
+    required_roles = [("entity", "Entity"), ("dto", "DTO")]
+    if bindings:
+        required_roles.insert(1, ("po", "PO"))
+    for role, label in required_roles:
         if not roles[role]:
             errors.append(f"实体 {entity_id} 缺少 {label} 类型。")
     if errors:
         return errors, blockers, entity_facts(entity_id, roles, [], expected_fields, bindings)
 
     field_expectations = {str(item.get("name") or ""): item for item in expected_fields}
-    if str(expected.get("data_source_type") or "").casefold() == "database":
-        bound_fields = {str(item.get("entity_field") or "") for item in bindings}
-        missing = sorted(set(field_expectations) - bound_fields)
-        if missing:
-            blockers.append(f"实体 {entity_id} 的正式数据库绑定缺少字段：{', '.join(missing)}。")
+    source_annotated = any(item.get("source_types") for item in expected_fields)
+    database_fields = {
+        name
+        for name, item in field_expectations.items()
+        if "database" in (item.get("source_types") or [])
+    }
+    if not source_annotated and str(expected.get("data_source_type") or "").casefold() == "database":
+        database_fields = set(field_expectations)
+    bound_fields = {str(item.get("entity_field") or "") for item in bindings}
+    missing = sorted(database_fields - bound_fields)
+    if missing:
+        blockers.append(f"实体 {entity_id} 的当前 Endpoint 数据库绑定缺少字段：{', '.join(missing)}。")
     dto_schema_types = schema_entity_fields(endpoints, set(field_expectations))
     entity_properties: dict[str, str] = {}
     po_properties: dict[str, str] = {}

@@ -293,15 +293,20 @@ def project_build_context_output(
         ),
         "dataSourceIds": _compact_strings(
             {
-                str(design.get("data_source_type") or "")
-                for design in build_context.get("entity_designs") or []
-                if isinstance(design, dict) and design.get("data_source_type")
+                str(snapshot.get("sourceId") or "")
+                for design in build_context.get("endpoint_designs") or []
+                if isinstance(design, dict)
+                for snapshot in design.get("sourceSnapshots") or []
+                if isinstance(snapshot, dict) and snapshot.get("sourceId")
             },
             item_limit=200,
             text_limit=240,
         ),
         "entityIds": _compact_strings(
             build_context.get("entity_ids"), item_limit=200, text_limit=240
+        ),
+        "mappingFlows": _compact_strings(
+            build_context.get("mapping_flows"), item_limit=500, text_limit=1_000
         ),
         "reusableTaskIds": _compact_strings(
             reusable_ids, item_limit=200, text_limit=240

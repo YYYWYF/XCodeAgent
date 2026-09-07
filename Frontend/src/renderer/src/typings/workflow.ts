@@ -446,6 +446,171 @@ export type WorkflowEntityDesignSuggestion = {
   note?: string
 }
 
+/** API 设计节点暴露的 Endpoint 字段节点。 */
+export type WorkflowApiField = {
+  nodeType?: 'endpoint_field'
+  id: string
+  side: 'request' | 'response'
+  location: 'path' | 'query' | 'header' | 'request_body' | 'response_body'
+  path: string
+  type: string
+  required?: boolean
+  description?: string
+}
+
+/** Endpoint 场景 Entity 的局部字段。 */
+export type WorkflowApiSceneEntityField = {
+  id: string
+  name: string
+  label?: string
+  type: string
+  required?: boolean
+  description?: string
+}
+
+/** Endpoint 场景 Entity，只能从 TechnicalPlan 模板复制并以只读副本持久化。 */
+export type WorkflowApiSceneEntity = {
+  id: string
+  name: string
+  description?: string
+  templateEntityId: string
+  fields: WorkflowApiSceneEntityField[]
+}
+
+/** TechnicalPlan 实体的只读复制模板。 */
+export type WorkflowApiEntityTemplate = {
+  id: string
+  name: string
+  description?: string
+  fields: Array<{
+    name: string
+    label?: string
+    type: string
+    required?: boolean
+    description?: string
+  }>
+}
+
+/** API 设计中的直属 MySQL Source Field 节点。 */
+export type WorkflowApiDatabaseFieldNode = {
+  nodeType?: 'source_field'
+  sourceType: 'database'
+  id: string
+  sourceId: string
+  schema?: string
+  table: string
+  column: string
+  type: string
+  usage?: 'read' | 'filter' | 'write'
+  description?: string
+}
+
+/** API 设计中的外部 Operation Source Field 节点。 */
+export type WorkflowApiExternalFieldNode = {
+  nodeType?: 'source_field'
+  sourceType: 'external_api'
+  id: string
+  sourceId: string
+  directoryId: string
+  operationId: string
+  section: 'path' | 'query' | 'header' | 'request_body' | 'response_body'
+  path: string
+  type: string
+  description?: string
+}
+
+/** API 字段映射内嵌的场景实体字段引用。 */
+export type WorkflowApiEntityFieldReference = {
+  entityId: string
+  fieldId: string
+  path: string
+  type: string
+}
+
+export type WorkflowApiSourceField =
+  | Omit<WorkflowApiDatabaseFieldNode, 'id' | 'nodeType'>
+  | Omit<WorkflowApiExternalFieldNode, 'id' | 'nodeType'>
+
+export type WorkflowApiEndpointFieldSnapshot = Omit<WorkflowApiField, 'id' | 'nodeType'>
+
+/** 一个 Endpoint 字段的一条自包含映射记录。 */
+export type WorkflowApiFieldMapping = {
+  endpointField: WorkflowApiEndpointFieldSnapshot
+  mappingType: 'unconfigured'
+} | {
+  endpointField: WorkflowApiEndpointFieldSnapshot
+  mappingType: 'business_description'
+  businessDescription: string
+} | {
+  endpointField: WorkflowApiEndpointFieldSnapshot
+  mappingType: 'direct_source'
+  sourceField: WorkflowApiSourceField
+} | {
+  endpointField: WorkflowApiEndpointFieldSnapshot
+  mappingType: 'through_entity'
+  entityField: WorkflowApiEntityFieldReference
+  sourceField?: WorkflowApiSourceField
+}
+
+/** 可随加载动作往返传递的 Endpoint 字段映射草稿。 */
+export type WorkflowApiDesignDraft = {
+  apiContractId: string
+  endpointId: string
+  /** Endpoint 级可选实现指导，不参与字段映射完整性判断。 */
+  implementationDescription?: string
+  sceneEntities: WorkflowApiSceneEntity[]
+  fieldMappings: WorkflowApiFieldMapping[]
+}
+
+/** API 设计面板提交给 AG-UI 工作流的结构化动作。 */
+export type WorkflowApiDesignAction = {
+  action: 'confirm'
+  apiContractId: string
+  endpointId: string
+  draft: WorkflowApiDesignDraft
+}
+
+/** API 设计节点向前端投影的契约、模板和草稿；来源元数据由独立数据源接口补充。 */
+export type WorkflowApiDesignPayload = {
+  endpoint: Record<string, unknown> & { apiContractId?: string; id?: string }
+  endpointFields: WorkflowApiField[]
+  entityTemplates: WorkflowApiEntityTemplate[]
+  /** 仅供前端将独立数据源目录合并进工作台，不由 /workflow/run 返回。 */
+  sources?: Array<Record<string, unknown> & {
+    id?: string
+    name?: string
+    type?: 'database' | 'external_api'
+    mode?: string
+    metadataSupported?: boolean
+    metadataMessage?: string
+    directories?: Array<Record<string, unknown>>
+  }>
+  draft: WorkflowApiDesignDraft
+  existingStatus?: Record<string, unknown>
+  /** 仅供前端保存独立数据源接口返回的临时元数据，不进入工作流状态。 */
+  databaseMetadata?: {
+    sourceId?: string
+    schema?: string
+    table?: string
+    tables?: Array<{ name: string; description?: string }>
+    columns?: Array<{ name: string; type: string; required?: boolean; description?: string }>
+  }
+  externalOperation?: {
+    sourceId?: string
+    sourceName?: string
+    directoryId?: string
+    directoryName?: string
+    operation?: Record<string, unknown>
+    fields?: Array<{
+      section: string
+      path: string
+      type: string
+      required?: boolean
+      description?: string
+    }>
+  }
+}
+
 export type WorkflowDetailReview = {
   pages?: WorkflowDetailReviewTarget[]
   endpoints?: WorkflowDetailReviewTarget[]
@@ -586,6 +751,7 @@ export type WorkflowClarificationAnswer =
   | WorkflowClarificationChoiceAnswer
   | WorkflowDetailReviewSubmission
   | WorkflowEntityDesignAction
+  | WorkflowApiDesignAction
   | WorkflowRequirementSpecEdit
   | WorkflowBuildTaskPlanConfirmation
   | Record<string, unknown>
@@ -617,6 +783,8 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   implementation_fix_confirmation?: 'approved' | 'rejected'
   /** 正式草稿交互必须携带服务端绑定的 change、revision 与 hash。 */
   revision_draft_interaction?: WorkflowRevisionDraftInteraction
+  /** API 设计节点的实时加载或确认动作。 */
+  api_design?: WorkflowApiDesignAction
 }
 
 /** 开发完成后恢复测试阶段确认节点的协议答案。 */
@@ -695,6 +863,9 @@ export type WorkflowClarification = {
   editableFields?: string[]
   actionValues?: string[]
   errors?: string[]
+  apiDesign?: WorkflowApiDesignPayload
+  missingApiDesigns?: Array<Record<string, unknown>>
+  developmentTarget?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -914,6 +1085,7 @@ export type LifecyclePendingInteractionType =
   | 'requirement_document_confirmation'
   | 'technical_plan_confirmation'
   | 'entity_source_binding'
+  | 'api_design'
   | 'page_design_confirmation'
   | 'task_plan_confirmation'
   | 'impact_confirmation'
@@ -1026,6 +1198,7 @@ export type WorkflowAction =
   | 'continue_revision_build'
   | 'start_entity_binding'
   | 'continue_after_entity_binding'
+  | 'start_api_design'
 
 export type WorkflowCodeReviewRetry = {
   available: true

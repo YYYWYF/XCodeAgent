@@ -7,3 +7,4 @@
 .codex/
 .zcode/
 .mcp.json
+**/.build-tmp/

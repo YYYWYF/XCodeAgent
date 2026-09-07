@@ -2105,6 +2105,7 @@ export default function AiChatPanel({
     handleRetryPlan,
     handleStopPlan,
     handleSend,
+    handleStartApiDesign,
     handleStartEndpointDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
@@ -2996,6 +2997,7 @@ export default function AiChatPanel({
           activeApiEndpointOption?.endpoint.designed ||
             activeApiEndpointOption?.endpoint.hasDetailPlan
         ),
+        detailPlanStatus: activeApiEndpointOption?.endpoint.detailPlanStatus,
         path: activeApiEndpointOption?.endpoint.path,
         purpose: activeApiEndpointOption?.endpoint.summary
       }
@@ -3651,7 +3653,7 @@ export default function AiChatPanel({
     return started
   }
 
-  /** 启动当前接口开发；后端先执行实体绑定前置检查。 */
+  /** 启动当前接口的独立 API 动态映射设计，确认后本次执行直接结束。 */
   const handleStartEndpointDesign = async (
     endpointTargetId: string,
     endpointLabel: string,
@@ -3680,11 +3682,11 @@ export default function AiChatPanel({
     } else {
       setActiveDetailTarget({ type: 'none' })
     }
-    const started = await handleStartEndpointDevelopment({
+    const started = await handleStartApiDesign({
       apiContractId: targetContext?.apiContractId,
       endpointId: targetContext?.endpointId || endpointTargetId,
       endpointLabel,
-      hasDetailPlan
+      redesign: hasDetailPlan
     })
     if (started) {
       onPlanningArtifactsRefresh()
@@ -3766,10 +3768,19 @@ export default function AiChatPanel({
       )
       return
     }
-    await handleStartEndpointDesign(task.endpointId, task.endpointLabel, task.hasDetailPlan, {
-      apiContractId: task.apiContractId,
-      endpointId: task.endpointId
-    })
+    if (task.hasDetailPlan) {
+      await handleStartEndpointDevelopment({
+        apiContractId: task.apiContractId,
+        endpointId: task.endpointId,
+        endpointLabel: task.endpointLabel,
+        hasDetailPlan: true
+      })
+    } else {
+      await handleStartEndpointDesign(task.endpointId, task.endpointLabel, false, {
+        apiContractId: task.apiContractId,
+        endpointId: task.endpointId
+      })
+    }
   }
 
   /** 消费实体完成续接卡，在同一历史会话中重新启动原页面或 Endpoint 正式任务。 */

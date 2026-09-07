@@ -11,6 +11,7 @@ from app.graph.workflow import (
     route_build_result,
     route_development_readiness,
     route_entity_source_binding,
+    route_api_design,
     route_prepare_build_tasks,
     route_project_planning,
     route_review_phase_confirmation,
@@ -28,10 +29,26 @@ from app.domain.application_lifecycle import PendingInteractionType
 
 
 class WorkflowRoutingTests(unittest.TestCase):
+    def test_api_design_waits_then_continues_to_readiness(self) -> None:
+        """API 动态设计确认前暂停，确认后进入同一 Endpoint 的开发前置检查。"""
+
+        self.assertEqual(
+            route_api_design({"status": "requires_user_input"}),
+            "await_user_input",
+        )
+        self.assertEqual(
+            route_api_design({"status": "completed"}),
+            "api_design_readiness_gate",
+        )
+        self.assertEqual(
+            route_api_design({"status": "failed"}),
+            "handle_failure",
+        )
+
     def test_workflow_start_defaults_to_development_readiness(self) -> None:
         self.assertEqual(
             route_workflow_start({}),
-            "development_readiness_gate",
+            "api_design_readiness_gate",
         )
 
     def test_workflow_start_can_resume_from_entity_source_binding(self) -> None:
@@ -64,7 +81,7 @@ class WorkflowRoutingTests(unittest.TestCase):
         )
         self.assertEqual(
             route_application_revision({"status": "revision_artifacts_confirmed"}),
-            "development_readiness_gate",
+            "api_design_readiness_gate",
         )
 
     def test_project_planning_waits_for_confirmation(self) -> None:
@@ -76,7 +93,7 @@ class WorkflowRoutingTests(unittest.TestCase):
     def test_project_planning_continues_to_development_readiness(self) -> None:
         self.assertEqual(
             route_project_planning({"status": "completed"}),
-            "development_readiness_gate",
+            "api_design_readiness_gate",
         )
 
     def test_workflow_start_can_resume_from_prepare_build_tasks(self) -> None:

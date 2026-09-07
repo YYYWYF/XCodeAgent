@@ -134,12 +134,15 @@ def _task_frontend_source_types(tasks: list[dict[str, Any]]) -> set[str]:
         source_refs = task.get("source_refs")
         if not isinstance(source_refs, dict):
             continue
-        designs = source_refs.get("entity_designs")
+        designs = source_refs.get("endpoint_designs")
         if not isinstance(designs, list):
             continue
         for design in designs:
-            if isinstance(design, dict) and design.get("data_source_type"):
-                source_types.add(str(design["data_source_type"]).strip())
+            if not isinstance(design, dict):
+                continue
+            for snapshot in design.get("sourceSnapshots") or []:
+                if isinstance(snapshot, dict) and snapshot.get("sourceType"):
+                    source_types.add(str(snapshot["sourceType"]).strip())
     return source_types
 
 

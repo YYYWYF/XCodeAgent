@@ -3,7 +3,7 @@ import {
   ClockCircleOutlined,
   DatabaseOutlined
 } from '@ant-design/icons'
-import { Table, Tag, Typography } from 'antd'
+import { Alert, Table, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useState } from 'react'
 import type { DevelopmentPlanningEntityOption } from '../../../../typings'
@@ -193,6 +193,12 @@ export default function EntityInfoPanel({
           </Text>
         </div>
       </header>
+
+      <Alert
+        message="独立旧能力：实体绑定结果不参与 API 设计、开发门禁或 Build 上下文。"
+        showIcon
+        type="info"
+      />
 
       <div className={cx('entity-info-meta')}>
         <div className={cx('entity-info-meta-item')}>

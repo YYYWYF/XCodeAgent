@@ -93,3 +93,33 @@ async def detail_data_source(
     """读取指定外部 API 接口的完整配置详情。"""
 
     return _data_source_response(action="detail", input_data=input_data, accept=accept)
+
+
+@data_sources_router.post("/database-tables")
+async def database_tables_metadata(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """为 API 设计面板独立读取直属 MySQL 表清单。"""
+
+    return _data_source_response(action="database_tables", input_data=input_data, accept=accept)
+
+
+@data_sources_router.post("/database-columns")
+async def database_columns_metadata(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """为 API 设计面板独立读取直属 MySQL 表字段。"""
+
+    return _data_source_response(action="database_columns", input_data=input_data, accept=accept)
+
+
+@data_sources_router.post("/external-operation")
+async def external_operation_metadata(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """为 API 设计面板独立读取外部 Operation Schema。"""
+
+    return _data_source_response(action="external_operation", input_data=input_data, accept=accept)

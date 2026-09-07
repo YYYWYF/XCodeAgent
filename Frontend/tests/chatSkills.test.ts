@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createElement } from 'react'
+import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   beginOptimisticSkillSend,
@@ -32,6 +32,7 @@ import WorkflowRunCard, {
   PlanConfirmationCard,
   workflowOriginalRequest
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
+import { WorkbenchPhaseProvider } from '../src/renderer/src/context'
 import { workflowInteractionAvailability } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
   isStructuredPlanningWorkflow,
@@ -64,7 +65,50 @@ import {
   filterCatalogSkills,
   reconcileEnabledChatSkills
 } from '../src/renderer/src/components/SkillsPage/skillCatalog'
-import type { UserSkillCatalog, WorkflowRunPayload } from '../src/renderer/src/typings'
+import type {
+  ApplicationLifecycle,
+  UserSkillCatalog,
+  WorkflowRunPayload
+} from '../src/renderer/src/typings'
+
+const testLocalStorage = new Map<string, string>()
+
+// 服务端渲染测试只需提供工作台阶段 Provider 读取的最小本地存储接口。
+Object.defineProperty(globalThis, 'window', {
+  configurable: true,
+  value: {
+    localStorage: {
+      getItem: (key: string): string | null => testLocalStorage.get(key) ?? null,
+      removeItem: (key: string): void => {
+        testLocalStorage.delete(key)
+      },
+      setItem: (key: string, value: string): void => {
+        testLocalStorage.set(key, value)
+      }
+    }
+  }
+})
+
+/** 在与正式工作台一致的阶段上下文中渲染工作流卡片。 */
+function renderWorkflowRunCard(props: ComponentProps<typeof WorkflowRunCard>): string {
+  const lifecycle = {
+    initialization: { stage: 'ready_for_workbench' },
+    activeExecutions: {
+      test: {
+        phase: props.workflow.summary.phase,
+        status: 'running',
+        updatedAt: '2026-09-04T00:00:00.000Z'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  return renderToStaticMarkup(
+    createElement(
+      WorkbenchPhaseProvider,
+      { applicationId: `chat-skills-${props.workflow.runId}`, lifecycle },
+      createElement(WorkflowRunCard, props)
+    )
+  )
+}
 
 test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   const scope = workflowDebugBuildScope({
@@ -1287,9 +1331,9 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
 
   assert.ok(snapshot)
   assert.match(markup, /生成 Unit DAG 骨架/)
-  assert.match(markup, /实现首页/)
-  assert.match(markup, /按 DAG 拓扑顺序排列，将在下一阶段执行/)
-  assert.match(markup, /build-task-plan\.json/)
+  assert.match(markup, /已生成 1 个任务/)
+  assert.match(markup, /编译任务注册表与依赖/)
+  assert.match(markup, /保存 DAG 产物/)
   assert.doesNotMatch(
     JSON.stringify(snapshot),
     /raw-model-output|\/workspace\/build-task-plan\.json/
@@ -1569,8 +1613,7 @@ test('单元测试生成期间展示运行中的集成检查矩阵', () => {
 })
 
 test('构建完成后展示单元测试跳过确认按钮', () => {
-  const markup = renderToStaticMarkup(
-    createElement(WorkflowRunCard, {
+  const markup = renderWorkflowRunCard({
       interactionAvailability: 'active',
       workflow: {
         runId: 'run-unit-test-confirmation',
@@ -1602,8 +1645,7 @@ test('构建完成后展示单元测试跳过确认按钮', () => {
         },
         events: []
       }
-    })
-  )
+  })
 
   assert.match(markup, /是否跳过单元测试？/)
   assert.match(markup, /是，跳过单元测试/)
@@ -1614,8 +1656,7 @@ test('构建完成后展示单元测试跳过确认按钮', () => {
 })
 
 test('项目启动节点不展示已过期的前端性能测试确认', () => {
-  const markup = renderToStaticMarkup(
-    createElement(WorkflowRunCard, {
+  const markup = renderWorkflowRunCard({
       interactionAvailability: 'stale',
       workflow: {
         runId: 'run-launch-with-stale-performance-confirmation',
@@ -1643,8 +1684,7 @@ test('项目启动节点不展示已过期的前端性能测试确认', () => {
         },
         events: []
       }
-    })
-  )
+  })
 
   assert.match(markup, /正在启动项目预览/)
   assert.doesNotMatch(markup, /是否跳过前端性能测试/)
@@ -1655,8 +1695,7 @@ test('项目启动节点不展示已过期的前端性能测试确认', () => {
 
 test('UI 确认过渡帧缺少 clarification 时仍可正常渲染', () => {
   assert.doesNotThrow(() =>
-    renderToStaticMarkup(
-      createElement(WorkflowRunCard, {
+    renderWorkflowRunCard({
         interactionAvailability: 'active',
         workflow: {
           runId: 'run-ui-confirmation-transition',
@@ -1670,8 +1709,7 @@ test('UI 确认过渡帧缺少 clarification 时仍可正常渲染', () => {
           state: {},
           result: {}
         }
-      })
-    )
+    })
   )
 })
 
@@ -1896,9 +1934,7 @@ test('失败的技术规划历史隐藏模型 JSON 并保留结构化错误卡',
     workflowMessageContentForDisplay('{"architecture":{"frontend":"React"}}', workflow, false),
     ''
   )
-  const markup = renderToStaticMarkup(
-    createElement(WorkflowRunCard, { interactionAvailability: 'active', workflow })
-  )
+  const markup = renderWorkflowRunCard({ interactionAvailability: 'active', workflow })
   assert.match(markup, /技术规划自动修复后仍未通过校验/)
   assert.match(markup, /重新生成/)
   assert.doesNotMatch(markup, /architecture/)

@@ -6,7 +6,7 @@ from typing import Any
 from app.services.business_acceptance import DELIVERABLE_KINDS
 
 
-_ENDPOINT_SOURCE_TYPES = frozenset({"database", "external_api", "static"})
+_ENDPOINT_SOURCE_TYPES = frozenset({"database", "external_api"})
 _ENDPOINT_BACKEND_SOURCE_TYPES = frozenset({"database", "external_api"})
 
 
@@ -14,41 +14,28 @@ def endpoint_source_groups(
     project_plan: dict[str, Any],
     build_context: dict[str, Any] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """按当前 endpoint 的实体设计归并数据源，拒绝非法来源并避免全局污染。"""
+    """按当前 Endpoint 设计快照归并数据源，拒绝全局实体绑定回流。"""
 
     executable = project_plan.get("executable_details")
     executable = executable if isinstance(executable, dict) else {}
-    designs = executable.get("entity_designs")
+    designs = executable.get("endpoint_designs")
     if not isinstance(designs, list) or not designs:
         context = build_context if isinstance(build_context, dict) else {}
-        designs = context.get("entity_designs")
+        designs = context.get("endpoint_designs")
     groups: dict[str, list[dict[str, Any]]] = {
-        source_type: [] for source_type in ("database", "external_api", "static")
+        source_type: [] for source_type in ("database", "external_api")
     }
     if isinstance(designs, list):
         for item in designs:
             if not isinstance(item, dict):
                 continue
-            source_type = str(item.get("data_source_type") or "").strip()
-            if not source_type:
-                if item.get("entity_id") or item.get("entity_name"):
-                    raise ValueError("任务准备上下文的实体设计缺少数据源类型。")
-                continue
-            if source_type not in _ENDPOINT_SOURCE_TYPES:
-                raise ValueError(f"任务准备上下文包含非法数据源类型: {source_type}")
-            groups[source_type].append(item)
-    if not any(groups.values()):
-        skeleton = project_plan.get("application_skeleton")
-        sources = skeleton.get("data_sources") if isinstance(skeleton, dict) else None
-        for source in sources or []:
-            if not isinstance(source, dict):
-                continue
-            source_type = str(source.get("type") or "").strip()
-            if not source_type:
-                continue
-            if source_type not in _ENDPOINT_SOURCE_TYPES:
-                raise ValueError(f"任务准备上下文包含非法数据源类型: {source_type}")
-            groups[source_type].append(source)
+            for snapshot in item.get("sourceSnapshots") or []:
+                if not isinstance(snapshot, dict):
+                    continue
+                source_type = str(snapshot.get("sourceType") or "").strip()
+                if source_type not in _ENDPOINT_SOURCE_TYPES:
+                    raise ValueError(f"任务准备上下文包含非法数据源类型: {source_type}")
+                groups[source_type].append(snapshot)
     return {source_type: items for source_type, items in groups.items() if items}
 
 
@@ -106,8 +93,6 @@ def build_task_preparation_prompt(
         else endpoint_source_groups(project_plan, build_context)
     )
     source_types = set(source_groups)
-    if mode == "combined" and source_types and source_types <= {"static"}:
-        mode = "static"
     prompt_context = scoped_prompt_build_context(build_context, mode)
     snapshot_scope = _snapshot_scope(mode, source_types)
     snapshot = compact_workspace_snapshot(workspace_snapshot, scope=snapshot_scope)
@@ -173,7 +158,7 @@ def _role_boundary_section(mode: str) -> str:
         "subagents, inspect files outside the provided WorkspaceSnapshot, or generate or "
         "modify code. Create tasks only for the effective planning Units: use "
         "TargetBuildContext.planning_unit_ids when non-empty, otherwise use "
-        "TargetBuildContext.required_unit_ids. Formal contracts and confirmed entity "
+        "TargetBuildContext.required_unit_ids. Formal contracts and confirmed Endpoint API "
         "designs are authoritative; WorkspaceSnapshot is authoritative for existing paths."
     )
 
@@ -219,6 +204,7 @@ def _planning_algorithm_section(
         if str(unit_id).strip()
     }
     backend_source_types = set(source_groups) & _ENDPOINT_BACKEND_SOURCE_TYPES
+    endpoint_design_present = bool(build_context.get("endpoint_designs") or build_context.get("business_descriptions"))
     reusable_tasks_by_unit = build_context.get("reusable_tasks_by_unit")
     reusable_tasks_by_unit = (
         reusable_tasks_by_unit if isinstance(reusable_tasks_by_unit, dict) else {}
@@ -265,60 +251,48 @@ def _planning_algorithm_section(
                 "must depend on this adapter task and import the shared module; no business API "
                 "task may repeat the envelope types, success code, errors, or unwrap logic."
             )
-    if "database" in source_groups:
+    if backend_source_types or endpoint_design_present:
         rules.append(
-            "For every confirmed database entity in each backend:endpoint:* Unit, emit "
-            "exactly four structural tasks in this order: `objects`, `repository`, "
-            "`service`, `controller`. Use IDs "
-            "`<endpointUnitId>::<entityId>::<stage>`. Existing files do not remove a stage: "
-            "use `modify` for paths present in WorkspaceSnapshot and `add` for missing "
-            "business paths; execution may prove the stage `already_satisfied`. The objects "
-            "stage owns domain/PO/DTO conversion files, repository owns Mapper/XML and "
-            "repository files, service owns the application service, and controller owns "
-            "the endpoint adapter."
+            "For every backend:endpoint:* Unit, select exactly one confirmed endpoint_designs "
+            "item by apiContractId + endpointId. Plan one shared Endpoint pipeline rather than "
+            "one pipeline per Endpoint: sceneEntities are local semantic structures and never "
+            "authorize a global entity source binding. Use stable task IDs "
+            "`<endpointUnitId>::endpoint::<stage>`. Emit `objects`, `service`, and `controller` "
+            "once for the Endpoint; add `repository` when fieldMappings contain database sourceField values, "
+            "and add `upstream` plus `mapping` when they contain external API sourceField values. Existing files do not remove a required stage: use `modify` for paths "
+            "present in WorkspaceSnapshot and `add` for missing business paths; execution may "
+            "prove a stage `already_satisfied`."
+        )
+        rules.append(
+            "Treat api_design.fieldMappings plus sourceSnapshots as the complete field-source "
+            "authority. Each record contains one Endpoint field and its complete mapping. A "
+            "`business_description` mapping attaches one concise sentence to one Request or Response "
+            "Endpoint field; it has no Entity/Source output and must be implemented as an explicit "
+            "business note without inventing formulas, fields, queries, or upstream calls. "
+            "The optional `api_design.implementationDescription` is an Endpoint-level implementation "
+            "guide for the whole request/response flow. When present, reflect its concrete steps in "
+            "the Controller/ApplicationService/Repository/upstream task descriptions according to "
+            "their layer boundaries. It never changes the confirmed method, path, parameters, "
+            "schemas, field mappings, or source dependencies; if it conflicts with those facts, "
+            "preserve the confirmed contract and report the conflict instead of inventing a source. "
+            "Do not invent an Entity field, database column, Repository query, or external API field "
+            "for a business_description. Repository work must name every confirmed "
+            "database sourceId/table/column. Objects owns only the DTO/domain shapes required by "
+            "the internal API and these local semantic references."
         )
     if "external_api" in source_groups:
         rules.append(
-            "For every confirmed external_api entity in each backend:endpoint:* Unit, first "
-            "match the Unit's exact api_contract_id + endpoint_id against operations[].endpoint_refs "
-            "and require exactly one matching operation. Then emit `upstream`, `mapping`, `service`, "
-            "and `controller` tasks with IDs `<endpointUnitId>::<entityId>::<stage>`. Reuse one "
-            "Client method and transport DTO set for the same operation_id, preferring OpenFeign "
-            "for a new Client while preserving an already-satisfying existing HTTP abstraction, "
-            "and do not add "
-            "persistence stages. Use these exact deliverable kinds: upstream = "
-            "`backend.external_api_client`, mapping = `backend.external_api_mapping`, service = "
-            "`backend.application_service`, controller = `backend.endpoint_controller`."
-        )
-        rules.append(
-            "For every external_api stage, make the Simplified Chinese numbered description "
-            "operation-specific and directly executable. Upstream must name operation_id, "
-            "base_url_config_key, timeout, upstream method/path, typed Path/Query parameters, "
-            "headers, request_shape, response_shape, and success status codes. For a new Client, "
-            "prefer a typed @FeignClient interface; do not force a technology migration when an "
-            "existing Client already satisfies the complete operation. The upstream task "
-            "must also own the runtime Base URL property: reuse the backend module's existing "
-            "Spring Boot application.yml, application.yaml, or application.properties; if none "
-            "exists, create application.yml under that module's existing src/main/resources. "
-            "Include that exact configuration file in target_files, allowed_paths, change_scope, "
-            "and the backend.external_api_client deliverable paths, and add the exact "
-            "base_url_config_key there. Write effective_connection.base_url directly as the "
-            "plain YAML or properties value for that key. Never wrap it in a `${ENV_NAME:default}` "
-            "expression, derive an environment-variable name, or emit another placeholder. This "
-            "configuration-file work belongs to upstream, never to "
-            "mapping, service, or controller. Mapping must name "
-            "mapped_entity_path, every source_field -> entity_field rule, and entity decimal, "
-            "datetime, and enum types. Service must bind internal request fields to upstream "
-            "request fields by exact name, call the Client, extract the declared mapped entity "
-            "path, and translate upstream errors. Controller must implement only the internal API "
-            "Contract method/path and delegate to the service; it must not expose the upstream "
-            "path. Treat request_shape and response_shape as type/field structure only: never "
-            "hard-code sample scalar values, and never put the design-time base_url in Java source "
-            "or a business constant. When field_mappings share "
-            "an array prefix such as list[], that mapped_entity_path is the entity collection even "
-            "when the response root/cardinality is object. If deterministic operation selection or "
-            "request binding is impossible, return no invented task semantics and let platform "
-            "validation reject the candidate."
+            "For each selected external_api source snapshot, use only "
+            "details.operation and details.connection saved at API-design confirmation. Upstream "
+            "must name operationId, baseUrlConfigKey, timeoutMs, method/path, typed Path/Query "
+            "parameters, headers, requestStructure, responseStructure, and success status codes. "
+            "Prefer a typed @FeignClient for a new Client while preserving an existing compatible "
+            "HTTP abstraction. Reuse the backend module's existing Spring Boot configuration "
+            "file, or create application.yml under its existing src/main/resources, and write "
+            "connection.baseUrl as the plain value for connection.baseUrlConfigKey. Never put "
+            "the Base URL in Java or invent a credential. Mapping must follow every external "
+            "dataField section/path and its paired API field/entity semantic reference. Controller "
+            "implements only the internal API Contract and never exposes the upstream path."
         )
     if "static" in source_groups or mode == "static":
         rules.append(
@@ -452,20 +426,14 @@ def _dependency_rules_section(source_types: set[str]) -> str:
         "task IDs, or tasks from another Unit; the deterministic Unit Graph owns all "
         "cross-Unit edges."
     )
-    if "database" in source_types:
-        rules += (
-            " Database chains are objects → repository → service → controller."
-        )
-    if "external_api" in source_types:
-        rules += (
-            " External API chains are upstream → mapping → service → controller and are "
-            "scoped by endpoint_refs; identical operation_id values share Client methods and DTOs."
-        )
     if source_types & _ENDPOINT_BACKEND_SOURCE_TYPES:
         rules += (
-            " The first stage of each entity is a same-Unit root, different entities do not "
-            "depend on one another, and each later stage depends only on the immediately "
-            "previous stage."
+            " Each Endpoint pipeline uses objects as one root. Repository depends on objects "
+            "when database fields exist. Upstream is an independent same-Unit root and mapping "
+            "depends on upstream when external API fields exist. Service depends on objects plus "
+            "every emitted repository or mapping task, and controller depends only on service. "
+            "Direct bindings from different sources converge in service; one-sentence business descriptions never create an "
+            "entity-global dependency chain."
         )
     return rules + (
         " When "
@@ -574,14 +542,13 @@ def scoped_prompt_build_context(
             source_refs.pop("page_implementation_contract", None)
         context["source_refs"] = source_refs
     if mode == "page":
-        for key in ("endpoint_contract", "direct_endpoint_contracts", "entity_designs", "entity_ids"):
+        for key in ("endpoint_contract", "direct_endpoint_contracts", "endpoint_designs", "mapping_flows", "entity_ids"):
             context.pop(key, None)
     elif mode == "endpoint":
         for key in (
             "page_implementation_contract",
             "endpoint_contract",
             "direct_endpoint_contracts",
-            "entity_designs",
             "required_endpoint_ids",
             "planning_unit_ids",
             "planning_context_mode",
@@ -591,6 +558,9 @@ def scoped_prompt_build_context(
             "target",
             "endpoint_ids",
             "entity_ids",
+            "endpoint_designs",
+            "mapping_flows",
+            "business_descriptions",
             "required_unit_ids",
             "source_refs",
             "reusable_tasks_by_unit",
@@ -818,15 +788,9 @@ def _bounded_prompt_value(value: Any, *, limit: int) -> Any:
 
 
 def task_preparation_datasource_types(project_plan: dict[str, Any]) -> set[str]:
-    """从任务准备投影读取并校验数据源类型集合。"""
+    """从 Endpoint API 设计快照读取并校验数据源类型集合。"""
 
-    skeleton = project_plan.get("application_skeleton")
-    sources = skeleton.get("data_sources") if isinstance(skeleton, dict) else None
-    source_types = {
-        str(source.get("type") or "")
-        for source in sources or []
-        if isinstance(source, dict)
-    }
+    source_types = endpoint_source_types(project_plan)
     if not source_types:
         raise ValueError("任务准备上下文缺少数据源类型。")
     if not source_types <= _ENDPOINT_SOURCE_TYPES:

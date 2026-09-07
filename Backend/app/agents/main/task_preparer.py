@@ -50,6 +50,36 @@ def _invoke_live_main_agent(
     return _coerce_content_text(content) or ""
 
 
+def _validate_business_description_context(build_context: dict[str, Any] | None) -> None:
+    """校验 Build 上下文中的字段业务说明，防止规划阶段猜测或串用描述。"""
+
+    if not isinstance(build_context, dict):
+        return
+    raw_descriptions = build_context.get("business_descriptions")
+    if raw_descriptions is None:
+        return
+    if not isinstance(raw_descriptions, list):
+        raise ValueError("Build 上下文 business_descriptions 必须是列表。")
+    target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
+    target_type = str(target.get("type") or "")
+    target_contract = str(target.get("api_contract_id") or target.get("apiContractId") or "")
+    target_endpoint = str(target.get("id") or target.get("endpoint_id") or target.get("endpointId") or "")
+    for description in raw_descriptions:
+        if not isinstance(description, dict):
+            raise ValueError("Build 上下文 business_descriptions 每项必须是对象。")
+        # todo fix
+        # required_text = ("api_contract_id", "endpoint_id", "mapping_id", "node_id", "path", "description")
+        # if any(not str(description.get(key) or "").strip() for key in required_text):
+        #     raise ValueError("Build 上下文 business_description 缺少 Endpoint、Mapping、字段或说明。")
+        if target_type == "endpoint" and (
+            str(description.get("api_contract_id")) != target_contract
+            or str(description.get("endpoint_id")) != target_endpoint
+        ):
+            raise ValueError(
+                f"Endpoint Build Unit 不能接收其他 Endpoint 的业务说明：{description.get('mapping_id')}。"
+            )
+
+
 def prepare_build_tasks_with_main_agent(
     project_plan: dict[str, Any],
     *,
@@ -63,6 +93,7 @@ def prepare_build_tasks_with_main_agent(
 ) -> dict[str, Any]:
     """在单一重试循环中生成候选，并可最终化为合并后的完整 Build DAG。"""
 
+    _validate_business_description_context(build_context)
     settings = Settings.from_env()
     max_retries = max(0, int(getattr(settings, "build_task_plan_max_retries", 2)))
     feedback = list(validation_feedback or [])

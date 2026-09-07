@@ -58,8 +58,8 @@ def _project_plan() -> dict:
 
 
 class BuildUnitSkeletonTests(unittest.TestCase):
-    def test_mixed_source_types_build_backend_and_static_units(self) -> None:
-        """混合数据库与静态数据源时同时生成后端、数据库与前端 Mock 数据 Unit。"""
+    def test_legacy_entity_sources_do_not_change_endpoint_units(self) -> None:
+        """旧实体来源不再影响按 TechnicalPlan Endpoint 固定生成的后端 Unit。"""
 
         project_plan = {
             **_project_plan(),
@@ -140,7 +140,7 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         plan = ensure_build_unit_skeleton(project_plan, {})
         units = plan["build_units"]
         self.assertNotIn("database:database", units)
-        self.assertIn("frontend:data:static", units)
+        self.assertNotIn("frontend:data:static", units)
         self.assertIn("backend:endpoint:orders-api:orders.list", units)
         self.assertIn("backend:endpoint:weather-api:weather.get", units)
         self.assertIn("backend:bootstrap", units)
@@ -226,19 +226,19 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         )
         self.assertEqual(plan["build_units"]["page:orders"]["status"], "not_prepared")
 
-    def test_static_builds_frontend_data_units_without_backend_units(self) -> None:
-        """Static 骨架只建立前端内存数据模块到页面的依赖。"""
+    def test_legacy_static_entity_source_does_not_bypass_endpoint_units(self) -> None:
+        """实体旧入口的 static 结果不能绕过 Endpoint 与后端 bootstrap。"""
 
         project_plan = _project_plan()
         project_plan = confirm_entity_designs(project_plan, source_type="static")
         plan = ensure_build_unit_skeleton(project_plan, {})
 
-        self.assertIn("frontend:data:static", plan["build_units"])
+        self.assertNotIn("frontend:data:static", plan["build_units"])
         self.assertNotIn("database:database", plan["build_units"])
-        self.assertNotIn("backend:bootstrap", plan["build_units"])
-        self.assertNotIn("backend:endpoint:orders-api:orders.list", plan["build_units"])
+        self.assertIn("backend:bootstrap", plan["build_units"])
+        self.assertIn("backend:endpoint:orders-api:orders.list", plan["build_units"])
         self.assertIn(
-            {"from": "frontend:data:static", "to": "page:orders", "type": "depends_on"},
+            {"from": "backend:endpoint:orders-api:orders.list", "to": "page:orders", "type": "depends_on"},
             plan["unit_graph"]["edges"],
         )
 

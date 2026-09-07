@@ -79,6 +79,9 @@ def _with_task_unit_metadata(
     canonical_source_refs = _unit_source_refs(unit_id, unit, build_context)
     provided_source_refs = _dict_value(task.get("source_refs"))
     provided_source_refs.pop("entity_ids", None)
+    provided_source_refs.pop("entity_designs", None)
+    provided_source_refs.pop("endpoint_designs", None)
+    provided_source_refs.pop("business_descriptions", None)
     source_refs = {
         **canonical_source_refs,
         **provided_source_refs,
@@ -89,27 +92,11 @@ def _with_task_unit_metadata(
         source_refs["authorization"] = authorization
     else:
         source_refs.pop("authorization", None)
-    # entity_designs 是来源隔离的确定性输入，不能被模型返回的未过滤引用覆盖；
-    # endpoint 任务按固定任务 ID 推导实体子集，只暴露本任务真正实现的实体设计。
-    if (
-        unit_id.startswith("frontend:data:")
-        or unit_id.startswith("backend:endpoint:")
-        or unit_id == "backend:bootstrap"
-    ):
-        canonical_designs = _entity_design_items(
-            canonical_source_refs.get("entity_designs")
+    # Endpoint 设计是平台确认的确定性来源，模型候选不得覆盖或扩展其字段映射记录。
+    if unit_id.startswith("backend:endpoint:") or unit_id == "backend:bootstrap":
+        source_refs["endpoint_designs"] = _endpoint_design_items(
+            canonical_source_refs.get("endpoint_designs")
         )
-        canonical_entity_ids = [
-            str(design.get("entity_id") or "")
-            for design in canonical_designs
-            if str(design.get("entity_id") or "")
-        ]
-        selected_entity_ids = _task_entity_ids(task, unit_id, canonical_entity_ids)
-        source_refs["entity_designs"] = [
-            design
-            for design in canonical_designs
-            if str(design.get("entity_id") or "") in set(selected_entity_ids)
-        ]
     task_with_refs = {
         **task,
         "unit_id": unit_id,
@@ -122,29 +109,6 @@ def _with_task_unit_metadata(
         ),
     }
     return task_with_refs
-
-
-def _task_entity_ids(
-    task: dict[str, Any],
-    unit_id: str,
-    canonical_entity_ids: list[str],
-) -> list[str]:
-    """从固定任务 ID 推导后端任务的实体范围。"""
-
-    if not unit_id.startswith("backend:endpoint:") or not canonical_entity_ids:
-        return canonical_entity_ids
-    task_id = _text(task.get("id"))
-    prefix = f"{unit_id}::"
-    if task_id.startswith(prefix):
-        entity_id, separator, stage = task_id[len(prefix):].rpartition("::")
-        if separator and entity_id in canonical_entity_ids and stage:
-            return [entity_id]
-    if len(canonical_entity_ids) == 1:
-        return canonical_entity_ids
-    raise ValueError(
-        f"Backend endpoint task {task_id or '<unknown>'} must use fixed id "
-        f"{unit_id}::<entityId>::<stage> so its entity scope is unambiguous."
-    )
 
 
 def _apply_unit_task_dependencies(
@@ -268,13 +232,19 @@ def _unit_source_refs(
     unit: dict[str, Any],
     build_context: dict[str, Any],
 ) -> dict[str, Any]:
-    """按 Unit 类型映射到页面实现契约、TechnicalPlan Endpoint 或实体绑定来源。"""
+    """按 Unit 类型映射到页面实现契约、TechnicalPlan Endpoint 或 API 设计。"""
 
-    existing = _dict_value(unit.get("source_refs"))
+    existing = {
+        key: value
+        for key, value in _dict_value(unit.get("source_refs")).items()
+        if key != "source_types"
+    }
     target = _dict_value(build_context.get("target"))
     refs = _dict_value(build_context.get("source_refs"))
-    entity_designs = _entity_design_items(build_context.get("entity_designs"))
+    endpoint_designs = _endpoint_design_items(build_context.get("endpoint_designs"))
+    source_types = _string_list(build_context.get("source_types"))
     if unit_id.startswith("page:"):
+        descriptions = _dict_items(build_context.get("business_descriptions"))
         return {
             **existing,
             "type": "page_implementation_contract",
@@ -283,15 +253,10 @@ def _unit_source_refs(
                 refs.get("page_implementation_contract")
             ),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_designs": entity_designs,
-        }
-    if unit_id.startswith("frontend:data:"):
-        return {
-            **existing,
-            "type": "frontend_mock_contract",
-            "target": target,
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_designs": _filter_entity_designs_by_source(entity_designs, {"static"}),
+            "endpoint_designs": endpoint_designs,
+            "mapping_flows": _string_list(build_context.get("mapping_flows")),
+            **({"source_types": source_types} if source_types else {}),
+            **({"business_descriptions": descriptions} if descriptions else {}),
         }
     if unit_id.startswith("backend:endpoint:"):
         contract_id, endpoint_id = _backend_endpoint_identity(unit_id)
@@ -299,6 +264,11 @@ def _unit_source_refs(
         endpoint_refs = _matching_endpoint_refs(
             refs.get("technical_plan_endpoints"),
             endpoint_ids,
+        )
+        descriptions = _scope_business_descriptions_to_endpoint(
+            _dict_items(build_context.get("business_descriptions")),
+            contract_id=contract_id,
+            endpoint_id=endpoint_id,
         )
         return {
             **existing,
@@ -315,26 +285,26 @@ def _unit_source_refs(
             ),
             "technical_plan_endpoints": endpoint_refs,
             "endpoint_ids": endpoint_ids,
-            "entity_designs": _scope_entity_designs_to_endpoint(
-                _filter_entity_designs_by_source(
-                    entity_designs,
-                    {"database", "external_api"},
-                ),
+            "endpoint_designs": _scope_endpoint_designs_to_endpoint(
+                endpoint_designs,
                 contract_id=contract_id,
                 endpoint_id=endpoint_id,
             ),
+            "mapping_flows": _string_list(build_context.get("mapping_flows")),
+            **({"source_types": source_types} if source_types else {}),
+            **({"business_descriptions": descriptions} if descriptions else {}),
         }
     if unit_id == "backend:bootstrap":
-        backend_designs = _filter_entity_designs_by_source(
-            entity_designs,
-            {"database", "external_api"},
-        )
+        descriptions = _dict_items(build_context.get("business_descriptions"))
         return {
             **existing,
             "type": "backend_bootstrap",
             "target": target,
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_designs": backend_designs,
+            "endpoint_designs": endpoint_designs,
+            "mapping_flows": _string_list(build_context.get("mapping_flows")),
+            **({"source_types": source_types} if source_types else {}),
+            **({"business_descriptions": descriptions} if descriptions else {}),
         }
     return {
         **existing,
@@ -356,18 +326,9 @@ def _unit_fingerprint_payload(
             "source_refs": source_refs,
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
             "entity_ids": _string_list(build_context.get("entity_ids")),
-            "entity_designs": _entity_design_items(build_context.get("entity_designs")),
-        }
-    if unit_id.startswith("frontend:data:"):
-        return {
-            "unit_id": unit_id,
-            "source_refs": source_refs,
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_ids": _string_list(build_context.get("entity_ids")),
-            "entity_designs": _filter_entity_designs_by_source(
-                _entity_design_items(build_context.get("entity_designs")),
-                {"static"},
-            ),
+            "endpoint_designs": _endpoint_design_items(build_context.get("endpoint_designs")),
+            "mapping_flows": _string_list(build_context.get("mapping_flows")),
+            "business_descriptions": _dict_items(build_context.get("business_descriptions")),
         }
     if unit_id.startswith("backend:endpoint:"):
         return {
@@ -375,28 +336,14 @@ def _unit_fingerprint_payload(
             "source_refs": source_refs,
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
             "entity_ids": _string_list(build_context.get("entity_ids")),
-            "entity_designs": _filter_entity_designs_by_source(
-                _entity_design_items(build_context.get("entity_designs")),
-                {"database", "external_api"},
-            ),
+            "endpoint_designs": _endpoint_design_items(build_context.get("endpoint_designs")),
+            "mapping_flows": _string_list(build_context.get("mapping_flows")),
+            "business_descriptions": _dict_items(build_context.get("business_descriptions")),
         }
     return {
         "unit_id": unit_id,
         "source_refs": source_refs,
     }
-
-
-def _filter_entity_designs_by_source(
-    entity_designs: list[dict[str, Any]],
-    allowed_source_types: set[str],
-) -> list[dict[str, Any]]:
-    """按 Unit 所属实现边界过滤实体来源，避免前后端互相携带无关设计。"""
-
-    return [
-        design
-        for design in entity_designs
-        if str(design.get("data_source_type") or "").strip() in allowed_source_types
-    ]
 
 
 def _backend_endpoint_identity(unit_id: str) -> tuple[str, str]:
@@ -408,40 +355,36 @@ def _backend_endpoint_identity(unit_id: str) -> tuple[str, str]:
     return parts[2].strip(), parts[3].strip()
 
 
-def _scope_entity_designs_to_endpoint(
-    entity_designs: list[dict[str, Any]],
+def _scope_endpoint_designs_to_endpoint(
+    endpoint_designs: list[dict[str, Any]],
     *,
     contract_id: str,
     endpoint_id: str,
 ) -> list[dict[str, Any]]:
-    """按 Unit Endpoint 裁剪外部 API 操作，数据库实体设计保持原样。"""
+    """按 Unit 的复合 Endpoint 标识筛选已确认 API 设计。"""
 
-    scoped: list[dict[str, Any]] = []
-    target_ref = (contract_id, endpoint_id)
-    for design in entity_designs:
-        copied = deepcopy(design)
-        if str(copied.get("data_source_type") or "") != "external_api":
-            scoped.append(copied)
-            continue
-        external = _dict_value(copied.get("external_api_design"))
-        operations = []
-        for operation in _entity_design_items(external.get("operations")):
-            refs = {
-                (
-                    str(ref.get("api_contract_id") or "").strip(),
-                    str(ref.get("endpoint_id") or "").strip(),
-                )
-                for ref in _entity_design_items(operation.get("endpoint_refs"))
-            }
-            if target_ref in refs:
-                operations.append(deepcopy(operation))
-        copied["external_api_design"] = {
-            **external,
-            "operation_count": len(operations),
-            "operations": operations,
-        }
-        scoped.append(copied)
-    return scoped
+    return [
+        deepcopy(design)
+        for design in endpoint_designs
+        if str(design.get("apiContractId") or "") == contract_id
+        and str(design.get("endpointId") or "") == endpoint_id
+    ]
+
+
+def _scope_business_descriptions_to_endpoint(
+    descriptions: list[dict[str, Any]],
+    *,
+    contract_id: str,
+    endpoint_id: str,
+) -> list[dict[str, Any]]:
+    """按复合 Endpoint 标识筛选字段业务说明。"""
+
+    return [
+        deepcopy(description)
+        for description in descriptions
+        if str(description.get("api_contract_id") or "") == contract_id
+        and str(description.get("endpoint_id") or "") == endpoint_id
+    ]
 
 
 def _matching_endpoint_refs(
@@ -473,8 +416,8 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def _entity_design_items(value: Any) -> list[dict[str, Any]]:
-    """读取构建上下文中的实体设计摘要，只保留字典项。"""
+def _endpoint_design_items(value: Any) -> list[dict[str, Any]]:
+    """读取构建上下文中的 Endpoint API 设计，只保留字典项。"""
 
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 

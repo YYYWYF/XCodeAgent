@@ -13,8 +13,136 @@ from app.agents.data_source.workspace_context import backend_workspace_context
 from app.services.build_unit_compiler import apply_unit_compilation
 
 
+def _endpoint_design(source_specs: list[dict]) -> dict:
+    """把测试所需来源规整为自包含字段映射产物。"""
+
+    snapshots: list[dict] = []
+    field_mappings: list[dict] = []
+    scene_entities: dict[str, dict] = {}
+    for index, source in enumerate(source_specs):
+        source_type = str(source.get("data_source_type") or "database")
+        entity_id = str(source.get("entity_id") or f"Entity{index}")
+        source_id = str(source.get("source_id") or f"{source_type}-{index}")
+        scene = scene_entities.setdefault(entity_id, {
+            "id": f"scene:{entity_id}", "name": entity_id,
+            "templateEntityId": entity_id, "fields": []
+        })
+        if source_type == "database":
+            database = source.get("database_design") or {}
+            table = str(database.get("matched_table") or entity_id.casefold())
+            rows = database.get("bindings") or [{"entity_field": "name", "table_column": "name"}]
+            snapshots.append({
+                "sourceType": "database",
+                "sourceId": source_id,
+                "name": table,
+                "details": {
+                    "databaseMode": "direct_mysql",
+                    "table": table,
+                    "columns": [row.get("table_column") for row in rows],
+                },
+            })
+            for row in rows:
+                entity_field = str(row.get("entity_field") or "name")
+                field_id = f"{entity_id}:{entity_field}"
+                scene["fields"].append({"id": field_id, "name": entity_field, "type": "string"})
+                field_mappings.append({
+                    "endpointField": {
+                        "side": "request", "location": "request_body",
+                        "path": f"{entity_id}.{entity_field}", "type": "string", "required": True,
+                        "description": "",
+                    },
+                    "mappingType": "through_entity",
+                    "entityField": {
+                        "entityId": scene["id"], "fieldId": field_id,
+                        "path": entity_field, "type": "string",
+                    },
+                    "sourceField": {
+                        "sourceType": "database", "sourceId": source_id, "schema": "app",
+                        "table": table, "column": str(row.get("table_column") or entity_field),
+                        "type": "string", "usage": "write",
+                    },
+                })
+            continue
+
+        external = source.get("external_api_design") or {}
+        operation = (external.get("operations") or [{}])[0]
+        api_info = operation.get("api_info") or {}
+        connection = operation.get("effective_connection") or external.get("connection") or {}
+        operation_id = str(operation.get("operation_id") or f"operation-{index}")
+        operation_mappings = operation.get("field_mappings") or [{
+            "entity_field": "value", "source_field": "value", "rule": "direct",
+        }]
+        snapshots.append({
+            "sourceType": source_type,
+            "sourceId": source_id,
+            "name": str(source.get("entity_name") or entity_id),
+            "details": {
+                "connection": {
+                    "baseUrl": connection.get("base_url") or "https://example.invalid",
+                    "baseUrlConfigKey": connection.get("base_url_config_key") or "upstream.url",
+                    "timeoutMs": connection.get("timeout_ms") or 10000,
+                    "headers": connection.get("headers") or [],
+                },
+                "operation": {
+                    "operationId": operation_id,
+                    "name": operation.get("name") or operation_id,
+                    "method": api_info.get("method") or "GET",
+                    "path": api_info.get("path") or "/values",
+                    "pathParameters": [],
+                    "queryParameters": api_info.get("parameters") or [],
+                    "requestStructure": api_info.get("request_shape") or {},
+                    "responseStructure": api_info.get("response_shape") or {},
+                },
+            },
+        })
+        for mapping in operation_mappings:
+            entity_field = str(mapping.get("entity_field") or "value")
+            source_path = str(mapping.get("source_field") or "value")
+            field_id = f"{entity_id}:{entity_field}"
+            scene["fields"].append({"id": field_id, "name": entity_field, "type": "string"})
+            field_mappings.append({
+                "endpointField": {
+                    "side": "response", "location": "response_body",
+                    "path": f"result.{entity_field}", "type": "string", "required": True,
+                    "description": "",
+                },
+                "mappingType": "through_entity",
+                "entityField": {
+                    "entityId": scene["id"], "fieldId": field_id,
+                    "path": entity_field, "type": "string",
+                },
+                "sourceField": {
+                    "sourceType": "external_api", "sourceId": source_id,
+                    "directoryId": "products", "operationId": operation_id,
+                    "section": "response_body", "path": source_path, "type": "string",
+                },
+            })
+    return {
+        "schemaVersion": "endpoint-field-mapping.v1",
+        "artifactType": "endpoint-field-mapping",
+        "status": "confirmed",
+        "confirmationStatus": "confirmed",
+        "apiContractId": "category_api",
+        "endpointId": "category.create",
+        "endpointContract": {
+            "id": "category.create", "method": "POST", "path": "/api/categories",
+        },
+        "sceneEntities": list(scene_entities.values()),
+        "fieldMappings": field_mappings,
+        "sourceSnapshots": snapshots,
+        "basedOn": [{"artifactKey": "technical-plan", "sha256": "a" * 64}],
+        "confirmedAt": "2026-09-04T00:00:00Z",
+    }
+
+
 def _task(*, designs: list[dict]) -> dict:
-    """构造包含调度冗余字段的后端 Endpoint 测试任务。"""
+    """构造携带当前 Endpoint API 设计和调度冗余字段的后端任务。"""
+
+    endpoint_designs = (
+        designs
+        if designs and all(item.get("schemaVersion") for item in designs)
+        else [_endpoint_design(designs)]
+    )
 
     return {
         "id": "backend:endpoint:category_api:category.create::Category::objects",
@@ -41,7 +169,7 @@ def _task(*, designs: list[dict]) -> dict:
                 "api_contract_id": "category_api",
             },
             "endpoint_ids": ["category.create"],
-            "entity_designs": designs,
+            "endpoint_designs": endpoint_designs,
         },
         "acceptance_checks": [{"description": "UNRELATED_ACCEPTANCE_SENTINEL"}],
         "impact_scope": {"summary": "UNRELATED_IMPACT_SENTINEL"},
@@ -244,8 +372,8 @@ def _workspace_snapshot() -> dict:
 class DataSourceGenerationPromptTests(unittest.TestCase):
     """验证 DataSource 执行提示词的任务级 Skill 路由与最小上下文。"""
 
-    def test_task_skill_paths_follow_exact_entity_source_types(self) -> None:
-        """每个任务只声明自身实体来源对应的 Skill 路径。"""
+    def test_task_skill_paths_follow_exact_api_source_types(self) -> None:
+        """每个任务按 Endpoint API 设计来源加载生成与模板边界 Skill。"""
 
         database = _task(
             designs=[{"entity_id": "Category", "data_source_type": "database"}],
@@ -260,67 +388,62 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(
-            task_required_skill_paths(database),
-            ["/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md"],
+        expected_skills = [
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md",
+            "/.xcodeagent/builtin-skills/"
+            "springboot-template-modification-boundary/SKILL.md",
+        ]
+        self.assertEqual(task_required_skill_paths(database), expected_skills)
+        self.assertEqual(task_required_skill_paths(external), expected_skills)
+        self.assertEqual(task_required_skill_paths(mixed), expected_skills)
+        database_paths = task_required_instruction_paths(database)
+        external_paths = task_required_instruction_paths(external)
+        mixed_paths = task_required_instruction_paths(mixed)
+        self.assertEqual(database_paths[:2], expected_skills)
+        self.assertEqual(external_paths[:2], expected_skills)
+        self.assertEqual(mixed_paths[:2], expected_skills)
+        self.assertIn(
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "references/database/layer-implementation.md",
+            database_paths,
         )
-        self.assertEqual(
-            task_required_skill_paths(external),
-            ["/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md"],
+        self.assertIn(
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "references/external-api/layer-implementation.md",
+            external_paths,
         )
-        self.assertEqual(
-            task_required_skill_paths(mixed),
-            ["/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md"],
+        self.assertIn(
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "references/database/layer-implementation.md",
+            mixed_paths,
         )
-        self.assertEqual(
-            task_required_instruction_paths(database),
-            [
-                "/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md",
-                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
-                "references/database/layer-implementation.md",
-            ],
-        )
-        self.assertEqual(
-            task_required_instruction_paths(external),
-            [
-                "/.xcodeagent/builtin-skills/"
-                "springboot-backend-generate/SKILL.md",
-                "/.xcodeagent/builtin-skills/"
-                "springboot-backend-generate/"
-                "references/external-api/layer-implementation.md",
-            ],
-        )
-        self.assertEqual(
-            task_required_instruction_paths(mixed),
-            [
-                "/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md",
-                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
-                "references/database/layer-implementation.md",
-                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
-                "references/external-api/layer-implementation.md",
-            ],
+        self.assertIn(
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "references/external-api/layer-implementation.md",
+            mixed_paths,
         )
         mixed_bootstrap = dict(mixed)
         mixed_bootstrap["id"] = "backend:bootstrap::bootstrap"
         mixed_bootstrap["unit_id"] = "backend:bootstrap"
-        self.assertEqual(
-            task_required_instruction_paths(mixed_bootstrap),
-            [
-                "/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md",
-                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
-                "references/database/bootstrap.md",
-                "/.xcodeagent/builtin-skills/springboot-backend-generate/"
-                "references/external-api/bootstrap.md",
-            ],
+        bootstrap_paths = task_required_instruction_paths(mixed_bootstrap)
+        self.assertIn(
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "references/database/bootstrap.md",
+            bootstrap_paths,
+        )
+        self.assertIn(
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "references/external-api/bootstrap.md",
+            bootstrap_paths,
         )
 
     def test_static_backend_task_is_rejected(self) -> None:
-        """static 实体若误入后端执行器，应在调用模型前失败。"""
+        """非法 static 来源若误入 API 设计，应在调用模型前失败。"""
 
         task = _task(
             designs=[{"entity_id": "Notice", "data_source_type": "static"}],
         )
-        with self.assertRaisesRegex(ValueError, "不得处理 static"):
+        with self.assertRaisesRegex(ValueError, "非法数据源类型：static"):
             task_required_skill_paths(task)
 
     def test_prompt_contains_only_execution_fields_and_targeted_artifacts(self) -> None:
@@ -347,7 +470,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertIn("springboot-backend-generate/SKILL.md", prompt)
         self.assertIn("CategoryInput", prompt)
         self.assertIn("CategoryValue", prompt)
-        self.assertIn("matched_table", prompt)
+        self.assertIn('"table": "category"', prompt)
         for sentinel in (
             "UNRELATED_PAGE_SENTINEL",
             "UNRELATED_SCHEMA_SENTINEL",
@@ -364,7 +487,8 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertNotIn("BuildTaskPlan summary:", prompt)
         self.assertNotIn("Code graph navigation contract", prompt)
         self.assertIn("outer_integration_test_only", prompt)
-        self.assertIn("创建分类。", prompt)
+        self.assertIn('"sceneEntities"', prompt)
+        self.assertIn('"mappingType": "through_entity"', prompt)
         self.assertIn("Backend Workspace Context:", prompt)
         self.assertIn('"backend_working_directory": "/backend"', prompt)
         self.assertIn('"backend_directory_structure"', prompt)
@@ -415,16 +539,19 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             set(context["api_contract"]["schemas"]),
             {"CategoryInput", "CategoryValue"},
         )
-        self.assertEqual(context["endpoint_detail"]["processing_logic"], ["创建分类。"])
+        design = context["api_design"]
+        self.assertEqual(design["schemaVersion"], "endpoint-field-mapping.v1")
+        self.assertEqual(design["sceneEntities"][0]["templateEntityId"], "Category")
+        self.assertEqual(design["fieldMappings"][0]["mappingType"], "through_entity")
         self.assertEqual(
-            [item["entity_id"] for item in context["entities"]],
-            ["Category"],
-        )
-        self.assertEqual(
-            context["entities"][0]["source_binding"]["matched_table"],
+            next(
+                mapping["sourceField"]
+                for mapping in design["fieldMappings"]
+                if mapping.get("sourceField", {}).get("sourceType") == "database"
+            )["table"],
             "category",
         )
-        self.assertNotIn("table_design", context["entities"][0])
+        self.assertNotIn("entity_designs", context)
 
     def test_endpoint_contract_projects_platform_authorization_constraints(self) -> None:
         """后端执行任务包只消费平台注入的 Endpoint 权限切片。"""
@@ -485,34 +612,27 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
 
         context = task_implementation_contract(_project_plan(), task)
 
-        operations = context["entities"][0]["source_binding"]["operations"]
-        self.assertEqual(
-            [item["operation_id"] for item in operations],
-            ["external-op-product-list"],
+        api_design = context["api_design"]
+        operation = api_design["sourceSnapshots"][0]["details"]["operation"]
+        self.assertEqual(operation["operationId"], "external-op-product-list")
+        self.assertNotIn("unrelated-operation", str(api_design))
+        self.assertNotIn("request_body", str(operation))
+        self.assertNotIn("response_body", str(operation))
+
+    def test_endpoint_contract_rejects_missing_or_duplicate_api_design(self) -> None:
+        """Endpoint 缺失或重复 API 设计时必须在 Agent 写入前失败。"""
+
+        missing = _task(designs=[_external_product_design()])
+        missing["source_refs"]["endpoint_designs"] = []
+        with self.assertRaisesRegex(ValueError, "必须且只能携带一个已确认 Endpoint API 设计"):
+            task_implementation_contract(_project_plan(), missing)
+
+        duplicate = _task(designs=[_external_product_design()])
+        duplicate["source_refs"]["endpoint_designs"].append(
+            dict(duplicate["source_refs"]["endpoint_designs"][0])
         )
-        self.assertEqual(operations[0]["mapped_entity_path"], "list[]")
-        self.assertNotIn("request_body", str(operations[0]))
-        self.assertNotIn("response_body", str(operations[0]))
-
-    def test_external_api_contract_rejects_missing_or_duplicate_endpoint_operation(self) -> None:
-        """当前 Endpoint 缺失或重复绑定上游操作时必须在 Agent 写入前失败。"""
-
-        missing = _external_product_design()
-        missing["external_api_design"]["operations"][0]["endpoint_refs"][0][
-            "endpoint_id"
-        ] = "category.delete"
-        with self.assertRaisesRegex(ValueError, "必须且只能投射一个上游操作"):
-            task_implementation_contract(_project_plan(), _task(designs=[missing]))
-
-        duplicate = _external_product_design()
-        duplicate["external_api_design"]["operations"].append(
-            {
-                **duplicate["external_api_design"]["operations"][0],
-                "operation_id": "duplicate-product-list",
-            }
-        )
-        with self.assertRaisesRegex(ValueError, "实际为 2 个"):
-            task_implementation_contract(_project_plan(), _task(designs=[duplicate]))
+        with self.assertRaisesRegex(ValueError, "必须且只能携带一个已确认 Endpoint API 设计"):
+            task_implementation_contract(_project_plan(), duplicate)
 
     def test_external_api_prompt_carries_shapes_stage_and_mapping_without_examples(self) -> None:
         """DatasourceAgent Prompt 携带当前商品操作结构、阶段和映射规则。"""
@@ -531,15 +651,15 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         )
 
         self.assertIn('"stage": "mapping"', prompt)
-        self.assertIn('"mapped_entity_path": "list[]"', prompt)
-        self.assertIn('"base_url_config_key": "product.url"', prompt)
+        self.assertIn('"fieldMappings"', prompt)
+        self.assertIn('"baseUrlConfigKey": "product.url"', prompt)
         self.assertIn('"path": "pageSize"', prompt)
         self.assertIn('"path": "list[].price"', prompt)
-        self.assertIn("request_shape and response_shape as field/type structure", prompt)
-        self.assertIn("Persist effective_connection.base_url directly", prompt)
+        self.assertIn("request_shape and requestStructure and responseStructure", prompt)
+        self.assertIn("Persist the confirmed baseUrl directly", prompt)
         self.assertIn("plain YAML or properties value", prompt)
         self.assertIn("never wrap it in a `${ENV_NAME:default}`", prompt)
-        self.assertIn("never place effective_connection.base_url in Java constants", prompt)
+        self.assertIn("never place the base URL in Java constants", prompt)
         self.assertIn("Prefer Spring Cloud OpenFeign", prompt)
         self.assertIn("existing RestTemplate, WebClient", prompt)
         self.assertIn("do not reject or rewrite it solely", prompt)
@@ -693,12 +813,23 @@ class DataSourceWorkspaceContextTests(unittest.TestCase):
 
 
 class DataSourceTaskCompilationTests(unittest.TestCase):
-    """验证 Unit 编译阶段按任务实体子集隔离后端来源。"""
+    """验证 Unit 编译阶段按 Endpoint 身份隔离 API 设计。"""
 
-    def test_endpoint_task_filters_designs_to_declared_entities(self) -> None:
-        """混合 Endpoint 中的单实体任务不会继承其他来源实体。"""
+    def test_endpoint_task_filters_designs_to_endpoint_identity(self) -> None:
+        """Endpoint Unit 只能继承复合标识完全匹配的 API 设计。"""
 
         unit_id = "backend:endpoint:dashboard_api:dashboard.get"
+        selected = _endpoint_design([
+            {"entity_id": "Order", "data_source_type": "database"},
+            {"entity_id": "Weather", "data_source_type": "external_api"},
+        ])
+        selected["apiContractId"] = "dashboard_api"
+        selected["endpointId"] = "dashboard.get"
+        unrelated = _endpoint_design([
+            {"entity_id": "Notice", "data_source_type": "database"}
+        ])
+        unrelated["apiContractId"] = "notice_api"
+        unrelated["endpointId"] = "notice.list"
         tasks = apply_unit_compilation(
             {"build_units": {unit_id: {"id": unit_id}}},
             [
@@ -712,67 +843,77 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
                 "target": {"type": "endpoint", "id": "dashboard.get"},
                 "endpoint_ids": ["dashboard.get"],
                 "entity_ids": ["Order", "Weather"],
-                "entity_designs": [
-                    {"entity_id": "Order", "data_source_type": "database"},
-                    {"entity_id": "Weather", "data_source_type": "external_api"},
-                ],
+                "endpoint_designs": [selected, unrelated],
                 "source_refs": {},
             },
         )
 
         self.assertNotIn("entity_ids", tasks[0]["source_refs"])
         self.assertEqual(
-            [item["entity_id"] for item in tasks[0]["source_refs"]["entity_designs"]],
-            ["Order"],
+            [item["endpointId"] for item in tasks[0]["source_refs"]["endpoint_designs"]],
+            ["dashboard.get"],
         )
 
-    def test_multi_entity_endpoint_task_requires_fixed_entity_task_id(
-        self,
-    ) -> None:
-        """多实体 Endpoint 任务必须用固定任务 ID 表达唯一实体范围。"""
+    def test_endpoint_task_rejects_model_source_override(self) -> None:
+        """模型任务中的来源设计不能覆盖平台编译的正式 API 设计。"""
 
         unit_id = "backend:endpoint:dashboard_api:dashboard.get"
-        with self.assertRaisesRegex(ValueError, "must use fixed id"):
-            apply_unit_compilation(
-                {"build_units": {unit_id: {"id": unit_id}}},
-                [{"id": "ambiguous", "unit_id": unit_id, "source_refs": {}}],
-                {
-                    "target": {"type": "endpoint", "id": "dashboard.get"},
-                    "endpoint_ids": ["dashboard.get"],
-                    "entity_ids": ["Order", "Weather"],
-                    "entity_designs": [
-                        {"entity_id": "Order", "data_source_type": "database"},
-                        {"entity_id": "Weather", "data_source_type": "external_api"},
-                    ],
-                    "source_refs": {},
-                },
-            )
+        selected = _endpoint_design([
+            {"entity_id": "Order", "data_source_type": "database"}
+        ])
+        selected["apiContractId"] = "dashboard_api"
+        selected["endpointId"] = "dashboard.get"
+        tasks = apply_unit_compilation(
+            {"build_units": {unit_id: {"id": unit_id}}},
+            [{
+                "id": "ambiguous",
+                "unit_id": unit_id,
+                "source_refs": {"endpoint_designs": [{"endpointId": "forged"}]},
+            }],
+            {
+                "target": {"type": "endpoint", "id": "dashboard.get"},
+                "endpoint_ids": ["dashboard.get"],
+                "entity_ids": ["Order"],
+                "endpoint_designs": [selected],
+                "source_refs": {},
+            },
+        )
 
-    def test_bootstrap_inherits_current_backend_entity_sources(self) -> None:
-        """bootstrap 继承当前目标的数据库与外部 API 实体，但排除 static。"""
+        self.assertEqual(
+            [item["endpointId"] for item in tasks[0]["source_refs"]["endpoint_designs"]],
+            ["dashboard.get"],
+        )
 
+    def test_bootstrap_inherits_current_endpoint_sources(self) -> None:
+        """bootstrap 从当前 Endpoint API 设计继承数据库和外部 API 来源。"""
+
+        design = _endpoint_design([
+            {"entity_id": "Order", "data_source_type": "database"},
+            {"entity_id": "Weather", "data_source_type": "external_api"},
+        ])
+        design["apiContractId"] = "dashboard_api"
+        design["endpointId"] = "dashboard.get"
         tasks = apply_unit_compilation(
             {"build_units": {"backend:bootstrap": {"id": "backend:bootstrap"}}},
             [{"id": "bootstrap", "unit_id": "backend:bootstrap", "source_refs": {}}],
             {
                 "target": {"type": "endpoint", "id": "dashboard.get"},
                 "endpoint_ids": ["dashboard.get"],
-                "entity_ids": ["Order", "Weather", "Notice"],
-                "entity_designs": [
-                    {"entity_id": "Order", "data_source_type": "database"},
-                    {"entity_id": "Weather", "data_source_type": "external_api"},
-                    {"entity_id": "Notice", "data_source_type": "static"},
-                ],
+                "entity_ids": ["Order", "Weather"],
+                "endpoint_designs": [design],
                 "source_refs": {},
             },
         )
 
         self.assertNotIn("entity_ids", tasks[0]["source_refs"])
         self.assertEqual(
-            task_required_skill_paths(tasks[0]),
-            ["/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md"],
+            {
+                snapshot["sourceType"]
+                for snapshot in tasks[0]["source_refs"]["endpoint_designs"][0]["sourceSnapshots"]
+            },
+            {"database", "external_api"},
         )
-        self.assertNotIn("static", str(tasks[0]["source_refs"]["entity_designs"]))
+        self.assertEqual(len(task_required_skill_paths(tasks[0])), 2)
 
 
 if __name__ == "__main__":

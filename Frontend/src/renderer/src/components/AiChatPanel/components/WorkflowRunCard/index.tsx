@@ -55,6 +55,7 @@ import RevisionImpactReview from '../ApplicationRevisionCard/RevisionImpactRevie
 import RevisionDraftReview from '../ApplicationRevisionCard/RevisionDraftReview'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import DetailReview from './DetailReview'
+import ApiDesignPanel from './ApiDesignPanel'
 import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
@@ -163,6 +164,8 @@ export default function WorkflowRunCard({
     ? []
     : clarification?.questions || []
   const entityDesignGate = clarification?.mode === 'entity_source_binding_required'
+  const apiDesign = clarification?.mode === 'api_design' ? clarification.apiDesign : undefined
+  const apiDesignRequired = clarification?.mode === 'api_design_required'
   const gateQuestion = clarification?.questions?.[0]
   const entityGateEntities = (clarification?.missing_entities || []).filter((item) =>
     Boolean(
@@ -533,6 +536,29 @@ export default function WorkflowRunCard({
                   frontend_performance_confirmation: decision
                 })
               }
+            />
+          ) : apiDesign ? (
+            <ApiDesignPanel
+              disabled={disabled || interactionAvailability !== 'active'}
+              onAction={(action) =>
+                onSubmitClarification?.(workflow, { api_design: action })
+              }
+              payload={apiDesign}
+              workspaceRoot={workspaceRoot}
+            />
+          ) : apiDesignRequired ? (
+            <Alert
+              description={(clarification?.missingApiDesigns || [])
+                .map((item) => {
+                  const method = String(item.method || 'API')
+                  const path = String(item.path || item.endpoint_id || '')
+                  const reason = String(item.reason || '尚未设计')
+                  return `${method} ${path}：${reason}`
+                })
+                .join('；')}
+              message={clarification?.message || '请先补齐关联 Endpoint 的 API 设计。'}
+              showIcon
+              type="warning"
             />
           ) : detailReview ? (
             <DetailReview

@@ -698,6 +698,45 @@ def validate_source(source: dict[str, Any], workspace_root: str | Path | None = 
     return {"valid": True, "connection": "ok"}
 
 
+def resolve_direct_database_config(
+    workspace_root: str | Path,
+    source_id: str,
+) -> dict[str, Any]:
+    """为受信任的后端服务解析直属 MySQL 连接，禁止公开密文或明文密码。"""
+
+    sources = _read_catalog(workspace_root)
+    source = next(
+        (
+            item
+            for item in sources
+            if str(item.get("id") or "") == str(source_id or "").strip()
+        ),
+        None,
+    )
+    if source is None:
+        raise DataSourceError("目标数据库数据源不存在。")
+    if source.get("type") != "database":
+        raise DataSourceError("目标数据源不是数据库。")
+    if source.get("mode") != "direct":
+        raise DataSourceError("当前数据库模式不支持实时读取元数据，仅直属 MySQL 可用。")
+    password_ciphertext = str(source.get("passwordCiphertext") or "")
+    try:
+        password = decrypt_password(password_ciphertext)
+    except DatabaseCryptoError as exc:
+        raise DataSourceError(
+            "数据库密码无法解密，请重新保存当前直属 MySQL 数据源。"
+        ) from exc
+    return {
+        "sourceId": str(source["id"]),
+        "name": str(source.get("name") or source["id"]),
+        "host": str(source.get("domain") or ""),
+        "port": int(source.get("port") or 3306),
+        "user": str(source.get("userName") or ""),
+        "password": password,
+        "database": str(source.get("schema") or ""),
+    }
+
+
 def _source_with_stored_password(
     source: dict[str, Any], workspace_root: str | Path | None
 ) -> dict[str, Any]:

@@ -195,6 +195,43 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("实体载荷路径", result["evidence"])
 
+    def test_external_api_mapping_verifier_does_not_skip_direct_endpoint_mapping(self) -> None:
+        """没有场景实体的 Endpoint 直连外部字段也必须有实现证据。"""
+
+        result = verify_external_api_mapping_source(
+            {"OrderController.java": "public class OrderController {}"},
+            {
+                "external_apis": [{
+                    "response_handling": {"entity_payload": False},
+                    "field_mappings": [
+                        {"source_field": "data.id", "entity_field": "response.id"}
+                    ],
+                }]
+            },
+        )
+        self.assertNotEqual(result["status"], "passed")
+
+    def test_external_api_mapping_verifier_accepts_direct_endpoint_path_segments(self) -> None:
+        """没有场景实体时，真实的路径级字段读写应能通过外部映射验收。"""
+
+        result = verify_external_api_mapping_source(
+            {
+                "OrderController.java": (
+                    "class OrderController { void map() { "
+                    "String id = data.id; response.id = id; } }"
+                )
+            },
+            {
+                "external_apis": [{
+                    "response_handling": {"entity_payload": False},
+                    "field_mappings": [
+                        {"source_field": "data.id", "entity_field": "response.id"}
+                    ],
+                }]
+            },
+        )
+        self.assertEqual(result["status"], "passed", result)
+
     def test_frontend_api_contract_passes_with_cross_platform_target(self) -> None:
         """TypeScript API 模块在 Windows 分隔符目标下应通过。"""
 
@@ -820,7 +857,12 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temp_dir:
             positive_evidence: dict[str, list[dict]] = {}
-            for check_kind in BUSINESS_ACCEPTANCE_KINDS:
+            current_kinds = [
+                kind
+                for kind in BUSINESS_ACCEPTANCE_KINDS
+                if kind != "frontend.static_data_contract"
+            ]
+            for check_kind in current_kinds:
                 deliverable_kind, _owner, unit_id = task_inputs[check_kind]
                 task, formal = _compiled_task(
                     deliverable_kind,

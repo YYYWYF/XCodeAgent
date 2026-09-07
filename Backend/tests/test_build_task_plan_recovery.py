@@ -453,6 +453,105 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
         )
         self.assertTrue(merged["task_graph"]["validation"]["is_valid"])
 
+    def test_scope_merge_preserves_generated_dependencies_when_task_ids_are_stable(self) -> None:
+        """同一 Unit 使用稳定任务 ID 重规划时不得把候选内部依赖扩展成环。"""
+
+        unit_id = "backend:endpoint:product_api:product_api.list"
+        task_ids = [
+            f"{unit_id}::endpoint::objects",
+            f"{unit_id}::endpoint::repository",
+            f"{unit_id}::endpoint::service",
+            f"{unit_id}::endpoint::controller",
+        ]
+        base_plan = replace_build_task_plan_tasks(
+            _base_unit_plan(unit_id),
+            [
+                _task(task_ids[0], unit_id),
+                _task(task_ids[1], unit_id, dependencies=[task_ids[0]]),
+                _task(
+                    task_ids[2],
+                    unit_id,
+                    dependencies=[task_ids[0], task_ids[1]],
+                ),
+                _task(task_ids[3], unit_id, dependencies=[task_ids[2]]),
+            ],
+        )
+        build_context = {
+            "target": {
+                "type": "endpoint",
+                "id": "product_api.list",
+                "api_contract_id": "product_api",
+            },
+            "required_unit_ids": [unit_id],
+            "source_refs": {},
+        }
+        prepared_plan = create_build_task_plan(
+            {"version": "1.0.0"},
+            agent_plan={
+                "tasks": [
+                    {
+                        **_task(
+                            task_ids[0],
+                            unit_id,
+                            with_deliverable=True,
+                        ),
+                        "dependencies": [],
+                    },
+                    {
+                        **_task(
+                            task_ids[1],
+                            unit_id,
+                            dependencies=[task_ids[0]],
+                            with_deliverable=True,
+                        ),
+                    },
+                    {
+                        **_task(
+                            task_ids[2],
+                            unit_id,
+                            dependencies=[task_ids[0], task_ids[1]],
+                            with_deliverable=True,
+                        ),
+                    },
+                    {
+                        **_task(
+                            task_ids[3],
+                            unit_id,
+                            dependencies=[task_ids[2]],
+                            with_deliverable=True,
+                        ),
+                    },
+                ]
+            },
+            base_build_task_plan=base_plan,
+            build_context=build_context,
+        )
+
+        merged = _merge_prepared_scope_tasks(
+            base_plan,
+            prepared_plan,
+            build_context,
+        )
+
+        self.assertEqual(
+            {
+                task_id: merged["task_registry"][task_id]["dependencies"]
+                for task_id in task_ids
+            },
+            {
+                task_ids[0]: [],
+                task_ids[1]: [task_ids[0]],
+                task_ids[2]: [task_ids[0], task_ids[1]],
+                task_ids[3]: [task_ids[2]],
+            },
+        )
+        self.assertFalse(
+            any(
+                "Task dependency graph contains a cycle" in str(error)
+                for error in merged["task_graph"]["validation"]["errors"]
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

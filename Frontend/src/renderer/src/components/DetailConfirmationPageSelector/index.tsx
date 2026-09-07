@@ -51,6 +51,7 @@ type Props = {
     apiContractId: string;
     endpointId: string;
     hasDetailPlan?: boolean;
+    detailPlanStatus?: string;
     label: string;
     path?: string;
     purpose?: string;
@@ -71,6 +72,7 @@ type EndpointOption = {
   endpointKey: string;
   endpointId: string;
   hasDetailPlan: boolean;
+  detailPlanStatus?: string;
   label: string;
   method: string;
   path: string;
@@ -186,6 +188,7 @@ export default function DetailConfirmationPageSelector({
           description:
             endpoint.summary || `来自 ${contract.label || contract.id}`,
           hasDetailPlan: Boolean(endpoint.hasDetailPlan || endpoint.designed),
+          detailPlanStatus: endpoint.detailPlanStatus,
         } satisfies EndpointOption;
       });
     });
@@ -305,7 +308,11 @@ export default function DetailConfirmationPageSelector({
           <Text className={cx("detail-page-selector-eyebrow")}>
             DETAIL DESIGN REQUIRED
           </Text>
-          <Title level={3}>「{progressTarget.label}」尚未进行详细设计</Title>
+          <Title level={3}>
+            {progressTargetType === "endpoint"
+              ? `「${progressTarget.label}」${progressTarget.hasDetailPlan ? "需要重新设计 API" : "尚未设计 API"}`
+              : `「${progressTarget.label}」尚未进行详细设计`}
+          </Title>
           <Text
             className={cx("detail-page-selector-locked-copy")}
             type="secondary"
@@ -313,7 +320,7 @@ export default function DetailConfirmationPageSelector({
             {progressTargetType === "entity"
               ? "为避免实现阶段发明字段，请先生成该实体的字段、表结构与业务规则设计。"
               : progressTargetType === "endpoint"
-                ? "为避免接口实现跳过契约细化，请先生成该接口的用途、处理逻辑与数据来源设计。"
+                ? "为避免接口实现跳过契约细化，请先完成该 Endpoint 的字段来源与业务处理绑定。"
                 : "为避免自由对话跳过页面设计，请先生成该页面的布局、状态、交互与验收标准。"}
           </Text>
           <div className={cx("detail-page-selector-target")}>
@@ -349,13 +356,19 @@ export default function DetailConfirmationPageSelector({
             size="large"
             type="primary"
           >
-            开始详细设计
+            {progressTargetType === "endpoint"
+              ? progressTarget.hasDetailPlan
+                ? "重新设计 API"
+                : "设计 API"
+              : "开始详细设计"}
           </Button>
           <Text
             className={cx("detail-page-selector-lock-hint")}
             type="secondary"
           >
-            完成生成并确认后将自动解锁当前对话区
+            {progressTargetType === "endpoint"
+              ? "确认后将继续当前 Endpoint 的任务规划、代码生成、测试和验收流程"
+              : "完成生成并确认后将自动解锁当前对话区"}
           </Text>
         </main>
       </section>
@@ -525,7 +538,11 @@ export default function DetailConfirmationPageSelector({
           size="large"
           type="primary"
         >
-          开始详细设计「{selectedTarget?.label || "所选对象"}」
+          {selectedTargetType === "endpoint"
+            ? selectedEndpoint?.detailPlanStatus === "stale"
+              ? `重新设计 API「${selectedTarget?.label || "所选接口"}」`
+              : `设计 API「${selectedTarget?.label || "所选接口"}」`
+            : `开始详细设计「${selectedTarget?.label || "所选对象"}」`}
         </Button>
         </div>
       </main>

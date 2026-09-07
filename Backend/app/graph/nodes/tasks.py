@@ -21,7 +21,7 @@ from app.services.build_task_confirmation import (
     build_task_confirmation_read_model,
 )
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
-from app.services.development_readiness import development_readiness
+from app.services.api_design import api_design_readiness
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     frontend_endpoint_implementation_owners,
@@ -49,7 +49,6 @@ from app.services.build_unit_skeleton import (
     build_unit_skeleton_input_fingerprint,
     ensure_build_unit_skeleton,
 )
-from app.services.entity_definitions import entity_design_summaries, plan_data_sources
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
@@ -675,7 +674,8 @@ def _build_prerequisite_errors(
     target_id = str(scope.get("targetId") or "")
     if target_type in {"page", "endpoint"} and target_id:
         try:
-            readiness = development_readiness(
+            readiness = api_design_readiness(
+                workspace or "",
                 project_plan,
                 target_type=target_type,
                 target_id=target_id,
@@ -685,11 +685,11 @@ def _build_prerequisite_errors(
             )
             if not readiness.get("ready"):
                 missing = "、".join(
-                    str(item.get("entity_name") or item.get("entity_id") or "")
-                    for item in readiness.get("missing_entities", [])
+                    f"{item.get('method')} {item.get('path')}"
+                    for item in readiness.get("missing_api_designs", [])
                     if isinstance(item, dict)
                 )
-                errors.append(f"EntitySourceBinding 未完成：{missing}。")
+                errors.append(f"API 设计未完成或已失效：{missing}。")
         except ValueError as exc:
             errors.append(str(exc))
     if workspace:
@@ -832,7 +832,7 @@ def _build_prerequisite_blocked_result(
                 header="Build 前置条件",
                 question=(
                     "当前正式产物、模板初始化或运行时上下文尚未就绪，DAG 不会修改上游产物。"
-                    "请返回对应的规划、模板初始化或 EntitySourceBinding 流程处理。"
+                    "请返回对应的规划、模板初始化或 Endpoint API 设计流程处理。"
                 ),
                 type="text",
                 placeholder="请按下方具体错误完成上游流程后重新进入 Build。",
@@ -848,7 +848,7 @@ def _build_prerequisite_blocked_result(
             "target": build_execution_scope,
             "artifact": (
                 "RequirementSpec / ProductPlan / UiManifest / TechnicalPlan / "
-                "template-generation-manifest.json / EntitySourceBinding"
+                "template-generation-manifest.json / Endpoint API Design"
             ),
             "recommended_action": "手动完成并确认错误所指向的前置产物后重新发起 DAG 生成。",
             "automatic_routing": False,
@@ -858,7 +858,7 @@ def _build_prerequisite_blocked_result(
                 "ui_confirmation",
                 "technical_planning",
                 "application_lifecycle",
-                "entity_source_binding",
+                "api_design",
             ],
             "buildExecutionScope": build_execution_scope,
         }
@@ -1297,6 +1297,8 @@ def _resolve_build_context(
         "direct_endpoint_contracts": [],
         "endpoint_ids": [],
         "entity_ids": [],
+        "endpoint_designs": [],
+        "source_types": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
@@ -1344,12 +1346,7 @@ def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> d
     skeleton = {
         "pages": _skeleton_pages(project_plan) if mode in {"page", "combined"} else [],
         "data_sources": (
-            _skeleton_data_sources(
-                project_plan,
-                None
-                if mode == "combined"
-                else build_context.get("entity_ids"),
-            )
+            _skeleton_data_sources(build_context)
             if mode in {"endpoint", "combined"}
             else []
         ),
@@ -1404,16 +1401,10 @@ def _scoped_task_architecture(
         }
     context = build_context if isinstance(build_context, dict) else {}
     endpoint_source_types = {
-        str(item.get("data_source_type") or "")
-        for item in context.get("entity_designs") or []
-        if isinstance(item, dict) and item.get("data_source_type")
+        str(item)
+        for item in context.get("source_types") or []
+        if str(item).strip()
     }
-    if endpoint_source_types == {"static"}:
-        return {
-            key: value
-            for key, value in architecture.items()
-            if key in {"frontend", "data_contract", "route_root_path", "menu_enabled"}
-        }
     if endpoint_source_types and endpoint_source_types <= {"database", "external_api"}:
         return {
             key: value
@@ -1488,47 +1479,32 @@ def _skeleton_pages(project_plan: dict) -> list[dict]:
     ]
 
 
-def _skeleton_data_sources(
-    project_plan: dict,
-    entity_ids: list[str] | None = None,
-) -> list[dict]:
-    """提取当前范围的数据源 Unit 骨架摘要，不携带数据源详情正文。"""
+def _skeleton_data_sources(build_context: dict) -> list[dict]:
+    """从当前 Endpoint 设计快照提取数据源骨架，不读取实体全局绑定。"""
 
-    allowed_entity_ids = {
-        str(entity_id).strip()
-        for entity_id in entity_ids or []
-        if str(entity_id).strip()
-    }
-    scoped_sources: list[dict] = []
-    for source in plan_data_sources(project_plan):
-        if not isinstance(source, dict):
+    result: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for design in build_context.get("endpoint_designs") or []:
+        if not isinstance(design, dict):
             continue
-        source_entities = [
-            entity
-            for entity in source.get("entities") or []
-            if isinstance(entity, dict)
-            and (
-                not allowed_entity_ids
-                or str(entity.get("id") or "") in allowed_entity_ids
+        for snapshot in design.get("sourceSnapshots") or []:
+            if not isinstance(snapshot, dict):
+                continue
+            key = (
+                str(snapshot.get("sourceType") or ""),
+                str(snapshot.get("sourceId") or ""),
             )
-        ]
-        if allowed_entity_ids and not source_entities:
-            continue
-        scoped_sources.append(
-            {
-                "id": source.get("id"),
-                "name": source.get("name"),
-                "type": source.get("type"),
-                "entities": source_entities,
-                "schema_refs": source.get("schema_refs"),
-                "detail_status": (
-                    source.get("detail_design", {}).get("status")
-                    if isinstance(source.get("detail_design"), dict)
-                    else None
-                ),
-            }
-        )
-    return scoped_sources
+            if not all(key) or key in seen:
+                continue
+            seen.add(key)
+            result.append(
+                {
+                    "id": key[1],
+                    "name": snapshot.get("name") or key[1],
+                    "type": key[0],
+                }
+            )
+    return result
 
 
 def _skeleton_api_contracts(project_plan: dict) -> list[dict]:
@@ -1554,23 +1530,13 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
     """按当前构建目标投射页面实现契约、endpoint 和 API 详情。"""
 
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
-    entity_ids = list(
-        dict.fromkeys(
-            str(item)
-            for item in build_context.get("entity_ids") or []
-            if str(item).strip()
-        )
-    )
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     is_application = str(target.get("type") or "") == "application"
-    if is_application:
-        entity_ids = _confirmed_entity_ids(project_plan)
-    context_entity_designs = build_context.get("entity_designs")
-    entity_designs = (
-        [dict(item) for item in context_entity_designs if isinstance(item, dict)]
-        if isinstance(context_entity_designs, list) and context_entity_designs
-        else entity_design_summaries(project_plan, entity_ids)
-    )
+    endpoint_designs = [
+        dict(item)
+        for item in build_context.get("endpoint_designs") or []
+        if isinstance(item, dict)
+    ]
     scoped_contracts = _scoped_contracts(project_plan, build_context, is_application=is_application)
     return {
         "page_implementation_contracts": (
@@ -1583,33 +1549,11 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
         "endpoint_contracts": list(
             build_context.get("direct_endpoint_contracts") or []
         ),
-        "entity_designs": entity_designs,
+        "endpoint_designs": endpoint_designs,
         "api_contracts": [
             _scoped_api_contract(contract, endpoint_ids)
             for contract in scoped_contracts
         ],
-    }
-
-
-def _confirmed_entity_ids(project_plan: dict) -> list[str]:
-    """返回已确认实体设计的实体 id，供全量构建投射实体上下文。"""
-
-    return [
-        str(detail.get("entity_id") or "")
-        for detail in project_plan.get("entity_detail_plans") or []
-        if isinstance(detail, dict)
-                      and str(detail.get("status") or "") == "confirmed"
-                      and detail.get("entity_id")
-    ]
-
-
-def _scoped_entity_source_ids(project_plan: dict, entity_ids: set[str]) -> set[str]:
-    """按范围内实体设计推导虚拟数据源 id（即实体数据源类型）。"""
-
-    return {
-        str(summary.get("data_source_type") or "")
-        for summary in entity_design_summaries(project_plan, sorted(entity_ids))
-        if summary.get("data_source_type")
     }
 
 
@@ -1733,15 +1677,24 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
     """投射当前页面、API Contract 与实体 id，排除数据源及范围外设计。"""
 
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
-    entity_ids = [
-        str(item).strip()
-        for item in build_context.get("entity_ids") or []
-        if str(item).strip()
-    ]
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     target_page_id = str(target.get("id") or "") if target.get("type") == "page" else ""
     pages = _scoped_pages(project_plan, target_page_id)
     contracts = _scoped_contracts(project_plan, build_context)
+    # TechnicalPlan 的全局 entity_ids 约束在本阶段保持原语义；Endpoint 场景实体
+    # 只作为 Build 上下文的局部事实，不应污染 Contract 一致性校验投影。
+    entity_ids = [
+        str(entity_id).strip()
+        for contract in contracts
+        for entity_id in contract.get("entity_ids") or []
+        if str(entity_id).strip()
+    ]
+    if not entity_ids:
+        entity_ids = [
+            str(item).strip()
+            for item in build_context.get("entity_ids") or []
+            if str(item).strip()
+        ]
     page_field = (
         "pages"
         if project_plan.get("artifact_type") == "technical-plan"
@@ -1829,10 +1782,8 @@ def _merge_prepared_scope_tasks(
         retained_tasks,
         replacement_dependency_map,
     )
-    generated_tasks = _rewrite_replaced_unit_dependencies(
-        generated_tasks,
-        replacement_dependency_map,
-    )
+    # 替换映射只用于让范围外保留任务改为依赖本轮新任务；本轮候选已经声明了
+    # 同 Unit 内的完整依赖，若再次按旧任务 ID 展开，会把稳定 ID 误写成互相依赖。
     acceptance_context = {
         **build_context,
         "project_plan": project_plan if isinstance(project_plan, dict) else {},
@@ -2250,7 +2201,7 @@ def _build_context_error_payload(
             "code": "build_context_incomplete",
             "message": "目标构建上下文不完整，已阻止任务拆分和代码生成。",
             "target": build_execution_scope,
-            "artifact": "PageImplementationContract / Endpoint Contract / EntitySourceBinding",
+            "artifact": "PageImplementationContract / Endpoint Contract / Endpoint API Design",
             "errors": [error],
             "recommended_action": "手动补齐并确认缺失的范围详情后重新发起 DAG 生成。",
             "automatic_routing": False,

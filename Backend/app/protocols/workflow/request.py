@@ -15,6 +15,7 @@ from app.domain.development_continuation import (
     DevelopmentContinuationReference,
 )
 from app.services.entity_design import normalize_entity_design_action
+from app.services.api_design import normalize_api_design_action
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
 from app.services.execution_resource_scope import resolve_execution_resource_claims
 from app.services.frontend_page_tree import project_plan_page_records
@@ -317,13 +318,16 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 "创建规划确认必须通过 applicationPlanningInteraction 恢复原生中断。"
             )
-        resume_from = "development_readiness_gate"
+        resume_from = "api_design_readiness_gate"
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     entity_source_binding_submission = _entity_source_binding_submission(clarification_answers)
     entity_design_action = _entity_design_action(clarification_answers)
+    api_design_action = _api_design_action(clarification_answers)
     if entity_source_binding_submission or entity_design_action:
         resume_from = "entity_source_binding"
+    if api_design_action:
+        resume_from = "api_design"
     acceptance_decision = _page_acceptance_decision(clarification_answers)
     frontend_performance_decision = _frontend_performance_decision(
         clarification_answers
@@ -343,6 +347,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("selectedApiContractId"))
         or _optional_text(forwarded_props.get("selected_api_contract_id"))
         or _optional_text(resume_values_from_state.get("selected_api_contract_id"))
+        or _optional_text(api_design_action.get("apiContractId") if api_design_action else None)
     )
     selected_endpoint_id = (
         _optional_text(payload.get("selectedEndpointId"))
@@ -350,6 +355,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("selectedEndpointId"))
         or _optional_text(forwarded_props.get("selected_endpoint_id"))
         or _optional_text(resume_values_from_state.get("selected_endpoint_id"))
+        or _optional_text(api_design_action.get("endpointId") if api_design_action else None)
     )
     selected_entity_id = (
         _optional_text(payload.get("selectedEntityId"))
@@ -369,6 +375,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("detail_target_type"))
         or _optional_text(resume_values_from_state.get("detail_target_type"))
     )
+    if workflow_action == "start_api_design":
+        if not selected_api_contract_id or not selected_endpoint_id:
+            raise ValueError("start_api_design 必须提供 selectedApiContractId 和 selectedEndpointId。")
+        resume_from = "api_design"
+        detail_target_type = "endpoint"
+        selected_entity_id = ""
     # 页面与接口开发目标互斥；本次明确选择接口时，不允许恢复态里的旧页面 ID 回流。
     if detail_target_type == "endpoint" or selected_endpoint_id:
         selectedPageId = ""
@@ -411,7 +423,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             thread_id=request_thread_id,
         )
         request = validated_continuation.request
-        resume_from = "development_readiness_gate"
+        resume_from = "api_design_readiness_gate"
         resume_values_from_state = {}
         development_continuation_id = validated_continuation.id
         development_continuation_source_run_id = validated_continuation.source_run_id
@@ -465,7 +477,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         # continuation 的 request、target 和固定开发入口全部以 lifecycle 为权威；
         # TechnicalPlan 已在 application_planning 完成，不再重复进入 application_revision。
         request = active_revision.request
-        resume_from = "development_readiness_gate"
+        resume_from = "api_design_readiness_gate"
         resume_values_from_state = {}
         continuation_change_id = active_revision.change_id
         revision_continuation_replaces_run_id = str(
@@ -642,6 +654,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
         **({"entity_design_action": entity_design_action} if entity_design_action else {}),
+        **({"api_design_action": api_design_action} if api_design_action else {}),
         **({"ui_design_action": ui_design_action} if ui_design_action else {}),
         **({"acceptance_decision": acceptance_decision} if acceptance_decision else {}),
         **(
@@ -1045,6 +1058,7 @@ def _supported_workflow_action(value: str) -> str:
             "submit_revision_interaction",
             "start_entity_binding",
             "continue_after_entity_binding",
+            "start_api_design",
         }
         else ""
     )
@@ -1288,6 +1302,8 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
         if node_name == "inspect_database_context":
             return "prepare_build_tasks"
         supported = {
+            "api_design",
+            "api_design_readiness_gate",
             "development_readiness_gate",
             "entity_source_binding",
             "project_planning",
@@ -1341,6 +1357,10 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "data_source_spec_draft",
         "detail_plans",
         "entity_source_binding_submission",
+        "api_design_action",
+        "api_design_draft",
+        "api_design_result",
+        "api_design_readiness",
         "workspace_snapshot_summary",
         "workspace_snapshot_path",
         "workspace_snapshot_hash",
@@ -2218,6 +2238,17 @@ def _entity_design_action(value: Any) -> dict[str, Any] | None:
     if not isinstance(action, dict):
         return None
     return normalize_entity_design_action(action)
+
+
+def _api_design_action(value: Any) -> dict[str, Any] | None:
+    """从结构化确认答案中提取当前版 Endpoint API 设计动作。"""
+
+    if not isinstance(value, dict):
+        return None
+    action = value.get("api_design")
+    if not isinstance(action, dict):
+        return None
+    return normalize_api_design_action(action)
 
 
 def _application_planning_interaction(

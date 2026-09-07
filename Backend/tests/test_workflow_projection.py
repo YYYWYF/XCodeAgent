@@ -11,6 +11,18 @@ from app.protocols.workflow.projection import (
 
 
 class WorkflowProjectionTests(unittest.TestCase):
+    def test_api_design_projects_readiness_after_confirmation(self) -> None:
+        """API 设计确认后的可视化下一节点必须是就绪检查，而非运行终点。"""
+
+        self.assertEqual(
+            _workflow_next_nodes("api_design", {"status": "requires_user_input"}),
+            [],
+        )
+        self.assertEqual(
+            _workflow_next_nodes("api_design", {"status": "completed"}),
+            ["api_design_readiness_gate"],
+        )
+
     def test_workspace_inspection_projects_direct_task_preparation(self) -> None:
         """工作区检查完成后不再投射独立数据库上下文节点。"""
 

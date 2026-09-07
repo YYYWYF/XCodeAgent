@@ -203,6 +203,12 @@ type UseWorkflowConversationResult = {
     endpointLabel: string
     hasDetailPlan?: boolean
   }) => Promise<boolean>
+  handleStartApiDesign: (target: {
+    apiContractId?: string
+    endpointId: string
+    endpointLabel: string
+    redesign?: boolean
+  }) => Promise<boolean>
   handleStartEntityDetailConfirmation: (target: {
     entityId: string
     entityLabel: string
@@ -1451,6 +1457,24 @@ export function useWorkflowConversation({
       if (!started) codeReviewRepairRunIdsRef.current.delete(workflow.runId)
       return started
     }
+    if (!conversation && clarificationMode === 'api_design' && answers.api_design) {
+      // API 设计的元数据加载和确认都必须直接恢复 api_design 节点，不能交给通用澄清文本生成器；
+      // 数据源元数据已经由独立接口读取，这里只提交用户最终确认动作。
+      const action = answers.api_design
+      const actionMessage = '确认当前 Endpoint API 映射设计。'
+      return sendWorkflowMessage(actionMessage, {
+        clarificationAnswers: answers,
+        originalRequest,
+        resumeState: workflow,
+        selectedPageId: '',
+        selectedApiContractId: endpointScope?.apiContractId || action.apiContractId,
+        selectedEndpointId: endpointScope?.targetId || action.endpointId,
+        detailTargetType: 'endpoint',
+        buildExecutionScope: workflowBuildScope,
+        titleFrom: actionMessage,
+        conversation: false
+      })
+    }
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
     if (!continuationMessage || loading || workspaceBusy) return false
     return sendWorkflowMessage(continuationMessage, {
@@ -1535,6 +1559,30 @@ export function useWorkflowConversation({
       endpointLabel: target.endpointLabel,
       sessionIdentity: identity,
       titleFrom: `开发接口：${target.endpointLabel}`
+    })
+  }
+
+  /** 为指定 Endpoint 启动独立 API 动态映射节点，确认后续接当前 Endpoint 的完整开发链路。 */
+  const handleStartApiDesign = async (target: {
+    apiContractId?: string
+    endpointId: string
+    endpointLabel: string
+    redesign?: boolean
+  }): Promise<boolean> => {
+    if (!target.apiContractId || !target.endpointId || loading || workspaceBusy) return false
+    const identity = await ensureActiveSession()
+    const actionLabel = target.redesign ? '重新设计 API' : '设计 API'
+    return sendWorkflowMessage(`${actionLabel}：${target.endpointLabel}`, {
+      conversation: false,
+      executionThreadId: randomUUID(),
+      selectedApiContractId: target.apiContractId,
+      selectedEndpointId: target.endpointId,
+      selectedPageId: '',
+      detailTargetType: 'endpoint',
+      endpointLabel: target.endpointLabel,
+      workflowAction: 'start_api_design',
+      sessionIdentity: identity,
+      titleFrom: `${actionLabel}：${target.endpointLabel}`
     })
   }
 
@@ -1743,6 +1791,7 @@ export function useWorkflowConversation({
     handleRetryPlan,
     handleStopPlan,
     handleSend,
+    handleStartApiDesign,
     handleStartEndpointDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,

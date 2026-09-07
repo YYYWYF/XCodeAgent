@@ -2,10 +2,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import {
   endpointDesignDocumentExists,
   endpointDesignDocumentPath,
+  endpointDesignJsonPath,
+  endpointDesignDocumentStatus,
   PRODUCT_PLAN_SCHEMA_VERSION
 } from '../src/main/planningArtifactStatus'
 
@@ -54,16 +57,10 @@ test('空 endpoint Markdown 不会标记为已设计', async () => {
   })
 })
 
-/** 验证只有非空用户可读 endpoint 文档真实落盘后才标记为已设计。 */
-test('非空 endpoint Markdown 产出后接口标记为已设计', async () => {
+/** 验证只有当前版双文件与 TechnicalPlan 指纹一致时才标记为已设计。 */
+test('当前版 endpoint 双文件和指纹有效时接口标记为已设计', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const documentPath = endpointDesignDocumentPath(
-      workspaceRoot,
-      'employee-api',
-      'employee.list'
-    )
-    await fs.mkdir(path.dirname(documentPath), { recursive: true })
-    await fs.writeFile(documentPath, '# Employee list endpoint\n', 'utf8')
+    await writeCurrentEndpointDesign(workspaceRoot)
 
     assert.equal(
       await endpointDesignDocumentExists(workspaceRoot, 'employee-api', 'employee.list'),
@@ -72,8 +69,41 @@ test('非空 endpoint Markdown 产出后接口标记为已设计', async () => {
   })
 })
 
-/** 验证内部 JSON 单独存在时不能代替用户要求的 endpoint 文档。 */
-test('只有 endpoint JSON 时接口仍保持待设计', async () => {
+/** 验证 JSON 与 Markdown 修订号不一致时不会误判为已设计。 */
+test('endpoint JSON 与 Markdown 修订号不一致时需重新设计', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeCurrentEndpointDesign(workspaceRoot)
+    const markdownPath = endpointDesignDocumentPath(workspaceRoot, 'employee-api', 'employee.list')
+    await fs.writeFile(markdownPath, '# Employee list endpoint\n<!-- xcodeagent-artifact-revision: ffffffffffffffffffffffffffffffff -->\n', 'utf8')
+    const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
+    assert.equal(status.status, 'stale')
+    assert.equal(status.designed, false)
+  })
+})
+
+/** 验证 TechnicalPlan 修改后 Endpoint 进入需重新设计状态。 */
+test('TechnicalPlan 指纹改变后接口需重新设计', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeCurrentEndpointDesign(workspaceRoot)
+    const technicalPlanPath = path.join(
+      workspaceRoot,
+      '.xcodeagent',
+      'plans',
+      'technical-plan.json'
+    )
+    await fs.writeFile(technicalPlanPath, '{"artifact_type":"technical-plan","revision":2}\n')
+    const status = await endpointDesignDocumentStatus(
+      workspaceRoot,
+      'employee-api',
+      'employee.list'
+    )
+    assert.equal(status.status, 'stale')
+    assert.equal(status.designed, false)
+  })
+})
+
+/** 验证内部 JSON 单独存在时会被识别为残缺 stale。 */
+test('只有 endpoint JSON 时接口需重新设计', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
     const markdownPath = endpointDesignDocumentPath(
       workspaceRoot,
@@ -83,9 +113,126 @@ test('只有 endpoint JSON 时接口仍保持待设计', async () => {
     await fs.mkdir(path.dirname(markdownPath), { recursive: true })
     await fs.writeFile(markdownPath.replace(/\.md$/, '.json'), '{"status":"confirmed"}\n', 'utf8')
 
-    assert.equal(
-      await endpointDesignDocumentExists(workspaceRoot, 'employee-api', 'employee.list'),
-      false
-    )
+    const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
+    assert.equal(status.status, 'stale')
+    assert.equal(status.designed, false)
+    assert.equal(await endpointDesignDocumentExists(workspaceRoot, 'employee-api', 'employee.list'), false)
   })
 })
+
+/** 验证场景实体必须完整匹配当前 Contract 的 TechnicalPlan 模板。 */
+test('场景实体不是只读模板副本时需重新设计', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    const technicalPlan = {
+      artifact_type: 'technical-plan',
+      entities: [{ id: 'Employee', name: '员工', fields: [{ name: 'id', type: 'string' }] }],
+      api_contracts: [{ id: 'employee-api', entity_ids: ['Employee'] }]
+    }
+    await writeCurrentEndpointDesign(workspaceRoot, {
+      technicalPlan,
+      sceneEntities: [{
+        id: 'scene-employee', name: '自建实体', templateEntityId: 'Unknown', fields: []
+      }]
+    })
+    const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
+    assert.equal(status.status, 'stale')
+    assert.equal(status.designed, false)
+    assert.match(status.reason, /TechnicalPlan 模板/)
+  })
+})
+
+/** 合法模板副本和没有场景实体的直连设计都应保持已确认。 */
+test('完整模板副本和无实体设计均可确认', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    const technicalPlan = {
+      artifact_type: 'technical-plan',
+      entities: [{ id: 'Employee', name: '员工', fields: [{ name: 'id', type: 'string' }] }],
+      api_contracts: [{ id: 'employee-api', entity_ids: ['Employee'] }]
+    }
+    await writeCurrentEndpointDesign(workspaceRoot, {
+      technicalPlan,
+      sceneEntities: [{
+        id: 'scene-employee', name: '员工', description: '', templateEntityId: 'Employee',
+        fields: [{ id: 'field-id', name: 'id', label: 'id', type: 'string', required: false, description: '' }]
+      }]
+    })
+    const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
+    assert.equal(status.status, 'confirmed')
+    assert.equal(status.designed, true)
+  })
+})
+
+/** Endpoint 实现描述属于可选指导，缺失或为空不影响当前版设计状态。 */
+test('缺少 Endpoint 实现描述仍保持已确认', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeCurrentEndpointDesign(workspaceRoot)
+    const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
+    assert.equal(status.status, 'confirmed')
+    assert.equal(status.designed, true)
+  })
+})
+
+/** Endpoint 实现描述存在时必须满足当前文本长度约束。 */
+test('过长 Endpoint 实现描述需重新设计', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeCurrentEndpointDesign(workspaceRoot, { implementationDescription: 'x'.repeat(4001) })
+    const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
+    assert.equal(status.status, 'stale')
+    assert.equal(status.designed, false)
+  })
+})
+
+/** 写入满足当前版 Endpoint API 设计契约的完整测试产物。 */
+async function writeCurrentEndpointDesign(
+  workspaceRoot: string,
+  options: {
+    technicalPlan?: Record<string, unknown>
+    sceneEntities?: unknown[]
+    implementationDescription?: unknown
+  } = {}
+): Promise<void> {
+  const markdownPath = endpointDesignDocumentPath(
+    workspaceRoot,
+    'employee-api',
+    'employee.list'
+  )
+  const jsonPath = endpointDesignJsonPath(workspaceRoot, 'employee-api', 'employee.list')
+  const technicalPlanPath = path.join(
+    workspaceRoot,
+    '.xcodeagent',
+    'plans',
+    'technical-plan.json'
+  )
+  await fs.mkdir(path.dirname(markdownPath), { recursive: true })
+  const technicalPlan = Buffer.from(JSON.stringify(options.technicalPlan || {
+    artifact_type: 'technical-plan', revision: 1
+  }) + '\n')
+  await fs.writeFile(technicalPlanPath, technicalPlan)
+  const artifactRevision = '0123456789abcdef0123456789abcdef'
+  await fs.writeFile(markdownPath, `# Employee list endpoint\n<!-- xcodeagent-artifact-revision: ${artifactRevision} -->\n`, 'utf8')
+  await fs.writeFile(
+    jsonPath,
+    JSON.stringify({
+      schemaVersion: 'endpoint-field-mapping.v1',
+      artifactType: 'endpoint-field-mapping',
+      status: 'confirmed',
+      confirmationStatus: 'confirmed',
+      artifactRevision,
+      apiContractId: 'employee-api',
+      endpointId: 'employee.list',
+      confirmedAt: new Date().toISOString(),
+      sceneEntities: options.sceneEntities || [],
+      fieldMappings: [],
+      ...(options.implementationDescription !== undefined
+        ? { implementationDescription: options.implementationDescription }
+        : {}),
+      basedOn: [
+        {
+          artifactKey: 'technical-plan',
+          sha256: createHash('sha256').update(technicalPlan).digest('hex')
+        }
+      ]
+    }),
+    'utf8'
+  )
+}

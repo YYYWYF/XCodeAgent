@@ -42,3 +42,21 @@
     color: #eef0f7;
   }
 }
+
+.@{class-prefix}-api-design-status {
+  border: 1px solid var(--outline-line);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 18px;
+  margin-left: auto;
+  padding: 0 6px;
+  white-space: nowrap;
+
+  &.confirmed {
+    color: var(--color-success, #52c41a);
+  }
+
+  &.stale {
+    color: var(--color-warning, #d89614);
+  }
+}

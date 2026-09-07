@@ -343,7 +343,7 @@ def build_workflow_ag_ui_stream(
         workspace: str | None = None
         lifecycle_payload: dict[str, Any] | None = None
         workflow_scope = workflow_inputs.get("workflow_scope") or None
-        current_phase = "development_readiness_gate"
+        current_phase = "api_design_readiness_gate"
         node_attempts: dict[str, int] = {}
         application_planning_resume_lock: asyncio.Lock | None = None
         application_planning_resume_lock_acquired = False

@@ -8,6 +8,7 @@ from app.services.builtin_skills import (
     SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME,
     SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME,
 )
+from app.services.api_design import api_design_business_descriptions
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 
 
@@ -20,12 +21,12 @@ _BOOTSTRAP_UNIT_ID = "backend:bootstrap"
 _OUTER_VERIFICATION_POLICY = "outer_integration_test_only"
 
 
-def task_entity_designs(task: dict[str, Any]) -> list[dict[str, Any]]:
-    """读取单个任务已由 Unit 编译器裁剪过的实体设计。"""
+def task_endpoint_designs(task: dict[str, Any]) -> list[dict[str, Any]]:
+    """读取单个任务已由 Unit 编译器裁剪过的 Endpoint API 设计。"""
 
     source_refs = task.get("source_refs")
     source_refs = source_refs if isinstance(source_refs, dict) else {}
-    designs = source_refs.get("entity_designs")
+    designs = source_refs.get("endpoint_designs")
     return (
         [dict(item) for item in designs if isinstance(item, dict)]
         if isinstance(designs, list)
@@ -34,29 +35,27 @@ def task_entity_designs(task: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def task_data_source_types(tasks: list[dict[str, Any]]) -> set[str]:
-    """从当前派发任务的实体设计提取有界数据源类型集合。"""
+    """从当前派发任务的 API 设计来源快照提取数据源类型集合。"""
 
     return {
-        str(design.get("data_source_type") or "").strip()
+        str(snapshot.get("sourceType") or "").strip()
         for task in tasks
-        for design in task_entity_designs(task)
-        if str(design.get("data_source_type") or "").strip()
+        for design in task_endpoint_designs(task)
+        for snapshot in _dict_items(design.get("sourceSnapshots"))
+        if str(snapshot.get("sourceType") or "").strip()
     }
 
 
 def task_required_skill_paths(task: dict[str, Any]) -> list[str]:
-    """按单个任务的实体数据源类型映射必须读取的内置 Skill。"""
+    """按单个任务的 API 设计来源类型映射必须读取的内置 Skill。"""
 
     source_types = {
-        str(design.get("data_source_type") or "").strip()
-        for design in task_entity_designs(task)
-        if str(design.get("data_source_type") or "").strip()
+        str(snapshot.get("sourceType") or "").strip()
+        for design in task_endpoint_designs(task)
+        for snapshot in _dict_items(design.get("sourceSnapshots"))
+        if str(snapshot.get("sourceType") or "").strip()
     }
     unsupported = source_types - set(_SOURCE_REFERENCE_DIRECTORIES)
-    if "static" in unsupported:
-        raise ValueError(
-            f"DataSource 后端任务 {task.get('id') or '<unknown>'} 不得处理 static 实体。"
-        )
     if unsupported:
         raise ValueError(
             f"DataSource 后端任务 {task.get('id') or '<unknown>'} 包含非法数据源类型："
@@ -192,26 +191,19 @@ def task_implementation_contract(
         endpoint_ids,
         entity_ids,
     )
-    scoped_entity_designs = [
-        detail
-        for detail in task_entity_designs(task)
-        if str(detail.get("entity_id") or "") in entity_ids
-    ]
+    endpoint_designs = task_endpoint_designs(task)
+    if len(endpoint_designs) != 1:
+        raise ValueError("Backend Endpoint Task 必须且只能携带一个已确认 Endpoint API 设计。")
+    source_refs = task.get("source_refs")
+    source_refs = source_refs if isinstance(source_refs, dict) else {}
     return {
         "kind": "endpoint",
         "api_contract": api_contracts[0] if api_contracts else {},
-        "endpoint_detail": _scoped_endpoint_detail(
-            project_plan,
-            contract_ids,
-            endpoint_ids,
-        ),
-        "entities": [
-            _implementation_entity_binding(
-                detail,
-                contract_ids=contract_ids,
-                endpoint_ids=endpoint_ids,
-            )
-            for detail in scoped_entity_designs
+        "api_design": endpoint_designs[0],
+        "business_descriptions": [
+            dict(item)
+            for item in source_refs.get("business_descriptions") or api_design_business_descriptions(endpoint_designs)
+            if isinstance(item, dict)
         ],
         "authorization_constraints": _endpoint_authorization_constraints(task),
         "language": {"java_version": "8"},
@@ -326,9 +318,10 @@ def _task_scope_ids(tasks: list[dict[str, Any]]) -> tuple[set[str], set[str], se
             contract_ids.add(contract_id)
         endpoint_ids.update(_string_items(source_refs.get("endpoint_ids")))
         entity_ids.update(
-            str(design.get("entity_id") or "").strip()
-            for design in task_entity_designs(task)
-            if str(design.get("entity_id") or "").strip()
+            str(entity.get("id") or "").strip()
+            for design in task_endpoint_designs(task)
+            for entity in _dict_items(design.get("sceneEntities"))
+            if str(entity.get("id") or "").strip()
         )
     return contract_ids, endpoint_ids, entity_ids
 
@@ -386,11 +379,7 @@ def _scoped_api_contracts(
         result.append(
             {
                 "id": contract_id,
-                "entity_ids": [
-                    item
-                    for item in _string_items(contract.get("entity_ids"))
-                    if not entity_ids or item in entity_ids
-                ],
+                "entity_ids": sorted(entity_ids),
                 "base_path": contract.get("base_path"),
                 "authentication": contract.get("authentication"),
                 "schemas": _scoped_contract_schemas(contract.get("schemas"), endpoints),
@@ -398,107 +387,6 @@ def _scoped_api_contracts(
             }
         )
     return result
-
-
-def _scoped_endpoint_detail(
-    project_plan: dict[str, Any],
-    contract_ids: set[str],
-    endpoint_ids: set[str],
-) -> dict[str, Any]:
-    """读取当前任务唯一的已确认 EndpointDetail 行为，不携带其他接口设计。"""
-
-    for detail in _dict_items(project_plan.get("endpoint_detail_plans")):
-        endpoint_id = str(detail.get("endpoint_id") or detail.get("id") or "").strip()
-        contract_id = str(detail.get("api_contract_id") or "").strip()
-        if endpoint_id not in endpoint_ids:
-            continue
-        if contract_ids and contract_id and contract_id not in contract_ids:
-            continue
-        if str(detail.get("status") or "") != "confirmed":
-            continue
-        return dict(detail)
-    return {}
-
-
-def _implementation_entity_binding(
-    detail: dict[str, Any],
-    *,
-    contract_ids: set[str],
-    endpoint_ids: set[str],
-) -> dict[str, Any]:
-    """把已确认实体设计裁剪为 Java 实现所需的字段与来源绑定。"""
-
-    source_type = str(detail.get("data_source_type") or "").strip()
-    source_key = {
-        "database": "database_design",
-        "external_api": "external_api_design",
-    }.get(source_type, "")
-    source_binding = detail.get(source_key) if source_key else {}
-    if source_type == "external_api":
-        source_binding = _endpoint_external_api_binding(
-            source_binding,
-            contract_ids=contract_ids,
-            endpoint_ids=endpoint_ids,
-            entity_id=str(detail.get("entity_id") or ""),
-        )
-    return {
-        "entity_id": detail.get("entity_id"),
-        "entity_name": detail.get("entity_name"),
-        "fields": [
-            dict(field)
-            for field in detail.get("fields") or []
-            if isinstance(field, dict)
-        ],
-        "source_type": source_type,
-        "source_binding": (
-            dict(source_binding) if isinstance(source_binding, dict) else {}
-        ),
-    }
-
-
-def _endpoint_external_api_binding(
-    value: Any,
-    *,
-    contract_ids: set[str],
-    endpoint_ids: set[str],
-    entity_id: str,
-) -> dict[str, Any]:
-    """只保留当前 Endpoint 唯一上游操作，并在模型调用前拒绝错误关联。"""
-
-    design = dict(value) if isinstance(value, dict) else {}
-    target_refs = {
-        (contract_id, endpoint_id)
-        for contract_id in contract_ids
-        for endpoint_id in endpoint_ids
-    }
-    operations: list[dict[str, Any]] = []
-    for operation in _dict_items(design.get("operations")):
-        refs = {
-            (
-                str(ref.get("api_contract_id") or "").strip(),
-                str(ref.get("endpoint_id") or "").strip(),
-            )
-            for ref in _dict_items(operation.get("endpoint_refs"))
-        }
-        matched = bool(refs & target_refs) if target_refs else bool(
-            {ref[1] for ref in refs} & endpoint_ids
-        )
-        if matched:
-            operations.append(dict(operation))
-    if len(operations) != 1:
-        target = ", ".join(sorted(endpoint_ids)) or "<unknown>"
-        raise ValueError(
-            f"外部 API 实体 {entity_id or '<unknown>'} 对当前 Endpoint {target} "
-            f"必须且只能投射一个上游操作，实际为 {len(operations)} 个。"
-        )
-    return {
-        "connection": (
-            dict(design.get("connection"))
-            if isinstance(design.get("connection"), dict)
-            else {}
-        ),
-        "operations": operations,
-    }
 
 
 def _string_items(value: Any) -> list[str]:

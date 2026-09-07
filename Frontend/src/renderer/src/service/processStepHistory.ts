@@ -9,6 +9,8 @@ import {
 import type { DagGenerationSnapshot, ProcessStepRecord } from './agUiAgent'
 
 const WORKFLOW_NODE_LABELS: Record<string, string> = {
+  api_design: 'API 动态映射设计',
+  api_design_readiness_gate: 'API 设计前置检查',
   development_readiness_gate: '开发前置检查',
   entity_source_binding: '实体数据源绑定',
   inspect_workspace: '扫描工作区代码',

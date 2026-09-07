@@ -18,8 +18,8 @@ UiDesign（可选的真实 React 页面稿 + UiManifest）
 TechnicalPlan
   -> 开发确认
 Workbench
-  -> development_readiness_gate（校验关联实体绑定）
-  -> EntitySourceBinding（仅由用户手动选择实体进入，独立结束）
+  -> api_design（按 Endpoint 设计字段来源，确认后独立结束）
+  -> api_design_readiness_gate（页面/API 开发前校验关联 Endpoint）
   -> Build DAG
   -> Build / Test / Acceptance
 ```
@@ -228,7 +228,7 @@ TechnicalPlan 包含：
 TechnicalPlan 不再持久化 `app`、`requirements_overview`、`project_acceptance_criteria`、
 `business_flows`、`acceptance_criteria`、`risks`、`data_sources`、`permission_model`、
 `frontend_pages` 或 `page_implementation_contracts`。页面字段来自 ProductPlan；实体字段来自
-TechnicalPlan 顶层 `entities`；数据源身份只来自后续已确认 EntitySourceBinding。API Contract 必须通过非空
+TechnicalPlan 顶层 `entities`；实体不做全局数据源绑定，数据源身份只存在于后续已确认的 Endpoint API 设计。API 设计场景 Entity 只能从当前 Contract 关联的 TechnicalPlan 实体复制，复制后保持只读且不回写全局实体；模板实体或字段变化会因 TechnicalPlan 契约指纹变化使 Endpoint 设计失效。API Contract 必须通过非空
 `entity_ids` 关联一个或多个实体，禁止 `data_source_id`。角色/跳转/状态来自 ProductPlan；UI 路径与控件映射来自已确认 UiManifest，跳过时不提供 UI 路径和控件映射；
 运行时按当前构建范围组合这些正式上游产物。
 
@@ -300,49 +300,52 @@ TechnicalPlan 修订。
 
 - 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、V1 页面与操作权限目标身份、业务流程、页面信息和业务动作上下文，并在修订时注入修订上下文；数据权限不进入第一阶段模型上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
 
-## 详设节点移除与工作台执行
+## Endpoint API 动态映射与工作台执行
 
-当前契约不生成、不读取也不迁移页面/API详设；`.xcodeagent/plans/pages/` 和 `.xcodeagent/plans/endpoints/` 不再是运行依赖。原接口详设中的操作、基数、选择器、事务、零/多匹配、状态码、副作用和风险已经收回 TechnicalPlan Endpoint。页面事实由 ProductPlan、UiDesign、TechnicalPlan references 和运行时 `PageImplementationContract` 共同提供。
+页面没有独立详设文件；页面事实由 ProductPlan、UiDesign、TechnicalPlan references 和运行时 `PageImplementationContract` 共同提供。API 则有独立 `api_design` 节点，但它不是第二份 API 契约：TechnicalPlan 唯一负责 Endpoint 的 method、path、参数和 Schema，API 设计只能给这些既有 API 叶子字段补充实体语义引用、数据库/外部 API 字段来源或一句话业务说明。业务说明没有 Entity/Source 输出，也不保存表达式或可执行规则，默认由 ApplicationService 按说明实现。当前实现不读取、不迁移历史 Endpoint 设计结构。
 
-页面/API开发流程固定为：
+Endpoint 设计和页面/API开发流程固定为：
 
 ```text
-选择页面或 API
-  -> development_readiness_gate
-  -> 关联实体缺少绑定：返回 entity_source_binding_required，用户手动选择实体
-  -> EntitySourceBinding 确认后独立结束
-  -> 用户重新选择原页面或 API
-  -> development_readiness_gate
-  -> inspect_workspace
-  -> prepare_build_tasks（二次复检实体绑定）
+待设计 Endpoint -> api_design -> 显式确认 -> 写入 Endpoint JSON/Markdown -> END
+页面或 API 开发
+  -> api_design_readiness_gate
+  -> 缺少/过期：一次性返回关联 Endpoint 列表 -> END
+  -> 用户补齐设计后重新主动发起开发
+  -> 就绪：inspect_workspace
+  -> prepare_build_tasks（二次复检 Endpoint 设计）
   -> Build DAG 用户确认
   -> Build / Test / Acceptance
 ```
 
-纯静态且没有 Endpoint 的页面可直接通过门禁。EntitySourceBinding 保留 database、external API、static、字段映射、建表/补列和高危 DDL 审批；它不修改已确认的 API Contract。
+纯静态且没有 Endpoint 的页面可直接通过门禁。API 设计以 Request/Response 两侧的 `fieldMappings` 表达 `direct_source`、`through_entity`、`business_description` 和可选字段的 `unconfigured` 状态；每条记录内嵌唯一 Endpoint 字段及其实体字段引用、完整来源字段或一句自然语言说明，数据流方向由 Request/Response 侧确定，不保存节点、边或随机映射 ID。数据字段可来自直属 MySQL 实时表列或数据源目录中已保存的外部 Operation Schema；Builtin/DBID 不提供伪造元数据，外部 API 设计时不发起网络请求。
+
+每次确认写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用 `endpoint-field-mapping.v1`，保存当前 TechnicalPlan 契约指纹、场景实体、自包含 `fieldMappings`、脱敏来源快照和随机十六进制 `artifactRevision`；Markdown 写入同一修订标记并作为用户可见正式产物。双文件替换失败回滚上一版，读取时必须同时验证双文件、当前 Schema、确认状态、TechnicalPlan 指纹和修订号一致；旧 `nodes`/`mappings` 结构不读取、不迁移并直接视为 stale。TechnicalPlan 契约改变会使 Endpoint 变为“需重新设计”，确认后的数据源目录变化不主动使其失效；Build 使用快照并在运行时按 `sourceId` 安全解析凭据。
+
+旧 EntitySourceBinding 代码、设计页面和独立入口保留，但不再处于正常旅程，不影响 API 设计状态、开发门禁或 Build 上下文。
 
 正式依赖顺序为：
 
 ```text
 RequirementSpec -> ProductPlan -> UiDesign（可选） -> 等待进入规划阶段 -> TechnicalPlan
-TechnicalPlan + EntitySourceBinding -> development_readiness_gate -> Build DAG
+TechnicalPlan -> Endpoint API Design -> api_design_readiness_gate -> Build DAG
 ```
 
-ProductPlan 或 UiDesign 变化时重新确认受影响 TechnicalPlan/运行时页面契约；TechnicalPlan API 或 Schema 变化时使相关 Build DAG 失效；EntitySourceBinding 变化时使引用实体的页面/API Build DAG 失效。纯代码实现错误进入 SmallTask 修复，不回到规划阶段。
+ProductPlan 或 UiDesign 变化时重新确认受影响 TechnicalPlan/运行时页面契约；TechnicalPlan API 或 Schema 变化时使相关 Endpoint 设计和 Build DAG 失效。纯代码实现错误进入 SmallTask 修复，不回到规划阶段。
 
 TechnicalPlan 确认前执行确定性一致性检查：UI 中声明的每个业务操作、显示项和跳转必须能映射到 ProductPlan；每个 ProductPlan `business` action 和组合中的每个 `business` step 必须有且只有一个 endpoint 实现；TechnicalPlan 不得为 `navigation`、`interface` 或 `external` 行为重复作产品/UI 决策；每个技术绑定必须引用已存在的 action/step、endpoint、Schema 和页面。启用权限时，`authorization-manifest.v2` 必须完整覆盖 RequirementSpec 页面/操作规则及 ProductPlan 目标，确定性生成页面、顶层 action 和唯一系统资源，以及 Endpoint `operationResourceKeys` 的 ANY-OF 绑定；V1 出现数据权限字段必须拒绝确认。资源键、系统资源及 endpoint resource binding 均由确定性编译器生成。编译后的 `endpoint`、`navigation`、`local`、`external`、`sequence` 联合契约必须完整闭合，失败时不得进入工作台。
 
 ## 上下文预算
 
-RequirementSpec 与 ProductPlan 只持久化用户提出或确认的产品事实，不保存模型推测的 `assumptions` 或 `risks`。TechnicalPlan、EntitySourceBinding 和任务规划只接收当前目标所需的结构化输入，不复制上游全文或无关历史记录。
+RequirementSpec 与 ProductPlan 只持久化用户提出或确认的产品事实，不保存模型推测的 `assumptions` 或 `risks`。TechnicalPlan、Endpoint API Design 和任务规划只接收当前目标所需的结构化输入，不复制上游全文或无关历史记录。
 
 单次模型上下文限制为当前阶段所需内容：
 
 - ProductPlan：RequirementSpec；
 - UiDesign：单页 ProductPlan 摘要；
 - TechnicalPlan：拆分的 ProductPlan 页面、信息项、行为与业务流程上下文，以及必要修订信息；不读取 RequirementSpec 的 `entities`，也不加载完整上游文档或 UI manifest JSON；
-- EntitySourceBinding：单个实体定义和所选数据源的有界元数据；
-- Build：当前 Unit 的 TechnicalPlan Endpoint、页面实现契约、实体绑定摘要、UI 设计文件路径和工作区快照。
+- Endpoint API Design：单个 Endpoint 契约、场景 Entity 模板和按需加载的数据源有界元数据；
+- Build：当前 Unit 的 TechnicalPlan Endpoint、Endpoint 自包含字段映射/业务说明/来源快照、派生数据流表达式、页面实现契约、UI 设计文件路径和工作区快照。
 
 ProductPlan 每次自动修复只回灌最多八条校验摘要，TechnicalPlan 最多回灌十二条页面/API/数据源契约摘要；两者都不追加历史模型全文。TechnicalPlan 首次失败后优先只向模型投射报错 API Contract、绑定实体和关联产品动作，并将修复结果确定性合并回完整候选；无法定位具体 Contract 时才回退完整计划修订。三次预算耗尽时，最后一个可解析候选和精简错误只保留在 LangGraph checkpoint 的内部修复字段中，不作为 AG-UI 公开状态，也不写入正式 Markdown/JSON；用户授权“重新生成”后从该候选继续修复。只有通过校验的计划才进入确认产物，从而保持 128k 上下文预算与 checkpoint 可检查性。
 

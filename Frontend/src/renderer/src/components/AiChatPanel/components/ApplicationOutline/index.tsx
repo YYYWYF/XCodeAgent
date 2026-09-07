@@ -272,6 +272,18 @@ export default function ApplicationOutline({
                                       {endpoint.method}
                                     </span>
                                     <code>{displayPath}</code>
+                                    <span
+                                      className={cx(
+                                        'api-design-status',
+                                        endpoint.detailPlanStatus || 'pending'
+                                      )}
+                                    >
+                                      {endpoint.detailPlanStatus === 'confirmed'
+                                        ? '已设计'
+                                        : endpoint.detailPlanStatus === 'stale'
+                                          ? '需重新设计'
+                                          : '待设计'}
+                                    </span>
                                   </button>
                                 </div>
                               )

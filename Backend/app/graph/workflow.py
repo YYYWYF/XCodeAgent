@@ -11,8 +11,12 @@ from app.persistence.checkpoints import (
 
 
 def route_workflow_start(state: ProjectState) -> str:
-    """让主 Workflow 从开发就绪门禁、实体绑定或指定恢复节点开始。"""
+    """让主 Workflow 从 API 设计、开发检查、旧实体入口或指定节点开始。"""
 
+    if state.get("resume_from") == "api_design":
+        return "api_design"
+    if state.get("resume_from") == "api_design_readiness_gate":
+        return "api_design_readiness_gate"
     if state.get("resume_from") == "entity_source_binding":
         return "entity_source_binding"
     if state.get("resume_from") == "development_readiness_gate":
@@ -59,14 +63,14 @@ def route_workflow_start(state: ProjectState) -> str:
         return "finalize_project"
     if str(state.get("selected_entity_id") or "").strip():
         return "entity_source_binding"
-    return "development_readiness_gate"
+    return "api_design_readiness_gate"
 
 
 def route_application_revision(state: ProjectState) -> str:
-    """正式产物收口完成后先经过开发就绪门禁，再进入工作区检查。"""
+    """正式产物收口完成后先检查关联 API 设计，再进入工作区检查。"""
 
     return (
-        "development_readiness_gate"
+        "api_design_readiness_gate"
         if state.get("status") == "revision_artifacts_confirmed"
         else "await_user_input"
     )
@@ -195,6 +199,23 @@ def route_entity_source_binding(state: ProjectState) -> str:
     return "await_user_input"
 
 
+def route_api_design(state: ProjectState) -> str:
+    """按 API 设计状态决定等待、续接开发链路或进入统一失败处理。"""
+
+    status = str(state.get("status") or "")
+    if status == "requires_user_input":
+        return "await_user_input"
+    if status == "completed":
+        return "api_design_readiness_gate"
+    return "handle_failure"
+
+
+def route_api_design_readiness(state: ProjectState) -> str:
+    """API 设计齐备时进入工作区检查，否则等待用户逐个完成设计。"""
+
+    return "await_user_input" if state.get("status") == "requires_user_input" else "inspect_workspace"
+
+
 def route_development_readiness(state: ProjectState) -> str:
     """开发就绪时进入工作区检查，否则停下等待用户手动完成实体绑定。"""
 
@@ -202,13 +223,13 @@ def route_development_readiness(state: ProjectState) -> str:
 
 
 def route_project_planning(state: ProjectState) -> str:
-    """技术计划调整确认后重新执行开发就绪门禁，失败则统一处理。"""
+    """技术计划调整确认后重新检查 API 设计，失败则统一处理。"""
 
     if state.get("status") == "requires_user_input":
         return "await_user_input"
     if state.get("status") == "failed":
         return "handle_failure"
-    return "development_readiness_gate"
+    return "api_design_readiness_gate"
 
 
 def route_prepare_build_tasks(state: ProjectState) -> str:
@@ -243,6 +264,8 @@ def build_graph(*, checkpointer):
     builder = StateGraph(ProjectState)
 
     builder.add_node("development_readiness_gate", nodes.development_readiness_gate)
+    builder.add_node("api_design", nodes.api_design)
+    builder.add_node("api_design_readiness_gate", nodes.api_design_readiness_gate)
     builder.add_node("application_revision", nodes.start_application_revision)
     # TechnicalPlan 二次修改使用同一实现节点，但以真实 technical_planning
     # 入口暴露给运行时，避免把用户确认后的规划请求显示成未知的 revision 流程。
@@ -271,6 +294,8 @@ def build_graph(*, checkpointer):
         START,
         route_workflow_start,
         {
+            "api_design": "api_design",
+            "api_design_readiness_gate": "api_design_readiness_gate",
             "development_readiness_gate": "development_readiness_gate",
             "application_revision": "application_revision",
             "technical_planning": "technical_planning",
@@ -296,7 +321,7 @@ def build_graph(*, checkpointer):
         "application_revision",
         route_application_revision,
         {
-            "development_readiness_gate": "development_readiness_gate",
+            "api_design_readiness_gate": "api_design_readiness_gate",
             "await_user_input": END,
         },
     )
@@ -304,7 +329,24 @@ def build_graph(*, checkpointer):
         "technical_planning",
         route_application_revision,
         {
-            "development_readiness_gate": "development_readiness_gate",
+            "api_design_readiness_gate": "api_design_readiness_gate",
+            "await_user_input": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "api_design",
+        route_api_design,
+        {
+            "api_design_readiness_gate": "api_design_readiness_gate",
+            "await_user_input": END,
+            "handle_failure": "handle_failure",
+        },
+    )
+    builder.add_conditional_edges(
+        "api_design_readiness_gate",
+        route_api_design_readiness,
+        {
+            "inspect_workspace": "inspect_workspace",
             "await_user_input": END,
         },
     )
@@ -325,7 +367,7 @@ def build_graph(*, checkpointer):
         "project_planning",
         route_project_planning,
         {
-            "development_readiness_gate": "development_readiness_gate",
+            "api_design_readiness_gate": "api_design_readiness_gate",
             "await_user_input": END,
             "handle_failure": "handle_failure",
         },

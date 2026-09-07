@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 from deepagents.middleware.filesystem import _check_fs_permission
@@ -53,6 +55,54 @@ class WorkspaceScopeTests(unittest.TestCase):
                 ),
                 "export default null\n",
             )
+
+    @unittest.skipUnless(os.name == "nt", "Windows 扩展路径仅在 Windows 验证。")
+    def test_workspace_backend_accepts_extended_windows_path_inside_root(self) -> None:
+        """Windows 扩展路径与普通工作区根等价时不得误判为越界。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            backend = create_workspace_backend(workspace)
+            target = Path(workspace) / "backend/src/main/java/Product.java"
+            extended_target = Path(f"\\\\?\\{target.resolve()}")
+
+            with (
+                patch.object(
+                    FilesystemBackend,
+                    "_resolve_path",
+                    side_effect=ValueError(
+                        f"Path:{extended_target} outside root directory: {backend.cwd}"
+                    ),
+                ),
+                patch.object(Path, "resolve", return_value=extended_target),
+            ):
+                resolved = backend._resolve_path("/backend/src/main/java/Product.java")
+
+            self.assertEqual(resolved, extended_target)
+
+    @unittest.skipUnless(os.name == "nt", "Windows 扩展路径仅在 Windows 验证。")
+    def test_workspace_backend_rejects_extended_windows_path_outside_root(self) -> None:
+        """Windows 扩展路径兼容不得放宽真实的工作区目录边界。"""
+
+        with tempfile.TemporaryDirectory() as parent:
+            workspace = Path(parent) / "workspace"
+            outside = Path(parent) / "outside"
+            workspace.mkdir()
+            outside.mkdir()
+            backend = create_workspace_backend(str(workspace))
+            extended_target = Path(f"\\\\?\\{(outside / 'Product.java').resolve()}")
+
+            with (
+                patch.object(
+                    FilesystemBackend,
+                    "_resolve_path",
+                    side_effect=ValueError(
+                        f"Path:{extended_target} outside root directory: {backend.cwd}"
+                    ),
+                ),
+                patch.object(Path, "resolve", return_value=extended_target),
+                self.assertRaisesRegex(ValueError, "outside root directory"),
+            ):
+                backend._resolve_path("/Product.java")
 
     def test_missing_workspace_uses_state_backend_and_denies_filesystem(self) -> None:
         backend = create_workspace_backend(None)

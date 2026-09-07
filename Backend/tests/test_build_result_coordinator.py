@@ -123,6 +123,23 @@ class BuildResultCoordinatorTests(unittest.TestCase):
                     ["invalid_structured_response", "invalid_structured_response"],
                 )
 
+    def test_non_strict_schema_accepts_extra_top_level_fields(self) -> None:
+        """严格模式关闭时保留任务结果，并忽略 Agent 返回的额外顶层摘要。"""
+
+        results = create_agent_task_results(
+            [{"id": "backend", "owner": "backend"}],
+            """{
+              "task_results": [
+                {"task_id": "backend", "status": "completed", "summary": "ok"}
+              ],
+              "summary": "extra top-level summary"
+            }""",
+            require_structured=True,
+        )
+
+        self.assertEqual(results[0]["status"], "completed")
+        self.assertEqual(results[0]["agent_note"], "ok")
+
     def test_invalid_structured_status_becomes_protocol_failure(self) -> None:
         """结构化状态不合法时必须显式失败，不能回退成 completed。"""
 

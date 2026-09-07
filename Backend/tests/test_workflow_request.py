@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.agents.test_generation.generator import _build_prompt
 from app.graph.subgraphs.testing import collect_unit_test_targets
+from app.services.api_design import ApiDesignError
 from app.protocols.workflow.request import (
     _build_execution_scope,
     _resume_values,
@@ -982,9 +983,53 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
+        self.assertEqual(inputs["resume_from"], "api_design_readiness_gate")
         self.assertNotIn("原始需求：\n请基于原始需求", inputs["request"])
         self.assertIn("回答：库管员", inputs["request"])
+
+    def test_start_api_design_uses_endpoint_target(self) -> None:
+        """显式 API 设计动作必须携带完整 Contract 与 Endpoint 目标。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "设计 API：GET /orders",
+                "forwardedProps": {
+                    "workflowAction": "start_api_design",
+                    "selectedApiContractId": "orders-api",
+                    "selectedEndpointId": "orders.list",
+                },
+            }
+        )
+        self.assertEqual(inputs["resume_from"], "api_design")
+        self.assertEqual(inputs["resume_values"]["selected_api_contract_id"], "orders-api")
+        self.assertEqual(inputs["resume_values"]["selected_endpoint_id"], "orders.list")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {
+                "type": "endpoint",
+                "targetId": "orders.list",
+                "apiContractId": "orders-api",
+            },
+        )
+
+    def test_api_design_metadata_action_is_rejected_by_workflow_adapter(self) -> None:
+        """数据源元数据动作不再进入工作流，避免由 /workflow/run 返回元数据。"""
+
+        with self.assertRaises(ApiDesignError):
+            workflow_run_inputs(
+                {
+                    "request": "加载数据库表",
+                    "clarificationAnswers": {
+                        "api_design": {
+                            "action": "load_database_tables",
+                            "apiContractId": "orders-api",
+                            "endpointId": "orders.list",
+                            "sourceId": "orders-db",
+                            "draft": {},
+                        }
+                    },
+                }
+            )
 
     def test_application_planning_accepts_only_current_resume_nodes(self) -> None:
         inputs = workflow_run_inputs(

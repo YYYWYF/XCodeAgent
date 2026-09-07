@@ -9,7 +9,39 @@ import type {
 } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 
-type DataSourceAction = 'list' | 'create' | 'update' | 'delete' | 'validate' | 'detail'
+type DataSourceAction =
+  | 'list'
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'validate'
+  | 'detail'
+  | 'database_tables'
+  | 'database_columns'
+  | 'external_operation'
+
+export type ApiDesignDatabaseMetadata = {
+  sourceId?: string
+  schema?: string
+  table?: string
+  tables?: Array<{ name: string; description?: string }>
+  columns?: Array<{ name: string; type: string; required?: boolean; description?: string }>
+}
+
+export type ApiDesignExternalOperationMetadata = {
+  sourceId?: string
+  sourceName?: string
+  directoryId?: string
+  directoryName?: string
+  operation?: Record<string, unknown>
+  fields?: Array<{
+    section: string
+    path: string
+    type: string
+    required?: boolean
+    description?: string
+  }>
+}
 
 type DataSourcesPayload = {
   schemaVersion: 1
@@ -18,15 +50,18 @@ type DataSourcesPayload = {
   status: 'completed' | 'failed'
   action?: DataSourceAction
   catalog?: DataSourceCatalog
+  metadata?: ApiDesignDatabaseMetadata | ApiDesignExternalOperationMetadata
   validation?: DataSourceValidation
   error?: { type?: string; message?: string }
 }
 
+/** 将内部动作名转换为独立数据源路由的短横线路径。 */
 function getDataSourcesUrl(action: DataSourceAction): string {
+  const pathAction = action.replace(/_/g, '-')
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
   return agentBaseUrl
-    ? `${agentBaseUrl.replace(/\/$/, '')}/data-sources/${action}`
-    : `/api/agent/data-sources/${action}`
+    ? `${agentBaseUrl.replace(/\/$/, '')}/data-sources/${pathAction}`
+    : `/api/agent/data-sources/${pathAction}`
 }
 
 function readDataSourcesPayload(value: unknown): DataSourcesPayload | undefined {
@@ -92,9 +127,73 @@ function requireCatalog(payload: DataSourcesPayload): DataSourceCatalog {
   return payload.catalog
 }
 
+/** 从独立数据源 AG-UI 动作中提取 API 设计需要的数据库元数据。 */
+function requireDatabaseMetadata(payload: DataSourcesPayload): ApiDesignDatabaseMetadata {
+  if (!payload.metadata || !Array.isArray((payload.metadata as ApiDesignDatabaseMetadata).tables)) {
+    throw new Error('数据库元数据接口没有返回有效的表结构。')
+  }
+  return payload.metadata as ApiDesignDatabaseMetadata
+}
+
+/** 从独立数据源 AG-UI 动作中提取 API 设计需要的外部 Operation Schema。 */
+function requireExternalOperationMetadata(payload: DataSourcesPayload): ApiDesignExternalOperationMetadata {
+  if (!payload.metadata || !Array.isArray((payload.metadata as ApiDesignExternalOperationMetadata).fields)) {
+    throw new Error('外部 Operation 接口没有返回有效的字段结构。')
+  }
+  return payload.metadata as ApiDesignExternalOperationMetadata
+}
+
 /** 读取当前工作区的独立数据源目录。 */
 export async function requestDataSources(workspaceRoot: string): Promise<DataSourceCatalog> {
   return requireCatalog(await runDataSourceAction(workspaceRoot, 'list', {}, '读取独立数据源。'))
+}
+
+/** 通过独立接口读取 API 设计可用的直属 MySQL 表清单。 */
+export async function requestApiDesignDatabaseTables(
+  workspaceRoot: string,
+  sourceId: string,
+): Promise<ApiDesignDatabaseMetadata> {
+  return requireDatabaseMetadata(
+    await runDataSourceAction(
+      workspaceRoot,
+      'database_tables',
+      { sourceId },
+      '读取 API 设计数据库表清单。',
+    ),
+  )
+}
+
+/** 通过独立接口读取 API 设计选定数据库表的字段。 */
+export async function requestApiDesignDatabaseColumns(
+  workspaceRoot: string,
+  sourceId: string,
+  table: string,
+): Promise<ApiDesignDatabaseMetadata> {
+  return requireDatabaseMetadata(
+    await runDataSourceAction(
+      workspaceRoot,
+      'database_columns',
+      { sourceId, table },
+      '读取 API 设计数据库字段。',
+    ),
+  )
+}
+
+/** 通过独立接口读取 API 设计选定的外部 Operation Schema。 */
+export async function requestApiDesignExternalOperation(
+  workspaceRoot: string,
+  sourceId: string,
+  directoryId: string,
+  operationId: string,
+): Promise<ApiDesignExternalOperationMetadata> {
+  return requireExternalOperationMetadata(
+    await runDataSourceAction(
+      workspaceRoot,
+      'external_operation',
+      { sourceId, directoryId, operationId },
+      '读取 API 设计外部 Operation Schema。',
+    ),
+  )
 }
 
 /** 读取指定外部 API 接口的完整配置。 */

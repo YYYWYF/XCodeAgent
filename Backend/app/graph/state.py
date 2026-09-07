@@ -95,6 +95,10 @@ class ProjectState(TypedDict, total=False):
     entity_source_binding_submission: dict[str, Any]
     entity_design_action: dict[str, Any]
     development_readiness: dict[str, Any]
+    api_design_action: dict[str, Any]
+    api_design_draft: dict[str, Any]
+    api_design_result: dict[str, Any]
+    api_design_readiness: dict[str, Any]
     development_continuation_id: str
     application_planning_confirmation: dict[str, Any]
     ui_designs: dict[str, Any]

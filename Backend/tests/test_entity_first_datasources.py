@@ -100,24 +100,33 @@ class EntityFirstDatasourceTests(unittest.TestCase):
         """任务准备类型检测保留 endpoint 绑定的完整来源集合。"""
 
         def plan_with_types(types: list[str]) -> dict:
-            """构造带 application_skeleton 数据源类型的最小计划。"""
+            """构造带当前 Endpoint 设计来源快照的最小计划。"""
 
             return {
-                "application_skeleton": {
-                    "data_sources": [
-                        {"id": f"source_{index}", "type": source_type}
-                        for index, source_type in enumerate(types)
+                "executable_details": {
+                    "endpoint_designs": [
+                        {
+                            "sourceSnapshots": [
+                                {
+                                    "sourceId": f"source_{index}",
+                                    "sourceType": source_type,
+                                }
+                                for index, source_type in enumerate(types)
+                            ]
+                        }
                     ]
                 }
             }
 
         self.assertEqual(
-            task_preparation_datasource_types(plan_with_types(["static"])),
-            {"static"},
+            task_preparation_datasource_types(plan_with_types(["database"])),
+            {"database"},
         )
         self.assertEqual(
-            task_preparation_datasource_types(plan_with_types(["database", "static"])),
-            {"database", "static"},
+            task_preparation_datasource_types(
+                plan_with_types(["database", "external_api"])
+            ),
+            {"database", "external_api"},
         )
         self.assertEqual(
             task_preparation_datasource_types(plan_with_types(["external_api"])),

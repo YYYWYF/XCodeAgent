@@ -1,0 +1,448 @@
+.api-design-panel {
+  --api-design-surface: var(--color-bg-container, #fff);
+  --api-design-muted: var(--color-bg-layout, #f7f5fa);
+  --api-design-border: var(--color-border-secondary, rgba(31, 19, 51, 0.14));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.api-design-panel-header,
+.api-design-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.api-design-panel-header h5 {
+  margin: 0 0 4px;
+}
+
+.api-design-metadata-loading {
+  align-items: center;
+  color: var(--color-text-secondary, #756b80);
+  display: flex;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.api-design-implementation-description {
+  background: var(--api-design-surface);
+  border: 1px solid var(--api-design-border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.api-design-implementation-description-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.5;
+}
+
+.api-design-implementation-description-heading > div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.api-design-implementation-description-heading > div .ant-typography-secondary {
+  background: var(--api-design-muted);
+  border: 1px solid var(--api-design-border);
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 1px 6px;
+}
+
+.api-design-implementation-description-input {
+  width: 100%;
+}
+
+.api-design-implementation-description-input.ant-input:focus,
+.api-design-implementation-description-input.ant-input-focused {
+  border-color: var(--color-primary, #7b4bb7);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary, #7b4bb7) 14%, transparent);
+}
+
+.api-design-table-shell {
+  background: var(--api-design-surface);
+  border: 1px solid var(--api-design-border);
+  border-radius: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.api-design-table {
+  background: var(--api-design-surface);
+}
+
+.api-design-table .ant-table {
+  background: transparent;
+}
+
+.api-design-table .ant-table-thead > tr > th {
+  background: var(--api-design-muted);
+  border-bottom-color: var(--api-design-border);
+  color: var(--color-text, inherit);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.api-design-table .ant-table-tbody > tr > td {
+  border-bottom-color: var(--api-design-border);
+  vertical-align: middle;
+}
+
+.api-design-table-row:hover > td,
+.api-design-table-row.is-editing > td {
+  background: color-mix(in srgb, var(--color-primary, #7b4bb7) 8%, var(--api-design-surface));
+}
+
+.api-design-table-row.is-error > td {
+  background: color-mix(in srgb, var(--color-error, #ff4d4f) 7%, var(--api-design-surface));
+}
+
+.api-design-field-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.api-design-field-cell .ant-typography-ellipsis-single-line {
+  max-width: 155px;
+}
+
+.api-design-inline-select {
+  min-width: 130px;
+}
+
+.api-design-mode-select {
+  min-width: 108px;
+}
+
+.api-design-source-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.api-design-mapping-drawer .ant-drawer-content-wrapper {
+  max-width: 100vw;
+}
+
+.api-design-mapping-drawer .ant-drawer-body {
+  background: var(--api-design-surface);
+  padding: 0;
+}
+
+.api-design-editor-summary {
+  background: var(--api-design-muted);
+  border: 1px solid var(--api-design-border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+}
+
+.api-design-editor-kicker {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.api-design-editor-summary-title {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.api-design-editor-summary-title .ant-typography {
+  font-size: 18px;
+}
+
+.api-design-editor-summary-description {
+  line-height: 1.5;
+  max-width: 100%;
+}
+
+.api-design-editor-section {
+  background: var(--api-design-surface);
+  border: 1px solid var(--api-design-border);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.api-design-mode-section {
+  background: color-mix(in srgb, var(--api-design-muted) 58%, var(--api-design-surface));
+}
+
+.api-design-section-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.api-design-editor-form-item {
+  margin-bottom: 0 !important;
+}
+
+.api-design-editor-select,
+.api-design-editor-textarea {
+  width: 100%;
+}
+
+.api-design-flow-hint,
+.api-design-source-note {
+  color: var(--color-text-secondary, #756b80);
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 10px;
+}
+
+.api-design-source-card {
+  padding-bottom: 14px;
+}
+
+.api-design-source-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.api-design-source-grid-database,
+.api-design-source-grid-external {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.api-design-source-field-full {
+  grid-column: 1 / -1;
+}
+
+.api-design-source-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.api-design-source-field-label {
+  color: var(--color-text-secondary, #756b80);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-design-source-field-label strong,
+.api-design-source-field-label.ant-typography-strong {
+  color: var(--color-text, inherit);
+}
+
+.api-design-required-mark {
+  color: var(--color-error, #ff4d4f);
+  margin-right: 4px;
+}
+
+.api-design-source-select {
+  min-width: 0;
+  width: 100%;
+}
+
+.api-design-source-select .ant-select-selector {
+  min-width: 0;
+}
+
+.api-design-source-usage {
+  margin-top: 12px;
+}
+
+.api-design-source-usage-select {
+  max-width: 240px;
+}
+
+.api-design-source-status {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.api-design-source-status .ant-alert {
+  flex: 1 1 100%;
+}
+
+.api-design-source-reload {
+  padding-inline: 0;
+}
+
+.api-design-editor-actions {
+  align-items: center;
+  background: var(--api-design-surface);
+  border-top: 1px solid var(--api-design-border);
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  /* 操作栏属于滚动内容的一部分，不能用负底边距覆盖 TextArea 的帮助文案。 */
+  margin: 18px -24px 0;
+  min-height: 68px;
+  padding: 14px 24px;
+  position: sticky;
+  z-index: 2;
+}
+
+.api-design-editor-actions::before {
+  background: linear-gradient(to top, var(--api-design-surface), transparent);
+  content: '';
+  height: 10px;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: -10px;
+}
+
+.api-design-editor-actions .ant-space {
+  align-items: center;
+  display: inline-flex;
+}
+
+.api-design-editor-actions > .ant-btn-dangerous.ant-btn-text {
+  margin-left: 0;
+  padding-inline: 0;
+}
+
+.api-design-mapping-summary {
+  max-width: 330px;
+}
+
+.api-design-status {
+  margin-inline-end: 0;
+  white-space: nowrap;
+}
+
+.api-design-business-edit {
+  padding-inline: 2px;
+}
+
+.api-design-business-description-editor {
+  max-height: calc(100vh - 150px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.api-design-field-mapping-editor {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 150px);
+  min-height: 100%;
+  overflow-y: auto;
+  padding: 22px 24px 0;
+}
+
+.api-design-field-mapping-editor > .ant-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.api-design-field-mapping-editor .api-design-editor-section {
+  flex: 0 0 auto;
+}
+
+.api-design-field-mapping-editor .api-design-editor-actions {
+  flex: 0 0 auto;
+}
+
+.api-design-field-mapping-editor .ant-form-item-explain,
+.api-design-field-mapping-editor .ant-form-item-extra {
+  line-height: 1.5;
+  margin-top: 6px;
+}
+
+.api-design-field-mapping-editor .ant-form-item {
+  margin-bottom: 18px;
+}
+
+.api-design-editor-help {
+  margin-top: 8px;
+}
+
+.api-design-editor-section + .api-design-editor-section {
+  margin-top: 14px;
+}
+
+.api-design-table-empty {
+  color: var(--color-text-secondary, rgba(0, 0, 0, 0.45));
+  padding: 30px 16px;
+  text-align: center;
+}
+
+[data-theme='dark'] .api-design-panel,
+.dark .api-design-panel {
+  --api-design-surface: var(--color-bg-container, #211b2b);
+  --api-design-muted: var(--color-bg-layout, #17131d);
+  --api-design-border: rgba(232, 222, 245, 0.18);
+}
+
+[data-theme='dark'] .api-design-mapping-drawer,
+.dark .api-design-mapping-drawer {
+  --api-design-surface: var(--color-bg-container, #211b2b);
+  --api-design-muted: var(--color-bg-layout, #17131d);
+  --api-design-border: rgba(232, 222, 245, 0.18);
+}
+
+@media (max-width: 720px) {
+  .api-design-panel-header,
+  .api-design-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .api-design-table-shell {
+    overflow-x: auto;
+  }
+
+  .api-design-field-mapping-editor {
+    padding-inline: 16px;
+  }
+
+  .api-design-source-grid,
+  .api-design-source-grid-database,
+  .api-design-source-grid-external {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .api-design-source-field-full {
+    grid-column: auto;
+  }
+
+  .api-design-editor-actions {
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
+}
+
+@media (max-width: 420px) {
+  .api-design-editor-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+    gap: 8px;
+  }
+
+  .api-design-editor-actions .ant-space {
+    display: flex;
+    justify-content: flex-end;
+  }
+}

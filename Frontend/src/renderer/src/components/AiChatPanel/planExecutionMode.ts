@@ -307,6 +307,8 @@ function normalizePageId(value?: string): string {
 export function planExecutionPhaseLabel(phase?: string): string {
   return (
     {
+      api_design: '设计 API 动态映射',
+      api_design_readiness_gate: '检查 API 设计前置',
       development_readiness_gate: '检查开发前置',
       entity_source_binding: '实体数据源绑定',
       inspect_workspace: '检查工作区',
@@ -341,6 +343,8 @@ export function workflowResumeNode(
   executionPhase?: string
 ): string {
   const supported = new Set([
+    'api_design',
+    'api_design_readiness_gate',
     'development_readiness_gate',
     'entity_source_binding',
     'inspect_workspace',

@@ -15,7 +15,7 @@ import {
   readManagedWorkspaceApplication,
   resolveApplicationTemplateBranch
 } from './managedWorkspace'
-import { endpointDesignDocumentExists, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
+import { endpointDesignDocumentStatus, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
 import {
   nextStageSessionSequence,
   stageForWorkbenchPhase,
@@ -535,7 +535,7 @@ function pageBuildTaskSummary(
   }
 }
 
-/** 只根据 endpoint Markdown 是否真实产出合并接口设计状态。 */
+/** 按当前版双文件、确认状态和 TechnicalPlan 指纹合并 Endpoint API 设计状态。 */
 async function mergeWorkbenchApiStatus(
   workspaceRoot: string,
   contracts: WorkbenchApiContract[]
@@ -545,16 +545,17 @@ async function mergeWorkbenchApiStatus(
       ...contract,
       endpoints: await Promise.all(
         contract.endpoints.map(async (endpoint) => {
-          const hasDesignDocument = await endpointDesignDocumentExists(
+          const designStatus = await endpointDesignDocumentStatus(
             workspaceRoot,
             endpoint.apiContractId,
             endpoint.id
           )
           return {
             ...endpoint,
-            designed: hasDesignDocument,
-            detailPlanStatus: hasDesignDocument ? 'generated' : '',
-            hasDetailPlan: hasDesignDocument
+            designed: designStatus.designed,
+            detailPlanStatus: designStatus.status,
+            hasDetailPlan: designStatus.designed,
+            apiDesignMissingReason: designStatus.reason
           }
         })
       )

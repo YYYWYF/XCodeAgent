@@ -11,6 +11,7 @@ from app.graph.nodes.lifecycle import (
 )
 from app.graph.nodes.modification import direct_modification
 from app.graph.nodes.development_readiness import development_readiness_gate
+from app.graph.nodes.api_design import api_design, api_design_readiness_gate
 from app.graph.nodes.planning import entity_source_binding, project_planning
 from app.graph.nodes.product_planning import product_planning
 from app.graph.nodes.requirements import requirements
@@ -31,6 +32,8 @@ __all__ = [
     "build",
     "classify_request_complexity",
     "development_readiness_gate",
+    "api_design",
+    "api_design_readiness_gate",
     "direct_modification",
     "entity_source_binding",
     "finalize_project",

@@ -115,7 +115,8 @@ def verify_application_service_source(files: dict[str, str], expected: dict[str,
         repository_fields = {
             field.name for field in service.fields if _name_has_suffix(field.type_name, "Repository", "Mapper")
         }
-        if operations and not repository_fields:
+        requires_repository = any(operation.get("requires_repository") is True for operation in operations)
+        if requires_repository and not repository_fields:
             errors.append(f"ApplicationService {service.name} 未声明 Repository/Mapper 依赖。")
             continue
         for operation in operations:
@@ -132,6 +133,17 @@ def verify_application_service_source(files: dict[str, str], expected: dict[str,
                     errors.append(f"操作 {operation.get('endpoint_id')} 缺少 selector 字段 {field}。")
             if repository_fields and not any(call.object_name in repository_fields for call in method.calls):
                 errors.append(f"操作 {operation.get('endpoint_id')} 未调用 Repository/Mapper。")
+        for description in _dict_items(expected.get("business_descriptions")):
+            description_methods = [
+                method
+                for method in service.methods
+                if _behavior_token_present(method.identifiers, description.get("path"))
+            ]
+            if not description_methods:
+                errors.append(
+                    f"ApplicationService 未体现业务说明字段 {description.get('path') or description.get('mapping_id')}。"
+                )
+                continue
     if errors:
         return verification_result("failed", "；".join(errors), facts={"operation_count": len(operations)})
     return verification_result(
@@ -176,6 +188,13 @@ def verify_endpoint_source(files: dict[str, str], expected: dict[str, Any]) -> d
             errors.append(f"Controller 未委托 ApplicationService（{endpoint.get('endpoint_id')}）。")
         if repository_fields:
             errors.append("Controller 直接访问 Repository/Mapper，越过 ApplicationService。")
+        for description in _dict_items(expected.get("business_descriptions")):
+            if str(description.get("endpoint_id") or "") != str(endpoint.get("endpoint_id") or ""):
+                continue
+            if not _behavior_token_present(handler.identifiers, description.get("path")):
+                errors.append(
+                    f"Controller 未绑定业务说明字段 {description.get('path') or description.get('mapping_id')}。"
+                )
         checked.append({"endpoint_id": str(endpoint.get("endpoint_id") or ""), "method": method, "path": path})
     if errors:
         return verification_result("failed", "；".join(errors), facts={"endpoints": checked})
@@ -184,6 +203,13 @@ def verify_endpoint_source(files: dict[str, str], expected: dict[str, Any]) -> d
         "已通过 AST 验证 Controller method/path、DTO 和 Service 委托。",
         facts={"endpoints": checked},
     )
+
+
+def _behavior_token_present(identifiers: set[str], value: Any) -> bool:
+    """判断业务处理字段路径的末级标识是否出现在 Java 方法证据中。"""
+
+    token = str(value or "").strip().replace("[]", "").split(".")[-1]
+    return bool(token and token in identifiers)
 
 
 def verify_external_client_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
@@ -220,7 +246,7 @@ def verify_external_client_source(files: dict[str, str], expected: dict[str, Any
 
 
 def verify_external_mapping_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
-    """通过 AST 验证外部 source_field 到 entity_field 的同方法映射。"""
+    """通过 AST 验证 API 设计中外部字段到内部语义字段的同方法映射。"""
 
     model = _inspect_or_block(files)
     if isinstance(model, dict):
@@ -231,30 +257,37 @@ def verify_external_mapping_source(files: dict[str, str], expected: dict[str, An
         if _type_has_suffix(item, "Mapper", "Converter", "Assembler", "Adapter")
         for method in item.methods
     ]
+    all_methods = [method for item in model.types for method in item.methods]
     errors: list[str] = []
     mappings = 0
     entity_payload_apis = 0
     for api in _dict_items(expected.get("external_apis")):
         response_handling = _dict_value(api.get("response_handling"))
-        if response_handling.get("entity_payload") is not True:
+        field_mappings = _dict_items(api.get("field_mappings"))
+        if response_handling.get("entity_payload") is not True and not field_mappings:
             continue
         entity_payload_apis += 1
         payload_path = str(response_handling.get("payload_path") or "").strip()
         payload_segments = _source_path_segments(payload_path)
-        if payload_segments and not any(
+        if response_handling.get("entity_payload") is True and payload_segments and not any(
             payload_segments.issubset(method.identifiers)
             for method in mapping_methods
         ):
             errors.append(f"缺少外部 API 实体载荷路径解析：{payload_path}。")
-        for mapping in _dict_items(api.get("field_mappings")):
+        # 没有场景实体时，直连映射可能落在 Controller 或 Client 方法中，
+        # 因此使用全部方法作为证据范围；有实体时仍限定在转换层，避免误借业务方法。
+        candidate_methods = mapping_methods if response_handling.get("entity_payload") is True else all_methods
+        for mapping in field_mappings:
             source_field = str(mapping.get("source_field") or "")
             entity_field = str(mapping.get("entity_field") or "")
             if not source_field or not entity_field:
-                return verification_result("blocked", "正式外部 API field_mappings 缺少 source_field 或 entity_field。")
+                return verification_result("blocked", "Endpoint API 设计缺少外部字段或内部语义字段。")
             required = _source_path_segments(source_field)
-            required.add(entity_field)
-            if not any(required.issubset(method.identifiers) for method in mapping_methods):
-                errors.append(f"缺少外部字段到实体字段的同方法映射 {source_field} -> {entity_field}。")
+            # Endpoint 直连时 entity_field 也是路径（如 items[].status），必须拆成
+            # Java AST 可识别的逐级标识符，不能把整条路径当作一个变量名。
+            required.update(_source_path_segments(entity_field))
+            if not any(required.issubset(method.identifiers) for method in candidate_methods):
+                errors.append(f"缺少外部字段到内部语义字段的同方法映射 {source_field} -> {entity_field}。")
             mappings += 1
     if errors:
         return verification_result("failed", "；".join(errors), facts={"mapping_count": mappings})

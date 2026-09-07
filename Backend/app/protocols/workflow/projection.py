@@ -378,7 +378,7 @@ def _workflow_start_node(
     if resume_from == "inspect_database_context":
         return "prepare_build_tasks"
     supported = set(WORKFLOW_NODE_LABELS) - {"handle_failure"}
-    return resume_from if resume_from in supported else "development_readiness_gate"
+    return resume_from if resume_from in supported else "api_design_readiness_gate"
 
 
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
@@ -425,6 +425,16 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("status") == "requires_user_input":
             return []
         return ["inspect_workspace"]
+    if node_name == "api_design":
+        if update.get("status") == "requires_user_input":
+            return []
+        if update.get("status") == "completed":
+            return ["api_design_readiness_gate"]
+        return ["handle_failure"]
+    if node_name == "api_design_readiness_gate":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["inspect_workspace"]
     if node_name == "unit_test":
         if update.get("status") == "requires_user_input":
             return []
@@ -447,7 +457,7 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     if node_name == "project_planning":
         if update.get("status") == "requires_user_input":
             return []
-        return ["development_readiness_gate"]
+        return ["api_design_readiness_gate"]
     if node_name == "inspect_workspace":
         return ["prepare_build_tasks"]
     if node_name == "prepare_build_tasks":
@@ -751,6 +761,34 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "clarification": clarification,
                 "requiresUserInput": update.get("status") == "requires_user_input",
                 "developmentReadiness": update.get("development_readiness"),
+            },
+        }
+    if node_name == "api_design":
+        clarification = update.get("clarification")
+        waiting = update.get("status") == "requires_user_input"
+        return {
+            "message": (
+                "API 设计待确认。"
+                if waiting
+                else "API 设计已确认，正在继续当前 Endpoint 的 API 开发流程。"
+            ),
+            "data": {
+                "clarification": clarification,
+                "requiresUserInput": waiting,
+                "apiDesign": clarification.get("apiDesign") if isinstance(clarification, dict) else None,
+                "apiDesignDraft": update.get("api_design_draft"),
+                "apiDesignResult": update.get("api_design_result"),
+            },
+        }
+    if node_name == "api_design_readiness_gate":
+        clarification = update.get("clarification")
+        waiting = update.get("status") == "requires_user_input"
+        return {
+            "message": "存在未完成的 API 设计。" if waiting else "API 设计前置检查已通过。",
+            "data": {
+                "clarification": clarification,
+                "requiresUserInput": waiting,
+                "apiDesignReadiness": update.get("api_design_readiness"),
             },
         }
     if node_name == "entity_source_binding":
@@ -1347,6 +1385,9 @@ def _workflow_summary(
         "revisionDraft": result.get("revision_draft"),
         "revisionContinuation": result.get("revision_continuation"),
         "developmentContinuation": result.get("development_continuation"),
+        "apiDesignDraft": result.get("api_design_draft"),
+        "apiDesignResult": result.get("api_design_result"),
+        "apiDesignReadiness": result.get("api_design_readiness"),
         **({"buildSummary": build_summary} if build_summary else {}),
         "buildTaskPlan": result.get("build_task_plan", {}),
         "buildExecutionScope": result.get("build_execution_scope"),
@@ -1409,6 +1450,8 @@ def _workflow_user_input_message(
         "batch_review": "页面与数据源设计已生成，请确认后继续。",
         "entity_source_binding": "实体数据源绑定已生成，请确认后继续。",
         "entity_source_binding_required": "请先完成当前目标依赖实体的数据源绑定。",
+        "api_design": "API 设计草稿已准备，请完成动态映射并确认。",
+        "api_design_required": "请先完成当前目标依赖的 API 设计。",
         "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",
         "unit_test_confirmation": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
@@ -1567,9 +1610,9 @@ def _workflow_confirmation_artifact(
 
     artifact_contracts = {
         "requirement_document_confirmation": {
-            "phase": "product_planning",
-            "id": "requirement_document",
-            "name": "requirement-document",
+            "phase": "requirements",
+            "id": "requirement_spec",
+            "name": "requirement-spec.md",
             "path_field": "requirement_spec_path",
         },
         "project_plan_confirmation": {

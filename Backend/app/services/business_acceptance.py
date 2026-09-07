@@ -178,15 +178,16 @@ def business_acceptance_contract_errors(
     source_refs = _dict_value(task.get("source_refs"))
     entity_ids = set(_string_list(source_refs.get("entity_ids")))
     endpoint_ids = set(_string_list(source_refs.get("endpoint_ids")))
-    entity_designs = {
-        _text(item.get("entity_id"))
-        for item in _dict_items(source_refs.get("entity_designs"))
-        if _text(item.get("entity_id"))
+    endpoint_design_entity_ids = {
+        _text(entity.get("id"))
+        for design in _dict_items(source_refs.get("endpoint_designs"))
+        for entity in _dict_items(design.get("sceneEntities"))
+        if _text(entity.get("id"))
     }
-    if entity_ids and entity_designs and not entity_ids.issubset(entity_designs):
+    if entity_ids and endpoint_design_entity_ids and not entity_ids.issubset(endpoint_design_entity_ids):
         errors.append(
             f"Task {task_id} references entities outside its Unit: "
-            + ", ".join(sorted(entity_ids - entity_designs))
+            + ", ".join(sorted(entity_ids - endpoint_design_entity_ids))
             + "."
         )
 
@@ -227,9 +228,9 @@ def business_acceptance_contract_errors(
                 errors.append(
                     f"Business check {check_id or '<unknown>'} references endpoint {source_target} outside the Unit."
                 )
-            if artifact == "entity_design" and entity_ids and source_target not in entity_ids:
+            if artifact == "api_design" and endpoint_ids and source_target not in endpoint_ids:
                 errors.append(
-                    f"Business check {check_id or '<unknown>'} references entity {source_target} outside the Unit."
+                    f"Business check {check_id or '<unknown>'} references API design {source_target} outside the Unit."
                 )
             if artifact == "page_implementation_contract":
                 page_id = unit_id.split(":", 1)[1] if unit_id.startswith("page:") else ""
@@ -384,7 +385,7 @@ def _checks_for_deliverable(
                 task,
                 deliverable,
                 "backend.domain_mapping",
-                "后端 Entity、PO、DTO 与已确认实体字段和数据库列映射必须完整，并通过转换层衔接。",
+                "后端 Entity、PO、DTO 必须落实 Endpoint API 设计中的字段、实体语义引用和数据库列映射。",
                 [source for entity in entities for source in _entity_sources(formal, entity)]
                 + _api_sources(formal, endpoints),
                 {
@@ -394,7 +395,12 @@ def _checks_for_deliverable(
             )
         ]
     if kind == "backend.repository":
-        operations = _operation_expectations(formal)
+        # 无数据库 Source Field 的 Endpoint（例如纯分页/排序业务处理）不应生成 Repository 验收。
+        operations = [
+            operation
+            for operation in _operation_expectations(formal)
+            if operation.get("requires_repository") is True
+        ]
         entities = _selected_entities(formal)
         if not operations and not entities:
             return []
@@ -403,7 +409,7 @@ def _checks_for_deliverable(
                 task,
                 deliverable,
                 "backend.repository_contract",
-                "Repository/Mapper 必须按已确认实体绑定和 EndpointDetail 操作语义实现查询、分页及返回 cardinality。",
+                "Repository/Mapper 必须按 Endpoint API 设计中的数据库字段和处理逻辑实现访问语义。",
                 [source for entity in entities for source in _entity_sources(formal, entity)]
                 + _endpoint_detail_sources(formal),
                 {"entities": [_entity_expectation(entity) for entity in entities], "operations": operations},
@@ -411,7 +417,8 @@ def _checks_for_deliverable(
         ]
     if kind == "backend.application_service":
         operations = _operation_expectations(formal)
-        if not operations:
+        descriptions = _business_description_expectations(formal)
+        if not operations and not descriptions:
             return []
         endpoints = _endpoint_expectations(formal)
         return [
@@ -419,14 +426,15 @@ def _checks_for_deliverable(
                 task,
                 deliverable,
                 "backend.application_service_contract",
-                "ApplicationService 必须委托 Repository、执行已确认 operation 语义并保留事务边界。",
+                "ApplicationService 必须执行已确认 operation 语义和 Request 业务处理，并在需要时委托 Repository。",
                 _endpoint_detail_sources(formal) + _api_sources(formal, endpoints),
-                {"operations": operations, "endpoints": endpoints},
+                {"operations": operations, "endpoints": endpoints, "business_descriptions": descriptions},
             )
         ]
     if kind == "backend.endpoint_controller":
         endpoints = _endpoint_expectations(formal)
-        if not endpoints:
+        descriptions = _business_description_expectations(formal)
+        if not endpoints and not descriptions:
             return []
         return [
             _business_check(
@@ -435,7 +443,11 @@ def _checks_for_deliverable(
                 "backend.endpoint_contract",
                 "Controller 必须按 API Contract 暴露 method/path、绑定 DTO、返回约定状态码并委托 ApplicationService。",
                 _api_sources(formal, endpoints) + _endpoint_detail_sources(formal),
-                {"endpoints": endpoints, "operations": _operation_expectations(formal)},
+                {
+                    "endpoints": endpoints,
+                    "operations": _operation_expectations(formal),
+                    "business_descriptions": descriptions,
+                },
             )
         ]
     if kind == "backend.external_api_client":
@@ -469,7 +481,7 @@ def _checks_for_deliverable(
                 task,
                 deliverable,
                 "backend.external_api_mapping_contract",
-                "外部 API 返回字段必须按已确认 source_field 到 entity_field 的嵌套路径逐项映射。",
+                "外部 API 字段必须按 Endpoint API 设计映射到内部 API 字段和局部实体语义。",
                 [source for entity in designs for source in _entity_sources(formal, entity)]
                 + _api_sources(formal, endpoints),
                 {
@@ -546,33 +558,18 @@ def _formal_inputs(context: dict[str, Any], task: dict[str, Any]) -> dict[str, A
             (item for item in page_contracts if _text(item.get("pageId")) == target_id),
             {},
         )
-    endpoint_details = _dict_items(context.get("direct_endpoint_details"))
-    endpoint_details.extend(_dict_items(context.get("endpoint_details")))
-    endpoint_details.extend(_dict_items(project_plan.get("endpoint_detail_plans")))
-    if not endpoint_details:
-        endpoint_details.extend(_dict_items(executable.get("endpoint_detail_plans")))
-    endpoint_details = _unique_objects(endpoint_details, ("api_contract_id", "endpoint_id"))
-    task_entity_ids = set(_string_list(source_refs.get("entity_ids")))
-    context_entity_ids = set(_string_list(context.get("entity_ids")))
-    # Task 已经过 Unit 编译并携带精确实体子集；仅在任务没有实体声明时，
-    # 才回退到页面或 endpoint 的 BuildContext，避免单实体任务继承同页其他实体。
-    requested_entity_ids = set(task_entity_ids or context_entity_ids)
-    entity_details = [
-        item
-        for item in _dict_items(project_plan.get("entity_detail_plans"))
-        if _text(item.get("status")) == "confirmed"
-        and (not requested_entity_ids or _text(item.get("entity_id")) in requested_entity_ids)
-    ]
-    if not entity_details:
-        entity_details = [
-            item for item in _dict_items(context.get("formal_entity_designs"))
-            if not requested_entity_ids or _text(item.get("entity_id")) in requested_entity_ids
-        ]
+    endpoint_designs = _dict_items(source_refs.get("endpoint_designs"))
+    if not endpoint_designs:
+        endpoint_designs = _dict_items(context.get("endpoint_designs"))
+    if not endpoint_designs:
+        endpoint_designs = _dict_items(executable.get("endpoint_designs"))
+    entity_details = _entities_from_endpoint_designs(endpoint_designs)
     return {
         "project_plan": project_plan,
         "contracts": contracts,
         "page_contract": page_contract,
-        "endpoint_details": endpoint_details,
+        "endpoint_details": [],
+        "endpoint_designs": endpoint_designs,
         "entity_details": entity_details,
         "endpoint_ids": endpoint_ids,
         "api_contract_ids": sorted(api_contract_ids),
@@ -623,39 +620,272 @@ def _required_endpoint_ids(formal: dict[str, Any]) -> list[str]:
 
 
 def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
-    """从 EndpointDetail 提取可转换为确定性断言的操作语义。"""
+    """从 Endpoint API 设计提取可转换为确定性断言的操作语义。"""
 
     result: list[dict[str, Any]] = []
-    for detail in _dict_items(formal.get("endpoint_details")):
-        decision = _dict_value(detail.get("endpoint_decision"))
-        semantics = _dict_value(decision.get("operation_semantics"))
-        interface = _dict_value(detail.get("interface_design"))
-        response = _dict_value(interface.get("response_format"))
-        if not semantics and not response:
-            continue
-        selector = _dict_value(semantics.get("selector"))
+    for design in _dict_items(formal.get("endpoint_designs")):
+        endpoint = _dict_value(design.get("endpointContract"))
+        method = _text(endpoint.get("method"), "GET").upper()
+        field_mappings = _dict_items(design.get("fieldMappings"))
+        response_is_collection = any(
+            _dict_value(mapping.get("endpointField")).get("side") == "response"
+            and "[]" in _text(_dict_value(mapping.get("endpointField")).get("path"))
+            for mapping in field_mappings
+        )
+        operation_kind = {
+            "POST": "create",
+            "PUT": "update",
+            "PATCH": "update",
+            "DELETE": "delete",
+        }.get(method, "list" if response_is_collection else "read")
+        source_fields = [
+            _dict_value(mapping.get("sourceField"))
+            for mapping in field_mappings
+            if _dict_value(mapping.get("sourceField"))
+        ]
+        database_fields = [
+            field for field in source_fields if field.get("sourceType") == "database"
+        ]
+        selector_fields = [field for field in database_fields if field.get("usage") == "filter"]
         result.append(
             {
-                "api_contract_id": _text(detail.get("api_contract_id")),
-                "endpoint_id": _text(detail.get("endpoint_id")),
-                "operation_kind": _text(semantics.get("operation_kind")),
-                "target_cardinality": _text(semantics.get("target_cardinality")),
+                "api_contract_id": _text(design.get("apiContractId")),
+                "endpoint_id": _text(design.get("endpointId")),
+                "operation_kind": operation_kind,
+                "target_cardinality": "collection" if response_is_collection else "object",
                 "selector": {
-                    "source": _text(selector.get("source")),
-                    "fields": _dedupe_strings(selector.get("fields")),
+                    "source": "endpoint_api_design",
+                    "fields": _dedupe_strings([field.get("column") for field in selector_fields]),
                 },
-                "transaction_required": bool(semantics.get("transaction_required")),
-                "zero_match_behavior": _text(semantics.get("zero_match_behavior")),
-                "multiple_match_behavior": _text(semantics.get("multiple_match_behavior")),
-                "success_status_code": semantics.get("success_status_code") or response.get("status_code"),
-                "side_effect": _text(semantics.get("side_effect"), "none"),
+                "transaction_required": any(field.get("usage") == "write" for field in database_fields)
+                and method not in {"GET", "HEAD"},
+                "zero_match_behavior": "confirmed_processing_logic",
+                "multiple_match_behavior": "confirmed_processing_logic",
+                "success_status_code": endpoint.get("successStatusCode"),
+                "side_effect": "write" if method not in {"GET", "HEAD"} else "none",
+                "processing_logic": _mapping_descriptions(design),
+                "requires_repository": bool(database_fields),
             }
         )
     return result[:_MAX_ITEMS]
 
 
+def _business_description_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
+    """提取 Request/Response 字段的一句话业务说明。"""
+
+    result: list[dict[str, Any]] = []
+    for design in _dict_items(formal.get("endpoint_designs")):
+        for mapping in _dict_items(design.get("fieldMappings")):
+            if mapping.get("mappingType") != "business_description":
+                continue
+            endpoint = _dict_value(mapping.get("endpointField"))
+            result.append(
+                {
+                    "api_contract_id": _text(design.get("apiContractId")),
+                    "endpoint_id": _text(design.get("endpointId")),
+                    "path": _text(endpoint.get("path")),
+                    "location": _text(endpoint.get("location")),
+                    "side": _text(endpoint.get("side")),
+                    "description": _text(mapping.get("businessDescription")),
+                }
+            )
+    return result[:_MAX_ITEMS]
+
+
+def _entities_from_endpoint_designs(
+    designs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """把自包含字段映射投射为确定性 Java 验收器可消费的场景实体视图。"""
+
+    result: list[dict[str, Any]] = []
+    for design in designs:
+        endpoint_id = _text(design.get("endpointId"))
+        contract_id = _text(design.get("apiContractId"))
+        mappings = _dict_items(design.get("fieldMappings"))
+        for entity in _dict_items(design.get("sceneEntities")):
+            entity_id = _text(entity.get("id"))
+            entity_mappings = [
+                mapping
+                for mapping in mappings
+                if mapping.get("mappingType") == "through_entity"
+                and _text(_dict_value(mapping.get("entityField")).get("entityId")) == entity_id
+            ]
+            fields = []
+            for field in _dict_items(entity.get("fields")):
+                field_name = _text(field.get("name"))
+                if not field_name:
+                    continue
+                field_mappings = [
+                    mapping
+                    for mapping in entity_mappings
+                    if _text(_dict_value(mapping.get("entityField")).get("fieldId"))
+                    == _text(field.get("id"))
+                ]
+                fields.append(
+                    {
+                        "name": field_name,
+                        "type": _text(field.get("type"), "unknown"),
+                        "required": bool(field.get("required")),
+                        "source_types": _dedupe_strings(
+                            [
+                                _dict_value(mapping.get("sourceField")).get("sourceType")
+                                for mapping in field_mappings
+                                if _dict_value(mapping.get("sourceField"))
+                            ]
+                        ),
+                    }
+                )
+            database_bindings = [
+                {
+                    "entity_field": _text(_dict_value(mapping.get("entityField")).get("path")),
+                    "table": _text(_dict_value(mapping.get("sourceField")).get("table")),
+                    "table_column": _text(_dict_value(mapping.get("sourceField")).get("column")),
+                    "rule": "",
+                }
+                for mapping in entity_mappings
+                if _dict_value(mapping.get("sourceField")).get("sourceType") == "database"
+            ]
+            external_operations = _external_operations_from_field_mappings(
+                design,
+                entity_mappings,
+                contract_id,
+                endpoint_id,
+                entity_payload=True,
+            )
+            source_types = {
+                _text(_dict_value(mapping.get("sourceField")).get("sourceType"))
+                for mapping in entity_mappings
+                if _text(_dict_value(mapping.get("sourceField")).get("sourceType"))
+            }
+            result.append(
+                {
+                    "entity_id": entity_id,
+                    "entity_name": _text(entity.get("name"), entity_id),
+                    "fields": fields,
+                    "data_source_type": (
+                        "database"
+                        if "database" in source_types
+                        else "external_api"
+                        if "external_api" in source_types
+                        else "static"
+                    ),
+                    "database_design": {
+                        "matched_table": _text(database_bindings[0].get("table"))
+                        if database_bindings
+                        else "",
+                        "bindings": database_bindings,
+                    },
+                    "external_api_design": {"operations": external_operations}
+                    if external_operations
+                    else {},
+                    "endpoint_api_design": design,
+                }
+            )
+    return result[:_MAX_ITEMS]
+
+
+def _mapping_descriptions(design: dict[str, Any]) -> list[str]:
+    """提取字段映射中的一句话业务说明。"""
+
+    return _dedupe_strings(
+        [
+            mapping.get("businessDescription")
+            for mapping in _dict_items(design.get("fieldMappings"))
+            if mapping.get("mappingType") == "business_description"
+        ]
+    )
+
+
+def _external_operations_from_field_mappings(
+    design: dict[str, Any],
+    mappings: list[dict[str, Any]],
+    contract_id: str,
+    endpoint_id: str,
+    *,
+    entity_payload: bool,
+) -> list[dict[str, Any]]:
+    """按自包含字段映射汇总外部 Operation 验收事实。"""
+
+    snapshots = {
+        (
+            _text(item.get("sourceId")),
+            _text(_dict_value(item.get("details")).get("directoryId")),
+            _text(
+                _dict_value(item.get("details")).get("operationId")
+                or _dict_value(_dict_value(item.get("details")).get("operation")).get("operationId")
+                or _dict_value(_dict_value(item.get("details")).get("operation")).get("id")
+            ),
+        ): item
+        for item in _dict_items(design.get("sourceSnapshots"))
+        if item.get("sourceType") == "external_api"
+    }
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for mapping in mappings:
+        source_field = _dict_value(mapping.get("sourceField"))
+        if source_field.get("sourceType") != "external_api":
+            continue
+        key = (
+            _text(source_field.get("sourceId")),
+            _text(source_field.get("directoryId")),
+            _text(source_field.get("operationId")),
+        )
+        groups.setdefault(key, []).append(mapping)
+    result: list[dict[str, Any]] = []
+    for (source_id, directory_id, operation_id), grouped_mappings in groups.items():
+        snapshot = _dict_value(snapshots.get((source_id, directory_id, operation_id)))
+        details = _dict_value(snapshot.get("details"))
+        operation = _dict_value(details.get("operation"))
+        connection = _dict_value(details.get("connection"))
+        effective_headers = {
+            _text(header.get("name")).casefold(): dict(header)
+            for header in _dict_items(connection.get("headers"))
+            if _text(header.get("name"))
+        }
+        for header in _dict_items(operation.get("headers")):
+            name = _text(header.get("name"))
+            if name:
+                effective_headers[name.casefold()] = dict(header)
+        result.append(
+            {
+                "operation_id": operation_id,
+                "name": operation.get("name") or operation_id,
+                "endpoint_refs": [{"api_contract_id": contract_id, "endpoint_id": endpoint_id}],
+                "api_info": {
+                    "method": operation.get("method"),
+                    "path": operation.get("path"),
+                    "parameters": [
+                        *_dict_items(operation.get("pathParameters")),
+                        *_dict_items(operation.get("queryParameters")),
+                    ],
+                    "headers": list(effective_headers.values()),
+                    "request_body": operation.get("requestStructure"),
+                    "response_body": operation.get("responseStructure"),
+                },
+                "effective_connection": {
+                    "base_url": connection.get("baseUrl"),
+                    "base_url_config_key": connection.get("baseUrlConfigKey"),
+                    "timeout_ms": connection.get("timeoutMs"),
+                    "headers": list(effective_headers.values()),
+                },
+                "response_handling": {"entity_payload": entity_payload, "payload_path": ""},
+                "field_mappings": [
+                    {
+                        "entity_field": _text(
+                            _dict_value(mapping.get("entityField")).get("path")
+                            or _dict_value(mapping.get("endpointField")).get("path")
+                        ),
+                        "source_field": _text(_dict_value(mapping.get("sourceField")).get("path")),
+                        "rule": "",
+                    }
+                    for mapping in grouped_mappings
+                ],
+            }
+        )
+    return result
+
+
 def _selected_entities(formal: dict[str, Any]) -> list[dict[str, Any]]:
-    """按任务实体范围返回完整已确认实体设计。"""
+    """返回从当前 Endpoint API 设计投射出的局部实体验收视图。"""
 
     return _dict_items(formal.get("entity_details"))[:_MAX_ITEMS]
 
@@ -668,15 +898,41 @@ def _primary_entity(formal: dict[str, Any]) -> dict[str, Any]:
 
 
 def _external_designs(formal: dict[str, Any]) -> list[dict[str, Any]]:
-    """筛选包含完整 external_api_design 的已确认实体设计。"""
+    """筛选包含外部 API 来源的 Endpoint 局部实体或直连映射视图。"""
 
-    return [
+    result = [
         entity
         for entity in _selected_entities(formal)
         if _dict_value(entity.get("external_api_design"))
     ]
-
-
+    for design in _dict_items(formal.get("endpoint_designs")):
+        direct_mappings = [
+            mapping
+            for mapping in _dict_items(design.get("fieldMappings"))
+            if mapping.get("mappingType") == "direct_source"
+            and _dict_value(mapping.get("sourceField")).get("sourceType") == "external_api"
+        ]
+        if not direct_mappings:
+            continue
+        contract_id = _text(design.get("apiContractId"))
+        endpoint_id = _text(design.get("endpointId"))
+        result.append(
+            {
+                "entity_id": f"endpoint:{contract_id}:{endpoint_id}",
+                "entity_name": f"Endpoint {endpoint_id}",
+                "external_api_design": {
+                    "operations": _external_operations_from_field_mappings(
+                        design,
+                        direct_mappings,
+                        contract_id,
+                        endpoint_id,
+                        entity_payload=False,
+                    )
+                },
+                "endpoint_api_design": design,
+            }
+        )
+    return result
 def _entity_expectation(entity: dict[str, Any]) -> dict[str, Any]:
     """投射实体字段、类型、必填性和数据库绑定。"""
 
@@ -702,6 +958,7 @@ def _entity_expectation(entity: dict[str, Any]) -> dict[str, Any]:
                 "type": _text(field.get("type"), "text"),
                 "required": bool(field.get("required")),
                 "enum_values": _dedupe_strings(field.get("enum_values")),
+                "source_types": _dedupe_strings(field.get("source_types")),
             }
             for field in _dict_items(entity.get("fields"))[:_MAX_ITEMS]
             if _text(field.get("name"))
@@ -744,7 +1001,10 @@ def _external_api_expectations(
             continue
         effective_headers = {
             _text(header.get("name")).casefold(): dict(header)
-            for header in _dict_items(connection.get("headers"))
+            for header in [
+                *_dict_items(connection.get("headers")),
+                *_dict_items(effective.get("headers")),
+            ]
             if _text(header.get("name"))
         }
         for header in _dict_items(api_info.get("headers")):
@@ -764,8 +1024,7 @@ def _external_api_expectations(
                     "path": _text(api_info.get("path")),
                     "timeout_ms": effective.get("timeout_ms") or override.get("timeout_ms") or connection.get("timeout_ms"),
                     "parameters": _dict_items(api_info.get("parameters"))[:_MAX_ITEMS],
-                    "headers": _dict_items(effective.get("headers"))[:_MAX_ITEMS]
-                    or list(effective_headers.values())[:_MAX_ITEMS],
+                    "headers": list(effective_headers.values())[:_MAX_ITEMS],
                     "request_body": api_info.get("request_body"),
                     "response_body": api_info.get("response_body"),
                 },
@@ -784,10 +1043,12 @@ def _external_api_expectations(
 
 
 def _entity_sources(formal: dict[str, Any], entity: dict[str, Any]) -> list[dict[str, Any]]:
-    """为实体设计生成带完整内容哈希的正式来源引用。"""
+    """为 Endpoint 局部实体语义生成 API 设计来源引用。"""
 
     entity_id = _text(entity.get("entity_id"))
-    return [_source("entity_design", entity_id, f"/entity_detail_plans/{entity_id}", entity)]
+    endpoint_design = _dict_value(entity.get("endpoint_api_design"))
+    endpoint_id = _text(endpoint_design.get("endpointId")) or entity_id
+    return [_source("api_design", endpoint_id, f"/endpoint_designs/{endpoint_id}", endpoint_design)]
 
 
 def _api_sources(formal: dict[str, Any], endpoints: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -832,46 +1093,18 @@ def _page_sources(formal: dict[str, Any], endpoints: list[dict[str, Any]]) -> li
 
 
 def _endpoint_detail_sources(formal: dict[str, Any]) -> list[dict[str, Any]]:
-    """为当前 EndpointDetail 切片生成正式来源引用，优先使用外置 sha256。"""
+    """为当前 Endpoint API 设计生成正式来源引用。"""
 
-    ref_by_id = {
-        _text(item.get("id")): item
-        for item in _dict_items(_dict_value(formal.get("source_refs")).get("endpoint_details"))
-        if _text(item.get("id"))
-    }
-    result: list[dict[str, Any]] = []
-    for detail in _dict_items(formal.get("endpoint_details")):
-        endpoint_id = _text(detail.get("endpoint_id"))
-        if not endpoint_id:
-            continue
-        ref = ref_by_id.get(endpoint_id, {})
-        preferred_hash = _text(ref.get("sha256")) or _endpoint_reference_hash(
-            formal,
-            endpoint_id,
+    return [
+        _source(
+            "api_design",
+            _text(design.get("endpointId")),
+            f"/endpoint_designs/{_text(design.get('endpointId'))}",
+            design,
         )
-        result.append(
-            _source(
-                "endpoint_detail",
-                endpoint_id,
-                f"/endpoint_detail_plans/{endpoint_id}",
-                detail,
-                preferred_hash=preferred_hash,
-            )
-        )
-    return result
-
-
-def _endpoint_reference_hash(formal: dict[str, Any], endpoint_id: str) -> str:
-    """读取 API Contract 中 EndpointDetail 的当前正式引用哈希。"""
-
-    for contract in _dict_items(formal.get("contracts")):
-        for endpoint in _dict_items(contract.get("endpoints")):
-            if _text(endpoint.get("id")) != endpoint_id:
-                continue
-            detail_ref = endpoint.get("detail_design")
-            if isinstance(detail_ref, dict) and _text(detail_ref.get("sha256")):
-                return _text(detail_ref.get("sha256"))
-    return ""
+        for design in _dict_items(formal.get("endpoint_designs"))
+        if _text(design.get("endpointId"))
+    ]
 
 
 def _source(

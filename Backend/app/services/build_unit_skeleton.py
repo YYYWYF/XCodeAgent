@@ -7,91 +7,19 @@ from hashlib import sha256
 import json
 from typing import Any
 
-from app.services.entity_definitions import plan_data_sources
 from app.services.frontend_page_tree import project_plan_page_records
 
 
 def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
-    """按数据源类型选择公共 Unit，bootstrap 服务数据库或外部 API 后端能力。"""
+    """返回 Endpoint API 设计旅程固定需要的公共 Unit。"""
 
-    source_types = {
-        str(source.get("type") or "")
-        for source in plan_data_sources(project_plan)
-    }
-    units = ["frontend:shell"]
-    if not (source_types and source_types <= {"static"}):
-        units.append("frontend:api-client")
-    units.append("frontend:auth-guard")
-    if source_types & {"database", "external_api"}:
-        units.append("backend:bootstrap")
-    units.append("app:integration")
-    return tuple(units)
-
-
-def _source_type_map(project_plan: dict[str, Any]) -> dict[str, str]:
-    """建立数据源 id 到类型的映射，供按源构建 Unit。"""
-
-    return {
-        str(source.get("id") or ""): str(source.get("type") or "")
-        for source in plan_data_sources(project_plan)
-        if source.get("id")
-    }
-
-
-def _string_items(value: Any) -> list[str]:
-    """把未知值收窄为去重后的非空字符串列表。"""
-
-    if not isinstance(value, list):
-        return []
-    result: list[str] = []
-    for item in value:
-        text = str(item or "").strip()
-        if text and text not in result:
-            result.append(text)
-    return result
-
-
-def _entity_to_source_map(project_plan: dict[str, Any]) -> dict[str, str]:
-    """建立实体 id 到数据源 id 的映射，契约通过 entity_ids 反查数据源。"""
-
-    result: dict[str, str] = {}
-    for source in plan_data_sources(project_plan):
-        source_id = str(source.get("id") or "")
-        for entity in _dict_items(source.get("entities")):
-            entity_id = str(entity.get("id") or "")
-            if entity_id and entity_id not in result:
-                result[entity_id] = source_id
-    return result
-
-
-def _contract_source_ids(
-    project_plan: dict[str, Any],
-    contracts: list[dict[str, Any]],
-) -> dict[str, str]:
-    """按契约 entity_ids 反查所属数据源类型；混合实体源时优先数据库/外部 API。"""
-
-    entity_to_source = _entity_to_source_map(project_plan)
-    result: dict[str, str] = {}
-    for contract in contracts:
-        contract_id = str(contract.get("id") or "")
-        source_ids = [
-            entity_to_source[entity_id]
-            for entity_id in _string_items(contract.get("entity_ids"))
-            if entity_id in entity_to_source
-        ]
-        source_id = _preferred_source_id(source_ids)
-        if contract_id:
-            result[contract_id] = source_id
-    return result
-
-
-def _preferred_source_id(source_ids: list[str]) -> str:
-    """按 数据库 > 外部 API > 静态 的顺序选取契约级数据源标识。"""
-
-    for preferred in ("database", "external_api", "static"):
-        if preferred in source_ids:
-            return preferred
-    return source_ids[0] if source_ids else ""
+    return (
+        "frontend:shell",
+        "frontend:api-client",
+        "frontend:auth-guard",
+        "backend:bootstrap",
+        "app:integration",
+    )
 
 
 def ensure_build_unit_skeleton(
@@ -152,22 +80,8 @@ def _build_units(
     """从确认计划构造公共、静态数据、endpoint 和页面 Unit，并保留已有状态。"""
 
     existing = existing_units if isinstance(existing_units, dict) else {}
-    source_type_map = _source_type_map(project_plan)
     unit_ids = ["application:root", *_public_unit_ids(project_plan)]
-    for source_id, source_type in source_type_map.items():
-        if source_type == "static":
-            unit_ids.append(f"frontend:data:{source_id}")
-        # database 已在实体确认阶段落库，external_api 由 endpoint Unit 承载。
-    unit_ids.extend(
-        _endpoint_unit_ids(
-            project_plan.get("api_contracts"),
-            source_type_map,
-            _contract_source_ids(
-                project_plan,
-                _dict_items(project_plan.get("api_contracts")),
-            ),
-        )
-    )
+    unit_ids.extend(_endpoint_unit_ids(project_plan.get("api_contracts")))
     unit_ids.extend(
         f"page:{page_id}"
         for page_id in _ids(project_plan_page_records(project_plan), "pageId")
@@ -220,9 +134,6 @@ def _unit_graph(
     edges: list[dict[str, str]] = []
     errors: list[str] = []
     public_unit_ids = _public_unit_ids(project_plan)
-    source_type_map = _source_type_map(project_plan)
-    source_types = set(source_type_map.values())
-    all_static = bool(source_types) and source_types <= {"static"}
     for public_unit_id in public_unit_ids:
         if public_unit_id != "app:integration":
             edges.append(
@@ -234,33 +145,13 @@ def _unit_graph(
             )
 
     contracts = _dict_items(project_plan.get("api_contracts"))
-    contract_source_ids = _contract_source_ids(project_plan, contracts)
-    contract_source_types = {
-        str(contract.get("id") or ""): source_type_map.get(
-            contract_source_ids.get(str(contract.get("id") or ""), ""),
-            "",
-        )
-        for contract in contracts
-    }
     page_contracts_by_id = {
         str(contract.get("pageId") or contract.get("id")): contract
         for contract in _dict_items(project_plan.get("page_implementation_contracts"))
         if contract.get("pageId") or contract.get("id")
     }
-    for source_id, source_type in source_type_map.items():
-        if source_type == "static":
-            source_unit_id = f"frontend:data:{source_id}"
-        else:
-            continue
-        edges.append(
-            {"from": "application:root", "to": source_unit_id, "type": "contains"}
-        )
-
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
-        contract_source_type = contract_source_types.get(contract_id)
-        if contract_source_type not in {"database", "external_api"}:
-            continue
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "")
             if not contract_id or not endpoint_id:
@@ -270,8 +161,7 @@ def _unit_graph(
                 errors.append(f"API contract {contract_id} endpoint {endpoint_id} has no Unit.")
                 continue
             edges.append({"from": "application:root", "to": endpoint_unit_id, "type": "contains"})
-            if contract_source_type in {"database", "external_api"}:
-                edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
+            edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
             edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
 
     for page in project_plan_page_records(project_plan):
@@ -282,7 +172,7 @@ def _unit_graph(
         edges.append({"from": "application:root", "to": page_unit_id, "type": "contains"})
         for public_unit_id in (
             "frontend:shell",
-            *([] if all_static else ["frontend:api-client"]),
+            "frontend:api-client",
         ):
             edges.append({"from": public_unit_id, "to": page_unit_id, "type": "depends_on"})
         if _page_requires_auth(page):
@@ -294,24 +184,7 @@ def _unit_graph(
             page_contracts_by_id.get(page_id),
         )
         endpoint_unit_ids = _page_endpoint_unit_ids(dependency_source, contracts)
-        static_endpoint_unit_ids = [
-            unit_id
-            for unit_id in endpoint_unit_ids
-            if contract_source_types.get(unit_id.removeprefix("backend:endpoint:").split(":", 1)[0])
-            == "static"
-        ]
-        backend_endpoint_unit_ids = [
-            unit_id
-            for unit_id in endpoint_unit_ids
-            if contract_source_types.get(unit_id.removeprefix("backend:endpoint:").split(":", 1)[0])
-            in {"database", "external_api"}
-        ]
-        for source_unit_id in _page_static_source_unit_ids(
-            static_endpoint_unit_ids,
-            contract_source_ids,
-        ):
-            edges.append({"from": source_unit_id, "to": page_unit_id, "type": "depends_on"})
-        for endpoint_unit_id in backend_endpoint_unit_ids:
+        for endpoint_unit_id in endpoint_unit_ids:
             if endpoint_unit_id not in build_units:
                 errors.append(f"Page {page_id} references unknown endpoint Unit {endpoint_unit_id}.")
                 continue
@@ -365,7 +238,7 @@ def _skeleton_fingerprint(
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),
         "pages": project_plan_page_records(project_plan),
-        "data_sources": plan_data_sources(project_plan),
+        "endpoint_api_design_policy": "endpoint-field-mapping.v1",
         "api_contracts": project_plan.get("api_contracts"),
         "workspace_revision": (workspace_snapshot or {}).get("workspace_revision"),
         "tech_stack": (workspace_snapshot or {}).get("tech_stack"),
@@ -389,20 +262,13 @@ def _ids(value: Any, key: str) -> list[str]:
 
 def _endpoint_unit_ids(
     value: Any,
-    source_type_map: dict[str, str],
-    contract_source_ids: dict[str, str],
 ) -> list[str]:
-    """从 API 契约清单中生成后端 endpoint Unit ID（数据库与外部 API 源）。"""
+    """从 API 契约清单中为每个 Endpoint 生成后端 Unit ID。"""
 
     result: list[str] = []
     for contract in _dict_items(value):
         contract_id = str(contract.get("id") or "")
         if not contract_id:
-            continue
-        if source_type_map.get(contract_source_ids.get(contract_id, "")) not in {
-            "database",
-            "external_api",
-        }:
             continue
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "")
@@ -458,22 +324,6 @@ def _page_endpoint_unit_ids(
         for endpoint_id in dict.fromkeys(endpoint_ids)
         if endpoint_id in endpoint_to_contract
     ]
-
-
-def _page_static_source_unit_ids(
-    endpoint_unit_ids: list[str],
-    contract_source_ids: dict[str, str],
-) -> list[str]:
-    """把页面契约依赖映射为 Static 前端数据模块 Unit。"""
-
-    source_ids = [
-        contract_source_ids.get(
-            unit_id.removeprefix("backend:endpoint:").split(":", 1)[0],
-            "",
-        )
-        for unit_id in endpoint_unit_ids
-    ]
-    return [f"frontend:data:{source_id}" for source_id in dict.fromkeys(source_ids) if source_id]
 
 
 def _page_requires_auth(page: dict[str, Any]) -> bool:
