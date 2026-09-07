@@ -53,7 +53,7 @@ async def regenerate_pending_build_task_plan(
     publish: SnapshotPublisher | None = None,
     planning_run_id_factory: Callable[[], str] | None = None,
 ) -> RegeneratePendingResult:
-    """消费精确旧 Pending，并从刚重载的 Formal 输入启动全新串行 PlanningRun。
+    """消费精确旧 Pending，并从刚重载的 Formal 输入启动全新有限并发 PlanningRun。
 
     删除旧 Pending 是不可回滚的生命周期提交点。其后 Formal/input reload、Planning、
     模型调用或新 Pending 写入任一步失败，都向调用方传播异常且绝不恢复旧草稿。

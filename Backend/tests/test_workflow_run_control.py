@@ -5,7 +5,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.protocols.workflow.run_control import build_workflow_plan_control_ag_ui_stream
+from app.protocols.workflow.run_control import (
+    build_workflow_cancellation_ag_ui_stream,
+    build_workflow_plan_control_ag_ui_stream,
+)
 
 
 class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
@@ -60,6 +63,26 @@ class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
             stop.assert_called_once_with(directory, run_id="run-active")
             abandon.assert_not_called()
             self.assertTrue(frames)
+
+    async def test_workflow_cancel_does_not_call_pending_abandon(self) -> None:
+        """Workflow task cancellation 只取消活动运行，不删除 PendingPlan。"""
+
+        stream = build_workflow_cancellation_ag_ui_stream(
+            thread_id="thread-control",
+            run_id="cancel-request",
+            target_run_id="run-active",
+        )
+        with patch(
+            "app.protocols.workflow.run_control.workflow_run_registry.cancel",
+            return_value=True,
+        ) as cancel, patch(
+            "app.protocols.workflow.run_control.abandon_pending_build_task_plan",
+        ) as abandon:
+            frames = [frame async for frame in stream]
+
+        cancel.assert_called_once_with("run-active")
+        abandon.assert_not_called()
+        self.assertIn("cancel_requested", "".join(frames))
 
 
 if __name__ == "__main__":

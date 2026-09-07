@@ -4,6 +4,9 @@
 非法转换抛出 IllegalPlanningTransition，原状态保持不变。
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
+
 from app.services.global_issue_attribution import GlobalRepairDecision
 from app.services.planning_issues import ValidationIssue, dedupe_issues, group_issues_by_retry_unit
 from app.services.planning_run_contracts import PlanningRun, UnitRoundHistory, UnitRunState
@@ -33,6 +36,31 @@ def _unit(run: PlanningRun, unit_id: str) -> UnitRunState:
 
     _require(unit_id in run.unit_states, "Unit 不属于当前 PlanningRun。")
     return run.unit_states[unit_id]
+
+
+def active_attempt_registry(run: PlanningRun) -> Mapping[str, AttemptIdentity]:
+    """投影活动 Run 中每个 Unit 当前唯一的在途 Attempt。"""
+
+    snapshot = PlanningRun.model_validate(run)
+    if snapshot.status != "active":
+        return MappingProxyType({})
+    return MappingProxyType({
+        unit_id: unit.expected_identity
+        for unit_id, unit in snapshot.unit_states.items()
+        if unit.expected_identity is not None
+    })
+
+
+def accepts_attempt(run: PlanningRun, result_identity: AttemptIdentity) -> bool:
+    """仅当 Run 活动且 Unit 仍精确等待该 Attempt 时接纳结果。"""
+
+    try:
+        identity = AttemptIdentity.model_validate(result_identity)
+    except (TypeError, ValueError):
+        return False
+    expected = active_attempt_registry(run).get(identity.unit_id)
+    # attempt_id 是调度身份；同时核对完整身份以拒绝伪造的 Run/round/Local 计数。
+    return expected is not None and expected == identity
 
 
 def _apply(run: PlanningRun, *, at: str, unit: UnitRunState | None = None, **changes) -> PlanningRun:

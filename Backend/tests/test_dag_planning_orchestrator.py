@@ -1,4 +1,4 @@
-"""T6.4 全新串行链路集成 Gate，模型传输替身之外均使用真实服务。"""
+"""T6.4/T9.2 全新有限并发链路集成 Gate，模型传输替身之外均使用真实服务。"""
 
 import json
 import tempfile
@@ -22,7 +22,7 @@ from tests.test_unit_generation_contracts import _policy_payload
 from tests.test_unit_generation_orchestrator import _settings
 
 
-class SequentialPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
+class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         """使用临时工作区记录模型调用、冻结 Context 与已发布阶段。"""
 
@@ -60,7 +60,7 @@ class SequentialPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         return result
 
     async def _plan(self, inputs, **kwargs):
-        """调用正式串行 API；唯一替身是单次模型工厂返回的固定传输响应。"""
+        """调用正式有限并发 API；唯一替身是单次模型工厂返回的固定传输响应。"""
 
         async def publish(projection):
             """只记录轻量 Controller 投影，便于核对阶段与预算。"""
@@ -103,8 +103,8 @@ class SequentialPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(path.read_bytes(), payload)
         return verify
 
-    async def test_a_once_b_twice_c_once_with_real_local_retry(self):
-        """A 首次成功后 B 的 Local 错误只重试 B；C 独立首次成功。"""
+    async def test_a_once_b_twice_c_once_with_retry_at_queue_tail(self):
+        """A/C 首次成功，B 的 Local retry 回到首批 A/B/C 后面的队尾。"""
 
         inputs = planning_inputs()
         before = inputs.model_dump_json()
@@ -113,7 +113,7 @@ class SequentialPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         result = await self._plan(inputs)
         self.assertIsInstance(result, ValidatedAssembledPlan)
         self.assertEqual(Counter(job.identity.unit_id for job, _ in self.calls), {"page:a": 1, "page:b": 2, "page:c": 1})
-        self.assertEqual([job.identity.unit_id for job, _ in self.calls], ["page:a", "page:b", "page:b", "page:c"])
+        self.assertEqual([job.identity.unit_id for job, _ in self.calls], ["page:a", "page:b", "page:c", "page:b"])
         self.assertEqual(result.planning_run.global_repair_round, 0)
         self.assertEqual(result.planning_run.phase, "validating")
         self.assertIn(("global_check", 0), self.phases)
@@ -122,7 +122,7 @@ class SequentialPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("confirmation_status", result.assembly.assembled_plan)
         self.assertEqual(before, inputs.model_dump_json())
         # B 两个 Attempt 复用同一冻结输入；Context 不携带 A/C 的当前候选正文。
-        self.assertEqual(self.calls[1][0].context, self.calls[2][0].context)
+        self.assertEqual(self.calls[1][0].context, self.calls[3][0].context)
         for job, _ in self.calls:
             for other in ("page:a", "page:b", "page:c"):
                 if other != job.identity.unit_id:
@@ -182,8 +182,8 @@ class SequentialPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plain_json(result.assembly.assembled_plan["task_registry"]), baseline["task_registry"])
         self.assertEqual(result.planning_run.global_repair_round, 0)
 
-    async def test_infrastructure_failure_is_fatal_without_formal_writes(self):
-        """A 传输失败即停止，B/C 不调用，Local/Global 不做基础设施重试。"""
+    async def test_infrastructure_failure_has_no_content_retry_or_formal_writes(self):
+        """首批 sibling 可已启动，但基础设施失败不进入内容重试或正式写入。"""
 
         self.offline = True
         verify = self._assert_formal_untouched()
@@ -192,7 +192,10 @@ class SequentialPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         state = caught.exception.snapshot
         self.assertEqual((state.status, state.global_repair_round), ("failed", 0))
         self.assertEqual(state.failure.category, "infrastructure")
-        self.assertEqual(len(self.calls), 1)
+        self.assertCountEqual(
+            [(job.identity.unit_id, job.identity.attempt_in_round) for job, _ in self.calls],
+            [("page:a", 1), ("page:b", 1), ("page:c", 1)],
+        )
         self.assertEqual(load_planning_run(self.workspace)["status"], "failed")
         self.assertFalse(any(phase == "assembling" for phase, _ in self.phases))
         verify()

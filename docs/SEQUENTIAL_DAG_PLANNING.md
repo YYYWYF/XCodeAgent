@@ -1,10 +1,10 @@
-# T6.4 Sequential Planning Orchestrator
+# T6.4/T9.2/T9.3/T9.4/T9.5 Bounded Parallel Planning Orchestrator
 
 ## 接口与边界
 
 `app.services.dag_planning_orchestrator.plan_dag_sequential` 将当前 T2.3 Requirements、
 单 Unit Session/Local、T6.2 Barrier、T4.2 append-only Assembly、完整编译检查、
-T4.1 归因和 T6.3 Global repair 接到一个 concurrency=1 的内部服务。
+T4.1 归因和 T6.3 Global repair 接到一个最多三个 model session 并发的内部服务。
 
 ```python
 result = await plan_dag_sequential(
@@ -45,9 +45,24 @@ Assembly、Global 编译门禁和归因始终使用真实服务。`publish` 是�
 Unit 的正式合同 inline 切片、平台工作区快照、相关 Endpoint owner 和同 Unit retained 摘要；
 不含任何当前 Candidate 正文。Global repair 复用这些冻结 Context，仅更新轮次/Attempt 和反馈。
 
-模型 Unit 逐个 await T6.1 Local round，三次内容失败仅耗尽当前轮；后续 Unit 仍继续。
+模型 Unit 以 `UnitAttemptJob` 进入 FIFO Queue，最多三个 worker 并发执行；一次内容失败只把
+当前 Unit 的下一 Attempt 追加到队尾，三次内容失败才耗尽当前轮。Unit Graph dependency
+不作为生成顺序或入队门禁。
 确定性 `frontend:auth-guard` 由既有 builder 生成，再经 Controller Candidate 事件接纳，
 不进入模型 Session/Local retry，模型计数为零。shell/structural/reuse Unit 不生成。
+
+任一 active model Unit 出现基础设施 fatal 时，Controller 先提交 `RunFailed`，将全部未完成
+Unit 置为 `aborted`；Scheduler 随即停止新 dispatch、丢弃队列中尚未派发的 Job，并
+best-effort 取消其他 active worker。已取消 sibling 若仍返回结果，Controller 的终态门禁会
+拒绝其 Candidate 提交，Scheduler 保留并传播最初的 fatal，不让晚到拒绝异常覆盖根因。
+fatal 不进入 Local requeue，也不会到达 Barrier、Global repair 或 Pending persistence。
+
+Workflow registry 对活动任务发出 `task.cancel()` 后，Scheduler 先冻结派发并丢弃
+所有 queued Job，再经 Controller 原子持久化 `PlanningRun.cancelled`，最后 best-effort
+取消 active worker。吞掉 cancellation 的 provider 若返回晚到结果，T9.4 Attempt gate
+将其作为无写入 no-op；Scheduler 不再 Local requeue，不进入 Barrier/Global。DAG
+orchestrator 对 Assembly/Global 等 Scheduler 外 await 边界做幂等取消收口，但始终将
+`CancelledError` 向上传播，不伪装成正常结果。
 
 全部 Unit 到达轮次终态后进入 Global completeness；缺失时整批走 T6.3 repair。
 Candidate 齐全才提交 `AssemblyStarted`，使用当前唯一 valid Candidate 和全部 confirmed
@@ -57,7 +72,8 @@ Tasks 执行真实 append-only Assembly。累计 DAG 的 Unit/task 图、跨 Uni
 Assembly 结构化失败保留完整来源序列，含重复 ID 的多个 provenance 记录，经 T4.1 归因。
 成功组装后提交 `GlobalValidationStarted` 并核验真实编译的 status、task graph validation
 和 blocked batches。任何已归因的一批问题只消耗一轮 G=2，先原子 supersede 所有 affected，
-再串行重生这些 Unit；unaffected Candidate 仍保留在 Controller 中。
+再把完整 affected 批次交给同一个有限并发 Scheduler；unaffected Candidate 仍保留在
+Controller 中。
 
 有些现有编译规则只有字符串错误。它们完整保存在 `GLOBAL_COMPILED_PLAN_INVALID` 的
 diagnostic details 中，作为平台阻断，不通过解析文本猜测 retry Unit；未宣称所有旧字符串
@@ -73,6 +89,8 @@ deterministic 策略、授权资源 executor、完整指纹 Task ID/capability �
 输出没有 `confirmation_status`/`confirmed_at`，不得把它当作 Pending 或 Build authority。
 内容/Global/基础设施失败抛 `DagPlanningError(issues, snapshot)`，没有失败 Plan 返回值；
 前置输入失败的 snapshot 为 None。Controller 持久化/发布及取消保留原异常语义。
+Workflow Cancel 与 Pending Abandon 仍是两条独立路径：前者取消活动 task 并关闭
+PlanningRun，后者只删除精确身份匹配的 PendingPlan。
 
 ## 与现有 LangGraph 入口的关系
 
@@ -82,8 +100,9 @@ deterministic 策略、授权资源 executor、完整指纹 Task ID/capability �
 LangGraph adapter；业务编排归本服务所有。
 
 唯一允许的文件写入是 Controller 的 `.xcodeagent/plans/planning-run.json`。
-不写 Pending、ConfirmedPlan、TechnicalPlan 或其他正式产物，不接 FrozenContractReader、
-Frontend、并发队列或 concurrency>1；不开始下一 Task。
+不写 Pending、ConfirmedPlan、TechnicalPlan 或其他正式产物，不接 FrozenContractReader
+或 Frontend。T9.4/T9.5 只完成 Backend Attempt 拒收与 Scheduler cancellation correctness，
+不修改前端 Cancel UI。
 
 ## 验证
 
@@ -91,6 +110,7 @@ Frontend、并发队列或 concurrency>1；不开始下一 Task。
 
 ```sh
 .venv/bin/python -m unittest tests.test_dag_planning_orchestrator tests.test_sequential_auth_boundary
+.venv/bin/python -m unittest tests.test_unit_generation_scheduler tests.test_unit_generation_scheduler_fatal tests.test_unit_generation_scheduler_cancellation
 .venv/bin/python -m unittest tests.test_build_task_planner tests.test_build_unit_skeleton tests.test_prepare_build_tasks_guard tests.test_build_dag_v3_contract tests.test_page_build_context_resolver
 .venv/bin/python -m unittest tests.test_engineering_acceptance tests.test_business_acceptance tests.test_build_task_planner
 .venv/bin/python -m unittest tests.test_llm_provider tests.test_model_transport_retry tests.test_model_output tests.test_main_agent_boundaries
@@ -98,5 +118,8 @@ Frontend、并发队列或 concurrency>1；不开始下一 Task。
 
 后三行分别是完整 R-PLAN、R-ACCEPT、R-MODEL。集成测试使用固定模型传输响应，实际执行
 Prompt/session/parser/Local、Requirements、Controller、Assembly 和 Global；验证 A=1/B=2/C=1、
-真实 retained ID 冲突只修 B、Shared retain+append、无规划 Unit、基础设施 fatal、正式文件字节
-不变，并补充完整数据库 Scope、确定性 auth、空图、过期 Requirements 和无责任证据的编译失败。
+Local retry 回队尾、1/2/3/5 Unit 的最大并发、deterministic/model 混合与完整 Barrier，
+基础设施 fatal 的停派/active sibling 取消/晚到成功丢弃/no Pending、Workflow Cancel 下
+active=3/queued=2 的停派、worker 取消、晚到拒收、cancelled 持久化及 Global 停止、真实 retained ID 冲突只修 B、
+Shared retain+append、无规划 Unit、正式文件字节不变，并补充完整数据库 Scope、确定性 auth、
+空图、过期 Requirements 和无责任证据的编译失败。

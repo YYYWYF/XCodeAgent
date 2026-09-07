@@ -294,8 +294,8 @@ class ConfirmPromotionTests(unittest.TestCase):
 class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):
     """串起 T6.4 与 T7.2/T7.3，验证真实新链路产物可以通过 Confirm。"""
 
-    async def test_sequential_plan_pending_confirm(self):
-        """只有模型生成使用固定响应，Local/Assembly/Global/Pending/Confirm 均执行真实服务。"""
+    async def test_bounded_parallel_plan_pending_confirm(self):
+        """仅模型响应固定，Queue/Local/Assembly/Global/Pending/Confirm 均执行真实服务。"""
 
         from app.services.dag_planning_orchestrator import plan_dag_sequential
         from app.services.planning_frozen import plain_json

@@ -15,6 +15,7 @@ from app.services.planning_run_events import (
     PendingPersistenceStarted, PlanningRunEvent, RoundExhausted, RunCancelled,
     RunFailed, UnitAttemptStarted, UnitValidationStarted,
 )
+from app.services.unit_generation_contracts import AttemptIdentity
 from app.workspace.planning_run_documents import project_planning_run, write_planning_run_atomic
 from app.workspace.spec_documents import workspace_root
 
@@ -35,6 +36,16 @@ _TRANSITIONS = {
     RunFailed: (transitions.fail, "issue"),
     RunCancelled: (transitions.cancel, None),
 }
+
+
+def _result_identity(event: PlanningRunEvent) -> AttemptIdentity | None:
+    """从 Worker 结果类事件提取 AttemptIdentity，其他命令事件不参与 gate。"""
+
+    if isinstance(event, UnitValidationStarted):
+        return event.identity
+    if isinstance(event, (CandidateInvalid, CandidateReady)):
+        return event.candidate.identity
+    return None
 
 
 class PlanningRunPersistenceError(RuntimeError):
@@ -92,6 +103,22 @@ class PlanningRunController:
 
         return freeze_json(project_planning_run(self._snapshot))
 
+    @property
+    def active_attempts(self) -> Mapping[str, AttemptIdentity]:
+        """返回从已提交快照派生的只读活动 Attempt registry。"""
+
+        return transitions.active_attempt_registry(self._snapshot)
+
+    def accepts_attempt(self, result_identity: Any) -> bool:
+        """在当前已提交快照上查询 Worker 结果是否仍可接纳。"""
+
+        return transitions.accepts_attempt(self._snapshot, result_identity)
+
+    async def cancel(self, *, at: str) -> PlanningRun:
+        """幂等提交 RunCancelled；已终止 Run 直接返回已提交快照。"""
+
+        return await self.apply(RunCancelled(at=at))
+
     async def apply(self, event: PlanningRunEvent) -> PlanningRun:
         """串行验证和提交事件；取消等待者不允许中断已开始的写入或提前释放锁。"""
 
@@ -101,6 +128,19 @@ class PlanningRunController:
             raise TypeError("必须提交受支持的冻结 PlanningRunEvent，不能提交状态补丁或回调。")
         event = type(event).model_validate(event)
         async with self._lock:
+            if isinstance(event, RunCancelled) and self._snapshot.status != "active":
+                # Scheduler 与顶层 orchestrator 可以同时具备取消收口，但只能提交一次终态。
+                return self._snapshot
+            identity = _result_identity(event)
+            if identity is not None and not transitions.accepts_attempt(self._snapshot, identity):
+                # gate 必须在串行锁内重新判断；排队期间被取消或 supersede 的结果不得落盘。
+                return self._snapshot
+            if isinstance(event, UnitValidationStarted) and (
+                self._snapshot.unit_states[event.identity.unit_id].generation_status
+                == "validating"
+            ):
+                # 重复 Worker callback 可能在首个回调的 Local Validation 期间到达，不能再次开始校验。
+                return self._snapshot
             transition, field = _TRANSITIONS[type(event)]
             args = () if field is None else (getattr(event, field),)
             # T5.1 已经负责合法性验证和 revision+1，这里不能再递增一次。

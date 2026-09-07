@@ -150,7 +150,7 @@ def _assert_round_inputs(
         raise ValueError("UnitGenerationContext 的 Unit 不属于当前 PlanningRun。")
     unit = snapshot.unit_states[context.unit_id]
     if unit.generation_strategy != "model" or unit.generation_status != "pending":
-        raise ValueError("Sequential Local retry 只接收 pending 的 model Unit。")
+        raise ValueError("Local generation 只接收 pending 的 model Unit。")
     if context.input_fingerprint != snapshot.input_fingerprint:
         raise ValueError("UnitGenerationContext 的 input fingerprint 与 PlanningRun 不一致。")
     if context.base_confirmed_plan_digest != snapshot.base_confirmed_plan_digest:
@@ -193,6 +193,144 @@ async def _fail_validation(
     await controller.apply(RunFailed(issue=fatal, at=now()))
 
 
+def allocate_unit_attempt_job(
+    controller: PlanningRunController,
+    context: UnitGenerationContext,
+    policy: UnitGenerationPolicy,
+) -> UnitAttemptJob:
+    """从 Controller 已提交快照为 pending model Unit 分配下一次 Attempt Job。"""
+
+    frozen_context = UnitGenerationContext.model_validate(context)
+    frozen_policy = UnitGenerationPolicy.model_validate(policy)
+    unit = _assert_round_inputs(controller, frozen_context, frozen_policy)
+    identity = AttemptIdentity.allocate(
+        planning_run_id=controller.snapshot.planning_run_id,
+        unit_id=unit.unit_id,
+        generation_round=unit.generation_round,
+        attempt_in_round=unit.attempt_in_round + 1,
+    )
+    return UnitAttemptJob(
+        identity=identity,
+        context=frozen_context,
+        policy=frozen_policy,
+    )
+
+
+async def run_unit_generation_attempt(
+    controller: PlanningRunController,
+    job: UnitAttemptJob,
+    *,
+    global_feedback: Sequence[ValidationIssue] = (),
+    local_feedback: Sequence[ValidationIssue] = (),
+    reuse_facts: ReuseFacts | Mapping[str, Any] | None = None,
+    unit_kind_rules: Sequence[str] = (),
+    settings: Settings | None = None,
+    generate_once: _GenerateOnce | None = None,
+    validate_candidate: _ValidateCandidate | None = None,
+    now: _Clock = _utc_timestamp,
+) -> UnitRunState:
+    """执行并提交一个已分配 Attempt，返回可重排队或已终止的 Unit 状态。"""
+
+    frozen_job = UnitAttemptJob.model_validate(job)
+    frozen_global_feedback = tuple(
+        ValidationIssue.model_validate(issue) for issue in global_feedback
+    )
+    frozen_local_feedback = tuple(
+        ValidationIssue.model_validate(issue) for issue in local_feedback
+    )
+    unit = _assert_round_inputs(controller, frozen_job.context, frozen_job.policy)
+    expected = (
+        controller.snapshot.planning_run_id,
+        unit.unit_id,
+        unit.generation_round,
+        unit.attempt_in_round + 1,
+    )
+    actual = (
+        frozen_job.identity.planning_run_id,
+        frozen_job.identity.unit_id,
+        frozen_job.identity.generation_round,
+        frozen_job.identity.attempt_in_round,
+    )
+    if actual != expected:
+        raise ValueError("UnitAttemptJob 不是当前 Unit 下一次可执行的 Attempt。")
+    if frozen_local_feedback != _latest_local_feedback(unit):
+        raise ValueError("UnitAttemptJob 的 Local feedback 不是当前 Unit 最新内容问题。")
+
+    active_generate_once = generate_once or generate_unit_candidate_once
+    active_validate_candidate = validate_candidate or validate_unit_candidate
+    identity = frozen_job.identity
+    await controller.apply(UnitAttemptStarted(identity=identity, at=now()))
+
+    try:
+        result = await active_generate_once(
+            frozen_job,
+            global_feedback=frozen_global_feedback,
+            local_feedback=frozen_local_feedback,
+            unit_kind_rules=unit_kind_rules,
+            settings=settings,
+        )
+    except UnitGenerationInfrastructureError as exc:
+        # 先提交 Run.failed；并发 Scheduler 随后负责停派、取消 sibling 并传播原始异常。
+        await controller.apply(RunFailed(issue=_infrastructure_issue(exc), at=now()))
+        raise
+
+    result = UnitGenerationAttemptResult.model_validate(result)
+    if (
+        result.identity != identity
+        or result.input_fingerprint != frozen_job.context.input_fingerprint
+    ):
+        mismatch = ValidationIssue(
+            code="UNIT_GENERATION_RESULT_IDENTITY_MISMATCH",
+            level="system",
+            category="platform",
+            unit_ids=(unit.unit_id,),
+            task_ids=(),
+            retry_unit_ids=(),
+            retryable=False,
+            message="Unit generation Worker 返回了非当前预期 Attempt 的结果。",
+            details={"expected_attempt_id": identity.attempt_id},
+        )
+        await controller.apply(RunFailed(issue=mismatch, at=now()))
+        raise UnitGenerationFatalError((mismatch,))
+
+    issues = tuple(result.validation_issues)
+    if not issues:
+        await controller.apply(UnitValidationStarted(identity=identity, at=now()))
+        issues = tuple(
+            active_validate_candidate(frozen_job.context, result.tasks, reuse_facts)
+        )
+
+    if issues:
+        local_issues = _local_retry_issues(issues, unit_id=unit.unit_id)
+        if local_issues is None:
+            await _fail_validation(controller, issues, now=now)
+            raise UnitGenerationFatalError(issues)
+        candidate = CandidateAttempt(
+            identity=identity,
+            input_fingerprint=result.input_fingerprint,
+            status="invalid",
+            tasks=result.tasks,
+            validation_issues=local_issues,
+            generation_metadata=result.generation_metadata,
+        )
+        await controller.apply(CandidateInvalid(candidate=candidate, at=now()))
+        current = controller.snapshot.unit_states[unit.unit_id]
+        if current.attempt_in_round == frozen_job.policy.local_max_attempts:
+            await controller.apply(RoundExhausted(unit_id=unit.unit_id, at=now()))
+        return controller.snapshot.unit_states[unit.unit_id]
+
+    candidate = CandidateAttempt(
+        identity=identity,
+        input_fingerprint=result.input_fingerprint,
+        status="valid",
+        tasks=result.tasks,
+        validation_issues=(),
+        generation_metadata=result.generation_metadata,
+    )
+    await controller.apply(CandidateReady(candidate=candidate, at=now()))
+    return controller.snapshot.unit_states[unit.unit_id]
+
+
 async def run_unit_generation_round(
     controller: PlanningRunController,
     context: UnitGenerationContext,
@@ -215,94 +353,24 @@ async def run_unit_generation_round(
 
     frozen_context = UnitGenerationContext.model_validate(context)
     frozen_policy = UnitGenerationPolicy.model_validate(policy)
-    frozen_global_feedback = tuple(
-        ValidationIssue.model_validate(issue) for issue in global_feedback
-    )
-    active_generate_once = generate_once or generate_unit_candidate_once
-    active_validate_candidate = validate_candidate or validate_unit_candidate
     unit = _assert_round_inputs(controller, frozen_context, frozen_policy)
 
     while unit.attempt_in_round < frozen_policy.local_max_attempts:
-        # 下一身份只由 Orchestrator 根据已提交快照分配，Worker 内部绝不循环或补号。
-        identity = AttemptIdentity.allocate(
-            planning_run_id=controller.snapshot.planning_run_id,
-            unit_id=unit.unit_id,
-            generation_round=unit.generation_round,
-            attempt_in_round=unit.attempt_in_round + 1,
+        job = allocate_unit_attempt_job(controller, frozen_context, frozen_policy)
+        unit = await run_unit_generation_attempt(
+            controller,
+            job,
+            global_feedback=global_feedback,
+            local_feedback=_latest_local_feedback(unit),
+            reuse_facts=reuse_facts,
+            unit_kind_rules=unit_kind_rules,
+            settings=settings,
+            generate_once=generate_once,
+            validate_candidate=validate_candidate,
+            now=now,
         )
-        job = UnitAttemptJob(identity=identity, context=frozen_context, policy=frozen_policy)
-        local_feedback = _latest_local_feedback(unit)
-        await controller.apply(UnitAttemptStarted(identity=identity, at=now()))
-
-        try:
-            result = await active_generate_once(
-                job,
-                global_feedback=frozen_global_feedback,
-                local_feedback=local_feedback,
-                unit_kind_rules=unit_kind_rules,
-                settings=settings,
-            )
-        except UnitGenerationInfrastructureError as exc:
-            # 基础设施失败不会排入下一 Local attempt；先提交 fatal 快照再保留异常链上抛。
-            await controller.apply(RunFailed(issue=_infrastructure_issue(exc), at=now()))
-            raise
-
-        result = UnitGenerationAttemptResult.model_validate(result)
-        if (
-            result.identity != identity
-            or result.input_fingerprint != frozen_context.input_fingerprint
-        ):
-            mismatch = ValidationIssue(
-                code="UNIT_GENERATION_RESULT_IDENTITY_MISMATCH",
-                level="system",
-                category="platform",
-                unit_ids=(unit.unit_id,),
-                task_ids=(),
-                retry_unit_ids=(),
-                retryable=False,
-                message="Unit generation Worker 返回了非当前预期 Attempt 的结果。",
-                details={"expected_attempt_id": identity.attempt_id},
-            )
-            await controller.apply(RunFailed(issue=mismatch, at=now()))
-            raise UnitGenerationFatalError((mismatch,))
-
-        issues = tuple(result.validation_issues)
-        if not issues:
-            await controller.apply(UnitValidationStarted(identity=identity, at=now()))
-            issues = tuple(
-                active_validate_candidate(frozen_context, result.tasks, reuse_facts)
-            )
-
-        if issues:
-            local_issues = _local_retry_issues(issues, unit_id=unit.unit_id)
-            if local_issues is None:
-                await _fail_validation(controller, issues, now=now)
-                raise UnitGenerationFatalError(issues)
-            candidate = CandidateAttempt(
-                identity=identity,
-                input_fingerprint=result.input_fingerprint,
-                status="invalid",
-                tasks=result.tasks,
-                validation_issues=local_issues,
-                generation_metadata=result.generation_metadata,
-            )
-            await controller.apply(CandidateInvalid(candidate=candidate, at=now()))
-            unit = controller.snapshot.unit_states[unit.unit_id]
-            if unit.attempt_in_round == frozen_policy.local_max_attempts:
-                await controller.apply(RoundExhausted(unit_id=unit.unit_id, at=now()))
-                return controller.snapshot.unit_states[unit.unit_id]
-            continue
-
-        candidate = CandidateAttempt(
-            identity=identity,
-            input_fingerprint=result.input_fingerprint,
-            status="valid",
-            tasks=result.tasks,
-            validation_issues=(),
-            generation_metadata=result.generation_metadata,
-        )
-        await controller.apply(CandidateReady(candidate=candidate, at=now()))
-        return controller.snapshot.unit_states[unit.unit_id]
+        if unit.generation_status in {"candidate_ready", "round_exhausted"}:
+            return unit
 
     # 输入校验和循环条件共同保证不可达；保留保护以防固定策略未来改变。
     raise RuntimeError("Unit Local round exited without a terminal Unit status.")

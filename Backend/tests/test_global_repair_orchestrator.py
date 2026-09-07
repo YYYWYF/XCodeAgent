@@ -88,6 +88,12 @@ class SequentialGlobalRepairTests(unittest.IsolatedAsyncioTestCase):
             generate_once=self._generate, now=lambda: AT,
         )
 
+    async def _regenerate_round(self, units):
+        """按旧串行夹具执行完整目标批次，生产接入另用并发 Scheduler。"""
+
+        for current in units:
+            await self._regenerate(current)
+
     async def _loop(self, *batches):
         """按 cycle 提供完整规则 Issues，真实 T4.1 归因后交给 Global 循环。"""
 
@@ -108,7 +114,7 @@ class SequentialGlobalRepairTests(unittest.IsolatedAsyncioTestCase):
 
         return await run_global_repair_loop(
             self.controller, validate_global=validate,
-            regenerate_unit=self._regenerate, now=lambda: AT,
+            regenerate_round=self._regenerate_round, now=lambda: AT,
         )
 
     async def test_initial_global_success_spends_no_budget_or_pending(self):

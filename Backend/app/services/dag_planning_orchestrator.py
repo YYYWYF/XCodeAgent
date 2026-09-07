@@ -1,5 +1,6 @@
-"""T6.4 Requirements → 串行 Unit/Local → Barrier → Assembly/Global → Repair。"""
+"""T6.4/T9.2 Requirements → 并发 Unit Queue → Barrier → Assembly/Global → Repair。"""
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -24,8 +25,9 @@ from app.services.planning_run_events import (
 from app.services.scope_assembly import ScopeAssemblyError, ScopeAssemblyResult, assemble_scope_build_task_plan
 from app.services.unit_generation import UnitGenerationInfrastructureError
 from app.services.unit_generation_contracts import AttemptIdentity, CandidateAttempt, UnitGenerationAttemptResult, UnitGenerationPolicy
-from app.services.unit_generation_orchestrator import UnitGenerationFatalError, run_unit_generation_round
+from app.services.unit_generation_orchestrator import UnitGenerationFatalError
 from app.services.unit_generation_requirements_contracts import GenerationRequirementsError, UnitGenerationRequirements
+from app.services.unit_generation_scheduler import UnitGenerationScheduler
 
 
 class DagPlanningError(RuntimeError):
@@ -119,7 +121,7 @@ async def plan_dag_sequential(
     publish: SnapshotPublisher | None = None,
     now: Callable[[], str] = _now,
 ) -> ValidatedAssembledPlan:
-    """执行完整 concurrency=1 新链路，只写 Controller 的轻量 planning-run.json。
+    """执行最多三个 model session 并发的新链路，只写轻量 planning-run.json。
 
     上游提供正式输入、Scope、骨架及受信 ReuseFacts；若提供已计算 requirements，必须
     与本次 T2.3 结果精确相同。所有 Context 在首个模型调用前冻结；每个模型 Unit 独立
@@ -144,18 +146,16 @@ async def plan_dag_sequential(
     except GenerationRequirementsError as exc:
         raise DagPlanningError(exc.issues) from exc
     controller = PlanningRunController(initial, workspace_state, publish=publish)
+    scheduler = UnitGenerationScheduler(
+        concurrency=(settings.dag_unit_generation_concurrency if settings else 3),
+    )
     assembled: ScopeAssemblyResult | None = None
 
-    async def regenerate(current: UnitRunState) -> None:
-        """复用同一冻结 Context 执行当前 Unit 新轮，确定性候选直接走受信 builder。"""
+    async def regenerate_deterministic(current: UnitRunState) -> None:
+        """在 model worker pool 外生成并提交当前 deterministic Candidate。"""
 
-        if current.generation_strategy == "model":
-            await run_unit_generation_round(
-                controller, contexts[current.unit_id], policy,
-                global_feedback=current.current_issues, reuse_facts=frozen.reuse_facts,
-                settings=settings, generate_once=generate_once, now=now,
-            )
-            return
+        if current.generation_strategy != "deterministic":
+            raise ValueError("确定性生成回调只能接收 deterministic Unit。")
         identity = AttemptIdentity.allocate(planning_run_id=initial.planning_run_id, unit_id=current.unit_id,
                                             generation_round=current.generation_round, attempt_in_round=1)
         await controller.apply(UnitAttemptStarted(identity=identity, at=now()))
@@ -173,6 +173,33 @@ async def plan_dag_sequential(
         await controller.apply(CandidateReady(candidate=CandidateAttempt(
             identity=identity, input_fingerprint=initial.input_fingerprint, status="valid", tasks=payload["tasks"],
         ), at=now()))
+
+    async def regenerate_round(units: tuple[UnitRunState, ...]) -> None:
+        """把完整 pending 目标批次交给 FIFO Scheduler，并透传各 Unit Global feedback。"""
+
+        pending = {
+            unit_id
+            for unit_id in controller.snapshot.planning_unit_ids
+            if controller.snapshot.unit_states[unit_id].generation_status == "pending"
+        }
+        supplied = {unit.unit_id for unit in units}
+        if supplied != pending:
+            raise ValueError("Generation round 目标必须精确覆盖当前全部 pending Unit。")
+        await scheduler.run_round(
+            controller,
+            contexts,
+            policy,
+            global_feedback_by_unit={
+                unit.unit_id: unit.current_issues
+                for unit in units
+                if unit.generation_strategy == "model"
+            },
+            reuse_facts=frozen.reuse_facts,
+            settings=settings,
+            generate_once=generate_once,
+            run_deterministic=regenerate_deterministic,
+            now=now,
+        )
 
     async def assemble_and_validate(snapshot: PlanningRun) -> GlobalRepairDecision:
         """在齐全 Barrier 后执行真实 append-only Assembly，并归因本 cycle 的完整失败。"""
@@ -195,11 +222,18 @@ async def plan_dag_sequential(
 
     try:
         await controller.apply(GenerationStarted(at=now()))
-        for key in initial.planning_unit_ids:
-            await regenerate(controller.snapshot.unit_states[key])
+        await regenerate_round(tuple(
+            controller.snapshot.unit_states[key]
+            for key in initial.planning_unit_ids
+        ))
         decision = await run_global_repair_loop(
-            controller, validate_global=assemble_and_validate, regenerate_unit=regenerate, now=now,
+            controller, validate_global=assemble_and_validate,
+            regenerate_round=regenerate_round, now=now,
         )
+    except asyncio.CancelledError:
+        # Scheduler 已收口生成期取消；此处幂等覆盖 Assembly/Global 等其他 await 边界。
+        await controller.cancel(at=now())
+        raise
     except (UnitGenerationInfrastructureError, UnitGenerationFatalError) as exc:
         raise DagPlanningError((controller.snapshot.failure,), controller.snapshot) from exc
     except GenerationRequirementsError as exc:

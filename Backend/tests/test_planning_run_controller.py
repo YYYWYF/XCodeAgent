@@ -97,12 +97,12 @@ class PlanningRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0].unit_states["page:other"].generation_status, "pending")
 
     async def test_illegal_transition_never_persists_or_publishes(self):
-        """非法阶段和过期身份在写入前拒绝，不增加 revision、不发布快照。"""
+        """非法阶段的调度命令在写入前拒绝，不增加 revision、不发布快照。"""
 
         original = self.controller.snapshot
         with patch("app.services.planning_run_controller.write_planning_run_atomic") as writer:
             with self.assertRaises(sm.IllegalPlanningTransition):
-                await self.controller.apply(UnitValidationStarted(identity=identity(original), at=AT))
+                await self.controller.apply(UnitAttemptStarted(identity=identity(original), at=AT))
             writer.assert_not_called()
         self.assertIs(self.controller.snapshot, original)
         self.assertEqual(self.published, [])
@@ -180,8 +180,8 @@ class PlanningRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reopened.global_repair_round, 2)
         self.assertEqual([item["revision"] for item in self.published], list(range(1, reopened.revision + 1)))
 
-    async def test_fatal_and_cancel_events_reject_late_results_without_another_write(self):
-        """终止事件落盘后，晚到 Worker 结果不能修改状态或产生新的发布。"""
+    async def test_fatal_and_cancel_events_ignore_late_results_without_another_write(self):
+        """终止事件落盘后，晚到 Worker 结果作为 no-op，不写入或发布。"""
 
         for event in (RunFailed(issue=issue(retryable=False), at=AT), RunCancelled(at=AT)):
             controller = PlanningRunController(run(), self.workspace, publish=self.publish)
@@ -190,8 +190,8 @@ class PlanningRunControllerTests(unittest.IsolatedAsyncioTestCase):
             await controller.apply(UnitAttemptStarted(identity=attempt, at=AT))
             terminal = await controller.apply(event)
             before = len(self.published)
-            with self.assertRaises(sm.IllegalPlanningTransition):
-                await controller.apply(UnitValidationStarted(identity=attempt, at=AT))
+            ignored = await controller.apply(UnitValidationStarted(identity=attempt, at=AT))
+            self.assertIs(ignored, terminal)
             self.assertEqual(len(self.published), before)
             self.assertEqual(load_planning_run(self.workspace), project_planning_run(terminal))
 
