@@ -27,6 +27,7 @@ from app.services.planning_run_events import (
 from app.services.unit_candidate_validator import validate_unit_candidate
 from app.services.unit_generation import (
     UnitGenerationInfrastructureError,
+    UnitGenerationPlatformError,
     generate_unit_candidate_once,
 )
 from app.services.unit_generation_contracts import (
@@ -126,6 +127,26 @@ def _infrastructure_issue(error: UnitGenerationInfrastructureError) -> Validatio
         retry_unit_ids=(),
         retryable=False,
         message="Unit Candidate 生成发生模型基础设施错误，PlanningRun 已终止。",
+        details={
+            "attempt_id": error.identity.attempt_id,
+            "stage": error.stage,
+            "cause_type": error.cause_type,
+        },
+    )
+
+
+def _platform_issue(error: UnitGenerationPlatformError) -> ValidationIssue:
+    """把冻结来源/Reader 损坏转换为不可进入 Local/Global 重试的平台问题。"""
+
+    return ValidationIssue(
+        code="UNIT_GENERATION_FROZEN_CONTRACT_SOURCE_INVALID",
+        level="system",
+        category="platform",
+        unit_ids=(error.identity.unit_id,),
+        task_ids=(),
+        retry_unit_ids=(),
+        retryable=False,
+        message="Unit Candidate 生成使用的冻结合同来源已损坏，PlanningRun 已终止。",
         details={
             "attempt_id": error.identity.attempt_id,
             "stage": error.stage,
@@ -272,6 +293,10 @@ async def run_unit_generation_attempt(
     except UnitGenerationInfrastructureError as exc:
         # 先提交 Run.failed；并发 Scheduler 随后负责停派、取消 sibling 并传播原始异常。
         await controller.apply(RunFailed(issue=_infrastructure_issue(exc), at=now()))
+        raise
+    except UnitGenerationPlatformError as exc:
+        # Reader/Store 损坏不是模型内容错误，必须在本 Attempt 处终止整次 PlanningRun。
+        await controller.apply(RunFailed(issue=_platform_issue(exc), at=now()))
         raise
 
     result = UnitGenerationAttemptResult.model_validate(result)

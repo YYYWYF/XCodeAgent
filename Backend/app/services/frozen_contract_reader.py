@@ -9,9 +9,12 @@ import re
 from threading import Lock
 from typing import Any
 
+from langchain_core.tools import tool
+
 from app.services.frozen_contract_catalog import ContractCatalogEntry
 from app.services.frozen_contract_reader_contracts import (
     FrozenContractFragment,
+    FrozenContractReadInput,
     FrozenContractReadError,
     FrozenContractReadPolicy,
     read_error as _read_error,
@@ -29,6 +32,7 @@ _RAW_PATH_PREFIXES = (
     "/workspace/",
 )
 _WINDOWS_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+FROZEN_CONTRACT_READER_TOOL_NAME = "read_frozen_contract_fragment"
 
 
 def _decode_pointer_segment(segment: str) -> str:
@@ -176,7 +180,7 @@ class FrozenContractReader:
             )
         try:
             catalog = tuple(ContractCatalogEntry.model_validate(item) for item in contract_catalog)
-            policy = FrozenContractReadPolicy.model_validate(read_policy)
+            policy = FrozenContractReadPolicy.model_validate(plain_json(read_policy))
         except (TypeError, ValueError) as exc:
             if isinstance(exc, FrozenContractReadError):
                 raise
@@ -356,3 +360,36 @@ def read_frozen_contract_fragment(
             "read_frozen_contract_fragment 必须接收 FrozenContractReader instance。",
         )
     return reader.read(ref_id=ref_id, selector=selector, cursor=cursor)
+
+
+def create_frozen_contract_reader_tool(reader: FrozenContractReader):
+    """创建只绑定一个 Attempt Reader 的唯一模型工具，不暴露 Store 或工作区参数。"""
+
+    if not isinstance(reader, FrozenContractReader):
+        raise _read_error(
+            "FROZEN_CONTRACT_READER_INPUT_INVALID",
+            "Frozen contract tool 必须绑定 FrozenContractReader instance。",
+        )
+
+    @tool(FROZEN_CONTRACT_READER_TOOL_NAME, args_schema=FrozenContractReadInput)
+    def frozen_contract_fragment_tool(
+        ref_id: str,
+        selector: str,
+        cursor: str | None = None,
+    ) -> str:
+        """读取当前 Unit catalog 授权的一页冻结合同 JSON；分页时仅复用返回的 nextCursor。"""
+
+        fragment = read_frozen_contract_fragment(
+            reader,
+            ref_id=ref_id,
+            selector=selector,
+            cursor=cursor,
+        )
+        return json.dumps(
+            fragment.model_dump(mode="json", by_alias=True),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    return frozen_contract_fragment_tool

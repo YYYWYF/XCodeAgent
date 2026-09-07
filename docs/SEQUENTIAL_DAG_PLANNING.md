@@ -41,9 +41,10 @@ Assembly、Global 编译门禁和归因始终使用真实服务。`publish` 是�
 
 ## 状态链路
 
-一个调用创建一个 Controller，首个模型调用前冻结所有 Unit Context。Context 包含当前
-Unit 的正式合同 inline 切片、平台工作区快照、相关 Endpoint owner 和同 Unit retained 摘要；
-不含任何当前 Candidate 正文。Global repair 复用这些冻结 Context，仅更新轮次/Attempt 和反馈。
+一个调用创建一个 Controller，首个模型调用前冻结所有 Unit Context。Context 只包含当前
+Unit 的正式合同 catalog 元数据、平台工作区快照、相关 Endpoint owner 和同 Unit retained 摘要；
+合同正文只存在于 PlanningRun 内存 Frozen Store，不含任何当前 Candidate 正文。Global repair
+复用这些冻结 Context 与 Store，仅更新轮次/Attempt 和反馈。
 
 模型 Unit 以 `UnitAttemptJob` 进入 FIFO Queue，最多三个 worker 并发执行；一次内容失败只把
 当前 Unit 的下一 Attempt 追加到队尾，三次内容失败才耗尽当前轮。Unit Graph dependency
@@ -51,7 +52,12 @@ Unit 的正式合同 inline 切片、平台工作区快照、相关 Endpoint own
 确定性 `frontend:auth-guard` 由既有 builder 生成，再经 Controller Candidate 事件接纳，
 不进入模型 Session/Local retry，模型计数为零。shell/structural/reuse Unit 不生成。
 
-任一 active model Unit 出现基础设施 fatal 时，Controller 先提交 `RunFailed`，将全部未完成
+每个 Local Attempt 创建独立 FrozenContractReader，只绑定 `read_frozen_contract_fragment`。
+模型可在一个 Attempt 内执行受 turn/read-count/read-byte 预算限制的多轮 Model → Reader，
+但最终仍只返回一个完整 `tasks[]`，也只增加一次 Local attempt。预算耗尽是内容失败；
+Store/catalog 损坏是 platform fatal，不开放其他 workspace tool。
+
+任一 active model Unit 出现基础设施或 platform fatal 时，Controller 先提交 `RunFailed`，将全部未完成
 Unit 置为 `aborted`；Scheduler 随即停止新 dispatch、丢弃队列中尚未派发的 Job，并
 best-effort 取消其他 active worker。已取消 sibling 若仍返回结果，Controller 的终态门禁会
 拒绝其 Candidate 提交，Scheduler 保留并传播最初的 fatal，不让晚到拒绝异常覆盖根因。
@@ -87,7 +93,7 @@ deterministic 策略、授权资源 executor、完整指纹 Task ID/capability �
 
 仅无问题且图有效时返回 `ValidatedAssembledPlan`，Run 停在 `active/validating`。
 输出没有 `confirmation_status`/`confirmed_at`，不得把它当作 Pending 或 Build authority。
-内容/Global/基础设施失败抛 `DagPlanningError(issues, snapshot)`，没有失败 Plan 返回值；
+内容/Global/基础设施/platform 失败抛 `DagPlanningError(issues, snapshot)`，没有失败 Plan 返回值；
 前置输入失败的 snapshot 为 None。Controller 持久化/发布及取消保留原异常语义。
 Workflow Cancel 与 Pending Abandon 仍是两条独立路径：前者取消活动 task 并关闭
 PlanningRun，后者只删除精确身份匹配的 PendingPlan。
@@ -100,8 +106,8 @@ PlanningRun，后者只删除精确身份匹配的 PendingPlan。
 LangGraph adapter；业务编排归本服务所有。
 
 唯一允许的文件写入是 Controller 的 `.xcodeagent/plans/planning-run.json`。
-不写 Pending、ConfirmedPlan、TechnicalPlan 或其他正式产物，不接 FrozenContractReader
-或 Frontend。T9.4/T9.5 只完成 Backend Attempt 拒收与 Scheduler cancellation correctness，
+不写 Pending、ConfirmedPlan、TechnicalPlan 或其他正式产物，也不接 Frontend。
+FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Attempt 拒收与 Scheduler cancellation correctness，
 不修改前端 Cancel UI。
 
 ## Frozen Contract Catalog

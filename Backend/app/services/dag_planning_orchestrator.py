@@ -24,7 +24,11 @@ from app.services.planning_run_events import (
     RunFailed, UnitAttemptStarted, UnitValidationStarted,
 )
 from app.services.scope_assembly import ScopeAssemblyError, ScopeAssemblyResult, assemble_scope_build_task_plan
-from app.services.unit_generation import UnitGenerationInfrastructureError
+from app.services.unit_generation import (
+    UnitGenerationInfrastructureError,
+    UnitGenerationPlatformError,
+    generate_unit_candidate_once,
+)
 from app.services.unit_generation_contracts import AttemptIdentity, CandidateAttempt, UnitGenerationAttemptResult, UnitGenerationPolicy
 from app.services.unit_generation_orchestrator import UnitGenerationFatalError
 from app.services.unit_generation_requirements_contracts import GenerationRequirementsError, UnitGenerationRequirements
@@ -170,6 +174,18 @@ async def plan_dag_sequential(
     )
     assembled: ScopeAssemblyResult | None = None
 
+    if generate_once is None:
+        async def active_generate_once(job, **kwargs) -> UnitGenerationAttemptResult:
+            """为默认 Worker 显式绑定当前 PlanningRun 的内存 Frozen Store。"""
+
+            return await generate_unit_candidate_once(
+                job,
+                frozen_contract_store=contract_store,
+                **kwargs,
+            )
+    else:
+        active_generate_once = generate_once
+
     async def regenerate_deterministic(current: UnitRunState) -> None:
         """在 model worker pool 外生成并提交当前 deterministic Candidate。"""
 
@@ -215,7 +231,7 @@ async def plan_dag_sequential(
             },
             reuse_facts=frozen.reuse_facts,
             settings=settings,
-            generate_once=generate_once,
+            generate_once=active_generate_once,
             run_deterministic=regenerate_deterministic,
             now=now,
         )
@@ -253,7 +269,11 @@ async def plan_dag_sequential(
         # Scheduler 已收口生成期取消；此处幂等覆盖 Assembly/Global 等其他 await 边界。
         await controller.cancel(at=now())
         raise
-    except (UnitGenerationInfrastructureError, UnitGenerationFatalError) as exc:
+    except (
+        UnitGenerationInfrastructureError,
+        UnitGenerationPlatformError,
+        UnitGenerationFatalError,
+    ) as exc:
         raise DagPlanningError((controller.snapshot.failure,), controller.snapshot) from exc
     except GenerationRequirementsError as exc:
         await controller.apply(RunFailed(issue=exc.issues[0], at=now()))

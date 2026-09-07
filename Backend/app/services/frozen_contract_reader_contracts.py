@@ -40,6 +40,14 @@ class FrozenContractReadPolicy(FrozenPlanningModel):
         return self
 
 
+class FrozenContractReadInput(FrozenPlanningModel):
+    """定义模型唯一可调用的冻结合同读取工具参数。"""
+
+    ref_id: _Identifier
+    selector: _Identifier
+    cursor: _Identifier | None = None
+
+
 class FrozenContractFragment(FrozenPlanningModel):
     """一次受限读取返回的 JSON 文本页及其继续读取游标。"""
 

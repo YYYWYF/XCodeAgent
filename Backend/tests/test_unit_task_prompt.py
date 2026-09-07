@@ -102,6 +102,16 @@ class UnitTaskPromptTests(unittest.TestCase):
         self.assertIn("Never reference a Task from another Candidate", prompt)
         self.assertIn("platform compiles cross-Unit dependencies later", prompt)
 
+    def test_prompt_exposes_only_frozen_contract_reader_tool(self) -> None:
+        """合同正文只能通过 catalog 授权的 Reader tool 读取，不能扩展到工作区工具。"""
+
+        prompt = _prompt()
+        self.assertIn("only available tool is `read_frozen_contract_fragment`", prompt)
+        self.assertIn("exact catalog `ref_id` and authorized `selector`", prompt)
+        self.assertIn("opaque `nextCursor`", prompt)
+        self.assertIn("Never invent a cursor", prompt)
+        self.assertIn("return one complete `tasks[]` envelope", prompt)
+
     def test_prompt_separates_global_and_latest_local_feedback(self) -> None:
         """Global 与最新 Local Issue 必须分区投影并保留结构化路由字段。"""
 

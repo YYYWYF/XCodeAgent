@@ -40,7 +40,9 @@ def _policy_payload() -> dict:
 
     return {
         "request_timeout": 30.0, "unit_session_timeout": 120.0, "model_turn_limit": 4,
-        "frozen_contract_read_limits": {"max_reads": 5, "max_total_bytes": 10000},
+        "frozen_contract_read_limits": {
+            "max_reads": 5, "max_total_bytes": 10000, "max_bytes_per_read": 2000,
+        },
     }
 
 
@@ -194,7 +196,12 @@ class UnitGenerationContractTests(unittest.TestCase):
             {"model_max_tokens": 0}, {"model_max_tokens": "4096"},
             {"request_timeout": 0}, {"request_timeout": float("inf")},
             {"unit_session_timeout": -1}, {"unit_session_timeout": float("nan")},
-            {"model_turn_limit": True}, {"frozen_contract_read_limits": {"max_reads": -1}},
+            {"model_turn_limit": True},
+            {"frozen_contract_read_limits": {"max_reads": -1}},
+            {"frozen_contract_read_limits": {"max_reads": 5, "max_total_bytes": 10000}},
+            {"frozen_contract_read_limits": {
+                "max_reads": 5, "max_total_bytes": 100, "max_bytes_per_read": 101,
+            }},
         ):
             with self.subTest(change=change), self.assertRaises(ValidationError):
                 UnitGenerationPolicy(**{**_policy_payload(), **change})

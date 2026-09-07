@@ -17,7 +17,10 @@ from app.services.planning_frozen import FrozenPlanningModel
 from app.services.planning_issues import ValidationIssue
 from app.services.planning_run_contracts import UnitRunState
 from app.services.planning_run_controller import PlanningRunController
-from app.services.unit_generation import UnitGenerationInfrastructureError
+from app.services.unit_generation import (
+    UnitGenerationInfrastructureError,
+    UnitGenerationPlatformError,
+)
 from app.services.unit_generation_contracts import (
     UnitAttemptJob,
     UnitGenerationAttemptResult,
@@ -256,7 +259,11 @@ class UnitGenerationScheduler:
                             controller.snapshot.status == "failed"
                             and isinstance(
                                 exc,
-                                (UnitGenerationInfrastructureError, UnitGenerationFatalError),
+                                (
+                                    UnitGenerationInfrastructureError,
+                                    UnitGenerationPlatformError,
+                                    UnitGenerationFatalError,
+                                ),
                             )
                         ):
                             stop_for_fatal(exc)

@@ -14,7 +14,10 @@ import httpx
 from app.config import Settings
 from app.services import planning_run as transitions
 from app.services.planning_run_controller import PlanningRunController
-from app.services.unit_generation import UnitGenerationInfrastructureError
+from app.services.unit_generation import (
+    UnitGenerationInfrastructureError,
+    UnitGenerationPlatformError,
+)
 from app.services.unit_generation_contracts import UnitGenerationPolicy
 from app.services.unit_generation_orchestrator import run_unit_generation_round
 from tests.planning_run_fixtures import AT, UNIT, run
@@ -193,6 +196,40 @@ class SequentialUnitGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.snapshot.failure.category, "infrastructure")
         self.assertEqual(self.controller.snapshot.failure.retry_unit_ids, ())
         self.assertEqual(len(models[1].prompts), 0)
+
+    async def test_broken_frozen_source_is_platform_fatal_without_local_retry(self) -> None:
+        """Reader/Store 损坏提交不可重试平台失败，不分配第二个 Local Attempt。"""
+
+        calls = []
+
+        async def fail_with_broken_source(job, **_kwargs):
+            """模拟默认 generation session 在 Reader 初始化时发现冻结来源损坏。"""
+
+            calls.append(job.identity)
+            raise UnitGenerationPlatformError(
+                identity=job.identity,
+                stage="contract_reader_setup",
+                cause=ValueError("broken frozen ref"),
+            )
+
+        with self.assertRaises(UnitGenerationPlatformError):
+            await run_unit_generation_round(
+                self.controller,
+                self.context,
+                self.policy,
+                settings=_settings(),
+                generate_once=fail_with_broken_source,
+                now=lambda: AT,
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.controller.snapshot.status, "failed")
+        self.assertEqual(self.controller.snapshot.failure.category, "platform")
+        self.assertEqual(self.controller.snapshot.failure.retry_unit_ids, ())
+        self.assertEqual(
+            self.controller.snapshot.failure.code,
+            "UNIT_GENERATION_FROZEN_CONTRACT_SOURCE_INVALID",
+        )
 
     async def test_finish_length_is_local_failure_then_retries(self) -> None:
         """provider length 截断即使正文合法也作为 Local failure 消耗一次并重试。"""

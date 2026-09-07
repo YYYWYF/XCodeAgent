@@ -10,6 +10,7 @@ from pydantic import AfterValidator, BeforeValidator, Field, PlainSerializer, St
 
 from app.domain.models import BuildUnitKind
 from app.services.frozen_contract_catalog import ContractCatalogEntry
+from app.services.frozen_contract_reader_contracts import FrozenContractReadPolicy
 from app.services.planning_issues import ValidationIssue
 from app.services.planning_frozen import (
     FrozenJsonObject as _FrozenJsonObject, FrozenPlanningModel as _GenerationModel,
@@ -84,6 +85,22 @@ class UnitGenerationPolicy(_GenerationModel):
     unit_session_timeout: _PositiveSeconds
     model_turn_limit: _PositiveInt
     frozen_contract_read_limits: _ReadLimits
+
+    @model_validator(mode="after")
+    def validate_frozen_contract_read_limits(self) -> "UnitGenerationPolicy":
+        """要求 Unit Policy 完整承载 Reader 的三项保护预算且不接受任意扩展键。"""
+
+        required = {"max_reads", "max_total_bytes", "max_bytes_per_read"}
+        actual = set(self.frozen_contract_read_limits)
+        if actual != required:
+            raise ValueError(
+                "frozen_contract_read_limits 必须且只能包含 "
+                "max_reads、max_total_bytes、max_bytes_per_read。"
+            )
+        FrozenContractReadPolicy.model_validate(
+            _plain_json(self.frozen_contract_read_limits)
+        )
+        return self
 
 
 def _new_attempt_id() -> str:

@@ -226,8 +226,8 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("### Global feedback", prompt)
         self.assertIn("### Latest local feedback", prompt)
 
-    async def test_one_api_call_creates_and_invokes_exactly_one_model_session(self) -> None:
-        """单次 API 不循环、不隐藏 retry，也不产生第二个 Candidate 响应。"""
+    async def test_no_store_compatibility_invokes_exactly_one_model_turn(self) -> None:
+        """未绑定 Frozen Store 的兼容调用不开放 Tool loop，也不隐藏模型 retry。"""
 
         model = FakeAsyncModel('{"tasks":[]}')
         result, model_factory = await self._generate(model)
