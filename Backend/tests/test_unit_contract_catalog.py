@@ -1,4 +1,4 @@
-"""T10.2 Frozen Contract Catalog 与 Unit allowlist 集成测试。"""
+"""T10.2 Catalog 基线与 T10.4 Tool Session 前置绑定 hardening 测试。"""
 
 from __future__ import annotations
 
@@ -42,8 +42,8 @@ def _built_context(inputs, unit_id: str, *, planning_run_id: str = "catalog-run"
     )
 
 
-class UnitContractCatalogTests(unittest.TestCase):
-    """验证 Page/Endpoint catalog 严格按当前 Unit 的正式绑定收窄。"""
+class UnitContractCatalogT102Tests(unittest.TestCase):
+    """T10.2：验证 Page/Endpoint catalog 严格按当前 Unit 的正式绑定收窄。"""
 
     def test_page_allowlist_contains_only_current_page_contracts(self) -> None:
         """Page 获得自身页面、接口、实体、权限和共享架构引用。"""
@@ -199,8 +199,8 @@ class UnitContractCatalogTests(unittest.TestCase):
         self.assertEqual(binding.selectors, ("/", "/uiDesignRef"))
 
 
-class UnitContractCatalogRetryTests(unittest.IsolatedAsyncioTestCase):
-    """验证 retry 复用 catalog，并让非法来源绑定在模型调用前致命失败。"""
+class UnitContractCatalogT104HardeningTests(unittest.IsolatedAsyncioTestCase):
+    """T10.4 hardening：验证 Tool Session 前的 catalog 复用与绑定 fail closed。"""
 
     async def test_local_retry_uses_same_contract_catalog(self) -> None:
         """首次内容失败与第二次成功 Attempt 使用完全相同的非空 catalog。"""
@@ -273,6 +273,111 @@ class UnitContractCatalogRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(caught.exception.snapshot)
         self.assertEqual(caught.exception.issues[0].code, "UNIT_CONTRACT_SOURCE_BINDING_INVALID")
         self.assertFalse(caught.exception.issues[0].retryable)
+
+    async def _assert_declared_refs_are_fatal(
+        self,
+        *,
+        inputs,
+        refs: list[dict],
+        planning_run_id: str,
+        expected_message: str,
+    ) -> None:
+        """断言多报或错类绑定在模型 dispatch 前以平台致命错误关闭。"""
+
+        invalid = inputs.model_copy(update={"formal_source_refs": refs})
+        calls = []
+
+        async def generate(job, **_kwargs):
+            """记录意外调用；不精确的声明清单不允许进入 Local attempt。"""
+
+            calls.append(job)
+            raise AssertionError("非精确正式来源绑定不得进入模型 dispatch")
+
+        with TemporaryDirectory() as directory, self.assertRaises(DagPlanningError) as caught:
+            await plan_dag_sequential(
+                invalid,
+                workspace_state={"workspace": directory},
+                planning_run_id=planning_run_id,
+                workflow_run_id="workflow-run",
+                thread_id="thread",
+                policy=UnitGenerationPolicy(**_policy_payload()),
+                settings=_settings(),
+                generate_once=generate,
+                now=lambda: AT,
+            )
+
+        self.assertEqual(calls, [])
+        self.assertIsNone(caught.exception.snapshot)
+        self.assertEqual(
+            caught.exception.issues[0].code,
+            "UNIT_CONTRACT_SOURCE_BINDING_INVALID",
+        )
+        self.assertFalse(caught.exception.issues[0].retryable)
+        self.assertIn(expected_message, caught.exception.issues[0].message)
+
+    async def test_extra_selector_is_fatal_before_model_dispatch(self) -> None:
+        """同一来源多报 selector 时必须按双向精确比较 fail closed。"""
+
+        inputs = planning_inputs(required=["page:a"])
+        refs = [item.model_dump(mode="json") for item in inputs.formal_source_refs]
+        page_ref = next(
+            item
+            for item in refs
+            if item["unit_id"] == "page:a" and item["kind"] == "page_contract"
+        )
+        page_ref["selectors"].append("/uiDesignRef")
+
+        await self._assert_declared_refs_are_fatal(
+            inputs=inputs,
+            refs=refs,
+            planning_run_id="catalog-extra-selector-run",
+            expected_message="未授权",
+        )
+
+    async def test_extra_source_is_fatal_before_model_dispatch(self) -> None:
+        """多报 Store 内真实但非当前职责所需的来源时必须 fail closed。"""
+
+        inputs = planning_inputs(required=["page:a"])
+        refs = [item.model_dump(mode="json") for item in inputs.formal_source_refs]
+        page_ref = next(
+            item
+            for item in refs
+            if item["unit_id"] == "page:a" and item["kind"] == "page_contract"
+        )
+        refs.append(
+            {
+                **page_ref,
+                "kind": "product_plan",
+                "source": plain_json(inputs.formal_contract_inputs.product_plan.source),
+                "selectors": ["/"],
+            }
+        )
+
+        await self._assert_declared_refs_are_fatal(
+            inputs=inputs,
+            refs=refs,
+            planning_run_id="catalog-extra-source-run",
+            expected_message="product_plan",
+        )
+
+    async def test_wrong_kind_is_fatal_before_model_dispatch(self) -> None:
+        """把真实 Page 来源声明为错误 kind 时必须在 Store 绑定阶段 fail closed。"""
+
+        inputs = planning_inputs(required=["page:a"])
+        refs = [item.model_dump(mode="json") for item in inputs.formal_source_refs]
+        page_ref = next(
+            item
+            for item in refs
+            if item["unit_id"] == "page:a" and item["kind"] == "page_contract"
+        )
+        page_ref["kind"] = "api_contract"
+
+        await self._assert_declared_refs_are_fatal(
+            inputs=inputs,
+            refs=refs,
+            planning_run_id="catalog-wrong-kind-run",
+            expected_message="api_contract",
+        )
 
     async def _assert_missing_page_binding_is_fatal(self, missing_kind: str) -> None:
         """删除 Page 完整清单中的一种正式来源，并断言模型 dispatch 前失败。"""
