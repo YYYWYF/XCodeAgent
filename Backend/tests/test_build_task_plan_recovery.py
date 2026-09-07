@@ -22,7 +22,7 @@ def _base_unit_plan(*unit_ids: str, edges: list[dict] | None = None) -> dict:
     """构造带有效空任务图的最小 Unit 计划，供增量合并回归测试复用。"""
 
     return {
-        "schema_version": "build-dag.v3",
+        "schema_version": "build-dag.v4",
         "build_units": {
             unit_id: {
                 "id": unit_id,

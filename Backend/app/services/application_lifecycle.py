@@ -32,10 +32,6 @@ from app.domain.application_lifecycle import (
     WorkbenchExecutionStatus,
     utc_now,
 )
-from app.services.application_template_generation import (
-    ApplicationTemplateGenerationError,
-    validate_application_template_generation,
-)
 
 
 APPLICATION_LIFECYCLE_RELATIVE_PATH = Path(".xcodeagent/application-lifecycle.json")
@@ -895,75 +891,6 @@ def transition_application_lifecycle(
             "active_run_id": active_run_id or state.active_run_id,
             "error": error,
         }
-    )
-
-
-def complete_application_template_generation(
-    workspace: str | Path,
-    *,
-    succeeded: bool,
-    error_message: str | None = None,
-    active_run_id: str | None = None,
-) -> ApplicationLifecycle:
-    """校验正式产物、manifest 和真实文件后把模板生成结果落为 ready 或失败。"""
-
-    current = load_application_lifecycle(workspace)
-    if current is None:
-        raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
-    if (
-        current.initialization.stage
-        != ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES
-    ):
-        raise ApplicationLifecycleConflictError(
-            f"当前阶段 {current.initialization.stage.value} 不能提交应用模板文件生成结果。"
-        )
-    requirement_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/specs/requirement-spec.json"
-    )
-    product_plan_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/plans/product-plan.json"
-    )
-    ui_design_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/specs/ui-designs.json"
-    )
-    technical_plan_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/plans/technical-plan.json",
-        expected_artifact_type="technical-plan",
-    )
-    # UI 阶段可以是用户明确跳过，其余正式产物仍必须处于 confirmed。
-    artifacts_confirmed = (
-        requirement_status == "confirmed"
-        and product_plan_status == "confirmed"
-        and ui_design_status in {"confirmed", "skipped"}
-        and technical_plan_status == "confirmed"
-    )
-    if succeeded and not artifacts_confirmed:
-        succeeded = False
-        error_message = "需求、产品、技术正式产物必须确认，UI 设计稿必须确认或明确跳过，才能进入工作台。"
-    if succeeded:
-        try:
-            validate_application_template_generation(workspace)
-        except ApplicationTemplateGenerationError as exc:
-            succeeded = False
-            error_message = str(exc)
-    if succeeded:
-        return persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
-            status=ApplicationLifecycleStatus.COMPLETED,
-            active_run_id=active_run_id,
-        )
-    return persist_application_lifecycle_transition(
-        workspace,
-        stage=ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
-        status=ApplicationLifecycleStatus.FAILED,
-        active_run_id=active_run_id,
-        error=ApplicationLifecycleError(
-            code="application_template_generation_failed",
-            message=(error_message or "应用模板文件生成失败。")[:2048],
-            recoverable=False,
-            occurredAt=utc_now(),
-        ),
     )
 
 

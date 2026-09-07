@@ -39,6 +39,20 @@ def _write_current_plan(workspace: str, project_plan: dict) -> str:
     """把当前 TechnicalPlan 测试夹具写入正式 JSON 路径。"""
 
     workspace_root = Path(workspace)
+    template_state_path = workspace_root / ".xcodeagent/template-state.json"
+    if not template_state_path.exists():
+        template_state_path.parent.mkdir(parents=True, exist_ok=True)
+        template_state_path.write_text(
+            json.dumps(
+                {
+                    "templateRevision": "prepare-build-test-r1",
+                    "managedFiles": {},
+                    "requested": {},
+                    "effective": {},
+                }
+            ),
+            encoding="utf-8",
+        )
     plan_path = workspace_root / ".xcodeagent/plans/project-plan.json"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(project_plan), encoding="utf-8")
@@ -68,7 +82,7 @@ def _confirmation_plan(tasks: list[dict], build_context: dict) -> dict:
     task_ids = [str(task["id"]) for task in tasks]
     return {
         "version": "3.0.0",
-        "schema_version": "build-dag.v3",
+        "schema_version": "build-dag.v4",
         "status": "ready",
         "confirmation_status": "pending",
         "build_context": build_context,
@@ -144,10 +158,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 }
             ],
         }
-        with tempfile.TemporaryDirectory() as workspace, patch(
-            "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"errors": []},
-        ):
+        with tempfile.TemporaryDirectory() as workspace:
             _write_formal_build_artifacts(workspace)
             technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
             technical_path.write_text(json.dumps(technical_plan), encoding="utf-8")
@@ -250,10 +261,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 }
             ],
         }
-        with tempfile.TemporaryDirectory() as workspace, patch(
-            "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"errors": []},
-        ):
+        with tempfile.TemporaryDirectory() as workspace:
             _write_formal_build_artifacts(workspace)
             technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
             technical_path.write_text(json.dumps(technical_plan), encoding="utf-8")
@@ -308,10 +316,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "confirmation_status": "confirmed",
         }
 
-        with tempfile.TemporaryDirectory() as workspace, patch(
-            "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"errors": []},
-        ):
+        with tempfile.TemporaryDirectory() as workspace:
             _write_formal_build_artifacts(workspace)
             errors = _build_prerequisite_errors(
                 state,
@@ -335,10 +340,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "confirmation_status": "confirmed",
         }
 
-        with tempfile.TemporaryDirectory() as workspace, patch(
-            "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"errors": []},
-        ):
+        with tempfile.TemporaryDirectory() as workspace:
             _write_formal_build_artifacts(workspace, include_technical_plan=False)
             errors = _build_prerequisite_errors(
                 state,
@@ -352,9 +354,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         """门禁阻断时也要把正式产物状态写回 checkpoint，避免旧快照继续残留。"""
 
         with tempfile.TemporaryDirectory() as workspace, patch(
-            "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"errors": ["模板 manifest 尚未就绪。"]},
-        ), patch(
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             side_effect=AssertionError("formal artifact gate must block before task generation"),
         ):
@@ -377,11 +376,11 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(result["technical_plan"]["confirmation_status"], "confirmed")
 
     def test_confirm_repairs_missing_generated_dag_status(self) -> None:
-        """确认当前 build-dag.v3 时应修复生成阶段漏写的顶层 status。"""
+        """确认当前 build-dag.v4 时应修复生成阶段漏写的顶层 status。"""
 
         scope = {"type": "page", "targetId": "home"}
         plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "task_graph": {"validation": {"is_valid": True, "errors": []}},
             "execution": {"batches": [{"mode": "serial", "tasks": []}]},
             "task_registry": {},
@@ -456,7 +455,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             {},
             {
                 "version": "3.0.0",
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "status": "ready",
                 "confirmation_status": "pending",
                 "build_execution_scope": {
@@ -666,7 +665,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         old_scope = {"type": "page", "targetId": "orders"}
         current_scope = {"type": "page", "targetId": "customers"}
         plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "status": "ready",
             "task_graph": {"validation": {"is_valid": True, "errors": []}},
             "execution": {"batches": []},
@@ -692,7 +691,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
 
         scope = {"type": "application", "targetId": "application"}
         plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "status": "ready",
             "task_graph": {
                 "nodes": ["old-orders-task"],
@@ -729,7 +728,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
 
         scope = {"type": "application", "targetId": "application"}
         plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "status": "ready",
             "task_graph": {
                 "nodes": ["old-orders-task"],
@@ -918,8 +917,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "version": "1.0.0",
             "confirmation_status": "confirmed",
             "frontend_pages": [
-                {"pageId": "orders"},
-                {"pageId": "customers"},
+                {"pageId": "orders", "path": "/orders"},
+                {"pageId": "customers", "path": "/customers"},
+            ],
+            "pages": [
+                {"pageId": "orders", "path": "/orders", "name": "订单"},
+                {"pageId": "customers", "path": "/customers", "name": "客户"},
             ],
             "page_implementation_contracts": [
                 _page_implementation_contract("orders", ["orders.list"]),
@@ -1145,7 +1148,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             persisted_plan_path.write_text(
                 json.dumps(
                     {
-                        "schema_version": "build-dag.v3",
+                        "schema_version": "build-dag.v4",
                         "status": "ready",
                         "task_registry": {},
                         "task_graph": {
@@ -1207,7 +1210,10 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "version": "1.0.0",
             "confirmation_status": "confirmed",
             "frontend_pages": [
-                {"pageId": "orders"}
+                {"pageId": "orders", "path": "/orders"}
+            ],
+            "pages": [
+                {"pageId": "orders", "path": "/orders", "name": "订单"},
             ],
             "page_implementation_contracts": [
                 _page_implementation_contract("orders", ["orders.list"]),
@@ -1313,8 +1319,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "version": "1.0.0",
             "confirmation_status": "confirmed",
             "frontend_pages": [
-                {"pageId": "orders"},
-                {"pageId": "orderReports"},
+                {"pageId": "orders", "path": "/orders"},
+                {"pageId": "orderReports", "path": "/order-reports"},
+            ],
+            "pages": [
+                {"pageId": "orders", "path": "/orders", "name": "订单"},
+                {"pageId": "orderReports", "path": "/order-reports", "name": "订单报表"},
             ],
             "page_implementation_contracts": [
                 _page_implementation_contract("orders", ["orders.list"]),
@@ -1529,6 +1539,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         project_plan["confirmation_status"] = "confirmed"
 
         with tempfile.TemporaryDirectory() as workspace:
+            _write_current_plan(workspace, project_plan)
             with patch(
                 "app.graph.nodes.tasks._build_prerequisite_errors",
                 return_value=[],
@@ -1628,19 +1639,19 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         project_plan["confirmation_status"] = "confirmed"
         project_plan["api_contracts"][0]["entity_ids"] = ["Unknown"]
 
-        with patch(
+        with tempfile.TemporaryDirectory() as workspace, patch(
             "app.graph.nodes.tasks._build_prerequisite_errors", return_value=[]
-        ), patch(
-            "app.graph.nodes.tasks.inspect_template_generation_readiness",
-            return_value={"templateVariant": "main", "errors": []},
         ), patch(
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             side_effect=AssertionError("must not generate tasks with contract drift"),
         ):
+            project_plan_path = _write_current_plan(workspace, project_plan)
             result = prepare_build_tasks(
                 {
                     "request": "开始任务拆分",
+                    "workspace": workspace,
                     "project_plan": project_plan,
+                    "project_plan_json_path": project_plan_path,
                     "timeline": [],
                 }
             )

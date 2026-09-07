@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, AsyncIterator, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -10,13 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
-    begin_application_template_generation,
-    complete_application_template_generation,
     ensure_application_lifecycle,
     load_application_lifecycle,
-)
-from app.services.application_template_generation import (
-    prepare_application_template_generation,
 )
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.service import WorkspaceBootstrapService
@@ -34,31 +28,6 @@ class ApplicationLifecycleApplication(BaseModel):
     app_name: str = Field(alias="appName", min_length=1, max_length=512)
 
 
-class TemplateDownloadTarget(BaseModel):
-    """校验单个模板下载目标的结构化执行结果。"""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    status: Literal["pending", "succeeded", "failed"]
-    path: str = Field(min_length=1, max_length=4096)
-    attempt: int = Field(ge=0, le=3)
-    error: str | None = Field(default=None, max_length=8192)
-    repository_url: str | None = Field(default=None, alias="repositoryUrl", max_length=4096)
-    branch: Literal["main", "auth"] | None = None
-    commit_sha: str | None = Field(default=None, alias="commitSha", min_length=7, max_length=128)
-
-
-class TemplateDownloadResult(BaseModel):
-    """校验 Renderer 提交的前后端模板下载汇总。"""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    ok: bool
-    status: Literal["succeeded", "failed"]
-    failed_targets: list[Literal["frontend", "backend"]] = Field(alias="failedTargets")
-    targets: dict[Literal["frontend", "backend"], TemplateDownloadTarget]
-
-
 class ApplicationLifecycleAction(BaseModel):
     """校验生命周期创建、读取和应用模板文件生成结果动作。"""
 
@@ -67,16 +36,11 @@ class ApplicationLifecycleAction(BaseModel):
     action: Literal[
         "create",
         "get",
-        "prepare_template_generation",
-        "complete_template_generation",
         "bootstrap_template_generation",
         "workspace_attach",
     ]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     application: ApplicationLifecycleApplication | None = None
-    succeeded: bool | None = None
-    error_message: str | None = Field(default=None, alias="errorMessage", max_length=2048)
-    download_result: TemplateDownloadResult | None = Field(default=None, alias="downloadResult")
 
 
 def application_lifecycle_capabilities() -> dict[str, Any]:
@@ -91,8 +55,6 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
         "actions": [
             "create",
             "get",
-            "prepare_template_generation",
-            "complete_template_generation",
             "bootstrap_template_generation",
             "workspace_attach",
         ],
@@ -149,19 +111,6 @@ def build_application_lifecycle_ag_ui_stream(
             if state is None:
                 raise ValueError("application-lifecycle.json 不存在。")
             message = "已读取应用生命周期。"
-        elif request.action == "prepare_template_generation":
-            if request.download_result is None:
-                raise ValueError("prepare_template_generation 必须提供 downloadResult。")
-            state = begin_application_template_generation(
-                request.workspace_root,
-                active_run_id=str(payload.get("runId") or "") or None,
-            )
-            manifest = await asyncio.to_thread(
-                prepare_application_template_generation,
-                request.workspace_root,
-                request.download_result.model_dump(mode="json", by_alias=True),
-            )
-            message = "页面和菜单增量初始化完成。"
         elif request.action == "bootstrap_template_generation":
             if bootstrap_service is None:
                 raise RuntimeError("Workspace Bootstrap 服务尚未初始化。")
@@ -182,20 +131,6 @@ def build_application_lifecycle_ag_ui_stream(
             if state is None:
                 raise ValueError("application-lifecycle.json 不存在。")
             message = "Workspace Attach 已完成。"
-        else:
-            if request.succeeded is None:
-                raise ValueError("complete_template_generation 必须提供 succeeded。")
-            state = complete_application_template_generation(
-                request.workspace_root,
-                succeeded=request.succeeded,
-                error_message=request.error_message,
-                active_run_id=str(payload.get("runId") or "") or None,
-            )
-            message = (
-                "应用模板文件生成完成，可以进入工作台。"
-                if request.succeeded
-                else "应用模板文件生成失败，已保留可重试状态。"
-            )
         data = {"action": request.action, "lifecycle": application_lifecycle_payload(state)}
         if request.action == "workspace_attach":
             data["workspaceAttach"] = {
@@ -203,8 +138,6 @@ def build_application_lifecycle_ag_ui_stream(
                 "cleaned": attached.cleaned,
                 "lifecycleChanged": attached.lifecycle_changed,
             }
-        if request.action == "prepare_template_generation":
-            data["templateGenerationManifest"] = manifest
         return AgUiActionResult(data=data, message=message)
 
     return build_ag_ui_action_stream(

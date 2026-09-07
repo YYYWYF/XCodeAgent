@@ -3,8 +3,7 @@ export {}
 import type { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   ApplicationSchemaConfig,
-  DevelopmentPlanningPageTreeNode,
-  TemplateDownloadResult
+  DevelopmentPlanningPageTreeNode
 } from './typings'
 
 declare global {
@@ -43,12 +42,6 @@ declare global {
           workspacePath: string
           applicationConfig: ApplicationSchemaConfig
         }) => Promise<{ ok?: boolean; path: string }>
-        cloneTemplate: (payload: {
-          projectPath: string
-          appName: string
-          frontendTemplateUrl?: string
-          backendTemplateUrl?: string
-        }) => Promise<TemplateDownloadResult>
         readApplication: (payload: { workspaceRoot: string }) => Promise<{ application?: unknown }>
         inspectPlanningArtifacts: (payload: { workspaceRoot: string }) => Promise<{
           ready: boolean

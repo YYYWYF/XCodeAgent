@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from app.services.frontend_page_tree import project_plan_page_records
 from app.services.ui_design_generator import derive_page_key
 
 ROUTES_RELATIVE_PATH = Path("frontend/src/constants/routes.tsx")
@@ -24,9 +25,9 @@ class RouteProjectionError(ValueError):
 def compile_route_projection(project_plan: dict[str, Any]) -> dict[str, list[dict[str, str | bool]]]:
     """从确认的 TechnicalPlan 编译全部业务页面，完全不依赖权限能力。"""
 
-    pages = project_plan.get("pages") if isinstance(project_plan, dict) else None
-    if not isinstance(pages, list):
-        raise RouteProjectionError("TechnicalPlan 缺少 pages 数组，不能生成业务路由。")
+    pages = project_plan_page_records(project_plan)
+    if not pages:
+        raise RouteProjectionError("已确认计划缺少业务页面事实，不能生成业务路由。")
     used_keys: set[str] = {"DefaultPage"}
     result: list[dict[str, str | bool]] = []
     for page in pages:

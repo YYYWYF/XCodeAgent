@@ -870,26 +870,6 @@ export type ApplicationLifecycleStage =
   | 'application_template_generation_failed'
   | 'ready_for_workbench'
 
-export type TemplateDownloadTargetResult = {
-  status: 'succeeded' | 'failed' | 'pending'
-  attempt: number
-  path: string
-  error?: string
-  repositoryUrl?: string
-  branch?: 'main' | 'auth'
-  commitSha?: string
-}
-
-export type TemplateDownloadResult = {
-  ok: boolean
-  status: 'succeeded' | 'failed'
-  failedTargets: Array<'frontend' | 'backend'>
-  targets: {
-    frontend: TemplateDownloadTargetResult
-    backend: TemplateDownloadTargetResult
-  }
-}
-
 export type WorkbenchExecutionStatus =
   | 'running'
   | 'stopping'

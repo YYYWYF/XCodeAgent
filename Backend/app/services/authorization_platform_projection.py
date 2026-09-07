@@ -1,4 +1,4 @@
-"""在 Build 派发前应用并记录平台拥有的权限共享投影。"""
+"""在 Build 任务完成后应用并记录平台拥有的共享投影。"""
 
 from __future__ import annotations
 
@@ -22,11 +22,11 @@ from app.workspace.task_documents import build_task_plan_sha256
 from app.workspace.code_changes import capture_workspace_changes
 
 
-class AuthorizationPlatformProjectionError(ValueError):
-    """表示确认后的平台权限投影无法安全应用。"""
+class PlatformProjectionError(ValueError):
+    """表示确认后的平台共享投影无法安全应用。"""
 
 
-def apply_authorization_platform_projections(
+def apply_platform_projections(
     workspace: str | Path,
     build_task_plan: dict[str, Any],
     *,
@@ -36,21 +36,21 @@ def apply_authorization_platform_projections(
     """应用确认 DAG 的共享投影，并把源码差异作为平台证据单独返回。"""
 
     if not isinstance(build_task_plan, dict):
-        raise AuthorizationPlatformProjectionError("Build DAG 根结构无效，不能应用权限共享投影。")
+        raise PlatformProjectionError("Build DAG 根结构无效，不能应用平台共享投影。")
     actual_plan_sha256 = build_task_plan_sha256(build_task_plan)
     if plan_sha256 and plan_sha256 != actual_plan_sha256:
-        raise AuthorizationPlatformProjectionError("Build Run 绑定的任务计划摘要与投影输入不一致。")
+        raise PlatformProjectionError("Build Run 绑定的任务计划摘要与投影输入不一致。")
     route_projection = build_task_plan.get("route_projection")
     frontend_projection = build_task_plan.get("authorization_frontend_projection")
     constants_projection = build_task_plan.get("authorization_constants_projection")
     if route_projection is None:
-        raise AuthorizationPlatformProjectionError("Build DAG 缺少通用 route_projection。")
+        raise PlatformProjectionError("Build DAG 缺少通用 route_projection。")
     if frontend_projection is None and constants_projection is None:
         authorization_decorations = None
     else:
         state = load_template_state(workspace)
         if not has_capability(state, "authorization"):
-            raise AuthorizationPlatformProjectionError("权限投影要求 TemplateState.effective 含 authorization。")
+            raise PlatformProjectionError("权限投影要求 TemplateState.effective 含 authorization。")
         authorization_decorations = (
             frontend_projection.get("routeDecorations")
             if isinstance(frontend_projection, dict)
@@ -58,7 +58,7 @@ def apply_authorization_platform_projections(
         )
     workspace_path = Path(workspace).expanduser().resolve()
     if not workspace_path.is_dir():
-        raise AuthorizationPlatformProjectionError("权限共享投影工作区不存在或不是目录。")
+        raise PlatformProjectionError("平台共享投影工作区不存在或不是目录。")
 
     def _apply() -> dict[str, Any]:
         """严格按确认 DAG 写入通用路由、可选权限资源和后端常量。"""
@@ -86,18 +86,18 @@ def apply_authorization_platform_projections(
             OSError,
             ValueError,
         ) as exc:
-            raise AuthorizationPlatformProjectionError(str(exc)) from exc
+            raise PlatformProjectionError(str(exc)) from exc
 
-    # 平台写入发生在任何 Agent 快照之前；返回的差异不能并入 Agent code_change_sets。
+    # 平台写入在所有 Build 任务成功后才发生；返回的差异不能并入 Agent code_change_sets。
     captured = capture_workspace_changes(
         workspace=str(workspace_path),
-        source_tool="platform.authorization_projection",
+        source_tool="platform.projection",
         action=_apply,
     )
     change_set = captured.code_change_set or {}
     return {
         "status": "applied",
-        "source": "platform.authorization_projection",
+        "source": "platform.projection",
         "buildRunId": build_run_id,
         "planSha256": actual_plan_sha256,
         "frontend": captured.value["frontend"],

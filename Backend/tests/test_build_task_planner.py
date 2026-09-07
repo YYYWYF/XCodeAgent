@@ -1604,7 +1604,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             build_task_plan_max_retries=2,
         )
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "backend:bootstrap": {"id": "backend:bootstrap", "kind": "backend"},
                 "backend:endpoint:orders-api:orders.list": {
@@ -1878,7 +1878,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "source_refs": {"type": "page_detail"},
         }
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "frontend:shell": {"id": "frontend:shell", "kind": "frontend"},
                 "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
@@ -1899,9 +1899,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             dashboard = Path(workspace) / "frontend/src/pages/Dashboard/index.tsx"
             dashboard.parent.mkdir(parents=True)
             dashboard.write_text("export default function Dashboard() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -1944,7 +1941,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "frontend/src/pages/Dashboard/index.tsx",
         )
         self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
-        self.assertIn("must not add template page entry", str(plan["task_graph"]["validation"]["errors"]))
+        self.assertIn("must include the dashboard_page page entry", str(plan["task_graph"]["validation"]["errors"]))
         self.assertNotIn("frontend/src/constants/menus.ts", page_task["allowed_paths"])
 
     def test_existing_page_entry_is_used_when_model_omits_page_path(self) -> None:
@@ -1971,10 +1968,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page_file = Path(workspace) / "frontend/src/pages/PetListPage/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text("export default function PetListPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
-
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -2022,10 +2015,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as workspace:
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
-
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -2061,8 +2050,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             [change["path"] for change in page_task["change_scope"]],
         )
 
-    def test_scaffolded_menu_entry_excludes_model_menu_task(self) -> None:
-        """脚手架已注册精确菜单项时，模型菜单任务直接不进入 Build DAG。"""
+    def test_platform_registration_task_is_rejected_by_dag_validation(self) -> None:
+        """模型触碰平台托管路由文件时，DAG 必须保留候选并报告边界错误。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -2083,7 +2072,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "required_unit_ids": ["frontend:shell", "page:dashboard_page"],
         }
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "frontend:shell": {"id": "frontend:shell", "kind": "frontend"},
                 "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
@@ -2104,15 +2093,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page_file = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text("export default function DashboardPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text(
-                """export const BIZ_MENUS = [{
-  path: 'firstLevel',
-  children: [{ path: '/page/', name: '概览页', key: 'DashboardPage' }]
-}];""",
-                encoding="utf-8",
-            )
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -2182,7 +2162,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "required_unit_ids": ["page:dashboard_page"],
         }
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "page:dashboard_page": {
                     "id": "page:dashboard_page",
@@ -2199,12 +2179,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
             page.parent.mkdir(parents=True)
             page.write_text("export default function DashboardPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text(
-                "export const BIZ_MENUS = [{ path: '/page/home', name: '概览页', key: 'DashboardPage' }];",
-                encoding="utf-8",
-            )
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -2254,8 +2228,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
         self.assertNotIn("pre_satisfied_targets", task)
 
-    def test_scaffolded_menu_entry_prevents_deterministic_duplicate_task(self) -> None:
-        """模型未生成菜单任务时，已存在的脚手架菜单也不得被确定性重复补齐。"""
+    def test_page_task_does_not_add_platform_registration_task(self) -> None:
+        """模型未触碰平台文件时，DAG 不得额外补齐路由或菜单注册任务。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -2273,13 +2247,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page_file = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text("export default function DashboardPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text(
-                "export const BIZ_MENUS = [{ children: "
-                "[{ path: '/page/', name: '概览页', key: 'DashboardPage' }] }];",
-                encoding="utf-8",
-            )
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -2330,9 +2297,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page_file = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text("export default function DashboardPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -2346,7 +2310,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                                 {
                                     "operation": "modify",
                                     "path": "frontend/src/constants/menus.ts",
-                                    "description": "追加到 BIZ_MENUS.firstLevel.children",
+                                    "description": "修改平台托管的业务导航区",
                                 }
                             ],
                             "acceptance_criteria": ["path 为 /page/dashboard"],
@@ -2403,9 +2367,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page_file = Path(workspace) / "frontend/src/pages/ProjectListPage/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text("export default function ProjectListPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -2758,7 +2719,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """页面任务只继承前端公共 Unit，后端 Unit 仅保留接口来源引用。"""
 
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "frontend"},
                 "backend:endpoint:orders-api:orders_api.list": {
@@ -2871,7 +2832,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """复现多任务计划，跨 Unit 反向边被改写且纯验证任务不进入注册表。"""
 
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "backend:bootstrap": {"id": "backend:bootstrap", "kind": "backend"},
                 "backend:core": {"id": "backend:core", "kind": "backend"},
@@ -2985,7 +2946,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ]
             },
             base_build_task_plan={
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "build_units": {
                     "database:users": {"id": "database:users", "kind": "database"}
                 },
@@ -3022,7 +2983,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ]
             },
             base_build_task_plan={
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "build_units": {
                     "backend:endpoint:user_api:user.list": {
                         "id": "backend:endpoint:user_api:user.list",
@@ -3088,7 +3049,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ]
             },
             base_build_task_plan={
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "build_units": {
                     "backend:endpoint:user_api:user.create": {
                         "id": "backend:endpoint:user_api:user.create",
@@ -3139,7 +3100,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ]
             },
             base_build_task_plan={
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "build_units": {
                     "database:core": {"id": "database:core", "kind": "database"},
                 },
@@ -3181,7 +3142,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """未显式声明 operation 时，按磁盘存在性决定 add/modify，避免验收 modified/added 错配。"""
 
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "application"},
             },
@@ -3227,7 +3188,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """显式 add/modify 也必须由工作区文件存在性统一归一化。"""
 
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "application"},
             },

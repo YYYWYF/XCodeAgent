@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from app.services.authorization_edd import verify_authorization_edd
-from app.services.authorization_platform_projection import apply_authorization_platform_projections
+from app.services.authorization_platform_projection import apply_platform_projections
 
 
 class AuthorizationPlatformProjectionTests(unittest.TestCase):
@@ -18,8 +18,8 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             self._write_template(workspace)
-            first = apply_authorization_platform_projections(workspace, self._plan())
-            second = apply_authorization_platform_projections(workspace, self._plan())
+            first = apply_platform_projections(workspace, self._plan())
+            second = apply_platform_projections(workspace, self._plan())
 
         self.assertEqual(first["summary"]["files"], 3)
         self.assertEqual(second["summary"]["files"], 0)
@@ -31,7 +31,7 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
             workspace = Path(directory)
             self._write_template(workspace)
             plan = self._plan()
-            apply_authorization_platform_projections(workspace, plan)
+            apply_platform_projections(workspace, plan)
             route_file = workspace / "frontend/src/constants/routes.tsx"
             route_file.write_text("// drift", encoding="utf-8")
             errors = verify_authorization_edd(workspace, plan)

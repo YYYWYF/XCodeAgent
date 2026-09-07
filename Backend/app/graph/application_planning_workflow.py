@@ -43,22 +43,10 @@ from app.services.application_lifecycle import (
     persist_application_lifecycle_transition,
 )
 from app.services.application_revision_lifecycle import issue_revision_continuation
-from app.services.authorization_frontend_projection import (
-    apply_authorization_frontend_projection,
-    compile_frontend_authorization_projection,
-)
-from app.services.route_projection import apply_route_projection, compile_route_projection
-from app.services.frontend_scaffold import (
-    collect_template_pages,
-    ensure_frontend_menu_entries,
-    ensure_frontend_page_placeholders,
-)
 from app.services.template_scaffold_injection import (
     inject_deterministic_backend_skeleton,
 )
 from app.workspace.plan_documents import technical_plan_json_path
-from app.workspace.product_plan_documents import confirmed_product_plan_json_path
-from app.workspace.spec_documents import ui_designs_json_path, load_ui_designs_json
 
 
 def _route_start(state: ProjectState) -> str:
@@ -415,7 +403,7 @@ def _technical_planning(state: ProjectState) -> dict:
             # 在签发 continuation 前，把可确定性推导的后端骨架代码注入模板工程，
             # 让开发阶段 Agent 只需补充业务逻辑，不必从零生成 Entity/PO/Mapper 等
             # 确定性文件。模板工程已在首次创建时拉取到工作区，此处只写不删。
-            _inject_revision_scaffold(workspace, node_state)
+            _inject_revision_backend_skeleton(workspace, node_state)
             token, issued = issue_revision_continuation(
                 workspace,
                 change_id=active_revision.change_id,
@@ -616,17 +604,15 @@ def _workspace(state: ProjectState) -> str:
     return workspace
 
 
-def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
-    """二次修改确认 TechnicalPlan 后，把确定性代码增量注入模板工程。
+def _inject_revision_backend_skeleton(workspace: str, state: dict[str, Any]) -> None:
+    """二次修改确认 TechnicalPlan 后，仅注入确定性的后端骨架。
 
-    只在模板工程已存在时注入（首次创建走 prepare_template_generation，不在此注入）。
+    只在模板工程已存在时注入（首次创建由 Workspace Bootstrap 完成，不在此注入）。
     注入失败不阻断主流程——确定性代码缺失时 Agent 仍可在 build 阶段补生成。
 
-    注入内容：
-    - 前端路由/权限资源（auth 分支）：从 TechnicalPlan 的 authorization_manifest 编译并写入 routes.tsx/resources.ts
-    - 前端页面占位：从 ProductPlan + UiDesign 收集页面并创建占位文件
-    - 后端骨架：从 TechnicalPlan 的 entities 推导 Entity/PO/Mapper/Repository/DTO/Controller
-    全部幂等——已存在且内容一致的文件跳过，不覆盖用户手改。
+    前端页面、菜单、路由及权限资源均由确认 Build DAG 在页面任务完成后投影；
+    这里不得预创建或重写它们。后端骨架从 TechnicalPlan 的 entities 推导
+    Entity/PO/Mapper/Repository/DTO/Controller，并保持幂等。
     """
 
     try:
@@ -638,66 +624,11 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
             technical_plan = json.load(handle)
         if not isinstance(technical_plan, dict):
             return
-        # 前端确定性注入：页面占位文件
-        _inject_frontend_page_placeholders(workspace, state)
-        # 前端确定性注入：通用路由与可选权限资源
-        _inject_frontend_authorization(workspace, technical_plan)
         # 后端确定性注入：Entity/PO/Mapper/Repository/DTO/Controller 骨架
         inject_deterministic_backend_skeleton(workspace, technical_plan)
     except Exception:
-        # 确定性注入是优化项，失败不阻断二次修改主流程；Agent 仍可补生成。
+        # 后端骨架是优化项，失败不阻断二次修改主流程；Agent 仍可补生成。
         pass
-
-
-def _inject_frontend_authorization(workspace: str, technical_plan: dict[str, Any]) -> None:
-    """从 TechnicalPlan 写入共享路由，并在存在权限事实时写入资源常量。"""
-
-    frontend_dir = Path(workspace) / "frontend"
-    routes_path = frontend_dir / "src" / "constants" / "routes.tsx"
-    if not routes_path.is_file():
-        return  # 模板未拉取或缺少固定 routes.tsx 托管区，跳过
-    authorization_projection = compile_frontend_authorization_projection(technical_plan)
-    apply_route_projection(
-        workspace,
-        compile_route_projection(technical_plan),
-        authorization_decorations=(
-            authorization_projection.get("routeDecorations")
-            if isinstance(authorization_projection, dict)
-            else None
-        ),
-    )
-    if authorization_projection is not None:
-        apply_authorization_frontend_projection(workspace, authorization_projection)
-
-
-def _inject_frontend_page_placeholders(workspace: str, state: dict[str, Any]) -> None:
-    """从 ProductPlan + UiDesign 收集页面并同步占位文件与菜单入口（main/auth 通用）。
-
-    创建/删除页面占位文件后，同步 ``BIZ_MENUS`` 顶层菜单项：追加新增页面入口、
-    移除已删除页面入口，使应用启动后菜单与 ProductPlan 保持一致。菜单同步失败
-    不阻断主流程——与占位文件写入一样作为确定性优化项处理。
-    """
-
-    frontend_dir = Path(workspace) / "frontend"
-    if not (frontend_dir / "src").is_dir():
-        return  # 模板未拉取，跳过
-    product_plan_path = confirmed_product_plan_json_path(state)
-    if not product_plan_path.is_file():
-        return
-    import json
-    with product_plan_path.open(encoding="utf-8") as handle:
-        product_plan = json.load(handle)
-    if not isinstance(product_plan, dict):
-        return
-    ui_designs_path = ui_designs_json_path(state)
-    ui_designs = load_ui_designs_json(ui_designs_path) if ui_designs_path.is_file() else {}
-    pages = collect_template_pages(product_plan, ui_designs)
-    if pages:
-        ensure_frontend_page_placeholders(frontend_dir, pages)
-        # 同步 BIZ_MENUS 菜单入口，避免新增/删除页面后菜单与实际页面不一致。
-        menus_path = frontend_dir / "src" / "constants" / "menus.ts"
-        if menus_path.is_file():
-            ensure_frontend_menu_entries(frontend_dir, pages)
 
 
 def build_application_planning_graph(*, checkpointer):

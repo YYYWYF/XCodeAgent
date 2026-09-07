@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+from copy import deepcopy
 from uuid import uuid4
 
 from concurrent.futures import ThreadPoolExecutor
@@ -33,8 +34,8 @@ from app.graph.nodes.confirmation import extract_confirmation_answer, user_confi
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
 from app.services.build_task_confirmation import build_task_confirmation_read_model
 from app.services.authorization_platform_projection import (
-    AuthorizationPlatformProjectionError,
-    apply_authorization_platform_projections,
+    PlatformProjectionError,
+    apply_platform_projections,
 )
 from app.services.authorization_edd import verify_authorization_edd
 from app.services.business_acceptance_verifier import verify_business_acceptance
@@ -1027,8 +1028,8 @@ def _build_run_plan_drift_result(
             "errors": errors,
         },
         "build_events": [*build_events, "scheduler:build_run_plan_changed"],
-        "authorization_platform_projection_evidence": current_state.get(
-            "authorization_platform_projection_evidence", {}
+        "platform_projection_evidence": current_state.get(
+            "platform_projection_evidence", {}
         ),
         "build_run_id": current_state.get("build_run_id"),
         "build_run_plan_path": current_state.get("build_run_plan_path"),
@@ -1135,34 +1136,8 @@ def run_build_scheduler(
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)
     if gate_errors:
         return _build_gate_result(state, build_task_plan, gate_errors)
-    try:
-        # 平台在 Agent 获取工作区快照前重放确认投影，源码差异单列为平台证据。
-        authorization_platform_projection_evidence = (
-            apply_authorization_platform_projections(
-                workspace_from_state(state) or "",
-                build_task_plan,
-                build_run_id=build_run_binding.get("build_run_id"),
-                plan_sha256=build_run_binding.get("build_run_plan_sha256"),
-            )
-        )
-    except AuthorizationPlatformProjectionError as exc:
-        blocked = _build_gate_result(
-            state,
-            build_task_plan,
-            [f"权限共享投影写入失败，Build 已阻断：{exc}"],
-        )
-        return {
-            **blocked,
-            "authorization_platform_projection_evidence": {
-                "status": "failed",
-                "source": "platform.authorization_projection",
-                "buildRunId": build_run_binding.get("build_run_id"),
-                "planSha256": build_run_binding.get("build_run_plan_sha256"),
-                "error": str(exc),
-                "files": [],
-                "summary": {"files": 0, "additions": 0, "deletions": 0},
-            },
-        }
+    # 后续调度会把任务运行态写回派生计划；平台投影必须始终读取不可变的确认快照。
+    confirmed_build_task_plan = deepcopy(build_task_plan)
     # 当前契约直接使用最新计划，不对历史 DAG 做运行时迁移或字段回填。
     canonical_tasks = list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
     build_task_plan = replace_build_task_plan_tasks(build_task_plan, canonical_tasks)
@@ -1170,7 +1145,7 @@ def run_build_scheduler(
         **state,
         **build_run_binding,
         "build_task_plan_path": build_run_binding.get("build_run_plan_path"),
-        "authorization_platform_projection_evidence": authorization_platform_projection_evidence,
+        "platform_projection_evidence": state.get("platform_projection_evidence", {}),
         "build_results": hydrate_missing_failed_results(
             canonical_tasks,
             list(state.get("build_results", [])),
@@ -1626,13 +1601,46 @@ def run_build_scheduler(
         else "failed"
     )
     if workflow_status == "completed":
-        edd_errors = verify_authorization_edd(
-            workspace_from_state(state) or "",
-            current_state.get("build_task_plan", build_task_plan),
-        )
-        if edd_errors:
+        try:
+            # 仅当所有页面/API/后端任务已成功后，才验证真实页面并写入平台托管区。
+            # apply_platform_projections 内部的 Route Projection 会拒绝缺失的页面文件。
+            platform_projection_evidence = apply_platform_projections(
+                workspace_from_state(current_state) or "",
+                # 使用 Build Run 的不可变确认 DAG；current_state 会随着任务状态更新，
+                # 不能再参与摘要校验或改变平台投影输入。
+                confirmed_build_task_plan,
+                build_run_id=build_run_binding.get("build_run_id"),
+                plan_sha256=build_run_binding.get("build_run_plan_sha256"),
+            )
+            build_events.append("scheduler:platform_projection_applied")
+        except PlatformProjectionError as exc:
             workflow_status = "failed"
-            build_summary = {**build_summary, "status": "failed", "authorization_edd_errors": edd_errors}
+            platform_projection_evidence = {
+                "status": "failed",
+                "source": "platform.projection",
+                "buildRunId": build_run_binding.get("build_run_id"),
+                "planSha256": build_run_binding.get("build_run_plan_sha256"),
+                "error": str(exc),
+                "files": [],
+                "summary": {"files": 0, "additions": 0, "deletions": 0},
+            }
+            build_summary = {
+                **build_summary,
+                "status": "failed",
+                "platform_projection_errors": [str(exc)],
+            }
+            build_events.append("scheduler:platform_projection_failed")
+        if workflow_status == "completed":
+            # EDD 必须在投影完成后只读验证，避免以验收重写掩盖投影失败。
+            edd_errors = verify_authorization_edd(
+                workspace_from_state(current_state) or "",
+                current_state.get("build_task_plan", build_task_plan),
+            )
+            if edd_errors:
+                workflow_status = "failed"
+                build_summary = {**build_summary, "status": "failed", "authorization_edd_errors": edd_errors}
+    else:
+        platform_projection_evidence = state.get("platform_projection_evidence", {})
     clarification = (
         _repair_scope_confirmation_payload(repair_task_plan)
         if isinstance(repair_task_plan, dict)
@@ -1664,7 +1672,7 @@ def run_build_scheduler(
         "build_events": build_events,
         "repair_iteration": int(state.get("repair_iteration", 0) or 0)
         + (1 if repair_dispatched else 0),
-        "authorization_platform_projection_evidence": authorization_platform_projection_evidence,
+        "platform_projection_evidence": platform_projection_evidence,
         **code_change_state_update(merged_code_changes),
         "timeline": ["build"],
     }

@@ -1,6 +1,6 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
-import type { ApplicationConfig, ApplicationLifecycle, TemplateDownloadResult } from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 
 type ApplicationLifecyclePayload = {
@@ -146,35 +146,5 @@ export async function bootstrapApplicationTemplateGeneration(
   return runApplicationLifecycleAction(threadId, {
     action: 'bootstrap_template_generation',
     workspaceRoot: application.workspaceRoot
-  })
-}
-
-// 把模板下载明细提交给后端，并执行页面与菜单的增量初始化。
-export async function prepareApplicationTemplateGeneration(
-  application: ApplicationConfig,
-  threadId: string,
-  downloadResult: TemplateDownloadResult
-): Promise<ApplicationLifecycle> {
-  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return runApplicationLifecycleAction(threadId, {
-    action: 'prepare_template_generation',
-    workspaceRoot: application.workspaceRoot,
-    downloadResult
-  })
-}
-
-// 把应用模板文件的真实生成结果提交给后端，由状态机决定 ready 或 failed。
-export async function completeApplicationTemplateGeneration(
-  application: ApplicationConfig,
-  threadId: string,
-  succeeded: boolean,
-  errorMessage?: string
-): Promise<ApplicationLifecycle> {
-  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return runApplicationLifecycleAction(threadId, {
-    action: 'complete_template_generation',
-    workspaceRoot: application.workspaceRoot,
-    succeeded,
-    errorMessage
   })
 }

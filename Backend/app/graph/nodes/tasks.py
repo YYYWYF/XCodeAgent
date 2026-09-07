@@ -272,8 +272,8 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         }
     # Engine State 是唯一模板事实源；Build 仅持久化只读绑定快照。
     try:
-        state = load_template_state(workspace)
-        build_context["template_context"] = template_context(state)
+        template_state = load_template_state(workspace)
+        build_context["template_context"] = template_context(template_state)
     except ValueError as exc:
         attempt_plan = _build_task_plan_attempt_view(build_task_plan, build_execution_scope)
         progress.fail(
@@ -1059,8 +1059,8 @@ def _build_task_plan_gate_errors(
     """检查最新 DAG 的 schema、ready 状态、确认前置和当前 scope。"""
 
     errors: list[str] = []
-    if build_task_plan.get("schema_version") != "build-dag.v3":
-        errors.append("最新 DAG schema_version 不是 build-dag.v3。")
+    if build_task_plan.get("schema_version") != "build-dag.v4":
+        errors.append("最新 DAG schema_version 不是 build-dag.v4。")
     if build_task_plan.get("status") != "ready":
         errors.append(f"最新 DAG status={build_task_plan.get('status') or 'unknown'}，不能进入 Build。")
     if build_task_plan.get("confirmation_status") not in {"pending", "confirmed"}:
@@ -1103,11 +1103,11 @@ def _build_task_plan_status(build_task_plan: dict[str, Any]) -> str:
 
 
 def _fill_missing_build_task_plan_status(value: Any) -> dict[str, Any]:
-    """为当前 build-dag.v3 产物补齐生成阶段漏写的顶层 status 字段。"""
+    """为当前 build-dag.v4 产物补齐生成阶段漏写的顶层 status 字段。"""
 
     if not isinstance(value, dict):
         return {}
-    if value.get("schema_version") != "build-dag.v3" or "status" in value:
+    if value.get("schema_version") != "build-dag.v4" or "status" in value:
         return value
     return {**value, "status": _build_task_plan_status(value)}
 
@@ -1229,7 +1229,7 @@ def _existing_build_task_plan(state: ProjectState) -> dict:
 def _is_valid_build_task_plan(value: object) -> bool:
     """仅接受通过任务图校验的 v3 DAG，避免失败 checkpoint 污染后续重试。"""
 
-    if not isinstance(value, dict) or value.get("schema_version") != "build-dag.v3":
+    if not isinstance(value, dict) or value.get("schema_version") != "build-dag.v4":
         return False
     if value.get("status") == "failed":
         return False

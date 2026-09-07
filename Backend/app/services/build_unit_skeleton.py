@@ -120,7 +120,7 @@ def ensure_build_unit_skeleton(
     unit_graph = _unit_graph(project_plan, build_units)
     return {
         **current_plan,
-        "schema_version": "build-dag.v3",
+        "schema_version": "build-dag.v4",
         "application": {
             "unit_id": "application:root",
             "status": "prepared",
