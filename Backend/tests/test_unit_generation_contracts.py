@@ -24,10 +24,11 @@ def _context_payload() -> dict:
             "requirement_id": "orders-page", "description": "实现订单查询页面",
             "source_refs": {"artifact": "technical-plan", "pointers": ["/pages/orders"]},
         }],
-        "formal_contracts": {
-            "inline_slices": [{"endpoint_id": "orders.list", "fields": [{"name": "id"}]}],
-            "frozen_catalog_refs": [{"ref_id": "orders-contract", "digest": "frozen-digest"}],
-        },
+        "contract_catalog": [{
+            "ref_id": "frozen-contract-orders",
+            "kind": "page_contract",
+            "selectors": ["/", "/requiredEndpointIds"],
+        }],
         "workspace_context": {"snapshot_id": "workspace-1", "relevant_paths": ["frontend/src/pages/Orders/index.tsx"]},
         "dependency_context": {"dependency_unit_ids": ["frontend:api-client"], "retained_task_summaries": [{"id": "api:orders"}]},
         "constraints": {"owner": "frontend", "managed_files": ["frontend/src/constants/resources.ts"]},
@@ -130,15 +131,15 @@ class UnitGenerationContractTests(unittest.TestCase):
 
         context = UnitGenerationContext(**_context_payload())
         for mapping in (
-            context.build_execution_scope, context.formal_contracts, context.workspace_context,
+            context.build_execution_scope, context.workspace_context,
             context.dependency_context, context.constraints,
-            context.formal_contracts["inline_slices"][0]["fields"][0],
             context.generation_requirements[0].source_refs,
         ):
             with self.subTest(mapping=mapping), self.assertRaises(TypeError):
                 mapping["changed"] = True
         for sequence in (
-            context.generation_requirements, context.formal_contracts["inline_slices"],
+            context.generation_requirements, context.contract_catalog,
+            context.contract_catalog[0].selectors,
             context.workspace_context["relevant_paths"], context.dependency_context["dependency_unit_ids"],
             context.constraints["managed_files"], context.generation_requirements[0].source_refs["pointers"],
         ):
@@ -152,7 +153,7 @@ class UnitGenerationContractTests(unittest.TestCase):
         payload = _context_payload()
         before = deepcopy(payload)
         context = UnitGenerationContext(**payload)
-        payload["formal_contracts"]["inline_slices"][0]["fields"][0]["name"] = "changed"
+        payload["contract_catalog"][0]["selectors"].append("/changed")
         payload["generation_requirements"][0]["source_refs"]["pointers"].append("changed")
         payload["dependency_context"]["retained_task_summaries"][0]["id"] = "changed"
         dumped = context.model_dump(mode="json")
@@ -256,11 +257,11 @@ class UnitGenerationContractTests(unittest.TestCase):
         context = UnitGenerationContext(**_context_payload())
         copied = context.model_copy(deep=True)
         self.assertEqual(copied, context)
-        self.assertIsNot(copied.formal_contracts, context.formal_contracts)
+        self.assertIsNot(copied.contract_catalog, context.contract_catalog)
         with self.assertRaises(ValidationError):
             context.model_copy(update={"model_max_tokens": 4096})
         with self.assertRaises(ValidationError):
-            UnitGenerationPolicy(**_policy_payload()).model_copy(update={"formal_contracts": {}})
+            UnitGenerationPolicy(**_policy_payload()).model_copy(update={"contract_catalog": []})
 
     def test_context_accepts_explicit_empty_and_confirmed_baseline_identity(self) -> None:
         """没有 confirmed 基线时显式使用 None，有基线时保留调用方提供的摘要。"""

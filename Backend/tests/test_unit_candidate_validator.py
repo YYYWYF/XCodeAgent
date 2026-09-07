@@ -69,7 +69,7 @@ def _context(unit_id: str = "page:orders") -> UnitGenerationContext:
         input_fingerprint="input-digest",
         base_confirmed_plan_digest="confirmed-digest",
         generation_requirements=[_requirement(unit_id)],
-        formal_contracts={"inline_slices": []},
+        contract_catalog=[],
         workspace_context={"snapshot_id": "workspace-1"},
         dependency_context={
             "dependency_unit_ids": ["frontend:api-client"],

@@ -743,9 +743,8 @@ UnitGenerationContext
 │
 ├── generation_requirements
 │
-├── formal_contracts
-│   ├── inline_slices
-│   └── frozen_catalog_refs
+├── contract_catalog
+│   └── [{ ref_id, kind, selectors[] }]
 │
 ├── workspace_context
 │   ├── workspace_snapshot identity

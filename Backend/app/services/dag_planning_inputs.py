@@ -3,9 +3,23 @@
 from collections.abc import Mapping
 from hashlib import sha256
 import json
+from typing import Annotated
+
+from pydantic import BeforeValidator
 
 from app.services.build_task_reuse_contracts import ReuseFacts
-from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel, plain_json
+from app.services.frozen_contract_catalog import (
+    ContractCatalogBindingError,
+    FormalContractSourceRef,
+    build_unit_contract_catalog,
+)
+from app.services.frozen_contract_store import FrozenContractStore, PlanningFormalInputs
+from app.services.planning_frozen import (
+    FrozenJsonObject,
+    FrozenPlanningModel,
+    plain_json,
+    tuple_input,
+)
 from app.services.planning_run_contracts import PlanningRun, UnitRunState
 from app.services.unit_generation_contracts import UnitGenerationContext
 from app.services.unit_generation_requirement_targets import scoped_formal_targets
@@ -22,6 +36,12 @@ def _input_digest(value: Mapping) -> str:
                              separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+_FormalSourceRefs = Annotated[
+    tuple[FormalContractSourceRef, ...],
+    BeforeValidator(tuple_input),
+]
+
+
 class SequentialPlanningInputs(FrozenPlanningModel):
     """一次 Run 的完整只读业务输入；不接受 Pending/checkpoint 替代正式基线。"""
 
@@ -32,6 +52,8 @@ class SequentialPlanningInputs(FrozenPlanningModel):
     build_execution_scope: FrozenJsonObject
     workspace_snapshot: FrozenJsonObject
     reuse_facts: ReuseFacts
+    formal_contract_inputs: PlanningFormalInputs
+    formal_source_refs: _FormalSourceRefs
 
     def requirements(self) -> UnitGenerationRequirements:
         """验证基线身份及 retained 全量覆盖，再调用 T2.3 计算本轮职责。"""
@@ -60,6 +82,11 @@ class SequentialPlanningInputs(FrozenPlanningModel):
             fail_requirement_input("PLANNING_SCOPE_MISMATCH", "BuildContext 与显式 BuildExecutionScope 不一致。")
         if "required_unit_ids" not in self.build_context:
             fail_requirement_input("PLANNING_REQUIRED_UNITS_MISSING", "BuildContext 必须显式提供 required_unit_ids；空 Scope 也需提供空数组。")
+        if self.formal_contract_inputs.technical_plan.content != self.project_plan:
+            fail_requirement_input(
+                "FORMAL_CONTRACT_INPUT_MISMATCH",
+                "FrozenContractStore 的 TechnicalPlan 正文必须与 Planning 正式 target 完全一致。",
+            )
         return resolve_generation_requirements(
             required_unit_ids=self.build_context.get("required_unit_ids", ()),
             build_execution_scope=self.build_execution_scope, unit_skeleton=self.skeleton_plan,
@@ -93,9 +120,14 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         )
 
     def unit_context(
-        self, run: PlanningRun, requirements: UnitGenerationRequirements, unit_id: str,
+        self,
+        run: PlanningRun,
+        requirements: UnitGenerationRequirements,
+        unit_id: str,
+        *,
+        frozen_contract_store: FrozenContractStore,
     ) -> UnitGenerationContext:
-        """只从冻结正式输入构造 inline 切片，绝不读取本轮任何 Candidate。"""
+        """为当前 Unit 构造 Frozen Store catalog，绝不内联合同或读取 Candidate。"""
 
         plan = plain_json(self.project_plan)
         pages, endpoints = scoped_formal_targets(plan, self.build_execution_scope)
@@ -109,12 +141,27 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         elif not endpoint_keys:
             # 公共 adapter/bootstrap 的职责依赖当前 Scope 的接口与数据源，但不包含其他 Scope。
             endpoint_keys.update(endpoints)
-        contracts = [{**contract, "endpoints": [endpoint for endpoint in contract["endpoints"]
-                     if (contract["id"], endpoint["id"]) in endpoint_keys]}
-                     for contract in plan.get("api_contracts", [])
-                     if any(key[0] == contract["id"] for key in endpoint_keys)]
-        entity_ids = {key for contract in contracts for key in contract.get("entity_ids", ())}
         unit = run.unit_states[unit_id]
+        if frozen_contract_store.planning_run_id != run.planning_run_id:
+            fail_requirement_input(
+                "UNIT_CONTRACT_SOURCE_BINDING_INVALID",
+                "FrozenContractStore 与当前 PlanningRun 身份不一致。",
+                unit_ids=(unit_id,),
+            )
+        try:
+            contract_catalog = build_unit_contract_catalog(
+                unit_id=unit_id,
+                unit_kind=unit.kind,
+                generation_requirements=duties,
+                formal_source_refs=self.formal_source_refs,
+                frozen_contract_store=frozen_contract_store,
+            )
+        except ContractCatalogBindingError as exc:
+            fail_requirement_input(
+                "UNIT_CONTRACT_SOURCE_BINDING_INVALID",
+                str(exc),
+                unit_ids=(unit_id,),
+            )
         registry = self.base_confirmed_plan["task_registry"] if self.base_confirmed_plan is not None else {}
         summaries = [{field: registry[key][field] for field in ("id", "unit_id", "title", "description", "provides_capabilities")
                       if field in registry[key]} for key in unit.retained_task_ids]
@@ -122,14 +169,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
             planning_run_id=run.planning_run_id, unit_id=unit_id, unit_kind=unit.kind,
             build_execution_scope=run.build_execution_scope, input_fingerprint=run.input_fingerprint,
             base_confirmed_plan_digest=run.base_confirmed_plan_digest, generation_requirements=duties,
-            formal_contracts={"inline_slices": [{
-                "architecture": plan.get("architecture", {}),
-                "build_target": self.build_context.get("target", {}) if selected_pages else {},
-                "page_implementation_contracts": selected_pages, "api_contracts": contracts,
-                "entities": [entity for entity in plan.get("entities", []) if entity.get("id") in entity_ids],
-                "entity_detail_plans": [entity for entity in plan.get("entity_detail_plans", []) if entity.get("entity_id") in entity_ids],
-                "authorization_constraints": self.build_context.get("authorization_constraints", {}),
-            }]},
+            contract_catalog=contract_catalog,
             workspace_context=self.workspace_snapshot,
             dependency_context={
                 "dependency_unit_ids": sorted({edge["from"] for edge in self.skeleton_plan["unit_graph"].get("edges", ())

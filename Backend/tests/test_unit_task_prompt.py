@@ -181,7 +181,7 @@ class UnitTaskPromptTests(unittest.TestCase):
             "## 1. Single Unit Role & Boundary",
             "## 2. Strict Output Contract",
             "## 3. Current Generation Requirements",
-            "## 4. Frozen Inline Unit Context",
+            "## 4. Frozen Unit Context & Contract Catalog",
             "## 5. Dependency Allowlist",
             "## 6. Unit-Kind Rules",
             "## 7. Structured Feedback",

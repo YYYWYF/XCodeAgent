@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import AfterValidator, BeforeValidator, Field, PlainSerializer, StringConstraints, model_validator
 
 from app.domain.models import BuildUnitKind
+from app.services.frozen_contract_catalog import ContractCatalogEntry
 from app.services.planning_issues import ValidationIssue
 from app.services.planning_frozen import (
     FrozenJsonObject as _FrozenJsonObject, FrozenPlanningModel as _GenerationModel,
@@ -23,6 +24,7 @@ _ReadLimits = Annotated[
     Mapping[_Identifier, _PositiveInt], BeforeValidator(_plain_json), AfterValidator(_freeze_json),
     PlainSerializer(_plain_json, return_type=dict[str, int]),
 ]
+_ContractCatalog = Annotated[tuple[ContractCatalogEntry, ...], BeforeValidator(_tuple_input)]
 
 
 class GenerationRequirement(_GenerationModel):
@@ -40,8 +42,8 @@ class GenerationRequirement(_GenerationModel):
 class UnitGenerationContext(_GenerationModel):
     """冻结的业务输入；所有业务区段必须显式提供，空 confirmed 基线用 None 表示。
 
-    formal_contracts 可携带 inline_slices/frozen_catalog_refs，其他区段保存工作区、
-    依赖和约束快照。仅冻结已有数据，不读取文件、不计算 fingerprint/digest。
+    contract_catalog 只保存当前 Unit 的 Frozen Store 引用和 selector allowlist，其他区段
+    保存工作区、依赖和约束快照。合同正文不进入 Context；本模型也不读取 fragment。
     retry counter、timeout 和 token budget 均不是本模型字段。
     """
 
@@ -52,10 +54,19 @@ class UnitGenerationContext(_GenerationModel):
     input_fingerprint: _Identifier
     base_confirmed_plan_digest: _Identifier | None
     generation_requirements: Annotated[tuple[GenerationRequirement, ...], BeforeValidator(_tuple_input)]
-    formal_contracts: _FrozenJsonObject
+    contract_catalog: _ContractCatalog
     workspace_context: _FrozenJsonObject
     dependency_context: _FrozenJsonObject
     constraints: _FrozenJsonObject
+
+    @model_validator(mode="after")
+    def validate_contract_catalog(self) -> "UnitGenerationContext":
+        """拒绝重复或顺序不稳定的 catalog 引用，保证 retry 可精确比较。"""
+
+        ref_ids = tuple(entry.ref_id for entry in self.contract_catalog)
+        if len(set(ref_ids)) != len(ref_ids) or tuple(sorted(ref_ids)) != ref_ids:
+            raise ValueError("contract_catalog ref_id 必须唯一并按字典序排列。")
+        return self
 
 
 class UnitGenerationPolicy(_GenerationModel):

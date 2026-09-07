@@ -11,6 +11,7 @@ from app.config import Settings
 from app.services.authorization_resource_catalog import compile_frontend_resource_catalog, resource_catalog_fingerprint
 from app.services.dag_planning_inputs import SequentialPlanningInputs
 from app.services.deterministic_unit_candidates import build_auth_guard_candidate
+from app.services.frozen_contract_store import FrozenContractStore
 from app.services.global_issue_attribution import GlobalRepairDecision, attribute_global_issues
 from app.services.global_planning_validation import CandidateOwnership, TaskProvenance
 from app.services.global_repair_orchestrator import run_global_repair_loop
@@ -141,7 +142,25 @@ async def plan_dag_sequential(
             ),))
         initial = frozen.create_run(requirements, planning_run_id=planning_run_id,
                                     workflow_run_id=workflow_run_id, thread_id=thread_id, at=now())
-        contexts = {key: frozen.unit_context(initial, requirements, key) for key in initial.planning_unit_ids
+        try:
+            contract_store = FrozenContractStore.create(
+                planning_run_id=initial.planning_run_id,
+                formal_inputs=frozen.formal_contract_inputs,
+            )
+        except ValueError as exc:
+            raise GenerationRequirementsError((ValidationIssue(
+                code="FROZEN_CONTRACT_STORE_INVALID",
+                level="pre_generation",
+                category="input",
+                retryable=False,
+                message=f"当前正式合同无法冻结：{exc}",
+            ),)) from exc
+        contexts = {key: frozen.unit_context(
+            initial,
+            requirements,
+            key,
+            frozen_contract_store=contract_store,
+        ) for key in initial.planning_unit_ids
                     if initial.unit_states[key].generation_strategy == "model"}
     except GenerationRequirementsError as exc:
         raise DagPlanningError(exc.issues) from exc
