@@ -2,6 +2,21 @@ import type { WorkflowClarification, WorkflowRunPayload } from '../../../../typi
 import type { AgentChatMessage } from '../../types'
 import { planningWorkflowPhase } from '../../../Welcome/planningWorkflowState'
 
+export type PlanningSubmissionTransaction = {
+  sessionKey: string
+  messageIds: number[]
+}
+
+/** 按本次提交记录的消息 ID 精确回滚，保留期间到达的其他异步消息。 */
+export function rollbackPlanningSubmissionMessages(
+  messages: AgentChatMessage[],
+  transaction: PlanningSubmissionTransaction
+): AgentChatMessage[] {
+  const optimisticMessageIds = new Set(transaction.messageIds)
+  if (optimisticMessageIds.size === 0) return messages
+  return messages.filter((message) => !optimisticMessageIds.has(message.id))
+}
+
 /** 从公开 Workflow 快照读取当前确认模式，兼容流式投影的三个权威位置。 */
 function clarificationMode(workflow: WorkflowRunPayload): string {
   const candidates = [

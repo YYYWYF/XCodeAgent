@@ -9,7 +9,8 @@ import {
   isSupersededPlanningStageEntryMessage,
   isSupersededTechnicalPlanTransitionMessage,
   isTemplateSupersededPlanningProgressMessage,
-  latestUiDesignPreviewMessageIndex
+  latestUiDesignPreviewMessageIndex,
+  rollbackPlanningSubmissionMessages
 } from '../src/renderer/src/components/AiChatPanel/components/MessageList/uiDesignPreviewHistory'
 import {
   ensureApplicationPlanningAction,
@@ -58,6 +59,20 @@ import {
   revisionContinuationHandoffFromWorkflow
 } from '../src/renderer/src/service/applicationPagePlanning'
 import { planningArtifactRecoveryKeys } from '../src/renderer/src/components/AiChatPanel/planningArtifactRecovery'
+
+const planningSubmissionMessages: AgentChatMessage[] = [
+  { id: 1, role: 'assistant', content: '技术规划待确认', createdAt: 1 },
+  { id: 2, role: 'user', content: '技术规划确认：正确，继续', createdAt: 2 },
+  { id: 3, role: 'assistant', content: '并行到达的其他消息', createdAt: 3 },
+  { id: 4, role: 'assistant', content: '', planningLoading: true, createdAt: 4 }
+]
+assert.deepEqual(
+  rollbackPlanningSubmissionMessages(planningSubmissionMessages, {
+    sessionKey: 'planning-session',
+    messageIds: [2, 4]
+  }).map((item) => item.id),
+  [1, 3]
+)
 
 assert.deepEqual(planningArtifactRecoveryKeys(false, 'product'), [])
 assert.deepEqual(planningArtifactRecoveryKeys(false, 'planning'), [])

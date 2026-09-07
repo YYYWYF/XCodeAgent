@@ -154,6 +154,11 @@ def workflow_capabilities() -> dict[str, Any]:
             },
             "clientNodeSelectionAllowed": False,
         },
+        "runCancellation": {
+            "requestField": "forwardedProps.cancelRunId",
+            "statuses": ["cancelled", "not_running", "cancel_timeout"],
+            "semantics": "final_server_task_state_after_bounded_wait",
+        },
         "clarificationModes": {
             "unit_test_confirmation": {
                 "answerField": "clarificationAnswers.unit_test_confirmation",

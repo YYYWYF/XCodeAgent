@@ -746,10 +746,61 @@ test('AG-UI 连续请求只发送当前用户消息', async () => {
   )
 })
 
-test('AG-UI 暂停先等待后端取消接管，不会立即中止活动流', async () => {
+test('AG-UI 暂停在自然收口窗口内完成时不发送取消请求', async () => {
+  const originalFetch = globalThis.fetch
+  let resolveActiveResponse: ((response: Response) => void) | undefined
+  let cancellationRequests = 0
+  let activeThreadId = ''
+  let activeRunId = ''
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      forwardedProps?: { cancelRunId?: string }
+      runId?: string
+      threadId?: string
+    }
+    if (request.forwardedProps?.cancelRunId) {
+      cancellationRequests += 1
+    }
+    activeThreadId = String(request.threadId)
+    activeRunId = String(request.runId)
+    return new Promise<Response>((resolve) => {
+      resolveActiveResponse = resolve
+    })
+  }
+
+  try {
+    const session = new AgUiChatSession('thread-natural-stop', 'http://agent.test/workflow/run')
+    const activeRequest = session.sendMessage('执行计划', { editorMode: 'frontend' })
+    await Promise.resolve()
+    const stopPromise = session.stop()
+    const events = [
+      { type: 'RUN_STARTED', threadId: activeThreadId, runId: activeRunId },
+      { type: 'TEXT_MESSAGE_START', messageId: 'natural-stop', role: 'assistant' },
+      { type: 'TEXT_MESSAGE_END', messageId: 'natural-stop' },
+      {
+        type: 'RUN_FINISHED',
+        threadId: activeThreadId,
+        runId: activeRunId,
+        result: {}
+      }
+    ]
+    resolveActiveResponse?.(
+      new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+        headers: { 'content-type': 'text/event-stream' },
+        status: 200
+      })
+    )
+
+    await Promise.all([activeRequest, stopPromise])
+    assert.equal(cancellationRequests, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('AG-UI 暂停等待服务端 cancelled 后主动收口旧 transport', async () => {
   const originalFetch = globalThis.fetch
   let activeSignal: AbortSignal | undefined
-  let rejectActiveRequest: ((reason?: unknown) => void) | undefined
   let cancellationRequested = false
   globalThis.fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as {
@@ -760,18 +811,14 @@ test('AG-UI 暂停先等待后端取消接管，不会立即中止活动流', as
     if (request.forwardedProps?.cancelRunId) {
       cancellationRequested = true
       const events = [
-        {
-          type: 'RUN_STARTED',
-          threadId: String(request.threadId),
-          runId: String(request.runId)
-        },
+        { type: 'RUN_STARTED', threadId: String(request.threadId), runId: String(request.runId) },
         {
           type: 'RUN_FINISHED',
           threadId: String(request.threadId),
           runId: String(request.runId),
           result: {
             workflowRunControl: {
-              status: 'cancel_requested',
+              status: 'cancelled',
               targetRunId: request.forwardedProps.cancelRunId
             }
           }
@@ -784,22 +831,184 @@ test('AG-UI 暂停先等待后端取消接管，不会立即中止活动流', as
     }
     activeSignal = init?.signal || undefined
     return new Promise<Response>((_resolve, reject) => {
-      rejectActiveRequest = reject
+      activeSignal?.addEventListener('abort', () => reject(new Error('transport aborted')), {
+        once: true
+      })
     })
   }
 
   try {
     const session = new AgUiChatSession('thread-stop', 'http://agent.test/workflow/run')
-    const activeRequest = session.sendMessage('执行计划', { editorMode: 'frontend' })
+    const activeRequest = session
+      .sendMessage('执行计划', { editorMode: 'frontend' })
+      .then(() => undefined, (reason) => reason)
     await Promise.resolve()
-    session.stop()
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await session.stop()
 
     assert.equal(cancellationRequested, true)
-    assert.equal(activeSignal?.aborted, false)
+    assert.equal(activeSignal?.aborted, true)
+    assert.match(String(await activeRequest), /transport aborted/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
 
-    rejectActiveRequest?.(new Error('server cancelled'))
-    await assert.rejects(activeRequest, /server cancelled/)
+test('AG-UI 旧运行确认停止后才发送且只发送一次 TechnicalPlan 确认', async () => {
+  const originalFetch = globalThis.fetch
+  const requestOrder: string[] = []
+  let normalRequestCount = 0
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      forwardedProps?: { cancelRunId?: string }
+      messages?: Array<{ content?: string }>
+      runId?: string
+      threadId?: string
+    }
+    if (request.forwardedProps?.cancelRunId) {
+      requestOrder.push('cancel')
+      const events = [
+        { type: 'RUN_STARTED', threadId: String(request.threadId), runId: String(request.runId) },
+        {
+          type: 'RUN_FINISHED',
+          threadId: String(request.threadId),
+          runId: String(request.runId),
+          result: { workflowRunControl: { status: 'cancelled' } }
+        }
+      ]
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+        headers: { 'content-type': 'text/event-stream' },
+        status: 200
+      })
+    }
+
+    normalRequestCount += 1
+    const content = String(request.messages?.[0]?.content || '')
+    requestOrder.push(content)
+    if (normalRequestCount === 1) {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('old transport aborted')), {
+          once: true
+        })
+      })
+    }
+    const events = [
+      { type: 'RUN_STARTED', threadId: String(request.threadId), runId: String(request.runId) },
+      { type: 'TEXT_MESSAGE_START', messageId: 'technical-confirmed', role: 'assistant' },
+      { type: 'TEXT_MESSAGE_END', messageId: 'technical-confirmed' },
+      {
+        type: 'RUN_FINISHED',
+        threadId: String(request.threadId),
+        runId: String(request.runId),
+        result: {}
+      }
+    ]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' },
+      status: 200
+    })
+  }
+
+  try {
+    const session = new AgUiChatSession('thread-confirm-order', 'http://agent.test/workflow/run')
+    void session.sendMessage('旧规划运行', { editorMode: 'frontend' }).catch(() => undefined)
+    await Promise.resolve()
+    await session.stop()
+    await session.sendMessage('技术规划确认', { editorMode: 'frontend' })
+
+    assert.deepEqual(requestOrder, ['旧规划运行', 'cancel', '技术规划确认'])
+    assert.equal(normalRequestCount, 2)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('AG-UI 旧 SSE 永不结束时 stop 仍在限定时间内完成', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      forwardedProps?: { cancelRunId?: string }
+      runId?: string
+      threadId?: string
+    }
+    if (request.forwardedProps?.cancelRunId) {
+      const events = [
+        { type: 'RUN_STARTED', threadId: String(request.threadId), runId: String(request.runId) },
+        {
+          type: 'RUN_FINISHED',
+          threadId: String(request.threadId),
+          runId: String(request.runId),
+          result: { workflowRunControl: { status: 'cancelled' } }
+        }
+      ]
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+        headers: { 'content-type': 'text/event-stream' },
+        status: 200
+      })
+    }
+    return new Promise<Response>(() => undefined)
+  }
+
+  try {
+    const session = new AgUiChatSession('thread-stuck-sse', 'http://agent.test/workflow/run')
+    void session.sendMessage('执行计划', { editorMode: 'frontend' }).catch(() => undefined)
+    await Promise.resolve()
+    await Promise.race([
+      session.stop(),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error('stop 未在限定时间内完成')), 2_000)
+      )
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('AG-UI 服务端 cancel_timeout 时拒绝发送下一条确认', async () => {
+  const originalFetch = globalThis.fetch
+  let normalRequestCount = 0
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      forwardedProps?: { cancelRunId?: string }
+      runId?: string
+      threadId?: string
+    }
+    if (request.forwardedProps?.cancelRunId) {
+      const events = [
+        { type: 'RUN_STARTED', threadId: String(request.threadId), runId: String(request.runId) },
+        {
+          type: 'RUN_FINISHED',
+          threadId: String(request.threadId),
+          runId: String(request.runId),
+          result: {
+            workflowRunControl: {
+              status: 'cancel_timeout',
+              message: 'Workflow 未能在限定时间内停止，请稍后重试。'
+            }
+          }
+        }
+      ]
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+        headers: { 'content-type': 'text/event-stream' },
+        status: 200
+      })
+    }
+    normalRequestCount += 1
+    return new Promise<Response>(() => undefined)
+  }
+
+  try {
+    const session = new AgUiChatSession('thread-cancel-timeout', 'http://agent.test/workflow/run')
+    void session.sendMessage('旧规划运行', { editorMode: 'frontend' }).catch(() => undefined)
+    await Promise.resolve()
+    await assert.rejects(
+      async () => {
+        await session.stop()
+        await session.sendMessage('技术规划确认', { editorMode: 'frontend' })
+      },
+      /限定时间内停止/
+    )
+
+    assert.equal(normalRequestCount, 1)
   } finally {
     globalThis.fetch = originalFetch
   }

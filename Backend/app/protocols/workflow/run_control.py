@@ -7,7 +7,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 from ag_ui.core import (
     CustomEvent,
@@ -32,6 +32,8 @@ from app.workspace.task_documents import (
     load_build_task_plan_json,
     write_build_task_plan_json,
 )
+
+WorkflowCancellationStatus = Literal["cancelled", "not_running", "cancel_timeout"]
 
 
 class WorkflowRunRegistry:
@@ -76,6 +78,30 @@ class WorkflowRunRegistry:
             entry = self._tasks.get(run_id)
         task = entry[1] if entry is not None else None
         return bool(task and not task.done() and task.cancel())
+
+    async def cancel_and_wait(
+        self,
+        run_id: str,
+        *,
+        timeout_seconds: float = 3.0,
+    ) -> WorkflowCancellationStatus:
+        """取消指定运行并有限等待任务退出，返回可安全串行下一轮的最终状态。"""
+
+        with self._lock:
+            entry = self._tasks.get(run_id)
+        task = entry[1] if entry is not None else None
+        if task is None or task.done():
+            return "not_running"
+
+        cancellation_requested = task.cancel()
+        if not cancellation_requested:
+            return "not_running" if task.done() else "cancel_timeout"
+
+        done, _pending = await asyncio.wait(
+            [task],
+            timeout=max(0.0, timeout_seconds),
+        )
+        return "cancelled" if task in done or task.done() else "cancel_timeout"
 
     def begin_workspace_deletion(self, workspace: str) -> None:
         """建立工作区删除栅栏，阻止清理期间出现新的运行。"""
@@ -196,13 +222,12 @@ def build_workflow_cancellation_ag_ui_stream(
     message_id = f"cancel:{run_id}"
 
     async def stream() -> AsyncIterator[str]:
-        cancelled = workflow_run_registry.cancel(target_run_id)
-        status = "cancel_requested" if cancelled else "not_running"
-        message = (
-            "已请求停止正在运行的 Workflow。"
-            if cancelled
-            else "目标 Workflow 已结束，无需停止。"
-        )
+        status = await workflow_run_registry.cancel_and_wait(target_run_id)
+        message = {
+            "cancelled": "Workflow 已停止。",
+            "not_running": "目标 Workflow 已结束，无需停止。",
+            "cancel_timeout": "Workflow 未能在限定时间内停止，请稍后重试。",
+        }[status]
         result = {
             "status": status,
             "targetRunId": target_run_id,

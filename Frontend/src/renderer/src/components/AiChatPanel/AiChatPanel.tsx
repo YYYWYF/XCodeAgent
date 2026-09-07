@@ -66,7 +66,9 @@ import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import {
   appendPlanningLoadingPlaceholder,
-  compactPlanningMessageHistory
+  compactPlanningMessageHistory,
+  rollbackPlanningSubmissionMessages,
+  type PlanningSubmissionTransaction
 } from './components/MessageList/uiDesignPreviewHistory'
 import PageContextHeader from './components/PageContextHeader'
 import type { PageContextStatus } from './components/PageContextHeader'
@@ -2360,12 +2362,19 @@ export default function AiChatPanel({
   // 同时追加一条 assistant 占位消息（loading 态），让用户看到产品 Agent 正在处理，
   // 避免操作后界面像卡死一样无反馈；后续流式 chunk 到达时更新该占位消息。
   const appendPlanningUserMessage = useCallback(
-    (answers?: WorkflowClarificationAnswers, withLoadingPlaceholder = true) => {
+    (
+      answers?: WorkflowClarificationAnswers,
+      withLoadingPlaceholder = true
+    ): PlanningSubmissionTransaction | undefined => {
       const sessionKey = planningSessionKeyRef.current
       if (!sessionKey || !answers) return
       const text = planningUserMessageText(answers)
       const userMessageId = Date.now() * 1000 + (planningMessageIdRef.current++ % 1000)
       const assistantPlaceholderId = userMessageId + 1
+      const messageIds = [
+        ...(text ? [userMessageId] : []),
+        ...(withLoadingPlaceholder ? [assistantPlaceholderId] : [])
+      ]
       setSessionMessagesRef.current(sessionKey, (prev) => [
         ...prev,
         ...(text
@@ -2390,6 +2399,18 @@ export default function AiChatPanel({
             ]
           : [])
       ])
+      return { sessionKey, messageIds }
+    },
+    []
+  )
+
+  /** 提交失败时只撤销本次乐观消息，使原确认卡恢复为当前可操作项。 */
+  const rollbackPlanningSubmission = useCallback(
+    (transaction?: PlanningSubmissionTransaction): void => {
+      if (!transaction) return
+      setSessionMessagesRef.current(transaction.sessionKey, (messages) =>
+        rollbackPlanningSubmissionMessages(messages, transaction)
+      )
     },
     []
   )
@@ -3921,6 +3942,7 @@ export default function AiChatPanel({
           ? (planningAnswers as { ui_design_action?: { action?: string } }).ui_design_action
               ?.action !== 'skip'
           : false
+      let planningSubmission: PlanningSubmissionTransaction | undefined
       if (!isUiDesignPageAction) {
         planningNewRoundRef.current = true
         // 离开 UI 确认阶段（确认全部/跳过/进入规划）：清空 UI 确认阶段标记，
@@ -4080,13 +4102,24 @@ export default function AiChatPanel({
           // TechnicalPlan 二次修改确认后继续停留在当前规划会话；只有服务端
           // continuation 被开发 Workflow 成功接管后，才激活 DEVELOPMENT StageSession。
           suppressRevisionTechnicalPlanTransitionRef.current = revisionTechnicalPlanConfirmed
-          appendPlanningUserMessage(planningAnswers, !revisionTechnicalPlanConfirmed)
+          planningSubmission = appendPlanningUserMessage(
+            planningAnswers,
+            !revisionTechnicalPlanConfirmed
+          )
         }
       }
       void onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec).catch(
-        () => {
+        (reason) => {
           if (revisionTechnicalPlanConfirmed) {
             suppressRevisionTechnicalPlanTransitionRef.current = false
+            planningNewRoundRef.current = false
+            rollbackPlanningSubmission(planningSubmission)
+            message.error(
+              formatError(
+                reason,
+                '技术规划确认未提交成功，上一轮规划连接未能正常结束，请重试'
+              )
+            )
           }
         }
       )

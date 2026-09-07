@@ -544,19 +544,26 @@ export default function ApplicationPagePlanningModal({
     // 后端同 thread 不能并发 Graph run，旧 run 被 session.stop() 取消会导致 SSE 流中断
     // （ASGI callable returned without completing response），前端收不到完整快照、
     // 界面卡在生成中。轮询只是重读 ui-designs.json，等当前 run 自然结束即可。
-    if (planningRunningRef.current && !interaction) return
+    const previousRunActive = planningRunningRef.current || session.hasActiveRun()
+    if (previousRunActive && !interaction && !designRevision) return
     const runToken = planningRunTokenRef.current + 1
     planningRunTokenRef.current = runToken
-    // 新一轮补充到达时先取消旧生成，避免旧请求在新需求之后继续写入状态。
-    if (planningRunningRef.current) {
-      await session.stop()
-    }
     planningRunningRef.current = true
     setRunning(true)
     onStatusChange('running')
     setError('')
     setStreamingContent('')
+    let previousRunStopFailed = false
     try {
+      // 新交互必须等服务端确认旧任务退出；停止失败时禁止并发发送同 thread 请求。
+      if (previousRunActive) {
+        try {
+          await session.stop()
+        } catch (reason) {
+          previousRunStopFailed = true
+          throw reason
+        }
+      }
       const result = await session.sendMessage(messageText, {
         application,
         applicationPlanningInteraction: interaction,
@@ -638,11 +645,15 @@ export default function ApplicationPagePlanningModal({
         error: String(reason).slice(0, 120)
       })
       console.error('[planning-modal] runPlanning error', reason)
-      if (isAuthenticationFailure(reason)) return
-      setError(formatError(reason, '创建规划运行失败'))
+      if (!isAuthenticationFailure(reason)) {
+        setError(formatError(reason, '创建规划运行失败'))
+      }
+      // 用户交互和正式 revision 启动必须把失败传回消息层，供其回滚乐观提交。
+      if (interaction || designRevision) throw reason
     } finally {
       if (runToken === planningRunTokenRef.current) {
-        planningRunningRef.current = false
+        // 服务端未确认旧 run 退出时保留待停止标记，下一次重试必须先重新 stop。
+        planningRunningRef.current = previousRunStopFailed
         setRunning(false)
       }
     }
@@ -651,6 +662,8 @@ export default function ApplicationPagePlanningModal({
   // 冷启动时只读恢复同一线程的 checkpoint；若已签发 continuation，则转交工作台消费。
   const recoverPlanning = async (): Promise<void> => {
     if (!application.workspaceRoot) return
+    // 只读恢复也不能覆盖同一 session 的活动 transport；当前 run 自然结束后再由用户重试。
+    if (session.hasActiveRun()) return
     setRunning(true)
     setError('')
     setStreamingContent('')
