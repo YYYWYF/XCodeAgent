@@ -10,6 +10,7 @@ from app.agents.main.product_planner import (
     _product_planning_prompt,
 )
 from app.agents.main.planner import (
+    _technical_action_binding_repair_prompt,
     _technical_contract_ids_for_errors,
     _technical_contract_repair_prompt,
     _technical_planning_prompt,
@@ -22,8 +23,14 @@ from app.agents.main.requirements_analyzer import (
 )
 from app.services.page_implementation_contract import (
     attach_page_implementation_contracts,
+    expected_business_action_implementations,
     materialize_technical_plan_runtime,
+    technical_action_binding_issues,
     validate_page_implementation_contracts,
+)
+from app.services.technical_action_binding_repair import (
+    apply_technical_action_binding_patch,
+    validate_technical_action_binding_patch,
 )
 from app.services.api_contracts import normalize_api_contracts
 from app.services.page_dependencies import normalize_page_dependencies
@@ -426,6 +433,304 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertNotIn("requirement_field_sentinel", prompt)
         self.assertNotIn("engineering_design", prompt)
         self.assertNotIn('"resource"', prompt)
+        self.assertNotIn("complete five-part object", prompt)
+        self.assertNotIn('"action_implementations": []', prompt)
+        self.assertIn("exactly one action_implementations", prompt)
+        self.assertIn("stepBindings covers every and only business stepId", prompt)
+
+    def test_action_binding_issues_follow_product_business_behavior(self) -> None:
+        """结构化 issue 只覆盖直接业务动作和组合中的业务步骤。"""
+
+        product_page = {
+            "pageId": "orders",
+            "actions": [
+                {"actionId": "save", "behavior": {"type": "business"}},
+                {"actionId": "open", "behavior": {"type": "navigation"}},
+                {"actionId": "filter", "behavior": {"type": "interface"}},
+                {
+                    "actionId": "submit",
+                    "behavior": {
+                        "type": "sequence",
+                        "steps": [
+                            {"stepId": "validate", "type": "business"},
+                            {"stepId": "toast", "type": "interface"},
+                            {"stepId": "persist", "type": "business"},
+                        ],
+                    },
+                },
+            ],
+        }
+        technical_plan = {
+            "artifact_type": "technical-plan",
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "references": {
+                        "action_implementations": [
+                            {
+                                "actionId": "submit",
+                                "stepBindings": [
+                                    {"stepId": "validate", "endpointId": "orders.validate"}
+                                ],
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+
+        self.assertEqual(
+            expected_business_action_implementations(product_page),
+            {"save": None, "submit": {"validate", "persist"}},
+        )
+        self.assertEqual(
+            technical_action_binding_issues(
+                technical_plan,
+                {"pages": [product_page]},
+            ),
+            [
+                {
+                    "kind": "missing_business_action_binding",
+                    "pageId": "orders",
+                    "actionId": "save",
+                    "requiredStepIds": [],
+                },
+                {
+                    "kind": "incomplete_business_sequence_binding",
+                    "pageId": "orders",
+                    "actionId": "submit",
+                    "requiredStepIds": ["persist", "validate"],
+                    "missingStepIds": ["persist"],
+                    "unexpectedStepIds": [],
+                },
+            ],
+        )
+        technical_plan["pages"][0]["references"]["action_implementations"] = [
+            {"actionId": "save", "endpointId": "orders.save"},
+            {
+                "actionId": "submit",
+                "stepBindings": [
+                    {"stepId": "validate", "endpointId": "orders.validate"},
+                    {"stepId": "persist", "endpointId": "orders.persist"},
+                ],
+            },
+        ]
+        self.assertEqual(
+            technical_action_binding_issues(
+                technical_plan,
+                {"pages": [product_page]},
+            ),
+            [],
+        )
+
+    def test_action_binding_patch_is_strict_and_changes_only_target_binding(self) -> None:
+        """局部 Patch 必须拒绝未知 Endpoint，并且幂等保留其他 TechnicalPlan 内容。"""
+
+        issues = [
+            {
+                "kind": "missing_business_action_binding",
+                "pageId": "orders",
+                "actionId": "save",
+                "requiredStepIds": [],
+            }
+        ]
+        existing_plan = {
+            "artifact_type": "technical-plan",
+            "architecture": {"frontend": "keep"},
+            "entities": [{"id": "Order"}],
+            "api_contracts": [
+                {
+                    "id": "orders_api",
+                    "endpoints": [{"id": "orders_api.save"}],
+                }
+            ],
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "references": {
+                        "endpoint_dependencies": [],
+                        "action_implementations": [
+                            {"actionId": "search", "endpointId": "orders_api.search"}
+                        ],
+                    },
+                },
+                {"pageId": "dashboard", "references": {"sentinel": "keep"}},
+            ],
+        }
+        invalid_patch = {
+            "bindings": [
+                {
+                    "pageId": "orders",
+                    "actionId": "save",
+                    "endpointId": "fake.endpoint",
+                }
+            ]
+        }
+        valid_patch = {
+            "bindings": [
+                {
+                    "pageId": "orders",
+                    "actionId": "save",
+                    "endpointId": "orders_api.save",
+                }
+            ]
+        }
+
+        self.assertTrue(
+            validate_technical_action_binding_patch(
+                invalid_patch,
+                binding_issues=issues,
+                existing_plan=existing_plan,
+            )
+        )
+        self.assertEqual(
+            validate_technical_action_binding_patch(
+                valid_patch,
+                binding_issues=issues,
+                existing_plan=existing_plan,
+            ),
+            [],
+        )
+        repaired = apply_technical_action_binding_patch(existing_plan, valid_patch)
+        repaired_twice = apply_technical_action_binding_patch(repaired, valid_patch)
+
+        self.assertEqual(repaired, repaired_twice)
+        self.assertEqual(repaired["architecture"], existing_plan["architecture"])
+        self.assertEqual(repaired["entities"], existing_plan["entities"])
+        self.assertEqual(repaired["api_contracts"], existing_plan["api_contracts"])
+        self.assertEqual(repaired["pages"][1], existing_plan["pages"][1])
+        self.assertEqual(
+            repaired["pages"][0]["references"]["action_implementations"],
+            [
+                {"actionId": "search", "endpointId": "orders_api.search"},
+                {"actionId": "save", "endpointId": "orders_api.save"},
+            ],
+        )
+
+    def test_sequence_action_binding_patch_requires_exact_business_steps(self) -> None:
+        """组合 Action Patch 必须覆盖每个且仅覆盖业务 stepId。"""
+
+        issue = {
+            "kind": "incomplete_business_sequence_binding",
+            "pageId": "orders",
+            "actionId": "submit",
+            "requiredStepIds": ["validate", "persist"],
+            "missingStepIds": ["persist"],
+        }
+        existing_plan = {
+            "api_contracts": [
+                {
+                    "id": "orders_api",
+                    "endpoints": [
+                        {"id": "orders_api.validate"},
+                        {"id": "orders_api.persist"},
+                    ],
+                }
+            ]
+        }
+        incomplete_patch = {
+            "bindings": [
+                {
+                    "pageId": "orders",
+                    "actionId": "submit",
+                    "stepBindings": [
+                        {"stepId": "validate", "endpointId": "orders_api.validate"}
+                    ],
+                }
+            ]
+        }
+        complete_patch = {
+            "bindings": [
+                {
+                    "pageId": "orders",
+                    "actionId": "submit",
+                    "stepBindings": [
+                        {"stepId": "validate", "endpointId": "orders_api.validate"},
+                        {"stepId": "persist", "endpointId": "orders_api.persist"},
+                    ],
+                }
+            ]
+        }
+
+        self.assertTrue(
+            validate_technical_action_binding_patch(
+                incomplete_patch,
+                binding_issues=[issue],
+                existing_plan=existing_plan,
+            )
+        )
+        self.assertEqual(
+            validate_technical_action_binding_patch(
+                complete_patch,
+                binding_issues=[issue],
+                existing_plan=existing_plan,
+            ),
+            [],
+        )
+
+    def test_action_binding_repair_prompt_uses_only_bounded_selection_context(self) -> None:
+        """Action Repair Prompt 只提供受影响动作、紧凑 Endpoint 目录和当前绑定。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "actions": [
+                        {
+                            "actionId": "save",
+                            "name": "保存订单",
+                            "behavior": {"type": "business"},
+                        },
+                        {
+                            "actionId": "open",
+                            "name": "打开详情",
+                            "behavior": {"type": "navigation"},
+                        },
+                    ],
+                }
+            ]
+        }
+        prompt = _technical_action_binding_repair_prompt(
+            {"confirmed_product_plan": product_plan},
+            {
+                "api_contracts": [
+                    {
+                        "id": "orders_api",
+                        "entity_ids": ["Order"],
+                        "schemas": {"ShouldNotAppear": {"type": "object"}},
+                        "endpoints": [
+                            {
+                                "id": "orders_api.save",
+                                "method": "POST",
+                                "path": "/api/orders",
+                                "summary": "保存订单",
+                                "request_schema_ref": "ShouldNotAppear",
+                            }
+                        ],
+                    }
+                ],
+                "pages": [
+                    {
+                        "pageId": "orders",
+                        "references": {"action_implementations": []},
+                    }
+                ],
+            },
+            [
+                {
+                    "kind": "missing_business_action_binding",
+                    "pageId": "orders",
+                    "actionId": "save",
+                    "requiredStepIds": [],
+                }
+            ],
+        )
+
+        self.assertIn("orders_api.save", prompt)
+        self.assertIn("保存订单", prompt)
+        self.assertNotIn("ShouldNotAppear", prompt)
+        self.assertNotIn("打开详情", prompt)
+        self.assertIn("sole top-level key bindings", prompt)
 
     def test_technical_plan_entities_come_only_from_model_output(self) -> None:
         """TechnicalPlan 实体不得继承 RequirementSpec.entities。"""
