@@ -1,5 +1,6 @@
 import type {
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption
 } from '../../../../typings'
@@ -33,13 +34,24 @@ export type EntityQuickTaskItem = QuickTaskItemBase & {
   hasDetailPlan: boolean
 }
 
-export type QuickTaskItem = PageQuickTaskItem | EndpointQuickTaskItem | EntityQuickTaskItem
+export type AgentQuickTaskItem = QuickTaskItemBase & {
+  kind: 'agent'
+  agentId: string
+  agentLabel: string
+}
 
-/** 将项目计划投影为携带一次性工作流目标、但不定义会话归属的页面、接口与实体快捷任务。 */
+export type QuickTaskItem =
+  | PageQuickTaskItem
+  | EndpointQuickTaskItem
+  | EntityQuickTaskItem
+  | AgentQuickTaskItem
+
+/** 将项目计划投影为携带一次性工作流目标、但不定义会话归属的开发快捷任务。 */
 export function buildQuickTasks(
   pages: DevelopmentPlanningPageOption[],
   apiContracts: DevelopmentPlanningApiContract[],
-  entities: DevelopmentPlanningEntityOption[]
+  entities: DevelopmentPlanningEntityOption[],
+  agents: DevelopmentPlanningAgentOption[] = []
 ): QuickTaskItem[] {
   const pageTasks: PageQuickTaskItem[] = pages.map((page) => ({
     description: String(page.purpose || '从这个页面开始讨论和开发。').trim(),
@@ -84,5 +96,14 @@ export function buildQuickTasks(
     meta: String(entity.dataSourceType || '待配置').trim(),
     title: String(entity.label || entity.id || '未命名实体').trim()
   }))
-  return [...pageTasks, ...endpointTasks, ...entityTasks]
+  const agentTasks: AgentQuickTaskItem[] = agents.map((agent) => ({
+    agentId: agent.agentId,
+    agentLabel: String(agent.label || agent.agentId || '未命名智能体').trim(),
+    description: String(agent.purpose || '从这个智能体开始进入开发流程。').trim(),
+    id: `agent:${agent.agentId}`,
+    kind: 'agent' as const,
+    meta: `${agent.capabilities.length} 项能力`,
+    title: String(agent.label || agent.agentId || '未命名智能体').trim()
+  }))
+  return [...pageTasks, ...endpointTasks, ...entityTasks, ...agentTasks]
 }
