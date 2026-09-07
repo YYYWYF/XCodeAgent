@@ -401,7 +401,7 @@ flowchart TD
 `/conversation/run` 高置信识别到 `formal_revision` 时，返回带 `formalBranch` 的 `revision_impact_confirmation` 结构化交互。前端只展示分类 JSON 的 `reason` 和确认动作，用户确认后按 branch handoff：
 
 - `design_stage_revision`：调用 `/application-page-planning/run` 的受控 `start_design_revision`，随后切回现有设计阶段界面；
-- `workbench_plan_revision`：先创建新的用户可见规划会话，再由该会话调用 `/application-page-planning/run` 的 `start_technical_revision`；服务端恢复原 planning checkpoint 的 `technical_planning` 节点，重新生成 `technical-plan.json`。
+- `workbench_plan_revision`：先创建新的用户可见规划会话，再由该会话调用 `/application-page-planning/run` 的 `start_technical_revision`；服务端恢复原 planning checkpoint 的 `technical_planning` 节点，以 checkpoint 中当前正式 TechnicalPlan 和原始修改请求生成完整新版本。只有 RequirementSpec、ProductPlan 或 UiDesign 先变化时才淘汰旧 TechnicalPlan 并按新上游重建。
 
 低置信或目标有实质歧义时先进入 `clarification`，不展示不可靠的影响范围。
 
@@ -1035,8 +1035,8 @@ safe revert service
 | `Backend/app/graph/direct_modification_workflow.py` | 保留 quick path，formal 产生带影响范围的结构化确认交互 |
 | `Backend/app/graph/nodes/direct_modification.py` | 删除固定 `detail_confirmation` 语义并保留原始请求/target |
 | `Backend/app/protocols/direct_modification.py` | 投影 formal handoff 的 branch、target、影响范围和一次性 interactionId |
-| `Backend/app/protocols/application_page_planning.py` | 增加 `start_design_revision`，校验 impact interaction 后恢复原 planning thread；TechnicalPlan 确认后投影一次性 continuation token |
-| `Backend/app/graph/application_planning_revision.py` | 接收受控 design-stage handoff 并复用现有 `design_intent_analysis`；不修改 UiDesign 内部逻辑 |
+| `Backend/app/protocols/application_page_planning.py` | 增加 `start_design_revision`，校验 impact interaction 后恢复原 planning thread；`start_technical_revision` 只清路径与派生状态并保留 checkpoint TechnicalPlan baseline；TechnicalPlan 确认后投影一次性 continuation token |
+| `Backend/app/graph/application_planning_revision.py` | 接收受控 design-stage handoff 并复用现有 `design_intent_analysis`；统一 TechnicalPlan 直接修订 reset，保留 baseline，但上游变化仍淘汰旧 TechnicalPlan；不修改 UiDesign 内部逻辑 |
 | `Backend/app/graph/application_planning_workflow.py` | 允许服务端动作从 completed checkpoint 进入现有设计意图入口；不接受前端任意节点 |
 | `Backend/app/protocols/workflow/request.py` | 解析 revisionRequest/revisionInteraction/`continue_revision_build` token，删除产品 acceptance adjustment 路由 |
 | `Backend/app/protocols/workflow/lifecycle.py` | 投影 active formal revision 和 pending interaction |

@@ -828,6 +828,111 @@ class ProductPlanningRetryTests(unittest.TestCase):
             ["字段必须使用 type，禁止 semantic_type"],
         )
 
+    def test_confirmation_revision_passes_baseline_and_request_to_planner(self) -> None:
+        """TechnicalPlan 确认卡修订必须把 V1 与用户原始要求同时交给模型。"""
+
+        state = self._technical_planning_state()
+        old_plan = create_technical_plan(
+            {
+                **state["requirement_spec"],
+                "confirmed_product_plan": state["product_plan"],
+            },
+            agent_plan=technical_model_entities(state["requirement_spec"]),
+        )
+        old_plan["confirmation_status"] = "pending_user_confirmation"
+        state.update(
+            {
+                "technical_plan": old_plan,
+                "application_planning_interaction": {
+                    "action": "revise",
+                    "request": "把 update 改成 PATCH",
+                },
+                "clarification": {
+                    "mode": "technical_plan_confirmation",
+                    "status": "requires_user_input",
+                },
+            }
+        )
+        with (
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=deepcopy(old_plan),
+            ) as planner_mock,
+            patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="technical-plan.md",
+            ),
+            patch(
+                "app.graph.nodes.planning.write_technical_plan_document",
+                return_value=("technical-plan.md", "technical-plan.json"),
+            ),
+        ):
+            project_planning(state)
+
+        planner_mock.assert_called_once()
+        self.assertEqual(planner_mock.call_args.kwargs["existing_plan"], old_plan)
+        self.assertEqual(
+            planner_mock.call_args.args[0]["planning_adjustment_request"],
+            "把 update 改成 PATCH",
+        )
+
+    def test_workbench_revision_passes_checkpoint_baseline_to_planner(self) -> None:
+        """工作台正式技术修订必须复用 checkpoint V1 且不重跑上游节点。"""
+
+        state = self._technical_planning_state()
+        old_plan = create_technical_plan(
+            {
+                **state["requirement_spec"],
+                "confirmed_product_plan": state["product_plan"],
+            },
+            agent_plan=technical_model_entities(state["requirement_spec"]),
+        )
+        old_plan["confirmation_status"] = "confirmed"
+        state.update(
+            {
+                "technical_plan": old_plan,
+                "request": "查询接口增加分页",
+            }
+        )
+        with (
+            patch(
+                "app.graph.nodes.planning._is_workbench_technical_plan_revision",
+                return_value=True,
+            ),
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=deepcopy(old_plan),
+            ) as planner_mock,
+            patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="technical-plan.md",
+            ),
+            patch(
+                "app.graph.nodes.planning.write_technical_plan_document",
+                return_value=("technical-plan.md", "technical-plan.json"),
+            ),
+        ):
+            project_planning(state)
+
+        planner_mock.assert_called_once()
+        self.assertEqual(planner_mock.call_args.kwargs["existing_plan"], old_plan)
+        self.assertEqual(
+            planner_mock.call_args.args[0]["planning_adjustment_request"],
+            "查询接口增加分页",
+        )
+
+    def test_workbench_revision_without_baseline_is_rejected(self) -> None:
+        """工作台正式修订缺少 checkpoint TechnicalPlan 时必须立即失败。"""
+
+        state = self._technical_planning_state()
+        with patch(
+            "app.graph.nodes.planning._is_workbench_technical_plan_revision",
+            return_value=True,
+        ), self.assertRaisesRegex(ValueError, "缺少当前正式 TechnicalPlan baseline"):
+            project_planning(state)
+
     def test_technical_plan_validation_retry_repairs_only_target_contract(self) -> None:
         """可定位的 API 错误应进入 Contract 定向修复，而不是再次生成完整计划。"""
 

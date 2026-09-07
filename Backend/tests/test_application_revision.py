@@ -47,6 +47,9 @@ from app.services.revision_drafts import (
 )
 from app.services.revision_routing import enforce_revision_routing
 from app.graph.application_planning_revision import analyze_design_intent
+from app.protocols.application_page_planning import (
+    _prepare_start_design_revision_payload,
+)
 from app.protocols.workflow.revision import (
     bind_revision_draft_interaction,
     parse_revision_draft_interaction,
@@ -193,6 +196,74 @@ class RevisionRoutingTests(unittest.TestCase):
                     "workbench_plan_revision",
                 )
                 self.assertEqual(result.candidate.earliest_artifact.value, "technical-plan")
+
+    def test_start_technical_revision_preserves_checkpoint_baseline(self) -> None:
+        """工作台技术修订入口的 resumeState 不得再覆盖原 planning checkpoint 计划。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+                initialization_thread_id="planning-thread",
+            )
+            lifecycle = lifecycle.model_copy(
+                update={
+                    "initialization": lifecycle.initialization.model_copy(
+                        update={
+                            "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                            "status": ApplicationLifecycleStatus.COMPLETED,
+                        }
+                    )
+                }
+            )
+            write_application_lifecycle(directory, lifecycle)
+            register_revision_impact(
+                directory,
+                interaction_id="impact_technical",
+                source_thread_id="conversation-thread",
+                source_run_id="conversation-run",
+                request="查询接口增加分页",
+                target=RevisionTarget(type="application"),
+                impact=RevisionImpact(
+                    formalBranch="workbench_plan_revision",
+                    revisionType="technical_contract_change",
+                    earliestArtifact="technical-plan",
+                    affectedArtifacts=["technical-plan"],
+                    affectedResources=["application"],
+                    reason="技术契约变化",
+                ),
+            )
+            result = _prepare_start_design_revision_payload(
+                {
+                    "forwardedProps": {
+                        "workspaceRoot": directory,
+                        "workflowAction": "start_technical_revision",
+                        "revisionRequest": {
+                            "source": "conversation_handoff",
+                            "formalBranch": "workbench_plan_revision",
+                            "target": {"type": "application"},
+                            "request": "查询接口增加分页",
+                            "confirmedImpact": {
+                                "interactionId": "impact_technical"
+                            },
+                        },
+                    }
+                },
+                {
+                    "source": "conversation_handoff",
+                    "formalBranch": "workbench_plan_revision",
+                    "target": {"type": "application"},
+                    "request": "查询接口增加分页",
+                    "confirmedImpact": {"interactionId": "impact_technical"},
+                },
+            )
+
+        resume_state = result["forwardedProps"]["resumeState"]["state"]
+        self.assertNotIn("technical_plan", resume_state)
+        self.assertEqual(resume_state["technical_plan_path"], "")
+        self.assertEqual(resume_state["technical_plan_json_path"], "")
+        self.assertEqual(result["request"], "查询接口增加分页")
+        self.assertEqual(result["resumeFrom"], "technical_planning")
 
     def test_formal_route_keeps_transitive_downstream_artifact_closure(self) -> None:
         """单次分类 JSON 仍须由服务端补齐最早产物的下游闭包。"""

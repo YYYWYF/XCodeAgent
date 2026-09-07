@@ -55,6 +55,7 @@ from app.services.authorization_deliverability import (
     authorization_deliverability_errors,
     authorization_deliverability_report,
 )
+from app.services.application_lifecycle import load_application_lifecycle
 from app.services.product_plan import require_current_product_plan
 from app.services.page_dependencies import (
     close_page_action_endpoint_dependencies,
@@ -116,6 +117,20 @@ def _planning_phase(state: ProjectState) -> str:
         "technical_planning"
         if state.get("workflow_scope") == "application_planning"
         else "project_planning"
+    )
+
+
+def _is_workbench_technical_plan_revision(state: ProjectState) -> bool:
+    """从服务端 lifecycle 判定当前节点是否属于工作台 TechnicalPlan 正式修订。"""
+
+    workspace = workspace_from_state(state)
+    if not workspace:
+        return False
+    lifecycle = load_application_lifecycle(workspace)
+    active = lifecycle.active_formal_revision if lifecycle is not None else None
+    return bool(
+        active is not None
+        and active.formal_branch.value == "workbench_plan_revision"
     )
 
 
@@ -364,6 +379,13 @@ def project_planning(state: ProjectState) -> dict:
         if state.get("workflow_scope") == "application_planning"
         else state.get("project_plan")
     )
+    workbench_revision = _is_workbench_technical_plan_revision(state)
+    if workbench_revision and not (
+        isinstance(existing_plan, dict) and bool(existing_plan)
+    ):
+        raise ValueError(
+            "workbench_plan_revision 缺少当前正式 TechnicalPlan baseline，拒绝从零重新生成。"
+        )
     repair_seed = state.get("technical_plan_repair_candidate")
     repair_errors = state.get("technical_plan_repair_errors")
     clarification = state.get("clarification")
@@ -487,6 +509,11 @@ def project_planning(state: ProjectState) -> dict:
             **requirement_spec,
             "planning_adjustment_request": request,
         }
+        if phase == "technical_planning" and not resume_failed_candidate:
+            logger.info(
+                "technical_plan_revision_generation baseline_present=true "
+                "adjustment_present=true"
+            )
     if phase == "technical_planning":
         project_plan, validation_errors, failed_candidate = (
             _generate_valid_technical_plan(

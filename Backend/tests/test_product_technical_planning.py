@@ -439,6 +439,31 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("exactly one action_implementations", prompt)
         self.assertIn("stepBindings covers every and only business stepId", prompt)
 
+    def test_technical_revision_prompt_preserves_unaffected_baseline_facts(self) -> None:
+        """TechnicalPlan 修订提示必须携带旧计划并约束无关事实漂移。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(requirement_spec)
+        existing_plan = {
+            "architecture": {"frontend": "BASELINE_SENTINEL"},
+            "entities": [],
+            "api_contracts": [],
+            "pages": [],
+        }
+        prompt = _technical_planning_prompt(
+            {
+                **requirement_spec,
+                "confirmed_product_plan": product_plan,
+                "planning_adjustment_request": "将 update 改成 PATCH",
+            },
+            existing_plan,
+        )
+
+        self.assertIn("Existing TechnicalPlan", prompt)
+        self.assertIn("planning_adjustment_request", prompt)
+        self.assertIn("Preserve all valid unaffected technical decisions", prompt)
+        self.assertIn("BASELINE_SENTINEL", prompt)
+
     def test_action_binding_issues_follow_product_business_behavior(self) -> None:
         """结构化 issue 只覆盖直接业务动作和组合中的业务步骤。"""
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from typing import Any, AsyncIterator, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -10,6 +11,9 @@ from app.domain.application_revision import (
     StartRevisionRequest,
 )
 from app.domain.application_lifecycle import ApplicationLifecycleStage
+from app.graph.application_planning_revision import (
+    technical_plan_revision_reset_state,
+)
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.protocols.application_planning_interrupt import (
     project_application_planning_interrupt,
@@ -30,6 +34,7 @@ from app.services.requirement_spec import (
 
 
 REQUIREMENT_SPEC_DRAFT_EVENT_NAME = "requirement-spec-draft"
+logger = logging.getLogger("uvicorn.error")
 
 
 class ApplicationPlanningRecoveryRequest(BaseModel):
@@ -393,12 +398,13 @@ def _prepare_start_design_revision_payload(
             stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
         )
         next_forwarded["resumeState"] = {
-            "state": {
-                "technical_plan": {},
-                "technical_plan_path": "",
-                "technical_plan_json_path": "",
-            }
+            "state": technical_plan_revision_reset_state()
         }
+        logger.info(
+            "technical_plan_revision_started source=workbench_plan_revision "
+            "baseline_present=true request_length=%s",
+            len(active.request),
+        )
     return {
         **payload,
         "threadId": active.planning_thread_id,

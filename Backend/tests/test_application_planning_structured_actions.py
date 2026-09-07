@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
 from app.graph.application_planning_interrupts import (
+    application_planning_review_payload,
+    resume_application_planning_review,
     validate_application_planning_review_action,
 )
 
@@ -121,6 +124,42 @@ class ApplicationPlanningStructuredActionTests(unittest.TestCase):
                 "planning_stage_entry",
                 _submission("ui_designs", "confirm"),
             )
+
+    def test_generation_error_retry_preserves_failed_candidate(self) -> None:
+        """生成失败卡的 revise 必须保留 repair candidate 并继续既有修复路由。"""
+
+        failed_candidate = {"artifact_type": "technical-plan", "marker": "failed-v2"}
+        state = {
+            "technical_plan": {"artifact_type": "technical-plan", "marker": "v1"},
+            "technical_plan_repair_candidate": failed_candidate,
+            "technical_plan_repair_errors": ["schema invalid"],
+            "clarification": {
+                "status": "requires_user_input",
+                "mode": "technical_plan_generation_error",
+                "questions": [],
+            },
+        }
+        payload = application_planning_review_payload(state, "technical_planning")
+        submission = {
+            "gateId": payload["gateId"],
+            "artifact": payload["artifact"],
+            "artifactRevision": payload["artifactRevision"],
+            "action": "revise",
+            "request": "请继续修复技术规划",
+        }
+
+        with patch(
+            "app.graph.application_planning_interrupts.interrupt",
+            return_value=submission,
+        ):
+            command = resume_application_planning_review(
+                state,
+                "technical_planning",
+            )
+
+        self.assertNotIn("technical_plan_repair_candidate", command.update)
+        self.assertNotIn("technical_plan_repair_errors", command.update)
+        self.assertNotIn("design_change_submission", command.update)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from app.graph.application_planning_revision import (
     is_design_change,
     prepare_ui_revision_state,
     route_design_intent,
+    technical_plan_revision_reset_state,
 )
 from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
@@ -281,6 +282,57 @@ class ApplicationDesignConversationTests(unittest.TestCase):
 
         self.assertEqual(update["application_planning_confirmation"], {})
         self.assertFalse(update["requirements_confirmed"])
+
+    def test_technical_plan_confirmation_revision_preserves_baseline(self) -> None:
+        """TechnicalPlan 确认卡修订只清派生状态，不能覆盖 checkpoint baseline。"""
+
+        old_plan = {
+            "artifact_type": "technical-plan",
+            "confirmation_status": "pending_user_confirmation",
+        }
+        update = begin_current_artifact_revision(
+            {"technical_plan": old_plan},
+            node_name="technical_planning",
+            request="将 personnel.update 改成 PATCH",
+        )
+
+        self.assertNotIn("technical_plan", update)
+        self.assertEqual(update["technical_plan_repair_candidate"], {})
+        self.assertEqual(update["technical_plan_repair_errors"], [])
+        self.assertEqual(update["application_planning_confirmation"], {})
+        self.assertEqual(update["revision_continuation"], {})
+
+    def test_upstream_revision_still_invalidates_technical_plan(self) -> None:
+        """Requirement、Product 或 UI 变化后必须继续淘汰旧 TechnicalPlan。"""
+
+        for node_name in ("requirements", "product_planning", "ui_confirmation"):
+            with self.subTest(node_name=node_name):
+                update = begin_current_artifact_revision(
+                    {"technical_plan": {"artifact_type": "technical-plan"}},
+                    node_name=node_name,
+                    request="修改上游正式产物",
+                )
+
+                self.assertEqual(update["technical_plan"], {})
+
+    def test_technical_plan_revision_requires_checkpoint_baseline(self) -> None:
+        """TechnicalPlan 直接修订缺少 baseline 时必须拒绝静默从零生成。"""
+
+        with self.assertRaisesRegex(ValueError, "缺少当前版本 baseline"):
+            begin_current_artifact_revision(
+                {"technical_plan": {}},
+                node_name="technical_planning",
+                request="将 update 改成 PATCH",
+            )
+
+    def test_technical_plan_revision_reset_never_contains_baseline(self) -> None:
+        """统一 reset helper 必须只撤销路径和派生状态。"""
+
+        reset = technical_plan_revision_reset_state()
+
+        self.assertNotIn("technical_plan", reset)
+        self.assertEqual(reset["technical_plan_path"], "")
+        self.assertEqual(reset["technical_plan_json_path"], "")
 
     def test_confirmed_revision_advances_downstream_generation_cursor(self) -> None:
         """上游新版本确认后应重做下游，但不能把原修改文本重复套给下游。"""

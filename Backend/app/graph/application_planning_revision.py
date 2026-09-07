@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.agents.design_conversation import (
@@ -13,6 +14,9 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
     restart_application_planning_lifecycle,
 )
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 DESIGN_CHANGE_TARGET_NODES = (
@@ -40,6 +44,22 @@ def invalidated_downstream_planning_state() -> dict[str, Any]:
 
     return {
         "technical_plan": {},
+        "technical_plan_path": "",
+        "technical_plan_json_path": "",
+        "technical_plan_repair_candidate": {},
+        "technical_plan_repair_errors": [],
+        "project_plan": {},
+        "project_plan_path": "",
+        "project_plan_json_path": "",
+        "revision_continuation": {},
+        "application_planning_confirmation": {},
+    }
+
+
+def technical_plan_revision_reset_state() -> dict[str, Any]:
+    """直接修订 TechnicalPlan 时清理旧派生状态，但保留当前计划作为 baseline。"""
+
+    return {
         "technical_plan_path": "",
         "technical_plan_json_path": "",
         "technical_plan_repair_candidate": {},
@@ -290,8 +310,17 @@ def begin_current_artifact_revision(
     instruction = request.strip()
     if not instruction:
         raise ValueError("修订当前设计产物必须提供修改意见。")
+    if node_name == "technical_planning" and not _dict_value(
+        state.get("technical_plan")
+    ):
+        raise ValueError("TechnicalPlan 修订缺少当前版本 baseline，拒绝从零重新生成。")
+    invalidation = (
+        technical_plan_revision_reset_state()
+        if node_name == "technical_planning"
+        else invalidated_downstream_planning_state()
+    )
     update = {
-        **invalidated_downstream_planning_state(),
+        **invalidation,
         "application_planning_confirmation": {},
         "design_change_submission": True,
         "design_change_request": instruction,
@@ -302,6 +331,12 @@ def begin_current_artifact_revision(
         "design_change_generation_request": instruction,
         "design_change_existing_artifacts": existing_artifact_presence(state),
     }
+    if node_name == "technical_planning":
+        logger.info(
+            "technical_plan_revision_started source=confirmation "
+            "baseline_present=true request_length=%s",
+            len(instruction),
+        )
     if node_name == "requirements":
         # 需求开始修订时立即撤销旧确认，避免旧文档在新一轮分析期间继续被前端或恢复逻辑当成正式版本。
         update.update(

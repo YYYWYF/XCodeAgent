@@ -988,6 +988,13 @@ export default function AiChatPanel({
   const isDesignPhase = activeWorkbenchPhase === 'product'
   const isTechnicalPlanningPhase = activeWorkbenchPhase === 'planning'
   const isApplicationPlanningPhase = isDesignPhase || isTechnicalPlanningPhase
+  // 右侧规划面板统一消费组件内存 Workflow；外层 prop 只把首次规划流和冷启动快照注入内存。
+  const [planningViewWorkflow, setPlanningViewWorkflow] = useState<
+    WorkflowRunPayload | undefined
+  >(planningWorkflow)
+  useEffect(() => {
+    setPlanningViewWorkflow(planningWorkflow)
+  }, [application.id, planningThreadId, planningWorkflow])
   const showDevelopmentSidebarActions = activeWorkbenchPhase === 'development'
   const {
     acquireSessionExecution,
@@ -1076,16 +1083,19 @@ export default function AiChatPanel({
   // 需求文档在模型生成后即可展示；确认状态只决定它是草稿还是正式文档。
   // UI 设计稿：从规划 workflow 的 clarification（ui_design_confirmation 模式）或
   // state/result 的 ui_designs 读取页面列表。设计稿生成中或已就绪都算可用。
-  const planningClarification = planningWorkflow
-    ? planningWorkflowClarification(planningWorkflow)
+  const planningClarification = planningViewWorkflow
+    ? planningWorkflowClarification(planningViewWorkflow)
     : undefined
-  const planningPhaseRunning = planningWorkflow?.summary?.status === 'running'
-  const planningPhase = planningWorkflowPhase(planningWorkflow)
-  const planningUiDesignSkipped = planningWorkflowUiDesignSkipped(planningWorkflow)
+  const planningPhaseRunning = planningViewWorkflow?.summary?.status === 'running'
+  const planningPhase = planningWorkflowPhase(planningViewWorkflow)
+  const planningUiDesignSkipped = planningWorkflowUiDesignSkipped(planningViewWorkflow)
   const requirementSpecPath =
-    workflowArtifactPath(planningWorkflow, 'requirement-spec') ||
+    workflowArtifactPath(planningViewWorkflow, 'requirement-spec') ||
     designDocFilePath['requirement-spec']
-  const requirementsConfirmed = planningRequirementsConfirmed(planningWorkflow, requirementSpecPath)
+  const requirementsConfirmed = planningRequirementsConfirmed(
+    planningViewWorkflow,
+    requirementSpecPath
+  )
   const localUiDesigns = asWorkflowRecord(uiDesignFile?.ui_designs)
   const localUiDesignPages: unknown[] | undefined = Array.isArray(uiDesignFile?.pages)
     ? uiDesignFile.pages
@@ -1096,8 +1106,10 @@ export default function AiChatPanel({
     ? undefined
     : Array.isArray(planningClarification?.pages) && planningClarification.pages.length > 0
       ? planningClarification.pages
-      : ((planningWorkflow?.state?.ui_designs as { pages?: unknown[] } | undefined)?.pages ??
-        (planningWorkflow?.result?.ui_designs as { pages?: unknown[] | undefined } | undefined)
+      : ((planningViewWorkflow?.state?.ui_designs as { pages?: unknown[] } | undefined)?.pages ??
+        (planningViewWorkflow?.result?.ui_designs as
+          | { pages?: unknown[] | undefined }
+          | undefined)
           ?.pages ??
         localUiDesignPages)
   // UI 设计稿页面列表（右侧"UI设计稿"tab 预览用）。
@@ -1129,17 +1141,17 @@ export default function AiChatPanel({
   }, [planningUiDesignPagesSource, planningPhaseRunning])
   const requirementDocContent = mergedRequirementDocContentFor(
     designDocFileContent,
-    planningWorkflow
+    planningViewWorkflow
   )
   const technicalPlanDocContent = designDocContentFor(
     designDocFileContent,
-    planningWorkflow,
+    planningViewWorkflow,
     'technical-plan'
   )
   const uiDesignDocContent = designDocFileContent['ui-design'] || ''
-  const requirementSpecMemory = requirementSpecFromWorkflow(planningWorkflow)
-  const productPlanMemory = productPlanFromWorkflow(planningWorkflow)
-  const technicalPlanMemory = technicalPlanFromWorkflow(planningWorkflow)
+  const requirementSpecMemory = requirementSpecFromWorkflow(planningViewWorkflow)
+  const productPlanMemory = productPlanFromWorkflow(planningViewWorkflow)
+  const technicalPlanMemory = technicalPlanFromWorkflow(planningViewWorkflow)
   const requirementDocAvailable = Boolean(
     requirementDocContent.trim() || requirementSpecMemory || productPlanMemory
   )
@@ -3051,6 +3063,20 @@ export default function AiChatPanel({
         : activePageOption?.taskSummary
   )
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
+  // TechnicalPlan 二次修改不经过外层初始化规划 Modal；把当前会话的 AG-UI Workflow
+  // 快照留在 renderer 内存并直接提供给右侧面板，生成过程中与待确认状态都不重新读盘。
+  useEffect(() => {
+    if (
+      !isTechnicalPlanningPhase ||
+      !latestWorkflowForDisplay ||
+      planningWorkflowPhase(latestWorkflowForDisplay) !== 'technical_planning'
+    ) {
+      return
+    }
+    setPlanningViewWorkflow((current) =>
+      current === latestWorkflowForDisplay ? current : latestWorkflowForDisplay
+    )
+  }, [isTechnicalPlanningPhase, latestWorkflowForDisplay])
   const currentStageSessionTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const stageOutputContextAligned = activeTargetKey
     ? currentStageSessionTargetKey === activeTargetKey

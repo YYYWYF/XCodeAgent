@@ -187,6 +187,10 @@ def _technical_planning_prompt(
     }
     revision_context = (
         "Revise the existing TechnicalPlan according to planning_adjustment_request and return the complete four-part object.\n"
+        "Treat the supplied Existing TechnicalPlan as the authoritative baseline. Preserve all valid unaffected "
+        "technical decisions. Change only facts explicitly required by planning_adjustment_request and consistency "
+        "changes directly caused by those edits. Do not rename, remove, or redesign unrelated entities, API Contracts, "
+        "Endpoints, Schemas, architecture decisions, or page bindings without a concrete dependency reason.\n"
         f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"
         if existing_plan
         else "Create a new TechnicalPlan.\n"

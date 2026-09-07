@@ -1743,43 +1743,39 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
   --modal-accent-hover: #b89aff;
 }
 
-// 技术规划修改意见弹窗与工作台主题保持一致；Modal portal 脱离工作台变量域，需显式提供明暗配色。
-.@{class-prefix}-technical-plan-revision-modal {
-  --technical-revision-surface: #ffffff;
-  --technical-revision-field: #faf9ff;
-  --technical-revision-border: rgba(107, 60, 240, 0.3);
-  --technical-revision-text: #202124;
-  --technical-revision-secondary: #65666a;
+// 技术规划修改使用确认行内编辑，直接继承工作台明暗主题变量。
+.@{class-prefix}-artifact-auth-bar-footer.@{class-prefix}-technical-plan-revision-inline {
+  display: block;
+}
 
-  .ant-modal-body {
-    display: grid;
-    gap: 12px;
-  }
-
-  .ant-typography {
-    color: var(--technical-revision-secondary);
-  }
+.@{class-prefix}-technical-plan-revision-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
 
   .ant-input {
-    color: var(--technical-revision-text);
-    border-color: var(--technical-revision-border);
-    background: var(--technical-revision-field);
+    min-width: 0;
+    height: 42px;
+    color: var(--wb-text, #202124);
+    border-color: var(--wb-accent-border, rgba(107, 60, 240, 0.3));
+    background: var(--wb-surface, #ffffff);
 
     &:focus,
     &:hover {
-      border-color: var(--modal-accent, #6b3cf0);
-      box-shadow: 0 0 0 2px rgba(107, 60, 240, 0.12);
+      border-color: var(--wb-accent, #6b3cf0);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 12%, transparent);
     }
   }
-}
 
-body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
-  .@{class-prefix}-technical-plan-revision-modal {
-  --technical-revision-surface: #28282b;
-  --technical-revision-field: #1f1f22;
-  --technical-revision-border: #5b4b7d;
-  --technical-revision-text: #e6e6e8;
-  --technical-revision-secondary: #b7b4be;
+  .ant-btn {
+    height: 42px;
+    padding: 0 18px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+  }
 }
 
 .@{class-prefix}-planning-artifact-card {

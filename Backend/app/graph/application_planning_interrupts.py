@@ -194,13 +194,18 @@ def resume_application_planning_review(
     if submission.ui_action is not None:
         update["ui_design_action"] = submission.ui_action
     if submission.action == "revise":
-        update.update(
-            begin_current_artifact_revision(
-                state,
-                node_name=node_name,
-                request=submission.request,
+        clarification = payload.get("clarification")
+        clarification = clarification if isinstance(clarification, dict) else {}
+        if clarification.get("mode") != "technical_plan_generation_error":
+            # generation error 的 revise 属于失败候选续修，必须保留 repair candidate/errors；
+            # 只有用户直接修订正式产物时才开启新的 baseline revision transaction。
+            update.update(
+                begin_current_artifact_revision(
+                    state,
+                    node_name=node_name,
+                    request=submission.request,
+                )
             )
-        )
         if node_name == "ui_confirmation":
             update["ui_design_action"] = {
                 "action": "adjust_pages",

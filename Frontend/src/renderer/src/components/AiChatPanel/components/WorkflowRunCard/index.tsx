@@ -991,7 +991,7 @@ export function PlanConfirmationCard({
   const documentLabel =
     planType === 'product' ? '需求文档' : planType === 'technical' ? '技术规划' : '项目计划书'
 
-  /** 打开技术规划修改意见窗口时清空上一轮未提交输入，避免误提交过期需求。 */
+  /** 将技术规划确认行切换为行内输入，并清空上一轮未提交内容。 */
   const startRevision = (): void => {
     setRevisionRequest('')
     setRevising(true)
@@ -1005,7 +1005,7 @@ export function PlanConfirmationCard({
     onRevise(request)
   }
 
-  /** 关闭修改意见窗口并丢弃本地未提交内容，不触发任何工作流动作。 */
+  /** 取消行内修改并丢弃本地未提交内容，不触发任何工作流动作。 */
   const cancelRevision = (): void => {
     setRevising(false)
     setRevisionRequest('')
@@ -1013,30 +1013,73 @@ export function PlanConfirmationCard({
 
   return (
     <div className={cx('artifact-auth-bar', 'project-plan-confirmation-card')}>
-      <div className={cx('artifact-auth-bar-footer')}>
-        <span className={cx('artifact-auth-status')}>
-          <CheckCircleOutlined aria-hidden="true" />
-          {title}已生成
-        </span>
-        <span className={cx('artifact-auth-actions')}>
-          {canView ? (
-            <Button className={cx('requirement-spec-edit-btn')} onClick={() => setViewing(true)}>
-              查看{documentLabel}
+      <div
+        className={cx(
+          'artifact-auth-bar-footer',
+          revising && 'technical-plan-revision-inline'
+        )}
+      >
+        {revising ? (
+          <div className={cx('technical-plan-revision-editor')}>
+            <Input
+              aria-label="技术规划修改意见"
+              autoFocus
+              disabled={disabled}
+              onChange={(event) => setRevisionRequest(event.target.value)}
+              onKeyDown={(event) => {
+                // Escape 只退出本地编辑态，不触发后端修订。
+                if (event.key === 'Escape') cancelRevision()
+              }}
+              placeholder="输入技术规划修改意见"
+              value={revisionRequest}
+            />
+            <Button
+              disabled={disabled || !revisionRequest.trim()}
+              onClick={submitRevision}
+              type="primary"
+            >
+              提交
             </Button>
-          ) : null}
-          {canRevise ? (
-            <Button className={cx('requirement-spec-edit-btn')} disabled={disabled} onClick={startRevision}>
-              修改
-            </Button>
-          ) : (
-            <Button disabled={disabled} onClick={onAbandon}>
-              放弃
-            </Button>
-          )}
-          <Button disabled={disabled || !requiresConfirmation} onClick={onConfirm} type="primary">
-            确认保存
-          </Button>
-        </span>
+            <Button onClick={cancelRevision}>取消</Button>
+          </div>
+        ) : (
+          <>
+            <span className={cx('artifact-auth-status')}>
+              <CheckCircleOutlined aria-hidden="true" />
+              {title}已生成
+            </span>
+            <span className={cx('artifact-auth-actions')}>
+              {canView ? (
+                <Button
+                  className={cx('requirement-spec-edit-btn')}
+                  onClick={() => setViewing(true)}
+                >
+                  查看{documentLabel}
+                </Button>
+              ) : null}
+              {canRevise ? (
+                <Button
+                  className={cx('requirement-spec-edit-btn')}
+                  disabled={disabled}
+                  onClick={startRevision}
+                >
+                  修改
+                </Button>
+              ) : (
+                <Button disabled={disabled} onClick={onAbandon}>
+                  放弃
+                </Button>
+              )}
+              <Button
+                disabled={disabled || !requiresConfirmation}
+                onClick={onConfirm}
+                type="primary"
+              >
+                确认保存
+              </Button>
+            </span>
+          </>
+        )}
       </div>
       <Modal
         cancelText="关闭"
@@ -1058,31 +1101,6 @@ export function PlanConfirmationCard({
         ) : artifact ? (
           <ConfirmationArtifact artifact={artifact} />
         ) : null}
-      </Modal>
-      <Modal
-        cancelText="取消"
-        centered
-        className={cx('technical-plan-revision-modal')}
-        okButtonProps={{ disabled: disabled || !revisionRequest.trim() }}
-        okText="提交并重新生成"
-        onCancel={cancelRevision}
-        onOk={submitRevision}
-        open={revising}
-        title="修改技术规划"
-        width={680}
-        destroyOnClose
-      >
-        <Text type="secondary">
-          提交后，当前技术规划版本将失效；系统会依据你的意见重新生成并再次要求确认。
-        </Text>
-        <TextArea
-          aria-label="技术规划修改意见"
-          autoFocus
-          onChange={(event) => setRevisionRequest(event.target.value)}
-          placeholder="例如：为订单列表补充分页 API，并明确分页请求和响应 Schema。"
-          rows={6}
-          value={revisionRequest}
-        />
       </Modal>
     </div>
   )
