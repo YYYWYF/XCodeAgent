@@ -1,5 +1,6 @@
 """T6.4/T9.2 全新有限并发链路集成 Gate，模型传输替身之外均使用真实服务。"""
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -33,6 +34,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.phases = []
         self.invalid_first = None
         self.collision_id = None
+        self.collision_ids_by_unit = {}
         self.offline = False
         self.wrong_page_entry = False
         self.policy = UnitGenerationPolicy(**_policy_payload())
@@ -50,8 +52,11 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
             tasks[0]["deliverables"][0]["paths"] = [path]
         if job.identity.unit_id == self.invalid_first and job.identity.attempt_in_round == 1:
             tasks[0]["owner"] = "backend"
-        if job.identity.unit_id == "page:b" and job.identity.generation_round == 1 and self.collision_id:
-            tasks[0]["id"] = self.collision_id
+        collision_id = self.collision_ids_by_unit.get(job.identity.unit_id)
+        if collision_id is None and job.identity.unit_id == "page:b":
+            collision_id = self.collision_id
+        if job.identity.generation_round == 1 and collision_id:
+            tasks[0]["id"] = collision_id
         response = SimpleNamespace(content=json.dumps({"tasks": tasks}), response_metadata={"finish_reason": "stop"})
         model = SimpleNamespace(ainvoke=AsyncMock(side_effect=httpx.ReadError("offline") if self.offline else None, return_value=response))
         with patch("app.services.unit_generation.create_chat_model", return_value=model):
@@ -59,7 +64,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         model.ainvoke.assert_awaited_once()
         return result
 
-    async def _plan(self, inputs, **kwargs):
+    async def _plan(self, inputs, *, generate_once=None, **kwargs):
         """调用正式有限并发 API；唯一替身是单次模型工厂返回的固定传输响应。"""
 
         async def publish(projection):
@@ -69,7 +74,8 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         return await plan_dag_sequential(
             inputs, workspace_state=self.workspace, planning_run_id="sequential-run", workflow_run_id="workflow",
-            thread_id="thread", policy=self.policy, settings=_settings(), generate_once=self._generate,
+            thread_id="thread", policy=self.policy, settings=_settings(),
+            generate_once=generate_once or self._generate,
             publish=publish, now=lambda: AT, **kwargs,
         )
 
@@ -151,6 +157,112 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses, {"valid": 3, "superseded": 1})
         self._assert_retained_contract(result.assembly.assembled_plan["task_registry"][self.collision_id], baseline["task_registry"][self.collision_id])
         verify()
+
+    async def test_global_repair_runs_multiple_affected_units_concurrently(self):
+        """B/C 同时归因后并发修复，A Candidate 不变且整批完成后才再过 Global。"""
+
+        plan = plain_json(planning_inputs().project_plan)
+        plan["pages"].append({"pageId": "history2", "path": "/history2"})
+        plan["page_implementation_contracts"].append({
+            "schema_version": "page-implementation-contract.v1",
+            "pageId": "history2",
+            "uiDesignRef": {"path": ".xcodeagent/ui-design/pages/History2/index.tsx"},
+            "requiredEndpointIds": [],
+        })
+        historical = await self._plan(planning_inputs(
+            plan=plan,
+            required=["page:history", "page:history2"],
+        ))
+        baseline = plain_json(historical.assembly.assembled_plan)
+        baseline.update(confirmation_status="confirmed", confirmed_at=AT)
+        retained_ids = tuple(baseline["task_registry"])
+        self.assertEqual(len(retained_ids), 2)
+        self.calls.clear()
+        self.phases.clear()
+        self.collision_ids_by_unit = {
+            "page:b": retained_ids[0],
+            "page:c": retained_ids[1],
+        }
+        repair_release = asyncio.Event()
+        repair_active = 0
+        repair_max_active = 0
+
+        async def generate(job, **kwargs):
+            """在 B2/C2 模型边界使用门闩，记录真实 Scheduler 同时活跃数。"""
+
+            nonlocal repair_active, repair_max_active
+            is_repair_target = (
+                job.identity.unit_id in {"page:b", "page:c"}
+                and job.identity.generation_round == 2
+            )
+            if not is_repair_target:
+                return await self._generate(job, **kwargs)
+            repair_active += 1
+            repair_max_active = max(repair_max_active, repair_active)
+            try:
+                result = await self._generate(job, **kwargs)
+                if repair_active == 2:
+                    repair_release.set()
+                await asyncio.wait_for(repair_release.wait(), 1)
+                return result
+            finally:
+                repair_active -= 1
+
+        result = await self._plan(
+            planning_inputs(plan=plan, baseline=baseline),
+            generate_once=generate,
+        )
+        run = result.planning_run
+
+        self.assertEqual(repair_max_active, 2)
+        self.assertEqual(
+            [(job.identity.unit_id, job.identity.generation_round) for job, _ in self.calls],
+            [
+                ("page:a", 1),
+                ("page:b", 1),
+                ("page:c", 1),
+                ("page:b", 2),
+                ("page:c", 2),
+            ],
+        )
+        self.assertEqual(run.global_repair_round, 1)
+        self.assertEqual(
+            {target for issue in run.global_issues for target in issue.retry_unit_ids},
+            {"page:b", "page:c"},
+        )
+        self.assertEqual(
+            [run.unit_states[key].generation_round for key in ("page:a", "page:b", "page:c")],
+            [1, 2, 2],
+        )
+        self.assertTrue(all(
+            run.unit_states[key].generation_status == "candidate_ready"
+            for key in ("page:a", "page:b", "page:c")
+        ))
+
+        a_job = next(job for job, _ in self.calls if job.identity.unit_id == "page:a")
+        a_candidates = [
+            candidate
+            for candidate in run.candidates.values()
+            if candidate.identity.unit_id == "page:a"
+        ]
+        self.assertEqual(len(a_candidates), 1)
+        self.assertEqual(a_candidates[0].identity, a_job.identity)
+        self.assertEqual(plain_json(a_candidates[0].tasks), model_tasks(a_job))
+        self.assertEqual(a_candidates[0].status, "valid")
+
+        expected_progression = [
+            ("global_check", 0),
+            ("assembling", 0),
+            ("generating_units", 1),
+            ("global_check", 1),
+            ("assembling", 1),
+            ("validating", 1),
+        ]
+        cursor = 0
+        for phase in self.phases:
+            if cursor < len(expected_progression) and phase == expected_progression[cursor]:
+                cursor += 1
+        self.assertEqual(cursor, len(expected_progression), self.phases)
 
     async def test_shared_unit_retains_history_and_appends_missing_api_only(self):
         """共享 Unit 精确复用 adapter/旧接口，只追加 customers 缺失职责并保留所有历史合同。"""
