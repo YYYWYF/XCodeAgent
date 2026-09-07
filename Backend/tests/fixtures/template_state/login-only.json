@@ -1,0 +1,16 @@
+{
+  "templateRevision": "2026.09.04.1",
+  "managedFiles": {
+    "frontend/package.json": "{}"
+  },
+  "requested": {
+    "login": {
+      "enabled": true
+    }
+  },
+  "effective": {
+    "login": {
+      "enabled": true
+    }
+  }
+}

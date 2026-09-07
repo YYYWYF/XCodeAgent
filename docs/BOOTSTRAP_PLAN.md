@@ -1086,3 +1086,550 @@ First Build E2E
 - [ ] 普通、login、authorization 三类应用通过；
 - [ ] First Build 基于 TemplateState Capability 正常通过；
 - [ ] Renderer 断连、删除、Workspace Attach 中断收尾均通过。
+
+---
+
+# 第三章 本地回检后的 Runtime 收口实施方案
+
+> 本章记录 2026-09-07 对 XCodeAgent 本地实现的回检结果，并把第二章尚未完成的
+> Runtime Cutover 拆成可独立开发、可独立验收的步骤。本章不改变第一章的目标架构；
+> 若第二章的通用阶段描述与本章的本地实施顺序冲突，以本章为当前仓库的执行顺序。
+
+## 3.1 当前实现判断
+
+### 已知事实
+
+当前仓库已经具备以下新链路基础：
+
+- `WorkspaceBootstrapService` 已能调用 Template Engine、下载 ZIP、校验 Package、物化 Workspace 并建立 Git baseline；
+- `.xcodeagent/template-state.json` 的基础读取层已经存在；
+- `TemplateMutationCoordinator` 已覆盖 Bootstrap、删除和 Workspace Attach 的进程内协调；
+- Renderer 的正式模板生成入口已经改为触发 `bootstrap_template_generation`。
+
+但正式 Runtime 尚未完成 Cutover：
+
+- Build 仍从 `.xcodeagent/template-generation-manifest.json` 读取 `templateVariant`；
+- BuildContext、BuildTaskPlan、Planner、Frontend Agent Prompt 和权限投影仍使用 `template_variant=main|auth`；
+- Electron 仍保留 `workspace:clone-template`、模板仓库 URL、Git clone 子进程管理和 main/auth 分支选择；
+- Lifecycle AG-UI 仍接受 `prepare_template_generation` 和 `complete_template_generation`；
+- 二次 TechnicalPlan 确认仍可能提前写入 auth 路由、页面 placeholder 和 `BIZ_MENUS`；
+- `workspace_attach` 已有 Backend action，但 Renderer 的应用恢复和打开入口尚未调用。
+
+### 反向检验
+
+旧 Electron clone 和旧 lifecycle 方法已经不在 Renderer 的主模板触发链上，单独看可能被
+误判为无害死代码；但 Build 节点和权限投影仍直接依赖旧 manifest/variant。因此当前问题
+不是单纯删除废弃代码，而是必须先补齐 TemplateState Consumer 和统一平台投影，再一次性
+切走旧 Runtime。否则新 Bootstrap 生成的 Workspace 会在 First Build 因缺少旧 manifest 而失败。
+
+### 保留边界
+
+以下内容不是旧分支逻辑，必须保留：
+
+- `application.auth.enable` 和 `application.authorization.enabled` 作为 Requested Intent；
+- `login`、`authorization` 作为 Template Engine Capability；
+- Spring Boot 工程中的 `auth` 权限领域模块；
+- 权限规划、权限 Overlay、RouteGuard、资源常量和权限业务 API。
+
+本次只删除 `auth`/`main` 作为模板 Git 分支、模板变体和 Build 事实源的含义。
+
+## 3.2 实施总序与公共契约
+
+实施顺序固定为：
+
+```text
+冻结 TemplateState Consumer
+        ↓
+补齐事务内 Bootstrap Readiness
+        ↓
+建设通用 Route / Authorization Projection
+        ↓
+迁移 BuildContext / Planner / Agent / Skill
+        ↓
+调整 Build 投影时序和二次规划行为
+        ↓
+一次性删除旧 Lifecycle / Electron Clone
+        ↓
+接通 Workspace Attach
+        ↓
+文档清理与三类应用 E2E
+```
+
+步骤可以在开发分支内独立提交，但步骤 3.7 完成前不得发布，避免再次形成
+`New Bootstrap + Old templateVariant Build` 的混合运行态。
+
+Build DAG 当前契约同步升级为 `build-dag.v4`，不兼容读取或回填 `build-dag.v3`。
+删除顶层 `template_variant`，新增：
+
+```json
+{
+  "template_context": {
+    "state_path": ".xcodeagent/template-state.json",
+    "template_revision": "engine-owned-revision",
+    "effective_capabilities": {
+      "login": { "enabled": true },
+      "authorization": { "enabled": true }
+    }
+  }
+}
+```
+
+`template_context` 是 Build Run 的只读绑定快照，不是第二份模板事实源。Build 启动时必须
+重读 TemplateState 并核对 revision 与 effective capabilities；任何漂移直接阻断本次 Run。
+
+Lifecycle AG-UI action 最终只保留：
+
+```text
+create
+get
+bootstrap_template_generation
+workspace_attach
+```
+
+平台投影证据统一为 `platform_projection_evidence`，包含 route、authorization frontend、
+AuthConstants 三部分；按 current-contract-only 规则不保留旧字段别名。
+
+## 3.3 步骤 1：冻结 TemplateState Consumer 契约
+
+### 改动项
+
+1. 以 Template Engine OpenAPI 为唯一 Schema 来源，替换当前只检查四个顶层字段的浅校验；
+2. 在 `Backend/app/services/template_state.py` 收敛以下公共能力：
+   - 完整读取和校验 TemplateState；
+   - 返回 `templateRevision`；
+   - 返回规范化 `effective capabilities`；
+   - 查询单个 capability；
+   - 生成 Build 使用的只读 `template_context`；
+   - 比较 Build 绑定快照与当前 TemplateState；
+3. capability 判断只读取 `effective`，不得从 Application 或 TechnicalPlan 补全 Engine 依赖；
+4. 建立无 capability、login only、authorization effective 三类固定 fixture。
+
+### 自动化验收
+
+- 三类合法 fixture 均可读取并生成稳定的 `template_context`；
+- 缺字段、多字段、错误嵌套类型、空 revision、非法 managedFiles、非法 enabled 语义均被拒绝；
+- 相同 TemplateState 的规范化结果稳定一致；
+- revision 或 effective capability 漂移时比较失败；
+- 本步骤测试不创建、不读取 generation manifest。
+
+### 人工验收
+
+对照 Engine OpenAPI 检查三类 fixture，确认字段和嵌套结构一致，且输出中不存在
+`templateVariant`、`template_variant`、main/auth branch。
+
+### 退出标准
+
+- [ ] 后续模块只需依赖统一 TemplateState 读取层；
+- [ ] XCodeAgent 没有与 Engine OpenAPI 冲突的第二套 Schema；
+- [ ] TemplateState Consumer 测试全部通过。
+
+## 3.4 步骤 2：补齐事务内 Bootstrap Readiness
+
+### 改动项
+
+Materializer 的固定顺序调整为：
+
+```text
+解压 staging
+→ 移动 frontend/backend
+→ 建立 Git baseline
+→ 写入 TemplateState
+→ 清除 staging
+→ 完整 readiness
+→ 提交事务成功
+```
+
+Readiness 必须检查：
+
+1. RequirementSpec、ProductPlan、TechnicalPlan 为 `confirmed`；
+2. UiDesign 为 `confirmed` 或 `skipped`；
+3. TemplateState 完整合法；
+4. TemplateState requested 与本轮 RequestedConfig 一致；
+5. Application 请求启用的 capability 存在于 effective capabilities；
+6. `frontend/package.json` 是普通文件；
+7. `backend/pom.xml` 和 Spring Boot `Application.java` 入口存在；
+8. `.git` 为当前 Workspace 的独立仓库；
+9. `git rev-parse HEAD` 成功；
+10. `git status --porcelain` 为空；
+11. `.xcodeagent` 未进入 baseline；
+12. `bootstrap-staging` 无残留。
+
+Readiness 失败必须在 Materializer 事务中抛出，使本次 frontend、backend、`.git`、
+TemplateState 全部回滚。`complete_workspace_bootstrap(succeeded=True)` 只能在事务校验通过后调用。
+
+Bootstrap 只允许 lifecycle 处于 `GENERATING_APPLICATION_TEMPLATE_FILES` 时触发；READY、FAILED
+或其他阶段必须在调用 Engine 前拒绝。失败后仍不支持原地 Retry/Resume。
+
+### 自动化验收
+
+- 分别注入缺前端入口、缺后端入口、无 HEAD、dirty baseline、capability 冲突和 staging 残留；
+- 每类失败均将 lifecycle 写为不可恢复 FAILED，并清除 frontend/backend/`.git`/TemplateState；
+- 正式规划文档、application.json 和 application-lifecycle.json 必须保留；
+- AG-UI 返回失败，不能返回“可以进入工作台”的成功消息；
+- READY/FAILED 后重复 trigger 不调用 Template Engine；
+- 同一活动 Bootstrap 的并发 trigger 仍复用同一个 Server-owned Task。
+
+### 人工验收
+
+正常 Bootstrap 后执行：
+
+```bash
+git -C <workspace> rev-parse HEAD
+git -C <workspace> status --porcelain
+git -C <workspace> ls-files .xcodeagent
+```
+
+预期分别为：存在 HEAD、无 dirty 输出、`.xcodeagent` 无 tracked 文件。
+
+### 退出标准
+
+- [ ] 所有 readiness 失败都处于可回滚事务内；
+- [ ] 不存在 FAILED lifecycle 携带半物化模板 roots；
+- [ ] 成功 Workspace 满足本节全部 readiness 条件。
+
+## 3.5 步骤 3：建设与权限无关的通用 Route Projection
+
+### 改动项
+
+1. 从现有权限前端投影中拆出通用页面 Route Projection；
+2. 三类 TemplateState 对应的模板都必须提供相同 `routes.tsx` managed markers；
+3. Route Projection 根据确认的 ProductPlan/TechnicalPlan 页面事实生成全部业务页面 import 和 route；
+4. Route Projection 不要求 authorization capability，不创建页面文件，不写 `BIZ_MENUS`；
+5. Authorization Projection 只负责 `resources.ts`、RouteGuard/resourceKey 和操作权限投影；
+6. AuthConstants 投影改为检查 authorization effective capability 与固定 managed marker，不再读取后端分支；
+7. 所有投影保持幂等，并通过统一平台变更捕获返回证据。
+
+### 自动化验收
+
+- 无 capability：写入普通页面路由，不生成权限资源；
+- login only：写入普通页面路由，不错误启用 authorization；
+- authorization effective：普通页无 RouteGuard，受控页包含正确 RouteGuard/resourceKey；
+- 操作资源只进入 authorization effective 应用的 AuthConstants 托管区；
+- marker 缺失、重复、顺序错误或 marker 外漂移时 fail closed；
+- 连续执行两次，第二次无文件差异；
+- 页面文件不存在时投影拒绝，且不生成 placeholder。
+
+### 人工验收
+
+使用“两个页面、一个受控页面”的 fixture：先创建两个真实页面，再执行平台投影。确认两条 route
+均存在、仅受控页带权限守卫，且没有产生 placeholder 或 `BIZ_MENUS` 条目。
+
+### 退出标准
+
+- [ ] 所有应用使用同一 Route Projection；
+- [ ] 权限只作为 route decoration；
+- [ ] 投影模块不存在 branch/variant 判断。
+
+## 3.6 步骤 4：迁移 BuildContext、Planner、Agent 和 Skills
+
+### 改动项
+
+1. `prepare_build_tasks` 读取 TemplateState，把 `template_context` 注入 BuildContext；
+2. BuildTaskPlanner 删除 `template_variant` 参数和默认值；
+3. 平台路由文件对所有 capability 都禁止 Agent 修改；
+4. `frontend:route-registry` 永远不能成为模型任务；
+5. authorization 资源、RouteGuard 和 AuthConstants 只允许平台投影修改；
+6. Build DAG 切换为 `build-dag.v4` 并持久化 `template_context`；
+7. Build Run 重读 TemplateState，要求 revision 和 effective capabilities 与确认 DAG 完全一致；
+8. Frontend Agent Prompt 根据 authorization effective capability 决定是否提供 Permission/RESOURCES 指令；
+9. 前后端模板 Skills 改读 `/.xcodeagent/template-state.json`，删除远程 clone、旧 manifest、
+   main/auth 隔离和预建 placeholder/BIZ_MENUS 描述；
+10. 保留 auth 领域模块的真实保护边界，不能把“删除模板分支”扩大为允许 Agent 修改权限基础设施。
+
+### 自动化验收
+
+- 三类 TemplateState 均能完成 DAG 生成；
+- BuildContext 和 BuildTaskPlan 不包含 `template_variant`；
+- authorization effective 时生成权限任务切片，其他两类不生成；
+- 模型输出 route-registry 或共享路由修改任务时，三类应用均被拒绝；
+- Build Run 遇到 TemplateState revision/capability 漂移时阻断；
+- Prompt 和 Skills 测试不包含旧 manifest、main/auth branch 或占位页前提；
+- `build-dag.v3` 被明确拒绝，不做运行时迁移或字段回填。
+
+### 人工验收
+
+分别输出三类应用的 BuildContext、BuildTaskPlan 和 Agent Prompt，确认差异只来自 capability，
+没有任何模板分支差异。
+
+### 退出标准
+
+- [ ] 正式 Build 不再 import `application_template_generation.py`；
+- [ ] Planner、Build Run、Agent 和 Skills 只使用 TemplateState；
+- [ ] `build-dag.v4` 的生产、确认、恢复和消费测试同时通过。
+
+## 3.7 步骤 5：调整 Build 投影时序和二次规划行为
+
+### 改动项
+
+Build 顺序固定调整为：
+
+```text
+确认并绑定 Build DAG
+→ 执行页面/API/后端任务
+→ 确认目标页面文件真实存在
+→ Route Projection
+→ Authorization Frontend Projection
+→ AuthConstants Projection
+→ 工程/业务验收
+```
+
+平台投影失败时必须把 Build 标记为 failed，不进入 Integration Test，并保存精确错误和
+`platform_projection_evidence`。平台文件不得归入任一 Agent change set。Retry/Repair 重放同一
+确认 DAG 的投影，且必须保持幂等。
+
+二次 TechnicalPlan 确认后的确定性注入只保留仍有现行消费者的后端骨架：
+
+- 删除前端权限投影；
+- 删除页面 placeholder；
+- 删除 `BIZ_MENUS` 同步；
+- 将函数重命名为能准确表达“仅后端骨架”的名称；
+- `frontend_scaffold.py` 无其他消费者后直接删除。
+
+### 自动化验收
+
+- Route Projection 调用发生在 page task 成功之后、验收之前；
+- 页面任务失败时平台投影不执行；
+- 页面文件缺失时平台投影失败并阻断后续测试；
+- 平台投影文件只出现在 `platform_projection_evidence`；
+- 二次规划确认不创建、删除或覆盖前端页面、菜单、路由文件；
+- Repair 后重放投影不产生重复 route/resource/constants。
+
+### 人工验收
+
+对已有 Workspace 发起新增页面的正式 revision。TechnicalPlan 确认后检查页面和 route 尚未被
+预创建；First Build 完成后再检查真实页面与 managed route 已按顺序出现。
+
+### 退出标准
+
+- [ ] Bootstrap 和规划阶段均不生成业务页面或菜单；
+- [ ] 平台投影严格发生在真实页面生成后；
+- [ ] Build 验收消费 Agent 代码与平台投影合并后的最终工程。
+
+## 3.8 步骤 6：一次性删除旧 Lifecycle 与 Electron Clone
+
+### Backend 删除项
+
+```text
+prepare_template_generation
+complete_template_generation
+TemplateDownloadTarget
+TemplateDownloadResult
+templateGenerationManifest response
+application_template_generation.py
+旧 template generation lock / delete fence
+```
+
+### Frontend / Electron 删除项
+
+```text
+workspace:clone-template
+cloneGitRepo
+模板来源、分支和 commit 校验
+clone 子进程登记、终止和退出清理
+默认前后端模板仓库 URL
+resolveApplicationTemplateBranch
+preload/window cloneTemplate API
+TemplateDownloadTargetResult / TemplateDownloadResult
+旧 lifecycle service 方法
+```
+
+Application deletion 只使用 Backend `TemplateMutationCoordinator` 和当前运行资源协调器。
+`/health` 的 lifecycle capabilities 同步只发布四个当前 action。不保留废弃 action、类型别名、
+旧 IPC 空实现或旧 manifest 兼容读取。
+
+### 自动化验收
+
+- 旧 lifecycle action 触发 Pydantic 校验失败；
+- Electron 不再注册 `workspace:clone-template`；
+- 删除项目时不调用任何 clone process stop 逻辑；
+- Backend lifecycle/bootstrap/deletion 测试通过；
+- `pnpm typecheck` 和 `pnpm build` 通过；
+- `/health` 只列出四个当前 lifecycle action。
+
+### 人工验收
+
+新建应用时观察 Electron 日志和子进程，确认不出现 `git clone`；同时确认 Template Engine 请求
+只由 Backend 发起。删除正在 Bootstrap 的应用，确认由 Backend Coordinator 完成取消或等待 Commit。
+
+### 退出标准
+
+- [ ] Frontend/Electron 不知道模板仓库 URL、分支或 Engine 凭据；
+- [ ] Backend 不接受 Renderer 模板下载结果；
+- [ ] 新旧 Bootstrap 协议不再并存。
+
+## 3.9 步骤 7：接通 Workspace Attach 和中断恢复
+
+### 改动项
+
+1. Frontend 增加 `attachApplicationWorkspace` AG-UI 调用；
+2. 应用列表恢复、用户打开应用、Workbench 首次挂载和 Renderer 重启恢复都必须先 Attach、再 Get；
+3. 同一 Workspace 的并发 Attach 在 Renderer 内合并；
+4. Backend Attach 固定行为：
+   - 非 GENERATING：返回 `none`；
+   - 当前 Backend 持有活动 Bootstrap：返回 `active`；
+   - 孤儿 GENERATING：清理 frontend/backend/`.git`/TemplateState/staging 并写不可恢复 FAILED；
+   - 清理失败：保持 GENERATING，下次 Attach 继续收尾；
+5. `get` 保持严格只读，不隐式执行 Attach 或生命周期修复。
+
+### 自动化验收
+
+- active Bootstrap Attach 不取消任务、不修改 lifecycle；
+- 孤儿 GENERATING Attach 完成清理并写 FAILED；
+- cleanup failure 保持 GENERATING；
+- READY/FAILED Attach 幂等返回 none；
+- Renderer 打开应用的调用顺序为 attach → get；
+- React StrictMode 或多入口并发只产生一个活动 Attach 请求。
+
+### 人工验收
+
+在 Bootstrap 中断 Backend，保留 GENERATING Workspace；重启应用并打开项目，确认 Attach 自动
+清理并展示失败原因。再次打开时不得重复修改状态。
+
+### 退出标准
+
+- [ ] 所有 Workspace 接管入口都执行 Attach；
+- [ ] 不存在只能人工删除的孤儿 Bootstrap 状态；
+- [ ] `get` 的只读语义未被破坏。
+
+## 3.10 步骤 8：清理当前契约文档和索引
+
+### 改动项
+
+同步更新：
+
+```text
+docs/CODEBASE_INDEX.md
+docs/WORKFLOW.md
+docs/AUTH.md
+docs/XCODEAGENT_COMPLETE_WORKFLOW.md
+docs/DAG_TASK_GENERATION_AND_VALIDATION_MININAL_CHANGE_PLAN.md
+docs/DAG_TASK_GENERATION_UNIT_CANDIDATE_PLAN.md
+docs/APPLICATION_TEMPLATE_GENERATION_STATUS_AND_PLAN.md
+```
+
+当前契约描述中必须删除：
+
+- main/auth 模板分支选择和双端分支一致性；
+- main 初始化 placeholder/BIZ_MENUS；
+- auth 分支专属平台投影；
+- generation manifest 门禁；
+- Electron 下载模板和模板仓库 URL。
+
+历史方案若必须保留，需在标题下明确标记“已被 `BOOTSTRAP_PLAN.md` 取代，不是当前运行契约”；
+否则删除对应索引入口。只有真实自动化与人工验收通过后，才能勾选本文第二章和第三章的完成项。
+
+### 自动化验收
+
+全仓搜索：
+
+```text
+templateVariant
+template_variant
+workspace:clone-template
+cloneTemplate
+template-generation-manifest.json
+resolveApplicationTemplateBranch
+frontendTemplateUrl
+backendTemplateUrl
+```
+
+正式源码和当前契约文档必须零命中。测试中仅允许存在“明确拒绝旧字段/动作”的负向用例。
+Java `src/main`、Git 默认分支、数据源 ID，以及 `auth` 认证/权限领域名不属于清理目标。
+
+### 人工验收
+
+从 `CODEBASE_INDEX.md` 依次追踪 Bootstrap、Build、Projection 和 Attach，确认描述与实现一致；
+阅读前后端模板 Skills，确认 Agent 不会再寻找旧 manifest 或基于模板分支决定行为。
+
+### 退出标准
+
+- [ ] 仓库文档不存在两套并行的当前契约；
+- [ ] 索引能直接定位新的 TemplateState、投影和 Bootstrap 边界；
+- [ ] 旧术语只存在于必要的拒绝测试或明确历史背景。
+
+## 3.11 步骤 9：三类应用 E2E 与最终发布门禁
+
+### 自动化 E2E
+
+三类应用：
+
+```text
+A. login=false, authorization=false
+B. login=true, authorization=false
+C. login=true, authorization=true
+```
+
+每类完整执行：
+
+```text
+创建 Application/Lifecycle
+→ 确认正式规划产物
+→ Backend /v1/generate
+→ ZIP 校验与物化
+→ Git baseline
+→ READY
+→ Workspace Inspection
+→ build-dag.v4 生成与确认
+→ Page/API/Backend Tasks
+→ Route/Authorization Projection
+→ Integration Test
+→ First Build 完成
+```
+
+共同断言：
+
+- 只有 TemplateState，没有 generation manifest；
+- BuildContext/BuildTaskPlan 没有 variant；
+- Bootstrap 无 placeholder/BIZ_MENUS；
+- 三类应用均存在业务 route；
+- 仅 C 包含 RouteGuard、RESOURCES 和 AuthConstants 业务投影；
+- Git baseline clean；
+- 平台投影证据与 Agent change set 分离。
+
+### 异常 E2E
+
+必须覆盖：
+
+- Renderer 在下载中断连，Backend 继续完成；
+- 删除发生在 Preparation；
+- 删除发生在 Commit Section；
+- Backend 中断后的 Workspace Attach；
+- Engine timeout/reject；
+- unsafe ZIP；
+- TemplateState capability/revision 漂移；
+- route/AuthConstants marker 漂移。
+
+### 最终验证命令
+
+Backend：
+
+```bash
+python3 -m py_compile <changed-python-files>
+Backend/.venv/bin/python -m pytest -q Backend/tests
+curl -sS http://127.0.0.1:8000/health
+```
+
+Frontend：
+
+```bash
+cd Frontend
+pnpm typecheck
+pnpm build
+```
+
+Frontend UI 必须在已运行 Electron 应用中验证，不得用 Vite 浏览器页面替代。
+
+### 人工验收
+
+在 Electron 中分别新建 A/B/C 三类应用并完成 First Build，逐一核对 Workspace 文件、
+页面路由、权限守卫、生命周期卡片和 Git 状态。随后各执行一次 Renderer 断连、Bootstrap
+期间删除以及孤儿 GENERATING Workspace 重开，确认 UI 结果与 Backend lifecycle 一致。
+
+### 发布退出标准
+
+- [ ] 所有自动化测试通过；
+- [ ] Electron 人工验收通过；
+- [ ] 三类应用均完成 First Build；
+- [ ] 正式 Runtime 不存在 main/auth 分支或 templateVariant 依赖；
+- [ ] Renderer 断连、删除和 Workspace Attach 满足事务边界；
+- [ ] 任一验收失败都阻止合并或发布，不增加兼容分支临时绕过。

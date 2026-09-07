@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
+from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 
 
@@ -48,8 +49,9 @@ class WorkspaceMaterializerTests(unittest.TestCase):
         """成功提交后必须存在两个根、唯一 State 与不包含 State 的 Git baseline。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            archive = workspace / "template.zip"
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            archive = Path(directory) / "template.zip"
             _write_package(archive)
 
             WorkspaceMaterializer().materialize(
@@ -65,6 +67,7 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             self.assertFalse((workspace / ".xcodeagent/bootstrap-staging").exists())
             exclude = (workspace / ".git/info/exclude").read_text(encoding="utf-8")
             self.assertIn(".xcodeagent/", exclude)
+            self.assertTrue(BootstrapGitManager().verify_baseline(workspace))
 
     def test_second_root_move_failure_rolls_back_all_managed_outputs(self) -> None:
         """第二个 root 的移动失败时不得留下第一个 root、Git 或 TemplateState。"""
@@ -134,9 +137,10 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             for relative in ("frontend", "backend", ".git", TEMPLATE_STATE_RELATIVE_PATH):
                 self.assertFalse((workspace / relative).exists(), relative)
 
-            def fail_readiness(_workspace: Path) -> None:
-                """注入最终 readiness 失败，模拟 Commit Section 最后一步失败。"""
+            def fail_readiness(callback_workspace: Path) -> None:
+                """确认 staging 已清理后注入最终失败，模拟事务末尾 Readiness 失败。"""
 
+                self.assertFalse((callback_workspace / ".xcodeagent/bootstrap-staging").exists())
                 raise RuntimeError("readiness failed")
 
             with self.assertRaisesRegex(RuntimeError, "readiness failed"):

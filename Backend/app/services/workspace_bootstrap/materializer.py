@@ -90,10 +90,11 @@ class WorkspaceMaterializer:
             self._git_manager.initialize_baseline(root)
             _write_template_state(root / TEMPLATE_STATE_RELATIVE_PATH, template_state)
             journal.template_state_written = True
-            if readiness is not None:
-                readiness(root)
             _remove_managed_path(journal.staging)
             _remove_empty_staging_parent(root)
+            # Readiness 必须在 staging 已清除但仍可回滚的事务边界内执行。
+            if readiness is not None:
+                readiness(root)
             return str(root)
         except Exception:
             try:

@@ -31,6 +31,19 @@ class BootstrapGitManager:
         self._run(root, ["git", "commit", "-m", "chore: initialize workspace from template"])
         return self._run(root, ["git", "rev-parse", "HEAD"]).strip()
 
+    def verify_baseline(self, workspace: str | Path) -> str:
+        """确认 baseline 已存在、工作树干净且未追踪平台内部状态。"""
+
+        root = Path(workspace).expanduser().resolve()
+        head = self._run(root, ["git", "rev-parse", "--verify", "HEAD"]).strip()
+        if not head:
+            raise BootstrapGitError("Git baseline 缺少 HEAD 提交。")
+        if self._run(root, ["git", "status", "--porcelain"]).strip():
+            raise BootstrapGitError("Git baseline 提交后工作树必须保持干净。")
+        if self._run(root, ["git", "ls-files", "--", ".xcodeagent"]).strip():
+            raise BootstrapGitError("Git baseline 不得追踪 .xcodeagent 内部状态。")
+        return head
+
     def _run(self, workspace: Path, arguments: list[str]) -> str:
         """经工作区进程登记执行 Git，并将失败收敛为 Bootstrap 错误。"""
 

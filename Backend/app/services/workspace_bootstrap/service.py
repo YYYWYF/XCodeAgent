@@ -7,10 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
-from app.services.application_lifecycle import complete_workspace_bootstrap
+from app.services.application_lifecycle import (
+    begin_application_template_generation,
+    complete_workspace_bootstrap,
+)
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 from app.services.workspace_bootstrap.models import ArchiveLimits, WorkspaceBootstrapError
+from app.services.workspace_bootstrap.readiness import validate_workspace_bootstrap_readiness
 from app.services.workspace_bootstrap.requested_config import compile_template_requested_config
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 from app.services.workspace_bootstrap.template_package import validate_template_package
@@ -56,7 +60,11 @@ class WorkspaceBootstrapService:
         """编译请求、下载校验、事务物化，并确保失败写入 lifecycle。"""
 
         download_path: Path | None = None
+        coordinator_started = False
+        # 先拒绝非 TechnicalPlan-confirmed 的旧入口，避免下载后才发现 lifecycle 非法。
+        await asyncio.to_thread(begin_application_template_generation, workspace)
         template_mutation_coordinator.begin_preparation(workspace)
+        coordinator_started = True
         try:
             requested_config = await asyncio.to_thread(compile_template_requested_config, workspace)
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
@@ -81,13 +89,31 @@ class WorkspaceBootstrapService:
             )
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             template_mutation_coordinator.enter_commit_section(workspace)
+            lifecycle: Any = None
+
+            def commit_readiness(root: Path) -> None:
+                """在物化事务内验证完整性，并把唯一 READY 写入与其绑定。"""
+
+                nonlocal lifecycle
+                validate_workspace_bootstrap_readiness(
+                    root,
+                    requested_config=requested_config,
+                )
+                lifecycle = complete_workspace_bootstrap(
+                    root,
+                    succeeded=True,
+                    readiness_verified=True,
+                )
+
             await asyncio.to_thread(
                 WorkspaceMaterializer().materialize,
                 workspace=workspace,
                 archive_path=package.archive_path,
                 template_state=package.template_state,
+                readiness=commit_readiness,
             )
-            lifecycle = await asyncio.to_thread(complete_workspace_bootstrap, workspace, succeeded=True)
+            if lifecycle is None:
+                raise WorkspaceBootstrapError("Bootstrap 事务未提交 lifecycle READY。")
             return {"workspaceRoot": str(workspace), "lifecycle": lifecycle.model_dump(mode="json", by_alias=True)}
         except Exception as exc:
             lifecycle = await asyncio.to_thread(
@@ -102,7 +128,8 @@ class WorkspaceBootstrapService:
         finally:
             if download_path is not None:
                 download_path.unlink(missing_ok=True)
-            template_mutation_coordinator.finish(workspace)
+            if coordinator_started:
+                template_mutation_coordinator.finish(workspace)
 
 
 def workspace_bootstrap_service(settings: Settings) -> WorkspaceBootstrapService:

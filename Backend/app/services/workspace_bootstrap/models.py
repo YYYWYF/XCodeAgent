@@ -36,6 +36,12 @@ class TemplateEngineError(WorkspaceBootstrapError):
     code = "TEMPLATE_ENGINE_UNAVAILABLE"
 
 
+class WorkspaceBootstrapReadinessError(WorkspaceBootstrapError):
+    """表示提交前工作区未满足 Bootstrap 就绪契约。"""
+
+    code = "WORKSPACE_BOOTSTRAP_READINESS_FAILED"
+
+
 @dataclass(frozen=True)
 class ArchiveLimits:
     """限制不可信 ZIP 的压缩包、条目和展开体积。"""

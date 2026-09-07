@@ -428,7 +428,11 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 )
             write_application_lifecycle(workspace, state)
 
-            ready = complete_workspace_bootstrap(workspace, succeeded=True)
+            ready = complete_workspace_bootstrap(
+                workspace,
+                succeeded=True,
+                readiness_verified=True,
+            )
 
             self.assertEqual(ready.initialization.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
             self.assertFalse((workspace / ".xcodeagent/template-generation-manifest.json").exists())
