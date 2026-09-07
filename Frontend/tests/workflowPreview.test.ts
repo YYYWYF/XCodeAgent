@@ -526,6 +526,56 @@ test('页面和 Endpoint 快捷任务保留本次运行目标且不生成会话�
   assert.equal('threadId' in tasks[1], false)
 })
 
+test('Agent 快捷任务只携带启动所需的稳定目标信息', () => {
+  const tasks = buildQuickTasks([], [], [], [
+    {
+      key: 'support_agent',
+      agentId: 'support_agent',
+      label: '员工服务助手',
+      purpose: '回答员工问题并协助提交申请。',
+      boundaries: [],
+      capabilities: [
+        {
+          capabilityId: 'answer_questions',
+          name: '回答问题',
+          expectedResult: '返回可信答案',
+          toolIds: []
+        }
+      ],
+      entryPageIds: ['assistant_chat'],
+      entryActions: [],
+      interaction: {},
+      contractHash: 'sha256:test',
+      agentSettings: {},
+      dependencies: {
+        gateway: {},
+        tools: [],
+        entities: [],
+        pages: [],
+        runtime: {}
+      },
+      runtime: {},
+      security: {},
+      artifacts: [],
+      requiredChecks: []
+    }
+  ])
+
+  assert.deepEqual(tasks, [
+    {
+      agentId: 'support_agent',
+      agentLabel: '员工服务助手',
+      description: '回答员工问题并协助提交申请。',
+      id: 'agent:support_agent',
+      kind: 'agent',
+      meta: '1 项能力',
+      title: '员工服务助手'
+    }
+  ])
+  assert.equal('contractHash' in tasks[0], false)
+  assert.equal('agentSettings' in tasks[0], false)
+})
+
 test('实体完成续接只接受后端签发的完整原页面合同', () => {
   const workflow = previewWorkflow({
     phase: 'entity_source_binding',

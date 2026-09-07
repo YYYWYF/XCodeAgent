@@ -3708,7 +3708,7 @@ export default function AiChatPanel({
     }
   }
 
-  /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置页面、Endpoint 或实体目标。 */
+  /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置所选开发目标。 */
   const handleQuickTaskStart = async (task: QuickTaskItem): Promise<void> => {
     if (pendingDagExecution) return
     setTemporaryChatOpen(false)
@@ -3721,6 +3721,11 @@ export default function AiChatPanel({
     }
     if (task.kind === 'entity') {
       await handleStartEntityDesign(task.entityId, task.entityLabel, task.hasDetailPlan)
+      return
+    }
+    if (task.kind === 'agent') {
+      const agent = developmentPlanningAgents.find((item) => item.agentId === task.agentId)
+      if (agent) await handleStartAgentBuild(agent)
       return
     }
     await handleStartEndpointDesign(task.endpointId, task.endpointLabel, task.hasDetailPlan, {
@@ -4322,6 +4327,7 @@ export default function AiChatPanel({
                 !isApplicationPlanningPhase ? (
                   <QuickTaskGuide
                     apiContracts={developmentPlanningApiContracts}
+                    agents={developmentPlanningAgents}
                     disabled={loading || workflowInputLocked}
                     entities={developmentPlanningEntities}
                     loading={loadingSessions || !developmentPlanningReady}
