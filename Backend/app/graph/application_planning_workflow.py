@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,8 @@ from app.services.template_scaffold_injection import (
 from app.workspace.plan_documents import technical_plan_json_path
 from app.workspace.product_plan_documents import confirmed_product_plan_json_path
 from app.workspace.spec_documents import ui_designs_json_path, load_ui_designs_json
+
+logger = logging.getLogger(__name__)
 
 
 def _route_start(state: ProjectState) -> str:
@@ -619,7 +622,10 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
     """二次修改确认 TechnicalPlan 后，把确定性代码增量注入模板工程。
 
     只在模板工程已存在时注入（首次创建走 prepare_template_generation，不在此注入）。
-    注入失败不阻断主流程——确定性代码缺失时 Agent 仍可在 build 阶段补生成。
+    这是签发 continuation 前的 best-effort scaffold，不是 auth 产物的权威写入边界：
+    此处只提前写 auth routes.tsx，绝不写 resources.ts；Build 阶段会重放 routes 平台投影
+    并 fail closed，resources.ts 则由 authorization.frontend_resources Task 唯一写入。
+    因此预注入失败不阻断主流程，但不能依赖 Agent 补齐任何 auth 投影。
 
     注入内容：
     - 前端路由（auth 分支）：从 TechnicalPlan 的 authorization_manifest 编译并写入 routes.tsx
@@ -644,8 +650,8 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
         # 后端确定性注入：Entity/PO/Mapper/Repository/DTO/Controller 骨架
         inject_deterministic_backend_skeleton(workspace, technical_plan)
     except Exception:
-        # 确定性注入是优化项，失败不阻断二次修改主流程；Agent 仍可补生成。
-        pass
+        # 预注入失败可继续签发 continuation；权威 Build 投影仍会重放并 fail closed。
+        logger.exception("revision_scaffold_injection_failed")
 
 
 def _inject_frontend_authorization(workspace: str, technical_plan: dict[str, Any]) -> None:

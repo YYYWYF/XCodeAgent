@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.main import requirements_analyzer
 from app.graph.application_planning_workflow import (
+    _inject_revision_scaffold,
     _technical_planning,
     _requirements,
     _route_requirements,
@@ -1014,6 +1015,23 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         self.assertIs(result, sentinel)
         self.assertEqual(stream.call_args.kwargs["payload"]["workflowScope"], "application_planning")
+
+    def test_revision_scaffold_failure_is_logged_without_blocking_continuation(self) -> None:
+        """预注入异常应留下诊断，但仍保持 scaffold 层既有的 fail-open 语义。"""
+
+        with (
+            patch(
+                "app.graph.application_planning_workflow.technical_plan_json_path",
+                side_effect=RuntimeError("scaffold failed"),
+            ),
+            patch(
+                "app.graph.application_planning_workflow.logger.exception"
+            ) as log_exception,
+        ):
+            result = _inject_revision_scaffold("/tmp/revision-workspace", {})
+
+        self.assertIsNone(result)
+        log_exception.assert_called_once_with("revision_scaffold_injection_failed")
 
 
 if __name__ == "__main__":
