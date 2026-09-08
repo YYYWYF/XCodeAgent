@@ -335,7 +335,7 @@ def project_contract_validation_output(
 
 
 def project_candidate_tasks_output(build_task_plan: dict[str, Any]) -> dict[str, Any]:
-    """投射模型规划阶段的候选任务列表和负责人汇总。"""
+    """投射模型计划阶段的候选任务列表和负责人汇总。"""
 
     tasks = _project_tasks(build_task_plan)
     return {

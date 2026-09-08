@@ -466,7 +466,7 @@ export default function MessageList({
                   <MessageAgentHeader agentKey={currentPhase} />
                   <PhasePendingCard
                     agentKey={currentPhase}
-                    detail={currentPhase === 'planning' ? '正在恢复规划阶段…' : '正在准备需求确认…'}
+                    detail={currentPhase === 'planning' ? '正在恢复计划阶段…' : '正在准备需求确认…'}
                   />
                 </div>
               </article>
@@ -497,14 +497,14 @@ export default function MessageList({
                 return null
               }
               // 以 activePlannings 的当前权威阶段收口冲突消息：保留 UI 设计稿历史，
-              // 只隐藏过早生成的 TechnicalPlan，进入规划阶段后也不回显旧入口卡。
+              // 只隐藏过早生成的 TechnicalPlan，进入计划阶段后也不回显旧入口卡。
               if (
                 designPhasePlanning &&
                 isSupersededPlanningPhaseMessage(message, currentPlanningPhase)
               ) {
                 return null
               }
-                // TechnicalPlan 已开始后，入口动作已经消费；不在规划阶段继续展示可点击入口卡。
+                // TechnicalPlan 已开始后，入口动作已经消费；不在计划阶段继续展示可点击入口卡。
               if (
                 designPhasePlanning &&
                 isSupersededPlanningStageEntryMessage(messages, messageIndex)
@@ -796,7 +796,7 @@ export default function MessageList({
                                     : '正在生成设计方案…'
                                   : designPhasePlanning
                                     ? currentPhase === 'planning'
-                                      ? '正在恢复规划阶段…'
+                                      ? '正在恢复计划阶段…'
                                       : '正在准备需求确认…'
                                     : '正在处理…'
                               }

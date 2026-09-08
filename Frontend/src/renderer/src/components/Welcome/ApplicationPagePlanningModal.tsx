@@ -144,8 +144,8 @@ const phaseProgress: Record<
   planning_stage_entry: {
     active: 68,
     complete: 68,
-    message: '设计阶段已完成，等待进入规划阶段…',
-    title: '等待进入规划阶段'
+    message: '设计阶段已完成，等待进入计划阶段…',
+    title: '等待进入计划阶段'
   },
   technical_planning: {
     active: 78,

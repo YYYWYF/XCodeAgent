@@ -59,7 +59,7 @@ export function WorkbenchPhaseProvider({
   const derivedReachedPhase = deriveWorkbenchReachedPhase(lifecycle);
   // 多应用切换时各自保留独立的覆盖值，避免互相串用。
   const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>({});
-  // 需求分析/项目规划阶段回退会产生新的生命周期快照，但不能抹掉本版本此前已经到达的阶段。
+  // 需求分析/项目计划阶段回退会产生新的生命周期快照，但不能抹掉本版本此前已经到达的阶段。
   const [rememberedReachedPhases, setRememberedReachedPhases] = useState<
     Record<string, WorkbenchPhase>
   >({});

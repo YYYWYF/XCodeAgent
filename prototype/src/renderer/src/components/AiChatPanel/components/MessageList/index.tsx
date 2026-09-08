@@ -456,7 +456,7 @@ export default function MessageList({
                 clarificationSnapshot?.status === 'submitted' &&
                 (clarificationSnapshot?.questions?.length ?? 0) > 0
               // 只有最后一张待确认卡才可能是 active；历史卡（已提交 / 被新回复取代）一律 stale，
-              // 防止需求分析/项目规划阶段 fast-path 把所有 requires_user_input 历史快照都判成 active（按钮复活）。
+              // 防止需求分析/项目计划阶段 fast-path 把所有 requires_user_input 历史快照都判成 active（按钮复活）。
               const lastPendingClarificationId = (() => {
                 for (let i = displayMessages.length - 1; i >= 0; i -= 1) {
                   const candidate = displayMessages[i]

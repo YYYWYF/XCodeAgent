@@ -49,7 +49,7 @@ export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX
       const currentRefreshId = ++refreshId
       try {
         const storedApplications = await loadStoredApplications()
-        // 规划在需求分析/项目规划阶段的工作台内完成：所有应用都可直接进入工作台，最近项目全量展示。
+        // 规划在需求分析/项目计划阶段的工作台内完成：所有应用都可直接进入工作台，最近项目全量展示。
         if (active && currentRefreshId === refreshId) {
           setApplications(storedApplications)
         }

@@ -174,7 +174,7 @@ type ArtifactNavigationProps = {
   artifactStatusById: Record<string, WorkbenchArtifactStatus>
   designArtifacts: DesignArtifactItem[]
   entities: DevelopmentPlanningEntity[]
-  /** 开发产物工作区不展示需求分析/项目规划阶段文档，只复用原有开发目录树。 */
+  /** 开发产物工作区不展示需求分析/项目计划阶段文档，只复用原有开发目录树。 */
   hideDesignArtifacts?: boolean
   /** 开发产物目录不展示应用根节点，页面/接口/实体直接作为一级分组。 */
   hideApplicationRoot?: boolean

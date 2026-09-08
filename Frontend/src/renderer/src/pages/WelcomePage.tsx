@@ -25,7 +25,7 @@ type Props = {
 
 type WelcomeTheme = 'dark' | 'light'
 
-// 渲染首页，并以统一项目列表承载所有设计、规划和开发阶段的应用入口。
+// 渲染首页，并以统一项目列表承载所有设计、计划和开发阶段的应用入口。
 export default function WelcomePage({
   onBeforeDeleteApplication,
   onOpenApplication,

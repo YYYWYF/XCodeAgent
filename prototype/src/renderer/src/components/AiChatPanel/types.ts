@@ -40,7 +40,7 @@ export type AgentChatMessage = {
   createdAt: number
 }
 
-/** 需求分析/项目规划阶段右侧「文档」的产物 key，作为工作区 tab 使用。 */
+/** 需求分析/项目计划阶段右侧「文档」的产物 key，作为工作区 tab 使用。 */
 export type WorkspaceDocKey = 'requirement-spec' | 'project-plan'
 
 export type RightPanelState =

@@ -212,7 +212,7 @@ quality gate passed
 
 ### 5.3 P0：task allowlist 只存在于 prompt
 
-Frontend/Data Source/Main Agent 的 filesystem permission 对非 Test 模式允许 `read/write /**`。任务的 `change_scope`、`allowed_paths` 和“规划阶段只读”目前主要依靠提示词；diff 捕获只能事后发现，不能事前阻止。
+Frontend/Data Source/Main Agent 的 filesystem permission 对非 Test 模式允许 `read/write /**`。任务的 `change_scope`、`allowed_paths` 和“计划阶段只读”目前主要依靠提示词；diff 捕获只能事后发现，不能事前阻止。
 
 建议为每次 invocation 构造权限：
 

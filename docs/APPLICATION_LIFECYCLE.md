@@ -6,7 +6,7 @@
 
 ## 权威边界
 
-`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台执行和资源锁的持久化权威来源。应用索引只负责统一列出和打开应用，不保存阶段准入事实；设计、规划或开发阶段均可进入工作台。`checkpoints.sqlite` 继续负责 LangGraph 技术断点；RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 各自负责正式内容与确认状态；Build DAG、ExecutionRun 和 TestReport 继续负责执行和测试事实。
+`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台执行和资源锁的持久化权威来源。应用索引只负责统一列出和打开应用，不保存阶段准入事实；设计、计划或开发阶段均可进入工作台。`checkpoints.sqlite` 继续负责 LangGraph 技术断点；RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 各自负责正式内容与确认状态；Build DAG、ExecutionRun 和 TestReport 继续负责执行和测试事实。
 
 生命周期文件只承担冷启动、断线重连和显式校准，不作为渲染进程的实时轮询源。后端每次原子写入成功后，必须先通过主 Workflow AG-UI 流发送独立的 `application-lifecycle` 自定义事件，再继续投影对应节点或控制动作。工作台顶层 application store 按应用标识与单调 `revision` 合并冷启动读取、重连校准和实时事件；页面控制栏、应用大纲及 API 大纲只消费这一个 store。较旧的文件读取结果不得覆盖更新的实时 revision。
 
@@ -36,7 +36,7 @@ collecting_requirement
        └─ failure -> application_template_generation_failed（终止）
 ```
 
-UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不会自动执行 TechnicalPlan。只有原创建规划 checkpoint 上通过 `gateId + artifactRevision` 校验的 `enter_planning` 动作才能进入 `generating_technical_plan`。模板生成只由用户确认 TechnicalPlan 后的确认回调启动。失败、应用重启、再次打开和进入工作台都不会重新启动模板生成；任何新一轮生成都必须重新进入规划阶段并确认 TechnicalPlan。
+UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不会自动执行 TechnicalPlan。只有原创建规划 checkpoint 上通过 `gateId + artifactRevision` 校验的 `enter_planning` 动作才能进入 `generating_technical_plan`。模板生成只由用户确认 TechnicalPlan 后的确认回调启动。失败、应用重启、再次打开和进入工作台都不会重新启动模板生成；任何新一轮生成都必须重新进入计划阶段并确认 TechnicalPlan。
 
 ## 全应用生命周期与计划执行模式
 

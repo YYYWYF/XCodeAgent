@@ -23,8 +23,8 @@ export default function AppEntryPage(): JSX.Element {
 }
 
 // 在欢迎页与应用工作台之间维护顶层导航。
-// 新建旅程的规则：需求确认与项目规划全部在工作台需求分析/项目规划阶段内完成，
-// 任何应用（含仍在需求分析/项目规划阶段的应用）都直接进入工作台，不再有独立规划弹窗。
+// 新建旅程的规则：需求确认与项目规划全部在工作台需求分析/项目计划阶段内完成，
+// 任何应用（含仍在需求分析/项目计划阶段的应用）都直接进入工作台，不再有独立规划弹窗。
 function AppEntryContent(): JSX.Element {
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
@@ -72,7 +72,7 @@ function AppEntryContent(): JSX.Element {
     [openWorkbench]
   )
 
-  // 从最近项目打开应用：仍处于需求分析/项目规划阶段的应用也直接进工作台；生命周期由工作台冷启动自行校准。
+  // 从最近项目打开应用：仍处于需求分析/项目计划阶段的应用也直接进工作台；生命周期由工作台冷启动自行校准。
   const handleOpenApplication = useCallback(
     (application: ApplicationConfig) => {
       void openWorkbench(application)

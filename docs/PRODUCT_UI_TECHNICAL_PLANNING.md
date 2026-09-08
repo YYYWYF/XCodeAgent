@@ -13,7 +13,7 @@ ProductPlan
   -> 产品确认
 UiDesign（可选的真实 React 页面稿 + UiManifest）
   -> 产品确认或明确跳过
-等待进入规划阶段
+等待进入计划阶段
   -> 用户显式确认 enter_planning
 TechnicalPlan
   -> 开发确认
@@ -327,11 +327,11 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 正式依赖顺序为：
 
 ```text
-RequirementSpec -> ProductPlan -> UiDesign（可选） -> 等待进入规划阶段 -> TechnicalPlan
+RequirementSpec -> ProductPlan -> UiDesign（可选） -> 等待进入计划阶段 -> TechnicalPlan
 TechnicalPlan + EntitySourceBinding -> development_readiness_gate -> Build DAG
 ```
 
-ProductPlan 或 UiDesign 变化时重新确认受影响 TechnicalPlan/运行时页面契约；TechnicalPlan API 或 Schema 变化时使相关 Build DAG 失效；EntitySourceBinding 变化时使引用实体的页面/API Build DAG 失效。纯代码实现错误进入 SmallTask 修复，不回到规划阶段。
+ProductPlan 或 UiDesign 变化时重新确认受影响 TechnicalPlan/运行时页面契约；TechnicalPlan API 或 Schema 变化时使相关 Build DAG 失效；EntitySourceBinding 变化时使引用实体的页面/API Build DAG 失效。纯代码实现错误进入 SmallTask 修复，不回到计划阶段。
 
 TechnicalPlan 确认前执行确定性一致性检查：UI 中声明的每个业务操作、显示项和跳转必须能映射到 ProductPlan；每个 ProductPlan `business` action 和组合中的每个 `business` step 必须有且只有一个 endpoint 实现；TechnicalPlan 不得为 `navigation`、`interface` 或 `external` 行为重复作产品/UI 决策；每个技术绑定必须引用已存在的 action/step、endpoint、Schema 和页面。启用权限时，`authorization-manifest.v2` 必须完整覆盖 RequirementSpec 页面/操作规则及 ProductPlan 目标，确定性生成页面、顶层 action 和唯一系统资源，以及 Endpoint `operationResourceKeys` 的 ANY-OF 绑定；V1 出现数据权限字段必须拒绝确认。资源键、系统资源及 endpoint resource binding 均由确定性编译器生成。编译后的 `endpoint`、`navigation`、`local`、`external`、`sequence` 联合契约必须完整闭合，失败时不得进入工作台。
 

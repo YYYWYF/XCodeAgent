@@ -19,7 +19,7 @@ _TARGET_BY_SEMANTICS: dict[tuple[str, str], DesignConversationTarget] = {
 }
 
 _PHASE_LABELS = {
-    "planning": "规划",
+    "planning": "计划",
     "development": "开发",
     "test": "测试",
 }

@@ -761,7 +761,7 @@ test('正式产物收口与 Build 确认门属于开发阶段，后续节点进�
   assert.equal(workbenchPhaseForNode('acceptance', 'review'), 'acceptance')
 })
 
-test('UI 完成后仍停留设计阶段，进入后 TechnicalPlan 属于独立规划阶段', () => {
+test('UI 完成后仍停留设计阶段，进入后 TechnicalPlan 属于独立计划阶段', () => {
   const awaitingEntry = planLifecycle(pageExecution({ status: 'completed' }))
   awaitingEntry.initialization = {
     stage: 'awaiting_planning_stage_entry',

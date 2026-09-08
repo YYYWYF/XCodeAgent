@@ -36,7 +36,7 @@ export interface DatabaseDatasourceDetails {
 /** 描述最终写入 application.json 的数据库数据源配置。 */
 export interface DatabaseDatasourceConfig {
   type: DatasourceEnum.DB
-  /** 创建应用时数据库连接配置非必填；实体数据源在项目规划阶段再确认。 */
+  /** 创建应用时数据库连接配置非必填；实体数据源在项目计划阶段再确认。 */
   db?: DatabaseDatasourceDetails
 }
 

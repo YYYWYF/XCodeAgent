@@ -109,7 +109,7 @@ export function retainApplicationPlanningInterrupt(
   const sameRun =
     previous?.threadId === incoming.threadId && previous?.runId === incoming.runId
   // 同一恢复轮一旦开始生成 TechnicalPlan，晚到的入口 checkpoint 帧只能视为旧投影，
-  // 不能把规划阶段重新拉回“进入规划阶段”的确认卡。
+  // 不能把计划阶段重新拉回“进入计划阶段”的确认卡。
   if (
     sameRun &&
     planningWorkflowPhase(previous) === 'technical_planning' &&

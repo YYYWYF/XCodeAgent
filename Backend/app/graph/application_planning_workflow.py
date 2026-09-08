@@ -140,7 +140,7 @@ def _route_product_planning(state: ProjectState) -> str:
 
 
 def _route_ui_confirmation(state: ProjectState) -> str:
-    """UI设计稿未全部确认时继续审阅，否则停在独立规划阶段入口。"""
+    """UI设计稿未全部确认时继续审阅，否则停在独立计划阶段入口。"""
 
     clarification = state.get("clarification")
     return "ui_confirmation_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "planning_stage_entry"
@@ -224,7 +224,7 @@ def _requirements(state: ProjectState) -> dict:
 
 
 async def _ui_confirmation(state: ProjectState) -> dict:
-    """为每个页面生成设计稿或处理明确跳过，完成后等待用户进入规划阶段。"""
+    """为每个页面生成设计稿或处理明确跳过，完成后等待用户进入计划阶段。"""
 
     node_state = design_artifact_node_state(state, "ui_confirmation")
     if (
@@ -266,7 +266,7 @@ async def _ui_confirmation(state: ProjectState) -> dict:
                     "lifecycle": application_lifecycle_payload(lifecycle),
                 },
             )
-        # UI 已全部确认或明确跳过，只推进到规划阶段入口，不得自动生成 TechnicalPlan。
+        # UI 已全部确认或明确跳过，只推进到计划阶段入口，不得自动生成 TechnicalPlan。
         lifecycle = persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
@@ -480,7 +480,7 @@ def _ensure_lifecycle(state: ProjectState):
 
 
 def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: ProjectState):
-    """校验规划阶段入口动作，并把生命周期推进到 TechnicalPlan 生成。"""
+    """校验计划阶段入口动作，并把生命周期推进到 TechnicalPlan 生成。"""
 
     common = {
         "active_run_id": state.get("active_run_id"),
@@ -489,7 +489,7 @@ def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: Proj
     action = str(interaction.get("action") or "") if isinstance(interaction, dict) else ""
     if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY:
         if action != "enter_planning":
-            raise ValueError("TechnicalPlan 必须由用户明确进入规划阶段后才能生成。")
+            raise ValueError("TechnicalPlan 必须由用户明确进入计划阶段后才能生成。")
         lifecycle = persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
@@ -514,7 +514,7 @@ def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: Proj
         ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
     }:
         raise ValueError(
-            "TechnicalPlan 只能在用户明确进入规划阶段后生成，当前生命周期为 "
+            "TechnicalPlan 只能在用户明确进入计划阶段后生成，当前生命周期为 "
             f"{lifecycle.initialization.stage.value}。"
         )
     return lifecycle

@@ -44,7 +44,7 @@ export default function RevisionImpactReview({
           取消
         </Button>
         <Button disabled={disabled} onClick={() => onDecision('approved')} type="primary">
-          {designBranch ? '确认并返回设计阶段' : '确认并进入规划阶段'}
+          {designBranch ? '确认并返回设计阶段' : '确认并进入计划阶段'}
         </Button>
       </div>
     </section>

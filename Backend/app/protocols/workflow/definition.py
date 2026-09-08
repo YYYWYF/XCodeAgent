@@ -14,7 +14,7 @@ WORKFLOW_NODE_LABELS = {
     "requirements": "需求文档",
     "product_planning": "产品规划",
     "ui_confirmation": "UI 设计",
-    "planning_stage_entry": "进入规划阶段",
+    "planning_stage_entry": "进入计划阶段",
     "technical_planning": "技术规划",
     "application_revision": "正式产物二次修改",
     "development_readiness_gate": "开发前置检查",

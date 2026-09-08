@@ -263,7 +263,7 @@ const xcodeAgent = {
     listWorkspaces: () => ok([]),
     list: ({ workspaceRoot, editorMode, applicationId }: { workspaceRoot?: string; editorMode?: string; applicationId?: string }) => {
       // 规划(需求分析/项目规划)阶段的应用不返回静态镜像的已设计页会话；但运行期保存的对话必须照常返回——
-      // 需求分析/项目规划旅程本就处于规划阶段集合，若连实时会话一起隐藏，任何一次目录重载
+      // 需求分析/项目规划旅程本就处于计划阶段集合，若连实时会话一起隐藏，任何一次目录重载
       // 都会把默认常规对话清空，用户视角就是“默认对话点进去就没了”。
       const inPlanning = mockApplicationInPlanning(workspaceRoot || '', applicationId)
       const scriptedSessions = inPlanning

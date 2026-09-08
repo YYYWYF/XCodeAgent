@@ -107,7 +107,7 @@ function isWorkbenchPhase(value: string | null): value is WorkbenchPhase {
 
 export type WorkbenchAgentIdentity = {
   key: WorkbenchPhase
-  /** 短标签：设计 / 规划 / 开发 / 测试 / 审查 / 验收。 */
+  /** 短标签：设计 / 计划 / 开发 / 测试 / 审查 / 验收。 */
   label: string
   /** Agent 身份：产品 Agent / 规划 Agent / 研发 Agent / 测试 Agent / 审查 Agent / 验收 Agent。 */
   role: string
@@ -125,7 +125,7 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
   },
   planning: {
     key: 'planning',
-    label: '规划',
+    label: '计划',
     role: '规划 Agent',
     responsibility: '定 HOW：技术架构、实体、API、Schema 与页面实现引用'
   },
@@ -169,7 +169,7 @@ export type EditableObjectType =
 
 /** 各阶段可编辑的对象集合；不在集合里的对象在该阶段只读。 */
 const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
-  // 设计阶段只编辑产品事实，技术规划由独立规划阶段负责。
+  // 设计阶段只编辑产品事实，技术规划由独立计划阶段负责。
   product: ['requirement_doc'],
   planning: ['project_plan'],
   // 研发阶段：页面 spec、接口 spec、代码。
@@ -198,7 +198,7 @@ const PLANNING_STAGES = new Set([
   'generating_build_task_plan'
 ])
 
-/** 独立技术规划阶段及模板准备阶段的生命周期节点。 */
+/** 独立技术计划阶段及模板准备阶段的生命周期节点。 */
 const TECHNICAL_PLANNING_STAGES = new Set([
   'generating_technical_plan',
   'awaiting_technical_plan_confirmation',
@@ -342,7 +342,7 @@ const INITIALIZATION_STAGE_LABELS: Record<string, string> = {
   awaiting_requirement_document_confirmation: '确认需求文档',
   generating_ui_designs: '生成 UI 设计',
   awaiting_ui_design_confirmation: '确认 UI 设计',
-  awaiting_planning_stage_entry: '等待进入规划阶段',
+  awaiting_planning_stage_entry: '等待进入计划阶段',
   generating_technical_plan: '生成技术规划',
   awaiting_technical_plan_confirmation: '确认技术规划',
   generating_application_template_files: '生成应用模板',

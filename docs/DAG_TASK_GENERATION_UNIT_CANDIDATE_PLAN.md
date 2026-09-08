@@ -350,7 +350,7 @@ backend:bootstrap
 
 ### 已确认：auth-guard 承担资源注入任务，先于页面实施
 
-`frontend:auth-guard` 的业务职责是把前面设计和规划阶段已经确定的全部资源点注入 auth 模板的 `src/constants/resources.ts`，在应用工作区中的精确路径为 `frontend/src/constants/resources.ts`。该职责由一个独立的 DAG Task 承担，并作为当前权限场景下 Page 页面实施 Task 的前置依赖；不采用“auth-guard 仅保留能力标识、不生成任务”的建议。
+`frontend:auth-guard` 的业务职责是把前面设计和计划阶段已经确定的全部资源点注入 auth 模板的 `src/constants/resources.ts`，在应用工作区中的精确路径为 `frontend/src/constants/resources.ts`。该职责由一个独立的 DAG Task 承担，并作为当前权限场景下 Page 页面实施 Task 的前置依赖；不采用“auth-guard 仅保留能力标识、不生成任务”的建议。
 
 **已确认的任务复用原则与执行边界：** 对未发生变化的同一份规划资源点清单，上一份 confirmed DAG 中已有对应资源注入任务时，生成阶段保留同一任务及其身份，后续页面依赖该任务，不因切换页面或开启新的页面 PlanningRun 而重复生成。是否保留任务不以已经执行成功为条件：已有任务尚未执行或执行失败，都不能仅因此另生成一份相同任务。生成阶段只判断已有任务是否对应本轮所需的资源注入职责，以及是否存在必须新增的任务贡献，不负责判断该任务现在是否应执行、跳过或重试。
 
@@ -627,7 +627,7 @@ API module 重复利用需要“生成前判断 + 生成后校验”，但两者
 
 `frontend:api-client` 中的共享响应适配器是固定的 `frontend/src/apis/responseEntity.ts`。它按项目既有传输约定处理 `returnCode / errorMsg / body`、`SUC0000` 成功码、业务错误、协议错误和空响应；业务 API 模块通过它向页面返回业务数据 `T`。正式 API Contract 决定各接口的业务类型和是否有响应数据，适配器不因消费页面或业务类型不同而重复生成。实际 `service.ts` 的返回约定由业务模块执行时读取并采用；static 模块不使用该 HTTP 适配器。
 
-规划阶段复用的是上一份 confirmed DAG 中已选定保留的适配器任务，按明确身份识别：
+计划阶段复用的是上一份 confirmed DAG 中已选定保留的适配器任务，按明确身份识别：
 
 ```text
 unit_id = frontend:api-client
@@ -1215,7 +1215,7 @@ generation_attempt
 
 错误发生后将当前 PlanningRun 标记为 failed，停止新调用与自动重试，按失败收尾规则处理正在进行的调用及迟到结果。通过现有 AG-UI 失败流程向上层报告故障 Unit、原因及是否需要先处理配置，明确结束当前生成进度；不交给 Global 作为内容缺项自动修复，也不在 PlanningRun 内保留等待用户决定的运行状态。
 
-- **用户选择重新生成任务：** 上层重新进入 `prepare_build_tasks` 的任务准备入口及必要输入准备，创建新的 `planning_run_id`；重新读取已确认正式合同和 confirmed DAG，建立本轮工作区快照、复用事实与生成范围。新 Run 不读取失败 Run 的 Candidate，也不能把 checkpoint 中上次候选计划当作 confirmed 基线；Local／Global 预算从新 Run 开始计数。这不是从需求、UI 或技术规划阶段重新生成上游产物。
+- **用户选择重新生成任务：** 上层重新进入 `prepare_build_tasks` 的任务准备入口及必要输入准备，创建新的 `planning_run_id`；重新读取已确认正式合同和 confirmed DAG，建立本轮工作区快照、复用事实与生成范围。新 Run 不读取失败 Run 的 Candidate，也不能把 checkpoint 中上次候选计划当作 confirmed 基线；Local／Global 预算从新 Run 开始计数。这不是从需求、UI 或技术计划阶段重新生成上游产物。
 - **用户选择取消／稍后处理：** 失败 PlanningRun 已经结束，无需再让它等待；上层关闭本次失败处理或等待用户稍后主动发起。正式 DAG 始终不变；用户在调用尚未失败时主动取消，则按取消分支结束运行。
 - **上层等待与内部 Run 分离：** 可以由工作流／界面等待用户选择，但这不表示失败 PlanningRun 仍活跃。AG-UI 工作流执行身份与 `planning_run_id` 分属不同层，不要求更换整个应用、会话或重新执行所有上游节点。用户操作的身份绑定在第 9、10 项衔接。
 - **错误契约：** 使用平台结构化失败结果和明确的新 Run 发起动作，不仅抛一个未处理异常后让界面停留在“生成中”。基础设施错误的 `ValidationIssue.retryable=false` 表示不能在该 PlanningRun 内通过 Candidate 重生成修复，不禁止用户在上层主动开启新 Run。

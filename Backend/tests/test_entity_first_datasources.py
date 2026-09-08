@@ -34,7 +34,7 @@ class EntityFirstDatasourceTests(unittest.TestCase):
         self.assertNotIn("type", module_entity["fields"][0])
 
     def test_plan_entities_do_not_carry_data_source(self) -> None:
-        """规划阶段实体不生成 data_source，数据源清单为空直到实体设计确认。"""
+        """计划阶段实体不生成 data_source，数据源清单为空直到实体设计确认。"""
 
         spec = create_requirement_spec("创建一个书籍管理系统")
         plan = create_project_plan(spec, datasource_type="database")

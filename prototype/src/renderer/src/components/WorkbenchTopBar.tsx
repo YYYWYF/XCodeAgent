@@ -47,7 +47,7 @@ type Props = {
   onRequestEnterTesting?: () => void
   /** 项目规划准入门是否待处理（需求文档确认后的进入项目规划弹框未完成确认）。 */
   canEnterPlanningStage?: boolean
-  /** 用户点击具备进入条件的项目规划阶段节点时，再次唤起项目规划准入门弹框。 */
+  /** 用户点击具备进入条件的项目计划阶段节点时，再次唤起项目规划准入门弹框。 */
   onRequestEnterPlanning?: () => void
   /** 开发准入门是否待处理（项目计划确认后的进入开发弹框未完成选择）。 */
   canEnterDevelopmentStage?: boolean

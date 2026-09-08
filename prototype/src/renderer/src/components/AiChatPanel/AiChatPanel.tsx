@@ -480,7 +480,7 @@ function composeVersionPreviewUrl(baseUrl: string, path: string, versionKey: str
   return parsedUrl.toString()
 }
 
-// 需求分析/项目规划阶段产物文档的可用进度（按生命周期 initialization.stage 判定）。
+// 需求分析/项目计划阶段产物文档的可用进度（按生命周期 initialization.stage 判定）。
 // 顺序与 planning.ts / workbenchPhase 的规划期 stage 推进一致；到达门槛 stage 后对应文档才生成。
 const DESIGN_DOC_STAGE_ORDER = [
   'collecting_requirement',
@@ -505,7 +505,7 @@ function isDevelopmentCatalogConfirmed(stage: string | undefined): boolean {
   return stage === 'ready_for_workbench'
 }
 
-/** 需求分析/项目规划阶段两份正式产物文档的 key → 可用的门槛 stage。 */
+/** 需求分析/项目计划阶段两份正式产物文档的 key → 可用的门槛 stage。 */
 const DESIGN_DOC_THRESHOLDS: Record<WorkspaceDocKey, string> = {
   'requirement-spec': 'generating_requirement_spec',
   'project-plan': 'generating_project_plan'
@@ -528,7 +528,7 @@ function contentFromFileDiff(diff: string, currentContent = ''): string {
 }
 
 /**
- * 需求分析/项目规划阶段右栏文档 tab 跟随规则：回看时优先按当前查看阶段定位，
+ * 需求分析/项目计划阶段右栏文档 tab 跟随规则：回看时优先按当前查看阶段定位，
  * 正常推进时生成中按 workflow.phase、就绪后按 lifecycle.stage 接管切到内容。
  */
 function resolveDesignDocKey(
@@ -537,7 +537,7 @@ function resolveDesignDocKey(
   phaseRunning: boolean,
   viewingPhase?: WorkbenchPhase
 ): WorkspaceDocKey | undefined {
-  // 回看需求分析/项目规划阶段时，左侧产物必须跟随当前查看阶段，不能被生命周期已到达的最新文档覆盖。
+  // 回看需求分析/项目计划阶段时，左侧产物必须跟随当前查看阶段，不能被生命周期已到达的最新文档覆盖。
   if (viewingPhase === 'analysis') return 'requirement-spec'
   if (viewingPhase === 'planning') return 'project-plan'
   const generatingKey =
@@ -549,7 +549,7 @@ function resolveDesignDocKey(
   return generatingKey ?? designActiveDocKey(stage)
 }
 
-/** 判断需求分析/项目规划阶段的文件改动是否仍属于当前阶段的待授权生成，过滤已确认后残留的历史快照。 */
+/** 判断需求分析/项目计划阶段的文件改动是否仍属于当前阶段的待授权生成，过滤已确认后残留的历史快照。 */
 function isPendingDesignCodeChange(
   workflow: WorkflowRunPayload | undefined,
   stage: string | undefined
@@ -565,7 +565,7 @@ function isPendingDesignCodeChange(
     )
   }
   if (phase === 'project_planning') {
-    // 项目 Agent 的首个 running 快照到来时，生命周期通常还没切到项目规划阶段；
+    // 项目 Agent 的首个 running 快照到来时，生命周期通常还没切到项目计划阶段；
     // 不能因此过滤掉渐进写入的中间快照，否则用户只能看到最后一帧。
     return (
       running ||
@@ -735,7 +735,7 @@ export default function AiChatPanel({
   onTestCaseGenerationTaskTypeChange
 }: Props): ReactElement {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
-  // 需求分析/项目规划阶段文档编辑态:editedDesignDocs 存快捷键保存后的编辑版(覆盖静态产物显示);
+  // 需求分析/项目计划阶段文档编辑态:editedDesignDocs 存快捷键保存后的编辑版(覆盖静态产物显示);
   // 编辑草稿由 DocPanel 内部管理(默认即编辑,IDE 式),Ctrl/Cmd+S 后经 onSaveEdit(draft) 回传。
   const [editedDesignDocs, setEditedDesignDocs] = useState<
     Partial<Record<WorkspaceDocKey, string>>
@@ -818,9 +818,9 @@ export default function AiChatPanel({
     }),
     [scenario.designedPageDesigns, scenario.pageDesigns]
   )
-  // 需求分析和项目规划阶段共用现有规划工作区；后续任务再拆分两套对话流程。
+  // 需求分析和项目计划阶段共用现有规划工作区；后续任务再拆分两套对话流程。
   const isDesignPhase = activeWorkbenchPhase === 'analysis' || activeWorkbenchPhase === 'planning'
-  // 需求分析/项目规划阶段由当前工作台阶段直接决定 Agent 身份；会话切换完成前不沿用上一阶段的消息和加载态。
+  // 需求分析/项目计划阶段由当前工作台阶段直接决定 Agent 身份；会话切换完成前不沿用上一阶段的消息和加载态。
   const renderedTaskPhase = isDesignPhase ? activeWorkbenchPhase : viewingTaskPhase
   const displayIsDesignPhase = renderedTaskPhase === 'analysis' || renderedTaskPhase === 'planning'
   const displayIsDevelopmentPhase = renderedTaskPhase === 'development'
@@ -1037,7 +1037,7 @@ export default function AiChatPanel({
       (!activeSession?.sessionKind && conversationPhase === activeWorkbenchPhase))
   const stageSessionSwitching = loadingSessions || !activeSessionMatchesStage
 
-  // 需求分析阶段默认会话只归属需求文档，项目规划阶段默认会话只归属项目计划。
+  // 需求分析阶段默认会话只归属需求文档，项目计划阶段默认会话只归属项目计划。
   const formalAnalysisSession = useMemo(() => {
     const candidates = sessions.filter(
       (session) =>
@@ -1395,7 +1395,7 @@ export default function AiChatPanel({
       }
     : undefined
 
-  // 开发准入门：先看当前查看会话的最新工作流，再回退扫描规划阶段全部会话——
+  // 开发准入门：先看当前查看会话的最新工作流，再回退扫描计划阶段全部会话——
   // 推进权/查看对象切到新建任务后，规划默认任务里挂起的门禁仍要可被唤起。
   const developmentEntryWorkflow =
     pendingGateWorkflow(
@@ -1469,7 +1469,7 @@ export default function AiChatPanel({
       return
     }
     if (state.dismissed) return
-    // 需求分析/项目规划阶段：右侧固定「文档」区，自动落到第一份已生成产物（需求文档/项目计划）。
+    // 需求分析/项目计划阶段：右侧固定「文档」区，自动落到第一份已生成产物（需求文档/项目计划）。
     // 注意：本 effect 依赖 rightPanel，必须仅在非 doc 或未选中有效文档时才 set，否则每次新建对象 →
     // rightPanel 引用变 → effect 重跑 → 再 set，形成 Maximum update depth 死循环。
     if (displayIsDesignPhase) {
@@ -3599,7 +3599,7 @@ export default function AiChatPanel({
     onPlanningEntryAvailableChange?.(planningEntryAvailable)
   }, [onPlanningEntryAvailableChange, planningEntryAvailable])
 
-  /** 确认进入项目规划阶段：提交准入门续跑，由规划剧本接管阶段切换。 */
+  /** 确认进入项目计划阶段：提交准入门续跑，由规划剧本接管阶段切换。 */
   const handleConfirmPlanningEntry = (): void => {
     const workflow = planningEntryWorkflow
     // 与开发准入门同一竞态处理：先关弹框并标记已消费，防止自动开启 effect 重弹。
@@ -3638,7 +3638,7 @@ export default function AiChatPanel({
     void handleSubmitWorkflowClarification(workflow, { test_case_task_type: taskType })
   }
 
-  /** 取消选择时停留在项目规划阶段；重新进入页面后仍可从同一 gate 继续。 */
+  /** 取消选择时停留在项目计划阶段；重新进入页面后仍可从同一 gate 继续。 */
   const handleCancelTestCaseTaskType = (): void => {
     setTestCaseTaskTypeModalOpen(false)
     setDismissedDevelopmentEntryRunId(developmentEntryWorkflow?.runId || '')
@@ -3823,7 +3823,7 @@ export default function AiChatPanel({
         open={reviewCompleteModalOpen}
       />
       {/* 开发准入门与其它阶段门禁弹框并列渲染，交互与状态归口保持一致；
-          用例数量由项目规划阶段确认，是准入门中的确定信息，予以保留展示。 */}
+          用例数量由项目计划阶段确认，是准入门中的确定信息，予以保留展示。 */}
       <TestCaseTaskTypeModal
         onCancel={handleCancelTestCaseTaskType}
         onConfirm={handleConfirmTestCaseTaskType}
@@ -3836,12 +3836,12 @@ export default function AiChatPanel({
         cancelText="暂不进入"
         confirmText="进入下一阶段"
         icon={<ProjectOutlined />}
-        lead="需求文档已确认，当前版本已具备进入项目规划阶段的条件。"
+        lead="需求文档已确认，当前版本已具备进入项目计划阶段的条件。"
         onCancel={handleCancelPlanningEntry}
         onConfirm={handleConfirmPlanningEntry}
         open={planningEntryModalOpen}
         subtitle="确认后由项目 Agent 接管项目计划"
-        title="进入项目规划阶段？"
+        title="进入项目计划阶段？"
       />
       <PhaseNavigation
         activeView={activeView}

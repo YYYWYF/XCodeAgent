@@ -110,7 +110,7 @@ def _write_planning_stage_entry_lifecycle(
     *,
     initialization_thread_id: str | None = None,
 ) -> None:
-    """把测试生命周期推进到等待进入规划阶段，模拟已确认或已跳过 UI。"""
+    """把测试生命周期推进到等待进入计划阶段，模拟已确认或已跳过 UI。"""
 
     state = create_application_lifecycle(
         application_id=workspace.name,
@@ -382,7 +382,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(result["clarification"]["questions"][0]["question"], "主要使用者是谁？")
 
     def test_routes_cover_design_and_independent_planning_stages(self) -> None:
-        """独立创建 Graph 应把技术规划放在设计与开发之间的独立规划阶段。"""
+        """独立创建 Graph 应把技术规划放在设计与开发之间的独立计划阶段。"""
 
         self.assertEqual(_route_start({}), "requirements")
         with self.assertRaisesRegex(
@@ -842,7 +842,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             with patch(
                 "app.graph.application_planning_workflow.nodes.project_planning"
             ) as project_planning:
-                with self.assertRaisesRegex(ValueError, "明确进入规划阶段"):
+                with self.assertRaisesRegex(ValueError, "明确进入计划阶段"):
                     _technical_planning({**state, "workflow_scope": "application_planning"})
             project_planning.assert_not_called()
 

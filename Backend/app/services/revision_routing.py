@@ -303,7 +303,7 @@ def build_small_task_revision_confirmation(
     confirmation_label = (
         "确认并返回设计阶段"
         if routing.impact.formal_branch == FormalRevisionBranch.DESIGN_STAGE_REVISION
-        else "确认并进入规划阶段"
+        else "确认并进入计划阶段"
     )
     return {
         "conversation_intent": "formal_revision",

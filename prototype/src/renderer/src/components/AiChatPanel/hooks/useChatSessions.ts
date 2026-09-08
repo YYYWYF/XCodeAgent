@@ -741,7 +741,7 @@ export function useChatSessions({
     return createNewSession(undefined, undefined, undefined, '需求分析', true, 'analysis')
   }
 
-  /** 创建或复用项目 Agent 的项目规划阶段默认会话，只持有项目计划。 */
+  /** 创建或复用项目 Agent 的项目计划阶段默认会话，只持有项目计划。 */
   const ensurePlanningSession = async (): Promise<SessionIdentity> => {
     const activeRuntimeSession = activeRuntimeDesignSession('planning')
     if (activeRuntimeSession) return activeRuntimeSession

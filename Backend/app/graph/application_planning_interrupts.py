@@ -55,9 +55,9 @@ def application_planning_review_payload(
             "questions": [],
             "assumptions": [],
             "message": (
-                "UI 设计已跳过。请确认是否进入规划阶段并开始生成技术规划。"
+                "UI 设计已跳过。请确认是否进入计划阶段并开始生成技术规划。"
                 if skipped
-                else "UI 设计已确认。请确认是否进入规划阶段并开始生成技术规划。"
+                else "UI 设计已确认。请确认是否进入计划阶段并开始生成技术规划。"
             ),
             "ui_design_skipped": skipped,
         }
@@ -83,7 +83,7 @@ def validate_application_planning_review_action(
 ) -> None:
     """按当前审阅门的产物和 clarification 状态校验动作组合。"""
 
-    # 校验必须使用当前 interrupt 对外展示的同一份载荷。规划阶段入口的 clarification
+    # 校验必须使用当前 interrupt 对外展示的同一份载荷。计划阶段入口的 clarification
     # 是根据已确认/跳过的 UI 状态动态合成的，不会写回 checkpoint；若继续读取 state，
     # 就会把上一阶段遗留状态误判为“当前门禁未等待用户输入”。
     clarification = application_planning_review_payload(state, node_name).get("clarification")
@@ -107,7 +107,7 @@ def validate_application_planning_review_action(
     if effective_node_name == "planning_stage_entry":
         if mode != "planning_stage_entry_confirmation" or submission.action != "enter_planning":
             raise ValueError(
-                "等待进入规划阶段门禁只允许 action=enter_planning 或设计变更。"
+                "等待进入计划阶段门禁只允许 action=enter_planning 或设计变更。"
             )
         return
 
@@ -318,7 +318,7 @@ def planning_stage_entry(
     state: ProjectState,
     config: RunnableConfig,
 ) -> Command[Literal["technical_planning", "design_intent_analysis"]]:
-    """暂停在规划阶段入口，只有显式进入动作才能开始 TechnicalPlan。"""
+    """暂停在计划阶段入口，只有显式进入动作才能开始 TechnicalPlan。"""
 
     return resume_application_planning_review(state, "planning_stage_entry", config)
 

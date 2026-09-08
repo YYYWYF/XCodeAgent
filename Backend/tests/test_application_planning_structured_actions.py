@@ -172,7 +172,7 @@ class ApplicationPlanningStructuredActionTests(unittest.TestCase):
         )
 
     def test_planning_stage_entry_only_accepts_explicit_enter_action(self) -> None:
-        """UI 完成后的入口门禁不能把普通确认误当成进入规划阶段。"""
+        """UI 完成后的入口门禁不能把普通确认误当成进入计划阶段。"""
 
         state = {
             "ui_designs": {"confirmation_status": "skipped"},

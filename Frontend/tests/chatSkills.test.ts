@@ -2708,7 +2708,7 @@ test('会话恢复保留有效的二次修改交接回执并拒绝残缺回执',
       targetConversationThreadId: 'planning-thread',
       impactInteractionId: 'impact-1',
       changeId: 'change-1',
-      request: '需求设计已确认，进入技术规划阶段'
+      request: '需求设计已确认，进入技术计划阶段'
     }
   })
   assert.deepEqual(planning.revisionHandoff, {
@@ -2718,7 +2718,7 @@ test('会话恢复保留有效的二次修改交接回执并拒绝残缺回执',
     targetConversationThreadId: 'planning-thread',
     impactInteractionId: 'impact-1',
     changeId: 'change-1',
-    request: '需求设计已确认，进入技术规划阶段'
+    request: '需求设计已确认，进入技术计划阶段'
   })
 })
 

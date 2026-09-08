@@ -1897,7 +1897,7 @@ def create_project_plan(
     architecture = _architecture_for_sources(data_sources)
     if isinstance(agent_architecture, dict):
         architecture.update(agent_architecture)
-    # 数据源实现边界属于项目规划阶段硬约束，模型输出遗漏或写偏时必须确定性恢复。
+    # 数据源实现边界属于项目计划阶段硬约束，模型输出遗漏或写偏时必须确定性恢复。
     architecture_policy = _architecture_for_sources(data_sources)
     for key in ("backend", "data", "backend_tech_stack", "data_contract"):
         architecture[key] = architecture_policy[key]

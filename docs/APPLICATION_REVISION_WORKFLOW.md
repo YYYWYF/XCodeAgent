@@ -9,7 +9,7 @@
 3. 不改变已确认产品或技术语义的修改走 `implementation_fix`；普通工作区文件可由现有 SmallTask 路径直接修改，前端/后端代码修改必须先弹出实现范围确认，再由 SmallTask 修改、验证并完成。
 4. 改变正式产品/技术语义的请求走 `formal_revision`，再确定是 `design_stage_revision` 还是 `workbench_plan_revision`。
 5. 改变 RequirementSpec 或 ProductPlan 语义的请求走 `design_stage_revision`：用户确认影响范围后返回现有设计阶段，复用原 `application_planning_workflow`、原 thread/checkpoint、最早节点路由和逐层确认逻辑；既有页面的 UI 小改动不走该分支。
-6. 不需要重跑需求、产品或 UI 的 TechnicalPlan、API 契约或数据约束修改走 `workbench_plan_revision`：用户确认影响范围后创建独立规划阶段会话，并通过原 planning checkpoint 的 `technical_planning` 节点重新生成 `technical-plan.json`。
+6. 不需要重跑需求、产品或 UI 的 TechnicalPlan、API 契约或数据约束修改走 `workbench_plan_revision`：用户确认影响范围后创建独立计划阶段会话，并通过原 planning checkpoint 的 `technical_planning` 节点重新生成 `technical-plan.json`。
 7. 工作台草稿和当前已确认 canonical 产物隔离。用户放弃时只删除当前草稿，canonical 产物不变。
 8. 用户确认工作台草稿后，服务端先同步 Markdown 编辑到内部 JSON，再校验并原子覆盖 canonical；从这一刻起，新产物就是唯一正确版本。
 9. 不引入 RevisionManifest、历史版本仓库、promotion、正式产物回滚或 Change 级代码自动撤销。
@@ -106,7 +106,7 @@ SmallTask 禁止通过该路径：
 
 该 branch 不新建第二套设计 Graph，不复制设计节点，不改变 UiDesign 当前内部增量/重建策略。
 
-两个 branch 只是不同入口：`design_stage_revision` 先回原设计 Graph，`workbench_plan_revision` 创建独立规划阶段会话并恢复原 `technical_planning` 节点，不重跑 RequirementSpec、ProductPlan 或 UiDesign；二者最终都汇合到同一个代码执行阶段。
+两个 branch 只是不同入口：`design_stage_revision` 先回原设计 Graph，`workbench_plan_revision` 创建独立计划阶段会话并恢复原 `technical_planning` 节点，不重跑 RequirementSpec、ProductPlan 或 UiDesign；二者最终都汇合到同一个代码执行阶段。
 
 #### 工作台正式修改 `workbench_plan_revision`
 
@@ -122,7 +122,7 @@ SmallTask 禁止通过该路径：
 `formal_revision` 在执行 branch 前先展示一次只读确认卡：
 
 - 用户可见内容只展示分类 JSON 的 `reason`，不再调用第二个模型生成或展示影响范围证据；
-- `design_stage_revision` 显示“确认并返回设计阶段”；`workbench_plan_revision` 显示“确认并进入规划阶段”；
+- `design_stage_revision` 显示“确认并返回设计阶段”；`workbench_plan_revision` 显示“确认并进入计划阶段”；
 - 确认前不进入设计 Graph、不创建草稿、不修改 canonical、不获取 formal revision planning lease；
 - 用户确认后才进入对应 branch；
 - 用户取消时结束本次请求，当前 canonical 完全不变。
@@ -419,7 +419,7 @@ flowchart TD
 - 初始化尚未进入 `ready_for_workbench`：继续使用 `application_planning_workflow` 原 thread/checkpoint 的 `design_intent_analysis`。
 - 进入 `ready_for_workbench` 时不再删除原 planning thread 引用；它作为后续返回设计阶段的唯一服务端定位，不表示当前仍在初始化。
 - 已进入 `ready_for_workbench` 且选择 `design_stage_revision`：通过显式 `start_design_revision` 受控恢复原 planning thread/checkpoint，并把界面切回现有设计阶段。
-- 已进入 `ready_for_workbench` 且选择 `workbench_plan_revision`：不重跑需求/产品/UI 节点，但显式切到独立规划阶段会话生成和确认 TechnicalPlan 草稿。
+- 已进入 `ready_for_workbench` 且选择 `workbench_plan_revision`：不重跑需求/产品/UI 节点，但显式切到独立计划阶段会话生成和确认 TechnicalPlan 草稿。
 - 任一 formal revision 完成 TechnicalPlan 确认后，服务端生成一次性 continuation token；前端先为同一 `changeId` 创建或复用独立开发会话，再依据 AG-UI 结果自动调用 `/workflow/run` 的 `continue_revision_build`。只有调用成功后才切回开发阶段，不要求用户再次输入。
 - `/workflow/run` 校验 token、changeId、原 planning thread、TechnicalPlan confirmed hash、lifecycle revision 和 target 后，重新投影 application/workbench 数据并生成 Build DAG。独立 `application_planning` continuation 不依赖规划 execution；只有主 Workflow continuation 携带有效来源 execution 时才执行原子替换。
 - continuation 只能从服务端已完成的 TechnicalPlan confirmation 产生；不能从前端快照重建设计 Graph State，也不能接受前端节点名。
@@ -806,7 +806,7 @@ SmallTask 只执行有界实现任务：
 
 规则：
 
-- `design_stage_revision` 使用“确认并返回设计阶段”；`workbench_plan_revision` 使用“确认并进入规划阶段”；“取消”提交 rejected。
+- `design_stage_revision` 使用“确认并返回设计阶段”；`workbench_plan_revision` 使用“确认并进入计划阶段”；“取消”提交 rejected。
 - rejected 只结束当前 handoff，不恢复设计 Graph、不创建 draft/changeId，也不获取 planning lease。
 - approved 后才发送对应的 `start_design_revision` 或 `start_revision`。
 - `interactionId` 是一次性确认凭据，服务端校验它属于当前 pending card、已经 approved，且绑定同一原始请求和 target。
@@ -931,7 +931,7 @@ RUN_STARTED
 - 用户只描述结果，不展示五类 acceptance adjustment Select。
 - page/API 会话始终发送当前 target。
 - 预览元素审查只保留一个有效选择，Composer 显示“已选择 + tagName”；普通 `/conversation/run` 请求既通过独立 `elementContext` 发送源码路径和行列，也在用户需求末尾追加 `frontend/src/...` 文件和目标行附近的实现提示，让分类器和执行 Agent 都能直接消费定位。成功发送后清除，失败保留，导航、刷新或会话切换时失效；仅关闭预览不清除选择。
-- 等待影响范围确认时按 branch 显示“确认并返回设计阶段”或“确认并进入规划阶段”，以及“取消”。
+- 等待影响范围确认时按 branch 显示“确认并返回设计阶段”或“确认并进入计划阶段”，以及“取消”。
 - `design_stage_revision` approved 后切回现有设计阶段界面，继续使用原确认卡和底部设计对话。
 - `workbench_plan_revision` active 时切到独立 TechnicalPlan 规划会话，底部输入替换为 revision control dock。
 - 等待草稿确认时只允许当前结构化 interaction。
@@ -950,7 +950,7 @@ Frontend/src/renderer/src/components/AiChatPanel/components/ApplicationRevisionC
 `RevisionImpactReview` 在执行 branch 前展示：
 
 - 分类 JSON 的 `reason`；
-- branch 为设计阶段时显示 `确认并返回设计阶段`；branch 为工作台时显示 `确认并进入规划阶段`；两者都有 `取消`。
+- branch 为设计阶段时显示 `确认并返回设计阶段`；branch 为工作台时显示 `确认并进入计划阶段`；两者都有 `取消`。
 
 该卡片只读，不提供手工勾选 Graph 节点或编辑影响范围。用户认为范围不正确时取消并重新描述需求。
 
@@ -1110,7 +1110,7 @@ safe revert service
 ### Phase 2：统一入口与前端卡片
 
 1. `/conversation/run` formal handoff 保留原始请求和 target，将固定 `detail_confirmation` 替换为 `revision_impact_confirmation`，并投影 `revision-impact` 事件。
-2. 新增只读影响范围确认卡；design branch 显示“确认并返回设计阶段”，workbench branch 显示“确认并进入规划阶段”。
+2. 新增只读影响范围确认卡；design branch 显示“确认并返回设计阶段”，workbench branch 显示“确认并进入计划阶段”。
 3. design branch approved 后切回现有设计阶段；workbench branch approved 后创建独立规划会话和草稿确认卡；二者确认 TechnicalPlan 后均自动切回开发阶段并衔接工作区扫描/DAG。完整支持浅色/深色主题。
 4. 删除五类 acceptance adjustment Select、前后端类型和直接节点映射。
 5. Build/Acceptance 的“继续修改”重新进入自然语言路由。
@@ -1195,7 +1195,7 @@ safe revert service
 - 正式修改确认卡只展示 `reason` 和确认/取消动作；
 - design branch 点击“确认并返回设计阶段”后切回现有设计界面和原确认卡；
 - design branch 完成 TechnicalPlan 确认后无需用户再次输入或点击，自动返回工作台并展示正式产物收口或 Build DAG 确认状态；
-- workbench branch 点击“确认并进入规划阶段”后创建新的规划会话，草稿卡只出现在该会话；取消时不进入任何 branch；
+- workbench branch 点击“确认并进入计划阶段”后创建新的规划会话，草稿卡只出现在该会话；取消时不进入任何 branch；
 - Markdown 草稿可编辑，保存不等于确认；
 - 按钮文案是“放弃本次修改”，并明确提示只删除当前未确认草稿；
 - discard 后 canonical 展示不变；

@@ -183,7 +183,7 @@ class BuiltinSkillsTests(unittest.TestCase):
 
         self.assertIn("implementation_contract", backend_skill)
         self.assertIn("allowed_paths", backend_skill)
-        self.assertNotIn("任务规划阶段", backend_skill)
+        self.assertNotIn("任务计划阶段", backend_skill)
         self.assertNotIn("Task sequencing", backend_skill)
         self.assertLess(len(backend_skill), 10_000)
         self.assertIn("Spring Cloud OpenFeign", backend_skill)

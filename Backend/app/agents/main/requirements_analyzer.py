@@ -330,7 +330,7 @@ def _requirements_prompt(
     datasource_type: DatasourceType = "database",
     clarification_round: int = 0,
 ) -> str:
-    """构建产品需求提示；实体归技术规划阶段。"""
+    """构建产品需求提示；实体归技术计划阶段。"""
 
     bounded_round = max(
         0, min(clarification_round, MAX_REQUIREMENT_CLARIFICATION_ROUNDS)

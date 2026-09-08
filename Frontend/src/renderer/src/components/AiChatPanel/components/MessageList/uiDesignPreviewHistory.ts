@@ -41,7 +41,7 @@ function isUiDesignPreviewMessage(message: AgentChatMessage): boolean {
   )
 }
 
-/** 判断消息是否为当前规划阶段入口卡。 */
+/** 判断消息是否为当前计划阶段入口卡。 */
 function isPlanningStageEntryMessage(message: AgentChatMessage): boolean {
   return Boolean(
     message.workflow &&
@@ -56,7 +56,7 @@ function planningMessagePhase(message: AgentChatMessage): string {
   return planningWorkflowPhase(message.workflow)
 }
 
-/** 判断与当前权威规划阶段冲突的入口或 TechnicalPlan 卡片；UI 设计稿始终保留为历史。 */
+/** 判断与当前权威计划阶段冲突的入口或 TechnicalPlan 卡片；UI 设计稿始终保留为历史。 */
 export function isSupersededPlanningPhaseMessage(
   message: AgentChatMessage,
   currentPhase: string
@@ -72,7 +72,7 @@ export function isSupersededPlanningPhaseMessage(
   return currentPhase === 'ui_confirmation' && messagePhase === 'technical_planning'
 }
 
-/** TechnicalPlan 已开始后，设计窗口遗留的“进入规划阶段”卡不再属于当前消息流。 */
+/** TechnicalPlan 已开始后，设计窗口遗留的“进入计划阶段”卡不再属于当前消息流。 */
 export function isSupersededPlanningStageEntryMessage(
   messages: AgentChatMessage[],
   messageIndex: number
@@ -144,7 +144,7 @@ export function isSupersededPlanningProgressMessage(
   return message.workflow?.summary?.status === 'running'
 }
 
-/** 模板准备终态覆盖空的规划进度，避免模板已就绪后仍显示“正在恢复规划阶段”。 */
+/** 模板准备终态覆盖空的规划进度，避免模板已就绪后仍显示“正在恢复计划阶段”。 */
 export function isTemplateSupersededPlanningProgressMessage(
   message: AgentChatMessage,
   templatePreparationVisible: boolean
@@ -197,12 +197,12 @@ export function compactPlanningMessageHistory(
     }
   })
 
-  // 入口卡片自身已经完整表达用户动作，因此不再保存重复的“进入规划阶段”文本；
+  // 入口卡片自身已经完整表达用户动作，因此不再保存重复的“进入计划阶段”文本；
   // 若下一条只是这次恢复产生的失败快照或占位，也一起删除，保留入口卡供重试。
   if (latestPlanningEntryIndex >= 0) {
     for (let index = latestPlanningEntryIndex + 1; index < messages.length; index += 1) {
       const message = messages[index]
-      if (message.role !== 'user' || message.content.trim() !== '进入规划阶段') continue
+      if (message.role !== 'user' || message.content.trim() !== '进入计划阶段') continue
       removedIndexes.add(index)
       const nextMessage = messages[index + 1]
       if (nextMessage && isFailedPlanningEntryAttempt(nextMessage)) {

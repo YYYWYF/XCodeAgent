@@ -164,10 +164,10 @@ function planningUserMessageText(answers: WorkflowClarificationAnswers): string 
   const entries = Object.entries(answers)
   if (entries.length === 0) return ''
   // UI 设计稿单页动作（换一换/选模板/调整）：不作为用户消息留痕（卡片内已体现操作）。
-  // “跳过”只结束 UI 设计，不会越过独立规划阶段入口。
+  // “跳过”只结束 UI 设计，不会越过独立计划阶段入口。
   if ('ui_design_action' in answers) {
     const action = (answers as { ui_design_action?: { action?: string } }).ui_design_action
-    return action?.action === 'skip' ? '跳过 UI 设计稿，等待进入规划阶段' : ''
+    return action?.action === 'skip' ? '跳过 UI 设计稿，等待进入计划阶段' : ''
   }
   // 入口卡片本身就是用户操作记录，不再追加同文案的 user 消息。
   if (answers.__applicationPlanningAction === 'enter_planning') return ''
@@ -188,7 +188,7 @@ const PLANNING_ANSWER_LABELS: Record<string, string> = {
   requirement_spec_feedback: '需求文档意见',
   design_change_request: '设计变更',
   technical_plan_confirmation: '技术规划确认',
-  planning_stage_entry: '规划阶段入口',
+  planning_stage_entry: '计划阶段入口',
   project_plan_confirmation: '项目计划确认',
   entity_source_binding: '实体数据源绑定'
 }
@@ -912,7 +912,7 @@ export default function AiChatPanel({
     (loading: boolean) => setDesignDocState((s) => ({ ...s, loading })),
     []
   )
-  // 当前工作台进入规划阶段时创建独立聊天线程；后端 Graph 继续复用原 planningThreadId。
+  // 当前工作台进入计划阶段时创建独立聊天线程；后端 Graph 继续复用原 planningThreadId。
   const [localPlanningConversationThreadId, setLocalPlanningConversationThreadId] = useState('')
   // 同一 impact 只允许创建一个前端二次修改会话，失败后才放开重试。
   const designRevisionStartInteractionRef = useRef('')
@@ -1035,7 +1035,7 @@ export default function AiChatPanel({
     if (planningConfirmedSeenRef.current) return
     planningConfirmedSeenRef.current = true
     if (enterDevConfirmed) return
-    // 后端已完成模板生成（lifecycle=ready_for_workbench）：锁住规划阶段，等用户手动进入开发。
+    // 后端已完成模板生成（lifecycle=ready_for_workbench）：锁住计划阶段，等用户手动进入开发。
     switchPhase('planning')
   }, [lifecycleReadyForWorkbench, enterDevConfirmed, switchPhase])
 
@@ -1068,7 +1068,7 @@ export default function AiChatPanel({
   // 面板内容（preview/doc/diff）由本组件按目标类型设置。
   const showRightPanel = rightPanelOpen && Boolean(rightPanel)
 
-  // ---- 创建规划阶段：设计阶段展示产品产物，规划阶段只展示 TechnicalPlan。 ----
+  // ---- 创建计划阶段：设计阶段展示产品产物，计划阶段只展示 TechnicalPlan。 ----
   // 需求文档在模型生成后即可展示；确认状态只决定它是草稿还是正式文档。
   // UI 设计稿：从规划 workflow 的 clarification（ui_design_confirmation 模式）或
   // state/result 的 ui_designs 读取页面列表。设计稿生成中或已就绪都算可用。
@@ -1146,7 +1146,7 @@ export default function AiChatPanel({
   )
   const uiDesignAvailable = Boolean(uiDesignDocContent.trim()) || uiDesignPages.length > 0
   const technicalPlanDocAvailable = Boolean(technicalPlanDocContent.trim() || technicalPlanMemory)
-  // 按当前设计/规划阶段稳定生成右侧文档集合，避免阶段切换之外反复创建依赖对象。
+  // 按当前设计/计划阶段稳定生成右侧文档集合，避免阶段切换之外反复创建依赖对象。
   const designDocs = useMemo<DesignWorkspaceDoc[] | undefined>(() => {
     if (!isApplicationPlanningPhase) return undefined
     if (isDesignPhase) {
@@ -2229,7 +2229,7 @@ export default function AiChatPanel({
       pending.resolve()
     })().catch(async (error) => {
       // 尚未激活时可以清理无主预创建会话；一旦用户已进入 DEVELOPMENT，失败也必须
-      // 保留当前新会话和运行记录，禁止删除后把界面再次推回规划阶段或旧开发会话。
+      // 保留当前新会话和运行记录，禁止删除后把界面再次推回计划阶段或旧开发会话。
       const sourceMessages = getSessionMessages(pending.sourceIdentity.key)
       const successfulReceiptExists = sourceMessages.some(
         (item) =>
@@ -2270,7 +2270,7 @@ export default function AiChatPanel({
 
   const copy = chatCopy[editorMode]
 
-  // 创建规划阶段：激活当前阶段的前端聊天会话，并注册原 Graph 的流式注入句柄，
+  // 创建计划阶段：激活当前阶段的前端聊天会话，并注册原 Graph 的流式注入句柄，
   // 让 AppEntryPage 把 Modal 转发的 onContent/onWorkflow 注入当前 session 的 messages。
   const planningSessionKeyRef = useRef<string>('')
   // 保存最新规划权威快照，供会话键晚于流式事件就绪时补齐最终确认卡。
@@ -2528,7 +2528,7 @@ export default function AiChatPanel({
       } else {
         // 新一轮：纯进度快照（content 空、无待确认 clarification）不创建消息卡片，
         // 避免空白卡片占位；待 content 或 clarification 到达后再创建。
-        // 例外：规划阶段 running 期间创建卡片显示生成加载态，
+        // 例外：计划阶段 running 期间创建卡片显示生成加载态，
         // 让用户看到规划进度，而非长时间无反馈。
         const hasContent = Boolean(chunk.content?.trim())
         const requiresInput = planningWorkflowRequiresUserInput(incomingWorkflow)
@@ -2558,7 +2558,7 @@ export default function AiChatPanel({
     } else if (chunk.content !== undefined && chunk.content.trim()) {
       // 纯 content 流式（非空）：同一轮内更新最后一条 assistant 消息，否则新增。
       // UI 确认阶段的单页动作（runId 变化）也更新同一条卡片。
-      // 规划阶段流式 token 到达时，最后一条消息可能已是规划 workflow 卡片，
+      // 计划阶段流式 token 到达时，最后一条消息可能已是规划 workflow 卡片，
       // 此时合并 content 而不是新增重复消息。
       // 到该卡片，而非新增重复卡片。
       // 用户刚提交后（planningNewRoundRef=true）追加的 assistant 占位消息（无 workflow）
@@ -2835,7 +2835,7 @@ export default function AiChatPanel({
     }
     // 顶部阶段栏只负责浏览：非业务规划期间只能打开既有会话，禁止因 phase 切换补建会话。
     if (!businessPlanningSessionActive && !existingPlanningSessionThreadId) {
-      onSessionHistoryReadyChange(false, '找不到当前设计或规划阶段对应的历史会话。')
+      onSessionHistoryReadyChange(false, '找不到当前设计或计划阶段对应的历史会话。')
       return
     }
     const sessionLookupKey =
@@ -2890,13 +2890,13 @@ export default function AiChatPanel({
       .catch((error) => {
         onSessionHistoryReadyChange(
           false,
-          formatError(error, '恢复设计或规划阶段会话失败')
+          formatError(error, '恢复设计或计划阶段会话失败')
         )
       })
     return () => {
       cancelled = true
     }
-    // 只依赖创建规划阶段、threadId 和会话加载态，ensurePlanningSession 用 ref 避免循环。
+    // 只依赖创建计划阶段、threadId 和会话加载态，ensurePlanningSession 用 ref 避免循环。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     isApplicationPlanningPhase,
@@ -2934,7 +2934,7 @@ export default function AiChatPanel({
 
   useEffect(() => {
     if (!onPlanningStreamReady) return
-    // 不依赖创建规划阶段：工作台刚进入时 lifecycle 尚未加载，阶段推导可能尚未就绪，
+    // 不依赖创建计划阶段：工作台刚进入时 lifecycle 尚未加载，阶段推导可能尚未就绪，
     // 若此时不注册句柄，Modal 最早的流式数据（"正在生成需求文档大纲…"）会被丢弃。
     // 总是注册，chunk 到达时 sessionKey 未就绪则缓存，待 ensurePlanningSession 完成后回放。
     const injectChunk = (chunk: { content?: string; workflow?: WorkflowRunPayload }): void => {
@@ -3978,7 +3978,7 @@ export default function AiChatPanel({
             message.error('当前规划 checkpoint 标识缺失，请重新打开应用后重试。')
             return
           }
-          // 每次从设计阶段进入规划阶段都创建新的前端会话；后端仍复用原 planning
+          // 每次从设计阶段进入计划阶段都创建新的前端会话；后端仍复用原 planning
           // checkpoint thread，避免二次修改沿用旧设计会话导致入口提交没有新会话承载。
           // 首次创建沿用当前 DESIGN 会话作为交接来源；formal revision 必须按 lifecycle
           // 完整身份从所有会话中重新解析，不能信任可能被阶段恢复抢占的 activeSession。
@@ -4003,7 +4003,7 @@ export default function AiChatPanel({
               revisionContext.formalBranch !== activeFormalRevision.formalBranch)
           ) {
             planningNewRoundRef.current = false
-            message.error('找不到与本次二次修改匹配的需求设计会话，已停止进入规划阶段。')
+            message.error('找不到与本次二次修改匹配的需求设计会话，已停止进入计划阶段。')
             return
           }
           const planningInterrupt = [workflow.result, workflow.state]
@@ -4062,7 +4062,7 @@ export default function AiChatPanel({
                       changeId: revisionContext.changeId,
                       request: String(
                         activeFormalRevision?.request ||
-                          '需求设计已确认，进入本次二次修改的技术规划阶段。'
+                          '需求设计已确认，进入本次二次修改的技术计划阶段。'
                       )
                     },
                     createdAt: receiptId
@@ -4105,7 +4105,7 @@ export default function AiChatPanel({
                   sourceReceiptRolledBack = false
                   // 磁盘仍保留回执时，内存也恢复为同一状态，并保留目标会话维持可跳转关系。
                   setSessionMessages(sourceIdentity.key, sourceMessagesWithReceipt)
-                  message.warning(formatError(rollbackError, '规划阶段交接回执回滚失败'))
+                  message.warning(formatError(rollbackError, '计划阶段交接回执回滚失败'))
                 }
               }
             }
@@ -4118,7 +4118,7 @@ export default function AiChatPanel({
             }
             setLocalPlanningConversationThreadId('')
             switchPhase('product')
-            message.error(formatError(error, '进入规划阶段失败'))
+            message.error(formatError(error, '进入计划阶段失败'))
           }
           return
         } else {

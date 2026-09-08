@@ -81,14 +81,14 @@ const ANALYSIS_INITIALIZATION_STAGES = new Set([
   'awaiting_requirement_confirmation'
 ])
 
-/** 项目规划阶段的初始化节点：项目 Agent 正在生成或确认项目计划。 */
+/** 项目计划阶段的初始化节点：项目 Agent 正在生成或确认项目计划。 */
 const PLANNING_INITIALIZATION_STAGES = new Set([
   'generating_project_plan',
   'awaiting_project_plan_confirmation',
   'generating_build_task_plan'
 ])
 
-/** 应用是否仍处于需求分析或项目规划阶段——新应用自动开始规划对话的依据。 */
+/** 应用是否仍处于需求分析或项目计划阶段——新应用自动开始规划对话的依据。 */
 export function isInitialPlanningPhase(lifecycle?: ApplicationLifecycle): boolean {
   const stage = lifecycle?.initialization?.stage || ''
   return ANALYSIS_INITIALIZATION_STAGES.has(stage) || PLANNING_INITIALIZATION_STAGES.has(stage)
@@ -121,7 +121,7 @@ const ACCEPTANCE_PHASE_NODES = new Set(['acceptance'])
 
 const TERMINAL_EXECUTION_STATUSES = new Set(['completed', 'stopped', 'failed'])
 
-/** 根据初始化节点返回需求分析/项目规划阶段，未知节点交给 execution 推导。 */
+/** 根据初始化节点返回需求分析/项目计划阶段，未知节点交给 execution 推导。 */
 function phaseForInitializationStage(stage: string): WorkbenchPhase | null {
   if (ANALYSIS_INITIALIZATION_STAGES.has(stage)) return 'analysis'
   if (PLANNING_INITIALIZATION_STAGES.has(stage)) return 'planning'

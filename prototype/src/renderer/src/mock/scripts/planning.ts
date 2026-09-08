@@ -310,7 +310,7 @@ const planningEntryConfirmationPayload = (
       clarification: {
         mode: 'planning_stage_entry',
         status: 'requires_user_input',
-        message: '需求文档已确认，等待进入项目规划阶段。',
+        message: '需求文档已确认，等待进入项目计划阶段。',
         questions: []
       },
       requirement_spec_confirmed: true
@@ -320,7 +320,7 @@ const planningEntryConfirmationPayload = (
       summary: {
         phase: 'planning_stage_entry',
         status: 'requires_user_input',
-        message: '需求文档已确认，等待进入项目规划阶段。'
+        message: '需求文档已确认，等待进入项目计划阶段。'
       }
     },
     events
@@ -431,7 +431,7 @@ function submittedCardHistory(
   ]
 }
 
-// 项目规划阶段独立回放项目计划生成，保证没有需求确认上下文时也不会重新进入需求分析阶段。
+// 项目计划阶段独立回放项目计划生成，保证没有需求确认上下文时也不会重新进入需求分析阶段。
 async function replayProjectPlan(
   threadId: string,
   options: SendWorkflowMessageOptions,
@@ -443,7 +443,7 @@ async function replayProjectPlan(
   const { onWorkflow, onApplicationLifecycle } = callbacks
   const revision = Boolean(extra?.revision)
   const trajectory = createTrajectory('project_planning', callbacks.onProcessSteps)
-  // 项目计划开始生成即进入项目规划阶段，不能等文件生成完成后才切换 Agent 与会话。
+  // 项目计划开始生成即进入项目计划阶段，不能等文件生成完成后才切换 Agent 与会话。
   // 过渡说明由节点轨迹的 detail 承载，不再向对话正文追加状态句。
   onApplicationLifecycle?.(designLifecycle(options.application, 'generating_project_plan'))
   trajectory.set('planning_context', 'completed')
@@ -758,7 +758,7 @@ export async function replayPlanning(
   return payload
 }
 
-// —— 工作台需求分析/项目规划阶段：把「一次性需求确认 + 项目规划」节点逻辑挪进工作台对话 ——
+// —— 工作台需求分析/项目计划阶段：把「一次性需求确认 + 项目规划」节点逻辑挪进工作台对话 ——
 
 function designLifecycle(
   app: ApplicationConfig | undefined,
@@ -776,8 +776,8 @@ function designLifecycle(
 }
 
 /**
- * 工作台需求分析/项目规划阶段剧本 = 规划流程(复用 replayPlanning)+ 生命周期驱动阶段。
- * 规划全程生命周期 stage 属需求分析/项目规划阶段；计划确认完成后发 ready_for_workbench，
+ * 工作台需求分析/项目计划阶段剧本 = 规划流程(复用 replayPlanning)+ 生命周期驱动阶段。
+ * 规划全程生命周期 stage 属需求分析/项目计划阶段；计划确认完成后发 ready_for_workbench，
  * 前端 executionPhase 据此自动切到开发阶段。
  */
 export async function replayDesignPhase(

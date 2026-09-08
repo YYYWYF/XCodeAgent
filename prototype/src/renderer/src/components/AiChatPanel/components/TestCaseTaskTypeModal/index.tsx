@@ -13,7 +13,7 @@ export type { TestCaseGenerationTaskType } from '../../../../testCasePreparation
 
 type TestCaseTaskTypeModalProps = {
   open: boolean
-  /** 预计生成的业务测试用例数量；项目规划阶段已确认，数量在此处是确定值。 */
+  /** 预计生成的业务测试用例数量；项目计划阶段已确认，数量在此处是确定值。 */
   testCaseTotal: number
   onCancel: () => void
   onConfirm: (taskType: TestCaseGenerationTaskType) => void
@@ -56,7 +56,7 @@ function renderDescription(description: string, highlightCredit: boolean): React
   ))
 }
 
-/** 项目计划确认后的开发准入门弹框：选择测试用例生成任务类型后才进入开发阶段；用例数量由项目规划阶段确认，属确定信息。 */
+/** 项目计划确认后的开发准入门弹框：选择测试用例生成任务类型后才进入开发阶段；用例数量由项目计划阶段确认，属确定信息。 */
 export default function TestCaseTaskTypeModal({
   open,
   testCaseTotal,

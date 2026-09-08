@@ -56,7 +56,7 @@ class ProductStageConversationRequest(BaseModel):
 
 
 def application_page_planning_capabilities() -> dict[str, Any]:
-    """发布设计阶段、规划阶段及其显式入口门禁的 AG-UI 能力。"""
+    """发布设计阶段、计划阶段及其显式入口门禁的 AG-UI 能力。"""
 
     return {
         "name": "application-page-planning",
@@ -570,7 +570,7 @@ def _build_start_design_revision_error_stream(
         run_id_prefix="start-design-revision",
         operation=operation,
         error_message_prefix=(
-            "返回技术规划阶段失败"
+            "返回技术计划阶段失败"
             if action == "start_technical_revision"
             else "返回设计阶段失败"
         ),

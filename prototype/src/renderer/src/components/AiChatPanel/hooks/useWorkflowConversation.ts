@@ -70,7 +70,7 @@ type UseWorkflowConversationParams = {
   /** 当前是否处于开发阶段；仅此阶段允许主会话匹配任意产物目标。 */
   developmentPhase?: boolean
   designPhase?: boolean
-  /** 当前查看阶段是否为项目规划阶段，用于选择项目 Agent 的默认会话。 */
+  /** 当前查看阶段是否为项目计划阶段，用于选择项目 Agent 的默认会话。 */
   planningPhase?: boolean
   /** 当前是否处于测试阶段默认对话。 */
   testingPhase?: boolean
@@ -87,7 +87,7 @@ type UseWorkflowConversationParams = {
   ensureDevelopmentSession: () => Promise<SessionIdentity>
   /** 创建/复用产品 Agent 的需求分析阶段默认会话。 */
   ensureAnalysisSession: () => Promise<SessionIdentity>
-  /** 创建/复用项目 Agent 的项目规划阶段默认会话。 */
+  /** 创建/复用项目 Agent 的项目计划阶段默认会话。 */
   ensurePlanningSession: () => Promise<SessionIdentity>
   /** 创建/复用无页面归属的应用级会话(审查阶段专用)。 */
   ensureReviewSession: () => Promise<SessionIdentity>
@@ -1024,7 +1024,7 @@ export function useWorkflowConversation({
       requirementConfirmation &&
       answers.confirm_requirement_spec !== undefined &&
       !clarificationAnswerIsYes(answers, 'confirm_requirement_spec')
-    // 项目规划准入门：需求确认接受后，工作流停在分析会话的「进入项目规划阶段」节点上；
+    // 项目规划准入门：需求确认接受后，工作流停在分析会话的「进入项目计划阶段」节点上；
     // Diff 确认是节点动作，不直接触发阶段切换，门禁确认才切到规划会话。
     const planningStageEntry = clarificationMode === 'planning_stage_entry'
     // 每个阶段都有独立默认对话；准入门确认后必须在计划对话继续，不能混入分析消息。
@@ -1066,15 +1066,15 @@ export function useWorkflowConversation({
         testingResume ||
         acceptanceContinuation ||
         backgroundDispatchContinuation ||
-        // 需求分析/项目规划阶段同会话续跑复用原工作流消息：整阶段保持一条连续工作流轨迹。
+        // 需求分析/项目计划阶段同会话续跑复用原工作流消息：整阶段保持一条连续工作流轨迹。
         // 跨阶段续跑（规划准入门 → 计划会话）目标会话尚无 assistant 消息，复用自然落空、另起新轨迹。
         (Boolean(designPhase) && !directModification),
-      // 需求分析/项目规划阶段确认必须继续走对应的工作台规划剧本，否则会被默认路由到
+      // 需求分析/项目计划阶段确认必须继续走对应的工作台规划剧本，否则会被默认路由到
       // replayWorkbench，导致提交确认后不推进规划节点。
       workflowScope:
         designPhase && !directModification
           ? requirementNeedsRevision || requirementConfirmation
-            ? // 需求确认接受后回到分析剧本，推进到「进入项目规划阶段」准入门，不直接切阶段。
+            ? // 需求确认接受后回到分析剧本，推进到「进入项目计划阶段」准入门，不直接切阶段。
               'application_analysis'
             : planningStageEntry || planningPhase || activeSession?.sessionKind === 'planning'
               ? 'application_workbench_planning'
@@ -1193,7 +1193,7 @@ export function useWorkflowConversation({
     agUiSession.stop()
   }
 
-    // 需求分析/项目规划阶段：新应用或阶段回退后，默认 Agent 主动开启当前阶段对话。
+    // 需求分析/项目计划阶段：新应用或阶段回退后，默认 Agent 主动开启当前阶段对话。
   // 注意：ref 只在 timer 真正 fire（已发起发送）后置位，而非 effect body 里提前置位——
   // 否则 React.StrictMode 双调（mount→cleanup 清 timer→重 mount）会因 ref 已 true 而不再
   // 调度，handleSend 被 cleanup 吞掉，表现为“有时自动开始、有时不开始”。

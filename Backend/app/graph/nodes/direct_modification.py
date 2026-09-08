@@ -184,7 +184,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         confirmation_label = (
             "确认并返回设计阶段"
             if formal_branch == "design_stage_revision"
-            else "确认并进入规划阶段"
+            else "确认并进入计划阶段"
         )
         message = "该请求会修改已确认的正式语义，请确认是否进入正式修改流程。"
         return {

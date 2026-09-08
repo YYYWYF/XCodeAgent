@@ -61,7 +61,7 @@ const { TextArea } = Input
 
 const OTHER_OPTION_VALUE = '__other__'
 
-// 需求分析/项目规划阶段三份产物的确认卡 mode → 文档信息（驱动 ArtifactConfirmationCard 渲染）。
+// 需求分析/项目计划阶段三份产物的确认卡 mode → 文档信息（驱动 ArtifactConfirmationCard 渲染）。
 const ARTIFACT_CONFIRMATION_MAP: Record<
   string,
   { docKey: WorkspaceDocKey; title: string; summary: string }
@@ -1251,7 +1251,7 @@ export function buildClarificationContinuationMessage(
     return '确认进入开发阶段。'
   }
   if (mode === 'planning_stage_entry') {
-    return '确认进入项目规划阶段。'
+    return '确认进入项目计划阶段。'
   }
   if (
     mode === 'requirement_spec_confirmation' &&

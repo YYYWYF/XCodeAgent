@@ -921,7 +921,7 @@ const compactedPlanningMessages = compactPlanningMessageHistory([
       }
     } as WorkflowRunPayload
   },
-  { id: 4, role: 'user', content: '进入规划阶段', createdAt: 4 },
+  { id: 4, role: 'user', content: '进入计划阶段', createdAt: 4 },
   {
     id: 5,
     role: 'assistant',
@@ -1046,7 +1046,7 @@ assert.equal(
   false
 )
 // TechnicalPlan 二次修改确认后的主 Workflow 已进入开发前置门禁，
-// 规划会话不应再显示“恢复规划阶段”的 loading 占位。
+// 规划会话不应再显示“恢复计划阶段”的 loading 占位。
 assert.equal(
   planningWorkflowNeedsChatLoading(
     {
@@ -1330,7 +1330,7 @@ assert.deepEqual(
       {
         id: 22,
         role: 'assistant',
-        content: '请确认是否进入规划阶段。',
+        content: '请确认是否进入计划阶段。',
         createdAt: 22,
         workflow: entryAuthoritativeWorkflow
       }

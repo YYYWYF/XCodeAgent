@@ -14,8 +14,8 @@ export function workflowInteractionAvailability(
 ): WorkflowInteractionAvailability {
   if (!lifecycle) return 'unavailable'
 
-  // 应用规划(需求分析/项目规划阶段)确认没有 execution 锁：workflow 待用户输入且应用仍在规划期时视为
-  // 当前可交互(active)，避免需求分析/项目规划阶段的澄清/需求/计划确认卡被 execution 锁判定误杀为 stale。
+  // 应用规划(需求分析/项目计划阶段)确认没有 execution 锁：workflow 待用户输入且应用仍在规划期时视为
+  // 当前可交互(active)，避免需求分析/项目计划阶段的澄清/需求/计划确认卡被 execution 锁判定误杀为 stale。
   // 推进到开发期(isInitialPlanningPhase=false)后，旧规划卡自动回 stale 不再显示。
   if (workflow.summary.status === 'requires_user_input' && isInitialPlanningPhase(lifecycle)) {
     return 'active'

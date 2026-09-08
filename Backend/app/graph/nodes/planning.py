@@ -111,7 +111,7 @@ def _planning_token_callback(token: str) -> None:
 
 
 def _planning_phase(state: ProjectState) -> str:
-    """区分创建流程的开发技术规划与主工作流项目规划阶段。"""
+    """区分创建流程的开发技术规划与主工作流项目计划阶段。"""
 
     return (
         "technical_planning"

@@ -95,6 +95,6 @@ design_change_request 保存原始输入，design_change_generation_target 和 d
 
 planning run 执行期间输入框仍可编辑，但发送按钮和回车发送都被禁止，并提示“当前设计正在生成，完成后即可发送新的调整。”前端不得为自由输入停止当前 run、排队第二个 run 或绕过同一 planning thread 的单写事务。进入待确认、等待用户或空闲状态后才允许发送。
 
-规划阶段和开发阶段继续使用各自原有对话路径；产品专用自由输入仅在 workbenchPhase=product 时进入 /application-page-planning/run。
+计划阶段和开发阶段继续使用各自原有对话路径；产品专用自由输入仅在 workbenchPhase=product 时进入 /application-page-planning/run。
 
 应用已 `ready_for_workbench` 后，用户手动切回 product 阶段仍使用同一 Product Coordinator 和 `/application-page-planning/run`，不回落 `/conversation/run`。服务端固定恢复原 planning thread 的 `design_intent_analysis`：chat/read_only/clarification/out_of_scope 直接回复且零写入；识别到产品修改时也只提示进入既有 formal revision 影响确认，不复用历史审阅门、不直接改正式产物。

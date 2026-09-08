@@ -57,7 +57,7 @@ export default function WelcomeRecentProjects({
       try {
         const storedApplications = await loadStoredApplications()
         if (active && currentRefreshId === refreshId) {
-          // 首页使用统一应用列表，设计、规划和开发阶段不再影响应用是否可见。
+          // 首页使用统一应用列表，设计、计划和开发阶段不再影响应用是否可见。
           setApplications(storedApplications)
         }
       } finally {

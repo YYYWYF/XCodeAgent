@@ -137,7 +137,7 @@ def _planning_stage_entry_test_graph():
     """构建入口门与技术规划占位节点，验证失败后可在同一 checkpoint 重试。"""
 
     def technical_planning_fixture(state: ProjectState) -> dict:
-        """记录成功进入规划阶段后的运行身份，并结束测试图。"""
+        """记录成功进入计划阶段后的运行身份，并结束测试图。"""
 
         return {
             "phase": "technical_planning",
@@ -484,7 +484,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
                         workspace=workspace,
                         pending=pending,
                         action="confirm",
-                        request="普通确认不能进入规划阶段",
+                        request="普通确认不能进入计划阶段",
                     ),
                 )
             ]
@@ -498,7 +498,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
                         workspace=workspace,
                         pending=pending,
                         action="enter_planning",
-                        request="进入规划阶段",
+                        request="进入计划阶段",
                     ),
                 )
             ]
