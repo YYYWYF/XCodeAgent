@@ -1,4 +1,9 @@
-# 应用模板生成阶段目标、现状与改进计划
+# 历史资料：应用模板生成阶段目标、现状与改进计划
+
+> 已被 [BOOTSTRAP_PLAN.md](BOOTSTRAP_PLAN.md) 取代，不是当前运行契约。
+> 本文保留为重构前的设计与问题追踪记录；下文的“当前”“已实施”和验收结论仅适用于记录当时，不能作为现有代码的实施依据。
+> 当前流程见 [WORKFLOW.md](WORKFLOW.md)，实现入口见 [CODEBASE_INDEX.md](CODEBASE_INDEX.md)。
+
 
 ## 1. 文档范围
 

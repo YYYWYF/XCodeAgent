@@ -61,10 +61,10 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 
 ## 核心原则
 
-模板变体必须隔离：
+模板能力以 Engine-owned TemplateState 的 `effective` 为准：
 
-- **main**：后端模板只有 `common` 公共基础设施，没有 auth 权限模块。业务模块直接在 `com.cmbchina.backend.<module>` 下新建。
-- **auth**：后端模板包含 `common` 公共基础设施 + `auth` 权限模块（完整的 RBAC）。业务模块在 `com.cmbchina.backend.<module>` 下新建，**不得修改 `auth` 模块的任何已有文件**。
+- 未启用 authorization capability 时，业务模块复用已交付的公共基础设施，不推断或补建权限模块。
+- 启用 authorization capability 时，复用模板交付的 auth 权限基础设施；业务模块仍在 `com.cmbchina.backend.<module>` 下新建，**不得修改 `auth` 模块的任何已有文件**。
 
 - 业务模块包名固定为 `com.cmbchina.backend.<module>`，`<module>` 取业务实体名的小写驼峰（如 `project`、`orderItem`）。
 - DDD 分层固定为：`domain/entity` → `infrastructure/po` → `infrastructure/mapper` → `domain/repository` → `infrastructure/repository/impl` + `infrastructure/repository/converter` → `application/dto` + `application/assembler` + `application/service` → `adapter/web`。

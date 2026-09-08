@@ -1547,6 +1547,14 @@ Java `src/main`、Git 默认分支、数据源 ID，以及 `auth` 认证/权限�
 - [ ] 索引能直接定位新的 TemplateState、投影和 Bootstrap 边界；
 - [ ] 旧术语只存在于必要的拒绝测试或明确历史背景。
 
+### 2026-09-08 文档清理记录
+
+- 已同步 WORKFLOW、AUTH、两份 DAG 方案与 CODEBASE_INDEX 的模板能力、Readiness、投影时序和 Attach 边界。
+- XCODEAGENT_COMPLETE_WORKFLOW 与 APPLICATION_TEMPLATE_GENERATION_STATUS_AND_PLAN 保留为明确标记的历史快照；不作为当前实现依据。
+- 当前契约文档中，上述八个旧标识符已无命中；本重构计划的删除清单和两份历史资料作为背景保留。
+- 源码审计仍发现 `graph/subgraphs/build.py` 显式拒绝旧模板字段，生命周期测试仍断言旧 manifest 文件不存在。这不是兼容读取，但尚不满足本节“正式源码零命中”的字面标准；本轮只清理文档，未改动相关代码，退出项暂不勾选。
+- 本轮只做文档静态检查；步骤 9 的三类应用 E2E 与人工启动验收仍须独立完成。
+
 ## 3.11 步骤 9：三类应用 E2E 与最终发布门禁
 
 ### 自动化 E2E

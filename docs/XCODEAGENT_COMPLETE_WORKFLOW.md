@@ -1,4 +1,9 @@
-# XCodeAgent 当前完整 Workflow 与数据流说明
+# 历史资料：XCodeAgent 旧版完整 Workflow 与数据流说明
+
+> 已被 [BOOTSTRAP_PLAN.md](BOOTSTRAP_PLAN.md) 取代，不是当前运行契约。
+> 本文保留为重构前的设计与问题追踪记录；下文的“当前”“已实施”和验收结论仅适用于记录当时，不能作为现有代码的实施依据。
+> 当前流程见 [WORKFLOW.md](WORKFLOW.md)，实现入口见 [CODEBASE_INDEX.md](CODEBASE_INDEX.md)。
+
 
 > 更新时间：2026-08-09（按当前工作区源码核对）
 > 事实来源：当前工作区代码，而不是历史设计稿。

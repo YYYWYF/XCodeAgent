@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
 from app.protocols.application_lifecycle import (
@@ -144,6 +145,41 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
             frames = asyncio.run(collect_removed_action())
 
         self.assertIn("validation error", frames)
+
+    def test_get_action_never_runs_workspace_attach(self) -> None:
+        """get 仅返回已持久化生命周期，不能隐式接管或修复 Workspace。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+            )
+            write_application_lifecycle(directory, lifecycle)
+            with patch(
+                "app.protocols.application_lifecycle.template_mutation_coordinator.attach_workspace"
+            ) as attach_workspace:
+                stream = build_application_lifecycle_ag_ui_stream(
+                    payload={
+                        "threadId": "lifecycle-thread",
+                        "runId": "lifecycle-run",
+                        "forwardedProps": {
+                            "applicationLifecycle": {
+                                "action": "get",
+                                "workspaceRoot": directory,
+                            }
+                        },
+                    }
+                )
+
+                async def collect() -> str:
+                    """消费只读 get 事件流。"""
+
+                    return "".join([frame async for frame in stream])
+
+                frames = asyncio.run(collect())
+
+        attach_workspace.assert_not_called()
+        self.assertIn("已读取应用生命周期", frames)
 
 
 if __name__ == "__main__":

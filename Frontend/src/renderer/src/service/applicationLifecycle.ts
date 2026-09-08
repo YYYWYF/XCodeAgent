@@ -14,6 +14,7 @@ type ApplicationLifecyclePayload = {
 }
 
 const lifecycleReadRequests = new Map<string, Promise<ApplicationLifecycle>>()
+const workspaceAttachRequests = new Map<string, Promise<ApplicationLifecycle>>()
 
 // 校验生命周期快照只属于当前应用及初始化线程，禁止同目录或异步回包造成跨应用串态。
 function assertApplicationLifecycleOwnership(
@@ -111,7 +112,7 @@ export async function createApplicationLifecycle(
   )
 }
 
-// 读取权威生命周期，并合并 React StrictMode 等场景产生的同工作区并发请求。
+// 先接管可能中断的 Workspace，再读取权威生命周期，并合并 StrictMode 等并发请求。
 export async function getApplicationLifecycle(
   application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
   threadId = randomUUID()
@@ -123,16 +124,46 @@ export async function getApplicationLifecycle(
     return assertApplicationLifecycleOwnership(await currentRequest, application.id)
   }
 
-  const request = runApplicationLifecycleAction(threadId, {
-    action: 'get',
-    workspaceRoot
-  })
+  // 每次冷读取前先 Attach：后端 get 始终只读，孤儿 Bootstrap 的回收只能由 Attach 完成。
+  const request = (async (): Promise<ApplicationLifecycle> => {
+    await attachApplicationWorkspace(application, threadId)
+    return runApplicationLifecycleAction(threadId, {
+      action: 'get',
+      workspaceRoot
+    })
+  })()
   lifecycleReadRequests.set(workspaceRoot, request)
   try {
     return assertApplicationLifecycleOwnership(await request, application.id)
   } finally {
     if (lifecycleReadRequests.get(workspaceRoot) === request) {
       lifecycleReadRequests.delete(workspaceRoot)
+    }
+  }
+}
+
+// 接管指定工作区的中断 Bootstrap；同一工作区的并发恢复请求必须共用一次 AG-UI 调用。
+export async function attachApplicationWorkspace(
+  application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
+  threadId = randomUUID()
+): Promise<ApplicationLifecycle> {
+  const workspaceRoot = application.workspaceRoot
+  if (!workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
+  const currentRequest = workspaceAttachRequests.get(workspaceRoot)
+  if (currentRequest) {
+    return assertApplicationLifecycleOwnership(await currentRequest, application.id)
+  }
+
+  const request = runApplicationLifecycleAction(threadId, {
+    action: 'workspace_attach',
+    workspaceRoot
+  })
+  workspaceAttachRequests.set(workspaceRoot, request)
+  try {
+    return assertApplicationLifecycleOwnership(await request, application.id)
+  } finally {
+    if (workspaceAttachRequests.get(workspaceRoot) === request) {
+      workspaceAttachRequests.delete(workspaceRoot)
     }
   }
 }

@@ -110,6 +110,52 @@ class TemplateMutationCoordinatorTests(unittest.TestCase):
             for relative in ("frontend", "backend", ".git", TEMPLATE_STATE_RELATIVE_PATH, BOOTSTRAP_STAGING_RELATIVE_PATH):
                 self.assertFalse((workspace / relative).exists(), relative)
 
+    def test_attach_returns_active_without_touching_backend_owned_bootstrap(self) -> None:
+        """当前 Backend 持有 Bootstrap 时 Attach 只能返回 active，不能修改生命周期或文件。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _generating_workspace(workspace)
+            coordinator = TemplateMutationCoordinator()
+            coordinator.begin_preparation(workspace)
+            try:
+                result = coordinator.attach_workspace(workspace)
+            finally:
+                coordinator.finish(workspace)
+
+            lifecycle = load_application_lifecycle(workspace)
+            self.assertEqual(result.action, "active")
+            self.assertFalse(result.cleaned)
+            assert lifecycle is not None
+            self.assertEqual(
+                lifecycle.initialization.stage,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            )
+
+    def test_attach_returns_none_for_terminal_workspace(self) -> None:
+        """READY 或 FAILED Workspace 的重复 Attach 必须幂等且不改变生命周期。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _generating_workspace(workspace)
+            failed = transition_application_lifecycle(
+                load_application_lifecycle(workspace),
+                stage=ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
+                status=ApplicationLifecycleStatus.FAILED,
+            )
+            write_application_lifecycle(workspace, failed)
+
+            result = TemplateMutationCoordinator().attach_workspace(workspace)
+            lifecycle = load_application_lifecycle(workspace)
+
+            self.assertEqual(result.action, "none")
+            self.assertFalse(result.cleaned)
+            assert lifecycle is not None
+            self.assertEqual(
+                lifecycle.initialization.stage,
+                ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
+            )
+
     def test_attach_cleanup_failure_keeps_generating_for_later_retry(self) -> None:
         """受管清理失败时 Attach 不得伪造失败完成，应保留 GENERATING。"""
 
