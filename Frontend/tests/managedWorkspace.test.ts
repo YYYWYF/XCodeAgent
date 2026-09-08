@@ -3,10 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import {
-  readManagedWorkspaceApplication,
-  resolveApplicationTemplateBranch
-} from '../src/main/managedWorkspace'
+import { readManagedWorkspaceApplication } from '../src/main/managedWorkspace'
 
 /** 创建隔离的临时工作区并在测试结束后清理。 */
 async function withTemporaryWorkspace(
@@ -42,26 +39,6 @@ test('允许添加规范的 XCodeAgent 本地项目', async () => {
     const application = await readManagedWorkspaceApplication(workspaceRoot)
     assert.equal(application.appName, '本地项目')
   })
-})
-
-/** 验证模板分支只由已持久化的权限开关确定，调用方不能自行选择。 */
-test('根据已持久化权限开关确定唯一模板分支', () => {
-  const base = {
-    schemaVersion: 5,
-    appName: '模板分支项目',
-    auth: { enable: false },
-    authorization: { enabled: false, initialAdministratorSubjects: [] }
-  }
-
-  assert.equal(resolveApplicationTemplateBranch(base), 'main')
-  assert.equal(
-    resolveApplicationTemplateBranch({
-      ...base,
-      auth: { enable: true },
-      authorization: { enabled: true, initialAdministratorSubjects: ['ops@example.com'] }
-    }),
-    'auth'
-  )
 })
 
 /** 验证旧结构因不是当前 schemaVersion 而不能通过。 */

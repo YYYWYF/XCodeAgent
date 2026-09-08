@@ -1,7 +1,4 @@
-import {
-  CheckCircleOutlined,
-  ExclamationCircleOutlined
-} from '@ant-design/icons'
+import { CheckCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import { Button, Spin, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { ApplicationLifecycle } from '../../../../typings'
@@ -81,7 +78,7 @@ export default function TemplatePreparingCard({
   return (
     <div className={cx('template-preparing-card', 'template-preparing-loading')}>
       <div className={cx('template-preparing-head')}>
-        <Spin size="small" />
+        {/* <Spin size="small" /> */}
         <Text strong>产品 Agent 正在准备应用模板</Text>
       </div>
       <Text type="secondary" className={cx('template-preparing-desc')}>

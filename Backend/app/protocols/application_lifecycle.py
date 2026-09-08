@@ -1,12 +1,16 @@
 """应用生命周期独立 AG-UI 动作协议。"""
 
 from __future__ import annotations
+import asyncio
 
 from typing import Any, AsyncIterator, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
+from app.protocols.ag_ui_action_stream import (
+    AgUiActionResult,
+    build_ag_ui_action_stream,
+)
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     ensure_application_lifecycle,
@@ -14,7 +18,6 @@ from app.services.application_lifecycle import (
 )
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.service import WorkspaceBootstrapService
-
 
 APPLICATION_LIFECYCLE_EVENT_NAME = "application-lifecycle"
 
@@ -94,10 +97,14 @@ def build_application_lifecycle_ag_ui_stream(
         if request.action == "create":
             application = request.application
             if application is None:
-                raise ValueError("create 必须提供有效的 application.id 和 application.appName。")
+                raise ValueError(
+                    "create 必须提供有效的 application.id 和 application.appName。"
+                )
             existing = load_application_lifecycle(request.workspace_root)
             if existing is not None and existing.application.id != application.id:
-                raise ValueError("当前工作区已属于另一个应用，请为新应用选择独立的项目目录。")
+                raise ValueError(
+                    "当前工作区已属于另一个应用，请为新应用选择独立的项目目录。"
+                )
             state = ensure_application_lifecycle(
                 request.workspace_root,
                 application_id=application.id,
@@ -120,7 +127,11 @@ def build_application_lifecycle_ag_ui_stream(
             if state is None:
                 raise RuntimeError("Bootstrap 完成后缺少 lifecycle。")
             message = "Workspace Bootstrap 已完成，可以进入工作台。"
-            data = {"action": request.action, **result, "lifecycle": application_lifecycle_payload(state)}
+            data = {
+                "action": request.action,
+                **result,
+                "lifecycle": application_lifecycle_payload(state),
+            }
             return AgUiActionResult(data=data, message=message)
         elif request.action == "workspace_attach":
             attached = await asyncio.to_thread(
@@ -131,7 +142,10 @@ def build_application_lifecycle_ag_ui_stream(
             if state is None:
                 raise ValueError("application-lifecycle.json 不存在。")
             message = "Workspace Attach 已完成。"
-        data = {"action": request.action, "lifecycle": application_lifecycle_payload(state)}
+        data = {
+            "action": request.action,
+            "lifecycle": application_lifecycle_payload(state),
+        }
         if request.action == "workspace_attach":
             data["workspaceAttach"] = {
                 "action": attached.action,
