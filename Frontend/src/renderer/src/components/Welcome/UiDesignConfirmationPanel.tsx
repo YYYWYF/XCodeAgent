@@ -422,6 +422,10 @@ export default function UiDesignConfirmationPanel({
     [feedback, parseMentionedPageIds]
   )
   const canAdjust = !disabled && feedback.trim().length > 0
+  // UI 设计稿生成中（本地 acting 入队、后台 worker pool 处理或 run 提交进行中）：
+  // 期间跳过/进入规划等阶段动作都应禁用，与「全部生成」按钮保持一致，避免并发提交冲突。
+  const uiGenerationInProgress =
+    actingPageIds.length > 0 || generatingPageIds.length > 0 || runInFlightRef.current
 
   // 在模板选择弹窗中确认选中某个模板。
   const confirmTemplatePick = useCallback(
@@ -523,7 +527,7 @@ export default function UiDesignConfirmationPanel({
         {pages.length - confirmedCount > 0 ? (
           <Button
             className={cx('ui-design-generate-all-btn')}
-            disabled={disabled || runInFlightRef.current || actingPageIds.length > 0 || generatingPageIds.length > 0}
+            disabled={disabled || uiGenerationInProgress}
             icon={<ThunderboltOutlined />}
             onClick={generateAll}
             title="一次性并发生成所有未确认页面的设计稿"
@@ -866,7 +870,7 @@ export default function UiDesignConfirmationPanel({
           <div className={cx('ui-design-confirm-actions')}>
             <Button
               className={cx('ui-design-skip-btn')}
-              disabled={disabled}
+              disabled={disabled || uiGenerationInProgress}
               onClick={skipUiDesign}
               size="large"
             >
@@ -874,7 +878,7 @@ export default function UiDesignConfirmationPanel({
             </Button>
             <Button
               className={cx('ui-design-confirm-all-btn')}
-              disabled={disabled || !allConfirmed}
+              disabled={disabled || uiGenerationInProgress || !allConfirmed}
               onClick={confirmAll}
               size="large"
               type="primary"
