@@ -24,7 +24,7 @@ export default function PlanningStageEntryCard({
         <Text strong>{skippedUiDesign ? 'UI 设计已跳过' : '设计阶段已完成'}</Text>
       </div>
       <Text className={cx('template-preparing-desc')} type="secondary">
-        进入规划阶段后，规划 Agent 将根据已确认的需求、产品规划和
+        进入规划阶段后，规划 Agent 将根据已确认的需求、产品行为和
         {skippedUiDesign ? '跳过状态' : ' UI 设计稿'}
         自动生成技术规划。生成后仍需你确认，才会进入开发准备。
       </Text>

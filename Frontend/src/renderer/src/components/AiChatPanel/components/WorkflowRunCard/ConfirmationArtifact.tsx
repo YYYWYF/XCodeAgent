@@ -18,8 +18,8 @@ export default function ConfirmationArtifact({
     ? '需求文档'
     : artifact.id === 'product_plan'
       ? isDraft
-        ? '产品规划草稿'
-        : '产品规划'
+        ? '需求文档草稿'
+        : '需求文档'
       : artifact.id === 'technical_plan'
         ? '技术规划'
         : '项目计划'

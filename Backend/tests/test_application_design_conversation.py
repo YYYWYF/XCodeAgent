@@ -12,12 +12,12 @@ from app.graph.application_planning_revision import (
     cleared_design_change_context,
     design_artifact_node_state,
     design_node_update,
-    earliest_available_design_target,
     is_design_change,
     prepare_ui_revision_state,
     route_design_intent,
     technical_plan_revision_reset_state,
 )
+from app.agents.design_conversation import resolve_design_target
 from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
 )
@@ -46,6 +46,10 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         self.assertEqual(
             capabilities["designChange"]["existingArtifactsStateField"],
             "design_change_existing_artifacts",
+        )
+        self.assertIn(
+            "out_of_scope",
+            capabilities["designChange"]["nonMutatingIntents"],
         )
 
     def test_design_change_request_starts_original_graph_intent_node(self) -> None:
@@ -126,10 +130,13 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         """需求意图应调用真实生命周期服务，从后续阶段回到分析并保存原始输入。"""
 
         classify.return_value = SimpleNamespace(
-            target="requirements",
+            intent="requirement_change",
+            change_level="requirement",
             reason="页面清单发生变化",
             affected_page_ids=["orders"],
             response="",
+            suggested_phase="none",
+            clarification_question="",
         )
         with TemporaryDirectory() as workspace:
             ensure_application_lifecycle(
@@ -231,6 +238,94 @@ class ApplicationDesignConversationTests(unittest.TestCase):
 
         self.assertEqual(first["request"], "新增报表页")
         self.assertEqual(resumed["request"], "正确，继续规划")
+
+    @patch("app.graph.application_planning_revision.classify_design_conversation")
+    def test_out_of_scope_response_does_not_mutate_artifacts_or_lifecycle(
+        self,
+        classify,
+    ) -> None:
+        """越界输入只能形成回复，不能失效产物、确认或生命周期。"""
+
+        classify.return_value = SimpleNamespace(
+            intent="out_of_scope",
+            change_level="none",
+            reason="接口契约属于规划阶段",
+            affected_page_ids=[],
+            response="",
+            suggested_phase="planning",
+            clarification_question="",
+        )
+        update = analyze_design_intent(
+            {
+                "request": "订单接口增加 status 参数",
+                "design_interaction_origin": "ui_confirmation",
+                "requirement_spec": {"confirmation_status": "confirmed"},
+                "product_plan": {"confirmation_status": "confirmed"},
+                "ui_designs": {"confirmation_status": "confirmed"},
+                "technical_plan": {"confirmation_status": "confirmed"},
+                "application_planning_confirmation": {"confirmedAt": "unchanged"},
+                "lifecycle": {"initialization": {"stage": "unchanged"}},
+            }
+        )
+
+        self.assertEqual(route_design_intent(update), "design_chat_response")
+        self.assertIn("规划", update["conversation_response"])
+        for key in (
+            "requirement_spec",
+            "product_plan",
+            "ui_designs",
+            "technical_plan",
+            "application_planning_confirmation",
+            "lifecycle",
+        ):
+            self.assertNotIn(key, update)
+
+    @patch("app.graph.application_planning_revision.classify_design_conversation")
+    def test_all_non_mutating_intents_preserve_current_review_state(
+        self,
+        classify,
+    ) -> None:
+        """闲聊、只读问答和澄清同样只能回复并回到原审阅门。"""
+
+        cases = (
+            ("chat", "你好", "可以聊聊当前产品。", ""),
+            ("read_only", "当前有哪些角色？", "当前有管理员角色。", ""),
+            ("clarification", "改一下", "", "你希望调整哪个页面？"),
+        )
+        for intent, request, response, question in cases:
+            with self.subTest(intent=intent):
+                classify.return_value = SimpleNamespace(
+                    intent=intent,
+                    change_level="none",
+                    reason="无需修改正式产物",
+                    affected_page_ids=[],
+                    response=response,
+                    suggested_phase="none",
+                    clarification_question=question,
+                )
+                update = analyze_design_intent(
+                    {
+                        "request": request,
+                        "design_interaction_origin": "ui_confirmation",
+                        "requirement_spec": {"confirmation_status": "confirmed"},
+                        "product_plan": {"confirmation_status": "confirmed"},
+                        "ui_designs": {"confirmation_status": "confirmed"},
+                        "technical_plan": {"confirmation_status": "confirmed"},
+                        "application_planning_confirmation": {"confirmedAt": "unchanged"},
+                    }
+                )
+                self.assertEqual(route_design_intent(update), "design_chat_response")
+                self.assertTrue(update["conversation_response"])
+                self.assertEqual(update["design_interaction_origin"], "ui_confirmation")
+                for key in (
+                    "requirement_spec",
+                    "product_plan",
+                    "ui_designs",
+                    "technical_plan",
+                    "application_planning_confirmation",
+                    "lifecycle",
+                ):
+                    self.assertNotIn(key, update)
 
     def test_design_node_update_keeps_revision_projection_context(self) -> None:
         """修订节点更新必须持续携带前端实时状态所需的变更上下文。"""
@@ -514,16 +609,16 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         """意图 Agent 不能越过尚未确认的上游产物。"""
 
         self.assertEqual(
-            earliest_available_design_target(
-                "ui_confirmation",
+            resolve_design_target(
+                SimpleNamespace(intent="ui_change", change_level="ui"),
                 requirement_spec={"confirmation_status": "pending_user_confirmation"},
                 product_plan={"confirmation_status": "confirmed"},
             ),
             "requirements",
         )
         self.assertEqual(
-            earliest_available_design_target(
-                "ui_confirmation",
+            resolve_design_target(
+                SimpleNamespace(intent="ui_change", change_level="ui"),
                 requirement_spec={"confirmation_status": "confirmed"},
                 product_plan={"confirmation_status": "pending_user_confirmation"},
             ),

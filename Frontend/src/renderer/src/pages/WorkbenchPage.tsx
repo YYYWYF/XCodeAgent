@@ -41,7 +41,6 @@ type Props = {
     requirementSpecFeedback?: string,
     designChangeRequest?: string
   ) => Promise<void>
-  onStopPlanning: () => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
@@ -76,7 +75,6 @@ function WorkbenchPage({
   onApplicationLifecycleChange,
   onReturnWelcome,
   onSubmitPlanningClarification,
-  onStopPlanning,
   onStartDesignStageRevision,
   onRevisionContinuationHandlerChange,
   onThemeChange,
@@ -387,7 +385,6 @@ function WorkbenchPage({
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
                 onReturnWelcome={onReturnWelcome}
                 onSubmitPlanningClarification={onSubmitPlanningClarification}
-                onStopPlanning={onStopPlanning}
                 onStartDesignStageRevision={onStartDesignStageRevision}
                 onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
                 onThemeChange={handleThemeChange}

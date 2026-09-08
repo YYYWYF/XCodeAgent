@@ -42,7 +42,7 @@ def _authorization_fact_extraction_prompt(
 ) -> str:
     """构造只提取角色与权限业务事实的 JSON 提示，禁止把结构缺口转成用户追问。"""
 
-    existing_roles = (
+    candidate_roles = (
         existing_spec.get("user_roles")
         if isinstance(existing_spec, dict)
         and isinstance(existing_spec.get("user_roles"), list)
@@ -64,6 +64,10 @@ def _authorization_fact_extraction_prompt(
         "user_roles is an array of every explicitly stated business participant. Each item must contain exactly "
         "id, name, description. id must be lower_snake_case; description must state the role's explicit business "
         "responsibilities. Return [] only if the request truly identifies no business participant.\n"
+        "The supplied candidate role catalogue was produced by the complete RequirementSpec analysis that already "
+        "applied the latest feedback. When it is non-empty, copy that catalogue exactly and use its ids in grants; "
+        "do not split it again from wording in the request. Identity statements such as 'A is B', 'A and B are the "
+        "same person', or their Chinese equivalents describe one business participant, never two roles.\n"
         "authorization_requirements must contain exactly restrictedPages, restrictedOperations, dataAuthorizationIssues. "
         "Return only controls explicitly stated in the request; empty arrays are valid. Every restrictedPages item "
         "must contain exactly name, targetPageId, description, rationale, sourceRefs, defaultGrantedRoleIds; every "
@@ -81,7 +85,7 @@ def _authorization_fact_extraction_prompt(
         "or initial-system-administrator fields.\n"
         "Do not ask the user to repeat facts already stated. If a fact is explicit, express it completely using the "
         "required fields.\n"
-        f"Existing business roles, if any:\n{json.dumps(existing_roles, ensure_ascii=False)}\n\n"
+        f"Current candidate role catalogue, if any:\n{json.dumps(candidate_roles, ensure_ascii=False)}\n\n"
         f"Confirmed page catalogue for restrictedPages.targetPageId:\n{json.dumps(page_candidates, ensure_ascii=False)}\n\n"
         f"Original requirement:\n{request}"
     )
@@ -234,6 +238,13 @@ def _extract_authorization_facts(
 ) -> dict[str, Any]:
     """独立提取权限业务事实，并在字段形状漂移时要求模型自动修复。"""
 
+    candidate_roles = (
+        existing_spec.get("user_roles")
+        if isinstance(existing_spec, dict)
+        and isinstance(existing_spec.get("user_roles"), list)
+        and existing_spec.get("user_roles")
+        else None
+    )
     feedback = ""
     for _attempt in range(_AUTHORIZATION_FACT_EXTRACTION_ATTEMPTS):
         prompt = _authorization_fact_extraction_prompt(request, existing_spec, pages)
@@ -246,6 +257,18 @@ def _extract_authorization_facts(
         payload = extract_json_object(
             _coerce_content_text(getattr(result, "content", "")) or ""
         )
+        if isinstance(payload, dict) and candidate_roles is not None:
+            # 完整需求模型已经应用本轮增量语义；权限提取只能引用该角色目录，
+            # 不能再次按字面拆分“录入员就是本人”等同一身份表达。
+            payload["user_roles"] = [
+                {
+                    "id": str(role.get("id") or "").strip(),
+                    "name": str(role.get("name") or "").strip(),
+                    "description": str(role.get("description") or "").strip(),
+                }
+                for role in candidate_roles
+                if isinstance(role, dict)
+            ]
         errors = _validate_authorization_fact_output(payload, pages)
         if not errors:
             return payload
@@ -262,8 +285,14 @@ def _merge_authorization_facts(
 
     merged = deepcopy(agent_spec) if isinstance(agent_spec, dict) else {}
     fact_roles = facts.get("user_roles")
-    if isinstance(fact_roles, list) and fact_roles:
-        # 原始需求中明确提到的角色是当前轮的权威事实，不能被历史草稿或通用兜底角色覆盖。
+    candidate_roles = merged.get("user_roles")
+    if (
+        not (isinstance(candidate_roles, list) and candidate_roles)
+        and isinstance(fact_roles, list)
+        and fact_roles
+    ):
+        # 主需求模型尚未形成完整角色目录时才使用独立事实补齐；完整结果已经
+        # 合并本轮增量语义，不能再被按原文字面二次拆分的角色覆盖。
         merged["user_roles"] = fact_roles
     authorization = merged.get("authorization_requirements")
     authorization = deepcopy(authorization) if isinstance(authorization, dict) else {}
@@ -635,9 +664,14 @@ def _analyze_requirements_once(
         allow_inferred_defaults=False,
     )
     # 角色事实独立于是否开启权限：后续“谁是初始系统管理员”的选择只能基于这里识别的业务角色。
+    authorization_fact_context = (
+        effective_agent_spec
+        if isinstance(effective_agent_spec, dict)
+        else existing_spec
+    )
     authorization_facts = _extract_authorization_facts(
         request,
-        existing_spec,
+        authorization_fact_context,
         settings,
         spec.get("pages") if isinstance(spec.get("pages"), list) else [],
     )

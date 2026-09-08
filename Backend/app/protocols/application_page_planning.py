@@ -68,7 +68,23 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "designChange": {
             "requestField": "forwardedProps.applicationPlanningInteraction",
             "intentNode": "design_intent_analysis",
+            "intents": [
+                "chat",
+                "read_only",
+                "requirement_change",
+                "ui_change",
+                "clarification",
+                "out_of_scope",
+            ],
+            "changeLevels": ["requirement", "product_behavior", "ui", "none"],
             "targets": ["requirements", "product_planning", "ui_confirmation"],
+            "nonMutatingIntents": [
+                "chat",
+                "read_only",
+                "clarification",
+                "out_of_scope",
+            ],
+            "suggestedPhases": ["planning", "development", "test", "none"],
             "usesOriginalThread": True,
             "incrementalArtifacts": True,
             "existingArtifactsStateField": "design_change_existing_artifacts",

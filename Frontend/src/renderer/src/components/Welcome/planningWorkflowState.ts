@@ -22,8 +22,8 @@ const PLANNING_ACTIVITY_COPY: Record<
     revisionDetail: '正在合并本次补充，并保留未受影响的需求事实。'
   },
   product_planning: {
-    title: '正在生成产品规划',
-    revisionTitle: '正在重新生成产品规划',
+    title: '正在整理需求',
+    revisionTitle: '正在调整需求',
     detail: '正在梳理页面目标、核心操作、状态与产品验收标准。',
     revisionDetail: '正在更新受影响页面的目标、操作、状态与产品验收标准。'
   },
@@ -48,7 +48,7 @@ const PLANNING_ACTIVITY_COPY: Record<
 
 const DESIGN_INTENT_LABELS: Record<string, string> = {
   requirements: '需求层变更',
-  product_planning: '产品规划层变更',
+  product_planning: '产品行为调整',
   ui_confirmation: 'UI 设计层变更',
   chat: '无需修改正式产物'
 }
@@ -374,7 +374,7 @@ export function planningRequirementsConfirmed(
   // UI 与 TechnicalPlan 只能消费已联合确认的需求文档；节点切换的增量帧
   // 可能暂时缺少该字段或把缺失值投影为 false，此时以下游阶段门禁为权威。
   // 但只有 lifecycle.stage 的冷启动校准快照不足以证明本轮需求确认已经完成，
-  // 需要同时有 Workflow 的 phase/node 投影，避免把“正在生成产品规划”误标为正式需求文档。
+  // 需要同时有 Workflow 的 phase/node 投影，避免把“正在整理需求”误标为正式需求文档。
   const projectedPhase =
     String(
       workflow?.summary?.phase || workflow?.result?.phase || workflow?.state?.phase || ''
@@ -500,7 +500,7 @@ export function planningWorkflowActivity(
     return {
       status: 'running',
       title: '正在识别设计变更意图',
-      detail: '正在判断这次改动应回到需求、产品规划还是 UI 设计阶段。'
+      detail: '正在判断这次输入属于需求事实、产品行为还是 UI 设计。'
     }
   }
 

@@ -480,7 +480,6 @@ function AppEntryContent(): JSX.Element {
                 designChangeRequest
               )
             }}
-            onStopPlanning={() => planningController.stopPlanning(activeApplication.id)}
             onStartDesignStageRevision={(input) =>
               handleStartDesignStageRevision(activeApplication, input)
             }

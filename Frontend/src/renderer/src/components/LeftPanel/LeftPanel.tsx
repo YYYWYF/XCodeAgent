@@ -39,9 +39,9 @@ type Props = {
     workflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
-    requirementSpecFeedback?: string
+    requirementSpecFeedback?: string,
+    designChangeRequest?: string
   ) => Promise<void>
-  onStopPlanning: () => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
@@ -84,7 +84,6 @@ export default function LeftPanel({
   previewLaunchLoading,
   onReturnWelcome,
   onSubmitPlanningClarification,
-  onStopPlanning,
   onStartDesignStageRevision,
   onRevisionContinuationHandlerChange,
   onThemeChange,
@@ -121,7 +120,6 @@ export default function LeftPanel({
             previewLaunchLoading={previewLaunchLoading}
             onReturnWelcome={onReturnWelcome}
             onSubmitPlanningClarification={onSubmitPlanningClarification}
-            onStopPlanning={onStopPlanning}
             onStartDesignStageRevision={onStartDesignStageRevision}
             onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
             onThemeChange={onThemeChange}

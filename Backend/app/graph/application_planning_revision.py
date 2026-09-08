@@ -6,6 +6,9 @@ from typing import Any
 from app.agents.design_conversation import (
     DesignConversationDecision,
     classify_design_conversation,
+    enforce_product_conversation_capabilities,
+    product_conversation_response,
+    resolve_design_target,
 )
 from app.domain.application_lifecycle import ApplicationLifecycleStage
 from app.graph.state import ProjectState
@@ -73,7 +76,7 @@ def technical_plan_revision_reset_state() -> dict[str, Any]:
 
 
 def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
-    """识别最早受影响产物，并把原创建生命周期回退到对应真实节点。"""
+    """识别产品语义；只有确定性 Policy 允许的修改才回退正式生命周期。"""
 
     request = str(state.get("request") or "").strip()
     if not request:
@@ -83,11 +86,16 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         # 正式二次修改已经在影响确认阶段固定最早产物和目标资源；用户点击
         # “确认并返回设计阶段”后必须立即进入真实生成节点，不能再调用一次
         # 设计分类模型形成额外等待、失败点或目标漂移。
-        target = authoritative_target
+        intent, change_level = {
+            "requirements": ("requirement_change", "requirement"),
+            "product_planning": ("requirement_change", "product_behavior"),
+            "ui_confirmation": ("ui_change", "ui"),
+        }[authoritative_target]
         decision = DesignConversationDecision(
-            target=target,
+            intent=intent,
+            change_level=change_level,
             reason=(
-                f"formal revision 起点由 lifecycle.currentArtifact 固定为 {target}，"
+                f"formal revision 起点由 lifecycle.currentArtifact 固定为 {authoritative_target}，"
                 "直接进入对应正式产物生成节点。"
             ),
             affected_page_ids=authoritative_page_ids,
@@ -100,14 +108,35 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
             product_plan=_dict_value(state.get("product_plan")),
             ui_designs=_dict_value(state.get("ui_designs")),
         )
-        target = earliest_available_design_target(
-            decision.target,
-            requirement_spec=_dict_value(state.get("requirement_spec")),
-            product_plan=_dict_value(state.get("product_plan")),
-        )
+    decision = enforce_product_conversation_capabilities(decision, request)
+    target = resolve_design_target(
+        decision,
+        requirement_spec=_dict_value(state.get("requirement_spec")),
+        product_plan=_dict_value(state.get("product_plan")),
+    )
     reason = decision.reason
-    if authoritative_target is None and target != decision.target:
+    semantic_target = {
+        ("requirement_change", "requirement"): "requirements",
+        ("requirement_change", "product_behavior"): "product_planning",
+        ("ui_change", "ui"): "ui_confirmation",
+    }.get((decision.intent, decision.change_level))
+    if authoritative_target is None and target and target != semantic_target:
         reason = f"{reason}；上游产物尚未确认，先回到 {target}。"
+    if target not in DESIGN_CHANGE_TARGET_NODES:
+        # 闲聊、只读问答、澄清和越界请求只写对话回复及路由清理字段，
+        # 不撤销确认、不失效产物，也不触碰 application lifecycle。
+        return {
+            **cleared_design_change_context(),
+            "workflow_scope": "application_planning",
+            "resume_from": "",
+            "phase": "design_intent_analysis",
+            "status": "completed",
+            "conversation_response": product_conversation_response(decision),
+            "design_interaction_origin": str(
+                state.get("design_interaction_origin") or "requirements"
+            ),
+            "timeline": ["design_intent_analysis"],
+        }
     update: dict[str, Any] = {
         "workflow_scope": "application_planning",
         # design_intent_analysis 已消费本次 START 指令；即使下游生成中断，
@@ -123,7 +152,7 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         "design_change_generation_target": target,
         "design_change_generation_request": request,
         "design_change_existing_artifacts": existing_artifact_presence(state),
-        "conversation_response": decision.response,
+        "conversation_response": "",
         "application_planning_confirmation": {},
         "timeline": ["design_intent_analysis"],
     }
@@ -197,25 +226,6 @@ def design_chat_response(state: ProjectState) -> dict[str, Any]:
         ),
         "timeline": ["design_chat_response"],
     }
-
-
-def earliest_available_design_target(
-    target: str,
-    *,
-    requirement_spec: dict[str, Any] | None,
-    product_plan: dict[str, Any] | None,
-) -> str:
-    """禁止设计意图越过尚未确认的上游正式产物。"""
-
-    if target == "chat":
-        return target
-    if not requirement_spec or requirement_spec.get("confirmation_status") != "confirmed":
-        return "requirements"
-    if target == "ui_confirmation" and (
-        not product_plan or product_plan.get("confirmation_status") != "confirmed"
-    ):
-        return "product_planning"
-    return target
 
 
 def is_design_change(state: ProjectState) -> bool:

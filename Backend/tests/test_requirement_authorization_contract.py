@@ -98,6 +98,42 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
             "DATA_AUTHORIZATION_NOT_SUPPORTED",
         )
 
+    def test_authorization_facts_do_not_split_complete_model_role_identity(self) -> None:
+        """完整需求已合并同一身份时，独立事实不得再拆成录入员和本人两个角色。"""
+
+        merged = _merge_authorization_facts(
+            {
+                "user_roles": [
+                    {
+                        "id": "entry_clerk",
+                        "name": "录入员",
+                        "description": "用户本人负责录入人名。",
+                    }
+                ],
+                "authorization_requirements": {
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                },
+            },
+            {
+                "user_roles": [
+                    {"id": "entry_clerk", "name": "录入员", "description": "负责人名录入。"},
+                    {"id": "self", "name": "本人", "description": "应用使用者本人。"},
+                ],
+                "authorization_requirements": {
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                    "dataAuthorizationIssues": [],
+                },
+            },
+            None,
+        )
+
+        self.assertEqual(
+            [(role["id"], role["name"]) for role in merged["user_roles"]],
+            [("entry_clerk", "录入员")],
+        )
+
     def test_authorization_fact_output_rejects_incomplete_page_candidate(self) -> None:
         """模型遗漏页面业务说明时必须触发自动修复，不能转嫁给用户。"""
 

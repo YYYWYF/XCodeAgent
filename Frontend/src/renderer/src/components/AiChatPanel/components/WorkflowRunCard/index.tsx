@@ -78,7 +78,7 @@ const OTHER_OPTION_VALUE = '__other__'
 const ARTIFACT_CONFIRMATION_MAP: Record<string, { title: string; summary: string }> = {
   requirement_document_confirmation: {
     title: '需求文档',
-    summary: '需求文档（含产品规划）已生成，确认后生成 UI 设计稿。'
+    summary: '需求文档已生成，确认后生成 UI 设计稿。'
   },
   technical_plan_confirmation: {
     title: '技术规划',
@@ -335,7 +335,7 @@ export default function WorkflowRunCard({
           <LoadingOutlined aria-hidden="true" />
           <Text type="secondary">
             {planningPhase === 'product_planning'
-              ? '正在生成产品规划…'
+              ? '正在整理需求…'
               : planningPhase === 'technical_planning'
                 ? '正在生成技术规划…'
                 : '正在生成项目计划…'}

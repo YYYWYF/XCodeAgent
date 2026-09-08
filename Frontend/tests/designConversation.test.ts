@@ -59,6 +59,12 @@ import {
   revisionContinuationHandoffFromWorkflow
 } from '../src/renderer/src/service/applicationPagePlanning'
 import { planningArtifactRecoveryKeys } from '../src/renderer/src/components/AiChatPanel/planningArtifactRecovery'
+import {
+  PRODUCT_CONVERSATION_PLACEHOLDER,
+  buildProductConversationInteraction,
+  productConversationSendBlocked,
+  productConversationSubmissionError
+} from '../src/renderer/src/components/AiChatPanel/components/ChatComposer/productConversation'
 
 const planningSubmissionMessages: AgentChatMessage[] = [
   { id: 1, role: 'assistant', content: '技术规划待确认', createdAt: 1 },
@@ -99,6 +105,36 @@ const forwardedProps = buildWorkflowForwardedProps({
 assert.deepEqual(forwardedProps.applicationPlanningInteraction, planningInteraction)
 assert.equal(forwardedProps.workflowScope, 'application_planning')
 assert.equal(forwardedProps.resumeState, undefined)
+
+assert.equal(
+  PRODUCT_CONVERSATION_PLACEHOLDER,
+  '告诉产品 Agent 你想调整的需求、页面或 UI，也可以直接提问…'
+)
+assert.equal(PRODUCT_CONVERSATION_PLACEHOLDER.includes('暂停并自由输入'), false)
+assert.deepEqual(
+  buildProductConversationInteraction(
+    {
+      gateId: 'ui_designs:revision-2',
+      artifact: 'ui_designs',
+      artifactRevision: 'revision-2'
+    },
+    '  首页改成左侧导航  '
+  ),
+  {
+    gateId: 'ui_designs:revision-2',
+    artifact: 'ui_designs',
+    artifactRevision: 'revision-2',
+    action: 'design_change',
+    request: '首页改成左侧导航'
+  }
+)
+assert.equal(productConversationSendBlocked(true, true), true)
+assert.equal(productConversationSendBlocked(true, false), false)
+assert.equal(productConversationSendBlocked(false, true), false)
+assert.match(
+  productConversationSubmissionError(new Error('待确认产物已经更新，请基于最新版本重新提交。')),
+  /刷新到最新产品设计状态/
+)
 
 const designRevisionInput = {
   request: '把订单页改成双列布局',
@@ -1245,7 +1281,7 @@ const initialProductPlanningWorkflow = {
 
 assert.deepEqual(planningWorkflowActivity(initialProductPlanningWorkflow), {
   status: 'running',
-  title: '正在生成产品规划',
+  title: '正在整理需求',
   detail: '正在梳理页面目标、核心操作、状态与产品验收标准。',
   intentLabel: undefined
 })
@@ -1261,7 +1297,7 @@ const firstProductPlanWithPendingArtifact = {
 
 assert.deepEqual(planningWorkflowActivity(firstProductPlanWithPendingArtifact), {
   status: 'running',
-  title: '正在生成产品规划',
+  title: '正在整理需求',
   detail: '正在梳理页面目标、核心操作、状态与产品验收标准。',
   intentLabel: undefined
 })
@@ -1382,9 +1418,9 @@ const regeneratingProductPlanWorkflow = {
 
 assert.deepEqual(planningWorkflowActivity(regeneratingProductPlanWorkflow), {
   status: 'running',
-  title: '正在重新生成产品规划',
+  title: '正在调整需求',
   detail: '页面操作和可见结果发生变化',
-  intentLabel: '产品规划层变更'
+  intentLabel: '产品行为调整'
 })
 
 const regeneratingUiDesignWorkflow = {
@@ -1462,7 +1498,7 @@ assert.deepEqual(planningWorkflowActivity(regeneratingTechnicalPlan), {
   status: 'running',
   title: '正在重新生成技术规划',
   detail: '正在根据本次设计变更更新技术实现方案。',
-  intentLabel: '产品规划层变更'
+  intentLabel: '产品行为调整'
 })
 
 const uiCardActionWithHistoricalIntent = {

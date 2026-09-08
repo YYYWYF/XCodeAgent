@@ -108,7 +108,7 @@ def _confirmation_payload(plan: dict[str, Any]) -> dict[str, Any]:
             AskUserQuestion(
                 header="需求文档确认",
                 question=(
-                    "需求分析与产品规划已合并为一份需求文档。请确认应用信息、用户角色、功能模块、"
+                    "需求内容已合并为一份完整需求文档。请确认应用信息、用户角色、功能模块、"
                     "页面目标、业务信息、核心操作、页面跳转和产品验收标准。"
                     "正确时回复“确认需求文档，继续”；需要调整时直接写出修改意见。"
                 ),
@@ -118,7 +118,7 @@ def _confirmation_payload(plan: dict[str, Any]) -> dict[str, Any]:
         ]
     )
     payload["mode"] = "requirement_document_confirmation"
-    payload["message"] = "请确认需求文档（含产品规划）后再进入 UI 设计。"
+    payload["message"] = "请确认完整需求文档后再进入 UI 设计。"
     payload["plan_summary"] = plan.get("app", {}).get("name", "未命名应用")
     return payload
 
@@ -281,7 +281,7 @@ def _operation_coverage_clarification(
                 }
                 for page in pages
             ]
-            question = f"需求已确认受限操作“{name}”，但产品规划未包含该操作；请选择它所属的页面。"
+            question = f"需求已确认受限操作“{name}”，但需求文档未包含该操作；请选择它所属的页面。"
         questions.append(
             {
                 "id": f"authorization_operation_rule_{rule_id}",

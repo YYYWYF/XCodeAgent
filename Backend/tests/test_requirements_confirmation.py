@@ -1282,6 +1282,55 @@ class RequirementsConfirmationTests(unittest.TestCase):
         analyzer.assert_called_once()
         self.assertEqual(result["status"], "requires_user_input")
 
+    def test_pending_requirement_spec_with_design_revision_cursor_is_regenerated(self) -> None:
+        """待确认草稿收到自由输入修订后必须重新分析，不能把旧草稿原样返回。"""
+
+        spec = create_requirement_spec("创建一个人名录入应用")
+        spec["confirmation_status"] = "pending_user_confirmation"
+        revised = {
+            **spec,
+            "user_roles": [
+                {
+                    "id": "entry_clerk",
+                    "name": "录入员",
+                    "description": "用户本人负责录入人名。",
+                    "isSystemRole": False,
+                    "isInitialAdminRole": False,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": revised,
+                    "clarification": clear_clarification(revised),
+                },
+            ) as analyzer:
+                result = requirements(
+                    {
+                        "request": "不是，录入员就是本人啊",
+                        "workspace": workspace,
+                        "workflow_scope": "application_planning",
+                        "application_planning_interaction": {},
+                        "design_change_submission": True,
+                        "design_change_generation_target": "requirements",
+                        "design_change_generation_request": "不是，录入员就是本人啊",
+                        "requirement_spec": spec,
+                        "timeline": [],
+                    }
+                )
+
+        analyzer.assert_called_once()
+        self.assertEqual(
+            analyzer.call_args.args[0],
+            "不是，录入员就是本人啊",
+        )
+        self.assertEqual(
+            [role["id"] for role in result["requirement_spec"]["user_roles"]],
+            ["entry_clerk"],
+        )
+
     def test_application_planning_recovery_text_cannot_confirm_requirement(self) -> None:
         """创建规划的恢复文案即使含确认关键词，也必须继续停在需求门禁。"""
 

@@ -121,7 +121,7 @@ export default function DocPanel({
               ) : (
                 <div className={cx('doc-panel-empty')}>
                   <Text strong>技术规划可视化暂不可用</Text>
-                  <Text type="secondary">未读取到 ProductPlan 或 TechnicalPlan 结构化数据</Text>
+                  <Text type="secondary">未读取到需求或技术规划的结构化数据</Text>
                 </div>
               )
             ) : requirementReady ? (

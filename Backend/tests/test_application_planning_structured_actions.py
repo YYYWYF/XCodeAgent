@@ -49,8 +49,8 @@ class ApplicationPlanningStructuredActionTests(unittest.TestCase):
                         "questions": [{"id": "confirmation"}],
                     }
                 },
-                "product_planning",
-                _submission("product_plan", "answer", answers={"answer": "继续"}),
+                "requirement_document",
+                _submission("requirement_document", "answer", answers={"answer": "继续"}),
             )
 
     def test_confirm_is_rejected_on_generation_error_card(self) -> None:
@@ -78,7 +78,7 @@ class ApplicationPlanningStructuredActionTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             _submission(
-                "product_plan",
+                "requirement_document",
                 "ui_action",
                 ui_action={"action": "skip"},
             )

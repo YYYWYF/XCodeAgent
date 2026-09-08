@@ -54,9 +54,13 @@ import {
 } from '../Welcome/planningWorkflowState'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
+import {
+  PRODUCT_CONVERSATION_PLACEHOLDER,
+  PRODUCT_CONVERSATION_RUNNING_HINT,
+  productConversationSendBlocked
+} from './components/ChatComposer/productConversation'
 import AcceptanceDecisionDock from './components/AcceptanceDecisionDock'
 import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
-import DesignChangeLockDock from './components/DesignChangeLockDock'
 import SessionExecutionLockDock from './components/SessionExecutionLockDock'
 import DocPanel from './components/DocPanel'
 import SourcePanel from './components/SourcePanel'
@@ -248,7 +252,6 @@ type Props = {
     requirementSpecFeedback?: string,
     designChangeRequest?: string
   ) => Promise<void>
-  onStopPlanning: () => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
@@ -287,13 +290,6 @@ type ActiveDetailTarget =
   | { type: 'page'; pageId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
   | { type: 'entity'; entityId: string; label: string }
-
-const ACTIVE_DESIGN_WORKFLOW_STATUSES = new Set([
-  'running',
-  'requires_user_input',
-  'paused',
-  'stopping'
-])
 
 type DesignDocArtifactKey = PlanningArtifactRecoveryKey
 
@@ -794,7 +790,6 @@ export default function AiChatPanel({
   previewLaunchLoading,
   onReturnWelcome,
   onSubmitPlanningClarification,
-  onStopPlanning,
   onStartDesignStageRevision,
   onRevisionContinuationHandlerChange,
   onThemeChange,
@@ -921,7 +916,7 @@ export default function AiChatPanel({
   const designRevisionStartInteractionRef = useRef('')
   const formalRevisionSessionIdentitiesRef = useRef<Record<string, SessionIdentity>>({})
   const formalRevisionSourcePhasesRef = useRef<Record<string, WorkbenchPhase>>({})
-  // 二次修改：待处理的 continuation + 设计变更解锁标记。两者语义相关，合并减少 state 数量。
+  // 二次修改：保存待工作台接管的 continuation。
   const [revisionState, setRevisionState] = useState<{
     pendingContinuation: {
       continuation: WorkflowRevisionContinuation
@@ -930,19 +925,12 @@ export default function AiChatPanel({
       sourceIdentity: SessionIdentity
       targetIdentity: SessionIdentity
     } | undefined
-    designChangeUnlocked: boolean
-  }>({ pendingContinuation: undefined, designChangeUnlocked: false })
+  }>({ pendingContinuation: undefined })
   // 兼容别名：保持下游调用点不变。
   const pendingRevisionContinuation = revisionState.pendingContinuation
-  const designChangeUnlocked = revisionState.designChangeUnlocked
   const setPendingRevisionContinuation = useCallback(
     (pendingContinuation: typeof revisionState.pendingContinuation) =>
       setRevisionState((s) => ({ ...s, pendingContinuation })),
-    []
-  )
-  const setDesignChangeUnlocked = useCallback(
-    (designChangeUnlocked: boolean) =>
-      setRevisionState((s) => ({ ...s, designChangeUnlocked })),
     []
   )
   // 同一 change 的 handoff 在当前进程只执行一次；失败后删除，允许用户显式重试。
@@ -1005,11 +993,8 @@ export default function AiChatPanel({
     updateSessionExecutionStatus
   } = useSessionRuntimeStore()
 
-  // 切换应用或规划线程时回到主流程锁定态，避免把上一个规划的自由变更模式带入新会话。
-  // 同时清空验收会话 key 和二次修改去重 ref——三者都在 application.id 变化时 reset，
-  // 合并为一个 effect 减少数量。各 reset 操作无顺序依赖（都是独立赋值）。
+  // 切换应用或规划线程时清空验收会话 key 和二次修改去重 ref。
   useEffect(() => {
-    setDesignChangeUnlocked(false)
     setAcceptanceConversationSessionKey('')
     designRevisionStartInteractionRef.current = ''
     formalRevisionSessionIdentitiesRef.current = {}
@@ -1525,13 +1510,13 @@ export default function AiChatPanel({
 
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
-  const planningWorkflowStatus = String(planningWorkflow?.summary?.status || '')
+  const planningWorkflowStatus = String(planningViewWorkflow?.summary?.status || '')
   // 模板就绪后创建规划已经结束；即使界面暂留在产品阶段等待“进入开发”，底部也应恢复普通自由对话。
-  const designChangeWorkflowAvailable = isApplicationPlanningPhase && !lifecycleReadyForWorkbench
-  const designWorkflowActive =
-    designChangeWorkflowAvailable &&
-    (!planningWorkflow || ACTIVE_DESIGN_WORKFLOW_STATUSES.has(planningWorkflowStatus))
-  const designChangeInputLocked = designWorkflowActive && !designChangeUnlocked
+  const designChangeWorkflowAvailable = isDesignPhase && !lifecycleReadyForWorkbench
+  const productConversationSendDisabled = productConversationSendBlocked(
+    designChangeWorkflowAvailable,
+    !planningViewWorkflow || planningPhaseRunning || planningWorkflowStatus === 'stopping'
+  )
   const activePreviewPath = activePageOption?.path || '/'
 
   /** 接收实时 launch 结果并复用手动预览入口打开右侧面板。 */
@@ -4177,15 +4162,26 @@ export default function AiChatPanel({
   /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
   const handleDesignChangeSend = async (): Promise<void> => {
     const trimmed = draft.trim()
-    if (!trimmed || !planningWorkflow) return
+    if (
+      !trimmed ||
+      !planningViewWorkflow ||
+      productConversationSendDisabled ||
+      workflowInputLocked
+    ) {
+      return
+    }
     // 设计阶段二次修改同样不能沿用开发阶段页面的临时生成状态。
     setGeneratingDetailTargetKey('')
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
     appendPlanningUserMessage({ design_change_request: trimmed })
-    void onSubmitPlanningClarification(planningWorkflow, {}, undefined, undefined, trimmed).catch(
-      () => undefined
-    )
+    void onSubmitPlanningClarification(
+      planningViewWorkflow,
+      {},
+      undefined,
+      undefined,
+      trimmed
+    ).catch(() => undefined)
     setDraftByKey(draftKey, '')
   }
 
@@ -4431,14 +4427,6 @@ export default function AiChatPanel({
                 workspaceBusy={workflowInputLocked}
                 workspaceRoot={workspaceRoot}
               />
-            ) : designChangeInputLocked ? (
-              <DesignChangeLockDock
-                disabled={loading || workflowInputLocked}
-                onStart={async () => {
-                  await onStopPlanning()
-                  setDesignChangeUnlocked(true)
-                }}
-              />
             ) : (
               <>
                 <ChatComposer
@@ -4450,7 +4438,18 @@ export default function AiChatPanel({
                   onDraftChange={(value) => setDraftByKey(draftKey, value)}
                   onInspectedElementContextClear={() => setInspectedElementContext(undefined)}
                   onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
-                  // 设计阶段仍可修订时，专用输入先做设计意图识别；模板就绪后恢复普通 Coordinator 对话。
+                  placeholder={
+                    designChangeWorkflowAvailable
+                      ? PRODUCT_CONVERSATION_PLACEHOLDER
+                      : undefined
+                  }
+                  sendDisabled={productConversationSendDisabled}
+                  sendDisabledHint={
+                    productConversationSendDisabled
+                      ? PRODUCT_CONVERSATION_RUNNING_HINT
+                      : undefined
+                  }
+                  // 产品阶段自由输入先做语义识别；模板就绪后恢复普通 Coordinator 对话。
                   // 当前节点的澄清和确认只能通过上方结构化卡片提交，不能劫持普通输入语义。
                   onSend={
                     designChangeWorkflowAvailable ? handleDesignChangeSend : handleConversationSend

@@ -39,6 +39,10 @@ import {
   retainApplicationPlanningInterrupt
 } from './planningWorkflowState'
 import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
+import {
+  buildProductConversationInteraction,
+  productConversationSubmissionError
+} from '../AiChatPanel/components/ChatComposer/productConversation'
 import './ApplicationPagePlanningModal.less'
 
 // 绘制带轻微弧度的单向返回箭头，避免视觉上接近刷新图标。
@@ -129,7 +133,7 @@ const phaseProgress: Record<
     active: 30,
     complete: 40,
     message: '正在生成页面目标、核心操作与产品验收标准…',
-    title: '正在生成产品规划'
+    title: '正在整理需求'
   },
   ui_confirmation: {
     active: 52,
@@ -246,13 +250,14 @@ function buildPlanningInteraction(
   }
 
   if (designChangeRequest?.trim()) {
-    return {
-      gateId,
-      artifact,
-      artifactRevision,
-      action: 'design_change',
-      request: designChangeRequest.trim()
-    }
+    return buildProductConversationInteraction(
+      {
+        gateId,
+        artifact,
+        artifactRevision
+      },
+      designChangeRequest
+    )
   }
 
   const explicitAction = answers.__applicationPlanningAction
@@ -546,6 +551,9 @@ export default function ApplicationPagePlanningModal({
     // 界面卡在生成中。轮询只是重读 ui-designs.json，等当前 run 自然结束即可。
     const previousRunActive = planningRunningRef.current || session.hasActiveRun()
     if (previousRunActive && !interaction && !designRevision) return
+    if (previousRunActive && interaction?.action === 'design_change') {
+      throw new Error('当前设计正在生成，完成后即可发送新的调整。')
+    }
     const runToken = planningRunTokenRef.current + 1
     planningRunTokenRef.current = runToken
     planningRunningRef.current = true
@@ -555,7 +563,8 @@ export default function ApplicationPagePlanningModal({
     setStreamingContent('')
     let previousRunStopFailed = false
     try {
-      // 新交互必须等服务端确认旧任务退出；停止失败时禁止并发发送同 thread 请求。
+      // 结构化卡片和正式 revision 沿用原取消恢复协议；产品自由输入已在上方直接拒绝，
+      // 不得为了“随时发送”打断同一 planning thread 的活动写事务。
       if (previousRunActive) {
         try {
           await session.stop()
@@ -805,7 +814,11 @@ export default function ApplicationPagePlanningModal({
         interaction
       )
     } catch (reason) {
-      setError(formatError(reason, designChangeRequest ? '设计变更提交失败' : '创建规划确认失败'))
+      setError(
+        designChangeRequest
+          ? productConversationSubmissionError(reason)
+          : formatError(reason, '创建规划确认失败')
+      )
       throw reason
     }
   }

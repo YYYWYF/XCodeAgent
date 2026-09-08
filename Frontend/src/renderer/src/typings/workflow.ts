@@ -646,7 +646,7 @@ export type WorkflowBuildTaskPlanConfirmation = {
 
 export type ApplicationPlanningInteraction = {
   gateId: string
-  artifact: 'requirement_spec' | 'product_plan' | 'ui_designs' | 'technical_plan'
+  artifact: 'requirement_spec' | 'requirement_document' | 'ui_designs' | 'technical_plan'
   artifactRevision: string
   action: ApplicationPlanningAction
   request?: string
