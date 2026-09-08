@@ -47,6 +47,7 @@ from app.workspace.run_lease import workspace_run_leases
 
 
 APPLICATION_DELETION_EVENT_NAME = "application-deletion"
+_PREPARED_DELETIONS: dict[str, str] = {}
 
 
 class ApplicationDeletionRequest(BaseModel):
@@ -54,7 +55,7 @@ class ApplicationDeletionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    action: Literal["prepare"]
+    action: Literal["prepare", "complete"]
     application_id: str = Field(alias="applicationId", min_length=1, max_length=256)
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
 
@@ -67,7 +68,7 @@ def application_deletion_capabilities() -> dict[str, Any]:
         "endpoint": "/application-deletion/run",
         "transport": "ag-ui-sse",
         "actionField": "forwardedProps.applicationDeletion",
-        "actions": ["prepare"],
+        "actions": ["prepare", "complete"],
         "customEventName": APPLICATION_DELETION_EVENT_NAME,
         "stateSnapshotKey": "applicationDeletion",
         "preservedSharedResources": [
@@ -108,6 +109,11 @@ def build_application_deletion_ag_ui_stream(
         """复用统一销毁准备逻辑并保持原有 AG-UI 成功结果。"""
 
         request = ApplicationDeletionRequest.model_validate(raw_request)
+        if request.action == "complete":
+            return AgUiActionResult(
+                data=complete_application_deletion(request),
+                message="应用删除已完成，原路径可以创建新应用。",
+            )
         report_data = await prepare_application_deletion(request, report=report)
         return AgUiActionResult(data=report_data, message="应用已停止，可以安全删除。")
 
@@ -134,6 +140,8 @@ async def prepare_application_deletion(
 ) -> dict[str, Any]:
     """按可逆停机和不可逆持久化释放两阶段准备应用目录删除。"""
 
+    if request.action != "prepare":
+        raise ValueError("删除准备入口仅接受 prepare 动作。")
     workspace = _validated_managed_workspace(
         request.workspace_root,
         application_id=request.application_id,
@@ -278,7 +286,35 @@ async def prepare_application_deletion(
                 data={"readyForTrash": True},
             )
         )
+    _PREPARED_DELETIONS[workspace_text] = request.application_id
     return report_data
+
+
+def complete_application_deletion(request: ApplicationDeletionRequest) -> dict[str, Any]:
+    """确认旧目录已移走后解除四类栅栏，移动失败或身份不符时保持封锁。"""
+
+    candidate = Path(request.workspace_root).expanduser()
+    workspace = candidate.resolve(strict=False)
+    workspace_text = str(workspace)
+    if candidate.is_symlink() or workspace.exists():
+        raise ValueError("原应用目录仍然存在，不能完成删除或解除运行封锁。")
+    prepared_application = _PREPARED_DELETIONS.get(workspace_text)
+    if prepared_application is not None and prepared_application != request.application_id:
+        raise ValueError("应用标识与已准备的删除事务不匹配。")
+    if prepared_application is None and workflow_run_registry.is_workspace_deleting(workspace_text):
+        raise ValueError("应用删除尚未完成停机准备，不能解除运行封锁。")
+    # 同步完成收尾；解除后旧路径可由新的应用使用，重复确认也保持幂等。
+    end_application_template_deletion(workspace)
+    workspace_process_registry.end_workspace_deletion(workspace)
+    get_ui_design_generation_pool().end_workspace_deletion(workspace_text)
+    workflow_run_registry.end_workspace_deletion(workspace_text)
+    _PREPARED_DELETIONS.pop(workspace_text, None)
+    return {
+        "action": "complete",
+        "applicationId": request.application_id,
+        "workspaceRoot": workspace_text,
+        "deletionCompleted": True,
+    }
 
 
 def _validated_managed_workspace(workspace_root: str, *, application_id: str) -> Path:

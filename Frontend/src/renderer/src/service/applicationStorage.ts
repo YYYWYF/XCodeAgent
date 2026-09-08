@@ -14,10 +14,12 @@ import {
   readChatSession,
 } from './chatSessions';
 import { clearApplicationWorkbenchState } from '../workbenchPhase';
+import { completeApplicationDeletion } from './applicationDeletion';
 
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
 export const APPLICATIONS_CHANGED_EVENT = 'xcode-agent-applications-changed';
+const pendingProjectDeletionCompletions = new Set<string>();
 
 // 判断创建规划是否已经完成；工作台内部运行状态不得影响该结果。
 export function isApplicationCreationComplete(lifecycle?: ApplicationLifecycle): boolean {
@@ -32,12 +34,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function cacheApplications(applications: ApplicationConfig[]) {
+// 更新当前窗口使用的应用索引缓存。
+function cacheApplications(applications: ApplicationConfig[]): void {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(applications));
 }
 
 // 通知当前渲染窗口重新校验依赖应用索引的派生状态。
-function notifyApplicationsChanged() {
+function notifyApplicationsChanged(): void {
   window.dispatchEvent(new Event(APPLICATIONS_CHANGED_EVENT));
 }
 
@@ -47,7 +50,8 @@ export function subscribeApplicationsChanged(listener: () => void): () => void {
   return () => window.removeEventListener(APPLICATIONS_CHANGED_EVENT, listener);
 }
 
-export function loadCachedApplications() {
+// 读取本地应用缓存，缺失或损坏时返回空列表。
+export function loadCachedApplications(): ApplicationConfig[] {
   try {
     const rawValue = window.localStorage.getItem(STORAGE_KEY);
     if (!rawValue) return [];
@@ -57,7 +61,8 @@ export function loadCachedApplications() {
   }
 }
 
-export async function loadStoredApplications() {
+// 读取应用索引并同步窗口缓存。
+export async function loadStoredApplications(): Promise<ApplicationConfig[]> {
   const electronApplications = window.xcodeAgent?.applications;
 
   if (electronApplications) {
@@ -84,7 +89,8 @@ export async function loadStoredApplications() {
   }
 }
 
-export async function saveStoredApplications(applications: ApplicationConfig[]) {
+// 保存应用索引并通知依赖该索引的界面。
+export async function saveStoredApplications(applications: ApplicationConfig[]): Promise<void> {
   cacheApplications(applications);
 
   const electronApplications = window.xcodeAgent?.applications;
@@ -114,7 +120,7 @@ export async function saveStoredApplications(applications: ApplicationConfig[]) 
 }
 
 // 从首页应用索引中移除指定项目，不会删除工作区中的任何文件。
-export async function removeStoredApplication(applicationId: string) {
+export async function removeStoredApplication(applicationId: string): Promise<void> {
   const applications = await loadStoredApplications();
   await saveStoredApplications(
     applications.filter((application) => application.id !== applicationId)
@@ -122,17 +128,24 @@ export async function removeStoredApplication(applicationId: string) {
 }
 
 // 请求桌面主进程先完成后端停机门禁，再删除受 XCodeAgent 管理的真实项目目录。
-export async function deleteStoredProject(applicationId: string, workspaceRoot: string) {
+export async function deleteStoredProject(applicationId: string, workspaceRoot: string): Promise<void> {
   const electronApplications = window.xcodeAgent?.applications;
   if (!electronApplications?.deleteProject) {
     throw new Error('当前环境不支持删除本地项目目录');
   }
-  await electronApplications.deleteProject({ applicationId, workspaceRoot });
+  const deletionKey = JSON.stringify([applicationId, workspaceRoot]);
+  // 回收站已成功但收尾请求失败时，只重试幂等确认，不再移动一次已消失的目录。
+  if (!pendingProjectDeletionCompletions.has(deletionKey)) {
+    await electronApplications.deleteProject({ applicationId, workspaceRoot });
+    pendingProjectDeletionCompletions.add(deletionKey);
+  }
+  await completeApplicationDeletion(applicationId, workspaceRoot);
+  pendingProjectDeletionCompletions.delete(deletionKey);
   clearWorkspaceChatSessionCache(workspaceRoot);
 }
 
 // 清理项目删除后仍可能保留在 Chromium 存储中的应用级恢复键和表单草稿。
-export async function clearDeletedApplicationClientState(application: ApplicationConfig) {
+export async function clearDeletedApplicationClientState(application: ApplicationConfig): Promise<void> {
   const workspaceRoot = application.workspaceRoot?.trim()
   if (!workspaceRoot) return
   const summaries = (

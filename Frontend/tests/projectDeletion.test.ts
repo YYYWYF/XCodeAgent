@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { deleteStoredProject } from '../src/renderer/src/service/applicationStorage'
 import {
   lstatIfPresent,
   movePathToTrashIfPresent,
@@ -12,6 +13,78 @@ import {
   sessionRuntimeKey,
   sessionRuntimeKeyBelongsToWorkspace
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
+
+/** 验证收尾仅发生在系统回收站成功后，后端失败时也不能误报删除成功。 */
+for (const outcome of ['success', 'trash-failed', 'complete-failed'] as const) {
+  test(`应用删除按移入回收站、AG-UI 收尾、缓存清理顺序执行：${outcome}`, async () => {
+    const originalWindow = globalThis.window
+    const originalFetch = globalThis.fetch
+    const calls: string[] = []
+    let completionFails = outcome === 'complete-failed'
+    Object.assign(globalThis, {
+      window: {
+        xcodeAgent: {
+          agentBaseUrl: 'http://localhost:8000',
+          applications: {
+            deleteProject: async () => {
+              calls.push('trash')
+              if (outcome === 'trash-failed') throw new Error('trash failed')
+              return { ok: true }
+            }
+          }
+        },
+        localStorage: { removeItem: () => calls.push('clear-cache') }
+      },
+      fetch: async (url: string, init: RequestInit) => {
+        calls.push('complete')
+        assert.equal(url, 'http://localhost:8000/application-deletion/run')
+        const request = JSON.parse(String(init.body))
+        assert.deepEqual(request.forwardedProps.applicationDeletion, {
+          action: 'complete',
+          applicationId: 'old-app',
+          workspaceRoot: '/projects/same-name'
+        })
+        const result = {
+          schemaVersion: 1,
+          action: 'complete',
+          applicationId: 'old-app',
+          workspaceRoot: '/projects/same-name',
+          status: completionFails ? 'failed' : 'completed',
+          deletionCompleted: !completionFails,
+          error: completionFails ? { message: 'complete failed' } : undefined
+        }
+        const events = [
+          { type: 'RUN_STARTED', threadId: request.threadId, runId: request.runId },
+          { type: 'CUSTOM', name: 'application-deletion', value: result },
+          { type: 'STATE_SNAPSHOT', snapshot: { applicationDeletion: result } },
+          { type: 'RUN_FINISHED', threadId: request.threadId, runId: request.runId }
+        ]
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+          headers: { 'Content-Type': 'text/event-stream' }
+        })
+      }
+    })
+    try {
+      if (outcome === 'success') {
+        await deleteStoredProject('old-app', '/projects/same-name')
+        assert.deepEqual(calls, ['trash', 'complete', 'clear-cache', 'clear-cache'])
+      } else {
+        await assert.rejects(
+          deleteStoredProject('old-app', '/projects/same-name'),
+          outcome === 'trash-failed' ? /trash failed/ : /complete failed/
+        )
+        assert.deepEqual(calls, outcome === 'trash-failed' ? ['trash'] : ['trash', 'complete'])
+        if (outcome === 'complete-failed') {
+          completionFails = false
+          await deleteStoredProject('old-app', '/projects/same-name')
+          assert.deepEqual(calls, ['trash', 'complete', 'complete', 'clear-cache', 'clear-cache'])
+        }
+      }
+    } finally {
+      Object.assign(globalThis, { window: originalWindow, fetch: originalFetch })
+    }
+  })
+}
 
 /** 验证已不存在的路径可以重复执行删除而不产生错误。 */
 test('删除不存在的目录按幂等成功处理', async () => {

@@ -62,6 +62,8 @@ Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase
 
 停机后，后端按工作区正文、metadata 和已知 lifecycle thread 清理共享 SQLite 中的 checkpoint 行；工作区本地 checkpointer 还要关闭连接并逐项驱逐主 Workflow、创建规划和 Conversation Graph 缓存。随后释放 workspace lease、规划恢复锁和生命周期/模板锁。Electron 再终止仍在下载模板的 `git clone`，将环境级会话目录和整个受管项目目录依次移入系统回收站；因此项目源码以及 `.xcodeagent` 下的 lifecycle、正式文档、草稿、运行日志、报告、cache、UI 设计稿、模板 manifest、checkpoint SQLite/WAL/SHM 都随项目一起删除。最后才从应用索引移除条目，并清理 Chromium 中按应用、工作区、thread 和 change-set 保存的恢复键。
 
+Electron 的移动操作成功后，Renderer 通过 `/application-deletion/run` 的 `complete` 动作提交收尾；后端核对已准备的应用身份，并确认原目录已经不存在，随后解除 Workflow、命令进程、模板生成、UI 设计生成四类删除栅栏，再返回 `deletionCompleted=true`。前端收到确认后才继续清理缓存并移除首页索引。同一路径的新应用因此可以正常创建生命周期和启动规划。目录仍在、应用身份不匹配或停机未完成时禁止解锁；重复收尾保持幂等，已重建目录不会被迟到的旧收尾触碰。该动作沿用完整 AG-UI 结果、错误和快照，能力元数据由 `/health` 发布。
+
 销毁默认不触碰平台级数据库加密私钥、用户 Skills、AGENTS.md、登录态、全局设置、外部 MySQL 数据、远程 trace 或 Git 远端。首页“仅移除索引”仍是另一项操作：它不停止运行、不删除会话，也不移动任何项目文件。
 
 示意快照（省略无关字段）：
