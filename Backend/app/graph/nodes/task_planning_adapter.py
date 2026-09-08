@@ -140,6 +140,10 @@ async def _run_async_workflow_planning_adapter(
 
     action_payload = state.get("build_task_plan_confirmation")
     if isinstance(action_payload, dict) and action_payload.get("action"):
+        # 只有精确 confirm 才能进入 Confirm authority；任何其它动作都 fail closed，
+        # 绝不调用 confirm_service、绝不写 Formal，并保留当前 Pending 供重新确认。
+        if action_payload.get("action") != "confirm":
+            return _reject_non_confirm_action(state, action_payload)
         return await _run_confirm_branch(
             state,
             action_payload,
@@ -186,6 +190,31 @@ async def _run_confirm_branch(
         current_inputs=context.inputs.sequential_inputs(),
     )
     return _project_confirm_result(result, state=state, context=context)
+
+
+def _reject_non_confirm_action(
+    state: ProjectState, action_payload: dict[str, Any]
+) -> dict[str, Any]:
+    """非 confirm 的 DAG 动作必须 fail closed：不调 Confirm、不写 Formal。
+
+    复用 stale 投影语义保留当前 Pending 与 DraftIdentity，让用户能重新确认；
+    任何异常动作值都不会被当作 Confirm 处理。
+    """
+
+    context = _assemble_planning_context(state)
+    if isinstance(context, dict):
+        return context
+    action = str(action_payload.get("action") or "")
+    return _stale_confirm_result(
+        ConfirmPromotionResult(
+            status="stale_draft",
+            errors=(
+                f"build_task_plan_confirmation.action 只支持 confirm，收到 {action!r}。",
+            ),
+        ),
+        state=state,
+        context=context,
+    )
 
 
 def _assemble_planning_context(

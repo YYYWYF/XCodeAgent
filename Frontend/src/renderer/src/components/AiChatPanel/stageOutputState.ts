@@ -228,13 +228,14 @@ export function currentDagConfirmationDraftIdentity(
   return { planningRunId, draftDigest }
 }
 
-/** 把 Backend 签发的 DraftIdentity 绑定到 DAG 动作，供 Confirm/Abandon 精确提交。 */
+/** 把 Backend 签发的 DraftIdentity 绑定到 DAG 动作，供 Confirm/Abandon 精确提交。
+ *  缺少服务端身份时返回 undefined，调用方必须 fail closed，不得提交无身份请求。 */
 export function bindDagConfirmationDraftIdentity(
   workflow: WorkflowRunPayload | undefined,
   action: WorkflowBuildTaskPlanConfirmation
-): WorkflowBuildTaskPlanConfirmation {
+): WorkflowBuildTaskPlanConfirmation | undefined {
   const identity = currentDagConfirmationDraftIdentity(workflow)
-  return identity ? { ...action, ...identity } : action
+  return identity ? { ...action, ...identity } : undefined
 }
 
 /** 读取当前 DAG 确认卡的结构化错误，供右侧交互卡复用原始反馈。 */

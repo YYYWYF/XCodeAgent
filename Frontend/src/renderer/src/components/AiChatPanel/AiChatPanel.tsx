@@ -114,7 +114,6 @@ import { workflowDevelopmentContinuation } from './developmentContinuation'
 import {
   bindDagConfirmationDraftIdentity,
   currentDagConfirmationErrors,
-  currentDagConfirmationDraftIdentity,
   currentDagConfirmationPlan,
   currentDagConfirmationTargetReview,
   latestDagGenerationSnapshot,
@@ -3807,17 +3806,16 @@ export default function AiChatPanel({
     try {
       setDagConfirmationSubmissionError('')
       const identity = await loadSessionIdentity(pendingDagSession.id)
-      // Confirm 与 Abandon 都必须精确绑定服务端 DraftIdentity；缺失时不能提交
-      // 无身份的 Graph 请求，否则 Backend 只会按 stale 拒绝。
-      const draftIdentity = currentDagConfirmationDraftIdentity(pendingDagWorkflow)
-      if (!draftIdentity) {
-        setDagConfirmationSubmissionError('当前任务规划缺少服务端 DraftIdentity，请刷新后重试。')
-        return
-      }
+      // Confirm 与 Abandon 都必须精确绑定服务端 DraftIdentity；缺失时 fail closed，
+      // 绝不提交无身份的 Graph 请求，否则 Backend 只会按 stale 拒绝。
       const identityBoundAction = bindDagConfirmationDraftIdentity(
         pendingDagWorkflow,
         action
       )
+      if (!identityBoundAction) {
+        setDagConfirmationSubmissionError('当前任务规划缺少服务端 DraftIdentity，请刷新后重试。')
+        return
+      }
       const submitted = await handleSubmitClarification(
         pendingDagWorkflow,
         { build_task_plan_confirmation: identityBoundAction },

@@ -620,7 +620,7 @@ test('Confirm 动作绑定 Backend DraftIdentity 供 Graph 精确确认', () => 
   })
 })
 
-test('Confirm 动作缺少服务端 DraftIdentity 时保持原样', () => {
+test('Confirm/Abandon 动作缺少服务端 DraftIdentity 时 fail closed', () => {
   const workflow = {
     runId: 'workflow-confirm',
     threadId: 'thread-confirm',
@@ -630,12 +630,36 @@ test('Confirm 动作缺少服务端 DraftIdentity 时保持原样', () => {
       clarification: { mode: 'build_task_plan_confirmation' }
     }
   } as unknown as WorkflowRunPayload
+  const actions = [
+    { mode: 'build_task_plan_confirmation', action: 'confirm' },
+    { mode: 'build_task_plan_confirmation', action: 'abandon' }
+  ] as const
+
+  for (const action of actions) {
+    assert.equal(bindDagConfirmationDraftIdentity(workflow, action), undefined)
+  }
+})
+
+test('DraftIdentity 不完整时 Confirm/Abandon 同样 fail closed', () => {
+  const workflow = {
+    runId: 'workflow-incomplete',
+    threadId: 'thread-incomplete',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      clarification: {
+        mode: 'build_task_plan_confirmation',
+        draftIdentity: { planningRunId: 'planning-incomplete', draftDigest: 'not-a-digest' }
+      }
+    }
+  } as unknown as WorkflowRunPayload
   const action = {
     mode: 'build_task_plan_confirmation',
     action: 'confirm'
   } as const
 
-  assert.deepEqual(bindDagConfirmationDraftIdentity(workflow, action), action)
+  assert.equal(currentDagConfirmationDraftIdentity(workflow), undefined)
+  assert.equal(bindDagConfirmationDraftIdentity(workflow, action), undefined)
 })
 
 test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控制入口', () => {

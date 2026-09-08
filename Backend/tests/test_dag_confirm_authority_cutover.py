@@ -10,6 +10,9 @@ from unittest.mock import Mock, patch
 
 from langgraph.checkpoint.memory import InMemorySaver
 
+from app.graph.nodes.task_planning_adapter import (
+    create_async_workflow_planning_adapter,
+)
 from app.graph.workflow import build_graph
 from app.protocols.workflow.request import workflow_run_inputs
 from app.services.unit_generation_contracts import UnitGenerationAttemptResult
@@ -218,6 +221,45 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["planning_run_id"], identity_b["planning_run_id"])
         self.assertEqual(result["draft_digest"], identity_b["draft_digest"])
+        self.assertTrue(result["build_task_plan_confirmation"]["errors"])
+
+    async def test_non_confirm_action_never_reaches_confirm_service(self) -> None:
+        """非 confirm 的 build_task_plan_confirmation 必须 fail closed，不提升 Formal。"""
+
+        graph = build_graph(checkpointer=InMemorySaver())
+        _, identity = await self._generate_pending(graph, "thread-non-confirm")
+        pending_path = build_task_plan_pending_json_path(self._state())
+        pending_bytes = pending_path.read_bytes()
+        confirm_spy = Mock(
+            side_effect=AssertionError("非 confirm action 不得调用 confirm_service")
+        )
+        adapter = create_async_workflow_planning_adapter(confirm_service=confirm_spy)
+        guarded_graph = build_graph(
+            checkpointer=InMemorySaver(),
+            prepare_build_tasks_node=adapter,
+        )
+
+        with patch(
+            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            return_value=self.readiness,
+        ):
+            result = await guarded_graph.ainvoke(
+                self._state(
+                    build_task_plan_confirmation={
+                        "mode": "build_task_plan_confirmation",
+                        "action": "abandon",
+                        "planning_run_id": identity["planning_run_id"],
+                        "draft_digest": identity["draft_digest"],
+                    }
+                ),
+                config={"configurable": {"thread_id": "thread-non-confirm"}},
+            )
+
+        # 非法动作 fail closed：Confirm authority 零调用、Formal 未写入、Pending 原样保留。
+        confirm_spy.assert_not_called()
+        self.assertFalse(build_task_plan_json_path(self._state()).exists())
+        self.assertEqual(pending_path.read_bytes(), pending_bytes)
+        self.assertEqual(result["status"], "requires_user_input")
         self.assertTrue(result["build_task_plan_confirmation"]["errors"])
 
     def test_request_parser_forwards_exact_draft_identity(self) -> None:
