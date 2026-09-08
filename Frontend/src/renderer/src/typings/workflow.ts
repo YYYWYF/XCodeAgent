@@ -57,6 +57,7 @@ export type WorkflowSummary = {
   unitTestBuildCodeChanges?: WorkspaceCodeChangeSet
   unitTestBuildDiffCaptured?: boolean
   unitTestRepairTaskPlan?: Record<string, unknown>
+  unitTestRepairAttempts?: Record<string, number>
   unitTestRepairIteration?: number
   unitTestMaxRepairIterations?: number
   repairReturnNode?: 'unit_test' | 'integration_test' | string

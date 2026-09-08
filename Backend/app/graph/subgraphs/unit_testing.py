@@ -21,6 +21,9 @@ from app.graph.subgraphs.testing import (
     validate_generated_unit_tests,
 )
 from app.services.test_validation import evaluate_quality_gate
+from app.services.unit_test_repair_budget import (
+    UNIT_TEST_REPAIRS_PER_CHECK, failed_check_repair_iteration,
+)
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.spec_documents import workflow_artifact_root
 from app.workspace.test_documents import write_test_report_json
@@ -72,10 +75,8 @@ def _unit_repair_state(state: ProjectState) -> dict[str, Any]:
         "revision_requests": state.get("revision_requests", []),
         "repair_task_plan": state.get("unit_test_repair_task_plan", {}),
         "repair_task_plan_path": repair_plan_path,
-        "repair_iteration": int(state.get("unit_test_repair_iteration", 0) or 0),
-        "max_repair_iterations": int(
-            state.get("unit_test_max_repair_iterations", 3) or 3
-        ),
+        "repair_iteration": failed_check_repair_iteration(state),
+        "max_repair_iterations": UNIT_TEST_REPAIRS_PER_CHECK,
         "integration_repair_enabled": state.get("unit_test_repair_enabled", True),
         "integration_next_action": state.get("unit_test_next_action", ""),
         "repair_return_node": "unit_test",
@@ -106,12 +107,10 @@ def unit_repair_planning(state: ProjectState) -> dict[str, Any]:
         "status": status,
         "unit_test_repair_task_plan": result.get("repair_task_plan", {}),
         "unit_test_repair_task_plan_path": result.get("repair_task_plan_path"),
-        "unit_test_repair_iteration": result.get(
-            "repair_iteration", state.get("unit_test_repair_iteration", 0)
-        ),
-        "unit_test_max_repair_iterations": result.get(
-            "max_repair_iterations", state.get("unit_test_max_repair_iterations", 3)
-        ),
+        "unit_test_repair_iteration": state.get("unit_test_repair_iteration", 0),
+        "unit_test_max_repair_iterations": UNIT_TEST_REPAIRS_PER_CHECK,
+        "unit_test_repair_attempts": state.get("unit_test_repair_attempts", {}),
+        "unit_test_repair_charged_checks": [],
         "unit_test_next_action": next_action,
         "unit_test_gate_passed": bool(
             state.get("unit_test_quality_gate_passed", False)
@@ -238,10 +237,8 @@ def unit_test(state: ProjectState) -> dict[str, Any]:
         "repair_task_plan": state.get("unit_test_repair_task_plan", {}),
         "repair_task_plan_path": state.get("unit_test_repair_task_plan_path"),
         "repair_tasks": state.get("repair_tasks", []),
-        "repair_iteration": int(state.get("unit_test_repair_iteration", 0) or 0),
-        "max_repair_iterations": int(
-            state.get("unit_test_max_repair_iterations", 3) or 3
-        ),
+        "repair_iteration": failed_check_repair_iteration(state),
+        "max_repair_iterations": UNIT_TEST_REPAIRS_PER_CHECK,
         "integration_repair_enabled": state.get("unit_test_repair_enabled", True),
         "integration_next_action": "",
         "clarification": {},
@@ -340,6 +337,8 @@ def unit_test(state: ProjectState) -> dict[str, Any]:
     ]
     all_changes = merge_code_change_sets(all_change_sets) or stable_changes
     return {
+        # 本轮单测无论调试、续接或修复，都必须重新等待进入测试阶段的确认。
+        "test_phase_confirmation": {},
         "phase": "unit_test",
         "status": status,
         "clarification": clarification if waiting else {},
@@ -374,9 +373,9 @@ def unit_test(state: ProjectState) -> dict[str, Any]:
         "unit_test_repair_iteration": result.get(
             "unit_test_repair_iteration", state.get("unit_test_repair_iteration", 0)
         ),
-        "unit_test_max_repair_iterations": result.get(
-            "unit_test_max_repair_iterations", state.get("unit_test_max_repair_iterations", 3)
-        ),
+        "unit_test_max_repair_iterations": UNIT_TEST_REPAIRS_PER_CHECK,
+        "unit_test_repair_attempts": result.get("unit_test_repair_attempts", {}),
+        "unit_test_repair_charged_checks": result.get("unit_test_repair_charged_checks", []),
         "repair_tasks": result.get("repair_tasks", []),
         "small_task_tasks": result.get("repair_tasks", []),
         "small_task_results": state.get("small_task_results", []),

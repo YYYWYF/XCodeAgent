@@ -172,6 +172,8 @@ class ProjectState(TypedDict, total=False):
     unit_test_repair_task_plan_path: str
     unit_test_repair_iteration: int
     unit_test_max_repair_iterations: int
+    unit_test_repair_attempts: dict[str, int]
+    unit_test_repair_charged_checks: list[str]
     frontend_performance_decision: str
     frontend_performance_test_enabled: bool
     integration_build_checks_completed: bool

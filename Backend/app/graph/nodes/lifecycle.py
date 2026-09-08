@@ -310,6 +310,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
     confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
     if confirmed and gate.allowed:
         return {
+            "test_phase_confirmation": {},
             "phase": "test_phase_confirmation",
             "status": "completed",
             "build_summary": build_summary,
@@ -326,6 +327,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
     return {
         "phase": "test_phase_confirmation",
         "status": "requires_user_input",
+        "test_phase_confirmation": {},
         "build_summary": build_summary,
         "clarification": {
             "mode": "test_phase_confirmation",

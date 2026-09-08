@@ -686,11 +686,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             if build_task_plan_confirmation
             else {}
         ),
-        **(
-            {"test_phase_confirmation": test_phase_confirmation}
-            if test_phase_confirmation
-            else {}
-        ),
+        # 阶段确认是本次提交的一次性动作；空值也须覆盖 checkpoint 中的旧确认。
+        "test_phase_confirmation": test_phase_confirmation,
         **(
             {"review_phase_confirmation": review_phase_confirmation}
             if review_phase_confirmation

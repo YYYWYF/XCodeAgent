@@ -899,6 +899,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "unitTestNextAction": update.get("unit_test_next_action"),
                 "unitTestRepairTaskPlan": update.get("unit_test_repair_task_plan"),
                 "unitTestRepairIteration": update.get("unit_test_repair_iteration"),
+                "unitTestRepairAttempts": update.get("unit_test_repair_attempts", {}),
                 "unitTestMaxRepairIterations": update.get(
                     "unit_test_max_repair_iterations"
                 ),
@@ -1339,6 +1340,7 @@ def _workflow_summary(
         "unitTestGatePassed": result.get("unit_test_gate_passed"),
         "unitTestNextAction": result.get("unit_test_next_action"),
         "unitTestRepairIteration": result.get("unit_test_repair_iteration"),
+        "unitTestRepairAttempts": result.get("unit_test_repair_attempts", {}),
         "unitTestMaxRepairIterations": result.get("unit_test_max_repair_iterations"),
         "smallTaskTasks": result.get("small_task_tasks", []),
         "smallTaskResults": result.get("small_task_results", []),
