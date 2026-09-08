@@ -262,7 +262,7 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
-  onSessionHistoryReadyChange: (ready: boolean) => void
+  onSessionHistoryReadyChange: (ready: boolean, error?: string) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 设计阶段规划 Graph 的错误，来自仍在后台挂载的规划容器。 */
@@ -2795,8 +2795,12 @@ export default function AiChatPanel({
 
   // 首次进入工作台时同时等待会话列表、消息正文和设计阶段规划会话激活，避免遮罩结束后短暂显示空对话。
   useEffect(() => {
+    if (sessionError) {
+      onSessionHistoryReadyChange(false, sessionError)
+      return
+    }
     onSessionHistoryReadyChange(!loadingSessions && planningSessionHistoryReady)
-  }, [loadingSessions, onSessionHistoryReadyChange, planningSessionHistoryReady])
+  }, [loadingSessions, onSessionHistoryReadyChange, planningSessionHistoryReady, sessionError])
 
   useEffect(() => {
     // 正式二次修改只能恢复其独立前端会话；匹配失败时禁止退回原 Graph thread，
@@ -2825,9 +2829,15 @@ export default function AiChatPanel({
     )
     // active formal revision 只能恢复完整身份匹配的会话；缺失时等待会话列表刷新，
     // 禁止用 Graph thread 或普通 workflow 会话补建没有 revisionContext 的替代会话。
-    if (activeFormalRevision && (!formalRevisionSessionIdentity || !formalRevisionContext)) return
+    if (activeFormalRevision && (!formalRevisionSessionIdentity || !formalRevisionContext)) {
+      onSessionHistoryReadyChange(false, '找不到与当前正式修改匹配的设计或规划会话。')
+      return
+    }
     // 顶部阶段栏只负责浏览：非业务规划期间只能打开既有会话，禁止因 phase 切换补建会话。
-    if (!businessPlanningSessionActive && !existingPlanningSessionThreadId) return
+    if (!businessPlanningSessionActive && !existingPlanningSessionThreadId) {
+      onSessionHistoryReadyChange(false, '找不到当前设计或规划阶段对应的历史会话。')
+      return
+    }
     const sessionLookupKey =
       formalRevisionSessionIdentity?.threadId ||
       existingPlanningSessionThreadId ||
@@ -2876,6 +2886,12 @@ export default function AiChatPanel({
         ) {
           injectPlanningChunk(identity.key, { workflow: latestPlanningWorkflow })
         }
+      })
+      .catch((error) => {
+        onSessionHistoryReadyChange(
+          false,
+          formatError(error, '恢复设计或规划阶段会话失败')
+        )
       })
     return () => {
       cancelled = true

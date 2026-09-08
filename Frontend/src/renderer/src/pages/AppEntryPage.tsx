@@ -306,6 +306,12 @@ function AppEntryContent(): JSX.Element {
     setActiveSurface('welcome')
   }
 
+  // 工作台首次加载失败时卸载本次工作台实例，确保再次打开应用会重新执行完整恢复。
+  const handleWorkbenchEntryFailure = useCallback((): void => {
+    setActiveSurface('welcome')
+    setActiveApplication(null)
+  }, [])
+
   // 设计阶段（product）的规划确认（需求确认/UI确认/项目规划确认）直接在工作台
   // 中间区完成，不弹"生成应用规划"全屏 Modal。Modal 仍挂载跑规划 graph，但 visible=false。
   // 提交确认时由工作台中间区的 ApplicationPlanningQuestionPanel 通过 planningSubmitByAppRef 调用。
@@ -447,6 +453,7 @@ function AppEntryContent(): JSX.Element {
             application={activeApplication}
             applicationLifecycle={applicationLifecycle}
             onApplicationLifecycleChange={mergeApplicationLifecycle}
+            onEntryLoadFailure={handleWorkbenchEntryFailure}
             onReturnWelcome={handleReturnWelcome}
             onSubmitPlanningClarification={(
               workflow,
