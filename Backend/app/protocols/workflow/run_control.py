@@ -313,6 +313,8 @@ def _build_abandon_frames(
 
     messages = {
         "abandoned": "当前 Pending Build DAG 已安全放弃。",
+        "already_abandoned": "该 Pending Build DAG 已经被放弃，请刷新查看当前状态。",
+        "already_confirmed": "该 Build DAG 已经确认，不能再放弃。",
         "no_pending": "当前没有可放弃的 Pending Build DAG。",
         "stale_draft": "待放弃的 Build DAG 已变化，请刷新后基于当前版本操作。",
     }
@@ -330,7 +332,11 @@ def _build_abandon_frames(
             else {}
         ),
     }
-    workflow_status = "completed" if result.status in {"abandoned", "no_pending"} else "requires_user_input"
+    workflow_status = (
+        "completed"
+        if result.status in {"abandoned", "no_pending"}
+        else "requires_user_input"
+    )
     workflow = {
         "runId": run_id,
         "threadId": thread_id,

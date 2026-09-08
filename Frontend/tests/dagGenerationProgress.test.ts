@@ -725,3 +725,52 @@ test('Abandon lifecycle revision 拒绝更晚到达的旧 Pending lifecycle even
 
   assert.equal(latestApplicationLifecycle(abandoned, stalePending), abandoned)
 })
+
+test('same revision 重连校准可刷新 planningRefresh，但不能覆盖持久化 lifecycle 字段', () => {
+  const current = {
+    application: { id: 'app-1', name: 'App' },
+    updatedAt: '2026-09-08T00:00:00Z',
+    revision: 12,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: {},
+    extensions: {
+      sentinel: 'persisted',
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'active_planning_run',
+        status: 'planning',
+        planningRunId: 'planning-current',
+        workflowRunId: 'workflow-current',
+        message: '运行中。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const recalibrated = {
+    ...current,
+    extensions: {
+      sentinel: 'persisted',
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'active_planning_run',
+        status: 'planning_run_interrupted',
+        planningRunId: 'planning-current',
+        workflowRunId: 'workflow-current',
+        message: '运行已中断。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+
+  const merged = latestApplicationLifecycle(current, recalibrated)
+  assert.equal(merged.revision, 12)
+  assert.equal(merged.extensions.sentinel, 'persisted')
+  assert.equal(merged.extensions.planningRefresh?.status, 'planning_run_interrupted')
+
+  const sameRevisionWithoutRefresh = {
+    ...recalibrated,
+    extensions: { sentinel: 'persisted' }
+  } as unknown as ApplicationLifecycle
+  assert.equal(
+    latestApplicationLifecycle(merged, sameRevisionWithoutRefresh).extensions.planningRefresh?.status,
+    'planning_run_interrupted'
+  )
+})

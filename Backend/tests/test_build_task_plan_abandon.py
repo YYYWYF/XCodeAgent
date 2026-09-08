@@ -270,5 +270,61 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["planningRunId"], request["planning_run_id"])
 
 
+    def test_abandon_commit_survives_pending_cleanup_failure(self) -> None:
+        """tombstone 已提交后即使 Pending 删除失败，刷新也不得把旧草稿复活。"""
+        self.formal_path.unlink()
+        self.pending_path.unlink()
+        request = self._write_pending(base_digest=None)
+        self._write_lifecycle()
+        original_unlink = Path.unlink
+
+        def fail_pending(path, *args, **kwargs):
+            if path == self.pending_path:
+                raise OSError("pending delete failed")
+            return original_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", fail_pending):
+            with self.assertRaisesRegex(OSError, "pending delete failed"):
+                abandon_pending_build_task_plan(
+                    self.state,
+                    **request,
+                    workflow_run_id="workflow-current",
+                )
+
+        self.assertTrue(self.pending_path.exists())
+        reloaded = load_application_lifecycle(self.state["workspace"])
+        snapshot = resolve_planning_refresh_state(
+            self.state["workspace"],
+            lifecycle=reloaded,
+            runtime_active=lambda _run_id: False,
+        )
+        self.assertEqual(snapshot["source"], "abandoned")
+        self.assertEqual(snapshot["planningRunId"], request["planning_run_id"])
+
+        # 重试不会把已经提交的 Abandon 当成 no_pending；同时会 best-effort 清理 residue。
+        retried = abandon_pending_build_task_plan(
+            self.state,
+            **request,
+            workflow_run_id="workflow-current",
+        )
+        self.assertEqual(retried.status, "already_abandoned")
+        self.assertFalse(self.pending_path.exists())
+
+    def test_duplicate_abandon_reports_already_abandoned(self) -> None:
+        """同一 DraftIdentity 的重复 Abandon 必须返回明确终态，而不是退化为 no_pending。"""
+        self.formal_path.unlink()
+        self.pending_path.unlink()
+        request = self._write_pending(base_digest=None)
+        self._write_lifecycle()
+        self.assertEqual(
+            abandon_pending_build_task_plan(self.state, **request).status,
+            "abandoned",
+        )
+        self.assertEqual(
+            abandon_pending_build_task_plan(self.state, **request).status,
+            "already_abandoned",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

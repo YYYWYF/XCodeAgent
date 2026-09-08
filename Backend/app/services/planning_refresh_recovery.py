@@ -171,6 +171,20 @@ def _pending_was_promoted(pending_identity: Any, confirmed: dict[str, Any] | Non
     )
 
 
+def _pending_was_abandoned(
+    pending_identity: Any,
+    abandoned: dict[str, Any] | None,
+) -> bool:
+    """判断 Pending 是否只是 authoritative Abandon 提交后的精确清理残留。"""
+
+    if abandoned is None or pending_identity is None:
+        return False
+    return (
+        abandoned.get("planningRunId") == pending_identity.planning_run_id
+        and abandoned.get("draftDigest") == pending_identity.draft_digest
+    )
+
+
 def _planning_run_is_stale(
     planning_run: PlanningRunProjection,
     confirmed: dict[str, Any] | None,
@@ -224,7 +238,7 @@ def resolve_planning_refresh_state(
     lifecycle: ApplicationLifecycle | None,
     runtime_active: RuntimeActiveReader,
 ) -> PlanningRefreshState:
-    """按 Pending→Active Run→Formal 解析刷新状态；聊天历史由前端在其后补位。"""
+    """按 authoritative terminal marker/Pending→Active Run→Formal 解析刷新状态。"""
 
     confirmed, invalid_formal = _confirmed_plan(workspace)
     pending, pending_identity = _pending_plan(
@@ -237,7 +251,11 @@ def resolve_planning_refresh_state(
     )
     abandoned = _abandoned_planning_result(lifecycle)
 
-    if pending is not None and not _pending_was_promoted(pending_identity, confirmed):
+    if (
+        pending is not None
+        and not _pending_was_promoted(pending_identity, confirmed)
+        and not _pending_was_abandoned(pending_identity, abandoned)
+    ):
         workflow_run_id, thread_id = _matching_pending_execution(lifecycle, planning_run)
         return {
             "schemaVersion": "planning-refresh.v1",

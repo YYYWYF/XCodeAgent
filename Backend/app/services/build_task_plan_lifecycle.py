@@ -46,9 +46,14 @@ class ConfirmPromotionResult(FrozenPlanningModel):
 
 
 class AbandonPendingResult(FrozenPlanningModel):
-    """区分成功删除、无 Pending 与身份已过期三类 Abandon 结果。"""
-
-    status: Literal["abandoned", "no_pending", "stale_draft"]
+    """区分成功、终态重复请求、无 Pending 与身份已过期的 Abandon 结果。"""
+    status: Literal[
+        "abandoned",
+        "already_abandoned",
+        "already_confirmed",
+        "no_pending",
+        "stale_draft",
+    ]
     draft_identity: DraftIdentity | None = None
     errors: tuple[str, ...] = ()
 
@@ -97,6 +102,18 @@ def abandon_pending_build_task_plan(
         )
 
     with build_task_plan_lifecycle_lock:
+        if _confirmed_request_matches(state, request):
+            cleanup_error = _cleanup_matching_pending(state, request)
+            return AbandonPendingResult(
+                status="already_confirmed",
+                errors=(cleanup_error,) if cleanup_error else (),
+            )
+        if _abandoned_request_matches(state, request):
+            cleanup_error = _cleanup_matching_pending(state, request)
+            return AbandonPendingResult(
+                status="already_abandoned",
+                errors=(cleanup_error,) if cleanup_error else (),
+            )
         try:
             pending = load_pending_build_task_plan(state)
             if pending is None:
@@ -209,6 +226,37 @@ def _matches_request(value: Any, request: ConfirmedFrom) -> bool:
             and value.get("draft_digest") == request.draft_digest)
 
 
+def _abandoned_request_matches(state: dict[str, Any], request: ConfirmedFrom) -> bool:
+    """只接受 application lifecycle 中精确匹配请求身份的 authoritative tombstone。"""
+
+    from app.services.application_lifecycle import load_application_lifecycle
+
+    lifecycle = load_application_lifecycle(state.get("workspace") or "")
+    if lifecycle is None:
+        return False
+    marker = lifecycle.extensions.get("planningResultLifecycle")
+    return (
+        isinstance(marker, dict)
+        and marker.get("schemaVersion") == "planning-result-lifecycle.v1"
+        and marker.get("status") == "abandoned"
+        and marker.get("planningRunId") == request.planning_run_id
+        and marker.get("draftDigest") == request.draft_digest
+    )
+
+
+def _confirmed_request_matches(state: dict[str, Any], request: ConfirmedFrom) -> bool:
+    """判断请求是否已经由当前 Formal 的 confirmed_from 精确提交。"""
+
+    from app.workspace.spec_documents import workspace_root
+    from app.workspace.task_documents import load_confirmed_build_task_plan
+
+    try:
+        formal = load_confirmed_build_task_plan(workspace_root(state))
+    except (OSError, ValueError, TypeError):
+        return False
+    return formal is not None and _matches_request(formal.get("confirmed_from"), request)
+
+
 def confirm_pending_build_task_plan(
     state: dict[str, Any], *, planning_run_id: str, draft_digest: str,
     current_inputs: SequentialPlanningInputs,
@@ -247,6 +295,12 @@ def confirm_pending_build_task_plan(
             return ConfirmPromotionResult(
                 status="already_confirmed", confirmed_plan=formal,
                 pending_cleanup_error=_cleanup_matching_pending(state, request),
+            )
+        # Abandon tombstone 是结果生命周期的提交点；匹配的 Pending 即使因 cleanup
+        # 故障仍留在磁盘，也只能视为 residue，绝不能再次 Promote。
+        if _abandoned_request_matches(state, request):
+            return ConfirmPromotionResult(
+                status="stale_draft", errors=("该 PendingPlan 已被放弃，不能再次确认。",)
             )
         try:
             pending = load_pending_build_task_plan(state)

@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
+from app.domain.application_lifecycle import ApplicationLifecycle
+from app.services.application_lifecycle import write_application_lifecycle
 
 from app.services.build_task_plan_lifecycle import (
     abandon_pending_build_task_plan,
@@ -59,6 +61,39 @@ class ConfirmPromotionTests(unittest.TestCase):
         )
         identity = load_pending_build_task_plan(self.state)["draft_identity"]
         self.request = {key: identity[key] for key in ("planning_run_id", "draft_digest")}
+
+    def _write_lifecycle(self) -> None:
+        lifecycle = ApplicationLifecycle.model_validate(
+            {
+                "application": {"id": "app-confirm", "name": "Confirm 测试"},
+                "updatedAt": "2026-09-08T00:00:00Z",
+                "revision": 4,
+                "initialization": {"stage": "ready_for_workbench", "status": "completed"},
+                "activeRunId": "workflow-current",
+                "activeExecutions": {
+                    "workflow-current": {
+                        "scope": "page",
+                        "targetId": "orders",
+                        "pageId": "orders",
+                        "threadId": "thread-confirm",
+                        "runId": "workflow-current",
+                        "phase": "prepare_build_tasks",
+                        "status": "awaiting_user",
+                        "pendingInteraction": {
+                            "id": "pending-dag",
+                            "type": "task_plan_confirmation",
+                            "basedOnRevision": 4,
+                            "payload": {"mode": "build_task_plan_confirmation"},
+                            "artifactRefs": [],
+                            "createdAt": "2026-09-08T00:00:00Z",
+                        },
+                        "startedAt": "2026-09-08T00:00:00Z",
+                        "updatedAt": "2026-09-08T00:00:00Z",
+                    }
+                },
+            }
+        )
+        write_application_lifecycle(self.state["workspace"], lifecycle)
 
     def _confirm(self, **changes):
         """调用被测公共函数，不 mock 门禁或文件读写。"""
@@ -293,16 +328,40 @@ class ConfirmPromotionTests(unittest.TestCase):
         self.assertEqual(sorted(result.status for result in results), ["already_confirmed", "confirmed"])
         replace.assert_called_once()
 
-    def test_abandon_after_confirm_is_no_pending_and_preserves_formal(self):
-        """Confirm 先提交时，随后 Abandon 只能观察到无 Pending，不能回滚 Formal。"""
+    def test_abandon_after_confirm_is_already_confirmed_and_preserves_formal(self):
+        """Confirm 先提交时，随后 Abandon 明确拒绝 already-confirmed，不能回滚 Formal。"""
 
         self.assertEqual(self._confirm().status, "confirmed")
         formal = self.formal_path.read_bytes()
 
         result = abandon_pending_build_task_plan(self.state, **self.request)
 
-        self.assertEqual(result.status, "no_pending")
+        self.assertEqual(result.status, "already_confirmed")
         self.assertEqual(self.formal_path.read_bytes(), formal)
+
+    def test_abandoned_tombstone_blocks_confirm_even_when_pending_cleanup_failed(self):
+        """Abandon commit 后残留 Pending 只是 cleanup residue，不能再次 Promote。"""
+        self._write_lifecycle()
+        original_unlink = Path.unlink
+
+        def fail_pending(path, *args, **kwargs):
+            if path == self.pending_path:
+                raise OSError("pending delete failed")
+            return original_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", fail_pending):
+            with self.assertRaisesRegex(OSError, "pending delete failed"):
+                abandon_pending_build_task_plan(
+                    self.state,
+                    **self.request,
+                    workflow_run_id="workflow-current",
+                )
+
+        self.assertTrue(self.pending_path.exists())
+        result = self._confirm()
+        self.assertEqual(result.status, "stale_draft")
+        self.assertTrue(any("已被放弃" in error for error in result.errors))
+        self.assertFalse(self.formal_path.exists())
 
     def test_abandoned_draft_cannot_be_promoted(self):
         """Abandon 先提交后，同一 DraftIdentity 永久失去 Confirm/Promote 资格。"""
@@ -331,7 +390,7 @@ class ConfirmPromotionTests(unittest.TestCase):
         self.assertIn(
             outcome,
             {
-                ("confirmed", "no_pending"),
+                ("confirmed", "already_confirmed"),
                 ("stale_draft", "abandoned"),
             },
         )

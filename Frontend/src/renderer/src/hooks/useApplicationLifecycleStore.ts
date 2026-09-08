@@ -3,15 +3,29 @@ import type { ApplicationLifecycle } from '../typings'
 
 const NON_TERMINAL_EXECUTION_STATUSES = new Set(['running', 'stopping', 'awaiting_user'])
 
-/** 按应用标识和单调 revision 合并 lifecycle，拒绝冷启动读取覆盖更新的实时投影。 */
+/**
+ * 按应用标识和单调 revision 合并持久化 lifecycle。
+ * planningRefresh 是 Backend GET 时临时计算的恢复投影，不参与持久化 revision；
+ * 因此同 revision 的重新校准允许只替换该 extension，不能让旧持久化字段倒退。
+ */
 export function latestApplicationLifecycle(
   current: ApplicationLifecycle | undefined,
   incoming: ApplicationLifecycle
 ): ApplicationLifecycle {
   if (!current || current.application.id !== incoming.application.id) return incoming
-  return incoming.revision > current.revision ? incoming : current
-}
+  if (incoming.revision > current.revision) return incoming
+  if (incoming.revision < current.revision) return current
 
+  const planningRefresh = incoming.extensions?.planningRefresh
+  if (!planningRefresh) return current
+  return {
+    ...current,
+    extensions: {
+      ...current.extensions,
+      planningRefresh
+    }
+  }
+}
 /** 判断应用是否仍有需要在后台继续持有的非终态执行。 */
 export function hasNonTerminalApplicationExecution(lifecycle?: ApplicationLifecycle): boolean {
   return Object.values(lifecycle?.activeExecutions || {}).some((execution) =>
@@ -32,7 +46,7 @@ export function useApplicationLifecycleStore(applicationId: string): {
     setLifecycle((current) => (current?.application.id === applicationId ? current : undefined))
   }, [applicationId])
 
-  // 实时事件、冷启动读取和重连校准都走相同的 revision 合并规则。
+  // 实时事件、冷启动读取和重连校准共享持久化 revision；GET-time planningRefresh 单独刷新。
   const mergeLifecycle = useCallback((incoming: ApplicationLifecycle): void => {
     setLifecycle((current) => latestApplicationLifecycle(current, incoming))
   }, [])
