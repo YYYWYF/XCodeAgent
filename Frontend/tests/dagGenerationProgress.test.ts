@@ -17,6 +17,7 @@ import {
   dagGenerationUnitStatusLabel,
   dagGenerationUnitTaskCopy,
   currentDagConfirmationDraftIdentity,
+  bindDagConfirmationDraftIdentity,
   latestDagGenerationSnapshot,
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
@@ -588,6 +589,53 @@ test('Abandon 请求复用 Backend DraftIdentity 且不发送 Workflow cancel', 
   assert.equal(forwarded.planningRunId, 'planning-current')
   assert.equal(forwarded.draftDigest, 'a'.repeat(64))
   assert.equal('cancelRunId' in forwarded, false)
+})
+
+test('Confirm 动作绑定 Backend DraftIdentity 供 Graph 精确确认', () => {
+  const workflow = {
+    runId: 'workflow-confirm',
+    threadId: 'thread-confirm',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      clarification: {
+        mode: 'build_task_plan_confirmation',
+        draftIdentity: {
+          planningRunId: 'planning-confirm',
+          draftDigest: 'd'.repeat(64)
+        }
+      }
+    }
+  } as unknown as WorkflowRunPayload
+  const bound = bindDagConfirmationDraftIdentity(workflow, {
+    mode: 'build_task_plan_confirmation',
+    action: 'confirm'
+  })
+
+  assert.deepEqual(bound, {
+    mode: 'build_task_plan_confirmation',
+    action: 'confirm',
+    planningRunId: 'planning-confirm',
+    draftDigest: 'd'.repeat(64)
+  })
+})
+
+test('Confirm 动作缺少服务端 DraftIdentity 时保持原样', () => {
+  const workflow = {
+    runId: 'workflow-confirm',
+    threadId: 'thread-confirm',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      clarification: { mode: 'build_task_plan_confirmation' }
+    }
+  } as unknown as WorkflowRunPayload
+  const action = {
+    mode: 'build_task_plan_confirmation',
+    action: 'confirm'
+  } as const
+
+  assert.deepEqual(bindDagConfirmationDraftIdentity(workflow, action), action)
 })
 
 test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控制入口', () => {

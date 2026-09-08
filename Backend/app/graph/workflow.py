@@ -4,6 +4,9 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from app.graph import nodes
+from app.graph.nodes.task_planning_adapter import (
+    create_async_workflow_planning_adapter,
+)
 from app.graph.subgraphs import acceptance_subgraph
 from app.graph.state import ProjectState
 from app.services.authorization_bootstrap import authorization_bootstrap_enabled
@@ -252,7 +255,14 @@ def build_graph(
     ]
     | None = None,
 ):
-    """构建主应用开发图；async planning adapter 仅能由调用方显式注入。"""
+    """构建主应用开发图；production 默认绑定 async Planning/Confirm adapter。
+
+    T11.6.4 cutover 后，只有显式注入的节点才能替换 production authority；
+    legacy ``prepare_build_tasks`` 不再是默认实现，也不再参与正常生成或确认。
+    """
+
+    if prepare_build_tasks_node is None:
+        prepare_build_tasks_node = create_async_workflow_planning_adapter()
 
     builder = StateGraph(ProjectState)
 

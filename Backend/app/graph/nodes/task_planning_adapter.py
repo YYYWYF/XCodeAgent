@@ -1,8 +1,9 @@
-"""T11.6.3 显式 opt-in 的异步 Workflow Planning Graph adapter。"""
+"""T11.6.4 production Workflow Planning/Confirm authority adapter。"""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from app.config import Settings
@@ -16,6 +17,7 @@ from app.graph.nodes.tasks import (
     _build_prerequisite_errors,
     _build_task_plan_confirmation_payload,
     _confirmed_baseline_blocked_result,
+    _confirmed_build_task_plan_result,
     _existing_build_task_plan,
     _formal_artifact_state_update,
     _latest_project_plan,
@@ -30,6 +32,10 @@ from app.services.application_template_generation import (
     inspect_template_generation_readiness,
 )
 from app.services.authorization_overlay import compile_authorization_overlay
+from app.services.build_task_plan_lifecycle import (
+    ConfirmPromotionResult,
+    confirm_pending_build_task_plan,
+)
 from app.services.build_task_planner import tasks_from_build_task_plan
 from app.services.build_task_planning_service import (
     MainlinePlanningResult,
@@ -45,26 +51,53 @@ from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
     UnitGenerationPolicy,
 )
-from app.workspace.task_documents import build_task_plan_json_path
+from app.workspace.task_documents import (
+    build_task_plan_json_path,
+    build_task_plan_pending_json_path,
+    load_pending_build_task_plan,
+)
 
 
 MainlinePlanningService = Callable[..., Awaitable[MainlinePlanningResult]]
 UnitGenerationCallable = Callable[..., Awaitable[UnitGenerationAttemptResult]]
+ConfirmService = Callable[..., ConfirmPromotionResult]
+
+
+def production_unit_generation_policy() -> UnitGenerationPolicy:
+    """返回 production Workflow 使用的 Unit 生成策略。
+
+    Local=3、SDK retry=0 与 token budget 由 DTO 固定；这里的超时、turn 与
+    Frozen Contract 读取预算是 cutover 的显式生产取值，不再依赖测试常量。
+    """
+
+    return UnitGenerationPolicy(
+        request_timeout=120.0,
+        unit_session_timeout=600.0,
+        model_turn_limit=8,
+        frozen_contract_read_limits={
+            "max_reads": 24,
+            "max_total_bytes": 2_000_000,
+            "max_bytes_per_read": 200_000,
+        },
+    )
 
 
 def create_async_workflow_planning_adapter(
     *,
-    policy: UnitGenerationPolicy,
+    policy: UnitGenerationPolicy | None = None,
     settings: Settings | None = None,
     generate_once: UnitGenerationCallable | None = None,
     planning_service: MainlinePlanningService = run_mainline_planning,
+    confirm_service: ConfirmService = confirm_pending_build_task_plan,
 ) -> Callable[[ProjectState], Awaitable[dict[str, Any]]]:
-    """创建显式 opt-in 的异步 Graph 节点，默认 production 图不会自动采用它。"""
+    """创建 production Graph 节点：生成走 Scheduler，确认走 lifecycle authority。"""
 
-    frozen_policy = UnitGenerationPolicy.model_validate(policy)
+    frozen_policy = UnitGenerationPolicy.model_validate(
+        policy or production_unit_generation_policy()
+    )
 
     async def async_workflow_planning_adapter(state: ProjectState) -> dict[str, Any]:
-        """解析 Workflow state，等待 mainline service，并投射现有确认读模型。"""
+        """解析 Workflow state，按本轮动作分派 generation 或 Confirm。"""
 
         return await _run_async_workflow_planning_adapter(
             state,
@@ -72,9 +105,26 @@ def create_async_workflow_planning_adapter(
             settings=settings,
             generate_once=generate_once,
             planning_service=planning_service,
+            confirm_service=confirm_service,
         )
 
     return async_workflow_planning_adapter
+
+
+@dataclass(frozen=True)
+class _PlanningContext:
+    """一次 generation 或 Confirm 共享的服务端权威规划上下文。"""
+
+    workspace: str
+    formal_state: dict[str, dict[str, Any]]
+    project_plan: dict[str, Any]
+    scope: dict[str, str]
+    confirmed_plan: dict[str, Any] | None
+    skeleton: dict[str, Any]
+    build_context: dict[str, Any]
+    workspace_snapshot: dict[str, Any]
+    inputs: Any
+    formal_plan_path: str
 
 
 async def _run_async_workflow_planning_adapter(
@@ -84,12 +134,68 @@ async def _run_async_workflow_planning_adapter(
     settings: Settings | None,
     generate_once: UnitGenerationCallable | None,
     planning_service: MainlinePlanningService,
+    confirm_service: ConfirmService,
 ) -> dict[str, Any]:
-    """执行 generation 分支；不接管 Confirm 或默认 production authority。"""
+    """执行 generation 或 Confirm；两分支共享同一服务端权威输入构造。"""
 
     action_payload = state.get("build_task_plan_confirmation")
     if isinstance(action_payload, dict) and action_payload.get("action"):
-        raise ValueError("T11.6.3 async planning adapter 尚未接管 Confirm authority。")
+        return await _run_confirm_branch(
+            state,
+            action_payload,
+            confirm_service=confirm_service,
+        )
+
+    context = _assemble_planning_context(state)
+    if isinstance(context, dict):
+        return context
+    result = await planning_service(
+        context.inputs,
+        workspace_state=state,
+        policy=policy,
+        settings=settings,
+        generate_once=generate_once,
+        publish=create_planning_run_progress_publisher(),
+    )
+    return _project_planning_result(
+        result,
+        project_plan=context.project_plan,
+        build_context=context.build_context,
+        scope=context.scope,
+        confirmed_plan=context.confirmed_plan,
+        formal_state=context.formal_state,
+        formal_plan_path=context.formal_plan_path,
+    )
+
+
+async def _run_confirm_branch(
+    state: ProjectState,
+    action_payload: dict[str, Any],
+    *,
+    confirm_service: ConfirmService,
+) -> dict[str, Any]:
+    """只接受精确 DraftIdentity，并交给 lifecycle Confirm authority 提升 Formal。"""
+
+    context = _assemble_planning_context(state)
+    if isinstance(context, dict):
+        return context
+    result = confirm_service(
+        state,
+        planning_run_id=str(action_payload.get("planning_run_id") or ""),
+        draft_digest=str(action_payload.get("draft_digest") or ""),
+        current_inputs=context.inputs.sequential_inputs(),
+    )
+    return _project_confirm_result(result, state=state, context=context)
+
+
+def _assemble_planning_context(
+    state: ProjectState,
+) -> _PlanningContext | dict[str, Any]:
+    """按正式产物重建 planning 上下文；返回 dict 表示本轮被门禁阻断。
+
+    生成与 Confirm 都必须使用服务端重新构造的正式输入，不接受前端指纹或
+    checkpoint；两分支复用同一构造，保证 input_fingerprint 可精确复验。
+    """
 
     workspace = workspace_from_state(state)
     formal_artifacts = _load_formal_artifacts(workspace)
@@ -180,21 +286,16 @@ async def _run_async_workflow_planning_adapter(
         workflow_run_id=workflow_run_id,
         thread_id=thread_id,
     )
-    result = await planning_service(
-        inputs,
-        workspace_state=state,
-        policy=policy,
-        settings=settings,
-        generate_once=generate_once,
-        publish=create_planning_run_progress_publisher(),
-    )
-    return _project_planning_result(
-        result,
+    return _PlanningContext(
+        workspace=workspace,
+        formal_state=formal_state,
         project_plan=project_plan,
-        build_context=build_context,
         scope=scope,
         confirmed_plan=confirmed_plan,
-        formal_state=formal_state,
+        skeleton=skeleton,
+        build_context=build_context,
+        workspace_snapshot=workspace_snapshot,
+        inputs=inputs,
         formal_plan_path=str(build_task_plan_json_path(state)),
     )
 
@@ -294,4 +395,85 @@ def _project_planning_result(
         "clarification": confirmation,
         "timeline": ["prepare_build_tasks"],
         **formal_state,
+    }
+
+
+def _project_confirm_result(
+    result: ConfirmPromotionResult,
+    *,
+    state: ProjectState,
+    context: _PlanningContext,
+) -> dict[str, Any]:
+    """把 Confirm 结果投影到 Graph：成功放行 Build，失败保留可重试 Pending。"""
+
+    if result.status in {"confirmed", "already_confirmed"} and result.confirmed_plan is not None:
+        confirmed_plan = plain_json(result.confirmed_plan)
+        return {
+            **clear_planning_projection(),
+            **_confirmed_build_task_plan_result(
+                state,
+                context.project_plan,
+                confirmed_plan,
+                context.scope,
+                path=context.formal_plan_path,
+            ),
+            "build_context": context.build_context,
+            "build_units": confirmed_plan.get("build_units", {}),
+            "unit_graph": confirmed_plan.get("unit_graph", {}),
+            "last_persisted_build_execution_scope": context.scope,
+            **context.formal_state,
+        }
+    return _stale_confirm_result(result, state=state, context=context)
+
+
+def _stale_confirm_result(
+    result: ConfirmPromotionResult,
+    *,
+    state: ProjectState,
+    context: _PlanningContext,
+) -> dict[str, Any]:
+    """拒绝过期、已放弃或校验失败的 Confirm，并保留当前 Pending 供重新确认。"""
+
+    pending = load_pending_build_task_plan(state) or {}
+    errors = list(result.errors) or [
+        "待确认任务规划已过期或被替换，请重新生成后再确认。"
+    ]
+    confirmation = _build_task_plan_confirmation_payload(
+        pending,
+        context.scope,
+        project_plan=context.project_plan,
+        build_context=context.build_context,
+        errors=errors,
+    )
+    identity = (
+        pending.get("draft_identity") if isinstance(pending, dict) else None
+    )
+    identity = identity if isinstance(identity, dict) else {}
+    pending_path = build_task_plan_pending_json_path(state) if pending else None
+    return {
+        "phase": "prepare_build_tasks",
+        "status": "requires_user_input",
+        "project_plan": context.project_plan,
+        "build_task_plan": pending,
+        "build_task_plan_path": context.formal_plan_path,
+        "build_task_plan_persisted": (
+            isinstance(context.confirmed_plan, dict)
+            and context.confirmed_plan.get("build_execution_scope") == context.scope
+        ),
+        "pending_build_task_plan_path": str(pending_path) if pending_path else "",
+        "pending_build_task_plan_persisted": bool(pending),
+        "planning_run_id": str(identity.get("planning_run_id") or ""),
+        "draft_digest": str(identity.get("draft_digest") or ""),
+        "dag_generation_progress": {},
+        "build_execution_scope": context.scope,
+        "build_context": context.build_context,
+        "build_units": pending.get("build_units", {}),
+        "unit_graph": pending.get("unit_graph", {}),
+        "task_registry": pending.get("task_registry", {}),
+        "task_graph": pending.get("task_graph", {}),
+        "tasks": tasks_from_build_task_plan(pending),
+        "build_task_plan_confirmation": confirmation,
+        "clarification": confirmation,
+        "timeline": ["prepare_build_tasks"],
+        **context.formal_state,
     }

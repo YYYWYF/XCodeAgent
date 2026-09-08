@@ -7,6 +7,7 @@ import type {
   WorkbenchExecution,
   WorkflowBuildTargetReview,
   WorkflowBuildTaskPlan,
+  WorkflowBuildTaskPlanConfirmation,
   WorkflowRunPayload
 } from '../../typings'
 import type { AgentChatMessage } from './types'
@@ -225,6 +226,15 @@ export function currentDagConfirmationDraftIdentity(
   const draftDigest = String((value as Record<string, unknown>).draftDigest || '').trim()
   if (!planningRunId || !/^[0-9a-f]{64}$/.test(draftDigest)) return undefined
   return { planningRunId, draftDigest }
+}
+
+/** 把 Backend 签发的 DraftIdentity 绑定到 DAG 动作，供 Confirm/Abandon 精确提交。 */
+export function bindDagConfirmationDraftIdentity(
+  workflow: WorkflowRunPayload | undefined,
+  action: WorkflowBuildTaskPlanConfirmation
+): WorkflowBuildTaskPlanConfirmation {
+  const identity = currentDagConfirmationDraftIdentity(workflow)
+  return identity ? { ...action, ...identity } : action
 }
 
 /** 读取当前 DAG 确认卡的结构化错误，供右侧交互卡复用原始反馈。 */

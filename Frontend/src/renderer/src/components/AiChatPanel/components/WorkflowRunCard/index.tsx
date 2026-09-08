@@ -63,6 +63,7 @@ import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
 import { workflowClarification } from './workflowClarification'
+import { bindDagConfirmationDraftIdentity } from '../../stageOutputState'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -508,7 +509,10 @@ export default function WorkflowRunCard({
               errors={clarification?.errors}
               onSubmit={(action: WorkflowBuildTaskPlanConfirmation) =>
                 onSubmitClarification?.(workflow, {
-                  build_task_plan_confirmation: action
+                  build_task_plan_confirmation: bindDagConfirmationDraftIdentity(
+                    workflow,
+                    action
+                  )
                 })
               }
               plan={dagTaskPlan}

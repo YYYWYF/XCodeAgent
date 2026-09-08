@@ -92,33 +92,41 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             tasks=tasks,
         )
 
-    async def test_default_graph_keeps_legacy_authority_until_cutover(self) -> None:
-        """未显式注入 adapter 时，默认 Graph 仍必须绑定 legacy production 节点。"""
+    async def test_default_graph_binds_async_adapter_after_cutover(self) -> None:
+        """未显式注入节点时，默认 Graph 必须绑定 async Planning/Confirm adapter。"""
 
-        legacy_node = Mock(
-            return_value={
-                "phase": "prepare_build_tasks",
-                "status": "requires_user_input",
-                "clarification": {"mode": "legacy-authority-probe"},
-                "timeline": ["prepare_build_tasks"],
-            }
-        )
+        sentinel_calls: list[dict] = []
+
+        def adapter_factory(**_: object):
+            """返回 authority 探针节点，证明默认 Graph 使用 adapter 工厂。"""
+
+            async def sentinel(state: dict) -> dict:
+                sentinel_calls.append(dict(state))
+                return {
+                    "phase": "prepare_build_tasks",
+                    "status": "requires_user_input",
+                    "clarification": {"mode": "async-adapter-authority-probe"},
+                    "timeline": ["prepare_build_tasks"],
+                }
+
+            return sentinel
+
         with patch(
-            "app.graph.workflow.nodes.prepare_build_tasks",
-            new=legacy_node,
+            "app.graph.workflow.create_async_workflow_planning_adapter",
+            new=adapter_factory,
         ):
             graph = build_graph(checkpointer=InMemorySaver())
             result = await graph.ainvoke(
                 self._state(execution_scope()),
                 config={
-                    "configurable": {"thread_id": "thread-legacy-authority-probe"}
+                    "configurable": {"thread_id": "thread-async-authority-probe"}
                 },
             )
 
-        legacy_node.assert_called_once()
+        self.assertEqual(len(sentinel_calls), 1)
         self.assertEqual(
             result["clarification"]["mode"],
-            "legacy-authority-probe",
+            "async-adapter-authority-probe",
         )
 
     async def test_graph_adapter_creates_pending_and_projects_confirmation_state(self) -> None:
