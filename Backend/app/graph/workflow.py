@@ -1,3 +1,6 @@
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from langgraph.graph import END, START, StateGraph
 
 from app.graph import nodes
@@ -241,8 +244,15 @@ def route_acceptance(state: ProjectState) -> str:
     return "finalize_project" if state.get("accepted") is True else "await_user_input"
 
 
-def build_graph(*, checkpointer):
-    """构建从开发就绪检查开始的主应用开发图。"""
+def build_graph(
+    *,
+    checkpointer,
+    prepare_build_tasks_node: Callable[
+        [ProjectState], dict[str, Any] | Awaitable[dict[str, Any]]
+    ]
+    | None = None,
+):
+    """构建主应用开发图；async planning adapter 仅能由调用方显式注入。"""
 
     builder = StateGraph(ProjectState)
 
@@ -254,7 +264,10 @@ def build_graph(*, checkpointer):
     builder.add_node("entity_source_binding", nodes.entity_source_binding)
     builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
-    builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
+    builder.add_node(
+        "prepare_build_tasks",
+        prepare_build_tasks_node or nodes.prepare_build_tasks,
+    )
     builder.add_node("authorization_bootstrap", nodes.authorization_bootstrap)
     builder.add_node("build", nodes.build)
     builder.add_node("unit_test", nodes.unit_test)

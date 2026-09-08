@@ -102,11 +102,18 @@ PlanningRun，后者只删除精确身份匹配的 PendingPlan。
 
 现有 `tasks.py::prepare_build_tasks` 仍包含旧整批生成、正式路径 pending 写入和确认门禁，
 其 workflow 路由依赖该确认流程。T6.4 排除 Pending/Confirm，因此本次不切换这个生产入口，
-也不增加能够绕过确认直接进入 Build 的新路由。后续接入时，`tasks.py` 应仅作为服务的
-LangGraph adapter；业务编排归本服务所有。
+也不增加能够绕过确认直接进入 Build 的新路由。T11.6.2 新增异步
+`build_task_planning_service.run_mainline_planning` 作为后续 production Graph adapter 的唯一
+Planning 业务边界：它接收带 Workflow 身份的 `MainlinePlanningInputs`，由服务端分配
+PlanningRun ID，等待本 orchestrator 返回 validated assembly 后，才通过现有唯一 Pending
+writer 写入并回读自校验 DraftIdentity。规划失败或取消不会调用 Pending writer，Formal
+ConfirmedPlan 保持不变。后续切流时，`tasks.py` 应只准备 authoritative inputs、调用该
+service 并投影 Graph state；不得自行创建 Controller 或 Scheduler。
 
-唯一允许的文件写入是 Controller 的 `.xcodeagent/plans/planning-run.json`。
-不写 Pending、ConfirmedPlan、TechnicalPlan 或其他正式产物，也不接 Frontend。
+`plan_dag_sequential` 自身唯一允许的文件写入是 Controller 的
+`.xcodeagent/plans/planning-run.json`；它不写 Pending、ConfirmedPlan、TechnicalPlan
+或其他正式产物。只有外层 mainline facade 在该调用成功返回后写 Pending，二者均不接
+Frontend。
 FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Attempt 拒收与 Scheduler cancellation correctness，
 不修改前端 Cancel UI。
 

@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from typing import Annotated
 
-from pydantic import AfterValidator, BeforeValidator
+from pydantic import AfterValidator, BeforeValidator, StringConstraints
 
 from app.services.build_task_reuse_contracts import ReuseFacts
 from app.services.frozen_contract_catalog import (
@@ -42,6 +42,10 @@ _FormalSourceRefs = Annotated[
     tuple[FormalContractSourceRef, ...],
     BeforeValidator(tuple_input),
     AfterValidator(canonicalize_formal_source_refs),
+]
+_Identifier = Annotated[
+    str,
+    StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$"),
 ]
 
 
@@ -193,3 +197,80 @@ class SequentialPlanningInputs(FrozenPlanningModel):
                          "managed_files": [], "strong_rules": ["exact_unit_owner", "exact_file_scope",
                          "no_platform_owned_fields", "no_platform_owned_tasks", "no_repair_or_verification_tasks", "status_pending"]},
         )
+
+
+class MainlinePlanningInputs(SequentialPlanningInputs):
+    """汇集 Workflow 身份与正式规划输入，作为 mainline service 的只读入口。"""
+
+    workflow_run_id: _Identifier
+    thread_id: _Identifier
+
+    def sequential_inputs(self) -> SequentialPlanningInputs:
+        """剥离 Workflow 身份并构造 Scheduler 唯一接受的冻结输入 DTO。"""
+
+        return SequentialPlanningInputs.model_validate(
+            self.model_dump(
+                mode="python",
+                exclude={"workflow_run_id", "thread_id"},
+            )
+        )
+
+
+def assemble_mainline_planning_inputs(
+    *,
+    project_plan: Mapping,
+    base_confirmed_plan: Mapping | None,
+    skeleton_plan: Mapping,
+    build_context: Mapping,
+    build_execution_scope: Mapping,
+    workspace_snapshot: Mapping,
+    reuse_facts: ReuseFacts,
+    formal_contract_inputs: PlanningFormalInputs,
+    workflow_run_id: str,
+    thread_id: str,
+) -> MainlinePlanningInputs:
+    """从 Workflow 正式输入编译 mainline DTO，不向 adapter 暴露 Unit Catalog 内部状态。
+
+    期望 binding manifest 由当前职责与 Frozen Store 独立编译；调用方只负责提供
+    已确认产物、Scope、工作区证据和只读 ReuseFacts，不创建 PlanningRun、Scheduler
+    或 Candidate。
+    """
+
+    provisional = SequentialPlanningInputs(
+        project_plan=project_plan,
+        base_confirmed_plan=base_confirmed_plan,
+        skeleton_plan=skeleton_plan,
+        build_context=build_context,
+        build_execution_scope=build_execution_scope,
+        workspace_snapshot=workspace_snapshot,
+        reuse_facts=reuse_facts,
+        formal_contract_inputs=formal_contract_inputs,
+        formal_source_refs=(),
+    )
+    requirements = provisional.requirements()
+    manifest_store = FrozenContractStore.create(
+        planning_run_id="mainline-input-manifest",
+        formal_inputs=formal_contract_inputs,
+    )
+    _, endpoints = scoped_formal_targets(
+        plain_json(provisional.project_plan),
+        provisional.build_execution_scope,
+    )
+    formal_source_refs = tuple(
+        source_ref
+        for unit_id, unit_requirements in requirements.generation_requirements_by_unit.items()
+        if unit_requirements
+        for source_ref in compile_expected_unit_formal_source_refs(
+            unit_id=unit_id,
+            unit_kind=provisional.skeleton_plan["build_units"][unit_id]["kind"],
+            generation_requirements=unit_requirements,
+            scoped_endpoint_keys=tuple(endpoints),
+            frozen_contract_store=manifest_store,
+        )
+    )
+    return MainlinePlanningInputs(
+        **provisional.model_dump(mode="python", exclude={"formal_source_refs"}),
+        formal_source_refs=formal_source_refs,
+        workflow_run_id=workflow_run_id,
+        thread_id=thread_id,
+    )

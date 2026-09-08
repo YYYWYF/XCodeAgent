@@ -115,6 +115,8 @@ class ProjectState(TypedDict, total=False):
     database_approval_requests: list[dict[str, Any]]
     build_task_plan: dict[str, Any]
     build_task_plan_confirmation: dict[str, Any]
+    planning_run_id: str
+    draft_digest: str
     dag_generation_progress: dict[str, Any]
     build_task_plan_path: str
     build_run_id: str

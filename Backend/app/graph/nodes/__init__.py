@@ -1,3 +1,6 @@
+from app.graph.nodes.task_planning_adapter import (
+    create_async_workflow_planning_adapter,
+)
 from app.graph.nodes.tasks import prepare_build_tasks
 from app.graph.nodes.authorization_bootstrap import authorization_bootstrap
 from app.graph.nodes.application_revision import start_application_revision
@@ -43,6 +46,7 @@ __all__ = [
     "unit_test_repair",
     "launch_project",
     "test_phase_confirmation",
+    "create_async_workflow_planning_adapter",
     "prepare_build_tasks",
     "project_planning",
     "product_planning",
