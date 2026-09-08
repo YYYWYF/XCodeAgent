@@ -177,12 +177,17 @@ export default function WelcomeRecentProjects({
                     <ProjectIcon />
                   </span>
                   <span className={cx('welcome-project-main')}>
-                    <strong>{application.name}</strong>
-                    <code>
+                    <strong title={application.name}>{application.name}</strong>
+                    <code
+                      title={application.workspaceRoot || application.projectDirectoryName || '本地应用'}
+                    >
                       {application.workspaceRoot || application.projectDirectoryName || '本地应用'}
                     </code>
                   </span>
-                  <span className={cx('welcome-project-description')}>
+                  <span
+                    className={cx('welcome-project-description')}
+                    title={application.senario || '继续上一次开发会话'}
+                  >
                     {application.senario || '继续上一次开发会话'}
                   </span>
                   <time dateTime={new Date(application.createdAt).toISOString()}>
