@@ -4302,7 +4302,9 @@ export default function AiChatPanel({
               onOpenRevisionSession={handleOpenRevisionSession}
               onRevertCodeChanges={requestCodeChangeRevert}
               onRetryError={
-                planningError
+                applicationLifecycle?.initialization.stage === 'application_template_generation_failed'
+                  ? onRetryPlanning
+                  : planningError
                   ? onRetryPlanning
                   : workflowCodeReviewRetry(activeWorkflow)
                     ? () => void handleRetryCodeReview()

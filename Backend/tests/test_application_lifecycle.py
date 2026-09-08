@@ -23,6 +23,7 @@ from app.services.application_lifecycle import (
     application_lifecycle_path,
     load_application_lifecycle,
     persist_application_lifecycle_transition,
+    retry_application_template_generation,
     start_workbench_execution,
     stop_workbench_execution,
     transition_application_lifecycle,
@@ -308,6 +309,42 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
             self.assertEqual(ready.initialization.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
             self.assertFalse((workspace / ".xcodeagent/template-generation-manifest.json").exists())
+
+    def test_failed_workspace_bootstrap_can_enter_a_new_generation_attempt(self) -> None:
+        """模板失败后只能由显式重试动作清除错误并回到生成阶段。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(application_id="app-1", application_name="任务中心")
+            for stage in (
+                ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+                ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            ):
+                state = transition_application_lifecycle(
+                    state, stage=stage, status=ApplicationLifecycleStatus.RUNNING
+                )
+            write_application_lifecycle(directory, state)
+            complete_workspace_bootstrap(
+                directory,
+                succeeded=False,
+                error_message="Template Engine unavailable",
+            )
+
+            retried = retry_application_template_generation(directory, active_run_id="retry-run")
+
+            self.assertEqual(
+                retried.initialization.stage,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            )
+            self.assertEqual(retried.initialization.status, ApplicationLifecycleStatus.RUNNING)
+            self.assertEqual(retried.active_run_id, "retry-run")
+            self.assertIsNone(retried.error)
 
     def test_current_snapshot_loads_with_workbench_defaults(self) -> None:
         """当前初始化快照应获得空的工作台字段默认值且不包含 delivery。"""

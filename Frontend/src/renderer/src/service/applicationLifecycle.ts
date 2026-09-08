@@ -8,7 +8,12 @@ type ApplicationLifecyclePayload = {
   runId: string
   threadId: string
   status: 'completed' | 'failed'
-  action?: 'create' | 'get' | 'bootstrap_template_generation' | 'workspace_attach'
+  action?:
+    | 'create'
+    | 'get'
+    | 'bootstrap_template_generation'
+    | 'retry_bootstrap_template_generation'
+    | 'workspace_attach'
   lifecycle?: ApplicationLifecycle
   error?: { message?: string }
 }
@@ -176,6 +181,18 @@ export async function bootstrapApplicationTemplateGeneration(
   if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
   return runApplicationLifecycleAction(threadId, {
     action: 'bootstrap_template_generation',
+    workspaceRoot: application.workspaceRoot
+  })
+}
+
+// 仅在后端已标记模板生成失败时，显式开启一轮新的 Bootstrap。
+export async function retryApplicationTemplateGeneration(
+  application: ApplicationConfig,
+  threadId: string
+): Promise<ApplicationLifecycle> {
+  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
+  return runApplicationLifecycleAction(threadId, {
+    action: 'retry_bootstrap_template_generation',
     workspaceRoot: application.workspaceRoot
   })
 }

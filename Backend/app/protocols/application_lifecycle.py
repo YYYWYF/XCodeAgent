@@ -15,6 +15,7 @@ from app.services.application_lifecycle import (
     application_lifecycle_payload,
     ensure_application_lifecycle,
     load_application_lifecycle,
+    retry_application_template_generation,
 )
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.service import WorkspaceBootstrapService
@@ -40,6 +41,7 @@ class ApplicationLifecycleAction(BaseModel):
         "create",
         "get",
         "bootstrap_template_generation",
+        "retry_bootstrap_template_generation",
         "workspace_attach",
     ]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
@@ -59,6 +61,7 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "create",
             "get",
             "bootstrap_template_generation",
+            "retry_bootstrap_template_generation",
             "workspace_attach",
         ],
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
@@ -118,9 +121,18 @@ def build_application_lifecycle_ag_ui_stream(
             if state is None:
                 raise ValueError("application-lifecycle.json 不存在。")
             message = "已读取应用生命周期。"
-        elif request.action == "bootstrap_template_generation":
+        elif request.action in {
+            "bootstrap_template_generation",
+            "retry_bootstrap_template_generation",
+        }:
             if bootstrap_service is None:
                 raise RuntimeError("Workspace Bootstrap 服务尚未初始化。")
+            if request.action == "retry_bootstrap_template_generation":
+                await asyncio.to_thread(
+                    retry_application_template_generation,
+                    request.workspace_root,
+                    active_run_id=str(payload.get("runId") or "") or None,
+                )
             task = await bootstrap_service.trigger(request.workspace_root)
             result = await asyncio.shield(task)
             state = load_application_lifecycle(request.workspace_root)

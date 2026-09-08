@@ -225,13 +225,20 @@ authorization=true
 ---
 
 ## 1.7 `/v1/update` 调用契约
+XCodeAgent 读取并校验 .xcodeagent/template-state.json，将其完整 JSON 内容作为 currentTemplateState 提交给 Template Service
 
 输入：
 
 ```json
 {
   "currentTemplateState": {
-    "...": "current .xcodeagent/template-state.json"
+    "templateRevision": "...",
+    "managedFiles": {},
+    "requested": {},
+    "effective": {}
+  },
+  "requestedConfig": {
+    "capabilities": {}
   },
   "requestedConfig": {
     "capabilities": {

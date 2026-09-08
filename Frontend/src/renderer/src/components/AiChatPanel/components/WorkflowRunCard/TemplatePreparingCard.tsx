@@ -1,5 +1,5 @@
 import { CheckCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
-import { Button, Spin, Typography } from 'antd'
+import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { ApplicationLifecycle } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -11,6 +11,10 @@ type Props = {
   lifecycle?: ApplicationLifecycle
   /** 模板就绪后点击进入开发阶段。 */
   onEnterDevelopment?: () => void
+  /** 模板失败后重新执行一次受控 Bootstrap。 */
+  onRetry?: () => void
+  /** 重试请求正在等待后端 Bootstrap 结果。 */
+  retrying?: boolean
 }
 
 const TEMPLATE_STAGES = new Set([
@@ -32,13 +36,15 @@ export function isTemplatePreparing(lifecycle?: ApplicationLifecycle): boolean {
  *  - application_template_generation_failed：失败态，展示错误信息 */
 export default function TemplatePreparingCard({
   lifecycle,
-  onEnterDevelopment
+  onEnterDevelopment,
+  onRetry,
+  retrying = false
 }: Props): ReactElement {
   const stage = lifecycle?.initialization?.stage
   const failed = stage === 'application_template_generation_failed'
   const ready = stage === 'ready_for_workbench'
 
-  if (failed) {
+  if (failed && !retrying) {
     return (
       <div className={cx('template-preparing-card', 'template-preparing-error')}>
         <div className={cx('template-preparing-head')}>
@@ -48,6 +54,11 @@ export default function TemplatePreparingCard({
         <Text type="secondary" className={cx('template-preparing-desc')}>
           {lifecycle?.error?.message || '应用模板文件生成失败，请查看错误信息。'}
         </Text>
+        {onRetry ? (
+          <Button className={cx('template-preparing-enter-btn')} onClick={onRetry} type="primary">
+            重试模板生成
+          </Button>
+        ) : null}
       </div>
     )
   }
@@ -79,10 +90,10 @@ export default function TemplatePreparingCard({
     <div className={cx('template-preparing-card', 'template-preparing-loading')}>
       <div className={cx('template-preparing-head')}>
         {/* <Spin size="small" /> */}
-        <Text strong>产品 Agent 正在准备应用模板</Text>
+        <Text strong>{retrying ? '产品 Agent 正在重试应用模板生成' : '产品 Agent 正在准备应用模板'}</Text>
       </div>
       <Text type="secondary" className={cx('template-preparing-desc')}>
-        正在拉取模板工程并生成应用骨架，请稍候…
+        {retrying ? '正在重新拉取模板工程并生成应用骨架，请稍候…' : '正在拉取模板工程并生成应用骨架，请稍候…'}
       </Text>
     </div>
   )

@@ -93,6 +93,9 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
         ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
         ApplicationLifecycleStage.READY_FOR_WORKBENCH,
     },
+    ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED: {
+        ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+    },
 }
 
 APPLICATION_PLANNING_REVISION_STAGES = {
@@ -942,6 +945,30 @@ def begin_application_template_generation(
     raise ApplicationLifecycleConflictError(
         "只有用户确认 TechnicalPlan 后才能开始模板初始化；当前阶段为 "
         f"{current.initialization.stage.value}。"
+    )
+
+
+def retry_application_template_generation(
+    workspace: str | Path,
+    *,
+    active_run_id: str | None = None,
+) -> ApplicationLifecycle:
+    """仅允许失败的首次 Bootstrap 显式重试，并清除上一轮错误。"""
+
+    current = load_application_lifecycle(workspace)
+    if current is None:
+        raise ApplicationLifecycleConflictError("重试应用模板前必须先创建生命周期状态。")
+    if current.initialization.stage != ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED:
+        raise ApplicationLifecycleConflictError(
+            "只有失败的应用模板生成可以重试；当前阶段为 "
+            f"{current.initialization.stage.value}。"
+        )
+    return persist_application_lifecycle_transition(
+        workspace,
+        stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+        status=ApplicationLifecycleStatus.RUNNING,
+        active_run_id=active_run_id,
+        error=None,
     )
 
 

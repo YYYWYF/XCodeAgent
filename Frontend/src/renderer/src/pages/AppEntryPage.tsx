@@ -228,7 +228,18 @@ function AppEntryContent(): JSX.Element {
     [mergeApplicationLifecycle, stopPreviousPreviewIfNeeded]
   )
 
+  // 只接收当前工作台所属应用的 Bootstrap 终态，避免后台应用覆盖当前页面状态。
+  const syncActiveTemplateLifecycle = useCallback(
+    (applicationId: string, lifecycle: ApplicationLifecycle): void => {
+      if (activeApplication?.id === applicationId) {
+        mergeApplicationLifecycle(lifecycle)
+      }
+    },
+    [activeApplication?.id, mergeApplicationLifecycle]
+  )
+
   const planningController = useActiveApplicationPlannings({
+    onTemplateLifecycleResolved: syncActiveTemplateLifecycle,
     onOpenWorkbench: openWorkbench
   })
 
@@ -495,7 +506,9 @@ function AppEntryContent(): JSX.Element {
             onPlanningStreamReady={handlePlanningStreamReady}
             onRetryPlanning={
               templateGenerationFailed
-                ? undefined
+                ? () => {
+                    void planningController.retryApplicationTemplateGeneration(activeApplication.id)
+                  }
                 : () => {
                     const retry = planningRetryByAppRef.current[activeApplication.id]
                     if (retry) retry()

@@ -342,7 +342,12 @@ export default function MessageList({
       workflowFailureMessage(latestAssistantMessage.workflow)
     : ''
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
-  const showStandaloneError = Boolean(visibleError && visibleError !== latestAssistantMessageError)
+  const templateGenerationFailed =
+    applicationLifecycle?.initialization.stage === 'application_template_generation_failed'
+  // 模板失败详情由 TemplatePreparingCard 唯一承载，避免与通用执行错误卡重复展示。
+  const showStandaloneError = Boolean(
+    !templateGenerationFailed && visibleError && visibleError !== latestAssistantMessageError
+  )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
@@ -719,7 +724,8 @@ export default function MessageList({
                             }
                           />
                         ) : null}
-                        {messageError ? (
+                        {/* 模板失败由下方唯一的模板卡片展示后端详情，避免历史通用错误卡重复。 */}
+                        {messageError && !templateGenerationFailed ? (
                           <AgentErrorCard
                             error={messageError}
                             onRetry={isCurrentErrorMessage ? onRetryError : undefined}
@@ -923,6 +929,8 @@ export default function MessageList({
                 <TemplatePreparingCard
                   lifecycle={applicationLifecycle}
                   onEnterDevelopment={onEnterDevelopment}
+                  onRetry={onRetryError}
+                  retrying={Boolean(generatingTemplate && templateGenerationFailed)}
                 />
               </div>
             </article>
