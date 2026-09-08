@@ -73,7 +73,13 @@ _AGENT_SETTINGS_KEYS = {
 _AGENT_PROMPT_KEYS = {"persona", "systemPrompt", "constraints"}
 _AGENT_PERSONA_KEYS = {"role", "tone"}
 _AGENT_MODEL_KEYS = {"selection", "modelRef", "requiredCapabilities", "generation"}
-_AGENT_MODEL_CAPABILITY_KEYS = {"streaming", "toolCalling", "structuredOutput", "vision"}
+_AGENT_MODEL_CAPABILITY_KEYS = {
+    "streaming",
+    "toolCalling",
+    "structuredOutput",
+    "vision",
+    "observability",
+}
 _AGENT_GENERATION_KEYS = {"temperature"}
 _AGENT_CAPABILITY_BINDING_KEYS = {"capabilityId", "toolIds"}
 _AGENT_TOOLS_KEYS = {"enabled", "bindings"}
@@ -2200,6 +2206,8 @@ def _technical_agent_contract_model_errors(
             )
         if capabilities.get("streaming") is not True:
             errors.append(f"{location}.agentSettings.model 必须要求 streaming。")
+        if capabilities.get("observability") is not True:
+            errors.append(f"{location}.agentSettings.model 必须要求 observability。")
         if capabilities.get("toolCalling") is not bool(tool_bindings):
             errors.append(
                 f"{location}.agentSettings.model.toolCalling 必须与 Tools 是否启用一致。"
@@ -2483,6 +2491,70 @@ def validate_technical_plan_agent_contracts(
             "TechnicalPlan.agent_contracts 与 ProductPlan、API Contract 或平台确定性配置不一致。"
         )
     return errors
+
+
+def recompile_technical_plan_agent_settings(
+    technical_plan: dict[str, Any],
+    product_plan: dict[str, Any],
+    *,
+    agent_id: str,
+    prompt: dict[str, Any] | None = None,
+    temperature: float | None = None,
+) -> dict[str, Any]:
+    """把允许编辑的 Prompt/Temperature 合入候选并重编译完整 Agent Contract。"""
+
+    candidates = technical_agent_contract_model_input(
+        _dict_items(technical_plan.get("agent_contracts"))
+    )
+    matches = [
+        item for item in candidates if str(item.get("agentId") or "").strip() == agent_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("TechnicalPlan 无法唯一定位要修改的智能体契约。")
+    target = matches[0]
+    settings = (
+        deepcopy(target.get("agentSettings"))
+        if isinstance(target.get("agentSettings"), dict)
+        else {}
+    )
+    if prompt is not None:
+        settings["prompt"] = deepcopy(prompt)
+    if temperature is not None:
+        model = (
+            deepcopy(settings.get("model"))
+            if isinstance(settings.get("model"), dict)
+            else {}
+        )
+        generation = (
+            deepcopy(model.get("generation"))
+            if isinstance(model.get("generation"), dict)
+            else {}
+        )
+        generation["temperature"] = temperature
+        model["generation"] = generation
+        settings["model"] = model
+    target["agentSettings"] = settings
+    api_contracts = _dict_items(technical_plan.get("api_contracts"))
+    pages = _dict_items(technical_plan.get("pages"))
+    candidate_plan = {"agent_contracts": candidates}
+    errors = _technical_agent_contract_model_errors(
+        candidate_plan,
+        product_plan,
+        api_contracts,
+        pages,
+    )
+    if errors:
+        raise ValueError("；".join(errors))
+    next_plan = deepcopy(technical_plan)
+    next_plan["agent_contracts"] = _technical_agent_contracts(
+        product_plan,
+        candidate_plan,
+        api_contracts,
+    )
+    validation_errors = validate_technical_plan_agent_contracts(next_plan, product_plan)
+    if validation_errors:
+        raise ValueError("；".join(validation_errors))
+    return next_plan
 
 
 def create_technical_plan(

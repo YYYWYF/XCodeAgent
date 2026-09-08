@@ -129,6 +129,8 @@ class AgentBuildRunnerTests(unittest.TestCase):
         self.assertIn("agent-runtime-generate/SKILL.md", prompt)
         self.assertIn("create_agent(*, model, runtime_context, checkpointer)", prompt)
         self.assertIn("never initialize a second model", prompt)
+        self.assertIn("Java gateway transport as deferred", prompt)
+        self.assertIn("Never invent Java source", prompt)
         self.assertIn('"id": "inventory_api"', prompt)
         self.assertIn('"InventoryStatus"', prompt)
         self.assertNotIn('"id": "unrelated_api"', prompt)

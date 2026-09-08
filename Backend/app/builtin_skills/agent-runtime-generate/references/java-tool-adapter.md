@@ -1,35 +1,41 @@
-# Java Tool adapter
+# Java gateway Tool boundary
 
 The generated file at `artifacts.toolAdapterPath` exposes
 `build_tools(runtime_context) -> list`. Each list item is a LangChain Tool whose stable
 name is the Contract `toolId` and whose description preserves the declared usage trigger.
 
-## Transport boundary
+This reference constrains the Python boundary only. Java gateway implementation and Java
+source generation belong to another owner and are not part of this Skill.
 
-- Call only the relative `endpoint.path` and HTTP `endpoint.method` from the Contract.
-- Resolve the Java service base URL through `load_settings().require_backend_base_url()`
-  and the service-to-service credential through
-  `load_settings().require_tool_gateway_token()` at call time. Their environment sources
-  are `AGENT_RUNTIME_BACKEND_BASE_URL` and `AGENT_RUNTIME_TOOL_GATEWAY_TOKEN`.
-- Reject a missing base URL/token, an absolute Endpoint path, redirects to another host,
-  and response bodies that do not match the declared JSON expectation.
-- Forward trusted context as `X-Agent-User-Id`, `X-Agent-Tenant-Id`, `X-Agent-Scopes`, and
-  `traceparent` when present. Tool arguments must never override these headers.
-- Send `Authorization: Bearer <service token>` and JSON content headers. Never expose the
-  token in errors, logs, model-visible results, or test snapshots.
-- Apply a finite timeout and return a bounded, safe Tool error. Do not retry write
-  operations automatically.
+## Stable Tool contract
 
-## Request and response mapping
+- Generate exactly one Tool for each declared binding and no undeclared Tool.
+- Derive Tool arguments only from the resolved request/path/query schema. Do not add
+  identity, tenant, scope, credential, URL, or Header parameters to the model-visible Tool.
+- Preserve `toolId`, description/usage trigger, `accessMode`, Endpoint identity, method,
+  path, request schema, and response schema as business-interface metadata.
+- `accessMode=read` remains read-only. `accessMode=write` never treats user or model text as
+  platform approval.
 
-Use the resolved API Contract supplied by the execution prompt to implement path/query/
-body mapping. Do not infer fields from names alone and do not invent defaults. Preserve
-the declared request and response schema shapes. A `requestSchemaRef` of `null` means no
-JSON body, not an empty fabricated object.
+## Gateway integration modes
 
-`accessMode=read` Tools must remain read-only. `accessMode=write` Tools must state that
-approval is platform-managed and must not treat model text as approval. The Java Endpoint
-remains the enforcement boundary.
+Choose the mode from evidence already present in the task and template:
 
-Focused tests must replace the HTTP transport, verify the exact method/path/body and
-trusted headers, and cover a safe failure response without performing network calls.
+1. **Declared transport available**: reuse the supplied Python gateway client or transport
+   abstraction and its configuration contract. Map the declared Tool request and response
+   without changing their shapes. Tests replace that boundary; they do not call a real
+   service.
+2. **Transport not yet declared**: keep the Tool and its typed arguments available, but
+   route invocation to one small fail-closed boundary that returns or raises a bounded
+   `gateway_not_configured`-style error. Do not issue an HTTP request and do not simulate a
+   successful business response.
+
+Endpoint `method` and `path` describe the future business call; they do not establish a
+base URL, Java client class, route prefix, Header set, Token name, response envelope,
+timeout, redirect, or retry policy. Never invent those details. `RuntimeContext` remains
+trusted input from the Python Runtime, but how it is forwarded is owned by the future
+gateway contract.
+
+The absence of a completed Java gateway does not block generation of the Agent module,
+Tool declarations, or focused tests. The task summary must state that live Tool transport
+remains deferred whenever mode 2 is used.

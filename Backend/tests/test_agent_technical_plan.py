@@ -35,6 +35,7 @@ class AgentTechnicalPlanTests(unittest.TestCase):
                     "toolCalling": True,
                     "structuredOutput": False,
                     "vision": False,
+                    "observability": True,
                 },
                 "generation": {"temperature": 0.2},
             },
@@ -332,6 +333,11 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         self.assertEqual(tool["approvalPolicy"], "platform_managed")
         self.assertFalse(contract["agentSettings"]["skills"]["enabled"])
         self.assertFalse(contract["agentSettings"]["knowledge"]["enabled"])
+        self.assertTrue(
+            contract["agentSettings"]["model"]["requiredCapabilities"][
+                "observability"
+            ]
+        )
         self.assertEqual(
             contract["agentSettings"]["context"]["compression"]["strategy"],
             "none",
@@ -535,20 +541,26 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         self.assertIn("separate Agent gateway contract", prompt)
         self.assertIn("never emit an empty entity_ids array", prompt)
         self.assertIn("inventory_assistant", prompt)
-        example_text = prompt.split("Complete result example:\n", 1)[1].split(
-            "\n\nDynamic context sections:",
+        example_text = prompt.split(
+            "endpointId values declared by the generated TechnicalPlan:\n",
+            1,
+        )[1].split(
+            "\n\nAdditional sequence syntax example only:",
             1,
         )[0]
         example = json.loads(example_text)
+        self.assertTrue(
+            example["agent_contracts"][0]["agentSettings"]["model"][
+                "requiredCapabilities"
+            ]["observability"]
+        )
         gateway_endpoint_id = example["agent_contracts"][0]["gatewayEndpointId"]
-        self.assertEqual(
+        self.assertIn(
+            {
+                "actionId": "dashboard_page_ask_inventory_assistant",
+                "endpointId": gateway_endpoint_id,
+            },
             example["pages"][0]["references"]["action_implementations"],
-            [
-                {
-                    "actionId": "dashboard_page_ask_inventory_assistant",
-                    "endpointId": gateway_endpoint_id,
-                }
-            ],
         )
 
     def test_technical_prompt_uses_no_memory_for_single_turn_agent(self) -> None:
@@ -563,6 +575,18 @@ class AgentTechnicalPlanTests(unittest.TestCase):
 
         self.assertIn('"enabled": false', prompt)
         self.assertIn('"store": null', prompt)
+
+    def test_agent_contract_requires_observability(self) -> None:
+        """可观测能力必须像流式输出一样由 TechnicalPlan 默认声明且保持开启。"""
+
+        requirement = self._requirement_with_product_agent()
+        raw_plan = self._technical_model_plan(requirement)
+        raw_plan["agent_contracts"][0]["agentSettings"]["model"][
+            "requiredCapabilities"
+        ]["observability"] = False
+
+        with self.assertRaisesRegex(ValueError, "必须要求 observability"):
+            create_technical_plan(requirement, agent_plan=raw_plan)
 
 
 if __name__ == "__main__":

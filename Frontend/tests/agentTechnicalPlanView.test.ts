@@ -3,6 +3,11 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import TechnicalPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanDocPanel'
 import TechnicalPlanSummary from '../src/renderer/src/components/Welcome/TechnicalPlanSummary'
+import agentDevelopmentDetailSource from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/index.tsx?raw'
+import agentSettingsViewSource from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/AgentSettingsView.tsx?raw'
+import agentSettingsSummarySource from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/AgentSettingsSummary.tsx?raw'
+import agentDependenciesViewSource from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/AgentDependenciesView.tsx?raw'
+import agentSettingsRevisionSource from '../src/renderer/src/service/agentSettingsRevision.ts?raw'
 
 const agentPlan = {
   architecture: {
@@ -60,7 +65,8 @@ const agentPlan = {
             streaming: true,
             toolCalling: true,
             structuredOutput: false,
-            vision: false
+            vision: false,
+            observability: true
           },
           generation: { temperature: 0.2 }
         },
@@ -174,3 +180,53 @@ const ordinaryPlanMarkup = renderToStaticMarkup(
   })
 )
 assert.doesNotMatch(ordinaryPlanMarkup, /智能体契约|智能体运行时|Python 3\.12/)
+
+// Agent 工作台默认只展示七段可视化摘要，不再把不可控 JSON 作为编辑界面。
+assert.doesNotMatch(agentSettingsViewSource, /JSON\.stringify\(value, null, 2\)/)
+for (const label of [
+  '人设与 System Prompt',
+  '模型配置',
+  '记忆模块',
+  '工具配置',
+  'Skills',
+  '知识库配置',
+  '上下文配置'
+]) {
+  assert.match(agentSettingsSummarySource, new RegExp(label))
+}
+assert.match(agentSettingsViewSource, /生成修改预览/)
+assert.match(agentSettingsViewSource, /确认并应用/)
+assert.match(agentSettingsViewSource, /结束任务并修改配置/)
+assert.match(agentSettingsViewSource, /打开当前任务/)
+assert.match(agentSettingsViewSource, /aria-label="查看 Agent Settings 来源"/)
+assert.match(agentSettingsViewSource, /配置来源：已确认的 TechnicalPlan/)
+assert.doesNotMatch(agentSettingsViewSource, /来源 TechnicalPlan/)
+assert.match(agentSettingsViewSource, /平台模型列表接入后可选择/)
+assert.match(agentSettingsViewSource, /label: '跟随项目默认模型'/)
+assert.match(
+  agentSettingsViewSource,
+  /Boolean\(preview\) \|\| Boolean\(blockingExecution\)/
+)
+assert.match(agentSettingsSummarySource, /PlusOutlined/)
+assert.match(agentSettingsSummarySource, /Checkbox/)
+assert.match(agentSettingsSummarySource, /\$\{label\}接入功能还在开发中/)
+assert.match(agentSettingsSummarySource, /comingSoonAction\('Skill 市场'\)/)
+assert.match(agentSettingsSummarySource, /comingSoonAction\('知识库'\)/)
+assert.match(agentSettingsSummarySource, /observability: '可观测'/)
+assert.doesNotMatch(agentSettingsSummarySource, /capabilities\.observability !== false/)
+assert.match(agentSettingsSummarySource, /right === 'observability'/)
+assert.match(agentSettingsSummarySource, /capabilityEntries\.map/)
+assert.match(agentSettingsSummarySource, /aria-label="Agent 模型策略"/)
+assert.match(agentSettingsSummarySource, /agent-model-select/)
+assert.doesNotMatch(agentSettingsSummarySource, /Temperature/)
+assert.match(agentSettingsViewSource, /label="Temperature"/)
+assert.match(agentDependenciesViewSource, /必要检查/)
+assert.match(agentDependenciesViewSource, /Required checks · 开发完成后执行/)
+assert.match(agentDependenciesViewSource, /agent-required-checks-list/)
+assert.match(agentDependenciesViewSource, /requiredChecks\.map\(\(check, index\)/)
+assert.match(agentDevelopmentDetailSource, /aria-label="查看 Contract Hash"/)
+assert.match(agentDevelopmentDetailSource, /agent-contract-hash-tooltip/)
+assert.doesNotMatch(agentDevelopmentDetailSource, /className=\{cx\('agent-contract-hash'\)\}/)
+assert.match(agentSettingsRevisionSource, /@ag-ui\/client/)
+assert.match(agentSettingsRevisionSource, /basedOnTechnicalPlanSha256/)
+assert.match(agentSettingsRevisionSource, /agent-settings-revision/)

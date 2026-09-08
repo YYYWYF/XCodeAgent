@@ -381,6 +381,26 @@ def start_workbench_execution(
                 or pending.submitted_at is not None
             ):
                 raise ApplicationLifecycleConflictError("测试阶段确认已过期或不属于原开发运行。")
+        active_revision = current.active_formal_revision
+        active_revision_has_execution = bool(
+            active_revision is not None
+            and any(
+                execution_belongs_to_active_revision(current, execution)
+                for execution in current.active_executions.values()
+            )
+        )
+        # Agent Settings 预览直接占用 formal revision lease，但不会额外登记 Workflow
+        # execution；在确认或放弃前禁止普通 Build 越过该确认门读取旧 Contract。
+        if (
+            active_revision is not None
+            and active_revision.target.type == "agent"
+            and active_revision.status in {"drafting", "awaiting_user"}
+            and not active_revision_has_execution
+            and phase != "application_revision"
+        ):
+            raise ApplicationLifecycleConflictError(
+                "当前智能体有待确认的 Settings 修改，请先确认或放弃修改预览。"
+            )
         if development_continuation_consume is not None:
             # 同一把生命周期锁内复验 token，并把消费状态与 execution 原子写入。
             # 请求解析、模型校验或写盘失败都不能单独烧掉一次性续接凭据。
@@ -774,6 +794,8 @@ def execution_belongs_to_active_revision(
         return execution.scope == "page" and (
             execution.target_id == page_id or execution.page_id == page_id
         )
+    if target.type == "agent":
+        return execution.scope == "agent" and execution.target_id == str(target.agent_id or "")
     endpoint_id = str(target.endpoint_id or "")
     return execution.scope == "endpoint" and execution.target_id == endpoint_id
 

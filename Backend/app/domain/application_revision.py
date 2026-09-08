@@ -53,9 +53,9 @@ class EarliestRevisionArtifact(StrEnum):
 
 
 class RevisionTarget(RevisionModel):
-    """保存应用、页面或接口会话的稳定业务目标。"""
+    """保存应用、页面、接口或业务智能体会话的稳定业务目标。"""
 
-    type: Literal["application", "page", "endpoint"]
+    type: Literal["application", "page", "endpoint", "agent"]
     page_id: str | None = Field(default=None, alias="pageId", max_length=512)
     api_contract_id: str | None = Field(
         default=None,
@@ -63,6 +63,7 @@ class RevisionTarget(RevisionModel):
         max_length=512,
     )
     endpoint_id: str | None = Field(default=None, alias="endpointId", max_length=512)
+    agent_id: str | None = Field(default=None, alias="agentId", max_length=512)
 
     @model_validator(mode="after")
     def validate_identifiers(self) -> "RevisionTarget":
@@ -75,6 +76,8 @@ class RevisionTarget(RevisionModel):
             or not str(self.endpoint_id or "").strip()
         ):
             raise ValueError("接口修订目标必须提供 apiContractId 和 endpointId。")
+        if self.type == "agent" and not str(self.agent_id or "").strip():
+            raise ValueError("智能体修订目标必须提供 agentId。")
         return self
 
 

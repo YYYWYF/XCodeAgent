@@ -83,10 +83,25 @@ export default function AgentDependenciesView({
           size="small"
         />
         <div className={cx('agent-required-checks')}>
-          <span>Required checks</span>
-          {requiredChecks.map((check) => (
-            <code key={check}>{check}</code>
-          ))}
+          <div className={cx('agent-required-checks-heading')}>
+            <div>
+              <strong>必要检查</strong>
+              <span>Required checks · 开发完成后执行</span>
+            </div>
+            <Tag>{requiredChecks.length} 项</Tag>
+          </div>
+          {requiredChecks.length ? (
+            <ol className={cx('agent-required-checks-list')}>
+              {requiredChecks.map((check, index) => (
+                <li key={check}>
+                  <span aria-hidden="true">{index + 1}</span>
+                  <code>{check}</code>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className={cx('agent-required-checks-empty')}>当前契约未声明必要检查</p>
+          )}
         </div>
       </section>
     </>

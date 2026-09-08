@@ -148,6 +148,7 @@ export type DevelopmentPlanningAgentOption = {
   entryActions: Array<{ pageId: string; pageLabel: string; actionIds: string[] }>
   interaction: Record<string, unknown>
   contractHash: string
+  technicalPlanSha256: string
   agentSettings: Record<string, Record<string, unknown>>
   dependencies: {
     gateway: Record<string, unknown>

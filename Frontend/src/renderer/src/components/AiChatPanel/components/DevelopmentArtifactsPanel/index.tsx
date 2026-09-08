@@ -2,21 +2,35 @@ import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import ApplicationOutline from '../ApplicationOutline'
 import AgentDevelopmentDetail from '../AgentDevelopmentDetail'
-import type { DevelopmentPlanningAgentOption } from '../../../../typings'
+import type {
+  ApplicationLifecycle,
+  DevelopmentPlanningAgentOption,
+  WorkbenchExecution
+} from '../../../../typings'
 import type { ApplicationOutlineProps } from '../ApplicationOutline'
 import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
   detailLabel?: string
   developmentDisabled?: boolean
+  applicationLifecycle?: ApplicationLifecycle
+  onEndAgentExecution?: (execution: WorkbenchExecution) => Promise<boolean>
+  onOpenAgentExecution?: (execution: WorkbenchExecution) => Promise<void>
+  onAgentSettingsApplied?: () => void
   onStartAgentDevelopment?: (agent: DevelopmentPlanningAgentOption) => void
+  workspaceRoot?: string
 }
 
 /** 并排展示常驻菜单和随选中产物更新的详情占位，菜单选择不切换工作区标签。 */
 export default function DevelopmentArtifactsPanel({
   detailLabel,
   developmentDisabled,
+  applicationLifecycle,
+  onEndAgentExecution,
+  onOpenAgentExecution,
+  onAgentSettingsApplied,
   onStartAgentDevelopment,
+  workspaceRoot,
   ...outlineProps
 }: Props): ReactElement {
   const selectedAgent = outlineProps.agents.find(
@@ -34,8 +48,13 @@ export default function DevelopmentArtifactsPanel({
         {selectedAgent && onStartAgentDevelopment ? (
           <AgentDevelopmentDetail
             agent={selectedAgent}
+            applicationLifecycle={applicationLifecycle}
             disabled={developmentDisabled}
+            onEndAgentExecution={onEndAgentExecution}
+            onOpenAgentExecution={onOpenAgentExecution}
+            onSettingsApplied={onAgentSettingsApplied || (() => undefined)}
             onStartDevelopment={onStartAgentDevelopment}
+            workspaceRoot={workspaceRoot}
           />
         ) : (
           <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status">

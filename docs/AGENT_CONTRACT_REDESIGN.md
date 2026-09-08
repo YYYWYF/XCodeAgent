@@ -209,7 +209,8 @@ System Prompt、Skill、Knowledge 文档、Tool description 和检索结果都�
         "streaming": true,
         "toolCalling": true,
         "structuredOutput": false,
-        "vision": false
+        "vision": false,
+        "observability": true
       },
       "generation": {
         "temperature": 0.2
@@ -382,7 +383,8 @@ Prompt 不得包含密钥、连接串、物理路径、未授权 Tool 或绕过�
     "streaming": true,
     "toolCalling": true,
     "structuredOutput": false,
-    "vision": false
+    "vision": false,
+    "observability": true
   },
   "generation": {
     "temperature": 0.2
@@ -395,6 +397,7 @@ Prompt 不得包含密钥、连接串、物理路径、未授权 Tool 或绕过�
 - 当前 Contract 固定使用 `project_default`，DeepSeek、GPT、Claude、Qwen 等由项目配置和 `init_chat_model` 解析；
 - Contract 不保存供应商密钥；
 - `requiredCapabilities` 表达 Agent 的最低模型要求；
+- `streaming` 与 `observability` 由 TechnicalPlan 默认生成且固定为 `true`，在开发阶段只读展示，用户不能关闭；
 - Tools 非空时 `toolCalling` 必须为 true；
 - 平台用模型注册表校验能力，不满足时阻止确认或启动，不能静默降级；
 - “是否允许追问”不是模型能力，必须放在 `interaction.clarification`。
@@ -831,5 +834,6 @@ TechnicalPlan Markdown 的“智能体契约”章节依次展示：
 8. 正式 Contract 由平台编译，模型候选不能直接进入 Build；
 9. 当前未实现的设置必须显式关闭；
 10. 按批次实施，不在一次修改中同时引入全部 Runtime 能力。
+11. 可观测能力与流式输出一样进入正式 `requiredCapabilities`，默认开启且不可编辑；本阶段只声明契约要求，不扩展 Runtime 实现。
 
 当前代码已经完成模型候选与正式 Contract 分离、ProductPlan Hash、七段 `agentSettings`、Endpoint 快照展开、平台派生字段重编译校验、Markdown/前端阅读以及 Build Tool 依赖消费。MySQL、OSS、Long-term Memory、Skill Loader、Knowledge Retriever、Summary Compression、Vision、结构化最终输出和单 Agent 模型覆盖仍未实现，也不得在 Contract 中启用。

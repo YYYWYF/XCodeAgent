@@ -183,7 +183,7 @@ type UseWorkflowConversationResult = {
   handleContinueDevelopment: (
     continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
   ) => Promise<boolean>
-  handleEndPlan: (runId?: string) => Promise<void>
+  handleEndPlan: (runId?: string, sessionIdentity?: SessionIdentity) => Promise<boolean>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
   handleRetryPlan: () => Promise<void>
@@ -1692,18 +1692,23 @@ export function useWorkflowConversation({
   }
 
   /** 通过同一 AG-UI 端点结束计划并释放生命周期中的工作区锁。 */
-  const handleEndPlan = async (runId?: string): Promise<void> => {
+  const handleEndPlan = async (
+    runId?: string,
+    sessionIdentity?: SessionIdentity
+  ): Promise<boolean> => {
     const execution = planExecutionForPage(activeWorkflow?.summary.lifecycle, selectedPageId, {
       runId: activeWorkflow?.runId,
       threadId: activeWorkflow?.threadId
     })
     const targetRunId = runId || execution?.runId || activeWorkflow?.runId
-    const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
+    const controlIdentity =
+      sessionIdentity || activeRun?.identity || matchingActiveSession || activeSession
     const endedSessionKeys = Array.from(
       new Set(
-        [activeRuntimeKey, controlIdentity?.key, draftKey].filter((key): key is string =>
-          Boolean(key)
-        )
+        (sessionIdentity
+          ? [sessionIdentity.key]
+          : [activeRuntimeKey, controlIdentity?.key, draftKey]
+        ).filter((key): key is string => Boolean(key))
       )
     )
 
@@ -1728,8 +1733,8 @@ export function useWorkflowConversation({
     }
 
     // 结束动作的 UI 解锁不等待后端；请求仍尽力释放服务端工作区锁。
-    if (loading || workspaceBusy || !targetRunId) return
-    await sendWorkflowMessage('结束当前计划。', {
+    if (loading || workspaceBusy || !targetRunId) return false
+    return sendWorkflowMessage('结束当前计划。', {
       planControlAction: 'end',
       planControlRunId: targetRunId,
       selectedPageId,

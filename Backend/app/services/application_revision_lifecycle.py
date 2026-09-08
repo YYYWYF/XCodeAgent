@@ -136,6 +136,87 @@ def submit_revision_impact(
     return active
 
 
+def start_agent_settings_revision(
+    workspace: str | Path,
+    *,
+    agent_id: str,
+    source_thread_id: str,
+    source_run_id: str,
+) -> ActiveFormalRevision:
+    """为可视化 Agent Settings 修改直接创建唯一 TechnicalPlan 正式修订。"""
+
+    current = _required_lifecycle(workspace)
+    if (
+        current.initialization.stage != ApplicationLifecycleStage.READY_FOR_WORKBENCH
+        or current.initialization.status != ApplicationLifecycleStatus.COMPLETED
+    ):
+        raise ApplicationLifecycleConflictError(
+            "只有已完成创建并进入开发工作台的应用才能修改 Agent Settings。"
+        )
+    if current.active_formal_revision is not None:
+        raise ApplicationLifecycleConflictError("当前 application 已有 formal revision 正在进行。")
+    if current.pending_revision_impact is not None:
+        raise ApplicationLifecycleConflictError("当前 application 有待确认的修改影响范围。")
+    if current.resource_locks.application is not None:
+        raise ApplicationLifecycleConflictError("当前 application 正在执行其他开发任务。")
+    resource_locks = current.resource_locks
+    agent_lock = resource_locks.agents.get(agent_id)
+    agent_execution = (
+        current.active_executions.get(agent_lock.run_id) if agent_lock is not None else None
+    )
+    if agent_lock is not None and agent_execution is None:
+        # 锁必须由 active execution 持有；进程异常留下的孤立 Agent 锁没有可恢复任务，
+        # 在同一次 lifecycle CAS 中定向清理，不能让配置入口永久不可用。
+        resource_locks = resource_locks.model_copy(
+            update={
+                "agents": {
+                    key: value
+                    for key, value in resource_locks.agents.items()
+                    if key != agent_id
+                }
+            }
+        )
+    elif agent_execution is not None:
+        status_message = {
+            "running": "正在运行",
+            "stopping": "正在停止",
+            "awaiting_user": "正在等待用户确认",
+            "failed": "执行失败但尚未结束",
+            "stopped": "已停止但尚未结束",
+            "completed": "已完成但尚未释放",
+        }.get(agent_execution.status.value, "尚未结束")
+        raise ApplicationLifecycleConflictError(
+            f"当前智能体开发任务{status_message}，请先结束该任务再修改配置。"
+        )
+    planning_thread_id = str(current.initialization.thread_id or "").strip()
+    if not planning_thread_id:
+        raise ApplicationLifecycleConflictError("Agent Settings 修订缺少原 application planning thread。")
+    interaction_id = f"agent-settings:{uuid4().hex}"
+    active = ActiveFormalRevision(
+        changeId=f"chg_{uuid4().hex}",
+        formalBranch=FormalRevisionBranch.WORKBENCH_PLAN_REVISION,
+        sourceThreadId=source_thread_id,
+        sourceRunId=source_run_id,
+        request=f"修改智能体 {agent_id} 的 Agent Settings。",
+        target=RevisionTarget(type="agent", agentId=agent_id),
+        impactInteractionId=interaction_id,
+        planningThreadId=planning_thread_id,
+        status="drafting",
+        currentArtifact="technical-plan",
+        remainingArtifacts=[],
+    )
+    updated = current.model_copy(
+        update={
+            "updated_at": utc_now(),
+            "revision": current.revision + 1,
+            "active_formal_revision": active,
+            "resource_locks": resource_locks,
+        }
+    )
+    write_application_lifecycle(workspace, updated, expected_revision=current.revision)
+    return active
+
+
 def issue_revision_continuation(
     workspace: str | Path,
     *,

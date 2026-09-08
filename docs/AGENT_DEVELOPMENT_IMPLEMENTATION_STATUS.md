@@ -38,6 +38,7 @@
 - 现有 `build-dag.v3` 已增加平台 readiness `agent:runtime` Unit、业务 `agent:<agentId>` Unit、`agent` owner 和独立 Agent Runtime Generation CodeRunner；模型不再为 `agent:runtime` 生成 bootstrap 任务，业务 Agent 任务写权限只允许对应 `agent-runtime/**` 路径。CodeRunner 已强制读取专用生成 Skill，只接收当前 Agent Contract 和其 Tool 实际引用的 Java API Contract/Schema，并按模板固定入口生成业务模块。工作台智能体设计/配置产物、真实生成应用端到端运行、专属测试/审查证据和候选版本晋升仍未完成。
 - 已确认 [Agent Runtime 模板仓库与初始化流程设计](./AGENT_RUNTIME_TEMPLATE_AND_INITIALIZATION.md)，独立模板仓库 `Bettetman/agent-runtime-template@master` 可安装、测试、启动和基础对话。XCodeAgent 已把 `agentRuntime` 接入 TechnicalPlan 确认结果、Electron 模板下载、前后端协议类型、manifest 和 Backend readiness：`agent_contracts[]` 非空时下载并复核仓库、分支、commit 与关键文件，普通应用明确记录 skipped 且不创建目录。业务产物路径已统一切换到 `src/app/agent/`、`src/app/tools/`，`agent:runtime` 不再生成模型 bootstrap 任务；Testing、Code Review、Project Launch、Java Gateway 和 Electron 完整端到端仍未完成。
 - 已完成 [Agent Development Workbench 第一期](./AGENT_DEVELOPMENT_PHASE1_IMPLEMENTATION_PLAN.md)：生产工作台已把 Agent 作为页面、API、实体同级开发目标，只读展示完整 Contract、七段 Settings、Runtime/Gateway/Tool/实体/页面依赖和固定实现文件状态；`type=agent` 已贯通 AG-UI 请求、Graph State、lifecycle、资源锁、EntitySourceBinding continuation、Build scope、required Unit 闭包及现有 Agent CodeRunner。实现未增加新的产品 Endpoint，也未改变页面、Endpoint、实体和应用级 Build 的既有行为。
+- Agent Settings 第一批可视化编辑已接入生产工作台：七段配置不再展示原始 JSON，Prompt 与 Temperature 可生成 TechnicalPlan revision draft、查看字段 Diff、确认或放弃；确认时原子更新正式 TechnicalPlan 并使绑定旧 Contract Hash 的当前 Agent BuildTaskPlan 失效。Prepare 使用现有 Agent 资源锁，运行任务必须回到原会话停止，等待确认/失败/停止任务可由用户明确结束后释放；不会自动中断运行，也不影响无关 Agent、页面、Endpoint 或实体。
 - 因此当前总体状态是：**正式开发中，已完成 RequirementSpec、ProductPlan、TechnicalPlan、条件式 Runtime 初始化、Agent Workbench 第一期与业务 Agent Build 接入切片，但尚未形成运行试聊、专属测试、启动和验收端到端闭环**。第一期自动化证据为 Backend 167 个定向测试和 Frontend Node/Renderer TypeScript + Electron/Vite Build 通过；Electron 实机完整 Agent Build 仍由用户验证。
 - 原型脚本 `test:agent-development`、`test:new-app-agent-planning`、智能体配置样式测试与 `typecheck` 可作为原型验证入口；本次变基后已重新运行并通过。
 
@@ -53,8 +54,8 @@
 | Build DAG 与代码生成 | 原型已实现（模拟） | 正式开发中 | 正式开发中 | 已进入同一 `build-dag.v3`、BuildScheduler 和 Repair 边界；Agent CodeRunner 已按专用 Skill、完整 Contract 和相关 API Schema 生成固定三文件，真实生成工程与运行证据仍待验证。 |
 | 智能体定义与工具适配代码 Diff | 原型已实现（模拟） | 未开始 | 正式开发中 | 已固定 `agent-runtime/` 路径、Python 3.12 + DeepAgents、模板注入模型、动态业务模块入口、`agent` owner 与受限 CodeRunner；尚无真实生成应用 Diff 验收。 |
 | 页面集成与调用入口 | 原型已实现 | 正式开发中 | 正式开发中 | 页面 action、Java 网关与 Agent Contract 使用稳定 Endpoint 引用和 AG-UI SSE；尚未在生成应用中执行真实联调。 |
-| 配置 active/draft/candidate | 原型已实现 | 未开始 | 未开始 | 设计正式配置状态、候选版本、CAS、失效和回滚边界。 |
-| 配置确认后重新生成 | 原型已实现 | 未开始 | 未开始 | 必须走“确认变更 → 重新生成 → Diff → 测试 → 验收”，验收前不替换 active。 |
+| 配置 active/draft/candidate | 原型已实现 | 已集成 | 已集成 | 第一批复用现有 TechnicalPlan revision draft、changeId、CAS、预览、确认和放弃，不新增平行配置文件；独立 candidate/active 发布与历史回滚仍未实现。 |
+| 配置确认后重新生成 | 原型已实现 | 正式开发中 | 正式开发中 | Prompt/Temperature 确认后正式 Contract 更新并定向废弃旧 Agent BuildTaskPlan，用户可重新进入现有 Build；完整单测、试聊、审查、验收证据失效与候选发布仍待后续闭合。 |
 | 试聊与智能体预览 | 原型已实现 | 未开始 | 未开始 | 复用现有 Preview、会话与 AG-UI；明确 Mock、候选和已生效版本。 |
 | 单测、集成测试、审查 | 原型已实现（模拟/复用） | 未开始 | 未开始 | 编译 required checks，并接入现有 unit test、integration test 和 code review 阶段。 |
 | 智能体验收与版本完成态 | 原型已实现 | 未开始 | 未开始 | 验收必须绑定候选版本、真实 Diff、测试/启动证据和用户决定。 |
@@ -391,3 +392,29 @@
 - 模板完整 `pytest` 在依赖准备阶段因下载 `anthropic==1.3.0` 超时而未进入测试；不能记为测试通过或产品代码失败。
 - XCodeAgent 全量 `tests.test_builtin_skills` 有 1 项 Spring Boot Skill 文案断言差异；对比当前 HEAD 后确认预期句子与 Skill 缺失均已存在，本切片没有修改该 Skill。正式 Backend 未运行，`/health` 无法连接。
 - 未运行 Electron UI、真实模型、Java Gateway 或生成应用端到端验证。
+
+## 14. Agent Settings 可视化编辑第一批
+
+2026-09-07 完成开发阶段 Agent Settings 的首个正式编辑闭环：
+
+- Agent 详情以人设与 Prompt、模型、记忆、工具、Skills、知识库和上下文七段摘要替代原始 JSON；未实现的 Long-term Memory、Skills、Knowledge 和 Compression 继续只读显示为当前版本未启用。
+- 第一批只开放角色、表达风格、System Prompt、业务约束和 Temperature；模型策略、能力要求、安全前缀与全部平台派生字段保持只读。
+- Renderer 只提交严格 Settings Patch、Contract Hash 和 TechnicalPlan SHA；现有 `/application-page-planning/run` 以 `agent-settings-revision` Custom Event 和 `agentSettingsRevision` State Snapshot 完成 `get/prepare/confirm/abandon` AG-UI 生命周期。
+- Prepare 从已确认 ProductPlan、当前 TechnicalPlan 和允许字段重新编译完整 Agent Contract，只写 revision draft。Confirm 复验 lifecycle、draft、Contract 和文档 Hash 后原子写 TechnicalPlan Markdown/JSON；Abandon 删除 draft 且不修改正式计划。
+- 同一 Agent 的现有开发 execution 继续拥有资源锁。本地表单可以编辑，但 Prepare 前必须处理占用：运行中只能打开原任务并由用户停止；等待确认、失败或停止任务可在二次确认后使用现有 AG-UI `planControlAction=end` 结束。没有 backing execution 的孤立 Agent 锁会被定向清理。
+- Confirm 只使绑定旧 Contract Hash 的当前 Agent BuildTaskPlan stale，并提示用户重新进入现有 Build DAG；不自动启动 Build，也不修改 ProductPlan、页面、Endpoint、实体或无关 Agent。
+
+正式代码证据：
+
+- `Backend/app/services/agent_settings_revision.py`
+- `Backend/app/services/agent_settings_revision_models.py`
+- `Backend/app/services/agent_settings_revision_support.py`
+- `Backend/app/services/application_revision_lifecycle.py`
+- `Backend/app/protocols/application_page_planning.py`
+- `Frontend/src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/AgentSettingsView.tsx`
+- `Frontend/src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/AgentSettingsSummary.tsx`
+- `Frontend/src/renderer/src/service/agentSettingsRevision.ts`
+- `Backend/tests/test_agent_settings_revision.py`
+- `Frontend/tests/agentTechnicalPlanView.test.ts`
+
+当前限制：尚未开放 Tools、Memory、Skills、Knowledge、Context 的写能力；尚未实现独立 candidate/active 发布、配置历史回滚、完整质量证据定向失效和运行时热更新。Electron 实机交互、明暗主题和真实 Agent Build 由用户后续启动验证，不以自动化结构测试替代。

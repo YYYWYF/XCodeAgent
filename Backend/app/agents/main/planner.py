@@ -252,6 +252,7 @@ def _technical_planning_prompt(
                             "toolCalling": True,
                             "structuredOutput": False,
                             "vision": False,
+                            "observability": True,
                         },
                         "generation": {"temperature": 0.2},
                     },
@@ -450,7 +451,8 @@ def _technical_planning_prompt(
         "capabilityBindings covers every ProductPlan capabilityId in order and binds it to stable toolIds. "
         "agentSettings has exactly prompt, model, memory, tools, skills, knowledge, and context. prompt contains "
         "persona(role and tone), systemPrompt, and constraints. model uses project_default and declares streaming, "
-        "toolCalling, structuredOutput, and vision requirements. memory must follow the example: SQLite short-term "
+        "toolCalling, structuredOutput, vision, and observability requirements. streaming and observability must "
+        "both be true and remain read-only platform requirements. memory must follow the example: SQLite short-term "
         "checkpoint only when ProductPlan supportsMultiTurn is true; long-term and archive remain disabled. tools "
         "contains enabled and bindings; each binding has toolId, name, description, endpointId, and accessMode(read "
         "or write), references a real non-gateway Endpoint, and uses read only for GET/HEAD/OPTIONS; other HTTP "

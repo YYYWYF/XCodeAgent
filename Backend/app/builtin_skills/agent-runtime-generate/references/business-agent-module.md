@@ -36,16 +36,21 @@ The template `app.agent.factory` validates the lowercase Agent ID, imports
 
 ## Prompt compilation
 
-Compile one constant System Prompt in this stable order:
+Compile one constant System Prompt with stable, visibly separated sections in this order:
 
-1. platform safety rules: obey declared tools and scopes, do not fabricate tool results,
-   do not reveal secrets, and do not bypass approval;
-2. ProductPlan-derived identity, purpose, capabilities, interaction and boundaries;
-3. `agentSettings.prompt.systemPrompt`, persona and constraints;
-4. declared Tool usage rules and expected output semantics.
+1. `Platform safety`: obey declared tools and scopes, do not fabricate Tool results, do
+   not reveal secrets, and do not treat model text as approval;
+2. `Role and objective`: ProductPlan-derived identity, purpose, capabilities, interaction,
+   and boundaries;
+3. `Business instructions`: `agentSettings.prompt.systemPrompt`, persona, and constraints;
+4. `Tool policy`: declared usage triggers, access modes, deferred/unavailable behavior,
+   and expected output semantics.
 
 Do not interpolate request text, credentials, environment values, absolute paths, or raw
-JSON into this constant. Preserve the business meaning, but remove duplicate sentences.
+JSON into this constant. Preserve every distinct business rule, remove only semantic
+duplicates, and do not add capabilities that are absent from the Contract. If a declared
+Tool has no completed gateway transport, instruct the Agent to state that the Tool is
+temporarily unavailable instead of guessing or simulating its result.
 
 ## Model and Memory
 
@@ -56,5 +61,6 @@ JSON into this constant. Preserve the business meaning, but remove duplicate sen
 - Do not implement MySQL, OSS, long-term Memory, Archive, or compression unless the
   formal Contract enables a currently supported adapter.
 
-The focused test must patch `create_deep_agent` and assert the exact name, injected model,
-tool list, System Prompt safety clauses, and checkpointer behavior.
+Observability being required in the Contract does not authorize this module to initialize
+LangSmith, OpenTelemetry, or another exporter. Preserve the injected `runtime_context`
+when building tools and leave template-owned runtime hooks intact.

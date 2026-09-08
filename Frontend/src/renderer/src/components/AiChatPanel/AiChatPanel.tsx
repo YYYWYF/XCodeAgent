@@ -4564,16 +4564,37 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
-              developmentArtifacts={applicationLifecycle?.developmentArtifacts}
+              applicationLifecycle={applicationLifecycle}
               apiContracts={developmentPlanningApiContracts}
               agents={developmentPlanningAgents}
               entities={developmentPlanningEntities}
               detailLabel={artifactDetailLabel}
               developmentDisabled={loading || workflowInputLocked}
+              onAgentSettingsApplied={onPlanningArtifactsRefresh}
+              onEndAgentExecution={async (execution) => {
+                const session = allSessions.find(
+                  (item) =>
+                    item.workflowId === application.id && item.threadId === execution.threadId
+                )
+                const identity = session ? await loadSessionIdentity(session.id) : undefined
+                return handleEndPlan(execution.runId, identity)
+              }}
+              onOpenAgentExecution={async (execution) => {
+                const session = allSessions.find(
+                  (item) =>
+                    item.workflowId === application.id && item.threadId === execution.threadId
+                )
+                if (!session) {
+                  message.error('没有找到当前开发任务所属的本地会话。')
+                  return
+                }
+                await handleOpenChatSession(session.id)
+              }}
               onStartAgentDevelopment={(agent) => void handleStartAgentBuild(agent)}
               outlineLocked={false}
               pages={displayedPlanningPages}
               pageTree={displayedPlanningPageTree}
+              workspaceRoot={application.workspaceRoot}
               {...artifactOutlineProps}
             />
           </div>

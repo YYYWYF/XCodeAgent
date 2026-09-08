@@ -1,7 +1,11 @@
-import { RobotOutlined } from '@ant-design/icons'
-import { Button, Tag } from 'antd'
+import { InfoCircleOutlined, RobotOutlined } from '@ant-design/icons'
+import { Button, Tag, Tooltip } from 'antd'
 import type { ReactElement } from 'react'
-import type { DevelopmentPlanningAgentOption } from '../../../../typings'
+import type {
+  ApplicationLifecycle,
+  DevelopmentPlanningAgentOption,
+  WorkbenchExecution
+} from '../../../../typings'
 import { cx } from '../../../../utils'
 import AgentDependenciesView from './AgentDependenciesView'
 import AgentSettingsView from './AgentSettingsView'
@@ -9,14 +13,24 @@ import './AgentDevelopmentDetail.less'
 
 type Props = {
   agent: DevelopmentPlanningAgentOption
+  applicationLifecycle?: ApplicationLifecycle
   disabled?: boolean
+  onEndAgentExecution?: (execution: WorkbenchExecution) => Promise<boolean>
+  onOpenAgentExecution?: (execution: WorkbenchExecution) => Promise<void>
+  onSettingsApplied: () => void
   onStartDevelopment: (agent: DevelopmentPlanningAgentOption) => void
+  workspaceRoot?: string
 }
 
 /** 组合 Agent 概览、七段 Settings、依赖状态和现有 Build 入口。 */
 export default function AgentDevelopmentDetail({
   agent,
+  applicationLifecycle,
   disabled,
+  onEndAgentExecution,
+  onOpenAgentExecution,
+  onSettingsApplied,
+  workspaceRoot,
   onStartDevelopment
 }: Props): ReactElement {
   const summary = agent.taskSummary
@@ -42,14 +56,29 @@ export default function AgentDevelopmentDetail({
 
       <section className={cx('agent-detail-section')}>
         <div className={cx('agent-detail-section-title')}>
-          <h3>概览</h3>
+          <div className={cx('agent-detail-section-heading-main')}>
+            <h3>概览</h3>
+            <Tooltip
+              overlayClassName={cx('agent-contract-hash-tooltip')}
+              title={
+                <span>
+                  <strong>Contract Hash</strong>
+                  <code>{agent.contractHash}</code>
+                </span>
+              }
+            >
+              <button
+                aria-label="查看 Contract Hash"
+                className={cx('agent-detail-info-trigger')}
+                type="button"
+              >
+                <InfoCircleOutlined />
+              </button>
+            </Tooltip>
+          </div>
           <Tag color="purple">{agent.capabilities.length} 项能力</Tag>
         </div>
         <p className={cx('agent-purpose')}>{agent.purpose || '未声明用途'}</p>
-        <div className={cx('agent-contract-hash')}>
-          <span>Contract Hash</span>
-          <code>{agent.contractHash}</code>
-        </div>
         <div className={cx('agent-capability-list')}>
           {agent.capabilities.map((capability) => (
             <article key={capability.capabilityId}>
@@ -77,7 +106,14 @@ export default function AgentDevelopmentDetail({
         ) : null}
       </section>
 
-      <AgentSettingsView agentSettings={agent.agentSettings} />
+      <AgentSettingsView
+        agent={agent}
+        applicationLifecycle={applicationLifecycle}
+        onEndAgentExecution={onEndAgentExecution}
+        onOpenAgentExecution={onOpenAgentExecution}
+        onApplied={onSettingsApplied}
+        workspaceRoot={workspaceRoot}
+      />
       <AgentDependenciesView
         artifacts={agent.artifacts}
         dependencies={agent.dependencies}

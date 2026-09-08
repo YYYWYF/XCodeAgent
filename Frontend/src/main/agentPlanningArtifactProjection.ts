@@ -18,6 +18,7 @@ export type WorkbenchAgentOption = {
   entryActions: Array<{ pageId: string; pageLabel: string; actionIds: string[] }>
   interaction: Record<string, unknown>
   contractHash: string
+  technicalPlanSha256: string
   agentSettings: Record<string, Record<string, unknown>>
   dependencies: {
     gateway: Record<string, unknown>
@@ -50,6 +51,9 @@ export async function projectWorkbenchAgents(
   const contracts = recordItems(technicalPlan.agent_contracts)
   const invalid: string[] = []
   const agents: WorkbenchAgentOption[] = []
+  const technicalPlanSha256 = await fileSha256(
+    path.join(workspaceRoot, '.xcodeagent', 'plans', 'technical-plan.json')
+  )
   for (const productAgent of productAgents) {
     const agentId = String(productAgent.agentId || '').trim()
     const matches = contracts.filter((item) => String(item.agentId || '').trim() === agentId)
@@ -64,7 +68,8 @@ export async function projectWorkbenchAgents(
         technicalPlan,
         productAgent,
         matches[0],
-        buildTaskPlan
+        buildTaskPlan,
+        technicalPlanSha256
       )
     )
   }
@@ -85,7 +90,8 @@ async function projectAgent(
   technicalPlan: Record<string, unknown>,
   productAgent: Record<string, unknown>,
   contract: Record<string, unknown>,
-  buildTaskPlan?: Record<string, unknown>
+  buildTaskPlan: Record<string, unknown> | undefined,
+  technicalPlanSha256: string
 ): Promise<WorkbenchAgentOption> {
   const agentId = String(contract.agentId || '').trim()
   const identity = record(contract.identity)
@@ -134,6 +140,7 @@ async function projectAgent(
     entryActions,
     interaction: record(contract.interaction),
     contractHash: hash,
+    technicalPlanSha256,
     agentSettings: Object.fromEntries(
       ['prompt', 'model', 'memory', 'tools', 'skills', 'knowledge', 'context'].map((key) => [
         key,
@@ -215,6 +222,12 @@ async function readAgentRuntimeManifest(workspaceRoot: string): Promise<Record<s
 /** 计算与后端相同的排序紧凑 JSON SHA-256。 */
 function contractHash(contract: Record<string, unknown>): string {
   return `sha256:${createHash('sha256').update(canonicalJson(contract), 'utf8').digest('hex')}`
+}
+
+/** 读取正式 TechnicalPlan 文件并生成带算法前缀的 CAS 哈希。 */
+async function fileSha256(filePath: string): Promise<string> {
+  const content = await fs.readFile(filePath)
+  return `sha256:${createHash('sha256').update(content).digest('hex')}`
 }
 
 /** 递归生成按键排序且无多余空白的 JSON 文本。 */
