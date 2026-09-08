@@ -16,6 +16,7 @@ import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/comp
 import { developmentContinuationFromWorkflow } from '../src/renderer/src/components/AiChatPanel/developmentContinuation'
 import DevelopmentContinuationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/DevelopmentContinuationCard'
 import RemainingEntityBindingsCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/RemainingEntityBindingsCard'
+import { BuildExecutionRunCard } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
@@ -68,6 +69,7 @@ import {
 } from '../src/renderer/src/workbenchPhase'
 import type {
   ApplicationLifecycle,
+  WorkflowBuildExecutionSlice,
   WorkbenchExecution,
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
@@ -1341,6 +1343,51 @@ test('不在资源集合中的页面仍可自由输入', () => {
 
   assert.equal(context.execution, undefined)
   assert.equal(context.dependencyLocked, false)
+})
+
+test('构建卡片将已满足要求的任务展示为完成，并与其他状态保持一致排序', () => {
+  const executionSlice: WorkflowBuildExecutionSlice = {
+    scope: { type: 'page', targetId: 'age_entry_page' },
+    tasks: [
+      { id: 'pending', title: '待执行任务', status: 'pending' },
+      { id: 'satisfied', title: '后端启动配置与基础依赖', status: 'already_satisfied' },
+      { id: 'failed', title: '失败任务', status: 'failed' },
+      { id: 'completed', title: '新实现任务', status: 'completed' },
+      { id: 'running', title: '运行中任务', status: 'running' }
+    ]
+  }
+  const markup = renderToStaticMarkup(
+    createElement(BuildExecutionRunCard, { executionSlice, status: 'running' })
+  )
+  const tags = [...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)]
+  assert.deepEqual(tags.map((match) => match[1]), ['完成', '完成', '运行中', '失败', '待执行'])
+  const panels = [...markup.matchAll(/class="([^"]*workflow-build-task-panel[^"]*)"/g)]
+  assert.equal(panels.length, 5)
+  assert.match(panels[0][1], /completed/)
+  assert.match(panels[1][1], /completed/)
+  assert.ok(markup.indexOf('后端启动配置与基础依赖') < markup.indexOf('运行中任务'))
+  assert.match(markup, /40% 完成/)
+  assert.equal(executionSlice.tasks?.[1].status, 'already_satisfied')
+})
+
+test('构建完成快照有无汇总时都把已满足要求的任务计入完成', () => {
+  for (const summary of [undefined, { total: 2, completed: 2, pending: 0 }]) {
+    const executionSlice: WorkflowBuildExecutionSlice = {
+      scope: { type: 'page', targetId: 'age_entry_page' },
+      summary,
+      tasks: [
+        { id: 'satisfied', title: '已满足要求任务', status: 'already_satisfied' },
+        { id: 'completed', title: '新实现任务', status: 'completed' }
+      ]
+    }
+    const markup = renderToStaticMarkup(
+      createElement(BuildExecutionRunCard, { executionSlice, status: 'completed' })
+    )
+    assert.match(markup, /100% 完成/)
+    const tags = [...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)]
+    assert.deepEqual(tags.map((match) => match[1]), ['完成', '完成'])
+    assert.doesNotMatch(markup, /workflow-build-task-panel[^"<>]*already_satisfied/)
+  }
 })
 
 test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、失败、通过与跳过状态', () => {

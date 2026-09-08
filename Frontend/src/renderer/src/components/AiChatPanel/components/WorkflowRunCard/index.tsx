@@ -63,6 +63,7 @@ import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
 import { workflowClarification } from './workflowClarification'
+import { buildTaskDisplayStatus } from './buildTaskStatus'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -1176,7 +1177,7 @@ function BuildExecutionSliceProgress({
   const total = numberValue(summary.total, tasks.length)
   const completed = numberValue(
     summary.completed,
-    tasks.filter((task) => task.status === 'completed').length
+    tasks.filter((task) => buildTaskDisplayStatus(task.status) === 'completed').length
   )
   const failed = numberValue(
     summary.failed,
@@ -1188,7 +1189,7 @@ function BuildExecutionSliceProgress({
   )
   const pending = numberValue(
     summary.pending,
-    tasks.filter((task) => !task.status || task.status === 'pending').length
+    tasks.filter((task) => buildTaskDisplayStatus(task.status) === 'pending').length
   )
   const reused = numberValue(summary.reused, executionSlice.reusable_task_ids?.length || 0)
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0
@@ -1281,7 +1282,7 @@ function BuildExecutionSliceProgress({
           >
             {displayTasks.map((task) => (
               <Collapse.Panel
-                className={cx('workflow-build-task-panel', task.status || 'pending')}
+                className={cx('workflow-build-task-panel', buildTaskDisplayStatus(task.status))}
                 header={
                   <BuildExecutionTaskHeader
                     expanded={expandedTaskKeys.has(taskId(task))}
@@ -1360,7 +1361,7 @@ function BuildExecutionTaskHeader({
 }): ReactElement {
   /** 渲染可折叠任务卡片的头部摘要。 */
 
-  const status = String(task.status || 'pending')
+  const status = buildTaskDisplayStatus(task.status)
   const title = displayTaskTitle(task)
   const description = displayTaskDescription(task)
   return (
@@ -1728,7 +1729,7 @@ function sortBuildTasksForDisplay(
 function taskStatusRank(task: WorkflowBuildExecutionTask): number {
   /** 返回任务状态展示优先级，完成项沉淀在顶部，未开始项留在底部。 */
 
-  const status = String(task.status || 'pending')
+  const status = buildTaskDisplayStatus(task.status)
   if (status === 'completed') return 0
   if (status === 'running') return 1
   if (status === 'failed') return 2

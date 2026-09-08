@@ -1107,7 +1107,7 @@ export type WorkflowBuildExecutionTask = {
   owner?: string
   title?: string
   description?: string
-  status?: 'pending' | 'running' | 'completed' | 'failed' | string
+  status?: 'pending' | 'running' | 'completed' | 'already_satisfied' | 'failed' | string
   dependencies?: string[]
   dependsOn?: string[]
   targetFiles?: string[]
