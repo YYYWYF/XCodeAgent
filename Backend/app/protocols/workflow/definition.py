@@ -94,6 +94,13 @@ def workflow_capabilities() -> dict[str, Any]:
         "name": "workflow-run",
         "endpoint": "/workflow/run",
         "transport": "ag-ui-sse",
+        "backendStartupCheck": {
+            "id": "backend_startup", "name": "后端启动检查",
+            "after": "backend_build", "event": "integration_test.checks",
+            "requiredWhenApplicable": True, "timeoutSeconds": 60,
+            "stabilitySeconds": 3, "temporaryPort": True,
+            "cleanupAfterCheck": True, "repairOwner": "backend",
+        },
         "workflowActions": {
             "requestField": "forwardedProps.workflowAction",
             "values": {

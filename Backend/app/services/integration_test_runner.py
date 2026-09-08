@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from app.services.data_source_policy import read_application_datasource_type
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.backend_startup_check import run_backend_startup_check
+from app.services.backend_startup_diagnostics import startup_source_fingerprint
 from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
@@ -40,6 +42,7 @@ def run_integration_checks(
     frontend_install_result: dict[str, Any] | None = None,
     affected_layers: set[str] | None = None,
     install_frontend_dependencies: bool = True,
+    include_backend_startup: bool = False,
 ) -> dict[str, Any]:
     """按阶段和受影响层执行检查，支持快速修改复用同一套确定性命令。"""
 
@@ -125,10 +128,49 @@ def run_integration_checks(
                 unit_tests_affected=backend_unit_tests_affected,
                 on_progress=on_progress,
             )
+        if include_backend_startup and phase in {"all", "build"}:
+            startup = _backend_startup_result(state, root, log_root, backend_results, on_progress)
+            index = next((i + 1 for i, item in enumerate(backend_results)
+                          if item["id"] == "backend_build"), len(backend_results))
+            backend_results.insert(index, startup)
         for result in backend_results:
             results.append(result)
             events.append(result["id"])
+    elif include_backend_startup and phase in {"all", "build"}:
+        results.append(_skipped_after_blocking_failure_result(
+            check_id="backend_startup", name="后端启动检查", layer="backend", language=None,
+            evidence="本轮不执行后端检查，跳过后端启动检测。", required=False,
+            on_progress=on_progress,
+        ))
+        events.append("backend_startup")
+    if include_backend_startup:
+        for check in results:
+            if check["id"] == "backend_startup" and "source_fingerprint" not in check:
+                check["source_fingerprint"] = startup_source_fingerprint(root)
     return {"test_results": results, "test_events": events}
+
+
+def _backend_startup_result(
+    state: dict[str, Any], root: Path, log_root: Path,
+    backend_results: list[dict[str, Any]], on_progress: CheckProgressCallback | None,
+) -> dict[str, Any]:
+    """仅在真实后端构建成功后检测新产物；前置失败不产生重复修复请求。"""
+    build = next((item for item in backend_results if item["id"] == "backend_build"), {})
+    backend_root = _find_maven_project_root(root)
+    if not backend_root or not build.get("passed") or build.get("skipped"):
+        return _skipped_after_blocking_failure_result(
+            check_id="backend_startup", name="后端启动检查", layer="backend", language="java",
+            evidence=("未发现 Maven 工程，跳过后端启动检查。" if not backend_root
+                      else "前置检查失败，后端启动检查未执行。"),
+            required=bool(backend_root), on_progress=on_progress,
+        )
+    maven = _maven_command(backend_root)
+    # 构建成功说明 Maven 已被识别；仍在启动服务中显式处理命令消失后的失败。
+    return run_backend_startup_check(
+        root=root, backend_root=backend_root, log_root=log_root,
+        run_id=str(state.get("active_run_id") or ""),
+        maven_command=maven[0] if maven else "mvn", on_progress=on_progress,
+    )
 
 
 def _safe_artifact_namespace(value: str) -> str:

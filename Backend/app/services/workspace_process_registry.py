@@ -7,6 +7,8 @@ import signal
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,65 @@ class WorkspaceProcessRegistry:
         self._lock = threading.Lock()
         self._processes: dict[str, set[subprocess.Popen[Any]]] = {}
         self._deleting_workspaces: set[str] = set()
+        self._run_processes: dict[str, set[subprocess.Popen[Any]]] = {}
+        self._cancelled_runs: set[str] = set()
+
+    def allow_run(self, run_id: str) -> None:
+        """登记新工作流时解除同 ID 上次取消留下的启动栅栏。"""
+        with self._lock:
+            self._cancelled_runs.discard(run_id)
+
+    def is_run_cancelled(self, run_id: str) -> bool:
+        """让同步检测循环观察异步工作流的停止请求。"""
+        with self._lock:
+            return run_id in self._cancelled_runs
+
+    def cancel_run(self, run_id: str) -> None:
+        """封锁迟到的检测启动，并仅通知本 run 登记的进程退出。"""
+        with self._lock:
+            self._cancelled_runs.add(run_id)
+            processes = list(self._run_processes.get(run_id, set()))
+        for process in processes:
+            _terminate_process_group(process, force=False)
+
+    @contextmanager
+    def managed_process(
+        self, *popenargs: Any, workspace: str | Path, run_id: str = "", **kwargs: Any,
+    ) -> Iterator[subprocess.Popen[Any]]:
+        """为需自行观察就绪的短期进程提供登记、取消和异常回收边界。"""
+        key = _workspace_key(workspace)
+        _configure_process_group(kwargs)
+        with self._lock:
+            if key in self._deleting_workspaces or run_id in self._cancelled_runs:
+                raise RuntimeError("工作区或当前运行已停止，拒绝启动检测进程。")
+            process = subprocess.Popen(*popenargs, **kwargs)
+            self._processes.setdefault(key, set()).add(process)
+            if run_id:
+                self._run_processes.setdefault(run_id, set()).add(process)
+        try:
+            yield process
+        finally:
+            try:
+                _terminate_process_group(process, force=False)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _terminate_process_group(process, force=True)
+                    process.wait(timeout=1)
+            finally:
+                # communicate 被取消时也必须关闭 PIPE，避免退出后的文件句柄泄漏。
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+                # 未能回收的进程仍留在工作区登记中，供删除或停止重试处理。
+                if process.poll() is not None:
+                    self._unregister(key, process)
+                    with self._lock:
+                        registered = self._run_processes.get(run_id)
+                        if registered is not None:
+                            registered.discard(process)
+                            if not registered:
+                                self._run_processes.pop(run_id, None)
 
     def run(
         self,
@@ -29,6 +90,7 @@ class WorkspaceProcessRegistry:
         capture_output: bool = False,
         timeout: float | None = None,
         check: bool = False,
+        run_id: str = "",
         **kwargs: Any,
     ) -> subprocess.CompletedProcess[Any]:
         """按 subprocess.run 语义执行命令，并在整个等待期间登记其进程组。"""
@@ -49,11 +111,9 @@ class WorkspaceProcessRegistry:
             kwargs["stdout"] = subprocess.PIPE
             kwargs["stderr"] = subprocess.PIPE
         _configure_process_group(kwargs)
-        process = subprocess.Popen(*popenargs, **kwargs)
-        self._register(key, process)
-        try:
+        with self.managed_process(*popenargs, workspace=workspace, run_id=run_id, **kwargs) as process:
             try:
-                stdout, stderr = process.communicate(input, timeout=timeout)
+                stdout, stderr = self._communicate(process, input, timeout, run_id)
             except subprocess.TimeoutExpired as exc:
                 _terminate_process_group(process, force=True)
                 stdout, stderr = process.communicate()
@@ -69,8 +129,28 @@ class WorkspaceProcessRegistry:
             if check:
                 completed.check_returncode()
             return completed
-        finally:
-            self._unregister(key, process)
+
+    def _communicate(
+        self, process: subprocess.Popen[Any], input: Any,
+        timeout: float | None, run_id: str,
+    ) -> tuple[Any, Any]:
+        """绑定 run 的补打包命令定期观察取消，避免忽略 SIGTERM 后等到构建超时。"""
+        if not run_id:
+            return process.communicate(input, timeout=timeout)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            if self.is_run_cancelled(run_id):
+                # 抛出后交给 managed_process 的五秒宽限与强制回收边界处理。
+                raise RuntimeError("当前运行已停止，工作区命令已取消。")
+            remaining = None if deadline is None else deadline - time.monotonic()
+            try:
+                return process.communicate(
+                    input, timeout=0.2 if remaining is None else max(0, min(0.2, remaining)),
+                )
+            except subprocess.TimeoutExpired:
+                input = None
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise
 
     def begin_workspace_deletion(self, workspace: str | Path) -> None:
         """封锁目标工作区后续短期命令启动。"""

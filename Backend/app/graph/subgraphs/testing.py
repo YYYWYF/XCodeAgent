@@ -20,6 +20,7 @@ from app.services.frontend_performance_runner import (
     run_frontend_performance_check,
 )
 from app.services.integration_test_runner import run_integration_checks
+from app.services.backend_startup_diagnostics import startup_source_fingerprint
 from app.services.test_validation import evaluate_quality_gate
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.code_changes import merge_code_change_sets
@@ -51,6 +52,7 @@ _INTEGRATION_CHECK_ORDER = (
     "frontend_install",
     "frontend_build",
     "backend_build",
+    "backend_startup",
     "backend_static_check",
     "frontend_test_generation",
     "backend_test_generation",
@@ -1031,6 +1033,18 @@ def _string_list(value: Any, *, limit: int) -> list[str]:
     )[:limit]
 
 
+def _startup_cache_is_current(state: ProjectState, checks: list[dict[str, Any]]) -> bool:
+    """仅复用包含本轮启动检查且源码未变化的完整构建检查快照。"""
+    check = next((item for item in checks if item.get("id") == "backend_startup"), None)
+    if check is None:
+        return False
+    try:
+        from app.workspace.spec_documents import workspace_root
+        return check.get("source_fingerprint") == startup_source_fingerprint(workspace_root(state))
+    except OSError:
+        return False
+
+
 def build_project_checks(
     state: ProjectState,
     config: RunnableConfig,
@@ -1043,6 +1057,7 @@ def build_project_checks(
         state.get("integration_build_checks_completed")
         and isinstance(cached_results, list)
         and cached_results
+        and _startup_cache_is_current(state, cached_results)
     ):
         cached_results = _ordered_integration_checks(
             [item for item in cached_results if isinstance(item, dict)]
@@ -1059,6 +1074,7 @@ def build_project_checks(
         state,
         on_progress=reporter,
         phase="build",
+        include_backend_startup=True,
     )
     test_results = _ordered_integration_checks(
         [
@@ -1716,6 +1732,9 @@ def _repair_config_hints_for(
         )
         if not owner_matches:
             continue
+        if check_id == "backend_startup":
+            hints.extend(_string_list(result.get("repair_hints"), limit=20))
+            continue
         hints.extend(_INTEGRATION_REPAIR_CONFIG_HINTS.get(check_id, []))
     return list(dict.fromkeys(hints))
 
@@ -1742,6 +1761,11 @@ def _repair_scoped_tasks(state: ProjectState) -> list[dict[str, Any]]:
         owner_sources = [path for path in source_files if _source_layer(path) == owner]
         config_hints = _repair_config_hints_for(state, owner)
         owner_failures = failed_by_owner.get(owner, [])
+        repair_directory = _REPAIR_DIRECTORY_BY_OWNER[owner]
+        if owner == "backend" and any(item.get("id") == "backend_startup" for item in owner_failures):
+            # 启动检测提供真实目录大小写，避免 Backend 工程只能获准修改不存在的 backend。
+            if any(path.startswith("Backend/") for path in config_hints):
+                repair_directory = "Backend"
         if not owner_tests and not owner_sources and not config_hints and not owner_failures:
             continue
         owner_task = next((task for task in tasks if task.get("owner") == owner), None)
@@ -1761,7 +1785,7 @@ def _repair_scoped_tasks(state: ProjectState) -> list[dict[str, Any]]:
             dict.fromkeys(
                 [
                     *_string_list(owner_task.get("allowed_paths"), limit=100),
-                    _REPAIR_DIRECTORY_BY_OWNER[owner],
+                    repair_directory,
                 ]
             )
         )
@@ -1876,6 +1900,7 @@ def integration_test(state: ProjectState) -> dict:
     reuse_build_checks = bool(
         state.get("integration_build_checks_completed")
         and frontend_performance_decision in _FRONTEND_PERFORMANCE_DECISIONS
+        and _startup_cache_is_current(state, _without_unit_test_checks(state.get("integration_build_results")))
     )
     cached_build_results = _without_unit_test_checks(
         state.get("integration_build_results")

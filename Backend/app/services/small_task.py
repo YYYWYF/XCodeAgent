@@ -8,6 +8,7 @@ from typing import Any
 
 from app.agents.small_task import invoke_small_task_agent, normalize_small_task_result
 from app.agents.tool_activity_stream import ToolActivityCallback
+from app.services.backend_startup_diagnostics import startup_failure_packet
 from app.services.engineering_acceptance_verifier import unauthorized_batch_paths
 from app.services.small_task_scope import (
     SMALL_TASK_MAX_CONCURRENCY,
@@ -63,6 +64,10 @@ def build_small_task_packet(
         "failureEvidence": _bounded_value(
             task.get("failure_evidence") or task.get("failureEvidence") or {},
             limit=6_000,
+        ),
+        # 独立保留启动根因与完整日志入口，不受整体测试报告的长度裁剪影响。
+        "backendStartupFailure": startup_failure_packet(
+            task.get("failure_evidence") or task.get("failureEvidence") or {}
         ),
         "confirmedContext": {
             "buildExecutionScope": _bounded_value(

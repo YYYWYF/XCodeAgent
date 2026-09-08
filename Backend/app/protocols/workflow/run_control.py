@@ -27,6 +27,7 @@ from app.services.application_lifecycle import (
     stop_workbench_execution,
 )
 from app.domain.application_lifecycle import PendingInteractionType
+from app.services.workspace_process_registry import workspace_process_registry
 from app.workspace.task_documents import (
     build_task_plan_json_path,
     load_build_task_plan_json,
@@ -62,6 +63,7 @@ class WorkflowRunRegistry:
             if workspace_key and workspace_key in self._deleting_workspaces:
                 raise RuntimeError("当前应用正在删除，不能启动新的运行。")
             self._tasks[run_id] = (workspace_key, task)
+            workspace_process_registry.allow_run(run_id)
 
     def unregister(self, run_id: str, task: asyncio.Task[Any] | None = None) -> None:
         """仅移除仍指向同一 asyncio task 的运行登记。"""
@@ -77,6 +79,8 @@ class WorkflowRunRegistry:
         with self._lock:
             entry = self._tasks.get(run_id)
         task = entry[1] if entry is not None else None
+        if task and not task.done():
+            workspace_process_registry.cancel_run(run_id)
         return bool(task and not task.done() and task.cancel())
 
     async def cancel_and_wait(
@@ -93,6 +97,7 @@ class WorkflowRunRegistry:
         if task is None or task.done():
             return "not_running"
 
+        workspace_process_registry.cancel_run(run_id)
         cancellation_requested = task.cancel()
         if not cancellation_requested:
             return "not_running" if task.done() else "cancel_timeout"
@@ -137,6 +142,7 @@ class WorkflowRunRegistry:
         requested_run_ids = [run_id for run_id, task in entries if not task.done()]
         for _run_id, task in entries:
             if not task.done():
+                workspace_process_registry.cancel_run(_run_id)
                 task.cancel()
         if entries:
             await asyncio.wait(

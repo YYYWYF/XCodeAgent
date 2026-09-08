@@ -39,7 +39,11 @@ import {
   isApplicationCreationComplete,
   subscribeApplicationsChanged
 } from '../src/renderer/src/service/applicationStorage'
-import { readApplicationLifecycle } from '../src/renderer/src/service/agUiAgent'
+import {
+  readApplicationLifecycle,
+  readIntegrationTestChecks
+} from '../src/renderer/src/service/agUiAgent'
+import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
 import { processStepsForMessageDisplay } from '../src/renderer/src/service/processStepHistory'
 import { workspaceToolErrorMessage } from '../src/renderer/src/service/workspaceTools'
 import { codeReviewReportFocusKey } from '../src/renderer/src/components/AiChatPanel/hooks/useCodeReviewReportPanel'
@@ -1337,4 +1341,48 @@ test('不在资源集合中的页面仍可自由输入', () => {
 
   assert.equal(context.execution, undefined)
   assert.equal(context.dependencyLocked, false)
+})
+
+test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、失败、通过与跳过状态', () => {
+  for (const status of ['running', 'failed', 'passed', 'skipped'] as const) {
+    const checks = readIntegrationTestChecks({
+      checks: [
+        { id: 'backend_build', name: '后端构建检查', status: 'passed', required: true },
+        {
+          id: 'backend_startup',
+          name: '后端启动检查',
+          status,
+          required: true,
+          evidence:
+            status === 'failed'
+              ? 'ClassNotFoundException: ConfigurationBeanFactoryMetadata'
+              : '启动检测'
+        },
+        { id: 'frontend_performance', name: '前端性能测试', status: 'skipped', required: false }
+      ]
+    })
+    assert.equal(checks?.[1].id, 'backend_startup')
+    assert.equal(checks?.[1].status, status)
+    const markup = renderToStaticMarkup(
+      createElement(ProcessSteps, {
+        loading: true,
+        steps: [
+          {
+            id: 'integration',
+            kind: 'workflow',
+            status: 'running',
+            title: '集成测试',
+            detail: '',
+            sequence: 1,
+            nodeName: 'integration_test',
+            checks
+          }
+        ]
+      })
+    )
+    assert.ok(markup.indexOf('后端构建检查') < markup.indexOf('后端启动检查'))
+    assert.ok(markup.indexOf('后端启动检查') < markup.indexOf('前端性能测试'))
+    if (status === 'failed') assert.match(markup, /ConfigurationBeanFactoryMetadata/)
+    assert.equal(integrationTestCheckReportPath(checks![1]), undefined)
+  }
 })
