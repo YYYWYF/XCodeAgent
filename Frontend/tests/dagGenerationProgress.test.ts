@@ -78,6 +78,16 @@ function snapshot(
 }
 
 test('新版 Snapshot 会严格解析，并丢弃 Candidate 正文和旧 stages 协议', () => {
+  const issueWithPrivateTaskId = {
+    code: 'unit.contract',
+    level: 'unit',
+    category: 'contract',
+    unitIds: ['page:orders'],
+    taskIds: ['candidate:secret'],
+    retryUnitIds: ['page:orders'],
+    retryable: true,
+    message: '契约需要修复'
+  }
   const parsed = readDagGenerationSnapshot({
     ...snapshot({}, [
       unit({
@@ -85,18 +95,7 @@ test('新版 Snapshot 会严格解析，并丢弃 Candidate 正文和旧 stages 
         status: 'candidate_ready',
         retainedTaskCount: 2,
         candidateTaskCount: 1,
-        issues: [
-          {
-            code: 'unit.contract',
-            level: 'unit',
-            category: 'contract',
-            unitIds: ['page:orders'],
-            taskIds: ['candidate:secret'],
-            retryUnitIds: ['page:orders'],
-            retryable: true,
-            message: '契约需要修复'
-          }
-        ]
+        issues: [issueWithPrivateTaskId]
       })
     ]),
     tasks: [{ id: 'candidate:secret', body: 'candidate-body-must-stay-private' }],
@@ -111,7 +110,43 @@ test('新版 Snapshot 会严格解析，并丢弃 Candidate 正文和旧 stages 
   assert.equal(parsed.units[0]?.issues[0]?.message, '契约需要修复')
   assert.equal('tasks' in parsed, false)
   assert.equal(JSON.stringify(parsed).includes('candidate-body-must-stay-private'), false)
+  assert.equal(JSON.stringify(parsed).includes('candidate:secret'), false)
   assert.equal(readDagGenerationSnapshot({ stages: [] }), undefined)
+})
+
+test('任一 Unit 的未知生命周期枚举或空 id 会拒绝整份 Snapshot', () => {
+  const invalidUnits = [
+    { ...unit(), participation: 'some_future_participation' },
+    { ...unit(), generationStrategy: 'some_future_strategy' },
+    { ...unit(), status: 'some_future_status' },
+    { ...unit(), id: '' }
+  ]
+
+  for (const invalidUnit of invalidUnits) {
+    assert.equal(
+      readDagGenerationSnapshot({
+        ...snapshot(),
+        units: [unit({ id: 'page:valid' }), invalidUnit]
+      }),
+      undefined
+    )
+  }
+})
+
+test('Unit 协议校验覆盖展示上限之外的条目，合法列表仍只展示前 200 条', () => {
+  const units = Array.from({ length: 201 }, (_, index) => unit({ id: `page:${index}` }))
+  const parsed = readDagGenerationSnapshot(snapshot({}, units))
+
+  assert.ok(parsed)
+  assert.equal(parsed.units.length, 200)
+  assert.equal(parsed.summary.unitCount, 201)
+  assert.equal(
+    readDagGenerationSnapshot({
+      ...snapshot({}, units),
+      units: [...units.slice(0, 200), { ...unit({ id: 'page:200' }), status: 'some_future_status' }]
+    }),
+    undefined
+  )
 })
 
 test('所有 Unit 状态都有稳定展示，waiting 与 round_exhausted 不伪装为百分比或 Run failed', () => {

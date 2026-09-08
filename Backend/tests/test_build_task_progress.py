@@ -416,12 +416,15 @@ class PlanningRunProgressProjectorTests(unittest.TestCase):
         self.assertEqual(projected["summary"]["readyUnitCount"], 1)
 
     def test_global_repair_projects_round_and_safe_issues(self) -> None:
-        """Global reopen 后透传轮次和问题，但省略问题 details 内部上下文。"""
+        """Global reopen 后透传轮次和问题，但省略 Candidate 身份与诊断上下文。"""
 
         state = ready(planning_transitions.begin_generation(run(), at=AT))
         state = planning_transitions.begin_global_check(state, at=AT)
         global_issue = issue(level="global").model_copy(
-            update={"details": {"candidateExcerpt": "private-fragment"}}
+            update={
+                "task_ids": ("candidate-secret",),
+                "details": {"candidateExcerpt": "private-fragment"},
+            }
         )
         state = planning_transitions.begin_global_repair(
             state,
@@ -434,6 +437,8 @@ class PlanningRunProgressProjectorTests(unittest.TestCase):
         self.assertEqual(projected["globalRepairLimit"], 2)
         self.assertEqual(projected["phase"], "generating_units")
         self.assertEqual(projected["globalIssues"][0]["code"], global_issue.code)
+        self.assertNotIn("taskIds", projected["globalIssues"][0])
+        self.assertNotIn("candidate-secret", str(projected))
         self.assertNotIn("details", projected["globalIssues"][0])
         self.assertNotIn("private-fragment", str(projected))
         self.assertEqual(projected["units"][0]["generationRound"], 2)

@@ -265,7 +265,6 @@ export type DagGenerationIssueRecord = {
   level: string
   category: string
   unitIds: string[]
-  taskIds: string[]
   retryUnitIds: string[]
   retryable: boolean
   message: string
@@ -314,11 +313,7 @@ export type DagGenerationSnapshot = {
   summary: DagGenerationSummary
 }
 
-const DAG_GENERATION_RUN_STATUSES = new Set<string>([
-  'active',
-  'failed',
-  'cancelled'
-])
+const DAG_GENERATION_RUN_STATUSES = new Set<string>(['active', 'failed', 'cancelled'])
 const DAG_GENERATION_PHASES = new Set<string>([
   'preparing',
   'generating_units',
@@ -859,6 +854,9 @@ export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot
     return undefined
   }
 
+  const units = readDagGenerationProgressUnits(snapshot.units)
+  if (!units) return undefined
+
   return {
     schemaVersion,
     planningRunId,
@@ -867,16 +865,17 @@ export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot
     phase: phase as DagGenerationPhase,
     globalRepairRound: nonNegativeInteger(snapshot.globalRepairRound),
     globalRepairLimit: nonNegativeInteger(snapshot.globalRepairLimit),
-    units: readDagGenerationProgressUnits(snapshot.units),
+    units,
     globalIssues: readDagGenerationIssues(snapshot.globalIssues),
     summary: readDagGenerationSummary(snapshot.summary)
   }
 }
 
-/** 解析 Unit 进度并严格过滤未知参与方式、策略或状态。 */
-function readDagGenerationProgressUnits(value: unknown): DagGenerationUnitRecord[] {
-  if (!Array.isArray(value)) return []
-  return value.slice(0, 200).flatMap((item) => {
+/** 完整校验全部 Unit 的生命周期枚举，再单独截取 UI 可展示的前 200 条。 */
+function readDagGenerationProgressUnits(value: unknown): DagGenerationUnitRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const units: DagGenerationUnitRecord[] = []
+  for (const item of value) {
     const unit = objectValue(item)
     const id = boundedString(unit.id, 240)
     const participation = stringValue(unit.participation)
@@ -888,10 +887,10 @@ function readDagGenerationProgressUnits(value: unknown): DagGenerationUnitRecord
       !DAG_GENERATION_STRATEGIES.has(generationStrategy) ||
       !DAG_GENERATION_UNIT_STATUSES.has(status)
     ) {
-      return []
+      return undefined
     }
-    return [
-      {
+    if (units.length < 200) {
+      units.push({
         id,
         kind: boundedString(unit.kind, 80) || 'unknown',
         participation: participation as DagGenerationParticipation,
@@ -905,12 +904,13 @@ function readDagGenerationProgressUnits(value: unknown): DagGenerationUnitRecord
         reusableCapabilityCount: nonNegativeInteger(unit.reusableCapabilityCount),
         candidateTaskCount: nonNegativeInteger(unit.candidateTaskCount),
         issues: readDagGenerationIssues(unit.issues)
-      }
-    ]
-  })
+      })
+    }
+  }
+  return units
 }
 
-/** 解析安全 Issue 投影；Candidate 正文和任意 details 均不会进入前端状态。 */
+/** 解析安全 Issue 投影；Candidate 身份、正文和任意 details 均不会进入前端状态。 */
 function readDagGenerationIssues(value: unknown): DagGenerationIssueRecord[] {
   if (!Array.isArray(value)) return []
   return value.slice(0, 100).flatMap((item) => {
@@ -924,7 +924,6 @@ function readDagGenerationIssues(value: unknown): DagGenerationIssueRecord[] {
         level: boundedString(issue.level, 80) || 'unit',
         category: boundedString(issue.category, 80) || 'validation',
         unitIds: boundedStringList(issue.unitIds, 200, 240),
-        taskIds: boundedStringList(issue.taskIds, 200, 240),
         retryUnitIds: boundedStringList(issue.retryUnitIds, 200, 240),
         retryable: issue.retryable === true,
         message

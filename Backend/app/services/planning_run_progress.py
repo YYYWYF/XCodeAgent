@@ -29,7 +29,6 @@ class DagGenerationIssue(TypedDict):
     level: str
     category: str
     unitIds: list[str]
-    taskIds: list[str]
     retryUnitIds: list[str]
     retryable: bool
     message: str
@@ -134,14 +133,13 @@ def _project_unit(unit: UnitRunState) -> DagGenerationUnit:
 
 
 def _project_issue(issue: ValidationIssue) -> DagGenerationIssue:
-    """投影结构化路由与展示信息，省略可能携带内部上下文的 details。"""
+    """投影结构化路由与展示信息，省略 Candidate 身份和内部诊断上下文。"""
 
     return {
         "code": issue.code,
         "level": issue.level,
         "category": issue.category,
         "unitIds": list(issue.unit_ids),
-        "taskIds": list(issue.task_ids),
         "retryUnitIds": list(issue.retry_unit_ids),
         "retryable": issue.retryable,
         "message": issue.message,

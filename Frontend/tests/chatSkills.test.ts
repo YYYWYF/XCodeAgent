@@ -17,6 +17,10 @@ import {
   readProjectPlanUpdate,
   readWorkspaceInspectionSnapshot
 } from '../src/renderer/src/service/agUiAgent'
+import type {
+  DagGenerationSnapshot,
+  DagGenerationUnitRecord
+} from '../src/renderer/src/service/agUiAgent'
 import { revisionContinuationFromWorkflow } from '../src/renderer/src/service/applicationPagePlanning'
 import { technicalPlanConfirmationSubmission } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
@@ -65,6 +69,63 @@ import {
   reconcileEnabledChatSkills
 } from '../src/renderer/src/components/SkillsPage/skillCatalog'
 import type { UserSkillCatalog, WorkflowRunPayload } from '../src/renderer/src/typings'
+
+/** 构造当前 DAG 进度协议的完整 Unit，测试只覆写关心的离散事实。 */
+function dagGenerationUnit(
+  overrides: Partial<DagGenerationUnitRecord> = {}
+): DagGenerationUnitRecord {
+  return {
+    id: 'page:home',
+    kind: 'page',
+    participation: 'generate_only',
+    generationStrategy: 'model',
+    status: 'pending',
+    generationRound: 1,
+    attemptInRound: 0,
+    localAttemptLimit: 3,
+    totalAttempts: 0,
+    retainedTaskCount: 0,
+    reusableCapabilityCount: 0,
+    candidateTaskCount: 0,
+    issues: [],
+    ...overrides
+  }
+}
+
+/** 构造当前 dag-generation.v1 完整快照，避免历史测试继续伪造旧 stages 协议。 */
+function dagGenerationSnapshot(
+  overrides: Partial<DagGenerationSnapshot> = {},
+  units: DagGenerationUnitRecord[] = [dagGenerationUnit()]
+): DagGenerationSnapshot {
+  return {
+    schemaVersion: 'dag-generation.v1',
+    planningRunId: 'planning-run-chat-test',
+    revision: 1,
+    status: 'active',
+    phase: 'generating_units',
+    globalRepairRound: 0,
+    globalRepairLimit: 2,
+    units,
+    globalIssues: [],
+    summary: {
+      unitCount: units.length,
+      readyUnitCount: units.filter((unit) =>
+        ['not_required', 'candidate_ready'].includes(unit.status)
+      ).length,
+      pendingUnitCount: units.filter((unit) => unit.status === 'pending').length,
+      activeUnitCount: units.filter((unit) => ['generating', 'validating'].includes(unit.status))
+        .length,
+      roundExhaustedUnitCount: units.filter((unit) => unit.status === 'round_exhausted').length,
+      abortedUnitCount: units.filter((unit) => unit.status === 'aborted').length,
+      retainedTaskCount: units.reduce((count, unit) => count + unit.retainedTaskCount, 0),
+      candidateTaskCount: units.reduce((count, unit) => count + unit.candidateTaskCount, 0),
+      unitIssueCount: units.reduce((count, unit) => count + unit.issues.length, 0),
+      globalIssueCount: 0,
+      failureIssueCount: 0
+    },
+    ...overrides
+  }
+}
 
 test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   const scope = workflowDebugBuildScope({
@@ -895,19 +956,9 @@ test('AG-UI DAG 生成步骤按稳定 ID 合并最新完整快照', async () => 
         name: 'agent-process',
         value: {
           ...baseStep,
-          dagGeneration: {
-            stages: [
-              {
-                id: 'unit_skeleton',
-                name: '生成 Unit DAG 骨架',
-                status: 'running',
-                detail: '生成中'
-              }
-            ],
-            tasks: [],
-            summary: { unitCount: 0, taskCount: 0 },
-            artifacts: []
-          }
+          dagGeneration: dagGenerationSnapshot({ revision: 1 }, [
+            dagGenerationUnit({ id: 'api', kind: 'backend' })
+          ])
         }
       },
       {
@@ -916,38 +967,10 @@ test('AG-UI DAG 生成步骤按稳定 ID 合并最新完整快照', async () => 
         value: {
           ...baseStep,
           status: 'completed',
-          dagGeneration: {
-            stages: [
-              {
-                id: 'unit_skeleton',
-                name: '生成 Unit DAG 骨架',
-                status: 'completed',
-                detail: '完成'
-              }
-            ],
-            tasks: [
-              {
-                id: 'api',
-                title: '实现 API',
-                owner: 'data_source',
-                status: 'pending',
-                dependencies: [],
-                changePaths: ['backend/api.py'],
-                acceptanceCriteria: ['接口可用']
-              },
-              {
-                id: 'page',
-                title: '实现页面',
-                owner: 'frontend',
-                status: 'pending',
-                dependencies: ['api'],
-                changePaths: ['frontend/Page.tsx'],
-                acceptanceCriteria: ['页面可渲染']
-              }
-            ],
-            summary: { unitCount: 2, taskCount: 2, batchCount: 2 },
-            artifacts: []
-          }
+          dagGeneration: dagGenerationSnapshot({ revision: 2, phase: 'global_check' }, [
+            dagGenerationUnit({ id: 'api', kind: 'backend', status: 'candidate_ready' }),
+            dagGenerationUnit({ id: 'page', status: 'candidate_ready' })
+          ])
         }
       },
       { type: 'TEXT_MESSAGE_END', messageId },
@@ -967,7 +990,7 @@ test('AG-UI DAG 生成步骤按稳定 ID 合并最新完整快照', async () => 
     assert.equal(result.processSteps[0]?.sequence, 3)
     assert.equal(result.processSteps[0]?.status, 'completed')
     assert.deepEqual(
-      result.processSteps[0]?.dagGeneration?.tasks.map((task) => task.id),
+      result.processSteps[0]?.dagGeneration?.units.map((unit) => unit.id),
       ['api', 'page']
     )
   } finally {
@@ -1180,93 +1203,27 @@ test('工作区检查详情优先从完成事件恢复并兼容旧状态字段',
 
 test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
   const snapshot = readDagGenerationSnapshot({
+    ...dagGenerationSnapshot({ phase: 'persisting_pending' }, [
+      dagGenerationUnit({
+        id: 'page:home',
+        status: 'candidate_ready',
+        candidateTaskCount: 1,
+        issues: [
+          {
+            code: 'unit.contract',
+            level: 'unit',
+            category: 'generation',
+            unitIds: ['page:home'],
+            retryUnitIds: ['page:home'],
+            retryable: true,
+            message: '候选任务已通过修复'
+          }
+        ]
+      })
+    ]),
     agent_note: 'raw-model-output',
     buildTaskPlanPath: '/workspace/build-task-plan.json',
-    stages: [
-      {
-        id: 'unit_skeleton',
-        name: '生成 Unit DAG 骨架',
-        status: 'completed',
-        detail: '已完成'
-      },
-      {
-        id: 'model_planning',
-        name: '生成候选构建任务',
-        status: 'completed',
-        detail: '已生成 1 项'
-      },
-      {
-        id: 'task_compilation',
-        name: '编译任务注册表与依赖',
-        status: 'completed',
-        detail: '已编译 1 个任务、0 条任务依赖。',
-        output: {
-          kind: 'compiled_tasks',
-          tasks: [
-            {
-              id: 'page-home',
-              title: '实现首页',
-              owner: 'frontend',
-              status: 'pending',
-              dependencies: [],
-              changePaths: ['frontend/src/pages/Home.tsx'],
-              acceptanceCriteria: ['首页可渲染']
-            }
-          ],
-          edges: { items: [], truncated: false },
-          summary: { frontend: 1, backend: 0, database: 0 }
-        }
-      },
-      {
-        id: 'artifact_persistence',
-        name: '保存 DAG 产物',
-        status: 'completed',
-        detail: '已保存 DAG 产物。',
-        output: {
-          kind: 'artifacts',
-          artifacts: [
-            {
-              id: 'dag',
-              name: 'build-task-plan.json',
-              kind: 'json',
-              confirmationStatus: 'pending',
-              status: 'saved'
-            }
-          ],
-          count: 1
-        }
-      }
-    ],
-    tasks: [
-      {
-        id: 'page-home',
-        title: '实现首页',
-        owner: 'frontend',
-        status: 'pending',
-        dependencies: [],
-        changePaths: ['frontend/src/pages/Home.tsx'],
-        acceptanceCriteria: ['首页可渲染']
-      }
-    ],
-    summary: {
-      unitCount: 2,
-      taskCount: 1,
-      edgeCount: 0,
-      batchCount: 1,
-      frontendCount: 1,
-      dataSourceCount: 0,
-      isValid: true
-    },
-    artifacts: [
-      { id: 'plan', name: '内部 Build Task Plan', kind: 'internal', status: 'saved' },
-      {
-        id: 'dag',
-        name: 'build-task-plan.json',
-        kind: 'json',
-        status: 'saved',
-        confirmationStatus: 'pending'
-      }
-    ]
+    candidateTaskId: 'candidate:secret'
   })
   const markup = renderToStaticMarkup(
     createElement(ProcessSteps, {
@@ -1286,17 +1243,16 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
   )
 
   assert.ok(snapshot)
-  assert.match(markup, /生成 Unit DAG 骨架/)
-  assert.match(markup, /实现首页/)
-  assert.match(markup, /按 DAG 拓扑顺序排列，将在下一阶段执行/)
-  assert.match(markup, /build-task-plan\.json/)
+  assert.match(markup, /任务 DAG Unit 进度/)
+  assert.match(markup, /page:home/)
+  assert.match(markup, /retained 0 \/ candidate 1/)
   assert.doesNotMatch(
     JSON.stringify(snapshot),
-    /raw-model-output|\/workspace\/build-task-plan\.json/
+    /raw-model-output|\/workspace\/build-task-plan\.json|candidate:secret/
   )
 })
 
-test('旧会话从节点完成事件恢复 DAG 生成详情', () => {
+test('历史会话从节点完成事件恢复当前 DAG 生成详情', () => {
   const steps = processStepsForDisplay(undefined, {
     runId: 'run-dag-history',
     threadId: 'thread-dag-history',
@@ -1309,36 +1265,16 @@ test('旧会话从节点完成事件恢复 DAG 生成详情', () => {
         status: 'completed',
         data: {
           detail: {
-            dagGeneration: {
-              stages: [
-                {
-                  id: 'unit_skeleton',
-                  name: '生成 Unit DAG 骨架',
-                  status: 'completed',
-                  detail: '完成'
-                }
-              ],
-              tasks: [
-                {
-                  id: 'page-home',
-                  title: '实现首页',
-                  owner: 'frontend',
-                  status: 'pending',
-                  dependencies: [],
-                  changePaths: [],
-                  acceptanceCriteria: []
-                }
-              ],
-              summary: { unitCount: 1, taskCount: 1 },
-              artifacts: []
-            }
+            dagGeneration: dagGenerationSnapshot({ phase: 'persisting_pending' }, [
+              dagGenerationUnit({ id: 'page:home', status: 'candidate_ready' })
+            ])
           }
         }
       }
     ]
   })
 
-  assert.equal(steps?.[0].dagGeneration?.tasks[0]?.id, 'page-home')
+  assert.equal(steps?.[0].dagGeneration?.units[0]?.id, 'page:home')
 })
 
 test('实体数据源绑定把只读计划更新挂到正确执行轮次并默认展开', () => {
