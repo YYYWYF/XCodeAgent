@@ -1,4 +1,5 @@
 import type { ApplicationLifecycle } from './typings'
+import { clearReachedWorkbenchPhase } from './workbenchPhaseNavigation'
 
 const DEVELOPMENT_ENTRY_STORAGE_PREFIX = 'xcodeagent:enter-dev-confirmed:'
 const DEVELOPMENT_ENTRY_EVENT = 'xcodeagent:development-entered'
@@ -43,6 +44,7 @@ export function markApplicationEnteredDevelopment(applicationId: string): void {
 
 /** 删除应用时清除工作台阶段和进入开发门禁的本地持久化状态。 */
 export function clearApplicationWorkbenchState(applicationId: string): void {
+  clearReachedWorkbenchPhase(applicationId)
   window.localStorage.removeItem(workbenchPhaseStorageKey(applicationId))
   window.localStorage.removeItem(developmentEntryStorageKey(applicationId))
 }

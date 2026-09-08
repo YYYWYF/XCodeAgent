@@ -7,6 +7,9 @@ export type WorkbenchPhaseContextValue = {
   /** 实际生效阶段已通过测试门禁。 */
   phase: WorkbenchPhase
   derivedPhase: WorkbenchPhase
+  /** 独立于当前浏览视图的应用最远阶段，仅用于回访入口。 */
+  reachedPhase: WorkbenchPhase
+  recordReachedPhase: (phase: WorkbenchPhase) => void
   manualOverride: WorkbenchPhase | null
   switchPhase: (phase: WorkbenchPhase | null) => void
   agent: WorkbenchAgentIdentity

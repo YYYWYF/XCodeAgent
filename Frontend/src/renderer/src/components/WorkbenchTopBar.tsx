@@ -7,6 +7,7 @@ import { useWorkbenchPhase } from '../context'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
 import { testEntryGateReason } from '../developmentArtifacts'
+import { WORKBENCH_PHASE_ORDER as PHASE_ORDER } from '../workbenchPhaseNavigation'
 import {
   markApplicationEnteredDevelopment,
   WORKBENCH_PHASE_AGENTS,
@@ -14,17 +15,8 @@ import {
 } from '../workbenchPhase'
 import './WorkbenchTopBar.less'
 
-const PHASE_ORDER: WorkbenchPhase[] = [
-  'product',
-  'planning',
-  'development',
-  'test',
-  'review',
-  'acceptance'
-]
-
 type Props = {
-  application: ApplicationConfig
+  application: Pick<ApplicationConfig, 'id' | 'name'>
   workspaceRoot: string
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
@@ -43,7 +35,7 @@ export default function WorkbenchTopBar({
   rightPanelOpen,
   onToggleRightPanel
 }: Props): JSX.Element {
-  const { phase, derivedPhase, manualOverride, switchPhase, agent, testEntryGate } =
+  const { phase, derivedPhase, reachedPhase, manualOverride, switchPhase, agent, testEntryGate } =
     useWorkbenchPhase()
   const following = manualOverride === null
   // 回退切阶段（切到旅程上游 = 增量迭代）需二次确认；向前推进 / 同级直接切。
@@ -89,9 +81,8 @@ export default function WorkbenchTopBar({
         <div className={cx('workbench-topbar-stepper')} role="tablist" aria-label="阶段">
           {PHASE_ORDER.map((phaseKey, idx) => {
             const isActive = phase === phaseKey
-            // 测试确认成功后先由会话切换立即设置当前阶段，生命周期异步回传前也不能把当前按钮置灰。
-            const reached =
-              Math.max(PHASE_ORDER.indexOf(derivedPhase), PHASE_ORDER.indexOf(phase)) >= idx
+            // 回访资格使用独立的到达记录，不能随当前视图回退或 execution 收口而降低。
+            const reached = PHASE_ORDER.indexOf(reachedPhase) >= idx
             return (
               <Fragment key={phaseKey}>
                 {idx > 0 ? (
