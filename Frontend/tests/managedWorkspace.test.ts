@@ -21,7 +21,7 @@ async function withTemporaryWorkspace(
 }
 
 /** 验证真实 .xcodeagent 目录和有效 v5 application.json 可以被识别。 */
-test('允许添加规范的 XCodeAgent 本地项目', async () => {
+test('允许添加规范的 AIStudio 本地项目', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
     const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
     await fs.mkdir(agentDirectory)

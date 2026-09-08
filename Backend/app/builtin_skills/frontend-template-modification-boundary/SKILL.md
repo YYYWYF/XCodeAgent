@@ -60,11 +60,11 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | `src/components/<Module>/` | 可复用组件 `index.tsx` |
 | `src/apis/` | 业务接口 `<biz>Api.ts` |
 
-> 在 XCodeAgent 的 Frontend task 中，类型检查、构建、安装、lint 和测试由外层 integration-test 阶段统一执行，Frontend Agent 不调用这些项目级命令。独立人工流程且用户明确要求验证时，仍然禁止创建临时脚本。
+> 在 AIStudio 的 Frontend task 中，类型检查、构建、安装、lint 和测试由外层 integration-test 阶段统一执行，Frontend Agent 不调用这些项目级命令。独立人工流程且用户明确要求验证时，仍然禁止创建临时脚本。
 
 ## 🔴 验证边界：由外层质量门禁统一执行
 
-在 XCodeAgent 的 Frontend task 中，写完代码后不要运行依赖安装、TypeScript 类型检查、lint、build、unit test 或 dev-server 命令。外层 integration-test 阶段会在所有 owner task 完成后统一执行仓库级检查；如果发现依赖或命令缺失，应在最终 JSON 中报告，不能通过安装依赖或临时脚本绕过边界。
+在 AIStudio 的 Frontend task 中，写完代码后不要运行依赖安装、TypeScript 类型检查、lint、build、unit test 或 dev-server 命令。外层 integration-test 阶段会在所有 owner task 完成后统一执行仓库级检查；如果发现依赖或命令缺失，应在最终 JSON 中报告，不能通过安装依赖或临时脚本绕过边界。
 
 ### 外层质量门禁负责的检查
 
@@ -84,7 +84,7 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 
 ### 独立人工流程读取命令输出
 
-只有在脱离 XCodeAgent task 的独立人工流程中，用户明确要求执行命令时，才读取 `execute` 返回的 `{ exit_code, stdout, stderr }`；不要用 `echo "EXIT_CODE=$?"` 包装命令，也不要为此创建脚本。
+只有在脱离 AIStudio task 的独立人工流程中，用户明确要求执行命令时，才读取 `execute` 返回的 `{ exit_code, stdout, stderr }`；不要用 `echo "EXIT_CODE=$?"` 包装命令，也不要为此创建脚本。
 
 ## 核心原则
 

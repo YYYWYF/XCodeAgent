@@ -51,7 +51,7 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 
 ## 🔴 验证边界：由外层质量门禁统一执行
 
-在 XCodeAgent 的 Backend task 中，写完代码后不要运行 Maven 构建、编译、单元测试或启动命令。外层 integration-test 阶段会在所有 owner task 完成后统一执行仓库级检查；如果发现依赖或命令缺失，应在最终 JSON 中报告，不能通过安装依赖或临时脚本绕过边界。
+在 AIStudio 的 Backend task 中，写完代码后不要运行 Maven 构建、编译、单元测试或启动命令。外层 integration-test 阶段会在所有 owner task 完成后统一执行仓库级检查；如果发现依赖或命令缺失，应在最终 JSON 中报告，不能通过安装依赖或临时脚本绕过边界。
 
 ### ❌ Backend Agent 禁止行为
 

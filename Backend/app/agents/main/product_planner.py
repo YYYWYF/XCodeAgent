@@ -145,7 +145,7 @@ def _product_planning_prompt(
         "it is an internal derived field that the server creates only after validating this raw JSON. "
         "Your response must omit it completely, together with every other authorization mapping or field.\n"
         "All page acceptance_criteria and product_acceptance_criteria must describe only observable "
-        "product behavior for users of the generated application. Never include XCodeAgent workflow "
+        "product behavior for users of the generated application. Never include AIStudio workflow "
         "stages, preview availability, code generation, build/compile/lint/typecheck status, automated "
         "or integration tests, quality gates, or conditions for entering user acceptance.\n"
         "The page set is immutable: pages must match RequirementSpec.pages one-to-one by pageId, name, "

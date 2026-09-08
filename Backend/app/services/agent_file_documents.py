@@ -19,7 +19,7 @@ AGENTS_FILE_NAME = "AGENTS.md"
 # DeepAgents system context alongside workflow prompts, skills, and task input.
 MAX_AGENTS_CONTENT_BYTES = 32 * 1024
 DEFAULT_AGENTS_CONTENT = (
-    "# XCodeAgent 工作区指令\n\n"
+    "# AIStudio 工作区指令\n\n"
     "## 工作方式\n"
     "- 先理解任务，再制定清晰的实施计划。\n"
     "- 优先复用现有代码与项目规范；仅修改完成需求所必需的内容。\n"
@@ -64,7 +64,7 @@ class AgentFileRevisionConflictError(RuntimeError):
 
 
 def resolve_agent_files_root() -> Path:
-    """Return the current environment's XCodeAgent data directory."""
+    """Return the current environment's AIStudio data directory."""
 
     return Path.home() / user_skills_working_dir()
 
@@ -116,11 +116,11 @@ def save_agents_document(
 def _ensure_environment_root(root: Path | None) -> Path:
     environment_root = root or resolve_agent_files_root()
     if environment_root.is_symlink():
-        raise AgentFilePathError("XCodeAgent 环境目录不允许使用符号链接。")
+        raise AgentFilePathError("AIStudio 环境目录不允许使用符号链接。")
     try:
         environment_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError as exc:
-        raise AgentFilePathError("无法创建 XCodeAgent 环境目录。") from exc
+        raise AgentFilePathError("无法创建 AIStudio 环境目录。") from exc
     if environment_root.is_symlink() or not environment_root.is_dir():
         raise AgentFilePathError(f"{agent_files_root_label()} 不可用。")
     return environment_root

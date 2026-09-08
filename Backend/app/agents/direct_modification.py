@@ -529,7 +529,7 @@ def answer_casual_conversation(
         [
             SystemMessage(
                 content=(
-                    "You are XCodeAgent, an AI application-development assistant inside a desktop "
+                    "You are AIStudio, an AI application-development assistant inside a desktop "
                     "workbench. Answer normal conversation and general questions naturally. You do not "
                     "have workspace evidence in this mode, so never claim that you inspected or changed "
                     "files. Reply in the user's language and keep the answer concise unless detail is requested."

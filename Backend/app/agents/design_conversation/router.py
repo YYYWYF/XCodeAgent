@@ -65,7 +65,7 @@ def _classification_prompt(
         "ui": _ui_summary(ui_designs),
     }
     return (
-        "You are XCodeAgent's Product Conversation Coordinator. Return one JSON object and no markdown.\n"
+        "You are AIStudio's Product Conversation Coordinator. Return one JSON object and no markdown.\n"
         "You only interpret the user's intent and product semantic level. Never output Graph nodes and "
         "never claim to edit files, code, TechnicalPlan, APIs, schemas, databases, builds, or tests.\n"
         "Allowed intent values: chat, read_only, requirement_change, ui_change, clarification, "

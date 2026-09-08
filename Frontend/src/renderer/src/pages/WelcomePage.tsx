@@ -36,12 +36,12 @@ export default function WelcomePage({
     <main className={cx('welcome-page')} data-theme={theme}>
       <section className={cx('welcome-shell')}>
         <header className={cx('welcome-topbar')}>
-          <div className={cx('welcome-brand')} aria-label="XCodeAgent">
+          <div className={cx('welcome-brand')} aria-label="AIStudio">
             <span className={cx('welcome-brand-mark')} aria-hidden="true">
               <i />
               <i />
             </span>
-            <span>XCodeAgent</span>
+            <span>AIStudio</span>
           </div>
 
           <nav className={cx('welcome-utilities')} aria-label="欢迎页工具">
@@ -67,7 +67,7 @@ export default function WelcomePage({
           <section className={cx('welcome-primary')}>
             <WelcomeHero />
 
-            <section className={cx('welcome-actions')} aria-label="开始使用 XCodeAgent">
+            <section className={cx('welcome-actions')} aria-label="开始使用 AIStudio">
               <CreateApplicationAction onStartPlanning={onStartPlanning} theme={theme} />
               <OpenWorkspaceAction onOpenApplication={onOpenApplication} theme={theme} />
             </section>

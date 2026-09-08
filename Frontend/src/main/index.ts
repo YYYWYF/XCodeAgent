@@ -808,7 +808,7 @@ async function writeApplications(applications: unknown): Promise<void> {
   await fs.writeFile(applicationsFile, `${JSON.stringify(applications, null, 2)}\n`, 'utf8')
 }
 
-/** 仅将带有 XCodeAgent 项目标识的安全工作区目录移入系统回收站。 */
+/** 仅将带有 AIStudio 项目标识的安全工作区目录移入系统回收站。 */
 async function trashProjectDirectory(workspaceRoot: unknown): Promise<void> {
   const projectRoot = resolveWorkspaceRoot(workspaceRoot)
   const protectedRoots = new Set(
@@ -820,7 +820,7 @@ async function trashProjectDirectory(workspaceRoot: unknown): Promise<void> {
     ].map(pathComparisonKey)
   )
   if (protectedRoots.has(pathComparisonKey(projectRoot))) {
-    throw new Error('不能删除系统、用户或 XCodeAgent 数据目录')
+    throw new Error('不能删除系统、用户或 AIStudio 数据目录')
   }
 
   const projectMetadataFile = getWorkspaceApplicationFile(projectRoot)
@@ -833,7 +833,7 @@ async function trashProjectDirectory(workspaceRoot: unknown): Promise<void> {
   try {
     await fs.access(projectMetadataFile)
   } catch {
-    throw new Error('该目录不是由 XCodeAgent 管理的项目，不能直接删除')
+    throw new Error('该目录不是由 AIStudio 管理的项目，不能直接删除')
   }
 
   await movePathToTrashIfPresent(projectRoot, (targetPath) => shell.trashItem(targetPath))
@@ -1975,7 +1975,7 @@ function createMainWindow(): void {
     height: 920,
     minWidth: 720,
     minHeight: 600,
-    title: 'XCode Agent',
+    title: 'AIStudio',
     backgroundColor: '#f5f7fb',
     show: false,
     autoHideMenuBar: true,
@@ -2023,7 +2023,7 @@ function createLoginWindow(): void {
     height: 620,
     minWidth: 840,
     minHeight: 580,
-    title: 'XCode Agent 登录',
+    title: 'AIStudio 登录',
     backgroundColor: '#2f1d49',
     frame: false,
     hasShadow: false,
@@ -2091,7 +2091,7 @@ function setupTray(): void {
     trayIcon.setTemplateImage(true)
   }
   tray = new Tray(trayIcon)
-  tray.setToolTip('XCode Agent')
+  tray.setToolTip('AIStudio')
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
@@ -2158,7 +2158,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
   const backendBaseUrl = await startBackendService()
-  console.log(`XCode Agent backend URL: ${backendBaseUrl}`)
+  console.log(`AIStudio backend URL: ${backendBaseUrl}`)
   setupApplicationStorageIpc()
   setupApplicationSettingsIpc()
   setupAuthIpc()
@@ -2181,7 +2181,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
 
 /** 处理主实例初始化中的非认证清理异常。 */
 function handlePrimaryStartupFailure(error: unknown): boolean {
-  console.error('Failed to start XCode Agent', error)
+  console.error('Failed to start AIStudio', error)
   app.quit()
   return false
 }
@@ -2196,7 +2196,7 @@ async function focusPrimaryWindowAfterStartup(): Promise<void> {
 /** 接收第二实例通知，避免第二进程触碰当前实例的认证文件。 */
 function handleSecondInstance(): void {
   void focusPrimaryWindowAfterStartup().catch((error) => {
-    console.error('Failed to focus the primary XCode Agent window', error)
+    console.error('Failed to focus the primary AIStudio window', error)
   })
 }
 

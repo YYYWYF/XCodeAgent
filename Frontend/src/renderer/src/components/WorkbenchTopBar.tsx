@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react'
 import { Tag } from 'antd'
-import { BlockOutlined, DownOutlined, FolderOutlined } from '@ant-design/icons'
+import { BlockOutlined, LeftOutlined, FolderOutlined } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import { useWorkbenchPhase } from '../context'
@@ -25,7 +25,7 @@ type Props = {
 }
 
 /**
- * 工作台顶部单条：左 = Logo(XCodeAgent)，分隔线后 = 应用卡 + 阶段横排 stepper，
+ * 工作台顶部单条：左 = Logo(AIStudio)，分隔线后 = 应用卡 + 阶段横排 stepper，
  * 右侧 = 状态提示（当前 Agent + 跟随旅程）+ 预览开关，主题入口统一放在左侧快捷栏。
  */
 export default function WorkbenchTopBar({
@@ -55,26 +55,22 @@ export default function WorkbenchTopBar({
 
   return (
     <div className={cx('workbench-topbar')}>
-      <button
-        className={cx('workbench-topbar-logo')}
-        onClick={onReturnWelcome}
-        title="返回欢迎页"
-        type="button"
-      >
+      <div className={cx('workbench-topbar-logo')}>
         <BrandLogo size={22} />
-      </button>
+      </div>
 
       <span className={cx('workbench-topbar-divider')} aria-hidden="true" />
 
       <button
         className={cx('workbench-topbar-app')}
         onClick={onReturnWelcome}
-        title={workspaceRoot}
+        title={`返回欢迎页 · ${workspaceRoot}`}
+        aria-label={`${application.name}，返回欢迎页`}
         type="button"
       >
+        <LeftOutlined aria-hidden="true" />
         <FolderOutlined />
         <span className={cx('workbench-topbar-app-name')}>{application.name}</span>
-        <DownOutlined rotate={-90} />
       </button>
 
       <div className={cx('workbench-topbar-phase')}>

@@ -80,7 +80,7 @@ def resolve_user_skills_root() -> Path:
 
 
 def user_skills_working_dir() -> str:
-    """读取并校验当前 XCodeAgent 用户环境目录名。"""
+    """读取并校验当前 AIStudio 用户环境目录名。"""
 
     working_dir = os.getenv(
         USER_SKILLS_WORKING_DIR_ENV,
@@ -88,7 +88,7 @@ def user_skills_working_dir() -> str:
     ).strip()
     if working_dir not in SUPPORTED_USER_SKILLS_WORKING_DIRS:
         raise RuntimeError(
-            f"{USER_SKILLS_WORKING_DIR_ENV} 必须是受支持的 XCodeAgent 用户目录。"
+            f"{USER_SKILLS_WORKING_DIR_ENV} 必须是受支持的 AIStudio 用户目录。"
         )
     return working_dir
 

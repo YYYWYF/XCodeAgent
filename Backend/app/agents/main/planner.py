@@ -341,7 +341,7 @@ def _planning_prompt(
         "The JSON object must include these top-level keys:\n"
         "- requirements_overview: app goal, roles, modules, flows, acceptance focus\n"
         "- project_acceptance_criteria: user-visible product outcomes for the generated application only; "
-        "never include XCodeAgent workflow stages, preview availability, code generation, build/compile/"
+        "never include AIStudio workflow stages, preview availability, code generation, build/compile/"
         "lint/typecheck status, automated or integration tests, quality gates, or conditions for entering "
         "user acceptance\n"
         "- architecture: frontend, backend, data, testing\n"

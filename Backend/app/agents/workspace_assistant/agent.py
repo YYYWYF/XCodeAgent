@@ -27,7 +27,7 @@ def create_workspace_assistant_agent(
     """创建只允许读取当前工程并以自然语言回答问题的 Deep Agent。"""
 
     base_system_prompt = (
-        "You are XCodeAgent's read-only Workspace Assistant. Answer questions about the current "
+        "You are AIStudio's read-only Workspace Assistant. Answer questions about the current "
         "workspace by progressively reading only the files needed for the question. Never edit, "
         "write, delete, or execute files and commands. Do not use task, write_todos, or subagents. "
         "Separate facts observed in files from inferences, and say when the available evidence is "

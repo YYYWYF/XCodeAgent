@@ -268,7 +268,7 @@ function ProjectPlanConfirmationLayout({
           />
           <div className={cx('project-plan-confirmation-brand')}>
             <span className={cx('project-plan-confirmation-brand-mark')}>✦</span>
-            <span>XCodeAgent / 技术规划</span>
+            <span>AIStudio / 技术规划</span>
           </div>
         </div>
         <div className={cx('project-plan-confirmation-topbar-meta')}>

@@ -296,7 +296,7 @@ def _validated_managed_workspace(workspace_root: str, *, application_id: str) ->
         raise ValueError("只能删除真实存在且不是符号链接的应用工作区。")
     marker = workspace / ".xcodeagent" / "application.json"
     if not marker.is_file() or marker.is_symlink():
-        raise ValueError("该目录不是由 XCodeAgent 管理的项目，不能执行应用删除。")
+        raise ValueError("该目录不是由 AIStudio 管理的项目，不能执行应用删除。")
     lifecycle = load_application_lifecycle(workspace)
     if lifecycle is not None and lifecycle.application.id != application_id:
         raise ValueError("应用标识与工作区生命周期不匹配，已拒绝删除。")

@@ -183,7 +183,7 @@ def _render_resources(resources: list[dict[str, str]]) -> str:
     """渲染前端唯一的完整 RESOURCES 常量目录。"""
 
     grouped = {group: [item for item in resources if item["group"] == group] for group in ("SYSTEM", "PAGE", "OPERATION")}
-    lines = ["/** 由 XCodeAgent 根据确认权限目录生成，请勿手工修改。 */", "export const RESOURCES = {"]
+    lines = ["/** 由 AIStudio 根据确认权限目录生成，请勿手工修改。 */", "export const RESOURCES = {"]
     for group in ("SYSTEM", "PAGE", "OPERATION"):
         lines.append(f"  {group}: {{")
         for item in grouped[group]:

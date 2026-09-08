@@ -20,7 +20,7 @@ import {
 } from '@ant-design/icons'
 import { Button, Form, Input, Radio, Select, Switch } from 'antd'
 import type { FormInstance } from 'antd'
-import type { ReactNode } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
 import type { ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
@@ -56,7 +56,8 @@ type Props = {
   selectingParent: boolean
 }
 
-function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+/** 渲染应用创建表单的分组标题。 */
+function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode }): ReactElement {
   return (
     <div className={cx('application-form-section-title')}>
       <span className={cx('application-form-section-icon')}>{icon}</span>
@@ -65,7 +66,8 @@ function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode
   )
 }
 
-export default function ApplicationForm({ form, onSelectProjectParent, selectingParent }: Props) {
+/** 渲染应用创建配置与项目目录提示。 */
+export default function ApplicationForm({ form, onSelectProjectParent, selectingParent }: Props): ReactElement {
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? true
   const authorizationEnabled = Form.useWatch(['authorization', 'enabled'], form) ?? false
   const trackEnabled = Form.useWatch(['track', 'enable'], form) ?? true
@@ -99,7 +101,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       <section className={cx('application-form-section', 'application-form-section--full')}>
         <SectionTitle icon={<FolderOpenOutlined />}>项目位置</SectionTitle>
         <Form.Item
-          extra="请输入一个新的项目目录，或选择一个空目录；已有 XCodeAgent 应用目录不能复用。"
+          extra="请输入一个新的项目目录，或选择一个空目录；已有 AIStudio 应用目录不能复用。"
           label="新应用项目目录"
           required
         >

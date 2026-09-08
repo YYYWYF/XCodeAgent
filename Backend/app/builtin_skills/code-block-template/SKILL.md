@@ -1,14 +1,14 @@
 ---
 name: code-block-template
 description: >-
-  XcodeAgent 前端代码区块与页面模板技能。用于通过 LLM 驱动生成基于 React + Ant Design ProComponents的前端代码。提供详细的设计规范、
+  AIStudio 前端代码区块与页面模板技能。用于通过 LLM 驱动生成基于 React + Ant Design ProComponents的前端代码。提供详细的设计规范、
   使用决策树、代码示例、页面模板、分步代码生成策略和 Mock 数据生成规范。当用户需要生成前端页面、表格、表单、列表、卡片、弹窗表单、抽屉表单、分步表单、行、列等组件时使用此技能。
 agent_created: true
 ---
 
-# XcodeAgent Frontend Code Block Template
+# AIStudio Frontend Code Block Template
 
-面向 XcodeAgent 大模型前端代码生成的区块/页面设计规范。提供 ProComponents 体系下各区块的详细设计、决策逻辑与分步生成策略。
+面向 AIStudio 大模型前端代码生成的区块/页面设计规范。提供 ProComponents 体系下各区块的详细设计、决策逻辑与分步生成策略。
 
 ## When to Use
 
@@ -22,7 +22,7 @@ agent_created: true
 
 ## Architecture Overview
 
-XcodeAgent 前端页面由**区块（Blocks）**拼装而成。区块是可复用的最小单元，页面是多个区块的组合。
+AIStudio 前端页面由**区块（Blocks）**拼装而成。区块是可复用的最小单元，页面是多个区块的组合。
 
 ```
 ProCard / PageContainer          ← 页面容器与卡片

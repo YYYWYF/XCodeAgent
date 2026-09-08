@@ -244,7 +244,7 @@ export default function WelcomeRecentProjects({
         </Radio.Group>
         {!projectDirectoryCanBeDeleted ? (
           <p className={cx('welcome-project-delete-hint')}>
-            仅 XCodeAgent 创建且带有项目标识的本地目录可以在此删除。
+            仅 AIStudio 创建且带有项目标识的本地目录可以在此删除。
           </p>
         ) : null}
       </Modal>
