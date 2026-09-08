@@ -606,13 +606,23 @@ export default function MessageList({
               )
               // 设计阶段/会话内只有列表末尾的待答卡可交互：其后出现答案留痕或下一张卡
               // 即证明它已被回答。历史待答卡渲染为失效态，避免旧表单以空白可填样式误导。
+              // 手动切回设计阶段浏览已完成应用时（lifecycle 已就绪且无活跃 formal revision），
+              // 末尾的历史确认卡也已过期，不能判 active，否则跳过/确认按钮会错误可点。
+              const lifecycleReadyForWorkbench =
+                applicationLifecycle?.initialization?.stage === 'ready_for_workbench'
+              const browsingDesignHistory =
+                designPhasePlanning &&
+                lifecycleReadyForWorkbench &&
+                !applicationLifecycle?.activeFormalRevision
               const interactionAvailability =
                 message.workflow && requiresClarification
                   ? messageIndex < messages.length - 1
                     ? 'stale'
-                    : conversation || designPhasePlanning
-                      ? 'active'
-                      : workflowInteractionAvailability(message.workflow, applicationLifecycle)
+                    : browsingDesignHistory
+                      ? 'stale'
+                      : conversation || designPhasePlanning
+                        ? 'active'
+                        : workflowInteractionAvailability(message.workflow, applicationLifecycle)
                   : 'stale'
               // 已答过的历史澄清卡：从其后最近的 user 留痕解析「header：答案」行回填为
               // 只读摘要，避免旧表单以空白可填样式重现（恢复会话时 localStorage 草稿已丢）。

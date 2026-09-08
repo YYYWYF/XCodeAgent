@@ -2661,10 +2661,16 @@ export default function AiChatPanel({
         applicationLifecycle.initialization.stage !== 'ready_for_workbench' &&
         activeWorkbenchPhase === derivedWorkbenchPhase)
   )
+  // 手动切回设计阶段浏览时，活跃规划流和 formal revision 都不在，
+  // 需用应用创建时保留的 planning thread 恢复历史设计会话，否则
+  // ensurePlanningSession 因 lookupKey 为空不激活，对话区停留在 loading 占位。
+  const restoredDesignConversationThreadId =
+    application.planningThreadId || applicationLifecycle?.initialization?.threadId
   const planningSessionLookupKey =
     activePlanningConversationThreadId ||
     restoredPlanningConversationThreadId ||
-    (formalRevisionPlanningActive ? undefined : planningThreadId)
+    (formalRevisionPlanningActive ? undefined : planningThreadId) ||
+    (isDesignPhase && !formalRevisionPlanningActive ? restoredDesignConversationThreadId : undefined)
   const planningSessionPhase = isTechnicalPlanningPhase ? 'planning' : 'product'
   const existingPlanningSession = useMemo(
     () =>
