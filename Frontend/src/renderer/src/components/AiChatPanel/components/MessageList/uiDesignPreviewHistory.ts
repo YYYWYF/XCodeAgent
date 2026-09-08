@@ -1,6 +1,7 @@
 import type { WorkflowClarification, WorkflowRunPayload } from '../../../../typings'
 import type { AgentChatMessage } from '../../types'
 import { planningWorkflowPhase } from '../../../Welcome/planningWorkflowState'
+import { isNonMutatingProductConversation } from './productConversationPresentation'
 
 export type PlanningSubmissionTransaction = {
   sessionKey: string
@@ -34,6 +35,7 @@ function clarificationMode(workflow: WorkflowRunPayload): string {
 function isUiDesignPreviewMessage(message: AgentChatMessage): boolean {
   return Boolean(
     message.workflow &&
+      !isNonMutatingProductConversation(message.workflow) &&
       (message.workflow.summary?.phase === 'ui_confirmation' ||
         clarificationMode(message.workflow) === 'ui_design_confirmation')
   )
@@ -43,6 +45,7 @@ function isUiDesignPreviewMessage(message: AgentChatMessage): boolean {
 function isPlanningStageEntryMessage(message: AgentChatMessage): boolean {
   return Boolean(
     message.workflow &&
+      !isNonMutatingProductConversation(message.workflow) &&
       (message.workflow.summary?.phase === 'planning_stage_entry' ||
         clarificationMode(message.workflow) === 'planning_stage_entry_confirmation')
   )

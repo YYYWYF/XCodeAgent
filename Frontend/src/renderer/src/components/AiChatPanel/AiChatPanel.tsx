@@ -42,6 +42,7 @@ import { formatError } from '../Welcome/utils'
 import {
   planningWorkflowActivity,
   planningWorkflowClarification,
+  planningWorkflowIsActivelyRunning,
   planningWorkflowPhase,
   planningRequirementsConfirmed,
   ensureApplicationPlanningAction,
@@ -57,6 +58,7 @@ import ChatComposer from './components/ChatComposer'
 import {
   PRODUCT_CONVERSATION_PLACEHOLDER,
   PRODUCT_CONVERSATION_RUNNING_HINT,
+  productConversationRoute,
   productConversationSendBlocked
 } from './components/ChatComposer/productConversation'
 import AcceptanceDecisionDock from './components/AcceptanceDecisionDock'
@@ -1073,7 +1075,7 @@ export default function AiChatPanel({
   const planningClarification = planningViewWorkflow
     ? planningWorkflowClarification(planningViewWorkflow)
     : undefined
-  const planningPhaseRunning = planningViewWorkflow?.summary?.status === 'running'
+  const planningPhaseRunning = planningWorkflowIsActivelyRunning(planningViewWorkflow)
   const planningPhase = planningWorkflowPhase(planningViewWorkflow)
   const planningUiDesignSkipped = planningWorkflowUiDesignSkipped(planningViewWorkflow)
   const requirementSpecPath =
@@ -1511,11 +1513,19 @@ export default function AiChatPanel({
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
   const planningWorkflowStatus = String(planningViewWorkflow?.summary?.status || '')
-  // 模板就绪后创建规划已经结束；即使界面暂留在产品阶段等待“进入开发”，底部也应恢复普通自由对话。
-  const designChangeWorkflowAvailable = isDesignPhase && !lifecycleReadyForWorkbench
+  const activeProductConversationRoute = productConversationRoute(
+    isDesignPhase,
+    lifecycleReadyForWorkbench
+  )
+  // 只要用户主动选中产品阶段，Composer 就必须保持 Product Agent 能力边界。
+  const productConversationAvailable =
+    activeProductConversationRoute !== 'development_conversation'
+  // 应用完成态只改变正式修订入口，不再复用初始 planning 的旧审阅门。
+  const initialProductPlanningAvailable = activeProductConversationRoute === 'initial_planning'
   const productConversationSendDisabled = productConversationSendBlocked(
-    designChangeWorkflowAvailable,
-    !planningViewWorkflow || planningPhaseRunning || planningWorkflowStatus === 'stopping'
+    productConversationAvailable,
+    initialProductPlanningAvailable &&
+      (!planningViewWorkflow || planningPhaseRunning || planningWorkflowStatus === 'stopping')
   )
   const activePreviewPath = activePageOption?.path || '/'
 
@@ -2093,6 +2103,7 @@ export default function AiChatPanel({
     handleContinueDevelopment: continueDevelopmentExecution,
     handleContinueRevisionBuild,
     handleEndPlan,
+    handleProductStageConversation,
     handleResumePlan,
     handleRetryCodeReview,
     handleRetryPlan,
@@ -4166,7 +4177,7 @@ export default function AiChatPanel({
   )
 
   /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
-  const handleDesignChangeSend = async (): Promise<void> => {
+  const handleInitialProductConversationSend = async (): Promise<void> => {
     const trimmed = draft.trim()
     if (
       !trimmed ||
@@ -4189,6 +4200,27 @@ export default function AiChatPanel({
       trimmed
     ).catch(() => undefined)
     setDraftByKey(draftKey, '')
+  }
+
+  /** 按应用是否完成初始创建，在原审阅门与 formal revision 语义入口之间分流。 */
+  const handleProductConversationSend = async (): Promise<void> => {
+    if (initialProductPlanningAvailable) {
+      await handleInitialProductConversationSend()
+      return
+    }
+    if (!productConversationAvailable) return
+    const originalPlanningThreadId = String(
+      planningThreadId ||
+        application.planningThreadId ||
+        applicationLifecycle?.initialization?.threadId ||
+        ''
+    ).trim()
+    if (!originalPlanningThreadId) {
+      message.error('当前应用缺少原产品规划会话，无法发起产品阶段对话。')
+      return
+    }
+    setGeneratingDetailTargetKey('')
+    await handleProductStageConversation(draft, originalPlanningThreadId)
   }
 
   /** 滚动到现有 Workflow 进度区域，不改变消息列表和中央内容结构。 */
@@ -4445,7 +4477,7 @@ export default function AiChatPanel({
                   onInspectedElementContextClear={() => setInspectedElementContext(undefined)}
                   onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
                   placeholder={
-                    designChangeWorkflowAvailable
+                    productConversationAvailable
                       ? PRODUCT_CONVERSATION_PLACEHOLDER
                       : undefined
                   }
@@ -4455,10 +4487,12 @@ export default function AiChatPanel({
                       ? PRODUCT_CONVERSATION_RUNNING_HINT
                       : undefined
                   }
-                  // 产品阶段自由输入先做语义识别；模板就绪后恢复普通 Coordinator 对话。
+                  // 产品阶段始终使用 Product Coordinator；完成态修改再进入 formal revision。
                   // 当前节点的澄清和确认只能通过上方结构化卡片提交，不能劫持普通输入语义。
                   onSend={
-                    designChangeWorkflowAvailable ? handleDesignChangeSend : handleConversationSend
+                    productConversationAvailable
+                      ? handleProductConversationSend
+                      : handleConversationSend
                   }
                   onStopGenerating={handleStopGenerating}
                   stopping={stopping}

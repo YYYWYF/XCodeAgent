@@ -27,6 +27,14 @@ _CODE_REVIEW_VISIBLE_PHASES = {
 }
 _CODE_REVIEW_REPORT_PATH = ".xcodeagent/reports/code-review.md"
 _TEST_REPORT_PATH = ".xcodeagent/reports/test-report.md"
+_PRODUCT_CONVERSATION_KINDS = {
+    "chat",
+    "read_only",
+    "requirement_change",
+    "ui_change",
+    "clarification",
+    "out_of_scope",
+}
 
 
 def _workflow_code_review_retry(value: Any) -> dict[str, Any]:
@@ -210,6 +218,30 @@ def _safe_public_text(value: Any, limit: int) -> str:
     return text[:limit]
 
 
+def _product_conversation_result(value: Any) -> dict[str, Any] | None:
+    """把产品对话结果收敛为公开协议，拒绝未知意图和展示动作。"""
+
+    if not isinstance(value, dict):
+        return None
+    kind = str(value.get("kind") or "").strip()
+    mutating = value.get("mutating")
+    if kind not in _PRODUCT_CONVERSATION_KINDS or not isinstance(mutating, bool):
+        return None
+    presentation = value.get("presentation")
+    presentation = presentation if isinstance(presentation, dict) else {}
+    artifact_presentation = str(
+        presentation.get("artifactPresentation") or ""
+    ).strip()
+    if artifact_presentation not in {"preserve", "replace_on_revision"}:
+        artifact_presentation = "replace_on_revision" if mutating else "preserve"
+    return {
+        "kind": kind,
+        "mutating": mutating,
+        "response": _safe_public_text(value.get("response"), 4_000),
+        "presentation": {"artifactPresentation": artifact_presentation},
+    }
+
+
 def _workflow_launch_progress(
     result: dict[str, Any],
     events: list[dict[str, Any]],
@@ -385,6 +417,8 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     """仅预测下一个 UI 时间线节点，不参与 LangGraph 实际路由。"""
 
     if node_name == "design_intent_analysis":
+        if update.get("product_stage_conversation"):
+            return ["design_chat_response"]
         target = str(update.get("design_change_target") or "design_chat_response")
         return [target] if target in {
             "requirements",
@@ -559,6 +593,13 @@ def _public_workflow_state(
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
+    if "product_conversation_result" in value:
+        public_state.pop("product_conversation_result", None)
+        product_result = _product_conversation_result(
+            value.get("product_conversation_result")
+        )
+        if product_result is not None:
+            public_state["productConversationResult"] = product_result
     bootstrap = value.get("authorization_bootstrap_result")
     public_state.pop("authorization_bootstrap_result", None)
     if isinstance(bootstrap, dict):
@@ -1290,8 +1331,17 @@ def _workflow_summary(
     )
     artifacts = _workflow_artifacts(result)
     code_changes = _workflow_code_changes(result)
+    product_conversation = _product_conversation_result(
+        result.get("product_conversation_result")
+    )
     conversation_response = str(result.get("conversation_response") or "").strip()
-    if result.get("phase") == "design_chat_response" and conversation_response:
+    if (
+        product_conversation
+        and product_conversation["mutating"] is False
+        and product_conversation["response"]
+    ):
+        message = product_conversation["response"]
+    elif result.get("phase") == "design_chat_response" and conversation_response:
         message = conversation_response
     elif status == "requires_user_input":
         message = _workflow_user_input_message(result, clarification)
@@ -1384,6 +1434,11 @@ def _workflow_summary(
         "clarification": clarification,
         "observability": result.get("observability", {}),
         "lifecycle": result.get("lifecycle"),
+        **(
+            {"productConversationResult": product_conversation}
+            if product_conversation is not None
+            else {}
+        ),
         **_requirements_confirmation_projection(result),
     }
 
@@ -1504,6 +1559,11 @@ def _workflow_visual_payload(
         "smallTaskHandoff": result.get("small_task_handoff", {}),
         "revisionImpact": result.get("revision_impact"),
         "revisionDraft": result.get("revision_draft"),
+        **(
+            {"productConversationResult": summary["productConversationResult"]}
+            if summary.get("productConversationResult") is not None
+            else {}
+        ),
         "clarification": result.get("clarification", {}),
         **_requirements_confirmation_projection(result),
         "design_change_submission": result.get("design_change_submission", False),

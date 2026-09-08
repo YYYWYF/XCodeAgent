@@ -26,6 +26,9 @@ export type SendWorkflowMessageOptions = {
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
   applicationPlanningInteraction?: ApplicationPlanningInteraction
+  productStageConversation?: {
+    request: string
+  }
   editedRequirementSpec?: Record<string, unknown>
   requirementSpecFeedback?: string
   applicationPlanningRecovery?: {
@@ -106,6 +109,7 @@ export function buildWorkflowForwardedProps(
     application: options.application,
     clarificationAnswers: options.clarificationAnswers,
     applicationPlanningInteraction: options.applicationPlanningInteraction,
+    productStageConversation: options.productStageConversation,
     editedRequirementSpec: options.editedRequirementSpec,
     requirementSpecFeedback: options.requirementSpecFeedback,
     applicationPlanningRecovery: options.applicationPlanningRecovery,

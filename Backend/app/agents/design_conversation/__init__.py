@@ -9,7 +9,7 @@ from app.agents.design_conversation.models import (
 from app.agents.design_conversation.router import classify_design_conversation
 from app.agents.design_conversation.policy import (
     DesignConversationTarget,
-    enforce_product_conversation_capabilities,
+    is_natural_language_confirmation,
     product_conversation_response,
     resolve_design_target,
 )
@@ -21,7 +21,7 @@ __all__ = [
     "ProductConversationIntent",
     "SuggestedPhase",
     "classify_design_conversation",
-    "enforce_product_conversation_capabilities",
+    "is_natural_language_confirmation",
     "product_conversation_response",
     "resolve_design_target",
 ]

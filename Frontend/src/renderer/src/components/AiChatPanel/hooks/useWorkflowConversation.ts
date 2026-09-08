@@ -184,6 +184,10 @@ type UseWorkflowConversationResult = {
     continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
   ) => Promise<boolean>
   handleEndPlan: (runId?: string) => Promise<void>
+  handleProductStageConversation: (
+    request: string,
+    planningThreadId: string
+  ) => Promise<boolean>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
   handleRetryPlan: () => Promise<void>
@@ -696,6 +700,9 @@ export function useWorkflowConversation({
       clearDraft?: boolean
       clarificationAnswers?: ClarificationAnswers
       applicationPlanningInteraction?: ApplicationPlanningInteraction
+      productStageConversation?: {
+        request: string
+      }
       originalRequest?: string
       selectedSkills?: ChatMessageSkill[]
       resumeState?: WorkflowRunPayload
@@ -899,6 +906,7 @@ export function useWorkflowConversation({
         application,
         clarificationAnswers: options?.clarificationAnswers,
         applicationPlanningInteraction: options?.applicationPlanningInteraction,
+        productStageConversation: options?.productStageConversation,
         originalRequest: options?.originalRequest,
         onApplicationLifecycle: onApplicationLifecycleChange,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
@@ -1084,6 +1092,28 @@ export function useWorkflowConversation({
       setRunStates((current) => omitKey(current, identity.key))
       stopRequestedRef.current[identity.key] = false
     }
+  }
+
+  /** 已完成应用的产品输入复用原 planning thread，并显式关闭开发对话模式。 */
+  const handleProductStageConversation = async (
+    request: string,
+    planningThreadId: string
+  ): Promise<boolean> => {
+    const trimmed = request.trim()
+    if (!trimmed || !planningThreadId || loading || workspaceBusy) return false
+    const identity = activeSession || (await ensureActiveSession())
+    return sendWorkflowMessage(trimmed, {
+      clearDraft: true,
+      executionThreadId: planningThreadId,
+      productStageConversation: {
+        request: trimmed
+      },
+      sessionIdentity: identity,
+      titleFrom: trimmed,
+      workflowAction: 'product_stage_conversation',
+      workflowScope: 'application_planning',
+      conversation: false
+    })
   }
 
   /** 将结构化确认转换为可追踪的用户消息，并通过当前 AG-UI 会话恢复 Workflow。 */
@@ -1750,6 +1780,7 @@ export function useWorkflowConversation({
     handleContinueRevisionBuild,
     handleContinueDevelopment,
     handleEndPlan,
+    handleProductStageConversation,
     handleResumePlan,
     handleRetryCodeReview,
     handleRetryPlan,

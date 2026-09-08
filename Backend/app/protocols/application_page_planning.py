@@ -47,6 +47,14 @@ class ApplicationPlanningRecoveryRequest(BaseModel):
     applicationId: str | None = None
 
 
+class ProductStageConversationRequest(BaseModel):
+    """校验已完成应用回到产品阶段后的受限 Coordinator 请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request: str = Field(min_length=1, max_length=16_000)
+
+
 def application_page_planning_capabilities() -> dict[str, Any]:
     """发布设计阶段、规划阶段及其显式入口门禁的 AG-UI 能力。"""
 
@@ -67,6 +75,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         ],
         "designChange": {
             "requestField": "forwardedProps.applicationPlanningInteraction",
+            "completedProductRequestField": "forwardedProps.productStageConversation",
             "intentNode": "design_intent_analysis",
             "intents": [
                 "chat",
@@ -88,8 +97,11 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "usesOriginalThread": True,
             "incrementalArtifacts": True,
             "existingArtifactsStateField": "design_change_existing_artifacts",
+            "conversationResultStateField": "productConversationResult",
+            "nonMutatingArtifactPresentation": "preserve",
             "resumePrimitive": "langgraph-interrupt-command",
             "formalRevisionAction": "start_design_revision",
+            "completedProductConversationAction": "product_stage_conversation",
             "technicalRevisionAction": "start_technical_revision",
             "clientNodeSelectionAllowed": False,
         },
@@ -162,6 +174,19 @@ def build_application_page_planning_ag_ui_stream(
         **payload,
         "workflowScope": "application_planning",
     }
+    product_stage_input = _product_stage_conversation_input(normalized_payload)
+    if product_stage_input is not None:
+        try:
+            normalized_payload = _prepare_product_stage_conversation_payload(
+                normalized_payload,
+                product_stage_input,
+            )
+        except Exception as exc:
+            return _build_product_stage_conversation_error_stream(
+                payload=normalized_payload,
+                error=exc,
+                accept=accept,
+            )
     start_design_revision = _start_design_revision_input(normalized_payload)
     if start_design_revision is not None:
         try:
@@ -346,6 +371,91 @@ def _application_planning_recovery_input(
     return value if isinstance(value, dict) else None
 
 
+def _product_stage_conversation_input(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """读取已完成应用在产品阶段提交的 Coordinator 请求。"""
+
+    forwarded_props = payload.get("forwardedProps")
+    if not isinstance(forwarded_props, dict):
+        return None
+    if str(forwarded_props.get("workflowAction") or "").strip() != (
+        "product_stage_conversation"
+    ):
+        return None
+    for key in ("resumeFrom", "resume_from", "node"):
+        if key in forwarded_props or key in payload:
+            raise ValueError("产品阶段对话不接受客户端节点或 resume_from。")
+    value = forwarded_props.get("productStageConversation")
+    if not isinstance(value, dict):
+        raise ValueError("产品阶段对话必须提供 productStageConversation。")
+    return value
+
+
+def _prepare_product_stage_conversation_payload(
+    payload: dict[str, Any],
+    raw_request: dict[str, Any],
+) -> dict[str, Any]:
+    """固定复用原 planning thread，并把完成态产品输入限制为只回复轮次。"""
+
+    request = ProductStageConversationRequest.model_validate(raw_request)
+    forwarded_props = dict(payload.get("forwardedProps") or {})
+    workspace = str(forwarded_props.get("workspaceRoot") or "").strip()
+    if not workspace:
+        application = forwarded_props.get("application")
+        application = application if isinstance(application, dict) else {}
+        workspace = str(application.get("workspaceRoot") or "").strip()
+    lifecycle = load_application_lifecycle(workspace)
+    if (
+        lifecycle is None
+        or lifecycle.initialization.stage
+        != ApplicationLifecycleStage.READY_FOR_WORKBENCH
+    ):
+        raise ValueError("只有已 ready_for_workbench 的应用可使用完成态产品对话。")
+    planning_thread_id = str(lifecycle.initialization.thread_id or "").strip()
+    if not planning_thread_id:
+        raise ValueError("已完成应用缺少原 application planning thread。")
+    next_forwarded = {
+        **forwarded_props,
+        "workflowAction": None,
+        "productStageConversation": None,
+        "applicationPlanningInteraction": None,
+        "resumeState": {"state": {"product_stage_conversation": True}},
+    }
+    return {
+        **payload,
+        "threadId": planning_thread_id,
+        "request": request.request,
+        "resumeFrom": "design_intent_analysis",
+        "forwardedProps": next_forwarded,
+    }
+
+
+def _build_product_stage_conversation_error_stream(
+    *,
+    payload: dict[str, Any],
+    error: Exception,
+    accept: str | None,
+) -> AsyncIterator[str]:
+    """把完成态产品对话边界错误投射为完整 AG-UI 失败生命周期。"""
+
+    async def operation() -> AgUiActionResult:
+        """在标准 action stream 内重新抛出已校验的业务错误。"""
+
+        raise error
+
+    return build_ag_ui_action_stream(
+        payload=payload,
+        event_name="workflow-run",
+        state_key="workflow",
+        run_id_prefix="product-stage-conversation",
+        operation=operation,
+        error_message_prefix="产品阶段对话失败",
+        error_data=lambda _exc: {"action": "product_stage_conversation"},
+        accept=accept,
+    )
+
+
 def _start_design_revision_input(payload: dict[str, Any]) -> dict[str, Any] | None:
     """读取设计或技术规划回退 action 的 revisionRequest，不接受客户端节点字段。"""
 
@@ -407,6 +517,11 @@ def _prepare_start_design_revision_payload(
         "workflowAction": None,
         "revisionRequest": None,
     }
+    if action == "start_design_revision":
+        # 完成态产品对话标记只约束单次只回复轮次，正式修订恢复时必须消费。
+        next_forwarded["resumeState"] = {
+            "state": {"product_stage_conversation": False}
+        }
     if action == "start_technical_revision":
         # TechnicalPlan 二次修改恢复原 planning checkpoint，由原节点重新调用模型。
         restart_application_planning_lifecycle(

@@ -66,7 +66,23 @@ export type WorkflowSummary = {
   revisionContinuation?: WorkflowRevisionContinuation
   developmentContinuation?: WorkflowDevelopmentContinuation
   revisionDraft?: WorkflowRevisionDraft
+  productConversationResult?: WorkflowProductConversationResult
   [key: string]: unknown
+}
+
+export type WorkflowProductConversationResult = {
+  kind:
+    | 'chat'
+    | 'read_only'
+    | 'requirement_change'
+    | 'ui_change'
+    | 'clarification'
+    | 'out_of_scope'
+  mutating: boolean
+  response: string
+  presentation: {
+    artifactPresentation: 'preserve' | 'replace_on_revision'
+  }
 }
 
 export type WorkflowFormalRevisionBranch =
@@ -1052,6 +1068,7 @@ export type WorkflowAction =
   | 'retry_failed_tasks'
   | 'retry_code_review'
   | 'start_design_revision'
+  | 'product_stage_conversation'
   | 'start_technical_revision'
   | 'start_revision'
   | 'submit_revision_interaction'

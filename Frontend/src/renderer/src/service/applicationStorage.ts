@@ -14,12 +14,10 @@ import {
   readChatSession,
 } from './chatSessions';
 import { clearApplicationWorkbenchState } from '../workbenchPhase';
-import { completeApplicationDeletion } from './applicationDeletion';
 
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
 export const APPLICATIONS_CHANGED_EVENT = 'xcode-agent-applications-changed';
-const pendingProjectDeletionCompletions = new Set<string>();
 
 // 判断创建规划是否已经完成；工作台内部运行状态不得影响该结果。
 export function isApplicationCreationComplete(lifecycle?: ApplicationLifecycle): boolean {
@@ -133,14 +131,7 @@ export async function deleteStoredProject(applicationId: string, workspaceRoot: 
   if (!electronApplications?.deleteProject) {
     throw new Error('当前环境不支持删除本地项目目录');
   }
-  const deletionKey = JSON.stringify([applicationId, workspaceRoot]);
-  // 回收站已成功但收尾请求失败时，只重试幂等确认，不再移动一次已消失的目录。
-  if (!pendingProjectDeletionCompletions.has(deletionKey)) {
-    await electronApplications.deleteProject({ applicationId, workspaceRoot });
-    pendingProjectDeletionCompletions.add(deletionKey);
-  }
-  await completeApplicationDeletion(applicationId, workspaceRoot);
-  pendingProjectDeletionCompletions.delete(deletionKey);
+  await electronApplications.deleteProject({ applicationId, workspaceRoot });
   clearWorkspaceChatSessionCache(workspaceRoot);
 }
 

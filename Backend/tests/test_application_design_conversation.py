@@ -14,6 +14,7 @@ from app.graph.application_planning_revision import (
     design_node_update,
     is_design_change,
     prepare_ui_revision_state,
+    route_design_chat_response,
     route_design_intent,
     technical_plan_revision_reset_state,
 )
@@ -27,11 +28,16 @@ from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
 )
+from app.domain.application_revision import RevisionImpact, RevisionTarget
 from app.services.application_lifecycle import (
     ensure_application_lifecycle,
     load_application_lifecycle,
     persist_application_lifecycle_transition,
     restart_application_planning_lifecycle,
+)
+from app.services.application_revision_lifecycle import (
+    register_revision_impact,
+    submit_revision_impact,
 )
 
 
@@ -50,6 +56,18 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         self.assertIn(
             "out_of_scope",
             capabilities["designChange"]["nonMutatingIntents"],
+        )
+        self.assertEqual(
+            capabilities["designChange"]["completedProductConversationAction"],
+            "product_stage_conversation",
+        )
+        self.assertEqual(
+            capabilities["designChange"]["conversationResultStateField"],
+            "productConversationResult",
+        )
+        self.assertEqual(
+            capabilities["designChange"]["nonMutatingArtifactPresentation"],
+            "preserve",
         )
 
     def test_design_change_request_starts_original_graph_intent_node(self) -> None:
@@ -75,6 +93,97 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             result["application_planning_interaction"]["action"],
             "design_change",
         )
+
+    @patch("app.graph.application_planning_revision.classify_design_conversation")
+    def test_formal_revision_uses_lifecycle_target_without_reclassification(
+        self,
+        classify,
+    ) -> None:
+        """formal revision 的 currentArtifact 必须优先于 Coordinator。"""
+
+        with TemporaryDirectory() as workspace:
+            self._activate_design_revision(workspace, "requirement-spec")
+            update = analyze_design_intent(
+                {"request": "任意复杂的原始修改文本", "workspace": workspace}
+            )
+
+        classify.assert_not_called()
+        self.assertEqual(update["design_change_target"], "requirements")
+
+    def _activate_design_revision(self, workspace: str, artifact: str) -> None:
+        """为意图路由测试创建已批准的设计分支 formal revision。"""
+
+        ensure_application_lifecycle(
+            workspace,
+            application_id="app-1",
+            application_name="测试应用",
+            initialization_thread_id="planning-thread",
+        )
+        affected = {
+            "requirement-spec": [
+                "requirement-spec",
+                "product-plan",
+                "ui-design",
+                "technical-plan",
+            ],
+            "product-plan": ["product-plan", "ui-design", "technical-plan"],
+        }[artifact]
+        register_revision_impact(
+            workspace,
+            interaction_id="impact-1",
+            source_thread_id="conversation-thread",
+            source_run_id="conversation-run",
+            request="修改产品设计",
+            target=RevisionTarget(type="application"),
+            impact=RevisionImpact(
+                formalBranch="design_stage_revision",
+                revisionType=(
+                    "requirement_scope_change"
+                    if artifact == "requirement-spec"
+                    else "product_behavior_change"
+                ),
+                earliestArtifact=artifact,
+                affectedArtifacts=affected,
+                affectedResources=["application"],
+                reason="用户已确认影响范围",
+            ),
+        )
+        submit_revision_impact(
+            workspace,
+            interaction_id="impact-1",
+            decision="approved",
+        )
+
+    @patch("app.graph.application_planning_revision.restart_application_planning_lifecycle")
+    @patch("app.graph.application_planning_revision.classify_design_conversation")
+    def test_completed_product_change_has_no_artifact_write_permission(
+        self,
+        classify,
+        restart,
+    ) -> None:
+        """完成态产品修改只给出正式修订提示，不直接重启或失效产物。"""
+
+        classify.return_value = SimpleNamespace(
+            intent="requirement_change",
+            change_level="requirement",
+            reason="新增页面",
+            affected_page_ids=[],
+            response="",
+            suggested_phase="none",
+            clarification_question="",
+        )
+        update = analyze_design_intent(
+            {
+                "request": "增加供应商管理页",
+                "product_stage_conversation": True,
+                "requirement_spec": {"confirmation_status": "confirmed"},
+                "product_plan": {"confirmation_status": "confirmed"},
+            }
+        )
+
+        restart.assert_not_called()
+        self.assertEqual(route_design_intent(update), "design_chat_response")
+        self.assertIn("正式修订影响确认", update["conversation_response"])
 
     def test_design_change_rejects_non_planning_scope(self) -> None:
         """设计产物变更不能被发送到主开发 Workflow。"""
@@ -151,19 +260,11 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                    ApplicationLifecycleStatus.AWAITING_USER,
-                ),
-                (
-                    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-                    ApplicationLifecycleStatus.RUNNING,
-                ),
-                (
-                    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                     ApplicationLifecycleStatus.AWAITING_USER,
                 ),
                 (
@@ -201,6 +302,15 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         )
         self.assertEqual(update["design_change_request"], "新增报表页")
         self.assertEqual(update["design_change_generation_target"], "requirements")
+        self.assertEqual(
+            update["product_conversation_result"],
+            {
+                "kind": "requirement_change",
+                "mutating": True,
+                "response": "",
+                "presentation": {"artifactPresentation": "replace_on_revision"},
+            },
+        )
         self.assertEqual(
             update["design_change_existing_artifacts"],
             {
@@ -249,15 +359,15 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         classify.return_value = SimpleNamespace(
             intent="out_of_scope",
             change_level="none",
-            reason="接口契约属于规划阶段",
+            reason="目标是另一个工程的代码修复",
             affected_page_ids=[],
             response="",
-            suggested_phase="planning",
+            suggested_phase="development",
             clarification_question="",
         )
         update = analyze_design_intent(
             {
-                "request": "订单接口增加 status 参数",
+                "request": "我想修复另外一个工程里的 bug",
                 "design_interaction_origin": "ui_confirmation",
                 "requirement_spec": {"confirmation_status": "confirmed"},
                 "product_plan": {"confirmation_status": "confirmed"},
@@ -269,7 +379,18 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         )
 
         self.assertEqual(route_design_intent(update), "design_chat_response")
-        self.assertIn("规划", update["conversation_response"])
+        self.assertIn("开发", update["conversation_response"])
+        self.assertIn("对应工程", update["conversation_response"])
+        self.assertIn("不会发生变化", update["conversation_response"])
+        self.assertEqual(
+            update["product_conversation_result"],
+            {
+                "kind": "out_of_scope",
+                "mutating": False,
+                "response": update["conversation_response"],
+                "presentation": {"artifactPresentation": "preserve"},
+            },
+        )
         for key in (
             "requirement_spec",
             "product_plan",
@@ -316,6 +437,15 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                 )
                 self.assertEqual(route_design_intent(update), "design_chat_response")
                 self.assertTrue(update["conversation_response"])
+                self.assertEqual(
+                    update["product_conversation_result"]["kind"],
+                    intent,
+                )
+                self.assertFalse(update["product_conversation_result"]["mutating"])
+                self.assertEqual(
+                    update["product_conversation_result"]["presentation"],
+                    {"artifactPresentation": "preserve"},
+                )
                 self.assertEqual(update["design_interaction_origin"], "ui_confirmation")
                 for key in (
                     "requirement_spec",
@@ -326,6 +456,47 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                     "lifecycle",
                 ):
                     self.assertNotIn(key, update)
+
+    def test_requirement_document_chat_returns_to_same_review_gate(self) -> None:
+        """联合需求文档门的普通回复不能退回 RequirementSpec 审阅节点。"""
+
+        self.assertEqual(
+            route_design_chat_response(
+                {"design_interaction_origin": "requirement_document"}
+            ),
+            "requirement_document_review",
+        )
+
+    @patch("app.graph.application_planning_revision.classify_design_conversation")
+    def test_natural_language_confirmation_cannot_consume_review_gate(
+        self,
+        classify,
+    ) -> None:
+        """聊天中声称已确认时不调用分类模型，也不修改任何正式状态。"""
+
+        update = analyze_design_intent(
+            {
+                "request": "那我确认了，你继续规划吧",
+                "design_interaction_origin": "product_planning",
+                "requirement_spec": {"confirmation_status": "pending_user_confirmation"},
+                "product_plan": {"confirmation_status": "pending_user_confirmation"},
+            }
+        )
+
+        classify.assert_not_called()
+        self.assertEqual(route_design_intent(update), "design_chat_response")
+        self.assertIn("不会作为正式确认提交", update["conversation_response"])
+        self.assertIn("当前确认卡", update["conversation_response"])
+        self.assertFalse(update["product_conversation_result"]["mutating"])
+        self.assertEqual(update["design_interaction_origin"], "product_planning")
+        for key in (
+            "requirement_spec",
+            "product_plan",
+            "requirements_confirmed",
+            "application_planning_confirmation",
+            "lifecycle",
+        ):
+            self.assertNotIn(key, update)
 
     def test_design_node_update_keeps_revision_projection_context(self) -> None:
         """修订节点更新必须持续携带前端实时状态所需的变更上下文。"""
@@ -682,19 +853,11 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                    ApplicationLifecycleStatus.AWAITING_USER,
-                ),
-                (
-                    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-                    ApplicationLifecycleStatus.RUNNING,
-                ),
-                (
-                    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                     ApplicationLifecycleStatus.AWAITING_USER,
                 ),
                 (

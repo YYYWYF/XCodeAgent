@@ -48,6 +48,7 @@ class WorkflowRunRegistry:
         self._lock = Lock()
         self._tasks: dict[str, tuple[str, asyncio.Task[Any]]] = {}
         self._deleting_workspaces: set[str] = set()
+        self._deleting_application_ids: dict[str, str] = {}
 
     def register(
         self,
@@ -108,20 +109,42 @@ class WorkflowRunRegistry:
         )
         return "cancelled" if task in done or task.done() else "cancel_timeout"
 
-    def begin_workspace_deletion(self, workspace: str) -> None:
-        """建立工作区删除栅栏，阻止清理期间出现新的运行。"""
+    def begin_workspace_deletion(
+        self,
+        workspace: str,
+        *,
+        application_id: str | None = None,
+    ) -> None:
+        """建立工作区删除栅栏，并按需绑定发起稳定应用身份。"""
 
         workspace_key = _workspace_key(workspace)
         if not workspace_key:
             raise ValueError("删除应用必须提供有效的 workspaceRoot。")
         with self._lock:
+            current_application_id = self._deleting_application_ids.get(workspace_key)
+            if (
+                current_application_id is not None
+                and application_id is not None
+                and current_application_id != application_id
+            ):
+                raise RuntimeError("工作区已有其他应用删除事务正在进行。")
             self._deleting_workspaces.add(workspace_key)
+            if application_id is not None:
+                self._deleting_application_ids[workspace_key] = application_id
 
     def end_workspace_deletion(self, workspace: str) -> None:
-        """仅解除目标工作区的删除栅栏，供可逆停机阶段失败后恢复使用。"""
+        """解除目标工作区删除栅栏及其绑定的应用身份。"""
 
         with self._lock:
-            self._deleting_workspaces.discard(_workspace_key(workspace))
+            workspace_key = _workspace_key(workspace)
+            self._deleting_workspaces.discard(workspace_key)
+            self._deleting_application_ids.pop(workspace_key, None)
+
+    def workspace_deletion_application_id(self, workspace: str) -> str | None:
+        """返回当前删除事务绑定的应用标识；无绑定事务时返回空。"""
+
+        with self._lock:
+            return self._deleting_application_ids.get(_workspace_key(workspace))
 
     async def cancel_workspace(
         self,

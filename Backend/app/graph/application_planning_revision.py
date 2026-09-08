@@ -6,7 +6,7 @@ from typing import Any
 from app.agents.design_conversation import (
     DesignConversationDecision,
     classify_design_conversation,
-    enforce_product_conversation_capabilities,
+    is_natural_language_confirmation,
     product_conversation_response,
     resolve_design_target,
 )
@@ -101,6 +101,21 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
             affected_page_ids=authoritative_page_ids,
             response="",
         )
+    elif is_natural_language_confirmation(request) and not state.get(
+        "product_stage_conversation"
+    ):
+        # 底部输入只是产品对话通道，不是正式确认信封。这类话术必须零写入，
+        # 并引导用户回到当前审阅卡，禁止分类模型误报“已确认”或启动产物修订。
+        decision = DesignConversationDecision(
+            intent="chat",
+            change_level="none",
+            reason="自由文本不能代替当前审阅门的结构化确认动作。",
+            affected_page_ids=[],
+            response=(
+                "这句话不会作为正式确认提交。请使用当前确认卡上的确认操作继续；"
+                "当前待确认状态保持不变。"
+            ),
+        )
     else:
         decision = classify_design_conversation(
             request,
@@ -108,11 +123,14 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
             product_plan=_dict_value(state.get("product_plan")),
             ui_designs=_dict_value(state.get("ui_designs")),
         )
-    decision = enforce_product_conversation_capabilities(decision, request)
-    target = resolve_design_target(
-        decision,
-        requirement_spec=_dict_value(state.get("requirement_spec")),
-        product_plan=_dict_value(state.get("product_plan")),
+    target = (
+        authoritative_target
+        if authoritative_target is not None
+        else resolve_design_target(
+            decision,
+            requirement_spec=_dict_value(state.get("requirement_spec")),
+            product_plan=_dict_value(state.get("product_plan")),
+        )
     )
     reason = decision.reason
     semantic_target = {
@@ -120,18 +138,42 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         ("requirement_change", "product_behavior"): "product_planning",
         ("ui_change", "ui"): "ui_confirmation",
     }.get((decision.intent, decision.change_level))
-    if authoritative_target is None and target and target != semantic_target:
-        reason = f"{reason}；上游产物尚未确认，先回到 {target}。"
-    if target not in DESIGN_CHANGE_TARGET_NODES:
-        # 闲聊、只读问答、澄清和越界请求只写对话回复及路由清理字段，
-        # 不撤销确认、不失效产物，也不触碰 application lifecycle。
+    product_stage_conversation = bool(state.get("product_stage_conversation"))
+    if product_stage_conversation and authoritative_target is None:
+        # 已完成应用回到产品阶段时只允许 Coordinator 回答；正式产品修改必须
+        # 先由既有 formal revision 机制确认影响，不能直接复用历史审阅门写产物。
+        response = product_conversation_response(decision)
+        if target in DESIGN_CHANGE_TARGET_NODES:
+            response = (
+                "这个请求会修改已确认的正式产品语义，需要先通过正式修订影响确认。"
+                "本轮未修改任何正式产物。"
+            )
+        result = product_conversation_result(decision, response=response)
         return {
             **cleared_design_change_context(),
             "workflow_scope": "application_planning",
             "resume_from": "",
             "phase": "design_intent_analysis",
             "status": "completed",
-            "conversation_response": product_conversation_response(decision),
+            "product_stage_conversation": True,
+            "conversation_response": result["response"],
+            "product_conversation_result": result,
+            "timeline": ["design_intent_analysis"],
+        }
+    if authoritative_target is None and target and target != semantic_target:
+        reason = f"{reason}；上游产物尚未确认，先回到 {target}。"
+    if target not in DESIGN_CHANGE_TARGET_NODES:
+        # 闲聊、只读问答、澄清和越界请求只写对话回复及路由清理字段，
+        # 不撤销确认、不失效产物，也不触碰 application lifecycle。
+        result = product_conversation_result(decision)
+        return {
+            **cleared_design_change_context(),
+            "workflow_scope": "application_planning",
+            "resume_from": "",
+            "phase": "design_intent_analysis",
+            "status": "completed",
+            "conversation_response": result["response"],
+            "product_conversation_result": result,
             "design_interaction_origin": str(
                 state.get("design_interaction_origin") or "requirements"
             ),
@@ -153,6 +195,12 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         "design_change_generation_request": request,
         "design_change_existing_artifacts": existing_artifact_presence(state),
         "conversation_response": "",
+        "product_conversation_result": {
+            "kind": decision.intent,
+            "mutating": True,
+            "response": "",
+            "presentation": {"artifactPresentation": "replace_on_revision"},
+        },
         "application_planning_confirmation": {},
         "timeline": ["design_intent_analysis"],
     }
@@ -209,7 +257,29 @@ def route_design_intent(state: ProjectState) -> str:
     """把意图结果路由到原创建 Graph 的真实产物节点。"""
 
     target = str(state.get("design_change_target") or "chat")
-    return target if target in DESIGN_CHANGE_TARGET_NODES else "design_chat_response"
+    if target in DESIGN_CHANGE_TARGET_NODES:
+        return target
+    return "design_chat_response"
+
+
+def product_conversation_result(
+    decision: DesignConversationDecision,
+    *,
+    response: str | None = None,
+) -> dict[str, Any]:
+    """构造非修改产品对话结果，明确要求前端保留而不重放原审阅卡。"""
+
+    resolved_response = (
+        str(response).strip()
+        if response is not None
+        else product_conversation_response(decision)
+    )
+    return {
+        "kind": decision.intent,
+        "mutating": False,
+        "response": resolved_response,
+        "presentation": {"artifactPresentation": "preserve"},
+    }
 
 
 def design_chat_response(state: ProjectState) -> dict[str, Any]:
@@ -226,6 +296,24 @@ def design_chat_response(state: ProjectState) -> dict[str, Any]:
         ),
         "timeline": ["design_chat_response"],
     }
+
+
+def route_design_chat_response(state: ProjectState) -> str:
+    """已完成应用的产品对话直接结束，初始规划则回到原审阅门。"""
+
+    if state.get("product_stage_conversation"):
+        return "completed"
+    origin = str(state.get("design_interaction_origin") or "requirements")
+    if origin in {"product_planning", "requirement_document"}:
+        return "requirement_document_review"
+    if origin == "planning_stage_entry":
+        return "planning_stage_entry"
+    return (
+        f"{origin}_review"
+        if origin
+        in {"requirements", "ui_confirmation", "technical_planning"}
+        else "requirements_review"
+    )
 
 
 def is_design_change(state: ProjectState) -> bool:

@@ -26,9 +26,11 @@ from app.protocols.application_development_planning import (
     build_application_development_planning_ag_ui_stream,
 )
 from app.protocols.application_deletion import (
+    ApplicationDeletionCompletionRequest,
     ApplicationDeletionRequest,
     application_deletion_capabilities,
     build_application_deletion_ag_ui_stream,
+    complete_application_deletion,
     prepare_application_deletion,
 )
 from app.protocols.application_lifecycle import (
@@ -213,6 +215,15 @@ async def prepare_application_deletion_direct(
     """供 Electron 主进程在移动目录前直接复用应用销毁准备门禁。"""
 
     return await prepare_application_deletion(request)
+
+
+@app.post("/application-deletion/complete")
+async def complete_application_deletion_direct(
+        request: ApplicationDeletionCompletionRequest,
+) -> dict[str, Any]:
+    """供 Electron 在目录移入回收站后释放该路径的删除栅栏。"""
+
+    return complete_application_deletion(request)
 
 
 @app.post("/skills/run")

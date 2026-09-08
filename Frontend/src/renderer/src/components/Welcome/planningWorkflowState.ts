@@ -229,6 +229,14 @@ export function planningWorkflowRequiresUserInput(workflow?: WorkflowRunPayload)
   return false
 }
 
+// 判断规划运行是否仍在实际生成；已投影待确认交互时即使 summary 暂留 running 也必须解锁输入。
+export function planningWorkflowIsActivelyRunning(workflow?: WorkflowRunPayload): boolean {
+  return (
+    workflow?.summary.status === 'running' &&
+    !planningWorkflowRequiresUserInput(workflow)
+  )
+}
+
 // 判断规划快照是否已经足以结束聊天占位加载态，覆盖待确认与正常终态。
 export function planningWorkflowSettlesLoading(workflow?: WorkflowRunPayload): boolean {
   if (planningWorkflowRequiresUserInput(workflow)) return true

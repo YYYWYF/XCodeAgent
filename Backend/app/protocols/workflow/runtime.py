@@ -1732,8 +1732,6 @@ def build_workflow_ag_ui_stream(
             blocked_scope: dict[str, Any] = {}
             blocked_target: dict[str, str] = {}
             if gate_blocked:
-                from app.services.application_lifecycle import application_lifecycle_payload, load_application_lifecycle
-
                 try:
                     current_lifecycle = load_application_lifecycle(workspace) if workspace else None
                 except (OSError, ValueError):

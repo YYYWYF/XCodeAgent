@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -11,62 +10,6 @@ from app.agents.design_conversation.models import (
     SuggestedPhase,
 )
 
-_TEST_SIGNALS = (
-    "运行测试",
-    "跑一下测试",
-    "写测试",
-    "集成测试",
-    "测试修复",
-    "单元测试",
-    "测试一下",
-    "验证一下",
-)
-_DEVELOPMENT_SIGNALS = (
-    ".tsx",
-    ".ts",
-    ".py",
-    "源代码",
-    "修改代码",
-    "后端代码",
-    "前端代码",
-    "修复代码",
-    "修复 bug",
-    "修 bug",
-    "组件源码",
-    "重构",
-    "安装依赖",
-    "运行命令",
-    "执行命令",
-    "shell",
-)
-_PLANNING_SIGNALS = (
-    "api",
-    "endpoint",
-    "接口",
-    "request contract",
-    "response contract",
-    "request/response",
-    "请求参数",
-    "响应字段",
-    "schema",
-    "数据库",
-    "表结构",
-    "sqlite",
-    "postgresql",
-    "索引",
-    "redis",
-    "缓存策略",
-    "消息队列",
-    "技术方案",
-    "技术规划",
-    "技术架构",
-    "实体持久化",
-    "数据源技术",
-    "数据源实现",
-    "technicalplan",
-    "technical plan",
-)
-
 
 def fallback_design_conversation_decision(
     request: str,
@@ -74,7 +17,7 @@ def fallback_design_conversation_decision(
     requirement_spec: dict[str, Any] | None,
     product_plan: dict[str, Any] | None,
 ) -> DesignConversationDecision:
-    """模型不可用时执行保守兜底，越界信号优先且不会获得额外权限。"""
+    """模型不可用时执行保守兜底，只让明显产品表达获得白名单语义。"""
 
     text = request.strip().lower()
     intent, change_level, suggested_phase = _fallback_semantics(text)
@@ -97,49 +40,21 @@ def fallback_design_conversation_decision(
     )
 
 
-def invalid_model_decision(value: Any) -> DesignConversationDecision:
+def invalid_model_decision(_value: Any) -> DesignConversationDecision:
     """把无法通过当前语义契约的模型输出降级为零写入越界结果。"""
 
-    serialized = json.dumps(value, ensure_ascii=False, default=str).lower()
-    if any(signal in serialized for signal in ("test", "测试", "verify")):
-        suggested_phase: SuggestedPhase = "test"
-    elif any(
-        signal in serialized
-        for signal in ("code", "frontend", "backend", "tsx", "python", "development")
-    ):
-        suggested_phase = "development"
-    elif any(
-        signal in serialized
-        for signal in ("technical", "planning", "api", "schema", "database", "数据库")
-    ):
-        suggested_phase = "planning"
-    else:
-        suggested_phase = "none"
     return DesignConversationDecision(
         intent="out_of_scope",
         change_level="none",
         reason="Coordinator 返回了当前产品语义契约不允许的结果，已拒绝执行。",
-        suggested_phase=suggested_phase,
+        suggested_phase="none",
     )
-
-
-def out_of_scope_phase_for_request(request: str) -> SuggestedPhase | None:
-    """只识别产品阶段绝对禁止执行的技术、开发和测试能力请求。"""
-
-    text = request.strip().lower()
-    if any(signal in text for signal in _TEST_SIGNALS):
-        return "test"
-    if any(signal in text for signal in _DEVELOPMENT_SIGNALS):
-        return "development"
-    if any(signal in text for signal in _PLANNING_SIGNALS):
-        return "planning"
-    return None
 
 
 def _fallback_semantics(
     text: str,
 ) -> tuple[ProductConversationIntent, ProductChangeLevel, SuggestedPhase]:
-    """按越界优先级为模型故障请求选择最保守的产品语义。"""
+    """模型故障时只识别明显产品表达，歧义输入一律要求澄清。"""
 
     requirement_signals = (
         "需求",
@@ -178,6 +93,11 @@ def _fallback_semantics(
         "加载状态",
         "空状态",
         "业务结果",
+        "异常",
+        "错误提示",
+        "无数据",
+        "重试按钮",
+        "连接状态",
     )
     ui_signals = (
         "ui",
@@ -193,22 +113,36 @@ def _fallback_semantics(
         "导航",
         "弹窗",
         "控件",
+        "卡片",
         "响应式",
         "暗色",
         "深色",
         "浅色",
     )
-    question_signals = ("哪些", "什么", "多少", "为什么", "现在有", "当前有", "目前有")
-    if out_of_scope_phase := out_of_scope_phase_for_request(text):
-        return "out_of_scope", "none", out_of_scope_phase
+    question_signals = (
+        "哪些",
+        "什么",
+        "多少",
+        "为什么",
+        "现在有",
+        "当前有",
+        "目前有",
+        "需求是否完整",
+        "需求有没有遗漏",
+        "需求有无遗漏",
+        "需求有没有冲突",
+        "需求有无冲突",
+    )
     if any(signal in text for signal in question_signals) or text.endswith(("?", "？")):
         return "read_only", "none", "none"
-    if any(signal in text for signal in requirement_signals):
+    if any(signal in text for signal in ui_signals):
+        return "ui_change", "ui", "none"
+    if any(signal in text for signal in requirement_signals) or any(
+        signal in text for signal in ("管理页面", "管理模块", "缺陷管理")
+    ):
         return "requirement_change", "requirement", "none"
     if any(signal in text for signal in product_signals):
         return "requirement_change", "product_behavior", "none"
-    if any(signal in text for signal in ui_signals):
-        return "ui_change", "ui", "none"
     if any(signal in text for signal in ("你好", "谢谢", "辛苦了", "嗨", "hello")):
         return "chat", "none", "none"
     return "clarification", "none", "none"

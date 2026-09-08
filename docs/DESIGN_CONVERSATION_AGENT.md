@@ -49,11 +49,15 @@ suggested_phase:
 
 RequirementSpec 未确认时，任何正式产品修改最早回到 requirements；ProductPlan 未确认时，UI 修改最早回到 product_planning。未知组合、旧 Graph target、技术节点或异常输出没有目标节点，默认零写入。
 
-一条请求只要包含 API、Schema、数据库、源码、命令或测试等越界部分，就整体返回 out_of_scope，不得只执行其中的产品部分。
+Product Coordinator 根据用户真正要求改变的内容判断 out_of_scope；明确要求技术方案、代码实现或测试执行时整体越界，不得只执行其中的产品部分。
+
+Policy 不读取原始文本，也不维护 API、数据库、代码或测试关键词。它只允许 `requirement_change + requirement`、`requirement_change + product_behavior`、`ui_change + ui` 三种结构化组合获得正式节点权限，其余组合一律零权限。
+
+已批准的 `design_stage_revision` 不再经过 Coordinator 或 Policy。此时 `activeFormalRevision.currentArtifact` 是更高级的生命周期事实，只能按 `requirement-spec -> requirements`、`product-plan -> product_planning`、`ui-design -> ui_confirmation` 的白名单进入原生成节点。
 
 ## 零写入意图
 
-以下意图只生成 conversation_response 并回到原审阅门：
+以下意图只生成 `conversation_response` 和明确的 `product_conversation_result`，然后回到原审阅门：
 
 ~~~
 chat
@@ -62,7 +66,7 @@ clarification
 out_of_scope
 ~~~
 
-它们不得调用产物失效、当前产物 revision 或 lifecycle restart，不得改变 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan 或 application_planning_confirmation。只读问答只使用 Coordinator 收到的有界产品上下文，不扫描工作区源码。
+`product_conversation_result` 固定携带 `mutating=false` 和 `presentation.artifactPresentation=preserve`。AG-UI 将 response 投影为普通 assistant 正文；前端按 `artifact + gateId + artifactRevision` 复用原审阅卡，不以新 runId 或 messageId 重放同一文档。它们不得调用产物失效、当前产物 revision 或 lifecycle restart，不得改变 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan 或 application_planning_confirmation。只读问答只使用 Coordinator 收到的有界产品上下文，不扫描工作区源码。
 
 ## 正式修改和确认
 
@@ -92,3 +96,5 @@ design_change_request 保存原始输入，design_change_generation_target 和 d
 planning run 执行期间输入框仍可编辑，但发送按钮和回车发送都被禁止，并提示“当前设计正在生成，完成后即可发送新的调整。”前端不得为自由输入停止当前 run、排队第二个 run 或绕过同一 planning thread 的单写事务。进入待确认、等待用户或空闲状态后才允许发送。
 
 规划阶段和开发阶段继续使用各自原有对话路径；产品专用自由输入仅在 workbenchPhase=product 时进入 /application-page-planning/run。
+
+应用已 `ready_for_workbench` 后，用户手动切回 product 阶段仍使用同一 Product Coordinator 和 `/application-page-planning/run`，不回落 `/conversation/run`。服务端固定恢复原 planning thread 的 `design_intent_analysis`：chat/read_only/clarification/out_of_scope 直接回复且零写入；识别到产品修改时也只提示进入既有 formal revision 影响确认，不复用历史审阅门、不直接改正式产物。

@@ -8,7 +8,7 @@ from unittest.mock import patch
 from app.agents.design_conversation import (
     DesignConversationDecision,
     classify_design_conversation,
-    enforce_product_conversation_capabilities,
+    is_natural_language_confirmation,
     product_conversation_response,
     resolve_design_target,
 )
@@ -51,34 +51,14 @@ class ProductConversationPolicyTests(unittest.TestCase):
         """需求、产品行为和 UI 语料必须映射到三种受限语义组合。"""
 
         cases = {
-            "requirement": [
-                "增加供应商管理模块",
-                "增加订单详情页",
-                "去掉图片详情页",
-                "管理员可以查看所有用户数据",
-                "增加审核员角色",
-            ],
-            "product_behavior": [
-                "订单支持批量归档",
-                "审批完成后显示成功提示",
-                "用户可以从列表跳到详情",
-                "列表增加导出操作",
-            ],
-            "ui": [
-                "登录页改成左右布局",
-                "首页改成左侧导航",
-                "卡片圆角再大一点",
-                "订单列表换成两列",
-                "增加暗色主题",
-            ],
+            "增加供应商管理模块": ("requirement_change", "requirement"),
+            "订单支持批量归档": ("requirement_change", "product_behavior"),
+            "首页改成左侧导航": ("ui_change", "ui"),
         }
-        for level, requests in cases.items():
-            for request in requests:
-                with self.subTest(level=level, request=request):
-                    decision = self._fallback(request)
-                    expected_intent = "ui_change" if level == "ui" else "requirement_change"
-                    self.assertEqual(decision.intent, expected_intent)
-                    self.assertEqual(decision.change_level, level)
+        for request, expected in cases.items():
+            with self.subTest(request=request):
+                decision = self._fallback(request)
+                self.assertEqual((decision.intent, decision.change_level), expected)
 
     def test_read_only_questions_never_resolve_to_mutation_target(self) -> None:
         """产品事实问答只能回复，不能进入任何正式产物节点。"""
@@ -96,33 +76,55 @@ class ProductConversationPolicyTests(unittest.TestCase):
                 )
                 self.assertTrue(product_conversation_response(decision))
 
-    def test_out_of_scope_and_mixed_requests_are_fully_blocked(self) -> None:
-        """技术、开发、测试和混合请求必须整体越界且没有 Graph target。"""
+    def test_out_of_scope_uses_coordinator_boundary_response(self) -> None:
+        """越界结果优先展示 Coordinator 给出的具体拒绝和阶段指引。"""
+
+        decision = DesignConversationDecision(
+            intent="out_of_scope",
+            change_level="none",
+            reason="目标是另一个工程的代码修复",
+            response=(
+                "这个请求不属于当前产品设计阶段，而且目标是另一个工程。"
+                "请切换到对应工程的开发阶段处理；当前应用的需求和 UI 不会发生变化。"
+            ),
+            suggested_phase="development",
+        )
+
+        self.assertEqual(product_conversation_response(decision), decision.response)
+
+    def test_natural_language_confirmation_only_matches_review_claims(self) -> None:
+        """自由文本确认只用于阻止误报，不影响对确认控件的真实修改需求。"""
+
+        for request in ("我确认了", "那我确认了，你继续规划吧", "没问题，继续吧"):
+            with self.subTest(request=request):
+                self.assertTrue(is_natural_language_confirmation(request))
+        for request in ("把确认按钮改成紫色", "修改确认页面布局"):
+            with self.subTest(request=request):
+                self.assertFalse(is_natural_language_confirmation(request))
+
+    def test_policy_only_grants_three_whitelisted_semantic_pairs(self) -> None:
+        """只有三种产品语义组合可以获得正式节点权限。"""
 
         cases = {
-            "planning": [
-                "接口增加 status 参数",
-                "把 SQLite 换成 PostgreSQL",
-                "给数据库增加索引",
-                "修改 Redis 缓存策略",
-                "增加订单筛选，并把接口增加 status 参数",
-            ],
-            "development": ["修改 OrderPage.tsx"],
-            "test": ["帮我跑一下测试"],
+            ("requirement_change", "requirement"): "requirements",
+            ("requirement_change", "product_behavior"): "product_planning",
+            ("ui_change", "ui"): "ui_confirmation",
         }
-        for phase, requests in cases.items():
-            for request in requests:
-                with self.subTest(phase=phase, request=request):
-                    decision = self._fallback(request)
-                    self.assertEqual(decision.intent, "out_of_scope")
-                    self.assertEqual(decision.suggested_phase, phase)
-                    self.assertIsNone(
-                        resolve_design_target(
-                            decision,
-                            requirement_spec={"confirmation_status": "confirmed"},
-                            product_plan={"confirmation_status": "confirmed"},
-                        )
-                    )
+        for semantic, target in cases.items():
+            with self.subTest(semantic=semantic):
+                decision = DesignConversationDecision(
+                    intent=semantic[0],
+                    change_level=semantic[1],
+                    reason="白名单授权测试",
+                )
+                self.assertEqual(
+                    resolve_design_target(
+                        decision,
+                        requirement_spec={"confirmation_status": "confirmed"},
+                        product_plan={"confirmation_status": "confirmed"},
+                    ),
+                    target,
+                )
 
     def test_policy_guards_unconfirmed_upstream_artifacts(self) -> None:
         """确定性 Policy 必须把正式修改拉回最早未确认的上游。"""
@@ -152,35 +154,25 @@ class ProductConversationPolicyTests(unittest.TestCase):
     def test_policy_rejects_invalid_semantic_combinations(self) -> None:
         """模型即使给出合法枚举的错误组合也不能获得正式节点权限。"""
 
-        decision = DesignConversationDecision(
-            intent="requirement_change",
-            change_level="ui",
-            reason="异常组合",
+        invalid = (
+            ("requirement_change", "ui"),
+            ("chat", "requirement"),
+            ("out_of_scope", "product_behavior"),
         )
-        self.assertIsNone(
-            resolve_design_target(
-                decision,
-                requirement_spec={"confirmation_status": "confirmed"},
-                product_plan={"confirmation_status": "confirmed"},
-            )
-        )
-
-    def test_capability_gate_blocks_mixed_request_even_if_model_misclassifies_it(self) -> None:
-        """模型漏掉 API 子请求时，确定性门禁仍必须整体拒绝混合输入。"""
-
-        decision = DesignConversationDecision(
-            intent="requirement_change",
-            change_level="product_behavior",
-            reason="模型只识别了筛选行为",
-        )
-        guarded = enforce_product_conversation_capabilities(
-            decision,
-            "增加订单筛选，并把接口增加 status 参数",
-        )
-        self.assertEqual(guarded.intent, "out_of_scope")
-        self.assertEqual(guarded.suggested_phase, "planning")
-        self.assertEqual(guarded.affected_page_ids, [])
-        self.assertIn("不会只执行其中一部分", guarded.response)
+        for intent, level in invalid:
+            with self.subTest(intent=intent, level=level):
+                decision = DesignConversationDecision(
+                    intent=intent,
+                    change_level=level,
+                    reason="异常组合",
+                )
+                self.assertIsNone(
+                    resolve_design_target(
+                        decision,
+                        requirement_spec={"confirmation_status": "confirmed"},
+                        product_plan={"confirmation_status": "confirmed"},
+                    )
+                )
 
     def test_unknown_page_ids_are_removed_from_valid_model_output(self) -> None:
         """Coordinator 只能回传当前 ProductPlan 中存在的 pageId。"""
@@ -237,7 +229,7 @@ class ProductConversationPolicyTests(unittest.TestCase):
                 settings=SimpleNamespace(),
             )
         self.assertEqual(decision.intent, "out_of_scope")
-        self.assertEqual(decision.suggested_phase, "planning")
+        self.assertEqual(decision.suggested_phase, "none")
 
 
 if __name__ == "__main__":

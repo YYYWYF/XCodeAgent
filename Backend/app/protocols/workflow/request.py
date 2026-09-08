@@ -1504,6 +1504,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "accepted",
         "ui_designs",
         "conversation_response",
+        "product_stage_conversation",
     }
     resumed_values = {
         key: merged[key]

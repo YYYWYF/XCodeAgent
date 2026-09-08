@@ -58,11 +58,9 @@ Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase
 
 ## 应用销毁边界
 
-“删除本地项目”是独立于当前生命周期阶段的完整销毁事务，不再要求规划先自然停止。Renderer 先调用 `/application-deletion/run`；后端按规范化 `workspaceRoot` 建立删除栅栏，拒绝新的 Workflow、独立 AG-UI 动作、模板写入、UI 设计生成和工作区命令，并取消已登记运行。同步命令使用独立进程组登记，删除时先终止、超时后强杀；前后端预览和 UI 设计预览也必须全部停止。已经进入同步模板线程或 UI 设计模型调用的工作会被等待到取消检查边界，确认不会再落盘后，接口才返回 `readyForTrash=true`。
+“删除本地项目”是独立于当前生命周期阶段的完整销毁事务，不再要求规划先自然停止。Electron 先调用 `/application-deletion/prepare`；后端按规范化 `workspaceRoot` 建立删除栅栏，拒绝新的 Workflow、独立 AG-UI 动作、模板写入、UI 设计生成和工作区命令，并取消已登记运行。同步命令使用独立进程组登记，删除时先终止、超时后强杀；前后端预览和 UI 设计预览也必须全部停止。已经进入同步模板线程或 UI 设计模型调用的工作会被等待到取消检查边界，确认不会再落盘后，接口才返回 `readyForTrash=true`。
 
-停机后，后端按工作区正文、metadata 和已知 lifecycle thread 清理共享 SQLite 中的 checkpoint 行；工作区本地 checkpointer 还要关闭连接并逐项驱逐主 Workflow、创建规划和 Conversation Graph 缓存。随后释放 workspace lease、规划恢复锁和生命周期/模板锁。Electron 再终止仍在下载模板的 `git clone`，将环境级会话目录和整个受管项目目录依次移入系统回收站；因此项目源码以及 `.xcodeagent` 下的 lifecycle、正式文档、草稿、运行日志、报告、cache、UI 设计稿、模板 manifest、checkpoint SQLite/WAL/SHM 都随项目一起删除。最后才从应用索引移除条目，并清理 Chromium 中按应用、工作区、thread 和 change-set 保存的恢复键。
-
-Electron 的移动操作成功后，Renderer 通过 `/application-deletion/run` 的 `complete` 动作提交收尾；后端核对已准备的应用身份，并确认原目录已经不存在，随后解除 Workflow、命令进程、模板生成、UI 设计生成四类删除栅栏，再返回 `deletionCompleted=true`。前端收到确认后才继续清理缓存并移除首页索引。同一路径的新应用因此可以正常创建生命周期和启动规划。目录仍在、应用身份不匹配或停机未完成时禁止解锁；重复收尾保持幂等，已重建目录不会被迟到的旧收尾触碰。该动作沿用完整 AG-UI 结果、错误和快照，能力元数据由 `/health` 发布。
+停机后，后端按工作区正文、metadata 和已知 lifecycle thread 清理共享 SQLite 中的 checkpoint 行；工作区本地 checkpointer 还要关闭连接并逐项驱逐主 Workflow、创建规划和 Conversation Graph 缓存。随后释放 workspace lease、规划恢复锁和生命周期/模板锁，但继续保留阻止同路径新写入的删除栅栏。Electron 再终止仍在下载模板的 `git clone`，将环境级会话目录和整个受管项目目录依次移入系统回收站；因此项目源码以及 `.xcodeagent` 下的 lifecycle、正式文档、草稿、运行日志、报告、cache、UI 设计稿、模板 manifest、checkpoint SQLite/WAL/SHM 都随项目一起删除。项目目录成功移走后，Electron 调用 `/application-deletion/complete`；后端仅在确认 `applicationId` 与准备阶段绑定的身份一致且原路径已经不存在时，才释放 Workflow、模板、UI 设计和工作区命令四类删除栅栏，使同一路径可以创建新应用。最后才从应用索引移除条目，并清理 Chromium 中按应用、工作区、thread 和 change-set 保存的恢复键。
 
 销毁默认不触碰平台级数据库加密私钥、用户 Skills、AGENTS.md、登录态、全局设置、外部 MySQL 数据、远程 trace 或 Git 远端。首页“仅移除索引”仍是另一项操作：它不停止运行、不删除会话，也不移动任何项目文件。
 

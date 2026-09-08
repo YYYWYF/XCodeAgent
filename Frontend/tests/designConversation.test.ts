@@ -19,6 +19,7 @@ import {
   planningWorkflowNeedsChatLoading,
   planningWorkflowActivity,
   planningWorkflowCanPublishDuringRun,
+  planningWorkflowIsActivelyRunning,
   planningWorkflowPhase,
   planningWorkflowRequiresUserInput,
   planningWorkflowSettlesLoading,
@@ -62,9 +63,17 @@ import { planningArtifactRecoveryKeys } from '../src/renderer/src/components/AiC
 import {
   PRODUCT_CONVERSATION_PLACEHOLDER,
   buildProductConversationInteraction,
+  productConversationRoute,
   productConversationSendBlocked,
   productConversationSubmissionError
 } from '../src/renderer/src/components/AiChatPanel/components/ChatComposer/productConversation'
+import {
+  canonicalPlanningReviewMessageIndexes,
+  isNonMutatingProductConversation,
+  planningReviewIdentity,
+  planningReviewMatchesActiveWorkflow
+} from '../src/renderer/src/components/AiChatPanel/components/MessageList/productConversationPresentation'
+import { workflowMessageContentForDisplay } from '../src/renderer/src/service/processStepHistory'
 
 const planningSubmissionMessages: AgentChatMessage[] = [
   { id: 1, role: 'assistant', content: '技术规划待确认', createdAt: 1 },
@@ -131,10 +140,135 @@ assert.deepEqual(
 assert.equal(productConversationSendBlocked(true, true), true)
 assert.equal(productConversationSendBlocked(true, false), false)
 assert.equal(productConversationSendBlocked(false, true), false)
+assert.equal(productConversationRoute(true, false), 'initial_planning')
+assert.equal(productConversationRoute(true, true), 'completed_product')
+assert.equal(productConversationRoute(false, true), 'development_conversation')
+const completedProductForwardedProps = buildWorkflowForwardedProps({
+  editorMode: 'frontend',
+  productStageConversation: {
+    request: '修改 OrderPage.tsx'
+  },
+  workflowAction: 'product_stage_conversation',
+  workflowScope: 'application_planning'
+})
+assert.equal(completedProductForwardedProps.workflowAction, 'product_stage_conversation')
+assert.equal(completedProductForwardedProps.workflowScope, 'application_planning')
+assert.equal(completedProductForwardedProps.conversation, undefined)
+assert.deepEqual(completedProductForwardedProps.productStageConversation, {
+  request: '修改 OrderPage.tsx'
+})
 assert.match(
   productConversationSubmissionError(new Error('待确认产物已经更新，请基于最新版本重新提交。')),
   /刷新到最新产品设计状态/
 )
+
+/** 构造带稳定审阅门和产品对话结果的前端投影样本。 */
+const reviewWorkflow = (
+  kind: 'out_of_scope' | 'read_only' | 'clarification' | 'requirement_change',
+  revision: string,
+  mutating: boolean
+): WorkflowRunPayload => ({
+  runId: `run-${kind}-${revision}`,
+  threadId: 'planning-thread',
+  events: [],
+  summary: {
+    phase: mutating ? 'requirements' : 'design_chat_response',
+    status: mutating ? 'running' : 'requires_user_input',
+    message: mutating ? '' : `${kind} response`,
+    productConversationResult: {
+      kind,
+      mutating,
+      response: mutating ? '' : `${kind} response`,
+      presentation: {
+        artifactPresentation: mutating ? 'replace_on_revision' : 'preserve'
+      }
+    }
+  },
+  result: {
+    application_planning_interrupt: {
+      artifact: 'requirement_document',
+      gateId: `requirement_document:${revision}`,
+      artifactRevision: revision
+    }
+  }
+})
+const originalReviewWorkflow = {
+  ...reviewWorkflow('requirement_change', 'revision-a', true),
+  summary: { phase: 'product_planning', status: 'requires_user_input' }
+} as WorkflowRunPayload
+const reviewIdentityA = planningReviewIdentity(originalReviewWorkflow)
+assert.ok(reviewIdentityA)
+for (const kind of ['out_of_scope', 'read_only', 'clarification'] as const) {
+  const nonMutatingWorkflow = reviewWorkflow(kind, 'revision-a', false)
+  const messages: AgentChatMessage[] = [
+    { id: 1, role: 'assistant', content: '', workflow: originalReviewWorkflow, createdAt: 1 },
+    { id: 2, role: 'user', content: `${kind} request`, createdAt: 2 },
+    {
+      id: 3,
+      role: 'assistant',
+      content: `${kind} response`,
+      workflow: nonMutatingWorkflow,
+      createdAt: 3
+    }
+  ]
+  assert.equal(isNonMutatingProductConversation(nonMutatingWorkflow), true)
+  assert.equal(
+    workflowMessageContentForDisplay(`${kind} response`, nonMutatingWorkflow, false),
+    `${kind} response`
+  )
+  assert.equal(canonicalPlanningReviewMessageIndexes(messages).get(reviewIdentityA!), 0)
+}
+const nonMutatingWorkflowWithoutInterrupt = {
+  ...reviewWorkflow('out_of_scope', 'revision-a', false),
+  result: {}
+} as WorkflowRunPayload
+assert.equal(planningReviewIdentity(nonMutatingWorkflowWithoutInterrupt), undefined)
+// 自由问答的回复帧不是确认权威；前端必须继续使用当前 planningWorkflow 的门禁身份。
+assert.equal(planningReviewIdentity(originalReviewWorkflow), reviewIdentityA)
+assert.equal(
+  planningReviewMatchesActiveWorkflow(originalReviewWorkflow, originalReviewWorkflow),
+  true
+)
+const originalUiReviewWorkflow = {
+  ...originalReviewWorkflow,
+  summary: { phase: 'ui_confirmation', status: 'requires_user_input' }
+} as WorkflowRunPayload
+const nonMutatingUiWorkflow = {
+  ...reviewWorkflow('out_of_scope', 'revision-a', false),
+  result: {
+    ...reviewWorkflow('out_of_scope', 'revision-a', false).result,
+    clarification: { mode: 'ui_design_confirmation', status: 'requires_user_input' }
+  }
+} as WorkflowRunPayload
+const compactedNonMutatingUiMessages = compactPlanningMessageHistory([
+  { id: 1, role: 'assistant', content: '', workflow: originalUiReviewWorkflow, createdAt: 1 },
+  { id: 2, role: 'user', content: '修复另一个工程的 bug', createdAt: 2 },
+  {
+    id: 3,
+    role: 'assistant',
+    content: '请切换到目标工程的开发阶段处理。',
+    workflow: nonMutatingUiWorkflow,
+    createdAt: 3
+  }
+])
+assert.deepEqual(
+  compactedNonMutatingUiMessages.map((message) => message.id),
+  [1, 2, 3]
+)
+const changedReviewWorkflow = reviewWorkflow('requirement_change', 'revision-b', true)
+const changedReviewMessages: AgentChatMessage[] = [
+  { id: 1, role: 'assistant', content: '', workflow: originalReviewWorkflow, createdAt: 1 },
+  { id: 2, role: 'assistant', content: '', workflow: changedReviewWorkflow, createdAt: 2 }
+]
+const reviewIdentityB = planningReviewIdentity(changedReviewWorkflow)
+assert.ok(reviewIdentityB)
+assert.notEqual(reviewIdentityB, reviewIdentityA)
+assert.equal(
+  planningReviewMatchesActiveWorkflow(originalReviewWorkflow, changedReviewWorkflow),
+  false
+)
+assert.equal(isNonMutatingProductConversation(changedReviewWorkflow), false)
+assert.equal(canonicalPlanningReviewMessageIndexes(changedReviewMessages).get(reviewIdentityB!), 1)
 
 const designRevisionInput = {
   request: '把订单页改成双列布局',
@@ -1029,7 +1163,15 @@ const clarificationOnlyQuestionsWorkflow = {
 } as WorkflowRunPayload
 
 assert.equal(planningWorkflowRequiresUserInput(clarificationOnlyQuestionsWorkflow), true)
+assert.equal(planningWorkflowIsActivelyRunning(clarificationOnlyQuestionsWorkflow), false)
 assert.equal(planningWorkflowSettlesLoading(clarificationOnlyQuestionsWorkflow), true)
+assert.equal(
+  planningWorkflowIsActivelyRunning({
+    ...clarificationOnlyQuestionsWorkflow,
+    summary: { status: 'running', phase: 'requirements' }
+  } as WorkflowRunPayload),
+  true
+)
 assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, false), true)
 assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, true), false)
 
@@ -1219,7 +1361,7 @@ const analyzingDesignIntentWorkflow = {
 assert.deepEqual(planningWorkflowActivity(analyzingDesignIntentWorkflow), {
   status: 'running',
   title: '正在识别设计变更意图',
-  detail: '正在判断这次改动应回到需求、产品规划还是 UI 设计阶段。'
+  detail: '正在判断这次输入属于需求事实、产品行为还是 UI 设计。'
 })
 
 const initialRequirementWorkflow = {

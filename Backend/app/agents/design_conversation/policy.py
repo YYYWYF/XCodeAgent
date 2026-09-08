@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
-from app.agents.design_conversation.fallback import out_of_scope_phase_for_request
 from app.agents.design_conversation.models import DesignConversationDecision
 
 
@@ -24,35 +24,13 @@ _PHASE_LABELS = {
     "test": "测试",
 }
 
-
-def enforce_product_conversation_capabilities(
-    decision: DesignConversationDecision | Any,
-    request: str,
-) -> DesignConversationDecision:
-    """用确定性拒绝规则拦截模型遗漏的技术、开发、测试及混合请求。"""
-
-    phase = out_of_scope_phase_for_request(request)
-    if phase is None:
-        return decision
-    mixed = str(getattr(decision, "intent", "") or "") in {
-        "requirement_change",
-        "ui_change",
-    }
-    response = (
-        "这个请求同时包含产品设计和后续阶段修改，当前产品阶段不会只执行其中一部分。"
-        "请只描述产品层期望，或前往对应后续阶段整体处理。"
-        if mixed
-        else ""
-    )
-    return DesignConversationDecision(
-        intent="out_of_scope",
-        change_level="none",
-        reason="请求包含当前产品阶段禁止执行的后续阶段能力。",
-        affected_page_ids=[],
-        response=response,
-        suggested_phase=phase,
-        clarification_question="",
-    )
+_NATURAL_CONFIRMATION_PATTERNS = (
+    re.compile(
+        r"^(?:那)?(?:好|好的|可以|行|没问题)?(?:我)?(?:已|已经)?"
+        r"确认(?:了)?(?:你)?(?:继续(?:规划)?(?:吧)?)?$"
+    ),
+    re.compile(r"^(?:那)?(?:好|好的|可以|行|没问题)(?:你)?继续(?:规划)?(?:吧)?$"),
+)
 
 
 def resolve_design_target(
@@ -61,7 +39,7 @@ def resolve_design_target(
     requirement_spec: dict[str, Any] | None,
     product_plan: dict[str, Any] | None,
 ) -> DesignConversationTarget | None:
-    """把受限产品语义映射到原 Graph 节点，并阻止异常模型输出越权。"""
+    """只按允许的产品语义组合授予三个正式 Graph 节点的写权限。"""
 
     target = _TARGET_BY_SEMANTICS.get(
         (
@@ -90,20 +68,30 @@ def product_conversation_response(decision: DesignConversationDecision | Any) ->
         question = str(getattr(decision, "clarification_question", "") or "").strip()
         return question or "请再说明你希望调整的产品事实、页面行为或 UI 表现。"
     if intent == "out_of_scope":
-        if response.startswith("这个请求同时包含产品设计和后续阶段修改"):
+        if response:
             return response
         phase = str(getattr(decision, "suggested_phase", "") or "")
         phase_label = _PHASE_LABELS.get(phase)
         if phase_label:
             return (
-                f"这个请求属于「{phase_label}」阶段。"
-                "当前产品阶段只维护需求、产品行为和 UI 设计，不会修改后续阶段资源。"
+                f"这个请求属于「{phase_label}」阶段，超出当前产品 Agent 的能力边界。"
+                f"请切换到对应工程的{phase_label}阶段处理；"
+                "当前应用的需求、产品行为和 UI 不会发生变化。"
             )
         return "这个请求超出当前产品阶段的能力范围，未修改任何正式产物。"
     return (
         "当前输入无法安全映射到产品阶段能力，未修改任何正式产物。"
         "请只描述产品需求、页面行为或 UI 期望。"
     )
+
+
+def is_natural_language_confirmation(request: str) -> bool:
+    """识别只表达“我确认了”的自由文本，禁止它冒充审阅卡结构化 action。"""
+
+    normalized = re.sub(r"[\s,，。.!！?？;；:：]+", "", request.strip().lower())
+    if not normalized:
+        return False
+    return any(pattern.fullmatch(normalized) for pattern in _NATURAL_CONFIRMATION_PATTERNS)
 
 
 def _is_confirmed(artifact: dict[str, Any] | None) -> bool:

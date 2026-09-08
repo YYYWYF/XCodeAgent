@@ -971,6 +971,47 @@ async function prepareApplicationDeletionWithBackend(
   }
 }
 
+/** 在项目目录移入回收站后通知后端释放该路径的全部删除栅栏。 */
+async function completeApplicationDeletionWithBackend(
+  applicationId: string,
+  workspaceRoot: string
+): Promise<void> {
+  const response = await fetch(
+    `${getBackendBaseUrl().replace(/\/$/, '')}/application-deletion/complete`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'complete',
+        applicationId,
+        workspaceRoot
+      })
+    }
+  )
+  const result = (await response.json().catch(() => undefined)) as
+    | {
+        applicationId?: unknown
+        workspaceRoot?: unknown
+        deletionCompleted?: unknown
+        detail?: unknown
+      }
+    | undefined
+  if (!response.ok) {
+    throw new Error(
+      typeof result?.detail === 'string'
+        ? result.detail
+        : `Application deletion completion failed: ${response.status}`
+    )
+  }
+  if (
+    result?.deletionCompleted !== true ||
+    result.applicationId !== applicationId ||
+    result.workspaceRoot !== workspaceRoot
+  ) {
+    throw new Error('Backend did not confirm the requested application deletion completion')
+  }
+}
+
 /** 注册应用列表读取和保存所需的 IPC。 */
 function setupApplicationStorageIpc(): void {
   ipcMain.handle('applications:load', async () => ({
@@ -993,6 +1034,7 @@ function setupApplicationStorageIpc(): void {
       shell.trashItem(targetPath)
     )
     await trashProjectDirectory(workspaceRoot)
+    await completeApplicationDeletionWithBackend(applicationId, workspaceRoot)
     return { ok: true }
   })
 }

@@ -10,7 +10,7 @@ from langgraph.types import Command
 
 from app.graph.application_planning_interrupts import (
     planning_stage_entry,
-    requirements_review,
+    requirement_document_review,
 )
 from app.graph.state import ProjectState
 from app.protocols.application_planning_interrupt import (
@@ -19,37 +19,28 @@ from app.protocols.application_planning_interrupt import (
 from app.protocols.workflow import build_workflow_ag_ui_stream
 
 
-def _requirements_fixture(state: ProjectState) -> dict:
-    """构造可确认的最小需求节点，用于验证真实 interrupt 往返。"""
+def _requirement_document_fixture(state: ProjectState) -> dict:
+    """构造可联合确认的最小需求文档节点，用于验证真实 interrupt 往返。"""
 
     interaction = state.get("application_planning_interaction")
     if isinstance(interaction, dict) and interaction.get("action") == "confirm":
         return {
-            "phase": "requirements",
+            "phase": "product_planning",
             "status": "completed",
             "requirement_spec": {"confirmation_status": "confirmed"},
+            "product_plan": {"confirmation_status": "confirmed"},
             "clarification": {"status": "clear"},
         }
-    if isinstance(interaction, dict) and interaction.get("action") == "revise":
-        return {
-            "phase": "requirements",
-            "status": "requires_user_input",
-            "requirement_spec": {
-                "confirmation_status": "pending_user_confirmation",
-                "name": str(state.get("request") or "修订需求"),
-            },
-            "clarification": {
-                "status": "requires_user_input",
-                "mode": "requirement_document_confirmation",
-            },
-            "application_planning_interaction": {},
-        }
     return {
-        "phase": "requirements",
+        "phase": "product_planning",
         "status": "requires_user_input",
         "requirement_spec": {
             "confirmation_status": "pending_user_confirmation",
             "name": "任务中心",
+        },
+        "product_plan": {
+            "confirmation_status": "pending_user_confirmation",
+            "name": "任务中心产品规划",
         },
         "clarification": {
             "status": "requires_user_input",
@@ -58,31 +49,49 @@ def _requirements_fixture(state: ProjectState) -> dict:
     }
 
 
-def _route_requirements_fixture(state: ProjectState) -> str:
-    """确认完成时结束测试图，否则进入需求审阅中断。"""
+def _route_requirement_document_fixture(state: ProjectState) -> str:
+    """联合确认完成时结束测试图，否则进入需求文档审阅中断。"""
 
     return "completed" if state.get("status") == "completed" else "review"
 
 
-def _design_intent_fixture(state: ProjectState) -> ProjectState:
-    """提供审阅门动态目标校验所需的占位设计意图节点。"""
+def _design_intent_fixture(state: ProjectState) -> dict:
+    """模拟一次需求文档修订，并生成可再次确认的新联合文档版本。"""
 
-    return state
+    request = str(state.get("request") or "修订需求")
+    return {
+        "phase": "product_planning",
+        "status": "requires_user_input",
+        "requirement_spec": {
+            "confirmation_status": "pending_user_confirmation",
+            "name": request,
+        },
+        "product_plan": {
+            "confirmation_status": "pending_user_confirmation",
+            "name": f"{request}产品规划",
+        },
+        "clarification": {
+            "status": "requires_user_input",
+            "mode": "requirement_document_confirmation",
+        },
+        "application_planning_interaction": {},
+    }
 
 
 def _interrupt_test_graph():
-    """构建只包含需求产物与原生审阅门的最小测试 Graph。"""
+    """构建只包含联合需求文档与原生审阅门的最小测试 Graph。"""
 
     builder = StateGraph(ProjectState)
-    builder.add_node("requirements", _requirements_fixture)
-    builder.add_node("requirements_review", requirements_review)
+    builder.add_node("product_planning", _requirement_document_fixture)
+    builder.add_node("requirement_document_review", requirement_document_review)
     builder.add_node("design_intent_analysis", _design_intent_fixture)
-    builder.add_edge(START, "requirements")
+    builder.add_edge(START, "product_planning")
     builder.add_conditional_edges(
-        "requirements",
-        _route_requirements_fixture,
-        {"review": "requirements_review", "completed": END},
+        "product_planning",
+        _route_requirement_document_fixture,
+        {"review": "requirement_document_review", "completed": END},
     )
+    builder.add_edge("design_intent_analysis", "requirement_document_review")
     return builder.compile(checkpointer=InMemorySaver())
 
 
@@ -93,7 +102,7 @@ def _counting_interrupt_test_graph(
 ):
     """构造带真实异步下游副作用的中断 Graph，用于验证恢复串行化。"""
 
-    async def counting_requirements(state: ProjectState) -> dict:
+    async def counting_product_planning(state: ProjectState) -> dict:
         """在确认恢复时计数并等待测试释放，制造可观测的并发窗口。"""
 
         interaction = state.get("application_planning_interaction")
@@ -102,23 +111,25 @@ def _counting_interrupt_test_graph(
             downstream_entered.set()
             await release_downstream.wait()
             return {
-                "phase": "requirements",
+                "phase": "product_planning",
                 "status": "completed",
                 "requirement_spec": {"confirmation_status": "confirmed"},
+                "product_plan": {"confirmation_status": "confirmed"},
                 "clarification": {"status": "clear"},
             }
-        return _requirements_fixture(state)
+        return _requirement_document_fixture(state)
 
     builder = StateGraph(ProjectState)
-    builder.add_node("requirements", counting_requirements)
-    builder.add_node("requirements_review", requirements_review)
+    builder.add_node("product_planning", counting_product_planning)
+    builder.add_node("requirement_document_review", requirement_document_review)
     builder.add_node("design_intent_analysis", _design_intent_fixture)
-    builder.add_edge(START, "requirements")
+    builder.add_edge(START, "product_planning")
     builder.add_conditional_edges(
-        "requirements",
-        _route_requirements_fixture,
-        {"review": "requirements_review", "completed": END},
+        "product_planning",
+        _route_requirement_document_fixture,
+        {"review": "requirement_document_review", "completed": END},
     )
+    builder.add_edge("design_intent_analysis", "requirement_document_review")
     return builder.compile(checkpointer=InMemorySaver())
 
 
@@ -327,10 +338,10 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(projected["status"], "requires_user_input")
-        self.assertEqual(projected["phase"], "requirements")
+        self.assertEqual(projected["phase"], "requirement_document")
         self.assertEqual(
             projected["application_planning_interrupt"]["artifact"],
-            "requirement_spec",
+            "requirement_document",
         )
 
     async def test_ag_ui_runtime_uses_command_resume(self) -> None:
@@ -342,7 +353,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         _ = [
             chunk
             async for chunk in graph.astream(
-                {"resume_from": "requirements"},
+                {"resume_from": "product_planning"},
                 config=config,
                 stream_mode="updates",
             )

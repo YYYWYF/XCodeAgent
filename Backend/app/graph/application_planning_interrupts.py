@@ -83,13 +83,17 @@ def validate_application_planning_review_action(
 ) -> None:
     """按当前审阅门的产物和 clarification 状态校验动作组合。"""
 
-    artifact = ARTIFACT_BY_NODE[node_name]
     # 校验必须使用当前 interrupt 对外展示的同一份载荷。规划阶段入口的 clarification
     # 是根据已确认/跳过的 UI 状态动态合成的，不会写回 checkpoint；若继续读取 state，
     # 就会把上一阶段遗留状态误判为“当前门禁未等待用户输入”。
     clarification = application_planning_review_payload(state, node_name).get("clarification")
     clarification = clarification if isinstance(clarification, dict) else {}
     mode = str(clarification.get("mode") or "")
+    effective_node_name = _effective_application_planning_review_node(state, node_name)
+    # 恢复请求会先经过 runtime 预校验，再进入 Graph 的 interrupt 恢复函数。
+    # 已错误挂到 requirements 的联合需求文档 checkpoint 必须在两层都按真实语义校验，
+    # 同时保留原 interrupt 的 gateId/artifact/revision，避免把当前卡片判为过期。
+    artifact = ARTIFACT_BY_NODE[effective_node_name]
     status = str(clarification.get("status") or "")
     questions = clarification.get("questions")
     has_questions = isinstance(questions, list) and bool(questions)
@@ -100,7 +104,7 @@ def validate_application_planning_review_action(
         # 底部设计聊天可以从任意正式产物审阅门进入统一的设计意图路由。
         return
 
-    if node_name == "planning_stage_entry":
+    if effective_node_name == "planning_stage_entry":
         if mode != "planning_stage_entry_confirmation" or submission.action != "enter_planning":
             raise ValueError(
                 "等待进入规划阶段门禁只允许 action=enter_planning 或设计变更。"
@@ -152,11 +156,12 @@ def resume_application_planning_review(
     if submission.artifact_revision != payload["artifactRevision"]:
         raise ValueError("待确认产物已经更新，请基于最新版本重新提交。")
 
-    validate_application_planning_review_action(state, node_name, submission)
+    effective_node_name = _effective_application_planning_review_node(state, node_name)
+    validate_application_planning_review_action(state, effective_node_name, submission)
     runtime_update = _application_planning_runtime_update(config)
 
     if submission.action == "design_change" or (
-        submission.action == "revise" and node_name == "requirement_document"
+        submission.action == "revise" and effective_node_name == "requirement_document"
     ):
         # 需求+产品规划合并确认门上的“修改”可能涉及任一产物，统一走设计意图分析，
         # 由分类器路由到最早受影响产物并级联重新生成下游。
@@ -169,7 +174,7 @@ def resume_application_planning_review(
                 # 指令，避免意图分析失败时 checkpoint 继续保留错误入口。
                 "resume_from": "",
                 "request": submission.request.strip(),
-                "design_interaction_origin": node_name,
+                "design_interaction_origin": effective_node_name,
                 "application_planning_interaction": {},
             },
             goto="design_intent_analysis",
@@ -180,12 +185,15 @@ def resume_application_planning_review(
         # 原生 interrupt 已精确决定恢复节点，本轮开始后必须消费旧 START 指令。
         "resume_from": "",
         "request": submission.request.strip(),
+        # 用户开始处理原审阅门后，上一轮普通产品对话的 preserve 提示已经消费；
+        # 后续正式生成必须按新 artifact revision 决定展示，不能继续隐藏卡片。
+        "product_conversation_result": {},
         "application_planning_interaction": submission.model_dump(
             by_alias=False,
             exclude_none=True,
         ),
     }
-    if node_name == "planning_stage_entry":
+    if effective_node_name == "planning_stage_entry":
         return Command(update=update, goto="technical_planning")
     if submission.edited_requirement_spec is not None:
         update["edited_requirement_spec"] = submission.edited_requirement_spec
@@ -202,18 +210,40 @@ def resume_application_planning_review(
             update.update(
                 begin_current_artifact_revision(
                     state,
-                    node_name=node_name,
+                    node_name=effective_node_name,
                     request=submission.request,
                 )
             )
-        if node_name == "ui_confirmation":
+        if effective_node_name == "ui_confirmation":
             update["ui_design_action"] = {
                 "action": "adjust_pages",
                 "pageIds": [],
                 "instruction": submission.request.strip(),
             }
-    target_node = "product_planning" if node_name == "requirement_document" else node_name
+    target_node = (
+        "product_planning"
+        if effective_node_name == "requirement_document"
+        else effective_node_name
+    )
     return Command(update=update, goto=target_node)
+
+
+def _effective_application_planning_review_node(
+    state: ProjectState,
+    node_name: str,
+) -> str:
+    """修正已挂起在需求节点、但实际携带联合需求文档确认的当前 checkpoint。"""
+
+    clarification = state.get("clarification")
+    clarification = clarification if isinstance(clarification, dict) else {}
+    if (
+        node_name == "requirements"
+        and clarification.get("mode") == "requirement_document_confirmation"
+    ):
+        # 旧的非修改回复把 requirement_document 误返回 requirements_review。
+        # 保留已发给客户端的 gate 身份，但按 clarification 的真实语义续跑。
+        return "requirement_document"
+    return node_name
 
 
 def _application_planning_runtime_update(

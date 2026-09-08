@@ -71,6 +71,12 @@ import {
   isTemplateSupersededPlanningProgressMessage,
   latestUiDesignPreviewMessageIndex
 } from './uiDesignPreviewHistory'
+import {
+  canonicalPlanningReviewMessageIndexes,
+  isNonMutatingProductConversation,
+  planningReviewIdentity,
+  planningReviewMatchesActiveWorkflow
+} from './productConversationPresentation'
 import './MessageList.less'
 
 const { Text } = Typography
@@ -345,6 +351,15 @@ export default function MessageList({
   const showStandaloneError = Boolean(visibleError && visibleError !== latestAssistantMessageError)
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
+  const planningReviewMessageIndexes = canonicalPlanningReviewMessageIndexes(messages)
+  // 当前 planning checkpoint 是确认权限的唯一权威。普通问答可以继续向后追加消息，
+  // 但只要服务端仍挂起在同一 gateId + artifactRevision，原确认卡就必须保持可操作。
+  const activePlanningReviewIdentity =
+    designPhasePlanning &&
+    planningWorkflow &&
+    planningWorkflowRequiresUserInput(planningWorkflow)
+      ? planningReviewIdentity(planningWorkflow)
+      : undefined
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
   const pendingPhaseDetail = phasePendingDetail(currentPhase)
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
@@ -544,6 +559,27 @@ export default function MessageList({
               )
               const requiresClarification =
                 message.workflow && planningWorkflowRequiresUserInput(message.workflow)
+              const messagePlanningReviewIdentity = planningReviewIdentity(message.workflow)
+              const nonMutatingProductConversation = isNonMutatingProductConversation(
+                message.workflow
+              )
+              const isCanonicalPlanningReview = Boolean(
+                messagePlanningReviewIdentity &&
+                  planningReviewMessageIndexes.get(messagePlanningReviewIdentity) === messageIndex
+              )
+              const isDuplicatePlanningReview = Boolean(
+                messagePlanningReviewIdentity && !isCanonicalPlanningReview
+              )
+              const isCurrentPlanningReview = Boolean(
+                isCanonicalPlanningReview &&
+                  activePlanningReviewIdentity &&
+                  planningReviewMatchesActiveWorkflow(message.workflow, planningWorkflow)
+              )
+              // 早期版本可能已把非修改回复挂回错误的审阅节点。若该回复本身就是
+              // 当前 checkpoint 的唯一卡片宿主，允许它承载一次可恢复确认；正常同门禁回复仍去重到原卡。
+              const isActiveNonMutatingReviewFallback = Boolean(
+                nonMutatingProductConversation && isCurrentPlanningReview
+              )
               // 设计规划已经由专用进度块表达当前意图和生成阶段，不再重复展示
               // 通用 ProcessSteps 的“执行完成 / 已归档步骤”摘要。
               const planningActivity = designPhasePlanning
@@ -566,10 +602,13 @@ export default function MessageList({
                 : undefined
               const isUiDesignConfirmationCard =
                 message.workflow &&
+                (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
+                !isDuplicatePlanningReview &&
                 (message.workflow.summary?.phase === 'ui_confirmation' ||
                   messageClarification?.mode === 'ui_design_confirmation')
               const isLatestUiDesignConfirmationCard =
-                isUiDesignConfirmationCard && messageIndex === latestUiDesignPreviewIndex
+                isUiDesignConfirmationCard &&
+                (messageIndex === latestUiDesignPreviewIndex || isCurrentPlanningReview)
               // 项目启动节点使用专用卡片覆盖运行、完成与失败状态。
               const isLaunchProjectCard = workflowShouldShowProjectLaunch(
                 message.workflow,
@@ -594,6 +633,8 @@ export default function MessageList({
                 message.workflow.summary?.status !== 'running'
               const showWorkflowCard = Boolean(
                 message.workflow &&
+                  (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
+                  !isDuplicatePlanningReview &&
                   ((requiresClarification &&
                     !isUiDesignConfirmationCard &&
                     !dagConfirmationMovedToStageOutput) ||
@@ -616,9 +657,9 @@ export default function MessageList({
                 !applicationLifecycle?.activeFormalRevision
               const interactionAvailability =
                 message.workflow && requiresClarification
-                  ? messageIndex < messages.length - 1
+                  ? browsingDesignHistory
                     ? 'stale'
-                    : browsingDesignHistory
+                    : messageIndex < messages.length - 1 && !isCurrentPlanningReview
                       ? 'stale'
                       : conversation || designPhasePlanning
                         ? 'active'
@@ -643,6 +684,8 @@ export default function MessageList({
               // 规划占位消息（planningLoading）：用户提交后产品 Agent 正在思考，只显示 loading 态。
               const isPlanningArtifactConfirmationCard =
                 message.workflow &&
+                (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
+                !isDuplicatePlanningReview &&
                 [
                   'requirement_document_confirmation',
                   'technical_plan_confirmation',
@@ -653,7 +696,9 @@ export default function MessageList({
               // （确认/放弃/修改）随 disabled 禁用，查看类按钮不读 disabled、仍可点开。
               // 当前真正待确认的卡是列表末尾消息，其后没有任何消息，因此不受影响、保持可点。
               const planningArtifactAnswered =
-                Boolean(isPlanningArtifactConfirmationCard) && messageIndex < messages.length - 1
+                Boolean(isPlanningArtifactConfirmationCard) &&
+                messageIndex < messages.length - 1 &&
+                !isCurrentPlanningReview
               const isPlanningStageRunningCard =
                 message.workflow &&
                 isStructuredPlanningWorkflow(message.workflow) &&

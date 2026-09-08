@@ -16,10 +16,10 @@ from app.graph.application_planning_revision import (
     design_node_update,
     is_design_change,
     prepare_ui_revision_state,
+    route_design_chat_response,
     route_design_intent,
 )
 from app.graph.application_planning_interrupts import (
-    pending_review_node,
     planning_stage_entry,
     requirement_document_review,
     requirements_review,
@@ -735,7 +735,8 @@ def build_application_planning_graph(*, checkpointer):
         "technical_planning_review": "technical_planning_review",
         "completed": END,
     })
-    builder.add_conditional_edges("design_chat_response", pending_review_node, {
+    builder.add_conditional_edges("design_chat_response", route_design_chat_response, {
+        "completed": END,
         "requirements_review": "requirements_review",
         "requirement_document_review": "requirement_document_review",
         "ui_confirmation_review": "ui_confirmation_review",
