@@ -17,12 +17,14 @@ from app.services.application_lifecycle import (
 )
 from app.services.build_task_plan_lifecycle import abandon_pending_build_task_plan
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
+from app.workspace.planning_run_documents import load_planning_run, write_planning_run_atomic
 from app.workspace.task_documents import (
     build_task_plan_json_path,
     build_task_plan_pending_json_path,
     load_pending_build_task_plan,
     write_pending_build_task_plan_atomic,
 )
+from tests.planning_run_fixtures import run as planning_run_fixture
 
 
 class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
@@ -63,6 +65,14 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
             "planning_run_id": identity["planning_run_id"],
             "draft_digest": identity["draft_digest"],
         }
+
+    def _write_planning_run(self, planning_run_id: str) -> None:
+        """写入指定身份的轻量 PlanningRun 快照，供 Abandon 收口断言使用。"""
+
+        write_planning_run_atomic(
+            self.state,
+            planning_run_fixture().model_copy(update={"planning_run_id": planning_run_id}),
+        )
 
     def _write_lifecycle(self) -> None:
         """写入停在 DAG 确认门禁的最小 application lifecycle。"""
@@ -113,6 +123,42 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "abandoned")
         self.assertFalse(self.pending_path.exists())
         self.assertIsNone(load_pending_build_task_plan(self.state))
+        self.assertEqual(self.formal_path.read_bytes(), self.formal_bytes)
+
+    def test_abandon_ends_matching_planning_run(self) -> None:
+        """精确身份的 Abandon 必须删除 Pending 与匹配 PlanningRun，Formal 保持不变。"""
+
+        request = load_pending_build_task_plan(self.state)["draft_identity"]
+        self._write_planning_run(request["planning_run_id"])
+
+        result = abandon_pending_build_task_plan(
+            self.state,
+            planning_run_id=request["planning_run_id"],
+            draft_digest=request["draft_digest"],
+        )
+
+        self.assertEqual(result.status, "abandoned")
+        self.assertFalse(self.pending_path.exists())
+        self.assertIsNone(load_planning_run(self.state))
+        self.assertEqual(self.formal_path.read_bytes(), self.formal_bytes)
+
+    def test_abandon_preserves_newer_planning_run(self) -> None:
+        """更新的 PlanningRun 快照不能被旧草稿的 Abandon 误删。"""
+
+        request = load_pending_build_task_plan(self.state)["draft_identity"]
+        self._write_planning_run("planning-run-newer")
+
+        result = abandon_pending_build_task_plan(
+            self.state,
+            planning_run_id=request["planning_run_id"],
+            draft_digest=request["draft_digest"],
+        )
+
+        self.assertEqual(result.status, "abandoned")
+        self.assertEqual(
+            load_planning_run(self.state)["planning_run_id"],
+            "planning-run-newer",
+        )
         self.assertEqual(self.formal_path.read_bytes(), self.formal_bytes)
 
     def test_stale_abandon_does_not_delete_current_pending(self) -> None:
@@ -183,7 +229,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs["plan_control_draft_digest"], "e" * 64)
 
     async def test_abandon_action_does_not_cancel_or_end_execution(self) -> None:
-        """AG-UI Abandon 只删除 Pending，不调用 Scheduler cancel 或 lifecycle end。"""
+        """AG-UI Abandon 收口 Pending/PlanningRun，但不调用 Scheduler cancel 或 lifecycle end。"""
 
         self.formal_path.unlink()
         self.pending_path.unlink()

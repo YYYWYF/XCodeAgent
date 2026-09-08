@@ -75,11 +75,12 @@ def abandon_pending_build_task_plan(
     workflow_run_id: str = "",
     record_lifecycle: bool = True,
 ) -> AbandonPendingResult:
-    """仅删除自摘要有效且精确匹配请求身份的当前 PendingPlan。
+    """仅删除自摘要有效且精确匹配请求身份的当前 PendingPlan，并结束其 DAG 生成。
 
     在持有 Pending lifecycle 锁时、删除文件前先持久化 authoritative Abandon
-    tombstone；生命周期写入失败时保留 Pending，不伪报成功。Regenerate 复用精确
-    删除能力时显式关闭 tombstone，因为它会立即创建新的 PlanningRun。
+    tombstone；生命周期写入失败时保留 Pending，不伪报成功。Pending 删除成功后
+    同时移除身份匹配的 PlanningRun 快照，让本次 DAG 生成真正结束；Formal 永不改动。
+    Regenerate 复用精确删除能力时显式关闭 tombstone，因为它会立即创建新的 PlanningRun。
     """
 
     from app.services.application_lifecycle import record_abandoned_planning_result
@@ -110,6 +111,7 @@ def abandon_pending_build_task_plan(
             )
         if _abandoned_request_matches(state, request):
             cleanup_error = _cleanup_matching_pending(state, request)
+            _end_matching_planning_run(state, request.planning_run_id)
             return AbandonPendingResult(
                 status="already_abandoned",
                 errors=(cleanup_error,) if cleanup_error else (),
@@ -134,6 +136,7 @@ def abandon_pending_build_task_plan(
                 workflow_run_id=workflow_run_id,
             )
         build_task_plan_pending_json_path(state).unlink()
+        _end_matching_planning_run(state, identity.planning_run_id)
         return AbandonPendingResult(status="abandoned", draft_identity=identity)
 
 
@@ -224,6 +227,24 @@ def _matches_request(value: Any, request: ConfirmedFrom) -> bool:
 
     return (isinstance(value, dict) and value.get("planning_run_id") == request.planning_run_id
             and value.get("draft_digest") == request.draft_digest)
+
+
+def _end_matching_planning_run(state: dict[str, Any], planning_run_id: str) -> None:
+    """删除与本次 Abandon 身份匹配的 PlanningRun 快照，让 DAG 生成真正结束。
+
+    只删除 planning_run_id 精确匹配的当前快照；更新的草稿快照必须保留，避免误删
+    后续生成。删除失败不回滚已提交的 Abandon：tombstone 仍压制该 Run，不会复活
+    Pending 或写入 Formal。
+    """
+
+    from app.workspace.planning_run_documents import delete_planning_run, load_planning_run
+
+    try:
+        run = load_planning_run(state)
+        if run is not None and run.get("planning_run_id") == planning_run_id:
+            delete_planning_run(state)
+    except (OSError, ValueError, TypeError):
+        return
 
 
 def _abandoned_request_matches(state: dict[str, Any], request: ConfirmedFrom) -> bool:

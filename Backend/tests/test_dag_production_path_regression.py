@@ -18,6 +18,7 @@ from unittest.mock import Mock, patch
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.graph.workflow import build_graph
+from app.protocols.workflow.run_control import build_workflow_plan_control_ag_ui_stream
 from app.services.dag_planning_orchestrator import UnitGenerationScheduler
 from app.services.scope_assembly import assemble_scope_build_task_plan
 from app.services.unit_generation_contracts import UnitGenerationAttemptResult
@@ -222,6 +223,50 @@ class DagProductionPathCutoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(unique_units <= set(pending["build_units"]))
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["build_execution_scope"], scope)
+
+    async def test_abandon_ends_generation_and_discards_pending(self) -> None:
+        """Abandon 必须结束本次 DAG 生成、丢弃 Pending，且绝不写 Formal。"""
+
+        scope = execution_scope(name="orders")
+        graph = build_graph(checkpointer=InMemorySaver())
+        with patch(
+            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            return_value=_ready_template(self.workspace),
+        ), patch(
+            "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
+            new=self._model_stub([]),
+        ):
+            result = await graph.ainvoke(
+                self._state(scope),
+                config={"configurable": {"thread_id": "thread-production-abandon"}},
+            )
+
+        identity = result["build_task_plan_confirmation"]["draftIdentity"]
+        # 生成成功后 Run 仍在磁盘上，Abandon 必须把它收口。
+        self.assertEqual(load_planning_run(self._state(scope))["status"], "active")
+        self.assertIsNotNone(load_pending_build_task_plan(self._state(scope)))
+
+        frames = "".join(
+            [
+                frame
+                async for frame in build_workflow_plan_control_ag_ui_stream(
+                    action="abandon",
+                    workspace=str(self.workspace),
+                    target_run_id="workflow-production-cutover",
+                    planning_run_id=identity["planningRunId"],
+                    draft_digest=identity["draftDigest"],
+                    thread_id="thread-production-cutover",
+                    run_id="request-production-abandon",
+                )
+            ]
+        )
+
+        self.assertIn('"status":"abandoned"', frames)
+        # 本次生成的 Pending 彻底丢弃，DAG 生成结束（PlanningRun 不再存在）。
+        self.assertIsNone(load_pending_build_task_plan(self._state(scope)))
+        self.assertIsNone(load_planning_run(self._state(scope)))
+        # Formal 从不写入。
+        self.assertFalse(build_task_plan_json_path(self._state(scope)).exists())
 
 
 if __name__ == "__main__":
