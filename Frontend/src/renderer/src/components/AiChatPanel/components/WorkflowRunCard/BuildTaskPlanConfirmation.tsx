@@ -1,4 +1,4 @@
-import { CodeOutlined, FileTextOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons'
+import { CodeOutlined, DeleteOutlined, FileTextOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { Alert, Button, Collapse, Popconfirm, Space, Typography } from 'antd'
 import type {
   WorkflowBuildTargetReview,
@@ -107,12 +107,12 @@ export default function BuildTaskPlanConfirmation({
             cancelText="继续确认"
             disabled={disabled}
             okButtonProps={{ danger: true }}
-            okText="放弃并停止"
+            okText="确认放弃"
             onConfirm={() => onSubmit({ mode: 'build_task_plan_confirmation', action: 'abandon' })}
-            title="放弃后当前流程会停止，确定继续吗？"
+            title="放弃后当前待确认规划将失效，确定继续吗？"
           >
-            <Button danger disabled={disabled} icon={<StopOutlined />} size="small">
-              放弃流程
+            <Button danger disabled={disabled} icon={<DeleteOutlined />} size="small">
+              放弃当前规划
             </Button>
           </Popconfirm>
           <Button

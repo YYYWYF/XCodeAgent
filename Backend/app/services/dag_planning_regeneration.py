@@ -63,6 +63,7 @@ async def regenerate_pending_build_task_plan(
         state,
         planning_run_id=planning_run_id,
         draft_digest=draft_digest,
+        record_lifecycle=False,
     )
     if abandoned.status != "abandoned":
         errors = abandoned.errors or (

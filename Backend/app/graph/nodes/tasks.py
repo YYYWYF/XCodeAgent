@@ -1006,6 +1006,16 @@ def _build_task_plan_confirmation_payload(
         },
         "targetReview": read_model["targetReview"],
     }
+    draft_identity = build_task_plan.get("draft_identity")
+    if isinstance(draft_identity, dict):
+        planning_run_id = draft_identity.get("planning_run_id")
+        draft_digest = draft_identity.get("draft_digest")
+        # 只公开 Abandon/Confirm 所需的最小身份，不泄露冻结输入和内部 Draft 元数据。
+        if isinstance(planning_run_id, str) and isinstance(draft_digest, str):
+            payload["draftIdentity"] = {
+                "planningRunId": planning_run_id,
+                "draftDigest": draft_digest,
+            }
     if errors:
         payload["errors"] = errors
         payload["message"] = "Build DAG 需要处理后才能继续。"

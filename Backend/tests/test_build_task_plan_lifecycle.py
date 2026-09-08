@@ -9,7 +9,10 @@ import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 
-from app.services.build_task_plan_lifecycle import confirm_pending_build_task_plan
+from app.services.build_task_plan_lifecycle import (
+    abandon_pending_build_task_plan,
+    confirm_pending_build_task_plan,
+)
 from app.services.dag_planning_inputs import _input_digest
 from app.workspace.task_documents import (
     build_task_plan_draft_sha256, build_task_plan_json_path, build_task_plan_pending_json_path,
@@ -289,6 +292,51 @@ class ConfirmPromotionTests(unittest.TestCase):
                 results = list(executor.map(lambda _: self._confirm(), range(2)))
         self.assertEqual(sorted(result.status for result in results), ["already_confirmed", "confirmed"])
         replace.assert_called_once()
+
+    def test_abandon_after_confirm_is_no_pending_and_preserves_formal(self):
+        """Confirm 先提交时，随后 Abandon 只能观察到无 Pending，不能回滚 Formal。"""
+
+        self.assertEqual(self._confirm().status, "confirmed")
+        formal = self.formal_path.read_bytes()
+
+        result = abandon_pending_build_task_plan(self.state, **self.request)
+
+        self.assertEqual(result.status, "no_pending")
+        self.assertEqual(self.formal_path.read_bytes(), formal)
+
+    def test_abandoned_draft_cannot_be_promoted(self):
+        """Abandon 先提交后，同一 DraftIdentity 永久失去 Confirm/Promote 资格。"""
+
+        abandoned = abandon_pending_build_task_plan(self.state, **self.request)
+        confirmed = self._confirm()
+
+        self.assertEqual(abandoned.status, "abandoned")
+        self.assertEqual(confirmed.status, "stale_draft")
+        self.assertFalse(self.formal_path.exists())
+
+    def test_confirm_abandon_race_has_one_backend_winner(self):
+        """Confirm/Abandon 竞争由同一 Backend lifecycle 锁仲裁，最终状态不会分裂。"""
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            confirm_future = executor.submit(self._confirm)
+            abandon_future = executor.submit(
+                abandon_pending_build_task_plan,
+                self.state,
+                **self.request,
+            )
+            confirmed = confirm_future.result()
+            abandoned = abandon_future.result()
+
+        outcome = (confirmed.status, abandoned.status)
+        self.assertIn(
+            outcome,
+            {
+                ("confirmed", "no_pending"),
+                ("stale_draft", "abandoned"),
+            },
+        )
+        self.assertFalse(self.pending_path.exists())
+        self.assertEqual(self.formal_path.exists(), confirmed.status == "confirmed")
 
 
 class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):

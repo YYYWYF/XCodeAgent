@@ -49,6 +49,7 @@ class AbandonPendingResult(FrozenPlanningModel):
     """区分成功删除、无 Pending 与身份已过期三类 Abandon 结果。"""
 
     status: Literal["abandoned", "no_pending", "stale_draft"]
+    draft_identity: DraftIdentity | None = None
     errors: tuple[str, ...] = ()
 
 
@@ -66,9 +67,17 @@ def abandon_pending_build_task_plan(
     *,
     planning_run_id: str,
     draft_digest: str,
+    workflow_run_id: str = "",
+    record_lifecycle: bool = True,
 ) -> AbandonPendingResult:
-    """仅删除自摘要有效且精确匹配请求身份的当前 PendingPlan。"""
+    """仅删除自摘要有效且精确匹配请求身份的当前 PendingPlan。
 
+    在持有 Pending lifecycle 锁时、删除文件前先持久化 authoritative Abandon
+    tombstone；生命周期写入失败时保留 Pending，不伪报成功。Regenerate 复用精确
+    删除能力时显式关闭 tombstone，因为它会立即创建新的 PlanningRun。
+    """
+
+    from app.services.application_lifecycle import record_abandoned_planning_result
     from app.workspace.task_documents import (
         build_task_plan_lifecycle_lock,
         build_task_plan_pending_json_path,
@@ -94,12 +103,21 @@ def abandon_pending_build_task_plan(
                 return AbandonPendingResult(status="no_pending")
             if not _matches_request(pending.get("draft_identity"), request):
                 return AbandonPendingResult(status="stale_draft")
-            validate_pending_self_digest(pending)
+            identity = validate_pending_self_digest(pending)
         except (ValueError, TypeError) as exc:
             return AbandonPendingResult(status="stale_draft", errors=(str(exc),))
 
+        if record_lifecycle:
+            record_abandoned_planning_result(
+                state.get("workspace") or "",
+                planning_run_id=identity.planning_run_id,
+                draft_digest=identity.draft_digest,
+                base_confirmed_plan_digest=identity.base_confirmed_plan_digest,
+                build_execution_scope=dict(identity.build_execution_scope),
+                workflow_run_id=workflow_run_id,
+            )
         build_task_plan_pending_json_path(state).unlink()
-        return AbandonPendingResult(status="abandoned")
+        return AbandonPendingResult(status="abandoned", draft_identity=identity)
 
 
 def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:

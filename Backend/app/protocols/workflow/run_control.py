@@ -22,12 +22,14 @@ from ag_ui.encoder import EventEncoder
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     end_workbench_execution,
+    load_application_lifecycle,
     stop_workbench_execution,
 )
 from app.services.build_task_plan_lifecycle import (
     AbandonPendingResult,
     abandon_pending_build_task_plan,
 )
+from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 
 
 class WorkflowRunRegistry:
@@ -221,6 +223,7 @@ def build_workflow_plan_control_ag_ui_stream(
                 {"workspace": workspace},
                 planning_run_id=planning_run_id,
                 draft_digest=draft_digest,
+                workflow_run_id=target_run_id,
             )
             for frame in _build_abandon_frames(
                 encoder=encoder,
@@ -228,6 +231,7 @@ def build_workflow_plan_control_ag_ui_stream(
                 run_id=run_id,
                 message_id=message_id,
                 result=result,
+                lifecycle=_planning_lifecycle_payload(workspace),
             ):
                 yield frame
             return
@@ -275,6 +279,27 @@ def build_workflow_plan_control_ag_ui_stream(
     return stream()
 
 
+def _planning_lifecycle_payload(workspace: str) -> dict[str, Any] | None:
+    """读取当前 lifecycle，并附加不落盘的 authoritative Planning refresh 投影。"""
+
+    lifecycle = load_application_lifecycle(workspace)
+    if lifecycle is None:
+        return None
+    payload = application_lifecycle_payload(lifecycle)
+    payload["extensions"] = {
+        **dict(payload.get("extensions") or {}),
+        "planningRefresh": resolve_planning_refresh_state(
+            workspace,
+            lifecycle=lifecycle,
+            runtime_active=lambda workflow_run_id: workflow_run_registry.is_active(
+                workflow_run_id,
+                workspace=workspace,
+            ),
+        ),
+    }
+    return payload
+
+
 def _build_abandon_frames(
     *,
     encoder: EventEncoder,
@@ -282,6 +307,7 @@ def _build_abandon_frames(
     run_id: str,
     message_id: str,
     result: AbandonPendingResult,
+    lifecycle: dict[str, Any] | None,
 ) -> Iterator[str]:
     """把 Pending Abandon 结果编码成完整 AG-UI 生命周期，不触发 Graph 或取消。"""
 
@@ -295,6 +321,14 @@ def _build_abandon_frames(
         "status": result.status,
         "message": message,
         "errors": list(result.errors),
+        **(
+            {
+                "planningRunId": result.draft_identity.planning_run_id,
+                "draftDigest": result.draft_identity.draft_digest,
+            }
+            if result.draft_identity is not None
+            else {}
+        ),
     }
     workflow_status = "completed" if result.status in {"abandoned", "no_pending"} else "requires_user_input"
     workflow = {
@@ -304,21 +338,27 @@ def _build_abandon_frames(
             "status": workflow_status,
             "phase": "build_task_plan_abandon",
             "message": message,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
         },
         "events": [],
         "state": {
             "status": workflow_status,
             "phase": "build_task_plan_abandon",
             "buildTaskPlanAbandon": public_result,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
         },
         "result": {
             "status": workflow_status,
             "phase": "build_task_plan_abandon",
             "buildTaskPlanAbandon": public_result,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
         },
     }
     yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
     yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
+    if lifecycle is not None:
+        # Abandon 成功或拒绝后都先广播 Backend 当前事实，前端不能按点击顺序猜测状态。
+        yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle))
     yield encoder.encode(CustomEvent(name="workflow-run", value=workflow))
     yield encoder.encode(StateSnapshotEvent(snapshot={"workflow": workflow}))
     yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=message))

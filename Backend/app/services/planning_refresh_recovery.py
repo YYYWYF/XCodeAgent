@@ -22,12 +22,14 @@ from app.workspace.task_documents import (
 
 PlanningRefreshSource = Literal[
     "pending",
+    "abandoned",
     "active_planning_run",
     "confirmed_plan",
     "none",
 ]
 PlanningRefreshStatus = Literal[
     "awaiting_confirmation",
+    "abandoned",
     "planning",
     "planning_run_interrupted",
     "confirmed",
@@ -53,6 +55,40 @@ class PlanningRefreshState(TypedDict, total=False):
 
 
 RuntimeActiveReader = Callable[[str], bool]
+
+
+def _abandoned_planning_result(
+    lifecycle: ApplicationLifecycle | None,
+) -> dict[str, Any] | None:
+    """严格读取 application lifecycle 中持久化的当前 Abandon tombstone。"""
+
+    value = lifecycle.extensions.get("planningResultLifecycle") if lifecycle is not None else None
+    if not isinstance(value, dict):
+        return None
+    planning_run_id = value.get("planningRunId")
+    draft_digest = value.get("draftDigest")
+    base_digest = value.get("baseConfirmedPlanDigest")
+    scope = value.get("buildExecutionScope")
+    if (
+        value.get("schemaVersion") != "planning-result-lifecycle.v1"
+        or value.get("status") != "abandoned"
+        or not isinstance(planning_run_id, str)
+        or not planning_run_id.strip()
+        or not isinstance(draft_digest, str)
+        or len(draft_digest) != 64
+        or any(character not in "0123456789abcdef" for character in draft_digest)
+        or (
+            base_digest is not None
+            and (
+                not isinstance(base_digest, str)
+                or len(base_digest) != 64
+                or any(character not in "0123456789abcdef" for character in base_digest)
+            )
+        )
+        or not isinstance(scope, dict)
+    ):
+        return None
+    return value
 
 
 def _confirmed_plan(workspace: str) -> tuple[dict[str, Any] | None, bool]:
@@ -199,6 +235,7 @@ def resolve_planning_refresh_state(
         workspace,
         lower_priority_formal_exists=confirmed is not None,
     )
+    abandoned = _abandoned_planning_result(lifecycle)
 
     if pending is not None and not _pending_was_promoted(pending_identity, confirmed):
         workflow_run_id, thread_id = _matching_pending_execution(lifecycle, planning_run)
@@ -214,6 +251,25 @@ def resolve_planning_refresh_state(
             "confirmation": _pending_confirmation(pending, pending_identity),
             "message": "已从 PendingPlan 恢复待确认任务规划。",
         }
+
+    if abandoned is not None and (
+        planning_run is None
+        or planning_run.planning_run_id == abandoned["planningRunId"]
+    ):
+        formal_digest = build_task_plan_sha256(confirmed) if confirmed is not None else None
+        # 只有 Formal 仍是该草稿冻结的 baseline 时 tombstone 才是当前事实；后续
+        # ConfirmedPlan 会自然淘汰旧 Abandon，不需要兼容分支或历史迁移。
+        if formal_digest == abandoned.get("baseConfirmedPlanDigest"):
+            return {
+                "schemaVersion": "planning-refresh.v1",
+                "source": "abandoned",
+                "status": "abandoned",
+                "planningRunId": abandoned["planningRunId"],
+                "workflowRunId": str(abandoned.get("workflowRunId") or ""),
+                "draftDigest": abandoned["draftDigest"],
+                "buildExecutionScope": dict(abandoned["buildExecutionScope"]),
+                "message": "当前 Planning result 已放弃。",
+            }
 
     if (
         planning_run is not None

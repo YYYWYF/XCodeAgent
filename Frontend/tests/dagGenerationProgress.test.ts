@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  buildWorkflowForwardedProps,
   newerDagGenerationSnapshot,
   readDagGenerationSnapshot
 } from '../src/renderer/src/service/agUiAgent'
@@ -15,11 +16,13 @@ import {
   dagGenerationUnitAttemptCopy,
   dagGenerationUnitStatusLabel,
   dagGenerationUnitTaskCopy,
+  currentDagConfirmationDraftIdentity,
   latestDagGenerationSnapshot,
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
   planningRefreshInterruption
 } from '../src/renderer/src/components/AiChatPanel/stageOutputState'
+import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import type { ApplicationLifecycle, WorkflowRunPayload } from '../src/renderer/src/typings'
 
@@ -549,4 +552,176 @@ test('ConfirmedPlan 会压制同 PlanningRun 的 stale historical snapshot', () 
 
   assert.equal(latestDagGenerationSnapshot(messages, lifecycle), undefined)
   assert.equal(pendingDagConfirmationExecution(lifecycle), undefined)
+})
+
+test('Abandon 请求复用 Backend DraftIdentity 且不发送 Workflow cancel', () => {
+  const workflow = {
+    runId: 'workflow-current',
+    threadId: 'thread-current',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      clarification: {
+        mode: 'build_task_plan_confirmation',
+        draftIdentity: {
+          planningRunId: 'planning-current',
+          draftDigest: 'a'.repeat(64)
+        }
+      }
+    }
+  } as unknown as WorkflowRunPayload
+  const identity = currentDagConfirmationDraftIdentity(workflow)
+  const forwarded = buildWorkflowForwardedProps({
+    editorMode: 'frontend',
+    planControlAction: 'abandon',
+    planControlRunId: workflow.runId,
+    planningRunId: identity?.planningRunId,
+    draftDigest: identity?.draftDigest
+  })
+
+  assert.deepEqual(identity, {
+    planningRunId: 'planning-current',
+    draftDigest: 'a'.repeat(64)
+  })
+  assert.equal(forwarded.planControlAction, 'abandon')
+  assert.equal(forwarded.planControlRunId, 'workflow-current')
+  assert.equal(forwarded.planningRunId, 'planning-current')
+  assert.equal(forwarded.draftDigest, 'a'.repeat(64))
+  assert.equal('cancelRunId' in forwarded, false)
+})
+
+test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控制入口', () => {
+  const pendingLifecycle = {
+    activeExecutions: {},
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'pending',
+        status: 'awaiting_confirmation',
+        planningRunId: 'planning-pending',
+        workflowRunId: 'workflow-pending',
+        threadId: 'thread-pending',
+        draftDigest: 'c'.repeat(64),
+        confirmation: {
+          mode: 'build_task_plan_confirmation',
+          actionValues: ['confirm', 'abandon'],
+          draftIdentity: {
+            planningRunId: 'planning-pending',
+            draftDigest: 'c'.repeat(64)
+          },
+          taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+        },
+        message: '待确认。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const generatingLifecycle = {
+    activeExecutions: {},
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'active_planning_run',
+        status: 'planning',
+        planningRunId: 'planning-generating',
+        dagGeneration: snapshot({ planningRunId: 'planning-generating' }),
+        message: '生成中。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+
+  const pendingExecution = pendingDagConfirmationExecution(pendingLifecycle)
+  const pendingWorkflow = pendingDagConfirmationWorkflow([], pendingExecution, pendingLifecycle)
+  assert.deepEqual(pendingWorkflow?.summary.clarification?.actionValues, ['confirm', 'abandon'])
+  assert.equal(pendingDagConfirmationExecution(generatingLifecycle), undefined)
+})
+
+test('authoritative Abandon 在 reload、stale snapshot 与 late progress 后都不复活 Pending', () => {
+  const abandonedLifecycle = {
+    revision: 11,
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'abandoned',
+        status: 'abandoned',
+        planningRunId: 'planning-abandoned',
+        workflowRunId: 'workflow-abandoned',
+        draftDigest: 'b'.repeat(64),
+        buildExecutionScope: { type: 'page', targetId: 'orders' },
+        message: '当前 Planning result 已放弃。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const lateSnapshot = snapshot({
+    planningRunId: 'planning-abandoned',
+    revision: 999,
+    status: 'active',
+    phase: 'generating_units'
+  })
+  const staleWorkflow = {
+    runId: 'workflow-abandoned',
+    threadId: 'thread-abandoned',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      clarification: {
+        mode: 'build_task_plan_confirmation',
+        taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+      }
+    }
+  } as unknown as WorkflowRunPayload
+  const messages = [
+    {
+      id: 1,
+      role: 'assistant',
+      content: '',
+      createdAt: 1,
+      workflow: staleWorkflow,
+      processSteps: [
+        {
+          id: 'late-planning-progress',
+          kind: 'workflow',
+          status: 'running',
+          title: '旧进度',
+          detail: '',
+          sequence: 99,
+          dagGeneration: lateSnapshot
+        }
+      ]
+    }
+  ] as AgentChatMessage[]
+
+  assert.equal(pendingDagConfirmationExecution(abandonedLifecycle), undefined)
+  assert.equal(latestDagGenerationSnapshot(messages, abandonedLifecycle), undefined)
+  assert.equal(latestDagGenerationSnapshot([...messages], abandonedLifecycle), undefined)
+})
+
+test('Abandon lifecycle revision 拒绝更晚到达的旧 Pending lifecycle event', () => {
+  const abandoned = {
+    application: { id: 'app-1' },
+    revision: 12,
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'abandoned',
+        status: 'abandoned',
+        planningRunId: 'planning-abandoned',
+        message: '已放弃。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const stalePending = {
+    application: { id: 'app-1' },
+    revision: 11,
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'pending',
+        status: 'awaiting_confirmation',
+        planningRunId: 'planning-abandoned',
+        message: '旧 Pending。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+
+  assert.equal(latestApplicationLifecycle(abandoned, stalePending), abandoned)
 })

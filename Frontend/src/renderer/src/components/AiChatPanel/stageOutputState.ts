@@ -21,9 +21,10 @@ export function planningRefreshState(
   if (
     !value ||
     value.schemaVersion !== 'planning-refresh.v1' ||
-    !['pending', 'active_planning_run', 'confirmed_plan', 'none'].includes(value.source) ||
+    !['pending', 'abandoned', 'active_planning_run', 'confirmed_plan', 'none'].includes(value.source) ||
     ![
       'awaiting_confirmation',
+      'abandoned',
       'planning',
       'planning_run_interrupted',
       'confirmed',
@@ -170,6 +171,13 @@ export function latestDagGenerationSnapshot(
   }
   const recovery = planningRefreshState(lifecycle)
   if (!recovery) return latest
+  if (
+    recovery.source === 'abandoned' &&
+    recovery.status === 'abandoned' &&
+    (!latest || latest.planningRunId === recovery.planningRunId)
+  ) {
+    return undefined
+  }
   if (recovery.source === 'pending' || recovery.status === 'planning_run_interrupted') {
     return undefined
   }
@@ -207,6 +215,18 @@ export function currentDagConfirmationTargetReview(
   return currentDagConfirmationPayload(workflow)?.targetReview
 }
 
+/** 读取 Backend 签发的当前 DraftIdentity，供 Abandon 精确绑定 Pending result。 */
+export function currentDagConfirmationDraftIdentity(
+  workflow: WorkflowRunPayload | undefined
+): { planningRunId: string; draftDigest: string } | undefined {
+  const value = currentDagConfirmationPayload(workflow)?.draftIdentity
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const planningRunId = String((value as Record<string, unknown>).planningRunId || '').trim()
+  const draftDigest = String((value as Record<string, unknown>).draftDigest || '').trim()
+  if (!planningRunId || !/^[0-9a-f]{64}$/.test(draftDigest)) return undefined
+  return { planningRunId, draftDigest }
+}
+
 /** 读取当前 DAG 确认卡的结构化错误，供右侧交互卡复用原始反馈。 */
 export function currentDagConfirmationErrors(workflow: WorkflowRunPayload | undefined): string[] {
   const errors = currentDagConfirmationPayload(workflow)?.errors
@@ -220,6 +240,7 @@ function currentDagConfirmationPayload(workflow: WorkflowRunPayload | undefined)
   | {
       taskPlan?: WorkflowBuildTaskPlan
       targetReview?: WorkflowBuildTargetReview
+      draftIdentity?: unknown
       errors?: unknown
     }
   | undefined {
@@ -238,6 +259,7 @@ function currentDagConfirmationPayload(workflow: WorkflowRunPayload | undefined)
     | {
         taskPlan?: WorkflowBuildTaskPlan
         targetReview?: WorkflowBuildTargetReview
+        draftIdentity?: unknown
         errors?: unknown
       }
     | undefined

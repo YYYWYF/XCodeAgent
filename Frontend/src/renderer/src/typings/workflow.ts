@@ -642,6 +642,8 @@ export type WorkflowCodeReviewRepairConfirmation = {
 export type WorkflowBuildTaskPlanConfirmation = {
   mode?: 'build_task_plan_confirmation' | string
   action: 'confirm' | 'abandon'
+  planningRunId?: string
+  draftDigest?: string
 }
 
 export type ApplicationPlanningInteraction = {
@@ -954,9 +956,10 @@ export type WorkbenchExecution = {
 /** 页面刷新时由 Backend 按磁盘、进程注册表和 Formal 事实解析的 Planning 状态。 */
 export type PlanningRefreshState = {
   schemaVersion: 'planning-refresh.v1'
-  source: 'pending' | 'active_planning_run' | 'confirmed_plan' | 'none'
+  source: 'pending' | 'abandoned' | 'active_planning_run' | 'confirmed_plan' | 'none'
   status:
     | 'awaiting_confirmation'
+    | 'abandoned'
     | 'planning'
     | 'planning_run_interrupted'
     | 'confirmed'

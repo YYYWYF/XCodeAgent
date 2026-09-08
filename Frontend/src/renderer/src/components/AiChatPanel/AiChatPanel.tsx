@@ -113,6 +113,7 @@ import type { AgentChatMessage, WorkspaceDocKey } from './types'
 import { workflowDevelopmentContinuation } from './developmentContinuation'
 import {
   currentDagConfirmationErrors,
+  currentDagConfirmationDraftIdentity,
   currentDagConfirmationPlan,
   currentDagConfirmationTargetReview,
   latestDagGenerationSnapshot,
@@ -3805,9 +3806,16 @@ export default function AiChatPanel({
     try {
       setDagConfirmationSubmissionError('')
       const identity = await loadSessionIdentity(pendingDagSession.id)
+      const draftIdentity = currentDagConfirmationDraftIdentity(pendingDagWorkflow)
+      if (action.action === 'abandon' && !draftIdentity) {
+        setDagConfirmationSubmissionError('当前任务规划缺少服务端 DraftIdentity，请刷新后重试。')
+        return
+      }
+      const identityBoundAction =
+        action.action === 'abandon' ? { ...action, ...draftIdentity } : action
       const submitted = await handleSubmitClarification(
         pendingDagWorkflow,
-        { build_task_plan_confirmation: action },
+        { build_task_plan_confirmation: identityBoundAction },
         {
           sessionIdentity: identity,
           onExecutionStarted:
@@ -3822,7 +3830,7 @@ export default function AiChatPanel({
         setDagConfirmationSubmissionError(
           action.action === 'confirm'
             ? '确认提交失败，任务计划仍保持待确认；请重试或放弃流程。'
-            : '放弃提交失败，流程仍保持锁定；请重试。'
+            : '放弃提交失败，当前任务规划仍保持待确认；请重试。'
         )
       }
     } catch (error) {
@@ -3831,7 +3839,7 @@ export default function AiChatPanel({
           error,
           action.action === 'confirm'
             ? '确认提交失败，任务计划仍保持待确认'
-            : '放弃提交失败，流程仍保持锁定'
+            : '放弃提交失败，当前任务规划仍保持待确认'
         )
       )
     }

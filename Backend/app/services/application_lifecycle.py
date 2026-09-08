@@ -539,6 +539,76 @@ def complete_workbench_execution(
         )
 
 
+def record_abandoned_planning_result(
+    workspace: str | Path,
+    *,
+    planning_run_id: str,
+    draft_digest: str,
+    base_confirmed_plan_digest: str | None,
+    build_execution_scope: dict[str, Any],
+    workflow_run_id: str = "",
+) -> ApplicationLifecycle | None:
+    """持久化 Planning result 的 Abandon tombstone，并收口对应待确认 execution。
+
+    该动作只在 Pending 已由 DraftIdentity 验证后调用；它不取消运行中的 Workflow、
+    Scheduler 或模型请求，也不修改 Formal DAG。没有 application lifecycle 的独立
+    service 测试场景保持可用，此时由 Pending 文件删除继续充当业务事实。
+    """
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        if current is None:
+            return None
+        now = utc_now()
+        marker = {
+            "schemaVersion": "planning-result-lifecycle.v1",
+            "status": "abandoned",
+            "planningRunId": planning_run_id,
+            "draftDigest": draft_digest,
+            "baseConfirmedPlanDigest": base_confirmed_plan_digest,
+            "buildExecutionScope": dict(build_execution_scope),
+            "workflowRunId": workflow_run_id,
+            "abandonedAt": now.isoformat(),
+        }
+        extensions = {
+            **current.extensions,
+            "planningResultLifecycle": marker,
+        }
+        executions = dict(current.active_executions)
+        resource_locks = current.resource_locks
+        execution = executions.get(workflow_run_id) if workflow_run_id else None
+        pending = execution.pending_interaction if execution is not None else None
+        # 只收口已经停在 Build DAG 确认门禁的 execution；绝不借 Abandon 取消生成中运行。
+        if (
+            execution is not None
+            and execution.status == WorkbenchExecutionStatus.AWAITING_USER
+            and pending is not None
+            and (
+                pending.type == PendingInteractionType.TASK_PLAN_CONFIRMATION
+                or pending.payload.get("mode") == "build_task_plan_confirmation"
+            )
+        ):
+            executions.pop(workflow_run_id, None)
+            resource_locks = _resource_locks_without_run(resource_locks, workflow_run_id)
+        latest = max(executions.values(), key=lambda item: item.updated_at) if executions else None
+        updated = current.model_copy(
+            update={
+                "updated_at": now,
+                "revision": current.revision + 1,
+                "active_run_id": latest.run_id if latest else None,
+                "active_executions": executions,
+                "resource_locks": resource_locks,
+                "extensions": extensions,
+            }
+        )
+        return write_application_lifecycle(
+            workspace,
+            updated,
+            expected_revision=current.revision,
+        )
+
+
 def end_workbench_execution(
     workspace: str | Path,
     *,

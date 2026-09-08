@@ -8,9 +8,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from app.domain.application_lifecycle import ApplicationLifecycle
 from app.protocols.workflow.request import workflow_run_inputs
 from app.protocols.workflow.run_control import build_workflow_plan_control_ag_ui_stream
+from app.services.application_lifecycle import (
+    load_application_lifecycle,
+    write_application_lifecycle,
+)
 from app.services.build_task_plan_lifecycle import abandon_pending_build_task_plan
+from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.workspace.task_documents import (
     build_task_plan_json_path,
     build_task_plan_pending_json_path,
@@ -35,7 +41,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         self.formal_path.write_bytes(self.formal_bytes)
         self._write_pending()
 
-    def _write_pending(self) -> dict:
+    def _write_pending(self, *, base_digest: str | None = "a" * 64) -> dict:
         """写入有效最小 Pending，并返回服务端签发的请求身份。"""
 
         plan = {
@@ -47,7 +53,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
             self.state,
             plan,
             planning_run_id="planning-run-current",
-            base_confirmed_plan_digest="a" * 64,
+            base_confirmed_plan_digest=base_digest,
             input_fingerprint="b" * 64,
             build_execution_scope={"type": "page", "targetId": "orders"},
             created_at="2026-09-06T00:00:00Z",
@@ -57,6 +63,41 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
             "planning_run_id": identity["planning_run_id"],
             "draft_digest": identity["draft_digest"],
         }
+
+    def _write_lifecycle(self) -> None:
+        """写入停在 DAG 确认门禁的最小 application lifecycle。"""
+
+        lifecycle = ApplicationLifecycle.model_validate(
+            {
+                "application": {"id": "app-abandon", "name": "Abandon 测试"},
+                "updatedAt": "2026-09-08T00:00:00Z",
+                "revision": 4,
+                "initialization": {"stage": "ready_for_workbench", "status": "completed"},
+                "activeRunId": "workflow-current",
+                "activeExecutions": {
+                    "workflow-current": {
+                        "scope": "page",
+                        "targetId": "orders",
+                        "pageId": "orders",
+                        "threadId": "thread-abandon",
+                        "runId": "workflow-current",
+                        "phase": "prepare_build_tasks",
+                        "status": "awaiting_user",
+                        "pendingInteraction": {
+                            "id": "pending-dag",
+                            "type": "task_plan_confirmation",
+                            "basedOnRevision": 4,
+                            "payload": {"mode": "build_task_plan_confirmation"},
+                            "artifactRefs": [],
+                            "createdAt": "2026-09-08T00:00:00Z",
+                        },
+                        "startedAt": "2026-09-08T00:00:00Z",
+                        "updatedAt": "2026-09-08T00:00:00Z",
+                    }
+                },
+            }
+        )
+        write_application_lifecycle(self.state["workspace"], lifecycle)
 
     def test_normal_abandon_deletes_pending_and_preserves_formal(self) -> None:
         """精确身份应删除 Pending，刷新读取为空且 Formal 字节不变。"""
@@ -144,11 +185,14 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
     async def test_abandon_action_does_not_cancel_or_end_execution(self) -> None:
         """AG-UI Abandon 只删除 Pending，不调用 Scheduler cancel 或 lifecycle end。"""
 
-        request = load_pending_build_task_plan(self.state)["draft_identity"]
+        self.formal_path.unlink()
+        self.pending_path.unlink()
+        request = self._write_pending(base_digest=None)
+        self._write_lifecycle()
         stream = build_workflow_plan_control_ag_ui_stream(
             action="abandon",
             workspace=self.state["workspace"],
-            target_run_id="",
+            target_run_id="workflow-current",
             planning_run_id=request["planning_run_id"],
             draft_digest=request["draft_digest"],
             thread_id="thread-abandon",
@@ -167,6 +211,63 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         stop.assert_not_called()
         self.assertFalse(self.pending_path.exists())
         self.assertIn('"status":"abandoned"', "".join(frames))
+        self.assertIn('"source":"abandoned"', "".join(frames))
+        persisted = load_application_lifecycle(self.state["workspace"])
+        self.assertNotIn("workflow-current", persisted.active_executions)
+        self.assertEqual(
+            persisted.extensions["planningResultLifecycle"]["planningRunId"],
+            request["planning_run_id"],
+        )
+
+    async def test_stale_abandon_returns_current_pending_authority(self) -> None:
+        """身份拒绝必须保留 Pending，并通过同一 AG-UI 流返回当前 authoritative 投影。"""
+
+        self.formal_path.unlink()
+        self.pending_path.unlink()
+        self._write_pending(base_digest=None)
+        self._write_lifecycle()
+        stream = build_workflow_plan_control_ag_ui_stream(
+            action="abandon",
+            workspace=self.state["workspace"],
+            target_run_id="workflow-current",
+            planning_run_id="planning-run-stale",
+            draft_digest="f" * 64,
+            thread_id="thread-abandon",
+            run_id="request-stale-abandon",
+        )
+
+        frames = "".join([frame async for frame in stream])
+
+        self.assertTrue(self.pending_path.exists())
+        self.assertIn('"status":"stale_draft"', frames)
+        self.assertIn('"source":"pending"', frames)
+        self.assertIn("workflow-current", load_application_lifecycle(
+            self.state["workspace"]
+        ).active_executions)
+
+    def test_abandoned_snapshot_remains_authoritative_after_reload(self) -> None:
+        """重载后 tombstone 仍压制旧 PlanningRun/Pending UI，不依赖前端本地清空。"""
+
+        self.formal_path.unlink()
+        self.pending_path.unlink()
+        request = self._write_pending(base_digest=None)
+        self._write_lifecycle()
+        result = abandon_pending_build_task_plan(
+            self.state,
+            **request,
+            workflow_run_id="workflow-current",
+        )
+        reloaded = load_application_lifecycle(self.state["workspace"])
+        snapshot = resolve_planning_refresh_state(
+            self.state["workspace"],
+            lifecycle=reloaded,
+            runtime_active=lambda _run_id: False,
+        )
+
+        self.assertEqual(result.status, "abandoned")
+        self.assertEqual(snapshot["source"], "abandoned")
+        self.assertEqual(snapshot["status"], "abandoned")
+        self.assertEqual(snapshot["planningRunId"], request["planning_run_id"])
 
 
 if __name__ == "__main__":

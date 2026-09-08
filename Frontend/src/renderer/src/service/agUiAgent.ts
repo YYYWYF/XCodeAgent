@@ -60,8 +60,10 @@ export type SendWorkflowMessageOptions = {
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onToolCalls?: (toolCalls: ToolCallRecord[]) => void
   onProcessSteps?: (steps: ProcessStepRecord[]) => void
-  planControlAction?: 'stop' | 'end'
+  planControlAction?: 'stop' | 'end' | 'abandon'
   planControlRunId?: string
+  planningRunId?: string
+  draftDigest?: string
   resumeExecutionRunId?: string
   pageTemplate?: {
     id?: string
@@ -130,6 +132,8 @@ export function buildWorkflowForwardedProps(
     workflowScope: options.workflowScope,
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
+    planningRunId: options.planningRunId,
+    draftDigest: options.draftDigest,
     resumeExecutionRunId: options.resumeExecutionRunId,
     pageTemplate: options.pageTemplate,
     conversation: options.conversation

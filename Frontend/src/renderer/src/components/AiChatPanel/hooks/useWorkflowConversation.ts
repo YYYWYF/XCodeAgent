@@ -242,9 +242,13 @@ function buildTaskPlanConfirmationAction(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const action = String((value as Record<string, unknown>).action || '')
   if (!['confirm', 'abandon'].includes(action)) return undefined
+  const planningRunId = String((value as Record<string, unknown>).planningRunId || '').trim()
+  const draftDigest = String((value as Record<string, unknown>).draftDigest || '').trim()
   return {
     mode: 'build_task_plan_confirmation',
-    action: action as WorkflowBuildTaskPlanConfirmation['action']
+    action: action as WorkflowBuildTaskPlanConfirmation['action'],
+    ...(planningRunId ? { planningRunId } : {}),
+    ...(draftDigest ? { draftDigest } : {})
   }
 }
 
@@ -254,7 +258,7 @@ function buildTaskPlanConfirmationMessage(
 ): string {
   const messages: Record<WorkflowBuildTaskPlanConfirmation['action'], string> = {
     confirm: '已确认 Build DAG，请进入 Build。',
-    abandon: '放弃当前 Build DAG 并停止流程。'
+    abandon: '放弃当前待确认 Build DAG。'
   }
   return messages[action]
 }
@@ -704,8 +708,10 @@ export function useWorkflowConversation({
       executionThreadId?: string
       onExecutionStarted?: () => void
       buildExecutionScope?: WorkflowBuildExecutionScope
-      planControlAction?: 'stop' | 'end'
+      planControlAction?: 'stop' | 'end' | 'abandon'
       planControlRunId?: string
+      planningRunId?: string
+      draftDigest?: string
       resumeExecutionRunId?: string
       selectedPageId?: string
       selectedApiContractId?: string
@@ -911,6 +917,8 @@ export function useWorkflowConversation({
         workflowDebug: options?.workflowDebug,
         planControlAction: options?.planControlAction,
         planControlRunId: options?.planControlRunId,
+        planningRunId: options?.planningRunId,
+        draftDigest: options?.draftDigest,
         resumeExecutionRunId: options?.resumeExecutionRunId,
         resumeState: options?.resumeState,
         pageTemplate: options?.pageTemplate,
@@ -1264,9 +1272,19 @@ export function useWorkflowConversation({
       const action = buildTaskPlanConfirmationAction(answers)
       if (!action || loading || workspaceBusy) return false
       if (action.action === 'abandon') {
+        if (!action.planningRunId || !/^[0-9a-f]{64}$/.test(action.draftDigest || '')) {
+          setErrors((current) => ({
+            ...current,
+            [activeRuntimeKey || draftKey]:
+              '当前 Build DAG 缺少服务端 DraftIdentity，请刷新后重试。'
+          }))
+          return false
+        }
         return sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
-          planControlAction: 'end',
+          planControlAction: 'abandon',
           planControlRunId: workflow.runId,
+          planningRunId: action.planningRunId,
+          draftDigest: action.draftDigest,
           sessionIdentity: options?.sessionIdentity,
           titleFrom: '放弃 Build DAG',
           conversation: false
