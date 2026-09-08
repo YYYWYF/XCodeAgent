@@ -1,0 +1,119 @@
+.@{class-prefix}-workflow-test-phase-confirmation {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  color: var(--wb-text);
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 10px;
+
+  .ant-btn {
+    min-height: 38px;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-title {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+    line-height: 1.6;
+  }
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 50%;
+  font-size: 18px;
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-target {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+
+  .ant-typography:last-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-remaining {
+  min-width: 0;
+  padding: 12px;
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 8px;
+
+  ul {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 10px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    gap: 10px;
+    line-height: 1.6;
+  }
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-remaining-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+
+  > span:last-child {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-kind {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.@{class-prefix}-workflow-test-phase-confirmation-name {
+  min-width: 0;
+  color: var(--wb-text);
+  overflow-wrap: anywhere;
+}

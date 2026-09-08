@@ -2132,6 +2132,12 @@ export default function AiChatPanel({
     onRollbackFormalRevisionSession: rollbackFormalRevisionSession,
     onRevisionContinuation: handleRevisionContinuation,
     onEnterTestPhase: handleEnterTestPhase,
+    onRollbackTestSession: async (identity, source) => {
+      // 后端未接纳测试运行时删除预创建会话，并回到原开发对话。
+      await discardPreparedSession(identity)
+      switchPhase('development')
+      if (source) await handleOpenSession(source.sessionId)
+    },
     onEnterReviewPhase: handleEnterReviewPhase,
     onEnterAcceptancePhase: handleEnterAcceptancePhase,
     onElementContextConsumed: (context) => {
@@ -4513,6 +4519,7 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
+              developmentArtifacts={applicationLifecycle?.developmentArtifacts}
               apiContracts={developmentPlanningApiContracts}
               entities={developmentPlanningEntities}
               detailLabel={artifactDetailLabel}

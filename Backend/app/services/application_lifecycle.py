@@ -177,6 +177,9 @@ def write_application_lifecycle(
     path = application_lifecycle_path(workspace)
     lock = _application_lifecycle_lock(path)
     with lock:
+        from app.services.development_artifacts import reconcile_development_artifacts
+
+        state = reconcile_development_artifacts(workspace, state)
         path.parent.mkdir(parents=True, exist_ok=True)
         if expected_revision is not None:
             current = load_application_lifecycle(workspace)
@@ -339,11 +342,21 @@ def start_workbench_execution(
     replaces_run_id: str | None = None,
     resource_claims: list[ExecutionResourceClaim] | None = None,
     development_continuation_consume: dict[str, str] | None = None,
+    initial_development_entry: bool = False,
+    api_contract_id: str | None = None,
+    requires_test_entry: bool = False,
+    test_interaction_submission: dict[str, Any] | None = None,
 ) -> ApplicationLifecycle:
     """原子登记计划执行及全部资源锁，并保持初始化完成状态不变。"""
 
     path = application_lifecycle_path(workspace)
     with _application_lifecycle_lock(path):
+        from app.services.development_artifacts import (
+            execution_development_metadata, reconcile_development_artifacts, require_test_entry,
+        )
+
+        if requires_test_entry:
+            require_test_entry(workspace)
         current = load_application_lifecycle(workspace)
         if current is None:
             raise ApplicationLifecycleConflictError("进入计划执行模式前必须先创建生命周期状态。")
@@ -352,6 +365,19 @@ def start_workbench_execution(
                 "应用尚未完成创建规划，当前阶段 "
                 f"{current.initialization.stage.value} 不能启动工作台计划执行。"
             )
+        if test_interaction_submission is not None:
+            # 测试确认凭据只在接替 execution 的同一次写盘中消费；启动失败仍可重试。
+            source_id = str(test_interaction_submission.get("runId") or "")
+            source = current.active_executions.get(source_id)
+            pending = source.pending_interaction if source else None
+            if (
+                source_id != replaces_run_id or pending is None
+                or pending.type != PendingInteractionType.TEST_PHASE_CONFIRMATION
+                or pending.id != test_interaction_submission.get("id")
+                or pending.based_on_revision != test_interaction_submission.get("basedOnRevision")
+                or pending.submitted_at is not None
+            ):
+                raise ApplicationLifecycleConflictError("测试阶段确认已过期或不属于原开发运行。")
         if development_continuation_consume is not None:
             # 同一把生命周期锁内复验 token，并把消费状态与 execution 原子写入。
             # 请求解析、模型校验或写盘失败都不能单独烧掉一次性续接凭据。
@@ -373,6 +399,12 @@ def start_workbench_execution(
                     "status": "consumed", "token_sha256": None, "consumed_at": utc_now(),
                 }),
             }})
+        current = reconcile_development_artifacts(workspace, current)
+        development_metadata = execution_development_metadata(
+            current, phase=phase, scope=scope, target_id=target_id,
+            api_contract_id=api_contract_id, initial_entry=initial_development_entry,
+            replaces_run_id=replaces_run_id,
+        )
         resource_locks = current.resource_locks
         transferred_claims: list[ExecutionResourceClaim] = []
         if replaces_run_id and replaces_run_id in current.active_executions:
@@ -414,6 +446,7 @@ def start_workbench_execution(
                 resourceKeys=[_resource_claim_key(claim) for claim in claims],
                 startedAt=acquired_at,
                 updatedAt=acquired_at,
+                **development_metadata,
             ),
             resource_locks=next_locks,
         )
@@ -604,6 +637,10 @@ def persist_workbench_interaction_submission(
         pending = execution.pending_interaction if execution else None
         if current is None or execution is None or pending is None:
             raise ApplicationLifecycleConflictError("当前运行没有可提交的待处理交互。")
+        if pending.type == PendingInteractionType.TEST_PHASE_CONFIRMATION:
+            from app.services.development_artifacts import require_test_entry
+
+            current = require_test_entry(workspace)
         if pending.id != interaction_id or pending.based_on_revision != based_on_revision:
             raise ApplicationLifecycleConflictError("待处理交互已过期或不属于当前页面运行。")
         if pending.submitted_at is not None:
@@ -859,6 +896,9 @@ def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]
     """生成可安全放入 Graph State 和 AG-UI 快照的生命周期对象。"""
 
     payload = state.model_dump(mode="json", by_alias=True)
+    from app.services.development_artifacts import test_entry_gate
+
+    payload["testEntryGate"] = test_entry_gate(state).model_dump(mode="json", by_alias=True)
     # continuation 的原请求和 token 哈希只属于服务端控制面；公开运行结果通过
     # developmentContinuation 单独投射当前可执行动作，生命周期快照不暴露内部登记表。
     payload.pop("developmentContinuations", None)

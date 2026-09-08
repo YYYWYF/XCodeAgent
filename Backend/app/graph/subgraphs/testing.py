@@ -1848,6 +1848,10 @@ _testing_subgraph = build_testing_subgraph()
 def integration_test(state: ProjectState) -> dict:
     """运行测试阶段子图，并只保留集成检查与性能测试结果。"""
 
+    from app.services.development_artifacts import require_test_entry
+    from app.workspace.spec_documents import workspace_root
+
+    require_test_entry(workspace_root(state))
     previous_small_task_changes = [
         item
         for item in state.get("small_task_code_change_sets", [])

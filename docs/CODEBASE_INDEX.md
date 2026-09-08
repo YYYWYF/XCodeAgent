@@ -39,6 +39,15 @@ For small local edits that do not change structure or ownership, leave the index
 
 ## Backend
 
+### Initial development completion and test entry
+
+- `Backend/app/domain/development_artifacts.py` defines the strict page/Endpoint identity, initial progress, catalog availability, and derived `TestEntryGate` contracts. `services/development_artifacts.py` owns confirmed ProductPlan/TechnicalPlan catalog reconciliation, sticky first completion, and the single application-wide test-entry rule. Entities remain a development prerequisite and do not count in this gate.
+- `.xcodeagent/application-lifecycle.json.developmentArtifacts` is the sole completion authority. Every lifecycle write reconciles the current confirmed catalog under the existing lock; the AG-UI lifecycle `get` calibrates cold/reconnected reads. `testEntryGate` is projection-only. Execution `developmentPurpose`/`developmentTarget` are server-owned and preserved across initial-development continuations, while revisions never backfill completion.
+- `graph/nodes/lifecycle.py::test_phase_confirmation` records the selected target only after Build and the development unit-test gate pass, before checking all targets. Workflow lifecycle startup and `graph/subgraphs/testing.py::integration_test` recheck the same gate; test interaction consumption and execution replacement share one atomic write. Blocked runs emit a structured `development_artifacts_incomplete` result and finish the AG-UI lifecycle without marking development failed.
+- Frontend `developmentArtifacts.ts`, `context/WorkbenchPhaseContext.tsx` and `context/workbenchPhaseState.ts` own shared phase access and live gate consumption. `ApplicationOutline/DevelopmentStatusDot` and `ApiOutlineGroup` render initial status and unfiltered counts; `WorkbenchTopBar` and historical `TestPhaseConfirmationCard` consume the same application lifecycle. Test browsing creates no session; actual confirmation changes phase only after server execution registration, and an unaccepted test session is discarded.
+- Regression entry points: Backend `tests.test_development_artifacts`, `tests.test_workflow_test_phase_confirmation`, lifecycle/continuation stream tests; Frontend `pnpm test:development-artifacts`, existing workflow/stage tests, targeted ESLint and `pnpm build`. Runtime UI verification must use Electron.
+- `ApplicationOutline/DevelopmentStatusDot.less` owns the purple in-progress pulse (with reduced-motion support); `styles/global.less` defines dedicated light/dark completion greens. `WorkflowRunCard/TestPhaseConfirmationCard.less` owns the themed confirmation layout: blocked cards list each remaining artifact with its type and count, while test target and action appear only after the live gate allows entry.
+
 ```text
 Backend/app/
 ├── main.py

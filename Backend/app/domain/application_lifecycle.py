@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.application_revision import ActiveFormalRevision, PendingRevisionImpact
+from app.domain.development_artifacts import DevelopmentArtifacts, DevelopmentArtifactTarget
 
 
 class ApplicationLifecycleStage(StrEnum):
@@ -201,6 +202,12 @@ class WorkbenchExecution(ApplicationLifecycleModel):
     phase: str = Field(min_length=1, max_length=128)
     status: WorkbenchExecutionStatus
     resource_keys: list[str] = Field(default_factory=list, alias="resourceKeys")
+    development_purpose: Literal["initial", "revision"] | None = Field(
+        default=None, alias="developmentPurpose"
+    )
+    development_target: DevelopmentArtifactTarget | None = Field(
+        default=None, alias="developmentTarget"
+    )
     pending_interaction: PendingInteraction | None = Field(
         default=None,
         alias="pendingInteraction",
@@ -272,6 +279,9 @@ class ApplicationLifecycle(ApplicationLifecycleModel):
     application: ApplicationIdentity
     updated_at: datetime = Field(alias="updatedAt")
     revision: int = Field(ge=1)
+    development_artifacts: DevelopmentArtifacts = Field(
+        default_factory=DevelopmentArtifacts, alias="developmentArtifacts"
+    )
     initialization: ApplicationInitialization
     active_run_id: str | None = Field(default=None, alias="activeRunId", max_length=512)
     active_executions: dict[str, WorkbenchExecution] = Field(

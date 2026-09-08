@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+from app.domain.development_artifacts import TestEntryGate
 
 from app.graph.workflow import (
     build_graph,
@@ -28,6 +30,18 @@ from app.domain.application_lifecycle import PendingInteractionType
 
 
 class WorkflowRoutingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """路由单测隔离持久化；初次完成与全量门禁使用独立真实文件测试。"""
+
+        for mocked in (
+            patch("app.graph.nodes.lifecycle.complete_initial_development"),
+            patch("app.graph.nodes.lifecycle.test_entry_gate", return_value=TestEntryGate(
+                allowed=True, total=1, completed=1, pending=0, inProgress=0, blockers=[],
+            )),
+        ):
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
     def test_workflow_start_defaults_to_development_readiness(self) -> None:
         self.assertEqual(
             route_workflow_start({}),

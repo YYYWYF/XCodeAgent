@@ -6,10 +6,13 @@ import {
 } from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import { useState } from 'react'
-import type { ApplicationMenuItem } from '../../../../typings'
+import type { ApplicationMenuItem, DevelopmentArtifactProgress } from '../../../../typings'
+import { developmentCompletedCount } from '../../../../developmentArtifacts'
+import DevelopmentStatusDot from './DevelopmentStatusDot'
 import { cx } from '../../../../utils'
 
 type OutlineRowProps = {
+  progressByPage?: Record<string, DevelopmentArtifactProgress>
   disabled?: boolean
   item: ApplicationMenuItem
   level: number
@@ -19,13 +22,14 @@ type OutlineRowProps = {
 }
 
 /** 递归统计当前目录节点下的页面数量，用于目录标签展示。 */
-function outlineLeafCount(item: ApplicationMenuItem): number {
-  if (item.type !== 'menu') return 1
-  return (item.children || []).reduce((total, child) => total + outlineLeafCount(child), 0)
+function outlineLeafKeys(item: ApplicationMenuItem): string[] {
+  if (item.type !== 'menu') return [item.pageKey || item.key]
+  return (item.children || []).flatMap(outlineLeafKeys)
 }
 
 /** 渲染单个页面目录节点，展示名称、路径和目录页面数量。 */
 export function OutlineRow({
+  progressByPage,
   disabled = false,
   item,
   level,
@@ -37,7 +41,8 @@ export function OutlineRow({
   const children = item.children?.filter((child) => visibleKeys.has(child.key)) || []
   const isFolder = item.type === 'menu' || children.length > 0
   const selected = selectedKey === item.key
-  const childPageCount = isFolder ? outlineLeafCount(item) : 0
+  const pageKeys = outlineLeafKeys(item)
+  const completed = developmentCompletedCount(pageKeys.map((key) => progressByPage?.[key]))
 
   return (
     <div className={cx('outline-node')}>
@@ -63,16 +68,22 @@ export function OutlineRow({
           <span className={cx('outline-label-row')}>
             <span className={cx('outline-label')}>{item.label}</span>
             {isFolder ? (
-              <span className={cx('outline-menu-count')}>{childPageCount} 个页面</span>
+              <span className={cx('development-count')}>
+                {completed}/{pageKeys.length}
+              </span>
             ) : null}
           </span>
           {item.path ? <span className={cx('outline-meta')}>{item.path}</span> : null}
         </span>
+        {!isFolder ? (
+          <DevelopmentStatusDot progress={progressByPage?.[item.pageKey || item.key]} />
+        ) : null}
       </button>
       {isFolder && expanded && children.length > 0 ? (
         <div className={cx('outline-children')}>
           {children.map((child) => (
             <OutlineRow
+              progressByPage={progressByPage}
               disabled={disabled}
               item={child}
               key={child.key}

@@ -39,6 +39,13 @@ class TestingSubgraphEventsTests(unittest.TestCase):
     (projected from ``test_events``) was therefore incomplete.
     """
 
+    def setUp(self) -> None:
+        """本组只验证测试子图事件，应用级门禁由独立真实持久化测试覆盖。"""
+
+        gate = patch("app.services.development_artifacts.require_test_entry")
+        gate.start()
+        self.addCleanup(gate.stop)
+
     def test_mapping_layer_sources_are_not_unit_test_targets(self) -> None:
         """映射层变化不生成单测目标，但 Service 仍可生成。"""
 

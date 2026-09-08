@@ -6,6 +6,7 @@ import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import { useWorkbenchPhase } from '../context'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
+import { testEntryGateReason } from '../developmentArtifacts'
 import {
   markApplicationEnteredDevelopment,
   WORKBENCH_PHASE_AGENTS,
@@ -42,7 +43,8 @@ export default function WorkbenchTopBar({
   rightPanelOpen,
   onToggleRightPanel
 }: Props): JSX.Element {
-  const { phase, derivedPhase, manualOverride, switchPhase, agent } = useWorkbenchPhase()
+  const { phase, derivedPhase, manualOverride, switchPhase, agent, testEntryGate } =
+    useWorkbenchPhase()
   const following = manualOverride === null
   // 回退切阶段（切到旅程上游 = 增量迭代）需二次确认；向前推进 / 同级直接切。
   const [confirmPhase, setConfirmPhase] = useState<WorkbenchPhase | null>(null)
@@ -106,11 +108,17 @@ export default function WorkbenchTopBar({
                     isActive && 'active',
                     reached && !isActive && 'reached'
                   )}
-                  disabled={!reached}
+                  disabled={phaseKey === 'test' ? testEntryGate?.allowed !== true : !reached}
+                  title={phaseKey === 'test' ? testEntryGateReason(testEntryGate) : undefined}
                   onClick={() => handlePhaseClick(phaseKey)}
                 >
                   <span className={cx('workbench-topbar-phase-dot')} aria-hidden="true" />
                   {WORKBENCH_PHASE_AGENTS[phaseKey].label}阶段
+                  {phaseKey === 'development' && testEntryGate ? (
+                    <span>
+                      {testEntryGate.completed}/{testEntryGate.total}
+                    </span>
+                  ) : null}
                 </button>
               </Fragment>
             )

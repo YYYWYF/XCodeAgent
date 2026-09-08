@@ -13,6 +13,7 @@ from ag_ui.core import (
     RunErrorEvent,
     RunFinishedEvent,
     RunStartedEvent,
+    TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
 )
@@ -1725,7 +1726,38 @@ def build_workflow_ag_ui_stream(
                 )
             raise
         except Exception as exc:
-            if not workflow_scope:
+            from app.services.development_artifacts import DevelopmentArtifactsIncompleteError
+
+            gate_blocked = isinstance(exc, DevelopmentArtifactsIncompleteError)
+            blocked_scope: dict[str, Any] = {}
+            blocked_target: dict[str, str] = {}
+            if gate_blocked:
+                from app.services.application_lifecycle import application_lifecycle_payload, load_application_lifecycle
+
+                try:
+                    current_lifecycle = load_application_lifecycle(workspace) if workspace else None
+                except (OSError, ValueError):
+                    # 状态文件损坏时仍收口 AG-UI 错误，不能在异常处理内再次中断流。
+                    current_lifecycle = None
+                if current_lifecycle and run_id in current_lifecycle.active_executions:
+                    from app.domain.application_lifecycle import PendingInteractionType, WorkbenchExecutionStatus
+                    from app.services.application_lifecycle import update_workbench_execution
+
+                    execution = current_lifecycle.active_executions[run_id]
+                    blocked_scope = {"type": execution.scope, "targetId": execution.target_id}
+                    if execution.development_target and execution.development_target.api_contract_id:
+                        blocked_scope["apiContractId"] = execution.development_target.api_contract_id
+                    blocked_target = {"type": execution.scope, "id": execution.target_id, "label": execution.target_id}
+                    current_lifecycle = update_workbench_execution(
+                        workspace, run_id=run_id, phase="test_phase_confirmation",
+                        status=WorkbenchExecutionStatus.AWAITING_USER,
+                        pending_type=PendingInteractionType.TEST_PHASE_CONFIRMATION,
+                        pending_payload={"testTarget": blocked_target, "testEntryGate": exc.gate.model_dump(mode="json", by_alias=True)},
+                    )
+                lifecycle_payload = application_lifecycle_payload(current_lifecycle) if current_lifecycle else None
+                if lifecycle_payload:
+                    yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle_payload))
+            if not workflow_scope and not gate_blocked:
                 lifecycle_payload = fail_workflow_lifecycle(
                     workspace,
                     run_id=run_id,
@@ -1734,28 +1766,40 @@ def build_workflow_ag_ui_stream(
                 )
             error_code = getattr(exc, "code", None)
             result = {
-                "status": "failed",
-                "phase": "failed",
+                "status": "requires_user_input" if gate_blocked else "failed",
+                "phase": "test_phase_confirmation" if gate_blocked else "failed",
                 "error": str(exc),
                 **({"lifecycle": lifecycle_payload} if lifecycle_payload else {}),
                 **({"error_code": error_code} if error_code else {}),
+                **({"test_entry_gate": exc.gate.model_dump(mode="json", by_alias=True)} if gate_blocked else {}),
+                **({
+                    "build_execution_scope": blocked_scope,
+                    "test_target": blocked_target,
+                    "clarification": {
+                        "mode": "test_phase_confirmation", "status": "requires_user_input",
+                        "message": str(exc), "testTarget": blocked_target,
+                        "testEntryGate": exc.gate.model_dump(mode="json", by_alias=True),
+                        "questions": [],
+                    },
+                } if gate_blocked else {}),
             }
             summary = _workflow_summary(result, events)
-            summary["message"] = f"Workflow failed：{type(exc).__name__}: {exc}"
+            summary["message"] = str(exc) if gate_blocked else f"Workflow failed：{type(exc).__name__}: {exc}"
             if error_code:
                 summary["errorCode"] = error_code
             failed_event = _workflow_event(
                 events,
-                "workflow.run.failed",
+                "workflow.test_entry.blocked" if gate_blocked else "workflow.run.failed",
                 run_id=run_id,
                 thread_id=thread_id,
-                status="failed",
+                status="blocked" if gate_blocked else "failed",
                 message=summary["message"],
                 data={
                     "error": {
                         "type": type(exc).__name__,
                         "message": str(exc),
                         **({"code": error_code} if error_code else {}),
+                        **({"testEntryGate": exc.gate.model_dump(mode="json", by_alias=True)} if gate_blocked else {}),
                     }
                 },
             )
@@ -1775,7 +1819,15 @@ def build_workflow_ag_ui_stream(
                 visual_payload=failed_payload,
             ):
                 yield frame
+            if gate_blocked:
+                yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=str(exc)))
             yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+            if gate_blocked:
+                yield encoder.encode(RunFinishedEvent(
+                    threadId=thread_id, runId=run_id,
+                    result=jsonable_encoder({"workflow": failed_payload, "result": result}),
+                ))
+                return
             yield encoder.encode(
                 RunErrorEvent(
                     message=summary["message"],

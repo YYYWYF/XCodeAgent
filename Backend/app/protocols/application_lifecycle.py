@@ -93,6 +93,13 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
         "stateSnapshotKey": "applicationLifecycle",
         "workflowIndependent": True,
+        "developmentArtifacts": {
+            "targets": ["page", "endpoint"],
+            "statuses": ["pending", "in_progress", "completed"],
+            "completionBoundary": "test_phase_confirmation",
+            "gateField": "testEntryGate",
+            "secondaryModificationResetsCompletion": False,
+        },
     }
 
 
@@ -138,9 +145,9 @@ def build_application_lifecycle_ag_ui_stream(
             )
             message = "应用生命周期已创建。"
         elif request.action == "get":
-            state = load_application_lifecycle(request.workspace_root)
-            if state is None:
-                raise ValueError("application-lifecycle.json 不存在。")
+            from app.services.development_artifacts import refresh_development_artifacts
+
+            state = refresh_development_artifacts(request.workspace_root)
             message = "已读取应用生命周期。"
         elif request.action == "prepare_template_generation":
             if request.download_result is None:

@@ -139,6 +139,7 @@ type UseWorkflowConversationParams = {
   inputMode: ChatInputMode
   editorMode: EditorMode
   createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
+  onRollbackTestSession: (identity: SessionIdentity, source?: SessionIdentity) => Promise<void>
   createReviewSession: (target: ReviewPhaseSessionTarget) => Promise<SessionIdentity>
   createAcceptanceSession: (target: AcceptancePhaseSessionTarget) => Promise<SessionIdentity>
   acceptanceConversationSessionKey?: string
@@ -504,6 +505,7 @@ export function useWorkflowConversation({
   inputMode,
   editorMode,
   createTestSession,
+  onRollbackTestSession,
   createReviewSession,
   createAcceptanceSession,
   acceptanceConversationSessionKey,
@@ -1291,6 +1293,7 @@ export function useWorkflowConversation({
           : ''
       if (
         action !== 'confirm' ||
+        applicationLifecycle?.testEntryGate?.allowed !== true ||
         loading ||
         workspaceBusy ||
         testPhaseTransitionRunIdsRef.current.has(workflow.runId)
@@ -1315,8 +1318,12 @@ export function useWorkflowConversation({
         testPhaseTransitionRunIdsRef.current.delete(workflow.runId)
         return false
       }
-      onEnterTestPhase()
+      let testExecutionAccepted = false
       const started = await sendWorkflowMessage(testPhaseConfirmationMessage(workflow), {
+        onExecutionStarted: () => {
+          testExecutionAccepted = true
+          onEnterTestPhase()
+        },
         clarificationAnswers: answers,
         originalRequest,
         resumeState: workflow,
@@ -1326,8 +1333,11 @@ export function useWorkflowConversation({
         titleFrom: '进入测试阶段',
         conversation: false
       })
-      if (!started) testPhaseTransitionRunIdsRef.current.delete(workflow.runId)
-      return started
+      if (!testExecutionAccepted) {
+        testPhaseTransitionRunIdsRef.current.delete(workflow.runId)
+        await onRollbackTestSession(testSession, options?.sessionIdentity || activeSession)
+      }
+      return started && testExecutionAccepted
     }
     if (!conversation && clarificationMode === 'review_phase_confirmation') {
       const answer = answers.review_phase_confirmation

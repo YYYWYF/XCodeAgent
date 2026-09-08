@@ -937,6 +937,8 @@ export type LifecycleError = {
 }
 
 export type WorkbenchExecution = {
+  developmentPurpose?: 'initial' | 'revision' | null
+  developmentTarget?: DevelopmentArtifactTarget | null
   scope: 'application' | 'page' | 'data_source' | 'endpoint'
   targetId: string
   pageId?: string
@@ -960,7 +962,36 @@ export type ExecutionResourceLock = {
   acquiredAt: string
 }
 
+export type DevelopmentArtifactTarget =
+  | { type: 'page'; pageId: string }
+  | { type: 'endpoint'; apiContractId: string; endpointId: string }
+
+export type DevelopmentArtifactProgress = {
+  initialDevelopmentStatus: 'pending' | 'in_progress' | 'completed'
+  completedAt?: string | null
+  completedRunId?: string | null
+  completedThreadId?: string | null
+}
+
+export type DevelopmentArtifacts = {
+  pages: Record<string, DevelopmentArtifactProgress>
+  endpoints: Record<string, Record<string, DevelopmentArtifactProgress>>
+  catalogError?: string | null
+}
+
+export type TestEntryGate = {
+  allowed: boolean
+  total: number
+  completed: number
+  pending: number
+  inProgress: number
+  blockers: DevelopmentArtifactTarget[]
+  reason?: string | null
+}
+
 export type ApplicationLifecycle = {
+  developmentArtifacts?: DevelopmentArtifacts
+  testEntryGate?: TestEntryGate
   application: { id: string; name: string }
   updatedAt: string
   revision: number

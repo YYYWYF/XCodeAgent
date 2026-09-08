@@ -57,7 +57,13 @@ def begin_workflow_lifecycle(
         return None
     resume_values = workflow_inputs.get("resume_values")
     resume_values = resume_values if isinstance(resume_values, dict) else {}
+    requires_test_entry = phase == "integration_test" or bool(resume_values.get("test_phase_confirmation"))
+    if requires_test_entry:
+        from app.services.development_artifacts import require_test_entry
+
+        lifecycle = require_test_entry(workspace)
     submission = resume_values.get("lifecycle_interaction_submission")
+    test_submission: dict[str, Any] | None = None
     approved_repair_claims: list[ExecutionResourceClaim] = []
     if isinstance(submission, dict):
         submission_run_id = str(submission.get("runId") or "")
@@ -70,12 +76,15 @@ def begin_workflow_lifecycle(
                 and _repair_scope_approved(str(workflow_inputs.get("request") or ""))
             ):
                 approved_repair_claims = _repair_resource_claims(pending.payload)
-            persist_workbench_interaction_submission(
-                workspace,
-                run_id=submission_run_id,
-                interaction_id=str(submission.get("id") or ""),
-                based_on_revision=int(submission.get("basedOnRevision") or 0),
-            )
+            if pending is not None and pending.type == PendingInteractionType.TEST_PHASE_CONFIRMATION:
+                test_submission = submission
+            else:
+                persist_workbench_interaction_submission(
+                    workspace,
+                    run_id=submission_run_id,
+                    interaction_id=str(submission.get("id") or ""),
+                    based_on_revision=int(submission.get("basedOnRevision") or 0),
+                )
     scope = resume_values.get("build_execution_scope")
     scope = scope if isinstance(scope, dict) else {}
     page_id = str(resume_values.get("selectedPageId") or "").strip() or None
@@ -140,6 +149,14 @@ def begin_workflow_lifecycle(
         ),
         resource_claims=resource_claims,
         development_continuation_consume=workflow_inputs.get("development_continuation_consume"),
+        initial_development_entry=(
+            phase == "development_readiness_gate"
+            and not workflow_inputs.get("workflow_debug_enabled")
+            and workflow_inputs.get("workflow_action") != "continue_revision_build"
+        ),
+        api_contract_id=str(scope.get("apiContractId") or "").strip() or None,
+        requires_test_entry=requires_test_entry,
+        test_interaction_submission=test_submission,
     )
     # application_revision 仍可能停在草稿确认门，只有节点确认全部正式产物后
     # 才能把 formal revision 切成 building，避免运行登记提前改变业务事实。

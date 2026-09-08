@@ -171,6 +171,12 @@ def workflow_capabilities() -> dict[str, Any]:
                 "lifecycleInteraction": "frontend_performance_confirmation",
             },
             "test_phase_confirmation": {
+                "applicationGate": {
+                    "field": "lifecycle.testEntryGate",
+                    "requires": "全部页面和接口分别完成初次 Build 与开发阶段单元测试门禁",
+                    "errorCode": "development_artifacts_incomplete",
+                    "entitiesIncluded": False,
+                },
                 "answerField": "clarificationAnswers.test_phase_confirmation",
                 "answer": {"action": "confirm"},
                 "testTarget": {

@@ -6,6 +6,8 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 
 ## 核心架构原则
 
+测试入口另有应用级初次开发门禁：`.xcodeagent/application-lifecycle.json.developmentArtifacts` 保存每个页面和 Endpoint 的初次开发状态。只有每个目标分别完成 Build 及开发阶段单元测试门禁后，投影 `testEntryGate.allowed=true`，顶部才允许浏览测试阶段；实体继续作为开发前置条件，不计入此门禁。`test_phase_confirmation` 先记录当前目标完成再计算全量门禁，二次修改不覆盖首次完成事实。实际确认、跨 thread 测试接替和集成测试节点均在服务端复检，阻断以 `development_artifacts_incomplete` 及完整 AG-UI 生命周期返回。详细状态及目录同步规则见 `docs/APPLICATION_DEVELOPMENT_PLANNING.md` 的 Initial Development Completion and Test Entry。
+
 1. 外层 LangGraph 管理确定性的项目生命周期。
 2. Deep Agents 负责需要自主推理、工具调用、文件操作和多步执行的任务。
 3. Agent 不得自行决定或绕过项目阶段、用户确认、任务依赖和质量门禁。

@@ -1,5 +1,4 @@
 import {
-  ApiOutlined,
   CaretDownOutlined,
   DatabaseOutlined,
   FilterOutlined,
@@ -11,17 +10,18 @@ import type { ReactElement } from 'react'
 import { useMemo, useState } from 'react'
 import type {
   ApplicationMenuItem,
+  DevelopmentArtifacts,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption,
   DevelopmentPlanningPageTreeNode
 } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { apiEndpointDisplayPath } from '../../utils'
 import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
+import ApiOutlineGroup from './ApiOutlineGroup'
+import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import {
-  apiEndpointSelectionKey,
   collectRelatedKeys,
   collectVisibleKeys,
   containsMenuKey,
@@ -31,6 +31,7 @@ import {
 const { Text } = Typography
 
 export type ApplicationOutlineProps = {
+  developmentArtifacts?: DevelopmentArtifacts
   apiContracts: DevelopmentPlanningApiContract[]
   entities: DevelopmentPlanningEntityOption[]
   onApiEndpointSelect: (target: {
@@ -51,6 +52,7 @@ export type ApplicationOutlineProps = {
 
 /** 渲染开发产物列表，提供搜索、筛选、分组展开与产物浏览入口。 */
 export default function ApplicationOutline({
+  developmentArtifacts,
   apiContracts = [],
   entities = [],
   onApiEndpointSelect,
@@ -179,6 +181,12 @@ export default function ApplicationOutline({
               >
                 <CaretDownOutlined className={cx(!pagesExpanded && 'collapsed')} />
                 <span>页面</span>
+                <span className={cx('development-count')}>
+                  {developmentCompletedCount(
+                    pages.map((page) => developmentArtifacts?.pages[page.pageId])
+                  )}
+                  /{pages.length}
+                </span>
               </button>
               {pagesExpanded ? (
                 <div className={cx('outline-tree')}>
@@ -186,6 +194,7 @@ export default function ApplicationOutline({
                     .filter((item) => visibleKeys.has(item.key))
                     .map((item) => (
                       <OutlineRow
+                        progressByPage={developmentArtifacts?.pages}
                         disabled={outlineLocked}
                         item={item}
                         key={item.key}
@@ -214,73 +223,36 @@ export default function ApplicationOutline({
               >
                 <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
                 <span>接口</span>
+                <span className={cx('development-count')}>
+                  {developmentCompletedCount(
+                    apiContracts.flatMap((contract) =>
+                      contract.endpoints.map(
+                        (endpoint) =>
+                          developmentArtifacts?.endpoints[endpoint.apiContractId || contract.id]?.[
+                            endpoint.id
+                          ]
+                      )
+                    )
+                  )}
+                  /{apiContracts.reduce((total, contract) => total + contract.endpoints.length, 0)}
+                </span>
               </button>
               {apiExpanded ? (
                 <div className={cx('api-group')}>
-                  {visibleApiContracts.map((contract) => {
-                    const contractExpanded = !collapsedApiContractIds.has(contract.id)
-                    return (
-                      <div key={contract.id}>
-                        <button
-                          aria-expanded={contractExpanded}
-                          className={cx('api-group-title')}
-                          onClick={() => handleApiContractToggle(contract.id)}
-                          type="button"
-                        >
-                          <CaretDownOutlined className={cx(!contractExpanded && 'collapsed')} />
-                          <ApiOutlined />
-                          <code>{contract.label}</code>
-                        </button>
-                        {contractExpanded ? (
-                          <div className={cx('api-list')}>
-                            {contract.endpoints.map((endpoint, endpointIndex) => {
-                              const endpointId = endpoint.id || String(endpointIndex + 1)
-                              const apiContractId = endpoint.apiContractId || contract.id
-                              const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
-                              const displayPath = apiEndpointDisplayPath(
-                                endpoint.path,
-                                contract.label
-                              )
-                              const endpointLabel = `${endpoint.method} ${displayPath}`.trim()
-                              return (
-                                <div className={cx('api-node')} key={endpointKey}>
-                                  <button
-                                    aria-current={
-                                      selectedApiEndpointKey === endpointKey ? 'true' : undefined
-                                    }
-                                    className={cx(
-                                      'api-row',
-                                      selectedApiEndpointKey === endpointKey && 'selected'
-                                    )}
-                                    onClick={() =>
-                                      onApiEndpointSelect({
-                                        apiContractId,
-                                        endpointId,
-                                        endpointKey,
-                                        label: endpointLabel
-                                      })
-                                    }
-                                    title={endpoint.summary}
-                                    type="button"
-                                  >
-                                    <span
-                                      className={cx(
-                                        'api-method',
-                                        endpoint.method.toLocaleLowerCase()
-                                      )}
-                                    >
-                                      {endpoint.method}
-                                    </span>
-                                    <code>{displayPath}</code>
-                                  </button>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                    )
-                  })}
+                  {visibleApiContracts.map((contract) => (
+                    <ApiOutlineGroup
+                      key={contract.id}
+                      contract={contract}
+                      allEndpoints={
+                        apiContracts.find((item) => item.id === contract.id)?.endpoints || []
+                      }
+                      developmentArtifacts={developmentArtifacts}
+                      expanded={!collapsedApiContractIds.has(contract.id)}
+                      onToggle={() => handleApiContractToggle(contract.id)}
+                      onSelect={onApiEndpointSelect}
+                      selectedKey={selectedApiEndpointKey}
+                    />
+                  ))}
                   {visibleApiContracts.length === 0 ? (
                     <div className={cx('outline-empty')}>
                       project_plan.json 的 api_contracts 中暂无接口
