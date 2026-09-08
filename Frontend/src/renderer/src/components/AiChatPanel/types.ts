@@ -56,7 +56,6 @@ export type RightPanelState =
       type: 'stage-output'
       sessionKey: string
       view?: 'stage' | 'confirmation'
-      stageId?: string
     }
 
 export type ChatCopy = Record<

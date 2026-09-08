@@ -1,6 +1,7 @@
 import type { WorkflowRunPayload } from '../typings'
 import { isConversationWorkflow } from '../components/AiChatPanel/conversationMode'
 import {
+  newerDagGenerationSnapshot,
   readDagGenerationSnapshot,
   readIntegrationTestChecks,
   readProjectPlanUpdate,
@@ -133,7 +134,7 @@ function mergeRecoveredWorkflowSteps(
     }
 
     const existingStep = mergedSteps[existingIndex]
-    const dagGeneration = mergeDagGenerationSnapshot(
+    const dagGeneration = newerDagGenerationSnapshot(
       existingStep.dagGeneration,
       recoveredStep.dagGeneration
     )
@@ -158,23 +159,6 @@ function findMatchingWorkflowStepIndex(
     (step) =>
       workflowStepNodeName(step) === recoveredNodeName && (step.attempt || 1) === recoveredAttempt
   )
-}
-
-/** 选择结构化产物更完整的 DAG 快照，完成事件优先覆盖旧的中间快照。 */
-function mergeDagGenerationSnapshot(
-  current: DagGenerationSnapshot | undefined,
-  recovered: DagGenerationSnapshot | undefined
-): DagGenerationSnapshot | undefined {
-  if (!current) return recovered
-  if (!recovered) return current
-  return dagGenerationOutputCount(recovered) >= dagGenerationOutputCount(current)
-    ? recovered
-    : current
-}
-
-/** 统计阶段级结构化产物数量，用于判断哪个历史快照更完整。 */
-function dagGenerationOutputCount(snapshot: DagGenerationSnapshot): number {
-  return snapshot.stages.reduce((count, stage) => count + (stage.output ? 1 : 0), 0)
 }
 
 /** 从完成事件或旧状态快照恢复工作区检查详情，并补齐缓存命中标记。 */
@@ -401,7 +385,7 @@ function completedDagGenerationSnapshot(
     .filter((candidate): candidate is DagGenerationSnapshot => Boolean(candidate))
 
   return candidates.reduce<DagGenerationSnapshot | undefined>(
-    (current, candidate) => mergeDagGenerationSnapshot(current, candidate),
+    (current, candidate) => newerDagGenerationSnapshot(current, candidate),
     undefined
   )
 }

@@ -9,6 +9,7 @@ from pydantic import model_validator
 
 from app.config import Settings
 from app.services.authorization_resource_catalog import compile_frontend_resource_catalog, resource_catalog_fingerprint
+from app.services.build_task_progress import create_planning_run_progress_publisher
 from app.services.dag_planning_inputs import SequentialPlanningInputs
 from app.services.deterministic_unit_candidates import build_auth_guard_candidate
 from app.services.frozen_contract_store import FrozenContractStore
@@ -168,7 +169,14 @@ async def plan_dag_sequential(
                     if initial.unit_states[key].generation_strategy == "model"}
     except GenerationRequirementsError as exc:
         raise DagPlanningError(exc.issues) from exc
-    controller = PlanningRunController(initial, workspace_state, publish=publish)
+    progress_publisher = (
+        publish if publish is not None else create_planning_run_progress_publisher()
+    )
+    controller = PlanningRunController(
+        initial,
+        workspace_state,
+        publish=progress_publisher,
+    )
     scheduler = UnitGenerationScheduler(
         concurrency=(settings.dag_unit_generation_concurrency if settings else 3),
     )

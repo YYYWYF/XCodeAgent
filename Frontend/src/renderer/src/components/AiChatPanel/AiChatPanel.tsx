@@ -110,9 +110,7 @@ import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRu
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import { chatCopy } from './constants'
 import type { AgentChatMessage, WorkspaceDocKey } from './types'
-import {
-  workflowDevelopmentContinuation
-} from './developmentContinuation'
+import { workflowDevelopmentContinuation } from './developmentContinuation'
 import {
   currentDagConfirmationErrors,
   currentDagConfirmationPlan,
@@ -120,8 +118,6 @@ import {
   latestDagGenerationSnapshot,
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
-  runningDagGenerationStage,
-  selectedDagGenerationStage,
   stageOutputPhase
 } from './stageOutputState'
 import {
@@ -834,7 +830,12 @@ export default function AiChatPanel({
     []
   )
   const setInspectedElementContext = useCallback(
-    (context: InspectedElementContext | undefined | ((prev: InspectedElementContext | undefined) => InspectedElementContext | undefined)) =>
+    (
+      context:
+        | InspectedElementContext
+        | undefined
+        | ((prev: InspectedElementContext | undefined) => InspectedElementContext | undefined)
+    ) =>
       setInspection((s) => ({
         ...s,
         context: typeof context === 'function' ? context(s.context) : context
@@ -886,7 +887,11 @@ export default function AiChatPanel({
   const uiDesignFile = designDocState.uiDesign
   const technicalPlanFileLoading = designDocState.loading
   const setDesignDocFileContent = useCallback(
-    (fileContent: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) =>
+    (
+      fileContent:
+        | Record<string, string>
+        | ((prev: Record<string, string>) => Record<string, string>)
+    ) =>
       setDesignDocState((s) => ({
         ...s,
         fileContent: typeof fileContent === 'function' ? fileContent(s.fileContent) : fileContent
@@ -898,19 +903,23 @@ export default function AiChatPanel({
     []
   )
   const setTechnicalPlanFile = useCallback(
-    (technicalPlan: Record<string, unknown> | undefined) => setDesignDocState((s) => ({ ...s, technicalPlan })),
+    (technicalPlan: Record<string, unknown> | undefined) =>
+      setDesignDocState((s) => ({ ...s, technicalPlan })),
     []
   )
   const setProductPlanFile = useCallback(
-    (productPlan: Record<string, unknown> | undefined) => setDesignDocState((s) => ({ ...s, productPlan })),
+    (productPlan: Record<string, unknown> | undefined) =>
+      setDesignDocState((s) => ({ ...s, productPlan })),
     []
   )
   const setRequirementSpecFile = useCallback(
-    (requirementSpec: Record<string, unknown> | undefined) => setDesignDocState((s) => ({ ...s, requirementSpec })),
+    (requirementSpec: Record<string, unknown> | undefined) =>
+      setDesignDocState((s) => ({ ...s, requirementSpec })),
     []
   )
   const setUiDesignFile = useCallback(
-    (uiDesign: Record<string, unknown> | undefined) => setDesignDocState((s) => ({ ...s, uiDesign })),
+    (uiDesign: Record<string, unknown> | undefined) =>
+      setDesignDocState((s) => ({ ...s, uiDesign })),
     []
   )
   const setTechnicalPlanFileLoading = useCallback(
@@ -925,13 +934,15 @@ export default function AiChatPanel({
   const formalRevisionSourcePhasesRef = useRef<Record<string, WorkbenchPhase>>({})
   // 二次修改：待处理的 continuation + 设计变更解锁标记。两者语义相关，合并减少 state 数量。
   const [revisionState, setRevisionState] = useState<{
-    pendingContinuation: {
-      continuation: WorkflowRevisionContinuation
-      reject: (reason?: unknown) => void
-      resolve: () => void
-      sourceIdentity: SessionIdentity
-      targetIdentity: SessionIdentity
-    } | undefined
+    pendingContinuation:
+      | {
+          continuation: WorkflowRevisionContinuation
+          reject: (reason?: unknown) => void
+          resolve: () => void
+          sourceIdentity: SessionIdentity
+          targetIdentity: SessionIdentity
+        }
+      | undefined
     designChangeUnlocked: boolean
   }>({ pendingContinuation: undefined, designChangeUnlocked: false })
   // 兼容别名：保持下游调用点不变。
@@ -943,8 +954,7 @@ export default function AiChatPanel({
     []
   )
   const setDesignChangeUnlocked = useCallback(
-    (designChangeUnlocked: boolean) =>
-      setRevisionState((s) => ({ ...s, designChangeUnlocked })),
+    (designChangeUnlocked: boolean) => setRevisionState((s) => ({ ...s, designChangeUnlocked })),
     []
   )
   // 同一 change 的 handoff 在当前进程只执行一次；失败后删除，允许用户显式重试。
@@ -965,10 +975,7 @@ export default function AiChatPanel({
   const previewError = preview.error
   const runtimePreviewBaseUrl = preview.baseUrl
   const runtimePreviewLaunchError = preview.launchError
-  const setPreviewError = useCallback(
-    (error: string) => setPreview((s) => ({ ...s, error })),
-    []
-  )
+  const setPreviewError = useCallback((error: string) => setPreview((s) => ({ ...s, error })), [])
   const setRuntimePreviewBaseUrl = useCallback(
     (baseUrl: string) => setPreview((s) => ({ ...s, baseUrl })),
     []
@@ -2667,8 +2674,7 @@ export default function AiChatPanel({
     [application.workspaceRoot, editorMode, pendingDagSession]
   )
   const pendingDagSessionMessages = useMemo(
-    () =>
-      pendingDagSessionIdentity ? getSessionMessages(pendingDagSessionIdentity.key) : [],
+    () => (pendingDagSessionIdentity ? getSessionMessages(pendingDagSessionIdentity.key) : []),
     [getSessionMessages, pendingDagSessionIdentity]
   )
   const pendingDagWorkflow = pendingDagConfirmationWorkflow(
@@ -3075,11 +3081,7 @@ export default function AiChatPanel({
     : !currentStageSessionTargetKey
   const stageOutputMessages = useMemo(
     () =>
-      pendingDagExecution
-        ? pendingDagSessionMessages
-        : stageOutputContextAligned
-          ? messages
-          : [],
+      pendingDagExecution ? pendingDagSessionMessages : stageOutputContextAligned ? messages : [],
     [pendingDagExecution, pendingDagSessionMessages, stageOutputContextAligned, messages]
   )
   const stageOutputWorkflow = pendingDagExecution
@@ -3115,34 +3117,19 @@ export default function AiChatPanel({
     currentDagSnapshot,
     dagConfirmationPlan
   )
-  const currentRunningDagStage = runningDagGenerationStage(currentDagSnapshot)
   const stageOutputSessionKey = pendingDagExecution
     ? `${application.id}:pending-dag:${pendingDagExecution.runId}`
     : `${application.id}:${activeTargetKey || 'free-chat'}:${activeSession?.key || draftKey}`
   const stageOutputMatchesSession =
     rightPanel?.type === 'stage-output' && rightPanel.sessionKey === stageOutputSessionKey
-  const selectedDagStage = selectedDagGenerationStage(
-    currentDagSnapshot,
-    stageOutputMatchesSession && rightPanel?.type === 'stage-output'
-      ? rightPanel.stageId
-      : undefined
-  )
-  const activeDagStageId =
-    stageOutputMatchesSession && rightPanel?.type === 'stage-output' && rightPanel.view === 'stage'
-      ? rightPanel.stageId
-      : undefined
-  const manuallySelectedDagSessionRef = useRef('')
   const lastStageOutputSessionRef = useRef('')
   const lastStageOutputPhaseRef = useRef('')
   const lastPinnedDagRunRef = useRef('')
 
-  // 右侧阶段产物只在切换会话或进入新的大阶段时自动跟随；同一 DAG 生成阶段内，
-  // 用户点选过其它子阶段后，后续流式快照只能更新内容，不能抢回当前选择。
+  // 右侧面板只在会话或 DAG 大阶段变化时切换；同一阶段的 revision 更新直接刷新完整 Unit 快照。
   useEffect(() => {
     if (isApplicationPlanningPhase) return
     if (pendingDagExecution) {
-      // 每个待确认运行首次出现时自动打开确认卡；之后允许用户查看其它工作区 tab，
-      // 但再次进入阶段产物时仍始终读取这个运行的原会话与确认版本。
       const enteringPendingRun = lastPinnedDagRunRef.current !== pendingDagExecution.runId
       lastPinnedDagRunRef.current = pendingDagExecution.runId
       if (enteringPendingRun) {
@@ -3164,57 +3151,27 @@ export default function AiChatPanel({
       }
       return
     }
+
     lastPinnedDagRunRef.current = ''
     const sessionChanged = lastStageOutputSessionRef.current !== stageOutputSessionKey
     const phaseChanged = lastStageOutputPhaseRef.current !== currentStageOutputPhase
+    if (!sessionChanged && !phaseChanged) return
 
-    if (sessionChanged || phaseChanged) {
-      lastStageOutputSessionRef.current = stageOutputSessionKey
-      lastStageOutputPhaseRef.current = currentStageOutputPhase
-      manuallySelectedDagSessionRef.current = ''
-
-      if (currentStageOutputPhase === 'confirmation') {
-        if (!rightPanelOpen) onRightPanelOpenChange(true)
-        setRightPanel({
-          type: 'stage-output',
-          sessionKey: stageOutputSessionKey,
-          view: 'confirmation'
-        })
-        return
-      }
-      if (currentStageOutputPhase === 'generation') {
-        if (!rightPanelOpen) onRightPanelOpenChange(true)
-        setRightPanel({
-          type: 'stage-output',
-          sessionKey: stageOutputSessionKey,
-          view: 'stage',
-          stageId: currentRunningDagStage?.id
-        })
-        return
-      }
-      if (rightPanel?.type === 'stage-output') {
-        setRightPanel({ type: 'stage-output', sessionKey: stageOutputSessionKey })
-      }
-      return
-    }
-
-    if (!rightPanelOpen) return
-    if (
-      currentStageOutputPhase === 'generation' &&
-      manuallySelectedDagSessionRef.current !== stageOutputSessionKey &&
-      rightPanel?.type === 'stage-output' &&
-      rightPanel.sessionKey === stageOutputSessionKey &&
-      (rightPanel.view !== 'stage' || rightPanel.stageId !== currentRunningDagStage?.id)
-    ) {
+    lastStageOutputSessionRef.current = stageOutputSessionKey
+    lastStageOutputPhaseRef.current = currentStageOutputPhase
+    if (currentStageOutputPhase === 'confirmation' || currentStageOutputPhase === 'generation') {
+      if (!rightPanelOpen) onRightPanelOpenChange(true)
       setRightPanel({
         type: 'stage-output',
         sessionKey: stageOutputSessionKey,
-        view: 'stage',
-        stageId: currentRunningDagStage?.id
+        view: currentStageOutputPhase === 'confirmation' ? 'confirmation' : 'stage'
       })
+      return
+    }
+    if (rightPanel?.type === 'stage-output') {
+      setRightPanel({ type: 'stage-output', sessionKey: stageOutputSessionKey })
     }
   }, [
-    currentRunningDagStage?.id,
     currentStageOutputPhase,
     isApplicationPlanningPhase,
     onRightPanelOpenChange,
@@ -3225,27 +3182,8 @@ export default function AiChatPanel({
     stageOutputSessionKey
   ])
 
-  /** 从中间 DAG 卡片选择子阶段；点击运行中阶段时恢复自动跟随。 */
-  const handleDagStageSelect = useCallback(
-    (stageId: string): void => {
-      const target = selectedDagGenerationStage(currentDagSnapshot, stageId)
-      if (!target || (!target.output && target.status !== 'running')) return
-      manuallySelectedDagSessionRef.current =
-        target.status === 'running' ? '' : stageOutputSessionKey
-      onRightPanelOpenChange(true)
-      setRightPanel({
-        type: 'stage-output',
-        sessionKey: stageOutputSessionKey,
-        view: 'stage',
-        stageId
-      })
-    },
-    [currentDagSnapshot, onRightPanelOpenChange, setRightPanel, stageOutputSessionKey]
-  )
-
-  /** 从确认阶段的历史子阶段产物返回当前任务确认卡。 */
+  /** 从 Unit 进度返回当前任务确认卡。 */
   const handleReturnDagConfirmation = useCallback((): void => {
-    manuallySelectedDagSessionRef.current = ''
     setRightPanel({
       type: 'stage-output',
       sessionKey: stageOutputSessionKey,
@@ -3325,7 +3263,6 @@ export default function AiChatPanel({
   const openDisplayedWorkspaceTab = useCallback(
     (key: WorkspaceTabKey): void => {
       if (key === 'stage-output' && !isApplicationPlanningPhase) {
-        manuallySelectedDagSessionRef.current = ''
         setRightPanel({
           type: 'stage-output',
           sessionKey: stageOutputSessionKey,
@@ -3334,8 +3271,7 @@ export default function AiChatPanel({
               ? 'confirmation'
               : currentStageOutputPhase === 'generation'
                 ? 'stage'
-                : undefined,
-          stageId: currentStageOutputPhase === 'generation' ? currentRunningDagStage?.id : undefined
+                : undefined
         })
         return
       }
@@ -3350,7 +3286,6 @@ export default function AiChatPanel({
       openWorkspaceTab(key)
     },
     [
-      currentRunningDagStage?.id,
       currentStageOutputPhase,
       isApplicationPlanningPhase,
       openWorkspaceTab,
@@ -3478,7 +3413,7 @@ export default function AiChatPanel({
     developmentPlanningApiContracts,
     displayedPlanningPages,
     loading,
-    onPlanningArtifactsRefresh,
+    onPlanningArtifactsRefresh
   ])
 
   // 大纲刷新把实体标记为已设计后，解除返回态抑制，避免误锁后续入口。
@@ -3753,12 +3688,7 @@ export default function AiChatPanel({
       return
     }
     if (task.kind === 'entity') {
-      await handleStartDetailDesign(
-        'entity',
-        task.entityId,
-        task.entityLabel,
-        task.hasDetailPlan
-      )
+      await handleStartDetailDesign('entity', task.entityId, task.entityLabel, task.hasDetailPlan)
       return
     }
     await handleStartEndpointDesign(task.endpointId, task.endpointLabel, task.hasDetailPlan, {
@@ -4334,7 +4264,6 @@ export default function AiChatPanel({
             )}
 
             <MessageList
-              activeDagStageId={activeDagStageId}
               applicationLifecycle={applicationLifecycle}
               applicationTemplatePreparationEligible={applicationTemplatePreparationEligible}
               codeChangeActionsDisabled={
@@ -4367,7 +4296,6 @@ export default function AiChatPanel({
               messages={messages}
               onContinueDevelopment={handleContinueDevelopment}
               onEntityDesignGateJump={handleEntityDesignGateJump}
-              onDagStageSelect={handleDagStageSelect}
               onOpenCodeChangeFile={handleOpenCodeChangeFile}
               onOpenRevisionSession={handleOpenRevisionSession}
               onRevertCodeChanges={requestCodeChangeRevert}
@@ -4399,8 +4327,8 @@ export default function AiChatPanel({
                 status={phaseExecutionStatus}
               />
             ) : !entityDesignChatActive &&
-            !acceptanceAwaiting &&
-            shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive) ? (
+              !acceptanceAwaiting &&
+              shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive) ? (
               <WorkspaceDebugDock
                 activeWorkflow={activeWorkflow}
                 copy={copy}
@@ -4750,14 +4678,14 @@ export default function AiChatPanel({
                     void handlePinnedDagConfirmation(action)
                   }}
                 />
-              ) : rightPanel.view === 'stage' && selectedDagStage?.output ? (
+              ) : rightPanel.view === 'stage' && currentDagSnapshot ? (
                 <StageOutputPanel
                   onReturnToConfirmation={
                     currentStageOutputPhase === 'confirmation' && dagConfirmationPlan
                       ? handleReturnDagConfirmation
                       : undefined
                   }
-                  stage={selectedDagStage}
+                  snapshot={currentDagSnapshot}
                 />
               ) : pendingDagExecution && rightPanel.view === 'confirmation' ? (
                 <Alert

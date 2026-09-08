@@ -1,4 +1,5 @@
-import type { DagGenerationSnapshot, DagGenerationStageRecord } from '../../service/agUiAgent'
+import type { DagGenerationSnapshot, DagGenerationUnitRecord } from '../../service/agUiAgent'
+import { newerDagGenerationSnapshot } from '../../service/agUiAgent'
 import { processStepsForDisplay } from '../../service/processStepHistory'
 import type {
   ApplicationLifecycle,
@@ -42,20 +43,23 @@ export function pendingDagConfirmationWorkflow(
   return undefined
 }
 
-/** 从当前会话消息末尾读取最新、最完整的 DAG 生成快照。 */
+/** 从当前会话最后一个 PlanningRun 读取 revision 最大的 DAG 生成快照。 */
 export function latestDagGenerationSnapshot(
   messages: AgentChatMessage[]
 ): DagGenerationSnapshot | undefined {
+  let latest: DagGenerationSnapshot | undefined
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
     const message = messages[messageIndex]
     const steps = processStepsForDisplay(message.processSteps, message.workflow)
     if (!steps?.length) continue
     for (let stepIndex = steps.length - 1; stepIndex >= 0; stepIndex -= 1) {
       const snapshot = steps[stepIndex].dagGeneration
-      if (snapshot) return snapshot
+      if (!snapshot) continue
+      if (latest && latest.planningRunId !== snapshot.planningRunId) return latest
+      latest = newerDagGenerationSnapshot(latest, snapshot)
     }
   }
-  return undefined
+  return latest
 }
 
 /** 仅在当前 Workflow 正处于 DAG 确认时读取任务计划，避免历史确认数据污染后续阶段。 */
@@ -83,9 +87,7 @@ export function currentDagConfirmationErrors(workflow: WorkflowRunPayload | unde
 }
 
 /** 从 Workflow 当前投影位置解析 DAG 确认载荷，不读取历史阶段快照。 */
-function currentDagConfirmationPayload(
-  workflow: WorkflowRunPayload | undefined
-):
+function currentDagConfirmationPayload(workflow: WorkflowRunPayload | undefined):
   | {
       taskPlan?: WorkflowBuildTaskPlan
       targetReview?: WorkflowBuildTargetReview
@@ -123,22 +125,66 @@ export function stageOutputPhase(
     workflow?.summary.phase || workflow?.result?.phase || workflow?.state?.phase || ''
   )
   if (phase === 'prepare_build_tasks') return 'generation'
-  if (snapshot?.stages.some((stage) => stage.status === 'running')) return 'generation'
+  if (snapshot?.status === 'active') return 'generation'
   return 'other'
 }
 
-/** 返回当前运行中的 DAG 子阶段；没有运行中阶段时不回退到已完成产物。 */
-export function runningDagGenerationStage(
-  snapshot: DagGenerationSnapshot | undefined
-): DagGenerationStageRecord | undefined {
-  return snapshot?.stages.find((stage) => stage.status === 'running')
+/** 返回 Unit 的用户可见状态；前置与复用 Unit 永不误标为生成中。 */
+export function dagGenerationUnitStatusLabel(unit: DagGenerationUnitRecord): string {
+  if (unit.status === 'not_required') {
+    if (unit.participation === 'prerequisite_only') return 'prerequisite'
+    if (unit.participation === 'reuse_only') return 'reused'
+    if (unit.participation === 'structural_only') return 'structural'
+  }
+  return {
+    not_required: 'not_required',
+    pending: 'waiting',
+    generating: 'generating',
+    validating: 'validating',
+    candidate_ready: 'candidate_ready',
+    round_exhausted: 'round_exhausted',
+    aborted: 'aborted'
+  }[unit.status]
 }
 
-/** 按稳定阶段 ID 从当前会话最新快照解析产物，禁止直接持有历史快照对象。 */
-export function selectedDagGenerationStage(
-  snapshot: DagGenerationSnapshot | undefined,
-  stageId: string | undefined
-): DagGenerationStageRecord | undefined {
-  if (!stageId) return undefined
-  return snapshot?.stages.find((stage) => stage.id === stageId)
+/** 仅模型生成 Unit 展示 Local attempt，确定性 Unit 不制造 0/0 次数。 */
+export function dagGenerationUnitAttemptCopy(unit: DagGenerationUnitRecord): string {
+  if (
+    unit.generationStrategy !== 'model' ||
+    unit.localAttemptLimit <= 0 ||
+    unit.attemptInRound <= 0
+  ) {
+    return ''
+  }
+  return `attempt ${unit.attemptInRound}/${unit.localAttemptLimit}`
+}
+
+/** 返回复用与候选任务的安全数量，不展示 Candidate Task 身份或正文。 */
+export function dagGenerationUnitTaskCopy(unit: DagGenerationUnitRecord): string {
+  if (unit.retainedTaskCount === 0 && unit.candidateTaskCount === 0) return ''
+  return `retained ${unit.retainedTaskCount} / candidate ${unit.candidateTaskCount}`
+}
+
+/** 返回 Unit 当前策略文案，auth 等确定性 Unit 始终明确标识 deterministic。 */
+export function dagGenerationStrategyLabel(unit: DagGenerationUnitRecord): string {
+  if (unit.generationStrategy === 'deterministic') return 'deterministic'
+  if (unit.generationStrategy === 'prerequisite_only') return 'prerequisite'
+  if (unit.generationStrategy === 'reuse_only') return 'reused'
+  if (unit.generationStrategy === 'structural_only') return 'structural'
+  if (unit.participation === 'reuse_and_generate') return 'reuse_and_generate'
+  return 'model'
+}
+
+/** 返回 Run 级摘要；round_exhausted 只描述局部轮次，不提升为 Run 失败。 */
+export function dagGenerationSummaryCopy(snapshot: DagGenerationSnapshot): string {
+  if (snapshot.status === 'failed') return 'PlanningRun failed'
+  if (snapshot.status === 'cancelled') return 'PlanningRun cancelled'
+  if (snapshot.summary.roundExhaustedUnitCount > 0) return '本轮已耗尽，等待修复决策'
+  if (snapshot.phase === 'global_check') return '正在执行 Global validation'
+  if (snapshot.globalRepairRound > 0) {
+    return `正在执行 Global repair ${snapshot.globalRepairRound}/${snapshot.globalRepairLimit}`
+  }
+  if (snapshot.summary.activeUnitCount > 0) return '正在处理 Unit'
+  if (snapshot.summary.pendingUnitCount > 0) return 'Unit 等待调度'
+  return 'Unit 候选已就绪，等待全局校验'
 }
