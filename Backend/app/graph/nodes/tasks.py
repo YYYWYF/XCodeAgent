@@ -211,6 +211,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             output=project_build_context_output({}, attempt_plan),
         )
         return {
+            **clear_planning_projection(),
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
             "project_plan": project_plan,
@@ -270,6 +271,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             output=project_build_context_output({}, attempt_plan),
         )
         return {
+            **clear_planning_projection(),
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
             "project_plan": project_plan,
@@ -325,6 +327,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             output=project_contract_validation_output(build_context, contract_errors),
         )
         return {
+            **clear_planning_projection(),
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
             "project_plan": project_plan,
@@ -853,6 +856,27 @@ def _dedupe_texts(values: list[str]) -> list[str]:
     return result
 
 
+def clear_planning_projection() -> dict[str, Any]:
+    """清除上一轮 PlanningRun/Pending 的只读投影，避免 checkpoint 延续旧身份。
+
+    Graph state 按 key 合并，本轮没有产生 PlanningRun 的阻断或失败结果必须显式
+    覆盖这些字段，否则会出现 status=requires_user_input 却挂着上一轮
+    planning_run_id/draft_digest/dag_generation_progress 的错配。
+    调用方用 ``{**clear_planning_projection(), **本轮结果}`` 合并，本轮真实写入的
+    dag_generation_progress 或 persisted 事实仍以本轮结果为准。
+    """
+
+    return {
+        "planning_run_id": "",
+        "draft_digest": "",
+        "dag_generation_progress": {},
+        "build_task_plan_confirmation": {},
+        "pending_build_task_plan_path": "",
+        "pending_build_task_plan_persisted": False,
+        "build_task_plan_persisted": False,
+    }
+
+
 def _build_prerequisite_blocked_result(
     project_plan: dict[str, Any],
     build_execution_scope: dict[str, str],
@@ -898,6 +922,7 @@ def _build_prerequisite_blocked_result(
         }
     )
     return {
+        **clear_planning_projection(),
         "phase": "prepare_build_tasks",
         "status": "requires_user_input",
         "project_plan": project_plan,
@@ -941,9 +966,9 @@ def _confirmed_baseline_blocked_result(
         "retryable": False,
     })
     return {
+        **clear_planning_projection(),
         "phase": "prepare_build_tasks", "status": "requires_user_input",
         "project_plan": project_plan, "build_execution_scope": build_execution_scope,
-        "build_task_plan_persisted": False,
         "clarification": payload, "message": payload["message"],
         "timeline": ["prepare_build_tasks"],
     }
@@ -2283,6 +2308,7 @@ def _build_task_plan_generation_failed_result(
     )
     persisted_scope = build_task_plan.get("build_execution_scope")
     return {
+        **clear_planning_projection(),
         "phase": "prepare_build_tasks",
         "status": "failed",
         "project_plan": project_plan,
@@ -2291,7 +2317,6 @@ def _build_task_plan_generation_failed_result(
         "last_persisted_build_execution_scope": (
             persisted_scope if isinstance(persisted_scope, dict) else None
         ),
-        "build_task_plan_persisted": False,
         "dag_generation_progress": progress.snapshot(),
         "error": reason,
         "message": "Build DAG 自动重生成未得到有效任务计划，已停止代码生成。",
@@ -2340,6 +2365,7 @@ def _retained_endpoint_owner_blocked_result(
     )
     persisted_scope = build_task_plan.get("build_execution_scope")
     return {
+        **clear_planning_projection(),
         "phase": "prepare_build_tasks",
         "status": "requires_user_input",
         "project_plan": project_plan,
@@ -2348,7 +2374,6 @@ def _retained_endpoint_owner_blocked_result(
         "last_persisted_build_execution_scope": (
             persisted_scope if isinstance(persisted_scope, dict) else None
         ),
-        "build_task_plan_persisted": False,
         "dag_generation_progress": progress.snapshot(),
         "clarification": payload,
         "message": payload["message"],

@@ -118,6 +118,8 @@ class BuildTaskPlanningServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.draft_identity, identity)
         self.assertEqual(plain_json(result.pending_plan), pending)
         self.assertEqual(persisted_run["planning_run_id"], result.planning_run_id)
+        # 写 Pending 之前必须先提交 PendingPersistenceStarted，Run 不能停留在 validating。
+        self.assertEqual((persisted_run["status"], persisted_run["phase"]), ("active", "persisting_pending"))
         self.assertEqual(formal_path.read_bytes(), formal_bytes)
 
     async def test_multi_unit_planning_keeps_attempts_and_candidates_independent(self) -> None:

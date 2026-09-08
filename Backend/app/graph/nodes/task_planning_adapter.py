@@ -23,6 +23,7 @@ from app.graph.nodes.tasks import (
     _resolve_build_context,
     _scoped_contract_errors,
     _workspace_snapshot_from_state,
+    clear_planning_projection,
 )
 from app.graph.state import ProjectState
 from app.services.application_template_generation import (
@@ -44,6 +45,7 @@ from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
     UnitGenerationPolicy,
 )
+from app.workspace.task_documents import build_task_plan_json_path
 
 
 MainlinePlanningService = Callable[..., Awaitable[MainlinePlanningResult]]
@@ -193,6 +195,7 @@ async def _run_async_workflow_planning_adapter(
         scope=scope,
         confirmed_plan=confirmed_plan,
         formal_state=formal_state,
+        formal_plan_path=str(build_task_plan_json_path(state)),
     )
 
 
@@ -207,12 +210,12 @@ def _context_blocked_result(
     """保持旧节点的可恢复上下文字段，同时明确本轮没有写 Pending。"""
 
     return {
+        **clear_planning_projection(),
         "phase": "prepare_build_tasks",
         "status": "requires_user_input",
         "project_plan": project_plan,
         "build_task_plan": skeleton,
         "build_execution_scope": scope,
-        "build_task_plan_persisted": False,
         "clarification": clarification,
         "timeline": ["prepare_build_tasks"],
         **formal_state,
@@ -237,8 +240,15 @@ def _project_planning_result(
     scope: dict[str, str],
     confirmed_plan: dict[str, Any] | None,
     formal_state: dict[str, dict[str, Any]],
+    formal_plan_path: str,
 ) -> dict[str, Any]:
-    """把 Pending 只读投影到既有 Graph contract，不触碰 Formal authority。"""
+    """把 Pending 只读投影到既有 Graph contract，不触碰 Formal authority。
+
+    ``build_task_plan_path`` 始终指向 Formal authority（build-task-plan.json），
+    ``pending_build_task_plan_path`` 指向本轮 Pending authority；
+    ``build_task_plan_persisted`` 只表示当前 scope 的 Formal 是否已存在，
+    Pending 落盘由 ``pending_build_task_plan_persisted`` 单独表达。
+    """
 
     pending_plan = plain_json(result.pending_plan)
     confirmation = _build_task_plan_confirmation_payload(
@@ -258,8 +268,15 @@ def _project_planning_result(
         "status": "requires_user_input",
         "project_plan": project_plan,
         "build_task_plan": pending_plan,
-        "build_task_plan_path": result.pending_plan_path,
-        "build_task_plan_persisted": True,
+        "build_task_plan_path": formal_plan_path,
+        # Formal persisted 只按当前 scope 判断；本轮 Pending 另由
+        # pending_build_task_plan_persisted 表达，两者不能互相代替。
+        "build_task_plan_persisted": (
+            isinstance(confirmed_plan, dict)
+            and confirmed_plan.get("build_execution_scope") == scope
+        ),
+        "pending_build_task_plan_path": result.pending_plan_path,
+        "pending_build_task_plan_persisted": True,
         "planning_run_id": result.planning_run_id,
         "draft_digest": result.draft_identity.draft_digest,
         "dag_generation_progress": project_planning_run_progress(

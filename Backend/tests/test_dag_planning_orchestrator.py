@@ -121,7 +121,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Counter(job.identity.unit_id for job, _ in self.calls), {"page:a": 1, "page:b": 2, "page:c": 1})
         self.assertEqual([job.identity.unit_id for job, _ in self.calls], ["page:a", "page:b", "page:c", "page:b"])
         self.assertEqual(result.planning_run.global_repair_round, 0)
-        self.assertEqual(result.planning_run.phase, "validating")
+        self.assertEqual(result.planning_run.phase, "persisting_pending")
         self.assertIn(("global_check", 0), self.phases)
         self.assertIn(("assembling", 0), self.phases)
         self.assertTrue(result.assembly.assembled_plan["task_graph"]["validation"]["is_valid"])
@@ -226,10 +226,9 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(run.global_repair_round, 1)
-        self.assertEqual(
-            {target for issue in run.global_issues for target in issue.retry_unit_ids},
-            {"page:b", "page:c"},
-        )
+        # 成功 Run 停在 persisting_pending 时已清空 global_issues；
+        # 重开目标只由 Unit 的 generation_round 变化证明。
+        self.assertEqual(run.global_issues, ())
         self.assertEqual(
             [run.unit_states[key].generation_round for key in ("page:a", "page:b", "page:c")],
             [1, 2, 2],
@@ -325,7 +324,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "frontend:api-client": 1, "page:orders": 1,
         })
         self.assertTrue(result.assembly.assembled_plan["task_graph"]["validation"]["is_valid"])
-        self.assertEqual(result.planning_run.phase, "validating")
+        self.assertEqual(result.planning_run.phase, "persisting_pending")
 
     async def test_pending_baseline_rejected_before_model_or_persistence(self):
         """Pending 不能进入新链路充当历史基线，前置失败不写 Run。"""

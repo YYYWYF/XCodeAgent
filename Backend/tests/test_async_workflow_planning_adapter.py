@@ -22,6 +22,7 @@ from app.services.unit_generation_contracts import (
 )
 from app.workspace.planning_run_documents import load_planning_run
 from app.workspace.task_documents import (
+    build_task_plan_pending_json_path,
     load_build_task_plan_json,
     load_pending_build_task_plan,
     validate_pending_self_digest,
@@ -182,6 +183,15 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             result["last_persisted_build_execution_scope"],
             previous_scope,
         )
+        # Formal authority 与 Pending authority 必须是两个独立字段。
+        self.assertEqual(result["build_task_plan_path"], str(formal_path))
+        self.assertEqual(
+            result["pending_build_task_plan_path"],
+            str(build_task_plan_pending_json_path(self._state(current_scope))),
+        )
+        # 正式基线属于上一 scope，本轮只落盘 Pending；两个 persisted 语义不能混用。
+        self.assertFalse(result["build_task_plan_persisted"])
+        self.assertTrue(result["pending_build_task_plan_persisted"])
         for key in (
             "build_context",
             "build_units",
@@ -198,6 +208,53 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             "confirmed",
         )
         self.assertNotEqual(plain_json(pending), load_build_task_plan_json(formal_path))
+
+    async def test_blocked_round_clears_previous_planning_projection(self) -> None:
+        """同一 checkpoint 上一轮成功后进入 blocked，必须清空上一轮 PlanningRun 身份。"""
+
+        scope = execution_scope(name="customers")
+        formal = confirmed_baseline(self.plan, execution_scope(name="orders"))
+        write_build_task_plan_json(self._state(scope), formal)
+        adapter = create_async_workflow_planning_adapter(
+            policy=self.policy,
+            generate_once=self._generate,
+        )
+        graph = build_graph(
+            checkpointer=InMemorySaver(),
+            prepare_build_tasks_node=adapter,
+        )
+        thread = {"configurable": {"thread_id": "thread-blocked-projection"}}
+
+        with patch(
+            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            return_value=_ready_template(self.workspace),
+        ), patch(
+            "app.services.build_task_planning_service._new_planning_run_id",
+            return_value="planning-blocked-first",
+        ):
+            first = await graph.ainvoke(self._state(scope), config=thread)
+            # ProductPlan 退回未确认，让下一轮在同一 checkpoint 上被前置门禁阻断。
+            write_json(
+                self.workspace,
+                ARTIFACT_PATHS["product_plan"],
+                {
+                    **formal_artifacts(self.plan)["product_plan"],
+                    "confirmation_status": "draft",
+                },
+            )
+            second = await graph.ainvoke(self._state(scope), config=thread)
+
+        self.assertEqual(first["planning_run_id"], "planning-blocked-first")
+        self.assertTrue(first["dag_generation_progress"])
+        self.assertEqual(second["status"], "requires_user_input")
+        self.assertEqual(second["clarification"]["mode"], "build_prerequisite_error")
+        self.assertEqual(second["planning_run_id"], "")
+        self.assertEqual(second["draft_digest"], "")
+        self.assertEqual(second["dag_generation_progress"], {})
+        self.assertEqual(second["build_task_plan_confirmation"], {})
+        self.assertEqual(second["pending_build_task_plan_path"], "")
+        self.assertFalse(second["pending_build_task_plan_persisted"])
+        self.assertFalse(second["build_task_plan_persisted"])
 
     async def test_graph_cancellation_reaches_planning_run_without_detached_work(self) -> None:
         """取消 Graph coroutine 必须沿 await stack 标记 Run cancelled 且不写 Pending。"""

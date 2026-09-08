@@ -1,4 +1,9 @@
-"""T11.6.1 production Workflow 到 legacy planner 的回归锚点。"""
+"""T11.6.4 cutover acceptance：production Workflow 不再调用 legacy planner。
+
+T11.6.1 起草时把这条断言放在 T11.6.1；但 T11.6.3 明确要求默认 production graph
+在 T11.6.4 之前继续绑定 legacy 节点，两条要求在 cutover 前不可能同时成立。
+因此本文件整体作为 T11.6.4 验收套件，cutover 前跳过，避免与 T11.6.3 冲突。
+"""
 
 from __future__ import annotations
 
@@ -31,6 +36,10 @@ ARTIFACT_PATHS = {
 class DagProductionPathRegressionTests(unittest.TestCase):
     """验证 production Workflow 的 DAG planning 实际调用边界。"""
 
+    @unittest.skip(
+        "T11.6.4 cutover acceptance：默认 production graph 在 T11.6.4 之前"
+        "仍绑定 legacy planner，T11.6.1 的断言到 cutover 后才有意义。"
+    )
     def test_production_workflow_does_not_call_legacy_scope_planner(self) -> None:
         """从 production 入口进入真实节点，并用抛错陷阱锁定 legacy 调用。"""
 

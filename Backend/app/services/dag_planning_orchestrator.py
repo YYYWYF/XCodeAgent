@@ -22,7 +22,8 @@ from app.services.planning_run_contracts import PlanningRun, UnitRunState
 from app.services.planning_run_controller import PlanningRunController, SnapshotPublisher
 from app.services.planning_run_events import (
     AssemblyStarted, CandidateReady, GenerationStarted, GlobalValidationStarted,
-    RunFailed, UnitAttemptStarted, UnitValidationStarted,
+    PendingPersistenceStarted, RunFailed, UnitAttemptStarted,
+    UnitValidationStarted,
 )
 from app.services.scope_assembly import ScopeAssemblyError, ScopeAssemblyResult, assemble_scope_build_task_plan
 from app.services.unit_generation import (
@@ -48,7 +49,7 @@ class DagPlanningError(RuntimeError):
 
 
 class ValidatedAssembledPlan(FrozenPlanningModel):
-    """已通过当前全局检查的内存累计 DAG，没有 Pending/Confirmed 身份。"""
+    """已通过全局检查、等待调用方写 Pending 的内存累计 DAG，没有 Pending/Confirmed 身份。"""
 
     assembly: ScopeAssemblyResult
     planning_run: PlanningRun
@@ -60,8 +61,8 @@ class ValidatedAssembledPlan(FrozenPlanningModel):
 
         run = self.planning_run
         plan = self.assembly.assembled_plan
-        if run.status != "active" or run.phase != "validating":
-            raise ValueError("ValidatedAssembledPlan 必须来自 active/validating Run。")
+        if run.status != "active" or run.phase != "persisting_pending":
+            raise ValueError("ValidatedAssembledPlan 必须来自 active/persisting_pending Run。")
         if any(run.unit_states[key].generation_status != "candidate_ready" for key in run.planning_unit_ids):
             raise ValueError("ValidatedAssembledPlan 必须拥有全部当前 Candidate。")
         if self.generation_requirements.planning_unit_ids != run.planning_unit_ids:
@@ -133,7 +134,8 @@ async def plan_dag_sequential(
     与本次 T2.3 结果精确相同。所有 Context 在首个模型调用前冻结；每个模型 Unit 独立
     完成最多三次 Local，Global=2 只重开归因目标。deterministic 不消耗模型预算。
     仅成功返回 ValidatedAssembledPlan；内容/基础设施失败抛 DagPlanningError。持久化、
-    发布或任务取消保持 Controller 原有异常语义。不写 Pending 或任何 Formal file。
+    发布或任务取消保持 Controller 原有异常语义。成功返回前提交 PendingPersistenceStarted，
+    让 Run 停在 active/persisting_pending，等待调用方写 Pending；本函数不写任何文件。
     """
 
     frozen = SequentialPlanningInputs.model_validate(inputs)
@@ -290,4 +292,7 @@ async def plan_dag_sequential(
         raise DagPlanningError(decision.issues, controller.snapshot)
     if assembled is None:
         raise RuntimeError("Global success 未产生完整 Assembly 结果。")
+    # 全局校验成功即离开 validating，进入写 Pending 的唯一阶段标记；
+    # Pending 文件由调用方在同一 Run 上落盘，Run 不会自行写文件。
+    await controller.apply(PendingPersistenceStarted(at=now()))
     return ValidatedAssembledPlan(assembly=assembled, planning_run=controller.snapshot, generation_requirements=requirements)
