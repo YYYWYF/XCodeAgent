@@ -73,6 +73,16 @@ class WorkflowRunRegistry:
         task = entry[1] if entry is not None else None
         return bool(task and not task.done() and task.cancel())
 
+    def is_active(self, run_id: str, *, workspace: str | None = None) -> bool:
+        """判断指定 Workflow 是否仍由当前 Backend 进程真实持有。"""
+
+        workspace_key = _workspace_key(workspace)
+        with self._lock:
+            entry = self._tasks.get(run_id)
+        if entry is None or entry[1].done():
+            return False
+        return not workspace_key or entry[0] == workspace_key
+
     def begin_workspace_deletion(self, workspace: str) -> None:
         """建立工作区删除栅栏，阻止清理期间出现新的运行。"""
 

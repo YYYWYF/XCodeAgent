@@ -17,7 +17,8 @@ import {
   dagGenerationUnitTaskCopy,
   latestDagGenerationSnapshot,
   pendingDagConfirmationExecution,
-  pendingDagConfirmationWorkflow
+  pendingDagConfirmationWorkflow,
+  planningRefreshInterruption
 } from '../src/renderer/src/components/AiChatPanel/stageOutputState'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import type { ApplicationLifecycle, WorkflowRunPayload } from '../src/renderer/src/typings'
@@ -371,4 +372,181 @@ test('待确认 DAG 由持久化 lifecycle 锁定且只匹配原 run 和 thread 
     ),
     undefined
   )
+})
+
+test('browser refresh 优先采用 Backend 当前 active PlanningRun 而非旧聊天 revision', () => {
+  const recovered = snapshot({ revision: 12 }, [
+    unit({ status: 'validating', attemptInRound: 2, totalAttempts: 2 })
+  ])
+  const historical = snapshot({ revision: 3 }, [
+    unit({ status: 'generating', attemptInRound: 1, totalAttempts: 1 })
+  ])
+  const lifecycle = {
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'active_planning_run',
+        status: 'planning',
+        planningRunId: recovered.planningRunId,
+        workflowRunId: 'workflow-refresh',
+        threadId: 'thread-refresh',
+        dagGeneration: recovered,
+        message: '已恢复当前 PlanningRun 进度。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const messages = [
+    {
+      id: 1,
+      role: 'assistant',
+      content: '',
+      createdAt: 1,
+      processSteps: [
+        {
+          id: 'workflow:prepare_build_tasks',
+          kind: 'workflow',
+          status: 'running',
+          title: '生成',
+          detail: '',
+          sequence: 1,
+          dagGeneration: historical
+        }
+      ]
+    }
+  ] as AgentChatMessage[]
+
+  assert.equal(latestDagGenerationSnapshot(messages, lifecycle)?.revision, 12)
+  assert.equal(latestDagGenerationSnapshot(messages, lifecycle)?.units[0]?.status, 'validating')
+})
+
+test('refresh Pending 使用 Backend 确认投影，stale chat message 不能覆盖', () => {
+  const execution = {
+    scope: 'page',
+    targetId: 'orders',
+    pageId: 'orders',
+    threadId: 'thread-current',
+    runId: 'workflow-current',
+    phase: 'prepare_build_tasks',
+    status: 'awaiting_user',
+    pendingInteraction: {
+      id: 'interaction-current',
+      type: 'task_plan_confirmation',
+      basedOnRevision: 9,
+      payload: { mode: 'build_task_plan_confirmation' },
+      artifactRefs: [],
+      createdAt: '2026-09-08T00:00:00Z'
+    },
+    startedAt: '2026-09-08T00:00:00Z',
+    updatedAt: '2026-09-08T00:00:00Z'
+  } as const
+  const lifecycle = {
+    revision: 9,
+    updatedAt: '2026-09-08T00:00:00Z',
+    activeExecutions: { 'workflow-current': execution },
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'pending',
+        status: 'awaiting_confirmation',
+        planningRunId: 'planning-current',
+        workflowRunId: 'workflow-current',
+        threadId: 'thread-current',
+        draftDigest: 'd'.repeat(64),
+        buildExecutionScope: { type: 'page', targetId: 'orders' },
+        confirmation: {
+          mode: 'build_task_plan_confirmation',
+          status: 'requires_user_input',
+          taskPlan: {
+            confirmationStatus: 'pending',
+            scopeTasks: [{ id: 'current-task', title: '当前任务', description: '' }]
+          }
+        },
+        message: '已从 PendingPlan 恢复待确认任务规划。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const staleWorkflow = {
+    runId: 'workflow-current',
+    threadId: 'thread-current',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      clarification: {
+        mode: 'build_task_plan_confirmation',
+        taskPlan: {
+          confirmationStatus: 'pending',
+          scopeTasks: [{ id: 'stale-task', title: '旧任务', description: '' }]
+        }
+      }
+    }
+  } as unknown as WorkflowRunPayload
+  const messages = [
+    { id: 1, role: 'assistant', content: '', createdAt: 1, workflow: staleWorkflow }
+  ] as AgentChatMessage[]
+
+  const restoredExecution = pendingDagConfirmationExecution(lifecycle)
+  const restoredWorkflow = pendingDagConfirmationWorkflow(messages, restoredExecution, lifecycle)
+
+  assert.equal(restoredExecution?.runId, 'workflow-current')
+  assert.equal(
+    restoredWorkflow?.summary.clarification?.taskPlan?.scopeTasks?.[0]?.id,
+    'current-task'
+  )
+})
+
+test('Backend restart 将 disk active 显式解析为 interrupted 且不展示生成中快照', () => {
+  const lifecycle = {
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'active_planning_run',
+        status: 'planning_run_interrupted',
+        planningRunId: 'planning-interrupted',
+        workflowRunId: 'workflow-interrupted',
+        threadId: 'thread-interrupted',
+        dagGeneration: snapshot({ planningRunId: 'planning-interrupted' }),
+        message: 'Backend 已重启或运行已中断；Candidate 不会自动续跑。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+
+  assert.equal(planningRefreshInterruption(lifecycle)?.planningRunId, 'planning-interrupted')
+  assert.equal(latestDagGenerationSnapshot([], lifecycle), undefined)
+})
+
+test('ConfirmedPlan 会压制同 PlanningRun 的 stale historical snapshot', () => {
+  const historical = snapshot({ planningRunId: 'planning-promoted', revision: 7 })
+  const lifecycle = {
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'confirmed_plan',
+        status: 'confirmed',
+        planningRunId: 'planning-promoted',
+        message: '已恢复当前 ConfirmedPlan。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const messages = [
+    {
+      id: 1,
+      role: 'assistant',
+      content: '',
+      createdAt: 1,
+      processSteps: [
+        {
+          id: 'workflow:prepare_build_tasks',
+          kind: 'workflow',
+          status: 'running',
+          title: '生成',
+          detail: '',
+          sequence: 1,
+          dagGeneration: historical
+        }
+      ]
+    }
+  ] as AgentChatMessage[]
+
+  assert.equal(latestDagGenerationSnapshot(messages, lifecycle), undefined)
+  assert.equal(pendingDagConfirmationExecution(lifecycle), undefined)
 })

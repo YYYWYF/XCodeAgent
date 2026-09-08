@@ -1,8 +1,9 @@
 import type { DagGenerationSnapshot, DagGenerationUnitRecord } from '../../service/agUiAgent'
-import { newerDagGenerationSnapshot } from '../../service/agUiAgent'
+import { newerDagGenerationSnapshot, readDagGenerationSnapshot } from '../../service/agUiAgent'
 import { processStepsForDisplay } from '../../service/processStepHistory'
 import type {
   ApplicationLifecycle,
+  PlanningRefreshState,
   WorkbenchExecution,
   WorkflowBuildTargetReview,
   WorkflowBuildTaskPlan,
@@ -12,10 +13,79 @@ import type { AgentChatMessage } from './types'
 
 export type StageOutputPhase = 'generation' | 'confirmation' | 'other'
 
+/** 读取并校验 lifecycle GET 临时附加的 Planning refresh 投影。 */
+export function planningRefreshState(
+  lifecycle: ApplicationLifecycle | undefined
+): PlanningRefreshState | undefined {
+  const value = lifecycle?.extensions?.planningRefresh
+  if (
+    !value ||
+    value.schemaVersion !== 'planning-refresh.v1' ||
+    !['pending', 'active_planning_run', 'confirmed_plan', 'none'].includes(value.source) ||
+    ![
+      'awaiting_confirmation',
+      'planning',
+      'planning_run_interrupted',
+      'confirmed',
+      'idle'
+    ].includes(value.status)
+  ) {
+    return undefined
+  }
+  return value
+}
+
+/** 返回 Backend 重启导致的明确中断状态，禁止把磁盘 active 误当成仍在执行。 */
+export function planningRefreshInterruption(
+  lifecycle: ApplicationLifecycle | undefined
+): PlanningRefreshState | undefined {
+  const state = planningRefreshState(lifecycle)
+  return state?.status === 'planning_run_interrupted' ? state : undefined
+}
+
 /** 从持久化生命周期中读取当前唯一的 Build DAG 待确认 execution。 */
 export function pendingDagConfirmationExecution(
   lifecycle: ApplicationLifecycle | undefined
 ): WorkbenchExecution | undefined {
+  const recovery = planningRefreshState(lifecycle)
+  if (recovery) {
+    if (recovery.source !== 'pending' || recovery.status !== 'awaiting_confirmation') {
+      return undefined
+    }
+    const exact = recovery.workflowRunId
+      ? lifecycle?.activeExecutions?.[recovery.workflowRunId]
+      : undefined
+    if (exact) return exact
+    const pending = Object.values(lifecycle?.activeExecutions || {}).find(
+      (execution) =>
+        execution.status === 'awaiting_user' &&
+        (execution.pendingInteraction?.type === 'task_plan_confirmation' ||
+          execution.pendingInteraction?.payload?.mode === 'build_task_plan_confirmation')
+    )
+    if (pending) return pending
+    if (!recovery.workflowRunId || !recovery.threadId) return undefined
+    const now = lifecycle?.updatedAt || new Date(0).toISOString()
+    const scope = recovery.buildExecutionScope || { type: 'application', targetId: 'application' }
+    return {
+      scope: scope.type,
+      targetId: scope.targetId || 'application',
+      pageId: scope.type === 'page' ? scope.targetId : undefined,
+      threadId: recovery.threadId,
+      runId: recovery.workflowRunId,
+      phase: 'prepare_build_tasks',
+      status: 'awaiting_user',
+      pendingInteraction: {
+        id: `planning-refresh:${recovery.draftDigest || recovery.planningRunId || 'pending'}`,
+        type: 'task_plan_confirmation',
+        basedOnRevision: Math.max(1, lifecycle?.revision || 1),
+        payload: recovery.confirmation || { mode: 'build_task_plan_confirmation' },
+        artifactRefs: [],
+        createdAt: now
+      },
+      startedAt: now,
+      updatedAt: now
+    }
+  }
   return Object.values(lifecycle?.activeExecutions || {}).find(
     (execution) =>
       execution.status === 'awaiting_user' &&
@@ -27,9 +97,42 @@ export function pendingDagConfirmationExecution(
 /** 在某个持久化会话中定位与 lifecycle execution 对应的 DAG 确认快照。 */
 export function pendingDagConfirmationWorkflow(
   messages: AgentChatMessage[],
-  execution: WorkbenchExecution | undefined
+  execution: WorkbenchExecution | undefined,
+  lifecycle?: ApplicationLifecycle
 ): WorkflowRunPayload | undefined {
   if (!execution) return undefined
+  const recovery = planningRefreshState(lifecycle)
+  if (
+    recovery?.source === 'pending' &&
+    recovery.status === 'awaiting_confirmation' &&
+    recovery.confirmation
+  ) {
+    return {
+      runId: recovery.workflowRunId || execution.runId,
+      threadId: recovery.threadId || execution.threadId,
+      events: [],
+      summary: {
+        status: 'requires_user_input',
+        phase: 'prepare_build_tasks',
+        message: recovery.message,
+        clarification: recovery.confirmation,
+        buildTaskPlanConfirmation: recovery.confirmation,
+        lifecycle
+      },
+      state: {
+        status: 'requires_user_input',
+        phase: 'prepare_build_tasks',
+        clarification: recovery.confirmation,
+        lifecycle
+      },
+      result: {
+        status: 'requires_user_input',
+        phase: 'prepare_build_tasks',
+        clarification: recovery.confirmation,
+        lifecycle
+      }
+    }
+  }
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const workflow = messages[index].workflow
     if (
@@ -45,9 +148,11 @@ export function pendingDagConfirmationWorkflow(
 
 /** 从当前会话最后一个 PlanningRun 读取 revision 最大的 DAG 生成快照。 */
 export function latestDagGenerationSnapshot(
-  messages: AgentChatMessage[]
+  messages: AgentChatMessage[],
+  lifecycle?: ApplicationLifecycle
 ): DagGenerationSnapshot | undefined {
   let latest: DagGenerationSnapshot | undefined
+  let reachedPreviousRun = false
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
     const message = messages[messageIndex]
     const steps = processStepsForDisplay(message.processSteps, message.workflow)
@@ -55,11 +160,35 @@ export function latestDagGenerationSnapshot(
     for (let stepIndex = steps.length - 1; stepIndex >= 0; stepIndex -= 1) {
       const snapshot = steps[stepIndex].dagGeneration
       if (!snapshot) continue
-      if (latest && latest.planningRunId !== snapshot.planningRunId) return latest
+      if (latest && latest.planningRunId !== snapshot.planningRunId) {
+        reachedPreviousRun = true
+        break
+      }
       latest = newerDagGenerationSnapshot(latest, snapshot)
     }
+    if (reachedPreviousRun) break
+  }
+  const recovery = planningRefreshState(lifecycle)
+  if (!recovery) return latest
+  if (recovery.source === 'pending' || recovery.status === 'planning_run_interrupted') {
+    return undefined
+  }
+  if (recovery.source === 'active_planning_run' && recovery.status === 'planning') {
+    return readRecoveredDagGenerationSnapshot(recovery.dagGeneration) || latest
+  }
+  if (
+    recovery.source === 'confirmed_plan' &&
+    recovery.planningRunId &&
+    latest?.planningRunId === recovery.planningRunId
+  ) {
+    return undefined
   }
   return latest
+}
+
+/** 复用 AG-UI 的严格 Snapshot parser 读取 Backend refresh 投影。 */
+function readRecoveredDagGenerationSnapshot(value: unknown): DagGenerationSnapshot | undefined {
+  return readDagGenerationSnapshot(value)
 }
 
 /** 仅在当前 Workflow 正处于 DAG 确认时读取任务计划，避免历史确认数据污染后续阶段。 */

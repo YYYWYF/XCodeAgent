@@ -951,6 +951,27 @@ export type WorkbenchExecution = {
   updatedAt: string
 }
 
+/** 页面刷新时由 Backend 按磁盘、进程注册表和 Formal 事实解析的 Planning 状态。 */
+export type PlanningRefreshState = {
+  schemaVersion: 'planning-refresh.v1'
+  source: 'pending' | 'active_planning_run' | 'confirmed_plan' | 'none'
+  status:
+    | 'awaiting_confirmation'
+    | 'planning'
+    | 'planning_run_interrupted'
+    | 'confirmed'
+    | 'idle'
+  planningRunId?: string
+  workflowRunId?: string
+  threadId?: string
+  draftDigest?: string
+  buildExecutionScope?: WorkflowBuildExecutionScope
+  dagGeneration?: unknown
+  confirmation?: WorkflowClarification
+  confirmedPlanDigest?: string
+  message: string
+}
+
 export type ExecutionResourceLock = {
   runId: string
   ownerPageId?: string
@@ -1002,7 +1023,7 @@ export type ApplicationLifecycle = {
     [key: string]: unknown
   }
   recovery?: Record<string, unknown>
-  extensions: Record<string, unknown>
+  extensions: Record<string, unknown> & { planningRefresh?: PlanningRefreshState }
 }
 
 export type WorkflowRunPayload = {

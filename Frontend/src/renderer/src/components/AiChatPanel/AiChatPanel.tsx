@@ -118,6 +118,7 @@ import {
   latestDagGenerationSnapshot,
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
+  planningRefreshInterruption,
   stageOutputPhase
 } from './stageOutputState'
 import {
@@ -2679,7 +2680,8 @@ export default function AiChatPanel({
   )
   const pendingDagWorkflow = pendingDagConfirmationWorkflow(
     pendingDagSessionMessages,
-    pendingDagExecution
+    pendingDagExecution,
+    applicationLifecycle
   )
 
   // lifecycle 只保存 Graph 身份；冷启动时按 run/thread 精确扫描持久化会话，恢复确认卡来源。
@@ -3090,9 +3092,10 @@ export default function AiChatPanel({
       ? latestWorkflowForDisplay
       : undefined
   const currentDagSnapshot = useMemo(
-    () => latestDagGenerationSnapshot(stageOutputMessages),
-    [stageOutputMessages]
+    () => latestDagGenerationSnapshot(stageOutputMessages, applicationLifecycle),
+    [applicationLifecycle, stageOutputMessages]
   )
+  const interruptedPlanningRun = planningRefreshInterruption(applicationLifecycle)
   const dagConfirmationPlan = useMemo(
     () => currentDagConfirmationPlan(stageOutputWorkflow),
     [stageOutputWorkflow]
@@ -3112,11 +3115,9 @@ export default function AiChatPanel({
     ],
     [dagConfirmationSubmissionError, stageOutputWorkflow]
   )
-  const currentStageOutputPhase = stageOutputPhase(
-    stageOutputWorkflow,
-    currentDagSnapshot,
-    dagConfirmationPlan
-  )
+  const currentStageOutputPhase = interruptedPlanningRun
+    ? 'generation'
+    : stageOutputPhase(stageOutputWorkflow, currentDagSnapshot, dagConfirmationPlan)
   const stageOutputSessionKey = pendingDagExecution
     ? `${application.id}:pending-dag:${pendingDagExecution.runId}`
     : `${application.id}:${activeTargetKey || 'free-chat'}:${activeSession?.key || draftKey}`
@@ -4662,7 +4663,14 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             {stageOutputMatchesSession ? (
-              rightPanel.view === 'confirmation' && dagConfirmationPlan ? (
+              interruptedPlanningRun ? (
+                <Alert
+                  message="任务规划已中断"
+                  description={interruptedPlanningRun.message}
+                  showIcon
+                  type="warning"
+                />
+              ) : rightPanel.view === 'confirmation' && dagConfirmationPlan ? (
                 <StageOutputPanel
                   confirmationDisabled={
                     loading ||
