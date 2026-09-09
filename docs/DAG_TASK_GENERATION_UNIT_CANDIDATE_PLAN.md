@@ -125,8 +125,11 @@ build-task-plan.json
 2. PendingPlan 永远不能成为下一 Run baseline。
 3. Build 永远只读取 ConfirmedPlan。
 4. LangGraph checkpoint 只是 Workflow projection，不是正式 DAG 权威。
-5. PlanningRun 成功写 Pending 后即可销毁。
+5. PlanningRun 成功写 Pending 后即失去执行权威；Pending 成为待确认权威。允许保留轻量 PlanningRun 投影用于刷新恢复、身份校验和清理，但不得据此继续生成。
 6. 未经用户确认不得修改正式 `build-task-plan.json`。
+7. 同一应用任一时刻最多存在一个 active PlanningRun 或一个 PendingPlan；不同 Scope 不得并行生成或等待确认。
+8. Abandon 结束本次 Workflow execution，但保留聊天记录和已有 ConfirmedPlan。
+9. Regenerate 删除旧 Pending 后创建全新 PlanningRun；后续失败不恢复旧 Pending。
 
 ---
 
@@ -1661,10 +1664,12 @@ DraftIdentity
 
 `draft_digest` 对去除自身字段后的 canonical PendingPlan 计算。
 
-Pending 成功写入：
+Pending 成功写入后：
 
 ```text
-delete planning-run.json
+PlanningRun.status = awaiting_confirmation
+PendingPlan 成为唯一待确认权威
+PlanningRun 仅保留轻量投影，不再继续执行
 ```
 
 ---
@@ -1720,24 +1725,53 @@ Abandon：
 ```text
 verify identity
 ↓
+persist abandoned terminal marker
+↓
 delete matching Pending
+↓
+delete matching PlanningRun projection
+↓
+end current Workflow execution and release lifecycle/resource/session input locks
 ↓
 Formal unchanged
 ```
 
+这里的“结束”只指当前 Workflow execution，不删除或关闭聊天会话，也不清理聊天记录。
+
 Regenerate：
 
 ```text
-verify Pending
+receive structured action=regenerate + exact DraftIdentity
 ↓
-delete Pending
+verify and delete matching Pending (commit point)
 ↓
 load current ConfirmedPlan
 ↓
-create new PlanningRun
+return to prepare_build_tasks
+↓
+create new PlanningRun with a new planning_run_id
+↓
+generate + assemble + Global Validate
+↓
+success: write new Pending and await confirmation
+failure: keep failure state; do not restore old Pending
 ```
 
 旧 Candidate / Pending 不恢复。
+
+`regenerate` 是 AG-UI 结构化 Planning result 动作，不是普通自然语言请求，也不复用 Unit Local Retry 或 Global Repair 的内部动作。生产接入必须同时更新 request normalization、Graph resume routing、lifecycle、前端类型与确认卡。
+
+## 38.1 同一应用全局互斥
+
+PlanningRun 和 PendingPlan 使用工作区唯一存储路径，因此互斥边界是 application/workspace，而不是 page 或 Unit：
+
+```text
+no active PlanningRun
+AND
+no PendingPlan awaiting confirmation
+```
+
+满足上述条件后才能开始新的 DAG generation。不同 page、endpoint、data_source 或 application Scope 不得同时处于 generating 或 awaiting_confirmation；新请求必须被拒绝或引导用户先 Cancel/Abandon 当前运行，不能采用 last-writer-wins 覆盖。
 
 ---
 
@@ -1762,6 +1796,14 @@ Abandon
 ```
 
 二者不得混淆。
+
+取消粒度固定为 Workflow/PlanningRun 级：用户不能单独取消某个 Unit。Unit 级 `aborted` 只是整轮取消传播后的内部结果，不是产品动作。
+
+# 39.1 页面刷新与运行保持
+
+第一版只恢复 PlanningRun/Pending/ConfirmedPlan 的权威状态投影，不保证页面刷新后原 DAG 请求继续执行，也不从轻量 `planning-run.json` 恢复 Candidate 或 Scheduler。页面刷新、应用切换、Electron 退出或其他传输断开均允许使 active Workflow/PlanningRun 结束。
+
+如果未来要求普通页面刷新后继续运行，必须先把 Workflow execution 从 SSE 响应协程中解耦，并设计后台任务所有权、事件重放/重新订阅、运行终止判定和跨进程恢复；该能力明确延期，不属于本轮 Regenerate 接入。
 
 ---
 
@@ -1846,6 +1888,8 @@ Build Scheduler general redesign
 Semantic review model
 frontend:data 全面重构
 backend:bootstrap 多数据源专项
+页面刷新后的后台脱离执行、事件重放或 Candidate 断点续跑
+Unit 级用户取消
 ```
 
 ---

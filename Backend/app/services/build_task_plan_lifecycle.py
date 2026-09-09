@@ -287,7 +287,7 @@ def confirm_pending_build_task_plan(
     current_inputs 必须由服务端从当前正式输入重新构造，使用 Planning 相同的冻结 DTO
     和摘要算法，不接受前端指纹或 checkpoint。只在同一后端进程内串行化 Pending writer
     和 Confirm；调用方负责正式输入稳定性，不提供跨进程或外部编辑器事务。
-    当前服务尚未接入旧 tasks.py/AG-UI adapter，不提供新的 HTTP 产品接口。
+    当前生产 Graph 通过 AG-UI adapter 调用本服务，不另设 JSON/REST 产品接口。
     """
 
     # 延迟导入避免 task_documents 的 DraftIdentity 类型依赖形成循环。

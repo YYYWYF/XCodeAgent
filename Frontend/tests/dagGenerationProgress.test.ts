@@ -620,7 +620,38 @@ test('Confirm 动作绑定 Backend DraftIdentity 供 Graph 精确确认', () => 
   })
 })
 
-test('Confirm/Abandon 动作缺少服务端 DraftIdentity 时 fail closed', () => {
+test('Regenerate 动作绑定旧 Pending 身份并通过 Graph 协议提交', () => {
+  const workflow = {
+    runId: 'workflow-regenerate',
+    threadId: 'thread-regenerate',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      clarification: {
+        mode: 'build_task_plan_confirmation',
+        draftIdentity: {
+          planningRunId: 'planning-old',
+          draftDigest: 'e'.repeat(64)
+        }
+      }
+    }
+  } as unknown as WorkflowRunPayload
+
+  assert.deepEqual(
+    bindDagConfirmationDraftIdentity(workflow, {
+      mode: 'build_task_plan_confirmation',
+      action: 'regenerate'
+    }),
+    {
+      mode: 'build_task_plan_confirmation',
+      action: 'regenerate',
+      planningRunId: 'planning-old',
+      draftDigest: 'e'.repeat(64)
+    }
+  )
+})
+
+test('Confirm/Abandon/Regenerate 动作缺少服务端 DraftIdentity 时 fail closed', () => {
   const workflow = {
     runId: 'workflow-confirm',
     threadId: 'thread-confirm',
@@ -632,7 +663,8 @@ test('Confirm/Abandon 动作缺少服务端 DraftIdentity 时 fail closed', () =
   } as unknown as WorkflowRunPayload
   const actions = [
     { mode: 'build_task_plan_confirmation', action: 'confirm' },
-    { mode: 'build_task_plan_confirmation', action: 'abandon' }
+    { mode: 'build_task_plan_confirmation', action: 'abandon' },
+    { mode: 'build_task_plan_confirmation', action: 'regenerate' }
   ] as const
 
   for (const action of actions) {
@@ -640,7 +672,7 @@ test('Confirm/Abandon 动作缺少服务端 DraftIdentity 时 fail closed', () =
   }
 })
 
-test('DraftIdentity 不完整时 Confirm/Abandon 同样 fail closed', () => {
+test('DraftIdentity 不完整时 Planning result 动作同样 fail closed', () => {
   const workflow = {
     runId: 'workflow-incomplete',
     threadId: 'thread-incomplete',
@@ -676,7 +708,7 @@ test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控�
         draftDigest: 'c'.repeat(64),
         confirmation: {
           mode: 'build_task_plan_confirmation',
-          actionValues: ['confirm', 'abandon'],
+          actionValues: ['confirm', 'abandon', 'regenerate'],
           draftIdentity: {
             planningRunId: 'planning-pending',
             draftDigest: 'c'.repeat(64)
@@ -703,7 +735,11 @@ test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控�
 
   const pendingExecution = pendingDagConfirmationExecution(pendingLifecycle)
   const pendingWorkflow = pendingDagConfirmationWorkflow([], pendingExecution, pendingLifecycle)
-  assert.deepEqual(pendingWorkflow?.summary.clarification?.actionValues, ['confirm', 'abandon'])
+  assert.deepEqual(pendingWorkflow?.summary.clarification?.actionValues, [
+    'confirm',
+    'abandon',
+    'regenerate'
+  ])
   assert.equal(pendingDagConfirmationExecution(generatingLifecycle), undefined)
 })
 

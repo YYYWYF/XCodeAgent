@@ -107,7 +107,8 @@ def workflow_capabilities() -> dict[str, Any]:
                     "修复重试复用原问题快照和失败前轮次。"
                 ),
                 "build_task_plan_confirmation": (
-                    "通过 clarificationAnswers 提交只读 Build 任务计划的 confirm 动作；abandon 走 plan control。"
+                    "通过 clarificationAnswers 提交只读 Build 任务计划的 confirm/regenerate 动作；"
+                    "abandon 走 plan control。"
                 ),
                 "test_phase_confirmation": (
                     "通过 clarificationAnswers.test_phase_confirmation 提交结构化 confirm 动作；"
@@ -158,7 +159,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "requestField": "forwardedProps.planControlAction",
             "actions": ["stop", "end", "abandon"],
             "abandonIdentityFields": ["planningRunId", "draftDigest"],
-            "abandonSemantics": "仅删除精确匹配的 PendingPlan，不取消 Scheduler 或结束 execution。",
+            "abandonSemantics": "删除精确匹配的 PendingPlan，结束对应 Workflow execution；不取消 active Scheduler。",
         },
         "clarificationModes": {
             "confirmed_baseline_error": {

@@ -1,4 +1,10 @@
-import { CodeOutlined, DeleteOutlined, FileTextOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import {
+  CodeOutlined,
+  DeleteOutlined,
+  FileTextOutlined,
+  PlayCircleOutlined,
+  ReloadOutlined
+} from '@ant-design/icons'
 import { Alert, Button, Collapse, Popconfirm, Space, Typography } from 'antd'
 import type {
   WorkflowBuildTargetReview,
@@ -113,6 +119,23 @@ export default function BuildTaskPlanConfirmation({
           >
             <Button danger disabled={disabled} icon={<DeleteOutlined />} size="small">
               放弃当前规划
+            </Button>
+          </Popconfirm>
+          {/* 限制长文案宽度，并从按钮中心锚定右上布局，避免右侧面板防溢出后箭头偏移。 */}
+          <Popconfirm
+            arrowPointAtCenter
+            cancelText="继续确认"
+            disabled={disabled}
+            okText="重新生成"
+            onConfirm={() =>
+              onSubmit({ mode: 'build_task_plan_confirmation', action: 'regenerate' })
+            }
+            overlayStyle={{ maxWidth: 'min(360px, calc(100vw - 24px))' }}
+            placement="topRight"
+            title="重新生成会先丢弃当前规划；若生成失败，当前规划不会恢复。确定继续吗？"
+          >
+            <Button disabled={disabled} icon={<ReloadOutlined />} size="small">
+              重新生成
             </Button>
           </Popconfirm>
           <Button

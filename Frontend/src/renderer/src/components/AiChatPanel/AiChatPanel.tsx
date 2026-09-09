@@ -3806,7 +3806,7 @@ export default function AiChatPanel({
     try {
       setDagConfirmationSubmissionError('')
       const identity = await loadSessionIdentity(pendingDagSession.id)
-      // Confirm 与 Abandon 都必须精确绑定服务端 DraftIdentity；缺失时 fail closed，
+      // Confirm、Abandon 与 Regenerate 都必须精确绑定服务端 DraftIdentity；缺失时 fail closed，
       // 绝不提交无身份的 Graph 请求，否则 Backend 只会按 stale 拒绝。
       const identityBoundAction = bindDagConfirmationDraftIdentity(
         pendingDagWorkflow,
@@ -3822,7 +3822,7 @@ export default function AiChatPanel({
         {
           sessionIdentity: identity,
           onExecutionStarted:
-            action.action === 'confirm'
+            action.action !== 'abandon'
               ? () => {
                   void handleOpenChatSession(pendingDagSession.id)
                 }
@@ -3833,7 +3833,9 @@ export default function AiChatPanel({
         setDagConfirmationSubmissionError(
           action.action === 'confirm'
             ? '确认提交失败，任务计划仍保持待确认；请重试或放弃流程。'
-            : '放弃提交失败，当前任务规划仍保持待确认；请重试。'
+            : action.action === 'regenerate'
+              ? '重新生成启动失败；请刷新查看当前任务规划状态。'
+              : '放弃提交失败，当前任务规划仍保持待确认；请重试。'
         )
       }
     } catch (error) {
@@ -3842,7 +3844,9 @@ export default function AiChatPanel({
           error,
           action.action === 'confirm'
             ? '确认提交失败，任务计划仍保持待确认'
-            : '放弃提交失败，当前任务规划仍保持待确认'
+            : action.action === 'regenerate'
+              ? '重新生成失败；旧任务规划可能已被丢弃，请刷新查看最新状态'
+              : '放弃提交失败，当前任务规划仍保持待确认'
         )
       )
     }

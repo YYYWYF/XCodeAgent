@@ -241,7 +241,7 @@ function buildTaskPlanConfirmationAction(
   const value = answers.build_task_plan_confirmation
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const action = String((value as Record<string, unknown>).action || '')
-  if (!['confirm', 'abandon'].includes(action)) return undefined
+  if (!['confirm', 'abandon', 'regenerate'].includes(action)) return undefined
   const planningRunId = String((value as Record<string, unknown>).planningRunId || '').trim()
   const draftDigest = String((value as Record<string, unknown>).draftDigest || '').trim()
   return {
@@ -258,7 +258,8 @@ function buildTaskPlanConfirmationMessage(
 ): string {
   const messages: Record<WorkflowBuildTaskPlanConfirmation['action'], string> = {
     confirm: '已确认 Build DAG，请进入 Build。',
-    abandon: '放弃当前待确认 Build DAG。'
+    abandon: '放弃当前待确认 Build DAG。',
+    regenerate: '丢弃当前待确认 Build DAG，并重新生成任务规划。'
   }
   return messages[action]
 }
@@ -1295,9 +1296,10 @@ export function useWorkflowConversation({
         originalRequest,
         resumeState: workflow,
         buildExecutionScope: workflowBuildScope,
+        resumeExecutionRunId: workflow.runId,
         onExecutionStarted: options?.onExecutionStarted,
         sessionIdentity: options?.sessionIdentity,
-        titleFrom: 'Build DAG 确认',
+        titleFrom: action.action === 'regenerate' ? '重新生成 Build DAG' : 'Build DAG 确认',
         conversation: false
       })
     }

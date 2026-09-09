@@ -95,20 +95,18 @@ deterministic 策略、授权资源 executor、完整指纹 Task ID/capability �
 输出没有 `confirmation_status`/`confirmed_at`，不得把它当作 Pending 或 Build authority。
 内容/Global/基础设施/platform 失败抛 `DagPlanningError(issues, snapshot)`，没有失败 Plan 返回值；
 前置输入失败的 snapshot 为 None。Controller 持久化/发布及取消保留原异常语义。
-Workflow Cancel 与 Pending Abandon 仍是两条独立路径：前者取消活动 task 并关闭
-PlanningRun，后者只删除精确身份匹配的 PendingPlan。
+Workflow Cancel 与 Pending Abandon 仍是两条独立路径：前者取消整个活动 Workflow/PlanningRun，
+后者精确删除待确认 PendingPlan、记录 abandoned 终态并结束对应 Workflow execution。两者都不提供 Unit 级用户取消。
 
 ## 与现有 LangGraph 入口的关系
 
-现有 `tasks.py::prepare_build_tasks` 仍包含旧整批生成、正式路径 pending 写入和确认门禁，
-其 workflow 路由依赖该确认流程。T6.4 排除 Pending/Confirm，因此本次不切换这个生产入口，
-也不增加能够绕过确认直接进入 Build 的新路由。T11.6.2 新增异步
-`build_task_planning_service.run_mainline_planning` 作为后续 production Graph adapter 的唯一
-Planning 业务边界：它接收带 Workflow 身份的 `MainlinePlanningInputs`，由服务端分配
+生产 `task_planning_adapter.py::prepare_build_tasks` 已通过异步
+`build_task_planning_service.run_mainline_planning` 进入本 orchestrator；`tasks.py` 只保留历史实现和共享 helper，
+不再是默认 Planning 权威。mainline service 是 production Graph adapter 的唯一 Planning 业务边界：它接收带 Workflow 身份的 `MainlinePlanningInputs`，由服务端分配
 PlanningRun ID，等待本 orchestrator 返回 validated assembly 后，才通过现有唯一 Pending
 writer 写入并回读自校验 DraftIdentity。规划失败或取消不会调用 Pending writer，Formal
-ConfirmedPlan 保持不变。后续切流时，`tasks.py` 应只准备 authoritative inputs、调用该
-service 并投影 Graph state；不得自行创建 Controller 或 Scheduler。
+ConfirmedPlan 保持不变。Confirm/Abandon 已由独立 lifecycle 接入；任何调用方都不得自行创建 Controller 或 Scheduler，
+也不得跳过 Pending 确认直接进入 Build。
 
 `plan_dag_sequential` 自身唯一允许的文件写入是 Controller 的
 `.xcodeagent/plans/planning-run.json`；它不写 Pending、ConfirmedPlan、TechnicalPlan
@@ -116,6 +114,21 @@ service 并投影 Graph state；不得自行创建 Controller 或 Scheduler。
 Frontend。
 FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Attempt 拒收与 Scheduler cancellation correctness，
 不修改前端 Cancel UI。
+
+## Planning result 生命周期约束
+
+同一应用任一时刻最多只能有一个 active PlanningRun 或一个 awaiting-confirmation PendingPlan，
+页面、Endpoint、data source 和 application Scope 共用该互斥域。这个限制位于 Planning 外层生命周期，
+不能依赖 Unit Scheduler 的三 worker 并发上限或工作区唯一文件的覆盖顺序实现。
+
+待确认界面使用精确 `planning_run_id + draft_digest`：
+
+- `confirm` 原子提升 Pending 为 Formal，再进入 Build；
+- `abandon` 删除旧 Pending并结束当前 Workflow execution，聊天记录和已有 Formal 保留；
+- `regenerate` 是新增的 AG-UI 结构化动作：先不可回滚地删除旧 Pending，再回到 `prepare_build_tasks`，由服务端分配新 PlanningRun ID 并完整执行本 orchestrator。成功写新 Pending；失败保留失败事实且不恢复旧 Pending。
+
+页面刷新只从服务端投影恢复 PlanningRun/Pending/Formal 状态，不承诺原 DAG 请求继续执行。
+后台脱离执行、SSE 事件重放/重新订阅和 Candidate 断点恢复不属于当前合同。
 
 ## Frozen Contract Catalog
 

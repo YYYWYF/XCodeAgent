@@ -18,6 +18,8 @@ EntitySourceBinding 只负责实体的数据源类型与物理来源绑定，保
 
 生命周期边界签发的 `developmentContinuation` 是协议控制结果，必须完整保留到节点事件、StateSnapshot 和 RUN_FINISHED，不能被最终 Graph checkpoint 覆盖。前端仅从当前公开 summary 读取，运行完成时将续接卡和确认结果一起持久化，不依赖当前 UI 选择或挂载 effect。续接请求解析只读校验，token 消费和原 execution 的接替在同一生命周期锁及同一次写盘内完成；新运行未登记成功时 token 保持可重试。页面/API开发、EntitySourceBinding、Build DAG 确认以及后续执行都使用 `/workflow/run` 的完整 AG-UI 生命周期；普通协作继续使用独立 `/conversation/run`。
 
+Build DAG 生成成功后只产生 `.xcodeagent/plans/build-task-plan.pending.json`，已有正式 `.xcodeagent/plans/build-task-plan.json` 保持不变。确认卡是只读 Planning-result 门禁：`confirm` 精确提升当前 Pending 并进入 Build；`abandon` 删除当前 Pending、结束对应 Workflow execution，但保留聊天会话和已有正式计划；新增的结构化 `regenerate` 先删除旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun，成功后生成新的 Pending，任一后续失败都不恢复旧 Pending。同一应用的所有页面和 Scope 共用一个 DAG Planning/待确认互斥域；取消只作用于整个 Workflow/PlanningRun，不提供 Unit 级取消。页面刷新只恢复服务端权威状态投影，刷新后继续执行与事件补发不作为当前强保证。
+
 This flow uses the independent `/application-development-planning/run` AG-UI endpoint and its own thread id. It never enters or resumes the primary LangGraph workflow. A normal generation requires one model call; if the model returns genuine blocking questions, the answers are supplied to a second generation call. Confirmation is deterministic and model-free.
 
 ## Context Budget

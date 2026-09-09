@@ -425,7 +425,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             {"type": "application", "targetId": "application"},
         )
 
-        self.assertEqual(payload["actionValues"], ["confirm", "abandon"])
+        self.assertEqual(payload["actionValues"], ["confirm", "abandon", "regenerate"])
         self.assertNotIn("editableFields", payload)
         self.assertNotIn("tasks", payload["taskPlan"])
 
@@ -474,7 +474,10 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         )
 
         clarification = result["clarification"]
-        self.assertEqual(clarification["actionValues"], ["confirm", "abandon"])
+        self.assertEqual(
+            clarification["actionValues"],
+            ["confirm", "abandon", "regenerate"],
+        )
         self.assertIn("scopeTasks", clarification["taskPlan"])
         self.assertNotIn("tasks", clarification["taskPlan"])
 

@@ -2084,7 +2084,7 @@ def _clarification_answers_to_text(value: Any) -> str:
 def _build_task_plan_confirmation(value: Any) -> dict[str, Any]:
     """提取 DAG 确认动作，并转发服务端签发的精确 DraftIdentity。
 
-    只接受 confirm；abandon 仍由计划控制流终止，不进入 Graph。身份字段只做
+    只接受 confirm 或 regenerate；abandon 仍由计划控制流终止，不进入 Graph。身份字段只做
     透传，权威性由 Backend lifecycle 用重建输入复验，绝不信任前端指纹。
     """
 
@@ -2094,7 +2094,7 @@ def _build_task_plan_confirmation(value: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     action = _optional_text(raw.get("action")).lower()
-    if action != "confirm":
+    if action not in {"confirm", "regenerate"}:
         return {}
     confirmation: dict[str, Any] = {
         "mode": "build_task_plan_confirmation",

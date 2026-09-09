@@ -1,4 +1,17 @@
-# T7.3 Confirm Promotion
+# Build Task Plan Confirm / Abandon / Regenerate 生命周期
+
+## 当前生产状态和目标动作
+
+生产 Workflow 已默认绑定 async Planning/Confirm adapter：生成成功只写
+`build-task-plan.pending.json`，Confirm 才提升到 `build-task-plan.json`。确认卡的目标动作集合为：
+
+```text
+confirm
+abandon
+regenerate
+```
+
+`confirm`、`abandon` 与 `regenerate` 均已接入当前生产链路。Regenerate 通过 AG-UI 结构化动作恢复 `prepare_build_tasks`，不得退回普通自然语言触发。
 
 ## 接口
 
@@ -56,17 +69,47 @@ Pending writer 和 Confirm 共用进程内同步锁，保证同进程的重复�
 且本服务清理 Pending 时 writer 不会插入新文件。不提供跨进程、外部编辑器或
 其他正式输入写入者的事务锁；原子替换也不等同于两个文件的联合事务。
 
-现有 `tasks.py` 仍使用旧整批 Planning 与 Formal-path pending/confirm。
-本 Task 实现独立服务及新链路集成测试，未切换生产 Graph、修改 AG-UI 请求或
-前端身份传递。生产接入需要一起更新 Pending 生产者和 Confirm 调用方，不能只
-切换单侧。本 Task 不实现 Abandon、Regenerate、前端 UI redesign 或下一 Task。
+生产 Graph 已通过 `task_planning_adapter.py` 使用独立 Pending writer 和 Confirm authority；
+`tasks.py` 只保留 legacy 实现以及被 adapter 复用的前置校验、确认投影和 Build 兼容 helper。
+Abandon 已通过 plan-control AG-UI 流接入：它只收口匹配 Pending 对应的 Workflow execution，
+不取消 active Scheduler、不删除聊天记录，也不修改 Formal。
+
+## Regenerate 当前合同
+
+Regenerate 请求必须携带：
+
+```text
+action = regenerate
+planning_run_id
+draft_digest
+```
+
+处理顺序固定为：
+
+1. 精确验证当前 Pending DraftIdentity。
+2. 删除匹配 Pending；该删除是不可回滚提交点。
+3. 回到 `prepare_build_tasks`，重新加载当前 ConfirmedPlan 和最新正式输入。
+4. 分配新的 `planning_run_id`，创建全新 PlanningRun；不得继承旧 Candidate、Local Retry 或 Global Repair 状态。
+5. 完成 Unit generation、Scope Assembly 和 Global Validation 后写入新的 Pending，并再次等待确认。
+6. 任一后续步骤失败时保留失败事实，但不恢复旧 Pending；Formal 始终保持不变。
+
+Regenerate 是 AG-UI 结构化动作，并与 Confirm 一样绑定精确 DraftIdentity。前端、request normalization、Graph resume、lifecycle 和 Planning refresh 投影已经按一个端到端合同接入。
+
+## 应用级互斥和刷新边界
+
+同一应用不允许不同页面或其他 Scope 同时处于 DAG generating 或 awaiting confirmation。
+开始新 PlanningRun 前必须确认当前应用既没有 active PlanningRun，也没有待确认 PendingPlan；不能依赖工作区唯一文件的覆盖顺序解决并发。
+
+取消只提供 Workflow/PlanningRun 级能力，不提供 Unit 级用户取消。Pending 阶段使用 Abandon，不使用 Cancel。
+
+当前刷新能力只恢复权威状态投影，不保证刷新后请求继续运行。后台脱离执行、SSE 重连/事件重放和 Candidate 断点续跑属于后续架构能力，本轮不实现。
 
 ## 测试
 
 在 `Backend` 目录使用现有 unittest runner：
 
 ```sh
-.venv/bin/python -m unittest tests.test_build_task_plan_lifecycle tests.test_pending_build_task_plan_documents
+.venv/bin/python -m unittest tests.test_build_task_plan_lifecycle tests.test_build_task_plan_regenerate tests.test_pending_build_task_plan_documents
 .venv/bin/python -m unittest tests.test_build_task_plan_recovery tests.test_agent_file_documents
 .venv/bin/python -m unittest tests.test_build_task_planner tests.test_build_unit_skeleton tests.test_prepare_build_tasks_guard tests.test_build_dag_v3_contract tests.test_page_build_context_resolver
 .venv/bin/python -m unittest tests.test_application_planning_interrupts tests.test_application_planning_structured_actions tests.test_development_continuation tests.test_development_continuation_stream

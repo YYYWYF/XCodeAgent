@@ -196,7 +196,7 @@ export default function WorkflowRunCard({
     workflow.summary?.testTarget ||
     workflow.state?.testTarget) as WorkflowTestTarget | undefined
   const dagTaskPlan = clarification?.taskPlan as WorkflowBuildTaskPlan | undefined
-  // Confirm/Abandon 必须精确绑定服务端 DraftIdentity；缺失时禁止提交（fail closed）。
+  // Confirm/Abandon/Regenerate 必须精确绑定服务端 DraftIdentity；缺失时禁止提交（fail closed）。
   const dagDraftIdentity = currentDagConfirmationDraftIdentity(workflow)
   const dagConfirmationErrors = dagDraftIdentity
     ? clarification?.errors

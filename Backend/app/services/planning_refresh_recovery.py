@@ -211,7 +211,7 @@ def _pending_confirmation(pending: dict[str, Any], identity: Any) -> dict[str, A
         "mode": "build_task_plan_confirmation",
         "status": "requires_user_input",
         "message": "Build DAG 已生成，请确认任务规划后再进入 Build。",
-        "actionValues": ["confirm", "abandon"],
+        "actionValues": ["confirm", "abandon", "regenerate"],
         "confirmationStatus": "pending",
         "buildExecutionScope": scope,
         "draftIdentity": {

@@ -1016,7 +1016,7 @@ def _build_task_plan_confirmation_payload(
         "mode": "build_task_plan_confirmation",
         "status": "requires_user_input",
         "message": "Build DAG 已生成，请确认任务规划后再进入 Build。",
-        "actionValues": ["confirm", "abandon"],
+        "actionValues": ["confirm", "abandon", "regenerate"],
         "confirmationStatus": build_task_plan.get("confirmation_status") or "pending",
         "buildExecutionScope": build_execution_scope or build_task_plan.get("build_execution_scope") or {},
         "taskPlan": {

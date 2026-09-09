@@ -223,6 +223,49 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["draft_digest"], identity_b["draft_digest"])
         self.assertTrue(result["build_task_plan_confirmation"]["errors"])
 
+    async def test_regenerate_resume_consumes_old_pending_and_projects_new_identity(self) -> None:
+        """结构化 Regenerate 应回到同一节点并生成全新 Pending identity。"""
+
+        graph = build_graph(checkpointer=InMemorySaver())
+        thread = "thread-regenerate-cutover"
+        _, old_identity = await self._generate_pending(graph, thread)
+
+        with patch(
+            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            return_value=self.readiness,
+        ), patch(
+            "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
+            new=self._model_stub(),
+        ), patch(
+            "app.services.dag_planning_regeneration._new_planning_run_id",
+            return_value="planning-regenerated-cutover",
+        ):
+            regenerated = await graph.ainvoke(
+                self._state(
+                    build_task_plan_confirmation={
+                        "mode": "build_task_plan_confirmation",
+                        "action": "regenerate",
+                        "planning_run_id": old_identity["planning_run_id"],
+                        "draft_digest": old_identity["draft_digest"],
+                    }
+                ),
+                config={"configurable": {"thread_id": thread}},
+            )
+
+        pending = load_pending_build_task_plan(self._state())
+        new_identity = validate_pending_self_digest(pending)
+        self.assertEqual(regenerated["status"], "requires_user_input")
+        self.assertEqual(new_identity.planning_run_id, "planning-regenerated-cutover")
+        self.assertNotEqual(new_identity.planning_run_id, old_identity["planning_run_id"])
+        self.assertNotEqual(new_identity.draft_digest, old_identity["draft_digest"])
+        self.assertEqual(regenerated["planning_run_id"], new_identity.planning_run_id)
+        self.assertEqual(regenerated["draft_digest"], new_identity.draft_digest)
+        self.assertEqual(
+            regenerated["build_task_plan_confirmation"]["actionValues"],
+            ["confirm", "abandon", "regenerate"],
+        )
+        self.assertFalse(build_task_plan_json_path(self._state()).exists())
+
     async def test_non_confirm_action_never_reaches_confirm_service(self) -> None:
         """非 confirm 的 build_task_plan_confirmation 必须 fail closed，不提升 Formal。"""
 
@@ -290,7 +333,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_request_parser_accepts_snake_case_and_rejects_abandon(self) -> None:
-        """兼容 snake_case 身份；abandon 仍由计划控制流处理，不进 Graph。"""
+        """兼容 snake_case 身份和 Regenerate；abandon 仍由计划控制流处理。"""
 
         digest = "c" * 64
         forwarded = workflow_run_inputs(
@@ -312,6 +355,28 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
             forwarded_confirmation["planning_run_id"], "planning-forward-2"
         )
         self.assertEqual(forwarded_confirmation["draft_digest"], digest)
+        regenerated = workflow_run_inputs(
+            {
+                "request": "重新生成任务规划",
+                "clarificationAnswers": {
+                    "build_task_plan_confirmation": {
+                        "action": "regenerate",
+                        "planningRunId": "planning-forward-2",
+                        "draftDigest": digest,
+                    }
+                },
+            }
+        )
+        self.assertEqual(regenerated["resume_from"], "prepare_build_tasks")
+        self.assertEqual(
+            regenerated["resume_values"]["build_task_plan_confirmation"],
+            {
+                "mode": "build_task_plan_confirmation",
+                "action": "regenerate",
+                "planning_run_id": "planning-forward-2",
+                "draft_digest": digest,
+            },
+        )
         abandoned = workflow_run_inputs(
             {
                 "request": "放弃任务规划",
