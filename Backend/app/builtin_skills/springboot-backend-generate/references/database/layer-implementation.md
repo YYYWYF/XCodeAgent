@@ -27,8 +27,8 @@ configuration work here.
 2. Locate the injected `common` infrastructure and reuse its actual classes and packages.
 3. Determine whether the current stage is already complete; leave it unchanged when it
    fully satisfies the contract.
-4. Implement only the minimum missing work for the current object, repository, service, or
-   Controller stage.
+4. Implement only the minimum missing work for the current objects, repository, service, or
+   Controller stage. The objects stage also owns its Converter files.
 5. Return the exact structured completion, failure, or change-request result required by
    the outer Build flow.
 
@@ -62,12 +62,14 @@ configuration work here.
 - Use explicit MyBatis-Plus mapping annotations when a database column and Java field have
   different names.
 
-### DTO, Converter, and Assembler
+### DTO and Converter
 
 - Include only fields genuinely required by the current API Contract and application
   service.
-- Use a Converter for PO/Entity mapping and an Assembler for Entity/DTO mapping. Do not
-  duplicate mapping logic in Controllers.
+- Keep PO, Entity, DTO, and their Converter in the same objects task. The Converter owns
+  both PO/Entity and Entity/DTO conversion; do not emit a separate Converter stage or
+  duplicate conversion logic in Controllers. Organize the object work as PO -> Entity ->
+  DTO before completing the typed conversion edges.
 - Prefer the project's existing MapStruct configuration and component model.
 
 ### Repository
@@ -124,7 +126,7 @@ normally provides these stable responsibilities:
   failures, and request-body parsing failures into unified error responses.
 - A `WebMvcConfigurer`-based CORS configuration: the template-level cross-origin policy.
 
-These files are read-only infrastructure owned by the template. Endpoint object,
+These files are read-only infrastructure owned by the template. Endpoint objects,
 repository, service, and Controller tasks must not copy, rename, or modify them, and must
 not create a second implementation with the same responsibility:
 

@@ -335,7 +335,7 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 
 任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面内容实现和整体集成验证。内部 DAG 保留 API、共享组件、权限和页面实现等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内；菜单、路由、页面占位和项目级测试不属于 DAG 任务。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
 
-该节点通过 `agents/main/task_preparer.py` 调用 direct ChatModel 生成任务编排建议，再由确定性 schema 编译结构字段为静态 Build DAG，不改变候选的语义边界。`build_task_plan.workspace_analysis` 优先使用模型返回的结构化摘要；缺省时由 `WorkspaceSnapshot` 兜底，并记录 `workspace_snapshot_ref` 以便恢复和审计。模型未返回可解析任务、越过平台职责边界或生成无效 DAG 时，节点会把具体错误自动回灌模型并有界重生成；重试耗尽才进入平台失败处理，不把任务拆分规则交给用户，也不能用硬编码任务清单代替模型规划结果。
+该节点通过 `agents/main/task_preparer.py` 调用 direct ChatModel 生成任务编排建议，再由确定性 schema 编译结构字段为静态 Build DAG，不改变候选的语义边界。模型只返回 `tasks`；`build_task_plan.workspace_analysis` 始终由 `WorkspaceSnapshot` 确定性生成，并记录 `workspace_snapshot_ref` 以便恢复和审计。任务并行性由平台依据依赖和目标文件冲突计算，模型不得输出并行字段。模型未返回可解析任务、越过平台职责边界或生成无效 DAG 时，节点会把具体错误自动回灌模型并有界重生成；重试耗尽才进入平台失败处理，不把任务拆分规则交给用户，也不能用硬编码任务清单代替模型规划结果。
 
 调用模型生成任务 DAG 前，节点必须只读检查已确认的 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、模板生成 manifest、当前 PageImplementationContract、Endpoint 契约和 Endpoint API 设计。任一前置条件未满足时返回可定位错误，不修改上游正式产物。
 

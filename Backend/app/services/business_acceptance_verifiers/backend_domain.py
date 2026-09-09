@@ -24,8 +24,14 @@ from app.services.business_acceptance_verifiers.java_ast import JavaType
 from app.services.business_acceptance_verifiers.java_inspection_support import _dict_items, _inspect_or_block
 
 
-def verify_domain_mapping_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
-    """按 Endpoint API 设计中的局部实体语义验证对象、表列和转换链。"""
+def verify_objects_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
+    """按 Endpoint API 设计联合验证对象字段、表列绑定和转换链。"""
+
+    return _verify_domain_source(files, expected)
+
+
+def _verify_domain_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
+    """解析同一 objects 交付物的全部 Java 文件并执行分层检查。"""
 
     model = _inspect_or_block(files)
     if isinstance(model, dict):
@@ -41,7 +47,11 @@ def verify_domain_mapping_source(files: dict[str, str], expected: dict[str, Any]
     endpoints = _dict_items(expected.get("endpoints"))
     for entity in entities:
         entity_errors, entity_blockers, facts = _verify_entity(
-            entity, endpoints, data_types, conversion_types, len(entities)
+            entity,
+            endpoints,
+            data_types,
+            conversion_types,
+            len(entities),
         )
         errors.extend(entity_errors)
         blockers.extend(entity_blockers)
@@ -49,12 +59,13 @@ def verify_domain_mapping_source(files: dict[str, str], expected: dict[str, Any]
     if blockers:
         return verification_result(
             "blocked", "；".join(blockers),
-            facts={"reason_code": "domain_mapping_evidence_incomplete", "entities": checked},
+            facts={"reason_code": "objects_evidence_incomplete", "entities": checked},
         )
     if errors:
         return verification_result("failed", "；".join(errors), facts={"entities": checked})
     return verification_result(
-        "passed", "已通过 AST 验证分层字段、API DTO、表列绑定和逐字段转换链。",
+        "passed",
+        "已通过 AST 验证 PO、Entity、DTO 字段、表列绑定和逐字段转换链。",
         facts={"entities": checked},
     )
 
@@ -165,4 +176,4 @@ def _verify_entity(
     return errors, blockers, entity_facts(entity_id, roles, edges, expected_fields, bindings)
 
 
-__all__ = ["verify_domain_mapping_source"]
+__all__ = ["verify_objects_source"]

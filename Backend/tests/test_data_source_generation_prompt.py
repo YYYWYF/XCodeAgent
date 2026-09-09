@@ -620,7 +620,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         """DatasourceAgent Prompt 携带当前商品操作结构、阶段和映射规则。"""
 
         task = _task(designs=[_external_product_design()])
-        task["id"] = "backend:endpoint:category_api:category.create::Category::mapping"
+        task["id"] = "backend:endpoint:category_api:category.create::Category::upstream"
         task["description"] = (
             "1. 读取商品上游响应 DTO 并遍历 list[]。\n"
             "2. 按 list[].price 到 price 等字段映射转换商品。"
@@ -632,7 +632,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             tasks=[task],
         )
 
-        self.assertIn('"stage": "mapping"', prompt)
+        self.assertIn('"stage": "upstream"', prompt)
         self.assertIn('"fieldMappings"', prompt)
         self.assertIn('"baseUrlConfigKey": "product.url"', prompt)
         self.assertIn('"path": "pageSize"', prompt)

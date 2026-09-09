@@ -278,7 +278,6 @@ def _task_stage(task: dict[str, Any]) -> str:
         "objects",
         "repository",
         "upstream",
-        "mapping",
         "service",
         "controller",
     }

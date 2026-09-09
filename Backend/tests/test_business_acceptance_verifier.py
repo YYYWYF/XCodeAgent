@@ -8,11 +8,9 @@ import unittest
 
 from app.services.business_acceptance import BUSINESS_ACCEPTANCE_KINDS, compile_business_acceptance
 from app.services.business_acceptance_verifier import verify_business_acceptance
-from app.services.business_acceptance_verifiers.backend_domain import verify_domain_mapping_source
-from app.services.business_acceptance_verifiers.backend_external_api import (
-    verify_external_api_client_source,
-    verify_external_api_mapping_source,
-)
+from app.services.business_acceptance_verifiers.backend_domain import verify_objects_source
+from app.services.business_acceptance_verifiers.backend_external_api import verify_upstream_source
+from app.services.business_acceptance_verifiers.java_inspection import verify_external_mapping_source
 from app.services.business_acceptance_verifiers.typescript_inspection import (
     verify_api_contract_source,
 )
@@ -100,7 +98,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
     def test_external_api_client_verifier_rejects_missing_parameter(self) -> None:
         """外部 API Client 必须实现正式契约声明的 Path/Query 参数。"""
 
-        result = verify_external_api_client_source(
+        result = verify_upstream_source(
             {
                 "OrderClient.java": (
                     "class OrderClient { private RestTemplate restTemplate; "
@@ -123,7 +121,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
     def test_external_api_client_verifier_accepts_resttemplate(self) -> None:
         """客户端类型不是业务验收条件，完整 RestTemplate 调用仍可通过。"""
 
-        result = verify_external_api_client_source(
+        result = verify_upstream_source(
             {
                 "OrderClient.java": (
                     "class OrderClient { private RestTemplate restTemplate; "
@@ -144,10 +142,10 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "passed")
 
-    def test_external_api_mapping_verifier_supports_root_array_path(self) -> None:
+    def test_upstream_conversion_verifier_supports_root_array_path(self) -> None:
         """根数组规范路径 [].name 不应产生空 Java 标识符并误判生成代码。"""
 
-        result = verify_external_api_mapping_source(
+        result = verify_external_mapping_source(
             {
                 "OrderMapper.java": (
                     "class OrderMapper { Order map(Upstream value) { "
@@ -169,10 +167,10 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "passed")
 
-    def test_external_api_mapping_verifier_checks_payload_path(self) -> None:
+    def test_upstream_conversion_verifier_checks_payload_path(self) -> None:
         """字段名偶然匹配时仍必须验证实体载荷路径的解析语义。"""
 
-        result = verify_external_api_mapping_source(
+        result = verify_external_mapping_source(
             {
                 "OrderMapper.java": (
                     "class OrderMapper { Order map(Upstream value) { "
@@ -195,10 +193,10 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("实体载荷路径", result["evidence"])
 
-    def test_external_api_mapping_verifier_does_not_skip_direct_endpoint_mapping(self) -> None:
+    def test_upstream_conversion_verifier_does_not_skip_direct_endpoint_mapping(self) -> None:
         """没有场景实体的 Endpoint 直连外部字段也必须有实现证据。"""
 
-        result = verify_external_api_mapping_source(
+        result = verify_external_mapping_source(
             {"OrderController.java": "public class OrderController {}"},
             {
                 "external_apis": [{
@@ -211,10 +209,10 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         )
         self.assertNotEqual(result["status"], "passed")
 
-    def test_external_api_mapping_verifier_accepts_direct_endpoint_path_segments(self) -> None:
+    def test_upstream_conversion_verifier_accepts_direct_endpoint_path_segments(self) -> None:
         """没有场景实体时，真实的路径级字段读写应能通过外部映射验收。"""
 
-        result = verify_external_api_mapping_source(
+        result = verify_external_mapping_source(
             {
                 "OrderController.java": (
                     "class OrderController { void map() { "
@@ -514,7 +512,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         self.assertEqual(passed["status"], "passed", passed)
         self.assertEqual(failed["status"], "failed", failed)
 
-    def test_domain_mapping_verifies_entity_po_dto_and_converter_as_one_delivery(self) -> None:
+    def test_objects_verifies_entity_po_dto_and_converter_as_one_delivery(self) -> None:
         """领域映射检查应联合读取兄弟交付物，不能要求每个文件独立包含完整映射。"""
 
         paths = {
@@ -525,7 +523,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             "assembler": "backend/src/assembler/OrderAssembler.java",
         }
         task = _task(
-            "backend.domain_mapping",
+            "backend.objects",
             path=paths["entity"],
             owner="backend",
             unit_id="backend:orders",
@@ -536,7 +534,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             task["deliverables"].append(
                 {
                     "id": f"order-{role}",
-                    "kind": "backend.domain_mapping",
+                    "kind": "backend.objects",
                     "target_id": "Order",
                     "paths": [path],
                     "provides": [f"order.{role}"],
@@ -573,10 +571,10 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         self.assertEqual(len(compiled["business_acceptance_checks"]), 1)
         self.assertEqual(result["status"], "passed", result)
 
-    def test_domain_mapping_supports_java_bean_mapstruct_and_mybatis_camel_case(self) -> None:
+    def test_objects_supports_java_bean_mapstruct_and_mybatis_camel_case(self) -> None:
         """领域映射应接受 JavaBean、MapStruct 异名映射和 MyBatis-Plus 驼峰列策略。"""
 
-        result = verify_domain_mapping_source(
+        result = verify_objects_source(
             _personal_info_domain_sources(),
             _personal_info_domain_expected(),
         )
@@ -585,7 +583,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         edges = result["facts"]["entities"][0]["conversion_edges"]
         self.assertTrue(any(["nativePlace", "birthplace"] in edge["mappings"] for edge in edges))
 
-    def test_domain_mapping_rejects_missing_dto_field_per_layer(self) -> None:
+    def test_objects_rejects_missing_dto_field_per_layer(self) -> None:
         """字段只存在于 Entity 或 PO 时不得替代 DTO 自身的字段证据。"""
 
         sources = _personal_info_domain_sources()
@@ -593,12 +591,12 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             "class PersonalInfoDTO { private String name; }"
         )
 
-        result = verify_domain_mapping_source(sources, _personal_info_domain_expected())
+        result = verify_objects_source(sources, _personal_info_domain_expected())
 
         self.assertEqual(result["status"], "failed", result)
         self.assertIn("DTO 缺少 API Schema 字段 birthplace", result["evidence"])
 
-    def test_domain_mapping_rejects_unrelated_column_literal(self) -> None:
+    def test_objects_rejects_unrelated_column_literal(self) -> None:
         """无关字符串字面量不得冒充 PO 字段上的数据库列映射。"""
 
         expected = _personal_info_domain_expected()
@@ -608,12 +606,12 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             ' class Unrelated { String value = "legacy_place"; }'
         )
 
-        result = verify_domain_mapping_source(sources, expected)
+        result = verify_objects_source(sources, expected)
 
         self.assertEqual(result["status"], "failed", result)
         self.assertIn("birthplace -> legacy_place", result["evidence"])
 
-    def test_domain_mapping_requires_source_read_and_target_write_in_one_method(self) -> None:
+    def test_objects_requires_source_read_and_target_write_in_one_method(self) -> None:
         """转换方法仅读取 getter 而未写入目标对象时不得通过。"""
 
         sources = _personal_info_domain_sources()
@@ -622,15 +620,15 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             "po.getName(); po.getNativePlace(); return new PersonalInfo(); } }"
         )
 
-        result = verify_domain_mapping_source(sources, _personal_info_domain_expected())
+        result = verify_objects_source(sources, _personal_info_domain_expected())
 
         self.assertEqual(result["status"], "failed", result)
         self.assertIn("po->entity 字段转换", result["evidence"])
 
-    def test_domain_mapping_write_endpoint_requires_reverse_conversion(self) -> None:
+    def test_objects_write_endpoint_requires_reverse_conversion(self) -> None:
         """写接口必须提供 DTO 到 Entity 再到 PO 的反向转换链。"""
 
-        result = verify_domain_mapping_source(
+        result = verify_objects_source(
             _personal_info_domain_sources(),
             _personal_info_domain_expected("POST"),
         )
@@ -639,16 +637,16 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         self.assertIn("dto->entity 字段转换", result["evidence"])
         self.assertIn("entity->po 字段转换", result["evidence"])
 
-    def test_domain_mapping_blocks_incomplete_formal_database_bindings(self) -> None:
+    def test_objects_blocks_incomplete_formal_database_bindings(self) -> None:
         """数据库实体正式绑定不完整时应阻断，而不是让代码 Repair 猜测列名。"""
 
         expected = _personal_info_domain_expected()
         expected["entities"][0]["database_bindings"] = expected["entities"][0]["database_bindings"][:1]
 
-        result = verify_domain_mapping_source(_personal_info_domain_sources(), expected)
+        result = verify_objects_source(_personal_info_domain_sources(), expected)
 
         self.assertEqual(result["status"], "blocked", result)
-        self.assertEqual(result["facts"]["reason_code"], "domain_mapping_evidence_incomplete")
+        self.assertEqual(result["facts"]["reason_code"], "objects_evidence_incomplete")
 
     def test_application_service_ast_requires_real_repository_delegation(self) -> None:
         """ApplicationService 仅声明 Repository 字段但不调用时不能通过。"""
@@ -774,7 +772,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
 
     def test_all_phase_two_verifiers_have_positive_and_non_false_positive_paths(self) -> None:
-        """九种业务检查均应有可通过的结构样本，并拒绝只存在于注释中的伪实现。"""
+        """八种业务检查均应有可通过的结构样本，并拒绝只存在于注释中的伪实现。"""
 
         positive_sources = {
             "frontend.api_contract": (
@@ -794,7 +792,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
                 "export function listOrders(params: OrderRequest): Promise<OrderResponse> { "
                 "return Promise.resolve(orders[0]) }"
             ),
-            "backend.domain_mapping": (
+            "backend.objects_contract": (
                 "class Order { String id; String status; }\n"
                 "@TableName(\"orders\") class OrderPO { @TableField(\"order_id\") String id; }\n"
                 "class OrderDTO { String id; String status; }\n"
@@ -820,16 +818,13 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
                 "return service.list(status); }\n"
                 "}"
             ),
-            "backend.external_api_client_contract": (
+            "backend.upstream_contract": (
                 "@FeignClient(name = \"orders\", url = \"${integrations.orders.base-url}\")\n"
                 "class OrderClient {\n"
                 "  @GetMapping(\"/upstream/orders\") OrderResponse get(@RequestParam(\"page\") int page);\n"
-                "}"
-            ),
-            "backend.external_api_mapping_contract": (
-                "class OrderMapper {\n"
+                "}\nclass OrderConverter {\n"
                 "  Order map(Upstream value) { String id = value.data.id; String state = value.data.state.value; "
-                "String status = state; return null; }\n"
+                "String status = state; items.status = status; return null; }\n"
                 "}"
             ),
         }
@@ -837,23 +832,21 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             "frontend.api_contract": "frontend/src/apis/orders.ts",
             "frontend.page_endpoint_usage": "frontend/src/pages/Orders/index.tsx",
             "frontend.static_data_contract": "frontend/src/apis/ordersMock.ts",
-            "backend.domain_mapping": "backend/src/domain/Order.java",
+            "backend.objects_contract": "backend/src/domain/Order.java",
             "backend.repository_contract": "backend/src/repository/OrderRepository.java",
             "backend.application_service_contract": "backend/src/service/OrderService.java",
             "backend.endpoint_contract": "backend/src/controller/OrderController.java",
-            "backend.external_api_client_contract": "backend/src/client/OrderClient.java",
-            "backend.external_api_mapping_contract": "backend/src/mapper/OrderMapper.java",
+            "backend.upstream_contract": "backend/src/client/OrderClient.java",
         }
         task_inputs = {
             "frontend.api_contract": ("frontend.api_module", "frontend", "frontend:api-client"),
             "frontend.page_endpoint_usage": ("frontend.page", "frontend", "page:orders"),
             "frontend.static_data_contract": ("frontend.static_data_module", "frontend", "frontend:data:orders"),
-            "backend.domain_mapping": ("backend.domain_mapping", "backend", "backend:orders"),
+            "backend.objects_contract": ("backend.objects", "backend", "backend:orders"),
             "backend.repository_contract": ("backend.repository", "backend", "backend:orders"),
             "backend.application_service_contract": ("backend.application_service", "backend", "backend:orders"),
             "backend.endpoint_contract": ("backend.endpoint_controller", "backend", "backend:orders.list"),
-            "backend.external_api_client_contract": ("backend.external_api_client", "backend", "backend:orders"),
-            "backend.external_api_mapping_contract": ("backend.external_api_mapping", "backend", "backend:orders"),
+            "backend.upstream_contract": ("backend.upstream", "backend", "backend:orders"),
         }
         with tempfile.TemporaryDirectory() as temp_dir:
             positive_evidence: dict[str, list[dict]] = {}

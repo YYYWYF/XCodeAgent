@@ -269,17 +269,14 @@ def _log_task_model_response_diagnostics(
     """记录模型响应的脱敏解析摘要，用于定位模型输出或 JSON 解析故障。"""
 
     tasks = agent_plan.get("tasks") if isinstance(agent_plan, dict) else None
-    dag = agent_plan.get("dag") if isinstance(agent_plan, dict) else None
-    dag_tasks = (dag.get("tasks") or dag.get("nodes")) if isinstance(dag, dict) else None
-    candidates = tasks if isinstance(tasks, list) else dag_tasks
     logger.info(
         "build_task_model_response response_chars=%s response_sha256=%s parsed_keys=%s "
         "tasks_type=%s tasks_count=%s",
         len(agent_note),
         _response_fingerprint(agent_note),
         _parsed_keys(agent_plan),
-        type(candidates).__name__ if candidates is not None else "missing",
-        len(candidates) if isinstance(candidates, list) else 0,
+        type(tasks).__name__ if tasks is not None else "missing",
+        len(tasks) if isinstance(tasks, list) else 0,
     )
 
 

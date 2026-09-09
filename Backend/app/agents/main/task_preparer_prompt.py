@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.services.api_design_mapping_rules import mapping_sources
 from app.services.business_acceptance import DELIVERABLE_KINDS
 
 
@@ -14,7 +15,7 @@ def endpoint_source_groups(
     project_plan: dict[str, Any],
     build_context: dict[str, Any] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """按当前 Endpoint 设计快照归并数据源，拒绝全局实体绑定回流。"""
+    """按当前 Endpoint 字段映射归并被引用的数据源快照。"""
 
     executable = project_plan.get("executable_details")
     executable = executable if isinstance(executable, dict) else {}
@@ -29,13 +30,38 @@ def endpoint_source_groups(
         for item in designs:
             if not isinstance(item, dict):
                 continue
-            for snapshot in item.get("sourceSnapshots") or []:
-                if not isinstance(snapshot, dict):
+            snapshots = [
+                snapshot
+                for snapshot in item.get("sourceSnapshots") or []
+                if isinstance(snapshot, dict)
+            ]
+            seen_snapshots: set[tuple[str, str]] = set()
+            for mapping in item.get("fieldMappings") or []:
+                if not isinstance(mapping, dict):
                     continue
-                source_type = str(snapshot.get("sourceType") or "").strip()
-                if source_type not in _ENDPOINT_SOURCE_TYPES:
-                    raise ValueError(f"任务准备上下文包含非法数据源类型: {source_type}")
-                groups[source_type].append(snapshot)
+                for source in mapping_sources(mapping):
+                    source_type = str(source.get("sourceType") or "").strip()
+                    source_id = str(source.get("sourceId") or "").strip()
+                    if source_type not in _ENDPOINT_SOURCE_TYPES:
+                        raise ValueError(f"任务准备上下文包含非法数据源类型: {source_type}")
+                    matched = next(
+                        (
+                            snapshot
+                            for snapshot in snapshots
+                            if str(snapshot.get("sourceType") or "").strip() == source_type
+                            and str(snapshot.get("sourceId") or "").strip() == source_id
+                        ),
+                        None,
+                    )
+                    if matched is None:
+                        raise ValueError(
+                            f"任务准备上下文缺少被引用的数据源快照: {source_type}:{source_id}"
+                        )
+                    snapshot_key = (source_type, source_id)
+                    if snapshot_key in seen_snapshots:
+                        continue
+                    seen_snapshots.add(snapshot_key)
+                    groups[source_type].append(matched)
     return {source_type: items for source_type, items in groups.items() if items}
 
 
@@ -106,7 +132,7 @@ def build_task_preparation_prompt(
             validation_feedback,
         ),
         _task_rules_section(mode, source_types, prompt_context),
-        _dependency_rules_section(source_types),
+        _dependency_rules_section(mode, source_types, prompt_context),
         _forbidden_output_section(mode, source_types),
         _workspace_context_section(snapshot, prompt_context, project_plan),
     ]
@@ -169,14 +195,14 @@ def _output_contract_section() -> str:
     return (
         "## 2. Output Contract\n"
         "Return exactly one JSON object without markdown fences or commentary. The object "
-        "must contain exactly two top-level keys: `workspace_analysis` and `tasks`; do not "
-        "return `dag` or any other top-level key. `workspace_analysis` summarizes only "
-        "directories, entrypoints, stack, and reuse conventions visible in the scoped "
-        "WorkspaceSnapshot. Every task must include: `id`, `unit_id`, `owner`, Simplified "
+        "must contain exactly one top-level key: `tasks`; do not return `workspace_analysis`; "
+        "do not return `dag` or any other top-level key. The platform derives workspace analysis and "
+        "execution parallelism deterministically. Every task must include: `id`, `unit_id`, "
+        "`owner`, Simplified "
         "Chinese `title` and `description`, `dependencies`, exact `change_scope`, "
-        "`deliverables`, `impact_scope`, `can_run_in_parallel`, `parallel_reason`, and "
-        "`status: \"pending\"`. Do not return platform-owned acceptance, evidence, summary, "
-        "or verification-command fields.\n"
+        "`deliverables`, `impact_scope`, and `status: \"pending\"`. Do not return "
+        "`can_run_in_parallel`, `parallel_reason`, or platform-owned acceptance, evidence, "
+        "summary, or verification-command fields.\n"
         + _deliverable_kind_contract_prompt()
     )
 
@@ -215,17 +241,22 @@ def _planning_algorithm_section(
             bootstrap_capabilities.append("MyBatis-Plus/MySQL")
         if "external_api" in backend_source_types:
             bootstrap_capabilities.append("Spring Cloud OpenFeign")
+        bootstrap_detail = (
+            " For OpenFeign, it must also inspect and own the real Spring Boot Application.java "
+            "or existing Feign-enablement configuration, add the smallest authorized "
+            "@EnableFeignClients activation only when missing, and include every such exact "
+            "path in target_files, allowed_paths, change_scope, and its backend.bootstrap "
+            "deliverable. It must not generate endpoint Clients or transport objects."
+            if "external_api" in backend_source_types
+            else ""
+        )
         rules.append(
             "Emit exactly one backend:bootstrap root task with id "
             "`backend:bootstrap::bootstrap`, unit_id `backend:bootstrap`, owner "
             "`backend`, and dependencies `[]`. Keep it even when execution may report "
             "`already_satisfied`. Its exact capability scope is "
             f"{', '.join(bootstrap_capabilities)}. The task must inspect and own the existing "
-            "backend Maven pom.xml. For OpenFeign, it must also inspect and own the real "
-            "Spring Boot Application.java or existing Feign-enablement configuration, add "
-            "the smallest authorized @EnableFeignClients activation only when missing, and "
-            "include every such exact path in target_files, allowed_paths, change_scope, and "
-            "its backend.bootstrap deliverable. It must not generate endpoint Clients or DTOs."
+            f"backend Maven pom.xml.{bootstrap_detail}"
         )
     if backend_source_types and "frontend:api-client" in planning_units:
         if reusable_tasks_by_unit.get("frontend:api-client"):
@@ -252,28 +283,79 @@ def _planning_algorithm_section(
                 "task may repeat the envelope types, success code, errors, or unwrap logic."
             )
     if backend_source_types or endpoint_design_present:
+        if backend_source_types == {"database"}:
+            pipeline_rule = (
+                "The logical implementation flow is `objects -> converter -> repository -> "
+                "service -> controller`, but objects and converter belong to one `objects` task. "
+                "Emit exactly four tasks: `objects -> repository -> service -> controller`."
+            )
+        elif backend_source_types == {"external_api"}:
+            pipeline_rule = (
+                "The exact pipeline is `objects -> upstream -> service -> controller`. Emit all "
+                "four stages exactly once; converter is an internal responsibility of upstream, "
+                "not a separate task."
+            )
+        elif backend_source_types == {"database", "external_api"}:
+            pipeline_rule = (
+                "Emit one mixed pipeline with an `objects` root. The objects task also owns "
+                "the database converter, so the database branch is `objects -> repository`; "
+                "the external branch is `objects -> upstream`; service depends on repository "
+                "and upstream, and controller depends only on service."
+            )
+        else:
+            pipeline_rule = (
+                "The exact pipeline is `objects -> service -> controller`. Do not emit "
+                "converter, repository, or upstream tasks."
+            )
+        if backend_source_types == {"database"}:
+            source_authority = (
+                "Treat every database sourceFields entry plus its matching sourceSnapshot as "
+                "the complete physical-source authority, and name its sourceId/table/column."
+            )
+        elif backend_source_types == {"external_api"}:
+            source_authority = (
+                "Treat every external_api sourceFields entry plus its matching sourceSnapshot "
+                "as the complete physical-source authority."
+            )
+        elif backend_source_types == {"database", "external_api"}:
+            source_authority = (
+                "Treat every database and external_api sourceFields entry plus its matching "
+                "sourceSnapshot as the complete physical-source authority, including every "
+                "source in a mixed mapping."
+            )
+        else:
+            source_authority = (
+                "This Endpoint has no referenced physical source. Do not derive a source from "
+                "unreferenced sourceSnapshots."
+            )
+        objects_scope = (
+            "Objects owns PO, Entity, DTO, and database conversion implementation required by "
+            "the selected database fields, and declares one `backend.objects` deliverable."
+            if "database" in backend_source_types
+            else "Objects owns only the internal DTO/domain shapes required by the API Contract."
+        )
         rules.append(
             "For every backend:endpoint:* Unit, select exactly one confirmed endpoint_designs "
             "item by apiContractId + endpointId. Plan one shared Endpoint pipeline rather than "
             "one pipeline per Endpoint: TechnicalPlan entity_ids provide business entity "
             "semantics independently from physical source mappings. Use stable task IDs "
-            "`<endpointUnitId>::endpoint::<stage>`. Emit `objects`, `service`, and `controller` "
-            "once for the Endpoint; add `repository` when fieldMappings contain database sourceFields entries, "
-            "and add `upstream` plus `mapping` when they contain external API sourceFields entries. Existing files do not remove a required stage: use `modify` for paths "
+            "`<endpointUnitId>::endpoint::<stage>`. "
+            f"{pipeline_rule} Existing files do not remove a required stage: use `modify` for paths "
             "present in WorkspaceSnapshot and `add` for missing business paths; execution may "
             "prove a stage `already_satisfied`."
         )
         rules.append(
-            "Treat api_design.fieldMappings plus sourceSnapshots as the complete field-source "
-            "authority. Iterate ALL sourceFields, including mixed database and external Operation dependencies. "
+            f"{source_authority} Iterate all declared sourceFields. "
             "processingType=direct is a one-source assignment; single_field_description and multi_field_description "
             "require implementing the user's complete businessDescription with all declared sources. "
-            "Preserve the description verbatim in task context. Never invent formulas, joins or missing sources; "
-            "block and report required clarification when critical business semantics are missing. "
+            "Preserve the description verbatim in task context. Never invent formulas, joins or missing sources. "
             "Request maps input to filter/write or upstream request fields; Response reads sources into output. "
-            "Each record contains one Endpoint field and its complete mapping. A "
-            "A pure `business_description` mapping has no physical source and must be implemented as an explicit "
-            "business note without inventing formulas, fields, queries, or upstream calls. Source-based "
+            "Each record contains one Endpoint field and its complete mapping. A pure "
+            "`business_description` mapping has no physical source. Assign it to the narrowest "
+            "behavior layer: DTO/object shape belongs to objects; HTTP binding or protocol "
+            "validation belongs to controller; defaults, filtering, calculation, aggregation, "
+            "and response semantics belong to service. Preserve its text verbatim, and never "
+            "create converter, repository, upstream, query, or physical fields from it. Source-based "
             "single_field_description and multi_field_description mappings keep every source dependency and "
             "must implement the user's multiline businessDescription. "
             "The optional `api_design.implementationDescription` is an Endpoint-level implementation "
@@ -282,10 +364,20 @@ def _planning_algorithm_section(
             "their layer boundaries. It never changes the confirmed method, path, parameters, "
             "schemas, field mappings, or source dependencies; if it conflicts with those facts, "
             "preserve the confirmed contract and report the conflict instead of inventing a source. "
-            "Do not invent an Endpoint field, database column, Repository query, or external API field "
-            "for a business_description. Repository work must name every confirmed "
-            "database sourceId/table/column. Objects owns only the DTO/domain shapes required by "
-            "the internal API and the TechnicalPlan entity semantics."
+            "Do not invent any Endpoint or physical-source field for a business_description. "
+            f"{objects_scope}"
+        )
+    if "database" in source_groups:
+        rules.append(
+            "The `objects` task owns PO, Entity, DTO, and typed PO <-> Entity plus Entity <-> "
+            "DTO conversion. Within that task, organize object work as PO -> Entity -> DTO, "
+            "then complete the typed conversion edges. It declares one `backend.objects` deliverable covering those files; "
+            "do not emit a separate converter task or converter deliverable. The converter "
+            "responsibility does not own persistence access. "
+            "The `repository` task owns the MyBatis Mapper interface, optional Mapper XML, "
+            "Repository interface and Repository implementation as one layer. RepositoryImpl "
+            "injects Mapper plus the converter and names every confirmed sourceId/table/column. "
+            "Mapper is not a separate pipeline stage or task."
         )
     if "external_api" in source_groups:
         rules.append(
@@ -297,8 +389,16 @@ def _planning_algorithm_section(
             "HTTP abstraction. Reuse the backend module's existing Spring Boot configuration "
             "file, or create application.yml under its existing src/main/resources, and write "
             "connection.baseUrl as the plain value for connection.baseUrlConfigKey. Never put "
-            "the Base URL in Java or invent a credential. Mapping must follow every external "
-            "dataField section/path and its paired API field/entity semantic reference. Controller "
+            "the Base URL in Java or invent a credential. `upstream` is one task and one module: "
+            "first define transport request/response DTOs, envelopes, and nested objects; then "
+            "implement the upstream-local converter when a confirmed transformation exists and "
+            "the Feign Client or compatible existing HTTP Client. It declares one "
+            "`backend.upstream` deliverable covering transport objects, optional "
+            "Converter, Client, configuration, and error-adapter files. Within this one task, "
+            "the internal order is `transport_objects -> converter` when conversion is required "
+            "and `transport_objects -> client`; these are not separate DAG tasks. The converter must follow every external "
+            "dataField section/path and its paired API field/entity semantic reference. Never emit "
+            "an empty converter. Controller "
             "implements only the internal API Contract and never exposes the upstream path."
         )
     if "static" in source_groups or mode == "static":
@@ -358,6 +458,17 @@ def _task_rules_section(
 ) -> str:
     """生成变更范围语义和路径边界规则。"""
 
+    target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
+    target_is_endpoint = str(target.get("type") or "").strip() == "endpoint"
+    has_backend_scope = mode in {"endpoint", "combined"} and (
+        target_is_endpoint
+        or any(
+            str(unit_id).startswith(("backend:endpoint:", "backend:bootstrap"))
+            for unit_id in build_context.get("planning_unit_ids")
+            or build_context.get("required_unit_ids")
+            or []
+        )
+    )
     fragments = [
         "## 4. Task Rules",
         "`change_scope` is the planned file-operation intent, not a pure permission list. "
@@ -393,7 +504,7 @@ def _task_rules_section(
                 f"`frontend/src/pages/{page_key}/index.tsx`; create it with operation=add "
                 "when it is absent from WorkspaceSnapshot."
             )
-    if source_types & _ENDPOINT_BACKEND_SOURCE_TYPES:
+    if has_backend_scope:
         fragments.append(
             "All backend business source paths are under `/backend/src/main/java/` or "
             "`/backend/src/main/resources/`."
@@ -410,7 +521,7 @@ def _task_rules_section(
             "a fully satisfying file unchanged, and make only the minimum additions or "
             "corrections when it is partially satisfying. When one task owns multiple paths, "
             "state each path's snapshot status and planned action separately. Apply this "
-            "description contract to backend:bootstrap, database, and external_api tasks."
+            "description contract to every backend task in the dynamically injected pipeline."
         )
         fragments.append(
             "When TargetBuildContext.authorization_constraints contains a non-empty endpoint "
@@ -423,7 +534,9 @@ def _task_rules_section(
     return "\n".join(fragments)
 
 
-def _dependency_rules_section(source_types: set[str]) -> str:
+def _dependency_rules_section(
+    mode: str, source_types: set[str], build_context: dict[str, Any]
+) -> str:
     """生成同 Unit 依赖和固定阶段链规则。"""
 
     rules = (
@@ -433,14 +546,36 @@ def _dependency_rules_section(source_types: set[str]) -> str:
         "task IDs, or tasks from another Unit; the deterministic Unit Graph owns all "
         "cross-Unit edges."
     )
-    if source_types & _ENDPOINT_BACKEND_SOURCE_TYPES:
+    target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
+    has_backend_endpoint = mode in {"endpoint", "combined"} and (
+        str(target.get("type") or "").strip() == "endpoint"
+        or any(
+            str(unit_id).startswith("backend:endpoint:")
+            for unit_id in build_context.get("planning_unit_ids")
+            or build_context.get("required_unit_ids")
+            or []
+        )
+    )
+    if has_backend_endpoint:
+        if source_types == {"database"}:
+            rules += (
+                " Use exactly objects -> repository -> service -> controller. The objects "
+                "task internally completes objects before converter work, and repository "
+                "depends on that combined task."
+            )
+        elif source_types == {"external_api"}:
+            rules += " Use exactly objects -> upstream -> service -> controller."
+        elif source_types == {"database", "external_api"}:
+            rules += (
+                " Objects is the root and includes the database converter. Repository and "
+                "upstream both depend on objects; service depends on repository and "
+                "upstream; controller depends only on service."
+            )
+        else:
+            rules += " Use exactly objects -> service -> controller."
         rules += (
-            " Each Endpoint pipeline uses objects as one root. Repository depends on objects "
-            "when database fields exist. Upstream is an independent same-Unit root and mapping "
-            "depends on upstream when external API fields exist. Service depends on objects plus "
-            "every emitted repository or mapping task, and controller depends only on service. "
-            "Direct bindings from different sources converge in service; one-sentence business descriptions never create an "
-            "entity-global dependency chain."
+            " Direct bindings from different sources converge in service; pure business "
+            "descriptions never create a physical-source dependency chain."
         )
     return rules + (
         " When "
@@ -468,15 +603,26 @@ def _forbidden_output_section(mode: str, source_types: set[str]) -> str:
         "the platform injects immutable authorization slices after Unit selection.",
         "Never create, modify, or list AuthConstants in change_scope, allowed_paths, or deliverables; "
         "the platform writes business operation constants into the auth template managed region after DAG confirmation.",
-        "Never create owner=database tasks, database:* Units, DDL, schema/table changes, "
-        "migrations, or seed SQL. Never add CRUD operations, endpoints, fields, credentials, "
+        "Never add CRUD operations, endpoints, fields, credentials, "
         "URLs, headers, or configuration outside confirmed contracts.",
-        "Only backend:bootstrap may plan modifications to the existing backend/pom.xml, "
-        "datasource/MyBatis configuration, or global OpenFeign activation. External API "
-        "upstream tasks may modify only their exact Base URL/Feign client configuration "
-        "entries plus their Client/DTO/error-adapter source paths; other endpoint tasks must "
-        "not modify global configuration.",
     ]
+    if "database" in source_types and "external_api" in source_types:
+        rules.append(
+            "Only backend:bootstrap may modify backend/pom.xml, datasource/MyBatis "
+            "configuration, or global OpenFeign activation. Upstream may modify only its exact "
+            "Base URL entry plus Client/transport-object/Converter/error-adapter paths."
+        )
+    elif "database" in source_types:
+        rules.append(
+            "Only backend:bootstrap may modify backend/pom.xml or datasource/MyBatis "
+            "configuration; endpoint tasks must not modify global configuration."
+        )
+    elif "external_api" in source_types:
+        rules.append(
+            "Only backend:bootstrap may modify backend/pom.xml or global OpenFeign activation. "
+            "Upstream may modify only its exact Base URL entry plus Client/transport-object/"
+            "Converter/error-adapter paths."
+        )
     if mode == "page":
         rules.append(
             "Page-only scope must not create backend, database, Spring, MyBatis, endpoint "
@@ -489,8 +635,8 @@ def _forbidden_output_section(mode: str, source_types: set[str]) -> str:
         )
     if "external_api" in source_types:
         rules.append(
-            "External API entities must not create Entity/PO, Mapper, Repository, datasource, "
-            "migration, or seed work. Never turn design-time base_url, request examples, response "
+            "External API upstream work must stay within its confirmed transport, conversion, "
+            "Client, configuration, and error-adaptation responsibilities. Never turn design-time base_url, request examples, response "
             "examples, or upstream field names into hard-coded business constants."
         )
     return "\n".join(rules)
@@ -798,8 +944,6 @@ def task_preparation_datasource_types(project_plan: dict[str, Any]) -> set[str]:
     """从 Endpoint API 设计快照读取并校验数据源类型集合。"""
 
     source_types = endpoint_source_types(project_plan)
-    if not source_types:
-        raise ValueError("任务准备上下文缺少数据源类型。")
     if not source_types <= _ENDPOINT_SOURCE_TYPES:
         invalid = sorted(source_types - _ENDPOINT_SOURCE_TYPES)
         raise ValueError(f"任务准备上下文包含非法数据源类型: {', '.join(invalid)}")

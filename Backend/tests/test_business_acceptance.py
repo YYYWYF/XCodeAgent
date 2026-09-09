@@ -272,7 +272,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
     def test_technical_plan_entities_are_projected_without_endpoint_sources(self) -> None:
         """TechnicalPlan 实体语义投影不再从 Endpoint 物理映射反推来源。"""
 
-        task = _task("backend.domain_mapping", path="backend/src/domain/Order.java", owner="backend", unit_id="backend:orders", target_id="Order")
+        task = _task("backend.objects", path="backend/src/domain/Order.java", owner="backend", unit_id="backend:orders", target_id="Order")
         compiled = compile_business_acceptance([task], _formal_context())[0]
         fields = compiled["business_acceptance_checks"][0]["expected"]["entities"][0]["fields"]
         self.assertEqual({item["name"]: item["source_types"] for item in fields}, {"id": [], "status": []})
@@ -350,17 +350,16 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
     """验证业务检查只由平台按正式输入生成。"""
 
     def test_all_phase_two_kinds_compile(self) -> None:
-        """九种白名单交付物均应生成对应的确定性业务检查。"""
+        """八种白名单交付物均应生成对应的确定性业务检查。"""
 
         cases = [
             ("frontend.api_module", "frontend", "frontend:api-client", "frontend/src/apis/orders.ts"),
             ("frontend.page", "frontend", "page:orders", "frontend/src/pages/Orders/index.tsx"),
-            ("backend.domain_mapping", "backend", "backend:orders", "backend/src/domain/Order.java"),
+            ("backend.objects", "backend", "backend:orders", "backend/src/domain/Order.java"),
             ("backend.repository", "backend", "backend:orders", "backend/src/repository/OrderRepository.java"),
             ("backend.application_service", "backend", "backend:orders", "backend/src/service/OrderService.java"),
             ("backend.endpoint_controller", "backend", "backend:orders.list", "backend/src/controller/OrderController.java"),
-            ("backend.external_api_client", "backend", "backend:orders", "backend/src/client/OrderClient.java"),
-            ("backend.external_api_mapping", "backend", "backend:orders", "backend/src/mapper/OrderMapper.java"),
+            ("backend.upstream", "backend", "backend:orders", "backend/src/client/OrderClient.java"),
         ]
         compiled = compile_business_acceptance(
             [
@@ -392,7 +391,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
         )
         tasks = [
             _task(
-                "backend.domain_mapping",
+                "backend.objects",
                 path="backend/src/domain/Order.java",
                 owner="backend",
                 unit_id="backend:endpoint:orders-api:orders.list",
@@ -443,7 +442,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
         """Entity、PO、DTO 和 Converter 应共同承担一条领域映射检查。"""
 
         task = _task(
-            "backend.domain_mapping",
+            "backend.objects",
             path="backend/src/domain/Order.java",
             owner="backend",
             unit_id="backend:orders",
@@ -458,7 +457,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
             task["deliverables"].append(
                 {
                     "id": f"order-domain-{index}",
-                    "kind": "backend.domain_mapping",
+                    "kind": "backend.objects",
                     "target_id": "Order",
                     "paths": [path],
                     "provides": [f"order.domain.{index}"],
@@ -562,7 +561,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
             {"name": "x-locale", "value": "zh-CN"}
         ]
         task = _task(
-            "backend.external_api_client",
+            "backend.upstream",
             path="backend/src/client/OrderClient.java",
             owner="backend",
             unit_id="backend:orders",

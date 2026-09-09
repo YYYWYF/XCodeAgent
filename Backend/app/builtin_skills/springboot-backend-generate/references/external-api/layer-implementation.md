@@ -18,7 +18,7 @@ current task `stage`; do not perform bootstrap dependency or global activation w
 - Write only `allowed_paths` and `change_scope`. If the confirmed contract cannot fit the
   scope, return the execution protocol's `change_request` instead of expanding it.
 - Keep the external transport model separate from internal API DTOs. Conversion belongs in
-  a mapper/assembler boundary, not in the Controller or HTTP Client.
+  the same upstream module as the transport DTOs and HTTP Client, not in the Controller.
 - Treat `request_shape` and `response_shape` as field/type descriptions, never literal
   examples. Bind internal request fields to upstream Path, Query, and body fields only by
   exact name; a required unmatched field is a `contract_mismatch`.
@@ -28,15 +28,17 @@ current task `stage`; do not perform bootstrap dependency or global activation w
 1. Locate the single endpoint-linked operation and read its effective connection.
 2. Resolve the Base URL through the exact `base_url_config_key`; for Feign use the
    mechanically equivalent `${property.key}` placeholder rather than a Java constant.
-3. Create typed request transport DTOs from `request_shape`, bind exact-name inputs, and
-   apply only confirmed non-sensitive headers.
-4. Call through the preferred typed OpenFeign interface, or a compatible
+3. Create typed request/response transport DTOs, envelopes, and nested objects from the
+   confirmed shapes.
+4. Implement the upstream-local Converter only when confirmed payload or field conversion
+   is required, then bind exact-name inputs and apply only confirmed non-sensitive headers.
+5. Call through the preferred typed OpenFeign interface, or a compatible
    already-satisfying project Client, and deserialize the declared response root into typed
    transport DTOs derived from `response_shape`.
-5. Accept only `success_status_codes`; translate other HTTP responses, declared
+6. Accept only `success_status_codes`; translate other HTTP responses, declared
    `error_message_path`, timeouts, and deserialization failures through existing exceptions.
-6. Traverse `mapped_entity_path` when present and apply every `field_mappings` entry exactly.
-7. Return the internal API Contract response through the application service and Controller.
+7. Traverse `mapped_entity_path` when present and apply every `field_mappings` entry exactly.
+8. Return the internal API Contract response through the application service and Controller.
 
 ## Client Implementation
 
@@ -67,18 +69,22 @@ current task `stage`; do not perform bootstrap dependency or global activation w
 
 ## Layer Responsibilities
 
-1. The upstream stage owns the preferred `@FeignClient` interface or compatible existing
-   HTTP Client, transport DTOs, parameter binding, client-scoped timeout, Base URL property,
-   and upstream error translation. It does not own Maven or global Feign activation.
-2. The mapping stage owns field conversion, payload-path traversal, array/cardinality
-   normalization, and internal entity mapping only when `entity_payload=true`.
+1. The upstream stage is one task and one module. It owns transport request/response DTOs,
+   envelopes and nested objects; an upstream-local Converter when confirmed transformation
+   exists; the preferred `@FeignClient` interface or compatible existing HTTP Client;
+   parameter binding, client-scoped timeout, Base URL property, and upstream error
+   translation. Implement transport objects first, then Converter and Client. It does not
+   own Maven or global Feign activation, and it must not create an empty Converter.
+2. The upstream Converter owns field conversion, payload-path traversal, array/cardinality
+   normalization, and internal semantic mapping. Its files remain distinct from transport
+   DTO and Client deliverable paths even though all belong to the same upstream task.
 3. The service stage owns endpoint-facing orchestration and business decisions; it does not
    issue HTTP calls directly when an upstream adapter exists.
 4. The controller stage owns the confirmed internal HTTP method/path, request validation,
    response envelope/status mapping, and delegation to the application service.
 
 For `entity_payload=false`, preserve acknowledgement/status semantics and do not create an
-Entity, PO, or invented mapper. When multiple internal Endpoints reference the same
+Entity, PO, or invented Converter. When multiple internal Endpoints reference the same
 `operation_id`, reuse one Client method and compatible transport DTO set.
 
 ## Template `common` Infrastructure

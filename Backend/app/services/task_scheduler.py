@@ -89,6 +89,8 @@ def scheduler_capabilities() -> Dict[str, Any]:
 
 
 def _annotate_task(task: Dict[str, Any], *, target_counts: Dict[str, int]) -> Dict[str, Any]:
+    """根据任务类型、共享路径和文件冲突确定平台执行方式。"""
+
     next_task = dict(task)
     task_type = str(next_task.get("task_type") or "feature")
     target_files = _task_target_files(next_task)
@@ -125,7 +127,7 @@ def _annotate_task(task: Dict[str, Any], *, target_counts: Dict[str, int]) -> Di
         mode = "subagent-direct-write"
         agent = _builder_for(task_type)
         reason = "任务 target_files 明确且互斥，允许受限 subagent 直接写入。"
-        can_parallel = _task_can_run_in_parallel(next_task)
+        can_parallel = True
 
     next_task["executionMode"] = mode
     next_task["assignedAgent"] = agent
@@ -247,9 +249,3 @@ def _task_dependencies(task: Dict[str, Any]) -> List[str]:
     """读取当前 DAG v3 任务的依赖列表。"""
 
     return _string_list(task.get("dependencies"))
-
-
-def _task_can_run_in_parallel(task: Dict[str, Any]) -> bool:
-    """读取当前 DAG v3 任务的并行标记。"""
-
-    return bool(task.get("can_run_in_parallel", True))

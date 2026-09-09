@@ -99,8 +99,6 @@ deliverables
 requires_capabilities
 provides_capabilities
 impact_scope
-can_run_in_parallel
-parallel_reason
 status
 ```
 
@@ -222,12 +220,11 @@ Phase 0不作为独立交付阶段；其中的现状特征测试并入Phase 1的
 frontend.api_contract
 frontend.page_endpoint_usage
 frontend.static_data_contract
-backend.domain_mapping
+backend.objects_contract
 backend.repository_contract
 backend.application_service_contract
 backend.endpoint_contract
-backend.external_api_client_contract
-backend.external_api_mapping_contract
+backend.upstream_contract
 ```
 
 除此之外的业务检查类型，即使出现在上游正式产物中，当前也不得生成占位检查、
@@ -262,12 +259,11 @@ frontend.api_module
 frontend.static_data_module
 frontend.shared_capability
 
-backend.domain_mapping
+backend.objects
 backend.repository
 backend.application_service
 backend.endpoint_controller
-backend.external_api_client
-backend.external_api_mapping
+backend.upstream
 backend.bootstrap
 ```
 
@@ -464,7 +460,7 @@ typings、constants、hooks、utils 和可复用 components。以下属于工程
 
 | 交付物 | 业务输入 | 检查类型 | 验证重点 |
 | --- | --- | --- | --- |
-| `backend.domain_mapping` | EntityDesign字段、database bindings、API Schema | `backend.domain_mapping` | Entity/PO/DTO 字段与类型、表列映射、Converter/Assembler 转换 |
+| `backend.objects` | 当前 Endpoint 字段映射、database bindings、API Schema | `backend.objects_contract` | 同一 objects 任务内的 PO/Entity/DTO 字段与类型、表列映射、Converter 转换 |
 | `backend.repository` | EntityDesign database bindings、EndpointDetail operation semantics | `backend.repository_contract` | Mapper/Repository/RepositoryImpl 方法、selector、返回数量/分页结构、Mapper XML statement 与表列引用 |
 | `backend.application_service` | EndpointDetail operation semantics、API Schema | `backend.application_service_contract` | Service 方法、Repository 调用、Assembler/Converter、事务 |
 | `backend.endpoint_controller` | API Contract method/path/request/response、EndpointDetail status | `backend.endpoint_contract` | Spring Mapping、参数来源、DTO、状态码、ApplicationService 委托，禁止直访 Repository/Mapper |
@@ -479,8 +475,7 @@ Repository 检查不证明真实 SQL 结果，ApplicationService 检查不证明
 
 | 交付物 | 业务输入 | 检查类型 | 验证重点 |
 | --- | --- | --- | --- |
-| `backend.external_api_client` | EntityDesign `external_api_design.connection + operations[]` | `backend.external_api_client_contract` | 当前 Endpoint 关联操作的有效连接、上游 method/path、请求/响应 DTO、项目 HTTP Client；新建实现优先 OpenFeign，已有兼容 HTTP Client 可复用；相同 `operation_id` 复用 Client 方法，禁止凭空增加地址/字段或引入持久化代码 |
-| `backend.external_api_mapping` | EntityDesign `external_api_design.operations[].response_handling + field_mappings`、API Schema | `backend.external_api_mapping_contract` | `entity_payload=true` 操作的载荷路径及每个 source_field 到 entity_field 映射、嵌套路径、必要类型/枚举转换；非实体响应不虚构映射，映射责任不落入 Controller |
+| `backend.upstream` | 当前 Endpoint 关联的 external_api sourceFields 与 sourceSnapshot | `backend.upstream_contract` | 同一 upstream 任务内的传输 DTO、可选 Converter、method/path、Client、配置和错误适配；新建实现优先 OpenFeign，已有兼容 HTTP Client 可复用 |
 
 当前 Build 上下文的外部 API 实体摘要只包含 `mapping_count`，不足以生成字段级映射检查。
 BusinessAcceptanceCompiler 必须直接读取已确认 EntityDesign 的完整必需 `field_mappings` 切片并记录哈希；
@@ -838,12 +833,11 @@ curl -sS http://127.0.0.1:8000/health
 frontend.api_contract
 frontend.page_endpoint_usage
 frontend.static_data_contract
-backend.domain_mapping
+backend.objects_contract
 backend.repository_contract
 backend.application_service_contract
 backend.endpoint_contract
-backend.external_api_client_contract
-backend.external_api_mapping_contract
+backend.upstream_contract
 ```
 
 ### 新增文件
@@ -872,8 +866,8 @@ Backend/tests/test_business_acceptance_verifier.py
 `business_acceptance_verifier.py` 只负责注册、调度和汇总；各 kind 与语言解析能力拆分到独立模块，
 避免把九种规则堆入单个服务文件。
 
-同一任务中相同 deliverable kind 的兄弟交付物先聚合为一条业务检查。例如 Entity、PO、DTO、Converter、
-Assembler 的路径共同进入一条 `backend.domain_mapping` 检查，Repository 接口与 Mapper/XML 也共同进入一条
+同一任务中相同 deliverable kind 的兄弟交付物先聚合为一条业务检查。PO、Entity、DTO、Converter
+的路径共同进入一条 `backend.objects_contract` 检查，Repository 接口与 Mapper/XML 也共同进入一条
 `backend.repository_contract` 检查。检查仍以首个 deliverable ID 作为稳定锚点，但 `target_paths` 覆盖该 kind
 的完整交付物集合；不得要求任一单文件独立包含整条跨层契约。
 

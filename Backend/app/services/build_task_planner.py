@@ -407,7 +407,6 @@ def _normalize_agent_tasks(
         dependencies = _dedupe_normalized_strings(
             _string_list(item.get("dependencies"))
         )
-        can_parallel = bool(item.get("can_run_in_parallel", True))
         database_scope = _dict_value(item.get("database_scope"))
         allowed_paths = (
             _dedupe_normalized_strings(
@@ -462,11 +461,8 @@ def _normalize_agent_tasks(
                 "impact_scope": _impact_scope(
                     item.get("impact_scope"), description
                 ),
-                "can_run_in_parallel": can_parallel,
-                "parallel_reason": _text(
-                    item.get("parallel_reason"),
-                    "依赖满足且目标文件不冲突时可并行。",
-                ),
+                "can_run_in_parallel": True,
+                "parallel_reason": "并行性由平台根据依赖和目标文件冲突计算。",
                 "engineering_context": _dict_value(item.get("engineering_context")),
             }
         )
@@ -755,18 +751,11 @@ def _merge_source_ref_list(left: list[Any], right: list[Any]) -> list[Any]:
 
 
 def _raw_agent_tasks(agent_plan: dict[str, Any] | None) -> Any:
-    """兼容读取模型输出中的 tasks 或 dag.tasks 候选列表。"""
+    """读取当前模型输出中唯一允许的 tasks 候选列表。"""
 
     if not isinstance(agent_plan, dict):
         return None
-    if isinstance(agent_plan.get("tasks"), list):
-        return agent_plan["tasks"]
-    dag = agent_plan.get("dag")
-    if isinstance(dag, dict):
-        for key in ("tasks", "nodes"):
-            if isinstance(dag.get(key), list):
-                return dag[key]
-    return None
+    return agent_plan.get("tasks")
 
 
 def build_task_candidate_contract_errors(
@@ -774,14 +763,28 @@ def build_task_candidate_contract_errors(
 ) -> list[str]:
     """在归一化前校验模型任务的交付物结构，避免非法字段被静默丢弃。"""
 
+    errors: list[str] = []
+    if not isinstance(agent_plan, dict):
+        return ["Model output must be one JSON object with exactly the tasks key."]
+    unexpected_keys = sorted(str(key) for key in agent_plan if key != "tasks")
+    if unexpected_keys:
+        errors.append(
+            "Model output contains unsupported top-level keys: "
+            + ", ".join(unexpected_keys)
+            + "."
+        )
     raw_tasks = _raw_agent_tasks(agent_plan)
     if not isinstance(raw_tasks, list):
-        return []
-    errors: list[str] = []
+        return [*errors, "Model output tasks must be an array."]
     for task_index, task in enumerate(raw_tasks):
         if not isinstance(task, dict):
             continue
         task_id = _text(task.get("id"), f"tasks[{task_index}]")
+        for field in ("can_run_in_parallel", "parallel_reason"):
+            if field in task:
+                errors.append(
+                    f"Task {task_id} must not output platform-owned {field}."
+                )
         source_refs = task.get("source_refs")
         if isinstance(source_refs, dict) and "authorization" in source_refs:
             errors.append(
@@ -861,9 +864,6 @@ def _annotate_parallelism(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """为任务补齐并行元信息和执行批次。"""
 
-    requested_parallel = {
-        task["id"]: _task_can_run_in_parallel(task) for task in tasks
-    }
     annotated = annotate_task_execution(tasks)
     batches = build_execution_batches(annotated)
     parallel_by_task: dict[str, list[str]] = {}
@@ -876,10 +876,10 @@ def _annotate_parallelism(
     for task in annotated:
         task["can_run_in_parallel"] = _task_can_run_in_parallel(task)
         task["parallel_with"] = parallel_by_task.get(task["id"], [])
-        if not task["can_run_in_parallel"] and requested_parallel.get(task["id"]):
-            task["parallel_reason"] = str(
-                task.get("directWriteReason") or "调度器检测到文件或契约冲突，必须串行。"
-            )
+        task["parallel_reason"] = str(
+            task.get("directWriteReason")
+            or "平台根据依赖和目标文件冲突计算执行方式。"
+        )
     return annotated, batches
 
 
@@ -1496,11 +1496,7 @@ def create_build_task_plan(
             "validation": {"is_valid": True, "errors": []},
         },
         "execution_history": base_plan.get("execution_history") or [],
-        "workspace_analysis": (
-            _workspace_analysis((agent_plan or {}).get("workspace_analysis"))
-            if (agent_plan or {}).get("workspace_analysis")
-            else _workspace_analysis_from_snapshot(workspace_snapshot)
-        ),
+        "workspace_analysis": _workspace_analysis_from_snapshot(workspace_snapshot),
         "workspace_snapshot_ref": {
             "workspace_revision": (workspace_snapshot or {}).get("workspace_revision"),
             "schema_version": (workspace_snapshot or {}).get("schema_version"),

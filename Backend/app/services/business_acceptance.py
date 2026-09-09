@@ -19,24 +19,22 @@ BUSINESS_ACCEPTANCE_KINDS = (
     "frontend.api_contract",
     "frontend.page_endpoint_usage",
     "frontend.static_data_contract",
-    "backend.domain_mapping",
+    "backend.objects_contract",
     "backend.repository_contract",
     "backend.application_service_contract",
     "backend.endpoint_contract",
-    "backend.external_api_client_contract",
-    "backend.external_api_mapping_contract",
+    "backend.upstream_contract",
 )
 
 BUSINESS_VERIFIER_NAMES = {
     "frontend.api_contract": "frontend_api_contract",
     "frontend.page_endpoint_usage": "frontend_page_endpoint_usage",
     "frontend.static_data_contract": "frontend_static_data_contract",
-    "backend.domain_mapping": "backend_domain_mapping",
+    "backend.objects_contract": "backend_objects_contract",
     "backend.repository_contract": "backend_repository_contract",
     "backend.application_service_contract": "backend_application_service_contract",
     "backend.endpoint_contract": "backend_endpoint_contract",
-    "backend.external_api_client_contract": "backend_external_api_client_contract",
-    "backend.external_api_mapping_contract": "backend_external_api_mapping_contract",
+    "backend.upstream_contract": "backend_upstream_contract",
 }
 
 DELIVERABLE_KINDS = (
@@ -44,12 +42,11 @@ DELIVERABLE_KINDS = (
     "frontend.api_module",
     "frontend.static_data_module",
     "frontend.shared_capability",
-    "backend.domain_mapping",
+    "backend.objects",
     "backend.repository",
     "backend.application_service",
     "backend.endpoint_controller",
-    "backend.external_api_client",
-    "backend.external_api_mapping",
+    "backend.upstream",
     "backend.bootstrap",
 )
 
@@ -366,7 +363,7 @@ def _checks_for_deliverable(
                 },
             )
         ]
-    if kind == "backend.domain_mapping":
+    if kind == "backend.objects":
         entities = _selected_entities(formal)
         if not entities:
             return []
@@ -375,8 +372,8 @@ def _checks_for_deliverable(
             _business_check(
                 task,
                 deliverable,
-                "backend.domain_mapping",
-                "后端 Entity、PO、DTO 必须落实 Endpoint API 设计中的字段、实体语义引用和数据库列映射。",
+                "backend.objects_contract",
+                "后端 PO、Entity、DTO 与 Converter 必须落实字段、表列绑定和类型化转换链。",
                 [source for entity in entities for source in _entity_sources(formal, entity)]
                 + _api_sources(formal, endpoints),
                 {
@@ -441,7 +438,7 @@ def _checks_for_deliverable(
                 },
             )
         ]
-    if kind == "backend.external_api_client":
+    if kind == "backend.upstream":
         designs = _external_designs(formal)
         if not designs:
             return []
@@ -450,29 +447,8 @@ def _checks_for_deliverable(
             _business_check(
                 task,
                 deliverable,
-                "backend.external_api_client_contract",
-                "外部 API Client 必须使用已确认上游 method/path 和请求/响应 DTO；新建实现优先 OpenFeign，已有兼容 HTTP Client 可复用。",
-                [source for entity in designs for source in _entity_sources(formal, entity)],
-                {
-                    "external_apis": [
-                        expectation
-                        for entity in designs
-                        for expectation in _external_api_expectations(entity, endpoints)
-                    ]
-                },
-            )
-        ]
-    if kind == "backend.external_api_mapping":
-        designs = _external_designs(formal)
-        if not designs:
-            return []
-        endpoints = _endpoint_expectations(formal)
-        return [
-            _business_check(
-                task,
-                deliverable,
-                "backend.external_api_mapping_contract",
-                "外部 API 字段必须按 Endpoint API 设计映射到内部 API 字段和局部实体语义。",
+                "backend.upstream_contract",
+                "Upstream 必须实现已确认的传输对象、可选 Converter、Client、配置和错误适配。",
                 [source for entity in designs for source in _entity_sources(formal, entity)]
                 + _api_sources(formal, endpoints),
                 {
@@ -480,8 +456,7 @@ def _checks_for_deliverable(
                         expectation
                         for entity in designs
                         for expectation in _external_api_expectations(entity, endpoints)
-                    ],
-                    "endpoints": endpoints,
+                    ]
                 },
             )
         ]
@@ -986,6 +961,7 @@ def _external_api_expectations(
                 "field_mappings": [
                     {
                         "entity_field": _text(mapping.get("entity_field")),
+                        "endpoint_field": _text(mapping.get("endpoint_field")),
                         "source_field": _text(mapping.get("source_field")),
                         "rule": _text(mapping.get("rule")),
                     }
@@ -1088,12 +1064,11 @@ def _expected_field_errors(check_id: str, kind: str, value: Any) -> list[str]:
         "frontend.api_contract": ("endpoints",),
         "frontend.page_endpoint_usage": ("required_endpoint_ids",),
         "frontend.static_data_contract": ("entity", "endpoints", "operations"),
-        "backend.domain_mapping": ("entities", "endpoints"),
+        "backend.objects_contract": ("entities", "endpoints"),
         "backend.repository_contract": ("entities", "operations"),
         "backend.application_service_contract": ("operations",),
         "backend.endpoint_contract": ("endpoints",),
-        "backend.external_api_client_contract": ("external_apis",),
-        "backend.external_api_mapping_contract": ("external_apis",),
+        "backend.upstream_contract": ("external_apis",),
     }.get(kind, ())
     return [
         f"Business check {check_id or '<unknown>'} expected is missing {field}."

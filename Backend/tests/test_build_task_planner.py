@@ -312,8 +312,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         positions = [prompt.index(heading) for heading in headings]
         self.assertEqual(positions, sorted(positions))
         self.assertTrue(all(prompt.count(heading) == 1 for heading in headings))
-        self.assertIn("exactly two top-level keys", prompt)
-        self.assertIn("`workspace_analysis` and `tasks`", prompt)
+        self.assertIn("exactly one top-level key: `tasks`", prompt)
         self.assertIn("do not return `dag`", prompt)
         self.assertNotIn("source_refs.entity_ids", prompt)
 
@@ -350,8 +349,10 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         self.assertIn("`backend:bootstrap::bootstrap`", prompt)
         self.assertIn("`<endpointUnitId>::endpoint::<stage>`", prompt)
-        self.assertIn("`objects`, `service`, and `controller`", prompt)
-        self.assertIn("add `repository`", prompt)
+        self.assertIn("Emit exactly four tasks: `objects -> repository -> service -> controller`", prompt)
+        self.assertIn("one `backend.objects` deliverable", prompt)
+        self.assertIn("Mapper is not a separate pipeline stage", prompt)
+        self.assertNotIn("OpenFeign", prompt)
         self.assertIn("ProductCategory becomes productCategory", prompt)
         self.assertIn("Never invent semantic names", prompt)
         self.assertIn("Existing files do not remove a required stage", prompt)
@@ -773,7 +774,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             self.assertNotIn(omitted_key, prompt_context)
         self.assertEqual(prompt.count("UNIQUE_ENDPOINT_LOGIC"), 1)
         self.assertEqual(prompt.count("UNIQUE_ENTITY_FIELD"), 1)
-        self.assertEqual(prompt.count("owner=database"), 1)
+        self.assertNotIn("owner=database", prompt)
         self.assertNotIn('"application_skeleton"', prompt)
 
     def test_endpoint_projection_includes_confirmed_api_design(self) -> None:
@@ -905,7 +906,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         read_skill.assert_not_called()
         self.assertNotIn("Skill", prompt)
         self.assertNotIn("SKILL.md", prompt)
-        self.assertIn("add `upstream` plus `mapping`", prompt)
+        self.assertIn("`objects -> upstream -> service -> controller`", prompt)
+        self.assertIn("one `backend.upstream` deliverable", prompt)
         self.assertIn("external_api", prompt)
         self.assertIn("apiContractId + endpointId", prompt)
         self.assertIn("details.operation and details.connection", prompt)
@@ -919,7 +921,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("requestStructure, responseStructure", prompt)
         self.assertIn("never exposes the upstream path", prompt)
         self.assertIn("For every owner=backend task", prompt)
-        self.assertIn("database, and external_api tasks", prompt)
+        self.assertNotIn("database, and external_api tasks", prompt)
         self.assertNotIn("DATABASE BOOTSTRAP TASK IS REQUIRED", prompt)
 
     def test_external_api_task_prompt_carries_product_operation_structure_without_samples(self) -> None:
@@ -1102,9 +1104,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
         read_skill.assert_not_called()
         self.assertNotIn("Skill", prompt)
         self.assertNotIn("SKILL.md", prompt)
-        self.assertIn("`objects`, `service`, and `controller`", prompt)
-        self.assertIn("add `repository`", prompt)
-        self.assertIn("add `upstream` plus `mapping`", prompt)
+        self.assertIn("database branch is `objects -> repository`", prompt)
+        self.assertIn("external branch is `objects -> upstream`", prompt)
+        self.assertIn("service depends on repository and upstream", prompt)
         self.assertIn("different sources", prompt)
 
     def test_legacy_static_entity_binding_does_not_drive_endpoint_prompt(self) -> None:
@@ -1341,7 +1343,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
     def test_main_agent_json_is_consumed_by_task_planner(self) -> None:
         response = """```json
         {
-          "workspace_analysis": {"entry_files": ["src/main.tsx"]},
           "tasks": [{
             "id": "task-home",
             "unit_id": "page:home",
@@ -1373,7 +1374,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         tasks = tasks_from_build_task_plan(plan)
         self.assertEqual(tasks[0]["id"], "task-home")
         self.assertEqual(tasks[0]["target_files"], ["src/pages/Home/index.tsx"])
-        self.assertEqual(plan["workspace_analysis"]["inspection_status"], "completed")
+        self.assertEqual(plan["workspace_analysis"]["inspection_status"], "incomplete")
         self.assertEqual(plan["prepared_by"]["model"], "test-model")
 
     def test_malformed_deliverable_is_regenerated_with_precise_feedback(self) -> None:
@@ -2992,7 +2993,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "deliverables": [
                 {
                     "id": "domain:order",
-                    "kind": "backend.domain_mapping",
+                    "kind": "backend.objects",
                     "target_id": "Order",
                     "paths": ["backend/src/main/java/demo/Order.java"],
                     "provides": ["order.domain"],
@@ -3188,12 +3189,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
     def test_uses_workspace_aware_agent_tasks_with_detailed_contract(self) -> None:
         project_plan = {"version": "1.0.0", "page_detail_plans": [], "data_sources": []}
         agent_plan = {
-            "workspace_analysis": {
-                "stack": ["React", "TypeScript"],
-                "inspected_directories": ["src/pages", "src/router"],
-                "entry_files": ["src/router/index.ts"],
-                "conventions": ["页面使用 PascalCase 文件名"],
-            },
             "tasks": [
                 {
                     "id": "page-login",
@@ -3212,8 +3207,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "public_contracts": [],
                         "risks": ["未登录跳转可能形成循环"],
                     },
-                    "can_run_in_parallel": False,
-                    "parallel_reason": "修改共享路由表，需要串行。",
                     "deliverables": [
                         {
                             "id": "page:login",
@@ -3228,7 +3221,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
             ],
         }
 
-        plan = create_build_task_plan(project_plan, agent_plan=agent_plan)
+        plan = create_build_task_plan(
+            project_plan,
+            agent_plan=agent_plan,
+            workspace_snapshot={
+                "entrypoints": [{"path": "src/router/index.ts"}],
+                "project_roots": [{"path": "src"}],
+                "tech_stack": ["React", "TypeScript"],
+            },
+        )
         task = tasks_from_build_task_plan(plan)[0]
 
         self.assertEqual(plan["version"], "3.0.0")
@@ -3246,7 +3247,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(task["target_files"], ["src/pages/Login/index.tsx", "src/router/index.ts"])
         self.assertEqual(task["change_scope"][0]["operation"], "add")
         self.assertEqual(task["impact_scope"]["affected_modules"], ["pages", "router"])
-        self.assertFalse(task["can_run_in_parallel"])
+        self.assertTrue(task["can_run_in_parallel"])
         self.assertNotIn("acceptance_criteria", task)
         self.assertEqual(
             [check["kind"] for check in task["acceptance_checks"]],
