@@ -11,7 +11,7 @@ from app.services.business_acceptance import (
     business_acceptance_contract_errors,
     compile_business_acceptance,
     compile_repair_business_acceptance,
-    _entities_from_endpoint_designs,
+    _technical_plan_entity_details,
     _external_designs,
     _external_operations_from_field_mappings,
 )
@@ -27,6 +27,7 @@ def _formal_context() -> dict:
             "api_contracts": [
                 {
                     "id": "orders-api",
+                    "entity_ids": ["Order"],
                     "schemas": {
                         "OrderRequest": {
                             "type": "object",
@@ -48,6 +49,16 @@ def _formal_context() -> dict:
                             "response_schema_ref": "#/schemas/OrderResponse",
                             "parameters": [],
                         }
+                    ],
+                }
+            ],
+            "entities": [
+                {
+                    "id": "Order",
+                    "name": "Order",
+                    "fields": [
+                        {"name": "id", "type": "string", "required": True},
+                        {"name": "status", "type": "string", "required": True},
                     ],
                 }
             ],
@@ -166,7 +177,7 @@ def _endpoint_api_design() -> dict:
     api_id = {"side": "response", "location": "response_body", "path": "items[].id", "type": "string", "required": True, "description": ""}
     api_status = {"side": "response", "location": "response_body", "path": "items[].status", "type": "string", "required": True, "description": ""}
     return {
-        "schemaVersion": "endpoint-field-mapping.v1",
+        "schemaVersion": "endpoint-field-mapping.v3",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -178,16 +189,9 @@ def _endpoint_api_design() -> dict:
             "path": "/orders",
             "successStatusCode": 200,
         },
-        "sceneEntities": [{
-            "id": "scene:Order", "name": "订单", "templateEntityId": "Order",
-            "fields": [
-                {"id": "id", "name": "id", "type": "string", "required": True},
-                {"id": "status", "name": "status", "type": "string", "required": True},
-            ],
-        }],
         "fieldMappings": [
-            {"endpointField": api_id, "mappingType": "through_entity", "entityField": {"entityId": "scene:Order", "fieldId": "id", "path": "id", "type": "string"}, "sourceField": {"sourceType": "database", "sourceId": "orders-db", "schema": "app", "table": "orders", "column": "order_id", "type": "string", "usage": "read", "description": ""}},
-            {"endpointField": api_status, "mappingType": "through_entity", "entityField": {"entityId": "scene:Order", "fieldId": "status", "path": "status", "type": "string"}, "sourceField": {"sourceType": "external_api", "sourceId": "orders-upstream", "directoryId": "orders-directory", "operationId": "order-list", "section": "response_body", "path": "data.state.value", "type": "string", "description": ""}},
+            {"endpointField": api_id, "mappingType": "source_mapping", "processingType": "direct", "sourceFields": [{"sourceType": "database", "sourceId": "orders-db", "schema": "app", "table": "orders", "column": "order_id", "type": "string", "usage": "read", "description": ""}]},
+            {"endpointField": api_status, "mappingType": "source_mapping", "processingType": "direct", "sourceFields": [{"sourceType": "external_api", "sourceId": "orders-upstream", "directoryId": "orders-directory", "operationId": "order-list", "section": "response_body", "path": "data.state.value", "type": "string", "description": ""}]},
         ],
         "sourceSnapshots": [
             {
@@ -265,22 +269,22 @@ def _task(kind: str, *, path: str, owner: str, unit_id: str, target_id: str = ""
 class BusinessAcceptanceCompilationTests(unittest.TestCase):
     """验证业务验收从 fieldMappings 派生，不再依赖图节点或边。"""
 
-    def test_mixed_endpoint_sources_are_projected_per_scene_field(self) -> None:
-        """混合数据库与外部 API 来源时，每个场景字段只保留自身映射来源。"""
+    def test_technical_plan_entities_are_projected_without_endpoint_sources(self) -> None:
+        """TechnicalPlan 实体语义投影不再从 Endpoint 物理映射反推来源。"""
 
         task = _task("backend.domain_mapping", path="backend/src/domain/Order.java", owner="backend", unit_id="backend:orders", target_id="Order")
         compiled = compile_business_acceptance([task], _formal_context())[0]
         fields = compiled["business_acceptance_checks"][0]["expected"]["entities"][0]["fields"]
-        self.assertEqual({item["name"]: item["source_types"] for item in fields}, {"id": ["database"], "status": ["external_api"]})
+        self.assertEqual({item["name"]: item["source_types"] for item in fields}, {"id": [], "status": []})
 
     def test_external_operations_are_derived_from_self_contained_rows(self) -> None:
         """外部 Operation 仅由字段行中嵌入的 sourceField 聚合。"""
 
         design = _endpoint_api_design()
-        mappings = [row for row in design["fieldMappings"] if row["sourceField"]["sourceType"] == "external_api"]
-        operations = _external_operations_from_field_mappings(design, mappings, "orders-api", "orders.list", entity_payload=True)
+        mappings = [row for row in design["fieldMappings"] if row["sourceFields"][0]["sourceType"] == "external_api"]
+        operations = _external_operations_from_field_mappings(design, mappings, "orders-api", "orders.list", entity_payload=False)
         self.assertEqual([item["operation_id"] for item in operations], ["order-list"])
-        self.assertEqual(operations[0]["field_mappings"][0]["entity_field"], "status")
+        self.assertEqual(operations[0]["field_mappings"][0]["endpoint_field"], "items[].status")
 
     def test_business_description_is_projected(self) -> None:
         """业务说明映射进入独立验收期望。"""
@@ -291,8 +295,12 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
             "mappingType": "business_description",
             "businessDescription": "分页页码",
         })
-        entities = _entities_from_endpoint_designs([design])
-        self.assertEqual(entities[0]["entity_id"], "scene:Order")
+        entities = _technical_plan_entity_details(
+            _formal_context()["project_plan"],
+            {"entity_ids": ["Order"]},
+            [design],
+        )
+        self.assertEqual(entities[0]["entity_id"], "Order")
         formal = {"endpoint_designs": [design], "entity_details": entities}
         self.assertIn("分页页码", str(formal["endpoint_designs"][0]["fieldMappings"]))
 
@@ -302,7 +310,14 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
         design = _endpoint_api_design()
         design["nodes"] = []
         design["mappings"] = []
-        self.assertEqual(_entities_from_endpoint_designs([design])[0]["fields"][0]["source_types"], ["database"])
+        self.assertEqual(
+            _technical_plan_entity_details(
+                _formal_context()["project_plan"],
+                {"entity_ids": ["Order"]},
+                [design],
+            )[0]["fields"][0]["source_types"],
+            [],
+        )
 
     def test_target_page_key_requires_entry_in_all_page_task_path_fields(self) -> None:
         """目标页构建必须用 page_key 的入口并在三类路径声明中保持一致。"""
@@ -363,8 +378,8 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
         actual = {check["kind"] for task in compiled for check in task["business_acceptance_checks"]}
         self.assertEqual(actual, set(BUSINESS_ACCEPTANCE_KINDS) - {"frontend.static_data_contract"})
 
-    def test_task_uses_endpoint_design_instead_of_global_entity_details(self) -> None:
-        """后端任务只追溯 Endpoint API 设计，不继承全局实体设计。"""
+    def test_task_keeps_global_entity_semantics_separate_from_endpoint_sources(self) -> None:
+        """后端任务保留 TechnicalPlan 实体语义，并通过 API Contract 追溯接口来源。"""
 
         context = _formal_context()
         context["entity_ids"] = ["Order", "Customer"]
@@ -401,7 +416,15 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
                 for source in check["sources"]
                 if source["artifact"] == "api_design"
             }
-            self.assertEqual(api_design_source_ids, {"orders.list"})
+            expected_api_design_sources = {"orders.list"} if task["deliverables"][0]["kind"] == "backend.repository" else set()
+            self.assertEqual(api_design_source_ids, expected_api_design_sources)
+            api_contract_source_ids = {
+                source["target_id"]
+                for check in task["business_acceptance_checks"]
+                for source in check["sources"]
+                if source["artifact"] == "api_contract"
+            }
+            self.assertEqual(api_contract_source_ids, {"orders.list"})
             self.assertFalse(
                 any(
                     source["artifact"] == "entity_design"

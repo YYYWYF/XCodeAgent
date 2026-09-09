@@ -3,7 +3,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 
 export const PRODUCT_PLAN_SCHEMA_VERSION = 'product-plan.v5'
-export const ENDPOINT_API_DESIGN_SCHEMA_VERSION = 'endpoint-field-mapping.v1'
+export const ENDPOINT_API_DESIGN_SCHEMA_VERSION = 'endpoint-field-mapping.v3'
 
 /** 把 endpoint 业务标识转换为与规划产物约定一致的安全文件名。 */
 function endpointDocumentStem(apiContractId: string, endpointId: string): string {
@@ -49,56 +49,7 @@ export type EndpointDesignDocumentStatus = {
   reason: string
 }
 
-/** 校验正式产物中的场景实体是否完整匹配当前 Contract 的 TechnicalPlan 模板。 */
-function endpointSceneEntitiesMatchTechnicalPlan(
-  design: Record<string, unknown>,
-  technicalPlan: Record<string, unknown>,
-  apiContractId: string
-): boolean {
-  const entities = Array.isArray(design.sceneEntities) ? design.sceneEntities : []
-  if (entities.length === 0) return true
-  const contract = (Array.isArray(technicalPlan.api_contracts) ? technicalPlan.api_contracts : [])
-    .find((item): item is Record<string, unknown> =>
-      Boolean(item && typeof item === 'object' && String(item.id || '') === apiContractId)
-    )
-  if (!contract) return false
-  const templateIds = new Set(
-    (Array.isArray(contract.entity_ids) ? contract.entity_ids : []).map(String)
-  )
-  const templates = new Map(
-    (Array.isArray(technicalPlan.entities) ? technicalPlan.entities : [])
-      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-      .map((item) => [String(item.id || ''), item])
-  )
-  const usedTemplateIds = new Set<string>()
-  return entities.every((item) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return false
-    const entity = item as Record<string, unknown>
-    const templateId = String(entity.templateEntityId || '')
-    const template = templates.get(templateId)
-    if (!template || !templateIds.has(templateId) || usedTemplateIds.has(templateId)) return false
-    usedTemplateIds.add(templateId)
-    const normalizeFields = (value: unknown): Array<Record<string, unknown>> =>
-      (Array.isArray(value) ? value : []).map((field) => {
-        const source = field && typeof field === 'object' && !Array.isArray(field)
-          ? field as Record<string, unknown>
-          : {}
-        const name = String(source.name || source.path || '')
-        return {
-          name,
-          label: String(source.label || name),
-          type: String(source.type || 'unknown'),
-          required: Boolean(source.required),
-          description: String(source.description || '')
-        }
-      })
-    return String(entity.name || '') === String(template.name || templateId) &&
-      String(entity.description || '') === String(template.description || '') &&
-      JSON.stringify(normalizeFields(entity.fields)) === JSON.stringify(normalizeFields(template.fields))
-  })
-}
-
-/** 校验当前版映射中的一句话业务说明，避免手工残缺产物误判为已确认。 */
+/** 校验当前版映射中的来源和多行业务处理，避免手工残缺产物误判为已确认。 */
 function endpointFieldMappingsMatchCurrentContract(design: Record<string, unknown>): boolean {
   /** 把未知输入收敛为普通对象。 */
   const record = (value: unknown): Record<string, unknown> | null =>
@@ -106,13 +57,8 @@ function endpointFieldMappingsMatchCurrentContract(design: Record<string, unknow
       ? value as Record<string, unknown>
       : null
 
-  const entities = new Map(
-    (Array.isArray(design.sceneEntities) ? design.sceneEntities : [])
-      .map(record)
-      .filter((item): item is Record<string, unknown> => Boolean(item))
-      .map((entity) => [String(entity.id || ''), entity])
-  )
   const mappings = Array.isArray(design.fieldMappings) ? design.fieldMappings : []
+  if (mappings.length === 0) return false
   const keys = new Set<string>()
   for (const item of mappings) {
     const mapping = record(item)
@@ -127,31 +73,42 @@ function endpointFieldMappingsMatchCurrentContract(design: Record<string, unknow
     if (keys.has(key)) return false
     keys.add(key)
     const mappingType = String(mapping.mappingType || '')
-    if (mappingType === 'unconfigured') {
-      if (endpoint.required === true) return false
-      continue
-    }
+    if (mappingType === 'unconfigured') return false
     if (mappingType === 'business_description') {
-      if (!String(mapping.businessDescription || '').trim()) return false
+      if (typeof mapping.businessDescription !== 'string' || !mapping.businessDescription.trim() || mapping.businessDescription.length > 2000) return false
+      if ('sourceFields' in mapping || 'processingType' in mapping) return false
       continue
     }
-    const sourceField = record(mapping.sourceField)
-    if (mappingType === 'direct_source' && !sourceField) return false
-    if (mappingType === 'through_entity') {
-      const entityField = record(mapping.entityField)
-      const entity = entities.get(String(entityField?.entityId || ''))
-      const fields = Array.isArray(entity?.fields) ? entity.fields.map(record) : []
-      if (!entityField || !fields.some((field) =>
-        field &&
-        String(field.id || '') === String(entityField.fieldId || '') &&
-        String(field.name || '') === String(entityField.path || '') &&
-        String(field.type || 'unknown') === String(entityField.type || 'unknown')
-      )) return false
-    } else if (mappingType !== 'direct_source') {
-      return false
-    }
-    if (sourceField && !['database', 'external_api'].includes(String(sourceField.sourceType || ''))) {
-      return false
+    if (mappingType !== 'source_mapping') return false
+    if ('sourceField' in mapping) return false
+    const sources = Array.isArray(mapping.sourceFields) ? mapping.sourceFields : []
+    const processing = mapping.processingType
+    if (!['direct', 'single_field_description', 'multi_field_description'].includes(String(processing))) return false
+    if (sources.length > 100 || (processing === 'multi_field_description' ? sources.length < 2 : sources.length !== 1)) return false
+    if (processing === 'direct') {
+      if ('businessDescription' in mapping) return false
+    } else if (typeof mapping.businessDescription !== 'string' || !mapping.businessDescription.trim() || mapping.businessDescription.length > 2000) return false
+    const sourceKeys = new Set<string>()
+    for (const rawSource of sources) {
+      const sourceField = record(rawSource)
+      if (!sourceField || !['database', 'external_api'].includes(String(sourceField.sourceType || ''))) return false
+      const fields = sourceField.sourceType === 'database' ? ['sourceType', 'sourceId', 'schema', 'table', 'column', 'usage'] : ['sourceType', 'sourceId', 'directoryId', 'operationId', 'section', 'path']
+      const sourceKey = JSON.stringify(fields.map((field) => sourceField[field]))
+      if (sourceKeys.has(sourceKey)) return false
+      sourceKeys.add(sourceKey)
+      if (sourceField.sourceType === 'database') {
+        if (!String(sourceField.sourceId || '') || !String(sourceField.schema || '') ||
+          !String(sourceField.table || '') || !String(sourceField.column || '')) return false
+        const usage = String(sourceField.usage || '')
+        if (endpoint.side === 'request' && !['filter', 'write'].includes(usage)) return false
+        if (endpoint.side === 'response' && usage !== 'read') return false
+      } else {
+        if (!String(sourceField.sourceId || '') || !String(sourceField.directoryId || '') ||
+          !String(sourceField.operationId || '') || !String(sourceField.section || '') ||
+          !String(sourceField.path || '')) return false
+        if (endpoint.side === 'request' && sourceField.section === 'response_body') return false
+        if (endpoint.side === 'response' && sourceField.section !== 'response_body') return false
+      }
     }
   }
   return true
@@ -197,7 +154,6 @@ export async function endpointDesignDocumentStatus(
     }
     const markdownRevision = markdown.match(/xcodeagent-artifact-revision:\s*([0-9a-f]{32})/)?.[1] || ''
     const design = JSON.parse(jsonText) as Record<string, unknown>
-    const technicalPlanObject = JSON.parse(technicalPlan.toString('utf8')) as Record<string, unknown>
     const basedOn = Array.isArray(design.basedOn)
       ? design.basedOn.filter((item): item is Record<string, unknown> =>
           Boolean(item && typeof item === 'object')
@@ -207,11 +163,6 @@ export async function endpointDesignDocumentStatus(
       (item) => item.artifactKey === 'technical-plan'
     )
     const technicalSha256 = createHash('sha256').update(technicalPlan).digest('hex')
-    const sceneEntitiesValid = endpointSceneEntitiesMatchTechnicalPlan(
-      design,
-      technicalPlanObject,
-      apiContractId
-    )
     const mappingsValid = endpointFieldMappingsMatchCurrentContract(design)
     // Endpoint 实现描述是可选指导；只有存在时才校验文本类型和长度。
     const implementationDescription = design.implementationDescription
@@ -232,19 +183,11 @@ export async function endpointDesignDocumentStatus(
       typeof design.confirmedAt === 'string' &&
       !('nodes' in design) &&
       !('mappings' in design) &&
-      Array.isArray(design.sceneEntities) &&
+      !('sceneEntities' in design) &&
       Array.isArray(design.fieldMappings) &&
       implementationDescriptionValid &&
-      sceneEntitiesValid &&
       mappingsValid &&
       technicalReference?.sha256 === technicalSha256
-    if (!sceneEntitiesValid) {
-      return {
-        designed: false,
-        status: 'stale',
-        reason: '场景实体已不符合当前 TechnicalPlan 模板，请重新设计 API。'
-      }
-    }
     return valid
       ? { designed: true, status: 'confirmed', reason: '' }
       : {

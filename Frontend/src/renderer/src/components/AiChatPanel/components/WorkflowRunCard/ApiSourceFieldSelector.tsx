@@ -39,8 +39,6 @@ const { Text } = Typography
 
 type Props = {
   endpoint: WorkflowApiField
-  mode: 'direct_source' | 'through_entity'
-  businessRole?: 'input' | 'output'
   payload: WorkflowApiDesignPayload
   draft: WorkflowApiDesignDraft
   disabled?: boolean
@@ -53,7 +51,7 @@ type Props = {
 
 /** 在字段表格中提供直属 MySQL 与外部 Operation 的级联来源选择。 */
 export default function ApiSourceFieldSelector({
-  endpoint, mode, businessRole, payload, disabled, selectedSourceNode, metadataRequest, onLoad, onSelect, onClear
+  endpoint, payload, disabled, selectedSourceNode, metadataRequest, onLoad, onSelect, onClear
 }: Props): ReactElement {
   const resolvedSelectedSourceNode = selectedSourceNode
   const [state, setState] = useState(() => createApiSourceSelectorState(endpoint, resolvedSelectedSourceNode))
@@ -71,10 +69,10 @@ export default function ApiSourceFieldSelector({
   const external = payload.externalOperation
   const externalFields = external?.sourceId === sourceId && external.directoryId === directoryId
     && String(external.operation?.id || '') === operationId
-    ? filterExternalFields(external.fields || [], businessRole ? `business_${businessRole}` : endpoint.side as ApiExternalFieldDirection)
+    ? filterExternalFields(external.fields || [], endpoint.side as ApiExternalFieldDirection)
     : []
 
-  const direction: ApiExternalFieldDirection = businessRole ? `business_${businessRole}` : endpoint.side
+  const direction: ApiExternalFieldDirection = endpoint.side
   const externalFieldGroups = external?.sourceId === sourceId && external.directoryId === directoryId
     && String(external.operation?.id || '') === operationId
     ? groupExternalFields(external.fields || [], direction)
@@ -116,19 +114,8 @@ export default function ApiSourceFieldSelector({
     }
   }, [onLoad, payload.databaseMetadata, resolvedSelectedSourceNode, sourceId, sources, table])
 
-  /** 根据当前规则角色恢复数据库字段用途，避免业务规则输入写入数据库。 */
-  const resolveSelectorUsage = (requested?: WorkflowApiDatabaseFieldNode['usage']): WorkflowApiDatabaseFieldNode['usage'] => {
-    if (businessRole === 'input') return 'read'
-    if (businessRole === 'output') return requested === 'write' ? 'write' : 'filter'
-    return resolveDatabaseUsage(endpoint, requested)
-  }
-
   /** 返回当前选择器允许的数据库用途。 */
-  const selectorUsages = businessRole === 'input'
-    ? ['read' as const]
-    : businessRole === 'output'
-      ? ['filter' as const, 'write' as const]
-      : allowedDatabaseUsages(endpoint)
+  const selectorUsages = allowedDatabaseUsages(endpoint)
 
   /** 选择来源后重置旧级联状态，并按来源类型自动加载第一层元数据。 */
   const handleSourceChange = (nextSourceId: string | undefined): void => {
@@ -155,11 +142,11 @@ export default function ApiSourceFieldSelector({
     setState((current) => ({ ...current, column: nextColumn }))
     const metadata = columns.find((item) => item.name === nextColumn)
     if (!metadata || !sourceId || !table) return
-    const nextUsage = resolveSelectorUsage(usage)
+    const nextUsage = resolveDatabaseUsage(endpoint, usage)
     onSelect({
       nodeType: 'source_field', sourceType: 'database',
       id: databaseSourceFieldId({
-        nodeType: 'source_field', sourceType: 'database', sourceId,
+        sourceType: 'database', sourceId,
         schema: String(database?.schema || ''), table, column: nextColumn,
         type: metadata.type, usage: nextUsage
       }),
@@ -177,7 +164,7 @@ export default function ApiSourceFieldSelector({
     onSelect({
       nodeType: 'source_field', sourceType: 'database',
       id: databaseSourceFieldId({
-        nodeType: 'source_field', sourceType: 'database', sourceId,
+        sourceType: 'database', sourceId,
         schema: String(database?.schema || ''), table, column,
         type: metadata.type, usage: nextUsage
       }),
@@ -228,10 +215,10 @@ export default function ApiSourceFieldSelector({
   }
 
   /** 渲染数据源级联中的统一字段标题，确保不同来源模式保持一致层级。 */
-  const renderSourceFieldLabel = (label: string, required = false): ReactElement => (
+  const renderSourceFieldLabel = (label: string): ReactElement => (
     <Tooltip title={label}>
-      <Text className="api-design-source-field-label" strong={required} title={label}>
-        {required ? <span className="api-design-required-mark">*</span> : null}{label}
+      <Text className="api-design-source-field-label" title={label}>
+        {label}
       </Text>
     </Tooltip>
   )
@@ -240,8 +227,8 @@ export default function ApiSourceFieldSelector({
     return <div className="api-design-source-selector">
       <div className="api-design-source-grid">
         <div className="api-design-source-field api-design-source-field-full">
-          {renderSourceFieldLabel('数据源', mode === 'direct_source')}
-          <Select {...sourceSelectProps} placeholder={mode !== 'direct_source' ? '可选：选择数据源' : '选择数据源'} />
+          {renderSourceFieldLabel('数据源')}
+          <Select {...sourceSelectProps} placeholder="选择数据源" />
         </div>
       </div>
       <Typography.Text type="secondary">请选择数据源。</Typography.Text>
@@ -251,8 +238,8 @@ export default function ApiSourceFieldSelector({
     return <div className="api-design-source-selector">
       <div className="api-design-source-grid">
         <div className="api-design-source-field api-design-source-field-full">
-          {renderSourceFieldLabel('数据源', mode === 'direct_source')}
-          <Select {...sourceSelectProps} placeholder={mode !== 'direct_source' ? '可选：选择数据源' : '选择数据源'} />
+          {renderSourceFieldLabel('数据源')}
+          <Select {...sourceSelectProps} placeholder="选择数据源" />
         </div>
       </div>
       <div className="api-design-source-status">
@@ -264,11 +251,11 @@ export default function ApiSourceFieldSelector({
     return <div className="api-design-source-selector">
       <div className="api-design-source-grid api-design-source-grid-database">
         <div className="api-design-source-field api-design-source-field-full">
-          {renderSourceFieldLabel('数据源', mode === 'direct_source')}
-          <Select {...sourceSelectProps} placeholder={mode !== 'direct_source' ? '可选：选择数据源' : '选择数据源'} />
+          {renderSourceFieldLabel('数据源')}
+          <Select {...sourceSelectProps} placeholder="选择数据源" />
         </div>
         <div className="api-design-source-field">
-          {renderSourceFieldLabel('数据表', mode === 'direct_source')}
+          {renderSourceFieldLabel('数据表')}
           <Select
             className="api-design-source-select"
             disabled={disabled || tablesLoading || !tables.length}
@@ -286,7 +273,7 @@ export default function ApiSourceFieldSelector({
           />
         </div>
         <div className="api-design-source-field">
-          {renderSourceFieldLabel('数据字段', mode === 'direct_source')}
+          {renderSourceFieldLabel('数据字段')}
           <Select
             allowClear
             className="api-design-source-select"
@@ -326,11 +313,11 @@ export default function ApiSourceFieldSelector({
   return <div className="api-design-source-selector">
     <div className="api-design-source-grid api-design-source-grid-external">
       <div className="api-design-source-field api-design-source-field-full">
-        {renderSourceFieldLabel('数据源', mode === 'direct_source')}
-        <Select {...sourceSelectProps} placeholder={mode !== 'direct_source' ? '可选：选择数据源' : '选择数据源'} />
+        {renderSourceFieldLabel('数据源')}
+        <Select {...sourceSelectProps} placeholder="选择数据源" />
       </div>
       <div className="api-design-source-field">
-        {renderSourceFieldLabel('数据目录', mode === 'direct_source')}
+        {renderSourceFieldLabel('数据目录')}
         <Select
           className="api-design-source-select"
           disabled={disabled || !directories.length}
@@ -346,7 +333,7 @@ export default function ApiSourceFieldSelector({
         />
       </div>
       <div className="api-design-source-field">
-        {renderSourceFieldLabel('Operation', mode === 'direct_source')}
+        {renderSourceFieldLabel('Operation')}
         <Select
           className="api-design-source-select"
           disabled={disabled || !operations.length}
@@ -362,7 +349,7 @@ export default function ApiSourceFieldSelector({
         />
       </div>
       <div className="api-design-source-field api-design-source-field-full">
-        {renderSourceFieldLabel('Operation 字段', mode === 'direct_source')}
+        {renderSourceFieldLabel('Operation 字段')}
         <Select
           allowClear
           className="api-design-source-select"

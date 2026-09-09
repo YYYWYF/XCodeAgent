@@ -8,7 +8,6 @@ from typing import Any
 
 from app.services.api_design import (
     api_design_business_descriptions,
-    api_design_entity_ids,
     api_design_mapping_flows,
     api_design_source_types,
     load_confirmed_endpoint_designs,
@@ -117,7 +116,7 @@ def _page_context(
         project_plan,
         endpoint_ids,
     )
-    entity_ids = api_design_entity_ids(endpoint_designs)
+    entity_ids = _technical_plan_entity_ids(project_plan, endpoint_ids)
     source_types = api_design_source_types(endpoint_designs)
     mapping_flows = api_design_mapping_flows(endpoint_designs)
     business_descriptions = api_design_business_descriptions(endpoint_designs)
@@ -203,7 +202,11 @@ def _endpoint_context(
         api_contract_id=contract_id,
     )
     source_types = api_design_source_types(endpoint_designs)
-    entity_ids = api_design_entity_ids(endpoint_designs)
+    entity_ids = _technical_plan_entity_ids(
+        project_plan,
+        [endpoint_id],
+        api_contract_ids=[contract_id],
+    )
     mapping_flows = api_design_mapping_flows(endpoint_designs)
     business_descriptions = api_design_business_descriptions(endpoint_designs)
     required_unit_ids = ["backend:bootstrap", _endpoint_unit_id(contract_id, endpoint_id)]
@@ -309,6 +312,38 @@ def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:
     """生成 endpoint Unit 的稳定复合标识，避免不同契约下接口 ID 冲突。"""
 
     return f"backend:endpoint:{api_contract_id}:{endpoint_id}"
+
+
+def _technical_plan_entity_ids(
+    project_plan: dict[str, Any],
+    endpoint_ids: list[str],
+    *,
+    api_contract_ids: list[str] | None = None,
+) -> list[str]:
+    """从 TechnicalPlan Contract 独立读取业务 Entity ID，不依赖物理来源映射。"""
+
+    target_endpoint_ids = {str(item).strip() for item in endpoint_ids if str(item).strip()}
+    target_contract_ids = {
+        str(item).strip() for item in (api_contract_ids or []) if str(item).strip()
+    }
+    if not target_endpoint_ids:
+        return []
+    result: list[str] = []
+    for contract in _dict_items(project_plan.get("api_contracts")):
+        contract_id = str(contract.get("id") or "")
+        contract_endpoints = {
+            str(endpoint.get("id") or "")
+            for endpoint in _dict_items(contract.get("endpoints"))
+        }
+        if target_contract_ids and contract_id not in target_contract_ids:
+            continue
+        if not (contract_endpoints & target_endpoint_ids):
+            continue
+        for entity_id in contract.get("entity_ids") or []:
+            normalized = str(entity_id).strip()
+            if normalized and normalized not in result:
+                result.append(normalized)
+    return result
 
 
 

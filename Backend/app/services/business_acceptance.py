@@ -12,6 +12,8 @@ import json
 import re
 from typing import Any
 
+from app.services.api_design_mapping_rules import mapping_business_description, mapping_sources
+
 
 BUSINESS_ACCEPTANCE_KINDS = (
     "frontend.api_contract",
@@ -178,18 +180,7 @@ def business_acceptance_contract_errors(
     source_refs = _dict_value(task.get("source_refs"))
     entity_ids = set(_string_list(source_refs.get("entity_ids")))
     endpoint_ids = set(_string_list(source_refs.get("endpoint_ids")))
-    endpoint_design_entity_ids = {
-        _text(entity.get("id"))
-        for design in _dict_items(source_refs.get("endpoint_designs"))
-        for entity in _dict_items(design.get("sceneEntities"))
-        if _text(entity.get("id"))
-    }
-    if entity_ids and endpoint_design_entity_ids and not entity_ids.issubset(endpoint_design_entity_ids):
-        errors.append(
-            f"Task {task_id} references entities outside its Unit: "
-            + ", ".join(sorted(entity_ids - endpoint_design_entity_ids))
-            + "."
-        )
+    # Entity ID 由 TechnicalPlan Contract 注入并单独消费，不能再从 Endpoint 物理映射反推。
 
     checks = _dict_items(task.get("business_acceptance_checks"))
     check_ids: set[str] = set()
@@ -563,7 +554,7 @@ def _formal_inputs(context: dict[str, Any], task: dict[str, Any]) -> dict[str, A
         endpoint_designs = _dict_items(context.get("endpoint_designs"))
     if not endpoint_designs:
         endpoint_designs = _dict_items(executable.get("endpoint_designs"))
-    entity_details = _entities_from_endpoint_designs(endpoint_designs)
+    entity_details = _technical_plan_entity_details(project_plan, source_refs, endpoint_designs)
     return {
         "project_plan": project_plan,
         "contracts": contracts,
@@ -639,9 +630,9 @@ def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
             "DELETE": "delete",
         }.get(method, "list" if response_is_collection else "read")
         source_fields = [
-            _dict_value(mapping.get("sourceField"))
+            source
             for mapping in field_mappings
-            if _dict_value(mapping.get("sourceField"))
+            for source in mapping_sources(mapping)
         ]
         database_fields = [
             field for field in source_fields if field.get("sourceType") == "database"
@@ -671,12 +662,13 @@ def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _business_description_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
-    """提取 Request/Response 字段的一句话业务说明。"""
+    """提取 Request/Response 字段的业务处理内容。"""
 
     result: list[dict[str, Any]] = []
     for design in _dict_items(formal.get("endpoint_designs")):
         for mapping in _dict_items(design.get("fieldMappings")):
-            if mapping.get("mappingType") != "business_description":
+            description = mapping_business_description(mapping)
+            if not description:
                 continue
             endpoint = _dict_value(mapping.get("endpointField"))
             result.append(
@@ -686,112 +678,75 @@ def _business_description_expectations(formal: dict[str, Any]) -> list[dict[str,
                     "path": _text(endpoint.get("path")),
                     "location": _text(endpoint.get("location")),
                     "side": _text(endpoint.get("side")),
-                    "description": _text(mapping.get("businessDescription")),
+                    "description": description,
+                    "processing_type": mapping.get("processingType"),
+                    "source_fields": mapping_sources(mapping),
                 }
             )
     return result[:_MAX_ITEMS]
 
 
-def _entities_from_endpoint_designs(
+def _technical_plan_entity_details(
+    project_plan: dict[str, Any],
+    source_refs: dict[str, Any],
     designs: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """把自包含字段映射投射为确定性 Java 验收器可消费的场景实体视图。"""
+    """从 TechnicalPlan Contract 投射业务 Entity 语义，不构造局部来源绑定。"""
 
+    entity_ids = _string_list(source_refs.get("entity_ids"))
+    if not entity_ids:
+        contract_ids = {
+            _text(design.get("apiContractId"))
+            for design in designs
+            if _text(design.get("apiContractId"))
+        }
+        entity_ids = [
+            entity_id
+            for contract in _dict_items(project_plan.get("api_contracts"))
+            if not contract_ids or _text(contract.get("id")) in contract_ids
+            for entity_id in _string_list(contract.get("entity_ids"))
+        ]
+    entities_by_id = {
+        _text(entity.get("id")): entity
+        for entity in _dict_items(project_plan.get("entities"))
+        if _text(entity.get("id"))
+    }
     result: list[dict[str, Any]] = []
-    for design in designs:
-        endpoint_id = _text(design.get("endpointId"))
-        contract_id = _text(design.get("apiContractId"))
-        mappings = _dict_items(design.get("fieldMappings"))
-        for entity in _dict_items(design.get("sceneEntities")):
-            entity_id = _text(entity.get("id"))
-            entity_mappings = [
-                mapping
-                for mapping in mappings
-                if mapping.get("mappingType") == "through_entity"
-                and _text(_dict_value(mapping.get("entityField")).get("entityId")) == entity_id
-            ]
-            fields = []
-            for field in _dict_items(entity.get("fields")):
-                field_name = _text(field.get("name"))
-                if not field_name:
-                    continue
-                field_mappings = [
-                    mapping
-                    for mapping in entity_mappings
-                    if _text(_dict_value(mapping.get("entityField")).get("fieldId"))
-                    == _text(field.get("id"))
-                ]
-                fields.append(
+    for entity_id in dict.fromkeys(entity_ids):
+        entity = entities_by_id.get(entity_id)
+        if not entity:
+            continue
+        result.append(
+            {
+                "entity_id": entity_id,
+                "entity_name": _text(entity.get("name"), entity_id),
+                "fields": [
                     {
-                        "name": field_name,
+                        "name": _text(field.get("name") or field.get("path")),
                         "type": _text(field.get("type"), "unknown"),
                         "required": bool(field.get("required")),
-                        "source_types": _dedupe_strings(
-                            [
-                                _dict_value(mapping.get("sourceField")).get("sourceType")
-                                for mapping in field_mappings
-                                if _dict_value(mapping.get("sourceField"))
-                            ]
-                        ),
+                        "source_types": [],
                     }
-                )
-            database_bindings = [
-                {
-                    "entity_field": _text(_dict_value(mapping.get("entityField")).get("path")),
-                    "table": _text(_dict_value(mapping.get("sourceField")).get("table")),
-                    "table_column": _text(_dict_value(mapping.get("sourceField")).get("column")),
-                    "rule": "",
-                }
-                for mapping in entity_mappings
-                if _dict_value(mapping.get("sourceField")).get("sourceType") == "database"
-            ]
-            external_operations = _external_operations_from_field_mappings(
-                design,
-                entity_mappings,
-                contract_id,
-                endpoint_id,
-                entity_payload=True,
-            )
-            source_types = {
-                _text(_dict_value(mapping.get("sourceField")).get("sourceType"))
-                for mapping in entity_mappings
-                if _text(_dict_value(mapping.get("sourceField")).get("sourceType"))
+                    for field in _dict_items(entity.get("fields"))
+                    if _text(field.get("name") or field.get("path"))
+                ],
+                "data_source_type": "",
+                "database_design": {"matched_table": "", "bindings": []},
+                "external_api_design": {},
+                "endpoint_api_design": {},
             }
-            result.append(
-                {
-                    "entity_id": entity_id,
-                    "entity_name": _text(entity.get("name"), entity_id),
-                    "fields": fields,
-                    "data_source_type": (
-                        "database"
-                        if "database" in source_types
-                        else "external_api"
-                        if "external_api" in source_types
-                        else "static"
-                    ),
-                    "database_design": {
-                        "matched_table": _text(database_bindings[0].get("table"))
-                        if database_bindings
-                        else "",
-                        "bindings": database_bindings,
-                    },
-                    "external_api_design": {"operations": external_operations}
-                    if external_operations
-                    else {},
-                    "endpoint_api_design": design,
-                }
-            )
+        )
     return result[:_MAX_ITEMS]
 
 
 def _mapping_descriptions(design: dict[str, Any]) -> list[str]:
-    """提取字段映射中的一句话业务说明。"""
+    """提取字段映射中的多行业务处理内容。"""
 
     return _dedupe_strings(
         [
-            mapping.get("businessDescription")
+            mapping_business_description(mapping)
             for mapping in _dict_items(design.get("fieldMappings"))
-            if mapping.get("mappingType") == "business_description"
+            if mapping_business_description(mapping)
         ]
     )
 
@@ -821,15 +776,11 @@ def _external_operations_from_field_mappings(
     }
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for mapping in mappings:
-        source_field = _dict_value(mapping.get("sourceField"))
-        if source_field.get("sourceType") != "external_api":
-            continue
-        key = (
-            _text(source_field.get("sourceId")),
-            _text(source_field.get("directoryId")),
-            _text(source_field.get("operationId")),
-        )
-        groups.setdefault(key, []).append(mapping)
+        for source_field in mapping_sources(mapping):
+            if source_field.get("sourceType") != "external_api":
+                continue
+            key = (_text(source_field.get("sourceId")), _text(source_field.get("directoryId")), _text(source_field.get("operationId")))
+            groups.setdefault(key, []).append({**mapping, "selected_source": source_field})
     result: list[dict[str, Any]] = []
     for (source_id, directory_id, operation_id), grouped_mappings in groups.items():
         snapshot = _dict_value(snapshots.get((source_id, directory_id, operation_id)))
@@ -870,15 +821,18 @@ def _external_operations_from_field_mappings(
                 "response_handling": {"entity_payload": entity_payload, "payload_path": ""},
                 "field_mappings": [
                     {
-                        "entity_field": _text(
-                            _dict_value(mapping.get("entityField")).get("path")
-                            or _dict_value(mapping.get("endpointField")).get("path")
-                        ),
-                        "source_field": _text(_dict_value(mapping.get("sourceField")).get("path")),
-                        "rule": "",
+                        **({
+                            "entity_field": _text(_dict_value(mapping.get("entityField")).get("path"))
+                        } if entity_payload else {
+                            "endpoint_field": _text(_dict_value(mapping.get("endpointField")).get("path"))
+                        }),
+                        "source_field": _text(_dict_value(mapping.get("selected_source")).get("path")),
+                        "rule": _text(mapping.get("businessDescription")),
                     }
                     for mapping in grouped_mappings
                 ],
+                "business_descriptions": [mapping_business_description(mapping) for mapping in grouped_mappings if mapping_business_description(mapping)],
+                "source_dependencies": [mapping["selected_source"] for mapping in grouped_mappings],
             }
         )
     return result
@@ -909,8 +863,8 @@ def _external_designs(formal: dict[str, Any]) -> list[dict[str, Any]]:
         direct_mappings = [
             mapping
             for mapping in _dict_items(design.get("fieldMappings"))
-            if mapping.get("mappingType") == "direct_source"
-            and _dict_value(mapping.get("sourceField")).get("sourceType") == "external_api"
+            if mapping.get("mappingType") == "source_mapping"
+            and any(source.get("sourceType") == "external_api" for source in mapping_sources(mapping))
         ]
         if not direct_mappings:
             continue
@@ -1043,12 +997,13 @@ def _external_api_expectations(
 
 
 def _entity_sources(formal: dict[str, Any], entity: dict[str, Any]) -> list[dict[str, Any]]:
-    """为 Endpoint 局部实体语义生成 API 设计来源引用。"""
+    """为 TechnicalPlan Entity 语义生成可追溯来源引用。"""
 
-    entity_id = _text(entity.get("entity_id"))
     endpoint_design = _dict_value(entity.get("endpoint_api_design"))
-    endpoint_id = _text(endpoint_design.get("endpointId")) or entity_id
-    return [_source("api_design", endpoint_id, f"/endpoint_designs/{endpoint_id}", endpoint_design)]
+    endpoint_id = _text(endpoint_design.get("endpointId"))
+    if endpoint_id:
+        return [_source("api_design", endpoint_id, f"/endpoint_designs/{endpoint_id}", endpoint_design)]
+    return _api_sources(formal, _endpoint_expectations(formal))
 
 
 def _api_sources(formal: dict[str, Any], endpoints: list[dict[str, Any]]) -> list[dict[str, Any]]:

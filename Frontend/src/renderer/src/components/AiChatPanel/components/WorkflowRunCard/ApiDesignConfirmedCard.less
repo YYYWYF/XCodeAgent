@@ -1,0 +1,29 @@
+.@{class-prefix}-api-design-confirmed-card {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 24px;
+  // 确认结果是历史快照，使用主题强调边框把它与会话背景明确分隔开。
+  border: 1px solid var(--wb-accent);
+  border-radius: 20px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+
+  > header { display: flex; align-items: flex-start; gap: 16px; padding-bottom: 22px; border-bottom: 1px solid var(--wb-border); }
+  .confirmation-icon { display: grid; place-items: center; flex: 0 0 48px; height: 48px; border-radius: 50%; background: var(--wb-surface-subtle); color: var(--wb-accent); font-size: 25px; }
+  .confirmation-title { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 20px; }
+  header p { margin: 8px 0 0; color: var(--wb-text-secondary); }
+  > .ant-alert { background: var(--wb-surface-subtle); border: 0; border-radius: 12px; }
+  .ant-alert-message, .ant-alert-icon { color: var(--wb-text); }
+  .ant-alert-description { color: var(--wb-text-secondary); }
+  > .ant-btn { height: 40px; border-radius: 20px; background: transparent; border-color: var(--wb-border); color: var(--wb-text-secondary); }
+  > .ant-btn:hover, > .ant-btn:focus-visible { color: var(--wb-accent); border-color: var(--wb-accent); }
+  .confirmation-actions { display: flex; justify-content: flex-end; gap: 10px; }
+  .confirmation-design-list { display: grid; gap: 14px; }
+  .confirmation-design-item { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--wb-border); border-radius: 14px; background: var(--wb-surface-subtle); }
+  .confirmation-design-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--wb-text); }
+  .confirmation-design-heading .ant-btn { color: var(--wb-text-secondary); border-color: var(--wb-border); background: var(--wb-surface); }
+  .confirmation-design-heading .ant-btn:hover,
+  .confirmation-design-heading .ant-btn:focus-visible { color: var(--wb-accent); border-color: var(--wb-accent); }
+  @media (max-width: 600px) { padding: 16px; }
+}

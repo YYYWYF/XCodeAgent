@@ -17,9 +17,7 @@ import {
   validateApiDesignDraft
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/apiDesignSerialization'
 import {
-  applyDirectSourceMapping,
-  applyEntityMapping,
-  ensureTemplateEntityField,
+  applySourceMapping,
   projectApiFieldMappingRows
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/apiDesignTableModel'
 
@@ -36,9 +34,8 @@ function payload(): WorkflowApiDesignPayload {
   return {
     endpoint: { apiContractId: 'orders-api', id: 'orders.list', method: 'GET', path: '/orders' },
     endpointFields: [request, response],
-    entityTemplates: [{ id: 'Order', name: '订单', fields: [{ name: 'id', type: 'number' }] }],
     sources: [{ id: 'orders-db', name: '订单库', type: 'database' }],
-    draft: { apiContractId: 'orders-api', endpointId: 'orders.list', sceneEntities: [], fieldMappings: [] }
+    draft: { apiContractId: 'orders-api', endpointId: 'orders.list', fieldMappings: [] }
   }
 }
 
@@ -54,42 +51,61 @@ test('normalize creates one self-contained row per endpoint field', () => {
 test('business description mapping is self-contained', () => {
   const source = normalizeApiDesignDraft(payload())
   const field = payload().endpointFields[0]
-  const next = replaceFieldMapping(source, createBusinessDescriptionMapping(field, '分页页码'))
+  let next = replaceFieldMapping(source, createBusinessDescriptionMapping(field, '分页页码'))
+  next = replaceFieldMapping(next, createBusinessDescriptionMapping(payload().endpointFields[1], '展示总数'))
   assert.equal(next.fieldMappings[0].mappingType, 'business_description')
   assert.deepEqual(validateApiDesignDraft(next), {})
   assert.match(apiDesignMappingPreview(next.fieldMappings[0]), /分页页码/)
 })
 
-/** 直接来源映射只嵌入来源字段，不保存候选节点 ID。 */
-test('direct source mapping embeds source field without ids', () => {
+/** 数据源映射只嵌入来源字段，不保存候选节点 ID。 */
+test('source mapping embeds source field without ids', () => {
   const data = payload()
   const field = data.endpointFields[1]
   const source: WorkflowApiExternalFieldNode = {
     nodeType: 'source_field', id: 'ui-only', sourceType: 'external_api', sourceId: 'upstream',
     directoryId: 'catalog', operationId: 'list', section: 'response_body', path: 'total', type: 'number'
   }
-  const draft = applyDirectSourceMapping(normalizeApiDesignDraft(data), field, source)
+  let draft = replaceFieldMapping(
+    normalizeApiDesignDraft(data),
+    createBusinessDescriptionMapping(data.endpointFields[0], '分页页码')
+  )
+  draft = applySourceMapping(draft, field, source)
   const mapping = findFieldMapping(draft, field)
-  assert.equal(mapping?.mappingType, 'direct_source')
-  assert.equal('id' in (mapping && 'sourceField' in mapping ? mapping.sourceField : {}), false)
+  assert.equal(mapping?.mappingType, 'source_mapping')
+  assert.equal('id' in (mapping && 'sourceFields' in mapping ? mapping.sourceFields[0] : {}), false)
   assert.deepEqual(validateApiDesignDraft(draft), {})
 })
 
-/** 经实体映射可以同时保存实体引用和可选来源字段。 */
-test('through entity mapping embeds entity and optional source', () => {
+/** 来源映射支持单字段说明与多字段说明，并保留全部来源。 */
+test('source mapping supports processing descriptions and multiple sources', () => {
   const data = payload()
   const normalized = normalizeApiDesignDraft(data)
-  const ensured = ensureTemplateEntityField(normalized, data.entityTemplates[0], 'id')
-  const source: WorkflowApiExternalFieldNode = {
-    nodeType: 'source_field', id: 'ui-only', sourceType: 'external_api', sourceId: 'upstream',
-    directoryId: 'catalog', operationId: 'list', section: 'response_body', path: 'id', type: 'number'
+  const response = data.endpointFields[1]
+  const first: WorkflowApiExternalFieldNode = {
+    nodeType: 'source_field', id: 'first', sourceType: 'external_api', sourceId: 'upstream',
+    directoryId: 'catalog', operationId: 'list', section: 'response_body', path: 'data.total', type: 'number'
   }
-  const field = data.endpointFields[1]
-  const draft = applyEntityMapping(ensured.draft, field, ensured.field, source)
-  const mapping = findFieldMapping(draft, field)
-  assert.equal(mapping?.mappingType, 'through_entity')
-  assert.equal(mapping && mapping.mappingType === 'through_entity' ? mapping.entityField.path : '', 'id')
+  const second: WorkflowApiExternalFieldNode = {
+    ...first, id: 'second', path: 'data.frozen'
+  }
+  let draft = applySourceMapping(normalized, response, first)
+  const single = findFieldMapping(draft, response)
+  if (!single || single.mappingType !== 'source_mapping') throw new Error('expected source mapping')
+  draft = replaceFieldMapping(draft, {
+    ...single,
+    processingType: 'single_field_description',
+    businessDescription: '将上游总额转换为展示金额。'
+  })
+  draft = replaceFieldMapping(draft, {
+    endpointField: single.endpointField,
+    mappingType: 'source_mapping',
+    processingType: 'multi_field_description',
+    sourceFields: [single.sourceFields[0], { ...single.sourceFields[0], path: 'data.frozen' }],
+    businessDescription: '总额减去冻结金额。\n空值按业务错误处理。'
+  })
   assert.deepEqual(validateApiDesignDraft(draft), {})
+  assert.match(apiDesignMappingPreview(draft.fieldMappings[1]), /总额减去冻结金额/)
 })
 
 /** 表格投影直接读取 fieldMappings，未配置字段按必填性显示状态。 */

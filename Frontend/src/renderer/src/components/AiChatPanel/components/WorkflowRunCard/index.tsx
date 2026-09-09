@@ -55,7 +55,10 @@ import RevisionImpactReview from '../ApplicationRevisionCard/RevisionImpactRevie
 import RevisionDraftReview from '../ApplicationRevisionCard/RevisionDraftReview'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import DetailReview from './DetailReview'
-import ApiDesignPanel from './ApiDesignPanel'
+import ApiDesignConfirmedCard from './ApiDesignConfirmedCard'
+import ApiDesignReadinessGateCard from './ApiDesignReadinessGateCard'
+import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
+import { readApiDesignResult } from './apiDesignResult'
 import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
@@ -74,6 +77,23 @@ const { Text } = Typography
 const { TextArea } = Input
 
 const OTHER_OPTION_VALUE = '__other__'
+
+/** 校验门禁卡片的页面或 Endpoint 开发目标，拒绝不完整的历史载荷。 */
+function normalizeApiDesignDevelopmentTarget(value: unknown):
+  | { type: 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string }
+  | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const target = value as Record<string, unknown>
+  const type = target.type === 'page' ? 'page' : target.type === 'endpoint' ? 'endpoint' : undefined
+  const id = String(target.id || '')
+  if (!type || !id) return undefined
+  return {
+    type,
+    id,
+    label: String(target.label || '') || undefined,
+    apiContractId: String(target.apiContractId || '') || undefined
+  }
+}
 
 // 设计阶段产物确认卡 mode → 文档信息（驱动产物确认行渲染）。
 const ARTIFACT_CONFIRMATION_MAP: Record<string, { title: string; summary: string }> = {
@@ -99,6 +119,7 @@ type WorkflowRunCardProps = {
   /** 已答完的历史澄清卡：header→答案 映射，存在时按原控件形态回填答案并以禁用态展示。 */
   historicalClarificationAnswers?: Record<string, string>
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
+  onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
@@ -110,6 +131,8 @@ type WorkflowRunCardProps = {
   onUiDesignActivePageChange?: (pageId: string) => void
   /** UI 设计稿确认：当前正在执行动作的 pageId 集合（联动右侧逐页加载态）。 */
   uiDesignActingPageIds?: string[]
+  /** 当前门禁会话中已经保存、但尚未统一检测的 Endpoint 映射键。 */
+  apiDesignSavedMappingKeys?: ReadonlySet<string>
   /** UI 设计稿确认：动作页集合变化时通知外部。 */
   onUiDesignActingPageIdsChange?: (ids: string[]) => void
   /** 需求文档确认：保存编辑草稿（重写 Markdown+JSON），返回更新后的 spec。 */
@@ -132,11 +155,13 @@ export default function WorkflowRunCard({
   historicalClarificationAnswers,
   interactionAvailability,
   onEntityDesignGateJump,
+  onOpenApiDesignConfig,
   onSubmitClarification,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
   uiDesignActingPageIds,
   onUiDesignActingPageIdsChange,
+  apiDesignSavedMappingKeys,
   onSaveRequirementSpec,
   rootPath,
   planningWorkflow,
@@ -164,7 +189,8 @@ export default function WorkflowRunCard({
     ? []
     : clarification?.questions || []
   const entityDesignGate = clarification?.mode === 'entity_source_binding_required'
-  const apiDesign = clarification?.mode === 'api_design' ? clarification.apiDesign : undefined
+  const apiDesignResult = readApiDesignResult(workflow)
+  const apiDesignConfirmation = clarification?.mode === 'api_design_confirmation'
   const apiDesignRequired = clarification?.mode === 'api_design_required'
   const gateQuestion = clarification?.questions?.[0]
   const entityGateEntities = (clarification?.missing_entities || []).filter((item) =>
@@ -294,6 +320,44 @@ export default function WorkflowRunCard({
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.threadId, clarificationFingerprint])
+
+  const awaitingApiDesignConfirmation =
+    apiDesignResult?.status === 'ready' && apiDesignConfirmation
+  if (
+    apiDesignResult &&
+    (apiDesignResult.status === 'confirmed' || awaitingApiDesignConfirmation)
+  ) {
+    const gateAction = {
+      action: 'confirm' as const,
+      targetType: apiDesignResult.targetType,
+      targetId: apiDesignResult.targetId,
+      apiContractId:
+        apiDesignResult.targetType === 'endpoint'
+          ? apiDesignResult.designs[0]?.apiContractId
+          : undefined,
+      versions: apiDesignResult.designs.map((item) => ({
+        apiContractId: item.apiContractId,
+        endpointId: item.endpointId,
+        artifactRevision: item.artifactRevision
+      }))
+    }
+    return (
+      <ApiDesignConfirmedCard
+        awaitingConfirmation={awaitingApiDesignConfirmation}
+        result={apiDesignResult}
+        disabled={disabled || interactionAvailability !== 'active'}
+        onConfirm={awaitingApiDesignConfirmation ? () => onSubmitClarification?.(workflow, { api_design_gate: gateAction }) : undefined}
+        onEdit={awaitingApiDesignConfirmation ? (item) => {
+          const endpoint = item.design.endpointContract as Record<string, unknown> | undefined
+          onOpenApiDesignConfig?.({
+            apiContractId: item.apiContractId,
+            endpointId: item.endpointId,
+            label: `${String(endpoint?.method || 'API')} ${String(endpoint?.path || item.endpointId)}`
+          }, workflow)
+        } : undefined}
+      />
+    )
+  }
 
   return (
     <div
@@ -537,28 +601,18 @@ export default function WorkflowRunCard({
                 })
               }
             />
-          ) : apiDesign ? (
-            <ApiDesignPanel
-              disabled={disabled || interactionAvailability !== 'active'}
-              onAction={(action) =>
-                onSubmitClarification?.(workflow, { api_design: action })
-              }
-              payload={apiDesign}
-              workspaceRoot={workspaceRoot}
-            />
           ) : apiDesignRequired ? (
-            <Alert
-              description={(clarification?.missingApiDesigns || [])
-                .map((item) => {
-                  const method = String(item.method || 'API')
-                  const path = String(item.path || item.endpoint_id || '')
-                  const reason = String(item.reason || '尚未设计')
-                  return `${method} ${path}：${reason}`
-                })
-                .join('；')}
-              message={clarification?.message || '请先补齐关联 Endpoint 的 API 设计。'}
-              showIcon
-              type="warning"
+            <ApiDesignReadinessGateCard
+              disabled={disabled || interactionAvailability !== 'active'}
+              message={clarification?.message}
+              missing={clarification?.missingApiDesigns || []}
+              savedMappingKeys={apiDesignSavedMappingKeys}
+              scopeKey={`${workflow.threadId}:${workflow.runId}`}
+              onConfigure={(target) => onOpenApiDesignConfig?.(target, workflow)}
+              onConfirm={(action) =>
+                onSubmitClarification?.(workflow, { api_design_gate: action })
+              }
+              target={normalizeApiDesignDevelopmentTarget(clarification?.developmentTarget)}
             />
           ) : detailReview ? (
             <DetailReview

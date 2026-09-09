@@ -7,15 +7,13 @@ import type {
   WorkflowApiDesignPayload,
   WorkflowApiField
 } from '../../../../typings'
-import { cx } from '../../../../utils'
 import {
   projectApiFieldMappingRows,
-  pruneUnusedSceneEntities,
   type ApiFieldMappingRow
 } from './apiDesignTableModel'
 import ApiFieldMappingEditor from './ApiFieldMappingEditor'
 import { apiFieldLocationLabel } from './apiDesignTableModel'
-import { createUnconfiguredFieldMapping, replaceFieldMapping } from './apiDesignSerialization'
+import { createUnconfiguredFieldMapping, findFieldMapping, replaceFieldMapping } from './apiDesignSerialization'
 import './ApiDesignPanel.less'
 import type { ApiSourceMetadataAction, ApiSourceMetadataContext, ApiSourceMetadataRequestState } from './apiSourceSelectorModel'
 
@@ -48,7 +46,7 @@ export default function ApiFieldMappingTable({
     [activeSide, draft, errors, payload]
   )
 
-  /** 打开直接映射或经实体映射抽屉，不在表格行内写入半成品映射。 */
+  /** 打开字段映射抽屉，不在表格行内写入半成品映射。 */
   const openMappingEditor = (row: ApiFieldMappingRow): void => {
     setEditingFieldId(row.field.id)
     setMappingEndpoint(row.field)
@@ -60,42 +58,58 @@ export default function ApiFieldMappingTable({
     setEditingFieldId('')
   }
 
-  /** 为实体选择器构造当前模板字段的只读选项。 */
-  const renderEntityCell = (row: ApiFieldMappingRow): ReactElement => {
-    if (row.mode === 'direct_source' || row.mode === 'business_description') return <Text type="secondary">—</Text>
-    return <SummaryTags values={row.entityLabels} />
+  /** 直接读取结构化映射，分别展示来源、字段和说明，避免拆分拼接后的路径。 */
+  const renderMappingCell = (row: ApiFieldMappingRow, column: 'source' | 'field' | 'description'): ReactElement => {
+    const mapping = findFieldMapping(draft, row.field)
+    let value = ''
+    if (mapping?.mappingType === 'source_mapping') {
+      value = column === 'description' ? mapping.businessDescription || '' : mapping.sourceFields.map((source) => {
+        if (column === 'source') return String(payload.sources?.find((item) => item.id === source.sourceId)?.name || source.sourceId)
+        return source.sourceType === 'database'
+          ? [source.schema, source.table, source.column].filter(Boolean).join('.')
+          : [source.directoryId, source.operationId, source.section, source.path].join(' / ')
+      }).join('\n')
+    } else if (mapping?.mappingType === 'business_description' && column === 'description') {
+      value = mapping.businessDescription
+    }
+    return value
+      ? <div className="api-design-mapping-summary"><Text>{value}</Text></div>
+      : <Text type="secondary">—</Text>
   }
 
-  /** 为数据源单元格渲染摘要或当前行的级联选择器。 */
-  const renderSourceCell = (row: ApiFieldMappingRow): ReactElement => {
-    if (row.mode === 'business_description') return <Text type="secondary">—</Text>
-    return <SummaryTags values={row.sourceLabels} />
+  /** 按已保存的映射类型展示模式名称，编辑入口统一放在右侧操作列。 */
+  const renderModeCell = (row: ApiFieldMappingRow): ReactElement => {
+    const labels = { unconfigured: '未配置', source_mapping: '数据源字段映射', business_description: '业务说明' }
+    const mapping = findFieldMapping(draft, row.field)
+    const label = mapping?.mappingType === 'source_mapping' ? ({ direct: '直接映射', single_field_description: '单字段业务处理', multi_field_description: '多字段业务处理' })[mapping.processingType] : labels[row.mode]
+    return <Text type={row.mode === 'unconfigured' ? 'secondary' : undefined}>{label}</Text>
   }
 
   const columns: ColumnsType<ApiFieldMappingRow> = [
     {
-      title: '字段', dataIndex: 'field', key: 'field', width: 170,
+      title: '字段', dataIndex: 'field', key: 'field', width: 160,
       render: (_value, row) => <div className="api-design-field-cell">
         <Space size={6} wrap>
           <Text strong>{row.field.path}</Text>
-          <Tag>{row.field.required ? '必填' : '可选'}</Tag>
         </Space>
         {row.field.description ? <Tooltip title={row.field.description}><Text type="secondary" ellipsis>{row.field.description}</Text></Tooltip> : null}
       </div>
     },
-    { title: '位置', key: 'location', width: 110, render: (_value, row) => apiFieldLocationLabel(row.field.location) },
-    { title: '类型', dataIndex: ['field', 'type'], key: 'type', width: 110 },
+    { title: '位置', key: 'location', width: 125, render: (_value, row) => <Tag className="api-design-location-tag">{apiFieldLocationLabel(row.field.location)}</Tag> },
+    { title: '类型', dataIndex: ['field', 'type'], key: 'type', width: 90, render: (_value, row) => <span className="api-design-type-text">{row.field.type}</span> },
+    { title: '映射模式', key: 'mode', width: 140, render: (_value, row) => renderModeCell(row) },
+    { title: '业务说明', key: 'description', width: 200, render: (_value, row) => renderMappingCell(row, 'description') },
+    { title: '数据源', key: 'source', width: 140, render: (_value, row) => renderMappingCell(row, 'source') },
+    { title: '映射字段', key: 'sourceField', width: 180, render: (_value, row) => renderMappingCell(row, 'field') },
     {
-      title: '映射模式', key: 'mode', width: 150,
-      render: (_value, row) => row.mode === 'unconfigured'
-          ? <Button disabled={disabled} onClick={() => openMappingEditor(row)} size="small" type="link">配置映射</Button>
-          : <Space size={4}><Tag>{row.mode === 'through_entity' ? '经实体' : row.mode === 'business_description' ? '业务说明' : '直接'}</Tag><Button disabled={disabled} onClick={() => openMappingEditor(row)} size="small" type="link">编辑映射</Button></Space>
-    },
-    { title: '实体映射', key: 'entity', width: 230, render: (_value, row) => renderEntityCell(row) },
-    { title: '数据源映射', key: 'source', width: 360, render: (_value, row) => renderSourceCell(row) },
-    {
-      title: '状态', key: 'status', width: 120,
-      render: (_value, row) => <Tooltip title={row.errorMessages.join('；') || undefined}><Tag className="api-design-status" color={statusColor(row.status)}>{statusLabel(row.status)}</Tag></Tooltip>
+      title: '操作', key: 'actions', width: 120, align: 'center', fixed: 'right',
+      render: (_value, row) => <Button
+        aria-label={`${row.mode === 'unconfigured' ? '添加' : '编辑'} ${row.field.path} 映射`}
+        className="api-design-row-action"
+        disabled={disabled}
+        onClick={() => openMappingEditor(row)}
+        type="link"
+      >{row.mode === 'unconfigured' ? '添加映射' : '编辑映射'}</Button>
     }
   ]
 
@@ -109,9 +123,14 @@ export default function ApiFieldMappingTable({
         dataSource={rows}
         locale={{ emptyText: tableEmpty }}
         pagination={false}
-        rowClassName={(row) => cx('api-design-table-row', editingFieldId === row.field.id && 'is-editing', row.status === 'error' && 'is-error')}
+        rowClassName={(row) => [
+          'api-design-table-row',
+          editingFieldId === row.field.id ? 'is-editing' : '',
+          row.status === 'error' ? 'is-error' : ''
+        ].filter(Boolean).join(' ')}
         rowKey={(row) => row.key}
-        scroll={{ x: 1250 }}
+        tableLayout="fixed"
+        scroll={{ x: 1130 }}
         size="small"
       />
     </div>
@@ -124,7 +143,7 @@ export default function ApiFieldMappingTable({
         endpoint={mappingEndpoint}
         initialMode={(() => {
           const mode = rows.find((row) => row.field.id === mappingEndpoint.id)?.mode
-          return mode === 'through_entity' || mode === 'business_description' ? mode : 'direct_source'
+          return mode === 'business_description' ? mode : 'source_mapping'
         })()}
         payload={payload}
         draft={draft}
@@ -132,9 +151,7 @@ export default function ApiFieldMappingTable({
         metadataRequest={metadataRequest}
         onCancel={closeMappingEditor}
         onClear={() => {
-          onDraftChange(pruneUnusedSceneEntities(
-            replaceFieldMapping(draft, createUnconfiguredFieldMapping(mappingEndpoint))
-          ))
+          onDraftChange(replaceFieldMapping(draft, createUnconfiguredFieldMapping(mappingEndpoint)))
           closeMappingEditor()
         }}
         onLoadSource={onLoadSource}
@@ -142,23 +159,4 @@ export default function ApiFieldMappingTable({
       /> : null}
     </Drawer>
   </>
-}
-
-/** 显示实体或来源摘要，避免把多字段规则挤成一行长文本。 */
-function SummaryTags({ values }: { values: string[] }): ReactElement {
-  if (!values.length) return <Text type="secondary">—</Text>
-  return <Space className="api-design-mapping-summary" size={[4, 4]} wrap>{values.map((value) => <Tag key={value}>{value}</Tag>)}</Space>
-}
-
-/** 将内部状态转换为用户可读状态文案。 */
-function statusLabel(status: ApiFieldMappingRow['status']): string {
-  return ({ completed: '已完成', required_missing: '待配置', optional_unmapped: '可选未配置', error: '有错误' } as Record<ApiFieldMappingRow['status'], string>)[status]
-}
-
-/** 为字段状态选择 Ant Design 语义颜色。 */
-function statusColor(status: ApiFieldMappingRow['status']): string | undefined {
-  if (status === 'completed') return 'success'
-  if (status === 'required_missing') return 'error'
-  if (status === 'error') return 'error'
-  return undefined
 }

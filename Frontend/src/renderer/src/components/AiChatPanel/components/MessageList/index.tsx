@@ -35,6 +35,7 @@ import { ToolCallChain } from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import VersionCommitReminder from '../VersionCommitReminder'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
+import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
 import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
 import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
 import DevelopmentContinuationCard from '../WorkflowRunCard/DevelopmentContinuationCard'
@@ -249,6 +250,8 @@ type MessageListProps = {
   onUiDesignActivePageChange?: (pageId: string) => void
   /** UI 设计稿确认：当前正在执行动作的 pageId 集合（联动右侧逐页加载态）。 */
   uiDesignActingPageIds?: string[]
+  /** 当前门禁会话中已经保存、但尚未统一检测的 Endpoint 映射键。 */
+  apiDesignSavedMappingKeys?: ReadonlySet<string>
   /** UI 设计稿确认：动作页集合变化时通知外部。 */
   onUiDesignActingPageIdsChange?: (ids: string[]) => void
   /** 需求文档确认：保存编辑草稿（重写 Markdown+JSON），返回更新后的 spec。 */
@@ -269,6 +272,7 @@ type MessageListProps = {
   loading: boolean
   messages: AgentChatMessage[]
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
+  onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
   /** 在当前会话中恢复实体门禁前的页面或 Endpoint 正式任务。 */
   onContinueDevelopment?: (
     messageId: number,
@@ -307,6 +311,7 @@ export default function MessageList({
   onUiDesignActivePageChange,
   uiDesignActingPageIds,
   onUiDesignActingPageIdsChange,
+  apiDesignSavedMappingKeys,
   onSaveRequirementSpec,
   rootPath,
   onEnterDevelopment,
@@ -316,6 +321,7 @@ export default function MessageList({
   messages,
   onDagStageSelect,
   onEntityDesignGateJump,
+  onOpenApiDesignConfig,
   onContinueDevelopment,
   onOpenRevisionSession,
   onOpenCodeChangeFile,
@@ -821,7 +827,9 @@ export default function MessageList({
                               }
                               historicalClarificationAnswers={historicalClarificationAnswers}
                               interactionAvailability={interactionAvailability}
+                              apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
                               onEntityDesignGateJump={onEntityDesignGateJump}
+                              onOpenApiDesignConfig={onOpenApiDesignConfig}
                               onSubmitClarification={onSubmitClarification}
                               uiDesignActivePageId={uiDesignActivePageId}
                               onUiDesignActivePageChange={onUiDesignActivePageChange}

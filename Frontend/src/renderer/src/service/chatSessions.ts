@@ -96,6 +96,8 @@ export type ChatSessionRecord = {
   sequence?: number;
   entryKey?: string;
   threadId: string;
+  /** 页面/API 开发会话的不可变目标；自由会话不设置。 */
+  developmentTarget?: ChatSessionDevelopmentTarget;
   revisionContext?: ChatSessionRevisionContext;
   workspaceRoot: string;
   messages: ChatSessionMessage[];
@@ -113,6 +115,8 @@ export type ChatSessionSummary = {
   sequence?: number;
   entryKey?: string;
   threadId: string;
+  /** 页面/API 开发会话的不可变目标；自由会话不设置。 */
+  developmentTarget?: ChatSessionDevelopmentTarget;
   revisionContext?: ChatSessionRevisionContext;
   createdAt: number;
   updatedAt: number;
@@ -126,6 +130,8 @@ export type CreateChatSessionInput = {
   workbenchPhase: WorkbenchPhase;
   entryKey?: string;
   title?: string;
+  /** 仅页面/API 开发会话创建时设置的目标。 */
+  developmentTarget?: ChatSessionDevelopmentTarget;
   revisionContext?: ChatSessionRevisionContext;
   /** 仅用于恢复已消费 continuation 但本地会话缺失的工作台 execution。 */
   recoveryExecutionRunId?: string;
@@ -451,6 +457,9 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
   )
     return null
   if (!stage && (session.stage || session.sequence || session.entryKey)) return null
+  const developmentTarget = normalizeDevelopmentTarget(session.developmentTarget)
+  if (session.developmentTarget !== undefined && !developmentTarget) return null
+  if (developmentTarget && session.workbenchPhase !== 'development') return null
   return {
     id: String(session.id),
     title: String(session.title || '新对话'),
@@ -465,12 +474,49 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
         }
       : {}),
     threadId: String(session.threadId),
+    ...(developmentTarget ? { developmentTarget } : {}),
     revisionContext: normalizeRevisionSessionContext(session.revisionContext),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now())
   }
+}
+
+/** 严格规范化当前契约支持的页面或 Endpoint 会话目标。 */
+export function normalizeDevelopmentTarget(
+  value: unknown
+): ChatSessionDevelopmentTarget | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const target = value as Record<string, unknown>
+  const label = typeof target.label === 'string' ? target.label.trim() : ''
+  if (target.type === 'page') {
+    const pageId = typeof target.pageId === 'string' ? target.pageId.trim() : ''
+    return pageId && label ? { type: 'page', pageId, label } : undefined
+  }
+  if (target.type === 'endpoint') {
+    const apiContractId =
+      typeof target.apiContractId === 'string' ? target.apiContractId.trim() : ''
+    const endpointId = typeof target.endpointId === 'string' ? target.endpointId.trim() : ''
+    return apiContractId && endpointId && label
+      ? { type: 'endpoint', apiContractId, endpointId, label }
+      : undefined
+  }
+  return undefined
+}
+
+/** 比较规范化后的页面或 Endpoint 目标，保证 localStorage fallback 也不允许改绑。 */
+function sameDevelopmentTarget(
+  left: ChatSessionDevelopmentTarget | undefined,
+  right: ChatSessionDevelopmentTarget | undefined
+): boolean {
+  if (!left || !right) return !left && !right
+  if (left.type !== right.type) return false
+  return left.type === 'page'
+    ? right.type === 'page' && left.pageId === right.pageId
+    : right.type === 'endpoint' &&
+        left.apiContractId === right.apiContractId &&
+        left.endpointId === right.endpointId
 }
 
 /** 将完整会话投影为包含阶段归属的列表摘要。 */
@@ -485,6 +531,7 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     sequence: session.sequence,
     entryKey: session.entryKey,
     threadId: session.threadId,
+    developmentTarget: session.developmentTarget,
     revisionContext: session.revisionContext,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -523,6 +570,8 @@ function normalizeSummary(item: Partial<ChatSessionSummary>): ChatSessionSummary
     (!stage && (item.stage || item.sequence || item.entryKey))
   )
     return null
+  const developmentTarget = normalizeDevelopmentTarget(item.developmentTarget)
+  if (item.developmentTarget !== undefined && !developmentTarget) return null
   return {
     id: String(item.id),
     title: String(item.title || '新对话'),
@@ -531,6 +580,7 @@ function normalizeSummary(item: Partial<ChatSessionSummary>): ChatSessionSummary
     workflowId: String(item.workflowId),
     ...(stage ? { stage, sequence: Number(item.sequence), entryKey: String(item.entryKey) } : {}),
     threadId: String(item.threadId),
+    ...(developmentTarget ? { developmentTarget } : {}),
     revisionContext: normalizeRevisionSessionContext(item.revisionContext),
     createdAt: Number(item.createdAt || Date.now()),
     updatedAt: Number(item.updatedAt || Date.now()),
@@ -748,6 +798,10 @@ export async function createChatSession(input: CreateChatSessionInput): Promise<
   const now = Date.now()
   const id = createChatSessionId()
   const stage = stageForWorkbenchPhase(input.workbenchPhase)
+  const developmentTarget = normalizeDevelopmentTarget(input.developmentTarget)
+  if (input.developmentTarget !== undefined && !developmentTarget) {
+    throw new Error('会话开发目标不符合当前契约。')
+  }
   const entryKey = stage ? input.entryKey?.trim() || `session:${id}` : undefined
   const existingSessions = [
     ...readFallbackSessions(input.workspaceRoot, 'frontend'),
@@ -782,6 +836,7 @@ export async function createChatSession(input: CreateChatSessionInput): Promise<
     threadId: createChatSessionId(),
     ...(stage ? { stage, sequence, entryKey } : {}),
     title: input.title || '新对话',
+    ...(developmentTarget ? { developmentTarget } : {}),
     messages: [],
     createdAt: now,
     updatedAt: now
@@ -805,11 +860,17 @@ export async function saveChatSession(session: ChatSessionRecord): Promise<ChatS
   }
 
   const sessions = readFallbackSessions(session.workspaceRoot, session.editorMode)
-  const nextSessions = [session, ...sessions.filter((item) => item.id !== session.id)].sort(
+  const existing = sessions.find((item) => item.id === session.id)
+  if (existing && !sameDevelopmentTarget(existing.developmentTarget, session.developmentTarget)) {
+    throw new Error('会话开发目标不可修改。')
+  }
+  const normalizedSession = normalizeSession(session)
+  if (!normalizedSession) throw new Error('会话不符合当前契约。')
+  const nextSessions = [normalizedSession, ...sessions.filter((item) => item.id !== session.id)].sort(
     (a, b) => b.updatedAt - a.updatedAt
   )
   writeFallbackSessions(session.workspaceRoot, session.editorMode, nextSessions)
-  return toSummary(session)
+  return toSummary(normalizedSession)
 }
 
 export async function deleteChatSession(

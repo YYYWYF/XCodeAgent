@@ -302,25 +302,28 @@ TechnicalPlan 修订。
 
 ## Endpoint API 动态映射与工作台执行
 
-页面没有独立详设文件；页面事实由 ProductPlan、UiDesign、TechnicalPlan references 和运行时 `PageImplementationContract` 共同提供。API 则有独立 `api_design` 节点，但它不是第二份 API 契约：TechnicalPlan 唯一负责 Endpoint 的 method、path、参数和 Schema，API 设计只能给这些既有 API 叶子字段补充实体语义引用、数据库/外部 API 字段来源或一句话业务说明。业务说明没有 Entity/Source 输出，也不保存表达式或可执行规则，默认由 ApplicationService 按说明实现。当前实现不读取、不迁移历史 Endpoint 设计结构。
+页面没有独立详设文件；页面事实由 ProductPlan、UiDesign、TechnicalPlan references 和运行时 `PageImplementationContract` 共同提供。API 则有独立 `api_design` 节点，但它不是第二份 API 契约：TechnicalPlan 唯一负责 Endpoint 的 method、path、参数和 Schema，API 设计只能给这些既有 API 叶子字段补充数据库/外部 API 字段来源或自然语言业务处理。业务处理不保存表达式或可执行规则，默认由 ApplicationService 按用户说明实现。当前实现不读取、不迁移历史 Endpoint 设计结构。
 
 Endpoint 设计和页面/API开发流程固定为：
 
 ```text
-待设计 Endpoint -> api_design -> 显式确认 -> 写入 Endpoint JSON/Markdown -> END
+待设计 Endpoint -> 独立映射弹窗 -> 保存 Endpoint JSON/Markdown -> 返回原界面
 页面或 API 开发
   -> api_design_readiness_gate
   -> 缺少/过期：一次性返回关联 Endpoint 列表 -> END
-  -> 用户补齐设计后重新主动发起开发
-  -> 就绪：inspect_workspace
+  -> 用户逐项补齐后自动或手动重新检测
+  -> 全部就绪：回显完整映射并等待确认
+  -> 确认的 revisions 仍一致：inspect_workspace
   -> prepare_build_tasks（二次复检 Endpoint 设计）
   -> Build DAG 用户确认
   -> Build / Test / Acceptance
 ```
 
-纯静态且没有 Endpoint 的页面可直接通过门禁。API 设计以 Request/Response 两侧的 `fieldMappings` 表达 `direct_source`、`through_entity`、`business_description` 和可选字段的 `unconfigured` 状态；每条记录内嵌唯一 Endpoint 字段及其实体字段引用、完整来源字段或一句自然语言说明，数据流方向由 Request/Response 侧确定，不保存节点、边或随机映射 ID。数据字段可来自直属 MySQL 实时表列或数据源目录中已保存的外部 Operation Schema；Builtin/DBID 不提供伪造元数据，外部 API 设计时不发起网络请求。
+纯静态且没有 Endpoint 的页面可直接通过门禁。API 设计以 Request/Response 两侧的 `fieldMappings` 表达 `source_mapping` 或 `business_description`；草稿允许 `unconfigured`，但确认时包括可选字段在内必须全部完成配置。`source_mapping` 内嵌 `sourceFields`，通过 `processingType` 区分直接映射、单字段业务处理和多字段业务处理；每条说明支持多行并原样传递给下游。数据流方向由 Request/Response 侧确定，不保存节点、边或随机映射 ID；TechnicalPlan 顶层实体语义与 Endpoint↔Source 映射分离。数据字段可来自直属 MySQL 实时表列或数据源目录中已保存的外部 Operation Schema；Builtin/DBID 不提供伪造元数据，外部 API 设计时不发起网络请求。
 
-每次确认写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用 `endpoint-field-mapping.v1`，保存当前 TechnicalPlan 契约指纹、场景实体、自包含 `fieldMappings`、脱敏来源快照和随机十六进制 `artifactRevision`；Markdown 写入同一修订标记并作为用户可见正式产物。双文件替换失败回滚上一版，读取时必须同时验证双文件、当前 Schema、确认状态、TechnicalPlan 指纹和修订号一致；旧 `nodes`/`mappings` 结构不读取、不迁移并直接视为 stale。TechnicalPlan 契约改变会使 Endpoint 变为“需重新设计”，确认后的数据源目录变化不主动使其失效；Build 使用快照并在运行时按 `sourceId` 安全解析凭据。
+每次确认写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用当前 `endpoint-field-mapping.v3`：`source_mapping` 记录完整 `sourceFields`，并用 `processingType` 区分直接映射、单字段业务处理和多字段业务处理；无物理来源的控制字段使用 `business_description`。产物保存当前 TechnicalPlan 契约指纹、自包含 `fieldMappings`、脱敏来源快照和随机十六进制 `artifactRevision`；Markdown 写入同一修订标记并作为用户可见正式产物。双文件替换失败回滚上一版，读取时必须同时验证双文件、当前 Schema、确认状态、TechnicalPlan 指纹和修订号一致；历史结构不读取、不迁移并直接视为 stale。TechnicalPlan 契约改变会使 Endpoint 变为“需重新设计”，确认后的数据源目录变化不主动使其失效；Build 使用快照并在运行时按 `sourceId` 安全解析凭据。
+
+用户确认开发门禁时，工作流消息保存当次聚合 `apiDesignResult` 快照，右侧开发产物通过独立 `/endpoint-designs/run` AG-UI 读取当前正式产物。该接口按当前工作区、API Contract 与 Endpoint 标识提供 `get/prepare/save`，返回 pending、confirmed 或 stale 状态以及结构化设计和 Markdown；保存只更新映射，不启动主工作流。右侧详情与工作流卡片共用请求/返回字段映射投影，弹窗保存后刷新原门禁，仍由用户确认是否继续开发。
 
 旧 EntitySourceBinding 代码、设计页面和独立入口保留，但不再处于正常旅程，不影响 API 设计状态、开发门禁或 Build 上下文。
 
@@ -328,7 +331,7 @@ Endpoint 设计和页面/API开发流程固定为：
 
 ```text
 RequirementSpec -> ProductPlan -> UiDesign（可选） -> 等待进入规划阶段 -> TechnicalPlan
-TechnicalPlan -> Endpoint API Design -> api_design_readiness_gate -> Build DAG
+TechnicalPlan -> independent Endpoint mapping -> api_design_readiness_gate confirmation -> Build DAG
 ```
 
 ProductPlan 或 UiDesign 变化时重新确认受影响 TechnicalPlan/运行时页面契约；TechnicalPlan API 或 Schema 变化时使相关 Endpoint 设计和 Build DAG 失效。纯代码实现错误进入 SmallTask 修复，不回到规划阶段。

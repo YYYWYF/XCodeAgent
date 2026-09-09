@@ -68,8 +68,8 @@ class EndpointDesignDocumentsTests(unittest.TestCase):
             self.assertIsNone(read_endpoint_design(workspace, "orders-api", "orders.list"))
             self.assertEqual(endpoint_design_status(workspace, "orders-api", "orders.list")["status"], "stale")
 
-    def test_scene_entity_without_template_id_is_not_current_design(self) -> None:
-        """缺少模板来源的场景实体不能被当前 Pydantic 产物模型读取。"""
+    def test_removed_scene_entity_shape_is_not_current_design(self) -> None:
+        """已移除的场景实体字段不能被当前 Pydantic 产物模型读取。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             _write_technical_plan(workspace, {"artifact_type": "technical-plan"})
@@ -141,7 +141,6 @@ class EndpointDesignDocumentsTests(unittest.TestCase):
                 "endpointContract": {"method": "GET", "path": "/orders"},
                 "artifactRevision": "0123456789abcdef0123456789abcdef",
                 "implementationDescription": "先校验查询条件。\n再执行分页查询并统一处理空结果。",
-                "sceneEntities": [],
                 "fieldMappings": [{
                     "endpointField": {"side": "response", "location": "response_body", "path": "status", "type": "string", "required": True, "description": ""},
                     "mappingType": "business_description",
@@ -184,7 +183,6 @@ def _design(workspace: str) -> EndpointApiDesign:
             "endpointId": "orders.list",
             "endpointContract": {"id": "orders.list", "method": "GET", "path": "/orders"},
             "artifactRevision": "0123456789abcdef0123456789abcdef",
-            "sceneEntities": [],
             "fieldMappings": [],
             "sourceSnapshots": [],
             "basedOn": [{"artifactKey": "technical-plan", "sha256": technical_plan_sha256(workspace)}],

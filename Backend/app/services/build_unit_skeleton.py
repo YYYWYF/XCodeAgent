@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.domain.api_design import API_DESIGN_SCHEMA_VERSION
+
 from copy import deepcopy
 from hashlib import sha256
 import json
@@ -238,7 +240,7 @@ def _skeleton_fingerprint(
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),
         "pages": project_plan_page_records(project_plan),
-        "endpoint_api_design_policy": "endpoint-field-mapping.v1",
+        "endpoint_api_design_policy": API_DESIGN_SCHEMA_VERSION,
         "api_contracts": project_plan.get("api_contracts"),
         "workspace_revision": (workspace_snapshot or {}).get("workspace_revision"),
         "tech_stack": (workspace_snapshot or {}).get("tech_stack"),

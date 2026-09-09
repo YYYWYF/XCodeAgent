@@ -59,19 +59,14 @@ def _write_current_plan(workspace: str, project_plan: dict) -> str:
                     "endpointId": str(endpoint["id"]),
                     "artifactRevision": "0123456789abcdef0123456789abcdef",
                     "endpointContract": endpoint,
-                    "sceneEntities": [],
                     "fieldMappings": [
                         {
                             "endpointField": {
                                 key: field.get(key)
                                 for key in ("side", "location", "path", "type", "required", "description")
                             },
-                            "mappingType": "business_description" if field.get("required") else "unconfigured",
-                            **(
-                                {"businessDescription": "测试夹具中的必填字段实现说明。"}
-                                if field.get("required")
-                                else {}
-                            ),
+                            "mappingType": "business_description",
+                            "businessDescription": "测试夹具中的字段实现说明。",
                         }
                         for field in endpoint_api_fields(contract, endpoint)
                     ],

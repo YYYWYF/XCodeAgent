@@ -5,9 +5,9 @@ import { pathToFileURL } from 'node:url'
 import { build } from 'vite'
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
-const entryFile = path.join(frontendRoot, 'tests', 'apiDesignSerialization.test.ts')
+const entryFile = path.join(frontendRoot, 'tests', 'apiDesign.test.ts')
 const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-api-design-tests-'))
-const outputFile = path.join(outputDirectory, 'apiDesignSerialization.test.mjs')
+const outputFile = path.join(outputDirectory, 'apiDesign.test.mjs')
 
 try {
   // 将纯函数测试打包到系统临时目录，避免生成仓库内测试产物。

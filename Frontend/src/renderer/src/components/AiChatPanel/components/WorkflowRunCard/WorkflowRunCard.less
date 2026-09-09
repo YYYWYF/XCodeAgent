@@ -15,6 +15,25 @@
   }
 }
 
+// API 设计卡片已有独立容器，移除通用确认卡片的重复外框与标题。
+.@{class-prefix}-workflow-run-card-api-design {
+  gap: 0;
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+
+  .@{class-prefix}-workflow-run-header {
+    display: none;
+  }
+}
+
+.@{class-prefix}-workflow-run-card-api-design .@{class-prefix}-workflow-api-design-clarification {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .@{class-prefix}-workflow-run-header {
   display: flex;
   align-items: center;

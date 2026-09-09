@@ -120,45 +120,30 @@ test('只有 endpoint JSON 时接口需重新设计', async () => {
   })
 })
 
-/** 验证场景实体必须完整匹配当前 Contract 的 TechnicalPlan 模板。 */
-test('场景实体不是只读模板副本时需重新设计', async () => {
+/** 验证确认产物不能保留草稿态的未配置字段。 */
+test('正式 Endpoint 产物含未配置字段时需重新设计', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const technicalPlan = {
-      artifact_type: 'technical-plan',
-      entities: [{ id: 'Employee', name: '员工', fields: [{ name: 'id', type: 'string' }] }],
-      api_contracts: [{ id: 'employee-api', entity_ids: ['Employee'] }]
-    }
     await writeCurrentEndpointDesign(workspaceRoot, {
-      technicalPlan,
-      sceneEntities: [{
-        id: 'scene-employee', name: '自建实体', templateEntityId: 'Unknown', fields: []
+      fieldMappings: [{
+        endpointField: {
+          side: 'response', location: 'response_body', path: 'id', type: 'string', required: false
+        },
+        mappingType: 'unconfigured'
       }]
     })
     const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
     assert.equal(status.status, 'stale')
     assert.equal(status.designed, false)
-    assert.match(status.reason, /TechnicalPlan 模板/)
   })
 })
 
-/** 合法模板副本和没有场景实体的直连设计都应保持已确认。 */
-test('完整模板副本和无实体设计均可确认', async () => {
+/** 验证确认产物不能缺少 Endpoint 字段映射集合。 */
+test('正式 Endpoint 产物缺少字段映射时需重新设计', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const technicalPlan = {
-      artifact_type: 'technical-plan',
-      entities: [{ id: 'Employee', name: '员工', fields: [{ name: 'id', type: 'string' }] }],
-      api_contracts: [{ id: 'employee-api', entity_ids: ['Employee'] }]
-    }
-    await writeCurrentEndpointDesign(workspaceRoot, {
-      technicalPlan,
-      sceneEntities: [{
-        id: 'scene-employee', name: '员工', description: '', templateEntityId: 'Employee',
-        fields: [{ id: 'field-id', name: 'id', label: 'id', type: 'string', required: false, description: '' }]
-      }]
-    })
+    await writeCurrentEndpointDesign(workspaceRoot)
     const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
-    assert.equal(status.status, 'confirmed')
-    assert.equal(status.designed, true)
+    assert.equal(status.status, 'stale')
+    assert.equal(status.designed, false)
   })
 })
 
@@ -187,7 +172,7 @@ async function writeCurrentEndpointDesign(
   workspaceRoot: string,
   options: {
     technicalPlan?: Record<string, unknown>
-    sceneEntities?: unknown[]
+    fieldMappings?: unknown[]
     implementationDescription?: unknown
   } = {}
 ): Promise<void> {
@@ -213,7 +198,7 @@ async function writeCurrentEndpointDesign(
   await fs.writeFile(
     jsonPath,
     JSON.stringify({
-      schemaVersion: 'endpoint-field-mapping.v1',
+      schemaVersion: 'endpoint-field-mapping.v3',
       artifactType: 'endpoint-field-mapping',
       status: 'confirmed',
       confirmationStatus: 'confirmed',
@@ -221,8 +206,13 @@ async function writeCurrentEndpointDesign(
       apiContractId: 'employee-api',
       endpointId: 'employee.list',
       confirmedAt: new Date().toISOString(),
-      sceneEntities: options.sceneEntities || [],
-      fieldMappings: [],
+      fieldMappings: options.fieldMappings || [{
+        endpointField: {
+          side: 'response', location: 'response_body', path: 'id', type: 'string', required: false
+        },
+        mappingType: 'business_description',
+        businessDescription: '返回员工标识'
+      }],
       ...(options.implementationDescription !== undefined
         ? { implementationDescription: options.implementationDescription }
         : {}),

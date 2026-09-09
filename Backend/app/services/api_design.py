@@ -1,4 +1,4 @@
-"""Endpoint 动态实体映射的确定性候选、校验与就绪规则。"""
+"""Endpoint 字段来源映射的确定性候选、校验与就绪规则。"""
 
 from __future__ import annotations
 
@@ -15,21 +15,26 @@ from pydantic import TypeAdapter
 from app.domain.api_design import (
     API_DESIGN_SCHEMA_VERSION,
     ApiDesignAction,
+    ApiDesignGateResult,
+    ApiDesignGateAction,
     BusinessDescriptionFieldMapping,
     DatabaseSourceField,
-    DirectSourceFieldMapping,
+    ConfirmedFieldMapping,
+    DraftFieldMapping,
     EndpointFieldNode,
     EndpointFieldMappingDesign,
-    EntityTemplate,
-    EntityTemplateField,
-    FieldMapping,
     ExternalSourceField,
-    SceneEntity,
-    SceneEntityField,
-    ThroughEntityFieldMapping,
+    SourceMapping,
     UnconfiguredFieldMapping,
 )
 from app.services.api_schema_refs import normalize_local_schema_ref
+from app.services.api_design_mapping_rules import (
+    mapping_business_description,
+    mapping_processing_type,
+    mapping_sources,
+    validate_unique_sources,
+)
+from app.services.artifact_invalidation import mark_artifact_document_stale
 from app.services.api_design_schema import resolve_mapping_schema
 from app.services.data_sources import (
     DataSourceError,
@@ -46,11 +51,20 @@ from app.workspace.endpoint_design_documents import (
 )
 
 
-_FIELD_MAPPING_ADAPTER = TypeAdapter(FieldMapping)
+_DRAFT_FIELD_MAPPING_ADAPTER = TypeAdapter(DraftFieldMapping)
+_CONFIRMED_FIELD_MAPPING_ADAPTER = TypeAdapter(ConfirmedFieldMapping)
 
 
 class ApiDesignError(ValueError):
     """表示 API 动态映射目标、来源或关系不符合当前契约。"""
+
+
+def invalidate_api_design_consumers(workspace_root: str | Path) -> None:
+    """字段映射保存后使旧 Build DAG 计划失效，避免继续消费旧来源快照。"""
+
+    path = Path(workspace_root).expanduser().resolve() / ".xcodeagent" / "plans" / "build-task-plan.json"
+    if path.is_file():
+        mark_artifact_document_stale(path)
 
 
 def normalize_api_design_action(value: Any) -> dict[str, Any] | None:
@@ -60,6 +74,21 @@ def normalize_api_design_action(value: Any) -> dict[str, Any] | None:
         return None
     try:
         return ApiDesignAction.model_validate(value).model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+        )
+    except ValueError as exc:
+        raise ApiDesignError(str(exc)) from exc
+
+
+def normalize_api_design_gate_action(value: Any) -> dict[str, Any] | None:
+    """把开发门禁提交的版本刷新或确认动作归一化为当前合同。"""
+
+    if not isinstance(value, dict):
+        return None
+    try:
+        return ApiDesignGateAction.model_validate(value).model_dump(
             mode="json",
             by_alias=True,
             exclude_none=True,
@@ -154,52 +183,13 @@ def endpoint_field_nodes(contract: dict[str, Any], endpoint: dict[str, Any]) -> 
     return endpoint_api_fields(contract, endpoint)
 
 
-def entity_templates(
-    project_plan: dict[str, Any],
-    contract: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """把当前 Contract 关联的全局实体投影为只读复制模板。"""
-
-    entity_ids = {str(item).strip() for item in contract.get("entity_ids") or [] if str(item).strip()}
-    entities = {
-        str(item.get("id") or ""): item
-        for item in _dict_items(project_plan.get("entities"))
-        if str(item.get("id") or "").strip()
-    }
-    templates: list[dict[str, Any]] = []
-    for entity_id in sorted(entity_ids):
-        entity = entities.get(entity_id)
-        if entity is None:
-            continue
-        fields = [
-            EntityTemplateField(
-                name=str(field.get("name") or field.get("path") or "field"),
-                label=str(field.get("label") or field.get("name") or "field"),
-                type=str(field.get("type") or "unknown"),
-                required=bool(field.get("required")),
-                description=str(field.get("description") or ""),
-            )
-            for field in _dict_items(entity.get("fields"))
-            if str(field.get("name") or field.get("path") or "").strip()
-        ]
-        templates.append(
-            EntityTemplate(
-                id=entity_id,
-                name=str(entity.get("name") or entity_id),
-                description=str(entity.get("description") or ""),
-                fields=fields,
-            ).model_dump(mode="json", by_alias=True)
-        )
-    return templates
-
-
 def initial_api_design_payload(
     workspace_root: str | Path,
     project_plan: dict[str, Any],
     api_contract_id: str,
     endpoint_id: str,
 ) -> dict[str, Any]:
-    """构造动态映射工作台所需的契约、模板和有界草稿。
+    """构造字段来源映射工作台所需的契约和有界草稿。
 
     数据源目录及实时元数据由独立数据源接口读取，不能通过工作流 run
     快照返回，避免把连接目录和元数据混入工作流状态。
@@ -213,7 +203,6 @@ def initial_api_design_payload(
             "apiContractId": api_contract_id,
             "endpointId": endpoint_id,
             "implementationDescription": str(existing.get("implementationDescription") or ""),
-            "sceneEntities": existing.get("sceneEntities", []),
             "fieldMappings": existing.get("fieldMappings", []),
         }
     else:
@@ -221,7 +210,6 @@ def initial_api_design_payload(
             "apiContractId": api_contract_id,
             "endpointId": endpoint_id,
             "implementationDescription": "",
-            "sceneEntities": [],
             "fieldMappings": [
                 {
                     "endpointField": _endpoint_field_snapshot(field),
@@ -233,7 +221,6 @@ def initial_api_design_payload(
     return {
         "endpoint": {**endpoint, "apiContractId": api_contract_id},
         "endpointFields": endpoint_nodes,
-        "entityTemplates": entity_templates(project_plan, contract),
         "draft": draft,
         "existingStatus": endpoint_design_status(workspace_root, api_contract_id, endpoint_id),
     }
@@ -433,6 +420,53 @@ def api_design_readiness(
     }
 
 
+def api_design_gate_result(
+    workspace_root: str | Path,
+    project_plan: dict[str, Any],
+    *,
+    target_type: str,
+    target_id: str,
+    target_label: str,
+    api_contract_id: str | None = None,
+    confirmed_for_development: bool = False,
+) -> dict[str, Any]:
+    """读取门禁目标的全部当前映射，并生成可确认、可持久化的完整结果。"""
+
+    targets = _target_endpoints(
+        project_plan,
+        target_type=target_type,
+        target_id=target_id,
+        api_contract_id=api_contract_id,
+    )
+    designs: list[dict[str, Any]] = []
+    for contract, endpoint in targets:
+        contract_id = str(contract.get("id") or "")
+        endpoint_id = str(endpoint.get("id") or "")
+        design = read_endpoint_design(workspace_root, contract_id, endpoint_id)
+        if design is None:
+            raise ApiDesignError(f"Endpoint {contract_id}/{endpoint_id} 缺少当前版已确认动态映射。")
+        _validate_persisted_design(project_plan, contract, endpoint, design)
+        designs.append(
+            {
+                "apiContractId": contract_id,
+                "endpointId": endpoint_id,
+                "artifactRevision": str(design.get("artifactRevision") or ""),
+                "design": design,
+            }
+        )
+    result = ApiDesignGateResult.model_validate(
+        {
+            "status": "confirmed" if confirmed_for_development else "ready",
+            "targetType": target_type,
+            "targetId": target_id,
+            "targetLabel": target_label,
+            "designs": designs,
+            "confirmedForDevelopment": confirmed_for_development,
+        }
+    )
+    return result.model_dump(mode="json", by_alias=True)
+
+
 def load_confirmed_endpoint_designs(
     workspace_root: str | Path,
     project_plan: dict[str, Any],
@@ -440,7 +474,7 @@ def load_confirmed_endpoint_designs(
     *,
     api_contract_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """为 Build 上下文加载指定 Endpoint 的当前版已确认动态映射。"""
+    """为 Build 上下文加载指定 Endpoint 的已确认动态映射。"""
 
     result: list[dict[str, Any]] = []
     target_ids = set(endpoint_ids)
@@ -470,22 +504,10 @@ def api_design_source_types(designs: list[dict[str, Any]]) -> list[str]:
     result: list[str] = []
     for design in designs:
         for mapping in _dict_items(design.get("fieldMappings")):
-            source = mapping.get("sourceField") if isinstance(mapping.get("sourceField"), dict) else {}
-            source_type = str(source.get("sourceType") or "")
-            if source_type and source_type not in result:
-                result.append(source_type)
-    return result
-
-
-def api_design_entity_ids(designs: list[dict[str, Any]]) -> list[str]:
-    """从场景实体中提取业务实体 ID，不读取实体全局绑定。"""
-
-    result: list[str] = []
-    for design in designs:
-        for entity in _dict_items(design.get("sceneEntities")):
-            entity_id = str(entity.get("id") or "")
-            if entity_id and entity_id not in result:
-                result.append(entity_id)
+            for source in mapping_sources(mapping):
+                source_type = str(source.get("sourceType") or "")
+                if source_type and source_type not in result:
+                    result.append(source_type)
     return result
 
 
@@ -498,15 +520,14 @@ def api_design_mapping_flows(designs: list[dict[str, Any]]) -> list[str]:
             endpoint = _endpoint_field_label(mapping.get("endpointField"))
             mapping_type = str(mapping.get("mappingType") or "")
             if mapping_type == "business_description":
-                description = str(mapping.get("businessDescription") or "").strip()
+                description = mapping_business_description(mapping)
                 if endpoint and description:
                     flows.append(f"{endpoint} ⇒ 业务说明：{description}")
                 continue
             if mapping_type == "unconfigured" or not endpoint:
                 continue
-            entity = _entity_field_label(mapping.get("entityField"))
-            source = _source_field_label(mapping.get("sourceField"))
-            middle = [label for label in (entity, source) if label]
+            source = " + ".join(_source_field_label(item) for item in mapping_sources(mapping))
+            middle = [label for label in (source,) if label]
             endpoint_field = (
                 mapping.get("endpointField")
                 if isinstance(mapping.get("endpointField"), dict)
@@ -518,17 +539,19 @@ def api_design_mapping_flows(designs: list[dict[str, Any]]) -> list[str]:
                 else [*reversed(middle), endpoint]
             )
             if len(labels) > 1:
-                flows.append(" → ".join(labels))
+                description = mapping_business_description(mapping)
+                flows.append(" → ".join(labels) + ("；业务说明：" + description if description else ""))
     return list(dict.fromkeys(flows))
 
 
 def api_design_business_descriptions(designs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """提取 Request/Response 字段的一句话业务说明，供构建、任务规划和验收使用。"""
+    """提取 Request/Response 字段的多行业务说明，供构建、任务规划和验收使用。"""
 
     descriptions: list[dict[str, Any]] = []
     for design in designs:
         for mapping in _dict_items(design.get("fieldMappings")):
-            if mapping.get("mappingType") != "business_description":
+            description = mapping_business_description(mapping)
+            if not description:
                 continue
             endpoint = mapping.get("endpointField") if isinstance(mapping.get("endpointField"), dict) else {}
             descriptions.append(
@@ -540,7 +563,9 @@ def api_design_business_descriptions(designs: list[dict[str, Any]]) -> list[dict
                     "location": str(endpoint.get("location") or ""),
                     "type": str(endpoint.get("type") or "unknown"),
                     "required": bool(endpoint.get("required")),
-                    "description": str(mapping.get("businessDescription") or ""),
+                    "description": description,
+                    "processing_type": mapping_processing_type(mapping),
+                    "source_fields": mapping_sources(mapping),
                 }
             )
     return descriptions
@@ -556,18 +581,15 @@ def _validate_design(
 ) -> dict[str, Any]:
     """校验自包含字段映射、来源真实性和必填 Endpoint 字段覆盖。"""
 
-    if any(key in draft for key in ("nodes", "mappings", "fieldBindings")):
+    if any(key in draft for key in ("nodes", "mappings", "fieldBindings", "sceneEntities")):
         raise ApiDesignError("API 设计草稿必须使用当前 fieldMappings 结构。")
-    scene_entities = _parse_entities(draft.get("sceneEntities"))
     field_mappings = _parse_field_mappings(draft.get("fieldMappings"))
-    _validate_entities(scene_entities, entity_templates(project_plan, contract))
-    _validate_field_mappings(field_mappings, endpoint_nodes, scene_entities)
+    _validate_field_mappings(field_mappings, endpoint_nodes)
     implementation_description = _normalize_implementation_description(
         draft.get("implementationDescription")
     )
     snapshots = _validated_source_snapshots(workspace_root, field_mappings)
     normalized = {
-        "sceneEntities": [item.model_dump(mode="json", by_alias=True, exclude_none=True) for item in scene_entities],
         "fieldMappings": [item.model_dump(mode="json", by_alias=True, exclude_none=True) for item in field_mappings],
         "sourceSnapshots": snapshots,
     }
@@ -589,85 +611,15 @@ def _normalize_implementation_description(value: Any) -> str | None:
     return normalized or None
 
 
-def _parse_entities(value: Any) -> list[SceneEntity]:
-    """解析场景实体列表并拒绝旧字段绑定结构。"""
-
-    if not isinstance(value, list):
-        raise ApiDesignError("草稿缺少 sceneEntities 列表。")
-    try:
-        return [SceneEntity.model_validate(item) for item in value]
-    except ValueError as exc:
-        raise ApiDesignError(f"场景实体结构无效：{exc}") from exc
-
-
 def _parse_field_mappings(value: Any) -> list[Any]:
-    """解析每个 Endpoint 字段的一条自包含映射记录。"""
+    """解析每个 Endpoint 字段的一条当前版自包含映射记录。"""
 
     if not isinstance(value, list):
         raise ApiDesignError("草稿缺少 fieldMappings 列表。")
     try:
-        return [_FIELD_MAPPING_ADAPTER.validate_python(item) for item in value]
+        return [_DRAFT_FIELD_MAPPING_ADAPTER.validate_python(item) for item in value]
     except ValueError as exc:
         raise ApiDesignError(f"字段映射结构无效：{exc}") from exc
-
-
-def _validate_entities(
-    entities: list[SceneEntity],
-    templates: list[dict[str, Any]],
-) -> None:
-    """确保场景实体只能是当前 Contract 的唯一只读模板副本。"""
-
-    entity_ids: set[str] = set()
-    template_by_id = {str(item.get("id") or ""): item for item in templates}
-    used_template_ids: set[str] = set()
-    for entity in entities:
-        if entity.id in entity_ids:
-            raise ApiDesignError(f"场景实体 ID 重复：{entity.id}。")
-        entity_ids.add(entity.id)
-        template_id = entity.template_entity_id
-        template = template_by_id.get(template_id)
-        if template is None:
-            raise ApiDesignError(
-                f"场景实体 {entity.id} 未引用当前 Contract 的 TechnicalPlan 实体模板：{template_id}。"
-            )
-        if template_id in used_template_ids:
-            raise ApiDesignError(f"TechnicalPlan 实体模板 {template_id} 在当前 Endpoint 中只能复制一次。")
-        used_template_ids.add(template_id)
-        if entity.name != str(template.get("name") or template_id) or entity.description != str(
-            template.get("description") or ""
-        ):
-            raise ApiDesignError(f"场景实体 {entity.id} 的实体定义已偏离 TechnicalPlan 模板。")
-        template_fields = [
-            {
-                "name": str(field.get("name") or ""),
-                "label": str(field.get("label") or ""),
-                "type": str(field.get("type") or "unknown"),
-                "required": bool(field.get("required")),
-                "description": str(field.get("description") or ""),
-            }
-            for field in _dict_items(template.get("fields"))
-        ]
-        actual_fields = [
-            {
-                "name": field.name,
-                "label": field.label,
-                "type": field.type,
-                "required": field.required,
-                "description": field.description,
-            }
-            for field in entity.fields
-        ]
-        if actual_fields != template_fields:
-            raise ApiDesignError(
-                f"场景实体 {entity.id} 的字段只能使用 TechnicalPlan 模板字段，不能新增、删除或修改。"
-            )
-        field_ids: set[str] = set()
-        field_names: set[str] = set()
-        for field in entity.fields:
-            if field.id in field_ids or field.name in field_names:
-                raise ApiDesignError(f"场景实体 {entity.id} 的字段 ID 或名称重复。")
-            field_ids.add(field.id)
-            field_names.add(field.name)
 
 
 def _validate_persisted_design(
@@ -681,30 +633,22 @@ def _validate_persisted_design(
     persisted_endpoint = design.get("endpointContract")
     if not isinstance(persisted_endpoint, dict) or persisted_endpoint != endpoint:
         raise ApiDesignError("已确认产物中的 Endpoint 定义已被修改。")
-    scene_entities = _parse_entities(design.get("sceneEntities"))
-    field_mappings = _parse_field_mappings(design.get("fieldMappings"))
-    _validate_entities(scene_entities, entity_templates(project_plan, contract))
+    field_mappings = _parse_confirmed_field_mappings(design.get("fieldMappings"))
     current_endpoint_nodes = endpoint_field_nodes(contract, endpoint)
-    _validate_field_mappings(field_mappings, current_endpoint_nodes, scene_entities)
+    _validate_field_mappings(field_mappings, current_endpoint_nodes)
 
 
 def _validate_field_mappings(
     mappings: list[Any],
     endpoint_nodes: list[dict[str, Any]],
-    entities: list[SceneEntity],
 ) -> None:
-    """校验字段唯一性、Endpoint 快照、实体引用、来源方向和类型兼容性。"""
+    """校验字段唯一性、Endpoint 快照、来源方向和类型兼容性。"""
 
     expected = {
         _endpoint_field_key(item): _endpoint_field_snapshot(item)
         for item in endpoint_nodes
     }
     actual: dict[tuple[str, str, str], Any] = {}
-    entity_fields = {
-        (entity.id, field.id): field
-        for entity in entities
-        for field in entity.fields
-    }
     for mapping in mappings:
         endpoint = mapping.endpoint_field
         endpoint_payload = endpoint.model_dump(mode="json", by_alias=True)
@@ -718,36 +662,18 @@ def _validate_field_mappings(
             raise ApiDesignError(f"Endpoint 字段定义被草稿修改：{key}。")
         actual[key] = mapping
         if isinstance(mapping, UnconfiguredFieldMapping):
-            if endpoint.required:
-                raise ApiDesignError(f"必填 Endpoint 字段尚未配置映射：{endpoint.path}。")
-            continue
+            raise ApiDesignError(f"Endpoint 字段尚未配置映射：{endpoint.path}。")
         if isinstance(mapping, BusinessDescriptionFieldMapping):
             continue
-        source_field = _mapping_source_field(mapping)
-        if isinstance(mapping, ThroughEntityFieldMapping):
-            reference = mapping.entity_field
-            entity_field = entity_fields.get((reference.entity_id, reference.field_id))
-            if entity_field is None:
-                raise ApiDesignError(
-                    f"实体字段引用不存在：{reference.entity_id}.{reference.field_id}。"
-                )
-            if reference.path != entity_field.name or reference.type != entity_field.type:
-                raise ApiDesignError(
-                    f"实体字段引用与场景实体定义不一致：{reference.entity_id}.{reference.field_id}。"
-                )
-            if not _types_compatible(endpoint.type, reference.type):
-                raise ApiDesignError(f"Endpoint 与实体字段类型不兼容：{endpoint.path} → {reference.path}。")
-            if source_field is not None and not _types_compatible(reference.type, source_field.type):
-                raise ApiDesignError(
-                    f"实体与数据源字段类型不兼容：{reference.path} → {_source_field_label(source_field)}。"
-                )
-        elif isinstance(mapping, DirectSourceFieldMapping):
-            if not _types_compatible(endpoint.type, mapping.source_field.type):
-                raise ApiDesignError(
-                    f"Endpoint 与数据源字段类型不兼容：{endpoint.path} → {_source_field_label(source_field)}。"
-                )
-        if source_field is not None:
-            _validate_source_for_endpoint(endpoint, source_field)
+        if isinstance(mapping, SourceMapping):
+            try:
+                validate_unique_sources([item.model_dump(by_alias=True) for item in mapping.source_fields])
+            except ValueError as exc:
+                raise ApiDesignError(str(exc)) from exc
+            for source_field in mapping.source_fields:
+                if mapping.processing_type == "direct" and not _types_compatible(endpoint.type, source_field.type):
+                    raise ApiDesignError(f"Endpoint 与数据源字段类型不兼容：{endpoint.path}。")
+                _validate_source_for_endpoint(endpoint, source_field)
 
     expected_keys = set(expected)
     if set(actual) != expected_keys:
@@ -756,14 +682,15 @@ def _validate_field_mappings(
         raise ApiDesignError(f"Endpoint 字段集合与当前契约不一致，缺少 {missing}，多出 {extra}。")
 
 
-def _mapping_source_field(mapping: Any) -> DatabaseSourceField | ExternalSourceField | None:
-    """读取直接来源或经实体映射中的可选来源字段。"""
+def _parse_confirmed_field_mappings(value: Any) -> list[ConfirmedFieldMapping]:
+    """解析正式产物中的映射并拒绝草稿状态或旧中转结构。"""
 
-    if isinstance(mapping, DirectSourceFieldMapping):
-        return mapping.source_field
-    if isinstance(mapping, ThroughEntityFieldMapping):
-        return mapping.source_field
-    return None
+    if not isinstance(value, list):
+        raise ApiDesignError("正式 API 设计缺少 fieldMappings 列表。")
+    try:
+        return [_CONFIRMED_FIELD_MAPPING_ADAPTER.validate_python(item) for item in value]
+    except ValueError as exc:
+        raise ApiDesignError(f"正式字段映射结构无效：{exc}") from exc
 
 
 def _validate_source_for_endpoint(endpoint: Any, source_field: Any) -> None:
@@ -796,7 +723,8 @@ def _validated_source_snapshots(
     source_fields = [
         source_field
         for mapping in mappings
-        if (source_field := _mapping_source_field(mapping)) is not None
+        if isinstance(mapping, SourceMapping)
+        for source_field in mapping.source_fields
     ]
     database_refs: defaultdict[tuple[str, str], list[DatabaseSourceField]] = defaultdict(list)
     external_refs: defaultdict[tuple[str, str, str], list[ExternalSourceField]] = defaultdict(list)
@@ -824,7 +752,7 @@ def _validated_source_snapshots(
             {
                 "sourceType": "database",
                 "sourceId": source_id,
-                "name": source_id,
+                "name": _database_source_display_name(workspace_root, source_id),
                 "details": _project_database_snapshot(metadata, refs),
             }
         )
@@ -860,6 +788,19 @@ def _validated_source_snapshots(
             }
         )
     return snapshots
+
+
+def _database_source_display_name(workspace_root: str | Path, source_id: str) -> str:
+    """读取数据库数据源的业务名称，避免正式快照暴露内部标识。"""
+
+    try:
+        catalog = public_catalog(workspace_root, source_id=source_id)
+    except DataSourceError:
+        # 元数据校验已经完成时，目录读取失败不应把内部 ID 写入用户可读快照。
+        return "数据库"
+    source = next((item for item in catalog.sources if item.id == source_id), None)
+    name = str(source.name or "").strip() if source is not None else ""
+    return name if name and name != source_id else "数据库"
 
 
 def _project_database_snapshot(
@@ -1254,16 +1195,6 @@ def _endpoint_field_label(value: Any) -> str:
     return ""
 
 
-def _entity_field_label(value: Any) -> str:
-    """把内嵌实体字段引用转换为可读标签。"""
-
-    if hasattr(value, "entity_id"):
-        return f"{value.entity_id}.{value.path}"
-    if isinstance(value, dict):
-        return f"{value.get('entityId')}.{value.get('path')}"
-    return ""
-
-
 def _source_field_label(value: Any) -> str:
     """把内嵌数据源字段转换为可读标签。"""
 
@@ -1279,7 +1210,7 @@ def _source_field_label(value: Any) -> str:
 
 
 def _types_compatible(left: str, right: str) -> bool:
-    """按 API、实体、SQL 和外部 Schema 的常用类型族判断兼容性。"""
+    """按 API、SQL 和外部 Schema 的常用类型族判断兼容性。"""
 
     left_family = _type_family(left)
     right_family = _type_family(right)
@@ -1307,4 +1238,3 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
     """过滤列表中的非对象输入。"""
 
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
-

@@ -243,6 +243,7 @@ def _unit_source_refs(
     refs = _dict_value(build_context.get("source_refs"))
     endpoint_designs = _endpoint_design_items(build_context.get("endpoint_designs"))
     source_types = _string_list(build_context.get("source_types"))
+    entity_ids = _string_list(build_context.get("entity_ids"))
     if unit_id.startswith("page:"):
         descriptions = _dict_items(build_context.get("business_descriptions"))
         return {
@@ -253,6 +254,7 @@ def _unit_source_refs(
                 refs.get("page_implementation_contract")
             ),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": entity_ids,
             "endpoint_designs": endpoint_designs,
             "mapping_flows": _string_list(build_context.get("mapping_flows")),
             **({"source_types": source_types} if source_types else {}),
@@ -285,6 +287,7 @@ def _unit_source_refs(
             ),
             "technical_plan_endpoints": endpoint_refs,
             "endpoint_ids": endpoint_ids,
+            "entity_ids": entity_ids,
             "endpoint_designs": _scope_endpoint_designs_to_endpoint(
                 endpoint_designs,
                 contract_id=contract_id,
@@ -301,6 +304,7 @@ def _unit_source_refs(
             "type": "backend_bootstrap",
             "target": target,
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": entity_ids,
             "endpoint_designs": endpoint_designs,
             "mapping_flows": _string_list(build_context.get("mapping_flows")),
             **({"source_types": source_types} if source_types else {}),

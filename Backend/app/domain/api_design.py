@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-API_DESIGN_SCHEMA_VERSION = "endpoint-field-mapping.v1"
+API_DESIGN_SCHEMA_VERSION = "endpoint-field-mapping.v3"
 API_DESIGN_ARTIFACT_TYPE = "endpoint-field-mapping"
 
 
@@ -40,55 +40,6 @@ class EndpointField(ApiDesignModel):
     type: str = Field(default="unknown", min_length=1, max_length=128)
     required: bool = False
     description: str = Field(default="", max_length=2048)
-
-
-class SceneEntityField(ApiDesignModel):
-    """定义当前 Endpoint 场景 Entity 中的一个局部字段。"""
-
-    id: str = Field(min_length=1, max_length=256)
-    name: str = Field(min_length=1, max_length=256)
-    label: str = Field(default="", max_length=256)
-    type: str = Field(default="unknown", min_length=1, max_length=128)
-    required: bool = False
-    description: str = Field(default="", max_length=2048)
-
-
-class SceneEntity(ApiDesignModel):
-    """描述当前 Endpoint 复制得到的只读 TechnicalPlan 场景实体。"""
-
-    id: str = Field(min_length=1, max_length=256)
-    name: str = Field(min_length=1, max_length=256)
-    description: str = Field(default="", max_length=2048)
-    template_entity_id: str = Field(alias="templateEntityId", min_length=1, max_length=256)
-    fields: list[SceneEntityField] = Field(default_factory=list, max_length=500)
-
-
-class EntityTemplateField(ApiDesignModel):
-    """为当前 Endpoint 提供复制入口的 TechnicalPlan 实体字段模板。"""
-
-    name: str = Field(min_length=1, max_length=256)
-    label: str = Field(default="", max_length=256)
-    type: str = Field(default="unknown", min_length=1, max_length=128)
-    required: bool = False
-    description: str = Field(default="", max_length=2048)
-
-
-class EntityTemplate(ApiDesignModel):
-    """只读的全局实体复制模板，不承载任何数据源绑定。"""
-
-    id: str = Field(min_length=1, max_length=256)
-    name: str = Field(min_length=1, max_length=256)
-    description: str = Field(default="", max_length=2048)
-    fields: list[EntityTemplateField] = Field(default_factory=list, max_length=500)
-
-
-class EntityFieldReference(ApiDesignModel):
-    """内嵌引用当前场景实体中的一个字段。"""
-
-    entity_id: str = Field(alias="entityId", min_length=1, max_length=256)
-    field_id: str = Field(alias="fieldId", min_length=1, max_length=256)
-    path: str = Field(min_length=1, max_length=1024)
-    type: str = Field(default="unknown", min_length=1, max_length=128)
 
 
 class DatabaseSourceField(ApiDesignModel):
@@ -146,28 +97,41 @@ class BusinessDescriptionFieldMapping(ApiDesignModel):
         return self
 
 
-class DirectSourceFieldMapping(ApiDesignModel):
-    """表示 Endpoint 字段与一个真实数据源字段直接对应。"""
+class SourceMapping(ApiDesignModel):
+    """表示 Endpoint 字段与真实来源列表及用户确认的处理说明。"""
 
     endpoint_field: EndpointField = Field(alias="endpointField")
-    mapping_type: Literal["direct_source"] = Field(default="direct_source", alias="mappingType")
-    source_field: SourceField = Field(alias="sourceField")
+    mapping_type: Literal["source_mapping"] = Field(default="source_mapping", alias="mappingType")
+    source_fields: list[SourceField] = Field(alias="sourceFields", min_length=1, max_length=100)
+    processing_type: Literal["direct", "single_field_description", "multi_field_description"] = Field(alias="processingType")
+    business_description: str | None = Field(default=None, alias="businessDescription", max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_processing(self) -> "SourceMapping":
+        """校验来源数量与处理内容，直接映射不允许携带业务处理内容。"""
+        if self.processing_type == "multi_field_description":
+            if len(self.source_fields) < 2:
+                raise ValueError("多字段业务处理至少需要两个来源。")
+        elif len(self.source_fields) != 1:
+            raise ValueError("直接映射或单字段业务处理必须只有一个来源。")
+        if self.processing_type == "direct":
+            if "business_description" in self.model_fields_set:
+                raise ValueError("直接映射不能携带业务处理内容。")
+        elif not self.business_description or not self.business_description.strip():
+            raise ValueError("业务处理内容不能为空。")
+        return self
 
 
-class ThroughEntityFieldMapping(ApiDesignModel):
-    """表示 Endpoint 字段经场景实体字段映射，并可继续连接数据源。"""
-
-    endpoint_field: EndpointField = Field(alias="endpointField")
-    mapping_type: Literal["through_entity"] = Field(default="through_entity", alias="mappingType")
-    entity_field: EntityFieldReference = Field(alias="entityField")
-    source_field: SourceField | None = Field(default=None, alias="sourceField")
+ConfirmedFieldMapping = Annotated[
+    SourceMapping | BusinessDescriptionFieldMapping,
+    Field(discriminator="mapping_type"),
+]
 
 
-FieldMapping = Annotated[
+DraftFieldMapping = Annotated[
     UnconfiguredFieldMapping
     | BusinessDescriptionFieldMapping
-    | DirectSourceFieldMapping
-    | ThroughEntityFieldMapping,
+    | SourceMapping,
     Field(discriminator="mapping_type"),
 ]
 
@@ -191,7 +155,7 @@ class ArtifactLineageReference(ApiDesignModel):
 class EndpointFieldMappingDesign(ApiDesignModel):
     """描述已确认的 Endpoint 自包含字段映射正式产物。"""
 
-    schema_version: Literal["endpoint-field-mapping.v1"] = Field(default=API_DESIGN_SCHEMA_VERSION, alias="schemaVersion")
+    schema_version: Literal["endpoint-field-mapping.v3"] = Field(default=API_DESIGN_SCHEMA_VERSION, alias="schemaVersion")
     artifact_type: Literal["endpoint-field-mapping"] = Field(default=API_DESIGN_ARTIFACT_TYPE, alias="artifactType")
     status: Literal["confirmed"] = "confirmed"
     confirmation_status: Literal["confirmed"] = Field(default="confirmed", alias="confirmationStatus")
@@ -200,8 +164,7 @@ class EndpointFieldMappingDesign(ApiDesignModel):
     endpoint_id: str = Field(alias="endpointId", min_length=1, max_length=256)
     endpoint_contract: dict[str, Any] = Field(alias="endpointContract")
     implementation_description: str | None = Field(default=None, alias="implementationDescription", max_length=4000)
-    scene_entities: list[SceneEntity] = Field(default_factory=list, alias="sceneEntities", max_length=200)
-    field_mappings: list[FieldMapping] = Field(alias="fieldMappings", max_length=3000)
+    field_mappings: list[ConfirmedFieldMapping] = Field(alias="fieldMappings", max_length=3000)
     source_snapshots: list[SourceSnapshot] = Field(default_factory=list, alias="sourceSnapshots", max_length=100)
     based_on: list[ArtifactLineageReference] = Field(alias="basedOn", min_length=1)
     confirmed_at: datetime = Field(alias="confirmedAt")
@@ -222,6 +185,61 @@ class ApiDesignAction(ApiDesignModel):
         if self.action == "confirm" and not self.draft:
             raise ValueError("确认 API 设计必须提交当前完整草稿。")
         return self
+
+
+class ApiDesignGateVersion(ApiDesignModel):
+    """描述开发门禁确认时用户看到的一项 Endpoint 映射版本。"""
+
+    api_contract_id: str = Field(alias="apiContractId", min_length=1, max_length=256)
+    endpoint_id: str = Field(alias="endpointId", min_length=1, max_length=256)
+    artifact_revision: str = Field(alias="artifactRevision", pattern=r"^[0-9a-f]{32}$")
+
+
+class ApiDesignGateAction(ApiDesignModel):
+    """描述 API 开发门禁的刷新或版本确认动作。"""
+
+    action: Literal["refresh", "confirm"]
+    target_type: Literal["page", "endpoint"] = Field(alias="targetType")
+    target_id: str = Field(alias="targetId", min_length=1, max_length=256)
+    api_contract_id: str | None = Field(
+        default=None,
+        alias="apiContractId",
+        min_length=1,
+        max_length=256,
+    )
+    versions: list[ApiDesignGateVersion] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_gate_arguments(self) -> "ApiDesignGateAction":
+        """按目标和动作校验门禁参数，保证刷新与确认都绑定完整开发目标。"""
+
+        if self.target_type == "endpoint" and not self.api_contract_id:
+            raise ValueError("Endpoint 开发门禁必须携带 API Contract 标识。")
+        if self.action == "confirm" and not self.versions:
+            raise ValueError("确认 API 映射必须携带当前全部版本。")
+        if self.action == "refresh" and self.versions:
+            raise ValueError("重新检测 API 映射不能携带确认版本。")
+        return self
+
+
+class ApiDesignGateDesign(ApiDesignModel):
+    """描述开发门禁回显的一项完整 Endpoint 映射。"""
+
+    api_contract_id: str = Field(alias="apiContractId", min_length=1, max_length=256)
+    endpoint_id: str = Field(alias="endpointId", min_length=1, max_length=256)
+    artifact_revision: str = Field(alias="artifactRevision", pattern=r"^[0-9a-f]{32}$")
+    design: EndpointFieldMappingDesign
+
+
+class ApiDesignGateResult(ApiDesignModel):
+    """描述页面或接口开发门禁的聚合映射结果。"""
+
+    status: Literal["ready", "confirmed"]
+    target_type: Literal["page", "endpoint"] = Field(alias="targetType")
+    target_id: str = Field(alias="targetId", min_length=1, max_length=256)
+    target_label: str = Field(alias="targetLabel", min_length=1, max_length=512)
+    designs: list[ApiDesignGateDesign] = Field(max_length=1000)
+    confirmed_for_development: bool = Field(default=False, alias="confirmedForDevelopment")
 
 
 EndpointApiDesign = EndpointFieldMappingDesign

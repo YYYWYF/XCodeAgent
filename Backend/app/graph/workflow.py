@@ -11,10 +11,8 @@ from app.persistence.checkpoints import (
 
 
 def route_workflow_start(state: ProjectState) -> str:
-    """让主 Workflow 从 API 设计、开发检查、旧实体入口或指定节点开始。"""
+    """让主 Workflow 从 API 门禁、开发检查、旧实体入口或指定节点开始。"""
 
-    if state.get("resume_from") == "api_design":
-        return "api_design"
     if state.get("resume_from") == "api_design_readiness_gate":
         return "api_design_readiness_gate"
     if state.get("resume_from") == "entity_source_binding":
@@ -199,17 +197,6 @@ def route_entity_source_binding(state: ProjectState) -> str:
     return "await_user_input"
 
 
-def route_api_design(state: ProjectState) -> str:
-    """按 API 设计状态决定等待、续接开发链路或进入统一失败处理。"""
-
-    status = str(state.get("status") or "")
-    if status == "requires_user_input":
-        return "await_user_input"
-    if status == "completed":
-        return "api_design_readiness_gate"
-    return "handle_failure"
-
-
 def route_api_design_readiness(state: ProjectState) -> str:
     """API 设计齐备时进入工作区检查，否则等待用户逐个完成设计。"""
 
@@ -264,7 +251,6 @@ def build_graph(*, checkpointer):
     builder = StateGraph(ProjectState)
 
     builder.add_node("development_readiness_gate", nodes.development_readiness_gate)
-    builder.add_node("api_design", nodes.api_design)
     builder.add_node("api_design_readiness_gate", nodes.api_design_readiness_gate)
     builder.add_node("application_revision", nodes.start_application_revision)
     # TechnicalPlan 二次修改使用同一实现节点，但以真实 technical_planning
@@ -294,7 +280,6 @@ def build_graph(*, checkpointer):
         START,
         route_workflow_start,
         {
-            "api_design": "api_design",
             "api_design_readiness_gate": "api_design_readiness_gate",
             "development_readiness_gate": "development_readiness_gate",
             "application_revision": "application_revision",
@@ -331,15 +316,6 @@ def build_graph(*, checkpointer):
         {
             "api_design_readiness_gate": "api_design_readiness_gate",
             "await_user_input": END,
-        },
-    )
-    builder.add_conditional_edges(
-        "api_design",
-        route_api_design,
-        {
-            "api_design_readiness_gate": "api_design_readiness_gate",
-            "await_user_input": END,
-            "handle_failure": "handle_failure",
         },
     )
     builder.add_conditional_edges(

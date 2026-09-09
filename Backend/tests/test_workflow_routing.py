@@ -11,7 +11,7 @@ from app.graph.workflow import (
     route_build_result,
     route_development_readiness,
     route_entity_source_binding,
-    route_api_design,
+    route_api_design_readiness,
     route_prepare_build_tasks,
     route_project_planning,
     route_review_phase_confirmation,
@@ -29,20 +29,16 @@ from app.domain.application_lifecycle import PendingInteractionType
 
 
 class WorkflowRoutingTests(unittest.TestCase):
-    def test_api_design_waits_then_continues_to_readiness(self) -> None:
-        """API 动态设计确认前暂停，确认后进入同一 Endpoint 的开发前置检查。"""
+    def test_api_design_gate_waits_then_continues_to_workspace_inspection(self) -> None:
+        """字段映射门禁等待配置或确认，通过后才进入工作区检查。"""
 
         self.assertEqual(
-            route_api_design({"status": "requires_user_input"}),
+            route_api_design_readiness({"status": "requires_user_input"}),
             "await_user_input",
         )
         self.assertEqual(
-            route_api_design({"status": "completed"}),
-            "api_design_readiness_gate",
-        )
-        self.assertEqual(
-            route_api_design({"status": "failed"}),
-            "handle_failure",
+            route_api_design_readiness({"status": "completed"}),
+            "inspect_workspace",
         )
 
     def test_workflow_start_defaults_to_development_readiness(self) -> None:

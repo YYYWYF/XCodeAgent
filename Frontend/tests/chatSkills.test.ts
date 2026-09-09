@@ -42,9 +42,16 @@ import {
 } from '../src/renderer/src/service/processStepHistory'
 import { normalizePersistentSessionMessage } from '../src/main/sessionMessageNormalization'
 import {
+  chatSessionToSummary,
   normalizeMessageSkills,
+  normalizeDevelopmentTarget,
   normalizeRevisionSessionContext
 } from '../src/renderer/src/service/chatSessions'
+import {
+  createSessionIdentity,
+  developmentTargetWorkflowFields,
+  sameDevelopmentTarget
+} from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import {
   chatCopy,
   DEFAULT_DIFF_PANEL_WIDTH
@@ -125,6 +132,92 @@ test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   })
 
   assert.deepEqual(scope, { type: 'page', targetId: 'pet_list_page' })
+})
+
+test('页面和 Endpoint 开发目标严格规范化并投影到 Workflow scope', () => {
+  const page = normalizeDevelopmentTarget({
+    type: 'page',
+    pageId: 'products',
+    label: '商品列表页'
+  })
+  const endpoint = normalizeDevelopmentTarget({
+    type: 'endpoint',
+    apiContractId: 'products-api',
+    endpointId: 'products.list',
+    label: 'GET /api/products'
+  })
+
+  assert.deepEqual(page, { type: 'page', pageId: 'products', label: '商品列表页' })
+  assert.deepEqual(endpoint, {
+    type: 'endpoint',
+    apiContractId: 'products-api',
+    endpointId: 'products.list',
+    label: 'GET /api/products'
+  })
+  assert.equal(normalizeDevelopmentTarget({ type: 'endpoint', endpointId: 'products.list' }), undefined)
+  assert.deepEqual(developmentTargetWorkflowFields(endpoint), {
+    selectedApiContractId: 'products-api',
+    selectedEndpointId: 'products.list',
+    detailTargetType: 'endpoint',
+    buildExecutionScope: {
+      type: 'endpoint',
+      targetId: 'products.list',
+      apiContractId: 'products-api'
+    }
+  })
+  // 自由会话和临时对话浮层都不声明目标，因此不会投影出正式开发 scope。
+  assert.equal(normalizeDevelopmentTarget(undefined), undefined)
+  assert.deepEqual(developmentTargetWorkflowFields(undefined), {})
+})
+
+test('会话摘要和运行时身份保留不可变开发目标', () => {
+  const target = {
+    type: 'endpoint' as const,
+    apiContractId: 'products-api',
+    endpointId: 'products.list',
+    label: 'GET /api/products'
+  }
+  const summary = chatSessionToSummary({
+    id: 'session-1',
+    title: '开发接口：GET /api/products',
+    editorMode: 'frontend',
+    workbenchPhase: 'development',
+    workflowId: 'app-1',
+    stage: 'DEVELOPMENT',
+    sequence: 1,
+    entryKey: 'session:1',
+    threadId: 'thread-1',
+    developmentTarget: target,
+    workspaceRoot: 'E:/goods',
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1
+  })
+  const identity = createSessionIdentity({
+    workspaceRoot: 'E:/goods',
+    editorMode: 'frontend',
+    sessionId: summary.id,
+    threadId: summary.threadId,
+    workflowId: summary.workflowId,
+    workbenchPhase: summary.workbenchPhase,
+    stage: summary.stage,
+    sequence: summary.sequence,
+    entryKey: summary.entryKey,
+    developmentTarget: summary.developmentTarget
+  })
+
+  assert.deepEqual(summary.developmentTarget, target)
+  assert.deepEqual(identity.developmentTarget, target)
+  assert.equal(sameDevelopmentTarget(target, { ...target, label: '商品列表接口' }), true)
+  assert.equal(
+    sameDevelopmentTarget(target, {
+      type: 'endpoint',
+      apiContractId: 'products-api',
+      endpointId: 'products.detail',
+      label: 'GET /api/products/{id}'
+    }),
+    false
+  )
 })
 
 test('design TechnicalPlan 完成后只读取完整的一次性 continuation 合同', () => {

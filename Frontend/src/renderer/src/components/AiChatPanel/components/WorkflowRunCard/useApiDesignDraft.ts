@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   WorkflowApiDesignDraft,
   WorkflowApiDesignPayload
@@ -17,14 +17,23 @@ export function useApiDesignDraft(payload: WorkflowApiDesignPayload): {
   const [draft, setDraft] = useState<WorkflowApiDesignDraft>(() =>
     normalizeApiDesignDraft(payload)
   )
+  const payloadSignature = JSON.stringify({
+    apiContractId: payload.draft.apiContractId,
+    endpointId: payload.draft.endpointId,
+    draft: payload.draft
+  })
+  const lastPayloadSignature = useRef(payloadSignature)
 
   useEffect(() => {
+    // 普通流式状态会不断创建新的 payload 对象；只有目标或服务端草稿真正变化时才重置。
+    if (lastPayloadSignature.current === payloadSignature) return
+    lastPayloadSignature.current = payloadSignature
     setDraft(normalizeApiDesignDraft(payload))
-  }, [payload])
+  }, [payload, payloadSignature])
 
   const errors = useMemo(
-    () => validateApiDesignDraft(draft, payload.entityTemplates || []),
-    [draft, payload.entityTemplates]
+    () => validateApiDesignDraft(draft),
+    [draft]
   )
 
   return { draft, errors, setDraft }

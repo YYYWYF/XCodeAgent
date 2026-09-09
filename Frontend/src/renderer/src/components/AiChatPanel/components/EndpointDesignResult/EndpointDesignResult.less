@@ -1,0 +1,43 @@
+.@{class-prefix}-endpoint-design-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px;
+  color: var(--wb-text);
+
+  .endpoint-design-result-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .ant-typography { color: var(--wb-text); }
+  .ant-descriptions-view, .ant-collapse { border-color: var(--wb-border); }
+  .ant-table { background: var(--wb-canvas); color: var(--wb-text); }
+  // 详情表沿用设计表的列结构，长来源和多行说明允许完整换行。
+  .ant-table-thead > tr > th, .ant-table-tbody > tr > td {
+    background: var(--wb-canvas);
+    border-color: var(--wb-border);
+    color: var(--wb-text);
+    overflow-wrap: anywhere;
+  }
+}
+
+// 多来源及用户多行说明保留换行，颜色沿用当前主题。
+.endpoint-design-result .ant-table-cell { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.@{class-prefix}-endpoint-design-history {
+  gap: 0;
+  padding: 0 16px;
+  border: 1px solid var(--wb-border);
+  border-radius: 14px;
+  overflow: hidden;
+
+  > section { min-width: 0; padding: 18px 0; }
+  > section + section { border-top: 1px solid var(--wb-border); }
+  section > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  section > p { margin: 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-text-secondary); }
+  .ant-tag { margin: 0; border-radius: 14px; border-color: var(--wb-border); background: var(--wb-surface-subtle); color: var(--wb-text-secondary); }
+}

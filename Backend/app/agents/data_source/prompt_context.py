@@ -303,7 +303,7 @@ def _task_execution_steps(task: dict[str, Any]) -> list[str]:
 
 
 def _task_scope_ids(tasks: list[dict[str, Any]]) -> tuple[set[str], set[str], set[str]]:
-    """汇总当前批次真实涉及的契约、接口和实体标识。"""
+    """汇总当前批次真实涉及的契约、接口和 TechnicalPlan Entity 标识。"""
 
     contract_ids: set[str] = set()
     endpoint_ids: set[str] = set()
@@ -317,12 +317,7 @@ def _task_scope_ids(tasks: list[dict[str, Any]]) -> tuple[set[str], set[str], se
         if contract_id:
             contract_ids.add(contract_id)
         endpoint_ids.update(_string_items(source_refs.get("endpoint_ids")))
-        entity_ids.update(
-            str(entity.get("id") or "").strip()
-            for design in task_endpoint_designs(task)
-            for entity in _dict_items(design.get("sceneEntities"))
-            if str(entity.get("id") or "").strip()
-        )
+        entity_ids.update(_string_items(source_refs.get("entity_ids")))
     return contract_ids, endpoint_ids, entity_ids
 
 
@@ -379,7 +374,11 @@ def _scoped_api_contracts(
         result.append(
             {
                 "id": contract_id,
-                "entity_ids": sorted(entity_ids),
+                "entity_ids": sorted(
+                    str(entity_id).strip()
+                    for entity_id in contract.get("entity_ids") or []
+                    if str(entity_id).strip() and str(entity_id).strip() in entity_ids
+                ),
                 "base_path": contract.get("base_path"),
                 "authentication": contract.get("authentication"),
                 "schemas": _scoped_contract_schemas(contract.get("schemas"), endpoints),

@@ -362,12 +362,13 @@ def acceptance(state: ProjectState) -> dict:
 
 
 def finalize_project(state: ProjectState) -> dict:
+    """汇总工作流最终完成状态。"""
+
     return {
         "phase": "completed",
         "status": "completed",
         "timeline": ["finalize_project"],
     }
-
 
 def handle_failure(state: ProjectState) -> dict:
     """保留上游失败原因并统一结束失败工作流。"""

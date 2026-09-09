@@ -18,15 +18,10 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
 
     snapshots: list[dict] = []
     field_mappings: list[dict] = []
-    scene_entities: dict[str, dict] = {}
     for index, source in enumerate(source_specs):
         source_type = str(source.get("data_source_type") or "database")
         entity_id = str(source.get("entity_id") or f"Entity{index}")
         source_id = str(source.get("source_id") or f"{source_type}-{index}")
-        scene = scene_entities.setdefault(entity_id, {
-            "id": f"scene:{entity_id}", "name": entity_id,
-            "templateEntityId": entity_id, "fields": []
-        })
         if source_type == "database":
             database = source.get("database_design") or {}
             table = str(database.get("matched_table") or entity_id.casefold())
@@ -43,24 +38,18 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
             })
             for row in rows:
                 entity_field = str(row.get("entity_field") or "name")
-                field_id = f"{entity_id}:{entity_field}"
-                scene["fields"].append({"id": field_id, "name": entity_field, "type": "string"})
                 field_mappings.append({
                     "endpointField": {
                         "side": "request", "location": "request_body",
                         "path": f"{entity_id}.{entity_field}", "type": "string", "required": True,
                         "description": "",
                     },
-                    "mappingType": "through_entity",
-                    "entityField": {
-                        "entityId": scene["id"], "fieldId": field_id,
-                        "path": entity_field, "type": "string",
-                    },
-                    "sourceField": {
+                    "mappingType": "source_mapping",
+                    "processingType": "direct", "sourceFields": [{
                         "sourceType": "database", "sourceId": source_id, "schema": "app",
                         "table": table, "column": str(row.get("table_column") or entity_field),
                         "type": "string", "usage": "write",
-                    },
+                    }],
                 })
             continue
 
@@ -98,27 +87,21 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
         for mapping in operation_mappings:
             entity_field = str(mapping.get("entity_field") or "value")
             source_path = str(mapping.get("source_field") or "value")
-            field_id = f"{entity_id}:{entity_field}"
-            scene["fields"].append({"id": field_id, "name": entity_field, "type": "string"})
             field_mappings.append({
                 "endpointField": {
                     "side": "response", "location": "response_body",
                     "path": f"result.{entity_field}", "type": "string", "required": True,
                     "description": "",
                 },
-                "mappingType": "through_entity",
-                "entityField": {
-                    "entityId": scene["id"], "fieldId": field_id,
-                    "path": entity_field, "type": "string",
-                },
-                "sourceField": {
+                "mappingType": "source_mapping",
+                "processingType": "direct", "sourceFields": [{
                     "sourceType": "external_api", "sourceId": source_id,
                     "directoryId": "products", "operationId": operation_id,
                     "section": "response_body", "path": source_path, "type": "string",
-                },
+                }],
             })
     return {
-        "schemaVersion": "endpoint-field-mapping.v1",
+        "schemaVersion": "endpoint-field-mapping.v3",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -127,7 +110,6 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
         "endpointContract": {
             "id": "category.create", "method": "POST", "path": "/api/categories",
         },
-        "sceneEntities": list(scene_entities.values()),
         "fieldMappings": field_mappings,
         "sourceSnapshots": snapshots,
         "basedOn": [{"artifactKey": "technical-plan", "sha256": "a" * 64}],
@@ -487,8 +469,8 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertNotIn("BuildTaskPlan summary:", prompt)
         self.assertNotIn("Code graph navigation contract", prompt)
         self.assertIn("outer_integration_test_only", prompt)
-        self.assertIn('"sceneEntities"', prompt)
-        self.assertIn('"mappingType": "through_entity"', prompt)
+        self.assertIn('"fieldMappings"', prompt)
+        self.assertIn('"mappingType": "source_mapping"', prompt)
         self.assertIn("Backend Workspace Context:", prompt)
         self.assertIn('"backend_working_directory": "/backend"', prompt)
         self.assertIn('"backend_directory_structure"', prompt)
@@ -540,14 +522,14 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             {"CategoryInput", "CategoryValue"},
         )
         design = context["api_design"]
-        self.assertEqual(design["schemaVersion"], "endpoint-field-mapping.v1")
-        self.assertEqual(design["sceneEntities"][0]["templateEntityId"], "Category")
-        self.assertEqual(design["fieldMappings"][0]["mappingType"], "through_entity")
+        self.assertEqual(design["schemaVersion"], "endpoint-field-mapping.v3")
+        self.assertNotIn("sceneEntities", design)
+        self.assertEqual(design["fieldMappings"][0]["mappingType"], "source_mapping")
         self.assertEqual(
             next(
-                mapping["sourceField"]
+                mapping["sourceFields"][0]
                 for mapping in design["fieldMappings"]
-                if mapping.get("sourceField", {}).get("sourceType") == "database"
+                if any(source.get("sourceType") == "database" for source in mapping.get("sourceFields", []))
             )["table"],
             "category",
         )
@@ -848,7 +830,7 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
             },
         )
 
-        self.assertNotIn("entity_ids", tasks[0]["source_refs"])
+        self.assertEqual(tasks[0]["source_refs"]["entity_ids"], ["Order", "Weather"])
         self.assertEqual(
             [item["endpointId"] for item in tasks[0]["source_refs"]["endpoint_designs"]],
             ["dashboard.get"],
@@ -905,7 +887,7 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
             },
         )
 
-        self.assertNotIn("entity_ids", tasks[0]["source_refs"])
+        self.assertEqual(tasks[0]["source_refs"]["entity_ids"], ["Order", "Weather"])
         self.assertEqual(
             {
                 snapshot["sourceType"]

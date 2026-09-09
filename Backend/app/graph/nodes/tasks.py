@@ -1681,8 +1681,8 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
     target_page_id = str(target.get("id") or "") if target.get("type") == "page" else ""
     pages = _scoped_pages(project_plan, target_page_id)
     contracts = _scoped_contracts(project_plan, build_context)
-    # TechnicalPlan 的全局 entity_ids 约束在本阶段保持原语义；Endpoint 场景实体
-    # 只作为 Build 上下文的局部事实，不应污染 Contract 一致性校验投影。
+    # TechnicalPlan 的全局 entity_ids 约束在本阶段保持原语义；物理来源映射
+    # 只作为 Build 上下文的 Endpoint 局部事实，不应污染 Contract 一致性校验投影。
     entity_ids = [
         str(entity_id).strip()
         for contract in contracts

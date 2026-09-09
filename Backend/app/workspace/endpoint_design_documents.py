@@ -100,7 +100,7 @@ def read_endpoint_design(
     *,
     require_current: bool = True,
 ) -> dict[str, Any] | None:
-    """读取并严格校验当前版双文件 API 设计及只读模板副本结构。"""
+    """读取并严格校验当前版双文件 API 设计及字段映射结构。"""
 
     json_path, markdown_path = endpoint_design_paths(
         workspace_root,
@@ -169,7 +169,7 @@ def endpoint_design_status(
     return {
         "status": "stale",
         "designed": False,
-        "reason": "API 设计格式无效、双文件不完整、场景实体模板失效或 TechnicalPlan 已变化。",
+        "reason": "API 设计格式无效、双文件不完整或 TechnicalPlan 已变化。",
     }
 
 
@@ -189,22 +189,6 @@ def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(_implementation_description_lines(design) or ["- 未补充 API 实现描述。"])
-    lines.extend([
-        "",
-        "## 场景实体",
-        "",
-    ])
-    for entity in _dict_items(design.get("sceneEntities")):
-        entity_name = str(entity.get("name") or entity.get("id") or "")
-        template = f"（模板：{entity.get('templateEntityId')}）" if entity.get("templateEntityId") else ""
-        lines.append(f"### {entity_name} `{entity.get('id')}` {template}".rstrip())
-        fields = _dict_items(entity.get("fields"))
-        lines.extend(
-            [f"- `{field.get('name')}`：{field.get('type') or 'unknown'}{('：' + str(field.get('description'))) if field.get('description') else ''}" for field in fields]
-            or ["- 尚未添加字段。"]
-        )
-    if not _dict_items(design.get("sceneEntities")):
-        lines.append("- 当前 Endpoint 未创建场景实体。")
     lines.extend(["", "## Request 映射", ""])
     lines.extend(_mapping_lines(design, side="request") or ["- 无 Request 映射。"])
     lines.extend(["", "## Response 映射", ""])
@@ -244,14 +228,9 @@ def _mapping_lines(design: dict[str, Any], *, side: str) -> list[str]:
                 f"{_escape_markdown(str(mapping.get('businessDescription') or ''))}"
             )
             continue
-        middle = [
-            label
-            for label in (
-                _entity_field_label(mapping.get("entityField")),
-                _source_field_label(mapping.get("sourceField")),
-            )
-            if label
-        ]
+        middle = [" + ".join(_source_field_label(item) for item in mapping.get("sourceFields", []))]
+        middle.append({"direct": "直接映射", "single_field_description": "单字段业务处理", "multi_field_description": "多字段业务处理"}.get(mapping.get("processingType"), ""))
+        middle = [label for label in middle if label]
         labels = [endpoint_label, *middle] if side == "request" else [*reversed(middle), endpoint_label]
         if len(labels) > 1:
             lines.append(f"- {_escape_markdown(' → '.join(labels))}")
@@ -259,11 +238,11 @@ def _mapping_lines(design: dict[str, Any], *, side: str) -> list[str]:
 
 
 def _business_description_lines(design: dict[str, Any]) -> list[str]:
-    """按字段展示 Request 和 Response 的一句话业务说明。"""
+    """按字段展示 Request 和 Response 的多行业务处理内容。"""
 
     lines: list[str] = []
     for mapping in _dict_items(design.get("fieldMappings")):
-        if mapping.get("mappingType") != "business_description":
+        if not mapping.get("businessDescription"):
             continue
         endpoint = mapping.get("endpointField") if isinstance(mapping.get("endpointField"), dict) else {}
         lines.extend(
@@ -327,12 +306,6 @@ def _endpoint_field_label(value: dict[str, Any]) -> str:
     """把内嵌 Endpoint 字段转换为简洁标签。"""
 
     return f"{value.get('side')}.{value.get('location')}.{value.get('path')}"
-
-
-def _entity_field_label(value: Any) -> str:
-    """把内嵌实体字段引用转换为简洁标签。"""
-
-    return f"{value.get('entityId')}.{value.get('path')}" if isinstance(value, dict) else ""
 
 
 def _source_field_label(value: Any) -> str:

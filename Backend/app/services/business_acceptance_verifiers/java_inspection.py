@@ -279,15 +279,15 @@ def verify_external_mapping_source(files: dict[str, str], expected: dict[str, An
         candidate_methods = mapping_methods if response_handling.get("entity_payload") is True else all_methods
         for mapping in field_mappings:
             source_field = str(mapping.get("source_field") or "")
-            entity_field = str(mapping.get("entity_field") or "")
-            if not source_field or not entity_field:
+            semantic_field = str(mapping.get("endpoint_field") or mapping.get("entity_field") or "")
+            if not source_field or not semantic_field:
                 return verification_result("blocked", "Endpoint API 设计缺少外部字段或内部语义字段。")
             required = _source_path_segments(source_field)
-            # Endpoint 直连时 entity_field 也是路径（如 items[].status），必须拆成
+            # Endpoint 直连时 endpoint_field 也是路径（如 items[].status），必须拆成
             # Java AST 可识别的逐级标识符，不能把整条路径当作一个变量名。
-            required.update(_source_path_segments(entity_field))
+            required.update(_source_path_segments(semantic_field))
             if not any(required.issubset(method.identifiers) for method in candidate_methods):
-                errors.append(f"缺少外部字段到内部语义字段的同方法映射 {source_field} -> {entity_field}。")
+                errors.append(f"缺少外部字段到 Endpoint 字段的同方法映射 {source_field} -> {semantic_field}。")
             mappings += 1
     if errors:
         return verification_result("failed", "；".join(errors), facts={"mapping_count": mappings})

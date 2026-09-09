@@ -34,7 +34,10 @@ import type {
 } from '../../typings'
 import { CLASS_PREFIX, composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
 import { readWorkspaceFile } from '../../service/workspaceTools'
-import type { ChatSessionDevelopmentContinuation } from '../../service/chatSessions'
+import type {
+  ChatSessionDevelopmentContinuation,
+  ChatSessionDevelopmentTarget
+} from '../../service/chatSessions'
 import { saveRequirementSpecDraft } from '../../service/applicationPagePlanning'
 import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
@@ -64,6 +67,9 @@ import StageOutputPanel from './components/StageOutputPanel'
 import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
+import ApiDesignConfigModal from './components/WorkflowRunCard/ApiDesignConfigModal'
+import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
+import { workflowClarification } from './components/WorkflowRunCard/workflowClarification'
 import {
   appendPlanningLoadingPlaceholder,
   compactPlanningMessageHistory
@@ -110,6 +116,7 @@ import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRu
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import { chatCopy } from './constants'
 import type { AgentChatMessage, WorkspaceDocKey } from './types'
+import type { EndpointDesignSaveResult } from '../../typings'
 import {
   workflowDevelopmentContinuation
 } from './developmentContinuation'
@@ -176,6 +183,36 @@ function planningUserMessageText(answers: WorkflowClarificationAnswers): string 
     lines.push(`${label}：${text}`)
   }
   return lines.join('\n')
+}
+
+/** 汇总工作流门禁中的全部 Endpoint 映射版本，驱动右侧正式产物在聚合结果变化时刷新。 */
+function workflowApiDesignRevisionKey(workflow?: WorkflowRunPayload): string {
+  if (!workflow) return ''
+  const candidates = [
+    workflow.summary?.apiDesignResult,
+    workflow.summary?.api_design_result,
+    workflow.state?.apiDesignResult,
+    workflow.state?.api_design_result,
+    workflow.result?.apiDesignResult,
+    workflow.result?.api_design_result
+  ]
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+    const designs = (candidate as Record<string, unknown>).designs
+    if (!Array.isArray(designs)) continue
+    return designs
+      .map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return ''
+        const value = item as Record<string, unknown>
+        return `${String(value.apiContractId || '')}:${String(value.endpointId || '')}:${String(
+          value.artifactRevision || ''
+        )}`
+      })
+      .filter(Boolean)
+      .sort()
+      .join('|')
+  }
+  return ''
 }
 
 const PLANNING_ANSWER_LABELS: Record<string, string> = {
@@ -289,6 +326,21 @@ type ActiveDetailTarget =
   | { type: 'page'; pageId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
   | { type: 'entity'; entityId: string; label: string }
+
+/** 将持久化页面/API 会话目标转换为工作台当前详情目标。 */
+function activeDetailTargetFromSession(
+  target: ChatSessionDevelopmentTarget | undefined
+): ActiveDetailTarget {
+  if (!target) return { type: 'none' }
+  if (target.type === 'page') return { type: 'page', pageId: target.pageId }
+  return {
+    type: 'endpoint',
+    apiContractId: target.apiContractId,
+    endpointId: target.endpointId,
+    endpointKey: `${target.apiContractId}:${target.endpointId}`,
+    label: target.label
+  }
+}
 
 const ACTIVE_DESIGN_WORKFLOW_STATUSES = new Set([
   'running',
@@ -814,6 +866,12 @@ export default function AiChatPanel({
 }: Props): ReactElement {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
+  const [apiDesignConfigTarget, setApiDesignConfigTarget] = useState<ApiDesignConfigTarget>()
+  const [apiDesignConfigGateWorkflow, setApiDesignConfigGateWorkflow] = useState<WorkflowRunPayload>()
+  const [apiDesignSavedMappingKeys, setApiDesignSavedMappingKeys] = useState<Set<string>>(
+    () => new Set()
+  )
+  const [apiDesignRefreshKey, setApiDesignRefreshKey] = useState(0)
   // 临时对话仅控制覆盖层可见性，不切换当前工作流会话或持久化上下文。
   const [temporaryChatOpen, setTemporaryChatOpen] = useState(false)
   // 设计阶段自由变更是主规划 Workflow 的显式中断模式，默认保持锁定。
@@ -1057,7 +1115,7 @@ export default function AiChatPanel({
     setRightPanel,
     splitDragging
   } = useAssistantPreviewLayout({ rightPanelOpen })
-  const { artifactDetailLabel, artifactOutlineProps } = useDevelopmentArtifactDetail({
+  const { artifactDetailLabel, artifactOutlineProps, apiTarget } = useDevelopmentArtifactDetail({
     applicationId: application.id,
     setRightPanel,
     onRightPanelOpenChange
@@ -1321,6 +1379,7 @@ export default function AiChatPanel({
     draft,
     draftKey,
     ensureActiveSession,
+    ensureDevelopmentSession,
     ensurePlanningSession,
     ensureRevisionDevelopmentSession,
     recoverRevisionDevelopmentSession,
@@ -1521,6 +1580,12 @@ export default function AiChatPanel({
 
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
+  useEffect(() => {
+    // 历史会话切换只恢复显式持久化目标；无目标自由会话不会借用上一个目标。
+    setActiveDetailTarget(activeDetailTargetFromSession(activeSession?.developmentTarget))
+    setInteractingDetailTargetKey('')
+    setGeneratingDetailTargetKey('')
+  }, [activeSession?.developmentTarget, activeSession?.key])
   const planningWorkflowStatus = String(planningWorkflow?.summary?.status || '')
   // 模板就绪后创建规划已经结束；即使界面暂留在产品阶段等待“进入开发”，底部也应恢复普通自由对话。
   const designChangeWorkflowAvailable = isApplicationPlanningPhase && !lifecycleReadyForWorkbench
@@ -2105,7 +2170,6 @@ export default function AiChatPanel({
     handleRetryPlan,
     handleStopPlan,
     handleSend,
-    handleStartApiDesign,
     handleStartEndpointDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
@@ -2132,6 +2196,7 @@ export default function AiChatPanel({
     createAcceptanceSession,
     acceptanceConversationSessionKey,
     ensureActiveSession,
+    ensureDevelopmentSession,
     getSessionMessages,
     persistSession,
     onApplicationLifecycleChange,
@@ -3663,6 +3728,7 @@ export default function AiChatPanel({
       endpointId?: string
     }
   ): Promise<boolean> => {
+    if (!targetContext?.apiContractId || (!targetContext.endpointId && !endpointTargetId)) return false
     const targetKey = targetContext?.apiContractId
       ? endpointDetailTargetKey(
           targetContext.apiContractId,
@@ -3682,18 +3748,14 @@ export default function AiChatPanel({
     } else {
       setActiveDetailTarget({ type: 'none' })
     }
-    const started = await handleStartApiDesign({
-      apiContractId: targetContext?.apiContractId,
-      endpointId: targetContext?.endpointId || endpointTargetId,
-      endpointLabel,
-      redesign: hasDetailPlan
+    setGeneratingDetailTargetKey('')
+    setApiDesignConfigGateWorkflow(undefined)
+    setApiDesignConfigTarget({
+      apiContractId: targetContext.apiContractId,
+      endpointId: targetContext.endpointId || endpointTargetId,
+      label: endpointLabel
     })
-    if (started) {
-      onPlanningArtifactsRefresh()
-    } else {
-      setGeneratingDetailTargetKey((current) => (current === targetKey ? '' : current))
-    }
-    return started
+    return true
   }
 
   /** 根据锁定入口里的目标类型启动页面、接口或实体详细设计。 */
@@ -3768,19 +3830,12 @@ export default function AiChatPanel({
       )
       return
     }
-    if (task.hasDetailPlan) {
-      await handleStartEndpointDevelopment({
-        apiContractId: task.apiContractId,
-        endpointId: task.endpointId,
-        endpointLabel: task.endpointLabel,
-        hasDetailPlan: true
-      })
-    } else {
-      await handleStartEndpointDesign(task.endpointId, task.endpointLabel, false, {
-        apiContractId: task.apiContractId,
-        endpointId: task.endpointId
-      })
-    }
+    await handleStartEndpointDevelopment({
+      apiContractId: task.apiContractId,
+      endpointId: task.endpointId,
+      endpointLabel: task.endpointLabel,
+      hasDetailPlan: task.hasDetailPlan
+    })
   }
 
   /** 消费实体完成续接卡，在同一历史会话中重新启动原页面或 Endpoint 正式任务。 */
@@ -4155,6 +4210,36 @@ export default function AiChatPanel({
     await handleSubmitClarification(workflow, answers)
   }
 
+  /** 打开独立 API 映射弹窗；保存后只更新当前门禁的本地配置状态。 */
+  const handleOpenApiDesignConfig = useCallback(
+    (target: ApiDesignConfigTarget, _workflow?: WorkflowRunPayload): void => {
+      setApiDesignConfigTarget(target)
+      setApiDesignConfigGateWorkflow(_workflow)
+    },
+    []
+  )
+
+  /** 保存独立映射后更新当前门禁的已配置标记，不触发检测或继续开发。 */
+  const handleApiDesignConfigSaved = useCallback(
+    async (target: ApiDesignConfigTarget, _result: EndpointDesignSaveResult): Promise<void> => {
+      const gateWorkflow = apiDesignConfigGateWorkflow
+      setApiDesignConfigTarget(undefined)
+      setApiDesignConfigGateWorkflow(undefined)
+      if (gateWorkflow) {
+        const scopeKey = `${gateWorkflow.threadId}:${gateWorkflow.runId}`
+        const mappingKey = `${scopeKey}:${target.apiContractId}:${target.endpointId}`
+        setApiDesignSavedMappingKeys((current) => {
+          const next = new Set(current)
+          next.add(mappingKey)
+          return next
+        })
+      }
+      setApiDesignRefreshKey((value) => value + 1)
+      onPlanningArtifactsRefresh()
+    },
+    [apiDesignConfigGateWorkflow, onPlanningArtifactsRefresh]
+  )
+
   // 需求文档确认：保存编辑草稿（重写 Markdown+JSON），不确认也不继续规划。
   // 保存后把更新后的 workflow 注入回规划会话，驱动右侧需求文档 tab 实时刷新
   // 编辑后的内容（confirmationArtifact.content 与 state.requirement_spec 同步更新）。
@@ -4381,8 +4466,10 @@ export default function AiChatPanel({
               key={activeSession?.key || draftKey}
               loading={loading || otherSessionExecutionLocked}
               messages={messages}
+              apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
               onContinueDevelopment={handleContinueDevelopment}
               onEntityDesignGateJump={handleEntityDesignGateJump}
+              onOpenApiDesignConfig={handleOpenApiDesignConfig}
               onDagStageSelect={handleDagStageSelect}
               onOpenCodeChangeFile={handleOpenCodeChangeFile}
               onOpenRevisionSession={handleOpenRevisionSession}
@@ -4538,6 +4625,17 @@ export default function AiChatPanel({
 
       {temporaryChatOpen ? <TemporaryChatOverlay onClose={handleCloseTemporaryChat} /> : null}
 
+      <ApiDesignConfigModal
+        onClose={() => {
+          setApiDesignConfigTarget(undefined)
+          setApiDesignConfigGateWorkflow(undefined)
+        }}
+        onSaved={handleApiDesignConfigSaved}
+        open={Boolean(apiDesignConfigTarget)}
+        target={apiDesignConfigTarget}
+        workspaceRoot={workspaceRoot}
+      />
+
       {showRightPanel && (
         <div
           aria-label="拖动调整右侧面板宽度"
@@ -4571,6 +4669,11 @@ export default function AiChatPanel({
               apiContracts={developmentPlanningApiContracts}
               entities={developmentPlanningEntities}
               detailLabel={artifactDetailLabel}
+              apiTarget={apiTarget}
+              apiDesignRefreshKey={`${apiDesignRefreshKey}:${workflowApiDesignRevisionKey(
+                latestWorkflowForDisplay
+              )}`}
+              workspaceRoot={workspaceRoot}
               outlineLocked={false}
               pages={displayedPlanningPages}
               pageTree={displayedPlanningPageTree}

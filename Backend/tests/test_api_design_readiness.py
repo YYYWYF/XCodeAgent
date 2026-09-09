@@ -29,6 +29,44 @@ class ApiDesignReadinessTests(unittest.TestCase):
                 ["orders.list", "orders.create"],
             )
 
+    def test_endpoint_reports_only_its_own_mapping(self) -> None:
+        """接口开发门禁不得把同一 Contract 的兄弟 Endpoint 纳入检测。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            _write_plan(workspace, plan)
+            readiness = api_design_readiness(
+                workspace,
+                plan,
+                target_type="endpoint",
+                target_id="orders.list",
+                api_contract_id="orders-api",
+            )
+            self.assertEqual(readiness["endpoint_ids"], ["orders.list"])
+            self.assertEqual(
+                [item["endpoint_id"] for item in readiness["missing_api_designs"]],
+                ["orders.list"],
+            )
+
+    def test_page_without_endpoint_dependencies_is_ready(self) -> None:
+        """不依赖 Endpoint 的页面应直接通过字段映射检测。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            plan["pages"].append({"pageId": "empty", "name": "空页面"})
+            plan["page_implementation_contracts"].append(
+                {"pageId": "empty", "requiredEndpointIds": []}
+            )
+            _write_plan(workspace, plan)
+            readiness = api_design_readiness(
+                workspace,
+                plan,
+                target_type="page",
+                target_id="empty",
+            )
+            self.assertTrue(readiness["ready"])
+            self.assertEqual(readiness["endpoint_ids"], [])
+
     def test_confirmed_snapshot_survives_source_catalog_change(self) -> None:
         """确认后仅 TechnicalPlan 指纹决定有效性，数据源目录变化不主动失效。"""
 
@@ -43,27 +81,35 @@ class ApiDesignReadinessTests(unittest.TestCase):
             readiness = api_design_readiness(workspace, plan, target_type="page", target_id="orders")
             self.assertTrue(readiness["ready"])
 
-    def test_custom_scene_entity_makes_confirmed_pair_stale(self) -> None:
-        """旧的现场创建场景实体不能通过当前只读模板就绪检查。"""
+    def test_invalid_confirmed_mapping_is_stale(self) -> None:
+        """正式产物含有草稿态未配置字段时必须回到 stale。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan = _plan()
             _write_plan(workspace, plan)
-            write_endpoint_design(workspace, _entity_design(workspace, "orders.list", "Unknown"))
-            readiness = api_design_readiness(workspace, plan, target_type="endpoint", target_id="orders.list", api_contract_id="orders-api")
+            paths = write_endpoint_design(workspace, _empty_design(workspace, "orders.list"))
+            payload = json.loads(Path(paths["json_path"]).read_text(encoding="utf-8"))
+            payload["fieldMappings"] = [{
+                "endpointField": {
+                    "side": "response",
+                    "location": "response_body",
+                    "path": "status",
+                    "type": "string",
+                    "required": False,
+                    "description": "",
+                },
+                "mappingType": "unconfigured",
+            }]
+            Path(paths["json_path"]).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            readiness = api_design_readiness(
+                workspace,
+                plan,
+                target_type="endpoint",
+                target_id="orders.list",
+                api_contract_id="orders-api",
+            )
             self.assertFalse(readiness["ready"])
             self.assertEqual(readiness["missing_api_designs"][0]["status"], "stale")
-            self.assertIn("TechnicalPlan", readiness["missing_api_designs"][0]["reason"])
-
-    def test_complete_template_scene_entity_is_ready(self) -> None:
-        """完整的 TechnicalPlan 模板副本可以通过 Endpoint 就绪检查。"""
-
-        with tempfile.TemporaryDirectory() as workspace:
-            plan = _plan()
-            _write_plan(workspace, plan)
-            write_endpoint_design(workspace, _entity_design(workspace, "orders.list", "Order"))
-            readiness = api_design_readiness(workspace, plan, target_type="endpoint", target_id="orders.list", api_contract_id="orders-api")
-            self.assertTrue(readiness["ready"])
 
 
 def _plan() -> dict:
@@ -108,30 +154,6 @@ def _empty_design(workspace: str, endpoint_id: str) -> EndpointApiDesign:
             "endpointId": endpoint_id,
             "endpointContract": {"id": endpoint_id, "method": method, "path": "/orders"},
             "artifactRevision": "0123456789abcdef0123456789abcdef",
-            "sceneEntities": [],
-            "fieldMappings": [],
-            "basedOn": [{"artifactKey": "technical-plan", "sha256": technical_plan_sha256(workspace)}],
-            "confirmedAt": datetime.now(UTC),
-        }
-    )
-
-
-def _entity_design(workspace: str, endpoint_id: str, template_id: str) -> EndpointApiDesign:
-    """构造包含指定场景实体的测试产物。"""
-
-    method = "POST" if endpoint_id.endswith(".create") else "GET"
-    return EndpointApiDesign.model_validate(
-        {
-            "apiContractId": "orders-api",
-            "endpointId": endpoint_id,
-            "endpointContract": {"id": endpoint_id, "method": method, "path": "/orders"},
-            "artifactRevision": "fedcba9876543210fedcba9876543210",
-            "sceneEntities": [{
-                "id": "scene-order",
-                "name": "订单",
-                "templateEntityId": template_id,
-                "fields": [{"id": "field-id", "name": "id", "label": "id", "type": "string"}],
-            }],
             "fieldMappings": [],
             "basedOn": [{"artifactKey": "technical-plan", "sha256": technical_plan_sha256(workspace)}],
             "confirmedAt": datetime.now(UTC),

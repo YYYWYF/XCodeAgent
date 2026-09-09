@@ -17,7 +17,6 @@ WORKFLOW_NODE_LABELS = {
     "planning_stage_entry": "进入规划阶段",
     "technical_planning": "技术规划",
     "application_revision": "正式产物二次修改",
-    "api_design": "API 动态映射设计",
     "api_design_readiness_gate": "API 设计前置检查",
     "development_readiness_gate": "开发前置检查",
     "entity_source_binding": "实体数据源绑定",
@@ -44,7 +43,6 @@ WORKFLOW_NODE_LABELS = {
 # 仅用于可视化层的兜底预测；实际节点路由始终以 LangGraph 为准。
 WORKFLOW_STATIC_NEXT_NODES = {
     "design_intent_analysis": ["requirements", "product_planning", "ui_confirmation"],
-    "api_design": ["api_design_readiness_gate"],
     "api_design_readiness_gate": ["inspect_workspace"],
     "development_readiness_gate": ["inspect_workspace"],
     "entity_source_binding": [],
@@ -149,10 +147,6 @@ def workflow_capabilities() -> dict[str, Any]:
                     "引用开发门禁登记的 continuation，在独立 thread 启动缺失实体的 "
                     "EntitySourceBinding execution。"
                 ),
-                "start_api_design": (
-                    "按 selectedApiContractId 和 selectedEndpointId 启动独立 Endpoint API 设计；"
-                    "确认后继续当前 Endpoint 的 API 就绪检查、任务规划、代码生成、测试与验收。"
-                ),
                 "continue_after_entity_binding": (
                     "消费实体确认后由后端签发的一次性 token，校验原 execution、目标与 "
                     "TechnicalPlan 哈希后恢复原开发 thread，并重新执行开发前置检查。"
@@ -161,14 +155,15 @@ def workflow_capabilities() -> dict[str, Any]:
             "clientNodeSelectionAllowed": False,
         },
         "clarificationModes": {
-            "api_design": {
-                "answerField": "clarificationAnswers.api_design",
-                "actions": ["confirm"],
-                "metadataTransport": "independent-data-sources-ag-ui",
+            "api_design_confirmation": {
+                "answerField": "clarificationAnswers.api_design_gate",
+                "actions": ["confirm", "refresh"],
+                "semantics": "confirm-all-currently-displayed-target-endpoint-design-versions-before-development",
             },
             "api_design_required": {
-                "answerField": None,
-                "semantics": "complete-missing-endpoint-designs-and-start-development-again",
+                "answerField": "clarificationAnswers.api_design_gate",
+                "actions": ["refresh"],
+                "semantics": "pause-page-or-endpoint-development-until-all-required-independent-mappings-pass-recheck",
             },
             "unit_test_confirmation": {
                 "answerField": "clarificationAnswers.unit_test_confirmation",

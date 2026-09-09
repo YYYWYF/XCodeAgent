@@ -89,6 +89,60 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(result["resume_values"]["detail_target_type"], "endpoint")
         self.assertNotIn("selectedPageId", result["resume_values"])
 
+    def test_page_api_design_refresh_preserves_page_scope(self) -> None:
+        """页面映射重新检测必须恢复原页面目标，不能转成单 Endpoint 开发。"""
+
+        result = workflow_run_inputs(
+            {
+                "clarificationAnswers": {
+                    "api_design_gate": {
+                        "action": "refresh",
+                        "targetType": "page",
+                        "targetId": "orders",
+                    }
+                },
+                "resumeState": {
+                    "state": {
+                        "selectedPageId": "orders",
+                        "detailTargetType": "page",
+                    }
+                },
+            }
+        )
+        values = result["resume_values"]
+        self.assertEqual(result["resume_from"], "api_design_readiness_gate")
+        self.assertEqual(values["selectedPageId"], "orders")
+        self.assertEqual(values["detail_target_type"], "page")
+        self.assertNotIn("selected_endpoint_id", values)
+
+    def test_endpoint_api_design_refresh_preserves_endpoint_scope(self) -> None:
+        """接口映射重新检测必须继续绑定原 Contract 和 Endpoint。"""
+
+        result = workflow_run_inputs(
+            {
+                "clarificationAnswers": {
+                    "api_design_gate": {
+                        "action": "refresh",
+                        "targetType": "endpoint",
+                        "targetId": "orders.list",
+                        "apiContractId": "orders-api",
+                    }
+                },
+                "resumeState": {
+                    "state": {
+                        "selectedApiContractId": "orders-api",
+                        "selectedEndpointId": "orders.list",
+                        "detailTargetType": "endpoint",
+                    }
+                },
+            }
+        )
+        values = result["resume_values"]
+        self.assertEqual(result["resume_from"], "api_design_readiness_gate")
+        self.assertEqual(values["selected_api_contract_id"], "orders-api")
+        self.assertEqual(values["selected_endpoint_id"], "orders.list")
+        self.assertEqual(values["detail_target_type"], "endpoint")
+
     def test_resume_state_restores_camel_case_endpoint_scope(self) -> None:
         """从公开 StateSnapshot 重新执行时，应恢复 camelCase endpoint scope。"""
 
@@ -987,8 +1041,8 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertNotIn("原始需求：\n请基于原始需求", inputs["request"])
         self.assertIn("回答：库管员", inputs["request"])
 
-    def test_start_api_design_uses_endpoint_target(self) -> None:
-        """显式 API 设计动作必须携带完整 Contract 与 Endpoint 目标。"""
+    def test_removed_start_api_design_action_uses_normal_development_gate(self) -> None:
+        """已移除的工作流内 API 设计动作不得绕过正常开发门禁。"""
 
         inputs = workflow_run_inputs(
             {
@@ -1000,7 +1054,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 },
             }
         )
-        self.assertEqual(inputs["resume_from"], "api_design")
+        self.assertEqual(inputs["resume_from"], "")
         self.assertEqual(inputs["resume_values"]["selected_api_contract_id"], "orders-api")
         self.assertEqual(inputs["resume_values"]["selected_endpoint_id"], "orders.list")
         self.assertEqual(

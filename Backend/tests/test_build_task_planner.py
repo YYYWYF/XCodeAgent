@@ -61,16 +61,9 @@ def _endpoint_design(
 
     snapshots: list[dict] = []
     field_mappings: list[dict] = []
-    scene = {
-        "id": f"scene:{entity_id}",
-        "name": entity_id,
-        "templateEntityId": entity_id,
-        "fields": [],
-    }
     for index, source_type in enumerate(source_types):
         source_id = f"{source_type}-{index}"
         field_name = f"{source_type}{index}"
-        scene["fields"].append({"id": field_name, "name": field_name, "type": "string"})
         if source_type == "database":
             details = {"table": "orders", "columns": ["order_id"]}
             source_field = {
@@ -124,24 +117,17 @@ def _endpoint_design(
                 "required": True,
                 "description": "",
             },
-            "mappingType": "through_entity",
-            "entityField": {
-                "entityId": scene["id"],
-                "fieldId": field_name,
-                "path": field_name,
-                "type": "string",
-            },
-            "sourceField": source_field,
+            "mappingType": "source_mapping",
+            "processingType": "direct", "sourceFields": [source_field],
         })
     return {
-        "schemaVersion": "endpoint-field-mapping.v1",
+        "schemaVersion": "endpoint-field-mapping.v3",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
         "apiContractId": contract_id,
         "endpointId": endpoint_id,
         "endpointContract": {"id": endpoint_id, "method": "GET", "path": "/values"},
-        "sceneEntities": [scene],
         "fieldMappings": field_mappings,
         "sourceSnapshots": snapshots,
         "basedOn": [{"artifactKey": "technical-plan", "sha256": "a" * 64}],
@@ -837,8 +823,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             endpoint_id="category_api.create",
             entity_id="Category",
         )
-        endpoint_design["fieldMappings"][0]["entityField"]["path"] = "category_name"
-        endpoint_design["fieldMappings"][0]["sourceField"].update({"table": "category", "column": "category_name"})
+        endpoint_design["fieldMappings"][0]["endpointField"]["path"] = "result.database0"
+        endpoint_design["fieldMappings"][0]["sourceFields"][0].update({"table": "category", "column": "category_name"})
         build_context = {
             "target": {
                 "type": "endpoint",
@@ -865,11 +851,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
         designs = projected["executable_details"]["endpoint_designs"]
         self.assertEqual([item["endpointId"] for item in designs], ["category_api.create"])
         self.assertEqual(
-            designs[0]["fieldMappings"][0]["entityField"]["path"],
-            "category_name",
+            designs[0]["fieldMappings"][0]["endpointField"]["path"],
+            "result.database0",
         )
         self.assertEqual(
-            designs[0]["fieldMappings"][0]["sourceField"]["table"],
+            designs[0]["fieldMappings"][0]["sourceFields"][0]["table"],
             "category",
         )
         self.assertNotIn("entity_designs", projected["executable_details"])
@@ -1023,16 +1009,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
         endpoint_design["fieldMappings"] = [
             {
                 "endpointField": {"side": "response", "location": "response_body", "path": f"items[].{mapping['entity_field']}", "type": "string", "required": True, "description": ""},
-                "mappingType": "through_entity",
-                "entityField": {"entityId": "scene:Product", "fieldId": mapping["entity_field"], "path": mapping["entity_field"], "type": "string"},
-                "sourceField": {"sourceType": "external_api", "sourceId": "external_api-0", "directoryId": "products", "operationId": operation["operation_id"], "section": "response_body", "path": mapping["source_field"], "type": "string", "description": ""},
+                "mappingType": "source_mapping",
+                "processingType": "direct", "sourceFields": [{"sourceType": "external_api", "sourceId": "external_api-0", "directoryId": "products", "operationId": operation["operation_id"], "section": "response_body", "path": mapping["source_field"], "type": "string", "description": ""}],
             }
             for mapping in operation["field_mappings"]
         ]
-        endpoint_design["sceneEntities"] = [{
-            "id": "scene:Product", "name": "Product", "templateEntityId": "Product",
-            "fields": [{"id": m["entity_field"], "name": m["entity_field"], "type": "string"} for m in operation["field_mappings"]],
-        }]
         project_plan = {
             "executable_details": {
                 "endpoint_designs": [endpoint_design],
@@ -2311,6 +2292,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     {"id": "orders_api.list", "api_contract_id": "orders-api"}
                 ],
                 "endpoint_ids": ["orders_api.list"],
+                "entity_ids": [],
                 "endpoint_designs": [],
                 "mapping_flows": [],
             },

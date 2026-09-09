@@ -12,6 +12,7 @@ import {
   saveChatSession,
   setPersistedActiveSessionId,
   type ChatSessionMessage,
+  type ChatSessionDevelopmentTarget,
   type ChatSessionRecord,
   type ChatSessionRevisionContext,
   type ChatSessionRevisionHandoff,
@@ -30,6 +31,7 @@ import type { AgentChatMessage } from '../types'
 import {
   createSessionIdentity,
   pendingDraftKey,
+  sameDevelopmentTarget,
   sessionIdentityFromSummary,
   sessionRuntimeKey,
   type SessionIdentity
@@ -111,6 +113,7 @@ type UseChatSessionsResult = {
   createAcceptanceSession: (target: AcceptancePhaseSessionTarget) => Promise<SessionIdentity>
   discardPreparedSession: (identity: SessionIdentity) => Promise<void>
   ensureActiveSession: () => Promise<SessionIdentity>
+  ensureDevelopmentSession: (target: ChatSessionDevelopmentTarget) => Promise<SessionIdentity>
   ensurePlanningSession: (
     threadId: string,
     phase?: WorkbenchPhase,
@@ -357,6 +360,7 @@ export function useChatSessions({
       stage: session.stage,
       sequence: session.sequence,
       entryKey: session.entryKey,
+      developmentTarget: session.developmentTarget,
       revisionContext: session.revisionContext
     })
     registerSession(identity, session.messages)
@@ -435,6 +439,7 @@ export function useChatSessions({
     workbenchPhase?: WorkbenchPhase
     revisionContext?: ChatSessionRevisionContext
     recoveryExecutionRunId?: string
+    developmentTarget?: ChatSessionDevelopmentTarget
   }): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
       throw new Error('创建会话前需要选择工作目录。')
@@ -449,7 +454,8 @@ export function useChatSessions({
       entryKey: options?.entryKey,
       title: options?.title || '新对话',
       revisionContext: options?.revisionContext,
-      recoveryExecutionRunId: options?.recoveryExecutionRunId
+      recoveryExecutionRunId: options?.recoveryExecutionRunId,
+      developmentTarget: options?.developmentTarget
     })
     if (session.editorMode !== editorMode) {
       throw new Error('同一阶段入口已由另一个编辑模式创建，不能重复接管。')
@@ -464,6 +470,7 @@ export function useChatSessions({
       stage: session.stage,
       sequence: session.sequence,
       entryKey: session.entryKey,
+      developmentTarget: session.developmentTarget,
       revisionContext: session.revisionContext
     })
     const agUiSession = new AgUiChatSession(session.threadId)
@@ -496,6 +503,21 @@ export function useChatSessions({
       return activeSession
     }
     return createNewSession()
+  }
+
+  /** 确保页面/API 开发使用绑定目标的独立会话，目标变化时不改写旧会话。 */
+  const ensureDevelopmentSession = async (
+    target: ChatSessionDevelopmentTarget
+  ): Promise<SessionIdentity> => {
+    if (workbenchPhase !== 'development') {
+      throw new Error('页面/API 开发目标只能创建在 DEVELOPMENT 会话中。')
+    }
+    if (activeSession && sameDevelopmentTarget(activeSession.developmentTarget, target)) {
+      ensureAgent(activeSession)
+      return activeSession
+    }
+    const title = target.type === 'page' ? `开发页面：${target.label}` : `开发接口：${target.label}`
+    return createNewSession({ developmentTarget: target, title })
   }
 
   /** 创建或恢复同一阶段入口的可见会话；Graph checkpoint 与该会话 Thread 始终分离。 */
@@ -827,6 +849,7 @@ export function useChatSessions({
       stage: existingSummary.stage,
       sequence: existingSummary.sequence,
       entryKey: existingSummary.entryKey,
+      developmentTarget: existingSummary.developmentTarget,
       threadId: input.threadId,
       revisionContext: mergeRevisionSessionContext(
         existingSummary?.revisionContext,
@@ -853,6 +876,7 @@ export function useChatSessions({
     draft,
     draftKey,
     ensureActiveSession,
+    ensureDevelopmentSession,
     ensurePlanningSession,
     ensureRevisionDevelopmentSession,
     recoverRevisionDevelopmentSession,

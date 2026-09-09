@@ -7,6 +7,8 @@ type ArtifactSelection = {
   label: string
   pageId?: string
   endpointKey?: string
+  apiContractId?: string
+  endpointId?: string
   entityId?: string
 }
 
@@ -18,6 +20,7 @@ type Options = {
 
 type DevelopmentArtifactDetail = {
   artifactDetailLabel?: string
+  apiTarget?: { apiContractId: string; endpointId: string }
   artifactOutlineProps: Pick<
     ApplicationOutlineProps,
     | 'onPageSelect'
@@ -52,7 +55,12 @@ export function useDevelopmentArtifactDetail({
 
   /** 点击 API 只打开该接口的空白详情。 */
   const onApiEndpointSelect: ApplicationOutlineProps['onApiEndpointSelect'] = (endpoint) => {
-    openDetail({ endpointKey: endpoint.endpointKey, label: endpoint.label })
+    openDetail({
+      apiContractId: endpoint.apiContractId,
+      endpointId: endpoint.endpointId,
+      endpointKey: endpoint.endpointKey,
+      label: endpoint.label
+    })
   }
 
   /** 点击实体只打开该实体的空白详情。 */
@@ -62,6 +70,9 @@ export function useDevelopmentArtifactDetail({
 
   return {
     artifactDetailLabel: currentSelection?.label,
+    apiTarget: currentSelection?.apiContractId && currentSelection.endpointId
+      ? { apiContractId: currentSelection.apiContractId, endpointId: currentSelection.endpointId }
+      : undefined,
     artifactOutlineProps: {
       onPageSelect,
       onApiEndpointSelect,

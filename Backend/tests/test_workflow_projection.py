@@ -11,16 +11,18 @@ from app.protocols.workflow.projection import (
 
 
 class WorkflowProjectionTests(unittest.TestCase):
-    def test_api_design_projects_readiness_after_confirmation(self) -> None:
-        """API 设计确认后的可视化下一节点必须是就绪检查，而非运行终点。"""
+    def test_api_design_gate_projects_waiting_and_completed_routes(self) -> None:
+        """字段映射门禁等待时停图，确认完成后投影工作区检查。"""
 
         self.assertEqual(
-            _workflow_next_nodes("api_design", {"status": "requires_user_input"}),
+            _workflow_next_nodes(
+                "api_design_readiness_gate", {"status": "requires_user_input"}
+            ),
             [],
         )
         self.assertEqual(
-            _workflow_next_nodes("api_design", {"status": "completed"}),
-            ["api_design_readiness_gate"],
+            _workflow_next_nodes("api_design_readiness_gate", {"status": "completed"}),
+            ["inspect_workspace"],
         )
 
     def test_workspace_inspection_projects_direct_task_preparation(self) -> None:

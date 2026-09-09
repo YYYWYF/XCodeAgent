@@ -716,6 +716,10 @@ type ChatSessionRevisionContext = {
   technicalPlanSha256?: string
 }
 
+type ChatSessionDevelopmentTarget =
+  | { type: 'page'; pageId: string; label: string }
+  | { type: 'endpoint'; apiContractId: string; endpointId: string; label: string }
+
 type SessionWorkspaceSummary = {
   workspaceRoot: string
   name: string
@@ -736,6 +740,7 @@ type ChatSessionSummary = {
   sequence?: number
   entryKey?: string
   threadId: string
+  developmentTarget?: ChatSessionDevelopmentTarget
   revisionContext?: ChatSessionRevisionContext
   createdAt: number
   updatedAt: number
@@ -754,6 +759,7 @@ type NormalizedChatSession = {
   sequence?: number
   entryKey?: string
   threadId: string
+  developmentTarget?: ChatSessionDevelopmentTarget
   revisionContext?: ChatSessionRevisionContext
   createdAt: number
   updatedAt: number
@@ -1129,6 +1135,7 @@ function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
     sequence: session.sequence,
     entryKey: session.entryKey,
     threadId: String(session.threadId || ''),
+    developmentTarget: session.developmentTarget,
     revisionContext: session.revisionContext,
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
@@ -1170,6 +1177,13 @@ function normalizeSession(session: unknown): NormalizedChatSession {
   if (!stage && (session.stage || session.sequence || session.entryKey)) {
     throw new Error('non-stage session cannot declare stage identity')
   }
+  const developmentTarget = normalizeDevelopmentTarget(session.developmentTarget)
+  if (session.developmentTarget !== undefined && !developmentTarget) {
+    throw new Error('session developmentTarget is invalid')
+  }
+  if (developmentTarget && workbenchPhase !== 'development') {
+    throw new Error('session developmentTarget requires DEVELOPMENT phase')
+  }
   const revisionContext = normalizeSessionRevisionContext(session.revisionContext)
   return {
     id,
@@ -1179,12 +1193,45 @@ function normalizeSession(session: unknown): NormalizedChatSession {
     workflowId,
     ...(stage ? { stage, sequence, entryKey } : {}),
     threadId,
+    ...(developmentTarget ? { developmentTarget } : {}),
     ...(revisionContext ? { revisionContext } : {}),
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
     workspaceRoot: typeof session.workspaceRoot === 'string' ? session.workspaceRoot : '',
     messages
   }
+}
+
+/** 严格规范化当前契约支持的页面或 Endpoint 会话目标。 */
+function normalizeDevelopmentTarget(value: unknown): ChatSessionDevelopmentTarget | undefined {
+  if (!isJsonRecord(value)) return undefined
+  const label = normalizeSessionEndpointField(value.label)
+  if (value.type === 'page') {
+    const pageId = normalizeSessionEndpointField(value.pageId)
+    return pageId && label ? { type: 'page', pageId, label } : undefined
+  }
+  if (value.type === 'endpoint') {
+    const apiContractId = normalizeSessionEndpointField(value.apiContractId)
+    const endpointId = normalizeSessionEndpointField(value.endpointId)
+    return apiContractId && endpointId && label
+      ? { type: 'endpoint', apiContractId, endpointId, label }
+      : undefined
+  }
+  return undefined
+}
+
+/** 比较规范化后的页面或 Endpoint 目标，阻止持久化会话被改绑。 */
+function sameDevelopmentTarget(
+  left: ChatSessionDevelopmentTarget | undefined,
+  right: ChatSessionDevelopmentTarget | undefined
+): boolean {
+  if (!left || !right) return !left && !right
+  if (left.type !== right.type) return false
+  return left.type === 'page'
+    ? left.pageId === (right.type === 'page' ? right.pageId : '')
+    : right.type === 'endpoint' &&
+        left.apiContractId === right.apiContractId &&
+        left.endpointId === right.endpointId
 }
 
 /** 规范化接口会话标识，避免空字符串污染持久化索引。 */
@@ -1790,7 +1837,8 @@ function setupSessionStorageIpc(): void {
       existing.stage !== session.stage ||
       existing.sequence !== session.sequence ||
       existing.entryKey !== session.entryKey ||
-      existing.threadId !== session.threadId
+      existing.threadId !== session.threadId ||
+      !sameDevelopmentTarget(existing.developmentTarget, session.developmentTarget)
     if (immutableIdentityChanged) {
       throw new Error('session phase identity is immutable')
     }

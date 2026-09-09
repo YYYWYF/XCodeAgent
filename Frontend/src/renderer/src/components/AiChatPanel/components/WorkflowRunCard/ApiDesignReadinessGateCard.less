@@ -1,0 +1,72 @@
+.@{class-prefix}-api-design-readiness-gate {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+
+  > .ant-alert {
+    border-color: var(--wb-border);
+    border-radius: 12px;
+    background: var(--wb-surface-subtle);
+  }
+
+  .api-design-readiness-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .api-design-readiness-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--wb-border);
+    border-radius: 12px;
+    background: var(--wb-surface-subtle);
+    color: var(--wb-text);
+  }
+
+  .api-design-readiness-icon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: var(--wb-surface);
+    color: var(--wb-accent);
+  }
+
+  .api-design-readiness-copy {
+    display: grid;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .api-design-readiness-copy strong,
+  .api-design-readiness-copy span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .api-design-readiness-copy span {
+    color: var(--wb-text-secondary);
+  }
+
+  .api-design-readiness-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  @media (max-width: 720px) {
+    .api-design-readiness-item {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .api-design-readiness-item > .ant-tag,
+    .api-design-readiness-item > .ant-btn {
+      grid-column: 2;
+      justify-self: start;
+    }
+  }
+}

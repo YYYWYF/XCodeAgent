@@ -43,10 +43,10 @@ flowchart TD
         T4(["ready_for_workbench / 工作台就绪"])
     end
 
-    subgraph P3["阶段三：Endpoint API 设计与开发就绪检查"]
-        D1["api_design / Endpoint 动态映射设计"]
-        D2["api_design_readiness_gate / 开发前设计检查"]
-        DW(["await_user_input / 缺少或过期 Endpoint 设计"])
+    subgraph P3["阶段三：独立映射配置与开发门禁"]
+        D1["/endpoint-designs/run / 独立映射配置"]
+        D2["api_design_readiness_gate / 页面或接口开发门禁"]
+        DW(["await_user_input / 等待配置或确认"])
     end
 
     subgraph P4["阶段四：上下文与任务规划"]
@@ -85,11 +85,13 @@ flowchart TD
     T2 -->|"pages + menus + written files"| T3
     T3 -->|"succeeded=true"| T4
 
-    T4 -->|"start_api_design + selected Endpoint"| D1
-    D1 -->|"confirmed Endpoint JSON + Markdown；当前 run 结束"| DW
+    T4 -->|"设计 API / 重新设计"| D1
+    D1 -->|"save + refresh 原门禁"| D2
     T4 -->|"页面或 API 开发"| D2
     D2 -->|"missing_api_designs；当前 run 结束"| DW
-    D2 -->|"all Endpoint designs ready"| C1
+    DW -->|"逐项配置映射"| D1
+    D2 -->|"全部有效；等待确认"| DW
+    D2 -->|"确认的 revisions 仍一致"| C1
     C1 -->|"workspace snapshot ready"| C3
     C3 -->|"build-dag.v3 + task graph"| B1
 
@@ -122,7 +124,7 @@ flowchart TD
 2. 初始化依次经过 RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 四个确认门。RequirementSpec 支持结构化编辑和“保存草稿”，但保存不等于确认；TechnicalPlan 必须显式确认，确认之前不会触发模板生成。
 3. TechnicalPlan 确认后，前端才拉取前后端模板、写页面占位和 `BIZ_MENUS`，再提交模板生成 lifecycle。应用打开、进入工作台、应用重启和模板生成失败都不会再次触发；成功后才允许进入工作台。
 4. 工作台进入时会先通过 `/api/projects/launch` 异步尝试启动“当前模板工程预览”。这是工作台预览初始化，不是主 Workflow 测试通过后的 `launch_project`，两次启动的时机和失败语义不同。
-5. 正式开发前先从 ProjectPlan 选择页面或具体 Endpoint。Endpoint 的“设计 API/重新设计”以 `workflowAction=start_api_design + selectedApiContractId + selectedEndpointId` 送入 `/workflow/run`，确认写入双文件后自动进入 `api_design_readiness_gate`，并继续当前 Endpoint 的任务规划、代码生成、测试、审查和验收；页面/API开发同样先经过 `api_design_readiness_gate`，页面会一次列出全部缺少或过期的关联 Endpoint。页面仍可选择参考模板并预览，选择结果以 `pageTemplate={id,name,sourcePath}` 送入开发运行。
+5. 正式开发前先从 ProjectPlan 选择页面或具体 Endpoint。Endpoint 的“设计 API/重新设计”打开独立映射弹窗，通过 `/endpoint-designs/run` 保存，不进入主开发 Graph。页面和接口开发统一先启动 `/workflow/run` 并进入 `api_design_readiness_gate`：页面检查全部关联 Endpoint，接口只检查自身；缺失时逐项配置并重新检测，全部有效后仍需确认当前 revisions 才进入任务规划、代码生成、测试、审查和验收。页面仍可选择参考模板并预览，选择结果以 `pageTemplate={id,name,sourcePath}` 送入开发运行。
 6. 页面和 endpoint 各自拥有会话、thread 和历史。工作台普通自然语言统一走 `/conversation/run`，由 Coordinator 自动分类并决定后续路由；设计阶段专用变更输入仍进入原 application planning Graph。每条消息可选择当前启用的用户 Skill，选中列表随消息和会话快照传递。
 7. 正式运行期间只用 `PlanExecutionDock` 替换底部输入区，消息、流程步骤、侧栏和预览仍保留。Build Run 卡嵌在对应 Build 步骤内，展示 scope、任务状态、依赖、文件范围、验收项和失败证据；运行中任务可展示非持久化工具活动。
 8. Workflow `launch_project` 返回正式 `preview_url` 后打开右侧预览。用户可以验收通过，或提交 `local_fix/page_design_change/endpoint_change/data_source_change/project_plan_change`；调整请求在协议边界直接选择恢复节点，通常不先执行 `acceptance` 节点。
@@ -134,7 +136,8 @@ flowchart TD
 | `/application-page-planning/run`        | RequirementSpec、UI 设计、ProjectPlan 三阶段初始化规划；也承载只读恢复和 RequirementSpec 草稿保存动作 | 否，使用独立 application-planning Graph/thread |
 | `/application-lifecycle/run`            | 创建、读取 lifecycle，完成模板生成门禁                                                                | 否，独立确定性 AG-UI action                    |
 | `/application-development-planning/run` | 为 `selectedPageKey` 生成并确认编号任务清单                                                           | 否；当前前端未挂载，见第 5 节                  |
-| `/workflow/run`                         | Endpoint API 动态映射、设计就绪检查、Build、Testing、修复、正式预览和验收                              | 是                                             |
+| `/endpoint-designs/run`                 | 独立准备、保存和读取 Endpoint 字段映射；保存后可刷新原开发门禁                                         | 否，使用独立 AG-UI thread/run                  |
+| `/workflow/run`                         | 页面／接口字段映射门禁、Build、Testing、修复、正式预览和验收                                           | 是                                             |
 | `/conversation/run`                     | 无目标对话、工作区问答、自由协作和局部修改                                                            | 否，使用独立 conversation Graph/thread         |
 
 业务动作和正常 Workflow 轮次都投影完整 AG-UI run 生命周期。等待确认采用“当前 Graph 运行到 `END`，以 `requires_user_input` 完成本轮”，不是 LangGraph interrupt；用户提交新 HTTP run 后，服务端再合并同 thread checkpoint、磁盘 artifacts、受校验的客户端恢复值和显式恢复节点。未捕获的 Graph/模型异常发送 `RunErrorEvent`，不能与业务失败的 `RUN_FINISHED(status=failed)` 混为一谈。
@@ -296,7 +299,6 @@ flowchart TD
 ```mermaid
 flowchart TD
     S(["START / 开始或恢复"])
-    D["api_design / Endpoint API 字段设计"]
     G["api_design_readiness_gate / 开发前设计检查"]
     P["project_planning / 项目计划调整"]
     W["inspect_workspace / 检查工作区"]
@@ -310,7 +312,6 @@ flowchart TD
     X(["handle_failure / 失败"])
     E(["END / 暂停等待用户"])
 
-    S -->|"workflowAction=start_api_design"| D
     S -->|"default development request"| G
     S -->|"resume_from=project_planning"| P
     S -->|"resume_from=inspect_workspace"| W
@@ -323,10 +324,8 @@ flowchart TD
     S -->|"resume_from=acceptance"| A
     S -->|"resume_from=finalize_project"| F
 
-    D -->|"confirmed Endpoint design"| E
-    D -->|"requires_user_input"| E
-    G -->|"all Endpoint designs ready"| W
-    G -->|"missing_api_designs"| E
+    G -->|"missing_api_designs 或等待 revision 确认"| E
+    G -->|"确认的全部 revisions 仍一致"| W
     P -->|"confirmed revised plan"| G
     P -->|"requires_user_input"| E
     P -->|"failed"| X
@@ -358,15 +357,15 @@ flowchart TD
     A -->|"not accepted"| E
 ```
 
-### 6.1 `api_design / Endpoint API 动态映射设计`
+### 6.1 `/endpoint-designs/run` 与 `api_design_readiness_gate`
 
-- **类型**：确定性字段枚举、结构化草稿校验、双文件原子持久化和用户确认门禁；不调用设计模型。数据源目录和按需元数据由独立数据源 AG-UI 接口提供。
-- **交互**：`clarification.mode=api_design` 的工作流只接受最终 `confirm`。直属 MySQL 表列、Builtin/DBID 能力提示和外部 API Operation Schema 通过 `/data-sources/list`、`/data-sources/database-tables`、`/data-sources/database-columns`、`/data-sources/external-operation` 独立读取，不进入 `/workflow/run` 的响应状态。
-- **输入**：已确认 TechnicalPlan、`selectedApiContractId + selectedEndpointId`、API 设计动作与有界草稿。实体字段只作为当前 Endpoint 内的业务语义引用，不存在全局实体数据源绑定。
-- **输出**：`.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 保存契约指纹、场景实体、节点、映射边、业务处理描述和脱敏来源快照；Markdown 是用户可见正式产物。确认后进入 API 设计就绪检查并继续当前 Endpoint 的完整开发链路。
+- **类型**：独立 AG-UI 配置流负责确定性字段枚举、结构化草稿校验和双文件原子持久化；主 Workflow 的确定性门禁负责页面／接口全量检测与 revision 确认，二者都不调用设计模型。
+- **交互**：弹窗通过 `/endpoint-designs/run` 的 `prepare/save` 动作编辑正式映射。直属 MySQL 表列、Builtin/DBID 能力提示和外部 API Operation Schema 通过独立数据源 AG-UI 接口读取，不进入 `/workflow/run` 的响应状态。保存后刷新原门禁，但不会自动确认或继续开发。
+- **输入**：独立配置使用已确认 TechnicalPlan、`apiContractId + endpointId` 和有界草稿；页面开发门禁使用 `requiredEndpointIds`，接口开发门禁只使用自身复合标识。实体字段只作为当前 Endpoint 内的业务语义引用，不存在全局实体数据源绑定。
+- **输出**：配置流写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用 `endpoint-field-mapping.v3`；`source_mapping` 通过 `sourceFields` 和 `processingType` 表示直接映射、单字段业务处理或多字段业务处理，无物理来源的字段使用 `business_description`。门禁回显全部关联 Endpoint 的完整映射与 revisions；确认时重新读取并逐项比较，通过后才进入 `inspect_workspace`。Markdown 是用户可见正式产物。
 - **校验规则**：Path、Query、Header、请求体叶子和响应业务叶子均可进入映射图；容器与纯包装节点跳过。`direct` 要求方向和类型兼容；不属于实体或数据源的字段使用 `business_description` 填写一句自然语言说明，不产生额外节点或边。节点不得修改 TechnicalPlan method、path、参数或 Schema。
-- **依赖文件**：`domain/api_design.py`、`services/api_design.py`、`workspace/endpoint_design_documents.py`、`graph/nodes/api_design.py`。
-- **依赖节点**：`start_api_design` 直接进入；确认后经过 `api_design_readiness_gate` 进入 `inspect_workspace`、`prepare_build_tasks` 和后续完整开发链路。页面/API开发另从 `api_design_readiness_gate` 进入；页面缺失时返回完整列表并结束，不自动逐个设计。
+- **依赖文件**：`domain/api_design.py`、`services/api_design.py`、`services/endpoint_design_detail.py`、`protocols/endpoint_designs.py`、`routes/endpoint_designs.py`、`workspace/endpoint_design_documents.py`、`graph/nodes/api_design.py`。
+- **依赖节点**：页面/API 开发固定从 `api_design_readiness_gate` 进入；缺失或失效时返回完整列表并结束当前 run，全部有效时等待用户确认，确认的 revisions 仍一致后进入 `inspect_workspace`。
 
 ### 6.2 `inspect_workspace / 检查工作区`
 
@@ -380,7 +379,7 @@ flowchart TD
 ### 6.3 `prepare_build_tasks / 生成并编译 Build DAG`
 
 - **类型**：直接 ChatModel 生成候选任务 + 多阶段确定性编译器。
-- **当前提示词**：`agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt`。Endpoint 动态映射图中的场景实体、Source Field 和执行摘要用于生成后端持久化代码，正常 Build 不生成数据库 owner 任务。每个后端 endpoint/table 模块必须拆成对象类、Repository、ApplicationService、Controller 四个串行 stage task，各 stage 只拥有自己的文件，并把上一阶段的预期文件、职责和契约写入下一阶段描述。带 `api_dependencies` 的页面必须规划或复用 `src/apis/<biz>Api.ts`，页面只能通过该服务访问共享 axios 实例。Static 应用只允许前端内存数据模块和页面任务；模型不得生成验证任务，`acceptance_criteria=[]` 且 `acceptance_checks=[]`，工程验收由后端编译。
+- **当前提示词**：`agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt`。TechnicalPlan Contract 的全局实体语义、Endpoint 已确认字段映射、Source Field 和执行摘要用于生成后端持久化代码，正常 Build 不生成数据库 owner 任务。每个后端 endpoint/table 模块必须拆成对象类、Repository、ApplicationService、Controller 四个串行 stage task，各 stage 只拥有自己的文件，并把上一阶段的预期文件、职责和契约写入下一阶段描述。带 `api_dependencies` 的页面必须规划或复用 `src/apis/<biz>Api.ts`，页面只能通过该服务访问共享 axios 实例。Static 应用只允许前端内存数据模块和页面任务；模型不得生成验证任务，`acceptance_criteria=[]` 且 `acceptance_checks=[]`，工程验收由后端编译。
 - **输入**：确认后的 ProjectPlan、当前目标范围、PageImplementationContract、TechnicalPlan Endpoint、有界 Endpoint 动态映射图/业务规则/来源快照、WorkspaceSnapshot、已有 Build DAG、可复用 Unit。
 - **输出**：`build-dag.v3`、`build_units`、`unit_graph`、`task_registry`、`task_graph`、`tasks`、`build_context`、`.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md`。
 - **校验规则**：ProjectPlan 必须 confirmed；Unit skeleton 合法；目标详情必须存在；页面/API 契约按范围校验；模型任务不能越过 required Unit；正常 Build 禁止 database Unit/owner；任务 ID、依赖、DAG、路径和 owner 必须合法；工程 acceptance checks 确定性编译；无效计划阻断 Build。页面任务声明的 PageKey 若与实时唯一同义目录不同，会先纠正为真实目录；模型漏报页面入口时，编译器优先复用唯一实时入口，否则把 `target.page_key` 推导的标准入口补进已有前端页面任务，再确定性补齐或规范化顶层 `BIZ_MENUS` 登记。
@@ -566,7 +565,7 @@ flowchart TD
 - **输出**：`small_task_results`、code change sets、更新后的 repair tasks、handoff 或回测路由。
 - **校验规则**：preflight 禁止正式产物和复杂范围；精确路径授权；实际 diff 归属；依赖和并发边界；最多 20 个批次；完成后必须回到 Integration Test；需要新页面/接口/数据源/计划时必须确认后升级正式节点。
 - **依赖文件**：`graph/nodes/small_task.py`、`agents/small_task/*`、`services/small_task.py`、`services/small_task_scope.py`、`workspace/code_changes.py`。
-- **依赖节点**：上游 `repair_planning` 或验收 local fix；下游通常 `integration_test`，也可经确认跳到 `api_design/project_planning/inspect_workspace/prepare_build_tasks/build`。
+- **依赖节点**：上游 `repair_planning` 或验收 local fix；下游通常 `integration_test`，也可经确认跳到 `api_design_readiness_gate/project_planning/inspect_workspace/prepare_build_tasks/build`。
 
 ## 9. 启动、验收、调整和终态
 
@@ -578,7 +577,7 @@ flowchart TD
     A["acceptance / 用户验收"]
     F["finalize_project / 项目完成"]
     S["small_task_repair / 局部验收修复"]
-    D["api_design / 重新确认 Endpoint 字段设计"]
+    D["独立映射弹窗 / 重新配置 Endpoint 字段映射"]
     PP["project_planning / 重新确认项目计划"]
 
     L -->|"launch success"| P
@@ -586,7 +585,7 @@ flowchart TD
     P -->|"新请求 decision=accepted"| A
     A -->|"accepted=true"| F
     P -->|"新请求 local_fix；绕过 acceptance"| S
-    P -->|"新请求 page_design_change；绕过 acceptance"| D
+    P -->|"新请求 page_design_change；绕过 acceptance"| PP
     P -->|"新请求 endpoint_change；绕过 acceptance"| D
     P -->|"新请求 data_source_change；绕过 acceptance"| D
     P -->|"新请求 project_plan_change；绕过 acceptance"| PP
@@ -906,11 +905,11 @@ Endpoint API 设计保存确认时的无敏感来源快照，数据源目录后�
 
 **建议**：客户端只提交 `threadId/executionId/interactionId/basedOnRevision/decision`；服务端从 checkpoint 和磁盘读取状态。任意节点跳转仅保留开发模式并由服务器配置开启。
 
-### P1：页面缺失 API 设计后的补齐旅程仍需用户重启
+### 页面缺失字段映射后的原门禁续接
 
-`api_design_readiness_gate` 会一次返回页面关联的全部缺少或过期 Endpoint，且按当前产品约束不会自动逐个进入设计。用户完成这些独立设计后，需要重新主动发起页面开发。
+`api_design_readiness_gate` 会一次返回页面关联的全部缺少或过期 Endpoint，不自动在主 Graph 内逐个编辑。用户从清单打开独立弹窗保存后，前端自动恢复原门禁执行重新检测；自动刷新失败或取消编辑时仍可点击“重新检测”。
 
-**建议**：页面缺失清单仍保持一次性返回和显式重启页面开发；单个 Endpoint 的动态设计确认则自动续接该 Endpoint 的完整开发链路，避免设计产物已确认但开发状态停留在独立终点。
+全部映射有效后，原门禁聚合回显所有 Endpoint 的当前 revisions，并等待用户“确认并继续开发”；确认时后端重新读取并逐项比较，通过后才进入 `inspect_workspace`。
 
 ### P1：启动失败绕过统一失败节点
 
@@ -950,7 +949,7 @@ application-planning Graph 已支持 `resume_from=ui_confirmation`，请求校�
 | --- | --- | --- |
 | 正式产物确认 | RequirementSpec、UI Design、ProjectPlan、TechnicalPlan、Endpoint API Design 生成或修订后均进入显式确认门禁 | 保存草稿、回答澄清均不等于确认；下游只消费已确认 revision/hash。模板完成是确定性完整性门禁，不冒充用户确认。 |
 | 人工暂停与验收请求 | `await_user_input`、`acceptance_request` 保持为控制边界，不注册为普通 Agent 节点 | `await_user_input` 结束当前 Graph run；`acceptance_request` 是 `launch_project` 的结构化输出。两者不需要 Prompt，也不拥有独立业务产物。 |
-| UI 与 API 设计 | ProductPlan、UiDesign、TechnicalPlan 先确认，再按 Endpoint 独立完成 API 动态映射设计 | Endpoint 设计只补充场景实体、来源节点、映射边和业务规则，不修改 TechnicalPlan 契约；每个 Endpoint 只写自己的 artifact。 |
+| UI 与 API 设计 | ProductPlan、UiDesign、TechnicalPlan 先确认，再按 Endpoint 独立完成 API 动态映射设计 | Endpoint 设计只补充 `source_mapping`、`business_description` 和业务规则，不修改 TechnicalPlan 契约；每个 Endpoint 只写自己的 artifact。 |
 | 工作区与 Endpoint 上下文 | `inspect_workspace` 生成稳定 WorkspaceSnapshot，任务准备读取已确认的有界 Endpoint 设计摘要 | 实时字段候选只在 API 设计阶段按需读取；任务准备不重复查库，也不把凭据或完整元数据放入模型上下文。 |
 | Build DAG 并行 | BuildScheduler 只并行调度依赖满足、授权路径不冲突的 ready tasks | 不同 owner 可以并发；同一 owner 可批量处理。并发结果必须经过真实 diff 归属、工程验收和确定性合并。 |
 | 跨 Run 资源隔离 | 默认实行“一 workspace 一个写 execution”，只读会话保持并行 | 数据库 schema 变更和共享预览环境使用独占锁；代码任务需要跨 Run 并行时使用独立 Git worktree/分支，合并阶段串行。 |
@@ -1035,7 +1034,7 @@ flowchart TD
     P["project_planning / 项目计划确认"]
     U["ui_confirmation / 基于计划的 UI 确认"]
     T["template_materialization / 模板物化与完整性校验"]
-    D["api_design / Endpoint 字段设计确认"]
+    D["independent endpoint mapping + readiness confirmation"]
     W["workspace_and_database_context / 工作区与数据库事实"]
     H["confirmed_unit_plan / 用户确认的统一开发计划"]
     G["compile_build_dag / 确定性编译 Build DAG"]
@@ -1079,7 +1078,7 @@ flowchart TD
 | RequirementSpec                       | `Backend/app/graph/nodes/requirements.py`、`Backend/app/agents/main/requirements_analyzer.py`                                                                                                                                |
 | UI 设计确认与直出渲染                 | `Backend/app/config.py`、`Backend/app/graph/nodes/ui_confirmation.py`、`Backend/app/services/ui_design_generator.py`、`Frontend/src/renderer/src/components/DesignRenderer/`、`Frontend/src/renderer/public/design-runtime/` |
 | ProductPlan/TechnicalPlan              | `Backend/app/graph/nodes/product_planning.py`、`Backend/app/graph/nodes/planning.py`、`Backend/app/agents/main/planner.py`                                                                            |
-| Endpoint API 设计                      | `Backend/app/graph/nodes/api_design.py`、`Backend/app/domain/api_design.py`、`Backend/app/services/api_design.py`、`Backend/app/workspace/endpoint_design_documents.py`                              |
+| Endpoint 字段映射与开发门禁            | `Backend/app/routes/endpoint_designs.py`、`Backend/app/protocols/endpoint_designs.py`、`Backend/app/services/endpoint_design_detail.py`、`Backend/app/graph/nodes/api_design.py`、`Backend/app/domain/api_design.py`、`Backend/app/services/api_design.py`、`Backend/app/workspace/endpoint_design_documents.py` |
 | Workspace/Database Context            | `Backend/app/graph/nodes/workspace_inspection.py`、`database_context.py`                                                                                                                                                     |
 | Build DAG                             | `Backend/app/graph/nodes/tasks.py`、`Backend/app/agents/main/task_preparer.py`                                                                                                                                               |
 | BuildScheduler                        | `Backend/app/graph/subgraphs/build.py`、`Backend/app/services/build_scheduler.py`                                                                                                                                            |
@@ -1101,7 +1100,7 @@ flowchart TD
 | `requirements`                              | 无独立 SystemMessage；直接使用单 Prompt                                                         | `agents/main/requirements_analyzer.py::_requirements_prompt`                                  | request、existing RequirementSpec、datasource type                                                                                                                                             |
 | `ui_confirmation`                           | 无独立 SystemMessage                                                                            | `services/ui_design_generator.py::_build_ui_design_prompt`；失败用 `_build_repair_prompt`     | page brief、PageKey、UI skill、可复用旧代码、校验错误；`UI_DESIGN_MAX_TOKENS` 默认 8192，`UI_DESIGN_MAX_RETRIES` 默认 2；输出代码内联到 `ui_designs.pages[].code` 供 `DesignRenderer` 直出渲染 |
 | `project_planning`                          | 无独立 SystemMessage                                                                            | `agents/main/planner.py::_planning_prompt`                                                    | RequirementSpec、existing plan、datasource type、route/menu policy                                                                                                                             |
-| `api_design`                                 | 无 LLM；确定性服务                                                                               | 无                                                                                            | 单个 Endpoint 契约、实体语义字段、按需 MySQL 表列或已保存外部 Operation Schema、结构化草稿                                                                                                    |
+| `/endpoint-designs/run` + `api_design_readiness_gate` | 无 LLM；确定性服务                                                                      | 无                                                                                            | 独立配置使用单个 Endpoint 契约、按需 MySQL 表列或已保存外部 Operation Schema和结构化草稿；主门禁使用页面全量或接口单目标的映射 revisions |
 | `prepare_build_tasks`                       | 无独立 SystemMessage                                                                            | `agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt` | bounded WorkspaceSnapshot、TargetBuildContext、TaskPreparationContext、规划器自有数据源规则（不读取或内联 Skill）                                                                                                      |
 | `generate_application_development_plan`     | `services/application_development_planning.py::_SYSTEM_PROMPT`                                  | 同文件 `generate_application_development_plan` 内动态 `prompt`                                | application.json 摘要、selected page、澄清回答                                                                                                                                                 |
 | `database_agent`                            | `agents/database/agent.py::create_database_agent` 内 `base_system_prompt`                       | `agents/database/generator.py::_database_generation_prompt`                                   | database tasks、真实 schema/gaps、ProjectPlan contracts                                                                                                                                        |

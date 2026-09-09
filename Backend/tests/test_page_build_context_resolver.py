@@ -102,7 +102,6 @@ def _write_endpoint_designs(workspace: Path, plan: dict, *, source_type: str) ->
         entity_id = str((contract.get("entity_ids") or ["Order"])[0])
         for endpoint in contract.get("endpoints") or []:
             endpoint_id = str(endpoint.get("id") or "")
-            scene_id = f"scene:{entity_id}"
             endpoint_field = {
                 "side": "response",
                 "location": "response_body",
@@ -110,12 +109,6 @@ def _write_endpoint_designs(workspace: Path, plan: dict, *, source_type: str) ->
                 "type": "string",
                 "required": False,
                 "description": "",
-            }
-            entity_field = {
-                "entityId": scene_id,
-                "fieldId": "id",
-                "path": "id",
-                "type": "string",
             }
             data_field = (
                 {
@@ -141,7 +134,7 @@ def _write_endpoint_designs(workspace: Path, plan: dict, *, source_type: str) ->
                 workspace,
                 EndpointApiDesign.model_validate(
                     {
-                        "schemaVersion": "endpoint-field-mapping.v1",
+                        "schemaVersion": "endpoint-field-mapping.v3",
                         "artifactType": "endpoint-field-mapping",
                         "status": "confirmed",
                         "confirmationStatus": "confirmed",
@@ -149,17 +142,10 @@ def _write_endpoint_designs(workspace: Path, plan: dict, *, source_type: str) ->
                         "endpointId": endpoint_id,
                         "artifactRevision": "0123456789abcdef0123456789abcdef",
                         "endpointContract": endpoint,
-                        "sceneEntities": [{
-                            "id": scene_id,
-                            "name": entity_id,
-                            "templateEntityId": entity_id,
-                            "fields": [{"id": "id", "name": "id", "label": "id", "type": "string"}],
-                        }],
                         "fieldMappings": [{
                             "endpointField": endpoint_field,
-                            "mappingType": "through_entity",
-                            "entityField": entity_field,
-                            "sourceField": data_field,
+                            "mappingType": "source_mapping",
+                            "processingType": "direct", "sourceFields": [data_field],
                         }],
                         "sourceSnapshots": [
                             {
@@ -214,6 +200,24 @@ class PageBuildContextResolverTests(unittest.TestCase):
         )
         self.assertEqual(context["required_endpoint_ids"], ["orders.list"])
 
+    def test_page_without_endpoints_has_no_entity_scope(self) -> None:
+        """没有关联 Endpoint 的页面不得继承全部 TechnicalPlan 实体。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            plan["page_implementation_contracts"][0]["requiredEndpointIds"] = []
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+
+        self.assertEqual(context["endpoint_ids"], [])
+        self.assertEqual(context["entity_ids"], [])
+
     def test_page_context_uses_technical_plan_endpoint_contract(self) -> None:
         """页面 scope 直接加载 requiredEndpoints 对应的 TechnicalPlan 契约。"""
 
@@ -228,7 +232,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
             )
 
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
-        self.assertEqual(context["entity_ids"], ["scene:Order"])
+        self.assertEqual(context["entity_ids"], ["Order"])
         self.assertEqual(context["source_types"], ["database"])
         self.assertEqual(context["endpoint_designs"][0]["sourceSnapshots"][0]["sourceType"], "database")
         self.assertEqual(context["page_implementation_contract"]["pageId"], "orders")
@@ -276,7 +280,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
             )
             validation_plan = _scoped_contract_validation_plan(plan, context)
 
-        self.assertEqual(context["entity_ids"], ["scene:Order"])
+        self.assertEqual(context["entity_ids"], ["Order"])
         self._assert_no_source_or_contract_fields(context)
         self.assertEqual(
             [contract["id"] for contract in validation_plan["api_contracts"]],
@@ -362,7 +366,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertEqual(context["target"]["type"], "endpoint")
         self.assertEqual(context["target"]["api_contract_id"], "orders-api")
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
-        self.assertEqual(context["entity_ids"], ["scene:Order"])
+        self.assertEqual(context["entity_ids"], ["Order"])
         self.assertEqual(context["endpoint_designs"][0]["endpointId"], "orders.list")
         self.assertEqual(context["direct_endpoint_contracts"][0]["id"], "orders.list")
         self._assert_no_source_or_contract_fields(context)
@@ -450,7 +454,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 api_contract_id="orders-api",
                 project_plan_path=plan_path,
             )
-            self.assertEqual(context["entity_ids"], ["scene:Order"])
+            self.assertEqual(context["entity_ids"], ["Order"])
 
     def test_legacy_static_entity_design_does_not_change_api_build_units(self) -> None:
         """旧实体静态设计不影响 Endpoint API 设计决定的 Build Unit。"""

@@ -115,6 +115,14 @@ declare global {
           workbenchPhase: 'product' | 'planning' | 'development' | 'test' | 'review' | 'acceptance'
           entryKey?: string
           title?: string
+          developmentTarget?:
+            | { type: 'page'; pageId: string; label: string }
+            | {
+                type: 'endpoint'
+                apiContractId: string
+                endpointId: string
+                label: string
+              }
           revisionContext?: unknown
           recoveryExecutionRunId?: string
         }) => Promise<{ ok?: boolean; session?: unknown }>

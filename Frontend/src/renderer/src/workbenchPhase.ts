@@ -206,7 +206,6 @@ export function isInitialPlanningPhase(lifecycle?: ApplicationLifecycle): boolea
 /** 开发阶段的工作流节点 phase（开发前置检查 → 工作区检查 → DAG → Build →单元测试-> 测试确认）。 */
 const DEVELOPMENT_PHASE_NODES = new Set([
   'application_revision',
-  'api_design',
   'api_design_readiness_gate',
   'development_readiness_gate',
   'entity_source_binding',
@@ -347,7 +346,6 @@ const INITIALIZATION_STAGE_LABELS: Record<string, string> = {
 /** 工作台 execution.phase 的中文节点标签。 */
 const EXECUTION_PHASE_LABELS: Record<string, string> = {
   application_revision: '确认正式修改产物',
-  api_design: '设计 API 动态映射',
   api_design_readiness_gate: '检查 API 设计前置',
   development_readiness_gate: '检查开发前置',
   entity_source_binding: '实体数据源绑定',

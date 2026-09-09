@@ -2,125 +2,119 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from app.graph.state import ProjectState
 from app.services.api_design import (
     ApiDesignError,
+    api_design_gate_result,
     api_design_readiness,
-    confirm_api_design,
-    initial_api_design_payload,
 )
-from app.services.artifact_invalidation import mark_artifact_document_stale
 from app.services.frontend_page_tree import project_plan_page_records
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 
 
-def api_design(state: ProjectState) -> dict[str, Any]:
-    """按 Endpoint 运行 API 字段映射交互，确认后续接完整开发链路。"""
-
-    workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
-    project_plan = state.get("project_plan")
-    api_contract_id = str(state.get("selected_api_contract_id") or "").strip()
-    endpoint_id = str(state.get("selected_endpoint_id") or "").strip()
-    if not workspace:
-        raise ApiDesignError("API 设计缺少工作区路径。")
-    if not isinstance(project_plan, dict):
-        raise ApiDesignError("缺少已确认 TechnicalPlan，无法设计 API。")
-    if not api_contract_id or not endpoint_id:
-        raise ApiDesignError("API 设计必须提供完整的 API Contract 和 Endpoint 标识。")
-
-    action = state.get("api_design_action")
-    action = action if isinstance(action, dict) else {}
-    if action:
-        if (
-            str(action.get("apiContractId") or "") != api_contract_id
-            or str(action.get("endpointId") or "") != endpoint_id
-        ):
-            raise ApiDesignError("API 设计动作与当前 Endpoint 不一致。")
-        action_name = str(action.get("action") or "")
-        if action_name == "confirm":
-            result = confirm_api_design(workspace, project_plan, action)
-            _invalidate_build_task_plan(workspace)
-            return {
-                "phase": "api_design",
-                "status": "completed",
-                "api_design_action": {},
-                "api_design_result": result,
-                "api_design_draft": result.get("design", {}),
-                "clarification": {},
-                "message": "API 设计已确认，正在继续当前 Endpoint 的 API 开发流程。",
-                "timeline": ["api_design"],
-            }
-
-    payload = initial_api_design_payload(
-        workspace,
-        project_plan,
-        api_contract_id,
-        endpoint_id,
-    )
-    if action.get("draft") and isinstance(action.get("draft"), dict):
-        payload["draft"] = action["draft"]
-    clarification = build_ask_user_payload(
-        [
-            AskUserQuestion(
-                header="API 字段映射",
-                question="请为当前 Endpoint 配置请求与返回映射，并确认 API 设计。",
-                type="text",
-                placeholder="请在 API 设计面板中完成字段映射配置。",
-            )
-        ]
-    )
-    clarification.update(
-        {
-            "mode": "api_design",
-            "status": "requires_user_input",
-            "message": "API 设计草稿已准备，请完成字段映射后确认。",
-            "apiDesign": payload,
-        }
-    )
-    return {
-        "phase": "api_design",
-        "status": "requires_user_input",
-        "api_design_action": {},
-        "api_design_draft": payload.get("draft", {}),
-        "clarification": clarification,
-        "timeline": ["api_design"],
-    }
-
-
 def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
-    """在页面或 API 开发前检查关联 Endpoint 的当前版设计是否全部确认。"""
+    """在页面或接口开发前检查全部目标映射，并等待用户确认当前版本。"""
 
     workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
     project_plan = state.get("project_plan")
     if not workspace or not isinstance(project_plan, dict):
         raise ApiDesignError("缺少工作区或已确认 TechnicalPlan，无法检查 API 设计。")
-    target_type = "endpoint" if str(state.get("selected_endpoint_id") or "").strip() else "page"
-    target_id = (
+    action = state.get("api_design_gate_action")
+    action = action if isinstance(action, dict) else {}
+    state_target_type = (
+        "endpoint" if str(state.get("selected_endpoint_id") or "").strip() else "page"
+    )
+    state_target_id = (
+        str(state.get("selected_endpoint_id") or "").strip()
+        if state_target_type == "endpoint"
+        else str(state.get("selectedPageId") or "").strip()
+    )
+    action_target_type = str(action.get("targetType") or "").strip()
+    target_type = action_target_type if action_target_type in {"page", "endpoint"} else (
+        state_target_type
+    )
+    target_id = str(action.get("targetId") or "").strip() or (
         str(state.get("selected_endpoint_id") or "").strip()
         if target_type == "endpoint"
         else str(state.get("selectedPageId") or "").strip()
     )
     if not target_id:
         raise ApiDesignError("请选择要开始开发的页面或 API。")
+    if action and state_target_id and (target_type != state_target_type or target_id != state_target_id):
+        raise ApiDesignError("API 映射门禁动作与原开发目标不一致。")
+    api_contract_id = str(action.get("apiContractId") or "").strip() or (
+        str(state.get("selected_api_contract_id") or "").strip() or None
+    )
+    state_contract_id = str(state.get("selected_api_contract_id") or "").strip()
+    if target_type == "endpoint" and state_contract_id and api_contract_id != state_contract_id:
+        raise ApiDesignError("API 映射门禁动作与原 API Contract 不一致。")
     readiness = api_design_readiness(
         workspace,
         project_plan,
         target_type=target_type,
         target_id=target_id,
-        api_contract_id=str(state.get("selected_api_contract_id") or "").strip() or None,
+        api_contract_id=api_contract_id,
     )
-    if readiness["ready"]:
+    action_name = str(action.get("action") or "")
+    if readiness["ready"] and not readiness["endpoint_ids"]:
         return {
             "phase": "api_design_readiness_gate",
             "status": "completed",
+            "api_design_gate_action": {},
             "api_design_readiness": readiness,
+            "api_design_result": {},
             "clarification": {},
             "timeline": ["api_design_readiness_gate"],
         }
     target_label = _development_target_label(project_plan, target_type, target_id)
+    if readiness["ready"]:
+        result = api_design_gate_result(
+            workspace,
+            project_plan,
+            target_type=target_type,
+            target_id=target_id,
+            target_label=target_label,
+            api_contract_id=api_contract_id,
+        )
+        if action_name == "confirm" and _gate_versions_match(action, result):
+            confirmed_result = {**result, "status": "confirmed", "confirmedForDevelopment": True}
+            return {
+                "phase": "api_design_readiness_gate",
+                "status": "completed",
+                "api_design_gate_action": {},
+                "api_design_readiness": readiness,
+                "api_design_result": confirmed_result,
+                "clarification": {},
+                "message": "API 映射已确认，正在继续当前开发流程。",
+                "timeline": ["api_design_readiness_gate"],
+            }
+        version_changed = action_name == "confirm"
+        return {
+            "phase": "api_design_readiness_gate",
+            "status": "requires_user_input",
+            "api_design_gate_action": {},
+            "api_design_readiness": readiness,
+            "api_design_result": result,
+            "clarification": {
+                "mode": "api_design_confirmation",
+                "status": "requires_user_input",
+                "message": (
+                    "API 映射版本已变化，请核对当前结果后重新确认。"
+                    if version_changed
+                    else "字段映射检测已通过，请确认本次开发使用当前版本。"
+                ),
+                "apiDesignResult": result,
+                "developmentTarget": {
+                    "type": target_type,
+                    "id": target_id,
+                    "label": target_label,
+                    "apiContractId": api_contract_id,
+                },
+            },
+            "timeline": ["api_design_readiness_gate"],
+        }
     missing = readiness["missing_api_designs"]
     labels = "、".join(
         f"{item.get('method')} {item.get('path')}" for item in missing
@@ -129,9 +123,9 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         [
             AskUserQuestion(
                 header="API 设计前置",
-                question=f"当前目标依赖的 API 尚未完成设计：{labels}。请分别完成设计后重新发起开发。",
+                question=f"当前目标依赖的 API 尚未完成设计：{labels}。请分别配置后重新检测。",
                 type="text",
-                placeholder="请从应用大纲进入对应 API 的设计。",
+                placeholder="请通过门禁卡片配置映射并重新检测。",
             )
         ]
     )
@@ -145,25 +139,43 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
                 "type": target_type,
                 "id": target_id,
                 "label": target_label,
-                "apiContractId": readiness.get("api_contract_id"),
+                "apiContractId": api_contract_id,
             },
         }
     )
     return {
         "phase": "api_design_readiness_gate",
         "status": "requires_user_input",
+        "api_design_gate_action": {},
         "api_design_readiness": readiness,
+        "api_design_result": {},
         "clarification": clarification,
         "timeline": ["api_design_readiness_gate"],
     }
 
 
-def _invalidate_build_task_plan(workspace: str) -> None:
-    """API 设计确认后将既有 Build DAG 标记为失效，避免复用旧绑定上下文。"""
+def _gate_versions_match(action: dict[str, Any], result: dict[str, Any]) -> bool:
+    """比较用户确认的全部映射版本与本次重新读取结果，拒绝遗漏、重复或变更。"""
 
-    path = Path(workspace).expanduser() / ".xcodeagent" / "plans" / "build-task-plan.json"
-    if path.is_file():
-        mark_artifact_document_stale(path)
+    expected = {
+        (
+            str(item.get("apiContractId") or ""),
+            str(item.get("endpointId") or ""),
+            str(item.get("artifactRevision") or ""),
+        )
+        for item in action.get("versions") or []
+        if isinstance(item, dict)
+    }
+    actual = {
+        (
+            str(item.get("apiContractId") or ""),
+            str(item.get("endpointId") or ""),
+            str(item.get("artifactRevision") or ""),
+        )
+        for item in result.get("designs") or []
+        if isinstance(item, dict)
+    }
+    return len(expected) == len(action.get("versions") or []) and expected == actual
 
 
 def _development_target_label(
