@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from app.agents.main.unit_task_prompt import build_unit_generation_prompt
+from app.agents.main.unit_task_rules import resolve_unit_task_rules
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_generation_contracts import UnitGenerationContext
 from tests.test_unit_generation_contracts import _context_payload
@@ -66,6 +67,48 @@ def _prompt() -> str:
     )
 
 
+def _requirement(kind: str, suffix: str, **source_refs: str) -> dict:
+    """构造能被 Prompt 规则清单精确消费的增量职责。"""
+
+    requirement_id = f"{kind}:{suffix}"
+    return {
+        "requirement_id": requirement_id,
+        "description": f"实现 {requirement_id}",
+        "source_refs": {
+            "artifact": "technical-plan",
+            "capability_id": requirement_id,
+            "kind": kind,
+            **source_refs,
+        },
+    }
+
+
+def _unit_context(
+    unit_id: str,
+    unit_kind: str,
+    requirements: list[dict],
+) -> UnitGenerationContext:
+    """基于公共冻结夹具构造不同类型的模型 Unit Context。"""
+
+    payload = _context_payload()
+    payload.update({
+        "unit_id": unit_id,
+        "unit_kind": unit_kind,
+        "generation_requirements": requirements,
+        "constraints": {
+            "owner": "frontend" if unit_kind in {"page", "frontend"} else unit_kind,
+            "managed_files": [],
+            "strong_rules": ["exact_unit_owner"],
+        },
+        "dependency_context": {
+            "dependency_unit_ids": [],
+            "retained_task_summaries": [],
+            "retained_owner_constraints": [],
+        },
+    })
+    return UnitGenerationContext(**payload)
+
+
 class UnitTaskPromptTests(unittest.TestCase):
     def test_prompt_binds_exact_single_unit_identity(self) -> None:
         """Prompt 必须绑定唯一 Unit、kind、Run 和输入指纹。"""
@@ -123,13 +166,146 @@ class UnitTaskPromptTests(unittest.TestCase):
         self.assertIn('"retry_unit_ids": [', prompt)
         self.assertIn("Feedback is diagnostic input only", prompt)
 
-    def test_prompt_applies_only_supplied_unit_kind_rules(self) -> None:
-        """Unit-kind rules 必须显式注入并绑定当前 Unit，不能变成全局规则。"""
+    def test_prompt_combines_automatic_and_supplied_unit_kind_rules(self) -> None:
+        """自动 Unit 规则与调用方附加规则共同绑定当前 Unit。"""
 
         prompt = _prompt()
         self.assertIn("Apply these rules only to `page` Unit `page:orders`", prompt)
+        self.assertIn("`page:orders::page`", prompt)
+        self.assertIn("requirement-to-deliverable manifest is authoritative", prompt)
         self.assertIn("只实现当前页面的 PageImplementationContract。", prompt)
         self.assertIn("页面 Task 必须复用现有入口文件。", prompt)
+
+    def test_all_model_unit_types_resolve_legacy_equivalent_rules(self) -> None:
+        """六类模型 Unit 均自动获得旧版数量、固定 ID、分层或复用规则。"""
+
+        database_requirements = [
+            _requirement(
+                kind,
+                "orders-api:orders.list:Order",
+                api_contract_id="orders-api",
+                endpoint_id="orders.list",
+                entity_id="Order",
+                data_source_type="database",
+            )
+            for kind in (
+                "backend.domain_mapping",
+                "backend.repository",
+                "backend.application_service",
+                "backend.endpoint_controller",
+            )
+        ]
+        external_requirements = [
+            _requirement(
+                kind,
+                "profile-api:profile.get:Profile",
+                api_contract_id="profile-api",
+                endpoint_id="profile.get",
+                entity_id="Profile",
+                data_source_type="external_api",
+            )
+            for kind in (
+                "backend.external_api_client",
+                "backend.external_api_mapping",
+                "backend.application_service",
+                "backend.endpoint_controller",
+            )
+        ]
+        cases = (
+            (
+                _unit_context("page:orders", "page", [
+                    _requirement("frontend.page", "orders", page_id="orders")
+                ]),
+                ("page:orders::page", "PageImplementationContract"),
+            ),
+            (
+                _unit_context("frontend:api-client", "frontend", [
+                    _requirement(
+                        "frontend.shared_capability",
+                        "response-entity-adapter",
+                        target_id="response-entity-adapter",
+                    ),
+                    _requirement(
+                        "frontend.api_module",
+                        "orders-api:orders.list",
+                        api_contract_id="orders-api",
+                        endpoint_id="orders.list",
+                    ),
+                ]),
+                ("frontend:api-client::response-entity-adapter", "SUC0000"),
+            ),
+            (
+                _unit_context("frontend:data:static", "frontend", [
+                    _requirement(
+                        "frontend.static_data_module",
+                        "orders-api:orders.list",
+                        api_contract_id="orders-api",
+                        endpoint_id="orders.list",
+                    )
+                ]),
+                ("frontend:data:static::data-module", "module-local types and constants"),
+            ),
+            (
+                _unit_context("backend:bootstrap", "backend", [
+                    _requirement(
+                        "backend.bootstrap",
+                        source_type,
+                        data_source_type=source_type,
+                    )
+                    for source_type in ("database", "external_api")
+                ]),
+                ("backend:bootstrap::bootstrap", "MyBatis-Plus/MySQL", "Spring Cloud OpenFeign"),
+            ),
+            (
+                _unit_context(
+                    "backend:endpoint:orders-api:orders.list",
+                    "backend",
+                    database_requirements,
+                ),
+                (
+                    "backend:endpoint:orders-api:orders.list::Order::objects",
+                    "objects -> repository -> service -> controller",
+                ),
+            ),
+            (
+                _unit_context(
+                    "backend:endpoint:profile-api:profile.get",
+                    "backend",
+                    external_requirements,
+                ),
+                (
+                    "backend:endpoint:profile-api:profile.get::Profile::upstream",
+                    "upstream -> mapping -> service -> controller",
+                    "base_url_config_key",
+                ),
+            ),
+        )
+        for context, expected_fragments in cases:
+            with self.subTest(unit_id=context.unit_id):
+                rules = resolve_unit_task_rules(context)
+                self.assertTrue(rules)
+                rendered = "\n".join(rules)
+                task_owner = (
+                    "backend" if context.unit_kind == "backend" else "frontend"
+                )
+                self.assertIn(f"task_type `{task_owner}.code`", rendered)
+                self.assertIn(context.generation_requirements[0].requirement_id, rendered)
+                for fragment in expected_fragments:
+                    self.assertIn(fragment, rendered)
+
+    def test_unknown_model_unit_cannot_fall_back_to_empty_rules(self) -> None:
+        """未知模型 Unit 在构建 Prompt 前失败，不能静默携带空规则调用模型。"""
+
+        context = _unit_context("frontend:unknown", "frontend", [
+            _requirement(
+                "frontend.api_module",
+                "orders-api:orders.list",
+                api_contract_id="orders-api",
+                endpoint_id="orders.list",
+            )
+        ])
+        with self.assertRaisesRegex(ValueError, "没有可用的旧任务规划规则投影"):
+            build_unit_generation_prompt(context)
 
     def test_prompt_forbids_replacement_and_platform_owned_work(self) -> None:
         """Prompt 必须禁止 replacement、其他 Candidate 和平台拥有职责。"""

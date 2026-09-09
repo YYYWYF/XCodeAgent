@@ -6,6 +6,13 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from app.agents.main.unit_task_rules import (
+    example_task_id,
+    expected_task_owner,
+    expected_task_type,
+    requirement_output_contracts,
+    resolve_unit_task_rules,
+)
 from app.services.business_acceptance import DELIVERABLE_KINDS
 from app.services.planning_frozen import plain_json
 from app.services.planning_issues import ValidationIssue
@@ -28,7 +35,7 @@ def _feedback_payload(issues: Sequence[ValidationIssue]) -> list[dict[str, Any]]
 
 
 def _unit_rules(rules: Sequence[str]) -> tuple[str, ...]:
-    """验证平台选择的 Unit-kind 规则，拒绝空值或隐式字符串转换。"""
+    """验证调用方附加的 Unit 规则，拒绝空值或隐式字符串转换。"""
 
     if isinstance(rules, (str, bytes)):
         raise TypeError("unit_kind_rules 必须是规则字符串数组。")
@@ -53,20 +60,34 @@ def _output_contract(context: UnitGenerationContext) -> str:
     """声明严格 Raw Candidate envelope 与后续 Local Validator 所需 Task 字段。"""
 
     deliverable_kinds = ", ".join(f"`{kind}`" for kind in DELIVERABLE_KINDS)
+    requirement_contracts = requirement_output_contracts(
+        context.generation_requirements
+    )
+    sample_contract = requirement_contracts[0] if requirement_contracts else {}
+    if context.unit_id == "frontend:api-client":
+        sample_contract = next(
+            (
+                item
+                for item in requirement_contracts
+                if item["deliverable_kind"] == "frontend.shared_capability"
+            ),
+            sample_contract,
+        )
+    sample_task_id = example_task_id(context)
     example = {
         "tasks": [
             {
-                "id": "stable-model-task-id",
+                "id": sample_task_id,
                 "unit_id": context.unit_id,
-                "owner": "owner-required-by-context",
-                "task_type": "unit-kind-specific-task-type",
+                "owner": expected_task_owner(context),
+                "task_type": expected_task_type(context),
                 "title": "简体中文任务标题",
                 "description": "简体中文可执行任务说明",
                 "dependencies": [],
                 "target_files": ["workspace-relative/path"],
                 "change_scope": [
                     {
-                        "operation": "add|modify|delete",
+                        "operation": "add",
                         "path": "workspace-relative/path",
                         "description": "该文件的精确变更",
                     }
@@ -74,11 +95,15 @@ def _output_contract(context: UnitGenerationContext) -> str:
                 "allowed_paths": ["workspace-relative/path"],
                 "deliverables": [
                     {
-                        "id": "stable-deliverable-id",
-                        "kind": "allowed-deliverable-kind",
-                        "target_id": "formal-target-or-capability-id",
+                        "id": f"{sample_task_id}::deliverable",
+                        "kind": sample_contract.get("deliverable_kind")
+                        or "kind-from-generation-requirement",
+                        "target_id": sample_contract.get("target_id")
+                        or "target-from-generation-requirement",
                         "paths": ["workspace-relative/path"],
-                        "provides": ["semantic.capability"],
+                        "provides": [sample_contract.get(
+                            "requirement_id", "exact-generation-requirement-id"
+                        )],
                     }
                 ],
                 "impact_scope": {
@@ -99,10 +124,12 @@ def _output_contract(context: UnitGenerationContext) -> str:
         "text before or after it. The object has exactly one top-level key: `tasks`. "
         "The required envelope is `{" + '"tasks"' + ":[]}`; the array contains every and "
         "only Task newly contributed by this Unit generation attempt. Never output "
-        "`workspace_analysis`, `dag`, or any other envelope field. Every Task ID is created "
-        "by the model, must be a unique non-empty string, and will not be repaired by the "
-        "platform. Every Task must use the exact current `unit_id` shown below.\n"
-        "Task JSON shape:\n"
+        "`workspace_analysis`, `dag`, or any other envelope field. Every Task ID must be a "
+        "unique non-empty string, use the exact fixed ID whenever Unit-Kind Rules prescribe "
+        "one, and will not be repaired by the platform. Every Task must use the exact current "
+        "`unit_id` shown below.\n"
+        "Task JSON shape example; use the exact IDs and requirement manifest from the "
+        "Unit-Kind Rules rather than inventing or copying placeholders:\n"
         + _stable_json(example)
         + "\nAllowed `deliverables[].kind` values are exactly: "
         + deliverable_kinds
@@ -139,13 +166,15 @@ def build_unit_generation_prompt(
 ) -> str:
     """为一个冻结 Context 构建纯文本 Unit Candidate Generation Prompt。
 
-    Builder 只序列化调用方已提供的冻结 Context、当前 Unit 规则和结构化反馈。
-    它不读取工作区或正式产物、不调用 FrozenContractReader、不调用模型，也不执行
-    Local/Global retry、Candidate validation、Assembly 或 replacement 决策。
+    Builder 从冻结 Context 自动解析旧版 Unit 任务规则，并追加调用方显式补充规则和
+    结构化反馈。它不读取工作区或正式产物、不调用 FrozenContractReader、不调用模型，
+    也不执行 Local/Global retry、Candidate validation、Assembly 或 replacement 决策。
     """
 
     frozen_context = UnitGenerationContext.model_validate(context)
-    rules = _unit_rules(unit_kind_rules)
+    automatic_rules = resolve_unit_task_rules(frozen_context)
+    additional_rules = _unit_rules(unit_kind_rules)
+    rules = tuple(dict.fromkeys((*automatic_rules, *additional_rules)))
     if not isinstance(contract_tool_enabled, bool):
         raise TypeError("contract_tool_enabled 必须是 bool。")
     contract_access = (

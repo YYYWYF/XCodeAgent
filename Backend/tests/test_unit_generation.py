@@ -111,7 +111,6 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
                 active_job,
                 global_feedback=global_feedback,
                 local_feedback=local_feedback,
-                unit_kind_rules=("只实现当前页面职责。",),
                 settings=_settings(
                     dag_unit_max_tokens=active_job.policy.model_max_tokens
                 ),
@@ -122,7 +121,8 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
         """合法响应保留原文和 Task，但尚未生成 Candidate status。"""
 
         raw_response = '{"tasks":[{"id":"task-orders","owner":"frontend"}]}'
-        result, _ = await self._generate(FakeAsyncModel(raw_response))
+        model = FakeAsyncModel(raw_response)
+        result, _ = await self._generate(model)
 
         self.assertEqual(result.raw_response, raw_response)
         self.assertEqual(result.tasks[0]["id"], "task-orders")
@@ -132,6 +132,8 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("status", result.model_dump())
         self.assertNotIn("candidate_id", result.model_dump())
         self.assertEqual(result.generation_metadata["finish_reason"], "stop")
+        self.assertIn("`page:orders::page`", model.prompts[0])
+        self.assertNotIn("Apply these rules only to `page` Unit `page:orders`:\n[]", model.prompts[0])
 
     async def test_malformed_response_returns_parser_issues_without_partial_tasks(self) -> None:
         """非法 JSON 消耗本次内容 attempt，并以结构化 Issue 返回。"""
