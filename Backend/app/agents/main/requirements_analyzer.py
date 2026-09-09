@@ -522,6 +522,9 @@ def _invoke_live_chat_model(
 
         accumulated_text = ""
         merged_chunk: AIMessageChunk | None = None
+        # 非流式边界情况：stream() 返回单个完整 AIMessage（非 AIMessageChunk），
+        # 此时无法用 + 拼接，直接当 final 返回，避免被 isinstance 丢弃导致空 messages。
+        non_stream_final: AIMessage | None = None
         for chunk in runnable.stream(
             _requirements_prompt(
                 request,
@@ -530,6 +533,14 @@ def _invoke_live_chat_model(
                 clarification_round,
             )
         ):
+            if isinstance(chunk, AIMessage) and not isinstance(chunk, AIMessageChunk):
+                # 完整 AIMessage（非流式）：直接作为最终消息，提取 content 供 token 转发。
+                non_stream_final = chunk
+                token = _coerce_content_text(chunk.content)
+                if token:
+                    accumulated_text += token
+                    on_token(token)
+                continue
             if isinstance(chunk, AIMessageChunk):
                 # glm-5.2 流式 chunk.content 是 content block 列表（如
                 # [{"text": "...", "type": "text", "index": 0}]），不是纯字符串。
@@ -540,6 +551,17 @@ def _invoke_live_chat_model(
                     accumulated_text += token
                     on_token(token)
                 merged_chunk = chunk if merged_chunk is None else merged_chunk + chunk
+        if non_stream_final is not None:
+            # 非流式：用完整 AIMessage，但补上已提取的 accumulated_text 作为 content。
+            return {
+                "messages": [
+                    AIMessage(
+                        content=accumulated_text or _coerce_content_text(non_stream_final.content),
+                        tool_calls=getattr(non_stream_final, "tool_calls", None),
+                        id=getattr(non_stream_final, "id", None),
+                    )
+                ]
+            }
         if merged_chunk is None:
             return {"messages": []}
         final_tool_calls = getattr(merged_chunk, "tool_calls", None) or []

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
@@ -213,7 +213,9 @@ def _invoke_product_planner(
 
     accumulated = ""
     for chunk in model.stream(prompt):
-        if not isinstance(chunk, AIMessageChunk):
+        # 流式模型返回 AIMessageChunk；非流式边界情况返回完整 AIMessage，
+        # 两者都要提取 content，否则非流式时 accumulated 永远为空。
+        if not isinstance(chunk, (AIMessageChunk, AIMessage)):
             continue
         token = _coerce_content_text(chunk.content)
         if token:
