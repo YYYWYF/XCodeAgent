@@ -67,14 +67,18 @@ const PLANNING_CONFIRMATION_DEFAULTS = new Set([
   '确认全部设计稿'
 ])
 
-const APPLICATION_PLANNING_CLARIFICATION_PHASES: Record<string, string> = {
-  ask_user_question: 'requirements',
-  requirement_document_confirmation: 'product_planning',
-  ui_design_confirmation: 'ui_confirmation',
-  planning_stage_entry_confirmation: 'planning_stage_entry',
-  technical_plan_confirmation: 'technical_planning',
-  technical_plan_generation_error: 'technical_planning',
-  project_plan_confirmation: 'project_planning'
+const APPLICATION_PLANNING_CLARIFICATION_PHASES: Record<string, readonly string[]> = {
+  ask_user_question: ['requirements'],
+  authorization_configuration_conflict: ['requirements'],
+  // RequirementSpec 与 ProductPlan 联合确认时，后端在运行期间使用
+  // product_planning，但稳定中断快照投影为 requirement_document。两者都是
+  // 当前同一确认门的合法 phase；只接受前者会把真实确认卡过滤成 loading。
+  requirement_document_confirmation: ['product_planning', 'requirement_document'],
+  ui_design_confirmation: ['ui_confirmation'],
+  planning_stage_entry_confirmation: ['planning_stage_entry'],
+  technical_plan_confirmation: ['technical_planning'],
+  technical_plan_generation_error: ['technical_planning'],
+  project_plan_confirmation: ['project_planning']
 }
 
 /** 判断创建规划确认是否仍属于当前节点，过滤 checkpoint 中已消费但尚未清理的旧确认。 */
@@ -82,9 +86,9 @@ function applicationPlanningClarificationMatchesPhase(
   workflow: WorkflowRunPayload,
   clarification: WorkflowClarification
 ): boolean {
-  const expectedPhase = APPLICATION_PLANNING_CLARIFICATION_PHASES[String(clarification.mode || '')]
+  const expectedPhases = APPLICATION_PLANNING_CLARIFICATION_PHASES[String(clarification.mode || '')]
   const phase = planningWorkflowPhase(workflow)
-  return !expectedPhase || !phase || phase === expectedPhase
+  return !expectedPhases || !phase || expectedPhases.includes(phase)
 }
 
 // 从服务端 Workflow 投影中读取原生 LangGraph 审阅中断，不解析或补造其中的门禁字段。
@@ -247,8 +251,7 @@ export function planningWorkflowNeedsChatLoading(
   designPhasePlanning: boolean,
   loadingPlaceholder: boolean,
   hasWorkflowCard: boolean,
-  content: string,
-  isLatestAssistantMessage = false
+  content: string
 ): boolean {
   // 服务端已给出待输入/终态或可渲染卡片时，它必须覆盖本地残留的占位标记。
   if (hasWorkflowCard || planningWorkflowSettlesLoading(workflow)) return false
@@ -267,10 +270,8 @@ export function planningWorkflowNeedsChatLoading(
   if (workflow?.summary.status === 'running') {
     return planningPhases.has(phase) && !content.trim()
   }
-  // 规划快照尚未到达的窗口期：仅对当前正在推进的最后一条 assistant 消息生效。
-  // 该窗口内无 workflow 的消息只可能来自规划流式 token（中间态输出），不能以纯文本裸露；
-  // 历史遗留的无 workflow 消息（后面已有后续消息）不受影响，仍正常展示原文。
-  if (!workflow && isLatestAssistantMessage) return true
+  // 没有 Workflow 快照时不能仅凭“最后一条 assistant 消息”推断仍在运行；
+  // 重启恢复、流中断和持久化截断都会产生这种消息，真实请求的首帧由 planningLoading 显式承接。
   return false
 }
 

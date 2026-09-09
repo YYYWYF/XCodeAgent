@@ -1080,12 +1080,23 @@ def create_requirement_spec(
         else existing_authorization
     )
     explicit_authorization_enabled = _authorization_enabled_from_request(source_text)
-    # 权限总开关由创建表单约束；业务行为和 ruleId 只来自候选及已有内部状态。
+    # 创建时的“涉及权限控制：否”只是初始配置事实。后续设计变更若已产生
+    # 经校验的受控页面或操作候选，说明用户正在通过自然语言开启权限，不能再被
+    # 拼接在历史 request 中的初始开关反向清空。
+    authorization_has_current_rules = isinstance(authorization_source, dict) and any(
+        isinstance(authorization_source.get(field_name), list)
+        and bool(authorization_source[field_name])
+        for field_name in ("restrictedPages", "restrictedOperations")
+    )
+    authorization_enabled_hint = (
+        True if authorization_has_current_rules else explicit_authorization_enabled
+    )
+    # 没有当前权限候选时仍保留明确表单开关，支持初始创建和用户显式取消权限的场景。
     spec["authorization_requirements"] = normalize_authorization_requirements(
         authorization_source
         if isinstance(authorization_source, dict)
         else default_spec["authorization_requirements"],
-        enabled_hint=explicit_authorization_enabled,
+        enabled_hint=authorization_enabled_hint,
         existing_value=existing_authorization,
         pages=spec["pages"],
         entities=spec["entities"],

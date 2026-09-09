@@ -13,6 +13,9 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
     restart_application_planning_lifecycle,
 )
+from app.services.access_control_intent import (
+    has_explicit_business_access_control_change,
+)
 
 
 DESIGN_CHANGE_TARGET_NODES = (
@@ -63,11 +66,13 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         # 正式二次修改已经在影响确认阶段固定最早产物和目标资源；用户点击
         # “确认并返回设计阶段”后必须立即进入真实生成节点，不能再调用一次
         # 设计分类模型形成额外等待、失败点或目标漂移。
-        target = authoritative_target
+        target = formal_revision_design_target(request, authoritative_target)
         decision = DesignConversationDecision(
             target=target,
             reason=(
-                f"formal revision 起点由 lifecycle.currentArtifact 固定为 {target}，"
+                "业务访问控制必须由 RequirementSpec 持有，已纠正 formal revision 的旧起点。"
+                if target != authoritative_target
+                else f"formal revision 起点由 lifecycle.currentArtifact 固定为 {target}，"
                 "直接进入对应正式产物生成节点。"
             ),
             affected_page_ids=authoritative_page_ids,
@@ -131,6 +136,14 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
             update["product_plan_path"] = ""
             update["product_plan_json_path"] = ""
     return update
+
+
+def formal_revision_design_target(request: str, authoritative_target: str) -> str:
+    """纠正正式修订中会跳过 RequirementSpec 的业务权限变更起点。"""
+
+    if has_explicit_business_access_control_change(request):
+        return "requirements"
+    return authoritative_target
 
 
 def _formal_revision_context(state: ProjectState) -> tuple[str | None, list[str]]:

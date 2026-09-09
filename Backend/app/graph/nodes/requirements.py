@@ -25,6 +25,7 @@ from app.services.data_source_policy import (
 from app.services.application_authorization_config import (
     ApplicationAuthorizationConfigError,
     authorization_configuration_can_enable,
+    authorization_configuration_is_enabled,
     persist_authorization_configuration,
 )
 from app.services.requirement_spec import (
@@ -285,25 +286,23 @@ def requirements(state: ProjectState) -> dict:
         clarification_round=clarification_round,
         on_token=_llm_token_callback,
     )
-    model_conflict = analysis.get("authorization_config_conflict")
-    if (
-        application_planning_scope
-        and isinstance(model_conflict, dict)
-        and model_conflict.get("requested") is True
-    ):
-        return _authorization_config_conflict_result(
-            apply_authoritative_datasource_type(
-                analysis["requirement_spec"],
-                datasource_type,
-            ),
-            state,
-            model_conflict,
-        )
     spec = apply_authoritative_datasource_type(
         analysis["requirement_spec"],
         datasource_type,
     )
     _apply_menus_root_path_to_pages(spec, state)
+    if (
+        application_planning_scope
+        and _authorization_requested_by_requirement(spec)
+        and not authorization_configuration_is_enabled(str(state.get("workspace") or ""))
+    ):
+        # 已验证的业务权限规则就是开启应用权限的意图；只收集无法从角色名推导的真实管理员 subjectId。
+        return _authorization_config_conflict_result(
+            spec,
+            state,
+            {"requested": True, "evidence": _authorization_requirement_evidence(spec)},
+            collecting_admin=True,
+        )
     clarification = analysis["clarification"]
     clarification = _without_technical_datasource_questions(clarification, spec)
     clarification = _without_non_substantive_completeness_questions(
@@ -534,6 +533,40 @@ def _authorization_config_conflict_result(
         "clarification": clarification,
         "timeline": ["requirements"],
     }
+
+
+def _authorization_requested_by_requirement(spec: dict[str, Any]) -> bool:
+    """判断已归一化的需求是否包含明确的页面或操作权限控制。"""
+
+    authorization = spec.get("authorization_requirements")
+    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+        return False
+    return any(
+        isinstance(authorization.get(field_name), list)
+        and bool(authorization[field_name])
+        for field_name in ("restrictedPages", "restrictedOperations")
+    )
+
+
+def _authorization_requirement_evidence(spec: dict[str, Any]) -> list[str]:
+    """提取已验证权限规则的原始需求证据，供管理员初始化提示说明原因。"""
+
+    authorization = spec.get("authorization_requirements")
+    if not isinstance(authorization, dict):
+        return []
+    evidence: list[str] = []
+    for field_name in ("restrictedPages", "restrictedOperations"):
+        rules = authorization.get(field_name)
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            for source in rule.get("sourceRefs", []):
+                text = str(source).strip()
+                if text and text not in evidence:
+                    evidence.append(text)
+    return evidence[:8]
 
 
 def _resolve_authorization_config_conflict(

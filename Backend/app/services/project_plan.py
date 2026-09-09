@@ -1095,7 +1095,7 @@ def validate_project_plan_datasource_policy(
     """
 
     del datasource_type
-    errors = template_capability_errors(plan)
+    errors = template_capability_errors(project_plan)
     sources = plan_data_sources(project_plan)
     source_ids = {str(source.get("id") or "") for source in sources}
     designed_entity_ids = {

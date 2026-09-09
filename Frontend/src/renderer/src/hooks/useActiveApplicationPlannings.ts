@@ -204,9 +204,13 @@ export function useActiveApplicationPlannings({
     []
   )
 
-  // 停止指定应用的主规划 Workflow，供工作台自由变更入口复用同一停止句柄。
+  // 停止指定应用的主规划 Workflow；停止句柄未注册时必须显式失败，不能伪装成已停止。
   const stopPlanning = useCallback(async (applicationId: string): Promise<void> => {
-    await stopHandlersRef.current.get(applicationId)?.()
+    const handler = stopHandlersRef.current.get(applicationId)
+    if (!handler) {
+      throw new Error('当前规划会话尚未就绪，无法确认已暂停。请稍后重试。')
+    }
+    await handler()
   }, [])
 
   // 从活动集合移除已经完成或删除的单个计划。

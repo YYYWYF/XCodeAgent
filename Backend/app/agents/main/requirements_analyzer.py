@@ -14,7 +14,6 @@ from app.config import Settings
 from app.services.data_source_policy import DatasourceType
 from app.services.model_transport_retry import run_with_transport_retry
 from app.services.requirement_spec import (
-    _authorization_enabled_from_request,
     create_requirement_spec,
 )
 from app.tools.ask_user import (
@@ -274,8 +273,21 @@ def _merge_authorization_facts(
     for field_name in ("restrictedPages", "restrictedOperations"):
         fact_items = fact_authorization.get(field_name)
         if isinstance(fact_items, list):
-            # 权限候选以独立事实提取为唯一来源，空数组也表示没有明确提出该维度。
-            authorization[field_name] = fact_items
+            existing_items = authorization.get(field_name)
+            # 独立提取出的非空候选优先，因为它经过专门的契约校验。反过来，空
+            # 数组并不能证明主需求模型已给出的完整候选是错误的：实际模型曾将
+            # “HR 用于查看人员列表”误判为角色职责而非访问限制，进而把已确认的
+            # 页面授权和权限开关一并清空。仅在两边都没有候选时才保留空数组。
+            if fact_items or not isinstance(existing_items, list) or not existing_items:
+                authorization[field_name] = fact_items
+    # 已通过独立契约校验的受控页面或操作，是用户要求应用权限能力的确定性证据。
+    # 不依赖“涉及权限控制：是”这类表单式措辞，避免自然语言需求被旧开关静默清空。
+    if any(
+        isinstance(authorization.get(field_name), list)
+        and bool(authorization[field_name])
+        for field_name in ("restrictedPages", "restrictedOperations")
+    ):
+        authorization["enabled"] = True
     data_issues = fact_authorization.get("dataAuthorizationIssues")
     if isinstance(data_issues, list):
         merged["authorization_capability_issues"] = [
@@ -417,7 +429,9 @@ def _requirements_prompt(
         "entity, operation, route, resourceKey, policyKey, dataRuleKey, database fields, or SQL identifiers here.\n"
         "Each permission candidate must include sourceRefs containing the relevant original business description or clarification answer and non-empty defaultGrantedRoleIds referencing user_roles[].id. If the user explicitly requests a controlled target but does not state which role receives it by default, call ask_user to select the applicable business roles; never guess or leave it empty. Do not emit unauthorizedBehavior, unauthorizedPage, unauthorizedOperation, unauthenticated, or any other configurable unauthorized-display field: page/menu and operation entries are fixed to hide for users without the matching resource, while direct page and endpoint access is rejected with 403. Data authorization is not supported in this phase: report it only through the separate authorization fact extraction capability issue, never as RequirementSpec fields.\n"
         "First identify every business participant explicitly stated in the request and put it in user_roles; this includes roles such as 管理员、审批人、运营人员、员工 when the user describes them. Do not replace an explicitly stated role with a generic business_user. RequirementSpec first records business-role facts, never runtime role-resource/member relations. Every user_roles item must have a stable lower_snake_case id, name, description, isSystemRole=false, and isInitialAdminRole=false. Do not select an initial system administrator and do not call ask_user for that selection: after business roles are recorded, the workflow presents the choice deterministically. Never decide system-administrator responsibility from a role name. The flags are metadata only and do not grant implicit permissions.\n"
-        "When the configuration fact says application-level authorization is disabled but the original business description explicitly requests a permission control, return a top-level internal authorization_config_conflict object with requested=true and short evidence. Do not copy this marker into the RequirementSpec and do not silently enable authorization_requirements. Omit the marker when no business permission control was requested.\n"
+        "When the business description explicitly requests a permission control, preserve the candidate page or operation. "
+        "The platform determines the application-level authorization configuration after deterministic validation and "
+        "collects only a required real initial-administrator subjectId; do not emit configuration-conflict fields.\n"
         "If authorization is not enabled, return authorization_requirements.enabled=false and empty candidate "
         "arrays, and state that the application has no application-level resource authorization.\n"
         "Do not generate business entities in this stage. Entities, their fields, data sources, "
@@ -605,18 +619,11 @@ def _analyze_requirements_once(
         # 需求已被判定为清晰时必须有完整 JSON，不能退回固定页面模板继续向下游传播。
         raise ValueError("需求 AI 未返回完整 RequirementSpec JSON。")
     # ask_user 不采用并行 JSON；权限角色和规则由独立事实提取步骤写入草稿。
-    authorization_config_conflict = _authorization_config_conflict_from_agent_spec(
-        request,
-        agent_spec if not asks_for_clarification else None,
-    )
     effective_agent_spec = (
         deepcopy(agent_spec)
         if not asks_for_clarification and isinstance(agent_spec, dict)
         else None
     )
-    if isinstance(effective_agent_spec, dict):
-        # 此标记只驱动配置前置澄清，不能成为正式需求文档的一部分。
-        effective_agent_spec.pop("authorization_config_conflict", None)
     if not asks_for_clarification:
         _validate_complete_requirement_spec(
             effective_agent_spec,
@@ -682,35 +689,6 @@ def _analyze_requirements_once(
     return {
         "requirement_spec": spec,
         "clarification": clarification,
-        "authorization_config_conflict": authorization_config_conflict,
-    }
-
-
-def _authorization_config_conflict_from_agent_spec(
-    request: str,
-    agent_spec: Any,
-) -> dict[str, Any] | None:
-    """识别模型发现的业务权限要求与关闭配置之间的冲突，不使用关键词猜测业务。"""
-
-    if _authorization_enabled_from_request(request) is not False or not isinstance(
-        agent_spec, dict
-    ):
-        return None
-    conflict = agent_spec.get("authorization_config_conflict")
-    if not isinstance(conflict, dict) or conflict.get("requested") is not True:
-        return None
-    evidence = conflict.get("evidence")
-    evidence_items = (
-        [str(item).strip() for item in evidence if str(item).strip()]
-        if isinstance(evidence, list)
-        else []
-    )
-    # 配置冲突必须有模型给出的原始需求证据，避免仅凭“管理员”等角色名称产生误报。
-    if not evidence_items:
-        return None
-    return {
-        "requested": True,
-        "evidence": evidence_items[:8],
     }
 
 

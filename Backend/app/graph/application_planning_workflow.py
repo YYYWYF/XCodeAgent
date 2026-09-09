@@ -117,13 +117,22 @@ def _route_start(state: ProjectState) -> str:
 
 
 def _route_requirements(state: ProjectState) -> str:
-    """仅需求澄清问答挂起；需求确认与产品规划确认合并为产品规划门一次确认。"""
+    """把所有未完成的需求输入挂起，需求草稿完成后才进入联合产品规划门。"""
 
     clarification = state.get("clarification")
     clarification = clarification if isinstance(clarification, dict) else {}
+    requirement_spec = state.get("requirement_spec")
+    confirmation_status = (
+        str(requirement_spec.get("confirmation_status") or "")
+        if isinstance(requirement_spec, dict)
+        else ""
+    )
+    # 权限初始化等确定性问题也属于 RequirementSpec 的待回答状态。只按
+    # ask_user_question 判断会让 Graph 越过 interrupt 直接运行 ProductPlan，
+    # 从而同时破坏生命周期转换和前端可恢复确认卡。
     if (
         clarification.get("status") == "requires_user_input"
-        and str(clarification.get("mode") or "") == "ask_user_question"
+        and confirmation_status == "pending_user_input"
     ):
         return "requirements_review"
     return "product_planning"

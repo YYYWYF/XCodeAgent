@@ -468,7 +468,33 @@ function AppEntryContent(): JSX.Element {
             ): Promise<void> => {
               const submit = planningSubmitByAppRef.current[activeApplication.id]
               if (!submit) {
-                // Modal 尚未注册句柄时保留最新一次用户提交；注册回调会负责补发。
+                // 工作台可能先从磁盘恢复确认卡，而隐藏的 Modal 尚未被 active
+                // planning 集合重新挂载。此前这里只缓存 Promise，容器永远不出现
+                // 时会导致点击后既没有 AG-UI 请求也没有错误反馈。使用同一 lifecycle
+                // 的 thread 重新挂载容器；其注册回调会立即补发下面缓存的提交。
+                const workflowLifecycle = [workflow.state?.lifecycle, workflow.result?.lifecycle].find(
+                  (value): value is ApplicationLifecycle =>
+                    Boolean(value && typeof value === 'object' && !Array.isArray(value))
+                )
+                // 冷启动的首帧中，应用级 store 和 active planning 都可能还未回填；
+                // 但确认卡随服务端快照携带的 lifecycle 已是当前恢复操作的权威来源。
+                const currentPlanningLifecycle =
+                  applicationLifecycle || activePlanning?.lifecycle || workflowLifecycle
+                const planningThreadId = String(
+                  currentPlanningLifecycle?.initialization.threadId ||
+                    activeApplication.planningThreadId ||
+                    ''
+                ).trim()
+                if (!currentPlanningLifecycle || !planningThreadId) {
+                  return Promise.reject(new Error('当前应用缺少规划线程标识，无法提交需求确认。'))
+                }
+                planningController.startPlanning(
+                  activeApplication,
+                  planningThreadId,
+                  currentPlanningLifecycle,
+                  false,
+                  true
+                )
                 return new Promise<void>((resolve, reject) => {
                   const previous = pendingPlanningSubmitByAppRef.current[activeApplication.id]
                   previous?.reject(new Error('规划提交已被更新的用户操作替代。'))

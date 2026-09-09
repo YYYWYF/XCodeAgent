@@ -673,8 +673,7 @@ export default function MessageList({
                   designPhasePlanning,
                   isPlanningLoadingPlaceholder,
                   showWorkflowCard,
-                  visibleAssistantContent,
-                  messageIndex === messages.length - 1
+                  visibleAssistantContent
                 )
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
               // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。

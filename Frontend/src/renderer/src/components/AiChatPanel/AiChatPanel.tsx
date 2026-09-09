@@ -35,7 +35,10 @@ import type {
 import { CLASS_PREFIX, composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
 import { readWorkspaceFile } from '../../service/workspaceTools'
 import type { ChatSessionDevelopmentContinuation } from '../../service/chatSessions'
-import { saveRequirementSpecDraft } from '../../service/applicationPagePlanning'
+import {
+  createApplicationPlanningSession,
+  saveRequirementSpecDraft
+} from '../../service/applicationPagePlanning'
 import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { formatError } from '../Welcome/utils'
@@ -1512,11 +1515,16 @@ export default function AiChatPanel({
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
   const planningWorkflowStatus = String(planningWorkflow?.summary?.status || '')
+  // 生命周期是冷启动时判断服务端是否仍在执行的唯一依据；缺失 Workflow 快照不能被视为运行中。
+  const planningLifecycleRunning = ['pending', 'running', 'stopping'].includes(
+    String(applicationLifecycle?.initialization.status || '')
+  )
   // 模板就绪后创建规划已经结束；即使界面暂留在产品阶段等待“进入开发”，底部也应恢复普通自由对话。
   const designChangeWorkflowAvailable = isApplicationPlanningPhase && !lifecycleReadyForWorkbench
   const designWorkflowActive =
     designChangeWorkflowAvailable &&
-    (!planningWorkflow || ACTIVE_DESIGN_WORKFLOW_STATUSES.has(planningWorkflowStatus))
+    Boolean(planningWorkflow) &&
+    ACTIVE_DESIGN_WORKFLOW_STATUSES.has(planningWorkflowStatus)
   const designChangeInputLocked = designWorkflowActive && !designChangeUnlocked
   const activePreviewPath = activePageOption?.path || '/'
 
@@ -2332,6 +2340,23 @@ export default function AiChatPanel({
     }, 800)
   }, [])
 
+  /** 删除未绑定 Workflow 的空规划占位，避免请求停止或失败后残留“正在处理”视觉状态。 */
+  const clearEmptyPlanningLoadingPlaceholders = useCallback((): void => {
+    const sessionKey = planningSessionKeyRef.current
+    if (!sessionKey) return
+    setSessionMessagesRef.current(sessionKey, (current) =>
+      current.filter(
+        (item) =>
+          !(
+            item.role === 'assistant' &&
+            item.planningLoading &&
+            !item.workflow &&
+            !item.content.trim()
+          )
+      )
+    )
+  }, [])
+
   // 卸载时清掉未触发的落盘定时器，避免在已卸载组件上写状态。
   useEffect(() => {
     return () => {
@@ -2810,9 +2835,13 @@ export default function AiChatPanel({
             injectPlanningChunk(identity.key, chunk)
           }
         }
-        // 规划会话回放完缓存后仍无消息时注入即时占位，避免只显示 Agent 头像。
+        // 规划会话回放完缓存后，仅当权威 lifecycle 或 Workflow 明确仍在运行时才注入占位。
+        // 重启后的 awaiting_user 没有活动执行，不能因空消息历史伪造“正在处理”。
         const currentMsgs = getSessionMessagesRef.current(identity.key)
-        if (currentMsgs.length === 0) {
+        if (
+          currentMsgs.length === 0 &&
+          (planningLifecycleRunning || planningWorkflowRef.current?.summary.status === 'running')
+        ) {
           const placeholderId = Date.now() * 1000 + (planningMessageIdRef.current++ % 1000)
           setSessionMessagesRef.current(identity.key, (messages) =>
             appendPlanningLoadingPlaceholder(messages, {
@@ -2874,6 +2903,24 @@ export default function AiChatPanel({
     // injectPlanningChunk 读取的会话操作均由 ref 保持最新，避免把函数身份加入依赖造成重复注入。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isApplicationPlanningPhase, isTechnicalPlanningPhase, planningThreadId, planningWorkflow])
+
+  // 清理重启前遗留的空 loading 占位：服务端不在运行且没有 Workflow 时，该占位不能继续遮挡确认卡或输入区。
+  useEffect(() => {
+    if (
+      !isApplicationPlanningPhase ||
+      !planningSessionKeyRef.current ||
+      planningLifecycleRunning ||
+      planningWorkflow?.summary.status === 'running'
+    ) {
+      return
+    }
+    clearEmptyPlanningLoadingPlaceholders()
+  }, [
+    clearEmptyPlanningLoadingPlaceholders,
+    isApplicationPlanningPhase,
+    planningLifecycleRunning,
+    planningWorkflow?.summary.status
+  ])
 
   useEffect(() => {
     if (!onPlanningStreamReady) return
@@ -4109,19 +4156,53 @@ export default function AiChatPanel({
     [application.workspaceRoot, planningThreadId]
   )
 
+  /** 从当前快照或服务端 checkpoint 恢复可提交的规划 Workflow，避免本地会话丢失时吞掉用户输入。 */
+  const resolveDesignChangeWorkflow = async (): Promise<WorkflowRunPayload> => {
+    const currentWorkflow = planningWorkflow || latestMessageWorkflow(messages)
+    if (currentWorkflow) return currentWorkflow
+    if (!application.workspaceRoot || !planningThreadId) {
+      throw new Error('当前应用缺少规划线程标识，无法提交设计变更。')
+    }
+    const recoverySession = createApplicationPlanningSession(planningThreadId)
+    const result = await recoverySession.sendMessage('读取待确认的应用规划状态。', {
+      application,
+      applicationPlanningRecovery: {
+        action: 'get',
+        workspaceRoot: application.workspaceRoot,
+        applicationId: application.id
+      },
+      editorMode: 'frontend',
+      workflowScope: 'application_planning',
+      workspaceRoot: application.workspaceRoot
+    })
+    if (!result.workflow) throw new Error('没有找到可恢复的应用规划状态，请重新打开应用后重试。')
+    planningStreamInjectRef.current?.({ workflow: result.workflow })
+    return result.workflow
+  }
+
   /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
   const handleDesignChangeSend = async (): Promise<void> => {
     const trimmed = draft.trim()
-    if (!trimmed || !planningWorkflow) return
+    if (!trimmed) return
+    let currentWorkflow: WorkflowRunPayload
+    try {
+      currentWorkflow = await resolveDesignChangeWorkflow()
+    } catch (reason) {
+      message.error(formatError(reason, '恢复规划状态失败'))
+      return
+    }
     // 设计阶段二次修改同样不能沿用开发阶段页面的临时生成状态。
     setGeneratingDetailTargetKey('')
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
     appendPlanningUserMessage({ design_change_request: trimmed })
-    void onSubmitPlanningClarification(planningWorkflow, {}, undefined, undefined, trimmed).catch(
-      () => undefined
-    )
     setDraftByKey(draftKey, '')
+    try {
+      await onSubmitPlanningClarification(currentWorkflow, {}, undefined, undefined, trimmed)
+    } catch (reason) {
+      clearEmptyPlanningLoadingPlaceholders()
+      message.error(formatError(reason, '提交设计变更失败'))
+    }
   }
 
   /** 滚动到现有 Workflow 进度区域，不改变消息列表和中央内容结构。 */
@@ -4373,6 +4454,8 @@ export default function AiChatPanel({
                 disabled={loading || workflowInputLocked}
                 onStart={async () => {
                   await onStopPlanning()
+                  // 停止已成功落盘后，同步撤销本地占位，禁止旧 loading 继续伪装成运行中的 Agent。
+                  clearEmptyPlanningLoadingPlaceholders()
                   setDesignChangeUnlocked(true)
                 }}
               />

@@ -24,6 +24,18 @@ def authorization_configuration_can_enable(workspace_root: str | Path) -> bool:
     return isinstance(datasource, dict) and datasource.get("type") == "database"
 
 
+def authorization_configuration_is_enabled(workspace_root: str | Path) -> bool:
+    """读取当前应用的权限配置状态，供自然语言需求与运行时配置对齐。"""
+
+    target = Path(workspace_root).expanduser() / ".xcodeagent" / "application.json"
+    try:
+        current = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    authorization = current.get("authorization") if isinstance(current, dict) else None
+    return isinstance(authorization, dict) and authorization.get("enabled") is True
+
+
 def persist_authorization_configuration(
     workspace_root: str | Path,
     *,

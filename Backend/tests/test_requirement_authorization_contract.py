@@ -93,9 +93,112 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
             merged["authorization_requirements"]["restrictedPages"][0]["description"],
             "只有管理员可以进入资产列表页。",
         )
+        self.assertTrue(merged["authorization_requirements"]["enabled"])
         self.assertEqual(
             merged["authorization_capability_issues"][0]["code"],
             "DATA_AUTHORIZATION_NOT_SUPPORTED",
+        )
+
+    def test_current_permission_rules_override_stale_initial_disabled_flag(self) -> None:
+        """设计变更产生受控页面后，旧创建开关不能把本轮权限需求清空。"""
+
+        spec = create_requirement_spec(
+            "涉及权限控制：否；补充确认：只有管理员可以进入人员列表页",
+            agent_spec={
+                "user_roles": [
+                    {
+                        "id": "admin",
+                        "name": "管理员",
+                        "description": "负责访问人员列表页面。",
+                    }
+                ],
+                "pages": [
+                    {
+                        "pageId": "page_personnel_list",
+                        "name": "人员列表",
+                        "path": "/personnel",
+                        "module_id": "personnel",
+                        "description": "展示人员明细。",
+                    }
+                ],
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [
+                        {
+                            "name": "人员列表页",
+                            "targetPageId": "page_personnel_list",
+                            "description": "只有管理员可以进入人员列表页。",
+                            "rationale": "人员信息需要按角色访问。",
+                            "sourceRefs": ["只有管理员可以进入人员列表页"],
+                            "defaultGrantedRoleIds": ["admin"],
+                        }
+                    ],
+                    "restrictedOperations": [],
+                },
+            },
+            authoritative_agent_spec=True,
+            allow_inferred_defaults=False,
+        )
+
+        authorization = spec["authorization_requirements"]
+        self.assertTrue(authorization["enabled"])
+        self.assertEqual(
+            authorization["restrictedPages"][0]["targetPageId"],
+            "page_personnel_list",
+        )
+
+    def test_empty_fact_extraction_does_not_erase_complete_primary_permission_rule(self) -> None:
+        """事实提取漏掉访问限制时，不能覆盖主模型中已完整表达的权限候选。"""
+
+        primary_rule = {
+            "name": "人员列表",
+            "targetPageId": "page_personnel_list",
+            "description": "仅 HR 可以查看人员明细列表。",
+            "rationale": "人员信息需要按业务角色限制访问。",
+            "sourceRefs": ["hr 用于查看人员的明细列表"],
+            "defaultGrantedRoleIds": ["hr"],
+        }
+        merged = _merge_authorization_facts(
+            {
+                "user_roles": [
+                    {"id": "hr", "name": "HR", "description": "查看人员明细。"}
+                ],
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [primary_rule],
+                    "restrictedOperations": [],
+                },
+            },
+            {
+                "user_roles": [
+                    {"id": "hr", "name": "HR", "description": "查看人员明细。"}
+                ],
+                "authorization_requirements": {
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                    "dataAuthorizationIssues": [],
+                },
+            },
+            None,
+        )
+
+        authorization = merged["authorization_requirements"]
+        self.assertTrue(authorization["enabled"])
+        self.assertEqual(authorization["restrictedPages"], [primary_rule])
+        spec = create_requirement_spec(
+            "涉及权限控制：否；补充确认：authorization_initial_admin_role 已选：hr",
+            agent_spec=merged,
+            authoritative_agent_spec=True,
+            allow_inferred_defaults=False,
+        )
+        self.assertTrue(spec["authorization_requirements"]["enabled"])
+        self.assertEqual(
+            spec["authorization_requirements"]["restrictedPages"][0]["targetPageId"],
+            "page_personnel_list",
+        )
+        self.assertEqual(
+            spec["authorization_requirements"]["restrictedPages"][0]["defaultGrantedRoleIds"],
+            ["hr"],
         )
 
     def test_authorization_fact_output_rejects_incomplete_page_candidate(self) -> None:

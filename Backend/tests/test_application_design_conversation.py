@@ -13,6 +13,7 @@ from app.graph.application_planning_revision import (
     design_artifact_node_state,
     design_node_update,
     earliest_available_design_target,
+    formal_revision_design_target,
     is_design_change,
     prepare_ui_revision_state,
     route_design_intent,
@@ -22,6 +23,7 @@ from app.protocols.application_page_planning import (
 )
 from app.protocols.workflow.projection import _workflow_next_nodes, _workflow_start_node
 from app.protocols.workflow.request import workflow_run_inputs
+from app.agents.design_conversation.router import classify_design_conversation
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
@@ -70,6 +72,48 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             result["application_planning_interaction"]["action"],
             "design_change",
         )
+
+    def test_explicit_permission_change_always_routes_to_requirements(self) -> None:
+        """明确角色可见性限制不能被路由模型降级为产品规划或普通对话。"""
+
+        decision = classify_design_conversation(
+            "设计变更：我想添加权限功能，需要管理员才能看到列表页",
+            requirement_spec={"confirmation_status": "confirmed"},
+            product_plan={
+                "pages": [
+                    {"pageId": "asset_list", "name": "资产列表"},
+                ]
+            },
+            ui_designs={"confirmation_status": "confirmed"},
+        )
+
+        self.assertEqual(decision.target, "requirements")
+
+    def test_authorization_initialization_question_stays_in_requirements_review(self) -> None:
+        """权限初始化待回答时必须产生 RequirementSpec 原生中断。"""
+
+        target = _route_requirements(
+            {
+                "requirement_spec": {"confirmation_status": "pending_user_input"},
+                "clarification": {
+                    "mode": "authorization_configuration_conflict",
+                    "status": "requires_user_input",
+                    "questions": [{"id": "authorization_initial_admin"}],
+                },
+            }
+        )
+
+        self.assertEqual(target, "requirements_review")
+
+    def test_stale_formal_product_target_is_corrected_for_permission_change(self) -> None:
+        """已冻结的 ProductPlan 起点也不能跳过业务权限需求重建。"""
+
+        target = formal_revision_design_target(
+            "我想添加权限功能，需要管理员才能看到列表页",
+            "product_planning",
+        )
+
+        self.assertEqual(target, "requirements")
 
     def test_design_change_rejects_non_planning_scope(self) -> None:
         """设计产物变更不能被发送到主开发 Workflow。"""
@@ -143,19 +187,11 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                    ApplicationLifecycleStatus.AWAITING_USER,
-                ),
-                (
-                    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-                    ApplicationLifecycleStatus.RUNNING,
-                ),
-                (
-                    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                     ApplicationLifecycleStatus.AWAITING_USER,
                 ),
                 (
@@ -535,19 +571,11 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
                     ApplicationLifecycleStatus.RUNNING,
                 ),
                 (
-                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                    ApplicationLifecycleStatus.AWAITING_USER,
-                ),
-                (
-                    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
-                    ApplicationLifecycleStatus.RUNNING,
-                ),
-                (
-                    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                     ApplicationLifecycleStatus.AWAITING_USER,
                 ),
                 (
