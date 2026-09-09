@@ -253,7 +253,10 @@ def _extract_authorization_facts(
                 "\n\nPrevious output failed validation. Return a corrected complete JSON only:\n"
                 + feedback
             )
-        result = create_chat_model(settings).invoke(prompt)
+        result = create_chat_model(
+            settings,
+            extra_model_kwargs={"thinking": {"type": "disabled"}},
+        ).invoke(prompt)
         payload = extract_json_object(
             _coerce_content_text(getattr(result, "content", "")) or ""
         )
@@ -508,7 +511,10 @@ def _invoke_live_chat_model(
 
     def _call_once() -> dict[str, Any]:
         # 每次重试必须重建 runnable 与流式迭代器：已中断的流不能续读。
-        runnable = create_chat_model(active_settings).bind_tools([ask_user])
+        runnable = create_chat_model(
+            active_settings,
+            extra_model_kwargs={"thinking": {"type": "disabled"}},
+        ).bind_tools([ask_user])
         if on_token is None:
             result = runnable.invoke(
                 _requirements_prompt(
