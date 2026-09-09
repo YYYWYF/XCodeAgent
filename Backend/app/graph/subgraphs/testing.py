@@ -4,6 +4,8 @@ from collections.abc import Callable
 from pathlib import PurePosixPath
 from typing import Any
 
+from app.services.unit_test_repair_budget import UNIT_TEST_REPAIRS_PER_CHECK
+
 from langchain_core.runnables import RunnableConfig
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
@@ -1572,11 +1574,11 @@ def repair_planning(state: ProjectState) -> dict:
             "status": "terminal_failure",
             "decision": "terminal_failure",
             "reason": (
-                "单元测试子步骤已用完各 4 次修复额度：" + "、".join(
+                f"单元测试子步骤已用完各 {UNIT_TEST_REPAIRS_PER_CHECK} 次修复额度：" + "、".join(
                     str(check.get("name") or check.get("id"))
                     for check in state.get("test_results", [])
                     if not check.get("passed") and check.get("blocking", True)
-                    and state.get("unit_test_repair_attempts", {}).get(check.get("id"), 0) >= 4
+                    and state.get("unit_test_repair_attempts", {}).get(check.get("id"), 0) >= UNIT_TEST_REPAIRS_PER_CHECK
                 )
                 if state.get("repair_return_node") == "unit_test"
                 else f"{repair_stage} repair iteration budget exhausted."

@@ -67,7 +67,9 @@ START
 
 顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段 → 验收阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责开发就绪检查、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `review_phase_confirmation`；审查阶段负责 `code_review` 子图和 `acceptance_phase_confirmation`；验收阶段负责 `acceptance` 子图（包含 `launch_project`、`acceptance_review`）和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在验收阶段开放。
 
-`build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，前端生成、后端生成、前端单测、后端单测按检查 ID 各有 4 次独立修复额度；初次执行不计次数，第四次修复后的复测仍失败才耗尽，耗尽后失败且不展示测试阶段确认卡。
+`build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，前端生成、后端生成、前端单测、后端单测按检查 ID 各有 10 次独立修复额度；初次执行不计次数，第十次修复后的复测仍失败才耗尽，耗尽后失败且不展示测试阶段确认卡。
+
+SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `status/summary` 的结果统一标记为 `failureCode=invalid_agent_output`。单测局部修复遇到这类协议失败且当前检查尚有修复额度时，保留真实 Diff 和失败记录，返回 `unit_test` 复测，再由 RepairPlanner 根据当前失败生成新计划；派发仍计入各检查的十次额度，不自动清零。额度耗尽时同时显示协议错误和耗尽原因。真实业务失败、声明完成但无实际改动、越权变更及人工确认边界不按此策略自动重试；集成测试的独立修复策略保持不变。
 
 单元测试通过或跳过后才进入 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 或单测失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
 
@@ -81,7 +83,7 @@ START
 
 该检查复用 `integration_test.checks` 增量和恢复快照、现有清单样式与测试报告 Markdown；不增加卡片、用户交互或产品接口。`/health` 的工作流元数据通过 `backendStartupCheck` 声明检查顺序、必需性、超时、稳定窗口和修复归属。
 
-单测修复预算由 `services/unit_test_repair_budget.py` 管理。`unit_test_repair_attempts` 保存检查 ID 到次数的映射；派发实际 SmallTask 前计费，Agent 失败也保存次数，前置范围确认不计费。同一修复计划内多个任务及范围确认续接通过 `unit_test_repair_charged_checks` 去重；新一轮质量门复核后才重新计费。当前仍失败的检查独立判断上限，已经通过的检查即使用完四次也不占其他检查额度。集成测试和审查预算保持各自规则。AG-UI 的 `unitTestRepairAttempts` 是只读服务端投影，前端恢复快照不能改写它；`unitTestMaxRepairIterations=4` 表示每个检查上限，`unitTestRepairIteration` 仅记录完成的修复轮次，不作为共享门禁。
+单测修复预算由 `services/unit_test_repair_budget.py` 管理。`unit_test_repair_attempts` 保存检查 ID 到次数的映射；派发实际 SmallTask 前计费，Agent 失败也保存次数，前置范围确认不计费。同一修复计划内多个任务及范围确认续接通过 `unit_test_repair_charged_checks` 去重；新一轮质量门复核后才重新计费。当前仍失败的检查独立判断上限，已经通过的检查即使用完十次也不占其他检查额度。集成测试和审查预算保持各自规则。AG-UI 的 `unitTestRepairAttempts` 是只读服务端投影，前端恢复快照不能改写它；`unitTestMaxRepairIterations=10` 表示每个检查上限，`unitTestRepairIteration` 仅记录完成的修复轮次，不作为共享门禁。
 
 进入测试的确认是一次性动作：请求适配器只接受本次 `clarificationAnswers.test_phase_confirmation`，无提交时显式写入空对象以覆盖 checkpoint 的旧确认。`unit_test` 每次返回都清空旧阶段确认，确认节点放行后也清空该动作。由单测或确认节点调试重新进入时，必须重新展示确认卡并等待本次用户确认；重新执行单测不能自动进入当前开发会话内的测试阶段。
 
@@ -590,7 +592,7 @@ acceptance.START
 - `small_task_tasks` / `small_task_results`：SmallTask 执行器的任务状态、实际改动、验证和升级结果；
 - `unit_test_next_action` / `integration_next_action`：分别表示开发单测和测试集成门禁的下一步路由；单测取值包含 `test_phase_confirmation`、`unit_test_repair`、`await_user_input` 或 `handle_failure`，集成测试取值包含 `review_phase_confirmation`、`small_task_repair`、`await_user_input` 或 `handle_failure`；
 - `repair_iteration` / `max_repair_iterations`：集成测试修复闭环预算。
-- `unit_test_quality_gate_passed`、`unit_test_results`、`unit_test_report`、`unit_test_report_path`、`unit_test_repair_attempts` / `unit_test_max_repair_iterations`：开发阶段单测的独立结果、报告和每个检查四次的修复预算；`unit_test_repair_iteration` 只用于轮次记录。
+- `unit_test_quality_gate_passed`、`unit_test_results`、`unit_test_report`、`unit_test_report_path`、`unit_test_repair_attempts` / `unit_test_max_repair_iterations`：开发阶段单测的独立结果、报告和每个检查十次的修复预算；`unit_test_repair_iteration` 只用于轮次记录。
 - `unit_test_generation_context`、`unit_test_generation`、`unit_test_mapping_path`：本轮源码目标、首次 Build Diff 派生的 `code_diff`、生成/同步结果、warning、校验和可重建映射缓存；`unit_test_code_change_sets` 与 `unit_test_generation_code_change_sets` 保存实际测试文件差异（后者为生成阶段别名）。
 
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：

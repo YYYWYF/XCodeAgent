@@ -112,6 +112,51 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.finish("get")
         self.assertTrue(test_entry_gate(require_test_entry(self.workspace)).allowed)
 
+    def test_debug_restart_and_retry_project_active_target_without_granting_completion(self) -> None:
+        """调试重启及失败重试均投影紫色，但不改变修订执行的首次完成资格。"""
+
+        for target in ("one", "get"):
+            with self.subTest(target=target):
+                scope = (
+                    {"type": "endpoint", "targetId": target, "apiContractId": "api"}
+                    if target == "get" else {"type": "page", "targetId": target}
+                )
+                values = {"build_execution_scope": scope}
+                inputs = {"workspace": str(self.workspace), "workflow_debug_enabled": True,
+                          "resume_values": values}
+                debug_run = f"debug-{target}"
+                begin_workflow_lifecycle(inputs, thread_id=f"thread-{target}",
+                    run_id=debug_run, phase="prepare_build_tasks")
+                state = load_application_lifecycle(self.workspace)
+                self.assertEqual(state.active_executions[debug_run].development_purpose, "revision")
+                self.assertEqual(test_entry_gate(state).in_progress, 1)
+                update_workbench_execution(self.workspace, run_id=debug_run,
+                    phase="build", status=WorkbenchExecutionStatus.FAILED)
+                self.assertEqual(test_entry_gate(load_application_lifecycle(self.workspace)).in_progress, 0)
+
+                retry_run = f"retry-{target}"
+                payload = begin_workflow_lifecycle({
+                    "workspace": str(self.workspace), "workflow_action": "retry_failed_tasks",
+                    "resume_values": {**values, "resume_execution_run_id": debug_run},
+                }, thread_id=f"thread-{target}", run_id=retry_run, phase="build")
+                artifacts = payload["developmentArtifacts"]
+                progress = (artifacts["endpoints"]["api"]["get"]
+                            if target == "get" else artifacts["pages"]["one"])
+                self.assertEqual(progress["initialDevelopmentStatus"], "in_progress")
+                other = (artifacts["pages"]["one"] if target == "get"
+                         else artifacts["endpoints"]["api"]["get"])
+                self.assertEqual(other["initialDevelopmentStatus"], "pending")
+                self.assertEqual(payload["testEntryGate"]["inProgress"], 1)
+                for status in (WorkbenchExecutionStatus.AWAITING_USER, WorkbenchExecutionStatus.STOPPING):
+                    state = update_workbench_execution(self.workspace, run_id=retry_run,
+                        phase="build", status=status)
+                    self.assertEqual(test_entry_gate(state).in_progress, 1)
+                state = complete_initial_development(self.workspace, run_id=retry_run)
+                self.assertEqual(test_entry_gate(state).completed, 0)
+                self.assertFalse(test_entry_gate(state).allowed)
+                state = end_workbench_execution(self.workspace, run_id=retry_run)
+                self.assertEqual(test_entry_gate(state).in_progress, 0)
+
     def test_build_and_unit_test_evidence_are_required(self) -> None:
         """真实节点仅在 Build 与单测门均通过后标绿，其他产物未完成时保留等待状态。"""
 

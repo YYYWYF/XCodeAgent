@@ -96,7 +96,7 @@ def artifact_progress(
 
 
 def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLifecycle) -> ApplicationLifecycle:
-    """在 lifecycle 写入锁内同步已确认目录，并从初次执行推导未完成项状态。"""
+    """在 lifecycle 写入锁内同步已确认目录，并从当前开发执行推导未完成项状态。"""
 
     old = state.development_artifacts
     try:
@@ -110,9 +110,9 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
     for target in targets:
         progress = artifact_progress(old, target) or DevelopmentArtifactProgress()
         if progress.initial_development_status != "completed":
+            # 调试重启可能登记为 revision；运行圆点仍跟随目标，首次完成资格另行校验。
             active = any(
-                execution.development_purpose == "initial"
-                and execution.development_target == target
+                execution.development_target == target
                 and execution.status in ACTIVE_STATUSES
                 for execution in state.active_executions.values()
             )

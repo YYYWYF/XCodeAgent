@@ -2,7 +2,7 @@
 
 from typing import Any
 
-UNIT_TEST_REPAIRS_PER_CHECK = 4
+UNIT_TEST_REPAIRS_PER_CHECK = 10
 
 
 def unit_test_repair_attempts(state: dict[str, Any]) -> dict[str, int]:
@@ -35,7 +35,7 @@ def charge_unit_test_repair_batch(
     attempts = unit_test_repair_attempts(state)
     exhausted = sorted(check for check in new_checks if attempts.get(check, 0) >= UNIT_TEST_REPAIRS_PER_CHECK)
     if exhausted:
-        return f"以下单元测试子步骤已用完各 4 次修复额度：{'、'.join(exhausted)}。"
+        return f"以下单元测试子步骤已用完各 {UNIT_TEST_REPAIRS_PER_CHECK} 次修复额度：{'、'.join(exhausted)}。"
     for check in new_checks:
         attempts[check] = attempts.get(check, 0) + 1
     state["unit_test_repair_attempts"] = attempts

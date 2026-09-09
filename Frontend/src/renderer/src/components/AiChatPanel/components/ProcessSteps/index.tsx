@@ -364,7 +364,7 @@ function ProcessStep({
     >
       <summary className={cx('process-step-summary')}>{summaryContent}</summary>
       <div className={cx('process-step-detail')}>
-        {!hasChecks &&
+        {(!hasChecks || (step.nodeName === 'unit_test' && step.status === 'failed')) &&
           !hasDagGeneration &&
           !hasProjectPlanUpdate &&
           !hasWorkspaceInspection &&

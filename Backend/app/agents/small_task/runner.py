@@ -7,7 +7,7 @@ from typing import Any
 
 from app.agents.small_task.scope import small_task_path_scope
 from app.agents.tool_activity_stream import ToolActivityCallback, invoke_agent_with_tool_activity
-from app.utils.model_output import extract_json_object
+from app.agents.messages import NO_AGENT_TEXT
 
 
 SMALL_TASK_MODE_MARKER = "<xcodeagent-small-task-mode>"
@@ -40,7 +40,10 @@ def build_small_task_prompt(packet: dict[str, Any]) -> str:
         "A successful result requires either an actual authorized code diff or proof that the "
         "requested behavior was already satisfied. A failed intermediate read or search is only a "
         "warning when the requested change is written and the final acceptance evidence passes; "
-        "do not turn the whole task into failed solely because one tool call failed.\n\n"
+        "do not turn the whole task into failed solely because one tool call failed. "
+        "Invoke tools through real tool calls, never as Action/Action Input text. "
+        "Always finish with one complete JSON result containing status and a nonempty summary; "
+        "tool arguments or an empty final message are not execution results.\n\n"
         "Required JSON contract:\n"
         '{"status":"completed|already_satisfied|requires_user_confirmation|requires_workflow|failed",'
         '"summary":"...","changedFiles":[],"verification":[],'
@@ -72,7 +75,7 @@ def invoke_small_task_agent(
 def normalize_small_task_result(agent_note: str) -> dict[str, Any]:
     """校验模型返回的执行结果，并裁剪升级信息避免污染工作流上下文。"""
 
-    payload = extract_json_object(agent_note) or {}
+    payload, output_error = _read_small_task_output(agent_note)
     status = str(payload.get("status") or "failed").strip()
     if status not in _VALID_STATUSES:
         status = "failed"
@@ -103,12 +106,12 @@ def normalize_small_task_result(agent_note: str) -> dict[str, Any]:
         )[:120],
     }
     failure_reason = str(payload.get("failureReason") or "").strip()[:2_000]
-    if not payload:
+    if output_error:
         status = "failed"
-        failure_reason = "SmallTask Agent 没有返回有效的 JSON 结果。"
+        failure_reason = output_error
     return {
         "status": status,
-        "summary": str(payload.get("summary") or failure_reason or "Agent 未提供执行摘要.").strip()[:4_000],
+        "summary": (output_error or str(payload.get("summary") or failure_reason).strip())[:4_000],
         "changedFiles": changed_files,
         "verification": verification,
         "alreadySatisfied": bool(
@@ -117,9 +120,35 @@ def normalize_small_task_result(agent_note: str) -> dict[str, Any]:
             or status == "already_satisfied"
         ),
         "failureReason": failure_reason or None,
+        "failureCode": "invalid_agent_output" if output_error else None,
         "escalation": normalized_escalation,
         "agentNote": str(agent_note or "")[-8_000:],
     }
+
+
+def _read_small_task_output(agent_note: str) -> tuple[dict[str, Any], str | None]:
+    """只接收完整结果对象，禁止把工具参数或损坏 JSON 的嵌套对象当成执行结果。"""
+
+    text = agent_note.strip()
+    if not text or text == NO_AGENT_TEXT:
+        return {}, "SmallTask Agent 未返回最终执行结果（空响应）。"
+    if text.startswith("Action:") or "Action Input:" in text.split("{", 1)[0]:
+        return {}, "SmallTask Agent 仅返回工具调用文本，而非有效的最终执行结果。"
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            text = "\n".join(lines[1:-1]).strip()
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return {}, "SmallTask Agent 没有返回完整有效的 JSON 执行结果。"
+    if not isinstance(payload, dict):
+        return {}, "SmallTask Agent 执行结果必须是 JSON 对象。"
+    if not isinstance(payload.get("status"), str) or payload["status"] not in _VALID_STATUSES:
+        return {}, "SmallTask Agent 执行结果缺少有效 status，不能将工具参数当作结果。"
+    if not isinstance(payload.get("summary"), str) or not payload["summary"].strip():
+        return {}, "SmallTask Agent 执行结果缺少非空 summary。"
+    return payload, None
 
 
 def _string_list(value: Any, *, limit: int) -> list[str]:

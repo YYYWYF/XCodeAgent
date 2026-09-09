@@ -25,19 +25,19 @@ def repair_task(check_id: str, task_id: str = "repair") -> dict:
 
 
 class UnitTestRepairBudgetTests(unittest.TestCase):
-    """每个子步骤允许四轮，其他步骤及确认续接不消耗其预算。"""
+    """每个子步骤允许十轮，其他步骤及确认续接不消耗其预算。"""
 
-    def test_each_check_has_four_attempts_independent_of_other_checks(self) -> None:
+    def test_each_check_has_ten_attempts_independent_of_other_checks(self) -> None:
         """四种检查依次耗尽，任意前置检查均不会占用下一个检查的额度。"""
         state = {}
         for check in ("frontend_test_generation", "backend_test_generation", "frontend_unit_tests", "backend_unit_tests"):
-            for attempt in range(1, 5):
+            for attempt in range(1, 11):
                 state["unit_test_repair_charged_checks"] = []
                 self.assertIsNone(charge_unit_test_repair_batch(state, [repair_task(check)]))
                 self.assertEqual(state["unit_test_repair_attempts"][check], attempt)
             state["unit_test_repair_charged_checks"] = []
-            self.assertIn("4 次", charge_unit_test_repair_batch(state, [repair_task(check)]))
-        self.assertEqual(sum(state["unit_test_repair_attempts"].values()), 16)
+            self.assertIn("10 次", charge_unit_test_repair_batch(state, [repair_task(check)]))
+        self.assertEqual(sum(state["unit_test_repair_attempts"].values()), 40)
 
     def test_same_check_multiple_tasks_and_confirmation_resume_count_once(self) -> None:
         """同一轮计划的同目标任务和范围确认恢复不会重复扣费。"""
@@ -49,19 +49,19 @@ class UnitTestRepairBudgetTests(unittest.TestCase):
 
     def test_budget_exhaustion_does_not_partially_charge_a_batch(self) -> None:
         """批次含已耗尽目标时整批不派发，也不扣其他目标额度。"""
-        state = {"unit_test_repair_attempts": {"backend_test_generation": 4}}
+        state = {"unit_test_repair_attempts": {"backend_test_generation": 10}}
         self.assertIsNotNone(charge_unit_test_repair_batch(state, [
             repair_task("backend_test_generation"), repair_task("backend_unit_tests"),
         ]))
-        self.assertEqual(state["unit_test_repair_attempts"], {"backend_test_generation": 4})
+        self.assertEqual(state["unit_test_repair_attempts"], {"backend_test_generation": 10})
 
-    def test_planner_uses_current_check_budget_and_stops_after_four(self) -> None:
-        """执行过四轮前端修复后，后端仍可修复；当前检查第四轮失败才终止。"""
-        for count in (0, 3, 4):
+    def test_planner_uses_current_check_budget_and_stops_after_ten(self) -> None:
+        """执行过十轮前端修复后，后端仍可修复；当前检查第十轮失败才终止。"""
+        for count in (0, 4, 9, 10):
             with self.subTest(count=count):
                 state = {
                     "test_results": [{"id": "backend_unit_tests", "name": "后端单元测试", "passed": False}],
-                    "unit_test_repair_attempts": {"frontend_unit_tests": 4, "backend_unit_tests": count},
+                    "unit_test_repair_attempts": {"frontend_unit_tests": 10, "backend_unit_tests": count},
                     "unit_test_repair_iteration": 10,
                 }
                 plan = {"status": "ready", "decision": "repair", "tasks": [repair_task("backend_unit_tests")]}
@@ -69,9 +69,9 @@ class UnitTestRepairBudgetTests(unittest.TestCase):
                     value=plan, code_change_set=None,
                 )) as planner, patch("app.graph.subgraphs.testing.write_repair_task_plan_json", return_value="plan.json"):
                     result = unit_repair_planning(state)
-                self.assertEqual(result["unit_test_next_action"], "handle_failure" if count == 4 else "unit_test_repair")
-                self.assertEqual(planner.call_count, 0 if count == 4 else 1)
-                self.assertEqual(result["unit_test_max_repair_iterations"], 4)
+                self.assertEqual(result["unit_test_next_action"], "handle_failure" if count == 10 else "unit_test_repair")
+                self.assertEqual(planner.call_count, 0 if count == 10 else 1)
+                self.assertEqual(result["unit_test_max_repair_iterations"], 10)
 
     def test_dispatched_failure_and_success_both_preserve_attempts(self) -> None:
         """计费发生在派发时，Agent 返回失败也不能把额度回退。"""
@@ -84,23 +84,59 @@ class UnitTestRepairBudgetTests(unittest.TestCase):
                 self.assertEqual(result["unit_test_repair_attempts"], {"backend_unit_tests": 1})
                 self.assertEqual(result["unit_test_repair_charged_checks"], ["backend_unit_tests"])
 
-    def test_fifth_attempt_is_blocked_before_agent_dispatch(self) -> None:
-        """直接恢复修复节点也不能绕过四次上限。"""
-        with patch("app.graph.nodes.small_task.execute_small_task_batch") as execute:
+    def test_four_used_attempts_can_continue_without_resetting_count(self) -> None:
+        """已用四次的当前会话继续第五次，旧上限快照不能覆盖服务端十次上限。"""
+        with patch("app.graph.nodes.small_task.execute_small_task_batch", return_value={
+            "results": [{"taskId": "repair", "status": "completed", "summary": "已修复"}],
+            "codeChangeSets": [],
+        }) as execute:
             result = unit_test_repair({
                 "repair_tasks": [repair_task("backend_unit_tests")],
                 "unit_test_repair_attempts": {"backend_unit_tests": 4},
+                "unit_test_max_repair_iterations": 4,
+            })
+        execute.assert_called_once()
+        self.assertEqual(result["unit_test_repair_attempts"], {"backend_unit_tests": 5})
+        self.assertEqual(result["unit_test_max_repair_iterations"], 10)
+
+    def test_eleventh_attempt_is_blocked_before_agent_dispatch(self) -> None:
+        """直接恢复修复节点也不能绕过十次上限。"""
+        with patch("app.graph.nodes.small_task.execute_small_task_batch") as execute:
+            result = unit_test_repair({
+                "repair_tasks": [repair_task("backend_unit_tests")],
+                "unit_test_repair_attempts": {"backend_unit_tests": 10},
             })
         execute.assert_not_called()
         self.assertEqual(result["status"], "failed")
 
     def test_projection_preserves_per_check_counts(self) -> None:
         """AG-UI 快照携带独立计数，前端不能将其写回覆盖服务端事实。"""
-        state = {"unit_test_repair_attempts": {"backend_unit_tests": 2}, "unit_test_max_repair_iterations": 4}
+        state = {"unit_test_repair_attempts": {"backend_unit_tests": 2}, "unit_test_max_repair_iterations": 10}
         summary = _workflow_summary(state, [])
         self.assertEqual(summary["unitTestRepairAttempts"], state["unit_test_repair_attempts"])
         inputs = workflow_run_inputs({"resumeState": {"state": {"unitTestRepairAttempts": {"backend_unit_tests": 0}}}})
         self.assertNotIn("unit_test_repair_attempts", inputs["resume_values"])
+
+    def test_exhausted_debug_rerun_replaces_stale_agent_error_with_current_reason(self) -> None:
+        """调试重跑保持额度，但节点与失败处理必须展示本次真实终止原因。"""
+        from app.graph.nodes.lifecycle import handle_failure
+
+        state = {
+            "message": "Agent 未提供执行摘要.", "error": "旧错误",
+            "unit_test_repair_attempts": {"frontend_unit_tests": 10},
+            "test_results": [{"id": "frontend_unit_tests", "name": "前端单元测试", "passed": False}],
+        }
+        with patch("app.graph.subgraphs.testing.write_repair_task_plan_json", return_value="plan.json"):
+            planned = unit_repair_planning(state)
+        with patch("app.graph.subgraphs.unit_testing._unit_testing_subgraph") as graph:
+            graph.invoke.return_value = {**state, **planned, "unit_test_quality_gate_passed": False}
+            result = unit_test(state)
+        self.assertEqual(route_unit_test_result(result), "handle_failure")
+        self.assertIn("10 次修复额度", result["message"])
+        self.assertIn("前端单元测试", result["message"])
+        self.assertEqual(result["error"], result["message"])
+        self.assertEqual(handle_failure({**state, **result})["message"], result["message"])
+        self.assertNotIn("未提供执行摘要", result["message"])
 
 
 class UnitTestConfirmationResetTests(unittest.TestCase):

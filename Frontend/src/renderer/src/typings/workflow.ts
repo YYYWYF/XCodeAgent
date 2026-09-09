@@ -827,6 +827,7 @@ export type WorkflowSmallTaskResult = {
   changedFiles?: string[]
   verification?: string[]
   failureReason?: string | null
+  failureCode?: 'invalid_agent_output' | null
   escalation?: Record<string, unknown>
   [key: string]: unknown
 }

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.unit_test_repair_budget import UNIT_TEST_REPAIRS_PER_CHECK
+
 WORKFLOW_EVENT_PROTOCOL = "xcodeagent.workflow.event.v1"
 PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
@@ -95,7 +97,7 @@ def workflow_capabilities() -> dict[str, Any]:
         "endpoint": "/workflow/run",
         "transport": "ag-ui-sse",
         "unitTestRepairBudget": {
-            "scope": "check-id", "maxRepairsPerCheck": 4,
+            "scope": "check-id", "maxRepairsPerCheck": UNIT_TEST_REPAIRS_PER_CHECK,
             "attemptsField": "unitTestRepairAttempts",
             "sharedWithIntegrationTests": False,
         },

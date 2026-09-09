@@ -24,6 +24,7 @@ from app.services.unit_test_repair_budget import (
     UNIT_TEST_REPAIRS_PER_CHECK,
     charge_unit_test_repair_batch,
 )
+from app.services.unit_test_repair_recovery import recover_unit_test_output_failure
 
 
 def small_task_repair(state: ProjectState) -> dict[str, Any]:
@@ -229,13 +230,16 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
             None,
         )
         if failed_result:
-            return _small_task_failure(
+            failure = _small_task_failure(
                 state,
                 working_tasks,
                 all_results,
                 all_change_sets,
                 str(failed_result.get("failureReason") or failed_result.get("summary") or "小任务执行失败"),
             )
+            if repair_return_node == "unit_test":
+                return recover_unit_test_output_failure(state, failure, batch_results)
+            return failure
 
     if any(str(task.get("status") or "pending") == "pending" for task in working_tasks):
         return _small_task_failure(

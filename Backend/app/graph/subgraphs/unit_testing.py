@@ -274,6 +274,17 @@ def unit_test(state: ProjectState) -> dict[str, Any]:
         next_action = "test_phase_confirmation"
     else:
         status = "failed"
+    # 本轮终止原因覆盖 checkpoint 里的旧 Agent 摘要，尤其是修复额度已耗尽的调试重跑。
+    repair_plan = result.get("unit_test_repair_task_plan") or {}
+    message = (
+        str(repair_plan.get("reason") or "单元测试未通过，无法继续自动修复。")
+        if status == "failed"
+        else "单元测试未通过，正在进入局部修复。"
+        if next_action == "unit_test_repair"
+        else str(clarification.get("message") or "等待确认是否执行单元测试。")
+        if waiting
+        else "单元测试已通过或按确认跳过。"
+    )
     current_test_changes = [
         item
         for item in (
@@ -341,6 +352,8 @@ def unit_test(state: ProjectState) -> dict[str, Any]:
         "test_phase_confirmation": {},
         "phase": "unit_test",
         "status": status,
+        "message": message,
+        "error": message if status == "failed" else None,
         "clarification": clarification if waiting else {},
         "unit_test_quality_gate_passed": quality_passed,
         "unit_test_gate_passed": quality_passed,

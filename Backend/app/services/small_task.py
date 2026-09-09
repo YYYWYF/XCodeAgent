@@ -140,6 +140,7 @@ def execute_small_task_batch(
             "verification": normalized["verification"],
             "alreadySatisfied": normalized["alreadySatisfied"],
             "failureReason": normalized["failureReason"],
+            "failureCode": normalized.get("failureCode"),
             "escalation": normalized["escalation"],
             "agentNote": normalized["agentNote"],
             "packet": _packet_preview(packet),
@@ -178,8 +179,12 @@ def execute_small_task_batch(
         if result["status"] == "completed" and not task_files and not result["alreadySatisfied"]:
             result["status"] = "failed"
             result["failureReason"] = "Agent 报告完成，但授权范围内没有实际代码差异。"
-        if unauthorized and result["status"] in {"completed", "already_satisfied"}:
+        if unauthorized and (
+            result["status"] in {"completed", "already_satisfied"}
+            or result.get("failureCode") == "invalid_agent_output"
+        ):
             result["status"] = "failed"
+            result["failureCode"] = None
             result["failureReason"] = (
                 "检测到批次外文件变更：" + "、".join(sorted(set(unauthorized)))
             )[:2_000]

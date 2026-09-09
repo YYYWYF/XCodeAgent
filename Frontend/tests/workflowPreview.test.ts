@@ -1433,3 +1433,18 @@ test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、�
     assert.equal(integrationTestCheckReportPath(checks![1]), undefined)
   }
 })
+
+// 单测失败矩阵必须同时展示终止原因，避免额度耗尽看起来像跳过了修复。
+test('单测矩阵显示修复额度耗尽原因', () => {
+  const markup = renderToStaticMarkup(createElement(ProcessSteps, {
+    loading: false,
+    steps: [{
+      id: 'unit-failed', kind: 'workflow', status: 'failed', sequence: 1,
+      title: '开发阶段单元测试', nodeName: 'unit_test',
+      detail: '单元测试子步骤已用完各 10 次修复额度：前端单元测试',
+      checks: [{ id: 'frontend_unit_tests', name: '前端单元测试', status: 'failed', required: true }]
+    }]
+  }))
+  assert.match(markup, /单元测试子步骤已用完各 10 次修复额度/)
+  assert.match(markup, /集成检查矩阵/)
+})
