@@ -4,6 +4,7 @@ from deepagents import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 
 from app.agents.small_task.scope import ScopedSmallTaskBackend, is_small_task_path_allowed
+from app.agents.frontend_test_instructions import FRONTEND_TEST_INSTRUCTIONS
 from app.agents.workspace_scope import (
     create_workspace_backend,
     create_workspace_permissions,
@@ -63,7 +64,7 @@ def create_small_task_agent(
         name="small-task-coding-agent",
         model=model,
         system_prompt="\n\n".join(
-            part for part in (base_system_prompt, required_user_skills_prompt) if part
+            part for part in (base_system_prompt, FRONTEND_TEST_INSTRUCTIONS, required_user_skills_prompt) if part
         ),
         skills=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],

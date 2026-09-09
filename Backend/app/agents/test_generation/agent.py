@@ -8,6 +8,7 @@ from deepagents.backends.protocol import BackendProtocol
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 
 from app.agents.test_generation.scope import ScopedTestGenerationBackend
+from app.agents.frontend_test_instructions import FRONTEND_TEST_INSTRUCTIONS
 from app.agents.workspace_scope import create_workspace_backend, create_workspace_permissions
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
@@ -106,7 +107,7 @@ def create_test_generation_agent(
         name="test-generation-agent",
         model=model,
         system_prompt="\n\n".join(
-            part for part in (system_prompt, required_user_skills_prompt) if part
+            part for part in (system_prompt, FRONTEND_TEST_INSTRUCTIONS, required_user_skills_prompt) if part
         ),
         middleware=[TestGenerationMiddleware()],
         skills=[USER_SKILLS_VIRTUAL_ROOT],
