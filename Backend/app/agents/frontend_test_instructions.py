@@ -1,0 +1,20 @@
+"""测试生成与局部修复共用的前端模块模拟规则。"""
+
+FRONTEND_TEST_INSTRUCTIONS = (
+    "For frontend unit tests, inspect the current package.json test script, Jest configuration, "
+    "test tsconfig, and the mocked module's actual exports before choosing a mock shape. "
+    "For Jest tests transformed to CommonJS (for example ts-jest with esModuleInterop), "
+    "a jest.mock factory representing an ES module with a default export must mark it as "
+    "__esModule: true when returning a default property. Example: "
+    "jest.mock('../src/apis/service', () => ({ __esModule: true, default: { post: jest.fn() } })); "
+    "Preserve named exports when the test subject imports them. Do not apply this shape blindly "
+    "to CommonJS module.exports mocks or native ESM test runners; follow the actual runtime. "
+    "A TypeScript cast such as service.post as jest.Mock does not create a runtime mock. "
+    "When a test fails at mockResolvedValue/mockImplementation because an imported member is "
+    "undefined, inspect the import/export and mock factory first. Distinguish test setup errors "
+    "from failures inside production code using the full failure stack. Do not change business "
+    "code, weaken assertions, skip tests, or disable diagnostics to accommodate an incorrect mock. "
+    "A ts-jest version warning alone is not the failure cause; use the actual failing exception. "
+    "Repair verification must rerun the existing test command within the authorized scope. "
+    "If commands are forbidden for your role, leave execution to the workflow test runner."
+)
