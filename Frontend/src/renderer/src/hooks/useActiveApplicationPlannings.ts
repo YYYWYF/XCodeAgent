@@ -11,6 +11,7 @@ import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
 type UseActiveApplicationPlanningsOptions = {
+  onApplicationLifecycleChange?: (lifecycle: ApplicationLifecycle) => void
   onOpenWorkbench: (
     application: ApplicationConfig,
     lifecycle: ApplicationLifecycle
@@ -25,6 +26,7 @@ type ActiveApplicationPlanningsController = {
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
   generatingAppIds: ReadonlySet<string>
   onTechnicalPlanConfirmed: (applicationId: string) => Promise<boolean>
+  retryTemplateGeneration: (applicationId: string) => Promise<boolean>
   registerStopHandler: (applicationId: string, handler?: () => Promise<void>) => void
   returnHome: () => void
   showPlanning: (applicationId: string) => void
@@ -45,6 +47,7 @@ type ActiveApplicationPlanningsController = {
 
 // 维护相互隔离的应用初始化会话及其后台模板生成任务。
 export function useActiveApplicationPlannings({
+  onApplicationLifecycleChange,
   onOpenWorkbench
 }: UseActiveApplicationPlanningsOptions): ActiveApplicationPlanningsController {
   const [activePlannings, setActivePlannings] = useState<PersistedActivePlanning[]>([])
@@ -238,6 +241,7 @@ export function useActiveApplicationPlannings({
       commitPlannings,
       hidePlanning,
       getVisiblePlanningId,
+      onApplicationLifecycleChange,
       onOpenWorkbench
     })
 
@@ -254,8 +258,8 @@ export function useActiveApplicationPlannings({
     [setVisiblePlanning]
   )
 
-  // 仅确认回调所属应用的模板任务，忽略其他会话的完成状态。
-  const onTechnicalPlanConfirmed = useCallback(
+  // 按应用复用同一个模板生成入口，TechnicalPlan 确认和失败重试都不重启规划 Graph。
+  const runTemplateGeneration = useCallback(
     (applicationId: string): Promise<boolean> => {
       const planning = activePlanningsRef.current.find(
         (candidate) => candidate.application.id === applicationId
@@ -264,6 +268,9 @@ export function useActiveApplicationPlannings({
     },
     [generateApplicationTemplateFiles]
   )
+
+  const onTechnicalPlanConfirmed = runTemplateGeneration
+  const retryTemplateGeneration = runTemplateGeneration
 
   // 返回首页时只隐藏当前规划，所有已挂载会话继续运行。
   const returnHome = useCallback((): void => {
@@ -276,6 +283,7 @@ export function useActiveApplicationPlannings({
     hidePlanning,
     generatingAppIds,
     onTechnicalPlanConfirmed,
+    retryTemplateGeneration,
     registerStopHandler,
     returnHome,
     showPlanning,

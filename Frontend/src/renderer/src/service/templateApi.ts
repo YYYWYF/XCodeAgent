@@ -5,6 +5,7 @@ import type {
   TemplateDownloadResult
 } from '../typings'
 import {
+  beginApplicationTemplateGeneration,
   completeApplicationTemplateGeneration,
   prepareApplicationTemplateGeneration
 } from './applicationLifecycle'
@@ -74,6 +75,7 @@ async function runApplicationTemplateReadiness(
   threadId: string
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot || application.projectParentPath || ''
+  await beginApplicationTemplateGeneration(application, threadId)
   let failureMessage = ''
 
   try {

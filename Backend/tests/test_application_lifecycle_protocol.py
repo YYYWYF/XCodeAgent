@@ -32,7 +32,13 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
         self.assertEqual(capability["stateSnapshotKey"], "applicationLifecycle")
         self.assertEqual(
             capability["actions"],
-            ["create", "get", "prepare_template_generation", "complete_template_generation"],
+            [
+                "create",
+                "get",
+                "begin_template_generation",
+                "prepare_template_generation",
+                "complete_template_generation",
+            ],
         )
 
     def test_create_action_emits_complete_ag_ui_lifecycle(self) -> None:

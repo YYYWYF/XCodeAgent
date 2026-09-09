@@ -20,6 +20,7 @@ type UseApplicationTemplateGenerationOptions = {
   commitPlannings: PlanningUpdater
   hidePlanning: (applicationId: string) => void
   getVisiblePlanningId: () => string | undefined
+  onApplicationLifecycleChange?: (lifecycle: ApplicationLifecycle) => void
   onOpenWorkbench: (
     application: ApplicationConfig,
     lifecycle: ApplicationLifecycle
@@ -37,6 +38,7 @@ export function useApplicationTemplateGeneration({
   commitPlannings,
   hidePlanning,
   getVisiblePlanningId,
+  onApplicationLifecycleChange,
   onOpenWorkbench
 }: UseApplicationTemplateGenerationOptions): ApplicationTemplateGenerationController {
   const tasksRef = useRef(new Map<string, Promise<boolean>>())
@@ -54,6 +56,14 @@ export function useApplicationTemplateGeneration({
 
       const task = (async (): Promise<boolean> => {
         setGeneratingAppIds((current) => new Set(current).add(applicationId))
+        // 新一轮模板任务开始时清掉上一轮临时错误，生命周期仍由后端权威快照驱动。
+        commitPlannings((current) =>
+          current.map((currentPlanning) =>
+            currentPlanning.application.id === applicationId
+              ? { ...currentPlanning, error: undefined }
+              : currentPlanning
+          )
+        )
         try {
           const lifecycle = await ensureApplicationTemplateReadiness(
             planning.application,
@@ -97,9 +107,10 @@ export function useApplicationTemplateGeneration({
                       lifecycle,
                       status: activePlanningStatus(lifecycle)
                     }
-                  : currentPlanning
+                : currentPlanning
               )
             )
+            onApplicationLifecycleChange?.(lifecycle)
           } catch (lifecycleError) {
             console.warn('[模板初始化失败后读取生命周期失败]', lifecycleError)
           }
@@ -135,7 +146,13 @@ export function useApplicationTemplateGeneration({
       )
       return task
     },
-    [commitPlannings, hidePlanning, getVisiblePlanningId, onOpenWorkbench]
+    [
+      commitPlannings,
+      getVisiblePlanningId,
+      hidePlanning,
+      onApplicationLifecycleChange,
+      onOpenWorkbench
+    ]
   )
 
   return { generateApplicationTemplateFiles, generatingAppIds }

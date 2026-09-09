@@ -1028,6 +1028,8 @@ export default function AiChatPanel({
     application.source,
     enterDevConfirmed
   )
+  const templateGenerationFailed =
+    applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   // 只在 lifecycle 首次到达 ready_for_workbench 时锁一次，不依赖 activeWorkbenchPhase（避免覆盖用户切换）。
   const planningConfirmedSeenRef = useRef(false)
   useEffect(() => {
@@ -4422,6 +4424,9 @@ export default function AiChatPanel({
                   : workflowCodeReviewRetry(activeWorkflow)
                     ? () => void handleRetryCodeReview()
                     : undefined
+              }
+              onRetryTemplateGeneration={
+                templateGenerationFailed ? onRetryPlanning : undefined
               }
               onSubmitClarification={handleSubmitWorkflowClarification}
               revertingCodeChangeIds={revertingCodeChangeIds}

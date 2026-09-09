@@ -14,6 +14,10 @@ type Props = {
   lifecycle?: ApplicationLifecycle
   /** 模板就绪后点击进入开发阶段。 */
   onEnterDevelopment?: () => void
+  /** 模板失败后只重试模板下载与初始化阶段。 */
+  onRetry?: () => void
+  /** 当前是否正在执行模板重试。 */
+  retrying?: boolean
 }
 
 const TEMPLATE_STAGES = new Set([
@@ -35,10 +39,12 @@ export function isTemplatePreparing(lifecycle?: ApplicationLifecycle): boolean {
  *  - application_template_generation_failed：失败态，展示错误信息 */
 export default function TemplatePreparingCard({
   lifecycle,
-  onEnterDevelopment
+  onEnterDevelopment,
+  onRetry,
+  retrying = false
 }: Props): ReactElement {
   const stage = lifecycle?.initialization?.stage
-  const failed = stage === 'application_template_generation_failed'
+  const failed = stage === 'application_template_generation_failed' && !retrying
   const ready = stage === 'ready_for_workbench'
 
   if (failed) {
@@ -51,6 +57,15 @@ export default function TemplatePreparingCard({
         <Text type="secondary" className={cx('template-preparing-desc')}>
           {lifecycle?.error?.message || '应用模板文件生成失败，请查看错误信息。'}
         </Text>
+        <Button
+          className={cx('template-preparing-retry-btn')}
+          disabled={!onRetry}
+          loading={retrying}
+          onClick={onRetry}
+          type="primary"
+        >
+          {retrying ? '正在重新生成模板' : '重新生成模板'}
+        </Button>
       </div>
     )
   }
@@ -85,7 +100,9 @@ export default function TemplatePreparingCard({
         <Text strong>产品 Agent 正在准备应用模板</Text>
       </div>
       <Text type="secondary" className={cx('template-preparing-desc')}>
-        正在拉取模板工程并生成应用骨架，请稍候…
+        {retrying
+          ? '正在重新拉取模板工程并初始化应用骨架…'
+          : '正在拉取模板工程并生成应用骨架，请稍候…'}
       </Text>
     </div>
   )

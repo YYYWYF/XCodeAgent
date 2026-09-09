@@ -118,9 +118,9 @@ flowchart TD
 
 ### 2.1 当前前端用户旅程
 
-1. 欢迎页最多同时保留 3 个独立的新应用规划。每个应用拥有自己的 application、thread、lifecycle、Workflow 快照、停止处理器和模板任务；切换可见规划或返回首页只是隐藏界面，不会卸载仍在运行的规划或工作台。重启只恢复未完成的规划交互，不恢复或重新启动模板生成。
+1. 欢迎页最多同时保留 3 个独立的新应用规划。每个应用拥有自己的 application、thread、lifecycle、Workflow 快照、停止处理器和模板任务；切换可见规划或返回首页只是隐藏界面，不会卸载仍在运行的规划或工作台。重启只恢复未完成的规划交互；模板失败态可由用户显式重试模板阶段，但不会重新启动上游规划。
 2. 初始化依次经过 RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 四个确认门。RequirementSpec 支持结构化编辑和“保存草稿”，但保存不等于确认；TechnicalPlan 必须显式确认，确认之前不会触发模板生成。
-3. TechnicalPlan 确认后，前端才拉取前后端模板、写页面占位和 `BIZ_MENUS`，再提交模板生成 lifecycle。应用打开、进入工作台、应用重启和模板生成失败都不会再次触发；成功后才允许进入工作台。
+3. TechnicalPlan 确认后，前端先显式打开模板生成 lifecycle，再拉取前后端模板、写页面占位和 `BIZ_MENUS`，最后提交模板生成 lifecycle。应用打开、进入工作台和应用重启不会自动触发；模板失败只允许用户显式重试模板阶段，成功后才允许进入工作台。
 4. 工作台进入时会先通过 `/api/projects/launch` 异步尝试启动“当前模板工程预览”。这是工作台预览初始化，不是主 Workflow 测试通过后的 `launch_project`，两次启动的时机和失败语义不同。
 5. 正式开发前先从 ProjectPlan 选择页面或具体 endpoint。页面设计可选 `commonTable`、`multiForm`、`tabsTable` 三种参考模板并预览，选择结果以 `pageTemplate={id,name,sourcePath}` 送入 `/workflow/run`；endpoint 使用 `detailTargetType=endpoint + selectedApiContractId + selectedEndpointId`。
 6. 页面和 endpoint 各自拥有会话、thread 和历史。工作台普通自然语言统一走 `/conversation/run`，由 Coordinator 自动分类并决定后续路由；设计阶段专用变更输入仍进入原 application planning Graph。每条消息可选择当前启用的用户 Skill，选中列表随消息和会话快照传递。
@@ -216,12 +216,15 @@ flowchart LR
     V["complete_template_generation / 完成模板门禁"]
     W(["ready_for_workbench / 进入工作台"])
     F(["application_template_generation_failed / 模板生成失败"])
+    R["begin_template_generation / 用户重试模板"]
 
     P -->|"ProjectPlan.frontend_pages"| C
     C -->|"frontend/ + backend/"| G
     G -->|"written[] + menus"| V
     V -->|"succeeded=true"| W
     V -->|"succeeded=false"| F
+    F -->|"显式重试"| R
+    R --> C
 ```
 
 ### 4.1 `clone_templates / 拉取前后端模板`
@@ -249,7 +252,7 @@ flowchart LR
 - **输出**：`.xcodeagent/application-lifecycle.json` 的 `ready_for_workbench/completed` 或 `application_template_generation_failed/failed`。
 - **校验规则**：要求当前阶段允许完成模板；成功时复核 RequirementSpec 和 ProjectPlan JSON 的 `confirmation_status=confirmed`；当前不复核模板目录和实际写入文件。
 - **依赖文件**：`services/application_lifecycle.py`、`domain/application_lifecycle.py`、`.xcodeagent/application-lifecycle.json`、RequirementSpec JSON、ProjectPlan JSON。
-- **依赖节点**：上游 `generate_application_template_files`；成功进入工作台，失败停留在终止失败态。
+- **依赖节点**：上游 `generate_application_template_files`；成功进入工作台，失败停留在可重试失败态，只有显式 `begin_template_generation` 才能重新进入模板阶段。
 
 ## 5. 已实现但当前前端未挂载的应用开发任务规划动作
 

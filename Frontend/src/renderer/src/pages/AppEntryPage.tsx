@@ -229,6 +229,7 @@ function AppEntryContent(): JSX.Element {
   )
 
   const planningController = useActiveApplicationPlannings({
+    onApplicationLifecycleChange: mergeApplicationLifecycle,
     onOpenWorkbench: openWorkbench
   })
 
@@ -501,7 +502,9 @@ function AppEntryContent(): JSX.Element {
             onPlanningStreamReady={handlePlanningStreamReady}
             onRetryPlanning={
               templateGenerationFailed
-                ? undefined
+                ? () => {
+                    void planningController.retryTemplateGeneration(activeApplication.id)
+                  }
                 : () => {
                     const retry = planningRetryByAppRef.current[activeApplication.id]
                     if (retry) retry()

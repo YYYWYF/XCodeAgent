@@ -36,7 +36,7 @@ collecting_requirement
        └─ failure -> application_template_generation_failed（终止）
 ```
 
-UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不会自动执行 TechnicalPlan。只有原创建规划 checkpoint 上通过 `gateId + artifactRevision` 校验的 `enter_planning` 动作才能进入 `generating_technical_plan`。模板生成只由用户确认 TechnicalPlan 后的确认回调启动。失败、应用重启、再次打开和进入工作台都不会重新启动模板生成；任何新一轮生成都必须重新进入计划阶段并确认 TechnicalPlan。
+UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不会自动执行 TechnicalPlan。只有原创建规划 checkpoint 上通过 `gateId + artifactRevision` 校验的 `enter_planning` 动作才能进入 `generating_technical_plan`。模板生成只由用户确认 TechnicalPlan 后的确认回调启动；模板失败后，用户可通过独立的模板重试动作重新打开模板阶段，不能回到任何上游规划阶段。失败、应用重启、再次打开和进入工作台都不会自动重新启动模板生成。
 
 ## 全应用生命周期与计划执行模式
 
@@ -154,4 +154,4 @@ RepairPlanner 若请求扩大业务资源范围，必须在确认载荷中给出
 
 同一初始化阶段允许更新运行状态或活动 run 引用；跨阶段只允许图中边。初始化确认和澄清由对应 thread 的 Graph checkpoint 与历史 Workflow 快照恢复，不在状态文件根节点重复保存 pending interaction。工作台 execution 的待处理交互仍使用 `id + basedOnRevision` 校验，过期提交显式冲突。
 
-新应用创建时必须通过 AG-UI `applicationLifecycle.action = create` 显式创建状态文件。客户端重启后只使用 `get` 读取当前状态；缺失状态不会触发历史数据推断。TechnicalPlan 经开发确认后进入“生成应用模板文件”阶段，前端完成真实文件写入后通过 `complete_template_generation` 提交结果；后端复核 RequirementSpec、ProductPlan、TechnicalPlan 已确认，且 UiDesign 已确认或明确跳过后，才允许进入工作台。
+新应用创建时必须通过 AG-UI `applicationLifecycle.action = create` 显式创建状态文件。客户端重启后只使用 `get` 读取当前状态；缺失状态不会触发历史数据推断。TechnicalPlan 经开发确认后进入“生成应用模板文件”阶段，前端在下载前通过 `begin_template_generation` 显式打开该阶段，完成真实文件写入后通过 `complete_template_generation` 提交结果；失败会保留可重试的模板失败态，后端复核 RequirementSpec、ProductPlan、TechnicalPlan 已确认，且 UiDesign 已确认或明确跳过后，才允许进入工作台。

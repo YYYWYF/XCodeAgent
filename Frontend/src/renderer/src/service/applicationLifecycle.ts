@@ -8,7 +8,12 @@ type ApplicationLifecyclePayload = {
   runId: string
   threadId: string
   status: 'completed' | 'failed'
-  action?: 'create' | 'get' | 'prepare_template_generation' | 'complete_template_generation'
+  action?:
+    | 'create'
+    | 'get'
+    | 'begin_template_generation'
+    | 'prepare_template_generation'
+    | 'complete_template_generation'
   lifecycle?: ApplicationLifecycle
   error?: { message?: string }
 }
@@ -135,6 +140,18 @@ export async function getApplicationLifecycle(
       lifecycleReadRequests.delete(workspaceRoot)
     }
   }
+}
+
+// 在模板下载前显式打开模板阶段，支持失败态只回到模板阶段重试。
+export async function beginApplicationTemplateGeneration(
+  application: ApplicationConfig,
+  threadId: string
+): Promise<ApplicationLifecycle> {
+  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
+  return runApplicationLifecycleAction(threadId, {
+    action: 'begin_template_generation',
+    workspaceRoot: application.workspaceRoot
+  })
 }
 
 // 把模板下载明细提交给后端，并执行页面与菜单的增量初始化。

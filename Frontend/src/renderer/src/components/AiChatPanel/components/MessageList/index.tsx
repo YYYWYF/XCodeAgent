@@ -294,6 +294,8 @@ type MessageListProps = {
   onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
   /** 错误来自当前设计阶段规划时，允许用户回到规划页重试。 */
   onRetryError?: () => void
+  /** 模板生成失败时，只重试模板下载与初始化阶段。 */
+  onRetryTemplateGeneration?: () => void
   revertingCodeChangeIds: ReadonlySet<string>
   workspaceRoot?: string
 }
@@ -328,6 +330,7 @@ export default function MessageList({
   onOpenCodeChangeFile,
   onRevertCodeChanges,
   onRetryError,
+  onRetryTemplateGeneration,
   revertingCodeChangeIds,
   onSubmitClarification,
   workspaceRoot
@@ -342,13 +345,17 @@ export default function MessageList({
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const latestAssistantMessageId = findLastAssistantMessageId(messages)
   const visibleError = error?.trim() || ''
+  const templateGenerationFailed =
+    applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   const latestAssistantMessage = findLastAssistantMessage(messages)
   const latestAssistantMessageError = latestAssistantMessage
     ? latestAssistantMessage.error?.trim() ||
       workflowFailureMessage(latestAssistantMessage.workflow)
     : ''
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
-  const showStandaloneError = Boolean(visibleError && visibleError !== latestAssistantMessageError)
+  const showStandaloneError = Boolean(
+    !templateGenerationFailed && visibleError && visibleError !== latestAssistantMessageError
+  )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
   const planningReviewMessageIndexes = canonicalPlanningReviewMessageIndexes(messages)
@@ -978,6 +985,8 @@ export default function MessageList({
                 <TemplatePreparingCard
                   lifecycle={applicationLifecycle}
                   onEnterDevelopment={onEnterDevelopment}
+                  onRetry={onRetryTemplateGeneration}
+                  retrying={generatingTemplate}
                 />
               </div>
             </article>
