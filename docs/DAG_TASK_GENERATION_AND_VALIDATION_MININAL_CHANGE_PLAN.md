@@ -23,6 +23,8 @@ TechnicalPlan Endpoint 契约和 EntitySourceBinding。运行时的 `project_pla
 5. 新增结构化 `regenerate` 动作。它先消费并删除精确匹配的旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun；成功后写入新的 Pending 并再次等待确认。新生成失败时旧 Pending 不恢复。
 6. 用户取消只提供 Workflow/PlanningRun 级能力，不提供 Unit 级取消。取消 active PlanningRun 时停止派发、取消活动 Unit worker、标记 Run cancelled 并拒收晚到结果。
 7. 页面刷新只恢复权威状态投影，不承诺原 DAG 生成请求继续运行。将 Workflow 从 SSE 请求中解耦、支持重新订阅或断点续跑属于较大架构调整，本期明确延期；应用关闭、应用切换和其他断连同样允许结束当前生成运行。
+8. Pending 归属页面对话 `sessionId`，不归属某一次 Workflow Run；同一对话的 Regenerate 可以产生多个 Run，但新 Pending 必须继承原 `owner_session_id`。
+9. 删除 owner 对话时的二次确认、取消生成或放弃 Pending 联动本期不实施，作为独立后续功能。
 
 ## 2. 调整边界
 
@@ -411,8 +413,7 @@ DAG 编译和校验通过后：
 Build DAG 确认阶段不提供与 `abandon` 并列的独立 cancel 动作；active 生成阶段的停止按钮取消整个
 Workflow/PlanningRun，而不是单个 Unit。待确认状态的终止统一使用 `abandon`。后续恢复必须重新读取工作区中的最新 Pending/Formal，不能只信任旧 checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更，则退出本 mode，返回对应的正式规划或详细设计流程。
 
-同一应用的全局互斥必须覆盖 `generating` 和 `awaiting_confirmation` 两个阶段。新的 page、endpoint、data_source
-或 application Scope 请求若发现已有 active PlanningRun 或 PendingPlan，应被明确拒绝或引导用户先取消/放弃当前运行，不能覆盖工作区唯一的 `planning-run.json` 或 `build-task-plan.pending.json`。
+同一应用的页面会话流程锁继续覆盖 `generating` 和 `awaiting_confirmation` 两个阶段。当前 UI 在这两个阶段不允许新建并启动另一个会话，因此本期不另外增加“写新 Pending 前的多会话服务端抢占检查”。若未来开放多窗口、外部调用或并行会话，必须再在 Pending writer 前增加原子冲突门禁，避免覆盖工作区唯一的 `planning-run.json` 或 `build-task-plan.pending.json`。
 
 ## 6. 产物字段调整
 
@@ -475,7 +476,7 @@ Workflow/PlanningRun，而不是单个 Unit。待确认状态的终止统一使�
 Pending 使用同一 `build-dag.v3` 任务正文，但必须满足：
 
 - `confirmation_status=pending`、`confirmed_at=null`；
-- 携带服务端构造的 `draft_identity`，至少绑定 `planning_run_id`、`draft_digest`、Formal baseline 摘要、完整输入 fingerprint 和 Build Scope；
+- 携带服务端构造的 `draft_identity`，至少绑定页面对话 `owner_session_id`、`planning_run_id`、`draft_digest`、Formal baseline 摘要、完整输入 fingerprint 和 Build Scope；
 - 只有完整 Global Validation 通过的 DAG 才能写入；
 - Confirm、Abandon、Regenerate 都必须精确匹配当前 DraftIdentity；
 - Confirm 成功、Abandon 成功或 Regenerate 提交后删除；Regenerate 失败不恢复旧文件。
@@ -485,6 +486,9 @@ Pending 使用同一 `build-dag.v3` 任务正文，但必须满足：
 - 首次生成有效 DAG：写 Pending，Formal 保持不变；
 - 用户确认：从 Pending 构造 ConfirmedPlan 并原子替换 Formal，然后删除匹配 Pending；
 - 用户重新生成：先删除旧 Pending，再由新 PlanningRun 写入新 Pending；失败不恢复旧 Pending；
+- 重新生成只更换 PlanningRun 身份，新 Pending 继承旧 Pending 的 `owner_session_id`；
+- 刷新进入开发阶段时，只有 `owner_session_id` 等于当前页面对话才恢复可操作确认卡；其他对话只显示锁和跳转入口；
+- 工作区不存在 Pending 时，阶段产物为空，不从历史消息或 ConfirmedPlan 恢复旧待确认卡；
 - 任务执行状态变化不清除确认状态；
 - 任务规划内容变化必须清除原确认状态并重新确认。
 
@@ -571,8 +575,8 @@ confirmation_status == confirmed
 | `Backend/app/services/build_repair_planner.py` | 保持 repair-task-plan 独立产物和既有修复确认；追加修复任务时保留主计划 confirmation 语义 |
 | `Backend/app/graph/subgraphs/build.py` | 在 Build/scheduler/直接恢复入口增加最新 JSON 确认门禁；任务结果和修复流程不再写入 Markdown |
 | `Backend/app/graph/workflow.py` | 保持现有 Graph 节点关系；confirm 进入 Build，abandon 结束本次 Workflow execution，regenerate 回到 `prepare_build_tasks` |
-| `Backend/app/graph/state.py`、`Backend/app/protocols/workflow/definition.py` | 移除 `build_task_dag_path`；确认状态只存于计划内部，不新增重复 Graph State 字段 |
-| `Backend/app/protocols/workflow/request.py`、`run_control.py` | 接收结构化 `confirm`、`abandon`、`regenerate`；按应用维度拒绝第二个 DAG 生成或待确认状态，并恢复或结束对应 Workflow execution |
+| `Backend/app/graph/state.py`、`Backend/app/protocols/workflow/definition.py` | 移除 `build_task_dag_path`；增加页面对话 `owner_session_id` 作为 Pending 归属字段，不与 Run/Thread 身份混用 |
+| `Backend/app/protocols/workflow/request.py`、`run_control.py` | 接收 `forwardedProps.sessionId` 及结构化 `confirm`、`abandon`、`regenerate`；当前依赖页面流程锁阻止第二个对话进入 DAG，并恢复或结束对应 Workflow execution |
 | `Backend/app/protocols/workflow/projection.py`、`runtime.py` | 投影 DAG confirmation、当前目标、范围任务和局部错误；不再将 DAG Markdown 作为确认 artifact |
 | `Frontend/src/renderer/src/typings/workflow.ts`、`service/agUiAgent.ts` | 增加 DAG confirmation、目标、scope 和 JSON-safe snapshot 类型；移除 Markdown DAG artifact 类型 |
 | `Frontend/src/renderer/src/components/WorkflowRunCard`、`AiChatPanel.tsx`、`processStepHistory.ts`、`workbenchPhase.ts` | 分层展示目标与范围、页面验收、实际关联接口和只读任务详情，支持确认、全量重新生成及恢复；不复用正式文档确认卡片 |
@@ -605,9 +609,10 @@ confirmation_status == confirmed
 22. `repair-task-plan.json` 仍作为独立修复产物保留，不与 DAG JSON 混淆；
 23. 可视化界面展示的 scope、任务内容和确认状态与最新 JSON 一致，并能区分前置阻断、DAG 自动重生成失败和 DAG 确认等待；
 24. 普通任务执行、重试和修复流程不会错误清除已经确认的任务规划；
-25. 同一应用已有 active PlanningRun 或 PendingPlan 时，来自其他页面或 Scope 的 DAG 生成请求会被拒绝，不会形成两个并行待确认版本；
+25. 同一应用已有 active PlanningRun 或 PendingPlan 时，页面流程锁不允许新建或启动另一对话，因而不会形成两个并行待确认版本；本期不验收多窗口/外部请求的服务端抢占。
 26. 取消只终止当前 Workflow/PlanningRun，不提供 Unit 级取消动作；已经进入待确认状态后使用 abandon，而不是取消；
 27. 页面刷新后可从服务端投影恢复当前生成或待确认状态；刷新期间持续执行与事件补发不属于本期强保证。
+28. 存在 Pending 时，owner 对话恢复可操作确认卡，其他对话显示锁定提示和“打开目标对话”；Pending 消失后不恢复旧确认卡或旧 DAG 进度。
 
 ## 10. 后续优化项
 

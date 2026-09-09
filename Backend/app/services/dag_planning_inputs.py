@@ -202,6 +202,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
 class MainlinePlanningInputs(SequentialPlanningInputs):
     """汇集 Workflow 身份与正式规划输入，作为 mainline service 的只读入口。"""
 
+    owner_session_id: _Identifier
     workflow_run_id: _Identifier
     thread_id: _Identifier
 
@@ -211,7 +212,7 @@ class MainlinePlanningInputs(SequentialPlanningInputs):
         return SequentialPlanningInputs.model_validate(
             self.model_dump(
                 mode="python",
-                exclude={"workflow_run_id", "thread_id"},
+                exclude={"owner_session_id", "workflow_run_id", "thread_id"},
             )
         )
 
@@ -226,6 +227,7 @@ def assemble_mainline_planning_inputs(
     workspace_snapshot: Mapping,
     reuse_facts: ReuseFacts,
     formal_contract_inputs: PlanningFormalInputs,
+    owner_session_id: str,
     workflow_run_id: str,
     thread_id: str,
 ) -> MainlinePlanningInputs:
@@ -271,6 +273,7 @@ def assemble_mainline_planning_inputs(
     return MainlinePlanningInputs(
         **provisional.model_dump(mode="python", exclude={"formal_source_refs"}),
         formal_source_refs=formal_source_refs,
+        owner_session_id=owner_session_id,
         workflow_run_id=workflow_run_id,
         thread_id=thread_id,
     )

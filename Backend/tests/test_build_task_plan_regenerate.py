@@ -76,6 +76,7 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
         write_pending_build_task_plan_atomic(
             self.state,
             plain_json(old.assembly.assembled_plan),
+            owner_session_id="session-regenerate",
             planning_run_id=run.planning_run_id,
             base_confirmed_plan_digest=run.base_confirmed_plan_digest,
             input_fingerprint=run.input_fingerprint,
@@ -121,6 +122,7 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "regenerated")
         self.assertEqual(self.loaded_formals[0]["regenerate_baseline_marker"], "fresh")
         self.assertEqual(pending["draft_identity"]["planning_run_id"], "planning-new")
+        self.assertEqual(pending["draft_identity"]["owner_session_id"], "session-regenerate")
         self.assertEqual(self.formal_path.read_bytes(), formal_bytes)
 
     async def test_stale_regenerate_keeps_pending_and_does_not_start(self) -> None:

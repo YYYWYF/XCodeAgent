@@ -381,6 +381,9 @@ def _assemble_planning_context(
         template_readiness=template_readiness,
     )
     workflow_run_id, thread_id = _workflow_identity(state)
+    owner_session_id = str(state.get("owner_session_id") or "").strip()
+    if not owner_session_id:
+        raise ValueError("Async planning adapter 需要页面对话 owner_session_id。")
     inputs = assemble_mainline_planning_inputs(
         project_plan=project_plan,
         base_confirmed_plan=confirmed_plan,
@@ -392,6 +395,7 @@ def _assemble_planning_context(
         formal_contract_inputs=mainline_formal_contract_inputs(
             formal_artifacts, project_plan
         ),
+        owner_session_id=owner_session_id,
         workflow_run_id=workflow_run_id,
         thread_id=thread_id,
     )

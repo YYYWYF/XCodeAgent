@@ -71,6 +71,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
             "project_plan": self.plan,
             "workspace_snapshot_path": str(self.snapshot_path),
             "build_execution_scope": self.scope,
+            "owner_session_id": "session-confirm-cutover",
             "active_run_id": "workflow-confirm-cutover",
             "active_thread_id": "thread-confirm-cutover",
             **overrides,

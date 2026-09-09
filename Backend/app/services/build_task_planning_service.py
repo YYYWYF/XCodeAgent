@@ -76,6 +76,8 @@ def _new_planning_run_id() -> str:
 def _persist_validated_pending_plan(
     state: dict[str, Any],
     planned: ValidatedAssembledPlan,
+    *,
+    owner_session_id: str,
 ) -> PendingPlanPersistenceResult:
     """通过唯一 Pending storage authority 写入，并在同一锁内回读身份。"""
 
@@ -84,6 +86,7 @@ def _persist_validated_pending_plan(
         pending_path = write_pending_build_task_plan_atomic(
             state,
             plain_json(planned.assembly.assembled_plan),
+            owner_session_id=owner_session_id,
             planning_run_id=run.planning_run_id,
             base_confirmed_plan_digest=run.base_confirmed_plan_digest,
             input_fingerprint=run.input_fingerprint,
@@ -137,6 +140,7 @@ async def run_mainline_planning(
     persisted = _persist_validated_pending_plan(
         dict(workspace_state),
         planned,
+        owner_session_id=frozen.owner_session_id,
     )
     return MainlinePlanningResult(
         planning_run_id=planning_run_id,

@@ -12,6 +12,7 @@ class ProjectState(TypedDict, total=False):
     application_name: str
     active_thread_id: str
     active_run_id: str
+    owner_session_id: str
     change_id: str
     change_target: dict[str, Any]
     element_context: dict[str, Any]

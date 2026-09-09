@@ -47,6 +47,7 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
         write_pending_build_task_plan_atomic(
             self.state,
             _validated_plan(),
+            owner_session_id="session-refresh-owner",
             planning_run_id=self.planning.planning_run_id,
             base_confirmed_plan_digest=None,
             input_fingerprint=self.planning.input_fingerprint,
@@ -88,6 +89,11 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
 
         self.assertEqual(recovered["source"], "pending")
         self.assertEqual(recovered["status"], "awaiting_confirmation")
+        self.assertEqual(recovered["ownerSessionId"], "session-refresh-owner")
+        self.assertEqual(
+            recovered["confirmation"]["draftIdentity"]["ownerSessionId"],
+            "session-refresh-owner",
+        )
         self.assertEqual(
             recovered["draftDigest"],
             pending["draft_identity"]["draft_digest"],

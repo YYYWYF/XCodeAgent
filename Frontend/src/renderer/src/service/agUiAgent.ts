@@ -22,6 +22,7 @@ import type {
 
 export type SendWorkflowMessageOptions = {
   workspaceRoot?: string
+  sessionId?: string
   editorMode: EditorMode
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
@@ -104,6 +105,7 @@ export function buildWorkflowForwardedProps(
 ): Record<string, unknown> {
   return {
     workspaceRoot: options.workspaceRoot,
+    sessionId: options.sessionId,
     editorMode: options.editorMode,
     application: options.application,
     clarificationAnswers: options.clarificationAnswers,

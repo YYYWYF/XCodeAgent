@@ -34,6 +34,7 @@ export function workflowInteractionAvailability(
   if (isConversationWorkflow(workflow)) {
     return workflow.summary.status === 'requires_user_input' ? 'active' : 'stale'
   }
+  if (recoveredPendingInteractionMatches(workflow, lifecycle)) return 'active'
   const snapshotLifecycle = workflowLifecycleSnapshot(workflow)
   const snapshotExecution = snapshotLifecycle?.activeExecutions?.[workflow.runId]
   const snapshotPending = snapshotExecution?.pendingInteraction
@@ -64,6 +65,34 @@ export function workflowInteractionAvailability(
     activePending.basedOnRevision === snapshotPending.basedOnRevision
     ? 'active'
     : 'stale'
+}
+
+/** 允许仅由磁盘 Pending 恢复的确认卡提交；此时 lifecycle 可能已没有原 active execution。 */
+function recoveredPendingInteractionMatches(
+  workflow: WorkflowRunPayload,
+  lifecycle?: ApplicationLifecycle
+): boolean {
+  const recovery = lifecycle?.extensions?.planningRefresh
+  if (
+    !recovery ||
+    recovery.schemaVersion !== 'planning-refresh.v1' ||
+    recovery.source !== 'pending' ||
+    recovery.status !== 'awaiting_confirmation'
+  ) {
+    return false
+  }
+  const workflowMode = String(
+    workflow.summary.clarification?.mode ||
+      workflow.summary.buildTaskPlanConfirmation?.mode ||
+      workflow.state?.clarification?.mode ||
+      workflow.result?.clarification?.mode ||
+      ''
+  )
+  return (
+    workflowMode === 'build_task_plan_confirmation' &&
+    recovery.workflowRunId === workflow.runId &&
+    recovery.threadId === workflow.threadId
+  )
 }
 
 /** 从 Workflow 的兼容投影位置读取提交交互所依据的生命周期快照。 */

@@ -383,6 +383,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("workspaceRoot"))
         or _optional_text(application.get("workspaceRoot"))
     )
+    # 页面会话是 PendingPlan 的业务归属；同一会话可跨多个 Workflow Run 继续操作。
+    owner_session_id = (
+        _optional_text(payload.get("sessionId"))
+        or _optional_text(payload.get("session_id"))
+        or _optional_text(forwarded_props.get("sessionId"))
+        or _optional_text(forwarded_props.get("session_id"))
+    )
     request_thread_id = (
         _optional_text(payload.get("thread_id"))
         or _optional_text(payload.get("threadId"))
@@ -663,6 +670,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **resume_values_from_state,
         **project_plan_start_values,
         **_debug_resume_values(debug_state, workspace=workspace),
+        **({"owner_session_id": owner_session_id} if owner_session_id else {}),
         "retry_failed_tasks": (
             workflow_action == "retry_failed_tasks" and resume_from == "build"
         ),

@@ -21,6 +21,7 @@ import {
   latestDagGenerationSnapshot,
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
+  pendingDagOwnerSessionId,
   planningRefreshInterruption
 } from '../src/renderer/src/components/AiChatPanel/stageOutputState'
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
@@ -455,11 +456,17 @@ test('refresh Pending 使用 Backend 确认投影，stale chat message 不能覆
         planningRunId: 'planning-current',
         workflowRunId: 'workflow-current',
         threadId: 'thread-current',
+        ownerSessionId: 'session-current',
         draftDigest: 'd'.repeat(64),
         buildExecutionScope: { type: 'page', targetId: 'orders' },
         confirmation: {
           mode: 'build_task_plan_confirmation',
           status: 'requires_user_input',
+          draftIdentity: {
+            ownerSessionId: 'session-current',
+            planningRunId: 'planning-current',
+            draftDigest: 'd'.repeat(64)
+          },
           taskPlan: {
             confirmationStatus: 'pending',
             scopeTasks: [{ id: 'current-task', title: '当前任务', description: '' }]
@@ -492,6 +499,7 @@ test('refresh Pending 使用 Backend 确认投影，stale chat message 不能覆
   const restoredWorkflow = pendingDagConfirmationWorkflow(messages, restoredExecution, lifecycle)
 
   assert.equal(restoredExecution?.runId, 'workflow-current')
+  assert.equal(pendingDagOwnerSessionId(lifecycle), 'session-current')
   assert.equal(
     restoredWorkflow?.summary.clarification?.taskPlan?.scopeTasks?.[0]?.id,
     'current-task'
@@ -555,6 +563,42 @@ test('ConfirmedPlan 会压制同 PlanningRun 的 stale historical snapshot', () 
   assert.equal(pendingDagConfirmationExecution(lifecycle), undefined)
 })
 
+test('工作区没有 Pending 时不恢复任何历史 DAG 阶段产物', () => {
+  const historical = snapshot({ planningRunId: 'planning-history', revision: 4 })
+  const lifecycle = {
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'none',
+        status: 'idle',
+        message: '当前没有可恢复的 Planning 或 Confirmation 状态。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const messages = [
+    {
+      id: 1,
+      role: 'assistant',
+      content: '',
+      createdAt: 1,
+      processSteps: [
+        {
+          id: 'historical-planning-progress',
+          kind: 'workflow',
+          status: 'completed',
+          title: '旧 DAG',
+          detail: '',
+          sequence: 1,
+          dagGeneration: historical
+        }
+      ]
+    }
+  ] as AgentChatMessage[]
+
+  assert.equal(latestDagGenerationSnapshot(messages, lifecycle), undefined)
+  assert.equal(pendingDagOwnerSessionId(lifecycle), undefined)
+})
+
 test('Abandon 请求复用 Backend DraftIdentity 且不发送 Workflow cancel', () => {
   const workflow = {
     runId: 'workflow-current',
@@ -574,6 +618,7 @@ test('Abandon 请求复用 Backend DraftIdentity 且不发送 Workflow cancel', 
   const identity = currentDagConfirmationDraftIdentity(workflow)
   const forwarded = buildWorkflowForwardedProps({
     editorMode: 'frontend',
+    sessionId: 'session-current',
     planControlAction: 'abandon',
     planControlRunId: workflow.runId,
     planningRunId: identity?.planningRunId,
@@ -585,6 +630,7 @@ test('Abandon 请求复用 Backend DraftIdentity 且不发送 Workflow cancel', 
     draftDigest: 'a'.repeat(64)
   })
   assert.equal(forwarded.planControlAction, 'abandon')
+  assert.equal(forwarded.sessionId, 'session-current')
   assert.equal(forwarded.planControlRunId, 'workflow-current')
   assert.equal(forwarded.planningRunId, 'planning-current')
   assert.equal(forwarded.draftDigest, 'a'.repeat(64))
@@ -705,11 +751,13 @@ test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控�
         planningRunId: 'planning-pending',
         workflowRunId: 'workflow-pending',
         threadId: 'thread-pending',
+        ownerSessionId: 'session-pending',
         draftDigest: 'c'.repeat(64),
         confirmation: {
           mode: 'build_task_plan_confirmation',
           actionValues: ['confirm', 'abandon', 'regenerate'],
           draftIdentity: {
+            ownerSessionId: 'session-pending',
             planningRunId: 'planning-pending',
             draftDigest: 'c'.repeat(64)
           },
@@ -740,6 +788,7 @@ test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控�
     'abandon',
     'regenerate'
   ])
+  assert.equal(pendingDagOwnerSessionId(pendingLifecycle), 'session-pending')
   assert.equal(pendingDagConfirmationExecution(generatingLifecycle), undefined)
 })
 

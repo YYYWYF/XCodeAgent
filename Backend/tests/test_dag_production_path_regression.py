@@ -74,6 +74,7 @@ class DagProductionPathCutoverTests(unittest.IsolatedAsyncioTestCase):
             "project_plan": self.plan,
             "workspace_snapshot_path": str(self.snapshot_path),
             "build_execution_scope": scope,
+            "owner_session_id": "session-production-cutover",
             "active_run_id": "workflow-production-cutover",
             "active_thread_id": "thread-production-cutover",
         }
@@ -175,6 +176,7 @@ class DagProductionPathCutoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["build_task_plan_confirmation"]["draftIdentity"],
             {
+                "ownerSessionId": "session-production-cutover",
                 "planningRunId": identity.planning_run_id,
                 "draftDigest": identity.draft_digest,
             },

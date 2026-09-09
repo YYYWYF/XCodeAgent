@@ -70,6 +70,9 @@ async def regenerate_pending_build_task_plan(
             "当前 PendingPlan 不存在或已更新，不能基于旧版本重新生成。",
         )
         return RegeneratePendingResult(status="stale_draft", errors=errors)
+    if abandoned.draft_identity is None:
+        raise RuntimeError("Regenerate 删除旧 Pending 后缺少原页面会话身份。")
+    owner_session_id = abandoned.draft_identity.owner_session_id
 
     id_factory = planning_run_id_factory or _new_planning_run_id
     new_planning_run_id = str(id_factory() or "")
@@ -108,6 +111,7 @@ async def regenerate_pending_build_task_plan(
     write_pending_build_task_plan_atomic(
         state,
         plain_json(planned.assembly.assembled_plan),
+        owner_session_id=owner_session_id,
         planning_run_id=run.planning_run_id,
         base_confirmed_plan_digest=run.base_confirmed_plan_digest,
         input_fingerprint=run.input_fingerprint,

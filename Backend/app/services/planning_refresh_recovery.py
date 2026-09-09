@@ -46,6 +46,7 @@ class PlanningRefreshState(TypedDict, total=False):
     planningRunId: str
     workflowRunId: str
     threadId: str
+    ownerSessionId: str
     draftDigest: str
     buildExecutionScope: dict[str, Any]
     dagGeneration: dict[str, Any]
@@ -215,6 +216,7 @@ def _pending_confirmation(pending: dict[str, Any], identity: Any) -> dict[str, A
         "confirmationStatus": "pending",
         "buildExecutionScope": scope,
         "draftIdentity": {
+            "ownerSessionId": identity.owner_session_id,
             "planningRunId": identity.planning_run_id,
             "draftDigest": identity.draft_digest,
         },
@@ -264,6 +266,7 @@ def resolve_planning_refresh_state(
             "planningRunId": pending_identity.planning_run_id,
             "workflowRunId": workflow_run_id,
             "threadId": thread_id,
+            "ownerSessionId": pending_identity.owner_session_id,
             "draftDigest": pending_identity.draft_digest,
             "buildExecutionScope": dict(pending_identity.build_execution_scope),
             "confirmation": _pending_confirmation(pending, pending_identity),

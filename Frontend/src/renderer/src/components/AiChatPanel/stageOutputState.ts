@@ -96,6 +96,28 @@ export function pendingDagConfirmationExecution(
   )
 }
 
+/** 读取当前 PendingPlan 绑定的页面会话；Workflow Run 只用于定位执行，不充当业务 owner。 */
+export function pendingDagOwnerSessionId(
+  lifecycle: ApplicationLifecycle | undefined
+): string | undefined {
+  const recovery = planningRefreshState(lifecycle)
+  if (recovery?.source === 'pending' && recovery.status === 'awaiting_confirmation') {
+    const recoveredOwner = String(recovery.ownerSessionId || '').trim()
+    if (recoveredOwner) return recoveredOwner
+    const confirmationOwner = draftOwnerSessionId(recovery.confirmation?.draftIdentity)
+    if (confirmationOwner) return confirmationOwner
+  }
+  const execution = pendingDagConfirmationExecution(lifecycle)
+  return draftOwnerSessionId(execution?.pendingInteraction?.payload?.draftIdentity)
+}
+
+/** 从服务端 DraftIdentity 投影中严格读取页面会话 ID。 */
+function draftOwnerSessionId(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const ownerSessionId = String((value as Record<string, unknown>).ownerSessionId || '').trim()
+  return ownerSessionId || undefined
+}
+
 /** 在某个持久化会话中定位与 lifecycle execution 对应的 DAG 确认快照。 */
 export function pendingDagConfirmationWorkflow(
   messages: AgentChatMessage[],
@@ -172,27 +194,11 @@ export function latestDagGenerationSnapshot(
   }
   const recovery = planningRefreshState(lifecycle)
   if (!recovery) return latest
-  if (
-    recovery.source === 'abandoned' &&
-    recovery.status === 'abandoned' &&
-    (!latest || latest.planningRunId === recovery.planningRunId)
-  ) {
-    return undefined
-  }
-  if (recovery.source === 'pending' || recovery.status === 'planning_run_interrupted') {
-    return undefined
-  }
   if (recovery.source === 'active_planning_run' && recovery.status === 'planning') {
     return readRecoveredDagGenerationSnapshot(recovery.dagGeneration) || latest
   }
-  if (
-    recovery.source === 'confirmed_plan' &&
-    recovery.planningRunId &&
-    latest?.planningRunId === recovery.planningRunId
-  ) {
-    return undefined
-  }
-  return latest
+  // Refresh 已给出权威终态或 Pending 时，不允许历史消息里的旧 DAG 再次占据阶段产物。
+  return undefined
 }
 
 /** 复用 AG-UI 的严格 Snapshot parser 读取 Backend refresh 投影。 */

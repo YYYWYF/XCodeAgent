@@ -119,6 +119,7 @@ import {
   latestDagGenerationSnapshot,
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
+  pendingDagOwnerSessionId,
   planningRefreshInterruption,
   stageOutputPhase
 } from './stageOutputState'
@@ -2665,86 +2666,57 @@ export default function AiChatPanel({
     () => pendingDagConfirmationExecution(applicationLifecycle),
     [applicationLifecycle]
   )
-  const [pendingDagSessionId, setPendingDagSessionId] = useState('')
+  const pendingDagDeclaredSessionId = pendingDagOwnerSessionId(applicationLifecycle) || ''
   const pendingDagSession = useMemo(
-    () => allSessions.find((session) => session.id === pendingDagSessionId),
-    [allSessions, pendingDagSessionId]
+    () =>
+      (pendingDagDeclaredSessionId
+        ? allSessions.find((session) => session.id === pendingDagDeclaredSessionId)
+        : undefined) ||
+      (!pendingDagDeclaredSessionId && pendingDagExecution
+        ? allSessions.find((session) => session.threadId === pendingDagExecution.threadId)
+        : undefined),
+    [allSessions, pendingDagDeclaredSessionId, pendingDagExecution]
   )
+  // owner 字段尚未随 lifecycle 到达时，只允许用 execution 的精确 thread 识别当前页面对话；
+  // 不扫描消息内容，也不把 Workflow Run 当作长期 owner。
+  const activeSessionOwnsPendingThread = Boolean(
+    !pendingDagDeclaredSessionId &&
+      pendingDagExecution &&
+      activeSession?.threadId === pendingDagExecution.threadId
+  )
+  const pendingDagSessionId =
+    pendingDagDeclaredSessionId ||
+    pendingDagSession?.id ||
+    (activeSessionOwnsPendingThread ? activeSession?.sessionId || '' : '')
   const pendingDagSessionIdentity = useMemo(
     () =>
       sessionIdentityFromSummary(pendingDagSession, editorMode, application.workspaceRoot || ''),
     [application.workspaceRoot, editorMode, pendingDagSession]
   )
   const pendingDagSessionMessages = useMemo(
-    () => (pendingDagSessionIdentity ? getSessionMessages(pendingDagSessionIdentity.key) : []),
-    [getSessionMessages, pendingDagSessionIdentity]
+    () =>
+      pendingDagSessionIdentity
+        ? getSessionMessages(pendingDagSessionIdentity.key)
+        : pendingDagSessionId && activeSession?.sessionId === pendingDagSessionId
+          ? messages
+          : [],
+    [activeSession?.sessionId, getSessionMessages, messages, pendingDagSessionId, pendingDagSessionIdentity]
   )
   const pendingDagWorkflow = pendingDagConfirmationWorkflow(
     pendingDagSessionMessages,
     pendingDagExecution,
     applicationLifecycle
   )
-
-  // lifecycle 只保存 Graph 身份；冷启动时按 run/thread 精确扫描持久化会话，恢复确认卡来源。
-  useEffect(() => {
-    if (!pendingDagExecution) {
-      setPendingDagSessionId('')
-      return
-    }
-    if (pendingDagWorkflow && pendingDagSessionId) return
-    let cancelled = false
-
-    /** 逐条装载当前应用会话，直到找到持有待确认 Workflow 的原始会话。 */
-    const restorePendingDagSession = async (): Promise<void> => {
-      const candidates = allSessions.filter((session) => session.workflowId === application.id)
-      for (const candidate of candidates) {
-        const identity = sessionIdentityFromSummary(
-          candidate,
-          editorMode,
-          application.workspaceRoot || ''
-        )
-        if (!identity) continue
-        let workflow = pendingDagConfirmationWorkflow(
-          getSessionMessages(identity.key),
-          pendingDagExecution
-        )
-        if (!workflow) {
-          const loadedIdentity = await loadSessionIdentity(candidate.id)
-          workflow = pendingDagConfirmationWorkflow(
-            getSessionMessages(loadedIdentity.key),
-            pendingDagExecution
-          )
-        }
-        if (cancelled) return
-        if (workflow) {
-          setPendingDagSessionId(candidate.id)
-          return
-        }
-      }
-    }
-
-    void restorePendingDagSession()
-    return () => {
-      cancelled = true
-    }
-  }, [
-    allSessions,
-    application.id,
-    application.workspaceRoot,
-    editorMode,
-    getSessionMessages,
-    loadSessionIdentity,
-    pendingDagExecution,
-    pendingDagSessionId,
-    pendingDagWorkflow
-  ])
+  const pendingDagOwnedByActiveSession = Boolean(
+    pendingDagExecution && pendingDagSessionId && pendingDagSessionId === activeSessionId
+  )
   const planningSessionRunActive = isApplicationPlanningPhase && planningPhaseRunning
   const planningRunLockedByOtherSession = Boolean(
     planningSessionRunActive &&
       (!existingPlanningSession || existingPlanningSession.id !== activeSessionId)
   )
   const pendingDagLockedByOtherSession = Boolean(
-    pendingDagExecution && (!pendingDagSessionId || pendingDagSessionId !== activeSessionId)
+    pendingDagExecution && !pendingDagOwnedByActiveSession
   )
   const otherSessionExecutionLocked =
     sessionExecutionLocked || planningRunLockedByOtherSession || pendingDagLockedByOtherSession
@@ -3084,12 +3056,24 @@ export default function AiChatPanel({
     : !currentStageSessionTargetKey
   const stageOutputMessages = useMemo(
     () =>
-      pendingDagExecution ? pendingDagSessionMessages : stageOutputContextAligned ? messages : [],
-    [pendingDagExecution, pendingDagSessionMessages, stageOutputContextAligned, messages]
+      pendingDagOwnedByActiveSession
+        ? pendingDagSessionMessages
+        : pendingDagExecution
+          ? []
+          : stageOutputContextAligned
+            ? messages
+            : [],
+    [
+      pendingDagExecution,
+      pendingDagOwnedByActiveSession,
+      pendingDagSessionMessages,
+      stageOutputContextAligned,
+      messages
+    ]
   )
-  const stageOutputWorkflow = pendingDagExecution
+  const stageOutputWorkflow = pendingDagOwnedByActiveSession
     ? pendingDagWorkflow
-    : stageOutputContextAligned
+    : !pendingDagExecution && stageOutputContextAligned
       ? latestWorkflowForDisplay
       : undefined
   const currentDagSnapshot = useMemo(
@@ -3098,28 +3082,37 @@ export default function AiChatPanel({
   )
   const interruptedPlanningRun = planningRefreshInterruption(applicationLifecycle)
   const dagConfirmationPlan = useMemo(
-    () => currentDagConfirmationPlan(stageOutputWorkflow),
-    [stageOutputWorkflow]
+    () =>
+      pendingDagOwnedByActiveSession
+        ? currentDagConfirmationPlan(stageOutputWorkflow)
+        : undefined,
+    [pendingDagOwnedByActiveSession, stageOutputWorkflow]
   )
   const dagConfirmationTargetReview = useMemo(
-    () => currentDagConfirmationTargetReview(stageOutputWorkflow),
-    [stageOutputWorkflow]
+    () =>
+      pendingDagOwnedByActiveSession
+        ? currentDagConfirmationTargetReview(stageOutputWorkflow)
+        : undefined,
+    [pendingDagOwnedByActiveSession, stageOutputWorkflow]
   )
   const [dagConfirmationSubmissionError, setDagConfirmationSubmissionError] = useState('')
   useEffect(() => {
     setDagConfirmationSubmissionError('')
   }, [pendingDagExecution?.runId])
   const dagConfirmationErrors = useMemo(
-    () => [
-      ...currentDagConfirmationErrors(stageOutputWorkflow),
-      ...(dagConfirmationSubmissionError ? [dagConfirmationSubmissionError] : [])
-    ],
-    [dagConfirmationSubmissionError, stageOutputWorkflow]
+    () =>
+      pendingDagOwnedByActiveSession
+        ? [
+            ...currentDagConfirmationErrors(stageOutputWorkflow),
+            ...(dagConfirmationSubmissionError ? [dagConfirmationSubmissionError] : [])
+          ]
+        : [],
+    [dagConfirmationSubmissionError, pendingDagOwnedByActiveSession, stageOutputWorkflow]
   )
   const currentStageOutputPhase = interruptedPlanningRun
     ? 'generation'
     : stageOutputPhase(stageOutputWorkflow, currentDagSnapshot, dagConfirmationPlan)
-  const stageOutputSessionKey = pendingDagExecution
+  const stageOutputSessionKey = pendingDagOwnedByActiveSession && pendingDagExecution
     ? `${application.id}:pending-dag:${pendingDagExecution.runId}`
     : `${application.id}:${activeTargetKey || 'free-chat'}:${activeSession?.key || draftKey}`
   const stageOutputMatchesSession =
@@ -3131,7 +3124,7 @@ export default function AiChatPanel({
   // 右侧面板只在会话或 DAG 大阶段变化时切换；同一阶段的 revision 更新直接刷新完整 Unit 快照。
   useEffect(() => {
     if (isApplicationPlanningPhase) return
-    if (pendingDagExecution) {
+    if (pendingDagExecution && pendingDagOwnedByActiveSession) {
       const enteringPendingRun = lastPinnedDagRunRef.current !== pendingDagExecution.runId
       lastPinnedDagRunRef.current = pendingDagExecution.runId
       if (enteringPendingRun) {
@@ -3178,6 +3171,7 @@ export default function AiChatPanel({
     isApplicationPlanningPhase,
     onRightPanelOpenChange,
     pendingDagExecution,
+    pendingDagOwnedByActiveSession,
     rightPanel,
     rightPanelOpen,
     setRightPanel,
@@ -3799,13 +3793,13 @@ export default function AiChatPanel({
   const handlePinnedDagConfirmation = async (
     action: WorkflowBuildTaskPlanConfirmation
   ): Promise<void> => {
-    if (!pendingDagWorkflow || !pendingDagSession) {
+    if (!pendingDagWorkflow || !pendingDagSessionId) {
       setDagConfirmationSubmissionError('原会话仍在恢复中，请稍后重试。')
       return
     }
     try {
       setDagConfirmationSubmissionError('')
-      const identity = await loadSessionIdentity(pendingDagSession.id)
+      const identity = await loadSessionIdentity(pendingDagSessionId)
       // Confirm、Abandon 与 Regenerate 都必须精确绑定服务端 DraftIdentity；缺失时 fail closed，
       // 绝不提交无身份的 Graph 请求，否则 Backend 只会按 stale 拒绝。
       const identityBoundAction = bindDagConfirmationDraftIdentity(
@@ -3824,7 +3818,7 @@ export default function AiChatPanel({
           onExecutionStarted:
             action.action !== 'abandon'
               ? () => {
-                  void handleOpenChatSession(pendingDagSession.id)
+                  void handleOpenChatSession(pendingDagSessionId)
                 }
               : undefined
         }
@@ -4341,6 +4335,13 @@ export default function AiChatPanel({
                 phaseLabel={WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label}
                 sessionTitle={phaseExecutionSessionTitle}
                 status={phaseExecutionStatus}
+                onOpenSession={
+                  pendingDagLockedByOtherSession && pendingDagSession
+                    ? () => {
+                        void handleOpenChatSession(pendingDagSession.id)
+                      }
+                    : undefined
+                }
               />
             ) : !entityDesignChatActive &&
               !acceptanceAwaiting &&
@@ -4710,7 +4711,7 @@ export default function AiChatPanel({
                   }
                   snapshot={currentDagSnapshot}
                 />
-              ) : pendingDagExecution && rightPanel.view === 'confirmation' ? (
+              ) : pendingDagOwnedByActiveSession && rightPanel.view === 'confirmation' ? (
                 <Alert
                   message="正在恢复待确认的任务计划"
                   description="确认卡会固定显示在这里，恢复完成前不会释放当前流程锁。"

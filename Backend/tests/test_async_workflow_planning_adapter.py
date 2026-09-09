@@ -77,6 +77,7 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             "project_plan": self.plan,
             "workspace_snapshot_path": str(self.snapshot_path),
             "build_execution_scope": scope,
+            "owner_session_id": "session-async-adapter",
             "active_run_id": "workflow-async-adapter",
             "active_thread_id": "thread-async-adapter",
         }
@@ -178,6 +179,7 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["build_task_plan_confirmation"]["draftIdentity"],
             {
+                "ownerSessionId": "session-async-adapter",
                 "planningRunId": identity.planning_run_id,
                 "draftDigest": identity.draft_digest,
             },

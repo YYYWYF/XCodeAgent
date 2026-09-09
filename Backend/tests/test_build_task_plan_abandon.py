@@ -54,6 +54,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         write_pending_build_task_plan_atomic(
             self.state,
             plan,
+            owner_session_id="session-abandon",
             planning_run_id="planning-run-current",
             base_confirmed_plan_digest=base_digest,
             input_fingerprint="b" * 64,

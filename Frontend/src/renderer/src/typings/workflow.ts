@@ -692,6 +692,11 @@ export type WorkflowClarification = {
   taskPlan?: WorkflowBuildTaskPlan
   targetReview?: WorkflowBuildTargetReview
   buildExecutionScope?: WorkflowBuildExecutionScope
+  draftIdentity?: {
+    ownerSessionId?: string
+    planningRunId?: string
+    draftDigest?: string
+  }
   testTarget?: WorkflowTestTarget
   confirmationStatus?: 'pending' | 'confirmed' | string
   editableFields?: string[]
@@ -967,6 +972,7 @@ export type PlanningRefreshState = {
   planningRunId?: string
   workflowRunId?: string
   threadId?: string
+  ownerSessionId?: string
   draftDigest?: string
   buildExecutionScope?: WorkflowBuildExecutionScope
   dagGeneration?: unknown

@@ -53,7 +53,7 @@ class ConfirmPromotionTests(unittest.TestCase):
         """使用 T7.2 writer 和 Planning 的真实输入指纹生成待确认身份。"""
 
         write_pending_build_task_plan_atomic(
-            self.state, self.draft, planning_run_id=run_id,
+            self.state, self.draft, owner_session_id="session-confirm", planning_run_id=run_id,
             base_confirmed_plan_digest=_input_digest(self.inputs.base_confirmed_plan)
             if self.inputs.base_confirmed_plan is not None else None,
             input_fingerprint=_input_digest(self.inputs.model_dump(mode="json")),
@@ -428,7 +428,8 @@ class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             run = result.planning_run
             write_pending_build_task_plan_atomic(
-                state, plain_json(result.assembly.assembled_plan), planning_run_id=run.planning_run_id,
+                state, plain_json(result.assembly.assembled_plan), owner_session_id="session-integration",
+                planning_run_id=run.planning_run_id,
                 base_confirmed_plan_digest=run.base_confirmed_plan_digest, input_fingerprint=run.input_fingerprint,
                 build_execution_scope=plain_json(run.build_execution_scope), created_at=run.updated_at,
             )

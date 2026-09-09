@@ -155,6 +155,12 @@ def workflow_capabilities() -> dict[str, Any]:
             },
             "clientNodeSelectionAllowed": False,
         },
+        "pendingOwnership": {
+            "requestField": "forwardedProps.sessionId",
+            "storageField": "draft_identity.owner_session_id",
+            "refreshField": "extensions.planningRefresh.ownerSessionId",
+            "semantics": "页面对话拥有 PendingPlan；同一对话可跨多个 Workflow Run，Regenerate 继承原 owner。",
+        },
         "planControl": {
             "requestField": "forwardedProps.planControlAction",
             "actions": ["stop", "end", "abandon"],

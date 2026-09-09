@@ -23,6 +23,7 @@ BASE_DIGEST = "a" * 64
 INPUT_FINGERPRINT = "b" * 64
 BUILD_EXECUTION_SCOPE = {"type": "page", "targetId": "orders"}
 CREATED_AT = "2026-09-06T08:00:00+00:00"
+OWNER_SESSION_ID = "session-pending-documents"
 
 
 def _validated_plan(task_id: str = "page:orders::render") -> dict:
@@ -61,6 +62,7 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         return write_pending_build_task_plan_atomic(
             self.state,
             plan if plan is not None else _validated_plan(),
+            owner_session_id=metadata.get("owner_session_id", OWNER_SESSION_ID),
             planning_run_id=metadata.get("planning_run_id", PLANNING_RUN_ID),
             base_confirmed_plan_digest=metadata.get(
                 "base_confirmed_plan_digest", BASE_DIGEST
@@ -84,6 +86,7 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         self.assertEqual(loaded["confirmation_status"], "pending")
         self.assertIsNone(loaded["confirmed_at"])
         self.assertEqual(loaded["task_registry"], plan["task_registry"])
+        self.assertEqual(loaded["draft_identity"]["owner_session_id"], OWNER_SESSION_ID)
         self.assertIsInstance(validate_pending_self_digest(loaded), DraftIdentity)
         self.assertFalse(self.formal_path.exists())
 

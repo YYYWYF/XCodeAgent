@@ -148,6 +148,7 @@ def write_pending_build_task_plan_atomic(
     state: dict[str, Any],
     build_task_plan: dict[str, Any],
     *,
+    owner_session_id: str,
     planning_run_id: str,
     base_confirmed_plan_digest: str | None,
     input_fingerprint: str,
@@ -173,6 +174,7 @@ def write_pending_build_task_plan_atomic(
     pending_plan["confirmation_status"] = "pending"
     pending_plan["confirmed_at"] = None
     identity = DraftIdentity(
+        owner_session_id=owner_session_id,
         planning_run_id=planning_run_id,
         draft_digest="0" * 64,
         base_confirmed_plan_digest=base_confirmed_plan_digest,
