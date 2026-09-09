@@ -224,7 +224,7 @@ def execution_development_metadata(
     """只允许正式初次入口或同目标续接建立初次用途，修订与普通聊天不补记完成。"""
 
     previous: WorkbenchExecution | None = state.active_executions.get(replaces_run_id or "")
-    if previous and previous.development_target:
+    if previous and previous.development_target and not initial_entry:
         target = previous.development_target
         matches = (scope == "page" and target.page_id == target_id) or (
             scope == "endpoint" and target.endpoint_id == target_id

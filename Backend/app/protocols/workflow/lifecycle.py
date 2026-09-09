@@ -44,6 +44,7 @@ def begin_workflow_lifecycle(
     thread_id: str,
     run_id: str,
     phase: str,
+    checkpoint_state: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """在主 Workflow 获得工作区租约后登记活动计划执行。"""
 
@@ -90,6 +91,21 @@ def begin_workflow_lifecycle(
     page_id = str(resume_values.get("selectedPageId") or "").strip() or None
     scope_type = str(scope.get("type") or ("page" if page_id else "application"))
     target_id = str(scope.get("targetId") or page_id or "application")
+    # Build 之后的节点必须使用同一 thread 服务端已执行切片的目标，不能被调试面板默认 application 覆盖。
+    executed_slice = (checkpoint_state or {}).get("build_execution_slice") or {}
+    executed_scope = executed_slice.get("scope") if isinstance(executed_slice, dict) else None
+    use_executed_scope = (
+        phase in {"unit_test", "unit_test_repair", "test_phase_confirmation"}
+        and not lifecycle.active_formal_revision
+        and isinstance(executed_scope, dict)
+        and executed_scope.get("type") in {"page", "endpoint"}
+        and bool(executed_scope.get("targetId"))
+    )
+    if use_executed_scope:
+        scope = executed_scope
+        scope_type = str(scope["type"])
+        target_id = str(scope["targetId"])
+        page_id = target_id if scope_type == "page" else None
     raw_claims = resume_values.get("execution_resource_claims")
     resource_claims = [
         ExecutionResourceClaim.model_validate(item)
@@ -102,12 +118,15 @@ def begin_workflow_lifecycle(
         resume_values.get("resume_execution_run_id") or ""
     ).strip()
     if explicit_resume_run_id:
+        previous = lifecycle.active_executions.get(explicit_resume_run_id)
+        # 先校验应用级调试执行的原身份，再以服务端切片纠正新执行；页面之间仍禁止串目标。
+        application_resume = use_executed_scope and previous is not None and previous.scope == "application"
         _validate_resumable_execution(
             lifecycle,
             run_id=explicit_resume_run_id,
             thread_id=thread_id,
-            scope=scope_type,
-            target_id=target_id,
+            scope="application" if application_resume else scope_type,
+            target_id=previous.target_id if application_resume else target_id,
             allow_plan_adjustment_debug=bool(
                 workflow_inputs.get("workflow_debug_enabled")
             ),
@@ -150,8 +169,7 @@ def begin_workflow_lifecycle(
         resource_claims=resource_claims,
         development_continuation_consume=workflow_inputs.get("development_continuation_consume"),
         initial_development_entry=(
-            phase == "development_readiness_gate"
-            and not workflow_inputs.get("workflow_debug_enabled")
+            (phase == "development_readiness_gate" or use_executed_scope)
             and workflow_inputs.get("workflow_action") != "continue_revision_build"
         ),
         api_contract_id=str(scope.get("apiContractId") or "").strip() or None,

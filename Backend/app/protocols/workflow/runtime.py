@@ -440,7 +440,18 @@ def build_workflow_ag_ui_stream(
                 )
             resume_from = workflow_inputs.get("resume_from") or None
             checkpoint_values: dict[str, Any] = {}
+            execution_checkpoint_state: dict[str, Any] = {}
             checkpoint_snapshot: Any | None = None
+            if (
+                not workflow_scope
+                and resume_from in {"unit_test", "unit_test_repair", "test_phase_confirmation"}
+                and hasattr(active_graph, "aget_state")
+            ):
+                execution_snapshot = await active_graph.aget_state(
+                    {"configurable": {"thread_id": thread_id}}
+                )
+                # 只供生命周期读取执行目标，不把 reducer 管理的整个 checkpoint 再次写入 Graph。
+                execution_checkpoint_state = dict(execution_snapshot.values)
             if (
                 workflow_scope == "application_planning"
                 and hasattr(active_graph, "aget_state")
@@ -572,8 +583,19 @@ def build_workflow_ag_ui_stream(
                     thread_id=thread_id,
                     run_id=run_id,
                     phase=first_node_name,
+                    checkpoint_state=execution_checkpoint_state,
                 )
                 if lifecycle_payload is not None:
+                    execution = lifecycle_payload.get("activeExecutions", {}).get(run_id, {})
+                    development_target = execution.get("developmentTarget") or {}
+                    if development_target.get("type") in {"page", "endpoint"}:
+                        # 生命周期与 Graph 使用同一已登记目标，避免完成计数和确认卡再次分离。
+                        initial_state["build_execution_scope"] = {
+                            "type": execution["scope"], "targetId": execution["targetId"],
+                            **({"apiContractId": development_target["apiContractId"]}
+                               if development_target.get("type") == "endpoint" else {}),
+                        }
+                        initial_state["selectedPageId"] = execution["targetId"] if execution["scope"] == "page" else ""
                     initial_state["lifecycle"] = lifecycle_payload
                     result["lifecycle"] = lifecycle_payload
                     # 生命周期写入成功后立即投影，不能等待首个 Graph 节点结束。
