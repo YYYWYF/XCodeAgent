@@ -39,6 +39,11 @@ from app.services.frontend_page_tree import (
 from app.services.page_dependencies import normalize_page_dependencies
 from app.services.requirement_spec import product_acceptance_criteria
 from app.services.authorization_manifest import compile_authorization_manifest
+from app.services.template_reconcile.desired import (
+    initial_template_capabilities,
+    normalize_template_capabilities,
+    template_capability_errors,
+)
 
 
 BACKEND_TECH_STACK = {
@@ -1090,7 +1095,7 @@ def validate_project_plan_datasource_policy(
     """
 
     del datasource_type
-    errors: list[str] = []
+    errors = template_capability_errors(plan)
     sources = plan_data_sources(project_plan)
     source_ids = {str(source.get("id") or "") for source in sources}
     designed_entity_ids = {
@@ -1794,17 +1799,24 @@ def create_technical_plan(
         if isinstance(spec.get("confirmed_product_plan"), dict)
         else {"authorizationTargets": {"pageRules": [], "operationRules": []}}
     )
+    authorization_manifest = compile_authorization_manifest(
+        spec,
+        product_plan,
+        api_contracts,
+        pages,
+    )
+    raw_template_capabilities = _agent_section(agent_plan, "template_capabilities")
     plan = {
         "artifact_type": TECHNICAL_PLAN_ARTIFACT_TYPE,
         "architecture": architecture,
         "entities": entities,
         "api_contracts": api_contracts,
         "pages": pages,
-        "authorization_manifest": compile_authorization_manifest(
-            spec,
-            product_plan,
-            api_contracts,
-            pages,
+        "authorization_manifest": authorization_manifest,
+        "template_capabilities": (
+            normalize_template_capabilities(raw_template_capabilities)
+            if raw_template_capabilities is not None
+            else initial_template_capabilities(authorization_manifest)
         ),
     }
     repaired, _ = repair_cross_contract_schema_refs(plan)

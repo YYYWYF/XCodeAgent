@@ -7,34 +7,24 @@ from pathlib import Path
 from typing import Any
 
 from app.services.workspace_bootstrap.models import TemplateConfigError
+from app.services.template_reconcile.desired import (
+    TemplateCapabilityError,
+    requested_config_from_technical_plan,
+)
 
 
 def compile_template_requested_config(workspace_root: str | Path) -> dict[str, Any]:
-    """读取 application 与 confirmed TechnicalPlan，生成不做依赖解析的请求。"""
+    """读取 confirmed TechnicalPlan，生成不做依赖解析的当前 Engine 请求。"""
 
     root = Path(workspace_root).expanduser().resolve()
-    application = _load_object(root / ".xcodeagent/application.json", "application.json")
     technical_plan = _load_object(
         root / ".xcodeagent/plans/technical-plan.json", "technical-plan.json"
     )
     _validate_technical_plan(technical_plan)
-    auth = _object_field(application, "auth", "application.json")
-    authorization = _object_field(application, "authorization", "application.json")
-    login_enabled = _bool_field(auth, "enable", "application.json.auth")
-    authorization_enabled = _bool_field(
-        authorization, "enabled", "application.json.authorization"
-    )
-    if authorization_enabled and not login_enabled:
-        raise TemplateConfigError("启用 authorization 时 application.auth.enable 必须为 true。")
-    manifest = _object_field(technical_plan, "authorization_manifest", "TechnicalPlan")
-    if _bool_field(manifest, "enabled", "TechnicalPlan.authorization_manifest") != authorization_enabled:
-        raise TemplateConfigError("application 与 TechnicalPlan 的 authorization 状态不一致。")
-    return {
-        "capabilities": {
-            "login": {"enabled": login_enabled, "config": {}},
-            "authorization": {"enabled": authorization_enabled, "config": {}},
-        }
-    }
+    try:
+        return requested_config_from_technical_plan(technical_plan)
+    except TemplateCapabilityError as exc:
+        raise TemplateConfigError(str(exc)) from exc
 
 
 def _load_object(path: Path, label: str) -> dict[str, Any]:
@@ -54,21 +44,3 @@ def _validate_technical_plan(plan: dict[str, Any]) -> None:
 
     if plan.get("artifact_type") != "technical-plan" or plan.get("confirmation_status") != "confirmed":
         raise TemplateConfigError("Template 请求必须使用已确认的 TechnicalPlan。")
-
-
-def _object_field(value: dict[str, Any], name: str, label: str) -> dict[str, Any]:
-    """读取对象字段并统一报出当前契约错误。"""
-
-    item = value.get(name)
-    if not isinstance(item, dict):
-        raise TemplateConfigError(f"{label}.{name} 必须是对象。")
-    return item
-
-
-def _bool_field(value: dict[str, Any], name: str, label: str) -> bool:
-    """读取布尔字段，禁止用字符串或数字宽松转换。"""
-
-    item = value.get(name)
-    if not isinstance(item, bool):
-        raise TemplateConfigError(f"{label}.{name} 必须是布尔值。")
-    return item

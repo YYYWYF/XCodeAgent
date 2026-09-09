@@ -1,0 +1,19 @@
+{
+  "templateRevision": "2026.09.04.1",
+  "managedFiles": {
+    "frontend/src/added.ts": "export const added = true;\n",
+    "frontend/src/App.tsx": "export default function App() { return <main>new</main>; }\n"
+  },
+  "requested": {
+    "login": {
+      "enabled": true,
+      "config": {}
+    }
+  },
+  "effective": {
+    "login": {
+      "enabled": true,
+      "config": {}
+    }
+  }
+}

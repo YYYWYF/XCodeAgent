@@ -907,6 +907,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                 "api_contracts",
                 "pages",
                 "authorization_manifest",
+                "template_capabilities",
                 "product_plan_sha256",
                 "ui_designs_sha256",
             },

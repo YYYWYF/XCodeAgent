@@ -259,6 +259,8 @@ class ActiveFormalRevision(RevisionModel):
         "design_planning",
         "drafting",
         "awaiting_user",
+        "template_reconciling",
+        "template_reconcile_failed",
         "continuation_ready",
         "building",
         "stopped",

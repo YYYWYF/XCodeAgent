@@ -43,9 +43,17 @@ from app.services.application_lifecycle import (
     persist_application_lifecycle_transition,
 )
 from app.services.application_revision_lifecycle import issue_revision_continuation
+from app.config import Settings
+from app.services.artifact_invalidation import canonical_sha256
+from app.services.template_reconcile.finalization import (
+    claim_template_reconcile_finalization,
+    mark_template_reconcile_failed,
+)
+from app.services.template_reconcile.service import TemplateReconcileService
 from app.services.template_scaffold_injection import (
     inject_deterministic_backend_skeleton,
 )
+from app.services.workspace_bootstrap.requested_config import compile_template_requested_config
 from app.workspace.plan_documents import technical_plan_json_path
 
 
@@ -403,7 +411,19 @@ def _technical_planning(state: ProjectState) -> dict:
             # 在签发 continuation 前，把可确定性推导的后端骨架代码注入模板工程，
             # 让开发阶段 Agent 只需补充业务逻辑，不必从零生成 Entity/PO/Mapper 等
             # 确定性文件。模板工程已在首次创建时拉取到工作区，此处只写不删。
-            _inject_revision_backend_skeleton(workspace, node_state)
+            try:
+                _reconcile_revision_template_capabilities(workspace, active_revision.change_id)
+                _inject_revision_backend_skeleton(workspace, node_state, strict=True)
+            except Exception:
+                latest = load_application_lifecycle(workspace)
+                if (
+                    latest is not None
+                    and latest.active_formal_revision is not None
+                    and latest.active_formal_revision.change_id == active_revision.change_id
+                    and latest.active_formal_revision.status == "template_reconciling"
+                ):
+                    mark_template_reconcile_failed(workspace, change_id=active_revision.change_id)
+                raise
             token, issued = issue_revision_continuation(
                 workspace,
                 change_id=active_revision.change_id,
@@ -604,11 +624,42 @@ def _workspace(state: ProjectState) -> str:
     return workspace
 
 
-def _inject_revision_backend_skeleton(workspace: str, state: dict[str, Any]) -> None:
+def _reconcile_revision_template_capabilities(workspace: str, change_id: str) -> None:
+    """在二次 TechnicalPlan 确认后、Skeleton 前执行一次受开关保护的模板能力补充。"""
+
+    settings = Settings.from_env()
+    if not settings.template_reconcile_enabled:
+        return
+    plan_path = Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+    claim = claim_template_reconcile_finalization(workspace, change_id=change_id)
+    if not claim.acquired:
+        raise ApplicationLifecycleConflictError("Template Reconcile 已在执行或等待后续收口，不能重复触发。")
+    try:
+        requested_config = compile_template_requested_config(workspace)
+        asyncio.run(
+            TemplateReconcileService(settings).reconcile(
+                workspace,
+                change_id=change_id,
+                requested_config=requested_config,
+                technical_plan_sha256=canonical_sha256(plan_path),
+            )
+        )
+    except Exception:
+        # 外层同时覆盖 Skeleton 失败，并统一把 active revision 标记为可重试失败。
+        raise
+
+
+def _inject_revision_backend_skeleton(
+    workspace: str,
+    state: dict[str, Any],
+    *,
+    strict: bool = False,
+) -> None:
     """二次修改确认 TechnicalPlan 后，仅注入确定性的后端骨架。
 
     只在模板工程已存在时注入（首次创建由 Workspace Bootstrap 完成，不在此注入）。
-    注入失败不阻断主流程——确定性代码缺失时 Agent 仍可在 build 阶段补生成。
+    旧流程注入失败不阻断主流程；当 `strict=True`（模板能力 Reconcile 已成功）时，
+    必须把失败上抛，使同一 changeId 可从已完成 Reconcile 结果重试。
 
     前端页面、菜单、路由及权限资源均由确认 Build DAG 在页面任务完成后投影；
     这里不得预创建或重写它们。后端骨架从 TechnicalPlan 的 entities 推导
@@ -628,7 +679,8 @@ def _inject_revision_backend_skeleton(workspace: str, state: dict[str, Any]) -> 
         inject_deterministic_backend_skeleton(workspace, technical_plan)
     except Exception:
         # 后端骨架是优化项，失败不阻断二次修改主流程；Agent 仍可补生成。
-        pass
+        if strict:
+            raise
 
 
 def build_application_planning_graph(*, checkpointer):

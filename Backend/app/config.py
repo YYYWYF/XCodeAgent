@@ -63,6 +63,7 @@ class Settings:
     template_package_max_bytes: int = 104857600
     template_package_max_files: int = 10000
     template_package_max_extracted_bytes: int = 524288000
+    template_reconcile_enabled: bool = False
 
     @property
     def model_api_name(self) -> str:
@@ -143,6 +144,9 @@ class Settings:
                 os.getenv(
                     "XCODEAGENT_TEMPLATE_PACKAGE_MAX_EXTRACTED_BYTES", "524288000"
                 )
+            ),
+            template_reconcile_enabled=_env_bool(
+                "XCODEAGENT_TEMPLATE_RECONCILE_ENABLED", default=False
             ),
         )
 

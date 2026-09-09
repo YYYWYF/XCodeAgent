@@ -48,7 +48,12 @@ def _prepare_generating_workspace(workspace: Path) -> None:
         (specs / "ui-designs.json", {"confirmation_status": "confirmed"}),
         (
             plans / "technical-plan.json",
-            {"confirmation_status": "confirmed", "artifact_type": "technical-plan", "authorization_manifest": {"enabled": False}},
+            {
+                "confirmation_status": "confirmed",
+                "artifact_type": "technical-plan",
+                "authorization_manifest": {"enabled": False},
+                "template_capabilities": {},
+            },
         ),
     ):
         path.write_text(json.dumps(payload), encoding="utf-8")

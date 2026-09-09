@@ -1,8 +1,8 @@
 # XCodeAgent Workspace Bootstrap 实施方案
 
 > 本文只描述**首次创建应用时的模板初始化**。  
-> 模板体系公共架构、TemplateState、Capability、Desired/Requested/Effective 和 Ownership 规则见 [`TEMPLATE_REFACTOR.md`](./TEMPLATE_REFACTOR.md)。  
-> 已有 Workspace 在 TechnicalPlan Revision 后的模板能力增量更新见 [`TEMPLATE_RECONCILE_PLAN.md`](./TEMPLATE_RECONCILE_PLAN.md)。
+> 公共 TemplateState、Capability、Operation、Validation、Ownership 和 Build Binding 契约见 [`TEMPLATE_REFACTOR.md`](./TEMPLATE_REFACTOR.md)。
+> 已有 Workspace 的后续模板能力收敛见 [`TEMPLATE_RECONCILE_PLAN.md`](./TEMPLATE_RECONCILE_PLAN.md)。
 
 ---
 
@@ -10,71 +10,66 @@
 
 ## 1.1 目标
 
-Bootstrap 解决的问题是：
+Bootstrap 解决：
 
-> 在 Workspace 尚未初始化时，由 XCodeAgent Backend 调用 Template Engine `/v1/generate` 获取完整模板包，安全物化 frontend/backend，建立独立 Git baseline，并持久化 `.xcodeagent/template-state.json`，最终进入 Workbench。
+> 在 Workspace 尚未初始化时，由 XCodeAgent Backend 基于已确认 TechnicalPlan 编译 RequestedConfig，先通过 `/v1/plan` 获得 Engine 的完整目标状态和 Validation Contract，再调用 `/v1/generate` 获取完整工程包，安全物化 Workspace，执行 Blocking Validation，建立独立 Git baseline，并持久化完整 `.xcodeagent/template-state.json`。
 
 目标链路：
 
 ```text
 TechnicalPlan Confirmed
         ↓
-Application Lifecycle
-        ↓
 Compile Initial RequestedConfig
+        ↓
+POST /v1/plan
+currentTemplateState = null
+        ↓
+Plan Contract Gate
         ↓
 POST /v1/generate
         ↓
 Full Template Package
         ↓
-Validate / Stage
+Package / State Alignment Validation
         ↓
-Materialize frontend/backend
+Materialize Staging
+        ↓
+Workspace Preparation
+        ↓
+Engine Blocking Validation
         ↓
 Git Init + Baseline
         ↓
-Persist TemplateState
+Atomic Persist TemplateState
         ↓
 Readiness
         ↓
 READY_FOR_WORKBENCH
 ```
 
-Bootstrap 仅用于：
-
-```text
-First Creation
-```
-
-不得用于后续 TechnicalPlan Revision。
+Bootstrap 仅用于 First Creation，不得用于后续 Revision。
 
 ---
 
 ## 1.2 非目标
 
-Bootstrap 明确不负责：
+Bootstrap 不负责：
 
-- 后续 Capability Add/Remove；
-- Template Engine `/v1/update`；
+- `/v1/update`；
 - Existing Workspace ChangeSet Apply；
-- Template Revision Upgrade；
+- Template Refresh / Revision Upgrade；
 - Agent 业务代码生成；
-- 页面 placeholder；
-- `BIZ_MENUS`；
-- 业务 Route；
+- 页面 placeholder / 业务菜单 / 业务 Route；
 - Authorization 业务资源投影；
-- Workspace semantic scan；
-- LLM 决定文件解压、Git、rollback；
-- Template Engine 服务端保存 Project/Workspace 生命周期；
-- 第二份模板元数据。
+- 真实业务数据库 Migration 执行；
+- Engine Service 项目级持久化；
+- 第二份模板领域状态。
 
 ---
 
-## 1.3 Bootstrap 前置条件
+## 1.3 前置条件
 
-Bootstrap 只允许在“未初始化 Workspace”执行。
-
-Preflight 固定检查：
+Bootstrap 只允许在未初始化 Workspace：
 
 ```text
 frontend 不存在
@@ -83,7 +78,7 @@ backend 不存在
 .xcodeagent/template-state.json 不存在
 ```
 
-生命周期必须处于允许首次模板初始化的阶段，例如：
+生命周期：
 
 ```text
 AWAITING_TECHNICAL_PLAN_CONFIRMATION
@@ -91,36 +86,95 @@ AWAITING_TECHNICAL_PLAN_CONFIRMATION
 GENERATING_APPLICATION_TEMPLATE_FILES
 ```
 
-如果 Workspace 已存在 TemplateState，应进入 Reconcile 语义，而不是重新 Bootstrap。
+如果 TemplateState 已存在，不得重新 Bootstrap。
 
 ---
 
 ## 1.4 Initial RequestedConfig
 
-Bootstrap 使用公共 Desired Capability 编译规则。
-
-目标状态：
+唯一 Desired Authority：
 
 ```text
-Confirmed TechnicalPlan
-        ↓
-template_capabilities
-        ↓
-RequestedConfig
+Confirmed TechnicalPlan.template_capabilities
 ```
 
-过渡期如果 TechnicalPlan 尚未显式提供 `template_capabilities`，可以从现有已确认 Artifact 编译，但必须遵守：
+application.json 仅提供创建阶段 Initial Intent。
 
-1. 不解析 Capability dependency；
-2. authorization 不在 XCodeAgent 内自动补 login；
-3. application.json 只表示创建阶段初始 Intent；
-4. 产出的 RequestedConfig 必须与 Template Engine API 契约一致。
+XCodeAgent：
+
+```text
+不解析 Capability dependency
+不自动补 authorization → login
+不支持非空 capability config（Engine V1）
+```
+
+TechnicalPlan Confirm 前必须通过：
+
+```text
+template_capabilities Markdown round-trip
+authorization_manifest / template_capabilities consistency
+```
 
 ---
 
-## 1.5 `/v1/generate` Package Contract
+## 1.5 Bootstrap Plan Gate
 
-V1 Full Package 固定：
+Bootstrap 不直接只调用 `/v1/generate`。
+
+先调用：
+
+```json
+{
+  "currentTemplateState": null,
+  "requestedConfig": {
+    "capabilities": {}
+  }
+}
+```
+
+`/v1/plan` 首次必须返回 `CHANGE`。
+
+XCodeAgent 保存本次执行期 Plan Snapshot：
+
+```text
+nextTemplateState
+ChangeSetBody
+validationPlan
+risks
+diagnostics
+planJcsSha256
+```
+
+在首次 Materialize 前，还必须持久化一个 **Bootstrap Execution Journal**。它只记录本次
+Bootstrap 尝试，不是第二份模板领域状态：
+
+```text
+.xcodeagent/runtime/bootstrap/<attemptId>.json
+
+attemptId
+phase
+technicalPlanFileSha256
+requestedConfigJcsSha256
+planJcsSha256
+packageStateJcsSha256 | null
+leaseId / epoch
+validationRun | null
+```
+
+`technicalPlanFileSha256` 是确认后的 TechnicalPlan Markdown 原始 bytes SHA-256；
+`requestedConfigJcsSha256` 是 RFC 8785 JCS digest。开始 Materialize 前、进入
+`COMMITTING_METADATA` 前都必须重新计算并比对这两个 binding。任一改变都不得提交旧
+Package，且在 metadata commit 之前按 Bootstrap cleanup 结束本次尝试。
+
+Execution Journal 是 Attach 终止 orphan validation process、判断 cleanup 边界和恢复
+metadata 的唯一 Bootstrap 尝试证据；成功后可原子移入 history 或删除。它不参与
+TemplateState / capability 决策。
+
+---
+
+## 1.6 `/v1/generate` Package Contract
+
+完整包：
 
 ```text
 template-package.zip
@@ -130,37 +184,31 @@ template-package.zip
     └── template-state.json
 ```
 
-允许 Workspace managed root：
-
-```python
-MANAGED_ROOTS = ("frontend", "backend")
-```
-
-`.xcodeagent` exact allow-list：
+Generate Package 内的 TemplateState 必须与 Plan：
 
 ```text
-.xcodeagent/template-state.json
+plan.nextTemplateState
 ```
 
-禁止：
+语义完全一致；不一致时拒绝 Bootstrap。
+
+XCodeAgent 必须按完整 Engine Schema 校验：
 
 ```text
-.git/**
-其他 .xcodeagent/**
-其他未声明顶层 root
+templateRevision
+requested
+effective
+capabilities
+managed.files
+managed.nodes
+migrations
 ```
 
-未来增加 `infra/` 等 root，必须同时升级：
-
-```text
-Engine Package Contract
-XCodeAgent allow-list
-Contract Tests
-```
+不再使用旧四字段模型。
 
 ---
 
-## 1.6 Package 下载与安全
+## 1.7 Package 下载与安全
 
 必须：
 
@@ -168,45 +216,29 @@ Contract Tests
 HTTP streaming
 timeout
 package size limit
-SHA-256（如契约提供）
-async cancellation
 staging
+async cancellation
 ```
 
-ZIP 必须拒绝：
+ZIP 拒绝：
 
-- `..` 路径穿越；
+- `..`；
 - 绝对路径；
 - Windows drive path；
-- symlink；
-- 特殊文件；
+- symlink / 特殊文件；
 - 加密 ZIP；
 - 重复 path；
 - 大小写冲突；
+- Unicode 规范化冲突；
 - 解压配额超限；
-- 非法顶层 root；
 - `.git/**`；
 - 非 allow-list 的 `.xcodeagent/**`。
 
-禁止：
-
-```python
-zip.extractall(workspace)
-```
-
-所有内容先进入 staging。
+禁止直接 `extractall(workspace)`。
 
 ---
 
-## 1.7 Workspace Bootstrap Transaction
-
-Bootstrap 事务分为：
-
-```text
-Preparation
-Commit Section
-Rollback
-```
+## 1.8 Bootstrap Transaction
 
 ### Preparation
 
@@ -214,87 +246,124 @@ Rollback
 
 ```text
 download
-        ↓
-archive security validation
-        ↓
-package contract validation
-        ↓
-extract staging
-        ↓
-TemplateState validation
+→ archive validation
+→ extract staging
+→ TemplateState validation
+→ compare Plan nextTemplateState
+→ workspace tree validation
 ```
 
-不修改正式 frontend/backend。
-
-### Commit Section
-
-固定顺序：
+### Materialize
 
 ```text
 move frontend
-        ↓
 move backend
-        ↓
-git init
-        ↓
-git baseline commit
-        ↓
-atomic write template-state
-        ↓
-remove staging
-        ↓
-full readiness
-        ↓
-commit success
 ```
 
-### Rollback
+### Blocking Validation
 
-事务中任一步失败，清理本轮 Bootstrap 创建的：
+执行 `/v1/plan` 返回的全部：
+
+```text
+blocking=true validationPlan
+```
+
+命令：
+
+```text
+参数数组直接执行
+禁止 shell 拼接
+workingDirectory 必须位于 Workspace
+超时/启动失败/非零退出阻断
+```
+
+Validation 可能产生 `pnpm-lock.yaml`；该文件属于 Workspace 包管理副作用，不进入 TemplateState，但必须在失败 rollback 中被清理。
+
+Validation Command 与 Reconcile 共用公共 Runner：必须在独立 process group 中运行，并在
+**启动子进程前**将下列内容 fsync 到 Bootstrap Execution Journal：
+
+```text
+validationRunId + pid/pgid + commandDigest + startedAt + MutationContext(leaseId, epoch)
+```
+
+命令退出后也必须先持久化其退出状态，才进入 Git Baseline。若 Backend crash，Attach
+Recovery 先从 Journal 验证 command identity、终止仍属于该 Validation Run 的 orphan
+process group，再判断 cleanup/rollback；禁止先删除 Workspace 后才寻找子进程。
+
+### Git Baseline
+
+Validation 成功后：
+
+```text
+git init
+git config --local user.name XcodeAgent
+git config --local user.email xcodeagent@local
+git add frontend backend
+git commit -m "chore: initialize workspace from template"
+```
+
+`.xcodeagent/` 不进入 baseline。
+
+### Metadata Commit
+
+全部 Materialize、Blocking Validation 与 Git baseline 成功后：
+
+```text
+Compute Engine Exclusive actual-byte baseline
+→ Stage .xcodeagent/template-state.json
+→ Stage .xcodeagent/runtime/template-runtime-state.json
+   managedBaseline = computed target
+   bootstrapCommit.phase = COMMITTING_METADATA
+   finalization = null
+→ Atomic replace runtime state（durable bootstrap commit intent）+ fsync
+→ Atomic replace template-state.json + fsync
+→ Target Workspace Contract final recheck
+→ Atomic replace runtime state（bootstrapCommit=null，final baseline）+ fsync
+→ verify both target digests
+→ Bootstrap Completed
+```
+
+不能把 TemplateState 和 baseline 拆成两个无恢复关联的提交步骤。
+
+
+## 1.9 Cleanup / Recovery Boundary
+
+Bootstrap 只有在 **尚未持久化 `bootstrapCommit.phase=COMMITTING_METADATA`** 时才允许
+自动 cleanup。此时任一步失败，清理本轮 Bootstrap 创建的：
 
 ```text
 frontend/
 backend/
 .git/
 .xcodeagent/template-state.json
+.xcodeagent/runtime/template-runtime-state.json
+.xcodeagent/runtime/bootstrap/<attemptId>.json
 staging/
+validation 产生的 lockfile / build side effects（按 Cleanup Policy）
 ```
 
-保留：
+保留 Requirement / ProductPlan / UiDesign / TechnicalPlan 等已确认 Artifact。
+
+Bootstrap 失败不做原地 Resume；进入明确 Failed lifecycle。
+
+一旦 durable commit intent 已存在，禁止以“任一步失败”为由直接删除整个 Workspace：
 
 ```text
-application.json
-application-lifecycle.json
-Requirement / ProductPlan / UiDesign / TechnicalPlan
+State 未写入 / State target 已写入
+→ Attach 读取 bootstrapCommit + Execution Journal
+→ Target Workspace Contract 成立才补齐 metadata pair
+→ Contract 不成立则 TEMPLATE_METADATA_WORKSPACE_DIVERGED / recovery_required
 ```
 
-V1 不做失败后的原地 Resume；失败应进入确定的 Failed lifecycle。
+这样既不会把已提交 target State 回退成旧事实，也不会在外部编辑后自动删除或覆盖
+Workspace。Bootstrap 的业务失败仍可由用户重新发起新的 Bootstrap attempt；但
+`recovery_required` 必须先完成 Attach/人工恢复，不能把它伪装成普通 retry。
 
 ---
 
-## 1.8 Git Baseline
+## 1.10 Git Baseline 验收
 
-Workspace 初始化为独立 Git Repository。
-
-固定流程：
-
-```bash
-git init
-git config --local user.name XcodeAgent
-git config --local user.email xcodeagent@local
-git add
-git commit
-```
-
-Baseline commit：
-
-```text
-chore: initialize workspace from template
-```
-
-`.xcodeagent/` 不进入 baseline。
-
-成功后必须满足：
+成功后：
 
 ```bash
 git rev-parse HEAD
@@ -312,164 +381,233 @@ working tree clean
 
 ---
 
-## 1.9 TemplateMutationCoordinator
+## 1.11 Ownership Baseline 与 Metadata Commit
 
-Bootstrap Task 由 Backend server-owned coordinator 持有。
-
-职责：
+Bootstrap 完成后按 Ownership 建立不同冲突证据：
 
 ```text
-同一 Workspace 单实例 Bootstrap
-Task ownership
-重复 trigger 复用
-Application Delete 协调
-Commit critical section
-Workspace Attach 中断收尾
+ENGINE_EXCLUSIVE
+→ .xcodeagent/runtime/template-runtime-state.json.managedBaseline.engineExclusiveFiles
+→ path → sha256(actual final bytes) + mode
+
+SHARED_STRUCTURED_HOST
+→ 不记录 whole-file baseline
+→ Engine-owned node baseline 直接由 committed TemplateState.managed.nodes 表达
+
+PLATFORM_OVERLAY
+→ 不记录 whole-file baseline
+→ marker/region contract
 ```
 
-AG-UI / Renderer 只是触发和观察。
 
-因此：
+TemplateRuntimeState V1：
+
+```json
+{
+  "schemaVersion": "template-runtime-state.v1",
+  "managedBaseline": {"engineExclusiveFiles": {}},
+  "bootstrapCommit": null,
+  "finalization": null
+}
+```
+
+Bootstrap 不使用 `finalization`；它只在 Metadata Commit 临界区短暂写 `bootstrapCommit`，成功后清空。
+
+固定 Shared Structured Host 至少包括：
 
 ```text
-SSE disconnect
-≠
-cancel Bootstrap
+frontend/package.json
+backend/pom.xml
 ```
 
-Renderer 断连时，真实 Backend Bootstrap Task 继续执行。
+这样后续业务正常新增依赖不会因为宿主文件 bytes 改变而永久触发 `TEMPLATE_MANAGED_FILE_CONFLICT`。
 
----
-
-## 1.10 Application Delete
-
-删除行为按 Bootstrap 当前阶段处理。
-
-### Preparation
-
-可以取消 Task 并清理 staging。
-
-### Commit Section
-
-必须等待 Commit 成功或 Rollback 完成后，再执行应用删除。
-
-不能在：
+Bootstrap Readiness 必须同时验证：
 
 ```text
-frontend 已 move
-backend 未 move
+Shared Host 可解析
+TemplateState.managed.nodes 在实际 Host 中全部成立
+Engine Exclusive runtime managedBaseline 与 actual bytes 一致
+Platform marker host contract 成立
 ```
 
-等半事务状态直接并发删除。
-
----
-
-## 1.11 Workspace Attach 中断收尾
-
-Backend 不在进程启动时扫描和恢复所有 Workspace。
-
-用户重新打开一个已知 Workspace 时：
+Bootstrap 的最终提交仍把两个 Template JSON：
 
 ```text
-Frontend
-    ↓
-workspace_attach
-    ↓
-TemplateMutationCoordinator
+.xcodeagent/template-state.json
+.xcodeagent/runtime/template-runtime-state.json
 ```
 
-若发现：
+作为同一个 `TemplateMetadataCommit` 逻辑事务组。现有 `.xcodeagent/checkpoints/checkpoints.sqlite` 仍只由 LangGraph Checkpointer 管理，不写 Bootstrap/Reconcile 自定义状态。
+
+固定：
+
+```text
+stage target template-state.json
+→ write runtime state with target managedBaseline + bootstrapCommit intent
+→ atomic replace runtime state（durable intent）+ fsync
+→ atomic replace template-state.json + fsync
+→ Target Workspace Contract recheck（intent 仍存在）
+→ atomic replace runtime state（bootstrapCommit=null）+ fsync metadata dirs
+→ 两者 target digest 都成立后 Bootstrap Completed
+```
+
+`Target Workspace Contract` 是清除 intent 前的最后一道门。若它失败，必须保留 intent 并
+进入 recovery_required；不得先清空 `bootstrapCommit` 再发现 Workspace 漂移。
+
+若 crash 发生在 metadata replace 中间，Attach Recovery 在取得统一 Mutation Lease 后，必须先复验 Target Workspace Contract，再 roll-forward target metadata pair。
+
+`resources.ts` 若属于 Platform Overlay Host，新 Bootstrap 使用的 Engine Source 必须已经包含双方约定 marker；否则该 Engine 版本不能被 XCodeAgent 标记为 Reconcile-ready。
+
+## 1.12 TemplateMutationCoordinator / WorkspaceMutationManager
+
+`TemplateMutationCoordinator` 负责 Bootstrap 业务编排，但真正的互斥必须下沉到公共：
+
+```text
+WorkspaceMutationManager
+WorkspaceMutationContext
+WorkspaceMutationFS
+```
+
+Backend 所有 Workspace 写路径共用同一个按 `workspaceId/applicationId` 管理的 Lease。Lease 身份保存在 Workspace 外部 runtime/registry，确保 Application Delete 也受同一个锁保护。
+
+Lease Provider 是跨平台抽象，不得把 POSIX `flock` 当成产品级唯一实现：
+
+```text
+macOS / Linux → fd-backed POSIX flock
+Windows       → LockFileEx（或等价的内核级排他文件锁）
+```
+
+两种实现都必须具备：同一 workspace 的跨进程排他、进程死亡后内核自动释放、原子递增
+并持久化 epoch、以及旧 MutationContext 在新 epoch 下被 `WorkspaceMutationFS` fencing。
+不能只持久化 lease metadata，也不能把仅进程内 mutex 当作 Lease。
+
+Bootstrap acquire lease 后，其内部 Materialize/Git baseline/metadata commit 都携带同一 MutationContext。Build、Projection、Reconcile、Delete、Attach Recovery 也必须走同一 Manager。
+
+实际文件写入层必须验证 MutationContext；无有效 Lease 的 server-owned Workspace mutation 返回：
+
+```text
+WORKSPACE_MUTATION_LEASE_REQUIRED
+```
+
+文件层与受管子进程必须分开建模：
+
+```text
+WorkspaceMutationFS
+→ Backend 内部 write / replace / move / delete
+
+WorkspaceMutationProcessRunner
+→ git、blocking validation、Build、其他会写 Workspace 的受管子进程
+```
+
+Process Runner 在启动前校验 MutationContext，并把 leaseId/epoch 记录到 process registry；
+它不能被要求“经 WorkspaceMutationFS 写文件”。Agent File Tool、delete tool、workspace
+mutation API、Projection、Git 和受管 subprocess 都必须纳入 write-path inventory 与旁路测试。
+
+SSE disconnect 不取消 Bootstrap。
+
+## 1.13 Delete 与 Attach Recovery
+
+Preparation 阶段可取消并清理 staging。
+
+Commit 临界区必须等待成功或 rollback 完成后再 Delete。
+
+Workspace Attach 若发现 `template-runtime-state.json.bootstrapCommit.phase == COMMITTING_METADATA`，必须先 Acquire 同一 Mutation Lease，并复验 Target Workspace Contract：
+
+```text
+ENGINE_EXCLUSIVE target baseline 成立
+SHARED_STRUCTURED_HOST target managed.nodes 成立
+PLATFORM_OVERLAY marker contract 成立
+```
+
+通过后再处理 metadata pair：
+
+```text
+TemplateState target + RuntimeBaseline target + bootstrapCommit!=null → 清 bootstrapCommit，完成 Bootstrap
+TemplateState absent + RuntimeBaseline target + bootstrapCommit!=null → Target Contract 通过后 roll-forward TemplateState
+TemplateState target + RuntimeBaseline old/invalid                    → recovery required
+其他异常组合                                                     → recovery required
+```
+
+若 Workspace target contract 已不成立，则标记 `TEMPLATE_METADATA_WORKSPACE_DIVERGED`，不得盲目 roll-forward。
+
+Attach 必须先读取 Bootstrap Execution Journal：若 `validationRun` 仍是运行中状态，先按
+process identity 终止 orphan process group；只有确认其不能再写 Workspace 后，才进入
+metadata recovery 或 cleanup。
+
+若尚未进入 metadata commit，cleanup 只删除当前 `attemptId` 的 Execution Journal；不得
+删除 Requirement / ProductPlan / UiDesign / TechnicalPlan 或其他运行时所有者的数据。
+
+只有 Metadata Commit 尚未开始或仍处于可回滚阶段，才按下面逻辑执行 cleanup。
+
+Workspace Attach 若发现：
 
 ```text
 lifecycle = GENERATING_APPLICATION_TEMPLATE_FILES
 Coordinator 无 active task
 ```
 
-说明此前 Bootstrap 被进程级中断。
-
-执行确定性收尾：
+执行确定性 cleanup；成功后转：
 
 ```text
-cleanup frontend
-cleanup backend
-cleanup .git
-cleanup template-state
-cleanup staging
-        ↓
-verify clean
-        ↓
-GENERATING → APPLICATION_TEMPLATE_GENERATION_FAILED
-```
-
-若 cleanup 未完成：
-
-```text
-保持 GENERATING
-```
-
-下次 Attach 继续清理。
-
-`get` 保持只读；`workspace_attach` 是中断 Bootstrap 收尾入口。
-
----
-
-## 1.12 Readiness Gate
-
-Bootstrap 事务结束前必须验证：
-
-1. RequirementSpec == CONFIRMED；
-2. ProductPlan == CONFIRMED；
-3. UiDesign IN {CONFIRMED, SKIPPED}；
-4. TechnicalPlan == CONFIRMED；
-5. TemplateState 存在并完整合法；
-6. TemplateState.requested 与本轮 RequestedConfig 一致；
-7. 初始请求能力已经存在于 effective capability；
-8. `frontend/package.json` 是普通文件；
-9. `backend/pom.xml` 存在；
-10. Spring Boot Application 入口存在；
-11. Workspace 是独立 Git repo；
-12. HEAD 存在；
-13. Git working tree clean；
-14. `.xcodeagent` 不进入 baseline；
-15. staging 无残留；
-16. 正式路径不依赖 templateVariant/main/auth branch。
-
-Readiness 必须位于 Bootstrap 事务内。
-
-Readiness 失败：
-
-```text
-rollback
-        ↓
 APPLICATION_TEMPLATE_GENERATION_FAILED
 ```
 
-不得产生：
-
-```text
-FAILED lifecycle + 半物化模板
-```
+cleanup 未完成则保持 GENERATING，下一次 Attach 继续收尾。
 
 ---
 
-## 1.13 Bootstrap 与业务开发解耦
+## 1.14 Bootstrap Readiness 与提交边界
 
-Bootstrap 完成时只要求：
+以下是 **Pre-Commit Readiness**，必须在写入 durable `COMMITTING_METADATA` intent 前完成。
+其中 TemplateState / RuntimeBaseline 校验使用已 stage 的 target JSON 与当前 Workspace，
+不要求正式 metadata 文件已经提交：
+
+1. RequirementSpec CONFIRMED；
+2. ProductPlan CONFIRMED；
+3. UiDesign CONFIRMED/SKIPPED；
+4. TechnicalPlan CONFIRMED；
+5. TemplateState 完整 Schema 合法；
+6. TemplateState `canonical_json_sha256_v1`（RFC 8785 JCS + SHA-256）可计算；
+7. Plan nextTemplateState 与 Package State 一致；
+8. RequestedConfig 与 TemplateState.requested 语义一致；
+9. 请求 Capability 已体现在 effective；
+10. `managed.files` 宿主存在且为普通文件；
+11. `managed.nodes` 宿主存在且可解析；
+12. migrations 对应文件存在；
+13. frontend/backend 入口文件存在；
+14. Engine Blocking Validation 全部成功；
+15. Git HEAD 存在且 clean；
+16. `.xcodeagent` 不进入 baseline；
+17. 无 staging 残留；
+18. 不依赖 templateVariant/main/auth branch。
+
+Pre-Commit Readiness 失败必须 cleanup/rollback。
+
+Metadata Commit 后只允许执行不改变语义的 **Post-Commit Verification**：metadata pair target
+digest、Git HEAD/clean、staging 已清理、Execution Journal 可归档。该校验异常时不得 cleanup
+已提交 Workspace，而是保留 Execution Journal 并标记 recovery_required 交给 Attach 处理。
+
+---
+
+## 1.15 与业务开发解耦
+
+Bootstrap 只建立：
 
 ```text
-模板固定能力已经物化
-TemplateState 已建立
-Git baseline 已建立
+Template Capability
+TemplateState
+Git Baseline
+Managed Baseline Evidence
 ```
 
-不提前生成：
+不生成：
 
 ```text
 业务页面
-页面 placeholder
 业务菜单
 业务 Route
-权限 resourceKey
+业务 resourceKey
 AuthConstants 业务常量
 ```
 
@@ -477,412 +615,258 @@ AuthConstants 业务常量
 
 ```text
 READY_FOR_WORKBENCH
-        ↓
-Workspace Inspection
-        ↓
-Build DAG
-        ↓
-Agent Build
-        ↓
-Platform Projection
+→ Workspace Inspection
+→ Build DAG
+→ Agent Build
+→ Platform Projection
 ```
 
 ---
 
-## 1.14 Frontend / Electron 收口
+## 1.16 新旧 Workspace 切换规则
 
-正式 Bootstrap 路径：
+新版 Template Reconcile 只对本 Bootstrap 方案生成的**完整 Engine V1 TemplateState** 启用。
 
-```text
-Frontend
-    ↓
-AG-UI bootstrap_template_generation
-    ↓
-Backend WorkspaceBootstrapService
-    ↓
-Template Engine
-```
+旧四字段 TemplateState Workspace 不在 Bootstrap 阶段自动改写，也不通过扫描现有代码推断 `capabilities / managed.nodes / migrations`。
 
-Electron 不再负责模板 Git clone。
-
-最终删除正式路径依赖：
+运行时应由 `TemplateStateCompatibilityChecker` 判断：
 
 ```text
-DEFAULT_FRONTEND_TEMPLATE_REPO_URL
-DEFAULT_BACKEND_TEMPLATE_REPO_URL
-fetchTemplateCode
-TemplateDownloadError
-workspace.cloneTemplate
-workspace:clone-template
-TemplateDownloadResult
-TemplateDownloadTarget
-resolveApplicationTemplateBranch
-main/auth template branch selection
+完整 Engine V1 State → new template lifecycle
+旧四字段 State       → legacy lifecycle / capability revision blocked
 ```
 
-Electron 只保留 Desktop 容器和 OS 集成职责。
+旧 Workspace 的显式迁移不属于 Bootstrap V1。
 
 ---
 
-# 第二章 实施计划
+# 第二章 分步实施计划与人工验收
 
-## 2.1 实施原则
+Bootstrap 与 Reconcile 共用 Engine Model、Mutation Lease、Validation Runner、Digest 与 Ownership 公共组件。本章只描述首次 Workspace 初始化的实施顺序。
 
-Bootstrap 实施遵循：
-
-```text
-先冻结契约
-→ 再完成事务
-→ 再迁移消费者
-→ 最后一次性 Runtime Cutover
-```
-
-不得长期运行：
+统一建议提供：
 
 ```text
-New Bootstrap + Old templateVariant Build
+validation/template-bootstrap/
+├── verify_step_00_engine_contract.py
+├── verify_step_01_client_package.py
+├── verify_step_02_materialize_validation.py
+├── verify_step_03_git_metadata.py
+├── verify_step_04_runtime_cutover.py
+└── verify_e2e.py
 ```
 
----
+验证程序必须由 Python 在 Windows/macOS 共同执行；可额外提供 shell / PowerShell wrapper，
+但 wrapper 不是唯一验收入口。
 
-## 2.2 阶段 1：冻结 Generate 契约
+## 2.1 Step 00：Engine Plan/Generate 契约
 
-Template Engine 侧冻结：
+实现并确认实际 Engine 支持完整 TemplateState、`/v1/plan`、`/v1/generate`、validationPlan 与 Generate Package State。
 
-```text
-PackageBuilder
-OpenAPI
-TemplateState
-/v1/generate
-Contract Tests
+人工验收：
+
+```bash
+python3 validation/template-bootstrap/verify_step_00_engine_contract.py
 ```
 
-自动化验收：
+手工核对：
 
-- ZIP 只含 frontend/backend/template-state；
-- TemplateState Core/OpenAPI/Package 一致；
-- Requested 不被调用方补 dependency；
-- Effective 由 Engine 解析；
-- 非法 Package 被拒绝。
-
-退出标准：
-
-- [ ] Generate Package Contract 稳定；
-- [ ] TemplateState Schema 稳定；
-- [ ] XCodeAgent 可按 OpenAPI 完整校验。
-
----
-
-## 2.3 阶段 2：建设公共 Engine Client 与 Package Validator
-
-目标结构：
-
-```text
-Backend/app/services/template_engine/
-├── client.py
-├── models.py
-├── archive_security.py
-└── package_validation.py
+```bash
+unzip -p <generate.zip> .xcodeagent/template-state.json | jq '.capabilities,.managed,.migrations'
 ```
 
-Bootstrap 侧保留：
+通过标准：Generate Package State 与 Plan `nextTemplateState` JCS 语义相等；实际 Engine 不是旧四字段版本。
 
-```text
-workspace_bootstrap/
-├── requested_config.py
-├── template_package.py
-└── ...
-```
-
-验收：
-
-- streaming timeout；
-- oversized download；
-- unsafe ZIP；
-- 非法 root；
-- 非法 `.xcodeagent`；
-- valid/invalid TemplateState。
-
-退出标准：
-
-- [ ] `/v1/generate` 不依赖 Electron；
-- [ ] Package Security 测试闭合。
-
----
-
-## 2.4 阶段 3：Workspace Transaction / Git / Recovery
+## 2.2 Step 01：公共 Engine Client、Archive Security 与 Package Validator
 
 实现：
 
 ```text
-workspace_bootstrap/materializer.py
-workspace_bootstrap/git_manager.py
-TemplateMutationCoordinator
-BootstrapJournal
-deletion fence
-workspace_attach
+plan(null, requested)
+generate(requested)
+archive traversal/symlink guard
+Package State / Plan alignment
 ```
 
-故障注入：
+人工验收：
+
+```bash
+python3 validation/template-bootstrap/verify_step_01_client_package.py
+```
+
+必须可见验证：合法 package 解压；绝对路径、`..`、symlink、重复 State、State mismatch 均稳定拒绝。
+
+## 2.3 Step 02：Bootstrap Journal、跨平台 Lease、Materialize 与 Blocking Validation
+
+实现：
 
 ```text
-第二 root move 失败
-git init 失败
-git commit 失败
-TemplateState 写失败
-Readiness 失败
-Attach cleanup 失败
+Persist Bootstrap Execution Journal + TechnicalPlan / RequestedConfig binding
+Acquire Workspace Mutation Lease (platform lock + epoch fencing)
+Bootstrap preflight
+staging materialize
+atomic move frontend/backend
+persist validationRun before process start
+blocking validation process group
+persist validation exit evidence before Git
+validation side-effect cleanup
+all Workspace write-path inventory
 ```
 
-所有失败必须回到确定状态。
+人工验收：
 
-退出标准：
+```bash
+python3 validation/template-bootstrap/verify_step_02_materialize_validation.py
+```
 
-- [ ] rollback 闭合；
-- [ ] deletion 两阶段语义闭合；
-- [ ] Attach 收尾幂等；
-- [ ] Git baseline 可独立验收。
+人工观察：
 
----
+- 第二 worker 同时 Bootstrap 被 Lease 阻断；
+- macOS 与 Windows 上 kill 第一 worker 后均可重新取得更高 epoch；
+- Validation failure 后 frontend/backend、lockfile、副作用按 policy 清理；
+- Backend 在 Validation 运行中被 kill 后，Attach 从 Execution Journal 终止已登记的 orphan process，确认它不再修改 Workspace 后才 cleanup；
+- Agent File Tool、delete tool、workspace mutation API、Projection、Git 和受管 subprocess 缺少有效 MutationContext 时均不能旁路写入。
 
-## 2.5 阶段 4：TemplateState Consumer 与 Build Runtime Cutover
+## 2.4 Step 03：Git Baseline、Ownership Baseline 与 Metadata Commit
 
-公共 TemplateState Consumer 规则见 `TEMPLATE_REFACTOR.md`。
-
-本阶段完成：
+实现顺序：
 
 ```text
-tasks.py
-build_task_planner.py
-BuildContext
-BuildTaskPlan
-Agent Prompt
-Template Boundary Skills
-Authorization Projection gate
+Validation PASS
+→ git init + baseline commit
+→ Compute ENGINE_EXCLUSIVE actual-byte baseline
+→ verify Shared Host managed nodes
+→ Pre-Commit Readiness（含 TechnicalPlan / RequestedConfig binding recheck）
+→ stage TemplateState + baseline
+→ persist COMMITTING_METADATA evidence
+→ runtime intent replace + fsync
+→ TemplateState replace + fsync
+→ Target Workspace Contract recheck（intent 保留）
+→ runtime final replace + fsync
+→ Post-Commit Verification
+→ Bootstrap Completed
 ```
 
-从：
+人工验收：
+
+```bash
+python3 validation/template-bootstrap/verify_step_03_git_metadata.py
+```
+
+手工检查：
+
+```bash
+git -C <workspace> rev-parse HEAD
+git -C <workspace> status --porcelain
+git -C <workspace> ls-files .xcodeagent
+jq . <workspace>/.xcodeagent/template-state.json
+```
+
+故障注入至少覆盖：
+
+- kill 在 Validation 子进程启动后、exit evidence 持久化前；
+- kill 在 template-runtime-state intent 与 template-state replace 之间；
+- State 已 target、intent 未清除时外部修改 Engine Exclusive / managed node；
+- Pre-Commit Readiness 失败必须 cleanup；Post-Commit Verification 异常必须进入 recovery_required，不能 cleanup。
+
+## 2.5 Step 04：TemplateState Consumer、Build Binding 与 Runtime Cutover
+
+BuildContext 使用：
 
 ```text
-templateVariant / template_variant
+template_state_jcs_sha256
 ```
 
-迁移到：
+而不是 `state_sha256`。Build 前同时验证 State JCS digest 与 Managed Workspace Health。
+
+同一次切换退出：
 
 ```text
-TemplateState.effective
-template_context
+Electron clone
+templateVariant/main/auth branch
+旧四字段 TemplateState consumer
 ```
 
-同时建设与 authorization 无关的通用 Route Projection。
+人工验收：
 
-退出标准：
+```bash
+python3 validation/template-bootstrap/verify_step_04_runtime_cutover.py
+```
 
-- [ ] 无 Capability / login / authorization 三类状态均能生成 DAG；
-- [ ] Build 正式路径不读取 generation manifest；
-- [ ] Agent 不修改 Route/platform managed region。
+确认新建应用只通过 Backend Template Engine 路径生成；Build Task Plan 能看到 `template_state_jcs_sha256`。
 
----
+## 2.6 Step 05：Legacy Gate 与 Reconcile-ready 标记
 
-## 2.6 阶段 5：WorkspaceBootstrapService 集成
-
-正式服务：
+只有满足：
 
 ```text
-WorkspaceBootstrapService
+完整 TemplateState
+ENGINE_EXCLUSIVE baseline
+Shared Host managed-node health
+Platform marker host contract
+Engine Consumer Contract PASS
 ```
 
-负责：
+才使 Workspace 的 `reconcile-ready` 判定为 true。
 
-```text
-compile RequestedConfig
-generate
-download
-validate
-materialize
-git baseline
-TemplateState
-readiness
+`reconcile-ready` 不是新的持久化标记或第三份模板状态；必须由
+`TemplateStateCompatibilityChecker + TemplateRuntimeState baseline + Managed Workspace Health +
+Engine Consumer Contract evidence` 每次推导。
+
+旧四字段 Workspace 不自动升级。
+
+人工验收：
+
+```bash
+python3 validation/template-bootstrap/verify_e2e.py
 ```
 
-AG-UI：
+并用一个旧 Workspace 验证 `LEGACY_TEMPLATE_STATE_UNSUPPORTED`。
 
-```text
-bootstrap_template_generation
-workspace_attach
-```
+## 2.7 Bootstrap 整体验证案例
 
-验收：
-
-- 正常成功；
-- Engine timeout/reject；
-- unsafe ZIP；
-- Git failure；
-- readiness failure；
-- AG-UI disconnect；
-- duplicate trigger；
-- application delete；
-- workspace attach recovery。
-
-退出标准：
-
-- [ ] Backend 可独立完成 Bootstrap；
-- [ ] AG-UI 只触发/观察；
-- [ ] Renderer 断连不影响 server-owned task。
-
----
-
-## 2.7 阶段 6：一次性 Runtime Cutover
-
-同一次发布完成：
-
-```text
-新 Bootstrap 开启
-TemplateState Consumer 生效
-templateVariant 退出
-旧 business post-processor 停止
-Frontend 只调用 Backend Bootstrap
-```
-
-不得拆成长期兼容模式。
-
-E2E：
-
-```text
-A. 无 Capability
-B. login only
-C. authorization
-```
-
-完整走：
+使用 authorization=true 创建一个全新应用：
 
 ```text
 TechnicalPlan Confirmed
-→ Bootstrap
-→ READY
-→ Workspace Inspection
-→ Build DAG
-→ First Build
-→ Platform Projection
-→ Validation
+→ /v1/plan(null, authorization)
+→ effective 自动含 login+authorization
+→ /v1/generate
+→ materialize
+→ blocking validation
+→ git baseline
+→ State+Baseline metadata commit
+→ readiness PASS
 ```
 
----
+人工最终核对：
 
-## 2.8 阶段 7：删除旧 Electron Clone
-
-全仓搜索并清理：
-
-```text
-templateVariant
-template_variant
-workspace:clone-template
-cloneTemplate
-DEFAULT_FRONTEND_TEMPLATE_REPO_URL
-DEFAULT_BACKEND_TEMPLATE_REPO_URL
-template-generation-manifest.json
-main/auth template branch selection
-Bootstrap placeholder
-BIZ_MENUS
+```bash
+jq '.effective,.managed.nodes' <workspace>/.xcodeagent/template-state.json
+git -C <workspace> status --porcelain
+jq '.template_context' <workspace>/.xcodeagent/build-task-plan.json
 ```
 
-保留：
+预期：工作区 clean、`.xcodeagent` 未进入 Git baseline、完整 State 存在、Shared Host Engine nodes 成立、Build 使用 `template_state_jcs_sha256`。
 
-```text
-login capability
-authorization capability
-auth 领域模块
-权限规划与运行时权限功能
-```
+## 2.8 Definition of Done
 
-删除的是：
-
-```text
-main/auth 作为模板分支和模板变体的含义
-```
-
-不是删除权限能力。
-
----
-
-## 2.9 Bootstrap EDD
-
-至少覆盖：
-
-### 场景 A：无 Capability
-
-预期：
-
-```text
-Full Package 正常
-TemplateState effective 为空
-First Build 正常
-```
-
-### 场景 B：login only
-
-预期：
-
-```text
-login fixed files 存在
-effective.login=true
-```
-
-### 场景 C：authorization
-
-Requested 可保持：
-
-```text
-login=false
-authorization=true
-```
-
-Engine Effective：
-
-```text
-login=true
-authorization=true
-```
-
-### 场景 D：Renderer 断连
-
-预期：
-
-```text
-Backend Task 继续
-重新 Attach 可读取最终 lifecycle
-```
-
-### 场景 E：事务故障
-
-预期：
-
-```text
-无半物化 frontend/backend/.git/template-state
-```
-
-### 场景 F：中断 Attach
-
-预期：
-
-```text
-GENERATING + no active task
-→ cleanup
-→ FAILED
-```
-
----
-
-## 2.10 Definition of Done
-
-- [ ] `/v1/generate` 是首次模板唯一正式入口；
-- [ ] Workspace 由 Backend 安全物化；
-- [ ] Git baseline 成立且 clean；
-- [ ] TemplateState 唯一持久化模板元数据；
-- [ ] Bootstrap 不生成业务页面/菜单/业务路由；
-- [ ] Server-owned Task 不受 SSE disconnect 影响；
-- [ ] 删除与 Attach recovery 闭合；
-- [ ] Electron 不 clone 模板；
-- [ ] templateVariant/main/auth branch 不再作为模板事实；
-- [ ] 三类应用 First Build E2E 通过；
-- [ ] 后续 Revision 不再次执行 Bootstrap，而进入 Template Reconcile。
+- [ ] 每一步都有独立人工验收脚本；
+- [ ] Bootstrap 先 `/plan` 后 `/generate`；
+- [ ] Generate State 与 Plan nextTemplateState JCS 等价；
+- [ ] XCodeAgent 消费完整 TemplateState；
+- [ ] Blocking Validation 使用可 crash-recovery 的 process group runner；
+- [ ] Bootstrap Execution Journal 在 Materialize 前持久化 input binding，并在启动 Validation process 前持久化 process identity；
+- [ ] Mutation Lease 在 macOS/Linux 使用 `flock`、在 Windows 使用等价内核锁，并具备 epoch fencing；
+- [ ] WorkspaceMutationFS 与 WorkspaceMutationProcessRunner 覆盖全部已盘点的 Workspace 写路径；
+- [ ] Git baseline 成立且 `.xcodeagent` 不 tracked；
+- [ ] Managed Baseline 只覆盖 Engine Exclusive；
+- [ ] `package.json` / `pom.xml` 作为 Shared Structured Host；
+- [ ] resources marker host 契约成立；
+- [ ] State + Baseline 通过 crash-consistent metadata commit；
+- [ ] Target Workspace Contract 在清除 bootstrapCommit intent 前完成；
+- [ ] Pre-Commit Readiness 失败可 cleanup；metadata commit 后异常只允许 recovery，不得误删 Workspace；
+- [ ] Build 使用 `template_state_jcs_sha256` + Managed Workspace Health；
+- [ ] 旧四字段 Workspace 不自动切入 Reconcile；
+- [ ] `reconcile-ready` 由现有 State/runtime health 推导，不新增持久化模板事实；
+- [ ] 实际 Engine Consumer Contract PASS 后才判定 Reconcile-ready。

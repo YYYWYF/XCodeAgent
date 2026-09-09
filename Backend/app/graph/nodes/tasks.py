@@ -33,6 +33,7 @@ from app.services.build_task_planner import (
 from app.services.authorization_overlay import compile_authorization_overlay
 from app.services.route_projection import compile_route_projection
 from app.services.template_state import effective_capabilities, load_template_state, template_context
+from app.services.template_reconcile.health import assert_managed_workspace_healthy
 from app.services.build_task_progress import (
     build_task_artifacts,
     create_build_task_progress_tracker,
@@ -273,6 +274,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
     # Engine State 是唯一模板事实源；Build 仅持久化只读绑定快照。
     try:
         template_state = load_template_state(workspace)
+        assert_managed_workspace_healthy(workspace, template_state)
         build_context["template_context"] = template_context(template_state)
     except ValueError as exc:
         attempt_plan = _build_task_plan_attempt_view(build_task_plan, build_execution_scope)

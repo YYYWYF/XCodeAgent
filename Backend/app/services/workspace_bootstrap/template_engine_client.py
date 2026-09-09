@@ -68,3 +68,62 @@ class TemplateEngineClient:
                 os.close(descriptor)
             temporary_path.unlink(missing_ok=True)
             raise
+
+    async def update(
+        self,
+        current_template_state: dict[str, Any],
+        requested_config: dict[str, Any],
+        *,
+        temporary_dir: str | Path | None = None,
+    ) -> TemplatePackageDownload | None:
+        """调用 `/v1/update`；204 返回 `None`，200 时返回完整下载的 ZIP。"""
+
+        if not self._base_url or not self._token:
+            raise TemplateEngineError("Template Engine 地址或凭据未配置。")
+        directory = str(Path(temporary_dir)) if temporary_dir is not None else None
+        descriptor, name = tempfile.mkstemp(prefix="xcodeagent-template-update-", suffix=".zip", dir=directory)
+        temporary_path = Path(name)
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
+            async with self._client_factory(timeout=timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self._base_url}/v1/update",
+                    json={
+                        "currentTemplateState": current_template_state,
+                        "requestedConfig": requested_config,
+                    },
+                    headers={"Authorization": f"Bearer {self._token}", "Accept": "application/zip"},
+                ) as response:
+                    if response.status_code == 204:
+                        os.close(descriptor)
+                        descriptor = -1
+                        temporary_path.unlink(missing_ok=True)
+                        return None
+                    if response.status_code >= 400:
+                        raise TemplateEngineError(f"Template Engine 拒绝更新请求（HTTP {response.status_code}）。")
+                    content_type = response.headers.get("content-type")
+                    if not content_type or not content_type.lower().startswith("application/zip"):
+                        raise TemplateEngineError("Template Engine 更新未返回 application/zip。")
+                    with os.fdopen(descriptor, "wb") as output:
+                        descriptor = -1
+                        async for chunk in response.aiter_bytes(_CHUNK_BYTES):
+                            size += len(chunk)
+                            if size > self._max_package_bytes:
+                                raise TemplateEngineError("模板更新 ZIP 超过下载大小限制。")
+                            digest.update(chunk)
+                            output.write(chunk)
+                        output.flush()
+                        os.fsync(output.fileno())
+            return TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type)
+        except httpx.TimeoutException as exc:
+            raise TemplateEngineError("调用 Template Engine 更新超时。") from exc
+        except httpx.HTTPError as exc:
+            raise TemplateEngineError("调用 Template Engine 更新失败。") from exc
+        except Exception:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temporary_path.unlink(missing_ok=True)
+            raise

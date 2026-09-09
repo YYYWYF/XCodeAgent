@@ -829,6 +829,22 @@ def _authorization_manifest_markdown(plan: dict[str, Any]) -> str:
     ])
 
 
+def _template_capabilities_markdown(plan: dict[str, Any]) -> str:
+    """把 TechnicalPlan 的模板能力渲染为可编辑且可同步的 JSON 块。"""
+
+    capabilities = (
+        plan.get("template_capabilities")
+        if isinstance(plan.get("template_capabilities"), dict)
+        else {}
+    )
+    return "```json\n" + json.dumps(
+        capabilities,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n```"
+
+
 def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
     """渲染只供开发审核且不重复产品事实的 TechnicalPlan。"""
 
@@ -867,6 +883,10 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
 ## 页面技术引用
 
 {pages or '- 无'}
+
+## 模板能力
+
+{_template_capabilities_markdown(plan)}
 
 ## 权限资源目录（系统编译，只读）
 

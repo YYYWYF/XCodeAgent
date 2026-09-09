@@ -240,7 +240,15 @@ def update_active_revision_progress(
     workspace: str | Path,
     *,
     change_id: str,
-    status: Literal["drafting", "awaiting_user", "building", "stopped", "failed"],
+    status: Literal[
+        "drafting",
+        "awaiting_user",
+        "template_reconciling",
+        "template_reconcile_failed",
+        "building",
+        "stopped",
+        "failed",
+    ],
     current_artifact: str | None,
     remaining_artifacts: list[str] | None = None,
 ) -> ActiveFormalRevision:
