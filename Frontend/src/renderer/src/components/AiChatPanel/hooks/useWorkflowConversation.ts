@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { randomUUID } from '@ag-ui/client'
+import { workflowDebugResumeSource } from '../workflowDebugResume'
 import {
   AgUiChatSession,
   AgUiRunError,
@@ -599,6 +600,11 @@ export function useWorkflowConversation({
 
   /** 首次发送时创建阶段会话；简单模式补充输入优先复用当前会话和 thread。 */
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
+    // 调试属于已有执行的恢复，不能落到普通发送路径并改用会话的聊天 thread。
+    if (workflowDebug?.enabled && workflowDebug.resumeFrom && activeWorkflow) {
+      await handleResumePlan(workflowDebug)
+      return
+    }
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
     const acceptanceConversationSession =
@@ -1679,15 +1685,26 @@ export function useWorkflowConversation({
   /** 按暂停态调试面板选择的节点恢复当前计划，并保留原执行身份与状态快照。 */
   const handleResumePlan = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     if (!activeWorkflow || !workflowDebug?.resumeFrom || loading || workspaceBusy) return
-    const execution = planExecutionForPage(activeWorkflow.summary.lifecycle, selectedPageId, {
-      runId: activeWorkflow.runId,
-      threadId: activeWorkflow.threadId
-    })
+    const source =
+      workflowDebugResumeSource(
+        activeWorkflow,
+        getSessionMessages(activeRuntimeKey || draftKey),
+        applicationLifecycle,
+        workflowDebug.resumeFrom
+      ) || activeWorkflow
+    const execution = planExecutionForPage(
+      applicationLifecycle || source.summary.lifecycle,
+      selectedPageId,
+      {
+        runId: source.runId,
+        threadId: source.threadId
+      }
+    )
     await sendWorkflowMessage(`从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`, {
-      resumeState: activeWorkflow,
+      resumeState: source,
       // Mock 或旧会话可能没有 lifecycle projection，但 Workflow runId 仍是可校验的恢复令牌。
-      resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || selectedPageId,
+      resumeExecutionRunId: execution?.runId || source.runId,
+      selectedPageId: workflowSelectedPageId(source) || selectedPageId,
       titleFrom: '从指定节点继续执行',
       workflowDebug
     })

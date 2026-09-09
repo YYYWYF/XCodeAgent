@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { workflowDebugResumeSource } from '../src/renderer/src/components/AiChatPanel/workflowDebugResume'
 import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -73,6 +74,7 @@ import type {
   WorkbenchExecution,
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
+import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 
 /** 构造指定运行状态的最小 Workflow 预览测试数据。 */
 function previewWorkflow(
@@ -91,6 +93,25 @@ function previewWorkflow(
     }
   }
 }
+
+test('单测调试复用仍登记的 Build thread，避免聊天 thread 丢失执行事实', () => {
+  const execution = pageExecution({ status: 'stopped', phase: 'unit_test' })
+  const lifecycle = planLifecycle(execution)
+  const build = previewWorkflow({ buildSummary: { status: 'completed', total: 7, completed: 7 } })
+  build.threadId = execution.threadId
+  const latest = { ...build, runId: 'failed-response', summary: { phase: 'failed', status: 'failed' } }
+  const emptyDebug = { ...latest, threadId: 'chat-thread', runId: 'empty-debug' }
+  const messages: AgentChatMessage[] = [build, latest, emptyDebug].map((workflow, id) => ({
+    id, role: 'assistant', content: '', workflow
+  }))
+  const result = workflowDebugResumeSource(emptyDebug, messages, lifecycle, 'unit_test')
+  assert.equal(result?.threadId, execution.threadId)
+  assert.equal(result?.runId, execution.runId)
+  assert.equal(workflowDebugResumeSource(emptyDebug, messages, lifecycle, 'build'), emptyDebug)
+  assert.equal(workflowDebugResumeSource(emptyDebug, messages, undefined, 'unit_test'), emptyDebug)
+  const newerBuild = { ...emptyDebug, summary: { buildSummary: { status: 'failed', total: 1, failed: 1 } } }
+  assert.equal(workflowDebugResumeSource(emptyDebug, [...messages, { id: 4, role: 'assistant', content: '', workflow: newerBuild }], lifecycle, 'unit_test'), emptyDebug)
+})
 
 test('实时成功 launch 会生成可去重的预览目标', () => {
   const target = workflowPreviewTarget(previewWorkflow(), true)
@@ -509,6 +530,7 @@ test('页面和 Endpoint 快捷任务保留本次运行目标且不生成会话�
   )
   assert.deepEqual(tasks[0], {
     description: '应用首页',
+    progress: undefined,
     hasDetailPlan: false,
     id: 'page:page-home',
     kind: 'page',
@@ -520,6 +542,7 @@ test('页面和 Endpoint 快捷任务保留本次运行目标且不生成会话�
   assert.deepEqual(tasks[1], {
     apiContractId: 'orders-api',
     description: '查询订单',
+    progress: undefined,
     endpointId: 'list-orders',
     endpointLabel: 'GET /orders',
     hasDetailPlan: true,
