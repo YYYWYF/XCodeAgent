@@ -5,6 +5,7 @@ import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlan
 import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
+import { isTemplateGenerationOrphaned } from '../service/templateApi'
 import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
 import { stopProjectPreview } from '../service/projectLaunch'
 import type {
@@ -273,8 +274,17 @@ function AppEntryContent(): JSX.Element {
       )
     : undefined
   const activePlanningThreadId = activePlanning?.threadId
+  const activePlanningLifecycle = activePlanning?.lifecycle || applicationLifecycle
   const templateGenerationFailed =
-    activePlanning?.lifecycle.initialization.stage === 'application_template_generation_failed'
+    activePlanningLifecycle?.initialization.stage === 'application_template_generation_failed'
+  const templateGenerationOrphaned = isTemplateGenerationOrphaned(
+    activePlanningLifecycle,
+    activeApplication
+      ? planningController.generatingAppIds.has(activeApplication.id)
+      : false
+  )
+  const templateGenerationRecoverable =
+    templateGenerationFailed || templateGenerationOrphaned
 
   useEffect(() => {
     activePlanningThreadIdRef.current = activePlanningThreadId
@@ -501,7 +511,7 @@ function AppEntryContent(): JSX.Element {
             onThemeChange={setTheme}
             onPlanningStreamReady={handlePlanningStreamReady}
             onRetryPlanning={
-              templateGenerationFailed
+              templateGenerationRecoverable
                 ? () => {
                     void planningController.retryTemplateGeneration(activeApplication.id)
                   }

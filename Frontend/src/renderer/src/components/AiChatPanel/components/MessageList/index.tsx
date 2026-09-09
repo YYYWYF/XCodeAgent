@@ -269,6 +269,8 @@ type MessageListProps = {
   onEnterDevelopment?: () => void
   /** 当前应用是否正在生成模板（前端状态信号，lifecycle 在生成期间不变）。 */
   generatingTemplate?: boolean
+  /** lifecycle 仍在模板阶段但当前 renderer 没有对应生成任务。 */
+  templateGenerationOrphaned?: boolean
   /** 设计阶段最新的规划 workflow（activePlannings 权威快照，每轮 no-op resume 都会更新）。
    *  UI 设计稿确认卡片优先用它渲染，绕过消息对象里可能滞留的旧 message.workflow，
    *  保证后台生成池写入的最新页面状态实时反映到卡片。 */
@@ -320,6 +322,7 @@ export default function MessageList({
   rootPath,
   onEnterDevelopment,
   generatingTemplate,
+  templateGenerationOrphaned,
   planningWorkflow,
   loading,
   messages,
@@ -354,7 +357,10 @@ export default function MessageList({
     : ''
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
   const showStandaloneError = Boolean(
-    !templateGenerationFailed && visibleError && visibleError !== latestAssistantMessageError
+    !templateGenerationFailed &&
+    !templateGenerationOrphaned &&
+    visibleError &&
+    visibleError !== latestAssistantMessageError
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
@@ -986,6 +992,7 @@ export default function MessageList({
                   lifecycle={applicationLifecycle}
                   onEnterDevelopment={onEnterDevelopment}
                   onRetry={onRetryTemplateGeneration}
+                  orphaned={templateGenerationOrphaned}
                   retrying={generatingTemplate}
                 />
               </div>

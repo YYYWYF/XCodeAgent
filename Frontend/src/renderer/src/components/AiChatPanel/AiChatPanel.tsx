@@ -36,6 +36,7 @@ import { CLASS_PREFIX, composePreviewUrl, cx, openPreviewWindow, previewOrigin }
 import { readWorkspaceFile } from '../../service/workspaceTools'
 import type { ChatSessionDevelopmentContinuation } from '../../service/chatSessions'
 import { saveRequirementSpecDraft } from '../../service/applicationPagePlanning'
+import { isTemplateGenerationOrphaned } from '../../service/templateApi'
 import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { formatError } from '../Welcome/utils'
@@ -1030,6 +1031,12 @@ export default function AiChatPanel({
   )
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
+  const templateGenerationOrphaned = isTemplateGenerationOrphaned(
+    applicationLifecycle,
+    generatingTemplate
+  )
+  const templateGenerationRecoverable =
+    templateGenerationFailed || templateGenerationOrphaned
   // 只在 lifecycle 首次到达 ready_for_workbench 时锁一次，不依赖 activeWorkbenchPhase（避免覆盖用户切换）。
   const planningConfirmedSeenRef = useRef(false)
   useEffect(() => {
@@ -4426,7 +4433,7 @@ export default function AiChatPanel({
                     : undefined
               }
               onRetryTemplateGeneration={
-                templateGenerationFailed ? onRetryPlanning : undefined
+                templateGenerationRecoverable ? onRetryPlanning : undefined
               }
               onSubmitClarification={handleSubmitWorkflowClarification}
               revertingCodeChangeIds={revertingCodeChangeIds}
@@ -4439,6 +4446,7 @@ export default function AiChatPanel({
               rootPath={application.schema?.menus?.rootPath || '/'}
               onEnterDevelopment={handleEnterDevelopment}
               generatingTemplate={generatingTemplate}
+              templateGenerationOrphaned={templateGenerationOrphaned}
               planningWorkflow={planningWorkflow}
             />
 

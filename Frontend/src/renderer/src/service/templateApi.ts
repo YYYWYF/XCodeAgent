@@ -21,6 +21,17 @@ export const APPLICATION_TEMPLATE_GENERATION_ENABLED = true
 
 const readinessTasks = new Map<string, Promise<ApplicationLifecycle>>()
 
+/** 判断模板阶段是否只剩持久化状态、但当前 renderer 已没有对应生成任务。 */
+export function isTemplateGenerationOrphaned(
+  lifecycle?: ApplicationLifecycle,
+  generatingTemplate = false
+): boolean {
+  return (
+    lifecycle?.initialization?.stage === 'generating_application_template_files' &&
+    !generatingTemplate
+  )
+}
+
 /** 携带模板下载结构化结果，供后端 manifest 记录失败现场。 */
 class TemplateDownloadError extends Error {
   readonly result: TemplateDownloadResult
