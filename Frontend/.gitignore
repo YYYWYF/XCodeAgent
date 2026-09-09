@@ -7,3 +7,4 @@ resources/backend/
 *.log*
 .venv/
 electron.vite.config.*.mjs
+*.tsbuildinfo
