@@ -18,6 +18,13 @@ export function developmentStatusLabel(progress?: DevelopmentArtifactProgress): 
   return '初次开发未完成'
 }
 
+/** 为新会话产物卡片提供简短且统一的开发状态文案。 */
+export function developmentStatusText(progress?: DevelopmentArtifactProgress): string {
+  if (progress?.initialDevelopmentStatus === 'completed') return '已初次完成'
+  if (progress?.initialDevelopmentStatus === 'in_progress') return '开发中'
+  return '未开发'
+}
+
 /** 统计完整分组中的完成项，不使用搜索或折叠后的可见集合。 */
 export function developmentCompletedCount(
   records: (DevelopmentArtifactProgress | undefined)[]

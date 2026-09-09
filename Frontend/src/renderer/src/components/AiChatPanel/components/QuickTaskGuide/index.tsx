@@ -9,17 +9,21 @@ import { Skeleton, Tooltip, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useMemo } from 'react'
 import type {
+  DevelopmentArtifacts,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption
 } from '../../../../typings'
 import { cx } from '../../../../utils'
+import { developmentStatusText } from '../../../../developmentArtifacts'
 import { buildQuickTasks, type QuickTaskItem } from './quickTasks'
 import './QuickTaskGuide.less'
+import './QuickTaskStatus.less'
 
 const { Text, Title } = Typography
 
 type QuickTaskGuideProps = {
+  developmentArtifacts?: DevelopmentArtifacts
   apiContracts: DevelopmentPlanningApiContract[]
   disabled: boolean
   entities: DevelopmentPlanningEntityOption[]
@@ -87,7 +91,7 @@ function QuickTaskSection({
             >
               <span className={cx('quick-task-tooltip-anchor')}>
                 <button
-                  aria-label={`${item.title}，${item.meta}，${item.description}`}
+                  aria-label={`${item.title}，${item.meta}，${item.description}，${developmentStatusText(item.progress)}`}
                   className={cx('quick-task-item', item.kind)}
                   disabled={disabled}
                   onClick={() => void onStart(item)}
@@ -103,6 +107,12 @@ function QuickTaskSection({
                     <Text className={cx('quick-task-item-description')} type="secondary">
                       {item.description}
                     </Text>
+                    <span
+                      className={cx('quick-task-item-status')}
+                      data-status={item.progress?.initialDevelopmentStatus || 'pending'}
+                    >
+                      {developmentStatusText(item.progress)}
+                    </span>
                   </span>
                   <RightOutlined className={cx('quick-task-item-arrow')} />
                 </button>
@@ -121,6 +131,7 @@ function QuickTaskSection({
 
 /** 在空白对话区并排展示页面、Endpoint 与实体快捷任务，并保留底部自由输入入口。 */
 export default function QuickTaskGuide({
+  developmentArtifacts,
   apiContracts,
   disabled,
   entities,
@@ -129,8 +140,8 @@ export default function QuickTaskGuide({
   pages
 }: QuickTaskGuideProps): ReactElement {
   const tasks = useMemo(
-    () => buildQuickTasks(pages, apiContracts, entities),
-    [apiContracts, entities, pages]
+    () => buildQuickTasks(pages, apiContracts, entities, developmentArtifacts),
+    [apiContracts, entities, pages, developmentArtifacts]
   )
   const pageTasks = tasks.filter((task) => task.kind === 'page')
   const endpointTasks = tasks.filter((task) => task.kind === 'endpoint')

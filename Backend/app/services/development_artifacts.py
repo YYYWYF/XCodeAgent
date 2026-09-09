@@ -11,8 +11,10 @@ from app.domain.development_artifacts import (
     DevelopmentArtifactProgress,
     DevelopmentArtifacts,
     DevelopmentArtifactTarget,
+    EntityDevelopmentProgress,
     TestEntryGate,
 )
+from app.workspace.detail_design_documents import hydrate_external_detail_designs
 
 INITIAL_DEVELOPMENT_PHASES = frozenset({
     "development_readiness_gate", "inspect_workspace", "prepare_build_tasks",
@@ -61,7 +63,7 @@ def _identifier(value: Any) -> str:
 
 
 def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
-    """使用 ProductPlan 页面与 TechnicalPlan 接口，与工作台目录保持一致。"""
+    """使用 ProductPlan 页面与 TechnicalPlan 接口、实体，与工作台目录保持一致。"""
 
     product = _confirmed_plan(workspace, "product-plan")
     technical = _confirmed_plan(workspace, "technical-plan")
@@ -79,6 +81,8 @@ def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
                 type="endpoint", apiContractId=contract_id,
                 endpointId=_identifier(endpoint.get("id")),
             ))
+    for entity in _records(technical.get("entities", []), "TechnicalPlan.entities"):
+        targets.append(DevelopmentArtifactTarget(type="entity", entityId=_identifier(entity.get("id"))))
     keys = [target.model_dump_json() for target in targets]
     if len(set(keys)) != len(keys):
         raise ValueError("开发产物标识重复。")
@@ -87,11 +91,13 @@ def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
 
 def artifact_progress(
     artifacts: DevelopmentArtifacts, target: DevelopmentArtifactTarget,
-) -> DevelopmentArtifactProgress | None:
+) -> DevelopmentArtifactProgress | EntityDevelopmentProgress | None:
     """按完整目标身份读取状态，不把页面依赖接口视作同一产物。"""
 
     if target.type == "page":
         return artifacts.pages.get(target.page_id or "")
+    if target.type == "entity":
+        return artifacts.entities.get(target.entity_id or "")
     return artifacts.endpoints.get(target.api_contract_id or "", {}).get(target.endpoint_id or "")
 
 
@@ -101,6 +107,10 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
     old = state.development_artifacts
     try:
         targets = catalog_targets(workspace)
+        technical = hydrate_external_detail_designs(
+            Path(workspace) / ".xcodeagent/plans/technical-plan.json",
+            _confirmed_plan(workspace, "technical-plan"),
+        )
     except (OSError, UnicodeError, ValueError) as exc:
         # 草稿/文件错误不删除原完成事实，但必须关闭测试入口。
         return state.model_copy(update={"development_artifacts": old.model_copy(update={
@@ -108,6 +118,21 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
         })})
     artifacts = DevelopmentArtifacts(catalogError=None)
     for target in targets:
+        if target.type == "entity":
+            # 只认当前正式绑定的显式确认；选表、生成设计和等待确认都不算完成。
+            confirmed = any(
+                detail.get("entity_id") == target.entity_id and detail.get("status") == "confirmed"
+                for detail in technical.get("entity_detail_plans", [])
+            )
+            active = any(
+                execution.scope == "data_source" and execution.target_id == target.entity_id
+                and execution.status in ACTIVE_STATUSES
+                for execution in state.active_executions.values()
+            )
+            artifacts.entities[target.entity_id or ""] = EntityDevelopmentProgress(
+                initialDevelopmentStatus="completed" if confirmed else "in_progress" if active else "pending",
+            )
+            continue
         progress = artifact_progress(old, target) or DevelopmentArtifactProgress()
         if progress.initial_development_status != "completed":
             # 调试重启可能登记为 revision；运行圆点仍跟随目标，首次完成资格另行校验。
@@ -135,6 +160,9 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
         (DevelopmentArtifactTarget(type="endpoint", apiContractId=contract, endpointId=key), progress)
         for contract, endpoints in artifacts.endpoints.items()
         for key, progress in endpoints.items()
+    ] + [
+        (DevelopmentArtifactTarget(type="entity", entityId=key), progress)
+        for key, progress in artifacts.entities.items()
     ]
     completed = sum(progress.initial_development_status == "completed" for _, progress in records)
     in_progress = sum(progress.initial_development_status == "in_progress" for _, progress in records)
@@ -203,7 +231,7 @@ def complete_initial_development(workspace: str | Path, *, run_id: str) -> Appli
         if execution.development_purpose != "initial" or execution.development_target is None:
             return state
         progress = artifact_progress(state.development_artifacts, execution.development_target)
-        if progress is None or progress.initial_development_status == "completed":
+        if not isinstance(progress, DevelopmentArtifactProgress) or progress.initial_development_status == "completed":
             return state
         if execution.status not in ACTIVE_STATUSES:
             raise ValueError("已停止或失败的 execution 不能提交初次开发完成。")

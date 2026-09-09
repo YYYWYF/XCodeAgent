@@ -20,6 +20,7 @@ import { cx } from '../../../../utils'
 import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
 import ApiOutlineGroup from './ApiOutlineGroup'
+import DevelopmentStatusDot from './DevelopmentStatusDot'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import {
   collectRelatedKeys,
@@ -271,6 +272,12 @@ export default function ApplicationOutline({
               >
                 <CaretDownOutlined className={cx(!entitiesExpanded && 'collapsed')} />
                 <span>实体</span>
+                <span className={cx('development-count')}>
+                  {developmentCompletedCount(
+                    entities.map((entity) => developmentArtifacts?.entities[entity.id])
+                  )}
+                  /{entities.length}
+                </span>
               </button>
               {entitiesExpanded ? (
                 <div className={cx('entity-group')}>
@@ -290,6 +297,9 @@ export default function ApplicationOutline({
                           <span className={cx('entity-copy')}>
                             <span className={cx('outline-label-row')}>
                               <span className={cx('outline-label')}>{entity.label}</span>
+                              <DevelopmentStatusDot
+                                progress={developmentArtifacts?.entities[entity.id]}
+                              />
                             </span>
                             <span className={cx('entity-meta')}>{entity.id}</span>
                           </span>

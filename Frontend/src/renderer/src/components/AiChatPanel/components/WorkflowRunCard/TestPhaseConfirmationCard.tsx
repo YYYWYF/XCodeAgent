@@ -57,10 +57,14 @@ export default function TestPhaseConfirmationCard({
             {gate.blockers.map((item) => (
               <li key={JSON.stringify(item)}>
                 <span className={cx('workflow-test-phase-confirmation-kind')}>
-                  {item.type === 'page' ? '页面' : '接口'}
+                  {item.type === 'page' ? '页面' : item.type === 'entity' ? '实体' : '接口'}
                 </span>
                 <span className={cx('workflow-test-phase-confirmation-name')}>
-                  {item.type === 'page' ? item.pageId : `${item.apiContractId}/${item.endpointId}`}
+                  {item.type === 'page'
+                    ? item.pageId
+                    : item.type === 'entity'
+                      ? item.entityId
+                      : `${item.apiContractId}/${item.endpointId}`}
                 </span>
               </li>
             ))}

@@ -1,4 +1,4 @@
-"""页面与接口初次开发状态的当前持久化合同。"""
+"""页面、接口与实体开发状态的当前持久化合同。"""
 
 from datetime import datetime
 from typing import Literal
@@ -13,17 +13,24 @@ class DevelopmentArtifactModel(BaseModel):
 
 
 class DevelopmentArtifactTarget(DevelopmentArtifactModel):
-    """用稳定标识绑定唯一页面或接口，禁止索引和展示路径替代身份。"""
+    """用稳定标识绑定唯一产物，禁止索引和展示路径替代身份。"""
 
-    type: Literal["page", "endpoint"]
+    type: Literal["page", "endpoint", "entity"]
+    entity_id: str | None = Field(default=None, alias="entityId", min_length=1)
     page_id: str | None = Field(default=None, alias="pageId", min_length=1)
     api_contract_id: str | None = Field(default=None, alias="apiContractId", min_length=1)
     endpoint_id: str | None = Field(default=None, alias="endpointId", min_length=1)
 
     @model_validator(mode="after")
     def validate_identity(self) -> "DevelopmentArtifactTarget":
-        """确保两类目标只能携带各自完整的标识。"""
+        """确保三类目标只能携带各自完整的标识。"""
 
+        if self.type == "entity":
+            if not self.entity_id or self.page_id or self.api_contract_id or self.endpoint_id:
+                raise ValueError("实体开发目标必须且只能提供 entityId。")
+            return self
+        if self.entity_id:
+            raise ValueError("页面和接口目标不能携带 entityId。")
         if self.type == "page":
             if not self.page_id or self.api_contract_id or self.endpoint_id:
                 raise ValueError("页面开发目标必须且只能提供 pageId。")
@@ -55,10 +62,19 @@ class DevelopmentArtifactProgress(DevelopmentArtifactModel):
         return self
 
 
+class EntityDevelopmentProgress(DevelopmentArtifactModel):
+    """实体完成以当前正式绑定的确认状态为证据，不伪造 Build 执行记录。"""
+
+    initial_development_status: Literal["pending", "in_progress", "completed"] = Field(
+        default="pending", alias="initialDevelopmentStatus"
+    )
+
+
 class DevelopmentArtifacts(DevelopmentArtifactModel):
     """保存当前已确认目录及其开发状态；目录错误时禁止测试。"""
 
     pages: dict[str, DevelopmentArtifactProgress] = Field(default_factory=dict)
+    entities: dict[str, EntityDevelopmentProgress] = Field(default_factory=dict)
     endpoints: dict[str, dict[str, DevelopmentArtifactProgress]] = Field(default_factory=dict)
     catalog_error: str | None = Field(default="开发产物目录尚未就绪。", alias="catalogError")
 

@@ -32,7 +32,7 @@ class DevelopmentArtifactsTests(unittest.TestCase):
     """每个测试使用独立的当前规划与 lifecycle，不推断历史完成状态。"""
 
     def setUp(self) -> None:
-        """准备两个页面、一个接口及一个不计数的实体。"""
+        """准备两个页面和一个接口，实体场景按测试显式加入。"""
 
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -41,7 +41,7 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.plans.mkdir(parents=True)
         self.product = {"confirmation_status": "confirmed", "pages": [{"pageId": "one"}, {"pageId": "two"}]}
         self.technical = {
-            "confirmation_status": "confirmed", "entities": [{"id": "entity"}],
+            "confirmation_status": "confirmed", "entities": [],
             "api_contracts": [{"id": "api", "endpoints": [{"id": "get"}]}],
         }
         self.write_plans()
@@ -76,7 +76,7 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         run_id = self.start(target)
         complete_initial_development(self.workspace, run_id=run_id)
 
-    def test_initial_catalog_is_gray_and_entities_do_not_count(self) -> None:
+    def test_initial_catalog_is_gray(self) -> None:
         """目录初始化不因实体数量或规划文件存在而标记开发完成。"""
 
         state = refresh_development_artifacts(self.workspace)
@@ -85,6 +85,55 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertFalse(gate.allowed)
         self.assertNotIn("testEntryGate", json.loads((self.workspace / ".xcodeagent/application-lifecycle.json").read_text()))
         self.assertEqual(application_lifecycle_payload(state)["testEntryGate"]["total"], 3)
+
+    def test_entity_counts_and_requires_persisted_confirmation(self) -> None:
+        """实体必须确认正式绑定才计完成，等待确认和重试保持开发中。"""
+
+        self.technical["entities"] = [{"id": "entity"}]
+        self.write_plans()
+        for target in ("one", "two", "get"):
+            self.finish(target)
+        state = refresh_development_artifacts(self.workspace)
+        self.assertEqual((test_entry_gate(state).completed, test_entry_gate(state).total), (3, 4))
+        self.assertFalse(test_entry_gate(state).allowed)
+        self.assertEqual(test_entry_gate(state).blockers[0].entity_id, "entity")
+        start_workbench_execution(
+            self.workspace, scope="data_source", target_id="entity", page_id=None,
+            thread_id="entity-thread", run_id="entity-run", phase="entity_source_binding",
+        )
+        state = update_workbench_execution(
+            self.workspace, run_id="entity-run", phase="entity_source_binding",
+            status=WorkbenchExecutionStatus.AWAITING_USER,
+            pending_type=PendingInteractionType.ENTITY_SOURCE_BINDING,
+        )
+        self.assertEqual(state.development_artifacts.entities["entity"].initial_development_status, "in_progress")
+        state = update_workbench_execution(
+            self.workspace, run_id="entity-run", phase="entity_source_binding",
+            status=WorkbenchExecutionStatus.FAILED,
+        )
+        self.assertEqual(state.development_artifacts.entities["entity"].initial_development_status, "pending")
+        start_workbench_execution(
+            self.workspace, scope="data_source", target_id="entity", page_id=None,
+            thread_id="entity-thread", run_id="entity-retry", phase="entity_source_binding",
+            replaces_run_id="entity-run",
+        )
+        self.assertEqual(refresh_development_artifacts(self.workspace).development_artifacts.entities["entity"].initial_development_status, "in_progress")
+        directory = self.plans / "entities"
+        directory.mkdir()
+        path = directory / "entity--entity.json"
+        path.write_text(json.dumps({"entity_id": "entity", "status": "pending_user_confirmation"}))
+        self.assertFalse(test_entry_gate(refresh_development_artifacts(self.workspace)).allowed)
+        path.write_text(json.dumps({"entity_id": "entity", "status": "confirmed"}))
+        state = refresh_development_artifacts(self.workspace)
+        self.assertEqual(state.development_artifacts.entities["entity"].initial_development_status, "completed")
+        self.assertTrue(test_entry_gate(state).allowed)
+        path.write_text("invalid json")
+        self.assertFalse(test_entry_gate(refresh_development_artifacts(self.workspace)).allowed)
+        self.technical["entities"] = []
+        self.write_plans()
+        state = refresh_development_artifacts(self.workspace)
+        self.assertEqual(state.development_artifacts.entities, {})
+        self.assertEqual(test_entry_gate(state).total, 3)
 
     def test_start_wait_fail_retry_and_complete(self) -> None:
         """状态跟随初次执行，等待确认保持紫色，失败灰色且重试可完成。"""

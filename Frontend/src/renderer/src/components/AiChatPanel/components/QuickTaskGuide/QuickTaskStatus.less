@@ -1,0 +1,14 @@
+.@{class-prefix}-quick-task-item-status {
+  align-self: flex-end;
+  color: var(--wb-text-tertiary);
+  font-size: 12px;
+  line-height: 20px;
+
+  &[data-status='in_progress'] {
+    color: var(--wb-accent);
+  }
+
+  &[data-status='completed'] {
+    color: var(--wb-development-completed);
+  }
+}

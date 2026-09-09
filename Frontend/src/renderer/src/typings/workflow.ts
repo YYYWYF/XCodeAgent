@@ -981,6 +981,7 @@ export type ExecutionResourceLock = {
 }
 
 export type DevelopmentArtifactTarget =
+  | { type: 'entity'; entityId: string }
   | { type: 'page'; pageId: string }
   | { type: 'endpoint'; apiContractId: string; endpointId: string }
 
@@ -992,6 +993,7 @@ export type DevelopmentArtifactProgress = {
 }
 
 export type DevelopmentArtifacts = {
+  entities: Record<string, DevelopmentArtifactProgress>
   pages: Record<string, DevelopmentArtifactProgress>
   endpoints: Record<string, Record<string, DevelopmentArtifactProgress>>
   catalogError?: string | null

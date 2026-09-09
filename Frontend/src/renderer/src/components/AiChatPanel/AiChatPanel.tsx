@@ -4406,6 +4406,7 @@ export default function AiChatPanel({
               emptyContent={
                 !isApplicationPlanningPhase ? (
                   <QuickTaskGuide
+                    developmentArtifacts={applicationLifecycle?.developmentArtifacts}
                     apiContracts={developmentPlanningApiContracts}
                     disabled={loading || workflowInputLocked}
                     entities={developmentPlanningEntities}

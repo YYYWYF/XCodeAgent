@@ -1,10 +1,13 @@
 import type {
+  DevelopmentArtifacts,
+  DevelopmentArtifactProgress,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption
 } from '../../../../typings'
 
 type QuickTaskItemBase = {
+  progress?: DevelopmentArtifactProgress
   description: string
   id: string
   meta: string
@@ -39,9 +42,11 @@ export type QuickTaskItem = PageQuickTaskItem | EndpointQuickTaskItem | EntityQu
 export function buildQuickTasks(
   pages: DevelopmentPlanningPageOption[],
   apiContracts: DevelopmentPlanningApiContract[],
-  entities: DevelopmentPlanningEntityOption[]
+  entities: DevelopmentPlanningEntityOption[],
+  artifacts?: DevelopmentArtifacts
 ): QuickTaskItem[] {
   const pageTasks: PageQuickTaskItem[] = pages.map((page) => ({
+    progress: artifacts?.pages[page.pageId],
     description: String(page.purpose || '从这个页面开始讨论和开发。').trim(),
     id: `page:${page.pageId}`,
     kind: 'page' as const,
@@ -60,6 +65,7 @@ export function buildQuickTasks(
         .toUpperCase()
       const path = String(endpoint.path || '/').trim()
       return {
+        progress: artifacts?.endpoints[apiContractId]?.[endpointId],
         description: String(
           endpoint.summary || `来自 ${contract.label || contract.id || '当前接口契约'}`
         ).trim(),
@@ -75,6 +81,7 @@ export function buildQuickTasks(
     })
   )
   const entityTasks: EntityQuickTaskItem[] = entities.map((entity) => ({
+    progress: artifacts?.entities[entity.id],
     description: String(entity.purpose || '从这个实体开始配置数据来源。').trim(),
     entityId: entity.id,
     entityLabel: String(entity.label || entity.id || '未命名实体').trim(),

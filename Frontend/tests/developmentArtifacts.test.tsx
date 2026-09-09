@@ -14,6 +14,7 @@ import { useWorkbenchPhase } from '../src/renderer/src/context/workbenchPhaseSta
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import DevelopmentStatusDot from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/DevelopmentStatusDot'
 import TestPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TestPhaseConfirmationCard'
+import QuickTaskGuide from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide'
 import type { ApplicationLifecycle, TestEntryGate } from '../src/renderer/src/typings'
 
 const blocked: TestEntryGate = {
@@ -37,6 +38,56 @@ const allowed: TestEntryGate = {
   blockers: [],
   reason: null
 }
+
+test('新会话卡片按权威状态显示页面、接口和实体三态', () => {
+  const html = renderToStaticMarkup(
+    <QuickTaskGuide
+      pages={[
+        {
+          pageId: 'page',
+          key: 'page',
+          label: '页面',
+          path: '/page',
+          purpose: '录入',
+          designed: true
+        }
+      ]}
+      apiContracts={[
+        {
+          id: 'api',
+          label: '接口',
+          endpoints: [{ id: 'get', method: 'GET', path: '/api', summary: '读取' }]
+        }
+      ]}
+      entities={[{ id: 'entity', label: '实体', purpose: '记录', dataSourceType: 'database' }]}
+      developmentArtifacts={{
+        pages: { page: { initialDevelopmentStatus: 'completed' } },
+        endpoints: { api: { get: { initialDevelopmentStatus: 'in_progress' } } },
+        entities: { entity: { initialDevelopmentStatus: 'pending' } }
+      }}
+      disabled={false}
+      loading={false}
+      onStart={async () => undefined}
+    />
+  )
+  for (const [status, label] of [
+    ['completed', '已初次完成'],
+    ['in_progress', '开发中'],
+    ['pending', '未开发']
+  ]) {
+    assert.match(html, new RegExp(`data-status="${status}">${label}</span>`))
+  }
+})
+
+test('测试门禁正确展示未确认的实体名称', () => {
+  const html = renderConfirmation({
+    ...blocked,
+    blockers: [{ type: 'entity', entityId: 'AgeRecord' }]
+  })
+  assert.match(html, /实体/)
+  assert.match(html, /AgeRecord/)
+  assert.doesNotMatch(html, /undefined|进入测试阶段/)
+})
 
 /** 构造实际阶段 Provider 和 revision 合并测试所需的生命周期快照。 */
 function lifecycle(gate?: TestEntryGate, revision = 1): ApplicationLifecycle {
