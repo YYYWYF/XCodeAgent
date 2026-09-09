@@ -14,6 +14,7 @@ from app.services.application_lifecycle import (
     restart_application_planning_lifecycle,
 )
 from app.services.access_control_intent import (
+    has_explicit_capability_change,
     has_explicit_business_access_control_change,
 )
 
@@ -141,7 +142,10 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
 def formal_revision_design_target(request: str, authoritative_target: str) -> str:
     """纠正正式修订中会跳过 RequirementSpec 的业务权限变更起点。"""
 
-    if has_explicit_business_access_control_change(request):
+    if (
+        has_explicit_business_access_control_change(request)
+        or has_explicit_capability_change(request)
+    ):
         return "requirements"
     return authoritative_target
 

@@ -71,8 +71,12 @@ def _authorization_fact_extraction_prompt(
         "catalogue. It is the stable identity of the controlled page, not a technical implementation detail. "
         "description states who can perform or access the business target; rationale states the business reason; "
         "sourceRefs is a non-empty string array citing the original request; defaultGrantedRoleIds is an array "
-        "referencing user_roles ids. Return [] when the request does not explicitly state the default role grant; "
-        "never guess a role. dataAuthorizationIssues contains only explicit data-authorization requests that V1 cannot "
+        "referencing user_roles ids and must not be empty. Return [] when the request does not explicitly state the "
+        "default role grant; never guess a role. A globally unavailable feature is not authorization: statements such "
+        "as 'read-only', 'view only', or 'cannot add, delete, or edit' define the application's feature scope for "
+        "everyone and must never become restrictedPages or restrictedOperations. Only emit a restriction when the "
+        "request explicitly assigns access to one or more roles, members, or other authorization subjects. "
+        "dataAuthorizationIssues contains only explicit data-authorization requests that V1 cannot "
         "implement. Each item must contain exactly description and sourceRefs. Add an issue when different members, roles, "
         "organizations, projects, customers, or other relations determine which records can be read, modified, or created. "
         "Do not add an issue for a fixed business query such as 'my applications' unless it is an authorization boundary. "
@@ -100,6 +104,51 @@ def _string_list(value: Any) -> list[str]:
         if isinstance(value, list)
         else []
     )
+
+
+def _is_global_feature_availability_source(value: object) -> bool:
+    """判断来源文本是否只是在声明全局功能不可用，而非按角色授权。"""
+
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    has_global_restriction = bool(
+        re.search(
+            r"(?:只读|仅查看|只能查看|不可|不能|不可以|禁止|不支持).{0,12}"
+            r"(?:新增|添加|创建|删除|修改|编辑|更新)",
+            text,
+        )
+    )
+    has_authorization_subject = bool(
+        re.search(r"(?:仅|只有|角色|权限|授权|管理员|hr|审批人|运营人员)", text)
+    )
+    return has_global_restriction and not has_authorization_subject
+
+
+def _remove_global_feature_availability_controls(value: Any) -> Any:
+    """移除被模型误写成权限规则的全局只读功能声明。"""
+
+    if not isinstance(value, dict):
+        return value
+    sanitized = deepcopy(value)
+    authorization = sanitized.get("authorization_requirements")
+    if not isinstance(authorization, dict):
+        return sanitized
+    for field_name in ("restrictedPages", "restrictedOperations"):
+        items = authorization.get(field_name)
+        if not isinstance(items, list):
+            continue
+        # 只有所有来源都明确是全局功能限制时才删除，避免覆盖真正的角色权限规则。
+        authorization[field_name] = [
+            item
+            for item in items
+            if not (
+                isinstance(item, dict)
+                and (sources := _string_list(item.get("sourceRefs")))
+                and all(_is_global_feature_availability_source(source) for source in sources)
+            )
+        ]
+    return sanitized
 
 
 def _validate_authorization_fact_output(
@@ -200,7 +249,11 @@ def _validate_authorization_fact_output(
                     f"权限事实模型输出.{field_name}[{index}] 缺少 sourceRefs。"
                 )
             grants = _string_list(item.get("defaultGrantedRoleIds"))
-            if any(role_id not in role_ids for role_id in grants):
+            if not grants:
+                errors.append(
+                    f"权限事实模型输出.{field_name}[{index}] 缺少默认角色授权。"
+                )
+            elif any(role_id not in role_ids for role_id in grants):
                 errors.append(
                     f"权限事实模型输出.{field_name}[{index}] 默认角色授权无效。"
                 )
@@ -245,6 +298,8 @@ def _extract_authorization_facts(
         payload = extract_json_object(
             _coerce_content_text(getattr(result, "content", "")) or ""
         )
+        # 全局只读声明不应因模型误判而触发应用权限初始化。
+        payload = _remove_global_feature_availability_controls(payload)
         errors = _validate_authorization_fact_output(payload, pages)
         if not errors:
             return payload
@@ -402,7 +457,9 @@ def _requirements_prompt(
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 业务参与者, 功能模块, "
         "页面清单, 业务流程.\n"
-        "When the request explicitly says that application-level authorization is enabled, also produce an "
+        "When the request explicitly asks to add or enable login, produce authentication_requirements with enabled=true "
+        "and sourceRefs citing that request; otherwise set enabled=false and sourceRefs=[]. When the request explicitly "
+        "asks to add or enable application-level authorization, also produce an "
         "authorization_requirements object. Extract only permission controls explicitly stated in the user's "
         "business description or clarification answers into restrictedPages and restrictedOperations. Empty candidate "
         "arrays are valid and mean that the user did not request RBAC control for that business dimension. Never infer "
@@ -451,7 +508,7 @@ def _requirements_prompt(
         "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
         "without markdown fences or commentary. The JSON must contain exactly these top-level fields: "
         "version, status, generated_at, app_info, user_roles, feature_modules, pages, business_flows, "
-        "authorization_requirements. Do not include any other field. "
+        "authentication_requirements, authorization_requirements. Do not include any other field. "
         "app_info MUST include non-empty name and summary. Use summary as the only application-summary field; "
         "the field is named summary, not description. "
         "Do not return assumptions, product risks, or acceptance_criteria. "
@@ -469,7 +526,8 @@ def _requirements_prompt(
         "Set route_root_path to '/' when the home page path is '/'. "
         "Each business_flows item must have id, name, description, and steps. Each step is a string "
         "describing one business action; do not include role_id, page_id, or other structured fields in steps. "
-        "The JSON must represent the complete current requirement, not a patch. When authorization is enabled, "
+        "The JSON must represent the complete current requirement, not a patch. authentication_requirements must contain "
+        "exactly enabled and sourceRefs. When authorization is enabled, "
         "the complete JSON must also contain authorization_requirements with the current contract fields; do not "
         "include authorization candidate ruleId, page/entity bindings, role-resource/member assignments, "
         "resourceKey, policyKey, dataRuleKey, includes, or excludes. user_roles role ids are the only stable planning keys "

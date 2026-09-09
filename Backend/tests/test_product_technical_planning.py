@@ -20,6 +20,7 @@ from app.agents.main.requirements_analyzer import (
     _requirements_prompt,
     _validate_complete_requirement_spec,
 )
+from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.services.page_implementation_contract import (
     attach_page_implementation_contracts,
     materialize_technical_plan_runtime,
@@ -426,6 +427,37 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertNotIn("requirement_field_sentinel", prompt)
         self.assertNotIn("engineering_design", prompt)
         self.assertNotIn('"resource"', prompt)
+
+    def test_technical_markdown_sync_does_not_inject_authorization_data_bindings(self) -> None:
+        """技术文档同步不得把平台权限绑定伪装成模型输出。"""
+
+        existing_plan = {
+            "artifact_type": "technical-plan",
+            "authorization_manifest": {"bindings": {"dataRules": ["forbidden"]}},
+        }
+        synced_plan = {
+            "architecture": {},
+            "entities": [],
+            "api_contracts": [],
+            "pages": [],
+            "template_capabilities": {},
+        }
+        with patch(
+            "app.agents.main.document_sync._invoke_sync_model",
+            return_value=synced_plan,
+        ), patch(
+            "app.agents.main.document_sync.create_technical_plan",
+            return_value={},
+        ) as create_plan, patch(
+            "app.agents.main.document_sync.validate_api_contract_consistency",
+            return_value=[],
+        ):
+            sync_project_plan_from_markdown(existing_plan, {}, "# TechnicalPlan")
+
+        self.assertNotIn(
+            "authorization_data_bindings",
+            create_plan.call_args.kwargs["agent_plan"],
+        )
 
     def test_technical_plan_entities_come_only_from_model_output(self) -> None:
         """TechnicalPlan 实体不得继承 RequirementSpec.entities。"""

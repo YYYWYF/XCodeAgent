@@ -24,12 +24,17 @@ from app.services.template_reconcile.finalization import (
 )
 
 
-def _active_revision(*, status: str = "drafting") -> ActiveFormalRevision:
+def _active_revision(
+    *,
+    status: str = "drafting",
+    formal_branch: FormalRevisionBranch = FormalRevisionBranch.WORKBENCH_PLAN_REVISION,
+    current_artifact: str = EarliestRevisionArtifact.TECHNICAL_PLAN.value,
+) -> ActiveFormalRevision:
     """构造最小 active formal revision，供 CAS 行为测试使用。"""
 
     return ActiveFormalRevision(
         changeId="chg_template_reconcile",
-        formalBranch=FormalRevisionBranch.WORKBENCH_PLAN_REVISION,
+        formalBranch=formal_branch,
         sourceThreadId="thread-source",
         sourceRunId="run-source",
         request="为应用补充模板能力",
@@ -37,11 +42,17 @@ def _active_revision(*, status: str = "drafting") -> ActiveFormalRevision:
         impactInteractionId="impact-1",
         planningThreadId="thread-planning",
         status=status,
-        currentArtifact=EarliestRevisionArtifact.TECHNICAL_PLAN.value,
+        currentArtifact=current_artifact,
     )
 
 
-def _workspace_with_active_revision(root: Path, *, status: str = "drafting") -> None:
+def _workspace_with_active_revision(
+    root: Path,
+    *,
+    status: str = "drafting",
+    formal_branch: FormalRevisionBranch = FormalRevisionBranch.WORKBENCH_PLAN_REVISION,
+    current_artifact: str = EarliestRevisionArtifact.TECHNICAL_PLAN.value,
+) -> None:
     """写入带 active formal revision 的最小 lifecycle 文件。"""
 
     lifecycle = create_application_lifecycle(
@@ -51,7 +62,11 @@ def _workspace_with_active_revision(root: Path, *, status: str = "drafting") -> 
     lifecycle = lifecycle.model_copy(
         update={
             "revision": lifecycle.revision + 1,
-            "active_formal_revision": _active_revision(status=status),
+            "active_formal_revision": _active_revision(
+                status=status,
+                formal_branch=formal_branch,
+                current_artifact=current_artifact,
+            ),
         }
     )
     write_application_lifecycle(root, lifecycle, expected_revision=0)
@@ -116,3 +131,48 @@ class TemplateReconcileFinalizationTests(unittest.TestCase):
             claim_template_reconcile_finalization(root, change_id="chg_template_reconcile")
             failed = mark_template_reconcile_failed(root, change_id="chg_template_reconcile")
             self.assertEqual(failed.status, "template_reconcile_failed")
+
+    def test_design_revision_requires_confirmed_technical_plan_progress(self) -> None:
+        """设计阶段只有已确认的 TechnicalPlan 才能进入模板能力更新。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _workspace_with_active_revision(
+                root,
+                status="design_planning",
+                formal_branch=FormalRevisionBranch.DESIGN_STAGE_REVISION,
+                current_artifact="product-plan",
+            )
+            plan_path = root / ".xcodeagent" / "plans" / "technical-plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(
+                '{"artifact_type":"technical-plan","confirmation_status":"confirmed"}',
+                encoding="utf-8",
+            )
+            with self.assertRaises(ApplicationLifecycleConflictError):
+                claim_template_reconcile_finalization(
+                    root,
+                    change_id="chg_template_reconcile",
+                    technical_plan_path=plan_path,
+                )
+
+            lifecycle = load_application_lifecycle(root)
+            active = lifecycle.active_formal_revision.model_copy(
+                update={"current_artifact": "technical-plan"}
+            )
+            write_application_lifecycle(
+                root,
+                lifecycle.model_copy(
+                    update={
+                        "revision": lifecycle.revision + 1,
+                        "active_formal_revision": active,
+                    }
+                ),
+                expected_revision=lifecycle.revision,
+            )
+            claim = claim_template_reconcile_finalization(
+                root,
+                change_id="chg_template_reconcile",
+                technical_plan_path=plan_path,
+            )
+            self.assertTrue(claim.acquired)

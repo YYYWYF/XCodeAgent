@@ -19,6 +19,7 @@ from app.services.entity_definitions import (
     merge_entities,
     normalize_entities,
 )
+from app.services.access_control_intent import resolve_capability_intents
 from app.workspace.spec_documents import (
     load_requirement_spec_json,
     render_requirement_spec_markdown,
@@ -43,6 +44,27 @@ def _default_authorization_requirements(
     }
 
 
+def _default_authentication_requirements(enabled: bool = False) -> dict[str, Any]:
+    """构造当前 RequirementSpec 使用的认证能力需求默认结构。"""
+
+    return {"enabled": bool(enabled), "sourceRefs": []}
+
+
+def normalize_authentication_requirements(
+    value: Any,
+    *,
+    enabled_hint: bool | None = None,
+) -> dict[str, Any]:
+    """归一化登录基础能力需求，避免模型写入认证实现细节。"""
+
+    raw = value if isinstance(value, dict) else {}
+    enabled = bool(enabled_hint) if enabled_hint is not None else raw.get("enabled") is True
+    return {
+        "enabled": enabled,
+        "sourceRefs": _string_list(raw.get("sourceRefs")) if enabled else [],
+    }
+
+
 def _explicit_authorization_flag(text: str, marker: str) -> bool | None:
     """从创建应用规划请求中读取权限开关事实，避免模型自行覆盖表单选择。"""
 
@@ -60,6 +82,16 @@ def _authorization_enabled_from_request(text: str) -> bool | None:
     """读取权限是否启用的显式规划事实。"""
 
     for marker in ("涉及权限控制", "权限控制", "应用级资源授权"):
+        value = _explicit_authorization_flag(text, marker)
+        if value is not None:
+            return value
+    return None
+
+
+def _authentication_enabled_from_request(text: str) -> bool | None:
+    """读取认证是否启用的显式规划事实。"""
+
+    for marker in ("认证", "登录认证"):
         value = _explicit_authorization_flag(text, marker)
         if value is not None:
             return value
@@ -279,6 +311,7 @@ def normalize_authorization_requirements(
 
     normalized = {
         "enabled": enabled,
+        "sourceRefs": _string_list(raw.get("sourceRefs")) if enabled else [],
         "restrictedPages": [
             rule
             for item in raw_list("restrictedPages")
@@ -916,6 +949,7 @@ def create_requirement_spec(
     modules = _feature_modules(source_text) if allow_inferred_defaults else []
     app_name = _app_name(source_text) if allow_inferred_defaults else ""
     request_authorization_enabled = _authorization_enabled_from_request(source_text)
+    request_authentication_enabled = _authentication_enabled_from_request(source_text)
     roles = [
         {
             "id": "business_user",
@@ -948,6 +982,9 @@ def create_requirement_spec(
         "business_flows": _business_flows(modules) if allow_inferred_defaults else [],
         "authorization_requirements": _default_authorization_requirements(
             enabled=(request_authorization_enabled is True),
+        ),
+        "authentication_requirements": _default_authentication_requirements(
+            enabled=(request_authentication_enabled is True),
         ),
         "acceptance_criteria": (
             _acceptance_criteria(app_name) if allow_inferred_defaults else []
@@ -1101,6 +1138,24 @@ def create_requirement_spec(
         pages=spec["pages"],
         entities=spec["entities"],
     )
+    authentication_source = (
+        agent_spec.get("authentication_requirements")
+        if isinstance(agent_spec, dict) and isinstance(agent_spec.get("authentication_requirements"), dict)
+        else existing_spec.get("authentication_requirements")
+        if isinstance(existing_spec, dict)
+        else default_spec["authentication_requirements"]
+    )
+    spec["authentication_requirements"] = normalize_authentication_requirements(
+        authentication_source,
+        enabled_hint=request_authentication_enabled,
+    )
+    # 自然语言修订只形成正式需求事实；绝不在此修改 application.json 或 TemplateState。
+    for intent in resolve_capability_intents(request, requirement_spec=existing_spec):
+        if intent["capability"] == "login":
+            spec["authentication_requirements"] = {"enabled": True, "sourceRefs": [intent["evidence"]]}
+        elif intent["capability"] == "authorization":
+            spec["authorization_requirements"]["enabled"] = True
+            spec["authorization_requirements"]["sourceRefs"] = [intent["evidence"]]
     # 第一阶段不能把数据范围语义悄然丢弃：模型或编辑内容一旦提出该能力，
     # 必须以明确的能力缺口阻断 RequirementSpec 确认，等待用户改写需求。
     data_authorization_issues = []

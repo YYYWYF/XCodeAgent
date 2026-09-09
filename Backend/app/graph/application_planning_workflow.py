@@ -42,7 +42,10 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
     persist_application_lifecycle_transition,
 )
-from app.services.application_revision_lifecycle import issue_revision_continuation
+from app.services.application_revision_lifecycle import (
+    issue_revision_continuation,
+    update_active_revision_progress,
+)
 from app.config import Settings
 from app.services.artifact_invalidation import canonical_sha256
 from app.services.template_reconcile.finalization import (
@@ -65,6 +68,14 @@ def _route_start(state: ProjectState) -> str:
     lifecycle = load_application_lifecycle(workspace) if workspace else None
     if resume_from == "design_intent_analysis":
         return "design_intent_analysis"
+    if (
+        resume_from == "technical_planning"
+        and lifecycle is not None
+        and lifecycle.active_formal_revision is not None
+        and lifecycle.active_formal_revision.status == "template_reconcile_failed"
+    ):
+        # Reconcile 失败后的恢复必须复用已确认的 TechnicalPlan，不能重放旧确认动作。
+        return "template_reconcile"
     allowed_resume_stages = {
         "requirements": {
             ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
@@ -153,10 +164,12 @@ def _route_ui_confirmation(state: ProjectState) -> str:
 
 
 def _route_technical_planning(state: ProjectState) -> str:
-    """TechnicalPlan 未确认时进入原生审阅中断，确认后结束创建规划。"""
+    """TechnicalPlan 未确认时进入原生审阅中断，确认后转入独立收口阶段。"""
 
     clarification = state.get("clarification")
-    return "technical_planning_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "completed"
+    if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input":
+        return "technical_planning_review"
+    return "template_reconcile" if state.get("template_reconcile_pending") else "completed"
 
 
 def _requirements(state: ProjectState) -> dict:
@@ -279,6 +292,12 @@ async def _ui_confirmation(state: ProjectState) -> dict:
             status=ApplicationLifecycleStatus.AWAITING_USER,
             active_run_id=state.get("active_run_id"),
         )
+        lifecycle = _sync_design_revision_artifact(
+            workspace,
+            lifecycle,
+            current_artifact="ui-design",
+            remaining_artifacts=["technical-plan"],
+        )
         return design_node_update(
             state,
             "ui_confirmation",
@@ -336,6 +355,12 @@ def _product_planning(state: ProjectState) -> dict:
             stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
             status=ApplicationLifecycleStatus.RUNNING,
             active_run_id=state.get("active_run_id"),
+        )
+        lifecycle = _sync_design_revision_artifact(
+            workspace,
+            lifecycle,
+            current_artifact="product-plan",
+            remaining_artifacts=["ui-design", "technical-plan"],
         )
         return design_node_update(
             state,
@@ -407,47 +432,22 @@ def _technical_planning(state: ProjectState) -> dict:
             )
         merged_state = {**node_state, **update}
         confirmation = confirm_application_planning_artifacts(merged_state)
+        lifecycle = _sync_design_revision_artifact(
+            workspace,
+            lifecycle,
+            current_artifact="technical-plan",
+            remaining_artifacts=[],
+        )
         revision_continuation: dict[str, Any] = {}
+        template_reconcile_pending = False
         active_revision = lifecycle.active_formal_revision
         if (
             active_revision is not None
             and active_revision.formal_branch.value
             in {"design_stage_revision", "workbench_plan_revision"}
         ):
-            # 应用模板只在首次创建时生成一次。正式二次修改确认 TechnicalPlan
-            # 后直接签发主 Workflow continuation，由 application_revision 收口并
-            # 进入 inspect_workspace/prepare_build_tasks，不得再次进入模板阶段。
-            # 在签发 continuation 前，把可确定性推导的后端骨架代码注入模板工程，
-            # 让开发阶段 Agent 只需补充业务逻辑，不必从零生成 Entity/PO/Mapper 等
-            # 确定性文件。模板工程已在首次创建时拉取到工作区，此处只写不删。
-            try:
-                _reconcile_revision_template_capabilities(workspace, active_revision.change_id)
-                _inject_revision_backend_skeleton(workspace, node_state, strict=True)
-            except Exception:
-                latest = load_application_lifecycle(workspace)
-                if (
-                    latest is not None
-                    and latest.active_formal_revision is not None
-                    and latest.active_formal_revision.change_id == active_revision.change_id
-                    and latest.active_formal_revision.status == "template_reconciling"
-                ):
-                    mark_template_reconcile_failed(workspace, change_id=active_revision.change_id)
-                raise
-            token, issued = issue_revision_continuation(
-                workspace,
-                change_id=active_revision.change_id,
-                technical_plan_path=(
-                    Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
-                ),
-            )
-            lifecycle = load_application_lifecycle(workspace) or lifecycle
-            revision_continuation = {
-                "changeId": issued.change_id,
-                "formalBranch": issued.formal_branch.value,
-                "action": "continue_revision_build",
-                "token": token,
-                "technicalPlanSha256": issued.technical_plan_sha256,
-            }
+            # 确认产物必须先独立提交 checkpoint；后续模板更新失败不得重放 confirm。
+            template_reconcile_pending = True
         else:
             # 只有首次创建流程会在 TechnicalPlan 确认后准备应用模板。
             lifecycle = persist_application_lifecycle_transition(
@@ -467,6 +467,9 @@ def _technical_planning(state: ProjectState) -> dict:
                     "workflow_scope": "application_planning",
                     "application_planning_confirmation": confirmation,
                     "revision_continuation": revision_continuation,
+                    "template_reconcile_pending": template_reconcile_pending,
+                    # confirm 已由本节点写入 canonical TechnicalPlan；禁止后续节点重放它。
+                    "application_planning_interaction": {},
                     "lifecycle": application_lifecycle_payload(lifecycle),
                 },
             ),
@@ -476,6 +479,63 @@ def _technical_planning(state: ProjectState) -> dict:
         _persist_node_cancelled(workspace, state)
         raise
     except Exception as exc:
+        _persist_node_error(workspace, state, exc)
+        raise
+
+
+def _reconcile_confirmed_revision(state: ProjectState) -> dict:
+    """对已确认 TechnicalPlan 执行可重试的模板收口，并在成功后签发 continuation。"""
+
+    workspace = _workspace(state)
+    lifecycle = load_application_lifecycle(workspace)
+    active_revision = lifecycle.active_formal_revision if lifecycle is not None else None
+    if active_revision is None:
+        raise ApplicationLifecycleConflictError("Template Reconcile 缺少 active formal revision。")
+    try:
+        # 该节点只读取 canonical TechnicalPlan；确认节点已在前一 checkpoint 提交完成。
+        _reconcile_revision_template_capabilities(workspace, active_revision.change_id)
+        _inject_revision_backend_skeleton(workspace, state, strict=True)
+        token, issued = issue_revision_continuation(
+            workspace,
+            change_id=active_revision.change_id,
+            technical_plan_path=(
+                Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+            ),
+        )
+        lifecycle = load_application_lifecycle(workspace) or lifecycle
+        return {
+            **design_node_update(
+                state,
+                "template_reconcile",
+                {
+                    "phase": "template_reconcile",
+                    "status": "completed",
+                    "template_reconcile_pending": False,
+                    "application_planning_interaction": {},
+                    "revision_continuation": {
+                        "changeId": issued.change_id,
+                        "formalBranch": issued.formal_branch.value,
+                        "action": "continue_revision_build",
+                        "token": token,
+                        "technicalPlanSha256": issued.technical_plan_sha256,
+                    },
+                    "lifecycle": application_lifecycle_payload(lifecycle),
+                },
+            ),
+            **cleared_design_change_context(),
+        }
+    except asyncio.CancelledError:
+        _persist_node_cancelled(workspace, state)
+        raise
+    except Exception as exc:
+        latest = load_application_lifecycle(workspace)
+        if (
+            latest is not None
+            and latest.active_formal_revision is not None
+            and latest.active_formal_revision.change_id == active_revision.change_id
+            and latest.active_formal_revision.status == "template_reconciling"
+        ):
+            mark_template_reconcile_failed(workspace, change_id=active_revision.change_id)
         _persist_node_error(workspace, state, exc)
         raise
 
@@ -640,7 +700,11 @@ def _reconcile_revision_template_capabilities(workspace: str, change_id: str) ->
     if not settings.template_reconcile_enabled:
         return
     plan_path = Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
-    claim = claim_template_reconcile_finalization(workspace, change_id=change_id)
+    claim = claim_template_reconcile_finalization(
+        workspace,
+        change_id=change_id,
+        technical_plan_path=plan_path,
+    )
     if not claim.acquired:
         raise ApplicationLifecycleConflictError("Template Reconcile 已在执行或等待后续收口，不能重复触发。")
     try:
@@ -656,6 +720,28 @@ def _reconcile_revision_template_capabilities(workspace: str, change_id: str) ->
     except Exception:
         # 外层同时覆盖 Skeleton 失败，并统一把 active revision 标记为可重试失败。
         raise
+
+
+def _sync_design_revision_artifact(
+    workspace: str,
+    lifecycle: Any,
+    *,
+    current_artifact: str,
+    remaining_artifacts: list[str],
+) -> Any:
+    """在设计阶段正式产物确认后同步 active revision 的精确进度。"""
+
+    active = lifecycle.active_formal_revision
+    if active is None or active.formal_branch.value != "design_stage_revision":
+        return lifecycle
+    update_active_revision_progress(
+        workspace,
+        change_id=active.change_id,
+        status="design_planning",
+        current_artifact=current_artifact,
+        remaining_artifacts=remaining_artifacts,
+    )
+    return load_application_lifecycle(workspace) or lifecycle
 
 
 def _inject_revision_backend_skeleton(
@@ -707,6 +793,7 @@ def build_application_planning_graph(*, checkpointer):
     builder.add_node("planning_stage_entry", planning_stage_entry)
     builder.add_node("technical_planning", _technical_planning)
     builder.add_node("technical_planning_review", technical_planning_review)
+    builder.add_node("template_reconcile", _reconcile_confirmed_revision)
     builder.add_conditional_edges(START, _route_start, {
         "design_intent_analysis": "design_intent_analysis",
         "requirements": "requirements",
@@ -714,6 +801,7 @@ def build_application_planning_graph(*, checkpointer):
         "ui_confirmation": "ui_confirmation",
         "planning_stage_entry": "planning_stage_entry",
         "technical_planning": "technical_planning",
+        "template_reconcile": "template_reconcile",
     })
     builder.add_conditional_edges("design_intent_analysis", route_design_intent, {
         "requirements": "requirements",
@@ -735,8 +823,10 @@ def build_application_planning_graph(*, checkpointer):
     })
     builder.add_conditional_edges("technical_planning", _route_technical_planning, {
         "technical_planning_review": "technical_planning_review",
+        "template_reconcile": "template_reconcile",
         "completed": END,
     })
+    builder.add_edge("template_reconcile", END)
     builder.add_conditional_edges("design_chat_response", pending_review_node, {
         "requirements_review": "requirements_review",
         "requirement_document_review": "requirement_document_review",

@@ -241,6 +241,7 @@ def update_active_revision_progress(
     *,
     change_id: str,
     status: Literal[
+        "design_planning",
         "drafting",
         "awaiting_user",
         "template_reconciling",

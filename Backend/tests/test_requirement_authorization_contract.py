@@ -5,6 +5,7 @@ import unittest
 from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import (
     _merge_authorization_facts,
+    _remove_global_feature_availability_controls,
     _validate_authorization_fact_output,
 )
 from app.services.requirement_spec import (
@@ -42,6 +43,56 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
 
         self.assertNotIn("unauthorizedBehavior", spec["authorization_requirements"])
         self.assertEqual(validate_authorization_requirements(spec), [])
+
+    def test_global_read_only_requirement_is_not_an_authorization_rule(self) -> None:
+        """全局禁用增删改只能收窄功能范围，不能触发管理员初始化。"""
+
+        facts = {
+            "user_roles": [],
+            "authorization_requirements": {
+                "restrictedPages": [],
+                "restrictedOperations": [
+                    {
+                        "name": "维护人员信息",
+                        "description": "不可新增、删除、修改人员信息。",
+                        "rationale": "应用仅提供人员列表查看。",
+                        "sourceRefs": ["人员管理应用，查看人员列表，不可新增、删除、修改信息"],
+                        "defaultGrantedRoleIds": ["business_user"],
+                    }
+                ],
+                "dataAuthorizationIssues": [],
+            },
+        }
+
+        sanitized = _remove_global_feature_availability_controls(facts)
+
+        self.assertEqual(
+            sanitized["authorization_requirements"]["restrictedOperations"], []
+        )
+
+    def test_authorization_fact_output_rejects_rule_without_role_grant(self) -> None:
+        """缺少明确角色授权的候选不能被当成 RBAC 控制。"""
+
+        facts = {
+            "user_roles": [],
+            "authorization_requirements": {
+                "restrictedPages": [],
+                "restrictedOperations": [
+                    {
+                        "name": "删除人员",
+                        "description": "删除人员信息。",
+                        "rationale": "需要受控。",
+                        "sourceRefs": ["删除人员需要权限"],
+                        "defaultGrantedRoleIds": [],
+                    }
+                ],
+                "dataAuthorizationIssues": [],
+            },
+        }
+
+        errors = _validate_authorization_fact_output(facts, [])
+
+        self.assertTrue(any("缺少默认角色授权" in error for error in errors))
 
     def test_authorization_fact_extraction_replaces_incomplete_model_candidates(self) -> None:
         """明确角色和权限事实必须覆盖模型的空角色及缺字段候选。"""

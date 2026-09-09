@@ -5,10 +5,12 @@ from __future__ import annotations
 import unittest
 
 from app.services.template_reconcile.desired import (
+    compile_template_capabilities,
     initial_template_capabilities,
     requested_config_from_technical_plan,
     template_capability_errors,
 )
+from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import render_project_plan_markdown
 
 
@@ -23,6 +25,47 @@ class TemplateReconcileDesiredTests(unittest.TestCase):
             {"authorization": {"enabled": True, "config": {}}},
         )
         self.assertEqual(initial_template_capabilities({"enabled": False}), {})
+
+    def test_natural_language_login_requirement_compiles_desired_capability(self) -> None:
+        """二次提出增加登录时只更新正式 Desired，不依赖 application.json。"""
+
+        spec = create_requirement_spec(
+            "给这个应用增加登录功能",
+            agent_spec={
+                "authentication_requirements": {"enabled": False, "sourceRefs": []},
+                "authorization_requirements": {
+                    "enabled": False,
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                },
+            },
+        )
+
+        self.assertTrue(spec["authentication_requirements"]["enabled"])
+        self.assertEqual(
+            compile_template_capabilities(spec, {"enabled": False}),
+            {"login": {"enabled": True, "config": {}}},
+        )
+
+    def test_natural_language_authorization_requirement_needs_no_policy_rule(self) -> None:
+        """增加权限管理基础设施时允许暂时没有业务页面或操作规则。"""
+
+        spec = create_requirement_spec(
+            "给这个应用增加权限管理功能",
+            agent_spec={
+                "authorization_requirements": {
+                    "enabled": False,
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                },
+            },
+        )
+
+        self.assertTrue(spec["authorization_requirements"]["enabled"])
+        self.assertEqual(
+            compile_template_capabilities(spec, {"enabled": True}),
+            {"authorization": {"enabled": True, "config": {}}},
+        )
 
     def test_compiles_requested_config_only_from_technical_plan(self) -> None:
         """确认 RequestedConfig 不读取或依赖 application.json。"""

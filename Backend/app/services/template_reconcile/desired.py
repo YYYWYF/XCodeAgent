@@ -13,15 +13,48 @@ class TemplateCapabilityError(ValueError):
     """表示 TechnicalPlan 的模板能力不符合当前 Engine 支持范围。"""
 
 
-def initial_template_capabilities(authorization_manifest: Any) -> dict[str, dict[str, Any]]:
-    """根据确定性权限 Manifest 生成首次 TechnicalPlan 的默认模板能力。"""
+def compile_template_capabilities(
+    requirement_spec: Any,
+    authorization_manifest: Any,
+) -> dict[str, dict[str, Any]]:
+    """从 RequirementSpec 的正式能力需求确定性编译模板 Desired Capability。"""
 
     if not isinstance(authorization_manifest, dict):
         raise TemplateCapabilityError("TechnicalPlan.authorization_manifest 必须是对象。")
-    enabled = authorization_manifest.get("enabled")
-    if not isinstance(enabled, bool):
+    if not isinstance(requirement_spec, dict):
+        raise TemplateCapabilityError("RequirementSpec 必须是对象。")
+    manifest_enabled = authorization_manifest.get("enabled")
+    if not isinstance(manifest_enabled, bool):
         raise TemplateCapabilityError("TechnicalPlan.authorization_manifest.enabled 必须是布尔值。")
-    return {"authorization": {"enabled": True, "config": {}}} if enabled else {}
+    authentication = requirement_spec.get("authentication_requirements")
+    authorization = requirement_spec.get("authorization_requirements")
+    if not isinstance(authentication, dict) or not isinstance(authentication.get("enabled"), bool):
+        raise TemplateCapabilityError("RequirementSpec.authentication_requirements.enabled 必须是布尔值。")
+    if not isinstance(authorization, dict) or not isinstance(authorization.get("enabled"), bool):
+        raise TemplateCapabilityError("RequirementSpec.authorization_requirements.enabled 必须是布尔值。")
+    if manifest_enabled != (authorization.get("enabled") is True):
+        raise TemplateCapabilityError("权限 Manifest 必须与 RequirementSpec.authorization_requirements.enabled 一致。")
+    capabilities: dict[str, dict[str, Any]] = {}
+    if authentication.get("enabled") is True:
+        capabilities["login"] = {"enabled": True, "config": {}}
+    if authorization.get("enabled") is True:
+        capabilities["authorization"] = {"enabled": True, "config": {}}
+    return capabilities
+
+
+def initial_template_capabilities(authorization_manifest: Any) -> dict[str, dict[str, Any]]:
+    """兼容旧调用：仅按权限 Manifest 构造不含登录的首次能力集合。"""
+
+    return compile_template_capabilities(
+        {
+            "authentication_requirements": {"enabled": False},
+            "authorization_requirements": {
+                "enabled": isinstance(authorization_manifest, dict)
+                and authorization_manifest.get("enabled") is True
+            },
+        },
+        authorization_manifest,
+    )
 
 
 def normalize_template_capabilities(value: Any) -> dict[str, dict[str, Any]]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +27,7 @@ def claim_template_reconcile_finalization(
     workspace: str | Path,
     *,
     change_id: str,
+    technical_plan_path: str | Path | None = None,
 ) -> ReconcileFinalizationClaim:
     """以 lifecycle revision CAS 将当前 TechnicalPlan Revision 标记为 Reconcile 中。"""
 
@@ -37,7 +39,7 @@ def claim_template_reconcile_finalization(
         return ReconcileFinalizationClaim(acquired=False, active_revision=active)
     if active.continuation_token_sha256 is not None or active.continuation_consumed_at is not None:
         raise ApplicationLifecycleConflictError("当前 formal revision 已进入 continuation，不能再进入 Template Reconcile。")
-    if active.status not in {"drafting", "awaiting_user", "template_reconcile_failed"}:
+    if not _can_enter_template_reconcile(active, technical_plan_path):
         raise ApplicationLifecycleConflictError(
             f"当前 formal revision 状态 {active.status} 不允许进入 Template Reconcile。"
         )
@@ -56,6 +58,39 @@ def claim_template_reconcile_finalization(
     )
     write_application_lifecycle(workspace, updated, expected_revision=current.revision)
     return ReconcileFinalizationClaim(acquired=True, active_revision=next_active)
+
+
+def _can_enter_template_reconcile(
+    active: ActiveFormalRevision,
+    technical_plan_path: str | Path | None,
+) -> bool:
+    """按 formal revision 分支校验已确认 TechnicalPlan 的 Finalization 前置条件。"""
+
+    if active.status == "template_reconcile_failed":
+        return _technical_plan_is_confirmed(technical_plan_path)
+    if active.formal_branch.value == "design_stage_revision":
+        return (
+            active.status == "design_planning"
+            and active.current_artifact == "technical-plan"
+            and _technical_plan_is_confirmed(technical_plan_path)
+        )
+    return active.status in {"drafting", "awaiting_user"}
+
+
+def _technical_plan_is_confirmed(path: str | Path | None) -> bool:
+    """只允许已确认的 canonical TechnicalPlan 驱动设计阶段模板更新。"""
+
+    if path is None:
+        return False
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(value, dict)
+        and value.get("artifact_type") == "technical-plan"
+        and value.get("confirmation_status") == "confirmed"
+    )
 
 
 def mark_template_reconcile_failed(

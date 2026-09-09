@@ -40,8 +40,7 @@ from app.services.page_dependencies import normalize_page_dependencies
 from app.services.requirement_spec import product_acceptance_criteria
 from app.services.authorization_manifest import compile_authorization_manifest
 from app.services.template_reconcile.desired import (
-    initial_template_capabilities,
-    normalize_template_capabilities,
+    compile_template_capabilities,
     template_capability_errors,
 )
 
@@ -1805,7 +1804,6 @@ def create_technical_plan(
         api_contracts,
         pages,
     )
-    raw_template_capabilities = _agent_section(agent_plan, "template_capabilities")
     plan = {
         "artifact_type": TECHNICAL_PLAN_ARTIFACT_TYPE,
         "architecture": architecture,
@@ -1813,11 +1811,8 @@ def create_technical_plan(
         "api_contracts": api_contracts,
         "pages": pages,
         "authorization_manifest": authorization_manifest,
-        "template_capabilities": (
-            normalize_template_capabilities(raw_template_capabilities)
-            if raw_template_capabilities is not None
-            else initial_template_capabilities(authorization_manifest)
-        ),
+        # 模板能力只能由 RequirementSpec 的正式意图编译，模型不得自行声明。
+        "template_capabilities": compile_template_capabilities(spec, authorization_manifest),
     }
     repaired, _ = repair_cross_contract_schema_refs(plan)
     return repaired
