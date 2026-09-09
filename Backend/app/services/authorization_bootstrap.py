@@ -12,11 +12,20 @@ from threading import Lock
 from typing import Any
 
 from app.utils.subprocess_output import subprocess_output_text
+from app.services.workspace_process_registry import workspace_process_registry
 
 
 AUTHORIZATION_BOOTSTRAP_TIMEOUT_SECONDS = 600
 _WORKSPACE_LOCKS: dict[str, Lock] = {}
 _WORKSPACE_LOCKS_GUARD = Lock()
+
+
+def clear_authorization_bootstrap_lock(workspace: str | Path) -> bool:
+    """在应用停止后移除目标工作区的权限初始化互斥锁缓存。"""
+
+    key = _authorization_workspace_key(workspace)
+    with _WORKSPACE_LOCKS_GUARD:
+        return _WORKSPACE_LOCKS.pop(key, None) is not None
 
 
 def authorization_bootstrap_enabled(technical_plan: Any) -> bool:
@@ -81,8 +90,9 @@ def run_authorization_bootstrap(
         runtime_root.mkdir(parents=True, exist_ok=True)
         started = time.monotonic()
         try:
-            completed = subprocess.run(
+            completed = workspace_process_registry.run(
                 command,
+                workspace=root,
                 cwd=root,
                 env=_bootstrap_environment(),
                 stdin=subprocess.DEVNULL,
@@ -182,9 +192,15 @@ def _bootstrap_environment() -> dict[str, str]:
 def _workspace_lock(root: Path) -> Lock:
     """获取同一工作区的进程内互斥锁，避免并发重复启动脚本。"""
 
-    key = str(root)
+    key = _authorization_workspace_key(root)
     with _WORKSPACE_LOCKS_GUARD:
         return _WORKSPACE_LOCKS.setdefault(key, Lock())
+
+
+def _authorization_workspace_key(workspace: str | Path) -> str:
+    """生成权限初始化锁使用的规范化绝对工作区键。"""
+
+    return os.path.normcase(str(Path(workspace).expanduser().resolve(strict=False)))
 
 
 def _successful_marker(path: Path, fingerprint: str) -> bool:

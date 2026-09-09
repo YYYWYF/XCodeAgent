@@ -39,6 +39,13 @@ class TestingSubgraphEventsTests(unittest.TestCase):
     (projected from ``test_events``) was therefore incomplete.
     """
 
+    def setUp(self) -> None:
+        """本组只验证测试子图事件，应用级门禁由独立真实持久化测试覆盖。"""
+
+        gate = patch("app.services.development_artifacts.require_test_entry")
+        gate.start()
+        self.addCleanup(gate.stop)
+
     def test_mapping_layer_sources_are_not_unit_test_targets(self) -> None:
         """映射层变化不生成单测目标，但 Service 仍可生成。"""
 
@@ -159,6 +166,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             *,
             on_progress=None,
             phase: str = "all",
+            include_backend_startup: bool = False,
         ) -> dict:
             """按当前集成构建阶段返回检查，验证测试子图不执行单元测试。"""
 
@@ -429,6 +437,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             *,
             on_progress=None,
             phase: str = "all",
+            include_backend_startup: bool = False,
         ) -> dict:
             """模拟构建和单测两阶段，并记录每阶段的实时状态。"""
 
@@ -599,6 +608,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             *,
             on_progress=None,
             phase: str = "all",
+            include_backend_startup: bool = False,
         ) -> dict:
             """按阶段返回构建与单测检查。"""
 
@@ -761,10 +771,15 @@ class TestingSubgraphEventsTests(unittest.TestCase):
     def test_confirmed_integration_resume_reuses_completed_build_checks(self) -> None:
         """测试阶段确认恢复时复用已完成集成构建快照，避免再次安装和构建。"""
 
-        cached = [{"id": "frontend_build", "passed": True, "skipped": False}]
+        cached = [
+            {"id": "frontend_build", "passed": True, "skipped": False},
+            {"id": "backend_startup", "passed": True, "skipped": True, "source_fingerprint": "source"},
+        ]
         with patch(
             "app.graph.subgraphs.testing.run_integration_checks"
-        ) as run_checks:
+        ) as run_checks, patch(
+            "app.graph.subgraphs.testing.startup_source_fingerprint", return_value="source",
+        ):
             result = build_project_checks(
                 {
                     "integration_build_checks_completed": True,

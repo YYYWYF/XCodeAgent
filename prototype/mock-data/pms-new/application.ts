@@ -72,7 +72,6 @@ export const pmsNewApplication: ApplicationConfig = {
   pages: ['/recheck-introduction', '/my-rechecks'],
   defaultPage: '/recheck-introduction',
   schema: makeSchema(),
-  planningConfirmedAt: Date.now(),
   createdAt: Date.now(),
   // 版本演示:v1.3 为当前已发布版本，v1.0-v1.2 保留为可切换的只读历史。
   versions: [

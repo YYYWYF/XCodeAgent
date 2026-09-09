@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 from typing import Any, Callable
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
@@ -141,7 +141,12 @@ def _technical_planning_prompt(
                             "required_for_initial_load": True,
                         }
                     ],
-                    "action_implementations": [],
+                    "action_implementations": [
+                        {
+                            "actionId": "query_records",
+                            "endpointId": f"{contract_id}.list",
+                        }
+                    ],
                 },
             }
         ],
@@ -181,7 +186,11 @@ def _technical_planning_prompt(
         ]
     }
     revision_context = (
-        "Revise the existing TechnicalPlan according to planning_adjustment_request and return the complete five-part object.\n"
+        "Revise the existing TechnicalPlan according to planning_adjustment_request and return the complete four-part object.\n"
+        "Treat the supplied Existing TechnicalPlan as the authoritative baseline. Preserve all valid unaffected "
+        "technical decisions. Change only facts explicitly required by planning_adjustment_request and consistency "
+        "changes directly caused by those edits. Do not rename, remove, or redesign unrelated entities, API Contracts, "
+        "Endpoints, Schemas, architecture decisions, or page bindings without a concrete dependency reason.\n"
         f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"
         if existing_plan
         else "Create a new TechnicalPlan.\n"
@@ -222,11 +231,20 @@ def _technical_planning_prompt(
         "pageId and references. references contains endpoint_dependencies and action_implementations. Endpoint "
         "dependencies contain endpoint_id, usage, trigger, and required_for_initial_load. A direct business action "
         "uses {actionId, endpointId}; a business sequence uses {actionId, stepBindings:[{stepId, endpointId}]}. "
+        "If a ProductPlan page contains one or more direct business actions, action_implementations MUST NOT be empty. "
+        "Every direct business action has exactly one action_implementations entry shaped as {actionId, endpointId}. "
+        "Every sequence containing business steps has exactly one action_implementations entry shaped as "
+        "{actionId, stepBindings:[{stepId, endpointId}]} and covers every and only business stepId. Navigation, "
+        "interface, and external actions do not appear in action_implementations. "
         "Every selected endpointId exists in api_contracts and also appears in that page's endpoint_dependencies. "
         "The page set covers every upstream ProductPlan pageId.\n"
         "Do not emit authorization_manifest, resourceKey, roles, permission bindings, dataRules, policyKey, data-policy bindings, SQL, or executable authorization rules. The platform deterministically compiles all V1 page/action/system resources and Endpoint ANY-OF bindings after your output passes validation.\n\n"
-        "Complete result example:\n"
+        "Complete result syntax example only. Never copy its identifiers. Use only actionId values from the confirmed "
+        "ProductPlan and endpointId values declared by the generated TechnicalPlan:\n"
         f"{json.dumps(response_example, ensure_ascii=False, indent=2)}\n\n"
+        "Additional sequence syntax example only: {\"actionId\":\"submit_order\",\"stepBindings\":["
+        "{\"stepId\":\"validate_order\",\"endpointId\":\"order_api.validate\"},"
+        "{\"stepId\":\"persist_order\",\"endpointId\":\"order_api.create\"}]}. Never copy these identifiers.\n\n"
         "Dynamic context sections:\n"
         "- Entity generation boundary: derive business entities exclusively from the confirmed ProductPlan "
         "pages, information items, actions, and business flows. RequirementSpec entities are not provided "
@@ -241,6 +259,13 @@ def _technical_planning_prompt(
         f"{json.dumps(page_context, ensure_ascii=False)}\n\n"
         "- Business-action context: page-scoped ProductPlan actions. Use it to select endpoint implementations only for business actions and business steps.\n"
         f"{json.dumps(action_context, ensure_ascii=False)}\n\n"
+        "Before returning, audit every confirmed ProductPlan action page by page:\n"
+        "1. behavior.type=business has exactly one action_implementations entry.\n"
+        "2. behavior.type=sequence with business steps has exactly one action_implementations entry whose "
+        "stepBindings covers every and only business stepId.\n"
+        "3. behavior.type=navigation, interface, or external has no action_implementations entry.\n"
+        "4. Every referenced endpointId exists in api_contracts and is also present in the same page's "
+        "endpoint_dependencies. Do not return the TechnicalPlan until this audit passes.\n\n"
         f"{revision_context}"
         f"planning_adjustment_request:\n{str(requirement_spec.get('planning_adjustment_request') or '').strip()}\n"
     )
@@ -316,7 +341,7 @@ def _planning_prompt(
         "The JSON object must include these top-level keys:\n"
         "- requirements_overview: app goal, roles, modules, flows, acceptance focus\n"
         "- project_acceptance_criteria: user-visible product outcomes for the generated application only; "
-        "never include XCodeAgent workflow stages, preview availability, code generation, build/compile/"
+        "never include AIStudio workflow stages, preview availability, code generation, build/compile/"
         "lint/typecheck status, automated or integration tests, quality gates, or conditions for entering "
         "user acceptance\n"
         "- architecture: frontend, backend, data, testing\n"
@@ -484,12 +509,127 @@ def _invoke_prompt_with_chat_model(
 
     accumulated_text = ""
     for chunk in model.stream(prompt):
-        if isinstance(chunk, AIMessageChunk):
+        # 流式模型返回 AIMessageChunk；非流式边界情况返回完整 AIMessage，
+        # 两者都要提取 content，否则非流式时 accumulated_text 永远为空。
+        if isinstance(chunk, (AIMessageChunk, AIMessage)):
             token = chunk.content
             if isinstance(token, str) and token:
                 accumulated_text += token
                 on_token(token)
     return accumulated_text
+
+
+def _technical_action_binding_repair_prompt(
+    requirement_spec: dict[str, Any],
+    existing_plan: dict[str, Any],
+    binding_issues: list[dict[str, Any]],
+) -> str:
+    """仅投射受影响产品动作、现有 Endpoint 目录和页面绑定，构造选择型修复提示词。"""
+
+    product_plan = (
+        requirement_spec.get("confirmed_product_plan")
+        if isinstance(requirement_spec.get("confirmed_product_plan"), dict)
+        else {}
+    )
+    targets = {
+        (
+            str(issue.get("pageId") or "").strip(),
+            str(issue.get("actionId") or "").strip(),
+        )
+        for issue in binding_issues
+    }
+    affected_actions = [
+        {"pageId": page_id, "action": deepcopy(action)}
+        for page in product_plan.get("pages", [])
+        if isinstance(page, dict)
+        for page_id in [str(page.get("pageId") or "").strip()]
+        for action in page.get("actions", [])
+        if isinstance(action, dict)
+        and (page_id, str(action.get("actionId") or "").strip()) in targets
+    ]
+    endpoint_catalog = [
+        {
+            "contractId": str(contract.get("id") or "").strip(),
+            "entityIds": [
+                str(entity_id).strip()
+                for entity_id in contract.get("entity_ids", [])
+                if str(entity_id).strip()
+            ],
+            "endpoints": [
+                {
+                    key: endpoint.get(key)
+                    for key in ("id", "method", "path", "summary")
+                    if endpoint.get(key) is not None
+                }
+                for endpoint in contract.get("endpoints", [])
+                if isinstance(endpoint, dict) and str(endpoint.get("id") or "").strip()
+            ],
+        }
+        for contract in existing_plan.get("api_contracts", [])
+        if isinstance(contract, dict) and str(contract.get("id") or "").strip()
+    ]
+    affected_page_ids = {page_id for page_id, _ in targets}
+    current_bindings = [
+        {
+            "pageId": page.get("pageId"),
+            "action_implementations": deepcopy(
+                (
+                    page.get("references")
+                    if isinstance(page.get("references"), dict)
+                    else {}
+                ).get("action_implementations", [])
+            ),
+        }
+        for page in existing_plan.get("pages", [])
+        if isinstance(page, dict)
+        and str(page.get("pageId") or "").strip() in affected_page_ids
+    ]
+    return (
+        "You repair only missing TechnicalPlan business Action-to-Endpoint selections. First determine whether every "
+        "issue can be correctly implemented using only the existing Endpoint catalog. Return exactly one JSON "
+        "object. If every issue has a semantically suitable existing Endpoint, return exactly "
+        "{\"status\": \"resolved\", \"bindings\": [...]}. If any "
+        "issue requires an Endpoint that does not currently exist, do not guess, substitute, approximate, or reuse "
+        "an unrelated Endpoint. Return exactly {\"status\": \"requires_full_repair\", \"reason\": "
+        "\"no_suitable_endpoint\", \"bindings\": []}. An Endpoint being syntactically available does not make it "
+        "suitable: its method, path, summary, and business meaning must implement the confirmed ProductPlan action "
+        "semantics. Do not return architecture, entities, api_contracts, pages, ProductPlan, UI information, "
+        "authorization, markdown, or commentary. Choose only endpointId values that already exist in the supplied "
+        "Endpoint catalog; never create or rename an Endpoint. ProductPlan already decides whether an action or step "
+        "is business, so do not reclassify behavior. For a resolved direct business action, return exactly {pageId, "
+        "actionId, endpointId}. For a resolved sequence, return exactly {pageId, actionId, stepBindings:[{stepId, "
+        "endpointId}]} and cover every and only requiredStepIds. A resolved result must contain one binding for every "
+        "issue and no unrelated binding. The backend will close endpoint_dependencies deterministically.\n\n"
+        f"Structured binding issues:\n{json.dumps(binding_issues, ensure_ascii=False)}\n\n"
+        f"Affected confirmed ProductPlan actions:\n{json.dumps(affected_actions, ensure_ascii=False)}\n\n"
+        f"Existing Endpoint catalog:\n{json.dumps(endpoint_catalog, ensure_ascii=False)}\n\n"
+        f"Current bindings on affected pages:\n{json.dumps(current_bindings, ensure_ascii=False)}\n"
+    )
+
+
+def repair_technical_plan_action_bindings_with_chat_model(
+    requirement_spec: dict[str, Any],
+    existing_plan: dict[str, Any],
+    binding_issues: list[dict[str, Any]],
+    *,
+    on_token: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """让模型只返回已有 Endpoint 的业务 Action Binding Patch。"""
+
+    settings = Settings.from_env()
+    response_text = _invoke_prompt_with_chat_model(
+        _technical_action_binding_repair_prompt(
+            requirement_spec,
+            existing_plan,
+            binding_issues,
+        ),
+        settings=settings,
+        on_token=on_token,
+    )
+    parsed = extract_json_object(response_text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Action Binding 修复模型未返回有效 JSON object。")
+    return parsed
 
 
 def _technical_contract_ids_for_errors(

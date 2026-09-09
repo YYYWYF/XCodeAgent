@@ -13,7 +13,7 @@ ProductPlan
   -> 产品确认
 UiDesign（可选的真实 React 页面稿 + UiManifest）
   -> 产品确认或明确跳过
-等待进入规划阶段
+等待进入计划阶段
   -> 用户显式确认 enter_planning
 TechnicalPlan
   -> 开发确认
@@ -239,8 +239,11 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 平台规范化 TechnicalPlan 候选以及恢复失败 checkpoint 时，会把 `action_implementations` 和
 `stepBindings` 已明确选择且真实存在的 Endpoint 确定性并入同页 `endpoint_dependencies`。已有依赖的
 `usage`、`trigger` 和首屏标记保持不变；未知 Endpoint 不会被自动创建或掩盖，仍由一致性校验拒绝。
-Contract-only 自动修复仅适用于全部剩余错误都来自 API Contract 定义的情况，页面或混合错误必须走完整
-TechnicalPlan 修订。
+当全部剩余错误仅为缺失或不完整的业务 `action_implementations` 时，规划节点先从 ProductPlan 权威行为中
+生成结构化 binding issue，再让专用模型只返回已存在 Endpoint 的选择 Patch；后端严格校验目标、字段、
+业务 step 集合和 Endpoint 身份，幂等合并后执行上述依赖闭合，并重新运行完整 TechnicalPlan 校验。Patch
+无效或没有合适的现有 Endpoint 时，本轮直接回落完整 TechnicalPlan 修订。Contract-only 自动修复仍仅适用于
+全部剩余错误都来自 API Contract 定义的情况；绑定与 Contract、Schema、页面或全局错误混合时必须走完整修订。
 
 ```json
 {
@@ -298,7 +301,7 @@ TechnicalPlan 修订。
 
 ### TechnicalPlan 上下文预算
 
-- 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、V1 页面与操作权限目标身份、业务流程、页面信息和业务动作上下文，并在修订时注入修订上下文；数据权限不进入第一阶段模型上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
+- 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、V1 页面与操作权限目标身份、业务流程、页面信息和业务动作上下文。确认卡直接修订和 `workbench_plan_revision` 都以 checkpoint 中当前 TechnicalPlan 为 authoritative baseline，叠加本轮修改请求并返回完整新版本，同时保留未受影响事实及必要依赖闭合；RequirementSpec、ProductPlan 或 UiDesign 先变化时旧 baseline 失效并按新上游重建。数据权限不进入第一阶段模型上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
 
 ## Endpoint API 动态映射与工作台执行
 

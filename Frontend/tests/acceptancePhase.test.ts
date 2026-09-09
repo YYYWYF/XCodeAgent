@@ -13,7 +13,11 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 import { projectLaunchProgress } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/projectLaunchProgress'
-import { sessionsForWorkbenchPhase } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
+import { phasePendingDetail } from '../src/renderer/src/components/AiChatPanel/components/MessageList/phasePending'
+import {
+  preparePhaseTransitionSession,
+  sessionsForWorkbenchPhase
+} from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
 import type {
   ApplicationLifecycle,
   WorkbenchExecution,
@@ -233,4 +237,41 @@ test('验收 Agent 头像拥有可见的阶段背景', () => {
     messageListStyles,
     /\.@\{class-prefix\}-ai-message-agent\.@\{class-prefix\}-acceptance\s+\.@\{class-prefix\}-ai-message-agent-avatar\s*\{[^}]*background:/s
   )
+})
+
+test('验收空白会话展示验收 Agent 启动提示且预览不隐藏对话区', () => {
+  const panelStyles = readFileSync(
+    path.join(process.cwd(), 'src/renderer/src/components/AiChatPanel/AiChatPanel.less'),
+    'utf8'
+  )
+
+  assert.equal(phasePendingDetail('acceptance'), '正在启动项目准备验收…')
+  assert.doesNotMatch(panelStyles, /acceptance-preview-focus/)
+})
+
+test('阶段交接等待会话创建完成后才切换阶段', async () => {
+  const events: string[] = []
+  let finishCreation: (() => void) | undefined
+  const creationPending = new Promise<void>((resolve) => {
+    finishCreation = resolve
+  })
+
+  const transition = preparePhaseTransitionSession(
+    async () => {
+      events.push('session:create')
+      await creationPending
+      events.push('session:ready')
+      return 'acceptance-session'
+    },
+    () => {
+      events.push('phase:acceptance')
+    }
+  )
+
+  await Promise.resolve()
+  assert.deepEqual(events, ['session:create'])
+  finishCreation?.()
+
+  assert.equal(await transition, 'acceptance-session')
+  assert.deepEqual(events, ['session:create', 'session:ready', 'phase:acceptance'])
 })

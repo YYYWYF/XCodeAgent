@@ -25,6 +25,7 @@ class ProjectState(TypedDict, total=False):
     complexity_decision: dict[str, Any]
     conversation_intent: str
     conversation_response: str
+    product_conversation_result: dict[str, Any]
     change_impact_enabled: bool
     change_impact_analysis: dict[str, Any]
     change_impact_context: dict[str, Any]
@@ -43,6 +44,7 @@ class ProjectState(TypedDict, total=False):
     design_change_generation_request: str
     design_change_existing_artifacts: dict[str, bool]
     design_interaction_origin: str
+    product_stage_conversation: bool
     application_planning_interaction: dict[str, Any]
     authorization_config_conflict: dict[str, Any]
     direct_modification_owner: str
@@ -175,6 +177,8 @@ class ProjectState(TypedDict, total=False):
     unit_test_repair_task_plan_path: str
     unit_test_repair_iteration: int
     unit_test_max_repair_iterations: int
+    unit_test_repair_attempts: dict[str, int]
+    unit_test_repair_charged_checks: list[str]
     frontend_performance_decision: str
     frontend_performance_test_enabled: bool
     integration_build_checks_completed: bool

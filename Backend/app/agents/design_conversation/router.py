@@ -1,34 +1,17 @@
 from __future__ import annotations
 
 import json
-import re
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
+from app.agents.design_conversation.fallback import (
+    fallback_design_conversation_decision,
+    invalid_model_decision,
+)
+from app.agents.design_conversation.models import DesignConversationDecision
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.utils.model_output import extract_json_object
-
-
-DesignChangeTarget = Literal[
-    "requirements",
-    "product_planning",
-    "ui_confirmation",
-    "chat",
-]
-
-
-class DesignConversationDecision(BaseModel):
-    """设计阶段对话 Agent 的稳定路由结果。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    target: DesignChangeTarget
-    reason: str = Field(min_length=1, max_length=500)
-    affected_page_ids: list[str] = Field(default_factory=list, max_length=100)
-    response: str = Field(default="", max_length=2000)
 
 
 def classify_design_conversation(
@@ -39,9 +22,8 @@ def classify_design_conversation(
     ui_designs: dict[str, Any] | None,
     settings: Settings | None = None,
 ) -> DesignConversationDecision:
-    """调用独立 ChatModel 判断最早需要回退的真实设计节点。"""
+    """调用独立 ChatModel 识别用户意图和产品语义层。"""
 
-    active_settings = settings or Settings.from_env()
     prompt = _classification_prompt(
         request,
         requirement_spec=requirement_spec,
@@ -49,14 +31,23 @@ def classify_design_conversation(
         ui_designs=ui_designs,
     )
     try:
+        active_settings = settings or Settings.from_env()
         result = create_chat_model(active_settings).invoke(prompt)
         content = _coerce_content_text(getattr(result, "content", "")) or ""
         parsed = extract_json_object(content)
-        decision = DesignConversationDecision.model_validate(parsed)
-        return _normalize_decision(decision, product_plan)
     except Exception:
-        # 路由 Agent 失败时仍保持可用，并按“越上游越安全”的确定性规则兜底。
-        return _fallback_decision(request, product_plan)
+        # 模型调用失败时执行保守语义兜底，越界信号始终优先。
+        return fallback_design_conversation_decision(
+            request,
+            requirement_spec=requirement_spec,
+            product_plan=product_plan,
+        )
+    try:
+        decision = DesignConversationDecision.model_validate(parsed)
+    except Exception:
+        # 模型返回未知字段、技术节点或非法组合时直接拒绝，不再按用户文本授予修改能力。
+        return invalid_model_decision(parsed)
+    return _normalize_decision(decision, product_plan)
 
 
 def _classification_prompt(
@@ -66,7 +57,7 @@ def _classification_prompt(
     product_plan: dict[str, Any] | None,
     ui_designs: dict[str, Any] | None,
 ) -> str:
-    """构建设计节点路由提示，只提供紧凑产品事实而不加载 TSX 正文。"""
+    """构建产品语义分类提示，只提供紧凑产品事实而不加载源码。"""
 
     context = {
         "requirement": _requirement_summary(requirement_spec),
@@ -74,31 +65,42 @@ def _classification_prompt(
         "ui": _ui_summary(ui_designs),
     }
     return (
-        "You are the dedicated design-conversation routing agent for XCodeAgent.\n"
-        "Your only job is to decide the earliest formal design artifact node that must be revised. "
-        "Return one JSON object and no markdown.\n"
-        "Allowed target values: requirements, product_planning, ui_confirmation, chat.\n"
-        "Choose requirements for changes to product goals, scope, roles, modules, page inventory, "
-        "business flows, or required business information.\n"
-        "Choose product_planning when the fixed RequirementSpec remains valid but page goals, user "
-        "actions, navigation, visible outcomes, states, or product acceptance criteria must change.\n"
-        "Choose ui_confirmation only for visual layout, hierarchy, styling, controls, responsive/theme "
-        "presentation, or local interaction treatment that does not change product facts.\n"
-        "Choose chat only when no formal artifact needs to change.\n"
-        "If one request spans several levels, choose the earliest node: requirements before "
-        "product_planning before ui_confirmation. Never choose technical planning, APIs, schemas, "
-        "databases, code generation, or implementation nodes.\n"
+        "You are AIStudio's Product Conversation Coordinator. Return one JSON object and no markdown.\n"
+        "You only interpret the user's intent and product semantic level. Never output Graph nodes and "
+        "never claim to edit files, code, TechnicalPlan, APIs, schemas, databases, builds, or tests.\n"
+        "Allowed intent values: chat, read_only, requirement_change, ui_change, clarification, "
+        "out_of_scope. Allowed change_level values: requirement, product_behavior, ui, none.\n"
+        "Use requirement_change + requirement for product goals, scope, roles, modules, page existence, "
+        "new/deleted pages, business flows, business information, and business permissions.\n"
+        "Use requirement_change + product_behavior for page goals, actions, navigation, visible results, "
+        "states, and product acceptance behavior when the page inventory remains valid.\n"
+        "Use ui_change + ui only for layout, visual hierarchy, controls, color, typography, spacing, "
+        "theme, responsive presentation, or presentation of an existing interaction.\n"
+        "Use read_only for questions answerable from the bounded product context and put the answer in "
+        "response. If the context is insufficient, say so explicitly. Use chat for casual conversation.\n"
+        "Use clarification when the product-layer request is ambiguous and put exactly one useful "
+        "question in clarification_question.\n"
+        "Use out_of_scope when the user explicitly asks to change a TechnicalPlan, implementation "
+        "contract, source code, dependencies, or to execute commands/builds/tests. Choose "
+        "suggested_phase=planning, development, or test from the requested action. Do not classify a "
+        "request as out_of_scope merely because it mentions API, database, test users, or other "
+        "technical nouns: decide what product fact or presentation the user actually wants changed.\n"
+        "If a request mixes any product change with any out-of-scope work, classify the whole request "
+        "as out_of_scope; do not execute only the product portion.\n"
         "affected_page_ids may contain only pageIds from the current ProductPlan. Leave it empty when "
-        "the affected page cannot be determined safely. response is required only for chat.\n"
-        "Output shape: {\"target\":\"requirements|product_planning|ui_confirmation|chat\","
-        "\"reason\":\"short reason\",\"affected_page_ids\":[],\"response\":\"\"}.\n\n"
-        f"Current compact design context:\n{json.dumps(context, ensure_ascii=False)}\n\n"
+        "the affected page cannot be determined safely. Product changes use suggested_phase=none; "
+        "non-change intents use change_level=none.\n"
+        "Output shape: {\"intent\":\"chat|read_only|requirement_change|ui_change|clarification|out_of_scope\","
+        "\"change_level\":\"requirement|product_behavior|ui|none\",\"reason\":\"short reason\","
+        "\"affected_page_ids\":[],\"response\":\"\",\"suggested_phase\":"
+        "\"planning|development|test|none\",\"clarification_question\":\"\"}.\n\n"
+        f"Current compact product context:\n{json.dumps(context, ensure_ascii=False)}\n\n"
         f"Latest user input:\n{request}"
     )
 
 
 def _requirement_summary(spec: dict[str, Any] | None) -> dict[str, Any]:
-    """提取路由所需的需求概要，避免把完整正式文档重复塞给模型。"""
+    """提取分类所需的需求概要，避免把完整正式文档重复塞给模型。"""
 
     if not isinstance(spec, dict):
         return {}
@@ -114,7 +116,7 @@ def _requirement_summary(spec: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _product_summary(plan: dict[str, Any] | None) -> dict[str, Any]:
-    """提取页面及操作身份，供路由 Agent 判断产品与 UI 边界。"""
+    """提取页面及操作身份，供 Coordinator 判断产品行为和 UI 边界。"""
 
     if not isinstance(plan, dict):
         return {}
@@ -126,10 +128,12 @@ def _product_summary(plan: dict[str, Any] | None) -> dict[str, Any]:
             {
                 "pageId": page.get("pageId"),
                 "name": page.get("name"),
+                "goal": page.get("goal"),
                 "actions": _id_name_pairs(page.get("actions"), "actionId"),
                 "information_items": _id_name_pairs(
                     page.get("information_items"), "itemId"
                 ),
+                "states": _id_name_pairs(page.get("states"), "stateId"),
             }
         )
     return {
@@ -170,7 +174,7 @@ def _normalize_decision(
     decision: DesignConversationDecision,
     product_plan: dict[str, Any] | None,
 ) -> DesignConversationDecision:
-    """过滤未知页面 ID，并补齐 chat 的安全回复。"""
+    """过滤未知页面 ID，并清理 Coordinator 返回的展示文本。"""
 
     known_ids = {
         str(page.get("pageId") or "").strip()
@@ -185,84 +189,17 @@ def _normalize_decision(
         )
     )
     response = decision.response.strip()
-    if decision.target == "chat" and not response:
-        response = "这条消息不需要调整需求、产品规划或 UI 设计。"
+    clarification_question = decision.clarification_question.strip()
+    if decision.intent == "chat" and not response:
+        response = "这条消息不需要调整需求、产品行为或 UI 设计。"
+    if decision.intent == "read_only" and not response:
+        response = "当前产品设计中没有足够信息确定这一点。"
+    if decision.intent == "clarification" and not clarification_question:
+        clarification_question = "请再说明你希望调整的产品事实、页面行为或 UI 表现。"
     return decision.model_copy(
-        update={"affected_page_ids": affected, "response": response}
+        update={
+            "affected_page_ids": affected,
+            "response": response,
+            "clarification_question": clarification_question,
+        }
     )
-
-
-def _fallback_decision(
-    request: str,
-    product_plan: dict[str, Any] | None,
-) -> DesignConversationDecision:
-    """模型不可用时按关键词选择最早设计节点，并尽量识别页面 ID。"""
-
-    text = request.strip().lower()
-    requirement_signals = (
-        "需求",
-        "范围",
-        "角色",
-        "模块",
-        "新增页面",
-        "删除页面",
-        "业务流程",
-        "不需要这个页面",
-    )
-    product_signals = (
-        "产品规划",
-        "操作",
-        "跳转",
-        "验收标准",
-        "加载状态",
-        "空状态",
-        "业务结果",
-    )
-    ui_signals = (
-        "ui",
-        "界面",
-        "布局",
-        "样式",
-        "颜色",
-        "弹窗",
-        "组件",
-        "响应式",
-        "深色",
-        "浅色",
-    )
-    if any(signal in text for signal in requirement_signals):
-        target: DesignChangeTarget = "requirements"
-    elif any(signal in text for signal in product_signals):
-        target = "product_planning"
-    elif any(signal in text for signal in ui_signals):
-        target = "ui_confirmation"
-    else:
-        target = "chat"
-    page_ids = _mentioned_page_ids(text, product_plan)
-    return DesignConversationDecision(
-        target=target,
-        reason="路由模型不可用，已使用设计阶段保守规则判断。",
-        affected_page_ids=page_ids,
-        response=("这条消息暂未识别为正式设计产物调整。" if target == "chat" else ""),
-    )
-
-
-def _mentioned_page_ids(
-    request: str,
-    product_plan: dict[str, Any] | None,
-) -> list[str]:
-    """在兜底路径中按 pageId 或页面名识别显式提及的页面。"""
-
-    matched: list[str] = []
-    for page in (product_plan or {}).get("pages", []):
-        if not isinstance(page, dict):
-            continue
-        page_id = str(page.get("pageId") or "").strip()
-        name = str(page.get("name") or "").strip().lower()
-        if not page_id:
-            continue
-        if re.search(rf"(?<![\w-]){re.escape(page_id.lower())}(?![\w-])", request) or (
-            name and name in request
-        ):
-            matched.append(page_id)
-    return matched

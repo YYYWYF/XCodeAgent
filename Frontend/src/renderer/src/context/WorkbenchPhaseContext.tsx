@@ -1,11 +1,12 @@
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import type { ApplicationLifecycle } from '../typings'
+import { WorkbenchPhaseContext, type WorkbenchPhaseContextValue } from './workbenchPhaseState'
+import { gateWorkbenchPhase } from '../developmentArtifacts'
 import {
-  createContext,
-  type ReactNode,
-  useContext,
-  useMemo,
-  useState
-} from 'react';
-import type { ApplicationLifecycle } from '../typings';
+  furthestWorkbenchPhase,
+  getReachedWorkbenchPhase,
+  recordReachedWorkbenchPhase
+} from '../workbenchPhaseNavigation'
 import {
   deriveWorkbenchPhase,
   getPersistedWorkbenchPhase,
@@ -13,27 +14,8 @@ import {
   resolveWorkbenchPhase,
   setPersistedWorkbenchPhase,
   WORKBENCH_PHASE_AGENTS,
-  type EditableObjectType,
-  type WorkbenchAgentIdentity,
   type WorkbenchPhase
-} from '../workbenchPhase';
-
-type WorkbenchPhaseContextValue = {
-  /** 实际生效的阶段：手动覆盖优先，否则用旅程推导值。 */
-  phase: WorkbenchPhase;
-  /** 旅程推导的阶段（不受手动覆盖影响）。 */
-  derivedPhase: WorkbenchPhase;
-  /** 手动覆盖；null 表示跟随旅程（自动推进）。 */
-  manualOverride: WorkbenchPhase | null;
-  /** 切换阶段；传 null 回到「跟随旅程」。 */
-  switchPhase: (phase: WorkbenchPhase | null) => void;
-  /** 当前生效阶段的 Agent 身份。 */
-  agent: WorkbenchAgentIdentity;
-  /** 阶段门禁：某对象当前是否可编辑。 */
-  canEdit: (objectType: EditableObjectType) => boolean;
-};
-
-const WorkbenchPhaseContext = createContext<WorkbenchPhaseContextValue | null>(null);
+} from '../workbenchPhase'
 
 /**
  * 按应用隔离的手动阶段覆盖。旅程向前自动推进阶段（derivedPhase）；
@@ -44,44 +26,79 @@ export function WorkbenchPhaseProvider({
   lifecycle,
   children
 }: {
-  applicationId: string;
-  lifecycle?: ApplicationLifecycle;
-  children: ReactNode;
+  applicationId: string
+  lifecycle?: ApplicationLifecycle
+  children: ReactNode
 }): JSX.Element {
-  const derivedPhase = deriveWorkbenchPhase(lifecycle);
+  const testEntryGate = lifecycle?.testEntryGate
+  const derivedPhase = gateWorkbenchPhase(deriveWorkbenchPhase(lifecycle), testEntryGate)
   // 恢复用户上次手动选择的阶段；未覆盖时始终跟随后端生命周期。
   const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>(() => {
-    const persistedPhase = getPersistedWorkbenchPhase(applicationId);
-    return persistedPhase ? { [applicationId]: persistedPhase } : {};
-  });
-  const manualOverride = overrides[applicationId] ?? null;
+    const persistedPhase = getPersistedWorkbenchPhase(applicationId)
+    return persistedPhase ? { [applicationId]: persistedPhase } : {}
+  })
+  const manualOverride = overrides[applicationId] ?? null
+  const phase = gateWorkbenchPhase(
+    resolveWorkbenchPhase(derivedPhase, manualOverride),
+    testEntryGate
+  )
+  const [reachedByApplication, setReachedByApplication] = useState<Record<string, WorkbenchPhase>>(
+    {}
+  )
+  const reachedPhase = furthestWorkbenchPhase(
+    reachedByApplication[applicationId] ?? getReachedWorkbenchPhase(applicationId),
+    derivedPhase,
+    phase
+  )
+  /** 运行推进和当前会话目录均可补充到达记录，切换视图只会扩大而不会缩小范围。 */
+  const recordReachedPhase = useCallback(
+    (next: WorkbenchPhase): void => {
+      const reached = recordReachedWorkbenchPhase(applicationId, next)
+      setReachedByApplication((current) =>
+        current[applicationId] === reached ? current : { ...current, [applicationId]: reached }
+      )
+    },
+    [applicationId]
+  )
+  useEffect(() => {
+    recordReachedPhase(reachedPhase)
+  }, [reachedPhase, recordReachedPhase])
+  useEffect(() => {
+    // 确认门禁关闭后清除旧测试选择，避免最后一个产物完成时自动跳回测试视图。
+    if (testEntryGate && !testEntryGate.allowed && manualOverride === 'test') {
+      setPersistedWorkbenchPhase(applicationId, 'development')
+      setOverrides((current) => ({ ...current, [applicationId]: 'development' }))
+    }
+  }, [applicationId, manualOverride, testEntryGate])
 
   const value = useMemo<WorkbenchPhaseContextValue>(() => {
-    const phase = resolveWorkbenchPhase(derivedPhase, manualOverride);
     return {
+      testEntryGate,
       phase,
       derivedPhase,
+      reachedPhase,
+      recordReachedPhase,
       manualOverride,
       switchPhase: (next) => {
+        if (next === 'test' && testEntryGate?.allowed !== true) return
+        // 先保留当前最远阶段，再切换视图，避免运行刚结束或快速回退时丢失到达事实。
+        recordReachedPhase(furthestWorkbenchPhase(reachedPhase, next ?? phase))
         // 只持久化用户明确的界面覆盖；传 null 表示恢复生命周期自动阶段。
-        setPersistedWorkbenchPhase(applicationId, next);
-        setOverrides((current) => ({ ...current, [applicationId]: next ?? null }));
+        setPersistedWorkbenchPhase(applicationId, next)
+        setOverrides((current) => ({ ...current, [applicationId]: next ?? null }))
       },
       agent: WORKBENCH_PHASE_AGENTS[phase],
       canEdit: (objectType) => isObjectEditableInPhase(objectType, phase)
-    };
-  }, [applicationId, manualOverride, derivedPhase]);
+    }
+  }, [
+    applicationId,
+    manualOverride,
+    derivedPhase,
+    testEntryGate,
+    phase,
+    reachedPhase,
+    recordReachedPhase
+  ])
 
-  return (
-    <WorkbenchPhaseContext.Provider value={value}>{children}</WorkbenchPhaseContext.Provider>
-  );
-}
-
-export function useWorkbenchPhase(): WorkbenchPhaseContextValue {
-  const context = useContext(WorkbenchPhaseContext);
-  // 尽早暴露 Provider 遗漏问题，避免组件读到静默的默认阶段。
-  if (!context) {
-    throw new Error('useWorkbenchPhase must be used within WorkbenchPhaseProvider');
-  }
-  return context;
+  return <WorkbenchPhaseContext.Provider value={value}>{children}</WorkbenchPhaseContext.Provider>
 }

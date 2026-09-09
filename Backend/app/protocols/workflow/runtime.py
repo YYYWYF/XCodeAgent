@@ -13,6 +13,7 @@ from ag_ui.core import (
     RunErrorEvent,
     RunFinishedEvent,
     RunStartedEvent,
+    TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
 )
@@ -65,6 +66,10 @@ from app.graph.application_planning_interrupts import (
 )
 from app.graph.application_planning_revision import cleared_design_change_context
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
+from app.services.application_lifecycle import (
+    application_lifecycle_payload,
+    load_application_lifecycle,
+)
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
@@ -112,6 +117,18 @@ def _application_planning_resume_lock(thread_id: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _APPLICATION_PLANNING_RESUME_LOCKS[thread_id] = lock
     return lock
+
+
+def clear_application_planning_resume_locks(thread_ids: set[str]) -> int:
+    """在应用运行全部停止后移除其创建规划线程恢复锁。"""
+
+    removed = 0
+    for thread_id in thread_ids:
+        lock = _APPLICATION_PLANNING_RESUME_LOCKS.get(thread_id)
+        if lock is not None and not lock.locked():
+            _APPLICATION_PLANNING_RESUME_LOCKS.pop(thread_id, None)
+            removed += 1
+    return removed
 
 
 def _validate_application_planning_resume(
@@ -350,14 +367,17 @@ def build_workflow_ag_ui_stream(
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")
-        workflow_run_registry.register(run_id, task)
-
         yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
         yield encoder.encode(
             TextMessageStartEvent(messageId=message_id, role="assistant")
         )
 
         try:
+            workflow_run_registry.register(
+                run_id,
+                task,
+                workspace=workflow_inputs.get("workspace") or None,
+            )
             request = workflow_inputs["request"]
             if not request:
                 raise ValueError(
@@ -391,13 +411,14 @@ def build_workflow_ag_ui_stream(
                 else graph
             )
             if workflow_scope == "application_planning":
-                if isinstance(application_planning_interaction, dict):
-                    # 同一创建规划 thread 的恢复请求必须从快照校验一直串行到本轮流结束。
-                    application_planning_resume_lock = _application_planning_resume_lock(
-                        thread_id
-                    )
-                    await application_planning_resume_lock.acquire()
-                    application_planning_resume_lock_acquired = True
+                # 同一 planning thread 的所有 Graph 写运行必须串行。无 interaction 的
+                # 显式重试同样会修改 checkpoint，不能与确认恢复并发；snapshot-only
+                # 请求持锁时间很短，只保证读取到前一写运行完成后的稳定快照。
+                application_planning_resume_lock = _application_planning_resume_lock(
+                    thread_id
+                )
+                await application_planning_resume_lock.acquire()
+                application_planning_resume_lock_acquired = True
             await cleanup_workflow_checkpoints(
                 workspace=workspace,
                 project_id=project_id,
@@ -419,6 +440,18 @@ def build_workflow_ag_ui_stream(
                 )
             resume_from = workflow_inputs.get("resume_from") or None
             checkpoint_values: dict[str, Any] = {}
+            execution_checkpoint_state: dict[str, Any] = {}
+            checkpoint_snapshot: Any | None = None
+            if (
+                not workflow_scope
+                and resume_from in {"unit_test", "unit_test_repair", "test_phase_confirmation"}
+                and hasattr(active_graph, "aget_state")
+            ):
+                execution_snapshot = await active_graph.aget_state(
+                    {"configurable": {"thread_id": thread_id}}
+                )
+                # 只供生命周期读取执行目标，不把 reducer 管理的整个 checkpoint 再次写入 Graph。
+                execution_checkpoint_state = dict(execution_snapshot.values)
             if (
                 workflow_scope == "application_planning"
                 and hasattr(active_graph, "aget_state")
@@ -435,6 +468,84 @@ def build_workflow_ag_ui_stream(
                         application_planning_interaction,
                     )
                 checkpoint_values = dict(checkpoint_snapshot.values)
+            snapshot_only = (
+                workflow_scope == "application_planning"
+                and bool(checkpoint_values)
+                and not isinstance(application_planning_interaction, dict)
+                and not resume_from
+            )
+            if snapshot_only:
+                # 已有 checkpoint 的无动作请求只负责返回当前确认门；把 dict 再交给
+                # astream 会从 START 重跑，并可能让旧 resume_from 把流程带回 requirements。
+                result = project_application_planning_interrupt(
+                    checkpoint_values,
+                    checkpoint_snapshot,
+                )
+                current_lifecycle = (
+                    load_application_lifecycle(workspace) if workspace else None
+                )
+                if current_lifecycle is not None:
+                    lifecycle_payload = application_lifecycle_payload(current_lifecycle)
+                    result["lifecycle"] = lifecycle_payload
+                _workflow_event(
+                    events,
+                    "workflow.run.started",
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    status="running",
+                    message="读取当前 application planning checkpoint。",
+                    data={"request": request, "snapshotOnly": True},
+                )
+                summary = _workflow_summary(result, events)
+                finished_event = _workflow_event(
+                    events,
+                    "workflow.run.finished",
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    status=str(summary.get("status") or "completed"),
+                    message=str(summary.get("message") or "Workflow run finished."),
+                    data={"summary": summary, "snapshotOnly": True},
+                )
+                final_payload = _workflow_visual_payload(
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    summary=summary,
+                    events=events,
+                    result=result,
+                )
+                for frame in _workflow_ag_ui_frames(
+                    encoder,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    events=events,
+                    result=result,
+                    visual_payload=final_payload,
+                ):
+                    yield frame
+                for frame in _text_delta_frames(
+                    encoder,
+                    message_id,
+                    f"{summary.get('message') or finished_event['message']}\n",
+                ):
+                    yield frame
+                yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+                yield encoder.encode(
+                    RunFinishedEvent(
+                        threadId=thread_id,
+                        runId=run_id,
+                        result=jsonable_encoder(
+                            {
+                                "messageId": message_id,
+                                "agentMode": "workflow",
+                                "workflow": final_payload,
+                                "summary": summary,
+                                "events": events,
+                                "result": _public_workflow_state(result),
+                            }
+                        ),
+                    )
+                )
+                return
             initial_state: dict[str, Any] = {
                 **checkpoint_values,
                 "request": request,
@@ -472,8 +583,19 @@ def build_workflow_ag_ui_stream(
                     thread_id=thread_id,
                     run_id=run_id,
                     phase=first_node_name,
+                    checkpoint_state=execution_checkpoint_state,
                 )
                 if lifecycle_payload is not None:
+                    execution = lifecycle_payload.get("activeExecutions", {}).get(run_id, {})
+                    development_target = execution.get("developmentTarget") or {}
+                    if development_target.get("type") in {"page", "endpoint"}:
+                        # 生命周期与 Graph 使用同一已登记目标，避免完成计数和确认卡再次分离。
+                        initial_state["build_execution_scope"] = {
+                            "type": execution["scope"], "targetId": execution["targetId"],
+                            **({"apiContractId": development_target["apiContractId"]}
+                               if development_target.get("type") == "endpoint" else {}),
+                        }
+                        initial_state["selectedPageId"] = execution["targetId"] if execution["scope"] == "page" else ""
                     initial_state["lifecycle"] = lifecycle_payload
                     result["lifecycle"] = lifecycle_payload
                     # 生命周期写入成功后立即投影，不能等待首个 Graph 节点结束。
@@ -484,8 +606,9 @@ def build_workflow_ag_ui_stream(
                         )
                     )
 
-            if resume_from:
-                initial_state["resume_from"] = resume_from
+            # resume_from 只属于本次 START 调度，必须覆盖 checkpoint 中的旧值；
+            # 首个真实节点还会将其清空，避免再次持久化为业务状态。
+            initial_state["resume_from"] = resume_from or ""
 
             if project_id:
                 initial_state["project_id"] = project_id
@@ -1625,7 +1748,36 @@ def build_workflow_ag_ui_stream(
                 )
             raise
         except Exception as exc:
-            if not workflow_scope:
+            from app.services.development_artifacts import DevelopmentArtifactsIncompleteError
+
+            gate_blocked = isinstance(exc, DevelopmentArtifactsIncompleteError)
+            blocked_scope: dict[str, Any] = {}
+            blocked_target: dict[str, str] = {}
+            if gate_blocked:
+                try:
+                    current_lifecycle = load_application_lifecycle(workspace) if workspace else None
+                except (OSError, ValueError):
+                    # 状态文件损坏时仍收口 AG-UI 错误，不能在异常处理内再次中断流。
+                    current_lifecycle = None
+                if current_lifecycle and run_id in current_lifecycle.active_executions:
+                    from app.domain.application_lifecycle import PendingInteractionType, WorkbenchExecutionStatus
+                    from app.services.application_lifecycle import update_workbench_execution
+
+                    execution = current_lifecycle.active_executions[run_id]
+                    blocked_scope = {"type": execution.scope, "targetId": execution.target_id}
+                    if execution.development_target and execution.development_target.api_contract_id:
+                        blocked_scope["apiContractId"] = execution.development_target.api_contract_id
+                    blocked_target = {"type": execution.scope, "id": execution.target_id, "label": execution.target_id}
+                    current_lifecycle = update_workbench_execution(
+                        workspace, run_id=run_id, phase="test_phase_confirmation",
+                        status=WorkbenchExecutionStatus.AWAITING_USER,
+                        pending_type=PendingInteractionType.TEST_PHASE_CONFIRMATION,
+                        pending_payload={"testTarget": blocked_target, "testEntryGate": exc.gate.model_dump(mode="json", by_alias=True)},
+                    )
+                lifecycle_payload = application_lifecycle_payload(current_lifecycle) if current_lifecycle else None
+                if lifecycle_payload:
+                    yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle_payload))
+            if not workflow_scope and not gate_blocked:
                 lifecycle_payload = fail_workflow_lifecycle(
                     workspace,
                     run_id=run_id,
@@ -1634,28 +1786,40 @@ def build_workflow_ag_ui_stream(
                 )
             error_code = getattr(exc, "code", None)
             result = {
-                "status": "failed",
-                "phase": "failed",
+                "status": "requires_user_input" if gate_blocked else "failed",
+                "phase": "test_phase_confirmation" if gate_blocked else "failed",
                 "error": str(exc),
                 **({"lifecycle": lifecycle_payload} if lifecycle_payload else {}),
                 **({"error_code": error_code} if error_code else {}),
+                **({"test_entry_gate": exc.gate.model_dump(mode="json", by_alias=True)} if gate_blocked else {}),
+                **({
+                    "build_execution_scope": blocked_scope,
+                    "test_target": blocked_target,
+                    "clarification": {
+                        "mode": "test_phase_confirmation", "status": "requires_user_input",
+                        "message": str(exc), "testTarget": blocked_target,
+                        "testEntryGate": exc.gate.model_dump(mode="json", by_alias=True),
+                        "questions": [],
+                    },
+                } if gate_blocked else {}),
             }
             summary = _workflow_summary(result, events)
-            summary["message"] = f"Workflow failed：{type(exc).__name__}: {exc}"
+            summary["message"] = str(exc) if gate_blocked else f"Workflow failed：{type(exc).__name__}: {exc}"
             if error_code:
                 summary["errorCode"] = error_code
             failed_event = _workflow_event(
                 events,
-                "workflow.run.failed",
+                "workflow.test_entry.blocked" if gate_blocked else "workflow.run.failed",
                 run_id=run_id,
                 thread_id=thread_id,
-                status="failed",
+                status="blocked" if gate_blocked else "failed",
                 message=summary["message"],
                 data={
                     "error": {
                         "type": type(exc).__name__,
                         "message": str(exc),
                         **({"code": error_code} if error_code else {}),
+                        **({"testEntryGate": exc.gate.model_dump(mode="json", by_alias=True)} if gate_blocked else {}),
                     }
                 },
             )
@@ -1675,7 +1839,15 @@ def build_workflow_ag_ui_stream(
                 visual_payload=failed_payload,
             ):
                 yield frame
+            if gate_blocked:
+                yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=str(exc)))
             yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+            if gate_blocked:
+                yield encoder.encode(RunFinishedEvent(
+                    threadId=thread_id, runId=run_id,
+                    result=jsonable_encoder({"workflow": failed_payload, "result": result}),
+                ))
+                return
             yield encoder.encode(
                 RunErrorEvent(
                     message=summary["message"],

@@ -20,6 +20,11 @@ from app.services.small_task_scope import (
 )
 from app.services.revision_routing import build_small_task_revision_confirmation
 from app.workspace.code_changes import merge_code_change_sets
+from app.services.unit_test_repair_budget import (
+    UNIT_TEST_REPAIRS_PER_CHECK,
+    charge_unit_test_repair_batch,
+)
+from app.services.unit_test_repair_recovery import recover_unit_test_output_failure
 
 
 def small_task_repair(state: ProjectState) -> dict[str, Any]:
@@ -123,6 +128,12 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
                 revision_confirmation,
             )
 
+        if repair_return_node == "unit_test":
+            budget_error = charge_unit_test_repair_batch(state, batch)
+            if budget_error:
+                return _small_task_failure(
+                    state, working_tasks, all_results, all_change_sets, budget_error,
+                )
         dispatched = True
         execution = execute_small_task_batch(
             state=state,
@@ -219,13 +230,16 @@ def small_task_repair(state: ProjectState) -> dict[str, Any]:
             None,
         )
         if failed_result:
-            return _small_task_failure(
+            failure = _small_task_failure(
                 state,
                 working_tasks,
                 all_results,
                 all_change_sets,
                 str(failed_result.get("failureReason") or failed_result.get("summary") or "小任务执行失败"),
             )
+            if repair_return_node == "unit_test":
+                return recover_unit_test_output_failure(state, failure, batch_results)
+            return failure
 
     if any(str(task.get("status") or "pending") == "pending" for task in working_tasks):
         return _small_task_failure(
@@ -428,7 +442,15 @@ def _small_task_tool_activity_writer(node_name: str = "small_task_repair") -> To
 def unit_test_repair(state: ProjectState) -> dict[str, Any]:
     """执行开发阶段单元测试失败后的 SmallTask 修复。"""
 
-    return small_task_repair({**state, "repair_return_node": "unit_test"})
+    working_state = {**state, "repair_return_node": "unit_test"}
+    result = small_task_repair(working_state)
+    # 失败和等待范围确认也保存已派发的次数，恢复时不能退回旧额度。
+    return {
+        **result,
+        "unit_test_repair_attempts": working_state.get("unit_test_repair_attempts", {}),
+        "unit_test_repair_charged_checks": working_state.get("unit_test_repair_charged_checks", []),
+        "unit_test_max_repair_iterations": UNIT_TEST_REPAIRS_PER_CHECK,
+    }
 
 
 def _first_small_task_preflight(tasks: list[dict[str, Any]]) -> dict[str, str]:

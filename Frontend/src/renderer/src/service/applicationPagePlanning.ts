@@ -191,7 +191,7 @@ export function buildApplicationPlanningRequest(application: ApplicationConfig):
     `请为新应用「${appName}」完成需求、产品、UI（可跳过）和技术规划。`,
     `应用场景：${scenario}`,
     `目标终端：${terminal}。`,
-    `导航布局：${layout.type || '由规划阶段确定'}，页头=${layout.useHeader ? '启用' : '禁用'}，页脚=${layout.useFooter ? '启用' : '禁用'}。`,
+    `导航布局：${layout.type || '由计划阶段确定'}，页头=${layout.useHeader ? '启用' : '禁用'}，页脚=${layout.useFooter ? '启用' : '禁用'}。`,
     `数据源类型：${datasource}。`,
     `认证：${authEnabled ? '启用' : '不启用'}。`,
     `涉及权限控制：${authorizationEnabled ? '是' : '否'}。`,

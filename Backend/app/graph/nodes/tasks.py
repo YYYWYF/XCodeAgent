@@ -2154,7 +2154,7 @@ def _api_contract_inconsistency_payload(
                 header="契约校验",
                 question=(
                     "API 契约与数据源或页面字段引用不一致，已阻止代码生成。"
-                    "请返回项目规划阶段修订契约后再继续。"
+                    "请返回项目计划阶段修订契约后再继续。"
                 ),
                 type="text",
                 placeholder="例如：请按校验错误修订 API 契约和页面字段引用。",

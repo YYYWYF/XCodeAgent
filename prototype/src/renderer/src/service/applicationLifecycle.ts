@@ -8,7 +8,7 @@ type ApplicationLifecyclePayload = {
   runId: string
   threadId: string
   status: 'completed' | 'failed'
-  action?: 'create' | 'get' | 'complete_template_generation'
+  action?: 'create' | 'get'
   lifecycle?: ApplicationLifecycle
   error?: { message?: string }
 }
@@ -136,21 +136,4 @@ export async function getApplicationLifecycle(
       lifecycleReadRequests.delete(workspaceRoot)
     }
   }
-}
-
-// 把应用模板文件的真实生成结果提交给后端，由状态机决定 ready 或 failed。
-export async function completeApplicationTemplateGeneration(
-  application: ApplicationConfig,
-  threadId: string,
-  succeeded: boolean,
-  errorMessage?: string
-): Promise<ApplicationLifecycle> {
-  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return runApplicationLifecycleAction(threadId, {
-    action: 'complete_template_generation',
-    workspaceRoot: application.workspaceRoot,
-    applicationId: application.id,
-    succeeded,
-    errorMessage
-  })
 }

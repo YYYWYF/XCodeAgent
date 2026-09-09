@@ -2,6 +2,7 @@ import { MIN_ASSISTANT_PANEL_WIDTH, MIN_RIGHT_PANEL_WIDTH, SPLIT_HANDLE_WIDTH } 
 import type {
   DevelopmentPlanningApiEndpoint,
   DevelopmentPlanningPageOption,
+  WorkflowReviewTarget,
   WorkflowRunPayload,
   WorkspaceCodeChangeFile,
   WorkspaceCodeChangeSet
@@ -216,6 +217,30 @@ export function stoppedAnswer(content: string): string {
   return trimmedContent ? `${trimmedContent}\n\n_已停止生成。_` : '_已停止生成。_'
 }
 
+/**
+ * 判断工作流是否处于指定 mode 的待确认门禁（requires_user_input）：
+ * 阶段准入门都以“工作流自身的待输入节点”为唯一事实来源，弹框只是它的显示面。
+ * 命中时返回原工作流，供调用方直接取 runId 与续跑参数。
+ */
+export function pendingGateWorkflow(
+  workflow: WorkflowRunPayload | undefined,
+  mode: string
+): WorkflowRunPayload | undefined {
+  const clarification =
+    workflow?.summary?.clarification ||
+    workflow?.state?.clarification ||
+    workflow?.result?.clarification
+  if (
+    workflow?.summary?.status !== 'requires_user_input' ||
+    !clarification ||
+    typeof clarification !== 'object' ||
+    (clarification as { mode?: unknown }).mode !== mode
+  ) {
+    return undefined
+  }
+  return workflow
+}
+
 export function workflowCodeChanges(
   workflow: WorkflowRunPayload | undefined
 ): WorkspaceCodeChangeSet | undefined {
@@ -268,15 +293,39 @@ export function workflowPreviewTarget(
   }
 }
 
+/** 从 Workflow 结果中读取产物审查目标；同步任务落终态时由剧本写入 result。 */
+export function workflowReviewTarget(
+  workflow: WorkflowRunPayload | undefined
+): WorkflowReviewTarget | undefined {
+  const raw = workflow?.result?.review_target
+  if (!raw || typeof raw !== 'object') return undefined
+  const target = raw as Record<string, unknown>
+  if (target.type === 'page' && typeof target.pageId === 'string' && target.pageId) {
+    return { type: 'page', pageId: target.pageId }
+  }
+  if (
+    target.type === 'endpoint' &&
+    typeof target.apiContractId === 'string' &&
+    target.apiContractId &&
+    typeof target.endpointId === 'string' &&
+    target.endpointId
+  ) {
+    return {
+      type: 'endpoint',
+      apiContractId: target.apiContractId,
+      endpointId: target.endpointId
+    }
+  }
+  return undefined
+}
+
 /** 仅在当前工作区还没有任何已落盘页面设计时显示首次详细设计挡板。 */
 export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): boolean {
   return !hasPageDesigns
 }
 
 /** 以当前页面的落盘详情状态判断是否需要锁定对话区。 */
-export function requiresPageDetailDesign(
-  page: DevelopmentPlanningPageOption | undefined
-): boolean {
+export function requiresPageDetailDesign(page: DevelopmentPlanningPageOption | undefined): boolean {
   // 详设计划只是开发上下文；只有代码产物已交付(designed)才算页面完成。
   return Boolean(page && !page.designed)
 }

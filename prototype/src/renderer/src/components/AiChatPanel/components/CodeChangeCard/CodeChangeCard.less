@@ -146,6 +146,21 @@
   font-size: 12px;
 }
 
+// 文档/代码流式生成时 +N 计数会不断增加位数，定宽并靠右对齐，
+// 让数字向左增长，撤销/接受按钮在流式过程中保持原地不动。
+.@{class-prefix}-code-change-total {
+  min-width: 58px;
+  justify-content: flex-end;
+}
+
+// 消息流里的紧凑「文件改动」条同理：计数定宽靠右，接受/撤销按钮不被流式数字推动。
+.@{class-prefix}-code-change-card.@{class-prefix}-compact {
+  .@{class-prefix}-code-change-file-stats {
+    min-width: 58px;
+    justify-content: flex-end;
+  }
+}
+
 .@{class-prefix}-addition {
   color: var(--wb-code-add-text);
   font-weight: 600;

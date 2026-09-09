@@ -262,8 +262,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
             self.assertEqual(sorted(results), ["conflict", "written"])
 
-    def test_template_generation_failure_is_terminal(self) -> None:
-        """应用模板文件生成失败后不能从失败状态重新启动。"""
+    def test_template_generation_failure_can_retry(self) -> None:
+        """应用模板文件生成失败后只能从失败态重启模板阶段并继续重试。"""
 
         with tempfile.TemporaryDirectory() as directory:
             state = create_application_lifecycle(
@@ -300,11 +300,35 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
             assert failed.error is not None
             self.assertEqual(failed.error.code, "application_template_generation_failed")
+            self.assertTrue(failed.error.recoverable)
 
-            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "只有用户确认 TechnicalPlan"):
-                begin_application_template_generation(directory)
-            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "不能提交应用模板文件生成结果"):
-                complete_application_template_generation(directory, succeeded=True)
+            retry = begin_application_template_generation(directory, active_run_id="retry-run")
+            self.assertEqual(
+                retry.initialization.stage,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            )
+            self.assertEqual(retry.initialization.status, ApplicationLifecycleStatus.RUNNING)
+            self.assertEqual(retry.active_run_id, "retry-run")
+            self.assertEqual(retry.revision, failed.revision + 1)
+            self.assertIsNone(retry.error)
+
+            repeated = begin_application_template_generation(directory)
+            self.assertEqual(repeated.revision, retry.revision)
+            self.assertEqual(repeated.active_run_id, retry.active_run_id)
+
+            failed_again = complete_application_template_generation(
+                directory,
+                succeeded=False,
+                error_message="第二次页面文件写入失败",
+                active_run_id="retry-run",
+            )
+            self.assertEqual(
+                failed_again.initialization.stage,
+                ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
+            )
+            assert failed_again.error is not None
+            self.assertTrue(failed_again.error.recoverable)
+            begin_application_template_generation(directory, active_run_id="retry-run-2")
 
     def test_template_generation_success_is_persisted_after_technical_confirmation(self) -> None:
         """TechnicalPlan 确认后进入模板阶段，完成门禁才能进入工作台。"""

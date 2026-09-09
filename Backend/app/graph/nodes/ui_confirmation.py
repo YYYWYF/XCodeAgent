@@ -143,7 +143,7 @@ def _ui_design_confirmed_payload(
 
 
 def _ui_design_skipped_payload() -> dict[str, Any]:
-    """构造跳过 UI 设计后等待进入规划阶段的清晰状态载荷。"""
+    """构造跳过 UI 设计后等待进入计划阶段的清晰状态载荷。"""
 
     return {
         "mode": "ui_design_confirmation",
@@ -151,7 +151,7 @@ def _ui_design_skipped_payload() -> dict[str, Any]:
         "question_schema": "gemini_cli.ask_user.v1",
         "questions": [],
         "assumptions": [],
-        "message": "已跳过 UI 设计稿生成，等待用户确认进入规划阶段。",
+        "message": "已跳过 UI 设计稿生成，等待用户确认进入计划阶段。",
         "skipped": True,
         "pages": [],
     }
@@ -542,6 +542,27 @@ async def _latest_ui_designs(
     if stale:
         await pool.submit(stale)
         manifest = load_ui_designs_json(ui_designs_json_path(state))
+
+    # 回填内联 code：manifest 落盘时剥离了 code（persisted_ui_manifest），但前端
+    # isPageConfirmed 要求 page.code 非空才显示「已确认」。no-op resume 走此路径，
+    # 若不回填 code，生成成功的页会显示「未生成」，直到用户点另一页触发入队动作
+    # 才偶然回填。这里从 .tsx 文件读回 code，让 no-op resume 也能正确反映终态。
+    pages = manifest.get("pages") if isinstance(manifest, dict) else None
+    if isinstance(pages, list) and pages:
+        ui_design_root = str(workspace_root(state) / ".xcodeagent" / "ui-design")
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            if str(page.get("status") or "") != "confirmed":
+                continue
+            if page.get("code"):
+                continue
+            page_key = str(page.get("page_key") or "").strip()
+            if not page_key:
+                continue
+            code = load_page_code(ui_design_root, page_key)
+            if code:
+                page["code"] = code
 
     return manifest
 

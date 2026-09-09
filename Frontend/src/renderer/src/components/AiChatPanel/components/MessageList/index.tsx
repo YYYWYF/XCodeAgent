@@ -61,6 +61,7 @@ import {
   workflowShouldShowProjectLaunch
 } from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
+import { phasePendingDetail } from './phasePending'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
 import {
@@ -71,6 +72,12 @@ import {
   isTemplateSupersededPlanningProgressMessage,
   latestUiDesignPreviewMessageIndex
 } from './uiDesignPreviewHistory'
+import {
+  canonicalPlanningReviewMessageIndexes,
+  isNonMutatingProductConversation,
+  planningReviewIdentity,
+  planningReviewMatchesActiveWorkflow
+} from './productConversationPresentation'
 import './MessageList.less'
 
 const { Text } = Typography
@@ -126,8 +133,8 @@ function MessageAgentHeader({ agentKey }: { agentKey: WorkbenchPhase }): ReactEl
   )
 }
 
-/** 创建规划快照未到达时的加载卡，文案跟随当前产品/规划 Agent 身份。 */
-function PlanningPendingCard({
+/** 创建阶段快照未到达时的加载卡，文案跟随当前阶段 Agent 身份。 */
+function PhasePendingCard({
   agentKey,
   detail
 }: {
@@ -265,6 +272,8 @@ type MessageListProps = {
   onEnterDevelopment?: () => void
   /** 当前应用是否正在生成模板（前端状态信号，lifecycle 在生成期间不变）。 */
   generatingTemplate?: boolean
+  /** lifecycle 仍在模板阶段但当前 renderer 没有对应生成任务。 */
+  templateGenerationOrphaned?: boolean
   /** 设计阶段最新的规划 workflow（activePlannings 权威快照，每轮 no-op resume 都会更新）。
    *  UI 设计稿确认卡片优先用它渲染，绕过消息对象里可能滞留的旧 message.workflow，
    *  保证后台生成池写入的最新页面状态实时反映到卡片。 */
@@ -291,6 +300,8 @@ type MessageListProps = {
   onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
   /** 错误来自当前设计阶段规划时，允许用户回到规划页重试。 */
   onRetryError?: () => void
+  /** 模板生成失败时，只重试模板下载与初始化阶段。 */
+  onRetryTemplateGeneration?: () => void
   revertingCodeChangeIds: ReadonlySet<string>
   workspaceRoot?: string
 }
@@ -316,6 +327,7 @@ export default function MessageList({
   rootPath,
   onEnterDevelopment,
   generatingTemplate,
+  templateGenerationOrphaned,
   planningWorkflow,
   loading,
   messages,
@@ -327,6 +339,7 @@ export default function MessageList({
   onOpenCodeChangeFile,
   onRevertCodeChanges,
   onRetryError,
+  onRetryTemplateGeneration,
   revertingCodeChangeIds,
   onSubmitClarification,
   workspaceRoot
@@ -341,16 +354,33 @@ export default function MessageList({
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const latestAssistantMessageId = findLastAssistantMessageId(messages)
   const visibleError = error?.trim() || ''
+  const templateGenerationFailed =
+    applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   const latestAssistantMessage = findLastAssistantMessage(messages)
   const latestAssistantMessageError = latestAssistantMessage
     ? latestAssistantMessage.error?.trim() ||
       workflowFailureMessage(latestAssistantMessage.workflow)
     : ''
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
-  const showStandaloneError = Boolean(visibleError && visibleError !== latestAssistantMessageError)
+  const showStandaloneError = Boolean(
+    !templateGenerationFailed &&
+    !templateGenerationOrphaned &&
+    visibleError &&
+    visibleError !== latestAssistantMessageError
+  )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
+  const planningReviewMessageIndexes = canonicalPlanningReviewMessageIndexes(messages)
+  // 当前 planning checkpoint 是确认权限的唯一权威。普通问答可以继续向后追加消息，
+  // 但只要服务端仍挂起在同一 gateId + artifactRevision，原确认卡就必须保持可操作。
+  const activePlanningReviewIdentity =
+    designPhasePlanning &&
+    planningWorkflow &&
+    planningWorkflowRequiresUserInput(planningWorkflow)
+      ? planningReviewIdentity(planningWorkflow)
+      : undefined
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
+  const pendingPhaseDetail = phasePendingDetail(currentPhase)
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
   const templatePreparationVisible =
     applicationTemplatePreparationEligible &&
@@ -453,10 +483,17 @@ export default function MessageList({
               <article className={cx('ai-message', 'assistant')}>
                 <div className={cx('ai-message-content')}>
                   <MessageAgentHeader agentKey={currentPhase} />
-                  <PlanningPendingCard
+                  <PhasePendingCard
                     agentKey={currentPhase}
-                    detail={currentPhase === 'planning' ? '正在恢复规划阶段…' : '正在准备需求确认…'}
+                    detail={currentPhase === 'planning' ? '正在恢复计划阶段…' : '正在准备需求确认…'}
                   />
+                </div>
+              </article>
+            ) : pendingPhaseDetail ? (
+              <article className={cx('ai-message', 'assistant')}>
+                <div className={cx('ai-message-content')}>
+                  <MessageAgentHeader agentKey={currentPhase} />
+                  <PhasePendingCard agentKey={currentPhase} detail={pendingPhaseDetail} />
                 </div>
               </article>
             ) : emptyContent ? (
@@ -479,14 +516,14 @@ export default function MessageList({
                 return null
               }
               // 以 activePlannings 的当前权威阶段收口冲突消息：保留 UI 设计稿历史，
-              // 只隐藏过早生成的 TechnicalPlan，进入规划阶段后也不回显旧入口卡。
+              // 只隐藏过早生成的 TechnicalPlan，进入计划阶段后也不回显旧入口卡。
               if (
                 designPhasePlanning &&
                 isSupersededPlanningPhaseMessage(message, currentPlanningPhase)
               ) {
                 return null
               }
-                // TechnicalPlan 已开始后，入口动作已经消费；不在规划阶段继续展示可点击入口卡。
+                // TechnicalPlan 已开始后，入口动作已经消费；不在计划阶段继续展示可点击入口卡。
               if (
                 designPhasePlanning &&
                 isSupersededPlanningStageEntryMessage(messages, messageIndex)
@@ -541,6 +578,27 @@ export default function MessageList({
               )
               const requiresClarification =
                 message.workflow && planningWorkflowRequiresUserInput(message.workflow)
+              const messagePlanningReviewIdentity = planningReviewIdentity(message.workflow)
+              const nonMutatingProductConversation = isNonMutatingProductConversation(
+                message.workflow
+              )
+              const isCanonicalPlanningReview = Boolean(
+                messagePlanningReviewIdentity &&
+                  planningReviewMessageIndexes.get(messagePlanningReviewIdentity) === messageIndex
+              )
+              const isDuplicatePlanningReview = Boolean(
+                messagePlanningReviewIdentity && !isCanonicalPlanningReview
+              )
+              const isCurrentPlanningReview = Boolean(
+                isCanonicalPlanningReview &&
+                  activePlanningReviewIdentity &&
+                  planningReviewMatchesActiveWorkflow(message.workflow, planningWorkflow)
+              )
+              // 早期版本可能已把非修改回复挂回错误的审阅节点。若该回复本身就是
+              // 当前 checkpoint 的唯一卡片宿主，允许它承载一次可恢复确认；正常同门禁回复仍去重到原卡。
+              const isActiveNonMutatingReviewFallback = Boolean(
+                nonMutatingProductConversation && isCurrentPlanningReview
+              )
               // 设计规划已经由专用进度块表达当前意图和生成阶段，不再重复展示
               // 通用 ProcessSteps 的“执行完成 / 已归档步骤”摘要。
               const planningActivity = designPhasePlanning
@@ -563,10 +621,13 @@ export default function MessageList({
                 : undefined
               const isUiDesignConfirmationCard =
                 message.workflow &&
+                (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
+                !isDuplicatePlanningReview &&
                 (message.workflow.summary?.phase === 'ui_confirmation' ||
                   messageClarification?.mode === 'ui_design_confirmation')
               const isLatestUiDesignConfirmationCard =
-                isUiDesignConfirmationCard && messageIndex === latestUiDesignPreviewIndex
+                isUiDesignConfirmationCard &&
+                (messageIndex === latestUiDesignPreviewIndex || isCurrentPlanningReview)
               // 项目启动节点使用专用卡片覆盖运行、完成与失败状态。
               const isLaunchProjectCard = workflowShouldShowProjectLaunch(
                 message.workflow,
@@ -591,6 +652,8 @@ export default function MessageList({
                 message.workflow.summary?.status !== 'running'
               const showWorkflowCard = Boolean(
                 message.workflow &&
+                  (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
+                  !isDuplicatePlanningReview &&
                   ((requiresClarification &&
                     !isUiDesignConfirmationCard &&
                     !dagConfirmationMovedToStageOutput) ||
@@ -603,13 +666,23 @@ export default function MessageList({
               )
               // 设计阶段/会话内只有列表末尾的待答卡可交互：其后出现答案留痕或下一张卡
               // 即证明它已被回答。历史待答卡渲染为失效态，避免旧表单以空白可填样式误导。
+              // 手动切回设计阶段浏览已完成应用时（lifecycle 已就绪且无活跃 formal revision），
+              // 末尾的历史确认卡也已过期，不能判 active，否则跳过/确认按钮会错误可点。
+              const lifecycleReadyForWorkbench =
+                applicationLifecycle?.initialization?.stage === 'ready_for_workbench'
+              const browsingDesignHistory =
+                designPhasePlanning &&
+                lifecycleReadyForWorkbench &&
+                !applicationLifecycle?.activeFormalRevision
               const interactionAvailability =
                 message.workflow && requiresClarification
-                  ? messageIndex < messages.length - 1
+                  ? browsingDesignHistory
                     ? 'stale'
-                    : conversation || designPhasePlanning
-                      ? 'active'
-                      : workflowInteractionAvailability(message.workflow, applicationLifecycle)
+                    : messageIndex < messages.length - 1 && !isCurrentPlanningReview
+                      ? 'stale'
+                      : conversation || designPhasePlanning
+                        ? 'active'
+                        : workflowInteractionAvailability(message.workflow, applicationLifecycle)
                   : 'stale'
               // 已答过的历史澄清卡：从其后最近的 user 留痕解析「header：答案」行回填为
               // 只读摘要，避免旧表单以空白可填样式重现（恢复会话时 localStorage 草稿已丢）。
@@ -630,6 +703,8 @@ export default function MessageList({
               // 规划占位消息（planningLoading）：用户提交后产品 Agent 正在思考，只显示 loading 态。
               const isPlanningArtifactConfirmationCard =
                 message.workflow &&
+                (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
+                !isDuplicatePlanningReview &&
                 [
                   'requirement_document_confirmation',
                   'technical_plan_confirmation',
@@ -640,7 +715,9 @@ export default function MessageList({
               // （确认/放弃/修改）随 disabled 禁用，查看类按钮不读 disabled、仍可点开。
               // 当前真正待确认的卡是列表末尾消息，其后没有任何消息，因此不受影响、保持可点。
               const planningArtifactAnswered =
-                Boolean(isPlanningArtifactConfirmationCard) && messageIndex < messages.length - 1
+                Boolean(isPlanningArtifactConfirmationCard) &&
+                messageIndex < messages.length - 1 &&
+                !isCurrentPlanningReview
               const isPlanningStageRunningCard =
                 message.workflow &&
                 isStructuredPlanningWorkflow(message.workflow) &&
@@ -729,7 +806,7 @@ export default function MessageList({
                           (planningActivity && message.workflow ? (
                             <PlanningWorkflowActivity workflow={message.workflow} />
                           ) : (
-                            <PlanningPendingCard
+                            <PhasePendingCard
                               agentKey={messageAgentPhase(message.workflow, currentPhase)}
                               detail={
                                 isPlanningWorkflowRunning
@@ -738,7 +815,7 @@ export default function MessageList({
                                     : '正在生成设计方案…'
                                   : designPhasePlanning
                                     ? currentPhase === 'planning'
-                                      ? '正在恢复规划阶段…'
+                                      ? '正在恢复计划阶段…'
                                       : '正在准备需求确认…'
                                     : '正在处理…'
                               }
@@ -922,6 +999,9 @@ export default function MessageList({
                 <TemplatePreparingCard
                   lifecycle={applicationLifecycle}
                   onEnterDevelopment={onEnterDevelopment}
+                  onRetry={onRetryTemplateGeneration}
+                  orphaned={templateGenerationOrphaned}
+                  retrying={generatingTemplate}
                 />
               </div>
             </article>

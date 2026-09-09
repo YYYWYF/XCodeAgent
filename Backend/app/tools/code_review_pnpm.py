@@ -12,6 +12,8 @@ from uuid import uuid4
 
 from langchain_core.tools import ToolException, tool
 
+from app.services.workspace_process_registry import workspace_process_registry
+
 
 PNPM_INSTALL_TOOL_NAME = "pnpm_install_frontend"
 PNPM_INSTALL_TIMEOUT_SECONDS = 180
@@ -74,8 +76,9 @@ def create_code_review_pnpm_install_tool(workspace_root: str | None):
         log_root = resolved_runtime_root / execution_id
         log_root.mkdir()
         try:
-            completed = subprocess.run(
+            completed = workspace_process_registry.run(
                 [pnpm_command, "install"],
+                workspace=root,
                 cwd=resolved_frontend,
                 capture_output=True,
                 text=True,

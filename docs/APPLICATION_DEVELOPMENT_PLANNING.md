@@ -24,6 +24,22 @@ Source Field 节点可实时读取直属 MySQL 表列，也可读取数据源目
 
 开发确认成功后，门禁立即把页面或接口对应的完整映射集合随原工作流消息保存；该快照只代表当次确认结果，后续开发停止、失败或重新配置都不会覆盖历史卡片。切回会话时优先读取消息中的确认快照。独立 `/endpoint-designs/run` 按 `workspaceRoot + apiContractId + endpointId` 提供 `get/prepare/save`，右侧“开发产物”与门禁确认卡片共用只读投影；缺失结果显示 pending，TechnicalPlan 指纹变化或双文件异常显示 stale。任务规划继续读取当前正式磁盘映射，不消费门禁快照，也不增加基于 lifecycle 或开发状态的映射锁定。
 
+## Initial Development Completion and Test Entry
+
+页面和 Endpoint 必须分别作为显式开发目标走完一次初次流程，全部完成后才能进入测试阶段。页面开发顺带实现依赖 Endpoint 不替接口标记完成。实体也单独计数，只有用户显式确认且正式 EntitySourceBinding 成功写盘后才完成；选表、生成设计和等待确认均不算完成。三类产物全部完成后才能进入测试阶段。
+
+`.xcodeagent/application-lifecycle.json.developmentArtifacts` 保存 `pages[pageId]` 与 `endpoints[apiContractId][endpointId]` 的 `initialDevelopmentStatus`：`pending`、`in_progress`、`completed`。绿色完成记录同时保存首次 `completedAt`、`completedRunId`、`completedThreadId`，二次修改、测试失败、重复或迟到事件均不能覆盖。未完成运行在等待用户操作时保持紫色；失败、停止或放弃且无同目标其他初次执行时回到灰色。叶子点击只浏览，不更新开发状态。
+
+实体状态保存于 `developmentArtifacts.entities[entityId].initialDevelopmentStatus`，直接使用当前正式 EntitySourceBinding 的确认状态，不伪造页面/API 的 Build 完成时间和 run/thread。未确认实体有活动中的同目标 `data_source` execution 时为 `in_progress`，其余为 `pending`；缺失或损坏的绑定不能计完成。新会话卡片右下角使用绿色“已初次完成”、紫色“开发中”、灰色“未开发”，右侧实体组同步显示计数和圆点。
+
+后端 execution 的 `developmentPurpose` 和 `developmentTarget` 由正式入口及原 execution 决定，不能由客户端声明。初次开发的实体续接、DAG 确认、单元测试及重试保留该身份，普通会话及正式修订不能替未开发目标补记完成。只有服务端 Build 完成且 `unit_test_gate_passed=true`（通过或显式跳过）后，`test_phase_confirmation` 才先写入当前目标完成，再计算全部产物门禁；不等待测试确认、审查或验收。
+
+产物目录使用已确认 ProductPlan 页面和 TechnicalPlan Endpoint、实体。新增 ID 从 `pending` 开始；删除目标移出统计，迟到事件不能重建；同 ID 改名或修改需求保留初次完成。未确认草稿或损坏文件不替换既有完成事实，通过 `catalogError` 关闭测试入口。只支持当前合同，不从旧会话、Build 文件或历史 checkpoint 推断完成状态。
+
+`testEntryGate` 随 AG-UI lifecycle 投影提供 `allowed/total/completed/pending/inProgress/blockers/reason`，不重复持久化。放行要求工作台就绪、目录有效、至少一个页面、接口或实体、全部初次完成。前端顶部、历史确认卡、自动阶段与本地阶段恢复使用同一门禁。顶部点击只浏览；真实测试提交、execution 接替、直接恢复/调试测试及修复返回测试均由后端复检。拒绝返回 `development_artifacts_incomplete`，保留未消费确认；测试启动接替与凭据消费原子提交，失败后原执行可重试。
+
+圆点和分组计数只表示初次开发，不反映二次修改活动。分母不受搜索、折叠及相关项过滤影响。前端仅通过已有 AG-UI lifecycle store 同步，按 revision 拒绝旧快照；无状态文件轮询、独立 REST 接口或重复完成状态。
+
 ## Context Budget
 
 The backend reads the fixed `<workspaceRoot>/.xcodeagent/application.json` and sends only application identity, scenario, terminal, layout, the datasource type without connection mode or credentials, auth, menus, APIs, and at most five short clarification answers. It never sends source files, repository trees, workflow history, tool logs, chat history, or secrets. The output is bounded by existing menu count, twenty tasks per menu, two to six acceptance criteria per generated task, and short field limits. This remains far below the 128k model context budget.

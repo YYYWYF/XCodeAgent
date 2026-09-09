@@ -40,8 +40,6 @@ const xcodeAgentApi = {
       return ipcRenderer.invoke('applications:save', applications);
     },
     deleteProject: (payload) => ipcRenderer.invoke('applications:delete-project', payload),
-    deleteAgentDirectory: (payload) =>
-      ipcRenderer.invoke('applications:delete-agent-directory', payload),
   },
   workspace: {
     selectDirectory: (options = {}) => ipcRenderer.invoke('workspace:select-directory', options),
@@ -49,6 +47,7 @@ const xcodeAgentApi = {
     cloneTemplate: (payload) => ipcRenderer.invoke('workspace:clone-template', payload),
     readApplication: (payload) => ipcRenderer.invoke('workspace:read-application', payload),
     inspectPlanningArtifacts: (payload) => ipcRenderer.invoke('workspace:inspect-planning-artifacts', payload),
+    readUiDesigns: (payload) => ipcRenderer.invoke('workspace:read-ui-designs', payload),
   },
   sessions: {
     listWorkspaces: () => ipcRenderer.invoke('sessions:list-workspaces'),

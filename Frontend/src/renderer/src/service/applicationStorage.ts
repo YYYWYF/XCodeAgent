@@ -7,7 +7,13 @@ import type {
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption
 } from '../typings';
-import { clearWorkspaceChatSessionCache } from './chatSessions';
+import {
+  clearApplicationActiveSessionCache,
+  clearWorkspaceChatSessionCache,
+  listChatSessions,
+  readChatSession,
+} from './chatSessions';
+import { clearApplicationWorkbenchState } from '../workbenchPhase';
 
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
@@ -18,22 +24,6 @@ export function isApplicationCreationComplete(lifecycle?: ApplicationLifecycle):
   return lifecycle?.initialization.stage === 'ready_for_workbench';
 }
 
-// 判断应用是否已永久完成创建规划；持久确认标记优先，当前生命周期也可直接放行。
-export function canOpenApplicationWorkbench(
-  application: ApplicationConfig,
-  lifecycle?: ApplicationLifecycle
-): boolean {
-  if (application.source !== 'new') return true;
-  if (
-    typeof application.planningConfirmedAt === 'number' &&
-    Number.isFinite(application.planningConfirmedAt) &&
-    application.planningConfirmedAt > 0
-  ) {
-    return true;
-  }
-  return isApplicationCreationComplete(lifecycle);
-}
-
 function normalizeApplications(value: unknown): ApplicationConfig[] {
   return Array.isArray(value) ? (value as ApplicationConfig[]) : [];
 }
@@ -42,12 +32,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function cacheApplications(applications: ApplicationConfig[]) {
+// 更新当前窗口使用的应用索引缓存。
+function cacheApplications(applications: ApplicationConfig[]): void {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(applications));
 }
 
 // 通知当前渲染窗口重新校验依赖应用索引的派生状态。
-function notifyApplicationsChanged() {
+function notifyApplicationsChanged(): void {
   window.dispatchEvent(new Event(APPLICATIONS_CHANGED_EVENT));
 }
 
@@ -57,7 +48,8 @@ export function subscribeApplicationsChanged(listener: () => void): () => void {
   return () => window.removeEventListener(APPLICATIONS_CHANGED_EVENT, listener);
 }
 
-export function loadCachedApplications() {
+// 读取本地应用缓存，缺失或损坏时返回空列表。
+export function loadCachedApplications(): ApplicationConfig[] {
   try {
     const rawValue = window.localStorage.getItem(STORAGE_KEY);
     if (!rawValue) return [];
@@ -67,7 +59,8 @@ export function loadCachedApplications() {
   }
 }
 
-export async function loadStoredApplications() {
+// 读取应用索引并同步窗口缓存。
+export async function loadStoredApplications(): Promise<ApplicationConfig[]> {
   const electronApplications = window.xcodeAgent?.applications;
 
   if (electronApplications) {
@@ -94,7 +87,8 @@ export async function loadStoredApplications() {
   }
 }
 
-export async function saveStoredApplications(applications: ApplicationConfig[]) {
+// 保存应用索引并通知依赖该索引的界面。
+export async function saveStoredApplications(applications: ApplicationConfig[]): Promise<void> {
   cacheApplications(applications);
 
   const electronApplications = window.xcodeAgent?.applications;
@@ -124,31 +118,69 @@ export async function saveStoredApplications(applications: ApplicationConfig[]) 
 }
 
 // 从首页应用索引中移除指定项目，不会删除工作区中的任何文件。
-export async function removeStoredApplication(applicationId: string) {
+export async function removeStoredApplication(applicationId: string): Promise<void> {
   const applications = await loadStoredApplications();
   await saveStoredApplications(
     applications.filter((application) => application.id !== applicationId)
   );
 }
 
-// 请求桌面主进程删除受 XCodeAgent 管理的真实项目目录。
-export async function deleteStoredProject(workspaceRoot: string) {
+// 请求桌面主进程先完成后端停机门禁，再删除受 XCodeAgent 管理的真实项目目录。
+export async function deleteStoredProject(applicationId: string, workspaceRoot: string): Promise<void> {
   const electronApplications = window.xcodeAgent?.applications;
   if (!electronApplications?.deleteProject) {
     throw new Error('当前环境不支持删除本地项目目录');
   }
-  await electronApplications.deleteProject({ workspaceRoot });
+  await electronApplications.deleteProject({ applicationId, workspaceRoot });
   clearWorkspaceChatSessionCache(workspaceRoot);
 }
 
-// 请求桌面主进程将工作区内由初始化计划生成的 .xcodeagent 目录和聊天记录一起移入系统回收站。
-export async function deleteStoredAgentDirectory(workspaceRoot: string) {
-  const electronApplications = window.xcodeAgent?.applications;
-  if (!electronApplications?.deleteAgentDirectory) {
-    throw new Error('当前环境不支持删除初始化计划目录');
+// 清理项目删除后仍可能保留在 Chromium 存储中的应用级恢复键和表单草稿。
+export async function clearDeletedApplicationClientState(application: ApplicationConfig): Promise<void> {
+  const workspaceRoot = application.workspaceRoot?.trim()
+  if (!workspaceRoot) return
+  const summaries = (
+    await Promise.all(
+      (['frontend', 'backend'] as const).map((editorMode) =>
+        listChatSessions(workspaceRoot, editorMode).catch(() => [])
+      )
+    )
+  ).flat()
+  const threadIds = new Set(
+    [application.planningThreadId, ...summaries.map((summary) => summary.threadId)].filter(
+      (threadId): threadId is string => Boolean(threadId)
+    )
+  )
+  const changeSetIds = new Set<string>()
+  await Promise.all(
+    summaries.map(async (summary) => {
+      const session = await readChatSession(workspaceRoot, summary.editorMode, summary.id).catch(
+        () => undefined
+      )
+      session?.messages.forEach((item) => {
+        const changeSetId = item.codeChanges?.id
+        if (changeSetId) changeSetIds.add(changeSetId)
+      })
+    })
+  )
+
+  clearWorkspaceChatSessionCache(workspaceRoot)
+  clearApplicationActiveSessionCache(application.id)
+  clearApplicationWorkbenchState(application.id)
+  for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.localStorage.key(index)
+    if (
+      key &&
+      [...threadIds].some((threadId) =>
+        key.startsWith(`xcodeagent:clarification-draft:${threadId}:`)
+      )
+    ) {
+      window.localStorage.removeItem(key)
+    }
   }
-  await electronApplications.deleteAgentDirectory({ workspaceRoot });
-  clearWorkspaceChatSessionCache(workspaceRoot);
+  changeSetIds.forEach((changeSetId) => {
+    window.sessionStorage.removeItem(`xcodeagent:version-control:deferred:${changeSetId}`)
+  })
 }
 
 export async function loadWorkspaceApplicationConfig(

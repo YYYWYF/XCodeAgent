@@ -139,7 +139,7 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
                 "app.services.frontend_performance_runner.launch_frontend_project",
                 return_value=launch_result,
             ), patch(
-                "app.services.frontend_performance_runner.subprocess.run",
+                "app.services.frontend_performance_runner.workspace_process_registry.run",
                 side_effect=fake_run,
             ), patch(
                 "app.services.frontend_performance_runner.stop_frontend_project"
@@ -190,7 +190,7 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
                 "app.services.frontend_performance_runner.launch_frontend_project",
                 return_value=launch_result,
             ), patch(
-                "app.services.frontend_performance_runner.subprocess.run",
+                "app.services.frontend_performance_runner.workspace_process_registry.run",
                 side_effect=fake_run,
             ), patch(
                 "app.services.frontend_performance_runner.stop_frontend_project"
@@ -231,7 +231,7 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
                 "app.services.frontend_performance_runner.launch_frontend_project",
                 return_value=launch_result,
             ), patch(
-                "app.services.frontend_performance_runner.subprocess.run",
+                "app.services.frontend_performance_runner.workspace_process_registry.run",
                 return_value=SimpleNamespace(returncode=1, stdout="", stderr="failed"),
             ), patch(
                 "app.services.frontend_performance_runner.stop_frontend_project"

@@ -1,8 +1,8 @@
 import { PlusOutlined } from '@ant-design/icons'
 import { Form, message, Modal } from 'antd'
 import { useState } from 'react'
+import { randomUUID } from '@ag-ui/client'
 import { createApplicationLifecycle } from '../../service/applicationLifecycle'
-import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
 import type { ApplicationConfig, ApplicationDraft, ApplicationLifecycle } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'
@@ -15,6 +15,11 @@ import { createInitialVersion } from '../../service/applicationVersions'
 import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
 
+/** 为新建应用生成稳定的规划线程标识，随 lifecycle create 一起提交。 */
+function createPagePlanningThreadId(): string {
+  return randomUUID()
+}
+
 type Props = {
   onOpenWorkbenchAfterCreate: (
     application: ApplicationConfig,
@@ -22,7 +27,7 @@ type Props = {
   ) => void
 }
 
-// 创建应用基础配置，创建后直接进工作台分析阶段。
+// 创建应用基础配置，创建后直接进工作台需求分析阶段。
 export default function CreateApplicationAction({
   onOpenWorkbenchAfterCreate
 }: Props): JSX.Element {
@@ -31,9 +36,27 @@ export default function CreateApplicationAction({
   const [creating, setCreating] = useState(false)
   const [selectingParent, setSelectingParent] = useState(false)
 
-  // 打开应用基础配置弹窗。
+  // 打开应用基础配置弹窗，并异步预填一个全新的合法项目目录：
+  // 演示旅程要求“新建应用”开箱即走，用户不应手输目录，更不应撞上已有应用目录
+  // 而被“已有 XCodeAgent 应用目录不能复用”拦截。
   const openModal = (): void => {
     setModalOpen(true)
+    void prefillProjectDirectory()
+  }
+
+  /** 预填新项目目录；仅在用户尚未填写时写入，不覆盖手动输入，失败时仍可手动选择。 */
+  const prefillProjectDirectory = async (): Promise<void> => {
+    try {
+      const workspaceApi = window.xcodeAgent?.workspace
+      if (!workspaceApi?.selectDirectory) return
+      const result = await workspaceApi.selectDirectory({ title: '选择新应用的创建位置' })
+      const currentPath = String(form.getFieldValue('projectPath') || '').trim()
+      if (!result.canceled && result.path && !currentPath) {
+        form.setFieldsValue({ projectPath: result.path })
+      }
+    } catch {
+      // 预填失败不打断弹窗；目录仍可手动输入或点击选择文件夹。
+    }
   }
 
   // 调用桌面端目录选择器填写项目创建位置。
@@ -57,7 +80,7 @@ export default function CreateApplicationAction({
     }
   }
 
-  // 创建项目目录和应用索引，然后直接进入工作台分析阶段。
+  // 创建项目目录和应用索引，然后直接进入工作台需求分析阶段。
   const handleCreateApplication = async (): Promise<void> => {
     setCreating(true)
     try {

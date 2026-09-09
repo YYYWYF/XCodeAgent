@@ -138,7 +138,7 @@ def render_test_report_markdown(
     lines = [
         "# 测试报告",
         "",
-        "## 1. 前后端构建检查",
+        "## 1. 前后端构建与后端启动检查",
         "",
         "| 检查 | 状态 | 结果摘要 |",
         "| --- | --- | --- |",
@@ -146,6 +146,7 @@ def render_test_report_markdown(
     for check_id, name in (
         ("frontend_build", "前端构建检查"),
         ("backend_build", "后端构建检查"),
+        ("backend_startup", "后端启动检查"),
     ):
         check = _check_by_id(test_report, check_id)
         evidence = (

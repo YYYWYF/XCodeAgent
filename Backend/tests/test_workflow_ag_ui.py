@@ -14,6 +14,7 @@ from langgraph.graph import END, START, StateGraph
 from app.graph.state import ProjectState
 from app.graph.subgraphs.acceptance import acceptance_subgraph
 from app.protocols.workflow import build_workflow_ag_ui_stream
+from app.protocols.workflow.run_control import WorkflowRunRegistry
 from app.protocols.workflow.projection import (
     _workflow_confirmation_artifact,
     _workflow_next_nodes,
@@ -1421,7 +1422,100 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertTrue(cancelled)
         self.assertIn("RUN_STARTED", payload)
         self.assertIn("RUN_FINISHED", payload)
-        self.assertIn("cancel_requested", payload)
+        self.assertIn('"status":"cancelled"', payload)
+
+    def test_cancel_run_request_reports_not_running_for_finished_target(self) -> None:
+        """目标已经自然退出时，取消控制必须返回可安全继续的 not_running。"""
+
+        async def collect(stream) -> list[str]:
+            """收集取消控制的全部 AG-UI 帧。"""
+
+            return [frame async for frame in stream]
+
+        frames = asyncio.run(
+            collect(
+                build_workflow_ag_ui_stream(
+                    graph=FakeWorkflowGraph(),
+                    payload={
+                        "threadId": "thread-finished",
+                        "runId": "run-cancel-finished",
+                        "forwardedProps": {"cancelRunId": "run-already-finished"},
+                    },
+                )
+            )
+        )
+
+        self.assertIn('"status":"not_running"', "\n".join(frames))
+
+    def test_cancel_and_wait_reports_timeout_for_stubborn_target(self) -> None:
+        """目标捕获取消后仍运行时，有限等待必须返回 cancel_timeout。"""
+
+        async def run() -> str:
+            """登记拒绝及时退出的任务并读取最终取消状态。"""
+
+            registry = WorkflowRunRegistry()
+            started = asyncio.Event()
+            release = asyncio.Event()
+
+            async def stubborn_workflow() -> None:
+                """捕获取消并等待测试释放，模拟无法及时退出的 Workflow。"""
+
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+
+            task = asyncio.create_task(stubborn_workflow())
+            registry.register("run-stubborn", task)
+            await started.wait()
+            try:
+                return await registry.cancel_and_wait(
+                    "run-stubborn",
+                    timeout_seconds=0.01,
+                )
+            finally:
+                release.set()
+                await asyncio.gather(task, return_exceptions=True)
+
+        self.assertEqual(asyncio.run(run()), "cancel_timeout")
+
+    def test_cancel_and_wait_releases_serial_run_lock_before_next_run(self) -> None:
+        """旧任务完成 finally 后才返回 cancelled，使同线程下一轮可以取得串行锁。"""
+
+        async def run() -> tuple[str, bool]:
+            """模拟 planning run A 退出后 run B 获取同一串行锁。"""
+
+            registry = WorkflowRunRegistry()
+            planning_lock = asyncio.Lock()
+            first_started = asyncio.Event()
+            second_started = asyncio.Event()
+
+            async def first_run() -> None:
+                """持有 planning 锁直到收到取消。"""
+
+                async with planning_lock:
+                    first_started.set()
+                    await asyncio.Event().wait()
+
+            async def second_run() -> None:
+                """仅在旧任务 finally 释放锁后进入下一轮。"""
+
+                async with planning_lock:
+                    second_started.set()
+
+            first_task = asyncio.create_task(first_run())
+            registry.register("planning-run-a", first_task)
+            await first_started.wait()
+            second_task = asyncio.create_task(second_run())
+            status = await registry.cancel_and_wait("planning-run-a", timeout_seconds=0.5)
+            await asyncio.wait_for(second_task, timeout=0.5)
+            await asyncio.gather(first_task, return_exceptions=True)
+            return status, second_started.is_set()
+
+        status, second_started = asyncio.run(run())
+        self.assertEqual(status, "cancelled")
+        self.assertTrue(second_started)
 
     def test_visual_payload_state_preserves_requirement_spec_for_resume(self) -> None:
         result = {

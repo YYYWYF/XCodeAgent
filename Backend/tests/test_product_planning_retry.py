@@ -10,6 +10,7 @@ from pathlib import Path
 
 from app.graph.nodes.planning import (
     _project_plan_validation_errors,
+    _repair_technical_plan_candidate,
     _technical_planning_requirement_spec,
     project_planning,
 )
@@ -351,13 +352,16 @@ class ProductPlanningRetryTests(unittest.TestCase):
                 }
             ],
         }
-        valid_plan = deepcopy(invalid_plan)
-        valid_plan["pages"][0]["references"]["action_implementations"] = [
-            {
-                "actionId": "guide_list_page_search_guides",
-                "endpointId": "guides.search",
-            }
-        ]
+        repair_patch = {
+            "status": "resolved",
+            "bindings": [
+                {
+                    "pageId": target_page["pageId"],
+                    "actionId": "guide_list_page_search_guides",
+                    "endpointId": "guides.search",
+                }
+            ]
+        }
         state = {
             "workflow_scope": "application_planning",
             "requirement_spec": requirement_spec,
@@ -369,8 +373,12 @@ class ProductPlanningRetryTests(unittest.TestCase):
         with (
             patch(
                 "app.graph.nodes.planning.plan_project_with_chat_model",
-                side_effect=[invalid_plan, valid_plan],
+                return_value=invalid_plan,
             ) as planner_mock,
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_action_bindings_with_chat_model",
+                return_value=repair_patch,
+            ) as action_repair_mock,
             patch(
                 "app.graph.nodes.planning.validate_project_plan_dependencies",
                 return_value=[],
@@ -398,7 +406,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
         ):
             update = project_planning(state)
 
-        self.assertEqual(planner_mock.call_count, 2)
+        self.assertEqual(planner_mock.call_count, 1)
+        action_repair_mock.assert_called_once()
         self.assertEqual(update["status"], "requires_user_input")
         self.assertEqual(update["clarification"]["mode"], "technical_plan_confirmation")
         self.assertNotIn("page_implementation_contracts", update["technical_plan"])
@@ -412,6 +421,357 @@ class ProductPlanningRetryTests(unittest.TestCase):
             "actionBindings"
         ][0]
         self.assertEqual(binding["endpointId"], "guides.search")
+
+    def test_action_binding_repair_rejects_unknown_endpoint_and_falls_back(self) -> None:
+        """Scoped Repair 返回未知 Endpoint 时，本轮必须直接回落整份 TechnicalPlan 修复。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "actions": [
+                        {"actionId": "save", "behavior": {"type": "business"}}
+                    ],
+                }
+            ]
+        }
+        current_plan = {
+            "artifact_type": "technical-plan",
+            "api_contracts": [
+                {"id": "orders_api", "endpoints": [{"id": "orders_api.save"}]}
+            ],
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "references": {"action_implementations": []},
+                }
+            ],
+        }
+        missing_error = (
+            "页面 orders 的 TechnicalPlan 缺少业务 action endpoint 实现：save。"
+        )
+        full_repair = {"artifact_type": "technical-plan", "sentinel": "full"}
+
+        with (
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_action_bindings_with_chat_model",
+                return_value={
+                    "status": "resolved",
+                    "bindings": [
+                        {
+                            "pageId": "orders",
+                            "actionId": "save",
+                            "endpointId": "fake.endpoint",
+                        }
+                    ]
+                },
+            ) as action_repair_mock,
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=full_repair,
+            ) as planner_mock,
+        ):
+            repaired = _repair_technical_plan_candidate(
+                {"confirmed_product_plan": product_plan},
+                current_plan,
+                [missing_error],
+            )
+
+        action_repair_mock.assert_called_once()
+        planner_mock.assert_called_once()
+        self.assertIs(repaired, full_repair)
+
+    def test_action_binding_invalid_json_falls_back_full_repair_in_same_attempt(
+        self,
+    ) -> None:
+        """Scoped Repair 非法输出必须在当前候选修复内立即升级整份修复。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "actions": [
+                        {"actionId": "save", "behavior": {"type": "business"}}
+                    ],
+                }
+            ]
+        }
+        current_plan = {
+            "artifact_type": "technical-plan",
+            "api_contracts": [
+                {"id": "orders_api", "endpoints": [{"id": "orders_api.save"}]}
+            ],
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "references": {"action_implementations": []},
+                }
+            ],
+        }
+        missing_error = (
+            "页面 orders 的 TechnicalPlan 缺少业务 action endpoint 实现：save。"
+        )
+        full_repair = {"artifact_type": "technical-plan", "sentinel": "full"}
+
+        with (
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_action_bindings_with_chat_model",
+                side_effect=ValueError(
+                    "Action Binding 修复模型未返回有效 JSON object。"
+                ),
+            ) as action_repair_mock,
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=full_repair,
+            ) as planner_mock,
+        ):
+            repaired = _repair_technical_plan_candidate(
+                {"confirmed_product_plan": product_plan},
+                current_plan,
+                [missing_error],
+            )
+
+        action_repair_mock.assert_called_once()
+        planner_mock.assert_called_once()
+        self.assertEqual(planner_mock.call_args.kwargs["existing_plan"], current_plan)
+        self.assertIs(repaired, full_repair)
+
+    def test_action_binding_no_suitable_endpoint_falls_back_full_repair(
+        self,
+    ) -> None:
+        """Scoped Repair 明确无合适 Endpoint 时必须在本轮升级整份修复。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "people",
+                    "actions": [
+                        {
+                            "actionId": "delete_personnel",
+                            "behavior": {"type": "business"},
+                        }
+                    ],
+                }
+            ]
+        }
+        current_plan = {
+            "artifact_type": "technical-plan",
+            "api_contracts": [
+                {
+                    "id": "personnel_api",
+                    "endpoints": [
+                        {"id": "personnel_api.list"},
+                        {"id": "personnel_api.profile"},
+                    ],
+                }
+            ],
+            "pages": [
+                {
+                    "pageId": "people",
+                    "references": {"action_implementations": []},
+                }
+            ],
+        }
+        missing_error = (
+            "页面 people 的 TechnicalPlan 缺少业务 action endpoint 实现："
+            "delete_personnel。"
+        )
+        full_repair = {"artifact_type": "technical-plan", "sentinel": "full"}
+
+        with (
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_action_bindings_with_chat_model",
+                return_value={
+                    "status": "requires_full_repair",
+                    "reason": "no_suitable_endpoint",
+                    "bindings": [],
+                },
+            ) as action_repair_mock,
+            patch(
+                "app.graph.nodes.planning.apply_technical_action_binding_patch"
+            ) as apply_patch_mock,
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=full_repair,
+            ) as planner_mock,
+        ):
+            repaired = _repair_technical_plan_candidate(
+                {"confirmed_product_plan": product_plan},
+                current_plan,
+                [missing_error],
+            )
+
+        action_repair_mock.assert_called_once()
+        apply_patch_mock.assert_not_called()
+        planner_mock.assert_called_once()
+        self.assertEqual(planner_mock.call_args.kwargs["existing_plan"], current_plan)
+        self.assertIs(repaired, full_repair)
+
+    def test_mixed_action_binding_and_contract_errors_skip_scoped_repair(self) -> None:
+        """绑定缺口与 Contract 错误并存时不得进入 Action Binding Scoped Repair。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "actions": [
+                        {"actionId": "save", "behavior": {"type": "business"}}
+                    ],
+                }
+            ]
+        }
+        current_plan = {
+            "artifact_type": "technical-plan",
+            "api_contracts": [
+                {"id": "orders_api", "endpoints": [{"id": "orders_api.save"}]}
+            ],
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "references": {"action_implementations": []},
+                }
+            ],
+        }
+        binding_error = (
+            "页面 orders 的 TechnicalPlan 缺少业务 action endpoint 实现：save。"
+        )
+        contract_error = "Endpoint orders_api.save references unknown schema MissingInput."
+        full_repair = {"artifact_type": "technical-plan", "sentinel": "mixed"}
+
+        with (
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_action_bindings_with_chat_model"
+            ) as action_repair_mock,
+            patch(
+                "app.graph.nodes.planning._technical_plan_contract_validation_errors",
+                return_value=[contract_error],
+            ),
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=full_repair,
+            ) as planner_mock,
+        ):
+            repaired = _repair_technical_plan_candidate(
+                {"confirmed_product_plan": product_plan},
+                current_plan,
+                [binding_error, contract_error],
+            )
+
+        action_repair_mock.assert_not_called()
+        planner_mock.assert_called_once()
+        self.assertIs(repaired, full_repair)
+
+    def test_personnel_actions_are_repaired_without_full_regeneration(self) -> None:
+        """人员列表与个人资料的三个绑定缺口必须由一次 Scoped Repair 完成。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "page_personnel_list",
+                    "actions": [
+                        {
+                            "actionId": "page_personnel_list_delete_personnel",
+                            "behavior": {"type": "business"},
+                        },
+                        {
+                            "actionId": "page_personnel_list_save_personnel",
+                            "behavior": {"type": "business"},
+                        },
+                    ],
+                },
+                {
+                    "pageId": "page_my_profile",
+                    "actions": [
+                        {
+                            "actionId": "page_my_profile_save_profile",
+                            "behavior": {"type": "business"},
+                        }
+                    ],
+                },
+            ]
+        }
+        current_plan = {
+            "artifact_type": "technical-plan",
+            "architecture": {"frontend": "keep"},
+            "entities": [{"id": "Personnel"}],
+            "api_contracts": [
+                {
+                    "id": "personnel_api",
+                    "endpoints": [
+                        {"id": "personnel_api.delete"},
+                        {"id": "personnel_api.update"},
+                    ],
+                },
+                {
+                    "id": "profile_api",
+                    "endpoints": [{"id": "profile_api.update"}],
+                },
+            ],
+            "pages": [
+                {
+                    "pageId": "page_personnel_list",
+                    "references": {"action_implementations": []},
+                },
+                {
+                    "pageId": "page_my_profile",
+                    "references": {"action_implementations": []},
+                },
+            ],
+        }
+        patch_result = {
+            "status": "resolved",
+            "bindings": [
+                {
+                    "pageId": "page_personnel_list",
+                    "actionId": "page_personnel_list_delete_personnel",
+                    "endpointId": "personnel_api.delete",
+                },
+                {
+                    "pageId": "page_personnel_list",
+                    "actionId": "page_personnel_list_save_personnel",
+                    "endpointId": "personnel_api.update",
+                },
+                {
+                    "pageId": "page_my_profile",
+                    "actionId": "page_my_profile_save_profile",
+                    "endpointId": "profile_api.update",
+                },
+            ]
+        }
+        errors = [
+            "页面 page_personnel_list 的 TechnicalPlan 缺少业务 action endpoint 实现："
+            "page_personnel_list_delete_personnel、page_personnel_list_save_personnel。",
+            "页面 page_my_profile 的 TechnicalPlan 缺少业务 action endpoint 实现："
+            "page_my_profile_save_profile。",
+        ]
+
+        with (
+            patch(
+                "app.graph.nodes.planning.repair_technical_plan_action_bindings_with_chat_model",
+                return_value=patch_result,
+            ) as action_repair_mock,
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model"
+            ) as planner_mock,
+        ):
+            repaired = _repair_technical_plan_candidate(
+                {"confirmed_product_plan": product_plan},
+                current_plan,
+                errors,
+            )
+
+        action_repair_mock.assert_called_once()
+        planner_mock.assert_not_called()
+        self.assertEqual(repaired["architecture"], current_plan["architecture"])
+        self.assertEqual(repaired["entities"], current_plan["entities"])
+        self.assertEqual(repaired["api_contracts"], current_plan["api_contracts"])
+        self.assertEqual(
+            sum(
+                len(page["references"]["action_implementations"])
+                for page in repaired["pages"]
+            ),
+            3,
+        )
 
     def test_technical_plan_retries_raw_validation_error_then_confirms(self) -> None:
         """首次原始 JSON 校验失败时应在同一生成预算内修复并返回确认载荷。"""
@@ -467,6 +827,111 @@ class ProductPlanningRetryTests(unittest.TestCase):
             update["technical_plan_repair_errors"],
             ["字段必须使用 type，禁止 semantic_type"],
         )
+
+    def test_confirmation_revision_passes_baseline_and_request_to_planner(self) -> None:
+        """TechnicalPlan 确认卡修订必须把 V1 与用户原始要求同时交给模型。"""
+
+        state = self._technical_planning_state()
+        old_plan = create_technical_plan(
+            {
+                **state["requirement_spec"],
+                "confirmed_product_plan": state["product_plan"],
+            },
+            agent_plan=technical_model_entities(state["requirement_spec"]),
+        )
+        old_plan["confirmation_status"] = "pending_user_confirmation"
+        state.update(
+            {
+                "technical_plan": old_plan,
+                "application_planning_interaction": {
+                    "action": "revise",
+                    "request": "把 update 改成 PATCH",
+                },
+                "clarification": {
+                    "mode": "technical_plan_confirmation",
+                    "status": "requires_user_input",
+                },
+            }
+        )
+        with (
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=deepcopy(old_plan),
+            ) as planner_mock,
+            patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="technical-plan.md",
+            ),
+            patch(
+                "app.graph.nodes.planning.write_technical_plan_document",
+                return_value=("technical-plan.md", "technical-plan.json"),
+            ),
+        ):
+            project_planning(state)
+
+        planner_mock.assert_called_once()
+        self.assertEqual(planner_mock.call_args.kwargs["existing_plan"], old_plan)
+        self.assertEqual(
+            planner_mock.call_args.args[0]["planning_adjustment_request"],
+            "把 update 改成 PATCH",
+        )
+
+    def test_workbench_revision_passes_checkpoint_baseline_to_planner(self) -> None:
+        """工作台正式技术修订必须复用 checkpoint V1 且不重跑上游节点。"""
+
+        state = self._technical_planning_state()
+        old_plan = create_technical_plan(
+            {
+                **state["requirement_spec"],
+                "confirmed_product_plan": state["product_plan"],
+            },
+            agent_plan=technical_model_entities(state["requirement_spec"]),
+        )
+        old_plan["confirmation_status"] = "confirmed"
+        state.update(
+            {
+                "technical_plan": old_plan,
+                "request": "查询接口增加分页",
+            }
+        )
+        with (
+            patch(
+                "app.graph.nodes.planning._is_workbench_technical_plan_revision",
+                return_value=True,
+            ),
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=deepcopy(old_plan),
+            ) as planner_mock,
+            patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="technical-plan.md",
+            ),
+            patch(
+                "app.graph.nodes.planning.write_technical_plan_document",
+                return_value=("technical-plan.md", "technical-plan.json"),
+            ),
+        ):
+            project_planning(state)
+
+        planner_mock.assert_called_once()
+        self.assertEqual(planner_mock.call_args.kwargs["existing_plan"], old_plan)
+        self.assertEqual(
+            planner_mock.call_args.args[0]["planning_adjustment_request"],
+            "查询接口增加分页",
+        )
+
+    def test_workbench_revision_without_baseline_is_rejected(self) -> None:
+        """工作台正式修订缺少 checkpoint TechnicalPlan 时必须立即失败。"""
+
+        state = self._technical_planning_state()
+        with patch(
+            "app.graph.nodes.planning._is_workbench_technical_plan_revision",
+            return_value=True,
+        ), self.assertRaisesRegex(ValueError, "缺少当前正式 TechnicalPlan baseline"):
+            project_planning(state)
 
     def test_technical_plan_validation_retry_repairs_only_target_contract(self) -> None:
         """可定位的 API 错误应进入 Contract 定向修复，而不是再次生成完整计划。"""

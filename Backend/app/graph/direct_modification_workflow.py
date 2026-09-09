@@ -314,7 +314,10 @@ async def direct_modification_graph_for_request(
     return cached[1]
 
 
-def clear_direct_modification_graph_cache() -> None:
-    """清理进程内按工作区缓存的快速修改 Graph。"""
+def clear_direct_modification_graph_cache(*, cache_key: str | None = None) -> None:
+    """清理全部或单个 checkpoint 数据库对应的快速修改 Graph 缓存。"""
 
-    _DIRECT_MODIFICATION_GRAPHS.clear()
+    if cache_key is None:
+        _DIRECT_MODIFICATION_GRAPHS.clear()
+    else:
+        _DIRECT_MODIFICATION_GRAPHS.pop(cache_key, None)

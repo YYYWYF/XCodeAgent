@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+
+from app.services.application_lifecycle import create_application_lifecycle
 
 from app.graph.nodes.lifecycle import test_phase_confirmation
 from app.graph.workflow import route_test_phase_confirmation
@@ -14,6 +17,14 @@ from app.protocols.workflow.request import _resume_values, workflow_run_inputs
 
 class WorkflowTestPhaseConfirmationTests(unittest.TestCase):
     """覆盖 Build 状态恢复与测试阶段确认按钮契约。"""
+
+    def setUp(self) -> None:
+        """隔离此组 Build 证据单测的持久化边界，全量门禁另有真实文件回归。"""
+
+        completion = patch("app.graph.nodes.lifecycle.complete_initial_development", return_value=
+            create_application_lifecycle(application_id="test", application_name="测试"))
+        completion.start()
+        self.addCleanup(completion.stop)
 
     def test_empty_public_build_summary_does_not_override_completed_state(self) -> None:
         """公开结果中的空摘要不得覆盖 StateSnapshot 中的 Build 完成事实。"""

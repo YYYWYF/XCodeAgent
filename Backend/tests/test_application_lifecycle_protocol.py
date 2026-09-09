@@ -32,7 +32,13 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
         self.assertEqual(capability["stateSnapshotKey"], "applicationLifecycle")
         self.assertEqual(
             capability["actions"],
-            ["create", "get", "prepare_template_generation", "complete_template_generation"],
+            [
+                "create",
+                "get",
+                "begin_template_generation",
+                "prepare_template_generation",
+                "complete_template_generation",
+            ],
         )
 
     def test_create_action_emits_complete_ag_ui_lifecycle(self) -> None:
@@ -135,7 +141,6 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                 ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
                 ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
                 ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
                 ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,

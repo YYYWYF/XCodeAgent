@@ -54,6 +54,8 @@ export type SendWorkflowMessageOptions = {
     sourcePath?: string
   }
   directModification?: boolean
+  /** 本次发送的原始用户消息文本；浏览器 mock 剧本据此区分自动开启与用户真实输入。 */
+  message?: string
 }
 
 /** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能、控制和恢复字段。 */
@@ -303,7 +305,8 @@ export class AgUiChatSession {
   async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
     // 浏览器 mock 环境（无 Electron）直接回放剧本，不经真实后端。
     if (!window.xcodeAgent?.isElectron) {
-      void message
+      // 剧本需要原始消息文本来区分“自动开启阶段”与“用户输入的迭代需求”等真实输入。
+      const scriptOptions: SendWorkflowMessageOptions = { ...options, message }
       const [
         { replayPlanning, replayDesignPhase },
         { replayApplicationAcceptance, replayApplicationTesting, replayWorkbench, replayArtifactAcceptance, replayCodeReview }
@@ -323,21 +326,21 @@ export class AgUiChatSession {
         onProcessSteps: options.onProcessSteps
       }
       const result =
-        options.workflowScope === 'application_planning'
-          ? await replayPlanning(this.threadId, options, callbacks)
-          : options.workflowScope === 'application_analysis' ||
-              options.workflowScope === 'application_workbench_planning'
-            ? await replayDesignPhase(this.threadId, options, callbacks)
-            : options.workflowScope === 'application_acceptance' ||
-                options.workflowScope === 'application_acceptance_feedback'
-              ? await replayApplicationAcceptance(this.threadId, options, callbacks)
-              : options.workflowScope === 'application_testing'
-                ? await replayApplicationTesting(this.threadId, options, callbacks)
-            : options.workflowScope === 'application_review'
-              ? await replayCodeReview(this.threadId, options, callbacks)
-              : options.workflowScope === 'artifact_acceptance'
-                ? await replayArtifactAcceptance(this.threadId, options, callbacks)
-                : await replayWorkbench(this.threadId, options, callbacks)
+        scriptOptions.workflowScope === 'application_planning'
+          ? await replayPlanning(this.threadId, scriptOptions, callbacks)
+          : scriptOptions.workflowScope === 'application_analysis' ||
+              scriptOptions.workflowScope === 'application_workbench_planning'
+            ? await replayDesignPhase(this.threadId, scriptOptions, callbacks)
+            : scriptOptions.workflowScope === 'application_acceptance' ||
+                scriptOptions.workflowScope === 'application_acceptance_feedback'
+              ? await replayApplicationAcceptance(this.threadId, scriptOptions, callbacks)
+              : scriptOptions.workflowScope === 'application_testing'
+                ? await replayApplicationTesting(this.threadId, scriptOptions, callbacks)
+            : scriptOptions.workflowScope === 'application_review'
+              ? await replayCodeReview(this.threadId, scriptOptions, callbacks)
+              : scriptOptions.workflowScope === 'artifact_acceptance'
+                ? await replayArtifactAcceptance(this.threadId, scriptOptions, callbacks)
+                : await replayWorkbench(this.threadId, scriptOptions, callbacks)
       return {
         threadId: this.threadId,
         runId: result?.runId || 'mock-run',

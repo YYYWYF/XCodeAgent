@@ -661,7 +661,7 @@ class DirectModificationNodeTests(unittest.TestCase):
                 "confidence": 0.99,
                 "reason": "用户在询问助手身份。",
                 "clarificationQuestion": "",
-                "response": "我是 XCodeAgent，可以协助开发和回答常规问题。",
+                "response": "我是 AIStudio，可以协助开发和回答常规问题。",
                 "targetPaths": [],
             }
         )
@@ -674,7 +674,7 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(update["conversation_intent"], "casual_chat")
         self.assertEqual(update["direct_modification_owner"], "none")
         self.assertEqual(update["status"], "completed")
-        self.assertIn("XCodeAgent", update["conversation_response"])
+        self.assertIn("AIStudio", update["conversation_response"])
         self.assertEqual(_route_classification(update), "finalize")
 
     def test_casual_conversation_bypasses_tests_and_launch(self) -> None:
@@ -682,7 +682,7 @@ class DirectModificationNodeTests(unittest.TestCase):
 
         with patch(
             "app.graph.nodes.direct_modification.answer_casual_conversation",
-            return_value="我是 XCodeAgent，可以协助开发和回答常规问题。",
+            return_value="我是 AIStudio，可以协助开发和回答常规问题。",
         ):
             answered = respond_to_casual_conversation(
                 {"request": "你是谁", "direct_modification_summary": ""}
@@ -699,7 +699,7 @@ class DirectModificationNodeTests(unittest.TestCase):
 
         self.assertEqual(finalized["status"], "completed")
         self.assertEqual(finalized["phase"], "conversation")
-        self.assertIn("XCodeAgent", finalized["message"])
+        self.assertIn("AIStudio", finalized["message"])
         self.assertEqual(finalized["code_changes"], {})
 
     def test_formal_revision_rejection_keeps_cancel_message_as_success(self) -> None:
@@ -2247,14 +2247,14 @@ class DirectModificationProtocolTests(unittest.TestCase):
         asyncio.run(
             _report_custom_progress(
                 report,
-                chunk={"type": "conversation.text_delta", "delta": "我是 XCodeAgent。"},
+                chunk={"type": "conversation.text_delta", "delta": "我是 AIStudio。"},
                 state={"status": "in_progress"},
                 events=[],
                 report_text=report_text,
             )
         )
 
-        self.assertEqual(text_deltas, ["我是 XCodeAgent。"])
+        self.assertEqual(text_deltas, ["我是 AIStudio。"])
         self.assertEqual(reported, [])
 
     def test_stream_hides_pending_finalizer_process_step(self) -> None:

@@ -1,6 +1,8 @@
 import { message as antdMessage } from 'antd'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { useWorkbenchPhase } from '../../../context'
+import { reachedPhaseFromSessions } from '../../../workbenchPhaseNavigation'
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import {
   createChatSession,
@@ -158,6 +160,7 @@ export function useChatSessions({
   onCloseRightPanel,
   designPhasePlanning = false
 }: UseChatSessionsParams): UseChatSessionsResult {
+  const { recordReachedPhase } = useWorkbenchPhase()
   const [sessionSummaries, setSessionSummaries] = useState<
     Record<EditorMode, ChatSessionSummary[]>
   >({ frontend: [], backend: [] })
@@ -271,6 +274,8 @@ export function useChatSessions({
       const nextSessions = await listChatSessions(application.workspaceRoot, mode)
       // 阶段或工作区已经触发了更新加载时，旧请求不得再写 session/activeSessionId。
       if (sessionLoadGenerationRef.current[mode] !== generation) return
+      // 会话目录含全部阶段，恢复已走过的阶段无需切换会话或重跑工作流；空会话不计入。
+      recordReachedPhase(reachedPhaseFromSessions(nextSessions))
       sessionSummariesRef.current = {
         ...sessionSummariesRef.current,
         [mode]: nextSessions

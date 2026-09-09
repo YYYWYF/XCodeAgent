@@ -1,7 +1,7 @@
 {
   "name": "LT54.06_XCODE_AGENT_FRONTEND_APP",
   "version": "1.0.0",
-  "description": "XcodeAgent(生成低开应用)",
+  "description": "AIStudio(生成低开应用)",
   "main": "./out/main/index.js",
   "author": "80303865",
   "scripts": {
@@ -23,6 +23,7 @@
     "test:project-deletion": "node scripts/run-project-deletion-tests.mjs",
     "test:workflow-preview": "node scripts/run-workflow-preview-tests.mjs",
     "test:acceptance-phase": "node scripts/run-acceptance-phase-tests.mjs",
+    "test:development-artifacts": "node scripts/run-development-artifact-tests.mjs",
     "test:entity-design": "node scripts/run-entity-design-tests.mjs",
     "test:dag-generation": "node scripts/run-dag-generation-tests.mjs",
     "test:database-crypto": "node scripts/run-database-credential-crypto-tests.mjs",

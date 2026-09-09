@@ -4,7 +4,7 @@
 
 本文描述从创建应用到开始生成 Build DAG 之前的关键流程。
 
-UI 设计是可选节点：选择 UI 设计时先完成页面视觉稿确认，跳过时保存明确的 skipped 状态。两条路径都只到达“等待进入规划阶段”。用户点击绿色入口卡后，当前工作台创建或恢复该应用的独立 PLAN StageSession，并原地切换到规划阶段。后端继续使用原初始化 Graph checkpoint，规划 Agent 使用独立的前端 conversation thread；当前工作台只提交一次 `enter_planning`，然后才生成技术规划。
+UI 设计是可选节点：选择 UI 设计时先完成页面视觉稿确认，跳过时保存明确的 skipped 状态。两条路径都只到达“等待进入计划阶段”。用户点击绿色入口卡后，当前工作台创建或恢复该应用的独立 PLAN StageSession，并原地切换到计划阶段。后端继续使用原初始化 Graph checkpoint，规划 Agent 使用独立的前端 conversation thread；当前工作台只提交一次 `enter_planning`，然后才生成技术规划。
 
 ## 流程图
 
@@ -23,7 +23,7 @@ flowchart TD
     G --> H["确认 UI 设计"]
     H -->|"需要修改"| G
 
-    H --> I0["确认进入规划阶段"]
+    H --> I0["确认进入计划阶段"]
 
     U -->|"否"| I0
 
@@ -49,9 +49,9 @@ flowchart TD
     T --> S
 ```
 
-## 设计、规划阶段职责与四类产物
+## 设计、计划阶段职责与四类产物
 
-四类产物分别确认，但不重复确认同一类事实；TechnicalPlan 位于独立规划阶段。以下 JSON 是职责收敛后的简化示意；正式用户文档以 Markdown 为主，JSON 用于内部结构化状态、版本引用和校验。生成候选时使用 `pending_user_confirmation`，用户确认后改为 `confirmed`。
+四类产物分别确认，但不重复确认同一类事实；TechnicalPlan 位于独立计划阶段。以下 JSON 是职责收敛后的简化示意；正式用户文档以 Markdown 为主，JSON 用于内部结构化状态、版本引用和校验。生成候选时使用 `pending_user_confirmation`，用户确认后改为 `confirmed`。
 
 | 阶段 | 核心问题 | 权威内容 | 不负责的内容 |
 | --- | --- | --- | --- |

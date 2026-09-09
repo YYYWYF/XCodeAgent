@@ -56,7 +56,7 @@ class WorkspaceCodeGraphScanTests(unittest.TestCase):
             self.assertEqual(source_files_for_code_graph(root, ["main.py", "notes.txt"]), ["main.py"])
 
     def test_missing_explicit_workspace_does_not_invoke_code_graph(self) -> None:
-        """没有 workspaceRoot 时不得把 XCodeAgent 当前目录交给代码图。"""
+        """没有 workspaceRoot 时不得把 AIStudio 当前目录交给代码图。"""
 
         snapshot = {
             "schema_version": "1.1.0",
@@ -79,7 +79,7 @@ class WorkspaceCodeGraphScanTests(unittest.TestCase):
         self.assertNotIn("workspace_code_navigation_context", result)
 
     def test_agent_repository_root_is_never_accepted_by_code_graph(self) -> None:
-        """代码图管理器拒绝把 XCodeAgent 自己的工程目录当作用户工作区。"""
+        """代码图管理器拒绝把 AIStudio 自己的工程目录当作用户工作区。"""
 
         from app.services.code_graph.manager import CodeGraphManager
 
@@ -89,7 +89,7 @@ class WorkspaceCodeGraphScanTests(unittest.TestCase):
             revision="agent-root",
         )
         self.assertEqual(result.status, "skipped")
-        self.assertIn("XCodeAgent", result.message)
+        self.assertIn("AIStudio", result.message)
 
     def test_direct_scan_enters_classification_before_execution(self) -> None:
         """快速修改必须先扫描，再分类并进入对应执行节点。"""

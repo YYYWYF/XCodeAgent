@@ -137,18 +137,6 @@ export type TestCasePrepCase = {
   title: string
 }
 
-/** 由稳定用例基线生成后台顺序队列：按业务场景依次排队，供生成引擎与任务抽屉共同消费。 */
-export function createTestCaseQueue(taskType: TestCaseGenerationTaskType): TestCasePrepCase[] {
-  return TEST_CASE_BLUEPRINTS.map((blueprint) => ({
-    groupId: blueprint.groupId,
-    id: blueprint.id,
-    scenario: blueprint.scenario,
-    status: 'queued',
-    taskType,
-    title: blueprint.title
-  }))
-}
-
 export type TestCaseDefect = {
   id: string
   severity: '一般' | '严重'

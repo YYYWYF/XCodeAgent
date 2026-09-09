@@ -62,6 +62,9 @@ type ChatComposerProps = {
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
   onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   onStopGenerating: () => void
+  placeholder?: string
+  sendDisabled?: boolean
+  sendDisabledHint?: string
   stopping: boolean
   selectedSkills: ChatMessageSkill[]
   workspaceBusy: boolean
@@ -81,6 +84,9 @@ export default function ChatComposer({
   onSelectedSkillsChange,
   onSend,
   onStopGenerating,
+  placeholder,
+  sendDisabled = false,
+  sendDisabledHint,
   stopping,
   selectedSkills,
   workspaceBusy,
@@ -134,7 +140,7 @@ export default function ChatComposer({
 
   /** 校验当前状态并提交对话内容。 */
   const handleSend = (): void => {
-    if (!hasDebugNode) return
+    if (!hasDebugNode || workspaceBusy || sendDisabled) return
     onSend(currentDebugOptions())
   }
 
@@ -175,7 +181,7 @@ export default function ChatComposer({
                 aria-label={`${copy.title}输出内容`}
                 autoSize={{ minRows: 1, maxRows: 6 }}
                 bordered={false}
-                placeholder={copy.placeholder}
+                placeholder={placeholder || copy.placeholder}
                 value={draft}
                 onChange={(event) => onDraftChange(event.target.value)}
                 onKeyDown={handleInputKeyDown}
@@ -325,6 +331,11 @@ export default function ChatComposer({
                 其他会话正在执行
               </Text>
             )}
+            {!workspaceBusy && sendDisabled && sendDisabledHint && (
+              <Text className={cx('workspace-busy-label')} type="warning">
+                {sendDisabledHint}
+              </Text>
+            )}
             {loading ? (
               <Button
                 aria-label={stopping ? '正在停止' : '停止生成'}
@@ -340,7 +351,7 @@ export default function ChatComposer({
               <Button
                 aria-label={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
                 className={cx('composer-send-button')}
-                disabled={!canSend || workspaceBusy}
+                disabled={!canSend || workspaceBusy || sendDisabled}
                 icon={<SendOutlined />}
                 onClick={handleSend}
                 shape="circle"

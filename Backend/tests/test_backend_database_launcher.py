@@ -168,7 +168,7 @@ class BackendDatabaseLauncherTests(unittest.TestCase):
                     side_effect=["/usr/bin/mvn", "/usr/bin/java"],
                 ),
                 patch(
-                    "app.services.backend_project_launcher.subprocess.run",
+                    "app.services.backend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="built", stderr=""),
                 ),
                 patch(

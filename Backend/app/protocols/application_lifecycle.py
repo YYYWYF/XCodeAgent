@@ -65,6 +65,7 @@ class ApplicationLifecycleAction(BaseModel):
     action: Literal[
         "create",
         "get",
+        "begin_template_generation",
         "prepare_template_generation",
         "complete_template_generation",
     ]
@@ -87,12 +88,20 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
         "actions": [
             "create",
             "get",
+            "begin_template_generation",
             "prepare_template_generation",
             "complete_template_generation",
         ],
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
         "stateSnapshotKey": "applicationLifecycle",
         "workflowIndependent": True,
+        "developmentArtifacts": {
+            "targets": ["page", "endpoint"],
+            "statuses": ["pending", "in_progress", "completed"],
+            "completionBoundary": "test_phase_confirmation",
+            "gateField": "testEntryGate",
+            "secondaryModificationResetsCompletion": False,
+        },
     }
 
 
@@ -138,10 +147,16 @@ def build_application_lifecycle_ag_ui_stream(
             )
             message = "应用生命周期已创建。"
         elif request.action == "get":
-            state = load_application_lifecycle(request.workspace_root)
-            if state is None:
-                raise ValueError("application-lifecycle.json 不存在。")
+            from app.services.development_artifacts import refresh_development_artifacts
+
+            state = refresh_development_artifacts(request.workspace_root)
             message = "已读取应用生命周期。"
+        elif request.action == "begin_template_generation":
+            state = begin_application_template_generation(
+                request.workspace_root,
+                active_run_id=str(payload.get("runId") or "") or None,
+            )
+            message = "应用模板生成已开始。"
         elif request.action == "prepare_template_generation":
             if request.download_result is None:
                 raise ValueError("prepare_template_generation 必须提供 downloadResult。")
@@ -183,4 +198,5 @@ def build_application_lifecycle_ag_ui_stream(
         error_message_prefix="应用生命周期操作失败",
         error_data=lambda _exc: {"action": resolved_input.get("action")},
         accept=accept,
+        workspace_root=str(resolved_input.get("workspaceRoot") or "") or None,
     )

@@ -121,7 +121,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     return_value=package_manager_command,
                 ),
                 patch(
-                    "app.services.frontend_project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
                 ) as run,
                 patch(
@@ -165,7 +165,7 @@ class ProjectLauncherTests(unittest.TestCase):
                 patch.dict("app.services.frontend_project_launcher.os.environ", {"HOST": "inherited"}),
                 patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
                 patch(
-                    "app.services.frontend_project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
                 ),
                 patch(
@@ -226,7 +226,7 @@ class ProjectLauncherTests(unittest.TestCase):
             with (
                 patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
                 patch(
-                    "app.services.frontend_project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
                 ),
                 patch(
@@ -255,7 +255,7 @@ class ProjectLauncherTests(unittest.TestCase):
             with (
                 patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
                 patch(
-                    "app.services.frontend_project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
                 ),
                 patch(
@@ -302,7 +302,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     return_value="/usr/bin/npm",
                 ),
                 patch(
-                    "app.services.frontend_project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.workspace_process_registry.run",
                     side_effect=timeout,
                 ),
             ):
@@ -333,7 +333,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     return_value=package_manager_command,
                 ),
                 patch(
-                    "app.services.frontend_project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.workspace_process_registry.run",
                     side_effect=error,
                 ),
             ):
@@ -367,7 +367,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     side_effect=[maven_command, java_command],
                 ) as which,
                 patch(
-                    "app.services.backend_project_launcher.subprocess.run",
+                    "app.services.backend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="built", stderr=""),
                 ) as run,
                 patch(
@@ -415,7 +415,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     side_effect=["mvn", "java"],
                 ),
                 patch(
-                    "app.services.backend_project_launcher.subprocess.run",
+                    "app.services.backend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="built", stderr=""),
                 ) as run,
                 patch(
@@ -465,7 +465,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     side_effect=[maven_command, "/usr/bin/java"],
                 ),
                 patch(
-                    "app.services.backend_project_launcher.subprocess.run",
+                    "app.services.backend_project_launcher.workspace_process_registry.run",
                     side_effect=run_maven,
                 ),
                 patch(
@@ -517,7 +517,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     return_value="/usr/bin/tool",
                 ),
                 patch(
-                    "app.services.backend_project_launcher.subprocess.run",
+                    "app.services.backend_project_launcher.workspace_process_registry.run",
                     side_effect=run_build,
                 ),
                 patch(
@@ -561,7 +561,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     return_value=cleanup,
                 ),
                 patch(
-                    "app.services.backend_project_launcher.subprocess.run"
+                    "app.services.backend_project_launcher.workspace_process_registry.run"
                 ) as run,
             ):
                 result = launch_backend_project(workspace)
@@ -820,7 +820,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     return_value="/usr/bin/tool",
                 ),
                 patch(
-                    "app.services.backend_project_launcher.subprocess.run",
+                    "app.services.backend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(
                         returncode=1,
                         stdout="compile output",
@@ -857,7 +857,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     side_effect=[maven_command, java_command],
                 ),
                 patch(
-                    "app.services.backend_project_launcher.subprocess.run",
+                    "app.services.backend_project_launcher.workspace_process_registry.run",
                     side_effect=error,
                 ),
                 patch(
@@ -890,7 +890,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     return_value="/usr/bin/tool",
                 ),
                 patch(
-                    "app.services.backend_project_launcher.subprocess.run",
+                    "app.services.backend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="built", stderr=""),
                 ),
                 patch(

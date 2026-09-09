@@ -26,6 +26,9 @@ export type SendWorkflowMessageOptions = {
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
   applicationPlanningInteraction?: ApplicationPlanningInteraction
+  productStageConversation?: {
+    request: string
+  }
   editedRequirementSpec?: Record<string, unknown>
   requirementSpecFeedback?: string
   applicationPlanningRecovery?: {
@@ -106,6 +109,7 @@ export function buildWorkflowForwardedProps(
     application: options.application,
     clarificationAnswers: options.clarificationAnswers,
     applicationPlanningInteraction: options.applicationPlanningInteraction,
+    productStageConversation: options.productStageConversation,
     editedRequirementSpec: options.editedRequirementSpec,
     requirementSpecFeedback: options.requirementSpecFeedback,
     applicationPlanningRecovery: options.applicationPlanningRecovery,
@@ -454,6 +458,63 @@ export type ProcessStepRecord = {
 }
 
 const DEFAULT_AGENT_BASE_URL = 'http://127.0.0.1:8000'
+const STOP_NATURAL_DRAIN_MS = 300
+const STOP_CONTROL_TIMEOUT_MS = 4_000
+const STOP_TRANSPORT_DRAIN_MS = 800
+
+export type WorkflowCancellationStatus =
+  | 'cancelled'
+  | 'not_running'
+  | 'cancel_timeout'
+  | 'control_failed'
+
+type WorkflowCancellationResult = {
+  status: WorkflowCancellationStatus
+  message: string
+}
+
+/** 在限定时间内等待 Promise 收口，超时后返回 false 且不再追等原 Promise。 */
+async function waitWithTimeout(
+  promise: Promise<void> | undefined,
+  timeoutMs: number
+): Promise<boolean> {
+  if (!promise) return true
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout>
+    const finish = (completed: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(completed)
+    }
+    timer = setTimeout(() => finish(false), timeoutMs)
+    void promise.then(() => finish(true), () => finish(true))
+  })
+}
+
+/** 为取消控制请求增加独立超时，避免控制端点或网络永久占住 stop。 */
+async function promiseWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout>
+    const finish = (callback: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      callback()
+    }
+    timer = setTimeout(() => finish(() => reject(new Error(timeoutMessage))), timeoutMs)
+    void promise.then(
+      (value) => finish(() => resolve(value)),
+      (reason) => finish(() => reject(reason))
+    )
+  })
+}
 
 /** 解析桌面端注入的 Backend 地址，并为独立开发页面提供本地默认地址。 */
 function getAgentBaseUrl(): string {
@@ -479,6 +540,7 @@ export class AgUiChatSession {
   private activeRunId?: string
   private activeRunCompletion?: Promise<void>
   private resolveActiveRunCompletion?: () => void
+  private unresolvedServerRunId?: string
 
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
   constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
@@ -486,22 +548,60 @@ export class AgUiChatSession {
     this.endpointUrl = url
   }
 
-  /** 请求后端取消当前运行；确认失败时才本地中止，并等待取消请求完成。 */
+  /** 返回当前会话是否仍有本地活动运行或尚未确认退出的服务端运行。 */
+  hasActiveRun(): boolean {
+    return Boolean(this.activeRunId || this.unresolvedServerRunId)
+  }
+
+  /** 有限等待旧运行自然结束，否则由服务端确认退出后再收口本地 SSE。 */
   async stop(): Promise<void> {
-    const runId = this.activeRunId
+    const runId = this.activeRunId || this.unresolvedServerRunId
     const activeAgent = this.activeAgent
     const activeRunCompletion = this.activeRunCompletion
     if (!runId) {
       activeAgent?.abortRun()
       return
     }
-    const cancelled = await this.cancelRun(runId)
-    if (!cancelled && this.activeRunId === runId) activeAgent?.abortRun()
-    await activeRunCompletion
+    if (
+      this.unresolvedServerRunId !== runId &&
+      (await waitWithTimeout(activeRunCompletion, STOP_NATURAL_DRAIN_MS))
+    ) {
+      return
+    }
+
+    const cancellation = await this.cancelRun(runId)
+    const serverStopped =
+      cancellation.status === 'cancelled' || cancellation.status === 'not_running'
+    if (serverStopped && this.unresolvedServerRunId === runId) {
+      this.unresolvedServerRunId = undefined
+    } else if (!serverStopped) {
+      this.unresolvedServerRunId = runId
+    }
+    if (this.activeRunId === runId && this.activeAgent === activeAgent) {
+      activeAgent?.abortRun()
+    }
+    const transportSettled = await waitWithTimeout(
+      activeRunCompletion,
+      STOP_TRANSPORT_DRAIN_MS
+    )
+    if (!serverStopped) {
+      throw new Error(
+        cancellation.message ||
+          (cancellation.status === 'cancel_timeout'
+            ? '上一轮 Workflow 未能在限定时间内停止，请重试。'
+            : '无法确认上一轮 Workflow 已停止，请重试。')
+      )
+    }
+    if (!transportSettled) {
+      this.finishActiveRun(runId, activeAgent)
+    }
   }
 
   /** 使用请求级 HttpAgent 发送当前消息，避免把本地会话历史和旧状态重复传输。 */
   async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
+    if (this.activeRunId || this.unresolvedServerRunId) {
+      throw new Error('上一轮 Workflow 尚未确认停止，不能并发发送新的请求。')
+    }
     const requestAgent = createAgUiHttpAgent({
       url: this.endpointUrl,
       threadId: this.threadId
@@ -607,13 +707,7 @@ export class AgUiChatSession {
         subscriber
       )
     } finally {
-      if (this.activeAgent === requestAgent) {
-        this.activeAgent = undefined
-        this.activeRunId = undefined
-        this.resolveActiveRunCompletion?.()
-        this.activeRunCompletion = undefined
-        this.resolveActiveRunCompletion = undefined
-      }
+      this.finishActiveRun(runId, requestAgent)
     }
     if (runErrorMessage) {
       throw new AgUiRunError(runErrorMessage, {
@@ -644,20 +738,46 @@ export class AgUiChatSession {
     }
   }
 
-  /** 通过当前会话的实际端点发送独立取消控制请求，并返回后端是否接管取消。 */
-  private async cancelRun(targetRunId: string): Promise<boolean> {
+  /** 仅清理仍属于指定旧运行的本地状态，禁止晚到 cleanup 覆盖后续新运行。 */
+  private finishActiveRun(runId: string, activeAgent?: HttpAgent): void {
+    if (this.activeRunId !== runId || this.activeAgent !== activeAgent) return
+    this.activeAgent = undefined
+    this.activeRunId = undefined
+    this.resolveActiveRunCompletion?.()
+    this.activeRunCompletion = undefined
+    this.resolveActiveRunCompletion = undefined
+  }
+
+  /** 通过实际端点请求服务端取消并等待，返回可区分超时和控制失败的最终状态。 */
+  private async cancelRun(targetRunId: string): Promise<WorkflowCancellationResult> {
     const cancellationAgent = createAgUiHttpAgent({
       url: this.endpointUrl,
       threadId: this.threadId
     })
     try {
-      const result = await cancellationAgent.runAgent({
-        forwardedProps: { cancelRunId: targetRunId }
-      })
+      const result = await promiseWithTimeout(
+        cancellationAgent.runAgent({
+          forwardedProps: { cancelRunId: targetRunId }
+        }),
+        STOP_CONTROL_TIMEOUT_MS,
+        '取消上一轮 Workflow 的控制请求超时，请重试。'
+      )
       const control = objectValue(objectValue(result.result).workflowRunControl)
-      return stringValue(control.status) === 'cancel_requested'
-    } catch {
-      return false
+      const status = stringValue(control.status)
+      if (['cancelled', 'not_running', 'cancel_timeout'].includes(status)) {
+        return {
+          status: status as WorkflowCancellationStatus,
+          message: stringValue(control.message)
+        }
+      }
+      return { status: 'control_failed', message: '取消响应缺少有效的最终状态，请重试。' }
+    } catch (reason) {
+      cancellationAgent.abortRun()
+      return {
+        status: 'control_failed',
+        message:
+          reason instanceof Error ? reason.message : '取消上一轮 Workflow 失败，请重试。'
+      }
     }
   }
 }

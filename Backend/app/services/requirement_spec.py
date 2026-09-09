@@ -822,7 +822,7 @@ def _acceptance_criteria(spec_name: str) -> list[str]:
 
 
 _WORKFLOW_ACCEPTANCE_PATTERNS = (
-    re.compile(r"xcodeagent", re.IGNORECASE),
+    re.compile(r"aistudio", re.IGNORECASE),
     re.compile(r"质量门禁"),
     re.compile(r"(?:集成|单元|冒烟|自动化)?测试.*(?:通过|完成).*(?:用户验收|交付)"),
     re.compile(r"(?:编译|构建|lint|typecheck|代码生成).*(?:通过|完成)", re.IGNORECASE),
@@ -833,7 +833,7 @@ _WORKFLOW_ACCEPTANCE_PATTERNS = (
 
 
 def product_acceptance_criteria(value: Any) -> list[str]:
-    """只保留生成应用自身的产品结果，剔除 XCodeAgent 交付工作流标准。"""
+    """只保留生成应用自身的产品结果，剔除 AIStudio 交付工作流标准。"""
 
     if not isinstance(value, list):
         return []

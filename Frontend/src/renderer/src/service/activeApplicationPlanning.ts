@@ -1,5 +1,5 @@
 import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
-import { canOpenApplicationWorkbench, loadStoredApplications } from './applicationStorage'
+import { isApplicationCreationComplete, loadStoredApplications } from './applicationStorage'
 import { getApplicationLifecycle } from './applicationLifecycle'
 
 export type ActivePlanningStatus = 'error' | 'ready' | 'running'
@@ -15,8 +15,6 @@ export type PersistedActivePlanning = {
   error?: string
   workflow?: WorkflowRunPayload
 }
-
-export const MAX_ACTIVE_APPLICATION_PLANS = 3
 
 // 直接根据权威 lifecycle 状态计算首页展示状态。
 export function activePlanningStatus(lifecycle: ApplicationLifecycle): ActivePlanningStatus {
@@ -38,10 +36,9 @@ export async function loadActiveApplicationPlannings(): Promise<PersistedActiveP
     .sort((left, right) => right.createdAt - left.createdAt)
 
   for (const application of applications) {
-    if (canOpenApplicationWorkbench(application)) continue
     try {
       const lifecycle = await getApplicationLifecycle(application)
-      if (canOpenApplicationWorkbench(application, lifecycle)) continue
+      if (isApplicationCreationComplete(lifecycle)) continue
       const threadId = lifecycle.initialization.threadId
       if (!threadId) {
         throw new Error(`应用 ${application.id} 缺少初始化线程标识。`)

@@ -192,6 +192,7 @@ def requirements(state: ProjectState) -> dict:
     interaction = _application_planning_interaction(state)
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     request = _request_for_requirement_node(state, interaction)
+    design_revision_requested = _has_design_revision_for_node(state, "requirements")
     # 处理前一轮权限配置冲突的用户选择；解决后才允许继续生成需求草稿。
     conflict = state.get("authorization_config_conflict")
     conflict_resolved = False
@@ -210,7 +211,7 @@ def requirements(state: ProjectState) -> dict:
             return resolution["result"]
         request = str(resolution["request"])
         conflict_resolved = True
-    revision_requested = (
+    revision_requested = design_revision_requested or (
         interaction.get("action") == "revise"
         if application_planning_scope
         else _requirement_revision_requested(request)
@@ -237,6 +238,7 @@ def requirements(state: ProjectState) -> dict:
         existing_spec
         and existing_spec.get("confirmation_status") == "pending_user_confirmation"
         and not _has_explicit_user_submission(state)
+        and not design_revision_requested
     ):
         draft_path = str(
             state.get("requirement_spec_path")
@@ -1163,6 +1165,16 @@ def _has_application_planning_revision_context(state: ProjectState) -> bool:
             "design_change_generation_request",
             "design_interaction_origin",
         )
+    )
+
+
+def _has_design_revision_for_node(state: ProjectState, node_name: str) -> bool:
+    """判断服务端确认过的自由输入修订是否正等待指定产物节点消费。"""
+
+    return (
+        state.get("design_change_submission") is True
+        and state.get("design_change_generation_target") == node_name
+        and bool(str(state.get("design_change_generation_request") or "").strip())
     )
 
 

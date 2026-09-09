@@ -52,6 +52,126 @@ def _technical_implementations(page: dict[str, Any]) -> list[dict[str, Any]]:
     return _dict_items(references.get("action_implementations"))
 
 
+def expected_business_action_implementations(
+    product_page: dict[str, Any],
+) -> dict[str, set[str] | None]:
+    """从 ProductPlan 提取 TechnicalPlan 必须实现的直接业务动作与组合业务步骤。"""
+
+    expected: dict[str, set[str] | None] = {}
+    for action in _dict_items(product_page.get("actions")):
+        action_id = str(action.get("actionId") or "").strip()
+        behavior = _product_behavior(action)
+        behavior_type = str(behavior.get("type") or "business")
+        if behavior_type == "business":
+            expected[action_id] = None
+        elif behavior_type == "sequence":
+            business_steps = {
+                str(step.get("stepId") or "").strip()
+                for step in _dict_items(behavior.get("steps"))
+                if str(step.get("type") or "business") == "business"
+            }
+            if business_steps:
+                expected[action_id] = business_steps
+    return expected
+
+
+def _technical_action_binding_issues_for_page(
+    page: dict[str, Any],
+    product_page: dict[str, Any],
+    *,
+    page_id: str,
+) -> list[dict[str, Any]]:
+    """以结构化 issue 表达单页缺失或不完整的业务 Action Endpoint 绑定。"""
+
+    expected = expected_business_action_implementations(product_page)
+    implementations = _implementation_index(page)
+    issues: list[dict[str, Any]] = []
+    for action_id, required_steps in expected.items():
+        implementation = implementations.get(action_id)
+        if implementation is None:
+            issues.append(
+                {
+                    "kind": "missing_business_action_binding",
+                    "pageId": page_id,
+                    "actionId": action_id,
+                    "requiredStepIds": sorted(required_steps or set()),
+                }
+            )
+            continue
+        if required_steps is None:
+            continue
+        actual_step_ids = [
+            str(step.get("stepId") or "").strip()
+            for step in _dict_items(implementation.get("stepBindings"))
+        ]
+        if set(actual_step_ids) != required_steps or len(actual_step_ids) != len(
+            set(actual_step_ids)
+        ):
+            actual_steps = set(actual_step_ids)
+            issues.append(
+                {
+                    "kind": "incomplete_business_sequence_binding",
+                    "pageId": page_id,
+                    "actionId": action_id,
+                    "requiredStepIds": sorted(required_steps),
+                    "missingStepIds": sorted(required_steps - actual_steps),
+                    "unexpectedStepIds": sorted(actual_steps - required_steps),
+                }
+            )
+    return issues
+
+
+def technical_action_binding_issues(
+    technical_plan: dict[str, Any],
+    product_plan: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """按 ProductPlan 权威行为规则汇总 TechnicalPlan 的结构化绑定缺口。"""
+
+    technical_pages = {
+        str(page.get("pageId") or "").strip(): page
+        for page in _dict_items(technical_plan.get("pages"))
+        if str(page.get("pageId") or "").strip()
+    }
+    issues: list[dict[str, Any]] = []
+    for product_page in _dict_items(product_plan.get("pages")):
+        page_id = str(product_page.get("pageId") or "").strip()
+        issues.extend(
+            _technical_action_binding_issues_for_page(
+                technical_pages.get(page_id, {}),
+                product_page,
+                page_id=page_id,
+            )
+        )
+    return issues
+
+
+def technical_action_binding_issue_messages(
+    issues: list[dict[str, Any]],
+) -> list[str]:
+    """把结构化绑定 issue 转成既有的用户可读校验消息。"""
+
+    missing_by_page: dict[str, list[str]] = {}
+    messages: list[str] = []
+    for issue in issues:
+        page_id = str(issue.get("pageId") or "").strip()
+        action_id = str(issue.get("actionId") or "").strip()
+        if issue.get("kind") == "missing_business_action_binding":
+            missing_by_page.setdefault(page_id, []).append(action_id)
+        elif issue.get("kind") == "incomplete_business_sequence_binding":
+            messages.append(
+                f"页面 {page_id} 的组合 action {action_id} 必须逐一绑定全部业务 stepId。"
+            )
+    return [
+        *[
+            f"页面 {page_id} 的 TechnicalPlan 缺少业务 action endpoint 实现："
+            + "、".join(sorted(action_ids))
+            + "。"
+            for page_id, action_ids in missing_by_page.items()
+        ],
+        *messages,
+    ]
+
+
 def _product_behavior(action: dict[str, Any]) -> dict[str, Any]:
     """读取 ProductPlan 已确认的权威行为。"""
 
@@ -171,29 +291,14 @@ def _validate_technical_action_implementations(
     }
     if len(by_action) != len(implementations):
         errors.append(f"页面 {page_id} 的 action_implementations.actionId 必须非空且唯一。")
-    expected_actions: dict[str, set[str] | None] = {}
-    for action in _dict_items(product_page.get("actions")):
-        action_id = str(action.get("actionId") or "").strip()
-        behavior = _product_behavior(action)
-        behavior_type = str(behavior.get("type") or "business")
-        if behavior_type == "business":
-            expected_actions[action_id] = None
-        elif behavior_type == "sequence":
-            business_steps = {
-                str(step.get("stepId") or "").strip()
-                for step in _dict_items(behavior.get("steps"))
-                if str(step.get("type") or "business") == "business"
-            }
-            if business_steps:
-                expected_actions[action_id] = business_steps
-    missing_actions = sorted(set(expected_actions) - set(by_action))
+    expected_actions = expected_business_action_implementations(product_page)
+    binding_issues = _technical_action_binding_issues_for_page(
+        page,
+        product_page,
+        page_id=page_id,
+    )
+    errors.extend(technical_action_binding_issue_messages(binding_issues))
     extra_actions = sorted(set(by_action) - set(expected_actions))
-    if missing_actions:
-        errors.append(
-            f"页面 {page_id} 的 TechnicalPlan 缺少业务 action endpoint 实现："
-            + "、".join(missing_actions)
-            + "。"
-        )
     if extra_actions:
         errors.append(
             f"页面 {page_id} 的 TechnicalPlan 不得为导航、界面或外部 action 重复决策："
@@ -217,8 +322,6 @@ def _validate_technical_action_implementations(
             continue
         step_bindings = _dict_items(implementation.get("stepBindings"))
         actual_steps = [str(step.get("stepId") or "").strip() for step in step_bindings]
-        if set(actual_steps) != expected_steps or len(actual_steps) != len(set(actual_steps)):
-            errors.append(f"页面 {page_id} 的组合 action {action_id} 必须逐一绑定全部业务 stepId。")
         for step in step_bindings:
             step_id = str(step.get("stepId") or "").strip()
             endpoint_id = str(step.get("endpointId") or "").strip()

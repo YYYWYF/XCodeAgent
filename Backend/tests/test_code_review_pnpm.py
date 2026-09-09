@@ -45,7 +45,7 @@ class CodeReviewPnpmToolTests(unittest.TestCase):
                 "app.tools.code_review_pnpm.shutil.which",
                 return_value="/usr/local/bin/pnpm",
             ), patch(
-                "app.tools.code_review_pnpm.subprocess.run",
+                "app.tools.code_review_pnpm.workspace_process_registry.run",
                 side_effect=successful_install,
             ) as run:
                 result = json.loads(tool.invoke({}))
@@ -90,7 +90,7 @@ class CodeReviewPnpmToolTests(unittest.TestCase):
             with patch(
                 "app.tools.code_review_pnpm.shutil.which",
                 return_value="/usr/local/bin/pnpm",
-            ), patch("app.tools.code_review_pnpm.subprocess.run") as run:
+            ), patch("app.tools.code_review_pnpm.workspace_process_registry.run") as run:
                 with self.assertRaises(ToolException):
                     tool.invoke({})
 
@@ -108,7 +108,7 @@ class CodeReviewPnpmToolTests(unittest.TestCase):
             (frontend / "pnpm-lock.yaml").symlink_to(outside_lockfile)
             tool = create_code_review_pnpm_install_tool(workspace)
 
-            with patch("app.tools.code_review_pnpm.subprocess.run") as run:
+            with patch("app.tools.code_review_pnpm.workspace_process_registry.run") as run:
                 with self.assertRaises(ToolException):
                     tool.invoke({})
 

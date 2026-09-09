@@ -5,10 +5,21 @@ export type PhaseSessionSelection = Partial<
   Record<EditorMode, Partial<Record<WorkbenchPhase, string>>>
 >
 
+/** 先等待目标阶段会话创建并激活，再切换工作台阶段，避免阶段恢复清空新会话选择。 */
+export async function preparePhaseTransitionSession<Session>(
+  createSession: () => Promise<Session>,
+  enterPhase: () => void
+): Promise<Session> {
+  const session = await createSession()
+  enterPhase()
+  return session
+}
+
 /** 只返回归属于指定工作台阶段的会话，避免历史确认卡跨阶段显示。 */
-export function sessionsForWorkbenchPhase<
-  Session extends { workbenchPhase: WorkbenchPhase }
->(sessions: Session[], phase: WorkbenchPhase): Session[] {
+export function sessionsForWorkbenchPhase<Session extends { workbenchPhase: WorkbenchPhase }>(
+  sessions: Session[],
+  phase: WorkbenchPhase
+): Session[] {
   return sessions.filter((session) => session.workbenchPhase === phase)
 }
 

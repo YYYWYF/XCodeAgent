@@ -1,5 +1,5 @@
-import { Layout } from 'antd'
-import { useEffect, useRef, useState } from 'react'
+import { Layout, message } from 'antd'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { LeftPanel, WorkbenchTopBar } from '../components'
 import { WorkbenchPhaseProvider } from '../context'
 import {
@@ -33,6 +33,7 @@ type Props = {
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
+  onEntryLoadFailure: () => void
   onReturnWelcome: () => void
   onSubmitPlanningClarification: (
     workflow: WorkflowRunPayload,
@@ -41,7 +42,6 @@ type Props = {
     requirementSpecFeedback?: string,
     designChangeRequest?: string
   ) => Promise<void>
-  onStopPlanning: () => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
@@ -68,15 +68,21 @@ type WorkbenchEntryStage = 'loading' | 'leaving' | 'ready'
 
 const WORKBENCH_ENTRY_MIN_VISIBLE_MS = 520
 const WORKBENCH_ENTRY_FADE_MS = 280
+const WORKBENCH_ENTRY_TIMEOUT_MS = 15_000
+
+// 将未知加载异常转换为可展示的工作台入口错误。
+function formatWorkbenchEntryError(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim() ? error.message.trim() : fallback
+}
 
 // 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
 function WorkbenchPage({
   application,
   applicationLifecycle,
   onApplicationLifecycleChange,
+  onEntryLoadFailure,
   onReturnWelcome,
   onSubmitPlanningClarification,
-  onStopPlanning,
   onStartDesignStageRevision,
   onRevisionContinuationHandlerChange,
   onThemeChange,
@@ -113,6 +119,8 @@ function WorkbenchPage({
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const entryStartedAtRef = useRef(Date.now())
+  const entryStageRef = useRef<WorkbenchEntryStage>('loading')
+  const entryFailureHandledRef = useRef(false)
   const launchedWorkspaceRef = useRef<string>()
   const activeLaunchWorkspaceRef = useRef('')
   const launchRunIdRef = useRef(0)
@@ -125,6 +133,30 @@ function WorkbenchPage({
   // effect 的依赖，避免规划期流式 workflow 事件频繁递增 revision 导致 effect 反复 cleanup，
   // 进而中断正在进行的 npm install / dev server 启动。
   const lifecycleReadyForWorkbench = isApplicationCreationComplete(applicationLifecycle)
+
+  // 入口失败只处理一次：提示原因、返回首页，并由顶层卸载损坏的工作台实例。
+  const failWorkbenchEntry = useCallback(
+    (reason: string): void => {
+      if (entryStageRef.current !== 'loading' || entryFailureHandledRef.current) return
+      entryFailureHandledRef.current = true
+      message.error(`工作台加载失败，已返回首页：${reason}`)
+      onEntryLoadFailure()
+    },
+    [onEntryLoadFailure]
+  )
+
+  useEffect(() => {
+    entryStageRef.current = entryStage
+  }, [entryStage])
+
+  useEffect(() => {
+    if (entryStage !== 'loading') return
+    const timer = window.setTimeout(
+      () => failWorkbenchEntry('同步项目配置、规划产物或历史会话超时。'),
+      WORKBENCH_ENTRY_TIMEOUT_MS
+    )
+    return () => window.clearTimeout(timer)
+  }, [entryStage, failWorkbenchEntry])
 
   useEffect(() => {
     if (application.source !== 'new') {
@@ -250,7 +282,7 @@ function WorkbenchPage({
     // 同步可选的应用配置和规划产物；窗口重新聚焦时只校准可能被外部修改的文件。
     const syncWorkspaceFiles = async (): Promise<void> => {
       if (!application.workspaceRoot) {
-        setDevelopmentPlanningPagesLoaded(true)
+        failWorkbenchEntry('应用缺少有效的工作区路径。')
         return
       }
       try {
@@ -262,7 +294,9 @@ function WorkbenchPage({
           schema: { ...application.schema, ...applicationConfig }
         })
       } catch (error) {
-        console.warn('读取工作区 application.json 失败，继续使用已保存应用配置。', error)
+        console.warn('读取工作区 application.json 失败，终止本次工作台加载。', error)
+        failWorkbenchEntry(formatWorkbenchEntryError(error, '读取工作区 application.json 失败。'))
+        return
       }
       try {
         const inspection = await inspectWorkspacePlanningArtifacts(application.workspaceRoot)
@@ -279,6 +313,12 @@ function WorkbenchPage({
         )
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
+          if (lifecycleReadyForWorkbench) {
+            const details = [...inspection.missing, ...inspection.invalid].join('、')
+            failWorkbenchEntry(
+              details ? `工作区规划产物缺失或损坏：${details}` : '工作区规划产物不完整。'
+            )
+          }
         }
       } catch (error) {
         if (!active) return
@@ -287,6 +327,7 @@ function WorkbenchPage({
         setDevelopmentPlanningApiContracts([])
         setDevelopmentPlanningEntities([])
         console.warn('检查 specs/plans 规划产物失败。', error)
+        failWorkbenchEntry(formatWorkbenchEntryError(error, '检查工作区规划产物失败。'))
       } finally {
         if (active) setDevelopmentPlanningPagesLoaded(true)
       }
@@ -300,7 +341,7 @@ function WorkbenchPage({
       active = false
       window.removeEventListener('focus', syncWorkspaceFiles)
     }
-  }, [application, planningRefreshRevision])
+  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, planningRefreshRevision])
 
   useEffect(() => {
     let active = true
@@ -308,17 +349,28 @@ function WorkbenchPage({
     if (!workspaceRoot) return
 
     // 每次进入一个工作区只做一次冷启动校准；后续状态由 Workflow AG-UI 事件实时合并。
-    getApplicationLifecycle({ workspaceRoot })
+    getApplicationLifecycle({ workspaceRoot, id: application.id })
       .then((lifecycle) => {
         if (active) onApplicationLifecycleChange(lifecycle)
       })
       .catch((error) => {
-        console.warn('读取工作台应用生命周期失败，继续使用 Workflow 实时状态。', error)
+        if (!active) return
+        console.warn('读取工作台应用生命周期失败，终止本次工作台加载。', error)
+        failWorkbenchEntry(formatWorkbenchEntryError(error, '读取应用生命周期失败。'))
       })
     return () => {
       active = false
     }
-  }, [application.id, application.workspaceRoot, onApplicationLifecycleChange])
+  }, [application.id, application.workspaceRoot, failWorkbenchEntry, onApplicationLifecycleChange])
+
+  // 会话恢复失败时终止入口等待；普通的未就绪状态仍交给恢复流程或超时兜底。
+  const handleSessionHistoryReadyChange = useCallback(
+    (ready: boolean, error?: string): void => {
+      setChatSessionHistoryReady(ready)
+      if (error) failWorkbenchEntry(error)
+    },
+    [failWorkbenchEntry]
+  )
 
   useEffect(() => {
     if (!developmentPlanningPagesLoaded || !chatSessionHistoryReady || entryStage !== 'loading') {
@@ -387,12 +439,11 @@ function WorkbenchPage({
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
                 onReturnWelcome={onReturnWelcome}
                 onSubmitPlanningClarification={onSubmitPlanningClarification}
-                onStopPlanning={onStopPlanning}
                 onStartDesignStageRevision={onStartDesignStageRevision}
                 onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
                 onThemeChange={handleThemeChange}
                 onPlanningStreamReady={onPlanningStreamReady}
-                onSessionHistoryReadyChange={setChatSessionHistoryReady}
+                onSessionHistoryReadyChange={handleSessionHistoryReadyChange}
                 generatingTemplate={generatingTemplate}
                 planningError={planningError}
                 onRetryPlanning={onRetryPlanning}
@@ -421,7 +472,7 @@ function WorkbenchPage({
               <span />
               <span />
             </div>
-            <div className={cx('workbench-entry-kicker')}>XCODEAGENT WORKSPACE</div>
+            <div className={cx('workbench-entry-kicker')}>AIStudio WORKSPACE</div>
             <h1>正在进入工作台</h1>
             <p>正在同步项目配置、页面设计与历史会话</p>
             <div className={cx('workbench-entry-progress')} aria-hidden="true">

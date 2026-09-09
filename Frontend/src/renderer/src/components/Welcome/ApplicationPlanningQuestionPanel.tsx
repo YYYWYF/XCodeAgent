@@ -268,7 +268,7 @@ function ProjectPlanConfirmationLayout({
           />
           <div className={cx('project-plan-confirmation-brand')}>
             <span className={cx('project-plan-confirmation-brand-mark')}>✦</span>
-            <span>XCodeAgent / 技术规划</span>
+            <span>AIStudio / 技术规划</span>
           </div>
         </div>
         <div className={cx('project-plan-confirmation-topbar-meta')}>
@@ -737,7 +737,7 @@ export default function ApplicationPlanningQuestionPanel({
                   ? '请审核需求文档。需要补充时只在下方填写意见；文档正确时，直接点击右下角按钮继续。'
                   : isProductPlanConfirmation
                     ? artifactIsDraft
-                      ? '请审核需求文档草稿（含产品规划）；确认后才会提升为正式需求文档并进入 UI 设计。'
+                      ? '请审核完整需求文档草稿；确认后才会提升为正式需求文档并进入 UI 设计。'
                       : '请审核需求文档中的应用信息、用户角色、页面目标、业务信息、核心操作、跳转与验收标准；确认后进入 UI 设计。'
                     : isTechnicalPlanConfirmation
                       ? '请由开发角色审核架构、API、数据源、权限与页面实现契约；确认后进入工作区。'
@@ -948,7 +948,7 @@ export default function ApplicationPlanningQuestionPanel({
                       : isTechnicalPlanConfirmation
                         ? '技术规划正确，进入工作区'
                         : isProductPlanConfirmation
-                          ? '产品规划正确，进入 UI 设计'
+                          ? '需求文档正确，进入 UI 设计'
                           : submitLabel(clarification.mode)}
               </Button>
             </div>

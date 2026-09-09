@@ -15,7 +15,7 @@ type PhaseGateModalProps = {
   /** 正文导语；正文还通过 children 追加门禁专属内容（选项组、要点列表等）。 */
   lead?: ReactNode
   children?: ReactNode
-  /** 主确认按钮文案，例如「确认并进入开发」。 */
+  /** 主确认按钮文案；向前阶段门禁统一为「进入下一阶段」，阶段信息由标题承载。 */
   confirmText: string
   /** 条件未满足时禁用主确认，例如任务类型未选择。 */
   confirmDisabled?: boolean

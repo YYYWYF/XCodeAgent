@@ -67,6 +67,7 @@ import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
 import { workflowClarification } from './workflowClarification'
+import { buildTaskDisplayStatus } from './buildTaskStatus'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -99,7 +100,7 @@ function normalizeApiDesignDevelopmentTarget(value: unknown):
 const ARTIFACT_CONFIRMATION_MAP: Record<string, { title: string; summary: string }> = {
   requirement_document_confirmation: {
     title: '需求文档',
-    summary: '需求文档（含产品规划）已生成，确认后生成 UI 设计稿。'
+    summary: '需求文档已生成，确认后生成 UI 设计稿。'
   },
   technical_plan_confirmation: {
     title: '技术规划',
@@ -402,7 +403,7 @@ export default function WorkflowRunCard({
           <LoadingOutlined aria-hidden="true" />
           <Text type="secondary">
             {planningPhase === 'product_planning'
-              ? '正在生成产品规划…'
+              ? '正在整理需求…'
               : planningPhase === 'technical_planning'
                 ? '正在生成技术规划…'
                 : '正在生成项目计划…'}
@@ -703,6 +704,7 @@ export default function WorkflowRunCard({
               actingPageIds={uiDesignActingPageIds}
               onActingPageIdsChange={onUiDesignActingPageIdsChange}
               workflow={effectiveUiDesignWorkflow}
+              workspaceRoot={workspaceRoot}
             />
           ) : (
             <>
@@ -1071,7 +1073,7 @@ export function PlanConfirmationCard({
   const documentLabel =
     planType === 'product' ? '需求文档' : planType === 'technical' ? '技术规划' : '项目计划书'
 
-  /** 打开技术规划修改意见窗口时清空上一轮未提交输入，避免误提交过期需求。 */
+  /** 将技术规划确认行切换为行内输入，并清空上一轮未提交内容。 */
   const startRevision = (): void => {
     setRevisionRequest('')
     setRevising(true)
@@ -1085,7 +1087,7 @@ export function PlanConfirmationCard({
     onRevise(request)
   }
 
-  /** 关闭修改意见窗口并丢弃本地未提交内容，不触发任何工作流动作。 */
+  /** 取消行内修改并丢弃本地未提交内容，不触发任何工作流动作。 */
   const cancelRevision = (): void => {
     setRevising(false)
     setRevisionRequest('')
@@ -1093,30 +1095,73 @@ export function PlanConfirmationCard({
 
   return (
     <div className={cx('artifact-auth-bar', 'project-plan-confirmation-card')}>
-      <div className={cx('artifact-auth-bar-footer')}>
-        <span className={cx('artifact-auth-status')}>
-          <CheckCircleOutlined aria-hidden="true" />
-          {title}已生成
-        </span>
-        <span className={cx('artifact-auth-actions')}>
-          {canView ? (
-            <Button className={cx('requirement-spec-edit-btn')} onClick={() => setViewing(true)}>
-              查看{documentLabel}
+      <div
+        className={cx(
+          'artifact-auth-bar-footer',
+          revising && 'technical-plan-revision-inline'
+        )}
+      >
+        {revising ? (
+          <div className={cx('technical-plan-revision-editor')}>
+            <Input
+              aria-label="技术规划修改意见"
+              autoFocus
+              disabled={disabled}
+              onChange={(event) => setRevisionRequest(event.target.value)}
+              onKeyDown={(event) => {
+                // Escape 只退出本地编辑态，不触发后端修订。
+                if (event.key === 'Escape') cancelRevision()
+              }}
+              placeholder="输入技术规划修改意见"
+              value={revisionRequest}
+            />
+            <Button
+              disabled={disabled || !revisionRequest.trim()}
+              onClick={submitRevision}
+              type="primary"
+            >
+              提交
             </Button>
-          ) : null}
-          {canRevise ? (
-            <Button className={cx('requirement-spec-edit-btn')} disabled={disabled} onClick={startRevision}>
-              修改
-            </Button>
-          ) : (
-            <Button disabled={disabled} onClick={onAbandon}>
-              放弃
-            </Button>
-          )}
-          <Button disabled={disabled || !requiresConfirmation} onClick={onConfirm} type="primary">
-            确认保存
-          </Button>
-        </span>
+            <Button onClick={cancelRevision}>取消</Button>
+          </div>
+        ) : (
+          <>
+            <span className={cx('artifact-auth-status')}>
+              <CheckCircleOutlined aria-hidden="true" />
+              {title}已生成
+            </span>
+            <span className={cx('artifact-auth-actions')}>
+              {canView ? (
+                <Button
+                  className={cx('requirement-spec-edit-btn')}
+                  onClick={() => setViewing(true)}
+                >
+                  查看{documentLabel}
+                </Button>
+              ) : null}
+              {canRevise ? (
+                <Button
+                  className={cx('requirement-spec-edit-btn')}
+                  disabled={disabled}
+                  onClick={startRevision}
+                >
+                  修改
+                </Button>
+              ) : (
+                <Button disabled={disabled} onClick={onAbandon}>
+                  放弃
+                </Button>
+              )}
+              <Button
+                disabled={disabled || !requiresConfirmation}
+                onClick={onConfirm}
+                type="primary"
+              >
+                确认保存
+              </Button>
+            </span>
+          </>
+        )}
       </div>
       <Modal
         cancelText="关闭"
@@ -1138,31 +1183,6 @@ export function PlanConfirmationCard({
         ) : artifact ? (
           <ConfirmationArtifact artifact={artifact} />
         ) : null}
-      </Modal>
-      <Modal
-        cancelText="取消"
-        centered
-        className={cx('technical-plan-revision-modal')}
-        okButtonProps={{ disabled: disabled || !revisionRequest.trim() }}
-        okText="提交并重新生成"
-        onCancel={cancelRevision}
-        onOk={submitRevision}
-        open={revising}
-        title="修改技术规划"
-        width={680}
-        destroyOnClose
-      >
-        <Text type="secondary">
-          提交后，当前技术规划版本将失效；系统会依据你的意见重新生成并再次要求确认。
-        </Text>
-        <TextArea
-          aria-label="技术规划修改意见"
-          autoFocus
-          onChange={(event) => setRevisionRequest(event.target.value)}
-          placeholder="例如：为订单列表补充分页 API，并明确分页请求和响应 Schema。"
-          rows={6}
-          value={revisionRequest}
-        />
       </Modal>
     </div>
   )
@@ -1238,7 +1258,7 @@ function BuildExecutionSliceProgress({
   const total = numberValue(summary.total, tasks.length)
   const completed = numberValue(
     summary.completed,
-    tasks.filter((task) => task.status === 'completed').length
+    tasks.filter((task) => buildTaskDisplayStatus(task.status) === 'completed').length
   )
   const failed = numberValue(
     summary.failed,
@@ -1250,7 +1270,7 @@ function BuildExecutionSliceProgress({
   )
   const pending = numberValue(
     summary.pending,
-    tasks.filter((task) => !task.status || task.status === 'pending').length
+    tasks.filter((task) => buildTaskDisplayStatus(task.status) === 'pending').length
   )
   const reused = numberValue(summary.reused, executionSlice.reusable_task_ids?.length || 0)
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0
@@ -1343,7 +1363,7 @@ function BuildExecutionSliceProgress({
           >
             {displayTasks.map((task) => (
               <Collapse.Panel
-                className={cx('workflow-build-task-panel', task.status || 'pending')}
+                className={cx('workflow-build-task-panel', buildTaskDisplayStatus(task.status))}
                 header={
                   <BuildExecutionTaskHeader
                     expanded={expandedTaskKeys.has(taskId(task))}
@@ -1422,7 +1442,7 @@ function BuildExecutionTaskHeader({
 }): ReactElement {
   /** 渲染可折叠任务卡片的头部摘要。 */
 
-  const status = String(task.status || 'pending')
+  const status = buildTaskDisplayStatus(task.status)
   const title = displayTaskTitle(task)
   const description = displayTaskDescription(task)
   return (
@@ -1790,7 +1810,7 @@ function sortBuildTasksForDisplay(
 function taskStatusRank(task: WorkflowBuildExecutionTask): number {
   /** 返回任务状态展示优先级，完成项沉淀在顶部，未开始项留在底部。 */
 
-  const status = String(task.status || 'pending')
+  const status = buildTaskDisplayStatus(task.status)
   if (status === 'completed') return 0
   if (status === 'running') return 1
   if (status === 'failed') return 2

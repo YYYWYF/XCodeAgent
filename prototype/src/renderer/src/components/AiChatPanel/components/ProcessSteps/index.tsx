@@ -34,11 +34,16 @@ type Props = {
   /** 开发工作流首节点的模板选择交互。 */
   inlineFirstNode?: ReactElement
   inlineFirstNodePending?: boolean
+  /** 按节点归属内嵌的交互卡（需求分析/项目规划的澄清卡与已提交历史卡），键为节点 id。 */
+  nodeCards?: Record<string, ReactElement>
   /** 当前消息的 Workflow，用于把需要操作的节点交互嵌入节点轨迹。 */
   workflow?: WorkflowRunPayload
   interactionAvailability?: WorkflowInteractionAvailability
   interactionDisabled?: boolean
-  onSubmitClarification?: (workflow: WorkflowRunPayload, answers: ClarificationAnswers) => void
+  onSubmitClarification?: (
+    workflow: WorkflowRunPayload,
+    answers: ClarificationAnswers
+  ) => Promise<boolean>
   waitingPrompt?: string
   waitingForInput?: boolean
 }
@@ -50,6 +55,7 @@ export default function ProcessSteps({
   workflowTitle,
   inlineFirstNode,
   inlineFirstNodePending = false,
+  nodeCards,
   workflow,
   interactionAvailability = 'stale',
   interactionDisabled = false,
@@ -69,6 +75,16 @@ export default function ProcessSteps({
   const artifactAcceptancePending =
     workflowClarification(workflow)?.mode === 'page_acceptance' &&
     workflowClarification(workflow)?.status === 'requires_user_input'
+  // 头部状态说明：只在运行/等待时出现，跟随标题同行展示，完成后自然消失。
+  const statusHint = loading
+    ? currentStepLabel(steps)
+    : inlineFirstNodePending
+      ? '请选择页面模板后开始详细设计'
+      : dispatchPending
+        ? '请选择执行方式后继续'
+        : waitingForInput
+          ? '请根据下方提示补充修改需求'
+          : ''
 
   return (
     <div
@@ -78,6 +94,8 @@ export default function ProcessSteps({
         inlineFirstNode && 'has-inline-first-node'
       )}
     >
+      {/* 头部单行布局：大圆 + 名称 + 进度 + 状态说明同处一条水平线，
+          说明文字出现与否都不会把文字重心拉低，也不再需要防抖占位行。 */}
       <div className={cx('process-steps-summary')}>
         <span className={cx('process-steps-status')}>
           {loading ? (
@@ -88,21 +106,16 @@ export default function ProcessSteps({
             <CheckCircleOutlined />
           )}
         </span>
-        <span className={cx('process-steps-heading')}>
-          <span className={cx('process-steps-title-row')}>
-            <Text strong>{workflowTitle}</Text>
-            <Text className={cx('process-steps-progress')}>
-              {formatStepProgress(steps)}
+        <span className={cx('process-steps-title-row')}>
+          <Text strong>{workflowTitle}</Text>
+          <Text className={cx('process-steps-progress')}>
+            {formatStepProgress(steps)}
+          </Text>
+          {statusHint && (
+            <Text className={cx('process-steps-current')} type="secondary">
+              {statusHint}
             </Text>
-          </span>
-          {loading ? <Text type="secondary">{currentStepLabel(steps)}</Text> : null}
-          {inlineFirstNodePending ? (
-            <Text type="secondary">请选择页面模板后开始详细设计</Text>
-          ) : dispatchPending ? (
-            <Text type="secondary">请选择执行方式后继续</Text>
-          ) : waitingForInput ? (
-            <Text type="secondary">请根据下方提示补充修改需求</Text>
-          ) : null}
+          )}
         </span>
       </div>
       <div className={cx('process-steps-list')}>
@@ -115,6 +128,7 @@ export default function ProcessSteps({
             showTestCaseAuthorization={testCaseAuthorizationPending}
             showArtifactAcceptance={artifactAcceptancePending}
             showBackgroundDispatch={dispatchPending}
+            stepCard={nodeCards?.[step.nodeName || step.id]}
             inlineContent={index === 0 ? inlineFirstNode : undefined}
             workflow={workflow}
             interactionAvailability={interactionAvailability}
@@ -135,6 +149,7 @@ function ProcessStep({
   settled,
   step,
   inlineContent,
+  stepCard,
   showTestCaseAuthorization,
   showArtifactAcceptance,
   showBackgroundDispatch,
@@ -149,13 +164,18 @@ function ProcessStep({
   settled: boolean
   step: ProcessStepRecord
   inlineContent?: ReactElement
+  /** 归属到该节点下方的交互卡（需求澄清待输入卡 / 已提交历史卡）。 */
+  stepCard?: ReactElement
   showTestCaseAuthorization: boolean
   showArtifactAcceptance: boolean
   showBackgroundDispatch: boolean
   workflow?: WorkflowRunPayload
   interactionAvailability: WorkflowInteractionAvailability
   interactionDisabled: boolean
-  onSubmitClarification?: (workflow: WorkflowRunPayload, answers: ClarificationAnswers) => void
+  onSubmitClarification?: (
+    workflow: WorkflowRunPayload,
+    answers: ClarificationAnswers
+  ) => Promise<boolean>
   waitingForInput: boolean
   waitingPrompt: string
 }): ReactElement {
@@ -256,6 +276,19 @@ function ProcessStep({
           />
         </div>
       </div>
+    )
+  }
+
+  // 需求分析/项目规划工作流：卡片与节点同体——沿用可折叠节点的 details 结构，
+  // 点击节点标题即可收起/展开；待输入节点默认展开，确认提交落定后自动收起为历史。
+  if (stepCard) {
+    return (
+      <details className={className} open={step.status === 'requires_user_input'}>
+        <summary className={cx('process-step-summary')}>{summaryContent}</summary>
+        <div className={cx('process-step-detail', 'process-step-interaction-detail')}>
+          {stepCard}
+        </div>
+      </details>
     )
   }
 

@@ -184,7 +184,8 @@ export default function BackgroundTaskDrawer({
                       </span>
                     ) : (
                       <span className={cx('background-task-drawer-status')}>
-                        {task.statusText || meta.label}
+                        {/* 已完成分栏本身就是默认完成态，不重复展示；仅保留“已就绪”等额外业务状态。 */}
+                        {task.statusText || null}
                         {task.nextStepLabel && task.onNextStep ? (
                           <button
                             type="button"

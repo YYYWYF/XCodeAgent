@@ -288,6 +288,14 @@ export function workflowMessageContentForDisplay(
 
   // 自由对话的摘要就是助手正文，必须始终保留，避免过程步骤在结束时吞掉回复。
   if (isConversationWorkflow(workflow)) return content
+  // Product Conversation 即使恢复了原规划中断，也是一条普通 Agent 回复；
+  // 不能因同一快照仍含正式文档 clarification 而被结构化规划过滤器吞掉。
+  if (
+    workflow?.summary.productConversationResult?.mutating === false &&
+    workflow.summary.productConversationResult.presentation?.artifactPresentation === 'preserve'
+  ) {
+    return content
+  }
   // 规划正文由确认卡、进度卡或错误卡展示，历史 session 中已保存的模型 JSON 也必须隐藏。
   if (isStructuredPlanningWorkflow(workflow)) return ''
   if (!hasProcessSteps) return content

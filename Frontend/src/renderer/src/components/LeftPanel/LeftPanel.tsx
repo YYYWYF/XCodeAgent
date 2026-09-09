@@ -39,9 +39,9 @@ type Props = {
     workflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
-    requirementSpecFeedback?: string
+    requirementSpecFeedback?: string,
+    designChangeRequest?: string
   ) => Promise<void>
-  onStopPlanning: () => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
@@ -50,7 +50,7 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
-  onSessionHistoryReadyChange: (ready: boolean) => void
+  onSessionHistoryReadyChange: (ready: boolean, error?: string) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 设计阶段后台规划任务的模型错误。 */
@@ -84,7 +84,6 @@ export default function LeftPanel({
   previewLaunchLoading,
   onReturnWelcome,
   onSubmitPlanningClarification,
-  onStopPlanning,
   onStartDesignStageRevision,
   onRevisionContinuationHandlerChange,
   onThemeChange,
@@ -121,7 +120,6 @@ export default function LeftPanel({
             previewLaunchLoading={previewLaunchLoading}
             onReturnWelcome={onReturnWelcome}
             onSubmitPlanningClarification={onSubmitPlanningClarification}
-            onStopPlanning={onStopPlanning}
             onStartDesignStageRevision={onStartDesignStageRevision}
             onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
             onThemeChange={onThemeChange}

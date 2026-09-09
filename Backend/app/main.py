@@ -25,6 +25,14 @@ from app.protocols.application_development_planning import (
     application_development_planning_capabilities,
     build_application_development_planning_ag_ui_stream,
 )
+from app.protocols.application_deletion import (
+    ApplicationDeletionCompletionRequest,
+    ApplicationDeletionRequest,
+    application_deletion_capabilities,
+    build_application_deletion_ag_ui_stream,
+    complete_application_deletion,
+    prepare_application_deletion,
+)
 from app.protocols.application_lifecycle import (
     application_lifecycle_capabilities,
     build_application_lifecycle_ag_ui_stream,
@@ -67,6 +75,7 @@ from app.services.project_launcher import (
     launch_project_preview,
     stop_project_preview,
 )
+from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.tools import database_tools
 from app.workspace import workspace as workspace_tools
 
@@ -127,6 +136,7 @@ async def health() -> dict[str, object]:
             "application_page_planning": application_page_planning_capabilities(),
             "application_lifecycle": application_lifecycle_capabilities(),
             "application_development_planning": application_development_planning_capabilities(),
+            "application_deletion": application_deletion_capabilities(),
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
             "data_sources": data_sources_capabilities(),
@@ -187,6 +197,38 @@ async def run_application_development_planning(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/application-deletion/run")
+async def run_application_deletion(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """在 Electron 移动目录前执行工作区级应用销毁准备。"""
+
+    return StreamingResponse(
+        build_application_deletion_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/application-deletion/prepare")
+async def prepare_application_deletion_direct(
+        request: ApplicationDeletionRequest,
+) -> dict[str, Any]:
+    """供 Electron 主进程在移动目录前直接复用应用销毁准备门禁。"""
+
+    return await prepare_application_deletion(request)
+
+
+@app.post("/application-deletion/complete")
+async def complete_application_deletion_direct(
+        request: ApplicationDeletionCompletionRequest,
+) -> dict[str, Any]:
+    """供 Electron 在目录移入回收站后释放该路径的删除栅栏。"""
+
+    return complete_application_deletion(request)
 
 
 @app.post("/skills/run")
@@ -387,6 +429,24 @@ async def run_workflow(
 
 class ProjectLaunchRequest(BaseModel):
     workspace: str = Field(min_length=1, max_length=4096)
+
+
+class UiDesignCancelRequest(BaseModel):
+    workspace: str = Field(min_length=1, max_length=4096)
+    pageId: str = Field(min_length=1, max_length=256)
+
+
+@app.post("/api/ui-design/cancel")
+async def api_cancel_ui_design(request: UiDesignCancelRequest) -> dict[str, Any]:
+    """用户主动取消单页设计稿生成。
+
+    池把该页状态立即置为 cancelled（结果丢弃、LLM 请求不打断），前端据此
+    复位卡片加载态并允许重试。无在途任务时返回 cancelled=False（幂等）。
+    """
+
+    pool = get_ui_design_generation_pool()
+    cancelled = await pool.cancel_page(request.workspace, request.pageId)
+    return {"cancelled": cancelled, "pageId": request.pageId}
 
 
 @app.post("/api/projects/launch")

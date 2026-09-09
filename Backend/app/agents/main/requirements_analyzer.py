@@ -42,7 +42,7 @@ def _authorization_fact_extraction_prompt(
 ) -> str:
     """构造只提取角色与权限业务事实的 JSON 提示，禁止把结构缺口转成用户追问。"""
 
-    existing_roles = (
+    candidate_roles = (
         existing_spec.get("user_roles")
         if isinstance(existing_spec, dict)
         and isinstance(existing_spec.get("user_roles"), list)
@@ -64,6 +64,10 @@ def _authorization_fact_extraction_prompt(
         "user_roles is an array of every explicitly stated business participant. Each item must contain exactly "
         "id, name, description. id must be lower_snake_case; description must state the role's explicit business "
         "responsibilities. Return [] only if the request truly identifies no business participant.\n"
+        "The supplied candidate role catalogue was produced by the complete RequirementSpec analysis that already "
+        "applied the latest feedback. When it is non-empty, copy that catalogue exactly and use its ids in grants; "
+        "do not split it again from wording in the request. Identity statements such as 'A is B', 'A and B are the "
+        "same person', or their Chinese equivalents describe one business participant, never two roles.\n"
         "authorization_requirements must contain exactly restrictedPages, restrictedOperations, dataAuthorizationIssues. "
         "Return only controls explicitly stated in the request; empty arrays are valid. Every restrictedPages item "
         "must contain exactly name, targetPageId, description, rationale, sourceRefs, defaultGrantedRoleIds; every "
@@ -81,7 +85,7 @@ def _authorization_fact_extraction_prompt(
         "or initial-system-administrator fields.\n"
         "Do not ask the user to repeat facts already stated. If a fact is explicit, express it completely using the "
         "required fields.\n"
-        f"Existing business roles, if any:\n{json.dumps(existing_roles, ensure_ascii=False)}\n\n"
+        f"Current candidate role catalogue, if any:\n{json.dumps(candidate_roles, ensure_ascii=False)}\n\n"
         f"Confirmed page catalogue for restrictedPages.targetPageId:\n{json.dumps(page_candidates, ensure_ascii=False)}\n\n"
         f"Original requirement:\n{request}"
     )
@@ -234,6 +238,13 @@ def _extract_authorization_facts(
 ) -> dict[str, Any]:
     """独立提取权限业务事实，并在字段形状漂移时要求模型自动修复。"""
 
+    candidate_roles = (
+        existing_spec.get("user_roles")
+        if isinstance(existing_spec, dict)
+        and isinstance(existing_spec.get("user_roles"), list)
+        and existing_spec.get("user_roles")
+        else None
+    )
     feedback = ""
     for _attempt in range(_AUTHORIZATION_FACT_EXTRACTION_ATTEMPTS):
         prompt = _authorization_fact_extraction_prompt(request, existing_spec, pages)
@@ -242,10 +253,25 @@ def _extract_authorization_facts(
                 "\n\nPrevious output failed validation. Return a corrected complete JSON only:\n"
                 + feedback
             )
-        result = create_chat_model(settings).invoke(prompt)
+        result = create_chat_model(
+            settings,
+            extra_model_kwargs={"thinking": {"type": "disabled"}},
+        ).invoke(prompt)
         payload = extract_json_object(
             _coerce_content_text(getattr(result, "content", "")) or ""
         )
+        if isinstance(payload, dict) and candidate_roles is not None:
+            # 完整需求模型已经应用本轮增量语义；权限提取只能引用该角色目录，
+            # 不能再次按字面拆分“录入员就是本人”等同一身份表达。
+            payload["user_roles"] = [
+                {
+                    "id": str(role.get("id") or "").strip(),
+                    "name": str(role.get("name") or "").strip(),
+                    "description": str(role.get("description") or "").strip(),
+                }
+                for role in candidate_roles
+                if isinstance(role, dict)
+            ]
         errors = _validate_authorization_fact_output(payload, pages)
         if not errors:
             return payload
@@ -262,8 +288,14 @@ def _merge_authorization_facts(
 
     merged = deepcopy(agent_spec) if isinstance(agent_spec, dict) else {}
     fact_roles = facts.get("user_roles")
-    if isinstance(fact_roles, list) and fact_roles:
-        # 原始需求中明确提到的角色是当前轮的权威事实，不能被历史草稿或通用兜底角色覆盖。
+    candidate_roles = merged.get("user_roles")
+    if (
+        not (isinstance(candidate_roles, list) and candidate_roles)
+        and isinstance(fact_roles, list)
+        and fact_roles
+    ):
+        # 主需求模型尚未形成完整角色目录时才使用独立事实补齐；完整结果已经
+        # 合并本轮增量语义，不能再被按原文字面二次拆分的角色覆盖。
         merged["user_roles"] = fact_roles
     authorization = merged.get("authorization_requirements")
     authorization = deepcopy(authorization) if isinstance(authorization, dict) else {}
@@ -301,7 +333,7 @@ def _requirements_prompt(
     datasource_type: DatasourceType = "database",
     clarification_round: int = 0,
 ) -> str:
-    """构建产品需求提示；实体归技术规划阶段。"""
+    """构建产品需求提示；实体归技术计划阶段。"""
 
     bounded_round = max(
         0, min(clarification_round, MAX_REQUIREMENT_CLARIFICATION_ROUNDS)
@@ -479,7 +511,10 @@ def _invoke_live_chat_model(
 
     def _call_once() -> dict[str, Any]:
         # 每次重试必须重建 runnable 与流式迭代器：已中断的流不能续读。
-        runnable = create_chat_model(active_settings).bind_tools([ask_user])
+        runnable = create_chat_model(
+            active_settings,
+            extra_model_kwargs={"thinking": {"type": "disabled"}},
+        ).bind_tools([ask_user])
         if on_token is None:
             result = runnable.invoke(
                 _requirements_prompt(
@@ -493,6 +528,9 @@ def _invoke_live_chat_model(
 
         accumulated_text = ""
         merged_chunk: AIMessageChunk | None = None
+        # 非流式边界情况：stream() 返回单个完整 AIMessage（非 AIMessageChunk），
+        # 此时无法用 + 拼接，直接当 final 返回，避免被 isinstance 丢弃导致空 messages。
+        non_stream_final: AIMessage | None = None
         for chunk in runnable.stream(
             _requirements_prompt(
                 request,
@@ -501,6 +539,14 @@ def _invoke_live_chat_model(
                 clarification_round,
             )
         ):
+            if isinstance(chunk, AIMessage) and not isinstance(chunk, AIMessageChunk):
+                # 完整 AIMessage（非流式）：直接作为最终消息，提取 content 供 token 转发。
+                non_stream_final = chunk
+                token = _coerce_content_text(chunk.content)
+                if token:
+                    accumulated_text += token
+                    on_token(token)
+                continue
             if isinstance(chunk, AIMessageChunk):
                 # glm-5.2 流式 chunk.content 是 content block 列表（如
                 # [{"text": "...", "type": "text", "index": 0}]），不是纯字符串。
@@ -511,6 +557,17 @@ def _invoke_live_chat_model(
                     accumulated_text += token
                     on_token(token)
                 merged_chunk = chunk if merged_chunk is None else merged_chunk + chunk
+        if non_stream_final is not None:
+            # 非流式：用完整 AIMessage，但补上已提取的 accumulated_text 作为 content。
+            return {
+                "messages": [
+                    AIMessage(
+                        content=accumulated_text or _coerce_content_text(non_stream_final.content),
+                        tool_calls=getattr(non_stream_final, "tool_calls", None),
+                        id=getattr(non_stream_final, "id", None),
+                    )
+                ]
+            }
         if merged_chunk is None:
             return {"messages": []}
         final_tool_calls = getattr(merged_chunk, "tool_calls", None) or []
@@ -635,9 +692,14 @@ def _analyze_requirements_once(
         allow_inferred_defaults=False,
     )
     # 角色事实独立于是否开启权限：后续“谁是初始系统管理员”的选择只能基于这里识别的业务角色。
+    authorization_fact_context = (
+        effective_agent_spec
+        if isinstance(effective_agent_spec, dict)
+        else existing_spec
+    )
     authorization_facts = _extract_authorization_facts(
         request,
-        existing_spec,
+        authorization_fact_context,
         settings,
         spec.get("pages") if isinstance(spec.get("pages"), list) else [],
     )

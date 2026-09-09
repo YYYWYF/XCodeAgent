@@ -86,7 +86,7 @@ class CodeGraphManager:
         if not self._is_allowed_workspace_root(root):
             result = CodeGraphIndexResult(
                 status="skipped",
-                message="代码图只允许扫描显式用户 workspaceRoot，不扫描 XCodeAgent 工程目录。",
+                message="代码图只允许扫描显式用户 workspaceRoot，不扫描 AIStudio 工程目录。",
             )
             self._emit(callback, result)
             return result
@@ -280,7 +280,7 @@ class CodeGraphManager:
             return CodeGraphQueryResult(
                 status="skipped",
                 operation=request.operation,
-                message="代码图不扫描 XCodeAgent 工程目录。",
+                message="代码图不扫描 AIStudio 工程目录。",
                 fallback="workspace_search",
             )
         metadata_path = root / ".xcodeagent" / "cache" / "code-graph" / "v1" / "index.json"
@@ -326,7 +326,7 @@ class CodeGraphManager:
         if not root.is_dir() or not self._is_allowed_workspace_root(root):
             result = CodeGraphIndexResult(
                 status="skipped",
-                message="代码图只允许扫描显式用户 workspaceRoot，不扫描 XCodeAgent 工程目录。",
+                message="代码图只允许扫描显式用户 workspaceRoot，不扫描 AIStudio 工程目录。",
             )
             self._emit(callback, result)
             return result
@@ -353,7 +353,7 @@ class CodeGraphManager:
         explicit_changed_files: list[str] | None,
         callback: ProgressCallback | None,
     ) -> CodeGraphIndexResult:
-        """在线程池中构建索引并原子写入 XCodeAgent 元数据。"""
+        """在线程池中构建索引并原子写入 AIStudio 元数据。"""
 
         index_dir = metadata_path.parent
         index_dir.mkdir(parents=True, exist_ok=True)

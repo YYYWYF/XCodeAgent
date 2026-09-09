@@ -4,7 +4,6 @@
   background: transparent;
 }
 
-.@{class-prefix}-process-steps-summary,
 .@{class-prefix}-process-step-summary {
   display: flex;
   min-width: 0;
@@ -17,33 +16,33 @@
   }
 }
 
+// 工作流头部单行布局：大圆、名称、进度与状态说明同处一条水平线并互相垂直居中，
+// 说明文字出现与否只改变行内内容，文字重心不随之下坠，也无纵向抖动。
 .@{class-prefix}-process-steps-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
   padding: 0 0 18px;
+  cursor: default;
+  user-select: text;
 
   .ant-typography {
     margin: 0;
   }
 }
 
-.@{class-prefix}-process-steps-heading {
-  display: flex;
+// 状态说明跟随标题行内显示：单行省略，空间不足时先于标题收缩。
+.@{class-prefix}-process-steps-current.ant-typography {
+  flex: 0 1 auto;
   min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-
-  .ant-typography-secondary {
-    overflow: hidden;
-    color: var(--wb-text-secondary);
-    font-size: 12px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-}
-
-// 工作流容器固定展开；节点摘要仍保留点击展开详情的交互。
-.@{class-prefix}-process-steps-summary {
-  cursor: default;
-  user-select: text;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .@{class-prefix}-process-step-summary {
@@ -80,6 +79,12 @@
   border: 1px solid var(--wb-accent-border);
   border-radius: 50%;
   box-shadow: 0 0 0 4px var(--wb-accent-soft);
+  // 运行/等待/完成三态切换时颜色与光晕平滑过渡，避免图标换帧带来的生硬跳变。
+  transition:
+    color 200ms ease,
+    background-color 200ms ease,
+    border-color 200ms ease,
+    box-shadow 200ms ease;
 }
 
 .@{class-prefix}-process-steps.@{class-prefix}-running
@@ -100,17 +105,22 @@
 }
 
 .@{class-prefix}-process-steps-list {
-  padding-left: 14px;
-}
+  position: relative;
+  // 列表缩进恒定：等待态不再额外横移，避免运行/等待切换时整组节点左右抖动。
+  // 11.5px 让节点图标与连接线的中心线正好落在 17px（头部大圆圆心 x），大圆与节点轨道共线。
+  padding-left: 11.5px;
 
-.@{class-prefix}-process-steps.@{class-prefix}-waiting .@{class-prefix}-process-steps-list {
-  padding-left: 42px;
-}
-
-// 模板首节点也会显示等待态，但不能套用补充输入的额外缩进，避免点击后整组节点横向跳动。
-.@{class-prefix}-process-steps.@{class-prefix}-has-inline-first-node
-  .@{class-prefix}-process-steps-list {
-  padding-left: 14px;
+  // 大圆 → 首节点的连接线：从大圆下缘画到第一个节点图标上缘，把工作流头部与节点轨迹
+  // 连成一条连续轨道，消除头部与节点链之间的悬空感；列表为空时不画。
+  &:not(:empty)::before {
+    position: absolute;
+    top: -18px;
+    left: 16.5px;
+    width: 1px;
+    height: 22px;
+    content: '';
+    background: var(--wb-border-strong);
+  }
 }
 
 .@{class-prefix}-process-step-clarification {
@@ -124,6 +134,9 @@
 .@{class-prefix}-process-step {
   position: relative;
   padding: 0 0 18px 28px;
+  // 节点随工作流推进逐个追加，入场用轻微的淡入下移衔接轨道方向，
+  // 让流式推进读起来是“顺滑往下长”而不是整块突然出现。
+  animation: process-step-enter 240ms ease-out;
 
   &::before {
     position: absolute;
@@ -208,6 +221,8 @@
     font-size: 13px;
     text-overflow: ellipsis;
     white-space: nowrap;
+    // 节点在运行/完成态之间切换时文字颜色渐变，削弱状态翻转的闪烁感。
+    transition: color 180ms ease;
   }
 }
 
@@ -231,6 +246,15 @@
   border-radius: 50%;
   font-size: 8px;
   transform: translateY(-50%);
+  // 光环常驻（透明底）：运行态只把环染成强调色（见 .running 覆盖），
+  // 所有状态的圆圈几何 footprint 完全一致，不再出现“运行时变大”的抖动。
+  box-shadow: 0 0 0 4px transparent;
+  // 状态切换（待执行/运行/完成）时颜色与光环渐变过渡，图标换帧不再生硬。
+  transition:
+    color 180ms ease,
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .@{class-prefix}-process-step-detail {
@@ -576,6 +600,19 @@
   }
 }
 
+// 节点入场：沿轨道方向轻微淡入下移，流式追加时视觉上是连续生长。
+@keyframes process-step-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @keyframes quality-gate-scan {
   0%,
   18% {
@@ -617,6 +654,16 @@
   .@{class-prefix}-process-steps-status::after,
   .@{class-prefix}-integration-test-checklist::after {
     animation: none !important;
+  }
+
+  .@{class-prefix}-process-step {
+    animation: none;
+  }
+
+  .@{class-prefix}-process-step-icon,
+  .@{class-prefix}-process-step-summary .ant-typography,
+  .@{class-prefix}-process-steps-status {
+    transition: none;
   }
 
   .@{class-prefix}-integration-test-check {

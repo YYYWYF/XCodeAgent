@@ -25,6 +25,47 @@ class WorkflowProjectionTests(unittest.TestCase):
             ["inspect_workspace"],
         )
 
+    def test_non_mutating_product_result_projects_as_visible_assistant_reply(self) -> None:
+        """越界产品对话即使恢复原审阅门，也必须投影为普通 Agent 正文。"""
+
+        result = {
+            "phase": "design_chat_response",
+            "status": "requires_user_input",
+            "conversation_response": "fallback response",
+            "product_conversation_result": {
+                "kind": "out_of_scope",
+                "mutating": False,
+                "response": "请切换到目标工程的开发阶段处理。",
+                "presentation": {"artifactPresentation": "preserve"},
+            },
+            "clarification": {
+                "status": "requires_user_input",
+                "mode": "requirement_document_confirmation",
+            },
+        }
+
+        summary = _workflow_summary(result, [])
+        public_state = _public_workflow_state(result)
+        payload = _workflow_visual_payload(
+            run_id="run-1",
+            thread_id="thread-1",
+            summary=summary,
+            events=[],
+            result=result,
+        )
+
+        self.assertEqual(summary["message"], "请切换到目标工程的开发阶段处理。")
+        self.assertEqual(
+            summary["productConversationResult"]["presentation"],
+            {"artifactPresentation": "preserve"},
+        )
+        self.assertNotIn("product_conversation_result", public_state)
+        self.assertFalse(public_state["productConversationResult"]["mutating"])
+        self.assertEqual(
+            payload["state"]["productConversationResult"]["kind"],
+            "out_of_scope",
+        )
+
     def test_workspace_inspection_projects_direct_task_preparation(self) -> None:
         """工作区检查完成后不再投射独立数据库上下文节点。"""
 

@@ -36,7 +36,7 @@ export interface DatabaseDatasourceDetails {
 /** 描述最终写入 application.json 的数据库数据源配置。 */
 export interface DatabaseDatasourceConfig {
   type: DatasourceEnum.DB
-  /** 创建应用时数据库连接配置非必填；实体数据源在项目规划阶段再确认。 */
+  /** 创建应用时数据库连接配置非必填；实体数据源在项目计划阶段再确认。 */
   db?: DatabaseDatasourceDetails
 }
 
@@ -394,7 +394,6 @@ export interface ApplicationConfig extends ApplicationSchemaConfig {
   dynamicRouteDescription?: string
   schema: ApplicationSchemaConfig
   requirementPlan?: RequirementDevelopmentPlan
-  planningConfirmedAt?: number
   /** 应用规划线程 id，模板生成时持久化，供从历史恢复设计阶段历史卡片使用
    *  （后端在 lifecycle=ready_for_workbench 时会清空 threadId，前端需自行保留）。 */
   planningThreadId?: string

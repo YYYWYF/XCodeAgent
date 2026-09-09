@@ -6,7 +6,7 @@
 > 2026-08-18 更新：数据库上下文检查节点已退役，相关段落按现行工作流收敛。
 > 审计范围：
 > - 应用初始化阶段：`requirements`、`ui_confirmation`（ui_design）、`project_planning`
-> - 任务规划阶段：`inspect_workspace`、`prepare_build_tasks`
+> - 任务计划阶段：`inspect_workspace`、`prepare_build_tasks`
 > - build 阶段后端 Agent：`data_source_agent`（owner=backend）
 > 性质：只读审计，未改动任何代码
 
@@ -253,7 +253,7 @@
 - `Backend/app/agents/main/planner.py`：规划提示词与模型调用
 - `Backend/app/services/project_plan.py`、`services/api_contract_validation.py`、`services/page_dependencies.py`：计划校验与修复
 
-### 任务规划阶段
+### 任务计划阶段
 
 - `Backend/app/graph/nodes/workspace_inspection.py`：工作区扫描节点
 - `Backend/app/services/workspace_inspector.py`：快照构建/缓存/降级

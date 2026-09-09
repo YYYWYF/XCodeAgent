@@ -1,8 +1,5 @@
 import { MIN_ASSISTANT_PANEL_RATIO, MIN_RIGHT_PANEL_RATIO } from './constants'
 import type {
-  DevelopmentPlanningApiEndpoint,
-  DevelopmentPlanningEntityOption,
-  DevelopmentPlanningPageOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeFile,
   WorkspaceCodeChangeSet
@@ -352,42 +349,6 @@ export function workflowPreviewTarget(
     key: `${workflow.threadId}:${workflow.runId}:${url}`,
     url
   }
-}
-
-/** 以当前实体的数据源绑定状态判断是否需要锁定对话区。 */
-export function requiresEntitySourceBinding(
-  entity: DevelopmentPlanningEntityOption | undefined
-): boolean {
-  return Boolean(entity && !entity.designed && !entity.hasDetailPlan)
-}
-
-/** 以页面详细设计文档状态判断是否需要显示开始详细设计入口。 */
-export function requiresPageDetailDesign(page: DevelopmentPlanningPageOption | undefined): boolean {
-  return Boolean(page && !page.designed && !page.hasDetailPlan)
-}
-
-/** 判断待设计页面是否应显示锁定蒙层；正式开发产物存在时不再重复引导。 */
-export function shouldShowPageDetailDesignEntry(
-  page: DevelopmentPlanningPageOption | undefined,
-  developmentArtifactExists: boolean
-): boolean {
-  return requiresPageDetailDesign(page) && !developmentArtifactExists
-}
-
-/** 以 endpoint 文档状态判断接口是否需要显示开始详细设计入口。 */
-export function requiresEndpointDetailDesign(
-  endpoint: DevelopmentPlanningApiEndpoint | undefined
-): boolean {
-  return Boolean(endpoint && !endpoint.designed && !endpoint.hasDetailPlan)
-}
-
-/** 判断待设计接口是否应显示锁定卡片；空白新会话仍属于尚未开始设计。 */
-export function shouldShowEndpointDetailDesignEntry(
-  endpoint: DevelopmentPlanningApiEndpoint | undefined,
-  endpointSessionActive: boolean,
-  messageCount: number
-): boolean {
-  return requiresEndpointDetailDesign(endpoint) && (!endpointSessionActive || messageCount === 0)
 }
 
 /** 判断 Workflow 快照是否属于独立 EntitySourceBinding 场景。 */

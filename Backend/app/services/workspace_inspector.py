@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.workspace.workspace import SENSITIVE_FILE_NAMES
+from app.services.workspace_process_registry import workspace_process_registry
 
 
 INSPECTOR_SCHEMA_VERSION = "1.2.0"
@@ -223,8 +224,9 @@ def _run(
     timeout: int = 10,
 ) -> subprocess.CompletedProcess[str] | None:
     try:
-        return subprocess.run(
+        return workspace_process_registry.run(
             args,
+            workspace=cwd,
             cwd=cwd,
             capture_output=True,
             check=False,

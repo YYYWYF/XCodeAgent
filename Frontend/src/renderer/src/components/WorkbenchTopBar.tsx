@@ -1,11 +1,13 @@
 import { Fragment, useState } from 'react'
 import { Tag } from 'antd'
-import { BlockOutlined, DownOutlined, FolderOutlined } from '@ant-design/icons'
+import { BlockOutlined, LeftOutlined, FolderOutlined } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import { useWorkbenchPhase } from '../context'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
+import { testEntryGateReason } from '../developmentArtifacts'
+import { WORKBENCH_PHASE_ORDER as PHASE_ORDER } from '../workbenchPhaseNavigation'
 import {
   markApplicationEnteredDevelopment,
   WORKBENCH_PHASE_AGENTS,
@@ -13,17 +15,8 @@ import {
 } from '../workbenchPhase'
 import './WorkbenchTopBar.less'
 
-const PHASE_ORDER: WorkbenchPhase[] = [
-  'product',
-  'planning',
-  'development',
-  'test',
-  'review',
-  'acceptance'
-]
-
 type Props = {
-  application: ApplicationConfig
+  application: Pick<ApplicationConfig, 'id' | 'name'>
   workspaceRoot: string
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
@@ -32,7 +25,7 @@ type Props = {
 }
 
 /**
- * 工作台顶部单条：左 = Logo(XCodeAgent)，分隔线后 = 应用卡 + 阶段横排 stepper，
+ * 工作台顶部单条：左 = Logo(AIStudio)，分隔线后 = 应用卡 + 阶段横排 stepper，
  * 右侧 = 状态提示（当前 Agent + 跟随旅程）+ 预览开关，主题入口统一放在左侧快捷栏。
  */
 export default function WorkbenchTopBar({
@@ -42,7 +35,8 @@ export default function WorkbenchTopBar({
   rightPanelOpen,
   onToggleRightPanel
 }: Props): JSX.Element {
-  const { phase, derivedPhase, manualOverride, switchPhase, agent } = useWorkbenchPhase()
+  const { phase, derivedPhase, reachedPhase, manualOverride, switchPhase, agent, testEntryGate } =
+    useWorkbenchPhase()
   const following = manualOverride === null
   // 回退切阶段（切到旅程上游 = 增量迭代）需二次确认；向前推进 / 同级直接切。
   const [confirmPhase, setConfirmPhase] = useState<WorkbenchPhase | null>(null)
@@ -52,7 +46,7 @@ export default function WorkbenchTopBar({
       return
     }
     // 用户主动切到开发阶段时，标记已确认进入开发（与对话区"进入开发"按钮一致），
-    // 避免重挂载后 planningConfirmedAt effect 再次锁回 product。
+    // 避免重挂载后自动阶段推导再次回到 product。
     if (phaseKey === 'development') {
       markApplicationEnteredDevelopment(application.id)
     }
@@ -61,35 +55,30 @@ export default function WorkbenchTopBar({
 
   return (
     <div className={cx('workbench-topbar')}>
-      <button
-        className={cx('workbench-topbar-logo')}
-        onClick={onReturnWelcome}
-        title="返回欢迎页"
-        type="button"
-      >
+      <div className={cx('workbench-topbar-logo')}>
         <BrandLogo size={22} />
-      </button>
+      </div>
 
       <span className={cx('workbench-topbar-divider')} aria-hidden="true" />
 
       <button
         className={cx('workbench-topbar-app')}
         onClick={onReturnWelcome}
-        title={workspaceRoot}
+        title={`返回欢迎页 · ${workspaceRoot}`}
+        aria-label={`${application.name}，返回欢迎页`}
         type="button"
       >
+        <LeftOutlined aria-hidden="true" />
         <FolderOutlined />
         <span className={cx('workbench-topbar-app-name')}>{application.name}</span>
-        <DownOutlined rotate={-90} />
       </button>
 
       <div className={cx('workbench-topbar-phase')}>
         <div className={cx('workbench-topbar-stepper')} role="tablist" aria-label="阶段">
           {PHASE_ORDER.map((phaseKey, idx) => {
             const isActive = phase === phaseKey
-            // 测试确认成功后先由会话切换立即设置当前阶段，生命周期异步回传前也不能把当前按钮置灰。
-            const reached =
-              Math.max(PHASE_ORDER.indexOf(derivedPhase), PHASE_ORDER.indexOf(phase)) >= idx
+            // 回访资格使用独立的到达记录，不能随当前视图回退或 execution 收口而降低。
+            const reached = PHASE_ORDER.indexOf(reachedPhase) >= idx
             return (
               <Fragment key={phaseKey}>
                 {idx > 0 ? (
@@ -106,11 +95,17 @@ export default function WorkbenchTopBar({
                     isActive && 'active',
                     reached && !isActive && 'reached'
                   )}
-                  disabled={!reached}
+                  disabled={phaseKey === 'test' ? testEntryGate?.allowed !== true : !reached}
+                  title={phaseKey === 'test' ? testEntryGateReason(testEntryGate) : undefined}
                   onClick={() => handlePhaseClick(phaseKey)}
                 >
                   <span className={cx('workbench-topbar-phase-dot')} aria-hidden="true" />
                   {WORKBENCH_PHASE_AGENTS[phaseKey].label}阶段
+                  {phaseKey === 'development' && testEntryGate ? (
+                    <span>
+                      {testEntryGate.completed}/{testEntryGate.total}
+                    </span>
+                  ) : null}
                 </button>
               </Fragment>
             )

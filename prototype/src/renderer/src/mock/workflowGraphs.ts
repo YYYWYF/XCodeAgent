@@ -87,7 +87,8 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
     {
       id: 'choose_execution_endpoint',
       title: '选择接口执行方式',
-      detail: '接口产物单独选择执行方式；同步任务在当前对话中直接完成，异步/潮汐任务转入对应任务系统后台执行。',
+      detail:
+        '接口产物单独选择执行方式；同步任务在当前对话中直接完成，异步/潮汐任务转入对应任务系统后台执行。',
       surface: 'conversation'
     },
     {
@@ -122,20 +123,20 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
     },
     {
       id: 'launch_preview',
-      title: '启动页面预览',
-      detail: '启动当前页面预览。',
+      title: '启动产物审查',
+      detail: '右侧工作区切换到开发产物，打开当前产物的审查视图。',
       surface: 'background'
     },
     {
       id: 'acceptance_preview',
-      title: '打开产物预览',
-      detail: '右侧工作区切换到开发产物，打开页面预览或接口调试。',
+      title: '打开产物审查',
+      detail: '右侧工作区切换到开发产物，审查页面效果与接口内容。',
       surface: 'conversation'
     },
     {
       id: 'acceptance_confirm',
       title: '确认验收',
-      detail: '在预览中确认实现内容，确认后产物交付。',
+      detail: '在右侧审查内容中确认实现无误，确认后产物交付。',
       surface: 'conversation'
     },
     {
@@ -200,13 +201,7 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
     foreground_build: {
       id: 'foreground_build',
       label: '同步任务',
-      nodeIds: [
-        'build_dag',
-        'generate_code',
-        'confirm_changes',
-        'build_and_test',
-        'launch_preview'
-      ]
+      nodeIds: ['build_dag', 'generate_code', 'confirm_changes', 'build_and_test', 'launch_preview']
     },
     /** 验收段：异步任务完成后回到主对话的确认链路。 */
     acceptance: {
@@ -223,9 +218,139 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
   }
 }
 
+/**
+ * 需求分析工作流的完整底层 DAG。
+ * 节点序列对齐真实工程应用规划 Graph 的 requirements 段：上下文汇总 → 业务分析 →
+ * 澄清（交互门）→ 生成需求文档 → 确认需求文档（交互门）；澄清回答只补充信息，
+ * 文档确认始终是独立门禁，与真实工程的确认中断语义一致。
+ */
+const REQUIREMENT_ANALYSIS_WORKFLOW: WorkflowDefinition = {
+  id: 'requirement_analysis',
+  name: '需求分析工作流',
+  nodes: [
+    {
+      id: 'requirements_context',
+      title: '汇总应用上下文',
+      detail: '整合应用名称、业务目标与既有产物基线。',
+      surface: 'conversation'
+    },
+    {
+      id: 'requirements_analyze',
+      title: '分析业务与角色',
+      detail: '识别产品目标、用户角色、页面与业务流程中的信息缺口。',
+      surface: 'conversation'
+    },
+    {
+      id: 'requirements_clarify',
+      title: '澄清关键信息',
+      detail: '向用户确认业务目标、角色与流程中的缺失信息。',
+      surface: 'conversation'
+    },
+    {
+      id: 'requirements_intent',
+      title: '需求变更意图分析',
+      detail: '解析修改意见，定位受影响的需求事实与调整范围。',
+      surface: 'conversation'
+    },
+    {
+      id: 'requirements_document',
+      title: '生成需求文档',
+      detail: '合并原始诉求与澄清答案，产出需求文档；Diff 接受后节点完成。',
+      surface: 'conversation'
+    }
+  ],
+  edges: [
+    ['requirements_context', 'requirements_analyze'],
+    ['requirements_analyze', 'requirements_clarify'],
+    ['requirements_clarify', 'requirements_document'],
+    ['requirements_intent', 'requirements_document']
+  ],
+  segments: {
+    /** 澄清段：冷启动时先呈现的分析与澄清节点（澄清为待输入节点）。 */
+    clarify: {
+      id: 'clarify',
+      label: '需求澄清',
+      nodeIds: ['requirements_context', 'requirements_analyze', 'requirements_clarify']
+    },
+    /**
+     * 文档段：Diff 与接受授权都归属「生成需求文档」节点——生成中 running、
+     * 等待接受 requires_user_input、接受后 completed。规划准入门（planning_stage_entry）
+     * 是阶段层逻辑：工作流在此挂起等待确认，但不作为轨迹节点呈现。
+     */
+    document: {
+      id: 'document',
+      label: '需求文档',
+      nodeIds: ['requirements_clarify', 'requirements_document']
+    },
+    /** 修订段：修改意见提交后先做变更意图分析，再重新生成。 */
+    revision: {
+      id: 'revision',
+      label: '需求修订',
+      nodeIds: ['requirements_intent', 'requirements_document']
+    }
+  }
+}
+
+/**
+ * 项目计划工作流的完整底层 DAG。
+ * 节点序列对齐真实工程应用规划 Graph 的 product_planning/project_planning 段：
+ * Diff 与接受授权归属「生成项目计划」节点（生成中 → 等待接受 → 完成）。
+ */
+const PROJECT_PLANNING_WORKFLOW: WorkflowDefinition = {
+  id: 'project_planning',
+  name: '项目计划工作流',
+  nodes: [
+    {
+      id: 'planning_context',
+      title: '读取已确认需求',
+      detail: '读取已确认的需求文档与业务约束。',
+      surface: 'conversation'
+    },
+    {
+      id: 'planning_scope',
+      title: '规划页面与接口',
+      detail: '梳理页面、接口、实体清单与直接依赖关系。',
+      surface: 'conversation'
+    },
+    {
+      id: 'planning_permissions',
+      title: '映射业务权限规则',
+      detail: '把需求中的角色与权限规则映射到页面和操作清单。',
+      surface: 'conversation'
+    },
+    {
+      id: 'planning_document',
+      title: '生成项目计划',
+      detail: '按依赖关系整理开发顺序，产出项目计划文档；Diff 接受后节点完成。',
+      surface: 'conversation'
+    }
+  ],
+  edges: [
+    ['planning_context', 'planning_scope'],
+    ['planning_scope', 'planning_permissions'],
+    ['planning_permissions', 'planning_document']
+  ],
+  segments: {
+    /** 计划段：从读取需求到计划 Diff 接受的完整前台链路。 */
+    document: {
+      id: 'document',
+      label: '项目计划',
+      nodeIds: ['planning_context', 'planning_scope', 'planning_permissions', 'planning_document']
+    },
+    /** 修订段：调整意见提交后重新映射规则并再生成。 */
+    revision: {
+      id: 'revision',
+      label: '计划修订',
+      nodeIds: ['planning_permissions', 'planning_document']
+    }
+  }
+}
+
 /** 工作流注册表：后续新增工作流（测试/审查等）在这里登记各自的完整 DAG。 */
 const WORKFLOW_REGISTRY: Record<string, WorkflowDefinition> = {
-  [DEVELOPMENT_WORKFLOW.id]: DEVELOPMENT_WORKFLOW
+  [DEVELOPMENT_WORKFLOW.id]: DEVELOPMENT_WORKFLOW,
+  [REQUIREMENT_ANALYSIS_WORKFLOW.id]: REQUIREMENT_ANALYSIS_WORKFLOW,
+  [PROJECT_PLANNING_WORKFLOW.id]: PROJECT_PLANNING_WORKFLOW
 }
 
 /** 读取一种工作流的完整底层定义；未注册的工作流返回 undefined。 */
@@ -237,10 +362,7 @@ export function getWorkflowDefinition(workflowId: string): WorkflowDefinition | 
  * 读取一种工作流某个表现段的节点轨迹（深拷贝，避免播放器改写共享定义）。
  * 剧本可用返回节点 id 覆盖 detail，实现同一节点在不同目标下的差异化说明。
  */
-export function workflowSegmentNodes(
-  workflowId: string,
-  segmentId: string
-): WorkflowGraphNode[] {
+export function workflowSegmentNodes(workflowId: string, segmentId: string): WorkflowGraphNode[] {
   const definition = WORKFLOW_REGISTRY[workflowId]
   const segment = definition?.segments[segmentId]
   if (!definition || !segment) return []

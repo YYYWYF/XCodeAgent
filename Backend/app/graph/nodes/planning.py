@@ -13,6 +13,7 @@ from app.agents.database.generator import (
 )
 from app.agents.main.planner import (
     plan_project_with_chat_model,
+    repair_technical_plan_action_bindings_with_chat_model,
     repair_technical_plan_api_contracts_with_chat_model,
     revise_project_plan_with_chat_model,
     technical_plan_contract_repair_applicable,
@@ -54,6 +55,7 @@ from app.services.authorization_deliverability import (
     authorization_deliverability_errors,
     authorization_deliverability_report,
 )
+from app.services.application_lifecycle import load_application_lifecycle
 from app.services.product_plan import require_current_product_plan
 from app.services.page_dependencies import (
     close_page_action_endpoint_dependencies,
@@ -62,7 +64,14 @@ from app.services.page_dependencies import (
 from app.services.page_implementation_contract import (
     attach_page_implementation_contracts,
     materialize_technical_plan_runtime,
+    technical_action_binding_issue_messages,
+    technical_action_binding_issues,
     validate_page_implementation_contracts,
+)
+from app.services.technical_action_binding_repair import (
+    action_binding_repair_requires_full_repair,
+    apply_technical_action_binding_patch,
+    validate_technical_action_binding_patch,
 )
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
@@ -102,12 +111,26 @@ def _planning_token_callback(token: str) -> None:
 
 
 def _planning_phase(state: ProjectState) -> str:
-    """区分创建流程的开发技术规划与主工作流项目规划阶段。"""
+    """区分创建流程的开发技术规划与主工作流项目计划阶段。"""
 
     return (
         "technical_planning"
         if state.get("workflow_scope") == "application_planning"
         else "project_planning"
+    )
+
+
+def _is_workbench_technical_plan_revision(state: ProjectState) -> bool:
+    """从服务端 lifecycle 判定当前节点是否属于工作台 TechnicalPlan 正式修订。"""
+
+    workspace = workspace_from_state(state)
+    if not workspace:
+        return False
+    lifecycle = load_application_lifecycle(workspace)
+    active = lifecycle.active_formal_revision if lifecycle is not None else None
+    return bool(
+        active is not None
+        and active.formal_branch.value == "workbench_plan_revision"
     )
 
 
@@ -356,6 +379,13 @@ def project_planning(state: ProjectState) -> dict:
         if state.get("workflow_scope") == "application_planning"
         else state.get("project_plan")
     )
+    workbench_revision = _is_workbench_technical_plan_revision(state)
+    if workbench_revision and not (
+        isinstance(existing_plan, dict) and bool(existing_plan)
+    ):
+        raise ValueError(
+            "workbench_plan_revision 缺少当前正式 TechnicalPlan baseline，拒绝从零重新生成。"
+        )
     repair_seed = state.get("technical_plan_repair_candidate")
     repair_errors = state.get("technical_plan_repair_errors")
     clarification = state.get("clarification")
@@ -479,6 +509,11 @@ def project_planning(state: ProjectState) -> dict:
             **requirement_spec,
             "planning_adjustment_request": request,
         }
+        if phase == "technical_planning" and not resume_failed_candidate:
+            logger.info(
+                "technical_plan_revision_generation baseline_present=true "
+                "adjustment_present=true"
+            )
     if phase == "technical_planning":
         project_plan, validation_errors, failed_candidate = (
             _generate_valid_technical_plan(
@@ -1769,7 +1804,92 @@ def _repair_technical_plan_candidate(
     current_plan: dict,
     errors: list[str],
 ) -> dict:
-    """优先定向修复失败 Contract，无法定位或解析时才回退完整计划修订。"""
+    """保守路由 Action Binding、API Contract 或完整 TechnicalPlan 修复。"""
+
+    product_plan = requirement_spec.get("confirmed_product_plan")
+    binding_issues = (
+        technical_action_binding_issues(current_plan, product_plan)
+        if isinstance(product_plan, dict)
+        else []
+    )
+    normalized_errors = {
+        str(error).strip() for error in errors if str(error).strip()
+    }
+    binding_error_messages = set(
+        technical_action_binding_issue_messages(binding_issues)
+    )
+    only_binding_errors = bool(binding_issues) and (
+        normalized_errors == binding_error_messages
+    )
+    action_repair_failed = False
+    if only_binding_errors:
+        page_ids = sorted(
+            {
+                str(issue.get("pageId") or "").strip()
+                for issue in binding_issues
+                if str(issue.get("pageId") or "").strip()
+            }
+        )
+        action_ids = [
+            str(issue.get("actionId") or "").strip()
+            for issue in binding_issues
+            if str(issue.get("actionId") or "").strip()
+        ]
+        logger.info(
+            "technical_plan_repair_route: route=action_binding issues=%s pages=%s actions=%s",
+            len(binding_issues),
+            page_ids,
+            action_ids,
+        )
+        repair_result: dict[str, Any] | None = None
+        repair_abstained = False
+        try:
+            repair_result = repair_technical_plan_action_bindings_with_chat_model(
+                requirement_spec,
+                current_plan,
+                binding_issues,
+                on_token=_planning_token_callback,
+            )
+            patch_errors = validate_technical_action_binding_patch(
+                repair_result,
+                binding_issues=binding_issues,
+                existing_plan=current_plan,
+            )
+            if patch_errors:
+                raise ValueError("；".join(patch_errors))
+            if action_binding_repair_requires_full_repair(repair_result):
+                repair_abstained = True
+                raise ValueError(
+                    "Action Binding Scoped Repair 未找到语义匹配的现有 Endpoint。"
+                )
+            repaired = apply_technical_action_binding_patch(
+                current_plan,
+                repair_result,
+            )
+            logger.info(
+                "technical_plan_action_binding_patch_applied: bindings=%s",
+                len(repair_result.get("bindings", [])),
+            )
+            return repaired
+        except ValueError as exc:
+            action_repair_failed = True
+            if repair_abstained:
+                logger.warning(
+                    "technical_plan_action_binding_repair_abstained: "
+                    "reason=no_suitable_endpoint fallback=full_plan"
+                )
+            else:
+                failure_reason = (
+                    "invalid_model_output"
+                    if repair_result is None
+                    else "invalid_patch_or_merge"
+                )
+                logger.warning(
+                    "technical_plan_action_binding_repair_failed: "
+                    "reason=%s detail=%s fallback=full_plan",
+                    failure_reason,
+                    exc,
+                )
 
     contract_errors = _technical_plan_contract_validation_errors(
         current_plan,
@@ -1779,13 +1899,28 @@ def _repair_technical_plan_candidate(
         errors,
         contract_errors,
     ):
+        logger.info(
+            "technical_plan_repair_route: route=api_contract errors=%s",
+            len(errors),
+        )
         return repair_technical_plan_api_contracts_with_chat_model(
             requirement_spec,
             current_plan,
             errors,
             on_token=_planning_token_callback,
         )
-    logger.warning("technical_plan_contract_repair_fallback: errors=%s", errors)
+    reason = (
+        "action_binding_scoped_repair_failed"
+        if action_repair_failed
+        else "mixed_validation_errors"
+        if binding_issues
+        else "unscoped_validation_errors"
+    )
+    logger.warning(
+        "technical_plan_repair_route: route=full_plan reason=%s errors=%s",
+        reason,
+        errors,
+    )
     return plan_project_with_chat_model(
         requirement_spec,
         existing_plan=current_plan,

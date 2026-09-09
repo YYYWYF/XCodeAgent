@@ -92,7 +92,7 @@ def database_encryption_metadata(*, key_file: Path | None = None) -> dict[str, A
 
 
 def is_encrypted_password(value: str) -> bool:
-    """判断字符串是否声明为 XCodeAgent 版本化密文。"""
+    """判断字符串是否声明为 AIStudio 版本化密文。"""
 
     return value.startswith(f"{SECRET_PREFIX}:")
 
@@ -126,11 +126,11 @@ def _ensure_key_directory(key_directory: Path) -> None:
 
     environment_root = key_directory.parent
     if environment_root.is_symlink():
-        raise DatabaseCryptoError("XCodeAgent 用户级密钥目录不允许使用符号链接。")
+        raise DatabaseCryptoError("AIStudio 用户级密钥目录不允许使用符号链接。")
     try:
         environment_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if key_directory.is_symlink():
-            raise DatabaseCryptoError("XCodeAgent 用户级密钥目录不允许使用符号链接。")
+            raise DatabaseCryptoError("AIStudio 用户级密钥目录不允许使用符号链接。")
         key_directory.mkdir(mode=0o700, exist_ok=True)
         _set_posix_mode(key_directory, 0o700)
     except DatabaseCryptoError:

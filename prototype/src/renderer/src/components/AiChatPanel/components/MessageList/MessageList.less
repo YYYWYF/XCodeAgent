@@ -328,6 +328,18 @@
   white-space: pre-wrap;
 }
 
+// 用户消息中的 @ 产物提及：按 markdown 行内代码的轻格式呈现（浅底、圆角、等宽），不用彩色徽标。
+.@{class-prefix}-ai-message-mention {
+  padding: 1px 5px;
+  background: var(--wb-surface-hover);
+  border: 1px solid var(--wb-border-soft);
+  border-radius: 5px;
+  font-family: 'Segoe UI Variable Text', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    'Microsoft YaHei UI', monospace;
+  font-size: 0.92em;
+  font-weight: 600;
+}
+
 .@{class-prefix}-message-skill-labels {
   display: flex;
   max-width: 100%;
@@ -381,5 +393,25 @@
   .ant-typography-secondary {
     margin-left: 2px;
     color: var(--wb-text-tertiary);
+  }
+}
+
+// 产物发起引导：快速入口内嵌正文，文字链接样式，不做独立按钮。
+// 文案颜色随消息正文继承（--wb-text），与其它对话消息保持一致，不额外灰化。
+.@{class-prefix}-guide-launch-line {
+  display: block;
+  padding: 2px 0;
+}
+
+.@{class-prefix}-guide-inline-link {
+  padding: 0 2px;
+  color: var(--wb-accent);
+  font-size: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
   }
 }

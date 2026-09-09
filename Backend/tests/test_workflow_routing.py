@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+from app.domain.development_artifacts import TestEntryGate
 
 from app.graph.workflow import (
     build_graph,
@@ -29,6 +31,18 @@ from app.domain.application_lifecycle import PendingInteractionType
 
 
 class WorkflowRoutingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """路由单测隔离持久化；初次完成与全量门禁使用独立真实文件测试。"""
+
+        for mocked in (
+            patch("app.graph.nodes.lifecycle.complete_initial_development"),
+            patch("app.graph.nodes.lifecycle.test_entry_gate", return_value=TestEntryGate(
+                allowed=True, total=1, completed=1, pending=0, inProgress=0, blockers=[],
+            )),
+        ):
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
     def test_api_design_gate_waits_then_continues_to_workspace_inspection(self) -> None:
         """字段映射门禁等待配置或确认，通过后才进入工作区检查。"""
 
@@ -68,8 +82,8 @@ class WorkflowRoutingTests(unittest.TestCase):
         )
         self.assertIn("application_revision", build_graph(checkpointer=None).get_graph().nodes)
 
-    def test_application_revision_enters_development_readiness_after_artifacts_confirmed(self) -> None:
-        """草稿确认门停图，正式产物确认后先经过开发就绪门禁。"""
+    def test_application_revision_routes_confirmed_artifacts_by_lifecycle_scope(self) -> None:
+        """application 直接扫描工作区，page/endpoint 仍经过实体门禁。"""
 
         self.assertEqual(
             route_application_revision({"status": "requires_user_input"}),

@@ -14,16 +14,16 @@ import { cx } from '../../../../utils'
 import './PhaseNavigation.less'
 
 type Props = {
-  /** 打开只读临时对话抽屉。 */
-  onOpenTemporaryConversation: () => void
+  /** 打开任务管理抽屉：统一管理当前阶段任务与临时问答。 */
+  onOpenConversationManagement: () => void
+  /** 任务管理抽屉是否展开；用于菜单激活态。 */
+  conversationDrawerOpen?: boolean
   /** 打开指定任务系统的队列抽屉；两套任务系统各有独立入口。 */
   onOpenBackgroundTasks: (system: BackgroundTaskSystem) => void
   /** 当前展开的任务系统抽屉；用于菜单激活态。 */
   backgroundTasksDrawer?: BackgroundTaskSystem | null
   /** 各系统是否有任务正在执行；为真时对应入口显示运行特效引导用户点开查看。 */
   backgroundTasksRunning?: Record<BackgroundTaskSystem, boolean>
-  /** 各系统待验收任务数量；大于 0 时悬浮文案直接给出待处理提示。 */
-  backgroundTasksAwaiting?: Record<BackgroundTaskSystem, number>
   /** 打开应用文件工作区。 */
   onShowFiles: () => void
   /** 打开应用配置页。 */
@@ -80,8 +80,8 @@ export default function PhaseNavigation({
   activeView = 'chat',
   backgroundTasksDrawer,
   backgroundTasksRunning = { async: false, tide: false },
-  backgroundTasksAwaiting = { async: 0, tide: 0 },
-  onOpenTemporaryConversation,
+  conversationDrawerOpen = false,
+  onOpenConversationManagement,
   onOpenBackgroundTasks,
   onShowFiles,
   onShowSettings,
@@ -90,25 +90,28 @@ export default function PhaseNavigation({
   return (
     <aside aria-label="工作台功能导航" className={cx('phase-navigation')}>
       <nav aria-label="快捷功能" className={cx('phase-navigation-tools')}>
-        <RailButton ariaLabel="临时对话" onClick={onOpenTemporaryConversation} title="临时对话">
+        {/* 任务管理是第一入口：统一承载阶段任务切换、新建与临时问答。 */}
+        <RailButton
+          active={conversationDrawerOpen}
+          ariaLabel="任务管理"
+          onClick={onOpenConversationManagement}
+          title="任务管理"
+        >
           <SidebarAssetIcon source={freeChatIcon} />
         </RailButton>
         {/* 异步/潮汐是两套独立任务系统：入口从菜单层就拆开，交互结构保持一致降低认知成本。 */}
         {(['async', 'tide'] as const).map((system) => {
           const running = backgroundTasksRunning[system]
-          const awaiting = backgroundTasksAwaiting[system]
-          // 入口提示按「待验收 > 执行中 > 常态」的优先级组织，把人工处理入口放在最显眼的位置。
+          // 左侧只提醒真正运行中的后台任务；待继续任务统一收敛到输入区工作流入口。
           const title =
-            awaiting > 0
-              ? `${BACKGROUND_TASK_SYSTEM_LABEL[system]}（${awaiting} 项待验收）`
-              : running
-                ? `${BACKGROUND_TASK_SYSTEM_LABEL[system]}（有任务正在执行）`
-                : BACKGROUND_TASK_SYSTEM_LABEL[system]
+            running
+              ? `${BACKGROUND_TASK_SYSTEM_LABEL[system]}（有任务正在执行）`
+              : BACKGROUND_TASK_SYSTEM_LABEL[system]
           return (
             <RailButton
               active={backgroundTasksDrawer === system}
               ariaLabel={BACKGROUND_TASK_SYSTEM_LABEL[system]}
-              indicator={running || awaiting > 0}
+              indicator={running}
               key={system}
               onClick={() => onOpenBackgroundTasks(system)}
               title={title}

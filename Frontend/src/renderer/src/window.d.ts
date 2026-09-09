@@ -30,8 +30,10 @@ declare global {
       applications: {
         load: () => Promise<{ applications?: unknown }>
         save: (applications: unknown[]) => Promise<{ ok?: boolean }>
-        deleteProject: (payload: { workspaceRoot: string }) => Promise<{ ok?: boolean }>
-        deleteAgentDirectory: (payload: { workspaceRoot: string }) => Promise<{ ok?: boolean }>
+        deleteProject: (payload: {
+          applicationId: string
+          workspaceRoot: string
+        }) => Promise<{ ok?: boolean }>
       }
       workspace?: {
         selectDirectory: (options?: {
@@ -48,6 +50,7 @@ declare global {
           backendTemplateUrl?: string
         }) => Promise<TemplateDownloadResult>
         readApplication: (payload: { workspaceRoot: string }) => Promise<{ application?: unknown }>
+        readUiDesigns: (payload: { workspaceRoot: string }) => Promise<{ uiDesigns: unknown }>
         inspectPlanningArtifacts: (payload: { workspaceRoot: string }) => Promise<{
           ready: boolean
           hasPageDesigns: boolean

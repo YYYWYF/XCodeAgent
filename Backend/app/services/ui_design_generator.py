@@ -15,7 +15,9 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from app.services.workspace_process_registry import workspace_process_registry
 
 from app.agents.messages import _coerce_content_text, strip_thinking_fragments
 from app.agents.model_factory import create_chat_model
@@ -26,6 +28,10 @@ from app.workspace.spec_documents import REPOSITORY_ROOT
 
 
 logger = logging.getLogger(__name__)
+
+
+class UiDesignStreamCancelled(RuntimeError):
+    """流式生成过程中用户取消，由 generate_page_entry 转为池级 UiDesignGenerationCancelled。"""
 
 
 UI_DESIGN_SKILL_NAME = "antd-ui-design"
@@ -85,23 +91,27 @@ def _is_multiline_import_continuation(line: str) -> bool:
     return False
 
 def _create_ui_design_model(settings: Settings):
-    """创建 UI 设计稿专用模型实例，尽量压低 GLM-5.2 的 thinking 预算。
+    """创建 UI 设计稿专用模型实例，尽量压低推理模型的 thinking 预算。
 
-    GLM-5.2 默认开启深度思考，thinking 与正文共享 max_tokens，复杂页常在写完
-    代码前耗尽预算被截断（缺 export default）。
+    模型来源：`Settings.for_ui_design_model()`——配置了 UI_DESIGN_MODEL_*（如
+    DeepSeek-V4 Pro，其官方 API 真正支持 thinking 开关）时用独立配置，否则
+    回落全局模型。独立配置是缩短生成时间的主杠杆：GLM-5.2 等推理模型在长代码
+    任务上 thinking 压不掉（实测 curl 对照网关：只传 Anthropic 原生
+    `thinking.type=disabled` 或只传 Zhipu `reasoning_effort=none` 都能压掉短
+    任务的 thinking；但**两者同时传反而触发更多 thinking**，且长代码任务上两者
+    都压不掉），thinking 默写一遍代码再正文输出一遍，耗时翻倍。DeepSeek 官方
+    对 `thinking` 参数的支持是一等公民，disabled 后不再产生该开销。
 
-    实测（curl 对照网关）：只传 Anthropic 原生 `thinking.type=disabled` 或只传
-    Zhipu `reasoning_effort=none` 都能压掉短任务的 thinking；但**两者同时传反而
-    触发更多 thinking**（语义冲突），且长代码任务上两者都压不掉。因此只传
-    Anthropic 原生字段（协议标准、短任务确有效），长任务的截断兜底交给
-    `generate_page_react_code` 里的断点续写逻辑（`_is_likely_truncated` +
-    `_build_continuation_prompt`），不依赖网关对 thinking 参数的不稳定处理。
+    只传 Anthropic 原生 `thinking.type=disabled`（协议标准，DeepSeek/GLM 网关
+    均识别）；长任务截断兜底交给 `generate_page_react_code` 的断点续写逻辑
+    （`_is_likely_truncated` + `_build_continuation_prompt`）。
     """
 
+    resolved = settings.for_ui_design_model()
     return create_chat_model(
-        settings,
+        resolved,
         extra_model_kwargs={"thinking": {"type": "disabled"}},
-    ).bind(max_tokens=settings.ui_design_max_tokens)
+    ).bind(max_tokens=resolved.ui_design_max_tokens)
 
 
 def _ui_design_skill_document() -> str:
@@ -246,6 +256,29 @@ def _product_fact_boundary_rules() -> str:
         "- Any control used solely to switch prototype states must carry "
         "`data-preview-only=\"true\"`; it is review tooling, not product UI. Do not create any other "
         "preview-only business-looking control or content.\n"
+        "- Form entry fields nested inside `<Form.Item name=\"...\">` (Input, Select, "
+        "DatePicker, Checkbox, Radio, Switch, InputNumber, TimePicker, Upload) are "
+        "sub-fields of the form's submit action: do NOT put `data-action-id` or "
+        "`data-preview-only` on them. Only the form's submit/cancel Buttons carry "
+        "action bindings. A field Input directly in the page (not inside Form.Item) "
+        "that implements a declared action (e.g. a search box) must still carry "
+        "the action binding itself.\n"
+        "- Binding placement with render helper functions: the static analyzer reads "
+        "bindings LEXICALLY. A display component nested inside a bound container only "
+        "counts as nested when it appears LITERALLY between the container's opening "
+        "and closing tags. If you split success/loading/empty/error rendering into "
+        "helper functions like `renderStats()` / `renderList()` and call them via "
+        "`{renderStats()}` inside a ProCard, putting `data-information-item-id` only "
+        "on the ProCard is NOT enough — the analyzer cannot see through the function "
+        "call. In that style, put `data-information-item-id` and "
+        "`data-control-id` directly on the business display component returned by the "
+        "helper (the ProTable/Statistic/ProDescriptions itself). Either pattern works: "
+        "(a) literal nesting with binding on the outer container, or (b) helper "
+        "functions with the binding on the returned display component. Never split "
+        "the two (container bound + component hidden in a helper).\n"
+        "- Every retry/recover Button in error or empty states is review tooling: it "
+        "MUST carry `data-preview-only=\"true\"`. This is a recurring omission — check "
+        "every `Result`/`Empty` `extra` Button before returning.\n"
         "- Cross-page action handlers may stay local/no-op in the isolated preview, but their "
         "visible intent and data-action-id must still match ProductPlan exactly.\n"
         "--- END PRODUCT FACT BOUNDARY ---\n"
@@ -321,13 +354,33 @@ def _invoke_ui_design_model(
     *,
     page_id: str,
     max_retries: int,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> Any:
-    """对无副作用的 UI 模型调用做外层瞬时异常重试。"""
+    """对无副作用的 UI 模型调用做外层瞬时异常重试。
+
+    用流式 stream 代替同步 invoke：迭代 chunk 时检查 should_cancel，用户点停止后
+    立即 break 关闭 HTTP 流，不再等 LLM 自然跑完（glm-5.2/gpt-6 的 thinking 可达
+    十几分钟）。break 后底层 httpx 流被 GC 关闭，网关侧的半截流式计费是用户主动
+    停止的合理代价，优于占用并发度十几分钟。
+    """
 
     attempts = max(1, max_retries + 1)
     for attempt in range(1, attempts + 1):
         try:
-            return model.invoke(prompt)
+            # 流式聚合：边收 chunk 边检查取消，取消时抛 UiDesignGenerationCancelled
+            # 中断迭代（break 后迭代器析构关闭底层 SSE 流）。
+            collected: Any = None
+            for chunk in model.stream(prompt):
+                if should_cancel and should_cancel():
+                    raise UiDesignStreamCancelled(
+                        "用户取消了本次生成，LLM 流已中断。"
+                    )
+                collected = chunk if collected is None else collected + chunk
+            if collected is None:
+                raise RuntimeError("UI 设计模型调用未返回结果。")
+            return collected
+        except UiDesignStreamCancelled:
+            raise
         except Exception as exc:
             if attempt >= attempts:
                 raise
@@ -871,6 +924,8 @@ def generate_adjusted_page_react_code(
     project_dir: str,
     prev_code: str,
     instruction: str,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> str:
     """基于现有设计稿 + 用户调整指令调 LLM 重新生成，并校验+自动修复。
 
@@ -890,6 +945,7 @@ def generate_adjusted_page_react_code(
         prompt,
         page_id=page_id,
         max_retries=max_retries,
+            should_cancel=should_cancel,
     )
     content = _coerce_content_text(getattr(result, "content", ""))
     code = _extract_tsx_code(content)
@@ -915,6 +971,7 @@ def generate_adjusted_page_react_code(
             repair_prompt,
             page_id=page_id,
             max_retries=max_retries,
+                should_cancel=should_cancel,
         )
         content = _coerce_content_text(getattr(result, "content", ""))
         code = _extract_tsx_code(content)
@@ -947,7 +1004,7 @@ def resolve_adjust_target_pages(
         return []
     settings = Settings.from_env()
     model = create_chat_model(
-        settings,
+        settings.for_ui_design_model(),
         extra_model_kwargs={"thinking": {"type": "disabled"}},
     )
     page_briefs = "\n".join(
@@ -999,7 +1056,9 @@ def resolve_adjust_target_pages(
 
 
 def generate_page_react_code(
-    page: dict[str, Any], page_key: str, project_dir: str = ""
+    page: dict[str, Any], page_key: str, project_dir: str = "",
+    *,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> str:
     """调用 LLM 为单个页面生成 React 设计稿 .tsx 代码，并校验+自动修复。
 
@@ -1024,6 +1083,7 @@ def generate_page_react_code(
         prompt,
         page_id=page_id,
         max_retries=max_retries,
+            should_cancel=should_cancel,
     )
     raw_content = getattr(result, "content", "")
     content = _coerce_content_text(raw_content)
@@ -1082,6 +1142,7 @@ def generate_page_react_code(
                 continuation_prompt,
                 page_id=page_id,
                 max_retries=max_retries,
+                    should_cancel=should_cancel,
             )
             raw_content = getattr(result, "content", "")
             content = _coerce_content_text(raw_content)
@@ -1115,6 +1176,7 @@ def generate_page_react_code(
             repair_prompt,
             page_id=page_id,
             max_retries=max_retries,
+                should_cancel=should_cancel,
         )
         raw_content = getattr(result, "content", "")
         content = _coerce_content_text(raw_content)
@@ -1425,8 +1487,10 @@ def validate_tsx(project_dir: str, code: str) -> tuple[bool, str]:
         # 显式指定 UTF-8：Windows 上 text=True 默认用 locale 编码（中文系统为 GBK），
         # 当生成代码含 GBK 无法编码的字符时，写 stdin 会抛 UnicodeEncodeError；
         # errors="replace" 同时避免子进程输出含异常字节时再次中断校验。
-        proc = subprocess.run(
+        workspace = Path(project_dir).expanduser().resolve(strict=False).parents[1]
+        proc = workspace_process_registry.run(
             ["node", "-e", script, main_path],
+            workspace=workspace,
             input=code,
             capture_output=True,
             text=True,

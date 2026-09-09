@@ -232,6 +232,156 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         self.assertEqual(len(pages), 1)
         self.assertEqual(pages[0]["status"], "generation_failed")
 
+    def test_cancel_page_while_generating_discards_result(self) -> None:
+        """生成中取消：LLM 返回后结果不落盘，状态保持 cancelled，页面退出活跃集。
+
+        取消语义：HTTP 请求不打断（避免网关半截流式计费），但结果丢弃、状态立即
+        置 cancelled、前端可立即重试。worker 走到取消分支后不得用 confirmed
+        覆写 cancelled 终态。
+        """
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task = _task(self.workspace, self.project_dir)
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_generate(page, page_key, project_dir):
+            started.set()
+            release.wait(timeout=10)
+            return FAKE_CODE
+
+        with patch(
+            "app.services.ui_design_generation_pool.generate_page_react_code",
+            side_effect=slow_generate,
+        ):
+            async def scenario():
+                await pool.submit([task])
+                # worker 已领取并写入 generating。
+                self.assertTrue(await asyncio.to_thread(started.wait, 5))
+                cancelled = await pool.cancel_page(self.workspace, "orders")
+                self.assertTrue(cancelled)
+                # 取消即写回 cancelled 终态、退出活跃集，无需等 LLM 返回。
+                self.assertEqual(self._manifest_pages()[0]["status"], "cancelled")
+                self.assertFalse(pool.is_active(self.workspace, "orders"))
+                release.set()
+                await pool._queue.join()
+
+            asyncio.run(scenario())
+
+        # LLM 返回后：代码不落盘、状态不被 confirmed 覆写。
+        self.assertFalse((Path(self.project_dir) / "pages" / "orders" / "index.tsx").exists())
+        pages = self._manifest_pages()
+        self.assertEqual(pages[0]["status"], "cancelled")
+        self.assertIn("取消", pages[0]["error"])
+
+    def test_cancel_page_while_queued_skips_worker_pickup(self) -> None:
+        """排队中取消：worker 领取时惰性跳过，状态保持 cancelled，不触发生成。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task_a = _task(self.workspace, self.project_dir, page_id="orders")
+        task_b = _task(self.workspace, self.project_dir, page_id="dashboard")
+        started = threading.Event()
+        release = threading.Event()
+        generated: list[str] = []
+
+        def slow_generate(page, page_key, project_dir):
+            generated.append(page_key)
+            started.set()
+            release.wait(timeout=10)
+            return FAKE_CODE
+
+        with patch(
+            "app.services.ui_design_generation_pool.generate_page_react_code",
+            side_effect=slow_generate,
+        ):
+            async def scenario():
+                await pool.submit([task_a])
+                # A 被 worker 阻塞，B 入队为 queued。
+                self.assertTrue(await asyncio.to_thread(started.wait, 5))
+                await pool.submit([task_b])
+                # 取消还在队列里的 B：立即写回 cancelled。
+                cancelled_b = await pool.cancel_page(self.workspace, "dashboard")
+                self.assertTrue(cancelled_b)
+                by_id = {page["pageId"]: page["status"] for page in self._manifest_pages()}
+                self.assertEqual(by_id["dashboard"], "cancelled")
+                release.set()
+                await pool._queue.join()
+
+            asyncio.run(scenario())
+
+        # B 被惰性跳过，从未触发生成；终态保持 cancelled，A 正常 confirmed。
+        self.assertNotIn("Dashboard", generated)
+        by_id = {page["pageId"]: page["status"] for page in self._manifest_pages()}
+        self.assertEqual(by_id["dashboard"], "cancelled")
+        self.assertEqual(by_id["orders"], "confirmed")
+
+    def test_cancel_page_without_active_task_is_noop(self) -> None:
+        """无在途任务时取消返回 False，不写状态（幂等）。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+
+        async def scenario():
+            return await pool.cancel_page(self.workspace, "orders")
+
+        self.assertFalse(asyncio.run(scenario()))
+        self.assertEqual(self._manifest_pages(), [])
+
+    def test_resubmit_after_cancel_clears_cancelled_flag(self) -> None:
+        """取消后重新生成同页：新任务不被旧取消标记误杀，正常走到 confirmed。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task = _task(self.workspace, self.project_dir)
+
+        with patch(
+            "app.services.ui_design_generation_pool.generate_page_react_code",
+            return_value=FAKE_CODE,
+        ):
+            async def scenario():
+                await pool.submit([task])
+                await pool.cancel_page(self.workspace, "orders")
+                await pool._queue.join()
+                # 取消后立即重新提交同页。
+                accepted = await pool.submit([_task(self.workspace, self.project_dir)])
+                self.assertEqual(accepted, ["orders"])
+                await pool._queue.join()
+
+            asyncio.run(scenario())
+
+        self.assertEqual(self._manifest_pages()[0]["status"], "confirmed")
+
+    def test_cancel_workspace_prevents_late_page_code_write(self) -> None:
+        """删除栅栏在模型返回后阻止设计代码和最终 manifest 再写入工作区。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task = _task(self.workspace, self.project_dir)
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_generate(page, page_key, project_dir):
+            started.set()
+            release.wait(timeout=10)
+            return FAKE_CODE
+
+        with patch(
+            "app.services.ui_design_generation_pool.generate_page_react_code",
+            side_effect=slow_generate,
+        ):
+            async def scenario():
+                await pool.submit([task])
+                self.assertTrue(await asyncio.to_thread(started.wait, 5))
+                cancellation = asyncio.create_task(pool.cancel_workspace(self.workspace))
+                await asyncio.sleep(0)
+                release.set()
+                result = await cancellation
+                await pool._queue.join()
+                return result
+
+            result = asyncio.run(scenario())
+
+        self.assertEqual(result["remainingPageIds"], [])
+        self.assertFalse((Path(self.project_dir) / "pages" / "orders" / "index.tsx").exists())
+        self.assertEqual(self._manifest_pages()[0]["status"], UI_DESIGN_STATUS_GENERATING)
+
 
 if __name__ == "__main__":
     unittest.main()

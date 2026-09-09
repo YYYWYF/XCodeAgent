@@ -8,3 +8,7 @@
 .zcode/
 .mcp.json
 **/.build-tmp/
+.venv/
+__pycache__/
+*.pyc
+*.bak

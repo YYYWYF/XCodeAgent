@@ -1,10 +1,12 @@
 import { Button, Card, Input, Typography } from 'antd';
+import type { ReactElement } from 'react';
 import { cx } from '../../utils';
 import './GlobalConfigPanel.less';
 
 const { Paragraph, Text, Title } = Typography;
 
-export default function GlobalConfigPanel() {
+/** 展示应用的默认品牌信息与全局配置入口。 */
+export default function GlobalConfigPanel(): ReactElement {
   return (
     <main className={cx('workbench-pane', 'global-config-panel')}>
       <header className={cx('global-config-header')}>
@@ -21,7 +23,7 @@ export default function GlobalConfigPanel() {
       <div className={cx('global-config-content')}>
         <Card className={cx('config-card', 'app-profile-card')} bordered={false}>
           <div className={cx('config-section-heading')}>
-            <div className={cx('config-section-icon', 'app-icon')}>XA</div>
+            <div className={cx('config-section-icon', 'app-icon')}>AI</div>
             <div>
               <Title level={4}>应用信息</Title>
               <Paragraph>这些信息会展示在应用入口和管理后台。</Paragraph>
@@ -30,11 +32,11 @@ export default function GlobalConfigPanel() {
           <div className={cx('config-field-row')}>
             <label>
               <Text>应用名称</Text>
-              <Input defaultValue="XCode Agent" />
+              <Input defaultValue="AIStudio" />
             </label>
             <label>
               <Text>应用标识</Text>
-              <Input defaultValue="xcode-agent" />
+              <Input defaultValue="aistudio" />
             </label>
           </div>
         </Card>

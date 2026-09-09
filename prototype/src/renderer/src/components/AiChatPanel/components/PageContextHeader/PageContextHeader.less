@@ -41,3 +41,24 @@
   color: var(--wb-text-tertiary);
   font-size: 10px;
 }
+
+// 标题重命名入口：外观与纯文本标题一致，悬停浮现编辑图标提示可点击。
+// 重命名编辑图标常显：点击图标进入行内编辑；标题本身保持纯文本不参与交互。
+.@{class-prefix}-conversation-title-edit {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  color: var(--wb-text-tertiary);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 160ms ease;
+
+  &:hover {
+    color: var(--wb-accent);
+  }
+}

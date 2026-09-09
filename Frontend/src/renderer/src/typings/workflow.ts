@@ -58,6 +58,7 @@ export type WorkflowSummary = {
   unitTestBuildCodeChanges?: WorkspaceCodeChangeSet
   unitTestBuildDiffCaptured?: boolean
   unitTestRepairTaskPlan?: Record<string, unknown>
+  unitTestRepairAttempts?: Record<string, number>
   unitTestRepairIteration?: number
   unitTestMaxRepairIterations?: number
   repairReturnNode?: 'unit_test' | 'integration_test' | string
@@ -66,7 +67,23 @@ export type WorkflowSummary = {
   revisionContinuation?: WorkflowRevisionContinuation
   developmentContinuation?: WorkflowDevelopmentContinuation
   revisionDraft?: WorkflowRevisionDraft
+  productConversationResult?: WorkflowProductConversationResult
   [key: string]: unknown
+}
+
+export type WorkflowProductConversationResult = {
+  kind:
+    | 'chat'
+    | 'read_only'
+    | 'requirement_change'
+    | 'ui_change'
+    | 'clarification'
+    | 'out_of_scope'
+  mutating: boolean
+  response: string
+  presentation: {
+    artifactPresentation: 'preserve' | 'replace_on_revision'
+  }
 }
 
 export type WorkflowFormalRevisionBranch =
@@ -801,7 +818,7 @@ export type WorkflowBuildTaskPlanConfirmation = {
 
 export type ApplicationPlanningInteraction = {
   gateId: string
-  artifact: 'requirement_spec' | 'product_plan' | 'ui_designs' | 'technical_plan'
+  artifact: 'requirement_spec' | 'requirement_document' | 'ui_designs' | 'technical_plan'
   artifactRevision: string
   action: ApplicationPlanningAction
   request?: string
@@ -968,6 +985,7 @@ export type WorkflowSmallTaskResult = {
   changedFiles?: string[]
   verification?: string[]
   failureReason?: string | null
+  failureCode?: 'invalid_agent_output' | null
   escalation?: Record<string, unknown>
   [key: string]: unknown
 }
@@ -1095,6 +1113,8 @@ export type LifecycleError = {
 }
 
 export type WorkbenchExecution = {
+  developmentPurpose?: 'initial' | 'revision' | null
+  developmentTarget?: DevelopmentArtifactTarget | null
   scope: 'application' | 'page' | 'data_source' | 'endpoint'
   targetId: string
   pageId?: string
@@ -1118,7 +1138,38 @@ export type ExecutionResourceLock = {
   acquiredAt: string
 }
 
+export type DevelopmentArtifactTarget =
+  | { type: 'entity'; entityId: string }
+  | { type: 'page'; pageId: string }
+  | { type: 'endpoint'; apiContractId: string; endpointId: string }
+
+export type DevelopmentArtifactProgress = {
+  initialDevelopmentStatus: 'pending' | 'in_progress' | 'completed'
+  completedAt?: string | null
+  completedRunId?: string | null
+  completedThreadId?: string | null
+}
+
+export type DevelopmentArtifacts = {
+  entities: Record<string, DevelopmentArtifactProgress>
+  pages: Record<string, DevelopmentArtifactProgress>
+  endpoints: Record<string, Record<string, DevelopmentArtifactProgress>>
+  catalogError?: string | null
+}
+
+export type TestEntryGate = {
+  allowed: boolean
+  total: number
+  completed: number
+  pending: number
+  inProgress: number
+  blockers: DevelopmentArtifactTarget[]
+  reason?: string | null
+}
+
 export type ApplicationLifecycle = {
+  developmentArtifacts?: DevelopmentArtifacts
+  testEntryGate?: TestEntryGate
   application: { id: string; name: string }
   updatedAt: string
   revision: number
@@ -1178,6 +1229,7 @@ export type WorkflowAction =
   | 'retry_failed_tasks'
   | 'retry_code_review'
   | 'start_design_revision'
+  | 'product_stage_conversation'
   | 'start_technical_revision'
   | 'start_revision'
   | 'submit_revision_interaction'
@@ -1234,7 +1286,7 @@ export type WorkflowBuildExecutionTask = {
   owner?: string
   title?: string
   description?: string
-  status?: 'pending' | 'running' | 'completed' | 'failed' | string
+  status?: 'pending' | 'running' | 'completed' | 'already_satisfied' | 'failed' | string
   dependencies?: string[]
   dependsOn?: string[]
   targetFiles?: string[]

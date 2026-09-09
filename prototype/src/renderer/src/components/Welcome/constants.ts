@@ -53,7 +53,8 @@ export const initialApplicationDraft: ApplicationDraft = {
     username: '',
     password: ''
   },
-  // 演示案例预填（appName/场景/项目路径/主题色等）集中在 mock-data/application-form.ts
+  // 演示案例预填（应用名/场景/主题色等）集中在 mock-data/application-form.ts；
+  // 项目路径不参与预填，由新建弹窗打开时经目录选择器预填一个全新的可用目录。
   ...applicationFormPrefill
 }
 

@@ -124,7 +124,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
     }
   }
 
-  /** 选择并添加受 XCodeAgent 管理的本地项目；已有索引时直接使用原记录。 */
+  /** 选择并添加受 AIStudio 管理的本地项目；已有索引时直接使用原记录。 */
   const addLocalWorkspace = async (): Promise<void> => {
     const workspaceApi = window.xcodeAgent?.workspace
     if (!workspaceApi?.selectDirectory) {
@@ -134,7 +134,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
 
     setAddingWorkspace(true)
     try {
-      const selected = await workspaceApi.selectDirectory({ title: '选择要添加的 XCodeAgent 项目' })
+      const selected = await workspaceApi.selectDirectory({ title: '选择要添加的 AIStudio 项目' })
       if (selected.canceled || !selected.path) return
 
       const applications = await loadStoredApplications()

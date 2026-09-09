@@ -77,7 +77,7 @@ export const BACKGROUND_TASK_NEXT_STEP_LABEL: Record<
   BackgroundTaskNextStep['type'],
   string
 > = {
-  artifact_acceptance: '验收'
+  artifact_acceptance: '继续处理'
 }
 
 /** 任务类型的轻量标签文案，抽屉逐条展示。 */

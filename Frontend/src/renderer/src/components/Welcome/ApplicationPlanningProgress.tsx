@@ -6,7 +6,7 @@ const { Text } = Typography
 
 const STAGE_LABELS: Record<string, string> = {
   requirements: '需求确认',
-  product_planning: '产品规划',
+  product_planning: '需求整理',
   ui_confirmation: 'UI确认',
   technical_planning: '技术规划',
   application_template: '应用模板'

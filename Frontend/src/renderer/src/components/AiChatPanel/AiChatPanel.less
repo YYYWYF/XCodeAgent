@@ -11,7 +11,7 @@
   background: var(--wb-canvas);
 }
 
-// 验收待验收时右侧预览占满工作区；对话和拖拽条由“不通过”按钮恢复。
+// 验收待验收时为右侧预览预留决策底栏，同时保留验收 Agent 对话区。
 .@{class-prefix}-acceptance-awaiting {
   --acceptance-decision-dock-height: 84px;
 
@@ -334,37 +334,6 @@
   font-size: 15px;
   font-weight: 500;
   border-radius: 8px;
-}
-
-// 验收聚焦只隐藏中间对话区，左侧图标栏始终保留，预览占据其余可用宽度。
-.@{class-prefix}-ai-chat-panel.@{class-prefix}-acceptance-preview-focus {
-  flex-direction: row;
-
-  .@{class-prefix}-ai-chat-assistant {
-    display: flex;
-    width: auto;
-    min-width: 0;
-    min-height: 0;
-    flex: 0 0 auto;
-  }
-
-  .@{class-prefix}-session-sidebar {
-    display: flex;
-  }
-
-  .@{class-prefix}-ai-chat-main,
-  .@{class-prefix}-panel-split-handle {
-    display: none;
-  }
-
-  .@{class-prefix}-embedded-preview-pane {
-    width: auto;
-    min-width: 0;
-    min-height: 0;
-    flex: 1 1 auto;
-    border-top: 0;
-    border-left: 0;
-  }
 }
 
 @media (max-width: 720px) {

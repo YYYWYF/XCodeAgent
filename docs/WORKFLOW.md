@@ -6,6 +6,8 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 
 ## 核心架构原则
 
+测试入口另有应用级初次开发门禁：`.xcodeagent/application-lifecycle.json.developmentArtifacts` 保存每个页面和 Endpoint 的初次开发状态。只有每个目标分别完成 Build 及开发阶段单元测试门禁后，投影 `testEntryGate.allowed=true`，顶部才允许浏览测试阶段；实体继续作为开发前置条件，不计入此门禁。`test_phase_confirmation` 先记录当前目标完成再计算全量门禁，二次修改不覆盖首次完成事实。实际确认、跨 thread 测试接替和集成测试节点均在服务端复检，阻断以 `development_artifacts_incomplete` 及完整 AG-UI 生命周期返回。详细状态及目录同步规则见 `docs/APPLICATION_DEVELOPMENT_PLANNING.md` 的 Initial Development Completion and Test Entry。
+
 1. 外层 LangGraph 管理确定性的项目生命周期。
 2. Deep Agents 负责需要自主推理、工具调用、文件操作和多步执行的任务。
 3. Agent 不得自行决定或绕过项目阶段、用户确认、任务依赖和质量门禁。
@@ -67,13 +69,25 @@ START
 
 顶部阶段条固定为“设计阶段 → 开发阶段 → 测试阶段 → 审查阶段 → 验收阶段”。设计阶段负责需求、产品、UI 和技术规划；开发阶段负责开发就绪检查、工作区检查、DAG 准备和 Build；测试阶段负责 `integration_test`、测试失败触发的 `small_task_repair`、有界复测以及 `review_phase_confirmation`；审查阶段负责 `code_review` 子图和 `acceptance_phase_confirmation`；验收阶段负责 `acceptance` 子图（包含 `launch_project`、`acceptance_review`）和 `finalize_project`。测试阶段不开放产物编辑，验收编辑权限只在验收阶段开放。
 
-`build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，失败最多经过 3 轮独立 `unit_test_repair`，耗尽后失败且不展示测试阶段确认卡。
+`build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，前端生成、后端生成、前端单测、后端单测按检查 ID 各有 10 次独立修复额度；初次执行不计次数，第十次修复后的复测仍失败才耗尽，耗尽后失败且不展示测试阶段确认卡。
+
+SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `status/summary` 的结果统一标记为 `failureCode=invalid_agent_output`。单测局部修复遇到这类协议失败且当前检查尚有修复额度时，保留真实 Diff 和失败记录，返回 `unit_test` 复测，再由 RepairPlanner 根据当前失败生成新计划；派发仍计入各检查的十次额度，不自动清零。额度耗尽时同时显示协议错误和耗尽原因。真实业务失败、声明完成但无实际改动、越权变更及人工确认边界不按此策略自动重试；集成测试的独立修复策略保持不变。
 
 单元测试通过或跳过后才进入 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 或单测失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
 
 `build_summary`、`tasks` 与 `build_results` 是服务端 checkpoint 中的执行事实。AG-UI 只在存在非空 Build 摘要时投影 `buildSummary`；单元测试确认和 `unit_test/unit_test_repair/test_phase_confirmation` 节点调试恢复不得用前端快照覆盖这些字段，落盘 `build-task-plan.json` 也只能在 Build 入口初始化任务，不能把下游节点的已执行任务重置为 `pending`。对已经被旧快照污染的 checkpoint，`test_phase_confirmation` 优先从仍为终态的任务恢复摘要；任务被重置时，仅当同一 `build_run_id + build_run_plan_sha256` 存在、执行切片精确覆盖当前任务并显示全部完成、且每个任务的最新结果都是 `completed` 或 `already_satisfied` 时，才允许恢复为 `completed`。因此单测通过后必须稳定进入上述确认卡，不能因公开投影缺字段或调试产物重载而路由到 `handle_failure`。
 
-测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，只执行依赖安装、前后端 Build、前端性能测试和集成质量门禁。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。质量门禁通过后必须先经过 `review_phase_confirmation`；确认后由 `code_review` 子图只读扫描两个指定源码目录。扫描或修复 Agent 的模型网络异常、失败结果或响应业务校验失败会投影 `codeReviewRetry={available:true,target:"scan"|"repair"}`；前端错误卡通过 `workflowAction=retry_code_review` 在原审查 thread 和目标范围内恢复对应模型子步骤，修复重试直接复用问题快照并沿用失败前轮次，不重复扫描或消耗额外修复预算。审查构建失败、修复预算耗尽和普通停止不投影该重试能力。发现问题时暂停等待结构化 `repair_all`，修复和独立构建检查最多循环三轮；无问题或构建通过后进入 `acceptance_phase_confirmation`，只有用户提交结构化 `confirm` 才切换到独立验收会话并执行验收子图。验收子图先运行 `launch_project`，成功后由 `acceptance_review` 投影 `page_acceptance`、预览地址和启动结果；已有成功启动快照恢复时跳过启动节点，启动失败不进入待验收。
+测试阶段不再调用 TestGenerationAgent 或执行前后端单元测试，按“前端依赖安装 → 前端构建 → 后端构建 → 后端启动检查 → 前端性能测试 → 集成质量门禁”执行。任一阻塞集成测试子步骤失败时，`integration_test` 生成 SmallTask 修复任务并路由到 `small_task_repair`；修复成功后回到 `integration_test`，使用独立于单测的修复预算，达到既有重试上限后明确失败，不回到 `build`。质量门禁通过后必须先经过 `review_phase_confirmation`；确认后由 `code_review` 子图只读扫描两个指定源码目录。扫描或修复 Agent 的模型网络异常、失败结果或响应业务校验失败会投影 `codeReviewRetry={available:true,target:"scan"|"repair"}`；前端错误卡通过 `workflowAction=retry_code_review` 在原审查 thread 和目标范围内恢复对应模型子步骤，修复重试直接复用问题快照并沿用失败前轮次，不重复扫描或消耗额外修复预算。审查构建失败、修复预算耗尽和普通停止不投影该重试能力。发现问题时暂停等待结构化 `repair_all`，修复和独立构建检查最多循环三轮；无问题或构建通过后进入 `acceptance_phase_confirmation`，只有用户提交结构化 `confirm` 才切换到独立验收会话并执行验收子图。验收子图先运行 `launch_project`，成功后由 `acceptance_review` 投影 `page_acceptance`、预览地址和启动结果；已有成功启动快照恢复时跳过启动节点，启动失败不进入待验收。
+
+后端启动检查由测试阶段显式启用 `include_backend_startup=True`，稳定 ID 为 `backend_startup`，适用时 `required=true`、`blocking=true` 且不可由用户跳过；开发单测和普通快速修改默认不启用。复用当前 Maven 工程及数据源识别：Static、纯前端和无 Maven 工程跳过；前置构建失败记录未执行，不再产生重复启动修复请求。`backend_startup_check.py` 复用 `backend_launch_support.py` 的应用数据库环境、JAR 识别和必要的 repackage，但不调用完整验收启动器。它从本轮产物启动独立 Java 进程，追加 `--server.address=127.0.0.1 --server.port=0`，在 60 秒内同时验证 `Started …` 初始化完成日志、实际 HTTP 端口可连接，并稳定存活 3 秒。横幅、提前退出、初始化异常或无法回收都不能通过。进程登记到工作区并绑定当前 run，停止仅终止本次检测，退出先等待 5 秒，必要时强制终止并确认回收；现有预览不被接管。
+
+每次启动尝试保留 `.xcodeagent/runtime/tests/backend_startup/<attemptId>/` 日志。检查的 `execution` 包含启动命令、相对工作目录、开始结束时间、退出码、超时、回收结果、脱敏输出尾部、根因及日志虚拟路径。质量门禁将失败证据交给 backend 修复任务，并提供实际目录的 `pom.xml`、启动类和应用配置提示；SmallTask 额外接收独立 `backendStartupFailure`，避免整体报告裁剪后丢失 `Caused by`、类缺失或日志路径。修复必须解决初始化原因，不得禁用检查、伪造成功或跳过初始化。失败时前端性能步骤沿用阻塞规则跳过，使用现有默认 3 轮测试修复预算；每轮修复后重新构建并重新启动。仅等待性能确认且后端源码、构建配置及应用数据源配置的 `source_fingerprint` 未变化时，才复用本轮检查。
+
+该检查复用 `integration_test.checks` 增量和恢复快照、现有清单样式与测试报告 Markdown；不增加卡片、用户交互或产品接口。`/health` 的工作流元数据通过 `backendStartupCheck` 声明检查顺序、必需性、超时、稳定窗口和修复归属。
+
+单测修复预算由 `services/unit_test_repair_budget.py` 管理。`unit_test_repair_attempts` 保存检查 ID 到次数的映射；派发实际 SmallTask 前计费，Agent 失败也保存次数，前置范围确认不计费。同一修复计划内多个任务及范围确认续接通过 `unit_test_repair_charged_checks` 去重；新一轮质量门复核后才重新计费。当前仍失败的检查独立判断上限，已经通过的检查即使用完十次也不占其他检查额度。集成测试和审查预算保持各自规则。AG-UI 的 `unitTestRepairAttempts` 是只读服务端投影，前端恢复快照不能改写它；`unitTestMaxRepairIterations=10` 表示每个检查上限，`unitTestRepairIteration` 仅记录完成的修复轮次，不作为共享门禁。
+
+进入测试的确认是一次性动作：请求适配器只接受本次 `clarificationAnswers.test_phase_confirmation`，无提交时显式写入空对象以覆盖 checkpoint 的旧确认。`unit_test` 每次返回都清空旧阶段确认，确认节点放行后也清空该动作。由单测或确认节点调试重新进入时，必须重新展示确认卡并等待本次用户确认；重新执行单测不能自动进入当前开发会话内的测试阶段。
 
 ### 测试阶段 AG-UI 与生命周期契约
 
@@ -95,7 +109,7 @@ START
 - 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照和 `applicationPlanningInteraction`；确认卡携带服务端生成的 `gateId`、`artifactRevision` 与显式动作，沿同一 thread/checkpoint 原生恢复 Graph。前端按实际按钮或表单意图提交 `answer/confirm/revise/ui_action/enter_planning/design_change`，后端节点不再从中文文案猜动作；同一 thread 的版本校验与恢复全程串行，重复提交至多一个进入下游节点。
 - RequirementSpec、ProductPlan 和 TechnicalPlan 使用 Markdown 确认入口；React UI 稿及 `ui-designs.json` 使用 UI 确认界面。`ui_design_action.action = skip` 只写入 skipped Manifest 并进入 `awaiting_planning_stage_entry`，不得直接生成 TechnicalPlan。澄清回答不能替代产物确认。
 - TechnicalPlan 确认后校验四类正式产物；UI Manifest 的 `confirmation_status` 可以是 `confirmed` 或用户明确提交跳过后的 `skipped`，再推进 lifecycle 到 `generating_application_template_files`。模板完成动作使用同一规则复核四类 JSON 后才写入 `ready_for_workbench`。
-- 创建界面按“设计阶段 → 规划阶段 → 开发阶段”推进；设计阶段包含需求、产品和 UI，规划阶段包含 TechnicalPlan。RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为；UI 使用 `ui-manifest.v3`，跳过时保存空 `pages` 与 `confirmation_status: skipped`；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
+- 创建界面按“设计阶段 → 计划阶段 → 开发阶段”推进；设计阶段包含需求、产品和 UI，计划阶段包含 TechnicalPlan。RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为；UI 使用 `ui-manifest.v3`，跳过时保存空 `pages` 与 `confirmation_status: skipped`；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
 - 主 Workflow 运行时从 RequirementSpec、ProductPlan、UiManifest 和 TechnicalPlan 按需编译 PageImplementationContract；编译结果不写回 TechnicalPlan。
 - 创建规划不执行构建后的集成测试质量门，也不生成 `quality_gate_passed`；AG-UI 摘要只在主 Workflow 明确产生布尔质量门结果时展示“通过/未通过”，不得把缺失值误报为未通过。
 
@@ -121,9 +135,9 @@ START
 
 进入工作台后的主 Workflow 不再改写应用初始化阶段；运行、等待确认、失败、停止和验收只更新对应 execution。后端从正式 ProjectPlan 为页面执行解析页面、导航关联页、API 契约和数据源资源集合并写入 `resourceLocks`，但当前不以集合交集、同页面、同工作区或应用级范围拒绝新运行；进程内 lease 同样只跟踪活动 run 的释放，不再执行互斥。重叠资源键显示最近一次写入的 owner，完成或明确结束只清理该 run 当前拥有的登记。中央消息、现有进度卡、侧栏与预览布局不改变。停止、结束、结构化确认、重试、计划调整和最终验收均复用 `/workflow/run` 的 AG-UI 完整事件生命周期。停止操作先用本地 Workflow 快照即时显示 `stopping/stopped`，并让该瞬时状态优先于可能 revision 更高但尚未刷新的文件快照；后端 AG-UI 回包随后校准权威 execution，乐观更新不得改写顶层 `initialization`。
 
-新应用在创建目录后立即通过 `applicationLifecycle.action = create` 建立 lifecycle；后续启动只使用 `get` 读取已有文件。实现不读取旧 active-planning localStorage、旧完成线程列表、`planningThreadId/planningConfirmedAt` 或 checkpoint 来推导业务阶段，缺失、损坏和未来版本都会显式失败。
+新应用在创建目录后立即通过 `applicationLifecycle.action = create` 建立 lifecycle；后续启动只使用 `get` 读取已有文件。业务阶段只以 lifecycle 为准，不读取旧 active-planning localStorage、旧完成线程列表、应用索引字段或 checkpoint 反向推导；前端 `planningThreadId` 只用于定位原规划 checkpoint。缺失、损坏和未来版本都会显式失败。
 
-首页最多同时挂载三个未完成的新应用初始化计划；每个计划按 application id 和独立 `threadId` 隔离 Workflow 快照、AG-UI 会话、停止句柄、删除状态与模板生成任务。一次只显示用户选中的全屏规划页，其余会话保持挂载并在后台继续运行。后台计划完成时只更新自己的应用索引和 lifecycle，不得抢占当前规划页或切换当前工作台；只有三个名额都被未完成计划占用时，“新建应用”才禁用。
+首页只展示一个由应用索引驱动的统一项目列表，不按设计、计划或开发阶段分区，也不限制未完成应用数量。点击任意应用都进入工作台，再由 lifecycle 恢复其当前阶段；每个未完成计划仍按 application id 和独立 `threadId` 隔离 Workflow 快照、AG-UI 会话、停止句柄与模板生成任务。后台计划完成时只更新自己的应用索引和 lifecycle，不得抢占其他应用的工作台。
 
 参考架构映射保持克制：learn-coding-agent 当前公开提交只能核验 README 中的 JSONL 会话恢复、HITL、关键消息同步写和上下文压缩，不能声称存在未发布的 `src/*` 原子状态实现；OpenCode 采用稳定 session/message/question/permission ID 与事件投影，并把读取待处理问题和提交回答分成不同动作；Deep Agents/LangGraph 要求同一 thread/checkpointer 保存暂停状态，并只用显式 decision 恢复。XCodeAgent 因而把冷启动 checkpoint 读取与用户确认提交分离，同时继续由业务 lifecycle 协调首页和跨会话阶段。状态文件不复制文档、DAG、日志或会话历史，读取时按引用渐进加载，继续满足 128k 上下文预算。
 
@@ -352,7 +366,7 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 - `.xcodeagent/plans/build-task-plan.json`：内部结构化状态，供 BuildScheduler、调试续跑和后续节点读取；v3 task registry 使用 snake_case 单一字段，不再写入或读取 `task_id/dependsOn/targetFiles/acceptanceCriteria/canRunInParallel` 等旧 DAG 同义字段，`agent_note` 只保留短摘要和响应 hash；
 - 规划 JSON 初次保存为 `confirmation_status=pending`；通过 AG-UI 的 `build_task_plan_confirmation` 动作确认后才允许进入 Build。DAG 确认只编辑任务 `title` 和 `description`，不再生成或读取 `BUILD_TASK_DAG.md`。
 
-任务准备期间通过 LangGraph custom stream 发送 `prepare_build_tasks.progress` 完整快照，AG-UI 运行层将其投射到同一个 `workflow:prepare_build_tasks` 的 `agent-process.dagGeneration` 字段。快照固定按 Unit 骨架、目标上下文、契约校验、模型规划、任务编译、DAG 校验和产物保存七阶段排列；每个阶段可携带冻结的结构化 `output`，前端将候选任务归入模型规划阶段、最终任务表归入任务编译阶段、JSON 产物及确认状态归入产物保存阶段。最终任务按有效拓扑序展示，无效图则保留完整 task registry。公开快照只包含安全摘要、变更路径、工程检查摘要和 JSON 产物标签，不发送模型原文、WorkspaceSnapshot 正文或内部 JSON 路径。
+任务准备期间通过 LangGraph custom stream 发送 `prepare_build_tasks.progress` 完整快照，AG-UI 运行层将其投射到同一个 `workflow:prepare_build_tasks` 的 `agent-process.dagGeneration` 字段。快照固定按 Unit 骨架、目标上下文、契约校验、模型规划、任务编译、DAG 校验和产物保存七阶段排列；每个阶段可携带冻结的结构化 `output`，前端将候选任务归入模型计划阶段、最终任务表归入任务编译阶段、JSON 产物及确认状态归入产物保存阶段。最终任务按有效拓扑序展示，无效图则保留完整 task registry。公开快照只包含安全摘要、变更路径、工程检查摘要和 JSON 产物标签，不发送模型原文、WorkspaceSnapshot 正文或内部 JSON 路径。
 
 `stages[].output` 是严格的 `kind` 判别联合：`unit_graph` 包含 Unit（id/type/status/taskCount）、Unit 依赖边和骨架校验；`build_context` 包含目标 type/id、关联 Unit/Endpoint/API Contract/数据源及数据库摘要状态；`contract_validation` 包含校验范围、通过状态和问题；`candidate_tasks` 包含候选任务、负责人、依赖和 owner 汇总；`compiled_tasks` 包含最终拓扑任务、变更文件、工程检查摘要、任务依赖边和 owner 汇总；`dag_validation` 包含根/叶任务、拓扑顺序、执行批次（串/并行）和校验错误；`artifacts` 仅包含 `build-task-plan.json` 的 JSON 安全标签和确认状态。列表字段最多 200 条、文本最多 1000 字符，依赖边最多 500 条并带 `truncated` 标记；顶层 `tasks`、`artifacts` 仅作为安全投影保留。阶段完成或失败后产物冻结，后续阶段更新不得覆盖早期详情。历史会话重入时，前端以已完成 Workflow 事件、状态和结果中的 DAG 快照回填已持久化的步骤；若多个来源同时存在，优先选择包含更多阶段 `output` 的完整快照，避免旧的中间进度帧覆盖完成产物。
 
@@ -551,7 +565,7 @@ acceptance.START
 
 `launch_project` 继续复用现有工程识别、前后端启动、健康检查和 `launch_project.progress` 事件，
 但在子图内成功状态为 `completed`；启动失败直接结束子图。恢复已有成功启动快照时不得重复启动。
-`page_acceptance` 显式映射生命周期 `PAGE_ACCEPTANCE`。当前前端“不通过，进入对话”只恢复原分栏并让普通
+`page_acceptance` 显式映射生命周期 `PAGE_ACCEPTANCE`。验收项目启动期间与预览就绪后都保留验收 Agent 对话区，右侧预览以分栏形式打开；当前前端“不通过，进入对话”让普通
 消息走 `/conversation/run`，不提交验收结果；“验收通过”仅提示功能暂未开放，后端 accepted/finalize 能力保留。
 
 验收运行态的 AG-UI 最终投影必须包含 `previewUrl`、`launchResult` 和 `acceptanceRequest`，而启动过程的实时进度
@@ -582,7 +596,7 @@ acceptance.START
 - `small_task_tasks` / `small_task_results`：SmallTask 执行器的任务状态、实际改动、验证和升级结果；
 - `unit_test_next_action` / `integration_next_action`：分别表示开发单测和测试集成门禁的下一步路由；单测取值包含 `test_phase_confirmation`、`unit_test_repair`、`await_user_input` 或 `handle_failure`，集成测试取值包含 `review_phase_confirmation`、`small_task_repair`、`await_user_input` 或 `handle_failure`；
 - `repair_iteration` / `max_repair_iterations`：集成测试修复闭环预算。
-- `unit_test_quality_gate_passed`、`unit_test_results`、`unit_test_report`、`unit_test_report_path`、`unit_test_repair_iteration` / `unit_test_max_repair_iterations`：开发阶段单测的独立结果、报告和修复预算。
+- `unit_test_quality_gate_passed`、`unit_test_results`、`unit_test_report`、`unit_test_report_path`、`unit_test_repair_attempts` / `unit_test_max_repair_iterations`：开发阶段单测的独立结果、报告和每个检查十次的修复预算；`unit_test_repair_iteration` 只用于轮次记录。
 - `unit_test_generation_context`、`unit_test_generation`、`unit_test_mapping_path`：本轮源码目标、首次 Build Diff 派生的 `code_diff`、生成/同步结果、warning、校验和可重建映射缓存；`unit_test_code_change_sets` 与 `unit_test_generation_code_change_sets` 保存实际测试文件差异（后者为生成阶段别名）。
 
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：

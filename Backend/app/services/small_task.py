@@ -8,6 +8,7 @@ from typing import Any
 
 from app.agents.small_task import invoke_small_task_agent, normalize_small_task_result
 from app.agents.tool_activity_stream import ToolActivityCallback
+from app.services.backend_startup_diagnostics import startup_failure_packet
 from app.services.engineering_acceptance_verifier import unauthorized_batch_paths
 from app.services.small_task_scope import (
     SMALL_TASK_MAX_CONCURRENCY,
@@ -63,6 +64,10 @@ def build_small_task_packet(
         "failureEvidence": _bounded_value(
             task.get("failure_evidence") or task.get("failureEvidence") or {},
             limit=6_000,
+        ),
+        # 独立保留启动根因与完整日志入口，不受整体测试报告的长度裁剪影响。
+        "backendStartupFailure": startup_failure_packet(
+            task.get("failure_evidence") or task.get("failureEvidence") or {}
         ),
         "confirmedContext": {
             "buildExecutionScope": _bounded_value(
@@ -135,6 +140,7 @@ def execute_small_task_batch(
             "verification": normalized["verification"],
             "alreadySatisfied": normalized["alreadySatisfied"],
             "failureReason": normalized["failureReason"],
+            "failureCode": normalized.get("failureCode"),
             "escalation": normalized["escalation"],
             "agentNote": normalized["agentNote"],
             "packet": _packet_preview(packet),
@@ -173,8 +179,12 @@ def execute_small_task_batch(
         if result["status"] == "completed" and not task_files and not result["alreadySatisfied"]:
             result["status"] = "failed"
             result["failureReason"] = "Agent 报告完成，但授权范围内没有实际代码差异。"
-        if unauthorized and result["status"] in {"completed", "already_satisfied"}:
+        if unauthorized and (
+            result["status"] in {"completed", "already_satisfied"}
+            or result.get("failureCode") == "invalid_agent_output"
+        ):
             result["status"] = "failed"
+            result["failureCode"] = None
             result["failureReason"] = (
                 "检测到批次外文件变更：" + "、".join(sorted(set(unauthorized)))
             )[:2_000]

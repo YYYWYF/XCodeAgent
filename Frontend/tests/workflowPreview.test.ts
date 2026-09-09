@@ -6,10 +6,6 @@ import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
   pageDetailTargetKey,
-  requiresEndpointDetailDesign,
-  requiresPageDetailDesign,
-  shouldShowEndpointDetailDesignEntry,
-  shouldShowPageDetailDesignEntry,
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
   workflowPreviewTarget,
@@ -20,6 +16,7 @@ import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/comp
 import { developmentContinuationFromWorkflow } from '../src/renderer/src/components/AiChatPanel/developmentContinuation'
 import DevelopmentContinuationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/DevelopmentContinuationCard'
 import RemainingEntityBindingsCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/RemainingEntityBindingsCard'
+import { BuildExecutionRunCard } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
@@ -40,11 +37,14 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
 import {
   APPLICATIONS_CHANGED_EVENT,
-  canOpenApplicationWorkbench,
   isApplicationCreationComplete,
   subscribeApplicationsChanged
 } from '../src/renderer/src/service/applicationStorage'
-import { readApplicationLifecycle } from '../src/renderer/src/service/agUiAgent'
+import {
+  readApplicationLifecycle,
+  readIntegrationTestChecks
+} from '../src/renderer/src/service/agUiAgent'
+import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
 import { processStepsForMessageDisplay } from '../src/renderer/src/service/processStepHistory'
 import { workspaceToolErrorMessage } from '../src/renderer/src/service/workspaceTools'
 import { codeReviewReportFocusKey } from '../src/renderer/src/components/AiChatPanel/hooks/useCodeReviewReportPanel'
@@ -69,6 +69,7 @@ import {
 } from '../src/renderer/src/workbenchPhase'
 import type {
   ApplicationLifecycle,
+  WorkflowBuildExecutionSlice,
   WorkbenchExecution,
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
@@ -475,44 +476,6 @@ test('项目异步启动成功后将 about:blank 自动导航到当前页面', (
   )
 })
 
-test('待设计 API 在开始前显示绿色设计入口，已有运行消息后让出对话区', () => {
-  const pendingEndpoint = {
-    id: 'stats',
-    method: 'GET',
-    path: '/stats',
-    summary: '统计信息',
-    designed: false,
-    hasDetailPlan: false
-  }
-
-  assert.equal(requiresEndpointDetailDesign(pendingEndpoint), true)
-  assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, false, 0), true)
-  assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, true, 0), true)
-  assert.equal(shouldShowEndpointDetailDesignEntry(pendingEndpoint, true, 1), false)
-  assert.equal(
-    requiresEndpointDetailDesign({ ...pendingEndpoint, designed: true, hasDetailPlan: true }),
-    false
-  )
-})
-
-test('待设计页面仅在没有正式开发产物时使用锁定蒙层', () => {
-  const pendingPage = {
-    pageId: 'page-home',
-    key: 'page-home',
-    label: '首页',
-    path: '/page/page-home',
-    purpose: '应用首页',
-    designed: false,
-    hasDetailPlan: false
-  }
-
-  assert.equal(requiresPageDetailDesign(pendingPage), true)
-  assert.equal(shouldShowPageDetailDesignEntry(pendingPage, false), true)
-  assert.equal(shouldShowPageDetailDesignEntry(pendingPage, true), false)
-  assert.equal(requiresPageDetailDesign({ ...pendingPage, designed: true }), false)
-  assert.equal(requiresPageDetailDesign({ ...pendingPage, hasDetailPlan: true }), false)
-})
-
 test('页面和 Endpoint 快捷任务保留本次运行目标且不生成会话绑定字段', () => {
   const tasks = buildQuickTasks(
     [
@@ -714,35 +677,12 @@ test('最终结果标题区分成功和失败 Workflow', () => {
   })
 })
 
-test('只有初始化完成阶段允许 lifecycle 直接放行工作台', () => {
+test('只有初始化完成阶段视为模板与开发预览就绪', () => {
   const lifecycle = planLifecycle(pageExecution())
 
   assert.equal(isApplicationCreationComplete(lifecycle), true)
   lifecycle.initialization.stage = 'awaiting_project_plan_confirmation'
   assert.equal(isApplicationCreationComplete(lifecycle), false)
-})
-
-test('应用计划确认标记永久放行工作台且不依赖后续 lifecycle', () => {
-  const application = {
-    id: 'app-1',
-    source: 'new',
-    planningConfirmedAt: 1
-  } as Parameters<typeof canOpenApplicationWorkbench>[0]
-  const unrelatedPagePlanningLifecycle = planLifecycle(pageExecution())
-  unrelatedPagePlanningLifecycle.initialization.stage = 'awaiting_project_plan_confirmation'
-
-  assert.equal(canOpenApplicationWorkbench(application), true)
-  assert.equal(canOpenApplicationWorkbench(application, unrelatedPagePlanningLifecycle), true)
-})
-
-test('未写入永久确认标记的新应用仍可由当前初始化完成状态放行', () => {
-  const application = {
-    id: 'app-1',
-    source: 'new'
-  } as Parameters<typeof canOpenApplicationWorkbench>[0]
-
-  assert.equal(canOpenApplicationWorkbench(application), false)
-  assert.equal(canOpenApplicationWorkbench(application, planLifecycle(pageExecution())), true)
 })
 
 test('应用模板卡只允许首次新建且尚未进入开发时显示', () => {
@@ -821,7 +761,7 @@ test('正式产物收口与 Build 确认门属于开发阶段，后续节点进�
   assert.equal(workbenchPhaseForNode('acceptance', 'review'), 'acceptance')
 })
 
-test('UI 完成后仍停留设计阶段，进入后 TechnicalPlan 属于独立规划阶段', () => {
+test('UI 完成后仍停留设计阶段，进入后 TechnicalPlan 属于独立计划阶段', () => {
   const awaitingEntry = planLifecycle(pageExecution({ status: 'completed' }))
   awaitingEntry.initialization = {
     stage: 'awaiting_planning_stage_entry',
@@ -1403,4 +1343,108 @@ test('不在资源集合中的页面仍可自由输入', () => {
 
   assert.equal(context.execution, undefined)
   assert.equal(context.dependencyLocked, false)
+})
+
+test('构建卡片将已满足要求的任务展示为完成，并与其他状态保持一致排序', () => {
+  const executionSlice: WorkflowBuildExecutionSlice = {
+    scope: { type: 'page', targetId: 'age_entry_page' },
+    tasks: [
+      { id: 'pending', title: '待执行任务', status: 'pending' },
+      { id: 'satisfied', title: '后端启动配置与基础依赖', status: 'already_satisfied' },
+      { id: 'failed', title: '失败任务', status: 'failed' },
+      { id: 'completed', title: '新实现任务', status: 'completed' },
+      { id: 'running', title: '运行中任务', status: 'running' }
+    ]
+  }
+  const markup = renderToStaticMarkup(
+    createElement(BuildExecutionRunCard, { executionSlice, status: 'running' })
+  )
+  const tags = [...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)]
+  assert.deepEqual(tags.map((match) => match[1]), ['完成', '完成', '运行中', '失败', '待执行'])
+  const panels = [...markup.matchAll(/class="([^"]*workflow-build-task-panel[^"]*)"/g)]
+  assert.equal(panels.length, 5)
+  assert.match(panels[0][1], /completed/)
+  assert.match(panels[1][1], /completed/)
+  assert.ok(markup.indexOf('后端启动配置与基础依赖') < markup.indexOf('运行中任务'))
+  assert.match(markup, /40% 完成/)
+  assert.equal(executionSlice.tasks?.[1].status, 'already_satisfied')
+})
+
+test('构建完成快照有无汇总时都把已满足要求的任务计入完成', () => {
+  for (const summary of [undefined, { total: 2, completed: 2, pending: 0 }]) {
+    const executionSlice: WorkflowBuildExecutionSlice = {
+      scope: { type: 'page', targetId: 'age_entry_page' },
+      summary,
+      tasks: [
+        { id: 'satisfied', title: '已满足要求任务', status: 'already_satisfied' },
+        { id: 'completed', title: '新实现任务', status: 'completed' }
+      ]
+    }
+    const markup = renderToStaticMarkup(
+      createElement(BuildExecutionRunCard, { executionSlice, status: 'completed' })
+    )
+    assert.match(markup, /100% 完成/)
+    const tags = [...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)]
+    assert.deepEqual(tags.map((match) => match[1]), ['完成', '完成'])
+    assert.doesNotMatch(markup, /workflow-build-task-panel[^"<>]*already_satisfied/)
+  }
+})
+
+test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、失败、通过与跳过状态', () => {
+  for (const status of ['running', 'failed', 'passed', 'skipped'] as const) {
+    const checks = readIntegrationTestChecks({
+      checks: [
+        { id: 'backend_build', name: '后端构建检查', status: 'passed', required: true },
+        {
+          id: 'backend_startup',
+          name: '后端启动检查',
+          status,
+          required: true,
+          evidence:
+            status === 'failed'
+              ? 'ClassNotFoundException: ConfigurationBeanFactoryMetadata'
+              : '启动检测'
+        },
+        { id: 'frontend_performance', name: '前端性能测试', status: 'skipped', required: false }
+      ]
+    })
+    assert.equal(checks?.[1].id, 'backend_startup')
+    assert.equal(checks?.[1].status, status)
+    const markup = renderToStaticMarkup(
+      createElement(ProcessSteps, {
+        loading: true,
+        steps: [
+          {
+            id: 'integration',
+            kind: 'workflow',
+            status: 'running',
+            title: '集成测试',
+            detail: '',
+            sequence: 1,
+            nodeName: 'integration_test',
+            checks
+          }
+        ]
+      })
+    )
+    assert.ok(markup.indexOf('后端构建检查') < markup.indexOf('后端启动检查'))
+    assert.ok(markup.indexOf('后端启动检查') < markup.indexOf('前端性能测试'))
+    if (status === 'failed') assert.match(markup, /ConfigurationBeanFactoryMetadata/)
+    assert.equal(integrationTestCheckReportPath(checks![1]), undefined)
+  }
+})
+
+// 单测失败矩阵必须同时展示终止原因，避免额度耗尽看起来像跳过了修复。
+test('单测矩阵显示修复额度耗尽原因', () => {
+  const markup = renderToStaticMarkup(createElement(ProcessSteps, {
+    loading: false,
+    steps: [{
+      id: 'unit-failed', kind: 'workflow', status: 'failed', sequence: 1,
+      title: '开发阶段单元测试', nodeName: 'unit_test',
+      detail: '单元测试子步骤已用完各 10 次修复额度：前端单元测试',
+      checks: [{ id: 'frontend_unit_tests', name: '前端单元测试', status: 'failed', required: true }]
+    }]
+  }))
+  assert.match(markup, /单元测试子步骤已用完各 10 次修复额度/)
+  assert.match(markup, /集成检查矩阵/)
 })

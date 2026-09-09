@@ -128,7 +128,7 @@ def _summary_markdown(contract: Dict[str, Any], task_graph: Dict[str, Any], veri
     commands = verification.get("commands") if isinstance(verification.get("commands"), list) else []
     return "\n".join(
         [
-            f"# {contract.get('title') or 'XCodeAgent Run'}",
+            f"# {contract.get('title') or 'AIStudio Run'}",
             "",
             str(contract.get("summary") or ""),
             "",

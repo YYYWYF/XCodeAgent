@@ -85,7 +85,7 @@ function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Elem
   )
 }
 
-/** 渲染数据库连接配置；创建应用不选数据源类型，实体数据源类型在项目规划阶段按实体选择。 */
+/** 渲染数据库连接配置；创建应用不选数据源类型，实体数据源类型在项目计划阶段按实体选择。 */
 export default function DatasourceConfigFields({ form }: Props): JSX.Element {
   const useBuiltin =
     (Form.useWatch(['datasource', 'db', 'useBuiltin'], form) as boolean | undefined) ?? false

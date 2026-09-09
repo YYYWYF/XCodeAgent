@@ -5,6 +5,7 @@ from langgraph.config import get_stream_writer
 from app.graph.state import ProjectState
 from app.graph.subgraphs.acceptance import run_acceptance_subgraph
 from app.services.build_scheduler import summarize_build_runtime
+from app.services.development_artifacts import complete_initial_development, test_entry_gate
 from app.services.project_launcher import launch_project_preview
 from app.workspace.spec_documents import workspace_root
 
@@ -301,10 +302,15 @@ def test_phase_confirmation(state: ProjectState) -> dict:
             "test_target": target,
             "timeline": ["test_phase_confirmation"],
         }
+    lifecycle = complete_initial_development(
+        workspace_root(state), run_id=str(state.get("active_run_id") or ""),
+    )
+    gate = test_entry_gate(lifecycle)
     submission = state.get("test_phase_confirmation")
     confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
-    if confirmed:
+    if confirmed and gate.allowed:
         return {
+            "test_phase_confirmation": {},
             "phase": "test_phase_confirmation",
             "status": "completed",
             "build_summary": build_summary,
@@ -321,11 +327,16 @@ def test_phase_confirmation(state: ProjectState) -> dict:
     return {
         "phase": "test_phase_confirmation",
         "status": "requires_user_input",
+        "test_phase_confirmation": {},
         "build_summary": build_summary,
         "clarification": {
             "mode": "test_phase_confirmation",
             "status": "requires_user_input",
-            "message": "代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试与失败修复。",
+            "message": (
+                "代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试与失败修复。"
+                if gate.allowed else f"当前产物初次开发已完成。{gate.reason}"
+            ),
+            "testEntryGate": gate.model_dump(mode="json", by_alias=True),
             "testTarget": target,
             "questions": [],
         },
