@@ -52,6 +52,21 @@ _DECORATIVE_TAGS = {
     "Skeleton",
     "Spin",
 }
+# 表单项包装器：<Form.Item name="x"><Input/></Form.Item> 里的输入控件是表单提交
+# action（提交按钮）的字段录入子控件，不是独立 action。要求每个字段各自绑定
+# data-action-id 语义错误（它们不独立触发行为），标 data-preview-only 也错误
+# （它们是真实产品 UI）。嵌在表单项包装器内的录入类控件（Input/Select/DatePicker
+# 等）豁免 unowned_interactions；Button 不在豁免之列——Form.Item 里的按钮是真实的
+# action 触发器（提交/取消），仍须绑定 data-action-id。
+_FORM_FIELD_WRAPPER_TAGS = {
+    "Form.Item",
+    "ProForm.Item",
+    "ProFormGroup",
+    "ProFormDependency",
+    "Space.Compact",
+}
+# 表单项内豁免的录入类控件：Button/a（链接触发器）不在其中，仍要求绑定 actionId。
+_FORM_ENTRY_TAGS = _INTERACTIVE_TAGS - {"a", "Button"}
 _LEGACY_PRODUCT_FACT_KEYS = {
     "description",
     "display_items",
@@ -188,6 +203,39 @@ def _jsx_opening_tags(code: str) -> list[tuple[str, str, bool, bool]]:
             continue
         tag = name_match.group(0)
         attrs_start = start + 1 + len(tag)
+        # TS 泛型实参：<ProDescriptions<ProjectBasic> ...>。标签名后紧跟 `<`
+        # 时不是非法字符，而是泛型参数列表——跳过到配平的 `>`，属性从其后
+        # 开始。否则整个标签被丢弃（下方非法字符分支直接跳过），写在带泛型
+        # 组件上的 data-information-item-id / data-action-id 全部漏登记，校验
+        # 误报"缺少"。配平时把 `=>`（函数类型）的 `>` 排除在尖括号配平之外，
+        # 并追踪 {} () [] 深度，避免 Record<string, { x: () => void }> 这类
+        # 复合类型提前终止扫描。
+        if attrs_start < length and code[attrs_start] == "<":
+            angle = 0
+            other_depth = 0
+            scan = attrs_start
+            while scan < length:
+                ch = code[scan]
+                if ch in "{([":
+                    other_depth += 1
+                elif ch in "})]":
+                    other_depth = max(0, other_depth - 1)
+                elif ch == "<" and other_depth == 0:
+                    angle += 1
+                elif ch == ">" and other_depth == 0:
+                    # `=>` 的 `>` 不属于泛型配平。
+                    if scan > attrs_start and code[scan - 1] == "=":
+                        scan += 1
+                        continue
+                    angle -= 1
+                    if angle == 0:
+                        attrs_start = scan + 1
+                        break
+                scan += 1
+            else:
+                # 泛型未配平（截断代码）：按原逻辑跳过该标签。
+                index = attrs_start + 1
+                continue
         if attrs_start < length and not (
             code[attrs_start].isspace() or code[attrs_start] in "/>"
         ):
@@ -246,7 +294,10 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
 
     维护 JSX 祖先栈：当业务展示组件（Statistic/Table 等）嵌套在已绑定
     ``data-information-item-id`` 或 ``data-preview-only="true"`` 的父容器内时，
-    视为该信息项的子展示，不重复要求自身绑定。
+    视为该信息项的子展示，不重复要求自身绑定。同理，嵌套在 ``Form.Item`` 等
+    表单项包装器内的录入类控件（Input/Select/DatePicker 等）视为表单提交
+    action 的字段子控件，豁免 unowned_interactions——其提交行为由表单内的
+    提交按钮统一承载 data-action-id；Button/a 不豁免，仍须自行绑定。
     """
 
     actions: dict[str, list[str]] = {}
@@ -255,8 +306,8 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
     information_items: dict[str, list[str]] = {}
     unowned_interactions: list[str] = []
     unowned_displays: list[str] = []
-    # 祖先栈：(tag_name, has_information_item_id, has_preview_only)
-    ancestor_stack: list[tuple[str, bool, bool]] = []
+    # 祖先栈：(tag_name, has_information_item_id, has_preview_only, is_form_field_wrapper)
+    ancestor_stack: list[tuple[str, bool, bool, bool]] = []
     # 预提取 .map() 数据源里的产品 id 字面量：模型用 ``cards.map((m) =>
     # <Tag data-information-item-id={m.itemId}>)`` 渲染多个 ProductPlan 项时，
     # id 仍以字面量存在于数组定义，可静态解析后与 expected 精确匹配。
@@ -295,6 +346,10 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
         # 当前展示组件就被视为该信息项的子展示，不单独要求绑定。
         ancestor_has_item = any(s[1] for s in ancestor_stack)
         ancestor_has_preview = any(s[2] for s in ancestor_stack)
+        # 祖先链上有 Form.Item 等表单项包装器时，内嵌的录入类控件是表单提交
+        # action 的字段子控件，豁免 unowned_interactions（Button/a 除外——它们是
+        # 真实的 action 触发器，仍须自行绑定）。
+        ancestor_has_form_field = any(s[3] for s in ancestor_stack)
         if action_id:
             actions.setdefault(action_id, [])
             if control_id and control_id not in actions[action_id]:
@@ -315,6 +370,11 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
         # 组件即使带交互属性，要么是容器（其内嵌按钮才是 action）、要么是装饰，都不
         # 该要求绑 actionId。真交互控件已在白名单内，带 onClick 时仍会被判，不会漏。
         interactive = tag in _INTERACTIVE_TAGS and not decorative
+        # 表单项（Form.Item 等）里的录入类控件豁免：它们向表单提交 action 提供
+        # 字段值，由提交按钮统一承载 data-action-id，字段自身不要求绑定。
+        form_entry_exempt = (
+            ancestor_has_form_field and tag in _FORM_ENTRY_TAGS
+        )
         if (
             interactive
             and not action_id
@@ -322,6 +382,7 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
             and not preview_only
             and not action_dynamic
             and not item_dynamic
+            and not form_entry_exempt
         ):
             unowned_interactions.append(tag)
         if (
@@ -338,7 +399,56 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
         # 动态绑定的标签同样视为已绑定 informationItemId，让内嵌展示组件被豁免。
         has_item = bool(information_item_id) or item_dynamic
         if not self_closing:
-            ancestor_stack.append((tag, has_item, preview_only))
+            ancestor_stack.append(
+                (tag, has_item, preview_only, tag in _FORM_FIELD_WRAPPER_TAGS)
+            )
+
+    # 补充扫描对象字面量里的 data-* 字符串键值：pro-components 的 submitter/
+    # resetButtonProps/submitButtonProps 等配置以对象字面量形式传入（如
+    # submitter={{ resetButtonProps: { 'data-action-id': 'xxx' } }}），这些绑定
+    # 不在 JSX 标签属性里，_jsx_opening_tags 扫不到，导致校验永远报"缺少"，
+    # 模型无论怎么修复都通不过（问题在校验器而非模型代码）。这里用正则从整个
+    # 代码里提取这类键值对，合并到已识别集合，让配置式绑定也能通过事实边界校验。
+    for key in re.findall(
+        r"['\"]data-action-id['\"]\s*:\s*['\"]([^'\"]+)['\"]", code
+    ):
+        actions.setdefault(key.strip(), [])
+    for key in re.findall(
+        r"['\"]data-information-item-id['\"]\s*:\s*['\"]([^'\"]+)['\"]", code
+    ):
+        information_items.setdefault(key.strip(), [])
+    # data-ui-effect 在对象字面量里（submitter 配置式绑定）也要登记，
+    # 否则 interface 类型的 action 会报"缺少静态 data-ui-effect"。
+    # 不要求 data-action-id 与 data-ui-effect 紧邻：pro-components 的
+    # resetButtonProps/submitButtonProps 对象里属性顺序不固定，只要同一
+    # 对象字面量块内同时出现二者即关联（用非贪婪跨属性匹配）。
+    for action_id, effect in re.findall(
+        r"['\"]data-action-id['\"]\s*:\s*['\"]([^'\"]+)['\"]"
+        r"(?:[^{}]*?['\"]data-ui-effect['\"]\s*:\s*['\"]([^'\"]+)['\"])",
+        code,
+    ):
+        interaction_effects.setdefault(action_id.strip(), effect.strip())
+    # data-control-id 在对象字面量里通常与对应的 action/item id 成对出现；
+    # 把它登记到对应 action/item 的 control 列表，避免"缺少 data-control-id"误报。
+    for action_id, control_id in re.findall(
+        r"['\"]data-action-id['\"]\s*:\s*['\"]([^'\"]+)['\"]\s*,\s*"
+        r"['\"]data-control-id['\"]\s*:\s*['\"]([^'\"]+)['\"]",
+        code,
+    ):
+        controls = actions.setdefault(action_id.strip(), [])
+        cid = control_id.strip()
+        if cid and cid not in controls:
+            controls.append(cid)
+    for item_id, control_id in re.findall(
+        r"['\"]data-information-item-id['\"]\s*:\s*['\"]([^'\"]+)['\"]\s*,\s*"
+        r"['\"]data-control-id['\"]\s*:\s*['\"]([^'\"]+)['\"]",
+        code,
+    ):
+        controls = information_items.setdefault(item_id.strip(), [])
+        cid = control_id.strip()
+        if cid and cid not in controls:
+            controls.append(cid)
+
     return {
         "actions": actions,
         "interaction_effects": interaction_effects,
@@ -419,18 +529,39 @@ def validate_ui_design_code(page: dict[str, Any], code: str) -> list[str]:
             + "。"
         )
     if inspection["unowned_interactions"]:
-        errors.append(
+        message = (
             "以下交互控件没有绑定 ProductPlan actionId，也未标记 data-preview-only=\"true\"："
             + "、".join(inspection["unowned_interactions"])
             + "。"
         )
+        # error/empty 态 Result/Empty extra 里的重试按钮是高频遗漏：它属于评审
+        # 工具，标 data-preview-only="true" 即可，不要为它发明 actionId。
+        if "Button" in inspection["unowned_interactions"]:
+            message += (
+                " 若未绑定按钮是 error/empty 状态 Result/Empty 的 extra 里的"
+                "重试/恢复按钮，它属于评审工具，直接标 data-preview-only=\"true\"，"
+                "不要新增 ProductPlan 之外的 actionId。"
+            )
+        errors.append(message)
     if inspection["unowned_displays"]:
-        errors.append(
+        message = (
             "以下业务展示组件没有绑定 ProductPlan informationItemId，也未标记 "
             "data-preview-only=\"true\"："
             + "、".join(inspection["unowned_displays"])
             + "。"
         )
+        # render 辅助函数模式：展示组件写在 renderXxx() 函数体里，词法上不在
+        # 已绑定容器的开闭标签之间，祖先豁免不生效。引导模型把绑定随组件写在
+        # 函数返回的 JSX 上，而不是只写在调用处的 ProCard 上。
+        if re.search(r"\{render[A-Z]\w*\(\)\}", code):
+            message += (
+                " 检测到 `{renderXxx()}` 辅助函数调用：静态分析按词法读取绑定，"
+                "无法看穿函数调用。若这些展示组件写在 render 辅助函数里，请把 "
+                "data-information-item-id 与 data-control-id 直接写在函数返回的"
+                "业务展示组件（ProTable/Statistic/ProDescriptions 等）自身上，"
+                "而不是只写在调用处的容器（如 ProCard）上。"
+            )
+        errors.append(message)
     return errors
 
 

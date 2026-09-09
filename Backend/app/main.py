@@ -73,6 +73,7 @@ from app.services.project_launcher import (
     launch_project_preview,
     stop_project_preview,
 )
+from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.tools import database_tools
 from app.workspace import workspace as workspace_tools
 
@@ -424,6 +425,24 @@ async def run_workflow(
 
 class ProjectLaunchRequest(BaseModel):
     workspace: str = Field(min_length=1, max_length=4096)
+
+
+class UiDesignCancelRequest(BaseModel):
+    workspace: str = Field(min_length=1, max_length=4096)
+    pageId: str = Field(min_length=1, max_length=256)
+
+
+@app.post("/api/ui-design/cancel")
+async def api_cancel_ui_design(request: UiDesignCancelRequest) -> dict[str, Any]:
+    """用户主动取消单页设计稿生成。
+
+    池把该页状态立即置为 cancelled（结果丢弃、LLM 请求不打断），前端据此
+    复位卡片加载态并允许重试。无在途任务时返回 cancelled=False（幂等）。
+    """
+
+    pool = get_ui_design_generation_pool()
+    cancelled = await pool.cancel_page(request.workspace, request.pageId)
+    return {"cancelled": cancelled, "pageId": request.pageId}
 
 
 @app.post("/api/projects/launch")

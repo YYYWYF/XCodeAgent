@@ -624,6 +624,7 @@ export default function WorkflowRunCard({
               actingPageIds={uiDesignActingPageIds}
               onActingPageIdsChange={onUiDesignActingPageIdsChange}
               workflow={effectiveUiDesignWorkflow}
+              workspaceRoot={workspaceRoot}
             />
           ) : (
             <>

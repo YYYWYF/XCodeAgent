@@ -1627,6 +1627,20 @@ function setupWorkspaceIpc(): void {
     return inspectWorkspacePlanningArtifacts(workspaceRoot)
   })
 
+  // 直接读取工作区 specs/ui-designs.json，供前端轮询后台生成池进度。
+  // 绕过 Graph run（同 thread 不能并发），避免 no-op resume 被 checkpoint 约束吞掉。
+  ipcMain.handle('workspace:read-ui-designs', async (_event, payload = {}) => {
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    const uiDesignsPath = path.join(workspaceRoot, '.xcodeagent', 'specs', 'ui-designs.json')
+    try {
+      const content = await fs.readFile(uiDesignsPath, 'utf8')
+      const parsed = JSON.parse(content)
+      return { uiDesigns: parsed }
+    } catch {
+      return { uiDesigns: null }
+    }
+  })
+
   ipcMain.handle('workspace:read-application', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
     const applicationConfig = await readManagedWorkspaceApplication(workspaceRoot)

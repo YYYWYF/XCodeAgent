@@ -440,6 +440,230 @@ export default Page;
             "Form 带 onFinish 不应误判为交互控件",
         )
 
+    def test_form_fields_inside_form_item_not_flagged(self) -> None:
+        """Form.Item 内的录入控件（Input/Select/DatePicker）是提交 action 的字段子控件，不应误报。
+
+        回归：新建项目弹窗里 <Form.Item name="x"><Input/></Form.Item> 的 Input、
+        Select、DatePicker 未绑 data-action-id（它们不独立触发行为，提交按钮才
+        承载 submit action），旧校验器逐个判为"未归属交互控件"，模型重试 2 次
+        也无法在不污染语义的情况下通过，页面生成失败。
+        """
+
+        page = {
+            "pageId": "project_list",
+            "information_items": [
+                {"itemId": "project_table", "label": "项目表格"},
+            ],
+            "actions": [
+                {"actionId": "open_create_project_dialog"},
+                {"actionId": "submit_new_project"},
+                {"actionId": "close_create_project_dialog"},
+            ],
+        }
+        code = """
+import React from 'react';
+import { Button, DatePicker, Form, Input, Modal, Select, Space, Table } from 'antd';
+const ProjectList = () => {
+  const [form] = Form.useForm();
+  return (
+    <div>
+      <Button type="primary" data-action-id="open_create_project_dialog" data-control-id="open_create_project_dialog-control">新建项目</Button>
+      <div data-information-item-id="project_table" data-control-id="project_table-display">
+        <Table dataSource={[]} rowKey="id" />
+      </div>
+      <Modal title="新建项目" open>
+        <Form form={form} layout="vertical" onFinish={() => undefined}>
+          <Form.Item name="name" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }]}>
+            <Input placeholder="请输入项目名称" />
+          </Form.Item>
+          <Form.Item name="status" label="项目状态">
+            <Select placeholder="请选择项目状态" options={[]} />
+          </Form.Item>
+          <Form.Item name="startTime" label="开始时间">
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Button data-action-id="close_create_project_dialog" data-control-id="close_create_project_dialog-control">取消</Button>
+              <Button type="primary" htmlType="submit" data-action-id="submit_new_project" data-control-id="submit_new_project-control">提交</Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  );
+};
+export default ProjectList;
+"""
+
+        self.assertEqual(validate_ui_design_code(page, code), [])
+
+    def test_unbound_button_inside_form_item_still_flagged(self) -> None:
+        """Form.Item 里未绑 actionId 的 Button 仍是真实 action 触发器，必须报错。"""
+
+        code = """
+import React from 'react';
+import { Button, Form, Input } from 'antd';
+const Page = () => (
+  <Form onFinish={() => undefined}>
+    <Form.Item name="name" label="名称">
+      <Input />
+    </Form.Item>
+    <Form.Item>
+      <Button htmlType="submit" onClick={() => undefined}>未绑定提交</Button>
+    </Form.Item>
+  </Form>
+);
+export default Page;
+"""
+
+        errors = validate_ui_design_code(self.page, code)
+        self.assertTrue(
+            any("Button" in error for error in errors),
+            "Form.Item 内未绑 actionId 的 Button 应报未归属交互控件",
+        )
+        self.assertFalse(
+            any("Input" in error for error in errors),
+            "Form.Item 内的 Input 是录入字段，不应误报",
+        )
+
+    def test_generic_typed_components_register_bindings(self) -> None:
+        """带 TS 泛型的组件（ProDescriptions<T> 等）上的 data-* 绑定必须被提取。
+
+        回归：`_jsx_opening_tags` 在标签名后遇到 `<`（泛型左尖括号）时走非法
+        字符分支直接跳过整个标签，导致 `<ProDescriptions<ProjectBasic>
+        data-information-item-id="project_basic_info">` 的绑定全部漏登记，校验
+        误报"缺少 project_basic_info"，模型 repair 2 次仍用同种 TS 标准写法而
+        失败。泛型参数列表现在会被配平跳过，属性正常解析。
+        """
+
+        page = {
+            "pageId": "project_detail",
+            "information_items": [
+                {"itemId": "project_basic_info"},
+                {"itemId": "project_members"},
+            ],
+            "actions": [{"actionId": "edit_project_info"}],
+        }
+        code = """
+import React from 'react';
+import { ProDescriptions, ProTable } from '@ant-design/pro-components';
+import { Button } from 'antd';
+
+type ProjectBasic = { name: string };
+type ProjectMember = { id: string };
+
+const ProjectDetail: React.FC = () => {
+  const currentProject: ProjectBasic = { name: 'x' };
+  const members: ProjectMember[] = [];
+  return (
+    <div>
+      <ProDescriptions<ProjectBasic>
+        dataSource={currentProject}
+        data-information-item-id="project_basic_info"
+        data-control-id="project_basic_info-display"
+        extra={
+          <Button
+            type="primary"
+            data-action-id="edit_project_info"
+            data-control-id="edit_project_info-control"
+            data-ui-effect="打开项目信息编辑对话框"
+          >
+            编辑
+          </Button>
+        }
+        columns={[{ title: '项目名称', dataIndex: 'name' }]}
+      />
+      <div
+        data-information-item-id="project_members"
+        data-control-id="project_members-display"
+      >
+        <ProTable<ProjectMember>
+          columns={[]}
+          dataSource={members}
+          rowKey="id"
+          search={false}
+        />
+      </div>
+    </div>
+  );
+};
+export default ProjectDetail;
+"""
+
+        self.assertEqual(validate_ui_design_code(page, code), [])
+
+    def test_unowned_display_in_render_helper_gets_targeted_hint(self) -> None:
+        """render 辅助函数里未绑定的展示组件，报错应给出"绑定随组件写在函数里"的定向提示。
+
+        回归：dashboard 页把 Statistic/ProTable 写进 renderProjectStats()/
+        renderPendingReviews() 函数体，绑定只打在调用处的 ProCard 上——词法扫描
+        看不穿 {renderXxx()} 调用，祖先豁免不生效，展示组件被判未绑定。模型靠
+        thinking 猜出要把绑定挪到组件上，烧了一次 repair 预算。报错里直接给出
+        定向提示，让模型一次修对。
+        """
+
+        page = {
+            "pageId": "dashboard",
+            "information_items": [
+                {"itemId": "dashboard_project_stats"},
+                {"itemId": "dashboard_pending_reviews"},
+            ],
+            "actions": [],
+        }
+        code = """
+import React from 'react';
+import { ProCard, ProTable } from '@ant-design/pro-components';
+import { Statistic } from 'antd';
+const Dashboard = () => {
+  const renderStats = () => <Statistic title="项目总数" value={128} />;
+  const renderList = () => <ProTable dataSource={[]} rowKey="id" search={false} />;
+  return (
+    <div>
+      <ProCard data-information-item-id="dashboard_project_stats" data-control-id="dashboard_project_stats-display">
+        {renderStats()}
+      </ProCard>
+      <ProCard data-information-item-id="dashboard_pending_reviews" data-control-id="dashboard_pending_reviews-display">
+        {renderList()}
+      </ProCard>
+    </div>
+  );
+};
+export default Dashboard;
+"""
+
+        errors = validate_ui_design_code(page, code)
+        display_error = next((e for e in errors if "业务展示组件" in e), "")
+        self.assertIn("Statistic", display_error)
+        self.assertIn("ProTable", display_error)
+        self.assertIn("render", display_error)
+        self.assertIn("函数返回", display_error)
+
+    def test_unowned_retry_button_gets_preview_only_hint(self) -> None:
+        """error 态 Result 里未绑定的重试按钮，报错应提示标 data-preview-only。"""
+
+        page = {
+            "pageId": "dashboard",
+            "information_items": [{"itemId": "dashboard_project_stats"}],
+            "actions": [],
+        }
+        code = """
+import React from 'react';
+import { Button, Result, Statistic } from 'antd';
+const Dashboard = () => (
+  <div>
+    <Result status="error" title="加载失败" extra={<Button onClick={() => undefined}>重试</Button>} />
+    <Statistic title="项目总数" value={128} data-information-item-id="dashboard_project_stats" data-control-id="dashboard_project_stats-display" />
+  </div>
+);
+export default Dashboard;
+"""
+
+        errors = validate_ui_design_code(page, code)
+        button_error = next((e for e in errors if "Button" in e), "")
+        self.assertIn("data-preview-only", button_error)
+        self.assertIn("重试", button_error)
+
     def test_interface_action_requires_ui_owned_effect(self) -> None:
         """界面行为必须由真实 TSX 的 data-ui-effect 固化，不能留给 TechnicalPlan。"""
 

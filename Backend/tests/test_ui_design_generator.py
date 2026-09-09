@@ -81,6 +81,9 @@ class UiDesignGeneratorTests(unittest.TestCase):
             ui_design_max_tokens=12288,
             ui_design_max_retries=2,
         )
+        # 独立模型未配置时 for_ui_design_model 返回自身；SimpleNamespace 假 Settings
+        # 补该方法等价回落（本用例不覆盖独立模型解析，由 test_llm_provider 负责）。
+        settings.for_ui_design_model = lambda: settings
         with patch(
             "app.services.ui_design_generator.Settings.from_env",
             return_value=settings,
@@ -114,6 +117,7 @@ class UiDesignGeneratorTests(unittest.TestCase):
             ui_design_max_tokens=8192,
             ui_design_max_retries=2,
         )
+        settings.for_ui_design_model = lambda: settings
         with patch(
             "app.services.ui_design_generator.Settings.from_env",
             return_value=settings,
@@ -154,6 +158,7 @@ class UiDesignGeneratorTests(unittest.TestCase):
             SimpleNamespace(content=continuation),  # 续写：补全
         ]
         settings = SimpleNamespace(ui_design_max_tokens=32768, ui_design_max_retries=1)
+        settings.for_ui_design_model = lambda: settings
         with patch(
             "app.services.ui_design_generator.Settings.from_env",
             return_value=settings,
