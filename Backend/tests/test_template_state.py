@@ -68,7 +68,6 @@ class TemplateStateTests(unittest.TestCase):
         invalid_values = (
             {"login": {"enabled": False}},
             {"login": {"enabled": 1}},
-            {"login": {"enabled": True, "config": {}}},
             {"": {"enabled": True}},
             [],
         )
@@ -83,8 +82,8 @@ class TemplateStateTests(unittest.TestCase):
         with self.assertRaises(TemplateStateError):
             validate_template_state(invalid_requested)
 
-    def test_rejects_invalid_revision_and_managed_files(self) -> None:
-        """确认 revision 与 Engine 托管文件映射不能使用宽松值。"""
+    def test_rejects_invalid_revision_and_legacy_managed_files(self) -> None:
+        """确认 revision 不宽松，且 V1 managedFiles 不能混入当前唯一 State。"""
 
         invalid_states = []
         for revision in ("", "   ", 1):
@@ -104,8 +103,8 @@ class TemplateStateTests(unittest.TestCase):
 
         state = _fixture("authorization-effective")
         state["effective"] = {
-            "login": {"enabled": True},
-            "authorization": {"enabled": True},
+            "login": {"enabled": True, "config": {}},
+            "authorization": {"enabled": True, "config": {}},
         }
         original = deepcopy(state)
         context = template_context(state)
@@ -126,12 +125,12 @@ class TemplateStateTests(unittest.TestCase):
 
         revision_drift = deepcopy(context)
         revision_drift["template_revision"] = "different-revision"
-        with self.assertRaisesRegex(TemplateStateError, "revision"):
+        with self.assertRaisesRegex(TemplateStateError, "不一致"):
             assert_template_context_matches(state, revision_drift)
 
         capability_drift = deepcopy(context)
         capability_drift["effective_capabilities"].pop("authorization")
-        with self.assertRaisesRegex(TemplateStateError, "effective capabilities"):
+        with self.assertRaisesRegex(TemplateStateError, "不一致"):
             assert_template_context_matches(state, capability_drift)
 
     def test_rejects_noncanonical_build_context(self) -> None:

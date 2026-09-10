@@ -281,7 +281,14 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 (workspace / relative).mkdir()
             state_path = workspace / ".xcodeagent/template-state.json"
             state_path.write_text(
-                json.dumps({"templateRevision": "r1", "managedFiles": {}, "requested": {}, "effective": {}}),
+                json.dumps({
+                    "schemaVersion": 2,
+                    "templateRevision": "r1",
+                    "releaseDigest": "sha256:" + "0" * 64,
+                    "requested": {},
+                    "effective": {},
+                    "appliedAdditions": {},
+                }),
                 encoding="utf-8",
             )
             state = create_application_lifecycle(application_id="app-1", application_name="任务中心")

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.models import TemplateStateError
 
 TEMPLATE_RUNTIME_STATE_RELATIVE_PATH = Path(
@@ -85,28 +84,6 @@ def save_reconcile_attempt(workspace: str | Path, attempt: ReconcileAttempt | No
 
     payload: dict[str, Any] = {"reconcileAttempt": _attempt_payload(attempt)}
     atomic_write_json(template_runtime_state_path(workspace), payload)
-
-
-def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
-    """用 fsync 与同目录 replace 持久化 JSON，降低中断导致半文件的风险。"""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    except Exception:
-        Path(temporary_name).unlink(missing_ok=True)
-        raise
 
 
 def _attempt_payload(attempt: ReconcileAttempt | None) -> dict[str, Any] | None:

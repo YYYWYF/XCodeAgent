@@ -6,7 +6,7 @@ import json
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from app.services.template_state import validate_template_state
+from app.services.template_reconcile.protocol_v2 import TemplateStateV2
 from app.services.workspace_bootstrap.archive_security import validate_archive_entries
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError, ValidatedTemplatePackage
 
@@ -30,7 +30,10 @@ def validate_template_package(archive_path: str | Path, limits: ArchiveLimits) -
                 state = json.loads(package.read(state_entries[0]).decode("utf-8"))
             except (OSError, UnicodeDecodeError, json.JSONDecodeError, RuntimeError) as exc:
                 raise TemplatePackageError("模板 ZIP 中的 TemplateState 无法读取。") from exc
-            return ValidatedTemplatePackage(path, validate_template_state(state))
+            try:
+                return ValidatedTemplatePackage(path, TemplateStateV2.model_validate(state))
+            except ValueError as exc:
+                raise TemplatePackageError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：Bootstrap Package 未提供 V2 TemplateState。") from exc
     except zipfile.BadZipFile as exc:
         raise TemplatePackageError("模板 ZIP 已损坏或格式无效。") from exc
 

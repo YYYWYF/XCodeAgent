@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.services.template_reconcile.models import ChangeSetBody, TemplateState
-from app.services.template_reconcile.runtime_state import atomic_write_json
+from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.models import TemplatePackageDownload
 
 TEMPLATE_UPDATE_DIAGNOSTIC_RELATIVE_PATH = Path(

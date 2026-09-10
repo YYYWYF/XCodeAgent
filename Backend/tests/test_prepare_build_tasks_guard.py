@@ -45,10 +45,12 @@ def _write_current_plan(workspace: str, project_plan: dict) -> str:
         template_state_path.write_text(
             json.dumps(
                 {
+                    "schemaVersion": 2,
                     "templateRevision": "prepare-build-test-r1",
-                    "managedFiles": {},
+                    "releaseDigest": "sha256:" + "0" * 64,
                     "requested": {},
                     "effective": {},
+                    "appliedAdditions": {},
                 }
             ),
             encoding="utf-8",

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, model_validator
+
+NonBlankStringV2 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+CapabilityIdV2 = NonBlankStringV2
 
 
 class TemplateReconcileProtocolV2Error(ValueError):
@@ -23,7 +26,7 @@ class CapabilityStateV2(ProtocolV2Model):
     """表示已 canonicalize 的单个 Capability 状态。"""
 
     enabled: StrictBool
-    config: dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any]
 
     @model_validator(mode="after")
     def validate_enabled(self) -> "CapabilityStateV2":
@@ -37,9 +40,9 @@ class CapabilityStateV2(ProtocolV2Model):
 class AppliedAdditionV2(ProtocolV2Model):
     """记录已成功物化 Addition 的生命周期事实，不保存文件内容基线。"""
 
-    capabilityId: str = Field(min_length=1)
-    target: str = Field(min_length=1)
-    installedRevision: str = Field(min_length=1)
+    capabilityId: NonBlankStringV2
+    target: NonBlankStringV2
+    installedRevision: NonBlankStringV2
     origin: Literal["GENERATED", "UPDATED"]
 
 
@@ -47,11 +50,11 @@ class TemplateStateV2(ProtocolV2Model):
     """表示当前唯一支持的 TemplateState V2 持久化结构。"""
 
     schemaVersion: Literal[2]
-    templateRevision: str = Field(min_length=1)
+    templateRevision: NonBlankStringV2
     releaseDigest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    requested: dict[str, CapabilityStateV2]
-    effective: dict[str, CapabilityStateV2]
-    appliedAdditions: dict[str, AppliedAdditionV2]
+    requested: dict[CapabilityIdV2, CapabilityStateV2]
+    effective: dict[CapabilityIdV2, CapabilityStateV2]
+    appliedAdditions: dict[CapabilityIdV2, AppliedAdditionV2]
 
 
 class PayloadDescriptorV2(ProtocolV2Model):
@@ -78,11 +81,11 @@ StrategyTypeV2 = Literal[
 class StrategyDescriptorV2(ProtocolV2Model):
     """描述一个按 Package 全局顺序执行的 Workspace 收敛动作。"""
 
-    strategyId: str = Field(min_length=1)
+    strategyId: NonBlankStringV2
     index: int = Field(ge=0)
     schemaVersion: Literal[1]
     type: StrategyTypeV2
-    target: str = Field(min_length=1)
+    target: NonBlankStringV2
     precondition: dict[str, Any] = Field(default_factory=dict)
     parameters: dict[str, Any] = Field(default_factory=dict)
     payloadRef: str | None = None
@@ -103,11 +106,11 @@ ValidationTypeV2 = Literal[
 class ValidationPlanItemV2(ProtocolV2Model):
     """描述 Package Apply 后必须执行的一项结构化验收。"""
 
-    validationId: str = Field(min_length=1)
+    validationId: NonBlankStringV2
     index: int = Field(ge=0)
     type: ValidationTypeV2
-    capabilityId: str | None = None
-    workingDirectory: str = Field(min_length=1)
+    capabilityId: NonBlankStringV2 | None = None
+    workingDirectory: NonBlankStringV2
     parameters: dict[str, Any] = Field(default_factory=dict)
     blocking: StrictBool
     timeoutSeconds: int = Field(gt=0)
@@ -126,9 +129,9 @@ class StrategyUpdatePackageV2(ProtocolV2Model):
     """表示 Service 返回的完整且可验证的 V2 Strategy Package。"""
 
     protocolVersion: Literal["2"]
-    packageId: str = Field(min_length=1)
+    packageId: NonBlankStringV2
     mode: Literal["APPLY", "RECONCILE"]
-    sourceRevision: str = Field(min_length=1)
+    sourceRevision: NonBlankStringV2
     currentStateDigest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     nextStateDigest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     strategies: list[StrategyDescriptorV2]

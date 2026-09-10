@@ -42,10 +42,12 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
         with open(template_state_path, "w", encoding="utf-8") as handle:
             json.dump(
                 {
+                    "schemaVersion": 2,
                     "templateRevision": "scheduler-test-r1",
-                    "managedFiles": {},
+                    "releaseDigest": "sha256:" + "0" * 64,
                     "requested": {},
                     "effective": {},
+                    "appliedAdditions": {},
                 },
                 handle,
             )
@@ -187,10 +189,12 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         """构造含单个页面任务的 v4 计划与最小无权限模板。"""
 
         state = {
+            "schemaVersion": 2,
             "templateRevision": "test-r1",
-            "managedFiles": {},
+            "releaseDigest": "sha256:" + "0" * 64,
             "requested": {},
             "effective": {},
+            "appliedAdditions": {},
         }
         _write_workspace_file(workspace, ".xcodeagent/template-state.json")
         with open(os.path.join(workspace, ".xcodeagent/template-state.json"), "w", encoding="utf-8") as handle:

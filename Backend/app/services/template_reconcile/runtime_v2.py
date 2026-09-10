@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import fcntl
 import json
-import shutil
+import os
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Literal
 
-from app.services.template_reconcile.runtime_state import atomic_write_json
+from app.utils.atomic_json import atomic_write_json
 
 AttemptPhaseV2 = Literal["PREPARED", "APPLYING", "VALIDATING", "COMMITTING_STATE", "SUCCEEDED", "FAILED", "RECOVERY_REQUIRED"]
 
@@ -41,6 +42,7 @@ class ReconcileAttemptV2:
     protocol_version: Literal["2"]
     technical_plan_sha256: str
     package_id: str
+    source_revision: str
     package_digest: str
     current_state_digest: str
     next_state_digest: str
@@ -84,9 +86,33 @@ def persist_prepared_attempt(workspace: str | Path, attempt: ReconcileAttemptV2,
         raise ReconcileV2RuntimeError("只有 RUNNING/PREPARED Attempt 可以进入执行边界。")
     target = reconcile_v2_root(workspace) / "attempts" / attempt.attempt_id
     target.mkdir(parents=True, exist_ok=False)
-    shutil.copyfile(package_zip, target / "update-package.zip")
+    _persist_immutable_package(package_zip, target / "update-package.zip")
     _save_attempt(target / "attempt.json", attempt)
     atomic_write_json(reconcile_v2_root(workspace) / "current.json", {"attemptId": attempt.attempt_id})
+
+
+def _persist_immutable_package(source: Path, destination: Path) -> None:
+    """以临时文件、文件 fsync、rename 与目录 fsync 持久化 immutable ZIP。"""
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as output_handle:
+            with source.open("rb") as input_handle:
+                while chunk := input_handle.read(64 * 1024):
+                    output_handle.write(chunk)
+            output_handle.flush()
+            os.fsync(output_handle.fileno())
+        os.replace(temporary_name, destination)
+        directory = os.open(destination.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except Exception:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
 
 
 def load_current_attempt(workspace: str | Path) -> ReconcileAttemptV2 | None:
@@ -134,7 +160,8 @@ def _save_attempt(path: Path, attempt: ReconcileAttemptV2) -> None:
         "attemptId": attempt.attempt_id, "retryOf": attempt.retry_of,
         "operationType": attempt.operation_type, "mode": attempt.mode,
         "protocolVersion": attempt.protocol_version, "technicalPlanSha256": attempt.technical_plan_sha256,
-        "packageId": attempt.package_id, "packageDigest": attempt.package_digest,
+        "packageId": attempt.package_id, "sourceRevision": attempt.source_revision,
+        "packageDigest": attempt.package_digest,
         "currentStateDigest": attempt.current_state_digest, "nextStateDigest": attempt.next_state_digest,
         "phase": attempt.phase, "status": attempt.status, "startedAt": attempt.started_at,
         "updatedAt": attempt.updated_at, "errorCode": attempt.error_code, "errorMessage": attempt.error_message,
@@ -150,12 +177,38 @@ def _load_attempt(path: Path) -> ReconcileAttemptV2:
 
     raw = json.loads(path.read_text(encoding="utf-8"))
     try:
+        required_fields = {
+            "attemptId", "retryOf", "operationType", "mode", "protocolVersion",
+            "technicalPlanSha256", "packageId", "sourceRevision", "packageDigest",
+            "currentStateDigest", "nextStateDigest", "phase", "status", "startedAt",
+            "updatedAt", "errorCode", "errorMessage", "events",
+        }
+        if not isinstance(raw, dict) or set(raw) != required_fields:
+            raise TypeError("Attempt 字段集合无效")
         events = raw["events"]
         if not isinstance(events, list):
             raise TypeError("events 必须是数组")
+        required_strings = (
+            raw["attemptId"], raw["operationType"], raw["mode"], raw["protocolVersion"],
+            raw["technicalPlanSha256"], raw["packageId"], raw["sourceRevision"], raw["packageDigest"],
+            raw["currentStateDigest"], raw["nextStateDigest"], raw["phase"], raw["status"],
+            raw["startedAt"], raw["updatedAt"],
+        )
+        if not all(isinstance(value, str) and value for value in required_strings):
+            raise TypeError("Attempt 必填字段必须是非空字符串")
+        if raw["retryOf"] is not None and (not isinstance(raw["retryOf"], str) or not raw["retryOf"]):
+            raise TypeError("retryOf 必须为 null 或非空字符串")
+        if raw["operationType"] != "UPDATE" or raw["mode"] not in {"APPLY", "RECONCILE"} or raw["protocolVersion"] != "2":
+            raise ValueError("Attempt 协议字段无效")
+        if raw["phase"] not in {"PREPARED", "APPLYING", "VALIDATING", "COMMITTING_STATE", "SUCCEEDED", "FAILED", "RECOVERY_REQUIRED"} or raw["status"] not in {"RUNNING", "SUCCEEDED", "FAILED"}:
+            raise ValueError("Attempt phase 或 status 无效")
+        if raw["errorCode"] is not None and not isinstance(raw["errorCode"], str):
+            raise TypeError("errorCode 必须为 null 或字符串")
+        if raw["errorMessage"] is not None and not isinstance(raw["errorMessage"], str):
+            raise TypeError("errorMessage 必须为 null 或字符串")
         return ReconcileAttemptV2(
             attempt_id=raw["attemptId"], retry_of=raw["retryOf"], operation_type=raw["operationType"], mode=raw["mode"],
-            protocol_version=raw["protocolVersion"], technical_plan_sha256=raw["technicalPlanSha256"], package_id=raw["packageId"],
+            protocol_version=raw["protocolVersion"], technical_plan_sha256=raw["technicalPlanSha256"], package_id=raw["packageId"], source_revision=raw["sourceRevision"],
             package_digest=raw["packageDigest"], current_state_digest=raw["currentStateDigest"], next_state_digest=raw["nextStateDigest"],
             phase=raw["phase"], status=raw["status"], started_at=raw["startedAt"], updated_at=raw["updatedAt"],
             error_code=raw["errorCode"], error_message=raw["errorMessage"],

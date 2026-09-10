@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
-import tempfile
 import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from app.services.template_reconcile.protocol_v2 import TemplateStateV2
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
+from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import TemplatePackageError, WorkspaceBootstrapError
 
@@ -71,7 +71,7 @@ class WorkspaceMaterializer:
         *,
         workspace: str | Path,
         archive_path: str | Path,
-        template_state: dict[str, object],
+        template_state: TemplateStateV2,
         readiness: Callable[[Path], None] | None = None,
     ) -> str:
         """在 staging 解压后提交两个根、Git baseline 与唯一 TemplateState。"""
@@ -140,24 +140,10 @@ class WorkspaceMaterializer:
             raise
 
 
-def _write_template_state(path: Path, template_state: dict[str, object]) -> None:
+def _write_template_state(path: Path, template_state: TemplateStateV2) -> None:
     """以同目录原子替换落盘 Engine 原样输出的 TemplateState。"""
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(template_state, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    except Exception:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
+    atomic_write_json(path, template_state.model_dump(mode="json"))
 
 
 def _remove_managed_path(path: Path) -> None:

@@ -76,7 +76,14 @@ def _prepare_generating_workspace(workspace: Path) -> None:
 def _write_package(path: Path, *, include_application: bool) -> None:
     """构造最小 Engine ZIP；可故意省略 Spring Boot 入口触发 Readiness。"""
 
-    state = {"templateRevision": "r1", "managedFiles": {}, "requested": {}, "effective": {}}
+    state = {
+        "schemaVersion": 2,
+        "templateRevision": "r1",
+        "releaseDigest": "sha256:" + "0" * 64,
+        "requested": {},
+        "effective": {},
+        "appliedAdditions": {},
+    }
     with zipfile.ZipFile(path, "w") as package:
         package.writestr("frontend/package.json", "{}\n")
         package.writestr("backend/pom.xml", "<project />\n")

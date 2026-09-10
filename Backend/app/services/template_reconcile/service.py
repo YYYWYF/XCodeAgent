@@ -9,6 +9,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from app.config import Settings
+from app.services.artifact_invalidation import ArtifactInvalidationError, canonical_sha256
 from app.services.template_reconcile.digest_v2 import package_digest_v2, template_state_digest_v2
 from app.services.template_reconcile.executor_v2 import ModificationStrategyExecutorV2, WorkingCopyStoreV2, apply_working_copy_v2, restore_working_copy_v2
 from app.services.template_reconcile.protocol_v2 import StrategyUpdatePackageV2, TemplateStateV2, assert_reconcile_state_invariant_v2
@@ -41,12 +42,13 @@ class TemplateReconcileService:
                 raise TemplateStateError("RECONCILE_REQUESTED_CONFIG_MISMATCH：requestedConfig 与当前 TemplateState.requested 不一致。")
             attempt = load_current_attempt(root)
             if attempt is not None and attempt.status != "SUCCEEDED":
-                return self._recover(root, attempt, current, requested)
+                return self._recover(root, attempt, current, requested, technical_plan_sha256, mode)
             return await self._start(root, current, requested_config, technical_plan_sha256, mode, change_id)
 
     async def _start(self, root: Path, current: TemplateStateV2, requested_config: dict[str, Any], plan_sha: str, mode: Literal["APPLY", "RECONCILE"], _change_id: str) -> str:
         """下载、校验并先持久化 immutable Package，204 不创建虚假 Attempt。"""
 
+        _assert_technical_plan_binding(root, plan_sha)
         client = TemplateEngineClient(base_url=self._settings.template_engine_base_url, token=self._settings.template_engine_token, connect_timeout=self._settings.template_engine_connect_timeout_seconds, read_timeout=self._settings.template_engine_read_timeout_seconds, max_package_bytes=self._settings.template_package_max_bytes)
         download = await client.update(current.model_dump(mode="json"), requested_config, mode=mode)
         if download is None:
@@ -54,25 +56,30 @@ class TemplateReconcileService:
         try:
             validated = validate_strategy_update_package(download.temporary_path, self._limits())
             _validate_binding(current, validated.package, mode)
-            attempt = ReconcileAttemptV2(attempt_id=uuid4().hex, retry_of=None, operation_type="UPDATE", mode=mode, protocol_version="2", technical_plan_sha256=plan_sha, package_id=validated.package.packageId, package_digest="sha256:" + download.sha256, current_state_digest=validated.package.currentStateDigest, next_state_digest=validated.package.nextStateDigest, phase="PREPARED", status="RUNNING", started_at=_now(), updated_at=_now())
+            attempt = ReconcileAttemptV2(attempt_id=uuid4().hex, retry_of=None, operation_type="UPDATE", mode=mode, protocol_version="2", technical_plan_sha256=plan_sha, package_id=validated.package.packageId, source_revision=validated.package.sourceRevision, package_digest="sha256:" + download.sha256, current_state_digest=validated.package.currentStateDigest, next_state_digest=validated.package.nextStateDigest, phase="PREPARED", status="RUNNING", started_at=_now(), updated_at=_now())
             persist_prepared_attempt(root, attempt, download.temporary_path)
             return self._execute(root, attempt, validated, current)
         finally:
             download.temporary_path.unlink(missing_ok=True)
 
-    def _recover(self, root: Path, attempt: ReconcileAttemptV2, current: TemplateStateV2, requested: dict[str, Any]) -> str:
-        """按 digest 唯一选择重放或最终验收，状态冲突时失败关闭。"""
+    def _recover(self, root: Path, attempt: ReconcileAttemptV2, current: TemplateStateV2, requested: dict[str, Any], technical_plan_sha256: str, mode: Literal["APPLY", "RECONCILE"]) -> str:
+        """按冻结 ZIP、Package、Attempt、State 与技术规划的顺序安全决定恢复分支。"""
 
         if attempt.status == "SUCCEEDED":
             return "ALREADY_RECONCILED"
         if attempt.mode == "RECONCILE" and requested != _requested_from_state(current):
             raise TemplateStateError("RECONCILE_REQUESTED_CONFIG_MISMATCH：恢复请求与 State.requested 不一致。")
-        action = recovery_action(attempt, _state_digest(current))
+        if attempt.mode != mode:
+            raise TemplateStateError("RECOVERY_OPERATION_MISMATCH：恢复请求模式与未完成 Attempt 不一致。")
         package_path = reconcile_v2_root(root) / "attempts" / attempt.attempt_id / "update-package.zip"
         if package_digest_v2(package_path) != attempt.package_digest:
             update_attempt(root, attempt, phase="RECOVERY_REQUIRED", status="FAILED", error_code="PACKAGE_DIGEST_MISMATCH", error_message="immutable Package 摘要不匹配。")
             raise TemplateStateError("PACKAGE_DIGEST_MISMATCH：无法安全恢复模板更新。")
         validated = validate_strategy_update_package(package_path, self._limits())
+        _assert_attempt_package_binding(attempt, validated.package)
+        current_digest = _state_digest(current)
+        _assert_technical_plan_binding(root, technical_plan_sha256, attempt)
+        action = recovery_action(attempt, current_digest)
         if action == "CONFLICT":
             update_attempt(root, attempt, phase="RECOVERY_REQUIRED", status="FAILED", error_code="RECOVERY_STATE_CONFLICT", error_message="当前 TemplateState 与未完成 Attempt 不匹配。")
             raise TemplateStateError("RECOVERY_STATE_CONFLICT：无法安全恢复模板更新。")
@@ -113,7 +120,13 @@ class TemplateReconcileService:
         """将 Attempt 置于提交临界区后原子写 State，再记录成功终态。"""
 
         attempt = update_attempt(root, attempt, phase="COMMITTING_STATE")
-        write_template_state_v2(root, state)
+        try:
+            write_template_state_v2(root, state)
+        except Exception as exc:
+            # rename 后抛错时必须以磁盘事实判定；只要 nextState 已生效就绝不能回滚 Workspace。
+            if _state_digest_after_write_error(root) == _state_digest(state):
+                raise StateCommittedV2Error("RECONCILE_STATE_COMMITTED_PENDING：State 已提交，必须 Roll-forward finalize。") from exc
+            raise
         try:
             update_attempt(root, attempt, phase="SUCCEEDED", status="SUCCEEDED")
         except Exception as exc:
@@ -155,10 +168,57 @@ def _requested_from_state(state: TemplateStateV2) -> dict[str, Any]:
 def _validate_binding(current: TemplateStateV2, package: StrategyUpdatePackageV2, mode: str) -> None:
     """要求 Service Package 的模式和 currentStateDigest 均绑定本地 State。"""
 
-    if package.mode != mode or package.currentStateDigest != _state_digest(current):
+    if package.mode != mode or package.sourceRevision != current.templateRevision or package.currentStateDigest != _state_digest(current):
         raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：Strategy Package 未绑定当前 State。")
     if mode == "RECONCILE":
         assert_reconcile_state_invariant_v2(current, package.nextTemplateState)
+
+
+def _assert_attempt_package_binding(attempt: ReconcileAttemptV2, package: StrategyUpdatePackageV2) -> None:
+    """要求已解析 Package 的全部可比冻结字段与 durable Attempt 完全一致。"""
+
+    expected = {
+        "protocolVersion": attempt.protocol_version,
+        "packageId": attempt.package_id,
+        "mode": attempt.mode,
+        "sourceRevision": attempt.source_revision,
+        "currentStateDigest": attempt.current_state_digest,
+        "nextStateDigest": attempt.next_state_digest,
+    }
+    actual = {
+        "protocolVersion": package.protocolVersion,
+        "packageId": package.packageId,
+        "mode": package.mode,
+        "sourceRevision": package.sourceRevision,
+        "currentStateDigest": package.currentStateDigest,
+        "nextStateDigest": package.nextStateDigest,
+    }
+    if actual != expected:
+        raise TemplateStateError("RECOVERY_PACKAGE_BINDING_MISMATCH：immutable Package 与 Attempt 绑定不一致。")
+
+
+def _assert_technical_plan_binding(root: Path, supplied_sha256: str, attempt: ReconcileAttemptV2 | None = None) -> None:
+    """要求调用参数、持久 Attempt（如有）与当前 TechnicalPlan 内容使用同一 SHA-256。"""
+
+    if not isinstance(supplied_sha256, str) or len(supplied_sha256) != 64 or any(char not in "0123456789abcdef" for char in supplied_sha256):
+        raise TemplateStateError("TECHNICAL_PLAN_SHA_INVALID：technicalPlanSha256 必须是小写 SHA-256。")
+    if attempt is not None and attempt.technical_plan_sha256 != supplied_sha256:
+        raise TemplateStateError("RECOVERY_TECHNICAL_PLAN_MISMATCH：恢复请求未绑定原 Attempt 的 TechnicalPlan。")
+    try:
+        actual = canonical_sha256(root / ".xcodeagent/plans/technical-plan.json")
+    except ArtifactInvalidationError as exc:
+        raise TemplateStateError("RECOVERY_TECHNICAL_PLAN_MISSING：无法读取当前 TechnicalPlan。") from exc
+    if actual != supplied_sha256:
+        raise TemplateStateError("RECOVERY_TECHNICAL_PLAN_MISMATCH：当前 TechnicalPlan 已发生变化。")
+
+
+def _state_digest_after_write_error(root: Path) -> str | None:
+    """在 State 写入异常后重新读取唯一 State，确认 rename 是否实际已经完成。"""
+
+    try:
+        return _state_digest(load_template_state_v2(root))
+    except Exception:
+        return None
 
 
 def _payloads(validated: ValidatedStrategyUpdatePackage) -> dict[str, str]:

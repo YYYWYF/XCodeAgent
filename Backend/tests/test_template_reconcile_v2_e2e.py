@@ -35,6 +35,10 @@ class TemplateReconcileV2E2ETests(unittest.TestCase):
             (root / "src").mkdir()
             routes = root / "src/routes.tsx"
             routes.write_text("const routes = [\n  // routes\n];\n", encoding="utf-8")
+            plan_path = root / ".xcodeagent/plans/technical-plan.json"
+            plan_path.parent.mkdir(parents=True)
+            plan_path.write_text('{"artifact_type":"technical-plan"}\n', encoding="utf-8")
+            plan_sha256 = hashlib.sha256(plan_path.read_bytes()).hexdigest()
             current = _state(["login"])
             write_template_state_v2(root, load_template_state_v2_from(current))
             apply_zip = _package_zip(root, current, _state(["login", "authorization"]), "APPLY")
@@ -54,9 +58,9 @@ class TemplateReconcileV2E2ETests(unittest.TestCase):
 
             service = TemplateReconcileService(_settings())
             with patch("app.services.template_reconcile.service.TemplateEngineClient", FakeClient):
-                result = asyncio.run(service.reconcile(root, change_id="c1", requested_config={"capabilities": {"login": {"enabled": True, "config": {}}, "authorization": {"enabled": True, "config": {}}}}, technical_plan_sha256="sha256:" + "b" * 64))
+                result = asyncio.run(service.reconcile(root, change_id="c1", requested_config={"capabilities": {"login": {"enabled": True, "config": {}}, "authorization": {"enabled": True, "config": {}}}}, technical_plan_sha256=plan_sha256))
                 self.assertEqual("CHANGED", result)
-                result = asyncio.run(service.reconcile(root, change_id="c2", requested_config={"capabilities": {"login": {"enabled": True, "config": {}}, "authorization": {"enabled": True, "config": {}}}}, technical_plan_sha256="sha256:" + "c" * 64, mode="RECONCILE"))
+                result = asyncio.run(service.reconcile(root, change_id="c2", requested_config={"capabilities": {"login": {"enabled": True, "config": {}}, "authorization": {"enabled": True, "config": {}}}}, technical_plan_sha256=plan_sha256, mode="RECONCILE"))
                 self.assertEqual("CHANGED", result)
             self.assertEqual(1, routes.read_text(encoding="utf-8").count("xcodeagent:authorization-route"))
             self.assertEqual({"login", "authorization"}, set(load_template_state_v2(root).effective))

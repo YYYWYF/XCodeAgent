@@ -54,7 +54,12 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
             workspace = Path(directory)
             target = self._write_auth_template_contract(workspace)
             state = workspace / ".xcodeagent/template-state.json"
-            state.write_text('{"templateRevision":"r1","managedFiles":{},"requested":{},"effective":{}}', encoding="utf-8")
+            state.write_text(
+                '{"schemaVersion":2,"templateRevision":"r1","releaseDigest":"sha256:'
+                + "0" * 64
+                + '","requested":{},"effective":{},"appliedAdditions":{}}',
+                encoding="utf-8",
+            )
             with self.assertRaisesRegex(AuthorizationConstantsProjectionError, "effective"):
                 apply_authorization_constants_projection(
                     workspace,
@@ -67,7 +72,13 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
 
         state = workspace / ".xcodeagent/template-state.json"
         state.parent.mkdir(parents=True)
-        state.write_text('{"templateRevision":"r1","managedFiles":{},"requested":{"authorization":{"enabled":true}},"effective":{"authorization":{"enabled":true}}}', encoding="utf-8")
+        state.write_text(
+            '{"schemaVersion":2,"templateRevision":"r1","releaseDigest":"sha256:'
+            + "0" * 64
+            + '","requested":{"authorization":{"enabled":true,"config":{}}},'
+            '"effective":{"authorization":{"enabled":true,"config":{}}},"appliedAdditions":{}}',
+            encoding="utf-8",
+        )
         target = workspace / (
             "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/"
             "AuthConstants.java"

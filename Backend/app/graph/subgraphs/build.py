@@ -44,7 +44,6 @@ from app.services.build_task_planner import (
     tasks_from_build_task_plan,
 )
 from app.services.template_state import assert_template_context_matches, load_template_state
-from app.services.template_reconcile.health import assert_managed_workspace_healthy
 from app.services.build_tool_activity import (
     path_matches_task_scope,
     task_ids_for_tool_activity,
@@ -894,7 +893,6 @@ def _latest_build_task_plan_for_build(
     if workspace:
         try:
             template_state = load_template_state(workspace)
-            assert_managed_workspace_healthy(workspace, template_state)
             assert_template_context_matches(
                 template_state,
                 build_task_plan.get("template_context"),

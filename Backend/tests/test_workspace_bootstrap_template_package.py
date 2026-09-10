@@ -22,7 +22,7 @@ class TemplatePackageTests(unittest.TestCase):
             path = Path(directory) / "template.zip"
             path.write_bytes(package)
             result = validate_template_package(path, self._limits())
-            self.assertEqual(result.template_state["templateRevision"], "R1")
+            self.assertEqual(result.template_state.templateRevision, "R1")
 
     def test_rejects_unmanaged_and_internal_paths(self) -> None:
         """确认额外 root、额外 .xcodeagent 与路径穿越均被拒绝。"""
@@ -43,7 +43,14 @@ class TemplatePackageTests(unittest.TestCase):
     def _state(self) -> dict[str, object]:
         """构造 Engine State fixture。"""
 
-        return {"templateRevision": "R1", "managedFiles": {}, "requested": {}, "effective": {}}
+        return {
+            "schemaVersion": 2,
+            "templateRevision": "R1",
+            "releaseDigest": "sha256:" + "0" * 64,
+            "requested": {},
+            "effective": {},
+            "appliedAdditions": {},
+        }
 
     def _archive(self, entries: dict[str, str]) -> bytes:
         """构造内存 ZIP，便于精确覆盖非法路径。"""

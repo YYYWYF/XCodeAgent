@@ -85,20 +85,23 @@ def _validate_requested_capabilities(state: dict[str, Any], requested_config: di
         )
 
 
-def _enabled_requested_capabilities(requested_config: dict[str, Any]) -> dict[str, dict[str, bool]]:
+def _enabled_requested_capabilities(requested_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """从已编译请求提取 Engine 应原样持久化的 enabled capability 映射。"""
 
     capabilities = requested_config.get("capabilities") if isinstance(requested_config, dict) else None
     if not isinstance(capabilities, dict):
         raise WorkspaceBootstrapReadinessError("Bootstrap 请求缺少 capabilities 对象。")
-    enabled: dict[str, dict[str, bool]] = {}
+    enabled: dict[str, dict[str, Any]] = {}
     for capability_id, definition in capabilities.items():
         if not isinstance(capability_id, str) or not capability_id.strip() or not isinstance(definition, dict):
             raise WorkspaceBootstrapReadinessError("Bootstrap 请求包含无效 capability 定义。")
         if not isinstance(definition.get("enabled"), bool):
             raise WorkspaceBootstrapReadinessError("Bootstrap 请求 capability.enabled 必须为布尔值。")
+        config = definition.get("config") or {}
+        if not isinstance(config, dict):
+            raise WorkspaceBootstrapReadinessError("Bootstrap 请求 capability.config 必须是对象。")
         if definition["enabled"]:
-            enabled[capability_id] = {"enabled": True}
+            enabled[capability_id] = {"enabled": True, "config": config}
     return {capability_id: enabled[capability_id] for capability_id in sorted(enabled)}
 
 

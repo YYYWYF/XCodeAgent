@@ -743,6 +743,7 @@ Attempt 不保存每个文件的 before-image，因此不是 File Journal。
   "protocolVersion": "2",
   "technicalPlanSha256": "...",
   "packageId": "...",
+  "sourceRevision": "R3",
   "packageDigest": "...",
   "currentStateDigest": "...",
   "nextStateDigest": "...",
@@ -2698,7 +2699,8 @@ stateDigest(nextTemplateState)
 1. Package Validator 校验 nextStateDigest 与 nextTemplateState 的实际 canonical digest。
 2. Recovery 重读 immutable ZIP 时先校验 ZIP bytes digest，再解析 Package。
 3. Apply 前再次校验 currentStateDigest；不得接受绑定旧 State 的 Package。
-4. Attempt 持久化 packageId、packageDigest、mode、技术规划摘要、current/next digest；Recovery 全部复核。
+4. Attempt 持久化 protocolVersion、packageId、sourceRevision、packageDigest、mode、技术规划摘要、current/next digest；Recovery 全部复核。
+5. Recovery 的固定判定顺序为：ZIP bytes digest → 解析 Package → Attempt/Package 全字段比对 → Current State digest → 调用参数与当前 TechnicalPlan SHA-256 → `recovery_action()`；任一步失败都不得执行 Strategy 或 Roll-forward。
 ```
 
 ## XR-3：修正 State Commit 临界区与 Roll-forward 语义

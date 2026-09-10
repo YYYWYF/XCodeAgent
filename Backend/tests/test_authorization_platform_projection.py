@@ -57,7 +57,14 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
     def _write_template(self, workspace: Path) -> None:
         """创建带固定业务路由托管区的最小 auth 模板。"""
 
-        self._write(workspace / ".xcodeagent/template-state.json", json.dumps({"templateRevision": "r1", "managedFiles": {}, "requested": {"authorization": {"enabled": True}}, "effective": {"authorization": {"enabled": True}}}))
+        self._write(workspace / ".xcodeagent/template-state.json", json.dumps({
+            "schemaVersion": 2,
+            "templateRevision": "r1",
+            "releaseDigest": "sha256:" + "0" * 64,
+            "requested": {"authorization": {"enabled": True, "config": {}}},
+            "effective": {"authorization": {"enabled": True, "config": {}}},
+            "appliedAdditions": {},
+        }))
         self._write(workspace / "frontend/src/constants/resources.ts", "export const RESOURCES = {} as const;\n")
         self._write(workspace / "frontend/src/constants/routes.tsx", "import { RESOURCES } from '@/constants/resources';\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\nexport const PAGE_ROUTES = [\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n];\n")
         self._write(workspace / "frontend/src/pages/Orders/index.tsx", "export default null;\n")

@@ -16,7 +16,7 @@ def _attempt() -> ReconcileAttemptV2:
     return ReconcileAttemptV2(
         attempt_id="attempt-1", retry_of="attempt-0", operation_type="UPDATE", mode="RECONCILE",
         protocol_version="2", technical_plan_sha256="sha256:" + "a" * 64,
-        package_id="package-1", package_digest="sha256:" + "b" * 64,
+        package_id="package-1", source_revision="r1", package_digest="sha256:" + "b" * 64,
         current_state_digest="sha256:" + "c" * 64, next_state_digest="sha256:" + "c" * 64,
         phase="PREPARED", status="RUNNING", started_at="2026-09-10T00:00:00+00:00",
         updated_at="2026-09-10T00:00:00+00:00",

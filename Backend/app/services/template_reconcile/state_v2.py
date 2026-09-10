@@ -10,7 +10,7 @@ from app.services.template_reconcile.protocol_v2 import (
     TemplateReconcileProtocolV2Error,
     TemplateStateV2,
 )
-from app.services.template_reconcile.runtime_state import atomic_write_json
+from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.models import TemplateStateError
 
 TEMPLATE_STATE_V2_RELATIVE_PATH = Path(".xcodeagent/template-state.json")

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
+from app.services.template_reconcile.protocol_v2 import TemplateStateV2
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 
@@ -22,15 +23,17 @@ class _FailingGitManager:
         raise OSError("git commit failed")
 
 
-def _template_state() -> dict[str, object]:
-    """返回满足当前 Engine 冻结四字段契约的最小 State。"""
+def _template_state() -> TemplateStateV2:
+    """返回满足当前唯一 V2 契约的最小 State。"""
 
-    return {
+    return TemplateStateV2.model_validate({
+        "schemaVersion": 2,
         "templateRevision": "template-r1",
-        "managedFiles": {},
+        "releaseDigest": "sha256:" + "0" * 64,
         "requested": {},
         "effective": {},
-    }
+        "appliedAdditions": {},
+    })
 
 
 def _write_package(path: Path) -> None:
@@ -39,7 +42,7 @@ def _write_package(path: Path) -> None:
     with zipfile.ZipFile(path, "w") as package:
         package.writestr("frontend/package.json", "{}\n")
         package.writestr("backend/pom.xml", "<project />\n")
-        package.writestr(str(TEMPLATE_STATE_RELATIVE_PATH), json.dumps(_template_state()))
+        package.writestr(str(TEMPLATE_STATE_RELATIVE_PATH), json.dumps(_template_state().model_dump(mode="json")))
 
 
 class WorkspaceMaterializerTests(unittest.TestCase):

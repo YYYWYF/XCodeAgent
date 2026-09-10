@@ -63,10 +63,12 @@ def _prepare_workspace(workspace: Path, *, requested: dict[str, object] | None =
     state_path.write_text(
         json.dumps(
             {
-                "templateRevision": "template-r1",
-                "managedFiles": {},
-                "requested": requested or {},
-                "effective": effective or {},
+            "schemaVersion": 2,
+            "templateRevision": "template-r1",
+            "releaseDigest": "sha256:" + "0" * 64,
+            "requested": requested or {},
+            "effective": effective or {},
+            "appliedAdditions": {},
             }
         ),
         encoding="utf-8",
@@ -81,7 +83,7 @@ class WorkspaceBootstrapReadinessTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            capabilities = {"login": {"enabled": True}}
+            capabilities = {"login": {"enabled": True, "config": {}}}
             _prepare_workspace(workspace, requested=capabilities, effective=capabilities)
             verifier = _GitBaselineVerifier()
 
@@ -117,7 +119,7 @@ class WorkspaceBootstrapReadinessTests(unittest.TestCase):
             workspace = Path(directory)
             _prepare_workspace(
                 workspace,
-                requested={"login": {"enabled": True}},
+                requested={"login": {"enabled": True, "config": {}}},
                 effective={},
             )
 
