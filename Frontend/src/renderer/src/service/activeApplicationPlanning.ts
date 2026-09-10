@@ -1,5 +1,5 @@
 import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
-import { retainApplicationPlanningInterrupt } from '../components/Welcome/planningWorkflowState'
+import { retainApplicationPlanningInterrupt } from './applicationPlanningWorkflowState'
 import { isApplicationCreationComplete, loadStoredApplications } from './applicationStorage'
 import { getApplicationLifecycle } from './applicationLifecycle'
 

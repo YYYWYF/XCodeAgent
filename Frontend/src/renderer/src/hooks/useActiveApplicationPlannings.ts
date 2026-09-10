@@ -21,6 +21,7 @@ type ActiveApplicationPlanningsController = {
   activePlannings: ApplicationPlanningCurrentState[]
   dispatchPlanningEvent: (event: ApplicationPlanningCurrentEvent) => void
   dismissPlanning: (applicationId: string) => void
+  getPlanningState: (applicationId: string) => ApplicationPlanningCurrentState | undefined
   /** 只隐藏规划 Modal（清 visiblePlanningId），不删除 activePlannings 中的 planning。 */
   hidePlanning: (applicationId: string) => void
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
@@ -36,7 +37,7 @@ type ActiveApplicationPlanningsController = {
     lifecycle: ApplicationLifecycle,
     visible?: boolean,
     restoreArtifactsFromDisk?: boolean
-  ) => void
+  ) => ApplicationPlanningCurrentState
   stopPlanning: (applicationId: string) => Promise<void>
   visiblePlanningId?: string
 }
@@ -60,12 +61,19 @@ export function useActiveApplicationPlannings({
         current: ApplicationPlanningCurrentState[]
       ) => ApplicationPlanningCurrentState[]
     ): void => {
-      setActivePlannings((current) => {
-        const next = updater(current)
-        activePlanningsRef.current = next
-        return next
-      })
+      const next = updater(activePlanningsRef.current)
+      activePlanningsRef.current = next
+      setActivePlannings(next)
     },
+    []
+  )
+
+  // 直接读取同步权威引用，确保长期异步 Runtime 能立即看到刚提交的规划事件。
+  const getPlanningState = useCallback(
+    (applicationId: string): ApplicationPlanningCurrentState | undefined =>
+      activePlanningsRef.current.find(
+        (planning) => planning.application.id === applicationId
+      ),
     []
   )
 
@@ -132,16 +140,17 @@ export function useActiveApplicationPlannings({
       lifecycle: ApplicationLifecycle,
       visible = true,
       restoreArtifactsFromDisk = false
-    ): void => {
+    ): ApplicationPlanningCurrentState => {
       refreshIdRef.current += 1
+      const planning: ApplicationPlanningCurrentState = {
+        application,
+        lifecycle,
+        restoreArtifactsFromDisk,
+        threadId,
+        transportState: 'idle'
+      }
       commitPlannings((current) => [
-        {
-          application,
-          lifecycle,
-          restoreArtifactsFromDisk,
-          threadId,
-          transportState: 'running'
-        },
+        planning,
         ...current.filter((planning) => planning.application.id !== application.id)
       ])
       // visible=false 时只挂载规划会话（Modal 隐藏但继续跑 graph），用于新建应用后
@@ -149,6 +158,7 @@ export function useActiveApplicationPlannings({
       if (visible) {
         setVisiblePlanning(application.id)
       }
+      return planning
     },
     [commitPlannings, setVisiblePlanning]
   )
@@ -258,6 +268,7 @@ export function useActiveApplicationPlannings({
     activePlannings,
     dispatchPlanningEvent,
     dismissPlanning,
+    getPlanningState,
     hidePlanning,
     generatingAppIds,
     onTechnicalPlanConfirmed,
