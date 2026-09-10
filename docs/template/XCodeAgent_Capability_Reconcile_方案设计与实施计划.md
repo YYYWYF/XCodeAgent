@@ -2645,6 +2645,159 @@ XC-22
 
 ---
 
+# 第三章补充：实施遗漏修复计划（验收阻塞项）
+
+本节基于实施回检新增。以下事项不是可选优化；在完成前，不得宣称当前 V2 Contract 已成为唯一生产实现，也不得进行最终验收。
+
+## XR-1：统一 Bootstrap、Reconcile 与 Build 的 V2 TemplateState 事实源
+
+当前必须形成：
+
+```text
+/v1/generate
+→ V2 TemplateState
+→ Bootstrap 原子落盘
+→ V2 Reconcile
+→ Build / Projection / Readiness 只读取 V2 TemplateState
+```
+
+要求：
+
+```text
+1. Bootstrap Package 只接受并落盘 TemplateStateV2。
+2. Build、route projection、authorization、readiness 等全部迁移到 V2 requested/effective/appliedAdditions。
+3. 旧 managedFiles State、旧 Attempt、旧 ChangeSet 只返回 TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED；旧 Workspace 必须重新初始化。
+4. 所有生产调用方完成迁移后，删除旧 template_state、health、applier、runtime_state、ChangeSet DTO/validator 的生产路径。
+```
+
+验收：
+
+```text
+rg 证明生产代码不再导入旧 State / Health / ChangeSet / Git rollback Reconcile 实现。
+新 Bootstrap Workspace 可直接进入 V2 APPLY、RECONCILE 与原 Development Gate。
+```
+
+## XR-2：补齐 Package、Attempt 与 TemplateState 的完整性绑定
+
+冻结唯一 canonical JSON 与 `stateDigest()`：
+
+```text
+sha256(zip bytes)
+== Attempt.packageDigest
+
+stateDigest(currentTemplateState)
+== Package.currentStateDigest
+
+stateDigest(nextTemplateState)
+== Package.nextStateDigest
+```
+
+要求：
+
+```text
+1. Package Validator 校验 nextStateDigest 与 nextTemplateState 的实际 canonical digest。
+2. Recovery 重读 immutable ZIP 时先校验 ZIP bytes digest，再解析 Package。
+3. Apply 前再次校验 currentStateDigest；不得接受绑定旧 State 的 Package。
+4. Attempt 持久化 packageId、packageDigest、mode、技术规划摘要、current/next digest；Recovery 全部复核。
+```
+
+## XR-3：修正 State Commit 临界区与 Roll-forward 语义
+
+严格阶段边界：
+
+```text
+PREPARED / APPLYING / VALIDATING
+→ 进程内正常异常可以 restore WorkingCopy
+
+COMMITTING_STATE 之后
+→ 禁止 restore Workspace
+→ 只能 Roll-forward
+```
+
+要求：
+
+```text
+1. State atomic rename 成功后，即使 Attempt finalize 失败，也不得恢复 Workspace 文件。
+2. stateDigest==current：从 immutable Package 的 Strategy 0 重放。
+3. stateDigest==next：重新执行 immutable Validation Plan；成功仅 finalize Attempt。
+4. 其他 digest：RECOVERY_STATE_CONFLICT，并阻断后续开发。
+5. 必须提供 Apply 第 N 文件、State rename 后、Attempt finalize 前的可控 fault injection。
+```
+
+## XR-4：收紧结构化 Strategy 与 Validation Sandbox
+
+策略分层：
+
+```text
+受管理局部代码块
+→ managed marker + 唯一 anchor
+
+语言结构（Import / Route / Provider / Spring）
+→ AST selector + 明确插入位置 + AST postcondition
+
+配置结构（package.json / pom.xml）
+→ JSON/XML 语义编辑 + 冲突检测 + 稳定格式
+```
+
+要求：
+
+```text
+1. 不得以 marker/文本锚点猜测业务结构位置；找不到唯一 AST 目标、目标类型不符或语义冲突时 fail closed。
+2. Maven XML 修改保持 namespace、注释和稳定格式，不得无差别重序列化业务文件。
+3. Validation Plan 使用显式 DTO，不以无限制 parameters 承载任意断言或命令。
+4. Sandbox 定义确定性依赖准备（独立缓存的 frozen/offline install 或不可变依赖层），不得借用真实 Workspace node_modules。
+5. Validation Result 只返回 stdoutLogRef/stderrLogRef、exitCode、durationMs、errorCode；原始输出落 Attempt 私有日志目录。
+```
+
+## XR-5：补齐 RECONCILE、Template Preparation 与 Retry 产品闭环
+
+要求：
+
+```text
+1. 提供唯一的受控 RECONCILE 触发点；请求与 TemplateState.requested 不一致时返回 RECONCILE_REQUESTED_CONFIG_MISMATCH。
+2. RECONCILE 前后逐字段验证 requested/effective/config 不变；成功只能由 Strategy → Apply → Validation Plan 证明。
+3. 现有 Workflow AG-UI 在 Attempt 的 phase、Validation、错误变化时实时投影 templatePreparation，而不只在节点结束时投影。
+4. retry_template_preparation 复用当前 Workflow thread：unfinished Attempt 先 Recovery；失败且不可恢复时创建新 Attempt，并写 retryOf=旧 attemptId。
+5. Retry 不重跑、不重新确认 TechnicalPlan，也不改变 Template → Development Gate。
+6. Bootstrap DOWNLOAD 与 Reconcile UPDATE 可以共享 UI 表达，但后端执行边界与 durable Attempt 必须明确区分。
+```
+
+## XR-6：扩展 E2E、故障注入与最终架构门禁
+
+必须覆盖：
+
+```text
+新 Bootstrap 直接产生 V2 State
+login → authorization 的真实共享文件收敛
+APPLY 重放、RECONCILE 漂移修复、RECONCILE 后置条件失败
+下载中断 / ZIP digest 失败 / Strategy 内存失败 / Apply 多文件中断
+NPM_BUILD / MAVEN_TEST Sandbox 失败且真实 Workspace 无污染
+State Commit 前、atomic rename 后、Attempt finalize 前 crash
+并发 Retry 与 Run Gate
+旧 State / 旧 Attempt / 旧任务数据明确拒绝
+```
+
+最终静态门禁：
+
+```text
+生产代码不得继续引用旧 ChangeSet、旧 State consumer、Git rollback、独立 Health 阶段。
+```
+
+## 修复执行顺序
+
+```text
+XR-1
+→ XR-2
+→ XR-3
+→ XR-4
+→ XR-5
+→ XR-6
+```
+
+其中 XR-1、XR-2、XR-3 是阻塞项；未完成前不得扩大 UI 或 E2E 范围，也不得进入最终验收。
+
+---
+
 # 第四章 最终验收准则
 
 只有以下条件同时成立，才视为本次 Capability Reconcile 重构完成：

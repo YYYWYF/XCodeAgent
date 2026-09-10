@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import ValidationError
 
+from app.services.template_reconcile.digest_v2 import template_state_digest_v2
 from app.services.template_reconcile.protocol_v2 import StrategyUpdatePackageV2
 from app.services.workspace_bootstrap.archive_security import validate_archive_entries
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError
@@ -84,3 +85,5 @@ def _validate_payloads(
         digest = "sha256:" + hashlib.sha256(content).hexdigest()
         if len(content) != descriptor.size or digest != descriptor.sha256:
             raise TemplatePackageError("V2 Strategy Package payload 摘要或大小不匹配。")
+    if package.nextStateDigest != template_state_digest_v2(package.nextTemplateState):
+        raise TemplatePackageError("V2 Strategy Package 的 nextStateDigest 未绑定 nextTemplateState。")

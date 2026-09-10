@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +9,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from app.config import Settings
+from app.services.template_reconcile.digest_v2 import package_digest_v2, template_state_digest_v2
 from app.services.template_reconcile.executor_v2 import ModificationStrategyExecutorV2, WorkingCopyStoreV2, apply_working_copy_v2, restore_working_copy_v2
 from app.services.template_reconcile.protocol_v2 import StrategyUpdatePackageV2, TemplateStateV2, assert_reconcile_state_invariant_v2
 from app.services.template_reconcile.runtime_v2 import ReconcileAttemptV2, load_current_attempt, persist_prepared_attempt, reconcile_run_gate, reconcile_v2_root, recovery_action, update_attempt
@@ -70,6 +69,9 @@ class TemplateReconcileService:
             raise TemplateStateError("RECONCILE_REQUESTED_CONFIG_MISMATCH：恢复请求与 State.requested 不一致。")
         action = recovery_action(attempt, _state_digest(current))
         package_path = reconcile_v2_root(root) / "attempts" / attempt.attempt_id / "update-package.zip"
+        if package_digest_v2(package_path) != attempt.package_digest:
+            update_attempt(root, attempt, phase="RECOVERY_REQUIRED", status="FAILED", error_code="PACKAGE_DIGEST_MISMATCH", error_message="immutable Package 摘要不匹配。")
+            raise TemplateStateError("PACKAGE_DIGEST_MISMATCH：无法安全恢复模板更新。")
         validated = validate_strategy_update_package(package_path, self._limits())
         if action == "CONFLICT":
             update_attempt(root, attempt, phase="RECOVERY_REQUIRED", status="FAILED", error_code="RECOVERY_STATE_CONFLICT", error_message="当前 TemplateState 与未完成 Attempt 不匹配。")
@@ -94,6 +96,9 @@ class TemplateReconcileService:
             if not validation_plan_passed_v2(self._validate(root, package, current)):
                 raise TemplateStateError("VALIDATION_FAILED：Template Preparation 验收未通过。")
             return self._commit(root, attempt, package.nextTemplateState)
+        except StateCommittedV2Error:
+            # State 已成为权威事实，后续只能由 digest 驱动 Roll-forward，禁止恢复 Workspace。
+            raise
         except Exception as exc:
             restore_working_copy_v2(root, store)
             update_attempt(root, attempt, phase="FAILED", status="FAILED", error_code=_error_code(exc), error_message=str(exc)[:2048])
@@ -109,7 +114,10 @@ class TemplateReconcileService:
 
         attempt = update_attempt(root, attempt, phase="COMMITTING_STATE")
         write_template_state_v2(root, state)
-        update_attempt(root, attempt, phase="SUCCEEDED", status="SUCCEEDED")
+        try:
+            update_attempt(root, attempt, phase="SUCCEEDED", status="SUCCEEDED")
+        except Exception as exc:
+            raise StateCommittedV2Error("RECONCILE_FINALIZE_PENDING：State 已提交，必须 Roll-forward finalize。") from exc
         return "CHANGED"
 
     def _limits(self) -> ArchiveLimits:
@@ -166,8 +174,7 @@ def _payloads(validated: ValidatedStrategyUpdatePackage) -> dict[str, str]:
 def _state_digest(state: TemplateStateV2) -> str:
     """计算冻结 JSON State digest，作为 Package binding 与恢复的唯一比较值。"""
 
-    data = json.dumps(state.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return "sha256:" + hashlib.sha256(data).hexdigest()
+    return template_state_digest_v2(state)
 
 
 def _error_code(exc: Exception) -> str:
@@ -180,3 +187,7 @@ def _now() -> str:
     """生成 Attempt 审计时间。"""
 
     return datetime.now(timezone.utc).isoformat()
+
+
+class StateCommittedV2Error(TemplateStateError):
+    """表示 State 已落盘但 Attempt finalize 未完成，调用方必须进入 Roll-forward。"""

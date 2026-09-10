@@ -17,6 +17,7 @@ from app.services.template_reconcile.protocol_v2 import (
     TemplateReconcileProtocolV2Error,
     assert_reconcile_state_invariant_v2,
 )
+from app.services.template_reconcile.digest_v2 import template_state_digest_v2
 from app.services.template_reconcile.state_v2 import (
     load_template_state_v2,
     write_template_state_v2,
@@ -178,7 +179,9 @@ class TemplateReconcileProtocolV2Tests(unittest.TestCase):
             content = b"export const Login = () => null;\n"
             package = _package()
             package["mode"] = "APPLY"
-            package["nextStateDigest"] = "sha256:" + "b" * 64
+            package["nextStateDigest"] = template_state_digest_v2(
+                TemplateStateV2.model_validate(_state())
+            )
             package["payloadManifest"] = {
                 "payload/login.tsx": {
                     "size": len(content),
