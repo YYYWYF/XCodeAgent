@@ -6,12 +6,76 @@ from unittest.mock import patch
 
 from app.graph.nodes.development_readiness import development_readiness_gate
 from app.graph.nodes.tasks import _agent_generation_unit_ids
-from app.services.agent_development_readiness import inspect_agent_development_readiness
+from app.services.agent_development_readiness import (
+    _append_page_binding_blockers,
+    inspect_agent_development_readiness,
+)
 from app.services.build_context_resolver import resolve_target_build_context
 
 
 class AgentDevelopmentReadinessTests(unittest.TestCase):
     """验证 Agent 开发门禁只消费当前正式产物与运行时派生合同。"""
+
+    def test_interface_launcher_only_requires_gateway_page_dependency(self) -> None:
+        """界面型浮窗入口不要求 action 实现，但页面仍必须依赖 Gateway。"""
+
+        technical_plan = {
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "references": {
+                        "endpoint_dependencies": [
+                            {"endpoint_id": "agent_gateway.message", "usage": "write"}
+                        ],
+                        "action_implementations": [],
+                    },
+                }
+            ],
+            "page_implementation_contracts": [
+                {
+                    "pageId": "orders",
+                    "requiredEndpointIds": ["agent_gateway.message"],
+                }
+            ],
+        }
+        product_agent = {
+            "agentId": "support_agent",
+            "pageActionBindings": [
+                {
+                    "pageId": "orders",
+                    "actionIds": ["open_support_agent"],
+                    "surface": {
+                        "type": "floating_panel",
+                        "enabled": True,
+                        "contextItemIds": [],
+                    },
+                }
+            ],
+        }
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "orders",
+                    "actions": [
+                        {
+                            "actionId": "open_support_agent",
+                            "behavior": {"type": "interface"},
+                        }
+                    ],
+                }
+            ]
+        }
+        blockers: list[dict[str, str]] = []
+
+        _append_page_binding_blockers(
+            technical_plan,
+            product_plan,
+            product_agent,
+            {"invocation": {"gatewayEndpointId": "agent_gateway.message"}},
+            blockers,
+        )
+
+        self.assertEqual(blockers, [])
 
     def test_page_binding_uses_runtime_page_implementation_contract(self) -> None:
         """正式 TechnicalPlan 未持久化页面合同也不应误判 Agent 入口。"""

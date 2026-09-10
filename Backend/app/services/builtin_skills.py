@@ -20,6 +20,7 @@ FRONTEND_CODE_SCAN_SKILL_NAME = "frontend-code-scan"
 BACKEND_CODE_SCAN_SKILL_NAME = "backend-code-scan"
 SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME = "springboot-template-modification-boundary"
 AGENT_RUNTIME_GENERATE_SKILL_NAME = "agent-runtime-generate"
+AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME = "agent-ui-surface-template"
 
 _REACT_DEV_SPEC_REFERENCE_FILES = [
     "references/00-framework-intro.md",
@@ -64,6 +65,12 @@ _AGENT_RUNTIME_GENERATE_REFERENCE_FILES = [
     "references/task-result-contract.md",
 ]
 
+_AGENT_UI_SURFACE_TEMPLATE_REFERENCE_FILES = [
+    "references/ui-design-stage.md",
+    "references/frontend-mock-stage.md",
+    "references/ag-ui-integration-stage.md",
+]
+
 REQUIRED_BUILTIN_SKILL_FILES = {
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
@@ -85,6 +92,10 @@ REQUIRED_BUILTIN_SKILL_FILES = {
     AGENT_RUNTIME_GENERATE_SKILL_NAME: [
         "SKILL.md",
         *_AGENT_RUNTIME_GENERATE_REFERENCE_FILES,
+    ],
+    AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME: [
+        "SKILL.md",
+        *_AGENT_UI_SURFACE_TEMPLATE_REFERENCE_FILES,
     ],
 }
 

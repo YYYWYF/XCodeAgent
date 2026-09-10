@@ -142,9 +142,11 @@ def route_build_result(state: ProjectState) -> str:
     )
     if state.get("status") == "failed":
         return "handle_failure"
+    if summary_status == "mock_completed" or state.get("status") == "requires_user_input":
+        return "await_user_input"
     if summary_status == "completed":
         return "unit_test"
-    if summary_status == "requires_confirmation" or state.get("status") == "requires_user_input":
+    if summary_status == "requires_confirmation":
         return "await_user_input"
     return "handle_failure"
 
