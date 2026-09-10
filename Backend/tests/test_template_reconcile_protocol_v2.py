@@ -94,6 +94,38 @@ class TemplateReconcileProtocolV2Tests(unittest.TestCase):
         self.assertEqual(state.schemaVersion, 2)
         self.assertNotIn("managedFiles", state.model_dump())
 
+    def test_accepts_applied_addition_without_origin(self) -> None:
+        """确认 Addition 只记录目标事实，不要求无业务用途的来源字段。"""
+
+        payload = _state()
+        payload["appliedAdditions"] = {
+            "login.login-page": {
+                "capabilityId": "login",
+                "target": "frontend/src/pages/Login/index.tsx",
+                "installedRevision": "2026.09.10.1",
+            }
+        }
+        state = TemplateStateV2.model_validate(payload)
+        self.assertEqual(
+            state.appliedAdditions["login.login-page"].installedRevision,
+            "2026.09.10.1",
+        )
+
+    def test_rejects_removed_applied_addition_origin(self) -> None:
+        """确认已删除的 origin 不得以额外字段形式重返当前 State。"""
+
+        payload = _state()
+        payload["appliedAdditions"] = {
+            "login.login-page": {
+                "capabilityId": "login",
+                "target": "frontend/src/pages/Login/index.tsx",
+                "installedRevision": "2026.09.10.1",
+                "origin": "GENERATED",
+            }
+        }
+        with self.assertRaises(ValidationError):
+            TemplateStateV2.model_validate(payload)
+
     def test_rejects_legacy_template_state(self) -> None:
         """确认旧 managedFiles State 没有兼容入口。"""
 

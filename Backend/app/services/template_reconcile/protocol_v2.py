@@ -38,12 +38,11 @@ class CapabilityStateV2(ProtocolV2Model):
 
 
 class AppliedAdditionV2(ProtocolV2Model):
-    """记录已成功物化 Addition 的生命周期事实，不保存文件内容基线。"""
+    """记录已成功物化 Addition 的目标与安装修订，不保存冗余来源或文件内容基线。"""
 
     capabilityId: NonBlankStringV2
     target: NonBlankStringV2
     installedRevision: NonBlankStringV2
-    origin: Literal["GENERATED", "UPDATED"]
 
 
 class TemplateStateV2(ProtocolV2Model):

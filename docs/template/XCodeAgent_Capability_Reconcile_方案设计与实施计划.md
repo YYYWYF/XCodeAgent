@@ -1788,6 +1788,9 @@ effective
 appliedAdditions
 ```
 
+其中每个 `appliedAdditions` 条目仅记录 `capabilityId`、`target`、`installedRevision`；
+不得再写入没有消费方的 `origin` 字段。
+
 Writer：
 
 ```text
