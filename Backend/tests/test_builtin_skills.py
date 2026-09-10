@@ -307,11 +307,48 @@ class BuiltinSkillsTests(unittest.TestCase):
             builtin_skills.AGENT_RUNTIME_GENERATE_SKILL_NAME,
             available,
         )
+        self.assertIn(
+            builtin_skills.AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME,
+            available,
+        )
         summaries = builtin_skills.list_builtin_skills(root)
         self.assertTrue(all(skill.description for skill in summaries))
         self.assertTrue(
             all(not skill.relative_path.startswith(str(root)) for skill in summaries)
         )
+
+    def test_agent_ui_surface_skill_routes_each_delivery_stage(self) -> None:
+        """Agent UI Skill 入口保持精简，并按阶段路由全部必需引用。"""
+
+        root = builtin_skills.validate_required_builtin_skills()
+        skill_root = root / builtin_skills.AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME
+        entrypoint = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        references = (
+            "references/ui-design-stage.md",
+            "references/frontend-mock-stage.md",
+            "references/ag-ui-integration-stage.md",
+        )
+
+        self.assertLess(len(entrypoint), 10_000)
+        self.assertIn("@xcodeagent/agent-ui-design", entrypoint)
+        self.assertIn("standalone_page", entrypoint)
+        self.assertIn("floating_panel", entrypoint)
+        for relative_path in references:
+            self.assertIn(relative_path, entrypoint)
+            self.assertIn(
+                relative_path,
+                builtin_skills.REQUIRED_BUILTIN_SKILL_FILES[
+                    builtin_skills.AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME
+                ],
+            )
+            self.assertTrue((skill_root / relative_path).is_file())
+
+        mock_reference = (skill_root / references[1]).read_text(encoding="utf-8")
+        self.assertIn("MockAgentConversationAdapter", mock_reference)
+        self.assertIn("must not call", mock_reference)
+        integration_reference = (skill_root / references[2]).read_text(encoding="utf-8")
+        self.assertIn("@ag-ui/client", integration_reference)
+        self.assertIn("future integration stage", integration_reference)
 
     def test_environment_override_controls_skill_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:

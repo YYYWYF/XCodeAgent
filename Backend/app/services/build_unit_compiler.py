@@ -13,6 +13,7 @@ from app.services.authorization_capability_dependency import (
 )
 from app.services.authorization_overlay import unit_authorization_slice
 from app.services.planning_issues import ValidationIssue
+from app.services.agent_ui_build_contract import agent_ui_contract_from_source_refs
 
 
 class BuildUnitCompilationError(ValueError):
@@ -99,6 +100,8 @@ def _with_task_unit_metadata(
     provided_source_refs.pop("entity_designs", None)
     provided_source_refs.pop("endpoint_designs", None)
     provided_source_refs.pop("business_descriptions", None)
+    provided_source_refs.pop("agent_ui", None)
+    provided_source_refs.pop("agent_ui_by_page", None)
     source_refs = {
         **canonical_source_refs,
         **provided_source_refs,
@@ -109,6 +112,15 @@ def _with_task_unit_metadata(
         source_refs["authorization"] = authorization
     else:
         source_refs.pop("authorization", None)
+    # Agent UI 合同与权限 Overlay 一样属于平台只读事实，模型不能覆盖或拼接。
+    canonical_agent_ui = agent_ui_contract_from_source_refs(
+        canonical_source_refs,
+        page_id=unit_id.removeprefix("page:") if unit_id.startswith("page:") else "",
+    )
+    if canonical_agent_ui:
+        source_refs["agent_ui"] = canonical_agent_ui
+    else:
+        source_refs.pop("agent_ui", None)
     # Endpoint 设计是平台确认的确定性来源，模型候选不得覆盖或扩展其字段映射记录。
     if unit_id.startswith("backend:endpoint:") or unit_id == "backend:bootstrap":
         source_refs["endpoint_designs"] = _endpoint_design_items(
@@ -343,20 +355,32 @@ def _unit_source_refs(
     source_types = _string_list(build_context.get("source_types"))
     entity_ids = _string_list(build_context.get("entity_ids"))
     if unit_id.startswith("page:"):
-        descriptions = _dict_items(build_context.get("business_descriptions"))
+        page_id = unit_id.removeprefix("page:")
+        page_contexts = _dict_value(build_context.get("page_contexts_by_page"))
+        page_context = _dict_value(page_contexts.get(page_id))
+        effective_context = page_context or build_context
+        effective_refs = _dict_value(effective_context.get("source_refs")) or refs
+        agent_ui = agent_ui_contract_from_source_refs(effective_refs, page_id=page_id)
+        effective_endpoint_designs = _endpoint_design_items(
+            effective_context.get("endpoint_designs")
+        )
+        effective_source_types = _string_list(effective_context.get("source_types"))
+        effective_entity_ids = _string_list(effective_context.get("entity_ids"))
+        descriptions = _dict_items(effective_context.get("business_descriptions"))
         return {
             **existing,
             "type": "page_implementation_contract",
-            "target": target,
+            "target": _dict_value(effective_context.get("target")) or target,
             "page_implementation_contract": _dict_value(
-                refs.get("page_implementation_contract")
+                effective_refs.get("page_implementation_contract")
             ),
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_ids": entity_ids,
-            "endpoint_designs": endpoint_designs,
-            "mapping_flows": _string_list(build_context.get("mapping_flows")),
-            **({"source_types": source_types} if source_types else {}),
+            "endpoint_ids": _string_list(effective_context.get("endpoint_ids")),
+            "entity_ids": effective_entity_ids,
+            "endpoint_designs": effective_endpoint_designs,
+            "mapping_flows": _string_list(effective_context.get("mapping_flows")),
+            **({"source_types": effective_source_types} if effective_source_types else {}),
             **({"business_descriptions": descriptions} if descriptions else {}),
+            **({"agent_ui": agent_ui} if agent_ui else {}),
         }
     if unit_id.startswith("backend:endpoint:"):
         contract_id, endpoint_id = _backend_endpoint_identity(unit_id)

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
 
-export const PRODUCT_PLAN_SCHEMA_VERSION = 'product-plan.v6'
+export const PRODUCT_PLAN_SCHEMA_VERSION = 'product-plan.v8'
 export const ENDPOINT_API_DESIGN_SCHEMA_VERSION = 'endpoint-field-mapping.v7'
 
 /** 把 endpoint 业务标识转换为与规划产物约定一致的安全文件名。 */

@@ -52,6 +52,7 @@ from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.execution_recovery_reconciliation import reconcile_interrupted_execution_state
 from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.ui_design_generator import load_page_code
+from app.graph.nodes.ui_confirmation import refresh_ui_design_recovery_state
 from app.services.ui_design_manifest import present_ui_pages
 from app.services.ui_design_recovery import interrupted_ui_design_pages
 from app.services.ui_design_project_setup import ui_design_project_dir
@@ -75,9 +76,14 @@ from app.services.requirement_spec import (
 )
 from app.services.template_reconcile.runtime_v2 import load_current_attempt
 from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
+from app.services.agent_surface_selection import (
+    SaveAgentSurfaceSelectionRequest,
+    save_agent_surface_selection_draft,
+)
 
 
 REQUIREMENT_SPEC_DRAFT_EVENT_NAME = "requirement-spec-draft"
+AGENT_SURFACE_SELECTION_EVENT_NAME = "agent-surface-selection-draft"
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -379,8 +385,8 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "technicalPlanGenerationError": "technical_plan_generation_error",
         },
         "artifactSchemas": {
-            "product_plan": "product-plan.v6",
-            "ui_designs": "ui-manifest.v3",
+            "product_plan": "product-plan.v8",
+            "ui_designs": "ui-manifest.v5",
             "technical_plan": "technical-plan",
         },
         "uiDesignActions": ["select_template", "regenerate", "adjust_pages", "skip"],
@@ -397,7 +403,15 @@ def application_page_planning_capabilities() -> dict[str, Any]:
                     "specs/requirement-spec.md",
                     "specs/requirement-spec.json",
                 ],
-            }
+            },
+            "product_plan": {
+                "saveActionField": "forwardedProps.agentSurfaceSelectionDraft",
+                "actions": ["save_agent_surface_selection"],
+                "writes": [
+                    "drafts/plans/product-plan.md",
+                    "drafts/plans/product-plan.json",
+                ],
+            },
         },
         "agentSettingsRevision": {
             "requestField": "forwardedProps.agentSettingsRevision",
@@ -518,6 +532,13 @@ def build_application_page_planning_ag_ui_stream(
         return _build_requirement_spec_draft_ag_ui_stream(
             payload=normalized_payload,
             draft_input=draft_input,
+            accept=accept,
+        )
+    surface_selection_input = _agent_surface_selection_input(normalized_payload)
+    if surface_selection_input is not None:
+        return _build_agent_surface_selection_ag_ui_stream(
+            payload=normalized_payload,
+            selection_input=surface_selection_input,
             accept=accept,
         )
     recovery_input = _application_planning_recovery_input(normalized_payload)
@@ -656,6 +677,7 @@ def _build_application_planning_recovery_ag_ui_stream(
                 result,
                 projection=projection,
             )
+            result = await refresh_ui_design_recovery_state(result)
             # UI 确认阶段：后台生成池把最新 page status/code 写进 ui-designs.json，
             # 但 checkpoint 里的 ui_designs 仍停留在入队时的 queued/generating（池不写
             # checkpoint）。recovery 只读 checkpoint 不跑 Graph，若不回填 manifest，
@@ -771,6 +793,36 @@ def _build_requirement_spec_draft_ag_ui_stream(
     )
 
 
+def _build_agent_surface_selection_ag_ui_stream(
+    *,
+    payload: dict[str, Any],
+    selection_input: dict[str, Any],
+    accept: str | None,
+) -> AsyncIterator[str]:
+    """把浮窗启停选择投射为不续跑 Graph 的完整 AG-UI 生命周期。"""
+
+    async def operation() -> AgUiActionResult:
+        """校验并保存 ProductPlan 浮窗选择，返回新的结构化草稿。"""
+
+        request = SaveAgentSurfaceSelectionRequest.model_validate(selection_input)
+        result = save_agent_surface_selection_draft(request)
+        return AgUiActionResult(
+            data={"action": "save_agent_surface_selection", **result},
+            message="智能体浮窗选择已保存。",
+        )
+
+    return build_ag_ui_action_stream(
+        payload=payload,
+        event_name=AGENT_SURFACE_SELECTION_EVENT_NAME,
+        state_key="agentSurfaceSelectionDraft",
+        run_id_prefix="agent-surface-selection-draft",
+        operation=operation,
+        error_message_prefix="智能体浮窗选择保存失败",
+        error_data=lambda _exc: {"action": "save_agent_surface_selection"},
+        accept=accept,
+    )
+
+
 def _build_unsupported_lifecycle_ag_ui_stream(
     *,
     payload: dict[str, Any],
@@ -814,6 +866,16 @@ def _agent_settings_revision_input(payload: dict[str, Any]) -> dict[str, Any] | 
     if not isinstance(forwarded_props, dict):
         return None
     value = forwarded_props.get("agentSettingsRevision")
+    return value if isinstance(value, dict) else None
+
+
+def _agent_surface_selection_input(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """从 AG-UI forwardedProps 读取单页浮窗启停保存请求。"""
+
+    forwarded_props = payload.get("forwardedProps")
+    if not isinstance(forwarded_props, dict):
+        return None
+    value = forwarded_props.get("agentSurfaceSelectionDraft")
     return value if isinstance(value, dict) else None
 
 

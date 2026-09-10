@@ -49,6 +49,10 @@ datas = [
         str(backend_root.parent / "Frontend" / "src" / "renderer" / "src" / "templates"),
         "app/page_templates",
     ),
+    (
+        str(backend_root / "app" / "builtin_templates" / "agent-ui-frontend"),
+        "app/builtin_templates/agent-ui-frontend",
+    ),
 ]
 binaries = []
 

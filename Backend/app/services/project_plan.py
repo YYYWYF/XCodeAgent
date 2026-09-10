@@ -1326,7 +1326,9 @@ def _technical_plan_pages(
     """只保存页面身份和 TechnicalPlan 新增的 endpoint 技术引用。"""
 
     product_plan = (
-        spec.get("confirmed_product_plan")
+        spec.get("active_agent_product_plan")
+        if isinstance(spec.get("active_agent_product_plan"), dict)
+        else spec.get("confirmed_product_plan")
         if isinstance(spec.get("confirmed_product_plan"), dict)
         else {}
     )
@@ -2046,6 +2048,7 @@ def _technical_agent_contract_model_errors(
     }
     endpoint_records = _technical_endpoint_records(api_contracts)
     page_action_endpoints = _technical_page_action_endpoint_index(pages)
+    page_endpoint_dependencies = _technical_page_endpoint_dependency_index(pages)
     for index, contract in enumerate(raw_contracts):
         location = f"TechnicalPlan 模型输出 agent_contracts[{index}]"
         errors.extend(
@@ -2064,8 +2067,27 @@ def _technical_agent_contract_model_errors(
                 f"{gateway_endpoint_id or '空'}。"
             )
         for page_binding in _dict_items(product_agent.get("pageActionBindings")):
+            surface = (
+                page_binding.get("surface")
+                if isinstance(page_binding.get("surface"), dict)
+                else {}
+            )
+            if surface.get("enabled") is not True:
+                continue
             page_id = str(page_binding.get("pageId") or "").strip()
-            for action_id in _string_items(page_binding.get("actionIds")):
+            if gateway_endpoint_id not in page_endpoint_dependencies.get(
+                page_id,
+                set(),
+            ):
+                errors.append(
+                    f"{location} 的页面 {page_id or '空'} 必须声明 Agent 网关 Endpoint 依赖。"
+                )
+            gateway_action_ids = product_agent_gateway_action_ids(
+                product_plan,
+                page_id,
+                set(_string_items(page_binding.get("actionIds"))),
+            )
+            for action_id in gateway_action_ids:
                 if page_action_endpoints.get((page_id, action_id)) != gateway_endpoint_id:
                     errors.append(
                         f"{location} 的页面 action {page_id}.{action_id} "
@@ -2307,6 +2329,60 @@ def _technical_page_action_endpoint_index(
             if page_id and action_id and endpoint_id:
                 result[(page_id, action_id)] = endpoint_id
     return result
+
+
+def _technical_page_endpoint_dependency_index(
+    pages: list[dict[str, Any]],
+) -> dict[str, set[str]]:
+    """建立 TechnicalPlan 页面到所声明 Endpoint 依赖的索引。"""
+
+    result: dict[str, set[str]] = {}
+    for page in pages:
+        page_id = str(page.get("pageId") or "").strip()
+        references = (
+            page.get("references")
+            if isinstance(page.get("references"), dict)
+            else {}
+        )
+        if page_id:
+            result[page_id] = {
+                str(item.get("endpoint_id") or "").strip()
+                for item in _dict_items(references.get("endpoint_dependencies"))
+                if str(item.get("endpoint_id") or "").strip()
+            }
+    return result
+
+
+def product_agent_gateway_action_ids(
+    product_plan: dict[str, Any],
+    page_id: str,
+    action_ids: list[str] | set[str],
+) -> list[str]:
+    """筛选页面 Agent 绑定中需要由 Gateway Endpoint 实现的业务操作。"""
+
+    requested_ids = {
+        str(action_id or "").strip()
+        for action_id in action_ids
+        if str(action_id or "").strip()
+    }
+    for page in _dict_items(product_plan.get("pages")):
+        if str(page.get("pageId") or "").strip() != page_id:
+            continue
+        result: list[str] = []
+        for action in _dict_items(page.get("actions")):
+            action_id = str(action.get("actionId") or "").strip()
+            if action_id not in requested_ids:
+                continue
+            behavior = (
+                action.get("behavior")
+                if isinstance(action.get("behavior"), dict)
+                else {}
+            )
+            # 纯界面入口由固定 UI 实现；只有业务操作需要 TechnicalPlan Gateway 映射。
+            if str(behavior.get("type") or "business").strip() == "business":
+                result.append(action_id)
+        return result
+    return []
 
 
 def _resolved_agent_tools(
@@ -2655,7 +2731,12 @@ def create_technical_plan(
                 "initialAdministratorSubjects": [],
             },
         }
-    product_agents = _dict_items(product_plan.get("agents"))
+    active_product_plan = (
+        spec.get("active_agent_product_plan")
+        if isinstance(spec.get("active_agent_product_plan"), dict)
+        else product_plan
+    )
+    product_agents = _dict_items(active_product_plan.get("agents"))
     raw_agent_contracts = _agent_section(agent_plan, "agent_contracts")
     if (
         isinstance(agent_plan, dict)
@@ -2669,14 +2750,14 @@ def create_technical_plan(
         agent_plan = {**agent_plan, "agent_contracts": [deepcopy(raw_agent_contracts)]}
     agent_errors = _technical_agent_contract_model_errors(
         agent_plan,
-        product_plan,
+        active_product_plan,
         api_contracts,
         pages,
     )
     if agent_errors:
         raise ValueError("；".join(agent_errors))
     agent_contracts = _technical_agent_contracts(
-        product_plan,
+        active_product_plan,
         agent_plan,
         api_contracts,
     )
@@ -2684,7 +2765,7 @@ def create_technical_plan(
         architecture["agent_runtime"] = AGENT_RUNTIME_ARCHITECTURE
     authorization_manifest = compile_authorization_manifest(
         spec,
-        product_plan,
+        active_product_plan,
         api_contracts,
         pages,
         application_config=application_config,

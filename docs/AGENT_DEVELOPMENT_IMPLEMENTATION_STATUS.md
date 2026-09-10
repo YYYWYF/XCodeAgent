@@ -219,7 +219,7 @@
 
 2026-08-28 完成创建应用的智能体产品规划契约，范围只到 RequirementSpec + ProductPlan 联合确认，不提前决定技术实现：
 
-- ProductPlan 当前契约升级为 `product-plan.v6`，根对象固定包含 `agents`；普通应用必须使用空数组，历史 v5 不做迁移或兼容读取。
+- 该切片当时把 ProductPlan 契约升级为 `product-plan.v6`，根对象固定包含 `agents`；普通应用必须使用空数组，历史 v5 不做迁移或兼容读取。当前 v7 契约见第 15 节。
 - 每个智能体按 RequirementSpec 的稳定 `agentId` 一一对应，保留名称、职责、入口页面、交互模式和业务边界，并补充稳定能力 ID、能力预期结果、页面 action 绑定、五类交互状态和产品验收标准。
 - 每个 `entryPageId` 必须存在唯一 `pageActionBindings`，其中 action 必须真实存在于同一页面；模型输出遗漏、重复、越界引用或夹带技术字段都会在归一化前后被拒绝。
 - ProductPlan 明确禁止模型、Prompt、API、endpoint、工具、Skill、知识库、运行时、存储和代码路径；这些事实只能由后续 TechnicalPlan/详细设计决定。
@@ -246,7 +246,7 @@
 - `.venv/bin/python -m unittest tests.test_agent_product_plan -v`：6 项通过，覆盖普通应用空数组、智能体稳定引用、技术字段拒绝、模型输出覆盖、提示词边界、Markdown 同步与能力 ID 保持。
 - ProductPlan、RequirementSpec、规划重试、联合确认、模板生成、Workflow 请求和消息兼容定向回归：170 项通过。
 - 包含生命周期旧测试的扩大回归共执行 188 项，其中 181 项通过、7 项错误；错误均为测试继续引用已删除的 `GENERATING_REQUIREMENT_SPEC` / `AWAITING_REQUIREMENT_CONFIRMATION` 枚举，未指向 ProductPlan v6 或 `agents` 字段。本结果不能记为扩大回归全绿。
-- 所有变更 Python 文件 `py_compile`：通过；正式后端 `/health`：HTTP 200，`status=ok`，公开协议已报告 `product-plan.v6`。
+- 当次所有变更 Python 文件 `py_compile`：通过；正式后端 `/health`：HTTP 200，`status=ok`，当时公开协议报告 `product-plan.v6`。
 - 正式前端智能体产品规划测试 2 项、规划产物状态测试 5 项：通过；Node/Web TypeScript 检查与 Electron-Vite development bundle：通过。
 - 本次触及的前端文件定向 ESLint 和 Prettier：通过；全仓 ESLint 运行约 90 秒无输出且未结束，已中止，不能记为全仓 Lint 通过。
 - Electron 实机 UI 检查因 macOS 处于锁屏状态无法执行；自动化未尝试绕过锁屏，因此智能体页签的真实窗口交互、明暗主题和视觉布局仍待解锁后验收。
@@ -418,3 +418,136 @@
 - `Frontend/tests/agentTechnicalPlanView.test.ts`
 
 当前限制：尚未开放 Tools、Memory、Skills、Knowledge、Context 的写能力；尚未实现独立 candidate/active 发布、配置历史回滚、完整质量证据定向失效和运行时热更新。Electron 实机交互、明暗主题和真实 Agent Build 由用户后续启动验证，不以自动化结构测试替代。
+## 15. Agent 页面交互载体与模板设计
+
+2026-09-07 确认 [Agent 页面交互载体与 UI 模板设计](./AGENT_UI_SURFACES_AND_TEMPLATES.md)。2026-09-08 用户进一步收敛本次交付：只完成前端模板和 Electron 设计阶段验收，Java Gateway、Agent Runtime、Build DAG 与生产端到端不在本次范围：
+
+- 独立网页版问答确定为真正的 `standalone_page` 页面模板；普通页面中的 Agent 气泡确定为 `floating_panel` 页面增强能力，不建立第二个页面模板。
+- 本次模板只使用静态 Mock 和本地状态，不接入真实 API、Java Gateway 或 Agent Runtime；生产对话核心与传输协议留待未来单独立项。
+- ProductPlan 已在 `agents[].pageActionBindings[]` 增加 `surface.type/contextItemIds`，由 ProductPlan 确认页面载体和上下文白名单；UiDesign 仍只决定布局、位置、尺寸、响应式和视觉状态。当前契约已升级为 `product-plan.v7`，不兼容读取 v6。
+- 当前 UiManifest 已升级为 `ui-manifest.v5`：`agent_surfaces` 保存固定模板模块、组件、`agent-ui.v1` 与配置摘要；独立页和浮层的必需部件由固定组件版本保证，原业务 action/information item 仍须完整。
+- 当前三个业务模板继续用于普通页面和浮层宿主页；新增 `agentConversation` 模板只适用于 `standalone_page`。模板仍使用 React 18、隔离设计运行时中的 Ant Design 5、Pro Components 和静态 Mock，不引入新 UI 或聊天依赖。
+- PC 浮层设计支持受限拖动、视口夹紧和边缘吸附；移动端使用固定入口和受视口约束 Card，不使用浮窗 Drawer，也不提供自由拖动。设计稿只使用已声明的 `contextItemIds`，不扫描页面 DOM。
+- 原设计中的批次 1—7 属于本次前端模板范围；批次 8—12 涉及生成应用共享前端、Runtime、Java Gateway、Build 和生产端到端，已按用户确认排除，不作为本次“剩余批次”交付项。
+- 后续迁移公司内网组件库只替换视图组件和主题映射，不改变 ProductPlan、UiManifest、AG-UI、Gateway、Runtime、thread 或安全契约；当前不预建无法验证的通用适配层。
+
+本批次只新增和更新设计文档，没有修改 ProductPlan、UiManifest、模板源码、前后端类型、AG-UI、Build、Runtime 或外部模板仓库。未运行代码测试、Frontend Build、Backend `/health` 或 Electron 验证；这些结果不得被记为实现证据。
+
+## 16. Agent Surface ProductPlan v7
+
+2026-09-07 完成批次 1，只闭合 ProductPlan 当前契约及其直接消费者：
+
+- ProductPlan 当前版本升级为 `product-plan.v7`，`pageActionBindings[]` 必须包含精确的 `surface: {type, contextItemIds}`；普通应用仍固定为 `agents: []`。
+- `surface.type` 只允许 `standalone_page` 或 `floating_panel`；`contextItemIds` 归一化为去空白、去重的字符串数组，并只能引用绑定页面自身的 `information_items[].itemId`。
+- 同一页面最多绑定一个同类型 Agent Surface；页面 action 仍必须真实存在并与 RequirementSpec 入口页面逐项闭合。
+- 产品规划模型示例、提示词、严格原始 JSON 校验、确定性归一化、Markdown 展示/同步和 UiDesign 上游哈希均已覆盖 Surface。
+- 后端公开页面规划协议和 Electron 当前 ProductPlan 版本门禁同步升级为 v7；批次 2 已继续完成前端 Surface 严格类型与只读展示，见第 16 节。
+- 未修改 UiManifest、页面模板、UiDesign 生成、AG-UI、Build、Runtime、Java Gateway 或外部模板仓库，也没有新增依赖。
+
+本批次验证：
+
+- 测试先行：新增 Surface 契约测试在 v6 实现上 9 项中 8 项失败、1 项通过；实现后 `tests.test_agent_product_plan` 9 项全部通过。
+- ProductPlan、TechnicalPlan Agent 消费、生命周期协议与模板生成聚焦回归共 82 项通过；应用生命周期和 Workflow 请求回归 96 项通过；页面规划公开协议 v7 断言 1 项通过。
+- `tests.test_product_planning_retry` 纳入的扩大回归共 103 项，其中 102 项通过；既有 `test_4e_uses_materialized_page_implementation_contracts` 因测试输入缺少当前必填 `TechnicalPlan.agent_contracts` 失败。该测试及对应校验在本批次无 Diff，未越界修改，不能把扩大回归记为全绿。
+- `tests.test_application_page_planning` 全模块 23 项中 18 项通过、3 项失败、2 项错误；失败集中在既有需求确认投影与权限事实 FakeModel 路径，本批次只新增的 ProductPlan v7 公开协议断言单独通过，不能把该模块记为全绿。
+- 变更 Python 文件 `py_compile` 通过；前端规划版本测试 5 项、定向 ESLint、Prettier 和 Node/Web TypeScript 检查通过。
+- 标准 `pnpm build` 在进入项目脚本前被本机 pnpm 代理的注册表签名/网络校验拒绝；直接使用仓库已安装的 `electron-vite` 完成 main、preload、renderer 构建并通过。该等价构建不能抹去标准命令的环境失败。
+- 后端 `/health` 返回 `status: ok`，页面规划公开协议报告 `product-plan.v7`；未运行 Electron 实机 UI，因为本批次没有改变用户界面或视觉行为。
+
+## 17. Agent Surface 前端只读投影
+
+2026-09-07 完成批次 2，只把已确认的 ProductPlan Surface 投影到现有确认页和开发工作台，不提前实现模板、UiManifest 或聊天运行时：
+
+- Electron 主进程与 Renderer 镜像类型为每个 Agent 页面操作绑定增加严格的 `surface` 投影，类型只允许 `standalone_page`、`floating_panel` 或安全只读的 `unknown`。
+- 主进程投影同时携带入口页面名称、页面操作和 `contextItemIds`；上下文白名单只接受真实非空字符串并去重，不把数字、对象或未知 Surface 当作可执行配置。
+- RequirementSpec/ProductPlan 联合确认视图展示载体中文名称、页面操作与上下文白名单；Agent 开发详情新增“页面交互载体”只读区块。
+- 新增样式仅复用现有 `--wb-*` 主题变量和 Ant Design v4 `Tag`，没有增加依赖或独立颜色体系，明暗主题继续由现有主题变量覆盖。
+- 本节记录的批次 2 未修改 UiManifest、UiDesign 生成或模板分类；这些已在后续前端模板切片完成。外部模板仓库、AG-UI、Runtime、Java Gateway 与 Build 仍未纳入本次范围。
+
+本批次验证：
+
+- 测试先行：确认视图、主进程投影和开发详情渲染测试在旧实现上失败；实现后 `node scripts/run-agent-product-plan-tests.mjs` 4 项通过，`node scripts/run-agent-technical-plan-view-tests.mjs` 通过。
+- `tsc --noEmit -p tsconfig.node.json --composite false`、`tsc --noEmit -p tsconfig.web.json --composite false`、定向 ESLint、Prettier check 与 `git diff --check`：通过。
+- 直接运行已安装的 `electron-vite build --mode development`：main、preload、renderer 全部构建通过。
+- 标准 `pnpm build` 未进入项目脚本：pnpm 版本代理因 npm registry 签名/网络校验失败而终止，不能记为通过；等价的已安装 `tsc` 与 `electron-vite` 检查已分别通过。
+- 已检查当前运行中的 Electron 应用，可正常进入现有开发工作台；最近的智能体项目仍是 `product-plan.v6`，按当前契约规则不能兼容读取。为避免改写用户历史项目，本批未伪造 v7 数据，因此新增 Surface 卡片没有 Electron 实例级视觉证据，使用真实 React + Less 打包及静态渲染断言覆盖。
+
+## 18. Agent Surface 前端模板与 Electron 设计验收
+
+2026-09-08 完成 [Agent 页面交互载体与 UI 模板设计](./AGENT_UI_SURFACES_AND_TEMPLATES.md) 的批次 3—7，并保持用户确认的纯前端模板边界：
+
+- `ui-manifest.v5` 现可保存并验证 Agent Surface 的 Agent、类型、action、context、固定组件模块/名称/版本、配置摘要和派生必需部件证据；ProductPlan 页面事实变化会使旧设计证据失效，不兼容读取 v4。
+- 三个既有业务模板继续支持普通页面与 `floating_panel` 宿主页；新增 `agentConversation` 只支持 `standalone_page`，模板选择器按当前页面 Surface 严格过滤。
+- 独立会话模板提供桌面历史侧栏、窄屏历史 Drawer、消息/状态/Composer、明暗主题以及正常、加载、错误、空、Tool 和审批等静态设计状态。
+- 浮动 Agent 由 UiDesign 在完整业务页面上增强：桌面入口区分点击与拖动并执行视口夹紧/边缘吸附，窄屏禁用自由拖动并切换到底部面板；上下文只来自 ProductPlan 声明的 `contextItemIds`。
+- 生成器为 Surface 页面保留至少两轮有界契约修复，并把确定性固定组件 import 与静态 `configJson` 契约提供给模型；模型只能生成业务页面主体和组件组合，不再生成 Agent 聊天气泡、状态、拖动、独立页历史 Drawer 或主题实现。行选择操作仍不得只隐藏在 Ant Table `onRow` 返回值中。
+- 本次没有修改 `frontend-template`、`springboot-template` 或 `agent-runtime-template`。早先误入三个外部模板仓库的工作树变更已备份后恢复，Java Gateway、Agent Runtime、Build DAG 和生成应用端到端仍不在本次范围。
+
+本批次验证：
+
+- Backend `tests.test_ui_design_generator` 30 项通过；UiManifest、模板兼容性、ProductPlan 与相关生命周期扩大回归共 225 项通过。
+- `tests.test_application_page_planning` 的 5 项失败可在独立当前 `HEAD` 归档中原样复现，集中于既有权限事实 FakeModel 与确认投影路径；未把该基线失败记为本功能通过，也未越界修复。
+- Frontend 模板兼容、Agent ProductPlan 与规划产物状态测试共 16 项通过；`pnpm build`（Node/Web typecheck + Electron main/preload/renderer bundle）通过；变更前端文件定向 ESLint 通过。
+- 已运行 Electron 临时应用 `智能体页面模板验收`：独立页和订单浮层均生成并确认；两页 UiManifest 五类确定性检查全部通过。独立页实机覆盖窄/宽布局、明暗主题及正常/加载/错误/空状态；订单页实机覆盖业务表格保留、选中上下文、浮动入口拖动与吸附、迷你面板开关及正常/加载/错误/空状态。
+- Electron 验收只停留在设计阶段；没有进入技术规划、Build、Java/Python Runtime 或生成应用端到端，因此不得把本节解释为批次 8—12 已完成。
+
+## 19. Agent 入口页面范围识别修复
+
+2026-09-09 修复 RequirementSpec 可能只记录独立会话页、遗漏普通业务页浮窗入口的问题，保持现有 ProductPlan v7 与 UiManifest v4 契约不变：
+
+- `entryPageIds` 现在明确表示所有可见 Agent 入口页面，包括独立会话页和承载浮窗的普通业务页；空数组只表示没有可见页面入口，不能作为“全部页面”的缩写。
+- “所有页面”或“其他页面”只覆盖 Agent 明确面向角色实际使用的页面；管理员专属、系统页和其他角色页面默认不绑定，角色范围与页面范围冲突时先请求一次聚焦澄清。
+- 未进入 `entryPageIds` 的页面继续作为普通页面，不增加 Agent action、`floating_panel` 或模板限制。ProductPlan 仍只为已确认入口页面生成 `pageActionBindings`，UiDesign 仍只投影 ProductPlan 已声明的 Surface。
+- 本修复只调整需求模型的产品语义提示和对应测试，不新增字段、Schema、API、AG-UI 事件、Graph 节点、兼容分支或依赖，也不改写已有应用的已确认产物。
+
+本批次验证：
+
+- 测试先行：新增入口范围测试在修改前按预期失败，修改后 `tests.test_agent_requirement_spec` 14 项全部通过。
+- RequirementSpec 响应协议、ProductPlan Surface 和 UiManifest 下游回归共 38 项通过，覆盖普通应用空 Agent、独立页、浮窗和未绑定页面空 `agent_surfaces`。
+- 真实需求模型探测成功连通并进入澄清，但模型先询问应用信息、角色和功能，没有在该轮生成 RequirementSpec，因此不能记为真实 `entryPageIds` 命中证据。
+- 变更 Python 文件 `py_compile`、`git diff --check` 和后端 `/health` 检查通过；本次没有前端代码变更，因此未运行前端 Build、Electron 视觉、明暗主题或生成应用端到端验证。
+
+## 20. Agent 浮窗候选启停选择
+
+2026-09-10 在入口范围识别之后增加用户可控的页面级集成选择，当前 ProductPlan 契约升级为 `product-plan.v8`：
+
+- 模型识别出的每个 Agent Surface 都必须包含 `enabled`，候选默认开启；`standalone_page` 固定开启，只有 `floating_panel` 可关闭。
+- 开关位于 RequirementSpec/ProductPlan 联合确认右侧面板的“智能体 → 页面操作绑定”行，展示页面名称和路径；未识别页面不显示开关。
+- 只有 `pending_user_confirmation` ProductPlan 可修改。保存通过 `/application-page-planning/run` 的 `agentSurfaceSelectionDraft` AG-UI 动作完成，并同步草稿 JSON 与 Markdown；联合确认会重新读取该结构化草稿，使选择进入原 Graph checkpoint 的后续流程，确认后仅只读展示。
+- 正式 ProductPlan 保留关闭的候选及选择记录。UiDesign、TechnicalPlan 页面操作输入、PageImplementationContract 和工作台入口只消费启用投影，因此关闭页面不生成 Agent launcher、panel 或对应 Agent action；该页面其他信息项、业务操作、导航、状态和模板能力保持不变。
+- ProductPlan 修订会保留用户已经做出的启停选择，不允许模型的默认开启值覆盖它。
+- 修复保存成功后开关仍显示开启的问题：根因是右侧结构化视图优先消费了尚未刷新的外层 Workflow ProductPlan。前端现在为当前 run/thread 和 ProductPlan 版本身份保留最新保存快照；保存后立即显示新值，进入下一轮、确认完成或产物重新生成时自动回到新的 Workflow 权威快照。
+- 未增加新依赖、普通 REST 产品接口、历史版本读取、迁移、兼容分支或双写逻辑。
+
+本批次验证：
+
+- 用户明确要求由其自行验证，因此本批次完成实现后未运行测试、lint、typecheck、build、后端 `/health` 或 Electron 明暗主题/交互验证；不得把本节解释为这些检查已通过。
+
+## 21. Agent UI 生成应用 Mock Build 边界
+
+2026-09-11 完成 Agent UI 固定模板标准化批次 6，并保持真实 AG-UI/Gateway/Runtime 未完成的交付边界：
+
+- BuildContext 按页面从已确认 ProductPlan 与 TechnicalPlan 编译平台所有的 `agent-ui-build.v1` 合同；任务模型不能提交或覆盖 `source_refs.agent_ui`。
+- Agent 页面 Frontend Agent 由平台内联 `agent-ui-surface-template` Skill，并读取生成应用中已注入的固定组件源码；页面只组合精确配置，不创建第二套聊天核心、Adapter、传输或 Mock 数据。
+- Gateway Endpoint 继续保留在正式页面和 Unit 合同中，但 Mock 页面不消费它；普通业务 Endpoint 仍按原业务 API 检查执行。
+- `frontend.agent_ui_mock_contract` 是 Agent 页面强制检查，即使普通 DAG 业务自检关闭也会执行；它检查固定组件、精确配置、默认 Mock Adapter、浮窗业务主体及页面侧网络禁用。
+- Mock Build 完成后状态为 `mock_completed / real_integration=pending`，Workflow 停止在真实集成待办，不进入测试、启动或最终验收；Acceptance/finalize 也拒绝把该状态标记为完成。
+- 本节只证明固定 Agent UI Mock 的生成应用开发合同。真实 Gateway 消费、Python Runtime 联调、会话持久化、Launch 和端到端 Acceptance 仍未完成。
+
+阶段 6 及其 Agent ProductPlan、固定模板、Build DAG、业务验收和 Workflow 相邻回归共 303 项通过；阶段 7 的完整 Electron 主题/响应式/状态矩阵及最终边界见下一节。
+
+## 22. Agent UI 固定模板 Electron 回归与移动端 Card 收敛
+
+2026-09-11 完成固定模板标准化批次 7—8，并按用户确认撤销浮窗移动端 Drawer 方案：
+
+- 修复 `AgentChatCore` 普通状态白屏：旧实现先创建 `AgentExclusiveState` React element，再用 element 真值选择分支，导致 normal、tool、approval 和 success 都只渲染空状态容器。当前改为按 `loading/empty/error/stopped` 状态值判断，其他状态稳定渲染消息栈。
+- UiDesign 固定组件与生成应用内置资产统一使用受视口约束的浮窗 Card；320/767 宽度禁用自由拖动，768 及以上沿用 Ant Design `md` 桌面断点。`AgentMobileChatDrawer` 只承担独立会话页历史列表，不再承载浮窗聊天。
+- 移除 UiDesign 独立页和浮窗中仅供预览的手工状态切换条；normal/empty/loading/running/stopped/error/tool/approval/success 的状态组件保持不变，后续只接受 Adapter/运行事件驱动。
+- 新增 `test:agent-ui-electron-runtime`，在项目安装的真实 Electron 中覆盖 1440/1024/768/767/320、亮暗主题、normal/stopped 交互、无横向滚动、Escape、焦点返回、ARIA live/Composer 标签、渲染异常和零 HTTP/HTTPS Agent 请求，并输出可复核截图；其余状态由 `AgentChatCore` 确定性渲染测试覆盖。
+- 当前交付只证明 `agent-ui.v1` 固定 UI、`ui-manifest.v5` 确定性证据、生成应用 Mock Adapter 和 Mock Build 边界；Java Gateway 消费、真实 AG-UI、Python Runtime、会话持久化、Launch 和端到端 Acceptance 仍未完成。
+
+本批次验证：
+
+- Frontend Agent UI Runtime 与模板兼容专项通过；Node/Web TypeScript typecheck、定向 ESLint、Electron/Vite build、真实 Electron Runtime 矩阵和 `git diff --check` 通过。标准 `pnpm` 入口因本机 pnpm 8.15.9 registry 签名校验失败未进入项目脚本，等价检查均直接使用仓库已安装二进制完成。
+- Backend Agent UI scaffold、模板生成、Build DAG 和业务验收定向回归 160 项通过；`/health` 返回 healthy。
+- 统一 Backend 组合回归运行 254 项，248 项通过；剩余 6 项可在各自模块独立重跑中复现，分别为既有 Spring Boot Skill 精确文案断言 1 项，以及 application page planning FakeModel/确认投影 5 项。本批未修改这些无关区域，也未将失败记为通过。

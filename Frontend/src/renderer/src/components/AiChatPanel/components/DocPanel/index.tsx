@@ -31,12 +31,18 @@ function requirementStatusLabel(spec?: Record<string, unknown>): string {
 }
 
 type Props = {
+  agentSurfaceSelectionEditable?: boolean
   content?: string
   title?: string
   generating?: boolean
   error?: string
   docName?: string
   productPlan?: Record<string, unknown>
+  onAgentSurfaceEnabledChange?: (
+    agentId: string,
+    pageId: string,
+    enabled: boolean
+  ) => Promise<void>
   requirementSpec?: Record<string, unknown>
   technicalPlan?: Record<string, unknown>
   structuredDocument?: 'requirement-doc' | 'technical-plan'
@@ -45,12 +51,14 @@ type Props = {
 
 /** 右侧产物面板：需求文档与技术规划使用结构化审核视图，其余文档只读展示 Markdown。 */
 export default function DocPanel({
+  agentSurfaceSelectionEditable,
   content,
   title,
   generating,
   error,
   docName,
   productPlan,
+  onAgentSurfaceEnabledChange,
   requirementSpec,
   technicalPlan,
   structuredDocument,
@@ -125,7 +133,12 @@ export default function DocPanel({
                 </div>
               )
             ) : requirementReady ? (
-              <RequirementDocPanel productPlan={productPlan || {}} spec={requirementSpec || {}} />
+              <RequirementDocPanel
+                agentSurfaceSelectionEditable={agentSurfaceSelectionEditable}
+                onAgentSurfaceEnabledChange={onAgentSurfaceEnabledChange}
+                productPlan={productPlan || {}}
+                spec={requirementSpec || {}}
+              />
             ) : (
               <MarkdownContent content={content ?? ''} />
             )}

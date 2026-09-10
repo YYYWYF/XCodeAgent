@@ -488,6 +488,100 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "页面 action.*Agent 网关 Endpoint"):
             create_technical_plan(requirement, agent_plan=raw_plan)
 
+    def test_interface_agent_launcher_does_not_require_gateway_action_implementation(
+        self,
+    ) -> None:
+        """纯界面浮窗入口只依赖 Gateway，不应重复声明业务 action 实现。"""
+
+        requirement = self._requirement_with_product_agent()
+        product_plan = requirement["confirmed_product_plan"]
+        product_plan["pages"][0]["actions"][0]["behavior"] = {
+            "type": "interface",
+            "expectedResult": "打开库存助手浮窗。",
+        }
+        product_plan["agents"][0]["pageActionBindings"][0]["surface"] = {
+            "type": "floating_panel",
+            "enabled": True,
+            "contextItemIds": [],
+        }
+        raw_plan = self._technical_model_plan(requirement)
+        raw_plan["pages"][0]["references"]["action_implementations"] = []
+
+        plan = create_technical_plan(requirement, agent_plan=raw_plan)
+
+        self.assertEqual(
+            plan["pages"][0]["references"]["action_implementations"],
+            [],
+        )
+
+    def test_technical_prompt_keeps_interface_agent_launcher_out_of_example(
+        self,
+    ) -> None:
+        """TechnicalPlan 示例不得诱导模型为界面型浮窗入口生成 Endpoint 决策。"""
+
+        requirement = self._requirement_with_product_agent()
+        product_plan = requirement["confirmed_product_plan"]
+        action_id = product_plan["pages"][0]["actions"][0]["actionId"]
+        product_plan["pages"][0]["actions"][0]["behavior"] = {
+            "type": "interface",
+            "expectedResult": "打开库存助手浮窗。",
+        }
+        product_plan["agents"][0]["pageActionBindings"][0]["surface"] = {
+            "type": "floating_panel",
+            "enabled": True,
+            "contextItemIds": [],
+        }
+
+        prompt = _technical_planning_prompt(requirement, None)
+        example_text = prompt.split(
+            "endpointId values declared by the generated TechnicalPlan:\n",
+            1,
+        )[1].split(
+            "\n\nAdditional sequence syntax example only:",
+            1,
+        )[0]
+        example = json.loads(example_text)
+
+        self.assertNotIn(
+            action_id,
+            {
+                item["actionId"]
+                for item in example["pages"][0]["references"][
+                    "action_implementations"
+                ]
+            },
+        )
+        self.assertIn(
+            example["agent_contracts"][0]["gatewayEndpointId"],
+            {
+                item["endpoint_id"]
+                for item in example["pages"][0]["references"][
+                    "endpoint_dependencies"
+                ]
+            },
+        )
+
+    def test_interface_agent_launcher_requires_gateway_page_dependency(self) -> None:
+        """即使入口是纯界面操作，承载页面仍必须声明 Agent Gateway 依赖。"""
+
+        requirement = self._requirement_with_product_agent()
+        product_plan = requirement["confirmed_product_plan"]
+        product_plan["pages"][0]["actions"][0]["behavior"] = {
+            "type": "interface",
+            "expectedResult": "打开库存助手浮窗。",
+        }
+        product_plan["agents"][0]["pageActionBindings"][0]["surface"] = {
+            "type": "floating_panel",
+            "enabled": True,
+            "contextItemIds": [],
+        }
+        raw_plan = self._technical_model_plan(requirement)
+        raw_plan["pages"][0]["references"]["endpoint_dependencies"] = []
+        raw_plan["pages"][0]["references"]["action_implementations"] = []
+
+        with self.assertRaisesRegex(ValueError, "必须声明 Agent 网关 Endpoint 依赖"):
+            create_technical_plan(requirement, agent_plan=raw_plan)
+
     def test_agent_contract_rejects_memory_inconsistent_with_multi_turn(self) -> None:
         """Short-term Memory 必须与 ProductPlan 多轮要求保持一致。"""
 

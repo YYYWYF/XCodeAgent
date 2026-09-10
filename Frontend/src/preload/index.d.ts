@@ -128,6 +128,7 @@ declare global {
                 endpointId: string
                 label: string
               }
+            | { type: 'agent'; agentId: string; label: string }
           revisionContext?: unknown
         }) => Promise<{ ok?: boolean; session?: unknown }>
         save: (payload: {

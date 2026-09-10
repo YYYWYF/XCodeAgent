@@ -11,7 +11,7 @@ import {
   ensureApplicationTemplateReadiness,
   retryApplicationTemplateReadiness
 } from '../service/templateApi'
-import type { ApplicationConfig, ApplicationLifecycle, ApplicationPlanningConfirmation } from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { asMessageClause } from '../service/repositoryBranch'
 import type { RepositoryBranchOutcome } from '../service/repositoryBranch'
 

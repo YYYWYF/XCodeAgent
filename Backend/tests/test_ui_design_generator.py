@@ -6,8 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.config import Settings
+from app.services.page_templates import load_template_source
 from app.services.ui_design_generator import (
     _auto_fix_missing_imports,
+    _build_repair_prompt,
     _build_ui_design_prompt,
     _extract_tsx_code,
     _find_undefined_refs,
@@ -53,6 +55,18 @@ class UiDesignSettingsTests(unittest.TestCase):
 
 
 class UiDesignGeneratorTests(unittest.TestCase):
+    def test_template_source_requires_compatible_surface(self) -> None:
+        """模板后端读取必须按当前页 Surface 严格拒绝不兼容候选。"""
+
+        self.assertIn(
+            "AgentConversationPage",
+            load_template_source("agentConversation", surface_type="standalone_page"),
+        )
+        with self.assertRaisesRegex(ValueError, "不兼容"):
+            load_template_source("commonTable", surface_type="standalone_page")
+        with self.assertRaisesRegex(ValueError, "不兼容"):
+            load_template_source("agentConversation", surface_type="floating_panel")
+
     def test_prompt_declares_product_plan_as_only_product_fact_source(self) -> None:
         """UI 提示词必须明确禁止新增业务字段、操作、指标和正式路由。"""
 
@@ -69,6 +83,221 @@ class UiDesignGeneratorTests(unittest.TestCase):
         self.assertIn("ProductPlan is the ONLY source of product facts", prompt)
         self.assertIn("Do not invent additional metrics", prompt)
         self.assertIn('data-preview-only="true"', prompt)
+
+    def test_page_without_agent_surface_does_not_load_agent_ui_skill(self) -> None:
+        """普通页面只读取通用设计技能，不应加载 Agent UI 专用技能。"""
+
+        with patch(
+            "app.services.ui_design_generator.read_builtin_skill_md",
+            return_value="generic skill",
+        ) as read_skill:
+            prompt = _build_ui_design_prompt(
+                {"pageId": "orders", "name": "订单页", "information_items": [], "actions": []},
+                "Orders",
+            )
+
+        self.assertNotIn("INJECTED agent-ui-surface-template", prompt)
+        read_skill.assert_called_once_with("antd-ui-design")
+
+    def test_prompt_requires_static_ownership_for_every_interactive_control(
+        self,
+    ) -> None:
+        """每个交互控件都必须被静态归类，避免 Agent 内部按钮成为裸控件。"""
+
+        prompt = _build_ui_design_prompt(
+            {
+                "pageId": "orders",
+                "name": "订单页",
+                "information_items": [],
+                "actions": [{"actionId": "open-order-assistant"}],
+                "agent_surfaces": [
+                    {
+                        "agentId": "order_assistant",
+                        "type": "floating_panel",
+                        "actionIds": ["open-order-assistant"],
+                        "contextItemIds": [],
+                        "name": "订单助手",
+                        "purpose": "分析订单并协助跟进",
+                        "capabilities": [],
+                    }
+                ],
+            },
+            "Orders",
+        )
+
+        self.assertIn(
+            "Every interactive JSX opening tag MUST be classified exactly once",
+            prompt,
+        )
+        self.assertIn("declared ProductPlan action", prompt)
+        self.assertIn("declared information item", prompt)
+        self.assertIn('static `data-preview-only="true"`', prompt)
+        self.assertIn(
+            "Never use JSX expressions such as `data-preview-only={true}`",
+            prompt,
+        )
+        self.assertIn("Do not add ownership markers to internals", prompt)
+        self.assertIn("derived from the validated static configJson", prompt)
+
+    def test_prompt_requires_static_agent_surface_evidence(self) -> None:
+        """包含 Agent Surface 的页面必须收到两类载体及静态证据规则。"""
+
+        prompt = _build_ui_design_prompt(
+            {
+                "pageId": "orders",
+                "name": "订单页",
+                "information_items": [],
+                "actions": [{"actionId": "open-order-assistant"}],
+                "agent_surfaces": [
+                    {
+                        "agentId": "order_assistant",
+                        "type": "floating_panel",
+                        "actionIds": ["open-order-assistant"],
+                        "contextItemIds": [],
+                        "name": "订单助手",
+                        "purpose": "分析订单并协助跟进",
+                        "capabilities": [],
+                    }
+                ],
+            },
+            "Orders",
+        )
+
+        self.assertIn("required agent surfaces", prompt)
+        self.assertIn("from '@xcodeagent/agent-ui-design'", prompt)
+        self.assertIn("AgentFloatingPanelTemplate", prompt)
+        self.assertIn("agent-ui.v1", prompt)
+        self.assertIn('&quot;agentId&quot;:&quot;order_assistant&quot;', prompt)
+        self.assertIn("INJECTED agent-ui-surface-template SKILL.md", prompt)
+        self.assertIn("must not be implemented locally", prompt)
+
+    def test_prompt_expands_exact_non_agent_action_markers(self) -> None:
+        """界面动作应展开成可直接复制的静态 JSX 证据，并排除 Surface 自身动作。"""
+
+        page = {
+            "pageId": "orders",
+            "name": "订单页",
+            "actions": [
+                {
+                    "actionId": "orders_select",
+                    "behavior": {"type": "interface"},
+                },
+                {
+                    "actionId": "orders_agent_interact",
+                    "behavior": {"type": "business"},
+                },
+            ],
+            "agent_surfaces": [
+                {
+                    "agentId": "order_agent",
+                    "type": "floating_panel",
+                    "actionIds": ["orders_agent_interact"],
+                    "contextItemIds": [],
+                    "name": "订单助手",
+                    "purpose": "协助处理订单",
+                    "capabilities": [],
+                }
+            ],
+        }
+
+        prompt = _build_ui_design_prompt(page, "OrdersPage")
+
+        self.assertIn('data-action-id="orders_select"', prompt)
+        self.assertIn('data-control-id="orders_select-control"', prompt)
+        self.assertIn('data-ui-effect="执行orders_select对应的本地界面变化"', prompt)
+        self.assertIn("Do not rely solely on antd Table `onRow`", prompt)
+        self.assertNotIn('data-control-id="orders_agent_interact-control"', prompt)
+
+    def test_prompt_expands_exact_information_item_markers(self) -> None:
+        """业务信息项应展开成可直接复制的静态 JSX 证据。"""
+
+        prompt = _build_ui_design_prompt(
+            {
+                "pageId": "orders",
+                "name": "订单页",
+                "information_items": [
+                    {"itemId": "orders_table", "label": "订单表格"},
+                    {"itemId": "selected_order_number", "label": "选中订单编号"},
+                ],
+                "actions": [],
+            },
+            "OrdersPage",
+        )
+
+        self.assertIn('data-information-item-id="orders_table"', prompt)
+        self.assertIn('data-control-id="orders_table-display"', prompt)
+        self.assertIn('data-information-item-id="selected_order_number"', prompt)
+
+    def test_repair_prompt_requires_single_responsive_surface_nodes(self) -> None:
+        """Surface 修复提示必须禁止为桌面和移动端复制两套静态证据节点。"""
+
+        prompt = _build_repair_prompt(
+            {
+                "pageId": "orders",
+                "name": "订单页",
+                "information_items": [],
+                "actions": [{"actionId": "open_order_agent"}],
+                "agent_surfaces": [
+                    {
+                        "agentId": "order_agent",
+                        "type": "floating_panel",
+                        "actionIds": ["open_order_agent"],
+                        "contextItemIds": [],
+                        "name": "订单助手",
+                        "purpose": "协助处理订单",
+                        "capabilities": [],
+                    }
+                ],
+            },
+            "OrdersPage",
+            "const OrdersPage = () => <div />; export default OrdersPage;",
+            ["Agent Surface 存在重复 data-control-id"],
+        )
+
+        self.assertIn("AgentFloatingPanelTemplate", prompt)
+        self.assertIn("exact static configJson", prompt)
+        self.assertIn("Never recreate, wrap, copy, or restyle", prompt)
+
+    def test_repair_prompt_audits_every_interactive_control_instance(self) -> None:
+        """修复提示必须全量审计嵌套控件，不能只修首个同类 Button。"""
+
+        prompt = _build_repair_prompt(
+            {
+                "pageId": "orders",
+                "name": "订单页",
+                "information_items": [],
+                "actions": [{"actionId": "open_order_agent"}],
+                "agent_surfaces": [
+                    {
+                        "agentId": "order_agent",
+                        "type": "floating_panel",
+                        "actionIds": ["open_order_agent"],
+                        "contextItemIds": [],
+                        "name": "订单助手",
+                        "purpose": "协助处理订单",
+                        "capabilities": [],
+                    }
+                ],
+            },
+            "OrdersPage",
+            "const OrdersPage = () => <Button />; export default OrdersPage;",
+            ["未绑定 ProductPlan action：Button"],
+        )
+
+        self.assertIn(
+            "Audit every interactive JSX opening tag in the complete file",
+            prompt,
+        )
+        self.assertIn(
+            "Drawer, Modal, and Table column render functions",
+            prompt,
+        )
+        self.assertIn("Do not inspect controls inside the imported fixed Agent UI component", prompt)
+        self.assertIn(
+            "A validation error naming only a component type such as `Button` "
+            "can represent multiple instances",
+            prompt,
+        )
 
     def test_generation_binds_dedicated_ui_design_token_limit(self) -> None:
         """单页设计稿生成必须绑定 UI 设计专用输出上限。"""
@@ -135,6 +364,54 @@ class UiDesignGeneratorTests(unittest.TestCase):
 
         self.assertEqual(bound_model.invoke.call_count, 2)
         self.assertIn("export default MoviePage", code)
+
+    def test_agent_surface_generation_gets_two_bounded_contract_repairs(self) -> None:
+        """复杂 Agent Surface 页面即使默认配置为一次，也应获得两次契约修复机会。"""
+
+        model = MagicMock()
+        bound_model = model.bind.return_value
+        complete_code = "const OrdersPage = () => <div />; export default OrdersPage;"
+        bound_model.invoke.side_effect = [
+            SimpleNamespace(content=complete_code),
+            SimpleNamespace(content=complete_code),
+            SimpleNamespace(content=complete_code),
+        ]
+        settings = SimpleNamespace(ui_design_max_tokens=32768, ui_design_max_retries=1)
+        with patch(
+            "app.services.ui_design_generator.Settings.from_env",
+            return_value=settings,
+        ), patch(
+            "app.services.ui_design_generator.create_chat_model",
+            return_value=model,
+        ), patch(
+            "app.services.ui_design_generator.validate_page_code",
+            side_effect=[
+                (False, "缺少业务操作标记"),
+                (False, "Agent Surface 存在重复部件"),
+                (True, ""),
+            ],
+        ):
+            code = generate_page_react_code(
+                {
+                    "pageId": "orders",
+                    "name": "订单页",
+                    "agent_surfaces": [
+                        {
+                            "agentId": "order_agent",
+                            "type": "floating_panel",
+                            "actionIds": ["open_order_agent"],
+                            "contextItemIds": [],
+                            "name": "订单助手",
+                            "purpose": "协助处理订单",
+                            "capabilities": [],
+                        }
+                    ],
+                },
+                "OrdersPage",
+            )
+
+        self.assertEqual(bound_model.invoke.call_count, 3)
+        self.assertIn("export default OrdersPage", code)
 
     def test_truncated_output_is_continued_not_regenerated(self) -> None:
         """首次输出因 token 耗尽缺 export default 时，应断点续写而非整页重生成。
@@ -391,6 +668,20 @@ class AutoFixImportsTests(unittest.TestCase):
         self.assertEqual(_find_undefined_refs(fixed), [])
         self.assertEqual(unresolved, [])
         self.assertIn("import { Button, Card, Tag } from 'antd';", fixed)
+
+    def test_ignores_typescript_dom_generics(self) -> None:
+        """TypeScript DOM 泛型不能被误判为 JSX 组件。"""
+
+        code = (
+            "import React, { useRef } from 'react';\n"
+            "const Home = () => {\n"
+            "  const panelRef = useRef<HTMLDivElement>(null);\n"
+            "  return <div ref={panelRef}>ok</div>;\n"
+            "};\n"
+            "export default Home;\n"
+        )
+
+        self.assertEqual(_find_undefined_refs(code), [])
 
     def test_separates_antd_and_pro_components(self) -> None:
         """混合来源的缺失组件按 antd / pro-components 分别补到对应 import。"""

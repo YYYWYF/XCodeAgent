@@ -232,7 +232,7 @@ export function useActiveApplicationPlannings({
         (candidate) => candidate.application.id === applicationId
       )
       return planning
-        ? generateApplicationTemplateFiles(planning, confirmation)
+        ? generateApplicationTemplateFiles(planning)
         : Promise.resolve(false)
     },
     [generateApplicationTemplateFiles]

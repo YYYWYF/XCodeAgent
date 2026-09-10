@@ -76,7 +76,7 @@ export type ChatSessionRevisionHandoff = {
 
 export type ChatSessionRevisionContext = {
   kind: 'formal_revision';
-  sessionRole: 'design';
+  sessionRole: 'design' | 'development';
   formalBranch: WorkflowFormalRevisionBranch;
   impactInteractionId: string;
   sourceSessionId: string;
@@ -84,6 +84,9 @@ export type ChatSessionRevisionContext = {
   sourceRunId: string;
   planningThreadId: string;
   changeId?: string;
+  handoffFromSessionId?: string;
+  handoffFromConversationThreadId?: string;
+  technicalPlanSha256?: string;
 };
 
 export type AgentStage = 'DESIGN' | 'PLAN' | 'DEVELOPMENT';
@@ -525,6 +528,10 @@ export function normalizeDevelopmentTarget(
       ? { type: 'endpoint', apiContractId, endpointId, label }
       : undefined
   }
+  if (target.type === 'agent') {
+    const agentId = typeof target.agentId === 'string' ? target.agentId.trim() : ''
+    return agentId && label ? { type: 'agent', agentId, label } : undefined
+  }
   return undefined
 }
 
@@ -535,11 +542,13 @@ function sameDevelopmentTarget(
 ): boolean {
   if (!left || !right) return !left && !right
   if (left.type !== right.type) return false
-  return left.type === 'page'
-    ? right.type === 'page' && left.pageId === right.pageId
-    : right.type === 'endpoint' &&
-        left.apiContractId === right.apiContractId &&
-        left.endpointId === right.endpointId
+  if (left.type === 'page') return right.type === 'page' && left.pageId === right.pageId
+  if (left.type === 'agent') return right.type === 'agent' && left.agentId === right.agentId
+  return (
+    right.type === 'endpoint' &&
+    left.apiContractId === right.apiContractId &&
+    left.endpointId === right.endpointId
+  )
 }
 
 /** 将完整会话投影为包含阶段归属的列表摘要。 */
@@ -645,8 +654,13 @@ export function normalizeRevisionSessionContext(
   const sourceRunId = normalizeEndpointField(context.sourceRunId);
   const planningThreadId = normalizeEndpointField(context.planningThreadId);
   const changeId = normalizeEndpointField(context.changeId);
+  const handoffFromSessionId = normalizeEndpointField(context.handoffFromSessionId);
+  const handoffFromConversationThreadId = normalizeEndpointField(
+    context.handoffFromConversationThreadId,
+  );
+  const technicalPlanSha256 = normalizeEndpointField(context.technicalPlanSha256);
   if (
-    sessionRole !== 'design' ||
+    !['design', 'development'].includes(sessionRole || '') ||
     !['design_stage_revision', 'workbench_plan_revision'].includes(formalBranch || '') ||
     !impactInteractionId ||
     !sourceSessionId ||
@@ -656,9 +670,19 @@ export function normalizeRevisionSessionContext(
   ) {
     return undefined;
   }
+  if (
+    sessionRole === 'development' &&
+    (!changeId ||
+      !handoffFromSessionId ||
+      !handoffFromConversationThreadId ||
+      !technicalPlanSha256 ||
+      !/^[0-9a-f]{64}$/.test(technicalPlanSha256))
+  ) {
+    return undefined;
+  }
   return {
     kind: 'formal_revision',
-    sessionRole: 'design',
+    sessionRole: sessionRole as ChatSessionRevisionContext['sessionRole'],
     formalBranch: formalBranch as WorkflowFormalRevisionBranch,
     impactInteractionId,
     sourceSessionId,
@@ -666,6 +690,9 @@ export function normalizeRevisionSessionContext(
     sourceRunId,
     planningThreadId,
     ...(changeId ? { changeId } : {}),
+    ...(handoffFromSessionId ? { handoffFromSessionId } : {}),
+    ...(handoffFromConversationThreadId ? { handoffFromConversationThreadId } : {}),
+    ...(technicalPlanSha256 ? { technicalPlanSha256 } : {}),
   };
 }
 

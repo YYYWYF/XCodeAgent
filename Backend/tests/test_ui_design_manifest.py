@@ -11,6 +11,12 @@ from app.services.ui_design_manifest import (
     persisted_ui_manifest,
     validate_ui_design_code,
 )
+from app.services.ui_design_agent_template import build_agent_ui_template_source_contract
+from app.graph.nodes.ui_confirmation import (
+    _page_list,
+    _product_plan_hash,
+    _verified_ui_designs_for_confirmation,
+)
 from app.workspace.spec_documents import load_ui_designs_json, write_ui_designs_json
 
 
@@ -33,7 +39,7 @@ class UiDesignManifestTests(unittest.TestCase):
         }
 
     def test_manifest_only_keeps_ui_references_bindings_and_evidence(self) -> None:
-        """v3 页面清单不得重复保存 ProductPlan 文案、正式路由或角色。"""
+        """v5 页面清单不得重复保存 ProductPlan 文案、正式路由或角色。"""
 
         code = """
 import React from 'react';
@@ -71,6 +77,194 @@ export default Orders;
         )
         self.assertEqual(persisted["schema_version"], UI_MANIFEST_SCHEMA_VERSION)
         self.assertNotIn("code", persisted["pages"][0])
+
+    def test_floating_panel_persists_exact_agent_surface_evidence(self) -> None:
+        """浮动面板必须把 Agent、action、launcher、panel 和控件证据写入清单。"""
+
+        page = {
+            **self.page,
+            "actions": [{"actionId": "open-order-assistant", "name": "打开订单助手"}],
+            "agent_surfaces": [
+                {
+                    "agentId": "order_assistant",
+                    "type": "floating_panel",
+                    "actionIds": ["open-order-assistant"],
+                    "contextItemIds": ["orders-list"],
+                    "name": "订单助手",
+                    "purpose": "分析订单并协助跟进",
+                    "capabilities": [],
+                }
+            ],
+        }
+        code = build_agent_ui_template_source_contract(page)
+
+        manifest = build_ui_page_manifest(page, page_key="Orders", code=code)
+
+        self.assertEqual(manifest["verification"]["status"], "passed")
+        surface = manifest["bindings"]["agent_surfaces"][0]
+        self.assertEqual(surface["agentId"], "order_assistant")
+        self.assertEqual(surface["actionIds"], ["open-order-assistant"])
+        self.assertEqual(surface["contextItemIds"], ["orders-list"])
+        self.assertEqual(surface["controlIds"], ["order_assistant-launcher", "order_assistant-panel"])
+        self.assertEqual(surface["template"]["module"], "@xcodeagent/agent-ui-design")
+        self.assertEqual(surface["template"]["component"], "AgentFloatingPanelTemplate")
+        self.assertEqual(surface["template"]["version"], "agent-ui.v1")
+        self.assertEqual(len(surface["template"]["configSha256"]), 64)
+        persisted = persisted_ui_manifest(
+            {
+                "confirmation_status": "confirmed",
+                "product_plan_sha256": "d" * 64,
+                "pages": [manifest],
+            }
+        )
+        self.assertEqual(
+            persisted["pages"][0]["bindings"]["agent_surfaces"],
+            manifest["bindings"]["agent_surfaces"],
+        )
+
+    def test_standalone_page_requires_messages_status_and_composer(self) -> None:
+        """独立问答页只有同时提供消息区、状态区和 Composer 才能通过。"""
+
+        page = {
+            "pageId": "assistant_chat",
+            "information_items": [],
+            "actions": [{"actionId": "ask-assistant"}],
+            "agent_surfaces": [
+                {
+                    "agentId": "order_assistant",
+                    "type": "standalone_page",
+                    "actionIds": ["ask-assistant"],
+                    "contextItemIds": [],
+                    "name": "订单助手",
+                    "purpose": "回答订单问题",
+                    "capabilities": [],
+                }
+            ],
+        }
+        complete_code = build_agent_ui_template_source_contract(page)
+
+        self.assertEqual(validate_ui_design_code(page, complete_code), [])
+        missing_status = complete_code.replace("AgentConversationTemplate", "MissingTemplate")
+        self.assertTrue(
+            any("固定 Agent UI 组件" in error for error in validate_ui_design_code(page, missing_status))
+        )
+
+    def test_agent_surface_rejects_duplicate_controls_and_unknown_surface(self) -> None:
+        """自制 Agent DOM 和与 ProductPlan 不匹配的固定组件必须被拒绝。"""
+
+        page = {
+            "pageId": "assistant_chat",
+            "information_items": [],
+            "actions": [{"actionId": "ask-assistant"}],
+            "agent_surfaces": [
+                {
+                    "agentId": "order_assistant",
+                    "type": "floating_panel",
+                    "actionIds": ["ask-assistant"],
+                    "contextItemIds": [],
+                    "name": "订单助手",
+                    "purpose": "回答订单问题",
+                    "capabilities": [],
+                }
+            ],
+        }
+        code = build_agent_ui_template_source_contract(page).replace(
+            "AgentFloatingPanelTemplate", "AgentConversationTemplate"
+        ) + "\nfunction AgentChatCore() { return <div /> }"
+
+        errors = validate_ui_design_code(page, code)
+
+        self.assertTrue(any("自制" in error for error in errors))
+        self.assertTrue(any("固定组件" in error for error in errors))
+
+    def test_product_plan_projects_agent_surfaces_into_ui_page_input(self) -> None:
+        """UiDesign 单页输入必须按 pageId 投影 ProductPlan Agent Surface。"""
+
+        state = {
+            "product_plan": {
+                "pages": [self.page],
+                "agents": [
+                    {
+                        "agentId": "order_assistant",
+                        "name": "订单助手",
+                        "purpose": "分析订单",
+                        "interactionMode": "chat",
+                        "capabilities": [
+                            {"capabilityId": "analyze_orders", "name": "分析订单"}
+                        ],
+                        "pageActionBindings": [
+                            {
+                                "pageId": "orders",
+                                "actionIds": ["search-orders"],
+                                "surface": {
+                                    "type": "floating_panel",
+                                    "enabled": True,
+                                    "contextItemIds": ["orders-list"],
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+
+        pages = _page_list(state)
+
+        self.assertEqual(
+            pages[0]["agent_surfaces"],
+            [
+                {
+                    "agentId": "order_assistant",
+                    "type": "floating_panel",
+                    "actionIds": ["search-orders"],
+                    "contextItemIds": ["orders-list"],
+                    "name": "订单助手",
+                    "purpose": "分析订单",
+                    "interactionMode": "chat",
+                    "capabilities": [
+                        {"capabilityId": "analyze_orders", "name": "分析订单"}
+                    ],
+                }
+            ],
+        )
+
+    def test_surface_context_change_invalidates_existing_manifest(self) -> None:
+        """Surface 上下文白名单变化后旧 ProductPlan 哈希必须阻止 UI 确认。"""
+
+        product_plan = {
+            "pages": [self.page],
+            "agents": [
+                {
+                    "agentId": "order_assistant",
+                    "pageActionBindings": [
+                        {
+                            "pageId": "orders",
+                            "actionIds": ["search-orders"],
+                            "surface": {
+                                "type": "floating_panel",
+                                "enabled": True,
+                                "contextItemIds": [],
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+        with TemporaryDirectory() as temporary_directory:
+            state = {"workspace": temporary_directory, "product_plan": product_plan}
+            stale_hash = _product_plan_hash(state)
+            product_plan["agents"][0]["pageActionBindings"][0]["surface"][
+                "contextItemIds"
+            ] = ["orders-list"]
+            _verified, errors = _verified_ui_designs_for_confirmation(
+                state,
+                {
+                    "product_plan_sha256": stale_hash,
+                    "pages": [],
+                },
+            )
+
+        self.assertTrue(any("ProductPlan 哈希已过期" in error for error in errors))
 
     def test_validation_rejects_unknown_and_unowned_business_ui(self) -> None:
         """新增业务指标、未知 action 和无归属交互控件必须被确定性拒绝。"""
@@ -746,8 +940,8 @@ export default Orders;
             ],
         )
 
-    def test_legacy_manifest_is_migrated_without_product_fact_copies(self) -> None:
-        """旧 controls/display_items 必须迁移成 v3 bindings，不能被静默丢失。"""
+    def test_current_manifest_does_not_infer_legacy_bindings(self) -> None:
+        """v4 不得从历史 controls/display_items 推断当前绑定。"""
 
         persisted = persisted_ui_manifest(
             {
@@ -775,8 +969,10 @@ export default Orders;
         page = persisted["pages"][0]
         self.assertNotIn("name", page)
         self.assertNotIn("path", page)
-        self.assertEqual(page["bindings"]["actions"][0]["actionId"], "search-orders")
-        self.assertEqual(page["verification"]["status"], "legacy_unverified")
+        self.assertEqual(page["bindings"]["actions"], [])
+        self.assertEqual(page["bindings"]["information_items"], [])
+        self.assertEqual(page["bindings"]["agent_surfaces"], [])
+        self.assertEqual(page["verification"]["status"], "unverified")
 
     def test_workspace_persists_manifest_without_code_and_hydrates_runtime_copy(self) -> None:
         """正式 JSON 不保存源码，恢复运行态时只从受控 UI 目录读取。"""

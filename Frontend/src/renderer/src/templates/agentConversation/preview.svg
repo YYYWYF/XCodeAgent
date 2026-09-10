@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420" role="img" aria-labelledby="title description">
+  <title id="title">智能体会话页模板预览</title>
+  <desc id="description">左侧会话历史，右侧消息流、工具摘要、审批卡和固定输入区</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8f7fc"/>
+      <stop offset="1" stop-color="#eee9fb"/>
+    </linearGradient>
+    <linearGradient id="avatar" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8458f5"/>
+      <stop offset="1" stop-color="#5b2bd9"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#351f64" flood-opacity=".12"/>
+    </filter>
+  </defs>
+  <rect width="720" height="420" rx="22" fill="url(#background)"/>
+  <rect x="18" y="18" width="176" height="384" rx="15" fill="#ffffff" stroke="#ddd5ef"/>
+  <rect x="34" y="38" width="144" height="34" rx="9" fill="#6b3cf0"/>
+  <path d="M50 55h12m-6-6v12" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+  <rect x="34" y="84" width="144" height="30" rx="8" fill="#f7f5fb" stroke="#e8e2f2"/>
+  <circle cx="48" cy="99" r="5" fill="none" stroke="#887aa2" stroke-width="1.7"/>
+  <path d="m52 103 4 4" stroke="#887aa2" stroke-width="1.7" stroke-linecap="round"/>
+  <g fill="#4b405f">
+    <rect x="34" y="132" width="144" height="50" rx="9" fill="#f2edff"/>
+    <rect x="47" y="146" width="94" height="7" rx="3.5"/>
+    <rect x="47" y="160" width="54" height="5" rx="2.5" fill="#a89abf"/>
+    <rect x="47" y="202" width="104" height="7" rx="3.5"/>
+    <rect x="47" y="216" width="44" height="5" rx="2.5" fill="#a89abf"/>
+    <rect x="47" y="258" width="84" height="7" rx="3.5"/>
+    <rect x="47" y="272" width="60" height="5" rx="2.5" fill="#a89abf"/>
+  </g>
+  <rect x="210" y="18" width="492" height="384" rx="15" fill="#ffffff" stroke="#ddd5ef" filter="url(#shadow)"/>
+  <path d="M210 86h492" stroke="#e7e1f1"/>
+  <circle cx="239" cy="52" r="18" fill="url(#avatar)"/>
+  <path d="M232 55c5 5 10 5 15 0M233 48h.1M245 48h.1" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+  <rect x="269" y="37" width="108" height="9" rx="4.5" fill="#332846"/>
+  <rect x="269" y="55" width="142" height="6" rx="3" fill="#9b8dad"/>
+  <rect x="611" y="38" width="70" height="28" rx="8" fill="#f5f2fb" stroke="#dfd6ef"/>
+  <circle cx="245" cy="124" r="14" fill="#e5def7"/>
+  <rect x="269" y="109" width="300" height="52" rx="13" fill="#f7f5fb"/>
+  <rect x="285" y="124" width="230" height="7" rx="3.5" fill="#594b6d"/>
+  <rect x="285" y="139" width="184" height="6" rx="3" fill="#a195b0"/>
+  <circle cx="245" cy="198" r="14" fill="url(#avatar)"/>
+  <rect x="269" y="181" width="364" height="48" rx="13" fill="#f1ecff"/>
+  <rect x="285" y="196" width="292" height="7" rx="3.5" fill="#594b6d"/>
+  <rect x="285" y="211" width="214" height="6" rx="3" fill="#9d8eb0"/>
+  <rect x="269" y="243" width="285" height="58" rx="11" fill="#ffffff" stroke="#d9ccef"/>
+  <circle cx="291" cy="263" r="8" fill="#e4dbf7"/>
+  <path d="m287 263 3 3 6-7" fill="none" stroke="#6b3cf0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="308" y="257" width="102" height="7" rx="3.5" fill="#4b405f"/>
+  <rect x="285" y="279" width="216" height="6" rx="3" fill="#a195b0"/>
+  <rect x="566" y="243" width="105" height="58" rx="11" fill="#fffaf0" stroke="#f0dca9"/>
+  <rect x="581" y="257" width="72" height="7" rx="3.5" fill="#7b5a18"/>
+  <rect x="581" y="276" width="31" height="13" rx="6.5" fill="#6b3cf0"/>
+  <rect x="618" y="276" width="35" height="13" rx="6.5" fill="#eee8f8"/>
+  <rect x="228" y="329" width="456" height="55" rx="13" fill="#ffffff" stroke="#d6cae8"/>
+  <rect x="246" y="348" width="242" height="7" rx="3.5" fill="#afa4bd"/>
+  <circle cx="651" cy="356" r="17" fill="#6b3cf0"/>
+  <path d="m644 356 7-7 7 7m-7-7v14" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -2,6 +2,13 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
+export type WorkbenchAgentSurface = {
+  type: 'standalone_page' | 'floating_panel' | 'unknown'
+  label: string
+  enabled: boolean
+  contextItemIds: string[]
+}
+
 export type WorkbenchAgentOption = {
   key: string
   agentId: string
@@ -15,7 +22,12 @@ export type WorkbenchAgentOption = {
     toolIds: string[]
   }>
   entryPageIds: string[]
-  entryActions: Array<{ pageId: string; pageLabel: string; actionIds: string[] }>
+  entryActions: Array<{
+    pageId: string
+    pageLabel: string
+    actionIds: string[]
+    surface: WorkbenchAgentSurface
+  }>
   interaction: Record<string, unknown>
   contractHash: string
   technicalPlanSha256: string
@@ -100,14 +112,20 @@ async function projectAgent(
   const tools = record(settings.tools)
   const pages = recordItems(productPlan.pages)
   const apiContracts = recordItems(technicalPlan.api_contracts)
-  const entryPageIds = stringItems(productAgent.entryPageIds)
-  const entryActions = recordItems(productAgent.pageActionBindings).map((binding) => {
+  const enabledBindings = recordItems(productAgent.pageActionBindings).filter(
+    (binding) => record(binding.surface).enabled === true
+  )
+  const entryPageIds = enabledBindings
+    .map((binding) => String(binding.pageId || '').trim())
+    .filter(Boolean)
+  const entryActions = enabledBindings.map((binding) => {
     const pageId = String(binding.pageId || '').trim()
     const page = pages.find((item) => String(item.pageId || '').trim() === pageId)
     return {
       pageId,
       pageLabel: String(page?.name || page?.label || pageId),
-      actionIds: stringItems(binding.actionIds)
+      actionIds: stringItems(binding.actionIds),
+      surface: projectAgentSurface(binding.surface)
     }
   })
   const gatewayId = String(invocation.gatewayEndpointId || '').trim()
@@ -164,6 +182,24 @@ async function projectAgent(
     artifacts: await projectArtifacts(workspaceRoot, agentId, record(contract.artifacts)),
     requiredChecks: stringItems(contract.requiredChecks),
     taskSummary: agentTaskSummary(buildTaskPlan, agentId, hash)
+  }
+}
+
+/** 把 ProductPlan Surface 收敛为工作台可安全展示的只读类型。 */
+function projectAgentSurface(value: unknown): WorkbenchAgentSurface {
+  const surface = record(value)
+  const rawType = String(surface.type || '').trim()
+  const type = rawType === 'standalone_page' || rawType === 'floating_panel' ? rawType : 'unknown'
+  const labels: Record<WorkbenchAgentSurface['type'], string> = {
+    standalone_page: '独立问答页面',
+    floating_panel: '悬浮问答面板',
+    unknown: '未知载体（只读）'
+  }
+  return {
+    type,
+    label: labels[type],
+    enabled: surface.enabled === true,
+    contextItemIds: strictStringItems(surface.contextItemIds)
   }
 }
 
@@ -279,7 +315,11 @@ function agentTaskSummary(
 function findEndpoint(
   apiContracts: Array<Record<string, unknown>>,
   endpointId: string
-): { apiContractId: string; apiContract?: Record<string, unknown>; endpoint: Record<string, unknown> } {
+): {
+  apiContractId: string
+  apiContract?: Record<string, unknown>
+  endpoint: Record<string, unknown>
+} {
   const matches = apiContracts.flatMap((apiContract) =>
     recordItems(apiContract.endpoints)
       .filter((endpoint) => String(endpoint.id || '').trim() === endpointId)
@@ -307,7 +347,19 @@ function recordItems(value: unknown): Array<Record<string, unknown>> {
 
 /** 将未知数组过滤为非空字符串数组。 */
 function stringItems(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : []
+}
+
+/** 仅接受真实字符串，并去重生成不可执行的上下文项白名单。 */
+function strictStringItems(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    ? [
+        ...new Set(
+          value
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        )
+      ]
     : []
 }
