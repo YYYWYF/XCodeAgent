@@ -61,7 +61,7 @@ class TemplateReconcileV2RuntimeTests(unittest.TestCase):
             target.write_text("const routes = [\n  // routes\n];\n", encoding="utf-8")
             strategies = [
                 StrategyDescriptorV2.model_validate({"strategyId": "anchor", "index": 0, "schemaVersion": 1, "type": "TEXT_ANCHOR_INSERT", "target": "src/routes.tsx", "parameters": {"anchor": "  // routes", "content": "  { path: '/a' },\n"}}),
-                StrategyDescriptorV2.model_validate({"strategyId": "route", "index": 1, "schemaVersion": 1, "type": "ENSURE_ROUTE", "target": "src/routes.tsx", "parameters": {"anchor": "  // routes", "managedMarker": "xcodeagent:route:b", "content": "  // xcodeagent:route:b\n  { path: '/b' },\n"}}),
+                StrategyDescriptorV2.model_validate({"strategyId": "route", "index": 1, "schemaVersion": 1, "type": "ENSURE_ROUTE", "target": "src/routes.tsx", "parameters": {"astSelector": {"nodeType": "array", "position": "beforeEnd"}, "managedMarker": "xcodeagent:route:b", "content": "  // xcodeagent:route:b\n  { path: '/b' },\n"}}),
             ]
             executor = ModificationStrategyExecutorV2()
             store = WorkingCopyStoreV2(root)

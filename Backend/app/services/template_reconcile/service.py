@@ -41,11 +41,29 @@ class TemplateReconcileService:
             if mode == "RECONCILE" and requested != _requested_from_state(current):
                 raise TemplateStateError("RECONCILE_REQUESTED_CONFIG_MISMATCH：requestedConfig 与当前 TemplateState.requested 不一致。")
             attempt = load_current_attempt(root)
-            if attempt is not None and attempt.status != "SUCCEEDED":
+            if attempt is not None and attempt.status == "RUNNING":
                 return self._recover(root, attempt, current, requested, technical_plan_sha256, mode)
-            return await self._start(root, current, requested_config, technical_plan_sha256, mode, change_id)
+            if attempt is not None and attempt.status == "FAILED":
+                raise TemplateStateError("TEMPLATE_RECONCILE_RETRY_REQUIRED：上一 Attempt 已失败，必须创建新的 Retry Attempt。")
+            return await self._start(root, current, requested_config, technical_plan_sha256, mode, change_id, retry_of=None)
 
-    async def _start(self, root: Path, current: TemplateStateV2, requested_config: dict[str, Any], plan_sha: str, mode: Literal["APPLY", "RECONCILE"], _change_id: str) -> str:
+    async def retry_template_preparation(self, workspace: str | Path, *, change_id: str, requested_config: dict[str, Any], technical_plan_sha256: str, mode: Literal["APPLY", "RECONCILE"]) -> str:
+        """针对已明确失败的 Attempt 下载新 Package 并创建带 retryOf 的新 Attempt。"""
+
+        if not self._settings.template_reconcile_enabled:
+            raise TemplateStateError("TEMPLATE_RECONCILE_DISABLED：模板能力增量更新功能尚未开启。")
+        root = Path(workspace).expanduser().resolve()
+        with reconcile_run_gate(root):
+            current = load_template_state_v2(root)
+            requested = _normalized_requested_config(requested_config)
+            if mode == "RECONCILE" and requested != _requested_from_state(current):
+                raise TemplateStateError("RECONCILE_REQUESTED_CONFIG_MISMATCH：requestedConfig 与当前 TemplateState.requested 不一致。")
+            previous = load_current_attempt(root)
+            if previous is None or previous.status != "FAILED" or previous.phase != "FAILED":
+                raise TemplateStateError("TEMPLATE_RECONCILE_RETRY_NOT_ALLOWED：只有明确失败的 Attempt 可以创建 Retry。")
+            return await self._start(root, current, requested_config, technical_plan_sha256, mode, change_id, retry_of=previous.attempt_id)
+
+    async def _start(self, root: Path, current: TemplateStateV2, requested_config: dict[str, Any], plan_sha: str, mode: Literal["APPLY", "RECONCILE"], _change_id: str, *, retry_of: str | None) -> str:
         """下载、校验并先持久化 immutable Package，204 不创建虚假 Attempt。"""
 
         _assert_technical_plan_binding(root, plan_sha)
@@ -56,7 +74,7 @@ class TemplateReconcileService:
         try:
             validated = validate_strategy_update_package(download.temporary_path, self._limits())
             _validate_binding(current, validated.package, mode)
-            attempt = ReconcileAttemptV2(attempt_id=uuid4().hex, retry_of=None, operation_type="UPDATE", mode=mode, protocol_version="2", technical_plan_sha256=plan_sha, package_id=validated.package.packageId, source_revision=validated.package.sourceRevision, package_digest="sha256:" + download.sha256, current_state_digest=validated.package.currentStateDigest, next_state_digest=validated.package.nextStateDigest, phase="PREPARED", status="RUNNING", started_at=_now(), updated_at=_now())
+            attempt = ReconcileAttemptV2(attempt_id=uuid4().hex, retry_of=retry_of, operation_type="UPDATE", mode=mode, protocol_version="2", technical_plan_sha256=plan_sha, package_id=validated.package.packageId, source_revision=validated.package.sourceRevision, package_digest="sha256:" + download.sha256, current_state_digest=validated.package.currentStateDigest, next_state_digest=validated.package.nextStateDigest, phase="PREPARED", status="RUNNING", started_at=_now(), updated_at=_now())
             persist_prepared_attempt(root, attempt, download.temporary_path)
             return self._execute(root, attempt, validated, current)
         finally:
@@ -84,10 +102,12 @@ class TemplateReconcileService:
             update_attempt(root, attempt, phase="RECOVERY_REQUIRED", status="FAILED", error_code="RECOVERY_STATE_CONFLICT", error_message="当前 TemplateState 与未完成 Attempt 不匹配。")
             raise TemplateStateError("RECOVERY_STATE_CONFLICT：无法安全恢复模板更新。")
         if action == "FINALIZE":
-            if not validation_plan_passed_v2(self._validate(root, validated.package, current)):
+            if not validation_plan_passed_v2(self._validate(root, validated.package, current, attempt)):
                 update_attempt(root, attempt, phase="FAILED", status="FAILED", error_code="VALIDATION_FAILED", error_message="Roll-forward Validation 未通过。")
                 raise TemplateStateError("VALIDATION_FAILED：Template Preparation 验收未通过。")
-            return self._commit(root, attempt, validated.package.nextTemplateState)
+            # nextState 已是唯一 State 事实；FINALIZE 只能收口 Attempt，绝不能再次写 State。
+            update_attempt(root, attempt, phase="SUCCEEDED", status="SUCCEEDED")
+            return "FINALIZED"
         return self._execute(root, attempt, validated, current)
 
     def _execute(self, root: Path, attempt: ReconcileAttemptV2, validated: ValidatedStrategyUpdatePackage, current: TemplateStateV2) -> str:
@@ -100,7 +120,7 @@ class TemplateReconcileService:
             ModificationStrategyExecutorV2().execute(package.strategies, store, _payloads(validated))
             apply_working_copy_v2(root, store)
             attempt = update_attempt(root, attempt, phase="VALIDATING")
-            if not validation_plan_passed_v2(self._validate(root, package, current)):
+            if not validation_plan_passed_v2(self._validate(root, package, current, attempt)):
                 raise TemplateStateError("VALIDATION_FAILED：Template Preparation 验收未通过。")
             return self._commit(root, attempt, package.nextTemplateState)
         except StateCommittedV2Error:
@@ -111,10 +131,10 @@ class TemplateReconcileService:
             update_attempt(root, attempt, phase="FAILED", status="FAILED", error_code=_error_code(exc), error_message=str(exc)[:2048])
             raise
 
-    def _validate(self, root: Path, package: StrategyUpdatePackageV2, current: TemplateStateV2):
+    def _validate(self, root: Path, package: StrategyUpdatePackageV2, current: TemplateStateV2, attempt: ReconcileAttemptV2):
         """按 Package mode 运行唯一的 Validation Plan 权威验收。"""
 
-        return execute_reconcile_validation_v2(root, package, current) if package.mode == "RECONCILE" else execute_validation_plan_v2(root, package.validationPlan)
+        return execute_reconcile_validation_v2(root, package, current, attempt_id=attempt.attempt_id) if package.mode == "RECONCILE" else execute_validation_plan_v2(root, package.validationPlan, attempt_id=attempt.attempt_id)
 
     def _commit(self, root: Path, attempt: ReconcileAttemptV2, state: TemplateStateV2) -> str:
         """将 Attempt 置于提交临界区后原子写 State，再记录成功终态。"""
@@ -137,6 +157,12 @@ class TemplateReconcileService:
         """把 Settings 映射为 V2 ZIP 校验限额。"""
 
         return ArchiveLimits(self._settings.template_package_max_bytes, self._settings.template_package_max_files, self._settings.template_package_max_extracted_bytes)
+
+
+def reconcile_mode_for_requested_config(current: TemplateStateV2, requested_config: dict[str, Any]) -> Literal["APPLY", "RECONCILE"]:
+    """按请求配置与当前 State.requested 的语义差异选择产品唯一的更新模式。"""
+
+    return "RECONCILE" if _normalized_requested_config(requested_config) == _requested_from_state(current) else "APPLY"
 
 
 def _normalized_requested_config(value: dict[str, Any]) -> dict[str, Any]:

@@ -52,7 +52,12 @@ from app.services.template_reconcile.finalization import (
     claim_template_reconcile_finalization,
     mark_template_reconcile_failed,
 )
-from app.services.template_reconcile.service import TemplateReconcileService
+from app.services.template_reconcile.service import (
+    TemplateReconcileService,
+    reconcile_mode_for_requested_config,
+)
+from app.services.template_reconcile.runtime_v2 import load_current_attempt
+from app.services.template_reconcile.state_v2 import load_template_state_v2
 from app.services.template_reconcile.template_preparation import (
     template_preparation_projection_v2,
 )
@@ -713,14 +718,22 @@ def _reconcile_revision_template_capabilities(workspace: str, change_id: str) ->
         raise ApplicationLifecycleConflictError("Template Reconcile 已在执行或等待后续收口，不能重复触发。")
     try:
         requested_config = compile_template_requested_config(workspace)
-        asyncio.run(
-            TemplateReconcileService(settings).reconcile(
-                workspace,
-                change_id=change_id,
-                requested_config=requested_config,
-                technical_plan_sha256=canonical_sha256(plan_path),
-            )
+        mode = reconcile_mode_for_requested_config(
+            load_template_state_v2(workspace), requested_config
         )
+        service = TemplateReconcileService(settings)
+        arguments = {
+            "workspace": workspace,
+            "change_id": change_id,
+            "requested_config": requested_config,
+            "technical_plan_sha256": canonical_sha256(plan_path),
+            "mode": mode,
+        }
+        # 用户从 template_reconcile_failed 恢复时必须产生新 Attempt；运行中 Attempt 才走 crash recovery。
+        if (attempt := load_current_attempt(workspace)) is not None and attempt.status == "FAILED" and attempt.phase == "FAILED":
+            asyncio.run(service.retry_template_preparation(**arguments))
+        else:
+            asyncio.run(service.reconcile(**arguments))
     except Exception:
         # 外层同时覆盖 Skeleton 失败，并统一把 active revision 标记为可重试失败。
         raise

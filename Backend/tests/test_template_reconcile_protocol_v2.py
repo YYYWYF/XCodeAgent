@@ -72,6 +72,7 @@ def _package() -> dict[str, object]:
                 "type": "CAPABILITY_POSTCONDITION",
                 "capabilityId": "login",
                 "workingDirectory": "frontend",
+                "checks": [{"type": "FILE_EXISTS", "path": "src/routes.tsx"}],
                 "blocking": True,
                 "timeoutSeconds": 30,
                 "executionMode": "REAL_WORKSPACE",

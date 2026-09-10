@@ -103,6 +103,16 @@ ValidationTypeV2 = Literal[
 ]
 
 
+class ValidationCheckV2(ProtocolV2Model):
+    """表示 Capability 后置条件允许使用的冻结只读断言。"""
+
+    type: Literal["FILE_EXISTS", "STRUCTURE_CHECK", "JSON_STRUCTURE_CHECK"]
+    path: NonBlankStringV2
+    containsAll: list[NonBlankStringV2] | None = None
+    pointer: NonBlankStringV2 | None = None
+    expected: Any | None = None
+
+
 class ValidationPlanItemV2(ProtocolV2Model):
     """描述 Package Apply 后必须执行的一项结构化验收。"""
 
@@ -111,7 +121,11 @@ class ValidationPlanItemV2(ProtocolV2Model):
     type: ValidationTypeV2
     capabilityId: NonBlankStringV2 | None = None
     workingDirectory: NonBlankStringV2
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    path: NonBlankStringV2 | None = None
+    containsAll: list[NonBlankStringV2] | None = None
+    pointer: NonBlankStringV2 | None = None
+    expected: Any | None = None
+    checks: list[ValidationCheckV2] | None = None
     blocking: StrictBool
     timeoutSeconds: int = Field(gt=0)
     executionMode: Literal["REAL_WORKSPACE", "SANDBOX"]
@@ -122,6 +136,16 @@ class ValidationPlanItemV2(ProtocolV2Model):
 
         if self.type == "CAPABILITY_POSTCONDITION" and not self.capabilityId:
             raise ValueError("CAPABILITY_POSTCONDITION 必须提供 capabilityId。")
+        if self.type == "FILE_EXISTS" and not self.path:
+            raise ValueError("FILE_EXISTS 必须提供 path。")
+        if self.type == "STRUCTURE_CHECK" and (not self.path or not self.containsAll):
+            raise ValueError("STRUCTURE_CHECK 必须提供 path 和 containsAll。")
+        if self.type == "JSON_STRUCTURE_CHECK" and (not self.path or not self.pointer):
+            raise ValueError("JSON_STRUCTURE_CHECK 必须提供 path 和 pointer。")
+        if self.type == "CAPABILITY_POSTCONDITION" and not self.checks:
+            raise ValueError("CAPABILITY_POSTCONDITION 必须提供非空 checks。")
+        if self.type in {"NPM_BUILD", "NPM_TEST", "MAVEN_TEST", "MAVEN_PACKAGE"} and any(value is not None for value in (self.path, self.containsAll, self.pointer, self.checks)):
+            raise ValueError("Sandbox Validation 不得携带只读断言字段。")
         return self
 
 

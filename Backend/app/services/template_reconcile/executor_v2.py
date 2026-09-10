@@ -5,11 +5,16 @@ from __future__ import annotations
 import os
 import tempfile
 import json
-import xml.etree.ElementTree as element_tree
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from app.services.template_reconcile.protocol_v2 import StrategyDescriptorV2
+from app.services.template_reconcile.strategy_ast_v2 import (
+    StrategyAstV2Error,
+    insert_after_last_import,
+    insert_at_selector,
+)
 
 
 class StrategyExecutionV2Error(ValueError):
@@ -81,7 +86,7 @@ class ModificationStrategyExecutorV2:
                 "ENSURE_SPRING_BEAN",
                 "ENSURE_INTERCEPTOR",
             }:
-                self._ensure_marked_structure(strategy, store, payloads)
+                self._ensure_ast_structure(strategy, store, payloads)
             else:
                 raise StrategyExecutionV2Error(f"Strategy 尚未在 V2 内核实现：{strategy.type}。")
 
@@ -126,14 +131,11 @@ class ModificationStrategyExecutorV2:
         normalized_lines = [line.strip().rstrip(";") for line in content.splitlines()]
         if import_statement.rstrip(";") in normalized_lines:
             return
-        lines = content.splitlines(keepends=True)
-        import_indexes = [index for index, line in enumerate(lines) if line.lstrip().startswith("import ")]
-        if not import_indexes:
-            raise StrategyExecutionV2Error("ENSURE_IMPORT 找不到既有 import 区，拒绝猜测插入位置。")
         insertion = import_statement + ("" if import_statement.endswith(";") else ";") + "\n"
-        insert_at = import_indexes[-1] + 1
-        lines.insert(insert_at, insertion)
-        entry.working_content = "".join(lines)
+        try:
+            entry.working_content = insert_after_last_import(strategy.target, content, insertion)
+        except StrategyAstV2Error as exc:
+            raise StrategyExecutionV2Error(str(exc)) from exc
         entry.changed = True
 
     def _ensure_npm_dependency(self, strategy: StrategyDescriptorV2, store: WorkingCopyStoreV2) -> None:
@@ -171,32 +173,23 @@ class ModificationStrategyExecutorV2:
         group_id = _required_string(strategy.parameters, "groupId")
         artifact_id = _required_string(strategy.parameters, "artifactId")
         version = _required_string(strategy.parameters, "version")
-        try:
-            root = element_tree.fromstring(str(entry.working_content))
-        except element_tree.ParseError as exc:
-            raise StrategyExecutionV2Error("ENSURE_MAVEN_DEPENDENCY 目标不是合法 XML。") from exc
-        namespace = _xml_namespace(root.tag)
-        dependencies = root.find(f"{namespace}dependencies")
-        if dependencies is None:
-            dependencies = element_tree.SubElement(root, f"{namespace}dependencies")
-        for dependency in dependencies.findall(f"{namespace}dependency"):
-            found_group = dependency.findtext(f"{namespace}groupId")
-            found_artifact = dependency.findtext(f"{namespace}artifactId")
-            if found_group == group_id and found_artifact == artifact_id:
-                found_version = dependency.findtext(f"{namespace}version")
-                if found_version != version:
+        content = str(entry.working_content)
+        matches = re.findall(r"<dependency\b[^>]*>(.*?)</dependency>", content, flags=re.DOTALL)
+        for dependency in matches:
+            if _xml_tag_text(dependency, "groupId") == group_id and _xml_tag_text(dependency, "artifactId") == artifact_id:
+                if _xml_tag_text(dependency, "version") != version:
                     raise StrategyExecutionV2Error("MAVEN_DEPENDENCY_CONFLICT：已存在不同依赖版本。")
                 return
-        dependency = element_tree.SubElement(dependencies, f"{namespace}dependency")
-        element_tree.SubElement(dependency, f"{namespace}groupId").text = group_id
-        element_tree.SubElement(dependency, f"{namespace}artifactId").text = artifact_id
-        element_tree.SubElement(dependency, f"{namespace}version").text = version
-        element_tree.indent(root, space="  ")
-        entry.working_content = element_tree.tostring(root, encoding="unicode") + "\n"
+        closing = re.search(r"</dependencies\s*>", content)
+        if closing is None:
+            raise StrategyExecutionV2Error("MAVEN_DEPENDENCIES_TARGET_MISSING：pom.xml 缺少 dependencies 节点。")
+        indent = "  "
+        insertion = f"\n{indent}<dependency>\n{indent}  <groupId>{group_id}</groupId>\n{indent}  <artifactId>{artifact_id}</artifactId>\n{indent}  <version>{version}</version>\n{indent}</dependency>"
+        entry.working_content = content[:closing.start()] + insertion + content[closing.start():]
         entry.changed = True
 
-    def _ensure_marked_structure(self, strategy: StrategyDescriptorV2, store: WorkingCopyStoreV2, payloads: dict[str, str]) -> None:
-        """用 Capability 专属标记和唯一锚点维护 Provider、路由、菜单及 Spring 结构。"""
+    def _ensure_ast_structure(self, strategy: StrategyDescriptorV2, store: WorkingCopyStoreV2, payloads: dict[str, str]) -> None:
+        """用唯一 AST selector 维护 Provider、路由、菜单及 Spring 结构。"""
 
         entry = _existing_text_entry(strategy, store)
         marker = _required_string(strategy.parameters, "managedMarker")
@@ -206,14 +199,13 @@ class ModificationStrategyExecutorV2:
         insertion = _strategy_content(strategy, payloads)
         if marker not in insertion:
             raise StrategyExecutionV2Error("结构化 Strategy 的 payload 必须包含 managedMarker。")
-        anchor = _required_string(strategy.parameters, "anchor")
-        if content.count(anchor) != 1:
-            raise StrategyExecutionV2Error("结构化 Strategy 的 anchor 必须在目标中唯一。")
-        position = str(strategy.parameters.get("position", "before"))
-        if position not in {"before", "after"}:
-            raise StrategyExecutionV2Error("结构化 Strategy 的 position 必须是 before 或 after。")
-        offset = content.index(anchor) + (len(anchor) if position == "after" else 0)
-        entry.working_content = content[:offset] + insertion + content[offset:]
+        selector = strategy.parameters.get("astSelector")
+        if not isinstance(selector, dict):
+            raise StrategyExecutionV2Error("结构化 Strategy 必须提供 astSelector。")
+        try:
+            entry.working_content = insert_at_selector(strategy.target, content, selector, insertion)
+        except StrategyAstV2Error as exc:
+            raise StrategyExecutionV2Error(str(exc)) from exc
         entry.changed = True
 
 
@@ -286,10 +278,11 @@ def _required_string(parameters: dict[str, object], key: str) -> str:
     return value
 
 
-def _xml_namespace(tag: str) -> str:
-    """从 XML 根标签提取 ElementTree 查询所需的命名空间前缀。"""
+def _xml_tag_text(content: str, tag: str) -> str | None:
+    """从单个 Maven dependency 片段读取简单 XML 标签文本。"""
 
-    return tag[: tag.index("}") + 1] if tag.startswith("{") and "}" in tag else ""
+    match = re.search(rf"<{tag}\b[^>]*>\s*([^<]+?)\s*</{tag}\s*>", content)
+    return match.group(1).strip() if match else None
 
 
 def _atomic_write(path: Path, content: str) -> None:

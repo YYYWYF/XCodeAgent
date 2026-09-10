@@ -14,7 +14,7 @@ from app.services.template_reconcile.validation_v2 import execute_validation_pla
 def _item(**overrides: object) -> ValidationPlanItemV2:
     """构造可被单例测试按需覆盖的合法 V2 Validation 项。"""
 
-    values: dict[str, object] = {"validationId": "validation-0", "index": 0, "type": "FILE_EXISTS", "workingDirectory": ".", "blocking": True, "timeoutSeconds": 10, "executionMode": "REAL_WORKSPACE", "parameters": {"path": "src/feature.ts"}}
+    values: dict[str, object] = {"validationId": "validation-0", "index": 0, "type": "FILE_EXISTS", "workingDirectory": ".", "blocking": True, "timeoutSeconds": 10, "executionMode": "REAL_WORKSPACE", "path": "src/feature.ts"}
     values.update(overrides)
     return ValidationPlanItemV2.model_validate(values)
 
@@ -30,7 +30,7 @@ class TemplateReconcileV2ValidationTests(unittest.TestCase):
             (root / "src").mkdir()
             (root / "src/feature.ts").write_text("// managed:feature\n", encoding="utf-8")
             (root / "package.json").write_text('{"dependencies":{"demo":"1.0.0"}}', encoding="utf-8")
-            item = _item(type="CAPABILITY_POSTCONDITION", capabilityId="demo", parameters={"checks": [{"type": "FILE_EXISTS", "parameters": {"path": "src/feature.ts"}}, {"type": "STRUCTURE_CHECK", "parameters": {"path": "src/feature.ts", "containsAll": ["managed:feature"]}}, {"type": "JSON_STRUCTURE_CHECK", "parameters": {"path": "package.json", "pointer": "/dependencies/demo", "expected": "1.0.0"}}]})
+            item = _item(type="CAPABILITY_POSTCONDITION", capabilityId="demo", checks=[{"type": "FILE_EXISTS", "path": "src/feature.ts"}, {"type": "STRUCTURE_CHECK", "path": "src/feature.ts", "containsAll": ["managed:feature"]}, {"type": "JSON_STRUCTURE_CHECK", "path": "package.json", "pointer": "/dependencies/demo", "expected": "1.0.0"}])
             results = execute_validation_plan_v2(root, [item])
             self.assertTrue(results[0].passed)
             self.assertTrue(validation_plan_passed_v2(results))
@@ -40,7 +40,7 @@ class TemplateReconcileV2ValidationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            failed = _item(type="CAPABILITY_POSTCONDITION", capabilityId="demo", parameters={"checks": [{"type": "FILE_EXISTS", "parameters": {"path": "missing.ts"}}]})
+            failed = _item(type="CAPABILITY_POSTCONDITION", capabilityId="demo", checks=[{"type": "FILE_EXISTS", "path": "missing.ts"}])
             results = execute_validation_plan_v2(root, [failed, _item(validationId="following", index=1)])
             self.assertEqual(1, len(results))
             self.assertFalse(validation_plan_passed_v2(results))
@@ -51,15 +51,24 @@ class TemplateReconcileV2ValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "package.json").write_text('{"scripts":{"build":"noop"}}', encoding="utf-8")
-            item = _item(type="NPM_BUILD", executionMode="SANDBOX", parameters={})
+            (root / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+            item = _item(type="NPM_BUILD", executionMode="SANDBOX", path=None)
+            commands: list[list[str]] = []
 
             def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
                 """模拟构建在 Sandbox 中写入产物，而不依赖本机 pnpm。"""
 
+                commands.append(argv)
+                if argv[:2] == ["pnpm", "install"]:
+                    return subprocess.CompletedProcess(argv, 0, "prepared", "")
                 self.assertEqual(["pnpm", "run", "build"], argv)
                 Path(str(kwargs["cwd"]), "dist.txt").write_text("sandbox", encoding="utf-8")
                 return subprocess.CompletedProcess(argv, 0, "ok", "")
 
             results = execute_validation_plan_v2(root, [item], command_runner=runner)
             self.assertTrue(results[0].passed)
+            self.assertEqual(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], commands[0])
             self.assertFalse((root / "dist.txt").exists())
+            self.assertIsNotNone(results[0].stdout_log_ref)
+            self.assertTrue((root / str(results[0].stdout_log_ref)).is_file())
+            self.assertFalse(hasattr(results[0], "stdout"))

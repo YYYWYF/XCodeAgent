@@ -30,7 +30,7 @@ def load_template_state(workspace: str | Path) -> dict[str, Any]:
 
 
 def validate_template_state(value: Any) -> dict[str, Any]:
-    """严格验证 V2 State 并返回规范 JSON，不再接受 managedFiles 旧结构。"""
+    """严格验证 V2 State 并返回规范 JSON，不接受任何历史 State 结构。"""
 
     try:
         return TemplateStateV2.model_validate(value).model_dump(mode="json")
