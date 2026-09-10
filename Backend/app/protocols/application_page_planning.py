@@ -21,6 +21,8 @@ from app.protocols.application_planning_interrupt import (
 from app.protocols.application_lifecycle import application_lifecycle_input
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
+from app.services.ui_design_manifest import present_ui_pages
+from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
@@ -265,6 +267,23 @@ def _build_application_planning_recovery_ag_ui_stream(
         result = project_application_planning_interrupt(dict(snapshot.values), snapshot)
         if not result:
             raise ValueError("没有找到可恢复的应用规划 checkpoint。")
+        # UI 确认阶段：后台生成池把最新 page status/code 写进 ui-designs.json，
+        # 但 checkpoint 里的 ui_designs 仍停留在入队时的 queued/generating（池不写
+        # checkpoint）。recovery 只读 checkpoint 不跑 Graph，若不回填 manifest，
+        # 返回的快照里 pages 无 code 且 status 过时，右侧渲染区永远显示「生成中」。
+        if str(result.get("phase") or "") == "ui_confirmation":
+            manifest = load_ui_designs_json(
+                ui_designs_json_path(dict(snapshot.values))
+            )
+            if isinstance(manifest, dict) and manifest.get("pages"):
+                result["ui_designs"] = manifest
+                clarification = result.get("clarification")
+                if isinstance(clarification, dict):
+                    product_plan = result.get("product_plan")
+                    product_plan = (
+                        product_plan if isinstance(product_plan, dict) else {}
+                    )
+                    clarification["pages"] = present_ui_pages(manifest, product_plan)
         lifecycle = load_application_lifecycle(request.workspaceRoot)
         if lifecycle is not None:
             result["lifecycle"] = application_lifecycle_payload(lifecycle)
