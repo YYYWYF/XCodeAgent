@@ -1607,7 +1607,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 "pages": [{"pageId": "inventory_page"}],
             }
             product_plan = {
-                "schema_version": "product-plan.v6",
+                "schema_version": "product-plan.v8",
                 "confirmation_status": "confirmed",
                 "app": {"name": "库存应用", "summary": "管理库存"},
                 "business_flows": [],
@@ -1627,7 +1627,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 ],
             }
             ui_designs = {
-                "schema_version": "ui-manifest.v3",
+                "schema_version": "ui-manifest.v5",
                 "confirmation_status": "confirmed",
                 "pages": [
                     {

@@ -273,6 +273,9 @@ def _append_page_binding_blockers(
         for item in _dict_items(technical_plan.get("pages"))
     }
     for binding in _dict_items(product_agent.get("pageActionBindings")):
+        surface = binding.get("surface") if isinstance(binding.get("surface"), dict) else {}
+        if surface.get("enabled") is not True:
+            continue
         page_id = str(binding.get("pageId") or "").strip()
         action_ids = {
             str(item or "").strip()

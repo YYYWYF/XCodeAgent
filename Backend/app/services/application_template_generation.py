@@ -15,6 +15,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.domain.application_lifecycle import utc_now
+from app.services.frontend_agent_ui_scaffold import (
+    AGENT_UI_FRONTEND_TARGET_PATHS,
+    AGENT_UI_FRONTEND_TEMPLATE_VERSION,
+    FrontendAgentUiScaffoldError,
+    inject_frontend_agent_ui_scaffold,
+    inspect_frontend_agent_ui_requirement,
+    validate_frontend_agent_ui_scaffold,
+)
 from app.services.frontend_scaffold import (
     collect_template_pages,
     ensure_frontend_menu_entries,
@@ -27,6 +35,7 @@ from app.services.agent_runtime_template_policy import (
     AgentRuntimeTemplatePolicyError,
     load_agent_runtime_template_policy,
 )
+from app.services.ui_design_manifest import UI_MANIFEST_SCHEMA_VERSION
 
 TEMPLATE_GENERATION_MANIFEST_RELATIVE_PATH = Path(
     ".xcodeagent/template-generation-manifest.json"
@@ -139,6 +148,7 @@ def inspect_template_generation_readiness(workspace: str | Path) -> dict[str, An
         errors.append(f"模板 manifest 完成门禁状态为 {overall.get('status') or 'unknown'}")
 
     errors.extend(_download_target_errors(workspace_path, manifest))
+    errors.extend(_agent_ui_frontend_errors(workspace_path, steps))
 
     result = {
         "ready": not errors,
@@ -243,6 +253,29 @@ def prepare_application_template_generation(
             except Exception as exc:
                 errors = [str(exc)]
             last_step = "menus"
+        if not errors:
+            try:
+                manifest["steps"]["agentUiFrontend"] = (
+                    inject_frontend_agent_ui_scaffold(workspace_path)
+                )
+                last_step = "agentUiFrontend"
+            except FrontendAgentUiScaffoldError as exc:
+                try:
+                    requirement = inspect_frontend_agent_ui_requirement(workspace_path)
+                except FrontendAgentUiScaffoldError:
+                    requirement = {
+                        "required": None,
+                        "templateVersion": AGENT_UI_FRONTEND_TEMPLATE_VERSION,
+                        "sourceSha256": None,
+                        "targetFiles": list(AGENT_UI_FRONTEND_TARGET_PATHS),
+                    }
+                manifest["steps"]["agentUiFrontend"] = {
+                    **requirement,
+                    "status": "failed",
+                    "targets": [],
+                    "error": str(exc),
+                }
+                errors.append(str(exc))
         manifest["overall"].update(status="failed" if errors else "running", lastCompletedStep=last_step if not errors else None, error="；".join(errors) if errors else None, updatedAt=utc_now().isoformat())
         _write_manifest_atomically(workspace_path, manifest)
         if errors:
@@ -268,6 +301,7 @@ def validate_application_template_generation(workspace: str | Path) -> dict[str,
                 errors.append(f"manifest 步骤 {step_name} 未完成")
 
         errors.extend(_download_target_errors(workspace_path, manifest))
+        errors.extend(_agent_ui_frontend_errors(workspace_path, steps))
         if variant == "auth":
             errors.extend(_frontend_template_contract_errors(workspace_path / "frontend"))
         elif variant == "main":
@@ -308,7 +342,18 @@ def _base_manifest(workspace: Path, download_step: dict[str, Any]) -> dict[str, 
     now = utc_now().isoformat()
     pending = {"status": "pending", "error": None}
     variant, _ = _template_variant_from_download(download_step)
-    steps = {"download": download_step, "gate": {**pending, "checkedAt": None}}
+    steps = {
+        "download": download_step,
+        "agentUiFrontend": {
+            **pending,
+            "required": None,
+            "templateVersion": AGENT_UI_FRONTEND_TEMPLATE_VERSION,
+            "sourceSha256": None,
+            "targetFiles": list(AGENT_UI_FRONTEND_TARGET_PATHS),
+            "targets": [],
+        },
+        "gate": {**pending, "checkedAt": None},
+    }
     if variant == "main":
         steps.update({"templateFiles": dict(pending), "menus": dict(pending)})
     else:
@@ -428,6 +473,18 @@ def _required_step_names(variant: str, *, include_gate: bool) -> tuple[str, ...]
     return (*names, "gate") if include_gate else names
 
 
+def _agent_ui_frontend_errors(
+    workspace: Path,
+    steps: dict[str, Any],
+) -> list[str]:
+    """校验 Manifest 中独立于模板变体的 Agent UI 注入步骤。"""
+
+    step = steps.get("agentUiFrontend")
+    if not isinstance(step, dict):
+        return ["manifest 缺少 agentUiFrontend 步骤"]
+    return validate_frontend_agent_ui_scaffold(workspace, step)
+
+
 def _load_template_pages(workspace: Path) -> list[dict[str, Any]]:
     """读取 main 模板初始化依赖的已确认正式规划产物。"""
 
@@ -439,8 +496,10 @@ def _load_template_pages(workspace: Path) -> list[dict[str, Any]]:
             f"正式 ProductPlan 不是 {PRODUCT_PLAN_SCHEMA_VERSION}。"
         )
     ui_designs = _load_json_object(workspace / ".xcodeagent/specs/ui-designs.json", "正式 UiDesign Manifest")
-    if ui_designs.get("schema_version") != "ui-manifest.v3":
-        raise ApplicationTemplateGenerationError("正式 UiDesign Manifest 不是 ui-manifest.v3。")
+    if ui_designs.get("schema_version") != UI_MANIFEST_SCHEMA_VERSION:
+        raise ApplicationTemplateGenerationError(
+            f"正式 UiDesign Manifest 不是 {UI_MANIFEST_SCHEMA_VERSION}。"
+        )
     return collect_template_pages(product_plan, ui_designs)
 
 

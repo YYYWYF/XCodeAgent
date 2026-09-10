@@ -101,7 +101,7 @@ START
 - 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照和 `applicationPlanningInteraction`；确认卡携带服务端生成的 `gateId`、`artifactRevision` 与显式动作，沿同一 thread/checkpoint 原生恢复 Graph。前端按实际按钮或表单意图提交 `answer/confirm/revise/ui_action/enter_planning/design_change`，后端节点不再从中文文案猜动作；同一 thread 的版本校验与恢复全程串行，重复提交至多一个进入下游节点。
 - RequirementSpec、ProductPlan 和 TechnicalPlan 使用 Markdown 确认入口；React UI 稿及 `ui-designs.json` 使用 UI 确认界面。`ui_design_action.action = skip` 只写入 skipped Manifest 并进入 `awaiting_planning_stage_entry`，不得直接生成 TechnicalPlan。澄清回答不能替代产物确认。
 - TechnicalPlan 确认后校验四类正式产物；UI Manifest 的 `confirmation_status` 可以是 `confirmed` 或用户明确提交跳过后的 `skipped`，再推进 lifecycle 到 `generating_application_template_files`。模板完成动作使用同一规则复核四类 JSON 后才写入 `ready_for_workbench`。
-- 创建界面按“设计阶段 → 规划阶段 → 开发阶段”推进；设计阶段包含需求、产品和 UI，规划阶段包含 TechnicalPlan。RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为；UI 使用 `ui-manifest.v3`，跳过时保存空 `pages` 与 `confirmation_status: skipped`；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
+- 创建界面按“设计阶段 → 规划阶段 → 开发阶段”推进；设计阶段包含需求、产品和 UI，规划阶段包含 TechnicalPlan。RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用当前 `product-plan.v8` 保存产品可见行为、页面 Agent Surface 及浮窗启停选择，候选浮窗默认开启且仅在联合确认前可关闭；UI 使用 `ui-manifest.v5`，其 Agent Surface 证据包含固定模板模块、组件、版本与配置摘要，跳过时保存空 `pages` 与 `confirmation_status: skipped`；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
 - 主 Workflow 运行时从 RequirementSpec、ProductPlan、UiManifest 和 TechnicalPlan 按需编译 PageImplementationContract；编译结果不写回 TechnicalPlan。
 - 创建规划不执行构建后的集成测试质量门，也不生成 `quality_gate_passed`；AG-UI 摘要只在主 Workflow 明确产生布尔质量门结果时展示“通过/未通过”，不得把缺失值误报为未通过。
 
@@ -433,7 +433,7 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 - `requires_user_confirmation`：表示需要扩大修改范围、变更已确认需求/API 契约或做用户可见产品决策，调度器停止继续释放后续任务；
 - `terminal_failure`：表示证据不足、修复预算耗尽或失败不可自动处理，调度器停止构建并保留失败证据。
 
-外层 `build` 使用确定性条件路由：仅 `build_summary.status == completed` 可进入 `unit_test`；`requires_confirmation` 以 `repair_scope_confirmation` 暂停并返回稳定 `planId`、精确 `requestedPaths` 和原因；阻塞、仍有 pending/failed、不可修复或终止失败全部进入 `handle_failure`。用户批准时只从原任务授权范围编译 repair task，拒绝则终止，不允许单测或测试节点抢跑。
+外层 `build` 使用确定性条件路由：仅 `build_summary.status == completed` 可进入 `unit_test`；`requires_confirmation` 以 `repair_scope_confirmation` 暂停并返回稳定 `planId`、精确 `requestedPaths` 和原因；阻塞、仍有 pending/failed、不可修复或终止失败全部进入 `handle_failure`。用户批准时只从原任务授权范围编译 repair task，拒绝则终止，不允许单测或测试节点抢跑。含 Agent Surface 的页面由已确认 ProductPlan 与 TechnicalPlan 编译平台所有的 `agent-ui-build.v1` Mock 合同，页面代码只能组合固定 `AgentConversationPage` / `AgentFloatingPanel` 与默认 Mock Adapter；对应 `frontend.agent_ui_mock_contract` 即使普通业务自检关闭也必须执行。此类任务全部完成时，Build 返回 `mock_completed` 和 `delivery_boundary.real_integration=pending`，生命周期以独立 `agent_ui_integration_pending` 交互停在 Build，不进入单测、Launch 或 Acceptance；Gateway Endpoint 仍属于正式依赖，只在 Mock 页面消费检查中显式豁免。
 
 因此失败处理不是统一“重跑”：可重试的 runner/tool/网络类失败只通过显式 AG-UI 恢复动作重试；实现、编译、测试、验收类失败进入 RepairPlanner，已有 ready 修复计划也可由同一恢复入口继续执行；契约或计划边界类失败进入用户确认；不可恢复失败终止当前 build。摘要中的 `recovery_available`、`recovery_task_ids` 和兼容保留的 `retry_available`/`retryable_task_ids` 是前端是否显示恢复入口及其失败提示的依据。
 

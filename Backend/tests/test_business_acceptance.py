@@ -213,7 +213,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
     """验证业务检查只由平台按正式输入生成。"""
 
     def test_all_phase_two_kinds_compile(self) -> None:
-        """九种白名单交付物均应生成对应的确定性业务检查。"""
+        """九种通用交付物均应生成对应检查，条件式 Agent UI 由专测覆盖。"""
 
         cases = [
             ("frontend.api_module", "frontend", "frontend:api-client", "frontend/src/apis/orders.ts"),
@@ -240,7 +240,10 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
             _formal_context(),
         )
         actual = {check["kind"] for task in compiled for check in task["business_acceptance_checks"]}
-        self.assertEqual(actual, set(BUSINESS_ACCEPTANCE_KINDS))
+        self.assertEqual(
+            actual,
+            set(BUSINESS_ACCEPTANCE_KINDS) - {"frontend.agent_ui_mock_contract"},
+        )
 
     def test_task_entity_scope_does_not_expand_to_page_context_entities(self) -> None:
         """单实体后端任务不得继承同一页面 BuildContext 中的其他实体设计。"""

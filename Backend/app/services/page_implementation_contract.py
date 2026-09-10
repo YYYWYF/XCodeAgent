@@ -4,6 +4,7 @@ import hashlib
 import json
 from typing import Any
 
+from app.services.product_plan import project_active_agent_product_plan
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 from app.services.ui_design_manifest import persisted_ui_manifest, ui_action_bindings
 
@@ -388,6 +389,7 @@ def build_page_implementation_contracts(
 ) -> list[dict[str, Any]]:
     """把产品操作、真实 UI 稿和技术 API 绑定为非视觉页面实现契约。"""
 
+    product_plan = project_active_agent_product_plan(product_plan)
     product_pages = {
         str(page.get("pageId") or "").strip(): page
         for page in _dict_items(product_plan.get("pages"))
@@ -586,14 +588,16 @@ def validate_page_implementation_contracts(
     if technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE:
         raise ValueError("只接受当前 TechnicalPlan。")
 
+    # 页面契约的生成与校验必须共享同一份启用 Agent 投影，关闭的入口不能重新进入校验范围。
+    active_product_plan = project_active_agent_product_plan(product_plan)
     expected_pages = {
         str(page.get("pageId") or "").strip()
-        for page in _dict_items(product_plan.get("pages"))
+        for page in _dict_items(active_product_plan.get("pages"))
         if page.get("pageId")
     }
     contracts = build_page_implementation_contracts(
         technical_plan,
-        product_plan,
+        active_product_plan,
         ui_designs or {},
     )
     actual_pages = [str(item.get("pageId") or "").strip() for item in contracts]
@@ -603,7 +607,7 @@ def validate_page_implementation_contracts(
     endpoint_ids = set(_endpoint_catalog(technical_plan))
     product_pages = {
         str(page.get("pageId") or "").strip(): page
-        for page in _dict_items(product_plan.get("pages"))
+        for page in _dict_items(active_product_plan.get("pages"))
         if page.get("pageId")
     }
     ui_pages = {

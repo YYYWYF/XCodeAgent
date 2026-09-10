@@ -129,8 +129,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
 
         self.assertTrue(any("requirement_spec_sha256" in error for error in errors))
 
-    def test_product_plan_v6_keeps_only_pages_and_closes_navigation(self) -> None:
-        """v6 必须规范产品行为，并从导航操作闭合页面跳转。"""
+    def test_product_plan_v7_keeps_only_pages_and_closes_navigation(self) -> None:
+        """v7 必须规范产品行为，并从导航操作闭合页面跳转。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
         first_page, second_page = requirement_spec["pages"][:2]
@@ -162,7 +162,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
 
         page = product_plan["pages"][0]
-        self.assertEqual(product_plan["schema_version"], "product-plan.v6")
+        self.assertEqual(product_plan["schema_version"], "product-plan.v8")
         self.assertNotIn("frontend_pages", product_plan)
         self.assertEqual(page["information_items"][0]["itemId"], "inventory-summary")
         self.assertIsInstance(page["information_items"][0], dict)
@@ -1380,7 +1380,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             agent_plan=technical_model_entities(requirement_spec),
         )
         ui_designs = {
-            "schema_version": "ui-manifest.v3",
+            "schema_version": "ui-manifest.v5",
             "pages": [
                 {
                     "pageId": page["pageId"],
@@ -1639,18 +1639,23 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         }
         scoped_product_plan = {**product_plan, "pages": [first_page]}
         ui_designs = {
+            "schema_version": "ui-manifest.v5",
             "confirmation_status": "confirmed",
             "pages": [
                 {
                     "pageId": page_id,
                     "code_path": ".xcodeagent/ui-design/pages/Inventory/index.tsx",
                     "code_sha256": "a" * 64,
-                    "controls": [
-                        {
-                            "controlId": f"{action_id}-control",
-                            "actionId": action_id,
-                        }
-                    ],
+                    "bindings": {
+                        "actions": [
+                            {
+                                "actionId": action_id,
+                                "controlIds": [f"{action_id}-control"],
+                            }
+                        ],
+                        "information_items": [],
+                        "agent_surfaces": [],
+                    },
                 }
             ],
         }
@@ -1862,7 +1867,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             "api_contracts": [],
         }
         ui_designs = {
-            "schema_version": "ui-manifest.v3",
+            "schema_version": "ui-manifest.v5",
             "confirmation_status": "skipped",
             "pages": [],
         }
@@ -1885,6 +1890,122 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertEqual(
             validate_page_implementation_contracts(attached, product_plan, ui_designs),
             [],
+        )
+
+    def test_active_agent_projection_drives_contract_validation(self) -> None:
+        """关闭的 Agent 浮窗不应进入页面契约，但导航 action 仍不得写入技术实现。"""
+
+        product_plan = {
+            "pages": [
+                {
+                    "pageId": "page_home",
+                    "actions": [
+                        {
+                            "actionId": "go-next",
+                            "behavior": {
+                                "type": "navigation",
+                                "targetPageId": "page_next",
+                                "expectedResult": "进入下一页。",
+                            },
+                        },
+                        {
+                            "actionId": "open-assistant",
+                            "behavior": {
+                                "type": "business",
+                                "expectedResult": "打开智能助手。",
+                            },
+                        },
+                    ],
+                    "navigation_targets": ["page_next"],
+                },
+                {
+                    "pageId": "page_next",
+                    "actions": [],
+                    "navigation_targets": [],
+                },
+            ],
+            "agents": [
+                {
+                    "agentId": "assistant",
+                    "pageActionBindings": [
+                        {
+                            "pageId": "page_home",
+                            "actionIds": ["open-assistant"],
+                            "surface": {
+                                "type": "floating_panel",
+                                "enabled": False,
+                                "contextItemIds": [],
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+        technical_plan = {
+            "artifact_type": "technical-plan",
+            "pages": [
+                {
+                    "pageId": "page_home",
+                    "references": {
+                        "endpoint_dependencies": [],
+                        "action_implementations": [],
+                    },
+                },
+                {
+                    "pageId": "page_next",
+                    "references": {
+                        "endpoint_dependencies": [],
+                        "action_implementations": [],
+                    },
+                },
+            ],
+            "api_contracts": [],
+        }
+        ui_designs = {
+            "confirmation_status": "confirmed",
+            "pages": [
+                {
+                    "pageId": "page_home",
+                    "bindings": {
+                        "actions": [{"actionId": "go-next", "controlIds": ["next"]}]
+                    },
+                },
+                {"pageId": "page_next", "bindings": {"actions": []}},
+            ],
+        }
+
+        attached = attach_page_implementation_contracts(
+            technical_plan,
+            product_plan,
+            ui_designs,
+        )
+        errors = validate_page_implementation_contracts(
+            attached,
+            product_plan,
+            ui_designs,
+        )
+
+        self.assertEqual(errors, [])
+
+        technical_plan["pages"][0]["references"]["action_implementations"] = [
+            {"actionId": "go-next", "endpointId": "unexpected.endpoint"}
+        ]
+        invalid_attached = attach_page_implementation_contracts(
+            technical_plan,
+            product_plan,
+            ui_designs,
+        )
+        invalid_errors = validate_page_implementation_contracts(
+            invalid_attached,
+            product_plan,
+            ui_designs,
+        )
+
+        self.assertTrue(
+            any(
+                "不得为导航、界面或外部 action 重复决策：go-next" in error
+                for error in invalid_errors
+            )
         )
 
     def test_action_binding_validation_rejects_missing_or_ambiguous_decisions(self) -> None:

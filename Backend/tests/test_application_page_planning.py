@@ -17,6 +17,7 @@ from app.graph.application_planning_workflow import (
     _route_start,
     _route_ui_confirmation,
 )
+from app.graph.nodes.ui_confirmation import refresh_ui_design_recovery_state
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
@@ -41,6 +42,7 @@ from app.services.application_revision_lifecycle import (
 )
 from app.services.requirement_spec import create_requirement_spec
 from app.services.product_plan import create_product_plan
+from app.workspace.product_plan_documents import write_product_plan_documents
 from app.workspace.spec_documents import (
     write_requirement_spec_draft_document,
 )
@@ -88,7 +90,11 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
         "technical_plan_path": str(technical_plan_path),
         "requirement_spec": requirement_spec,
         "product_plan": product_plan,
-        "ui_designs": {"confirmation_status": "confirmed", "pages": []},
+        "ui_designs": {
+            "schema_version": "ui-manifest.v5",
+            "confirmation_status": "confirmed",
+            "pages": [],
+        },
         "technical_plan": technical_plan,
     }
     requirement_path.with_suffix(".json").write_text(
@@ -139,6 +145,60 @@ def _write_planning_stage_entry_lifecycle(
 
 
 class ApplicationPagePlanningTests(unittest.TestCase):
+    def test_ui_design_recovery_reads_latest_generation_pool_manifest(self) -> None:
+        """UI 轮询恢复必须展示后台生成池已经落盘的最终状态。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            manifest_path = workspace / ".xcodeagent" / "specs" / "ui-designs.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            latest = {
+                "schema_version": "ui-manifest.v5",
+                "confirmation_status": "pending_user_confirmation",
+                "product_plan_sha256": "product-hash",
+                "pages": [
+                    {
+                        "pageId": "qa_page",
+                        "page_key": "QaPage",
+                        "status": "generation_failed",
+                        "error": "模板生成失败",
+                        "bindings": {
+                            "actions": [],
+                            "information_items": [],
+                            "agent_surfaces": [],
+                        },
+                    }
+                ],
+            }
+            manifest_path.write_text(json.dumps(latest), encoding="utf-8")
+            state = {
+                "workspace": directory,
+                "project_id": "app-1",
+                "phase": "ui_confirmation",
+                "product_plan": {
+                    "pages": [{"pageId": "qa_page", "name": "智能体问答页"}],
+                    "agents": [],
+                },
+                "ui_designs": {
+                    **latest,
+                    "pages": [{"pageId": "qa_page", "status": "generating"}],
+                },
+                "application_planning_interrupt": {
+                    "clarification": {"mode": "ui_design_confirmation", "pages": []}
+                },
+            }
+
+            recovered = asyncio.run(refresh_ui_design_recovery_state(state))
+
+        self.assertEqual(recovered["ui_designs"]["pages"][0]["status"], "generation_failed")
+        self.assertEqual(recovered["clarification"]["pages"][0]["status"], "generation_failed")
+        self.assertEqual(
+            recovered["application_planning_interrupt"]["clarification"]["pages"][0][
+                "status"
+            ],
+            "generation_failed",
+        )
+
     def test_checkpoint_recovery_projects_confirmation_without_running_graph(self) -> None:
         """冷启动恢复只读取 checkpoint，并重新投影需求确认卡。"""
 
@@ -260,6 +320,56 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             [page["pageId"] for page in saved["pages"]],
             [page["pageId"] for page in spec["pages"]],
         )
+
+    def test_agent_surface_selection_uses_ag_ui_without_running_graph(self) -> None:
+        """浮窗开关必须通过独立 AG-UI 动作保存，并保持联合确认门禁。"""
+
+        spec = create_requirement_spec("创建库存应用，并提供库存问答助手")
+        page_id = spec["pages"][0]["pageId"]
+        spec["agent_requirements"] = [
+            {
+                "agentId": "inventory_assistant",
+                "name": "库存助手",
+                "purpose": "帮助用户理解库存状态。",
+                "capabilities": ["解释库存状态"],
+                "entryPageIds": [page_id],
+                "interactionMode": "conversation",
+                "boundaries": ["不得直接修改库存"],
+            }
+        ]
+        plan = create_product_plan(spec)
+
+        with tempfile.TemporaryDirectory() as directory:
+            write_requirement_spec_draft_document({"workspace": directory}, spec)
+            write_product_plan_documents({"workspace": directory}, plan)
+            stream = build_application_page_planning_ag_ui_stream(
+                graph=object(),
+                payload={
+                    "threadId": "surface-thread",
+                    "runId": "surface-run",
+                    "forwardedProps": {
+                        "agentSurfaceSelectionDraft": {
+                            "action": "save",
+                            "workspaceRoot": directory,
+                            "agentId": "inventory_assistant",
+                            "pageId": page_id,
+                            "enabled": False,
+                        }
+                    },
+                },
+            )
+
+            async def collect() -> str:
+                """消费浮窗选择事件流并返回完整协议文本。"""
+
+                return "".join([frame async for frame in stream])
+
+            frames = asyncio.run(collect())
+
+        self.assertIn("agent-surface-selection-draft", frames)
+        self.assertIn("RUN_STARTED", frames)
+        self.assertIn("RUN_FINISHED", frames)
+        self.assertIn('"enabled":false', frames)
 
     def test_creation_requirements_expose_clarification_tool(self) -> None:
         """新建应用需求不足时应允许模型集中提出关键澄清问题。"""
@@ -891,7 +1001,11 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             state = _confirmed_state(workspace)
-            skipped = {"confirmation_status": "skipped", "pages": []}
+            skipped = {
+                "schema_version": "ui-manifest.v5",
+                "confirmation_status": "skipped",
+                "pages": [],
+            }
             state["ui_designs"] = skipped
             (workspace / ".xcodeagent" / "specs" / "ui-designs.json").write_text(
                 json.dumps(skipped),
@@ -932,7 +1046,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             capability["confirmationArtifacts"],
             ["requirement_spec", "product_plan", "ui_designs", "technical_plan"],
         )
-        self.assertEqual(capability["artifactSchemas"]["ui_designs"], "ui-manifest.v3")
+        self.assertEqual(capability["artifactSchemas"]["product_plan"], "product-plan.v8")
+        self.assertEqual(capability["artifactSchemas"]["ui_designs"], "ui-manifest.v5")
         self.assertIn("skip", capability["uiDesignActions"])
         self.assertEqual(
             capability["editableArtifacts"]["requirement_spec"]["actions"],
@@ -941,6 +1056,10 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(
             capability["editableArtifacts"]["requirement_spec"]["saveActionField"],
             "forwardedProps.requirementSpecDraft",
+        )
+        self.assertEqual(
+            capability["editableArtifacts"]["product_plan"]["saveActionField"],
+            "forwardedProps.agentSurfaceSelectionDraft",
         )
         self.assertEqual(
             capability["draftArtifacts"]["product_plan"]["writes"],

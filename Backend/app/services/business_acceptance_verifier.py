@@ -13,6 +13,7 @@ from app.services.business_acceptance import (
     _endpoint_expectations,
     _stable_hash,
 )
+from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
 from app.services.business_acceptance_verifiers.backend_domain import verify_domain_mapping_source
 from app.services.business_acceptance_verifiers.backend_external_api import (
     verify_external_api_client_source,
@@ -24,6 +25,7 @@ from app.services.business_acceptance_verifiers.backend_application_service impo
 )
 from app.services.business_acceptance_verifiers.backend_repository import verify_repository_source
 from app.services.business_acceptance_verifiers.frontend_api import verify_api_contract_source
+from app.services.business_acceptance_verifiers.frontend_agent_ui import verify_agent_ui_mock_source
 from app.services.business_acceptance_verifiers.frontend_page import verify_page_endpoint_usage_source
 from app.services.business_acceptance_verifiers.frontend_static_data import (
     verify_static_data_contract_source,
@@ -35,6 +37,7 @@ Verifier = Callable[..., dict[str, Any]]
 
 BUSINESS_VERIFIER_REGISTRY: dict[str, Verifier] = {
     "frontend.api_contract": verify_api_contract_source,
+    "frontend.agent_ui_mock_contract": verify_agent_ui_mock_source,
     "frontend.page_endpoint_usage": verify_page_endpoint_usage_source,
     "frontend.static_data_contract": verify_static_data_contract_source,
     "backend.domain_mapping": verify_domain_mapping_source,
@@ -314,6 +317,12 @@ def _current_source_hash(source: dict[str, Any], formal: dict[str, Any]) -> str:
             {},
         )
         return _stable_hash(contract) if contract else ""
+    if artifact == "agent_ui_build_contract":
+        product_plan = formal.get("_product_plan")
+        product_plan = product_plan if isinstance(product_plan, dict) else {}
+        contracts = project_agent_ui_build_contracts(product_plan, formal)
+        contract = contracts.get(target_id)
+        return _stable_hash(contract) if isinstance(contract, dict) else ""
     if artifact == "endpoint_detail":
         detail = next(
             (

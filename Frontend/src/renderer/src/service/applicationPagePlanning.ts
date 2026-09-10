@@ -29,6 +29,17 @@ type RequirementSpecDraftPayload = {
   error?: { message?: string }
 }
 
+type AgentSurfaceSelectionDraftPayload = {
+  schemaVersion: 1
+  runId: string
+  threadId: string
+  status: 'completed' | 'failed'
+  action?: 'save_agent_surface_selection'
+  productPlan?: Record<string, unknown>
+  artifact?: WorkflowConfirmationArtifact
+  error?: { message?: string }
+}
+
 // 读取包含设计、显式规划入口和 TechnicalPlan 的创建规划 Graph 地址。
 export function getApplicationPlanningUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
@@ -125,6 +136,33 @@ function readRequirementSpecDraftState(value: unknown): RequirementSpecDraftPayl
   )
 }
 
+// 校验单页浮窗选择保存动作的 AG-UI 响应信封。
+function readAgentSurfaceSelectionPayload(
+  value: unknown
+): AgentSurfaceSelectionDraftPayload | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const payload = value as Partial<AgentSurfaceSelectionDraftPayload>
+  if (
+    payload.schemaVersion !== 1 ||
+    typeof payload.runId !== 'string' ||
+    typeof payload.threadId !== 'string' ||
+    !['completed', 'failed'].includes(String(payload.status))
+  ) {
+    return undefined
+  }
+  return payload as AgentSurfaceSelectionDraftPayload
+}
+
+// 从 AG-UI 状态快照读取单页浮窗选择保存结果。
+function readAgentSurfaceSelectionState(
+  value: unknown
+): AgentSurfaceSelectionDraftPayload | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  return readAgentSurfaceSelectionPayload(
+    (value as { agentSurfaceSelectionDraft?: unknown }).agentSurfaceSelectionDraft
+  )
+}
+
 // 调用规划端点的独立保存动作，在不确认需求的前提下重写 Markdown 与 JSON。
 export async function saveRequirementSpecDraft(
   workspaceRoot: string,
@@ -167,6 +205,58 @@ export async function saveRequirementSpecDraft(
   return {
     artifact: draftPayload.artifact,
     requirementSpec: draftPayload.requirementSpec
+  }
+}
+
+// 保存待确认 ProductPlan 中单页悬浮智能体的启停选择。
+export async function saveAgentSurfaceSelectionDraft(
+  workspaceRoot: string,
+  threadId: string,
+  selection: { agentId: string; pageId: string; enabled: boolean }
+): Promise<{
+  artifact: WorkflowConfirmationArtifact
+  productPlan: Record<string, unknown>
+}> {
+  const agent = createAgUiHttpAgent({ url: getApplicationPlanningUrl(), threadId })
+  agent.addMessage({
+    id: randomUUID(),
+    role: 'user',
+    content: `${selection.enabled ? '开启' : '关闭'}当前页面的智能体浮窗。`
+  })
+
+  let draftPayload: AgentSurfaceSelectionDraftPayload | undefined
+  const subscriber: AgentSubscriber = {
+    onCustomEvent: ({ event }) => {
+      if (event.name !== 'agent-surface-selection-draft') return
+      draftPayload = readAgentSurfaceSelectionPayload(event.value) ?? draftPayload
+    },
+    onStateSnapshotEvent: ({ event }) => {
+      draftPayload = readAgentSurfaceSelectionState(event.snapshot) ?? draftPayload
+    }
+  }
+  const result = await agent.runAgent(
+    {
+      forwardedProps: {
+        agentSurfaceSelectionDraft: {
+          action: 'save',
+          workspaceRoot,
+          ...selection
+        }
+      }
+    },
+    subscriber
+  )
+  draftPayload = readAgentSurfaceSelectionState(result.result) ?? draftPayload
+  if (!draftPayload) throw new Error('智能体浮窗保存接口没有返回有效的 AG-UI 状态。')
+  if (draftPayload.status === 'failed') {
+    throw new Error(draftPayload.error?.message || '智能体浮窗选择保存失败。')
+  }
+  if (!draftPayload.artifact || !draftPayload.productPlan) {
+    throw new Error('智能体浮窗保存接口没有返回更新后的 ProductPlan。')
+  }
+  return {
+    artifact: draftPayload.artifact,
+    productPlan: draftPayload.productPlan
   }
 }
 

@@ -57,7 +57,10 @@ from app.services.authorization_deliverability import (
     authorization_deliverability_report,
 )
 from app.services.application_lifecycle import load_application_lifecycle
-from app.services.product_plan import require_current_product_plan
+from app.services.product_plan import (
+    project_active_agent_product_plan,
+    require_current_product_plan,
+)
 from app.services.page_dependencies import (
     close_page_action_endpoint_dependencies,
     validate_project_plan_dependencies,
@@ -207,10 +210,12 @@ def _technical_planning_requirement_spec(
         for key, value in requirement_spec.items()
         if key != "entities"
     }
+    active_product_plan = project_active_agent_product_plan(product_plan)
     return {
         **technical_input,
-        "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
+        "pages": active_product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
+        "active_agent_product_plan": active_product_plan,
     }
 
 
@@ -253,12 +258,18 @@ def _technical_plan_contract_errors(
     if not isinstance(product_plan, dict) or not isinstance(ui_designs, dict):
         return ["TechnicalPlan 缺少 ProductPlan 或 UiDesign 输入。"]
     requirement_spec = state.get("requirement_spec")
-    errors = validate_page_implementation_contracts(plan, product_plan, ui_designs)
+    # TechnicalPlan 所有下游一致使用启用 Agent 投影，避免关闭入口被权限和页面契约重新纳入。
+    active_product_plan = project_active_agent_product_plan(product_plan)
+    errors = validate_page_implementation_contracts(
+        plan,
+        active_product_plan,
+        ui_designs,
+    )
     if isinstance(requirement_spec, dict):
         report = authorization_deliverability_report(
             plan.get("authorization_manifest"),
             requirement_spec,
-            product_plan,
+            active_product_plan,
             (
                 plan.get("api_contracts")
                 if isinstance(plan.get("api_contracts"), list)

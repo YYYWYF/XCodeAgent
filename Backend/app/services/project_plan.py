@@ -1319,7 +1319,9 @@ def _technical_plan_pages(
     """只保存页面身份和 TechnicalPlan 新增的 endpoint 技术引用。"""
 
     product_plan = (
-        spec.get("confirmed_product_plan")
+        spec.get("active_agent_product_plan")
+        if isinstance(spec.get("active_agent_product_plan"), dict)
+        else spec.get("confirmed_product_plan")
         if isinstance(spec.get("confirmed_product_plan"), dict)
         else {}
     )
@@ -2031,6 +2033,13 @@ def _technical_agent_contract_model_errors(
                 f"{gateway_endpoint_id or '空'}。"
             )
         for page_binding in _dict_items(product_agent.get("pageActionBindings")):
+            surface = (
+                page_binding.get("surface")
+                if isinstance(page_binding.get("surface"), dict)
+                else {}
+            )
+            if surface.get("enabled") is not True:
+                continue
             page_id = str(page_binding.get("pageId") or "").strip()
             for action_id in _string_items(page_binding.get("actionIds")):
                 if page_action_endpoints.get((page_id, action_id)) != gateway_endpoint_id:
@@ -2610,6 +2619,11 @@ def create_technical_plan(
         if isinstance(spec.get("confirmed_product_plan"), dict)
         else {"authorizationTargets": {"pageRules": [], "operationRules": []}}
     )
+    active_product_plan = (
+        spec.get("active_agent_product_plan")
+        if isinstance(spec.get("active_agent_product_plan"), dict)
+        else product_plan
+    )
     product_agents = _dict_items(product_plan.get("agents"))
     raw_agent_contracts = _agent_section(agent_plan, "agent_contracts")
     if (
@@ -2646,7 +2660,7 @@ def create_technical_plan(
         "agent_contracts": agent_contracts,
         "authorization_manifest": compile_authorization_manifest(
             spec,
-            product_plan,
+            active_product_plan,
             api_contracts,
             pages,
         ),

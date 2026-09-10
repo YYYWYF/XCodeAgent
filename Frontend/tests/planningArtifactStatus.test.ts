@@ -9,9 +9,9 @@ import {
   PRODUCT_PLAN_SCHEMA_VERSION
 } from '../src/main/planningArtifactStatus'
 
-/** 验证 Electron 工作台只读取后端当前的 ProductPlan v6 契约。 */
-test('ProductPlan 工作台校验使用 v6', () => {
-  assert.equal(PRODUCT_PLAN_SCHEMA_VERSION, 'product-plan.v6')
+/** 验证 Electron 工作台只读取后端当前的 ProductPlan v8 契约。 */
+test('ProductPlan 工作台校验使用 v8', () => {
+  assert.equal(PRODUCT_PLAN_SCHEMA_VERSION, 'product-plan.v8')
 })
 
 /** 创建隔离工作区并在用例结束后清理。 */

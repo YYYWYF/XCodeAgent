@@ -33,6 +33,7 @@ from app.services.ui_design_generation_pool import (
     UiDesignGenerationTask,
     get_ui_design_generation_pool,
 )
+from app.services.ui_design_agent_surfaces import project_ui_design_pages
 from app.services.ui_design_generator import (
     derive_page_key,
     generate_adjusted_page_react_code,
@@ -62,13 +63,12 @@ logger = logging.getLogger(__name__)
 
 
 def _page_list(state: ProjectState) -> list[dict[str, Any]]:
-    """只从当前 ProductPlan.pages 读取 UI 设计页面。"""
+    """从当前 ProductPlan 投影页面及其 Agent Surface 设计输入。"""
 
     product_plan = state.get("product_plan")
     if not isinstance(product_plan, dict):
         return []
-    pages = product_plan.get("pages")
-    return [page for page in pages if isinstance(page, dict)] if isinstance(pages, list) else []
+    return project_ui_design_pages(product_plan)
 
 
 def _page_id(page: dict[str, Any]) -> str:
@@ -544,6 +544,28 @@ async def _latest_ui_designs(
         manifest = load_ui_designs_json(ui_designs_json_path(state))
 
     return manifest
+
+
+async def refresh_ui_design_recovery_state(state: dict[str, Any]) -> dict[str, Any]:
+    """让只读 checkpoint 恢复同时投影后台生成池写入的最新 UI 清单。"""
+
+    existing = state.get("ui_designs")
+    if (
+        str(state.get("phase") or "") != "ui_confirmation"
+        or not isinstance(existing, dict)
+        or existing.get("confirmation_status") != "pending_user_confirmation"
+    ):
+        return state
+    latest = await _latest_ui_designs(state, existing)
+    clarification = _ui_design_confirmation_payload(state, latest)
+    projected = {**state, "ui_designs": latest, "clarification": clarification}
+    interrupt = state.get("application_planning_interrupt")
+    if isinstance(interrupt, dict):
+        projected["application_planning_interrupt"] = {
+            **interrupt,
+            "clarification": clarification,
+        }
+    return projected
 
 
 async def _enqueue_ui_design_generation(

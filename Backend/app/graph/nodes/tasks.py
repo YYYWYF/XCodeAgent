@@ -17,6 +17,7 @@ from app.services.artifact_invalidation import (
     stale_artifact_keys,
 )
 from app.services.build_context_resolver import resolve_target_build_context
+from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
 from app.services.build_task_confirmation import (
     build_task_confirmation_read_model,
 )
@@ -1356,6 +1357,23 @@ def _resolve_build_context(
                 )
             )
         return _add_reusable_task_context(context, build_task_plan)
+    product_plan = (
+        state.get("product_plan")
+        if isinstance(state.get("product_plan"), dict)
+        else {}
+    )
+    page_contexts_by_page = {
+        str(page.get("pageId") or ""): resolve_target_build_context(
+            project_plan,
+            target_type="page",
+            target_id=str(page.get("pageId") or ""),
+            project_plan_path=state.get("project_plan_json_path")
+                              or project_plan_json_path(state),
+            product_plan=product_plan,
+        )
+        for page in project_plan_page_records(project_plan)
+        if str(page.get("pageId") or "").strip()
+    }
     return _add_reusable_task_context({
         "target": {"type": "application", "id": "application"},
         "page_implementation_contract": None,
@@ -1364,8 +1382,14 @@ def _resolve_build_context(
         "endpoint_ids": [],
         "entity_ids": [],
         "agent_contracts": list(project_plan.get("agent_contracts") or []),
+        "page_contexts_by_page": page_contexts_by_page,
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
-        "source_refs": {},
+        "source_refs": {
+            "agent_ui_by_page": project_agent_ui_build_contracts(
+                product_plan,
+                project_plan,
+            )
+        },
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }, build_task_plan)
 

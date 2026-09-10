@@ -152,7 +152,9 @@ export default function AgentDevelopmentDetail({
             <article key={capability.capabilityId}>
               <strong>{capability.name}</strong>
               <p>{capability.expectedResult}</p>
-              <span>{capability.toolIds.length ? capability.toolIds.join(' · ') : '无需 Tool'}</span>
+              <span>
+                {capability.toolIds.length ? capability.toolIds.join(' · ') : '无需 Tool'}
+              </span>
             </article>
           ))}
         </div>
@@ -172,6 +174,48 @@ export default function AgentDevelopmentDetail({
             <span>失败 {summary.failed}</span>
           </div>
         ) : null}
+      </section>
+
+      <section className={cx('agent-detail-section')}>
+        <div className={cx('agent-detail-section-title')}>
+          <h3>页面交互载体</h3>
+          <Tag>只读 · 来源 ProductPlan</Tag>
+        </div>
+        {agent.entryActions.length ? (
+          <div className={cx('agent-surface-list')}>
+            {agent.entryActions.map((entryAction) => (
+              <article key={`${entryAction.pageId}:${entryAction.surface.type}`}>
+                <div className={cx('agent-surface-heading')}>
+                  <div>
+                    <strong>{entryAction.pageLabel || entryAction.pageId}</strong>
+                    <code>{entryAction.pageId}</code>
+                  </div>
+                  <Tag color={entryAction.surface.type === 'unknown' ? undefined : 'purple'}>
+                    {entryAction.surface.label}
+                  </Tag>
+                </div>
+                <dl>
+                  <div>
+                    <dt>页面操作</dt>
+                    <dd>
+                      {entryAction.actionIds.length ? entryAction.actionIds.join(' · ') : '未绑定'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>上下文白名单</dt>
+                    <dd>
+                      {entryAction.surface.contextItemIds.length
+                        ? entryAction.surface.contextItemIds.join(' · ')
+                        : '无'}
+                    </dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className={cx('agent-purpose')}>当前 Agent 未声明页面交互载体。</p>
+        )}
       </section>
 
       <AgentSettingsView

@@ -23,6 +23,7 @@ const RUNTIME_MODULE_MAP: Record<string, string> = {
   antd5: 'antd',
   '@ant-design/icons': 'antdIcons',
   '@ant-design/pro-components': 'proComponents',
+  '@xcodeagent/agent-ui-design': 'agentUi',
   // dayjs 是 antd5 的传递依赖，页面模板（commonTable/tabsTable）用它做日期格式化。
   // 选模板作设计稿时模板代码原样渲染，需登记 dayjs 否则 require('dayjs') 白屏。
   dayjs: 'dayjs'
@@ -41,17 +42,14 @@ const RUNTIME_MODULE_MAP: Record<string, string> = {
  */
 function rewriteRequire(code: string): string {
   // 匹配 require('xxx') 或 require("xxx")
-  return code.replace(
-    /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g,
-    (full, spec: string) => {
-      const nsKey = RUNTIME_MODULE_MAP[spec]
-      if (!nsKey) {
-        // 未知来源：保留原样，运行时 require 未定义会报错（设计稿规范禁用未登记的 import）。
-        return full
-      }
-      return `window.__DESIGN_RUNTIME__.${nsKey}`
+  return code.replace(/\brequire\(\s*['"]([^'"]+)['"]\s*\)/g, (full, spec: string) => {
+    const nsKey = RUNTIME_MODULE_MAP[spec]
+    if (!nsKey) {
+      // 未知来源：保留原样，运行时 require 未定义会报错（设计稿规范禁用未登记的 import）。
+      return full
     }
-  )
+    return `window.__DESIGN_RUNTIME__.${nsKey}`
+  })
 }
 
 /**
@@ -91,4 +89,3 @@ export function compileTsx(source: string): string {
   `
   return wrapped
 }
-

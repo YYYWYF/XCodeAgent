@@ -371,6 +371,15 @@ def acceptance(state: ProjectState) -> dict:
 
 
 def finalize_project(state: ProjectState) -> dict:
+    """仅在真实集成边界完整时完成项目，否则保留 Agent UI 待办门禁。"""
+
+    from app.services.agent_ui_build_contract import (
+        agent_ui_integration_pending,
+        agent_ui_integration_pending_result,
+    )
+
+    if agent_ui_integration_pending(state):
+        return agent_ui_integration_pending_result()
     return {
         "phase": "completed",
         "status": "completed",

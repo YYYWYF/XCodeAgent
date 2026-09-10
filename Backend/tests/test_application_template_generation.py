@@ -13,6 +13,7 @@ from app.services.application_template_generation import (
     prepare_application_template_generation,
     validate_application_template_generation,
 )
+from app.services.frontend_agent_ui_scaffold import AGENT_UI_FRONTEND_TARGET_PATHS
 from app.services.frontend_scaffold import ensure_frontend_menu_entries
 
 
@@ -38,6 +39,17 @@ class ApplicationTemplateGenerationTests(unittest.TestCase):
         (root / "backend").mkdir()
         (root / "backend/pom.xml").write_text("<project/>", encoding="utf-8")
         (root / ".xcodeagent/plans").mkdir(parents=True)
+        (root / ".xcodeagent/plans/product-plan.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "product-plan.v8",
+                    "confirmation_status": "confirmed",
+                    "agents": [],
+                    "pages": [],
+                }
+            ),
+            encoding="utf-8",
+        )
         (root / ".xcodeagent/plans/technical-plan.json").write_text(
             json.dumps(
                 {
@@ -48,6 +60,34 @@ class ApplicationTemplateGenerationTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+
+    def _enable_agent_surface(
+        self,
+        root: Path,
+        *,
+        surface_type: str = "standalone_page",
+    ) -> None:
+        """在正式 ProductPlan 中写入一个启用的 Agent Surface。"""
+
+        product_plan_path = root / ".xcodeagent/plans/product-plan.json"
+        product_plan = json.loads(product_plan_path.read_text(encoding="utf-8"))
+        product_plan["agents"] = [
+            {
+                "agentId": "assistant",
+                "pageActionBindings": [
+                    {
+                        "pageId": "assistant",
+                        "actionIds": ["assistant.ask"],
+                        "surface": {
+                            "type": surface_type,
+                            "enabled": True,
+                            "contextItemIds": [],
+                        },
+                    }
+                ],
+            }
+        ]
+        product_plan_path.write_text(json.dumps(product_plan), encoding="utf-8")
 
     def _download(self, branch: str = "auth") -> dict:
         """返回成功下载的最小结果。"""
@@ -134,6 +174,110 @@ class ApplicationTemplateGenerationTests(unittest.TestCase):
                 manifest["steps"]["download"]["targets"]["agentRuntime"]["status"],
                 "skipped",
             )
+            self.assertEqual(manifest["steps"]["agentUiFrontend"]["status"], "skipped")
+
+    def test_auth_template_injects_agent_ui_assets_before_build(self) -> None:
+        """auth 模板也必须通过共用服务获得摘要匹配的固定 Agent UI 资产。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._workspace(root)
+            self._enable_agent_surface(root)
+
+            manifest = prepare_application_template_generation(root, self._download("auth"))
+            validated = validate_application_template_generation(root)
+
+            step = manifest["steps"]["agentUiFrontend"]
+            self.assertTrue(step["required"])
+            self.assertEqual(step["status"], "succeeded")
+            self.assertEqual(len(step["targets"]), len(AGENT_UI_FRONTEND_TARGET_PATHS))
+            self.assertEqual(validated["overall"]["status"], "succeeded")
+
+    def test_main_template_injects_agent_ui_assets_after_page_initialization(self) -> None:
+        """main 模板页面初始化和 Agent UI 注入必须同时完成且不互相替代。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "frontend/src/constants").mkdir(parents=True)
+            (root / "frontend/package.json").write_text("{}", encoding="utf-8")
+            (root / "frontend/src/constants/menus.ts").write_text(
+                "export const BIZ_MENUS = [];\n", encoding="utf-8"
+            )
+            (root / "backend").mkdir()
+            (root / "backend/pom.xml").write_text("<project/>", encoding="utf-8")
+            (root / ".xcodeagent/plans").mkdir(parents=True)
+            (root / ".xcodeagent/specs").mkdir(parents=True)
+            (root / ".xcodeagent/plans/product-plan.json").write_text(
+                json.dumps(
+                    {
+                        "confirmation_status": "confirmed",
+                        "schema_version": "product-plan.v8",
+                        "pages": [
+                            {"pageId": "assistant", "name": "智能助手", "path": "/assistant"}
+                        ],
+                        "agents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self._enable_agent_surface(root, surface_type="floating_panel")
+            (root / ".xcodeagent/specs/ui-designs.json").write_text(
+                '{"schema_version":"ui-manifest.v5","confirmation_status":"skipped"}',
+                encoding="utf-8",
+            )
+            (root / ".xcodeagent/plans/technical-plan.json").write_text(
+                '{"artifact_type":"technical-plan","confirmation_status":"confirmed","agent_contracts":[]}',
+                encoding="utf-8",
+            )
+
+            manifest = prepare_application_template_generation(root, self._download("main"))
+            validate_application_template_generation(root)
+
+            self.assertEqual(manifest["steps"]["templateFiles"]["status"], "succeeded")
+            self.assertEqual(manifest["steps"]["menus"]["status"], "succeeded")
+            self.assertEqual(manifest["steps"]["agentUiFrontend"]["status"], "succeeded")
+            self.assertTrue((root / "frontend/src/pages/Assistant/index.tsx").is_file())
+
+    def test_gate_rejects_agent_ui_asset_drift(self) -> None:
+        """完成门禁必须复核目标摘要，不能只信任已保存的成功状态。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._workspace(root)
+            self._enable_agent_surface(root)
+            prepare_application_template_generation(root, self._download("auth"))
+            target = root / AGENT_UI_FRONTEND_TARGET_PATHS[0]
+            target.write_text("// drifted after injection\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ApplicationTemplateGenerationError, "固定资产内容漂移"
+            ):
+                validate_application_template_generation(root)
+
+    def test_conflicting_agent_ui_asset_is_preserved_and_recorded(self) -> None:
+        """模板已有同路径业务文件时，准备阶段必须失败并在 Manifest 留证。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._workspace(root)
+            self._enable_agent_surface(root)
+            target = root / AGENT_UI_FRONTEND_TARGET_PATHS[0]
+            target.parent.mkdir(parents=True)
+            target.write_text("// keep me\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ApplicationTemplateGenerationError, "已有文件与固定资产不一致"
+            ):
+                prepare_application_template_generation(root, self._download("auth"))
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "// keep me\n")
+            manifest = json.loads(
+                (root / ".xcodeagent/template-generation-manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(manifest["steps"]["agentUiFrontend"]["status"], "failed")
+            self.assertTrue(manifest["steps"]["agentUiFrontend"]["required"])
 
     def test_contract_gate_rejects_missing_markers(self) -> None:
         """模板缺少托管区时不得进入 Build。"""
@@ -165,8 +309,8 @@ class ApplicationTemplateGenerationTests(unittest.TestCase):
             (root / "backend/pom.xml").write_text("<project/>", encoding="utf-8")
             (root / ".xcodeagent/plans").mkdir(parents=True)
             (root / ".xcodeagent/specs").mkdir(parents=True)
-            (root / ".xcodeagent/plans/product-plan.json").write_text('{"confirmation_status":"confirmed","schema_version":"product-plan.v6","pages":[{"pageId":"dashboard","name":"首页","path":"/dashboard"}]}', encoding="utf-8")
-            (root / ".xcodeagent/specs/ui-designs.json").write_text('{"schema_version":"ui-manifest.v3","confirmation_status":"skipped"}', encoding="utf-8")
+            (root / ".xcodeagent/plans/product-plan.json").write_text('{"confirmation_status":"confirmed","schema_version":"product-plan.v8","pages":[{"pageId":"dashboard","name":"首页","path":"/dashboard"}]}', encoding="utf-8")
+            (root / ".xcodeagent/specs/ui-designs.json").write_text('{"schema_version":"ui-manifest.v5","confirmation_status":"skipped"}', encoding="utf-8")
             (root / ".xcodeagent/plans/technical-plan.json").write_text('{"artifact_type":"technical-plan","confirmation_status":"confirmed","agent_contracts":[]}', encoding="utf-8")
             manifest = prepare_application_template_generation(root, self._download("main"))
             validate_application_template_generation(root)

@@ -76,6 +76,24 @@ def _has_explicit_submission(state: ProjectState) -> bool:
     )
 
 
+def _saved_product_plan_draft(
+    state: ProjectState,
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    """确认前读取已保存的当前 ProductPlan 草稿，使结构化选择进入 Graph。"""
+
+    path = product_plan_draft_json_path(state)
+    if not path.is_file():
+        return fallback
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("已保存的 ProductPlan 草稿无法读取，请重新生成后再确认。") from exc
+    if not isinstance(saved, dict):
+        raise ValueError("已保存的 ProductPlan 草稿必须是 JSON 对象。")
+    return saved
+
+
 def _user_confirmed(request: str) -> bool:
     """识别产品对 ProductPlan 的明确确认。"""
 
@@ -550,6 +568,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
         else _user_confirmed(request)
     ):
         # 联合确认先在内存中准备两份最终候选；任何校验失败都不能写入单独正式产物。
+        existing = _saved_product_plan_draft(state, existing)
         confirmed_requirement_spec, requirement_markdown = prepare_requirement_spec_confirmation(
             state,
             requirement_spec,

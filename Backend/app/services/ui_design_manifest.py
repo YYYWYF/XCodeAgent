@@ -6,8 +6,14 @@ import hashlib
 import re
 from typing import Any
 
+from app.services.ui_design_agent_surfaces import (
+    inspect_agent_surface_bindings,
+    manifest_agent_surface_bindings,
+    validate_agent_surface_bindings,
+)
 
-UI_MANIFEST_SCHEMA_VERSION = "ui-manifest.v3"
+
+UI_MANIFEST_SCHEMA_VERSION = "ui-manifest.v5"
 
 _STATIC_ATTRIBUTE_TEMPLATE = r"\b{attribute}\s*=\s*['\"]([^'\"]+)['\"]"
 # 表达式绑定的 data-* 属性（如 data-information-item-id={item.itemId}、
@@ -71,6 +77,19 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
     """从列表值中保留 JSON 对象项。"""
 
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _string_items(value: Any) -> list[str]:
+    """从数组值中提取去空白、去重且保序的字符串。"""
+
+    result: list[str] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
 
 
 def _attribute(attrs: str, name: str) -> str:
@@ -262,7 +281,8 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
     # id 仍以字面量存在于数组定义，可静态解析后与 expected 精确匹配。
     source_item_ids = _extract_map_source_ids(code, "itemId")
     source_action_ids = _extract_map_source_ids(code, "actionId")
-    for tag, attrs, self_closing, is_closing in _jsx_opening_tags(code):
+    tags = _jsx_opening_tags(code)
+    for tag, attrs, self_closing, is_closing in tags:
         if is_closing:
             # 从栈顶向下找最近的同名标签，弹出它及之上的所有标签
             for i in range(len(ancestor_stack) - 1, -1, -1):
@@ -339,6 +359,14 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
         has_item = bool(information_item_id) or item_dynamic
         if not self_closing:
             ancestor_stack.append((tag, has_item, preview_only))
+    agent_surfaces = inspect_agent_surface_bindings(tags, code)
+    for surface in _dict_items(agent_surfaces.get("surfaces")):
+        agent_id = str(surface.get("agentId") or "").strip()
+        action_part = "composer" if surface.get("type") == "standalone_page" else "launcher"
+        for action_id in _string_items(surface.get("actionIds")):
+            actions.setdefault(action_id, [f"{agent_id}-{action_part}"])
+        for item_id in _string_items(surface.get("contextItemIds")):
+            information_items.setdefault(item_id, [f"{agent_id}-context-{item_id}"])
     return {
         "actions": actions,
         "interaction_effects": interaction_effects,
@@ -346,6 +374,7 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
         "information_items": information_items,
         "unowned_interactions": sorted(set(unowned_interactions)),
         "unowned_displays": sorted(set(unowned_displays)),
+        "agent_surfaces": agent_surfaces,
     }
 
 
@@ -358,6 +387,10 @@ def validate_ui_design_code(page: dict[str, Any], code: str) -> list[str]:
     actual_actions = set(inspection["actions"])
     actual_items = set(inspection["information_items"])
     errors: list[str] = []
+    surface_validation = validate_agent_surface_bindings(
+        page, inspection.get("agent_surfaces", {})
+    )
+    errors.extend(surface_validation["errors"])
     if actual_actions != set(expected_actions):
         missing = sorted(set(expected_actions) - actual_actions)
         unknown = sorted(actual_actions - set(expected_actions))
@@ -454,8 +487,17 @@ def build_ui_page_manifest(
         "information_items": {},
         "unowned_interactions": [],
         "unowned_displays": [],
+        "agent_surfaces": {
+            "surfaces": [],
+            "invalid_markers": [],
+            "duplicate_control_ids": [],
+            "template_inspection": {"usages": [], "errors": []},
+        },
     }
     errors = validate_ui_design_code(page, code) if code else []
+    surface_validation = validate_agent_surface_bindings(
+        page, inspection["agent_surfaces"]
+    )
     code_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest() if code else ""
     expected_actions = _expected_ids(page, "actions", "actionId")
     expected_items = _expected_ids(page, "information_items", "itemId")
@@ -506,6 +548,9 @@ def build_ui_page_manifest(
                 }
                 for item_id in expected_items
             ],
+            "agent_surfaces": manifest_agent_surface_bindings(
+                page, inspection["agent_surfaces"]
+            ),
         },
         "verification": {
             "status": "passed" if code and not errors else ("failed" if code else "pending"),
@@ -522,6 +567,20 @@ def build_ui_page_manifest(
                 {
                     "id": "no-unowned-business-ui",
                     "status": "passed" if no_unowned_business_ui else "failed",
+                },
+                {
+                    "id": "product-agent-surface-bindings",
+                    "status": (
+                        "passed" if surface_validation["bindings_passed"] else "failed"
+                    ),
+                },
+                {
+                    "id": "agent-ui-fixed-template",
+                    "status": (
+                        "passed"
+                        if surface_validation["required_parts_passed"]
+                        else "failed"
+                    ),
                 },
             ],
             "errors": errors,
@@ -547,7 +606,7 @@ def _preview_slug(page_key: str) -> str:
 
 
 def persisted_ui_manifest(ui_designs: dict[str, Any]) -> dict[str, Any]:
-    """移除运行时源码和旧产品事实副本，生成正式落盘 UI Manifest。"""
+    """移除运行时源码和产品事实副本，生成当前正式 UI Manifest。"""
 
     pages: list[dict[str, Any]] = []
     for page in _dict_items(ui_designs.get("pages")):
@@ -559,15 +618,16 @@ def persisted_ui_manifest(ui_designs: dict[str, Any]) -> dict[str, Any]:
         cleaned["bindings"] = {
             "actions": ui_action_bindings(page),
             "information_items": ui_information_bindings(page),
+            "agent_surfaces": ui_agent_surface_bindings(page),
         }
         if not cleaned.get("preview_path") and page.get("route_path"):
             cleaned["preview_path"] = page.get("route_path")
         if "verification" not in cleaned:
             cleaned["verification"] = {
-                "status": "legacy_unverified",
+                "status": "unverified",
                 "code_sha256": str(page.get("code_sha256") or ""),
                 "checks": [],
-                "errors": ["旧 UI Manifest 尚未按 ui-manifest.v3 重新校验。"],
+                "errors": ["UI Manifest 尚未提供 ui-manifest.v5 当前校验证据。"],
             }
         pages.append(cleaned)
     return {
@@ -579,47 +639,24 @@ def persisted_ui_manifest(ui_designs: dict[str, Any]) -> dict[str, Any]:
 
 
 def ui_action_bindings(page: dict[str, Any]) -> list[dict[str, Any]]:
-    """读取 v2 action 映射，并兼容旧 controls 数组。"""
+    """只读取当前 bindings.actions，不推断历史字段。"""
 
     bindings = page.get("bindings") if isinstance(page.get("bindings"), dict) else {}
-    actions = _dict_items(bindings.get("actions"))
-    if actions:
-        return actions
-    return [
-        {
-            "actionId": str(control.get("actionId") or "").strip(),
-            "controlIds": [str(control.get("controlId") or "").strip()],
-            **(
-                {"uiEffect": str(control.get("uiEffect") or control.get("localEffect") or "").strip()}
-                if str(control.get("uiEffect") or control.get("localEffect") or "").strip()
-                else {}
-            ),
-            **(
-                {"stepEffects": _dict_items(control.get("stepEffects"))}
-                if _dict_items(control.get("stepEffects"))
-                else {}
-            ),
-        }
-        for control in _dict_items(page.get("controls"))
-        if str(control.get("actionId") or "").strip()
-    ]
+    return _dict_items(bindings.get("actions"))
 
 
 def ui_information_bindings(page: dict[str, Any]) -> list[dict[str, Any]]:
-    """读取 v2 information item 映射，并兼容旧 display_items 数组。"""
+    """只读取当前 bindings.information_items，不推断历史字段。"""
 
     bindings = page.get("bindings") if isinstance(page.get("bindings"), dict) else {}
-    items = _dict_items(bindings.get("information_items"))
-    if items:
-        return items
-    return [
-        {
-            "informationItemId": str(item.get("informationItemId") or "").strip(),
-            "controlIds": [str(item.get("controlId") or "").strip()],
-        }
-        for item in _dict_items(page.get("display_items"))
-        if str(item.get("informationItemId") or "").strip()
-    ]
+    return _dict_items(bindings.get("information_items"))
+
+
+def ui_agent_surface_bindings(page: dict[str, Any]) -> list[dict[str, Any]]:
+    """读取当前 bindings.agent_surfaces，不为历史清单推断 Agent Surface。"""
+
+    bindings = page.get("bindings") if isinstance(page.get("bindings"), dict) else {}
+    return _dict_items(bindings.get("agent_surfaces"))
 
 
 def present_ui_pages(ui_designs: dict[str, Any], product_plan: dict[str, Any]) -> list[dict[str, Any]]:

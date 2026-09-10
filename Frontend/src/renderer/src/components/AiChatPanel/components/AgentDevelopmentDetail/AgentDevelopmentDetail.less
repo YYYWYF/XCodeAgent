@@ -389,6 +389,66 @@
   }
 }
 
+.@{class-prefix}-agent-surface-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 10px;
+
+  > article {
+    min-width: 0;
+    padding: 12px;
+    background: var(--wb-surface-subtle);
+    border: 1px solid var(--wb-border);
+    border-radius: 8px;
+  }
+
+  dl {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0 0;
+
+    > div {
+      display: grid;
+      gap: 3px;
+    }
+  }
+
+  dt {
+    color: var(--wb-text-tertiary);
+    font-size: 11px;
+  }
+
+  dd {
+    margin: 0;
+    color: var(--wb-text-secondary);
+    overflow-wrap: anywhere;
+  }
+}
+
+.@{class-prefix}-agent-surface-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  code {
+    color: var(--wb-text-tertiary);
+    overflow-wrap: anywhere;
+  }
+
+  .ant-tag {
+    flex: none;
+    margin-right: 0;
+  }
+}
+
 .@{class-prefix}-agent-settings-form {
   display: flex;
   flex-direction: column;

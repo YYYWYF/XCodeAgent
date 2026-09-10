@@ -50,7 +50,9 @@ _TEMPLATE_ADAPT_INSTRUCTION = (
     "Treat the supplied template only as a visual layout and component-style reference. "
     "Replace all template business semantics with exactly the ProductPlan information "
     "items and actions. Do not preserve any template field, metric, filter, action, "
-    "route, role, or label that ProductPlan does not declare."
+    "route, role, or label that ProductPlan does not declare. If the page declares an "
+    "Agent Surface, use the exact fixed component and static configJson supplied in the "
+    "page brief; the fixed Agent UI contract is structural and must not be visually rewritten."
 )
 
 
@@ -96,7 +98,18 @@ def generate_page_entry(
                 error="模板生成缺少 project_dir 或 template_id",
             )
         try:
-            template_code = load_template_source(task.template_id)
+            raw_surfaces = page.get("agent_surfaces")
+            surfaces = raw_surfaces if isinstance(raw_surfaces, list) else []
+            if len(surfaces) > 1:
+                raise ValueError("当前页面包含多个 Agent Surface，无法选择模板。")
+            surface_type = "standard_page"
+            if surfaces:
+                surface = surfaces[0] if isinstance(surfaces[0], dict) else {}
+                surface_type = str(surface.get("type") or "").strip()
+            template_code = load_template_source(
+                task.template_id,
+                surface_type=surface_type,
+            )
             code = generate_adjusted_page_react_code(
                 page,
                 task.page_key,

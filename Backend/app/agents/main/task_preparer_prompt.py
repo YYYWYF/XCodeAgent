@@ -91,6 +91,25 @@ def planning_context_mode(build_context: dict[str, Any] | None) -> str:
     return "combined"
 
 
+def _agent_ui_prompt_contracts(build_context: dict[str, Any]) -> list[dict[str, Any]]:
+    """读取平台投影的逐页 Agent UI Mock 合同，供任务规划边界使用。"""
+
+    source_refs = build_context.get("source_refs")
+    source_refs = source_refs if isinstance(source_refs, dict) else {}
+    contracts: list[dict[str, Any]] = []
+    direct = source_refs.get("agent_ui")
+    if isinstance(direct, dict) and direct:
+        contracts.append(direct)
+    by_page = source_refs.get("agent_ui_by_page")
+    if isinstance(by_page, dict):
+        contracts.extend(
+            contract
+            for contract in by_page.values()
+            if isinstance(contract, dict) and contract
+        )
+    return contracts
+
+
 def build_task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
@@ -351,10 +370,10 @@ def _planning_algorithm_section(
         )
         rules.append(
             "For each Java backend Endpoint referenced as an Agent Contract "
-            "invocation.gatewayEndpointId, plan an AG-UI SSE gateway implementation that proxies "
-            "to invocation.internalPath with scoped user context. It is not a CRUD repository "
-            "endpoint. For each page action bound to that gateway, plan AG-UI client stream "
-            "integration rather than an ordinary REST JSON call."
+            "invocation.gatewayEndpointId, keep its dedicated AG-UI SSE gateway implementation "
+            "task and stable dependency. It is not a CRUD repository endpoint. Agent UI page "
+            "tasks in this delivery must not consume that Gateway yet; their platform-owned "
+            "source_refs.agent_ui contract requires the fixed Mock component composition."
         )
     if set(source_groups) & _ENDPOINT_BACKEND_SOURCE_TYPES:
         rules.append(
@@ -435,6 +454,17 @@ def _task_rules_section(
                 f"For page:{page_id}, the exact required entry is "
                 f"`frontend/src/pages/{page_key}/index.tsx`; create it with operation=add "
                 "when it is absent from WorkspaceSnapshot."
+            )
+        agent_ui_contracts = _agent_ui_prompt_contracts(build_context)
+        if agent_ui_contracts:
+            fragments.append(
+                "For each page Unit listed in the platform-owned AgentUiMockContracts below, "
+                "plan only the existing business page entry implementation. The Frontend Agent "
+                "must compose the fixed generated-application Agent UI component and exact config; "
+                "do not create a second chat core, adapter, transport, API module, or shared Agent UI file. "
+                "The future Gateway Endpoint remains a stable reference but is mock-exempt for this page task.\n"
+                "AgentUiMockContracts:\n"
+                + json.dumps(agent_ui_contracts, ensure_ascii=False, indent=2)
             )
     if source_types & _ENDPOINT_BACKEND_SOURCE_TYPES:
         fragments.append(
@@ -517,7 +547,8 @@ def _forbidden_output_section(mode: str, source_types: set[str]) -> str:
         "evidence, summaries, or verification commands; the platform compiles engineering "
         "and business checks deterministically from change_scope, allowed_paths, deliverables, "
         "and formal contracts.",
-        "Never output authorization, authorization_constraints, or source_refs.authorization; "
+        "Never output authorization, authorization_constraints, source_refs.authorization, "
+        "source_refs.agent_ui, or source_refs.agent_ui_by_page; "
         "the platform injects immutable authorization slices after Unit selection.",
         "Never create, modify, or list AuthConstants in change_scope, allowed_paths, or deliverables; "
         "the platform writes business operation constants into the auth template managed region after DAG confirmation.",

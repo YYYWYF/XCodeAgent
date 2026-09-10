@@ -48,7 +48,9 @@ def _technical_planning_prompt(
     """构造字段边界明确且按上下文拆分的 TechnicalPlan 提示词。"""
 
     product_plan = (
-        requirement_spec.get("confirmed_product_plan")
+        requirement_spec.get("active_agent_product_plan")
+        if isinstance(requirement_spec.get("active_agent_product_plan"), dict)
+        else requirement_spec.get("confirmed_product_plan")
         if isinstance(requirement_spec.get("confirmed_product_plan"), dict)
         else {}
     )
@@ -201,6 +203,8 @@ def _technical_planning_prompt(
             item
             for item in example_agent.get("pageActionBindings", [])
             if isinstance(item, dict)
+            and isinstance(item.get("surface"), dict)
+            and item["surface"].get("enabled") is True
         ):
             binding_page_id = str(page_binding.get("pageId") or "").strip()
             example_page = example_pages_by_id.get(binding_page_id)
@@ -1051,7 +1055,11 @@ def _technical_contract_repair_prompt(
         if isinstance(page, dict)
         and bool(_technical_page_endpoint_ids(page) & target_endpoint_ids)
     }
-    product_plan = requirement_spec.get("confirmed_product_plan")
+    product_plan = (
+        requirement_spec.get("active_agent_product_plan")
+        if isinstance(requirement_spec.get("active_agent_product_plan"), dict)
+        else requirement_spec.get("confirmed_product_plan")
+    )
     product_actions = [
         {"pageId": page.get("pageId"), "actions": page.get("actions", [])}
         for page in (product_plan or {}).get("pages", [])

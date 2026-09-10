@@ -933,6 +933,7 @@ export type LifecyclePendingInteractionType =
   | 'review_phase_confirmation'
   | 'code_review_repair_confirmation'
   | 'acceptance_phase_confirmation'
+  | 'agent_ui_integration_pending'
   | 'revision_draft_confirmation'
   | 'plan_adjustment'
 

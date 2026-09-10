@@ -20,6 +20,7 @@ from app.services.entity_design import (
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.agent_development_readiness import agent_contract_sha256
+from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
 
 
 def _endpoint_contract(
@@ -127,7 +128,12 @@ def resolve_target_build_context(
     """解析目标详情、直接 endpoint/API 依赖与编译所需的 Unit 标识。"""
 
     if target_type == "page":
-        context = _page_context(project_plan, target_id, project_plan_path)
+        context = _page_context(
+            project_plan,
+            product_plan or {},
+            target_id,
+            project_plan_path,
+        )
     elif target_type == "endpoint":
         context = _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
     elif target_type == "agent":
@@ -278,6 +284,7 @@ def _agent_context(
 
 def _page_context(
     project_plan: dict[str, Any],
+    product_plan: dict[str, Any],
     page_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
@@ -293,6 +300,13 @@ def _page_context(
     )
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _contract_endpoint_ids(page_contract)
+    agent_ui = project_agent_ui_build_contracts(product_plan, project_plan).get(page_id)
+    gateway_endpoint_ids = {
+        str(invocation.get("gatewayEndpointId") or "").strip()
+        for contract in _dict_items(project_plan.get("agent_contracts"))
+        if isinstance((invocation := contract.get("invocation")), dict)
+        and str(invocation.get("gatewayEndpointId") or "").strip()
+    }
     entity_ids: list[str] = []
     source_types: list[str] = []
     endpoint_unit_ids: list[str] = []
@@ -300,8 +314,12 @@ def _page_context(
         endpoint = endpoint_index.get(endpoint_id)
         if endpoint is None:
             raise ValueError(f"Page {page_id} references unknown endpoint {endpoint_id}.")
-        entity_designs, missing_entity_ids = _endpoint_entity_designs(project_plan, endpoint)
-        _assert_endpoint_entities_designed(endpoint_id, entity_designs, missing_entity_ids)
+        if endpoint_id in gateway_endpoint_ids:
+            # Agent Gateway 是会话传输边界，不是实体 CRUD；保留 Unit 引用但不伪造实体绑定。
+            entity_designs, missing_entity_ids = [], []
+        else:
+            entity_designs, missing_entity_ids = _endpoint_entity_designs(project_plan, endpoint)
+            _assert_endpoint_entities_designed(endpoint_id, entity_designs, missing_entity_ids)
         for entity_design in entity_designs:
             entity_id = str(entity_design.get("entity_id") or "")
             if entity_id and entity_id not in entity_ids:
@@ -374,6 +392,7 @@ def _page_context(
                 }
                 for endpoint_id in endpoint_ids
             ],
+            **({"agent_ui": agent_ui} if isinstance(agent_ui, dict) else {}),
         },
     }
 

@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from app.services.authorization_overlay import unit_authorization_slice
+from app.services.agent_ui_build_contract import agent_ui_contract_from_source_refs
 
 
 def apply_unit_compilation(
@@ -79,6 +80,8 @@ def _with_task_unit_metadata(
     canonical_source_refs = _unit_source_refs(unit_id, unit, build_context)
     provided_source_refs = _dict_value(task.get("source_refs"))
     provided_source_refs.pop("entity_ids", None)
+    provided_source_refs.pop("agent_ui", None)
+    provided_source_refs.pop("agent_ui_by_page", None)
     source_refs = {
         **canonical_source_refs,
         **provided_source_refs,
@@ -89,6 +92,15 @@ def _with_task_unit_metadata(
         source_refs["authorization"] = authorization
     else:
         source_refs.pop("authorization", None)
+    # Agent UI 合同与权限 Overlay 一样属于平台只读事实，模型不能覆盖或拼接。
+    canonical_agent_ui = agent_ui_contract_from_source_refs(
+        canonical_source_refs,
+        page_id=unit_id.removeprefix("page:") if unit_id.startswith("page:") else "",
+    )
+    if canonical_agent_ui:
+        source_refs["agent_ui"] = canonical_agent_ui
+    else:
+        source_refs.pop("agent_ui", None)
     # entity_designs 是来源隔离的确定性输入，不能被模型返回的未过滤引用覆盖；
     # endpoint 任务按固定任务 ID 推导实体子集，只暴露本任务真正实现的实体设计。
     if (
@@ -275,15 +287,23 @@ def _unit_source_refs(
     refs = _dict_value(build_context.get("source_refs"))
     entity_designs = _entity_design_items(build_context.get("entity_designs"))
     if unit_id.startswith("page:"):
+        page_id = unit_id.removeprefix("page:")
+        page_contexts = _dict_value(build_context.get("page_contexts_by_page"))
+        page_context = _dict_value(page_contexts.get(page_id))
+        effective_context = page_context or build_context
+        effective_refs = _dict_value(effective_context.get("source_refs")) or refs
+        agent_ui = agent_ui_contract_from_source_refs(effective_refs, page_id=page_id)
         return {
             **existing,
             "type": "page_implementation_contract",
-            "target": target,
+            "target": _dict_value(effective_context.get("target")) or target,
             "page_implementation_contract": _dict_value(
-                refs.get("page_implementation_contract")
+                effective_refs.get("page_implementation_contract")
             ),
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "entity_designs": entity_designs,
+            "endpoint_ids": _string_list(effective_context.get("endpoint_ids")),
+            "entity_designs": _entity_design_items(effective_context.get("entity_designs"))
+            or entity_designs,
+            **({"agent_ui": agent_ui} if agent_ui else {}),
         }
     if unit_id.startswith("frontend:data:"):
         return {
