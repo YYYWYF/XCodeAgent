@@ -2372,11 +2372,6 @@ export default function AiChatPanel({
   const pendingPlanningChunksRef = useRef<
     Array<{ content?: string; workflow?: WorkflowRunPayload }>
   >([])
-  // onPlanningStreamReady 注册的注入句柄，保存需求文档草稿后用它把更新后的
-  // workflow 注入回规划会话，驱动右侧需求文档 tab 实时刷新编辑后的内容。
-  const planningStreamInjectRef = useRef<
-    ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
-  >(null)
   // 用户提交规划确认后置 true，下一次 workflow chunk 到达时新增消息卡片（新一轮），
   // 而非覆盖上一轮的对话卡片。同 runId 续跑也能正确区分轮次。
   const planningNewRoundRef = useRef(false)
@@ -3046,9 +3041,7 @@ export default function AiChatPanel({
       injectPlanningChunk(sessionKey, chunk)
     }
     onPlanningStreamReady(injectChunk)
-    planningStreamInjectRef.current = injectChunk
     return () => {
-      planningStreamInjectRef.current = null
       onPlanningStreamReady(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
