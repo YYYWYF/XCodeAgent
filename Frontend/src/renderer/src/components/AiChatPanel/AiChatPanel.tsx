@@ -48,6 +48,7 @@ import type {
   RequirementSpecDraftSaveResult,
   WorkflowRevisionContinuationHandoff
 } from '../../service/applicationPagePlanning'
+import { saveAgentSurfaceSelectionDraft } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { formatError } from '../Welcome/utils'
 import {
@@ -132,6 +133,11 @@ import { chatCopy } from './constants'
 import type { AgentChatMessage, WorkspaceDocKey } from './types'
 import type { EndpointDesignSaveResult } from '../../typings'
 import { workflowDevelopmentContinuation } from './developmentContinuation'
+import {
+  agentSurfaceProductPlanKey,
+  selectedAgentSurfaceProductPlan,
+  type AgentSurfaceProductPlanSelection
+} from './agentSurfaceSelectionState'
 import {
   bindDagConfirmationDraftIdentity,
   currentDagConfirmationDraftIdentity,
@@ -346,6 +352,9 @@ function activeDetailTargetFromSession(
 ): ActiveDetailTarget {
   if (!target) return { type: 'none' }
   if (target.type === 'page') return { type: 'page', pageId: target.pageId }
+  if (target.type === 'agent') {
+    return { type: 'agent', agentId: target.agentId, label: target.label }
+  }
   return {
     type: 'endpoint',
     apiContractId: target.apiContractId,
@@ -950,6 +959,9 @@ export default function AiChatPanel({
     uiDesign: undefined,
     loading: false
   })
+  // 保存成功后的 ProductPlan 在当前规划轮次内覆盖尚未刷新的外层 Workflow 快照。
+  const [agentSurfaceProductPlanSelection, setAgentSurfaceProductPlanSelection] =
+    useState<AgentSurfaceProductPlanSelection>()
   // 兼容别名：保持下游调用点不变。
   const designDocFileContent = designDocState.fileContent
   const designDocFilePath = designDocState.filePath
@@ -1225,6 +1237,14 @@ export default function AiChatPanel({
   const uiDesignDocContent = designDocFileContent['ui-design'] || ''
   const requirementSpecMemory = requirementSpecFromWorkflow(currentPlanningWorkflow)
   const productPlanMemory = productPlanFromWorkflow(currentPlanningWorkflow)
+  const selectedSurfaceProductPlan = selectedAgentSurfaceProductPlan(
+    agentSurfaceProductPlanSelection,
+    {
+      runId: String(currentPlanningWorkflow?.runId || ''),
+      threadId: String(currentPlanningWorkflow?.threadId || planningThreadId || '')
+    },
+    productPlanMemory
+  )
   const technicalPlanMemory = technicalPlanFromWorkflow(currentPlanningWorkflow)
   // 冷恢复以外，从开发阶段切回设计/规划阶段时，Workflow 可能已不再携带
   // 完整结构化产物；此时必须从当前工作区补读，不能把内存快照当成唯一来源。
@@ -1306,7 +1326,7 @@ export default function AiChatPanel({
     ? requirementSpecMemory || requirementSpecFile
     : undefined
   const requirementProductPlanForDoc = requirementDocViewActive
-    ? productPlanMemory || productPlanFile
+    ? selectedSurfaceProductPlan || productPlanFile
     : undefined
 
   // 冷恢复或阶段切回后内存快照不完整时读本地产物；按产物集合缓存 Promise，
@@ -4282,6 +4302,64 @@ export default function AiChatPanel({
     [application.workspaceRoot, onSavePlanningRequirementSpec]
   )
 
+  /** 在联合确认前保存单页智能体浮窗选择，并刷新右侧结构化需求文档。 */
+  const handleAgentSurfaceEnabledChange = useCallback(
+    async (agentId: string, pageId: string, enabled: boolean): Promise<void> => {
+      const workspaceRoot = application.workspaceRoot || ''
+      const workflow = currentPlanningWorkflow
+      const threadId = workflow?.threadId || planningThreadId || ''
+      const currentPlan = selectedSurfaceProductPlan || productPlanFile
+      if (
+        !workspaceRoot ||
+        !workflow ||
+        currentPlan?.confirmation_status !== 'pending_user_confirmation'
+      ) {
+        message.error('只有待确认的 ProductPlan 才能修改智能体浮窗选择。')
+        return
+      }
+      try {
+        const saved = await saveAgentSurfaceSelectionDraft(workspaceRoot, threadId, {
+          agentId,
+          pageId,
+          enabled
+        })
+        setAgentSurfaceProductPlanSelection({
+          runId: String(workflow.runId || ''),
+          threadId,
+          sourceProductPlanKey: agentSurfaceProductPlanKey(currentPlan),
+          productPlan: saved.productPlan
+        })
+        setProductPlanFile(saved.productPlan)
+        setDesignDocFileContent((current) => ({
+          ...current,
+          'product-plan': saved.artifact.content
+        }))
+        const planningSessionKey = planningSessionKeyRef.current
+        if (planningSessionKey) injectPlanningChunk(planningSessionKey, {
+          workflow: {
+            ...workflow,
+            state: { ...workflow.state, product_plan: saved.productPlan },
+            result: { ...workflow.result, product_plan: saved.productPlan }
+          }
+        })
+        message.success(`${enabled ? '已开启' : '已关闭'}该页面的智能体浮窗`)
+      } catch (reason) {
+        if (!isAuthenticationFailure(reason)) {
+          message.error(formatError(reason, '智能体浮窗选择保存失败'))
+        }
+      }
+    },
+    [
+      application.workspaceRoot,
+      planningThreadId,
+      currentPlanningWorkflow,
+      productPlanFile,
+      selectedSurfaceProductPlan,
+      setDesignDocFileContent,
+      setProductPlanFile
+    ]
+  )
+
   /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
   const handleInitialProductConversationSend = async (): Promise<void> => {
     const trimmed = draft.trim()
@@ -4744,12 +4822,19 @@ export default function AiChatPanel({
               />
             ) : isApplicationPlanningPhase ? (
               <DocPanel
+                agentSurfaceSelectionEditable={
+                  requirementDocViewActive &&
+                  planningClarification?.mode === 'requirement_document_confirmation' &&
+                  requirementProductPlanForDoc?.confirmation_status ===
+                    'pending_user_confirmation'
+                }
                 content={designDocContent}
                 docName={designDocName}
                 generating={designDocGenerating}
                 productPlan={
                   requirementDocViewActive ? requirementProductPlanForDoc : productPlanForDoc
                 }
+                onAgentSurfaceEnabledChange={handleAgentSurfaceEnabledChange}
                 requirementSpec={requirementSpecForDoc}
                 technicalPlan={technicalPlanForDoc}
                 structuredDocument={

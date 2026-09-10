@@ -9,6 +9,10 @@ from app.agents.tool_activity_stream import (
     invoke_agent_with_tool_activity,
 )
 from app.config import Settings
+from app.services.builtin_skills import (
+    AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME,
+    read_builtin_skill_md,
+)
 from app.services.build_result_coordinator import create_agent_task_results
 from app.services.template_state import validate_template_context
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
@@ -147,6 +151,56 @@ def _task_frontend_source_types(tasks: list[dict[str, Any]]) -> set[str]:
     return source_types
 
 
+def _task_agent_ui_contracts(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """提取当前前端任务中由平台注入的 Agent UI Mock 合同。"""
+
+    result: list[dict[str, Any]] = []
+    for task in tasks:
+        source_refs = task.get("source_refs")
+        source_refs = source_refs if isinstance(source_refs, dict) else {}
+        contract = source_refs.get("agent_ui")
+        if isinstance(contract, dict) and contract.get("mode") == "mock":
+            result.append({"taskId": str(task.get("id") or ""), **contract})
+    return result
+
+
+def _agent_ui_mock_instruction(contracts: list[dict[str, Any]]) -> str:
+    """生成固定组件、默认 Mock Adapter 和无网络边界的条件式执行说明。"""
+
+    if not contracts:
+        return ""
+    skill_content = read_builtin_skill_md(AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME)
+    if not skill_content:
+        raise RuntimeError("Agent UI Surface 内置 Skill 缺失，不能执行 Agent 页面 Build。")
+    return (
+        "## Agent UI Mock composition boundary\n"
+        "The platform has loaded the required built-in Skill below as authoritative input; "
+        "follow it together with the fixed source reads.\n"
+        "<agent-ui-surface-template-skill>\n"
+        f"{skill_content}\n"
+        "</agent-ui-surface-template-skill>\n"
+        "Apply this section only to the task IDs listed in AgentUiMockContracts. Before editing "
+        "their page, read the exact fixed componentPath, "
+        "`frontend/src/components/AgentConversation/AgentChatCore.tsx`, "
+        "`frontend/src/typings/agentConversation.ts`, and mockAdapterPath. These files are "
+        "platform-injected read-only assets and are not task output paths. In the page entry, "
+        "import the exact component from `@/components/AgentConversation`, import "
+        "`AgentUiTemplateConfig` from `@/typings/agentConversation`, declare the exact object "
+        "literal as `const AGENT_UI_CONFIG: AgentUiTemplateConfig = ...`, and pass it with "
+        "`config={AGENT_UI_CONFIG}`. The component's default adapter is the only allowed Mock "
+        "chain: you must not pass the `adapter` prop, JSX spreads, a wrapper, or a custom "
+        "AgentConversationAdapter. Do not create or copy AgentChatCore, chat bubbles, state "
+        "machines, mock records, or transport code. Remove all `data-preview-only` review "
+        "controls from production page composition. For the listed task, do not call fetch, "
+        "axios, XMLHttpRequest, WebSocket, EventSource, sendBeacon, a Python sidecar, or the "
+        "future Gateway Endpoint. Ordinary business APIs declared outside mockExemptEndpointIds "
+        "remain governed by their existing page/API contracts. For floating_panel, preserve and "
+        "render the ordinary business page body and compose AgentFloatingPanel alongside it.\n"
+        "AgentUiMockContracts:\n"
+        f"{json.dumps(contracts, ensure_ascii=False, indent=2)}\n\n"
+    )
+
+
 def _frontend_generation_prompt(
     *,
     project_plan: dict[str, Any],
@@ -155,6 +209,8 @@ def _frontend_generation_prompt(
     page_template: dict[str, Any] | None = None,
     ui_designs: dict[str, Any] | None = None,
 ) -> str:
+    """按任务来源组装普通页面或固定 Agent UI Mock 的执行 Prompt。"""
+
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
     frontend_root = "frontend"
@@ -164,6 +220,7 @@ def _frontend_generation_prompt(
     context_value = build_task_plan.get("template_context")
     template_context = validate_template_context(context_value) if context_value else {}
     authorization_effective = "authorization" in template_context.get("effective_capabilities", {})
+    agent_ui_contracts = _task_agent_ui_contracts(tasks)
     data_source_instruction = (
         "## CRITICAL: Data source is STATIC with effective_source=frontend_mock\n"
         "The data source for this page's entities declares type=static. Implement the approved "
@@ -183,12 +240,31 @@ def _frontend_generation_prompt(
         else ""
     )
     static_skill_requirement = (
-        "3. `/.xcodeagent/builtin-skills/frontend-static-data-generate/SKILL.md` — "
+        f"{4 if agent_ui_contracts else 3}. `/.xcodeagent/builtin-skills/frontend-static-data-generate/SKILL.md` — "
         "static frontend:data tasks: module-level in-memory records, async contract "
         "functions, exact fields/operations, and the prohibition on backend APIs or page-local "
         "business arrays. READ THIS before writing a static data module.\n"
         if has_static_data_source
         else ""
+    )
+    agent_ui_skill_requirement = (
+        "3. `/.xcodeagent/builtin-skills/agent-ui-surface-template/SKILL.md` — "
+        "fixed generated-application Agent UI composition, exact ProductPlan identifiers, "
+        "default Mock Adapter use, and the prohibition on real network or duplicate chat core. "
+        "READ THIS before editing any task listed in AgentUiMockContracts.\n"
+        if agent_ui_contracts
+        else ""
+    )
+    gateway_instruction = (
+        "For page tasks listed in AgentUiMockContracts, the future Gateway Endpoint is a stable "
+        "reference only: you must not call the future Gateway Endpoint or create an AG-UI client "
+        "in this Mock delivery. Other frontend tasks keep their existing endpoint contract.\n"
+        if agent_ui_contracts
+        else "When a page action references an Endpoint named by ProjectPlan.agent_contracts[*]."
+        "invocation.gatewayEndpointId, invoke it through the existing AG-UI client/event-stream "
+        "boundary and render streamed assistant lifecycle state. Do not treat that action as an "
+        "ordinary REST JSON request, do not call the Python sidecar directly, and do not invent "
+        "another Agent endpoint.\n"
     )
     response_entity_instruction = (
         "## ResponseEntity transport boundary\n"
@@ -243,12 +319,8 @@ def _frontend_generation_prompt(
         "Do not modify RequirementSpec, ProductPlan, TechnicalPlan, API contracts, or "
         "the task DAG. If an API contract or page plan cannot be implemented, "
         "return a change_request instead of silently changing it.\n"
-        "When a page action references an Endpoint named by ProjectPlan.agent_contracts[*]."
-        "invocation.gatewayEndpointId, invoke it through the existing AG-UI client/event-stream "
-        "boundary and render streamed assistant lifecycle state. Do not treat that action as an "
-        "ordinary REST JSON request, do not call the Python sidecar directly, and do not invent "
-        "another Agent endpoint.\n"
-        f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n"
+        + gateway_instruction
+        + f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n"
         f"Frontend path convention: all frontend code for this application MUST be placed "
         f"under the virtual path `/{frontend_root}/` (resolved from ProjectPlan.app.name = "
         f"'{app_name}'). Every `src/...` path described in the "
@@ -265,6 +337,7 @@ def _frontend_generation_prompt(
         + data_source_instruction
         + response_entity_instruction
         + authorization_boundary
+        + _agent_ui_mock_instruction(agent_ui_contracts)
         + "For business APIs, import functions from `src/apis/` "
         "and invoke them through `useRequest`; page and component code must never call `fetch`, `axios`, or `service` directly. "
         "If a declared action cannot be uniquely located, return that task as failed rather than guessing.\n\n"
@@ -293,8 +366,9 @@ def _frontend_generation_prompt(
         "`code-block-template/references/page-templates.md` (full page templates); "
         "`react-develop-specification/SKILL.md` (React coding conventions) for style rules "
         "when unsure. Reading these on demand keeps the context small.\n"
-        "Only after reading all required skills above may you start writing code.\n\n"
+        + agent_ui_skill_requirement
         + static_skill_requirement
+        + "Only after reading all required skills above may you start writing code.\n\n"
         + "## Required final report\n"
         "Return one JSON object with `task_results`, containing exactly one result for each "
         "approved task. Each result must contain `task_id`, `status` "
@@ -383,6 +457,9 @@ def generate_frontend_with_deep_agent(
         ui_designs=ui_designs,
         on_tool_activity=on_tool_activity,
     )
+    required_skills = list(selected_skill_names or [])
+    if _task_agent_ui_contracts(tasks):
+        required_skills.append(AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME)
     return create_agent_task_results(
         tasks,
         agent_note,
@@ -391,7 +468,7 @@ def generate_frontend_with_deep_agent(
             "mode": "live",
             "model": settings.model_name,
             "source": "frontend_deep_agent",
-            "requiredSkillsLoaded": list(selected_skill_names or []),
+            "requiredSkillsLoaded": list(dict.fromkeys(required_skills)),
         },
         require_structured=True,
     )

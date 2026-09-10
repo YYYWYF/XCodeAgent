@@ -108,7 +108,17 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
                     },
                 }
             )
-            page_action_bindings.append({"pageId": page_id, "actionIds": [action_id]})
+            page_action_bindings.append(
+                {
+                    "pageId": page_id,
+                    "actionIds": [action_id],
+                    "surface": {
+                        "type": "floating_panel",
+                        "enabled": True,
+                        "contextItemIds": [],
+                    },
+                }
+            )
         agents.append(
             {
                 "agentId": agent_id,
@@ -290,8 +300,13 @@ def _product_planning_prompt(
         "agentId, name, purpose, entryPageIds, interaction mode, and boundaries exactly. Expand every "
         "confirmed capability into {capabilityId,name,expectedResult}; capabilityId must be stable "
         "lower_snake_case and names must preserve RequirementSpec capability order. Every entryPageId must "
-        "have exactly one pageActionBindings item shaped {pageId,actionIds}; every actionId must reference "
-        "a real action on that page that represents invoking or interacting with the agent. interaction "
+        "have exactly one pageActionBindings item shaped {pageId,actionIds,surface}; every actionId must reference "
+        "a real action on that page that represents invoking or interacting with the agent. surface contains "
+        "exactly type, enabled, and contextItemIds. Set enabled=true by default for every recognized surface; "
+        "only a later explicit user choice may disable a floating_panel. Choose type=standalone_page only when conversation is the page's main "
+        "purpose; choose type=floating_panel when the Agent augments an ordinary business page. contextItemIds "
+        "must be a duplicate-free string array that references only information_items[].itemId from the same page; "
+        "use [] when no page context is needed. A page may have at most one Agent of each surface type. interaction "
         "contains exactly mode, supportsMultiTurn, inputDescription, outputDescription, and stateRequirements "
         "covering loading, empty, error, success, and validation. acceptanceCriteria must contain observable "
         "product outcomes. Return agents=[] when RequirementSpec.agent_requirements is empty. Never return model "

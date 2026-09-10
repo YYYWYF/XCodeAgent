@@ -132,6 +132,12 @@ export type DevelopmentPlanningEntityOption = {
   hasDetailPlan: boolean
   designed: boolean
 }
+export type DevelopmentPlanningAgentSurface = {
+  type: 'standalone_page' | 'floating_panel' | 'unknown'
+  label: string
+  enabled: boolean
+  contextItemIds: string[]
+}
 export type DevelopmentPlanningAgentOption = {
   key: string
   agentId: string
@@ -145,7 +151,12 @@ export type DevelopmentPlanningAgentOption = {
     toolIds: string[]
   }>
   entryPageIds: string[]
-  entryActions: Array<{ pageId: string; pageLabel: string; actionIds: string[] }>
+  entryActions: Array<{
+    pageId: string
+    pageLabel: string
+    actionIds: string[]
+    surface: DevelopmentPlanningAgentSurface
+  }>
   interaction: Record<string, unknown>
   contractHash: string
   technicalPlanSha256: string

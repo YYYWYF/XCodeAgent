@@ -1511,6 +1511,7 @@ def _workflow_user_input_message(
         "review_phase_confirmation": "测试已通过，请确认进入审查阶段。",
         "acceptance_phase_confirmation": "代码审查已完成，请确认进入验收阶段。",
         "code_review_repair_confirmation": "代码审查发现问题，请在上方执行一键修复。",
+        "agent_ui_integration_pending": "Agent UI Mock 已完成，可预览页面；真实 Gateway/Runtime 集成仍待完成。",
     }
     if clarification_mode in confirmation_labels:
         return confirmation_labels[clarification_mode]

@@ -350,7 +350,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
     """验证业务检查只由平台按正式输入生成。"""
 
     def test_all_phase_two_kinds_compile(self) -> None:
-        """八种白名单交付物均应生成对应的确定性业务检查。"""
+        """七种通用交付物均应生成对应检查，条件式交付物由专测覆盖。"""
 
         cases = [
             ("frontend.api_module", "frontend", "frontend:api-client", "frontend/src/apis/orders.ts"),
@@ -375,7 +375,11 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
             _formal_context(),
         )
         actual = {check["kind"] for task in compiled for check in task["business_acceptance_checks"]}
-        self.assertEqual(actual, set(BUSINESS_ACCEPTANCE_KINDS) - {"frontend.static_data_contract"})
+        self.assertEqual(
+            actual,
+            set(BUSINESS_ACCEPTANCE_KINDS)
+            - {"frontend.agent_ui_mock_contract", "frontend.static_data_contract"},
+        )
 
     def test_task_keeps_global_entity_semantics_separate_from_endpoint_sources(self) -> None:
         """后端任务保留 TechnicalPlan 实体语义，并通过 API Contract 追溯接口来源。"""

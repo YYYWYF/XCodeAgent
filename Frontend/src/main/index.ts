@@ -19,7 +19,6 @@ import {
   type EditorMode,
   type WorkbenchPhase
 } from './stageSessions'
-import { gitRepositoriesEquivalent, templateCloneAttempts } from './templateRepository'
 import {
   projectWorkbenchAgents,
   type WorkbenchAgentOption
@@ -716,7 +715,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
 
 type ChatSessionRevisionContext = {
   kind: 'formal_revision'
-  sessionRole: 'design'
+  sessionRole: 'design' | 'development'
   formalBranch: 'design_stage_revision' | 'workbench_plan_revision'
   impactInteractionId: string
   sourceSessionId: string
@@ -724,11 +723,15 @@ type ChatSessionRevisionContext = {
   sourceRunId: string
   planningThreadId: string
   changeId?: string
+  handoffFromSessionId?: string
+  handoffFromConversationThreadId?: string
+  technicalPlanSha256?: string
 }
 
 type ChatSessionDevelopmentTarget =
   | { type: 'page'; pageId: string; label: string }
   | { type: 'endpoint'; apiContractId: string; endpointId: string; label: string }
+  | { type: 'agent'; agentId: string; label: string }
 
 type SessionWorkspaceSummary = {
   workspaceRoot: string
@@ -1298,6 +1301,10 @@ function normalizeDevelopmentTarget(value: unknown): ChatSessionDevelopmentTarge
       ? { type: 'endpoint', apiContractId, endpointId, label }
       : undefined
   }
+  if (value.type === 'agent') {
+    const agentId = normalizeSessionEndpointField(value.agentId)
+    return agentId && label ? { type: 'agent', agentId, label } : undefined
+  }
   return undefined
 }
 
@@ -1308,11 +1315,13 @@ function sameDevelopmentTarget(
 ): boolean {
   if (!left || !right) return !left && !right
   if (left.type !== right.type) return false
-  return left.type === 'page'
-    ? left.pageId === (right.type === 'page' ? right.pageId : '')
-    : right.type === 'endpoint' &&
-        left.apiContractId === right.apiContractId &&
-        left.endpointId === right.endpointId
+  if (left.type === 'page') return right.type === 'page' && left.pageId === right.pageId
+  if (left.type === 'agent') return right.type === 'agent' && left.agentId === right.agentId
+  return (
+    right.type === 'endpoint' &&
+    left.apiContractId === right.apiContractId &&
+    left.endpointId === right.endpointId
+  )
 }
 
 /** 规范化接口会话标识，避免空字符串污染持久化索引。 */
@@ -1332,8 +1341,13 @@ function normalizeSessionRevisionContext(value: unknown): ChatSessionRevisionCon
   const sourceRunId = normalizeSessionEndpointField(value.sourceRunId)
   const planningThreadId = normalizeSessionEndpointField(value.planningThreadId)
   const changeId = normalizeSessionEndpointField(value.changeId)
+  const handoffFromSessionId = normalizeSessionEndpointField(value.handoffFromSessionId)
+  const handoffFromConversationThreadId = normalizeSessionEndpointField(
+    value.handoffFromConversationThreadId
+  )
+  const technicalPlanSha256 = normalizeSessionEndpointField(value.technicalPlanSha256)
   if (
-    sessionRole !== 'design' ||
+    !['design', 'development'].includes(sessionRole || '') ||
     !['design_stage_revision', 'workbench_plan_revision'].includes(formalBranch || '') ||
     !impactInteractionId ||
     !sourceSessionId ||
@@ -1343,16 +1357,29 @@ function normalizeSessionRevisionContext(value: unknown): ChatSessionRevisionCon
   ) {
     return undefined
   }
+  if (
+    sessionRole === 'development' &&
+    (!changeId ||
+      !handoffFromSessionId ||
+      !handoffFromConversationThreadId ||
+      !technicalPlanSha256 ||
+      !/^[0-9a-f]{64}$/.test(technicalPlanSha256))
+  ) {
+    return undefined
+  }
   return {
     kind: 'formal_revision',
-    sessionRole: 'design',
+    sessionRole: sessionRole as ChatSessionRevisionContext['sessionRole'],
     formalBranch: formalBranch as ChatSessionRevisionContext['formalBranch'],
     impactInteractionId,
     sourceSessionId,
     sourceConversationThreadId,
     sourceRunId,
     planningThreadId,
-    ...(changeId ? { changeId } : {})
+    ...(changeId ? { changeId } : {}),
+    ...(handoffFromSessionId ? { handoffFromSessionId } : {}),
+    ...(handoffFromConversationThreadId ? { handoffFromConversationThreadId } : {}),
+    ...(technicalPlanSha256 ? { technicalPlanSha256 } : {})
   }
 }
 

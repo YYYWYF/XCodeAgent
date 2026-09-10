@@ -97,11 +97,13 @@ export function sameDevelopmentTarget(
 ): boolean {
   if (!left || !right) return !left && !right
   if (left.type !== right.type) return false
-  return left.type === 'page'
-    ? right.type === 'page' && left.pageId === right.pageId
-    : right.type === 'endpoint' &&
-        left.apiContractId === right.apiContractId &&
-        left.endpointId === right.endpointId
+  if (left.type === 'page') return right.type === 'page' && left.pageId === right.pageId
+  if (left.type === 'agent') return right.type === 'agent' && left.agentId === right.agentId
+  return (
+    right.type === 'endpoint' &&
+    left.apiContractId === right.apiContractId &&
+    left.endpointId === right.endpointId
+  )
 }
 
 /** 将会话目标投影为 Workflow 请求所需的显式选择和构建范围。 */
@@ -111,9 +113,10 @@ export function developmentTargetWorkflowFields(
   selectedPageId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint'
+  selectedAgentId?: string
+  detailTargetType?: 'page' | 'endpoint' | 'agent'
   buildExecutionScope?: {
-    type: 'page' | 'endpoint'
+    type: 'page' | 'endpoint' | 'agent'
     targetId: string
     apiContractId?: string
   }
@@ -124,6 +127,13 @@ export function developmentTargetWorkflowFields(
       selectedPageId: target.pageId,
       detailTargetType: 'page',
       buildExecutionScope: { type: 'page', targetId: target.pageId }
+    }
+  }
+  if (target.type === 'agent') {
+    return {
+      selectedAgentId: target.agentId,
+      detailTargetType: 'agent',
+      buildExecutionScope: { type: 'agent', targetId: target.agentId }
     }
   }
   return {

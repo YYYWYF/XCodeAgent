@@ -772,7 +772,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
 
     def test_all_phase_two_verifiers_have_positive_and_non_false_positive_paths(self) -> None:
-        """八种业务检查均应有可通过的结构样本，并拒绝只存在于注释中的伪实现。"""
+        """九种通用检查验证正反样本，条件式 Agent UI 由阶段 6 专测覆盖。"""
 
         positive_sources = {
             "frontend.api_contract": (
@@ -850,12 +850,11 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temp_dir:
             positive_evidence: dict[str, list[dict]] = {}
-            current_kinds = [
+            for check_kind in (
                 kind
                 for kind in BUSINESS_ACCEPTANCE_KINDS
-                if kind != "frontend.static_data_contract"
-            ]
-            for check_kind in current_kinds:
+                if kind != "frontend.agent_ui_mock_contract"
+            ):
                 deliverable_kind, _owner, unit_id = task_inputs[check_kind]
                 task, formal = _compiled_task(
                     deliverable_kind,

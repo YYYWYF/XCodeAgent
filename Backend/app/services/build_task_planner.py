@@ -825,10 +825,15 @@ def build_task_candidate_contract_errors(
         except BuildTaskExecutionContractError as exc:
             errors.append(str(exc))
         source_refs = task.get("source_refs")
-        if isinstance(source_refs, dict) and "authorization" in source_refs:
-            errors.append(
-                f"Task {task_id} must not output platform-owned source_refs.authorization."
-            )
+        if isinstance(source_refs, dict):
+            if "authorization" in source_refs:
+                errors.append(
+                    f"Task {task_id} must not output platform-owned source_refs.authorization."
+                )
+            if "agent_ui" in source_refs or "agent_ui_by_page" in source_refs:
+                errors.append(
+                    f"Task {task_id} must not output platform-owned source_refs.agent_ui."
+                )
         if "authorization_constraints" in task or "authorization" in task:
             errors.append(
                 f"Task {task_id} must not output platform-owned authorization fields."
@@ -1208,6 +1213,21 @@ def _template_boundary_errors(
     task_id = str(task.get("id") or "")
     errors: list[str] = []
     route_registry = str(task.get("unit_id") or "") == "frontend:route-registry"
+    reconciliation = _dict_value(task.get("path_reconciliation"))
+    reconciled_page_path = normalize_repo_path(reconciliation.get("canonical_path"))
+    for change in _dict_items(task.get("change_scope")):
+        path = str(change.get("path") or change.get("file") or "").strip()
+        operation = str(change.get("operation") or "modify").strip().lower()
+        # 实时路径校对证明该页面入口已存在；保留模型操作意图并把错误交给同轮重试。
+        if (
+            reconciled_page_path
+            and normalize_repo_path(path) == reconciled_page_path
+            and operation == "add"
+        ):
+            errors.append(
+                f"Task {task_id} must not add template page entry {reconciled_page_path}; "
+                "use operation=modify for the existing live page."
+            )
     boundary_paths = sorted(
         {
             path
@@ -1233,9 +1253,6 @@ def _template_boundary_errors(
             f"Task {task_id} must not modify frontend route registry files: "
             f"{', '.join(sorted(registry_paths & _FRONTEND_ROUTE_REGISTRY_PATHS))}."
         )
-    for change in _dict_items(task.get("change_scope")):
-        path = str(change.get("path") or change.get("file") or "").strip()
-        operation = str(change.get("operation") or "modify").strip().lower()
     return errors
 
 

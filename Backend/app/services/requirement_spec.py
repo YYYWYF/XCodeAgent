@@ -601,7 +601,7 @@ def validate_requirement_spec_confirmation_readiness(spec: dict[str, Any]) -> li
                 unknown_page_ids = set(_string_list(entry_page_ids)) - page_ids
                 if unknown_page_ids:
                     errors.append(
-                        f"{label}引用了不存在的入口页面："
+                        f"{label}引用了不存在的候选入口页面："
                         + "、".join(sorted(unknown_page_ids))
                     )
             if not isinstance(agent.get("boundaries"), list):

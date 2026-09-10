@@ -21,7 +21,16 @@ from app.services.workspace_process_registry import workspace_process_registry
 from app.agents.messages import _coerce_content_text, strip_thinking_fragments
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
-from app.services.builtin_skills import read_builtin_skill_md
+from app.services.builtin_skills import (
+    AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME,
+    read_builtin_skill_md,
+)
+from app.services.ui_design_agent_template import (
+    AGENT_UI_TEMPLATE_MODULE,
+    AGENT_UI_TEMPLATE_VERSION,
+    build_agent_ui_template_source_contract,
+    component_for_surface,
+)
 from app.services.ui_design_manifest import validate_ui_design_code
 from app.workspace.spec_documents import REPOSITORY_ROOT
 
@@ -120,6 +129,18 @@ def _ui_design_skill_document() -> str:
     return content if content else _FALLBACK_SKILL_NOTE
 
 
+def _agent_ui_skill_document(page: dict[str, Any]) -> str:
+    """仅为含 Agent Surface 的页面读取并注入专用固定模板技能。"""
+
+    surfaces = page.get("agent_surfaces")
+    if not isinstance(surfaces, list) or not any(isinstance(item, dict) for item in surfaces):
+        return ""
+    content = read_builtin_skill_md(AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME)
+    if not content:
+        raise ValueError("包含 Agent Surface 的页面缺少 agent-ui-surface-template 技能。")
+    return content
+
+
 def _page_brief(page: dict[str, Any]) -> str:
     """把 ProductPlan 单页语义组织成 prompt 友好的设计输入。"""
 
@@ -146,9 +167,68 @@ def _page_brief(page: dict[str, Any]) -> str:
             "- required information items: "
             + json.dumps(information_items, ensure_ascii=False)
         )
+        for raw_item in information_items:
+            if not isinstance(raw_item, dict):
+                continue
+            item_id = str(raw_item.get("itemId") or "").strip()
+            if not item_id:
+                continue
+            lines.append(
+                "- REQUIRED information item marker: "
+                f'data-information-item-id="{item_id}" '
+                f'data-control-id="{item_id}-display" '
+                "(copy these static attributes onto the business display JSX node)"
+            )
     actions = page.get("actions")
     if isinstance(actions, list) and actions:
         lines.append("- approved product actions: " + json.dumps(actions, ensure_ascii=False))
+        raw_agent_surfaces = page.get("agent_surfaces")
+        surface_action_ids = {
+            str(action_id).strip()
+            for surface in (
+                raw_agent_surfaces if isinstance(raw_agent_surfaces, list) else []
+            )
+            if isinstance(surface, dict)
+            for action_id in surface.get("actionIds", [])
+            if str(action_id).strip()
+        }
+        for raw_action in actions:
+            if not isinstance(raw_action, dict):
+                continue
+            action_id = str(raw_action.get("actionId") or "").strip()
+            if not action_id or action_id in surface_action_ids:
+                continue
+            behavior = raw_action.get("behavior")
+            behavior_type = (
+                str(behavior.get("type") or "").strip()
+                if isinstance(behavior, dict)
+                else ""
+            )
+            marker = (
+                f'data-action-id="{action_id}" '
+                f'data-control-id="{action_id}-control"'
+            )
+            if behavior_type == "interface":
+                marker += f' data-ui-effect="执行{action_id}对应的本地界面变化"'
+            lines.append(
+                "- REQUIRED product action marker: "
+                + marker
+                + " (copy these static attributes onto the implementing JSX control. "
+                "For row-selection actions, render an explicit JSX `<button>` or "
+                "`<div role=\"button\">` carrying every literal marker. Do not rely solely "
+                "on antd Table `onRow`, because returned row props are not a JSX opening tag.)"
+            )
+    agent_surfaces = page.get("agent_surfaces")
+    if isinstance(agent_surfaces, list) and agent_surfaces:
+        lines.append(
+            "- required agent surfaces: "
+            + json.dumps(agent_surfaces, ensure_ascii=False)
+        )
+        lines.append(
+            "- REQUIRED EXACT fixed Agent UI source contract (copy the import, component, "
+            "and static configJson exactly; do not rewrite its internal UI):\n"
+            + build_agent_ui_template_source_contract(page)
+        )
     state_requirements = page.get("state_requirements")
     if isinstance(state_requirements, dict) and state_requirements:
         lines.append(
@@ -169,6 +249,7 @@ def _build_ui_design_prompt(page: dict[str, Any], page_key: str) -> str:
     """组合页面信息与技能全文，约束模型只返回单个页面的 .tsx 代码。"""
 
     skill_document = _ui_design_skill_document()
+    agent_ui_skill_document = _agent_ui_skill_document(page)
     return (
         "You are a UI design code generation model for an app-generation workflow.\n"
         "Generate ONE self-contained React + antd5 + @ant-design/pro-components "
@@ -207,6 +288,13 @@ def _build_ui_design_prompt(page: dict[str, Any], page_key: str) -> str:
         "--- INJECTED antd-ui-design SKILL.md (content inlined) ---\n"
         + skill_document
         + "\n--- END INJECTED SKILL.md ---\n"
+        + (
+            "\n--- INJECTED agent-ui-surface-template SKILL.md ---\n"
+            + agent_ui_skill_document
+            + "\n--- END INJECTED AGENT UI SKILL.md ---\n"
+            if agent_ui_skill_document
+            else ""
+        )
     )
 
 
@@ -240,10 +328,21 @@ def _product_fact_boundary_rules() -> str:
         "`data-information-item-id=\"<itemId>\"` and static "
         "`data-control-id=\"<itemId>-display\"` on the business display component itself. Never emit "
         "an undeclared data-information-item-id.\n"
+        f"- Every declared Agent Surface must use exactly one fixed component imported from "
+        f"`{AGENT_UI_TEMPLATE_MODULE}` with template version `{AGENT_UI_TEMPLATE_VERSION}`. "
+        "Use `AgentConversationTemplate` for `standalone_page` and "
+        "`AgentFloatingPanelTemplate` for `floating_panel`; pass the exact static configJson supplied "
+        "in the page brief. Never recreate, wrap, copy, or restyle the fixed chat core.\n"
+        "- A `standalone_page` renders the fixed component as its page body. A `floating_panel` "
+        "preserves the complete business page and adds the fixed component beside that body. "
+        "Responsive behavior, bubbles, states, Tool/approval cards, mobile Drawer, drag/snap, focus, "
+        "and light/dark themes belong to the fixed component and must not be implemented locally.\n"
         "- CRITICAL binding rule: `data-information-item-id`, `data-control-id`, "
         "`data-action-id`, `data-action-step-id`, `data-ui-effect`, and "
-        "`data-preview-only` values SHOULD be static string literals written "
+        "`data-preview-only` values MUST be static string literals written "
         "directly in the JSX (e.g. `data-information-item-id=\"dashboard_page-project-total\"`). "
+        "Never use JSX expressions such as `data-preview-only={true}` or variables for these "
+        "marker values. "
         "For table/list rows rendered via `.map()` or `dataSource`, the same action "
         "button across rows MAY reuse one static `data-action-id` and `data-control-id` "
         "(e.g. `data-action-id=\"project_detail_open_related_review\"` on every row's "
@@ -278,6 +377,14 @@ def _product_fact_boundary_rules() -> str:
         "- Every retry/recover Button in error or empty states is review tooling: it "
         "MUST carry `data-preview-only=\"true\"`. This is a recurring omission — check "
         "every `Result`/`Empty` `extra` Button before returning.\n"
+        "- Every interactive JSX opening tag MUST be classified exactly once as a control for "
+        "a declared ProductPlan action, a declared information item, or review tooling marked "
+        "with static `data-preview-only=\"true\"`. This includes Button, native button, Input, "
+        "Select, Radio, Segmented, Switch, Checkbox, and every other clickable or editable JSX "
+        "control. Never leave an interactive opening tag without one of these ownership markers.\n"
+        "- Do not add ownership markers to internals of the fixed Agent UI component. Its action, "
+        "context, required-part, and preview-control evidence is derived from the validated static "
+        "configJson and the platform component contract.\n"
         "- Cross-page action handlers may stay local/no-op in the isolated preview, but their "
         "visible intent and data-action-id must still match ProductPlan exactly.\n"
         "--- END PRODUCT FACT BOUNDARY ---\n"
@@ -461,7 +568,9 @@ def _collect_jsx_component_tags(code: str) -> set[str]:
     """
 
     tags: set[str] = set()
-    for m in re.finditer(r"<([A-Z][\w$]*)", code):
+    # JSX 标签前不会紧贴标识符、右括号或点号；排除 useRef<HTMLDivElement>
+    # 这类 TypeScript 泛型，避免把 DOM 类型误判为未导入组件。
+    for m in re.finditer(r"(?<![\w$.)])<([A-Z][\w$]*)", code):
         tags.add(m.group(1))
     return tags
 
@@ -560,6 +669,7 @@ _ALLOWED_IMPORT_SOURCES = {
     "@ant-design/pro-components",
     "@ant-design/icons",
     "@ant-design/cssinjs",
+    AGENT_UI_TEMPLATE_MODULE,
     # dayjs 是 antd5 的传递依赖，页面模板（commonTable/tabsTable）用它做日期格式化。
     # 选模板作设计稿时模板代码原样落盘，校验需放行 dayjs，否则被当作禁用依赖拦截。
     "dayjs",
@@ -836,6 +946,21 @@ def _build_repair_prompt(
         "--- VALIDATION ERRORS TO FIX ---\n"
         f"{error_block}\n"
         "--- END ERRORS ---\n\n"
+        "Mandatory repair self-check before returning:\n"
+        "- If the page declares an Agent Surface, preserve exactly one fixed Agent UI component "
+        "with the exact import, component name, and static configJson from PAGE TO DESIGN. Do not "
+        "recreate any Agent messages, controls, responsive behavior, or styles locally.\n"
+        "- verify every REQUIRED marker listed in PAGE TO DESIGN appears on the JSX node that "
+        "implements that action or displays that information item. Do not rename, omit, or "
+        "duplicate stable ids.\n"
+        "- Audit every interactive JSX opening tag in the complete file, including controls "
+        "nested in Drawer, Modal, and Table column render functions. Do not inspect controls "
+        "inside the imported fixed Agent UI component. "
+        "Classify every instance using the mandatory ownership rule above. A validation error "
+        "naming only a component type such as `Button` can represent multiple instances, so "
+        "inspect and fix every occurrence rather than stopping after the first match.\n"
+        "- Re-read every validation error above and confirm the returned complete file fixes all "
+        "of them, not only the first one.\n\n"
         "Return the full corrected .tsx file now."
     )
 
@@ -917,6 +1042,17 @@ def _build_adjust_prompt(
     )
 
 
+def _ui_design_validation_retries(settings: Settings, page: dict[str, Any]) -> int:
+    """为包含 Agent Surface 的复杂页面保留至少两次有界契约修复机会。"""
+
+    configured = max(0, settings.ui_design_max_retries)
+    surfaces = page.get("agent_surfaces")
+    has_agent_surface = isinstance(surfaces, list) and any(
+        isinstance(surface, dict) for surface in surfaces
+    )
+    return max(configured, 2) if has_agent_surface else configured
+
+
 def generate_adjusted_page_react_code(
     page: dict[str, Any],
     page_key: str,
@@ -936,7 +1072,7 @@ def generate_adjusted_page_react_code(
     settings = Settings.from_env()
     model = _create_ui_design_model(settings)
     page_id = str(page.get("pageId") or page.get("id") or "")
-    max_retries = max(0, settings.ui_design_max_retries)
+    max_retries = _ui_design_validation_retries(settings, page)
 
     prompt = _build_adjust_prompt(page, page_key, prev_code, instruction)
     result = _invoke_ui_design_model(
@@ -1073,7 +1209,7 @@ def generate_page_react_code(
     settings = Settings.from_env()
     model = _create_ui_design_model(settings)
     page_id = str(page.get("pageId") or page.get("id") or "")
-    max_retries = max(0, settings.ui_design_max_retries)
+    max_retries = _ui_design_validation_retries(settings, page)
 
     # 首次生成
     prompt = _build_ui_design_prompt(page, page_key)
@@ -1369,12 +1505,12 @@ def delete_page_code(project_dir: str, page_key: str) -> None:
 _TEMPLATES_DIR = REPOSITORY_ROOT / "Frontend" / "src" / "renderer" / "src" / "templates"
 
 
-def load_template_source(template_id: str) -> str:
-    """按 manifest.id 读取页面模板的 index.tsx 源码，供选模板作设计稿时直接落盘。
+def load_template_source(template_id: str, *, surface_type: str = "") -> str:
+    """按 manifest.id 与页面 Surface 读取兼容模板源码，供选模板生成设计稿。
 
     遍历 templates/*/manifest.json 匹配 id，返回对应目录下的 index.tsx 内容。
-    模板源码是成熟可运行的 Pro 组件页面，直接用作设计稿无需 LLM 生成或校验。
-    找不到模板时抛 ValueError，由调用方（ui_confirmation 节点）捕获标记失败。
+    category 与 supportedSurfaces 必须满足当前唯一契约，未知声明安全拒绝。
+    找不到或不兼容时抛 ValueError，由生成池捕获并标记失败。
     """
 
     template_id = str(template_id or "").strip()
@@ -1397,6 +1533,34 @@ def load_template_source(template_id: str) -> str:
             continue
         if str(manifest.get("id") or "").strip() != template_id:
             continue
+        category = str(manifest.get("category") or "").strip()
+        supported_surfaces = manifest.get("supportedSurfaces")
+        expected_category = "agent" if surface_type == "standalone_page" else "business"
+        if (
+            surface_type not in {"standard_page", "floating_panel", "standalone_page"}
+            or category not in {"business", "agent"}
+            or category != expected_category
+            or not isinstance(supported_surfaces, list)
+            or surface_type not in supported_surfaces
+        ):
+            raise ValueError(
+                f"load_template_source: 模板 {template_id} 与页面 Surface "
+                f"{surface_type or 'missing'} 不兼容。"
+            )
+        agent_ui = manifest.get("agentUi")
+        if category == "agent" and (
+            not isinstance(agent_ui, dict)
+            or agent_ui.get("module") != AGENT_UI_TEMPLATE_MODULE
+            or agent_ui.get("component") != component_for_surface(surface_type)
+            or agent_ui.get("version") != AGENT_UI_TEMPLATE_VERSION
+        ):
+            raise ValueError(
+                f"load_template_source: Agent 模板 {template_id} 缺少当前固定组件证据。"
+            )
+        if category == "business" and agent_ui is not None:
+            raise ValueError(
+                f"load_template_source: 业务模板 {template_id} 不得声明 Agent UI 固定组件。"
+            )
         index_path = entry / "index.tsx"
         if not index_path.is_file():
             raise ValueError(
