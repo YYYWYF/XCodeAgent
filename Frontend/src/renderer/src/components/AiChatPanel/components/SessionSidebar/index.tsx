@@ -310,6 +310,17 @@ export default function SessionSidebar({
                     </span>
                   ) : null}
                 </button>
+                {dataSourcesEnabled ? (
+                  <button
+                    className={cx(dataSourcesActive && 'active')}
+                    onClick={() => handleRailNavigation(onShowDataSources)}
+                    title="数据源"
+                    type="button"
+                  >
+                    <DatabaseOutlined />
+                    <span>数据源</span>
+                  </button>
+                ) : null}
                 <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
                   <HourglassOutlined />
                   <span>推荐任务</span>
@@ -340,17 +351,6 @@ export default function SessionSidebar({
                   <FolderOutlined />
                   <span>文件</span>
                 </button>
-                {dataSourcesEnabled ? (
-                  <button
-                    className={cx(dataSourcesActive && 'active')}
-                    onClick={() => handleRailNavigation(onShowDataSources)}
-                    title="数据源"
-                    type="button"
-                  >
-                    <DatabaseOutlined />
-                    <span>数据源</span>
-                  </button>
-                ) : null}
                 <button
                   className={cx(skillsActive && 'active')}
                   onClick={() => handleRailNavigation(onShowSkills)}
