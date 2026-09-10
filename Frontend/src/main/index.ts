@@ -1666,7 +1666,11 @@ function setupWorkspaceIpc(): void {
       targetDirName === 'frontend'
         ? [['package.json']]
         : targetDirName === 'agent-runtime'
-          ? [['pyproject.toml'], ['uv.lock'], ['src/app/main.py']]
+          ? [
+              ['pyproject.toml'],
+              ['uv.lock'],
+              ['src/app/main.py']
+            ]
           : [['pom.xml', 'build.gradle', 'build.gradle.kts']]
     for (const alternatives of requiredMarkers) {
       let found = false

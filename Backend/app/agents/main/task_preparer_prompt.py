@@ -343,11 +343,11 @@ def _planning_algorithm_section(
                 "Build planning; business tasks must not rewrite its shared infrastructure."
             )
         rules.append(
-            "For every business `agent:<agentId>` Unit, emit exactly one "
-            "`agent:<agentId>::implementation` task with owner `agent` and task_type `agent.code`. "
-            "Its change_scope and `agent.runtime` deliverable must use exactly the Agent Contract "
-            "artifacts.agentPath, toolAdapterPath, and testPath. Implement capabilities and the "
-            "seven-part agentSettings without changing the formal contract."
+            "Do not emit tasks for business `agent:<agentId>` Units. The platform deterministically "
+            "compiles Prompt, Model, Memory, Tools, Skills, Knowledge, and Context into seven "
+            "owner=agent, task_type=agent.code tasks. Their physical paths come only from the "
+            "platform-owned template path policy, never from this planning model or a template "
+            "Manifest."
         )
         rules.append(
             "For each Java backend Endpoint referenced as an Agent Contract "
@@ -464,9 +464,8 @@ def _task_rules_section(
             "authorization services, repositories, request-derived permission checks, or data rules."
         )
     fragments.append(
-        "Every owner=agent path must stay under `/agent-runtime/`. Agent tasks implement only "
-        "the fixed Python 3.12 + DeepAgents sidecar and its tests. They must not modify frontend, "
-        "Java backend, formal artifacts, API contracts, or the Build DAG."
+        "Never emit owner=agent tasks. Platform-compiled Agent tasks stay under `/agent-runtime/` "
+        "and must not modify frontend, Java backend, formal artifacts, API contracts, or the Build DAG."
     )
     return "\n".join(fragments)
 

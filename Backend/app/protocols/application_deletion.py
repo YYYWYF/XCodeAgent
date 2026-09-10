@@ -30,6 +30,9 @@ from app.services.application_lifecycle import (
     clear_application_lifecycle_lock,
     load_application_lifecycle,
 )
+from app.services.agent_runtime_process_registry import (
+    clear_agent_runtime_process_registry_workspace,
+)
 from app.services.authorization_bootstrap import clear_authorization_bootstrap_lock
 from app.services.backend_process_registry import (
     clear_backend_process_registry_workspace,
@@ -245,6 +248,9 @@ async def prepare_application_deletion(
     cleared_lifecycle_lock = clear_application_lifecycle_lock(workspace)
     cleared_template_lock = clear_application_template_lock(workspace)
     cleared_authorization_lock = clear_authorization_bootstrap_lock(workspace)
+    cleared_agent_runtime_process_cache = (
+        clear_agent_runtime_process_registry_workspace(workspace)
+    )
     cleared_backend_process_cache = clear_backend_process_registry_workspace(workspace)
     report_data = {
         "action": request.action,
@@ -265,6 +271,7 @@ async def prepare_application_deletion(
             "lifecycleLock": cleared_lifecycle_lock,
             "templateLock": cleared_template_lock,
             "authorizationBootstrapLock": cleared_authorization_lock,
+            "agentRuntimeProcessCache": cleared_agent_runtime_process_cache,
             "backendProcessCache": cleared_backend_process_cache,
             "templateOperationsIdle": template_idle,
         },

@@ -26,6 +26,16 @@ def agent_contract_sha256(contract: dict[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def agent_entity_binding_bypass_matches(value: Any, agent_id: str) -> bool:
+    """校验当前执行的手动跳过确认只属于指定 Agent。"""
+
+    return (
+        isinstance(value, dict)
+        and value.get("confirmed") is True
+        and str(value.get("agent_id") or "").strip() == str(agent_id or "").strip()
+    )
+
+
 def inspect_agent_development_readiness(
     workspace: str | Path,
     agent_id: str,

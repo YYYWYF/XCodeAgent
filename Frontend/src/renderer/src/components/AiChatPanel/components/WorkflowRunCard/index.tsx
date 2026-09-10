@@ -164,6 +164,13 @@ export default function WorkflowRunCard({
     ? []
     : clarification?.questions || []
   const entityDesignGate = clarification?.mode === 'entity_source_binding_required'
+  const entityGateDevelopmentTarget = clarification?.development_target as
+    | { type?: string }
+    | undefined
+  // 旧的挂起快照尚未带 can_skip 字段；Agent 的实体门禁本身已保证没有其他 blocker。
+  const canSkipAgentEntityBinding =
+    clarification?.can_skip_agent_entity_binding === true ||
+    (entityDesignGate && entityGateDevelopmentTarget?.type === 'agent')
   const gateQuestion = clarification?.questions?.[0]
   const entityGateEntities = (clarification?.missing_entities || []).filter((item) =>
     Boolean(
@@ -561,10 +568,16 @@ export default function WorkflowRunCard({
             />
           ) : entityDesignGate ? (
             <EntityDesignGateCard
-              disabled={disabled}
+              allowAgentSkip={canSkipAgentEntityBinding}
+              disabled={disabled || interactionAvailability !== 'active'}
               entities={entityGateEntities}
               explanation={clarification?.message || String(gateQuestion?.question || '')}
               onJump={(entityId) => onEntityDesignGateJump?.(entityId, workflow)}
+              onSkipAgentBinding={() =>
+                onSubmitClarification?.(workflow, {
+                  agent_entity_binding_skip: { action: 'skip' }
+                })
+              }
             />
           ) : artifactConfirmation && requiresConfirmation ? (
             clarification?.mode === 'requirement_document_confirmation' ? (
@@ -2370,6 +2383,14 @@ export function buildClarificationContinuationMessage(
   answers: ClarificationAnswers
 ): string {
   const clarification = workflowClarification(workflow)
+  if (
+    clarification?.mode === 'entity_source_binding_required' &&
+    answers.agent_entity_binding_skip &&
+    typeof answers.agent_entity_binding_skip === 'object' &&
+    answers.agent_entity_binding_skip.action === 'skip'
+  ) {
+    return '已确认暂时跳过当前 Agent 的实体绑定，继续生成 Python Agent 代码。'
+  }
   const acceptanceMessage = pageAcceptanceContinuationMessage(clarification, answers)
   if (acceptanceMessage) return acceptanceMessage
   if (clarification?.mode === 'entity_source_binding' && answers.entity_source_binding) {

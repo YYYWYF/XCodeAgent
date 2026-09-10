@@ -23,6 +23,10 @@ from app.services.frontend_scaffold import (
 )
 from app.services.product_plan import PRODUCT_PLAN_SCHEMA_VERSION
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
+from app.services.agent_runtime_template_policy import (
+    AgentRuntimeTemplatePolicyError,
+    load_agent_runtime_template_policy,
+)
 
 TEMPLATE_GENERATION_MANIFEST_RELATIVE_PATH = Path(
     ".xcodeagent/template-generation-manifest.json"
@@ -501,6 +505,10 @@ def _template_target_error(workspace: Path, target_name: str) -> str | None:
             return "agent-runtime 模板目录缺失：" + "、".join(missing_directories)
         if (directory / ".env").exists():
             return "agent-runtime 模板不能包含真实 .env 文件"
+        try:
+            load_agent_runtime_template_policy(directory)
+        except AgentRuntimeTemplatePolicyError as exc:
+            return f"agent-runtime 模板与平台路径策略不匹配：{exc}"
         return None
     markers = (
         (directory / "package.json",)

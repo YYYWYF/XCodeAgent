@@ -7,8 +7,9 @@ import type {
 const LAUNCH_STAGE_INDEX: Record<string, number> = {
   structure: 0,
   backend: 1,
-  frontend: 2,
-  ready: 3
+  agent_runtime: 2,
+  frontend: 3,
+  ready: 4
 }
 
 /** 返回启动子步骤的稳定序号，未知阶段不参与实时进度选择。 */

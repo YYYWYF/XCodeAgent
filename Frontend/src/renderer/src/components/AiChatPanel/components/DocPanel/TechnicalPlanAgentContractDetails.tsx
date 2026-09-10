@@ -315,7 +315,10 @@ export function AgentPlatformDetails({ contract }: { contract: JsonRecord }): Re
   const security = asRecord(contract.security)
   const artifacts = asRecord(contract.artifacts)
   const evaluation = asRecord(contract.evaluation)
-  const artifactPaths = [artifacts.agentPath, artifacts.toolAdapterPath, artifacts.testPath]
+  const artifactPaths = [
+    artifacts.compositionPath,
+    artifacts.testRoot
+  ]
     .map((item) => textValue(item).trim())
     .filter(Boolean)
   return (

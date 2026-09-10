@@ -1,15 +1,15 @@
 # Java gateway Tool boundary
 
-The generated file at `artifacts.toolAdapterPath` exposes
-`build_tools(runtime_context) -> list`. Each list item is a LangChain Tool whose stable
-name is the Contract `toolId` and whose description preserves the declared usage trigger.
+The Runtime template may already expose standard Contract Tools. Reuse it when the current task
+policy and disk evidence prove the binding is complete; otherwise modify an authorized existing
+Tool entry point or add the minimum adapter below the task's Tools `addRoots`.
 
 This reference constrains the Python boundary only. Java gateway implementation and Java
 source generation belong to another owner and are not part of this Skill.
 
 ## Stable Tool contract
 
-- Generate exactly one Tool for each declared binding and no undeclared Tool.
+- Do not regenerate a standard Tool binding or transport wrapper that already satisfies the Contract.
 - Derive Tool arguments only from the resolved request/path/query schema. Do not add
   identity, tenant, scope, credential, URL, or Header parameters to the model-visible Tool.
 - Preserve `toolId`, description/usage trigger, `accessMode`, Endpoint identity, method,

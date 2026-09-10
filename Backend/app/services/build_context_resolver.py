@@ -122,6 +122,7 @@ def resolve_target_build_context(
     api_contract_id: str | None = None,
     project_plan_path: str | Path | None = None,
     product_plan: dict[str, Any] | None = None,
+    allow_deferred_agent_entities: bool = False,
 ) -> dict[str, Any]:
     """解析目标详情、直接 endpoint/API 依赖与编译所需的 Unit 标识。"""
 
@@ -130,7 +131,12 @@ def resolve_target_build_context(
     elif target_type == "endpoint":
         context = _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
     elif target_type == "agent":
-        context = _agent_context(project_plan, product_plan or {}, target_id)
+        context = _agent_context(
+            project_plan,
+            product_plan or {},
+            target_id,
+            allow_deferred_entities=allow_deferred_agent_entities,
+        )
     else:
         raise ValueError(f"Unsupported build target type: {target_type}.")
     # 把平台预置的后端骨架文件清单传给 Agent，让它知道哪些文件已存在、只需补业务逻辑。
@@ -142,6 +148,8 @@ def _agent_context(
     project_plan: dict[str, Any],
     product_plan: dict[str, Any],
     agent_id: str,
+    *,
+    allow_deferred_entities: bool,
 ) -> dict[str, Any]:
     """只投射当前 Agent Contract、关联接口、实体、入口页和显式 Unit 根。"""
 
@@ -165,6 +173,7 @@ def _agent_context(
     tool_endpoints: list[dict[str, Any]] = []
     entity_ids: list[str] = []
     entity_designs: list[dict[str, Any]] = []
+    deferred_entity_ids: list[str] = []
     for binding in _dict_items(tools.get("bindings")):
         endpoint_ref = binding.get("endpoint") if isinstance(binding.get("endpoint"), dict) else {}
         endpoint_id = str(endpoint_ref.get("endpointId") or "").strip()
@@ -173,7 +182,14 @@ def _agent_context(
         if endpoint is None:
             raise ValueError(f"Agent {agent_id} 的 Tool 引用了未知 Endpoint {endpoint_id}。")
         designs, missing = _endpoint_entity_designs(project_plan, endpoint)
-        _assert_endpoint_entities_designed(endpoint_id, designs, missing)
+        if allow_deferred_entities:
+            for entity_id in missing:
+                if entity_id and entity_id not in entity_ids:
+                    entity_ids.append(entity_id)
+                if entity_id and entity_id not in deferred_entity_ids:
+                    deferred_entity_ids.append(entity_id)
+        else:
+            _assert_endpoint_entities_designed(endpoint_id, designs, missing)
         tool_endpoints.append(endpoint)
         for design in designs:
             entity_id = str(design.get("entity_id") or "").strip()
@@ -186,6 +202,18 @@ def _agent_context(
     gateway = endpoint_index.get(gateway_id)
     if gateway is None:
         raise ValueError(f"Agent {agent_id} 的 Java Gateway Endpoint 不存在。")
+    if allow_deferred_entities:
+        gateway_designs, gateway_missing = _endpoint_entity_designs(project_plan, gateway)
+        for entity_id in gateway_missing:
+            if entity_id and entity_id not in entity_ids:
+                entity_ids.append(entity_id)
+            if entity_id and entity_id not in deferred_entity_ids:
+                deferred_entity_ids.append(entity_id)
+        for design in gateway_designs:
+            entity_id = str(design.get("entity_id") or "").strip()
+            if entity_id and entity_id not in entity_ids:
+                entity_ids.append(entity_id)
+                entity_designs.append(design)
     gateway_contract_id = str(gateway.get("api_contract_id") or "").strip()
     entry_page_ids = [
         str(item or "").strip()
@@ -216,6 +244,7 @@ def _agent_context(
             )
         ),
         "entity_ids": entity_ids,
+        "deferred_entity_ids": deferred_entity_ids,
         "entity_designs": entity_design_summaries(
             project_plan,
             entity_ids,

@@ -20,13 +20,15 @@ def create_agent_runtime_agent(
     agent_memory_backend: BackendProtocol,
     required_user_skills_prompt: str = "",
 ):
-    """创建只能实现生成应用 Python Agent Runtime 的 Deep Agent。"""
+    """创建只能实现当前 Agent Runtime 模块任务的 Deep Agent。"""
 
     base_system_prompt = (
         "You are the Python Agent Runtime Coding Agent. Implement only approved owner=agent "
-        "tasks and their TechnicalPlan agent_contracts. Use Python 3.12 and DeepAgents, keep "
-        "the sidecar behind the Java gateway, and implement the declared internal AG-UI SSE "
-        "runtime behavior and tool adapters. Write only task allowed_paths under "
+        "task and its TechnicalPlan Agent Contract slice. Inspect the task's platform-compiled "
+        "template path policy, prefer reuse or modification of the existing Runtime files, and add "
+        "Python only inside the current task's authorized adapter/test roots. Never create a mechanical "
+        "per-Agent wrapper or initialize a second model. Use Python 3.12 and DeepAgents, keep the "
+        "sidecar behind the Java gateway, and write only task allowed_paths under "
         "/agent-runtime/. Never modify frontend, Java backend, formal planning artifacts, API "
         "contracts, or the Build DAG. Do not broaden capabilities, tools, model policy, or "
         "security boundaries beyond the contract. Before editing, read and follow "

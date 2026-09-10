@@ -56,8 +56,8 @@ _SPRINGBOOT_TEMPLATE_BOUNDARY_REFERENCE_FILES = [
 ]
 
 _AGENT_RUNTIME_GENERATE_REFERENCE_FILES = [
-    "references/runtime-extension-contract.md",
-    "references/business-agent-module.md",
+    "references/template-path-policy.md",
+    "references/module-implementation.md",
     "references/java-tool-adapter.md",
     "references/focused-tests.md",
     "references/task-result-contract.md",

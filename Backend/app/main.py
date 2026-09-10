@@ -21,6 +21,10 @@ from app.protocols.agent_files import (
     agent_files_capabilities,
     build_agent_files_ag_ui_stream,
 )
+from app.protocols.agent_runtime_debug import (
+    agent_runtime_debug_capabilities,
+    build_agent_runtime_debug_ag_ui_stream,
+)
 from app.protocols.application_development_planning import (
     application_development_planning_capabilities,
     build_application_development_planning_ag_ui_stream,
@@ -133,6 +137,7 @@ async def health() -> dict[str, object]:
             "application_deletion": application_deletion_capabilities(),
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
+            "agent_runtime_debug": agent_runtime_debug_capabilities(),
             "data_sources": data_sources_capabilities(),
             "code_changes": code_changes_capabilities(),
             "version_control": version_control_capabilities(),
@@ -234,6 +239,20 @@ async def run_agent_files(
 ) -> StreamingResponse:
     return StreamingResponse(
         build_agent_files_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/agent-runtime-debug/run")
+async def run_agent_runtime_debug(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流启动当前工作区的 Agent Runtime。"""
+
+    return StreamingResponse(
+        build_agent_runtime_debug_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -22,7 +22,11 @@ from app.services.build_task_confirmation import (
 )
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.development_readiness import development_readiness
-from app.services.agent_development_readiness import inspect_agent_development_readiness
+from app.services.agent_development_readiness import (
+    agent_entity_binding_bypass_matches,
+    inspect_agent_development_readiness,
+)
+from app.services.agent_build_tasks import compile_agent_build_tasks
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     frontend_endpoint_implementation_owners,
@@ -374,9 +378,12 @@ def prepare_build_tasks(state: ProjectState) -> dict:
                 ),
                 **formal_artifact_state,
             }
+        model_planning_unit_ids = {
+            unit_id for unit_id in planning_unit_ids if not unit_id.startswith("agent:")
+        }
         planning_build_context = {
             **build_context,
-            "planning_unit_ids": sorted(planning_unit_ids),
+            "planning_unit_ids": sorted(model_planning_unit_ids),
             # 该索引仅约束本轮模型规划，不写入正式 build_context 或 Build DAG。
             "frontend_endpoint_owner_constraints": owner_constraints,
         }
@@ -393,22 +400,34 @@ def prepare_build_tasks(state: ProjectState) -> dict:
                 candidate_plan,
                 build_context,
                 project_plan=project_plan,
+                workspace=workspace,
             )
             finalized_plan["value"] = merged_plan
             return merged_plan
 
-        prepared_plan = prepare_build_tasks_with_main_agent(
-            _task_preparation_project_plan(
-                project_plan,
-                planning_build_context,
-            ),
-            workspace=workspace,
-            workspace_snapshot=workspace_snapshot,
-            build_context=planning_build_context,
-            build_task_plan=build_task_plan,
-            build_execution_scope=build_execution_scope,
-            candidate_finalizer=finalize_candidate,
-        )
+        if model_planning_unit_ids:
+            prepared_plan = prepare_build_tasks_with_main_agent(
+                _task_preparation_project_plan(
+                    project_plan,
+                    planning_build_context,
+                ),
+                workspace=workspace,
+                workspace_snapshot=workspace_snapshot,
+                build_context=planning_build_context,
+                build_task_plan=build_task_plan,
+                build_execution_scope=build_execution_scope,
+                candidate_finalizer=finalize_candidate,
+            )
+        else:
+            # Agent 七模块任务由平台从正式契约编译，不为纯 Agent 范围调用任务规划模型。
+            prepared_plan = _merge_prepared_scope_tasks(
+                build_task_plan,
+                {"tasks": [], "preparation_source": "platform_agent_modules"},
+                build_context,
+                project_plan=project_plan,
+                workspace=workspace,
+            )
+            finalized_plan["value"] = prepared_plan
     except ValueError as exc:
         attempt_plan = _build_task_plan_attempt_view(
             build_task_plan,
@@ -461,6 +480,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             prepared_plan,
             build_context,
             project_plan=project_plan,
+            workspace=workspace,
         )
     except ValueError as exc:
         attempt_plan = _build_task_plan_attempt_view(
@@ -698,10 +718,18 @@ def _build_prerequisite_errors(
             errors.append("缺少 workspace，无法检查 Agent 开发前置条件。")
         else:
             readiness = inspect_agent_development_readiness(workspace, target_id)
+            bypasses_entity_binding = agent_entity_binding_bypass_matches(
+                state.get("agent_entity_binding_bypass"),
+                target_id,
+            )
             errors.extend(
                 str(item.get("message") or "智能体开发前置条件未满足。")
                 for item in readiness.get("blockers") or []
                 if isinstance(item, dict)
+                and not (
+                    bypasses_entity_binding
+                    and item.get("type") == "entity_source_binding"
+                )
             )
     if workspace:
         readiness = inspect_template_generation_readiness(workspace)
@@ -1307,11 +1335,25 @@ def _resolve_build_context(
                 if isinstance(state.get("product_plan"), dict)
                 else {}
             ),
+            allow_deferred_agent_entities=(
+                target_type == "agent"
+                and agent_entity_binding_bypass_matches(
+                    state.get("agent_entity_binding_bypass"),
+                    target_id,
+                )
+            ),
         )
         if target_type == "agent":
-            context["required_unit_ids"] = _required_unit_closure(
-                build_task_plan,
-                context.get("required_unit_root_ids") or [],
+            context["required_unit_ids"] = (
+                _agent_generation_unit_ids(build_task_plan, target_id)
+                if agent_entity_binding_bypass_matches(
+                    state.get("agent_entity_binding_bypass"),
+                    target_id,
+                )
+                else _required_unit_closure(
+                    build_task_plan,
+                    context.get("required_unit_root_ids") or [],
+                )
             )
         return _add_reusable_task_context(context, build_task_plan)
     return _add_reusable_task_context({
@@ -1365,6 +1407,21 @@ def _required_unit_closure(
     for root_unit_id in root_unit_ids:
         visit(str(root_unit_id))
     return ordered
+
+
+def _agent_generation_unit_ids(
+    build_task_plan: dict[str, Any],
+    agent_id: str,
+) -> list[str]:
+    """手动跳过实体绑定时只选择 Python Runtime 与目标 Agent Unit。"""
+
+    build_units = build_task_plan.get("build_units")
+    build_units = build_units if isinstance(build_units, dict) else {}
+    required = ["agent:runtime", f"agent:{agent_id}"]
+    missing = [unit_id for unit_id in required if unit_id not in build_units]
+    if missing:
+        raise ValueError(f"Agent Python 生成 Unit 不存在：{'、'.join(missing)}。")
+    return required
 
 
 def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> dict:
@@ -1840,6 +1897,7 @@ def _merge_prepared_scope_tasks(
         build_context: dict,
         *,
         project_plan: dict | None = None,
+        workspace: str | None = None,
 ) -> dict:
     """用本次范围任务替换同 Unit 旧任务，并保留其他已准备 Unit 的任务。"""
 
@@ -1852,6 +1910,16 @@ def _merge_prepared_scope_tasks(
     generated_tasks, ignored_platform_task_ids = strip_platform_owned_candidate_tasks(
         generated_tasks
     )
+    ignored_agent_task_ids = [
+        str(task.get("id") or "")
+        for task in generated_tasks
+        if str(task.get("unit_id") or "").startswith("agent:")
+    ]
+    generated_tasks = [
+        task
+        for task in generated_tasks
+        if not str(task.get("unit_id") or "").startswith("agent:")
+    ]
     out_of_scope_unit_ids = sorted(
         {
             str(task.get("unit_id") or "")
@@ -1869,6 +1937,29 @@ def _merge_prepared_scope_tasks(
         build_context,
         required_unit_ids,
     )
+    agent_unit_ids = {
+        unit_id
+        for unit_id in replaceable_unit_ids
+        if unit_id.startswith("agent:") and unit_id != "agent:runtime"
+    }
+    if agent_unit_ids and not workspace:
+        raise ValueError("缺少 workspace，无法编译 Agent 七模块任务。")
+    if agent_unit_ids:
+        generated_tasks.extend(
+            compile_agent_build_tasks(
+                [
+                    contract
+                    for contract in (
+                        project_plan.get("agent_contracts", [])
+                        if isinstance(project_plan, dict)
+                        else []
+                    )
+                    if isinstance(contract, dict)
+                ],
+                unit_ids=agent_unit_ids,
+                workspace=workspace or "",
+            )
+        )
     retained_tasks = [
         task
         for task in tasks_from_build_task_plan(skeleton_plan)
@@ -1941,8 +2032,13 @@ def _merge_prepared_scope_tasks(
                 else {}
             ),
             **(
-                {"ignoredPlatformCandidateTaskIds": ignored_platform_task_ids}
-                if ignored_platform_task_ids
+                {
+                    "ignoredPlatformCandidateTaskIds": [
+                        *ignored_platform_task_ids,
+                        *ignored_agent_task_ids,
+                    ]
+                }
+                if ignored_platform_task_ids or ignored_agent_task_ids
                 else {}
             ),
         },

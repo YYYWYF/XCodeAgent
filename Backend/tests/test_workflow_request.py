@@ -18,6 +18,81 @@ from app.protocols.workflow.request import (
 
 
 class WorkflowRequestTests(unittest.TestCase):
+    def test_agent_entity_binding_skip_is_bound_to_current_agent_gate(self) -> None:
+        """手动跳过必须来自当前 Agent 实体门禁并绑定 Agent id。"""
+
+        resume_state = {
+            "threadId": "thread-agent",
+            "state": {
+                "status": "requires_user_input",
+                "phase": "development_readiness_gate",
+                "selected_agent_id": "support_agent",
+                "detail_target_type": "agent",
+                "build_execution_scope": {
+                    "type": "agent",
+                    "targetId": "support_agent",
+                },
+                "clarification": {"mode": "entity_source_binding_required"},
+            },
+            "events": [
+                {
+                    "status": "requires_user_input",
+                    "nodeName": "development_readiness_gate",
+                }
+            ],
+        }
+        with (
+            patch(
+                "app.protocols.workflow.request._project_plan_start_values",
+                return_value={
+                    "project_plan": {"artifact_type": "technical-plan"}
+                },
+            ),
+            patch(
+                "app.protocols.workflow.request.resolve_execution_resource_claims",
+                return_value=[],
+            ),
+        ):
+            inputs = workflow_run_inputs(
+                {
+                    "request": "暂时跳过实体绑定",
+                    "forwardedProps": {
+                        "workspaceRoot": "/tmp/agent-skip",
+                        "clarificationAnswers": {
+                            "agent_entity_binding_skip": {"action": "skip"}
+                        },
+                        "resumeState": resume_state,
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
+        self.assertEqual(
+            inputs["resume_values"]["agent_entity_binding_bypass"],
+            {"confirmed": True, "agent_id": "support_agent"},
+        )
+
+    def test_agent_entity_binding_skip_rejects_non_gate_snapshot(self) -> None:
+        """非 Agent 实体门禁不能通过伪造结构化答案跳过。"""
+
+        with self.assertRaisesRegex(ValueError, "只能从 Agent 实体绑定门禁"):
+            workflow_run_inputs(
+                {
+                    "request": "跳过",
+                    "forwardedProps": {
+                        "clarificationAnswers": {
+                            "agent_entity_binding_skip": {"action": "skip"}
+                        },
+                        "resumeState": {
+                            "state": {
+                                "selected_agent_id": "support_agent",
+                                "clarification": {"mode": "plan_adjustment"},
+                            }
+                        },
+                    },
+                }
+            )
+
     def test_application_revision_continuation_ignores_stale_client_scope(self) -> None:
         """application continuation 必须清空旧目标并直接进入工作区扫描。"""
 

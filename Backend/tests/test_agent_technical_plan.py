@@ -301,8 +301,8 @@ class AgentTechnicalPlanTests(unittest.TestCase):
             ],
         }
 
-    def test_agent_technical_plan_materializes_python_sidecar_contract(self) -> None:
-        """Agent TechnicalPlan 必须落盘 Python sidecar、AG-UI 和稳定产物路径。"""
+    def test_agent_technical_plan_materializes_runtime_contract(self) -> None:
+        """Agent TechnicalPlan 必须声明当前模板组合入口、AG-UI 和七类配置。"""
 
         requirement = self._requirement_with_product_agent()
         plan = create_technical_plan(
@@ -343,8 +343,14 @@ class AgentTechnicalPlanTests(unittest.TestCase):
             "none",
         )
         self.assertEqual(
-            contract["artifacts"]["agentPath"],
-            "agent-runtime/src/app/agent/inventory_assistant.py",
+            contract["artifacts"]["compositionPath"],
+            "agent-runtime/src/app/agent/factory.py",
+        )
+        self.assertEqual(contract["artifacts"]["testRoot"], "agent-runtime/tests")
+        self.assertEqual(set(contract["artifacts"]), {"compositionPath", "testRoot"})
+        self.assertEqual(
+            contract["requiredChecks"],
+            ["uv run --project agent-runtime pytest -q"],
         )
         self.assertEqual(
             validate_technical_plan_agent_contracts(

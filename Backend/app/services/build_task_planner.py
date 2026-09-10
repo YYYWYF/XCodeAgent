@@ -1036,6 +1036,21 @@ def _task_semantic_errors(
         if owner == "agent":
             if task_type != "agent.code":
                 errors.append(f"Task {task_id} is agent owner but task_type is {task_type}.")
+            source_refs = task.get("source_refs")
+            source_refs = source_refs if isinstance(source_refs, dict) else {}
+            agent_module = str(source_refs.get("agent_module") or "").strip()
+            if agent_module not in {
+                "prompt",
+                "model",
+                "memory",
+                "tools",
+                "skills",
+                "knowledge",
+                "context",
+            }:
+                errors.append(
+                    f"Agent task {task_id} does not declare a valid source_refs.agent_module."
+                )
             if unit_id == "agent:runtime":
                 errors.append(
                     f"Task {task_id} must not target platform-owned agent:runtime; "

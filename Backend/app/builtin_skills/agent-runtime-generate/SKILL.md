@@ -1,65 +1,41 @@
 ---
 name: agent-runtime-generate
 description: >-
-  Implement one confirmed business Agent in the generated Python 3.12 + DeepAgents
-  runtime. Use only for owner=agent Build tasks with a complete Agent Contract; Java
-  gateway implementation may remain deferred when no formal transport contract exists.
+  Inspect and implement one approved Prompt, Model, Memory, Tools, Skills, Knowledge,
+  or Context module in a generated Python DeepAgents Runtime. Use only for platform-compiled
+  owner=agent, task_type=agent.code Build tasks with a validated platform template path policy.
 ---
 
 # agent-runtime-generate
 
-Use this Skill only for a confirmed `agent:<agentId>` Build Unit. The execution prompt
-provides one complete Agent Contract, any resolved Java API Contracts, and exact writable
-paths. Those structures are authoritative for business semantics. A Java API Contract is
-not by itself a complete Python-to-Java transport specification.
+Implement exactly one `source_refs.agent_module` from the confirmed Agent Contract.
 
-## Required workflow
+## Workflow
 
-1. Read the existing template files below before the first write:
-   - `/agent-runtime/src/app/agent/factory.py`
-   - `/agent-runtime/src/app/agent/context.py`
-   - `/agent-runtime/src/app/models/factory.py`
-   - `/agent-runtime/src/app/persistence/checkpointer.py`
-2. Read the task's three writable target files if they already exist.
-3. Read [runtime-extension-contract.md](references/runtime-extension-contract.md) and
-   [business-agent-module.md](references/business-agent-module.md).
-4. Read [java-tool-adapter.md](references/java-tool-adapter.md) only when
-   `agentSettings.tools.bindings` is non-empty.
-5. Read [focused-tests.md](references/focused-tests.md), then implement exactly the
-   declared Agent module, Tool adapter, and focused test.
-6. Read [task-result-contract.md](references/task-result-contract.md) before returning the
-   task result. Do not edit template infrastructure, dependency files, environment files,
-   Java source, or another Agent.
+1. Read the current task and its Contract slice.
+2. Read [template-path-policy.md](references/template-path-policy.md), then only
+   the current module's declared `readPaths` and existing authorized target files.
+3. Read [module-implementation.md](references/module-implementation.md) and decide exactly one
+   action: `skip`, `reuse`, `modify`, or `add`.
+4. For Tools, also read [java-tool-adapter.md](references/java-tool-adapter.md). For added or
+   modified tests, read [focused-tests.md](references/focused-tests.md).
+5. Make the smallest authorized change. Read [task-result-contract.md](references/task-result-contract.md)
+   before returning the result.
 
-## Hard boundaries
+## Boundaries
 
-- The generated Agent module exports exactly one template entry function named
-  `create_agent(*, model, runtime_context, checkpointer)`.
-- The template already resolves the project-default model through `init_chat_model` and
-  injects it as `model`. Do not create another model, read model credentials, or allow a
-  request to select Provider/Base URL/API Key.
-- Call `create_deep_agent` with the injected model, generated tools, compiled System
-  Prompt, declared checkpointer behavior, and `name=<agentId>`.
-- Generate only tools listed in `agentSettings.tools.bindings`. Preserve their declared
-  names, schemas, access modes, and Endpoint semantics. Never generate Java code or call a
-  database, third-party API, browser, local command, or arbitrary URL directly.
-- Reuse a gateway transport only when the current template or task supplies an explicit,
-  supported boundary. Otherwise keep the Tool integration fail-closed and report that
-  Java gateway wiring remains deferred. Missing gateway details must not block generation
-  of the Agent module, contract-shaped Tool definitions, or focused tests.
-- Do not invent a Java client, URL, route prefix, Header, Token name, response envelope,
-  retry policy, or authentication mechanism from Endpoint metadata alone.
-- Treat RuntimeContext identity and scopes as trusted only because the template created
-  them after internal gateway authentication. Do not accept identity from tool arguments.
-- Keep Skills, Knowledge, long-term/archive Memory, summary compression, Vision,
-  structured final output, and per-Agent model overrides disabled when the Contract says
-  they are disabled.
-- Never place secrets, connection values, Prompt internals, full tool responses, or host
-  paths in logs or task results.
-- Return `failed` with a contract mismatch when the stable Runtime entry interface,
-  business Tool schema, or task writable paths cannot implement the Contract. A deferred
-  Java transport is not a contract mismatch when no formal transport contract was supplied;
-  it must instead remain explicit and fail closed.
+- Treat the Contract as the complete business source. Do not invent identity, Prompt rules,
+  capabilities, Tools, schemas, URLs, credentials, approval policy, or Java behavior.
+- Do not modify paths outside the task policy, `.xcodeagent/`, frontend, Java backend, planning artifacts,
+  the Build DAG, dependency files, environment files, or another Agent.
+- Reuse a template capability when it already satisfies the current module. Do not create a file
+  merely to produce a Diff, and do not create a per-Agent wrapper by convention.
+- Add Python only below the current module's task-declared `addRoots` or `testRoots`. Do not initialize
+  a second model or duplicate the Runtime server, AG-UI, authentication, interaction, or settings.
+- Keep missing Java Gateway transport fail-closed. Do not block Python structure generation or
+  simulate successful Tool results.
+- Never expose secrets, complete System Prompts, unbounded Tool output, host paths, or hidden model
+  reasoning in task results.
 
-The outer Workflow owns dependency installation, compilation, tests, service startup,
-health checks, and integration verification. Do not run them from this Build task.
+The outer Workflow owns dependency installation, commands, tests, service startup, health checks,
+review, and acceptance. Do not run project-level verification from this Build task.

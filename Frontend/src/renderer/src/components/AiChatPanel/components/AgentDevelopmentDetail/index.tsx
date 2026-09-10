@@ -1,5 +1,11 @@
-import { InfoCircleOutlined, RobotOutlined } from '@ant-design/icons'
-import { Button, Tag, Tooltip } from 'antd'
+import {
+  CheckCircleOutlined,
+  InfoCircleOutlined,
+  PlayCircleOutlined,
+  RobotOutlined
+} from '@ant-design/icons'
+import { Button, message, Modal, Tag, Tooltip, Typography } from 'antd'
+import { useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
   ApplicationLifecycle,
@@ -7,9 +13,11 @@ import type {
   WorkbenchExecution
 } from '../../../../typings'
 import { cx } from '../../../../utils'
+import { startAgentRuntimeDebug } from '../../../../service/agentRuntimeDebug'
 import AgentDependenciesView from './AgentDependenciesView'
 import AgentSettingsView from './AgentSettingsView'
 import './AgentDevelopmentDetail.less'
+import './AgentRuntimeDebugButton.less'
 
 type Props = {
   agent: DevelopmentPlanningAgentOption
@@ -34,6 +42,41 @@ export default function AgentDevelopmentDetail({
   onStartDevelopment
 }: Props): ReactElement {
   const summary = agent.taskSummary
+  const [runtimeDebugStatus, setRuntimeDebugStatus] = useState<
+    'idle' | 'starting' | 'running' | 'failed'
+  >('idle')
+
+  /** 直接启动工作区 Runtime，供生成流程之外临时验证模板与模型配置。 */
+  const handleStartRuntimeDebug = async (): Promise<void> => {
+    if (!workspaceRoot || runtimeDebugStatus === 'starting') return
+    setRuntimeDebugStatus('starting')
+    try {
+      const result = await startAgentRuntimeDebug(workspaceRoot)
+      setRuntimeDebugStatus('running')
+      void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot })
+      message.success(result.message)
+      Modal.success({
+        title: 'Agent Runtime 已启动',
+        content: (
+          <div>
+            <p>以下信息仅供本次临时调试，重新启动 Runtime 后会失效。</p>
+            <p>
+              Runtime 地址：
+              <Typography.Text copyable>{result.runtimeUrl}</Typography.Text>
+            </p>
+            <p>
+              Bearer Token：
+              <Typography.Text copyable>{result.debugGatewayToken}</Typography.Text>
+            </p>
+          </div>
+        )
+      })
+    } catch (error) {
+      setRuntimeDebugStatus('failed')
+      message.error(error instanceof Error ? error.message : 'Agent Runtime 启动失败。')
+    }
+  }
+
   return (
     <div className={cx('agent-development-detail')}>
       <header className={cx('agent-detail-hero')}>
@@ -45,13 +88,38 @@ export default function AgentDevelopmentDetail({
           <h2>{agent.label}</h2>
           <code>{agent.agentId}</code>
         </div>
-        <Button
-          disabled={disabled}
-          onClick={() => onStartDevelopment(agent)}
-          type="primary"
-        >
-          开始开发智能体
-        </Button>
+        <div className={cx('agent-detail-hero-actions')}>
+          <Tooltip title="临时调试使用：只启动工作区 agent-runtime，不执行智能体代码生成。">
+            <Button
+              className={cx(
+                'agent-runtime-debug-button',
+                runtimeDebugStatus === 'running' && 'is-running'
+              )}
+              danger={runtimeDebugStatus === 'failed'}
+              disabled={!workspaceRoot}
+              icon={
+                runtimeDebugStatus === 'running' ? (
+                  <CheckCircleOutlined />
+                ) : (
+                  <PlayCircleOutlined />
+                )
+              }
+              loading={runtimeDebugStatus === 'starting'}
+              onClick={() => void handleStartRuntimeDebug()}
+            >
+              {runtimeDebugStatus === 'starting'
+                ? '正在启动 Runtime'
+                : runtimeDebugStatus === 'running'
+                  ? '重新启动 Runtime'
+                  : runtimeDebugStatus === 'failed'
+                    ? '启动失败，重试'
+                  : '启动 Runtime'}
+            </Button>
+          </Tooltip>
+          <Button disabled={disabled} onClick={() => onStartDevelopment(agent)} type="primary">
+            开始开发智能体
+          </Button>
+        </div>
       </header>
 
       <section className={cx('agent-detail-section')}>

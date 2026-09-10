@@ -761,7 +761,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 
 职责：
 
-- 只执行 `owner=agent`、`task_type=agent.code` 的已批准任务；
+- 平台直接从正式 Agent Contract 将每个业务 Agent 编译为七个 `owner=agent`、`task_type=agent.code` 模块任务；生成应用不写独立 Definition；
 - 根据 TechnicalPlan `agent_contracts[]` 生成 Python 3.12 + DeepAgents sidecar、单 Agent 定义、API 工具适配和测试；
 - 只写任务授权的 `agent-runtime/**`，不能修改前端、Java 后端、正式规划产物、API 契约或 Build DAG；
 - 保持 Java 网关、内部 sidecar 路径、AG-UI SSE、受限用户上下文转发和禁止客户端直连的安全边界；

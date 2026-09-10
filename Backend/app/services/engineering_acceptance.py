@@ -89,6 +89,11 @@ def engineering_acceptance_contract_errors(task: dict[str, Any]) -> list[str]:
             check.get("kind") in {"file_operation", "repair_change"}
             for check in checks
         )
+        and not (
+            str(task.get("owner") or "") == "agent"
+            and str(task.get("task_type") or "") == "agent.code"
+            and any(check.get("kind") == "agent_module_contract" for check in checks)
+        )
     ):
         errors.append(f"Task {task_id} does not define any file operation acceptance check.")
     return errors
@@ -109,6 +114,13 @@ def _compile_task(
     checks: list[dict[str, Any]] = []
     if str(task.get("owner") or "") == "database":
         checks.extend(_database_checks(task))
+    elif (
+        str(task.get("owner") or "") == "agent"
+        and str(task.get("task_type") or "") == "agent.code"
+    ):
+        checks.extend(_file_operation_checks(task))
+        checks.append(_scope_boundary_check(task))
+        checks.append(_agent_module_contract_check(task))
     else:
         checks.extend(_file_operation_checks(task))
         checks.append(_scope_boundary_check(task))
@@ -131,6 +143,33 @@ def _compile_task(
             for check in checks
         ]
     return compiled
+
+
+def _agent_module_contract_check(task: dict[str, Any]) -> dict[str, Any]:
+    """为平台编译的 Agent 七模块任务生成身份与 Hash 检查。"""
+
+    source_refs = task.get("source_refs")
+    source_refs = source_refs if isinstance(source_refs, dict) else {}
+    return _check(
+        task,
+        kind="agent_module_contract",
+        description="Agent 模块任务必须绑定正式 Contract、模块配置和平台模板策略身份。",
+        target_paths=_string_list(task.get("allowed_paths")),
+        expected={
+            "agent_id": str(source_refs.get("agent_id") or ""),
+            "agent_module": str(source_refs.get("agent_module") or ""),
+            "agent_contract_sha256": str(
+                source_refs.get("agent_contract_sha256") or ""
+            ),
+            "module_config_sha256": str(
+                source_refs.get("module_config_sha256") or ""
+            ),
+            "template_commit": str(source_refs.get("template_commit") or ""),
+            "template_policy_sha256": str(
+                source_refs.get("template_policy_sha256") or ""
+            ),
+        },
+    )
 
 
 def _file_operation_checks(task: dict[str, Any]) -> list[dict[str, Any]]:

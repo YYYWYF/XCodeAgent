@@ -129,6 +129,8 @@ def _verify_check(
         return _verify_repair_change(check, status=status, changes=changes, root=root)
     if kind == "scope_boundary":
         return _verify_scope_boundary(task, batch_unauthorized_paths)
+    if kind == "agent_module_contract":
+        return _verify_agent_module_contract(check, task=task)
     if kind == "page_entry":
         return _verify_page_entry(check, root=root)
     if kind == "page_default_export":
@@ -144,6 +146,57 @@ def _verify_check(
     if kind == "backend_authorization":
         return _verify_backend_authorization(check, root=root)
     return f"不支持的工程验收检查类型：{kind or '<empty>'}", "检查类型无法执行。"
+
+
+def _verify_agent_module_contract(
+    check: dict[str, Any],
+    *,
+    task: dict[str, Any],
+) -> tuple[str | None, str]:
+    """验证七模块任务仍绑定平台编译的完整身份字段。"""
+
+    expected = check.get("expected")
+    expected = expected if isinstance(expected, dict) else {}
+    source_refs = task.get("source_refs")
+    source_refs = source_refs if isinstance(source_refs, dict) else {}
+    module_name = str(source_refs.get("agent_module") or "")
+    if module_name not in {
+        "prompt",
+        "model",
+        "memory",
+        "tools",
+        "skills",
+        "knowledge",
+        "context",
+    }:
+        return "Agent 模块身份无效。", "source_refs.agent_module 未解析到七模块。"
+    fields = (
+        "agent_id",
+        "agent_module",
+        "agent_contract_sha256",
+        "module_config_sha256",
+        "template_commit",
+        "template_policy_sha256",
+    )
+    mismatched = [
+        field
+        for field in fields
+        if not str(source_refs.get(field) or "")
+        or str(source_refs.get(field) or "") != str(expected.get(field) or "")
+    ]
+    if mismatched:
+        return (
+            "Agent 模块任务身份不完整或已漂移：" + "、".join(mismatched) + "。",
+            "任务 source_refs 与平台编译的验收身份不一致。",
+        )
+    for field in (
+        "agent_contract_sha256",
+        "module_config_sha256",
+        "template_policy_sha256",
+    ):
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(source_refs[field])):
+            return f"Agent 模块任务的 {field} 无效。", "Hash 格式校验失败。"
+    return None, f"已绑定 Agent {source_refs['agent_id']} 的 {module_name} 模块身份。"
 
 
 def _verify_file_operation(

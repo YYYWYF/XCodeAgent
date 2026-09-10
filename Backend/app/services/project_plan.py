@@ -1817,13 +1817,12 @@ def _technical_endpoint_contract_index(
     }
 
 
-def _technical_agent_artifacts(agent_id: str) -> dict[str, str]:
-    """根据 lower_snake_case agentId 生成独立 Python sidecar 产物路径。"""
+def _technical_agent_artifacts() -> dict[str, Any]:
+    """声明业务 Agent 复用当前模板组合根和测试目录。"""
 
     return {
-        "agentPath": f"agent-runtime/src/app/agent/{agent_id}.py",
-        "toolAdapterPath": f"agent-runtime/src/app/tools/{agent_id}_tools.py",
-        "testPath": f"agent-runtime/tests/test_{agent_id}.py",
+        "compositionPath": "agent-runtime/src/app/agent/factory.py",
+        "testRoot": "agent-runtime/tests",
     }
 
 
@@ -2348,7 +2347,7 @@ def _technical_agent_contracts(
             "trigger": "missing_required_context",
             "maxRounds": 3 if supports_multi_turn else 0,
         }
-        artifacts = _technical_agent_artifacts(agent_id)
+        artifacts = _technical_agent_artifacts()
         contracts.append(
             {
                 "agentId": agent_id,
@@ -2385,9 +2384,7 @@ def _technical_agent_contracts(
                 "security": deepcopy(AGENT_SECURITY_CONTRACT),
                 "artifacts": artifacts,
                 "requiredChecks": [
-                    "uv run --project agent-runtime python -m py_compile "
-                    f"{artifacts['agentPath']} {artifacts['toolAdapterPath']}",
-                    f"uv run --project agent-runtime pytest {artifacts['testPath']}",
+                    "uv run --project agent-runtime pytest -q",
                 ],
                 "evaluation": {
                     "productAcceptanceCriteria": deepcopy(

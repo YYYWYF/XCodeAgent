@@ -4,7 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.graph.nodes.development_readiness import development_readiness_gate
+from app.graph.nodes.tasks import _agent_generation_unit_ids
 from app.services.agent_development_readiness import inspect_agent_development_readiness
+from app.services.build_context_resolver import resolve_target_build_context
 
 
 class AgentDevelopmentReadinessTests(unittest.TestCase):
@@ -96,6 +99,146 @@ class AgentDevelopmentReadinessTests(unittest.TestCase):
 
         self.assertTrue(result["ready"])
         self.assertEqual(result["blockers"], [])
+
+    def test_agent_gate_allows_explicit_entity_binding_bypass(self) -> None:
+        """用户显式确认后只跳过 Agent 的实体绑定阻断。"""
+
+        with patch(
+            "app.graph.nodes.development_readiness.inspect_agent_development_readiness",
+            return_value={
+                "ready": False,
+                "missing_entities": [
+                    {"entity_id": "inventory", "entity_name": "库存"}
+                ],
+                "blockers": [
+                    {
+                        "type": "entity_source_binding",
+                        "target_id": "inventory",
+                        "message": "库存实体尚未完成数据源绑定。",
+                    }
+                ],
+            },
+        ):
+            result = development_readiness_gate(
+                {
+                    "project_plan": {
+                        "artifact_type": "technical-plan",
+                        "agent_contracts": [{"agentId": "support_agent"}],
+                    },
+                    "selected_agent_id": "support_agent",
+                    "workspace": "/tmp/agent-readiness-test",
+                    "agent_entity_binding_bypass": {
+                        "confirmed": True,
+                        "agent_id": "support_agent",
+                    },
+                }
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(
+            result["development_readiness"]["entity_binding_bypassed"]
+        )
+
+    def test_agent_gate_exposes_manual_skip_only_for_entity_blockers(self) -> None:
+        """只有 Agent 且只缺实体绑定时才向前端公开跳过动作。"""
+
+        with patch(
+            "app.graph.nodes.development_readiness.inspect_agent_development_readiness",
+            return_value={
+                "ready": False,
+                "missing_entities": [
+                    {"entity_id": "inventory", "entity_name": "库存"}
+                ],
+                "blockers": [
+                    {
+                        "type": "entity_source_binding",
+                        "target_id": "inventory",
+                        "message": "库存实体尚未完成数据源绑定。",
+                    }
+                ],
+            },
+        ):
+            result = development_readiness_gate(
+                {
+                    "project_plan": {
+                        "artifact_type": "technical-plan",
+                        "agent_contracts": [{"agentId": "support_agent"}],
+                    },
+                    "selected_agent_id": "support_agent",
+                    "workspace": "/tmp/agent-readiness-test",
+                }
+            )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertTrue(
+            result["clarification"]["can_skip_agent_entity_binding"]
+        )
+
+    def test_agent_bypass_build_context_defers_entities_and_uses_python_units(self) -> None:
+        """跳过后的 Build Context 保留待联调实体，但只选 Python Unit。"""
+
+        context = resolve_target_build_context(
+            {
+                "entities": [{"id": "inventory", "name": "库存"}],
+                "entity_detail_plans": [],
+                "frontend_pages": [],
+                "page_implementation_contracts": [],
+                "api_contracts": [
+                    {
+                        "id": "inventory_api",
+                        "entity_ids": ["inventory"],
+                        "endpoints": [{"id": "inventory_api.query"}],
+                    },
+                    {
+                        "id": "agent_gateway_api",
+                        "entity_ids": ["inventory"],
+                        "endpoints": [{"id": "agent_gateway_api.message"}],
+                    },
+                ],
+                "agent_contracts": [
+                    {
+                        "agentId": "support_agent",
+                        "invocation": {
+                            "gatewayEndpointId": "agent_gateway_api.message"
+                        },
+                        "agentSettings": {
+                            "tools": {
+                                "bindings": [
+                                    {
+                                        "toolId": "query_inventory",
+                                        "endpoint": {
+                                            "apiContractId": "inventory_api",
+                                            "endpointId": "inventory_api.query",
+                                        },
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                ],
+            },
+            target_type="agent",
+            target_id="support_agent",
+            product_plan={
+                "agents": [{"agentId": "support_agent", "entryPageIds": []}]
+            },
+            allow_deferred_agent_entities=True,
+        )
+
+        self.assertEqual(context["deferred_entity_ids"], ["inventory"])
+        self.assertEqual(
+            _agent_generation_unit_ids(
+                {
+                    "build_units": {
+                        "agent:runtime": {},
+                        "agent:support_agent": {},
+                        "backend:endpoint:inventory_api:inventory_api.query": {},
+                    }
+                },
+                "support_agent",
+            ),
+            ["agent:runtime", "agent:support_agent"],
+        )
 
 
 if __name__ == "__main__":

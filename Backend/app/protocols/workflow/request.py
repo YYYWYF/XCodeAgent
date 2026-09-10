@@ -322,6 +322,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     entity_source_binding_submission = _entity_source_binding_submission(clarification_answers)
     entity_design_action = _entity_design_action(clarification_answers)
+    skip_agent_entity_binding = _skip_agent_entity_binding(clarification_answers)
     if entity_source_binding_submission or entity_design_action:
         resume_from = "entity_source_binding"
     acceptance_decision = _page_acceptance_decision(clarification_answers)
@@ -391,6 +392,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selected_endpoint_id = ""
         selected_api_contract_id = ""
         selected_entity_id = ""
+    if skip_agent_entity_binding:
+        if _clarification_mode(resume_state) != "entity_source_binding_required":
+            raise ValueError("只能从 Agent 实体绑定门禁显式跳过当前前置。")
+        if not selected_agent_id:
+            raise ValueError("跳过实体绑定必须定位到当前 Agent。")
+        resume_from = "development_readiness_gate"
     workspace = (
         _optional_text(payload.get("workspace"))
         or _optional_text(payload.get("workspaceRoot"))
@@ -757,6 +764,16 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
         **({"entity_design_action": entity_design_action} if entity_design_action else {}),
+        **(
+            {
+                "agent_entity_binding_bypass": {
+                    "confirmed": True,
+                    "agent_id": selected_agent_id,
+                }
+            }
+            if skip_agent_entity_binding
+            else {}
+        ),
         **({"ui_design_action": ui_design_action} if ui_design_action else {}),
         **({"acceptance_decision": acceptance_decision} if acceptance_decision else {}),
         **(
@@ -1477,6 +1494,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "data_source_spec_draft",
         "detail_plans",
         "entity_source_binding_submission",
+        "agent_entity_binding_bypass",
         "workspace_snapshot_summary",
         "workspace_snapshot_path",
         "workspace_snapshot_hash",
@@ -2347,6 +2365,19 @@ def _entity_source_binding_submission(value: Any) -> dict[str, Any] | None:
     if submission.get("review_status") != "confirmed":
         return None
     return submission
+
+
+def _skip_agent_entity_binding(value: Any) -> bool:
+    """读取 Agent 实体绑定门禁的显式手动跳过动作。"""
+
+    if not isinstance(value, dict) or "agent_entity_binding_skip" not in value:
+        return False
+    submission = value.get("agent_entity_binding_skip")
+    if not isinstance(submission, dict):
+        raise ValueError("agent_entity_binding_skip 必须是结构化对象。")
+    if _optional_text(submission.get("action")).lower() != "skip":
+        raise ValueError("agent_entity_binding_skip.action 只支持 skip。")
+    return True
 
 
 def _entity_design_action(value: Any) -> dict[str, Any] | None:

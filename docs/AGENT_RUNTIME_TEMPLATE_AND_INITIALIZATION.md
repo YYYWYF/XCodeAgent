@@ -36,7 +36,7 @@
 - `agent` owner 和 `/agent-runtime/**` 写边界；
 - 业务 Agent、工具适配器和测试使用 `src/app/agent/`、`src/app/tools/` 与 `tests/` 下的确定性路径。
 
-当前模板初始化已条件式处理 `frontend`、`backend` 和 `agent-runtime`，并在进入开发前执行 manifest 与真实 Git 来源门禁。项目启动、测试和代码审查尚未完整覆盖 Agent Runtime，不能据此把初始化完成误记为运行闭环。
+当前模板初始化已条件式处理 `frontend`、`backend` 和 `agent-runtime`，并在进入开发前执行模板生成记录与真实 Git 来源门禁。项目启动、测试和代码审查尚未完整覆盖 Agent Runtime，不能据此把初始化完成误记为运行闭环。
 
 ## 4. 模板、平台与 Build 的所有权
 
@@ -44,16 +44,14 @@
 | --- | --- | --- | --- |
 | Runtime 入口、AG-UI 适配、健康检查 | Agent Runtime 模板 | TechnicalPlan 确认后的模板初始化 | 否 |
 | 模型工厂、可信上下文、交互恢复、checkpoint | Agent Runtime 模板 | TechnicalPlan 确认后的模板初始化 | 否 |
-| `src/app/agent/factory.py` 内置 Chat 与业务 Agent 动态装配 | Agent Runtime 模板 | TechnicalPlan 确认后的模板初始化 | 否 |
+| `src/app/agent/factory.py` 内置 Chat 与业务 Agent 组合根 | Agent Runtime 模板 | TechnicalPlan 确认后的模板初始化 | 仅平台路径策略授权的模块任务 |
 | 模板仓库 URL、分支、commit、readiness | XCodeAgent 平台 | 模板初始化 | 否 |
-| `src/app/agent/<agentId>.py` | Agent Build CodeRunner | Build DAG 确认后 | 仅对应 `agent:<agentId>` 任务 |
-| `src/app/tools/<agentId>_tools.py` | Agent Build CodeRunner | Build DAG 确认后 | 仅对应 `agent:<agentId>` 任务 |
-| `tests/test_<agentId>.py` | Agent Build CodeRunner | Build DAG 确认后 | 仅对应 `agent:<agentId>` 任务 |
+| Prompt/Model/Memory/Tools/Skills/Knowledge/Context 修改或扩展 | Agent Build CodeRunner | 七模块 Build DAG 确认后 | 仅平台路径策略与当前任务授权交集 |
 | Java Agent Gateway | Backend/Data Source Build Agent | Build DAG 确认后 | 仅对应 Java 后端任务 |
 | 页面 Agent 入口 | Frontend Build Agent | Build DAG 确认后 | 仅对应前端页面任务 |
 | 模型密钥和内部网关凭证 | 部署环境 | 启动时 | 否，且不得落盘到正式产物 |
 
-模板基础设施属于平台。业务 Agent CodeRunner 只能写入明确授权的 `src/app/agent/<agentId>.py`、`src/app/tools/<agentId>_tools.py` 和对应测试，不得修改 Server、Models、Interaction、Persistence、依赖基线、启动入口或安全边界。需要改变模板基础设施时，应升级独立模板仓库并重新走模板设计、验证和发布流程。
+模板服务入口和安全基础设施属于平台。业务 Agent CodeRunner 只能写入平台内置路径策略与当前七模块任务共同授权的 composition、adapter 和 test 路径，不固定生成业务类或包装文件。需要改变模板基础设施时，应升级独立模板仓库并同步 XCodeAgent 策略、验证和发布流程。
 
 ## 5. 最小模板仓库
 
@@ -104,7 +102,7 @@ agent-runtime/
     └── test_runtime.py
 ```
 
-`src/app/agent/` 是唯一 Agent 装配目录，`src/app/tools/` 是唯一工具目录。当前最小 `chat` Agent 直接在 `agent/factory.py` 中调用 `create_deep_agent`，不再为了默认 Agent 单独建立文件或根目录代码树；它只负责证明模型、Deep Agents、checkpoint 与 Chat 传输能够连通，不能作为业务 Agent 验收证据。对于其他合法 `lower_snake_case` ID，Factory 动态导入 `app.agent.<agent_id>`，并调用该模块的固定 `create_agent(*, model, runtime_context, checkpointer)` 入口；不存在的模块和缺少入口的模块分别返回稳定的 `agent_not_found` 与 `invalid_agent_module` 错误。
+`src/app/agent/` 是唯一 Agent 装配目录，`src/app/tools/` 是唯一通用工具目录。当前最小 `chat` Agent 直接在 `agent/factory.py` 中调用 `create_deep_agent`，只负责证明模型、Deep Agents、checkpoint 与 Chat 传输能够连通。其他合法 `lower_snake_case` ID 必须在 Factory 的 Builder 注册表中显式注册；未知 ID 返回稳定的 `agent_not_found`。平台优先把业务 Prompt、工具和装配逻辑写入现有组合根，不要求为每个 Agent 创建同名 Python 文件。
 
 模板自身的基础设施契约测试可以保存在 `tests/`；它们只验证健康检查、内部认证、AG-UI 生命周期、流式文本和 checkpoint 交互恢复，不声明任何业务 Agent 已完成。
 
@@ -122,7 +120,7 @@ agent-runtime/
 | `server/app.py` | FastAPI 应用工厂和稳定路由注册 |
 | `server/health.py` | `/health`；返回有界运行状态，不泄露配置和凭证 |
 | `server/agui.py` | `/internal/agents/{agent_id}/run`；AG-UI 输入校验与事件流输出 |
-| `agent/factory.py` | 校验 Agent ID；直接创建内置 `chat`，或动态加载 `app.agent.<agent_id>.create_agent` 并注入模型、可信上下文和 checkpointer |
+| `agent/factory.py` | 校验 Agent ID；直接创建内置 `chat`，并通过显式 Builder 注册表装配业务 Agent |
 | `agent/context.py` | Java 网关注入的可信用户、租户、权限和 trace 上下文 |
 | `models/factory.py` | 使用 `init_chat_model` 根据项目默认配置创建支持 streaming 的 ChatModel |
 | `tools/__init__.py` | 保留原设计中的应用内工具扩展包；最小模板不预置业务工具实现 |
@@ -357,7 +355,7 @@ Agent Runtime 模板的规范仓库固定为 `https://github.com/Bettetman/agent
 - `src/app/agent/`、`src/app/tools/` 和 `tests/` 是真实目录；
 - 模板不包含真实 `.env` 或其他已知敏感文件。
 
-模板门禁不要求任何 `src/app/agent/<agentId>.py`、`src/app/tools/<agentId>_tools.py` 或 `tests/test_<agentId>.py`，因为这些业务文件只能在 Build DAG 确认后生成。
+模板门禁不要求 Manifest、Definition Loader、`agent/tools.py` 或任何固定命名的业务 Python 文件；真实实现位置由 XCodeAgent 平台路径策略和七模块任务决定。
 
 ## 11. Build DAG 调整
 
@@ -375,19 +373,11 @@ Agent Runtime 模板的规范仓库固定为 `https://github.com/Bettetman/agent
 
 ### 11.2 `agent:<agentId>`
 
-每个业务 Agent Unit 继续只生成：
-
-```text
-agent-runtime/src/app/agent/<agent_id>.py
-agent-runtime/src/app/tools/<agent_id>_tools.py
-agent-runtime/tests/test_<agent_id>.py
-```
-
-Backend TechnicalPlan/Build 契约与第三模板统一使用上述应用包内路径，不保留根级 `agents/`、`tools/` 旧路径兼容。
+每个业务 Agent Unit 由平台固定编译 Prompt、Model、Memory、Tools、Skills、Knowledge、Context 七个 `agent.code` 任务。模块优先复用或修改平台路径策略声明的现有入口，只有模板无法承载时才在授权 Adapter/Test 根目录新增最小文件；生成应用不写独立 Manifest 或 Definition。
 
 约束：
 
-- Agent 模块暴露固定的 `create_agent(*, model, runtime_context, checkpointer)` 构造入口，复用模板通过 `init_chat_model` 创建并注入的项目默认模型，不得二次初始化模型；
+- Agent 组合根复用模板通过 `init_chat_model` 创建并注入的项目默认模型，不得二次初始化模型；
 - Tool Adapter 只能调用同一 TechnicalPlan 中声明的 Java API Endpoint；
 - Tool Adapter 通过模板 Settings 读取 `AGENT_RUNTIME_BACKEND_BASE_URL` 与 `AGENT_RUNTIME_TOOL_GATEWAY_TOKEN`，前者只能是无账号、密码、query、fragment 和业务路径的 HTTP(S) Origin，后者不得进入源码、日志或模型上下文；
 - 测试覆盖 Agent 构造、能力绑定、工具输入输出边界和至少一个 AG-UI 对话路径；
@@ -419,6 +409,20 @@ Project Launch 在存在业务 Agent 时必须同时验证：
 Java backend 与 Agent Runtime 互相提供运行能力，健康检查不得通过同步调用对方形成启动死锁。基础 `/health` 只判断本进程与必要本地依赖；跨服务连通性由 Launch/Integration Testing 单独检查。
 
 任一 required 服务启动失败时不启动 Frontend preview，不把部分启动伪装成成功。停止时先停止 Frontend preview，再停止 Agent Runtime 和 Java backend，并清理本轮进程句柄；不删除工作区、checkpoint 或用户产物。
+
+XCodeAgent 托管启动 Agent Runtime 时，模型配置使用显式白名单兜底，不开放读取 XCodeAgent 环境变量的 HTTP 接口：
+
+```text
+工作区 MODEL_* / AGENT_*
+  -> XCODEAGENT_FALLBACK_MODEL_* / XCODEAGENT_FALLBACK_AGENT_*
+  -> 模板数值默认值
+```
+
+启动器必须先从 Runtime 子进程的继承环境移除普通 `MODEL_*`、`AGENT_*` 模型项，再注入 `XCODEAGENT_FALLBACK_*`，确保模板根目录 `.env` 中的项目配置保持最高优先级。白名单只包含模型 Base URL、API Key、模型名、超时、重试、温度和输出上限；不得复制完整 `os.environ` 为 fallback，也不得把 fallback 值写入 manifest、AG-UI state、启动结果或日志。每次 Runtime 启动还必须生成一枚仅在该进程生命周期有效的随机 `AGENT_RUNTIME_GATEWAY_TOKEN` 并直接注入子进程，工作区无需为托管启动创建 `.env`。独立终端启动 Runtime 时不具备这些托管配置，仍需项目自己的 `.env`。
+
+工作台 Agent 详情在“开始开发智能体”之前提供带悬浮说明的“启动 Runtime”临时调试按钮。该按钮通过独立 `/agent-runtime-debug/run` AG-UI 动作直接启动当前受管工作区的 `agent-runtime/`，不进入主 Workflow、不执行 Agent 代码生成，也不连带启动 Java 或前端。成功返回进程、readiness、loopback Runtime 地址和本次启动专用的临时 Bearer Token，供用户在本机复制执行 `curl`；重新启动后旧 Token 立即失效。模型 fallback、物理路径和普通项目预览的内部凭据仍不得进入 Renderer。
+
+显式调试启动还会把当前状态写入工作区 `.xcodeagent/runtime/launch/agent-runtime-debug.json`，字段包含 `status`、`service`、`host`、`port`、`health`、`reused`、`errorCode`、`message` 和 `debugToken`。文件权限在 POSIX 上固定为 `0600`，重新启动时原子覆盖；停止 Runtime 后状态改为 `stopped` 并把 `debugToken` 清空。后续启动会先安全清理该工作区旧 Runtime，再优先复用文件中的上次端口；端口被其他服务占用时只重新分配，不会按端口直接终止占用者。PID 文件恢复必须以 Runtime 命令标识和精确工作目录（Windows 为命令中的精确工作区路径）作为两项身份依据；任一依据缺失或不匹配都拒绝终止并停止新启动。工作区启动锁和清理失败即停止的规则保证 XCodeAgent 不会为同一工作区并发创建多个受管 Runtime。该文件只服务本机临时调试，不属于生成应用源码或正式运行配置。
 
 ### 12.3 健康返回
 
@@ -581,21 +585,19 @@ Runtime Chat 自身使用独立的 Java gateway Endpoint 和 Python internal pat
 当前未完成：
 
 - 尚未使用真实模型密钥验证内置 Chat 或生成一个真实业务 Agent；
-- 尚未接入 Java Agent Gateway、Python Tool Adapter、Testing、Code Review、Project Launch 和 Electron；
+- 尚未接入 Java Agent Gateway、Python Tool Adapter、Testing、Code Review 和 Electron；Project Launch 已能按 manifest 条件托管 Runtime 进程并注入模型 fallback，但尚未完成 Java Gateway 双向地址与内部凭据联调；
 - 尚未完成真实业务 Chat、工具调用、澄清/确认和重启恢复的端到端验收。
 
-## 20. Agent Contract 到业务 Runtime 生成实现记录
+## 20. Agent Contract 到业务 Runtime 的当前生成边界
 
-2026-09-06 完成阶段 C 的首个最小切片，使完整 Agent Contract 能够进入模板约束下的业务 Agent 代码生成：
+- 模板 Factory 保留可独立运行的内置 `chat`，并通过显式 Builder 注册表解析业务 Agent；未知 ID fail-closed；
+- 模型、可信上下文和 SQLite checkpointer 由模板注入，业务生成代码不得再次调用 `init_chat_model`；
+- XCodeAgent 的 `agent-runtime-generate` Skill 每次只处理一个七模块任务，物理读写范围来自任务携带的平台路径策略；
+- Prompt 等简单能力优先修改 `src/app/agent/factory.py`，不得按约定机械创建 `<agent_id>.py`；Tools、Skills、Knowledge 只有在正式 Contract 启用、现有模板无法承载且任务授权新增根时才增加文件；
+- Tool 身份来自可信 `RuntimeContext`，只能调用 Contract 声明的 Java Endpoint；Java Gateway 未实现时保持 fail-closed，但不阻断 Python 结构生成；
+- 当前七模块 DAG 与专用 Runner 已建立，模板感知 CodeRunner 的真实写入仍未启用，因此不会把无代码 Diff 的任务误报完成。
 
-- 模板 Factory 保留可独立运行的内置 `chat`，并按合法 Agent ID 动态加载 `app.agent.<agent_id>`；业务模块缺失或接口不合法时返回稳定错误，不修改 Factory 注册表；
-- 业务模块固定公开 `create_agent(*, model, runtime_context, checkpointer)`，模型、可信上下文和 SQLite checkpointer 均由模板注入；业务生成代码不得再次调用 `init_chat_model`；
-- Runtime Settings 增加 `AGENT_RUNTIME_BACKEND_BASE_URL` 与 `AGENT_RUNTIME_TOOL_GATEWAY_TOKEN`，Java 地址只接受安全 HTTP(S) Origin，凭据缺失时 fail fast；
-- XCodeAgent 新增内置 `agent-runtime-generate` Skill，强制业务 CodeRunner 先读取模板接口，再按需读取业务 Agent 与 Java Tool Adapter 规则；
-- Generator 只把当前任务对应的完整 Agent Contract，以及 Tool `apiContractId` 实际引用的 Java API Contract/Schema 投射给 CodeRunner，不泄露无关 API；
-- 每个业务 Agent 仍只拥有 Agent 模块、Tool Adapter 和聚焦测试三个确定性路径；Tool 身份来自可信 `RuntimeContext`，只能调用 Contract 声明的 Java Endpoint。
-
-本切片闭合的是“正式 Contract → 受控业务 Python 文件生成接口”，不代表 Java Gateway、真实业务 Agent E2E、Testing、Code Review 或 Project Launch 已完成。
+当前边界不代表 Java Gateway、真实业务 Agent E2E、Testing、Code Review 或完整 Project Launch 联调已完成。
 
 发布与验证记录：
 

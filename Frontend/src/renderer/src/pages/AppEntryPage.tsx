@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { SessionRuntimeProvider } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
 import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
 import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlannings'
-import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
+import {
+  latestApplicationLifecycle,
+  useApplicationLifecycleStore
+} from '../hooks/useApplicationLifecycleStore'
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
@@ -271,6 +274,10 @@ function AppEntryContent(): JSX.Element {
         (item) => item.application.id === activeApplication.id
       )
     : undefined
+  // 模板准备属于规划容器持有的独立异步任务；失败或成功快照必须立即覆盖工作台旧加载态。
+  const workbenchApplicationLifecycle = activePlanning?.lifecycle
+    ? latestApplicationLifecycle(applicationLifecycle, activePlanning.lifecycle)
+    : applicationLifecycle
   const activePlanningThreadId = activePlanning?.threadId
   useEffect(() => {
     activePlanningThreadIdRef.current = activePlanningThreadId
@@ -442,7 +449,7 @@ function AppEntryContent(): JSX.Element {
         >
           <WorkbenchPage
             application={activeApplication}
-            applicationLifecycle={applicationLifecycle}
+            applicationLifecycle={workbenchApplicationLifecycle}
             onApplicationLifecycleChange={mergeApplicationLifecycle}
             onReturnWelcome={handleReturnWelcome}
             onSubmitPlanningClarification={(

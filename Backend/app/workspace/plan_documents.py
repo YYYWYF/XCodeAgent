@@ -932,9 +932,8 @@ def _technical_agent_contract_markdown(contract: dict[str, Any]) -> str:
             "",
             f"- 调用：{invocation.get('transport', '')} → `{invocation.get('internalPath', '')}`",
             f"- 安全：客户端直连={'允许' if security.get('directClientAccess') else '禁止'}；工具授权={security.get('toolAuthorization', '')}",
-            f"- Agent 代码：`{artifacts.get('agentPath', '')}`",
-            f"- 工具适配：`{artifacts.get('toolAdapterPath', '')}`",
-            f"- 测试：`{artifacts.get('testPath', '')}`",
+            f"- Agent 组合入口：`{artifacts.get('compositionPath', '')}`",
+            f"- Agent 测试目录：`{artifacts.get('testRoot', '')}`",
             *[
                 f"- Required check：`{item}`"
                 for item in _text_items(contract.get("requiredChecks"))

@@ -1,5 +1,5 @@
 import { ArrowRightOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
-import { Button, Tag, Typography } from 'antd'
+import { Button, Tag, Tooltip, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 
@@ -11,18 +11,22 @@ type EntityDesignGateEntity = {
 }
 
 type EntityDesignGateCardProps = {
+  allowAgentSkip?: boolean
   disabled?: boolean
   explanation: string
   entities: EntityDesignGateEntity[]
   onJump: (entityId: string) => void
+  onSkipAgentBinding?: () => void
 }
 
 /** 实体数据源绑定门禁卡片：展示尚缺实体并在当前会话补齐前置条件。 */
 export default function EntityDesignGateCard({
+  allowAgentSkip,
   disabled,
   explanation,
   entities,
-  onJump
+  onJump,
+  onSkipAgentBinding
 }: EntityDesignGateCardProps): ReactElement {
   return (
     <div className={cx('workflow-entity-gate-card')}>
@@ -60,7 +64,18 @@ export default function EntityDesignGateCard({
         </div>
       ) : null}
       <div className={cx('workflow-entity-gate-actions')}>
-        <Text type="secondary">全部所需实体确认后，会显示原任务的继续开发按钮。</Text>
+        <Text type="secondary">
+          {allowAgentSkip
+            ? '可暂时跳过本次绑定以测试 Python Agent；未接入的 Tool 不会伪装成功。'
+            : '全部所需实体确认后，会显示原任务的继续开发按钮。'}
+        </Text>
+        {allowAgentSkip ? (
+          <Tooltip title="仅跳过当前 Agent 执行，页面和 API 开发门禁不受影响">
+            <Button disabled={disabled} onClick={onSkipAgentBinding} size="small">
+              暂时跳过
+            </Button>
+          </Tooltip>
+        ) : null}
       </div>
     </div>
   )

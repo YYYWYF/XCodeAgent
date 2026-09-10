@@ -82,9 +82,8 @@ class BuildUnitSkeletonTests(unittest.TestCase):
                         }
                     },
                     "artifacts": {
-                        "agentPath": "agent-runtime/src/app/agent/inventory_assistant.py",
-                        "toolAdapterPath": "agent-runtime/src/app/tools/inventory_assistant_tools.py",
-                        "testPath": "agent-runtime/tests/test_inventory_assistant.py",
+                        "compositionPath": "agent-runtime/src/app/agent/factory.py",
+                        "testRoot": "agent-runtime/tests",
                     },
                 }
             ],

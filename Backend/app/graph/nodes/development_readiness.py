@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from app.graph.state import ProjectState
-from app.services.agent_development_readiness import inspect_agent_development_readiness
+from app.services.agent_development_readiness import (
+    agent_entity_binding_bypass_matches,
+    inspect_agent_development_readiness,
+)
 from app.services.development_readiness import development_readiness
 from app.services.frontend_page_tree import project_plan_page_records
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
@@ -45,16 +48,37 @@ def development_readiness_gate(state: ProjectState) -> dict:
             api_contract_id=str(state.get("selected_api_contract_id") or "").strip() or None,
         )
     )
-    if readiness["ready"]:
+    blockers = readiness.get("blockers") or []
+    agent_binding_bypassed = (
+        target_type == "agent"
+        and agent_entity_binding_bypass_matches(
+            state.get("agent_entity_binding_bypass"),
+            target_id,
+        )
+        and not any(
+            isinstance(item, dict) and item.get("type") != "entity_source_binding"
+            for item in blockers
+        )
+    )
+    if readiness["ready"] or agent_binding_bypassed:
+        effective_readiness = (
+            {
+                **readiness,
+                "ready": True,
+                "blockers": [],
+                "entity_binding_bypassed": True,
+            }
+            if agent_binding_bypassed
+            else readiness
+        )
         return {
             "phase": "development_readiness_gate",
             "status": "completed",
-            "development_readiness": readiness,
+            "development_readiness": effective_readiness,
             "clarification": {},
             "timeline": ["development_readiness_gate"],
         }
     missing = readiness["missing_entities"]
-    blockers = readiness.get("blockers") or []
     if target_type == "agent" and any(
         isinstance(item, dict) and item.get("type") != "entity_source_binding"
         for item in blockers
@@ -132,6 +156,15 @@ def development_readiness_gate(state: ProjectState) -> dict:
             "status": "requires_user_input",
             "message": "存在未完成的数据源绑定实体，当前开发目标已暂停。",
             "missing_entities": missing,
+            "can_skip_agent_entity_binding": (
+                target_type == "agent"
+                and bool(blockers)
+                and all(
+                    isinstance(item, dict)
+                    and item.get("type") == "entity_source_binding"
+                    for item in blockers
+                )
+            ),
             "development_target": {
                 "type": target_type,
                 "id": target_id,
