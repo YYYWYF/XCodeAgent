@@ -1,0 +1,520 @@
+"""T10.2 Catalog 基线与 T10.4 Tool Session 前置绑定 hardening 测试。"""
+
+from __future__ import annotations
+
+import json
+from tempfile import TemporaryDirectory
+import unittest
+
+from app.services.dag_planning_orchestrator import DagPlanningError, plan_dag_sequential
+from app.services.dag_planning_inputs import SequentialPlanningInputs
+from app.services.frozen_contract_catalog import FormalContractSourceRef
+from app.services.frozen_contract_store import FrozenContractStore
+from app.services.planning_frozen import plain_json
+from app.services.unit_generation_contracts import UnitGenerationAttemptResult, UnitGenerationPolicy
+from tests.dag_planning_baseline_fixtures import build_context, execution_scope, project_plan
+from tests.dag_planning_orchestrator_fixtures import model_tasks, planning_inputs
+from tests.planning_run_fixtures import AT
+from tests.test_unit_generation_contracts import _policy_payload
+from tests.test_unit_generation_orchestrator import _settings
+
+
+def _built_context(inputs, unit_id: str, *, planning_run_id: str = "catalog-run"):
+    """从完整冻结输入创建一次 Run、Store 和指定 Unit Context。"""
+
+    requirements = inputs.requirements()
+    run = inputs.create_run(
+        requirements,
+        planning_run_id=planning_run_id,
+        workflow_run_id="workflow-run",
+        thread_id="thread",
+        at=AT,
+    )
+    store = FrozenContractStore.create(
+        planning_run_id=planning_run_id,
+        formal_inputs=inputs.formal_contract_inputs,
+    )
+    return store, inputs.unit_context(
+        run,
+        requirements,
+        unit_id,
+        frozen_contract_store=store,
+    )
+
+
+class UnitContractCatalogT102Tests(unittest.TestCase):
+    """T10.2：验证 Page/Endpoint catalog 严格按当前 Unit 的正式绑定收窄。"""
+
+    def test_page_allowlist_contains_only_current_page_contracts(self) -> None:
+        """Page 获得自身页面、接口、Endpoint API Design、权限和架构引用。"""
+
+        plan = project_plan(authorization=True)
+        scope = execution_scope(name="orders")
+        context = build_context(plan, scope)
+        inputs = planning_inputs(
+            plan=plan,
+            scope=scope,
+            context=context,
+            required=context["required_unit_ids"],
+        )
+        store, unit_context = _built_context(inputs, "page:orders")
+
+        catalog = unit_context.contract_catalog
+        self.assertEqual(
+            {entry.kind for entry in catalog},
+            {
+                "technical_plan", "page_contract", "api_contract",
+                "endpoint_api_design", "authorization_slice",
+            },
+        )
+        self.assertTrue(all(store.get(entry.ref_id) is not None for entry in catalog))
+        self.assertTrue(all(entry.selectors for entry in catalog))
+        catalog_sources = [plain_json(store[entry.ref_id].source) for entry in catalog]
+        self.assertIn({"artifact": "runtime-page-contracts", "page_id": "orders"}, catalog_sources)
+        self.assertNotIn({"artifact": "runtime-page-contracts", "page_id": "customers"}, catalog_sources)
+        self.assertNotIn("content", unit_context.model_dump(mode="json")["contract_catalog"][0])
+
+    def test_endpoint_allowlist_excludes_page_and_other_endpoint_contracts(self) -> None:
+        """Endpoint Unit 仅获得精确 API/设计/权限 fragment，不获得 Page 私有合同。"""
+
+        plan = project_plan(authorization=True)
+        scope = execution_scope(target_type="endpoint", name="orders")
+        context = build_context(plan, scope)
+        inputs = planning_inputs(
+            plan=plan,
+            scope=scope,
+            context=context,
+            required=context["required_unit_ids"],
+        )
+        store, unit_context = _built_context(
+            inputs,
+            "backend:endpoint:orders-api:orders.list",
+        )
+
+        contracts = [store[entry.ref_id] for entry in unit_context.contract_catalog]
+        self.assertNotIn("page_contract", {contract.kind for contract in contracts})
+        api_sources = [plain_json(contract.source) for contract in contracts if contract.kind == "api_contract"]
+        self.assertEqual(
+            api_sources,
+            [{"artifact": "technical-plan.json", "api_contract_id": "orders-api"}],
+        )
+        endpoint_design_sources = [
+            plain_json(contract.source)
+            for contract in contracts
+            if contract.kind == "endpoint_api_design"
+        ]
+        self.assertEqual(
+            endpoint_design_sources,
+            [{
+                "artifact": "confirmed-endpoint-api-design",
+                "api_contract_id": "orders-api",
+                "endpoint_id": "orders.list",
+                "artifact_revision": "0123456789abcdef0123456789abcdef",
+            }],
+        )
+        api_entry = next(entry for entry in unit_context.contract_catalog if entry.kind == "api_contract")
+        self.assertIn("/endpoints/0", api_entry.selectors)
+
+    def test_unauthorized_other_page_ref_is_absent(self) -> None:
+        """同一 application 输入含两页绑定时，Page catalog 仍不泄漏另一页私有 ref。"""
+
+        plan = project_plan()
+        scope = {"type": "application", "targetId": "application"}
+        required = ["page:orders", "page:customers"]
+        inputs = planning_inputs(
+            plan=plan,
+            scope=scope,
+            required=required,
+            context={"scope": scope, "required_unit_ids": required, "target": scope},
+        )
+        store, unit_context = _built_context(inputs, "page:orders")
+        private_customer_ref = next(
+            contract.ref_id
+            for contract in store.contracts.values()
+            if contract.kind == "page_contract" and contract.content.get("pageId") == "customers"
+        )
+
+        self.assertNotIn(private_customer_ref, {entry.ref_id for entry in unit_context.contract_catalog})
+        self.assertIn(
+            "page:customers",
+            {source_ref.unit_id for source_ref in inputs.formal_source_refs},
+        )
+
+    def test_formal_source_order_is_canonical_for_input_fingerprint(self) -> None:
+        """顶层绑定及其 requirement/selector 换序不改变 Run 输入指纹。"""
+
+        unit_id = "backend:endpoint:orders-api:orders.list"
+        original = planning_inputs(
+            plan=project_plan(),
+            required=[unit_id],
+            scope=execution_scope(target_type="endpoint", name="orders"),
+        )
+        payload = original.model_dump(mode="json")
+        refs = payload["formal_source_refs"]
+        technical_indexes = [
+            index
+            for index, item in enumerate(refs)
+            if item["unit_id"] == unit_id and item["kind"] == "technical_plan"
+        ][:2]
+        self.assertEqual(len(technical_indexes), 2)
+        first, second = (refs[index] for index in technical_indexes)
+        combined = {
+            **first,
+            "requirement_ids": first["requirement_ids"] + second["requirement_ids"],
+        }
+        canonical_payload = json.loads(json.dumps(payload))
+        canonical_payload["formal_source_refs"] = [
+            item
+            for index, item in enumerate(refs)
+            if index not in technical_indexes
+        ] + [combined]
+        reordered_payload = json.loads(json.dumps(canonical_payload))
+        reordered_payload["formal_source_refs"].reverse()
+        for item in reordered_payload["formal_source_refs"]:
+            item["requirement_ids"].reverse()
+            item["selectors"].reverse()
+
+        canonical = SequentialPlanningInputs.model_validate(canonical_payload)
+        reordered = SequentialPlanningInputs.model_validate(reordered_payload)
+        requirements = canonical.requirements()
+        canonical_run = canonical.create_run(
+            requirements,
+            planning_run_id="canonical-run",
+            workflow_run_id="workflow-run",
+            thread_id="thread",
+            at=AT,
+        )
+        reordered_run = reordered.create_run(
+            reordered.requirements(),
+            planning_run_id="reordered-run",
+            workflow_run_id="workflow-run",
+            thread_id="thread",
+            at=AT,
+        )
+
+        self.assertEqual(canonical.formal_source_refs, reordered.formal_source_refs)
+        self.assertEqual(canonical_run.input_fingerprint, reordered_run.input_fingerprint)
+
+    def test_endpoint_design_formal_fields_change_planning_run_fingerprint(self) -> None:
+        """Endpoint Design 的 revision、映射、来源和上游摘要都属于 Run 身份。"""
+
+        unit_id = "backend:endpoint:orders-api:orders.list"
+        inputs = planning_inputs(
+            plan=project_plan(),
+            required=[unit_id],
+            scope=execution_scope(target_type="endpoint", name="orders"),
+        )
+        requirements = inputs.requirements()
+        original_run = inputs.create_run(
+            requirements,
+            planning_run_id="endpoint-design-original-run",
+            workflow_run_id="workflow-run",
+            thread_id="thread",
+            at=AT,
+        )
+        mutations = {
+            "artifactRevision": lambda content, source: (
+                content.__setitem__("artifactRevision", "fedcba9876543210fedcba9876543210"),
+                source.__setitem__("artifact_revision", "fedcba9876543210fedcba9876543210"),
+            ),
+            "fieldMappings": lambda content, _source: content["fieldMappings"][0][
+                "sourceFields"
+            ][0].__setitem__("column", "changed_id"),
+            "sourceSnapshots": lambda content, _source: content["sourceSnapshots"][0]["details"].__setitem__(
+                "schema", "changed"
+            ),
+            "basedOnTechnicalPlanDigest": lambda content, _source: content["basedOn"][0].__setitem__(
+                "sha256", "b" * 64
+            ),
+        }
+
+        for field, mutate in mutations.items():
+            payload = inputs.model_dump(mode="json")
+            formal = payload["formal_contract_inputs"]["endpoint_api_designs"][0]
+            mutate(formal["content"], formal["source"])
+            changed_inputs = SequentialPlanningInputs.model_validate(payload)
+            changed_run = changed_inputs.create_run(
+                requirements,
+                planning_run_id=f"endpoint-design-{field}-run",
+                workflow_run_id="workflow-run",
+                thread_id="thread",
+                at=AT,
+            )
+
+            with self.subTest(field=field):
+                self.assertNotEqual(
+                    changed_run.input_fingerprint,
+                    original_run.input_fingerprint,
+                )
+                self.assertEqual(
+                    changed_run.input_fingerprint,
+                    changed_inputs.input_fingerprint(),
+                )
+
+    def test_nested_formal_source_sequences_are_canonical(self) -> None:
+        """单条 binding 的 requirement_ids 与 selectors 在 DTO 边界稳定排序。"""
+
+        binding = FormalContractSourceRef(
+            unit_id="page:orders",
+            unit_kind="page",
+            requirement_ids=("requirement:b", "requirement:a"),
+            kind="page_contract",
+            source={"page_id": "orders", "artifact": "runtime-page-contracts"},
+            selectors=("/uiDesignRef", "/"),
+        )
+
+        self.assertEqual(binding.requirement_ids, ("requirement:a", "requirement:b"))
+        self.assertEqual(binding.selectors, ("/", "/uiDesignRef"))
+
+
+class UnitContractCatalogT104HardeningTests(unittest.IsolatedAsyncioTestCase):
+    """T10.4 hardening：验证 Tool Session 前的 catalog 复用与绑定 fail closed。"""
+
+    async def test_local_retry_uses_same_contract_catalog(self) -> None:
+        """首次内容失败与第二次成功 Attempt 使用完全相同的非空 catalog。"""
+
+        catalogs = []
+
+        async def generate(job, **_kwargs):
+            """首轮返回 owner 错误触发 Local retry，第二轮返回合法 Candidate。"""
+
+            catalogs.append(job.context.contract_catalog)
+            tasks = model_tasks(job)
+            if job.identity.attempt_in_round == 1:
+                tasks[0]["owner"] = "backend"
+            return UnitGenerationAttemptResult(
+                identity=job.identity,
+                input_fingerprint=job.context.input_fingerprint,
+                raw_response=json.dumps({"tasks": tasks}),
+                tasks=tasks,
+            )
+
+        with TemporaryDirectory() as directory:
+            result = await plan_dag_sequential(
+                planning_inputs(required=["page:a"]),
+                workspace_state={"workspace": directory},
+                planning_run_id="catalog-retry-run",
+                workflow_run_id="workflow-run",
+                thread_id="thread",
+                policy=UnitGenerationPolicy(**_policy_payload()),
+                settings=_settings(),
+                generate_once=generate,
+                now=lambda: AT,
+            )
+
+        self.assertEqual(len(catalogs), 2)
+        self.assertTrue(catalogs[0])
+        self.assertEqual(catalogs[0], catalogs[1])
+        self.assertEqual(result.planning_run.unit_states["page:a"].total_attempts, 2)
+
+    async def test_invalid_source_binding_is_fatal_before_model_dispatch(self) -> None:
+        """当前 Unit 绑定不存在的 Store 来源时不返回部分 catalog，也不进入 Local retry。"""
+
+        inputs = planning_inputs(required=["page:a"])
+        refs = [item.model_dump(mode="json") for item in inputs.formal_source_refs]
+        page_ref = next(item for item in refs if item["unit_id"] == "page:a" and item["kind"] == "page_contract")
+        # ref 本身真实存在，但属于另一 Page；这类错绑也必须 fail closed。
+        page_ref["source"] = {"artifact": "runtime-page-contracts", "page_id": "b"}
+        invalid = inputs.model_copy(update={"formal_source_refs": refs})
+        calls = []
+
+        async def generate(job, **_kwargs):
+            """记录意外模型调用；来源绑定失败时本函数不应执行。"""
+
+            calls.append(job)
+            raise AssertionError("invalid source binding 不得进入模型 dispatch")
+
+        with TemporaryDirectory() as directory, self.assertRaises(DagPlanningError) as caught:
+            await plan_dag_sequential(
+                invalid,
+                workspace_state={"workspace": directory},
+                planning_run_id="catalog-invalid-run",
+                workflow_run_id="workflow-run",
+                thread_id="thread",
+                policy=UnitGenerationPolicy(**_policy_payload()),
+                settings=_settings(),
+                generate_once=generate,
+                now=lambda: AT,
+            )
+
+        self.assertEqual(calls, [])
+        self.assertIsNone(caught.exception.snapshot)
+        self.assertEqual(caught.exception.issues[0].code, "UNIT_CONTRACT_SOURCE_BINDING_INVALID")
+        self.assertFalse(caught.exception.issues[0].retryable)
+
+    async def _assert_declared_refs_are_fatal(
+        self,
+        *,
+        inputs,
+        refs: list[dict],
+        planning_run_id: str,
+        expected_message: str,
+    ) -> None:
+        """断言多报或错类绑定在模型 dispatch 前以平台致命错误关闭。"""
+
+        invalid = inputs.model_copy(update={"formal_source_refs": refs})
+        calls = []
+
+        async def generate(job, **_kwargs):
+            """记录意外调用；不精确的声明清单不允许进入 Local attempt。"""
+
+            calls.append(job)
+            raise AssertionError("非精确正式来源绑定不得进入模型 dispatch")
+
+        with TemporaryDirectory() as directory, self.assertRaises(DagPlanningError) as caught:
+            await plan_dag_sequential(
+                invalid,
+                workspace_state={"workspace": directory},
+                planning_run_id=planning_run_id,
+                workflow_run_id="workflow-run",
+                thread_id="thread",
+                policy=UnitGenerationPolicy(**_policy_payload()),
+                settings=_settings(),
+                generate_once=generate,
+                now=lambda: AT,
+            )
+
+        self.assertEqual(calls, [])
+        self.assertIsNone(caught.exception.snapshot)
+        self.assertEqual(
+            caught.exception.issues[0].code,
+            "UNIT_CONTRACT_SOURCE_BINDING_INVALID",
+        )
+        self.assertFalse(caught.exception.issues[0].retryable)
+        self.assertIn(expected_message, caught.exception.issues[0].message)
+
+    async def test_extra_selector_is_fatal_before_model_dispatch(self) -> None:
+        """同一来源多报 selector 时必须按双向精确比较 fail closed。"""
+
+        inputs = planning_inputs(required=["page:a"])
+        refs = [item.model_dump(mode="json") for item in inputs.formal_source_refs]
+        page_ref = next(
+            item
+            for item in refs
+            if item["unit_id"] == "page:a" and item["kind"] == "page_contract"
+        )
+        page_ref["selectors"].append("/uiDesignRef")
+
+        await self._assert_declared_refs_are_fatal(
+            inputs=inputs,
+            refs=refs,
+            planning_run_id="catalog-extra-selector-run",
+            expected_message="未授权",
+        )
+
+    async def test_extra_source_is_fatal_before_model_dispatch(self) -> None:
+        """多报 Store 内真实但非当前职责所需的来源时必须 fail closed。"""
+
+        inputs = planning_inputs(required=["page:a"])
+        refs = [item.model_dump(mode="json") for item in inputs.formal_source_refs]
+        page_ref = next(
+            item
+            for item in refs
+            if item["unit_id"] == "page:a" and item["kind"] == "page_contract"
+        )
+        refs.append(
+            {
+                **page_ref,
+                "kind": "product_plan",
+                "source": plain_json(inputs.formal_contract_inputs.product_plan.source),
+                "selectors": ["/"],
+            }
+        )
+
+        await self._assert_declared_refs_are_fatal(
+            inputs=inputs,
+            refs=refs,
+            planning_run_id="catalog-extra-source-run",
+            expected_message="product_plan",
+        )
+
+    async def test_wrong_kind_is_fatal_before_model_dispatch(self) -> None:
+        """把真实 Page 来源声明为错误 kind 时必须在 Store 绑定阶段 fail closed。"""
+
+        inputs = planning_inputs(required=["page:a"])
+        refs = [item.model_dump(mode="json") for item in inputs.formal_source_refs]
+        page_ref = next(
+            item
+            for item in refs
+            if item["unit_id"] == "page:a" and item["kind"] == "page_contract"
+        )
+        page_ref["kind"] = "api_contract"
+
+        await self._assert_declared_refs_are_fatal(
+            inputs=inputs,
+            refs=refs,
+            planning_run_id="catalog-wrong-kind-run",
+            expected_message="api_contract",
+        )
+
+    async def _assert_missing_page_binding_is_fatal(self, missing_kind: str) -> None:
+        """删除 Page 完整清单中的一种正式来源，并断言模型 dispatch 前失败。"""
+
+        plan = project_plan(authorization=True)
+        scope = execution_scope(name="orders")
+        context = build_context(plan, scope)
+        inputs = planning_inputs(
+            plan=plan,
+            scope=scope,
+            context=context,
+            required=["page:orders"],
+        )
+        refs = [
+            item.model_dump(mode="json")
+            for item in inputs.formal_source_refs
+            if not (item.unit_id == "page:orders" and item.kind == missing_kind)
+        ]
+        invalid = inputs.model_copy(update={"formal_source_refs": refs})
+        calls = []
+
+        async def generate(job, **_kwargs):
+            """记录意外调用；清单不完整时不允许进入 Local attempt。"""
+
+            calls.append(job)
+            raise AssertionError("缺失正式来源时不得进入模型 dispatch")
+
+        with TemporaryDirectory() as directory, self.assertRaises(DagPlanningError) as caught:
+            await plan_dag_sequential(
+                invalid,
+                workspace_state={"workspace": directory},
+                planning_run_id=f"catalog-missing-{missing_kind}-run",
+                workflow_run_id="workflow-run",
+                thread_id="thread",
+                policy=UnitGenerationPolicy(**_policy_payload()),
+                settings=_settings(),
+                generate_once=generate,
+                now=lambda: AT,
+            )
+
+        self.assertEqual(calls, [])
+        self.assertIsNone(caught.exception.snapshot)
+        self.assertEqual(
+            caught.exception.issues[0].code,
+            "UNIT_CONTRACT_SOURCE_BINDING_INVALID",
+        )
+        self.assertFalse(caught.exception.issues[0].retryable)
+        self.assertIn(missing_kind, caught.exception.issues[0].message)
+
+    async def test_missing_page_contract_is_fatal_before_model_dispatch(self) -> None:
+        """Page requirement 缺 page_contract 时必须 fail closed。"""
+
+        await self._assert_missing_page_binding_is_fatal("page_contract")
+
+    async def test_missing_required_api_contract_is_fatal_before_model_dispatch(self) -> None:
+        """Page requirement 缺 required API Contract 时必须 fail closed。"""
+
+        await self._assert_missing_page_binding_is_fatal("api_contract")
+
+    async def test_missing_required_endpoint_api_design_is_fatal_before_model_dispatch(self) -> None:
+        """Page requirement 缺 required Endpoint API Design 时必须 fail closed。"""
+
+        await self._assert_missing_page_binding_is_fatal("endpoint_api_design")
+
+    async def test_missing_required_authorization_slice_is_fatal_before_model_dispatch(self) -> None:
+        """受保护 Page requirement 缺 authorization_slice 时必须 fail closed。"""
+
+        await self._assert_missing_page_binding_is_fatal("authorization_slice")
+
+
+if __name__ == "__main__":
+    unittest.main()

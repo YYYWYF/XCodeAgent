@@ -127,7 +127,7 @@ def _task(*, designs: list[dict]) -> dict:
     )
 
     return {
-        "id": "backend:endpoint:category_api:category.create::Category::objects",
+        "id": "backend:endpoint:category_api:category.create::objects",
         "unit_id": "backend:endpoint:category_api:category.create",
         "title": "创建分类对象",
         "description": (
@@ -586,7 +586,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             }],
         })
         task = _task(designs=[design])
-        task["id"] = "backend:endpoint:category_api:category.create::Category::upstream"
+        task["id"] = "backend:endpoint:category_api:category.create::upstream"
         task["description"] = (
             "1. 创建 product.url 配置读取和商品上游请求 DTO。\n"
             "2. 使用 POST /v1/product/list 实现 OpenFeign Client。"
@@ -620,7 +620,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         """DatasourceAgent Prompt 携带当前商品操作结构、阶段和映射规则。"""
 
         task = _task(designs=[_external_product_design()])
-        task["id"] = "backend:endpoint:category_api:category.create::Category::upstream"
+        task["id"] = "backend:endpoint:category_api:category.create::upstream"
         task["description"] = (
             "1. 读取商品上游响应 DTO 并遍历 list[]。\n"
             "2. 按 list[].price 到 price 等字段映射转换商品。"
@@ -816,7 +816,7 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
             {"build_units": {unit_id: {"id": unit_id}}},
             [
                 {
-                    "id": f"{unit_id}::Order::repository",
+                    "id": f"{unit_id}::repository",
                     "unit_id": unit_id,
                     "source_refs": {},
                 }

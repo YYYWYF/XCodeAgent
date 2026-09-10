@@ -19,6 +19,18 @@ from app.protocols.workflow.request import (
 
 
 class WorkflowRequestTests(unittest.TestCase):
+    def test_forwards_page_session_as_pending_owner(self) -> None:
+        """页面对话 ID 必须进入 Graph state，且不与 Workflow Run 身份混用。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "开始开发",
+                "forwardedProps": {"sessionId": "session-owner-1"},
+            }
+        )
+
+        self.assertEqual(inputs["resume_values"]["owner_session_id"], "session-owner-1")
+
     def test_application_revision_continuation_ignores_stale_client_scope(self) -> None:
         """application continuation 必须清空旧目标并直接进入工作区扫描。"""
 

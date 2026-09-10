@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -96,6 +97,17 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
                 "app.agents.main.requirements_analyzer.create_chat_model",
                 return_value=fake_model,
             ) as create_model,
+            patch(
+                "app.agents.main.requirements_analyzer._extract_authorization_facts",
+                return_value={
+                    "user_roles": [],
+                    "authorization_requirements": {
+                        "restrictedPages": [],
+                        "restrictedOperations": [],
+                        "dataAuthorizationIssues": [],
+                    },
+                },
+            ) as extract_authorization_facts,
             patch("app.agents.create_agent_bundle") as bundle_factory,
         ):
             result = requirements_analyzer.analyze_requirements_with_chat_model(
@@ -104,6 +116,7 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
 
         from_env.assert_called_once_with()
         create_model.assert_called_once_with(settings)
+        extract_authorization_facts.assert_called_once()
         bundle_factory.assert_not_called()
         self.assertEqual(fake_model.bound_tools, [ask_user])
         self.assertIn("requirements model", fake_model.prompts[0])
@@ -118,6 +131,44 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
                 "source": "direct_chat_model",
             },
         )
+
+    def test_authorization_fact_extraction_uses_direct_toolless_model(self) -> None:
+        """权限事实提取使用独立无工具 ChatModel，并消费严格 JSON 对象。"""
+
+        expected = {
+            "user_roles": [],
+            "authorization_requirements": {
+                "restrictedPages": [],
+                "restrictedOperations": [],
+                "dataAuthorizationIssues": [],
+            },
+        }
+        fake_model = FakeChatModel(
+            AIMessage(content=json.dumps(expected, ensure_ascii=False))
+        )
+        settings = SimpleNamespace(model_name="test-model", default_max_tokens=1024)
+
+        with (
+            patch(
+                "app.agents.main.requirements_analyzer.create_chat_model",
+                return_value=fake_model,
+            ) as create_model,
+            patch("app.agents.create_agent_bundle") as bundle_factory,
+        ):
+            result = requirements_analyzer._extract_authorization_facts(
+                "创建一个库存管理系统",
+                None,
+                settings,
+                [],
+            )
+
+        create_model.assert_called_once_with(settings)
+        bundle_factory.assert_not_called()
+        self.assertIsNone(fake_model.bound_tools)
+        self.assertEqual(len(fake_model.prompts), 1)
+        self.assertIn("authorization business facts", fake_model.prompts[0])
+        self.assertIn("never call tools", fake_model.prompts[0])
+        self.assertEqual(result, expected)
 
     def test_project_planning_uses_direct_model_without_tools(self) -> None:
         fake_model = FakeChatModel(

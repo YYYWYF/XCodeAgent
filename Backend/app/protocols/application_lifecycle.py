@@ -18,6 +18,8 @@ from app.services.application_lifecycle import (
 from app.services.application_template_generation import (
     prepare_application_template_generation,
 )
+from app.services.planning_refresh_recovery import resolve_planning_refresh_state
+from app.protocols.workflow.run_control import workflow_run_registry
 
 
 APPLICATION_LIFECYCLE_EVENT_NAME = "application-lifecycle"
@@ -184,7 +186,22 @@ def build_application_lifecycle_ag_ui_stream(
                 if request.succeeded
                 else "应用模板文件生成失败，已保留可重试状态。"
             )
-        data = {"action": request.action, "lifecycle": application_lifecycle_payload(state)}
+        lifecycle_payload = application_lifecycle_payload(state)
+        if request.action == "get":
+            # 恢复投影只附加到本次读取响应，不写回 application-lifecycle.json，
+            # 避免进程内 runtime 事实伪装成可跨 Backend 重启的持久状态。
+            lifecycle_payload["extensions"] = {
+                **dict(lifecycle_payload.get("extensions") or {}),
+                "planningRefresh": resolve_planning_refresh_state(
+                    request.workspace_root,
+                    lifecycle=state,
+                    runtime_active=lambda run_id: workflow_run_registry.is_active(
+                        run_id,
+                        workspace=request.workspace_root,
+                    ),
+                ),
+            }
+        data = {"action": request.action, "lifecycle": lifecycle_payload}
         if request.action == "prepare_template_generation":
             data["templateGenerationManifest"] = manifest
         return AgUiActionResult(data=data, message=message)

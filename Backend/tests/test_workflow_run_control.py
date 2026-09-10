@@ -1,84 +1,88 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.domain.application_lifecycle import PendingInteractionType
-from app.protocols.workflow.run_control import abandon_pending_build_task_plan
+from app.protocols.workflow.run_control import (
+    build_workflow_cancellation_ag_ui_stream,
+    build_workflow_plan_control_ag_ui_stream,
+)
 
 
-class WorkflowRunControlTests(unittest.TestCase):
+class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
     """验证不启动 Graph 的计划控制动作仍完整收口业务产物。"""
 
-    def test_abandon_pending_dag_marks_plan_before_execution_unlock(self) -> None:
-        """放弃 DAG 必须持久化 abandoned，后续新流程不得复用旧 pending 计划。"""
+    async def test_end_execution_does_not_implicitly_abandon_any_plan(self) -> None:
+        """结束 execution 只更新 lifecycle，不再隐式改写或删除 Build plan。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            plan_path = Path(directory) / ".xcodeagent/plans/build-task-plan.json"
-            plan_path.parent.mkdir(parents=True, exist_ok=True)
-            plan_path.write_text(
-                json.dumps({"status": "ready", "confirmation_status": "pending"}),
-                encoding="utf-8",
-            )
-            lifecycle = SimpleNamespace(
-                active_executions={
-                    "run-dag": SimpleNamespace(
-                        pending_interaction=SimpleNamespace(
-                            type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
-                            payload={"mode": "build_task_plan_confirmation"},
-                        )
-                    )
-                }
+            lifecycle = {"revision": 2, "activeExecutions": {}}
+            stream = build_workflow_plan_control_ag_ui_stream(
+                action="end", workspace=directory, target_run_id="run-dag",
+                thread_id="thread-control", run_id="request-control",
             )
 
             with patch(
-                "app.protocols.workflow.run_control.load_application_lifecycle",
+                "app.protocols.workflow.run_control.end_workbench_execution",
                 return_value=lifecycle,
-            ):
-                abandoned = abandon_pending_build_task_plan(directory, run_id="run-dag")
+            ) as end, patch(
+                "app.protocols.workflow.run_control.application_lifecycle_payload",
+                return_value=lifecycle,
+            ), patch(
+                "app.protocols.workflow.run_control.abandon_pending_build_task_plan"
+            ) as abandon:
+                frames = [frame async for frame in stream]
 
-            persisted = json.loads(plan_path.read_text(encoding="utf-8"))
-            self.assertTrue(abandoned)
-            self.assertEqual(persisted["confirmation_status"], "abandoned")
-            self.assertTrue(persisted["abandoned_at"])
+            end.assert_called_once_with(directory, run_id="run-dag")
+            abandon.assert_not_called()
+            self.assertTrue(frames)
 
-    def test_end_other_pending_interaction_does_not_touch_dag(self) -> None:
-        """结束非 DAG 交互时不得误改工作区中的任务计划。"""
+    async def test_stop_execution_does_not_call_abandon(self) -> None:
+        """暂停 execution 与 Pending Abandon 保持独立。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            plan_path = Path(directory) / ".xcodeagent/plans/build-task-plan.json"
-            plan_path.parent.mkdir(parents=True, exist_ok=True)
-            plan_path.write_text(
-                json.dumps({"status": "ready", "confirmation_status": "pending"}),
-                encoding="utf-8",
-            )
-            lifecycle = SimpleNamespace(
-                active_executions={
-                    "run-acceptance": SimpleNamespace(
-                        pending_interaction=SimpleNamespace(
-                            type=PendingInteractionType.PAGE_ACCEPTANCE,
-                            payload={"mode": "page_acceptance"},
-                        )
-                    )
-                }
+            lifecycle = SimpleNamespace(model_dump=lambda **_kwargs: {})
+            stream = build_workflow_plan_control_ag_ui_stream(
+                action="stop", workspace=directory, target_run_id="run-active",
+                thread_id="thread-control", run_id="request-control",
             )
 
             with patch(
-                "app.protocols.workflow.run_control.load_application_lifecycle",
+                "app.protocols.workflow.run_control.stop_workbench_execution",
                 return_value=lifecycle,
-            ):
-                abandoned = abandon_pending_build_task_plan(
-                    directory,
-                    run_id="run-acceptance",
-                )
+            ) as stop, patch(
+                "app.protocols.workflow.run_control.application_lifecycle_payload",
+                return_value={},
+            ), patch(
+                "app.protocols.workflow.run_control.abandon_pending_build_task_plan"
+            ) as abandon:
+                frames = [frame async for frame in stream]
 
-            persisted = json.loads(plan_path.read_text(encoding="utf-8"))
-            self.assertFalse(abandoned)
-            self.assertEqual(persisted["confirmation_status"], "pending")
+            stop.assert_called_once_with(directory, run_id="run-active")
+            abandon.assert_not_called()
+            self.assertTrue(frames)
+
+    async def test_workflow_cancel_does_not_call_pending_abandon(self) -> None:
+        """Workflow task cancellation 只取消活动运行，不删除 PendingPlan。"""
+
+        stream = build_workflow_cancellation_ag_ui_stream(
+            thread_id="thread-control",
+            run_id="cancel-request",
+            target_run_id="run-active",
+        )
+        with patch(
+            "app.protocols.workflow.run_control.workflow_run_registry.cancel",
+            return_value=True,
+        ) as cancel, patch(
+            "app.protocols.workflow.run_control.abandon_pending_build_task_plan",
+        ) as abandon:
+            frames = [frame async for frame in stream]
+
+        cancel.assert_called_once_with("run-active")
+        abandon.assert_not_called()
+        self.assertIn("cancel_requested", "".join(frames))
 
 
 if __name__ == "__main__":

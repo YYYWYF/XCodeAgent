@@ -813,7 +813,9 @@ export type WorkflowCodeReviewRepairConfirmation = {
 
 export type WorkflowBuildTaskPlanConfirmation = {
   mode?: 'build_task_plan_confirmation' | string
-  action: 'confirm' | 'abandon'
+  action: 'confirm' | 'abandon' | 'regenerate'
+  planningRunId?: string
+  draftDigest?: string
 }
 
 export type ApplicationPlanningInteraction = {
@@ -862,6 +864,11 @@ export type WorkflowClarification = {
   taskPlan?: WorkflowBuildTaskPlan
   targetReview?: WorkflowBuildTargetReview
   buildExecutionScope?: WorkflowBuildExecutionScope
+  draftIdentity?: {
+    ownerSessionId?: string
+    planningRunId?: string
+    draftDigest?: string
+  }
   testTarget?: WorkflowTestTarget
   confirmationStatus?: 'pending' | 'confirmed' | string
   editableFields?: string[]
@@ -1129,6 +1136,29 @@ export type WorkbenchExecution = {
   updatedAt: string
 }
 
+/** 页面刷新时由 Backend 按磁盘、进程注册表和 Formal 事实解析的 Planning 状态。 */
+export type PlanningRefreshState = {
+  schemaVersion: 'planning-refresh.v1'
+  source: 'pending' | 'abandoned' | 'active_planning_run' | 'confirmed_plan' | 'none'
+  status:
+    | 'awaiting_confirmation'
+    | 'abandoned'
+    | 'planning'
+    | 'planning_run_interrupted'
+    | 'confirmed'
+    | 'idle'
+  planningRunId?: string
+  workflowRunId?: string
+  threadId?: string
+  ownerSessionId?: string
+  draftDigest?: string
+  buildExecutionScope?: WorkflowBuildExecutionScope
+  dagGeneration?: unknown
+  confirmation?: WorkflowClarification
+  confirmedPlanDigest?: string
+  message: string
+}
+
 export type ExecutionResourceLock = {
   runId: string
   ownerPageId?: string
@@ -1211,7 +1241,7 @@ export type ApplicationLifecycle = {
     [key: string]: unknown
   }
   recovery?: Record<string, unknown>
-  extensions: Record<string, unknown>
+  extensions: Record<string, unknown> & { planningRefresh?: PlanningRefreshState }
 }
 
 export type WorkflowRunPayload = {

@@ -1,12 +1,13 @@
+"""Build DAG 当前 async Unit Planner 共用的正式产物与范围投影辅助函数。
+
+生产图的任务规划节点由 ``task_planning_adapter`` 提供；本模块不再提供旧的
+Scope 级 TaskPreparer 或模型任务生成入口。
+"""
+
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.agents.main.document_sync import sync_project_plan_from_markdown
-from app.agents.main.planner import revise_project_plan_with_chat_model
-from app.agents.main.task_preparer import prepare_build_tasks_with_main_agent
-from app.agents.main.task_preparer_prompt import planning_context_mode
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
@@ -22,45 +23,22 @@ from app.services.build_task_confirmation import (
 )
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.api_design import api_design_readiness
-from app.services.build_task_planner import (
-    compile_build_task_plan_scope,
-    frontend_endpoint_implementation_owners,
-    frontend_endpoint_ownership_errors,
-    merge_exact_duplicate_tasks,
-    strip_platform_owned_candidate_tasks,
-    tasks_from_build_task_plan,
-)
-from app.services.application_template_generation import (
-    inspect_template_generation_readiness,
-)
-from app.services.authorization_overlay import compile_authorization_overlay
-from app.services.build_task_progress import (
-    build_task_artifacts,
-    create_build_task_progress_tracker,
-    project_artifact_output,
-    project_build_context_output,
-    project_candidate_tasks_output,
-    project_compiled_tasks_output,
-    project_contract_validation_output,
-    project_dag_validation_output,
-    project_unit_skeleton_output,
-)
-from app.services.build_unit_skeleton import (
-    build_unit_skeleton_input_fingerprint,
-    ensure_build_unit_skeleton,
-)
+from app.services.application_template_generation import inspect_template_generation_readiness
+from app.services.build_task_planner import tasks_from_build_task_plan
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_dependencies import validate_project_plan_dependencies
+from app.services.planning_issues import ValidationIssue
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
+from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import (
     load_project_plan_json,
     project_plan_json_path,
 )
+from app.workspace.spec_documents import workspace_root
 from app.workspace.task_documents import (
     build_task_plan_json_path,
-    load_build_task_plan_json,
-    write_build_task_plan_json,
+    load_confirmed_build_task_plan,
 )
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
@@ -102,527 +80,6 @@ def _latest_project_plan(
             ui_designs,
         )
     return project_plan
-
-
-def prepare_build_tasks(state: ProjectState) -> dict:
-    """按应用、页面、数据源或 endpoint 范围编译任务子图并持久化 Build DAG。"""
-    workspace = workspace_from_state(state)
-    formal_artifacts = _load_formal_artifacts(workspace)
-    project_plan = _latest_project_plan(
-        state,
-        formal_artifacts=formal_artifacts,
-    )
-    build_execution_scope = _build_execution_scope_from_state(state)
-    formal_artifact_state = _formal_artifact_state_update(formal_artifacts)
-    prerequisite_errors = _build_prerequisite_errors(
-        state,
-        project_plan,
-        workspace=workspace,
-        build_execution_scope=build_execution_scope,
-        formal_artifacts=formal_artifacts,
-    )
-    if prerequisite_errors:
-        return {
-            **_build_prerequisite_blocked_result(
-                project_plan,
-                build_execution_scope,
-                prerequisite_errors,
-            ),
-            **formal_artifact_state,
-        }
-
-    confirmation_result = _handle_build_task_plan_confirmation(
-        state,
-        project_plan,
-        build_execution_scope,
-    )
-    if confirmation_result is not None:
-        return {**confirmation_result, **formal_artifact_state}
-
-    workspace_snapshot = _workspace_snapshot_from_state(state)
-    existing_build_task_plan = _existing_build_task_plan(state)
-    progress = create_build_task_progress_tracker()
-
-    progress.start("unit_skeleton", "正在根据已确认项目计划生成 Unit DAG 骨架。")
-    try:
-        build_task_plan = ensure_build_unit_skeleton(
-            project_plan,
-            workspace_snapshot,
-            existing_build_task_plan,
-        )
-    except Exception as exc:
-        progress.fail(
-            "unit_skeleton",
-            f"Unit DAG 骨架生成失败：{exc}",
-            output={
-                "kind": "unit_graph",
-                "schemaVersion": "build-unit-graph.v3",
-                "reused": False,
-                "units": [],
-                "edges": {"items": [], "truncated": False},
-                "validation": {"isValid": False, "issues": [str(exc)[:1_000]]},
-            },
-        )
-        raise
-    build_units = build_task_plan.get("build_units")
-    unit_graph = build_task_plan.get("unit_graph")
-    unit_count = len(build_units) if isinstance(build_units, dict) else 0
-    unit_edge_count = (
-        len(unit_graph.get("edges") or []) if isinstance(unit_graph, dict) else 0
-    )
-    progress.complete(
-        "unit_skeleton",
-        f"已生成 {unit_count} 个 Unit、{unit_edge_count} 条 Unit 依赖。",
-        build_task_plan=build_task_plan,
-        output=project_unit_skeleton_output(build_task_plan),
-    )
-
-    progress.start("build_context", "正在解析当前页面或数据源的定向构建上下文。")
-    try:
-        build_context = _resolve_build_context(
-            state,
-            project_plan,
-            build_execution_scope,
-            build_task_plan,
-        )
-    except ValueError as exc:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-        )
-        progress.fail(
-            "build_context",
-            f"构建上下文解析失败：{exc}",
-            build_task_plan=attempt_plan,
-            output=project_build_context_output({}, attempt_plan),
-        )
-        return {
-            "phase": "prepare_build_tasks",
-            "status": "requires_user_input",
-            "project_plan": project_plan,
-            "build_task_plan": attempt_plan,
-            "build_execution_scope": build_execution_scope,
-            "last_persisted_build_execution_scope": (
-                build_task_plan.get("build_execution_scope")
-                if isinstance(build_task_plan.get("build_execution_scope"), dict)
-                else None
-            ),
-            "build_task_plan_persisted": False,
-            "dag_generation_progress": progress.snapshot(),
-            "clarification": _build_context_error_payload(
-                str(exc),
-                build_execution_scope,
-            ),
-            "timeline": ["prepare_build_tasks"],
-            **formal_artifact_state,
-        }
-    except Exception as exc:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-        )
-        progress.fail(
-            "build_context",
-            f"构建上下文解析异常：{exc}",
-            build_task_plan=attempt_plan,
-            output=project_build_context_output({}, attempt_plan),
-        )
-        raise
-    target = build_context.get("target")
-    target = target if isinstance(target, dict) else {}
-    progress.complete(
-        "build_context",
-        (
-            f"已解析 {target.get('type', 'application')}:{target.get('id', 'application')}，"
-            f"涉及 {len(build_context.get('required_unit_ids') or [])} 个 Unit、"
-            f"{len(build_context.get('endpoint_ids') or [])} 个 Endpoint。"
-        ),
-        build_task_plan=build_task_plan,
-        output=project_build_context_output(build_context, build_task_plan),
-    )
-
-    progress.start("authorization_overlay", "正在按当前 Unit 编译只读权限 Overlay。")
-    try:
-        build_context = compile_authorization_overlay(project_plan, build_context)
-    except ValueError as exc:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-        )
-        progress.fail(
-            "authorization_overlay",
-            f"权限 Overlay 编译失败：{exc}",
-            build_task_plan=attempt_plan,
-            output=project_build_context_output({}, attempt_plan),
-        )
-        return {
-            "phase": "prepare_build_tasks",
-            "status": "requires_user_input",
-            "project_plan": project_plan,
-            "build_task_plan": attempt_plan,
-            "build_execution_scope": build_execution_scope,
-            "build_task_plan_persisted": False,
-            "dag_generation_progress": progress.snapshot(),
-            "clarification": _build_context_error_payload(
-                str(exc),
-                build_execution_scope,
-            ),
-            "timeline": ["prepare_build_tasks"],
-            **formal_artifact_state,
-        }
-    # 模板分支是 Build 任务边界的唯一事实源，不能仅由权限开关推断。
-    template_readiness = inspect_template_generation_readiness(workspace)
-    build_context["template_variant"] = template_readiness.get("templateVariant")
-    progress.complete(
-        "authorization_overlay",
-        "已完成当前 Unit 的只读权限切片编译。",
-        build_task_plan=build_task_plan,
-        output=project_build_context_output(build_context, build_task_plan),
-    )
-
-    progress.start("contract_validation", "正在校验页面依赖和 API 契约一致性。")
-    try:
-        contract_errors = _scoped_contract_errors(
-            project_plan,
-            build_execution_scope,
-            build_context,
-        )
-    except Exception as exc:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-        )
-        progress.fail(
-            "contract_validation",
-            f"契约校验异常：{exc}",
-            build_task_plan=attempt_plan,
-            output=project_contract_validation_output(build_context, [str(exc)]),
-        )
-        raise
-    if contract_errors:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-        )
-        progress.fail(
-            "contract_validation",
-            f"契约校验发现 {len(contract_errors)} 个问题：{contract_errors[0]}",
-            build_task_plan=attempt_plan,
-            output=project_contract_validation_output(build_context, contract_errors),
-        )
-        return {
-            "phase": "prepare_build_tasks",
-            "status": "requires_user_input",
-            "project_plan": project_plan,
-            "build_task_plan": attempt_plan,
-            "build_execution_scope": build_execution_scope,
-            "last_persisted_build_execution_scope": (
-                build_task_plan.get("build_execution_scope")
-                if isinstance(build_task_plan.get("build_execution_scope"), dict)
-                else None
-            ),
-            "build_task_plan_persisted": False,
-            "dag_generation_progress": progress.snapshot(),
-            "clarification": _api_contract_inconsistency_payload(
-                contract_errors,
-                build_execution_scope,
-            ),
-            "timeline": ["prepare_build_tasks"],
-            **formal_artifact_state,
-        }
-    progress.complete(
-        "contract_validation",
-        "页面依赖与 API 契约校验通过。",
-        build_task_plan=build_task_plan,
-        output=project_contract_validation_output(build_context, []),
-    )
-
-    progress.start("model_planning", "正在调用任务规划模型生成候选构建任务。")
-    try:
-        planning_unit_ids = _replaceable_unit_ids(
-            build_task_plan,
-            build_context,
-            set(build_context.get("required_unit_ids") or []),
-        )
-        owner_constraints, retained_owner_errors = (
-            _retained_frontend_endpoint_owner_constraints(
-                build_task_plan,
-                planning_unit_ids,
-            )
-        )
-        if retained_owner_errors:
-            attempt_plan = _build_task_plan_attempt_view(
-                build_task_plan,
-                build_execution_scope,
-                status="failed",
-            )
-            progress.fail(
-                "model_planning",
-                "保留任务中存在前端 Endpoint 多 owner，已停止本轮 DAG 生成。",
-                build_task_plan=attempt_plan,
-                output=project_candidate_tasks_output(attempt_plan),
-            )
-            return {
-                **_retained_endpoint_owner_blocked_result(
-                    project_plan,
-                    build_task_plan,
-                    progress,
-                    retained_owner_errors,
-                    build_execution_scope,
-                ),
-                **formal_artifact_state,
-            }
-        planning_build_context = {
-            **build_context,
-            "planning_unit_ids": sorted(planning_unit_ids),
-            # 该索引仅约束本轮模型规划，不写入正式 build_context 或 Build DAG。
-            "frontend_endpoint_owner_constraints": owner_constraints,
-        }
-        planning_build_context["planning_context_mode"] = planning_context_mode(
-            planning_build_context
-        )
-        finalized_plan: dict[str, dict[str, Any]] = {}
-
-        def finalize_candidate(candidate_plan: dict[str, Any]) -> dict[str, Any]:
-            """把当前候选合并进保留任务，并返回需参与同轮校验的完整 DAG。"""
-
-            merged_plan = _merge_prepared_scope_tasks(
-                build_task_plan,
-                candidate_plan,
-                build_context,
-                project_plan=project_plan,
-            )
-            finalized_plan["value"] = merged_plan
-            return merged_plan
-
-        prepared_plan = prepare_build_tasks_with_main_agent(
-            _task_preparation_project_plan(
-                project_plan,
-                planning_build_context,
-            ),
-            workspace=workspace,
-            workspace_snapshot=workspace_snapshot,
-            build_context=planning_build_context,
-            build_task_plan=build_task_plan,
-            build_execution_scope=build_execution_scope,
-            candidate_finalizer=finalize_candidate,
-        )
-    except ValueError as exc:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-            status="failed",
-        )
-        progress.fail(
-            "model_planning",
-            f"候选任务生成失败：{exc}",
-            build_task_plan=attempt_plan,
-            output=project_candidate_tasks_output(attempt_plan),
-        )
-        return {
-            **_build_task_plan_generation_failed_result(
-                project_plan,
-                build_task_plan,
-                progress,
-                str(exc),
-                build_execution_scope,
-            ),
-            **formal_artifact_state,
-        }
-    except Exception as exc:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-            status="failed",
-        )
-        progress.fail(
-            "model_planning",
-            f"候选任务生成异常：{exc}",
-            build_task_plan=attempt_plan,
-            output=project_candidate_tasks_output(attempt_plan),
-        )
-        raise
-    prepared_tasks = tasks_from_build_task_plan(prepared_plan)
-    progress.complete(
-        "model_planning",
-        f"任务规划模型已生成 {len(prepared_tasks)} 个有效候选任务。",
-        build_task_plan=prepared_plan,
-        output=project_candidate_tasks_output(prepared_plan),
-    )
-
-    progress.start("task_compilation", "正在编译任务字段、Unit 与任务依赖。")
-    try:
-        # 正常运行时最终化已在唯一重试循环内完成；测试替身或旧调用边界未执行
-        # callback 时仍在这里合并一次，保证节点边界保持确定性。
-        build_task_plan = finalized_plan.get("value") or _merge_prepared_scope_tasks(
-            build_task_plan,
-            prepared_plan,
-            build_context,
-            project_plan=project_plan,
-        )
-    except ValueError as exc:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-            status="failed",
-        )
-        progress.fail(
-            "task_compilation",
-            f"任务依赖编译失败：{exc}",
-            build_task_plan=attempt_plan,
-            output=project_compiled_tasks_output(attempt_plan),
-        )
-        return {
-            **_build_task_plan_generation_failed_result(
-                project_plan,
-                build_task_plan,
-                progress,
-                str(exc),
-                build_execution_scope,
-            ),
-            **formal_artifact_state,
-        }
-    except Exception as exc:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-            status="failed",
-        )
-        progress.fail(
-            "task_compilation",
-            f"任务依赖编译异常：{exc}",
-            build_task_plan=attempt_plan,
-            output=project_compiled_tasks_output(attempt_plan),
-        )
-        raise
-    compiled_tasks = tasks_from_build_task_plan(build_task_plan)
-    task_graph = build_task_plan.get("task_graph")
-    task_graph = task_graph if isinstance(task_graph, dict) else {}
-    progress.complete(
-        "task_compilation",
-        (
-            f"已编译 {len(compiled_tasks)} 个任务、"
-            f"{len(task_graph.get('edges') or [])} 条任务依赖。"
-        ),
-        build_task_plan=build_task_plan,
-        output=project_compiled_tasks_output(build_task_plan),
-    )
-
-    progress.start("dag_validation", "正在校验任务拓扑、循环依赖和执行批次。")
-    dag_errors = (
-        build_task_plan.get("task_graph", {})
-        .get("validation", {})
-        .get("errors", [])
-    )
-    if dag_errors:
-        attempt_plan = _build_task_plan_attempt_view(
-            build_task_plan,
-            build_execution_scope,
-            status="failed",
-        )
-        progress.fail(
-            "dag_validation",
-            f"任务 DAG 校验发现 {len(dag_errors)} 个问题：{dag_errors[0]}",
-            build_task_plan=attempt_plan,
-            output=project_dag_validation_output(attempt_plan),
-        )
-        return {
-            **_build_task_plan_generation_failed_result(
-                project_plan,
-                build_task_plan,
-                progress,
-                "；".join(str(error) for error in dag_errors),
-                build_execution_scope,
-            ),
-            **formal_artifact_state,
-        }
-    execution = build_task_plan.get("execution")
-    execution = execution if isinstance(execution, dict) else {}
-    progress.complete(
-        "dag_validation",
-        f"任务 DAG 校验通过，共 {len(execution.get('batches') or [])} 个执行批次。",
-        build_task_plan=build_task_plan,
-        output=project_dag_validation_output(build_task_plan),
-    )
-
-    build_task_plan = {
-        **build_task_plan,
-        "build_execution_scope": build_execution_scope,
-        "status": _build_task_plan_status(build_task_plan),
-        "confirmation_status": "pending",
-        "confirmed_at": None,
-    }
-    authorization_constraints = build_context.get("authorization_constraints")
-    frontend_projection = (
-        authorization_constraints.get("frontendProjection")
-        if isinstance(authorization_constraints, dict)
-        else None
-    )
-    if frontend_projection is None:
-        build_task_plan.pop("authorization_frontend_projection", None)
-    else:
-        # 显式业务路由和完整 RESOURCES 均属于平台事实，不能交由 Page Agent 修改。
-        build_task_plan["authorization_frontend_projection"] = frontend_projection
-    auth_constants_projection = (
-        authorization_constraints.get("authConstantsProjection")
-        if isinstance(authorization_constraints, dict)
-        else None
-    )
-    if auth_constants_projection is None:
-        build_task_plan.pop("authorization_constants_projection", None)
-    else:
-        # 操作资源常量由平台统一写入模板托管区，Endpoint Agent 只能引用它们。
-        build_task_plan["authorization_constants_projection"] = auth_constants_projection
-    progress.start("artifact_persistence", "正在保存待确认的 JSON Build Task Plan。")
-    try:
-        build_task_plan_path = write_build_task_plan_json(state, build_task_plan)
-    except Exception as exc:
-        progress.fail(
-            "artifact_persistence",
-            f"DAG 产物保存失败：{exc}",
-            build_task_plan=build_task_plan,
-            output=project_artifact_output([]),
-        )
-        raise
-    artifacts = build_task_artifacts(build_task_plan)
-    progress.complete(
-        "artifact_persistence",
-        "待确认的 build-task-plan.json 已保存。",
-        build_task_plan=build_task_plan,
-        artifacts=artifacts,
-        output=project_artifact_output(artifacts),
-    )
-    return {
-        "phase": "prepare_build_tasks",
-        "status": "requires_user_input",
-        "project_plan": project_plan,
-        "build_task_plan": build_task_plan,
-        "dag_generation_progress": progress.snapshot(),
-        "build_task_plan_path": build_task_plan_path,
-        "build_execution_scope": build_execution_scope,
-        "build_task_plan_persisted": True,
-        "build_context": build_context,
-        "build_units": build_task_plan.get("build_units", {}),
-        "unit_graph": build_task_plan.get("unit_graph", {}),
-        "task_registry": build_task_plan.get("task_registry", {}),
-        "task_graph": build_task_plan.get("task_graph", {}),
-        "tasks": tasks_from_build_task_plan(build_task_plan),
-        "build_task_plan_confirmation": _build_task_plan_confirmation_payload(
-            build_task_plan,
-            build_execution_scope,
-            project_plan=project_plan,
-            build_context=build_context,
-        ),
-        "clarification": _build_task_plan_confirmation_payload(
-            build_task_plan,
-            build_execution_scope,
-            project_plan=project_plan,
-            build_context=build_context,
-        ),
-        "timeline": ["prepare_build_tasks"],
-        **formal_artifact_state,
-    }
-
 
 def _build_prerequisite_errors(
     state: ProjectState,
@@ -706,18 +163,11 @@ def _build_prerequisite_errors(
             for error in readiness.get("errors", [])
             if str(error).strip()
         )
+        if readiness.get("ready") is not True and not readiness.get("errors"):
+            errors.append("模板初始化：模板前置门禁未就绪。")
     else:
         errors.append("缺少 workspace，无法校验模板初始化 manifest。")
     return _dedupe_texts(errors)
-
-
-def _load_json_object(path: Path) -> dict[str, Any]:
-    """严格读取一个正式 JSON 对象，供 Build 前置门禁使用。"""
-
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError("正式产物必须是 JSON 对象。")
-    return value
 
 
 def _formal_artifact_hash_errors(
@@ -819,6 +269,27 @@ def _dedupe_texts(values: list[str]) -> list[str]:
     return result
 
 
+def clear_planning_projection() -> dict[str, Any]:
+    """清除上一轮 PlanningRun/Pending 的只读投影，避免 checkpoint 延续旧身份。
+
+    Graph state 按 key 合并，本轮没有产生 PlanningRun 的阻断或失败结果必须显式
+    覆盖这些字段，否则会出现 status=requires_user_input 却挂着上一轮
+    planning_run_id/draft_digest/dag_generation_progress 的错配。
+    调用方用 ``{**clear_planning_projection(), **本轮结果}`` 合并，本轮真实写入的
+    dag_generation_progress 或 persisted 事实仍以本轮结果为准。
+    """
+
+    return {
+        "planning_run_id": "",
+        "draft_digest": "",
+        "dag_generation_progress": {},
+        "build_task_plan_confirmation": {},
+        "pending_build_task_plan_path": "",
+        "pending_build_task_plan_persisted": False,
+        "build_task_plan_persisted": False,
+    }
+
+
 def _build_prerequisite_blocked_result(
     project_plan: dict[str, Any],
     build_execution_scope: dict[str, str],
@@ -864,6 +335,7 @@ def _build_prerequisite_blocked_result(
         }
     )
     return {
+        **clear_planning_projection(),
         "phase": "prepare_build_tasks",
         "status": "requires_user_input",
         "project_plan": project_plan,
@@ -873,26 +345,46 @@ def _build_prerequisite_blocked_result(
     }
 
 
-def _latest_build_task_plan_from_workspace(state: ProjectState) -> dict[str, Any]:
-    """只从当前工作区的最新 JSON 读取 DAG，避免确认旧 checkpoint 计划。"""
+def _confirmed_baseline_blocked_result(
+    project_plan: dict[str, Any],
+    build_execution_scope: dict[str, str],
+    errors: list[str],
+) -> dict[str, Any]:
+    """将非法正式 DAG 单独投影为平台基线问题，等待人工修复后重新校验。"""
 
-    workspace = workspace_from_state(state)
-    if workspace:
-        fixed_path = Path(workspace).expanduser() / ".xcodeagent" / "plans" / "build-task-plan.json"
-        if fixed_path.is_file():
-            try:
-                value = load_build_task_plan_json(fixed_path)
-                return _fill_missing_build_task_plan_status(value)
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                return {}
-    path = build_task_plan_json_path(state)
-    if not path.is_file():
-        return {}
-    try:
-        value = load_build_task_plan_json(path)
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return {}
-    return _fill_missing_build_task_plan_status(value)
+    artifact = ".xcodeagent/plans/build-task-plan.json"
+    recovery = (
+        "请由平台维护者检查正式 Build Task Plan 的文件内容、读取权限、确认状态和 DAG 校验结果；"
+        "修复并验证为合法 ConfirmedPlan 后，重新发起任务规划。"
+    )
+    issue = ValidationIssue(
+        code="CONFIRMED_BASELINE_INVALID", level="pre_generation", category="platform",
+        retryable=False, message="正式 Confirmed baseline 非法或无法读取。",
+        details={"artifact": artifact, "errors": errors},
+    )
+    payload = build_ask_user_payload([
+        AskUserQuestion(
+            header="DAG 基线非法",
+            question=f"正式任务基线 {artifact} 非法或无法读取，本轮规划已阻断。{recovery}",
+            type="text", placeholder="请先完成正式基线修复；回复确认不能代替基线校验。",
+        )
+    ])
+    payload.update({
+        "mode": "confirmed_baseline_error",
+        "code": "confirmed_baseline_invalid",
+        "message": f"正式任务基线 {artifact} 非法或无法读取，等待平台维护者处理。",
+        "artifact": artifact, "target": build_execution_scope,
+        "errors": errors, "issues": [issue.model_dump(mode="json")],
+        "recommended_action": recovery, "automatic_routing": False,
+        "retryable": False,
+    })
+    return {
+        **clear_planning_projection(),
+        "phase": "prepare_build_tasks", "status": "requires_user_input",
+        "project_plan": project_plan, "build_execution_scope": build_execution_scope,
+        "clarification": payload, "message": payload["message"],
+        "timeline": ["prepare_build_tasks"],
+    }
 
 
 def _build_task_plan_confirmation_payload(
@@ -915,7 +407,7 @@ def _build_task_plan_confirmation_payload(
         "mode": "build_task_plan_confirmation",
         "status": "requires_user_input",
         "message": "Build DAG 已生成，请确认任务规划后再进入 Build。",
-        "actionValues": ["confirm", "abandon"],
+        "actionValues": ["confirm", "abandon", "regenerate"],
         "confirmationStatus": build_task_plan.get("confirmation_status") or "pending",
         "buildExecutionScope": build_execution_scope or build_task_plan.get("build_execution_scope") or {},
         "taskPlan": {
@@ -930,166 +422,26 @@ def _build_task_plan_confirmation_payload(
         },
         "targetReview": read_model["targetReview"],
     }
+    draft_identity = build_task_plan.get("draft_identity")
+    if isinstance(draft_identity, dict):
+        planning_run_id = draft_identity.get("planning_run_id")
+        draft_digest = draft_identity.get("draft_digest")
+        owner_session_id = draft_identity.get("owner_session_id")
+        # 只公开 Abandon/Confirm 所需的最小身份，不泄露冻结输入和内部 Draft 元数据。
+        if (
+            isinstance(owner_session_id, str)
+            and isinstance(planning_run_id, str)
+            and isinstance(draft_digest, str)
+        ):
+            payload["draftIdentity"] = {
+                "ownerSessionId": owner_session_id,
+                "planningRunId": planning_run_id,
+                "draftDigest": draft_digest,
+            }
     if errors:
         payload["errors"] = errors
         payload["message"] = "Build DAG 需要处理后才能继续。"
     return payload
-
-
-def _handle_build_task_plan_confirmation(
-    state: ProjectState,
-    project_plan: dict[str, Any],
-    build_execution_scope: dict[str, str],
-) -> dict[str, Any] | None:
-    """处理 DAG confirm；放弃由 AG-UI 计划控制流终止，不进入 Graph。"""
-
-    action_payload = state.get("build_task_plan_confirmation")
-    if not isinstance(action_payload, dict) or not action_payload.get("action"):
-        latest_plan = _latest_build_task_plan_from_workspace(state)
-        planned_scope = latest_plan.get("build_execution_scope")
-        # build-task-plan.json 是应用级累计产物，但 pending/confirmed 只属于生成它的目标范围。
-        # 切换页面或接口后必须继续生成当前范围，不能把上一范围的确认状态直接带入 Build。
-        if (
-            not isinstance(planned_scope, dict)
-            or planned_scope != build_execution_scope
-            or not _is_current_build_task_plan(
-                state,
-                project_plan,
-                latest_plan,
-                build_execution_scope,
-            )
-        ):
-            return None
-        if latest_plan.get("confirmation_status") == "pending":
-            return _pending_build_task_plan_result(
-                state,
-                project_plan,
-                latest_plan,
-                build_execution_scope,
-            )
-        if latest_plan.get("confirmation_status") == "confirmed":
-            return _confirmed_build_task_plan_result(
-                state,
-                project_plan,
-                latest_plan,
-                build_execution_scope,
-            )
-        return None
-
-    action = str(action_payload.get("action") or "").strip().lower()
-    latest_plan = _latest_build_task_plan_from_workspace(state)
-    if not latest_plan:
-        return _pending_build_task_plan_result(
-            state,
-            project_plan,
-            latest_plan,
-            build_execution_scope,
-            errors=["工作区中不存在最新 build-task-plan.json，不能确认或修改旧计划。"],
-        )
-    freshness_errors = (
-        []
-        if _is_current_build_task_plan(
-            state,
-            project_plan,
-            latest_plan,
-            build_execution_scope,
-        )
-        else ["当前 build-task-plan.json 与项目计划输入、构建范围或 DAG 字段契约不一致，请重新生成。"]
-    )
-    plan_errors = [
-        *freshness_errors,
-        *_build_task_plan_gate_errors(latest_plan, build_execution_scope),
-    ]
-    if action == "confirm":
-        if plan_errors:
-            return _pending_build_task_plan_result(
-                state,
-                project_plan,
-                latest_plan,
-                build_execution_scope,
-                errors=plan_errors,
-            )
-        confirmed_plan = {
-            **latest_plan,
-            "confirmation_status": "confirmed",
-            "confirmed_at": datetime.now(UTC).isoformat(),
-            "build_execution_scope": build_execution_scope,
-        }
-        path = write_build_task_plan_json(state, confirmed_plan)
-        return _confirmed_build_task_plan_result(
-            state,
-            project_plan,
-            confirmed_plan,
-            build_execution_scope,
-            path=path,
-        )
-    return _pending_build_task_plan_result(
-        state,
-        project_plan,
-        latest_plan,
-        build_execution_scope,
-        errors=[f"不支持的 Build DAG 动作：{action}"],
-    )
-
-
-def _build_task_plan_gate_errors(
-    build_task_plan: dict[str, Any],
-    build_execution_scope: dict[str, Any],
-) -> list[str]:
-    """检查最新 DAG 的 schema、ready 状态、确认前置和当前 scope。"""
-
-    errors: list[str] = []
-    if build_task_plan.get("schema_version") != "build-dag.v3":
-        errors.append("最新 DAG schema_version 不是 build-dag.v3。")
-    if build_task_plan.get("status") != "ready":
-        errors.append(f"最新 DAG status={build_task_plan.get('status') or 'unknown'}，不能进入 Build。")
-    if build_task_plan.get("confirmation_status") not in {"pending", "confirmed"}:
-        errors.append("最新 DAG 缺少有效 confirmation_status。")
-    graph = build_task_plan.get("task_graph")
-    validation = graph.get("validation") if isinstance(graph, dict) else None
-    if not isinstance(validation, dict) or validation.get("is_valid") is not True:
-        errors.extend(
-            str(error)
-            for error in (validation.get("errors") if isinstance(validation, dict) else [])
-            if str(error).strip()
-        )
-    planned_scope = build_task_plan.get("build_execution_scope")
-    if isinstance(planned_scope, dict) and planned_scope and planned_scope != build_execution_scope:
-        errors.append(
-            "DAG scope 与当前 Build scope 不一致："
-            f"planned={planned_scope} current={build_execution_scope}。"
-        )
-    return _dedupe_texts(errors)
-
-
-def _build_task_plan_status(build_task_plan: dict[str, Any]) -> str:
-    """根据任务图校验和执行批次计算 Build DAG 顶层状态。"""
-
-    graph = build_task_plan.get("task_graph")
-    validation = graph.get("validation") if isinstance(graph, dict) else None
-    execution = build_task_plan.get("execution")
-    batches = execution.get("batches") if isinstance(execution, dict) else []
-    return (
-        "ready"
-        if isinstance(validation, dict)
-        and validation.get("is_valid") is True
-        and isinstance(batches, list)
-        and not any(
-            isinstance(batch, dict) and batch.get("mode") == "blocked"
-            for batch in batches
-        )
-        else "blocked"
-    )
-
-
-def _fill_missing_build_task_plan_status(value: Any) -> dict[str, Any]:
-    """为当前 build-dag.v3 产物补齐生成阶段漏写的顶层 status 字段。"""
-
-    if not isinstance(value, dict):
-        return {}
-    if value.get("schema_version") != "build-dag.v3" or "status" in value:
-        return value
-    return {**value, "status": _build_task_plan_status(value)}
 
 
 def _pending_build_task_plan_result(
@@ -1194,76 +546,13 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
 
 
 def _existing_build_task_plan(state: ProjectState) -> dict:
-    """优先读取有效 checkpoint 计划，否则从工作区恢复最后一个有效 DAG。"""
+    """正式文件缺失可开始首次规划；文件存在但不合格必须阻断，禁止退化为空基线。"""
 
-    in_state = state.get("build_task_plan")
-    if _is_valid_build_task_plan(in_state):
-        return in_state
-    plan_path = build_task_plan_json_path(state)
-    if not plan_path.is_file():
-        return {}
-    persisted = load_build_task_plan_json(plan_path)
-    return persisted if _is_valid_build_task_plan(persisted) else {}
-
-
-def _is_valid_build_task_plan(value: object) -> bool:
-    """仅接受通过任务图校验的 v3 DAG，避免失败 checkpoint 污染后续重试。"""
-
-    if not isinstance(value, dict) or value.get("schema_version") != "build-dag.v3":
-        return False
-    if value.get("status") == "failed":
-        return False
-    task_graph = value.get("task_graph")
-    validation = task_graph.get("validation") if isinstance(task_graph, dict) else None
-    return isinstance(validation, dict) and validation.get("is_valid") is True
-
-
-def _is_current_build_task_plan(
-    state: ProjectState,
-    project_plan: dict[str, Any],
-    build_task_plan: dict[str, Any],
-    build_execution_scope: dict[str, str],
-) -> bool:
-    """判断旧 DAG 是否仍匹配当前输入、范围和任务字段契约，避免新增页面复用旧快照。"""
-
-    if not _is_valid_build_task_plan(build_task_plan):
-        return False
-    if build_task_plan.get("build_execution_scope") != build_execution_scope:
-        return False
-
-    registry = build_task_plan.get("task_registry")
-    if not isinstance(registry, dict):
-        return False
-    tasks = [task for task in registry.values() if isinstance(task, dict)]
-    if len(tasks) != len(registry):
-        return False
-    task_graph = build_task_plan.get("task_graph")
-    graph_nodes = (
-        {str(task_id) for task_id in task_graph.get("nodes") or []}
-        if isinstance(task_graph, dict)
-        else set()
-    )
-    if graph_nodes != {str(task_id) for task_id in registry}:
-        return False
-    # 空任务图主要用于确认恢复；真实生成计划会带 Unit 骨架指纹，不能以缺失指纹的旧文件冒充当前计划。
-    skeleton = build_task_plan.get("unit_skeleton")
-    stored_fingerprint = skeleton.get("input_fingerprint") if isinstance(skeleton, dict) else None
-    if not tasks and not stored_fingerprint:
-        return True
-    if not stored_fingerprint:
-        return False
-    current_fingerprint = build_unit_skeleton_input_fingerprint(
-        project_plan,
-        _workspace_snapshot_from_state(state),
-    )
-    if stored_fingerprint != current_fingerprint:
-        return False
-
-    required_fields = ("deliverables", "acceptance_checks", "business_acceptance_checks")
-    return all(
-        all(field in task for field in required_fields)
-        for task in tasks
-    )
+    plan = load_confirmed_build_task_plan(workspace_root(state))
+    path = build_task_plan_json_path(state)
+    if plan is None and (path.exists() or path.is_symlink()):
+        raise ValueError("正式文件存在但不是已确认且通过校验的 build-dag.v3。")
+    return plan or {}
 
 
 def _resolve_build_context(
@@ -1286,11 +575,10 @@ def _resolve_build_context(
                 or build_execution_scope.get("api_contract_id")
                 or ""
             ).strip() or None,
-            project_plan_path=state.get("project_plan_json_path")
-                              or project_plan_json_path(state),
+            project_plan_path=technical_plan_path(workspace_from_state(state)),
         )
-        return _add_reusable_task_context(context, build_task_plan)
-    return _add_reusable_task_context({
+        return context
+    return {
         "target": {"type": "application", "id": "application"},
         "page_implementation_contract": None,
         "endpoint_contract": None,
@@ -1302,259 +590,8 @@ def _resolve_build_context(
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
-    }, build_task_plan)
-
-
-def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> dict:
-    """向模型公开已完成的公共任务，避免后续范围重复生成稳定能力。"""
-
-    reusable_tasks = {
-        unit_id: list(unit.get("task_ids") or [])
-        for unit_id, unit in (build_task_plan.get("build_units") or {}).items()
-        if isinstance(unit, dict)
-           and _is_reusable_public_unit(unit_id)
-           and _unit_tasks_are_reusable(build_task_plan, unit_id)
-    }
-    return {**build_context, "reusable_tasks_by_unit": reusable_tasks}
-
-
-def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> dict:
-    """按本轮规划模式构造最小任务拆分视图。"""
-
-    mode = planning_context_mode(build_context)
-    executable_details = _executable_details(project_plan, build_context)
-    if mode == "endpoint":
-        executable_details.pop("page_implementation_contracts", None)
-
-    allowed_unit_ids = list(
-        build_context.get("planning_unit_ids")
-        or build_context.get("required_unit_ids")
-        or []
-    )
-    if mode == "endpoint":
-        return {
-            "architecture": _scoped_task_architecture(
-                project_plan,
-                mode,
-                build_context,
-            ),
-            "execution_target": build_context.get("target"),
-            "allowed_unit_ids": allowed_unit_ids,
-            "executable_details": executable_details,
-        }
-
-    skeleton = {
-        "pages": _skeleton_pages(project_plan) if mode in {"page", "combined"} else [],
-        "data_sources": (
-            _skeleton_data_sources(build_context)
-            if mode in {"endpoint", "combined"}
-            else []
-        ),
-        "api_contracts": _scoped_skeleton_api_contracts(
-            project_plan,
-            build_context,
-            mode,
-        ),
-        "permission_model": (
-            project_plan.get("permission_model")
-            if mode in {"page", "combined"}
-            else None
-        ),
-    }
-    return {
-        "version": project_plan.get("version"),
-        "confirmation_status": project_plan.get("confirmation_status"),
-        "app": project_plan.get("app"),
-        "requirements_overview": (
-            project_plan.get("requirements_overview")
-            if mode == "combined"
-            else None
-        ),
-        "architecture": _scoped_task_architecture(project_plan, mode, build_context),
-        "project_acceptance_criteria": (
-            project_plan.get("project_acceptance_criteria")
-            if mode == "combined"
-            else None
-        ),
-        "application_skeleton": skeleton,
-        "execution_target": build_context.get("target"),
-        "allowed_unit_ids": allowed_unit_ids,
-        "executable_details": executable_details,
     }
 
-
-def _scoped_task_architecture(
-    project_plan: dict,
-    mode: str,
-    build_context: dict | None = None,
-) -> dict:
-    """只投射当前 endpoint/page 模式和数据源需要的架构事实。"""
-
-    architecture = project_plan.get("architecture")
-    if not isinstance(architecture, dict) or mode == "combined":
-        return architecture if isinstance(architecture, dict) else {}
-    if mode == "page":
-        return {
-            key: value
-            for key, value in architecture.items()
-            if key in {"frontend", "data_contract", "route_root_path", "menu_enabled"}
-        }
-    context = build_context if isinstance(build_context, dict) else {}
-    endpoint_source_types = {
-        str(item)
-        for item in context.get("source_types") or []
-        if str(item).strip()
-    }
-    if endpoint_source_types and endpoint_source_types <= {"database", "external_api"}:
-        return {
-            key: value
-            for key, value in architecture.items()
-            if key in {"backend_tech_stack", "data_contract"}
-        }
-    return {
-        key: value
-        for key, value in architecture.items()
-        if key in {
-            "frontend",
-            "backend_tech_stack",
-            "data_contract",
-            "route_root_path",
-            "menu_enabled",
-        }
-    }
-
-
-def _scoped_skeleton_api_contracts(
-    project_plan: dict,
-    build_context: dict,
-    mode: str,
-) -> list[dict]:
-    """页面或 endpoint 模式只保留当前范围引用到的 API 契约骨架。"""
-
-    contracts = _skeleton_api_contracts(project_plan)
-    if mode == "combined":
-        return contracts
-    endpoint_ids = {
-        str(endpoint_id)
-        for endpoint_id in build_context.get("endpoint_ids") or []
-        if str(endpoint_id).strip()
-    }
-    if not endpoint_ids:
-        return []
-    return [
-        contract
-        for contract in contracts
-        if endpoint_ids.intersection(
-            {
-                str(endpoint_id)
-                for endpoint_id in contract.get("endpoint_ids") or []
-                if str(endpoint_id).strip()
-            }
-        )
-    ]
-
-
-def _skeleton_pages(project_plan: dict) -> list[dict]:
-    """提取页面 Unit 骨架摘要，不携带完整页面实现契约。"""
-
-    contract_status = {
-        str(contract.get("pageId") or ""): "confirmed"
-        for contract in project_plan.get("page_implementation_contracts", [])
-        if isinstance(contract, dict) and contract.get("pageId")
-    }
-
-    return [
-        {
-            "pageId": page.get("pageId"),
-            "name": page.get("name"),
-            "path": page.get("path"),
-            "module_id": page.get("module_id"),
-            "description": page.get("description"),
-            "implementation_contract_status": contract_status.get(
-                str(page.get("pageId") or "")
-            ),
-        }
-        for page in project_plan_page_records(project_plan)
-        if isinstance(page, dict)
-    ]
-
-
-def _skeleton_data_sources(build_context: dict) -> list[dict]:
-    """从当前 Endpoint 设计快照提取数据源骨架，不读取实体全局绑定。"""
-
-    result: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    for design in build_context.get("endpoint_designs") or []:
-        if not isinstance(design, dict):
-            continue
-        for snapshot in design.get("sourceSnapshots") or []:
-            if not isinstance(snapshot, dict):
-                continue
-            key = (
-                str(snapshot.get("sourceType") or ""),
-                str(snapshot.get("sourceId") or ""),
-            )
-            if not all(key) or key in seen:
-                continue
-            seen.add(key)
-            result.append(
-                {
-                    "id": key[1],
-                    "name": snapshot.get("name") or key[1],
-                    "type": key[0],
-                }
-            )
-    return result
-
-
-def _skeleton_api_contracts(project_plan: dict) -> list[dict]:
-    """提取 API 契约骨架摘要，完整字段契约只在 executable_details 中按范围暴露。"""
-
-    return [
-        {
-            "id": contract.get("id"),
-            "entity_ids": contract.get("entity_ids"),
-            "base_path": contract.get("base_path"),
-            "endpoint_ids": [
-                endpoint.get("id")
-                for endpoint in contract.get("endpoints", [])
-                if isinstance(endpoint, dict) and endpoint.get("id")
-            ],
-        }
-        for contract in project_plan.get("api_contracts", [])
-        if isinstance(contract, dict)
-    ]
-
-
-def _executable_details(project_plan: dict, build_context: dict) -> dict:
-    """按当前构建目标投射页面实现契约、endpoint 和 API 详情。"""
-
-    endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
-    target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
-    is_application = str(target.get("type") or "") == "application"
-    endpoint_designs = [
-        dict(item)
-        for item in build_context.get("endpoint_designs") or []
-        if isinstance(item, dict)
-    ]
-    scoped_contracts = _scoped_contracts(project_plan, build_context, is_application=is_application)
-    return {
-        "page_implementation_contracts": (
-            [build_context["page_implementation_contract"]]
-            if build_context.get("page_implementation_contract")
-            else list(project_plan.get("page_implementation_contracts") or [])
-            if build_context.get("target", {}).get("type") == "application"
-            else []
-        ),
-        "endpoint_contracts": list(
-            build_context.get("direct_endpoint_contracts") or []
-        ),
-        "endpoint_designs": endpoint_designs,
-        "api_contracts": [
-            _scoped_api_contract(contract, endpoint_ids)
-            for contract in scoped_contracts
-        ],
-    }
 
 
 def _scoped_contracts(
@@ -1718,429 +755,6 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
     }
 
 
-def _merge_prepared_scope_tasks(
-        skeleton_plan: dict,
-        prepared_plan: dict,
-        build_context: dict,
-        *,
-        project_plan: dict | None = None,
-) -> dict:
-    """用本次范围任务替换同 Unit 旧任务，并保留其他已准备 Unit 的任务。"""
-
-    required_unit_ids = set(build_context.get("required_unit_ids") or [])
-    generated_tasks = tasks_from_build_task_plan(prepared_plan)
-    if not generated_tasks and isinstance(prepared_plan.get("tasks"), list):
-        generated_tasks = [task for task in prepared_plan["tasks"] if isinstance(task, dict)]
-    # 资源和路由注册由平台在 Build 启动前确定性执行；模型误输出时丢弃，
-    # 并同步移除依赖，避免候选图引用不存在的节点。
-    generated_tasks, ignored_platform_task_ids = strip_platform_owned_candidate_tasks(
-        generated_tasks
-    )
-    out_of_scope_unit_ids = sorted(
-        {
-            str(task.get("unit_id") or "")
-            for task in generated_tasks
-            if str(task.get("unit_id") or "") not in required_unit_ids
-        }
-    )
-    if out_of_scope_unit_ids:
-        raise ValueError(
-            "模型返回了当前构建范围以外的 Unit 任务："
-            + "、".join(out_of_scope_unit_ids)
-        )
-    replaceable_unit_ids = _replaceable_unit_ids(
-        skeleton_plan,
-        build_context,
-        required_unit_ids,
-    )
-    retained_tasks = [
-        task
-        for task in tasks_from_build_task_plan(skeleton_plan)
-        if str(task.get("unit_id") or "") not in replaceable_unit_ids
-    ]
-    retained_tasks_by_unit = _tasks_by_unit_id(retained_tasks)
-    generated_tasks, dropped_dependency_map = _drop_non_replaceable_unit_tasks(
-        generated_tasks,
-        replaceable_unit_ids=replaceable_unit_ids,
-        retained_tasks_by_unit=retained_tasks_by_unit,
-    )
-    generated_tasks = _rewrite_generated_task_dependencies(
-        generated_tasks,
-        dropped_dependency_map,
-    )
-    retained_ids = {str(task.get("id") or "") for task in retained_tasks}
-    generated_tasks = _rename_generated_task_id_conflicts(
-        generated_tasks,
-        reserved_ids=retained_ids,
-    )
-    replacement_dependency_map = _replacement_dependency_map(
-        skeleton_plan,
-        generated_tasks,
-        replaceable_unit_ids,
-    )
-    retained_tasks = _rewrite_replaced_unit_dependencies(
-        retained_tasks,
-        replacement_dependency_map,
-    )
-    # 替换映射只用于让范围外保留任务改为依赖本轮新任务；本轮候选已经声明了
-    # 同 Unit 内的完整依赖，若再次按旧任务 ID 展开，会把稳定 ID 误写成互相依赖。
-    acceptance_context = {
-        **build_context,
-        "project_plan": project_plan if isinstance(project_plan, dict) else {},
-        # 保留任务是上一轮已存在的基线；不猜测其历史业务语义，只允许新编译结果保留结构化空字段。
-        "_allow_missing_business_deliverable_task_ids": sorted(retained_ids),
-    }
-    merged = compile_build_task_plan_scope(
-        skeleton_plan,
-        merge_exact_duplicate_tasks([*retained_tasks, *generated_tasks]),
-        acceptance_context,
-        validate_task_scope=False,
-        preserve_compiled_task_ids=retained_ids,
-    )
-    for unit_id, unit in (merged.get("build_units") or {}).items():
-        if not isinstance(unit, dict) or unit_id not in replaceable_unit_ids:
-            continue
-        if unit.get("task_ids"):
-            unit["status"] = "prepared"
-            continue
-        reuse_evidence = _existing_application_unit_evidence(unit_id, prepared_plan)
-        if reuse_evidence:
-            unit["status"] = "reused"
-            unit["reuse_evidence"] = reuse_evidence
-        else:
-            unit["status"] = "not_prepared"
-    # 权限共享投影在 Build Run 绑定的计划顶层读取模板变体，不能只保留在调试用构建上下文。
-    result = {
-        **merged,
-        "template_variant": str(build_context.get("template_variant") or ""),
-        "prepared_by": {
-            **(
-                prepared_plan.get("prepared_by", merged.get("prepared_by", {}))
-                if isinstance(
-                    prepared_plan.get("prepared_by", merged.get("prepared_by", {})),
-                    dict,
-                )
-                else {}
-            ),
-            **(
-                {"ignoredPlatformCandidateTaskIds": ignored_platform_task_ids}
-                if ignored_platform_task_ids
-                else {}
-            ),
-        },
-        "preparation_source": prepared_plan.get(
-            "preparation_source", merged.get("preparation_source")
-        ),
-        "agent_note": prepared_plan.get("agent_note", merged.get("agent_note", "")),
-        "build_context": build_context,
-    }
-    return result
-
-
-def _existing_application_unit_evidence(
-        unit_id: str,
-        prepared_plan: dict,
-) -> dict[str, object] | None:
-    """根据任务规划前的工作区检查证据识别可复用的前端壳 Unit。"""
-
-    if unit_id != "frontend:shell":
-        return None
-    analysis = prepared_plan.get("workspace_analysis")
-    if not isinstance(analysis, dict) or analysis.get("inspection_status") != "completed":
-        return None
-    paths = [
-        str(path)
-        for key in ("entry_files", "inspected_directories")
-        for path in analysis.get(key, [])
-        if str(path).strip()
-    ]
-    lowered = [path.lower() for path in paths]
-    matched = [
-        path
-        for path, normalized in zip(paths, lowered)
-        if any(token in normalized for token in ("package.json", "/main.", "/app."))
-    ]
-    if not matched:
-        return None
-    return {
-        "source": "workspace_snapshot",
-        "paths": matched,
-        "reason": "Existing capability is reused; integration_test owns verification.",
-    }
-
-
-def _tasks_by_unit_id(tasks: list[dict]) -> dict[str, list[dict]]:
-    """按 Unit ID 分组任务，供复用已准备 Unit 时改写依赖。"""
-
-    grouped: dict[str, list[dict]] = {}
-    for task in tasks:
-        grouped.setdefault(str(task.get("unit_id") or "application:root"), []).append(task)
-    return grouped
-
-
-def _drop_non_replaceable_unit_tasks(
-        generated_tasks: list[dict],
-        *,
-        replaceable_unit_ids: set[str],
-        retained_tasks_by_unit: dict[str, list[dict]],
-) -> tuple[list[dict], dict[str, list[str]]]:
-    """丢弃模型为已准备 Unit 返回的新任务，并记录依赖应指向的旧任务。"""
-
-    kept_tasks: list[dict] = []
-    dependency_map: dict[str, list[str]] = {}
-    for task in generated_tasks:
-        unit_id = str(task.get("unit_id") or "")
-        task_id = str(task.get("id") or "").strip()
-        if unit_id in replaceable_unit_ids:
-            kept_tasks.append(task)
-            continue
-        retained_ids = [
-            str(retained_task.get("id") or "")
-            for retained_task in retained_tasks_by_unit.get(unit_id, [])
-            if retained_task.get("id")
-        ]
-        if task_id:
-            dependency_map[task_id] = retained_ids
-    return kept_tasks, dependency_map
-
-
-def _rewrite_generated_task_dependencies(
-        generated_tasks: list[dict],
-        dependency_map: dict[str, list[str]],
-) -> list[dict]:
-    """把被丢弃任务的依赖引用改为对应已保留任务。"""
-
-    if not dependency_map:
-        return generated_tasks
-    return [
-        _rewrite_task_dependencies(task, dependency_map)
-        for task in generated_tasks
-    ]
-
-
-def _replacement_dependency_map(
-        build_task_plan: dict,
-        generated_tasks: list[dict],
-        replaceable_unit_ids: set[str],
-) -> dict[str, list[str]]:
-    """按被替换 Unit 建立旧任务到新任务的映射，供全局依赖同步改写。"""
-
-    old_tasks_by_unit = _tasks_by_unit_id(tasks_from_build_task_plan(build_task_plan))
-    new_tasks_by_unit = _tasks_by_unit_id(generated_tasks)
-    dependency_map: dict[str, list[str]] = {}
-    for unit_id in replaceable_unit_ids:
-        replacement_ids = [
-            str(task.get("id") or "")
-            for task in new_tasks_by_unit.get(unit_id, [])
-            if task.get("id")
-        ]
-        for old_task in old_tasks_by_unit.get(unit_id, []):
-            old_task_id = str(old_task.get("id") or "").strip()
-            if old_task_id:
-                dependency_map[old_task_id] = replacement_ids
-    return dependency_map
-
-
-def _rewrite_replaced_unit_dependencies(
-        tasks: list[dict],
-        dependency_map: dict[str, list[str]],
-) -> list[dict]:
-    """改写任务中的旧 Unit 任务依赖，并过滤替换映射产生的自依赖。"""
-
-    if not dependency_map:
-        return tasks
-    rewritten_tasks: list[dict] = []
-    for task in tasks:
-        rewritten = _rewrite_task_dependencies(task, dependency_map)
-        task_id = str(rewritten.get("id") or "")
-        dependencies = [
-            dependency
-            for dependency in _task_dependency_list(rewritten)
-            if dependency != task_id
-        ]
-        rewritten_tasks.append(
-            {
-                **rewritten,
-                "dependencies": dependencies,
-            }
-        )
-    return rewritten_tasks
-
-
-def _rename_generated_task_id_conflicts(
-        generated_tasks: list[dict],
-        *,
-        reserved_ids: set[str],
-) -> list[dict]:
-    """为本次模型任务规避已保留任务 ID，并同步改写本批任务依赖。"""
-
-    id_map: dict[str, list[str]] = {}
-    used_ids = set(reserved_ids)
-    renamed_tasks: list[dict] = []
-    for task in generated_tasks:
-        task_id = str(task.get("id") or "").strip()
-        if not task_id:
-            renamed_tasks.append(task)
-            continue
-        next_id = task_id
-        if next_id in used_ids:
-            next_id = _unique_scoped_task_id(task, task_id, used_ids)
-            id_map[task_id] = [next_id]
-        used_ids.add(next_id)
-        renamed_tasks.append(
-            {
-                **task,
-                "id": next_id,
-            }
-        )
-    if not id_map:
-        return renamed_tasks
-    return [_rewrite_task_dependencies(task, id_map) for task in renamed_tasks]
-
-
-def _unique_scoped_task_id(
-        task: dict,
-        task_id: str,
-        used_ids: set[str],
-) -> str:
-    """按 Unit ID 生成稳定任务前缀，直到避开已有 ID。"""
-
-    unit_slug = _task_unit_slug(str(task.get("unit_id") or "application:root"))
-    base_id = f"{unit_slug}--{task_id}"
-    candidate = base_id
-    suffix = 2
-    while candidate in used_ids:
-        candidate = f"{base_id}-{suffix}"
-        suffix += 1
-    return candidate
-
-
-def _task_unit_slug(unit_id: str) -> str:
-    """把 Unit ID 转成可读、稳定的任务 ID 前缀。"""
-
-    slug = "".join(
-        char.lower() if char.isalnum() else "-"
-        for char in unit_id.strip()
-    ).strip("-")
-    return slug or "application-root"
-
-
-def _rewrite_task_dependencies(task: dict, id_map: dict[str, list[str]]) -> dict:
-    """把本次被重命名任务的依赖引用同步改成新 ID。"""
-
-    dependencies: list[str] = []
-    for dependency in _task_dependency_list(task):
-        replacements = id_map.get(dependency)
-        dependencies.extend(replacements if replacements is not None else [dependency])
-    return {
-        **task,
-        "dependencies": list(dict.fromkeys(dependencies)),
-    }
-
-
-def _task_dependency_list(task: dict) -> list[str]:
-    """读取任务依赖列表，过滤非字符串形式的空值。"""
-
-    value = task.get("dependencies") or []
-    if not isinstance(value, list):
-        return []
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
-def _replaceable_unit_ids(
-        build_task_plan: dict,
-        build_context: dict,
-        required_unit_ids: set[str],
-) -> set[str]:
-    """仅替换目标 Unit 与尚无任务的依赖 Unit，已准备依赖任务始终复用。"""
-
-    target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
-    if target.get("type") == "application":
-        return {
-            unit_id
-            for unit_id in required_unit_ids
-            if not (
-                    _is_reusable_public_unit(unit_id)
-                    and _unit_tasks_are_reusable(build_task_plan, unit_id)
-            )
-        }
-    target_unit_id = _target_unit_id(target)
-    units = build_task_plan.get("build_units") or {}
-    replaceable: set[str] = set()
-    for unit_id in required_unit_ids:
-        unit = units.get(unit_id) if isinstance(units, dict) else {}
-        has_tasks = isinstance(unit, dict) and bool(unit.get("task_ids"))
-        if unit_id == target_unit_id or not has_tasks:
-            replaceable.add(unit_id)
-    return replaceable
-
-
-def _retained_frontend_endpoint_owner_constraints(
-    build_task_plan: dict,
-    replaceable_unit_ids: set[str],
-) -> tuple[list[dict[str, str]], list[str]]:
-    """按实际合并边界从保留的普通任务实时提取 Endpoint owner 约束。"""
-
-    retained_tasks = [
-        task
-        for task in tasks_from_build_task_plan(build_task_plan)
-        if str(task.get("unit_id") or "") not in replaceable_unit_ids
-    ]
-    errors = frontend_endpoint_ownership_errors(retained_tasks)
-    constraints = sorted(
-        [
-            {
-                "api_contract_id": str(owner.get("api_contract_id") or ""),
-                "endpoint_id": str(owner.get("endpoint_id") or ""),
-                "owner_task_id": str(owner.get("owner_task_id") or ""),
-                "owner_unit_id": str(owner.get("owner_unit_id") or ""),
-                "policy": "reuse_only",
-            }
-            for owner in frontend_endpoint_implementation_owners(retained_tasks)
-        ],
-        key=lambda item: (
-            item["api_contract_id"].casefold(),
-            item["endpoint_id"].casefold(),
-            item["owner_task_id"],
-        ),
-    )
-    return constraints, errors
-
-
-def _is_reusable_public_unit(unit_id: str) -> bool:
-    """判断 Unit 是否属于可复用的前端公共能力。"""
-
-    return unit_id == "frontend:shell"
-
-
-def _unit_tasks_are_reusable(build_task_plan: dict, unit_id: str) -> bool:
-    """仅当 Unit 的全部登记任务均已完成时，才允许后续规划复用该 Unit。"""
-
-    units = build_task_plan.get("build_units")
-    unit = units.get(unit_id) if isinstance(units, dict) else None
-    task_ids = list(unit.get("task_ids") or []) if isinstance(unit, dict) else []
-    registry = build_task_plan.get("task_registry")
-    if not task_ids or not isinstance(registry, dict):
-        return False
-    return all(
-        isinstance(registry.get(task_id), dict)
-        and registry[task_id].get("status") in {"completed", "already_satisfied"}
-        for task_id in task_ids
-    )
-
-
-def _target_unit_id(target: dict) -> str:
-    """将构建目标转换成 Unit ID，供局部 DAG 判断替换边界。"""
-
-    target_type = str(target.get("type") or "")
-    target_id = str(target.get("id") or "")
-    if target_type == "page" and target_id:
-        return f"page:{target_id}"
-    if target_type == "endpoint" and target_id:
-        api_contract_id = str(target.get("api_contract_id") or "").strip()
-        return f"backend:endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
-    return ""
-
 
 def _api_contract_inconsistency_payload(
     errors: list[str],
@@ -2208,110 +822,3 @@ def _build_context_error_payload(
         }
     )
     return payload
-
-
-def _build_task_plan_generation_failed_result(
-    project_plan: dict,
-    build_task_plan: dict,
-    progress: Any,
-    error: str,
-    build_execution_scope: dict[str, str],
-) -> dict:
-    """构造自动重生成耗尽后的平台失败结果，不把平台边界问题交给用户修正。"""
-
-    reason = str(error or "Build DAG 自动重生成失败。").strip()
-    failed_plan = _build_task_plan_attempt_view(
-        build_task_plan,
-        build_execution_scope,
-        status="failed",
-    )
-    persisted_scope = build_task_plan.get("build_execution_scope")
-    return {
-        "phase": "prepare_build_tasks",
-        "status": "failed",
-        "project_plan": project_plan,
-        "build_task_plan": failed_plan,
-        "build_execution_scope": build_execution_scope,
-        "last_persisted_build_execution_scope": (
-            persisted_scope if isinstance(persisted_scope, dict) else None
-        ),
-        "build_task_plan_persisted": False,
-        "dag_generation_progress": progress.snapshot(),
-        "error": reason,
-        "message": "Build DAG 自动重生成未得到有效任务计划，已停止代码生成。",
-        "timeline": ["prepare_build_tasks"],
-    }
-
-
-def _retained_endpoint_owner_blocked_result(
-    project_plan: dict,
-    build_task_plan: dict,
-    progress: Any,
-    errors: list[str],
-    build_execution_scope: dict[str, str],
-) -> dict:
-    """将保留基线 owner 冲突投影为用户手动处理提示，不自动回退上游。"""
-
-    failed_plan = _build_task_plan_attempt_view(
-        build_task_plan,
-        build_execution_scope,
-        status="failed",
-    )
-    payload = build_ask_user_payload(
-        [
-            AskUserQuestion(
-                header="DAG 基线冲突",
-                question=(
-                    "当前已保留的 Build 任务对同一前端 Endpoint 声明了多个实现 owner，"
-                    "平台无法安全选择其中一个。请手动修正现有任务规划后重新发起 DAG 生成。"
-                ),
-                type="text",
-                placeholder="请保留一个 API 模块 owner，并让页面任务只复用该实现。",
-            )
-        ]
-    )
-    payload.update(
-        {
-            "mode": "retained_endpoint_owner_conflict",
-            "code": "retained_frontend_endpoint_owner_conflict",
-            "message": "保留 Build DAG 已存在前端 Endpoint 多 owner，未调用模型生成新候选。",
-            "target": build_execution_scope,
-            "artifact": ".xcodeagent/plans/build-task-plan.json",
-            "errors": errors,
-            "recommended_action": "手动修正现有 Build Task Plan 的重复 API 实现归属后重新生成 DAG。",
-            "automatic_routing": False,
-        }
-    )
-    persisted_scope = build_task_plan.get("build_execution_scope")
-    return {
-        "phase": "prepare_build_tasks",
-        "status": "requires_user_input",
-        "project_plan": project_plan,
-        "build_task_plan": failed_plan,
-        "build_execution_scope": build_execution_scope,
-        "last_persisted_build_execution_scope": (
-            persisted_scope if isinstance(persisted_scope, dict) else None
-        ),
-        "build_task_plan_persisted": False,
-        "dag_generation_progress": progress.snapshot(),
-        "clarification": payload,
-        "message": payload["message"],
-        "timeline": ["prepare_build_tasks"],
-    }
-
-
-def _build_task_plan_attempt_view(
-    build_task_plan: dict,
-    build_execution_scope: dict[str, str],
-    *,
-    status: str | None = None,
-) -> dict:
-    """为本次 DAG 尝试投影当前 scope，失败时不把它写回上一次成功的 JSON。"""
-
-    view = {
-        **build_task_plan,
-        "build_execution_scope": dict(build_execution_scope),
-    }
-    if status:
-        view["status"] = status
-    return view

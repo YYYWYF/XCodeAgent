@@ -22,6 +22,7 @@ import type {
 
 export type SendWorkflowMessageOptions = {
   workspaceRoot?: string
+  sessionId?: string
   editorMode: EditorMode
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
@@ -63,8 +64,10 @@ export type SendWorkflowMessageOptions = {
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onToolCalls?: (toolCalls: ToolCallRecord[]) => void
   onProcessSteps?: (steps: ProcessStepRecord[]) => void
-  planControlAction?: 'stop' | 'end'
+  planControlAction?: 'stop' | 'end' | 'abandon'
   planControlRunId?: string
+  planningRunId?: string
+  draftDigest?: string
   resumeExecutionRunId?: string
   pageTemplate?: {
     id?: string
@@ -105,6 +108,7 @@ export function buildWorkflowForwardedProps(
 ): Record<string, unknown> {
   return {
     workspaceRoot: options.workspaceRoot,
+    sessionId: options.sessionId,
     editorMode: options.editorMode,
     application: options.application,
     clarificationAnswers: options.clarificationAnswers,
@@ -134,6 +138,8 @@ export function buildWorkflowForwardedProps(
     workflowScope: options.workflowScope,
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
+    planningRunId: options.planningRunId,
+    draftDigest: options.draftDigest,
     resumeExecutionRunId: options.resumeExecutionRunId,
     pageTemplate: options.pageTemplate,
     conversation: options.conversation
@@ -231,148 +237,124 @@ export type IntegrationTestCheckRecord = {
   reportPath?: string
 }
 
-export type DagGenerationStageRecord = {
-  id: string
-  name: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
-  detail: string
-  output?: DagGenerationStageOutput
+export type DagGenerationRunStatus = 'active' | 'failed' | 'cancelled'
+
+export type DagGenerationPhase =
+  | 'preparing'
+  | 'generating_units'
+  | 'global_check'
+  | 'assembling'
+  | 'validating'
+  | 'persisting_pending'
+
+export type DagGenerationParticipation =
+  | 'reuse_only'
+  | 'generate_only'
+  | 'reuse_and_generate'
+  | 'prerequisite_only'
+  | 'structural_only'
+
+export type DagGenerationStrategy =
+  | 'structural_only'
+  | 'prerequisite_only'
+  | 'reuse_only'
+  | 'deterministic'
+  | 'model'
+
+export type DagGenerationUnitStatus =
+  | 'not_required'
+  | 'pending'
+  | 'generating'
+  | 'validating'
+  | 'candidate_ready'
+  | 'round_exhausted'
+  | 'aborted'
+
+export type DagGenerationIssueRecord = {
+  code: string
+  level: string
+  category: string
+  unitIds: string[]
+  retryUnitIds: string[]
+  retryable: boolean
+  message: string
 }
 
 export type DagGenerationUnitRecord = {
   id: string
   kind: string
-  status: string
-  taskCount: number
+  participation: DagGenerationParticipation
+  generationStrategy: DagGenerationStrategy
+  status: DagGenerationUnitStatus
+  generationRound: number
+  attemptInRound: number
+  localAttemptLimit: number
+  totalAttempts: number
+  retainedTaskCount: number
+  reusableCapabilityCount: number
+  candidateTaskCount: number
+  issues: DagGenerationIssueRecord[]
 }
 
-export type DagGenerationEdgeRecord = {
-  from: string
-  to: string
-  type: string
-}
-
-export type DagGenerationEdgeList = {
-  items: DagGenerationEdgeRecord[]
-  truncated: boolean
-}
-
-export type DagGenerationValidation = {
-  isValid: boolean
-  issues: string[]
-}
-
-export type DagGenerationStageOutput =
-  | {
-      kind: 'unit_graph'
-      schemaVersion: string
-      reused: boolean
-      units: DagGenerationUnitRecord[]
-      edges: DagGenerationEdgeList
-      validation: DagGenerationValidation
-    }
-  | {
-      kind: 'build_context'
-      target: { type: string; id: string }
-      requiredUnitIds: string[]
-      endpointIds: string[]
-      apiContractIds: string[]
-      dataSourceIds: string[]
-      databaseStatus: string
-      reusableTaskIds: string[]
-    }
-  | {
-      kind: 'contract_validation'
-      isValid: boolean
-      checkedEndpointIds: string[]
-      checkedApiContractIds: string[]
-      issues: string[]
-    }
-  | {
-      kind: 'candidate_tasks'
-      tasks: DagGenerationTaskRecord[]
-      summary: { frontend: number; backend: number; database: number }
-    }
-  | {
-      kind: 'compiled_tasks'
-      tasks: DagGenerationTaskRecord[]
-      edges: DagGenerationEdgeList
-      summary: { frontend: number; backend: number; database: number }
-    }
-  | {
-      kind: 'dag_validation'
-      isValid: boolean
-      roots: string[]
-      leaves: string[]
-      topologicalOrder: string[]
-      batches: DagGenerationBatchRecord[]
-      issues: string[]
-    }
-  | {
-      kind: 'artifacts'
-      artifacts: DagGenerationArtifactRecord[]
-      count: number
-    }
-
-export type DagGenerationBatchRecord = {
-  index: number
-  mode: string
-  taskIds: string[]
-}
-
-export type DagGenerationTaskRecord = {
-  id: string
-  title: string
-  description?: string
-  owner: string
-  unitId?: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
-  dependencies: string[]
-  changePaths: string[]
-  allowedPaths?: string[]
-  changeScope?: Array<Record<string, unknown>>
-  deliverables?: Array<Record<string, unknown>>
-  engineeringAcceptanceChecks: Array<Record<string, unknown>>
-  businessAcceptanceChecks: Array<Record<string, unknown>>
-}
-
-export type DagGenerationArtifactRecord = {
-  id: string
-  name: string
-  kind: 'json' | 'internal'
-  status: 'saved'
-  confirmationStatus?: string
-  scope?: Record<string, unknown>
+export type DagGenerationSummary = {
+  unitCount: number
+  readyUnitCount: number
+  pendingUnitCount: number
+  activeUnitCount: number
+  roundExhaustedUnitCount: number
+  abortedUnitCount: number
+  retainedTaskCount: number
+  candidateTaskCount: number
+  unitIssueCount: number
+  globalIssueCount: number
+  failureIssueCount: number
 }
 
 export type DagGenerationSnapshot = {
-  stages: DagGenerationStageRecord[]
-  tasks: DagGenerationTaskRecord[]
-  summary: {
-    unitCount: number
-    taskCount: number
-    edgeCount: number
-    batchCount: number
-    frontendCount: number
-    backendCount: number
-    databaseCount: number
-    isValid: boolean
-  }
-  artifacts: DagGenerationArtifactRecord[]
-  confirmationStatus?: string
-  scope?: WorkflowBuildExecutionScope
+  schemaVersion: 'dag-generation.v1'
+  planningRunId: string
+  revision: number
+  status: DagGenerationRunStatus
+  phase: DagGenerationPhase
+  globalRepairRound: number
+  globalRepairLimit: number
+  units: DagGenerationUnitRecord[]
+  globalIssues: DagGenerationIssueRecord[]
+  summary: DagGenerationSummary
 }
 
-const DAG_GENERATION_STAGE_OUTPUT_KIND: Record<string, DagGenerationStageOutput['kind']> = {
-  unit_skeleton: 'unit_graph',
-  build_context: 'build_context',
-  authorization_overlay: 'build_context',
-  contract_validation: 'contract_validation',
-  model_planning: 'candidate_tasks',
-  task_compilation: 'compiled_tasks',
-  dag_validation: 'dag_validation',
-  artifact_persistence: 'artifacts'
-}
+const DAG_GENERATION_RUN_STATUSES = new Set<string>(['active', 'failed', 'cancelled'])
+const DAG_GENERATION_PHASES = new Set<string>([
+  'preparing',
+  'generating_units',
+  'global_check',
+  'assembling',
+  'validating',
+  'persisting_pending'
+])
+const DAG_GENERATION_PARTICIPATIONS = new Set<string>([
+  'reuse_only',
+  'generate_only',
+  'reuse_and_generate',
+  'prerequisite_only',
+  'structural_only'
+])
+const DAG_GENERATION_STRATEGIES = new Set<string>([
+  'structural_only',
+  'prerequisite_only',
+  'reuse_only',
+  'deterministic',
+  'model'
+])
+const DAG_GENERATION_UNIT_STATUSES = new Set<string>([
+  'not_required',
+  'pending',
+  'generating',
+  'validating',
+  'candidate_ready',
+  'round_exhausted',
+  'aborted'
+])
 
 export type WorkspaceInspectionPathItem = {
   path: string
@@ -464,13 +446,51 @@ const STOP_TRANSPORT_DRAIN_MS = 800
 
 export type WorkflowCancellationStatus =
   | 'cancelled'
+  | 'pending_confirmation'
   | 'not_running'
   | 'cancel_timeout'
   | 'control_failed'
 
-type WorkflowCancellationResult = {
+export type WorkflowCancellationResult = {
   status: WorkflowCancellationStatus
   message: string
+}
+
+/** 通过对应 AG-UI 端点取消指定 Workflow Run，供刷新恢复后没有本地 SSE 句柄的运行使用。 */
+export async function cancelWorkflowRun(
+  threadId: string,
+  targetRunId: string,
+  workspaceRoot?: string,
+  endpointUrl = getWorkflowUrl()
+): Promise<WorkflowCancellationResult> {
+  const cancellationAgent = createAgUiHttpAgent({
+    url: endpointUrl,
+    threadId
+  })
+  try {
+    const result = await promiseWithTimeout(
+      cancellationAgent.runAgent({
+        forwardedProps: { cancelRunId: targetRunId, workspaceRoot }
+      }),
+      STOP_CONTROL_TIMEOUT_MS,
+      '取消 Workflow 的控制请求超时，请重试。'
+    )
+    const control = objectValue(objectValue(result.result).workflowRunControl)
+    const status = stringValue(control.status)
+    if (['cancelled', 'pending_confirmation', 'not_running', 'cancel_timeout'].includes(status)) {
+      return {
+        status: status as WorkflowCancellationStatus,
+        message: stringValue(control.message)
+      }
+    }
+    return { status: 'control_failed', message: '取消响应缺少有效的最终状态，请重试。' }
+  } catch (reason) {
+    cancellationAgent.abortRun()
+    return {
+      status: 'control_failed',
+      message: reason instanceof Error ? reason.message : '取消 Workflow 失败，请重试。'
+    }
+  }
 }
 
 /** 在限定时间内等待 Promise 收口，超时后返回 false 且不再追等原 Promise。 */
@@ -481,15 +501,17 @@ async function waitWithTimeout(
   if (!promise) return true
   return new Promise<boolean>((resolve) => {
     let settled = false
-    let timer: ReturnType<typeof setTimeout>
     const finish = (completed: boolean): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       resolve(completed)
     }
-    timer = setTimeout(() => finish(false), timeoutMs)
-    void promise.then(() => finish(true), () => finish(true))
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    void promise.then(
+      () => finish(true),
+      () => finish(true)
+    )
   })
 }
 
@@ -501,14 +523,13 @@ async function promiseWithTimeout<T>(
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false
-    let timer: ReturnType<typeof setTimeout>
     const finish = (callback: () => void): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       callback()
     }
-    timer = setTimeout(() => finish(() => reject(new Error(timeoutMessage))), timeoutMs)
+    const timer = setTimeout(() => finish(() => reject(new Error(timeoutMessage))), timeoutMs)
     void promise.then(
       (value) => finish(() => resolve(value)),
       (reason) => finish(() => reject(reason))
@@ -569,9 +590,11 @@ export class AgUiChatSession {
       return
     }
 
-    const cancellation = await this.cancelRun(runId)
+    const cancellation = await cancelWorkflowRun(this.threadId, runId, undefined, this.endpointUrl)
     const serverStopped =
-      cancellation.status === 'cancelled' || cancellation.status === 'not_running'
+      cancellation.status === 'cancelled' ||
+      cancellation.status === 'pending_confirmation' ||
+      cancellation.status === 'not_running'
     if (serverStopped && this.unresolvedServerRunId === runId) {
       this.unresolvedServerRunId = undefined
     } else if (!serverStopped) {
@@ -580,10 +603,7 @@ export class AgUiChatSession {
     if (this.activeRunId === runId && this.activeAgent === activeAgent) {
       activeAgent?.abortRun()
     }
-    const transportSettled = await waitWithTimeout(
-      activeRunCompletion,
-      STOP_TRANSPORT_DRAIN_MS
-    )
+    const transportSettled = await waitWithTimeout(activeRunCompletion, STOP_TRANSPORT_DRAIN_MS)
     if (!serverStopped) {
       throw new Error(
         cancellation.message ||
@@ -747,39 +767,6 @@ export class AgUiChatSession {
     this.activeRunCompletion = undefined
     this.resolveActiveRunCompletion = undefined
   }
-
-  /** 通过实际端点请求服务端取消并等待，返回可区分超时和控制失败的最终状态。 */
-  private async cancelRun(targetRunId: string): Promise<WorkflowCancellationResult> {
-    const cancellationAgent = createAgUiHttpAgent({
-      url: this.endpointUrl,
-      threadId: this.threadId
-    })
-    try {
-      const result = await promiseWithTimeout(
-        cancellationAgent.runAgent({
-          forwardedProps: { cancelRunId: targetRunId }
-        }),
-        STOP_CONTROL_TIMEOUT_MS,
-        '取消上一轮 Workflow 的控制请求超时，请重试。'
-      )
-      const control = objectValue(objectValue(result.result).workflowRunControl)
-      const status = stringValue(control.status)
-      if (['cancelled', 'not_running', 'cancel_timeout'].includes(status)) {
-        return {
-          status: status as WorkflowCancellationStatus,
-          message: stringValue(control.message)
-        }
-      }
-      return { status: 'control_failed', message: '取消响应缺少有效的最终状态，请重试。' }
-    } catch (reason) {
-      cancellationAgent.abortRun()
-      return {
-        status: 'control_failed',
-        message:
-          reason instanceof Error ? reason.message : '取消上一轮 Workflow 失败，请重试。'
-      }
-    }
-  }
 }
 
 function mergeProcessStep(
@@ -788,6 +775,7 @@ function mergeProcessStep(
 ): ProcessStepRecord[] {
   const existingIndex = steps.findIndex((item) => item.id === step.id)
   const existing = existingIndex >= 0 ? steps[existingIndex] : undefined
+  const dagGeneration = newerDagGenerationSnapshot(existing?.dagGeneration, step.dagGeneration)
   const mergedStep = {
     ...existing,
     ...step,
@@ -795,13 +783,25 @@ function mergeProcessStep(
       ? `${existing?.detail || ''}${step.detail}`.slice(-24_000)
       : step.detail,
     appendDetail: false,
-    sequence: existing?.sequence ?? step.sequence
+    sequence: existing?.sequence ?? step.sequence,
+    ...(dagGeneration ? { dagGeneration } : {})
   }
   const next =
     existingIndex < 0
       ? [...steps, mergedStep]
       : steps.map((item, index) => (index === existingIndex ? mergedStep : item))
   return next.sort((left, right) => left.sequence - right.sequence)
+}
+
+/** 同一 PlanningRun 仅接受 revision 不低于当前值的完整快照。 */
+export function newerDagGenerationSnapshot(
+  current: DagGenerationSnapshot | undefined,
+  incoming: DagGenerationSnapshot | undefined
+): DagGenerationSnapshot | undefined {
+  if (!current) return incoming
+  if (!incoming) return current
+  if (current.planningRunId !== incoming.planningRunId) return incoming
+  return incoming.revision >= current.revision ? incoming : current
 }
 
 /** 解析后端传来的流程步骤，并忽略不符合协议的扩展字段。 */
@@ -964,333 +964,121 @@ function readWorkspaceRelativePath(value: unknown): string {
   return path
 }
 
-/** 解析 DAG 生成快照，仅保留前端展示所需的受限结构。 */
+/** 解析 PlanningRun 完整进度快照，并拒绝旧版阶段结构和未知枚举。 */
 export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot | undefined {
   const snapshot = objectValue(parseStructuredValue(value))
-  if (!Array.isArray(snapshot.stages)) return undefined
+  const schemaVersion = boundedString(snapshot.schemaVersion, 80)
+  const planningRunId = boundedString(snapshot.planningRunId, 240)
+  const status = stringValue(snapshot.status)
+  const phase = stringValue(snapshot.phase)
+  if (
+    schemaVersion !== 'dag-generation.v1' ||
+    !planningRunId ||
+    !Number.isInteger(snapshot.revision) ||
+    Number(snapshot.revision) < 0 ||
+    !DAG_GENERATION_RUN_STATUSES.has(status) ||
+    !DAG_GENERATION_PHASES.has(phase) ||
+    !Array.isArray(snapshot.units) ||
+    !snapshot.summary ||
+    typeof snapshot.summary !== 'object'
+  ) {
+    return undefined
+  }
 
-  const stages = snapshot.stages.flatMap((item) => {
-    const stage = objectValue(item)
-    const id = boundedString(stage.id, 240)
-    const name = boundedString(stage.name, 500)
-    const status = stringValue(stage.status)
-    if (
-      !id ||
-      !name ||
-      !DAG_GENERATION_STAGE_OUTPUT_KIND[id] ||
-      !['pending', 'running', 'completed', 'failed'].includes(status)
-    ) {
-      return []
-    }
-    const parsedOutput = readDagGenerationStageOutput(stage.output)
-    const output =
-      parsedOutput && parsedOutput.kind === DAG_GENERATION_STAGE_OUTPUT_KIND[id]
-        ? parsedOutput
-        : undefined
-    return [
-      {
-        id,
-        name,
-        status: status as DagGenerationStageRecord['status'],
-        detail: boundedString(stage.detail, 1_000),
-        ...(output ? { output } : {})
-      }
-    ]
-  })
-  if (stages.length === 0) return undefined
-
-  const tasks = readDagGenerationTasks(snapshot.tasks)
-  const summary = objectValue(snapshot.summary)
-  const artifacts = readDagGenerationArtifacts(snapshot.artifacts)
+  const units = readDagGenerationProgressUnits(snapshot.units)
+  if (!units) return undefined
 
   return {
-    stages,
-    tasks,
-    summary: {
-      unitCount: nonNegativeInteger(summary.unitCount),
-      taskCount: nonNegativeInteger(summary.taskCount),
-      edgeCount: nonNegativeInteger(summary.edgeCount),
-      batchCount: nonNegativeInteger(summary.batchCount),
-      frontendCount: nonNegativeInteger(summary.frontendCount),
-      backendCount: nonNegativeInteger(summary.backendCount ?? summary.dataSourceCount),
-      databaseCount: nonNegativeInteger(summary.databaseCount),
-      isValid: summary.isValid === true
-    },
-    artifacts,
-    confirmationStatus: boundedString(
-      snapshot.confirmationStatus ?? snapshot.confirmation_status,
-      40
-    ) || undefined,
-    scope: readDagGenerationScope(snapshot.scope)
+    schemaVersion,
+    planningRunId,
+    revision: nonNegativeInteger(snapshot.revision),
+    status: status as DagGenerationRunStatus,
+    phase: phase as DagGenerationPhase,
+    globalRepairRound: nonNegativeInteger(snapshot.globalRepairRound),
+    globalRepairLimit: nonNegativeInteger(snapshot.globalRepairLimit),
+    units,
+    globalIssues: readDagGenerationIssues(snapshot.globalIssues),
+    summary: readDagGenerationSummary(snapshot.summary)
   }
 }
 
-/** 解析阶段结构化产物，并拒绝未知类型以保持协议边界。 */
-function readDagGenerationStageOutput(value: unknown): DagGenerationStageOutput | undefined {
-  const output = objectValue(parseStructuredValue(value))
-  const kind = stringValue(output.kind)
-  if (kind === 'unit_graph') {
-    const validation = readDagGenerationValidation(output.validation)
-    return {
-      kind,
-      schemaVersion: boundedString(output.schemaVersion ?? output.schema_version, 80),
-      reused: output.reused === true,
-      units: readDagGenerationUnits(output.units),
-      edges: readDagGenerationEdges(output.edges),
-      validation
-    }
-  }
-  if (kind === 'build_context') {
-    const target = objectValue(output.target)
-    return {
-      kind,
-      target: {
-        type: boundedString(target.type, 80) || 'application',
-        id: boundedString(target.id, 240) || 'application'
-      },
-      requiredUnitIds: boundedStringList(
-        output.requiredUnitIds ?? output.required_unit_ids,
-        200,
-        240
-      ),
-      endpointIds: boundedStringList(output.endpointIds ?? output.endpoint_ids, 200, 240),
-      apiContractIds: boundedStringList(output.apiContractIds ?? output.api_contract_ids, 200, 240),
-      dataSourceIds: boundedStringList(output.dataSourceIds ?? output.data_source_ids, 200, 240),
-      databaseStatus:
-        boundedString(output.databaseStatus ?? output.database_status, 80) || 'missing',
-      reusableTaskIds: boundedStringList(
-        output.reusableTaskIds ?? output.reusable_task_ids,
-        200,
-        240
-      )
-    }
-  }
-  if (kind === 'contract_validation') {
-    return {
-      kind,
-      isValid: output.isValid === true || output.is_valid === true,
-      checkedEndpointIds: boundedStringList(
-        output.checkedEndpointIds ?? output.checked_endpoint_ids,
-        200,
-        240
-      ),
-      checkedApiContractIds: boundedStringList(
-        output.checkedApiContractIds ?? output.checked_api_contract_ids,
-        200,
-        240
-      ),
-      issues: boundedStringList(output.issues, 100, 1_000)
-    }
-  }
-  if (kind === 'candidate_tasks') {
-    const summary = objectValue(output.summary)
-    return {
-      kind,
-      tasks: readDagGenerationTasks(output.tasks),
-      summary: {
-        frontend: nonNegativeInteger(summary.frontend),
-        backend: nonNegativeInteger(summary.backend),
-        database: nonNegativeInteger(summary.database)
-      }
-    }
-  }
-  if (kind === 'compiled_tasks') {
-    const summary = objectValue(output.summary)
-    return {
-      kind,
-      tasks: readDagGenerationTasks(output.tasks),
-      edges: readDagGenerationEdges(output.edges),
-      summary: {
-        frontend: nonNegativeInteger(summary.frontend),
-        backend: nonNegativeInteger(summary.backend),
-        database: nonNegativeInteger(summary.database)
-      }
-    }
-  }
-  if (kind === 'dag_validation') {
-    return {
-      kind,
-      isValid: output.isValid === true || output.is_valid === true,
-      roots: boundedStringList(output.roots, 200, 240),
-      leaves: boundedStringList(output.leaves, 200, 240),
-      topologicalOrder: boundedStringList(
-        output.topologicalOrder ?? output.topological_order,
-        200,
-        240
-      ),
-      batches: readDagGenerationBatches(output.batches),
-      issues: boundedStringList(output.issues, 100, 1_000)
-    }
-  }
-  if (kind === 'artifacts') {
-    const artifacts = readDagGenerationArtifacts(output.artifacts)
-    return { kind, artifacts, count: nonNegativeInteger(output.count) || artifacts.length }
-  }
-  return undefined
-}
-
-/** 解析 DAG 任务列表，统一兼容顶层和阶段内任务投影。 */
-function readDagGenerationTasks(value: unknown): DagGenerationTaskRecord[] {
-  if (!Array.isArray(value)) return []
-  return value.slice(0, 200).flatMap((item) => {
-    const task = objectValue(item)
-    const id = boundedString(task.id, 240)
-    const title = boundedString(task.title, 500)
-    const status = stringValue(task.status)
-    if (!id || !title || !['pending', 'running', 'completed', 'failed'].includes(status)) {
-      return []
-    }
-    return [
-      {
-        id,
-        title,
-        description: boundedString(task.description, 2_000) || undefined,
-        owner: boundedString(task.owner, 80),
-        unitId: boundedString(task.unitId ?? task.unit_id, 240) || undefined,
-        status: status as DagGenerationTaskRecord['status'],
-        dependencies: boundedStringList(task.dependencies, 200, 240),
-        changePaths: boundedStringList(task.changePaths, 200, 1_000),
-        allowedPaths: boundedStringList(
-          task.allowedPaths ?? task.allowed_paths,
-          200,
-          1_000
-        ),
-        changeScope: objectRecordList(task.changeScope ?? task.change_scope, 200),
-        deliverables: objectRecordList(task.deliverables, 100),
-        engineeringAcceptanceChecks: objectRecordList(
-          task.engineeringAcceptanceChecks ?? task.engineering_acceptance_checks,
-          100
-        ),
-        businessAcceptanceChecks: objectRecordList(
-          task.businessAcceptanceChecks ?? task.business_acceptance_checks,
-          100
-        )
-      }
-    ]
-  })
-}
-
-/** 解析并裁剪 Unit 列表。 */
-function readDagGenerationUnits(value: unknown): DagGenerationUnitRecord[] {
-  if (!Array.isArray(value)) return []
-  return value.slice(0, 200).flatMap((item) => {
+/** 完整校验全部 Unit 的生命周期枚举，再单独截取 UI 可展示的前 200 条。 */
+function readDagGenerationProgressUnits(value: unknown): DagGenerationUnitRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const units: DagGenerationUnitRecord[] = []
+  for (const item of value) {
     const unit = objectValue(item)
     const id = boundedString(unit.id, 240)
-    if (!id) return []
-    return [
-      {
+    const participation = stringValue(unit.participation)
+    const generationStrategy = stringValue(unit.generationStrategy)
+    const status = stringValue(unit.status)
+    if (
+      !id ||
+      !DAG_GENERATION_PARTICIPATIONS.has(participation) ||
+      !DAG_GENERATION_STRATEGIES.has(generationStrategy) ||
+      !DAG_GENERATION_UNIT_STATUSES.has(status)
+    ) {
+      return undefined
+    }
+    if (units.length < 200) {
+      units.push({
         id,
         kind: boundedString(unit.kind, 80) || 'unknown',
-        status: boundedString(unit.status, 80) || 'not_prepared',
-        taskCount: nonNegativeInteger(unit.taskCount ?? unit.task_count)
-      }
-    ]
-  })
-}
-
-/** 解析依赖边列表并保留服务端截断标记。 */
-function readDagGenerationEdges(value: unknown): DagGenerationEdgeList {
-  const edgeContainer = objectValue(value)
-  const rawItems = Array.isArray(value) ? value : edgeContainer.items
-  const items = Array.isArray(rawItems)
-    ? rawItems.slice(0, 500).flatMap((item) => {
-        const edge = objectValue(item)
-        const from = boundedString(edge.from, 240)
-        const to = boundedString(edge.to, 240)
-        if (!from || !to) return []
-        return [
-          {
-            from,
-            to,
-            type: boundedString(edge.type, 80) || 'depends_on'
-          }
-        ]
+        participation: participation as DagGenerationParticipation,
+        generationStrategy: generationStrategy as DagGenerationStrategy,
+        status: status as DagGenerationUnitStatus,
+        generationRound: nonNegativeInteger(unit.generationRound),
+        attemptInRound: nonNegativeInteger(unit.attemptInRound),
+        localAttemptLimit: nonNegativeInteger(unit.localAttemptLimit),
+        totalAttempts: nonNegativeInteger(unit.totalAttempts),
+        retainedTaskCount: nonNegativeInteger(unit.retainedTaskCount),
+        reusableCapabilityCount: nonNegativeInteger(unit.reusableCapabilityCount),
+        candidateTaskCount: nonNegativeInteger(unit.candidateTaskCount),
+        issues: readDagGenerationIssues(unit.issues)
       })
-    : []
-  return {
-    items,
-    truncated:
-      edgeContainer.truncated === true || (Array.isArray(rawItems) && rawItems.length > 500)
+    }
   }
+  return units
 }
 
-/** 解析统一校验结果。 */
-function readDagGenerationValidation(value: unknown): DagGenerationValidation {
-  const validation = objectValue(value)
-  return {
-    isValid: validation.isValid === true || validation.is_valid === true,
-    issues: boundedStringList(validation.issues ?? validation.errors, 100, 1_000)
-  }
-}
-
-/** 解析执行批次及其串并行模式。 */
-function readDagGenerationBatches(value: unknown): DagGenerationBatchRecord[] {
+/** 解析安全 Issue 投影；Candidate 身份、正文和任意 details 均不会进入前端状态。 */
+function readDagGenerationIssues(value: unknown): DagGenerationIssueRecord[] {
   if (!Array.isArray(value)) return []
-  return value.slice(0, 200).flatMap((item) => {
-    const batch = objectValue(item)
-    const taskIds = boundedStringList(batch.taskIds ?? batch.task_ids ?? batch.tasks, 200, 240)
-    if (taskIds.length === 0 && typeof batch.index !== 'number') return []
+  return value.slice(0, 100).flatMap((item) => {
+    const issue = objectValue(item)
+    const code = boundedString(issue.code, 160)
+    const message = boundedString(issue.message, 1_000)
+    if (!code || !message) return []
     return [
       {
-        index: nonNegativeInteger(batch.index),
-        mode: boundedString(batch.mode, 40) || 'serial',
-        taskIds
+        code,
+        level: boundedString(issue.level, 80) || 'unit',
+        category: boundedString(issue.category, 80) || 'validation',
+        unitIds: boundedStringList(issue.unitIds, 200, 240),
+        retryUnitIds: boundedStringList(issue.retryUnitIds, 200, 240),
+        retryable: issue.retryable === true,
+        message
       }
     ]
   })
 }
 
-/** 解析并裁剪已保存产物列表。 */
-function readDagGenerationArtifacts(value: unknown): DagGenerationArtifactRecord[] {
-  if (!Array.isArray(value)) return []
-  return value.slice(0, 200).flatMap((item) => {
-    const artifact = objectValue(item)
-    const id = boundedString(artifact.id, 240)
-    const name = boundedString(artifact.name, 500)
-    const kind = stringValue(artifact.kind)
-    if (!id || !name || !['json', 'internal'].includes(kind)) return []
-    return [
-      {
-        id,
-        name,
-        kind: kind as DagGenerationArtifactRecord['kind'],
-        status: 'saved' as const,
-        ...(boundedString(artifact.confirmationStatus ?? artifact.confirmation_status, 40)
-          ? {
-              confirmationStatus: boundedString(
-                artifact.confirmationStatus ?? artifact.confirmation_status,
-                40
-              )
-            }
-          : {}),
-        ...(Object.keys(objectValue(artifact.scope)).length > 0
-          ? { scope: objectValue(artifact.scope) }
-          : {})
-      }
-    ]
-  })
-}
-
-/** 解析 DAG 运行范围，只保留可用于展示和恢复的当前范围字段。 */
-function readDagGenerationScope(value: unknown): WorkflowBuildExecutionScope | undefined {
-  const scope = objectValue(value)
-  const type = boundedString(scope.type, 40)
-  if (!['application', 'page', 'data_source', 'endpoint'].includes(type)) return undefined
-  const targetId = boundedString(scope.targetId ?? scope.target_id, 240)
-  const apiContractId = boundedString(scope.apiContractId ?? scope.api_contract_id, 240)
+/** 解析服务端离散计数摘要，不计算或补造百分比。 */
+function readDagGenerationSummary(value: unknown): DagGenerationSummary {
+  const summary = objectValue(value)
   return {
-    type: type as WorkflowBuildExecutionScope['type'],
-    ...(targetId ? { targetId } : {}),
-    ...(apiContractId ? { apiContractId } : {})
+    unitCount: nonNegativeInteger(summary.unitCount),
+    readyUnitCount: nonNegativeInteger(summary.readyUnitCount),
+    pendingUnitCount: nonNegativeInteger(summary.pendingUnitCount),
+    activeUnitCount: nonNegativeInteger(summary.activeUnitCount),
+    roundExhaustedUnitCount: nonNegativeInteger(summary.roundExhaustedUnitCount),
+    abortedUnitCount: nonNegativeInteger(summary.abortedUnitCount),
+    retainedTaskCount: nonNegativeInteger(summary.retainedTaskCount),
+    candidateTaskCount: nonNegativeInteger(summary.candidateTaskCount),
+    unitIssueCount: nonNegativeInteger(summary.unitIssueCount),
+    globalIssueCount: nonNegativeInteger(summary.globalIssueCount),
+    failureIssueCount: nonNegativeInteger(summary.failureIssueCount)
   }
-}
-
-/** 裁剪阶段输出中的对象列表，避免把服务端内部对象原样暴露到前端。 */
-function objectRecordList(value: unknown, limit: number): Array<Record<string, unknown>> {
-  if (!Array.isArray(value)) return []
-  return value
-    .slice(0, limit)
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
 }
 
 /** 校验并裁剪页面细节确认产生的只读项目计划更新快照。 */
@@ -1497,23 +1285,32 @@ function optionalNonNegativeInteger(value: unknown): number | undefined {
 }
 
 /** 读取 Lighthouse 分类得分，只保留 0-100 的合法整数。 */
-function readPerformanceScores(value: unknown): NonNullable<IntegrationTestCheckRecord['performanceScores']> {
+function readPerformanceScores(
+  value: unknown
+): NonNullable<IntegrationTestCheckRecord['performanceScores']> {
   const source = objectValue(value)
   const scores: NonNullable<IntegrationTestCheckRecord['performanceScores']> = {}
-  const allowed = ['performance', 'accessibility', 'bestPractices', 'best_practices', 'seo'] as const
+  const allowed = [
+    'performance',
+    'accessibility',
+    'bestPractices',
+    'best_practices',
+    'seo'
+  ] as const
   for (const key of allowed) {
     const raw = source[key]
     if (typeof raw !== 'number' || !Number.isFinite(raw)) continue
     const normalized = Math.min(100, Math.max(0, Math.round(raw)))
-    const outputKey =
-      key === 'bestPractices' || key === 'best_practices' ? 'bestPractices' : key
+    const outputKey = key === 'bestPractices' || key === 'best_practices' ? 'bestPractices' : key
     scores[outputKey as keyof typeof scores] = normalized
   }
   return scores
 }
 
 /** 读取 Lighthouse 核心指标，只保留有限数值。 */
-function readPerformanceMetrics(value: unknown): NonNullable<IntegrationTestCheckRecord['performanceMetrics']> {
+function readPerformanceMetrics(
+  value: unknown
+): NonNullable<IntegrationTestCheckRecord['performanceMetrics']> {
   const source = objectValue(value)
   const metrics: NonNullable<IntegrationTestCheckRecord['performanceMetrics']> = {}
   const allowed = ['fcp', 'lcp', 'tbt', 'cls', 'si'] as const
@@ -1619,7 +1416,12 @@ function emitWorkflowLifecycle(
 function readConfirmationArtifact(value: unknown): WorkflowConfirmationArtifact | undefined {
   if (!value || typeof value !== 'object') return undefined
   const artifact = value as Partial<WorkflowConfirmationArtifact>
-  if (!['requirement_spec', 'product_plan', 'technical_plan', 'project_plan'].includes(String(artifact.id))) return undefined
+  if (
+    !['requirement_spec', 'product_plan', 'technical_plan', 'project_plan'].includes(
+      String(artifact.id)
+    )
+  )
+    return undefined
   if (artifact.format !== 'markdown') return undefined
   if (
     typeof artifact.name !== 'string' ||

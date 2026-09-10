@@ -3,7 +3,8 @@ import {
   ClockCircleOutlined,
   CloseCircleOutlined,
   LoadingOutlined,
-  PauseCircleOutlined
+  PauseCircleOutlined,
+  StopOutlined
 } from '@ant-design/icons'
 import {
   Alert,
@@ -14,6 +15,7 @@ import {
   Modal,
   Progress,
   Radio,
+  Space,
   Tag,
   Tooltip,
   Typography
@@ -68,6 +70,10 @@ import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
 import { workflowClarification } from './workflowClarification'
 import { buildTaskDisplayStatus } from './buildTaskStatus'
+import {
+  bindDagConfirmationDraftIdentity,
+  currentDagConfirmationDraftIdentity
+} from '../../stageOutputState'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -80,9 +86,9 @@ const { TextArea } = Input
 const OTHER_OPTION_VALUE = '__other__'
 
 /** 校验门禁卡片的页面或 Endpoint 开发目标，拒绝不完整的历史载荷。 */
-function normalizeApiDesignDevelopmentTarget(value: unknown):
-  | { type: 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string }
-  | undefined {
+function normalizeApiDesignDevelopmentTarget(
+  value: unknown
+): { type: 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string } | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const target = value as Record<string, unknown>
   const type = target.type === 'page' ? 'page' : target.type === 'endpoint' ? 'endpoint' : undefined
@@ -115,12 +121,15 @@ const ARTIFACT_CONFIRMATION_MAP: Record<string, { title: string; summary: string
 export type ClarificationAnswers = WorkflowClarificationAnswers
 
 type WorkflowRunCardProps = {
+  cancelDisabled?: boolean
   disabled?: boolean
   interactionAvailability: WorkflowInteractionAvailability
   /** 已答完的历史澄清卡：header→答案 映射，存在时按原控件形态回填答案并以禁用态展示。 */
   historicalClarificationAnswers?: Record<string, string>
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
+  /** 仅由外层基于当前权威 active run 身份传入；历史 running 快照不得自行显示取消。 */
+  onCancel?: () => void
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
@@ -152,11 +161,13 @@ type WorkflowRunCardProps = {
 }
 
 export default function WorkflowRunCard({
+  cancelDisabled,
   disabled,
   historicalClarificationAnswers,
   interactionAvailability,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
+  onCancel,
   onSubmitClarification,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -171,6 +182,7 @@ export default function WorkflowRunCard({
 }: WorkflowRunCardProps): ReactElement {
   const { phase: currentWorkbenchPhase } = useWorkbenchPhase()
   const status = String(workflow.summary.status || 'unknown')
+  const activeRun = status === 'running' || status === 'stopping'
   const artifacts = workflow.summary.artifacts || {}
   const clarification = workflowClarification(workflow)
   // 项目启动快照可能暂时保留上一测试节点已提交的性能测试确认；启动卡不应重复展示该旧交互。
@@ -222,6 +234,14 @@ export default function WorkflowRunCard({
     workflow.summary?.testTarget ||
     workflow.state?.testTarget) as WorkflowTestTarget | undefined
   const dagTaskPlan = clarification?.taskPlan as WorkflowBuildTaskPlan | undefined
+  // Confirm/Abandon/Regenerate 必须精确绑定服务端 DraftIdentity；缺失时禁止提交（fail closed）。
+  const dagDraftIdentity = currentDagConfirmationDraftIdentity(workflow)
+  const dagConfirmationErrors = dagDraftIdentity
+    ? clarification?.errors
+    : [
+        ...(Array.isArray(clarification?.errors) ? clarification.errors : []),
+        '当前任务规划缺少服务端 DraftIdentity，请刷新后重试。'
+      ]
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -322,11 +342,11 @@ export default function WorkflowRunCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.threadId, clarificationFingerprint])
 
-  const awaitingApiDesignConfirmation =
-    apiDesignResult?.status === 'ready' && apiDesignConfirmation
+  const awaitingApiDesignConfirmation = apiDesignResult?.status === 'ready' && apiDesignConfirmation
   if (
     apiDesignResult &&
-    (apiDesignResult.status === 'confirmed' || awaitingApiDesignConfirmation)
+    (apiDesignResult.status === 'confirmed' || awaitingApiDesignConfirmation) &&
+    !activeRun
   ) {
     const gateAction = {
       action: 'confirm' as const,
@@ -347,15 +367,26 @@ export default function WorkflowRunCard({
         awaitingConfirmation={awaitingApiDesignConfirmation}
         result={apiDesignResult}
         disabled={disabled || interactionAvailability !== 'active'}
-        onConfirm={awaitingApiDesignConfirmation ? () => onSubmitClarification?.(workflow, { api_design_gate: gateAction }) : undefined}
-        onEdit={awaitingApiDesignConfirmation ? (item) => {
-          const endpoint = item.design.endpointContract as Record<string, unknown> | undefined
-          onOpenApiDesignConfig?.({
-            apiContractId: item.apiContractId,
-            endpointId: item.endpointId,
-            label: `${String(endpoint?.method || 'API')} ${String(endpoint?.path || item.endpointId)}`
-          }, workflow)
-        } : undefined}
+        onConfirm={
+          awaitingApiDesignConfirmation
+            ? () => onSubmitClarification?.(workflow, { api_design_gate: gateAction })
+            : undefined
+        }
+        onEdit={
+          awaitingApiDesignConfirmation
+            ? (item) => {
+                const endpoint = item.design.endpointContract as Record<string, unknown> | undefined
+                onOpenApiDesignConfig?.(
+                  {
+                    apiContractId: item.apiContractId,
+                    endpointId: item.endpointId,
+                    label: `${String(endpoint?.method || 'API')} ${String(endpoint?.path || item.endpointId)}`
+                  },
+                  workflow
+                )
+              }
+            : undefined
+        }
       />
     )
   }
@@ -377,9 +408,22 @@ export default function WorkflowRunCard({
             </Text>
           </div>
         </div>
-        <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
-          {workflowStatusText(status)}
-        </Tag>
+        <Space size={8}>
+          {activeRun && onCancel ? (
+            <Button
+              danger
+              disabled={cancelDisabled || status === 'stopping'}
+              icon={<StopOutlined />}
+              onClick={onCancel}
+              size="small"
+            >
+              {status === 'stopping' ? '正在取消' : '取消运行'}
+            </Button>
+          ) : null}
+          <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
+            {workflowStatusText(status)}
+          </Tag>
+        </Space>
       </div>
       {workflow.summary.message &&
         !revisionImpact &&
@@ -453,20 +497,20 @@ export default function WorkflowRunCard({
         testPhaseConfirmation ||
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
-          <div className={cx('workflow-clarification')}>
-            {!revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
-              <div className={cx('workflow-clarification-header')}>
-                <div>
-                  <Text strong>待确认事项</Text>
-                </div>
-                <Tag
-                  className={cx('workflow-confirmation-count')}
-                  color={requiresConfirmation ? 'gold' : 'default'}
-                >
-                  {confirmationItemCount}
-                </Tag>
+        <div className={cx('workflow-clarification')}>
+          {!revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
+            <div className={cx('workflow-clarification-header')}>
+              <div>
+                <Text strong>待确认事项</Text>
               </div>
-            )}
+              <Tag
+                className={cx('workflow-confirmation-count')}
+                color={requiresConfirmation ? 'gold' : 'default'}
+              >
+                {confirmationItemCount}
+              </Tag>
+            </div>
+          )}
           {requiresConfirmation && interactionAvailability !== 'active' && (
             <Alert
               message={
@@ -572,13 +616,15 @@ export default function WorkflowRunCard({
             />
           ) : dagConfirmation && requiresConfirmation ? (
             <BuildTaskPlanConfirmation
-              disabled={disabled || interactionAvailability !== 'active'}
-              errors={clarification?.errors}
-              onSubmit={(action: WorkflowBuildTaskPlanConfirmation) =>
+              disabled={disabled || interactionAvailability !== 'active' || !dagDraftIdentity}
+              errors={dagConfirmationErrors}
+              onSubmit={(action: WorkflowBuildTaskPlanConfirmation) => {
+                const identityBoundAction = bindDagConfirmationDraftIdentity(workflow, action)
+                if (!identityBoundAction) return
                 onSubmitClarification?.(workflow, {
-                  build_task_plan_confirmation: action
+                  build_task_plan_confirmation: identityBoundAction
                 })
-              }
+              }}
               plan={dagTaskPlan}
               targetReview={clarification?.targetReview}
             />
@@ -610,9 +656,7 @@ export default function WorkflowRunCard({
               savedMappingKeys={apiDesignSavedMappingKeys}
               scopeKey={`${workflow.threadId}:${workflow.runId}`}
               onConfigure={(target) => onOpenApiDesignConfig?.(target, workflow)}
-              onConfirm={(action) =>
-                onSubmitClarification?.(workflow, { api_design_gate: action })
-              }
+              onConfirm={(action) => onSubmitClarification?.(workflow, { api_design_gate: action })}
               target={normalizeApiDesignDevelopmentTarget(clarification?.developmentTarget)}
             />
           ) : detailReview ? (
@@ -787,8 +831,7 @@ function workflowRevisionImpact(
   workflow: WorkflowRunPayload,
   clarification?: WorkflowClarification
 ): WorkflowRevisionImpact | undefined {
-  const clarificationImpact = (clarification as Record<string, unknown> | undefined)
-    ?.revisionImpact
+  const clarificationImpact = (clarification as Record<string, unknown> | undefined)?.revisionImpact
   const candidates = [
     clarificationImpact,
     workflow.summary.revisionImpact,
@@ -800,9 +843,7 @@ function workflowRevisionImpact(
     const impact = candidate as Partial<WorkflowRevisionImpact>
     if (
       typeof impact.interactionId === 'string' &&
-      ['design_stage_revision', 'workbench_plan_revision'].includes(
-        String(impact.formalBranch)
-      )
+      ['design_stage_revision', 'workbench_plan_revision'].includes(String(impact.formalBranch))
     ) {
       return impact as WorkflowRevisionImpact
     }
@@ -814,10 +855,12 @@ function workflowRevisionImpact(
 function workflowRevisionDraftBinding(
   workflow: WorkflowRunPayload,
   clarification?: WorkflowClarification
-): {
-  draft: WorkflowRevisionDraft
-  interaction: Omit<WorkflowRevisionDraftInteraction, 'action' | 'editedMarkdown' | 'feedback'>
-} | undefined {
+):
+  | {
+      draft: WorkflowRevisionDraft
+      interaction: Omit<WorkflowRevisionDraftInteraction, 'action' | 'editedMarkdown' | 'feedback'>
+    }
+  | undefined {
   if (clarification?.mode !== 'revision_draft_confirmation') return undefined
   const clarificationDraft = (clarification as Record<string, unknown>).revisionDraft
   const candidates = [
@@ -1095,12 +1138,7 @@ export function PlanConfirmationCard({
 
   return (
     <div className={cx('artifact-auth-bar', 'project-plan-confirmation-card')}>
-      <div
-        className={cx(
-          'artifact-auth-bar-footer',
-          revising && 'technical-plan-revision-inline'
-        )}
-      >
+      <div className={cx('artifact-auth-bar-footer', revising && 'technical-plan-revision-inline')}>
         {revising ? (
           <div className={cx('technical-plan-revision-editor')}>
             <Input
@@ -2313,10 +2351,7 @@ type BusinessAcceptanceDetail = {
 }
 
 /** 提取失败或阻断的验收证据，工程错误优先使用精确 error 字段。 */
-function acceptanceFailureDetails(
-  value: unknown,
-  kind: 'engineering' | 'business'
-): string[] {
+function acceptanceFailureDetails(value: unknown, kind: 'engineering' | 'business'): string[] {
   return objectList(value).flatMap((item) => {
     const status = stringValue(item.status).trim()
     if (!['failed', 'blocked'].includes(status)) return []

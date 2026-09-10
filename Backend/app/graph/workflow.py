@@ -1,6 +1,12 @@
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from langgraph.graph import END, START, StateGraph
 
 from app.graph import nodes
+from app.graph.nodes.task_planning_adapter import (
+    create_async_workflow_planning_adapter,
+)
 from app.graph.subgraphs import acceptance_subgraph
 from app.graph.state import ProjectState
 from app.services.authorization_bootstrap import authorization_bootstrap_enabled
@@ -245,8 +251,22 @@ def route_acceptance(state: ProjectState) -> str:
     return "finalize_project" if state.get("accepted") is True else "await_user_input"
 
 
-def build_graph(*, checkpointer):
-    """构建从开发就绪检查开始的主应用开发图。"""
+def build_graph(
+    *,
+    checkpointer,
+    prepare_build_tasks_node: Callable[
+        [ProjectState], dict[str, Any] | Awaitable[dict[str, Any]]
+    ]
+    | None = None,
+):
+    """构建主应用开发图；production 默认绑定 async Planning/Confirm adapter。
+
+    显式注入仅用于测试或注入当前 async adapter；默认 production graph 永远使用
+    ``task_planning_adapter``，不再保留旧的 Scope Planner 分支。
+    """
+
+    if prepare_build_tasks_node is None:
+        prepare_build_tasks_node = create_async_workflow_planning_adapter()
 
     builder = StateGraph(ProjectState)
 
@@ -259,7 +279,10 @@ def build_graph(*, checkpointer):
     builder.add_node("entity_source_binding", nodes.entity_source_binding)
     builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
-    builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
+    builder.add_node(
+        "prepare_build_tasks",
+        prepare_build_tasks_node,
+    )
     builder.add_node("authorization_bootstrap", nodes.authorization_bootstrap)
     builder.add_node("build", nodes.build)
     builder.add_node("unit_test", nodes.unit_test)

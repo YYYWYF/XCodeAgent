@@ -60,7 +60,7 @@ import {
   workflowShouldShowCodeReview,
   workflowShouldShowProjectLaunch
 } from '../../utils'
-import { workflowInteractionAvailability } from '../../planExecutionMode'
+import { workflowMessageInteractionAvailability } from '../../planExecutionMode'
 import { phasePendingDetail } from './phasePending'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
@@ -235,14 +235,13 @@ function messageAgentPhase(
 }
 
 type MessageListProps = {
-  activeDagStageId?: string
+  /** 当前由 lifecycle 或本地请求确认仍在运行的精确 Workflow；历史 running 快照不能替代。 */
+  activeRunWorkflow?: WorkflowRunPayload
   applicationLifecycle?: ApplicationLifecycle
   /** 仅首次新建且尚未进入开发的应用允许展示模板准备卡。 */
   applicationTemplatePreparationEligible: boolean
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
-  /** 右侧阶段产物面板可见时，把 Build DAG 确认卡从消息流移出以避免重复。 */
-  dagConfirmationInStageOutput?: boolean
   entityDesignSession?: boolean
   /** 普通自由对话没有消息时使用的工作区级快捷任务内容。 */
   emptyContent?: ReactNode
@@ -280,6 +279,7 @@ type MessageListProps = {
   planningWorkflow?: WorkflowRunPayload
   loading: boolean
   messages: AgentChatMessage[]
+  cancelRunDisabled?: boolean
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
   /** 在当前会话中恢复实体门禁前的页面或 Endpoint 正式任务。 */
@@ -289,8 +289,7 @@ type MessageListProps = {
   ) => void
   /** 从来源会话回执打开对应的独立需求设计会话。 */
   onOpenRevisionSession?: (handoff: NonNullable<AgentChatMessage['revisionHandoff']>) => void
-  /** 点击 DAG 进度卡中的已生成子阶段时，在右侧展示当前会话最新产物。 */
-  onDagStageSelect?: (stageId: string) => void
+  onCancelRun?: () => void
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
   onSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -308,12 +307,11 @@ type MessageListProps = {
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
-  activeDagStageId,
+  activeRunWorkflow,
   applicationLifecycle,
   applicationTemplatePreparationEligible,
   codeChangeActionsDisabled,
   conversationRunning,
-  dagConfirmationInStageOutput = false,
   entityDesignSession = false,
   emptyContent,
   designPhasePlanning = false,
@@ -331,11 +329,12 @@ export default function MessageList({
   planningWorkflow,
   loading,
   messages,
-  onDagStageSelect,
+  cancelRunDisabled,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
   onContinueDevelopment,
   onOpenRevisionSession,
+  onCancelRun,
   onOpenCodeChangeFile,
   onRevertCodeChanges,
   onRetryError,
@@ -364,19 +363,25 @@ export default function MessageList({
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
   const showStandaloneError = Boolean(
     !templateGenerationFailed &&
-    !templateGenerationOrphaned &&
-    visibleError &&
-    visibleError !== latestAssistantMessageError
+      !templateGenerationOrphaned &&
+      visibleError &&
+      visibleError !== latestAssistantMessageError
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
+  const activeRunRepresentedInMessages = Boolean(
+    activeRunWorkflow &&
+      messages.some(
+        (message) =>
+          message.workflow?.runId === activeRunWorkflow.runId &&
+          message.workflow.threadId === activeRunWorkflow.threadId
+      )
+  )
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
   const planningReviewMessageIndexes = canonicalPlanningReviewMessageIndexes(messages)
   // 当前 planning checkpoint 是确认权限的唯一权威。普通问答可以继续向后追加消息，
   // 但只要服务端仍挂起在同一 gateId + artifactRevision，原确认卡就必须保持可操作。
   const activePlanningReviewIdentity =
-    designPhasePlanning &&
-    planningWorkflow &&
-    planningWorkflowRequiresUserInput(planningWorkflow)
+    designPhasePlanning && planningWorkflow && planningWorkflowRequiresUserInput(planningWorkflow)
       ? planningReviewIdentity(planningWorkflow)
       : undefined
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
@@ -523,7 +528,7 @@ export default function MessageList({
               ) {
                 return null
               }
-                // TechnicalPlan 已开始后，入口动作已经消费；不在计划阶段继续展示可点击入口卡。
+              // TechnicalPlan 已开始后，入口动作已经消费；不在规划阶段继续展示可点击入口卡。
               if (
                 designPhasePlanning &&
                 isSupersededPlanningStageEntryMessage(messages, messageIndex)
@@ -619,6 +624,11 @@ export default function MessageList({
               const messageClarification = message.workflow
                 ? workflowClarification(message.workflow)
                 : undefined
+              const messageOwnsActiveRun = Boolean(
+                activeRunWorkflow &&
+                  message.workflow?.runId === activeRunWorkflow.runId &&
+                  message.workflow.threadId === activeRunWorkflow.threadId
+              )
               const isUiDesignConfirmationCard =
                 message.workflow &&
                 (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
@@ -638,10 +648,9 @@ export default function MessageList({
                 message.workflow && messageClarification?.mode === 'review_phase_confirmation'
               const isAcceptancePhaseConfirmationCard =
                 message.workflow && messageClarification?.mode === 'acceptance_phase_confirmation'
-              const dagConfirmationMovedToStageOutput = Boolean(
-                dagConfirmationInStageOutput &&
-                  messageClarification?.mode === 'build_task_plan_confirmation'
-              )
+              // Build DAG 确认只属于右侧阶段产物；普通消息流不恢复或复制确认卡。
+              const dagConfirmationMovedToStageOutput =
+                messageClarification?.mode === 'build_task_plan_confirmation'
               const isCodeReviewCard = workflowShouldShowCodeReview(message.workflow)
               // 创建规划的产品/技术阶段也展示 WorkflowRunCard，保证运行与确认状态连续可见。
               const isPlanningStageCard =
@@ -662,27 +671,19 @@ export default function MessageList({
                     isLaunchProjectCard ||
                     isReviewPhaseConfirmationCard ||
                     isAcceptancePhaseConfirmationCard ||
-                    isCodeReviewCard)
+                    isCodeReviewCard ||
+                    messageOwnsActiveRun)
               )
               // 设计阶段/会话内只有列表末尾的待答卡可交互：其后出现答案留痕或下一张卡
               // 即证明它已被回答。历史待答卡渲染为失效态，避免旧表单以空白可填样式误导。
-              // 手动切回设计阶段浏览已完成应用时（lifecycle 已就绪且无活跃 formal revision），
-              // 末尾的历史确认卡也已过期，不能判 active，否则跳过/确认按钮会错误可点。
-              const lifecycleReadyForWorkbench =
-                applicationLifecycle?.initialization?.stage === 'ready_for_workbench'
-              const browsingDesignHistory =
-                designPhasePlanning &&
-                lifecycleReadyForWorkbench &&
-                !applicationLifecycle?.activeFormalRevision
               const interactionAvailability =
                 message.workflow && requiresClarification
-                  ? browsingDesignHistory
-                    ? 'stale'
-                    : messageIndex < messages.length - 1 && !isCurrentPlanningReview
-                      ? 'stale'
-                      : conversation || designPhasePlanning
-                        ? 'active'
-                        : workflowInteractionAvailability(message.workflow, applicationLifecycle)
+                  ? workflowMessageInteractionAvailability(
+                      message.workflow,
+                      applicationLifecycle,
+                      messageIndex < messages.length - 1,
+                      Boolean(conversation || designPhasePlanning)
+                    )
                   : 'stale'
               // 已答过的历史澄清卡：从其后最近的 user 留痕解析「header：答案」行回填为
               // 只读摘要，避免旧表单以空白可填样式重现（恢复会话时 localStorage 草稿已丢）。
@@ -832,10 +833,8 @@ export default function MessageList({
                           visibleProcessSteps.length > 0 &&
                           !designPhasePlanning && (
                             <ProcessSteps
-                              activeDagStageId={activeDagStageId}
                               conversation={conversation}
                               loading={messageLoading}
-                              onDagStageSelect={onDagStageSelect}
                               steps={visibleProcessSteps}
                             />
                           )}
@@ -892,11 +891,16 @@ export default function MessageList({
                               disabled={loading || interactionAvailability !== 'active'}
                               onInteraction={scheduleScrollUpdate}
                               onSubmitClarification={onSubmitClarification}
-                              workflow={message.workflow}
+                              workflow={
+                                messageOwnsActiveRun && activeRunWorkflow
+                                  ? activeRunWorkflow
+                                  : message.workflow
+                              }
                               workspaceRoot={workspaceRoot}
                             />
                           ) : showWorkflowCard ? (
                             <WorkflowRunCard
+                              cancelDisabled={cancelRunDisabled}
                               disabled={
                                 loading ||
                                 interactionAvailability !== 'active' ||
@@ -904,6 +908,7 @@ export default function MessageList({
                               }
                               historicalClarificationAnswers={historicalClarificationAnswers}
                               interactionAvailability={interactionAvailability}
+                              onCancel={messageOwnsActiveRun ? onCancelRun : undefined}
                               apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
                               onEntityDesignGateJump={onEntityDesignGateJump}
                               onOpenApiDesignConfig={onOpenApiDesignConfig}
@@ -981,6 +986,21 @@ export default function MessageList({
               )
             })
           )}
+          {activeRunWorkflow && !activeRunRepresentedInMessages ? (
+            <article className={cx('ai-message', 'assistant')}>
+              <div className={cx('ai-message-content')}>
+                <MessageAgentHeader agentKey={messageAgentPhase(activeRunWorkflow, currentPhase)} />
+                <WorkflowRunCard
+                  cancelDisabled={cancelRunDisabled}
+                  disabled
+                  interactionAvailability="stale"
+                  onCancel={onCancelRun}
+                  workflow={activeRunWorkflow}
+                  workspaceRoot={workspaceRoot}
+                />
+              </div>
+            </article>
+          ) : null}
           {showStandaloneError ? (
             <article className={cx('ai-message', 'assistant')}>
               <div className={cx('ai-message-content')}>

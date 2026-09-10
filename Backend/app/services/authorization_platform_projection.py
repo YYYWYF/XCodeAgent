@@ -11,7 +11,7 @@ from app.services.authorization_constants_projection import (
 )
 from app.services.authorization_frontend_projection import (
     AuthorizationFrontendProjectionError,
-    apply_authorization_frontend_projection,
+    apply_frontend_routes_projection,
 )
 from app.workspace.task_documents import build_task_plan_sha256
 from app.workspace.code_changes import capture_workspace_changes
@@ -57,11 +57,11 @@ def apply_authorization_platform_projections(
         raise AuthorizationPlatformProjectionError("权限共享投影工作区不存在或不是目录。")
 
     def _apply() -> dict[str, Any]:
-        """严格按确认 DAG 的内容写入前端注册表和后端权限常量。"""
+        """严格按确认 DAG 写入前端路由和后端权限常量，不触碰 resources.ts。"""
 
         try:
             return {
-                "frontend": apply_authorization_frontend_projection(
+                "frontend": apply_frontend_routes_projection(
                     workspace_path,
                     frontend_projection,
                 ),

@@ -235,8 +235,14 @@ def _validate_resumable_execution(
         and execution.pending_interaction is not None
         and execution.pending_interaction.type == PendingInteractionType.PLAN_ADJUSTMENT
     )
-    # 单元测试、修复范围和测试阶段确认都是明确的人工门；其余待交互仍必须遵守
+    # DAG、单元测试、修复范围和测试阶段确认都是明确的人工门；其余待交互仍必须遵守
     # stopped/failed 或显式调试恢复规则，避免绕过人工门禁。
+    task_plan_confirmation = (
+        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type
+        == PendingInteractionType.TASK_PLAN_CONFIRMATION
+    )
     unit_test_confirmation = (
         execution.status == WorkbenchExecutionStatus.AWAITING_USER
         and execution.pending_interaction is not None
@@ -286,6 +292,7 @@ def _validate_resumable_execution(
     if (
         not resumable_status
         and not debug_plan_adjustment
+        and not task_plan_confirmation
         and not unit_test_confirmation
         and not frontend_performance_confirmation
         and not repair_scope_confirmation

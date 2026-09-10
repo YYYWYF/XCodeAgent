@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +45,8 @@ from app.services.application_lifecycle import (
 )
 from app.services.application_revision_lifecycle import issue_revision_continuation
 from app.services.authorization_frontend_projection import (
-    apply_authorization_frontend_projection,
-    compile_frontend_authorization_projection,
+    apply_frontend_routes_projection,
+    compile_frontend_routes_projection,
 )
 from app.services.frontend_scaffold import (
     collect_template_pages,
@@ -58,6 +59,8 @@ from app.services.template_scaffold_injection import (
 from app.workspace.plan_documents import technical_plan_json_path
 from app.workspace.product_plan_documents import confirmed_product_plan_json_path
 from app.workspace.spec_documents import ui_designs_json_path, load_ui_designs_json
+
+logger = logging.getLogger(__name__)
 
 
 def _route_start(state: ProjectState) -> str:
@@ -619,10 +622,13 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
     """二次修改确认 TechnicalPlan 后，把确定性代码增量注入模板工程。
 
     只在模板工程已存在时注入（首次创建走 prepare_template_generation，不在此注入）。
-    注入失败不阻断主流程——确定性代码缺失时 Agent 仍可在 build 阶段补生成。
+    这是签发 continuation 前的 best-effort scaffold，不是 auth 产物的权威写入边界：
+    此处只提前写 auth routes.tsx，绝不写 resources.ts；Build 阶段会重放 routes 平台投影
+    并 fail closed，resources.ts 则由 authorization.frontend_resources Task 唯一写入。
+    因此预注入失败不阻断主流程，但不能依赖 Agent 补齐任何 auth 投影。
 
     注入内容：
-    - 前端路由/权限资源（auth 分支）：从 TechnicalPlan 的 authorization_manifest 编译并写入 routes.tsx/resources.ts
+    - 前端路由（auth 分支）：从 TechnicalPlan 的 authorization_manifest 编译并写入 routes.tsx
     - 前端页面占位：从 ProductPlan + UiDesign 收集页面并创建占位文件
     - 后端骨架：从 TechnicalPlan 的 entities 推导 Entity/PO/Mapper/Repository/DTO/Controller
     全部幂等——已存在且内容一致的文件跳过，不覆盖用户手改。
@@ -637,27 +643,27 @@ def _inject_revision_scaffold(workspace: str, state: dict[str, Any]) -> None:
             technical_plan = json.load(handle)
         if not isinstance(technical_plan, dict):
             return
-        # 前端确定性注入：路由/权限资源（auth 分支）
+        # 前端确定性注入：仅写路由；resources.ts 由 auth-guard Build Task 唯一所有。
         _inject_frontend_authorization(workspace, technical_plan)
         # 前端确定性注入：页面占位文件
         _inject_frontend_page_placeholders(workspace, state)
         # 后端确定性注入：Entity/PO/Mapper/Repository/DTO/Controller 骨架
         inject_deterministic_backend_skeleton(workspace, technical_plan)
     except Exception:
-        # 确定性注入是优化项，失败不阻断二次修改主流程；Agent 仍可补生成。
-        pass
+        # 预注入失败可继续签发 continuation；权威 Build 投影仍会重放并 fail closed。
+        logger.exception("revision_scaffold_injection_failed")
 
 
 def _inject_frontend_authorization(workspace: str, technical_plan: dict[str, Any]) -> None:
-    """auth 分支模板：从 TechnicalPlan 编译并写入前端路由/权限资源。"""
+    """auth 分支模板：从 TechnicalPlan 编译并仅写入前端路由。"""
 
     frontend_dir = Path(workspace) / "frontend"
     routes_path = frontend_dir / "src" / "constants" / "routes.tsx"
     if not routes_path.is_file():
         return  # 非 auth 分支或模板未拉取，跳过
-    projection = compile_frontend_authorization_projection(technical_plan)
+    projection = compile_frontend_routes_projection(technical_plan)
     if projection is not None:
-        apply_authorization_frontend_projection(workspace, projection)
+        apply_frontend_routes_projection(workspace, projection)
 
 
 def _inject_frontend_page_placeholders(workspace: str, state: dict[str, Any]) -> None:

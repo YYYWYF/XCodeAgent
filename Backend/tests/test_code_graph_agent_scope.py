@@ -77,7 +77,12 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
             workspace_snapshot={
                 "backend": {"dir_structure": "└── backend/\n    └── pom.xml"}
             },
-            tasks=[{"id": "backend-task", "allowed_paths": ["backend/src/**"]}],
+            tasks=[{
+                "id": "backend:bootstrap::bootstrap",
+                "unit_id": "backend:bootstrap",
+                "allowed_paths": ["backend/pom.xml"],
+                "source_refs": {"endpoint_designs": []},
+            }],
         )
         compact_prompt = " ".join(frontend_prompt.split())
         self.assertIn("Process dispatched tasks one by one by `task_id`", compact_prompt)
@@ -165,30 +170,21 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
 
         prompt = _data_source_generation_prompt(
             project_plan={
-                "data_sources": [{"id": "database", "type": "database"}],
-                "entity_detail_plans": [
-                    {
-                        "entity_id": "Weather",
-                        "status": "confirmed",
-                        "data_source_type": "external_api",
-                        "external_api_design": {
-                            "connection": {
-                                "base_url": "https://weather.example.com",
-                                "base_url_config_key": "integrations.weather.base-url",
-                                "timeout_ms": 10000,
-                                "headers": [],
-                            },
-                            "operations": [],
-                        },
-                    }
-                ],
+                "api_contracts": [{
+                    "id": "weather_api",
+                    "endpoints": [{
+                        "id": "weather.get",
+                        "method": "GET",
+                        "path": "/weather",
+                    }],
+                }],
             },
             workspace_snapshot={
                 "backend": {"dir_structure": "└── backend/\n    └── pom.xml"}
             },
             tasks=[
                 {
-                    "id": "backend:endpoint:weather_api:weather.get::Weather::upstream",
+                    "id": "backend:endpoint:weather_api:weather.get::upstream",
                     "unit_id": "backend:endpoint:weather_api:weather.get",
                     "description": "1. 实现天气上游 Client。",
                     "allowed_paths": ["backend/src/main/java/**"],
@@ -199,48 +195,36 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                             "api_contract_id": "weather_api",
                         },
                         "endpoint_ids": ["weather.get"],
-                        "entity_designs": [
-                            {
-                                "entity_id": "Weather",
-                                "data_source_type": "external_api",
-                                "external_api_design": {
+                        "endpoint_designs": [{
+                            "schemaVersion": "endpoint-field-mapping.v3",
+                            "artifactType": "endpoint-field-mapping",
+                            "status": "confirmed",
+                            "confirmationStatus": "confirmed",
+                            "artifactRevision": "a" * 32,
+                            "apiContractId": "weather_api",
+                            "endpointId": "weather.get",
+                            "endpointContract": {
+                                "id": "weather.get",
+                                "method": "GET",
+                                "path": "/weather",
+                            },
+                            "fieldMappings": [],
+                            "sourceSnapshots": [{
+                                "sourceType": "external_api",
+                                "sourceId": "weather-upstream",
+                                "name": "天气服务",
+                                "details": {
                                     "connection": {
-                                        "base_url_config_key": "integrations.weather.base-url"
+                                        "baseUrlConfigKey": "integrations.weather.base-url",
                                     },
-                                    "operations": [
-                                        {
-                                            "operation_id": "weather-get",
-                                            "endpoint_refs": [
-                                                {
-                                                    "api_contract_id": "weather_api",
-                                                    "endpoint_id": "weather.get",
-                                                }
-                                            ],
-                                            "api_info": {
-                                                "method": "GET",
-                                                "path": "/weather",
-                                                "request_shape": {
-                                                    "root_type": "null",
-                                                    "fields": [],
-                                                },
-                                                "response_shape": {
-                                                    "root_type": "object",
-                                                    "fields": [],
-                                                },
-                                            },
-                                            "response_handling": {
-                                                "entity_payload": True,
-                                                "cardinality": "object",
-                                                "payload_path": "",
-                                                "success_status_codes": [200],
-                                            },
-                                            "mapped_entity_path": "",
-                                            "field_mappings": [],
-                                        }
-                                    ],
                                 },
-                            }
-                        ]
+                            }],
+                            "basedOn": [{
+                                "artifactKey": "technical-plan",
+                                "sha256": "b" * 64,
+                            }],
+                            "confirmedAt": "2026-09-10T00:00:00Z",
+                        }],
                     },
                 }
             ],
@@ -264,11 +248,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                 {
                     "id": "orders-page",
                     "allowed_paths": ["frontend/src/pages/**"],
-                    "source_refs": {
-                        "entity_designs": [
-                            {"entity_id": "Order", "data_source_type": "database"}
-                        ]
-                    },
+                    "source_refs": {},
                 }
             ],
         )
@@ -280,9 +260,9 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                     "id": "notice-static",
                     "allowed_paths": ["frontend/src/apis/**"],
                     "source_refs": {
-                        "entity_designs": [
-                            {"entity_id": "Notice", "data_source_type": "static"}
-                        ]
+                        "endpoint_designs": [{
+                            "sourceSnapshots": [{"sourceType": "static"}],
+                        }]
                     },
                 }
             ],

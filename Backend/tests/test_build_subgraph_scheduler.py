@@ -5,6 +5,7 @@ import json
 import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.subgraphs.build import (
@@ -19,6 +20,11 @@ from app.graph.subgraphs.build import (
 )
 from app.services.build_task_planner import replace_build_task_plan_tasks
 from app.services.build_scheduler import attribute_task_file_changes
+from app.services.build_scheduler import select_ready_build_batch
+from app.services.authorization_resource_catalog import (
+    compile_frontend_resource_catalog,
+    resource_catalog_fingerprint,
+)
 
 
 def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
@@ -51,7 +57,256 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
     return {**state, "build_task_plan": plan}
 
 
+def _authorization_formal_plan() -> dict:
+    """构造 deterministic auth dispatch 使用的最小已确认 TechnicalPlan。"""
+
+    return {
+        "confirmation_status": "confirmed",
+        "authorization_manifest": {
+            "enabled": True,
+            "resources": [
+                {
+                    "resourceKey": "system_authorization_management",
+                    "type": "system",
+                    "targetResourceRef": "system:authorization_management",
+                },
+                {
+                    "resourceKey": "orders",
+                    "type": "page",
+                    "targetResourceRef": "page:orders",
+                },
+            ],
+        },
+    }
+
+
+def _deterministic_auth_task(formal_plan: dict) -> dict:
+    """按正式资源目录生成可进入平台 executor 的 auth-guard Task。"""
+
+    catalog = compile_frontend_resource_catalog(
+        formal_plan["authorization_manifest"]
+    )
+    fingerprint = resource_catalog_fingerprint(catalog)
+    capability = f"frontend.auth.resources:{fingerprint}"
+    task_id = f"frontend-auth-resources-{fingerprint}"
+    resource_path = "frontend/src/constants/resources.ts"
+    return {
+        "id": task_id,
+        "unit_id": "frontend:auth-guard",
+        "owner": "frontend",
+        "task_type": "frontend.code",
+        "execution_strategy": "deterministic",
+        "platform_executor": "authorization.frontend_resources",
+        "status": "pending",
+        "dependencies": [],
+        "target_files": [resource_path],
+        "allowed_paths": [resource_path],
+        "change_scope": [
+            {
+                "operation": "add",
+                "path": resource_path,
+                "description": "物化已确认的完整权限资源目录。",
+            }
+        ],
+        "provides_capabilities": [capability],
+        "source_refs": {
+            "artifact": "technical-plan",
+            "kind": "frontend.auth.resources",
+            "capability_id": capability,
+            "resource_catalog_fingerprint": fingerprint,
+            "paths": [resource_path],
+        },
+        "deliverables": [
+            {
+                "id": f"{task_id}-resources",
+                "kind": "frontend.shared_capability",
+                "target_id": capability,
+                "paths": [resource_path],
+                "provides": [capability],
+            }
+        ],
+    }
+
+
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_deterministic_auth_task_dispatches_platform_executor(self) -> None:
+        """frontend owner 的 auth Task 必须执行平台 executor 而不是 Frontend Agent。"""
+
+        formal_plan = _authorization_formal_plan()
+        task = _deterministic_auth_task(formal_plan)
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.subgraphs.build.generate_frontend_with_deep_agent"
+        ) as frontend_runner:
+            results, change_sets = _execute_ready_tasks(
+                {
+                    "workspace": workspace,
+                    "project_plan": formal_plan,
+                    "build_task_plan": {"schema_version": "build-dag.v3"},
+                },
+                [task],
+            )
+
+            generated = Path(workspace) / "frontend/src/constants/resources.ts"
+            self.assertTrue(generated.is_file())
+
+        frontend_runner.assert_not_called()
+        self.assertEqual(results[0]["status"], "completed")
+        self.assertEqual(results[0]["scheduler_decision"]["action"], "complete")
+        self.assertEqual(results[0]["executed_by"]["mode"], "deterministic")
+        self.assertEqual(results[0]["owner"], "frontend")
+        self.assertEqual(len(change_sets), 1)
+
+    def test_deterministic_executor_failure_does_not_fallback_to_frontend_agent(self) -> None:
+        """平台 executor 失败继续走普通失败 lifecycle，但不能转交 frontend LLM。"""
+
+        formal_plan = _authorization_formal_plan()
+        task = _deterministic_auth_task(formal_plan)
+        invalid_plan = {**formal_plan, "confirmation_status": "pending"}
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.subgraphs.build.generate_frontend_with_deep_agent"
+        ) as frontend_runner:
+            results, change_sets = _execute_ready_tasks(
+                {
+                    "workspace": workspace,
+                    "project_plan": invalid_plan,
+                    "build_task_plan": {"schema_version": "build-dag.v3"},
+                },
+                [task],
+            )
+
+        frontend_runner.assert_not_called()
+        self.assertEqual(change_sets, [])
+        self.assertEqual(results[0]["status"], "failed")
+        self.assertEqual(results[0]["failure_category"], "invalid_execution_context")
+        self.assertEqual(results[0]["scheduler_decision"]["action"], "terminal_failure")
+
+    def test_mixed_batch_dispatches_platform_and_agent_tasks(self) -> None:
+        """同一 ready batch 可并发分流 deterministic 与普通 Agent Task。"""
+
+        formal_plan = _authorization_formal_plan()
+        auth_task = _deterministic_auth_task(formal_plan)
+        page_task = {
+            "id": "orders-page",
+            "owner": "frontend",
+            "execution_strategy": "agent",
+            "platform_executor": None,
+            "status": "pending",
+            "dependencies": [],
+            "target_files": ["frontend/src/Page.tsx"],
+            "allowed_paths": ["frontend/src/Page.tsx"],
+            "change_scope": [
+                {"operation": "add", "path": "frontend/src/Page.tsx"}
+            ],
+        }
+        selection = select_ready_build_batch([auth_task, page_task])
+
+        def frontend_runner(**kwargs):
+            """模拟普通前端 Agent 在自己的授权路径内写入。"""
+
+            _write_workspace_file(kwargs.get("workspace"), "frontend/src/Page.tsx")
+            return [
+                {
+                    "task_id": "orders-page",
+                    "owner": "frontend",
+                    "status": "completed",
+                }
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+            side_effect=frontend_runner,
+        ) as agent_runner:
+            results, change_sets = _execute_ready_tasks(
+                {
+                    "workspace": workspace,
+                    "project_plan": formal_plan,
+                    "build_task_plan": {"schema_version": "build-dag.v3"},
+                },
+                selection["ready_tasks"],
+            )
+            auth_output_exists = (
+                Path(workspace) / "frontend/src/constants/resources.ts"
+            ).is_file()
+            page_output_exists = (Path(workspace) / "frontend/src/Page.tsx").is_file()
+
+        self.assertEqual(set(selection["ready_task_ids"]), {auth_task["id"], "orders-page"})
+        self.assertEqual({result["status"] for result in results}, {"completed"})
+        results_by_id = {result["task_id"]: result for result in results}
+        self.assertEqual(
+            results_by_id[auth_task["id"]]["executed_by"]["mode"],
+            "deterministic",
+        )
+        self.assertEqual(
+            results_by_id[auth_task["id"]]["changed_files"],
+            ["frontend/src/constants/resources.ts"],
+        )
+        agent_runner.assert_called_once()
+        self.assertTrue(auth_output_exists)
+        self.assertTrue(page_output_exists)
+        changed_paths = {
+            file_item["path"]
+            for change_set in change_sets
+            for file_item in change_set.get("files", [])
+        }
+        self.assertEqual(
+            changed_paths,
+            {"frontend/src/constants/resources.ts", "frontend/src/Page.tsx"},
+        )
+
+    def test_unknown_deterministic_executor_never_falls_back_to_llm(self) -> None:
+        """未知 deterministic executor 必须 fail closed，不能按 frontend owner 调用 LLM。"""
+
+        task = {
+            "id": "unknown-executor",
+            "owner": "frontend",
+            "execution_strategy": "deterministic",
+            "platform_executor": "authorization.unknown",
+            "status": "pending",
+            "dependencies": [],
+        }
+        with patch("app.graph.subgraphs.build.generate_frontend_with_deep_agent") as runner:
+            results, change_sets = _execute_ready_tasks(
+                {
+                    "project_plan": {},
+                    "build_task_plan": {"schema_version": "build-dag.v3"},
+                },
+                [task],
+            )
+
+        runner.assert_not_called()
+        self.assertEqual(change_sets, [])
+        self.assertEqual(results[0]["status"], "failed")
+        self.assertEqual(results[0]["failure_category"], "execution_contract_error")
+        self.assertIn("is not allowlisted", results[0]["failure_reason"])
+
+    def test_normal_frontend_task_still_uses_frontend_agent(self) -> None:
+        """普通 agent 策略前端 Task 继续使用原有 frontend Agent。"""
+
+        task = {
+            "id": "legacy-page",
+            "owner": "frontend",
+            "execution_strategy": "agent",
+            "platform_executor": None,
+            "status": "pending",
+            "dependencies": [],
+        }
+        with patch(
+            "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+            return_value=[
+                {"task_id": "legacy-page", "owner": "frontend", "status": "completed"}
+            ],
+        ) as runner:
+            results, _ = _execute_ready_tasks(
+                {
+                    "project_plan": {},
+                    "build_task_plan": {"schema_version": "build-dag.v3"},
+                },
+                [task],
+            )
+
+        runner.assert_called_once()
+        self.assertEqual(results[0]["status"], "completed")
+
     def test_backend_workspace_snapshot_loads_from_inspection_artifact(self) -> None:
         """Build 应通过独立快照路径读取 WorkspaceSnapshot，而不是读取任务计划。"""
 

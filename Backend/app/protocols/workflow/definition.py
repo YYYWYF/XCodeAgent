@@ -123,7 +123,8 @@ def workflow_capabilities() -> dict[str, Any]:
                     "修复重试复用原问题快照和失败前轮次。"
                 ),
                 "build_task_plan_confirmation": (
-                    "通过 clarificationAnswers 提交只读 Build 任务计划的 confirm 动作；abandon 走 plan control。"
+                    "通过 clarificationAnswers 提交只读 Build 任务计划的 confirm/regenerate 动作；"
+                    "abandon 走 plan control。"
                 ),
                 "test_phase_confirmation": (
                     "通过 clarificationAnswers.test_phase_confirmation 提交结构化 confirm 动作；"
@@ -172,8 +173,30 @@ def workflow_capabilities() -> dict[str, Any]:
         },
         "runCancellation": {
             "requestField": "forwardedProps.cancelRunId",
-            "statuses": ["cancelled", "not_running", "cancel_timeout"],
-            "semantics": "final_server_task_state_after_bounded_wait",
+            "statuses": [
+                "cancelled",
+                "pending_confirmation",
+                "not_running",
+                "cancel_timeout",
+            ],
+            "semantics": "final_server_task_state_after_bounded_wait; authoritative PendingPlan wins over cancellation",
+        },
+        "pendingOwnership": {
+            "requestField": "forwardedProps.sessionId",
+            "storageField": "draft_identity.owner_session_id",
+            "refreshField": "extensions.planningRefresh.ownerSessionId",
+            "semantics": "页面对话拥有 PendingPlan；同一对话可跨多个 Workflow Run，Regenerate 继承原 owner。",
+            "draftIdentity": {
+                "storageField": "draft_identity",
+                "requestFields": ["planningRunId", "draftDigest"],
+                "semantics": "服务端签发并精确绑定当前 PendingPlan；客户端不得自行构造或改写。",
+            },
+        },
+        "planControl": {
+            "requestField": "forwardedProps.planControlAction",
+            "actions": ["stop", "end", "abandon"],
+            "abandonIdentityFields": ["planningRunId", "draftDigest"],
+            "abandonSemantics": "删除精确匹配的 PendingPlan，结束对应 Workflow execution；不取消 active Scheduler。",
         },
         "clarificationModes": {
             "api_design_confirmation": {
@@ -185,6 +208,22 @@ def workflow_capabilities() -> dict[str, Any]:
                 "answerField": "clarificationAnswers.api_design_gate",
                 "actions": ["refresh"],
                 "semantics": "pause-page-or-endpoint-development-until-all-required-independent-mappings-pass-recheck",
+            },
+            "build_task_plan_confirmation": {
+                "answerField": "clarificationAnswers.build_task_plan_confirmation",
+                "actions": ["confirm", "regenerate"],
+                "identityFields": ["planningRunId", "draftDigest"],
+                "semantics": "confirm 精确提升 PendingPlan 为 FormalPlan；regenerate 精确消费旧 PendingPlan 后创建新 PlanningRun。",
+            },
+            "confirmed_baseline_error": {
+                "code": "confirmed_baseline_invalid",
+                "artifact": ".xcodeagent/plans/build-task-plan.json",
+                "issueCode": "CONFIRMED_BASELINE_INVALID",
+                "level": "pre_generation",
+                "category": "platform",
+                "retryable": False,
+                "automaticRouting": False,
+                "recovery": "人工修复并验证正式 ConfirmedPlan 后重新发起规划；回复不能豁免校验。",
             },
             "unit_test_confirmation": {
                 "answerField": "clarificationAnswers.unit_test_confirmation",

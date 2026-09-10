@@ -381,13 +381,15 @@ flowchart TD
 
 ### 6.3 `prepare_build_tasks / 生成并编译 Build DAG`
 
-- **类型**：直接 ChatModel 生成候选任务 + 多阶段确定性编译器。
-- **当前提示词**：`agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt`。TechnicalPlan Contract 的全局实体语义、Endpoint 已确认字段映射、Source Field 和执行摘要用于生成后端持久化代码，正常 Build 不生成数据库 owner 任务。每个后端 endpoint/table 模块必须拆成对象类、Repository、ApplicationService、Controller 四个串行 stage task，各 stage 只拥有自己的文件，并把上一阶段的预期文件、职责和契约写入下一阶段描述。带 `api_dependencies` 的页面必须规划或复用 `src/apis/<biz>Api.ts`，页面只能通过该服务访问共享 axios 实例。Static 应用只允许前端内存数据模块和页面任务；模型不得生成验证任务，`acceptance_criteria=[]` 且 `acceptance_checks=[]`，工程验收由后端编译。
-- **输入**：确认后的 ProjectPlan、当前目标范围、PageImplementationContract、TechnicalPlan Endpoint、有界 Endpoint 动态映射图/业务规则/来源快照、WorkspaceSnapshot、已有 Build DAG、可复用 Unit。
-- **输出**：`build-dag.v3`、`build_units`、`unit_graph`、`task_registry`、`task_graph`、`tasks`、`build_context`、`.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md`。
-- **校验规则**：ProjectPlan 必须 confirmed；Unit skeleton 合法；目标详情必须存在；页面/API 契约按范围校验；模型任务不能越过 required Unit；正常 Build 禁止 database Unit/owner；任务 ID、依赖、DAG、路径和 owner 必须合法；工程 acceptance checks 确定性编译；无效计划阻断 Build。页面任务声明的 PageKey 若与实时唯一同义目录不同，会先纠正为真实目录；模型漏报页面入口时，编译器优先复用唯一实时入口，否则把 `target.page_key` 推导的标准入口补进已有前端页面任务，再确定性补齐或规范化顶层 `BIZ_MENUS` 登记。
-- **依赖文件**：`graph/nodes/tasks.py`、`agents/main/task_preparer.py`、`services/build_unit_skeleton.py`、`services/build_context_resolver.py`、`services/build_task_planner.py`、`services/engineering_acceptance.py`、`services/build_task_menu.py`、`workspace/task_documents.py`。
-- **依赖节点**：上游 `inspect_workspace`；下游 `build`。
+- **类型**：async Planning adapter + PlanningRun/Unit Scheduler + 多阶段确定性编译与 Global Validation。
+- **生成方式**：后端创建新的 PlanningRun。平台把 model Unit 放入 FIFO Worker Pool，最多并发三个 Worker，Local Retry 重新排到队尾；deterministic Unit 在模型池外串行提交。模型只生成当前 Unit 的 `tasks`，不决定 Unit Worker 数量、跨 Unit 调度或最终执行批次；Task Candidate 的单任务并行提示仍需由 Scope 编译器结合依赖和文件冲突形成平台批次。所有 Unit 到达完整 Barrier 后组装累计 Scope DAG，再执行 Global Validation 和受影响 Unit 的有界修复。内部 Local/Global Retry 不是用户动作。
+- **输入**：已确认 ProductPlan、TechnicalPlan、当前目标范围、PageImplementationContract、TechnicalPlan API Contract、当前有效 Endpoint API Design、权限切片、WorkspaceSnapshot、已有 ConfirmedPlan 和可复用 Unit。正式输入在 PlanningRun 创建前冻结到 Frozen Store；EntitySourceBinding 不参与正常 DAG Planning。
+- **输出**：`build-dag.v3`、`build_units`、`unit_graph`、`task_registry`、`task_graph`、`tasks`、`build_context`、PlanningRun 投影和 `.xcodeagent/plans/build-task-plan.pending.json`。生成阶段不得改写正式 `.xcodeagent/plans/build-task-plan.json`，也不再生成 `BUILD_TASK_DAG.md`。
+- **校验规则**：正式前置产物必须 confirmed；Unit skeleton 合法；目标实现契约和相关 Endpoint API Design 必须存在、未过期且 revision 完整；模型任务不能越过 required Unit；正常 Build 禁止 database Unit/owner；任务 ID、依赖、DAG、路径和 owner 必须合法；工程 acceptance checks 确定性编译；无效计划在 PlanningRun 内自动重试，耗尽后失败且不得写 Pending。
+- **确认动作**：`confirm` 精确验证 `planning_run_id + draft_digest`，提升 Pending 为 Formal 并进入 Build；`abandon` 删除精确 Pending 并结束当前 Workflow execution，但保留聊天记录和既有 Formal；结构化 `regenerate` 先丢弃旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun，成功写新 Pending，失败不恢复旧 Pending。
+- **并发、取消与刷新**：同一应用不允许不同页面或 Scope 同时处于 DAG generating 或 awaiting confirmation。活跃生成时仅当前权威运行卡显示“取消运行”，取消粒度是 Workflow/PlanningRun，不提供 Unit 级取消；刷新恢复且没有本地 SSE 句柄时通过 `cancelRunId` 走服务端控制路径。Pending 阶段不显示 active-run Cancel，使用确认卡上的 `abandon`、`regenerate` 或 `confirm`。`planningRefresh` 是 GET 时计算且不推进持久化 lifecycle revision 的弱投影；唯一 Pending、权威 Abandon 标记、终态与 DraftIdentity 校验优先于 active-planning 快照，没有 Pending 时不得从聊天历史、旧卡片或旧 execution 恢复确认。刷新不保证原请求继续执行；后台脱离执行、事件重放和 Candidate 断点续跑延期。
+- **依赖文件**：`graph/nodes/task_planning_adapter.py`、`graph/nodes/task_planning_inputs.py`、`services/build_task_planning_service.py`、`services/dag_planning_orchestrator.py`、`services/build_task_plan_lifecycle.py`、`services/dag_planning_regeneration.py`、`workspace/task_documents.py`。
+- **依赖节点**：上游 `inspect_workspace`；成功生成后进入 DAG Planning-result 待确认；Confirm 下游为 `build`，Regenerate 返回本节点，Abandon 终止当前 Workflow execution。
 
 ## 7. Build 节点内部流程
 
@@ -783,10 +785,12 @@ flowchart LR
     U["user_request / 用户需求"]
     RS[("RequirementSpec.md + json / 需求文档")]
     UI[("ui-designs.json + TSX / UI 设计稿")]
-    PP[("ProjectPlan.md + json / 项目计划")]
+    PP[("product-plan.md + json / 产品计划")]
+    TP[("technical-plan.md + json / 技术计划")]
     DT[("Endpoint API Design md/json / 动态映射与业务规则")]
     WS[("WorkspaceSnapshot + CodeGraph / 工作区快照")]
-    DAG[("build-task-plan.json + BUILD_TASK_DAG.md / 构建任务图")]
+    PDAG[("build-task-plan.pending.json / 待确认构建任务图")]
+    DAG[("build-task-plan.json / 已确认构建任务图")]
     SRC[("frontend + backend + database / 工程实现")]
     TR[("test-report.json + logs / 测试报告")]
     LC[("application-lifecycle.json / 应用生命周期")]
@@ -795,12 +799,17 @@ flowchart LR
     U --> RS
     RS --> UI
     RS --> PP
-    PP --> DT
+    PP --> TP
+    UI --> TP
+    TP --> DT
     DT --> WS
-    PP --> WS
-    PP --> DAG
-    DT --> DAG
-    WS --> DAG
+    TP --> WS
+    PP --> PDAG
+    TP --> PDAG
+    DT --> PDAG
+    WS --> PDAG
+    PDAG -->|"confirm"| DAG
+    PDAG -->|"regenerate: discard old"| PDAG
     DAG --> SRC
     SRC --> TR
     PP --> TR
@@ -819,15 +828,17 @@ flowchart LR
 ### 当前事实源边界
 
 | 数据                              | 当前权威来源                                                                                                                             | 主要消费者                             |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ---------------------- |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
 | 初始化和工作台 execution 生命周期 | `.xcodeagent/application-lifecycle.json`                                                                                                 | 首页、工作台运行状态、恢复校验         |
 | 需求正文                          | `.xcodeagent/specs/requirement-spec.md`；JSON 为内部结构状态                                                                             | ProjectPlan 生成、创建规划恢复         |
 | UI 视觉参考                       | `.xcodeagent/specs/ui-designs.json` + `.xcodeagent/ui-design/pages/<PageKey>/index.tsx`；确认/生成 UI 直接消费 `ui_designs.pages[].code` | `DesignRenderer`、Frontend Agent       |
-| 项目语义和 API contract           | `.xcodeagent/plans/project-plan.md` + `.json`                                                                                            | API Design、Build、Testing              |
-| Endpoint API 字段设计             | `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.md` + `.json`；必须已确认且契约指纹匹配                                | 用户确认、Build Context、Task Preparer |
-| 工作区事实                        | `.xcodeagent/cache/` 下 WorkspaceSnapshot/代码图缓存 + 真实源码                                                                          | Task Preparer、Agent 导航              |
-| 数据来源事实                      | Endpoint JSON 中的脱敏来源快照；直属 MySQL 候选在 API 设计时实时读取，运行凭据按 `sourceId` 安全解析                                     | Task Preparer、Data Source Agent       |
-| 构建 DAG                          | `.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md`                                                                            | BuildScheduler、RepairPlanner          |
+| 产品语义                          | `.xcodeagent/plans/product-plan.md` + `.json`                                                                                            | UI Design、TechnicalPlan、Build、Testing |
+| 技术架构和 API contract           | `.xcodeagent/plans/technical-plan.md` + `.json`                                                                                          | API Design、Build、Testing              |
+| Endpoint API 字段设计             | `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.md` + `.json`；必须已确认且契约指纹匹配                                | 用户确认、Planning input、Build Context |
+| 工作区事实                        | `.xcodeagent/cache/` 下 WorkspaceSnapshot/代码图缓存 + 真实源码                                                                          | Unit Planner、Agent 导航               |
+| 数据来源事实                      | Endpoint JSON 中的脱敏来源快照；直属 MySQL 候选在 API 设计时实时读取，运行凭据按 `sourceId` 安全解析                                     | Unit Planner、Data Source Agent        |
+| 待确认构建 DAG                    | `.xcodeagent/plans/build-task-plan.pending.json`，绑定 `planning_run_id + draft_digest`                                                  | DAG 确认卡、Planning-result lifecycle  |
+| 已确认构建 DAG                    | `.xcodeagent/plans/build-task-plan.json`                                                                                                  | BuildScheduler、RepairPlanner          |
 | 构建和测试结果                    | Build results、`.xcodeagent/reports/test-report.json`、runtime logs                                                                      | Quality Gate、RepairPlanner、UI        |
 | 技术恢复状态                      | `.xcodeagent/checkpoints/checkpoints.sqlite`                                                                                             | LangGraph resume                       |
 
@@ -836,9 +847,9 @@ flowchart LR
 - `.xcodeagent/application-lifecycle.json` 不保存 schema 版本字段，每次写入单调增加 `revision`。`initialization` 与 `activeExecutions` 是两套并列状态：前者描述新建应用，后者按 runId 描述工作台执行，不能互相覆盖；测试质量门禁通过后先进入审查确认与只读代码审查，再在审查阶段启动预览和完成验收。
 - `initialization.threadId` 只用于定位初始化 checkpoint；应用进入 `ready_for_workbench` 后清空。前端应用索引不保存阶段准入标记，应用从创建开始就在统一列表中并可进入工作台；生命周期只负责恢复当前阶段以及判断模板、开发和预览是否就绪。
 - 需要用户处理的工作台交互写入 `pendingInteraction={id,type,basedOnRevision,...}`。提交时协议层校验 interaction id 和 lifecycle revision，避免旧确认覆盖新状态。
-- `resourceLocks` 与 execution `resourceKeys` 当前只是可观测的资源声明，不执行跨 run 互斥；重叠资源允许并发，最新 writer 成为界面显示的 owner。单次 Build 内部的文件调度约束不能替代跨 run 隔离。
+- 一般 `resourceLocks` 与 execution `resourceKeys` 仍是可观测资源声明，不执行跨 run 互斥。DAG Planning 的当前产品入口通过 renderer/session lock 只允许一个 active PlanningRun 或一个 awaiting-confirmation PendingPlan，并以唯一 Pending 路径和 DraftIdentity 拒绝旧结果；它还不是独立的原子 server pre-start mutex，外部或多窗口绕过入口仍需后续补强。单次 Build 内部的文件调度约束不能替代该应用级门禁。
 - 对存在 lifecycle 的正式应用，主 Workflow 仍会校验 `ready_for_workbench` 并登记 execution；但为兼容旧工作区，生命周期文件完全缺失时 `begin_workflow_lifecycle()` 返回 `None`，Graph 仍可继续。因此 `ready_for_workbench` 只约束开发执行和预览就绪，不再限制首页显示或进入工作台。
-- `resumeExecutionRunId`/旧 runId 只作为同 thread、scope、target 的恢复令牌；真实 Graph State 仍来自当前 thread checkpoint。`stop/end` 可在不执行 Graph 的情况下停止或结束 execution，`cancelRunId` 用于取消当前运行任务；finalize 或显式 end 才清理该 run 拥有的资源登记。
+- `resumeExecutionRunId`/旧 runId 只作为同 thread、scope、target 的恢复令牌；真实 Graph State 仍来自当前 thread checkpoint。`cancelRunId` 取消整个 Workflow/PlanningRun，不提供 Unit 级取消。Pending 阶段的 `abandon` 删除匹配 Pending 并结束对应 Workflow execution；`regenerate` 同样先消费旧 Pending，再创建新 PlanningRun。finalize、显式 end 或 Abandon 清理该 run 拥有的资源登记。
 
 ## 12. 当前不合理之处与改进建议
 
@@ -1083,7 +1094,7 @@ flowchart TD
 | ProductPlan/TechnicalPlan              | `Backend/app/graph/nodes/product_planning.py`、`Backend/app/graph/nodes/planning.py`、`Backend/app/agents/main/planner.py`                                                                            |
 | Endpoint 字段映射与开发门禁            | `Backend/app/routes/endpoint_designs.py`、`Backend/app/protocols/endpoint_designs.py`、`Backend/app/services/endpoint_design_detail.py`、`Backend/app/graph/nodes/api_design.py`、`Backend/app/domain/api_design.py`、`Backend/app/services/api_design.py`、`Backend/app/workspace/endpoint_design_documents.py` |
 | Workspace/Database Context            | `Backend/app/graph/nodes/workspace_inspection.py`、`database_context.py`                                                                                                                                                     |
-| Build DAG                             | `Backend/app/graph/nodes/tasks.py`、`Backend/app/agents/main/task_preparer.py`                                                                                                                                               |
+| Build DAG Planning / lifecycle        | `Backend/app/graph/nodes/task_planning_adapter.py`、`Backend/app/services/build_task_planning_service.py`、`Backend/app/services/dag_planning_orchestrator.py`、`Backend/app/services/build_task_plan_lifecycle.py`、`Backend/app/services/dag_planning_regeneration.py`                    |
 | BuildScheduler                        | `Backend/app/graph/subgraphs/build.py`、`Backend/app/services/build_scheduler.py`                                                                                                                                            |
 | Testing Subgraph                      | `Backend/app/graph/subgraphs/testing.py`                                                                                                                                                                                     |
 | Integration checks/quality gate       | `Backend/app/services/integration_test_runner.py`、`test_validation.py`                                                                                                                                                      |
@@ -1104,7 +1115,7 @@ flowchart TD
 | `ui_confirmation`                           | 无独立 SystemMessage                                                                            | `services/ui_design_generator.py::_build_ui_design_prompt`；失败用 `_build_repair_prompt`     | page brief、PageKey、UI skill、可复用旧代码、校验错误；`UI_DESIGN_MAX_TOKENS` 默认 8192，`UI_DESIGN_MAX_RETRIES` 默认 2；输出代码内联到 `ui_designs.pages[].code` 供 `DesignRenderer` 直出渲染 |
 | `project_planning`                          | 无独立 SystemMessage                                                                            | `agents/main/planner.py::_planning_prompt`                                                    | RequirementSpec、existing plan、datasource type、route/menu policy                                                                                                                             |
 | `/endpoint-designs/run` + `api_design_readiness_gate` | 无 LLM；确定性服务                                                                      | 无                                                                                            | 独立配置使用单个 Endpoint 契约、按需 MySQL 表列或已保存外部 Operation Schema和结构化草稿；主门禁使用页面全量或接口单目标的映射 revisions |
-| `prepare_build_tasks`                       | 无独立 SystemMessage                                                                            | `agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt` | bounded WorkspaceSnapshot、TargetBuildContext、TaskPreparationContext、规划器自有数据源规则（不读取或内联 Skill）                                                                                                      |
+| `prepare_build_tasks`                       | 无独立 SystemMessage                                                                            | `agents/main/unit_task_prompt.py::build_unit_generation_prompt`，按 Unit Kind 叠加 `unit_task_rules.py` / `backend_unit_task_rules.py` | Frozen UnitGenerationContext、GenerationRequirements、metadata-only contract catalog、bounded WorkspaceSnapshot、retained owner constraints、Endpoint API Design refs、Local/Global structured feedback；模型只返回单 Unit `tasks` |
 | `generate_application_development_plan`     | `services/application_development_planning.py::_SYSTEM_PROMPT`                                  | 同文件 `generate_application_development_plan` 内动态 `prompt`                                | application.json 摘要、selected page、澄清回答                                                                                                                                                 |
 | `database_agent`                            | `agents/database/agent.py::create_database_agent` 内 `base_system_prompt`                       | `agents/database/generator.py::_database_generation_prompt`                                   | database tasks、真实 schema/gaps、ProjectPlan contracts                                                                                                                                        |
 | `data_source_agent`（task owner=`backend`） | `agents/data_source/agent.py::create_data_source_agent` 内 `base_system_prompt`                 | `agents/data_source/generator.py::_data_source_generation_prompt`                             | approved tasks、BuildTaskPlan、ProjectPlan、skills                                                                                                                                             |

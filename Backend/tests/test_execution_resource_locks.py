@@ -305,6 +305,50 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 "running",
             )
 
+    def test_task_plan_action_replaces_awaiting_execution_in_same_thread(self) -> None:
+        """Confirm 或 Regenerate 应原子接管原 DAG 待确认 execution。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="orders",
+                page_id="orders",
+                thread_id="thread-orders",
+                run_id="run-old",
+                phase="prepare_build_tasks",
+            )
+            update_workbench_execution(
+                directory,
+                run_id="run-old",
+                phase="prepare_build_tasks",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
+                pending_payload={"mode": "build_task_plan_confirmation"},
+            )
+
+            payload = begin_workflow_lifecycle(
+                {
+                    "workspace": directory,
+                    "resume_values": {
+                        "selectedPageId": "orders",
+                        "build_execution_scope": {
+                            "type": "page",
+                            "targetId": "orders",
+                        },
+                        "resume_execution_run_id": "run-old",
+                    },
+                },
+                thread_id="thread-orders",
+                run_id="run-new",
+                phase="prepare_build_tasks",
+            )
+
+            assert payload is not None
+            self.assertNotIn("run-old", payload["activeExecutions"])
+            self.assertEqual(payload["activeExecutions"]["run-new"]["status"], "running")
+
     def test_stopped_workflow_retry_cannot_take_another_thread_locks(self) -> None:
         """显式恢复令牌不能跨对话接管已经停止的资源锁。"""
 

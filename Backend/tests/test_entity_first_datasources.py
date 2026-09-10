@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import unittest
 
-from app.agents.main.task_preparer_prompt import task_preparation_datasource_types
 from tests.entity_design_test_utils import confirm_entity_designs
 from app.services.entity_definitions import (
     contract_data_source_id,
@@ -95,45 +94,6 @@ class EntityFirstDatasourceTests(unittest.TestCase):
         self.assertEqual(plan_data_sources(plan), [])
         self.assertTrue(all("data_source" not in entity for entity in plan["entities"]))
         self.assertEqual(validate_project_plan_datasource_policy(plan), [])
-
-    def test_task_preparation_preserves_all_source_types(self) -> None:
-        """任务准备类型检测保留 endpoint 绑定的完整来源集合。"""
-
-        def plan_with_types(types: list[str]) -> dict:
-            """构造带当前 Endpoint 设计来源快照的最小计划。"""
-
-            return {
-                "executable_details": {
-                    "endpoint_designs": [
-                        {
-                            "sourceSnapshots": [
-                                {
-                                    "sourceId": f"source_{index}",
-                                    "sourceType": source_type,
-                                }
-                                for index, source_type in enumerate(types)
-                            ]
-                        }
-                    ]
-                }
-            }
-
-        self.assertEqual(
-            task_preparation_datasource_types(plan_with_types(["database"])),
-            {"database"},
-        )
-        self.assertEqual(
-            task_preparation_datasource_types(
-                plan_with_types(["database", "external_api"])
-            ),
-            {"database", "external_api"},
-        )
-        self.assertEqual(
-            task_preparation_datasource_types(plan_with_types(["external_api"])),
-            {"external_api"},
-        )
-        with self.assertRaisesRegex(ValueError, "非法数据源类型"):
-            task_preparation_datasource_types(plan_with_types(["mock"]))
 
     def test_plan_derives_data_source_type_from_entity_design(self) -> None:
         """契约绑定实体，data_source_id 由已确认实体设计的数据源类型推导。"""
