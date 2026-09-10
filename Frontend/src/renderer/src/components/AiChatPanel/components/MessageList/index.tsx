@@ -59,7 +59,7 @@ import {
   workflowShouldShowCodeReview,
   workflowShouldShowProjectLaunch
 } from '../../utils'
-import { workflowInteractionAvailability } from '../../planExecutionMode'
+import { workflowMessageInteractionAvailability } from '../../planExecutionMode'
 import { phasePendingDetail } from './phasePending'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
@@ -603,11 +603,12 @@ export default function MessageList({
               // 即证明它已被回答。历史待答卡渲染为失效态，避免旧表单以空白可填样式误导。
               const interactionAvailability =
                 message.workflow && requiresClarification
-                  ? messageIndex < messages.length - 1
-                    ? 'stale'
-                    : conversation || designPhasePlanning
-                      ? 'active'
-                      : workflowInteractionAvailability(message.workflow, applicationLifecycle)
+                  ? workflowMessageInteractionAvailability(
+                      message.workflow,
+                      applicationLifecycle,
+                      messageIndex < messages.length - 1,
+                      Boolean(conversation || designPhasePlanning)
+                    )
                   : 'stale'
               // 已答过的历史澄清卡：从其后最近的 user 留痕解析「header：答案」行回填为
               // 只读摘要，避免旧表单以空白可填样式重现（恢复会话时 localStorage 草稿已丢）。

@@ -22,7 +22,9 @@ export function planningRefreshState(
   if (
     !value ||
     value.schemaVersion !== 'planning-refresh.v1' ||
-    !['pending', 'abandoned', 'active_planning_run', 'confirmed_plan', 'none'].includes(value.source) ||
+    !['pending', 'abandoned', 'active_planning_run', 'confirmed_plan', 'none'].includes(
+      value.source
+    ) ||
     ![
       'awaiting_confirmation',
       'abandoned',
@@ -45,55 +47,114 @@ export function planningRefreshInterruption(
   return state?.status === 'planning_run_interrupted' ? state : undefined
 }
 
+/** 从服务端草稿身份中读取可比较键，确保同 run/thread 的旧确认卡不会串到新草稿。 */
+function dagDraftIdentityKey(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const identity = value as Record<string, unknown>
+  const planningRunId = String(identity.planningRunId || '').trim()
+  const draftDigest = String(identity.draftDigest || '').trim()
+  return planningRunId && /^[0-9a-f]{64}$/.test(draftDigest)
+    ? `${planningRunId}:${draftDigest}`
+    : undefined
+}
+
+/** 判断 execution 是否仍承载可提交的 Build DAG 确认。 */
+function isAwaitingDagConfirmation(execution: WorkbenchExecution | undefined): boolean {
+  return Boolean(
+    execution?.status === 'awaiting_user' &&
+      !execution.pendingInteraction?.submittedAt &&
+      (execution.pendingInteraction?.type === 'task_plan_confirmation' ||
+        execution.pendingInteraction?.payload?.mode === 'build_task_plan_confirmation')
+  )
+}
+
+/**
+ * 从 lifecycle 中选择最新的 DAG 确认 execution。
+ * lifecycle 可能仍保留更早运行的 awaiting_user 记录；basedOnRevision 才能标识
+ * 哪张确认卡由最新 lifecycle 写入，不能依赖对象插入顺序取第一条。
+ */
+function latestPendingDagExecution(
+  lifecycle: ApplicationLifecycle | undefined
+): WorkbenchExecution | undefined {
+  return Object.values(lifecycle?.activeExecutions || {})
+    .filter(isAwaitingDagConfirmation)
+    .reduce<WorkbenchExecution | undefined>((latest, execution) => {
+      if (!latest) return execution
+      const latestRevision = Number(latest.pendingInteraction?.basedOnRevision || 0)
+      const executionRevision = Number(execution.pendingInteraction?.basedOnRevision || 0)
+      if (executionRevision !== latestRevision) {
+        return executionRevision > latestRevision ? execution : latest
+      }
+      return String(execution.updatedAt || '') > String(latest.updatedAt || '') ? execution : latest
+    }, undefined)
+}
+
 /** 从持久化生命周期中读取当前唯一的 Build DAG 待确认 execution。 */
 export function pendingDagConfirmationExecution(
   lifecycle: ApplicationLifecycle | undefined
 ): WorkbenchExecution | undefined {
   const recovery = planningRefreshState(lifecycle)
+  const pending = latestPendingDagExecution(lifecycle)
   if (recovery) {
-    if (recovery.source !== 'pending' || recovery.status !== 'awaiting_confirmation') {
-      return undefined
+    if (recovery.source === 'pending' && recovery.status === 'awaiting_confirmation') {
+      const recoveryIdentity = dagDraftIdentityKey({
+        planningRunId: recovery.planningRunId,
+        draftDigest: recovery.draftDigest
+      })
+      const exact = recovery.workflowRunId
+        ? lifecycle?.activeExecutions?.[recovery.workflowRunId]
+        : undefined
+      const exactIdentity = dagDraftIdentityKey(exact?.pendingInteraction?.payload?.draftIdentity)
+      if (
+        isAwaitingDagConfirmation(exact) &&
+        (!recoveryIdentity || recoveryIdentity === exactIdentity)
+      ) {
+        return exact
+      }
+      const identityMatchedPending = recoveryIdentity
+        ? Object.values(lifecycle?.activeExecutions || {}).find(
+            (execution) =>
+              isAwaitingDagConfirmation(execution) &&
+              dagDraftIdentityKey(execution.pendingInteraction?.payload?.draftIdentity) ===
+                recoveryIdentity
+          )
+        : pending
+      if (identityMatchedPending) return identityMatchedPending
+      if (!recovery.workflowRunId || !recovery.threadId) return undefined
+      const now = lifecycle?.updatedAt || new Date(0).toISOString()
+      const scope = recovery.buildExecutionScope || { type: 'application', targetId: 'application' }
+      return {
+        scope: scope.type,
+        targetId: scope.targetId || 'application',
+        pageId: scope.type === 'page' ? scope.targetId : undefined,
+        threadId: recovery.threadId,
+        runId: recovery.workflowRunId,
+        phase: 'prepare_build_tasks',
+        status: 'awaiting_user',
+        pendingInteraction: {
+          id: `planning-refresh:${recovery.draftDigest || recovery.planningRunId || 'pending'}`,
+          type: 'task_plan_confirmation',
+          basedOnRevision: Math.max(1, lifecycle?.revision || 1),
+          payload: recovery.confirmation || { mode: 'build_task_plan_confirmation' },
+          artifactRefs: [],
+          createdAt: now
+        },
+        startedAt: now,
+        updatedAt: now
+      }
     }
-    const exact = recovery.workflowRunId
-      ? lifecycle?.activeExecutions?.[recovery.workflowRunId]
-      : undefined
-    if (exact) return exact
-    const pending = Object.values(lifecycle?.activeExecutions || {}).find(
-      (execution) =>
-        execution.status === 'awaiting_user' &&
-        (execution.pendingInteraction?.type === 'task_plan_confirmation' ||
-          execution.pendingInteraction?.payload?.mode === 'build_task_plan_confirmation')
-    )
-    if (pending) return pending
-    if (!recovery.workflowRunId || !recovery.threadId) return undefined
-    const now = lifecycle?.updatedAt || new Date(0).toISOString()
-    const scope = recovery.buildExecutionScope || { type: 'application', targetId: 'application' }
-    return {
-      scope: scope.type,
-      targetId: scope.targetId || 'application',
-      pageId: scope.type === 'page' ? scope.targetId : undefined,
-      threadId: recovery.threadId,
-      runId: recovery.workflowRunId,
-      phase: 'prepare_build_tasks',
-      status: 'awaiting_user',
-      pendingInteraction: {
-        id: `planning-refresh:${recovery.draftDigest || recovery.planningRunId || 'pending'}`,
-        type: 'task_plan_confirmation',
-        basedOnRevision: Math.max(1, lifecycle?.revision || 1),
-        payload: recovery.confirmation || { mode: 'build_task_plan_confirmation' },
-        artifactRefs: [],
-        createdAt: now
-      },
-      startedAt: now,
-      updatedAt: now
+    // Planning refresh 与 execution 来自不同帧：若同 Run 已进入待确认，优先采用该精确
+    // execution；否则选择 revision 最新的一张卡，不能让历史 Pending 抢占当前会话锁。
+    if (recovery.source === 'active_planning_run' && recovery.status === 'planning') {
+      const exact = recovery.workflowRunId
+        ? lifecycle?.activeExecutions?.[recovery.workflowRunId]
+        : undefined
+      return isAwaitingDagConfirmation(exact) ? exact : pending
     }
+    // abandoned / confirmed / idle / interrupted 都是明确的非 Pending 状态，禁止旧 execution 复活。
+    return undefined
   }
-  return Object.values(lifecycle?.activeExecutions || {}).find(
-    (execution) =>
-      execution.status === 'awaiting_user' &&
-      (execution.pendingInteraction?.type === 'task_plan_confirmation' ||
-        execution.pendingInteraction?.payload?.mode === 'build_task_plan_confirmation')
-  )
+  return pending
 }
 
 /** 读取当前 PendingPlan 绑定的页面会话；Workflow Run 只用于定位执行，不充当业务 owner。 */

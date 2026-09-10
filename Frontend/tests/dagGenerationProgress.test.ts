@@ -24,9 +24,19 @@ import {
   pendingDagOwnerSessionId,
   planningRefreshInterruption
 } from '../src/renderer/src/components/AiChatPanel/stageOutputState'
+import {
+  workflowInteractionAvailability,
+  workflowMessageInteractionAvailability
+} from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
-import type { ApplicationLifecycle, WorkflowRunPayload } from '../src/renderer/src/typings'
+import type {
+  ApplicationLifecycle,
+  WorkbenchExecution,
+  WorkflowRunPayload
+} from '../src/renderer/src/typings'
+
+const DAG_DRAFT_DIGEST = 'f'.repeat(64)
 
 /** 构造一个完整 Unit，测试只覆盖被覆写的进度事实。 */
 function unit(overrides: Partial<DagGenerationUnitRecord> = {}): DagGenerationUnitRecord {
@@ -81,6 +91,79 @@ function snapshot(
     },
     ...overrides
   }
+}
+
+/** 构造带稳定 DraftIdentity 的 Build DAG 待确认 execution。 */
+function pendingDagExecution(): WorkbenchExecution {
+  return {
+    scope: 'application',
+    targetId: 'application',
+    threadId: 'thread-dag-transition',
+    runId: 'workflow-dag-transition',
+    phase: 'prepare_build_tasks',
+    status: 'awaiting_user',
+    pendingInteraction: {
+      id: 'interaction-current',
+      type: 'task_plan_confirmation',
+      basedOnRevision: 7,
+      payload: {
+        mode: 'build_task_plan_confirmation',
+        draftIdentity: {
+          ownerSessionId: 'session-dag-transition',
+          planningRunId: 'planning-dag-transition',
+          draftDigest: DAG_DRAFT_DIGEST
+        }
+      },
+      artifactRefs: [],
+      createdAt: '2026-09-10T00:00:01Z',
+      submittedAt: null
+    },
+    startedAt: '2026-09-10T00:00:00Z',
+    updatedAt: '2026-09-10T00:00:01Z'
+  }
+}
+
+/** 构造 interaction 帧尚未同步、但 DraftIdentity 与当前 Pending 一致的确认 Workflow。 */
+function dagConfirmationWorkflow(lifecycle: ApplicationLifecycle): WorkflowRunPayload {
+  const execution = pendingDagExecution()
+  const snapshotExecution = {
+    ...execution,
+    pendingInteraction: execution.pendingInteraction
+      ? {
+          ...execution.pendingInteraction,
+          id: 'interaction-workflow-frame',
+          basedOnRevision: 6
+        }
+      : undefined
+  }
+  const snapshotLifecycle = {
+    ...lifecycle,
+    revision: 6,
+    activeExecutions: { [snapshotExecution.runId]: snapshotExecution }
+  }
+  const clarification = {
+    mode: 'build_task_plan_confirmation',
+    status: 'requires_user_input',
+    draftIdentity: {
+      ownerSessionId: 'session-dag-transition',
+      planningRunId: 'planning-dag-transition',
+      draftDigest: DAG_DRAFT_DIGEST
+    },
+    taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+  }
+  return {
+    runId: execution.runId,
+    threadId: execution.threadId,
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      phase: 'prepare_build_tasks',
+      clarification,
+      lifecycle: snapshotLifecycle
+    },
+    state: { clarification, lifecycle: snapshotLifecycle },
+    result: { clarification, lifecycle: snapshotLifecycle }
+  } as unknown as WorkflowRunPayload
 }
 
 test('新版 Snapshot 会严格解析，并丢弃 Candidate 正文和旧 stages 协议', () => {
@@ -792,6 +875,204 @@ test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控�
   assert.equal(pendingDagConfirmationExecution(generatingLifecycle), undefined)
 })
 
+test('旧 planning refresh 不能否决已经进入 awaiting_user 的 DAG execution', () => {
+  const execution = pendingDagExecution()
+  const lifecycle = {
+    application: { id: 'app-dag-transition', name: 'App' },
+    updatedAt: '2026-09-10T00:00:01Z',
+    revision: 7,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: { [execution.runId]: execution },
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'active_planning_run',
+        status: 'planning',
+        planningRunId: 'planning-dag-transition',
+        workflowRunId: 'workflow-dag-transition',
+        threadId: 'thread-dag-transition',
+        message: '上一帧仍在生成。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+
+  assert.equal(pendingDagConfirmationExecution(lifecycle)?.runId, execution.runId)
+})
+
+test('实时 lifecycle 缺少 refresh 时按最新 revision 选择 DAG 确认，旧 Pending 不抢会话锁', () => {
+  const current = pendingDagExecution()
+  const stale = {
+    ...current,
+    runId: 'workflow-stale-pending',
+    threadId: 'thread-stale-pending',
+    updatedAt: '2026-09-09T23:59:59Z',
+    pendingInteraction: {
+      ...current.pendingInteraction!,
+      id: 'interaction-stale-pending',
+      basedOnRevision: 32,
+      payload: {
+        mode: 'build_task_plan_confirmation'
+      }
+    }
+  }
+  const lifecycle = {
+    application: { id: 'app-dag-transition', name: 'App' },
+    updatedAt: '2026-09-10T00:00:02Z',
+    revision: 81,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: {
+      [stale.runId]: stale,
+      [current.runId]: {
+        ...current,
+        updatedAt: '2026-09-10T00:00:01Z',
+        pendingInteraction: {
+          ...current.pendingInteraction!,
+          basedOnRevision: 81
+        }
+      }
+    },
+    extensions: {}
+  } as unknown as ApplicationLifecycle
+
+  assert.equal(pendingDagConfirmationExecution(lifecycle)?.runId, current.runId)
+  assert.equal(pendingDagOwnerSessionId(lifecycle), 'session-dag-transition')
+})
+
+test('DAG 确认卡后出现新消息仍按 DraftIdentity 与 lifecycle 保持可提交', () => {
+  const execution = pendingDagExecution()
+  const lifecycle = {
+    application: { id: 'app-dag-transition', name: 'App' },
+    updatedAt: '2026-09-10T00:00:01Z',
+    revision: 7,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: { [execution.runId]: execution },
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'active_planning_run',
+        status: 'planning',
+        planningRunId: 'planning-dag-transition',
+        workflowRunId: 'workflow-dag-transition',
+        threadId: 'thread-dag-transition',
+        message: '上一帧仍在生成。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const workflow = dagConfirmationWorkflow(lifecycle)
+
+  // Workflow 与 application lifecycle 的 interaction id/revision 故意不同，业务身份仍一致。
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
+  assert.equal(workflowMessageInteractionAvailability(workflow, lifecycle, true, false), 'active')
+})
+
+test('同 run/thread 的旧 DAG 卡不能越过工作区唯一 Pending 的 DraftIdentity', () => {
+  const execution = pendingDagExecution()
+  const regeneratedDigest = '9'.repeat(64)
+  const lifecycle = {
+    application: { id: 'app-dag-transition', name: 'App' },
+    updatedAt: '2026-09-10T00:00:02Z',
+    revision: 8,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    // 模拟同一 run/thread 的旧 execution 晚到；真正的 Pending 已由 refresh 给出新身份。
+    activeExecutions: { [execution.runId]: execution },
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'pending',
+        status: 'awaiting_confirmation',
+        planningRunId: 'planning-regenerated',
+        workflowRunId: execution.runId,
+        threadId: execution.threadId,
+        ownerSessionId: 'session-dag-transition',
+        draftDigest: regeneratedDigest,
+        confirmation: {
+          mode: 'build_task_plan_confirmation',
+          draftIdentity: {
+            ownerSessionId: 'session-dag-transition',
+            planningRunId: 'planning-regenerated',
+            draftDigest: regeneratedDigest
+          },
+          taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+        },
+        message: '已恢复重新生成后的唯一 Pending。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const oldWorkflow = dagConfirmationWorkflow(lifecycle)
+  const recoveredExecution = pendingDagConfirmationExecution(lifecycle)
+
+  assert.equal(
+    recoveredExecution?.pendingInteraction?.payload?.draftIdentity?.planningRunId,
+    'planning-regenerated'
+  )
+  assert.equal(workflowInteractionAvailability(oldWorkflow, lifecycle), 'stale')
+})
+
+test('planningRefresh 独立校准但拒绝与当前 Pending execution 冲突的旧生成帧', () => {
+  const execution = pendingDagExecution()
+  const current = {
+    application: { id: 'app-dag-transition', name: 'App' },
+    updatedAt: '2026-09-10T00:00:01Z',
+    revision: 7,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: { [execution.runId]: execution },
+    extensions: {}
+  } as unknown as ApplicationLifecycle
+  const stalePlanningRefresh = {
+    ...current,
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'active_planning_run',
+        status: 'planning',
+        planningRunId: 'planning-dag-transition',
+        workflowRunId: 'workflow-dag-transition',
+        threadId: 'thread-dag-transition',
+        message: '旧生成帧。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const lowerRevisionPendingRefresh = {
+    ...current,
+    revision: 6,
+    activeExecutions: {},
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'pending',
+        status: 'awaiting_confirmation',
+        planningRunId: 'planning-dag-transition',
+        workflowRunId: 'workflow-dag-transition',
+        threadId: 'thread-dag-transition',
+        draftDigest: DAG_DRAFT_DIGEST,
+        message: '磁盘 Pending 校准。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const lowerRevisionWrongPendingRefresh = {
+    ...lowerRevisionPendingRefresh,
+    extensions: {
+      planningRefresh: {
+        ...lowerRevisionPendingRefresh.extensions.planningRefresh,
+        planningRunId: 'planning-stale',
+        draftDigest: '8'.repeat(64)
+      }
+    }
+  } as unknown as ApplicationLifecycle
+
+  const withoutConflictingRefresh = latestApplicationLifecycle(current, stalePlanningRefresh)
+  assert.equal(withoutConflictingRefresh.extensions.planningRefresh, undefined)
+  assert.equal(withoutConflictingRefresh.activeExecutions[execution.runId], execution)
+
+  const withIndependentRefresh = latestApplicationLifecycle(current, lowerRevisionPendingRefresh)
+  assert.equal(withIndependentRefresh.revision, 7)
+  assert.equal(withIndependentRefresh.activeExecutions[execution.runId], execution)
+  assert.equal(withIndependentRefresh.extensions.planningRefresh?.status, 'awaiting_confirmation')
+
+  const withoutWrongRefresh = latestApplicationLifecycle(current, lowerRevisionWrongPendingRefresh)
+  assert.equal(withoutWrongRefresh.extensions.planningRefresh, undefined)
+})
+
 test('authoritative Abandon 在 reload、stale snapshot 与 late progress 后都不复活 Pending', () => {
   const abandonedLifecycle = {
     revision: 11,
@@ -850,6 +1131,33 @@ test('authoritative Abandon 在 reload、stale snapshot 与 late progress 后都
   assert.equal(pendingDagConfirmationExecution(abandonedLifecycle), undefined)
   assert.equal(latestDagGenerationSnapshot(messages, abandonedLifecycle), undefined)
   assert.equal(latestDagGenerationSnapshot([...messages], abandonedLifecycle), undefined)
+})
+
+test('authoritative 终态会否决晚到的旧 DAG awaiting execution 与确认卡', () => {
+  const execution = pendingDagExecution()
+  const lifecycle = {
+    application: { id: 'app-dag-transition', name: 'App' },
+    updatedAt: '2026-09-10T00:00:02Z',
+    revision: 8,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: { [execution.runId]: execution },
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'abandoned',
+        status: 'abandoned',
+        planningRunId: 'planning-dag-transition',
+        workflowRunId: 'workflow-dag-transition',
+        draftDigest: DAG_DRAFT_DIGEST,
+        message: '已放弃。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const workflow = dagConfirmationWorkflow(lifecycle)
+
+  assert.equal(pendingDagConfirmationExecution(lifecycle), undefined)
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'stale')
+  assert.equal(workflowMessageInteractionAvailability(workflow, lifecycle, false, false), 'stale')
 })
 
 test('Abandon lifecycle revision 拒绝更晚到达的旧 Pending lifecycle event', () => {
@@ -927,7 +1235,8 @@ test('same revision 重连校准可刷新 planningRefresh，但不能覆盖持�
     extensions: { sentinel: 'persisted' }
   } as unknown as ApplicationLifecycle
   assert.equal(
-    latestApplicationLifecycle(merged, sameRevisionWithoutRefresh).extensions.planningRefresh?.status,
+    latestApplicationLifecycle(merged, sameRevisionWithoutRefresh).extensions.planningRefresh
+      ?.status,
     'planning_run_interrupted'
   )
 })
