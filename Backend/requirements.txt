@@ -16,4 +16,4 @@ deepagents>=0.5.3
 pymysql>=1.1.0
 code-review-graph==2.3.7
 tree-sitter==0.26.0
-tree-sitter-language-pack==0.13.0
+tree-sitter-language-pack==0.11.0
