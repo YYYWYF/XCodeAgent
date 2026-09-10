@@ -3,6 +3,8 @@ import { workflowDebugResumeSource } from '../src/renderer/src/components/AiChat
 import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { WorkbenchPhaseContext } from '../src/renderer/src/context/workbenchPhaseState'
+import { WORKBENCH_PHASE_AGENTS } from '../src/renderer/src/workbenchPhase'
 import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
@@ -17,7 +19,7 @@ import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/comp
 import { developmentContinuationFromWorkflow } from '../src/renderer/src/components/AiChatPanel/developmentContinuation'
 import DevelopmentContinuationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/DevelopmentContinuationCard'
 import RemainingEntityBindingsCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/RemainingEntityBindingsCard'
-import { BuildExecutionRunCard } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
+import WorkflowRunCard, { BuildExecutionRunCard } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
@@ -1366,6 +1368,81 @@ test('不在资源集合中的页面仍可自由输入', () => {
 
   assert.equal(context.execution, undefined)
   assert.equal(context.dependencyLocked, false)
+})
+
+/** 验证映射门禁结果保留到单测节点时，当前确认按钮仍可见且可操作。 */
+test('已确认 API 映射不遮蔽构建后的单元测试选择', (context) => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: { getItem: () => null } }
+  })
+  // 恢复全局环境，避免影响同文件其他工作流组件测试。
+  context.after(() => {
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  })
+  const workflow: WorkflowRunPayload = {
+    runId: 'unit-run',
+    threadId: 'build-thread',
+    events: [],
+    summary: {
+      phase: 'unit_test',
+      status: 'requires_user_input',
+      clarification: { mode: 'unit_test_confirmation', status: 'requires_user_input' },
+      apiDesignResult: {
+        status: 'confirmed',
+        targetType: 'page',
+        targetId: 'orders',
+        targetLabel: '订单页',
+        confirmedForDevelopment: true,
+        designs: []
+      }
+    }
+  }
+  // 只提供卡片依赖的工作台上下文，阶段导航持久化由独立测试覆盖。
+  const phaseContext = {
+    phase: 'development' as const,
+    derivedPhase: 'development' as const,
+    reachedPhase: 'development' as const,
+    manualOverride: null,
+    agent: WORKBENCH_PHASE_AGENTS.development,
+    recordReachedPhase: () => {},
+    switchPhase: () => {},
+    canEdit: () => false
+  }
+  const markup = renderToStaticMarkup(
+    createElement(WorkbenchPhaseContext.Provider, { value: phaseContext },
+      createElement(WorkflowRunCard, {
+        workflow,
+        interactionAvailability: 'active'
+      })
+    )
+  )
+  assert.match(markup, /是，跳过单元测试/)
+  assert.match(markup, /否，继续执行/)
+  assert.doesNotMatch(markup, /API 映射已确认/)
+  assert.doesNotMatch(markup, /<button[^>]*disabled/)
+
+  // 原始映射门禁的已确认快照仍展示正式映射结果。
+  const historicalMarkup = renderToStaticMarkup(
+    createElement(WorkbenchPhaseContext.Provider, { value: phaseContext },
+      createElement(WorkflowRunCard, {
+        workflow: {
+          ...workflow,
+          summary: {
+            ...workflow.summary,
+            phase: 'api_design_readiness_gate',
+            status: 'completed',
+            clarification: undefined
+          }
+        },
+        interactionAvailability: 'stale'
+      })
+    )
+  )
+  assert.match(historicalMarkup, /API 映射已确认/)
+  assert.doesNotMatch(historicalMarkup, /是，跳过单元测试/)
 })
 
 test('构建卡片将已满足要求的任务展示为完成，并与其他状态保持一致排序', () => {

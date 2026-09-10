@@ -324,8 +324,12 @@ export default function WorkflowRunCard({
 
   const awaitingApiDesignConfirmation =
     apiDesignResult?.status === 'ready' && apiDesignConfirmation
+  // 映射结果会保留在后续节点快照中，仅映射门禁自身可以独占卡片，避免遮蔽单元测试等确认入口。
+  const showingApiDesignGate =
+    apiDesignConfirmation || workflow.summary.phase === 'api_design_readiness_gate'
   if (
     apiDesignResult &&
+    showingApiDesignGate &&
     (apiDesignResult.status === 'confirmed' || awaitingApiDesignConfirmation)
   ) {
     const gateAction = {
@@ -446,6 +450,7 @@ export default function WorkflowRunCard({
         </div>
       )}
       {(clarificationQuestions.length > 0 ||
+        unitTestConfirmation ||
         detailReview ||
         technicalPlanGenerationError ||
         planningStageEntry ||

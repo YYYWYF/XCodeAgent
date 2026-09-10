@@ -169,7 +169,7 @@ def begin_workflow_lifecycle(
         resource_claims=resource_claims,
         development_continuation_consume=workflow_inputs.get("development_continuation_consume"),
         initial_development_entry=(
-            (phase == "development_readiness_gate" or use_executed_scope)
+            (phase == "api_design_readiness_gate" or use_executed_scope)
             and workflow_inputs.get("workflow_action") != "continue_revision_build"
         ),
         api_contract_id=str(scope.get("apiContractId") or "").strip() or None,

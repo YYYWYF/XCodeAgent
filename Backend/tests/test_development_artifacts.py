@@ -65,7 +65,7 @@ class DevelopmentArtifactsTests(unittest.TestCase):
             target_id=target, page_id=None if target == "get" else target,
             api_contract_id="api" if target == "get" else None,
             thread_id=f"thread-{target}", run_id=run_id,
-            phase="development_readiness_gate", initial_development_entry=initial,
+            phase="api_design_readiness_gate", initial_development_entry=initial,
             replaces_run_id=replaces,
         )
         return run_id
@@ -371,9 +371,9 @@ class DevelopmentArtifactsTests(unittest.TestCase):
             return {"status": "completed"}
 
         builder = StateGraph(ProjectState)
-        builder.add_node("development_readiness_gate", guarded_node)
-        builder.add_edge(START, "development_readiness_gate")
-        builder.add_edge("development_readiness_gate", END)
+        builder.add_node("api_design_readiness_gate", guarded_node)
+        builder.add_edge(START, "api_design_readiness_gate")
+        builder.add_edge("api_design_readiness_gate", END)
         graph = builder.compile(checkpointer=InMemorySaver())
 
         async def collect() -> list[dict]:
@@ -418,10 +418,10 @@ class DevelopmentArtifactsTests(unittest.TestCase):
                     "unit_test_gate_passed": True}
 
         builder = StateGraph(ProjectState)
-        builder.add_node("development_readiness_gate", successful_development)
+        builder.add_node("api_design_readiness_gate", successful_development)
         builder.add_node("test_phase_confirmation", test_phase_confirmation)
-        builder.add_edge(START, "development_readiness_gate")
-        builder.add_edge("development_readiness_gate", "test_phase_confirmation")
+        builder.add_edge(START, "api_design_readiness_gate")
+        builder.add_edge("api_design_readiness_gate", "test_phase_confirmation")
         builder.add_edge("test_phase_confirmation", END)
         graph = builder.compile(checkpointer=InMemorySaver())
 
