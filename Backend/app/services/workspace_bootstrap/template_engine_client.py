@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -14,6 +15,7 @@ import httpx
 from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload
 
 _CHUNK_BYTES = 64 * 1024
+logger = logging.getLogger("uvicorn.error")
 
 
 class TemplateEngineClient:
@@ -86,6 +88,12 @@ class TemplateEngineClient:
         digest = hashlib.sha256()
         size = 0
         try:
+            # 仅记录调用边界与非敏感摘要；不得输出 Engine token、完整请求配置或 ZIP 内容。
+            logger.info(
+                "模板更新请求已发起：endpoint=%s/v1/update，当前模板版本=%s。",
+                self._base_url,
+                str(current_template_state.get("templateRevision") or "unknown"),
+            )
             timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
             async with self._client_factory(timeout=timeout) as client:
                 async with client.stream(
@@ -97,10 +105,16 @@ class TemplateEngineClient:
                     },
                     headers={"Authorization": f"Bearer {self._token}", "Accept": "application/zip"},
                 ) as response:
+                    logger.info(
+                        "模板更新接口已响应：endpoint=%s/v1/update，status=%s。",
+                        self._base_url,
+                        response.status_code,
+                    )
                     if response.status_code == 204:
                         os.close(descriptor)
                         descriptor = -1
                         temporary_path.unlink(missing_ok=True)
+                        logger.info("模板更新接口返回无变更（HTTP 204）。")
                         return None
                     if response.status_code >= 400:
                         raise TemplateEngineError(f"Template Engine 拒绝更新请求（HTTP {response.status_code}）。")
@@ -117,12 +131,17 @@ class TemplateEngineClient:
                             output.write(chunk)
                         output.flush()
                         os.fsync(output.fileno())
-            return TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type)
+            download = TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type)
+            logger.info("模板更新 ZIP 下载完成：bytes=%s，sha256=%s。", size, download.sha256)
+            return download
         except httpx.TimeoutException as exc:
+            logger.warning("模板更新接口调用超时：endpoint=%s/v1/update。", self._base_url)
             raise TemplateEngineError("调用 Template Engine 更新超时。") from exc
         except httpx.HTTPError as exc:
+            logger.warning("模板更新接口调用失败：endpoint=%s/v1/update，error=%s。", self._base_url, type(exc).__name__)
             raise TemplateEngineError("调用 Template Engine 更新失败。") from exc
         except Exception:
+            logger.exception("模板更新接口处理失败：endpoint=%s/v1/update。", self._base_url)
             if descriptor >= 0:
                 os.close(descriptor)
             temporary_path.unlink(missing_ok=True)

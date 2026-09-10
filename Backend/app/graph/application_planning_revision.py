@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from app.agents.design_conversation import (
     DesignConversationDecision,
@@ -323,6 +324,9 @@ def begin_current_artifact_revision(
         # 需求开始修订时立即撤销旧确认，避免旧文档在新一轮分析期间继续被前端或恢复逻辑当成正式版本。
         update.update(
             {
+                "requirement_revision_id": uuid4().hex,
+                "authorization_config_conflict": {},
+                "clarification": {},
                 "requirements_confirmed": False,
                 "requirement_spec_path": "",
                 "requirement_spec_json_path": "",

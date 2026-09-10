@@ -13,6 +13,12 @@ from app.services.template_reconcile.applier import (
     git_head,
     rollback_workspace,
 )
+from app.services.template_reconcile.diagnostics import (
+    capture_template_update_diagnostic,
+    capture_workspace_snapshot,
+    diagnostic_paths,
+    save_template_update_diagnostic,
+)
 from app.services.template_reconcile.health import assert_managed_workspace_healthy
 from app.services.template_reconcile.models import RequestedConfig, TemplateState
 from app.services.template_reconcile.preflight import ReconcileOwnershipRegistry
@@ -83,10 +89,17 @@ class TemplateReconcileService:
             phase="APPLYING",
         )
         save_reconcile_attempt(root, attempt)
+        package = None
+        before_snapshot = None
         try:
             package = validate_update_package(download.temporary_path, self._archive_limits())
             _validate_update_policy(current_state, package.next_template_state, package.change_set)
             ReconcileOwnershipRegistry(current_state, package.next_template_state).classify_change_set(package.change_set)
+            # 应用前保留内存快照；失败时连同回滚前快照一起落盘，不写任何正文。
+            before_snapshot = capture_workspace_snapshot(
+                root,
+                diagnostic_paths(current_state, package.next_template_state, package.change_set),
+            )
             attempt = apply_file_operations(root, package.change_set, attempt)
             attempt = replace(attempt, phase="VALIDATING")
             save_reconcile_attempt(root, attempt)
@@ -104,6 +117,18 @@ class TemplateReconcileService:
                 ) from exc
             current_attempt = replace(attempt, phase="FAILED_CLEAN", error=str(exc)[:2048])
             try:
+                diagnostic = capture_template_update_diagnostic(
+                    root,
+                    change_id=change_id,
+                    technical_plan_sha256=technical_plan_sha256,
+                    download=download,
+                    current_state=current_state,
+                    next_state=package.next_template_state if package is not None else None,
+                    change_set=package.change_set if package is not None else None,
+                    failure_type=type(exc).__name__,
+                    before=before_snapshot,
+                )
+                save_template_update_diagnostic(root, diagnostic)
                 rollback_workspace(root, attempt)
                 save_reconcile_attempt(root, current_attempt)
             except Exception as rollback_exc:

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import (
+    _authorization_evidence,
+    _authorization_facts_for_requirement,
     _merge_authorization_facts,
     _remove_global_feature_availability_controls,
+    _remove_unauthorized_authorization_candidates,
     _validate_authorization_fact_output,
 )
 from app.services.requirement_spec import (
@@ -68,6 +72,81 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
 
         self.assertEqual(
             sanitized["authorization_requirements"]["restrictedOperations"], []
+        )
+
+    def test_role_catalogue_and_business_flow_do_not_create_rbac_controls(self) -> None:
+        """角色职责与流程执行者不能被误判为人员列表的页面授权。"""
+
+        candidate = {
+            "authorization_requirements": {
+                "enabled": True,
+                "restrictedPages": [{"name": "人员列表页"}],
+                "restrictedOperations": [],
+            }
+        }
+
+        evidence = _authorization_evidence(
+            {"hasAuthorizationRequirement": False, "evidence": []},
+            "用户角色：仅HR人员 功能模块：人员信息查看 页面清单：人员列表页 "
+            "业务流程：hr访问人员列表页，查看人员信息",
+        )
+        sanitized = _remove_unauthorized_authorization_candidates(
+            candidate,
+            evidence,
+        )
+
+        self.assertEqual(
+            sanitized["authorization_requirements"]["restrictedPages"], []
+        )
+        self.assertFalse(sanitized["authorization_requirements"]["enabled"])
+
+    def test_evidence_gate_skips_authorization_extraction_for_business_flow(self) -> None:
+        """无显式授权证据时不得调用专门的权限事实提取器。"""
+
+        request = "用户角色：仅HR人员；业务流程：HR访问人员列表页，查看人员信息"
+        with (
+            patch(
+                "app.agents.main.requirements_analyzer._classify_authorization_evidence",
+                return_value={"hasAuthorizationRequirement": False, "evidence": []},
+            ),
+            patch(
+                "app.agents.main.requirements_analyzer._extract_authorization_facts"
+            ) as extraction,
+        ):
+            facts, evidence = _authorization_facts_for_requirement(
+                request,
+                None,
+                None,  # type: ignore[arg-type]
+                [],
+            )
+
+        extraction.assert_not_called()
+        self.assertFalse(evidence["hasAuthorizationRequirement"])
+        self.assertEqual(facts["authorization_requirements"]["restrictedPages"], [])
+
+    def test_explicit_role_resource_policy_remains_an_rbac_control(self) -> None:
+        """明确限定 HR 访问人员列表时必须保留真实页面授权。"""
+
+        candidate = {
+            "authorization_requirements": {
+                "enabled": True,
+                "restrictedPages": [{"name": "人员列表页"}],
+                "restrictedOperations": [],
+            }
+        }
+
+        request = "仅 HR 可以访问人员列表页。"
+        evidence = _authorization_evidence(
+            {"hasAuthorizationRequirement": True, "evidence": [request]},
+            request,
+        )
+        sanitized = _remove_unauthorized_authorization_candidates(
+            candidate,
+            evidence,
+        )
+
+        self.assertEqual(
+            sanitized["authorization_requirements"]["restrictedPages"], candidate["authorization_requirements"]["restrictedPages"]
         )
 
     def test_authorization_fact_output_rejects_rule_without_role_grant(self) -> None:

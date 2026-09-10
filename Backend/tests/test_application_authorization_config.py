@@ -147,12 +147,66 @@ class ApplicationAuthorizationConfigTests(unittest.TestCase):
                     "request": "继续处理。",
                     "timeline": [],
                     "requirement_spec": first["requirement_spec"],
+                    "requirement_revision_id": first["requirement_revision_id"],
                     "authorization_config_conflict": first["authorization_config_conflict"],
                     "application_planning_interaction": {"action": "answer", "answers": {"authorization_initial_admin": "ops@example.com"}},
                 })
             persisted = json.loads(target.read_text(encoding="utf-8"))
             self.assertTrue(persisted["auth"]["enable"])
             self.assertEqual(persisted["authorization"]["initialAdministratorSubjects"], ["ops@example.com"])
+
+    def test_stale_authorization_conflict_is_not_consumed_by_new_requirement_revision(
+        self,
+    ) -> None:
+        """revisionId 不匹配的旧权限初始化问题不能劫持新增登录需求。"""
+
+        login_spec = create_requirement_spec(
+            "我想添加登录功能",
+            agent_spec={
+                "authentication_requirements": {
+                    "enabled": True,
+                    "sourceRefs": ["我想添加登录功能"],
+                },
+                "authorization_requirements": {
+                    "enabled": False,
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                },
+            },
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_current_config(workspace)
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": login_spec,
+                    "clarification": {"status": "clear", "questions": []},
+                },
+            ):
+                result = requirements(
+                    {
+                        "workflow_scope": "application_planning",
+                        "workspace": workspace,
+                        "request": "我想添加登录功能",
+                        "timeline": [],
+                        "requirement_revision_id": "current-revision",
+                        "authorization_config_conflict": {
+                            "requested": True,
+                            "revisionId": "stale-revision",
+                            "decision": "enable",
+                        },
+                    }
+                )
+
+        self.assertEqual(result["authorization_config_conflict"], {})
+        self.assertNotIn(
+            "authorization_initial_admin",
+            [
+                question.get("id")
+                for question in result["clarification"].get("questions", [])
+                if isinstance(question, dict)
+            ],
+        )
 
 
 if __name__ == "__main__":

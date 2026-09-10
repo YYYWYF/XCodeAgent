@@ -21,7 +21,8 @@ def assert_managed_workspace_healthy(workspace: str | Path, state: dict[str, Any
         if not target.is_file() or target.is_symlink():
             raise TemplateStateError(f"MANAGED_WORKSPACE_UNHEALTHY：缺少受管文件 {raw_path}。")
         try:
-            actual_content = target.read_text(encoding="utf-8")
+            # 必须保留 CRLF/LF；TemplateState 和 Apply 均以 Engine 原始 UTF-8 文本为准。
+            actual_content = target.read_bytes().decode("utf-8")
         except (OSError, UnicodeError) as exc:
             raise TemplateStateError(f"MANAGED_WORKSPACE_UNHEALTHY：无法读取 {raw_path}。") from exc
         if actual_content != expected_content:

@@ -4,6 +4,7 @@ import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from langgraph.config import get_stream_writer
 
@@ -196,21 +197,29 @@ def requirements(state: ProjectState) -> dict:
     # 处理前一轮权限配置冲突的用户选择；解决后才允许继续生成需求草稿。
     conflict = state.get("authorization_config_conflict")
     conflict_resolved = False
+    conflict_invalidated = False
     if (
         application_planning_scope
         and isinstance(conflict, dict)
         and conflict.get("requested") is True
     ):
-        resolution = _resolve_authorization_config_conflict(
-            state,
-            interaction,
-            conflict,
-            existing_spec if isinstance(existing_spec, dict) else {},
-        )
-        if resolution.get("result") is not None:
-            return resolution["result"]
-        request = str(resolution["request"])
-        conflict_resolved = True
+        # 权限初始化问题只能被创建它的需求修订事务消费；缺失或不匹配的
+        # revisionId 视为已失效，不能在新需求分析前截获本轮输入。
+        revision_id = str(state.get("requirement_revision_id") or "").strip()
+        if str(conflict.get("revisionId") or "").strip() != revision_id:
+            conflict = {}
+            conflict_invalidated = True
+        else:
+            resolution = _resolve_authorization_config_conflict(
+                state,
+                interaction,
+                conflict,
+                existing_spec if isinstance(existing_spec, dict) else {},
+            )
+            if resolution.get("result") is not None:
+                return resolution["result"]
+            request = str(resolution["request"])
+            conflict_resolved = True
     revision_requested = (
         interaction.get("action") == "revise"
         if application_planning_scope
@@ -424,7 +433,9 @@ def requirements(state: ProjectState) -> dict:
         "requirement_spec_json_path": str(requirement_spec_draft_json_path(state)),
         "clarification": clarification,
         "authorization_config_conflict": (
-            {} if conflict_resolved else state.get("authorization_config_conflict", {})
+            {}
+            if conflict_resolved or conflict_invalidated
+            else state.get("authorization_config_conflict", {})
         ),
         "timeline": ["requirements"],
     }
@@ -465,6 +476,7 @@ def _authorization_config_conflict_result(
     """构造配置冲突前置澄清，禁止在此之前写入 RequirementSpec 草稿。"""
 
     workspace = str(state.get("workspace") or "").strip()
+    revision_id = str(state.get("requirement_revision_id") or "").strip() or uuid4().hex
     can_enable = bool(workspace) and authorization_configuration_can_enable(workspace)
     if collecting_admin:
         questions = [
@@ -528,8 +540,10 @@ def _authorization_config_conflict_result(
         "requirement_spec_json_path": "",
         "authorization_config_conflict": {
             **conflict,
+            "revisionId": revision_id,
             "decision": "enable" if collecting_admin else "",
         },
+        "requirement_revision_id": revision_id,
         "clarification": clarification,
         "timeline": ["requirements"],
     }

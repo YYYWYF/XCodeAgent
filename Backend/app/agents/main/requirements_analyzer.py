@@ -76,6 +76,10 @@ def _authorization_fact_extraction_prompt(
         "as 'read-only', 'view only', or 'cannot add, delete, or edit' define the application's feature scope for "
         "everyone and must never become restrictedPages or restrictedOperations. Only emit a restriction when the "
         "request explicitly assigns access to one or more roles, members, or other authorization subjects. "
+        "A role catalogue, a workflow actor, and an authentication fact establish participants, normal work, or identity "
+        "only; none is authorization evidence. Do not combine separate statements into an access policy. Emit a restriction "
+        "only when one self-contained requirement fact explicitly states a restriction, denial, exclusivity, grant, or "
+        "capability difference between authenticated subjects. "
         "dataAuthorizationIssues contains only explicit data-authorization requests that V1 cannot "
         "implement. Each item must contain exactly description and sourceRefs. Add an issue when different members, roles, "
         "organizations, projects, customers, or other relations determine which records can be read, modified, or created. "
@@ -148,6 +152,66 @@ def _remove_global_feature_availability_controls(value: Any) -> Any:
                 and all(_is_global_feature_availability_source(source) for source in sources)
             )
         ]
+    return sanitized
+
+
+def _authorization_evidence_prompt(request: str) -> str:
+    """构造窄职责授权证据判定提示，不允许其生成权限规则。"""
+
+    return (
+        "Classify whether this application requirement explicitly describes authorization, not authentication or business flows. "
+        "Return exactly one JSON object: {\"hasAuthorizationRequirement\": boolean, \"evidence\": string[]}.\n"
+        "Authorization requires an explicit restriction, denial, exclusivity, grant, or capability difference between "
+        "already authenticated principals. Authentication answers who is logged in; a business actor answers who performs "
+        "a normal workflow. Neither is authorization evidence. Do not combine separate role and workflow statements.\n"
+        "Return false with [] for authentication requirements, participant catalogues, and ordinary workflow statements. "
+        "Return true only for a self-contained statement of restriction, denial, exclusivity, grant, or capability difference "
+        "between authenticated subjects.\n"
+        "Each evidence value must be a verbatim, non-empty substring of the original requirement that independently proves "
+        "the explicit authorization assertion.\n\n"
+        f"Original requirement:\n{request}"
+    )
+
+
+def _authorization_evidence(value: Any, request: str) -> dict[str, Any]:
+    """校验窄分类器结论，只有可追溯的原文证据才能开启权限抽取。"""
+
+    if not isinstance(value, dict) or set(value) != {"hasAuthorizationRequirement", "evidence"}:
+        return {"hasAuthorizationRequirement": False, "evidence": []}
+    evidence = _string_list(value.get("evidence"))
+    request_text = str(request or "")
+    has_requirement = value.get("hasAuthorizationRequirement") is True
+    if not has_requirement or not evidence or any(item not in request_text for item in evidence):
+        return {"hasAuthorizationRequirement": False, "evidence": []}
+    return {"hasAuthorizationRequirement": True, "evidence": evidence}
+
+
+def _classify_authorization_evidence(request: str, settings: Settings) -> dict[str, Any]:
+    """以独立窄模型判定是否存在授权证据，阻断角色职责误入权限抽取。"""
+
+    result = create_chat_model(settings).invoke(_authorization_evidence_prompt(request))
+    payload = extract_json_object(_coerce_content_text(getattr(result, "content", "")) or "")
+    return _authorization_evidence(payload, request)
+
+
+def _remove_unauthorized_authorization_candidates(
+    value: Any,
+    evidence: dict[str, Any],
+) -> Any:
+    """在证据门关闭时清除所有模型候选，保持业务角色和认证事实独立。"""
+
+    if not isinstance(value, dict) or evidence.get("hasAuthorizationRequirement") is True:
+        return value
+    sanitized = deepcopy(value)
+    authorization = sanitized.get("authorization_requirements")
+    if not isinstance(authorization, dict):
+        return sanitized
+    for field_name in ("restrictedPages", "restrictedOperations"):
+        if isinstance(authorization.get(field_name), list):
+            authorization[field_name] = []
+    # 非显式授权证据不得把模型的 enabled=true 作为权限初始化依据。
+    authorization["enabled"] = False
+    authorization.pop("initialAdminRoleId", None)
     return sanitized
 
 
@@ -305,6 +369,30 @@ def _extract_authorization_facts(
             return payload
         feedback = "\n".join(f"- {error}" for error in errors[:12])
     raise ValueError("权限业务事实自动修复达到上限后仍未通过校验：" + feedback)
+
+
+def _authorization_facts_for_requirement(
+    request: str,
+    existing_spec: dict[str, Any] | None,
+    settings: Settings,
+    pages: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """先执行授权证据门，再按需提取角色-资源事实。"""
+
+    evidence = _classify_authorization_evidence(request, settings)
+    if evidence["hasAuthorizationRequirement"]:
+        return _extract_authorization_facts(request, existing_spec, settings, pages), evidence
+    return (
+        {
+            "user_roles": [],
+            "authorization_requirements": {
+                "restrictedPages": [],
+                "restrictedOperations": [],
+                "dataAuthorizationIssues": [],
+            },
+        },
+        evidence,
+    )
 
 
 def _merge_authorization_facts(
@@ -484,6 +572,10 @@ def _requirements_prompt(
         "restrictedOperations records the business operation name and reason. The specialized authorization fact "
         "extraction pass assigns restrictedPages.targetPageId from this document's page catalogue; do not invent page, "
         "entity, operation, route, resourceKey, policyKey, dataRuleKey, database fields, or SQL identifiers here.\n"
+        "Business Actor is not Authorization Role. A role catalogue, ordinary resource use, a business-flow actor, or an "
+        "authentication requirement must keep restrictedPages and restrictedOperations empty. Authorization requires one "
+        "self-contained statement of restriction, denial, exclusive access, grant, or capability difference between "
+        "authenticated principals.\n"
         "Each permission candidate must include sourceRefs containing the relevant original business description or clarification answer and non-empty defaultGrantedRoleIds referencing user_roles[].id. If the user explicitly requests a controlled target but does not state which role receives it by default, call ask_user to select the applicable business roles; never guess or leave it empty. Do not emit unauthorizedBehavior, unauthorizedPage, unauthorizedOperation, unauthenticated, or any other configurable unauthorized-display field: page/menu and operation entries are fixed to hide for users without the matching resource, while direct page and endpoint access is rejected with 403. Data authorization is not supported in this phase: report it only through the separate authorization fact extraction capability issue, never as RequirementSpec fields.\n"
         "First identify every business participant explicitly stated in the request and put it in user_roles; this includes roles such as 管理员、审批人、运营人员、员工 when the user describes them. Do not replace an explicitly stated role with a generic business_user. RequirementSpec first records business-role facts, never runtime role-resource/member relations. Every user_roles item must have a stable lower_snake_case id, name, description, isSystemRole=false, and isInitialAdminRole=false. Do not select an initial system administrator and do not call ask_user for that selection: after business roles are recorded, the workflow presents the choice deterministically. Never decide system-administrator responsibility from a role name. The flags are metadata only and do not grant implicit permissions.\n"
         "When the business description explicitly requests a permission control, preserve the candidate page or operation. "
@@ -699,8 +791,9 @@ def _analyze_requirements_once(
         # 实时模型的 RequirementSpec 必须完全来自模型或用户明确回答，禁止启用固定页面兜底。
         allow_inferred_defaults=False,
     )
-    # 角色事实独立于是否开启权限：后续“谁是初始系统管理员”的选择只能基于这里识别的业务角色。
-    authorization_facts = _extract_authorization_facts(
+    # 先判定“是否存在已认证主体间的显式能力差异”，再运行专门的权限事实提取。
+    # 角色清单、登录和业务流程不具备这类证据，不能被专门抽取器二次放大为 RBAC。
+    authorization_facts, authorization_evidence = _authorization_facts_for_requirement(
         request,
         existing_spec,
         settings,
@@ -710,6 +803,11 @@ def _analyze_requirements_once(
         effective_agent_spec,
         authorization_facts,
         existing_spec,
+    )
+    # 主需求模型的候选同样必须经过同一证据门，禁止在独立抽取未运行时复活。
+    effective_agent_spec = _remove_unauthorized_authorization_candidates(
+        effective_agent_spec,
+        authorization_evidence,
     )
     spec = create_requirement_spec(
         request,
