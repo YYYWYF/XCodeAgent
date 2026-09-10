@@ -34,6 +34,15 @@ function confirmationWorkflow(threadId = 'thread-A', gateId = 'current-gate'): W
   } as WorkflowRunPayload
 }
 
+/** 构造同线程但缺少服务端中断的历史快照，用于覆盖提交前恢复。 */
+function workflowWithoutInterrupt(threadId = 'thread-A'): WorkflowRunPayload {
+  return {
+    ...confirmationWorkflow(threadId),
+    state: {},
+    result: {}
+  }
+}
+
 /** 构造 AG-UI 会话返回值，允许同一次调用先发帧再返回或失败。 */
 function result(workflow?: WorkflowRunPayload): AgUiChatResult {
   return { threadId: workflow?.threadId || 'thread-A', runId: 'run-A', answer: '', workflow, toolCalls: [], processSteps: [] }
@@ -237,6 +246,79 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
   assert.equal(h.current()?.transportState, 'idle')
   assert.equal(h.current()?.workflow?.summary.status, 'requires_user_input')
   assert.ok(h.order.indexOf('workflow_received') < h.order.indexOf('publish_workflow'))
+}
+
+// J：缺中断的恢复读取和正式提交共享一个 logical transport ownership。
+{
+  const current = planningState()
+  current.workflow = workflowWithoutInterrupt()
+  const h = harness(current)
+  h.onSend(async (options) => {
+    if (h.calls.length === 1) {
+      assert.equal(options.applicationPlanningRecovery?.action, 'get')
+      return result(confirmationWorkflow('thread-A', 'recovered-gate'))
+    }
+    assert.equal(options.applicationPlanningInteraction?.gateId, 'recovered-gate')
+    return result(confirmationWorkflow('thread-A', 'submitted-gate'))
+  })
+  await h.runtime.submitClarification(current.workflow, { __applicationPlanningAction: 'confirm' })
+  assert.equal(h.calls.length, 2)
+  assert.equal(h.events.filter((event) => event.type === 'run_started').length, 1)
+  assert.equal(h.events.filter((event) => event.type === 'run_settled').length, 1)
+}
+
+// K：提交前恢复等待期间 Canonical transport 保持 running，普通重试不能并发发送。
+{
+  const current = planningState()
+  current.workflow = workflowWithoutInterrupt()
+  const h = harness(current)
+  let finishRecovery!: (value: AgUiChatResult) => void
+  h.onSend(async () => {
+    if (h.calls.length === 1) {
+      return await new Promise<AgUiChatResult>((resolve) => { finishRecovery = resolve })
+    }
+    return result(confirmationWorkflow())
+  })
+  const submitting = h.runtime.submitClarification(current.workflow, { __applicationPlanningAction: 'confirm' })
+  assert.equal(h.current()?.transportState, 'running')
+  await h.runtime.retryCurrentFailure()
+  assert.equal(h.calls.length, 1)
+  finishRecovery(result(confirmationWorkflow()))
+  await submitting
+  assert.equal(h.calls.length, 2)
+}
+
+// L：恢复重试属于同一 ownership，前两次读取和正式提交只产生一对运行事件。
+{
+  const current = planningState()
+  current.workflow = workflowWithoutInterrupt()
+  const h = harness(current)
+  h.onSend(async () => {
+    if (h.calls.length === 1) throw new Error('temporary network error')
+    if (h.calls.length === 2) return result(confirmationWorkflow('thread-A', 'retry-gate'))
+    return result(confirmationWorkflow('thread-A', 'submitted-gate'))
+  })
+  await h.runtime.submitClarification(current.workflow, { __applicationPlanningAction: 'confirm' })
+  assert.equal(h.calls.length, 3)
+  assert.equal(h.events.filter((event) => event.type === 'run_started').length, 1)
+  assert.equal(h.events.filter((event) => event.type === 'run_settled').length, 1)
+}
+
+// M：恢复 workflow 必须先进入 Canonical State，正式提交只能读取恢复后的门身份。
+{
+  const current = planningState()
+  current.workflow = workflowWithoutInterrupt()
+  const h = harness(current)
+  h.onSend(async (options) => {
+    if (h.calls.length === 1) return result(confirmationWorkflow('thread-A', 'canonical-recovery-gate'))
+    const canonicalInterrupt = h.current()?.workflow?.state?.application_planning_interrupt as Record<string, unknown> | undefined
+    assert.equal(canonicalInterrupt?.gateId, 'canonical-recovery-gate')
+    assert.equal(options.applicationPlanningInteraction?.gateId, 'canonical-recovery-gate')
+    h.order.push('formal_send')
+    return result(confirmationWorkflow('thread-A', 'submitted-gate'))
+  })
+  await h.runtime.submitClarification(current.workflow, { __applicationPlanningAction: 'confirm' })
+  assert.ok(h.order.indexOf('workflow_received') < h.order.indexOf('formal_send'))
 }
 
 // 补充：同线程历史卡片不能决定交互门，跨线程卡片明确拒绝。

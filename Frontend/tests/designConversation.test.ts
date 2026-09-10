@@ -63,11 +63,13 @@ import {
 import { planningArtifactRecoveryKeys } from '../src/renderer/src/components/AiChatPanel/planningArtifactRecovery'
 import {
   PRODUCT_CONVERSATION_PLACEHOLDER,
-  buildProductConversationInteraction,
   productConversationRoute,
-  productConversationSendBlocked,
-  productConversationSubmissionError
+  productConversationSendBlocked
 } from '../src/renderer/src/components/AiChatPanel/components/ChatComposer/productConversation'
+import {
+  buildProductConversationInteraction,
+  productConversationSubmissionError
+} from '../src/renderer/src/service/applicationPlanningProductConversation'
 import {
   canonicalPlanningReviewMessageIndexes,
   isNonMutatingProductConversation,

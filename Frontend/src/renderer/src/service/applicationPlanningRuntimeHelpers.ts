@@ -6,11 +6,11 @@ import type {
   WorkflowClarificationAnswers,
   WorkflowRunPayload
 } from '../typings'
-import type { AgUiChatSession, SendWorkflowMessageOptions } from './agUiAgent'
+import type { SendWorkflowMessageOptions } from './agUiAgent'
 import { getApplicationLifecycle } from './applicationLifecycle'
 import type { saveRequirementSpecDraft } from './applicationPagePlanning'
 import { planningTechnicalPlanConfirmed } from './applicationPlanningWorkflowState'
-import { buildProductConversationInteraction } from '../components/AiChatPanel/components/ChatComposer/productConversation'
+import { buildProductConversationInteraction } from './applicationPlanningProductConversation'
 
 export const MISSING_INTERRUPT_ERROR = '当前规划确认卡缺少可恢复的服务端中断，请刷新后重试。'
 
@@ -141,19 +141,14 @@ export function planningRecoveryOptions(application: ApplicationConfig): SendWor
   }
 }
 
-/** 提交缺少中断的确认卡前，沿用原有最多两次只读恢复。 */
-export async function fetchRecoveryWorkflowWithRetry(
-  session: Pick<AgUiChatSession, 'sendMessage'>,
-  getApplication: () => ApplicationConfig
+/** 在既有 transport ownership 内最多重试两次只读恢复，不持有任何会话能力。 */
+export async function retryPlanningRecoveryRead(
+  readOnce: () => Promise<WorkflowRunPayload>
 ): Promise<WorkflowRunPayload> {
   let lastError: unknown
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const application = getApplication()
     try {
-      const result = await session.sendMessage('读取待确认的应用规划状态。', planningRecoveryOptions(application))
-      getApplication()
-      if (result.workflow) return result.workflow
-      lastError = new Error('恢复响应缺少规划快照')
+      return await readOnce()
     } catch (reason) {
       lastError = reason
     }
