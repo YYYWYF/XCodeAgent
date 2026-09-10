@@ -2249,9 +2249,17 @@ export default function AiChatPanel({
     workbenchPhase: activeWorkbenchPhase
   })
 
-  /** 按当前执行归属停止生成；规划会话由应用根部 Runtime 停止。 */
+  // 同一执行归属同时决定停止按钮的显示与动作路由，普通 Workflow 保持原有优先级。
+  const currentGenerationOwner = loading
+    ? 'workflow'
+    : isApplicationPlanningPhase && planningState?.transportState === 'running'
+      ? 'planning'
+      : undefined
+  const currentGenerationLoading = currentGenerationOwner !== undefined
+
+  /** 按停止按钮当前显示的执行归属停止生成，规划会话由根部 Runtime 停止。 */
   const handleStopCurrentGeneration = (): void => {
-    if (!loading && isApplicationPlanningPhase && planningState?.transportState === 'running') {
+    if (currentGenerationOwner === 'planning') {
       void onStopPlanning().catch((reason) => {
         if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '停止规划失败'))
       })
@@ -4508,7 +4516,7 @@ export default function AiChatPanel({
                 activeWorkflow={activeWorkflow}
                 copy={copy}
                 initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
-                loading={loading}
+                loading={currentGenerationLoading}
                 onSend={
                   planExecutionShowsDebugResume(displayedPlanExecutionMode) && activeWorkflow
                     ? handleResumePlan
@@ -4528,7 +4536,7 @@ export default function AiChatPanel({
                     onOpenPreview={() => void handleOpenFullscreenPreview()}
                     onRetry={() => void handleRetryPlan()}
                     onStop={
-                      loading
+                      currentGenerationLoading
                         ? handleStopCurrentGeneration
                         : () => void handleStopPlan(scopedExecution?.runId)
                     }
@@ -4546,7 +4554,7 @@ export default function AiChatPanel({
                   copy={copy}
                   draft={draft}
                   inspectedElementContext={inspectedElementContext}
-                  loading={loading}
+                  loading={currentGenerationLoading}
                   onDraftChange={(value) => setDraftByKey(draftKey, value)}
                   onInspectedElementContextClear={() => setInspectedElementContext(undefined)}
                   onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
@@ -4581,7 +4589,7 @@ export default function AiChatPanel({
                     activeWorkflow={activeWorkflow}
                     copy={copy}
                     initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
-                    loading={loading}
+                    loading={currentGenerationLoading}
                     onSend={handleSend}
                     onStopGenerating={handleStopCurrentGeneration}
                     stopping={stopping}
