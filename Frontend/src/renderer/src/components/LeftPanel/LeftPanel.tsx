@@ -12,11 +12,11 @@ import type {
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
 } from '../../typings'
-import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
 import type {
-  ApplicationPlanningCurrentEvent,
-  ApplicationPlanningCurrentState
-} from '../../service/activeApplicationPlanning'
+  RequirementSpecDraftSaveResult,
+  WorkflowRevisionContinuationHandoff
+} from '../../service/applicationPagePlanning'
+import type { ApplicationPlanningCurrentState } from '../../service/activeApplicationPlanning'
 import { cx } from '../../utils'
 import AiChatPanel from '../AiChatPanel'
 import './LeftPanel.less'
@@ -54,7 +54,10 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
-  onPlanningCurrentEvent: (event: ApplicationPlanningCurrentEvent) => void
+  onSavePlanningRequirementSpec: (
+    spec: Record<string, unknown>
+  ) => Promise<RequirementSpecDraftSaveResult>
+  onStopPlanning: () => Promise<void>
   onSessionHistoryReadyChange: (ready: boolean, error?: string) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
@@ -89,7 +92,8 @@ export default function LeftPanel({
   onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
-  onPlanningCurrentEvent,
+  onSavePlanningRequirementSpec,
+  onStopPlanning,
   onSessionHistoryReadyChange,
   generatingTemplate,
   onRetryPlanning,
@@ -123,7 +127,8 @@ export default function LeftPanel({
             onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
             onThemeChange={onThemeChange}
             onPlanningStreamReady={onPlanningStreamReady}
-            onPlanningCurrentEvent={onPlanningCurrentEvent}
+            onSavePlanningRequirementSpec={onSavePlanningRequirementSpec}
+            onStopPlanning={onStopPlanning}
             onSessionHistoryReadyChange={onSessionHistoryReadyChange}
             generatingTemplate={generatingTemplate}
             onRetryPlanning={onRetryPlanning}

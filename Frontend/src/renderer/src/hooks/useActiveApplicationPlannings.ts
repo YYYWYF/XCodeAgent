@@ -28,7 +28,6 @@ type ActiveApplicationPlanningsController = {
   generatingAppIds: ReadonlySet<string>
   onTechnicalPlanConfirmed: (applicationId: string) => Promise<boolean>
   retryTemplateGeneration: (applicationId: string) => Promise<boolean>
-  registerStopHandler: (applicationId: string, handler?: () => Promise<void>) => void
   returnHome: () => void
   showPlanning: (applicationId: string) => void
   startPlanning: (
@@ -38,11 +37,10 @@ type ActiveApplicationPlanningsController = {
     visible?: boolean,
     restoreArtifactsFromDisk?: boolean
   ) => ApplicationPlanningCurrentState
-  stopPlanning: (applicationId: string) => Promise<void>
   visiblePlanningId?: string
 }
 
-// 维护相互隔离的应用初始化会话及其后台模板生成任务。
+// 维护应用规划的唯一当前状态、视图显隐及后台模板生成任务。
 export function useActiveApplicationPlannings({
   onApplicationLifecycleChange,
   onOpenWorkbench
@@ -52,7 +50,6 @@ export function useActiveApplicationPlannings({
   const activePlanningsRef = useRef<ApplicationPlanningCurrentState[]>([])
   const visiblePlanningIdRef = useRef<string>()
   const refreshIdRef = useRef(0)
-  const stopHandlersRef = useRef(new Map<string, () => Promise<void>>())
 
   // 同步更新 React 状态和异步回调读取的最新规划引用。
   const commitPlannings = useCallback(
@@ -77,7 +74,7 @@ export function useActiveApplicationPlannings({
     []
   )
 
-  // 切换当前可见规划，不影响其余已挂载会话继续运行。
+  // 切换当前可见规划，不影响其余 Runtime 继续运行。
   const setVisiblePlanning = useCallback((applicationId?: string): void => {
     visiblePlanningIdRef.current = applicationId
     setVisiblePlanningId(applicationId)
@@ -153,8 +150,8 @@ export function useActiveApplicationPlannings({
         planning,
         ...current.filter((planning) => planning.application.id !== application.id)
       ])
-      // visible=false 时只挂载规划会话（Modal 隐藏但继续跑 graph），用于新建应用后
-      // 直接进工作台、规划在后台运行的场景；后续 awaiting_user 时由 AppEntryPage 自动弹出。
+      // visible=false 时仅登记当前状态，由应用根部的 Runtime Manager 启动后台规划。
+      // 工作台确认卡可直接提交 Runtime 动作，是否显示全屏视图不参与执行。
       if (visible) {
         setVisiblePlanning(application.id)
       }
@@ -176,23 +173,6 @@ export function useActiveApplicationPlannings({
     },
     [commitPlannings]
   )
-
-  // 按应用注册独立停止句柄，删除一个计划时不会停止其他流。
-  const registerStopHandler = useCallback(
-    (applicationId: string, handler?: () => Promise<void>): void => {
-      if (handler) {
-        stopHandlersRef.current.set(applicationId, handler)
-      } else {
-        stopHandlersRef.current.delete(applicationId)
-      }
-    },
-    []
-  )
-
-  // 停止指定应用的主规划 Workflow，供工作台自由变更入口复用同一停止句柄。
-  const stopPlanning = useCallback(async (applicationId: string): Promise<void> => {
-    await stopHandlersRef.current.get(applicationId)?.()
-  }, [])
 
   // 从活动集合移除已经完成或删除的单个计划。
   const dismissPlanning = useCallback(
@@ -232,7 +212,7 @@ export function useActiveApplicationPlannings({
       onOpenWorkbench
     })
 
-  // 显示指定应用已经挂载的规划容器，供工作台错误恢复入口使用。
+  // 显示指定应用的规划视图，运行中的 Runtime 保持独立。
   const showPlanning = useCallback(
     (applicationId: string): void => {
       if (
@@ -259,7 +239,7 @@ export function useActiveApplicationPlannings({
   const onTechnicalPlanConfirmed = runTemplateGeneration
   const retryTemplateGeneration = runTemplateGeneration
 
-  // 返回首页时只隐藏当前规划，所有已挂载会话继续运行。
+  // 返回首页时只隐藏当前规划，所有后台 Runtime 继续运行。
   const returnHome = useCallback((): void => {
     setVisiblePlanning(undefined)
   }, [setVisiblePlanning])
@@ -273,11 +253,9 @@ export function useActiveApplicationPlannings({
     generatingAppIds,
     onTechnicalPlanConfirmed,
     retryTemplateGeneration,
-    registerStopHandler,
     returnHome,
     showPlanning,
     startPlanning,
-    stopPlanning,
     visiblePlanningId
   }
 }

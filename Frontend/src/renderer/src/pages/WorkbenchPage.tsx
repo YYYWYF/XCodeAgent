@@ -8,11 +8,11 @@ import {
   loadWorkspaceApplicationConfig
 } from '../service/applicationStorage'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
-import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
 import type {
-  ApplicationPlanningCurrentEvent,
-  ApplicationPlanningCurrentState
-} from '../service/activeApplicationPlanning'
+  RequirementSpecDraftSaveResult,
+  WorkflowRevisionContinuationHandoff
+} from '../service/applicationPagePlanning'
+import type { ApplicationPlanningCurrentState } from '../service/activeApplicationPlanning'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -54,7 +54,10 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
-  onPlanningCurrentEvent: (event: ApplicationPlanningCurrentEvent) => void
+  onSavePlanningRequirementSpec: (
+    spec: Record<string, unknown>
+  ) => Promise<RequirementSpecDraftSaveResult>
+  onStopPlanning: () => Promise<void>
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试设计阶段规划任务。 */
@@ -88,7 +91,8 @@ function WorkbenchPage({
   onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
-  onPlanningCurrentEvent,
+  onSavePlanningRequirementSpec,
+  onStopPlanning,
   generatingTemplate,
   onRetryPlanning,
   planningState,
@@ -442,7 +446,8 @@ function WorkbenchPage({
                 onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
                 onThemeChange={handleThemeChange}
                 onPlanningStreamReady={onPlanningStreamReady}
-                onPlanningCurrentEvent={onPlanningCurrentEvent}
+                onSavePlanningRequirementSpec={onSavePlanningRequirementSpec}
+                onStopPlanning={onStopPlanning}
                 onSessionHistoryReadyChange={handleSessionHistoryReadyChange}
                 generatingTemplate={generatingTemplate}
                 onRetryPlanning={onRetryPlanning}

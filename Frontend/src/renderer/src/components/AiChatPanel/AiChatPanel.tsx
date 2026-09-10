@@ -38,13 +38,12 @@ import type {
   ChatSessionDevelopmentContinuation,
   ChatSessionDevelopmentTarget
 } from '../../service/chatSessions'
-import { saveRequirementSpecDraft } from '../../service/applicationPagePlanning'
-import type {
-  ApplicationPlanningCurrentEvent,
-  ApplicationPlanningCurrentState
-} from '../../service/activeApplicationPlanning'
+import type { ApplicationPlanningCurrentState } from '../../service/activeApplicationPlanning'
 import { isTemplateGenerationOrphaned } from '../../service/templateApi'
-import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
+import type {
+  RequirementSpecDraftSaveResult,
+  WorkflowRevisionContinuationHandoff
+} from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { formatError } from '../Welcome/utils'
 import {
@@ -303,7 +302,10 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
-  onPlanningCurrentEvent: (event: ApplicationPlanningCurrentEvent) => void
+  onSavePlanningRequirementSpec: (
+    spec: Record<string, unknown>
+  ) => Promise<RequirementSpecDraftSaveResult>
+  onStopPlanning: () => Promise<void>
   onSessionHistoryReadyChange: (ready: boolean, error?: string) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
@@ -849,7 +851,8 @@ export default function AiChatPanel({
   onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
-  onPlanningCurrentEvent,
+  onSavePlanningRequirementSpec,
+  onStopPlanning,
   onSessionHistoryReadyChange,
   generatingTemplate,
   onRetryPlanning,
@@ -2246,6 +2249,17 @@ export default function AiChatPanel({
     workbenchPhase: activeWorkbenchPhase
   })
 
+  /** 按当前执行归属停止生成；规划会话由应用根部 Runtime 停止。 */
+  const handleStopCurrentGeneration = (): void => {
+    if (!loading && isApplicationPlanningPhase && planningState?.transportState === 'running') {
+      void onStopPlanning().catch((reason) => {
+        if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '停止规划失败'))
+      })
+      return
+    }
+    handleStopGenerating()
+  }
+
   // 普通二次修改发送前清理旧的页面详细设计标记，避免历史 Workflow 触发进度卡片。
   const handleConversationSend = useCallback(
     async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
@@ -2341,7 +2355,7 @@ export default function AiChatPanel({
   const copy = chatCopy[editorMode]
 
   // 创建计划阶段：激活当前阶段的前端聊天会话，并注册原 Graph 的流式注入句柄，
-  // 让 AppEntryPage 把 Modal 转发的 onContent/onWorkflow 注入当前 session 的 messages。
+  // 让 AppEntryPage 把 Runtime 输出的 onContent/onWorkflow 注入当前 session 的 messages。
   const planningSessionKeyRef = useRef<string>('')
   // 保存父层唯一 Planning State 的最新引用，供会话键晚于流式事件就绪时补齐最终确认卡。
   const planningCurrentStateRef = useRef(planningState)
@@ -3013,7 +3027,7 @@ export default function AiChatPanel({
   useEffect(() => {
     if (!onPlanningStreamReady) return
     // 不依赖创建计划阶段：工作台刚进入时 lifecycle 尚未加载，阶段推导可能尚未就绪，
-    // 若此时不注册句柄，Modal 最早的流式数据（"正在生成需求文档大纲…"）会被丢弃。
+    // 若此时不注册句柄，Runtime 最早的流式数据（"正在生成需求文档大纲…"）会被丢弃。
     // 总是注册，chunk 到达时 sessionKey 未就绪则缓存，待 ensurePlanningSession 完成后回放。
     const injectChunk = (chunk: { content?: string; workflow?: WorkflowRunPayload }): void => {
       const sessionKey = planningSessionKeyRef.current
@@ -3958,11 +3972,11 @@ export default function AiChatPanel({
     editedRequirementSpec?: Record<string, unknown>
   ): Promise<void> => {
     setGeneratingDetailTargetKey('')
-    // 设计阶段：规划确认走 planningSubmitRef（Modal 的 runPlanning），不走开发 workflow。
+    // 设计阶段：规划确认直接交给应用根部的 Planning Runtime。
     if (isApplicationPlanningPhase) {
       // 空答案 = UI 设计稿生成池轮询（no-op resume）：不开启新一轮、不追加用户消息，
       // 也不走 ensureApplicationPlanningAction（空 answers 会被误判为 confirm）。
-      // 直接把空 answers 传给 onSubmitPlanningClarification，由 Modal 拦截走恢复路径。
+      // 直接把空 answers 传给 onSubmitPlanningClarification，由 Runtime 沿用只读恢复路径。
       const isUiDesignPoll = !answers || Object.keys(answers).length === 0
       if (isUiDesignPoll) {
         void onSubmitPlanningClarification(workflow, {}, editedRequirementSpec).catch(
@@ -4205,43 +4219,20 @@ export default function AiChatPanel({
     [apiDesignConfigGateWorkflow, onPlanningArtifactsRefresh]
   )
 
-  // 需求文档确认：保存编辑草稿（重写 Markdown+JSON），不确认也不继续规划。
-  // 保存后把更新后的 workflow 注入回规划会话，驱动右侧需求文档 tab 实时刷新
-  // 编辑后的内容（confirmationArtifact.content 与 state.requirement_spec 同步更新）。
+  // 委托 Runtime 保存需求草稿；这里只刷新右侧文档缓存和提示，不写入规划当前状态。
   const handleSaveRequirementSpec = useCallback(
     async (
-      workflow: WorkflowRunPayload,
+      _workflow: WorkflowRunPayload,
       spec: Record<string, unknown>
     ): Promise<Record<string, unknown> | undefined> => {
-      const workspaceRoot = application.workspaceRoot || ''
-      const threadId = workflow.threadId || planningThreadId || ''
-      if (!workspaceRoot) return undefined
+      if (!application.workspaceRoot) return undefined
       try {
-        const saved = await saveRequirementSpecDraft(workspaceRoot, spec, threadId)
+        const saved = await onSavePlanningRequirementSpec(spec)
         message.success('需求文档修改已同步到 Markdown')
         setDesignDocFileContent((current) => ({
           ...current,
           'requirement-spec': saved.artifact.content
         }))
-        const savedWorkflow: WorkflowRunPayload = {
-          ...workflow,
-          confirmationArtifact: saved.artifact,
-          state: { ...workflow.state, requirement_spec: saved.requirementSpec },
-          result: { ...workflow.result, requirement_spec: saved.requirementSpec }
-        }
-        if (planningState && savedWorkflow.threadId === planningState.threadId) {
-          onPlanningCurrentEvent({
-            type: 'workflow_received',
-            applicationId: application.id,
-            threadId: planningState.threadId,
-            workflow: savedWorkflow
-          })
-        }
-        // 把保存后的 artifact 与 spec 注入回规划会话，更新当前需求确认卡片与右侧文档。
-        const inject = planningStreamInjectRef.current
-        if (inject) {
-          inject({ workflow: savedWorkflow })
-        }
         return saved.requirementSpec
       } catch (reason) {
         if (isAuthenticationFailure(reason)) return undefined
@@ -4249,13 +4240,7 @@ export default function AiChatPanel({
         return undefined
       }
     },
-    [
-      application.id,
-      application.workspaceRoot,
-      onPlanningCurrentEvent,
-      planningState,
-      planningThreadId
-    ]
+    [application.workspaceRoot, onSavePlanningRequirementSpec]
   )
 
   /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
@@ -4529,7 +4514,7 @@ export default function AiChatPanel({
                     ? handleResumePlan
                     : handleSend
                 }
-                onStopGenerating={handleStopGenerating}
+                onStopGenerating={handleStopCurrentGeneration}
                 rightContent={
                   <PlanExecutionDock
                     canRetryFailedTasks={canRetryFailedTasks}
@@ -4544,7 +4529,7 @@ export default function AiChatPanel({
                     onRetry={() => void handleRetryPlan()}
                     onStop={
                       loading
-                        ? handleStopGenerating
+                        ? handleStopCurrentGeneration
                         : () => void handleStopPlan(scopedExecution?.runId)
                     }
                     onViewPlan={handleViewPlan}
@@ -4583,7 +4568,7 @@ export default function AiChatPanel({
                       ? handleProductConversationSend
                       : handleConversationSend
                   }
-                  onStopGenerating={handleStopGenerating}
+                  onStopGenerating={handleStopCurrentGeneration}
                   stopping={stopping}
                   selectedSkills={selectedSkills}
                   workspaceBusy={workflowInputLocked}
@@ -4598,7 +4583,7 @@ export default function AiChatPanel({
                     initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
                     loading={loading}
                     onSend={handleSend}
-                    onStopGenerating={handleStopGenerating}
+                    onStopGenerating={handleStopCurrentGeneration}
                     stopping={stopping}
                     workspaceBusy={workflowInputLocked}
                     workspaceRoot={workspaceRoot}
