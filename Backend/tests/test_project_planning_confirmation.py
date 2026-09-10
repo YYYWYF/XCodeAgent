@@ -71,7 +71,7 @@ def confirmed_application_planning_artifacts(spec: dict) -> tuple[dict, dict, di
     )
     technical_plan["confirmation_status"] = "pending_user_confirmation"
     ui_designs = {
-        "schema_version": "ui-manifest.v3",
+        "schema_version": "ui-manifest.v5",
         "confirmation_status": "confirmed",
         "pages": [],
     }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import AgentDevelopmentDetail from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail'
 import TechnicalPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanDocPanel'
 import TechnicalPlanSummary from '../src/renderer/src/components/Welcome/TechnicalPlanSummary'
 import agentDevelopmentDetailSource from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/index.tsx?raw'
@@ -230,3 +231,70 @@ assert.doesNotMatch(agentDevelopmentDetailSource, /className=\{cx\('agent-contra
 assert.match(agentSettingsRevisionSource, /@ag-ui\/client/)
 assert.match(agentSettingsRevisionSource, /basedOnTechnicalPlanSha256/)
 assert.match(agentSettingsRevisionSource, /agent-settings-revision/)
+
+const agentDevelopmentMarkup = renderToStaticMarkup(
+  createElement(AgentDevelopmentDetail, {
+    agent: {
+      key: 'agent:inventory_assistant',
+      agentId: 'inventory_assistant',
+      label: '库存助手',
+      purpose: '帮助用户理解库存状态。',
+      boundaries: [],
+      capabilities: [],
+      entryPageIds: ['inventory_home'],
+      entryActions: [
+        {
+          pageId: 'inventory_home',
+          pageLabel: '库存首页',
+          actionIds: ['inventory_home_ask_assistant'],
+          surface: {
+            type: 'floating_panel',
+            label: '悬浮问答面板',
+            enabled: true,
+            contextItemIds: ['inventory_summary']
+          }
+        },
+        {
+          pageId: 'inventory_details',
+          pageLabel: '库存详情',
+          actionIds: [],
+          surface: {
+            type: 'unknown',
+            label: '未知载体（只读）',
+            enabled: false,
+            contextItemIds: []
+          }
+        }
+      ],
+      interaction: {},
+      contractHash: 'sha256:inventory-assistant',
+      agentSettings: {
+        prompt: {},
+        model: {},
+        memory: {},
+        tools: {},
+        skills: {},
+        knowledge: {},
+        context: {}
+      },
+      dependencies: {
+        gateway: {},
+        tools: [],
+        entities: [],
+        pages: [],
+        runtime: {}
+      },
+      runtime: {},
+      security: {},
+      artifacts: [],
+      requiredChecks: []
+    },
+    onSettingsApplied: () => undefined,
+    onStartDevelopment: () => undefined
+  })
+)
+assert.match(agentDevelopmentMarkup, /页面交互载体/)
+assert.match(agentDevelopmentMarkup, /库存首页/)
+assert.match(agentDevelopmentMarkup, /悬浮问答面板/)
+assert.match(agentDevelopmentMarkup, /inventory_summary/)
+assert.match(agentDevelopmentMarkup, /未知载体（只读）/)

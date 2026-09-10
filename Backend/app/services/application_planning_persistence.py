@@ -12,6 +12,7 @@ from app.services.entity_definitions import plan_data_sources
 from app.services.frontend_page_tree import is_menu_node, project_plan_page_records
 from app.services.product_plan import require_current_product_plan
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
+from app.services.ui_design_manifest import UI_MANIFEST_SCHEMA_VERSION
 
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:
@@ -467,9 +468,12 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
         raise ValueError("产品规划必须经产品角色确认后才能进入工作区。")
     if (
         not isinstance(ui_designs, dict)
+        or ui_designs.get("schema_version") != UI_MANIFEST_SCHEMA_VERSION
         or ui_designs.get("confirmation_status") not in {"confirmed", "skipped"}
     ):
-        raise ValueError("UI 设计稿必须经产品角色确认或明确跳过后才能进入工作区。")
+        raise ValueError(
+            f"UI 设计稿必须是 {UI_MANIFEST_SCHEMA_VERSION}，并经产品角色确认或明确跳过后才能进入工作区。"
+        )
     requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))
     product_plan_markdown = Path(str(state.get("product_plan_path") or ""))
     technical_plan_markdown = Path(str(state.get("technical_plan_path") or ""))

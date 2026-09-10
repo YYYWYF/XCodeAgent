@@ -12,6 +12,12 @@ import { requirementAgentRows, type JsonRecord } from './RequirementDocPanelData
 import './RequirementDocPanel.less'
 
 type Props = {
+  agentSurfaceSelectionEditable?: boolean
+  onAgentSurfaceEnabledChange?: (
+    agentId: string,
+    pageId: string,
+    enabled: boolean
+  ) => Promise<void>
   productPlan: JsonRecord
   spec: JsonRecord
 }
@@ -23,7 +29,12 @@ const baseRequirementDocSections: Array<{ key: RequirementSectionKey; label: str
 ]
 
 /** 渲染右侧需求文档产物视图，所有交互仅改变本面板内的阅读位置。 */
-export default function RequirementDocPanel({ productPlan, spec }: Props): ReactElement {
+export default function RequirementDocPanel({
+  agentSurfaceSelectionEditable,
+  onAgentSurfaceEnabledChange,
+  productPlan,
+  spec
+}: Props): ReactElement {
   const [activeSection, setActiveSection] = useState<RequirementSectionKey>('overview')
   const hasAgents = requirementAgentRows(productPlan, spec).length > 0
   const visibleSection = !hasAgents && activeSection === 'agents' ? 'overview' : activeSection
@@ -59,7 +70,12 @@ export default function RequirementDocPanel({ productPlan, spec }: Props): React
         <RequirementOverviewSection sectionKey="overview" spec={spec} />
       ) : null}
       {visibleSection === 'agents' ? (
-        <RequirementAgentSection productPlan={productPlan} spec={spec} />
+        <RequirementAgentSection
+          editable={agentSurfaceSelectionEditable}
+          onSurfaceEnabledChange={onAgentSurfaceEnabledChange}
+          productPlan={productPlan}
+          spec={spec}
+        />
       ) : null}
       {visibleSection === 'pages' ? (
         <RequirementPagesSection productPlan={productPlan} sectionKey="pages" spec={spec} />

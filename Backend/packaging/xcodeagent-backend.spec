@@ -44,6 +44,10 @@ datas = [
         str(backend_root / "app" / "builtin_skills"),
         "app/builtin_skills",
     ),
+    (
+        str(backend_root / "app" / "builtin_templates" / "agent-ui-frontend"),
+        "app/builtin_templates/agent-ui-frontend",
+    ),
 ]
 binaries = []
 

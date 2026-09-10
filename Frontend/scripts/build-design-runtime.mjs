@@ -12,11 +12,13 @@
 
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readFile, writeFile } from 'node:fs/promises'
 import { build } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dirname, '..')
+const outputPath = resolve(root, 'src/renderer/public/design-runtime/antd5-runtime.js')
 
 await build({
   // 用独立 config，不碰主工程的 electron-vite 配置，避免 antd4/antd5 串味。
@@ -64,5 +66,9 @@ await build({
     }
   }
 })
+
+// Vite 会保留依赖模板字符串换行前的缩进；清理行尾空格以保持生成物通过 Git 检查。
+const output = await readFile(outputPath, 'utf8')
+await writeFile(outputPath, output.replace(/[ \t]+$/gm, ''), 'utf8')
 
 console.log('✓ antd5 runtime bundle 已生成: src/renderer/public/design-runtime/antd5-runtime.js')

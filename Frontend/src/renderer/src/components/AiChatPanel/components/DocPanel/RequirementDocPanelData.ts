@@ -36,7 +36,14 @@ export type RequirementAgentRow = {
   purpose: string
   capabilities: Array<{ key: string; name: string; expectedResult: string }>
   entryPageIds: string[]
-  pageActionBindings: Array<{ key: string; pageId: string; actionIds: string[] }>
+  pageActionBindings: Array<{
+    key: string
+    pageId: string
+    pageName: string
+    pagePath: string
+    actionIds: string[]
+    surface: RequirementAgentSurface
+  }>
   interactionMode: string
   supportsMultiTurn: boolean
   inputDescription: string
@@ -44,6 +51,13 @@ export type RequirementAgentRow = {
   stateRequirements: Array<{ key: string; label: string; description: string }>
   boundaries: string[]
   acceptanceCriteria: string[]
+}
+
+export type RequirementAgentSurface = {
+  type: 'standalone_page' | 'floating_panel' | 'unknown'
+  label: string
+  enabled: boolean
+  contextItemIds: string[]
 }
 
 const STATE_REQUIREMENT_LABELS: Record<string, string> = {
@@ -55,11 +69,46 @@ const STATE_REQUIREMENT_LABELS: Record<string, string> = {
   validation: '校验'
 }
 
+/** 把 Surface 严格收敛为两个当前类型或只读未知状态。 */
+function requirementAgentSurface(value: unknown): RequirementAgentSurface {
+  const surface = asRecord(value)
+  const rawType = textValue(surface.type)
+  const type = rawType === 'standalone_page' || rawType === 'floating_panel' ? rawType : 'unknown'
+  const labels: Record<RequirementAgentSurface['type'], string> = {
+    standalone_page: '独立问答页面',
+    floating_panel: '悬浮问答面板',
+    unknown: '未知载体（只读）'
+  }
+  return {
+    type,
+    label: labels[type],
+    enabled: surface.enabled === true,
+    contextItemIds: strictStringItems(surface.contextItemIds)
+  }
+}
+
+/** 仅接受真实字符串并去重，避免把异常值显示成上下文标识。 */
+function strictStringItems(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [
+        ...new Set(
+          value
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        )
+      ]
+    : []
+}
+
 /** 把 ProductPlan 智能体契约拍平为确认视图；产品规划缺失时回退展示需求智能体摘要。 */
 export function requirementAgentRows(
   productPlan: JsonRecord,
   spec: JsonRecord
 ): RequirementAgentRow[] {
+  const pagesById = new Map(
+    recordItems(productPlan.pages).map((page) => [textValue(page.pageId), page] as const)
+  )
   const plannedAgents = recordItems(productPlan.agents)
   const sourceAgents = plannedAgents.length ? plannedAgents : recordItems(spec.agent_requirements)
   return sourceAgents.map((agent, index) => {
@@ -97,7 +146,10 @@ export function requirementAgentRows(
         return {
           key: pageId,
           pageId,
-          actionIds: stringItems(binding.actionIds)
+          pageName: textValue(pagesById.get(pageId)?.name, pageId),
+          pagePath: textValue(pagesById.get(pageId)?.path),
+          actionIds: stringItems(binding.actionIds),
+          surface: requirementAgentSurface(binding.surface)
         }
       }),
       interactionMode: textValue(interaction.mode) || textValue(agent.interactionMode),

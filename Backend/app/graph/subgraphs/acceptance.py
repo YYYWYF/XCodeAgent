@@ -7,6 +7,10 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from app.graph.state import ProjectState
+from app.services.agent_ui_build_contract import (
+    agent_ui_integration_pending,
+    agent_ui_integration_pending_result,
+)
 
 
 def _launch_project(state: ProjectState) -> dict[str, Any]:
@@ -39,6 +43,8 @@ def _launch_succeeded(state: ProjectState) -> bool:
 def _route_start(state: ProjectState) -> str:
     """首次进入时启动项目，恢复验收时直接跳过已完成的启动步骤。"""
 
+    if agent_ui_integration_pending(state):
+        return "acceptance_review"
     # 保留既有 accepted/finalize 后端调用能力：已提交通过动作无需再次启动项目。
     if str(state.get("acceptance_decision") or "") == "accepted":
         return "acceptance_review"
@@ -59,6 +65,12 @@ def _route_after_launch(state: ProjectState) -> str:
 def acceptance_review(state: ProjectState) -> dict[str, Any]:
     """展示验收等待状态，已提交 accepted 时保留原有完成语义。"""
 
+    if agent_ui_integration_pending(state):
+        return {
+            **agent_ui_integration_pending_result(),
+            "phase": "acceptance",
+            "timeline": ["acceptance"],
+        }
     decision = str(state.get("acceptance_decision") or "")
     if decision == "accepted":
         return {

@@ -290,6 +290,38 @@ class AgentRequirementSpecTests(unittest.TestCase):
                 self.assertIn(instruction, prompt)
                 self.assertIn("In both cases, do not ask the suitability question again", prompt)
 
+    def test_requirement_prompt_scopes_agent_entry_pages_by_role_and_user_request(self) -> None:
+        """页面浮窗必须按明确范围和适用角色绑定，不能机械覆盖全部页面。"""
+
+        prompt = _requirements_prompt(
+            "创建请假应用，员工助手提供独立对话页，并可从其他员工页面打开浮窗。"
+        )
+
+        self.assertIn(
+            "entryPageIds must include every page that is eligible to visibly expose",
+            prompt,
+        )
+        self.assertIn(
+            "limit 'all pages' or 'other pages' to pages used by the agent's stated user roles",
+            prompt,
+        )
+        self.assertIn(
+            "Do not attach the agent to administrator-only, system, or unrelated-role pages",
+            prompt,
+        )
+        self.assertIn(
+            "ask one focused clarification question instead of attaching the agent broadly",
+            prompt,
+        )
+        self.assertIn(
+            "Pages omitted from entryPageIds remain ordinary pages without an Agent entry",
+            prompt,
+        )
+        self.assertIn(
+            "An empty entryPageIds means that no visible page exposes the agent",
+            prompt,
+        )
+
     def test_markdown_sync_preserves_edited_business_agent_requirements(self) -> None:
         """Markdown 编辑后的智能体需求必须同步回结构化文档。"""
 

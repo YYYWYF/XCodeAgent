@@ -17,6 +17,7 @@ from app.services.frontend_page_tree import find_frontend_page, project_plan_pag
 from app.services.page_identity import page_id_to_page_key
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
+from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import load_project_plan_json
@@ -178,7 +179,12 @@ def resolve_target_build_context(
     """解析目标详情、直接 endpoint/API 依赖与编译所需的 Unit 标识。"""
 
     if target_type == "page":
-        context = _page_context(project_plan, target_id, project_plan_path)
+        context = _page_context(
+            project_plan,
+            product_plan or {},
+            target_id,
+            project_plan_path,
+        )
     elif target_type == "endpoint":
         context = _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
     elif target_type == "agent":
@@ -329,6 +335,7 @@ def _agent_context(
 
 def _page_context(
     project_plan: dict[str, Any],
+    product_plan: dict[str, Any],
     page_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
@@ -345,6 +352,7 @@ def _page_context(
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _contract_endpoint_ids(page_contract)
     workspace_root = _workspace_root(project_plan_path)
+    agent_ui = project_agent_ui_build_contracts(product_plan, project_plan).get(page_id)
     endpoint_unit_ids: list[str] = []
     for endpoint_id in endpoint_ids:
         endpoint = endpoint_index.get(endpoint_id)
@@ -414,6 +422,7 @@ def _page_context(
             "endpoint_designs": endpoint_designs,
             "mapping_flows": mapping_flows,
             "business_descriptions": business_descriptions,
+            **({"agent_ui": agent_ui} if isinstance(agent_ui, dict) else {}),
         },
     }
 

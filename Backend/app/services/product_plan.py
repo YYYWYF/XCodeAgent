@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -8,7 +9,7 @@ from typing import Any
 
 from app.services.requirement_spec import product_acceptance_criteria
 
-PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v6"
+PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v8"
 _STATE_REQUIREMENT_KEYS = ("loading", "empty", "error", "success", "validation")
 _FORBIDDEN_PRODUCT_KEYS = {
     "api_contracts",
@@ -77,7 +78,9 @@ _MODEL_AGENT_KEYS = {
     "acceptanceCriteria",
 }
 _MODEL_AGENT_CAPABILITY_KEYS = {"capabilityId", "name", "expectedResult"}
-_MODEL_AGENT_PAGE_BINDING_KEYS = {"pageId", "actionIds"}
+_MODEL_AGENT_PAGE_BINDING_KEYS = {"pageId", "actionIds", "surface"}
+_MODEL_AGENT_SURFACE_KEYS = {"type", "enabled", "contextItemIds"}
+_AGENT_SURFACE_TYPES = {"standalone_page", "floating_panel"}
 _MODEL_AGENT_INTERACTION_KEYS = {
     "mode",
     "supportsMultiTurn",
@@ -197,6 +200,15 @@ def _agent_contract_errors(
         }
         for page in _dict_items(pages)
     }
+    page_information_items = {
+        str(page.get("pageId") or "").strip(): {
+            str(item.get("itemId") or "").strip()
+            for item in _dict_items(page.get("information_items"))
+            if str(item.get("itemId") or "").strip()
+        }
+        for page in _dict_items(pages)
+    }
+    surface_owners: dict[tuple[str, str], list[str]] = {}
     requirements_by_id = {
         str(item.get("agentId") or "").strip(): item for item in requirements
     }
@@ -276,6 +288,48 @@ def _agent_contract_errors(
                     errors.append(
                         f"{binding_location}.actionIds 引用了不存在的页面操作 {action_id}。"
                     )
+            surface = binding.get("surface")
+            surface_location = f"{binding_location}.surface"
+            errors.extend(_exact_keys(surface, _MODEL_AGENT_SURFACE_KEYS, surface_location))
+            if not isinstance(surface, dict):
+                continue
+            surface_type = str(surface.get("type") or "").strip()
+            surface_enabled = surface.get("enabled")
+            if surface_type not in _AGENT_SURFACE_TYPES:
+                errors.append(
+                    f"{surface_location}.type 必须是 standalone_page 或 floating_panel。"
+                )
+            elif page_id:
+                surface_owners.setdefault((page_id, surface_type), []).append(agent_id)
+            if not isinstance(surface_enabled, bool):
+                errors.append(f"{surface_location}.enabled 必须是 boolean。")
+            if surface_type == "standalone_page" and surface_enabled is not True:
+                errors.append(f"{surface_location}.standalone_page 必须保持启用。")
+            raw_context_ids = surface.get("contextItemIds")
+            if not isinstance(raw_context_ids, list) or any(
+                not isinstance(item, str) or not item.strip()
+                for item in raw_context_ids if isinstance(raw_context_ids, list)
+            ):
+                errors.append(
+                    f"{surface_location}.contextItemIds 必须是字符串数组，且每个元素均为非空文本。"
+                )
+            context_ids = (
+                [
+                    item.strip()
+                    for item in raw_context_ids
+                    if isinstance(item, str) and item.strip()
+                ]
+                if isinstance(raw_context_ids, list)
+                else []
+            )
+            if len(context_ids) != len(set(context_ids)):
+                errors.append(f"{surface_location}.contextItemIds 不能重复。")
+            for context_item_id in dict.fromkeys(context_ids):
+                if context_item_id not in page_information_items.get(page_id, set()):
+                    errors.append(
+                        f"{surface_location}.contextItemIds 引用了同一页面不存在的信息项 "
+                        f"{context_item_id}。"
+                    )
         if binding_page_ids != _text_items(requirement.get("entryPageIds")):
             errors.append(
                 f"{agent_location}.pageActionBindings 必须逐项覆盖已确认入口页面。"
@@ -309,6 +363,12 @@ def _agent_contract_errors(
         acceptance = agent.get("acceptanceCriteria")
         if not isinstance(acceptance, list) or not _text_items(acceptance):
             errors.append(f"{agent_location}.acceptanceCriteria 必须是非空字符串数组。")
+    for (page_id, surface_type), owners in surface_owners.items():
+        if len(owners) > 1:
+            errors.append(
+                f"页面 {page_id} 最多绑定一个 {surface_type} Agent Surface，"
+                f"当前绑定：{'、'.join(owners)}。"
+            )
     return errors
 
 
@@ -635,6 +695,49 @@ def _default_agent_action_id(page_id: str, agent_id: str) -> str:
     return f"{page_id}_{agent_id}_interact"
 
 
+def _normalized_agent_surface(
+    supplied_binding: dict[str, Any],
+    existing_binding: dict[str, Any],
+) -> dict[str, Any]:
+    """规范 Agent 页面载体，并以空上下文作为最小权限默认值。"""
+
+    supplied_surface = (
+        supplied_binding.get("surface")
+        if isinstance(supplied_binding.get("surface"), dict)
+        else {}
+    )
+    existing_surface = (
+        existing_binding.get("surface")
+        if isinstance(existing_binding.get("surface"), dict)
+        else {}
+    )
+    source = supplied_surface or existing_surface
+    raw_context_item_ids = source.get("contextItemIds")
+    context_item_ids = (
+        list(
+            dict.fromkeys(
+                item.strip()
+                for item in raw_context_item_ids
+                if isinstance(item, str) and item.strip()
+            )
+        )
+        if isinstance(raw_context_item_ids, list)
+        else []
+    )
+    return {
+        "type": str(source.get("type") or "floating_panel").strip(),
+        # 用户开关属于显式确认选择；后续模型修订不得用默认值覆盖它。
+        "enabled": (
+            existing_surface.get("enabled")
+            if isinstance(existing_surface.get("enabled"), bool)
+            else source.get("enabled")
+            if isinstance(source.get("enabled"), bool)
+            else True
+        ),
+        "contextItemIds": context_item_ids,
+    }
+
+
 def _ensure_agent_entry_actions(
     pages: list[dict[str, Any]],
     requirement_spec: dict[str, Any],
@@ -733,15 +836,21 @@ def _normalized_agents(
             str(item.get("pageId") or "").strip(): item
             for item in _dict_items(supplement.get("pageActionBindings"))
         }
+        existing_bindings = {
+            str(item.get("pageId") or "").strip(): item
+            for item in _dict_items(existing_agent.get("pageActionBindings"))
+        }
         page_bindings = []
         for page_id in _text_items(requirement.get("entryPageIds")):
             supplied = supplied_bindings.get(page_id, {})
+            existing_binding = existing_bindings.get(page_id, {})
             action_ids = _text_items(supplied.get("actionIds"))
             page_bindings.append(
                 {
                     "pageId": page_id,
                     "actionIds": action_ids
                     or [_default_agent_action_id(page_id, agent_id)],
+                    "surface": _normalized_agent_surface(supplied, existing_binding),
                 }
             )
         supplied_interaction = (
@@ -1000,8 +1109,65 @@ def requirement_spec_sha256(requirement_spec: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def project_active_agent_product_plan(product_plan: dict[str, Any]) -> dict[str, Any]:
+    """为下游投影仅包含已启用 Agent 入口及其页面操作的产品快照。"""
+
+    projected = deepcopy(product_plan)
+    disabled_actions_by_page: dict[str, set[str]] = {}
+    enabled_actions_by_page: dict[str, set[str]] = {}
+    for agent in _dict_items(projected.get("agents")):
+        active_bindings: list[dict[str, Any]] = []
+        for binding in _dict_items(agent.get("pageActionBindings")):
+            surface = binding.get("surface") if isinstance(binding.get("surface"), dict) else {}
+            page_id = str(binding.get("pageId") or "").strip()
+            if surface.get("enabled") is True:
+                active_bindings.append(binding)
+                enabled_actions_by_page.setdefault(page_id, set()).update(
+                    _text_items(binding.get("actionIds"))
+                )
+                continue
+            disabled_actions_by_page.setdefault(page_id, set()).update(
+                _text_items(binding.get("actionIds"))
+            )
+        agent["pageActionBindings"] = active_bindings
+        agent["entryPageIds"] = [
+            str(binding.get("pageId") or "").strip()
+            for binding in active_bindings
+            if str(binding.get("pageId") or "").strip()
+        ]
+    disabled_action_refs = {
+        (page_id, action_id)
+        for page_id, action_ids in disabled_actions_by_page.items()
+        for action_id in action_ids.difference(enabled_actions_by_page.get(page_id, set()))
+    }
+    for page in _dict_items(projected.get("pages")):
+        page_id = str(page.get("pageId") or "").strip()
+        if any(ref[0] == page_id for ref in disabled_action_refs):
+            page["actions"] = [
+                action
+                for action in _dict_items(page.get("actions"))
+                if (page_id, str(action.get("actionId") or "").strip())
+                not in disabled_action_refs
+            ]
+    authorization_targets = (
+        projected.get("authorizationTargets")
+        if isinstance(projected.get("authorizationTargets"), dict)
+        else {}
+    )
+    authorization_targets["operationRules"] = [
+        rule
+        for rule in _dict_items(authorization_targets.get("operationRules"))
+        if (
+            str(rule.get("pageId") or "").strip(),
+            str(rule.get("actionId") or "").strip(),
+        )
+        not in disabled_action_refs
+    ]
+    return projected
+
+
 def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[str, Any]) -> list[str]:
-    """校验 ProductPlan v6 的结构、需求边界和稳定引用均闭合。"""
+    """校验 ProductPlan v8 的结构、需求边界和稳定引用均闭合。"""
 
     expected = [
         str(item.get("pageId") or item.get("id") or "").strip()
