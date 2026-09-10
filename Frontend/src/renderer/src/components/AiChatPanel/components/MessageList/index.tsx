@@ -27,6 +27,7 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../../../typings'
+import type { ApplicationPlanningCurrentState } from '../../../../service/activeApplicationPlanning'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import AgentErrorCard from '../../../AgentErrorCard'
@@ -78,6 +79,7 @@ import {
   planningReviewIdentity,
   planningReviewMatchesActiveWorkflow
 } from './productConversationPresentation'
+import { resolvePlanningMessageWorkflow } from './planningMessageWorkflow'
 import './MessageList.less'
 
 const { Text } = Typography
@@ -274,10 +276,8 @@ type MessageListProps = {
   generatingTemplate?: boolean
   /** lifecycle 仍在模板阶段但当前 renderer 没有对应生成任务。 */
   templateGenerationOrphaned?: boolean
-  /** 设计阶段最新的规划 workflow（activePlannings 权威快照，每轮 no-op resume 都会更新）。
-   *  UI 设计稿确认卡片优先用它渲染，绕过消息对象里可能滞留的旧 message.workflow，
-   *  保证后台生成池写入的最新页面状态实时反映到卡片。 */
-  planningWorkflow?: WorkflowRunPayload
+  /** 当前应用唯一的 Planning 业务状态。 */
+  planningState?: ApplicationPlanningCurrentState
   loading: boolean
   messages: AgentChatMessage[]
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
@@ -328,7 +328,7 @@ export default function MessageList({
   onEnterDevelopment,
   generatingTemplate,
   templateGenerationOrphaned,
-  planningWorkflow,
+  planningState,
   loading,
   messages,
   onDagStageSelect,
@@ -344,6 +344,8 @@ export default function MessageList({
   onSubmitClarification,
   workspaceRoot
 }: MessageListProps): ReactElement {
+  const planningWorkflow = planningState?.workflow
+  const currentPlanningMessageIndex = findCurrentPlanningMessageIndex(messages, planningWorkflow)
   const { phase: currentPhase } = useWorkbenchPhase()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
@@ -354,6 +356,9 @@ export default function MessageList({
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const latestAssistantMessageId = findLastAssistantMessageId(messages)
   const visibleError = error?.trim() || ''
+  const canonicalPlanningError = planningState?.error?.trim() || ''
+  const canonicalPlanningFailure =
+    canonicalPlanningError || workflowFailureMessage(planningWorkflow)
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   const latestAssistantMessage = findLastAssistantMessage(messages)
@@ -366,7 +371,8 @@ export default function MessageList({
     !templateGenerationFailed &&
     !templateGenerationOrphaned &&
     visibleError &&
-    visibleError !== latestAssistantMessageError
+    visibleError !== latestAssistantMessageError &&
+    (currentPlanningMessageIndex < 0 || visibleError !== canonicalPlanningFailure)
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
@@ -523,7 +529,7 @@ export default function MessageList({
               ) {
                 return null
               }
-                // TechnicalPlan 已开始后，入口动作已经消费；不在计划阶段继续展示可点击入口卡。
+              // TechnicalPlan 已开始后，入口动作已经消费；不在计划阶段继续展示可点击入口卡。
               if (
                 designPhasePlanning &&
                 isSupersededPlanningStageEntryMessage(messages, messageIndex)
@@ -551,11 +557,6 @@ export default function MessageList({
               // 实体会话内所有消息按对话样式渲染，运行中的临时快照缺少实体
               // 上下文时也不回退显示 Agent 流程信息。
               const hideEntityWorkflowChrome = entityDesignSession || entityDesignMessage
-              const isCurrentErrorMessage =
-                Boolean(message.error || workflowFailureMessage(message.workflow)) &&
-                message.role === 'assistant' &&
-                message.id === latestAssistantMessageId
-              const messageError = message.error || workflowFailureMessage(message.workflow)
               const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
               const visibleCodeChanges = workflowShouldShowCodeChanges(message.workflow)
                 ? codeChanges
@@ -563,7 +564,6 @@ export default function MessageList({
               const codeChangesBeforeConfirmation = workflowCodeChangesBeforeConfirmation(
                 message.workflow
               )
-              const finalResult = workflowFinalResultPresentation(message.workflow)
               const conversation =
                 (messageLoading && conversationRunning) || isConversationWorkflow(message.workflow)
               const visibleProcessSteps = processStepsForMessageDisplay(
@@ -576,8 +576,6 @@ export default function MessageList({
                     (step) => step.kind === 'tool' || step.kind === 'command'
                   )
               )
-              const requiresClarification =
-                message.workflow && planningWorkflowRequiresUserInput(message.workflow)
               const messagePlanningReviewIdentity = planningReviewIdentity(message.workflow)
               const nonMutatingProductConversation = isNonMutatingProductConversation(
                 message.workflow
@@ -594,6 +592,31 @@ export default function MessageList({
                   activePlanningReviewIdentity &&
                   planningReviewMatchesActiveWorkflow(message.workflow, planningWorkflow)
               )
+              const isCurrentPlanningMessage = Boolean(
+                designPhasePlanning &&
+                  planningWorkflow &&
+                  (isCurrentPlanningReview || messageIndex === currentPlanningMessageIndex)
+              )
+              const planningCardWorkflow = resolvePlanningMessageWorkflow(
+                message.workflow,
+                planningWorkflow,
+                isCurrentPlanningMessage
+              )
+              const currentPresentationWorkflow = isCurrentPlanningMessage
+                ? planningCardWorkflow
+                : message.workflow
+              const messageError = isCurrentPlanningMessage
+                ? canonicalPlanningError || workflowFailureMessage(planningCardWorkflow)
+                : message.error || workflowFailureMessage(message.workflow)
+              const isCurrentErrorMessage = Boolean(
+                messageError &&
+                  message.role === 'assistant' &&
+                  (isCurrentPlanningMessage || message.id === latestAssistantMessageId)
+              )
+              const finalResult = workflowFinalResultPresentation(currentPresentationWorkflow)
+              const requiresClarification = Boolean(
+                planningCardWorkflow && planningWorkflowRequiresUserInput(planningCardWorkflow)
+              )
               // 早期版本可能已把非修改回复挂回错误的审阅节点。若该回复本身就是
               // 当前 checkpoint 的唯一卡片宿主，允许它承载一次可恢复确认；正常同门禁回复仍去重到原卡。
               const isActiveNonMutatingReviewFallback = Boolean(
@@ -602,7 +625,7 @@ export default function MessageList({
               // 设计规划已经由专用进度块表达当前意图和生成阶段，不再重复展示
               // 通用 ProcessSteps 的“执行完成 / 已归档步骤”摘要。
               const planningActivity = designPhasePlanning
-                ? planningWorkflowActivity(message.workflow)
+                ? planningWorkflowActivity(planningCardWorkflow)
                 : undefined
               // 只有真正携带实体设计载荷的确认才渲染聊天卡片；
               // DDL 审批等其它确认类型继续走 WorkflowRunCard 的审批卡片。
@@ -616,14 +639,14 @@ export default function MessageList({
               // 可能短暂丢失 requires_user_input/mode）也保持显示，避免卡片闪烁。
               // 用 phase=ui_confirmation 作为权威判据（running 期间 phase 不丢），
               // 辅以 clarification.mode 兜底。
-              const messageClarification = message.workflow
-                ? workflowClarification(message.workflow)
+              const messageClarification = planningCardWorkflow
+                ? workflowClarification(planningCardWorkflow)
                 : undefined
               const isUiDesignConfirmationCard =
-                message.workflow &&
+                planningCardWorkflow &&
                 (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
                 !isDuplicatePlanningReview &&
-                (message.workflow.summary?.phase === 'ui_confirmation' ||
+                (planningCardWorkflow.summary?.phase === 'ui_confirmation' ||
                   messageClarification?.mode === 'ui_design_confirmation')
               const isLatestUiDesignConfirmationCard =
                 isUiDesignConfirmationCard &&
@@ -645,13 +668,13 @@ export default function MessageList({
               const isCodeReviewCard = workflowShouldShowCodeReview(message.workflow)
               // 创建规划的产品/技术阶段也展示 WorkflowRunCard，保证运行与确认状态连续可见。
               const isPlanningStageCard =
-                message.workflow &&
+                planningCardWorkflow &&
                 ['product_planning', 'project_planning', 'technical_planning'].includes(
-                  String(message.workflow.summary?.phase || '')
+                  String(planningCardWorkflow.summary?.phase || '')
                 ) &&
-                message.workflow.summary?.status !== 'running'
+                planningCardWorkflow.summary?.status !== 'running'
               const showWorkflowCard = Boolean(
-                message.workflow &&
+                planningCardWorkflow &&
                   (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
                   !isDuplicatePlanningReview &&
                   ((requiresClarification &&
@@ -675,14 +698,17 @@ export default function MessageList({
                 lifecycleReadyForWorkbench &&
                 !applicationLifecycle?.activeFormalRevision
               const interactionAvailability =
-                message.workflow && requiresClarification
+                planningCardWorkflow && requiresClarification
                   ? browsingDesignHistory
                     ? 'stale'
                     : messageIndex < messages.length - 1 && !isCurrentPlanningReview
                       ? 'stale'
                       : conversation || designPhasePlanning
                         ? 'active'
-                        : workflowInteractionAvailability(message.workflow, applicationLifecycle)
+                        : workflowInteractionAvailability(
+                            planningCardWorkflow,
+                            applicationLifecycle
+                          )
                   : 'stale'
               // 已答过的历史澄清卡：从其后最近的 user 留痕解析「header：答案」行回填为
               // 只读摘要，避免旧表单以空白可填样式重现（恢复会话时 localStorage 草稿已丢）。
@@ -702,7 +728,7 @@ export default function MessageList({
               // 规划文档确认阶段由确认卡展示，隐藏流式 JSON 原文；生成中只显示加载态。
               // 规划占位消息（planningLoading）：用户提交后产品 Agent 正在思考，只显示 loading 态。
               const isPlanningArtifactConfirmationCard =
-                message.workflow &&
+                planningCardWorkflow &&
                 (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
                 !isDuplicatePlanningReview &&
                 [
@@ -719,14 +745,14 @@ export default function MessageList({
                 messageIndex < messages.length - 1 &&
                 !isCurrentPlanningReview
               const isPlanningStageRunningCard =
-                message.workflow &&
-                isStructuredPlanningWorkflow(message.workflow) &&
-                message.workflow.summary?.status === 'running'
+                planningCardWorkflow &&
+                isStructuredPlanningWorkflow(planningCardWorkflow) &&
+                planningCardWorkflow.summary?.status === 'running'
               const isPlanningLoadingPlaceholder = Boolean(message.planningLoading)
               // 某些首帧会先带 running workflow，随后旧的占位标记可能被流式文本清掉；
               // 只要当前仍在运行且消息没有正文/确认卡，就继续显示生成中，避免只剩 Agent 头像。
               const isPlanningWorkflowRunning =
-                designPhasePlanning && message.workflow?.summary?.status === 'running'
+                designPhasePlanning && planningCardWorkflow?.summary?.status === 'running'
               // UI 确认阶段的轮询 no-op resume 会经历 running→requires_user_input 抖动。
               // running 期间 showWorkflowCard 可能因 requiresClarification/index 抖动瞬间为 false，
               // 导致 planningWorkflowNeedsChatLoading 返回 true、闪现"正在生成设计方案"loading 卡片，
@@ -738,7 +764,7 @@ export default function MessageList({
                 !message.revisionHandoff &&
                 !isUiDesignConfirmationCard &&
                 planningWorkflowNeedsChatLoading(
-                  message.workflow,
+                  planningCardWorkflow,
                   designPhasePlanning,
                   isPlanningLoadingPlaceholder,
                   showWorkflowCard,
@@ -776,7 +802,7 @@ export default function MessageList({
                         {/* 统一 Agent 头：人像图标 + 当前阶段 Agent 角色名（产品/规划/研发/测试/审查），
                             独占一行，下方换行展示正文/卡片。 */}
                         <MessageAgentHeader
-                          agentKey={messageAgentPhase(message.workflow, currentPhase)}
+                          agentKey={messageAgentPhase(currentPresentationWorkflow, currentPhase)}
                         />
                         {message.revisionHandoff ? (
                           <RevisionHandoffCard
@@ -803,11 +829,11 @@ export default function MessageList({
                             planningLoading 标记的占位消息显示与「正在分析需求」一致的
                             边框卡片加载态，流式 chunk 到达后 planningLoading 被清除并展示返回内容。 */}
                         {showPlanningLoading &&
-                          (planningActivity && message.workflow ? (
-                            <PlanningWorkflowActivity workflow={message.workflow} />
+                          (planningActivity && planningCardWorkflow ? (
+                            <PlanningWorkflowActivity workflow={planningCardWorkflow} />
                           ) : (
                             <PhasePendingCard
-                              agentKey={messageAgentPhase(message.workflow, currentPhase)}
+                              agentKey={messageAgentPhase(currentPresentationWorkflow, currentPhase)}
                               detail={
                                 isPlanningWorkflowRunning
                                   ? currentPhase === 'planning'
@@ -824,8 +850,8 @@ export default function MessageList({
                         {!showPlanningLoading &&
                         !messageError &&
                         planningActivity &&
-                        message.workflow ? (
-                          <PlanningWorkflowActivity workflow={message.workflow} />
+                        planningCardWorkflow ? (
+                          <PlanningWorkflowActivity workflow={planningCardWorkflow} />
                         ) : null}
                         {!hideEntityWorkflowChrome &&
                           visibleProcessSteps &&
@@ -914,8 +940,7 @@ export default function MessageList({
                               onUiDesignActingPageIdsChange={onUiDesignActingPageIdsChange}
                               onSaveRequirementSpec={onSaveRequirementSpec}
                               rootPath={rootPath}
-                              planningWorkflow={planningWorkflow}
-                              workflow={message.workflow}
+                              workflow={planningCardWorkflow || message.workflow}
                               workspaceRoot={workspaceRoot}
                             />
                           ) : null)}
@@ -1034,6 +1059,21 @@ function findLastAssistantMessage(messages: AgentChatMessage[]): AgentChatMessag
     if (messages[index].role === 'assistant') return messages[index]
   }
   return undefined
+}
+
+/** 找到与当前 Planning thread 对应的最后一条卡片宿主，不从阶段或文案猜测归属。 */
+function findCurrentPlanningMessageIndex(
+  messages: AgentChatMessage[],
+  currentWorkflow: WorkflowRunPayload | undefined
+): number {
+  if (!currentWorkflow?.threadId) return -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role === 'assistant' && message.workflow?.threadId === currentWorkflow.threadId) {
+      return index
+    }
+  }
+  return -1
 }
 
 /** 从 Workflow 终态提取失败摘要，覆盖后端未额外发送 RUN_ERROR 的失败路径。 */

@@ -4,6 +4,10 @@ import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPageP
 import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlannings'
 import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
+import {
+  workflowApplicationLifecycle,
+  type ApplicationPlanningCurrentEvent
+} from '../service/activeApplicationPlanning'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { isTemplateGenerationOrphaned } from '../service/templateApi'
 import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
@@ -234,6 +238,24 @@ function AppEntryContent(): JSX.Element {
     onOpenWorkbench: openWorkbench
   })
 
+  // 将 Modal 产生的事件提交给唯一 Planning Store，并同步当前工作台的全局 lifecycle 投影。
+  const handlePlanningCurrentEvent = useCallback(
+    (event: ApplicationPlanningCurrentEvent): void => {
+      planningController.dispatchPlanningEvent(event)
+      if (activeApplication?.id !== event.applicationId) return
+      const lifecycle =
+        event.type === 'lifecycle_received'
+          ? event.lifecycle
+          : event.type === 'workflow_received'
+            ? workflowApplicationLifecycle(event.workflow)
+            : event.type === 'run_failed' && event.workflow
+              ? workflowApplicationLifecycle(event.workflow)
+              : undefined
+      if (lifecycle) mergeApplicationLifecycle(lifecycle)
+    },
+    [activeApplication?.id, mergeApplicationLifecycle, planningController.dispatchPlanningEvent]
+  )
+
   // 设计阶段二次修改始终恢复应用创建时的 planning Graph；若开发阶段已卸载规划
   // Modal，则先用持久化 planningThreadId 后台挂载，等其注册句柄后再开始本轮请求。
   const handleStartDesignStageRevision = useCallback(
@@ -387,23 +409,12 @@ function AppEntryContent(): JSX.Element {
 
       {planningController.activePlannings.map((planning) => (
         <ApplicationPagePlanningModal
-          application={planning.application}
-          initialLifecycle={planning.lifecycle}
-          initialStatus={planning.status}
-          initialWorkflow={planning.workflow}
           key={planning.threadId}
+          planning={planning}
           onTechnicalPlanConfirmed={() =>
             planningController.onTechnicalPlanConfirmed(planning.application.id)
           }
-          onErrorChange={(error) =>
-            planningController.updatePlanningError(planning.application.id, error)
-          }
-          onLifecycleChange={(lifecycle) => {
-            planningController.updatePlanningLifecycle(planning.application.id, lifecycle)
-            if (activeApplication?.id === planning.application.id) {
-              mergeApplicationLifecycle(lifecycle)
-            }
-          }}
+          onCurrentStateEvent={handlePlanningCurrentEvent}
           onSubmitClarificationChange={(handler) => {
             planningSubmitByAppRef.current[planning.application.id] = handler ?? undefined
             if (!handler) return
@@ -436,20 +447,13 @@ function AppEntryContent(): JSX.Element {
             deliverPlanningChunk(planning.threadId, { content: undefined, workflow })
           }}
           onReturnHome={planningController.returnHome}
-          onStatusChange={(status) =>
-            planningController.updatePlanningStatus(planning.application.id, status)
-          }
           onStopHandlerChange={(handler) =>
             planningController.registerStopHandler(planning.application.id, handler)
           }
           onRetryHandlerChange={(handler) => {
             planningRetryByAppRef.current[planning.application.id] = handler ?? undefined
           }}
-          onWorkflowChange={(workflow) =>
-            planningController.updatePlanningWorkflow(planning.application.id, workflow)
-          }
           theme={theme}
-          threadId={planning.threadId}
           visible={planningController.visiblePlanningId === planning.application.id}
         />
       ))}
@@ -510,6 +514,7 @@ function AppEntryContent(): JSX.Element {
             }}
             onThemeChange={setTheme}
             onPlanningStreamReady={handlePlanningStreamReady}
+            onPlanningCurrentEvent={handlePlanningCurrentEvent}
             onRetryPlanning={
               templateGenerationRecoverable
                 ? () => {
@@ -522,10 +527,7 @@ function AppEntryContent(): JSX.Element {
                   }
             }
             generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
-            planningThreadId={activePlanningThreadId}
-            planningWorkflow={activePlanning?.workflow}
-            planningError={activePlanning?.error}
-            restorePlanningArtifactsFromDisk={activePlanning?.restoreArtifactsFromDisk === true}
+            planningState={activePlanning}
             theme={theme}
           />
         </div>

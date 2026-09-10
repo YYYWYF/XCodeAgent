@@ -1,5 +1,5 @@
 import { Button, message, Spin } from 'antd'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ApplicationConfig,
   ApplicationPlanningAction,
@@ -18,7 +18,12 @@ import {
   saveRequirementSpecDraft
 } from '../../service/applicationPagePlanning'
 import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
-import { workflowApplicationLifecycle } from '../../service/activeApplicationPlanning'
+import {
+  applicationPlanningDisplayStatus,
+  reduceApplicationPlanningCurrentState,
+  type ApplicationPlanningCurrentEvent,
+  type ApplicationPlanningCurrentState
+} from '../../service/activeApplicationPlanning'
 import { getApplicationLifecycle } from '../../service/applicationLifecycle'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { cx } from '../../utils'
@@ -35,10 +40,8 @@ import {
   planningWorkflowCanPublishDuringRun,
   planningWorkflowLifecycleStage,
   planningWorkflowPhase,
-  planningWorkflowRequiresUserInput,
-  retainApplicationPlanningInterrupt
+  planningWorkflowRequiresUserInput
 } from './planningWorkflowState'
-import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
 import {
   buildProductConversationInteraction,
   productConversationSubmissionError
@@ -61,12 +64,8 @@ function CurvedBackIcon(): JSX.Element {
 }
 
 type Props = {
-  application: ApplicationConfig
-  initialStatus: ActivePlanningStatus
-  initialLifecycle: ApplicationLifecycle
-  initialWorkflow?: WorkflowRunPayload
+  planning: ApplicationPlanningCurrentState
   theme: 'dark' | 'light'
-  threadId: string
   visible: boolean
   onReturnHome: () => void
   onSubmitClarificationChange: (
@@ -87,10 +86,7 @@ type Props = {
   onPlanningContent?: (content: string) => void
   onPlanningWorkflow?: (workflow: WorkflowRunPayload) => void
   onTechnicalPlanConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
-  onErrorChange: (error?: string) => void
-  onLifecycleChange: (lifecycle: ApplicationLifecycle) => void
-  onStatusChange: (status: ActivePlanningStatus) => void
-  onWorkflowChange: (workflow: WorkflowRunPayload) => void
+  onCurrentStateEvent: (event: ApplicationPlanningCurrentEvent) => void
   onStopHandlerChange: (handler?: () => Promise<void>) => void
   onRetryHandlerChange: (handler?: () => void) => void
 }
@@ -383,12 +379,8 @@ function workflowProgressCopy(workflow?: WorkflowRunPayload): { fallback: string
 
 // 在创建应用弹窗中运行并可视化产品、UI 与技术分层的规划 Graph。
 export default function ApplicationPagePlanningModal({
-  application,
-  initialStatus,
-  initialLifecycle,
-  initialWorkflow,
+  planning,
   theme,
-  threadId,
   visible,
   onReturnHome,
   onSubmitClarificationChange,
@@ -397,13 +389,12 @@ export default function ApplicationPagePlanningModal({
   onPlanningContent,
   onPlanningWorkflow,
   onTechnicalPlanConfirmed,
-  onErrorChange,
-  onLifecycleChange,
-  onStatusChange,
-  onWorkflowChange,
+  onCurrentStateEvent,
   onStopHandlerChange,
   onRetryHandlerChange
 }: Props): JSX.Element {
+  const application = planning.application
+  const threadId = planning.threadId
   const session = useMemo(() => createApplicationPlanningSession(threadId), [threadId])
   const originalRequest = useMemo(() => buildApplicationPlanningRequest(application), [application])
   const startedRef = useRef(false)
@@ -415,14 +406,16 @@ export default function ApplicationPagePlanningModal({
   // 可能短暂丢失 clarification/phase，导致 showingProgress 闪烁切回进度页白屏。
   // 锁定后整个会话不再切回全屏进度页，逐页动作只在渲染区显示加载态。
   const enteredUiConfirmationRef = useRef(false)
-  const [workflow, setWorkflow] = useState<WorkflowRunPayload | undefined>(initialWorkflow)
-  const workflowRef = useRef<WorkflowRunPayload | undefined>(initialWorkflow)
-  const [running, setRunning] = useState(false)
+  const planningRef = useRef(planning)
+  planningRef.current = planning
   const [preparingTemplate, setPreparingTemplate] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
-  const [error, setError] = useState(
-    initialStatus === 'error' ? '上次规划流程中断，请重试或检查当前规划内容。' : ''
-  )
+  const workflow = planning.workflow
+  const running = planning.transportState === 'running'
+  const displayStatus = applicationPlanningDisplayStatus(planning)
+  const error =
+    planning.error ||
+    (displayStatus === 'error' ? '上次规划流程中断，请重试或检查当前规划内容。' : '')
   const progressCopy = workflowProgressCopy(workflow)
   const awaitingUserInput = planningWorkflowRequiresUserInput(workflow)
   // 检测是否已进入 UI 确认阶段：一旦命中即锁定，避免 run 期间流式快照丢失导致回切进度页。
@@ -465,59 +458,62 @@ export default function ApplicationPagePlanningModal({
   const streamingUiTotal = planningUiDesignPageTotal(workflow)
   const isTechnicalPlanConfirmation = technicalPlanConfirmationReady(workflow)
 
+  // 在父层提交事件前用同一 reducer 计算本轮同步结果，供流式转发立即读取。
+  const applyCurrentStateEvent = useCallback(
+    (event: ApplicationPlanningCurrentEvent): ApplicationPlanningCurrentState => {
+      const current = planningRef.current
+      const next = reduceApplicationPlanningCurrentState(current, event)
+      planningRef.current = next
+      if (next !== current) onCurrentStateEvent(event)
+      return next
+    },
+    [onCurrentStateEvent]
+  )
+
   // 向首页注册当前 AG-UI 会话的停止句柄，并在取消落盘后同步权威生命周期。
   useEffect(() => {
     const stopPlanning = async (): Promise<void> => {
       await session.stop()
       const lifecycle = await waitForStoppedPlanningLifecycle(application, threadId)
-      onLifecycleChange(lifecycle)
-      if (workflow) {
-        const nextWorkflow = withAuthoritativeLifecycle(workflow, lifecycle)
-        setWorkflow(nextWorkflow)
-        onWorkflowChange(nextWorkflow)
+      applyCurrentStateEvent({
+        type: 'lifecycle_received',
+        applicationId: application.id,
+        threadId,
+        lifecycle
+      })
+      const currentWorkflow = planningRef.current.workflow
+      if (currentWorkflow) {
+        applyCurrentStateEvent({
+          type: 'workflow_received',
+          applicationId: application.id,
+          threadId,
+          workflow: withAuthoritativeLifecycle(currentWorkflow, lifecycle)
+        })
       }
     }
     onStopHandlerChange(stopPlanning)
     return () => onStopHandlerChange(undefined)
   }, [
     application,
-    onLifecycleChange,
+    applyCurrentStateEvent,
     onStopHandlerChange,
-    onWorkflowChange,
     session,
-    threadId,
-    workflow
+    threadId
   ])
 
-  // 将运行、待查看或异常状态同步给首页的规划入口。
-  useEffect(() => {
-    const status: ActivePlanningStatus = error
-      ? 'error'
-      : (running && !awaitingUserInput) || !workflow
-        ? 'running'
-        : 'ready'
-    onStatusChange(status)
-  }, [awaitingUserInput, error, onStatusChange, running, workflow])
-
-  // 规划容器可能被工作台隐藏，错误仍需同步到工作台消息区，保证失败可见。
-  useEffect(() => {
-    onErrorChange(error || undefined)
-  }, [error, onErrorChange])
-
-  // 同步组件内 Workflow 展示状态与可跨重启恢复的外部快照。
+  // 把同线程 Workflow 帧提交给唯一当前状态，并返回 reducer 合并后的快照。
   const handleWorkflowChange = (
-    nextWorkflow: WorkflowRunPayload,
-    publishExternally = true
+    nextWorkflow: WorkflowRunPayload
   ): WorkflowRunPayload | undefined => {
     // 每个全屏规划实例只接收自己的线程事件，避免并行应用互相覆盖问题卡片。
     if (nextWorkflow.threadId !== threadId) return undefined
-    const mergedWorkflow = retainApplicationPlanningInterrupt(workflowRef.current, nextWorkflow)
-    workflowRef.current = mergedWorkflow
-    setWorkflow(mergedWorkflow)
-    const lifecycle = workflowApplicationLifecycle(mergedWorkflow)
-    if (lifecycle) onLifecycleChange(lifecycle)
-    if (publishExternally) onWorkflowChange(mergedWorkflow)
-    return mergedWorkflow
+    const next = applyCurrentStateEvent({
+      type: 'workflow_received',
+      applicationId: application.id,
+      threadId,
+      workflow: nextWorkflow
+    })
+    return next.workflow
   }
 
   // 保持加载界面直到模板准备完成；失败后只展示终止状态，不再次触发模板初始化。
@@ -528,7 +524,12 @@ export default function ApplicationPagePlanningModal({
       const succeeded = await onTechnicalPlanConfirmed(confirmation)
       if (succeeded) return
       completedRef.current = false
-      setError('应用模板准备失败，模板生成已终止。')
+      applyCurrentStateEvent({
+        type: 'run_failed',
+        applicationId: application.id,
+        threadId,
+        error: '应用模板准备失败，模板生成已终止。'
+      })
     } catch (reason) {
       console.error('[planning-modal] completePlanning error', reason)
       completedRef.current = false
@@ -557,9 +558,12 @@ export default function ApplicationPagePlanningModal({
     const runToken = planningRunTokenRef.current + 1
     planningRunTokenRef.current = runToken
     planningRunningRef.current = true
-    setRunning(true)
-    onStatusChange('running')
-    setError('')
+    const currentLifecycle = planningRef.current.lifecycle
+    applyCurrentStateEvent({
+      type: 'run_started',
+      applicationId: application.id,
+      threadId
+    })
     setStreamingContent('')
     let previousRunStopFailed = false
     try {
@@ -593,15 +597,15 @@ export default function ApplicationPagePlanningModal({
           : {
               enabled: true,
               resumeFrom:
-                initialLifecycle.initialization.stage === 'generating_technical_plan' ||
-                initialLifecycle.initialization.stage === 'awaiting_technical_plan_confirmation'
+                currentLifecycle.initialization.stage === 'generating_technical_plan' ||
+                currentLifecycle.initialization.stage === 'awaiting_technical_plan_confirmation'
                   ? 'technical_planning'
-                  : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
-                      initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
+                  : currentLifecycle.initialization.stage === 'generating_ui_designs' ||
+                      currentLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
                     ? 'ui_confirmation'
-                    : initialLifecycle.initialization.stage ===
+                    : currentLifecycle.initialization.stage ===
                           'generating_requirement_document' ||
-                        initialLifecycle.initialization.stage ===
+                        currentLifecycle.initialization.stage ===
                           'awaiting_requirement_document_confirmation'
                       ? 'product_planning'
                       : 'requirements'
@@ -616,7 +620,7 @@ export default function ApplicationPagePlanningModal({
         onWorkflow: (nextWorkflow) => {
           if (runToken !== planningRunTokenRef.current) return
           const publishDuringRun = planningWorkflowCanPublishDuringRun(nextWorkflow)
-          const mergedWorkflow = handleWorkflowChange(nextWorkflow, publishDuringRun)
+          const mergedWorkflow = handleWorkflowChange(nextWorkflow)
           if (mergedWorkflow && publishDuringRun) {
             onPlanningWorkflow?.(mergedWorkflow)
           }
@@ -655,7 +659,12 @@ export default function ApplicationPagePlanningModal({
       })
       console.error('[planning-modal] runPlanning error', reason)
       if (!isAuthenticationFailure(reason)) {
-        setError(formatError(reason, '创建规划运行失败'))
+        applyCurrentStateEvent({
+          type: 'run_failed',
+          applicationId: application.id,
+          threadId,
+          error: formatError(reason, '创建规划运行失败')
+        })
       }
       // 用户交互和正式 revision 启动必须把失败传回消息层，供其回滚乐观提交。
       if (interaction || designRevision) throw reason
@@ -663,7 +672,11 @@ export default function ApplicationPagePlanningModal({
       if (runToken === planningRunTokenRef.current) {
         // 服务端未确认旧 run 退出时保留待停止标记，下一次重试必须先重新 stop。
         planningRunningRef.current = previousRunStopFailed
-        setRunning(false)
+        applyCurrentStateEvent({
+          type: 'run_settled',
+          applicationId: application.id,
+          threadId
+        })
       }
     }
   }
@@ -673,8 +686,11 @@ export default function ApplicationPagePlanningModal({
     if (!application.workspaceRoot) return
     // 只读恢复也不能覆盖同一 session 的活动 transport；当前 run 自然结束后再由用户重试。
     if (session.hasActiveRun()) return
-    setRunning(true)
-    setError('')
+    applyCurrentStateEvent({
+      type: 'run_started',
+      applicationId: application.id,
+      threadId
+    })
     setStreamingContent('')
     try {
       const result = await session.sendMessage('读取待确认的应用规划状态。', {
@@ -694,7 +710,7 @@ export default function ApplicationPagePlanningModal({
         },
         onWorkflow: (nextWorkflow) => {
           const publishDuringRun = planningWorkflowCanPublishDuringRun(nextWorkflow)
-          const mergedWorkflow = handleWorkflowChange(nextWorkflow, publishDuringRun)
+          const mergedWorkflow = handleWorkflowChange(nextWorkflow)
           if (mergedWorkflow && publishDuringRun) {
             onPlanningWorkflow?.(mergedWorkflow)
           }
@@ -711,9 +727,18 @@ export default function ApplicationPagePlanningModal({
       }
     } catch (reason) {
       if (isAuthenticationFailure(reason)) return
-      setError(formatError(reason, '恢复待确认规划失败'))
+      applyCurrentStateEvent({
+        type: 'run_failed',
+        applicationId: application.id,
+        threadId,
+        error: formatError(reason, '恢复待确认规划失败')
+      })
     } finally {
-      setRunning(false)
+      applyCurrentStateEvent({
+        type: 'run_settled',
+        applicationId: application.id,
+        threadId
+      })
     }
   }
 
@@ -721,26 +746,27 @@ export default function ApplicationPagePlanningModal({
   useEffect(() => {
     if (startedRef.current) return
     startedRef.current = true
+    const current = planningRef.current
     if (
-      initialLifecycle.initialization.stage === 'generating_application_template_files' ||
-      initialLifecycle.initialization.stage === 'application_template_generation_failed' ||
-      initialLifecycle.initialization.stage === 'ready_for_workbench'
+      current.lifecycle.initialization.stage === 'generating_application_template_files' ||
+      current.lifecycle.initialization.stage === 'application_template_generation_failed' ||
+      current.lifecycle.initialization.stage === 'ready_for_workbench'
     ) {
       return
     }
-    if (initialLifecycle.initialization.status === 'awaiting_user') {
+    if (current.lifecycle.initialization.status === 'awaiting_user') {
       void recoverPlanning()
       return
     }
-    if (initialStatus !== 'running') return
-    if (initialWorkflow) {
+    if (applicationPlanningDisplayStatus(current) !== 'running') return
+    if (current.workflow) {
       void runPlanning('请从上次保存的规划状态继续执行。')
       return
     }
     void runPlanning(originalRequest)
     // 同一 thread 的启动/恢复动作必须只执行一次，后续渲染由 startedRef 拦截。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialLifecycle.initialization.stage, originalRequest])
+  }, [originalRequest])
 
   // 提交前确保快照带有可恢复中断：卡片快照在流式时序窗口里可能丢掉中断投影
   // （同 runId 的中间帧覆盖 finished 帧），此时静默重读后端 checkpoint 投影，
@@ -814,11 +840,14 @@ export default function ApplicationPagePlanningModal({
         interaction
       )
     } catch (reason) {
-      setError(
-        designChangeRequest
+      applyCurrentStateEvent({
+        type: 'run_failed',
+        applicationId: application.id,
+        threadId,
+        error: designChangeRequest
           ? productConversationSubmissionError(reason)
           : formatError(reason, '创建规划确认失败')
-      )
+      })
       throw reason
     }
   }
@@ -858,7 +887,15 @@ export default function ApplicationPagePlanningModal({
         spec,
         currentWorkflow.threadId || threadId
       )
-      setWorkflow((current) => (current ? withSavedRequirementSpec(current, saved) : current))
+      const latestWorkflow = planningRef.current.workflow
+      if (latestWorkflow) {
+        applyCurrentStateEvent({
+          type: 'workflow_received',
+          applicationId: application.id,
+          threadId,
+          workflow: withSavedRequirementSpec(latestWorkflow, saved)
+        })
+      }
       message.success('需求文档修改已同步到 Markdown')
       return saved.requirementSpec
     } catch (reason) {
@@ -870,18 +907,17 @@ export default function ApplicationPagePlanningModal({
 
   // 规划流程失败时只允许重跑尚未进入模板阶段的规划，不重试已确认的 TechnicalPlan。
   const retryAfterFailure = async (): Promise<void> => {
-    const confirmation = workflowConfirmation(workflow)
+    const current = planningRef.current
+    const confirmation = workflowConfirmation(current.workflow)
     if (confirmation) return
-    if (initialLifecycle.initialization.status === 'awaiting_user') {
+    if (current.lifecycle.initialization.status === 'awaiting_user') {
       await recoverPlanning()
       return
     }
     await runPlanning(originalRequest)
   }
 
-  // handleSubmitClarification 和 runPlanning 依赖 initialLifecycle 等响应式状态，
-  // 但 onSubmitClarificationChange 的注册 effect 依赖列表为 []（只注册一次）。
-  // 用 ref 持有最新引用，避免注册的 handler 捕获旧闭包导致 resumeFrom 永远是初始阶段。
+  // 注册 effect 只执行一次，因此用 ref 持有最新提交函数，避免跨阶段句柄捕获旧闭包。
   const handleSubmitClarificationRef = useRef(handleSubmitClarification)
   handleSubmitClarificationRef.current = handleSubmitClarification
 

@@ -1,16 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
+import { latestApplicationLifecycle } from '../service/activeApplicationPlanning'
 import type { ApplicationLifecycle } from '../typings'
 
 const NON_TERMINAL_EXECUTION_STATUSES = new Set(['running', 'stopping', 'awaiting_user'])
 
-/** 按应用标识和单调 revision 合并 lifecycle，拒绝冷启动读取覆盖更新的实时投影。 */
-export function latestApplicationLifecycle(
-  current: ApplicationLifecycle | undefined,
-  incoming: ApplicationLifecycle
-): ApplicationLifecycle {
-  if (!current || current.application.id !== incoming.application.id) return incoming
-  return incoming.revision > current.revision ? incoming : current
-}
+export { latestApplicationLifecycle }
 
 /** 判断应用是否仍有需要在后台继续持有的非终态执行。 */
 export function hasNonTerminalApplicationExecution(lifecycle?: ApplicationLifecycle): boolean {

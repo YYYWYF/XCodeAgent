@@ -39,6 +39,10 @@ import type {
   ChatSessionDevelopmentTarget
 } from '../../service/chatSessions'
 import { saveRequirementSpecDraft } from '../../service/applicationPagePlanning'
+import type {
+  ApplicationPlanningCurrentEvent,
+  ApplicationPlanningCurrentState
+} from '../../service/activeApplicationPlanning'
 import { isTemplateGenerationOrphaned } from '../../service/templateApi'
 import type { WorkflowRevisionContinuationHandoff } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
@@ -299,17 +303,14 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
+  onPlanningCurrentEvent: (event: ApplicationPlanningCurrentEvent) => void
   onSessionHistoryReadyChange: (ready: boolean, error?: string) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
-  /** 设计阶段规划 Graph 的错误，来自仍在后台挂载的规划容器。 */
-  planningError?: string
   /** 从工作台错误卡片重试规划 Graph。 */
   onRetryPlanning?: () => void
-  planningThreadId?: string
-  planningWorkflow?: WorkflowRunPayload
-  /** 仅冷恢复时允许从 .xcodeagent 读取当前阶段规划产物。 */
-  restorePlanningArtifactsFromDisk?: boolean
+  /** 当前应用唯一的 Planning 业务状态。 */
+  planningState?: ApplicationPlanningCurrentState
   theme: 'light' | 'dark'
   rightPanelOpen: boolean
   onRightPanelOpenChange: (open: boolean) => void
@@ -848,17 +849,19 @@ export default function AiChatPanel({
   onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
+  onPlanningCurrentEvent,
   onSessionHistoryReadyChange,
   generatingTemplate,
-  planningError,
   onRetryPlanning,
-  planningThreadId,
-  planningWorkflow,
-  restorePlanningArtifactsFromDisk,
+  planningState,
   theme,
   rightPanelOpen,
   onRightPanelOpenChange
 }: Props): ReactElement {
+  const planningThreadId = planningState?.threadId
+  const currentPlanningWorkflow = planningState?.workflow
+  const planningError = planningState?.error
+  const restorePlanningArtifactsFromDisk = planningState?.restoreArtifactsFromDisk === true
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
   const [apiDesignConfigTarget, setApiDesignConfigTarget] = useState<ApiDesignConfigTarget>()
@@ -1038,13 +1041,6 @@ export default function AiChatPanel({
   const isDesignPhase = activeWorkbenchPhase === 'product'
   const isTechnicalPlanningPhase = activeWorkbenchPhase === 'planning'
   const isApplicationPlanningPhase = isDesignPhase || isTechnicalPlanningPhase
-  // 右侧规划面板统一消费组件内存 Workflow；外层 prop 只把首次规划流和冷启动快照注入内存。
-  const [planningViewWorkflow, setPlanningViewWorkflow] = useState<
-    WorkflowRunPayload | undefined
-  >(planningWorkflow)
-  useEffect(() => {
-    setPlanningViewWorkflow(planningWorkflow)
-  }, [application.id, planningThreadId, planningWorkflow])
   const showDevelopmentSidebarActions = activeWorkbenchPhase === 'development'
   const {
     acquireSessionExecution,
@@ -1138,17 +1134,17 @@ export default function AiChatPanel({
   // 需求文档在模型生成后即可展示；确认状态只决定它是草稿还是正式文档。
   // UI 设计稿：从规划 workflow 的 clarification（ui_design_confirmation 模式）或
   // state/result 的 ui_designs 读取页面列表。设计稿生成中或已就绪都算可用。
-  const planningClarification = planningViewWorkflow
-    ? planningWorkflowClarification(planningViewWorkflow)
+  const planningClarification = currentPlanningWorkflow
+    ? planningWorkflowClarification(currentPlanningWorkflow)
     : undefined
-  const planningPhaseRunning = planningWorkflowIsActivelyRunning(planningViewWorkflow)
-  const planningPhase = planningWorkflowPhase(planningViewWorkflow)
-  const planningUiDesignSkipped = planningWorkflowUiDesignSkipped(planningViewWorkflow)
+  const planningPhaseRunning = planningWorkflowIsActivelyRunning(currentPlanningWorkflow)
+  const planningPhase = planningWorkflowPhase(currentPlanningWorkflow)
+  const planningUiDesignSkipped = planningWorkflowUiDesignSkipped(currentPlanningWorkflow)
   const requirementSpecPath =
-    workflowArtifactPath(planningViewWorkflow, 'requirement-spec') ||
+    workflowArtifactPath(currentPlanningWorkflow, 'requirement-spec') ||
     designDocFilePath['requirement-spec']
   const requirementsConfirmed = planningRequirementsConfirmed(
-    planningViewWorkflow,
+    currentPlanningWorkflow,
     requirementSpecPath
   )
   const localUiDesigns = asWorkflowRecord(uiDesignFile?.ui_designs)
@@ -1161,8 +1157,8 @@ export default function AiChatPanel({
     ? undefined
     : Array.isArray(planningClarification?.pages) && planningClarification.pages.length > 0
       ? planningClarification.pages
-      : ((planningViewWorkflow?.state?.ui_designs as { pages?: unknown[] } | undefined)?.pages ??
-        (planningViewWorkflow?.result?.ui_designs as
+      : ((currentPlanningWorkflow?.state?.ui_designs as { pages?: unknown[] } | undefined)?.pages ??
+        (currentPlanningWorkflow?.result?.ui_designs as
           | { pages?: unknown[] | undefined }
           | undefined)
           ?.pages ??
@@ -1196,17 +1192,17 @@ export default function AiChatPanel({
   }, [planningUiDesignPagesSource, planningPhaseRunning])
   const requirementDocContent = mergedRequirementDocContentFor(
     designDocFileContent,
-    planningViewWorkflow
+    currentPlanningWorkflow
   )
   const technicalPlanDocContent = designDocContentFor(
     designDocFileContent,
-    planningViewWorkflow,
+    currentPlanningWorkflow,
     'technical-plan'
   )
   const uiDesignDocContent = designDocFileContent['ui-design'] || ''
-  const requirementSpecMemory = requirementSpecFromWorkflow(planningViewWorkflow)
-  const productPlanMemory = productPlanFromWorkflow(planningViewWorkflow)
-  const technicalPlanMemory = technicalPlanFromWorkflow(planningViewWorkflow)
+  const requirementSpecMemory = requirementSpecFromWorkflow(currentPlanningWorkflow)
+  const productPlanMemory = productPlanFromWorkflow(currentPlanningWorkflow)
+  const technicalPlanMemory = technicalPlanFromWorkflow(currentPlanningWorkflow)
   const requirementDocAvailable = Boolean(
     requirementDocContent.trim() || requirementSpecMemory || productPlanMemory
   )
@@ -1585,7 +1581,7 @@ export default function AiChatPanel({
     setInteractingDetailTargetKey('')
     setGeneratingDetailTargetKey('')
   }, [activeSession?.developmentTarget, activeSession?.key])
-  const planningWorkflowStatus = String(planningViewWorkflow?.summary?.status || '')
+  const planningWorkflowStatus = String(currentPlanningWorkflow?.summary?.status || '')
   const activeProductConversationRoute = productConversationRoute(
     isDesignPhase,
     lifecycleReadyForWorkbench
@@ -1598,7 +1594,7 @@ export default function AiChatPanel({
   const productConversationSendDisabled = productConversationSendBlocked(
     productConversationAvailable,
     initialProductPlanningAvailable &&
-      (!planningViewWorkflow || planningPhaseRunning || planningWorkflowStatus === 'stopping')
+      (!currentPlanningWorkflow || planningPhaseRunning || planningWorkflowStatus === 'stopping')
   )
   const activePreviewPath = activePageOption?.path || '/'
 
@@ -2347,9 +2343,9 @@ export default function AiChatPanel({
   // 创建计划阶段：激活当前阶段的前端聊天会话，并注册原 Graph 的流式注入句柄，
   // 让 AppEntryPage 把 Modal 转发的 onContent/onWorkflow 注入当前 session 的 messages。
   const planningSessionKeyRef = useRef<string>('')
-  // 保存最新规划权威快照，供会话键晚于流式事件就绪时补齐最终确认卡。
-  const planningWorkflowRef = useRef(planningWorkflow)
-  planningWorkflowRef.current = planningWorkflow
+  // 保存父层唯一 Planning State 的最新引用，供会话键晚于流式事件就绪时补齐最终确认卡。
+  const planningCurrentStateRef = useRef(planningState)
+  planningCurrentStateRef.current = planningState
   // sessionKey 就绪前缓存的流式 chunk，就绪后回放，避免最早的规划消息丢失。
   const pendingPlanningChunksRef = useRef<
     Array<{ content?: string; workflow?: WorkflowRunPayload }>
@@ -2401,7 +2397,10 @@ export default function AiChatPanel({
       const identity = activeSessionRef.current
       if (!identity || identity.key !== sessionKey) return
       const currentMessages = getSessionMessagesRef.current(sessionKey)
-      const msgs = compactPlanningMessageHistory(currentMessages, planningWorkflowRef.current)
+      const msgs = compactPlanningMessageHistory(
+        currentMessages,
+        planningCurrentStateRef.current?.workflow
+      )
       if (!msgs.length) return
       if (msgs !== currentMessages) {
         setSessionMessagesRef.current(sessionKey, msgs)
@@ -2950,7 +2949,7 @@ export default function AiChatPanel({
           )
         }
         // 工作台或会话键晚于最终 AG-UI 帧就绪时，用外层保存的权威快照收口占位消息。
-        const latestPlanningWorkflow = planningWorkflowRef.current
+        const latestPlanningWorkflow = planningCurrentStateRef.current?.workflow
         const stalePlanningEntry =
           isTechnicalPlanningPhase &&
           planningWorkflowPhase(latestPlanningWorkflow) === 'planning_stage_entry'
@@ -2996,15 +2995,20 @@ export default function AiChatPanel({
       !planningThreadId ||
       !sessionKey ||
       (isTechnicalPlanningPhase &&
-        planningWorkflowPhase(planningWorkflow) === 'planning_stage_entry') ||
-      !shouldBackfillPlanningWorkflow(planningWorkflow, planningNewRoundRef.current)
+        planningWorkflowPhase(currentPlanningWorkflow) === 'planning_stage_entry') ||
+      !shouldBackfillPlanningWorkflow(currentPlanningWorkflow, planningNewRoundRef.current)
     ) {
       return
     }
-    injectPlanningChunk(sessionKey, { workflow: planningWorkflow })
+    injectPlanningChunk(sessionKey, { workflow: currentPlanningWorkflow })
     // injectPlanningChunk 读取的会话操作均由 ref 保持最新，避免把函数身份加入依赖造成重复注入。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isApplicationPlanningPhase, isTechnicalPlanningPhase, planningThreadId, planningWorkflow])
+  }, [
+    currentPlanningWorkflow,
+    isApplicationPlanningPhase,
+    isTechnicalPlanningPhase,
+    planningThreadId
+  ])
 
   useEffect(() => {
     if (!onPlanningStreamReady) return
@@ -3182,20 +3186,6 @@ export default function AiChatPanel({
         : activePageOption?.taskSummary
   )
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
-  // TechnicalPlan 二次修改不经过外层初始化规划 Modal；把当前会话的 AG-UI Workflow
-  // 快照留在 renderer 内存并直接提供给右侧面板，生成过程中与待确认状态都不重新读盘。
-  useEffect(() => {
-    if (
-      !isTechnicalPlanningPhase ||
-      !latestWorkflowForDisplay ||
-      planningWorkflowPhase(latestWorkflowForDisplay) !== 'technical_planning'
-    ) {
-      return
-    }
-    setPlanningViewWorkflow((current) =>
-      current === latestWorkflowForDisplay ? current : latestWorkflowForDisplay
-    )
-  }, [isTechnicalPlanningPhase, latestWorkflowForDisplay])
   const currentStageSessionTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const stageOutputContextAligned = activeTargetKey
     ? currentStageSessionTargetKey === activeTargetKey
@@ -4233,17 +4223,24 @@ export default function AiChatPanel({
           ...current,
           'requirement-spec': saved.artifact.content
         }))
+        const savedWorkflow: WorkflowRunPayload = {
+          ...workflow,
+          confirmationArtifact: saved.artifact,
+          state: { ...workflow.state, requirement_spec: saved.requirementSpec },
+          result: { ...workflow.result, requirement_spec: saved.requirementSpec }
+        }
+        if (planningState && savedWorkflow.threadId === planningState.threadId) {
+          onPlanningCurrentEvent({
+            type: 'workflow_received',
+            applicationId: application.id,
+            threadId: planningState.threadId,
+            workflow: savedWorkflow
+          })
+        }
         // 把保存后的 artifact 与 spec 注入回规划会话，更新当前需求确认卡片与右侧文档。
         const inject = planningStreamInjectRef.current
         if (inject) {
-          inject({
-            workflow: {
-              ...workflow,
-              confirmationArtifact: saved.artifact,
-              state: { ...workflow.state, requirement_spec: saved.requirementSpec },
-              result: { ...workflow.result, requirement_spec: saved.requirementSpec }
-            }
-          })
+          inject({ workflow: savedWorkflow })
         }
         return saved.requirementSpec
       } catch (reason) {
@@ -4252,7 +4249,13 @@ export default function AiChatPanel({
         return undefined
       }
     },
-    [application.workspaceRoot, planningThreadId]
+    [
+      application.id,
+      application.workspaceRoot,
+      onPlanningCurrentEvent,
+      planningState,
+      planningThreadId
+    ]
   )
 
   /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
@@ -4260,7 +4263,7 @@ export default function AiChatPanel({
     const trimmed = draft.trim()
     if (
       !trimmed ||
-      !planningViewWorkflow ||
+      !currentPlanningWorkflow ||
       productConversationSendDisabled ||
       workflowInputLocked
     ) {
@@ -4272,7 +4275,7 @@ export default function AiChatPanel({
     lastUiDesignRunIdRef.current = undefined
     appendPlanningUserMessage({ design_change_request: trimmed })
     void onSubmitPlanningClarification(
-      planningViewWorkflow,
+      currentPlanningWorkflow,
       {},
       undefined,
       undefined,
@@ -4504,7 +4507,7 @@ export default function AiChatPanel({
               onEnterDevelopment={handleEnterDevelopment}
               generatingTemplate={generatingTemplate}
               templateGenerationOrphaned={templateGenerationOrphaned}
-              planningWorkflow={planningWorkflow}
+              planningState={planningState}
             />
 
             {otherSessionExecutionLocked || pendingDagExecution ? (

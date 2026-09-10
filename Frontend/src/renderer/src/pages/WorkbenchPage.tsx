@@ -10,6 +10,10 @@ import {
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
 import type {
+  ApplicationPlanningCurrentEvent,
+  ApplicationPlanningCurrentState
+} from '../service/activeApplicationPlanning'
+import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
@@ -50,16 +54,13 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
+  onPlanningCurrentEvent: (event: ApplicationPlanningCurrentEvent) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
-  /** 设计阶段后台规划任务的模型错误。 */
-  planningError?: string
   /** 从工作台错误卡片重试设计阶段规划任务。 */
   onRetryPlanning?: () => void
-  planningThreadId?: string
-  planningWorkflow?: WorkflowRunPayload
-  /** 仅冷恢复时允许从 .xcodeagent 读取当前阶段规划产物。 */
-  restorePlanningArtifactsFromDisk?: boolean
+  /** 当前应用唯一的 Planning 业务状态。 */
+  planningState?: ApplicationPlanningCurrentState
   theme: Theme
 }
 
@@ -87,12 +88,10 @@ function WorkbenchPage({
   onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
+  onPlanningCurrentEvent,
   generatingTemplate,
-  planningError,
   onRetryPlanning,
-  planningThreadId,
-  planningWorkflow,
-  restorePlanningArtifactsFromDisk,
+  planningState,
   theme
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
@@ -443,13 +442,11 @@ function WorkbenchPage({
                 onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
                 onThemeChange={handleThemeChange}
                 onPlanningStreamReady={onPlanningStreamReady}
+                onPlanningCurrentEvent={onPlanningCurrentEvent}
                 onSessionHistoryReadyChange={handleSessionHistoryReadyChange}
                 generatingTemplate={generatingTemplate}
-                planningError={planningError}
                 onRetryPlanning={onRetryPlanning}
-                planningThreadId={planningThreadId}
-                planningWorkflow={planningWorkflow}
-                restorePlanningArtifactsFromDisk={restorePlanningArtifactsFromDisk}
+                planningState={planningState}
                 theme={theme}
                 rightPanelOpen={rightPanelOpen}
                 onRightPanelOpenChange={setRightPanelOpen}
