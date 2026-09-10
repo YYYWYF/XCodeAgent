@@ -352,11 +352,12 @@ export default function MessageList({
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
   const pendingPhaseDetail = phasePendingDetail(currentPhase)
+  const templatePreparation = readTemplatePreparation(planningWorkflow)
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
   const templatePreparationVisible =
     applicationTemplatePreparationEligible &&
     designPhasePlanning &&
-    (generatingTemplate || isTemplatePreparing(applicationLifecycle))
+    (generatingTemplate || isTemplatePreparing(applicationLifecycle) || Boolean(templatePreparation))
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -927,6 +928,7 @@ export default function MessageList({
               <div className={cx('ai-message-content')}>
                 <TemplatePreparingCard
                   lifecycle={applicationLifecycle}
+                  templatePreparation={templatePreparation}
                   onEnterDevelopment={onEnterDevelopment}
                   onRetry={onRetryError}
                   retrying={Boolean(generatingTemplate && templateGenerationFailed)}
@@ -949,6 +951,18 @@ export default function MessageList({
       )}
     </div>
   )
+}
+
+/** 从规划 Workflow 的 summary、state 或 result 恢复 V2 Template Preparation 投影。 */
+function readTemplatePreparation(workflow?: WorkflowRunPayload): import('../../../../typings').WorkflowTemplatePreparation | undefined {
+  const candidates = [
+    workflow?.summary?.templatePreparation,
+    workflow?.state?.templatePreparation,
+    workflow?.result?.templatePreparation
+  ]
+  return candidates.find((value) => Boolean(value && typeof value === 'object')) as
+    | import('../../../../typings').WorkflowTemplatePreparation
+    | undefined
 }
 
 /** 从消息末尾向前查找当前正在流式更新的 Assistant 消息。 */

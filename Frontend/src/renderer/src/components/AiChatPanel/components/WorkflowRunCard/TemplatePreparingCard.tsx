@@ -1,7 +1,7 @@
 import { CheckCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
-import { Button, Typography } from 'antd'
+import { Button, Progress, Typography } from 'antd'
 import type { ReactElement } from 'react'
-import type { ApplicationLifecycle } from '../../../../typings'
+import type { ApplicationLifecycle, WorkflowTemplatePreparation } from '../../../../typings'
 import { cx } from '../../../../utils'
 
 const { Text } = Typography
@@ -9,6 +9,8 @@ const { Text } = Typography
 type Props = {
   /** 应用生命周期：用 initialization.stage 驱动加载/就绪/失败三态。 */
   lifecycle?: ApplicationLifecycle
+  /** V2 durable Attempt 的 AG-UI 投影；优先展示增量更新的精确阶段。 */
+  templatePreparation?: WorkflowTemplatePreparation
   /** 模板就绪后点击进入开发阶段。 */
   onEnterDevelopment?: () => void
   /** 模板失败后重新执行一次受控 Bootstrap。 */
@@ -36,23 +38,25 @@ export function isTemplatePreparing(lifecycle?: ApplicationLifecycle): boolean {
  *  - application_template_generation_failed：失败态，展示错误信息 */
 export default function TemplatePreparingCard({
   lifecycle,
+  templatePreparation,
   onEnterDevelopment,
   onRetry,
   retrying = false
 }: Props): ReactElement {
   const stage = lifecycle?.initialization?.stage
+  const preparationFailed = templatePreparation?.status === 'FAILED'
   const failed = stage === 'application_template_generation_failed'
   const ready = stage === 'ready_for_workbench'
 
-  if (failed && !retrying) {
+  if ((failed || preparationFailed) && !retrying) {
     return (
       <div className={cx('template-preparing-card', 'template-preparing-error')}>
         <div className={cx('template-preparing-head')}>
           <ExclamationCircleOutlined className={cx('template-preparing-icon', 'is-error')} />
-          <Text strong>应用模板生成失败</Text>
+          <Text strong>{templatePreparation ? '模板能力更新失败' : '应用模板生成失败'}</Text>
         </div>
         <Text type="secondary" className={cx('template-preparing-desc')}>
-          {lifecycle?.error?.message || '应用模板文件生成失败，请查看错误信息。'}
+          {templatePreparation?.errorMessage || lifecycle?.error?.message || '应用模板文件生成失败，请查看错误信息。'}
         </Text>
         {onRetry ? (
           <Button className={cx('template-preparing-enter-btn')} onClick={onRetry} type="primary">
@@ -85,6 +89,10 @@ export default function TemplatePreparingCard({
     )
   }
 
+  const completed = templatePreparation?.completedOperations || 0
+  const total = templatePreparation?.totalOperations || 0
+  const progress = total > 0 ? Math.round((completed / total) * 100) : 0
+
   // generating_application_template_files 或 lifecycle 未加载但已进入准备态
   return (
     <div className={cx('template-preparing-card', 'template-preparing-loading')}>
@@ -93,8 +101,18 @@ export default function TemplatePreparingCard({
         <Text strong>{retrying ? '产品 Agent 正在重试应用模板生成' : '产品 Agent 正在准备应用模板'}</Text>
       </div>
       <Text type="secondary" className={cx('template-preparing-desc')}>
-        {retrying ? '正在重新拉取模板工程并生成应用骨架，请稍候…' : '正在拉取模板工程并生成应用骨架，请稍候…'}
+        {templatePreparation
+          ? `正在执行模板增量更新：${templatePreparation.phase}（${completed}/${total}）`
+          : retrying
+            ? '正在重新拉取模板工程并生成应用骨架，请稍候…'
+            : '正在拉取模板工程并生成应用骨架，请稍候…'}
       </Text>
+      {templatePreparation ? <Progress percent={progress} showInfo={false} size="small" /> : null}
+      {templatePreparation?.logs?.length ? (
+        <Text type="secondary" className={cx('template-preparing-desc')}>
+          {templatePreparation.logs[templatePreparation.logs.length - 1]?.message}
+        </Text>
+      ) : null}
     </div>
   )
 }

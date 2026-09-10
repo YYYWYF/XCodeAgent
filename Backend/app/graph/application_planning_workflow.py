@@ -53,6 +53,9 @@ from app.services.template_reconcile.finalization import (
     mark_template_reconcile_failed,
 )
 from app.services.template_reconcile.service import TemplateReconcileService
+from app.services.template_reconcile.template_preparation import (
+    template_preparation_projection_v2,
+)
 from app.services.template_scaffold_injection import (
     inject_deterministic_backend_skeleton,
 )
@@ -511,6 +514,7 @@ def _reconcile_confirmed_revision(state: ProjectState) -> dict:
                     "phase": "template_reconcile",
                     "status": "completed",
                     "template_reconcile_pending": False,
+                    "template_preparation": template_preparation_projection_v2(workspace),
                     "application_planning_interaction": {},
                     "revision_continuation": {
                         "changeId": issued.change_id,

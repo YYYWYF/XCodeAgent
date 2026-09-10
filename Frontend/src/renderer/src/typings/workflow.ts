@@ -61,11 +61,34 @@ export type WorkflowSummary = {
   unitTestMaxRepairIterations?: number
   repairReturnNode?: 'unit_test' | 'integration_test' | string
   lifecycle?: ApplicationLifecycle
+  templatePreparation?: WorkflowTemplatePreparation
   revisionImpact?: WorkflowRevisionImpact
   revisionContinuation?: WorkflowRevisionContinuation
   developmentContinuation?: WorkflowDevelopmentContinuation
   revisionDraft?: WorkflowRevisionDraft
   [key: string]: unknown
+}
+
+/** Template Reconcile V2 durable Attempt 投影；用于刷新后恢复模板准备进度。 */
+export type WorkflowTemplatePreparation = {
+  operationType: 'UPDATE' | string
+  attemptId?: string
+  retryOf?: string | null
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | string
+  phase: string
+  completedOperations: number
+  totalOperations: number
+  retryable: boolean
+  errorCode?: string | null
+  errorMessage?: string | null
+  startedAt?: string
+  updatedAt?: string
+  logs?: Array<{
+    timestamp: string
+    phase: string
+    level: 'INFO' | 'ERROR' | string
+    message: string
+  }>
 }
 
 export type WorkflowFormalRevisionBranch =

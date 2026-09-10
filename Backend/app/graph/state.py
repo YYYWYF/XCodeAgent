@@ -99,6 +99,7 @@ class ProjectState(TypedDict, total=False):
     development_continuation_id: str
     application_planning_confirmation: dict[str, Any]
     template_reconcile_pending: bool
+    template_preparation: dict[str, Any] | None
     ui_designs: dict[str, Any]
     ui_design_action: dict[str, Any]
     workspace_snapshot_summary: dict[str, Any]

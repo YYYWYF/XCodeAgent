@@ -69,6 +69,9 @@ from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
 )
+from app.services.template_reconcile.template_preparation import (
+    template_preparation_projection_v2,
+)
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
@@ -475,6 +478,8 @@ def build_workflow_ag_ui_stream(
                 if current_lifecycle is not None:
                     lifecycle_payload = application_lifecycle_payload(current_lifecycle)
                     result["lifecycle"] = lifecycle_payload
+                if workspace:
+                    result["template_preparation"] = template_preparation_projection_v2(workspace)
                 _workflow_event(
                     events,
                     "workflow.run.started",

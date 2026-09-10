@@ -76,12 +76,15 @@ class TemplateEngineClient:
         current_template_state: dict[str, Any],
         requested_config: dict[str, Any],
         *,
+        mode: str = "APPLY",
         temporary_dir: str | Path | None = None,
     ) -> TemplatePackageDownload | None:
-        """调用 `/v1/update`；204 返回 `None`，200 时返回完整下载的 ZIP。"""
+        """调用 V2 单次 `/v1/update`；204 返回 `None`，200 时下载 Strategy Package。"""
 
         if not self._base_url or not self._token:
             raise TemplateEngineError("Template Engine 地址或凭据未配置。")
+        if mode not in {"APPLY", "RECONCILE"}:
+            raise TemplateEngineError("Template Engine 更新 mode 必须是 APPLY 或 RECONCILE。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
         descriptor, name = tempfile.mkstemp(prefix="xcodeagent-template-update-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
@@ -100,8 +103,10 @@ class TemplateEngineClient:
                     "POST",
                     f"{self._base_url}/v1/update",
                     json={
+                        "protocolVersion": "2",
                         "currentTemplateState": current_template_state,
                         "requestedConfig": requested_config,
+                        "mode": mode,
                     },
                     headers={"Authorization": f"Bearer {self._token}", "Accept": "application/zip"},
                 ) as response:

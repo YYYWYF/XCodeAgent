@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,6 +40,15 @@ class TemplateEngineClientTests(unittest.TestCase):
 
             self.assertEqual(request.method, "POST")
             self.assertEqual(request.url.path, "/v1/update")
+            self.assertEqual(
+                json.loads(request.content),
+                {
+                    "protocolVersion": "2",
+                    "currentTemplateState": {"templateRevision": "v1"},
+                    "requestedConfig": {"capabilities": {}},
+                    "mode": "APPLY",
+                },
+            )
             return httpx.Response(204)
 
         transport = httpx.MockTransport(respond)

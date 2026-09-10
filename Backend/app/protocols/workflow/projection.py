@@ -585,6 +585,9 @@ def _public_workflow_state(
     if "development_continuation" in value:
         public_state.pop("development_continuation", None)
         public_state["developmentContinuation"] = value["development_continuation"]
+    if "template_preparation" in value:
+        public_state.pop("template_preparation", None)
+        public_state["templatePreparation"] = value["template_preparation"]
     if "code_review_result" in value:
         public_state.pop("code_review_result", None)
         public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
