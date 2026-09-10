@@ -10,7 +10,10 @@ from typing import Any
 from app.services.application_template_generation import inspect_template_generation_readiness
 from app.services.development_readiness import development_readiness
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
-from app.services.project_plan import validate_technical_plan_agent_contracts
+from app.services.project_plan import (
+    product_agent_gateway_action_ids,
+    validate_technical_plan_agent_contracts,
+)
 from app.workspace.plan_documents import load_project_plan_json
 
 
@@ -114,6 +117,7 @@ def inspect_agent_development_readiness(
     if runtime_plan is not None:
         _append_page_binding_blockers(
             runtime_plan,
+            product_plan,
             product_agents[0],
             contract,
             blockers,
@@ -256,6 +260,7 @@ def _materialize_agent_runtime_plan(
 
 def _append_page_binding_blockers(
     technical_plan: dict[str, Any],
+    product_plan: dict[str, Any],
     product_agent: dict[str, Any],
     contract: dict[str, Any],
     blockers: list[dict[str, str]],
@@ -273,12 +278,20 @@ def _append_page_binding_blockers(
         for item in _dict_items(technical_plan.get("pages"))
     }
     for binding in _dict_items(product_agent.get("pageActionBindings")):
+        surface = binding.get("surface") if isinstance(binding.get("surface"), dict) else {}
+        if surface.get("enabled") is not True:
+            continue
         page_id = str(binding.get("pageId") or "").strip()
         action_ids = {
             str(item or "").strip()
             for item in binding.get("actionIds") or []
             if str(item or "").strip()
         }
+        gateway_action_ids = product_agent_gateway_action_ids(
+            product_plan,
+            page_id,
+            action_ids,
+        )
         page = technical_pages.get(page_id, {})
         references = page.get("references") if isinstance(page.get("references"), dict) else {}
         implementations = {
@@ -295,7 +308,10 @@ def _append_page_binding_blockers(
             not page_id
             or page_contract is None
             or gateway_id not in required_endpoint_ids
-            or any(implementations.get(action_id) != gateway_id for action_id in action_ids)
+            or any(
+                implementations.get(action_id) != gateway_id
+                for action_id in gateway_action_ids
+            )
         ):
             blockers.append(
                 _blocker(

@@ -43,7 +43,15 @@ from app.services.authorization_platform_projection import (
     apply_platform_projections,
 )
 from app.services.authorization_edd import verify_authorization_edd
-from app.services.business_acceptance_verifier import verify_business_acceptance
+from app.services.agent_ui_build_contract import (
+    agent_ui_integration_pending_result,
+    apply_agent_ui_delivery_boundary,
+)
+from app.services.business_acceptance_verifier import (
+    business_acceptance_kind_metrics,
+    summarize_business_acceptance,
+    verify_business_acceptance,
+)
 from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
@@ -625,14 +633,7 @@ def _verify_business_results(
         for task in owner_tasks
         if task.get("id")
     }
-    if not dag_business_self_check_enabled():
-        return [
-            _skip_business_acceptance(
-                result,
-                tasks_by_id.get(str(result.get("task_id") or ""), {}),
-            )
-            for result in results
-        ]
+    optional_checks_enabled = dag_business_self_check_enabled()
 
     dependency_evidence = _completed_dependency_business_evidence(
         state.get("build_results"),
@@ -644,18 +645,57 @@ def _verify_business_results(
         if result.get("status") not in {"completed", "already_satisfied"}:
             verified.append(result)
             continue
+        raw_checks = [
+            check
+            for check in task.get("business_acceptance_checks") or []
+            if isinstance(check, dict)
+        ]
+        mandatory_checks = [
+            check
+            for check in raw_checks
+            if check.get("kind") == "frontend.agent_ui_mock_contract"
+        ]
+        selected_checks = raw_checks if optional_checks_enabled else mandatory_checks
+        if not selected_checks and not optional_checks_enabled:
+            verified.append(_skip_business_acceptance(result, task))
+            continue
         business = verify_business_acceptance(
-            task,
+            {**task, "business_acceptance_checks": selected_checks},
             workspace_root,
-            formal_artifacts=state.get("project_plan")
-            if isinstance(state.get("project_plan"), dict)
-            else None,
+            formal_artifacts={
+                **(
+                    state.get("project_plan")
+                    if isinstance(state.get("project_plan"), dict)
+                    else {}
+                ),
+                "_product_plan": (
+                    state.get("product_plan")
+                    if isinstance(state.get("product_plan"), dict)
+                    else {}
+                ),
+            },
             dependency_evidence=dependency_evidence.get(str(task.get("id") or ""), []),
         )
+        business_evidence = list(business["business_acceptance_evidence"])
+        if not optional_checks_enabled:
+            selected_ids = {str(check.get("id") or "") for check in selected_checks}
+            business_evidence.extend(
+                _skipped_business_evidence(
+                    [
+                        check
+                        for check in raw_checks
+                        if str(check.get("id") or "") not in selected_ids
+                    ]
+                )
+            )
+            summary = summarize_business_acceptance(business_evidence)
+            summary["by_kind"] = business_acceptance_kind_metrics(business_evidence)
+        else:
+            summary = business["business_acceptance_summary"]
         next_result = {
             **result,
-            "business_acceptance_evidence": business["business_acceptance_evidence"],
-            "business_acceptance_summary": business["business_acceptance_summary"],
+            "business_acceptance_evidence": business_evidence,
+            "business_acceptance_summary": summary,
             "acceptance_status": {
                 **(
                     result.get("acceptance_status")
@@ -677,6 +717,20 @@ def _verify_business_results(
     return verified
 
 
+def _skipped_business_evidence(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """为关闭的普通业务自检生成显式跳过证据。"""
+
+    return [
+        {
+            "check_id": str(check.get("id") or ""),
+            "kind": str(check.get("kind") or ""),
+            "status": "skipped",
+            "evidence": "DAG 普通业务自检已通过环境变量关闭，本次自动跳过。",
+        }
+        for check in checks
+    ]
+
+
 def _skip_business_acceptance(
     result: dict[str, Any],
     task: dict[str, Any],
@@ -688,15 +742,7 @@ def _skip_business_acceptance(
         for check in task.get("business_acceptance_checks") or []
         if isinstance(check, dict)
     ]
-    evidence = [
-        {
-            "check_id": str(check.get("id") or ""),
-            "kind": str(check.get("kind") or ""),
-            "status": "skipped",
-            "evidence": "DAG 业务自检已通过环境变量关闭，本次自动跳过。",
-        }
-        for check in checks
-    ]
+    evidence = _skipped_business_evidence(checks)
     next_result = {
         **result,
         "business_acceptance_evidence": evidence,
@@ -1784,8 +1830,19 @@ def run_build_scheduler(
                 build_summary = {**build_summary, "status": "failed", "authorization_edd_errors": edd_errors}
     else:
         platform_projection_evidence = state.get("platform_projection_evidence", {})
+    pending_integration = {}
+    if workflow_status == "completed":
+        build_summary = apply_agent_ui_delivery_boundary(
+            build_summary,
+            execution_slice["tasks"],
+        )
+        if build_summary.get("status") == "mock_completed":
+            workflow_status = "requires_user_input"
+            pending_integration = agent_ui_integration_pending_result()
     clarification = (
-        _repair_scope_confirmation_payload(repair_task_plan)
+        pending_integration.get("clarification", {})
+        if pending_integration
+        else _repair_scope_confirmation_payload(repair_task_plan)
         if isinstance(repair_task_plan, dict)
         and repair_task_plan.get("decision") == "requires_user_confirmation"
         else {}
@@ -1806,6 +1863,7 @@ def run_build_scheduler(
         "build_results": build_results,
         "build_summary": build_summary,
         "status": workflow_status,
+        **({"message": pending_integration.get("message")} if pending_integration else {}),
         "clarification": clarification,
         "build_execution_scope": build_execution_scope,
         "build_execution_slice": execution_slice,

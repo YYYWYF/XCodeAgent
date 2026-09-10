@@ -193,7 +193,7 @@ def _agent_requirements_markdown(spec: dict[str, Any]) -> str:
                 f"- `{agent.get('agentId', '')}` {agent.get('name', '未命名智能体')}",
                 f"  - 职责：{agent.get('purpose', '待补充')}",
                 f"  - 核心能力：{capability_text}",
-                f"  - 入口页面：{entry_page_text}",
+                f"  - 候选入口页面：{entry_page_text}",
                 f"  - 交互方式：{agent.get('interactionMode', '待补充')}",
                 f"  - 业务边界：{boundary_text}",
             ]

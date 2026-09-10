@@ -55,13 +55,13 @@ ProductPlan 使用 `business`、`navigation`、`interface`、`external`、`seque
 
 ProductPlan 中面向产品角色展示的验收标准，只描述生成应用的目标用户能够观察或完成的产品结果。XCodeAgent 自身的本地预览、代码生成、编译、构建、lint、typecheck、自动化/集成测试、质量门禁、工作流节点和“何时进入用户验收”等交付条件属于独立工程运行状态，不得写入应用产品验收标准；确定性归一化会剔除这类越界文案。
 
-正式 JSON 使用 `product-plan.v6`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。根级 `agents` 只承接 RequirementSpec 已确认的业务智能体，并定义用户可确认的业务能力、入口页面与操作、交互方式、状态要求、业务边界和验收标准；普通应用必须使用 `agents: []`。ProductPlan 不选择模型、Prompt、API、工具、Skill、知识库、运行时、存储或代码路径，也不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
+正式 JSON 使用 `product-plan.v8`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。根级 `agents` 只承接 RequirementSpec 已确认的业务智能体，并定义用户可确认的业务能力、入口页面与操作、页面交互载体、是否启用浮窗、同页上下文白名单、交互方式、状态要求、业务边界和验收标准；普通应用必须使用 `agents: []`。ProductPlan 不选择模型、Prompt、API、工具、Skill、知识库、运行时、存储或代码路径，也不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
 
 权限开启时，RequirementSpec 的每条 `restrictedPages` 都以已确认的 `targetPageId` 引用业务页面；服务端在模型输出校验后仅根据该稳定绑定确定性生成内部 `authorizationTargets.pageRules[{ruleId,pageId}]`，不得按页面展示名称匹配或猜测。操作规则必须为 `{ruleId,pageId,actionId}`。`actionId` 只在所属页面内唯一，不能脱离 `pageId` 作为权限目标；`stepId` 仅用于产品组合行为，绝不进入权限目标。自然语言中已经验证的受控页面或操作会自动启用需求层权限能力；若当前应用尚未启用权限，只补问真实初始管理员 `subjectId`，不要求用户重复选择开关。ProductPlan 不保存资源键或角色授权；联合确认前只校验受控页面 `pageId`、受控操作 `<pageId>_<actionId>` 与固定 `system_authorization_management` 的全局候选是否碰撞，实际资源目录仍由 TechnicalPlan 编译。
 
 ```json
 {
-  "schema_version": "product-plan.v6",
+  "schema_version": "product-plan.v8",
   "app": {"name": "...", "summary": "..."},
   "agents": [
     {
@@ -77,7 +77,15 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
       ],
       "entryPageIds": ["orders"],
       "pageActionBindings": [
-        {"pageId": "orders", "actionIds": ["ask_order_assistant"]}
+        {
+          "pageId": "orders",
+          "actionIds": ["ask_order_assistant"],
+          "surface": {
+            "type": "floating_panel",
+            "enabled": true,
+            "contextItemIds": ["selected_order_ids"]
+          }
+        }
       ],
       "interaction": {
         "mode": "conversation",
@@ -106,11 +114,22 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
       "description": "...",
       "goal": "...",
       "information_items": [
-        {"itemId": "order-number", "label": "订单编号", "description": "..."}
+        {"itemId": "order_number", "label": "订单编号", "description": "..."},
+        {"itemId": "selected_order_ids", "label": "已选订单", "description": "..."}
       ],
       "actions": [
         {
-          "actionId": "open-order-detail",
+          "actionId": "ask_order_assistant",
+          "name": "询问订单助手",
+          "description": "打开订单助手并发送问题",
+          "requiresConfirmation": false,
+          "behavior": {
+            "type": "interface",
+            "expectedResult": "显示订单助手交互面板"
+          }
+        },
+        {
+          "actionId": "open_order_detail",
           "name": "查看订单详情",
           "description": "点击订单进入详情页",
           "requiresConfirmation": false,
@@ -136,7 +155,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 }
 ```
 
-模型提示直接提供包含全部 RequirementSpec 页面身份的完整 JSON 响应示例；根对象只能包含 `app`、`agents`、`business_flows`、`pages`、`product_acceptance_criteria`。`agents` 必须与 RequirementSpec 的 `agent_requirements` 按稳定 `agentId` 一一对应并保持顺序，能力名称、入口页面、交互模式和业务边界不得漂移；每个入口页面必须通过 `pageActionBindings` 引用该页面真实存在的 action。页面、智能体、能力、绑定、交互、信息项、action、behavior、sequence step 和状态对象均拒绝未声明字段。`information_items` 必须是 JSON 对象，禁止把 Python/JSON 字典序列化成字符串。action 只表示用户主动触发且会改变可见状态、结果集、页面位置、业务信息或外部效果的产品意图。阅读、浏览、滚动或看见内容不是 action，应写入 `information_items` 或 `acceptance_criteria`；纯展示页面允许 `actions: []`。导航 action 必须声明 `targetPageId`，并同步进入 `navigation_targets`。
+模型提示直接提供包含全部 RequirementSpec 页面身份的完整 JSON 响应示例；根对象只能包含 `app`、`agents`、`business_flows`、`pages`、`product_acceptance_criteria`。`agents` 必须与 RequirementSpec 的 `agent_requirements` 按稳定 `agentId` 一一对应并保持顺序，能力名称、入口页面、交互模式和业务边界不得漂移；每个入口页面必须通过 `pageActionBindings` 引用该页面真实存在的 action，并显式声明 `surface.type`、`surface.enabled` 与 `surface.contextItemIds`。Surface 类型只允许 `standalone_page` 或 `floating_panel`；模型生成默认 `enabled: true`，独立 Agent 页面必须始终开启，只有待联合确认的浮窗绑定允许用户关闭。关闭后正式 ProductPlan 保留选择记录，但 UiDesign、TechnicalPlan 页面操作投影和页面实现契约不得再生成该页 Agent 入口、面板或对应操作，页面其余业务能力不变。上下文 ID 只能引用同一页面的 `information_items[].itemId`，同一页面最多挂载一个同类型 Surface。页面、智能体、能力、绑定、Surface、交互、信息项、action、behavior、sequence step 和状态对象均拒绝未声明字段。`information_items` 必须是 JSON 对象，禁止把 Python/JSON 字典序列化成字符串。action 只表示用户主动触发且会改变可见状态、结果集、页面位置、业务信息或外部效果的产品意图。阅读、浏览、滚动或看见内容不是 action，应写入 `information_items` 或 `acceptance_criteria`；纯展示页面允许 `actions: []`。导航 action 必须声明 `targetPageId`，并同步进入 `navigation_targets`。
 
 ### UiDesign
 
@@ -149,11 +168,11 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。用户也可以明确跳过 UI 设计；此时不生成页面 TSX，Manifest 使用 `confirmation_status: skipped` 和空 `pages`。确认或跳过都只到达 `awaiting_planning_stage_entry`，用户点击绿色入口卡后，当前工作台为该应用创建或恢复独立的 PLAN StageSession，并原地切换到 Planning 阶段。后端继续使用 lifecycle 中的原初始化 Graph checkpoint，规划 Agent 使用独立的 conversation thread；只有当前工作台提交一次 `enter_planning`，避免复制或丢失已确认的 RequirementSpec、ProductPlan 与 UiDesign 状态。
 
-`ui-designs.json` 使用 `ui-manifest.v3`，它是 React 稿的引用与校验证据，不是另一份页面详设，也不是第二份产品事实。正式落盘文件不保存 TSX 正文，不重复页面名称、正式路由、描述、角色、状态要求、业务标签或验收标准；确认界面需要这些文案时，仅从当前 ProductPlan 临时投影。核心结构为：
+`ui-designs.json` 使用 `ui-manifest.v5`，它是 React 稿的引用与校验证据，不是另一份页面详设，也不是第二份产品事实。正式落盘文件不保存 TSX 正文，不重复页面名称、正式路由、描述、角色、状态要求、业务标签或验收标准；确认界面需要这些文案时，仅从当前 ProductPlan 临时投影。v5 在既有 action/information item 证据之外保存 Agent Surface 的固定模板模块、组件、版本和配置摘要。核心结构为：
 
 ```json
 {
-  "schema_version": "ui-manifest.v3",
+  "schema_version": "ui-manifest.v5",
   "confirmation_status": "pending_user_confirmation",
   "product_plan_sha256": "...",
   "pages": [
@@ -171,6 +190,25 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
         ],
         "information_items": [
           {"informationItemId": "order-number", "controlIds": ["order-number-display"]}
+        ],
+        "agent_surfaces": [
+          {
+            "agentId": "order-assistant",
+            "type": "floating_panel",
+            "actionIds": ["open-order-assistant"],
+            "contextItemIds": ["order-number"],
+            "controlIds": ["order-assistant-launcher", "order-assistant-panel"],
+            "parts": [
+              {"part": "launcher", "controlId": "order-assistant-launcher"},
+              {"part": "panel", "controlId": "order-assistant-panel"}
+            ],
+            "template": {
+              "module": "@xcodeagent/agent-ui-design",
+              "component": "AgentFloatingPanelTemplate",
+              "version": "agent-ui.v1",
+              "configSha256": "..."
+            }
+          }
         ]
       },
       "verification": {
@@ -188,7 +226,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 UI 生成只能消费已确认 ProductPlan，不能发明 ProductPlan 中不存在的页面、业务字段或操作；跳过 UI 时同样不改变 ProductPlan。
 
-生成、模板适配、用户调整和最终确认都必须执行确定性一致性检查：ProductPlan 的每个 `actionId` 和 `informationItemId` 必须在 TSX 中有静态控件映射；`interface` action 还必须通过 `data-ui-effect` 固化实际本地界面效果；未知 ID、缺失映射、无归属交互控件、无归属业务展示组件都拒绝确认。仅用于切换原型状态的控件必须显式标记 `data-preview-only="true"`，不得进入 ProductPlan 或 TechnicalPlan。模板只能作为布局和组件风格参考，必须先按 ProductPlan 重写业务语义，禁止原样携带模板字段或操作。若用户跳过 UI，则不执行这些 TSX 映射门禁，页面实现契约从 ProductPlan 的 `expectedResult` 补齐本地交互效果。
+生成、模板适配、用户调整和最终确认都必须执行确定性一致性检查：ProductPlan 的每个 `actionId` 和 `informationItemId` 必须在 TSX 中有静态控件映射；`interface` action 还必须通过 `data-ui-effect` 固化实际本地界面效果；未知 ID、缺失映射、无归属交互控件、无归属业务展示组件都拒绝确认。包含 Agent Surface 的页面必须精确导入 `@xcodeagent/agent-ui-design`，使用 Surface 对应的固定组件与 `agent-ui.v1` 静态 `configJson`，并拒绝页面内自制聊天核心；内部必需部件、action 和上下文证据由固定组件契约与配置摘要确定性派生。仅用于切换原型状态的业务页评审控件必须显式标记 `data-preview-only="true"`，不得进入 ProductPlan 或 TechnicalPlan。业务模板只能作为布局和组件风格参考，必须先按 ProductPlan 重写业务语义；固定 Agent UI 契约不能被视觉重写。若用户跳过 UI，则不执行这些 TSX 映射门禁，页面实现契约从 ProductPlan 的 `expectedResult` 补齐本地交互效果。
 
 RequirementSpec、ProductPlan 和 UiDesign 的产品确认均不得要求产品角色选择或审核数据源、数据库、持久化和 API 方案；这些内容只进入 TechnicalPlan 的开发确认。
 

@@ -13,8 +13,7 @@ import {
 } from '../service/templateApi'
 import type {
   ApplicationConfig,
-  ApplicationLifecycle,
-  ApplicationPlanningConfirmation
+  ApplicationLifecycle
 } from '../typings'
 
 type UseApplicationTemplateGenerationOptions = {

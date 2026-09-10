@@ -538,6 +538,7 @@ def _pending_interaction(
         "review_phase_confirmation": PendingInteractionType.REVIEW_PHASE_CONFIRMATION,
         "code_review_repair_confirmation": PendingInteractionType.CODE_REVIEW_REPAIR_CONFIRMATION,
         "acceptance_phase_confirmation": PendingInteractionType.ACCEPTANCE_PHASE_CONFIRMATION,
+        "agent_ui_integration_pending": PendingInteractionType.AGENT_UI_INTEGRATION_PENDING,
         "page_acceptance": PendingInteractionType.PAGE_ACCEPTANCE,
         "entity_source_binding": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "entity_source_binding_required": PendingInteractionType.ENTITY_SOURCE_BINDING,

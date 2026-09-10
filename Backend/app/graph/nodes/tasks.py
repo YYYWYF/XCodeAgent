@@ -18,6 +18,8 @@ from app.services.artifact_invalidation import (
     stale_artifact_keys,
 )
 from app.services.build_context_resolver import resolve_target_build_context
+from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
+from app.services.agent_development_readiness import agent_entity_binding_bypass_matches
 from app.services.build_task_confirmation import (
     build_task_confirmation_read_model,
 )
@@ -520,7 +522,7 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
     if isinstance(scope, dict):
         target_type = str(scope.get("type") or "").strip()
         target_id = str(scope.get("targetId") or scope.get("target_id") or "").strip()
-        if target_type in {"application", "page", "data_source", "endpoint"}:
+        if target_type in {"application", "page", "data_source", "endpoint", "agent"}:
             return {
                 "type": target_type,
                 "targetId": target_id or "application",
@@ -532,6 +534,9 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
                 ),
             }
     selected_page_id = str(state.get("selectedPageId") or "").strip()
+    selected_agent_id = str(state.get("selected_agent_id") or "").strip()
+    if selected_agent_id:
+        return {"type": "agent", "targetId": selected_agent_id}
     return (
         {"type": "page", "targetId": selected_page_id}
         if selected_page_id
@@ -559,7 +564,15 @@ def _resolve_build_context(
 
     target_type = build_execution_scope["type"]
     target_id = build_execution_scope["targetId"]
+    product_plan = (
+        state.get("product_plan")
+        if isinstance(state.get("product_plan"), dict)
+        else {}
+    )
     if target_type != "application":
+        agent_bypass = target_type == "agent" and agent_entity_binding_bypass_matches(
+            state.get("agent_entity_binding_bypass"), target_id
+        )
         context = resolve_target_build_context(
             project_plan,
             target_type=target_type,
@@ -570,8 +583,30 @@ def _resolve_build_context(
                 or ""
             ).strip() or None,
             project_plan_path=technical_plan_path(workspace_from_state(state)),
+            product_plan=product_plan,
+            allow_deferred_agent_entities=agent_bypass,
         )
+        if target_type == "agent":
+            context["required_unit_ids"] = (
+                _agent_generation_unit_ids(build_task_plan, target_id)
+                if agent_bypass
+                else _required_unit_closure(
+                    build_task_plan,
+                    context.get("required_unit_root_ids") or [],
+                )
+            )
         return context
+    page_contexts_by_page = {
+        str(page.get("pageId") or ""): resolve_target_build_context(
+            project_plan,
+            target_type="page",
+            target_id=str(page.get("pageId") or ""),
+            project_plan_path=technical_plan_path(workspace_from_state(state)),
+            product_plan=product_plan,
+        )
+        for page in project_plan_page_records(project_plan)
+        if str(page.get("pageId") or "").strip()
+    }
     return {
         "target": {"type": "application", "id": "application"},
         "page_implementation_contract": None,
@@ -582,10 +617,70 @@ def _resolve_build_context(
         "endpoint_designs": [],
         "source_types": [],
         "agent_contracts": list(project_plan.get("agent_contracts") or []),
+        "page_contexts_by_page": page_contexts_by_page,
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
-        "source_refs": {},
+        "source_refs": {
+            "agent_ui_by_page": project_agent_ui_build_contracts(
+                product_plan,
+                project_plan,
+            )
+        },
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }
+
+
+def _required_unit_closure(
+    build_task_plan: dict[str, Any],
+    root_unit_ids: list[str],
+) -> list[str]:
+    """按 depends_on 反向收集 Agent、网关与入口页面的全部前置 Unit。"""
+
+    build_units = build_task_plan.get("build_units")
+    build_units = build_units if isinstance(build_units, dict) else {}
+    graph = build_task_plan.get("unit_graph")
+    edges = graph.get("edges") if isinstance(graph, dict) else []
+    prerequisites: dict[str, list[str]] = {}
+    for edge in edges if isinstance(edges, list) else []:
+        if not isinstance(edge, dict) or edge.get("type") != "depends_on":
+            continue
+        predecessor = str(edge.get("from") or "").strip()
+        consumer = str(edge.get("to") or "").strip()
+        if predecessor and consumer:
+            prerequisites.setdefault(consumer, []).append(predecessor)
+    ordered: list[str] = []
+    visiting: set[str] = set()
+
+    def visit(unit_id: str) -> None:
+        """深度优先加入前置 Unit，并保持 Unit Graph 的稳定顺序。"""
+
+        if unit_id in visiting:
+            return
+        if unit_id not in build_units:
+            raise ValueError(f"Agent 构建闭包引用了不存在的 Unit：{unit_id}。")
+        visiting.add(unit_id)
+        for predecessor in prerequisites.get(unit_id, []):
+            visit(predecessor)
+        if unit_id not in ordered:
+            ordered.append(unit_id)
+
+    for root_unit_id in root_unit_ids:
+        visit(str(root_unit_id))
+    return ordered
+
+
+def _agent_generation_unit_ids(
+    build_task_plan: dict[str, Any],
+    agent_id: str,
+) -> list[str]:
+    """手动跳过实体绑定时只选择 Python Runtime 与目标 Agent Unit。"""
+
+    build_units = build_task_plan.get("build_units")
+    build_units = build_units if isinstance(build_units, dict) else {}
+    required = ["agent:runtime", f"agent:{agent_id}"]
+    missing = [unit_id for unit_id in required if unit_id not in build_units]
+    if missing:
+        raise ValueError(f"Agent Python 生成 Unit 不存在：{'、'.join(missing)}。")
+    return required
 
 
 
