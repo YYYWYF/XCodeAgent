@@ -71,7 +71,7 @@ START
 
 `build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，前端生成、后端生成、前端单测、后端单测按检查 ID 各有 10 次独立修复额度；初次执行不计次数，第十次修复后的复测仍失败才耗尽，耗尽后失败且不展示测试阶段确认卡。
 
-SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `status/summary` 的结果统一标记为 `failureCode=invalid_agent_output`。单测局部修复遇到这类协议失败且当前检查尚有修复额度时，保留真实 Diff 和失败记录，返回 `unit_test` 复测，再由 RepairPlanner 根据当前失败生成新计划；派发仍计入各检查的十次额度，不自动清零。额度耗尽时同时显示协议错误和耗尽原因。真实业务失败、声明完成但无实际改动、越权变更及人工确认边界不按此策略自动重试；集成测试的独立修复策略保持不变。
+SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `status/summary` 的结果统一标记为 `failureCode=invalid_agent_output`。单测局部修复遇到这类协议失败且当前检查尚有修复额度时，保留真实 Diff 和失败记录，返回 `unit_test` 复测，再由 RepairPlanner 根据当前失败生成新计划；派发仍计入各检查的十次额度，不自动清零。额度耗尽时同时显示协议错误和耗尽原因。真实业务失败、声明完成但无实际改动、越权变更及人工确认边界不按此策略自动重试；集成测试遇到此类输出协议错误时，在当前 SmallTask 调用内最多自动重试 2 次（总计 3 次调用），保持正在修复的节点与 UI 状态；重试复用任务范围、保留已落盘修改，不消耗额外集成复测轮次。有效业务失败、人工确认和越权变更不自动重试；连续无效输出耗尽后明确失败。
 
 单元测试通过或跳过后才进入 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 或单测失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
 
