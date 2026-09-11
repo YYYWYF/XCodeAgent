@@ -77,7 +77,7 @@ class TemplateEngineClientTests(unittest.TestCase):
         self.assertIn("模板更新接口返回无变更", rendered)
 
     def test_update_preserves_engine_error_json(self) -> None:
-        """确认 Engine 失败 JSON 的 code、status、message 不会被通用 HTTP 错误覆盖。"""
+        """确认流式 Engine 失败 body 先读取再解析，不会被 ResponseNotRead 或通用 HTTP 错误覆盖。"""
 
         transport = httpx.MockTransport(
             lambda _request: httpx.Response(409, json={"code": "RECONCILE_STATE_CHANGE_REQUIRED", "message": "必须使用 APPLY", "details": {"currentRevision": "v1"}, "traceId": "trace-123"})
