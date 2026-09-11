@@ -408,22 +408,9 @@ export default function WorkflowRunCard({
             </Text>
           </div>
         </div>
-        <Space size={8}>
-          {activeRun && onCancel ? (
-            <Button
-              danger
-              disabled={cancelDisabled || status === 'stopping'}
-              icon={<StopOutlined />}
-              onClick={onCancel}
-              size="small"
-            >
-              {status === 'stopping' ? '正在取消' : '取消运行'}
-            </Button>
-          ) : null}
           <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
             {workflowStatusText(status)}
           </Tag>
-        </Space>
       </div>
       {workflow.summary.message &&
         !revisionImpact &&

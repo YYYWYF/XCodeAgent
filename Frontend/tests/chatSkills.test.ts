@@ -121,6 +121,32 @@ function renderWorkflowRunCard(props: ComponentProps<typeof WorkflowRunCard>): s
   )
 }
 
+test('DAG 生成阶段隐藏 Workflow Card Header 的取消入口，但其他运行阶段保留', () => {
+  const dagMarkup = renderWorkflowRunCard({
+    interactionAvailability: 'active',
+    onCancel: () => undefined,
+    workflow: {
+      runId: 'run-dag-generation-header',
+      threadId: 'thread-dag-generation-header',
+      summary: { status: 'running', phase: 'prepare_build_tasks' },
+      events: []
+    }
+  })
+  assert.doesNotMatch(dagMarkup, /取消运行/)
+
+  const buildMarkup = renderWorkflowRunCard({
+    interactionAvailability: 'active',
+    onCancel: () => undefined,
+    workflow: {
+      runId: 'run-build-header',
+      threadId: 'thread-build-header',
+      summary: { status: 'running', phase: 'build' },
+      events: []
+    }
+  })
+  assert.match(buildMarkup, /取消运行/)
+})
+
 /** 构造当前 DAG 进度协议的完整 Unit，测试只覆写关心的离散事实。 */
 function dagGenerationUnit(
   overrides: Partial<DagGenerationUnitRecord> = {}
