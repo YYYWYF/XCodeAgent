@@ -4,6 +4,7 @@ import type { WorkflowClarificationAnswers, WorkflowRunPayload } from '../../typ
 import type { RequirementSpecDraftSaveResult } from '../../service/applicationPagePlanning'
 import {
   applicationPlanningDisplayStatus,
+  planningTransportBusy,
   type ApplicationPlanningCurrentState
 } from '../../service/activeApplicationPlanning'
 import { workflowConfirmation } from '../../service/applicationPlanningRuntimeHelpers'
@@ -75,9 +76,10 @@ export default function ApplicationPagePlanningModal({
   // UI 确认期间保留面板，避免逐页动作的中间快照短暂丢失 clarification 时回切进度页。
   const enteredUiConfirmationRef = useRef(false)
   const workflow = planning.workflow
-  const running = planning.transportState === 'running'
+  const running = planningTransportBusy(planning)
   const displayStatus = applicationPlanningDisplayStatus(planning)
   const error =
+    planning.syncError ||
     planning.error ||
     (displayStatus === 'error' ? '上次规划流程中断，请重试或检查当前规划内容。' : '')
   const progressCopy = workflowProgressCopy(workflow)
@@ -178,8 +180,10 @@ export default function ApplicationPagePlanningModal({
           {error ? (
             <AgentErrorCard
               error={error}
-              onRetry={workflowConfirmation(workflow) ? undefined : onRetry}
+              onRetry={planning.syncError || !workflowConfirmation(workflow) ? onRetry : undefined}
+              retryLabel={planning.syncError ? '重新同步状态' : undefined}
               retrying={running}
+              title={planning.syncError ? '规划状态尚未同步' : undefined}
             />
           ) : (
             <section className={cx('page-planning-review')}>

@@ -31,11 +31,6 @@ export type SendWorkflowMessageOptions = {
   }
   editedRequirementSpec?: Record<string, unknown>
   requirementSpecFeedback?: string
-  applicationPlanningRecovery?: {
-    action: 'get'
-    workspaceRoot: string
-    applicationId?: string
-  }
   originalRequest?: string
   selectedSkillNames?: string[]
   selectedPageId?: string
@@ -112,7 +107,6 @@ export function buildWorkflowForwardedProps(
     productStageConversation: options.productStageConversation,
     editedRequirementSpec: options.editedRequirementSpec,
     requirementSpecFeedback: options.requirementSpecFeedback,
-    applicationPlanningRecovery: options.applicationPlanningRecovery,
     originalRequest: options.originalRequest,
     selectedSkillNames: options.selectedSkillNames,
     selectedPageId: options.selectedPageId,
@@ -1552,7 +1546,7 @@ function readResultWorkflow(result: unknown): WorkflowRunPayload | undefined {
   return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.conversation)
 }
 
-function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
+export function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
   if (!value || typeof value !== 'object') return undefined
   const payload = value as Partial<WorkflowRunPayload>
   if (typeof payload.runId !== 'string' || typeof payload.threadId !== 'string') {

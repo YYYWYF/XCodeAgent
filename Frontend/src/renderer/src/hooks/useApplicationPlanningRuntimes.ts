@@ -26,6 +26,7 @@ export type ApplicationPlanningRuntimesController = {
   saveRequirementSpec: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['saveRequirementSpec']>) => ReturnType<ApplicationPlanningRuntime['saveRequirementSpec']>
   startDesignRevision: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['startDesignRevision']>) => Promise<void>
   retryCurrentFailure: (applicationId: string) => Promise<void>
+  reconcileCurrentState: (applicationId: string) => ReturnType<ApplicationPlanningRuntime['reconcileCurrentState']>
   stop: (applicationId: string) => Promise<void>
   subscribeStreamingContent: (applicationId: string, listener: (content: string) => void) => () => void
 }
@@ -110,6 +111,21 @@ export function useApplicationPlanningRuntimes(
     runtimesRef.current.clear()
   }, [])
 
+  // 网络恢复事件只为 uncertain Runtime 触发一次只读同步，不建立周期性轮询。
+  useEffect(() => {
+    const handleOnline = (): void => {
+      for (const runtime of runtimesRef.current.values()) {
+        const current = optionsRef.current.getPlanningState(runtime.applicationId)
+        if (current?.threadId !== runtime.threadId || current.transportState !== 'uncertain') continue
+        void runtime.reconcileCurrentState().catch((reason: unknown) => {
+          console.error('[planning-runtime] online reconcile failed', reason)
+        })
+      }
+    }
+    window.addEventListener('online', handleOnline)
+    return () => window.removeEventListener('online', handleOnline)
+  }, [])
+
   return useMemo<ApplicationPlanningRuntimesController>(() => ({
     ensureRuntime,
     getRuntime,
@@ -121,6 +137,8 @@ export function useApplicationPlanningRuntimes(
     startDesignRevision: (applicationId, ...args) => requireRuntime(applicationId).startDesignRevision(...args),
     /** 使用调用时的当前状态重试。 */
     retryCurrentFailure: (applicationId) => requireRuntime(applicationId).retryCurrentFailure(),
+    /** 只读同步指定应用当前权威状态。 */
+    reconcileCurrentState: (applicationId) => requireRuntime(applicationId).reconcileCurrentState(),
     /** 停止指定应用的会话。 */
     stop: (applicationId) => requireRuntime(applicationId).stop(),
     /** 订阅指定应用临时正文。 */

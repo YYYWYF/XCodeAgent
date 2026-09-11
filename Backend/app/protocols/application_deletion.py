@@ -25,7 +25,9 @@ from app.protocols.ag_ui_action_stream import (
     build_ag_ui_action_stream,
 )
 from app.protocols.workflow.run_control import workflow_run_registry
-from app.protocols.workflow.runtime import clear_application_planning_resume_locks
+from app.protocols.application_planning_run_lock import (
+    clear_application_planning_run_locks,
+)
 from app.services.application_lifecycle import (
     clear_application_lifecycle_lock,
     load_application_lifecycle,
@@ -254,7 +256,7 @@ async def prepare_application_deletion(
         workspace_root=workspace_text,
         project_id=request.application_id,
     )
-    released_resume_locks = clear_application_planning_resume_locks(thread_ids)
+    released_resume_locks = clear_application_planning_run_locks(thread_ids)
     cleared_lifecycle_lock = clear_application_lifecycle_lock(workspace)
     cleared_template_lock = clear_application_template_lock(workspace)
     cleared_authorization_lock = clear_authorization_bootstrap_lock(workspace)

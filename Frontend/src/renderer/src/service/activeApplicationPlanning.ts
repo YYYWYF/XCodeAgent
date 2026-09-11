@@ -4,7 +4,7 @@ import { isApplicationCreationComplete, loadStoredApplications } from './applica
 import { getApplicationLifecycle } from './applicationLifecycle'
 
 export type ActivePlanningStatus = 'error' | 'ready' | 'running'
-export type PlanningTransportState = 'idle' | 'running'
+export type PlanningTransportState = 'idle' | 'running' | 'reconciling' | 'uncertain'
 
 export type ApplicationPlanningCurrentState = {
   application: ApplicationConfig
@@ -15,6 +15,8 @@ export type ApplicationPlanningCurrentState = {
   restoreArtifactsFromDisk?: boolean
   /** 当前规划会话最近一次模型/Workflow 错误，仅用于前端实时展示。 */
   error?: string
+  /** Renderer 暂时无法确认后端权威状态时的同步错误。 */
+  syncError?: string
   workflow?: WorkflowRunPayload
 }
 
@@ -39,6 +41,20 @@ export type ApplicationPlanningCurrentEvent =
       threadId: string
       error: string
       workflow?: WorkflowRunPayload
+    }
+  | { type: 'reconcile_started'; applicationId: string; threadId: string }
+  | {
+      type: 'reconcile_received'
+      applicationId: string
+      threadId: string
+      lifecycle: ApplicationLifecycle
+      workflow: WorkflowRunPayload
+    }
+  | {
+      type: 'reconcile_failed'
+      applicationId: string
+      threadId: string
+      error: string
     }
   | { type: 'clear_error'; applicationId: string; threadId: string }
   | {
@@ -73,9 +89,23 @@ export function activePlanningStatus(lifecycle: ApplicationLifecycle): ActivePla
 export function applicationPlanningDisplayStatus(
   state: ApplicationPlanningCurrentState
 ): ActivePlanningStatus {
-  if (state.transportState === 'running') return 'running'
-  if (state.error) return 'error'
+  if (planningTransportBusy(state)) return 'running'
+  if (state.transportState === 'uncertain' || state.syncError || state.error) return 'error'
   return activePlanningStatus(state.lifecycle)
+}
+
+/** 判断当前 transport 是否正在执行 Graph 写入或权威状态同步。 */
+export function planningTransportBusy(
+  state?: ApplicationPlanningCurrentState
+): boolean {
+  return state?.transportState === 'running' || state?.transportState === 'reconciling'
+}
+
+/** 判断 mutation 是否必须等待 transport 回到已确认的 idle 状态。 */
+export function planningMutationBlocked(
+  state?: ApplicationPlanningCurrentState
+): boolean {
+  return Boolean(state && state.transportState !== 'idle')
 }
 
 /** 合并 Workflow 及其 lifecycle，并保留同一运行中的原生中断投影。 */
@@ -107,13 +137,55 @@ export function reduceApplicationPlanningCurrentState(
   }
 
   if (event.type === 'run_started') {
-    return { ...current, error: undefined, transportState: 'running' }
+    return { ...current, error: undefined, syncError: undefined, transportState: 'running' }
   }
   if (event.type === 'run_settled') {
     return { ...current, transportState: 'idle' }
   }
   if (event.type === 'clear_error') {
     return current.error ? { ...current, error: undefined } : current
+  }
+  if (event.type === 'reconcile_started') {
+    return { ...current, syncError: undefined, transportState: 'reconciling' }
+  }
+  if (event.type === 'reconcile_failed') {
+    return {
+      ...current,
+      syncError: event.error.trim() || '当前规划状态尚未确认，请重新同步状态。',
+      transportState: 'uncertain'
+    }
+  }
+  if (event.type === 'reconcile_received') {
+    if (
+      event.lifecycle.application.id !== current.application.id ||
+      event.workflow.threadId !== current.threadId
+    ) {
+      return current
+    }
+    // reconcile 是完整权威快照，必须覆盖本地为流式增量保留的旧 interrupt。
+    const workflowLifecycle = workflowApplicationLifecycle(event.workflow)
+    const lifecycle = latestApplicationLifecycle(
+      current.lifecycle,
+      workflowLifecycle
+        ? latestApplicationLifecycle(workflowLifecycle, event.lifecycle)
+        : event.lifecycle
+    )
+    let error = current.error
+    if (event.workflow.summary.status === 'failed') {
+      error = event.workflow.summary.message || current.error || '规划运行失败。'
+    } else if (lifecycle.initialization.status === 'failed') {
+      error = lifecycle.error?.message || current.error || '规划运行失败。'
+    } else {
+      error = undefined
+    }
+    return {
+      ...current,
+      workflow: event.workflow,
+      lifecycle,
+      error,
+      syncError: undefined,
+      transportState: 'idle'
+    }
   }
   if (event.type === 'application_received') {
     return event.application.id === current.application.id

@@ -356,7 +356,8 @@ export default function MessageList({
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const latestAssistantMessageId = findLastAssistantMessageId(messages)
   const visibleError = error?.trim() || ''
-  const canonicalPlanningError = planningState?.error?.trim() || ''
+  const canonicalPlanningError =
+    planningState?.syncError?.trim() || planningState?.error?.trim() || ''
   const canonicalPlanningFailure =
     canonicalPlanningError || workflowFailureMessage(planningWorkflow)
   const templateGenerationFailed =
@@ -372,7 +373,9 @@ export default function MessageList({
     !templateGenerationOrphaned &&
     visibleError &&
     visibleError !== latestAssistantMessageError &&
-    (currentPlanningMessageIndex < 0 || visibleError !== canonicalPlanningFailure)
+    (planningState?.syncError ||
+      currentPlanningMessageIndex < 0 ||
+      visibleError !== canonicalPlanningFailure)
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
@@ -1013,7 +1016,14 @@ export default function MessageList({
                 <AgentErrorCard
                   error={visibleError}
                   onRetry={onRetryError}
-                  title={/确认卡|中断|过期|版本/.test(visibleError) ? '规划确认未完成' : undefined}
+                  retryLabel={planningState?.syncError ? '重新同步状态' : undefined}
+                  title={
+                    planningState?.syncError
+                      ? '规划状态尚未同步'
+                      : /确认卡|中断|过期|版本/.test(visibleError)
+                        ? '规划确认未完成'
+                        : undefined
+                  }
                 />
               </div>
             </article>

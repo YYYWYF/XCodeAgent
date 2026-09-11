@@ -91,7 +91,9 @@ function AppEntryContent(): JSX.Element {
       planningController.dispatchPlanningEvent(event)
       if (activeApplication?.id !== event.applicationId) return
       const lifecycle =
-        event.type === 'lifecycle_received'
+        event.type === 'reconcile_received'
+          ? event.lifecycle
+          : event.type === 'lifecycle_received'
           ? event.lifecycle
           : event.type === 'workflow_received'
             ? workflowApplicationLifecycle(event.workflow)
@@ -265,7 +267,9 @@ function AppEntryContent(): JSX.Element {
             planningRuntimeController.saveRequirementSpec(visiblePlanning.application.id, spec)
           }
           onRetry={() =>
-            void planningRuntimeController.retryCurrentFailure(visiblePlanning.application.id)
+            void (visiblePlanning.syncError
+              ? planningRuntimeController.reconcileCurrentState(visiblePlanning.application.id)
+              : planningRuntimeController.retryCurrentFailure(visiblePlanning.application.id))
           }
           onReturnHome={planningController.returnHome}
           theme={theme}
@@ -301,11 +305,13 @@ function AppEntryContent(): JSX.Element {
             }
             onStopPlanning={() => planningRuntimeController.stop(activeApplication.id)}
             onRetryPlanning={
-              templateGenerationRecoverable
-                ? () => {
-                    void planningController.retryTemplateGeneration(activeApplication.id)
-                  }
-                : () => void planningRuntimeController.retryCurrentFailure(activeApplication.id)
+              activePlanning?.syncError
+                ? () => void planningRuntimeController.reconcileCurrentState(activeApplication.id)
+                : templateGenerationRecoverable
+                  ? () => {
+                      void planningController.retryTemplateGeneration(activeApplication.id)
+                    }
+                  : () => void planningRuntimeController.retryCurrentFailure(activeApplication.id)
             }
             generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
             planningState={activePlanning}

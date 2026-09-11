@@ -38,7 +38,10 @@ import type {
   ChatSessionDevelopmentContinuation,
   ChatSessionDevelopmentTarget
 } from '../../service/chatSessions'
-import type { ApplicationPlanningCurrentState } from '../../service/activeApplicationPlanning'
+import {
+  planningMutationBlocked,
+  type ApplicationPlanningCurrentState
+} from '../../service/activeApplicationPlanning'
 import { isTemplateGenerationOrphaned } from '../../service/templateApi'
 import type {
   RequirementSpecDraftSaveResult,
@@ -863,7 +866,7 @@ export default function AiChatPanel({
 }: Props): ReactElement {
   const planningThreadId = planningState?.threadId
   const currentPlanningWorkflow = planningState?.workflow
-  const planningError = planningState?.error
+  const planningError = planningState?.syncError || planningState?.error
   const restorePlanningArtifactsFromDisk = planningState?.restoreArtifactsFromDisk === true
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
@@ -2870,7 +2873,10 @@ export default function AiChatPanel({
     : pendingDagSession?.title || existingPlanningSession?.title
   const phaseExecutionStatus =
     phaseExecution?.status || (pendingDagExecution ? 'awaiting_user' : 'running')
-  const workflowInputLocked = workspaceBusy || Boolean(pendingDagExecution)
+  const workflowInputLocked =
+    workspaceBusy ||
+    Boolean(pendingDagExecution) ||
+    planningMutationBlocked(planningState)
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
       ? { ...sessionRunStates, [existingPlanningSession.id]: 'running' as const }

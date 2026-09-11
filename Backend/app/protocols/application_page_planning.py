@@ -18,6 +18,7 @@ from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_acti
 from app.protocols.application_planning_interrupt import (
     project_application_planning_interrupt,
 )
+from app.protocols.application_planning_run_lock import application_planning_run_lock
 from app.protocols.application_lifecycle import application_lifecycle_input
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
@@ -35,6 +36,12 @@ from app.services.requirement_spec import (
 
 REQUIREMENT_SPEC_DRAFT_EVENT_NAME = "requirement-spec-draft"
 logger = logging.getLogger("uvicorn.error")
+
+
+class ApplicationPlanningCheckpointNotFoundError(RuntimeError):
+    """标识只读恢复没有找到目标 application planning checkpoint。"""
+
+    code = "application_planning_checkpoint_not_found"
 
 
 class ApplicationPlanningRecoveryRequest(BaseModel):
@@ -259,13 +266,20 @@ def _build_application_planning_recovery_ag_ui_stream(
         )
         if inspect.isawaitable(active_graph):
             active_graph = await active_graph
-        snapshot = await active_graph.aget_state(
-            {"configurable": {"thread_id": thread_id}}
-        )
-        result = project_application_planning_interrupt(dict(snapshot.values), snapshot)
-        if not result:
-            raise ValueError("没有找到可恢复的应用规划 checkpoint。")
-        lifecycle = load_application_lifecycle(request.workspaceRoot)
+        lock = application_planning_run_lock(thread_id)
+        # 与同 thread writer 共用屏障，确保读取发生在在途 Graph 写运行释放锁之后。
+        async with lock:
+            snapshot = await active_graph.aget_state(
+                {"configurable": {"thread_id": thread_id}}
+            )
+            result = project_application_planning_interrupt(
+                dict(snapshot.values), snapshot
+            )
+            if not result:
+                raise ApplicationPlanningCheckpointNotFoundError(
+                    "没有找到可恢复的应用规划 checkpoint。"
+                )
+            lifecycle = load_application_lifecycle(request.workspaceRoot)
         if lifecycle is not None:
             result["lifecycle"] = application_lifecycle_payload(lifecycle)
         recovery_run_id = str(result.get("active_run_id") or f"recovery:{thread_id}")
@@ -288,7 +302,14 @@ def _build_application_planning_recovery_ag_ui_stream(
         run_id_prefix="application-planning-recovery",
         operation=operation,
         error_message_prefix="恢复应用规划失败",
-        error_data=lambda _exc: {"action": "get"},
+        error_data=lambda exc: {
+            "action": "get",
+            "code": getattr(
+                exc,
+                "code",
+                "application_planning_recovery_failed",
+            ),
+        },
         accept=accept,
     )
 

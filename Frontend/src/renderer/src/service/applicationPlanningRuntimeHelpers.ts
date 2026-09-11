@@ -68,6 +68,19 @@ export function hasPlanningInterrupt(workflow: WorkflowRunPayload): boolean {
   }
 }
 
+/** 返回服务端中断的稳定门身份，供断线后判断提交是否已被 Graph 消费。 */
+export function planningInterruptIdentity(workflow?: WorkflowRunPayload): string {
+  if (!workflow) return ''
+  try {
+    const interrupt = planningInterrupt(workflow)
+    const gateId = String(interrupt.gateId || '')
+    const artifactRevision = String(interrupt.artifactRevision || '')
+    return gateId && artifactRevision ? `${gateId}:${artifactRevision}` : ''
+  } catch {
+    return ''
+  }
+}
+
 /** 用当前服务端审阅门身份构造类型化交互，禁止从历史卡片猜测恢复节点。 */
 export function buildPlanningInteraction(
   workflow: WorkflowRunPayload,
@@ -128,32 +141,6 @@ export function planningResumeFrom(
     case 'awaiting_requirement_document_confirmation': return 'product_planning'
     default: return 'requirements'
   }
-}
-
-/** 构造只读 checkpoint 请求，沿用独立 Planning AG-UI 流。 */
-export function planningRecoveryOptions(application: ApplicationConfig): SendWorkflowMessageOptions {
-  return {
-    application,
-    applicationPlanningRecovery: {
-      action: 'get', workspaceRoot: application.workspaceRoot || '', applicationId: application.id
-    },
-    editorMode: 'frontend', workflowScope: 'application_planning', workspaceRoot: application.workspaceRoot || ''
-  }
-}
-
-/** 在既有 transport ownership 内最多重试两次只读恢复，不持有任何会话能力。 */
-export async function retryPlanningRecoveryRead(
-  readOnce: () => Promise<WorkflowRunPayload>
-): Promise<WorkflowRunPayload> {
-  let lastError: unknown
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await readOnce()
-    } catch (reason) {
-      lastError = reason
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error('读取待确认规划状态失败，请重试。')
 }
 
 /** 等待取消动作落入权威生命周期，保持原有最多二十次的有界等待。 */
