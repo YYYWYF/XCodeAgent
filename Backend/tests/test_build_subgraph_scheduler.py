@@ -44,7 +44,6 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
                 {
                     "schemaVersion": 2,
                     "templateRevision": "scheduler-test-r1",
-                    "releaseDigest": "sha256:" + "0" * 64,
                     "requested": {},
                     "effective": {},
                     "appliedAdditions": {},
@@ -191,7 +190,6 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         state = {
             "schemaVersion": 2,
             "templateRevision": "test-r1",
-            "releaseDigest": "sha256:" + "0" * 64,
             "requested": {},
             "effective": {},
             "appliedAdditions": {},

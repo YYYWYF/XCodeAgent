@@ -28,16 +28,12 @@ from app.services.template_reconcile.strategy_update_package import (
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError
 
 
-_DIGEST_A = "sha256:" + "a" * 64
-
-
 def _state() -> dict[str, object]:
     """构造包含 login 的最小 V2 State fixture。"""
 
     return {
         "schemaVersion": 2,
         "templateRevision": "2026.09.10.1",
-        "releaseDigest": _DIGEST_A,
         "requested": {"login": {"enabled": True, "config": {}}},
         "effective": {"login": {"enabled": True, "config": {}}},
         "appliedAdditions": {},
@@ -52,8 +48,8 @@ def _package() -> dict[str, object]:
         "packageId": "pkg-login-reconcile",
         "mode": "RECONCILE",
         "sourceRevision": "2026.09.10.1",
-        "currentStateDigest": _DIGEST_A,
-        "nextStateDigest": _DIGEST_A,
+        "currentStateDigest": template_state_digest_v2(TemplateStateV2.model_validate(_state())),
+        "nextStateDigest": template_state_digest_v2(TemplateStateV2.model_validate(_state())),
         "strategies": [
             {
                 "strategyId": "login-route",
@@ -93,6 +89,14 @@ class TemplateReconcileProtocolV2Tests(unittest.TestCase):
         state = TemplateStateV2.model_validate(_state())
         self.assertEqual(state.schemaVersion, 2)
         self.assertNotIn("managedFiles", state.model_dump())
+
+    def test_rejects_removed_release_digest(self) -> None:
+        """确认已删除字段不能以额外字段重新进入 V2 State。"""
+
+        payload = _state()
+        payload["release" + "Digest"] = "sha256:" + "a" * 64
+        with self.assertRaises(ValidationError):
+            TemplateStateV2.model_validate(payload)
 
     def test_accepts_applied_addition_without_origin(self) -> None:
         """确认 Addition 只记录目标事实，不要求无业务用途的来源字段。"""

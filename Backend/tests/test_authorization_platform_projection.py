@@ -60,7 +60,6 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
         self._write(workspace / ".xcodeagent/template-state.json", json.dumps({
             "schemaVersion": 2,
             "templateRevision": "r1",
-            "releaseDigest": "sha256:" + "0" * 64,
             "requested": {"authorization": {"enabled": True, "config": {}}},
             "effective": {"authorization": {"enabled": True, "config": {}}},
             "appliedAdditions": {},

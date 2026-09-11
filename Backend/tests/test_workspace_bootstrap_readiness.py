@@ -65,7 +65,6 @@ def _prepare_workspace(workspace: Path, *, requested: dict[str, object] | None =
             {
             "schemaVersion": 2,
             "templateRevision": "template-r1",
-            "releaseDigest": "sha256:" + "0" * 64,
             "requested": requested or {},
             "effective": effective or {},
             "appliedAdditions": {},

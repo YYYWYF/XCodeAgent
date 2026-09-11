@@ -47,7 +47,6 @@ def _write_current_plan(workspace: str, project_plan: dict) -> str:
                 {
                     "schemaVersion": 2,
                     "templateRevision": "prepare-build-test-r1",
-                    "releaseDigest": "sha256:" + "0" * 64,
                     "requested": {},
                     "effective": {},
                     "appliedAdditions": {},

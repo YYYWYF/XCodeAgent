@@ -26,7 +26,7 @@ def _state(capabilities: list[str]) -> dict[str, object]:
     """构造 login 或 login+authorization 的最小 V2 Capability State。"""
 
     enabled = {name: {"enabled": True, "config": {}} for name in capabilities}
-    return {"schemaVersion": 2, "templateRevision": "r1", "releaseDigest": "sha256:" + "a" * 64, "requested": enabled, "effective": enabled, "appliedAdditions": {}}
+    return {"schemaVersion": 2, "templateRevision": "r1", "requested": enabled, "effective": enabled, "appliedAdditions": {}}
 
 
 class TemplateReconcileV2E2ETests(unittest.TestCase):

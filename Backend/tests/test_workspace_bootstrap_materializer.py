@@ -29,7 +29,6 @@ def _template_state() -> TemplateStateV2:
     return TemplateStateV2.model_validate({
         "schemaVersion": 2,
         "templateRevision": "template-r1",
-        "releaseDigest": "sha256:" + "0" * 64,
         "requested": {},
         "effective": {},
         "appliedAdditions": {},

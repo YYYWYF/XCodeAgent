@@ -50,7 +50,6 @@ class TemplateStateV2(ProtocolV2Model):
 
     schemaVersion: Literal[2]
     templateRevision: NonBlankStringV2
-    releaseDigest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     requested: dict[CapabilityIdV2, CapabilityStateV2]
     effective: dict[CapabilityIdV2, CapabilityStateV2]
     appliedAdditions: dict[CapabilityIdV2, AppliedAdditionV2]

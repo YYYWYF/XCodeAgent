@@ -17,13 +17,12 @@ from app.services.template_reconcile.state_v2 import (
 )
 
 
-def _state(revision: str, release_hex: str) -> TemplateStateV2:
+def _state(revision: str) -> TemplateStateV2:
     """构造只用于 Commit 边界验证的最小 V2 State。"""
 
     return TemplateStateV2.model_validate({
         "schemaVersion": 2,
         "templateRevision": revision,
-        "releaseDigest": "sha256:" + release_hex * 64,
         "requested": {},
         "effective": {},
         "appliedAdditions": {},
@@ -51,8 +50,8 @@ class TemplateReconcileV2CommitTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            current = _state("r1", "a")
-            next_state = _state("r2", "b")
+            current = _state("r1")
+            next_state = _state("r2")
             _write_template_state_v2(root, current)
             package = root / "package.zip"
             package.write_bytes(b"package")

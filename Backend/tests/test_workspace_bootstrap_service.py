@@ -79,7 +79,6 @@ def _write_package(path: Path, *, include_application: bool) -> None:
     state = {
         "schemaVersion": 2,
         "templateRevision": "r1",
-        "releaseDigest": "sha256:" + "0" * 64,
         "requested": {},
         "effective": {},
         "appliedAdditions": {},

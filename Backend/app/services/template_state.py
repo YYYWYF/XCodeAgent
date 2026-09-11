@@ -82,7 +82,7 @@ def validate_template_context(value: Any) -> dict[str, Any]:
     capabilities = value.get("effective_capabilities")
     if not isinstance(revision, str) or not revision or not isinstance(capabilities, dict):
         raise TemplateStateError("template_context 的 revision 或 effective_capabilities 无效。")
-    state = {"schemaVersion": 2, "templateRevision": revision, "releaseDigest": "sha256:" + "0" * 64, "requested": {}, "effective": capabilities, "appliedAdditions": {}}
+    state = {"schemaVersion": 2, "templateRevision": revision, "requested": {}, "effective": capabilities, "appliedAdditions": {}}
     return {"state_path": TEMPLATE_STATE_RELATIVE_PATH.as_posix(), "template_revision": revision, "effective_capabilities": effective_capabilities(state)}
 
 

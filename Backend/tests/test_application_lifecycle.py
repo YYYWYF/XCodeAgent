@@ -284,7 +284,6 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 json.dumps({
                     "schemaVersion": 2,
                     "templateRevision": "r1",
-                    "releaseDigest": "sha256:" + "0" * 64,
                     "requested": {},
                     "effective": {},
                     "appliedAdditions": {},

@@ -46,7 +46,6 @@ class TemplatePackageTests(unittest.TestCase):
         return {
             "schemaVersion": 2,
             "templateRevision": "R1",
-            "releaseDigest": "sha256:" + "0" * 64,
             "requested": {},
             "effective": {},
             "appliedAdditions": {},

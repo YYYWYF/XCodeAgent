@@ -1782,7 +1782,6 @@ nextTemplateState.requested / effective 必须分别与 currentTemplateState 相
 ```text
 schemaVersion
 templateRevision
-releaseDigest
 requested
 effective
 appliedAdditions

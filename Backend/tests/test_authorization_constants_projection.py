@@ -55,9 +55,7 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
             target = self._write_auth_template_contract(workspace)
             state = workspace / ".xcodeagent/template-state.json"
             state.write_text(
-                '{"schemaVersion":2,"templateRevision":"r1","releaseDigest":"sha256:'
-                + "0" * 64
-                + '","requested":{},"effective":{},"appliedAdditions":{}}',
+                '{"schemaVersion":2,"templateRevision":"r1","requested":{},"effective":{},"appliedAdditions":{}}',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(AuthorizationConstantsProjectionError, "effective"):
@@ -73,9 +71,7 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
         state = workspace / ".xcodeagent/template-state.json"
         state.parent.mkdir(parents=True)
         state.write_text(
-            '{"schemaVersion":2,"templateRevision":"r1","releaseDigest":"sha256:'
-            + "0" * 64
-            + '","requested":{"authorization":{"enabled":true,"config":{}}},'
+            '{"schemaVersion":2,"templateRevision":"r1","requested":{"authorization":{"enabled":true,"config":{}}},'
             '"effective":{"authorization":{"enabled":true,"config":{}}},"appliedAdditions":{}}',
             encoding="utf-8",
         )
