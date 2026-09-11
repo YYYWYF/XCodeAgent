@@ -2774,20 +2774,26 @@ export default function AiChatPanel({
     [allSessions, application.id, planningSessionLookupKey, planningSessionPhase]
   )
   const existingPlanningSessionThreadId = existingPlanningSession?.threadId
-  const pendingDagExecution = useMemo(
-    () => pendingDagConfirmationExecution(applicationLifecycle),
-    [applicationLifecycle]
-  )
   const pendingDagDeclaredSessionId = pendingDagOwnerSessionId(applicationLifecycle) || ''
+  const pendingDagDeclaredSession = useMemo(
+    () =>
+      pendingDagDeclaredSessionId
+        ? allSessions.find((session) => session.id === pendingDagDeclaredSessionId)
+        : undefined,
+    [allSessions, pendingDagDeclaredSessionId]
+  )
+  const pendingDagExecution = useMemo(
+    () =>
+      pendingDagConfirmationExecution(applicationLifecycle, pendingDagDeclaredSession?.threadId),
+    [applicationLifecycle, pendingDagDeclaredSession?.threadId]
+  )
   const pendingDagSession = useMemo(
     () =>
-      (pendingDagDeclaredSessionId
-        ? allSessions.find((session) => session.id === pendingDagDeclaredSessionId)
-        : undefined) ||
+      pendingDagDeclaredSession ||
       (!pendingDagDeclaredSessionId && pendingDagExecution
         ? allSessions.find((session) => session.threadId === pendingDagExecution.threadId)
         : undefined),
-    [allSessions, pendingDagDeclaredSessionId, pendingDagExecution]
+    [allSessions, pendingDagDeclaredSession, pendingDagDeclaredSessionId, pendingDagExecution]
   )
   // owner 字段尚未随 lifecycle 到达时，只允许用 execution 的精确 thread 识别当前页面对话；
   // 不扫描消息内容，也不把 Workflow Run 当作长期 owner。

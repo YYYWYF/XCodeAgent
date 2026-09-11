@@ -540,7 +540,6 @@ test('refresh Pending 使用 Backend 确认投影，stale chat message 不能覆
         status: 'awaiting_confirmation',
         planningRunId: 'planning-current',
         workflowRunId: 'workflow-current',
-        threadId: 'thread-current',
         ownerSessionId: 'session-current',
         draftDigest: 'd'.repeat(64),
         buildExecutionScope: { type: 'page', targetId: 'orders' },
@@ -897,7 +896,6 @@ test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控�
         status: 'awaiting_confirmation',
         planningRunId: 'planning-pending',
         workflowRunId: 'workflow-pending',
-        threadId: 'thread-pending',
         ownerSessionId: 'session-pending',
         draftDigest: 'c'.repeat(64),
         confirmation: {
@@ -928,7 +926,7 @@ test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控�
     }
   } as unknown as ApplicationLifecycle
 
-  const pendingExecution = pendingDagConfirmationExecution(pendingLifecycle)
+  const pendingExecution = pendingDagConfirmationExecution(pendingLifecycle, 'thread-pending')
   const pendingWorkflow = pendingDagConfirmationWorkflow([], pendingExecution, pendingLifecycle)
   assert.deepEqual(pendingWorkflow?.summary.clarification?.actionValues, [
     'confirm',
@@ -937,6 +935,84 @@ test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控�
   ])
   assert.equal(pendingDagOwnerSessionId(pendingLifecycle), 'session-pending')
   assert.equal(pendingDagConfirmationExecution(generatingLifecycle), undefined)
+})
+
+test('PendingPlan recovery 缺少 threadId 仍按 owner、WorkflowRunId 和 DraftIdentity 激活确认卡', () => {
+  const planningRefresh = {
+    schemaVersion: 'planning-refresh.v1',
+    source: 'pending_plan',
+    status: 'awaiting_confirmation',
+    planningRunId: 'planning-recovered',
+    workflowRunId: 'workflow-recovered',
+    ownerSessionId: 'session-owner',
+    draftDigest: 'a'.repeat(64),
+    buildExecutionScope: { type: 'page', targetId: 'orders' },
+    confirmation: {
+      mode: 'build_task_plan_confirmation',
+      status: 'requires_user_input',
+      draftIdentity: {
+        ownerSessionId: 'session-owner',
+        planningRunId: 'planning-recovered',
+        draftDigest: 'a'.repeat(64)
+      },
+      taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+    },
+    message: '已从 PendingPlan 恢复待确认任务规划。'
+  }
+  const lifecycle = {
+    application: { id: 'app-recovered' },
+    revision: 12,
+    updatedAt: '2026-09-11T00:00:00Z',
+    activeExecutions: {},
+    extensions: { planningRefresh }
+  } as unknown as ApplicationLifecycle
+
+  // Backend 不返回 threadId；只使用 owner session 已有的真实 thread 恢复 renderer execution。
+  assert.equal(pendingDagConfirmationExecution(lifecycle), undefined)
+  const recoveredExecution = pendingDagConfirmationExecution(lifecycle, 'thread-owner')
+  const recoveredWorkflow = pendingDagConfirmationWorkflow([], recoveredExecution, lifecycle)
+  assert.equal(recoveredExecution?.threadId, 'thread-owner')
+  assert.equal(recoveredWorkflow?.runId, 'workflow-recovered')
+  assert.equal(workflowInteractionAvailability(recoveredWorkflow!, lifecycle), 'active')
+
+  const clarification = recoveredWorkflow!.summary.clarification!
+  const ownerMismatchWorkflow = {
+    ...recoveredWorkflow,
+    summary: {
+      ...recoveredWorkflow!.summary,
+      clarification: {
+        ...clarification,
+        draftIdentity: { ...clarification.draftIdentity, ownerSessionId: 'session-other' }
+      }
+    }
+  } as unknown as WorkflowRunPayload
+  assert.equal(workflowInteractionAvailability(ownerMismatchWorkflow, lifecycle), 'stale')
+
+  const draftMismatchWorkflow = {
+    ...recoveredWorkflow,
+    summary: {
+      ...recoveredWorkflow!.summary,
+      clarification: {
+        ...clarification,
+        draftIdentity: { ...clarification.draftIdentity, draftDigest: 'b'.repeat(64) }
+      }
+    }
+  } as unknown as WorkflowRunPayload
+  assert.equal(workflowInteractionAvailability(draftMismatchWorkflow, lifecycle), 'stale')
+
+  assert.equal(
+    workflowInteractionAvailability(
+      { ...recoveredWorkflow, runId: 'workflow-other' } as WorkflowRunPayload,
+      lifecycle
+    ),
+    'stale'
+  )
+
+  const threadBoundLifecycle = {
+    ...lifecycle,
+    extensions: { planningRefresh: { ...planningRefresh, threadId: 'thread-other' } }
+  } as unknown as ApplicationLifecycle
+  assert.equal(workflowInteractionAvailability(recoveredWorkflow!, threadBoundLifecycle), 'stale')
 })
 
 test('旧 planning refresh 不能否决已经进入 awaiting_user 的 DAG execution', () => {
@@ -1046,7 +1122,6 @@ test('同 run/thread 的旧 DAG 卡不能越过工作区唯一 Pending 的 Draft
         status: 'awaiting_confirmation',
         planningRunId: 'planning-regenerated',
         workflowRunId: execution.runId,
-        threadId: execution.threadId,
         ownerSessionId: 'session-dag-transition',
         draftDigest: regeneratedDigest,
         confirmation: {
@@ -1107,7 +1182,6 @@ test('planningRefresh 独立校准但拒绝与当前 Pending execution 冲突的
         status: 'awaiting_confirmation',
         planningRunId: 'planning-dag-transition',
         workflowRunId: 'workflow-dag-transition',
-        threadId: 'thread-dag-transition',
         draftDigest: DAG_DRAFT_DIGEST,
         message: '磁盘 Pending 校准。'
       }
@@ -1176,7 +1250,6 @@ test('首次 DAG generation-complete 触发 lifecycle refresh 并取得 pending 
     status: 'awaiting_confirmation',
     planningRunId: 'planning-a',
     workflowRunId: finalWorkflow.runId,
-    threadId: finalWorkflow.threadId,
     ownerSessionId: 'session-a',
     message: '已读取当前 PendingPlan。'
   })
@@ -1194,10 +1267,7 @@ test('首次 DAG generation-complete 触发 lifecycle refresh 并取得 pending 
   assert.equal(refreshed, true)
   assert.equal(refreshCount, 1)
   assert.equal(refreshedLifecycle?.extensions.planningRefresh?.source, 'pending_plan')
-  assert.equal(
-    refreshedLifecycle?.extensions.planningRefresh?.status,
-    'awaiting_confirmation'
-  )
+  assert.equal(refreshedLifecycle?.extensions.planningRefresh?.status, 'awaiting_confirmation')
 })
 
 test('Abandon 后再次手动生成仍刷新，Confirm/Abandon/Regenerate 不重复走 generation refresh', async () => {

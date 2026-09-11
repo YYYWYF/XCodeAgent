@@ -84,6 +84,7 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
         self.assertEqual(recovered["status"], "awaiting_confirmation")
         self.assertEqual(recovered["planningRunId"], self.planning.planning_run_id)
         self.assertEqual(recovered["workflowRunId"], self.planning.workflow_run_id)
+        self.assertNotIn("threadId", recovered)
         self.assertEqual(recovered["ownerSessionId"], "session-refresh-owner")
         self.assertEqual(
             recovered["buildExecutionScope"],

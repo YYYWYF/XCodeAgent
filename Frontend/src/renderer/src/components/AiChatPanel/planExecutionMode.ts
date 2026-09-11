@@ -67,6 +67,19 @@ function dagDraftIdentity(value: unknown): string | undefined {
     : undefined
 }
 
+/** 从 DAG DraftIdentity 读取页面会话归属，避免恢复卡跨 owner session 操作。 */
+function dagDraftOwnerSessionId(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const draftIdentity = (value as { draftIdentity?: unknown }).draftIdentity
+  if (!draftIdentity || typeof draftIdentity !== 'object' || Array.isArray(draftIdentity)) {
+    return undefined
+  }
+  const ownerSessionId = String(
+    (draftIdentity as Record<string, unknown>).ownerSessionId || ''
+  ).trim()
+  return ownerSessionId || undefined
+}
+
 /** 读取 Workflow 当前确认卡的稳定草稿身份。 */
 function workflowDagDraftIdentity(workflow: WorkflowRunPayload): string | undefined {
   const candidates = [
@@ -76,6 +89,17 @@ function workflowDagDraftIdentity(workflow: WorkflowRunPayload): string | undefi
     workflow.result?.clarification
   ]
   return candidates.map(dagDraftIdentity).find(Boolean)
+}
+
+/** 读取当前 Workflow 确认卡中的 PendingPlan owner session。 */
+function workflowDagOwnerSessionId(workflow: WorkflowRunPayload): string | undefined {
+  const candidates = [
+    workflow.summary.clarification,
+    workflow.summary.buildTaskPlanConfirmation,
+    workflow.state?.clarification,
+    workflow.result?.clarification
+  ]
+  return candidates.map(dagDraftOwnerSessionId).find(Boolean)
 }
 
 /** 根据后端权威生命周期判断历史 Workflow 确认是否仍可提交。 */
@@ -185,10 +209,16 @@ function recoveredPendingInteractionMatches(
   )
   const workflowDraftIdentity = workflowDagDraftIdentity(workflow)
   const recoveryDraftIdentity = dagDraftIdentity(recovery.confirmation)
+  const recoveryOwnerSessionId = String(recovery.ownerSessionId || '').trim()
+  const workflowOwnerSessionId = workflowDagOwnerSessionId(workflow)
+  const recoveryThreadId = String(recovery.threadId || '').trim()
   return (
     workflowMode === 'build_task_plan_confirmation' &&
     recovery.workflowRunId === workflow.runId &&
-    recovery.threadId === workflow.threadId &&
+    // PendingPlan 当前契约不持久化 threadId；若 GET projection 额外带出它，再做一致性校验。
+    (!recoveryThreadId || recoveryThreadId === workflow.threadId) &&
+    Boolean(recoveryOwnerSessionId) &&
+    workflowOwnerSessionId === recoveryOwnerSessionId &&
     Boolean(workflowDraftIdentity) &&
     workflowDraftIdentity === recoveryDraftIdentity
   )

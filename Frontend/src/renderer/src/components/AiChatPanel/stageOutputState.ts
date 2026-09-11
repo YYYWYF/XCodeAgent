@@ -114,9 +114,13 @@ function latestPendingDagExecution(
     }, undefined)
 }
 
-/** 从持久化生命周期中读取当前唯一的 Build DAG 待确认 execution。 */
+/** 从持久化生命周期中读取当前唯一的 Build DAG 待确认 execution。
+ *  Backend PendingPlan 不持久化 threadId；合成恢复 execution 时只接受 owner session
+ * 已有的真实 threadId 作为 renderer 上下文，不根据 workflowRunId 伪造 threadId。
+ */
 export function pendingDagConfirmationExecution(
-  lifecycle: ApplicationLifecycle | undefined
+  lifecycle: ApplicationLifecycle | undefined,
+  ownerSessionThreadId?: string
 ): WorkbenchExecution | undefined {
   const recovery = planningRefreshState(lifecycle)
   const pending = latestPendingDagExecution(lifecycle)
@@ -145,14 +149,17 @@ export function pendingDagConfirmationExecution(
           )
         : pending
       if (identityMatchedPending) return identityMatchedPending
-      if (!recovery.workflowRunId || !recovery.threadId) return undefined
+      const threadId = String(
+        recovery.threadId || ownerSessionThreadId || exact?.threadId || ''
+      ).trim()
+      if (!recovery.workflowRunId || !threadId) return undefined
       const now = lifecycle?.updatedAt || new Date(0).toISOString()
       const scope = recovery.buildExecutionScope || { type: 'application', targetId: 'application' }
       return {
         scope: scope.type,
         targetId: scope.targetId || 'application',
         pageId: scope.type === 'page' ? scope.targetId : undefined,
-        threadId: recovery.threadId,
+        threadId,
         runId: recovery.workflowRunId,
         phase: 'prepare_build_tasks',
         status: 'awaiting_user',
