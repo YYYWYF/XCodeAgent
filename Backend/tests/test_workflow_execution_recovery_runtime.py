@@ -252,7 +252,8 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(record)
         assert record is not None
         self.assertEqual(record.status.value, "failed")
-        self.assertIn('"type":"RUN_FINISHED"', "".join(frames))
+        self.assertIn('"type":"RUN_ERROR"', "".join(frames))
+        self.assertNotIn('"type":"RUN_FINISHED"', "".join(frames))
 
     async def test_cancel_captures_running_node_as_uncompleted(self) -> None:
         """B 正在阻塞时取消 Runtime，Execution 必须仍指向 B 且状态为 cancelled。"""
