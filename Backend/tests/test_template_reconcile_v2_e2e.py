@@ -16,7 +16,6 @@ from app.services.template_reconcile.runtime_v2 import ReconcileAttemptV2, persi
 from app.services.template_reconcile.service import (
     TemplateReconcileService,
     _state_digest,
-    reconcile_mode_for_requested_config,
 )
 from app.services.template_reconcile.state_v2 import load_template_state_v2, write_template_state_v2
 from app.services.workspace_bootstrap.models import TemplatePackageDownload
@@ -31,24 +30,6 @@ def _state(capabilities: list[str]) -> dict[str, object]:
 
 class TemplateReconcileV2E2ETests(unittest.TestCase):
     """确认 V2 生产编排不再走旧 ChangeSet、Git rollback 或 Health 路径。"""
-
-    def test_product_mode_uses_apply_for_requested_change_and_reconcile_for_drift_convergence(self) -> None:
-        """产品入口必须用 requested 差异决定 APPLY，并把相同请求路由到 RECONCILE。"""
-
-        current = load_template_state_v2_from(_state(["login"]))
-        self.assertEqual(
-            "RECONCILE",
-            reconcile_mode_for_requested_config(
-                current, {"capabilities": {"login": {"enabled": True, "config": {}}}}
-            ),
-        )
-        self.assertEqual(
-            "APPLY",
-            reconcile_mode_for_requested_config(
-                current,
-                {"capabilities": {"login": {"enabled": True, "config": {}}, "authorization": {"enabled": True, "config": {}}}},
-            ),
-        )
 
     def test_login_to_authorization_apply_then_reconcile_is_idempotent(self) -> None:
         """共享 routes 文件经过 APPLY 与 RECONCILE 后只有一个受管理结构且 State 仅在验收后推进。"""

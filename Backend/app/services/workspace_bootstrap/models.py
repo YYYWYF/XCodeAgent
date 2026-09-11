@@ -35,6 +35,19 @@ class TemplateEngineError(WorkspaceBootstrapError):
 
     code = "TEMPLATE_ENGINE_UNAVAILABLE"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        engine_error: dict[str, object] | None = None,
+        http_status: int | None = None,
+    ) -> None:
+        """保留 Engine 标准错误字段及 HTTP status，供上层 AG-UI 错误投影和诊断读取。"""
+
+        super().__init__(message)
+        self.engine_error = engine_error
+        self.http_status = http_status
+
 
 class WorkspaceBootstrapReadinessError(WorkspaceBootstrapError):
     """表示提交前工作区未满足 Bootstrap 就绪契约。"""

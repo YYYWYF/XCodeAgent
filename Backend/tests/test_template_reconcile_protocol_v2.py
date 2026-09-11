@@ -28,6 +28,9 @@ from app.services.template_reconcile.strategy_update_package import (
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError
 
 
+_FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "template_reconcile"
+
+
 def _state() -> dict[str, object]:
     """构造包含 login 的最小 V2 State fixture。"""
 
@@ -243,3 +246,19 @@ class TemplateReconcileProtocolV2Tests(unittest.TestCase):
                 validate_strategy_update_package(
                     archive_path, ArchiveLimits(1024 * 1024, 100, 1024 * 1024)
                 )
+
+    def test_parses_fixed_apply_and_reconcile_contract_fixtures(self) -> None:
+        """确认双端冻结 Fixture 覆盖 APPLY、RECONCILE、锚点、selector 与 JSON expected 后均可完整解析。"""
+
+        apply = StrategyUpdatePackageV2.model_validate_json(
+            (_FIXTURE_ROOT / "v2-apply-contract-package.json").read_text(encoding="utf-8")
+        )
+        reconcile = StrategyUpdatePackageV2.model_validate_json(
+            (_FIXTURE_ROOT / "v2-reconcile-contract-package.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("APPLY", apply.mode)
+        self.assertEqual("TEXT_ANCHOR_INSERT", apply.strategies[0].type)
+        self.assertEqual("routes", apply.strategies[1].parameters["astSelector"]["name"])
+        self.assertEqual("RECONCILE", reconcile.mode)
+        self.assertEqual("beforeEnd", reconcile.strategies[0].parameters["astSelector"]["position"])
+        self.assertEqual("18.3.1", reconcile.validationPlan[0].checks[0].expected)

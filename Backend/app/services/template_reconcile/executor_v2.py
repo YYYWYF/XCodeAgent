@@ -104,20 +104,31 @@ class ModificationStrategyExecutorV2:
             raise StrategyExecutionV2Error("ADDITION_TARGET_CONFLICT：ADD_FILE 目标已有不同内容。")
 
     def _text_anchor_insert(self, strategy: StrategyDescriptorV2, store: WorkingCopyStoreV2, payloads: dict[str, str]) -> None:
-        """在唯一锚点前后插入不可变内容，并用完整内容判断幂等。"""
+        """以成对 managed marker 收敛文本块；已有块只原位替换，不完整标记立即失败关闭。"""
 
         entry = _existing_text_entry(strategy, store)
         insertion = _strategy_content(strategy, payloads)
-        if insertion in str(entry.working_content):
+        marker = _required_string(strategy.parameters, "managedMarker")
+        content = str(entry.working_content)
+        existing_block = _managed_marker_block(content, marker)
+        expected_block = _managed_marker_block(insertion, marker)
+        if existing_block is not None:
+            if expected_block is None:
+                raise StrategyExecutionV2Error("TEXT_ANCHOR_INSERT 的 content 必须包含一对 managedMarker begin/end。")
+            if content[existing_block[0]:existing_block[1]] == insertion:
+                return
+            entry.working_content = content[:existing_block[0]] + insertion + content[existing_block[1]:]
+            entry.changed = True
             return
+        if expected_block is None:
+            raise StrategyExecutionV2Error("TEXT_ANCHOR_INSERT 的 content 必须包含一对 managedMarker begin/end。")
         anchor = _required_string(strategy.parameters, "anchor")
-        occurrences = str(entry.working_content).count(anchor)
+        occurrences = content.count(anchor)
         if occurrences != 1:
             raise StrategyExecutionV2Error("TEXT_ANCHOR_INSERT 的 anchor 必须在目标中唯一。")
         position = str(strategy.parameters.get("position", "before"))
         if position not in {"before", "after"}:
             raise StrategyExecutionV2Error("TEXT_ANCHOR_INSERT 的 position 必须是 before 或 after。")
-        content = str(entry.working_content)
         offset = content.index(anchor) + (len(anchor) if position == "after" else 0)
         entry.working_content = content[:offset] + insertion + content[offset:]
         entry.changed = True
@@ -207,6 +218,44 @@ class ModificationStrategyExecutorV2:
         except StrategyAstV2Error as exc:
             raise StrategyExecutionV2Error(str(exc)) from exc
         entry.changed = True
+
+
+def _managed_marker_block(content: str, marker: str) -> tuple[int, int] | None:
+    """返回唯一 managed block 的整行范围；缺失可插入，不完整、重复或倒序标记必须失败关闭。"""
+
+    begin = f"{marker}:begin"
+    end = f"{marker}:end"
+    begin_positions = _all_positions(content, begin)
+    end_positions = _all_positions(content, end)
+    if not begin_positions and not end_positions:
+        return None
+    if len(begin_positions) != 1 or len(end_positions) != 1 or begin_positions[0] >= end_positions[0]:
+        raise StrategyExecutionV2Error("TEXT_ANCHOR_INSERT 的 managedMarker begin/end 必须各唯一且顺序完整。")
+    return _line_start(content, begin_positions[0]), _line_end(content, end_positions[0])
+
+
+def _all_positions(content: str, token: str) -> list[int]:
+    """返回 token 的全部非重叠位置，供 managed marker 的重复检测使用。"""
+
+    positions: list[int] = []
+    offset = 0
+    while (position := content.find(token, offset)) >= 0:
+        positions.append(position)
+        offset = position + len(token)
+    return positions
+
+
+def _line_start(content: str, position: int) -> int:
+    """定位 marker 所在行的起始位置，使替换不会遗留注释前缀。"""
+
+    return content.rfind("\n", 0, position) + 1
+
+
+def _line_end(content: str, position: int) -> int:
+    """定位 marker 所在行的结尾并包含换行，使整块替换保持原位边界。"""
+
+    line_end = content.find("\n", position)
+    return len(content) if line_end < 0 else line_end + 1
 
 
 def apply_working_copy_v2(workspace: str | Path, store: WorkingCopyStoreV2) -> None:

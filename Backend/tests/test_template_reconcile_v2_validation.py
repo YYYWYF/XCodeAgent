@@ -35,6 +35,12 @@ class TemplateReconcileV2ValidationTests(unittest.TestCase):
             self.assertTrue(results[0].passed)
             self.assertTrue(validation_plan_passed_v2(results))
 
+    def test_json_structure_check_retains_optional_expected_until_dual_end_sync(self) -> None:
+        """确认 DTO 在双端同步收紧前仍接受旧 Package，执行器始终按 value == expected 语义处理。"""
+
+        item = _item(type="JSON_STRUCTURE_CHECK", path="package.json", pointer="/dependencies/demo", expected=None)
+        self.assertIsNone(item.expected)
+
     def test_blocking_postcondition_failure_stops_following_validations(self) -> None:
         """阻断性后置条件失败时不能继续生成误导性的后续通过结果。"""
 

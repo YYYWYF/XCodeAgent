@@ -1,0 +1,73 @@
+{
+  "protocolVersion": "2",
+  "packageId": "contract-apply",
+  "mode": "APPLY",
+  "sourceRevision": "2026.09.11.1",
+  "currentStateDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "nextStateDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "strategies": [
+    {
+      "strategyId": "managed-anchor",
+      "index": 0,
+      "schemaVersion": 1,
+      "type": "TEXT_ANCHOR_INSERT",
+      "target": "frontend/src/routes.tsx",
+      "precondition": {},
+      "parameters": {
+        "anchor": "const routes = [",
+        "position": "after",
+        "managedMarker": "xcodeagent:login-route",
+        "content": "// xcodeagent:login-route:begin\n{ path: '/login' },\n// xcodeagent:login-route:end\n"
+      },
+      "payloadRef": null
+    },
+    {
+      "strategyId": "named-route",
+      "index": 1,
+      "schemaVersion": 1,
+      "type": "ENSURE_ROUTE",
+      "target": "frontend/src/routes.tsx",
+      "precondition": {},
+      "parameters": {
+        "astSelector": {
+          "nodeType": "variable_declarator",
+          "position": "after",
+          "name": "routes"
+        },
+        "managedMarker": "xcodeagent:route-registration",
+        "content": "// xcodeagent:route-registration\n"
+      },
+      "payloadRef": null
+    }
+  ],
+  "validationPlan": [
+    {
+      "validationId": "login-package-json",
+      "index": 0,
+      "type": "JSON_STRUCTURE_CHECK",
+      "capabilityId": null,
+      "workingDirectory": ".",
+      "path": "frontend/package.json",
+      "containsAll": null,
+      "pointer": "/dependencies/react",
+      "expected": "18.3.1",
+      "checks": null,
+      "blocking": true,
+      "timeoutSeconds": 30,
+      "executionMode": "REAL_WORKSPACE"
+    }
+  ],
+  "payloadManifest": {},
+  "nextTemplateState": {
+    "schemaVersion": 2,
+    "templateRevision": "2026.09.11.1",
+    "requested": {
+      "login": { "enabled": true, "config": {} }
+    },
+    "effective": {
+      "login": { "enabled": true, "config": {} }
+    },
+    "appliedAdditions": {}
+  },
+  "diagnostics": []
+}

@@ -60,7 +60,7 @@ class TemplateReconcileV2RuntimeTests(unittest.TestCase):
             target = root / "src/routes.tsx"
             target.write_text("const routes = [\n  // routes\n];\n", encoding="utf-8")
             strategies = [
-                StrategyDescriptorV2.model_validate({"strategyId": "anchor", "index": 0, "schemaVersion": 1, "type": "TEXT_ANCHOR_INSERT", "target": "src/routes.tsx", "parameters": {"anchor": "  // routes", "content": "  { path: '/a' },\n"}}),
+                StrategyDescriptorV2.model_validate({"strategyId": "anchor", "index": 0, "schemaVersion": 1, "type": "TEXT_ANCHOR_INSERT", "target": "src/routes.tsx", "parameters": {"anchor": "  // routes", "managedMarker": "xcodeagent:route:a", "content": "  // xcodeagent:route:a:begin\n  { path: '/a' },\n  // xcodeagent:route:a:end\n"}}),
                 StrategyDescriptorV2.model_validate({"strategyId": "route", "index": 1, "schemaVersion": 1, "type": "ENSURE_ROUTE", "target": "src/routes.tsx", "parameters": {"astSelector": {"nodeType": "array", "position": "beforeEnd"}, "managedMarker": "xcodeagent:route:b", "content": "  // xcodeagent:route:b\n  { path: '/b' },\n"}}),
             ]
             executor = ModificationStrategyExecutorV2()
@@ -72,6 +72,34 @@ class TemplateReconcileV2RuntimeTests(unittest.TestCase):
             executor.execute(strategies, retry, {})
             self.assertEqual([], retry.changed_entries())
             self.assertIn("xcodeagent:route:b", first)
+
+    def test_text_anchor_insert_replaces_changed_managed_block_in_place(self) -> None:
+        """确认同一 managedMarker 的完整块内容变化时只替换该块，内容相同则不写盘。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "routes.tsx"
+            target.write_text("before\n// xcodeagent:route:a:begin\nold\n// xcodeagent:route:a:end\nafter\n", encoding="utf-8")
+            strategy = StrategyDescriptorV2.model_validate({"strategyId": "anchor", "index": 0, "schemaVersion": 1, "type": "TEXT_ANCHOR_INSERT", "target": "routes.tsx", "parameters": {"anchor": "unused", "managedMarker": "xcodeagent:route:a", "content": "// xcodeagent:route:a:begin\nnew\n// xcodeagent:route:a:end\n"}})
+            store = WorkingCopyStoreV2(root)
+            ModificationStrategyExecutorV2().execute([strategy], store, {})
+            self.assertEqual("before\n// xcodeagent:route:a:begin\nnew\n// xcodeagent:route:a:end\nafter\n", store.entry("routes.tsx").working_content)
+            self.assertTrue(store.changed_entries())
+            apply_working_copy_v2(root, store)
+            retry = WorkingCopyStoreV2(root)
+            ModificationStrategyExecutorV2().execute([strategy], retry, {})
+            self.assertEqual([], retry.changed_entries())
+
+    def test_text_anchor_insert_rejects_incomplete_or_duplicate_managed_markers(self) -> None:
+        """确认 begin/end 缺失、重复或倒序时不允许猜测修复并必须失败关闭。"""
+
+        strategy = StrategyDescriptorV2.model_validate({"strategyId": "anchor", "index": 0, "schemaVersion": 1, "type": "TEXT_ANCHOR_INSERT", "target": "routes.tsx", "parameters": {"anchor": "anchor", "managedMarker": "xcodeagent:route:a", "content": "// xcodeagent:route:a:begin\nnew\n// xcodeagent:route:a:end\n"}})
+        for source in ("// xcodeagent:route:a:begin\nold\n", "// xcodeagent:route:a:begin\n// xcodeagent:route:a:end\n// xcodeagent:route:a:end\n", "// xcodeagent:route:a:end\nold\n// xcodeagent:route:a:begin\n"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "routes.tsx").write_text(source, encoding="utf-8")
+                with self.assertRaisesRegex(StrategyExecutionV2Error, "managedMarker begin/end"):
+                    ModificationStrategyExecutorV2().execute([strategy], WorkingCopyStoreV2(root), {})
 
     def test_npm_dependency_conflict_is_rejected(self) -> None:
         """验证 JSON 依赖 Handler 不会静默覆盖业务锁定的依赖版本。"""

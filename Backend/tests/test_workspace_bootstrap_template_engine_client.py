@@ -75,3 +75,22 @@ class TemplateEngineClientTests(unittest.TestCase):
         self.assertIn("模板更新请求已发起", rendered)
         self.assertIn("模板更新接口已响应", rendered)
         self.assertIn("模板更新接口返回无变更", rendered)
+
+    def test_update_preserves_engine_error_json(self) -> None:
+        """确认 Engine 失败 JSON 的 code、status、message 不会被通用 HTTP 错误覆盖。"""
+
+        transport = httpx.MockTransport(
+            lambda _request: httpx.Response(409, json={"code": "RECONCILE_STATE_CHANGE_REQUIRED", "message": "必须使用 APPLY", "details": {"currentRevision": "v1"}, "traceId": "trace-123"})
+        )
+        factory = lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs)
+        client = TemplateEngineClient(base_url="http://engine", token="token", connect_timeout=1, read_timeout=1, max_package_bytes=100, client_factory=factory)
+
+        with self.assertRaises(TemplateEngineError) as raised:
+            asyncio.run(client.update({"templateRevision": "v1"}, {"capabilities": {}}))
+
+        self.assertEqual(
+            {"code": "RECONCILE_STATE_CHANGE_REQUIRED", "message": "必须使用 APPLY", "details": {"currentRevision": "v1"}, "traceId": "trace-123"},
+            raised.exception.engine_error,
+        )
+        self.assertEqual(409, raised.exception.http_status)
+        self.assertIn('"traceId":"trace-123"', str(raised.exception))

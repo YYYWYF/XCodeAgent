@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import tempfile
@@ -46,7 +47,7 @@ class TemplateEngineClient:
             async with self._client_factory(timeout=timeout) as client:
                 async with client.stream("POST", f"{self._base_url}/v1/generate", json={"requestedConfig": requested_config}, headers={"Authorization": f"Bearer {self._token}", "Accept": "application/zip"}) as response:
                     if response.status_code >= 400:
-                        raise TemplateEngineError(f"Template Engine 拒绝请求（HTTP {response.status_code}）。")
+                        raise _engine_response_error(response, "Template Engine 拒绝请求")
                     content_type = response.headers.get("content-type")
                     if not content_type or not content_type.lower().startswith("application/zip"):
                         raise TemplateEngineError("Template Engine 未返回 application/zip。")
@@ -122,7 +123,7 @@ class TemplateEngineClient:
                         logger.info("模板更新接口返回无变更（HTTP 204）。")
                         return None
                     if response.status_code >= 400:
-                        raise TemplateEngineError(f"Template Engine 拒绝更新请求（HTTP {response.status_code}）。")
+                        raise _engine_response_error(response, "Template Engine 拒绝更新请求")
                     content_type = response.headers.get("content-type")
                     if not content_type or not content_type.lower().startswith("application/zip"):
                         raise TemplateEngineError("Template Engine 更新未返回 application/zip。")
@@ -151,3 +152,24 @@ class TemplateEngineClient:
                 os.close(descriptor)
             temporary_path.unlink(missing_ok=True)
             raise
+
+
+def _engine_response_error(response: httpx.Response, prefix: str) -> TemplateEngineError:
+    """从 Engine 标准错误 JSON 保留 code、message、details、traceId 及 HTTP status。"""
+
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = None
+    if isinstance(payload, dict) and all(key in payload for key in ("code", "message")):
+        engine_error = {
+            key: payload[key]
+            for key in ("code", "message", "details", "traceId")
+            if key in payload
+        }
+        return TemplateEngineError(
+            f"{prefix}（HTTP {response.status_code}）：{json.dumps(engine_error, ensure_ascii=False, separators=(',', ':'))}",
+            engine_error=engine_error,
+            http_status=response.status_code,
+        )
+    return TemplateEngineError(f"{prefix}（HTTP {response.status_code}）。", http_status=response.status_code)

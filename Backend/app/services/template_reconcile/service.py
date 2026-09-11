@@ -159,12 +159,6 @@ class TemplateReconcileService:
         return ArchiveLimits(self._settings.template_package_max_bytes, self._settings.template_package_max_files, self._settings.template_package_max_extracted_bytes)
 
 
-def reconcile_mode_for_requested_config(current: TemplateStateV2, requested_config: dict[str, Any]) -> Literal["APPLY", "RECONCILE"]:
-    """按请求配置与当前 State.requested 的语义差异选择产品唯一的更新模式。"""
-
-    return "RECONCILE" if _normalized_requested_config(requested_config) == _requested_from_state(current) else "APPLY"
-
-
 def _normalized_requested_config(value: dict[str, Any]) -> dict[str, Any]:
     """归一 Engine requestedConfig，供 RECONCILE 严格比较当前 requested。"""
 
