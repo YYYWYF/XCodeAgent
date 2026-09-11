@@ -82,7 +82,11 @@ import {
   reduceApplicationPlanningCurrentState,
   type ApplicationPlanningCurrentState
 } from '../src/renderer/src/service/activeApplicationPlanning'
-import { resolvePlanningMessageWorkflow } from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningMessageWorkflow'
+import {
+  planningMessageActionsDisabled,
+  planningMessageHostsSyncError,
+  resolvePlanningMessageWorkflow
+} from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningMessageWorkflow'
 
 const canonicalPlanningApplication = {
   id: 'canonical-app',
@@ -197,6 +201,11 @@ assert.equal(
   ),
   historicalCompletedWorkflow
 )
+
+assert.equal(planningMessageHostsSyncError('状态未同步', 2), true)
+assert.equal(planningMessageHostsSyncError('状态未同步', -1), false)
+assert.equal(planningMessageActionsDisabled(true, true), true)
+assert.equal(planningMessageActionsDisabled(false, true), false)
 
 const technicalPlanGenerationErrorWorkflow = {
   ...canonicalTechnicalPlanWorkflow,

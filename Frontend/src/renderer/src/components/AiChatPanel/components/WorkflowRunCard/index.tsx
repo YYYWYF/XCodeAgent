@@ -999,7 +999,12 @@ function RequirementSpecConfirmationCard({
         footer={
           <div className={cx('requirement-spec-edit-modal-actions')}>
             <Button onClick={cancelEditing}>取消</Button>
-            <Button loading={saving} onClick={() => void saveAndClose()} type="primary">
+            <Button
+              disabled={disabled}
+              loading={saving}
+              onClick={() => void saveAndClose()}
+              type="primary"
+            >
               保存并退出编辑
             </Button>
           </div>

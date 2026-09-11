@@ -245,6 +245,7 @@ export class ApplicationPlanningRuntime {
 
   /** 保存需求草稿后更新当前快照，提示消息由调用它的 UI 决定。 */
   async saveRequirementSpec(spec: Record<string, unknown>): Promise<Awaited<ReturnType<typeof saveRequirementSpecDraft>>> {
+    this.assertMutationAllowed()
     const current = this.requireCurrentState()
     const save = this.dependencies.saveRequirementSpecDraft ?? saveRequirementSpecDraft
     const saved = await save(current.application.workspaceRoot || '', spec, current.threadId)

@@ -27,7 +27,10 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../../../typings'
-import type { ApplicationPlanningCurrentState } from '../../../../service/activeApplicationPlanning'
+import {
+  planningMutationBlocked,
+  type ApplicationPlanningCurrentState
+} from '../../../../service/activeApplicationPlanning'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import AgentErrorCard from '../../../AgentErrorCard'
@@ -79,7 +82,11 @@ import {
   planningReviewIdentity,
   planningReviewMatchesActiveWorkflow
 } from './productConversationPresentation'
-import { resolvePlanningMessageWorkflow } from './planningMessageWorkflow'
+import {
+  planningMessageActionsDisabled,
+  planningMessageHostsSyncError,
+  resolvePlanningMessageWorkflow
+} from './planningMessageWorkflow'
 import './MessageList.less'
 
 const { Text } = Typography
@@ -346,6 +353,12 @@ export default function MessageList({
 }: MessageListProps): ReactElement {
   const planningWorkflow = planningState?.workflow
   const currentPlanningMessageIndex = findCurrentPlanningMessageIndex(messages, planningWorkflow)
+  const planningActionsBlocked = planningMutationBlocked(planningState)
+  const planningSyncError = planningState?.syncError?.trim() || ''
+  const currentPlanningMessageCanHostSyncError = planningMessageHostsSyncError(
+    planningSyncError,
+    currentPlanningMessageIndex
+  )
   const { phase: currentPhase } = useWorkbenchPhase()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
@@ -356,8 +369,7 @@ export default function MessageList({
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const latestAssistantMessageId = findLastAssistantMessageId(messages)
   const visibleError = error?.trim() || ''
-  const canonicalPlanningError =
-    planningState?.syncError?.trim() || planningState?.error?.trim() || ''
+  const canonicalPlanningError = planningSyncError || planningState?.error?.trim() || ''
   const canonicalPlanningFailure =
     canonicalPlanningError || workflowFailureMessage(planningWorkflow)
   const templateGenerationFailed =
@@ -373,9 +385,8 @@ export default function MessageList({
     !templateGenerationOrphaned &&
     visibleError &&
     visibleError !== latestAssistantMessageError &&
-    (planningState?.syncError ||
-      currentPlanningMessageIndex < 0 ||
-      visibleError !== canonicalPlanningFailure)
+    !currentPlanningMessageCanHostSyncError &&
+    (currentPlanningMessageIndex < 0 || visibleError !== canonicalPlanningFailure)
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
@@ -600,6 +611,7 @@ export default function MessageList({
                   planningWorkflow &&
                   (isCurrentPlanningReview || messageIndex === currentPlanningMessageIndex)
               )
+              const currentPlanningSyncError = isCurrentPlanningMessage ? planningSyncError : ''
               const planningCardWorkflow = resolvePlanningMessageWorkflow(
                 message.workflow,
                 planningWorkflow,
@@ -826,6 +838,12 @@ export default function MessageList({
                           <AgentErrorCard
                             error={messageError}
                             onRetry={isCurrentErrorMessage ? onRetryError : undefined}
+                            retryLabel={
+                              currentPlanningSyncError ? '重新同步状态' : undefined
+                            }
+                            title={
+                              currentPlanningSyncError ? '规划状态尚未同步' : undefined
+                            }
                           />
                         ) : null}
                         {/* 创建规划占位消息：初次进入或用户提交后当前阶段 Agent 正在准备，
@@ -928,6 +946,10 @@ export default function MessageList({
                             <WorkflowRunCard
                               disabled={
                                 loading ||
+                                planningMessageActionsDisabled(
+                                  isCurrentPlanningMessage,
+                                  planningActionsBlocked
+                                ) ||
                                 interactionAvailability !== 'active' ||
                                 planningArtifactAnswered
                               }
@@ -1016,9 +1038,9 @@ export default function MessageList({
                 <AgentErrorCard
                   error={visibleError}
                   onRetry={onRetryError}
-                  retryLabel={planningState?.syncError ? '重新同步状态' : undefined}
+                  retryLabel={planningSyncError ? '重新同步状态' : undefined}
                   title={
-                    planningState?.syncError
+                    planningSyncError
                       ? '规划状态尚未同步'
                       : /确认卡|中断|过期|版本/.test(visibleError)
                         ? '规划确认未完成'

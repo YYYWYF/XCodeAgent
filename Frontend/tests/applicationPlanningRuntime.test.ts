@@ -570,6 +570,45 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
   )
 }
 
+// Y：uncertain 状态禁止保存 RequirementSpec，不能触达写接口。
+{
+  const current = planningState()
+  current.transportState = 'uncertain'
+  current.syncError = '状态尚未确认'
+  current.workflow = confirmationWorkflow()
+  let saveCalls = 0
+  const h = harness(current, {
+    saveRequirementSpecDraft: async () => {
+      saveCalls += 1
+      throw new Error('uncertain 状态不应调用保存接口')
+    }
+  })
+  await assert.rejects(
+    h.runtime.saveRequirementSpec({ title: '不应保存' }),
+    /请先重新同步状态/
+  )
+  assert.equal(saveCalls, 0)
+}
+
+// Z：reconciling 状态同样禁止保存 RequirementSpec，不能与权威读取并发写入。
+{
+  const current = planningState()
+  current.transportState = 'reconciling'
+  current.workflow = confirmationWorkflow()
+  let saveCalls = 0
+  const h = harness(current, {
+    saveRequirementSpecDraft: async () => {
+      saveCalls += 1
+      throw new Error('reconciling 状态不应调用保存接口')
+    }
+  })
+  await assert.rejects(
+    h.runtime.saveRequirementSpec({ title: '不应保存' }),
+    /请先重新同步状态/
+  )
+  assert.equal(saveCalls, 0)
+}
+
 // 补充：服务端明确 RUN_ERROR 保持业务失败，不额外触发 reconcile。
 {
   const h = harness()
