@@ -1495,7 +1495,7 @@ def build_workflow_ag_ui_stream(
                             result=resumed_state,
                         ):
                             yield frame
-                        await best_effort_recovery_observation(
+                        point = await best_effort_recovery_observation(
                             operation="point.captured",
                             workspace=workspace,
                             run_id=run_id,
@@ -1511,6 +1511,24 @@ def build_workflow_ag_ui_stream(
                                 completed_node=node_name,
                             ),
                         )
+                        if point is not None and len(point.next_nodes) == 1:
+                            # Recovery currentNode 必须跟随真实 checkpoint 的唯一后继，不能
+                            # 使用 UI phase 或业务路由推断覆盖 LangGraph 的执行事实。
+                            next_node = point.next_nodes[0]
+                            await best_effort_recovery_observation(
+                                operation="node.started",
+                                workspace=workspace,
+                                run_id=run_id,
+                                thread_id=thread_id,
+                                workflow_scope=workflow_scope,
+                                callback=lambda: observe_node_started(
+                                    workspace=workspace,
+                                    run_id=run_id,
+                                    thread_id=thread_id,
+                                    workflow_scope=workflow_scope,
+                                    node_name=next_node,
+                                ),
+                            )
                         continue
                     current_phase = node_name
                     if not workflow_scope:
@@ -1880,7 +1898,7 @@ def build_workflow_ag_ui_stream(
                         thread_id=thread_id,
                         run_id=run_id,
                         workflow_scope=workflow_scope,
-                        completed_node=current_phase,
+                        completed_node=None,
                     ),
                 )
                 await best_effort_recovery_observation(
@@ -1977,7 +1995,7 @@ def build_workflow_ag_ui_stream(
                         thread_id=thread_id,
                         run_id=run_id,
                         workflow_scope=workflow_scope,
-                        completed_node=current_phase,
+                        completed_node=None,
                     ),
                 )
                 if gate_blocked:
