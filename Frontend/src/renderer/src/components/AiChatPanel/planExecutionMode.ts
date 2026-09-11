@@ -33,12 +33,15 @@ function interactionMode(value: unknown): string {
 
 /** 判断 Workflow 是否承载 Build DAG 确认，统一兼容当前 AG-UI 投影位置。 */
 function isDagConfirmationWorkflow(workflow: WorkflowRunPayload): boolean {
+  const currentMode =
+    interactionMode(workflow.summary.clarification) ||
+    interactionMode(workflow.state?.clarification) ||
+    interactionMode(workflow.result?.clarification)
+  // 当前 clarification 已明确表达交互类型时，历史 DAG 投影不能覆盖当前阶段语义。
+  if (currentMode) return currentMode === 'build_task_plan_confirmation'
+  // 只有当前 clarification 完全缺失时，才用历史投影支持 PendingPlan 恢复。
   return (
-    interactionMode(workflow.summary.clarification) === 'build_task_plan_confirmation' ||
-    interactionMode(workflow.summary.buildTaskPlanConfirmation) ===
-      'build_task_plan_confirmation' ||
-    interactionMode(workflow.state?.clarification) === 'build_task_plan_confirmation' ||
-    interactionMode(workflow.result?.clarification) === 'build_task_plan_confirmation'
+    interactionMode(workflow.summary.buildTaskPlanConfirmation) === 'build_task_plan_confirmation'
   )
 }
 

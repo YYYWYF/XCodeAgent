@@ -168,6 +168,160 @@ function dagConfirmationWorkflow(lifecycle: ApplicationLifecycle): WorkflowRunPa
   } as unknown as WorkflowRunPayload
 }
 
+/** 构造 DAG 已确认后进入 Unit Test 的交互，保留历史 DAG 投影以覆盖回归。 */
+function unitTestConfirmationTransition(): {
+  workflow: WorkflowRunPayload
+  lifecycle: ApplicationLifecycle
+} {
+  const execution: WorkbenchExecution = {
+    scope: 'application',
+    targetId: 'application',
+    threadId: 'thread-unit-test-transition',
+    runId: 'workflow-unit-test-transition',
+    phase: 'unit_test',
+    status: 'awaiting_user',
+    pendingInteraction: {
+      id: 'interaction-unit-test',
+      type: 'unit_test_confirmation',
+      basedOnRevision: 12,
+      payload: { mode: 'unit_test_confirmation' },
+      artifactRefs: [],
+      createdAt: '2026-09-11T00:00:00Z',
+      submittedAt: null
+    },
+    startedAt: '2026-09-11T00:00:00Z',
+    updatedAt: '2026-09-11T00:00:01Z'
+  }
+  const lifecycle = {
+    application: { id: 'app-unit-test-transition', name: 'App' },
+    updatedAt: '2026-09-11T00:00:01Z',
+    revision: 12,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: { [execution.runId]: execution },
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'confirmed_plan',
+        status: 'confirmed',
+        planningRunId: 'planning-dag-transition',
+        workflowRunId: 'workflow-dag-transition',
+        draftDigest: DAG_DRAFT_DIGEST,
+        confirmedPlanDigest: DAG_DRAFT_DIGEST,
+        message: 'DAG 已确认并完成执行计划。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const clarification = {
+    mode: 'unit_test_confirmation',
+    status: 'requires_user_input',
+    message: '单元测试已完成，请确认是否继续。'
+  }
+  const historicalDagConfirmation = {
+    mode: 'build_task_plan_confirmation',
+    status: 'completed',
+    taskPlan: { confirmationStatus: 'confirmed', scopeTasks: [] }
+  }
+  return {
+    lifecycle,
+    workflow: {
+      runId: execution.runId,
+      threadId: execution.threadId,
+      events: [],
+      summary: {
+        status: 'requires_user_input',
+        phase: 'unit_test',
+        clarification,
+        buildTaskPlanConfirmation: historicalDagConfirmation,
+        lifecycle
+      },
+      state: { clarification, lifecycle },
+      result: { clarification, lifecycle }
+    } as unknown as WorkflowRunPayload
+  }
+}
+
+test('DAG Confirm 后进入 Unit Test 时，当前 clarification 优先于历史 DAG 投影', () => {
+  const { workflow, lifecycle } = unitTestConfirmationTransition()
+
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
+  assert.equal(workflowMessageInteractionAvailability(workflow, lifecycle, false, false), 'active')
+})
+
+test('当前 clarification 仍是 DAG confirmation 时继续遵守 terminal stale 防护', () => {
+  const execution = pendingDagExecution()
+  const lifecycle = {
+    application: { id: 'app-dag-terminal', name: 'App' },
+    updatedAt: '2026-09-11T00:00:01Z',
+    revision: 8,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: { [execution.runId]: execution },
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'confirmed_plan',
+        status: 'confirmed',
+        planningRunId: 'planning-dag-transition',
+        workflowRunId: execution.runId,
+        draftDigest: DAG_DRAFT_DIGEST,
+        message: 'DAG 已确认。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const workflow = dagConfirmationWorkflow(lifecycle)
+
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'stale')
+  assert.equal(workflowMessageInteractionAvailability(workflow, lifecycle, false, false), 'stale')
+})
+
+test('当前 clarification 缺失时，PendingPlan recovery 仍使用历史 DAG confirmation fallback', () => {
+  const confirmation = {
+    mode: 'build_task_plan_confirmation',
+    status: 'requires_user_input',
+    draftIdentity: {
+      ownerSessionId: 'session-recovered',
+      planningRunId: 'planning-recovered',
+      draftDigest: 'a'.repeat(64)
+    },
+    taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+  }
+  const lifecycle = {
+    application: { id: 'app-recovered', name: 'App' },
+    updatedAt: '2026-09-11T00:00:02Z',
+    revision: 12,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: {},
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'pending_plan',
+        status: 'awaiting_confirmation',
+        planningRunId: 'planning-recovered',
+        workflowRunId: 'workflow-recovered',
+        ownerSessionId: 'session-recovered',
+        draftDigest: 'a'.repeat(64),
+        confirmation,
+        message: '已从 PendingPlan 恢复待确认任务规划。'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  const workflow = {
+    runId: 'workflow-recovered',
+    threadId: 'thread-recovered',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      phase: 'prepare_build_tasks',
+      buildTaskPlanConfirmation: confirmation,
+      lifecycle
+    },
+    state: { lifecycle },
+    result: { lifecycle }
+  } as unknown as WorkflowRunPayload
+
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
+  assert.equal(workflowMessageInteractionAvailability(workflow, lifecycle, false, false), 'active')
+})
+
 test('新版 Snapshot 会严格解析，并丢弃 Candidate 正文和旧 stages 协议', () => {
   const issueWithPrivateTaskId = {
     code: 'unit.contract',
