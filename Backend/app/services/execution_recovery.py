@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
+    DurableExecutionRunConflictError,
     DurableExecutionStatus,
     ExecutionLease,
     ExecutionLeaseStatus,
@@ -19,6 +20,7 @@ from app.domain.execution_recovery import (
 from app.config import execution_recovery_lease_ttl_seconds
 from app.persistence.execution_recovery import (
     finish_execution_and_release_lease,
+    get_execution,
     initialize_execution_recovery_store,
     insert_execution_with_lease,
     insert_recovery_point,
@@ -53,6 +55,9 @@ async def best_effort_recovery_observation(
         return None
     try:
         return await callback()
+    except DurableExecutionRunConflictError:
+        # 身份冲突不是恢复基础设施故障，必须阻断本次 Graph Attempt。
+        raise
     except Exception as exc:
         logger.warning(
             "recovery.observation.failed operation=%s runId=%s threadId=%s "
@@ -65,6 +70,23 @@ async def best_effort_recovery_observation(
             exc_info=True,
         )
         return None
+
+
+async def assert_run_id_available(
+    workspace: str | None,
+    run_id: str,
+) -> None:
+    """在业务生命周期产生副作用前检查 runId 是否已经被占用。"""
+
+    if not workspace:
+        return
+    existing = await get_execution(workspace, run_id)
+    if existing is not None:
+        raise DurableExecutionRunConflictError(
+            run_id=existing.run_id,
+            existing_status=existing.status.value,
+            existing_thread_id=existing.thread_id,
+        )
 
 
 async def observe_execution_started(

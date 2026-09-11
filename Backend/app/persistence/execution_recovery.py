@@ -13,6 +13,7 @@ import aiosqlite
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
+    DurableExecutionRunConflictError,
     DurableExecutionStatus,
     ExecutionLease,
     ExecutionLeaseStatus,
@@ -241,38 +242,48 @@ async def insert_execution_with_lease(
         raise ValueError("新建 Execution 的 lease 必须为 ACTIVE。")
     await initialize_execution_recovery_store(record.workspace)
     async with _connection(record.workspace) as connection:
-        await connection.execute(
-            """
-            INSERT INTO execution_records(
-                run_id, thread_id, workspace, project_id, execution_kind,
-                workflow_scope, first_node, current_node, status,
-                last_recovery_point_id, started_at, updated_at, ended_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_id) DO NOTHING
-            """,
-            (
-                record.run_id,
-                record.thread_id,
-                record.workspace,
-                record.project_id,
-                record.execution_kind,
-                record.workflow_scope,
-                record.first_node,
-                record.current_node,
-                record.status.value,
-                record.last_recovery_point_id,
-                _utc_iso(record.started_at),
-                _utc_iso(record.updated_at),
-                _utc_iso(record.ended_at) if record.ended_at else None,
-            ),
-        )
+        # 用写事务把冲突读取和两张表的创建锁在一起，避免 preflight 后的并发窗口。
+        await connection.execute("BEGIN IMMEDIATE")
+        existing_row = await _fetch_execution_row(connection, record.run_id)
+        if existing_row is not None:
+            raise _run_id_conflict_from_row(existing_row)
+        try:
+            await connection.execute(
+                """
+                INSERT INTO execution_records(
+                    run_id, thread_id, workspace, project_id, execution_kind,
+                    workflow_scope, first_node, current_node, status,
+                    last_recovery_point_id, started_at, updated_at, ended_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.run_id,
+                    record.thread_id,
+                    record.workspace,
+                    record.project_id,
+                    record.execution_kind,
+                    record.workflow_scope,
+                    record.first_node,
+                    record.current_node,
+                    record.status.value,
+                    record.last_recovery_point_id,
+                    _utc_iso(record.started_at),
+                    _utc_iso(record.updated_at),
+                    _utc_iso(record.ended_at) if record.ended_at else None,
+                ),
+            )
+        except aiosqlite.IntegrityError:
+            # 处理其他连接已经先提交的同一 runId，并把冲突统一提升为结构化异常。
+            existing_row = await _fetch_execution_row(connection, record.run_id)
+            if existing_row is not None:
+                raise _run_id_conflict_from_row(existing_row) from None
+            raise
         await connection.execute(
             """
             INSERT INTO execution_leases(
                 run_id, owner_backend_instance_id, owner_pid, status,
                 acquired_at, heartbeat_at, expires_at, released_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_id) DO NOTHING
             """,
             (
                 lease.run_id,
@@ -289,6 +300,18 @@ async def insert_execution_with_lease(
         if row is None:
             raise RuntimeError(f"无法读取刚写入的执行记录：{record.run_id}")
         return _execution_from_row(row)
+
+
+def _run_id_conflict_from_row(
+    row: tuple[object, ...],
+) -> DurableExecutionRunConflictError:
+    """把已存在的 execution 行转换为稳定的 runId 冲突异常。"""
+
+    return DurableExecutionRunConflictError(
+        run_id=str(row[0]),
+        existing_status=str(row[8]),
+        existing_thread_id=str(row[1]),
+    )
 
 
 async def get_execution_lease(

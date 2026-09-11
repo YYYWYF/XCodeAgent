@@ -61,6 +61,7 @@ from app.protocols.workflow.stream_events import (
     _workflow_ag_ui_frames,
 )
 from app.config import Settings
+from app.domain.execution_recovery import DurableExecutionRunConflictError
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
 from app.graph.application_planning_interrupts import (
     validate_application_planning_review_action,
@@ -72,6 +73,7 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
 )
 from app.services.execution_recovery import (
+    assert_run_id_available,
     best_effort_recovery_observation,
     capture_recovery_point,
     durable_execution_status,
@@ -363,7 +365,8 @@ def build_workflow_ag_ui_stream(
         config: dict[str, Any] | None = None
         heartbeat_task: asyncio.Task[None] | None = None
         backend_identity = current_backend_instance()
-        recovery_observation_started = False
+        durable_execution_started = False
+        workflow_lifecycle_started = False
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")
@@ -430,21 +433,6 @@ def build_workflow_ag_ui_stream(
                 workspace=workspace,
                 project_id=project_id,
             )
-            if workflow_scope != "application_planning":
-                # 创建规划只维护自己的 AG-UI/Graph 生命周期；在 TechnicalPlan
-                # 确认前不应登记工作台写租约，更不能让普通规划占住应用资源。
-                workspace_lease = workspace_run_leases.acquire(
-                    workspace_root=workspace,
-                    project_id=project_id,
-                    execution_scope=workflow_inputs.get("resume_values", {}).get(
-                        "build_execution_scope"
-                    ),
-                    resource_claims=workflow_inputs.get("resume_values", {}).get(
-                        "execution_resource_claims"
-                    ),
-                    thread_id=thread_id,
-                    run_id=run_id,
-                )
             resume_from = workflow_inputs.get("resume_from") or None
             checkpoint_values: dict[str, Any] = {}
             execution_checkpoint_state: dict[str, Any] = {}
@@ -553,6 +541,31 @@ def build_workflow_ag_ui_stream(
                     )
                 )
                 return
+            # runId 冲突必须发生在 lifecycle 和工作区资源租约之前；普通存储故障仍由
+            # best-effort helper 降级，明确身份冲突则继续向 AG-UI 错误路径传播。
+            await best_effort_recovery_observation(
+                operation="execution.start.preflight",
+                workspace=workspace,
+                run_id=run_id,
+                thread_id=thread_id,
+                workflow_scope=workflow_scope,
+                callback=lambda: assert_run_id_available(workspace, run_id),
+            )
+            if workflow_scope != "application_planning":
+                # 创建规划只维护自己的 AG-UI/Graph 生命周期；在 TechnicalPlan
+                # 确认前不应登记工作台写租约，更不能让普通规划占住应用资源。
+                workspace_lease = workspace_run_leases.acquire(
+                    workspace_root=workspace,
+                    project_id=project_id,
+                    execution_scope=workflow_inputs.get("resume_values", {}).get(
+                        "build_execution_scope"
+                    ),
+                    resource_claims=workflow_inputs.get("resume_values", {}).get(
+                        "execution_resource_claims"
+                    ),
+                    thread_id=thread_id,
+                    run_id=run_id,
+                )
             initial_state: dict[str, Any] = {
                 **checkpoint_values,
                 "request": request,
@@ -592,6 +605,7 @@ def build_workflow_ag_ui_stream(
                     phase=first_node_name,
                     checkpoint_state=execution_checkpoint_state,
                 )
+                workflow_lifecycle_started = lifecycle_payload is not None
                 if lifecycle_payload is not None:
                     execution = lifecycle_payload.get("activeExecutions", {}).get(run_id, {})
                     development_target = execution.get("developmentTarget") or {}
@@ -663,7 +677,6 @@ def build_workflow_ag_ui_stream(
 
             # Recovery 记录是独立旁路：只在确认即将进入真实 Graph 后登记，且任何写入
             # 失败都由服务层降级为 warning，不得改变现有 Workflow 控制流。
-            recovery_observation_started = True
             started_record = await best_effort_recovery_observation(
                 operation="execution.started",
                 workspace=workspace,
@@ -682,7 +695,8 @@ def build_workflow_ag_ui_stream(
                     lease_ttl=settings.execution_recovery_lease_ttl_seconds,
                 ),
             )
-            if started_record is not None and workspace:
+            durable_execution_started = started_record is not None
+            if durable_execution_started and workspace:
                 heartbeat_task = asyncio.create_task(
                     maintain_execution_heartbeat(
                         workspace=workspace,
@@ -692,22 +706,23 @@ def build_workflow_ag_ui_stream(
                         lease_ttl_seconds=settings.execution_recovery_lease_ttl_seconds,
                     )
                 )
-            await best_effort_recovery_observation(
-                operation="point.captured",
-                workspace=workspace,
-                run_id=run_id,
-                thread_id=thread_id,
-                workflow_scope=workflow_scope,
-                callback=lambda: capture_recovery_point(
-                    graph=active_graph,
-                    config=config or {},
+            if durable_execution_started:
+                await best_effort_recovery_observation(
+                    operation="point.captured",
                     workspace=workspace,
-                    thread_id=thread_id,
                     run_id=run_id,
+                    thread_id=thread_id,
                     workflow_scope=workflow_scope,
-                    first_node=first_node_name,
-                ),
-            )
+                    callback=lambda: capture_recovery_point(
+                        graph=active_graph,
+                        config=config or {},
+                        workspace=workspace,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        workflow_scope=workflow_scope,
+                        first_node=first_node_name,
+                    ),
+                )
 
             started_event = _workflow_event(
                 events,
@@ -1524,21 +1539,25 @@ def build_workflow_ag_ui_stream(
                             result=resumed_state,
                         ):
                             yield frame
-                        point = await best_effort_recovery_observation(
-                            operation="point.captured",
-                            workspace=workspace,
-                            run_id=run_id,
-                            thread_id=thread_id,
-                            workflow_scope=workflow_scope,
-                            callback=lambda: capture_recovery_point(
-                                graph=active_graph,
-                                config=config or {},
+                        point = (
+                            await best_effort_recovery_observation(
+                                operation="point.captured",
                                 workspace=workspace,
-                                thread_id=thread_id,
                                 run_id=run_id,
+                                thread_id=thread_id,
                                 workflow_scope=workflow_scope,
-                                completed_node=node_name,
-                            ),
+                                callback=lambda: capture_recovery_point(
+                                    graph=active_graph,
+                                    config=config or {},
+                                    workspace=workspace,
+                                    thread_id=thread_id,
+                                    run_id=run_id,
+                                    workflow_scope=workflow_scope,
+                                    completed_node=node_name,
+                                ),
+                            )
+                            if durable_execution_started
+                            else None
                         )
                         if point is not None and len(point.next_nodes) == 1:
                             # Recovery currentNode 必须跟随真实 checkpoint 的唯一后继，不能
@@ -1702,22 +1721,23 @@ def build_workflow_ag_ui_stream(
 
                     # 节点的业务投影已经完成后再读取 StateSnapshot，确保 RecoveryPoint
                     # 记录的是这个 top-level Node 之后真实存在的 checkpoint 边界。
-                    await best_effort_recovery_observation(
-                        operation="point.captured",
-                        workspace=workspace,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        workflow_scope=workflow_scope,
-                        callback=lambda: capture_recovery_point(
-                            graph=active_graph,
-                            config=config or {},
+                    if durable_execution_started:
+                        await best_effort_recovery_observation(
+                            operation="point.captured",
                             workspace=workspace,
-                            thread_id=thread_id,
                             run_id=run_id,
+                            thread_id=thread_id,
                             workflow_scope=workflow_scope,
-                            completed_node=node_name,
-                        ),
-                    )
+                            callback=lambda: capture_recovery_point(
+                                graph=active_graph,
+                                config=config or {},
+                                workspace=workspace,
+                                thread_id=thread_id,
+                                run_id=run_id,
+                                workflow_scope=workflow_scope,
+                                completed_node=node_name,
+                            ),
+                        )
 
                     next_nodes = _workflow_next_nodes(node_name, update)
                     if (
@@ -1825,24 +1845,25 @@ def build_workflow_ag_ui_stream(
             # 真实 LangGraph 提供 aget_state；测试或兼容 Graph 可能只通过流更新返回状态。
             if hasattr(active_graph, "aget_state"):
                 snapshot = await active_graph.aget_state(config)
-                await best_effort_recovery_observation(
-                    operation="point.captured",
-                    workspace=workspace,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    workflow_scope=workflow_scope,
-                    callback=lambda: capture_recovery_point(
-                        graph=active_graph,
-                        config=config or {},
+                if durable_execution_started:
+                    await best_effort_recovery_observation(
+                        operation="point.captured",
                         workspace=workspace,
-                        thread_id=thread_id,
                         run_id=run_id,
+                        thread_id=thread_id,
                         workflow_scope=workflow_scope,
-                        completed_node=current_phase,
-                        first_node=first_node_name,
-                        snapshot=snapshot,
-                    ),
-                )
+                        callback=lambda: capture_recovery_point(
+                            graph=active_graph,
+                            config=config or {},
+                            workspace=workspace,
+                            thread_id=thread_id,
+                            run_id=run_id,
+                            workflow_scope=workflow_scope,
+                            completed_node=current_phase,
+                            first_node=first_node_name,
+                            snapshot=snapshot,
+                        ),
+                    )
                 result = dict(snapshot.values)
                 if workflow_scope == "application_planning":
                     result = project_application_planning_interrupt(result, snapshot)
@@ -1850,20 +1871,21 @@ def build_workflow_ag_ui_stream(
             if lifecycle_payload is not None:
                 result["lifecycle"] = lifecycle_payload
             summary = _workflow_summary(result, events)
-            await best_effort_recovery_observation(
-                operation="execution.finished",
-                workspace=workspace,
-                run_id=run_id,
-                thread_id=thread_id,
-                workflow_scope=workflow_scope,
-                callback=lambda: observe_execution_finished(
+            if durable_execution_started:
+                await best_effort_recovery_observation(
+                    operation="execution.finished",
                     workspace=workspace,
                     run_id=run_id,
                     thread_id=thread_id,
                     workflow_scope=workflow_scope,
-                    status=durable_execution_status(result=result, summary=summary),
-                ),
-            )
+                    callback=lambda: observe_execution_finished(
+                        workspace=workspace,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        workflow_scope=workflow_scope,
+                        status=durable_execution_status(result=result, summary=summary),
+                    ),
+                )
             finished_event = _workflow_event(
                 events,
                 "workflow.run.finished",
@@ -1913,7 +1935,7 @@ def build_workflow_ag_ui_stream(
                 )
             )
         except asyncio.CancelledError:
-            if recovery_observation_started and active_graph is not None and config is not None:
+            if durable_execution_started and active_graph is not None and config is not None:
                 await best_effort_recovery_observation(
                     operation="point.captured",
                     workspace=workspace,
@@ -1947,7 +1969,7 @@ def build_workflow_ag_ui_stream(
                         backend_instance_id=backend_identity.instance_id,
                     ),
                 )
-            if not workflow_scope:
+            if workflow_lifecycle_started:
                 lifecycle_payload = stop_workflow_lifecycle(
                     workspace,
                     run_id=run_id,
@@ -1958,6 +1980,7 @@ def build_workflow_ag_ui_stream(
             from app.services.development_artifacts import DevelopmentArtifactsIncompleteError
 
             gate_blocked = isinstance(exc, DevelopmentArtifactsIncompleteError)
+            run_id_conflict = isinstance(exc, DurableExecutionRunConflictError)
             blocked_scope: dict[str, Any] = {}
             blocked_target: dict[str, str] = {}
             if gate_blocked:
@@ -1984,7 +2007,7 @@ def build_workflow_ag_ui_stream(
                 lifecycle_payload = application_lifecycle_payload(current_lifecycle) if current_lifecycle else None
                 if lifecycle_payload:
                     yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle_payload))
-            if not workflow_scope and not gate_blocked:
+            if workflow_lifecycle_started and not gate_blocked and not run_id_conflict:
                 lifecycle_payload = fail_workflow_lifecycle(
                     workspace,
                     run_id=run_id,
@@ -2014,7 +2037,7 @@ def build_workflow_ag_ui_stream(
             summary["message"] = str(exc) if gate_blocked else f"Workflow failed：{type(exc).__name__}: {exc}"
             if error_code:
                 summary["errorCode"] = error_code
-            if recovery_observation_started and active_graph is not None and config is not None:
+            if durable_execution_started and active_graph is not None and config is not None:
                 await best_effort_recovery_observation(
                     operation="point.captured",
                     workspace=workspace,

@@ -14,6 +14,7 @@ from app.graph.application_planning_interrupts import technical_planning_review
 from app.graph.state import ProjectState
 from app.persistence.execution_recovery import (
     get_execution,
+    get_execution_lease,
     list_recovery_points,
 )
 from app.protocols.application_planning_interrupt import (
@@ -292,10 +293,14 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await runtime_task
             points = await list_recovery_points(workspace, run_id)
             cancelled = await get_execution(workspace, run_id)
+            cancelled_lease = await get_execution_lease(workspace, run_id)
 
         self.assertIsNotNone(cancelled)
+        self.assertIsNotNone(cancelled_lease)
         assert cancelled is not None
+        assert cancelled_lease is not None
         self.assertEqual(cancelled.status.value, "interrupted")
+        self.assertEqual(cancelled_lease.status.value, "released")
         self.assertFalse(any(
             point.completed_node == "product_planning"
             for point in points
@@ -339,8 +344,13 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 workspace,
                 "runtime-snapshot-only-run",
             )
+            execution_lease = await get_execution_lease(
+                workspace,
+                "runtime-snapshot-only-run",
+            )
 
         self.assertIsNone(execution)
+        self.assertIsNone(execution_lease)
         self.assertIn('"type":"RUN_FINISHED"', "".join(frames))
         self.assertNotIn('"type":"RUN_ERROR"', "".join(frames))
 

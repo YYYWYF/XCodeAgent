@@ -15,6 +15,30 @@ class ExecutionRecoveryModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class DurableExecutionRunConflictError(RuntimeError):
+    """表示 runId 已经属于另一轮 Durable Execution Attempt。"""
+
+    code = "DURABLE_EXECUTION_RUN_ID_CONFLICT"
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        existing_status: str,
+        existing_thread_id: str,
+    ) -> None:
+        """保存冲突双方可供协议层使用的稳定身份字段。"""
+
+        self.run_id = run_id
+        self.existing_status = existing_status
+        self.existing_thread_id = existing_thread_id
+        super().__init__(
+            "Durable execution runId already exists: "
+            f"runId={run_id} existingStatus={existing_status} "
+            f"existingThreadId={existing_thread_id}"
+        )
+
+
 class DurableExecutionStatus(StrEnum):
     """定义恢复记录层观察到的执行状态，不参与业务生命周期状态机。"""
 
