@@ -184,8 +184,9 @@ def workflow_capabilities() -> dict[str, Any]:
         "pendingOwnership": {
             "requestField": "forwardedProps.sessionId",
             "storageField": "draft_identity.owner_session_id",
+            "workflowStorageField": "draft_identity.workflow_run_id",
             "refreshField": "extensions.planningRefresh.ownerSessionId",
-            "semantics": "页面对话拥有 PendingPlan；同一对话可跨多个 Workflow Run，Regenerate 继承原 owner。",
+            "semantics": "页面对话拥有 PendingPlan；PendingPlan 文件是刷新投影唯一 authority，同一对话可跨多个 Workflow Run，Regenerate 继承原 owner。",
             "draftIdentity": {
                 "storageField": "draft_identity",
                 "requestFields": ["planningRunId", "draftDigest"],

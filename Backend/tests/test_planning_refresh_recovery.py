@@ -1,14 +1,23 @@
 from __future__ import annotations
 
-from copy import deepcopy
+from datetime import UTC, datetime
 import tempfile
 import unittest
 
+from app.domain.application_lifecycle import (
+    PendingInteraction,
+    PendingInteractionType,
+    WorkbenchExecution,
+    WorkbenchExecutionStatus,
+)
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    load_application_lifecycle,
+    write_application_lifecycle,
+)
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
-from app.workspace.json_documents import write_json_atomic
 from app.workspace.planning_run_documents import write_planning_run_atomic
 from app.workspace.task_documents import (
-    build_task_plan_json_path,
     load_pending_build_task_plan,
     write_pending_build_task_plan_atomic,
 )
@@ -17,7 +26,7 @@ from tests.test_pending_build_task_plan_documents import _validated_plan
 
 
 class PlanningRefreshRecoveryTests(unittest.TestCase):
-    """验证刷新解析只选择当前最高优先级 Planning/Confirmation 事实。"""
+    """验证 PendingPlan 是刷新时唯一的 Planning 权威投影来源。"""
 
     def setUp(self) -> None:
         """为每例创建独立工作区和一致的 PlanningRun 身份。"""
@@ -49,6 +58,7 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
             _validated_plan(),
             owner_session_id="session-refresh-owner",
             planning_run_id=self.planning.planning_run_id,
+            workflow_run_id=self.planning.workflow_run_id,
             base_confirmed_plan_digest=None,
             input_fingerprint=self.planning.input_fingerprint,
             build_execution_scope=self.planning.build_execution_scope,
@@ -58,38 +68,27 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
         assert pending is not None
         return pending
 
-    def _resolve(self, *, active: bool) -> dict:
-        """以可控进程注册表结果调用公共刷新解析器。"""
+    def _resolve(self) -> dict:
+        """调用只读取 PendingPlan 的公共刷新解析器。"""
 
-        return resolve_planning_refresh_state(
-            self.workspace,
-            lifecycle=None,
-            runtime_active=lambda run_id: active and run_id == self.planning.workflow_run_id,
-        )
+        return resolve_planning_refresh_state(self.workspace)
 
-    def test_browser_refresh_recovers_active_runtime_snapshot(self) -> None:
-        """浏览器刷新时，进程仍持有 Workflow 就恢复 active PlanningRun。"""
+    def test_case_a_pending_plan_is_authoritative(self) -> None:
+        """存在 PendingPlan 时返回确认态，并直接使用其中冻结的身份。"""
 
-        self._write_planning()
-
-        recovered = self._resolve(active=True)
-
-        self.assertEqual(recovered["source"], "active_planning_run")
-        self.assertEqual(recovered["status"], "planning")
-        self.assertEqual(recovered["workflowRunId"], self.planning.workflow_run_id)
-        self.assertEqual(recovered["dagGeneration"]["status"], "active")
-
-    def test_refresh_pending_wins_over_same_run_runtime(self) -> None:
-        """同 Run 的 Pending 与仍登记 runtime 并存时，必须优先进入确认。"""
-
-        self._write_planning()
         pending = self._write_pending()
 
-        recovered = self._resolve(active=True)
+        recovered = self._resolve()
 
-        self.assertEqual(recovered["source"], "pending")
+        self.assertEqual(recovered["source"], "pending_plan")
         self.assertEqual(recovered["status"], "awaiting_confirmation")
+        self.assertEqual(recovered["planningRunId"], self.planning.planning_run_id)
+        self.assertEqual(recovered["workflowRunId"], self.planning.workflow_run_id)
         self.assertEqual(recovered["ownerSessionId"], "session-refresh-owner")
+        self.assertEqual(
+            recovered["buildExecutionScope"],
+            self.planning.build_execution_scope,
+        )
         self.assertEqual(
             recovered["confirmation"]["draftIdentity"]["ownerSessionId"],
             "session-refresh-owner",
@@ -103,78 +102,59 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
             "pending",
         )
 
-    def test_backend_restart_marks_disk_active_run_interrupted(self) -> None:
-        """Backend 重启后只有磁盘 active 证据时不恢复 Scheduler。"""
+    def test_case_b_missing_pending_is_idle_even_with_active_planning_run(self) -> None:
+        """没有 PendingPlan 时，旧 PlanningRun 不能伪造待确认状态。"""
 
         self._write_planning()
 
-        recovered = self._resolve(active=False)
-
-        self.assertEqual(recovered["source"], "active_planning_run")
-        self.assertEqual(recovered["status"], "planning_run_interrupted")
-        self.assertIn("不会自动续跑", recovered["message"])
-
-    def test_promoted_formal_ignores_pending_and_planning_residue(self) -> None:
-        """Formal 已提升后，匹配的 Pending 与 planning-run 残留均不能覆盖它。"""
-
-        self._write_planning()
-        pending = self._write_pending()
-        identity = pending["draft_identity"]
-        formal = deepcopy(pending)
-        formal.pop("draft_identity")
-        formal.update(
-            confirmation_status="confirmed",
-            confirmed_at="2026-09-08T00:00:00Z",
-            confirmed_from={
-                "planning_run_id": identity["planning_run_id"],
-                "draft_digest": identity["draft_digest"],
-            },
+        recovered = resolve_planning_refresh_state(
+            self.workspace,
         )
-        write_json_atomic(build_task_plan_json_path(self.state), formal)
 
-        recovered = self._resolve(active=True)
+        self.assertEqual(recovered["source"], "none")
+        self.assertEqual(recovered["status"], "idle")
 
-        self.assertEqual(recovered["source"], "confirmed_plan")
-        self.assertEqual(recovered["status"], "confirmed")
-        self.assertEqual(recovered["planningRunId"], self.planning.planning_run_id)
+    def test_case_c_legacy_task_plan_confirmation_is_ignored(self) -> None:
+        """没有 PendingPlan 时，application-lifecycle 的旧确认交互也必须返回 idle。"""
 
-    def test_stale_planning_snapshot_cannot_override_newer_formal(self) -> None:
-        """基于旧 Formal digest 的磁盘 active snapshot 必须让位给当前 Formal。"""
-
-        formal = {
-            **_validated_plan(),
-            "confirmation_status": "confirmed",
-            "confirmed_at": "2026-09-08T00:00:00Z",
-            "confirmed_from": {
-                "planning_run_id": "newer-run",
-                "draft_digest": "c" * 64,
-            },
-        }
-        write_json_atomic(build_task_plan_json_path(self.state), formal)
-        stale = self.planning.model_copy(
-            update={"base_confirmed_plan_digest": "a" * 64}
+        timestamp = datetime(2026, 9, 11, tzinfo=UTC)
+        lifecycle = create_application_lifecycle(
+            application_id="app-refresh",
+            application_name="Planning refresh",
         )
-        write_planning_run_atomic(self.state, stale)
-
-        recovered = self._resolve(active=True)
-
-        self.assertEqual(recovered["source"], "confirmed_plan")
-        self.assertEqual(recovered["planningRunId"], "newer-run")
-
-    def test_no_active_state_returns_idle(self) -> None:
-        """没有 Pending、PlanningRun 或 Formal 时返回显式空状态。"""
-
-        recovered = self._resolve(active=False)
-
-        self.assertEqual(
-            recovered,
-            {
-                "schemaVersion": "planning-refresh.v1",
-                "source": "none",
-                "status": "idle",
-                "message": "当前没有可恢复的 Planning 或 Confirmation 状态。",
-            },
+        execution = WorkbenchExecution(
+            scope="page",
+            targetId="orders",
+            threadId="legacy-thread",
+            runId="legacy-workflow-run",
+            phase="prepare_build_tasks",
+            status=WorkbenchExecutionStatus.AWAITING_USER,
+            pendingInteraction=PendingInteraction(
+                id="legacy-task-plan-confirmation",
+                type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
+                basedOnRevision=lifecycle.revision,
+                payload={"mode": "build_task_plan_confirmation"},
+                createdAt=timestamp,
+            ),
+            startedAt=timestamp,
+            updatedAt=timestamp,
         )
+        lifecycle = lifecycle.model_copy(
+            update={
+                "active_run_id": execution.run_id,
+                "active_executions": {execution.run_id: execution},
+            }
+        )
+        write_application_lifecycle(self.workspace, lifecycle)
+        persisted = load_application_lifecycle(self.workspace)
+        self.assertIsNotNone(persisted)
+
+        recovered = resolve_planning_refresh_state(
+            self.workspace,
+        )
+
+        self.assertEqual(recovered["source"], "none")
+        self.assertEqual(recovered["status"], "idle")
 
 
 if __name__ == "__main__":

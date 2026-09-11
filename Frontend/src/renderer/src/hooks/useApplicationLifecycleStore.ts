@@ -63,7 +63,7 @@ function mergePlanningRefresh(
   if (incoming.revision < current.revision) {
     // 低 revision 的恢复读取只在能被当前 Pending execution 直接印证时采用。
     planningRefresh =
-      incomingRefresh?.source === 'pending' &&
+      incomingRefresh?.source === 'pending_plan' &&
       incomingRefresh.status === 'awaiting_confirmation' &&
       isPendingDagExecution(base, incomingRefresh)
         ? incomingRefresh
@@ -72,21 +72,15 @@ function mergePlanningRefresh(
     // 同 revision 且没有新的恢复读取时，只合并持久字段，不主动清除现有 GET 投影。
     planningRefresh = currentRefresh
   } else if (!incomingRefresh) {
-    const activePlanningRunId = currentRefresh?.workflowRunId
-    // 新持久快照不携带 GET extension 时，仅保留仍被 execution 印证的恢复状态。
-    planningRefresh =
-      (currentRefresh?.source === 'pending' &&
-        currentRefresh.status === 'awaiting_confirmation' &&
-        isPendingDagExecution(base, currentRefresh)) ||
-      (currentRefresh?.source === 'active_planning_run' &&
-        currentRefresh.status === 'planning' &&
-        Boolean(activePlanningRunId) &&
-        ['running', 'stopping'].includes(base.activeExecutions[activePlanningRunId!]?.status || ''))
-        ? currentRefresh
-        : undefined
+    // 缺少 projection 只表示本次 lifecycle 帧没有提供它，不能把已有权威 GET 结果清掉。
+    planningRefresh = currentRefresh
   }
 
-  if (planningRefresh && planningRefreshConflictsWithLifecycle(base, planningRefresh)) {
+  if (
+    incomingRefresh &&
+    planningRefresh &&
+    planningRefreshConflictsWithLifecycle(base, planningRefresh)
+  ) {
     planningRefresh = undefined
   }
   if (planningRefresh === base.extensions?.planningRefresh) return base

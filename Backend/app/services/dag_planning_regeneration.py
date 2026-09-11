@@ -113,6 +113,7 @@ async def regenerate_pending_build_task_plan(
         plain_json(planned.assembly.assembled_plan),
         owner_session_id=owner_session_id,
         planning_run_id=run.planning_run_id,
+        workflow_run_id=run.workflow_run_id,
         base_confirmed_plan_digest=run.base_confirmed_plan_digest,
         input_fingerprint=run.input_fingerprint,
         build_execution_scope=plain_json(run.build_execution_scope),

@@ -14,6 +14,13 @@ import type { AgentChatMessage } from './types'
 
 export type StageOutputPhase = 'generation' | 'confirmation' | 'other'
 
+export type PendingPlanGuard = {
+  locked: boolean
+  ownerSessionId?: string
+  planningRunId?: string
+  workflowRunId?: string
+}
+
 /** 读取并校验 lifecycle GET 临时附加的 Planning refresh 投影。 */
 export function planningRefreshState(
   lifecycle: ApplicationLifecycle | undefined
@@ -22,7 +29,7 @@ export function planningRefreshState(
   if (
     !value ||
     value.schemaVersion !== 'planning-refresh.v1' ||
-    !['pending', 'abandoned', 'active_planning_run', 'confirmed_plan', 'none'].includes(
+    !['pending_plan', 'abandoned', 'active_planning_run', 'confirmed_plan', 'none'].includes(
       value.source
     ) ||
     ![
@@ -37,6 +44,24 @@ export function planningRefreshState(
     return undefined
   }
   return value
+}
+
+/** 只按当前 PendingPlan 的刷新投影解析会话门禁，不读取 execution 或交互状态。 */
+export function resolvePendingPlanGuard(
+  lifecycle: ApplicationLifecycle | undefined
+): PendingPlanGuard {
+  const refresh = lifecycle?.extensions?.planningRefresh
+
+  if (refresh?.source !== 'pending_plan' || refresh.status !== 'awaiting_confirmation') {
+    return { locked: false }
+  }
+
+  return {
+    locked: true,
+    ownerSessionId: refresh.ownerSessionId,
+    planningRunId: refresh.planningRunId,
+    workflowRunId: refresh.workflowRunId
+  }
 }
 
 /** 返回 Backend 重启导致的明确中断状态，禁止把磁盘 active 误当成仍在执行。 */
@@ -96,7 +121,7 @@ export function pendingDagConfirmationExecution(
   const recovery = planningRefreshState(lifecycle)
   const pending = latestPendingDagExecution(lifecycle)
   if (recovery) {
-    if (recovery.source === 'pending' && recovery.status === 'awaiting_confirmation') {
+    if (recovery.source === 'pending_plan' && recovery.status === 'awaiting_confirmation') {
       const recoveryIdentity = dagDraftIdentityKey({
         planningRunId: recovery.planningRunId,
         draftDigest: recovery.draftDigest
@@ -162,7 +187,7 @@ export function pendingDagOwnerSessionId(
   lifecycle: ApplicationLifecycle | undefined
 ): string | undefined {
   const recovery = planningRefreshState(lifecycle)
-  if (recovery?.source === 'pending' && recovery.status === 'awaiting_confirmation') {
+  if (recovery?.source === 'pending_plan' && recovery.status === 'awaiting_confirmation') {
     const recoveredOwner = String(recovery.ownerSessionId || '').trim()
     if (recoveredOwner) return recoveredOwner
     const confirmationOwner = draftOwnerSessionId(recovery.confirmation?.draftIdentity)
@@ -188,7 +213,7 @@ export function pendingDagConfirmationWorkflow(
   if (!execution) return undefined
   const recovery = planningRefreshState(lifecycle)
   if (
-    recovery?.source === 'pending' &&
+    recovery?.source === 'pending_plan' &&
     recovery.status === 'awaiting_confirmation' &&
     recovery.confirmation
   ) {

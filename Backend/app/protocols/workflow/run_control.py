@@ -31,7 +31,6 @@ from app.services.build_task_plan_lifecycle import (
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.services.workspace_process_registry import workspace_process_registry
-from app.workspace.planning_run_documents import load_planning_run
 
 WorkflowCancellationStatus = Literal[
     "cancelled",
@@ -241,21 +240,13 @@ def _pending_confirmation_for_run(
     if not workspace:
         return None
     try:
-        planning_run = load_planning_run({"workspace": workspace})
-        lifecycle = load_application_lifecycle(workspace)
         refresh = resolve_planning_refresh_state(
             workspace,
-            lifecycle=lifecycle,
-            # Pending 的优先级高于 active 状态；这里不借 runtime_active 猜测归属。
-            runtime_active=lambda _workflow_run_id: False,
         )
     except (OSError, TypeError, ValueError):
         return None
     if (
-        planning_run is not None
-        and planning_run.get("planning_run_id") == refresh.get("planningRunId")
-        and planning_run.get("workflow_run_id") == run_id
-        and refresh.get("source") == "pending"
+        refresh.get("source") == "pending_plan"
         and refresh.get("status") == "awaiting_confirmation"
         and refresh.get("workflowRunId") == run_id
     ):
@@ -352,7 +343,6 @@ def build_workflow_plan_control_ag_ui_stream(
                 {"workspace": workspace},
                 planning_run_id=planning_run_id,
                 draft_digest=draft_digest,
-                workflow_run_id=target_run_id,
             )
             for frame in _build_abandon_frames(
                 encoder=encoder,
@@ -419,11 +409,6 @@ def _planning_lifecycle_payload(workspace: str) -> dict[str, Any] | None:
         **dict(payload.get("extensions") or {}),
         "planningRefresh": resolve_planning_refresh_state(
             workspace,
-            lifecycle=lifecycle,
-            runtime_active=lambda workflow_run_id: workflow_run_registry.is_active(
-                workflow_run_id,
-                workspace=workspace,
-            ),
         ),
     }
     return payload

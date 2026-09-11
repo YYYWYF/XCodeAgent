@@ -13,6 +13,7 @@ import {
   getApplicationPlanningUrl,
   revisionContinuationHandoffFromWorkflow
 } from '../../../service/applicationPagePlanning'
+import { getApplicationLifecycle } from '../../../service/applicationLifecycle'
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
@@ -1294,6 +1295,35 @@ export function useWorkflowConversation({
     }
   }
 
+  /** 在 Confirm、Abandon 或 Regenerate 完成后重新读取 PendingPlan 权威投影。 */
+  const refreshPendingPlanLifecycle = async (sessionKey: string): Promise<void> => {
+    try {
+      // planningRefresh 只在 lifecycle GET 时计算；动作流里的普通 lifecycle 帧不能替代它。
+      const lifecycle = await getApplicationLifecycle(application)
+      onApplicationLifecycleChange(lifecycle)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // 刷新失败时保留现有 guard，避免在未知服务端状态下错误解锁；同时报告可重试原因。
+      setErrors((current) => ({
+        ...current,
+        [sessionKey]: `任务规划状态刷新失败：${message}`
+      }))
+    }
+  }
+
+  /** 保持 PendingPlan guard 到动作结果确定后，再提交一次权威 lifecycle refresh。 */
+  const submitBuildTaskPlanAction = async (
+    submit: () => Promise<boolean>,
+    sessionKey: string
+  ): Promise<boolean> => {
+    try {
+      return await submit()
+    } finally {
+      // Confirm/Abandon/Regenerate 都必须以服务端当前 PendingPlan 事实收口，不能按点击动作猜状态。
+      await refreshPendingPlanLifecycle(sessionKey)
+    }
+  }
+
   /** 已完成应用的产品输入复用原 planning thread，并显式关闭开发对话模式。 */
   const handleProductStageConversation = async (
     request: string,
@@ -1495,6 +1525,7 @@ export function useWorkflowConversation({
     if (!conversation && clarificationMode === 'build_task_plan_confirmation') {
       const action = buildTaskPlanConfirmationAction(answers)
       if (!action || loading || workspaceBusy) return false
+      const actionSessionKey = options?.sessionIdentity?.key || activeRuntimeKey || draftKey
       if (action.action === 'abandon') {
         if (!action.planningRunId || !/^[0-9a-f]{64}$/.test(action.draftDigest || '')) {
           setErrors((current) => ({
@@ -1504,27 +1535,35 @@ export function useWorkflowConversation({
           }))
           return false
         }
-        return sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
-          planControlAction: 'abandon',
-          planControlRunId: workflow.runId,
-          planningRunId: action.planningRunId,
-          draftDigest: action.draftDigest,
-          sessionIdentity: options?.sessionIdentity,
-          titleFrom: '放弃 Build DAG',
-          conversation: false
-        })
+        return submitBuildTaskPlanAction(
+          () =>
+            sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
+              planControlAction: 'abandon',
+              planControlRunId: workflow.runId,
+              planningRunId: action.planningRunId,
+              draftDigest: action.draftDigest,
+              sessionIdentity: options?.sessionIdentity,
+              titleFrom: '放弃 Build DAG',
+              conversation: false
+            }),
+          actionSessionKey
+        )
       }
-      return sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
-        clarificationAnswers: answers,
-        originalRequest,
-        resumeState: workflow,
-        buildExecutionScope: workflowBuildScope,
-        resumeExecutionRunId: workflow.runId,
-        onExecutionStarted: options?.onExecutionStarted,
-        sessionIdentity: options?.sessionIdentity,
-        titleFrom: action.action === 'regenerate' ? '重新生成 Build DAG' : 'Build DAG 确认',
-        conversation: false
-      })
+      return submitBuildTaskPlanAction(
+        () =>
+          sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
+            clarificationAnswers: answers,
+            originalRequest,
+            resumeState: workflow,
+            buildExecutionScope: workflowBuildScope,
+            resumeExecutionRunId: workflow.runId,
+            onExecutionStarted: options?.onExecutionStarted,
+            sessionIdentity: options?.sessionIdentity,
+            titleFrom: action.action === 'regenerate' ? '重新生成 Build DAG' : 'Build DAG 确认',
+            conversation: false
+          }),
+        actionSessionKey
+      )
     }
     if (!conversation && clarificationMode === 'test_phase_confirmation') {
       const answer = answers.test_phase_confirmation

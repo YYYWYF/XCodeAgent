@@ -47,7 +47,7 @@ function terminalDagPlanningRefresh(lifecycle?: ApplicationLifecycle): boolean {
   const recovery = lifecycle?.extensions?.planningRefresh
   if (!recovery || recovery.schemaVersion !== 'planning-refresh.v1') return false
   return !(
-    (recovery.source === 'pending' && recovery.status === 'awaiting_confirmation') ||
+    (recovery.source === 'pending_plan' && recovery.status === 'awaiting_confirmation') ||
     (recovery.source === 'active_planning_run' && recovery.status === 'planning')
   )
 }
@@ -94,7 +94,7 @@ export function workflowInteractionAvailability(
   // Pending recovery 已经给出当前草稿身份；同 run/thread 上身份不匹配的旧卡必须失效。
   if (
     dagConfirmation &&
-    lifecycle?.extensions?.planningRefresh?.source === 'pending' &&
+    lifecycle?.extensions?.planningRefresh?.source === 'pending_plan' &&
     lifecycle.extensions.planningRefresh.status === 'awaiting_confirmation'
   ) {
     return 'stale'
@@ -171,7 +171,7 @@ function recoveredPendingInteractionMatches(
   if (
     !recovery ||
     recovery.schemaVersion !== 'planning-refresh.v1' ||
-    recovery.source !== 'pending' ||
+    recovery.source !== 'pending_plan' ||
     recovery.status !== 'awaiting_confirmation'
   ) {
     return false

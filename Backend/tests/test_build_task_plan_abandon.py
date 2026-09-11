@@ -56,6 +56,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
             plan,
             owner_session_id="session-abandon",
             planning_run_id="planning-run-current",
+            workflow_run_id="workflow-current",
             base_confirmed_plan_digest=base_digest,
             input_fingerprint="b" * 64,
             build_execution_scope={"type": "page", "targetId": "orders"},
@@ -258,7 +259,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         stop.assert_not_called()
         self.assertFalse(self.pending_path.exists())
         self.assertIn('"status":"abandoned"', "".join(frames))
-        self.assertIn('"source":"abandoned"', "".join(frames))
+        self.assertIn('"source":"none"', "".join(frames))
         persisted = load_application_lifecycle(self.state["workspace"])
         self.assertNotIn("workflow-current", persisted.active_executions)
         self.assertEqual(
@@ -287,7 +288,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(self.pending_path.exists())
         self.assertIn('"status":"stale_draft"', frames)
-        self.assertIn('"source":"pending"', frames)
+        self.assertIn('"source":"pending_plan"', frames)
         self.assertIn("workflow-current", load_application_lifecycle(
             self.state["workspace"]
         ).active_executions)
@@ -302,23 +303,18 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         result = abandon_pending_build_task_plan(
             self.state,
             **request,
-            workflow_run_id="workflow-current",
         )
-        reloaded = load_application_lifecycle(self.state["workspace"])
         snapshot = resolve_planning_refresh_state(
             self.state["workspace"],
-            lifecycle=reloaded,
-            runtime_active=lambda _run_id: False,
         )
 
         self.assertEqual(result.status, "abandoned")
-        self.assertEqual(snapshot["source"], "abandoned")
-        self.assertEqual(snapshot["status"], "abandoned")
-        self.assertEqual(snapshot["planningRunId"], request["planning_run_id"])
+        self.assertEqual(snapshot["source"], "none")
+        self.assertEqual(snapshot["status"], "idle")
 
 
     def test_abandon_commit_survives_pending_cleanup_failure(self) -> None:
-        """tombstone 已提交后即使 Pending 删除失败，刷新也不得把旧草稿复活。"""
+        """Pending 删除失败时，残留文件仍按 PendingPlan 权威投影，直到清理成功。"""
         self.formal_path.unlink()
         self.pending_path.unlink()
         request = self._write_pending(base_digest=None)
@@ -335,24 +331,20 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
                 abandon_pending_build_task_plan(
                     self.state,
                     **request,
-                    workflow_run_id="workflow-current",
                 )
 
         self.assertTrue(self.pending_path.exists())
-        reloaded = load_application_lifecycle(self.state["workspace"])
         snapshot = resolve_planning_refresh_state(
             self.state["workspace"],
-            lifecycle=reloaded,
-            runtime_active=lambda _run_id: False,
         )
-        self.assertEqual(snapshot["source"], "abandoned")
+        self.assertEqual(snapshot["source"], "pending_plan")
+        self.assertEqual(snapshot["status"], "awaiting_confirmation")
         self.assertEqual(snapshot["planningRunId"], request["planning_run_id"])
 
         # 重试不会把已经提交的 Abandon 当成 no_pending；同时会 best-effort 清理 residue。
         retried = abandon_pending_build_task_plan(
             self.state,
             **request,
-            workflow_run_id="workflow-current",
         )
         self.assertEqual(retried.status, "already_abandoned")
         self.assertFalse(self.pending_path.exists())

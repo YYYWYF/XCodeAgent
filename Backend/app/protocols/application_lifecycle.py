@@ -19,7 +19,6 @@ from app.services.application_template_generation import (
     prepare_application_template_generation,
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
-from app.protocols.workflow.run_control import workflow_run_registry
 
 
 APPLICATION_LIFECYCLE_EVENT_NAME = "application-lifecycle"
@@ -194,11 +193,6 @@ def build_application_lifecycle_ag_ui_stream(
                 **dict(lifecycle_payload.get("extensions") or {}),
                 "planningRefresh": resolve_planning_refresh_state(
                     request.workspace_root,
-                    lifecycle=state,
-                    runtime_active=lambda run_id: workflow_run_registry.is_active(
-                        run_id,
-                        workspace=request.workspace_root,
-                    ),
                 ),
             }
         data = {"action": request.action, "lifecycle": lifecycle_payload}

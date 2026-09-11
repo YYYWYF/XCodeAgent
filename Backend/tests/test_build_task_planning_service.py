@@ -110,6 +110,7 @@ class BuildTaskPlanningServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.terminal_status, "pending_confirmation")
         self.assertEqual(result.draft_identity, identity)
         self.assertEqual(result.draft_identity.owner_session_id, "session-mainline")
+        self.assertEqual(result.draft_identity.workflow_run_id, inputs.workflow_run_id)
         self.assertEqual(plain_json(result.pending_plan), pending)
         self.assertEqual(persisted_run["planning_run_id"], result.planning_run_id)
         # 写 Pending 之前必须先提交 PendingPersistenceStarted，Run 不能停留在 validating。

@@ -54,6 +54,7 @@ class ConfirmPromotionTests(unittest.TestCase):
 
         write_pending_build_task_plan_atomic(
             self.state, self.draft, owner_session_id="session-confirm", planning_run_id=run_id,
+            workflow_run_id="workflow-confirm",
             base_confirmed_plan_digest=_input_digest(self.inputs.base_confirmed_plan)
             if self.inputs.base_confirmed_plan is not None else None,
             input_fingerprint=_input_digest(self.inputs.model_dump(mode="json")),
@@ -354,7 +355,6 @@ class ConfirmPromotionTests(unittest.TestCase):
                 abandon_pending_build_task_plan(
                     self.state,
                     **self.request,
-                    workflow_run_id="workflow-current",
                 )
 
         self.assertTrue(self.pending_path.exists())
@@ -438,6 +438,7 @@ class EndpointDesignStalePromotionTests(unittest.TestCase):
             draft,
             owner_session_id="session-endpoint-design-stale",
             planning_run_id="planning-endpoint-design-stale",
+            workflow_run_id="workflow-endpoint-design-stale",
             base_confirmed_plan_digest=None,
             input_fingerprint=self.inputs.input_fingerprint(),
             build_execution_scope=scope,
@@ -524,6 +525,7 @@ class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):
             write_pending_build_task_plan_atomic(
                 state, plain_json(result.assembly.assembled_plan), owner_session_id="session-integration",
                 planning_run_id=run.planning_run_id,
+                workflow_run_id=run.workflow_run_id,
                 base_confirmed_plan_digest=run.base_confirmed_plan_digest, input_fingerprint=run.input_fingerprint,
                 build_execution_scope=plain_json(run.build_execution_scope), created_at=run.updated_at,
             )

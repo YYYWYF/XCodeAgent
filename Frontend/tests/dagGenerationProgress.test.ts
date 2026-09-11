@@ -22,7 +22,8 @@ import {
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
   pendingDagOwnerSessionId,
-  planningRefreshInterruption
+  planningRefreshInterruption,
+  resolvePendingPlanGuard
 } from '../src/renderer/src/components/AiChatPanel/stageOutputState'
 import {
   workflowInteractionAvailability,
@@ -534,7 +535,7 @@ test('refresh Pending 使用 Backend 确认投影，stale chat message 不能覆
     extensions: {
       planningRefresh: {
         schemaVersion: 'planning-refresh.v1',
-        source: 'pending',
+        source: 'pending_plan',
         status: 'awaiting_confirmation',
         planningRunId: 'planning-current',
         workflowRunId: 'workflow-current',
@@ -823,13 +824,75 @@ test('DraftIdentity 不完整时 Planning result 动作同样 fail closed', () =
   assert.equal(bindDagConfirmationDraftIdentity(workflow, action), undefined)
 })
 
+test('PendingPlanGuard 只由 pending_plan awaiting_confirmation projection 决定', () => {
+  const lifecycleWithOnlyOldExecution = {
+    activeExecutions: { 'workflow-old': pendingDagExecution() },
+    extensions: {}
+  } as unknown as ApplicationLifecycle
+  assert.deepEqual(resolvePendingPlanGuard(lifecycleWithOnlyOldExecution), { locked: false })
+
+  const pendingLifecycle = {
+    activeExecutions: {},
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'pending_plan',
+        status: 'awaiting_confirmation',
+        ownerSessionId: 'session-owner',
+        planningRunId: 'planning-current',
+        workflowRunId: 'workflow-current'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  assert.deepEqual(resolvePendingPlanGuard(pendingLifecycle), {
+    locked: true,
+    ownerSessionId: 'session-owner',
+    planningRunId: 'planning-current',
+    workflowRunId: 'workflow-current'
+  })
+
+  const nonPendingLifecycle = {
+    activeExecutions: { 'workflow-old': pendingDagExecution() },
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'pending_plan',
+        status: 'idle',
+        ownerSessionId: 'session-owner'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+  assert.deepEqual(resolvePendingPlanGuard(nonPendingLifecycle), { locked: false })
+})
+
+test('PendingPlanGuard 缺少 owner 时保留 invalid locked projection 供上层记录但不推导归属', () => {
+  const lifecycle = {
+    extensions: {
+      planningRefresh: {
+        schemaVersion: 'planning-refresh.v1',
+        source: 'pending_plan',
+        status: 'awaiting_confirmation',
+        planningRunId: 'planning-ownerless',
+        workflowRunId: 'workflow-ownerless'
+      }
+    }
+  } as unknown as ApplicationLifecycle
+
+  assert.deepEqual(resolvePendingPlanGuard(lifecycle), {
+    locked: true,
+    ownerSessionId: undefined,
+    planningRunId: 'planning-ownerless',
+    workflowRunId: 'workflow-ownerless'
+  })
+})
+
 test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控制入口', () => {
   const pendingLifecycle = {
     activeExecutions: {},
     extensions: {
       planningRefresh: {
         schemaVersion: 'planning-refresh.v1',
-        source: 'pending',
+        source: 'pending_plan',
         status: 'awaiting_confirmation',
         planningRunId: 'planning-pending',
         workflowRunId: 'workflow-pending',
@@ -978,7 +1041,7 @@ test('同 run/thread 的旧 DAG 卡不能越过工作区唯一 Pending 的 Draft
     extensions: {
       planningRefresh: {
         schemaVersion: 'planning-refresh.v1',
-        source: 'pending',
+        source: 'pending_plan',
         status: 'awaiting_confirmation',
         planningRunId: 'planning-regenerated',
         workflowRunId: execution.runId,
@@ -1039,7 +1102,7 @@ test('planningRefresh 独立校准但拒绝与当前 Pending execution 冲突的
     extensions: {
       planningRefresh: {
         schemaVersion: 'planning-refresh.v1',
-        source: 'pending',
+        source: 'pending_plan',
         status: 'awaiting_confirmation',
         planningRunId: 'planning-dag-transition',
         workflowRunId: 'workflow-dag-transition',
@@ -1071,6 +1134,105 @@ test('planningRefresh 独立校准但拒绝与当前 Pending execution 冲突的
 
   const withoutWrongRefresh = latestApplicationLifecycle(current, lowerRevisionWrongPendingRefresh)
   assert.equal(withoutWrongRefresh.extensions.planningRefresh, undefined)
+})
+
+/** 构造只携带 planningRefresh 投影的最小 lifecycle 帧。 */
+function lifecycleWithPlanningRefresh(
+  revision: number,
+  planningRefresh?: Record<string, unknown>
+): ApplicationLifecycle {
+  return {
+    application: { id: 'app-planning-refresh' },
+    updatedAt: `2026-09-10T00:00:${String(revision).padStart(2, '0')}Z`,
+    revision,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: {},
+    extensions: planningRefresh ? { planningRefresh } : {}
+  } as unknown as ApplicationLifecycle
+}
+
+test('higher revision lifecycle 缺少 planningRefresh 时保留 none/idle projection', () => {
+  const current = lifecycleWithPlanningRefresh(7, {
+    schemaVersion: 'planning-refresh.v1',
+    source: 'none',
+    status: 'idle',
+    message: '当前没有 PendingPlan。'
+  })
+  const incoming = lifecycleWithPlanningRefresh(8)
+
+  const merged = latestApplicationLifecycle(current, incoming)
+
+  assert.equal(merged.revision, 8)
+  assert.equal(merged.extensions.planningRefresh?.source, 'none')
+  assert.equal(merged.extensions.planningRefresh?.status, 'idle')
+})
+
+test('higher revision lifecycle 缺少 planningRefresh 时保留 pending projection', () => {
+  const current = lifecycleWithPlanningRefresh(7, {
+    schemaVersion: 'planning-refresh.v1',
+    source: 'pending_plan',
+    status: 'awaiting_confirmation',
+    planningRunId: 'planning-current',
+    workflowRunId: 'workflow-current',
+    ownerSessionId: 'session-current',
+    buildExecutionScope: { type: 'application', targetId: 'application' },
+    message: '已恢复 PendingPlan。'
+  })
+  const incoming = lifecycleWithPlanningRefresh(8)
+
+  const merged = latestApplicationLifecycle(current, incoming)
+
+  assert.equal(merged.revision, 8)
+  assert.equal(merged.extensions.planningRefresh?.source, 'pending_plan')
+  assert.equal(merged.extensions.planningRefresh?.status, 'awaiting_confirmation')
+  assert.equal(merged.extensions.planningRefresh?.ownerSessionId, 'session-current')
+})
+
+test('higher revision lifecycle 明确返回 none/idle 时替换 pending projection', () => {
+  const current = lifecycleWithPlanningRefresh(7, {
+    schemaVersion: 'planning-refresh.v1',
+    source: 'pending_plan',
+    status: 'awaiting_confirmation',
+    planningRunId: 'planning-current',
+    workflowRunId: 'workflow-current',
+    ownerSessionId: 'session-current',
+    message: '已恢复 PendingPlan。'
+  })
+  const incoming = lifecycleWithPlanningRefresh(8, {
+    schemaVersion: 'planning-refresh.v1',
+    source: 'none',
+    status: 'idle',
+    message: '当前没有 PendingPlan。'
+  })
+
+  const merged = latestApplicationLifecycle(current, incoming)
+
+  assert.equal(merged.extensions.planningRefresh?.source, 'none')
+  assert.equal(merged.extensions.planningRefresh?.status, 'idle')
+})
+
+test('higher revision lifecycle 明确返回 pending_plan 时替换 none/idle projection', () => {
+  const current = lifecycleWithPlanningRefresh(7, {
+    schemaVersion: 'planning-refresh.v1',
+    source: 'none',
+    status: 'idle',
+    message: '当前没有 PendingPlan。'
+  })
+  const incoming = lifecycleWithPlanningRefresh(8, {
+    schemaVersion: 'planning-refresh.v1',
+    source: 'pending_plan',
+    status: 'awaiting_confirmation',
+    planningRunId: 'planning-new',
+    workflowRunId: 'workflow-new',
+    ownerSessionId: 'session-new',
+    message: '已恢复 PendingPlan。'
+  })
+
+  const merged = latestApplicationLifecycle(current, incoming)
+
+  assert.equal(merged.extensions.planningRefresh?.source, 'pending_plan')
+  assert.equal(merged.extensions.planningRefresh?.status, 'awaiting_confirmation')
+  assert.equal(merged.extensions.planningRefresh?.ownerSessionId, 'session-new')
 })
 
 test('authoritative Abandon 在 reload、stale snapshot 与 late progress 后都不复活 Pending', () => {
@@ -1180,7 +1342,7 @@ test('Abandon lifecycle revision 拒绝更晚到达的旧 Pending lifecycle even
     extensions: {
       planningRefresh: {
         schemaVersion: 'planning-refresh.v1',
-        source: 'pending',
+        source: 'pending_plan',
         status: 'awaiting_confirmation',
         planningRunId: 'planning-abandoned',
         message: '旧 Pending。'

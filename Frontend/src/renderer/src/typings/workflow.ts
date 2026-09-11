@@ -1139,7 +1139,7 @@ export type WorkbenchExecution = {
 /** 页面刷新时由 Backend 按磁盘、进程注册表和 Formal 事实解析的 Planning 状态。 */
 export type PlanningRefreshState = {
   schemaVersion: 'planning-refresh.v1'
-  source: 'pending' | 'abandoned' | 'active_planning_run' | 'confirmed_plan' | 'none'
+  source: 'pending_plan' | 'abandoned' | 'active_planning_run' | 'confirmed_plan' | 'none'
   status:
     | 'awaiting_confirmation'
     | 'abandoned'

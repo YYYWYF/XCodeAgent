@@ -150,6 +150,7 @@ def write_pending_build_task_plan_atomic(
     *,
     owner_session_id: str,
     planning_run_id: str,
+    workflow_run_id: str,
     base_confirmed_plan_digest: str | None,
     input_fingerprint: str,
     build_execution_scope: Mapping[str, Any],
@@ -176,6 +177,7 @@ def write_pending_build_task_plan_atomic(
     identity = DraftIdentity(
         owner_session_id=owner_session_id,
         planning_run_id=planning_run_id,
+        workflow_run_id=workflow_run_id,
         draft_digest="0" * 64,
         base_confirmed_plan_digest=base_confirmed_plan_digest,
         input_fingerprint=input_fingerprint,

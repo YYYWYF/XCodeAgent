@@ -23,6 +23,7 @@ class DraftIdentity(FrozenPlanningModel):
 
     owner_session_id: _Identifier
     planning_run_id: _Identifier
+    workflow_run_id: _Identifier
     draft_digest: _Sha256
     base_confirmed_plan_digest: _Sha256 | None
     input_fingerprint: _Sha256
@@ -82,6 +83,8 @@ def abandon_pending_build_task_plan(
     tombstone；生命周期写入失败时保留 Pending，不伪报成功。Pending 删除成功后
     同时移除身份匹配的 PlanningRun 快照，让本次 DAG 生成真正结束；Formal 永不改动。
     Regenerate 复用精确删除能力时显式关闭 tombstone，因为它会立即创建新的 PlanningRun。
+    ``workflow_run_id`` 仅保留旧调用方参数；Lifecycle 始终使用 PendingPlan 内冻结的
+    Workflow 身份，不接受控制请求猜测。
     """
 
     from app.services.application_lifecycle import record_abandoned_planning_result
@@ -134,7 +137,8 @@ def abandon_pending_build_task_plan(
                 draft_digest=identity.draft_digest,
                 base_confirmed_plan_digest=identity.base_confirmed_plan_digest,
                 build_execution_scope=dict(identity.build_execution_scope),
-                workflow_run_id=workflow_run_id,
+                # PendingPlan 内冻结的 Workflow 身份优先于控制请求中的可选输入。
+                workflow_run_id=identity.workflow_run_id,
             )
         build_task_plan_pending_json_path(state).unlink()
         _end_matching_planning_run(state, identity.planning_run_id)

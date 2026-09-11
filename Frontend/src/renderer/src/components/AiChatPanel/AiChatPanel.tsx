@@ -138,6 +138,7 @@ import {
   pendingDagConfirmationWorkflow,
   pendingDagOwnerSessionId,
   planningRefreshInterruption,
+  resolvePendingPlanGuard,
   stageOutputPhase
 } from './stageOutputState'
 import {
@@ -2824,9 +2825,41 @@ export default function AiChatPanel({
     pendingDagExecution,
     applicationLifecycle
   )
-  const hasOwnedPendingPlan = Boolean(
-    pendingDagExecution && pendingDagSessionId && pendingDagSessionId === activeSessionId
+  const pendingPlanGuard = resolvePendingPlanGuard(applicationLifecycle)
+  const currentSessionId = activeSessionId || ''
+  const pendingPlanOwnedByCurrentSession = Boolean(
+    pendingPlanGuard.locked &&
+      pendingPlanGuard.ownerSessionId &&
+      pendingPlanGuard.ownerSessionId === currentSessionId
   )
+  // ownerSessionId 缺失时不能把所有会话误判为 owner 以外的会话，否则会造成全局只读。
+  const pendingPlanOwnedByOtherSession = Boolean(
+    pendingPlanGuard.locked &&
+      pendingPlanGuard.ownerSessionId &&
+      pendingPlanGuard.ownerSessionId !== currentSessionId
+  )
+  const invalidPendingPlanProjection = Boolean(
+    pendingPlanGuard.locked && !pendingPlanGuard.ownerSessionId
+  )
+  const pendingPlanLockActive = pendingPlanOwnedByCurrentSession || pendingPlanOwnedByOtherSession
+  useEffect(() => {
+    if (!invalidPendingPlanProjection) return
+    // 无 owner 的 PendingPlan projection 只记录诊断，不升级为全应用会话锁。
+    console.error(
+      '[PendingPlanGuard] invalid pending-plan projection: ownerSessionId is missing.',
+      {
+        applicationId: application.id,
+        planningRunId: pendingPlanGuard.planningRunId,
+        workflowRunId: pendingPlanGuard.workflowRunId
+      }
+    )
+  }, [
+    application.id,
+    invalidPendingPlanProjection,
+    pendingPlanGuard.planningRunId,
+    pendingPlanGuard.workflowRunId
+  ])
+  const hasOwnedPendingPlan = Boolean(pendingDagExecution && pendingPlanOwnedByCurrentSession)
   const activePlanningRefresh = applicationLifecycle?.extensions?.planningRefresh
   const hasActivePlanningRun = Boolean(
     activePlanningRefresh?.source === 'active_planning_run' &&
@@ -2882,17 +2915,16 @@ export default function AiChatPanel({
     planningSessionRunActive &&
       (!existingPlanningSession || existingPlanningSession.id !== activeSessionId)
   )
-  const pendingDagLockedByOtherSession = Boolean(pendingDagExecution && !hasOwnedPendingPlan)
   const otherSessionExecutionLocked =
-    sessionExecutionLocked || planningRunLockedByOtherSession || pendingDagLockedByOtherSession
+    sessionExecutionLocked || planningRunLockedByOtherSession || pendingPlanOwnedByOtherSession
   const phaseSessionRunActive =
-    Boolean(phaseExecution) || planningSessionRunActive || Boolean(pendingDagExecution)
+    Boolean(phaseExecution) || planningSessionRunActive || pendingPlanLockActive
   const phaseExecutionSessionTitle = phaseExecution
     ? allSessions.find((session) => session.id === phaseExecution.identity.sessionId)?.title
     : pendingDagSession?.title || existingPlanningSession?.title
   const phaseExecutionStatus =
-    phaseExecution?.status || (pendingDagExecution ? 'awaiting_user' : 'running')
-  const workflowInputLocked = workspaceBusy || Boolean(pendingDagExecution)
+    phaseExecution?.status || (pendingPlanLockActive ? 'awaiting_user' : 'running')
+  const workflowInputLocked = workspaceBusy || pendingPlanLockActive
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
       ? { ...sessionRunStates, [existingPlanningSession.id]: 'running' as const }
@@ -3753,7 +3785,7 @@ export default function AiChatPanel({
       continuation?: WorkflowDevelopmentContinuation
     }
   ): Promise<void> => {
-    if (pendingDagExecution) return
+    if (pendingPlanLockActive) return
     const targetKey = `entity:${entityId}`
     setInteractingDetailTargetKey(targetKey)
     setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
@@ -3773,7 +3805,7 @@ export default function AiChatPanel({
 
   /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置页面、Endpoint 或实体目标。 */
   const handleQuickTaskStart = async (task: QuickTaskItem): Promise<void> => {
-    if (pendingDagExecution) return
+    if (pendingPlanLockActive) return
     setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
@@ -4548,13 +4580,13 @@ export default function AiChatPanel({
               planningWorkflow={planningWorkflow}
             />
 
-            {otherSessionExecutionLocked || pendingDagExecution ? (
+            {otherSessionExecutionLocked || pendingPlanOwnedByCurrentSession ? (
               <SessionExecutionLockDock
                 phaseLabel={WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label}
                 sessionTitle={phaseExecutionSessionTitle}
                 status={phaseExecutionStatus}
                 onOpenSession={
-                  pendingDagLockedByOtherSession && pendingDagSession
+                  pendingPlanOwnedByOtherSession && pendingDagSession
                     ? () => {
                         void handleOpenChatSession(pendingDagSession.id)
                       }
