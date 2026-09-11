@@ -27,6 +27,14 @@ class DurableExecutionStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+class ExecutionLeaseStatus(StrEnum):
+    """定义持久化执行租约的生命周期状态。"""
+
+    ACTIVE = "active"
+    RELEASED = "released"
+    EXPIRED = "expired"
+
+
 class RecoveryPointKind(StrEnum):
     """区分没有真实 checkpoint 的入口现场和 LangGraph checkpoint 现场。"""
 
@@ -50,6 +58,19 @@ class DurableExecutionRecord(ExecutionRecoveryModel):
     started_at: datetime
     updated_at: datetime
     ended_at: datetime | None = None
+
+
+class ExecutionLease(ExecutionRecoveryModel):
+    """记录当前 Durable Execution 由哪个 Backend 实例持有。"""
+
+    run_id: str = Field(min_length=1, max_length=512)
+    owner_backend_instance_id: str = Field(min_length=1, max_length=256)
+    owner_pid: int = Field(ge=1)
+    status: ExecutionLeaseStatus
+    acquired_at: datetime
+    heartbeat_at: datetime
+    expires_at: datetime
+    released_at: datetime | None = None
 
 
 class RecoveryPoint(ExecutionRecoveryModel):

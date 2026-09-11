@@ -81,6 +81,13 @@ from app.services.execution_recovery import (
     observe_execution_started,
     observe_node_started,
 )
+from app.services.execution_lease_heartbeat import (
+    maintain_execution_heartbeat,
+    stop_execution_heartbeat,
+)
+from app.services.execution_recovery_scanner import reconcile_workspace_recovery
+from app.services.backend_instance import current_backend_instance
+from app.services.workspace_process_registry import workspace_process_registry
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
@@ -354,6 +361,8 @@ def build_workflow_ag_ui_stream(
         application_planning_run_lock_acquired = False
         active_graph: Any | None = None
         config: dict[str, Any] | None = None
+        heartbeat_task: asyncio.Task[None] | None = None
+        backend_identity = current_backend_instance()
         recovery_observation_started = False
         task = asyncio.current_task()
         if task is None:
@@ -386,6 +395,13 @@ def build_workflow_ag_ui_stream(
             workspace = workflow_inputs["workspace"] or None
             editor_mode = workflow_inputs["editor_mode"] or None
             settings = Settings.from_env()
+            if workspace:
+                # 新 Workflow 进入持久化 Execution 前，先按已知 workspace 清理旧孤儿。
+                await reconcile_workspace_recovery(
+                    workspace,
+                    current_backend_instance_id=backend_identity.instance_id,
+                    lease_ttl_seconds=settings.execution_recovery_lease_ttl_seconds,
+                )
             observability = _workflow_observability(
                 settings=settings,
                 run_id=run_id,
@@ -648,7 +664,7 @@ def build_workflow_ag_ui_stream(
             # Recovery 记录是独立旁路：只在确认即将进入真实 Graph 后登记，且任何写入
             # 失败都由服务层降级为 warning，不得改变现有 Workflow 控制流。
             recovery_observation_started = True
-            await best_effort_recovery_observation(
+            started_record = await best_effort_recovery_observation(
                 operation="execution.started",
                 workspace=workspace,
                 run_id=run_id,
@@ -661,8 +677,21 @@ def build_workflow_ag_ui_stream(
                     run_id=run_id,
                     workflow_scope=workflow_scope,
                     first_node=first_node_name,
+                    backend_instance_id=backend_identity.instance_id,
+                    backend_pid=backend_identity.pid,
+                    lease_ttl=settings.execution_recovery_lease_ttl_seconds,
                 ),
             )
+            if started_record is not None and workspace:
+                heartbeat_task = asyncio.create_task(
+                    maintain_execution_heartbeat(
+                        workspace=workspace,
+                        run_id=run_id,
+                        backend_instance_id=backend_identity.instance_id,
+                        interval_seconds=settings.execution_recovery_heartbeat_seconds,
+                        lease_ttl_seconds=settings.execution_recovery_lease_ttl_seconds,
+                    )
+                )
             await best_effort_recovery_observation(
                 operation="point.captured",
                 workspace=workspace,
@@ -1912,6 +1941,10 @@ def build_workflow_ag_ui_stream(
                         run_id=run_id,
                         thread_id=thread_id,
                         workflow_scope=workflow_scope,
+                        explicitly_cancelled=workspace_process_registry.is_run_cancelled(
+                            run_id
+                        ),
+                        backend_instance_id=backend_identity.instance_id,
                     ),
                 )
             if not workflow_scope:
@@ -2078,7 +2111,8 @@ def build_workflow_ag_ui_stream(
                 )
             )
         finally:
-            # 正常完成和消费端取消都必须释放任务注册及工作区占用。
+            # 所有终态先停止旁路心跳，再释放任务注册及工作区占用。
+            await stop_execution_heartbeat(heartbeat_task)
             workflow_run_registry.unregister(run_id, task)
             if workspace_lease is not None:
                 workspace_lease.release()

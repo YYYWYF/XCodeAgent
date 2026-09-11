@@ -135,6 +135,18 @@ class WorkflowRunRegistry:
             return False
         return not workspace_key or entry[0] == workspace_key
 
+    def active_run_ids(self, workspace: str | None = None) -> set[str]:
+        """返回当前进程仍活跃且属于目标 workspace 的 Workflow runId。"""
+
+        workspace_key = _workspace_key(workspace)
+        with self._lock:
+            entries = list(self._tasks.items())
+        return {
+            run_id
+            for run_id, (entry_workspace, task) in entries
+            if not task.done() and (not workspace_key or entry_workspace == workspace_key)
+        }
+
     def begin_workspace_deletion(
         self,
         workspace: str,

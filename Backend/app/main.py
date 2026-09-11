@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
@@ -71,6 +72,10 @@ from app.services.database_crypto import (
     database_encryption_metadata,
     ensure_database_platform_key,
 )
+from app.services.backend_instance import (
+    current_backend_instance,
+    initialize_backend_instance,
+)
 from app.services.project_launcher import (
     launch_project_preview,
     stop_project_preview,
@@ -88,6 +93,13 @@ async def lifespan(_app: FastAPI):
 
     ensure_database_platform_key()
     ensure_agents_document()
+    backend_instance = initialize_backend_instance()
+    logging.getLogger("uvicorn.error").info(
+        "backend.instance.started instanceId=%s pid=%s startedAt=%s",
+        backend_instance.instance_id,
+        backend_instance.pid,
+        backend_instance.started_at.isoformat(),
+    )
     try:
         yield
     finally:
@@ -118,6 +130,7 @@ async def health() -> dict[str, object]:
 
     return {
         "status": "ok",
+        "backendInstanceId": current_backend_instance().instance_id,
         "provider": settings.model_provider,
         "model": settings.model_api_name,
         "configured_model": settings.model_name,

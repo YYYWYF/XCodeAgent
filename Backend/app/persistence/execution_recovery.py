@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -14,6 +14,8 @@ import aiosqlite
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    ExecutionLease,
+    ExecutionLeaseStatus,
     RecoveryPoint,
     RecoveryPointKind,
 )
@@ -22,7 +24,7 @@ from app.domain.execution_recovery import (
 RECOVERY_DATABASE_RELATIVE_PATH = Path(
     ".xcodeagent/recovery/execution-recovery.sqlite"
 )
-RECOVERY_SCHEMA_VERSION = "1"
+RECOVERY_SCHEMA_VERSION = "2"
 
 
 def execution_recovery_db_path(workspace: str | Path) -> Path:
@@ -125,6 +127,27 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_execution_records_updated
                 ON execution_records(updated_at);
 
+            CREATE TABLE IF NOT EXISTS execution_leases (
+                run_id TEXT PRIMARY KEY,
+                owner_backend_instance_id TEXT NOT NULL,
+                owner_pid INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                acquired_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                released_at TEXT,
+                FOREIGN KEY(run_id)
+                    REFERENCES execution_records(run_id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_execution_leases_status
+                ON execution_leases(status);
+            CREATE INDEX IF NOT EXISTS idx_execution_leases_expires
+                ON execution_leases(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_execution_leases_owner
+                ON execution_leases(owner_backend_instance_id);
+
             CREATE TABLE IF NOT EXISTS recovery_points (
                 recovery_point_id TEXT PRIMARY KEY,
                 run_id TEXT NOT NULL,
@@ -201,6 +224,290 @@ async def insert_execution(
         if row is None:
             raise RuntimeError(f"无法读取刚写入的执行记录：{record.run_id}")
         return _execution_from_row(row)
+
+
+async def insert_execution_with_lease(
+    *,
+    record: DurableExecutionRecord,
+    lease: ExecutionLease,
+) -> DurableExecutionRecord:
+    """在一个 SQLite 事务中原子创建 ExecutionRecord 和 ACTIVE lease。"""
+
+    if record.run_id != lease.run_id:
+        raise ValueError("ExecutionRecord 与 ExecutionLease 的 runId 必须一致。")
+    if record.status is not DurableExecutionStatus.RUNNING:
+        raise ValueError("只能为 RUNNING Execution 创建 lease。")
+    if lease.status is not ExecutionLeaseStatus.ACTIVE:
+        raise ValueError("新建 Execution 的 lease 必须为 ACTIVE。")
+    await initialize_execution_recovery_store(record.workspace)
+    async with _connection(record.workspace) as connection:
+        await connection.execute(
+            """
+            INSERT INTO execution_records(
+                run_id, thread_id, workspace, project_id, execution_kind,
+                workflow_scope, first_node, current_node, status,
+                last_recovery_point_id, started_at, updated_at, ended_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO NOTHING
+            """,
+            (
+                record.run_id,
+                record.thread_id,
+                record.workspace,
+                record.project_id,
+                record.execution_kind,
+                record.workflow_scope,
+                record.first_node,
+                record.current_node,
+                record.status.value,
+                record.last_recovery_point_id,
+                _utc_iso(record.started_at),
+                _utc_iso(record.updated_at),
+                _utc_iso(record.ended_at) if record.ended_at else None,
+            ),
+        )
+        await connection.execute(
+            """
+            INSERT INTO execution_leases(
+                run_id, owner_backend_instance_id, owner_pid, status,
+                acquired_at, heartbeat_at, expires_at, released_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO NOTHING
+            """,
+            (
+                lease.run_id,
+                lease.owner_backend_instance_id,
+                lease.owner_pid,
+                lease.status.value,
+                _utc_iso(lease.acquired_at),
+                _utc_iso(lease.heartbeat_at),
+                _utc_iso(lease.expires_at),
+                _utc_iso(lease.released_at) if lease.released_at else None,
+            ),
+        )
+        row = await _fetch_execution_row(connection, record.run_id)
+        if row is None:
+            raise RuntimeError(f"无法读取刚写入的执行记录：{record.run_id}")
+        return _execution_from_row(row)
+
+
+async def get_execution_lease(
+    workspace: str | Path,
+    run_id: str,
+) -> ExecutionLease | None:
+    """读取指定执行的持久化租约。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        row = await _fetch_execution_lease_row(connection, run_id)
+        return _execution_lease_from_row(row) if row is not None else None
+
+
+async def renew_execution_lease(
+    *,
+    workspace: str | Path,
+    run_id: str,
+    owner_backend_instance_id: str,
+    heartbeat_at: datetime,
+    expires_at: datetime,
+) -> bool:
+    """仅为仍处于 RUNNING/ACTIVE 且属于当前 Backend 的执行续租。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            UPDATE execution_leases
+            SET heartbeat_at = ?, expires_at = ?
+            WHERE run_id = ?
+              AND owner_backend_instance_id = ?
+              AND status = ?
+              AND EXISTS (
+                  SELECT 1 FROM execution_records
+                  WHERE execution_records.run_id = execution_leases.run_id
+                    AND execution_records.status = ?
+              )
+            """,
+            (
+                _utc_iso(heartbeat_at),
+                _utc_iso(expires_at),
+                run_id,
+                owner_backend_instance_id,
+                ExecutionLeaseStatus.ACTIVE.value,
+                DurableExecutionStatus.RUNNING.value,
+            ),
+        )
+        return cursor.rowcount == 1
+
+
+async def finish_execution_and_release_lease(
+    *,
+    workspace: str | Path,
+    run_id: str,
+    status: DurableExecutionStatus,
+    owner_backend_instance_id: str,
+    ended_at: datetime,
+) -> bool:
+    """原子写入终态并释放当前 Backend 持有的 ACTIVE lease。"""
+
+    await initialize_execution_recovery_store(workspace)
+    ended_at_text = _utc_iso(ended_at)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            UPDATE execution_records
+            SET status = ?, updated_at = ?, ended_at = COALESCE(ended_at, ?)
+            WHERE run_id = ?
+              AND status = ?
+            """,
+            (
+                status.value,
+                ended_at_text,
+                ended_at_text,
+                run_id,
+                DurableExecutionStatus.RUNNING.value,
+            ),
+        )
+        if cursor.rowcount != 1:
+            return False
+        await connection.execute(
+            """
+            UPDATE execution_leases
+            SET status = ?, released_at = COALESCE(released_at, ?)
+            WHERE run_id = ?
+              AND owner_backend_instance_id = ?
+              AND status = ?
+            """,
+            (
+                ExecutionLeaseStatus.RELEASED.value,
+                ended_at_text,
+                run_id,
+                owner_backend_instance_id,
+                ExecutionLeaseStatus.ACTIVE.value,
+            ),
+        )
+        return True
+
+
+async def list_running_executions_with_leases(
+    workspace: str | Path,
+) -> list[tuple[DurableExecutionRecord, ExecutionLease | None]]:
+    """读取工作区全部 RUNNING 执行及其可选 lease，供恢复扫描器判断。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            SELECT
+                e.run_id, e.thread_id, e.workspace, e.project_id,
+                e.execution_kind, e.workflow_scope, e.first_node,
+                e.current_node, e.status, e.last_recovery_point_id,
+                e.started_at, e.updated_at, e.ended_at,
+                l.run_id, l.owner_backend_instance_id, l.owner_pid,
+                l.status, l.acquired_at, l.heartbeat_at, l.expires_at,
+                l.released_at
+            FROM execution_records AS e
+            LEFT JOIN execution_leases AS l ON l.run_id = e.run_id
+            WHERE e.status = ?
+            ORDER BY e.started_at ASC, e.run_id ASC
+            """,
+            (DurableExecutionStatus.RUNNING.value,),
+        )
+        rows = await cursor.fetchall()
+    return [
+        (
+            _execution_from_row(row[:13]),
+            _execution_lease_from_row(row[13:]) if row[13] is not None else None,
+        )
+        for row in rows
+    ]
+
+
+async def mark_execution_interrupted(
+    *,
+    workspace: str | Path,
+    run_id: str,
+    interrupted_at: datetime,
+) -> DurableExecutionRecord | None:
+    """以 RUNNING 条件保护地将执行标记为 INTERRUPTED 并使 lease 过期。"""
+
+    await initialize_execution_recovery_store(workspace)
+    interrupted_at_text = _utc_iso(interrupted_at)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            UPDATE execution_records
+            SET status = ?, updated_at = ?, ended_at = COALESCE(ended_at, ?)
+            WHERE run_id = ?
+              AND status = ?
+            """,
+            (
+                DurableExecutionStatus.INTERRUPTED.value,
+                interrupted_at_text,
+                interrupted_at_text,
+                run_id,
+                DurableExecutionStatus.RUNNING.value,
+            ),
+        )
+        if cursor.rowcount != 1:
+            return None
+        await connection.execute(
+            """
+            UPDATE execution_leases
+            SET status = ?
+            WHERE run_id = ?
+              AND status = ?
+            """,
+            (
+                ExecutionLeaseStatus.EXPIRED.value,
+                run_id,
+                ExecutionLeaseStatus.ACTIVE.value,
+            ),
+        )
+        row = await _fetch_execution_row(connection, run_id)
+        return _execution_from_row(row) if row is not None else None
+
+
+async def reconcile_orphaned_executions(
+    *,
+    workspace: str | Path,
+    current_backend_instance_id: str,
+    locally_active_run_ids: set[str],
+    now: datetime,
+    lease_ttl_seconds: float = 45.0,
+) -> list[DurableExecutionRecord]:
+    """按 lease 所有者、当前运行表和 TTL 修正孤儿执行，并返回新中断项。"""
+
+    running = await list_running_executions_with_leases(workspace)
+    interrupted: list[DurableExecutionRecord] = []
+    for record, lease in running:
+        should_interrupt = (
+            lease is None
+            or lease.status is not ExecutionLeaseStatus.ACTIVE
+            or lease.owner_backend_instance_id != current_backend_instance_id
+            or (
+                record.run_id not in locally_active_run_ids
+                and lease.expires_at <= now
+            )
+        )
+        if should_interrupt:
+            marked = await mark_execution_interrupted(
+                workspace=workspace,
+                run_id=record.run_id,
+                interrupted_at=now,
+            )
+            if marked is not None:
+                interrupted.append(marked)
+            continue
+        if record.run_id in locally_active_run_ids and lease is not None:
+            await renew_execution_lease(
+                workspace=workspace,
+                run_id=record.run_id,
+                owner_backend_instance_id=current_backend_instance_id,
+                heartbeat_at=now,
+                expires_at=now + timedelta(seconds=lease_ttl_seconds),
+            )
+    return interrupted
 
 
 async def update_execution_node(
@@ -384,6 +691,24 @@ async def _fetch_execution_row(
     return await cursor.fetchone()
 
 
+async def _fetch_execution_lease_row(
+    connection: aiosqlite.Connection,
+    run_id: str,
+) -> tuple[object, ...] | None:
+    """读取执行租约的一行原始数据。"""
+
+    cursor = await connection.execute(
+        """
+        SELECT run_id, owner_backend_instance_id, owner_pid, status,
+               acquired_at, heartbeat_at, expires_at, released_at
+        FROM execution_leases
+        WHERE run_id = ?
+        """,
+        (run_id,),
+    )
+    return await cursor.fetchone()
+
+
 async def _fetch_recovery_point_row_by_dedupe(
     connection: aiosqlite.Connection,
     dedupe_key: str,
@@ -423,6 +748,21 @@ def _execution_from_row(row: tuple[object, ...]) -> DurableExecutionRecord:
         started_at=_parse_datetime(str(row[10])),
         updated_at=_parse_datetime(str(row[11])),
         ended_at=_parse_datetime(str(row[12])) if row[12] is not None else None,
+    )
+
+
+def _execution_lease_from_row(row: tuple[object, ...]) -> ExecutionLease:
+    """将租约表行恢复为严格的领域模型。"""
+
+    return ExecutionLease(
+        run_id=str(row[0]),
+        owner_backend_instance_id=str(row[1]),
+        owner_pid=int(row[2]),
+        status=ExecutionLeaseStatus(str(row[3])),
+        acquired_at=_parse_datetime(str(row[4])),
+        heartbeat_at=_parse_datetime(str(row[5])),
+        expires_at=_parse_datetime(str(row[6])),
+        released_at=_parse_datetime(str(row[7])) if row[7] is not None else None,
     )
 
 

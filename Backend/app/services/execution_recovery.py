@@ -4,24 +4,28 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar
 from uuid import uuid4
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    ExecutionLease,
+    ExecutionLeaseStatus,
     RecoveryPoint,
     RecoveryPointKind,
 )
+from app.config import execution_recovery_lease_ttl_seconds
 from app.persistence.execution_recovery import (
+    finish_execution_and_release_lease,
     initialize_execution_recovery_store,
-    insert_execution,
+    insert_execution_with_lease,
     insert_recovery_point,
     update_execution_node,
-    update_execution_status,
 )
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.backend_instance import current_backend_instance
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -71,12 +75,23 @@ async def observe_execution_started(
     run_id: str,
     workflow_scope: str | None,
     first_node: str,
+    backend_instance_id: str | None = None,
+    backend_pid: int | None = None,
+    lease_ttl: float | None = None,
 ) -> DurableExecutionRecord | None:
-    """登记真实 Graph 执行，并将 planning/workbench 统一映射为记录类型。"""
+    """原子登记真实 Graph 执行及其当前 Backend 持有的 ACTIVE lease。"""
 
     if not workspace:
         return None
     now = _utc_now()
+    identity = current_backend_instance()
+    owner_backend_instance_id = backend_instance_id or identity.instance_id
+    owner_pid = backend_pid or identity.pid
+    resolved_lease_ttl = (
+        lease_ttl
+        if lease_ttl is not None
+        else execution_recovery_lease_ttl_seconds()
+    )
     record = DurableExecutionRecord(
         run_id=run_id,
         thread_id=thread_id,
@@ -94,8 +109,17 @@ async def observe_execution_started(
         started_at=now,
         updated_at=now,
     )
+    lease = ExecutionLease(
+        run_id=run_id,
+        owner_backend_instance_id=owner_backend_instance_id,
+        owner_pid=owner_pid,
+        status=ExecutionLeaseStatus.ACTIVE,
+        acquired_at=now,
+        heartbeat_at=now,
+        expires_at=now + timedelta(seconds=resolved_lease_ttl),
+    )
     await initialize_execution_recovery_store(workspace)
-    persisted = await insert_execution(record)
+    persisted = await insert_execution_with_lease(record=record, lease=lease)
     logger.info(
         "recovery.execution.started runId=%s threadId=%s workflowScope=%s "
         "firstNode=%s",
@@ -103,6 +127,12 @@ async def observe_execution_started(
         thread_id,
         workflow_scope,
         first_node,
+    )
+    logger.info(
+        "recovery.lease.acquired runId=%s backendInstanceId=%s pid=%s",
+        run_id,
+        owner_backend_instance_id,
+        owner_pid,
     )
     return persisted
 
@@ -215,16 +245,19 @@ async def observe_execution_finished(
     thread_id: str,
     workflow_scope: str | None,
     status: DurableExecutionStatus,
+    backend_instance_id: str | None = None,
 ) -> None:
     """记录 Graph 正常结束或进入等待用户确认的明确终态。"""
 
     if not workspace:
         return
-    await update_execution_status(
+    identity = current_backend_instance()
+    released = await finish_execution_and_release_lease(
         workspace=workspace,
         run_id=run_id,
         status=status,
-        ended=True,
+        owner_backend_instance_id=backend_instance_id or identity.instance_id,
+        ended_at=_utc_now(),
     )
     logger.info(
         "recovery.execution.finished runId=%s threadId=%s workflowScope=%s status=%s",
@@ -233,6 +266,13 @@ async def observe_execution_finished(
         workflow_scope,
         status.value,
     )
+    if released:
+        logger.info(
+            "recovery.lease.released runId=%s backendInstanceId=%s status=%s",
+            run_id,
+            backend_instance_id or identity.instance_id,
+            status.value,
+        )
 
 
 async def observe_execution_failed(
@@ -241,6 +281,7 @@ async def observe_execution_failed(
     run_id: str,
     thread_id: str,
     workflow_scope: str | None,
+    backend_instance_id: str | None = None,
 ) -> None:
     """记录未处理异常对应的失败终态。"""
 
@@ -251,6 +292,7 @@ async def observe_execution_failed(
         workflow_scope=workflow_scope,
         status=DurableExecutionStatus.FAILED,
         log_name="recovery.execution.failed",
+        backend_instance_id=backend_instance_id,
     )
 
 
@@ -260,16 +302,27 @@ async def observe_execution_cancelled(
     run_id: str,
     thread_id: str,
     workflow_scope: str | None,
+    explicitly_cancelled: bool = False,
+    backend_instance_id: str | None = None,
 ) -> None:
-    """记录 asyncio 取消对应的取消终态，并保留原取消异常向上传播。"""
+    """区分显式用户取消与外部任务中断，并保留原取消异常向上传播。"""
 
     await _observe_terminal_status(
         workspace=workspace,
         run_id=run_id,
         thread_id=thread_id,
         workflow_scope=workflow_scope,
-        status=DurableExecutionStatus.CANCELLED,
-        log_name="recovery.execution.cancelled",
+        status=(
+            DurableExecutionStatus.CANCELLED
+            if explicitly_cancelled
+            else DurableExecutionStatus.INTERRUPTED
+        ),
+        log_name=(
+            "recovery.execution.cancelled"
+            if explicitly_cancelled
+            else "recovery.execution.interrupted"
+        ),
+        backend_instance_id=backend_instance_id,
     )
 
 
@@ -321,16 +374,19 @@ async def _observe_terminal_status(
     workflow_scope: str | None,
     status: DurableExecutionStatus,
     log_name: str,
+    backend_instance_id: str | None = None,
 ) -> None:
     """写入失败或取消状态并输出不含敏感 State 的结构化上下文。"""
 
     if not workspace:
         return
-    await update_execution_status(
+    identity = current_backend_instance()
+    released = await finish_execution_and_release_lease(
         workspace=workspace,
         run_id=run_id,
         status=status,
-        ended=True,
+        owner_backend_instance_id=backend_instance_id or identity.instance_id,
+        ended_at=_utc_now(),
     )
     logger.info(
         "%s runId=%s threadId=%s workflowScope=%s status=%s",
@@ -340,3 +396,10 @@ async def _observe_terminal_status(
         workflow_scope,
         status.value,
     )
+    if released:
+        logger.info(
+            "recovery.lease.released runId=%s backendInstanceId=%s status=%s",
+            run_id,
+            backend_instance_id or identity.instance_id,
+            status.value,
+        )

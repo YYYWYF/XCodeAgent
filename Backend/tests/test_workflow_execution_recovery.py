@@ -215,6 +215,7 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             run_id="run-cancelled",
             thread_id="thread-001",
             workflow_scope="page",
+            explicitly_cancelled=True,
         )
         cancelled = await get_execution(self.workspace, "run-cancelled")
         self.assertIsNotNone(cancelled)

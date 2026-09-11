@@ -255,8 +255,8 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"type":"RUN_ERROR"', "".join(frames))
         self.assertNotIn('"type":"RUN_FINISHED"', "".join(frames))
 
-    async def test_cancel_captures_running_node_as_uncompleted(self) -> None:
-        """B 正在阻塞时取消 Runtime，Execution 必须仍指向 B 且状态为 cancelled。"""
+    async def test_external_cancel_captures_running_node_as_interrupted(self) -> None:
+        """外部取消 B 时必须保留未完成现场并标记为 interrupted。"""
 
         product_started = asyncio.Event()
         release_product = asyncio.Event()
@@ -295,7 +295,7 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(cancelled)
         assert cancelled is not None
-        self.assertEqual(cancelled.status.value, "cancelled")
+        self.assertEqual(cancelled.status.value, "interrupted")
         self.assertFalse(any(
             point.completed_node == "product_planning"
             for point in points

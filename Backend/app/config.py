@@ -73,6 +73,8 @@ class Settings:
     dag_business_self_check_enabled: bool = False
     checkpoint_db_path: str = ""  # populated in from_env
     checkpoint_retention_days: int = 30
+    execution_recovery_heartbeat_seconds: float = 10.0
+    execution_recovery_lease_ttl_seconds: float = 45.0
     langsmith_tracing_enabled: bool = False
     langsmith_project: str = ""
     langsmith_endpoint: str = ""
@@ -198,6 +200,8 @@ class Settings:
             checkpoint_retention_days=int(
                 os.getenv("XCODEAGENT_CHECKPOINT_RETENTION_DAYS", "30")
             ),
+            execution_recovery_heartbeat_seconds=execution_recovery_heartbeat_seconds(),
+            execution_recovery_lease_ttl_seconds=execution_recovery_lease_ttl_seconds(),
             langsmith_tracing_enabled=_env_bool("LANGSMITH_TRACING", default=False),
             langsmith_project=os.getenv("LANGSMITH_PROJECT", ""),
             langsmith_endpoint=os.getenv("LANGSMITH_ENDPOINT", ""),
@@ -232,6 +236,48 @@ def _env_int(name: str, *, default: int, minimum: int) -> int:
     if value < minimum:
         raise ValueError(f"{name} must be an integer >= {minimum}.")
     return value
+
+
+def _env_float(name: str, *, default: float, minimum: float) -> float:
+    """严格读取有下界的浮点配置，非法值报告变量名。"""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number >= {minimum}.") from exc
+    if value < minimum:
+        raise ValueError(f"{name} must be a number >= {minimum}.")
+    return value
+
+
+def execution_recovery_heartbeat_seconds() -> float:
+    """读取 Durable Execution lease 的心跳间隔。"""
+
+    return _env_float(
+        "XCODEAGENT_EXECUTION_RECOVERY_HEARTBEAT_SECONDS",
+        default=10.0,
+        minimum=0.001,
+    )
+
+
+def execution_recovery_lease_ttl_seconds() -> float:
+    """读取 lease TTL，并确保至少覆盖三个心跳周期。"""
+
+    heartbeat_seconds = execution_recovery_heartbeat_seconds()
+    ttl_seconds = _env_float(
+        "XCODEAGENT_EXECUTION_RECOVERY_LEASE_TTL_SECONDS",
+        default=45.0,
+        minimum=0.001,
+    )
+    if ttl_seconds < heartbeat_seconds * 3:
+        raise ValueError(
+            "XCODEAGENT_EXECUTION_RECOVERY_LEASE_TTL_SECONDS must be at least "
+            "three heartbeat intervals."
+        )
+    return ttl_seconds
 
 
 def _env_bool(name: str, *, default: bool) -> bool:

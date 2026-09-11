@@ -19,6 +19,7 @@ from app.services.application_template_generation import (
     prepare_application_template_generation,
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
+from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 
 
 APPLICATION_LIFECYCLE_EVENT_NAME = "application-lifecycle"
@@ -150,6 +151,9 @@ def build_application_lifecycle_ag_ui_stream(
         elif request.action == "get":
             from app.services.development_artifacts import refresh_development_artifacts
 
+            # 重新打开已知 workspace 时惰性识别旧 Backend 留下的中断执行；扫描器自身
+            # fail-open，不能把恢复基础设施故障升级为 lifecycle get 失败。
+            await reconcile_workspace_recovery(request.workspace_root)
             state = refresh_development_artifacts(request.workspace_root)
             message = "已读取应用生命周期。"
         elif request.action == "begin_template_generation":
