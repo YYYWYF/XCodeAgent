@@ -29,6 +29,7 @@ import {
   shouldSuppressConfirmedTechnicalPlanTransitionChunk
 } from '../src/renderer/src/components/Welcome/planningWorkflowState'
 import type {
+  ApplicationConfig,
   ApplicationLifecycle,
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
@@ -62,11 +63,13 @@ import {
 import { planningArtifactRecoveryKeys } from '../src/renderer/src/components/AiChatPanel/planningArtifactRecovery'
 import {
   PRODUCT_CONVERSATION_PLACEHOLDER,
-  buildProductConversationInteraction,
   productConversationRoute,
-  productConversationSendBlocked,
-  productConversationSubmissionError
+  productConversationSendBlocked
 } from '../src/renderer/src/components/AiChatPanel/components/ChatComposer/productConversation'
+import {
+  buildProductConversationInteraction,
+  productConversationSubmissionError
+} from '../src/renderer/src/service/applicationPlanningProductConversation'
 import {
   canonicalPlanningReviewMessageIndexes,
   isNonMutatingProductConversation,
@@ -74,6 +77,249 @@ import {
   planningReviewMatchesActiveWorkflow
 } from '../src/renderer/src/components/AiChatPanel/components/MessageList/productConversationPresentation'
 import { workflowMessageContentForDisplay } from '../src/renderer/src/service/processStepHistory'
+import {
+  applicationPlanningDisplayStatus,
+  reduceApplicationPlanningCurrentState,
+  type ApplicationPlanningCurrentState
+} from '../src/renderer/src/service/activeApplicationPlanning'
+import {
+  planningMessageActionsDisabled,
+  planningMessageHostsSyncError,
+  planningSyncErrorHostMessageIndex,
+  resolvePlanningMessageWorkflow
+} from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningMessageWorkflow'
+
+const canonicalPlanningApplication = {
+  id: 'canonical-app',
+  appName: 'Canonical App'
+} as ApplicationConfig
+
+/** 构造 reducer 测试使用的最小权威生命周期。 */
+function canonicalPlanningLifecycle(
+  revision: number,
+  status: ApplicationLifecycle['initialization']['status'] = 'awaiting_user'
+): ApplicationLifecycle {
+  return {
+    application: { id: canonicalPlanningApplication.id, name: canonicalPlanningApplication.appName },
+    updatedAt: `2026-09-10T00:00:0${revision}Z`,
+    revision,
+    initialization: {
+      stage:
+        status === 'failed'
+          ? 'generating_technical_plan'
+          : 'awaiting_technical_plan_confirmation',
+      threadId: 'canonical-thread',
+      status
+    },
+    activeExecutions: {},
+    extensions: {}
+  }
+}
+
+const canonicalTechnicalPlanWorkflow = {
+  runId: 'canonical-run',
+  threadId: 'canonical-thread',
+  summary: {
+    status: 'requires_user_input',
+    phase: 'technical_planning',
+    clarification: {
+      mode: 'technical_plan_confirmation',
+      status: 'requires_user_input'
+    }
+  },
+  events: [],
+  state: {
+    lifecycle: canonicalPlanningLifecycle(10),
+    technical_plan: { architecture: { style: 'modular' } }
+  },
+  result: {}
+} as WorkflowRunPayload
+
+const canonicalPlanningBaseState: ApplicationPlanningCurrentState = {
+  application: canonicalPlanningApplication,
+  lifecycle: canonicalPlanningLifecycle(10),
+  threadId: 'canonical-thread',
+  transportState: 'idle',
+  workflow: canonicalTechnicalPlanWorkflow
+}
+
+const staleLifecycleState = reduceApplicationPlanningCurrentState(canonicalPlanningBaseState, {
+  type: 'lifecycle_received',
+  applicationId: canonicalPlanningApplication.id,
+  threadId: 'canonical-thread',
+  lifecycle: canonicalPlanningLifecycle(9)
+})
+assert.equal(staleLifecycleState.lifecycle.revision, 10)
+
+const foreignThreadWorkflow = {
+  ...canonicalTechnicalPlanWorkflow,
+  runId: 'foreign-run',
+  threadId: 'foreign-thread'
+} as WorkflowRunPayload
+const foreignThreadState = reduceApplicationPlanningCurrentState(canonicalPlanningBaseState, {
+  type: 'workflow_received',
+  applicationId: canonicalPlanningApplication.id,
+  threadId: 'canonical-thread',
+  workflow: foreignThreadWorkflow
+})
+assert.equal(foreignThreadState, canonicalPlanningBaseState)
+
+const retryingFailedState = reduceApplicationPlanningCurrentState(
+  {
+    ...canonicalPlanningBaseState,
+    lifecycle: canonicalPlanningLifecycle(11, 'failed'),
+    error: '上次运行失败',
+    transportState: 'idle'
+  },
+  {
+    type: 'run_started',
+    applicationId: canonicalPlanningApplication.id,
+    threadId: 'canonical-thread'
+  }
+)
+assert.equal(applicationPlanningDisplayStatus(retryingFailedState), 'running')
+assert.equal(retryingFailedState.error, undefined)
+
+const historicalCompletedWorkflow = {
+  ...canonicalTechnicalPlanWorkflow,
+  runId: 'historical-run',
+  summary: { status: 'completed', phase: 'technical_planning' },
+  state: {}
+} as WorkflowRunPayload
+assert.equal(
+  resolvePlanningMessageWorkflow(
+    historicalCompletedWorkflow,
+    canonicalTechnicalPlanWorkflow,
+    true
+  ),
+  canonicalTechnicalPlanWorkflow
+)
+assert.equal(
+  resolvePlanningMessageWorkflow(
+    historicalCompletedWorkflow,
+    canonicalTechnicalPlanWorkflow,
+    false
+  ),
+  historicalCompletedWorkflow
+)
+
+assert.equal(planningMessageHostsSyncError('状态未同步', 2), true)
+assert.equal(planningMessageHostsSyncError('状态未同步', -1), false)
+assert.equal(planningMessageActionsDisabled(true, true), true)
+assert.equal(planningMessageActionsDisabled(false, true), false)
+// 当前审阅门仍由消息 0 承载时，即使同 thread 的最新 Assistant 消息位于 2，也只选择原确认卡。
+const splitPlanningSyncErrorHost = planningSyncErrorHostMessageIndex(
+  'technical-plan:gate-g:revision-g',
+  new Map([['technical-plan:gate-g:revision-g', 0]]),
+  2
+)
+assert.equal(splitPlanningSyncErrorHost, 0)
+assert.deepEqual(
+  [0, 2].filter((messageIndex) => messageIndex === splitPlanningSyncErrorHost),
+  [0]
+)
+
+const technicalPlanGenerationErrorWorkflow = {
+  ...canonicalTechnicalPlanWorkflow,
+  runId: 'technical-plan-error',
+  summary: {
+    status: 'requires_user_input',
+    phase: 'technical_planning',
+    clarification: {
+      mode: 'technical_plan_generation_error',
+      status: 'requires_user_input'
+    }
+  }
+} as WorkflowRunPayload
+assert.equal(
+  planningWorkflowRequiresUserInput(
+    resolvePlanningMessageWorkflow(
+      historicalCompletedWorkflow,
+      technicalPlanGenerationErrorWorkflow,
+      true
+    )
+  ),
+  true
+)
+assert.equal(
+  (
+    resolvePlanningMessageWorkflow(
+      historicalCompletedWorkflow,
+      technicalPlanGenerationErrorWorkflow,
+      true
+    )?.summary.clarification as { mode?: string } | undefined
+  )?.mode,
+  'technical_plan_generation_error'
+)
+
+const runningTechnicalPlanningWorkflow = {
+  ...canonicalTechnicalPlanWorkflow,
+  runId: 'technical-plan-running',
+  summary: { status: 'running', phase: 'technical_planning' }
+} as WorkflowRunPayload
+const runningState = reduceApplicationPlanningCurrentState(canonicalPlanningBaseState, {
+  type: 'workflow_received',
+  applicationId: canonicalPlanningApplication.id,
+  threadId: 'canonical-thread',
+  workflow: runningTechnicalPlanningWorkflow
+})
+const confirmedState = reduceApplicationPlanningCurrentState(runningState, {
+  type: 'workflow_received',
+  applicationId: canonicalPlanningApplication.id,
+  threadId: 'canonical-thread',
+  workflow: canonicalTechnicalPlanWorkflow
+})
+assert.equal(planningWorkflowPhase(confirmedState.workflow), 'technical_planning')
+assert.equal(
+  confirmedState.workflow?.summary.clarification &&
+    (confirmedState.workflow.summary.clarification as { mode?: string }).mode,
+  'technical_plan_confirmation'
+)
+
+const coldThenLiveState = reduceApplicationPlanningCurrentState(
+  reduceApplicationPlanningCurrentState(
+    { ...canonicalPlanningBaseState, lifecycle: canonicalPlanningLifecycle(9), workflow: undefined },
+    {
+      type: 'lifecycle_received',
+      applicationId: canonicalPlanningApplication.id,
+      threadId: 'canonical-thread',
+      lifecycle: canonicalPlanningLifecycle(10)
+    }
+  ),
+  {
+    type: 'workflow_received',
+    applicationId: canonicalPlanningApplication.id,
+    threadId: 'canonical-thread',
+    workflow: canonicalTechnicalPlanWorkflow
+  }
+)
+const liveThenColdState = reduceApplicationPlanningCurrentState(
+  reduceApplicationPlanningCurrentState(
+    { ...canonicalPlanningBaseState, lifecycle: canonicalPlanningLifecycle(9), workflow: undefined },
+    {
+      type: 'workflow_received',
+      applicationId: canonicalPlanningApplication.id,
+      threadId: 'canonical-thread',
+      workflow: canonicalTechnicalPlanWorkflow
+    }
+  ),
+  {
+    type: 'lifecycle_received',
+    applicationId: canonicalPlanningApplication.id,
+    threadId: 'canonical-thread',
+    lifecycle: canonicalPlanningLifecycle(10)
+  }
+)
+assert.deepEqual(
+  {
+    lifecycle: coldThenLiveState.lifecycle,
+    workflow: coldThenLiveState.workflow
+  },
+  {
+    lifecycle: liveThenColdState.lifecycle,
+    workflow: liveThenColdState.workflow
+  }
+)
 
 const planningSubmissionMessages: AgentChatMessage[] = [
   { id: 1, role: 'assistant', content: '技术规划待确认', createdAt: 1 },

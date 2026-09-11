@@ -10,6 +10,7 @@ type AgentErrorCardProps = {
   error?: string
   onRetry?: () => void
   retrying?: boolean
+  retryLabel?: string
   title?: string
 }
 
@@ -18,6 +19,7 @@ export default function AgentErrorCard({
   error,
   onRetry,
   retrying,
+  retryLabel = '重试',
   title
 }: AgentErrorCardProps): ReactElement {
   const copy = readableAgentError(error)
@@ -54,7 +56,7 @@ export default function AgentErrorCard({
             onClick={onRetry}
             type="primary"
           >
-            重试
+            {retryLabel}
           </Button>
         ) : null}
       </div>

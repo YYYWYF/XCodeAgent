@@ -143,10 +143,6 @@ type WorkflowRunCardProps = {
   ) => Promise<Record<string, unknown> | undefined>
   /** 需求文档确认：菜单根路径（驱动编辑器页面路由前缀）。 */
   rootPath?: string
-  /** 设计阶段最新规划 workflow（activePlannings 权威快照）。UI 设计稿确认卡片
-   *  优先用它渲染：后台生成池轮询每轮都会更新该快照，而消息对象里的
-   *  message.workflow 可能因流式 chunk 被 threadId 过滤丢弃而滞留旧状态。 */
-  planningWorkflow?: WorkflowRunPayload
   workflow: WorkflowRunPayload
   workspaceRoot?: string
 }
@@ -165,7 +161,6 @@ export default function WorkflowRunCard({
   apiDesignSavedMappingKeys,
   onSaveRequirementSpec,
   rootPath,
-  planningWorkflow,
   workflow,
   workspaceRoot
 }: WorkflowRunCardProps): ReactElement {
@@ -233,22 +228,7 @@ export default function WorkflowRunCard({
   const uiDesignConfirmation =
     clarification?.mode === 'ui_design_confirmation' ||
     workflow.summary?.phase === 'ui_confirmation'
-  // UI 设计稿确认卡的权威 workflow：优先用 activePlannings 的最新快照（后台生成池
-  // 每轮 no-op resume 都会经 onWorkflowChange 更新它），仅当它仍处于 UI 确认阶段时
-  // 采用；否则回落到消息对象里的 workflow。这样即使流式 chunk 因 threadId 过滤或
-  // 卡片合并未命中而滞留旧 message.workflow，卡片仍能实时反映最新页面状态。
-  const latestUiWorkflow =
-    planningWorkflow &&
-    (planningWorkflow.summary?.phase === 'ui_confirmation' ||
-      (planningWorkflow.summary?.clarification as { mode?: string } | undefined)?.mode ===
-        'ui_design_confirmation' ||
-      (planningWorkflow.state?.clarification as { mode?: string } | undefined)?.mode ===
-        'ui_design_confirmation' ||
-      (planningWorkflow.result?.clarification as { mode?: string } | undefined)?.mode ===
-        'ui_design_confirmation')
-      ? planningWorkflow
-      : undefined
-  const effectiveUiDesignWorkflow = latestUiWorkflow ?? workflow
+  const effectiveUiDesignWorkflow = workflow
   // 创建规划各阶段生成中都要保留卡片，避免运行期间没有任何可见反馈。
   const planningPhase = workflow.summary?.phase
   const planningRunning =
@@ -1019,7 +999,12 @@ function RequirementSpecConfirmationCard({
         footer={
           <div className={cx('requirement-spec-edit-modal-actions')}>
             <Button onClick={cancelEditing}>取消</Button>
-            <Button loading={saving} onClick={() => void saveAndClose()} type="primary">
+            <Button
+              disabled={disabled}
+              loading={saving}
+              onClick={() => void saveAndClose()}
+              type="primary"
+            >
               保存并退出编辑
             </Button>
           </div>
