@@ -96,13 +96,13 @@ SmallTask 禁止通过该路径：
 
 这里的“返回现有设计阶段”同时包含两个不同层面的身份，二者不能混用：
 
-- 前端为二次修改的 DESIGN、PLAN、DEVELOPMENT 三个业务阶段分别创建独立 StageSession 和独立 conversation thread；同一轮通过 `workflowId + changeId + revisionContext` 保持 lineage，不复制聊天上下文，也不复用跨阶段 thread。
+- 前端为二次修改的 DESIGN、PLAN 两个设计阶段分别创建独立 StageSession 和独立 conversation thread；TechnicalPlan 确认后返回发起本次修改的原 DEVELOPMENT StageSession，并用其既有 conversation thread 承接后续扫描、DAG 和执行内容。设计阶段不复制聊天上下文，开发阶段保留原会话历史。
 - 后端不创建第二个设计 Graph，仍以 lifecycle 中的原 `planningThreadId` 恢复原 `application_planning_workflow` checkpoint；新的 conversation thread 只承接前端消息展示和流式投影，不作为 Graph 恢复依据。
-- 二次修改 session 持久化绑定 `impactInteractionId + sourceSessionId + sourceConversationThreadId + sourceRunId + planningThreadId + changeId`。其中 `changeId` 由审批后的 lifecycle 补齐，冷恢复必须按完整身份匹配，不能按标题猜测或退回原可见规划会话。
+- 二次修改的 DESIGN/PLAN session 持久化绑定 `impactInteractionId + sourceSessionId + sourceConversationThreadId + sourceRunId + planningThreadId + changeId`。其中 `sourceSessionId + sourceConversationThreadId` 唯一指向发起修改的原 DEVELOPMENT 会话，`changeId` 由审批后的 lifecycle 补齐；冷恢复必须按完整身份匹配，不能按标题猜测或补建开发会话。
 - 发起二次修改的来源会话保留一条交接回执，记录目标 session/thread 和原始请求，并提供“打开二次修改会话”入口；交接回执不是新的审批，也不改变原 checkpoint 的权威性。
 - DESIGN 确认进入 PLAN 时同样在 DESIGN 来源会话写入可点击交接回执；阶段启动失败时先撤销回执，再删除尚未成功进入的预创建 StageSession，并保留来源会话供用户重试。若回执撤销无法落盘，则保留其目标 StageSession，不能制造悬空跳转。
-- TechnicalPlan 确认后再创建一个新的、用户可见的二次修改开发会话；该会话使用新的 AG-UI conversation thread，但通过同一个 `changeId`、TechnicalPlan 哈希和来源需求设计会话与 revision lineage 绑定。
-- “进入开发”是显式且幂等的 handoff：重复触发同一 `workflowId + changeId + technicalPlanSha256 + 来源 PLAN session/thread` 时复用已持久化的开发会话；只有开发 Workflow 成功接管 continuation 后才切换到开发阶段并写入来源回执。创建或启动失败时保留在 PLAN 会话，清理未成功进入且没有成功回执指向的预创建 DEVELOPMENT StageSession，并允许重试。
+- TechnicalPlan 确认后不创建新的开发会话，而是按 DESIGN/PLAN revisionContext 中的来源身份返回原 DEVELOPMENT 会话；先在原历史末尾追加“前置产物已更新完成”卡片，再由该会话的既有 AG-UI thread 承接工作区扫描、DAG 和执行内容。
+- “进入开发”是显式且幂等的 handoff：重复触发同一 `workflowId + changeId + technicalPlanSha256 + 来源 PLAN session/thread` 时仍解析到同一个原 DEVELOPMENT session/thread；只有该原会话成功激活后才切换到开发阶段并消费 continuation。原会话缺失或身份不匹配时失败关闭，禁止新建替代会话。
 
 该 branch 不新建第二套设计 Graph，不复制设计节点，不改变 UiDesign 当前内部增量/重建策略。
 
@@ -409,7 +409,7 @@ flowchart TD
 - page/endpoint target 必须保留；
 - 确认卡只展示服务端 `reason`，前端不自行推导或展示影响范围证据；
 - 取消确认只结束当前 conversation handoff，不进入设计阶段也不创建 formal revision；
-- 设计 branch 使用新的 `runId` 恢复原 planning thread；工作台 branch 使用新的规划会话 thread/run 生成草稿，并在确认后转交新的开发 run；
+- 设计 branch 使用新的 `runId` 恢复原 planning thread；工作台 branch 使用新的规划会话 thread/run 生成草稿，并在确认后由原开发会话开启新的开发 run；
 - 两个 branch 从影响范围 approved 开始共享同一个 `changeId`、原始请求和 target，直到 Acceptance 完成；Graph 切换不能丢失这些字段；
 - 前端不回传 WorkspaceSnapshot、模型 messages 或 Graph State；
 - branch 接收端重新执行确定性分类和安全升级校验，不能直接信任模型输出。
@@ -420,7 +420,7 @@ flowchart TD
 - 进入 `ready_for_workbench` 时不再删除原 planning thread 引用；它作为后续返回设计阶段的唯一服务端定位，不表示当前仍在初始化。
 - 已进入 `ready_for_workbench` 且选择 `design_stage_revision`：通过显式 `start_design_revision` 受控恢复原 planning thread/checkpoint，并把界面切回现有设计阶段。
 - 已进入 `ready_for_workbench` 且选择 `workbench_plan_revision`：不重跑需求/产品/UI 节点，但显式切到独立计划阶段会话生成和确认 TechnicalPlan 草稿。
-- 任一 formal revision 完成 TechnicalPlan 确认后，服务端生成一次性 continuation token；前端先为同一 `changeId` 创建或复用独立开发会话，再依据 AG-UI 结果自动调用 `/workflow/run` 的 `continue_revision_build`。只有调用成功后才切回开发阶段，不要求用户再次输入。
+- 任一 formal revision 完成 TechnicalPlan 确认后，服务端生成一次性 continuation token；前端按 revisionContext 中的来源 session/thread 返回发起修改的原开发会话，在其历史末尾追加前置产物完成卡，并依据 AG-UI 结果自动调用 `/workflow/run` 的 `continue_revision_build`。原会话成功激活后即切回开发阶段，不要求用户再次输入。
 - `/workflow/run` 校验 token、changeId、原 planning thread、TechnicalPlan confirmed hash、lifecycle revision 和 target 后，重新投影 application/workbench 数据并生成 Build DAG。独立 `application_planning` continuation 不依赖规划 execution；只有主 Workflow continuation 携带有效来源 execution 时才执行原子替换。
 - continuation 只能从服务端已完成的 TechnicalPlan confirmation 产生；不能从前端快照重建设计 Graph State，也不能接受前端节点名。
 

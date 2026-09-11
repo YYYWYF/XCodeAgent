@@ -180,14 +180,14 @@ function RevisionHandoffCard({
   const title = developmentEntry
     ? '本次需求的前置产物已更新完成，将在当前会话继续开发'
     : developmentHandoff
-      ? 'TechnicalPlan 已确认，已转入独立开发会话'
+      ? 'TechnicalPlan 已确认，已返回原开发会话继续开发'
       : planningHandoff
         ? '需求设计已确认，已转入独立技术规划会话'
         : planningRevision
           ? '已转入独立技术规划会话'
           : '已转入独立需求设计会话'
   const buttonText = developmentHandoff
-    ? '打开开发会话'
+    ? '打开原开发会话'
     : planningHandoff
       ? '打开技术规划会话'
       : planningRevision

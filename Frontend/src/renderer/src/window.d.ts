@@ -127,7 +127,6 @@ declare global {
                 label: string
               }
           revisionContext?: unknown
-          recoveryExecutionRunId?: string
         }) => Promise<{ ok?: boolean; session?: unknown }>
         save: (payload: {
           workspaceRoot: string

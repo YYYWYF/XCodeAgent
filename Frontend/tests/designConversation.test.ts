@@ -37,9 +37,9 @@ import type {
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import {
   activeFormalRevisionStageSession,
+  appendRevisionDevelopmentEntryMessage,
   bindRevisionSessionChangeId,
   createFormalRevisionSessionContext,
-  createRevisionDevelopmentSessionContext,
   formalRevisionContinuationSourceSession,
   formalRevisionPlanningSourceSession,
   initialFormalRevisionPhase,
@@ -55,7 +55,10 @@ import {
   isSameSessionExecutionScope,
   isSessionExecutionOwner
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
-import type { ChatSessionSummary } from '../src/renderer/src/service/chatSessions'
+import {
+  normalizeRevisionSessionContext,
+  type ChatSessionSummary
+} from '../src/renderer/src/service/chatSessions'
 import {
   revisionContinuationFromWorkflow,
   revisionContinuationHandoffFromWorkflow
@@ -844,18 +847,6 @@ const developmentContinuation = {
   token: 't'.repeat(48),
   technicalPlanSha256: 'b'.repeat(64)
 }
-const developmentRevisionContext = createRevisionDevelopmentSessionContext(
-  designRevisionIdentity,
-  developmentContinuation
-)
-assert.deepEqual(developmentRevisionContext, {
-  ...boundDesignRevisionContext,
-  sessionRole: 'development',
-  changeId: 'change-1',
-  handoffFromSessionId: 'revision-design-session',
-  handoffFromConversationThreadId: 'revision-design-thread',
-  technicalPlanSha256: 'b'.repeat(64)
-})
 const developmentSession = {
   ...revisionSessionBase,
   id: 'revision-development-session',
@@ -864,13 +855,20 @@ const developmentSession = {
   stage: 'DEVELOPMENT' as const,
   sequence: 1,
   entryKey: `revision-development:change-1:${'b'.repeat(64)}`,
-  revisionContext: developmentRevisionContext
+  revisionContext: undefined
 }
 const oldDevelopmentSession = {
   ...developmentSession,
   id: 'old-development-session',
   threadId: 'old-development-thread',
   updatedAt: 999
+}
+const sourceDevelopmentSession = {
+  ...developmentSession,
+  id: 'source-session',
+  threadId: 'source-thread',
+  entryKey: 'development-entry:source',
+  revisionContext: undefined
 }
 assert.equal(
   sessionToRestoreForPhase(
@@ -893,11 +891,11 @@ assert.equal(
 assert.deepEqual(sessionsForWorkbenchPhase([oldDevelopmentSession], 'planning'), [])
 assert.equal(
   revisionDevelopmentSessionForContinuation(
-    [...revisionSessionCandidates, developmentSession],
+    [...revisionSessionCandidates, developmentSession, sourceDevelopmentSession],
     designRevisionIdentity,
     developmentContinuation
   )?.id,
-  'revision-development-session'
+  'source-session'
 )
 assert.equal(
   revisionDevelopmentSessionForContinuation(
@@ -916,12 +914,56 @@ assert.equal(
   ),
   undefined
 )
+const existingDevelopmentMessages = [
+  { id: 1, role: 'user', content: '原开发需求', createdAt: 1 },
+  { id: 2, role: 'assistant', content: '原开发结果', createdAt: 2 },
+  { id: 3, role: 'assistant', content: '', createdAt: 3 }
+] as AgentChatMessage[]
+const revisionDevelopmentEntryMessage = {
+  id: 4,
+  role: 'assistant',
+  content: '',
+  createdAt: 4,
+  revisionHandoff: {
+    kind: 'revision_development_entry',
+    formalBranch: 'design_stage_revision',
+    targetSessionId: 'source-session',
+    targetConversationThreadId: 'source-thread',
+    impactInteractionId: 'impact-1',
+    changeId: 'change-1',
+    request: '把订单页改成双列布局'
+  }
+} as AgentChatMessage
+assert.deepEqual(
+  appendRevisionDevelopmentEntryMessage(
+    existingDevelopmentMessages,
+    revisionDevelopmentEntryMessage
+  ).map((message) => message.id),
+  [1, 2, 4]
+)
 assert.deepEqual(
   bindRevisionSessionChangeId(
     { ...designRevisionContext, sourceRunId: 'another-run' },
     activeRevisionLifecycle
   ),
   { ...designRevisionContext, sourceRunId: 'another-run' }
+)
+assert.equal(
+  normalizeRevisionSessionContext({
+    kind: 'formal_revision',
+    sessionRole: 'development',
+    formalBranch: 'workbench_plan_revision',
+    impactInteractionId: 'impact-1',
+    sourceSessionId: 'source-session',
+    sourceConversationThreadId: 'source-thread',
+    sourceRunId: 'source-run',
+    planningThreadId: 'planning-thread',
+    changeId: 'change-1',
+    handoffFromSessionId: 'planning-session',
+    handoffFromConversationThreadId: 'planning-thread',
+    technicalPlanSha256: 'a'.repeat(64)
+  }),
+  undefined
 )
 
 assert.equal(
