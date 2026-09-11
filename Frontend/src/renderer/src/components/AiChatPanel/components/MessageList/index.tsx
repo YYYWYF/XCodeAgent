@@ -85,6 +85,7 @@ import {
 import {
   planningMessageActionsDisabled,
   planningMessageHostsSyncError,
+  planningSyncErrorHostMessageIndex,
   resolvePlanningMessageWorkflow
 } from './planningMessageWorkflow'
 import './MessageList.less'
@@ -353,11 +354,25 @@ export default function MessageList({
 }: MessageListProps): ReactElement {
   const planningWorkflow = planningState?.workflow
   const currentPlanningMessageIndex = findCurrentPlanningMessageIndex(messages, planningWorkflow)
+  const planningReviewMessageIndexes = canonicalPlanningReviewMessageIndexes(messages)
+  // 当前 planning checkpoint 是确认权限的唯一权威。普通问答可以继续向后追加消息，
+  // 但只要服务端仍挂起在同一 gateId + artifactRevision，原确认卡就必须保持可操作。
+  const activePlanningReviewIdentity =
+    designPhasePlanning &&
+    planningWorkflow &&
+    planningWorkflowRequiresUserInput(planningWorkflow)
+      ? planningReviewIdentity(planningWorkflow)
+      : undefined
   const planningActionsBlocked = planningMutationBlocked(planningState)
   const planningSyncError = planningState?.syncError?.trim() || ''
-  const currentPlanningMessageCanHostSyncError = planningMessageHostsSyncError(
-    planningSyncError,
+  const syncErrorHostMessageIndex = planningSyncErrorHostMessageIndex(
+    activePlanningReviewIdentity,
+    planningReviewMessageIndexes,
     currentPlanningMessageIndex
+  )
+  const planningMessageCanHostSyncError = planningMessageHostsSyncError(
+    planningSyncError,
+    syncErrorHostMessageIndex
   )
   const { phase: currentPhase } = useWorkbenchPhase()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -369,7 +384,8 @@ export default function MessageList({
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const latestAssistantMessageId = findLastAssistantMessageId(messages)
   const visibleError = error?.trim() || ''
-  const canonicalPlanningError = planningSyncError || planningState?.error?.trim() || ''
+  const canonicalPlanningStateError = planningState?.error?.trim() || ''
+  const canonicalPlanningError = planningSyncError || canonicalPlanningStateError
   const canonicalPlanningFailure =
     canonicalPlanningError || workflowFailureMessage(planningWorkflow)
   const templateGenerationFailed =
@@ -385,20 +401,11 @@ export default function MessageList({
     !templateGenerationOrphaned &&
     visibleError &&
     visibleError !== latestAssistantMessageError &&
-    !currentPlanningMessageCanHostSyncError &&
+    !planningMessageCanHostSyncError &&
     (currentPlanningMessageIndex < 0 || visibleError !== canonicalPlanningFailure)
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
-  const planningReviewMessageIndexes = canonicalPlanningReviewMessageIndexes(messages)
-  // 当前 planning checkpoint 是确认权限的唯一权威。普通问答可以继续向后追加消息，
-  // 但只要服务端仍挂起在同一 gateId + artifactRevision，原确认卡就必须保持可操作。
-  const activePlanningReviewIdentity =
-    designPhasePlanning &&
-    planningWorkflow &&
-    planningWorkflowRequiresUserInput(planningWorkflow)
-      ? planningReviewIdentity(planningWorkflow)
-      : undefined
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
   const pendingPhaseDetail = phasePendingDetail(currentPhase)
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
@@ -611,7 +618,8 @@ export default function MessageList({
                   planningWorkflow &&
                   (isCurrentPlanningReview || messageIndex === currentPlanningMessageIndex)
               )
-              const currentPlanningSyncError = isCurrentPlanningMessage ? planningSyncError : ''
+              const currentPlanningSyncError =
+                messageIndex === syncErrorHostMessageIndex ? planningSyncError : ''
               const planningCardWorkflow = resolvePlanningMessageWorkflow(
                 message.workflow,
                 planningWorkflow,
@@ -620,9 +628,11 @@ export default function MessageList({
               const currentPresentationWorkflow = isCurrentPlanningMessage
                 ? planningCardWorkflow
                 : message.workflow
-              const messageError = isCurrentPlanningMessage
-                ? canonicalPlanningError || workflowFailureMessage(planningCardWorkflow)
-                : message.error || workflowFailureMessage(message.workflow)
+              const messageError = currentPlanningSyncError
+                ? currentPlanningSyncError
+                : isCurrentPlanningMessage
+                  ? canonicalPlanningStateError || workflowFailureMessage(planningCardWorkflow)
+                  : message.error || workflowFailureMessage(message.workflow)
               const isCurrentErrorMessage = Boolean(
                 messageError &&
                   message.role === 'assistant' &&
