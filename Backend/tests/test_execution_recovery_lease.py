@@ -827,6 +827,69 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(old.status, DurableExecutionStatus.INTERRUPTED)
         self.assertEqual(points, [])
 
+    async def test_runtime_active_registry_conflict_preserves_old_owner(self) -> None:
+        """进程内 active 冲突必须阻止新请求且保留旧 task 的取消 owner。"""
+
+        old_started = asyncio.Event()
+        old_release = asyncio.Event()
+
+        async def old_workflow() -> None:
+            """保持旧 Workflow 活跃，模拟 Graph 正在执行。"""
+
+            old_started.set()
+            await old_release.wait()
+
+        old_task = asyncio.create_task(old_workflow())
+        workflow_run_registry.register(
+            "run-active-registry-conflict",
+            old_task,
+            workspace=str(self.workspace),
+        )
+        await old_started.wait()
+        graph = _CountingGraph()
+        try:
+            with (
+                patch("app.protocols.workflow.runtime.begin_workflow_lifecycle") as begin,
+                patch("app.protocols.workflow.runtime.workspace_run_leases.acquire") as acquire,
+                patch("app.protocols.workflow.run_control.workspace_process_registry.allow_run") as allow_run,
+            ):
+                frames = [
+                    frame
+                    async for frame in build_workflow_ag_ui_stream(
+                        graph=graph,
+                        payload=self._workflow_payload(
+                            thread_id="thread-duplicate",
+                            run_id="run-active-registry-conflict",
+                        ),
+                    )
+                ]
+
+            payload = "".join(frames)
+            self.assertIn("WORKFLOW_RUN_ALREADY_ACTIVE", payload)
+            self.assertIn('"type":"RUN_ERROR"', payload)
+            self.assertFalse(graph.astream_started)
+            self.assertTrue(workflow_run_registry.is_active(
+                "run-active-registry-conflict",
+                workspace=str(self.workspace),
+            ))
+            begin.assert_not_called()
+            acquire.assert_not_called()
+            allow_run.assert_not_called()
+            self.assertEqual(
+                await workflow_run_registry.cancel_and_wait(
+                    "run-active-registry-conflict",
+                    workspace=str(self.workspace),
+                ),
+                "cancelled",
+            )
+        finally:
+            old_release.set()
+            await asyncio.gather(old_task, return_exceptions=True)
+            workflow_run_registry.unregister(
+                "run-active-registry-conflict",
+                old_task,
+            )
+
     async def test_recovery_start_storage_failure_stays_fail_open_without_fake_lease(self) -> None:
         """Execution start 普通写库故障仍允许 Graph 完成，但不产生伪造 lease/现场。"""
 

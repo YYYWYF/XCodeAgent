@@ -40,6 +40,18 @@ WorkflowCancellationStatus = Literal[
 ]
 
 
+class WorkflowRunAlreadyActiveError(RuntimeError):
+    """表示同一 Backend 进程内已有相同 runId 的活跃 owner。"""
+
+    code = "WORKFLOW_RUN_ALREADY_ACTIVE"
+
+    def __init__(self, run_id: str) -> None:
+        """记录冲突 runId，并生成稳定的诊断信息。"""
+
+        self.run_id = run_id
+        super().__init__(f"Workflow run is already active: runId={run_id}")
+
+
 class WorkflowRunRegistry:
     """当前进程内正在流式运行的主工作流任务注册表。
 
@@ -66,6 +78,13 @@ class WorkflowRunRegistry:
         with self._lock:
             if workspace_key and workspace_key in self._deleting_workspaces:
                 raise RuntimeError("当前应用正在删除，不能启动新的运行。")
+            existing = self._tasks.get(run_id)
+            if existing is not None:
+                _existing_workspace, existing_task = existing
+                if not existing_task.done():
+                    raise WorkflowRunAlreadyActiveError(run_id)
+                # 已结束但尚未进入 finally 清理的登记只属于内存垃圾，允许替换。
+                self._tasks.pop(run_id, None)
             self._tasks[run_id] = (workspace_key, task)
             workspace_process_registry.allow_run(run_id)
 

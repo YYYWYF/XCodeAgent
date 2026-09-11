@@ -48,6 +48,7 @@ from app.protocols.workflow.lifecycle import (
 from app.protocols.workflow.run_control import (
     build_workflow_plan_control_ag_ui_stream,
     build_workflow_cancellation_ag_ui_stream,
+    WorkflowRunAlreadyActiveError,
     workflow_run_registry,
 )
 from app.protocols.workflow.stream_events import (
@@ -376,11 +377,6 @@ def build_workflow_ag_ui_stream(
         )
 
         try:
-            workflow_run_registry.register(
-                run_id,
-                task,
-                workspace=workflow_inputs.get("workspace") or None,
-            )
             request = workflow_inputs["request"]
             if not request:
                 raise ValueError(
@@ -550,6 +546,12 @@ def build_workflow_ag_ui_stream(
                 thread_id=thread_id,
                 workflow_scope=workflow_scope,
                 callback=lambda: assert_run_id_available(workspace, run_id),
+            )
+            # Durable preflight 通过后再原子抢占进程内 owner，避免重复请求提前清理旧运行的取消状态。
+            workflow_run_registry.register(
+                run_id,
+                task,
+                workspace=workspace,
             )
             if workflow_scope != "application_planning":
                 # 创建规划只维护自己的 AG-UI/Graph 生命周期；在 TechnicalPlan
@@ -1980,7 +1982,10 @@ def build_workflow_ag_ui_stream(
             from app.services.development_artifacts import DevelopmentArtifactsIncompleteError
 
             gate_blocked = isinstance(exc, DevelopmentArtifactsIncompleteError)
-            run_id_conflict = isinstance(exc, DurableExecutionRunConflictError)
+            run_id_conflict = isinstance(
+                exc,
+                (DurableExecutionRunConflictError, WorkflowRunAlreadyActiveError),
+            )
             blocked_scope: dict[str, Any] = {}
             blocked_target: dict[str, str] = {}
             if gate_blocked:
