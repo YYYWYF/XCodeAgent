@@ -78,6 +78,7 @@ import {
   workflowCodeReviewRetry,
   workflowInteractionAvailability
 } from '../planExecutionMode'
+import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../pendingPlanLifecycleRefresh'
 
 type SessionRunEntry = {
   identity: SessionIdentity
@@ -1183,6 +1184,16 @@ export function useWorkflowConversation({
         threadId: identity.threadId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
+      await maybeRefreshPendingPlanLifecycleAfterGeneration(
+        finalWorkflow,
+        {
+          stopped,
+          clarificationAnswers: options?.clarificationAnswers,
+          planControlAction: options?.planControlAction
+        },
+        // 首次普通 DAG 生成完成后才读取 GET-time planningRefresh；Confirm/Abandon/Regenerate 由既有 action 收口负责。
+        () => refreshPendingPlanLifecycle(identity.key)
+      )
       if (apiConfirmationPersistFailed) {
         setErrors((current) => ({ ...current, [identity.key]: undefined }))
       }
@@ -1295,7 +1306,7 @@ export function useWorkflowConversation({
     }
   }
 
-  /** 在 Confirm、Abandon 或 Regenerate 完成后重新读取 PendingPlan 权威投影。 */
+  /** 在普通 DAG generation 或 Confirm、Abandon、Regenerate 完成后重新读取 PendingPlan 权威投影。 */
   const refreshPendingPlanLifecycle = async (sessionKey: string): Promise<void> => {
     try {
       // planningRefresh 只在 lifecycle GET 时计算；动作流里的普通 lifecycle 帧不能替代它。

@@ -121,7 +121,7 @@ function renderWorkflowRunCard(props: ComponentProps<typeof WorkflowRunCard>): s
   )
 }
 
-test('DAG 生成阶段隐藏 Workflow Card Header 的取消入口，但其他运行阶段保留', () => {
+test('Workflow Card Header 不渲染取消运行入口', () => {
   const dagMarkup = renderWorkflowRunCard({
     interactionAvailability: 'active',
     onCancel: () => undefined,
@@ -144,7 +144,7 @@ test('DAG 生成阶段隐藏 Workflow Card Header 的取消入口，但其他运
       events: []
     }
   })
-  assert.match(buildMarkup, /取消运行/)
+  assert.doesNotMatch(buildMarkup, /取消运行/)
 })
 
 /** 构造当前 DAG 进度协议的完整 Unit，测试只覆写关心的离散事实。 */

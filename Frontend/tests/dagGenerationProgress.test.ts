@@ -29,6 +29,7 @@ import {
   workflowInteractionAvailability,
   workflowMessageInteractionAvailability
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
+import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../src/renderer/src/components/AiChatPanel/pendingPlanLifecycleRefresh'
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import type {
@@ -1150,6 +1151,117 @@ function lifecycleWithPlanningRefresh(
     extensions: planningRefresh ? { planningRefresh } : {}
   } as unknown as ApplicationLifecycle
 }
+
+/** 构造 generation-complete 或普通 confirmation 的最小 Workflow 快照。 */
+function workflowWithClarificationMode(mode: string, suffix: string): WorkflowRunPayload {
+  return {
+    runId: `workflow-${suffix}`,
+    threadId: `thread-${suffix}`,
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      clarification: { mode }
+    }
+  } as unknown as WorkflowRunPayload
+}
+
+test('首次 DAG generation-complete 触发 lifecycle refresh 并取得 pending projection', async () => {
+  const finalWorkflow = workflowWithClarificationMode(
+    'build_task_plan_confirmation',
+    'generation-a'
+  )
+  const pendingLifecycle = lifecycleWithPlanningRefresh(21, {
+    schemaVersion: 'planning-refresh.v1',
+    source: 'pending_plan',
+    status: 'awaiting_confirmation',
+    planningRunId: 'planning-a',
+    workflowRunId: finalWorkflow.runId,
+    threadId: finalWorkflow.threadId,
+    ownerSessionId: 'session-a',
+    message: '已读取当前 PendingPlan。'
+  })
+  let refreshCount = 0
+  let refreshedLifecycle: ApplicationLifecycle | undefined
+  const refreshed = await maybeRefreshPendingPlanLifecycleAfterGeneration(
+    finalWorkflow,
+    { stopped: false },
+    async () => {
+      refreshCount += 1
+      refreshedLifecycle = pendingLifecycle
+    }
+  )
+
+  assert.equal(refreshed, true)
+  assert.equal(refreshCount, 1)
+  assert.equal(refreshedLifecycle?.extensions.planningRefresh?.source, 'pending_plan')
+  assert.equal(
+    refreshedLifecycle?.extensions.planningRefresh?.status,
+    'awaiting_confirmation'
+  )
+})
+
+test('Abandon 后再次手动生成仍刷新，Confirm/Abandon/Regenerate 不重复走 generation refresh', async () => {
+  const refreshes: string[] = []
+  // 用两次独立的普通 generation 模拟 Abandon 后再次手动生成。
+  const generate = (suffix: string): Promise<boolean> =>
+    maybeRefreshPendingPlanLifecycleAfterGeneration(
+      workflowWithClarificationMode('build_task_plan_confirmation', suffix),
+      { stopped: false },
+      async () => {
+        refreshes.push(suffix)
+      }
+    )
+
+  assert.equal(await generate('generation-a'), true)
+  assert.equal(
+    await maybeRefreshPendingPlanLifecycleAfterGeneration(
+      workflowWithClarificationMode('build_task_plan_confirmation', 'abandon-a'),
+      { stopped: false, planControlAction: 'abandon' },
+      async () => {
+        refreshes.push('abandon-a')
+      }
+    ),
+    false
+  )
+  assert.equal(await generate('generation-b'), true)
+
+  for (const action of ['confirm', 'regenerate'] as const) {
+    assert.equal(
+      await maybeRefreshPendingPlanLifecycleAfterGeneration(
+        workflowWithClarificationMode('build_task_plan_confirmation', action),
+        {
+          stopped: false,
+          clarificationAnswers: {
+            build_task_plan_confirmation: {
+              mode: 'build_task_plan_confirmation',
+              action
+            }
+          }
+        },
+        async () => {
+          refreshes.push(action)
+        }
+      ),
+      false
+    )
+  }
+
+  assert.deepEqual(refreshes, ['generation-a', 'generation-b'])
+})
+
+test('普通非 DAG confirmation 不触发 generation-complete lifecycle refresh', async () => {
+  let refreshCount = 0
+  const refreshed = await maybeRefreshPendingPlanLifecycleAfterGeneration(
+    workflowWithClarificationMode('test_phase_confirmation', 'ordinary-confirmation'),
+    { stopped: false },
+    async () => {
+      refreshCount += 1
+    }
+  )
+
+  assert.equal(refreshed, false)
+  assert.equal(refreshCount, 0)
+})
 
 test('higher revision lifecycle 缺少 planningRefresh 时保留 none/idle projection', () => {
   const current = lifecycleWithPlanningRefresh(7, {

@@ -3,8 +3,7 @@ import {
   ClockCircleOutlined,
   CloseCircleOutlined,
   LoadingOutlined,
-  PauseCircleOutlined,
-  StopOutlined
+  PauseCircleOutlined
 } from '@ant-design/icons'
 import {
   Alert,
@@ -15,7 +14,6 @@ import {
   Modal,
   Progress,
   Radio,
-  Space,
   Tag,
   Tooltip,
   Typography
@@ -161,13 +159,11 @@ type WorkflowRunCardProps = {
 }
 
 export default function WorkflowRunCard({
-  cancelDisabled,
   disabled,
   historicalClarificationAnswers,
   interactionAvailability,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
-  onCancel,
   onSubmitClarification,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -408,9 +404,9 @@ export default function WorkflowRunCard({
             </Text>
           </div>
         </div>
-          <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
-            {workflowStatusText(status)}
-          </Tag>
+        <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
+          {workflowStatusText(status)}
+        </Tag>
       </div>
       {workflow.summary.message &&
         !revisionImpact &&
