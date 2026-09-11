@@ -36,6 +36,7 @@ from app.services.development_continuation import (
     issue_development_continuation,
     register_development_continuation,
 )
+from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 
 
 def begin_workflow_lifecycle(
@@ -316,6 +317,19 @@ def _validate_resumable_execution(
         raise ApplicationLifecycleConflictError("恢复目标与原工作台执行不一致。")
 
 
+def _is_confirmed_build_task_plan_update(update: dict[str, Any]) -> bool:
+    """识别已完成 Confirm 提交的节点结果，避免普通 Build 完成误清理 Pending 投影。"""
+
+    confirmation = update.get("build_task_plan_confirmation")
+    return (
+        update.get("status") == "completed"
+        and isinstance(confirmation, dict)
+        and confirmation.get("mode") == "build_task_plan_confirmation"
+        and confirmation.get("status") == "clear"
+        and confirmation.get("confirmationStatus") == "confirmed"
+    )
+
+
 def project_workflow_lifecycle_boundary(
     workspace: str | None,
     *,
@@ -433,7 +447,15 @@ def project_workflow_lifecycle_boundary(
         phase=projected_phase,
         status=WorkbenchExecutionStatus.RUNNING,
     )
-    return application_lifecycle_payload(state)
+    payload = application_lifecycle_payload(state)
+    if node_name == "prepare_build_tasks" and _is_confirmed_build_task_plan_update(update):
+        # Formal 已在 Confirm service 中原子提交并清理 Pending；此处立即读取同一权威文件，
+        # 让 Confirm lifecycle event 先于后续 Build 帧清除旧的 actionable projection。
+        payload["extensions"] = {
+            **dict(payload.get("extensions") or {}),
+            "planningRefresh": resolve_planning_refresh_state(workspace or ""),
+        }
+    return payload
 
 
 def stop_workflow_lifecycle(
