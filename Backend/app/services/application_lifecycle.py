@@ -339,6 +339,7 @@ def start_workbench_execution(
     thread_id: str,
     run_id: str,
     phase: str,
+    owner_session_id: str | None = None,
     replaces_run_id: str | None = None,
     resource_claims: list[ExecutionResourceClaim] | None = None,
     development_continuation_consume: dict[str, str] | None = None,
@@ -350,7 +351,14 @@ def start_workbench_execution(
     """原子登记计划执行及全部资源锁，并保持初始化完成状态不变。"""
 
     path = application_lifecycle_path(workspace)
-    with maintenance_lock, _application_lifecycle_lock(path):
+    # 保留主干的 maintenance fence，并固定 Pending -> Application 的锁顺序。
+    from app.workspace.task_documents import build_task_plan_lifecycle_lock
+
+    with (
+        maintenance_lock,
+        build_task_plan_lifecycle_lock(workspace),
+        _application_lifecycle_lock(path),
+    ):
         require_no_maintenance(workspace)
         from app.services.development_artifacts import (
             execution_development_metadata, reconcile_development_artifacts, require_test_entry,
@@ -366,6 +374,12 @@ def start_workbench_execution(
                 "应用尚未完成创建规划，当前阶段 "
                 f"{current.initialization.stage.value} 不能启动工作台计划执行。"
             )
+        _assert_application_mutation_admission(
+            workspace,
+            current,
+            owner_session_id=owner_session_id,
+            replaces_run_id=replaces_run_id,
+        )
         if test_interaction_submission is not None:
             # 测试确认凭据只在接替 execution 的同一次写盘中消费；启动失败仍可重试。
             source_id = str(test_interaction_submission.get("runId") or "")
@@ -451,6 +465,70 @@ def start_workbench_execution(
             ),
             resource_locks=next_locks,
         )
+
+
+def _assert_application_mutation_admission(
+    workspace: str | Path,
+    current: ApplicationLifecycle,
+    *,
+    owner_session_id: str | None,
+    replaces_run_id: str | None,
+) -> None:
+    """在带会话身份的入口只拒绝绕过 DAG Planning owner 的新 mutation。"""
+
+    normalized_owner = str(owner_session_id or "").strip()
+    if not normalized_owner:
+        # 保留低层资源登记服务的独立能力；真实 Workflow request 会由 request adapter
+        # 从 sessionId 注入 owner_session_id，再由本 guard 保护应用级 admission。
+        return
+    active_executions = [
+        execution
+        for run_id, execution in current.active_executions.items()
+        if run_id != replaces_run_id
+        and _is_active_dag_planning_execution(execution)
+    ]
+    if active_executions:
+        raise ApplicationLifecycleConflictError(
+            "当前应用已有活动 DAG Planning，必须先完成当前会话或使用精确恢复令牌。"
+        )
+
+    # PendingPlan 的 owner 是唯一可继续 Confirm/Regenerate 的会话；普通新 mutation
+    # 即使来自同一 owner 也必须携带对应 replaces_run_id，避免绕过 Pending gate。
+    try:
+        from app.services.planning_refresh_recovery import (
+            _resolve_planning_refresh_state_locked,
+        )
+
+        # 当前函数由 start_workbench_execution 的 Pending -> Application 双锁包裹，
+        # 直接调用已持有 Pending 锁的内部投影，避免在 Application 锁内反向请求 Pending。
+        refresh = _resolve_planning_refresh_state_locked(str(workspace))
+    except (OSError, TypeError, ValueError):
+        # 损坏或不可读的 Pending 不制造新的 lock；后续正式请求仍由原有 lifecycle
+        # 校验报告具体错误，避免 admission guard 取代 Pending 自身的权威校验。
+        return
+    if (
+        refresh.get("source") == "pending_plan"
+        and refresh.get("status") == "awaiting_confirmation"
+    ):
+        if refresh.get("ownerSessionId") != normalized_owner:
+            raise ApplicationLifecycleConflictError(
+                "当前 Pending Build DAG 属于其他会话，不能启动新的应用 mutation。"
+            )
+        if replaces_run_id != refresh.get("workflowRunId"):
+            raise ApplicationLifecycleConflictError(
+                "当前 Pending Build DAG 只能通过对应 Workflow 的 Confirm/Regenerate 继续。"
+            )
+
+
+def _is_active_dag_planning_execution(execution: WorkbenchExecution) -> bool:
+    """判断 execution 是否正处于 DAG 生成或 Regenerate 的可占用窗口。"""
+
+    # prepare_build_tasks 是唯一登记 DAG Planning 的工作台节点；API Design、Unit Test、
+    # Review、Acceptance、普通 Build 及其它节点即使 active 也不形成 DAG 跨会话锁。
+    return execution.phase == "prepare_build_tasks" and execution.status in {
+        WorkbenchExecutionStatus.RUNNING,
+        WorkbenchExecutionStatus.STOPPING,
+    }
 
 
 def expand_workbench_execution_resources(
@@ -590,7 +668,10 @@ def record_abandoned_planning_result(
     """
 
     path = application_lifecycle_path(workspace)
-    with _application_lifecycle_lock(path):
+    # Abandon 也必须沿用 Pending -> Application 的统一锁顺序，支持独立调用时仍安全。
+    from app.workspace.task_documents import build_task_plan_lifecycle_lock
+
+    with build_task_plan_lifecycle_lock(workspace), _application_lifecycle_lock(path):
         current = load_application_lifecycle(workspace)
         if current is None:
             return None

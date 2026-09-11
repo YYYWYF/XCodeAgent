@@ -19,6 +19,7 @@ from app.services.planning_refresh_recovery import resolve_planning_refresh_stat
 from app.workspace.planning_run_documents import write_planning_run_atomic
 from app.workspace.task_documents import (
     load_pending_build_task_plan,
+    write_build_task_plan_json,
     write_pending_build_task_plan_atomic,
 )
 from tests.planning_run_fixtures import run
@@ -26,7 +27,7 @@ from tests.test_pending_build_task_plan_documents import _validated_plan
 
 
 class PlanningRefreshRecoveryTests(unittest.TestCase):
-    """验证 PendingPlan 是刷新时唯一的 Planning 权威投影来源。"""
+    """验证刷新只恢复尚未被终态事实压制的唯一 PendingPlan。"""
 
     def setUp(self) -> None:
         """为每例创建独立工作区和一致的 PlanningRun 身份。"""
@@ -69,9 +70,46 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
         return pending
 
     def _resolve(self) -> dict:
-        """调用只读取 PendingPlan 的公共刷新解析器。"""
+        """调用按 Pending 与终态身份解析的公共刷新解析器。"""
 
         return resolve_planning_refresh_state(self.workspace)
+
+    def _write_confirmed_formal(self, planning_run_id: str, draft_digest: str) -> None:
+        """写入带精确 confirmed_from 的 Formal residue。"""
+
+        write_build_task_plan_json(
+            self.state,
+            {
+                "schema_version": "build-dag.v3",
+                "status": "ready",
+                "confirmation_status": "confirmed",
+                "confirmed_from": {
+                    "planning_run_id": planning_run_id,
+                    "draft_digest": draft_digest,
+                },
+                "task_graph": {"validation": {"is_valid": True, "errors": []}},
+            },
+        )
+
+    def _write_abandoned_marker(self, planning_run_id: str, draft_digest: str) -> None:
+        """写入与 Pending 身份精确匹配的 authoritative Abandon residue。"""
+
+        lifecycle = create_application_lifecycle(
+            application_id="app-refresh",
+            application_name="Planning refresh",
+        ).model_copy(
+            update={
+                "extensions": {
+                    "planningResultLifecycle": {
+                        "schemaVersion": "planning-result-lifecycle.v1",
+                        "status": "abandoned",
+                        "planningRunId": planning_run_id,
+                        "draftDigest": draft_digest,
+                    }
+                }
+            }
+        )
+        write_application_lifecycle(self.workspace, lifecycle)
 
     def test_case_a_pending_plan_is_authoritative(self) -> None:
         """存在 PendingPlan 时返回确认态，并直接使用其中冻结的身份。"""
@@ -156,6 +194,53 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
 
         self.assertEqual(recovered["source"], "none")
         self.assertEqual(recovered["status"], "idle")
+
+    def test_case_b_confirmed_pending_residue_is_not_actionable(self) -> None:
+        """Formal 已精确确认当前 Pending 时，重启恢复不得再次展示确认。"""
+
+        pending = self._write_pending()
+        identity = pending["draft_identity"]
+        self._write_confirmed_formal(
+            identity["planning_run_id"],
+            identity["draft_digest"],
+        )
+
+        recovered = self._resolve()
+
+        self.assertEqual(recovered["source"], "none")
+        self.assertEqual(recovered["status"], "idle")
+        self.assertNotIn("confirmation", recovered)
+
+    def test_case_c_abandoned_pending_residue_is_not_actionable(self) -> None:
+        """Abandon tombstone 已精确终结当前 Pending 时，重启恢复不得复活它。"""
+
+        pending = self._write_pending()
+        identity = pending["draft_identity"]
+        self._write_abandoned_marker(
+            identity["planning_run_id"],
+            identity["draft_digest"],
+        )
+
+        recovered = self._resolve()
+
+        self.assertEqual(recovered["source"], "none")
+        self.assertEqual(recovered["status"], "idle")
+        self.assertNotIn("confirmation", recovered)
+
+    def test_case_d_different_pending_identity_survives_formal_residue(self) -> None:
+        """Formal 终结 A 不能使精确身份不同的当前 Pending B 失效。"""
+
+        pending = self._write_pending()
+        identity = pending["draft_identity"]
+        self._write_confirmed_formal("planning-formal-a", "a" * 64)
+        self._write_abandoned_marker("planning-abandoned-a", "b" * 64)
+
+        recovered = self._resolve()
+
+        self.assertEqual(recovered["source"], "pending_plan")
+        self.assertEqual(recovered["status"], "awaiting_confirmation")
+        self.assertEqual(recovered["planningRunId"], identity["planning_run_id"])
+        self.assertEqual(recovered["draftDigest"], identity["draft_digest"])
 
 
 if __name__ == "__main__":

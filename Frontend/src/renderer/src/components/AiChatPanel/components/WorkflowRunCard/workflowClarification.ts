@@ -12,9 +12,10 @@ export function workflowClarification(
 ): WorkflowClarification | undefined {
   const candidates: unknown[] = [
     workflow.summary.clarification,
-    workflow.summary.buildTaskPlanConfirmation,
     workflow.state?.clarification,
-    workflow.result?.clarification
+    workflow.result?.clarification,
+    workflow.summary.reviewPhaseConfirmation,
+    workflow.summary.acceptancePhaseConfirmation
   ]
   const clarificationEvent = workflow.events
     .slice()
@@ -40,16 +41,22 @@ export function workflowClarification(
   const expectedMode = WORKFLOW_PHASE_CONFIRMATION_MODES[phase]
   if (expectedMode) {
     const matching = candidates.find(
-      (candidate) =>
-        isUsableWorkflowClarification(candidate) && candidate.mode === expectedMode
+      (candidate) => isUsableWorkflowClarification(candidate) && candidate.mode === expectedMode
     )
     if (isUsableWorkflowClarification(matching)) return matching
     if (workflow.summary.status === 'requires_user_input') {
       return workflowPhaseConfirmationFallback(expectedMode)
     }
+    // 已进入确认阶段但当前载荷尚未到达时，不回退到上一阶段 clarification。
+    return undefined
   }
 
-  return candidates.find(isUsableWorkflowClarification)
+  const currentClarification = candidates.find(isUsableWorkflowClarification)
+  if (currentClarification) return currentClarification
+
+  // 只有当前 clarification 完全缺失时，才用历史 DAG 投影支持 PendingPlan 恢复。
+  const historicalProjection = workflow.summary.buildTaskPlanConfirmation
+  return isUsableWorkflowClarification(historicalProjection) ? historicalProjection : undefined
 }
 
 /** 判断确认载荷是否包含可渲染语义，避免空对象遮蔽后续真实载荷。 */

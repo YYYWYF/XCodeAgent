@@ -106,19 +106,7 @@ function isPendingDagExecution(
   )
 }
 
-/** 判断 refresh 是否已被 lifecycle 中较新的 Pending execution 越过。 */
-function planningRefreshConflictsWithLifecycle(
-  lifecycle: ApplicationLifecycle,
-  refresh: NonNullable<ApplicationLifecycle['extensions']['planningRefresh']>
-): boolean {
-  return (
-    refresh.source === 'active_planning_run' &&
-    refresh.status === 'planning' &&
-    isPendingDagExecution(lifecycle)
-  )
-}
-
-/** 在持久 revision 之外合并 GET-time refresh，同时拒绝与当前 execution 冲突的旧帧。 */
+/** 在持久 revision 之外合并 GET-time refresh，并保留缺失投影的既有状态。 */
 function mergePlanningRefresh(
   base: ApplicationLifecycle,
   current: ApplicationLifecycle,
@@ -136,23 +124,12 @@ function mergePlanningRefresh(
       isPendingDagExecution(base, incomingRefresh, true)
         ? incomingRefresh
         : currentRefresh
-  } else if (!incomingRefresh && incoming.revision === current.revision) {
-    // 同 revision 且没有新的恢复读取时，只合并持久字段，不主动清除现有 GET 投影。
-    planningRefresh = currentRefresh
   } else if (!incomingRefresh) {
-    // 缺少 projection 只表示本次 lifecycle 帧没有提供它，不能把已有权威 GET 结果清掉。
+    // 缺少 projection 只表示本次 lifecycle 帧没有提供它，不能把已有权威 GET 结果清掉；
+    // 只有 Backend 明确返回 none/idle 时才会替换现有 projection。
     planningRefresh = currentRefresh
   }
 
-  // 无论 refresh 来自当前帧还是沿用了旧投影，都不能让 active_planning_run
-  // 越过同一 lifecycle 中已经进入 awaiting_confirmation 的 Pending execution。
-  if (
-    planningRefresh &&
-    (planningRefreshConflictsWithLifecycle(base, planningRefresh) ||
-      planningRefreshConflictsWithLifecycle(current, planningRefresh))
-  ) {
-    planningRefresh = undefined
-  }
   if (planningRefresh === base.extensions?.planningRefresh) return base
   const extensions = { ...base.extensions }
   if (planningRefresh) extensions.planningRefresh = planningRefresh

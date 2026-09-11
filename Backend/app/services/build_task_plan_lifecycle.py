@@ -12,6 +12,7 @@ from app.services.dag_planning_inputs import SequentialPlanningInputs, _input_di
 from app.services.build_task_planner import replace_build_task_plan_tasks
 from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel, plain_json
 from app.services.planning_run_contracts import PlanningRun
+from app.workspace.spec_documents import workspace_root
 
 
 _Identifier = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
@@ -106,7 +107,7 @@ def abandon_pending_build_task_plan(
             errors=("放弃请求缺少有效 Draft identity。",),
         )
 
-    with build_task_plan_lifecycle_lock:
+    with build_task_plan_lifecycle_lock(workspace_root(state)):
         if _confirmed_request_matches(state, request):
             cleanup_error = _cleanup_matching_pending(state, request)
             return AbandonPendingResult(
@@ -132,7 +133,7 @@ def abandon_pending_build_task_plan(
 
         if record_lifecycle:
             record_abandoned_planning_result(
-                state.get("workspace") or "",
+                workspace_root(state),
                 planning_run_id=identity.planning_run_id,
                 draft_digest=identity.draft_digest,
                 base_confirmed_plan_digest=identity.base_confirmed_plan_digest,
@@ -255,9 +256,15 @@ def _end_matching_planning_run(state: dict[str, Any], planning_run_id: str) -> N
 def _abandoned_request_matches(state: dict[str, Any], request: ConfirmedFrom) -> bool:
     """只接受 application lifecycle 中精确匹配请求身份的 authoritative tombstone。"""
 
-    from app.services.application_lifecycle import load_application_lifecycle
+    from app.services.application_lifecycle import (
+        _application_lifecycle_lock,
+        application_lifecycle_path,
+        load_application_lifecycle,
+    )
 
-    lifecycle = load_application_lifecycle(state.get("workspace") or "")
+    normalized_workspace = workspace_root(state)
+    with _application_lifecycle_lock(application_lifecycle_path(normalized_workspace)):
+        lifecycle = load_application_lifecycle(normalized_workspace)
     if lifecycle is None:
         return False
     marker = lifecycle.extensions.get("planningResultLifecycle")
@@ -273,7 +280,6 @@ def _abandoned_request_matches(state: dict[str, Any], request: ConfirmedFrom) ->
 def _confirmed_request_matches(state: dict[str, Any], request: ConfirmedFrom) -> bool:
     """判断请求是否已经由当前 Formal 的 confirmed_from 精确提交。"""
 
-    from app.workspace.spec_documents import workspace_root
     from app.workspace.task_documents import load_confirmed_build_task_plan
 
     try:
@@ -301,14 +307,13 @@ def confirm_pending_build_task_plan(
         build_task_plan_json_path, build_task_plan_lifecycle_lock, build_task_plan_sha256,
         load_confirmed_build_task_plan, load_pending_build_task_plan, validate_pending_self_digest,
     )
-    from app.workspace.spec_documents import workspace_root
 
     try:
         request = ConfirmedFrom(planning_run_id=planning_run_id, draft_digest=draft_digest)
     except ValidationError:
         return ConfirmPromotionResult(status="stale_draft", errors=("确认请求缺少有效 Draft identity。",))
 
-    with build_task_plan_lifecycle_lock:
+    with build_task_plan_lifecycle_lock(workspace_root(state)):
         path = build_task_plan_json_path(state)
         try:
             formal = load_confirmed_build_task_plan(workspace_root(state))
