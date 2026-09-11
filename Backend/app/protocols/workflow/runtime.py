@@ -25,6 +25,7 @@ from app.protocols.application_planning_interrupt import (
     application_planning_interrupt_from_snapshot,
     project_application_planning_interrupt,
 )
+from app.protocols.application_planning_run_lock import application_planning_run_lock
 from app.protocols.workflow.projection import (
     _public_workflow_state,
     _workflow_artifacts,
@@ -74,9 +75,6 @@ from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
-_APPLICATION_PLANNING_RESUME_LOCKS: dict[str, asyncio.Lock] = {}
-
-
 def _graph_stream_supports_subgraphs(graph: Any) -> bool:
     """判断 Graph 流是否支持子图命名空间参数，并兼容测试中的轻量假 Graph。"""
 
@@ -106,29 +104,6 @@ def _workflow_stream_chunk(item: Any) -> tuple[tuple[str, ...], str, Any]:
         stream_mode, chunk = item
         return tuple(), str(stream_mode), chunk
     return tuple(), "", item
-
-
-def _application_planning_resume_lock(thread_id: str) -> asyncio.Lock:
-    """返回指定创建规划 thread 的进程内恢复锁。"""
-
-    lock = _APPLICATION_PLANNING_RESUME_LOCKS.get(thread_id)
-    if lock is None:
-        # 单进程事件循环内创建锁不需要额外互斥；不同 thread 会得到不同锁并行执行。
-        lock = asyncio.Lock()
-        _APPLICATION_PLANNING_RESUME_LOCKS[thread_id] = lock
-    return lock
-
-
-def clear_application_planning_resume_locks(thread_ids: set[str]) -> int:
-    """在应用运行全部停止后移除其创建规划线程恢复锁。"""
-
-    removed = 0
-    for thread_id in thread_ids:
-        lock = _APPLICATION_PLANNING_RESUME_LOCKS.get(thread_id)
-        if lock is not None and not lock.locked():
-            _APPLICATION_PLANNING_RESUME_LOCKS.pop(thread_id, None)
-            removed += 1
-    return removed
 
 
 def _validate_application_planning_resume(
@@ -365,8 +340,8 @@ def build_workflow_ag_ui_stream(
         workflow_scope = workflow_inputs.get("workflow_scope") or None
         current_phase = "api_design_readiness_gate"
         node_attempts: dict[str, int] = {}
-        application_planning_resume_lock: asyncio.Lock | None = None
-        application_planning_resume_lock_acquired = False
+        application_planning_run_lock_instance: asyncio.Lock | None = None
+        application_planning_run_lock_acquired = False
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")
@@ -417,11 +392,11 @@ def build_workflow_ag_ui_stream(
                 # 同一 planning thread 的所有 Graph 写运行必须串行。无 interaction 的
                 # 显式重试同样会修改 checkpoint，不能与确认恢复并发；snapshot-only
                 # 请求持锁时间很短，只保证读取到前一写运行完成后的稳定快照。
-                application_planning_resume_lock = _application_planning_resume_lock(
+                application_planning_run_lock_instance = application_planning_run_lock(
                     thread_id
                 )
-                await application_planning_resume_lock.acquire()
-                application_planning_resume_lock_acquired = True
+                await application_planning_run_lock_instance.acquire()
+                application_planning_run_lock_acquired = True
             await cleanup_workflow_checkpoints(
                 workspace=workspace,
                 project_id=project_id,
@@ -1868,11 +1843,11 @@ def build_workflow_ag_ui_stream(
             if workspace_lease is not None:
                 workspace_lease.release()
             if (
-                application_planning_resume_lock is not None
-                and application_planning_resume_lock_acquired
+                application_planning_run_lock_instance is not None
+                and application_planning_run_lock_acquired
             ):
                 # 取消、预校验异常和 Graph 异常都走这里，不能把同一 thread 永久锁死。
-                application_planning_resume_lock.release()
+                application_planning_run_lock_instance.release()
 
     return stream()
 

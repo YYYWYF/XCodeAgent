@@ -18,9 +18,12 @@ from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_acti
 from app.protocols.application_planning_interrupt import (
     project_application_planning_interrupt,
 )
+from app.protocols.application_planning_run_lock import application_planning_run_lock
 from app.protocols.application_lifecycle import application_lifecycle_input
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
+from app.services.ui_design_manifest import present_ui_pages
+from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
@@ -35,6 +38,12 @@ from app.services.requirement_spec import (
 
 REQUIREMENT_SPEC_DRAFT_EVENT_NAME = "requirement-spec-draft"
 logger = logging.getLogger("uvicorn.error")
+
+
+class ApplicationPlanningCheckpointNotFoundError(RuntimeError):
+    """标识只读恢复没有找到目标 application planning checkpoint。"""
+
+    code = "application_planning_checkpoint_not_found"
 
 
 class ApplicationPlanningRecoveryRequest(BaseModel):
@@ -259,13 +268,39 @@ def _build_application_planning_recovery_ag_ui_stream(
         )
         if inspect.isawaitable(active_graph):
             active_graph = await active_graph
-        snapshot = await active_graph.aget_state(
-            {"configurable": {"thread_id": thread_id}}
-        )
-        result = project_application_planning_interrupt(dict(snapshot.values), snapshot)
-        if not result:
-            raise ValueError("没有找到可恢复的应用规划 checkpoint。")
-        lifecycle = load_application_lifecycle(request.workspaceRoot)
+        lock = application_planning_run_lock(thread_id)
+        # 与同 thread writer 共用屏障，确保读取发生在在途 Graph 写运行释放锁之后。
+        async with lock:
+            snapshot = await active_graph.aget_state(
+                {"configurable": {"thread_id": thread_id}}
+            )
+            result = project_application_planning_interrupt(
+                dict(snapshot.values), snapshot
+            )
+            if not result:
+                raise ApplicationPlanningCheckpointNotFoundError(
+                    "没有找到可恢复的应用规划 checkpoint。"
+                )
+            # UI 确认阶段：后台生成池把最新 page status/code 写进 ui-designs.json，
+            # 但 checkpoint 里的 ui_designs 仍停留在入队时的 queued/generating（池不写
+            # checkpoint）。recovery 只读 checkpoint 不跑 Graph，若不回填 manifest，
+            # 返回的快照里 pages 无 code 且 status 过时，右侧渲染区永远显示「生成中」。
+            if str(result.get("phase") or "") == "ui_confirmation":
+                manifest = load_ui_designs_json(
+                    ui_designs_json_path(dict(snapshot.values))
+                )
+                if isinstance(manifest, dict) and manifest.get("pages"):
+                    result["ui_designs"] = manifest
+                    clarification = result.get("clarification")
+                    if isinstance(clarification, dict):
+                        product_plan = result.get("product_plan")
+                        product_plan = (
+                            product_plan if isinstance(product_plan, dict) else {}
+                        )
+                        clarification["pages"] = present_ui_pages(
+                            manifest, product_plan
+                        )
+            lifecycle = load_application_lifecycle(request.workspaceRoot)
         if lifecycle is not None:
             result["lifecycle"] = application_lifecycle_payload(lifecycle)
         recovery_run_id = str(result.get("active_run_id") or f"recovery:{thread_id}")
@@ -288,7 +323,14 @@ def _build_application_planning_recovery_ag_ui_stream(
         run_id_prefix="application-planning-recovery",
         operation=operation,
         error_message_prefix="恢复应用规划失败",
-        error_data=lambda _exc: {"action": "get"},
+        error_data=lambda exc: {
+            "action": "get",
+            "code": getattr(
+                exc,
+                "code",
+                "application_planning_recovery_failed",
+            ),
+        },
         accept=accept,
     )
 

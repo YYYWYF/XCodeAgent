@@ -5,12 +5,14 @@ import json
 import logging
 from typing import Any
 
+from json_repair import repair_json
+
 
 logger = logging.getLogger(__name__)
 
 
-def extract_json_object(text: str) -> dict[str, Any] | None:
-    """提取首个可解析对象，并记录最外层解析失败后回退到嵌套对象的诊断信息。"""
+def _strip_json_code_fence(text: str) -> str:
+    """移除模型响应最外层 JSON 代码围栏并保留原有宽松提取语义。"""
 
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -20,6 +22,13 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
         if lines and lines[-1].startswith("```"):
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
+    return stripped
+
+
+def extract_json_object(text: str) -> dict[str, Any] | None:
+    """提取首个可解析对象，并记录最外层解析失败后回退到嵌套对象的诊断信息。"""
+
+    stripped = _strip_json_code_fence(text)
 
     decoder = json.JSONDecoder()
     first_error: json.JSONDecodeError | None = None
@@ -63,6 +72,80 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
             _redacted_error_context(stripped, first_error_index + first_error.pos),
         )
     return None
+
+
+def extract_json_root_object_with_repair(text: str) -> dict[str, Any] | None:
+    """严格解析完整根对象，并仅在完整包络内执行一次受控语法修复。"""
+
+    stripped = _strip_json_code_fence(text)
+    if not _has_complete_json_object_envelope(stripped):
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        try:
+            repaired = repair_json(
+                stripped,
+                return_objects=True,
+                ensure_ascii=False,
+                skip_json_loads=True,
+            )
+        except Exception as repair_exc:
+            # 第三方修复器面对任意模型文本不得击穿上层既有有界重试。
+            logger.warning(
+                "model_json_root_repair_failed response_sha256=%s "
+                "root_error_position=%s root_error=%s error_type=%s",
+                _response_fingerprint(stripped),
+                exc.pos,
+                exc.msg,
+                type(repair_exc).__name__,
+            )
+            return None
+        if not isinstance(repaired, dict):
+            return None
+        logger.warning(
+            "model_json_root_repair_applied response_sha256=%s "
+            "root_error_position=%s root_error=%s repaired_keys=%s",
+            _response_fingerprint(stripped),
+            exc.pos,
+            exc.msg,
+            sorted(str(key) for key in repaired),
+        )
+        return repaired
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _has_complete_json_object_envelope(text: str) -> bool:
+    """验证原始文本含唯一闭合根对象，避免修复器把截断响应自动补全。"""
+
+    if not text.startswith("{") or not text.endswith("}"):
+        return False
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    pairs = {"}": "{", "]": "["}
+    for index, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+            continue
+        if character in "{[":
+            stack.append(character)
+            continue
+        if character not in pairs:
+            continue
+        if not stack or stack.pop() != pairs[character]:
+            return False
+        if not stack and index != len(text) - 1:
+            return False
+    return not stack and not in_string
 
 
 def repair_unescaped_json_string_quotes(text: str) -> str:

@@ -17,7 +17,7 @@ from app.domain.development_artifacts import (
 from app.workspace.detail_design_documents import hydrate_external_detail_designs
 
 INITIAL_DEVELOPMENT_PHASES = frozenset({
-    "development_readiness_gate", "inspect_workspace", "prepare_build_tasks",
+    "api_design_readiness_gate", "inspect_workspace", "prepare_build_tasks",
     "authorization_bootstrap", "build", "unit_test", "unit_test_repair",
     "test_phase_confirmation",
 })

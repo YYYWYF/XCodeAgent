@@ -1197,6 +1197,15 @@ test('planningRefresh 独立校准但拒绝与当前 Pending execution 冲突的
       }
     }
   } as unknown as ApplicationLifecycle
+  const lowerRevisionMissingIdentityRefresh = {
+    ...lowerRevisionPendingRefresh,
+    extensions: {
+      planningRefresh: {
+        ...lowerRevisionPendingRefresh.extensions.planningRefresh,
+        draftDigest: undefined
+      }
+    }
+  } as unknown as ApplicationLifecycle
 
   const withoutConflictingRefresh = latestApplicationLifecycle(current, stalePlanningRefresh)
   assert.equal(withoutConflictingRefresh.extensions.planningRefresh, undefined)
@@ -1209,6 +1218,12 @@ test('planningRefresh 独立校准但拒绝与当前 Pending execution 冲突的
 
   const withoutWrongRefresh = latestApplicationLifecycle(current, lowerRevisionWrongPendingRefresh)
   assert.equal(withoutWrongRefresh.extensions.planningRefresh, undefined)
+
+  const withoutMissingIdentityRefresh = latestApplicationLifecycle(
+    current,
+    lowerRevisionMissingIdentityRefresh
+  )
+  assert.equal(withoutMissingIdentityRefresh.extensions.planningRefresh, undefined)
 })
 
 /** 构造只携带 planningRefresh 投影的最小 lifecycle 帧。 */
@@ -1368,6 +1383,29 @@ test('higher revision lifecycle 缺少 planningRefresh 时保留 pending project
   assert.equal(merged.extensions.planningRefresh?.source, 'pending_plan')
   assert.equal(merged.extensions.planningRefresh?.status, 'awaiting_confirmation')
   assert.equal(merged.extensions.planningRefresh?.ownerSessionId, 'session-current')
+})
+
+test('higher revision lifecycle 缺少 planningRefresh 时清理已被 Pending execution 越过的 active projection', () => {
+  const execution = pendingDagExecution()
+  const current = {
+    ...lifecycleWithPlanningRefresh(7, {
+      schemaVersion: 'planning-refresh.v1',
+      source: 'active_planning_run',
+      status: 'planning',
+      planningRunId: 'planning-dag-transition',
+      workflowRunId: execution.runId,
+      threadId: execution.threadId,
+      draftDigest: DAG_DRAFT_DIGEST,
+      message: '旧生成投影。'
+    }),
+    activeExecutions: { [execution.runId]: execution }
+  } as unknown as ApplicationLifecycle
+  const incoming = lifecycleWithPlanningRefresh(8)
+
+  const merged = latestApplicationLifecycle(current, incoming)
+
+  assert.equal(merged.revision, 8)
+  assert.equal(merged.extensions.planningRefresh, undefined)
 })
 
 test('higher revision lifecycle 明确返回 none/idle 时替换 pending projection', () => {

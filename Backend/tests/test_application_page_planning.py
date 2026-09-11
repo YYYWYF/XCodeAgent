@@ -27,6 +27,10 @@ from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
 )
+from app.protocols.application_planning_run_lock import (
+    application_planning_run_lock,
+    clear_application_planning_run_locks,
+)
 from app.protocols.workflow.projection import _workflow_confirmation_artifact
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.application_lifecycle import (
@@ -139,6 +143,112 @@ def _write_planning_stage_entry_lifecycle(
 
 
 class ApplicationPagePlanningTests(unittest.TestCase):
+    def test_checkpoint_recovery_waits_for_active_planning_writer(self) -> None:
+        """只读恢复必须等待同 thread writer 释放共享运行锁。"""
+
+        class RecoveryGraph:
+            """记录权威读取何时真正越过 writer 屏障。"""
+
+            called = False
+
+            async def aget_state(self, _config: dict[str, object]):
+                """返回可投影的稳定 checkpoint。"""
+
+                self.called = True
+                return type(
+                    "Snapshot",
+                    (),
+                    {
+                        "values": {
+                            "active_run_id": "writer-run",
+                            "phase": "technical_planning",
+                            "status": "requires_user_input",
+                            "clarification": {
+                                "mode": "technical_plan_confirmation",
+                                "status": "requires_user_input",
+                            },
+                        }
+                    },
+                )()
+
+        async def exercise() -> str:
+            """在同一事件循环中持锁、启动恢复并验证读取顺序。"""
+
+            graph = RecoveryGraph()
+            thread_id = "planning-writer-barrier"
+            lock = application_planning_run_lock(thread_id)
+            await lock.acquire()
+            try:
+                stream = build_application_page_planning_ag_ui_stream(
+                    graph=graph,
+                    payload={
+                        "threadId": thread_id,
+                        "runId": "recovery-run",
+                        "forwardedProps": {
+                            "applicationPlanningRecovery": {
+                                "action": "get",
+                                "workspaceRoot": "/missing-workspace",
+                                "applicationId": "app-1",
+                            }
+                        },
+                    },
+                )
+
+                async def collect() -> str:
+                    """消费恢复流以驱动其只读 operation。"""
+
+                    return "".join([frame async for frame in stream])
+
+                recovery = asyncio.create_task(collect())
+                await asyncio.sleep(0)
+                self.assertFalse(graph.called)
+                lock.release()
+                frames = await recovery
+                self.assertTrue(graph.called)
+                return frames
+            finally:
+                if lock.locked():
+                    lock.release()
+                clear_application_planning_run_locks({thread_id})
+
+        frames = asyncio.run(exercise())
+        self.assertIn("RUN_FINISHED", frames)
+
+    def test_checkpoint_recovery_exposes_machine_readable_missing_code(self) -> None:
+        """缺少 checkpoint 时应通过完成信封返回稳定错误码。"""
+
+        class EmptyRecoveryGraph:
+            """模拟目标 thread 从未产生 checkpoint。"""
+
+            async def aget_state(self, _config: dict[str, object]):
+                """返回空 checkpoint 快照。"""
+
+                return type("Snapshot", (), {"values": {}})()
+
+        stream = build_application_page_planning_ag_ui_stream(
+            graph=EmptyRecoveryGraph(),
+            payload={
+                "threadId": "missing-planning-thread",
+                "runId": "missing-recovery-run",
+                "forwardedProps": {
+                    "applicationPlanningRecovery": {
+                        "action": "get",
+                        "workspaceRoot": "/missing-workspace",
+                        "applicationId": "app-1",
+                    }
+                },
+            },
+        )
+
+        async def collect() -> str:
+            """消费缺失 checkpoint 的完整失败生命周期。"""
+
+            return "".join([frame async for frame in stream])
+
+        frames = asyncio.run(collect())
+        self.assertIn("application_planning_checkpoint_not_found", frames)
+        self.assertIn("RUN_FINISHED", frames)
+
     def test_checkpoint_recovery_projects_confirmation_without_running_graph(self) -> None:
         """冷启动恢复只读取 checkpoint，并重新投影需求确认卡。"""
 

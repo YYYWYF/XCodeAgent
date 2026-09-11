@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import logging
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -16,7 +17,20 @@ from app.services.project_plan import (
     create_project_plan,
     create_technical_plan,
 )
-from app.utils.model_output import extract_json_object
+from app.utils.model_output import (
+    extract_json_object,
+    extract_json_root_object_with_repair,
+)
+
+
+logger = logging.getLogger(__name__)
+
+_TECHNICAL_PLAN_MODEL_ROOT_KEYS = (
+    "architecture",
+    "entities",
+    "api_contracts",
+    "pages",
+)
 
 
 BACKEND_TECH_STACK_REQUIREMENT = (
@@ -827,13 +841,14 @@ def plan_project_with_chat_model(
     )
     planning_source = "direct_chat_model"
 
-    agent_plan = extract_json_object(agent_note)
     if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
+        agent_plan = _parse_technical_plan_model_output(agent_note)
         return create_technical_plan(
             requirement_spec,
             agent_plan=agent_plan,
             datasource_type=datasource_type,
         )
+    agent_plan = extract_json_object(agent_note)
     plan = create_project_plan(
         requirement_spec,
         agent_note=agent_note,
@@ -850,6 +865,51 @@ def plan_project_with_chat_model(
         "source": planning_source,
     }
     return plan
+
+
+def _parse_technical_plan_model_output(agent_note: str) -> dict[str, Any]:
+    """恢复并校验 TechnicalPlan 模型根结构，拒绝嵌套对象或类型漂移。"""
+
+    result = extract_json_root_object_with_repair(agent_note)
+    if not isinstance(result, dict):
+        raise ValueError("TechnicalPlan 模型输出无法恢复为完整 JSON root object。")
+    missing_keys = [key for key in _TECHNICAL_PLAN_MODEL_ROOT_KEYS if key not in result]
+    if missing_keys:
+        logger.warning(
+            "technical_plan_json_root_incomplete missing_keys=%s invalid_sections=[]",
+            missing_keys,
+        )
+        raise ValueError(
+            "TechnicalPlan 模型输出根对象不完整，缺少字段："
+            + "、".join(missing_keys)
+        )
+    invalid_sections = [
+        key
+        for key, expected_type in (
+            ("architecture", dict),
+            ("entities", list),
+            ("api_contracts", list),
+            ("pages", list),
+        )
+        if not isinstance(result[key], expected_type)
+    ]
+    invalid_item_sections = [
+        key
+        for key in ("entities", "api_contracts", "pages")
+        if isinstance(result[key], list)
+        and any(not isinstance(item, dict) for item in result[key])
+    ]
+    invalid_sections = list(dict.fromkeys([*invalid_sections, *invalid_item_sections]))
+    if invalid_sections:
+        logger.warning(
+            "technical_plan_json_root_incomplete missing_keys=[] invalid_sections=%s",
+            invalid_sections,
+        )
+        raise ValueError(
+            "TechnicalPlan 模型输出根对象字段类型错误："
+            + "、".join(invalid_sections)
+        )
+    return result
 
 
 def _plan_pages_for_repair(existing_plan: dict[str, Any]) -> list[dict[str, Any]]:

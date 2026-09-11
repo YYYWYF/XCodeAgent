@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -10,6 +11,8 @@ from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.product_plan import create_product_plan, validate_product_plan_model_output
 from app.utils.model_output import extract_json_object
+
+logger = logging.getLogger(__name__)
 
 
 def _model_product_plan_view(plan: dict[str, Any]) -> dict[str, Any]:
@@ -84,6 +87,33 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
         "product_acceptance_criteria": ["<填写产品级验收标准>"],
     }
     return json.dumps(example, ensure_ascii=False, indent=2)
+
+
+def _normalize_product_plan_root(agent_plan: Any) -> Any:
+    """归一化模型常见的根字段结构错误，避免可确定的格式问题反复回喂模型重试。
+
+    已知模型错误模式：把 app.name / app.summary 直接放到根级别（输出 name、summary
+    而非嵌套 app 对象）。检测到根级别有 name/summary 且没有 app 时，把它们包进 app
+    对象，让后续校验通过。其他未知字段不处理，仍由校验报错。
+    """
+
+    if not isinstance(agent_plan, dict):
+        return agent_plan
+    has_app = isinstance(agent_plan.get("app"), dict)
+    has_root_name = "name" in agent_plan
+    has_root_summary = "summary" in agent_plan
+    if has_app or not (has_root_name or has_root_summary):
+        return agent_plan
+    app_obj = dict(agent_plan.get("app") or {})
+    if has_root_name:
+        app_obj["name"] = agent_plan.pop("name")
+    if has_root_summary:
+        app_obj["summary"] = agent_plan.pop("summary")
+    agent_plan["app"] = app_obj
+    logger.warning(
+        "product_plan_root_normalized: 模型把 name/summary 放在根级别，已自动包进 app 对象。"
+    )
+    return agent_plan
 
 
 def _authorization_operation_action_instruction(requirement_spec: dict[str, Any]) -> str:
@@ -240,6 +270,7 @@ def plan_product_with_chat_model(
         on_token=on_token,
     )
     agent_plan = extract_json_object(agent_note)
+    agent_plan = _normalize_product_plan_root(agent_plan)
     format_errors = validate_product_plan_model_output(agent_plan, requirement_spec)
     if format_errors:
         raise ValueError("ProductPlan 模型 JSON 格式校验失败：" + "；".join(format_errors))

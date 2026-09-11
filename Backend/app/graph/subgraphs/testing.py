@@ -1095,20 +1095,6 @@ def build_project_checks(
 def unit_test_confirmation(state: ProjectState) -> dict[str, Any]:
     """无阻塞失败时暂停等待用户选择；存在阻塞失败则自动跳过直达质量门禁。"""
 
-    context = state.get("unit_test_generation_context")
-    if (
-        isinstance(context, dict)
-        and context.get("enabled") is not False
-        and not context.get("has_targets")
-        and not context.get("existing_test_files")
-    ):
-        return {
-            "status": "in_progress",
-            "clarification": {},
-            "unit_test_decision": "skip",
-            "integration_next_action": "skip_unit_tests",
-            "test_events": ["unit_test_confirmation:auto_skipped_no_targets"],
-        }
     if _blocking_test_failures(state):
         return {
             "status": "in_progress",
