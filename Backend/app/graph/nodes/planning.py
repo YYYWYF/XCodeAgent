@@ -1,6 +1,8 @@
+import json
 import logging
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from langgraph.config import get_stream_writer
@@ -183,10 +185,16 @@ def _technical_planning_requirement_spec(
         for key, value in requirement_spec.items()
         if key != "entities"
     }
+    application_file = Path(workspace_from_state(state)) / ".xcodeagent" / "application.json"
+    try:
+        application_config = json.loads(application_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("TechnicalPlan 缺少有效 application.json。") from exc
     return {
         **technical_input,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
+        "application_config": application_config,
     }
 
 

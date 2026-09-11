@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.domain.application_config_change import ApplicationConfigChange
+
 
 class RevisionModel(BaseModel):
     """为二次修改模型提供严格的当前合同与驼峰序列化。"""
@@ -236,6 +238,11 @@ class PendingRevisionImpact(RevisionModel):
     request: str = Field(min_length=1, max_length=16_000)
     target: RevisionTarget
     impact: RevisionImpact
+    pending_application_config_changes: list[ApplicationConfigChange] = Field(
+        default_factory=list,
+        alias="pendingApplicationConfigChanges",
+        max_length=4,
+    )
     based_on_lifecycle_revision: int = Field(alias="basedOnLifecycleRevision", ge=1)
     status: Literal["pending"] = "pending"
 
@@ -271,6 +278,12 @@ class ActiveFormalRevision(RevisionModel):
         default_factory=list,
         alias="remainingArtifacts",
         max_length=100,
+    )
+    # 该集合是当前 Revision 的待确认配置提案，不是 application.json 的副本。
+    pending_application_config_changes: list[ApplicationConfigChange] = Field(
+        default_factory=list,
+        alias="pendingApplicationConfigChanges",
+        max_length=4,
     )
     technical_plan_sha256: str | None = Field(
         default=None,

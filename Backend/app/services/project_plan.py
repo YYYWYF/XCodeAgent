@@ -1811,8 +1811,8 @@ def create_technical_plan(
         "api_contracts": api_contracts,
         "pages": pages,
         "authorization_manifest": authorization_manifest,
-        # 模板能力只能由 RequirementSpec 的正式意图编译，模型不得自行声明。
-        "template_capabilities": compile_template_capabilities(spec, authorization_manifest),
+        # 模板能力只能由已提交 application.json 编译，模型不得自行声明。
+        "template_capabilities": compile_template_capabilities(spec.get("application_config"), authorization_manifest),
     }
     repaired, _ = repair_cross_contract_schema_refs(plan)
     return repaired

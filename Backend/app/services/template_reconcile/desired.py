@@ -14,28 +14,28 @@ class TemplateCapabilityError(ValueError):
 
 
 def compile_template_capabilities(
-    requirement_spec: Any,
+    application_config: Any,
     authorization_manifest: Any,
 ) -> dict[str, dict[str, Any]]:
-    """从 RequirementSpec 的正式能力需求确定性编译模板 Desired Capability。"""
+    """从已提交 application.json 的能力开关确定性编译模板 Desired Capability。"""
 
     if not isinstance(authorization_manifest, dict):
         raise TemplateCapabilityError("TechnicalPlan.authorization_manifest 必须是对象。")
-    if not isinstance(requirement_spec, dict):
-        raise TemplateCapabilityError("RequirementSpec 必须是对象。")
+    if not isinstance(application_config, dict):
+        raise TemplateCapabilityError("application.json 必须是对象。")
     manifest_enabled = authorization_manifest.get("enabled")
     if not isinstance(manifest_enabled, bool):
         raise TemplateCapabilityError("TechnicalPlan.authorization_manifest.enabled 必须是布尔值。")
-    authentication = requirement_spec.get("authentication_requirements")
-    authorization = requirement_spec.get("authorization_requirements")
-    if not isinstance(authentication, dict) or not isinstance(authentication.get("enabled"), bool):
-        raise TemplateCapabilityError("RequirementSpec.authentication_requirements.enabled 必须是布尔值。")
-    if not isinstance(authorization, dict) or not isinstance(authorization.get("enabled"), bool):
-        raise TemplateCapabilityError("RequirementSpec.authorization_requirements.enabled 必须是布尔值。")
+    auth = application_config.get("auth")
+    authorization = application_config.get("authorization")
+    if not isinstance(auth, dict) or type(auth.get("enable")) is not bool:
+        raise TemplateCapabilityError("application.json.auth.enable 必须是布尔值。")
+    if not isinstance(authorization, dict) or type(authorization.get("enabled")) is not bool:
+        raise TemplateCapabilityError("application.json.authorization.enabled 必须是布尔值。")
     if manifest_enabled != (authorization.get("enabled") is True):
-        raise TemplateCapabilityError("权限 Manifest 必须与 RequirementSpec.authorization_requirements.enabled 一致。")
+        raise TemplateCapabilityError("权限 Manifest 必须与 application.json.authorization.enabled 一致。")
     capabilities: dict[str, dict[str, Any]] = {}
-    if authentication.get("enabled") is True:
+    if auth.get("enable") is True:
         capabilities["login"] = {"enabled": True, "config": {}}
     if authorization.get("enabled") is True:
         capabilities["authorization"] = {"enabled": True, "config": {}}
@@ -46,13 +46,7 @@ def initial_template_capabilities(authorization_manifest: Any) -> dict[str, dict
     """兼容旧调用：仅按权限 Manifest 构造不含登录的首次能力集合。"""
 
     return compile_template_capabilities(
-        {
-            "authentication_requirements": {"enabled": False},
-            "authorization_requirements": {
-                "enabled": isinstance(authorization_manifest, dict)
-                and authorization_manifest.get("enabled") is True
-            },
-        },
+        {"auth": {"enable": False}, "authorization": {"enabled": isinstance(authorization_manifest, dict) and authorization_manifest.get("enabled") is True}},
         authorization_manifest,
     )
 

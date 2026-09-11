@@ -19,7 +19,6 @@ from app.services.entity_definitions import (
     merge_entities,
     normalize_entities,
 )
-from app.services.access_control_intent import resolve_capability_intents
 from app.workspace.spec_documents import (
     load_requirement_spec_json,
     render_requirement_spec_markdown,
@@ -948,8 +947,6 @@ def create_requirement_spec(
     # 模型正在 ask_user 时只允许保留已有或明确返回的事实，禁止用默认页面填充未决需求。
     modules = _feature_modules(source_text) if allow_inferred_defaults else []
     app_name = _app_name(source_text) if allow_inferred_defaults else ""
-    request_authorization_enabled = _authorization_enabled_from_request(source_text)
-    request_authentication_enabled = _authentication_enabled_from_request(source_text)
     roles = [
         {
             "id": "business_user",
@@ -980,12 +977,8 @@ def create_requirement_spec(
         "pages": _pages(modules) if allow_inferred_defaults else [],
         "entities": _entities(modules) if allow_inferred_defaults else [],
         "business_flows": _business_flows(modules) if allow_inferred_defaults else [],
-        "authorization_requirements": _default_authorization_requirements(
-            enabled=(request_authorization_enabled is True),
-        ),
-        "authentication_requirements": _default_authentication_requirements(
-            enabled=(request_authentication_enabled is True),
-        ),
+        "authorization_requirements": _default_authorization_requirements(),
+        "authentication_requirements": _default_authentication_requirements(),
         "acceptance_criteria": (
             _acceptance_criteria(app_name) if allow_inferred_defaults else []
         ),
@@ -1116,19 +1109,12 @@ def create_requirement_spec(
         if isinstance(agent_authorization, dict)
         else existing_authorization
     )
-    explicit_authorization_enabled = _authorization_enabled_from_request(source_text)
-    # 创建时的“涉及权限控制：否”只是初始配置事实。后续设计变更若已产生
-    # 经校验的受控页面或操作候选，说明用户正在通过自然语言开启权限，不能再被
-    # 拼接在历史 request 中的初始开关反向清空。
     authorization_has_current_rules = isinstance(authorization_source, dict) and any(
         isinstance(authorization_source.get(field_name), list)
         and bool(authorization_source[field_name])
         for field_name in ("restrictedPages", "restrictedOperations")
     )
-    authorization_enabled_hint = (
-        True if authorization_has_current_rules else explicit_authorization_enabled
-    )
-    # 没有当前权限候选时仍保留明确表单开关，支持初始创建和用户显式取消权限的场景。
+    authorization_enabled_hint = True if authorization_has_current_rules else None
     spec["authorization_requirements"] = normalize_authorization_requirements(
         authorization_source
         if isinstance(authorization_source, dict)
@@ -1147,15 +1133,7 @@ def create_requirement_spec(
     )
     spec["authentication_requirements"] = normalize_authentication_requirements(
         authentication_source,
-        enabled_hint=request_authentication_enabled,
     )
-    # 自然语言修订只形成正式需求事实；绝不在此修改 application.json 或 TemplateState。
-    for intent in resolve_capability_intents(request, requirement_spec=existing_spec):
-        if intent["capability"] == "login":
-            spec["authentication_requirements"] = {"enabled": True, "sourceRefs": [intent["evidence"]]}
-        elif intent["capability"] == "authorization":
-            spec["authorization_requirements"]["enabled"] = True
-            spec["authorization_requirements"]["sourceRefs"] = [intent["evidence"]]
     # 第一阶段不能把数据范围语义悄然丢弃：模型或编辑内容一旦提出该能力，
     # 必须以明确的能力缺口阻断 RequirementSpec 确认，等待用户改写需求。
     data_authorization_issues = []

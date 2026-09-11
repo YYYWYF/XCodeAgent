@@ -28,6 +28,7 @@ from app.services.application_lifecycle import (
 )
 from app.services.application_revision_lifecycle import (
     consume_revision_continuation,
+    commit_active_revision_application_config_changes,
     discard_active_revision,
     issue_revision_continuation,
     register_revision_impact,
@@ -148,6 +149,92 @@ class RevisionRoutingTests(unittest.TestCase):
             current = load_application_lifecycle(directory)
             assert current is not None and current.active_formal_revision is not None
             self.assertEqual(current.active_formal_revision.status, "awaiting_user")
+
+    def test_capability_change_is_pending_until_revision_is_discarded(self) -> None:
+        """能力开关只作为正式修订待提交 Delta 保存，放弃修订不得改写 application.json。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config_directory = workspace / ".xcodeagent"
+            config_directory.mkdir()
+            application_file = config_directory / "application.json"
+            application_file.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 5,
+                        "auth": {"enable": False},
+                        "authorization": {"enabled": False, "initialAdministratorSubjects": []},
+                        "track": {"enable": False},
+                        "apiTrack": {"enable": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lifecycle = create_application_lifecycle(
+                application_id="app-config-change",
+                application_name="配置测试",
+                initialization_thread_id="planning-thread",
+            )
+            lifecycle = lifecycle.model_copy(
+                update={
+                    "initialization": lifecycle.initialization.model_copy(
+                        update={
+                            "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                            "status": ApplicationLifecycleStatus.COMPLETED,
+                        }
+                    )
+                }
+            )
+            write_application_lifecycle(directory, lifecycle)
+            pending = register_revision_impact(
+                directory,
+                interaction_id="impact-config-change",
+                source_thread_id="conversation-thread",
+                source_run_id="conversation-run",
+                request="给应用增加登录功能",
+                target=RevisionTarget(type="application"),
+                impact=RevisionImpact(
+                    formalBranch="design_stage_revision",
+                    revisionType="requirement_scope_change",
+                    earliestArtifact="requirement-spec",
+                    affectedArtifacts=["requirement-spec"],
+                    affectedResources=["application"],
+                    reason="增加登录能力",
+                ),
+            )
+            self.assertEqual(
+                [item.model_dump(by_alias=True) for item in pending.pending_application_config_changes],
+                [{
+                    "path": "auth.enable",
+                    "operation": "set",
+                    "from": False,
+                    "to": True,
+                    "reason": "用户明确要求启用 auth.enable",
+                    "evidence": "给应用增加登录功能",
+                }],
+            )
+            active = submit_revision_impact(
+                directory,
+                interaction_id="impact-config-change",
+                decision="approved",
+            )
+            assert active is not None
+            self.assertEqual(active.pending_application_config_changes, pending.pending_application_config_changes)
+            self.assertFalse(json.loads(application_file.read_text(encoding="utf-8"))["auth"]["enable"])
+
+            committed = commit_active_revision_application_config_changes(
+                directory,
+                change_id=active.change_id,
+            )
+            self.assertEqual(committed.pending_application_config_changes, [])
+            self.assertTrue(json.loads(application_file.read_text(encoding="utf-8"))["auth"]["enable"])
+
+            discard_active_revision(directory, change_id=active.change_id)
+
+            persisted = load_application_lifecycle(directory)
+            assert persisted is not None
+            self.assertIsNone(persisted.active_formal_revision)
+            self.assertTrue(json.loads(application_file.read_text(encoding="utf-8"))["auth"]["enable"])
 
     def test_formal_product_operation_uses_original_design_branch(self) -> None:
         """模型判定产品语义变化后必须从 ProductPlan 返回原设计规划流程。"""

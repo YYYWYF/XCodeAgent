@@ -1001,6 +1001,14 @@ export type ApplicationLifecycle = {
     status: string
     currentArtifact?: string | null
     remainingArtifacts?: string[]
+    pendingApplicationConfigChanges?: Array<{
+      path: 'auth.enable' | 'authorization.enabled' | 'track.enable' | 'apiTrack.enable'
+      operation: 'set'
+      from: boolean
+      to: boolean
+      reason: string
+      evidence: string
+    }>
     continuationSourceRunId?: string
     [key: string]: unknown
   }

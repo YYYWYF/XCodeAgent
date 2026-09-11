@@ -26,8 +26,8 @@ class TemplateReconcileDesiredTests(unittest.TestCase):
         )
         self.assertEqual(initial_template_capabilities({"enabled": False}), {})
 
-    def test_natural_language_login_requirement_compiles_desired_capability(self) -> None:
-        """二次提出增加登录时只更新正式 Desired，不依赖 application.json。"""
+    def test_committed_login_configuration_compiles_desired_capability(self) -> None:
+        """登录模板能力只由已提交 application.json 开关决定。"""
 
         spec = create_requirement_spec(
             "给这个应用增加登录功能",
@@ -41,9 +41,11 @@ class TemplateReconcileDesiredTests(unittest.TestCase):
             },
         )
 
-        self.assertTrue(spec["authentication_requirements"]["enabled"])
         self.assertEqual(
-            compile_template_capabilities(spec, {"enabled": False}),
+            compile_template_capabilities(
+                {"auth": {"enable": True}, "authorization": {"enabled": False}},
+                {"enabled": False},
+            ),
             {"login": {"enabled": True, "config": {}}},
         )
 
@@ -61,10 +63,15 @@ class TemplateReconcileDesiredTests(unittest.TestCase):
             },
         )
 
-        self.assertTrue(spec["authorization_requirements"]["enabled"])
         self.assertEqual(
-            compile_template_capabilities(spec, {"enabled": True}),
-            {"authorization": {"enabled": True, "config": {}}},
+            compile_template_capabilities(
+                {"auth": {"enable": True}, "authorization": {"enabled": True}},
+                {"enabled": True},
+            ),
+            {
+                "login": {"enabled": True, "config": {}},
+                "authorization": {"enabled": True, "config": {}},
+            },
         )
 
     def test_compiles_requested_config_only_from_technical_plan(self) -> None:

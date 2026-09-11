@@ -676,8 +676,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 (Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.md").exists()
             )
 
-    def test_disabled_authorization_clears_model_candidates(self) -> None:
-        """表单明确关闭权限时，模型返回的权限候选不能进入 RequirementSpec。"""
+    def test_historical_authorization_switch_does_not_override_current_business_candidates(self) -> None:
+        """历史请求中的关闭表述不能覆盖本轮模型确认的权限业务候选。"""
 
         spec = create_requirement_spec(
             "涉及权限控制：否",
@@ -698,7 +698,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
         )
 
         authorization = spec["authorization_requirements"]
-        self.assertFalse(authorization["enabled"])
+        self.assertTrue(authorization["enabled"])
         self.assertNotIn("dataRules", authorization)
         self.assertNotIn("login_page", [page["pageId"] for page in spec["pages"]])
 

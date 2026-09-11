@@ -23,6 +23,11 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.artifact_invalidation import canonical_sha256
+from app.services.access_control_intent import has_explicit_capability_change
+from app.services.application_config_change_resolver import (
+    resolve_application_config_changes,
+)
+from app.services.application_config_mutation import apply_application_config_changes
 from app.domain.application_lifecycle import (
     ApplicationInitialization,
     ApplicationLifecycleStage,
@@ -55,6 +60,7 @@ def register_revision_impact(
     )
     if active is not None and not orphaned_failed_revision:
         raise ApplicationLifecycleConflictError("当前 application 已有 formal revision 正在进行。")
+    pending_config_changes = _resolve_pending_application_config_changes(workspace, request)
     pending = PendingRevisionImpact(
         interactionId=interaction_id,
         sourceThreadId=source_thread_id,
@@ -62,6 +68,7 @@ def register_revision_impact(
         request=request,
         target=target,
         impact=impact,
+        pendingApplicationConfigChanges=pending_config_changes,
         basedOnLifecycleRevision=current.revision + 1,
     )
     updated = current.model_copy(
@@ -123,6 +130,7 @@ def submit_revision_impact(
             # remainingArtifacts 只作生命周期展示，不允许客户端反向改写起点。
             currentArtifact=current_artifact,
             remainingArtifacts=remaining_artifacts,
+            pendingApplicationConfigChanges=pending.pending_application_config_changes,
         )
     updated = current.model_copy(
         update={
@@ -298,6 +306,32 @@ def discard_active_revision(workspace: str | Path, *, change_id: str) -> None:
     write_application_lifecycle(workspace, updated, expected_revision=current.revision)
 
 
+def commit_active_revision_application_config_changes(
+    workspace: str | Path,
+    *,
+    change_id: str,
+) -> ActiveFormalRevision:
+    """在正式产物确认边界提交当前 Revision 的配置 Delta，并清空已提交提案。"""
+
+    current = _required_lifecycle(workspace)
+    active = current.active_formal_revision
+    if active is None or active.change_id != change_id:
+        raise ApplicationLifecycleConflictError("formal revision changeId 已过期。")
+    if not active.pending_application_config_changes:
+        return active
+    apply_application_config_changes(workspace, changes=active.pending_application_config_changes)
+    next_active = active.model_copy(update={"pending_application_config_changes": []})
+    updated = current.model_copy(
+        update={
+            "updated_at": utc_now(),
+            "revision": current.revision + 1,
+            "active_formal_revision": next_active,
+        }
+    )
+    write_application_lifecycle(workspace, updated, expected_revision=current.revision)
+    return next_active
+
+
 def complete_active_revision(workspace: str | Path) -> str | None:
     """在最终验收完成后释放 active formal revision，并返回已完成 changeId。"""
 
@@ -323,6 +357,17 @@ def _required_lifecycle(workspace: str | Path):
     if current is None:
         raise ApplicationLifecycleConflictError("application lifecycle 尚未初始化。")
     return current
+
+
+def _resolve_pending_application_config_changes(
+    workspace: str | Path,
+    request: str,
+) -> list:
+    """仅为明确能力开关请求读取 canonical 配置并生成当前 Revision 的待确认 Delta。"""
+
+    if not has_explicit_capability_change(request):
+        return []
+    return resolve_application_config_changes(request, workspace_root=workspace)
 
 
 def _token_sha256(token: str) -> str:
