@@ -66,6 +66,25 @@ class RecoveryPointKind(StrEnum):
     CHECKPOINT = "checkpoint"
 
 
+class RecoveryDecision(StrEnum):
+    """定义 P0.3A 对一次恢复判断给出的安全决策。"""
+
+    READY_NATIVE = "ready_native"
+    REQUIRES_HANDLER = "requires_handler"
+    AWAITING_USER = "awaiting_user"
+    NOT_RECOVERABLE = "not_recoverable"
+    INVALID_RECOVERY_POINT = "invalid_recovery_point"
+    STATE_DRIFT = "state_drift"
+
+
+class RecoveryStrategy(StrEnum):
+    """定义恢复结果交给哪一种后续执行策略。"""
+
+    NATIVE_CHECKPOINT = "native_checkpoint"
+    HANDLER = "handler"
+    NONE = "none"
+
+
 class DurableExecutionRecord(ExecutionRecoveryModel):
     """保存一次 AG-UI Graph 执行的轻量观察索引。"""
 
@@ -116,3 +135,21 @@ class RecoveryPoint(ExecutionRecoveryModel):
     workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
     replay_safety: Literal["unassessed"] = "unassessed"
     captured_at: datetime
+
+
+class RecoveryPlan(ExecutionRecoveryModel):
+    """保存只读恢复协调结果，不复制完整 Graph State 或业务产物。"""
+
+    source_run_id: str = Field(min_length=1, max_length=512)
+    thread_id: str = Field(default="", max_length=512)
+    decision: RecoveryDecision
+    strategy: RecoveryStrategy
+    recovery_point_id: str | None = Field(default=None, max_length=512)
+    checkpoint_id: str | None = Field(default=None, max_length=512)
+    checkpoint_ns: str = Field(default="", max_length=512)
+    next_nodes: list[str] = Field(default_factory=list, max_length=256)
+    reason_code: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=2048)
+    lifecycle_revision: int | None = Field(default=None, ge=0)
+    workspace_revision: str | None = Field(default=None, max_length=512)
+    workspace_snapshot_hash: str | None = Field(default=None, max_length=512)

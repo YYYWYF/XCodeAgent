@@ -674,20 +674,23 @@ async def get_latest_recovery_point(
 async def list_recovery_points(
     workspace: str | Path,
     run_id: str,
+    *,
+    newest_first: bool = False,
 ) -> list[RecoveryPoint]:
-    """按捕获时间升序读取一次执行的完整现场历史。"""
+    """按捕获时间稳定读取一次执行的完整现场历史。"""
 
     await initialize_execution_recovery_store(workspace)
+    order = "DESC" if newest_first else "ASC"
     async with _connection(workspace) as connection:
         cursor = await connection.execute(
-            """
+            f"""
             SELECT recovery_point_id, run_id, thread_id, kind, checkpoint_id,
                    checkpoint_ns, graph_node, completed_node, next_nodes_json,
                    phase, state_status, lifecycle_revision, workspace_revision,
                    workspace_snapshot_hash, replay_safety, dedupe_key, captured_at
             FROM recovery_points
             WHERE run_id = ?
-            ORDER BY captured_at ASC, recovery_point_id ASC
+            ORDER BY captured_at {order}, recovery_point_id {order}
             """,
             (run_id,),
         )
