@@ -11,6 +11,7 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     RecoveryDecision,
+    RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
     RecoveryPoint,
     RecoveryStrategy,
@@ -49,6 +50,9 @@ class _CheckpointValidation:
     lifecycle_revision: int | None = None
     workspace_revision: str | None = None
     workspace_snapshot_hash: str | None = None
+    lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
+        RecoveryLifecycleOwnershipMode.SOURCE_OWNED
+    )
 
 
 class RecoveryCoordinator:
@@ -132,6 +136,7 @@ class RecoveryCoordinator:
                     lifecycle_revision=validation.lifecycle_revision,
                     workspace_revision=validation.workspace_revision,
                     workspace_snapshot_hash=validation.workspace_snapshot_hash,
+                    lifecycle_ownership_mode=validation.lifecycle_ownership_mode,
                 )
             )
             return _plan_from_assessment(
@@ -141,6 +146,7 @@ class RecoveryCoordinator:
                 lifecycle_revision=validation.lifecycle_revision,
                 workspace_revision=validation.workspace_revision,
                 workspace_snapshot_hash=validation.workspace_snapshot_hash,
+                lifecycle_ownership_mode=validation.lifecycle_ownership_mode,
             )
 
         if last_failure is not None:
@@ -270,6 +276,7 @@ async def _validate_checkpoint(
         lifecycle_revision=lifecycle.lifecycle_revision,
         workspace_revision=workspace_state.workspace_revision,
         workspace_snapshot_hash=workspace_state.workspace_snapshot_hash,
+        lifecycle_ownership_mode=lifecycle.lifecycle_ownership_mode,
     )
 
 
@@ -302,13 +309,17 @@ def _validate_lifecycle(
         snapshot=snapshot,
     )
     if contract is not None:
-        if contract.lifecycle_compatible(
+        assessment = contract.assess_lifecycle(
             source=source,
             point=point,
             snapshot=snapshot,
             lifecycle=lifecycle,
-        ):
-            return _CheckpointValidation(lifecycle_revision=lifecycle.revision)
+        )
+        if assessment.compatible:
+            return _CheckpointValidation(
+                lifecycle_revision=lifecycle.revision,
+                lifecycle_ownership_mode=assessment.ownership_mode,
+            )
         return _invalid_state(
             "LIFECYCLE_DRIFT",
             "Application Planning Recovery Contract 的 Lifecycle 已偏离允许的恢复窗口。",
@@ -675,6 +686,9 @@ def _plan_from_assessment(
     lifecycle_revision: int | None,
     workspace_revision: str | None,
     workspace_snapshot_hash: str | None,
+    lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
+        RecoveryLifecycleOwnershipMode.SOURCE_OWNED
+    ),
 ) -> RecoveryPlan:
     """把策略评估结果与已校验的当前状态引用组合成最终计划。"""
 
@@ -691,6 +705,7 @@ def _plan_from_assessment(
             "lifecycle_revision": lifecycle_revision,
             "workspace_revision": workspace_revision,
             "workspace_snapshot_hash": workspace_snapshot_hash,
+            "lifecycle_ownership_mode": lifecycle_ownership_mode,
         }
     )
 

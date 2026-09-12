@@ -9,12 +9,15 @@ from pathlib import Path
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    RecoveryAttemptStatus,
+    RecoveryLifecycleOwnershipMode,
     RecoveryPoint,
     RecoveryPointKind,
 )
 from app.persistence.execution_recovery import (
     execution_recovery_db_path,
     get_execution,
+    get_recovery_attempt,
     get_latest_recovery_point,
     initialize_execution_recovery_store,
     insert_execution,
@@ -46,7 +49,7 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(execution_recovery_db_path(self.workspace).exists())
 
     async def test_initialize_migrates_v3_records_without_rebuilding_history(self) -> None:
-        """v3 execution_records 必须原地增加 owner_session_id 并保留旧记录。"""
+        """v3/v4 恢复记录必须原地补字段并保留旧历史。"""
 
         database_path = execution_recovery_db_path(self.workspace)
         database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +74,23 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
                     updated_at TEXT NOT NULL,
                     ended_at TEXT
                 );
+                CREATE TABLE recovery_attempts (
+                    new_run_id TEXT PRIMARY KEY,
+                    source_run_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    source_recovery_point_id TEXT NOT NULL,
+                    source_checkpoint_id TEXT NOT NULL,
+                    source_checkpoint_ns TEXT NOT NULL DEFAULT '',
+                    replay_checkpoint_id TEXT,
+                    replay_checkpoint_ns TEXT NOT NULL DEFAULT '',
+                    strategy TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    handed_off_at TEXT,
+                    started_at TEXT,
+                    failed_at TEXT,
+                    failure_code TEXT
+                );
                 """
             )
             connection.execute(
@@ -83,6 +103,15 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
                 """,
                 (str(self.workspace),),
             )
+            connection.execute(
+                """
+                INSERT INTO recovery_attempts VALUES (
+                    'legacy-child', 'legacy-run', 'graph-thread', 'legacy-point',
+                    'legacy-checkpoint', '', NULL, '', 'native_checkpoint',
+                    'preparing', '2026-09-12T00:00:02+00:00', NULL, NULL, NULL, NULL
+                )
+                """
+            )
             connection.commit()
         finally:
             connection.close()
@@ -94,19 +123,32 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         assert loaded is not None
         self.assertEqual(loaded.thread_id, "graph-thread")
         self.assertIsNone(loaded.owner_session_id)
+        attempt = await get_recovery_attempt(self.workspace, "legacy-child")
+        self.assertIsNotNone(attempt)
+        assert attempt is not None
+        self.assertEqual(attempt.status, RecoveryAttemptStatus.PREPARING)
+        self.assertEqual(
+            attempt.lifecycle_ownership_mode,
+            RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
+        )
         connection = sqlite3.connect(database_path)
         try:
-            columns = {
+            execution_columns = {
                 str(row[1])
                 for row in connection.execute("PRAGMA table_info(execution_records)")
+            }
+            attempt_columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(recovery_attempts)")
             }
             version = connection.execute(
                 "SELECT value FROM recovery_meta WHERE key = 'schema_version'"
             ).fetchone()
         finally:
             connection.close()
-        self.assertIn("owner_session_id", columns)
-        self.assertEqual(version[0] if version else None, "4")
+        self.assertIn("owner_session_id", execution_columns)
+        self.assertIn("lifecycle_ownership_mode", attempt_columns)
+        self.assertEqual(version[0] if version else None, "5")
 
     async def test_insert_and_reload_execution(self) -> None:
         """ExecutionRecord 关闭连接后仍应能按 runId 重新读取。"""

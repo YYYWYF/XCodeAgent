@@ -8,14 +8,19 @@ from app.domain.execution_recovery import (
     RecoveryAttempt,
     RecoveryAttemptStatus,
     RecoveryExecutionError,
+    RecoveryLifecycleOwnershipMode,
 )
 from app.persistence.execution_recovery import (
     fail_recovery_attempt_prestart,
+    get_recovery_point,
     get_recovery_attempt,
     list_recovery_attempts_from_source,
     update_recovery_attempt,
 )
-from app.services.application_lifecycle import load_application_lifecycle
+from app.services.application_lifecycle import (
+    claim_application_planning_run_for_recovery,
+    load_application_lifecycle,
+)
 
 
 async def resolve_recovery_head(
@@ -78,6 +83,37 @@ async def reconcile_recovery_attempt(
                 new_run_id=new_run_id,
                 status=RecoveryAttemptStatus.HANDED_OFF,
             )
+        elif attempt.lifecycle_ownership_mode is RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP:
+            source_point = await get_recovery_point(
+                workspace,
+                attempt.source_recovery_point_id,
+            )
+            if lifecycle is None or source_point is None:
+                attempt = await fail_recovery_attempt_prestart(
+                    workspace=workspace,
+                    new_run_id=new_run_id,
+                    failure_code="RECOVERY_STATE_DRIFT",
+                )
+            else:
+                try:
+                    await claim_application_planning_run_for_recovery(
+                        workspace,
+                        new_run_id=attempt.new_run_id,
+                        thread_id=attempt.thread_id,
+                        expected_lifecycle_revision=source_point.lifecycle_revision,
+                    )
+                except Exception:
+                    attempt = await fail_recovery_attempt_prestart(
+                        workspace=workspace,
+                        new_run_id=new_run_id,
+                        failure_code="RECOVERY_STATE_DRIFT",
+                    )
+                else:
+                    attempt = await update_recovery_attempt(
+                        workspace=workspace,
+                        new_run_id=new_run_id,
+                        status=RecoveryAttemptStatus.HANDED_OFF,
+                    )
         elif source_owned or lifecycle is None:
             attempt = await fail_recovery_attempt_prestart(
                 workspace=workspace,

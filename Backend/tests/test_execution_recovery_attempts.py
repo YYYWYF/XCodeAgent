@@ -15,6 +15,7 @@ from app.domain.execution_recovery import (
     RecoveryAttemptAlreadyClaimedError,
     RecoveryAttemptStatus,
     RecoveryExecutionError,
+    RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
     RecoveryPoint,
     RecoveryPointKind,
@@ -90,6 +91,36 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(child_loaded.owner_session_id, "session-owner")
         self.assertEqual(child_loaded.thread_id, source.thread_id)
         self.assertEqual(lease.owner_backend_instance_id, "backend-a")
+
+    async def test_claim_persists_pre_ownership_mode(self) -> None:
+        """RecoveryAttempt 必须持久化 pre-ownership 语义供重启 reconciliation 使用。"""
+
+        source, plan = await self._prepare_source_and_plan()
+        pre_ownership_plan = plan.model_copy(
+            update={
+                "lifecycle_ownership_mode": RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+            }
+        )
+        child, _lease, attempt = await claim_native_recovery_attempt(
+            source=source,
+            plan=pre_ownership_plan,
+            new_run_id="child-pre-ownership",
+            owner_backend_instance_id="backend-a",
+            owner_pid=101,
+            lease_ttl_seconds=30,
+        )
+
+        self.assertEqual(
+            attempt.lifecycle_ownership_mode,
+            RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
+        persisted = await get_recovery_attempt(self.workspace, child.run_id)
+        self.assertIsNotNone(persisted)
+        assert persisted is not None
+        self.assertEqual(
+            persisted.lifecycle_ownership_mode,
+            RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
 
     async def test_started_attempt_cannot_be_taken_over_pre_runtime(self) -> None:
         """STARTED child 已进入 Graph replay 后必须拒绝 pre-runtime takeover。"""

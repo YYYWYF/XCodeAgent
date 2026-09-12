@@ -10,7 +10,7 @@ from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
 )
-from app.domain.application_revision import FormalRevisionBranch, RevisionTarget
+from app.domain.application_revision import RevisionTarget
 from app.domain.application_planning_recovery import (
     ApplicationPlanningRecoveryBoundary,
     ApplicationPlanningOperation,
@@ -28,9 +28,9 @@ from app.services.application_lifecycle import (
 from app.services.application_planning_persistence import (
     confirm_application_planning_artifacts,
 )
-from app.services.application_revision_lifecycle import issue_revision_continuation
 from app.services.application_revision_lifecycle import (
-    ensure_revision_impact_approved,
+    begin_technical_plan_revision_generation,
+    issue_revision_continuation,
     ensure_technical_plan_generation_lifecycle,
 )
 from app.workspace.plan_documents import (
@@ -145,22 +145,22 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
         if not isinstance(target, dict) or not target:
             raise ValueError("TechnicalPlan formal revision 缺少 change target。")
         target_model = RevisionTarget.model_validate(target)
-        active = ensure_revision_impact_approved(
+        lifecycle = begin_technical_plan_revision_generation(
             workspace,
             change_id=change_id,
             interaction_id=boundary.gate_id or "",
             request=request,
-            expected_branch=FormalRevisionBranch.WORKBENCH_PLAN_REVISION,
             target=target_model,
+            thread_id=str(state.get("active_thread_id") or ""),
+            active_run_id=str(state.get("active_run_id") or ""),
         )
-        if active.change_id != change_id:
-            raise ValueError("TechnicalPlan formal revision changeId 不匹配。")
-    lifecycle = ensure_technical_plan_generation_lifecycle(
-        workspace,
-        active_run_id=state.get("active_run_id"),
-        thread_id=state.get("active_thread_id"),
-        change_id=change_id or None,
-    )
+    else:
+        lifecycle = ensure_technical_plan_generation_lifecycle(
+            workspace,
+            active_run_id=state.get("active_run_id"),
+            thread_id=state.get("active_thread_id"),
+            change_id=change_id or None,
+        )
     return {
         "phase": "technical_planning_begin",
         "status": "running",

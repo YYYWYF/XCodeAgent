@@ -20,6 +20,7 @@ from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
     ApplicationLifecycleCorruptedError,
     create_application_lifecycle,
+    claim_application_planning_run_for_recovery,
     end_workbench_execution,
     application_lifecycle_path,
     load_application_lifecycle,
@@ -193,6 +194,39 @@ class ApplicationLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(revised.active_run_id, "revision-run")
         self.assertEqual(loaded.revision, revised.revision)
+
+    def test_pre_ownership_recovery_claim_only_changes_run_owner(self) -> None:
+        """pre-ownership claim 只能通过 CAS 替换 activeRunId 并保持业务阶段不变。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+                initialization_thread_id="thread-init",
+                active_run_id="old-run",
+            )
+            write_application_lifecycle(directory, lifecycle)
+
+            claimed = claim_application_planning_run_for_recovery(
+                directory,
+                new_run_id="child-run",
+                thread_id="thread-init",
+                expected_lifecycle_revision=lifecycle.revision,
+            )
+
+            self.assertEqual(claimed.active_run_id, "child-run")
+            self.assertEqual(claimed.revision, lifecycle.revision + 1)
+            self.assertEqual(claimed.initialization, lifecycle.initialization)
+            self.assertEqual(claimed.pending_revision_impact, lifecycle.pending_revision_impact)
+            self.assertEqual(claimed.active_formal_revision, lifecycle.active_formal_revision)
+
+            repeated = claim_application_planning_run_for_recovery(
+                directory,
+                new_run_id="child-run",
+                thread_id="thread-init",
+                expected_lifecycle_revision=claimed.revision,
+            )
+            self.assertEqual(repeated.revision, claimed.revision)
 
     def test_atomic_write_interruption_preserves_previous_file(self) -> None:
         """原子替换前失败时应保留上一版完整状态。"""

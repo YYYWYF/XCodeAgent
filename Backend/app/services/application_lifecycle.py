@@ -589,6 +589,53 @@ def handoff_application_planning_run_for_recovery(
         )
 
 
+def claim_application_planning_run_for_recovery(
+    workspace: str | Path,
+    *,
+    new_run_id: str,
+    thread_id: str,
+    expected_lifecycle_revision: int | None,
+) -> ApplicationLifecycle:
+    """以 lifecycle revision CAS 让 pre-ownership child 取得运行时 ownership。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        if current is None:
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: Application Planning lifecycle 不存在。"
+            )
+        if (
+            expected_lifecycle_revision is not None
+            and current.revision != expected_lifecycle_revision
+        ):
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: ApplicationLifecycle revision 已变化。"
+            )
+        if current.initialization.thread_id != thread_id:
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: application planning threadId 不匹配。"
+            )
+        if current.active_run_id == new_run_id:
+            return current
+        if not str(new_run_id or "").strip():
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: child activeRunId 不能为空。"
+            )
+        updated = current.model_copy(
+            update={
+                "updated_at": utc_now(),
+                "revision": current.revision + 1,
+                "active_run_id": new_run_id,
+            }
+        )
+        return write_application_lifecycle(
+            workspace,
+            updated,
+            expected_revision=current.revision,
+        )
+
+
 def expand_workbench_execution_resources(
     workspace: str | Path,
     *,

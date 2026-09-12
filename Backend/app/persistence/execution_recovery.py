@@ -21,6 +21,7 @@ from app.domain.execution_recovery import (
     RecoveryAttemptAlreadyClaimedError,
     RecoveryAttemptStatus,
     RecoveryExecutionError,
+    RecoveryLifecycleOwnershipMode,
     RecoveryPoint,
     RecoveryPointKind,
     RecoveryPlan,
@@ -31,7 +32,7 @@ from app.domain.execution_recovery import (
 RECOVERY_DATABASE_RELATIVE_PATH = Path(
     ".xcodeagent/recovery/execution-recovery.sqlite"
 )
-RECOVERY_SCHEMA_VERSION = "4"
+RECOVERY_SCHEMA_VERSION = "5"
 EXECUTION_ROW_WIDTH = 14
 EXECUTION_LEASE_ROW_WIDTH = 8
 
@@ -114,7 +115,7 @@ async def _connection_after_initialize(
 
 
 async def initialize_execution_recovery_store(workspace: str | Path) -> None:
-    """创建恢复库表，并把现有 v3 store 原地补齐到 v4。"""
+    """创建恢复库表，并把现有 v3/v4 store 原地补齐到当前 schema v5。"""
 
     async with _connection(workspace) as connection:
         await connection.executescript(
@@ -208,6 +209,7 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 replay_checkpoint_id TEXT,
                 replay_checkpoint_ns TEXT NOT NULL DEFAULT '',
                 strategy TEXT NOT NULL,
+                lifecycle_ownership_mode TEXT NOT NULL DEFAULT 'source_owned',
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 handed_off_at TEXT,
@@ -234,6 +236,18 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
         if not any(str(column[1]) == "owner_session_id" for column in columns):
             await connection.execute(
                 "ALTER TABLE execution_records ADD COLUMN owner_session_id TEXT"
+            )
+        attempts_columns_cursor = await connection.execute(
+            "PRAGMA table_info(recovery_attempts)"
+        )
+        attempts_columns = await attempts_columns_cursor.fetchall()
+        if not any(
+            str(column[1]) == "lifecycle_ownership_mode"
+            for column in attempts_columns
+        ):
+            await connection.execute(
+                "ALTER TABLE recovery_attempts ADD COLUMN "
+                "lifecycle_ownership_mode TEXT NOT NULL DEFAULT 'source_owned'"
             )
         index_cursor = await connection.execute(
             """
@@ -371,6 +385,7 @@ async def claim_native_recovery_attempt(
         source_checkpoint_id=plan.checkpoint_id,
         source_checkpoint_ns=plan.checkpoint_ns,
         strategy=plan.strategy,
+        lifecycle_ownership_mode=plan.lifecycle_ownership_mode,
         status=RecoveryAttemptStatus.PREPARING,
         created_at=now,
     )
@@ -442,9 +457,10 @@ async def claim_native_recovery_attempt(
                     new_run_id, source_run_id, thread_id,
                     source_recovery_point_id, source_checkpoint_id,
                     source_checkpoint_ns, replay_checkpoint_id,
-                    replay_checkpoint_ns, strategy, status, created_at,
+                    replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
+                    status, created_at,
                     handed_off_at, started_at, failed_at, failure_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt.new_run_id,
@@ -456,6 +472,7 @@ async def claim_native_recovery_attempt(
                     None,
                     attempt.replay_checkpoint_ns,
                     attempt.strategy.value,
+                    attempt.lifecycle_ownership_mode.value,
                     attempt.status.value,
                     _utc_iso(attempt.created_at),
                     None,
@@ -503,7 +520,8 @@ async def list_recovery_attempts_from_source(
             SELECT new_run_id, source_run_id, thread_id,
                    source_recovery_point_id, source_checkpoint_id,
                    source_checkpoint_ns, replay_checkpoint_id,
-                   replay_checkpoint_ns, strategy, status, created_at,
+                   replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
+                   status, created_at,
                    handed_off_at, started_at, failed_at, failure_code
             FROM recovery_attempts
             WHERE source_run_id = ?
@@ -894,7 +912,7 @@ async def takeover_pre_runtime_recovery_lease(
                 "RECOVERY_ATTEMPT_NOT_FOUND",
                 "pre-runtime recovery attempt 不存在。",
             )
-        attempt_status = RecoveryAttemptStatus(str(attempt_row[9]))
+        attempt_status = RecoveryAttemptStatus(str(attempt_row[10]))
         if attempt_status is RecoveryAttemptStatus.STARTED:
             raise RecoveryExecutionError(
                 "RECOVERY_ATTEMPT_ALREADY_STARTED",
@@ -1506,7 +1524,8 @@ async def _fetch_active_attempt_row(
         SELECT new_run_id, source_run_id, thread_id,
                source_recovery_point_id, source_checkpoint_id,
                source_checkpoint_ns, replay_checkpoint_id,
-               replay_checkpoint_ns, strategy, status, created_at,
+               replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
+               status, created_at,
                handed_off_at, started_at, failed_at, failure_code
         FROM recovery_attempts
         WHERE source_run_id = ?
@@ -1530,7 +1549,8 @@ async def _fetch_recovery_attempt_row(
         SELECT new_run_id, source_run_id, thread_id,
                source_recovery_point_id, source_checkpoint_id,
                source_checkpoint_ns, replay_checkpoint_id,
-               replay_checkpoint_ns, strategy, status, created_at,
+               replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
+               status, created_at,
                handed_off_at, started_at, failed_at, failure_code
         FROM recovery_attempts
         WHERE new_run_id = ?
@@ -1631,12 +1651,13 @@ def _recovery_attempt_from_row(row: tuple[object, ...]) -> RecoveryAttempt:
         replay_checkpoint_id=str(row[6]) if row[6] is not None else None,
         replay_checkpoint_ns=str(row[7] or ""),
         strategy=RecoveryStrategy(str(row[8])),
-        status=RecoveryAttemptStatus(str(row[9])),
-        created_at=_parse_datetime(str(row[10])),
-        handed_off_at=_parse_datetime(str(row[11])) if row[11] is not None else None,
-        started_at=_parse_datetime(str(row[12])) if row[12] is not None else None,
-        failed_at=_parse_datetime(str(row[13])) if row[13] is not None else None,
-        failure_code=str(row[14]) if row[14] is not None else None,
+        lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode(str(row[9])),
+        status=RecoveryAttemptStatus(str(row[10])),
+        created_at=_parse_datetime(str(row[11])),
+        handed_off_at=_parse_datetime(str(row[12])) if row[12] is not None else None,
+        started_at=_parse_datetime(str(row[13])) if row[13] is not None else None,
+        failed_at=_parse_datetime(str(row[14])) if row[14] is not None else None,
+        failure_code=str(row[15]) if row[15] is not None else None,
     )
 
 

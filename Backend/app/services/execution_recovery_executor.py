@@ -15,6 +15,7 @@ from app.domain.execution_recovery import (
     RecoveryAttempt,
     RecoveryAttemptStatus,
     RecoveryExecutionError,
+    RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
     RecoveryPoint,
     RecoveryPointKind,
@@ -34,6 +35,7 @@ from app.persistence.execution_recovery import (
 )
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
+    claim_application_planning_run_for_recovery,
     handoff_application_planning_run_for_recovery,
     handoff_workbench_execution_for_recovery,
     load_application_lifecycle,
@@ -237,6 +239,7 @@ async def finalize_handed_off_recovery_attempt(
             thread_id=source.thread_id,
             decision="ready_native",
             strategy=attempt.strategy,
+            lifecycle_ownership_mode=attempt.lifecycle_ownership_mode,
             recovery_point_id=attempt.source_recovery_point_id,
             checkpoint_id=attempt.source_checkpoint_id,
             checkpoint_ns=attempt.source_checkpoint_ns,
@@ -575,6 +578,13 @@ def _handoff_lifecycle(
     """按 execution kind 选择 Workbench 或 Application Planning 的 handoff。"""
 
     if source.execution_kind == "application_planning":
+        if plan.lifecycle_ownership_mode is RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP:
+            return claim_application_planning_run_for_recovery(
+                workspace,
+                new_run_id=new_run_id,
+                thread_id=source.thread_id,
+                expected_lifecycle_revision=plan.lifecycle_revision,
+            )
         return handoff_application_planning_run_for_recovery(
             workspace,
             source_run_id=source.run_id,

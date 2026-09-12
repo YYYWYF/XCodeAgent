@@ -7,6 +7,7 @@ from typing import Any, Protocol, Sequence
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
+    RecoveryLifecycleOwnershipMode,
     RecoveryDecision,
     RecoveryPoint,
     RecoveryStrategy,
@@ -23,6 +24,9 @@ class RecoveryContext:
     lifecycle_revision: int | None
     workspace_revision: str | None
     workspace_snapshot_hash: str | None
+    lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
+        RecoveryLifecycleOwnershipMode.SOURCE_OWNED
+    )
 
 
 @dataclass(frozen=True)

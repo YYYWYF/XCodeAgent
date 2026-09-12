@@ -85,6 +85,13 @@ class RecoveryStrategy(StrEnum):
     NONE = "none"
 
 
+class RecoveryLifecycleOwnershipMode(StrEnum):
+    """定义 Native Recovery 在 fork 前如何取得 ApplicationLifecycle ownership。"""
+
+    SOURCE_OWNED = "source_owned"
+    PRE_OWNERSHIP = "pre_ownership"
+
+
 class RecoveryAttemptStatus(StrEnum):
     """定义一次恢复子执行从 claim 到正式启动的 lineage 状态。"""
 
@@ -182,6 +189,9 @@ class RecoveryPlan(ExecutionRecoveryModel):
     thread_id: str = Field(default="", max_length=512)
     decision: RecoveryDecision
     strategy: RecoveryStrategy
+    lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
+        RecoveryLifecycleOwnershipMode.SOURCE_OWNED
+    )
     recovery_point_id: str | None = Field(default=None, max_length=512)
     checkpoint_id: str | None = Field(default=None, max_length=512)
     checkpoint_ns: str = Field(default="", max_length=512)
@@ -243,6 +253,9 @@ class RecoveryAttempt(ExecutionRecoveryModel):
     replay_checkpoint_id: str | None = Field(default=None, max_length=512)
     replay_checkpoint_ns: str = Field(default="", max_length=512)
     strategy: RecoveryStrategy
+    lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
+        RecoveryLifecycleOwnershipMode.SOURCE_OWNED
+    )
     status: RecoveryAttemptStatus
     created_at: datetime
     handed_off_at: datetime | None = None

@@ -17,11 +17,18 @@ from app.domain.application_planning_recovery import (
     application_planning_boundary_payload,
     application_planning_sha256,
 )
+from app.domain.application_revision import (
+    PendingRevisionImpact,
+    RevisionImpact,
+    RevisionTarget,
+    RevisionType,
+)
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     RecoveryPoint,
     RecoveryPointKind,
+    RecoveryLifecycleOwnershipMode,
 )
 from app.services.application_lifecycle import create_application_lifecycle
 from app.services.application_planning_recovery_contracts import TechnicalPlanningRecoveryContract
@@ -59,6 +66,7 @@ def _source() -> DurableExecutionRecord:
 def _snapshot_and_point(
     *,
     boundary: ApplicationPlanningRecoveryBoundary,
+    operation: ApplicationPlanningOperation = ApplicationPlanningOperation.REVISE,
     next_nodes: list[str] | None = None,
     clarification: dict[str, object] | None = None,
 ) -> tuple[SimpleNamespace, RecoveryPoint, DurableExecutionRecord, object]:
@@ -68,7 +76,7 @@ def _snapshot_and_point(
     plan = _technical_plan()
     payload = application_planning_boundary_payload(
         operation_id="technical-plan:transaction-1",
-        operation=ApplicationPlanningOperation.REVISE,
+        operation=operation,
         boundary=boundary,
         request="增加分页参数",
         gate_id="impact-1",
@@ -129,6 +137,119 @@ def _snapshot_and_point(
 class TechnicalPlanningRecoveryContractTests(unittest.TestCase):
     """覆盖 REVIEW_READY 以及 checkpoint 身份漂移的 fail-closed 规则。"""
 
+    def test_formal_input_committed_accepts_pre_ownership_window(self) -> None:
+        """Formal Revision 的 input boundary 可在 lifecycle ownership 前安全恢复。"""
+
+        snapshot, point, source, lifecycle = _snapshot_and_point(
+            boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
+            next_nodes=["technical_planning_begin"],
+        )
+        target = RevisionTarget(type="application")
+        snapshot.values.update(
+            {
+                "change_id": "change-1",
+                "change_target": target.model_dump(mode="python"),
+            }
+        )
+        pending = PendingRevisionImpact(
+            changeId="change-1",
+            interactionId="impact-1",
+            sourceThreadId="conversation-thread",
+            sourceRunId="conversation-run",
+            request="增加分页参数",
+            target=target,
+            impact=RevisionImpact(
+                formalBranch="workbench_plan_revision",
+                revisionType=RevisionType.TECHNICAL_CONTRACT_CHANGE,
+                earliestArtifact="technical-plan",
+                affectedArtifacts=["technical-plan"],
+                affectedResources=["application"],
+                reason="技术契约变化",
+            ),
+            basedOnLifecycleRevision=lifecycle.revision,
+        )
+        lifecycle = lifecycle.model_copy(
+            update={
+                "active_run_id": "previous-run",
+                "pending_revision_impact": pending,
+                "initialization": ApplicationInitialization(
+                    stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    status=ApplicationLifecycleStatus.COMPLETED,
+                    threadId=source.thread_id,
+                ),
+            }
+        )
+
+        contract = TechnicalPlanningRecoveryContract()
+        self.assertTrue(contract.match(source=source, point=point, snapshot=snapshot))
+        assessment = contract.assess_lifecycle(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+        )
+
+        self.assertTrue(assessment.compatible)
+        self.assertEqual(
+            assessment.ownership_mode,
+            RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
+
+    def test_initial_input_committed_accepts_pre_ownership_window(self) -> None:
+        """首次进入 TechnicalPlan 前的 input boundary 也使用 pre-ownership。"""
+
+        snapshot, point, source, lifecycle = _snapshot_and_point(
+            boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
+            operation=ApplicationPlanningOperation.INITIAL,
+            next_nodes=["technical_planning_begin"],
+        )
+        lifecycle = lifecycle.model_copy(
+            update={
+                "active_run_id": "previous-run",
+                "initialization": ApplicationInitialization(
+                    stage=ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+                    status=ApplicationLifecycleStatus.AWAITING_USER,
+                    threadId=source.thread_id,
+                ),
+            }
+        )
+
+        contract = TechnicalPlanningRecoveryContract()
+        self.assertTrue(contract.match(source=source, point=point, snapshot=snapshot))
+        assessment = contract.assess_lifecycle(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+        )
+
+        self.assertTrue(assessment.compatible)
+        self.assertEqual(
+            assessment.ownership_mode,
+            RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
+
+    def test_generation_ready_remains_source_owned(self) -> None:
+        """TechnicalPlan begin 之后的 boundary 必须继续要求 source ownership。"""
+
+        snapshot, point, source, lifecycle = _snapshot_and_point(
+            boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+            next_nodes=["technical_planning_generate"],
+        )
+
+        assessment = TechnicalPlanningRecoveryContract().assess_lifecycle(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+        )
+
+        self.assertTrue(assessment.compatible)
+        self.assertEqual(
+            assessment.ownership_mode,
+            RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
+        )
+
     def test_review_ready_routes_to_review_without_model_replay(self) -> None:
         """生成失败边界必须只恢复审阅节点，不得重新调用模型节点。"""
 
@@ -143,13 +264,16 @@ class TechnicalPlanningRecoveryContractTests(unittest.TestCase):
         contract = TechnicalPlanningRecoveryContract()
 
         self.assertTrue(contract.match(source=source, point=point, snapshot=snapshot))
-        self.assertTrue(
-            contract.lifecycle_compatible(
-                source=source,
-                point=point,
-                snapshot=snapshot,
-                lifecycle=lifecycle,
-            )
+        assessment = contract.assess_lifecycle(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+        )
+        self.assertTrue(assessment.compatible)
+        self.assertEqual(
+            assessment.ownership_mode,
+            RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
         )
         self.assertEqual(
             contract._NEXT_BY_BOUNDARY[
