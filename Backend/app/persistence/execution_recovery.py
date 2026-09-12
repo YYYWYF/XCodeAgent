@@ -17,15 +17,20 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     ExecutionLease,
     ExecutionLeaseStatus,
+    RecoveryAttempt,
+    RecoveryAttemptAlreadyClaimedError,
+    RecoveryAttemptStatus,
     RecoveryPoint,
     RecoveryPointKind,
+    RecoveryPlan,
+    RecoveryStrategy,
 )
 
 
 RECOVERY_DATABASE_RELATIVE_PATH = Path(
     ".xcodeagent/recovery/execution-recovery.sqlite"
 )
-RECOVERY_SCHEMA_VERSION = "2"
+RECOVERY_SCHEMA_VERSION = "3"
 
 
 def execution_recovery_db_path(workspace: str | Path) -> Path:
@@ -94,8 +99,19 @@ async def _connection(workspace: str | Path) -> AsyncIterator[aiosqlite.Connecti
         await connection.close()
 
 
+@asynccontextmanager
+async def _connection_after_initialize(
+    workspace: str | Path,
+) -> AsyncIterator[aiosqlite.Connection]:
+    """初始化当前恢复库后返回一个可执行普通事务的短连接。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        yield connection
+
+
 async def initialize_execution_recovery_store(workspace: str | Path) -> None:
-    """创建恢复库表、索引和当前 schema version。"""
+    """创建恢复库表，并把现有 v2 store 原子补齐到 v3。"""
 
     async with _connection(workspace) as connection:
         await connection.executescript(
@@ -177,6 +193,36 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 ON recovery_points(checkpoint_id);
             CREATE INDEX IF NOT EXISTS idx_recovery_points_captured
                 ON recovery_points(captured_at);
+
+            CREATE TABLE IF NOT EXISTS recovery_attempts (
+                new_run_id TEXT PRIMARY KEY,
+                source_run_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                source_recovery_point_id TEXT NOT NULL,
+                source_checkpoint_id TEXT NOT NULL,
+                source_checkpoint_ns TEXT NOT NULL DEFAULT '',
+                replay_checkpoint_id TEXT,
+                replay_checkpoint_ns TEXT NOT NULL DEFAULT '',
+                strategy TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                handed_off_at TEXT,
+                started_at TEXT,
+                failed_at TEXT,
+                failure_code TEXT,
+                FOREIGN KEY(source_run_id)
+                    REFERENCES execution_records(run_id),
+                FOREIGN KEY(new_run_id)
+                    REFERENCES execution_records(run_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_recovery_attempts_source
+                ON recovery_attempts(source_run_id);
+            CREATE INDEX IF NOT EXISTS idx_recovery_attempts_status
+                ON recovery_attempts(status);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_attempts_active_source
+                ON recovery_attempts(source_run_id)
+                WHERE status IN ('preparing', 'handed_off', 'started');
             """
         )
         await connection.execute(
@@ -225,6 +271,321 @@ async def insert_execution(
         if row is None:
             raise RuntimeError(f"无法读取刚写入的执行记录：{record.run_id}")
         return _execution_from_row(row)
+
+
+async def claim_native_recovery_attempt(
+    *,
+    source: DurableExecutionRecord,
+    plan: RecoveryPlan,
+    new_run_id: str,
+    owner_backend_instance_id: str,
+    owner_pid: int,
+    lease_ttl_seconds: float,
+    created_at: datetime | None = None,
+) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
+    """在一个 SQLite 写事务中 claim source、创建 child Execution、Lease 和 Attempt。"""
+
+    from app.domain.execution_recovery import RecoveryExecutionError
+
+    if plan.source_run_id != source.run_id:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_MISMATCH",
+            "RecoveryPlan 与 source execution 不属于同一条运行记录。",
+        )
+    if plan.decision.value != "ready_native" or plan.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT:
+        raise RecoveryExecutionError(
+            "RECOVERY_NOT_READY_NATIVE",
+            "当前 RecoveryPlan 未被 Native Recovery policy 明确允许。",
+        )
+    if not plan.recovery_point_id or not plan.checkpoint_id or len(plan.next_nodes) != 1:
+        raise RecoveryExecutionError(
+            "RECOVERY_PLAN_INCOMPLETE",
+            "Native RecoveryPlan 缺少唯一 checkpoint 或 next node。",
+        )
+    if source.status is not DurableExecutionStatus.INTERRUPTED:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_NOT_INTERRUPTED",
+            "source execution 当前状态不允许创建 Native Recovery attempt。",
+        )
+    now = created_at or datetime.now(timezone.utc)
+    lease = ExecutionLease(
+        run_id=new_run_id,
+        owner_backend_instance_id=owner_backend_instance_id,
+        owner_pid=owner_pid,
+        status=ExecutionLeaseStatus.ACTIVE,
+        acquired_at=now,
+        heartbeat_at=now,
+        expires_at=now + timedelta(seconds=lease_ttl_seconds),
+    )
+    record = DurableExecutionRecord(
+        run_id=new_run_id,
+        thread_id=source.thread_id,
+        workspace=source.workspace,
+        project_id=source.project_id,
+        execution_kind=source.execution_kind,
+        workflow_scope=source.workflow_scope,
+        first_node=plan.next_nodes[0],
+        current_node=plan.next_nodes[0],
+        status=DurableExecutionStatus.RUNNING,
+        started_at=now,
+        updated_at=now,
+    )
+    attempt = RecoveryAttempt(
+        source_run_id=source.run_id,
+        new_run_id=new_run_id,
+        thread_id=source.thread_id,
+        source_recovery_point_id=plan.recovery_point_id,
+        source_checkpoint_id=plan.checkpoint_id,
+        source_checkpoint_ns=plan.checkpoint_ns,
+        strategy=plan.strategy,
+        status=RecoveryAttemptStatus.PREPARING,
+        created_at=now,
+    )
+    await initialize_execution_recovery_store(source.workspace)
+    async with _connection(source.workspace) as connection:
+        await connection.execute("BEGIN IMMEDIATE")
+        source_row = await _fetch_execution_row(connection, source.run_id)
+        if source_row is None:
+            raise RecoveryExecutionError(
+                "SOURCE_EXECUTION_NOT_FOUND",
+                "source execution 不存在。",
+            )
+        if str(source_row[8]) != source.status.value:
+            raise RecoveryExecutionError(
+                "RECOVERY_SOURCE_CHANGED",
+                "source execution 在 claim 前已经发生状态变化。",
+            )
+        existing_row = await _fetch_execution_row(connection, new_run_id)
+        if existing_row is not None:
+            raise _run_id_conflict_from_row(existing_row)
+        try:
+            await connection.execute(
+                """
+                INSERT INTO execution_records(
+                    run_id, thread_id, workspace, project_id, execution_kind,
+                    workflow_scope, first_node, current_node, status,
+                    last_recovery_point_id, started_at, updated_at, ended_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.run_id,
+                    record.thread_id,
+                    record.workspace,
+                    record.project_id,
+                    record.execution_kind,
+                    record.workflow_scope,
+                    record.first_node,
+                    record.current_node,
+                    record.status.value,
+                    record.last_recovery_point_id,
+                    _utc_iso(record.started_at),
+                    _utc_iso(record.updated_at),
+                    None,
+                ),
+            )
+            await connection.execute(
+                """
+                INSERT INTO execution_leases(
+                    run_id, owner_backend_instance_id, owner_pid, status,
+                    acquired_at, heartbeat_at, expires_at, released_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lease.run_id,
+                    lease.owner_backend_instance_id,
+                    lease.owner_pid,
+                    lease.status.value,
+                    _utc_iso(lease.acquired_at),
+                    _utc_iso(lease.heartbeat_at),
+                    _utc_iso(lease.expires_at),
+                    None,
+                ),
+            )
+            await connection.execute(
+                """
+                INSERT INTO recovery_attempts(
+                    new_run_id, source_run_id, thread_id,
+                    source_recovery_point_id, source_checkpoint_id,
+                    source_checkpoint_ns, replay_checkpoint_id,
+                    replay_checkpoint_ns, strategy, status, created_at,
+                    handed_off_at, started_at, failed_at, failure_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    attempt.new_run_id,
+                    attempt.source_run_id,
+                    attempt.thread_id,
+                    attempt.source_recovery_point_id,
+                    attempt.source_checkpoint_id,
+                    attempt.source_checkpoint_ns,
+                    None,
+                    attempt.replay_checkpoint_ns,
+                    attempt.strategy.value,
+                    attempt.status.value,
+                    _utc_iso(attempt.created_at),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            )
+        except aiosqlite.IntegrityError as exc:
+            active = await _fetch_active_attempt_row(connection, source.run_id)
+            if active is not None:
+                raise RecoveryAttemptAlreadyClaimedError(
+                    source_run_id=source.run_id,
+                    active_run_id=str(active[0]),
+                ) from None
+            existing_row = await _fetch_execution_row(connection, new_run_id)
+            if existing_row is not None:
+                raise _run_id_conflict_from_row(existing_row) from None
+            raise exc
+        return record, lease, attempt
+
+
+async def get_recovery_attempt(
+    workspace: str | Path,
+    new_run_id: str,
+) -> RecoveryAttempt | None:
+    """读取一次恢复 child 对应的 lineage 记录。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        row = await _fetch_recovery_attempt_row(connection, new_run_id)
+        return _recovery_attempt_from_row(row) if row is not None else None
+
+
+async def list_recovery_attempts_from_source(
+    workspace: str | Path,
+    source_run_id: str,
+) -> list[RecoveryAttempt]:
+    """按创建时间读取 source execution 的全部恢复分支。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            SELECT new_run_id, source_run_id, thread_id,
+                   source_recovery_point_id, source_checkpoint_id,
+                   source_checkpoint_ns, replay_checkpoint_id,
+                   replay_checkpoint_ns, strategy, status, created_at,
+                   handed_off_at, started_at, failed_at, failure_code
+            FROM recovery_attempts
+            WHERE source_run_id = ?
+            ORDER BY created_at ASC, new_run_id ASC
+            """,
+            (source_run_id,),
+        )
+        rows = await cursor.fetchall()
+    return [_recovery_attempt_from_row(row) for row in rows]
+
+
+async def update_recovery_attempt(
+    *,
+    workspace: str | Path,
+    new_run_id: str,
+    status: RecoveryAttemptStatus,
+    replay_checkpoint_id: str | None = None,
+    replay_checkpoint_ns: str | None = None,
+    failure_code: str | None = None,
+    updated_at: datetime | None = None,
+) -> RecoveryAttempt | None:
+    """以允许的阶段字段更新 RecoveryAttempt，并返回最新 lineage。"""
+
+    now = updated_at or datetime.now(timezone.utc)
+    async with _connection_after_initialize(workspace) as connection:
+        current = await _fetch_recovery_attempt_row(connection, new_run_id)
+        if current is None:
+            return None
+        current_attempt = _recovery_attempt_from_row(current)
+        if current_attempt.status is RecoveryAttemptStatus.FAILED_PRESTART:
+            return current_attempt
+        if current_attempt.status is RecoveryAttemptStatus.STARTED:
+            return current_attempt
+        if (
+            current_attempt.status is RecoveryAttemptStatus.HANDED_OFF
+            and status is RecoveryAttemptStatus.PREPARING
+        ):
+            return current_attempt
+        updates = {
+            "status": status.value,
+            "replay_checkpoint_id": (
+                replay_checkpoint_id
+                if replay_checkpoint_id is not None
+                else current_attempt.replay_checkpoint_id
+            ),
+            "replay_checkpoint_ns": (
+                replay_checkpoint_ns
+                if replay_checkpoint_ns is not None
+                else current_attempt.replay_checkpoint_ns
+            ),
+            "handed_off_at": (
+                _utc_iso(now)
+                if status in {RecoveryAttemptStatus.HANDED_OFF, RecoveryAttemptStatus.STARTED}
+                else current_attempt.handed_off_at
+            ),
+            "started_at": (
+                _utc_iso(now)
+                if status is RecoveryAttemptStatus.STARTED
+                else current_attempt.started_at
+            ),
+            "failed_at": (
+                _utc_iso(now)
+                if status is RecoveryAttemptStatus.FAILED_PRESTART
+                else current_attempt.failed_at
+            ),
+            "failure_code": failure_code or current_attempt.failure_code,
+        }
+        await connection.execute(
+            """
+            UPDATE recovery_attempts
+            SET status = ?, replay_checkpoint_id = ?, replay_checkpoint_ns = ?,
+                handed_off_at = ?, started_at = ?, failed_at = ?, failure_code = ?
+            WHERE new_run_id = ?
+            """,
+            (
+                updates["status"], updates["replay_checkpoint_id"],
+                updates["replay_checkpoint_ns"], updates["handed_off_at"],
+                updates["started_at"], updates["failed_at"],
+                updates["failure_code"], new_run_id,
+            ),
+        )
+        row = await _fetch_recovery_attempt_row(connection, new_run_id)
+        return _recovery_attempt_from_row(row) if row is not None else None
+
+
+async def fail_recovery_attempt_prestart(
+    *,
+    workspace: str | Path,
+    new_run_id: str,
+    failure_code: str,
+    failed_at: datetime | None = None,
+) -> RecoveryAttempt | None:
+    """把尚未 handoff 的 child 收口为 FAILED_PRESTART 并释放其 lease。"""
+
+    attempt = await get_recovery_attempt(workspace, new_run_id)
+    if attempt is None:
+        return None
+    if attempt.status is not RecoveryAttemptStatus.PREPARING:
+        return attempt
+    moment = failed_at or datetime.now(timezone.utc)
+    execution = await get_execution(workspace, new_run_id)
+    lease = await get_execution_lease(workspace, new_run_id)
+    if execution is not None and lease is not None:
+        await finish_execution_and_release_lease(
+            workspace=workspace,
+            run_id=new_run_id,
+            status=DurableExecutionStatus.FAILED,
+            owner_backend_instance_id=lease.owner_backend_instance_id,
+            ended_at=moment,
+        )
+    return await update_recovery_attempt(
+        workspace=workspace,
+        new_run_id=new_run_id,
+        status=RecoveryAttemptStatus.FAILED_PRESTART,
+        failure_code=failure_code,
+        updated_at=moment,
+    )
 
 
 async def insert_execution_with_lease(
@@ -671,6 +1032,29 @@ async def get_latest_recovery_point(
         return _recovery_point_from_row(row) if row is not None else None
 
 
+async def get_recovery_point(
+    workspace: str | Path,
+    recovery_point_id: str,
+) -> RecoveryPoint | None:
+    """按稳定 recoveryPointId 读取单个恢复现场。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            SELECT recovery_point_id, run_id, thread_id, kind, checkpoint_id,
+                   checkpoint_ns, graph_node, completed_node, next_nodes_json,
+                   phase, state_status, lifecycle_revision, workspace_revision,
+                   workspace_snapshot_hash, replay_safety, dedupe_key, captured_at
+            FROM recovery_points
+            WHERE recovery_point_id = ?
+            """,
+            (recovery_point_id,),
+        )
+        row = await cursor.fetchone()
+        return _recovery_point_from_row(row) if row is not None else None
+
+
 async def list_recovery_points(
     workspace: str | Path,
     run_id: str,
@@ -713,6 +1097,51 @@ async def _fetch_execution_row(
         WHERE run_id = ?
         """,
         (run_id,),
+    )
+    return await cursor.fetchone()
+
+
+async def _fetch_active_attempt_row(
+    connection: aiosqlite.Connection,
+    source_run_id: str,
+) -> tuple[object, ...] | None:
+    """读取 source 当前仍占用唯一恢复分支的 child 行。"""
+
+    cursor = await connection.execute(
+        """
+        SELECT new_run_id, source_run_id, thread_id,
+               source_recovery_point_id, source_checkpoint_id,
+               source_checkpoint_ns, replay_checkpoint_id,
+               replay_checkpoint_ns, strategy, status, created_at,
+               handed_off_at, started_at, failed_at, failure_code
+        FROM recovery_attempts
+        WHERE source_run_id = ?
+          AND status IN ('preparing', 'handed_off', 'started')
+        ORDER BY created_at ASC, new_run_id ASC
+        LIMIT 1
+        """,
+        (source_run_id,),
+    )
+    return await cursor.fetchone()
+
+
+async def _fetch_recovery_attempt_row(
+    connection: aiosqlite.Connection,
+    new_run_id: str,
+) -> tuple[object, ...] | None:
+    """按 child runId 读取恢复 lineage 原始行。"""
+
+    cursor = await connection.execute(
+        """
+        SELECT new_run_id, source_run_id, thread_id,
+               source_recovery_point_id, source_checkpoint_id,
+               source_checkpoint_ns, replay_checkpoint_id,
+               replay_checkpoint_ns, strategy, status, created_at,
+               handed_off_at, started_at, failed_at, failure_code
+        FROM recovery_attempts
+        WHERE new_run_id = ?
+        """,
+        (new_run_id,),
     )
     return await cursor.fetchone()
 
@@ -789,6 +1218,28 @@ def _execution_lease_from_row(row: tuple[object, ...]) -> ExecutionLease:
         heartbeat_at=_parse_datetime(str(row[5])),
         expires_at=_parse_datetime(str(row[6])),
         released_at=_parse_datetime(str(row[7])) if row[7] is not None else None,
+    )
+
+
+def _recovery_attempt_from_row(row: tuple[object, ...]) -> RecoveryAttempt:
+    """将 recovery_attempts 行恢复为严格的 lineage 模型。"""
+
+    return RecoveryAttempt(
+        new_run_id=str(row[0]),
+        source_run_id=str(row[1]),
+        thread_id=str(row[2]),
+        source_recovery_point_id=str(row[3]),
+        source_checkpoint_id=str(row[4]),
+        source_checkpoint_ns=str(row[5] or ""),
+        replay_checkpoint_id=str(row[6]) if row[6] is not None else None,
+        replay_checkpoint_ns=str(row[7] or ""),
+        strategy=RecoveryStrategy(str(row[8])),
+        status=RecoveryAttemptStatus(str(row[9])),
+        created_at=_parse_datetime(str(row[10])),
+        handed_off_at=_parse_datetime(str(row[11])) if row[11] is not None else None,
+        started_at=_parse_datetime(str(row[12])) if row[12] is not None else None,
+        failed_at=_parse_datetime(str(row[13])) if row[13] is not None else None,
+        failure_code=str(row[14]) if row[14] is not None else None,
     )
 
 

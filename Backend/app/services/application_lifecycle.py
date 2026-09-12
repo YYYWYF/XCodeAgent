@@ -455,6 +455,140 @@ def start_workbench_execution(
         )
 
 
+def handoff_workbench_execution_for_recovery(
+    workspace: str | Path,
+    *,
+    source_run_id: str,
+    new_run_id: str,
+    thread_id: str,
+    phase: str,
+    expected_lifecycle_revision: int | None,
+) -> ApplicationLifecycle:
+    """在同一生命周期锁内把完整 Workbench execution 和资源锁转给 child run。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        if current is None:
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: Workbench execution 缺少 ApplicationLifecycle。"
+            )
+        if (
+            expected_lifecycle_revision is not None
+            and current.revision != expected_lifecycle_revision
+        ):
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: ApplicationLifecycle revision 已变化。"
+            )
+        existing = current.active_executions.get(new_run_id)
+        if existing is not None:
+            if existing.thread_id != thread_id or existing.phase != phase:
+                raise ApplicationLifecycleConflictError(
+                    "RECOVERY_STATE_DRIFT: child Workbench execution 身份不匹配。"
+                )
+            return current
+        source = current.active_executions.get(source_run_id)
+        if source is None:
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: source Workbench execution 已不存在。"
+            )
+        if source.thread_id != thread_id:
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: source threadId 与恢复请求不一致。"
+            )
+        if (
+            source.status == WorkbenchExecutionStatus.AWAITING_USER
+            or source.pending_interaction is not None
+        ):
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_REQUIRES_HANDLER: source execution 正在等待用户交互。"
+            )
+        if new_run_id in current.active_executions:
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: child runId 已被其他 Workbench execution 占用。"
+            )
+        now = utc_now()
+        child = source.model_copy(
+            update={
+                "run_id": new_run_id,
+                "thread_id": thread_id,
+                "phase": phase,
+                "status": WorkbenchExecutionStatus.RUNNING,
+                "pending_interaction": None,
+                "error": None,
+                "started_at": now,
+                "updated_at": now,
+            }
+        )
+        executions = dict(current.active_executions)
+        executions.pop(source_run_id, None)
+        executions[new_run_id] = child
+        updated = current.model_copy(
+            update={
+                "updated_at": now,
+                "revision": current.revision + 1,
+                "active_run_id": new_run_id,
+                "active_executions": executions,
+                "resource_locks": _transfer_resource_locks(
+                    current.resource_locks,
+                    source_run_id=source_run_id,
+                    new_run_id=new_run_id,
+                ),
+            }
+        )
+        return write_application_lifecycle(
+            workspace,
+            updated,
+            expected_revision=current.revision,
+        )
+
+
+def handoff_application_planning_run_for_recovery(
+    workspace: str | Path,
+    *,
+    source_run_id: str,
+    new_run_id: str,
+    thread_id: str,
+    expected_lifecycle_revision: int | None,
+) -> ApplicationLifecycle | None:
+    """只替换 Application Planning 的 activeRunId，保留阶段和正式产物状态。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        if current is None:
+            return None
+        if (
+            expected_lifecycle_revision is not None
+            and current.revision != expected_lifecycle_revision
+        ):
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: ApplicationLifecycle revision 已变化。"
+            )
+        if current.initialization.thread_id != thread_id:
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: application planning threadId 不匹配。"
+            )
+        if current.active_run_id == new_run_id:
+            return current
+        if current.active_run_id != source_run_id:
+            raise ApplicationLifecycleConflictError(
+                "RECOVERY_STATE_DRIFT: activeRunId 已不再属于 source execution。"
+            )
+        updated = current.model_copy(
+            update={
+                "updated_at": utc_now(),
+                "revision": current.revision + 1,
+                "active_run_id": new_run_id,
+            }
+        )
+        return write_application_lifecycle(
+            workspace,
+            updated,
+            expected_revision=current.revision,
+        )
+
+
 def expand_workbench_execution_resources(
     workspace: str | Path,
     *,
@@ -900,6 +1034,15 @@ def _resource_claims_for_run(
     return claims
 
 
+def resource_claims_for_run(
+    locks: ExecutionResourceLocks,
+    run_id: str,
+) -> list[ExecutionResourceClaim]:
+    """公开恢复 runtime 重建进程内完整资源租约所需的锁声明。"""
+
+    return _resource_claims_for_run(locks, run_id)
+
+
 def _resource_locks_with_claims(
     locks: ExecutionResourceLocks,
     *,
@@ -962,6 +1105,32 @@ def _resource_locks_without_run(
         dataSources={
             key: value for key, value in locks.data_sources.items() if value.run_id != run_id
         },
+    )
+
+
+def _transfer_resource_locks(
+    locks: ExecutionResourceLocks,
+    *,
+    source_run_id: str,
+    new_run_id: str,
+) -> ExecutionResourceLocks:
+    """只替换资源锁 owner，保留资源集合、角色、原因和原获取时间。"""
+
+    def transfer(lock: ExecutionResourceLock) -> ExecutionResourceLock:
+        """将单个资源锁的 owner 从 source 替换为 child。"""
+
+        return (
+            lock.model_copy(update={"run_id": new_run_id})
+            if lock.run_id == source_run_id
+            else lock
+        )
+
+    return ExecutionResourceLocks(
+        application=transfer(locks.application) if locks.application else None,
+        pages={key: transfer(value) for key, value in locks.pages.items()},
+        endpoints={key: transfer(value) for key, value in locks.endpoints.items()},
+        apiContracts={key: transfer(value) for key, value in locks.api_contracts.items()},
+        dataSources={key: transfer(value) for key, value in locks.data_sources.items()},
     )
 
 

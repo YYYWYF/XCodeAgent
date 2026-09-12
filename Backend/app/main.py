@@ -58,6 +58,10 @@ from app.protocols.direct_modification import (
     build_conversation_ag_ui_stream,
     conversation_capabilities,
 )
+from app.protocols.execution_recovery import (
+    build_execution_recovery_ag_ui_stream,
+    execution_recovery_capabilities,
+)
 from app.protocols.user_skills import (
     build_user_skills_ag_ui_stream,
     user_skills_capabilities,
@@ -157,6 +161,7 @@ async def health() -> dict[str, object]:
             "code_changes": code_changes_capabilities(),
             "version_control": version_control_capabilities(),
             "conversation": conversation_capabilities(),
+            "execution_recovery": execution_recovery_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -432,6 +437,23 @@ async def run_workflow(
     return StreamingResponse(
         build_workflow_ag_ui_stream(
             graph=workflow_graph_for_request,
+            payload=input_data,
+            accept=accept,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/execution-recovery/run")
+async def run_execution_recovery(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流启动一次 Backend-authoritative Native Recovery。"""
+
+    return StreamingResponse(
+        build_execution_recovery_ag_ui_stream(
             payload=input_data,
             accept=accept,
         ),

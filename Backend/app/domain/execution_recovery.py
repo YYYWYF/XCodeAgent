@@ -85,6 +85,41 @@ class RecoveryStrategy(StrEnum):
     NONE = "none"
 
 
+class RecoveryAttemptStatus(StrEnum):
+    """定义一次恢复子执行从 claim 到正式启动的 lineage 状态。"""
+
+    PREPARING = "preparing"
+    HANDED_OFF = "handed_off"
+    STARTED = "started"
+    FAILED_PRESTART = "failed_prestart"
+
+
+class RecoveryAttemptAlreadyClaimedError(RuntimeError):
+    """表示 source execution 已经存在未终结的恢复分支。"""
+
+    code = "RECOVERY_ALREADY_CLAIMED"
+
+    def __init__(self, *, source_run_id: str, active_run_id: str) -> None:
+        """保存冲突 source 与现有 child 的稳定身份。"""
+
+        self.source_run_id = source_run_id
+        self.active_run_id = active_run_id
+        super().__init__(
+            "Recovery source already has an active attempt: "
+            f"sourceRunId={source_run_id} activeRunId={active_run_id}"
+        )
+
+
+class RecoveryExecutionError(RuntimeError):
+    """表示 Native Recovery 在执行前被明确拒绝或准备失败。"""
+
+    def __init__(self, code: str, message: str) -> None:
+        """保存协议层需要透出的稳定错误码与安全消息。"""
+
+        self.code = code
+        super().__init__(message)
+
+
 class DurableExecutionRecord(ExecutionRecoveryModel):
     """保存一次 AG-UI Graph 执行的轻量观察索引。"""
 
@@ -153,3 +188,23 @@ class RecoveryPlan(ExecutionRecoveryModel):
     lifecycle_revision: int | None = Field(default=None, ge=0)
     workspace_revision: str | None = Field(default=None, max_length=512)
     workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
+
+
+class RecoveryAttempt(ExecutionRecoveryModel):
+    """记录 source execution 到新 execution attempt 的持久化 lineage。"""
+
+    source_run_id: str = Field(min_length=1, max_length=512)
+    new_run_id: str = Field(min_length=1, max_length=512)
+    thread_id: str = Field(min_length=1, max_length=512)
+    source_recovery_point_id: str = Field(min_length=1, max_length=512)
+    source_checkpoint_id: str = Field(min_length=1, max_length=512)
+    source_checkpoint_ns: str = Field(default="", max_length=512)
+    replay_checkpoint_id: str | None = Field(default=None, max_length=512)
+    replay_checkpoint_ns: str = Field(default="", max_length=512)
+    strategy: RecoveryStrategy
+    status: RecoveryAttemptStatus
+    created_at: datetime
+    handed_off_at: datetime | None = None
+    started_at: datetime | None = None
+    failed_at: datetime | None = None
+    failure_code: str | None = Field(default=None, max_length=128)

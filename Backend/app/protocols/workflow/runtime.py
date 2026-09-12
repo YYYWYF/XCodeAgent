@@ -84,6 +84,7 @@ from app.services.execution_recovery import (
     observe_execution_started,
     observe_node_started,
 )
+from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext
 from app.services.execution_lease_heartbeat import (
     maintain_execution_heartbeat,
     stop_execution_heartbeat,
@@ -320,11 +321,16 @@ def build_workflow_ag_ui_stream(
     graph: Any,
     payload: dict[str, Any],
     accept: str | None = None,
+    native_recovery_context: NativeRecoveryRuntimeContext | None = None,
 ) -> AsyncIterator[str]:
     """以 AG-UI SSE 事件流运行或取消一次主工作流请求。"""
 
     encoder = EventEncoder(accept or "text/event-stream")
-    workflow_inputs = workflow_run_inputs(payload)
+    workflow_inputs = (
+        native_recovery_context.workflow_inputs()
+        if native_recovery_context is not None
+        else workflow_run_inputs(payload)
+    )
     thread_id = workflow_inputs["thread_id"] or str(uuid4())
     run_id = workflow_inputs["run_id"] or f"workflow-{uuid4().hex[:12]}"
     plan_control_action = workflow_inputs.get("plan_control_action") or ""
@@ -354,24 +360,66 @@ def build_workflow_ag_ui_stream(
     async def stream() -> AsyncIterator[str]:
         events: list[dict[str, Any]] = []
         result: dict[str, Any] = {}
-        workspace_lease: WorkspaceRunLease | None = None
-        workspace: str | None = None
-        lifecycle_payload: dict[str, Any] | None = None
+        workspace_lease: WorkspaceRunLease | None = (
+            native_recovery_context.workspace_lease
+            if native_recovery_context is not None
+            else None
+        )
+        workspace: str | None = (
+            native_recovery_context.workspace
+            if native_recovery_context is not None
+            else None
+        )
+        lifecycle_payload: dict[str, Any] | None = (
+            native_recovery_context.lifecycle_payload
+            if native_recovery_context is not None
+            else None
+        )
         workflow_scope = workflow_inputs.get("workflow_scope") or None
         current_phase = "api_design_readiness_gate"
         node_attempts: dict[str, int] = {}
         application_planning_run_lock_instance: asyncio.Lock | None = None
         application_planning_run_lock_acquired = False
-        active_graph: Any | None = None
-        config: dict[str, Any] | None = None
-        heartbeat_task: asyncio.Task[None] | None = None
+        active_graph: Any | None = (
+            native_recovery_context.graph
+            if native_recovery_context is not None
+            else None
+        )
+        config: dict[str, Any] | None = (
+            native_recovery_context.fork_config
+            if native_recovery_context is not None
+            else None
+        )
+        recovery_observation_config: dict[str, Any] | None = (
+            native_recovery_context.observation_config
+            if native_recovery_context is not None
+            else None
+        )
+        heartbeat_task: asyncio.Task[None] | None = (
+            native_recovery_context.heartbeat_task
+            if native_recovery_context is not None
+            else None
+        )
         backend_identity = current_backend_instance()
-        durable_execution_started = False
+        durable_execution_started = native_recovery_context is not None
         workflow_lifecycle_started = False
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")
         yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
+        if native_recovery_context is not None:
+            yield encoder.encode(
+                CustomEvent(
+                    name="execution-recovery",
+                    value={
+                        "status": "running",
+                        "sourceRunId": native_recovery_context.source_execution.run_id,
+                        "runId": native_recovery_context.new_run_id,
+                        "threadId": native_recovery_context.thread_id,
+                        "strategy": native_recovery_context.recovery_plan.strategy.value,
+                    },
+                )
+            )
         yield encoder.encode(
             TextMessageStartEvent(messageId=message_id, role="assistant")
         )
@@ -394,7 +442,7 @@ def build_workflow_ag_ui_stream(
             workspace = workflow_inputs["workspace"] or None
             editor_mode = workflow_inputs["editor_mode"] or None
             settings = Settings.from_env()
-            if workspace:
+            if workspace and native_recovery_context is None:
                 # 新 Workflow 进入持久化 Execution 前，先按已知 workspace 清理旧孤儿。
                 await reconcile_workspace_recovery(
                     workspace,
@@ -411,11 +459,12 @@ def build_workflow_ag_ui_stream(
             application_planning_interaction = workflow_inputs.get(
                 "application_planning_interaction"
             )
-            active_graph = (
-                await graph(workspace=workspace, project_id=project_id)
-                if callable(graph)
-                else graph
-            )
+            if native_recovery_context is None:
+                active_graph = (
+                    await graph(workspace=workspace, project_id=project_id)
+                    if callable(graph)
+                    else graph
+                )
             if workflow_scope == "application_planning":
                 # 同一 planning thread 的所有 Graph 写运行必须串行。无 interaction 的
                 # 显式重试同样会修改 checkpoint，不能与确认恢复并发；snapshot-only
@@ -425,15 +474,20 @@ def build_workflow_ag_ui_stream(
                 )
                 await application_planning_run_lock_instance.acquire()
                 application_planning_run_lock_acquired = True
-            await cleanup_workflow_checkpoints(
-                workspace=workspace,
-                project_id=project_id,
-            )
+            if native_recovery_context is None:
+                await cleanup_workflow_checkpoints(
+                    workspace=workspace,
+                    project_id=project_id,
+                )
             resume_from = workflow_inputs.get("resume_from") or None
             checkpoint_values: dict[str, Any] = {}
             execution_checkpoint_state: dict[str, Any] = {}
             checkpoint_snapshot: Any | None = None
-            if (
+            if native_recovery_context is not None:
+                checkpoint_snapshot = native_recovery_context.fork_snapshot
+                values = getattr(checkpoint_snapshot, "values", {})
+                checkpoint_values = dict(values) if isinstance(values, dict) else {}
+            elif (
                 not workflow_scope
                 and resume_from in {"unit_test", "unit_test_repair", "test_phase_confirmation"}
                 and hasattr(active_graph, "aget_state")
@@ -553,7 +607,10 @@ def build_workflow_ag_ui_stream(
                 task,
                 workspace=workspace,
             )
-            if workflow_scope != "application_planning":
+            if (
+                workflow_scope != "application_planning"
+                and native_recovery_context is None
+            ):
                 # 创建规划只维护自己的 AG-UI/Graph 生命周期；在 TechnicalPlan
                 # 确认前不应登记工作台写租约，更不能让普通规划占住应用资源。
                 workspace_lease = workspace_run_leases.acquire(
@@ -598,7 +655,7 @@ def build_workflow_ag_ui_stream(
                 application_planning_interaction
             ) or _workflow_start_node(resume_from, workflow_scope)
             current_phase = first_node_name
-            if not workflow_scope:
+            if not workflow_scope and native_recovery_context is None:
                 # 独立创建规划 Graph 只维护创建阶段生命周期，不能登记为工作台开发执行。
                 lifecycle_payload = begin_workflow_lifecycle(
                     workflow_inputs,
@@ -629,6 +686,14 @@ def build_workflow_ag_ui_stream(
                         )
                     )
 
+            if native_recovery_context is not None:
+                # Native Recovery 只把 fork snapshot 用作投影；真正传给 Graph 的 input
+                # 仍然在下方固定为 None，避免 reducer 重新注入完整业务 state。
+                initial_state = dict(checkpoint_values)
+                observability = native_recovery_context.observability
+                first_node_name = native_recovery_context.recovery_plan.next_nodes[0]
+                current_phase = first_node_name
+
             # resume_from 只属于本次 START 调度，必须覆盖 checkpoint 中的旧值；
             # 首个真实节点还会将其清空，避免再次持久化为业务状态。
             initial_state["resume_from"] = resume_from or ""
@@ -655,50 +720,56 @@ def build_workflow_ag_ui_stream(
             # 避免 aget_state 把门禁合同或一次性续接 token 覆盖掉。
             boundary_state: dict[str, Any] = {}
 
-            config = {
-                "configurable": {"thread_id": thread_id},
-                "run_name": "xcodeagent-main-workflow",
-                "tags": [
-                    "xcodeagent",
-                    "workflow",
-                    *(["langsmith"] if observability["langsmith"]["enabled"] else []),
-                ],
-                "metadata": {
-                    "run_id": run_id,
-                    "thread_id": thread_id,
-                    "project_id": project_id,
-                    "workspace": workspace,
-                    "selected_skill_names": list(selected_skill_names),
-                    "selected_skills_revision": selected_skill_validation.revision,
-                    "editor_mode": editor_mode,
-                    "workflow_scope": workflow_scope,
-                    "workflow": "xcodeagent-main",
-                    "langsmith_enabled": observability["langsmith"]["enabled"],
-                },
-            }
+            if native_recovery_context is None:
+                config = {
+                    "configurable": {"thread_id": thread_id},
+                    "run_name": "xcodeagent-main-workflow",
+                    "tags": [
+                        "xcodeagent",
+                        "workflow",
+                        *(["langsmith"] if observability["langsmith"]["enabled"] else []),
+                    ],
+                    "metadata": {
+                        "run_id": run_id,
+                        "thread_id": thread_id,
+                        "project_id": project_id,
+                        "workspace": workspace,
+                        "selected_skill_names": list(selected_skill_names),
+                        "selected_skills_revision": selected_skill_validation.revision,
+                        "editor_mode": editor_mode,
+                        "workflow_scope": workflow_scope,
+                        "workflow": "xcodeagent-main",
+                        "langsmith_enabled": observability["langsmith"]["enabled"],
+                    },
+                }
+                recovery_observation_config = config
 
             # Recovery 记录是独立旁路：只在确认即将进入真实 Graph 后登记，且任何写入
             # 失败都由服务层降级为 warning，不得改变现有 Workflow 控制流。
-            started_record = await best_effort_recovery_observation(
-                operation="execution.started",
-                workspace=workspace,
-                run_id=run_id,
-                thread_id=thread_id,
-                workflow_scope=workflow_scope,
-                callback=lambda: observe_execution_started(
+            started_record = (
+                native_recovery_context.source_execution
+                if native_recovery_context is not None
+                else await best_effort_recovery_observation(
+                    operation="execution.started",
                     workspace=workspace,
-                    project_id=project_id,
-                    thread_id=thread_id,
                     run_id=run_id,
+                    thread_id=thread_id,
                     workflow_scope=workflow_scope,
-                    first_node=first_node_name,
-                    backend_instance_id=backend_identity.instance_id,
-                    backend_pid=backend_identity.pid,
-                    lease_ttl=settings.execution_recovery_lease_ttl_seconds,
-                ),
+                    callback=lambda: observe_execution_started(
+                        workspace=workspace,
+                        project_id=project_id,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        workflow_scope=workflow_scope,
+                        first_node=first_node_name,
+                        backend_instance_id=backend_identity.instance_id,
+                        backend_pid=backend_identity.pid,
+                        lease_ttl=settings.execution_recovery_lease_ttl_seconds,
+                    ),
+                )
             )
             durable_execution_started = started_record is not None
-            if durable_execution_started and workspace:
+            if durable_execution_started and workspace and heartbeat_task is None:
                 heartbeat_task = asyncio.create_task(
                     maintain_execution_heartbeat(
                         workspace=workspace,
@@ -708,7 +779,7 @@ def build_workflow_ag_ui_stream(
                         lease_ttl_seconds=settings.execution_recovery_lease_ttl_seconds,
                     )
                 )
-            if durable_execution_started:
+            if durable_execution_started and native_recovery_context is None:
                 await best_effort_recovery_observation(
                     operation="point.captured",
                     workspace=workspace,
@@ -717,7 +788,7 @@ def build_workflow_ag_ui_stream(
                     workflow_scope=workflow_scope,
                     callback=lambda: capture_recovery_point(
                         graph=active_graph,
-                        config=config or {},
+                        config=recovery_observation_config or config or {},
                         workspace=workspace,
                         thread_id=thread_id,
                         run_id=run_id,
@@ -801,7 +872,11 @@ def build_workflow_ag_ui_stream(
             # 仅限 UI 确认阶段：需求阶段提交后必须让 clarification 为空，使前端
             # awaitingUserInput=false → showingProgress=true 切到进度页，否则会卡在
             # 按钮禁用的确认面板不动。不修改共享 result，避免影响后续 updates 聚合。
-            started_result = dict(result)
+            started_result = (
+                dict(initial_state)
+                if native_recovery_context is not None
+                else dict(result)
+            )
             if first_node_name == "code_review":
                 # 修复恢复请求的首帧也要携带原始审查快照，避免前端把修复轮次误显示为首次扫描。
                 for key in (
@@ -896,7 +971,9 @@ def build_workflow_ag_ui_stream(
             tool_steps: dict[str, dict[str, str]] = {}
             tool_indexes: dict[int, str] = {}
 
-            graph_input: dict[str, Any] | Command[Any] = initial_state
+            graph_input: dict[str, Any] | Command[Any] | None = (
+                None if native_recovery_context is not None else initial_state
+            )
             if workflow_scope == "application_planning" and isinstance(
                 application_planning_interaction,
                 dict,
@@ -1550,7 +1627,7 @@ def build_workflow_ag_ui_stream(
                                 workflow_scope=workflow_scope,
                                 callback=lambda: capture_recovery_point(
                                     graph=active_graph,
-                                    config=config or {},
+                                    config=recovery_observation_config or config or {},
                                     workspace=workspace,
                                     thread_id=thread_id,
                                     run_id=run_id,
@@ -1732,7 +1809,7 @@ def build_workflow_ag_ui_stream(
                             workflow_scope=workflow_scope,
                             callback=lambda: capture_recovery_point(
                                 graph=active_graph,
-                                config=config or {},
+                                config=recovery_observation_config or config or {},
                                 workspace=workspace,
                                 thread_id=thread_id,
                                 run_id=run_id,
@@ -1846,7 +1923,9 @@ def build_workflow_ag_ui_stream(
 
             # 真实 LangGraph 提供 aget_state；测试或兼容 Graph 可能只通过流更新返回状态。
             if hasattr(active_graph, "aget_state"):
-                snapshot = await active_graph.aget_state(config)
+                snapshot = await active_graph.aget_state(
+                    recovery_observation_config or config
+                )
                 if durable_execution_started:
                     await best_effort_recovery_observation(
                         operation="point.captured",
@@ -1856,7 +1935,7 @@ def build_workflow_ag_ui_stream(
                         workflow_scope=workflow_scope,
                         callback=lambda: capture_recovery_point(
                             graph=active_graph,
-                            config=config or {},
+                            config=recovery_observation_config or config or {},
                             workspace=workspace,
                             thread_id=thread_id,
                             run_id=run_id,
@@ -1946,7 +2025,7 @@ def build_workflow_ag_ui_stream(
                     workflow_scope=workflow_scope,
                     callback=lambda: capture_recovery_point(
                         graph=active_graph,
-                        config=config or {},
+                        config=recovery_observation_config or config or {},
                         workspace=workspace,
                         thread_id=thread_id,
                         run_id=run_id,
@@ -2051,7 +2130,7 @@ def build_workflow_ag_ui_stream(
                     workflow_scope=workflow_scope,
                     callback=lambda: capture_recovery_point(
                         graph=active_graph,
-                        config=config or {},
+                        config=recovery_observation_config or config or {},
                         workspace=workspace,
                         thread_id=thread_id,
                         run_id=run_id,
