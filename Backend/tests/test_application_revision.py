@@ -233,6 +233,8 @@ class RevisionRoutingTests(unittest.TestCase):
                     reason="技术契约变化",
                 ),
             )
+            before = load_application_lifecycle(directory)
+            assert before is not None
             result = _prepare_start_design_revision_payload(
                 {
                     "forwardedProps": {
@@ -257,13 +259,28 @@ class RevisionRoutingTests(unittest.TestCase):
                     "confirmedImpact": {"interactionId": "impact_technical"},
                 },
             )
+            after = load_application_lifecycle(directory)
+            assert after is not None
+            self.assertEqual(after.revision, before.revision)
+            self.assertEqual(after.initialization, before.initialization)
+            self.assertIsNotNone(after.pending_revision_impact)
+            self.assertIsNone(after.active_formal_revision)
 
         resume_state = result["forwardedProps"]["resumeState"]["state"]
         self.assertNotIn("technical_plan", resume_state)
         self.assertEqual(resume_state["technical_plan_path"], "")
         self.assertEqual(resume_state["technical_plan_json_path"], "")
         self.assertEqual(result["request"], "查询接口增加分页")
-        self.assertEqual(result["resumeFrom"], "technical_planning")
+        self.assertEqual(result["resumeFrom"], "technical_planning_begin")
+        self.assertEqual(
+            result["forwardedProps"]["_technicalRevisionIntent"],
+            {
+                "changeId": before.pending_revision_impact.change_id
+                if before.pending_revision_impact is not None
+                else "",
+                "interactionId": "impact_technical",
+            },
+        )
 
     def test_formal_route_keeps_transitive_downstream_artifact_closure(self) -> None:
         """单次分类 JSON 仍须由服务端补齐最早产物的下游闭包。"""

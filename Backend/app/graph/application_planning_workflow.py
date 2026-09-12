@@ -101,6 +101,7 @@ def _route_start(state: ProjectState) -> str:
         "technical_planning_begin": {
             ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
             ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            ApplicationLifecycleStage.READY_FOR_WORKBENCH,
         },
         "technical_planning_generate": {
             ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,

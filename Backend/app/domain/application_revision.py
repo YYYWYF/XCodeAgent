@@ -230,6 +230,7 @@ class RevisionDraftMetadata(RevisionModel):
 class PendingRevisionImpact(RevisionModel):
     """保存尚未批准且未获取 formal revision lease 的影响范围确认。"""
 
+    change_id: str = Field(alias="changeId", min_length=1, max_length=256)
     interaction_id: str = Field(alias="interactionId", min_length=1, max_length=256)
     source_thread_id: str = Field(alias="sourceThreadId", min_length=1, max_length=512)
     source_run_id: str = Field(alias="sourceRunId", min_length=1, max_length=512)

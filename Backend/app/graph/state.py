@@ -87,7 +87,6 @@ class ProjectState(TypedDict, total=False):
     technical_plan_path: str
     technical_plan_json_path: str
     application_planning_recovery_boundary: dict[str, Any]
-    technical_planning_revision_bootstrap: bool
     technical_plan_candidate: dict[str, Any]
     technical_plan_candidate_sha256: str
     technical_plan_repair_candidate: dict[str, Any]

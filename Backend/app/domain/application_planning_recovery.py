@@ -31,6 +31,7 @@ class ApplicationPlanningRecoveryBoundary(StrEnum):
     GENERATION_READY = "generation_ready"
     CANDIDATE_COMMITTED = "candidate_committed"
     ARTIFACT_COMMITTED = "artifact_committed"
+    REVIEW_READY = "review_ready"
 
 
 class ApplicationPlanningBoundary(BaseModel):

@@ -33,7 +33,6 @@ from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_p
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
-    restart_application_planning_lifecycle,
 )
 from app.services.application_revision_lifecycle import submit_revision_impact
 from app.services.requirement_spec import (
@@ -584,13 +583,8 @@ def _prepare_start_design_revision_payload(
         raise ValueError("revisionRequest target 与 impact 绑定目标不匹配。")
     if pending.impact.formal_branch != request.formal_branch:
         raise ValueError("revisionRequest branch 与 impact 绑定分支不匹配。")
-    active = submit_revision_impact(
-        workspace,
-        interaction_id=request.confirmed_impact.interaction_id,
-        decision="approved",
-    )
-    if active is None:
-        raise ValueError("revision impact 未批准。")
+    if pending.interaction_id != request.confirmed_impact.interaction_id:
+        raise ValueError("revisionRequest interactionId 与 impact 绑定不匹配。")
     next_forwarded = {
         **forwarded_props,
         "workflowAction": None,
@@ -601,14 +595,35 @@ def _prepare_start_design_revision_payload(
         next_forwarded["resumeState"] = {
             "state": {"product_stage_conversation": False}
         }
-    if action == "start_technical_revision":
-        # TechnicalPlan 二次修改恢复原 planning checkpoint，由 begin 节点消费一次性后端标记。
-        restart_application_planning_lifecycle(
+        planning_thread_id = str(lifecycle.initialization.thread_id or "").strip()
+        if not planning_thread_id:
+            raise ValueError("设计修订缺少原 application planning thread。")
+        active = submit_revision_impact(
             workspace,
-            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            interaction_id=request.confirmed_impact.interaction_id,
+            decision="approved",
         )
-        next_forwarded["_technicalRevisionBootstrap"] = {
-            "changeId": active.change_id,
+        if active is None:
+            raise ValueError("revision impact 未批准。")
+        next_forwarded["resumeState"] = {
+            "state": {"product_stage_conversation": False}
+        }
+        return {
+            **payload,
+            "threadId": active.planning_thread_id,
+            "request": active.request,
+            "resumeFrom": "design_intent_analysis",
+            "forwardedProps": next_forwarded,
+        }
+    if action == "start_technical_revision":
+        # TechnicalPlan 二次修改只把 admission credential 交给 begin 节点，
+        # approval 和 lifecycle rewind 必须在 Graph 的 durable input 之后发生。
+        planning_thread_id = str(lifecycle.initialization.thread_id or "").strip()
+        if not planning_thread_id:
+            raise ValueError("技术规划修订缺少原 application planning thread。")
+        next_forwarded["_technicalRevisionIntent"] = {
+            "changeId": pending.change_id,
+            "interactionId": request.confirmed_impact.interaction_id,
         }
         next_forwarded["resumeState"] = {
             "state": technical_plan_revision_reset_state()
@@ -616,16 +631,20 @@ def _prepare_start_design_revision_payload(
         logger.info(
             "technical_plan_revision_started source=workbench_plan_revision "
             "baseline_present=true request_length=%s",
-            len(active.request),
+            len(pending.request),
         )
     return {
         **payload,
-        "threadId": active.planning_thread_id,
-        "request": active.request,
+        "threadId": (
+            planning_thread_id
+            if action == "start_technical_revision"
+            else str(lifecycle.initialization.thread_id or "").strip()
+        ),
+        "request": pending.request,
         "resumeFrom": (
             "design_intent_analysis"
             if action == "start_design_revision"
-            else "technical_planning"
+            else "technical_planning_begin"
         ),
         "forwardedProps": next_forwarded,
     }

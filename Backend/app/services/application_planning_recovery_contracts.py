@@ -123,13 +123,14 @@ class RequirementCommittedInputRecoveryContract:
 
 
 class TechnicalPlanningRecoveryContract:
-    """定义 TechnicalPlan 四个 durable boundary 的 Native Replay 规则。"""
+    """定义 TechnicalPlan 五个 durable boundary 的 Native Replay 规则。"""
 
     _NEXT_BY_BOUNDARY = {
         ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED.value: "technical_planning_begin",
         ApplicationPlanningRecoveryBoundary.GENERATION_READY.value: "technical_planning_generate",
         ApplicationPlanningRecoveryBoundary.CANDIDATE_COMMITTED.value: "technical_planning_commit",
         ApplicationPlanningRecoveryBoundary.ARTIFACT_COMMITTED.value: "technical_planning_review",
+        ApplicationPlanningRecoveryBoundary.REVIEW_READY.value: "technical_planning_review",
     }
 
     def match(self, *, source: DurableExecutionRecord, point: RecoveryPoint, snapshot: Any) -> bool:
@@ -138,6 +139,8 @@ class TechnicalPlanningRecoveryContract:
         if (
             source.execution_kind != "application_planning"
             or source.status is not DurableExecutionStatus.INTERRUPTED
+            or point.run_id != source.run_id
+            or point.thread_id != source.thread_id
         ):
             return False
         values = getattr(snapshot, "values", {})
@@ -189,6 +192,21 @@ class TechnicalPlanningRecoveryContract:
                 or candidate_sha256 != boundary.candidate_sha256
             ):
                 return False
+        if boundary.boundary is ApplicationPlanningRecoveryBoundary.REVIEW_READY:
+            clarification = values.get("clarification")
+            clarification = clarification if isinstance(clarification, dict) else {}
+            if (
+                clarification.get("status") != "requires_user_input"
+                or clarification.get("mode")
+                not in {
+                    "technical_plan_generation_error",
+                    "project_plan_dependency_validation_error",
+                }
+            ):
+                return False
+            errors = clarification.get("errors")
+            if errors is not None and not isinstance(errors, list):
+                return False
         if boundary.boundary is ApplicationPlanningRecoveryBoundary.ARTIFACT_COMMITTED:
             technical_plan = values.get("technical_plan")
             if (
@@ -207,7 +225,7 @@ class TechnicalPlanningRecoveryContract:
         point: RecoveryPoint,
         snapshot: Any,
     ) -> RecoveryStrategyAssessment:
-        """将完整 boundary 的四个 successor 统一标记为 Native Recoverable。"""
+        """将完整 boundary 的五个 successor 统一标记为 Native Recoverable。"""
 
         if not self.match(source=source, point=point, snapshot=snapshot):
             raise ValueError("当前 checkpoint 不是可验证的 TechnicalPlan boundary。")
@@ -283,11 +301,20 @@ class TechnicalPlanningRecoveryContract:
                 current_stage is ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
                 and current_status is ApplicationLifecycleStatus.AWAITING_USER
             )
+        if boundary.boundary is ApplicationPlanningRecoveryBoundary.ARTIFACT_COMMITTED:
+            return (
+                current_stage
+                is ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
+                and current_status is ApplicationLifecycleStatus.AWAITING_USER
+            )
         return (
-            boundary.boundary is ApplicationPlanningRecoveryBoundary.ARTIFACT_COMMITTED
-            and current_stage
-            is ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
-            and current_status is ApplicationLifecycleStatus.AWAITING_USER
+            boundary.boundary is ApplicationPlanningRecoveryBoundary.REVIEW_READY
+            and current_stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
+            and current_status is ApplicationLifecycleStatus.RUNNING
+            and (
+                expected_revision is None
+                or lifecycle.revision == expected_revision
+            )
         )
 
     def activity_label(self) -> str:

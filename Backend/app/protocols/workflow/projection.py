@@ -612,7 +612,6 @@ def _public_workflow_state(
             # Native Recovery 的审阅路由是后端 Durable Graph State，不能成为公开协议事实。
             "application_planning_review_route",
             "application_planning_recovery_boundary",
-            "technical_planning_revision_bootstrap",
             "technical_plan_candidate",
             "technical_plan_candidate_sha256",
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。

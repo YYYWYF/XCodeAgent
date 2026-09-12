@@ -10,6 +10,7 @@ from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
 )
+from app.domain.application_revision import FormalRevisionBranch, RevisionTarget
 from app.domain.application_planning_recovery import (
     ApplicationPlanningRecoveryBoundary,
     ApplicationPlanningOperation,
@@ -28,6 +29,10 @@ from app.services.application_planning_persistence import (
     confirm_application_planning_artifacts,
 )
 from app.services.application_revision_lifecycle import issue_revision_continuation
+from app.services.application_revision_lifecycle import (
+    ensure_revision_impact_approved,
+    ensure_technical_plan_generation_lifecycle,
+)
 from app.workspace.plan_documents import (
     commit_technical_plan_document,
     technical_plan_json_path,
@@ -107,85 +112,61 @@ def _boundary_payload_for_state(
 async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
     """校验 TechnicalPlan 输入事务并幂等推进到模型生成阶段。"""
 
-    working_state = state
-    if state.get("technical_planning_revision_bootstrap") is True:
-        baseline = state.get("technical_plan")
-        request = _technical_request(state)
-        if not isinstance(baseline, dict) or not baseline or not request:
-            raise ValueError("TechnicalPlan revision bootstrap 缺少当前 baseline 或修改要求。")
-        operation_id = f"technical-plan-{uuid4().hex}"
-        working_state = {
-            **state,
-            "application_planning_recovery_boundary": application_planning_boundary_payload(
-                operation_id=operation_id,
-                operation=ApplicationPlanningOperation.REVISE,
-                boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
-                request=request,
-                gate_id=operation_id,
-                baseline=baseline,
-            ),
-            "technical_planning_revision_bootstrap": False,
-        }
-    boundary = _technical_boundary(working_state)
+    boundary = _technical_boundary(state)
     if boundary.boundary is not ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED:
         raise ValueError("TechnicalPlan begin 只能从 INPUT_COMMITTED boundary 开始。")
-    workspace, lifecycle = _ensure_technical_lifecycle(state)
+    workspace, _lifecycle = _ensure_technical_lifecycle(state)
     operation = boundary.operation
-    if operation is ApplicationPlanningOperation.REVISE and not _technical_request(state):
+    request = _technical_request(state)
+    if operation is ApplicationPlanningOperation.REVISE and not request:
         raise ValueError("TechnicalPlan revise 必须提供明确的修改要求。")
     if operation in {
         ApplicationPlanningOperation.REVISE,
         ApplicationPlanningOperation.REPAIR,
     } and boundary.baseline_sha256 is None:
         raise ValueError("TechnicalPlan 修订/修复缺少 baseline 摘要。")
-    if lifecycle.initialization.stage in {
-        ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
-        ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-    }:
-        if (
-            lifecycle.initialization.stage
-            is ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY
-            and operation is not ApplicationPlanningOperation.INITIAL
-        ) or (
-            lifecycle.initialization.stage
-            is ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
-            and operation
-            not in {
-                ApplicationPlanningOperation.REVISE,
-                ApplicationPlanningOperation.REPAIR,
-            }
-        ):
-            raise ValueError("TechnicalPlan operation 不在当前输入事务允许范围内。")
-        lifecycle = persist_application_lifecycle_transition(
+    baseline = state.get("technical_plan")
+    if (
+        operation in {
+            ApplicationPlanningOperation.REVISE,
+            ApplicationPlanningOperation.REPAIR,
+        }
+        and (
+            not isinstance(baseline, dict)
+            or not baseline
+            or application_planning_sha256(baseline) != boundary.baseline_sha256
+        )
+    ):
+        raise ValueError("TechnicalPlan 修订/修复 baseline 与 boundary 不匹配。")
+
+    change_id = str(state.get("change_id") or "").strip()
+    if operation is ApplicationPlanningOperation.REVISE and change_id:
+        target = state.get("change_target")
+        if not isinstance(target, dict) or not target:
+            raise ValueError("TechnicalPlan formal revision 缺少 change target。")
+        target_model = RevisionTarget.model_validate(target)
+        active = ensure_revision_impact_approved(
             workspace,
-            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-            status=ApplicationLifecycleStatus.RUNNING,
-            active_run_id=state.get("active_run_id"),
+            change_id=change_id,
+            interaction_id=boundary.gate_id or "",
+            request=request,
+            expected_branch=FormalRevisionBranch.WORKBENCH_PLAN_REVISION,
+            target=target_model,
         )
-    elif lifecycle.initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN:
-        if lifecycle.initialization.status in {
-            ApplicationLifecycleStatus.FAILED,
-            ApplicationLifecycleStatus.CANCELLED,
-        }:
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-                status=ApplicationLifecycleStatus.RUNNING,
-                active_run_id=state.get("active_run_id"),
-            )
-        elif lifecycle.initialization.status is not ApplicationLifecycleStatus.RUNNING:
-            raise ValueError("TechnicalPlan lifecycle 状态不允许继续 begin。")
-    else:
-        raise ValueError(
-            "TechnicalPlan begin 的 lifecycle 阶段不匹配："
-            f"{lifecycle.initialization.stage.value}。"
-        )
+        if active.change_id != change_id:
+            raise ValueError("TechnicalPlan formal revision changeId 不匹配。")
+    lifecycle = ensure_technical_plan_generation_lifecycle(
+        workspace,
+        active_run_id=state.get("active_run_id"),
+        thread_id=state.get("active_thread_id"),
+        change_id=change_id or None,
+    )
     return {
         "phase": "technical_planning_begin",
         "status": "running",
         "resume_from": "",
         "application_planning_recovery_boundary": _boundary_payload_for_state(
-            working_state,
+            state,
             boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
         ),
         "application_planning_interaction": {},
@@ -252,7 +233,10 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             "status": "requires_user_input",
             "technical_plan_repair_candidate": failed_candidate or {},
             "technical_plan_repair_errors": errors[:12],
-            "application_planning_recovery_boundary": {},
+            "application_planning_recovery_boundary": _boundary_payload_for_state(
+                state,
+                boundary=ApplicationPlanningRecoveryBoundary.REVIEW_READY,
+            ),
             "technical_plan_candidate": {},
             "technical_plan_candidate_sha256": "",
             "clarification": _technical_generation_error_payload(errors),

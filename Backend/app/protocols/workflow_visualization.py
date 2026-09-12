@@ -1343,7 +1343,6 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
             # Native Recovery 的审阅路由只供后端 Graph 重建 successor，不能公开。
             "application_planning_review_route",
             "application_planning_recovery_boundary",
-            "technical_planning_revision_bootstrap",
             "technical_plan_candidate",
             "technical_plan_candidate_sha256",
         }

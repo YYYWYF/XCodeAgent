@@ -8,8 +8,19 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.agents.test_generation.generator import _build_prompt
+from app.domain.application_lifecycle import (
+    ApplicationInitialization,
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+)
+from app.domain.application_revision import RevisionImpact, RevisionTarget
 from app.graph.subgraphs.testing import collect_unit_test_targets
 from app.services.api_design import ApiDesignError
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    write_application_lifecycle,
+)
+from app.services.application_revision_lifecycle import register_revision_impact
 from app.protocols.workflow.request import (
     _build_execution_scope,
     _resume_values,
@@ -1286,6 +1297,73 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(inputs["resume_from"], "technical_planning")
+
+    def test_technical_revision_intent_injects_canonical_baseline(self) -> None:
+        """TechnicalPlan revision intent 必须由服务端补回 canonical baseline 与 boundary。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            lifecycle = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+                initialization_thread_id="planning-thread",
+            ).model_copy(
+                update={
+                    "initialization": ApplicationInitialization(
+                        stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                        status=ApplicationLifecycleStatus.COMPLETED,
+                        threadId="planning-thread",
+                    )
+                }
+            )
+            write_application_lifecycle(workspace, lifecycle)
+            pending = register_revision_impact(
+                workspace,
+                interaction_id="impact-technical-request",
+                source_thread_id="conversation-thread",
+                source_run_id="conversation-run",
+                request="查询接口增加分页",
+                target=RevisionTarget(type="application"),
+                impact=RevisionImpact(
+                    formalBranch="workbench_plan_revision",
+                    revisionType="technical_contract_change",
+                    earliestArtifact="technical-plan",
+                    affectedArtifacts=["technical-plan"],
+                    affectedResources=["application"],
+                    reason="技术契约变化",
+                ),
+            )
+            baseline = {
+                "artifact_type": "technical-plan",
+                "confirmation_status": "confirmed",
+                "app": {"name": "任务中心"},
+            }
+            plan_path = workspace / ".xcodeagent" / "plans" / "technical-plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(json.dumps(baseline), encoding="utf-8")
+
+            inputs = workflow_run_inputs(
+                {
+                    "request": "查询接口增加分页",
+                    "resumeFrom": "technical_planning_begin",
+                    "forwardedProps": {
+                        "workspaceRoot": str(workspace),
+                        "workflowScope": "application_planning",
+                        "_technicalRevisionIntent": {
+                            "changeId": pending.change_id,
+                            "interactionId": pending.interaction_id,
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "technical_planning_begin")
+        self.assertEqual(inputs["resume_values"]["change_id"], pending.change_id)
+        self.assertEqual(inputs["resume_values"]["technical_plan"], baseline)
+        self.assertEqual(
+            inputs["resume_values"]["application_planning_recovery_boundary"]["boundary"],
+            "input_committed",
+        )
 
     def test_explicit_debug_resume_node_overrides_resume_snapshot(self) -> None:
         """节点调试选择必须覆盖旧快照中的阻断节点。"""
