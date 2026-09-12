@@ -20,6 +20,7 @@ from app.domain.execution_recovery import (
     RecoveryAttempt,
     RecoveryAttemptAlreadyClaimedError,
     RecoveryAttemptStatus,
+    RecoveryExecutionError,
     RecoveryPoint,
     RecoveryPointKind,
     RecoveryPlan,
@@ -687,6 +688,87 @@ async def get_execution_lease(
         return _execution_lease_from_row(row) if row is not None else None
 
 
+async def takeover_pre_runtime_recovery_lease(
+    *,
+    workspace: str | Path,
+    new_run_id: str,
+    expected_attempt_status: set[RecoveryAttemptStatus],
+    new_owner_backend_instance_id: str,
+    new_owner_pid: int,
+    lease_ttl_seconds: float,
+    takeover_at: datetime | None = None,
+) -> ExecutionLease:
+    """在 Graph 启动前原子接管 PREPARING/HANDED_OFF child 的执行租约。"""
+
+    moment = takeover_at or datetime.now(timezone.utc)
+    expires_at = moment + timedelta(seconds=lease_ttl_seconds)
+    expected_values = {status.value for status in expected_attempt_status}
+    async with _connection_after_initialize(workspace) as connection:
+        await connection.execute("BEGIN IMMEDIATE")
+        attempt_row = await _fetch_recovery_attempt_row(connection, new_run_id)
+        if attempt_row is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_ATTEMPT_NOT_FOUND",
+                "pre-runtime recovery attempt 不存在。",
+            )
+        attempt_status = RecoveryAttemptStatus(str(attempt_row[9]))
+        if attempt_status is RecoveryAttemptStatus.STARTED:
+            raise RecoveryExecutionError(
+                "RECOVERY_ATTEMPT_ALREADY_STARTED",
+                "RecoveryAttempt 已经进入 Graph replay，不能进行 pre-runtime takeover。",
+            )
+        if attempt_status.value not in expected_values:
+            raise RecoveryExecutionError(
+                "RECOVERY_ATTEMPT_STATUS_MISMATCH",
+                "RecoveryAttempt 当前状态不允许进行 pre-runtime takeover。",
+            )
+        execution_row = await _fetch_execution_row(connection, new_run_id)
+        if execution_row is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_EXECUTION_NOT_FOUND",
+                "pre-runtime recovery 的 child execution 不存在。",
+            )
+        if str(execution_row[8]) != DurableExecutionStatus.RUNNING.value:
+            raise RecoveryExecutionError(
+                "RECOVERY_EXECUTION_NOT_RUNNING",
+                "只有仍处于 RUNNING 的 pre-runtime child 才能被接管。",
+            )
+        lease_row = await _fetch_execution_lease_row(connection, new_run_id)
+        if lease_row is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_LEASE_MISSING",
+                "pre-runtime recovery 缺少 child lease。",
+            )
+        cursor = await connection.execute(
+            """
+            UPDATE execution_leases
+            SET owner_backend_instance_id = ?, owner_pid = ?, status = ?,
+                heartbeat_at = ?, expires_at = ?, released_at = NULL
+            WHERE run_id = ?
+            """,
+            (
+                new_owner_backend_instance_id,
+                new_owner_pid,
+                ExecutionLeaseStatus.ACTIVE.value,
+                _utc_iso(moment),
+                _utc_iso(expires_at),
+                new_run_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RecoveryExecutionError(
+                "RECOVERY_LEASE_MISSING",
+                "pre-runtime recovery 的 child lease 无法接管。",
+            )
+        updated_lease_row = await _fetch_execution_lease_row(connection, new_run_id)
+        if updated_lease_row is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_LEASE_MISSING",
+                "pre-runtime recovery 的 child lease 无法读取。",
+            )
+        return _execution_lease_from_row(updated_lease_row)
+
+
 async def renew_execution_lease(
     *,
     workspace: str | Path,
@@ -862,9 +944,25 @@ async def reconcile_orphaned_executions(
 ) -> list[DurableExecutionRecord]:
     """按 lease 所有者、当前运行表和 TTL 修正孤儿执行，并返回新中断项。"""
 
-    running = await list_running_executions_with_leases(workspace)
+    running = await _list_running_executions_with_leases_and_attempts(workspace)
     interrupted: list[DurableExecutionRecord] = []
-    for record, lease in running:
+    for record, lease, attempt_status in running:
+        pre_runtime_recovery = (
+            attempt_status in {
+                RecoveryAttemptStatus.PREPARING,
+                RecoveryAttemptStatus.HANDED_OFF,
+            }
+            and lease is not None
+            and lease.status in {
+                ExecutionLeaseStatus.ACTIVE,
+                ExecutionLeaseStatus.EXPIRED,
+            }
+        )
+        if pre_runtime_recovery:
+            # PREPARING/HANDED_OFF 是 P0.3B 的 durable pre-runtime transaction，
+            # Graph 尚未 STARTED；必须留给 lineage reconciliation 做 takeover/fork，
+            # 不能被普通 orphan scanner 提前改成 INTERRUPTED。
+            continue
         should_interrupt = (
             lease is None
             or lease.status is not ExecutionLeaseStatus.ACTIVE
@@ -892,6 +990,44 @@ async def reconcile_orphaned_executions(
                 expires_at=now + timedelta(seconds=lease_ttl_seconds),
             )
     return interrupted
+
+
+async def _list_running_executions_with_leases_and_attempts(
+    workspace: str | Path,
+) -> list[
+    tuple[DurableExecutionRecord, ExecutionLease | None, RecoveryAttemptStatus | None]
+]:
+    """读取 RUNNING execution、lease 及其 lineage 阶段供 scanner 做有限豁免。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            SELECT
+                e.run_id, e.thread_id, e.workspace, e.project_id,
+                e.execution_kind, e.workflow_scope, e.first_node,
+                e.current_node, e.status, e.last_recovery_point_id,
+                e.started_at, e.updated_at, e.ended_at,
+                l.run_id, l.owner_backend_instance_id, l.owner_pid,
+                l.status, l.acquired_at, l.heartbeat_at, l.expires_at,
+                l.released_at, a.status
+            FROM execution_records AS e
+            LEFT JOIN execution_leases AS l ON l.run_id = e.run_id
+            LEFT JOIN recovery_attempts AS a ON a.new_run_id = e.run_id
+            WHERE e.status = ?
+            ORDER BY e.started_at ASC, e.run_id ASC
+            """,
+            (DurableExecutionStatus.RUNNING.value,),
+        )
+        rows = await cursor.fetchall()
+    return [
+        (
+            _execution_from_row(row[:13]),
+            _execution_lease_from_row(row[13:21]) if row[13] is not None else None,
+            RecoveryAttemptStatus(str(row[21])) if row[21] is not None else None,
+        )
+        for row in rows
+    ]
 
 
 async def update_execution_node(

@@ -247,13 +247,15 @@ async def _validate_checkpoint(
 
     lifecycle = _validate_lifecycle(workspace=workspace, source=source, point=point)
     if lifecycle.decision is not None:
-        return _CheckpointValidation(snapshot=snapshot, **lifecycle.__dict__)
+        return _CheckpointValidation(**{**lifecycle.__dict__, "snapshot": snapshot})
     workspace_state = _validate_workspace(workspace=workspace, point=point)
     if workspace_state.decision is not None:
         return _CheckpointValidation(
-            snapshot=snapshot,
-            lifecycle_revision=lifecycle.lifecycle_revision,
-            **workspace_state.__dict__,
+            **{
+                **workspace_state.__dict__,
+                "snapshot": snapshot,
+                "lifecycle_revision": lifecycle.lifecycle_revision,
+            },
         )
     return _CheckpointValidation(
         snapshot=snapshot,

@@ -29,6 +29,7 @@ from app.persistence.execution_recovery import (
     get_recovery_point,
     fail_recovery_attempt_prestart,
     insert_recovery_point,
+    takeover_pre_runtime_recovery_lease,
     update_recovery_attempt,
 )
 from app.services.application_lifecycle import (
@@ -52,6 +53,7 @@ class NativeRecoveryRuntimeContext:
     """把恢复准备事实传给现有 Runtime stream，而不是伪装成普通用户请求。"""
 
     source_execution: DurableExecutionRecord
+    child_execution: DurableExecutionRecord
     recovery_plan: RecoveryPlan
     source_recovery_point: RecoveryPoint
     new_run_id: str
@@ -127,7 +129,7 @@ async def prepare_native_recovery(
     identity = current_backend_instance()
     new_run_id = f"recovery-{uuid4().hex[:12]}"
     _validate_root_plan(plan)
-    _, _, attempt = await claim_native_recovery_attempt(
+    child_execution, _, attempt = await claim_native_recovery_attempt(
         source=source,
         plan=plan,
         new_run_id=new_run_id,
@@ -163,6 +165,7 @@ async def prepare_native_recovery(
             graph=graph,
             lifecycle=lifecycle,
             attempt=attempt,
+            child_execution=child_execution,
             heartbeat_task=heartbeat_task,
         )
         return context
@@ -223,16 +226,25 @@ async def finalize_handed_off_recovery_attempt(
     )
     _validate_root_plan(plan)
     lifecycle = load_application_lifecycle(workspace)
-    lease = await get_execution_lease(workspace, new_run_id)
-    if lease is None:
+    child_execution = await get_execution(workspace, new_run_id)
+    if child_execution is None:
         raise RecoveryExecutionError(
-            "RECOVERY_LEASE_MISSING",
-            "HANDED_OFF recovery 缺少可续租的 child lease。",
+            "RECOVERY_EXECUTION_NOT_FOUND",
+            "HANDED_OFF recovery 的 child execution 不存在。",
         )
+    identity = current_backend_instance()
+    await takeover_pre_runtime_recovery_lease(
+        workspace=workspace,
+        new_run_id=new_run_id,
+        expected_attempt_status={RecoveryAttemptStatus.HANDED_OFF},
+        new_owner_backend_instance_id=identity.instance_id,
+        new_owner_pid=identity.pid,
+        lease_ttl_seconds=Settings.from_env().execution_recovery_lease_ttl_seconds,
+    )
     heartbeat_task = _start_recovery_heartbeat(
         workspace=workspace,
         run_id=new_run_id,
-        owner_backend_instance_id=lease.owner_backend_instance_id,
+        owner_backend_instance_id=identity.instance_id,
     )
     try:
         context = await _fork_and_start(
@@ -244,6 +256,7 @@ async def finalize_handed_off_recovery_attempt(
             graph=graph,
             lifecycle=lifecycle,
             attempt=attempt,
+            child_execution=child_execution,
             heartbeat_task=heartbeat_task,
         )
         return context
@@ -269,6 +282,7 @@ async def _fork_and_start(
     graph: Any,
     lifecycle: Any,
     attempt: RecoveryAttempt,
+    child_execution: DurableExecutionRecord,
     heartbeat_task: asyncio.Task[None] | None,
 ) -> NativeRecoveryRuntimeContext:
     """只写 runtime identity 的 fork checkpoint，并在 durable point 后标记 STARTED。"""
@@ -391,6 +405,7 @@ async def _fork_and_start(
     }
     return NativeRecoveryRuntimeContext(
         source_execution=source,
+        child_execution=child_execution,
         recovery_plan=plan,
         source_recovery_point=source_point,
         new_run_id=new_run_id,
