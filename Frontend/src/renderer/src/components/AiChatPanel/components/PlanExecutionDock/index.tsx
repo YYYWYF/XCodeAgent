@@ -22,15 +22,18 @@ type Props = {
   dependencyLocked?: boolean
   error?: string
   execution?: WorkbenchExecution
+  genericRetryLoading?: boolean
   mode: Exclude<PlanExecutionMode, 'idle'>
   ownerPageId?: string
   onAccept: () => Promise<boolean>
   onConfirmInteraction: (decision: 'reject' | 'once' | 'always') => void
   onEnd: () => void
+  onGenericRetry?: () => void
   onOpenPreview: () => void
   onRetry: () => void
   onStop: () => void
   onViewPlan: () => void
+  retryActionRunning?: boolean
 }
 
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
@@ -39,15 +42,18 @@ export default function PlanExecutionDock({
   dependencyLocked = false,
   error,
   execution,
+  genericRetryLoading = false,
   mode,
   ownerPageId,
   onAccept,
   onConfirmInteraction,
   onEnd,
+  onGenericRetry,
   onOpenPreview,
   onRetry,
   onStop,
-  onViewPlan
+  onViewPlan,
+  retryActionRunning = false
 }: Props): ReactElement {
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -190,8 +196,23 @@ export default function PlanExecutionDock({
             )}
             {(mode === 'failed' || mode === 'stopped') && (
               <>
+                {mode === 'failed' && onGenericRetry ? (
+                  <Button
+                    disabled={retryActionRunning}
+                    icon={<RedoOutlined />}
+                    loading={genericRetryLoading}
+                    onClick={onGenericRetry}
+                  >
+                    通用重试（试用）
+                  </Button>
+                ) : null}
                 {(mode === 'stopped' || (mode === 'failed' && canRetryFailedTasks)) && (
-                  <Button icon={<RedoOutlined />} onClick={onRetry} type="primary">
+                  <Button
+                    disabled={genericRetryLoading || retryActionRunning}
+                    icon={<RedoOutlined />}
+                    onClick={onRetry}
+                    type="primary"
+                  >
                     {mode === 'failed' ? '重试失败任务' : '继续执行'}
                   </Button>
                 )}

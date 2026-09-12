@@ -87,7 +87,7 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
     def test_standard_ag_ui_envelope_is_accepted(self) -> None:
         """标准 AG-UI envelope 的客户端字段不能阻断 recovery authority 解析。"""
 
-        workspace, source_run_id = _parse_request(
+        workspace, action, source_run_id = _parse_request(
             {
                 "threadId": "frontend-thread",
                 "runId": "frontend-run",
@@ -106,7 +106,42 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(workspace, str(self.workspace))
+        self.assertEqual(action, "continue")
         self.assertEqual(source_run_id, "run-A")
+
+    def test_generic_retry_action_is_accepted_without_handler_fields(self) -> None:
+        """通用重试只接受统一 action 与 sourceRunId，不接收旧 handler 路由字段。"""
+
+        workspace, action, source_run_id = _parse_request(
+            {
+                "forwardedProps": {
+                    "workspaceRoot": str(self.workspace),
+                    "executionRecovery": {
+                        "action": "retry_current_failure",
+                        "sourceRunId": "run-A",
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(workspace, str(self.workspace))
+        self.assertEqual(action, "retry_current_failure")
+        self.assertEqual(source_run_id, "run-A")
+
+        with self.assertRaises(Exception) as raised:
+            _parse_request(
+                {
+                    "forwardedProps": {
+                        "workspaceRoot": str(self.workspace),
+                        "executionRecovery": {
+                            "action": "retry_current_failure",
+                            "sourceRunId": "run-A",
+                            "handler": "retry_failed_tasks",
+                        },
+                    }
+                }
+            )
+        self.assertEqual(raised.exception.code, "INVALID_EXECUTION_RECOVERY_REQUEST")
 
     async def test_requires_handler_has_no_recovery_side_effects(self) -> None:
         """默认 replay safety 未评估时只返回结构化拒绝，不 claim child 或修改 lifecycle。"""

@@ -28,6 +28,7 @@ from app.services.execution_recovery_executor import (
     NativeRecoveryRuntimeContext,
     prepare_native_recovery,
 )
+from app.services.execution_retry_dispatcher import prepare_retry_current_failure
 from app.services.execution_recovery_lineage import resolve_recovery_head
 from app.services.execution_recovery_lineage import reconcile_recovery_attempt
 
@@ -48,6 +49,9 @@ _FORBIDDEN_RECOVERY_FIELDS = {
     "strategy",
     "replaySafe",
     "replay_safe",
+    "handler",
+    "workflowAction",
+    "workflow_action",
 }
 
 
@@ -62,7 +66,7 @@ def execution_recovery_capabilities() -> dict[str, Any]:
             "forwardedProps": {
                 "workspaceRoot": "workspace used to locate the Recovery Store",
                 "executionRecovery": {
-                    "action": "continue",
+                    "action": "continue | retry_current_failure",
                     "sourceRunId": "backend-selected source execution",
                 },
             },
@@ -91,7 +95,29 @@ def build_execution_recovery_ag_ui_stream(
         source_run_id = ""
         workspace = ""
         try:
-            workspace, source_run_id = _parse_request(payload)
+            workspace, action, source_run_id = _parse_request(payload)
+            if action == "retry_current_failure":
+                source = await get_execution(workspace, source_run_id)
+                graph = (
+                    await workflow_graph_for_request(
+                        workspace=workspace,
+                        project_id=source.project_id,
+                    )
+                    if source is not None and source.execution_kind == "workbench"
+                    else None
+                )
+                plan = await prepare_retry_current_failure(
+                    workspace=workspace,
+                    source_run_id=source_run_id,
+                    graph=graph,
+                )
+                async for frame in build_workflow_ag_ui_stream(
+                    graph=graph,
+                    payload=plan.internal_payload,
+                    accept=accept,
+                ):
+                    yield frame
+                return
             reconciled_context = await _reconcile_prepared_lineage(
                 workspace,
                 source_run_id,
@@ -181,7 +207,7 @@ def build_execution_recovery_ag_ui_stream(
     return stream()
 
 
-def _parse_request(payload: dict[str, Any]) -> tuple[str, str]:
+def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str]:
     """在协议边界拒绝客户端伪造的恢复定位与执行 authority。"""
 
     forwarded = payload.get("forwardedProps")
@@ -209,10 +235,11 @@ def _parse_request(payload: dict[str, Any]) -> tuple[str, str]:
             "INVALID_EXECUTION_RECOVERY_REQUEST",
             "executionRecovery 不允许客户端提交：" + ", ".join(forbidden),
         )
-    if str(recovery.get("action") or "") != "continue":
+    action = str(recovery.get("action") or "")
+    if action not in {"continue", "retry_current_failure"}:
         raise RecoveryExecutionError(
             "INVALID_EXECUTION_RECOVERY_REQUEST",
-            "executionRecovery.action 只支持 continue。",
+            "executionRecovery.action 只支持 continue 或 retry_current_failure。",
         )
     source_run_id = str(recovery.get("sourceRunId") or "").strip()
     if not source_run_id:
@@ -220,7 +247,7 @@ def _parse_request(payload: dict[str, Any]) -> tuple[str, str]:
             "INVALID_EXECUTION_RECOVERY_REQUEST",
             "executionRecovery.sourceRunId 不能为空。",
         )
-    return workspace, source_run_id
+    return workspace, action, source_run_id
 
 
 async def _reconcile_prepared_lineage(

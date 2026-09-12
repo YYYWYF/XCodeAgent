@@ -55,7 +55,7 @@ export type SendWorkflowMessageOptions = {
   resumeState?: WorkflowRunPayload
   workflowScope?: string
   executionRecovery?: {
-    action: 'continue'
+    action: 'continue' | 'retry_current_failure'
     sourceRunId: string
   }
   onContent?: (content: string) => void

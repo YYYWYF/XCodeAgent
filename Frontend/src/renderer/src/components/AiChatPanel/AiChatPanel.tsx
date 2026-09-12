@@ -2173,6 +2173,7 @@ export default function AiChatPanel({
     handleContinueRevisionBuild,
     handleEndPlan,
     handleProductStageConversation,
+    handleRetryCurrentFailure,
     handleResumePlan,
     handleRetryCodeReview,
     handleRetryPlan,
@@ -2191,7 +2192,8 @@ export default function AiChatPanel({
     stopping,
     workspaceBusy,
     recoveryError,
-    recoveryRunning
+    recoveryRunning,
+    genericRetryRunning
   } = useWorkflowConversation({
     acquireSessionExecution,
     activeSession,
@@ -3076,6 +3078,13 @@ export default function AiChatPanel({
           workflowIdentity
         )
   const scopedExecution = targetExecutionContext.execution
+  const genericRetrySource =
+    scopedExecution?.status === 'failed'
+      ? {
+          runId: scopedExecution.runId,
+          threadId: scopedExecution.threadId
+        }
+      : undefined
   // 新建对话的空白草稿不归属于任何历史 Run；应用级 execution 不能重新锁住输入区。
   const detachedConversationDraft =
     !isApplicationPlanningPhase && !activeSession && activeDetailTarget.type === 'none'
@@ -4507,10 +4516,20 @@ export default function AiChatPanel({
                     dependencyLocked={targetExecutionContext.dependencyLocked}
                     error={scopedExecution?.error?.message || error}
                     execution={scopedExecution}
+                    genericRetryLoading={
+                      genericRetryRunning && genericRetrySource?.runId === scopedExecution?.runId
+                    }
                     mode={displayedPlanExecutionMode}
                     onAccept={handleAcceptPreview}
                     onConfirmInteraction={handleConfirmPlanInteraction}
                     onEnd={() => void handleEndPlan(scopedExecution?.runId)}
+                    onGenericRetry={
+                      genericRetrySource
+                        ? () => {
+                            void handleRetryCurrentFailure(genericRetrySource)
+                          }
+                        : undefined
+                    }
                     onOpenPreview={() => void handleOpenFullscreenPreview()}
                     onRetry={() => void handleRetryPlan()}
                     onStop={
@@ -4519,6 +4538,7 @@ export default function AiChatPanel({
                         : () => void handleStopPlan(scopedExecution?.runId)
                     }
                     onViewPlan={handleViewPlan}
+                    retryActionRunning={currentGenerationLoading}
                   />
                 }
                 stopping={stopping}
