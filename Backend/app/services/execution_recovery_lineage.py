@@ -24,7 +24,7 @@ async def resolve_recovery_head(
     *,
     max_hops: int = 32,
 ) -> str:
-    """沿 STARTED/HANDED_OFF lineage 找到 source 当前可继续的 canonical head。"""
+    """沿未终止的 recovery lineage 找到 source 当前的 canonical head。"""
 
     current = source_run_id
     visited: set[str] = set()
@@ -60,7 +60,7 @@ async def reconcile_recovery_attempt(
     new_run_id: str,
     graph: Any | None = None,
 ) -> Any:
-    """收敛崩溃在 PREPARING/HANDED_OFF 阶段留下的 child lineage。"""
+    """收敛崩溃在 PREPARING/HANDED_OFF/FINALIZING 阶段留下的 child lineage。"""
 
     attempt = await get_recovery_attempt(workspace, new_run_id)
     if attempt is None:
@@ -89,7 +89,10 @@ async def reconcile_recovery_attempt(
                 "RECOVERY_LINEAGE_CORRUPTED",
                 "PREPARING recovery 的 lifecycle ownership 无法判定。",
             )
-    if attempt is not None and attempt.status is RecoveryAttemptStatus.HANDED_OFF:
+    if attempt is not None and attempt.status in {
+        RecoveryAttemptStatus.HANDED_OFF,
+        RecoveryAttemptStatus.FINALIZING,
+    }:
         if graph is None:
             return attempt
         from app.services.execution_recovery_executor import (

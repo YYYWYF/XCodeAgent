@@ -21,6 +21,7 @@ from app.domain.execution_recovery import (
     RecoveryStrategy,
 )
 from app.persistence.execution_recovery import (
+    claim_recovery_finalization,
     claim_native_recovery_attempt,
     finish_execution_and_release_lease,
     get_execution,
@@ -29,7 +30,6 @@ from app.persistence.execution_recovery import (
     get_recovery_point,
     fail_recovery_attempt_prestart,
     insert_recovery_point,
-    takeover_pre_runtime_recovery_lease,
     update_recovery_attempt,
 )
 from app.services.application_lifecycle import (
@@ -40,7 +40,10 @@ from app.services.application_lifecycle import (
     resource_claims_for_run,
 )
 from app.services.backend_instance import current_backend_instance
-from app.services.execution_recovery_coordinator import prepare_continue
+from app.services.execution_recovery_coordinator import (
+    prepare_continue,
+    validate_recovery_workspace_state,
+)
 from app.services.execution_lease_heartbeat import (
     maintain_execution_heartbeat,
     stop_execution_heartbeat,
@@ -156,19 +159,13 @@ async def prepare_native_recovery(
             new_run_id=new_run_id,
             status=RecoveryAttemptStatus.HANDED_OFF,
         )
-        context = await _fork_and_start(
+        await stop_execution_heartbeat(heartbeat_task)
+        heartbeat_task = None
+        return await finalize_handed_off_recovery_attempt(
             workspace=workspace,
-            source=source,
-            plan=plan,
-            source_point=source_point,
             new_run_id=new_run_id,
             graph=graph,
-            lifecycle=lifecycle,
-            attempt=attempt,
-            child_execution=child_execution,
-            heartbeat_task=heartbeat_task,
         )
-        return context
     except Exception as exc:
         await stop_execution_heartbeat(heartbeat_task)
         await _handle_pre_runtime_failure(
@@ -192,23 +189,54 @@ async def finalize_handed_off_recovery_attempt(
     new_run_id: str,
     graph: Any,
 ) -> Any:
-    """为已完成 lifecycle handoff 但尚未 fork 的 child 补齐 durable fork 状态。"""
+    """独占 finalization 后重验恢复世界，再创建 durable fork checkpoint。"""
 
     attempt = await get_recovery_attempt(workspace, new_run_id)
-    if attempt is None or attempt.status is not RecoveryAttemptStatus.HANDED_OFF:
+    if attempt is None or attempt.status not in {
+        RecoveryAttemptStatus.HANDED_OFF,
+        RecoveryAttemptStatus.FINALIZING,
+    }:
         return attempt
+    identity = current_backend_instance()
+    attempt, _lease = await claim_recovery_finalization(
+        workspace=workspace,
+        new_run_id=new_run_id,
+        new_owner_backend_instance_id=identity.instance_id,
+        new_owner_pid=identity.pid,
+        lease_ttl_seconds=Settings.from_env().execution_recovery_lease_ttl_seconds,
+    )
+
     source = await get_execution(workspace, attempt.source_run_id)
+    source_point = await get_recovery_point(workspace, attempt.source_recovery_point_id)
+    child_execution = await get_execution(workspace, new_run_id)
     if source is None:
-        raise RecoveryExecutionError(
+        error = RecoveryExecutionError(
             "SOURCE_EXECUTION_NOT_FOUND",
             "RecoveryAttempt 的 source execution 不存在。",
         )
-    source_point = await get_recovery_point(workspace, attempt.source_recovery_point_id)
-    if source_point is None:
-        raise RecoveryExecutionError(
+    elif source_point is None:
+        error = RecoveryExecutionError(
             "INVALID_RECOVERY_POINT",
             "RecoveryAttempt 的 source RecoveryPoint 不存在。",
         )
+    elif child_execution is None:
+        error = RecoveryExecutionError(
+            "RECOVERY_EXECUTION_NOT_FOUND",
+            "FINALIZING recovery 的 child execution 不存在。",
+        )
+    else:
+        error = None
+    if error is not None:
+        await _handle_finalization_failure(
+            workspace=workspace,
+            new_run_id=new_run_id,
+            error_code=error.code,
+        )
+        raise error
+
+    assert source is not None
+    assert source_point is not None
+    assert child_execution is not None
     plan = RecoveryPlan(
         source_run_id=source.run_id,
         thread_id=source.thread_id,
@@ -224,50 +252,43 @@ async def finalize_handed_off_recovery_attempt(
         workspace_revision=source_point.workspace_revision,
         workspace_snapshot_hash=source_point.workspace_snapshot_hash,
     )
-    _validate_root_plan(plan)
-    lifecycle = load_application_lifecycle(workspace)
-    child_execution = await get_execution(workspace, new_run_id)
-    if child_execution is None:
-        raise RecoveryExecutionError(
-            "RECOVERY_EXECUTION_NOT_FOUND",
-            "HANDED_OFF recovery 的 child execution 不存在。",
-        )
-    identity = current_backend_instance()
-    await takeover_pre_runtime_recovery_lease(
-        workspace=workspace,
-        new_run_id=new_run_id,
-        expected_attempt_status={RecoveryAttemptStatus.HANDED_OFF},
-        new_owner_backend_instance_id=identity.instance_id,
-        new_owner_pid=identity.pid,
-        lease_ttl_seconds=Settings.from_env().execution_recovery_lease_ttl_seconds,
-    )
-    heartbeat_task = _start_recovery_heartbeat(
-        workspace=workspace,
-        run_id=new_run_id,
-        owner_backend_instance_id=identity.instance_id,
-    )
     try:
-        context = await _fork_and_start(
+        _validate_root_plan(plan)
+        lifecycle = load_application_lifecycle(workspace)
+        await _revalidate_finalizing_recovery(
             workspace=workspace,
             source=source,
-            plan=plan,
             source_point=source_point,
-            new_run_id=new_run_id,
+            attempt=attempt,
             graph=graph,
             lifecycle=lifecycle,
-            attempt=attempt,
-            child_execution=child_execution,
-            heartbeat_task=heartbeat_task,
         )
-        return context
+        heartbeat_task = _start_recovery_heartbeat(
+            workspace=workspace,
+            run_id=new_run_id,
+            owner_backend_instance_id=identity.instance_id,
+        )
+        try:
+            return await _fork_and_start(
+                workspace=workspace,
+                source=source,
+                plan=plan,
+                source_point=source_point,
+                new_run_id=new_run_id,
+                graph=graph,
+                lifecycle=lifecycle,
+                attempt=attempt,
+                child_execution=child_execution,
+                heartbeat_task=heartbeat_task,
+            )
+        except Exception:
+            await stop_execution_heartbeat(heartbeat_task)
+            raise
     except Exception as exc:
-        await stop_execution_heartbeat(heartbeat_task)
-        await _handle_pre_runtime_failure(
+        await _handle_finalization_failure(
             workspace=workspace,
             new_run_id=new_run_id,
-            attempt=await get_recovery_attempt(workspace, new_run_id),
             error_code=_recovery_error_code(exc),
-            handoff_completed=True,
         )
         raise
 
@@ -426,6 +447,138 @@ async def _fork_and_start(
     )
 
 
+async def _revalidate_finalizing_recovery(
+    *,
+    workspace: str,
+    source: DurableExecutionRecord,
+    source_point: RecoveryPoint,
+    attempt: RecoveryAttempt,
+    graph: Any,
+    lifecycle: Any,
+) -> Any:
+    """在唯一 finalizer 持有 fork 权后重新证明 checkpoint、磁盘和 ownership。"""
+
+    if source.status is not DurableExecutionStatus.INTERRUPTED:
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "source execution 已不再处于 INTERRUPTED，不能继续 finalization。",
+        )
+    if not hasattr(graph, "aget_state"):
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+            "当前 Graph 不支持重新读取 source checkpoint。",
+        )
+    source_config = {
+        "configurable": {
+            "thread_id": source.thread_id,
+            "checkpoint_ns": attempt.source_checkpoint_ns,
+            "checkpoint_id": attempt.source_checkpoint_id,
+        }
+    }
+    try:
+        snapshot = await graph.aget_state(source_config)
+        thread_id, checkpoint_ns, checkpoint_id = _snapshot_identity(snapshot)
+    except Exception as exc:
+        if isinstance(exc, RecoveryExecutionError):
+            raise RecoveryExecutionError(
+                "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+                "source checkpoint 无法重新读取或身份不完整。",
+            ) from exc
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+            "source checkpoint 无法重新读取。",
+        ) from exc
+    if (
+        thread_id != source.thread_id
+        or checkpoint_ns != attempt.source_checkpoint_ns
+        or checkpoint_id != attempt.source_checkpoint_id
+    ):
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+            "source checkpoint identity 已偏离 RecoveryAttempt。",
+        )
+    next_nodes = [str(node) for node in (getattr(snapshot, "next", ()) or ())]
+    if next_nodes != source_point.next_nodes:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+            "source checkpoint nextNodes 已偏离 RecoveryPoint。",
+        )
+    if any(getattr(task, "interrupts", ()) for task in getattr(snapshot, "tasks", ()) or ()):
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+            "source checkpoint 仍在等待交互，不能走 Native Recovery finalization。",
+        )
+
+    workspace_state = validate_recovery_workspace_state(
+        workspace=workspace,
+        point=source_point,
+    )
+    if workspace_state.decision is not None:
+        raise RecoveryExecutionError(
+            workspace_state.reason_code or "RECOVERY_STATE_DRIFT",
+            workspace_state.reason or "当前 workspace 不能安全验证。",
+        )
+    _validate_finalization_lifecycle(
+        source=source,
+        attempt=attempt,
+        lifecycle=lifecycle,
+    )
+    return snapshot
+
+
+def _validate_finalization_lifecycle(
+    *,
+    source: DurableExecutionRecord,
+    attempt: RecoveryAttempt,
+    lifecycle: Any,
+) -> None:
+    """验证 handoff 后 child 仍拥有正确的生命周期和资源锁。"""
+
+    if lifecycle is None:
+        if source.execution_kind == "application_planning":
+            return
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "Workbench finalization 缺少 ApplicationLifecycle。",
+        )
+    if source.execution_kind == "application_planning":
+        if (
+            lifecycle.active_run_id != attempt.new_run_id
+            or lifecycle.initialization.thread_id != attempt.thread_id
+        ):
+            raise RecoveryExecutionError(
+                "RECOVERY_STATE_DRIFT",
+                "Application Planning lifecycle 不再属于 child execution。",
+            )
+        return
+
+    execution = lifecycle.active_executions.get(attempt.new_run_id)
+    if execution is None:
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "Workbench lifecycle 中找不到 child execution。",
+        )
+    if (
+        lifecycle.active_run_id != attempt.new_run_id
+        or execution.thread_id != attempt.thread_id
+        or execution.status.value != "running"
+        or execution.pending_interaction is not None
+    ):
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "Workbench child execution 的 ownership 或运行状态已变化。",
+        )
+    claim_keys = {
+        f"{claim.type.value}:{claim.target_id}"
+        for claim in resource_claims_for_run(lifecycle.resource_locks, attempt.new_run_id)
+    }
+    if claim_keys != set(execution.resource_keys):
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "Workbench child execution 的 resource locks 已发生 owner drift。",
+        )
+
+
 def _handoff_lifecycle(
     workspace: str,
     *,
@@ -564,7 +717,7 @@ async def _handle_pre_runtime_failure(
     error_code: str,
     handoff_completed: bool = False,
 ) -> None:
-    """在 Graph 尚未交给 Runtime 前按 PREPARING/HANDED_OFF 语义收口 child。"""
+    """在 Graph 尚未交给 Runtime 前按当前 durable 阶段安全收口 child。"""
 
     if attempt is None:
         return
@@ -582,8 +735,36 @@ async def _handle_pre_runtime_failure(
             status=RecoveryAttemptStatus.HANDED_OFF,
             failure_code=error_code,
         )
+        return
+
+
+async def _handle_finalization_failure(
+    *,
+    workspace: str,
+    new_run_id: str,
+    error_code: str,
+) -> None:
+    """把不可安全 fork 的 child 固化为 FINALIZATION_FAILED 并释放 lease。"""
+
+    attempt = await get_recovery_attempt(workspace, new_run_id)
+    if attempt is None:
+        return
+    if attempt.status is RecoveryAttemptStatus.FINALIZING:
+        await update_recovery_attempt(
+            workspace=workspace,
+            new_run_id=new_run_id,
+            status=RecoveryAttemptStatus.FINALIZATION_FAILED,
+            failure_code=error_code,
+        )
+    elif attempt.status is not RecoveryAttemptStatus.FINALIZATION_FAILED:
+        return
     lease = await get_execution_lease(workspace, new_run_id)
-    if lease is not None:
+    execution = await get_execution(workspace, new_run_id)
+    if (
+        lease is not None
+        and execution is not None
+        and execution.status is DurableExecutionStatus.RUNNING
+    ):
         await finish_execution_and_release_lease(
             workspace=workspace,
             run_id=new_run_id,

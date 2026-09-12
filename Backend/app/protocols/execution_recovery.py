@@ -227,10 +227,10 @@ async def _reconcile_prepared_lineage(
     workspace: str,
     source_run_id: str,
 ) -> NativeRecoveryRuntimeContext | None:
-    """在解析 canonical head 前收敛同一 source 链上的 PREPARING/HANDED_OFF child。"""
+    """在解析 canonical head 前收敛同一 source 链上的 pre-runtime child。"""
 
     for attempt in await list_recovery_attempts_from_source(workspace, source_run_id):
-        if attempt.status.value not in {"preparing", "handed_off"}:
+        if attempt.status.value not in {"preparing", "handed_off", "finalizing"}:
             continue
         child = await get_execution(workspace, attempt.new_run_id)
         if child is None:

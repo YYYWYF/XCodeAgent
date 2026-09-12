@@ -223,9 +223,29 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 ON recovery_attempts(status);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_attempts_active_source
                 ON recovery_attempts(source_run_id)
-                WHERE status IN ('preparing', 'handed_off', 'started');
+                WHERE status IN ('preparing', 'handed_off', 'finalizing', 'started');
             """
         )
+        index_cursor = await connection.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'index' AND name = 'idx_recovery_attempts_active_source'
+            """
+        )
+        index_row = await index_cursor.fetchone()
+        index_sql = str(index_row[0] or "").lower() if index_row else ""
+        if "finalizing" not in index_sql:
+            await connection.execute(
+                "DROP INDEX IF EXISTS idx_recovery_attempts_active_source"
+            )
+            await connection.execute(
+                """
+                CREATE UNIQUE INDEX idx_recovery_attempts_active_source
+                ON recovery_attempts(source_run_id)
+                WHERE status IN ('preparing', 'handed_off', 'finalizing', 'started')
+                """
+            )
         await connection.execute(
             """
             INSERT INTO recovery_meta(key, value)
@@ -491,23 +511,38 @@ async def update_recovery_attempt(
     failure_code: str | None = None,
     updated_at: datetime | None = None,
 ) -> RecoveryAttempt | None:
-    """以允许的阶段字段更新 RecoveryAttempt，并返回最新 lineage。"""
+    """以持久化状态机约束更新 RecoveryAttempt，并返回最新 lineage。"""
 
     now = updated_at or datetime.now(timezone.utc)
     async with _connection_after_initialize(workspace) as connection:
+        await connection.execute("BEGIN IMMEDIATE")
         current = await _fetch_recovery_attempt_row(connection, new_run_id)
         if current is None:
             return None
         current_attempt = _recovery_attempt_from_row(current)
-        if current_attempt.status is RecoveryAttemptStatus.FAILED_PRESTART:
+        if current_attempt.status is status:
             return current_attempt
-        if current_attempt.status is RecoveryAttemptStatus.STARTED:
-            return current_attempt
-        if (
-            current_attempt.status is RecoveryAttemptStatus.HANDED_OFF
-            and status is RecoveryAttemptStatus.PREPARING
-        ):
-            return current_attempt
+        allowed_transitions = {
+            RecoveryAttemptStatus.PREPARING: {
+                RecoveryAttemptStatus.HANDED_OFF,
+                RecoveryAttemptStatus.FAILED_PRESTART,
+            },
+            RecoveryAttemptStatus.HANDED_OFF: {
+                RecoveryAttemptStatus.FINALIZING,
+            },
+            RecoveryAttemptStatus.FINALIZING: {
+                RecoveryAttemptStatus.STARTED,
+                RecoveryAttemptStatus.FINALIZATION_FAILED,
+            },
+            RecoveryAttemptStatus.STARTED: set(),
+            RecoveryAttemptStatus.FAILED_PRESTART: set(),
+            RecoveryAttemptStatus.FINALIZATION_FAILED: set(),
+        }
+        if status not in allowed_transitions[current_attempt.status]:
+            raise RecoveryExecutionError(
+                "RECOVERY_ATTEMPT_INVALID_TRANSITION",
+                "RecoveryAttempt 状态不能倒退或跳过 finalization claim。",
+            )
         updates = {
             "status": status.value,
             "replay_checkpoint_id": (
@@ -522,7 +557,13 @@ async def update_recovery_attempt(
             ),
             "handed_off_at": (
                 _utc_iso(now)
-                if status in {RecoveryAttemptStatus.HANDED_OFF, RecoveryAttemptStatus.STARTED}
+                if status
+                in {
+                    RecoveryAttemptStatus.HANDED_OFF,
+                    RecoveryAttemptStatus.FINALIZING,
+                    RecoveryAttemptStatus.STARTED,
+                    RecoveryAttemptStatus.FINALIZATION_FAILED,
+                }
                 else current_attempt.handed_off_at
             ),
             "started_at": (
@@ -532,7 +573,11 @@ async def update_recovery_attempt(
             ),
             "failed_at": (
                 _utc_iso(now)
-                if status is RecoveryAttemptStatus.FAILED_PRESTART
+                if status
+                in {
+                    RecoveryAttemptStatus.FAILED_PRESTART,
+                    RecoveryAttemptStatus.FINALIZATION_FAILED,
+                }
                 else current_attempt.failed_at
             ),
             "failure_code": failure_code or current_attempt.failure_code,
@@ -553,6 +598,128 @@ async def update_recovery_attempt(
         )
         row = await _fetch_recovery_attempt_row(connection, new_run_id)
         return _recovery_attempt_from_row(row) if row is not None else None
+
+
+async def claim_recovery_finalization(
+    *,
+    workspace: str | Path,
+    new_run_id: str,
+    new_owner_backend_instance_id: str,
+    new_owner_pid: int,
+    lease_ttl_seconds: float,
+    claim_at: datetime | None = None,
+) -> tuple[RecoveryAttempt, ExecutionLease]:
+    """在同一 SQLite 写事务中独占 finalization 权并接管 child lease。"""
+
+    moment = claim_at or datetime.now(timezone.utc)
+    expires_at = moment + timedelta(seconds=lease_ttl_seconds)
+    async with _connection_after_initialize(workspace) as connection:
+        await connection.execute("BEGIN IMMEDIATE")
+        attempt_row = await _fetch_recovery_attempt_row(connection, new_run_id)
+        if attempt_row is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_ATTEMPT_NOT_FOUND",
+                "RecoveryAttempt 不存在。",
+            )
+        attempt = _recovery_attempt_from_row(attempt_row)
+        if attempt.status is RecoveryAttemptStatus.STARTED:
+            raise RecoveryExecutionError(
+                "RECOVERY_ATTEMPT_ALREADY_STARTED",
+                "RecoveryAttempt 已经进入 Graph replay，不能再次 finalization。",
+            )
+        if attempt.status is RecoveryAttemptStatus.FINALIZATION_FAILED:
+            raise RecoveryExecutionError(
+                "RECOVERY_FINALIZATION_FAILED",
+                "RecoveryAttempt 的 finalization 已失败，不能回到 source 重放。",
+            )
+        if attempt.status not in {
+            RecoveryAttemptStatus.HANDED_OFF,
+            RecoveryAttemptStatus.FINALIZING,
+        }:
+            raise RecoveryExecutionError(
+                "RECOVERY_ATTEMPT_STATUS_MISMATCH",
+                "只有 HANDED_OFF 或可接管的 FINALIZING attempt 才能 finalization。",
+            )
+
+        execution_row = await _fetch_execution_row(connection, new_run_id)
+        if execution_row is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_EXECUTION_NOT_FOUND",
+                "finalization 的 child execution 不存在。",
+            )
+        if str(execution_row[8]) != DurableExecutionStatus.RUNNING.value:
+            raise RecoveryExecutionError(
+                "RECOVERY_EXECUTION_NOT_RUNNING",
+                "只有 RUNNING child execution 才能 finalization。",
+            )
+        lease_row = await _fetch_execution_lease_row(connection, new_run_id)
+        if lease_row is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_LEASE_MISSING",
+                "finalization 的 child lease 不存在。",
+            )
+        lease = _execution_lease_from_row(lease_row)
+        if (
+            attempt.status is RecoveryAttemptStatus.FINALIZING
+            and lease.status is ExecutionLeaseStatus.ACTIVE
+            and lease.expires_at > moment
+        ):
+            raise RecoveryExecutionError(
+                "RECOVERY_FINALIZATION_ALREADY_CLAIMED",
+                "RecoveryAttempt 的 finalization 已由其他 Backend 独占。",
+            )
+
+        if attempt.status is RecoveryAttemptStatus.HANDED_OFF:
+            status_cursor = await connection.execute(
+                """
+                UPDATE recovery_attempts
+                SET status = ?, handed_off_at = COALESCE(handed_off_at, ?)
+                WHERE new_run_id = ? AND status = ?
+                """,
+                (
+                    RecoveryAttemptStatus.FINALIZING.value,
+                    _utc_iso(moment),
+                    new_run_id,
+                    RecoveryAttemptStatus.HANDED_OFF.value,
+                ),
+            )
+            if status_cursor.rowcount != 1:
+                raise RecoveryExecutionError(
+                    "RECOVERY_FINALIZATION_ALREADY_CLAIMED",
+                    "RecoveryAttempt 的 finalization claim 已被其他请求获得。",
+                )
+        cursor = await connection.execute(
+            """
+            UPDATE execution_leases
+            SET owner_backend_instance_id = ?, owner_pid = ?, status = ?,
+                heartbeat_at = ?, expires_at = ?, released_at = NULL
+            WHERE run_id = ?
+            """,
+            (
+                new_owner_backend_instance_id,
+                new_owner_pid,
+                ExecutionLeaseStatus.ACTIVE.value,
+                _utc_iso(moment),
+                _utc_iso(expires_at),
+                new_run_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RecoveryExecutionError(
+                "RECOVERY_LEASE_MISSING",
+                "finalization 的 child lease 无法接管。",
+            )
+        updated_attempt_row = await _fetch_recovery_attempt_row(connection, new_run_id)
+        updated_lease_row = await _fetch_execution_lease_row(connection, new_run_id)
+        if updated_attempt_row is None or updated_lease_row is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_FINALIZATION_CLAIM_FAILED",
+                "finalization claim 写入后无法读取完整 owner。",
+            )
+        return (
+            _recovery_attempt_from_row(updated_attempt_row),
+            _execution_lease_from_row(updated_lease_row),
+        )
 
 
 async def fail_recovery_attempt_prestart(
@@ -951,6 +1118,7 @@ async def reconcile_orphaned_executions(
             attempt_status in {
                 RecoveryAttemptStatus.PREPARING,
                 RecoveryAttemptStatus.HANDED_OFF,
+                RecoveryAttemptStatus.FINALIZING,
             }
             and lease is not None
             and lease.status in {
@@ -959,7 +1127,7 @@ async def reconcile_orphaned_executions(
             }
         )
         if pre_runtime_recovery:
-            # PREPARING/HANDED_OFF 是 P0.3B 的 durable pre-runtime transaction，
+            # PREPARING/HANDED_OFF/FINALIZING 是 P0.3B 的 durable pre-runtime transaction，
             # Graph 尚未 STARTED；必须留给 lineage reconciliation 做 takeover/fork，
             # 不能被普通 orphan scanner 提前改成 INTERRUPTED。
             continue

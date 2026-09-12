@@ -21,6 +21,7 @@ from app.domain.execution_recovery import (
     RecoveryStrategy,
 )
 from app.persistence.execution_recovery import (
+    claim_recovery_finalization,
     claim_native_recovery_attempt,
     get_execution,
     get_execution_lease,
@@ -96,6 +97,18 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         await update_recovery_attempt(
             workspace=self.workspace,
             new_run_id=child.run_id,
+            status=RecoveryAttemptStatus.HANDED_OFF,
+        )
+        await claim_recovery_finalization(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
+            new_owner_backend_instance_id="backend-a",
+            new_owner_pid=101,
+            lease_ttl_seconds=30,
+        )
+        await update_recovery_attempt(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
             status=RecoveryAttemptStatus.STARTED,
             replay_checkpoint_id="fork-checkpoint",
         )
@@ -139,6 +152,10 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "app.services.execution_recovery_executor._start_recovery_heartbeat",
                 return_value=None,
+            ),
+            patch(
+                "app.services.execution_recovery_executor._revalidate_finalizing_recovery",
+                new=AsyncMock(),
             ),
             patch(
                 "app.services.execution_recovery_executor._fork_and_start",
@@ -197,6 +214,14 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(preserved_handoff, [])
 
+        await claim_recovery_finalization(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
+            new_owner_backend_instance_id="backend-new",
+            new_owner_pid=202,
+            lease_ttl_seconds=60,
+            claim_at=future,
+        )
         await update_recovery_attempt(
             workspace=self.workspace,
             new_run_id=child.run_id,
@@ -218,6 +243,58 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         assert interrupted_lease is not None
         self.assertEqual(interrupted_child.status, DurableExecutionStatus.INTERRUPTED)
         self.assertEqual(interrupted_lease.status, ExecutionLeaseStatus.EXPIRED)
+
+    async def test_concurrent_finalization_claim_has_one_winner(self) -> None:
+        """同一个 HANDED_OFF child 的 finalization claim 只能有一个 winner。"""
+
+        source, plan = await self._prepare_source_and_plan()
+        child, _lease, _attempt = await claim_native_recovery_attempt(
+            source=source,
+            plan=plan,
+            new_run_id="child-finalization-race",
+            owner_backend_instance_id="backend-a",
+            owner_pid=101,
+            lease_ttl_seconds=30,
+        )
+        await update_recovery_attempt(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
+            status=RecoveryAttemptStatus.HANDED_OFF,
+        )
+
+        async def claim(owner: str, pid: int):
+            """尝试争抢同一个 durable finalization owner。"""
+
+            try:
+                return await claim_recovery_finalization(
+                    workspace=self.workspace,
+                    new_run_id=child.run_id,
+                    new_owner_backend_instance_id=owner,
+                    new_owner_pid=pid,
+                    lease_ttl_seconds=60,
+                )
+            except Exception as exc:  # noqa: BLE001 - 断言唯一 winner
+                return exc
+
+        first, second = await asyncio.gather(
+            claim("backend-a", 101),
+            claim("backend-b", 202),
+        )
+        successes = [result for result in (first, second) if not isinstance(result, Exception)]
+        failures = [result for result in (first, second) if isinstance(result, Exception)]
+        self.assertEqual(len(successes), 1)
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], RecoveryExecutionError)
+        assert isinstance(failures[0], RecoveryExecutionError)
+        self.assertEqual(failures[0].code, "RECOVERY_FINALIZATION_ALREADY_CLAIMED")
+        durable_child = await get_execution(self.workspace, child.run_id)
+        durable_lease = await get_execution_lease(self.workspace, child.run_id)
+        self.assertIsNotNone(durable_child)
+        self.assertIsNotNone(durable_lease)
+        assert durable_child is not None
+        assert durable_lease is not None
+        self.assertEqual(durable_child.status, DurableExecutionStatus.RUNNING)
+        self.assertEqual(durable_lease.status, ExecutionLeaseStatus.ACTIVE)
 
     async def test_two_concurrent_claims_leave_one_active_child(self) -> None:
         """同一个 source 的并发 recovery claim 只能成功一次。"""

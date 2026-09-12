@@ -90,8 +90,10 @@ class RecoveryAttemptStatus(StrEnum):
 
     PREPARING = "preparing"
     HANDED_OFF = "handed_off"
+    FINALIZING = "finalizing"
     STARTED = "started"
     FAILED_PRESTART = "failed_prestart"
+    FINALIZATION_FAILED = "finalization_failed"
 
 
 class RecoveryAttemptAlreadyClaimedError(RuntimeError):

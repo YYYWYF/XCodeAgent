@@ -363,6 +363,16 @@ def _validate_workspace(
     )
 
 
+def validate_recovery_workspace_state(
+    *,
+    workspace: str,
+    point: RecoveryPoint,
+) -> _CheckpointValidation:
+    """复用 P0.3A 的当前磁盘校验，供 finalization 在 fork 前重验。"""
+
+    return _validate_workspace(workspace=workspace, point=point)
+
+
 def _load_workspace_snapshot_for_revision(
     workspace: str,
     revision: str,
