@@ -206,53 +206,47 @@ async def finalize_handed_off_recovery_attempt(
         lease_ttl_seconds=Settings.from_env().execution_recovery_lease_ttl_seconds,
     )
 
-    source = await get_execution(workspace, attempt.source_run_id)
-    source_point = await get_recovery_point(workspace, attempt.source_recovery_point_id)
-    child_execution = await get_execution(workspace, new_run_id)
-    if source is None:
-        error = RecoveryExecutionError(
-            "SOURCE_EXECUTION_NOT_FOUND",
-            "RecoveryAttempt 的 source execution 不存在。",
-        )
-    elif source_point is None:
-        error = RecoveryExecutionError(
-            "INVALID_RECOVERY_POINT",
-            "RecoveryAttempt 的 source RecoveryPoint 不存在。",
-        )
-    elif child_execution is None:
-        error = RecoveryExecutionError(
-            "RECOVERY_EXECUTION_NOT_FOUND",
-            "FINALIZING recovery 的 child execution 不存在。",
-        )
-    else:
-        error = None
-    if error is not None:
-        await _handle_finalization_failure(
-            workspace=workspace,
-            new_run_id=new_run_id,
-            error_code=error.code,
-        )
-        raise error
-
-    assert source is not None
-    assert source_point is not None
-    assert child_execution is not None
-    plan = RecoveryPlan(
-        source_run_id=source.run_id,
-        thread_id=source.thread_id,
-        decision="ready_native",
-        strategy=attempt.strategy,
-        recovery_point_id=attempt.source_recovery_point_id,
-        checkpoint_id=attempt.source_checkpoint_id,
-        checkpoint_ns=attempt.source_checkpoint_ns,
-        next_nodes=list(source_point.next_nodes),
-        reason_code="RECOVERY_RECONCILED",
-        reason="reconciled handed-off recovery",
-        lifecycle_revision=source_point.lifecycle_revision,
-        workspace_revision=source_point.workspace_revision,
-        workspace_snapshot_hash=source_point.workspace_snapshot_hash,
+    # FINALIZING claim 成功后立即续租，确保后续所有重验证和 fork 操作都保持独占权。
+    heartbeat_task = _start_recovery_heartbeat(
+        workspace=workspace,
+        run_id=new_run_id,
+        owner_backend_instance_id=identity.instance_id,
     )
     try:
+        source = await get_execution(workspace, attempt.source_run_id)
+        source_point = await get_recovery_point(workspace, attempt.source_recovery_point_id)
+        child_execution = await get_execution(workspace, new_run_id)
+        if source is None:
+            raise RecoveryExecutionError(
+                "SOURCE_EXECUTION_NOT_FOUND",
+                "RecoveryAttempt 的 source execution 不存在。",
+            )
+        if source_point is None:
+            raise RecoveryExecutionError(
+                "INVALID_RECOVERY_POINT",
+                "RecoveryAttempt 的 source RecoveryPoint 不存在。",
+            )
+        if child_execution is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_EXECUTION_NOT_FOUND",
+                "FINALIZING recovery 的 child execution 不存在。",
+            )
+
+        plan = RecoveryPlan(
+            source_run_id=source.run_id,
+            thread_id=source.thread_id,
+            decision="ready_native",
+            strategy=attempt.strategy,
+            recovery_point_id=attempt.source_recovery_point_id,
+            checkpoint_id=attempt.source_checkpoint_id,
+            checkpoint_ns=attempt.source_checkpoint_ns,
+            next_nodes=list(source_point.next_nodes),
+            reason_code="RECOVERY_RECONCILED",
+            reason="reconciled handed-off recovery",
+            lifecycle_revision=source_point.lifecycle_revision,
+            workspace_revision=source_point.workspace_revision,
+            workspace_snapshot_hash=source_point.workspace_snapshot_hash,
+        )
         _validate_root_plan(plan)
         lifecycle = load_application_lifecycle(workspace)
         await _revalidate_finalizing_recovery(
@@ -263,28 +257,20 @@ async def finalize_handed_off_recovery_attempt(
             graph=graph,
             lifecycle=lifecycle,
         )
-        heartbeat_task = _start_recovery_heartbeat(
+        return await _fork_and_start(
             workspace=workspace,
-            run_id=new_run_id,
-            owner_backend_instance_id=identity.instance_id,
+            source=source,
+            plan=plan,
+            source_point=source_point,
+            new_run_id=new_run_id,
+            graph=graph,
+            lifecycle=lifecycle,
+            attempt=attempt,
+            child_execution=child_execution,
+            heartbeat_task=heartbeat_task,
         )
-        try:
-            return await _fork_and_start(
-                workspace=workspace,
-                source=source,
-                plan=plan,
-                source_point=source_point,
-                new_run_id=new_run_id,
-                graph=graph,
-                lifecycle=lifecycle,
-                attempt=attempt,
-                child_execution=child_execution,
-                heartbeat_task=heartbeat_task,
-            )
-        except Exception:
-            await stop_execution_heartbeat(heartbeat_task)
-            raise
     except Exception as exc:
+        await stop_execution_heartbeat(heartbeat_task)
         await _handle_finalization_failure(
             workspace=workspace,
             new_run_id=new_run_id,

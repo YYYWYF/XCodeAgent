@@ -32,7 +32,11 @@ from app.persistence.execution_recovery import (
     takeover_pre_runtime_recovery_lease,
     update_recovery_attempt,
 )
-from app.services.execution_recovery_executor import finalize_handed_off_recovery_attempt
+from app.services.execution_recovery_executor import (
+    _start_recovery_heartbeat,
+    finalize_handed_off_recovery_attempt,
+)
+from app.services.execution_lease_heartbeat import stop_execution_heartbeat
 
 
 class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
@@ -128,7 +132,7 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.code, "RECOVERY_ATTEMPT_ALREADY_STARTED")
 
     async def test_finalize_handed_off_uses_current_backend_for_takeover(self) -> None:
-        """HANDED_OFF reconcile 必须先用当前 Backend 身份接管再启动 heartbeat。"""
+        """HANDED_OFF reconcile 必须用当前 Backend 身份接管 finalization。"""
 
         source, plan = await self._prepare_source_and_plan()
         child, _lease, _attempt = await claim_native_recovery_attempt(
@@ -175,6 +179,205 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         assert taken is not None
         self.assertEqual(taken.owner_backend_instance_id, "backend-b")
         self.assertEqual(taken.owner_pid, 202)
+
+    async def test_finalization_heartbeat_prevents_takeover_during_slow_revalidation(self) -> None:
+        """慢速 revalidation 超过原 lease TTL 时，存活 owner 仍拒绝第二次 finalization。"""
+
+        source, plan = await self._prepare_source_and_plan()
+        child, _lease, _attempt = await claim_native_recovery_attempt(
+            source=source,
+            plan=plan,
+            new_run_id="child-slow-finalization",
+            owner_backend_instance_id="backend-old",
+            owner_pid=101,
+            lease_ttl_seconds=0.08,
+        )
+        await update_recovery_attempt(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
+            status=RecoveryAttemptStatus.HANDED_OFF,
+        )
+        revalidation_started = asyncio.Event()
+        release_revalidation = asyncio.Event()
+        handed_off_heartbeat: list[asyncio.Task[None] | None] = []
+
+        async def slow_revalidation(**_kwargs: object) -> None:
+            """阻塞在 revalidation 内部，让测试观察 heartbeat 的续租行为。"""
+
+            revalidation_started.set()
+            await release_revalidation.wait()
+
+        async def capture_fork(**kwargs: object) -> str:
+            """记录交给 Runtime 的 heartbeat task，并跳过实际 checkpoint fork。"""
+
+            handed_off_heartbeat.append(kwargs["heartbeat_task"])  # type: ignore[arg-type]
+            return "context"
+
+        settings = SimpleNamespace(
+            execution_recovery_heartbeat_seconds=0.02,
+            execution_recovery_lease_ttl_seconds=0.08,
+        )
+        with (
+            patch(
+                "app.services.execution_recovery_executor.current_backend_instance",
+                return_value=SimpleNamespace(instance_id="backend-a", pid=201),
+            ),
+            patch("app.services.execution_recovery_executor.Settings.from_env", return_value=settings),
+            patch(
+                "app.services.execution_recovery_executor._revalidate_finalizing_recovery",
+                new=slow_revalidation,
+            ),
+            patch(
+                "app.services.execution_recovery_executor._fork_and_start",
+                new=capture_fork,
+            ),
+        ):
+            finalization = asyncio.create_task(
+                finalize_handed_off_recovery_attempt(
+                    workspace=str(self.workspace),
+                    new_run_id=child.run_id,
+                    graph=object(),
+                )
+            )
+            try:
+                await asyncio.wait_for(revalidation_started.wait(), timeout=1)
+                await asyncio.sleep(0.12)
+                with self.assertRaises(RecoveryExecutionError) as raised:
+                    await claim_recovery_finalization(
+                        workspace=self.workspace,
+                        new_run_id=child.run_id,
+                        new_owner_backend_instance_id="backend-b",
+                        new_owner_pid=202,
+                        lease_ttl_seconds=0.08,
+                    )
+                self.assertEqual(raised.exception.code, "RECOVERY_FINALIZATION_ALREADY_CLAIMED")
+                lease = await get_execution_lease(self.workspace, child.run_id)
+                self.assertIsNotNone(lease)
+                assert lease is not None
+                self.assertEqual(lease.owner_backend_instance_id, "backend-a")
+                self.assertEqual(lease.status, ExecutionLeaseStatus.ACTIVE)
+                self.assertGreater(lease.expires_at, datetime.now(timezone.utc))
+                release_revalidation.set()
+                self.assertEqual(await finalization, "context")
+            finally:
+                release_revalidation.set()
+                await asyncio.gather(finalization, return_exceptions=True)
+                for heartbeat_task in handed_off_heartbeat:
+                    await stop_execution_heartbeat(heartbeat_task)
+
+    async def test_expired_finalization_can_be_taken_over_after_owner_heartbeat_stops(self) -> None:
+        """owner heartbeat 停止并过期后，新的 Backend 可以安全接管 FINALIZING。"""
+
+        source, plan = await self._prepare_source_and_plan()
+        child, _lease, _attempt = await claim_native_recovery_attempt(
+            source=source,
+            plan=plan,
+            new_run_id="child-expired-finalization",
+            owner_backend_instance_id="backend-old",
+            owner_pid=101,
+            lease_ttl_seconds=0.08,
+        )
+        await update_recovery_attempt(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
+            status=RecoveryAttemptStatus.HANDED_OFF,
+        )
+        settings = SimpleNamespace(
+            execution_recovery_heartbeat_seconds=0.02,
+            execution_recovery_lease_ttl_seconds=0.08,
+        )
+        with patch("app.services.execution_recovery_executor.Settings.from_env", return_value=settings):
+            await claim_recovery_finalization(
+                workspace=self.workspace,
+                new_run_id=child.run_id,
+                new_owner_backend_instance_id="backend-a",
+                new_owner_pid=201,
+                lease_ttl_seconds=0.08,
+            )
+            heartbeat_task = _start_recovery_heartbeat(
+                workspace=str(self.workspace),
+                run_id=child.run_id,
+                owner_backend_instance_id="backend-a",
+            )
+            await stop_execution_heartbeat(heartbeat_task)
+
+        await asyncio.sleep(0.1)
+        _attempt, lease = await claim_recovery_finalization(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
+            new_owner_backend_instance_id="backend-b",
+            new_owner_pid=202,
+            lease_ttl_seconds=0.08,
+        )
+        self.assertEqual(lease.owner_backend_instance_id, "backend-b")
+        self.assertEqual(lease.owner_pid, 202)
+        self.assertEqual(lease.status, ExecutionLeaseStatus.ACTIVE)
+
+    async def test_finalization_failure_stops_heartbeat_and_releases_lease(self) -> None:
+        """revalidation 失败后必须先停止 heartbeat，再释放 child lease。"""
+
+        source, plan = await self._prepare_source_and_plan()
+        child, _lease, _attempt = await claim_native_recovery_attempt(
+            source=source,
+            plan=plan,
+            new_run_id="child-failed-finalization",
+            owner_backend_instance_id="backend-old",
+            owner_pid=101,
+            lease_ttl_seconds=0.08,
+        )
+        await update_recovery_attempt(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
+            status=RecoveryAttemptStatus.HANDED_OFF,
+        )
+
+        async def fail_revalidation(**_kwargs: object) -> None:
+            """模拟 workspace drift，验证 finalization failure 的清理顺序。"""
+
+            raise RecoveryExecutionError("WORKSPACE_DRIFT", "workspace drift")
+
+        settings = SimpleNamespace(
+            execution_recovery_heartbeat_seconds=0.02,
+            execution_recovery_lease_ttl_seconds=0.08,
+        )
+        with (
+            patch(
+                "app.services.execution_recovery_executor.current_backend_instance",
+                return_value=SimpleNamespace(instance_id="backend-a", pid=201),
+            ),
+            patch("app.services.execution_recovery_executor.Settings.from_env", return_value=settings),
+            patch(
+                "app.services.execution_recovery_executor._revalidate_finalizing_recovery",
+                new=fail_revalidation,
+            ),
+        ):
+            with self.assertRaises(RecoveryExecutionError) as raised:
+                await finalize_handed_off_recovery_attempt(
+                    workspace=str(self.workspace),
+                    new_run_id=child.run_id,
+                    graph=object(),
+                )
+
+        self.assertEqual(raised.exception.code, "WORKSPACE_DRIFT")
+        failed_attempt = await get_recovery_attempt(self.workspace, child.run_id)
+        failed_child = await get_execution(self.workspace, child.run_id)
+        failed_lease = await get_execution_lease(self.workspace, child.run_id)
+        self.assertIsNotNone(failed_attempt)
+        self.assertIsNotNone(failed_child)
+        self.assertIsNotNone(failed_lease)
+        assert failed_attempt is not None
+        assert failed_child is not None
+        assert failed_lease is not None
+        released_at = failed_lease.expires_at
+        self.assertEqual(failed_attempt.status, RecoveryAttemptStatus.FINALIZATION_FAILED)
+        self.assertEqual(failed_child.status, DurableExecutionStatus.INTERRUPTED)
+        self.assertEqual(failed_lease.status, ExecutionLeaseStatus.RELEASED)
+        await asyncio.sleep(0.06)
+        final_lease = await get_execution_lease(self.workspace, child.run_id)
+        self.assertIsNotNone(final_lease)
+        assert final_lease is not None
+        self.assertEqual(final_lease.status, ExecutionLeaseStatus.RELEASED)
+        self.assertEqual(final_lease.expires_at, released_at)
 
     async def test_scanner_preserves_pre_runtime_attempt_but_interrupts_started_orphan(self) -> None:
         """Scanner 保留 PREPARING/HANDED_OFF，却继续收敛 STARTED orphan。"""
