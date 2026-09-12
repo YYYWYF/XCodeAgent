@@ -59,6 +59,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "ui_confirmation",
             "planning_stage_entry",
             "technical_planning",
+            "template_reconcile",
         ],
         "designChange": {
             "requestField": "forwardedProps.applicationPlanningInteraction",

@@ -957,6 +957,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "ui_confirmation",
                 "planning_stage_entry",
                 "technical_planning",
+                "template_reconcile",
             ],
         )
         self.assertEqual(

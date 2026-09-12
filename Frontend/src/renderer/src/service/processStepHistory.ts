@@ -252,7 +252,10 @@ export function isStructuredPlanningWorkflow(workflow: WorkflowRunPayload | unde
     'requirements',
     'product_planning',
     'project_planning',
-    'technical_planning'
+    'technical_planning',
+    // 二次修改的 Template Reconcile 是正式的模板更新节点，其流式输出同样
+    // 必须由结构化活动卡承接，不能回退为普通技术规划文本。
+    'template_reconcile'
   ])
   if (planningNodes.has(String(workflow.summary.phase || ''))) return true
   const clarificationCandidates = [

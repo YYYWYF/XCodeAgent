@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.config import get_stream_writer
 
 from app.graph import nodes
 from app.graph.application_planning_revision import (
@@ -514,8 +515,16 @@ def _reconcile_confirmed_revision(state: ProjectState) -> dict:
     if active_revision is None:
         raise ApplicationLifecycleConflictError("Template Reconcile 缺少 active formal revision。")
     try:
+        _template_reconcile_progress(
+            workspace,
+            "正在根据已确认的技术规划更新模板能力。",
+        )
         # 该节点只读取 canonical TechnicalPlan；确认节点已在前一 checkpoint 提交完成。
         _reconcile_revision_template_capabilities(workspace, active_revision.change_id)
+        _template_reconcile_progress(
+            workspace,
+            "模板能力已更新，正在生成后端骨架并校验工作区。",
+        )
         _inject_revision_backend_skeleton(workspace, state, strict=True)
         token, issued = issue_revision_continuation(
             workspace,
@@ -561,6 +570,23 @@ def _reconcile_confirmed_revision(state: ProjectState) -> dict:
             mark_template_reconcile_failed(workspace, change_id=active_revision.change_id)
         _persist_node_error(workspace, state, exc)
         raise
+
+
+def _template_reconcile_progress(workspace: str, message: str) -> None:
+    """向 AG-UI 发布模板更新进度，避免二次修改期间沿用技术规划运行帧。"""
+
+    try:
+        writer = get_stream_writer()
+    except (KeyError, RuntimeError):
+        return
+    writer(
+        {
+            "type": "template_reconcile.progress",
+            "node_name": "template_reconcile",
+            "message": message,
+            "template_preparation": template_preparation_projection_v2(workspace),
+        }
+    )
 
 
 def _ensure_lifecycle(state: ProjectState):

@@ -51,6 +51,13 @@ export function isSupersededPlanningPhaseMessage(
   if (currentPhase === 'technical_planning') {
     return messagePhase === 'planning_stage_entry'
   }
+  // 模板处理已经接管当前轮次时，仅隐藏旧的技术规划运行帧；确认结果仍作为
+  // 历史记录保留，避免用户失去已确认 TechnicalPlan 的可追溯性。
+  if (['template_preparation', 'template_reconcile'].includes(currentPhase)) {
+    return (
+      messagePhase === 'technical_planning' && message.workflow.summary?.status === 'running'
+    )
+  }
   return currentPhase === 'ui_confirmation' && messagePhase === 'technical_planning'
 }
 

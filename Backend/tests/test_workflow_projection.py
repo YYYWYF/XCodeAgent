@@ -19,6 +19,24 @@ class WorkflowProjectionTests(unittest.TestCase):
             ["prepare_build_tasks"],
         )
 
+    def test_confirmed_technical_revision_projects_template_reconcile(self) -> None:
+        """二次 TechnicalPlan 确认后，AG-UI 必须发布模板更新开始事件。"""
+
+        self.assertEqual(
+            _workflow_next_nodes(
+                "technical_planning",
+                {"status": "completed", "template_reconcile_pending": True},
+            ),
+            ["template_reconcile"],
+        )
+        self.assertEqual(
+            _workflow_next_nodes(
+                "technical_planning",
+                {"status": "completed", "template_reconcile_pending": False},
+            ),
+            [],
+        )
+
     def test_build_projects_unit_test_gate(self) -> None:
         """Build 成功后的可视化下一节点必须是开发阶段单测门禁。"""
 

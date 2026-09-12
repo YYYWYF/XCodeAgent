@@ -39,6 +39,16 @@ const PLANNING_ACTIVITY_COPY: Record<
     detail: '正在根据已确认的上游设计生成技术实现方案。',
     revisionDetail: '正在根据本次设计变更更新技术实现方案。'
   },
+  template_preparation: {
+    title: '正在准备应用模板',
+    revisionTitle: '正在准备应用模板',
+    detail: '正在下载模板代码、生成应用骨架并校验工作区就绪状态。'
+  },
+  template_reconcile: {
+    title: '正在更新应用模板',
+    revisionTitle: '正在更新应用模板',
+    detail: '正在根据已确认的技术规划更新模板能力并校验工作区。'
+  },
   project_planning: {
     title: '正在生成项目计划',
     revisionTitle: '正在重新生成项目计划',
@@ -326,15 +336,26 @@ function planningPhaseForLifecycleStage(stage: string): string {
   if (['generating_technical_plan', 'awaiting_technical_plan_confirmation'].includes(stage)) {
     return 'technical_planning'
   }
+  // TechnicalPlan 已确认后，模板准备是唯一的进行中工作；不能再回退到
+  // 最后一个 technical_planning 节点事件，否则会误显示为重新生成技术规划。
+  if (stage === 'generating_application_template_files') return 'template_preparation'
   return ''
 }
 
 // 优先使用权威生命周期收口设计到规划的边界，再读取节点事件兼容流式摘要滞后。
 export function planningWorkflowPhase(workflow?: WorkflowRunPayload): string {
-  const lifecyclePhase = planningPhaseForLifecycleStage(planningWorkflowLifecycleStage(workflow))
-  if (lifecyclePhase) return lifecyclePhase
   const events = workflow?.events || []
   const lastEvent = events.length ? events[events.length - 1] : undefined
+  // 二次修改不会改变初始化 lifecycle 的技术规划阶段；Template Reconcile
+  // 作为真实执行节点必须优先于该历史 lifecycle，才能让模板更新接管文案。
+  if (
+    ['workflow.node.started', 'workflow.node.progress'].includes(String(lastEvent?.type || '')) &&
+    String(lastEvent?.nodeName || lastEvent?.node?.id || '') === 'template_reconcile'
+  ) {
+    return 'template_reconcile'
+  }
+  const lifecyclePhase = planningPhaseForLifecycleStage(planningWorkflowLifecycleStage(workflow))
+  if (lifecyclePhase) return lifecyclePhase
   if (lastEvent?.type === 'workflow.node.started') {
     const startedPhase = lastEvent.nodeName || lastEvent.node?.id
     if (startedPhase) return String(startedPhase)
@@ -418,7 +439,7 @@ export function planningWorkflowLifecycleStage(workflow?: WorkflowRunPayload): s
 // 只在本轮 TechnicalPlan 已确认并进入模板阶段时允许触发模板初始化，拒绝上游修订快照携带的旧终态确认。
 export function planningTechnicalPlanConfirmed(workflow?: WorkflowRunPayload): boolean {
   if (
-    planningWorkflowPhase(workflow) !== 'technical_planning' ||
+    !['technical_planning', 'template_preparation'].includes(planningWorkflowPhase(workflow)) ||
     workflow?.summary.status !== 'completed' ||
     planningWorkflowLifecycleStage(workflow) !== 'generating_application_template_files'
   ) {

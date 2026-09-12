@@ -1127,6 +1127,64 @@ def build_workflow_ag_ui_stream(
                             dag_generation=dag_generation,
                         )
                         continue
+                    if event_type == "template_reconcile.progress":
+                        # Template Reconcile 是二次修改 TechnicalPlan 确认后的独立工作；
+                        # 将其 custom progress 写成完整 Workflow 快照，确保前端不会
+                        # 回退到最后一个 technical_planning started 事件。
+                        progress_node = "template_reconcile"
+                        progress_attempt = _current_node_attempt(node_attempts, progress_node)
+                        progress_message = str(
+                            progress.get("message") or "正在更新应用模板。"
+                        )
+                        template_preparation = progress.get("template_preparation")
+                        progress_state = {
+                            **stream_state,
+                            "phase": progress_node,
+                            "status": "running",
+                            **(
+                                {"template_preparation": template_preparation}
+                                if isinstance(template_preparation, dict)
+                                else {}
+                            ),
+                        }
+                        _workflow_event(
+                            events,
+                            "workflow.node.progress",
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            node_name=progress_node,
+                            status="running",
+                            message=progress_message,
+                            data={
+                                "phase": progress_node,
+                                "templatePreparation": template_preparation,
+                            },
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                            node_label=_runtime_node_label(progress_node, progress_state),
+                        )
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=progress_state,
+                        ):
+                            yield frame
+                        process_sequence += 1
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id(progress_node, progress_attempt),
+                            kind="workflow",
+                            status="running",
+                            title="正在更新应用模板",
+                            detail=progress_message,
+                            sequence=process_sequence,
+                            node_name=progress_node,
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                        )
+                        continue
                     if event_type == "workflow.build.progress":
                         progress_state = (
                             progress.get("state")
